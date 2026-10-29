@@ -1,402 +1,519 @@
 # Cut-first plan for Goal Cup Proxy, Edition 01
 
 Date: Thursday 29 October 2026. Base: main at 4b226de2.
-Status: proposed, needs owner review. Nothing in this plan has been built or run.
-Revised the same day after a fact check and two adversarial reviews. Every point and answer is in
-[R-reviews.md](2026-10-30-audit/R-reviews.md); section 13 sums up what changed.
+Status: **revision 2**, needs owner review. Nothing in this plan has been built or run.
+Revision 1 was checked by a fact check and two reviews ([R-reviews.md](2026-10-30-audit/R-reviews.md)).
+Revision 2 adds the 2-hour Codex run ([M](2026-10-30-audit/M-two-hour-run.md)) and the owner's answers
+([N](2026-10-30-audit/N-architecture-and-owner-answers.md)).
 
-**The answer.** Keep the recording core: the proxy that the harness reaches through `HTTPS_PROXY`,
-the native session-file reader, the masker, the chain writer, the chunk uploader and the Worker's
-chunk store. Cut about 19,000 source lines and 28,000 test lines before Friday 6 November, all of
-them deletions of parts that serve none of the seven points: the verifier's research decoders,
-research scripts, disk-full handling, the start-time provider probe, byte goldens of connectors and
-dead leftovers. Change the parts that block or lose data: raise our own bounds on streams and
-connections to values that state their memory cost, delete the native file caps and the restart
-caps, make the native poll cheap, and make a full disk end the chain cleanly. Add eight small things,
-each tied to a point, such as the URL password rule and one "Recorded:" line for the participant.
-Leave the big structural cuts for after Edition 01: the daemon merge, termination proof, signing,
-pins, deny lists, the platform rewrite and the Rust copy of the Worker. They save about 25,000 more
-source lines, but each one touches working code that ends or proves a 168-hour run.
-Every code cut lands by Tuesday 3 November, before the 4 November feature stop (`TODO.md:42`).
-Wednesday adds tests only (N4), tags the release candidate and holds the 2-hour run. Thursday is the
-buffer, with pure deletes of history docs. Friday is the release. The Friday Worker deploy is
-configuration only. All line figures are estimates from line ranges, plus or minus 30 percent.
+**What changed since revision 1**
 
-## 2. The target shape
+- **The 2-hour run found silent loss.** On the same build as the audit, recording stopped for good at
+  minute 49. About 470 of Codex's 1,261 model calls and the wire records of 15 of 42 subagents are
+  missing, and the finish still said "Recording works: 1736 model calls" ([M 1.1](2026-10-30-audit/M-two-hour-run.md#11-what-happened-step-by-step)).
+  Eight silent-loss fixes (SL1 to SL8, section 3) now come before any cut.
+- **Architecture: patch the shape we have (option A).** The proxy that writes its own record (option B)
+  moves to after Edition 01, through a seam that already exists. A rewrite (option C) is out.
+- **Owner answers applied.** No caps of our own on subagents (native caps deleted, one stated memory
+  guard kept), the per-run size limit removed, prune once the server saved a part, no `goalcup mcp`
+  setup lines, README promises replaced by the seven points.
+- **Fewer cuts before Friday.** K1, K10, K11 and K12 move after Edition 01 to free review time for the
+  loss fixes. Friday now saves about 8,300 source lines, not 19,000. That is the trade the owner asked
+  for: "something that works versus not working".
+- **New work and new dates.** An upload backoff fix and long-window compression; one stream per
+  WebSocket direction waits until after Edition 01. A second 2-hour run on Monday 2 November with Codex
+  and Claude Code, both asked for subagents in the prompt. A minimum shippable set and a fallback build.
 
-**The core we keep.** `goalcup start` launches the harness with `HTTPS_PROXY` pointing at a loopback
-recording proxy. The proxy decrypts declared model hosts and passes every other host through
-unread, naming it. Each exchange goes to the recorder (still a separate daemon for Friday). The
-recorder masks secrets, then writes a hash-linked chain. It also polls the harness's session folder
-for main and subagent files. The uploader sends 32 MiB chunks to the Worker, which stores them in R2
-with a sequence number and `received_at`. `scripts/fetch-run.sh` and `goalcup-verify
---capture-integrity` rebuild a run by ID and time. The participant sees one "Recorded:" line and
-`goalcup status`.
+## 1. The answer
+
+Keep the recording core and fix the plumbing that lost the run, then cut. The core is the owner's own
+idea, and it already exists: the harness reaches a local recording proxy through `HTTPS_PROXY`, the
+proxy decrypts the model hosts the harness's config names, a recorder masks and chains the bytes, it
+also reads the harness's session files, and the uploader sends everything to the Worker. Before 15:43
+the wire matched Codex's own log in every 10-minute bucket ([N 2.1](2026-10-30-audit/N-architecture-and-owner-answers.md#21-facts-from-the-run)).
+What failed was the hop between the proxy and the recorder: a shared 8 MiB queue, a rule that drops a
+whole producer when one frame does not fit, a failure budget that read load as death, and a count taken
+before anything was written. We choose **option A, patch today's shape**, because it fixes every cause
+the run found in about 400 changed source lines and 3 working days, and leaves time for a measured rerun
+before the 4 November feature stop. Option B (the proxy writes its own record, no IPC) is the right
+next shape, but it changes the record format, uploader, Worker keys and verifier at once: 7 to 10 days.
+Option C (fresh rewrite) is 15 to 25 days. **Fallback** if the bigger fixes are not green by Monday
+night: ship the small set (SL1, SL2, SL4 and honest finish wording, section 9.3). Each load drop then
+becomes a visible gap and a reconnect, not a silent stop. After Edition 01, move to option B through
+the `CaptureSink` seam (`crates/goalcup-protocol/src/capture.rs:388-394`, taken by the emitter at
+`crates/goalcup-cli/src/proxy/api.rs:262, 300`), then do the large cuts.
+
+## 2. Owner answers so far
+
+| # | Owner's answer (29 Oct) | What the plan now does |
+|---|---|---|
+| 1 | Yes: replace README P1 to P7 with the seven points. | PR1 replaces `README.md:276-288` with R1 to R7 and drops the never-delete rule (`AGENTS.md:101`). |
+| 2 | Unsure what 16,384 means (agent threads?). Wants no caps. Remove the run size limit. | See "Q2 in plain words" below. Native caps go (SL4). One open-stream bound stays as a stated memory guard. The run limit goes (CH14). |
+| 3 | Same as 2: remove the per-run size limit. | CH14 sets `RUN_MAX_COMPRESSED_BYTES` to `9007199254740991` (`server/worker/wrangler.toml:59, 151`). Cost below. |
+| 4 | "Ideally we support both, with gateway and without gateway? Wasn't that the plan?" | Yes, and it already works. See "Q4" below. Hermes: support only 0.22.5, the version its installer gives. |
+| 5 | Unsure. "I would like something that works versus not working." | Option A, loss fixes first. Structural cuts stay after Edition 01, and four more cuts join them (new question O1). |
+| 6 | Yes, no need to print the `goalcup mcp` setup lines. | K8 in PR9. The `goalcup mcp` command keeps working through Edition 01. |
+| 7 | Why Claude Code only? What about Codex and others? | See "Q7" below. Codex and Amp already have their switch; Claude Code and Hermes get one line each (CH15). |
+| 8 | What does "table" mean? An API endpoint? | No. See "Q8" below. The plan stops a start that cannot record, with a one-line fix (AD5). Say no if you disagree. |
+| 9 | Yes, prune a part once the server saved it. | CH10, plus the finish line stops printing a local check that cannot pass (AD9). |
+| 10 | Hopes so, but fears it will not be done in 24 hours. | Nothing is due in 24 hours. There are five working days to the feature stop. Section 9 orders the work so the loss fixes land even if cuts slip, and names a minimum shippable set. |
+
+**Q2 in plain words: what 16,384 counts.** It is not agents. A "stream" is one recorded flow of bytes
+with an open, some bytes and an end (`crates/goalcup-protocol/src/capture.rs:96-103`). The bound counts
+streams open at the same moment.
+
+| Kind of stream | One stream is | Open for |
+|---|---|---|
+| HTTP request or response body | one model request, or its answer | seconds to minutes |
+| WebSocket message | one message in one direction | a moment |
+| Session file (native) | the main agent's or one subagent's transcript | the whole entry (one `goalcup start` or `continue`) |
+
+So a subagent costs one long stream for its file, plus a few short ones while it calls the model. A
+finished subagent's file keeps its slot until the entry ends. The run peaked at 54 open streams. At
+16,384, about 16,000 subagents fit in one entry, and `goalcup continue` starts a new entry. The bound
+guards memory: at most 16 KiB of not-yet-masked bytes per open stream
+(`crates/goalcup-daemon/src/redact/stream.rs:122-125`), so 256 MiB in the worst case and near zero for a
+quiet file. Past it, only the one new stream is refused, with a gap (SL5). The native caps (32 open
+files, 1,024 and 20,000 tracked files, `crates/goalcup-daemon/src/native_capture.rs:187, 279-280`)
+guard nothing real and lost 11 transcripts in the run: they go (SL4).
+
+**Q3, the cost of no run limit.** R2 costs $0.015 per GB-month, with no egress fee
+([R2 pricing](https://developers.cloudflare.com/r2/pricing/)). Production traces sit under a 180-day
+bucket lock (`server/worker/wrangler.toml:29-32`), so each byte is paid for at least 6 months.
+
+| Per run, compressed, busy 168 hours | Per month | 180 days | 100 entries, 180 days | 500 entries, 180 days |
+|---|---|---|---|---|
+| 68 GB (today's rate) | $1.02 | $6.12 | $612 | $3,060 |
+| 15 to 27 GB (with CH18 long-window compression, estimate) | $0.23 to $0.41 | $1.35 to $2.43 | $135 to $243 | $675 to $1,215 |
+
+The limit guarded one thing: a stuck or hostile client. One uploading 10 MB/s nonstop is about 6 TB a
+week, about $90 a month and $540 for 180 days, per run ([M 4.8](2026-10-30-audit/M-two-hour-run.md#48-storage-cost-without-a-per-run-limit)).
+New question O5 asks for a weekly look at stored bytes instead.
+
+**Q4, gateways and Hermes.** "With and without a gateway" already works, by one rule (D74): goalcup
+reads the one address the harness's own config names and records that host; with no address it records
+the harness's default host (`crates/goalcup-cli/src/model_host.rs:1-25`).
+
+| Harness | Where the gateway address goes | Measured |
+|---|---|---|
+| Claude Code | `env.ANTHROPIC_BASE_URL` in Goal Cup's `settings.json` (`connectors/claude-code-cli/harness.toml:40`) | Vercel gateway, 15 calls (`docs/research/results/2026-10-vercel-gateway.md:53`) |
+| Codex | `model_provider = "vercel"` plus a `[model_providers.vercel]` table with `base_url` (`connectors/codex-cli/harness.toml:37`) | Vercel, 17 calls, HTTP only (same doc `:54`) |
+| Hermes | `model.base_url` in `config.yaml` (`connectors/hermes-cli/harness.toml:68`) | Vercel, 9 calls (same doc `:55`) |
+| Amp | none: Amp always talks to its own server | yes |
+
+Routes the config reader cannot see record nothing today: Claude Code's cloud switches
+(`CLAUDE_CODE_USE_BEDROCK` and the like), a base URL in a shell export or project file, Codex's
+top-level `openai_base_url`, Codex built-ins with no table (Q8), and Hermes calls to hosts other than
+`model.base_url`. The plan reads `openai_base_url` and stops the four Codex built-ins (AD5), and names the
+rest in the participant text (AD8). A `--record-host` input for extra endpoints waits for after
+Edition 01 (O8). "Gateway" in round 1's question meant Hermes's own gateway process: the plan supports
+Hermes 0.22.5 only, drops the three 0.19.0 connector parts (`connectors/hermes-cli/harness.toml:54-57,
+88-92, 103-109`), and says "Hermes subagents: not yet measured" until a 0.22.5 run passes (O9).
+
+**Q7, auto-update per harness.** A running harness keeps its old binary; an update matters only at the
+next `goalcup continue`.
+
+| Harness | Updates itself? | Our switch today | Plan |
+|---|---|---|---|
+| Claude Code | Yes, in the background, also while running | `DISABLE_AUTOUPDATER = "1"` (`connectors/claude-code-cli/harness.toml:60`) | Add `DISABLE_UPDATES = "1"`, which also blocks a `claude update` the agent runs ([setup docs](https://code.claude.com/docs/en/setup)) |
+| Codex | No. It only checks at start and asks | `-c check_for_update_on_startup=false` (`connectors/codex-cli/harness.toml:46`) | Nothing more |
+| Amp | Checks; runner mode restarts for updates | `AMP_SKIP_UPDATE_CHECK = "1"` (`connectors/amp-cli/harness.toml:45`) | Nothing more |
+| Hermes | No; a daily passive check | none | Add `updates.check: false` |
+
+Participant text adds: "Do not run `brew upgrade`, `npm update -g` or `hermes update` during your run."
+
+**Q8, what a "table" is.** Not an API. In Codex's `config.toml`, a table is a section that starts with a
+name in square brackets:
+
+```toml
+model_provider = "vercel"
+
+[model_providers.vercel]
+base_url = "https://ai-gateway.vercel.sh/codex/v1"
+```
+
+goalcup reads `model_provider`, then that table's `base_url`, and records that host. Four Codex
+built-ins have no table, so no address is written anywhere: `ollama` and `lmstudio` (plain `http` to
+this computer, never through our proxy), `amazon-bedrock` and `gcp` (cloud hosts we are not told about,
+so they pass through unread). A run with one of them records zero model calls. The plan stops
+`goalcup start` before the harness launches with the fix ("add a provider table with an https
+address"), and warns on any other provider name with no table. Stopping before launch never blocks a
+running harness (point 3).
+
+## 3. Stop silent loss first
+
+Three rules now bind the recorder:
+
+1. **A call counts only once written.** The participant's number is model requests whose bytes reached
+   the chain, never requests the proxy merely saw.
+2. **Off time is shown.** If wire recording is off, `goalcup status` says so at once, and the finish
+   says how often and how long.
+3. **Every loss is a gap with a start and an end.** A loss starts at its chained gap and ends at the
+   next `Recovery` record, or at the end of the part. No new record kind is needed.
+
+The fixes, in the order they land. Paths are under `crates/` unless noted. Line figures are estimates.
+"P" numbers are the loss paths in [M section 2](2026-10-30-audit/M-two-hour-run.md#2-every-silent-loss-path-in-the-code-today).
+
+| Id | Fix | Where | src / tests | Test that proves it | Point | Was |
+|---|---|---|---|---|---|---|
+| SL1 | **Never give up on a recorder that answers** (P3, P4). Delete `MAX_CONNECTION_FAILURES`, `STABLE_EPOCH`, the failure row fields and `count_failure` with its three callers. The proxy retries on the 1, 2, 5, 10 s schedule for as long as `goalcup start` lives, logging once a minute. Keep `stats.failures` as a log counter. Alone, this would have kept the run recording. | `goalcup-cli/src/proxy/ingest.rs:98-108, 380-383, 461-472, 938, 963-970, 1117-1133` | -35 / 200 rewritten | New sender test: 50 losses in a row, each under a second, with the emulator's close-after-handshake policy. The sink never answers `Disabled`, at least 50 epochs become ready, and a frame after the 50th loss is `Queued`. Rewrite the five budget tests at `goalcup-cli/tests/it/m2_capture_sender.rs:1008-1289` and the constant check at `:1915`. | 1, 3 | CH6, third part (moved from PR7 to the first PR) |
+| SL2 | **Room for bursts.** Queue 8 to 64 MiB on both sides, control reserves scaled (proxy 512 KiB to 4 MiB, still under the `/8` check). Send ingest bytes as base64, not JSON number arrays: today each payload byte costs about 3.6 bytes, so 8 MiB held about 1.5 of Codex's 1.5 MB bodies. With both, the queue holds about 30 bodies. Memory cost: up to 64 MiB per side, and only while the writer is behind. | `goalcup-protocol/src/capture.rs:51, 228-231` (one serde attribute); `goalcup-daemon/src/runtime/capture/sink.rs:7-10`; `goalcup-cli/src/proxy/ingest.rs:113-128`; fixture `goalcup-protocol/tests/fixtures/m2-ingest/golden-stream.hex` | 5 / 30 | Regenerated golden fixture; one unit test that 1 MiB of payload encodes to under 1.4 MiB; N6 load test (AD6). | 1, 3 | CH1 queue part (moved from PR8a) |
+| SL3 | **A full queue costs one stream's bytes, never the producer** (P1, P2). When a `Bytes` frame does not fit, queue a small `Gap { QueueFull, lost_bytes }` on the same stream instead and answer `Queued`. The redactor already moves the stream past the gap and resumes (`goalcup-daemon/src/redact/stream.rs:2834-2861`); the sink already admits later bytes past a gap (`goalcup-daemon/src/ingest.rs:1002-1008`). | `goalcup-daemon/src/runtime/capture/sink.rs:268-282`; `goalcup-cli/src/proxy/ingest.rs:513-516, 804-817` | 40 / 150 | Invert `full_queue_gap_is_sticky` (`goalcup-daemon/src/runtime/capture/tests.rs:1061`), `queue_full_reports_loss_outside_full_queue` (`goalcup-daemon/tests/it/capture_ingest.rs:1668`) and `queue_full_latches_without_blocking_relay` (`goalcup-cli/tests/it/m2_capture_sender.rs:297`): fill the queue, submit bytes, assert `Queued`, producer still live, one gap with `lost_bytes` equal to the length, the next bytes accepted, sealed trace "incomplete" with exactly one stream gap. | 1, 3 | New. Overturns round 1's rejection of a daemon-side per-stream rule (R 3a) |
+| SL4 | **Session files never stop and have no caps** (P14 to P17). Delete the native share (32), the 1,024 and 20,000 file caps, and the 32-handle budget (K9 part). Raise `MAX_OPEN_STREAMS` 128 to 16,384 and `MAX_OPEN_CONNECTIONS` 128 to 1,024 as stated memory guards; every user reads the constant, verifier included (`goalcup-verifier/src/capture_analysis/reader.rs:1566, 1694`, `anthropic.rs:152`). Give the sink a `room()` read and stop a native pass when the queue is full, so a native frame is never refused: the file is the buffer, and the reader position moves only on `Queued`. Remove the 64 MiB finish cap; keep the 180 s finish budget. | `goalcup-daemon/src/native_capture.rs:84-91, 187, 279-280, 649-656, 940-975, 1323-1327, 1555-1558`; `goalcup-protocol/src/capture.rs:58, 60`; `goalcup-daemon/src/runtime/capture/sink.rs:246-283, 425-427`; `goalcup-daemon/src/runtime/capture/owner.rs:13`; `goalcup-platform/src/handle_budget.rs` | 20 net / 750 rewritten | N1 (AD6): 2,000 session files, 400 growing at once, `ulimit -n 256`; every byte recorded. Plus: fill the queue while native has a 10 MB file to read; assert all file bytes reach the chain and no native loss gap. | 2, 3 | CH1 streams part, CH2, CH12, plus the new no-latch rule |
+| SL5 | **Close the other "off for good" switches** (P6, P7, P10, P11, P13). Past the emitter's stream or connection bound, refuse that one stream with a `Loss` frame and keep the epoch live (CH4). A local framing error latches a loss, not a terminal state. Delete the one-`Loss`-per-reason dedupe, so each event has its time. When the recorder drops a producer for a redaction error, also tell the sink, so the proxy reconnects. | `goalcup-cli/src/proxy/api.rs:451-453, 599-601, 671-674, 683`; `goalcup-cli/src/proxy/ingest.rs:504-511, 552-558, 600-606, 944-948`; `goalcup-daemon/src/runtime/capture/owner.rs:326-341` | 15 / 120 | One test per path: open 200 streams at once (P6); force a redaction refusal (P13). Each asserts a gap at the loss time, a `Recovery` after it, and that no relay call waited. | 1, 3 | CH4, plus new |
+| SL6 | **The seal names any proxy loss left open.** If the proxy's sink was off at the finish, or `sink_refusals > 0`, write one stream-less `IngestLost` gap; the end of the part is its end. Fix the comment that says sink refusals "add none". The start time comes from SL7's off spans in the finish report. | `goalcup-daemon/src/runtime/capture/writer.rs:182-201`; `goalcup-protocol/src/control.rs:682-683` | 10 / 40 | Sender whose sink is disabled mid-run: the sealed trace ends with an `IngestLost` gap, and the finish report has the off span's start. | 3, 5, 6 | New |
+| SL7 | **Count a call once written; keep the off time.** The chain writer counts each written request `Open` (`WireRequest` with `POST`, or `WsClient`) that carries a protocol hint, and reports it in its status. The emitter records every off span (left `Live`, back to `Live`) in shared counters. The finish and status print the written count and the off time, never the proxy's "seen" count, which moves to `host.log`. `CONTROL_API_VERSION` 12 to 13. | `goalcup-daemon/src/runtime/capture/writer.rs:327-345`; `goalcup-daemon/src/runtime/capture/mod.rs:1292-1301`; `goalcup-protocol/src/control.rs:67`; `goalcup-cli/src/daemon/mock.rs:157-168`; `goalcup-cli/src/proxy/api.rs:158-171, 351-353, 739-745`; `goalcup-cli/src/commands/start/finish.rs:405-407, 439-444, 499-509`; `goalcup-cli/src/run/mod.rs:266, 716-719` | 45 / 60 | Sender against a sink that drops one producer mid-run: the printed count is below the seen count, equals the verifier's `wire_model_requests` on the same trace (`goalcup-verifier/src/capture_analysis/session.rs:210`), and the off time is above zero. | 6 | AD2's source, rewritten |
+| SL8 | **Say it while it happens.** `goalcup status` shows "Recording is off since 15:43" once the emitter has been off 60 s, or the recorder has not answered 3 watch ticks; one `PROBLEM:` line goes to `host.log` and `state.json`. A local-logs alarm: if session files grew in the last 5 minutes and the written count did not, one `PROBLEM:` line. It would have fired about 15:48 in the run. | `goalcup-cli/src/run/watch.rs`; `goalcup-cli/src/run/mod.rs:118-131`; `goalcup-cli/src/participant/status.rs:335-340` | 75 / 80 | Status test: emitter off for 61 s shows the line. Watch test: growing native bytes and a flat written count give one `PROBLEM:` line, not one per tick. | 6, 1 | AD3, rewritten, plus the owner's "check against local logs" |
+| | **Total** | | **about 175 net / 1,430** | | | |
+
+Left as they are, on purpose: P9 (65,536 producer IDs per entry, `capture.rs:63`) lasts 7.6 days at
+one reconnect every 10 s, longer than a run, and SL3 makes reconnects rare; it guards the verifier's
+lineage check, and if reached, SL6 and SL8 make it loud. P12 (a refused `Recovery`, `proxy/api.rs:774-785`)
+stays terminal and loud for the same reason. P18 (masking hold over 16 KiB) masks, never loses. P19
+(a decoded body over 8 MiB) is a stream gap with an end. P21 (a chain write error) is already loud. P22
+(full disk): the owner chose no special handling; CH9 only trims the torn tail. P23 and P24 refuse the
+harness rather than lose silently; CH6's other parts fix them in PR7.
+
+What could go wrong: a request body can now have holes, so that stream is "incomplete" while every
+other stream records; the verifier's provider decoders were not re-read for mid-body gaps (unverified,
+K1 keeps them). A broken recorder is retried for ever (log noise, one producer ID per 10 s). The single
+owner thread is still the throughput limit and its peak rate is unmeasured; N6 measures it. Lane N
+preferred a "busy" answer with TCP backpressure instead of SL3. We choose SL3: it is half the code, needs
+no new state, and cannot wedge a socket.
+
+## 4. The target shape
+
+Unchanged from revision 1: the harness reaches a loopback recording proxy through `HTTPS_PROXY`; the
+proxy decrypts declared model hosts and names every other host it passes through; the recorder (still a
+separate daemon for Friday) masks, then writes a hash-linked chain, and polls session folders; the
+uploader sends chunks to the Worker, which stores them in R2 by sequence and `received_at`;
+`scripts/fetch-run.sh` and `goalcup-verify --capture-integrity` rebuild a run by ID and time.
 
 ```mermaid
 flowchart LR
   H[Harness and its subagents] -- HTTPS_PROXY --> P[Recording proxy in goalcup start]
   P -- decrypt declared model hosts --> M[Model provider]
   P -- pass through unread, name host --> O[Other hosts]
-  P -- exchanges --> D[Recorder: mask, then chain]
-  S[Session files, main and subagents] -- poll: open, read, close --> D
+  P -- frames, base64, per-stream gap if full --> D[Recorder: mask, then chain]
+  S[Session files, main and subagents] -- poll, read only what fits --> D
   D --> C[Local chain parts]
-  C --> U[Uploader: 32 MiB chunks] --> W[Worker] --> R[R2 and run index]
+  C --> U[Uploader: long-window zstd chunks] --> W[Worker] --> R[R2 and run index]
   R --> F[fetch-run and verify: rebuild by ID and time]
-  D -. counts .-> T[Participant: Recorded line and status]
+  D -. written count, off time .-> T[Participant: Recorded line and status]
 ```
 
-**What the two fresh designs agree on** ([B.1](2026-10-30-audit/B-fresh-design.md#b1-both-designs-at-a-glance),
-[top findings](2026-10-30-audit/B-fresh-design.md#top-findings)): an environment-set proxy with a run CA,
-decrypt model hosts only, a session-root poller that opens, reads and closes each file, one masker
-before disk, idempotent `PUT` upload, plain status, and a connector of 15 to 20 lines. No subagent code
-is needed: subagents share the parent's network path and write more files. Neither design has a hash
-chain, signed acks, termination proof, a daemon control API, disk handling or research decoders. Both
-land at 2,500 to 3,800 lines in all (`B-fresh-design.md:15-16`), against about 102,000 production
-lines today (85,800 of them in the client crates).
-
-**Where this plan differs, and why.**
-
-| Fresh designs | This plan for Friday | Why |
-|---|---|---|
-| One process, or a tiny supervisor | Keep the separate daemon | The merge is about 12,000 source lines and touches 22 CLI files ([C 2.2](2026-10-30-audit/C-module-audits.md#22-should-the-daemon-be-a-separate-process-at-all)). After Edition 01. |
-| No hash chain or signing | Keep both | The Worker, verifier, uploader and prune all read acks today. Cutting them changes five copies of the contract in one week ([I](2026-10-30-audit/I-server-upload.md#9-hidden-couplings)). After Edition 01. |
-| `killpg`, grace, `killpg` | Keep termination proof | It works and was measured. A 168-hour stop is not the place to try new code. After Edition 01. |
-| Rewrite in Go | Cut the Rust toward the shape | B1 says so ([B top findings](2026-10-30-audit/B-fresh-design.md#top-findings), item 10); a rewrite does not fit in a week. |
-| B1 forces `Accept-Encoding: gzip` | Never change a forwarded byte (B2 and today) | Needs a per-harness test. The proxy already decodes one gzip, deflate, brotli or zstd coding plus permessage-deflate; any other coding is an `UnsupportedEncoding` gap (`docs/ARCHITECTURE.md:211-213`). |
-| Wildcard decrypt of cloud hosts | Keep the declared host list and name every passed-through host | Lane E rejects wildcards: they break boto3, gRPC and `cloudflared` and decrypt the agent's own cloud work ([E1 cuts](2026-10-30-audit/E-providers.md#e9-keep-cut-change-provider-facing-parts-only)). |
-| Joined-view masking of split secrets (about 80 lines) | Not for Friday | In today's streaming masker it is not small ([G.8](2026-10-30-audit/G-secrets.md#g8-the-model-echo-gap-h-29-and-the-promised-scan-that-does-not-exist-points-4-6-g-surface-g6)). Disclose the gap; build an export-time scan later. |
-| SQLite snapshots every 10 to 15 minutes | Keep Hermes's one final snapshot, lift its 64 MiB cap | New code; Hermes subagents reach the trace at seal only. A masked span changes length (`crates/goalcup-daemon/src/redact.rs:1199-1207`, the marker function), so the copy may not open as SQLite, and it holds earlier sessions of the shared home. Say so to Hermes users (AD8, Q4). |
-
-## 3. Numbers
-
-Counted with `wc -l`. "src" is production code; inline `#[cfg(test)]` modules count as tests. Today's
-figures are from [A.1](2026-10-30-audit/A-inventory.md#a1-totals-by-area). The "after" columns are
-estimates from the line ranges in sections 4 to 6, plus or minus 30 percent. Fixture and spike data
-lines are not in these figures (section 4 gives them).
-
-| Area | src today | tests today | src after Friday cuts | tests after Friday cuts | src after later cuts | tests after later cuts |
-|---|---:|---:|---:|---:|---:|---:|
-| `crates/goalcup-cli` | 38,636 | 69,357 | 35,760 | 64,840 | 30,870 | 53,320 |
-| `crates/goalcup-daemon` | 18,959 | 34,559 | 18,800 | 33,850 | 9,100 | 19,550 |
-| `crates/goalcup-platform` | 5,039 | 2,540 | 4,360 | 2,120 | 1,960 | 620 |
-| `crates/goalcup-protocol` | 11,013 | 14,841 | 11,010 | 14,725 | 6,350 | 5,690 |
-| `crates/goalcup-verifier` | 12,153 | 22,059 | 2,410 | 4,620 | 1,850 | 3,040 |
-| `server/worker` (src plus ops scripts) | 4,395 | 5,749 | 4,390 | 5,700 | 3,640 | 4,860 |
-| `scripts/` | 11,176 | 10,393 | 5,720 | 5,570 | 3,780 | 3,490 |
-| Other (`packaging/install.sh`, `harnesses/install.sh`, `spikes/redact.py`) | 805 | 0 | 740 | 0 | 390 | 0 |
-| **Total** | **102,176** | **159,498** | **83,200** | **131,400** | **57,900** | **90,600** |
-| Plus the adds (section 6) | | | +400 | +800 | | |
-| **Total with adds** | | | **about 83,600** | **about 132,200** | **about 58,300** | **about 91,400** |
-
-So the Friday build is about 19 percent smaller in source and 18 percent smaller in tests. After the
-later cuts it is about 43 percent smaller in source. The test figure fell from the first draft
-because the Rust Worker stand-in (K3), `m2_contract.rs` and four script tests now stay until after
-Edition 01. Lane J's test rewrite (keep about 37,000 lines, rewrite about 61,000 down to 30,000) would
-take tests further ([J A7](2026-10-30-audit/J-tests-gate.md#a7-recommendations)).
-
-## 4. Cut list
-
-Points checked: which point could suffer, and why it does not. "Before Friday" means merged by Tuesday
-3 November. Savings are counted once; where two rows touch the same lines, the row says so.
-
-### 4a. Before Friday (biggest safe cuts first)
-
-| Id | What | Path | src | tests | Risk | Tests that go | Points checked | When |
-|---|---|---|---:|---:|---|---|---|---|
-| K1 | Verifier research decoders, reports and stats, and the `doctor` decoder check | `crates/goalcup-verifier/src/capture_analysis/{api,registry,session,operations,wire,tracker,anthropic,openai,chat,thread,report,stats}.rs`, `native/*`; `crates/goalcup-cli/src/commands/doctor.rs:246-316` | 9,745 + 71 | 16,720 + 55 (+1,270 fixture lines) | Medium. `scripts/matrix.sh:2051-2064` counts calls with `--research-json`, so AD4 lands in the same PR. `reader.rs:36` imports `wire::SegmentView`: move that one type. Run labels (`wire_and_native` to `none`) and the bypass hint `native_activity_without_wire_streams` live only in `report.rs:375-404`, and `docs/RULES.md:306-321` and `docs/CHEAT-CHECKLIST.md:46-48, 94-97, 133-136, 144` cite them: AD4 prints a label from stream metadata, and PR3 rewords those lines to "labels are computed after the run". After PR8b, branch `decoders-ed01` from main with PR3 reverted, so the judges' decoders read Friday traces with the new bounds. README P6 names decoders (`README.md:287`), so Q1 first. | `m2_*decoder*`, `m2_native_observations`, `m2_research_report` (2,456), `m2_run_stats` (873), `m2_hermes_capture_only` (395), `connector_samples`, verifier `harness_contract_golden` (487), `common/decode.rs`, `common/wire.rs`. Edit, not delete: `every_hinted_path_is_read_by_its_decoder` (`crates/goalcup-cli/src/model_host.rs:1218-1270`), `tests/it/harness_contract_kit.rs:20-22, 511-513`, `tests/it/connector_contract.rs:36-37, 937-944`, `tests/full/connector_contract.rs:381-406`. | 1: the count proof moves to AD4. 5: the integrity reader (`reader.rs`, `lineage.rs`) stays and `fetch-run.sh` uses it. 6: the participant's call count comes from `state.json` (`crates/goalcup-cli/src/run/mod.rs:266`), not the verifier. | Before Friday (PR3) |
-| K2 | Scripts that serve no point, and the version check | `scripts/campaign.py` 1,888; `linux-matrix.sh` 876 + `kit_settle.py` 302; `research-measure.py` 541, `-replay.py` 342, `-sample.py` 424, `-staging.py` 604, `-watch.py` 95 (keep `research-staging.sql`); `ci-scope.py` 90; `harnesses/install.sh` 62; `check-version.py` 206 (moved here from K25). Data: `campaign.example.json` 64. Keep `linux-harness-smoke.sh`. | 5,430 | 4,821 | Low. `campaign.py` is the only automated network-cut drill: do it by hand in the 2-hour run. Edit `.github/workflows/ci.yml` (scope step and these tests), `scripts/gate.sh:61` and `scripts/release.sh:101-104` (version check). `check-version.py` reads `docs/CONTRACTS.md` and `docs/DECISIONS.md` (`:46-47`), so it would also break on a later doc merge. | `test_campaign.py` 1,335, `test_linux_matrix.py` 1,219, five `test_research_*.py` 1,467, `test_early_crosscheck.py` 538, `test_ci_scope.py` 134, `test_check_version.py` 128. Keep `test_gate.py`, `test_release.py`, `test_linux_check.py`, `test_codeowners.py` (lane J): they test kept scripts. | 7: live runs keep `matrix.sh`, and `linux-harness-smoke.sh` stays for `scripts/linux-check.sh:99-104` and `.github/workflows/linux-x86_64.yml:63`. 3: the network cut moves to the 2-hour run (section 9). | Before Friday (PR2) |
-| K4 | Connector byte goldens | `crates/goalcup-cli/tests/it/harness_contract_golden.rs` 975; `crates/goalcup-daemon/tests/it/harness_contract_golden.rs` 463; `crates/goalcup-protocol/tests/it/connector_template.rs` 120; fixtures `harness-golden` 2,110. Keep `m2_contract.rs` (record format), `frozen-connectors` and `schema-1-connectors` (kept tests read them). | 0 | 1,558 (+2,110 fixture lines) | Low. Keep `chain_golden.rs` (102) and `no_family_literals.rs` (378), which guards the hard rule at `AGENTS.md:87`. `m2_contract.rs` stays as the record format frozen for the cup, so a mid-cup fix release cannot change record bytes by accident. | the files listed | 5: the owner dropped the byte-for-byte rule for subagent files. 7: `shipped_connectors.rs` still loads every shipped connector. | Before Friday (PR4) |
-| K5 | Disk-full handling (owner: no special handling), client only | `crates/goalcup-cli/src/run/reserve.rs` (533 src / 423 inline), `run/pause.rs` (211 / 149), the disk half of `vitals.rs`, disk parts of `run/watch.rs`, `run/mod.rs`, `commands/start/phases.rs`, `commands/start/forked.rs` (about 330, est.); `crates/goalcup-platform/src/disk.rs:58-239`; `scripts/t25-disk-full.sh` 93; `tests/full/t25_disk_full.rs` 1,173. Keep process vitals (`open_files`, CPU, memory). The Worker disk code stays until after Edition 01. | about 1,410 | about 1,830 | Medium. A real `ENOSPC` poisons the writer and leaves a torn tail (`crates/goalcup-platform/src/tracecap.rs:673-689`, `crates/goalcup-daemon/src/runtime/capture/writer.rs:206-222`): CH9 fixes this. The 30 s tick (`run/reserve.rs:41`) moves to `run/watch.rs`. The Worker already accepts a heartbeat with null disk fields (`server/worker/src/runs.ts:507`). | reserve and pause inline tests, disk cases of `vitals.rs`; `t25_disk_full.rs`; `platform/tests/it/disk.rs` (137); disk cases in `prep.rs`, `status_views.rs` | 3: the `SIGSTOP` pause itself freezes the harness, so the cut helps; process vitals stay so a handle leak is still seen. 5: the `StorageFull` gap stays (`writer.rs:294`). 6: one plain line says a full disk ends recording (AD8). | Before Friday (PR6) |
-| K6 | Spike prototypes and unused spike data | `spikes/cursor-cli` (1,681), `spikes/openclaw` (7,887), prototype plugin code elsewhere in `spikes/` (hermes 374, opencode 269). Keep `spikes/redact.py`, `spikes/opencode` fixtures, chain golden files | 643 prototype (not counted as src) | 0 (+9,568 data lines) | Low. The redaction corpus test reads spike files (`crates/goalcup-daemon/tests/it/redaction.rs:608-650`); keep the OpenCode catch at `:625`. 73 `.jsonl` corpus files remain, above the test's floor of 50. | corpus assertion narrows | 4: the corpus still covers the four shipped harnesses. | Before Friday (PR2) |
-| K7 | Start-path leftovers: the start-time provider probe, probe test seams and DNS loopback check, shared-home double recheck, legacy leftovers. Keep session sniffing on `continue`. | `proxy/preflight.rs` (250 src / 170 inline) and its call (`commands/start/refusals.rs:9`, `commands/start/phases.rs:107-142`), `participant/refusals.rs:150-215`, `commands/start/phases.rs:234-245, 282-290`, `model_host.rs:507-540`, `launch.rs:912-920, 1306-1349`, `home.rs:30-90` (keep the `flock` at `:79-95`), `commands/prep.rs:436-445`, `preflight/probe.rs:7-29` (all under `crates/goalcup-cli/src/`) | about 620 | about 910 | Low to medium. Mixed-file estimates. Reserve calls in these files are counted in K5. An offline start shows its problem at the "no model calls" line (`participant/status.rs:467-509`), not at once. `phases.rs:296-361` and `launch.rs:664-746` stay: they hold `started_at_unix`, `model_calls_before` (AD2 needs it) and `resume_failed`. | probe rows in `preflight_doctor.rs`, `start_launch.rs:1026-1110, 1217-1261`, `m2_cli_lifecycle.rs:679-713`, removed-flag tests | 7: `continue` still checks for a session before it resumes. 3: fewer reasons to refuse a start. | Before Friday (PR9) |
-| K8 | `goalcup mcp` setup lines, and the legacy `git-credential` and old GitHub token flow. The `goalcup mcp` command itself stays through Edition 01. | `commands/prep.rs:730-760`, four `[participant.time_left_tool]` tables; `account/github.rs` (about 280 of 466), `main.rs:229-240, 327-336` | about 310 | about 150 | Low. Dry-run participants pasted the `goalcup mcp` lines into four harness configs; the command keeps answering, so no harness shows a failed server. 0.6.1 test clones cannot push (test data). | setup-line cases in `prep.rs` tests; git-credential cases in `tests/it/account.rs` | 6: `goalcup time-left`, the deadline file and the MCP tool stay. 3: no failed MCP server at harness start. | Before Friday (PR9), Q6 |
-| K9 | Platform dead code and no-point facts | `crates/goalcup-platform/src/tracecap.rs:186-210, 344-352, 546-563, 735-775`, `tracecap/unix.rs:607-739`; `machine.rs:415-466, 541-561` (AC power, container); `handle_budget.rs` (79, goes with CH2, and edits `sourcecap.rs:3, 139, 152`, `sourcecap/unix.rs:2, 131`, `native_capture.rs:576`) | about 500 | about 280 | Low. `docs/RULES.md:366` promises the AC power and container facts: edit it in the same PR. | `descriptor_*`, `sweep_*`, AC power and container cases, budget tests | 5: chain writes still `fsync`. 4: no-follow session reads in `sourcecap` stay. | Before Friday (PR8b and PR9) |
-| K10 | Uploader leftovers: `repo_head`, dual `proxy_version` and `tracer_version`, older-server deadline fallbacks. Keep the owed-ack path. | `crates/goalcup-cli/src/upload/uploader/local.rs:132-246`, `session.rs:33-45`, `upload/api.rs:14-69, 115-139, 247-262`, `uploader/heartbeat.rs:204-209, 231-280` | about 230 | about 380 | Low. The Worker must send `seconds_left` on open, continue and heartbeat; keep the local deadline path (`uploader/lifecycle.rs:129-133`). The Worker accepts a null `repo_head` (`server/worker/src/runs.ts:452-453, 472`). The owed-ack path (`session.rs:228-253, 327-347, 483-496`) stays: it lets the upload go on when `acks.jsonl` cannot be written, for example on a full disk. | `repo_head` cases, `api.rs` and heartbeat inline cases | 5: the chunk path is untouched. 6: the deadline still shows. | Before Friday (PR10) |
-| K11 | Proxy outage windows and extra counters | `crates/goalcup-cli/src/proxy/outage.rs` (144 / 172), `proxy/mod.rs:647-920, 1176-1224, 1241-1270`, `proxy/connect.rs:402-426` | about 520 (sum of named ranges; C counts about 200 for the outage part alone, so some of `mod.rs:647-920` may stay) | about 290 | Low. The finish loses "provider unreachable from 10:02 to 10:07"; a kept counter gives "could not reach api.example.com 14 times". | outage inline tests; the open flake `an_upstream_outage_is_one_window_closed_by_the_next_reach` (`tests/it/m2_proxy_integration.rs:2853-2916`); `m2_tls_connect.rs:273-303` | 6: the count line stays. 3: nothing here touches forwarding. | Before Friday (PR7) |
-| K12 | Daemon writer quota half and V1 row refusal | `crates/goalcup-daemon/src/runtime/capture/writer.rs` (quota part), `runtime/daemon.rs:143, 514` | about 150 | about 250 | Low. The 1 TiB quota is never reached. | storage-quota cases in `runtime/capture/tests.rs`; `capture_lifecycle.rs:2270` block | 5: the `StorageFull` gap is separate and stays. | Before Friday (PR8b) |
-| K26 | v5 corpus test (moved here from K14) | `crates/goalcup-verifier/tests/it/v5_corpus.rs` 718; fixtures `tests/fixtures/v5-corpus` | 0 | 718 (+912 fixture lines) | Low. Test-only. The owner ended back-compat before Edition 01; older test traces are no longer re-read. PR8a then has no frozen corpus to regenerate. | `v5_corpus.rs` | 5: `m2_contract.rs` and `chain_golden.rs` still pin the current format. | Before Friday (PR4) |
-| | **Total before Friday** | | **about 19,000** | **about 28,000** | | | | |
-
-### 4b. After Edition 01
-
-| Id | What | Path | src | tests | Risk | Tests that go | Points checked | When |
-|---|---|---|---:|---:|---|---|---|---|
-| K3 | Rust stand-in of the Worker (moved here from Friday) | `crates/goalcup-cli/tests/common/upload_server/` (2,514); `tests/it/upload_server.rs` 1,419, `upload_server_device.rs` 529, `upload_server_segments.rs` 961 | 0 | 5,423 | Medium. Ten other test files import the stand-in, `full/upload_e2e.rs` (2,518) among them; each needs a port to `wrangler dev` or a trimmed fake (C: trim it by about 500 lines). | the 65 stand-in tests | 5: AD7 (N4) tests the real Worker from Wednesday on. | After |
-| K13 | Merge the daemon into `goalcup start` (control API, ingest IPC, registry, lifecycle, termination proof, CLI daemon client, spawn and retry, `proxy/ingest.rs`, protocol `control.rs`) | `crates/goalcup-daemon/src/{control,ingest.rs,registry.rs,terminate,runtime/termination.rs,...}`, `crates/goalcup-cli/src/daemon/`, `subreaper.rs`, `released_child.rs`, `launch.rs:1657-1994`, `proxy/ingest.rs`, `crates/goalcup-protocol/src/control.rs` | about 12,000 | about 15,000 | High. Ctrl-C and `SIGHUP` reach the recorder; offline seal is untested; `setsid` children escape `killpg`; README P5 and P7. | `control_api.rs`, `capture_ingest.rs`, `terminate_sim.rs` (2,714), `process_kill.rs` (1,285), `capture_gate.rs` (519), `daemon_client.rs` (1,248), `run_scoped_daemon.rs` | 3: one process can kill its own child group with no pid-reuse risk. 1: a dead `goalcup start` must still leave a gap. | After |
-| K14 | Protocol and verifier back-compat, retired versions, seed support, dead V1 status fields, `export.rs` quota branches | `crates/goalcup-protocol/src/export.rs`, `control.rs:283-318`, `capture.rs:309-316`, `envelope.rs:24-28, 119-123`; verifier legacy branches | about 1,350 | about 3,000 | Medium. A control API bump in a week when the protocol already changes. No point gains. | legacy cases in `capture_terminals.rs`, `export_roundtrip.rs`, `roundtrip.rs:521-585` | 5: the reader still reads every current record. | After |
-| K15 | Platform rewrite of `tracecap` and `sourcecap` on `std` | `crates/goalcup-platform/src/` | about 2,400 | about 1,500 | High, wide. | most platform tests | 4: keep no-follow reads, or a symlink to `~/.ssh` uploads. | After |
-| K16 | Harness deny checks, trust tables and ceremony fields | `crates/goalcup-protocol/src/harness/check.rs:671-1048, 1113-1230, 1365-1412`, `capture_policy.rs:151-1000`, `schema.rs:686-748, 846-905` | about 1,780 | about 3,420 | Medium. Review becomes the only connector guard (D51). Touches the loader of every connector. | about 90 of 114 rows in `harness_schema.rs` | 7: connectors still load. 1: keep "no connector routes around the proxy". | After |
-| K17 | Connector pins, folder digest, `pin-manifests.sh`, `check-connector.sh` | `crates/goalcup-protocol/src/pins.rs`, `connector_dir.rs`, `scripts/pin-manifests.sh` 274, `scripts/check-connector.sh` 314 | about 1,240 | about 1,210 | Medium. Packaging, the kit and `GOALCUP_CONNECTORS_DIR` (`crates/goalcup-cli/src/config.rs:132-147`) assume a folder; the Worker wants a 64-hex `connector_dir_sha256`. | `connector_pins.rs`, `pins_build_fails.rs`, `test_check_connector.py` | 7: embed the four `harness.toml` files instead. | After |
-| K18 | Receipt, ack and status signing | `crates/goalcup-protocol/src/receipt.rs`, `ack.rs`, `control.rs:353-430`; `server/worker/src/sign.ts`; client ack checks; verifier receipt paths | about 1,000 | about 2,500 | High. Verifier, protocol, client, Worker and corpus change at once; prune must move to server position. Overlaps K13 (status signing). | `signing_vectors.rs`, `sign.test.ts`, receipt cases | 5: append-only offsets, R2 sha256 and `received_at` stay the anti-tamper facts. | After |
-| K19 | CLI extras: `login`, SSH key warnings, clipboard push lines, `doctor` shrink, status technical block, `goalcup mcp` | `commands/login.rs`, `ssh_keys.rs`, `push_lines.rs`, `commands/doctor.rs`, `commands/status.rs`, `commands/mcp.rs` (273 / 201) | about 1,770 | about 2,000 | Medium. `packaging/install.sh:100-160` parses `status --json`; `matrix.sh` parses `login` and `doctor`. | `login.rs`, `ssh_keys.rs`, `status_views.rs` parts, `mcp.rs` tests | 6: status keeps the Recorded line; `goalcup time-left` stays. | After |
-| K20 | Judged commit to an organizer script. `db-local.ts` stays: N4 runs `wrangler dev` with `DB_BACKEND=local` (`crates/goalcup-cli/tests/full/upload_worker.rs:50`). | `server/worker/src/github.ts` 223 | about 220 | about 180 | Medium. The judged commit with late and force flags is a cheat control (`github.ts:169-222`); someone must run the script. | `github.test.ts` | 5: storage path unchanged. | After |
-| K21 | Seal-time workspace walk and Git digest | `crates/goalcup-daemon/src/workspace.rs` 485, `workspace_git.rs` 549 | about 800 | about 600 | Medium. `seal.json` Git fields and verifier `seal_git_*` change. | most of `workspace_layout.rs` (643) | 5: the repository on GitHub holds the work. | After |
-| K22 | Finish stage machine to one timeout | `crates/goalcup-daemon/src/runtime/capture/finish.rs` 763 | about 400 | about 900 | Medium. Seal timing bugs. | most of `capture_finish_budget.rs` (1,267) | 3: a single deadline still bounds the end. | After |
-| K23 | Rate limiter Durable Object to one zone WAF rule | `server/worker/src/ratelimit.ts` 139 | about 170 | 184 | Medium. Zone rule slot unverified; needs a `deleted_classes` migration. | `ratelimit.test.ts` | none of the seven. | After |
-| K25 | `check-links.py`, `spikes/redact.py` oracle | `scripts/check-links.py` 1,349, `spikes/redact.py` 349 | about 1,700 | about 2,470 | Low. `check-links.py` guards this week's doc cuts; the oracle guards this week's masking change. | `test_check_links.py`, `spikes_redact_py_*` | 4: the Rust redaction suites stay. | After |
-| K27 | Leftovers moved out of Friday by the reviews: Worker disk vitals and `disk_full` notice (`runs.ts:499-533`, `notices.ts`, about 90); the owed-ack path (about 60); client run give-back and `pending-open.json` (`upload/mod.rs:297-495`, about 160); `m2_contract.rs` (1,715 tests) once the cup ends | as listed | about 310 | about 2,140 | Low. Give-back cut may leave stray `started` or `silence` emails. | `notices.test.ts` disk cases, owed-ack cases, give-back cases, `m2_contract.rs` | 5: no record path changes. | After |
-| | **Total after Edition 01** | | **about 25,100** | **about 40,500** | | | | |
-
-K24 (crash and failure campaign tests, about 2,880 test lines) is not counted: it waits for N5,
-a new end-to-end test (about 400 lines, [J A7.5](2026-10-30-audit/J-tests-gate.md#a75-the-minimum-test-set-that-proves-the-seven-points-end-to-end))
-that no PR schedules. Until N5 exists, `capture_crash_campaign.rs` is the only test of `kill -9`
-and a torn tail across real processes.
-
-Overlaps: K13 holds the termination proof and part of K18 (status signing) and the CLI half of the
-spawn gate; K15 starts from the platform left after K9; K19's `doctor` shrink excludes the decoder
-check counted in K1.
-
-## 5. Change list
-
-| Id | What | Why (point) | Size | Risk |
+| Option | Shape | New or changed src | Days | Verdict |
 |---|---|---|---|---|
-| CH1 | Raise our own bounds to values that state their cost, in `crates/goalcup-protocol/src/capture.rs`: `MAX_OPEN_STREAMS` 128 to 16,384 (`:58`; each open stream holds at most 16 KiB of undecided masking bytes, `crates/goalcup-daemon/src/redact/stream.rs:122-125`, so 256 MiB worst case, near zero for a quiet JSONL file); `MAX_OPEN_CONNECTIONS` 128 to 1,024 (`:60`); `MAX_CAPTURE_QUEUE_BYTES` 8 MiB to 64 MiB (`:51`), with the proxy `CONTROL_RESERVE_BYTES` 512 KiB to 4 MiB (`crates/goalcup-cli/src/proxy/ingest.rs:113-116`, 4 KiB per connection as today, still under the `/8` assert at `:128`). `MAX_LIVE_PRODUCERS` stays 128: the compile check at `crates/goalcup-daemon/src/runtime/capture/sink.rs:18` allows at most 256, and producers are per proxy epoch, not per subagent. The verifier's `MAX_GOAL_STREAMS` (`crates/goalcup-verifier/src/capture_analysis/reader.rs:78`) follows `MAX_PRODUCERS`, as its comment says it should. Every user moves in the same PR: proxy `api.rs:451, 599`, `mod.rs:1463`; daemon `sink.rs:386, 425`, `ingest.rs:1051, 1335`, `runtime/capture/writer.rs:252`, `redact/stream.rs:2769`; verifier `reader.rs:1384, 1566, 1694` (`session.rs` is gone with K1). | 2, 3 | about 30 src, about 500 test lines rewritten | Medium. If the reader does not move with it, large runs read as invalid (exit 2). Worst-case memory is about 256 MiB masking plus 64 MiB queue on each side; the realistic figure is measured in N1. An append-only stream keeps its slot for the whole part (`runtime/capture/tests.rs:2236-2239`), so a part with more than 16,384 subagent files still waits; closing quiet streams is after Edition 01, and the 2-hour run projects the 168-hour peak. |
-| CH2 | Delete the native share and file caps: `max_open_streams: MAX_OPEN_STREAMS / 4` and `max_files: 1024` (`crates/goalcup-daemon/src/native_capture.rs:279-280`), and `MAX_NATIVE_FILES` 20,000 (`:187`). A native stream holds no file handle between polls (`:76-81, 1415-1460`). The 32-handle budget (`handle_budget.rs`, from K9) goes with it. | 2 | about -40 src, about 250 test lines rewritten | Medium. CPU grows with files: CH3 ships close behind. |
-| CH3 | Cheap native poll: idle poll every 1 s, not 100 ms (`runtime/capture/owner.rs:16`); open each parent folder once per pass (`native_capture.rs:1376-1430`). A poll with deferred work repeats at once (`owner.rs:186`). | 3 | about 40 src | Low. Some tests wait longer for bytes. A fast writer may lag at 256 KiB per poll (`native_plan.rs:11`); measure. |
-| CH4 | A stream or connection past the bound is refused alone with the existing one-reason loss. Never latch `Disabled(LimitExceeded)` for the segment (`crates/goalcup-cli/src/proxy/api.rs:451-453, 599-601`). Naming the host in the loss is a record change and waits for after Edition 01. | 1, 3 | about 4 src, 1 test | Low. |
-| CH5 | Raise the open-file soft limit to the hard limit (macOS clamped to 10,240, Linux to 65,536) at the top of `main`, before the daemon starts; drop `OPEN_FILES_WANTED` (`commands/start/proxy.rs:27, 33-63`; today raised late at `commands/start/phases.rs:516`). | 2, 3 | about 10 src | Low. A harness tool using `select(2)` above 1,024 handles may break (rare, unverified). |
-| CH6 | The proxy never refuses: delete `MAX_RECORDER_RESTARTS` (`proxy/mod.rs:1022`, checked `:1079-1098`) and restart every time after 1 s, logging once a minute; delete the 503 past `MAX_CONNECTION_TASKS` (`:112`), keep the 10 ms `EMFILE` retry; delete `MAX_CONNECTION_FAILURES` (`proxy/ingest.rs:104`) and retry the daemon every 10 s for ever. A restart reuses the producer state (`proxy/mod.rs:1049-1060`), so it spends no producers. | 3 | about -60 src net, about 220 test lines rewritten | Low. A loop that dies on every accept restarts once a second (noise, logged). |
-| CH8 | Masking option b, after AD1: drop the `email` rule (`crates/goalcup-daemon/src/redact.rs:284-288`, its recognizer in `redact/stream.rs`, `spikes/redact.py:69`); drop the four Codex rate-limit rows (`connectors/codex-cli/harness.toml:110-113`); keep the three id rows; fix the form test (`redact/stream.rs:3538-3546`); regenerate pins. | 4 (and 1: the email rule masked bytes in subagent files) | about -100 src, about -90 tests | Low. Emails, plan type and credit balance now enter the private trace: AD8 says so. |
-| CH9 | On `StorageFull`, cut the chain back to the last whole record, then latch (`writer.rs:154, 216, 221`; `tracecap.rs:673-689`). The trace is then "incomplete", not "invalid". | 3, 5 | about 10 src, 1 test | Low. Must use the writer's known record length. |
-| CH10 | Prune: delete a closed part only after the server acked it, never the last part; drop the 2-hour timer and the disk-pressure branch (`crates/goalcup-cli/src/upload/prune.rs:47-82`). | 5 (a week of chain must fit on a laptop) | about -60 src, about -100 tests | Low. No local copy after the ack (Q9), so the 2-hour run compares against its own copies (section 9). |
-| CH11 | Passed-through hosts: keep one row per connection (host, port, bytes, times), which cheat check C5 needs ([L](2026-10-30-audit/L-red-team.md), C5). Past the 10,000-row bound (`proxy/tunnels.rs:20`), keep one row per new host and port with a count, so every host is named. The bound stays, and says why: it keeps the list under the 8 MiB the Worker accepts (`server/worker/src/runs.ts:27`, client `upload/uploader/finish.rs:257`). The format line `goalcup-tunnels-v1` does not change, so the Worker, which reads only that line (`runs.ts:73-86`), needs no change. Finish line: "Passed through unread: host:port, n connections." | 1, 5, 6 | about 30 src | Low. A crash before finish still loses the list, as today; a chained record waits for after Edition 01. |
-| CH12 | Hermes final snapshot: remove the 64 MiB cap `NATIVE_FINISH_BYTES` (`owner.rs:13`); keep the 180 s finish budget (`crates/goalcup-protocol/src/control.rs:708`). Best effort: the masked copy may not open as SQLite (AD8). | 2, 5 | 1 line | Low. A long seal on a huge `state.db`. |
-| CH13 | `goalcup setup` warns instead of failing on an unsupported filesystem (`commands/prep.rs:1104-1111`); `start` and `continue` already only warn (`folder_gate.rs:10-12`). Edit `docs/RULES.md:385` in the same PR. (The provider probe is deleted in K7.) | 3, 7 | small saving | Low. A run on btrfs (Fedora's default) is untested. |
-| CH14 | Worker for Friday, configuration only: `MIN_COMPETITION_VERSION` to the Friday tag (`server/worker/wrangler.toml:55, 150`); `EVENT_ID` switch (`:42`); a comment on `RUN_MAX_COMPRESSED_BYTES` (`:59`) naming the storage cost. No Worker code changes before 7 November: it already accepts null vitals and a null `repo_head` (`runs.ts:452-453, 507`). Keep `model_requests` in the heartbeat (`runs.ts:458`): it is the server's only call signal. | 5 | config | Medium. Deploy order; the owner deploys from a local device. No website SQL change. |
-| CH15 | Connector data: Claude Code keeps `DISABLE_AUTOUPDATER` and adds `DISABLE_UPDATES = "1"` and `CLAUDE_CODE_DISABLE_AGENT_VIEW = "1"` (`connectors/claude-code-cli/harness.toml:60`, [D](2026-10-30-audit/D-harnesses.md)); Codex unchanged, plus one test that its `-c` launch arguments stay, since they already force the embedded app server (`connectors/codex-cli/harness.toml:45-49`); Hermes rows for 0.22.5 only, dropping the 0.19.0 rows (`connectors/hermes-cli/harness.toml:54-57, 88-92, 103-109`) if Q4 is yes. | 1, 2, 7 | about 6 data lines, 1 test, pins | Medium. Participants lose agent view (AD8 says so). |
-| CH16 | Gate flakes: fix a flake only when it fails a PR this week. The outage-window flake goes with K11. Sweep the port races and sub-second bounds ([J B4](2026-10-30-audit/J-tests-gate.md#b4-known-flaky-tests-and-root-causes)) after Edition 01. | trust in the gate (no point) | small | Low. |
+| A | Today's shape, patched (section 3) | about 400 changed | about 3 | **For Edition 01** |
+| B | The proxy masks and writes its own wire record; no IPC | about 1,300 to 1,600 new; about 2,850 removed | 7 to 10 | After Edition 01, via the `CaptureSink` seam |
+| C | Fresh minimal rewrite | about 3,700 to 5,600 in Rust | 15 to 25 | No |
 
-CH7 (one proxy worker thread per core) is withdrawn for Friday: no measurement shows proxy latency.
-The 2-hour run records per-call latency; change it after Edition 01 if needed.
+Details and risks: [N section 3](2026-10-30-audit/N-architecture-and-owner-answers.md#3-options-a-b-and-c).
+Where this plan still differs from the two fresh designs (keep the daemon, chain, signing, termination
+proof, declared host list, never change a forwarded byte) is unchanged from revision 1, for the same
+reasons ([B top findings](2026-10-30-audit/B-fresh-design.md#top-findings)).
 
-## 6. Add list
+## 5. Numbers
 
-Only what the seven points need, in the smallest version.
+Counted with `wc -l`; "src" is production code, inline tests count as tests. Figures after today are
+estimates, plus or minus 30 percent. Per-area figures are in [A.1](2026-10-30-audit/A-inventory.md#a1-totals-by-area).
 
-| Id | Add | Point | Smallest version |
+| | src | tests |
+|---|---:|---:|
+| Today | 102,176 | 159,498 |
+| Friday cuts (section 6a) | about -8,270 | about -10,270 |
+| Friday adds and changes (sections 3, 7, 8; rewrites not counted) | about +650 | about +1,300 |
+| **Friday build** | **about 94,500** | **about 150,500** |
+| Later cuts (section 6b, now including K1, K10, K11, K12) | about -35,800 | about -58,200 |
+| **After Edition 01** | **about 58,700** | **about 92,300** |
+
+The Friday build is about 7 percent smaller in source, against 19 percent in revision 1. The end state
+after Edition 01 is the same as before.
+
+## 6. Cut list
+
+Points checked: which point could suffer, and why it does not. Full rows (paths, tests that go, risks)
+are unchanged from revision 1 unless the row says otherwise.
+
+### 6a. Before Friday (pure deletes first; each can slip without harm)
+
+| Id | What | src | tests | When | Change from revision 1 |
+|---|---|---:|---:|---|---|
+| K2 | Scripts that serve no point and `check-version.py` (`scripts/campaign.py`, `linux-matrix.sh`, `kit_settle.py`, five `research-*.py`, `ci-scope.py`, `harnesses/install.sh`); edit `.github/workflows/ci.yml`, `scripts/gate.sh:61`, `scripts/release.sh:101-104` | 5,430 | 4,821 | PR2, any day | None. The run's 11 real upload errors were a better drill than `campaign.py`. |
+| K6 | Spike prototypes and data (`spikes/cursor-cli`, `spikes/openclaw`, hermes and opencode plugin code); keep `spikes/redact.py` and the corpus files | 0 (+9,568 data) | 0 | PR2 | None |
+| K4 | Connector byte goldens (`goalcup-cli/tests/it/harness_contract_golden.rs`, daemon twin, `connector_template.rs`) | 0 | 1,558 | PR4, any day | None. Saves regenerating goldens for CH15. |
+| K26 | v5 corpus test (`goalcup-verifier/tests/it/v5_corpus.rs`) | 0 | 718 | PR4 | None |
+| K8 | `goalcup mcp` setup lines (`commands/prep.rs:730-760`), legacy `git-credential` flow; the command stays | 310 | 150 | PR9, Tue | Owner said yes (answer 6) |
+| K7 | Start-time provider probe and start-path leftovers; keep session sniffing on `continue` | 620 | 910 | PR9, Tue | None. The probe checks the provider, not the recorder; it would not have seen this loss. |
+| K9 | Platform dead code; `handle_budget.rs` now goes with SL4 | 500 | 280 | SL4 and PR9 | Budget part moved into SL4 |
+| K5 | Client disk-full handling, including the `SIGSTOP` pause; process vitals stay | 1,410 | 1,830 | PR6, Tue | Later in the week. If PR6 is not green, it slips and today's behaviour stays. |
+| | **Total before Friday** | **about 8,270** | **about 10,270** | | |
+
+### 6b. After Edition 01
+
+Unchanged from revision 1: K3 (Rust Worker stand-in), K13 (daemon merge, now the path to option B), K14
+(back-compat), K15 (platform rewrite), K16 (deny checks), K17 (pins), K18 (signing), K19 (CLI extras,
+push lines kept until then), K20 (judged commit), K21 (workspace walk), K22 (finish stage machine),
+K23 (rate limiter), K25 (`check-links.py`, oracle), K27 (leftovers). K24 still waits for test N5.
+
+Moved here from Friday, to free review time for section 3 (new question O1):
+
+| Id | What | src | tests | Why it moves |
+|---|---|---:|---:|---|
+| K1 | Verifier research decoders and reports | 9,816 | 16,775 | The biggest churn: `scripts/matrix.sh:2051-2064`, four kept tests and three docs read it. It fixes nothing the run found. The `decoders-ed01` branch is no longer needed. |
+| K10 | Uploader leftovers (`repo_head`, dual versions, old deadline fallbacks) | 230 | 380 | CH17 and CH18 touch the same files this week. No point gains. |
+| K11 | Proxy outage windows. **Narrowed:** when it lands, cut only `proxy/outage.rs` and the outage fields; keep `ProxyHealth`, `Counters`, `sink_answer` and `sink_refusals` (`goalcup-cli/src/proxy/mod.rs:604-624, 904-914`), which SL6 and SL8 need. | about 300 | 290 | The counters it would have cut are the only proxy-side proof of loss. |
+| K12 | Writer quota half | 150 | 250 | SL6 and SL7 edit `writer.rs`. 218 GB a week is under the 1 TiB quota (`capture.rs:54`). |
+| | **Total after Edition 01** | **about 35,800** | **about 58,200** | |
+
+## 7. Change list
+
+| Id | What | Point | Size | Status in revision 2 |
+|---|---|---|---|---|
+| CH1 | Raise our bounds with their cost stated | 2, 3 | | **Split:** queue part is SL2; stream and connection part is SL4. `MAX_LIVE_PRODUCERS` stays 128 (`goalcup-daemon/src/runtime/capture/sink.rs:18` allows at most 256). |
+| CH2 | Delete native share and file caps | 2 | | **Moved into SL4**, with the no-latch rule and the bound raise. Deleting the caps alone is unsafe: the 129th stream or a full queue would turn native off for the whole part ([M 5.2](2026-10-30-audit/M-two-hour-run.md#52-two-traps-that-make-just-delete-the-cap-unsafe)). |
+| CH3 | Cheap native poll: 1 s when idle, each parent folder once per pass (`owner.rs:16`, `native_capture.rs:1376-1430`) | 3 | about 40 src | Kept, PR8b Tue. The poll runs on the writer's thread, so measure its share in N6 first. Needed before thousands of session files; the run had 43. |
+| CH4 | Refuse one stream past the bound, never latch | 1, 3 | | **Moved into SL5.** |
+| CH5 | Raise the open-file soft limit at the top of `main` | 2, 3 | about 10 src | Kept, PR7, less urgent: the daemon used 17 to 18 files in the run. |
+| CH6 | The proxy never refuses | 3 | | **Split:** the failure budget is SL1. The restart cap (`proxy/mod.rs:1022`) and the 503 past `MAX_CONNECTION_TASKS` (`:112`) stay in PR7. |
+| CH7 | One proxy worker thread per core | | | Still withdrawn. The second run records per-call latency. |
+| CH8 | Masking option b after AD1 | 4 | about -100 src | Kept, PR5 Mon. |
+| CH9 | On `StorageFull`, cut the chain back to the last whole record | 3, 5 | about 10 src | Kept, with K5. |
+| CH10 | Prune a part once the server acked it, never the last; no timer, no disk branch (`goalcup-cli/src/upload/prune.rs:47-82`) | 5 | about -60 src | Kept (owner answer 9), plus AD9's finish line. |
+| CH11 | Name every passed-through host past the 10,000-row bound | 1, 5, 6 | about 30 src | Kept, PR10 Tue. May slip. |
+| CH12 | Remove the 64 MiB native finish cap | 2, 5 | 1 line | **Moved into SL4.** |
+| CH13 | `goalcup setup` warns on an unsupported filesystem | 3, 7 | small | Kept, PR9. |
+| CH14 | Worker configuration only | 5 | config | **Changed:** `RUN_MAX_COMPRESSED_BYTES` to `9007199254740991` (the largest value `parseSafeUint` takes, `server/worker/src/util.ts:119-123`) at `server/worker/wrangler.toml:59, 151`, with a comment naming the storage cost; `MIN_COMPETITION_VERSION` to the Friday tag (`:55, 150`); `EVENT_ID` (`:42`). Keep `model_requests` in the heartbeat as the "harness is active" signal; its comment says it is a "seen" count. |
+| CH15 | Connector data | 1, 2, 7 | data, 1 test, pins | **Changed:** Claude Code adds `DISABLE_UPDATES` and `CLAUDE_CODE_DISABLE_AGENT_VIEW`; Hermes 0.22.5 rows only, plus `updates.check: false`; Codex unchanged, with one test that its `-c` arguments stay. |
+| CH16 | Fix a flake only when it fails a PR | | small | Kept. |
+| CH17 | **New. Upload keeps up.** Reset the failure count whenever an attempt moved the server's offset (`goalcup-cli/src/upload/uploader/lifecycle.rs:513-533`; today it resets only on full catch-up, `:517-519`). Backoff cap 15 to 2 minutes (`goalcup-cli/src/upload/policy.rs:85`). A chunk every 5 minutes, or once 32 MiB of chain waits (`:81, :83`). | 5 | about 6 src, 20 tests | In the run, backoff waits added up to 82 of 120 minutes and only 7 percent was sent at minute 61 ([M 4.7](2026-10-30-audit/M-two-hour-run.md#47-upload-lag-and-the-backoff-fix)). Cost: about 2,000 to 10,000 more R2 objects per busy week. |
+| CH18 | **New. Long-window compression.** After `Encoder::new` at `goalcup-cli/src/upload/uploader/chunk.rs:144`, set a 128 MiB window (`window_log` 27) and long-distance matching; fix the "no long window" comment at `:17-19`. | 5 | about 4 src, 1 test | On chain-shaped synthetic data with 20 interleaved agents, 4.0 to 1 became 14.5 to 1 ([M 4.5](2026-10-30-audit/M-two-hour-run.md#45-zstd-long-window-experiment)). Synthetic only: measure on run 2's saved chain before the release. Cost: about 140 MiB more memory in `goalcup start` while a chunk is built (use 26, 73 MiB, if that is too much). `zstd -d` reads a 2^27 window with no flag, so `scripts/fetch-run.sh:327` and the Worker do not change. That the `zstd` 0.13 crate exposes the setters with default features off is unverified until it builds; the raw `set_parameter` call is the fallback. |
+| CH19 | **New, decided: one stream per WebSocket direction waits until after Edition 01.** | 5 | about 50 to 130 src, 300 to 600 tests | It would cut the chain by about a quarter and writer load by about two thirds (152,728 one-message streams in 49 minutes). But it changes the record shape across the proxy, the verifier's tracker and the decoders (an Amp `ping` breaks a joined JSON split, `goalcup-verifier/src/capture_analysis/thread.rs:48-51`), a week before the event. CH18 covers the size; SL2 and SL3 cover the load. Revisit only if run 2 shows the writer cannot keep up after CH3. |
+
+## 8. Add list
+
+| Id | Add | Point | Smallest version | Status |
+|---|---|---|---|---|
+| AD1 | URL password rule, before CH8 drops the email rule (`goalcup-daemon/src/redact.rs:280-283`) | 4 | about 61 src, 40 tests | Kept, PR5 |
+| AD2 | One "Recorded:" line at each part's end and in `goalcup status`: written model requests with hosts, session files read, files not read yet, off time, gaps, hosts passed through, upload state | 6, 2 | about 30 src, 30 tests | **Changed:** reads SL7's written count and off time, never `model_calls` at `run/mod.rs:266`. Example: "Recorded: 842 model requests from chatgpt.com. Recording was off 17 times, 1 h 12 min in total. Session files read: 43 of 43." |
+| AD3 | "Recording has stopped" | 6 | | **Became SL8.** |
+| AD4 | `live-check` for organizers and the 2-hour runs: wire requests against the harness's own log per 10-minute bucket ("wire minus failed responses" against Codex `token_count` events, Claude Code distinct `requestId`), subagent files against chain paths, secret scan of local and server copies with each stream's segments joined, raw, base64 and percent-encoded | 1, 2, 4, 6 | **Changed:** about 300 lines of Python under `scripts/`, started from the run's observer scripts (`measure.py`, `final.py`, `secrets.py` on branch `origin/smart/tender-clarke-qupne3`). Not shipped to participants. K1 stays, so `matrix.sh` keeps `--research-json`. | PR-K, Mon morning |
+| AD5 | Codex routes: read `openai_base_url` and `[model_providers.openai] base_url`; stop `ollama`, `lmstudio`, `amazon-bedrock`, `gcp` before launch with a fix; warn on any other provider name with no table | 1, 6 | about 40 src, 40 tests in `goalcup-cli/src/model_host.rs:334-405, 546-553` | Kept, PR11 (answer 8 explained above) |
+| AD6 | Tests N1 (2,000 session files under `ulimit -n 256`), N2 (recorder dies ten times, the port serves again), **N6 (new)**: 20 to 40 producers sending 1.5 MB bodies in bursts for 10 minutes against the real owner; no terminal latch, every loss gap followed by a recovery, native stays live; prints drain MB/s and peak CPU | 1, 2, 3 | about 360 test lines, serial group | N1 with SL4, N2 with PR7, N6 with SL3 |
+| AD7 | Server rebuild proof N4 under `wrangler dev`; `fetch-run.sh` names a missing range | 5 | about 10 src, 300 tests | Kept, PR12 Wed. More urgent: the run could not check the server copy at all. |
+| AD8 | Participant text | 6 | text | **More lines:** Codex shows one expected warning about settings goalcup passes; a busy run makes about 1.3 GB of trace an hour; start your prompt with the push lines; recording may pause under load and the screen says when; do not run `brew upgrade`, `npm update -g` or `hermes update`; local models and the routes in Q4 are not recorded; Hermes subagents not yet measured; plus every revision 1 line. |
+| AD9 | **New. Honest finish screen.** Print `verify:` only when the local chain is whole (`goalcup-cli/src/commands/seal.rs:452`); otherwise "The server holds your full recording (acknowledged at T). This computer keeps the last part." Move the support block (`proxy admission: ...`, "anchor", "terminal record") to `host.log`. Status wording "Start your prompt with these lines" (`goalcup-cli/src/commands/status.rs:478`). | 6 | about 20 src, 20 tests | With SL7, Sun |
+| AD10 | **New, decided later:** `--record-host https://host/base` for routes the config reader cannot see | 1 | about 40 to 80 src | After Edition 01 (O8). It does not help Hermes, whose extra hosts would fail TLS. |
+
+Decided not to add for Friday: closing quiet append-only streams, joined-view masking, periodic SQLite
+snapshots, a daemon restart with a fresh producer, spilling the queue to disk, prefix dedupe of
+repeated context, a per-harness call reconcile inside the client (AD4 does it for organizers; SL8's
+alarm is the harness-blind client half), OpenCode or OpenClaw connectors.
+
+## 9. PRs in order, day by day
+
+Each PR runs `sh scripts/gate.sh fast`. Every PR in section 3 also runs `sh scripts/gate.sh full`,
+because CI skips the daemon and CLI suites (`.github/workflows/ci.yml:15-16`). "Alone" means it can merge
+by itself. Every client change ships in the one Friday release.
+
+### 9.1 PRs
+
+| PR | Scope | Rough size | Tests that prove it | Merge |
+|---|---|---|---|---|
+| PR1 | Docs: README R1 to R7 (answer 1); AGENTS and VISION lines; the false lines listed in revision 1; merge the run report `docs/research/results/2026-10-30-two-hour-run.md` and its folder from `origin/smart/tender-clarke-qupne3` | about 160 doc lines | link check | Alone |
+| PR-S1 | SL1, SL2; D58 text (`docs/DECISIONS.md:495`) | about -30 src, 230 tests | SL1 and SL2 tests | Proxy, daemon and protocol together |
+| PR-S2 | SL3, SL5, N6 | about 55 src, 400 tests | SL3, SL5 tests, N6 | Daemon and proxy together |
+| PR-S3 | SL4, N1 (was PR8a) | about 20 src net, 750 rewritten | N1 on Linux and a Mac with `ulimit -n 256`; capture integrity tests | Protocol, daemon, proxy and verifier together |
+| PR-S4 | SL6, SL7, SL8, AD2, AD9; one `CONTROL_API_VERSION` bump | about 150 src, 200 tests | SL6 to SL8 tests; `start_launch`, `m2_cli_lifecycle` wording | Daemon, CLI and mock together |
+| PR-U | CH17, CH18 | about 10 src, 20 tests | upload policy tests; compress a saved chain and compare | Client only |
+| PR-K | AD4 `live-check` | about 300 script lines | run on an existing trace and on run 1's evidence | Alone, tools only |
+| PR2 | K2, K6 | -5,430 src, -4,821 tests | remaining script tests; redaction corpus test | Alone, any day |
+| PR4 | K4, K26 | -2,276 tests | gate fast | Alone, any day |
+| PR5 | AD1, CH8, AD8 masking lines | about -40 src | redaction suites, N3, oracle agreement | One commit |
+| PR7 | CH5, CH6 rest, N2 | about -100 src | proxy integration, N2 | Alone |
+| PR8b | CH3 | about 40 src | CPU at 1,000 and 10,000 synthetic files | Daemon. Ships without it if not green Tuesday. |
+| PR11 | AD5, CH15, pins, HARNESS-SETUP and RULES lines | about 40 src | `model_host_from.rs`, `shipped_connectors.rs`, Codex `-c` test | Connector and pins in one commit |
+| PR9 | K7, K8, CH13, rest of K9 | about -1,400 src | `start_launch`, `m2_cli_lifecycle` | Alone; may slip |
+| PR6 | K5, CH9, CH10, disk text | about -1,500 src | writer `StorageFull`, prune, vitals tests | Client only; may slip |
+| PR10 | CH11 | about 30 src | tunnel inline tests | Client only; may slip |
+| PR12 | AD7 (N4), `#[ignore]` removed from `upload_worker.rs` | +300 tests | N4 in the full tier | Tests only, allowed after the feature stop |
+| PR13 | Pure deletes of history docs | about -5,000 doc lines | link check | Thu, only if green |
+
+### 9.2 Day by day
+
+Nothing has to land in the next 24 hours. The days below leave slack; a PR that is not green moves to
+the next day, and the cuts move first.
+
+- **Thu 29 Oct:** owner reads this plan and section 15. PR1 if time.
+- **Fri 30 Oct:** PR-S1 (small, mostly deletion). PR1. PR2 in parallel.
+- **Sat 31 Oct:** PR-S2. Start PR-S3. PR4 in parallel.
+- **Sun 1 Nov:** finish PR-S3. PR-S4. PR-U. Prepare the run 2 sandboxes and read-only server access (O3).
+- **Mon 2 Nov:** PR-K in the morning. **Second 2-hour run** on main (section 10). In parallel: PR5, PR7.
+- **Tue 3 Nov:** fix what run 2 found, first. Then PR11, PR8b, PR9, PR6, PR10, in that order, as time
+  allows. Owner deploys the Worker configuration to staging. Feature stop at 4 Nov 00:00 UTC.
+- **Wed 4 Nov:** PR12. Tag the release candidate. Full gate on the Linux sandbox and on a Mac.
+  Release-candidate run (section 10.3).
+- **Thu 5 Nov:** buffer. Fix only what Wednesday found. Re-run the kit on the newest harness builds.
+  PR13 only if green.
+- **Fri 6 Nov:** release at 12:00 UTC. Owner deploys the production Worker configuration before
+  7 Nov 00:00 UTC. Freeze from here until the last run ends, except owner-signed fixes; a connector
+  update for harness drift counts as one.
+
+### 9.3 Minimum shippable set
+
+If time runs out, ship these and nothing riskier:
+
+1. SL1 (no failure budget) and SL2 (64 MiB queues, base64 bytes).
+2. SL4 (no native caps, stream bound 16,384 with the verifier following, native never latched off).
+3. SL7, or if it is not green, the fallback wording at `goalcup-cli/src/commands/start/finish.rs:499-509`:
+   "N requests reached the recording proxy. Run `goalcup status` to see gaps." and a line in the guide
+   that this count is not proof of recording.
+4. CH14 configuration and `MIN_COMPETITION_VERSION`.
+5. CH15's `DISABLE_UPDATES` line (one data line and pins).
+
+With 1 and 2, the run's failure becomes a series of chained gaps with reconnects. Release notes then say
+that a loss still costs every stream in flight at that moment, and that the count may be high.
+
+**Slips to after Edition 01 if needed, in this order:** PR13, PR10, PR6, PR9, PR8b, PR4, PR2. Already
+after Edition 01: K1, K3, K10 to K27, CH19, AD10, option B, dedupe of repeated context.
+
+## 10. The second 2-hour run
+
+### 10.1 How to run it (Monday 2 November)
+
+- Vercel Sandbox on a plan whose session lasts past 2 hours (`docs/research/VERCEL-COMPAT.md:41`), Linux,
+  a normal user, credential brokering off for model hosts (`:46`), a real terminal in `tmux`, real logins.
+- **Sandbox 1, Codex:** same login and shape as run 1 (API key), chat mode. The prompt asks for subagents
+  in plain words, for example "Build the app below. Split the work across as many parallel subagents as
+  help, and keep going until it is done." Never force subagents by config. Script the "keep going", so
+  there is no 45-minute idle like run 1.
+- **Sandbox 2, Claude Code:** the same prompt, at least 1 hour.
+- Push lines at the top of each prompt.
+- Every 5 minutes, `cp -al` the trace folder to a folder on the same filesystem. Hard links keep each part
+  after prune deletes its name, at no extra disk cost.
+- Read-only R2 and database access for the observer, so `fetch-run.sh` runs on the server copy (O3).
+- Every 10 s, sample CPU from `/proc/<pid>/stat` for the daemon, `goalcup start` and the harness.
+- Save the report as `docs/research/results/2026-11-02-two-hour-run.md`.
+
+### 10.2 Pass criteria
+
+| # | Point | Check | Pass |
 |---|---|---|---|
-| AD1 | URL password rule, before CH8 drops the email rule. Today only the email rule masks `https://user:TOKEN@host` (`redact.rs:280-283`). | 4 | Whole-match form from [G.1](2026-10-30-audit/G-secrets.md#g1-add-the-url-password-rule-then-drop-the-email-rule-points-4-1-3-5-g-code-g-1-g-2-g-surface-g1), in `redact.rs` SHARED, `stream.rs` SHAPES and `spikes/redact.py`. Test N3: percent-encoded form, a `git remote -v` line, split at every byte, a plain email left clear. About 61 src, 40 tests. |
-| AD2 | One "Recorded:" line at the end of each part and in `goalcup status`: model calls with hosts, session files read (main agent and subagents), files not read yet, gaps, hosts passed through unread, upload state. Say "so far" while recording. | 6, 2 | Read existing sources: `model_calls` (`run/mod.rs:266`), gaps, CH11 rows. Count files with an opened stream, not `tracked_files()` (`native_capture.rs:740-742`, which includes waiting files); print waiting files as "not read yet: n". Replace "Recording works". About 30 src, 30 tests. |
-| AD3 | "Recording has stopped" when the daemon does not answer for 3 watch ticks, or the proxy sink is disabled. Written once to `host.log` and `state.json`; `status` shows it: "exit the agent and run `goalcup continue`". Also one `PROBLEM:` line when `open_files` passes half the soft limit (from the kept process vitals). | 6, 1, 2, 3 | About 35 src, 40 tests ([F12](2026-10-30-audit/F-week-long-risks.md#f12-the-daemon-crashes-mid-run-change-highest-risk)). The full fix (restart the daemon) waits for K13. |
-| AD4 | `live-check` after seal, called by `matrix.sh`: wire call count against the harness's own count; subagent files on disk against native streams by path; a secret scan of the local chain copy and the fetched server copy (raw, base64, percent-encoded); the Recorded line against these counts; a run label from stream metadata only (model requests on recorded paths, native activity), with the bypass hint when there is native activity and no wire stream. | 1, 2, 4, 6 (proof); event rules | About 220 src, 110 tests. Replaces `--research-json`. |
-| AD5 | Routes we cannot see, for Codex: the host reader also reads `openai_base_url` and `[model_providers.openai] base_url`; refuse Codex built-ins with no table (`ollama`, `lmstudio`, `amazon-bedrock`, `gcp`), since they record nothing. Claude Code cloud switches are named in AD8 only. | 1, 6 | One PR in `crates/goalcup-cli/src/model_host.rs:334-405, 546-553`. About 40 src, 40 tests. |
-| AD6 | Tests N1 and N2. N1: 2,000 session files, 400 growing at once, under `ulimit -n 256`; every byte recorded or a named gap per file; memory and CPU printed. N2: the recorder dies ten times; the port is served again each time and calls succeed. | 2, 3 | About 210 test lines, N1 in a serial group. N1 ships with CH1 and CH2 (PR8a), N2 with CH6 (PR7). |
-| AD7 | Server rebuild proof N4: real client, real Worker under `wrangler dev`, Worker stopped and started mid-run, then `fetch-run.sh`; the rebuilt chain equals a copy of the local chain taken before prune; every call and file path present in ID and time order. Remove `#[ignore]` from `upload_worker.rs` (`scripts/gate.sh:90-93` already runs it by name). `fetch-run.sh` writes what arrived and names a missing range (`scripts/fetch-run.sh:218-219`): that source change lands in PR10, before the feature stop. | 5 | About 10 src, 300 tests. |
-| AD8 | Participant text (docs and start screen): a full disk ends recording; emails, plan type and credit fields stay in the private trace; local models, Claude Code cloud switches (`CLAUDE_CODE_USE_BEDROCK`, `_VERTEX`, `_FOUNDRY`, `_MANTLE`) and unlisted providers are not recorded; Claude Code agent view is off during a run; Hermes 0.19 is not supported, Hermes subagents are read at the end of a part, and the `state.db` copy holds earlier sessions of the shared home and may not open as SQLite; run in `tmux`; upload within 24 hours of the deadline; run labels are computed after the run; `goalcup mcp` lines in harness configs may stay, the tool keeps working. | 6 | Text only, in the PR that changes the behaviour. |
+| T1 | 1, 3 | `live-check`: wire requests against the harness's own log, per 10-minute bucket | Every bucket has wire requests. Wire minus failed responses equals the harness count, or each difference sits inside a gap the screen showed. No bucket after a gap stays at 0. |
+| T2 | 3 | Never off for good | Every `queue_full` or `ingest_lost` gap is followed by a `recovery` within 60 s. No terminal state in `host.log`. Ideally only per-stream `queue_full` gaps. |
+| T3 | 3, 5 | Loss never silent | Every span with relayed model traffic and no recorded frames is covered by a gap with a start and an end. |
+| T4 | 6 | Honest count | The finish and status count equals the written model requests in the chain, exactly. With any gap, the screen shows the off time and never "Recording works". |
+| T5 | 2 | Every subagent | Every rollout and every Claude Code subagent file on disk is in the chain by path. No stream-less `limit_exceeded` gap. |
+| T6 | 2 | Session files survive load | No native loss gap. Native bytes in the chain equal the files' bytes at the seal, less what the last poll had not read. |
+| T7 | 5 | Upload keeps up | At every 10-minute tick the server is at most 10 minutes or 64 MiB behind. No backoff wait over 2 minutes. Seal acknowledged within 1 minute. |
+| T8 | 5 | Server rebuild | `fetch-run.sh` output equals the hard-linked copy byte for byte. `goalcup-verify --capture-integrity` on the server copy exits 0 or names only gaps from T2 and T3. |
+| T9 | 4 | Secrets | No API key, GitHub token or `Authorization: Bearer` in either copy, segments joined, raw, base64 and percent-encoded. A fake `.env` the agent prints and a URL with a password are masked. |
+| T10 | 5 | Size | Chain and compressed bytes per hour by source; the long-window ratio against run 1's 3.2 to 1; the 168-hour projection. No pass line; it feeds CH18 and CH19. |
+| T11 | 3 | Load | Peak daemon CPU per 10 s, drain MB/s, RSS, open files, per-call latency. No refused model connection. |
+| T12 | 6 | Screen | No support block, no `verify:` that cannot pass, no internal words. The Codex warning is the one AD8 names. |
+| T13 | 7 | Push | The GitHub repository has the agent's commits. |
+| T14 | 1 | Run 1 unknowns | Name the cause of any stream-less `limit_exceeded` gap; explain run 1's `auth_refused=1` if it repeats. |
 
-Decided not to add for Friday: closing quiet append-only streams (after Edition 01, unless the
-2-hour run projects more than 8,000 open streams in 168 hours), joined-view masking, periodic SQLite
-snapshots, the system trust store, a daemon restart with a fresh producer, chained records for
-outages and tunnels, a host name in loss records, a Worker flag for "native activity but zero wire
-calls", OpenCode or OpenClaw connectors, a longer start retry.
+A run that fails T1, T2, T3 or T5 blocks the release candidate. Others are fixed on Tuesday or named in AD8.
 
-## 7. PRs in order
+### 10.3 Release-candidate run (Wednesday 4 November)
 
-Each PR runs `sh scripts/gate.sh fast`. "Alone" means it can merge to main by itself. Every client change
-ships in the one Friday release. The Friday Worker deploy is configuration only.
+The same setup on the tagged candidate, plus: kill the recorder twice (the harness carries on, a gap is
+written, the port serves again); kill the daemon once ("Recording is off" within 2 minutes, recording
+resumes after `goalcup continue`); one manual 2-minute network cut (recording goes on, upload catches
+up); a 30-minute Hermes 0.22.5 run with subagents asked for in the prompt (O9). Same pass table.
 
-| PR | Scope | Rough size | Tests that prove it | Merge or deploy |
-|---|---|---|---|---|
-| PR1 | Docs first: README promise list R1 to R7 (the seven points) replaces P1 to P7 and the never-delete rule (`README.md:276-288`, `AGENTS.md:101`); AGENTS hard rule on D65 (`AGENTS.md:84-86`); a "Decided" list in VISION; one line atop the phase 2 notes: "the decisions in the progress file win". Fix false lines: `README.md:150-151` and `docs/ARCHITECTURE.md:214` (headers), `docs/ARCHITECTURE.md:253-256` (proxy restart "not built"), `docs/HARNESS-SETUP.md:194-195` (Hermes 0.21.1), `docs/RULES.md:83-84` ("the verifier reports it": no such check), `docs/CHEAT-CHECKLIST.md:26-28` (hourly verify job), `docs/RULES.md:294-296` | about 160 doc lines | link check | Alone. Needs Q1. |
-| PR2 | K2, K6; CI drops the scope step and script tests; `gate.sh:61` and `release.sh:101-104` drop the version check | -5,430 src, -4,821 tests, -10,211 data | remaining script tests; redaction corpus test | Alone |
-| PR3 | K1, AD4; edits to the four kept tests named in K1; RULES and CHEAT-CHECKLIST label lines reworded | -9,816 src, -16,775 tests; +220 / +110 | `live-check` on an existing recorded trace gives the same call count and label as `--research-json` before the delete | Alone |
-| PR4 | K4, K26 | -2,276 tests | gate fast | Alone |
-| PR8a | CH1, CH2 without the handle budget, N1 | about +30 src net, about 750 test lines rewritten | N1 on Linux and on a Mac with `ulimit -n 256`; capture integrity tests; memory at 5,000 and 16,000 synthetic open streams | Protocol, daemon, proxy and verifier together; sets the release floor for `MIN_COMPETITION_VERSION`. Compiles alone, so it is the fallback if PR8b slips. |
-| PR5 | AD1, CH8, AD8 masking lines | about -40 src, net -50 tests | redaction suites, N3, `recognizers_hold_every_prefix_of_a_match`, oracle agreement | Alone; one commit (see section 8) |
-| PR6 | K5 (client only, process vitals kept), CH9, CH10, docs retiring D65 (disk text in 19 places, `docs/RULES.md` disk lines) | about -1,500 src, -1,900 tests | writer `StorageFull` test, prune tests, vitals tests | Client only. The Worker already accepts null disk fields. |
-| PR7 | CH5, CH6, K11, N2 | about -500 src, -300 tests | proxy integration, N2 | Alone |
-| PR8b | CH3, CH4, CH12, K12, handle budget (K9 part); `CONTROL_API_VERSION` bump if status shapes change | about -150 src, -300 tests | capture integrity tests; CPU at 5,000 and 16,000 synthetic files; N1 again | Daemon and proxy. If it is not green by Monday night, ship without it: PR8a already holds the raised bounds. |
-| PR9 | K7 (probe included, sniffing kept), CH13, K8, rest of K9, AD2, AD3, `docs/RULES.md:366, 385` | about -950 src, -1,000 tests | `start_launch`, `m2_cli_lifecycle`, `matrix.sh` wording (`READY_MARK` at `participant.rs:76` unchanged) | Alone |
-| PR10 | CH11, K10, `fetch-run.sh` partial rebuild (AD7 source part) | about -200 src, -380 tests | tunnel inline tests, `test_fetch_run.py` | Client only; format line unchanged |
-| PR11 | AD5, CH15, pins regenerated, HARNESS-SETUP and RULES lines | about +40 src, +41 tests | `model_host_from.rs`, `shipped_connectors.rs`, kit cases, Codex `-c` test | Alone; connector and pins in one commit |
-| PR12 | AD7 tests (N4), `#[ignore]` removed | +300 tests | N4 in the full tier | Tests only, allowed after the feature stop |
-| PR13 | Pure deletes of history docs (section 11) | about -5,000 doc lines | link check | Docs only |
-
-**Day by day.**
-
-- Thu 29 Oct: owner answers section 14. PR1.
-- Fri 30 Oct: PR2, PR3. If a 2-hour run happens on today's main, its open-file, stream and bytes-per-hour
-  numbers check the CH1 values. Its report (`docs/research/results/2026-10-30-two-hour-run.md`) does not
-  exist yet; nothing in this plan comes from it.
-- Sat 31 Oct: PR4, PR8a, PR5.
-- Sun 1 Nov: PR6, PR7.
-- Mon 2 Nov: PR8b, PR9.
-- Tue 3 Nov: PR10, PR11. Feature stop at 4 Nov 00:00 UTC. After PR8b merges, branch `decoders-ed01`
-  from main with PR3 reverted; CI builds it once.
-- Wed 4 Nov: PR12. Tag the release candidate. Full gate on the Linux sandbox and on a Mac. Owner
-  deploys the Worker configuration to staging. The 2-hour run on the candidate (section 9).
-- Thu 5 Nov: buffer. Fix only what the run found. PR13. Re-run the kit on the newest harness builds,
-  with `linux-harness-smoke.sh`. A 10-minute Amp chat run with one subagent, or the docs say "Amp
-  unverified on build X".
-- Fri 6 Nov: release at 12:00 UTC. Owner deploys the production Worker configuration with
-  `MIN_COMPETITION_VERSION` and the `EVENT_ID` switch before 7 Nov 00:00 UTC. No client release after
-  this until the last run ends, except owner-signed fixes; a connector update for harness drift counts
-  as such a fix.
-
-Risky work stays after Edition 01: K3, K13 to K27. The evidence does not justify an earlier daemon merge:
-no measured run covers a merged build ([C 2.2](2026-10-30-audit/C-module-audits.md#22-should-the-daemon-be-a-separate-process-at-all)).
-
-## 8. What must deploy together
+## 11. What must deploy together
 
 | Change | Parts that move together | Rule |
 |---|---|---|
-| Bounds (PR8a) | protocol `capture.rs`; proxy `ingest.rs:113-116`, `api.rs:451, 599`, `mod.rs:1463`; daemon `sink.rs`, `ingest.rs:1335`, `writer.rs:252`, `redact/stream.rs:122-125, 2769`, `native_capture.rs:187, 279-280`; verifier `reader.rs:78, 1566, 1694`; their tests | One release. `MIN_COMPETITION_VERSION` set to it, or an old verifier calls new traces invalid. |
-| `CONTROL_API_VERSION` | daemon, CLI, CLI mock (`crates/goalcup-cli/src/daemon/mock.rs:157-168`) | Bump once, in the Friday release. The installer ties CLI and daemon versions (`packaging/install.sh:104-195`). |
-| Disk cut (PR6) | client heartbeat, docs | Client only. The Worker accepts null disk fields (`runs.ts:507`). |
-| Tunnel rows (PR10) | client `tunnels.rs`, `fetch-run.sh` | Client only, while the format line stays `goalcup-tunnels-v1`. |
-| Masking (PR5) | `redact.rs`, `redact/stream.rs`, `spikes/redact.py`, Codex `harness.toml`, pins, RULES | One commit: if SHARED and SHAPES differ, `policy_ready` refuses and every producer is lost (`redact/stream.rs:754-772`). |
+| Ingest encoding (SL2) and gap substitution (SL3) | protocol `capture.rs`, proxy `ingest.rs`, daemon `sink.rs`, the golden fixture | One release. The installer ties CLI and daemon versions (`packaging/install.sh:104-195`). |
+| Bounds (SL4) | protocol `capture.rs:58, 60`; proxy `api.rs:451, 599`, `mod.rs:1463`; daemon `sink.rs`, `ingest.rs:1335`, `writer.rs:252`, `redact/stream.rs:2769`, `native_capture.rs`; verifier `reader.rs:1566, 1694` and every decoder that reads the constant | One release. `MIN_COMPETITION_VERSION` set to it, or an old verifier calls new traces invalid. |
+| `CONTROL_API_VERSION` 12 to 13 (SL7, SL8) | daemon, CLI, CLI mock (`goalcup-cli/src/daemon/mock.rs:157-168`) | Bump once, in the Friday release. |
+| Upload (CH17, CH18) | client only | The Worker never decompresses (`server/worker/src/chunks.ts:199-227`); `fetch-run.sh` reads the window by default. N4 proves it. |
+| Masking (PR5) | `redact.rs`, `redact/stream.rs`, `spikes/redact.py`, Codex `harness.toml`, pins, RULES | One commit, or `policy_ready` refuses every producer (`redact/stream.rs:754-772`). |
 | Connector edits (PR11, PR5) | `harness.toml`, `sh scripts/pin-manifests.sh` | Same commit, or every start refuses. |
-| Judging decoders | branch `decoders-ed01` = main after PR8b, with PR3 reverted | Built once. Used by organizers after the event, never shipped to participants. |
-| Friday release | client tag, production Worker configuration, `MIN_COMPETITION_VERSION`, `EVENT_ID` (`wrangler.toml:42, 55`) | Same day, before 7 Nov 00:00 UTC. No Worker code change. |
-| Website SQL | none for Friday | Later changes to seal order or the close window need a website migration. |
+| Disk cut (PR6), tunnel rows (PR10) | client | Client only: the Worker accepts null disk fields (`runs.ts:507`) and the tunnel format line stays `goalcup-tunnels-v1`. |
+| Friday release | client tag, Worker config (`RUN_MAX_COMPRESSED_BYTES`, `MIN_COMPETITION_VERSION`, `EVENT_ID`) | Staged Tuesday, production Friday before 7 Nov 00:00 UTC. No Worker code change. No website SQL change. |
 
-## 9. What to test in the next 2-hour run
+The `decoders-ed01` row from revision 1 is gone: K1 waits, so main keeps the decoders.
 
-The report of the planned 30 October run (`docs/research/results/2026-10-30-two-hour-run.md`) does not
-exist on any branch. This run is on the release candidate, Wednesday 4 November. Save its report as
-`docs/research/results/2026-11-04-two-hour-run.md`, and save the nextest JUnit output on any failure.
+## 12. Tests and gate
 
-**How to run it, the way people use harnesses.** Vercel Sandbox on a plan whose session lasts past 2
-hours (Hobby stops at 45 minutes, `docs/research/VERCEL-COMPAT.md:41`), Linux, a normal user (uid 1000,
-not root: Claude Code refuses bypass mode as root, and the gate refuses root). Credential brokering off
-for model hosts, or every model call fails (`docs/research/VERCEL-COMPAT.md:46`). A real terminal in
-`tmux`. Real logins. The newest stable builds of Claude Code, Codex (ChatGPT login, so the WebSocket path)
-and Hermes 0.22.5; Amp if time allows. Chat mode, not one-shot. The prompt asks for subagents, for
-example "Build the app below. Split the work across as many parallel subagents as help, and keep going
-until it is done." Never force subagents by config. Record `ulimit -n` (soft and hard), `uname -r`, the
-filesystem type of `$HOME`, and whether a TTY exists. Every 10 minutes, `cp -a` the trace folder to a
-folder outside the spool: prune and `clean_finished` delete acked parts
-(`crates/goalcup-cli/src/upload/prune.rs:20-22`), so the copies are what the rebuild is compared with.
+**Stays.** Redaction suites and the Python oracle; capture core (`capture_native.rs`, `capture_ingest.rs`,
+`capture_lifecycle.rs`, `m2_capture_sender.rs`) with the budget and cap rows rewritten; proxy relay tests;
+`m2_synthetic_vertical.rs`, `capture_crash_campaign.rs`, `capture_failure_campaign.rs`; the verifier's
+decoder tests (K1 waits); the Rust Worker stand-in; `upload_worker.rs` without `#[ignore]`; Worker tests;
+`chain_golden.rs`, `m2_contract.rs`, `no_family_literals.rs`, `shipped_connectors.rs`; termination and
+installer tests; `test_gate.py`, `test_release.py`, `test_linux_check.py`, `test_codeowners.py`.
 
-| Point | Check | Pass |
-|---|---|---|
-| 1 | `live-check` wire call count against the harness's own count; passed-through host list; Codex WebSocket reconnects | Counts equal, or each difference named. No model-looking host in the passed-through list. Each reconnect is a clean new exchange. |
-| 2 | Subagent files on disk against chain paths; open native streams per hour; files "not read yet"; gaps | Every subagent file is in the chain by path. Claude Code passes 32 open native streams at least once. No `LimitExceeded` gap. The open-stream count per hour, projected to 168 hours, stays under half of 16,384, or closing quiet streams moves up. |
-| 3 | 503s, refused model connections, `QueueFull` gaps, recorder kills, daemon kill, CPU, memory, open files, per-call latency through the proxy | No 503 and no refused model connection. No `QueueFull` gap. Kill the recorder twice: the harness carries on, a gap is recorded, the port serves again. Kill the daemon once: "Recording has stopped" shows within 2 minutes. Daemon CPU stays under a tenth of a core when idle (target, not yet measured). Open files stay well under the soft limit. Latency is recorded for the CH7 decision. A sleep-lock `PROBLEM:` line in the sandbox is expected and harmless (`docs/research/VERCEL-COMPAT.md:44`); note it. |
-| 4 | A fake `.env` the agent prints, a URL with a password, a fake key the model echoes | All masked in the copied local chain and in the fetched server copy, in raw, base64 and percent-encoded forms. The echo split across deltas is a known gap: record the result, do not fail the run on it. |
-| 5 | `fetch-run.sh` rebuild; `goalcup-verify --capture-integrity` on the server copy; bytes per hour | Rebuild equals the copied chain. Verify exits 0. Every segment is in order by ID and time. Compressed bytes per hour times 168 is under 64 GiB. |
-| 6 | The Recorded line and passed-through lines on screen | They match `live-check`. No internal words. |
-| 7 | One manual network cut of 2 minutes; harness auto-update off | Recording continues; upload catches up; no harness update during the run. |
+**New.** The SL tests in section 3, N1, N2, N4 and N6. About 1,800 test lines in all, counting rewrites.
 
-## 10. Tests and gate after the cuts
+**Goes before Friday.** The tests of K2, K4, K5, K7, K8, K9 and K26: about 10,300 lines.
 
-**Stays.** Redaction suites and the Python oracle (point 4). Capture core: `capture_native.rs`,
-`capture_ingest.rs`, `capture_lifecycle.rs`, with cap rows rewritten (points 1 to 3). Proxy relay tests
-for TLS, HTTP and WebSocket. `m2_synthetic_vertical.rs`, `capture_crash_campaign.rs` and
-`capture_failure_campaign.rs` (until N5). The Rust Worker stand-in and `upload_e2e.rs` (until K3).
-`upload_worker.rs`, now without `#[ignore]`. Worker tests, always in the full tier. `chain_golden.rs`,
-`m2_contract.rs`, `no_family_literals.rs`, `shipped_connectors.rs`, termination tests (until K13),
-installer tests, `test_gate.py`, `test_release.py`, `test_linux_check.py`, `test_codeowners.py`.
+**Gate.** Fast gate under 4 minutes warm on 4 vCPU (54 s to 306 s today,
+[J B3](2026-10-30-audit/J-tests-gate.md#b3-time-per-step-and-total)). Full gate on every section 3 PR,
+because CI excludes the daemon and CLI suites. Time the full gate once on Wednesday. N1 and N6 go in a
+serial group. The gate refuses root (`scripts/gate.sh:32-39`).
 
-**Goes before Friday.** The test lists in K1, K2, K4 to K12 and K26, about 28,000 lines, plus N1 and
-N2 rewrites of the cap and restart rows.
+## 13. Docs and decisions
 
-**Target gate time.** Fast gate under 4 minutes warm on 4 vCPU; today it ranges from 54 s quiet to
-306 s loaded ([J B3](2026-10-30-audit/J-tests-gate.md#b3-time-per-step-and-total)). Full gate under
-12 minutes; it has never been timed, so time it once on Wednesday.
+- **PR1:** promise list R1 to R7, the run 1 report merged to main, the revision 1 list of false lines.
+- **New decision, in PR-S1:** "Load never ends recording. Every loss is a gap with a start and an end. A
+  model call counts once its bytes are written." D58 loses "`MAX_CONNECTION_FAILURES` still ends the wire
+  leg" (`docs/DECISIONS.md:495`).
+- **New decision, in PR1:** option A for Edition 01, option B after it through the `CaptureSink` seam; D3's
+  "keep the signed daemon small" is void because the binaries are unsigned (`packaging/README.md:22-23`).
+- **Inside each code PR:** `docs/ARCHITECTURE.md` IPC text (per-stream gaps, base64 bytes) with PR-S1 and
+  PR-S2; cap text with PR-S3; count and off-time text with PR-S4; masking with PR5; Hermes 0.22.5, the
+  update switches and the gateway table in `docs/HARNESS-SETUP.md` with PR11; disk text with PR6.
+- **Thu 5 Nov, PR13, pure deletes only, if green:** the history docs listed in revision 1.
+- **After Edition 01:** the doc merges and decision retirements from revision 1 ([K](2026-10-30-audit/K-docs-decisions.md#8-order-of-work)).
+- **Never rename:** `docs/PARTICIPANT-GUIDE.md` (`goalcup-cli/src/main.rs:59`) and the `### <Harness>`
+  anchors in `docs/HARNESS-SETUP.md` (`goalcup-cli/src/commands/prep.rs:896`).
 
-**Flakes.** Fix one only when it fails a PR this week (CH16). The open outage-window flake goes with
-K11. Keep the `connector-runs` serial group. Put N1 in a serial group too: it opens hundreds of files.
+## 14. Risks and blind spots
 
-**Known limits.** CI still excludes the daemon and CLI suites (`.github/workflows/ci.yml:15-16`), so the
-hand-run `scripts/gate.sh full` is the gate. The gate refuses root (`scripts/gate.sh:32-39`).
+- **Writer throughput is unmeasured.** If the owner thread cannot keep up with a burst, SL2 only delays
+  the loss and SL3 turns it into many stream gaps. N6 and T11 measure it. If it is low, CH3 moves first.
+- **Mid-body gaps.** SL3 creates gaps inside request bodies. The verifier's decoders were not re-read for
+  them; a decoder that calls such a trace invalid would hurt judging, not recording.
+- **One run, one harness.** Run 1 was Codex only, about 20 subagents. Claude Code's load shape and 1,000
+  subagents are untested. Hermes 0.22.5 delegation has never been measured by us.
+- **The full chain of run 1 was pruned** and its server copy never fetched. Which producer each gap
+  belonged to, and why 5 of 22 `queue_full` gaps have no recovery, is inferred.
+- **Compression gain is synthetic.** CH18's figures come from made-up text. The `zstd` crate setters are
+  unverified until it builds.
+- **No run limit.** A looping client costs money until someone looks (O5).
+- **Upload errors.** Run 1's network errors may be the sandbox's egress; CH17 helps either way.
+- **A broken recorder is retried for ever.** Intended; logs once a minute.
+- **Wording.** "Recording was off for 1 h 12 min" may alarm a participant whose run is valid. AD2 says what
+  was kept as well as what was missed.
+- **Silent bypass remains.** A tool that ignores `HTTPS_PROXY` gives a sealed run with no gap. SL8's alarm
+  catches the case where session files grow and no call is written; it does not catch a harness that
+  writes no session file.
+- **A dead `goalcup start` still blocks the harness** until `goalcup continue`. Fixing it needs option B
+  or K13.
+- **Friday deploy from one device.** Stage the Worker configuration on Tuesday.
+- **macOS.** Every run so far was Linux. N1 must run on a Mac with `ulimit -n 256`.
+- **Estimates.** Line and day figures are estimates, plus or minus 30 to 50 percent.
 
-## 11. Docs and decisions
-
-From [K](2026-10-30-audit/K-docs-decisions.md#8-order-of-work): 82 Markdown files and 17,472 lines today;
-target about 31 files and 7,000 to 7,500 lines, reached after Edition 01.
-
-- **Before Friday, in PR1:** the promise list, the "Decided" list in VISION, AGENTS fixes, the false
-  statements listed in PR1, the line atop the phase 2 notes.
-- **Before Friday, inside each code PR:** the doc lines for that change (disk text in 19 places with PR6;
-  cap text with PR8a; masking text with PR5; label text with PR3; RULES machine and disk lines with PR9).
-- **Thu 5 Nov, PR13, pure deletes only:** `docs/archive/` (958 lines); research history (AMP-FOLLOWER,
-  HOW-A-RUN-ENDS, LOCAL-CAMPAIGN, LOCAL-NEXT-STEPS, LOCAL-TEST-DAY, PARTICIPANT-REVIEW,
-  RELEASE-IS-THE-LIST, SIMPLIFICATION, t25-disk-full with one line kept in ARCHITECTURE); ten fix plans
-  and old results; done plans (18, 19, 20, 23, 28 and its spec and ledger); `RESEARCH-TARGET.md`,
-  `LOCAL-RESEARCH-HANDOFF.md`. Keep `VERCEL-COMPAT.md`: the 2-hour run uses it.
-- **After Edition 01:** merge CONTRACTS and TERMINATION into ARCHITECTURE, CHEAT-CHECKLIST into
-  SECURITY, SERVER-DESIGN and UPLOAD-API into the Worker README, NOTIFICATIONS and RESTARTS-DESIGN into
-  PARTICIPANT-GUIDE, CONNECTOR-SCHEMA into HARNESS-ONBOARDING. Retire D7, D12, D23, D40 reserve clause,
-  D44, D48, D49, D50, D54 freeze, D58 (replace with "no caps of our own; any bound states its cost"),
-  D65 (its text is fixed in PR6), D68, D69, D73 0.7.0 branches, and re-cite the about 90 code-comment
-  cites. Delete the phase 2 notes, spec, plan and status once their binding lines have moved.
-- **Never rename:** `docs/PARTICIPANT-GUIDE.md` (`crates/goalcup-cli/src/main.rs:59`) and the
-  `### <Harness>` anchors in `docs/HARNESS-SETUP.md` (`crates/goalcup-cli/src/commands/prep.rs:896`).
-
-## 12. Risks and blind spots of this plan
-
-- **No long-run data.** The 2-hour run report does not exist. Peak streams, files, open handles, chain
-  size per hour, memory and CPU are all estimates. The CH1 values and the CH3 poll interval are guesses
-  until Wednesday.
-- **Append-only streams pile up.** A stream for a subagent transcript keeps its slot for the whole part.
-  At 16,384 this is far above "thousands of subagents", but it is still a wall for a very busy part. The
-  2-hour run projects the peak; past it, new files wait and the Recorded line says "not read yet".
-- **macOS is not tested in the sandbox.** The sandbox is Linux. The 256-handle default only shows on a Mac:
-  N1 must run on a Mac with `ulimit -n 256`.
-- **Estimates.** Mixed-file line counts are plus or minus 30 percent; 30 to 40 percent of source lines
-  are doc comments.
-- **Removing caps moves the limit to memory and handles.** Worst case about 256 MiB of held masking
-  bytes and two 64 MiB queues. Process vitals stay so `status` and the `PROBLEM:` line show a leak.
-- **PR8a and PR8b.** The bounds land Saturday so the Wednesday run tests them. If PR8b is late, the
-  release ships with PR8a alone; poll CPU then stays at today's 100 ms interval.
-- **Decoder cut.** Judges lose decoded reports in the shipped verifier. They use branch `decoders-ed01`
-  after the event. Lane L says no event-time cheat control needs them ([L top findings](2026-10-30-audit/L-red-team.md#top-findings)).
-- **Secrets still leak in two known ways:** a key the model echoes across deltas, and `cat .env` lines the
-  rules miss (`ENCRYPTION_KEY=`, short passwords). Both are in the private raw trace under a 180-day lock.
-- **Silent bypass.** A harness or tool that ignores `HTTPS_PROXY`, or a settings `env` that overrides it,
-  gives a sealed run with no gap. AD4's bypass hint, AD5 and AD8 shrink this; they do not close it.
-- **A dead `goalcup start` still blocks the harness** until `goalcup continue` (L point B). Fixing it needs K13.
-- **Worker deploy.** The owner deploys from a local device. Friday is configuration only; stage it on
-  Wednesday.
-- **Emails unverified.** Whether `RESEND_API_KEY` is set in production is unverified
-  (`server/worker/wrangler.toml:71, 84`); if not, no participant email is sent.
-- **Old promises.** Reviewers may block a cut using README P1 to P7 or the phase 2 notes. PR1 must land first.
-- **This plan cuts working code days before an event.** Every Friday cut is a deletion with a clear owner
-  decision or no caller; the riskier cuts wait.
-
-## 13. Challenges and answers
-
-A fact check found 23 errors, and two reviews challenged the plan from both sides: one said cuts
-break a point, the other said the plan still does too much. Full text and an answer to every point:
-[R-reviews.md](2026-10-30-audit/R-reviews.md). What changed:
-
-- **CH1 did not compile.** `MAX_LIVE_PRODUCERS` stays 128 (`sink.rs:18`). Streams go to 16,384,
-  connections to 1,024, the queue to 64 MiB with the control reserve scaled, and the verifier's goal
-  stream bound follows. The bounds now land Saturday as PR8a, apart from the riskier poll work (PR8b).
-- **Kept, not cut, for Friday:** process vitals (point 3 needs them once caps go), session sniffing on
-  `continue`, the `goalcup mcp` command, the owed-ack path, `linux-harness-smoke.sh` and four script
-  tests, `m2_contract.rs`, the Rust Worker stand-in (K3, now after Edition 01), `db-local.ts` (N4 needs it).
-- **Cut more:** the start-time provider probe, `check-version.py` and the v5 corpus test.
-- **Smaller changes:** no Codex `--no-daemon` flag, no Worker code before the event, CH4 without a new
-  record shape, CH11 keeps per-connection rows for cheat check C5, CH7 withdrawn, flakes fixed only
-  when they fail, doc merges and decision retirements moved after Edition 01, no Claude Code warning
-  in AD5.
-- **Added:** a metadata run label in AD4 and a `decoders-ed01` branch for judges, a "not read yet" count
-  in AD2, an open-files `PROBLEM:` line in AD3, copies of the trace in the 2-hour run, Vercel session and
-  brokering setup lines, more participant notices in AD8, connector fixes allowed during the freeze.
-- **Rejected:** cutting the sleep lock, the synced-folder refusal and `no_family_literals.rs`; moving
-  status signing into PR8; raising the head bound (past it the proxy relays bytes unparsed,
-  `proxy/http.rs:287, 489`); a longer start retry; the daemon-side per-stream change (the proxy and
-  the native reader refuse first).
-
-## 14. Owner questions
+## 15. Owner questions (new)
 
 | # | Question | Recommendation |
 |---|---|---|
-| Q1 | Replace README P1 to P7 and the never-delete rule with the seven points as R1 to R7, so cut PRs may delete the tests they make moot, and let run labels be computed after the run (decoders kept on branch `decoders-ed01`)? | Yes |
-| Q2 | Set open streams to 16,384 and connections to 1,024 per entry, the capture queue to 64 MiB, each stated as a memory guard, keep 128 live producers, delete the native 32-stream, 1,024-file and 20,000-file caps, and leave closing quiet streams for after Edition 01? | Yes |
-| Q3 | Keep `RUN_MAX_COMPRESSED_BYTES` at 64 GiB, with one line saying it guards storage cost (about $1 a month per run at the cap)? | Yes |
-| Q4 | Drop Hermes 0.19.0 support and pin Hermes 0.22.5, and keep the final `state.db` copy as best effort (it may not open as SQLite and holds earlier sessions of the shared home)? | Yes |
-| Q5 | Leave the daemon merge, termination proof, signing, connector pins, deny lists, the Rust Worker stand-in and the event-rule commands (`login`, SSH key warnings, push lines, client repo check, run give-back) until after Edition 01? | Yes |
-| Q6 | Stop printing the `goalcup mcp` setup lines now, keep the command working through Edition 01, and delete it after? | Yes |
-| Q7 | Add `DISABLE_UPDATES = "1"` and `CLAUDE_CODE_DISABLE_AGENT_VIEW = "1"` to the Claude Code connector, keeping `DISABLE_AUTOUPDATER`? | Yes |
-| Q8 | Refuse at start Codex built-in providers with no table (`ollama`, `lmstudio`, `amazon-bedrock`, `gcp`), and name Claude Code cloud switches in the docs only? | Yes |
-| Q9 | Keep a simple local prune: delete a part only after the server acked it, never the last one, with no timer and no disk trigger? | Yes |
-| Q10 | Freeze client releases from the Friday release until the last run ends, except owner-signed fixes, counting connector updates for harness drift as such fixes, with `MIN_COMPETITION_VERSION` set to that release? | Yes |
+| O1 | To make room for the loss fixes, may K1 (verifier decoders), K10, K11 and K12 wait until after Edition 01? Friday then removes about 8,300 source lines instead of 19,000. | Yes |
+| O2 | When a queue is full, should we drop only the overflowing bytes of one stream, with a gap that says how many (SL3), rather than pause the recorder's socket? | Yes, drop and mark: half the code, and it can never freeze. |
+| O3 | For the Monday run, may the observer get read-only access to R2 and the run database, so the server copy is checked for the first time? | Yes |
+| O4 | Long-window compression makes uploads about 3 times smaller but uses about 140 MiB more memory in `goalcup start` while a chunk is built. Accept, if Monday's run confirms the gain? | Yes |
+| O5 | With no run size limit, may we replace it with a weekly look at stored bytes per run during the event (no code)? | Yes |
+| O6 | Upload a chunk every 5 minutes instead of 30, so the server copy stays close behind. This means more, smaller files in R2 (a few thousand more per busy week). Accept? | Yes |
+| O7 | If Monday's run finds a new loss bug, may the feature stop move from 4 Nov 00:00 to 4 Nov 12:00 UTC for loss fixes only? | Yes |
+| O8 | Add a "record this endpoint too" option (`--record-host`) after Edition 01, not this week? | Yes, after |
+| O9 | Hermes: if a 30-minute 0.22.5 run with subagents fails on Wednesday, should the docs say "Hermes: main agent only" rather than drop Hermes? | Yes, keep it with the note |
+| O10 | Should `goalcup start` set up the Git remote in the workspace for the agent, since run 1's agent never pushed? Or only fix the wording that tells the participant to start the prompt with the push lines? | Wording only for Friday |
 
-## 15. Appendix index
+## 16. Appendix index
 
 - [A-inventory.md](2026-10-30-audit/A-inventory.md): every line counted by area and by point; caps and disk code listed.
 - [B-fresh-design.md](2026-10-30-audit/B-fresh-design.md): two fresh designs from the seven points, and how the code compares.
@@ -410,4 +527,6 @@ break a point, the other said the plan still does too much. Full text and an ans
 - [J-tests-gate.md](2026-10-30-audit/J-tests-gate.md): the test map, the gate, gate times and flakes.
 - [K-docs-decisions.md](2026-10-30-audit/K-docs-decisions.md): every doc and decision, with what to delete, merge or retire.
 - [L-red-team.md](2026-10-30-audit/L-red-team.md): unrecordable runs, day-3 breakage and cheats.
-- [R-reviews.md](2026-10-30-audit/R-reviews.md): the fact check, two adversarial reviews, and the answer to every point.
+- [M-two-hour-run.md](2026-10-30-audit/M-two-hour-run.md): the 2-hour Codex run, the cause chain, every silent-loss path, trace size, upload and native caps.
+- [N-architecture-and-owner-answers.md](2026-10-30-audit/N-architecture-and-owner-answers.md): options A, B and C, and the facts behind each owner answer.
+- [R-reviews.md](2026-10-30-audit/R-reviews.md): the fact check, two adversarial reviews of revision 1, and the answer to every point.
