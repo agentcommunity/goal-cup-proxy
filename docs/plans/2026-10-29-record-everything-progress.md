@@ -63,6 +63,8 @@ on Tenki come later, after the build is clear and good.
 - 29 Oct: Task 10 merged in #298 (04118da). The restart budget spans a run, including `continue`. Owner: keep the cap of five (spec rule 16 has no cap), and decide a gap reason for connections refused during the rebind window (v5 is frozen).
 - 29 Oct: Task 11 merged in #299 (b102cdc). The finish line names configured hosts, not observed hosts (owner to decide). The kit parser for sealed hosts was updated to the new wording; the product output was correct.
 
+- 29 Oct: The owner deployed the Worker from main a31094c2 (version 39eb8427, replacing 3e4598bb from 15 Oct). No SQL was needed; 276 of 276 Worker tests passed; device approve answers 404. Still open: the dashboard domain check, a test operator for the Vercel runs, and MIN_COMPETITION_VERSION before Friday.
+
 ## Measured runs (29 Oct, main a31094c, test keys)
 
 | Run | Decoded model calls | Evidence | Subagents | Result |
