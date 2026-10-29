@@ -24,8 +24,8 @@ the owner approves it). The rest of this page is the field-by-field detail.
   one path, or `model_host_from`, which with `absent = "defaults"` needs one row too). Some pairs
   are required together, such as `home.env` with a `{config_home}` root
   ([Cross-field rules](#cross-field-rules)).
-  Optional, each with the default its table below gives: zero or one `[[capture.native]]` (with
-  `name`, `root`, `pattern` and `form`), `[participant]`, `[launch_prep]`,
+  Optional, each with the default its table below gives: zero to eight `[[capture.native]]` rows
+  (each with `name`, `root`, `pattern` and `form`), `[participant]`, `[launch_prep]`,
   `resume_args`, `configure`, `auth_hosts`, `env`, `platform`, `reserved_env_prefixes`, `argv_guard`,
   `termination`, `providers`, `model_host_from`, the home's `skills_dir`, `per_run_dir`, `dirs`
   and `seed`, `version_args`, and `[redaction]`. The one-screen list is
@@ -112,20 +112,22 @@ While Goal Cup Proxy reads schema 1:
 
 Schema 1 may still grow: a new optional field whose absence keeps today's behaviour, a wider
 bound, a new closed value or a newly admitted pair of values. None of those breaks a connector.
-A connector that uses a widened bound (zero native rows, D74) needs a binary that admits it; an
-older binary refuses it with its own message.
+A connector that uses a widened bound (zero native rows, D74, or several native rows) needs a binary
+that admits it; an older binary refuses it with its own message.
 
-The promise is held by tests. Every shipped connector, and five frozen fixtures for harnesses
+The promise is held by tests. Every shipped connector, and six frozen fixtures for harnesses
 nobody ships (`crates/goalcup-cli/tests/fixtures/schema-1-connectors/`), take the connector
 contract. The fixtures are a plain chat shape (`schema1-chat`); a shared config home with
 `model_host_from`, `providers`, every `[participant]` field, `configure`, platform env, a
 reserved prefix, an argv guard, `native_pid` and redaction rows (`schema1-optional`); a per-run
 config home with `per_run_dir`, `dirs` and seeds, a `keychain_link` run home, a shared CA row
 and `prefix_paths` (`schema1-per-run`); one host row and no native row, so the wire is the only
-record (`schema1-wire-only`); and the required fields only, with no home variable and
-a shared run `HOME` (`schema1-minimal`, which pins the defaults). They load, take the launch checks
-(`tests/it/connector_contract.rs`) and run once with a stand-in through the real binaries
-(`tests/full/connector_contract.rs`; the fixtures through `--dev`). A connector made from the
+record (`schema1-wire-only`); two native rows under one config home, each planned as its own
+source, so a run records both streams (`schema1-two-native`); and the required fields only, with
+no home variable and a shared run `HOME` (`schema1-minimal`, which pins the defaults). They load,
+take the launch checks (`tests/it/connector_contract.rs`) and run once with a stand-in through
+the real binaries (`tests/full/connector_contract.rs`; the fixtures through `--dev`). A
+connector made from the
 [template](../skills/adding-a-capture-harness/templates/connector-harness.toml) loads with no
 Rust change (`goalcup-protocol` `connector_template.rs`), and no core string literal names a
 harness (`no_family_literals.rs`). A change that makes one of these fail is a break of the
@@ -196,7 +198,7 @@ has each line with its comment. The full reference below has every rule.
 | `[capture.home]` | `run_home`, `config_home`, the harness's home variable, its real folders, `skills_dir` | `config_home = "shared"`, `env = "CODEX_HOME"` |
 | `[capture.ca]` | The CA variable the harness reads, and `extend` or `replace` | `env = ["NODE_EXTRA_CA_CERTS"]`, `mode = "extend"` |
 | `[capture.identity]` | Always `source = "none"` | `source = "none"` |
-| `[[capture.native]]` | Zero or one. The session files: `name`, `root`, `pattern`, `form`, `protocol_hint`, `since_run_start = true` | `root = "{config_home}/sessions"` |
+| `[[capture.native]]` | Zero to eight rows, one per session file or store. Each has `name`, `root`, `pattern`, `form`, `protocol_hint` and `since_run_start = true`; no two rows share a name, or a root and pattern | `root = "{config_home}/sessions"` |
 | Model host | Default host rows (`[[capture.hosts]]` or `providers`), plus `model_host_from` when the harness's config may name another service | `model_host_from = { file = "settings.json", key = "env.ANTHROPIC_BASE_URL", absent = "defaults" }` |
 | `capture.auth_hosts` | Sign-in hosts, tunnelled and never recorded | `auth_hosts = ["auth.openai.com"]` |
 | `[capture.termination]` | `process_group`, or `native_pid` for an npm wrapper; a grace in seconds | `strategy = "process_group"`, `grace_seconds = 10` |
@@ -275,7 +277,7 @@ optional field or table is absent.
 | `capture.credential` | refused (D61) | A connector may not pass a provider key; the harness keeps its own login in its home. |
 | `capture.ca` | required table | The harness's CA variables and which file they get. |
 | `capture.identity` | required table | How this run's native-session identity is obtained and bound. |
-| `capture.native` | optional, default `[]` | Zero or one `[[capture.native]]` table (D74). |
+| `capture.native` | optional, default `[]` | Zero to eight `[[capture.native]]` tables (D74). Each row is checked on its own. |
 | `capture.argv_guard` | optional, default absent | Harness-specific pre-parser argument refusals. |
 | `capture.termination` | optional; effective defaults below | How the owned harness is stopped. |
 | `capture.hosts` | defaults to `[]`, validation requires 1–16 (with `providers`), or 0–16 with `model_host_from` and `absent = "refuse"` | Intercepted model hosts and their recorded paths. |
@@ -619,7 +621,9 @@ Every other identity field (`binding`, `match_field`, `match_value`, `id_field`,
 
 ## `[[capture.native]]`
 
-Zero or one native row (D74). A connector with none records the wire only, and `goalcup
+Zero to eight native rows (D74), one per session file or store. Each row is checked on its own
+and against the rows before it: names are unique, no two rows share a root and pattern, and every
+cross-field rule applies to every row. A connector with none records the wire only, and `goalcup
 continue` appends its `resume_args` as when a session file exists.
 
 | Field | Required/default | Contract |
@@ -980,7 +984,7 @@ schema 2.
 ## Examples
 
 Read the shipped connectors. Conformance tests load each as `Origin::Pinned` and compare its
-directory with its pin. The five frozen
+directory with its pin. The six frozen
 [schema-1 fixtures](../crates/goalcup-cli/tests/fixtures/schema-1-connectors/) are complete
 connectors for harnesses nobody ships, one per shape ([what each covers](#the-compatibility-promise)).
 

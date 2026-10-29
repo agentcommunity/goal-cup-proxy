@@ -201,8 +201,9 @@ next finish commits that terminal to the registry (`SealWritten` when `seal.json
   none free it is relayed as bytes and counted in `capture_table_full`.
 - One process-wide monotonic clock, `proxy::metadata::capture_time()`, serves all proxy
   observations.
-- Native capture reads a connector's zero or one `[[capture.native]]` source (D74). Hints are open strings. An
-  unknown hint is captured and reported as unsupported semantics.
+- Native capture reads a connector's zero to eight `[[capture.native]]` sources (D74,
+  `MAX_NATIVE_ROWS`), each planned as its own source. Hints are open strings. An unknown hint is
+  captured and reported as unsupported semantics.
 
 ### Proxy loss in the stream (H-16)
 

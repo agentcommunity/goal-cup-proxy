@@ -330,15 +330,102 @@ fn a_harness_without_a_native_source_is_admitted() {
     admitted(&t, PINNED);
 }
 
-#[test]
-fn two_native_sources_are_refused() {
-    let mut t = hermes();
+/// Hermes with `count` native rows: row `i` is Hermes's session row renamed `row-i` and pointed
+/// at `row{i}/*.jsonl` under the same root, so each row has its own name and its own root and
+/// pattern. Every other field, `since_run_start` included, is the shipped row's.
+fn with_native_rows(count: usize) -> Table {
+    native_rows_on(hermes(), count)
+}
+
+/// `base` with `count` native rows, as [`with_native_rows`] makes them from its first row.
+fn native_rows_on(mut t: Table, count: usize) -> Table {
     let first = tbl(&mut t, &["capture"])["native"].as_array().unwrap()[0].clone();
-    tbl(&mut t, &["capture"])["native"]
-        .as_array_mut()
+    let rows = (0..count)
+        .map(|i| {
+            let mut row = first.as_table().unwrap().clone();
+            row.insert("name".into(), format!("row-{i}").into());
+            row.insert("pattern".into(), format!("row{i}/*.jsonl").into());
+            row.insert("form".into(), "append_only".into());
+            Value::Table(row)
+        })
+        .collect();
+    tbl(&mut t, &["capture"]).insert("native".into(), Value::Array(rows));
+    t
+}
+
+/// Row `index` of the native array of `t`, mutable.
+fn native_row(t: &mut Table, index: usize) -> &mut Table {
+    tbl(t, &["capture"])["native"].as_array_mut().unwrap()[index]
+        .as_table_mut()
         .unwrap()
-        .push(first);
-    refused(&t, PINNED, &["exactly one `[[capture.native]]`"]);
+}
+
+#[test]
+fn up_to_eight_native_sources_are_admitted() {
+    admitted(&with_native_rows(1), PINNED);
+    admitted(&with_native_rows(3), PINNED);
+    admitted(&with_native_rows(8), PINNED);
+}
+
+#[test]
+fn nine_native_sources_are_refused() {
+    refused(
+        &with_native_rows(9),
+        PINNED,
+        &["capture.native", "at most 8"],
+    );
+}
+
+#[test]
+fn two_rows_with_one_name_are_refused() {
+    let mut t = with_native_rows(2);
+    native_row(&mut t, 1).insert("name".into(), "row-0".into());
+    refused(&t, PINNED, &["capture.native.name", "unique"]);
+}
+
+#[test]
+fn two_rows_with_one_root_and_pattern_are_refused() {
+    let mut t = with_native_rows(2);
+    native_row(&mut t, 1).insert("pattern".into(), "row0/*.jsonl".into());
+    refused(&t, PINNED, &["capture.native", "same root and pattern"]);
+}
+
+/// The duplicate rule ignores ASCII case: `Projects` and `projects` are one directory on a
+/// case-insensitive home, so rows that differ only so are the same rows.
+#[test]
+fn two_rows_with_one_root_and_pattern_in_other_case_are_refused() {
+    let mut t = with_native_rows(2);
+    native_row(&mut t, 0).insert("pattern".into(), "Row0/*.jsonl".into());
+    native_row(&mut t, 1).insert("pattern".into(), "row0/*.jsonl".into());
+    refused(&t, PINNED, &["capture.native", "same root and pattern"]);
+}
+
+#[test]
+fn two_rows_whose_roots_differ_only_in_case_are_refused() {
+    let mut t = with_native_rows(2);
+    native_row(&mut t, 0).insert("root".into(), "{config_home}/Sessions".into());
+    native_row(&mut t, 1).insert("root".into(), "{config_home}/sessions".into());
+    native_row(&mut t, 1).insert("pattern".into(), "row0/*.jsonl".into());
+    refused(&t, PINNED, &["capture.native", "same root and pattern"]);
+}
+
+/// Every row meets every row rule, not only the first: a second row on a shared root with no
+/// `since_run_start` is refused as the first would be. Claude's config home is shared (Hermes's is
+/// per run, so its rows owe no `since_run_start`).
+#[test]
+fn every_native_row_meets_the_cross_field_rules() {
+    let mut t = native_rows_on(claude(), 2);
+    native_row(&mut t, 1).insert("since_run_start".into(), false.into());
+    refused(&t, PINNED, &["capture.native.root", "must be per run"]);
+}
+
+/// Each row is checked on its own: a bad hint on the second row is refused though the first is
+/// well formed.
+#[test]
+fn every_native_row_meets_the_row_rules() {
+    let mut t = with_native_rows(2);
+    native_row(&mut t, 1).insert("protocol_hint".into(), "Bad_Hint".into());
+    refused(&t, PINNED, &["capture.native.protocol_hint"]);
 }
 
 #[test]

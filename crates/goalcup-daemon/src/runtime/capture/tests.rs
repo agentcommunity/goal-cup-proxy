@@ -1639,7 +1639,7 @@ fn manifest_at(path: &Path) -> HarnessManifest {
     HarnessManifest::from_toml_str(&text).unwrap()
 }
 
-/// The plan copies what each connector declares: its one source's label, hint, form and
+/// The plan copies what each connector declares: each source's label, hint, form and
 /// resolved root. Every frozen fixture, every shipped connector and the controlled workload are
 /// read; none is named here.
 #[test]
@@ -1657,9 +1657,9 @@ fn schema_native_plan_copies_label_hint_form_and_root() {
     let mut planned = 0;
     for path in paths {
         let manifest = manifest_at(&path);
-        let Some(native) = manifest.capture.native.first() else {
+        if manifest.capture.native.is_empty() {
             continue;
-        };
+        }
         let plan = native_plan(
             &manifest.capture,
             Path::new("/run"),
@@ -1668,32 +1668,80 @@ fn schema_native_plan_copies_label_hint_form_and_root() {
         )
         .unwrap();
         let at = path.display();
-        let [source] = plan.as_slice() else {
-            panic!("{at}: one source, got {plan:?}");
-        };
-        let root = native
-            .root
-            .replace("{run_home}", "/run")
-            .replace("{config_home}", "/config");
-        assert_eq!(source.root, Path::new(&root), "{at}");
-        let form = match native.form {
-            goalcup_protocol::harness::NativeForm::AppendOnly => NativeStoreForm::AppendOnly,
-            goalcup_protocol::harness::NativeForm::Snapshot => NativeStoreForm::Snapshot,
-            other => panic!("{at}: form {other:?}"),
-        };
         assert_eq!(
-            (source.name.as_str(), source.form),
-            (native.name.as_str(), form),
-            "{at}"
+            plan.len(),
+            manifest.capture.native.len(),
+            "{at}: one source per row"
         );
-        assert_eq!(
-            source.hint.as_ref().map(NativeHint::as_str),
-            native.protocol_hint.as_deref(),
-            "{at}"
-        );
+        // Each source is its row, in row order.
+        for (source, native) in plan.iter().zip(&manifest.capture.native) {
+            let root = native
+                .root
+                .replace("{run_home}", "/run")
+                .replace("{config_home}", "/config");
+            assert_eq!(source.root, Path::new(&root), "{at}");
+            let form = match native.form {
+                goalcup_protocol::harness::NativeForm::AppendOnly => NativeStoreForm::AppendOnly,
+                goalcup_protocol::harness::NativeForm::Snapshot => NativeStoreForm::Snapshot,
+                other => panic!("{at}: form {other:?}"),
+            };
+            assert_eq!(
+                (source.name.as_str(), source.form),
+                (native.name.as_str(), form),
+                "{at}"
+            );
+            assert_eq!(
+                source.hint.as_ref().map(NativeHint::as_str),
+                native.protocol_hint.as_deref(),
+                "{at}"
+            );
+        }
         planned += 1;
     }
     assert!(planned >= 5, "{planned} planned");
+}
+
+/// Every `[[capture.native]]` row is planned, in order: three rows give three specs, each with
+/// its own name, pattern and root.
+#[test]
+fn every_native_row_is_planned() {
+    let mut manifest = manifest_at(&frozen_manifest_paths().remove(0));
+    let first = manifest.capture.native[0].clone();
+    manifest.capture.native = (0..3)
+        .map(|i| {
+            let mut row = first.clone();
+            row.name = format!("row-{i}");
+            row.pattern = format!("row{i}/*.jsonl");
+            row
+        })
+        .collect();
+    let plan = native_plan(
+        &manifest.capture,
+        Path::new("/run"),
+        Path::new("/config"),
+        0,
+    )
+    .unwrap();
+    let planned: Vec<(&str, &str, &Path)> = plan
+        .iter()
+        .map(|source| {
+            (
+                source.name.as_str(),
+                source.pattern.as_str(),
+                source.root.as_path(),
+            )
+        })
+        .collect();
+    // The fixture's root is `{config_home}/projects`, so each row resolves under it.
+    let root = Path::new("/config/projects");
+    assert_eq!(
+        planned,
+        vec![
+            ("row-0", "row0/*.jsonl", root),
+            ("row-1", "row1/*.jsonl", root),
+            ("row-2", "row2/*.jsonl", root),
+        ]
+    );
 }
 
 /// A harness that keeps no conversation file declares no native source: its entry plans no
@@ -1978,6 +2026,129 @@ fn a_native_file_past_max_files_is_one_streamless_gap_until_the_count_grows() {
             .count(),
         2,
         "the tracked files are captured as before"
+    );
+}
+
+#[test]
+fn a_tracked_file_that_never_gets_a_stream_slot_is_a_streamless_gap_at_finish() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = tempfile::tempdir().unwrap();
+    for name in ["a", "b", "c"] {
+        std::fs::write(home.path().join(format!("{name}.jsonl")), b"x\n").unwrap();
+    }
+    let writer = writer(dir.path(), 64 << 20);
+    let sink = Arc::new(OwnerSink::default());
+    let native = NativeCapture::new(
+        NativeCaptureConfig {
+            sources: vec![NativeSourceSpec {
+                name: "store".into(),
+                root: home.path().to_path_buf(),
+                pattern: "*.jsonl".into(),
+                form: NativeStoreForm::AppendOnly,
+                hint: None,
+                modified_since: None,
+            }],
+            limits: NativeCaptureLimits {
+                max_open_streams: 2,
+                ..NativeCaptureLimits::default()
+            },
+        },
+        sink.clone(),
+        Box::new(SystemNativeClock::new()),
+    )
+    .unwrap();
+    let mut owner = Owner::new(
+        sink,
+        writer.clone(),
+        clock(),
+        &[],
+        Default::default(),
+        None,
+        Some(native),
+    );
+    for _ in 0..3 {
+        owner.poll_native();
+    }
+    let control = OwnerControl::default();
+    control.stop.store(true, Ordering::Release);
+    owner.run(&control);
+    assert!(control.drained.load(Ordering::Acquire));
+    let chain = records(dir.path());
+    assert_eq!(
+        streamless(&chain, GapReason::LimitExceeded),
+        1,
+        "the third file waits for a slot that never frees before the finish, so the chain marks it"
+    );
+    assert_eq!(
+        chain
+            .iter()
+            .filter(|r| matches!(r, CaptureRecord::Open { .. }))
+            .count(),
+        2,
+        "the two files that got a slot are captured as before"
+    );
+}
+
+/// The default native stream budget is a quarter of the entry's allowance (32 of
+/// `MAX_OPEN_STREAMS`), shared by every row. Append-only streams keep their slot until the finish,
+/// so the 33rd append-only file in a run waits for the whole run and the chain marks it as one
+/// streamless gap. This pins today's ceiling. Raising the budget or ending idle streams is an
+/// owner decision, because wire capture shares the entry's open-stream allowance.
+#[test]
+fn an_append_only_file_past_the_default_stream_budget_is_one_gap_at_finish() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = tempfile::tempdir().unwrap();
+    let budget = NativeCaptureLimits::default().max_open_streams;
+    for i in 0..=budget {
+        std::fs::write(home.path().join(format!("f{i:02}.jsonl")), b"x\n").unwrap();
+    }
+    let writer = writer(dir.path(), 64 << 20);
+    let sink = Arc::new(OwnerSink::default());
+    let native = NativeCapture::new(
+        NativeCaptureConfig {
+            sources: vec![NativeSourceSpec {
+                name: "store".into(),
+                root: home.path().to_path_buf(),
+                pattern: "*.jsonl".into(),
+                form: NativeStoreForm::AppendOnly,
+                hint: None,
+                modified_since: None,
+            }],
+            limits: NativeCaptureLimits::default(),
+        },
+        sink.clone(),
+        Box::new(SystemNativeClock::new()),
+    )
+    .unwrap();
+    let mut owner = Owner::new(
+        sink,
+        writer.clone(),
+        clock(),
+        &[],
+        Default::default(),
+        None,
+        Some(native),
+    );
+    for _ in 0..3 {
+        owner.poll_native();
+    }
+    let control = OwnerControl::default();
+    control.stop.store(true, Ordering::Release);
+    owner.run(&control);
+    assert!(control.drained.load(Ordering::Acquire));
+    let chain = records(dir.path());
+    assert_eq!(
+        streamless(&chain, GapReason::LimitExceeded),
+        1,
+        "the file past the budget waits for a slot that never frees before the finish"
+    );
+    assert_eq!(
+        chain
+            .iter()
+            .filter(|r| matches!(r, CaptureRecord::Open { .. }))
+            .count(),
+        budget,
+        "the first {budget} files get a slot and are captured as before"
     );
 }
 

@@ -22,7 +22,7 @@ use goalcup_protocol::capture::{CaptureRecord, CaptureSource};
 use goalcup_protocol::capture_policy::SHARED_CA_ENV;
 use goalcup_protocol::harness::{CaptureSpec, HarnessManifest, Origin};
 use goalcup_protocol::pins::shipped_connector_ids;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::process::Command;
@@ -60,15 +60,21 @@ fn after_exit_lines(m: &HarnessManifest) -> String {
 fn stand_in_header(m: &HarnessManifest, out: &Path) -> String {
     let c = &m.capture;
     let config_home = format!("${{{}}}", c.home.env.as_deref().unwrap_or("HOME"));
-    // A connector with no native source keeps no session file: the stand-in writes none.
-    let native_file = c.native.first().map_or_else(String::new, |native| {
-        let root = native
-            .root
-            .replace("{config_home}", &config_home)
-            .replace("{run_home}", "${HOME}");
-        let pattern = native.pattern.replace('*', "kit").replace('?', "k");
-        format!("{root}/{pattern}")
-    });
+    // One session file per `[[capture.native]]` row, in row order. A connector with no native
+    // source keeps none: the stand-in writes none.
+    let native_files = c
+        .native
+        .iter()
+        .map(|native| {
+            let root = native
+                .root
+                .replace("{config_home}", &config_home)
+                .replace("{run_home}", "${HOME}");
+            let pattern = native.pattern.replace('*', "kit").replace('?', "k");
+            format!("{root}/{pattern}")
+        })
+        .collect::<Vec<_>>()
+        .join(" ");
     let skills = c
         .home
         .skills_dir
@@ -77,9 +83,9 @@ fn stand_in_header(m: &HarnessManifest, out: &Path) -> String {
         .unwrap_or_default();
     format!(
         "KIT_OUT={out}\nKIT_VERSION_ARGV={version}\n\
-         KIT_NATIVE_FILE=\"{native_file}\"\nKIT_SKILLS_DIR=\"{skills}\"\nKIT_CA_VARS={ca}\n\
+         KIT_NATIVE_FILES=\"{native_files}\"\nKIT_SKILLS_DIR=\"{skills}\"\nKIT_CA_VARS={ca}\n\
          KIT_CONFIGURE={configure}\nKIT_AFTER_EXIT={after_exit}\n\
-         export KIT_OUT KIT_VERSION_ARGV KIT_NATIVE_FILE KIT_SKILLS_DIR KIT_CA_VARS \
+         export KIT_OUT KIT_VERSION_ARGV KIT_NATIVE_FILES KIT_SKILLS_DIR KIT_CA_VARS \
          KIT_CONFIGURE KIT_AFTER_EXIT\n",
         out = sh_quote(&out.display().to_string()),
         version = sh_quote(&c.executable.version_args.join(" ")),
@@ -357,33 +363,41 @@ fn run_connector(id: &str, from: Folder) {
     assert_eq!(code, 0, "{id}: {integrity}");
     // A connector with no native source records the wire alone: no native stream, and the
     // trace still seals as valid.
-    let Some(declared_native) = c.native.first() else {
+    if c.native.is_empty() {
         assert!(
             native.is_empty(),
             "{id}: a native stream with no native source"
         );
         return;
-    };
+    }
     assert!(
         String::from_utf8_lossy(&native).contains(PROMPT),
         "{id}: the prompt is in the recorded session file"
     );
 
-    // The session file is recorded under the hint the connector declared, as declared (D43). A
-    // hint no decoder accepts is capture-only: the research report lists it under
-    // `analysis.undecoded`, and the integrity verdict above is unchanged (D45).
-    let declared = declared_native.protocol_hint.as_deref();
+    // Every declared row records its own stream. A stream's label begins with the name of the
+    // row it came from (`<source name>:<path>#g<generation>`), so each stream is judged against
+    // its own row's hint.
     let registry = goalcup_verifier::capture_analysis::registry::DecoderRegistry::builtin();
     let (_, summary) = world.research(&entry);
     let undecoded = summary["analysis"]["undecoded"]
         .as_array()
         .unwrap_or_else(|| panic!("{id}: no analysis.undecoded: {summary}"));
-    let mut native_streams = 0;
+    let mut recorded_rows = BTreeSet::new();
     for (key, stream) in streams
         .iter()
         .filter(|(_, s)| s.source == CaptureSource::Native)
     {
-        native_streams += 1;
+        let row = c
+            .native
+            .iter()
+            .find(|row| stream.meta.label.starts_with(&format!("{}:", row.name)))
+            .unwrap_or_else(|| panic!("{id}: a native stream from no row: {}", stream.meta.label));
+        recorded_rows.insert(row.name.as_str());
+        // The session file is recorded under the hint its row declared, as declared (D43). A
+        // hint no decoder accepts is capture-only: the research report lists it under
+        // `analysis.undecoded`, and the integrity verdict above is unchanged (D45).
+        let declared = row.protocol_hint.as_deref();
         assert_eq!(
             stream.meta.protocol_hint.as_deref(),
             declared,
@@ -404,7 +418,13 @@ fn run_connector(id: &str, from: Folder) {
             "{id}: capture-only exactly when no decoder accepts `{declared:?}`: {summary}"
         );
     }
-    assert!(native_streams > 0, "{id}: a native stream was recorded");
+    for row in &c.native {
+        assert!(
+            recorded_rows.contains(row.name.as_str()),
+            "{id}: native row `{}` recorded no stream",
+            row.name
+        );
+    }
 }
 
 /// Every connector folder passes one participant-shaped run with no case of its own: it loads
@@ -430,6 +450,9 @@ fn every_connector_runs_once_as_a_participant_runs_it() {
 /// as a shipped connector: its configure commands, its own environment and CA file, its argv, its
 /// session file recorded with a hint no decoder knows when it declares one, and a sealed trace
 /// the verifier reads as valid.
+///
+/// A frozen fixture with two native rows (`schema1-two-native`) is among them: the run records
+/// both session files, each under its own row's hint, and seals valid.
 #[test]
 fn a_schema_1_connector_written_today_keeps_launching() {
     with_real_home_guard(|| {

@@ -6,9 +6,10 @@
 # these variables into it, all derived from the connector's `harness.toml`:
 #   KIT_OUT           its report directory, outside the run;
 #   KIT_VERSION_ARGV  the connector's `version_args`, joined by spaces (empty: none);
-#   KIT_NATIVE_FILE   the session file its first `[[capture.native]]` source finds: the root,
-#                     then the pattern with each `*` as `kit` and each `?` as `k` (empty: the
-#                     connector declares none, so the stand-in writes no session file);
+#   KIT_NATIVE_FILES  the session file each `[[capture.native]]` row finds, space-separated, in
+#                     row order: the root, then the pattern with each `*` as `kit` and each `?`
+#                     as `k` (empty: the connector declares none, so the stand-in writes no
+#                     session file);
 #   KIT_SKILLS_DIR    where the goal-cup skill should be, or empty when the connector has none;
 #   KIT_CA_VARS       the connector's `capture.ca.env` names, space-separated;
 #   KIT_CONFIGURE     the connector's `capture.configure` commands, one per line, each argument
@@ -24,8 +25,8 @@
 # It reports its argv (one per line), environment, stdin kind, what the goal-cup skill folder
 # held at its start, and a copy of the file each CA variable names; every byte it prints starts
 # `kit:`. It reads lines from its terminal (chat mode, D57) and appends each to KIT_NATIVE_FILE
-# as one JSON line, creating the file at the first line, as the measured harnesses do; `/exit`
-# ends it.
+# as one JSON line to every file in KIT_NATIVE_FILES, creating each at the first line, as the
+# measured harnesses do; `/exit` ends it.
 out="$KIT_OUT"
 if [ -n "$KIT_VERSION_ARGV" ] && [ "$*" = "$KIT_VERSION_ARGV" ]; then
   echo "kit 1.0.0"
@@ -57,15 +58,15 @@ for var in $KIT_CA_VARS; do
   eval "file=\${$var:-}"
   if [ -n "$file" ] && [ -f "$file" ]; then cp "$file" "$out/ca-$var"; fi
 done
-if [ -n "$KIT_NATIVE_FILE" ]; then mkdir -p "$(dirname "$KIT_NATIVE_FILE")"; fi
+for file in $KIT_NATIVE_FILES; do mkdir -p "$(dirname "$file")"; done
 echo "kit: ready"
 while IFS= read -r line; do
   if [ "$line" = /exit ]; then
     echo "kit: bye"
     exit 0
   fi
-  if [ -n "$KIT_NATIVE_FILE" ]; then
-    printf '{"type":"user","text":"%s"}\n' "$line" >> "$KIT_NATIVE_FILE"
-  fi
+  for file in $KIT_NATIVE_FILES; do
+    printf '{"type":"user","text":"%s"}\n' "$line" >> "$file"
+  done
   echo "kit: noted $line"
 done

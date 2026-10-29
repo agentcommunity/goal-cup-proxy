@@ -97,6 +97,56 @@ form = "append_only"
 protocol_hint = "claude-code-jsonl"
 since_run_start = true
 
+# Subagents (D57). Each subagent writes its own transcript and a meta file beside the session it
+# serves: `<session-id>/subagents/agent-<id>.jsonl`. That direct shape is observed in one real run
+# (kit run `task-5-subagents`, 29 Oct 2026, linux-x86_64, Claude Code 2.1.310, where the transcript
+# was in the capture chain). The wider pattern is community write-ups only, not vendor docs or a
+# re-fetched source. A subagent started by a workflow script writes one level deeper, under
+# `subagents/workflows/<workflow-id>/`, which was observed on disk, so it has its own rows.
+# Large tool output spills to `<session-id>/tool-results/`. Every row reads from the run's start,
+# as the main row does (D57). Older binaries refuse this connector: schema 1 grew (D68 is proposed).
+[[capture.native]]
+name = "subagents"
+root = "{config_home}/projects"
+pattern = "*/*/subagents/agent-*.jsonl"
+form = "append_only"
+protocol_hint = "claude-code-jsonl"
+since_run_start = true
+warn_missing = false
+
+[[capture.native]]
+name = "subagent-meta"
+root = "{config_home}/projects"
+pattern = "*/*/subagents/agent-*.meta.json"
+form = "snapshot"
+since_run_start = true
+warn_missing = false
+
+[[capture.native]]
+name = "workflow-subagents"
+root = "{config_home}/projects"
+pattern = "*/*/subagents/workflows/*/agent-*.jsonl"
+form = "append_only"
+protocol_hint = "claude-code-jsonl"
+since_run_start = true
+warn_missing = false
+
+[[capture.native]]
+name = "workflow-subagent-meta"
+root = "{config_home}/projects"
+pattern = "*/*/subagents/workflows/*/agent-*.meta.json"
+form = "snapshot"
+since_run_start = true
+warn_missing = false
+
+[[capture.native]]
+name = "tool-results"
+root = "{config_home}/projects"
+pattern = "*/*/tool-results/*"
+form = "snapshot"
+since_run_start = true
+warn_missing = false
+
 [capture.termination]
 strategy = "process_group"
 grace_seconds = 10

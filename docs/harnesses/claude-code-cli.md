@@ -43,7 +43,7 @@ claude -p --permission-mode bypassPermissions \
 | | macOS | Linux | Windows |
 |---|---|---|---|
 | Config dir | `$CLAUDE_CONFIG_DIR`, default `~/.claude` (vendor docs; measured with an isolated dir). Holds `settings.json`, `settings.local.json`, `.claude.json` (account and onboarding state; default location without the variable is `~/.claude.json`), `plugins/synced/`, `skills/synced/`, `sessions/`, `session-env/`, `shell-snapshots/` (measured) | unknown (vendor docs name `~/.claude`; not measured on Linux) | unknown |
-| Session / transcript store | `$CLAUDE_CONFIG_DIR/projects/<slug>/<session-id>.jsonl`, slug = working directory with every non-alphanumeric character mapped to `-` (measured; vendor docs: truncated to 200 characters plus a hash when longer, not exercised). Subagents: `<session-id>/subagents/agent-<agentId>.jsonl` and `.meta.json`. Large tool output spills to `<session-id>/tool-results/<id>.txt` (vendor docs; the spill path was not exercised by Goal Cup) | unknown | unknown |
+| Session / transcript store | `$CLAUDE_CONFIG_DIR/projects/<slug>/<session-id>.jsonl`, slug = working directory with every non-alphanumeric character mapped to `-` (measured; vendor docs: truncated to 200 characters plus a hash when longer, not exercised). Subagents: `<session-id>/subagents/agent-<agentId>.jsonl` and `.meta.json` (observed in one kit run, `task-5-subagents`, 29 Oct 2026, linux-x86_64, Claude Code 2.1.310, where both files were in the capture chain; the wider pattern is community write-ups only, not vendor docs or a re-fetched source; see section 9). Subagents started by a workflow script are one level deeper: `<session-id>/subagents/workflows/<workflow-id>/agent-<agentId>.jsonl` (seen on disk in workflow runs, 28 Oct 2026). The connector records both shapes, plus the tool-result files. Large tool output spills to `<session-id>/tool-results/<id>.txt` (vendor docs; the spill path was not exercised by Goal Cup) | unknown | unknown |
 | Logs / cache | `~/Library/Caches/claude-cli-nodejs/<slug>/mcp-logs-<server>/` when MCP servers start (measured; not written with MCP off); `~/.local/state/claude/locks/` (measured); `shell-snapshots/` in the config dir, removed at clean exit (measured) | unknown | unknown |
 | Env vars that move these | `CLAUDE_CONFIG_DIR` (config, transcripts); `HOME` (the Bash tool sources the user's `~/.zshrc` via the home directory, not `ZDOTDIR`; cache path); `XDG_STATE_HOME` (version lock only); `XDG_CACHE_HOME` reaches only the updater staging dir, not the MCP cache; `CLAUDE_CODE_PROJECT_DIR_NAME` (vendor docs, 2.1.234 and later); `CLAUDE_CODE_SKIP_PROMPT_HISTORY=1` stops history writing (vendor docs) | same variable names are expected; behaviour not measured on Linux | unknown |
 
@@ -101,6 +101,7 @@ Retention: vendor docs say transcripts are deleted after `cleanupPeriodDays` (de
 - `USER` must be in the environment or login reports false (measured).
 - The MCP cache path is `$HOME/Library/Caches/claude-cli-nodejs`; `XDG_CACHE_HOME` is not consulted (read from the bundle, not separately measured).
 - Whether another install's updater could prune 2.1.283 while an unlocked run uses it: not measured.
+- Direct subagent shape: observed in one kit run (`task-5-subagents`, 29 Oct 2026, linux-x86_64, Claude Code 2.1.310). A subagent started directly, not from a workflow script, wrote `<session-id>/subagents/agent-<agentId>.jsonl`, and its transcript and meta file were in the capture chain. The wider pattern is community write-ups only, not vendor docs or a re-fetched source, and one run on one OS does not cover other versions or platforms. The workflow shape was seen on disk.
 - Open: every "unknown" still above for Linux and Windows (a logged-in run, the config-dir default); the Linux credential store; the managed-settings paths; the update and connector hosts; how to install an exact version.
 - The Linux facts come from the 2026-10-13 arm64 Docker run and the x86_64 runner smoke.
 
@@ -158,3 +159,12 @@ and never sets them for you (D67). They go in `settings.json` in Claude Code's G
   [plan v4](../research/results/2026-10-22-fix-plan-v4.md).
 - Every setting for a long run, for participants:
   [Set up your harness for a 168-hour run](../HARNESS-SETUP.md#claude-code).
+
+## 11. Capture limits per run
+
+The connector declares six `[[capture.native]]` rows (main transcripts, subagent transcripts and meta files, workflow subagent transcripts and meta files, tool results). They share one budget per run, at the daemon's defaults (code: `NativeCaptureLimits::default` in `crates/goalcup-daemon/src/native_capture.rs`):
+
+- **Open streams: 32** at once across all native rows. Wire capture has its own allowance. Append-only transcripts (the main, subagent and workflow subagent rows) keep their stream until the run finishes, so the 33rd append-only file in one run waits for the whole run. The chain marks it with one streamless gap (`limit exceeded`) at finish; the first 32 files are captured as before.
+- **Tracked files: 1024** across all rows, counting open, completed and waiting files. A file past that count is not tracked and is not captured; the chain marks the loss with a streamless gap.
+
+Not measured: how many append-only files a long, subagent-heavy run reaches. Raising the stream budget, or ending an idle append-only stream and reopening it as the next generation, is an owner decision, because the budget is split with wire capture.

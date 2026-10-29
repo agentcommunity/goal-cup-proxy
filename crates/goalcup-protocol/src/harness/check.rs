@@ -5,9 +5,9 @@ use super::schema::{
     CHAT_MODE_ONLY, CONFIGURE_DENIED_KEYS, ConfigHome, HarnessManifest, LAUNCH_PREP_TOKENS,
     MAX_CONFIGURE_ARG_BYTES, MAX_CONFIGURE_ARGS, MAX_CONFIGURE_COMMANDS, MAX_MODEL_HOST_KEY_PARTS,
     MAX_NO_PROMPT_SETTINGS, MAX_NO_PROMPT_VALUES, MODEL_HOST_DENIED_WORDS,
-    MODEL_HOST_FILE_EXTENSIONS, MODEL_HOST_VIA_PART, ModelHostAbsent, NativeForm, Origin,
-    ParticipantSpec, PlatformKey, RunHome, Strategy, display_name_problem, first_screen_problem,
-    no_prompt_value_problem, setup_section_problem,
+    MODEL_HOST_FILE_EXTENSIONS, MODEL_HOST_VIA_PART, ModelHostAbsent, NativeForm, NativeSpec,
+    Origin, ParticipantSpec, PlatformKey, RunHome, Strategy, display_name_problem,
+    first_screen_problem, no_prompt_value_problem, setup_section_problem,
 };
 use super::{MIGRATION_SENTENCE, SUPPORTED_SCHEMA_VERSIONS};
 use crate::ProtocolError;
@@ -20,6 +20,10 @@ use crate::capture_policy::{
     local_host_problem, mentions_goalcup, startup_file_problem,
 };
 use crate::hints::valid_hint;
+
+/// The most `[[capture.native]]` rows a schema-1 connector may declare. The daemon's
+/// `MAX_NATIVE_SOURCES` is this constant, so every row a valid connector declares is admitted.
+pub const MAX_NATIVE_ROWS: usize = 8;
 
 /// Template variables an `args` element may use.
 const ARG_TOKENS: &[&str] = &["workspace"];
@@ -350,6 +354,41 @@ pub fn glob_matches(name: &str, pattern: &str) -> bool {
 /// wider grammar would let a reviewed connector run `update`, `login` or `mcp` through the
 /// probe, which runs before the capture with no proxy and no record.
 const VERSION_ARGS: &[&str] = &["--version", "-v", "-V", "version"];
+
+/// One `[[capture.native]]` row's own rules: its name, root, pattern, and the hint its form may
+/// carry.
+fn check_native_row(n: &NativeSpec) -> Result<(), ProtocolError> {
+    let valid_name = (1..=64).contains(&n.name.len())
+        && n.name
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'));
+    if !valid_name {
+        return Err(refuse(
+            "capture.native.name",
+            format!("`{}` must be 1 to 64 of `[A-Za-z0-9._-]`", n.name),
+        ));
+    }
+    split_native_root(&n.root)
+        .map_err(|why| refuse("capture.native.root", format!("`{}` {why}", n.root)))?;
+    native_pattern_components(&n.pattern)
+        .map_err(|why| refuse("capture.native.pattern", format!("`{}` {why}", n.pattern)))?;
+    match (&n.protocol_hint, n.form) {
+        (Some(_), NativeForm::Snapshot) => {
+            return Err(refuse(
+                "capture.native.protocol_hint",
+                "applies to `append_only` stores only",
+            ));
+        }
+        (Some(h), NativeForm::AppendOnly) if !valid_hint(h) => {
+            return Err(refuse(
+                "capture.native.protocol_hint",
+                format!("`{h}` must match `^[a-z][a-z0-9.-]{{0,63}}$`"),
+            ));
+        }
+        _ => {}
+    }
+    Ok(())
+}
 
 /// How a native `root` splits: which home it names and the relative path under it.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -1028,46 +1067,45 @@ impl HarnessManifest {
 
     fn check_native(&self) -> Result<(), ProtocolError> {
         let c = &self.capture;
-        // No native source is a harness that keeps no conversation file of its own: its run
-        // records the wire alone.
-        let n = match c.native.as_slice() {
-            [] => return Ok(()),
-            [one] => one,
-            _ => {
-                return Err(refuse(
-                    "capture.native",
-                    "schema 1 holds no native source or exactly one `[[capture.native]]`",
-                ));
-            }
-        };
-        let valid_name = (1..=64).contains(&n.name.len())
-            && n.name
-                .bytes()
-                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'));
-        if !valid_name {
+        // A harness that keeps no conversation file of its own declares no rows: its run records
+        // the wire alone. Each row is checked on its own, then against the rows before it.
+        if c.native.len() > MAX_NATIVE_ROWS {
             return Err(refuse(
-                "capture.native.name",
-                format!("`{}` must be 1 to 64 of `[A-Za-z0-9._-]`", n.name),
+                "capture.native",
+                format!(
+                    "schema 1 holds at most {MAX_NATIVE_ROWS} `[[capture.native]]` rows, \
+                     and this one declares {}",
+                    c.native.len()
+                ),
             ));
         }
-        split_native_root(&n.root)
-            .map_err(|why| refuse("capture.native.root", format!("`{}` {why}", n.root)))?;
-        native_pattern_components(&n.pattern)
-            .map_err(|why| refuse("capture.native.pattern", format!("`{}` {why}", n.pattern)))?;
-        match (&n.protocol_hint, n.form) {
-            (Some(_), NativeForm::Snapshot) => {
-                return Err(refuse(
-                    "capture.native.protocol_hint",
-                    "applies to `append_only` stores only",
-                ));
+        for (index, n) in c.native.iter().enumerate() {
+            check_native_row(n)?;
+            for earlier in &c.native[..index] {
+                if earlier.name == n.name {
+                    return Err(refuse(
+                        "capture.native.name",
+                        format!(
+                            "`{}` names two native rows: each name must be unique",
+                            n.name
+                        ),
+                    ));
+                }
+                // Compared without ASCII case: a home on a case-insensitive filesystem (APFS,
+                // NTFS) resolves `Projects` and `projects` to one directory, so such rows would
+                // track the same files twice. Distinct patterns that overlap are not caught here.
+                if earlier.root.eq_ignore_ascii_case(&n.root)
+                    && earlier.pattern.eq_ignore_ascii_case(&n.pattern)
+                {
+                    return Err(refuse(
+                        "capture.native",
+                        format!(
+                            "two native rows declare the same root and pattern (`{}` under `{}`)",
+                            n.pattern, n.root
+                        ),
+                    ));
+                }
             }
-            (Some(h), NativeForm::AppendOnly) if !valid_hint(h) => {
-                return Err(refuse(
-                    "capture.native.protocol_hint",
-                    format!("`{h}` must match `^[a-z][a-z0-9.-]{{0,63}}$`"),
-                ));
-            }
-            _ => {}
         }
         Ok(())
     }
@@ -1392,16 +1430,20 @@ impl HarnessManifest {
             }
         }
 
-        // The one native source, if any, with the home its root names. With none, the checks
-        // below that bind a native root to the homes have nothing to bind.
-        let native = c.native.first().map(|n| {
-            let (home, rel) = split_native_root(&n.root).expect("checked by native");
-            (n, home, rel)
-        });
+        // Every native row, with the home its root names. With none, the checks below that bind
+        // a native root to the homes have nothing to bind.
+        let natives: Vec<(&NativeSpec, RootHome, &str)> = c
+            .native
+            .iter()
+            .map(|n| {
+                let (home, rel) = split_native_root(&n.root).expect("checked by native");
+                (n, home, rel)
+            })
+            .collect();
 
         // `none` must read a per-run root, or only what was written since the run started:
         // another run's sessions are not this run's, and runs on a shared home are serialized.
-        if let Some((native, root_home, _)) = native {
+        for &(native, root_home, _) in &natives {
             let root_shared = match root_home {
                 RootHome::Config => !per_run,
                 RootHome::Run => run_shared,
@@ -1451,7 +1493,7 @@ impl HarnessManifest {
                     return Err(refuse(format!("capture.home.{field}"), WHY));
                 }
             }
-            if let Some((_, RootHome::Config, _)) = native {
+            if natives.iter().any(|&(_, home, _)| home == RootHome::Config) {
                 return Err(refuse(
                     "capture.native.root",
                     format!("a `{{config_home}}` root {WHY}: use `{{run_home}}/...`"),
@@ -1466,7 +1508,7 @@ impl HarnessManifest {
         // checked both ways the two could meet: the same directory (the seeds read as paths under
         // the run home) and nested (`<per_run_dir>/<seed>` under it). Components compare
         // lower-cased, because APFS is case-insensitive and `Config.YAML` is `config.yaml`.
-        if let Some((native, root_home, root_rel)) = native {
+        for &(native, root_home, root_rel) in &natives {
             let seed_homes: Vec<Vec<String>> = match root_home {
                 RootHome::Config => vec![Vec::new()],
                 RootHome::Run => vec![Vec::new(), vec![h.per_run_dir_name().to_ascii_lowercase()]],

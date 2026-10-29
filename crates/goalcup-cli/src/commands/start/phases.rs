@@ -732,9 +732,10 @@ fn endpoint_refs(list: &[(String, u16)]) -> Vec<(&str, u16)> {
 }
 
 /// Whether a continue resumes a harness that left no session file (D73): the connector says a
-/// missing file is no problem (a native row with `warn_missing = false`, D72), the run's earlier
-/// parts recorded model calls, and the harness home's conversation database was written since
-/// the run started. Every other connector keeps the file rule.
+/// missing file is no problem, which holds only when it declares native rows and every one of
+/// them has `warn_missing = false` (D72), the run's earlier parts recorded model calls, and the
+/// harness home's conversation database was written since the run started. A connector with
+/// any file-required row keeps the file rule.
 fn resumes_without_a_file(
     profile: &goalcup_protocol::harness::CaptureSpec,
     calls: u64,
@@ -742,7 +743,8 @@ fn resumes_without_a_file(
     since_unix: u64,
 ) -> bool {
     calls > 0
-        && profile.native.iter().any(|native| !native.warn_missing)
+        && !profile.native.is_empty()
+        && profile.native.iter().all(|native| !native.warn_missing)
         && session_db_written_since(config_home, since_unix)
 }
 
@@ -1509,6 +1511,22 @@ mod tests {
         );
         assert!(!resumes_without_a_file(hermes, 0, home.path(), now - 5));
         assert!(!resumes_without_a_file(codex, 3, home.path(), now - 5));
+    }
+
+    /// Claude's `subagent-meta` and `tool-results` rows say a missing file is no problem, but its
+    /// main session row does not, so a Claude run keeps the file rule even when a `state.db`
+    /// was written since the run started.
+    #[test]
+    fn a_connector_with_one_file_required_row_keeps_the_file_rule() {
+        let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../connectors");
+        let claude = crate::connector::load_harness(&dir, "claude-code-cli", false).unwrap();
+        let claude = &claude.loaded.manifest.capture;
+        assert!(claude.native.iter().any(|native| !native.warn_missing));
+        assert!(claude.native.iter().any(|native| native.warn_missing));
+        let home = tempfile::tempdir().unwrap();
+        std::fs::write(home.path().join("state.db"), b"").unwrap();
+        let now = crate::run::now_unix();
+        assert!(!resumes_without_a_file(claude, 3, home.path(), now - 5));
     }
 
     /// A resumed harness that exits non-zero at once is a failed resume, and the next continue

@@ -130,7 +130,10 @@ impl Owner {
                 max_bytes: NATIVE_FINISH_BYTES,
                 max_duration_ns: control.finish_budget_ns.load(Ordering::Acquire),
             });
-            if finished.discovery_capped {
+            // A discovery cap, or a tracked file that never got a stream slot before the
+            // finish, is a loss the chain must mark: one streamless gap for both, so the
+            // transcripts beyond the open-stream cap leave a marker rather than vanish.
+            if finished.discovery_capped || finished.uncaptured_files > 0 {
                 lock(&self.writer).streamless_gap(GapReason::LimitExceeded, &(self.clock)());
             }
             self.record_native_losses(true);
