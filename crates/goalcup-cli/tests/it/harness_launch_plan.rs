@@ -626,6 +626,7 @@ commands = [
         port: 8443,
         base_path: "/v1".into(),
         from: "model.base_url in config.yaml".into(),
+        edit: None,
     };
     let parent: BTreeMap<String, String> = [("PATH".to_string(), "/usr/bin:/bin".to_string())]
         .into_iter()

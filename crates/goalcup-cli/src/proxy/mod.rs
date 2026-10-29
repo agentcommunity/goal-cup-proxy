@@ -418,6 +418,12 @@ impl ProxyHandle {
         self.shared.emitter.generation_requests_counter()
     }
 
+    /// The hosts the counted model calls went to, observed on the requests, shared as
+    /// [`ProxyHandle::generation_requests`] is ([`api::CaptureEmitter::generation_hosts_shared`]).
+    pub fn generation_hosts(&self) -> Arc<std::sync::Mutex<std::collections::BTreeSet<String>>> {
+        self.shared.emitter.generation_hosts_shared()
+    }
+
     /// The recording proxy's count of restarts of its accept loop ([`ProxyHealth::recorder_restarts`]),
     /// shared as [`ProxyHandle::model_requests`] is.
     pub fn recorder_restarts(&self) -> Arc<std::sync::atomic::AtomicU64> {

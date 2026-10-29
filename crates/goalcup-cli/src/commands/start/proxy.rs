@@ -73,8 +73,6 @@ pub(super) struct Proxied {
     /// Where the finish writes the entry's sealed-connection list: `tunnels-<entry_id>.jsonl` in
     /// the run's directory (D74).
     pub(super) tunnels_file: std::path::PathBuf,
-    /// The hosts a run's model calls are recorded from, said at the finish ([`model_hosts`]).
-    pub(super) model_hosts: Vec<String>,
     pub(super) runtime: tokio::runtime::Runtime,
 }
 
@@ -145,27 +143,8 @@ impl Proxied {
             sink,
             proxy_url,
             tunnels_file,
-            model_hosts: model_hosts(&profile.hosts, model_host),
             runtime,
         })
-    }
-}
-
-/// The hosts a run's model calls are recorded from, for the finish's "Recording works" line: the
-/// model service the settings name, or, without one, the profile's hosts that carry a protocol
-/// hint (its model rows). A profile host with a hint may not be the one a run used (Codex has two
-/// model rows, and a run uses one of them): the line names the hosts the run was set up to use.
-fn model_hosts(
-    hosts: &[HostSpec],
-    model_host: Option<&crate::model_host::ModelHost>,
-) -> Vec<String> {
-    match model_host {
-        Some(model) => vec![model.host.clone()],
-        None => hosts
-            .iter()
-            .filter(|h| h.protocol_hint.is_some())
-            .map(|h| h.host.clone())
-            .collect(),
     }
 }
 
@@ -428,6 +407,7 @@ mod tests {
             port: 443,
             base_path: "/x/v1".to_string(),
             from: String::new(),
+            edit: None,
         };
         let approved = approved_hosts(&hosts, Some(&model));
         assert_eq!(approved.len(), profile_rules, "one rule per host");
@@ -445,6 +425,7 @@ mod tests {
             port: 443,
             base_path: String::new(),
             from: String::new(),
+            edit: None,
         };
         let approved = approved_hosts(&hosts, Some(&gateway));
         assert_eq!(approved.len(), profile_rules + 1);

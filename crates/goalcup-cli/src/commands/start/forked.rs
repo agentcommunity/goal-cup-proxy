@@ -231,7 +231,6 @@ impl Forked<'_> {
         let _ = say(out, &end.announcement(&info.entry_id));
         let deadline = std::time::Instant::now() + crate::finish_budget();
         if let Some(proxied) = proxied {
-            let model_hosts = proxied.model_hosts.clone();
             let _ = finish(
                 client,
                 &info.entry_id,
@@ -242,7 +241,7 @@ impl Forked<'_> {
                 false,
                 None,
                 None,
-                Some(&model_hosts),
+                true,
                 out,
             );
         }

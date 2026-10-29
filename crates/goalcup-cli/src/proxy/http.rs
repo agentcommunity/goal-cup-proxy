@@ -316,7 +316,7 @@ async fn relay_requests(
                     &capture.meta.method,
                     capture.named_by_row,
                 ) {
-                    shared.emitter.record_generation_request();
+                    shared.emitter.record_generation_request(Some(shared.host));
                 }
             }
             // Relayed unchanged but not retained: the chain says so, once per reason.
@@ -2157,6 +2157,33 @@ mod tests {
         fn try_close_epoch(&self, _: &str, _: Option<u64>) -> SubmitResult {
             SubmitResult::Queued
         }
+    }
+
+    /// The counted model calls name the hosts they went to, once each: a host the run did not
+    /// configure is named too, and a repeated host is named once.
+    #[test]
+    fn counted_model_calls_name_the_host_they_went_to() {
+        let sink = Arc::new(Recorder::default());
+        let emitter = CaptureEmitter::new("0123456789abcdef0123456789abcdef".into(), sink);
+        emitter.record_generation_request(Some("models.example.test"));
+        emitter.record_generation_request(Some("models.example.test"));
+        emitter.record_generation_request(Some("other.example.test"));
+        emitter.record_generation_request(None);
+        assert_eq!(emitter.generation_requests(), 4);
+        let named = emitter
+            .generation_hosts_shared()
+            .lock()
+            .unwrap()
+            .iter()
+            .cloned()
+            .collect::<Vec<_>>();
+        assert_eq!(
+            named,
+            vec![
+                "models.example.test".to_string(),
+                "other.example.test".to_string()
+            ]
+        );
     }
 
     /// An emit the emitter refuses locally submits nothing and leaves the stream

@@ -56,9 +56,6 @@ pub(super) fn finish_run(
     let calls = proxied
         .as_ref()
         .map(|proxied| proxied.proxy.generation_requests());
-    let model_hosts = proxied
-        .as_ref()
-        .map_or_else(Vec::new, |proxied| proxied.model_hosts.clone());
     let deadline = std::time::Instant::now() + crate::finish_budget();
     let finished = match (finished_early, proxied) {
         (Some(finished), _) => finished,
@@ -75,7 +72,7 @@ pub(super) fn finish_run(
             // so if it cut any. What reached the proxy is sealed and uploaded as always.
             helper_left.then_some(harness_name.as_str()),
             Some(cfg),
-            Some(&model_hosts),
+            true,
             out,
         ),
         (None, None) => Err(CliError::Internal(
@@ -335,7 +332,7 @@ pub(super) fn finish_unlaunched(
         false,
         None,
         None,
-        None,
+        false,
         out,
     );
 }
@@ -378,9 +375,10 @@ const RUNNING_HARNESS_SINK_SHUTDOWN: Duration = Duration::from_secs(1);
 /// before the seal ends the harness. If the recording proxy could not queue its producer's close,
 /// the sender is ended too before the seal ([`RUNNING_HARNESS_SINK_SHUTDOWN`]).
 ///
-/// `model_hosts` is `Some` for a run whose harness ran: once the recorder is stopped, a run that
-/// recorded model calls says so in one line, with these hosts ([`recording_works_line`]). `None`
-/// says nothing of the recording (a run whose harness never ran).
+/// `harness_ran` is set for a run whose harness ran: once the recorder is stopped, a run that
+/// recorded model calls says so in one line, with the hosts those calls went to as the recorder
+/// observed them ([`recording_works_line`]). Unset, it says nothing of the recording (a run whose
+/// harness never ran).
 ///
 /// `helper_left` names the harness when it exited but its connector's after-exit commands (D72)
 /// failed: what it left running (Hermes's gateway) may hold the proxy's connections open, so the
@@ -398,7 +396,7 @@ pub(super) fn finish(
     harness_running: bool,
     helper_left: Option<&str>,
     reconnect: Option<&Path>,
-    model_hosts: Option<&[String]>,
+    harness_ran: bool,
     out: &mut dyn std::io::Write,
 ) -> Result<CaptureFinishReport, CliError> {
     let Proxied {
@@ -410,6 +408,9 @@ pub(super) fn finish(
     } = proxied;
     // The recorder's count is read once it is stopped: the stop may settle a call still in flight.
     let model_calls = proxy.generation_requests();
+    // Read here as well, while the handle is still whole: the stop consumes it, and the hosts are
+    // read once the recorder is stopped, from this shared set.
+    let generation_hosts = proxy.generation_hosts();
     // A harness that still runs keeps its connections open: they would hold the stop, and the
     // seal that ends the harness, for the whole drain share. They are cut.
     let stopped = if harness_running || helper_left.is_some() {
@@ -440,10 +441,11 @@ pub(super) fn finish(
     let _ = say(out, &proxy_admission_line(h, a));
     // The recording, in one line, when the recorder saw model calls. None is said here: the end of
     // `goalcup start` says so in its no-model-calls block.
-    if let Some(hosts) = model_hosts {
+    if harness_ran {
         let calls = model_calls.load(std::sync::atomic::Ordering::SeqCst);
         if calls > 0 {
-            let _ = say(out, &recording_works_line(calls, hosts));
+            let hosts = observed_hosts(&generation_hosts);
+            let _ = say(out, &recording_works_line(calls, &hosts));
         }
     }
     for line in crate::proxy::outage::finish_lines(h.upstream_outages, &h.outage_windows) {
@@ -499,7 +501,8 @@ pub(super) fn finish(
 }
 
 /// The line that says the recording works, said at the finish of a run whose recorder saw
-/// `calls` model calls, from `hosts` (the run's model hosts). Without a host it names no host.
+/// `calls` model calls, from `hosts` (the hosts those calls went to, as observed). Without a host
+/// it names no host.
 pub(super) fn recording_works_line(calls: u64, hosts: &[String]) -> String {
     if hosts.is_empty() {
         format!("Recording works: {calls} model call(s) recorded.")
@@ -509,6 +512,15 @@ pub(super) fn recording_works_line(calls: u64, hosts: &[String]) -> String {
             hosts.join(", ")
         )
     }
+}
+
+/// The hosts the recorder observed the counted model calls go to, in order. A set that cannot be
+/// read gives none, and the line then names no host rather than a guess.
+fn observed_hosts(hosts: &std::sync::Mutex<std::collections::BTreeSet<String>>) -> Vec<String> {
+    hosts
+        .lock()
+        .map(|hosts| hosts.iter().cloned().collect())
+        .unwrap_or_default()
 }
 
 /// The lines that say, at the end of `goalcup start`, that no model call was recorded in this

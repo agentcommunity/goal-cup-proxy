@@ -501,7 +501,7 @@ impl<'c> Direction<'c> {
                                 connection.base.method.as_deref().unwrap_or_default(),
                                 connection.named_by_row,
                             ) {
-                                emitter.record_generation_request();
+                                emitter.record_generation_request(connection.base.host.as_deref());
                             }
                         }
                     }

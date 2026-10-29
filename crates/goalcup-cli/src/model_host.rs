@@ -64,6 +64,9 @@ pub struct ModelHost {
     pub base_path: String,
     /// Where it was read: `<key> in <file>`.
     pub from: String,
+    /// The file value to edit when this service cannot be recorded here (the same edit a refused
+    /// value gets, with its full path); `None` for a value that is not in a file.
+    pub edit: Option<Box<EditSetting>>,
 }
 
 impl ModelHost {
@@ -477,6 +480,7 @@ pub fn read(
         port: url.port,
         base_path: url.path,
         from: format!("{key} in {}", from.file),
+        edit: Some(edit_at(&key)),
     }))
 }
 
@@ -498,14 +502,15 @@ const AUTHORITY_REASON: &str = "its host part has a backslash, a space or a cont
      which a URL parser reads as a different host or refuses";
 
 /// The refusal for a model service whose name resolves only to this computer. It gets the same
-/// words a loopback address in the config gets.
+/// words a loopback address in the config gets, and the same edit advice a refused value in the
+/// config file gets, so the participant is told which file holds the value.
 pub fn resolves_only_here(model: &ModelHost) -> Unrecordable {
     Unrecordable {
         shown: format!("https://{}:{}", model.host, model.port),
         reason: LOOPBACK_REASON.into(),
         set_by: Some(model.from.clone()),
         file: None,
-        edit: None,
+        edit: model.edit.clone(),
     }
 }
 
@@ -1174,6 +1179,7 @@ sessions:
             port: 443,
             base_path: "/v1/".into(),
             from: "model.base_url in config.yaml".into(),
+            edit: None,
         };
         let rule = host.approved();
         assert_eq!(rule.host, "models.example.test");
@@ -1303,6 +1309,7 @@ absent = "defaults""#;
             port: 443,
             base_path: String::new(),
             from: "env.MODEL_BASE_URL in config.json".into(),
+            edit: None,
         };
         let asked = std::cell::RefCell::new(Vec::new());
         let refused = refuse_if_on_this_computer_with(&model, |host, port| {
@@ -1327,6 +1334,52 @@ absent = "defaults""#;
         );
     }
 
+    /// A name that resolves only to this computer and comes from the config file is refused with
+    /// the file's full path and the key to edit, the same advice a refused value in the file
+    /// gets, with the connector's own hosts as the fallback. Without that advice the participant
+    /// is sent to setup and never told which file holds the value.
+    #[test]
+    fn a_name_on_this_computer_from_a_file_says_which_file_to_edit() {
+        let model = ModelHost {
+            host: "gateway.example.test".into(),
+            port: 443,
+            base_path: "/v1".into(),
+            from: "env.MODEL_BASE_URL in config.json".into(),
+            edit: Some(Box::new(EditSetting {
+                key: "env.MODEL_BASE_URL".into(),
+                path: "/home/user/config/config.json".into(),
+                fallback: Some(vec!["api.models.example.test".into()]),
+            })),
+        };
+        let refused = refuse_if_on_this_computer_with(&model, |_, _| true).unwrap_err();
+        let text = refused.refusal("Harness", "harness");
+        assert!(
+            text.contains(
+                "Edit or delete env.MODEL_BASE_URL in /home/user/config/config.json; \
+                 without it Goal Cup records api.models.example.test."
+            ),
+            "{text}"
+        );
+        assert!(!text.contains("goalcup setup"), "{text}");
+
+        let no_fallback = ModelHost {
+            edit: Some(Box::new(EditSetting {
+                key: "env.MODEL_BASE_URL".into(),
+                path: "/home/user/config/config.json".into(),
+                fallback: None,
+            })),
+            ..model
+        };
+        let refused = refuse_if_on_this_computer_with(&no_fallback, |_, _| true).unwrap_err();
+        assert!(
+            refused.refusal("Harness", "harness").contains(
+                "Edit env.MODEL_BASE_URL in /home/user/config/config.json to an https address \
+                 Goal Cup can record."
+            ),
+            "{no_fallback:?}"
+        );
+    }
+
     fn named(host: &str, port: u16) -> (String, u16) {
         (host.to_string(), port)
     }
@@ -1341,6 +1394,7 @@ absent = "defaults""#;
             port: 443,
             base_path: String::new(),
             from: String::new(),
+            edit: None,
         };
         let harness = ["api.default.example"];
         let sign_in = ["auth.example.test"];
@@ -1417,6 +1471,7 @@ absent = "defaults""#;
             port: 443,
             base_path: String::new(),
             from: String::new(),
+            edit: None,
         };
         let missing = "api.default.example:443 could not be reached";
         let setup = default_host_sentence(missing, &model, Caller::Setup);

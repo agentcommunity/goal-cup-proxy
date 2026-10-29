@@ -1222,7 +1222,6 @@ pub(super) fn run_harness<'a>(
             let mut said = format!("{line}\n").into_bytes();
 
             let deadline = std::time::Instant::now() + crate::finish_budget();
-            let model_hosts = proxied.model_hosts.clone();
             // A seal that did not take (the daemon busy or restarting) is asked again through the
             // whole wrap-up: the harness must not run on past its deadline, and only the daemon's
             // seal ends it.
@@ -1236,7 +1235,7 @@ pub(super) fn run_harness<'a>(
                 true,
                 None,
                 Some(cfg),
-                Some(&model_hosts),
+                true,
                 &mut said,
             );
             *early.lock().unwrap_or_else(|e| e.into_inner()) = Some((finished, said));
