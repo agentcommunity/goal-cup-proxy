@@ -2910,3 +2910,114 @@ async fn an_upstream_outage_is_one_window_closed_by_the_next_reach() {
     let recovered = closed.recovered.as_deref().expect("the window closed");
     assert!(recovered >= closed.last_failure.as_str());
 }
+
+/// A dead accept loop is restarted on the same port: the address the harness already has serves a
+/// new connection, and its request is recorded. The test kills the loop; the supervisor binds the
+/// port again and runs a new loop over the same shared state.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_dead_accept_loop_is_restarted_on_the_same_port() {
+    let clock = clock_start();
+    let pki = TestPki::new("upstream test CA");
+    let mut upstream = Upstream::start(&pki, &["localhost"]).await;
+    let sink = DirectSink::new(QUEUE_BYTES);
+    let mut rig = Rig::start(RigConfig::new(&pki), sink.clone()).await;
+    let addr = rig.addr;
+    rig.handle().kill_accept_for_test();
+    eventually("the recorder restarts", || {
+        rig.handle().health().recorder_restarts == 1
+    })
+    .await;
+    assert_eq!(rig.handle().local_addr(), addr);
+    assert!(!rig.handle().health().recorder_lost);
+    let mut client = rig.client(upstream.addr.port()).await;
+    let mut up = upstream.accept().await.tls;
+    exchange(
+        &mut client,
+        &mut up,
+        "/v1/messages",
+        b"{\"messages\":[]}",
+        b"{\"id\":\"m\"}",
+    )
+    .await;
+    close_both(client, up).await;
+    rig.wait_closed(1).await;
+    let recorded = rig
+        .handle()
+        .recorded_requests()
+        .load(std::sync::atomic::Ordering::SeqCst);
+    assert_all_clean(&rig.stop().await);
+    sink.settle().await;
+
+    let frames = sink.frames();
+    check_frames(&frames);
+    check_clock(&frames, clock, clock_now());
+    assert_eq!(recorded, 1);
+    let requests = bodies(&frames)
+        .iter()
+        .filter(|v| v.source == CaptureSource::WireRequest)
+        .count();
+    assert_eq!(requests, 1);
+}
+
+/// The recorder is restarted at most five times in a run. The sixth death is not restarted: the
+/// port is no longer served, and the run reports the recorder lost.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_recorder_is_restarted_at_most_five_times() {
+    let pki = TestPki::new("upstream test CA");
+    let sink = DirectSink::new(QUEUE_BYTES);
+    let mut rig = Rig::start(RigConfig::new(&pki), sink.clone()).await;
+    for restarts in 1..=5u64 {
+        rig.handle().kill_accept_for_test();
+        eventually("a restart", || {
+            rig.handle().health().recorder_restarts == restarts
+        })
+        .await;
+    }
+    rig.handle().kill_accept_for_test();
+    eventually("the sixth death is reported", || {
+        rig.handle().health().recorder_lost
+    })
+    .await;
+    let health = rig.handle().health();
+    assert_eq!(health.recorder_restarts, 5);
+    assert!(health.recorder_lost);
+    assert!(
+        TcpStream::connect(rig.addr).await.is_err(),
+        "the port is still served after the sixth death"
+    );
+    let report = rig.stop().await;
+    assert!(report.accept_loop_lost, "{report:?}");
+    assert_eq!(report.health.recorder_restarts, 5);
+}
+
+/// The restart budget is the run's, not the launch's: a launch that continues a run which already
+/// restarted its recorder four times has one restart left, and the next death is the one past the
+/// limit. The count it starts from shows in its health.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_continued_launch_keeps_the_runs_restart_count() {
+    let pki = TestPki::new("upstream test CA");
+    let sink = DirectSink::new(QUEUE_BYTES);
+    let mut config = RigConfig::new(&pki);
+    config.recorder_restarts_before = 4;
+    let mut rig = Rig::start(config, sink.clone()).await;
+    assert_eq!(rig.handle().health().recorder_restarts, 4);
+    rig.handle().kill_accept_for_test();
+    eventually("the last restart of the run", || {
+        rig.handle().health().recorder_restarts == 5
+    })
+    .await;
+    assert!(!rig.handle().health().recorder_lost);
+    rig.handle().kill_accept_for_test();
+    eventually("the next death is past the run's limit", || {
+        rig.handle().health().recorder_lost
+    })
+    .await;
+    assert_eq!(rig.handle().health().recorder_restarts, 5);
+    assert!(
+        TcpStream::connect(rig.addr).await.is_err(),
+        "the port is still served after the run's limit"
+    );
+    let report = rig.stop().await;
+    assert!(report.accept_loop_lost, "{report:?}");
+    assert_eq!(report.health.recorder_restarts, 5);
+}

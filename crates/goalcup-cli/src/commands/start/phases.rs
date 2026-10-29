@@ -514,6 +514,9 @@ pub(super) fn create_and_gate<'a>(
         details.push(format!("run directory: {}", run.dir.display()));
         raise_open_file_limit(out)?;
         let tunnels_file = crate::run::tunnels_path(cfg, &record.run_id, &info.entry_id);
+        // The accept loop's restarts of the run's earlier parts count against its one limit (the
+        // proxy's own count starts here, so a continued run cannot restart more than the run may).
+        let recorder_restarts_before = carried_recorder_restarts(previous.as_ref());
         let proxied = Proxied::start(
             &info,
             profile,
@@ -522,6 +525,7 @@ pub(super) fn create_and_gate<'a>(
             roots,
             credential,
             tunnels_file,
+            recorder_restarts_before,
         )?;
         // A shared CA variable (`SSL_CERT_FILE`, `REQUESTS_CA_BUNDLE`) gets the system's roots
         // plus the recording proxy's CA, so tool children keep their real trust; a harness's own
@@ -701,6 +705,7 @@ pub(super) fn create_and_gate<'a>(
         prompt_file,
         on_clipboard,
         model_calls_before,
+        recorder_restarts_before: carried_recorder_restarts(previous.as_ref()),
         details,
         after_exit: c
             .loaded
@@ -1049,6 +1054,9 @@ pub(super) fn run_harness<'a>(
     launched.time_left = forked.time_left();
     // The run's model calls so far, which the tick adds this part's to (D73).
     launched.model_calls = Some(forked.model_calls_before.unwrap_or(0));
+    // The restart budget the earlier parts spent, written before the first watch tick copies the
+    // proxy's count in.
+    launched.recorder_restarts = forked.recorder_restarts_before;
     let keeper = crate::run::StateKeeper::begin(
         &crate::run::run_dir(forked.cfg, &forked.record.run_id),
         launched,
@@ -1059,7 +1067,11 @@ pub(super) fn run_harness<'a>(
         Some(proxied) => crate::run::RunSignals::counting(proxied.proxy.model_requests())
             .recording_from(proxied.proxy.recorded_requests())
             .generations_from(proxied.proxy.generation_requests())
-            .client_tls_from(proxied.proxy.client_tls_failures()),
+            .client_tls_from(proxied.proxy.client_tls_failures())
+            .recorder_from(
+                proxied.proxy.recorder_restarts(),
+                proxied.proxy.recorder_lost(),
+            ),
         None => crate::run::RunSignals::default(),
     }
     .model_calls_before(forked.model_calls_before.unwrap_or(0));
@@ -1482,6 +1494,13 @@ fn unmake(
     abandoned
 }
 
+/// The accept-loop restarts the run's earlier parts recorded, by the last part's `state.json`: the
+/// recording proxy starts its count from them, so the run's limit covers every part. None for a
+/// first launch, and 0 for a state an older build wrote.
+fn carried_recorder_restarts(previous: Option<&crate::run::RunState>) -> u64 {
+    previous.map_or(0, |state| state.recorder_restarts)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1574,6 +1593,28 @@ mod tests {
         assert_eq!(
             crate::run::read_state(dir.path()).unwrap().model_calls,
             None
+        );
+    }
+
+    /// A continued run's restart budget is the restarts its last part recorded, and the launch
+    /// state keeps them from its first write, so a part stopped before its first watch tick
+    /// does not hand the next one a fresh budget. The call that passes this value to the proxy is
+    /// covered by review only.
+    #[test]
+    fn a_continued_part_carries_the_runs_restarts_from_its_launch() {
+        assert_eq!(carried_recorder_restarts(None), 0);
+        let mut previous = crate::run::RunState::launched("e0", Ok(()));
+        previous.recorder_restarts = 4;
+        assert_eq!(carried_recorder_restarts(Some(&previous)), 4);
+        let dir = tempfile::tempdir().unwrap();
+        let mut launched = crate::run::RunState::launched("e1", Ok(()));
+        launched.recorder_restarts = carried_recorder_restarts(Some(&previous));
+        crate::run::StateKeeper::begin(dir.path(), launched);
+        assert_eq!(
+            crate::run::read_state(dir.path())
+                .unwrap()
+                .recorder_restarts,
+            4
         );
     }
 

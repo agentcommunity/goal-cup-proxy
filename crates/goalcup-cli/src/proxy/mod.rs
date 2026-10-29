@@ -93,7 +93,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::oneshot;
+use tokio::sync::{Notify, oneshot};
 use tokio::task::{JoinError, JoinHandle, JoinSet};
 use tokio::time::Instant;
 
@@ -158,6 +158,10 @@ pub struct ProxyConfig {
     pub connect_attempt_timeout: Duration,
     /// The most connection tasks alive at once, `1..=`[`MAX_CONNECTION_TASKS`].
     pub max_connections: usize,
+    /// Restarts of the accept loop that the run's earlier launches already made, at most
+    /// [`MAX_RECORDER_RESTARTS`]. The budget spans the whole run, so a continued run starts with
+    /// the count its last launch kept; zero for a first launch.
+    pub recorder_restarts_before: u64,
 }
 
 impl std::fmt::Debug for ProxyConfig {
@@ -176,6 +180,7 @@ impl std::fmt::Debug for ProxyConfig {
             .field("admission_timeout", &self.admission_timeout)
             .field("connect_attempt_timeout", &self.connect_attempt_timeout)
             .field("max_connections", &self.max_connections)
+            .field("recorder_restarts_before", &self.recorder_restarts_before)
             .finish_non_exhaustive()
     }
 }
@@ -226,6 +231,7 @@ pub async fn start(config: ProxyConfig) -> Result<ProxyHandle, StartError> {
         admission_timeout,
         connect_attempt_timeout,
         max_connections,
+        recorder_restarts_before,
     } = config;
     let deadline = Instant::now() + startup_deadline;
     if startup_deadline.is_zero()
@@ -243,10 +249,7 @@ pub async fn start(config: ProxyConfig) -> Result<ProxyHandle, StartError> {
     if !local_addr.ip().is_loopback() {
         return Err(StartError::NotLoopback);
     }
-    listener
-        .set_nonblocking(true)
-        .map_err(|e| StartError::Listener(e.kind()))?;
-    let listener = TcpListener::from_std(listener).map_err(|e| StartError::Listener(e.kind()))?;
+    let listener = into_accepting(listener).map_err(|e| StartError::Listener(e.kind()))?;
 
     // The CA key lives only here: every leaf is issued inside `AdmissionConfig::new`.
     let hosts: Vec<String> = approved.iter().map(|rule| rule.host.clone()).collect();
@@ -266,6 +269,10 @@ pub async fn start(config: ProxyConfig) -> Result<ProxyHandle, StartError> {
         }
     };
     let counters = Arc::new(Counters::default());
+    // The run's restarts so far count against the limit, and show in its health.
+    counters
+        .recorder_restarts
+        .store(recorder_restarts_before, Ordering::SeqCst);
     bump(&counters.producers_admitted);
     let observed: Arc<dyn CaptureSink> = Arc::new(ObservedSink {
         inner: sink,
@@ -280,11 +287,16 @@ pub async fn start(config: ProxyConfig) -> Result<ProxyHandle, StartError> {
         tunnels: tunnels::TunnelNotes::default(),
     });
     let (stop_tx, stop_rx) = oneshot::channel();
-    let accept = tokio::spawn(accept_loop(
+    let kill = Arc::new(Notify::new());
+    #[cfg(feature = "test-support")]
+    let kill_handle = Arc::clone(&kill);
+    let accept = tokio::spawn(supervise_accept(
         listener,
+        local_addr,
         Arc::clone(&shared),
         max_connections as u64,
         stop_rx,
+        Arc::clone(&kill),
     ));
     Ok(ProxyHandle {
         local_addr,
@@ -295,6 +307,8 @@ pub async fn start(config: ProxyConfig) -> Result<ProxyHandle, StartError> {
         shared,
         stop: Some(stop_tx),
         accept: Some(accept),
+        #[cfg(feature = "test-support")]
+        kill: kill_handle,
     })
 }
 
@@ -344,7 +358,10 @@ pub struct ProxyHandle {
     shutdown_deadline: Duration,
     shared: Arc<Shared>,
     stop: Option<oneshot::Sender<()>>,
-    accept: Option<JoinHandle<JoinSet<()>>>,
+    accept: Option<JoinHandle<Option<JoinSet<()>>>>,
+    /// Ends the accept loop as if it had died: [`ProxyHandle::kill_accept_for_test`].
+    #[cfg(feature = "test-support")]
+    kill: Arc<Notify>,
 }
 
 impl std::fmt::Debug for ProxyHandle {
@@ -401,6 +418,18 @@ impl ProxyHandle {
         self.shared.emitter.generation_requests_counter()
     }
 
+    /// The recording proxy's count of restarts of its accept loop ([`ProxyHealth::recorder_restarts`]),
+    /// shared as [`ProxyHandle::model_requests`] is.
+    pub fn recorder_restarts(&self) -> Arc<std::sync::atomic::AtomicU64> {
+        Arc::clone(&self.shared.counters.recorder_restarts)
+    }
+
+    /// Whether the recording proxy is lost ([`ProxyHealth::recorder_lost`]), shared as
+    /// [`ProxyHandle::model_requests`] is.
+    pub fn recorder_lost(&self) -> Arc<std::sync::atomic::AtomicBool> {
+        Arc::clone(&self.shared.counters.recorder_lost)
+    }
+
     /// The recording proxy's count of harness connections whose TLS handshake failed
     /// ([`AdmissionFailureCounts::client_tls`]), shared as [`ProxyHandle::model_requests`] is. A
     /// harness that does not trust the recording certificate shows here.
@@ -411,6 +440,13 @@ impl ProxyHandle {
     /// A snapshot of the counters. It never waits on a connection or the sink.
     pub fn health(&self) -> ProxyHealth {
         self.shared.health()
+    }
+
+    /// Ends the accept loop as if it had died, so the supervisor restarts it on the same port
+    /// (or reports the recorder lost past the limit). For the restart tests only.
+    #[cfg(feature = "test-support")]
+    pub fn kill_accept_for_test(&self) {
+        self.kill.notify_one();
     }
 
     /// Stops the recording proxy inside the one [`ProxyConfig::shutdown_deadline`], measured from
@@ -454,8 +490,10 @@ impl ProxyHandle {
         }
         let counters = &self.shared.counters;
         let mut tasks = match self.accept.take() {
+            // `None` from the supervisor: the recorder was lost before the stop, so no loop
+            // handed its tasks back.
             Some(mut accept) => match tokio::time::timeout_at(cut, &mut accept).await {
-                Ok(Ok(tasks)) => Some(tasks),
+                Ok(Ok(tasks)) => tasks,
                 // The loop did not hand its tasks back; aborting it drops (and so aborts)
                 // them, but when they end is no longer observable here.
                 Ok(Err(_)) | Err(_) => {
@@ -723,6 +761,12 @@ pub struct ProxyHealth {
     pub tunnels: Vec<tunnels::TunnelNote>,
     /// Tunnels past that bound, counted only.
     pub tunnels_dropped: u64,
+    /// Times the accept loop died and was started again on the same port, this run (at most
+    /// [`MAX_RECORDER_RESTARTS`]).
+    pub recorder_restarts: u64,
+    /// The accept loop died past the restart limit, or its port could not be bound again: no new
+    /// connection is served.
+    pub recorder_lost: bool,
 }
 
 #[derive(Default)]
@@ -768,6 +812,8 @@ struct Counters {
     sink_refusals: AtomicU64,
     producers_admitted: AtomicU64,
     task_panics: AtomicU64,
+    recorder_restarts: Arc<AtomicU64>,
+    recorder_lost: Arc<AtomicBool>,
 }
 
 fn bump(counter: &AtomicU64) {
@@ -842,6 +888,8 @@ impl Counters {
             outage_windows: Vec::new(),
             tunnels: Vec::new(),
             tunnels_dropped: 0,
+            recorder_restarts: read(&self.recorder_restarts),
+            recorder_lost: self.recorder_lost.load(Ordering::SeqCst),
         }
     }
 
@@ -940,7 +988,14 @@ async fn accept_loop(
                         let _ = tcp.try_write(OVER_CAPACITY_RESPONSE);
                         continue;
                     }
-                    tasks.spawn(serve_connection(tcp, Active::enter(Arc::clone(&shared))));
+                    // Both guards are made here, before the task exists: a task dropped before
+                    // its first poll (a restart or the shutdown cutting the JoinSet) still counts
+                    // as unsettled and is chained as a cut.
+                    tasks.spawn(serve_connection(
+                        tcp,
+                        Active::enter(Arc::clone(&shared)),
+                        Unsettled::enter(Arc::clone(&shared)),
+                    ));
                 }
                 Err(_) => {
                     bump(&shared.counters.accept_errors);
@@ -951,6 +1006,113 @@ async fn accept_loop(
     }
     // The listener is dropped here: nothing more is accepted.
     tasks
+}
+
+/// How many times the accept loop may die and be started again on the same port in one run. The
+/// sixth death is not restarted: the port is no longer served, and the run reports the recorder
+/// lost.
+pub const MAX_RECORDER_RESTARTS: u64 = 5;
+
+/// Aborts the task it was made for when dropped. The supervisor holds one for its accept loop, so
+/// that an aborted supervisor takes the loop with it instead of leaving it running detached.
+struct AbortOnDrop(tokio::task::AbortHandle);
+
+impl Drop for AbortOnDrop {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+
+/// Runs [`accept_loop`] on `local_addr` until a stop. A loop that ends without one (aborted, or
+/// panicked) is replaced by a new loop on the same port, over the same `shared`, up to
+/// [`MAX_RECORDER_RESTARTS`] times. A restart saves only new connections: the dead loop's
+/// `JoinSet` is dropped with it, which aborts every connection it held. Each one still unsettled
+/// is chained as [`ProxyLoss::CutUnsettled`], which is `ShutdownDeadline`: the nearest reason the
+/// protocol has for a restart cut, so that label does not mean a shutdown here.
+///
+/// Limit: between the old listener closing and the rebind, nothing listens on the port. A
+/// connection made in that window is refused or reset at the TCP level, so it leaves no chain
+/// record and no restart note mentions it. "Recording went on" means the recorder served again,
+/// not that nothing was lost.
+///
+/// Returns the last loop's connection tasks on a stop, or `None` when the recorder is lost: the
+/// limit was reached, or the port could not be bound again.
+async fn supervise_accept(
+    mut listener: TcpListener,
+    local_addr: SocketAddr,
+    shared: Arc<Shared>,
+    max_connections: u64,
+    mut stop: oneshot::Receiver<()>,
+    kill: Arc<Notify>,
+) -> Option<JoinSet<()>> {
+    loop {
+        let (loop_stop, loop_stop_rx) = oneshot::channel();
+        let mut accept = tokio::spawn(accept_loop(
+            listener,
+            Arc::clone(&shared),
+            max_connections,
+            loop_stop_rx,
+        ));
+        let _ends_with_us = AbortOnDrop(accept.abort_handle());
+        tokio::select! {
+            _ = &mut stop => {
+                let _ = loop_stop.send(());
+                return accept.await.ok();
+            }
+            _ = kill.notified() => {
+                accept.abort();
+                // Wait until the loop has ended: its listener is closed before the port is bound.
+                let _ = (&mut accept).await;
+            }
+            _ = &mut accept => {}
+        }
+        let counters = &shared.counters;
+        let restarts = counters.recorder_restarts.load(Ordering::SeqCst);
+        if restarts >= MAX_RECORDER_RESTARTS {
+            counters.recorder_lost.store(true, Ordering::SeqCst);
+            crate::host_log::log_only(&format!(
+                "the recorder stopped again after {MAX_RECORDER_RESTARTS} restarts and is not \
+                 restarted: new connections to the model service are refused. Run goalcup status \
+                 to see what to do."
+            ));
+            return None;
+        }
+        match rebind(local_addr) {
+            Ok(next) => {
+                listener = next;
+                bump(&counters.recorder_restarts);
+                crate::host_log::log_only(&format!(
+                    "the recorder stopped and was restarted on the same port (restart {} of {}). \
+                     Recording went on; connections open at the time were lost, and a connection \
+                     made while the port had no listener was refused and is not recorded. If \
+                     this repeats, run goalcup status.",
+                    restarts + 1,
+                    MAX_RECORDER_RESTARTS
+                ));
+            }
+            Err(error) => {
+                counters.recorder_lost.store(true, Ordering::SeqCst);
+                crate::host_log::log_only(&format!(
+                    "the recorder stopped and could not be restarted on its port ({error}). \
+                     New connections to the model service are refused. Run goalcup status to see \
+                     what to do."
+                ));
+                return None;
+            }
+        }
+    }
+}
+
+/// Makes a bound listener ready for the accept loop: non-blocking, then owned by the runtime.
+/// [`start`] and [`rebind`] both set a listener up this way.
+fn into_accepting(listener: std::net::TcpListener) -> std::io::Result<TcpListener> {
+    listener.set_nonblocking(true)?;
+    TcpListener::from_std(listener)
+}
+
+/// The listener on `addr`, bound again, as [`start`] makes it.
+fn rebind(addr: SocketAddr) -> std::io::Result<TcpListener> {
+    into_accepting(std::net::TcpListener::bind(addr)?)
 }
 
 async fn reap_all(tasks: &mut JoinSet<()>, counters: &Counters) {
@@ -976,11 +1138,10 @@ impl Drop for Active {
     }
 }
 
-async fn serve_connection(tcp: TcpStream, active: Active) {
+async fn serve_connection(tcp: TcpStream, active: Active, unsettled: Unsettled) {
     let shared = &*active.0;
     let counters = &shared.counters;
     let _ = tcp.set_nodelay(true);
-    let unsettled = Unsettled::enter(shared);
     let open_tunnel = OpenTunnel::new(&shared.tunnels);
     // A fail-open tunnel is chained as a loss when it is decided, before its first byte is
     // relayed: the tunnel runs inside `admit`, so a task that is cut or panics mid-relay
@@ -1117,13 +1278,13 @@ fn fail_open_counter(counters: &Counters, reason: connect::TunnelReason) -> Opti
 /// includes a connection cut before it relayed anything (still reading the CONNECT head):
 /// conservative, and the same `ShutdownDeadline` mapping the seal request's counter has always
 /// had. A tunnel settles when it is decided, so one cut while open is not counted here.
-struct Unsettled<'a> {
-    shared: &'a Shared,
+struct Unsettled {
+    shared: Arc<Shared>,
     settled: AtomicBool,
 }
 
-impl<'a> Unsettled<'a> {
-    fn enter(shared: &'a Shared) -> Self {
+impl Unsettled {
+    fn enter(shared: Arc<Shared>) -> Self {
         bump(&shared.counters.unsettled);
         Self {
             shared,
@@ -1136,7 +1297,7 @@ impl<'a> Unsettled<'a> {
     }
 }
 
-impl Drop for Unsettled<'_> {
+impl Drop for Unsettled {
     fn drop(&mut self) {
         unbump(&self.shared.counters.unsettled);
         if !*self.settled.get_mut() && !std::thread::panicking() {
