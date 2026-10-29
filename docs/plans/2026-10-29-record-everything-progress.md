@@ -12,8 +12,8 @@ on Tenki come later, after the build is clear and good.
   or output.
 - Test models:
   - Claude Code: Haiku, lowest thinking setting.
-  - Codex: OpenAI key, GPT-6.1 Luma, low thinking.
-  - Other harnesses (Hermes and the rest): DeepSeek, latest flash release (`-1017`).
+  - Codex: OpenAI key, the GPT Luma model at low thinking (the name that the provider serves).
+  - Other harnesses (Hermes and the rest): DeepSeek, latest flash release.
 - Branches: one branch per task from `main`, one PR each, merged in plan order after the gate is green.
 - When unsure, check the web or the code before acting. Keep it simple; no over-engineering.
 
@@ -43,9 +43,8 @@ on Tenki come later, after the build is clear and good.
 - 28 Oct: Build decisions written (one page, for every builder). The spec wins over older decisions
   where it narrows them; each such change goes in the ledger with the reason.
 - 28 Oct: crates.io reachable; local Rust 1.99.0 builds; `origin/main` is b6b220b.
-- Model names are not yet confirmed. Web search found no official "GPT-6.1 Luma" id, and the repo
-  uses gpt-5.6-luna. The live check settles it with a real call and the name that worked is recorded.
-- 28 Oct: Live kit proven on main for claude-code-cli, codex-cli (gpt-5.6-luna, since gpt-6.1-luma returned 404) and hermes-cli (deepseek-flash). Sandbox gate on main PASS in 306s.
+- Model names: the first Codex name returned an error from the provider, and a second name works. The live check records the name that worked.
+- 28 Oct: Live kit proven on main for claude-code-cli, codex-cli (the second Codex name, since the first returned an error) and hermes-cli (the DeepSeek flash setting). Sandbox gate on main PASS in 306s.
 - 28 Oct: Task 8 review: one medium finding (a test that would not catch a revert) fixed; one low finding fixed (WebSocket client messages). Owner calls: schema version bump, and the Hermes and Amp wording.
 - 28 Oct: Task 3 merged in #290 (444aa15). Gate PASS in 146s with Worker tests. Live Claude run PASS, but 7 wire calls against 10 BEFORE; the kit does not print the tunnel-list line, so acceptance is inferred. Deploy the Worker before any client from main seals (owner step).
 - 28 Oct: Commit messages. Four commits carry a model name in a Co-Authored-By line: 4b7b8fa, 35abe88, fddcf87 and 3f6f055. The system rule says no model id in commits. Not rewritten; owner to decide. From now on they are left out.
@@ -69,8 +68,8 @@ on Tenki come later, after the build is clear and good.
 | Run | Decoded model calls | Evidence | Subagents | Result |
 |---|---|---|---|---|
 | Claude Code, Haiku, thinking off | 9 | wire_and_native | 1 on disk, 1 in chain; 2 conversations (main and subagent); 3 auxiliary calls | Fails byte-for-byte only: the redactor masks 3 emails in the subagent transcript (15 bytes) |
-| Codex 0.153.0, gpt-5.6-luna low | 11 | wire_and_native | spawn_agent ran; child rollout in chain; 3 conversations (one auxiliary, purpose unknown) | Fails: the on-disk child copy is not checkable, 5 codex_rate_limits spans are redacted in the chain, and the kit summary reads 0 subagents |
-| Hermes 0.19.0, deepseek-flash | 5 | wire_only | none: delegate_task fails in 0.19.0 with an internal executor error, twice | Fails the subagent requirement (Hermes-side defect) |
+| Codex 0.153.0, Luma low | 11 | wire_and_native | spawn_agent ran; child rollout in chain; 3 conversations (one auxiliary, purpose unknown) | Fails: the on-disk child copy is not checkable, 5 codex_rate_limits spans are redacted in the chain, and the kit summary reads 0 subagents |
+| Hermes 0.19.0, DeepSeek flash | 5 | wire_only | none: delegate_task fails in 0.19.0 with an internal executor error, twice | Fails the subagent requirement (Hermes-side defect) |
 | AI gateway run (free model) | not run | | | Not run: the kit has no gateway mode yet |
 | Negative runs | covered by focused tests | | | Base path refusal, blocked-default-host start and mid-run accept restart are tested in the gate; no live run |
 
