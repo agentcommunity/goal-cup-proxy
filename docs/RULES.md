@@ -297,10 +297,11 @@ disclosure and no-side-channel rules.
   login or account you can revoke, keep no unrelated secrets in the workspace or your home folder,
   and log out of the harness or rotate its login after the event.
 - **What the evidence covers.** Every request your agent sent to the model service Goal Cup opened is
-  captured, model calls and everything else on that service alike; a call that bypasses `HTTPS_PROXY` is not. Nor is every byte a tool produced: several
-  harnesses truncate large tool output before writing it, and on some the untruncated bytes exist
-  nowhere on disk. A few internal model calls, such as title generators and follow-up suggestion
-  helpers, appear in no transcript on any harness we measured. Neither affects judging.
+  captured, model calls and everything else on that service alike; a call that bypasses
+  `HTTPS_PROXY` is not. Nor is every byte a tool produced: several harnesses truncate large tool
+  output before writing it, and on some the untruncated bytes exist nowhere on disk. A few internal
+  model calls, such as title generators and follow-up suggestion helpers, appear in no transcript on
+  any harness we measured. Neither affects judging.
   [CHEAT-CHECKLIST](CHEAT-CHECKLIST.md) lists what a verifier `pass` does not cover.
 - <a id="what-a-label-is-worth"></a>**What a label is worth.** The verifier labels what each run
   holds (D74): `wire_and_native` (the model requests and the harness's chat file), `wire_only`
@@ -336,9 +337,11 @@ disclosure and no-side-channel rules.
   the prompts and replies, the tool calls and their results, and the request and response headers of
   each exchange. Credential headers (`authorization`, `cookie`, `set-cookie`, `x-api-key`, and any
   header whose name contains `key`, `token`, `secret`, `password` or `auth`) are replaced by
-  `[masked]`, and so is any `Bearer` or `Basic` credential in a header value, the userinfo of a URL,
-  and a credential-named query value. A credential under any other header name is not masked by its
-  value. Credentials in bodies are matched by pattern and replaced by a `<redacted:KIND>` marker, and
+  `[masked]`. A `Bearer` or `Basic` credential is masked in any header value, whatever the header
+  is called. The userinfo of a URL is masked, and so is the value of a credential-named query
+  parameter: one whose name matches the header rule, `sig`, or any name containing `signature`
+  (signed-URL parameters). A credential in any other form, under a header name not listed here, is not masked.
+  Credentials in bodies are matched by pattern and replaced by a `<redacted:KIND>` marker, and
   a key the model repeats in its reply is not reliably caught. The trace also holds file contents
   and file paths from your machine: the harness's own session and chat files, and the files its tools
   read and wrote as the harness reports them. Paths are written as your machine names them. The
@@ -354,8 +357,10 @@ disclosure and no-side-channel rules.
   whether or not it is a model call: a model list, or a token refresh the harness makes there. The
   sign-in hosts are among the other addresses, and their traffic is never decrypted. This holds only
   for programs that use the `HTTPS_PROXY` setting: a tool that ignores it (`ssh`, a raw socket, a
-  command that unsets `HTTPS_PROXY`) connects directly and is not seen at all. Your ChatGPT, Claude or
-  login credentials are not stored as headers: the recording proxy removes their header values before anything is written, and keeps neither their values nor any fingerprint of them. A key the model repeats in its reply can still be recorded (see the recording gap above). Goal Cup Proxy
+  command that unsets `HTTPS_PROXY`) connects directly and is not seen at all. Your ChatGPT, Claude
+  or login credentials are not stored as headers: the recording proxy removes their header values
+  before anything is written, and keeps neither their values nor any fingerprint of them. A key the
+  model repeats in its reply can still be recorded (see the recording gap above). Goal Cup Proxy
   does not watch other terminals, your browser, other processes or audio. It also records the harness
   build and non-identifying facts about the machine (operating system and version, architecture, CPU
   count, memory, disk size and free space, WSL2, container, mains power): no host name, user name or

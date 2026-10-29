@@ -123,22 +123,23 @@ consistent, not that the participant followed the rules.
   stop (a dev server that outlived the harness) is cut without a loss. Each completed or cut
   tunnel is also listed, with host, port, reason, times and bytes each way, in
   `tunnels-<entry_id>.jsonl` (`goalcup-tunnels-v1`, at most 10,000 rows plus a dropped count),
-  summed up on the `sealed hosts (passed through unread):` finish line and uploaded with the seal (D74); a tunnel whose
-  task the stop cannot reap gets no note. The list is
+  summed up on the `sealed hosts (passed through unread):` finish line and uploaded with the seal
+  (D74); a tunnel whose task the stop cannot reap gets no note. The list is
   outside the chain and not hash-bound: the participant's machine wrote it, so it is a lead for
   review, not proof.
 - **Claude Code reads settings from more files than Goal Cup does (D74).** Goal Cup reads
   `env.ANTHROPIC_BASE_URL` in `settings.json` in Goal Cup's Claude Code home only. Claude Code
   also takes settings from a workspace's `.claude/settings.json` and `.claude/settings.local.json`
   and from managed settings. A gateway named there is not opened: its traffic tunnels, sealed and
-  unrecorded. Bounded by: the gateway shows in the `sealed hosts (passed through unread):` line and the uploaded tunnel
-  list, the run's label reads `native_only`, and `analysis.cross_leg` notes
+  unrecorded. Bounded by: the gateway shows in the `sealed hosts (passed through unread):` line and
+  the uploaded tunnel list, the run's label reads `native_only`, and `analysis.cross_leg` notes
   `native_activity_without_wire_streams`.
 - **The fallback trusts the absence of one key (D74, ledger L24).** Under `absent = "defaults"`,
   a config that names no address opens only the connector's default hosts. A model service
   chosen another way is not recorded. A Codex `[profiles.*]` provider or Claude Code's Bedrock
-  switch tunnels, sealed and unrecorded, and shows in the `sealed hosts (passed through unread):` line and the uploaded
-  tunnel list. A built-in local provider on this computer (`ollama`) is not seen at all: every
+  switch tunnels, sealed and unrecorded, and shows in the `sealed hosts (passed through unread):`
+  line and the uploaded tunnel list. A built-in local provider on this computer (`ollama`) is not
+  seen at all: every
   launch sets `NO_PROXY=127.0.0.1,localhost` (`CAPTURE_NO_PROXY`), so it connects directly and
   is in no list. Bounded by: either way the run's label reads `native_only`.
 - **The seal lists what it cannot read.** A workspace that is not a clone is walked, up to 50,000

@@ -438,11 +438,15 @@ fn a_continue_whose_clone_is_gone_is_refused_and_changes_nothing() {
 }
 
 /// Each entry of a continued run has its own sealed-connection list path, one file per entry, so
-/// a later segment's list is written beside the earlier one and never replaces it. This checks the
-/// path helper and the file naming directly. The finish writing its entry's file is checked on a
-/// real continued run in `a_run_crosses_two_platform_stops_and_each_continue_keeps_it_whole`.
+/// a later segment's list is written beside the earlier one and never replaces it.
+///
+/// Scope: this is a unit-level check of the path helper, the file naming and the `write` function
+/// with two entries. It does not run `goalcup continue`, so it does not prove that a continue
+/// keeps the earlier entry's list. The continued run in
+/// `a_run_crosses_two_platform_stops_and_each_continue_keeps_it_whole` checks only the last
+/// segment's list, because the killed segments before it write none.
 #[test]
-fn tunnel_lists_are_one_per_entry() {
+fn one_tunnel_list_per_entry_path() {
     use goalcup_cli::proxy::tunnels::{TunnelNote, file_name, write};
 
     let cfg = tempfile::tempdir().unwrap();

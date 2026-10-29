@@ -72,8 +72,10 @@ denies unknown fields; a missing `Option` field reads as `None`.
   proxy masks credentials before they reach the chain: the value of `authorization`,
   `proxy-authorization`, `cookie`, `set-cookie`, `x-api-key`, `api-key`, `x-goog-api-key`, and of
   any header whose name contains `key`, `token`, `secret`, `password` or `auth`, becomes
-  `[masked]`; a `Bearer` or `Basic` credential in any value, the userinfo of a URL, and
-  credential-named query values are masked the same way. A native label is a scoped relative path
+  `[masked]`; a `Bearer` or `Basic` credential in any header value (whatever the header is called),
+  the userinfo of a URL, and credential-named query values are masked the same way. A query value
+  is credential-named when its name matches the header rule, or is `sig`, or contains `signature`
+  (signed-URL parameters). A native label is a scoped relative path
   plus a generation, never an absolute path.
 - Connection `Open` admits `alpn` of `None` or `http/1.1` only. A recovered socket emits `Open
   { already_open: true }` and, for WebSocket, `UpgradedWebSocket` before new payload. `Close`

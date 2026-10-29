@@ -310,10 +310,10 @@ service they went to. If that line is missing and the block says no model calls 
 fix the setup before the next run. Every request to the model service is recorded, whatever its
 path, so a model list or a token refresh there is in the trace too. The `sealed hosts (passed
 through unread)` line names the other hosts your agent connected to, with the number of connections
-and their size. Those hosts are not read, and the model service is never among them. Your
-credential headers are masked in the trace as `[masked]`, and credentials in bodies are redacted by
-pattern as `<redacted:KIND>`, so a key your model repeats in a reply may not be caught. The trace
-also holds the files and paths on your machine that the agent read and wrote.
+and their size. Those hosts are not read, and the model service Goal Cup opened is never among
+them. Your credential headers are masked in the trace as `[masked]`, and credentials in bodies are
+redacted by pattern as `<redacted:KIND>`, so a key your model repeats in a reply may not be caught.
+The trace also holds the files and paths on your machine that the agent read and wrote.
 
 | The line says | What it means | What to do |
 |---|---|---|

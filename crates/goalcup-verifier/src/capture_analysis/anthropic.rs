@@ -1605,7 +1605,7 @@ mod select_gate_tests {
     /// not read, and the reason is named.
     #[test]
     fn a_hinted_messages_post_json_is_read_and_others_are_named() {
-        let post = meta("POST", "/claude-code/v1/messages", "application/json", None);
+        let post = meta("POST", "/gateway/v1/messages", "application/json", None);
         assert!(matches!(
             select(CaptureSource::WireRequest, &post),
             Body::Json(_)

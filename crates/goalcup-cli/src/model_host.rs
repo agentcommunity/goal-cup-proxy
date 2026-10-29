@@ -1222,7 +1222,7 @@ sessions:
     /// Anthropic decoder also reads only an endpoint ending in `/messages` (its `ENDPOINT_SUFFIX`),
     /// and only a POST with `application/json` (its `select_gate_tests` module pins that gate).
     #[test]
-    fn every_hinted_path_is_accepted_by_its_decoder() {
+    fn every_hinted_path_is_read_by_its_decoder() {
         use goalcup_protocol::capture::{CaptureSource, StreamKey};
         use goalcup_verifier::capture_analysis::api::StreamOpen;
         use goalcup_verifier::capture_analysis::registry::DecoderRegistry;
@@ -1232,7 +1232,7 @@ sessions:
             producer: "proxy".into(),
             stream: 1,
         };
-        let mut hinted = 0;
+        // Per base, not a total: a new wire hint or base adds rows without editing this test.
         for base in ["/claude-code", "/codex/v1", "/v1", ""] {
             let host = ModelHost {
                 host: "models.example.test".into(),
@@ -1242,11 +1242,12 @@ sessions:
                 edit: None,
             };
             let rule = host.approved();
+            let mut hinted_here = 0;
             for row in rule.policy.paths.iter().filter(|row| !row.prefix) {
                 let Some(hint) = row.protocol_hint.as_deref() else {
                     continue;
                 };
-                hinted += 1;
+                hinted_here += 1;
                 let picked = crate::proxy::metadata::select(&rule.policy, &row.path)
                     .unwrap_or_else(|| panic!("{base:?}: {} is selected", row.path));
                 assert_eq!(picked.protocol_hint.as_deref(), Some(hint), "{}", row.path);
@@ -1266,9 +1267,8 @@ sessions:
                     assert!(row.path.ends_with("/messages"), "{}", row.path);
                 }
             }
+            assert!(hinted_here > 0, "{base:?}: no path is hinted");
         }
-        // Each of the three wire formats is hinted under every base: 2 prefixes x 3 paths x 4.
-        assert_eq!(hinted, 2 * 3 * 4);
     }
 
     /// `url` as the base URL under a neutral settings key, read the way a run reads it.

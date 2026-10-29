@@ -230,44 +230,47 @@ with open(plan_path, "w") as f:
     f.write("\n".join(plan) + "\n")
 PY
 
-# 3. One object into $2, from the local store or from R2. R2's REST API takes the key percent-encoded.
-# The credential reaches curl through its configuration on stdin, never its command line.
-get_object() {
-  if [ -n "$store" ]; then
-    [ -f "$store/$1" ] || { echo "fetch-run: $1 is not in $store" >&2; return 1; }
-    cp "$store/$1" "$2"
-  else
-    enc=$(printf '%s' "$1" | sed 's|/|%2F|g')
-    url="https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/r2/buckets/$bucket/objects/$enc"
-    {
-      printf 'url = "%s"\noutput = "%s"\n' "$url" "$2"
-      printf 'header = "Authorization: Bearer %s"\n' "$CLOUDFLARE_API_TOKEN"
-      printf 'fail\nsilent\nshow-error\nconnect-timeout = 15\nmax-time = 600\n'
-    } | curl -K - || { echo "fetch-run: could not read $1 from bucket $bucket" >&2; return 1; }
-  fi
-}
-
-# An object that may be absent: 0 when it was fetched into $2, 2 when the bucket has no such
-# object, 1 for any other failure. Only a 404 is an absence, so a refused token still fails.
-get_optional_object() {
-  if [ -n "$store" ]; then
-    [ -f "$store/$1" ] || return 2
-    cp "$store/$1" "$2" || { rm -f "$2"; echo "fetch-run: could not copy $1 from $store" >&2; return 1; }
-    return 0
-  fi
+# 3. The R2 object's curl configuration on stdout: the URL, the output file and the bearer header.
+# R2's REST API takes the key percent-encoded. The credential reaches curl through this
+# configuration on stdin, never its command line; this is the only place it is written.
+object_config() { # key dest
   enc=$(printf '%s' "$1" | sed 's|/|%2F|g')
   url="https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/r2/buckets/$bucket/objects/$enc"
-  status=$({
-    printf 'url = "%s"\noutput = "%s"\n' "$url" "$2"
-    printf 'header = "Authorization: Bearer %s"\n' "$CLOUDFLARE_API_TOKEN"
-    printf 'silent\nshow-error\nconnect-timeout = 15\nmax-time = 600\n'
-    printf 'write-out = "%%{http_code}"\n'
-  } | curl -K -) || { rm -f "$2"; echo "fetch-run: could not read $1 from bucket $bucket" >&2; return 1; }
-  case $status in
-    200) return 0 ;;
-    404) rm -f "$2"; return 2 ;;
-    *) rm -f "$2"; echo "fetch-run: could not read $1 from bucket $bucket (HTTP $status)" >&2; return 1 ;;
-  esac
+  printf 'url = "%s"\noutput = "%s"\n' "$url" "$2"
+  printf 'header = "Authorization: Bearer %s"\n' "$CLOUDFLARE_API_TOKEN"
+}
+
+# One object into $2, from the local store or from R2. The mode is "required" (the default) or
+# "optional". Required: 0 when fetched, 1 for any failure. Optional: 0 when fetched, 2 when the
+# object is absent (a 404 from R2, or missing from the store), 1 for any other failure, so a
+# refused token still fails. Nothing is left in $2 on a failure.
+get_object() { # key dest [required|optional]
+  mode=${3:-required}
+  if [ -n "$store" ]; then
+    if [ -f "$store/$1" ]; then
+      cp "$store/$1" "$2" || { rm -f "$2"; echo "fetch-run: could not copy $1 from $store" >&2; return 1; }
+      return 0
+    fi
+    [ "$mode" = optional ] && return 2
+    echo "fetch-run: $1 is not in $store" >&2
+    return 1
+  fi
+  if [ "$mode" = optional ]; then
+    status=$({
+      object_config "$1" "$2"
+      printf 'silent\nshow-error\nconnect-timeout = 15\nmax-time = 600\n'
+      printf 'write-out = "%%{http_code}"\n'
+    } | curl -K -) || { rm -f "$2"; echo "fetch-run: could not read $1 from bucket $bucket" >&2; return 1; }
+    case $status in
+      200) return 0 ;;
+      404) rm -f "$2"; return 2 ;;
+      *) rm -f "$2"; echo "fetch-run: could not read $1 from bucket $bucket (HTTP $status)" >&2; return 1 ;;
+    esac
+  fi
+  {
+    object_config "$1" "$2"
+    printf 'fail\nsilent\nshow-error\nconnect-timeout = 15\nmax-time = 600\n'
+  } | curl -K - || { echo "fetch-run: could not read $1 from bucket $bucket" >&2; return 1; }
 }
 
 sha256_of() {
@@ -310,7 +313,7 @@ while read -r kind a b c d e f; do
     T)
       # The sealed-connection list: fetched when the seal carried one, else nothing is written.
       rc=0
-      get_optional_object "$b" "$tmp/build-$a/tunnels.jsonl" || rc=$?
+      get_object "$b" "$tmp/build-$a/tunnels.jsonl" optional || rc=$?
       [ "$rc" -eq 0 ] || [ "$rc" -eq 2 ] || exit 1
       ;;
     C)
