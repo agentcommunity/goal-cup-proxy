@@ -79,10 +79,12 @@ Owner decisions: (1) redaction of emails and codex rate-limit blocks in the chai
 
 - We over-engineered. Less code is better: fewer places for things to break. Simplify first.
 - Goal: record everything. Never block the harness. Runs may last a week with thousands of subagents.
-- Subagents: record whatever is running now. Protocol v5 lets only 128 streams be open at once, so
-  when slots run out, close the quietest caught-up stream and reopen it from the start when its file
-  grows. The file path is its ID; the server orders by ID and time. No verifier change. The 1024-file
-  cap goes. No other caps of our own.
+- No backward compatibility. Every run so far is test data. The version for next Friday may change
+  the protocol, verifier, Worker and client together. "Protocol v5 is frozen" no longer applies.
+- Subagents: record whatever is running, with no caps of our own. Simplest path: raise or remove the
+  open-stream limits (128 per entry, 32 for native files) and the 1024-file cap, so no stream ever
+  has to close early. Check open file handles first (macOS allows 256 per process by default).
+  The file path is the ID; the server orders by ID and time.
 - Disk full: no special handling. The harness stops and the user cleans up.
 - Server per-run limit (`RUN_MAX_COMPRESSED_BYTES`, 64 GiB): it guards storage cost against a stuck or
   hostile client, not against recording. Owner to decide whether to keep or raise it.
