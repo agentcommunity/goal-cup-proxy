@@ -1587,6 +1587,106 @@ fn owner_post_stop_drain_fits_commit_reserve() {
     );
 }
 
+/// Stop an owner whose only native store is one `final_snapshot` file in `home`, through the real
+/// sink, the way a finish does, with the harness exit the finish observed. Returns the chain.
+fn owner_finishes_a_final_snapshot(home: &Path, harness_exited: bool) -> Vec<CaptureRecord> {
+    let dir = tempfile::tempdir().unwrap();
+    let writer = writer(dir.path(), 64 << 20);
+    let sink = Arc::new(OwnerSink::default());
+    let native = NativeCapture::new(
+        NativeCaptureConfig {
+            sources: vec![NativeSourceSpec {
+                name: "state".into(),
+                root: home.to_path_buf(),
+                pattern: "state.db*".into(),
+                form: NativeStoreForm::FinalSnapshot,
+                hint: None,
+                modified_since: None,
+            }],
+            limits: NativeCaptureLimits::default(),
+        },
+        sink.clone(),
+        Box::new(SystemNativeClock::new()),
+    )
+    .unwrap();
+    let owner = Owner::new(
+        sink,
+        writer,
+        clock(),
+        &[],
+        Default::default(),
+        None,
+        Some(native),
+    );
+    let control = OwnerControl::default();
+    control.stop.store(true, Ordering::Release);
+    // What `stop_owner` hands the owner: the finish may run for as long as it has passes left.
+    control.finish_budget_ns.store(u64::MAX, Ordering::Release);
+    control
+        .harness_exited
+        .store(harness_exited, Ordering::Release);
+    owner.run(&control);
+    assert!(control.drained.load(Ordering::Acquire));
+    records(dir.path())
+}
+
+/// A final snapshot is not copied while the harness may still run: the finish that could not
+/// confirm the stop leaves it out, and the chain marks the missing copy.
+#[test]
+fn a_final_snapshot_is_not_copied_when_the_harness_exit_is_unconfirmed() {
+    let home = tempfile::tempdir().unwrap();
+    std::fs::write(home.path().join("state.db"), b"state").unwrap();
+    let chain = owner_finishes_a_final_snapshot(home.path(), false);
+    assert!(
+        !chain.iter().any(|r| matches!(
+            r,
+            CaptureRecord::Open { .. } | CaptureRecord::Segment { .. }
+        )),
+        "no stream of the store is opened or written"
+    );
+    assert_eq!(
+        streamless(&chain, GapReason::ShutdownDeadline),
+        1,
+        "the skipped copy is one stream-less gap at the finish"
+    );
+}
+
+/// A final snapshot far past the sink's payload bound is copied whole at the finish, because the
+/// owner takes each pass into the chain before the next one is queued. Without that, the sink
+/// latches `QueueFull` after about 8 MiB encoded, and the rest of the store and its sidecars are
+/// lost.
+#[test]
+fn a_final_snapshot_past_the_sink_bound_is_copied_whole_at_finish() {
+    let home = tempfile::tempdir().unwrap();
+    let len: usize = 10 << 20;
+    let content: Vec<u8> = (0..len).map(|i| (i % 251) as u8).collect();
+    std::fs::write(home.path().join("state.db"), &content).unwrap();
+    let chain = owner_finishes_a_final_snapshot(home.path(), true);
+    assert_eq!(
+        gaps(&chain, GapReason::QueueFull),
+        0,
+        "the sink never refuses the copy"
+    );
+    let copied: u64 = chain
+        .iter()
+        .filter_map(|r| match r {
+            CaptureRecord::Segment { source_len, .. } => Some(*source_len),
+            _ => None,
+        })
+        .sum();
+    assert_eq!(copied, len as u64, "every byte of the store is recorded");
+    assert!(
+        chain.iter().any(|r| matches!(
+            r,
+            CaptureRecord::End {
+                reason: EndReason::Complete,
+                ..
+            }
+        )),
+        "the store's stream ends complete"
+    );
+}
+
 /// The frozen connector fixtures (their recipes before chat mode, converted to it), not the
 /// shipped ones, so these tests keep their subject when the shipped connectors change.
 fn frozen_manifest_paths() -> Vec<PathBuf> {

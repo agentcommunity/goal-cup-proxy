@@ -398,6 +398,7 @@ fn generous() -> NativeFinishBudget {
     NativeFinishBudget {
         max_bytes: 64 << 20,
         max_duration_ns: u64::MAX,
+        harness_exited: true,
     }
 }
 
@@ -1004,6 +1005,7 @@ fn finish_reports_discovery_it_could_not_complete() {
     let finished = capture.finish(NativeFinishBudget {
         max_bytes: 64 << 20,
         max_duration_ns: 0,
+        harness_exited: true,
     });
     assert!(finished.admitted && finished.closed);
     assert_eq!(finished.completed_streams + finished.interrupted_streams, 0);
@@ -1757,6 +1759,7 @@ fn finish_budget_reports_unknown_tail() {
     let finished = capture.finish(NativeFinishBudget {
         max_bytes: budget,
         max_duration_ns: u64::MAX,
+        harness_exited: true,
     });
     assert_eq!(finished.bytes_drained, budget);
     assert_eq!(
@@ -1795,6 +1798,7 @@ fn finish_budget_reports_unknown_tail() {
     let finished = capture.finish(NativeFinishBudget {
         max_bytes: u64::MAX,
         max_duration_ns: 0,
+        harness_exited: true,
     });
     assert_eq!(finished.bytes_drained, MAX_SEGMENT_BYTES as u64);
     assert_eq!(finished.interrupted_streams, 1);
@@ -2036,6 +2040,7 @@ fn hermes_snapshot_over_the_finish_budget_is_a_shutdown_deadline_gap() {
     let finished = capture.finish(NativeFinishBudget {
         max_bytes: MAX_SEGMENT_BYTES as u64,
         max_duration_ns: u64::MAX,
+        harness_exited: true,
     });
     assert_eq!(
         (finished.completed_streams, finished.interrupted_streams),
@@ -2495,6 +2500,7 @@ fn a_finish_that_walked_a_whole_cycle_is_not_capped() {
     let finished = capture.finish(NativeFinishBudget {
         max_bytes: 5 * MAX_SEGMENT_BYTES as u64,
         max_duration_ns: u64::MAX,
+        harness_exited: true,
     });
     assert!(finished.closed);
     assert_eq!(finished.bytes_drained, 5 * MAX_SEGMENT_BYTES as u64);
@@ -2587,6 +2593,40 @@ fn a_final_snapshot_file_is_read_only_at_finish() {
     sink.assert_clean();
 }
 
+/// A `final_snapshot` store is not read when the finish is not told the harness exited: an
+/// unresolved stop may leave the harness writing, so its copy would be taken too early. Nothing
+/// of the store is captured, the report says so, and the seal still closes the producer.
+#[test]
+fn a_final_snapshot_is_not_read_when_the_harness_exit_is_unconfirmed() {
+    let root = root();
+    root.write("state.db", &pattern_bytes(3000, 1));
+    let sink = CollectSink::new();
+    let mut capture = start(
+        vec![source(
+            "state",
+            &root.home,
+            "state.db*",
+            NativeStoreForm::FinalSnapshot,
+            None,
+        )],
+        NativeCaptureLimits::default(),
+        &sink,
+    );
+    let finished = capture.finish(NativeFinishBudget {
+        max_bytes: 64 << 20,
+        max_duration_ns: u64::MAX,
+        harness_exited: false,
+    });
+    assert!(finished.final_snapshots_skipped);
+    assert_eq!(
+        (finished.completed_streams, finished.uncaptured_files),
+        (0, 0)
+    );
+    assert!(finished.closed);
+    assert!(labels(&replay(&sink.frames())).is_empty());
+    sink.assert_clean();
+}
+
 /// A `final_snapshot` file larger than the finish budget keeps what fit and says the tail is
 /// unknown: the existing `ShutdownDeadline` gap. The seal still closes the producer.
 #[test]
@@ -2609,6 +2649,7 @@ fn a_final_snapshot_over_budget_leaves_a_gap() {
     let finished = capture.finish(NativeFinishBudget {
         max_bytes: MAX_SEGMENT_BYTES as u64,
         max_duration_ns: u64::MAX,
+        harness_exited: true,
     });
     assert_eq!(
         (finished.completed_streams, finished.interrupted_streams),

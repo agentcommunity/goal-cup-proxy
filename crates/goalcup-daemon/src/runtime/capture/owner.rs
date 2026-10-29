@@ -125,16 +125,28 @@ impl Owner {
         while control.hold_drain.load(Ordering::Acquire) {
             std::thread::sleep(IDLE_WAIT);
         }
-        if let Some(native) = &mut self.native {
-            let finished = native.finish(NativeFinishBudget {
-                max_bytes: NATIVE_FINISH_BYTES,
-                max_duration_ns: control.finish_budget_ns.load(Ordering::Acquire),
-            });
+        if let Some(mut native) = self.native.take() {
+            // Each pass queues its frames into the sink, which holds about 8 MiB: the owner takes
+            // them into the chain before the next pass, or the sink refuses the rest of the copy.
+            let finished = native.finish_draining(
+                NativeFinishBudget {
+                    max_bytes: NATIVE_FINISH_BYTES,
+                    max_duration_ns: control.finish_budget_ns.load(Ordering::Acquire),
+                    harness_exited: control.harness_exited.load(Ordering::Acquire),
+                },
+                &mut || self.drain_all(),
+            );
+            self.native = Some(native);
             // A discovery cap, or a tracked file that never got a stream slot before the
             // finish, is a loss the chain must mark: one streamless gap for both, so the
             // transcripts beyond the open-stream cap leave a marker rather than vanish.
             if finished.discovery_capped || finished.uncaptured_files > 0 {
                 lock(&self.writer).streamless_gap(GapReason::LimitExceeded, &(self.clock)());
+            }
+            // Final snapshots are not copied while the harness may still run. The chain marks
+            // that the copy is missing, as it marks a file the finish budget does not reach.
+            if finished.final_snapshots_skipped {
+                lock(&self.writer).streamless_gap(GapReason::ShutdownDeadline, &(self.clock)());
             }
             self.record_native_losses(true);
         }
