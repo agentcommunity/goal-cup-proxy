@@ -32,8 +32,8 @@ on Tenki come later, after the build is clear and good.
 | 9 | Codex records an API-key login | merged in #295 (2bf49ac, squashed; a model-named trailer stayed off main); gate PASS, live PASS; subagent proof still needed in Task 13 |
 | 10 | Proxy restarts itself on the same port | merged in #298 (04118da); gate PASS, live PASS; cap of 5 is an owner decision; rebind window has no gap |
 | 11 | Participant sees "recording works" and the right file | merged in #299 (b102cdc); gate PASS, live PASS (kit parser fixed for the new sealed-hosts wording); chat-mode wording to confirm (L21) |
-| 12 | Seams, operations and docs | not started |
-| 13 | Measured runs (build and test first; long runs later) | not started |
+| 12 | Seams, operations and docs | merged in #300 (a31094c); gate PASS, live PASS |
+| 13 | Measured runs (build and test first; long runs later) | partial: see the measured-run table below |
 | 14 | Owner steps (for you) | not started |
 
 ## Log
@@ -63,3 +63,15 @@ on Tenki come later, after the build is clear and good.
 - 29 Oct: Task 6 merged in #297 (cc44537). Review found that the copy could run while the harness might still write, and that the queue cap cut copies near 8 MiB. Both fixed before merge. Owner: release order (older binaries refuse final_snapshot), and trace size grows with the shared Hermes database.
 - 29 Oct: Task 10 merged in #298 (04118da). The restart budget spans a run, including `continue`. Owner: keep the cap of five (spec rule 16 has no cap), and decide a gap reason for connections refused during the rebind window (v5 is frozen).
 - 29 Oct: Task 11 merged in #299 (b102cdc). The finish line names configured hosts, not observed hosts (owner to decide). The kit parser for sealed hosts was updated to the new wording; the product output was correct.
+
+## Measured runs (29 Oct, main a31094c, test keys)
+
+| Run | Decoded model calls | Evidence | Subagents | Result |
+|---|---|---|---|---|
+| Claude Code, Haiku, thinking off | 9 | wire_and_native | 1 on disk, 1 in chain; 2 conversations (main and subagent); 3 auxiliary calls | Fails byte-for-byte only: the redactor masks 3 emails in the subagent transcript (15 bytes) |
+| Codex 0.153.0, gpt-5.6-luna low | 11 | wire_and_native | spawn_agent ran; child rollout in chain; 3 conversations (one auxiliary, purpose unknown) | Fails: the on-disk child copy is not checkable, 5 codex_rate_limits spans are redacted in the chain, and the kit summary reads 0 subagents |
+| Hermes 0.19.0, deepseek-flash | 5 | wire_only | none: delegate_task fails in 0.19.0 with an internal executor error, twice | Fails the subagent requirement (Hermes-side defect) |
+| AI gateway run (free model) | not run | | | Not run: the kit has no gateway mode yet |
+| Negative runs | covered by focused tests | | | Base path refusal, blocked-default-host start and mid-run accept restart are tested in the gate; no live run |
+
+Owner decisions: (1) redaction of emails and codex rate-limit blocks in the chain versus spec rule 3 and the byte-for-byte check; (2) a Hermes version with working delegation, or accept no measured subagent run for Hermes; (3) whether the kit's subagent counter is fixed before the next run; (4) the value-masking gap in headers (spec rule 3) noted in PR #300.
