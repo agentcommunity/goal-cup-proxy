@@ -36,6 +36,32 @@ Two deviations, both owner-approved or owner-caused:
 5. **Upload worked, but lagged badly, and the local trace was pruned at the seal.** The full trace was never
    verified (see measure 5).
 
+## Root cause (pinned after the run)
+
+From the chain's gap and recovery times, and the code at `a31094c`:
+
+1. **The daemon's queue filled.** The proxy's frames go to the daemon, which queues them for its one chain writer.
+   That queue is 8 MiB, shared by every producer (`MAX_CAPTURE_QUEUE_BYTES`,
+   `crates/goalcup-daemon/src/runtime/capture/sink.rs`). Request bodies averaged 1.5 MB, because each one resends
+   the full context. About 20 subagents, plus retries after OpenAI's rate limits, sent bursts larger than the
+   queue. The daemon then dropped that producer (`queue_full` gap) and closed its socket.
+2. **The proxy counted each drop as a failure.** It saw a remote close (`ingest_lost`) and reconnected with a new
+   producer (`recovery`). A connection that lives under 60 s (`STABLE_EPOCH`) does not reset the count
+   (`crates/goalcup-cli/src/proxy/ingest.rs`, `lost` and `count_failure`).
+3. **The 10th drop in a row turned recording off for good.** The connection that died at 15:39:17 had lived
+   161 s, so the count restarted there. The next nine lived 3 to 45 s each. The 10th died at 15:43:15. That reached
+   `MAX_CONNECTION_FAILURES = 10`, and `latch_terminal(IngestLost)` disabled the sink. Every later frame was
+   dropped in the proxy, so the daemon never saw a loss to write as a gap. The relay went on, so the harness was
+   never slowed.
+4. **The finish line counted calls that were never written.** `record_generation_request` counts a request when the
+   proxy selects it, not when it reaches the chain. It also counts every WebSocket client message, interrupts
+   included. That is where "1736 recorded" comes from.
+5. **The `limit_exceeded` gap at the seal is a separate limit.** It is the daemon's native-file finish marker:
+   rollout files that never got a native stream slot (32 slots, 43 files; `owner.rs`, `uncaptured_files`).
+
+So the "never stop" rule for a busy daemon is broken by a budget built for a daemon that is gone. A daemon that
+drops a producer under load looks the same as one that is dead.
+
 ## The ten measures
 
 | # | Measure | Result | Evidence |
@@ -46,7 +72,7 @@ Two deviations, both owner-approved or owner-caused:
 | 4 | Gaps | 23. 22 are `queue_full` (first at 15:15:12Z, last at 15:43:15Z) and 1 is `limit_exceeded` at the seal (16:54:43.81Z, no stream). 17 `recovery` records (`ingest_lost`), each moving to a new producer, all between 15:15 and 15:43. 14 streams ended `interrupted`. `host.log` shows no proxy restart (port rebind). | [final.json](2026-10-30-two-hour-run/final.json) `other`, [log.jsonl](2026-10-30-two-hour-run/log.jsonl) |
 | 5 | Upload | 20 chunks stored, 1,304,968,017 bytes of chain, all acknowledged with the seal by 16:54:46Z (3 s after the seal). 11 network errors (os errors 11, 104 and 32, plus one EOF), with backoff up to 1,083 s. Lag: at 15:55 the chain was 1,302 MB but only 94 MB compressed had been sent; at 16:40, 276 MB. Local verify: exit 1, `chain_pruned_locally`, because goalcup pruned every part but the last when the seal was acknowledged. Server copy: **NOT VERIFIED**, because `fetch-run.sh` needs `DATABASE_URL` and Cloudflare R2 credentials, which this session does not have. | [host.log](2026-10-30-two-hour-run/host.log), [verify-local.txt](2026-10-30-two-hour-run/verify-local.txt) |
 | 6 | Size | Chain: 1.30 GB and 479,319 records. Compressed upload: 405 MB (3.2 to 1). 1,302 MB came in the first 61 minutes, about 1.3 GB an hour while recording. Payload 722 MB: HTTP request bodies 375 MB (243 POSTs, each resends the full context), WebSocket client messages 158 MB, server messages 104 MB, rollouts 47 MB. The chain is 1.8 times the payload. 152,728 WebSocket server-message streams, each written as open, segment and end. | [log.jsonl](2026-10-30-two-hour-run/log.jsonl) |
-| 7 | Load | Daemon: 50 to 52 MB RSS, 9 to 17% of a core, 17 to 18 open files. `goalcup start` (proxy and uploader): 26 to 32 MB, about 1%, 19 to 67 open files. Codex: 320 to 385 MB, 6 to 12%, up to 97 open files. Disk free stayed above 61 GB. | [log.jsonl](2026-10-30-two-hour-run/log.jsonl) `procs` |
+| 7 | Load | Daemon: 50 to 52 MB RSS, 9 to 17% of a core averaged over its life (`ps` gives no peak), 17 to 18 open files. `goalcup start` (proxy and uploader): 26 to 32 MB, about 1%, 19 to 67 open files. Codex: 320 to 385 MB, 6 to 12%, up to 97 open files. Disk free stayed above 61 GB. | [log.jsonl](2026-10-30-two-hour-run/log.jsonl) `procs` |
 | 8 | Secrets | No hit for the OpenAI key, the GitHub token or an `Authorization: Bearer` header in the 60 files still on disk. That covers the last chain part (1.4 MB, decoded segments too), all 43 rollouts (58.5 MB), the tunnel list, `host.log`, `daemon.log` and the upload state. **The full 1.3 GB trace was not scanned:** it was pruned at the seal, before the scan ran. Repository: nothing was pushed, so the GitHub repo is still empty. The 32 local commits do not contain the token. | [secrets-scan.txt](2026-10-30-two-hour-run/secrets-scan.txt), [secrets.py](2026-10-30-two-hour-run/secrets.py) |
 | 9 | Harness experience | First call under 1 s after the prompt. Codex stopped twice and waited ("Goal achieved"). It never pushed: "no Git remote is configured". 95 calls failed with `rate_limit_exceeded` (2M tokens a minute) from 15:15 to about 15:43, while 20+ subagents ran; Codex retried and moved to HTTP POSTs. One startup warning: `-c` overrides force Codex's embedded mode. No refusal or question blocked it. | [final-pane.txt](2026-10-30-two-hour-run/final-pane.txt), [final.json](2026-10-30-two-hour-run/final.json) |
 | 10 | Spend | Trace: 44.5M input tokens (44.0M cached), 223k output, about $0.61. Codex's record: 117.4M input (116.1M cached), 410.6k output (152k reasoning), about $1.50. Prices are third-party list prices ($0.10 input, $0.01 cached, $0.50 output per 1M tokens), not checked on OpenAI's own page. Well under the $20 cap. | [final.json](2026-10-30-two-hour-run/final.json) `usage` |
@@ -56,13 +82,12 @@ Two deviations, both owner-approved or owner-caused:
 1. **Silent loss after repeated `ingest_lost` (points 1, 2, 3).** Producers failed 17 times in 28 minutes.
    Each failure wrote a `queue_full` gap, then a `recovery` to a new producer. After the last gap at 15:43:15Z,
    no recovery and no record followed. The proxy kept relaying `api.openai.com` (Codex had no direct outside
-   connection; `ss` showed every Codex socket on the loopback proxy). None of it was written. Likely cause: the
-   sink was disabled for good once `MAX_CONNECTION_FAILURES` (10) was reached in a row
-   (`crates/goalcup-cli/src/proxy/ingest.rs`). This is inferred from the code, not proven.
+   connection; `ss` showed every Codex socket on the loopback proxy). None of it was written. Cause: see Root cause.
+   Ten drops in a row, each under 60 s, reached `MAX_CONNECTION_FAILURES` and disabled the sink for good.
    Evidence: [final-reconcile.txt](2026-10-30-two-hour-run/final-reconcile.txt), [final.json](2026-10-30-two-hour-run/final.json).
 2. **`queue_full` under a normal load (point 3).** 4 vCPU, about 20 subagents, under 1 model call a second, but
-   about 52 WebSocket messages a second and up to 1.5 MB per request body. The daemon never used more than 17% of a
-   core, so the bottleneck is probably the queue size or the socket, not the CPU.
+   about 52 WebSocket messages a second and 1.5 MB per request body on average. The daemon's lifetime CPU average
+   was 17% of a core, but that hides bursts: whether its one writer was saturated is NOT VERIFIED.
 3. **Trace size (point 5).** About 1.3 GB an hour while recording; a 168-hour run at this rate is about 200 GB.
    Two causes: every request body carries the whole context again (375 MB for 243 HTTP calls), and each of the
    152,728 WebSocket server messages is its own stream with three records.
@@ -86,10 +111,10 @@ start, so its totals cover the whole run. The 15:09 tick line was lost in a rest
 
 | Fix | Point |
 |---|---|
-| Never stop recording for good: after `ingest_lost`, keep reconnecting, and write one gap that covers the whole lost span with its end time | 1, 2, 3 |
-| Find why the daemon queue fills at about 52 messages a second with 1.5 MB bodies, and size it for 40+ subagents | 1, 3 |
+| Never stop recording for good: a daemon that answers the reconnect is alive, so a `queue_full` drop must not count toward `MAX_CONNECTION_FAILURES`; keep reconnecting, and write one gap that covers the lost span with its end time | 1, 2, 3 |
+| Stop the daemon queue filling: 8 MiB shared by all producers is about five request bodies; size it for 40+ subagents, or apply backpressure per stream instead of dropping the whole producer | 1, 3 |
 | Store a WebSocket connection as one stream per direction, not one per message; measure what repeated context costs the upload | 5 |
-| Make the finish line and `goalcup status` say how long recording was lost, and count model calls one way | 6 |
+| Count a model call only when its frames reach the chain, and make the finish line and `goalcup status` say how long recording was off | 6 |
 | Name the `limit_exceeded` limit in the gap, or remove the limit | 2 |
 | Keep the local trace until the participant verifies it, or make `verify:` point at the server copy | 5 |
 | Upload in smaller chunks, more often, with a capped backoff | 5 |
