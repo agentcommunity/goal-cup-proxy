@@ -20,7 +20,8 @@ Files read for this lane (`wc -l`, inline tests included where the file has them
 
 ## Summary
 
-The run lost about 470 of Codex's 1,261 model calls (37%) and every wire record of 15 of 42 subagents, because one
+The run lost 473 of Codex's 1,261 model calls (37.5%, measured on the server copy, section 9) and every wire record
+of 15 of 42 subagents, because one
 piece of plumbing treated load as death. The proxy sends its frames to the daemon through two 8 MiB queues. The bytes
 travel as JSON arrays of numbers, so 8 MiB holds about 2.3 MB of payload, about one and a half of Codex's 1.5 MB
 full-context HTTP bodies, not five. A rate-limit retry burst from about 20 subagents overflowed the daemon queue 22
@@ -63,7 +64,7 @@ The frames after the latch became nothing: relayed, never encoded, never queued,
 The native reader outlived the wire. It opened files 29 to 32 at 15:48 to 15:56, and native streams went from 27 at
 15:40 to 32 at 16:10 (E/log.jsonl). File 32 by start time is `/root/stage6_integrated_review` (15:56:43). The 11 after
 it are every subagent from 16:44 to 16:53, the same ones with no wire record. Those 11 left nothing on the server
-(probable; the chain was pruned, so unverified).
+(verified on the server copy, section 9.3).
 
 ### 1.2 Two causes the report did not name
 
@@ -264,7 +265,7 @@ time and a `Recovery` (or, for native, the full file bytes) afterwards, and that
   (`proxy admission: accepted=891 intercepted=772 tunneled_not_approved=118 auth_refused=1`, "anchor", "terminal
   record", "seal.json binds it", the dead `verify:` line; E/final-pane.txt) to `host.log` only.
 - **Risk:** "written" is not "synced": a crash can still lose the last 800 ms (`owner.rs:10`). Good enough for a
-  participant line; the server keeps its own count from the chain. The heartbeat's `model_requests` (CH14 keeps it)
+  participant line. (Corrected in 9.6: the server keeps no count from the chain; the Worker never opens a chunk.) The heartbeat's `model_requests` (CH14 keeps it)
   stays a "seen" count; say so in the Worker comment.
 - **Proof test:** the sender against a daemon whose sink drops one producer mid-run; assert the finish count is
   below the seen count, equals the verifier's `wire_model_requests` on the same trace
@@ -842,7 +843,7 @@ A run that fails T1, T2, T3 or T6 blocks the release candidate. The others are f
 
 ## 8. Blind spots and what is not verified
 
-- The full chain was pruned and the server copy was not fetched. Which producer each of the 22 `queue_full` gaps
+- Superseded by section 9: the server copy has since been fetched and read. At the time of writing, which producer each of the 22 `queue_full` gaps
   belonged to, why 5 have no recovery, whether native ever latched, and that the 11 missing transcripts are the last
   11 subagents are inferred from timing, slot order and code.
 - Owner thread throughput, peak queue depth and peak daemon CPU were not measured. If the owner was saturated, a
@@ -863,3 +864,198 @@ A run that fails T1, T2, T3 or T6 blocks the release candidate. The others are f
   projection, not a measurement.
 - A reconcile line saying "Not recorded: 419" could alarm a participant whose run is still valid; the wording must say
   what was kept as well as what was missed.
+
+## 9. Server copy
+
+Source: the "Server copy" section of the run report at commit `74daaa03` on `origin/smart/tender-clarke-qupne3`
+(`docs/research/results/2026-10-30-two-hour-run.md`, from line 123). A reviewer with read-only R2 and database access
+rebuilt the run with `sh scripts/fetch-run.sh r632072599ee7b6fc <outdir>` (R2 GETs only, the index query in a
+`READ ONLY` transaction) and compared it with Codex's 43 rollout files. The verifier was built at `a31094c`, the run's
+own build. Every check printed counts only. The code facts below were checked at the working tree:
+`git diff a31094c HEAD -- crates server` is empty, so the lines cited are the code that ran. This section replaces the
+inferences in sections 1 to 8 wherever the two differ; the table in 9.8 lists each correction.
+
+### 9.1 The whole chain is on the server
+
+| Fact | Value |
+|---|---|
+| Chunks fetched | 20, each matching its SHA-256 and stated length |
+| Chain bytes | 1,304,968,017, seq 0 to 479,319: the same count the local finish reported |
+| Offsets | Run on with no hole; the last chunk meets the committed final heartbeat |
+| Ack lag | The chunk acked at 15:34:47Z ends at seq 341,077; the next ack came at 16:26:11Z |
+| Verifier `--capture-integrity` | Exit 1, `incomplete`, anchor `signed`, sealed, 479,320 records, 23 gaps; findings `gap_recorded`, `producer_recovered`, `producer_unclosed`; ack verified through seq 479,319 (16:54:46Z), no torn tail, 0 records after the deadline; termination `confirmed` |
+
+So point 5 held for run 1: prune at the seal lost nothing that the server did not have, and `fetch-run.sh` rebuilt
+the run by ID and time. What the server copy cannot hold is what was never recorded (9.3, 9.4). The 51-minute ack
+lag matches three backoff waits on one chunk, 987, 975 and 1,083 s, 50 min 45 s in total (4.7). With the 0 to 25%
+jitter (`goalcup-cli/src/upload/policy.rs:283-291`), a 2-minute cap can still wait 150 s, so "no wait over 2 minutes"
+is not a valid pass line; use 2.5 minutes.
+
+### 9.2 Secrets and a side effect of masking
+
+- **Zero hits** for the run's OpenAI key and GitHub token in the whole 1.3 GB, with each stream's segments joined in
+  `source_offset` order: 374.0 MB of HTTP request bodies, 158.0 MB of WebSocket client messages, 103.5 MB of server
+  messages, 48.0 MB of native streams, 36.2 MB of response bodies, 0.9 MB of headers, the open-record metadata, the
+  five side files and the 43 raw rollouts. No body was compressed on the wire.
+- **Positive control:** all 378 `authorization` request headers are `[masked]`. No unmasked `Authorization`,
+  `Proxy-Authorization` or `x-api-key` value anywhere.
+- **Side effect:** the daemon's audit shows 634 `openai_key`, 777 `huggingface_token` and 1 `github_token` spans. In
+  the raw rollouts the same two rules match 103 times, and 102 of those sit in the middle of Codex's
+  `encrypted_content` reasoning blobs. The one `github_token` span is also inside such a blob. None is a credential.
+  No shared rule has a left boundary (`crates/goalcup-daemon/src/redact.rs:195-311`), and 13 vendor-prefix rules can
+  fire inside a base64url run. The recorded copy of those blobs is altered. The wire and the harness's own files are
+  never changed (`crates/goalcup-cli/src/proxy/http.rs:3-9`, `proxy/websocket.rs:3-8`;
+  `crates/goalcup-platform/src/sourcecap/unix.rs:222-227` opens read-only), so Codex kept working.
+- **The real risk is F-07, not the altered blob.** `openai_key` and `google_key` have a class that covers the whole
+  base64url alphabet, so a match runs to the end of the blob. If that is more than 16 KiB, the stream redactor holds
+  past `MAX_HELD_BYTES` (`crates/goalcup-daemon/src/redact/stream.rs:120-125`), fails closed and masks to the next
+  `\n` (`docs/CHEAT-CHECKLIST.md:178-181`). A WebSocket client message is one JSON line, so one such hit masks the
+  rest of a model request. That loses recorded context (point 1), not a secret. Whether any run 1 span did this is
+  unverified: the report gives span counts, not lengths.
+- **A plain `\b` is the wrong fix.** It misses keys after JSON escapes (`\n`, `\t`), percent escapes and ANSI codes,
+  and the stream pass sees no byte before its window (`redact/stream.rs:2082`). The correct form is a guard on the
+  byte before a match, with escape exceptions: about 80 to 110 src and 120 to 180 test lines across `redact.rs`,
+  `redact/stream.rs` and `spikes/redact.py`. It stops catching a key glued after a letter, digit, `_` or `-`.
+
+### 9.3 When recording stopped
+
+- **No proxy record after 15:43:15.44Z.** The last is the `queue_full` gap at seq 478,379 (producer `fd1a2b77`). The
+  940 records after it are all from the daemon: native to 16:54:43Z, the `limit_exceeded` gap, `producer_closed` and
+  `local_finish`.
+- **18 proxy producers, 22 `queue_full` gaps.** One gap each, except three producers with 2, 2 and 3. Each later
+  producer starts at a `recovery`; 17 recoveries for 17 later producers. The last gap has none. None of the 18 has a
+  `producer_closed` record, which is why the verifier says `producer_unclosed`. Every gap has `lost_bytes: null`.
+- **The budget, confirmed.** After `ee7b9797` lived 161 s, nine producers in a row lived 3 to 45 s. The drop at
+  15:43:15 was the 10th failure in a row.
+- **Native slots, confirmed.** The `limit_exceeded` gap (seq 479,285, 16:54:43.810Z) has no stream. It is the native
+  finish marker (`crates/goalcup-daemon/src/runtime/capture/owner.rs:143-145`). All 32 native streams stayed open to
+  the finish. The 32 captured files are the first 32 by start time; the 11 missing are the subagents started from
+  16:44:01Z to 16:53:20Z. They hold 136 `token_count` events. For those 11 threads the trace has neither leg.
+
+### 9.4 Model calls
+
+| | Count |
+|---|---|
+| Wire model calls | **842** (599 generating WebSocket `response.create`, 243 HTTP `POST /v1/responses`, 11 of them cut off), 14:54:41Z to 15:43:13Z. Not counted: 27 warm-ups (`generate: false`), 37 `response.interrupt` |
+| Codex `token_count` with usage | **1,261** in 43 files |
+| Before 15:43:15.44Z | Codex 788, wire 842. The extra 54 are mostly rate-limit retries in the 15:10 bucket: about 97 `rate_limit_exceeded` `error` events and 99 `response.failed`. From 15:40:00Z to the cutoff both sides have exactly 65 |
+| After 15:43:15.44Z | Codex **473** (37.5%), wire **0** |
+| Threads | 28 of 43 rollout threads have wire calls; 21 match exactly, 4 have more on the wire (retries), 3 have less. 1 wire-only thread (1 call). The 15 with no wire call: 4 subagents started 15:48:30Z to 15:56:43Z and the 11 from 16:44Z |
+
+So before the cutoff the wire matched Codex in every bucket once retries are allowed for. Per-thread matching works:
+every HTTP POST carries a `thread-id` header, and WebSocket messages carry the thread id in `client_metadata`. This
+corrects section 5.6 lesson 2, which said HTTP POSTs were not attributed to threads.
+
+### 9.5 Verifier blind spots
+
+| Field | Said | Why | Code |
+|---|---|---|---|
+| `analysis.cross_leg.state` | `consistent` | It judges only zero against non-zero. The wire's last request time is computed but ignored; there is no native time range. A wire that stops 71 minutes before native ends reads `consistent` | `crates/goalcup-verifier/src/capture_analysis/report.rs:326-333, 375-386`; `session.rs:193-241` |
+| `provider_errors.total` | 0 | It counts only the token-source leg. The wire decoder was degraded (429 unknown records), so native won, and the Codex native decoder emits no error at all | `stats.rs:749-779, 907, 949-956, 1023`; `native/codex.rs` has no `kinds::ERROR` |
+
+Only `producer_unclosed` hinted at the loss. Both fields sit in files that K1 deletes, but K1 now waits until after
+Edition 01, so judges will read them. `docs/CHEAT-CHECKLIST.md:46-47` leans on `cross_leg` as a bypass check; it fires
+only when the wire has zero streams. Run 1's observer scripts do not replace them either: `final.py` hard-codes paths
+and a start time and has no pass rule; `secrets.py` decodes each segment alone.
+
+Smallest patches: a `wire_ended_before_native` state when native's last observation is more than 10 minutes after
+the wire's last request (about 20 src, the unit test, the integration test and six byte goldens in
+`crates/goalcup-verifier/tests/fixtures/m2-report-bytes/`); and the wire leg's error total printed beside the primary
+one (about 10 src). Caution: the OpenAI decoder emits an error both for an `error` event and for `response.failed`
+(`openai.rs:475-486, 545-558`), so a naive count may double to about 196. Whether they pair one to one is unverified.
+
+### 9.6 What the server showed
+
+- **Run** `r632072599ee7b6fc`: `flagged_at` 15:29:25Z, `flag_reason` `gaps`, status `open` (by design: a segment
+  sealed before `ends_at` leaves the run open).
+- **Entry:** sealed 16:54:49Z, `model_requests` **1,766** stored. That is the proxy's relay-time counter
+  (`goalcup-cli/src/upload/uploader/heartbeat.rs:61`, `goalcup-cli/src/proxy/api.rs:342-358`), wider than the
+  finish's 1,736 (`generation_requests`): it adds about 30 other requests on a captured host (inferred split).
+- **Heartbeats:** 22. `recording` is `unknown`, then `ok` to 15:14:23Z, then `gaps` from 15:29:25Z. Never `failed`.
+  The word is the daemon's view only (`goalcup-cli/src/run/watch.rs:270-273`, `goalcup-cli/src/run/mod.rs:114-124`);
+  the proxy's latch lives in the CLI and nothing passes it on. Even a `failed` would not re-flag: `note_heartbeat`
+  sets the flag only while `flagged_at IS NULL` (`server/worker/sql/goal-cup-tracer-upload.sql:2831-2832`).
+- **The unread tell:** from 15:44:27Z to the final heartbeat `model_requests` rose by 600 (1,166 to 1,766) while the
+  chain grew 16.9 MB, all native: about 28 KB per new request against about 1.1 MB per request before. From 15:59:30Z
+  to 16:39:33Z nine heartbeats had the same `seq` (Codex was idle then).
+- **Notices:** `started` and one `recording` (15:30:49Z, "gaps"). The `recording` notice has dedupe key `""`
+  (`server/worker/src/notices.ts:150`), so a run gets one, ever. No notice kind exists for "recording stopped"
+  (`server/worker/src/db.ts:396-397`). No dashboard reads the flag, heartbeats or notices.
+
+The smallest signal for Edition 01 is client-side: send `failed` in the heartbeat when the wire has been off 60 s or
+the recorder is lost (about 10 src in `watch.rs`). A run whose first bad heartbeat is `failed` then gets today's
+email worded "(failed)". A run that said `gaps` first, as run 1 did, gets no second email unless the website SQL lets
+`failed` replace `gaps` and the Worker's dedupe key includes the reason (about 8 SQL lines, 2 Worker lines). An
+organizer query on `goal_cup_tracer.heartbeats` (requests rising while bytes per request fall tenfold below the
+entry's own average) needs no deploy; on run 1 it would have fired at about the 15:54 to 15:59 heartbeat (inferred,
+not run).
+
+### 9.7 Size and compression
+
+| Part | MB | Share |
+|---|---|---|
+| Payload | 721.8 | 55% |
+| Base64 growth | 239.3 | 18% |
+| Record framing | 343.9 | 26% |
+| **Chain** | **1,305.0** | |
+
+| Stream source | Streams | Chain MB | Payload MB |
+|---|---|---|---|
+| HTTP request | 758 | 506.3 | 375.4 |
+| WebSocket server message | 152,728 | 465.7 | 103.5 |
+| WebSocket client message | 671 | 214.3 | 158.2 |
+| Native rollout | 32 | 66.6 | 48.2 |
+| HTTP response | 702 | 51.0 | 36.4 |
+
+- **Per-message WebSocket cost, measured:** both WebSocket sources take 680.0 MB of chain for 261.7 MB of payload, an
+  overhead of **418.3 MB**. Server messages alone: **362 MB** (215.1 MB of open and end records, 112.3 MB of segment
+  framing, 34.8 MB of base64). The external review's "about 466 MB" was the whole `ws_server` chain share, payload
+  included.
+- **Long window, measured on the real chunks:** recompressing each stored chunk's byte range at `zstd -3` gives
+  408.9 MB (the 405 MB sent, 3.2 to 1). With `zstd -3 --long=27` it is **100.8 MB, 12.9 to 1, about 4 times
+  smaller**. By chunk: the 264 MB mostly-WebSocket chunk goes from 8.7 to 11.4 to 1; an 88 MB mostly-HTTP chunk from
+  2.7 to 23.1 to 1. The synthetic 14.5 to 37 to 1 (4.5) was an upper range: the real ratio is below its low end, and
+  the real gain (4 times) is a little above the synthetic 3.6 times.
+- **Not measured:** the gain at the shipped chunk size. CH17 makes a chunk about 5 minutes (about 100 MB of chain at
+  run 1's rate); each chunk is its own frame, so the gain may be smaller. The 128 MiB window is needed to decompress;
+  the Worker never decompresses (`server/worker/src/chunks.ts:165-225`) and `fetch-run.sh`'s `zstd -dcq`
+  (`scripts/fetch-run.sh:327`) accepts a 2^27 window by default ([zstd manual](https://github.com/facebook/zstd/blob/dev/programs/zstd.1.md)).
+  Memory on the client: about 140 MiB more while a chunk is built (synthetic, 4.5).
+
+**168 hours, revised.** At run 1's busiest rate (about 218 GB raw a week), 12.9 to 1 gives about **17 GB** compressed
+per busy week, not 19 to 34 GB: about $0.25 a month and $1.52 for 180 days per run, $152 for 100 entries and $760 for
+500, under the 180-day lock. Smaller chunks may compress less, so read 17 GB as the low end.
+
+### 9.8 Corrections to this appendix
+
+| Where | Said | Corrected by the server copy |
+|---|---|---|
+| Summary, N, plan | About 470 of 1,261 calls lost | **473** Codex calls after 15:43:15.44Z had no wire record (37.5%). Wire total 842 against 1,261, a difference of 419, because the wire's 54 retries before the cutoff offset part of the loss |
+| 1.1 step 1 | 95 calls failed `rate_limit_exceeded` | About 97 `error` events with `rate_limit_exceeded` and 99 `response.failed` in the chain |
+| 1.1 step 12 | The heartbeat's `model_requests` is the same "seen" count | It is a wider counter: 1,766 stored against 1,736 printed (9.6) |
+| 1.1, after the table | The 11 late subagents left nothing on the server (probable, unverified) | **Verified:** no native stream and no wire call for those 11 threads |
+| C8 | The seal `limit_exceeded` gap is almost certainly native | **Verified:** native finish marker, 32 streams held to 16:54:43Z |
+| C10 | 5 of 22 gaps have no recovery, 4 unexplained | **Explained:** 18 producers; three had 2, 2 and 3 gaps; 17 recoveries; only the final gap has none |
+| Ask 4 risk | "The server keeps its own count from the chain" | **False.** The Worker never opens a chunk (`server/worker/src/chunks.ts:171-225`). Its only number is the heartbeat's seen count |
+| 4.1 | Per-direction WS server streams save about 218 MB of open and end records and 300 to 320 MB in all | Open and end records of server messages: **215.1 MB**. Total per-message overhead: **362 MB** for server messages, **418 MB** for both directions. The external review's 466 MB included payload |
+| 4.2 | 720.8 MB payload, 240.3 base64, 342.4 framing; about 328 MB of framing is WS server streams | 721.8, 239.3, 343.9 (whole chain at the seal, not the 16:40 observer line). WS server framing and base64: 362 MB |
+| 4.5, 4.6 | Long window, synthetic: 3.6 times smaller, 14.5 to 37 to 1 | Real chunks: **4 times smaller, 12.9 to 1** at run 1's chunk sizes |
+| 4.5 table | 168 h: 19 to 34 GB with the long window | About **17 GB** (low end) |
+| 4.7, T8 | Cap backoff at 2 minutes; pass if no wait over 2 minutes | Jitter allows 150 s. Pass line: no wait over 2.5 minutes |
+| 4.9, 6.3 G12 | The full trace was never scanned for secrets | Scanned on the server copy: 0 hits, all 378 auth headers masked (9.2) |
+| 5.6 lesson 2 | HTTP POSTs were not attributed to threads | Every POST carries a `thread-id` header; per-thread matching works (9.4) |
+| 8, first bullet | The server copy was not fetched | Fetched; producer, recovery and slot facts are now measured, not inferred |
+
+### 9.9 What it adds to the fixes
+
+| Fix | From | Size (est.) | When |
+|---|---|---|---|
+| Heartbeat says `failed` when the wire is off 60 s or the recorder is lost | 9.6 | about 10 src, 30 tests | Before Friday, with the count fix |
+| Organizer query: requests rise, bytes per request collapse | 9.6 | SQL, no deploy | Run 2 and the event |
+| A second email when `failed` follows `gaps` | 9.6 | about 8 SQL lines, 2 Worker lines, 20 tests | Owner's call |
+| Verifier: `wire_ended_before_native`; wire error total | 9.5 | about 30 src, six goldens | Before Friday if green; else judge notes |
+| Observer checks that fail run 1 on the bucket, liveness and native-coverage checks | 9.5 | organizer script | Before run 2 |
+| Name the native limit and file count at the finish | 9.3 | about 3 src | With the native fix |
+| Left guard on vendor-prefix masking rules | 9.2 | about 80 to 110 src | After Edition 01, unless run 2 shows a fail-closed span |
+| Long-window compression | 9.7 | about 4 src | Before run 2, so run 2 measures it at the shipped chunk size |
+| Upload pass line 2.5 minutes | 9.1 | text | Run 2 |
