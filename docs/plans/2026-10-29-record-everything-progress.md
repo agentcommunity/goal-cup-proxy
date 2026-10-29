@@ -77,18 +77,20 @@ Owner decisions: (1) redaction of emails and codex rate-limit blocks in the chai
 
 ## Owner decisions after phase 2 (29 Oct)
 
-- Less code is better: fewer places for things to break.
-- Goal: record everything we can. Runs may last a week with thousands of subagents. Never break the harness.
-- No cap of our own on subagents, calls or bytes. The 1024-file tracking cap goes. The limits that stay are
-  not choices: protocol v5 allows 128 open streams at once per entry (so quiet streams must be closed and
-  reopened), the participant's free disk (record a gap and keep the harness running), and the server's
-  per-run limit (`RUN_MAX_COMPRESSED_BYTES`, 64 GiB; raise it by a deploy if a run needs more).
-- Each subagent stream must link to its parent session and carry a time. A byte-for-byte match of
-  subagent files against disk is no longer a requirement.
-- Masking, option b: drop the email rule and the Codex rate-limit rules; keep every secret rule; add the
-  URL password rule first, because the email rule catches URL passwords today. Nothing more.
+- We over-engineered. Less code is better: fewer places for things to break. Simplify first.
+- Goal: record everything. Never block the harness. Runs may last a week with thousands of subagents.
+- Subagents: record whatever is running now. Protocol v5 lets only 128 streams be open at once, so
+  when slots run out, close the quietest caught-up stream and reopen it from the start when its file
+  grows. The file path is its ID; the server orders by ID and time. No verifier change. The 1024-file
+  cap goes. No other caps of our own.
+- Disk full: no special handling. The harness stops and the user cleans up.
+- Server per-run limit (`RUN_MAX_COMPRESSED_BYTES`, 64 GiB): it guards storage cost against a stuck or
+  hostile client, not against recording. Owner to decide whether to keep or raise it.
+- A byte-for-byte match of subagent files against disk is no longer a requirement.
+- Masking, option b: add the URL password rule first, then drop the email rule and the Codex rate-limit
+  rules; keep every secret rule. Nothing more.
 - Tests run harnesses the way users do. Ask for subagents in the prompt, never force them by config.
   If the provider rejects the requested model name, use one that works and note it.
-- The owner deploys the Worker from a local device.
-- The 2-hour run happens in a Vercel Sandbox. Tenki and week-long runs come later.
-- Design notes: [phase 2 notes](2026-10-29-record-everything-phase2-notes.md).
+- The owner deploys the Worker from a local device. The 2-hour run happens in a Vercel Sandbox.
+- Design notes: [phase 2 notes](2026-10-29-record-everything-phase2-notes.md). Where they propose more
+  code than these decisions, the decisions win.
