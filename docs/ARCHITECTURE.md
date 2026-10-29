@@ -85,7 +85,7 @@ The manifest says, for one harness:
   `resume_args`;
 - which hosts the recording proxy decrypts (`[[capture.hosts]]`, each with a `protocol_hint`) and which CA
   variable the harness reads;
-- which session files to read (`[[capture.native]]`: root, glob, `append_only` or `snapshot`,
+- which session files to read (`[[capture.native]]`: root, glob, `append_only`, `snapshot` or `final_snapshot` (a store copied once after the harness exits),
   `since_run_start`) and how the session is identified (`[capture.identity]`);
 - the home layout (`[capture.home]`): shared or per-run config home, `run_home`, seeds;
 - how to end it (`[capture.termination]`: `process_group` or `native_pid`, grace) and extra

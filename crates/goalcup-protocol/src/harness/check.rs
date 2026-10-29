@@ -373,7 +373,7 @@ fn check_native_row(n: &NativeSpec) -> Result<(), ProtocolError> {
     native_pattern_components(&n.pattern)
         .map_err(|why| refuse("capture.native.pattern", format!("`{}` {why}", n.pattern)))?;
     match (&n.protocol_hint, n.form) {
-        (Some(_), NativeForm::Snapshot) => {
+        (Some(_), NativeForm::Snapshot | NativeForm::FinalSnapshot) => {
             return Err(refuse(
                 "capture.native.protocol_hint",
                 "applies to `append_only` stores only",

@@ -214,7 +214,9 @@ pub enum FrameEvent {
     /// The producer relayed something it did not capture, outside any payload stream: a
     /// fail-open tunnel or opaque fallback (`DecodeFailed`), a full capture table
     /// (`LimitExceeded`), a connection cut while unsettled (`ShutdownDeadline`). Stream zero.
-    /// The daemon records it as a stream-less gap on the producer's own clock.
+    /// The daemon records it as a stream-less gap on the producer's own clock. `ShutdownDeadline`
+    /// also marks a final snapshot the finish skipped because the harness exit was not confirmed;
+    /// the owner writes that gap itself, on its own clock, and no frame carries it.
     Loss {
         reason: GapReason,
     },

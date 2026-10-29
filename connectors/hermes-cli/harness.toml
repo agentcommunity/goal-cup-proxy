@@ -108,6 +108,18 @@ form = "snapshot"
 since_run_start = true
 warn_missing = false
 
+# Hermes's state database: every session from every surface, in the shared home (the root is the
+# whole home, so `since_run_start` is required). Read once, after the harness has exited, at each
+# segment's seal; never while the run goes. All three files (`state.db`, its `-wal` and `-shm`) go
+# in, each as its own stream. A harness killed before its seal keeps no copy of it.
+[[capture.native]]
+name = "state"
+root = "{config_home}"
+pattern = "state.db*"
+form = "final_snapshot"
+since_run_start = true
+warn_missing = false
+
 # Hermes scans raw argv for -p/--profile, --tui, --cli and -h before argparse, which abbreviates.
 [capture.argv_guard]
 long = ["profile", "tui", "cli", "help"]

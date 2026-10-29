@@ -457,6 +457,22 @@ fn a_snapshot_store_takes_no_hint_and_an_append_only_hint_has_a_grammar() {
     admitted(&t, PINNED);
 }
 
+/// A `final_snapshot` store is read whole once at the finish, so it takes no hint. The catch-all
+/// accepts a hint for any form it does not name, so the refusal must be explicit.
+#[test]
+fn a_final_snapshot_store_takes_no_hint() {
+    let mut t = hermes();
+    set(&mut t, &["capture", "native"], "form", "final_snapshot");
+    admitted(&t, PINNED);
+    set(
+        &mut t,
+        &["capture", "native"],
+        "protocol_hint",
+        "codex-jsonl",
+    );
+    refused(&t, PINNED, &["`append_only` stores only"]);
+}
+
 /// One record field, one key: the native store spells it `protocol_hint` like a host does, and
 /// the old spelling `hint` is a key schema 1 does not have.
 #[test]
