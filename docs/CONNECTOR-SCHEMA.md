@@ -631,8 +631,8 @@ continue` appends its `resume_args` as when a session file exists.
 | `capture.native[].name` | required | 1–64 bytes of `[A-Za-z0-9._-]`. |
 | `capture.native[].root` | required | `{config_home}` or `{run_home}` alone, or that token plus `/` and at most eight relative components; each component is 1–64 bytes of ASCII `[A-Za-z0-9._-]` and is neither `.` nor `..`. |
 | `capture.native[].pattern` | required | 1–1024 bytes, relative, at most eight `/`-separated components. |
-| `capture.native[].form` | required | Closed values: `append_only`, `snapshot`. `sqlite` is explicitly a core capability, not schema 1. |
-| `capture.native[].protocol_hint` | optional, default absent | `append_only` only; 1–64 bytes matching `^[a-z][a-z0-9.-]{0,63}$`. |
+| `capture.native[].form` | required | Closed values: `append_only`, `snapshot`, `final_snapshot`. `sqlite` is explicitly a core capability, not schema 1. `final_snapshot` files are read once, after the harness has exited, at each segment's seal; they are never read while the run goes. Older binaries refuse this value. |
+| `capture.native[].protocol_hint` | optional, default absent | `append_only` only; 1–64 bytes matching `^[a-z][a-z0-9.-]{0,63}$`. Refused on `snapshot` and `final_snapshot`. |
 | `capture.native[].since_run_start` | optional, default `false` | Boolean. `true` reads only the files new or written since the run started (D57). |
 | `capture.native[].warn_missing` | optional, default `true` | Boolean. `false` keeps the "no session file" `PROBLEM:` line quiet, for a harness whose supported versions include ones that write no such file (D72). The file is still read whenever it is written. |
 
@@ -657,7 +657,7 @@ directory refuses the creation. A `{run_home}` root is created this way only und
 home (`run_home = "shared"`, D59).
 
 An unknown but syntactically valid `protocol_hint` is admitted and means capture-only unless a
-registered decoder accepts the complete `StreamOpen`. A snapshot cannot carry a hint. The same
+registered decoder accepts the complete `StreamOpen`. A snapshot or `final_snapshot` cannot carry a hint. The same
 hint grammar applies to wire hosts.
 
 ## `[capture.argv_guard]`
@@ -990,8 +990,8 @@ connectors for harnesses nobody ships, one per shape ([what each covers](#the-co
 
 - [`connectors/hermes-cli/harness.toml`](../connectors/hermes-cli/harness.toml): chat mode with a
   `configure` command, its model host read from its own `config.yaml` (`model_host_from`, no
-  `hosts`), a `snapshot` native source read from the run's start, an argv guard and a reserved
-  prefix.
+  `hosts`), a `snapshot` native source read from the run's start, a `final_snapshot` state
+  database (`state.db*`, read at the seal), an argv guard and a reserved prefix.
 - [`connectors/codex-cli/harness.toml`](../connectors/codex-cli/harness.toml): chat mode
   (`interactive`), shared config home, `since_run_start`, `native_pid` termination, extra
   redaction patterns and per-platform env.

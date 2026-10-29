@@ -2540,3 +2540,84 @@ fn the_admitted_file_count_is_only_the_files_the_reader_took() {
     assert!(!capture.admitted(), "a finished reader is not admitted");
     sink.assert_clean();
 }
+
+/// A `final_snapshot` store (Hermes's whole database) is never read while the run goes. Its file
+/// is read once at the finish, after the harness exited, into its own stream with the final bytes.
+#[test]
+fn a_final_snapshot_file_is_read_only_at_finish() {
+    let root = root();
+    root.write("state.db", &pattern_bytes(3000, 1));
+    let sink = CollectSink::new();
+    let mut capture = start(
+        vec![source(
+            "state",
+            &root.home,
+            "state.db*",
+            NativeStoreForm::FinalSnapshot,
+            None,
+        )],
+        NativeCaptureLimits::default(),
+        &sink,
+    );
+    for _ in 0..3 {
+        capture.poll();
+    }
+    assert!(sink.frames().is_empty(), "no stream while the run goes");
+    let last = pattern_bytes(5000, 2);
+    root.write("state.db", &last);
+    capture.poll();
+    assert!(
+        sink.frames().is_empty(),
+        "still no stream while the run goes"
+    );
+    let finished = capture.finish(generous());
+    assert_eq!(
+        (finished.completed_streams, finished.interrupted_streams),
+        (1, 0)
+    );
+    let views = replay(&sink.frames());
+    assert_eq!(labels(&views), ["state:state.db#g1".to_string()]);
+    let (_, view) = by_label(&views, "state:state.db#g1");
+    assert_eq!(view.data, last);
+    assert_eq!(view.hint, None);
+    assert_eq!(
+        view.end.map(|(reason, _)| reason),
+        Some(EndReason::Complete)
+    );
+    sink.assert_clean();
+}
+
+/// A `final_snapshot` file larger than the finish budget keeps what fit and says the tail is
+/// unknown: the existing `ShutdownDeadline` gap. The seal still closes the producer.
+#[test]
+fn a_final_snapshot_over_budget_leaves_a_gap() {
+    let root = root();
+    let content = pattern_bytes(3 * MAX_SEGMENT_BYTES, 7);
+    root.write("state.db", &content);
+    let sink = CollectSink::new();
+    let mut capture = start(
+        vec![source(
+            "state",
+            &root.home,
+            "state.db*",
+            NativeStoreForm::FinalSnapshot,
+            None,
+        )],
+        limits_with_poll_bytes(MAX_SEGMENT_BYTES as u64),
+        &sink,
+    );
+    let finished = capture.finish(NativeFinishBudget {
+        max_bytes: MAX_SEGMENT_BYTES as u64,
+        max_duration_ns: u64::MAX,
+    });
+    assert_eq!(
+        (finished.completed_streams, finished.interrupted_streams),
+        (0, 1)
+    );
+    assert!(finished.closed);
+    let views = replay(&sink.frames());
+    let (_, view) = by_label(&views, "state:state.db#g1");
+    assert_eq!(view.gaps, [(GapReason::ShutdownDeadline, None)]);
+    assert_eq!(view.data, content[..MAX_SEGMENT_BYTES]);
+    sink.assert_clean();
+}

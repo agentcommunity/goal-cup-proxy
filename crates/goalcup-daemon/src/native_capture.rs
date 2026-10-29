@@ -46,7 +46,10 @@
 //! ([`NativeStoreForm::AppendOnly`]) keeps its stream open across polls: EOF of a live file is
 //! not completion, and a quiet poll emits nothing. A snapshot file ([`NativeStoreForm::Snapshot`])
 //! is read to the length observed when its stream opened and then ends `Complete`; a
-//! completed snapshot whose facts later differ is read again as a new generation.
+//! completed snapshot whose facts later differ is read again as a new generation. A final
+//! snapshot ([`NativeStoreForm::FinalSnapshot`]) is not polled at all: its files are discovered,
+//! tracked and read as snapshots only inside [`NativeCapture::finish`], after the harness has
+//! exited, and a file the finish budget does not reach ends `Gap { ShutdownDeadline }`.
 //! Replacement (a different identity), truncation (shorter than the reader position), a
 //! vanished path, a path that became a non-regular file, or a snapshot that changed while it
 //! was read ends the stream with `Gap { SourceChanged, lost_bytes: None }` then
@@ -219,6 +222,9 @@ pub enum NativeStoreForm {
     AppendOnly,
     /// Written whole (a spilled tool result): each generation ends `Complete` once read.
     Snapshot,
+    /// Written whole and read once at [`NativeCapture::finish`], after the harness exited. Never
+    /// polled during the run.
+    FinalSnapshot,
 }
 
 /// One positively scoped native store.
@@ -628,7 +634,7 @@ impl NativeCapture {
     pub fn poll(&mut self) -> NativePollReport {
         let mut report = NativePollReport::new(self.admission());
         if self.finished.is_none() && self.emitter.admit() {
-            self.pass(self.limits.poll_bytes, &mut report);
+            self.pass(self.limits.poll_bytes, false, &mut report);
         }
         report.admission = self.admission();
         report
@@ -658,7 +664,7 @@ impl NativeCapture {
             let mut whole = false;
             loop {
                 let mut pass = NativePollReport::new(NativeAdmission::Ready);
-                self.pass(left.min(self.limits.poll_bytes), &mut pass);
+                self.pass(left.min(self.limits.poll_bytes), true, &mut pass);
                 left = left.saturating_sub(pass.bytes);
                 report.bytes_drained += pass.bytes;
                 whole |= !pass.discovery_capped;
@@ -733,9 +739,10 @@ impl NativeCapture {
 
     /// One discovery-and-read pass. `report` is fresh for each pass, and its stream-less loss
     /// facts are folded into the adapter's lifetime facts here, for polls and finish alike.
-    fn pass(&mut self, byte_budget: u64, report: &mut NativePollReport) {
+    /// `finishing` admits the final-snapshot sources, which no poll walks.
+    fn pass(&mut self, byte_budget: u64, finishing: bool, report: &mut NativePollReport) {
         let seq_before = self.emitter.next_seq;
-        self.discover(report);
+        self.discover(finishing, report);
         self.read(byte_budget, report);
         report.frames += self.emitter.next_seq - seq_before;
         self.facts.fold(report);
@@ -744,10 +751,15 @@ impl NativeCapture {
     /// One window of the discovery cycle: read past what the cycle already examined, then
     /// examine up to `max_dir_entries` entries. A capped window moves the resume point on; one
     /// that reached the end starts the next cycle at the front.
-    fn discover(&mut self, report: &mut NativePollReport) {
+    fn discover(&mut self, finishing: bool, report: &mut NativePollReport) {
         let mut entries_left = self.limits.max_dir_entries;
         let mut pass_over = self.resume_at;
         for (index, source) in self.sources.iter().enumerate() {
+            // A final-snapshot store is walked at the finish alone: during the run its files are
+            // neither tracked nor read.
+            if source.form == NativeStoreForm::FinalSnapshot && !finishing {
+                continue;
+            }
             let mut walker = Walker {
                 index,
                 source,
@@ -1531,7 +1543,7 @@ fn open_generation(
         stream,
         identity: facts.identity.clone(),
         offset: 0,
-        snapshot: (source.form == NativeStoreForm::Snapshot).then_some(facts),
+        snapshot: (source.form != NativeStoreForm::AppendOnly).then_some(facts),
     });
     true
 }

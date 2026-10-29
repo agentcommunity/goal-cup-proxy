@@ -157,6 +157,8 @@ closed_enum! {
     AppendOnly = "append_only",
     /// Files read whole once they settle.
     Snapshot = "snapshot",
+    /// Files read whole once, after the harness has exited. Never read while the run goes.
+    FinalSnapshot = "final_snapshot",
 }
 
 closed_enum! {

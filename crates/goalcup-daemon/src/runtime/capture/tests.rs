@@ -1683,6 +1683,9 @@ fn schema_native_plan_copies_label_hint_form_and_root() {
             let form = match native.form {
                 goalcup_protocol::harness::NativeForm::AppendOnly => NativeStoreForm::AppendOnly,
                 goalcup_protocol::harness::NativeForm::Snapshot => NativeStoreForm::Snapshot,
+                goalcup_protocol::harness::NativeForm::FinalSnapshot => {
+                    NativeStoreForm::FinalSnapshot
+                }
                 other => panic!("{at}: form {other:?}"),
             };
             assert_eq!(
@@ -1742,6 +1745,25 @@ fn every_native_row_is_planned() {
             ("row-2", "row2/*.jsonl", root),
         ]
     );
+}
+
+/// A `final_snapshot` row is planned as a final-snapshot store, with no hint: the form the
+/// schema accepts is the form the adapter reads.
+#[test]
+fn a_final_snapshot_row_is_planned_as_a_final_snapshot_store() {
+    use goalcup_protocol::harness::NativeForm;
+    let mut manifest = manifest_at(&frozen_manifest_paths().remove(0));
+    manifest.capture.native[0].form = NativeForm::FinalSnapshot;
+    manifest.capture.native[0].protocol_hint = None;
+    let plan = native_plan(
+        &manifest.capture,
+        Path::new("/run"),
+        Path::new("/config"),
+        0,
+    )
+    .unwrap();
+    assert_eq!(plan[0].form, NativeStoreForm::FinalSnapshot);
+    assert_eq!(plan[0].hint, None);
 }
 
 /// A harness that keeps no conversation file declares no native source: its entry plans no
