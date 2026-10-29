@@ -30,8 +30,8 @@ on Tenki come later, after the build is clear and good.
 | 7 | Header stream per exchange, credentials masked | merged in #293 (1919549); gate PASS, live PASS (44 header streams, [masked] present, no Bearer) |
 | 8 | Evidence label counts model requests only | merged in #289 (5ce4b2a); gate PASS on rerun, live PASS |
 | 9 | Codex records an API-key login | merged in #295 (2bf49ac, squashed; a model-named trailer stayed off main); gate PASS, live PASS; subagent proof still needed in Task 13 |
-| 10 | Proxy restarts itself on the same port | not started |
-| 11 | Participant sees "recording works" and the right file | not started |
+| 10 | Proxy restarts itself on the same port | merged in #298 (04118da); gate PASS, live PASS; cap of 5 is an owner decision; rebind window has no gap |
+| 11 | Participant sees "recording works" and the right file | merged in #299 (b102cdc); gate PASS, live PASS (kit parser fixed for the new sealed-hosts wording); chat-mode wording to confirm (L21) |
 | 12 | Seams, operations and docs | not started |
 | 13 | Measured runs (build and test first; long runs later) | not started |
 | 14 | Owner steps (for you) | not started |
@@ -61,3 +61,5 @@ on Tenki come later, after the build is clear and good.
 - 29 Oct: Task 5 merged in #296 (eb9ad87). The live run put the subagent transcript in the chain. The kit's own subagent counter reads 0, which is a bug in that counter, not the chain. Owner decision before any long run: the native budget (32 open append-only streams, 1024 files) can lose transcripts past about 32 subagents (ledger L33).
 - 29 Oct: The container restarted twice more; both interrupted pipelines were resumed by hand from the branch state.
 - 29 Oct: Task 6 merged in #297 (cc44537). Review found that the copy could run while the harness might still write, and that the queue cap cut copies near 8 MiB. Both fixed before merge. Owner: release order (older binaries refuse final_snapshot), and trace size grows with the shared Hermes database.
+- 29 Oct: Task 10 merged in #298 (04118da). The restart budget spans a run, including `continue`. Owner: keep the cap of five (spec rule 16 has no cap), and decide a gap reason for connections refused during the rebind window (v5 is frozen).
+- 29 Oct: Task 11 merged in #299 (b102cdc). The finish line names configured hosts, not observed hosts (owner to decide). The kit parser for sealed hosts was updated to the new wording; the product output was correct.
