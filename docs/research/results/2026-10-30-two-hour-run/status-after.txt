@@ -1,0 +1,27 @@
+TEST RUN: an organizer test run, not a competition entry
+Your organizer test run with Codex: Codex has exited, the run is still open.
+  Ends: Thu 5 Nov, 14:54 UTC, 165 h 56 min left.
+  Codex: exited (exit code 0).
+  Upload: up to date (last sent 14 min ago).
+  Problems: 2, below.
+PROBLEM: the recording has gaps: part of what happened was not recorded. Keep the run going. If this keeps happening, write to goalcup@agentcommunity.org.
+PROBLEM: Codex has exited (exit code 0). Your run is still open until Thu 5 Nov, 14:54 UTC. To go on, run: goalcup continue r632072599ee7b6fc
+Your prompt starts with these lines (also in /vercel/.config/goalcup/runs/r632072599ee7b6fc/push-lines.txt):
+  Push to https://github.com/nembal/gc-2h-codex-1030
+  The token is GH_TOKEN in .env.local in this folder. Never print it, and never write it into a file, a git setting or a remote address.
+  After git init, run:
+    git config user.name "nembal"
+    git config user.email "20105844+nembal@users.noreply.github.com"
+    git config credential.https://github.com.helper '!f() { echo username=x-access-token; echo "password=$(sed -n s/^GH_TOKEN=//p "/vercel/proj/.env.local")"; }; f'
+    git remote add origin https://github.com/nembal/gc-2h-codex-1030.git
+Next: run goalcup continue r632072599ee7b6fc
+
+Details:
+run r632072599ee7b6fc
+part ede1ba278cd6261c8 (codex-cli)
+  published 0s ago (2026-10-29T16:58:10Z)
+  capture: incomplete — run sealed, analysis not_run
+  Local capture is finished: the chain is closed on this machine.
+  workspace: /vercel/proj
+  storage: 1304968017 of 1099511627776 bytes used, 0 reserved, durable through seq 479319 (1304968017 bytes)
+  gaps: 23; assistance recorded: no

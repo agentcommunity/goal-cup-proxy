@@ -1,0 +1,51 @@
+{
+  "schema_version": 3,
+  "integrity": "incomplete",
+  "anchor": "local_only",
+  "sealed": true,
+  "validated_records": 268,
+  "validated_bytes": 1304968017,
+  "validated_head": "ede71518f06d04f95ac821378c36ad2885eed3c301ce6dd9e4a84a7b5d9bd36a",
+  "gap_count": 0,
+  "coverage_incomplete": false,
+  "torn_tail": false,
+  "key_source": "pinned",
+  "findings": [
+    "chain_pruned_locally"
+  ],
+  "verified_ack": {
+    "seq": 479319,
+    "hash": "ede71518f06d04f95ac821378c36ad2885eed3c301ce6dd9e4a84a7b5d9bd36a",
+    "acked_at": "2026-10-29T16:54:46Z"
+  },
+  "receipt_clock": null,
+  "terminal": {
+    "seq": 479319,
+    "hash": "ede71518f06d04f95ac821378c36ad2885eed3c301ce6dd9e4a84a7b5d9bd36a",
+    "observed": {
+      "wall": "2026-10-29T16:54:43.861635194Z",
+      "mono_ns": 7225187396067,
+      "clock_id": "5f13d882309042547e6640448e2fb1cd"
+    },
+    "observed_at": "2026-10-29T16:54:43.861635194Z",
+    "kind": "local_finish",
+    "reason": "manual",
+    "termination": {
+      "confirmed": {
+        "requested_at": "2026-10-29T16:54:43Z",
+        "confirmed_at": "2026-10-29T16:54:43Z",
+        "method": "process_signal"
+      }
+    },
+    "seal_manifest_sha256": "cb230f073d803be9b80ebe902e460ea402e35852c4807820a3358e1f9f0b34e2"
+  },
+  "records_after_deadline": null,
+  "last_seq_at_or_before_deadline": null,
+  "last_ack_at": "2026-10-29T16:54:46Z",
+  "entry_id": "ede1ba278cd6261c8",
+  "profile_id": null,
+  "first_failure": {
+    "seq": null,
+    "code": "chain_pruned_locally"
+  }
+}

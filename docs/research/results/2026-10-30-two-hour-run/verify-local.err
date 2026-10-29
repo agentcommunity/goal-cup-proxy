@@ -1,0 +1,2 @@
+goalcup-verify: capture integrity incomplete (anchor local_only, exit 1, findings: chain_pruned_locally)
+goalcup-verify: the chain's first parts were pruned on this machine: verify the server copy

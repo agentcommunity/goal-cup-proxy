@@ -1,0 +1,60 @@
+run r632072599ee7b6fc opened on https://ingest.agentcommunity.org: official start 2026-10-29T14:54:18Z, deadline 2026-11-05T14:54:18Z
+entry ede1ba278cd6261c8
+model service: the connector's default hosts (`model_providers.*.base_url` through `model_provider` not set in config.toml)
+run directory: /vercel/.config/goalcup-runs/goalcup-944f9e13be3767a7
+goalcup: upload: chunk at byte 0 stored: 23535 bytes of chain, 5004 bytes compressed
+goalcup: upload: chunk at byte 23535 stored: 1340978 bytes of chain, 122291 bytes compressed
+goalcup: upload: the server could not be reached (https://ingest.agentcommunity.org/v1/runs/r632072599ee7b6fc/chunks/1364513: Network Error: Resource temporarily unavailable (os error 11)); trying again in 61s
+goalcup: upload: the server could not be reached (https://ingest.agentcommunity.org/v1/runs/r632072599ee7b6fc/chunks/1364513: Network Error: Connection reset by peer (os error 104)); trying again in 130s
+goalcup: upload: chunk at byte 1364513 stored: 264283523 bytes of chain, 30415198 bytes compressed
+goalcup: heartbeat: the server could not be reached (https://ingest.agentcommunity.org/v1/runs/r632072599ee7b6fc/heartbeat: Network Error: Resource temporarily unavailable (os error 11)) (1 in a row); it is sent again at the next beat
+goalcup: heartbeat: the server could not be reached (https://ingest.agentcommunity.org/v1/runs/r632072599ee7b6fc/heartbeat: Network Error: Resource temporarily unavailable (os error 11)) (1 in a row); it is sent again at the next beat
+goalcup: upload: the server could not be reached (https://ingest.agentcommunity.org/v1/runs/r632072599ee7b6fc/chunks/265648036: Network Error: Broken pipe (os error 32)); trying again in 269s
+goalcup: upload: chunk at byte 265648036 stored: 2809728 bytes of chain, 313627 bytes compressed
+goalcup: upload: the server could not be reached (https://ingest.agentcommunity.org/v1/runs/r632072599ee7b6fc/chunks/268457764: Network Error: Resource temporarily unavailable (os error 11)); trying again in 497s
+goalcup: upload: chunk at byte 268457764 stored: 139199898 bytes of chain, 31474411 bytes compressed
+goalcup: upload: chunk at byte 407657662 stored: 104529093 bytes of chain, 31528480 bytes compressed
+goalcup: upload: the server could not be reached (https://ingest.agentcommunity.org/v1/runs/r632072599ee7b6fc/chunks/512186755: Network Error: Resource temporarily unavailable (os error 11)); trying again in 987s
+goalcup: heartbeat: the server could not be reached (https://ingest.agentcommunity.org/v1/runs/r632072599ee7b6fc/heartbeat: Network Error: Unexpected EOF) (1 in a row); it is sent again at the next beat
+goalcup: upload: the server could not be reached (https://ingest.agentcommunity.org/v1/runs/r632072599ee7b6fc/chunks/512186755: Network Error: Resource temporarily unavailable (os error 11)); trying again in 975s
+goalcup: upload: the server could not be reached (https://ingest.agentcommunity.org/v1/runs/r632072599ee7b6fc/chunks/512186755: Network Error: Broken pipe (os error 32)); trying again in 1083s
+goalcup: upload: chunk at byte 512186755 stored: 25834235 bytes of chain, 9455530 bytes compressed
+goalcup: upload: chunk at byte 538020990 stored: 87603816 bytes of chain, 31487401 bytes compressed
+goalcup: upload: chunk at byte 625624806 stored: 76099007 bytes of chain, 31532019 bytes compressed
+goalcup: upload: chunk at byte 701723813 stored: 71373075 bytes of chain, 31552837 bytes compressed
+goalcup: upload: chunk at byte 773096888 stored: 34370009 bytes of chain, 15019447 bytes compressed
+goalcup: upload: chunk at byte 807466897 stored: 81033599 bytes of chain, 31500135 bytes compressed
+goalcup: upload: chunk at byte 888500496 stored: 81005010 bytes of chain, 31514569 bytes compressed
+goalcup: upload: the server could not be reached (https://ingest.agentcommunity.org/v1/runs/r632072599ee7b6fc/chunks/969505506: Network Error: Broken pipe (os error 32)); trying again in 947s
+goalcup: upload: chunk at byte 969505506 stored: 107037961 bytes of chain, 30193529 bytes compressed
+goalcup: upload: chunk at byte 1076543467 stored: 76334120 bytes of chain, 31521601 bytes compressed
+goalcup: upload: chunk at byte 1152877587 stored: 71281751 bytes of chain, 31546500 bytes compressed
+goalcup: upload: chunk at byte 1224159338 stored: 67779497 bytes of chain, 31504335 bytes compressed
+goalcup: upload: chunk at byte 1291938835 stored: 11592850 bytes of chain, 4281332 bytes compressed
+
+Details for support (also in /vercel/.config/goalcup/runs/r632072599ee7b6fc/host.log):
+proxy admission: accepted=891 intercepted=772 tunneled_not_approved=118 auth_refused=1
+Recording works: 1736 model call(s) recorded from api.openai.com.
+sealed hosts (passed through unread): registry.npmjs.org:443 x105 80107 KiB, ab.chatgpt.com:443 x11 24743 KiB, raw.githubusercontent.com:443 x1 9 KiB, github.com:443 x1 size unknown
+entry ede1ba278cd6261c8: finished locally; its terminal record is 479319 and seal.json binds it.
+anchor: the upload server's signed start receipt; its acknowledgements are added to acks.jsonl as the trace uploads.
+harness termination: Confirmed, the harness was asked to stop at 2026-10-29T16:54:43Z and seen stopped at 2026-10-29T16:54:43Z (process signal).
+trace:  /vercel/.config/goalcup-artifacts/artifacts/ede1ba278cd6261c8/trace
+verify: goalcup-verify --capture-integrity /vercel/.config/goalcup-artifacts/artifacts/ede1ba278cd6261c8/trace
+entry ede1ba278cd6261c8: finished locally; its terminal record is 479319 and seal.json binds it.
+anchor: the upload server's signed start receipt; its acknowledgements are added to acks.jsonl as the trace uploads.
+harness termination: Confirmed, the harness was asked to stop at 2026-10-29T16:54:43Z and seen stopped at 2026-10-29T16:54:43Z (process signal).
+trace:  /vercel/.config/goalcup-artifacts/artifacts/ede1ba278cd6261c8/trace
+verify: goalcup-verify --capture-integrity /vercel/.config/goalcup-artifacts/artifacts/ede1ba278cd6261c8/trace
+harness exited: exit code 0.
+
+Codex has exited (exit code 0).
+Your run is still open until Thu 5 Nov, 14:54 UTC, 165 h 59 min left.
+To go on, run: goalcup continue r632072599ee7b6fc (you can do it in another terminal now).
+If your work is done, you need do nothing. The run ends by itself.
+
+Uploading the rest of the run… keep this terminal open until it says the upload is done.
+goalcup: upload: chunk at byte 1303531685 stored: 8198 bytes of chain, 4085 bytes compressed
+goalcup: upload: chunk at byte 1303539883 stored: 1428134 bytes of chain, 416038 bytes compressed
+uploaded: 1304968017 bytes, acknowledged, and the seal.
+Upload done. Nothing more to do in this terminal.

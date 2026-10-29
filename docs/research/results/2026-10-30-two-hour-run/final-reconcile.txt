@@ -1,0 +1,57 @@
+rollout token_count total 1261 files 43
+10-min bucket: harness token_counts vs wire calls
+  2026-10-29T14:50 131 134
+  2026-10-29T15:00 193 192
+  2026-10-29T15:10 181 236
+  2026-10-29T15:20 105 104
+  2026-10-29T15:30 113 111
+  2026-10-29T15:40 159 65
+  2026-10-29T15:50 140 0
+  2026-10-29T16:40 135 0
+  2026-10-29T16:50 104 0
+per thread: sid parent depth path first last harness_tc wire_ws_gen models
+  00ca29f189cb - None None 2026-10-29T14:54:41.117Z 2026-10-29T16:54:38.336Z 591 217 {('LUNA', 'low'): 4}
+  24e54e339599 00ca29f189cb 1 /root/stage_plan 2026-10-29T14:54:53.761Z 2026-10-29T14:55:02.769Z 2 2 {('LUNA', 'low'): 2}
+  3073502a8fd2 00ca29f189cb 1 /root/consumer_ui 2026-10-29T14:55:14.204Z 2026-10-29T14:57:48.668Z 17 17 {('LUNA', 'low'): 2}
+  d4aed945a6a0 00ca29f189cb 1 /root/consumer_data 2026-10-29T14:55:16.155Z 2026-10-29T14:55:49.491Z 6 6 {('LUNA', 'low'): 2}
+  e60c12d1a1d4 00ca29f189cb 1 /root/admin_plan 2026-10-29T14:56:09.185Z 2026-10-29T14:56:16.008Z 1 1 {('LUNA', 'low'): 2}
+  d5c748f8b6fa 00ca29f189cb 1 /root/enterprise_plan 2026-10-29T14:56:17.888Z 2026-10-29T14:56:23.596Z 1 1 {('LUNA', 'low'): 2}
+  a63a45f80f4f 00ca29f189cb 1 /root/consumer_review 2026-10-29T14:57:56.631Z 2026-10-29T14:59:29.864Z 18 18 {('LUNA', 'low'): 2}
+  52950577e03c 00ca29f189cb 1 /root/admin_data 2026-10-29T14:57:59.003Z 2026-10-29T14:58:53.166Z 9 9 {('LUNA', 'low'): 2}
+  159641bd25ff 00ca29f189cb 1 /root/admin_ui 2026-10-29T14:58:00.819Z 2026-10-29T15:00:29.447Z 13 13 {('LUNA', 'low'): 2}
+  ec331cd4ae94 00ca29f189cb 1 /root/admin_review 2026-10-29T15:01:03.187Z 2026-10-29T15:02:05.926Z 10 10 {('LUNA', 'low'): 2}
+  45073490cb04 00ca29f189cb 1 /root/enterprise_data 2026-10-29T15:01:07.419Z 2026-10-29T15:03:46.480Z 20 20 {('LUNA', 'low'): 2}
+  c834588fe1a5 00ca29f189cb 1 /root/enterprise_ui 2026-10-29T15:01:10.323Z 2026-10-29T15:03:51.738Z 19 19 {('LUNA', 'low'): 2}
+  f68074600649 00ca29f189cb 1 /root/enterprise_review 2026-10-29T15:04:22.901Z 2026-10-29T15:06:08.272Z 17 17 {('LUNA', 'low'): 2}
+  f30e596e0a01 00ca29f189cb 1 /root/polish_plan 2026-10-29T15:06:21.119Z 2026-10-29T15:06:37.154Z 3 3 {('LUNA', 'low'): 2}
+  86a8ec2bb7fb 00ca29f189cb 1 /root/navigation_polish 2026-10-29T15:06:43.240Z 2026-10-29T15:08:14.790Z 9 9 {('LUNA', 'low'): 2}
+  96b6042ac890 00ca29f189cb 1 /root/ui_smoke_tests 2026-10-29T15:06:46.081Z 2026-10-29T15:08:30.885Z 15 15 {('LUNA', 'low'): 2}
+  36cb70af421e 00ca29f189cb 1 /root/final_review 2026-10-29T15:08:55.563Z 2026-10-29T15:09:43.670Z 8 8 {('LUNA', 'low'): 2}
+  25473afa410c 00ca29f189cb 1 /root/backend_plan 2026-10-29T15:11:34.591Z 2026-10-29T15:11:59.513Z 2 2 {('LUNA', 'low'): 3}
+  6a2510a72d75 00ca29f189cb 1 /root/api_foundation 2026-10-29T15:13:23.019Z 2026-10-29T15:20:16.891Z 55 44 {('LUNA', 'low'): 3}
+  a59924818ed7 00ca29f189cb 1 /root/auth_api 2026-10-29T15:13:46.971Z 2026-10-29T15:17:01.747Z 27 15 {('LUNA', 'low'): 4}
+  5907d6356ab7 00ca29f189cb 1 /root/wallet_api 2026-10-29T15:13:51.795Z 2026-10-29T15:18:32.977Z 23 45 {('LUNA', 'low'): 3}
+  fceda2d37613 00ca29f189cb 1 /root/consumer_api_ui 2026-10-29T15:18:48.890Z 2026-10-29T15:27:12.900Z 52 3 {('LUNA', 'low'): 3}
+  1759d1c5a502 00ca29f189cb 1 /root/backend_review 2026-10-29T15:27:20.004Z 2026-10-29T15:31:28.612Z 24 24 {('LUNA', 'low'): 3}
+  59477065729e 00ca29f189cb 1 /root/platform_plan 2026-10-29T15:28:51.559Z 2026-10-29T15:33:04.700Z 15 15 {('LUNA', 'low'): 3}
+  972cd4080400 00ca29f189cb 1 /root/schema_access 2026-10-29T15:35:32.922Z 2026-10-29T15:40:48.840Z 22 19 {('LUNA', 'low'): 3}
+  15588487921b 00ca29f189cb 1 /root/admin_server 2026-10-29T15:35:40.364Z 2026-10-29T15:41:07.556Z 21 10 {('LUNA', 'low'): 4}
+  ba92280e76c8 00ca29f189cb 1 /root/enterprise_server 2026-10-29T15:35:47.349Z 2026-10-29T15:45:56.902Z 33 33 {('LUNA', 'low'): 3}
+  3e03e40a451d 00ca29f189cb 1 /root/admin_tests 2026-10-29T15:42:55.824Z 2026-10-29T15:47:57.169Z 21 3 {('LUNA', 'low'): 3}
+  1a6fabf307f2 00ca29f189cb 1 /root/stage6_backend_review 2026-10-29T15:48:30.988Z 2026-10-29T15:53:35.586Z 25 0 {('LUNA', 'low'): 4}
+  61ecd4beb56f 00ca29f189cb 1 /root/admin_console_api 2026-10-29T15:48:51.072Z 2026-10-29T15:52:59.852Z 15 0 {('LUNA', 'low'): 4}
+  dd8bb61ef92d 00ca29f189cb 1 /root/enterprise_console_api 2026-10-29T15:48:58.303Z 2026-10-29T15:52:45.305Z 17 0 {('LUNA', 'low'): 4}
+  1c86ba05858e 00ca29f189cb 1 /root/stage6_integrated_review 2026-10-29T15:56:43.294Z 2026-10-29T15:57:28.721Z 14 0 {('LUNA', 'low'): 2}
+  f25ab829038f 00ca29f189cb 1 /root/stage7_product_plan 2026-10-29T16:44:01.593Z 2026-10-29T16:44:23.471Z 4 0 {('LUNA', 'low'): 3}
+  daa50ddd4334 00ca29f189cb 1 /root/request_lifecycle_server 2026-10-29T16:44:27.222Z 2026-10-29T16:45:58.173Z 17 0 {('LUNA', 'low'): 3}
+  bbeca6522167 00ca29f189cb 1 /root/request_lifecycle_ui 2026-10-29T16:44:29.946Z 2026-10-29T16:46:38.150Z 25 0 {('LUNA', 'low'): 3}
+  94a721e8c5f9 00ca29f189cb 1 /root/stage7_request_review 2026-10-29T16:47:02.264Z 2026-10-29T16:48:02.083Z 11 0 {('LUNA', 'low'): 3}
+  e1ce19f4b6a0 00ca29f189cb 1 /root/stage8_gap_plan 2026-10-29T16:48:38.844Z 2026-10-29T16:48:51.067Z 4 0 {('LUNA', 'low'): 3}
+  767429f4ee4a 00ca29f189cb 1 /root/account_settings_server 2026-10-29T16:49:03.095Z 2026-10-29T16:50:06.166Z 13 0 {('LUNA', 'low'): 3}
+  671ef80668b7 00ca29f189cb 1 /root/account_settings_ui 2026-10-29T16:49:05.840Z 2026-10-29T16:50:55.952Z 25 0 {('LUNA', 'low'): 3}
+  371d0177cc16 00ca29f189cb 1 /root/stage8_account_review 2026-10-29T16:51:16.913Z 2026-10-29T16:52:01.162Z 9 0 {('LUNA', 'low'): 3}
+  8a0b1d40cd20 00ca29f189cb 1 /root/stage9_product_plan 2026-10-29T16:52:36.233Z 2026-10-29T16:52:47.120Z 3 0 {('LUNA', 'low'): 3}
+  1c4cfb3a29f7 00ca29f189cb 1 /root/dispute_tracking_client 2026-10-29T16:53:16.307Z 2026-10-29T16:53:59.909Z 12 0 {('LUNA', 'low'): 3}
+  903f0d75bcfe 00ca29f189cb 1 /root/dispute_tracking_ui 2026-10-29T16:53:20.684Z 2026-10-29T16:54:42.840Z 13 0 {('LUNA', 'low'): 3}
+wire-only threads: ['01a18827-f01d-7651-8650-e2e4df5cb6a3']
+native streams opened in trace: 32
