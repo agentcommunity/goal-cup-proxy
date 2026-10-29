@@ -7,6 +7,20 @@ uses that evidence and adds server upload and event rules. Current support is ma
 Windows uses WSL2, with real-machine validation pending and native Windows planned.
 This file is the map for agents and people. Open work is in [`TODO.md`](TODO.md).
 
+## The seven points
+
+What we build toward, from [VISION.md](VISION.md). Every change is judged against these.
+
+1. **Record every model call** the harness makes, to any provider, for the whole run.
+2. **Record every subagent,** however many and however long.
+3. **Never block or slow the harness.** If something cannot be recorded, note a gap and keep going.
+4. **Never record secrets.**
+5. **Upload everything,** so the server can rebuild the full story by ID and time.
+6. **Tell the participant plainly** what was recorded.
+7. **Work with the harnesses people actually use,** run the way they use them.
+
+Less code is better. Cut before you add. Ready by Friday 6 November 2026.
+
 Read first: the [docs map](docs/README.md), which lists every doc by audience; the
 [event readiness plan](docs/plans/2026-10-20-event-readiness.md), which sets the work to
 6 Nov; and [local next steps](docs/research/LOCAL-NEXT-STEPS.md), what to measure next and in what
