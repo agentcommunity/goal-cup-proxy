@@ -514,6 +514,9 @@ pub(super) fn create_and_gate<'a>(
         details.push(format!("run directory: {}", run.dir.display()));
         raise_open_file_limit(out)?;
         let tunnels_file = crate::run::tunnels_path(cfg, &record.run_id, &info.entry_id);
+        // The accept loop's restarts of the run's earlier parts count against its one limit (the
+        // proxy's own count starts here, so a continued run cannot restart more than the run may).
+        let recorder_restarts_before = previous.as_ref().map_or(0, |state| state.recorder_restarts);
         let proxied = Proxied::start(
             &info,
             profile,
@@ -522,6 +525,7 @@ pub(super) fn create_and_gate<'a>(
             roots,
             credential,
             tunnels_file,
+            recorder_restarts_before,
         )?;
         // A shared CA variable (`SSL_CERT_FILE`, `REQUESTS_CA_BUNDLE`) gets the system's roots
         // plus the recording proxy's CA, so tool children keep their real trust; a harness's own

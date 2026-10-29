@@ -158,6 +158,10 @@ pub struct ProxyConfig {
     pub connect_attempt_timeout: Duration,
     /// The most connection tasks alive at once, `1..=`[`MAX_CONNECTION_TASKS`].
     pub max_connections: usize,
+    /// Restarts of the accept loop that the run's earlier launches already made, at most
+    /// [`MAX_RECORDER_RESTARTS`]. The budget spans the whole run, so a continued run starts with
+    /// the count its last launch kept; zero for a first launch.
+    pub recorder_restarts_before: u64,
 }
 
 impl std::fmt::Debug for ProxyConfig {
@@ -176,6 +180,7 @@ impl std::fmt::Debug for ProxyConfig {
             .field("admission_timeout", &self.admission_timeout)
             .field("connect_attempt_timeout", &self.connect_attempt_timeout)
             .field("max_connections", &self.max_connections)
+            .field("recorder_restarts_before", &self.recorder_restarts_before)
             .finish_non_exhaustive()
     }
 }
@@ -226,6 +231,7 @@ pub async fn start(config: ProxyConfig) -> Result<ProxyHandle, StartError> {
         admission_timeout,
         connect_attempt_timeout,
         max_connections,
+        recorder_restarts_before,
     } = config;
     let deadline = Instant::now() + startup_deadline;
     if startup_deadline.is_zero()
@@ -266,6 +272,10 @@ pub async fn start(config: ProxyConfig) -> Result<ProxyHandle, StartError> {
         }
     };
     let counters = Arc::new(Counters::default());
+    // The run's restarts so far count against the limit, and show in its health.
+    counters
+        .recorder_restarts
+        .store(recorder_restarts_before, Ordering::SeqCst);
     bump(&counters.producers_admitted);
     let observed: Arc<dyn CaptureSink> = Arc::new(ObservedSink {
         inner: sink,
@@ -981,7 +991,14 @@ async fn accept_loop(
                         let _ = tcp.try_write(OVER_CAPACITY_RESPONSE);
                         continue;
                     }
-                    tasks.spawn(serve_connection(tcp, Active::enter(Arc::clone(&shared))));
+                    // Both guards are made here, before the task exists: a task dropped before
+                    // its first poll (a restart or the shutdown cutting the JoinSet) still counts
+                    // as unsettled and is chained as a cut.
+                    tasks.spawn(serve_connection(
+                        tcp,
+                        Active::enter(Arc::clone(&shared)),
+                        Unsettled::enter(Arc::clone(&shared)),
+                    ));
                 }
                 Err(_) => {
                     bump(&shared.counters.accept_errors);
@@ -1111,11 +1128,10 @@ impl Drop for Active {
     }
 }
 
-async fn serve_connection(tcp: TcpStream, active: Active) {
+async fn serve_connection(tcp: TcpStream, active: Active, unsettled: Unsettled) {
     let shared = &*active.0;
     let counters = &shared.counters;
     let _ = tcp.set_nodelay(true);
-    let unsettled = Unsettled::enter(shared);
     let open_tunnel = OpenTunnel::new(&shared.tunnels);
     // A fail-open tunnel is chained as a loss when it is decided, before its first byte is
     // relayed: the tunnel runs inside `admit`, so a task that is cut or panics mid-relay
@@ -1252,13 +1268,13 @@ fn fail_open_counter(counters: &Counters, reason: connect::TunnelReason) -> Opti
 /// includes a connection cut before it relayed anything (still reading the CONNECT head):
 /// conservative, and the same `ShutdownDeadline` mapping the seal request's counter has always
 /// had. A tunnel settles when it is decided, so one cut while open is not counted here.
-struct Unsettled<'a> {
-    shared: &'a Shared,
+struct Unsettled {
+    shared: Arc<Shared>,
     settled: AtomicBool,
 }
 
-impl<'a> Unsettled<'a> {
-    fn enter(shared: &'a Shared) -> Self {
+impl Unsettled {
+    fn enter(shared: Arc<Shared>) -> Self {
         bump(&shared.counters.unsettled);
         Self {
             shared,
@@ -1271,7 +1287,7 @@ impl<'a> Unsettled<'a> {
     }
 }
 
-impl Drop for Unsettled<'_> {
+impl Drop for Unsettled {
     fn drop(&mut self) {
         unbump(&self.shared.counters.unsettled);
         if !*self.settled.get_mut() && !std::thread::panicking() {

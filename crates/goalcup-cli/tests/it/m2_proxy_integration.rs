@@ -2989,3 +2989,35 @@ async fn the_recorder_is_restarted_at_most_five_times() {
     assert!(report.accept_loop_lost, "{report:?}");
     assert_eq!(report.health.recorder_restarts, 5);
 }
+
+/// The restart budget is the run's, not the launch's: a launch that continues a run which already
+/// restarted its recorder four times has one restart left, and the next death is the one past the
+/// limit. The count it starts from shows in its health.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_continued_launch_keeps_the_runs_restart_count() {
+    let pki = TestPki::new("upstream test CA");
+    let sink = DirectSink::new(QUEUE_BYTES);
+    let mut config = RigConfig::new(&pki);
+    config.recorder_restarts_before = 4;
+    let mut rig = Rig::start(config, sink.clone()).await;
+    assert_eq!(rig.handle().health().recorder_restarts, 4);
+    rig.handle().kill_accept_for_test();
+    eventually("the last restart of the run", || {
+        rig.handle().health().recorder_restarts == 5
+    })
+    .await;
+    assert!(!rig.handle().health().recorder_lost);
+    rig.handle().kill_accept_for_test();
+    eventually("the next death is past the run's limit", || {
+        rig.handle().health().recorder_lost
+    })
+    .await;
+    assert_eq!(rig.handle().health().recorder_restarts, 5);
+    assert!(
+        TcpStream::connect(rig.addr).await.is_err(),
+        "the port is still served after the run's limit"
+    );
+    let report = rig.stop().await;
+    assert!(report.accept_loop_lost, "{report:?}");
+    assert_eq!(report.health.recorder_restarts, 5);
+}

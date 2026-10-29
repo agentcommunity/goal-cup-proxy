@@ -797,6 +797,7 @@ pub struct RigConfig {
     pub startup: Duration,
     pub shutdown: Duration,
     pub max_connections: usize,
+    pub recorder_restarts_before: u64,
 }
 
 impl RigConfig {
@@ -809,6 +810,7 @@ impl RigConfig {
             startup: Duration::from_secs(5),
             shutdown: Duration::from_secs(3),
             max_connections: 32,
+            recorder_restarts_before: 0,
         }
     }
 }
@@ -834,6 +836,7 @@ pub fn proxy_config(
         admission_timeout: Duration::from_secs(5),
         connect_attempt_timeout: Duration::from_secs(2),
         max_connections: config.max_connections,
+        recorder_restarts_before: config.recorder_restarts_before,
     }
 }
 

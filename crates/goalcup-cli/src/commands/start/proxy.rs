@@ -77,6 +77,7 @@ pub(super) struct Proxied {
 }
 
 impl Proxied {
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn start(
         info: &CaptureWorkspaceInfo,
         profile: &CaptureSpec,
@@ -85,6 +86,7 @@ impl Proxied {
         roots: UpstreamRoots,
         credential: ProxyCredential,
         tunnels_file: std::path::PathBuf,
+        recorder_restarts_before: u64,
     ) -> Result<Proxied, CliError> {
         let refused = |what: &str, e: &dyn std::fmt::Display| {
             CliError::Refused(format!(
@@ -131,6 +133,7 @@ impl Proxied {
             admission_timeout: DEFAULT_ADMISSION_TIMEOUT,
             connect_attempt_timeout: DEFAULT_CONNECT_ATTEMPT_TIMEOUT,
             max_connections: MAX_CONNECTION_TASKS as usize,
+            recorder_restarts_before,
         };
         let proxy = runtime
             .block_on(crate::proxy::start(config))
