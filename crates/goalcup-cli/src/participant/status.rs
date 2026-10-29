@@ -314,6 +314,24 @@ pub fn problem_state_stale(silent: &str, restart: Restart<'_>) -> String {
     )
 }
 
+/// The recorder's accept loop died and was started again on the same port, `times` times this
+/// run. The recording went on; what was open at each restart was lost.
+pub fn problem_recorder_restarted(times: u64) -> String {
+    let word = if times == 1 { "time" } else { "times" };
+    format!(
+        "the recorder restarted {times} {word}: recording went on, but connections open at each \
+         restart were lost. If this repeats, run goalcup status."
+    )
+}
+
+/// The recorder died past the restart limit and is not running: new connections to the model
+/// service are refused.
+pub fn problem_recorder_lost() -> String {
+    "the recorder stopped and was not restarted, so the agent's connections to the model service \
+     are refused. Run goalcup status to see what to do."
+        .to_string()
+}
+
 pub fn problem_recording_gaps() -> String {
     format!(
         "the recording has gaps: part of what happened was not recorded. Keep the run going. If \
@@ -454,6 +472,7 @@ pub fn problem_no_model_calls(
     running: bool,
 ) -> String {
     let span = match minutes {
+        0 => "less than a minute".to_string(),
         1 => "1 minute".to_string(),
         n => format!("{n} minutes"),
     };

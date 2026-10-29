@@ -374,6 +374,13 @@ fn a_run_crosses_two_platform_stops_and_each_continue_keeps_it_whole() {
             "{entry}: what was typed in it"
         );
     }
+    // The clean last segment ran its finish, which wrote its sealed-connection list under its own
+    // entry's name before the seal went up. The killed segments end without a finish, so only
+    // this one is checked here.
+    let list = goalcup_cli::run::tunnels_path(&rig.cfg, &run_id, &entry2);
+    let text = std::fs::read_to_string(&list).unwrap_or_else(|e| panic!("{}: {e}", list.display()));
+    let head: serde_json::Value = serde_json::from_str(text.lines().next().unwrap()).unwrap();
+    assert_eq!(head["entry_id"], entry2.as_str(), "{}", list.display());
 }
 
 /// The run's clone is gone when the participant continues: a sandbox whose work folder was on a
@@ -428,4 +435,63 @@ fn a_continue_whose_clone_is_gone_is_refused_and_changes_nothing() {
     again.type_line("/exit");
     assert!(again.wait().success(), "{}", again.shown());
     assert_eq!(server.entry_ids(&run_id).len(), 2);
+}
+
+/// Each entry of a continued run has its own sealed-connection list path, one file per entry, so
+/// a later segment's list is written beside the earlier one and never replaces it.
+///
+/// Scope: this is a unit-level check of the path helper, the file naming and the `write` function
+/// with two entries. It does not run `goalcup continue`, so it does not prove that a continue
+/// keeps the earlier entry's list. The continued run in
+/// `a_run_crosses_two_platform_stops_and_each_continue_keeps_it_whole` checks only the last
+/// segment's list, because the killed segments before it write none.
+#[test]
+fn one_tunnel_list_per_entry_path() {
+    use goalcup_cli::proxy::tunnels::{TunnelNote, file_name, write};
+
+    let cfg = tempfile::tempdir().unwrap();
+    let run_id = "run-continued";
+    let entries = ["e0123456789abcdef", "e1123456789abcdef"];
+    let note = |host: &str| TunnelNote {
+        host: host.into(),
+        port: 443,
+        reason: "sign_in",
+        opened: std::time::UNIX_EPOCH,
+        closed: std::time::UNIX_EPOCH,
+        up_bytes: Some(1),
+        down_bytes: Some(2),
+    };
+    let paths: Vec<PathBuf> = entries
+        .iter()
+        .map(|entry| goalcup_cli::run::tunnels_path(cfg.path(), run_id, entry))
+        .collect();
+    assert_ne!(paths[0], paths[1], "one list per entry");
+    for path in &paths {
+        assert_eq!(
+            path.parent(),
+            Some(goalcup_cli::run::run_dir(cfg.path(), run_id).as_path())
+        );
+    }
+
+    // The first segment's finish writes its list; the continue's segment writes its own.
+    write(&paths[0], entries[0], &[note("first.example.test")], 0).unwrap();
+    let first = std::fs::read_to_string(&paths[0]).unwrap();
+    write(&paths[1], entries[1], &[note("second.example.test")], 3).unwrap();
+
+    // The earlier list is untouched, and each file names its own entry on its first line.
+    assert_eq!(std::fs::read_to_string(&paths[0]).unwrap(), first);
+    for (path, entry) in paths.iter().zip(entries) {
+        let text = std::fs::read_to_string(path).unwrap();
+        let head: serde_json::Value = serde_json::from_str(text.lines().next().unwrap()).unwrap();
+        assert_eq!(head["entry_id"], entry, "{}", path.display());
+        assert_eq!(path.file_name().unwrap(), file_name(entry).as_str());
+    }
+    let kept = std::fs::read_dir(goalcup_cli::run::run_dir(cfg.path(), run_id))
+        .unwrap()
+        .filter(|f| {
+            f.as_ref()
+                .is_ok_and(|f| f.file_name().to_string_lossy().starts_with("tunnels-"))
+        })
+        .count();
+    assert_eq!(kept, 2, "one list per entry");
 }

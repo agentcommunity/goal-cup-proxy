@@ -13,6 +13,26 @@
     {
       "label": "main:unknown/unknown.jsonl#g1",
       "protocol_hint": "claude-code-jsonl"
+    },
+    {
+      "label": "subagent-meta:unknown/unknown/subagents/agent-unknown.meta.json#g1",
+      "protocol_hint": null
+    },
+    {
+      "label": "subagents:unknown/unknown/subagents/agent-unknown.jsonl#g1",
+      "protocol_hint": "claude-code-jsonl"
+    },
+    {
+      "label": "tool-results:unknown/unknown/tool-results/unknown#g1",
+      "protocol_hint": null
+    },
+    {
+      "label": "workflow-subagent-meta:unknown/unknown/subagents/workflows/unknown/agent-unknown.meta.json#g1",
+      "protocol_hint": null
+    },
+    {
+      "label": "workflow-subagents:unknown/unknown/subagents/workflows/unknown/agent-unknown.jsonl#g1",
+      "protocol_hint": "claude-code-jsonl"
     }
   ]
 }

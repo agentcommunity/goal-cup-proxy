@@ -25,7 +25,7 @@ const FILLED: &[(&str, &str)] = &[
     ("<session>", "session"),
     ("{config_home}/<sessions>", "{config_home}/sessions"),
     ("<*/*.jsonl>", "*/*.jsonl"),
-    ("<append_only|snapshot>", "append_only"),
+    ("<append_only|snapshot|final_snapshot>", "append_only"),
     ("<config.toml>", "config.toml"),
     ("<mcp_servers>", "mcp_servers"),
     ("<settings.json>", "settings.json"),

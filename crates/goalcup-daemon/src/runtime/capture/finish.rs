@@ -447,7 +447,14 @@ impl Daemon {
         // Stage 5: stop the owner. Native finish gets the rest of the drain share; the owner's
         // exit is awaited until the last instant a stage may begin, and is never joined while it
         // runs. A slow owner is a refusal; its thread stays with the entry for the next finish.
+        // The owner copies final snapshots only when the harness is known to have exited: an
+        // `Unresolved` stop may leave it running (`AlreadyStopped` and `Confirmed` both mean the
+        // harness was observed gone).
         capture.pause_before(FinishStage::OwnerDrain);
+        capture.owner.harness_exited.store(
+            !matches!(termination, TerminationOutcomeV1::Unresolved { .. }),
+            Ordering::Release,
+        );
         let stopped = budget.admits()
             && matches!(
                 capture.stop_owner(budget.native_budget(), Some(budget.last_start())),

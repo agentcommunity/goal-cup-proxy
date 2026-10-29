@@ -46,7 +46,12 @@
 //! ([`NativeStoreForm::AppendOnly`]) keeps its stream open across polls: EOF of a live file is
 //! not completion, and a quiet poll emits nothing. A snapshot file ([`NativeStoreForm::Snapshot`])
 //! is read to the length observed when its stream opened and then ends `Complete`; a
-//! completed snapshot whose facts later differ is read again as a new generation.
+//! completed snapshot whose facts later differ is read again as a new generation. A final
+//! snapshot ([`NativeStoreForm::FinalSnapshot`]) is not polled at all: its files are discovered,
+//! tracked and read as snapshots only inside [`NativeCapture::finish`], and only when the finish
+//! is told the harness has exited ([`NativeFinishBudget::harness_exited`]). Otherwise they are
+//! skipped and [`NativeFinishReport::final_snapshots_skipped`] says so. A file the finish budget
+//! does not reach ends `Gap { ShutdownDeadline }`.
 //! Replacement (a different identity), truncation (shorter than the reader position), a
 //! vanished path, a path that became a non-regular file, or a snapshot that changed while it
 //! was read ends the stream with `Gap { SourceChanged, lost_bytes: None }` then
@@ -93,7 +98,9 @@
 //! owner records a stream-less `CaptureRecord::Gap { LimitExceeded }` when it first rises and
 //! again when it grows. The
 //! finish walks a whole discovery cycle when its budget allows; one that could not is
-//! [`NativeFinishReport::discovery_capped`], and the owner records that too. An entry
+//! [`NativeFinishReport::discovery_capped`], and the owner records that too. A tracked file that
+//! never got a stream slot before the finish is [`NativeFinishReport::uncaptured_files`]; the owner
+//! records one stream-less gap for either at finish. An entry
 //! unavailable in one poll is retried in the next and is not a loss. A finish report with none
 //! of them still does not prove the expected file existed: the owner checks it saw the `Open`
 //! it expected.
@@ -105,6 +112,9 @@
 //! - `NativeCapture::poll(&mut self) -> NativePollReport` — one bounded cadence step.
 //! - `NativeCapture::finish(&mut self, budget: NativeFinishBudget) -> NativeFinishReport` —
 //!   once-only drain, stream termination and ordered producer close.
+//! - `NativeCapture::finish_draining(&mut self, budget, drain: &mut dyn FnMut())` is the same
+//!   finish, calling `drain` before each read pass. A caller whose sink holds about 8 MiB must
+//!   empty it there, or a long finish overflows it.
 //! - `NativeCapture::loss_report(&self) -> NativeLossReport` and `producer(&self) -> &str`.
 //!
 //! The caller owns the sink (and, through it, redaction and persistence), the cadence and
@@ -141,6 +151,7 @@
 //!     let finished = native.finish(NativeFinishBudget {
 //!         max_bytes: 64 << 20,
 //!         max_duration_ns: 10_000_000_000,
+//!         harness_exited: true,
 //!     });
 //!     # let _ = finished;
 //! }
@@ -167,8 +178,9 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::SystemTime;
 
-/// Most native sources one adapter reads.
-pub(crate) const MAX_NATIVE_SOURCES: usize = 8;
+/// Most native sources one capture reads: the protocol's schema-1 row bound, so the two cannot
+/// drift apart.
+pub(crate) const MAX_NATIVE_SOURCES: usize = goalcup_protocol::harness::MAX_NATIVE_ROWS;
 /// Most components in one source pattern.
 pub(crate) const MAX_NATIVE_PATTERN_DEPTH: usize = 8;
 /// Hard ceiling on [`NativeCaptureLimits::max_files`].
@@ -216,6 +228,10 @@ pub enum NativeStoreForm {
     AppendOnly,
     /// Written whole (a spilled tool result): each generation ends `Complete` once read.
     Snapshot,
+    /// Written whole and read once at [`NativeCapture::finish`], after the harness exited (when
+    /// the finish budget says so, see [`NativeFinishBudget::harness_exited`]). Never polled
+    /// during the run.
+    FinalSnapshot,
 }
 
 /// One positively scoped native store.
@@ -305,6 +321,11 @@ pub struct NativeCaptureConfig {
 pub struct NativeFinishBudget {
     pub max_bytes: u64,
     pub max_duration_ns: u64,
+    /// Whether the harness is known to have exited: its termination was `Confirmed` or
+    /// `AlreadyStopped`. Only then are [`NativeStoreForm::FinalSnapshot`] sources read. When it
+    /// is `false` (an unresolved stop, or a drop without a finish) they are skipped, and
+    /// [`NativeFinishReport::final_snapshots_skipped`] says so.
+    pub harness_exited: bool,
 }
 
 /// One observation instant from a [`NativeClock`].
@@ -487,6 +508,9 @@ pub struct NativeFinishReport {
     pub unavailable: u64,
     /// Matched files never tracked because `max_files` was reached, summed over passes.
     pub untracked_files: u64,
+    /// The finish had final-snapshot sources but was not told the harness exited, so it did not
+    /// read them. Nothing of those sources is captured; the owner records one stream-less gap.
+    pub final_snapshots_skipped: bool,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -625,7 +649,7 @@ impl NativeCapture {
     pub fn poll(&mut self) -> NativePollReport {
         let mut report = NativePollReport::new(self.admission());
         if self.finished.is_none() && self.emitter.admit() {
-            self.pass(self.limits.poll_bytes, &mut report);
+            self.pass(self.limits.poll_bytes, false, &mut report);
         }
         report.admission = self.admission();
         report
@@ -640,12 +664,29 @@ impl NativeCapture {
     /// sent only after every stream ended; a latched loss sends none. Once-only: later calls
     /// return the committed result.
     pub fn finish(&mut self, budget: NativeFinishBudget) -> NativeFinishReport {
+        self.finish_draining(budget, &mut || {})
+    }
+
+    /// [`Self::finish`], calling `drain` before each read pass and before the end frames. Every
+    /// frame a pass queues waits in the sink until its owner takes it, and the sink refuses
+    /// payload past about 8 MiB encoded (`QueueFull`, which latches this producer). A finish that
+    /// reads more than that must therefore be drained as it goes.
+    pub fn finish_draining(
+        &mut self,
+        budget: NativeFinishBudget,
+        drain: &mut dyn FnMut(),
+    ) -> NativeFinishReport {
         if let Some(done) = &self.finished {
             return done.clone();
         }
         let mut report = NativeFinishReport::default();
         if self.emitter.admit() {
             report.admitted = true;
+            report.final_snapshots_skipped = !budget.harness_exited
+                && self
+                    .sources
+                    .iter()
+                    .any(|source| source.form == NativeStoreForm::FinalSnapshot);
             let started = self.emitter.clock.now().mono_ns;
             let mut left = budget.max_bytes;
             // The finish walks its own cycle from the front: an entry examined by an earlier
@@ -654,8 +695,13 @@ impl NativeCapture {
             self.facts.cycle = 0;
             let mut whole = false;
             loop {
+                drain();
                 let mut pass = NativePollReport::new(NativeAdmission::Ready);
-                self.pass(left.min(self.limits.poll_bytes), &mut pass);
+                self.pass(
+                    left.min(self.limits.poll_bytes),
+                    budget.harness_exited,
+                    &mut pass,
+                );
                 left = left.saturating_sub(pass.bytes);
                 report.bytes_drained += pass.bytes;
                 whole |= !pass.discovery_capped;
@@ -670,6 +716,7 @@ impl NativeCapture {
                 }
             }
             if self.emitter.live() {
+                drain();
                 self.end_all(&mut report);
             }
             if self.emitter.live() {
@@ -730,9 +777,10 @@ impl NativeCapture {
 
     /// One discovery-and-read pass. `report` is fresh for each pass, and its stream-less loss
     /// facts are folded into the adapter's lifetime facts here, for polls and finish alike.
-    fn pass(&mut self, byte_budget: u64, report: &mut NativePollReport) {
+    /// `admit_final` admits the final-snapshot sources, which no poll walks.
+    fn pass(&mut self, byte_budget: u64, admit_final: bool, report: &mut NativePollReport) {
         let seq_before = self.emitter.next_seq;
-        self.discover(report);
+        self.discover(admit_final, report);
         self.read(byte_budget, report);
         report.frames += self.emitter.next_seq - seq_before;
         self.facts.fold(report);
@@ -741,10 +789,15 @@ impl NativeCapture {
     /// One window of the discovery cycle: read past what the cycle already examined, then
     /// examine up to `max_dir_entries` entries. A capped window moves the resume point on; one
     /// that reached the end starts the next cycle at the front.
-    fn discover(&mut self, report: &mut NativePollReport) {
+    fn discover(&mut self, admit_final: bool, report: &mut NativePollReport) {
         let mut entries_left = self.limits.max_dir_entries;
         let mut pass_over = self.resume_at;
         for (index, source) in self.sources.iter().enumerate() {
+            // A final-snapshot store is walked at the finish alone, and only once the harness is
+            // known to have exited: during the run its files are neither tracked nor read.
+            if source.form == NativeStoreForm::FinalSnapshot && !admit_final {
+                continue;
+            }
             let mut walker = Walker {
                 index,
                 source,
@@ -1528,7 +1581,7 @@ fn open_generation(
         stream,
         identity: facts.identity.clone(),
         offset: 0,
-        snapshot: (source.form == NativeStoreForm::Snapshot).then_some(facts),
+        snapshot: (source.form != NativeStoreForm::AppendOnly).then_some(facts),
     });
     true
 }

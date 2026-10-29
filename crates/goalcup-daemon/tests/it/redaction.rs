@@ -493,6 +493,87 @@ fn a_quoted_json_key_is_the_shape_the_daemon_actually_sees() {
     }
 }
 
+/// Asserts that `probe` loses `secret`, and that every span it gets is the generic kind.
+fn assert_secret_masked(probe: &str, secret: &str) {
+    let out = Redactor::new().apply(probe.as_bytes());
+    assert!(!out.spans.is_empty(), "{probe} produced no span");
+    assert!(
+        out.spans
+            .iter()
+            .all(|s| s.kind == "generic_secret_assignment"),
+        "{probe}: {:?}",
+        out.spans
+    );
+    assert!(
+        !String::from_utf8_lossy(&out.bytes).contains(secret),
+        "{probe} left its secret in the output: {}",
+        String::from_utf8_lossy(&out.bytes)
+    );
+}
+
+/// A camelCase credential key (`accessToken`, `clientSecret`): the key word follows a lowercase
+/// prefix instead of a `_` or `-` segment, which the name-based rules missed.
+#[test]
+fn a_camel_case_key_is_masked() {
+    assert_secret_masked(
+        r#"{"accessToken":"at-0123456789abcdefghij"}"#,
+        "at-0123456789abcdefghij",
+    );
+    assert_secret_masked(
+        r#"{"clientSecret":"s3cr3t-value-0123456789"}"#,
+        "s3cr3t-value-0123456789",
+    );
+}
+
+/// A PHP-style escaped slash inside a JSON value (`1\/\/0gAb…`) is masked whole: the value's
+/// backslash escapes are part of it, and its closing quote still ends it.
+#[test]
+fn an_escaped_slash_in_a_json_value_is_masked() {
+    assert_secret_masked(
+        r#"{"refresh_token":"1\/\/0gAbCdEfGhIjKlMnOpQrStUv"}"#,
+        "0gAbCdEfGhIjKlMnOpQrStUv",
+    );
+}
+
+/// A form-encoded refresh request (RFC 6749 section 6) whose value is percent-encoded
+/// (`1%2F%2F0gAb…`, with `+` and `=` escaped in the same way).
+#[test]
+fn a_percent_encoded_form_refresh_token_is_masked() {
+    assert_secret_masked(
+        "grant_type=refresh_token&refresh_token=1%2F%2F0gAbCdEfGhIjKlMnOpQrStUv",
+        "0gAbCdEfGhIjKlMnOpQrStUv",
+    );
+}
+
+/// A form-encoded refresh request whose value takes the dotted shape (`0.AXoA…`): a digit, a
+/// dot, then token characters.
+#[test]
+fn a_dotted_form_refresh_token_is_masked() {
+    assert_secret_masked(
+        "grant_type=refresh_token&refresh_token=0.AXoA-bcdefghijklmnopqrstuvwxyz_0123",
+        "AXoA-bcdefghijklmnopqrstuvwxyz_0123",
+    );
+}
+
+/// The unspaced `=` value must carry a `%XX` escape or the dotted shape, and sixteen units either
+/// way. Without that rule every path after a secret-named key is a secret. These are code and
+/// paths, and each must reach the chain unchanged.
+#[test]
+fn an_unspaced_value_without_an_escape_or_the_dotted_shape_is_left_alone() {
+    for probe in [
+        "git clone --token=src/components/some-long-file-name.tsx",
+        "grep --secret=/home/user/projects/agentcommunity/app/page.tsx",
+        "let token = entry.keys.signing_key",
+        "grant_type=refresh_token&client_id=abc",
+        // An escape does not lower the floor: this value is fifteen units.
+        "token=0123456789abcd%2F",
+    ] {
+        let out = Redactor::new().apply(probe.as_bytes());
+        assert_eq!(out.spans.len(), 0, "{probe} was redacted");
+        assert_eq!(out.bytes, probe.as_bytes(), "{probe} changed");
+    }
+}
+
 /// The shell/TOML literal keeps `redact.py`'s original narrow value class. Widening it to
 /// `[A-Za-z0-9_\-+/=.]{16,}` to catch base64 would put every dotted expression after a
 /// `token =` inside a span — a source line, not a secret, removed from the chain
@@ -1400,8 +1481,8 @@ fn with_script(body: &str) -> String {
 const SCRIPT_RULE_SPELLING_DELTAS: &[(&str, &str, &str)] = &[
     (
         "generic_secret_assignment",
-        r#"(?i)(api[_-]?key|secret|token|password)\s*[=:]\s*(?:\\{0,7}['\"])?([A-Za-z0-9_\-]{16,})"#,
-        r#"(?i)(?:api[_-]?key|secret|token|password)\s*[=:]\s*(?:\\{0,7}['"])?(?:[A-Za-z0-9_\-]{16,})"#,
+        r#"(?i)(api[_-]?key|secret|token|password)(?:\s*[=:]\s*(?:\\{0,7}['\"])?([A-Za-z0-9_\-]{16,})|=(%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){15,}|[A-Za-z0-9_.~+/=\-]{1}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){14,}|[A-Za-z0-9_.~+/=\-]{2}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){13,}|[A-Za-z0-9_.~+/=\-]{3}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){12,}|[A-Za-z0-9_.~+/=\-]{4}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){11,}|[A-Za-z0-9_.~+/=\-]{5}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){10,}|[A-Za-z0-9_.~+/=\-]{6}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){9,}|[A-Za-z0-9_.~+/=\-]{7}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){8,}|[A-Za-z0-9_.~+/=\-]{8}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){7,}|[A-Za-z0-9_.~+/=\-]{9}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){6,}|[A-Za-z0-9_.~+/=\-]{10}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){5,}|[A-Za-z0-9_.~+/=\-]{11}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){4,}|[A-Za-z0-9_.~+/=\-]{12}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){3,}|[A-Za-z0-9_.~+/=\-]{13}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){2,}|[A-Za-z0-9_.~+/=\-]{14}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){1,}|[A-Za-z0-9_.~+/=\-]{15,}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2})*|[0-9]\.[A-Za-z0-9_.~+/=\-]{14,}))"#,
+        r#"(?i)(?:api[_-]?key|secret|token|password)(?:\s*[=:]\s*(?:\\{0,7}['"])?[A-Za-z0-9_\-]{16,}|=(?:%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){15,}|[A-Za-z0-9_.~+/=\-]{1}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){14,}|[A-Za-z0-9_.~+/=\-]{2}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){13,}|[A-Za-z0-9_.~+/=\-]{3}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){12,}|[A-Za-z0-9_.~+/=\-]{4}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){11,}|[A-Za-z0-9_.~+/=\-]{5}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){10,}|[A-Za-z0-9_.~+/=\-]{6}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){9,}|[A-Za-z0-9_.~+/=\-]{7}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){8,}|[A-Za-z0-9_.~+/=\-]{8}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){7,}|[A-Za-z0-9_.~+/=\-]{9}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){6,}|[A-Za-z0-9_.~+/=\-]{10}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){5,}|[A-Za-z0-9_.~+/=\-]{11}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){4,}|[A-Za-z0-9_.~+/=\-]{12}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){3,}|[A-Za-z0-9_.~+/=\-]{13}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){2,}|[A-Za-z0-9_.~+/=\-]{14}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){1,}|[A-Za-z0-9_.~+/=\-]{15,}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2})*|[0-9]\.[A-Za-z0-9_.~+/=\-]{14,}))"#,
     ),
     (
         "email",
@@ -1646,6 +1727,16 @@ fn shared_rule_probes() -> Vec<String> {
     add(format!("api_key={}", a(15)));
     add(format!("tokenizer={}", a(20)));
     add(format!("token {}", a(20)));
+    // The form-encoded value: sixteen units with a `%XX` escape, or the dotted shape. Paths and
+    // code after the same keys are not secrets.
+    add(format!("refresh_token=1%2F%2F{}", a(16)));
+    add(format!("refresh_token=0.{}", a(16)));
+    add(format!("token={}%2F{}", a(8), a(7)));
+    add(format!("token={}%2F{}", a(8), a(6)));
+    add("token=0123456789abcd%2F".into());
+    add("git clone --token=src/components/some-long-file-name.tsx".into());
+    add("grep --secret=/home/user/projects/agentcommunity/app/page.tsx".into());
+    add("let token = entry.keys.signing_key".into());
     // email
     add("write to a@b.co or user.name+tag@ex-ample.com.".into());
     add("a@b".into());
@@ -2263,7 +2354,7 @@ const PEM_PIECES: &[&str] = &[
     "MIIBOgIBAAJBAKj34GkxFhD9",
     "0vcNLYLInFEX6Ppy1tPf9Cnz+/=",
     "ghp_ABCDEFGHIJKLMNOPQRSTUVWX",
-    "AKIAABCDEFGHIJKLMNOP",
+    "AKIAIOSFODNN7EXAMPLE",
     "Bearer ",
     "abcdefgh",
     "KEY-----",

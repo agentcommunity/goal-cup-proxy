@@ -792,6 +792,7 @@ impl Chain {
                 admission_timeout: Duration::from_secs(5),
                 connect_attempt_timeout: Duration::from_secs(2),
                 max_connections: 16,
+                recorder_restarts_before: 0,
             }),
         )
         .await

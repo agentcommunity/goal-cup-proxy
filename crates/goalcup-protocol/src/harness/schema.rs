@@ -157,6 +157,8 @@ closed_enum! {
     AppendOnly = "append_only",
     /// Files read whole once they settle.
     Snapshot = "snapshot",
+    /// Files read whole once, after the harness has exited. Never read while the run goes.
+    FinalSnapshot = "final_snapshot",
 }
 
 closed_enum! {
@@ -485,7 +487,8 @@ pub struct CaptureSpec {
     pub home: HomeSpec,
     pub ca: CaSpec,
     pub identity: IdentitySpec,
-    /// Zero or one entry in schema 1 (an array so that 1..=N is a later additive widening).
+    /// Zero to eight entries in schema 1 (`MAX_NATIVE_ROWS`): one per session file or store the
+    /// harness keeps. Each row has its own name and its own root and pattern.
     #[serde(default)]
     pub native: Vec<NativeSpec>,
     #[serde(default)]

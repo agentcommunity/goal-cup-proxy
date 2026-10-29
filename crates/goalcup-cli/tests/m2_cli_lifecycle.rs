@@ -1681,7 +1681,9 @@ fn an_existing_isolated_home_preserves_its_exact_leaf_alias() {
 #[test]
 fn unsafe_shared_capture_home_leaves_refuse_before_a_request_or_child() {
     let _lock = table_lock::TableLock::acquire();
-    for case in ["dangling", "file", "loop", "wide"] {
+    // A folder open to the group or the world is repaired to 0700, not refused (see
+    // `a_home_goal_cup_made_with_a_loose_mode_is_fixed`); `restricted` is unsafe in another way.
+    for case in ["dangling", "file", "loop", "restricted"] {
         let rig = Rig::new();
         let homes = rig.cfg.join("capture-homes");
         std::fs::create_dir_all(&homes).unwrap();
@@ -1690,10 +1692,10 @@ fn unsafe_shared_capture_home_leaves_refuse_before_a_request_or_child() {
             "dangling" => std::os::unix::fs::symlink(rig.root.join("missing"), &alias).unwrap(),
             "file" => std::fs::write(&alias, b"not a directory").unwrap(),
             "loop" => std::os::unix::fs::symlink(&alias, &alias).unwrap(),
-            "wide" => {
+            "restricted" => {
                 std::fs::create_dir(&alias).unwrap();
                 use std::os::unix::fs::PermissionsExt;
-                std::fs::set_permissions(&alias, std::fs::Permissions::from_mode(0o755)).unwrap();
+                std::fs::set_permissions(&alias, std::fs::Permissions::from_mode(0o500)).unwrap();
             }
             _ => unreachable!(),
         }

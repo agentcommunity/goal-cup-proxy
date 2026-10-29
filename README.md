@@ -35,7 +35,8 @@ also hand the setup to your own agent with the [goal-cup-setup skill](skills/goa
    harnesses and lets you pick one, opens it once in its own isolated home so you sign in (or
    paste your API key there) and set it never to stop for approval
    ([set up your harness for a 168-hour run](docs/HARNESS-SETUP.md)), and checks this machine.
-   Run it until every step says `[ok]`. It needs no GitHub and keeps no key.
+   Run it until every step says `[ok]` or `[warn]`; a `[warn]` says what to watch and does not
+   hold a step back. It needs no GitHub and keeps no key.
    <a id="the-access-token"></a>The harness's access token passes through the recording proxy's
    memory on its way to the model service; it is forwarded unread and never written
    ([`crates/goalcup-cli/src/proxy/http.rs`](crates/goalcup-cli/src/proxy/http.rs)). For Hermes, the

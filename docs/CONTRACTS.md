@@ -66,8 +66,17 @@ denies unknown fields; a missing `Option` field reads as `None`.
   own observations. Monotonic values compare only inside one `clock_id`. Cross-producer order is
   chain append order.
 - Retained metadata is a whitelist: label, hint, method, host, path (no query or fragment),
-  status, content type. No header, cookie, auth fingerprint or arbitrary map. A native label is
-  a scoped relative path plus a generation, never an absolute path.
+  status, content type. No header value, cookie, auth fingerprint or arbitrary map is kept as
+  metadata. Request and response heads are kept as bytes in header streams (`http-head-v1`, one
+  per direction for each exchange on an opened host, with no method, so never a model call). The
+  proxy masks credentials before they reach the chain: the value of `authorization`,
+  `proxy-authorization`, `cookie`, `set-cookie`, `x-api-key`, `api-key`, `x-goog-api-key`, and of
+  any header whose name contains `key`, `token`, `secret`, `password` or `auth`, becomes
+  `[masked]`; a `Bearer` or `Basic` credential in any header value (whatever the header is called),
+  the userinfo of a URL, and credential-named query values are masked the same way. A query value
+  is credential-named when its name matches the header rule, or is `sig`, or contains `signature`
+  (signed-URL parameters). A native label is a scoped relative path
+  plus a generation, never an absolute path.
 - Connection `Open` admits `alpn` of `None` or `http/1.1` only. A recovered socket emits `Open
   { already_open: true }` and, for WebSocket, `UpgradedWebSocket` before new payload. `Close`
   carries `Complete`, `Interrupted` or `TransportError` and no exception text.
@@ -201,8 +210,9 @@ next finish commits that terminal to the registry (`SealWritten` when `seal.json
   none free it is relayed as bytes and counted in `capture_table_full`.
 - One process-wide monotonic clock, `proxy::metadata::capture_time()`, serves all proxy
   observations.
-- Native capture reads a connector's zero or one `[[capture.native]]` source (D74). Hints are open strings. An
-  unknown hint is captured and reported as unsupported semantics.
+- Native capture reads a connector's zero to eight `[[capture.native]]` sources (D74,
+  `MAX_NATIVE_ROWS`), each planned as its own source. Hints are open strings. An unknown hint is
+  captured and reported as unsupported semantics.
 
 ### Proxy loss in the stream (H-16)
 
@@ -527,18 +537,24 @@ Every capture child of `goalcup start` is spawned through `launch::spawn_gated`.
   freeze. The v5 reader reads only the named files. An absent receipt or ack file is not an error,
   and it opens no other file in the trace directory. The sealed-connection list
   `tunnels-<entry_id>.jsonl` (format tag `goalcup-tunnels-v1`, D74) is one too: written once at
-  finish in the run's directory (mode 0600), not in the trace directory. Its first line is
-  `{"format":"goalcup-tunnels-v1","entry_id":...}`, then one line per tunnel (`host`, `port`,
-  `reason`, `opened`, `closed` in RFC 3339 UTC, `up_bytes`, `down_bytes`, the bytes `null` when the
-  tunnel ended in an error or was cut at the stop), at most 10,000 of them, and last
-  `{"dropped":N}`. It goes to the event server with the seal (at most 8 MiB) and is kept beside
-  it. No hash binds it, and the v5 verifier never reads it. A run that ends without a finish (a
-  crash, a killed process) has no list.
+  finish in the run's directory (mode 0600), not in the trace directory, one file per entry. Its
+  first line is `{"format":"goalcup-tunnels-v1","entry_id":...}`, then one line per tunnel (`host`,
+  `port`, `reason`, `opened`, `closed` in RFC 3339 UTC, `up_bytes`, `down_bytes`, the bytes `null`
+  when the tunnel ended in an error or was cut at the stop), at most 10,000 of them, and last
+  `{"dropped":N}`. The seal carries it as `tunnels_jsonl` (at most 8 MiB, verbatim), and the server
+  keeps it beside the seal as `traces/<event>/<run>/<entry>/tunnels.jsonl`: create-only, so the
+  first list kept wins. The server reads only the first line, which must name this entry's
+  `format` and `entry_id`; any other first line refuses the seal (400) and keeps nothing. No hash
+  binds the list, and the v5 verifier never reads it. A run that ends without a finish (a crash, a
+  killed process) has no list for that entry. `scripts/fetch-run.sh` brings the list back beside
+  the seal when the seal carried one.
 - **Not frozen.** The seven `FrameEvent` kinds are the producer-to-daemon seam; a change bumps
   `CONTROL_API_VERSION`. The status projection (`capture_status.rs`) is not a record.
 - **Reader rule.** A verifier change may not turn a previously valid v5 trace invalid without a
-  `docs/DECISIONS.md` entry. The server is at least as new as the newest client: an unknown
-  `protocol_version` is refused with `client_newer`, and the evidence stays Pending locally.
+  `docs/DECISIONS.md` entry. Version gating on the server is `MIN_COMPETITION_VERSION` only (see
+  `server/worker/README.md`): it refuses a competition device request or open from a goalcup older
+  than the minimum. No client sends `protocol_version` in a request, and the server never refuses
+  a newer client with `client_newer`; that refusal is not implemented.
 - **Guards.** Writer: the per-record goldens, the field-set table and the round-trip test in
   `goalcup-protocol/tests/it/m2_contract.rs`. Reader: the corpus
   `goalcup-verifier/tests/fixtures/v5-corpus/` with its exits, finding codes and report fields in

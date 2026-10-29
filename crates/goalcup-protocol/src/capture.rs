@@ -24,6 +24,21 @@ pub use crate::capture_status::{
 /// The protocol version of every envelope this crate writes or reads (D54).
 pub const M2_PROTOCOL_VERSION: u32 = 5;
 
+/// Protocol hint on a recorded HTTP header stream (a request's start line and headers, with
+/// credential values masked). It names a recorded artifact, not a model request.
+pub const HTTP_HEAD_HINT: &str = "http-head-v1";
+/// Protocol hint on the sealed-connection list (`goalcup-tunnels-v1`). It names a side
+/// artifact, not a model request.
+pub const TUNNEL_LIST_HINT: &str = "goalcup-tunnels-v1";
+
+/// Whether a protocol hint names a recorded artifact rather than a model request. Every side
+/// artifact hint belongs here, so the producer's model-call rule and the verifier's count
+/// exclude the same set.
+#[must_use]
+pub fn is_artifact_hint(hint: &str) -> bool {
+    hint == HTTP_HEAD_HINT || hint == TUNNEL_LIST_HINT
+}
+
 /// Bound on one source chunk and, separately, on one sanitized segment's bytes.
 pub const MAX_SEGMENT_BYTES: usize = 64 * 1024;
 /// Launch resource bound on the decoded goal.
@@ -148,7 +163,8 @@ impl From<ConnectionEventWire> for ConnectionEvent {
 }
 
 /// The whitelisted, sanitized metadata of one stream. `path` never carries a query or
-/// fragment; there are no headers, cookies or arbitrary maps.
+/// fragment; the metadata has no headers, cookies or arbitrary maps. Header text is never here: a
+/// request's or response's head is its own header stream (`http-head-v1`), with credentials masked.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CaptureMeta {
@@ -199,7 +215,9 @@ pub enum FrameEvent {
     /// The producer relayed something it did not capture, outside any payload stream: a
     /// fail-open tunnel or opaque fallback (`DecodeFailed`), a full capture table
     /// (`LimitExceeded`), a connection cut while unsettled (`ShutdownDeadline`). Stream zero.
-    /// The daemon records it as a stream-less gap on the producer's own clock.
+    /// The daemon records it as a stream-less gap on the producer's own clock. `ShutdownDeadline`
+    /// also marks a final snapshot the finish skipped because the harness exit was not confirmed;
+    /// the owner writes that gap itself, on its own clock, and no frame carries it.
     Loss {
         reason: GapReason,
     },

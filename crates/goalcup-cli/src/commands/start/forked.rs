@@ -68,6 +68,10 @@ pub(super) struct Forked<'a> {
     /// The model calls the run's earlier parts recorded, by its `state.json` (D73).
     /// `None` for a first launch, or a run whose earlier parts a build before 0.7.1 ran.
     pub(super) model_calls_before: Option<u64>,
+    /// The accept-loop restarts the run's earlier parts recorded. The recording proxy's count
+    /// starts here, and so does the run's launch state, so a run stopped before its first watch
+    /// tick cannot write a state with a fresh restart budget.
+    pub(super) recorder_restarts_before: u64,
     /// The run's ids and folders, held back from the launch block and written to its
     /// `host.log` once it is open.
     pub(super) details: Vec<String>,
@@ -305,6 +309,9 @@ pub(super) struct Exited<'a> {
     pub(super) left_running: Option<CliError>,
     /// The run's state file.
     pub(super) keeper: crate::run::StateKeeper,
+    /// How long the harness ran and whether its connections failed the TLS handshake: what the
+    /// end-of-run block says when the watch tick did not call the harness silent.
+    pub(super) silence: crate::run::NoModelCalls,
 }
 
 #[cfg(test)]

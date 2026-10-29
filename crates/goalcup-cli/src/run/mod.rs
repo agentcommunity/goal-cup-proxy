@@ -18,7 +18,7 @@ use crate::CliError;
 use serde::{Deserialize, Serialize};
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 pub use time_left::TimeLeft;
 
@@ -269,6 +269,14 @@ pub struct RunState {
     /// `state.json` an older build wrote.
     #[serde(default)]
     pub resume_failed: bool,
+    /// The recording proxy's accept loop died and was started again on the same port this many
+    /// times (at most five). Absent from a `state.json` an older build wrote.
+    #[serde(default)]
+    pub recorder_restarts: u64,
+    /// The recording proxy died past the restart limit: no new connection is served. Absent from
+    /// a `state.json` an older build wrote.
+    #[serde(default)]
+    pub recorder_lost: bool,
 }
 
 /// What the watch tick saw when it called the run's harness silent: no model call recorded.
@@ -446,6 +454,8 @@ impl RunState {
             no_model_calls: None,
             model_calls: None,
             resume_failed: false,
+            recorder_restarts: 0,
+            recorder_lost: false,
         }
     }
 
@@ -540,6 +550,15 @@ impl RunState {
                 self.disk.free_bytes,
             )));
         }
+        // The recorder's own trouble is the participant's whatever the run's state: a restart is
+        // said once the run has one, and a lost recorder is said as long as it is lost.
+        if self.recorder_lost {
+            lines.push(participant::problem_recorder_lost());
+        } else if self.recorder_restarts > 0 {
+            lines.push(participant::problem_recorder_restarted(
+                self.recorder_restarts,
+            ));
+        }
         if let Err(why) = &self.sleep_lock
             && !self.ended
         {
@@ -613,6 +632,9 @@ pub struct RunSignals {
     model_calls_before: u64,
     /// The recording proxy's count of harness connections that failed its TLS handshake.
     client_tls: Arc<AtomicU64>,
+    /// The recording proxy's count of accept-loop restarts, and whether it is lost.
+    recorder_restarts: Arc<AtomicU64>,
+    recorder_lost: Arc<AtomicBool>,
     upload: Arc<Mutex<UploadVital>>,
     /// The uploader's count of what is left of the run, each time it is set.
     time_left: Arc<Mutex<Option<TimeLeft>>>,
@@ -663,6 +685,8 @@ impl RunSignals {
             generation_requests: Arc::default(),
             model_calls_before: 0,
             client_tls: Arc::default(),
+            recorder_restarts: Arc::default(),
+            recorder_lost: Arc::default(),
             upload: Arc::default(),
             time_left: Arc::default(),
             probe: None,
@@ -698,6 +722,14 @@ impl RunSignals {
     /// proxy's).
     pub fn client_tls_from(mut self, counter: Arc<AtomicU64>) -> RunSignals {
         self.client_tls = counter;
+        self
+    }
+
+    /// These signals, with the recording proxy's accept-loop restarts and its lost flag read
+    /// from `restarts` and `lost`.
+    pub fn recorder_from(mut self, restarts: Arc<AtomicU64>, lost: Arc<AtomicBool>) -> RunSignals {
+        self.recorder_restarts = restarts;
+        self.recorder_lost = lost;
         self
     }
 
@@ -739,6 +771,16 @@ impl RunSignals {
     /// Harness connections the recording proxy could not complete a TLS handshake with so far.
     pub fn client_tls_failures(&self) -> u64 {
         self.client_tls.load(Ordering::SeqCst)
+    }
+
+    /// Times the recording proxy's accept loop was restarted so far.
+    pub fn recorder_restarts(&self) -> u64 {
+        self.recorder_restarts.load(Ordering::SeqCst)
+    }
+
+    /// Whether the recording proxy is lost: its accept loop died past the restart limit.
+    pub fn recorder_lost(&self) -> bool {
+        self.recorder_lost.load(Ordering::SeqCst)
     }
 
     /// The uploader set its count of what is left of the run.
@@ -1263,6 +1305,31 @@ mod tests {
         assert_eq!(lines.len(), 1, "{lines:?}");
         assert!(lines[0].contains("10 s"), "{lines:?}");
         assert!(lines[0].contains("run: goalcup upload"), "{lines:?}");
+    }
+
+    /// A recorder restarted on its port is one problem line that says what to do, and a recorder
+    /// lost past the limit says so instead; a run with neither has no such line.
+    #[test]
+    fn a_restarted_recorder_is_a_problem_line() {
+        let now = 1_000_000;
+        let who = who();
+        let mut state = RunState::launched("e1", Ok(()));
+        state.updated_at = now;
+        assert!(state.problems(now, Advice::Continue, &who).is_empty());
+        state.recorder_restarts = 1;
+        let lines = state.problems(now, Advice::Continue, &who);
+        assert_eq!(lines.len(), 1, "{lines:?}");
+        assert!(lines[0].contains("restarted 1 time:"), "{lines:?}");
+        assert!(lines[0].contains("recording went on"), "{lines:?}");
+        assert!(lines[0].contains("goalcup status"), "{lines:?}");
+        state.recorder_restarts = 2;
+        let lines = state.problems(now, Advice::Continue, &who);
+        assert!(lines[0].contains("restarted 2 times:"), "{lines:?}");
+        state.recorder_lost = true;
+        let lines = state.problems(now, Advice::Continue, &who);
+        assert_eq!(lines.len(), 1, "{lines:?}");
+        assert!(lines[0].contains("not restarted"), "{lines:?}");
+        assert!(lines[0].contains("goalcup status"), "{lines:?}");
     }
 
     /// D65: a paused agent is one problem line, in the owner's words, instead of the low-disk

@@ -24,8 +24,8 @@ the owner approves it). The rest of this page is the field-by-field detail.
   one path, or `model_host_from`, which with `absent = "defaults"` needs one row too). Some pairs
   are required together, such as `home.env` with a `{config_home}` root
   ([Cross-field rules](#cross-field-rules)).
-  Optional, each with the default its table below gives: zero or one `[[capture.native]]` (with
-  `name`, `root`, `pattern` and `form`), `[participant]`, `[launch_prep]`,
+  Optional, each with the default its table below gives: zero to eight `[[capture.native]]` rows
+  (each with `name`, `root`, `pattern` and `form`), `[participant]`, `[launch_prep]`,
   `resume_args`, `configure`, `auth_hosts`, `env`, `platform`, `reserved_env_prefixes`, `argv_guard`,
   `termination`, `providers`, `model_host_from`, the home's `skills_dir`, `per_run_dir`, `dirs`
   and `seed`, `version_args`, and `[redaction]`. The one-screen list is
@@ -112,20 +112,22 @@ While Goal Cup Proxy reads schema 1:
 
 Schema 1 may still grow: a new optional field whose absence keeps today's behaviour, a wider
 bound, a new closed value or a newly admitted pair of values. None of those breaks a connector.
-A connector that uses a widened bound (zero native rows, D74) needs a binary that admits it; an
-older binary refuses it with its own message.
+A connector that uses a widened bound (zero native rows, D74, or several native rows) needs a binary
+that admits it; an older binary refuses it with its own message.
 
-The promise is held by tests. Every shipped connector, and five frozen fixtures for harnesses
+The promise is held by tests. Every shipped connector, and six frozen fixtures for harnesses
 nobody ships (`crates/goalcup-cli/tests/fixtures/schema-1-connectors/`), take the connector
 contract. The fixtures are a plain chat shape (`schema1-chat`); a shared config home with
 `model_host_from`, `providers`, every `[participant]` field, `configure`, platform env, a
 reserved prefix, an argv guard, `native_pid` and redaction rows (`schema1-optional`); a per-run
 config home with `per_run_dir`, `dirs` and seeds, a `keychain_link` run home, a shared CA row
 and `prefix_paths` (`schema1-per-run`); one host row and no native row, so the wire is the only
-record (`schema1-wire-only`); and the required fields only, with no home variable and
-a shared run `HOME` (`schema1-minimal`, which pins the defaults). They load, take the launch checks
-(`tests/it/connector_contract.rs`) and run once with a stand-in through the real binaries
-(`tests/full/connector_contract.rs`; the fixtures through `--dev`). A connector made from the
+record (`schema1-wire-only`); two native rows under one config home, each planned as its own
+source, so a run records both streams (`schema1-two-native`); and the required fields only, with
+no home variable and a shared run `HOME` (`schema1-minimal`, which pins the defaults). They load,
+take the launch checks (`tests/it/connector_contract.rs`) and run once with a stand-in through
+the real binaries (`tests/full/connector_contract.rs`; the fixtures through `--dev`). A
+connector made from the
 [template](../skills/adding-a-capture-harness/templates/connector-harness.toml) loads with no
 Rust change (`goalcup-protocol` `connector_template.rs`), and no core string literal names a
 harness (`no_family_literals.rs`). A change that makes one of these fail is a break of the
@@ -196,7 +198,7 @@ has each line with its comment. The full reference below has every rule.
 | `[capture.home]` | `run_home`, `config_home`, the harness's home variable, its real folders, `skills_dir` | `config_home = "shared"`, `env = "CODEX_HOME"` |
 | `[capture.ca]` | The CA variable the harness reads, and `extend` or `replace` | `env = ["NODE_EXTRA_CA_CERTS"]`, `mode = "extend"` |
 | `[capture.identity]` | Always `source = "none"` | `source = "none"` |
-| `[[capture.native]]` | Zero or one. The session files: `name`, `root`, `pattern`, `form`, `protocol_hint`, `since_run_start = true` | `root = "{config_home}/sessions"` |
+| `[[capture.native]]` | Zero to eight rows, one per session file or store. Each has `name`, `root`, `pattern`, `form`, `protocol_hint` and `since_run_start = true`; no two rows share a name, or a root and pattern | `root = "{config_home}/sessions"` |
 | Model host | Default host rows (`[[capture.hosts]]` or `providers`), plus `model_host_from` when the harness's config may name another service | `model_host_from = { file = "settings.json", key = "env.ANTHROPIC_BASE_URL", absent = "defaults" }` |
 | `capture.auth_hosts` | Sign-in hosts, tunnelled and never recorded | `auth_hosts = ["auth.openai.com"]` |
 | `[capture.termination]` | `process_group`, or `native_pid` for an npm wrapper; a grace in seconds | `strategy = "process_group"`, `grace_seconds = 10` |
@@ -275,7 +277,7 @@ optional field or table is absent.
 | `capture.credential` | refused (D61) | A connector may not pass a provider key; the harness keeps its own login in its home. |
 | `capture.ca` | required table | The harness's CA variables and which file they get. |
 | `capture.identity` | required table | How this run's native-session identity is obtained and bound. |
-| `capture.native` | optional, default `[]` | Zero or one `[[capture.native]]` table (D74). |
+| `capture.native` | optional, default `[]` | Zero to eight `[[capture.native]]` tables (D74). Each row is checked on its own. |
 | `capture.argv_guard` | optional, default absent | Harness-specific pre-parser argument refusals. |
 | `capture.termination` | optional; effective defaults below | How the owned harness is stopped. |
 | `capture.hosts` | defaults to `[]`, validation requires 1–16 (with `providers`), or 0–16 with `model_host_from` and `absent = "refuse"` | Intercepted model hosts and their recorded paths. |
@@ -619,7 +621,9 @@ Every other identity field (`binding`, `match_field`, `match_value`, `id_field`,
 
 ## `[[capture.native]]`
 
-Zero or one native row (D74). A connector with none records the wire only, and `goalcup
+Zero to eight native rows (D74), one per session file or store. Each row is checked on its own
+and against the rows before it: names are unique, no two rows share a root and pattern, and every
+cross-field rule applies to every row. A connector with none records the wire only, and `goalcup
 continue` appends its `resume_args` as when a session file exists.
 
 | Field | Required/default | Contract |
@@ -627,8 +631,8 @@ continue` appends its `resume_args` as when a session file exists.
 | `capture.native[].name` | required | 1–64 bytes of `[A-Za-z0-9._-]`. |
 | `capture.native[].root` | required | `{config_home}` or `{run_home}` alone, or that token plus `/` and at most eight relative components; each component is 1–64 bytes of ASCII `[A-Za-z0-9._-]` and is neither `.` nor `..`. |
 | `capture.native[].pattern` | required | 1–1024 bytes, relative, at most eight `/`-separated components. |
-| `capture.native[].form` | required | Closed values: `append_only`, `snapshot`. `sqlite` is explicitly a core capability, not schema 1. |
-| `capture.native[].protocol_hint` | optional, default absent | `append_only` only; 1–64 bytes matching `^[a-z][a-z0-9.-]{0,63}$`. |
+| `capture.native[].form` | required | Closed values: `append_only`, `snapshot`, `final_snapshot`. `sqlite` is explicitly a core capability, not schema 1. `final_snapshot` files are read once, after the harness has exited, at each segment's seal; they are never read while the run goes. A seal whose stop is unresolved, so the harness may still be running, reads none of them and the chain records one stream-less `ShutdownDeadline` gap. Older binaries refuse this value. |
+| `capture.native[].protocol_hint` | optional, default absent | `append_only` only; 1–64 bytes matching `^[a-z][a-z0-9.-]{0,63}$`. Refused on `snapshot` and `final_snapshot`. |
 | `capture.native[].since_run_start` | optional, default `false` | Boolean. `true` reads only the files new or written since the run started (D57). |
 | `capture.native[].warn_missing` | optional, default `true` | Boolean. `false` keeps the "no session file" `PROBLEM:` line quiet, for a harness whose supported versions include ones that write no such file (D72). The file is still read whenever it is written. |
 
@@ -653,7 +657,7 @@ directory refuses the creation. A `{run_home}` root is created this way only und
 home (`run_home = "shared"`, D59).
 
 An unknown but syntactically valid `protocol_hint` is admitted and means capture-only unless a
-registered decoder accepts the complete `StreamOpen`. A snapshot cannot carry a hint. The same
+registered decoder accepts the complete `StreamOpen`. A snapshot or `final_snapshot` cannot carry a hint. The same
 hint grammar applies to wire hosts.
 
 ## `[capture.argv_guard]`
@@ -688,6 +692,9 @@ the grace is 10 seconds.
 One to 16 unique host rows are required, counting the rows `capture.providers` adds. A profile
 with `capture.model_host_from` and `absent = "refuse"` may list none: its model host comes from
 the harness's config at each start.
+
+The first row is the default login host, and it is the only default host probed when no model
+service is set. Other rows are recorded but not probed in that case.
 
 A model provider's host row is written once, in the shared provider table
 `crates/goalcup-protocol/providers.toml`, which is compiled into `goalcup`. A connector names
@@ -726,7 +733,7 @@ list. The shipped forms:
 |---|---|---|
 | `hermes-cli` | `{ file = "config.yaml", key = "model.base_url" }` | refused |
 | `claude-code-cli` | `{ file = "settings.json", key = "env.ANTHROPIC_BASE_URL", absent = "defaults" }` | `api.anthropic.com` (`providers = ["anthropic"]`) |
-| `codex-cli` | `{ file = "config.toml", key = "model_providers.*.base_url", via = "model_provider", absent = "defaults" }` | `chatgpt.com` (its own host row) |
+| `codex-cli` | `{ file = "config.toml", key = "model_providers.*.base_url", via = "model_provider", absent = "defaults" }` | `chatgpt.com` (its own host row); `api.openai.com` (its API-key row, `/v1/responses`) when the harness uses an API key |
 
 - **What is read.** `goalcup start` and each `goalcup continue` open `file` in the shared config
   home (`<cfg>/capture-homes/<id>/`), before anything is created, and read the one string at
@@ -766,17 +773,26 @@ list. The shipped forms:
   set in config.toml)``. A userinfo (`user:pass@`), the path and the query are never logged or
   recorded.
 - **Refused at start, and not ready at prep.** A missing file, key or `via` value (with
-  `absent = "refuse"`), a value that is not an
-  `http` or `https` URL, plain `http` (only `HTTPS_PROXY` is set, so it would pass around the
-  recorder), a loopback name, an address literal, a single-label name, a host that names
-  Goal Cup, and an authentication host. The refusal names the value (`<scheme>://<host>:<port>`
-  only), the reason, the setting and the way to change it: "`<display name>` is set to use
-  `<value>`, which Goal Cup cannot record: `<reason>` (set by `<key>` in `<file>`). Goal Cup
-  records only an https model service that is not on this computer. Run goalcup setup --harness
-  `<id>`, choose such a service there, then run the command again." Nothing is created. `goalcup continue` checks it before it closes an earlier segment.
-  `goalcup setup` makes the same check: while the value cannot be recorded the home is not ready,
-  and prep says why and opens the harness again. Only the address the config names is checked; a
-  login the harness refreshes at another host is not (D62).
+  `absent = "refuse"`); a value that is not an `http` or `https` URL; an authority (the part
+  before the path) with a backslash, a space or a control character, which a URL parser reads as
+  another host or refuses; plain `http` (only `HTTPS_PROXY` is set, so it would pass around the
+  recorder); a loopback name; an address literal; a single-label name; a host that names Goal Cup,
+  or the project's domain `agentcommunity.org` or a subdomain of it (its event server is Goal
+  Cup's own host); a sign-in host; and a path the recorder cannot follow (a `.` or `..` segment, a
+  `%2e` escape, a backslash, a quote, an angle bracket, a backtick, a brace or a non-ASCII byte).
+  A name that resolves only to this computer (to a loopback address, to `0.0.0.0`, to `::`, or to
+  an IPv4-mapped loopback address) is refused too, from a DNS lookup bounded by the preflight
+  budget. The refusal names the value (`<scheme>://<host>:<port>` only), the reason, the setting
+  and the way to change it: "`<display name>` is set to use `<value>`, which Goal Cup cannot
+  record: `<reason>` (set by `<key>` in `<file>`). Goal Cup records only an https model service
+  that is not on this computer. Run goalcup setup --harness `<id>`, choose such a service there,
+  then run the command again." Nothing is created. The name check runs at three points, each a
+  point-in-time lookup: `goalcup start` before anything is created, `goalcup continue` before it
+  closes an earlier segment, and `goalcup prep`. A name whose DNS changes to this computer after
+  its check is not seen; the gap is recorded in the one-capture-system ledger (L30).
+  `goalcup setup` makes the same checks: while the value cannot be recorded the home is not
+  ready, and prep says why and opens the harness again. Only the address the config names is
+  checked; a login the harness refreshes at another host is not (D62).
 - **Schema rules.** `file` is a relative path of at most 4 components with a `.yaml`, `.yml`,
   `.json` or `.toml` extension. `key` is 1–8 names of `[A-Za-z0-9_-]` (1–64 bytes each) joined
   with `.`; with `via` it holds exactly one `*` part, which is not its last, and without `via`
@@ -851,10 +867,11 @@ both forms or with neither is refused when the file is parsed. The regex each fo
 | `json_field = "F", value = "scalar"` | `"F"\s*:\s*("[^"\\]*"\|[^,}\s]+)` | a string, else a bare token such as a number |
 | `header_prefix = "P"` | `P[a-z0-9-]+:\s*[^\r\n"]+` | the whole `name: value` text |
 
-`header_prefix` is not a header filter: no HTTP header is ever recorded. It matches the text
-`PREFIX…: value` anywhere in a recorded body or file, not only at the start of a line or a word,
-and only in lowercase: `X-Vendor-Billing: …` is not matched, and no error says so. The match
-ends at a CR, an LF or a `"`. A short prefix over-matches: `x-` also strips `max-age: 3600`.
+`header_prefix` is not a header filter. It matches the text `PREFIX…: value` anywhere in a recorded
+body or file, not only at the start of a line or a word, and only in lowercase: `X-Vendor-Billing: …`
+is not matched, and no error says so. HTTP heads reach the chain as header streams (`http-head-v1`),
+masked by the proxy; no `header_prefix` row changes them. The match ends at a CR, an LF or a `"`. A
+short prefix over-matches: `x-` also strips `max-age: 3600`.
 
 What a form does not remove: `string` leaves a value with a backslash escape raw; `object` leaves
 a value nested four deep raw, and stops early at a brace inside a string; a quoted `scalar` that
@@ -968,14 +985,14 @@ schema 2.
 ## Examples
 
 Read the shipped connectors. Conformance tests load each as `Origin::Pinned` and compare its
-directory with its pin. The five frozen
+directory with its pin. The six frozen
 [schema-1 fixtures](../crates/goalcup-cli/tests/fixtures/schema-1-connectors/) are complete
 connectors for harnesses nobody ships, one per shape ([what each covers](#the-compatibility-promise)).
 
 - [`connectors/hermes-cli/harness.toml`](../connectors/hermes-cli/harness.toml): chat mode with a
   `configure` command, its model host read from its own `config.yaml` (`model_host_from`, no
-  `hosts`), a `snapshot` native source read from the run's start, an argv guard and a reserved
-  prefix.
+  `hosts`), a `snapshot` native source read from the run's start, a `final_snapshot` state
+  database (`state.db*`, read at the seal), an argv guard and a reserved prefix.
 - [`connectors/codex-cli/harness.toml`](../connectors/codex-cli/harness.toml): chat mode
   (`interactive`), shared config home, `since_run_start`, `native_pid` termination, extra
   redaction patterns and per-platform env.

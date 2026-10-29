@@ -163,13 +163,15 @@ mode = "<extend|replace>"
 # {config_home}/...:
 source = "none"
 
-# Zero or one local native artifact source (transcript or metadata); delete this table if the harness
-# keeps none, and the wire is the only record (D74). Never a request dump, credential or seed file.
+# Zero to eight local native artifact sources, one table each (transcript or metadata); delete these
+# tables if the harness keeps none, and the wire is the only record (D74). Give each row its own name,
+# and no two rows the same root and pattern. Never a request dump, credential or seed file.
 [[capture.native]]
 name = "<session>"                      # label in the chain; [A-Za-z0-9._-]{1,64}
 root = "{config_home}/<sessions>"       # {config_home} (C1) or {run_home} (C2), plus relative parts
 pattern = "<*/*.jsonl>"                 # globs below root, no **, no {id}
-form = "<append_only|snapshot>"         # JSONL appended in place, or a file rewritten whole
+form = "<append_only|snapshot|final_snapshot>"  # JSONL appended in place, a file rewritten whole, or a store copied once after the harness exits
+# final_snapshot is never read while the run goes, and takes no protocol_hint.
 # protocol_hint = "<harness-jsonl>"     # append_only only; an unknown hint means capture-only
 # The run's sessions are every matching file new or written since the run started (on a shared
 # home no id is known at launch). Delete only for a per-run root.

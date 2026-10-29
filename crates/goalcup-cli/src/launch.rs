@@ -136,7 +136,8 @@ use crate::CliError;
 use crate::connector::HarnessConnector;
 use crate::proxy::connect::PROXY_USERNAME;
 use goalcup_protocol::harness::{
-    CaptureSpec, LAUNCH_PREP_CA_FILE, LAUNCH_PREP_MODEL_BASE_URL, PlatformKey, Strategy,
+    CaptureSpec, LAUNCH_PREP_CA_FILE, LAUNCH_PREP_MODEL_BASE_URL, NativeForm, NativeSpec,
+    PlatformKey, Strategy,
 };
 use goalcup_protocol::manifest::{Kill, LaunchMode};
 use goalcup_protocol::process::{ProcessHandle, find_named, process_start_identity, snapshot};
@@ -666,12 +667,19 @@ pub fn has_native_session(
     config_home: &Path,
     since_unix: u64,
 ) -> Result<bool, String> {
-    if profile.native.is_empty() {
+    // A final-snapshot store is copied at the finish, not resumed (D73), so its rows do not count.
+    // A connector with no other store cannot tell, as with no store at all.
+    let stores: Vec<&NativeSpec> = profile
+        .native
+        .iter()
+        .filter(|native| native.form != NativeForm::FinalSnapshot)
+        .collect();
+    if stores.is_empty() {
         return Ok(true);
     }
     let since = std::time::UNIX_EPOCH + std::time::Duration::from_secs(since_unix);
     let mut unreadable = None;
-    for native in &profile.native {
+    for native in stores {
         let root = if let Some(rest) = native.root.strip_prefix("{config_home}") {
             config_home.join(rest.trim_start_matches('/'))
         } else if let Some(rest) = native.root.strip_prefix("{run_home}") {
@@ -1987,7 +1995,7 @@ unsafe fn gate_read(fd: i32, buffer: &mut [u8]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::has_native_session;
-    use goalcup_protocol::harness::HarnessManifest;
+    use goalcup_protocol::harness::{HarnessManifest, NativeForm};
     use std::time::{Duration, UNIX_EPOCH};
 
     /// A session is a native-store file written since the run started, found without following
@@ -2044,5 +2052,39 @@ mod tests {
             has_native_session(&none, &run_home, &config_home, since),
             Ok(true)
         );
+    }
+
+    /// A `final_snapshot` row (a database copied once at the finish) is not a session the
+    /// harness resumes (D73): a database written since the run's start does not make `--continue`
+    /// resume, and the session file rows decide alone.
+    #[test]
+    fn a_final_snapshot_row_is_not_a_session() {
+        let manifest = HarnessManifest::from_toml_str(include_str!(
+            "../tests/fixtures/connectors/chat-shared-home/harness.toml"
+        ))
+        .unwrap();
+        let mut profile = manifest.capture.clone();
+        let mut state = profile.native[0].clone();
+        state.name = "state".into();
+        state.root = "{config_home}".into();
+        state.pattern = "state.db*".into();
+        state.form = NativeForm::FinalSnapshot;
+        profile.native.push(state);
+        let t = tempfile::tempdir().unwrap();
+        let (run_home, config_home) = (t.path().join("run"), t.path().join("config"));
+        std::fs::create_dir_all(&config_home).unwrap();
+        let since = 2_000_000_000;
+        let has = || has_native_session(&profile, &run_home, &config_home, since);
+        let database = std::fs::File::create(config_home.join("state.db")).unwrap();
+        database
+            .set_modified(UNIX_EPOCH + Duration::from_secs(since))
+            .unwrap();
+        assert_eq!(has(), Ok(false), "a database is not a session");
+        let project = config_home.join("projects/a");
+        std::fs::create_dir_all(&project).unwrap();
+        let file = std::fs::File::create(project.join("s.jsonl")).unwrap();
+        file.set_modified(UNIX_EPOCH + Duration::from_secs(since))
+            .unwrap();
+        assert_eq!(has(), Ok(true), "a session file written at the run's start");
     }
 }

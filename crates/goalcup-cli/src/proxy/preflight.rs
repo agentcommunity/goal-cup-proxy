@@ -17,13 +17,15 @@ use super::connect::{ConnectFailureKind, DEFAULT_CONNECT_ATTEMPT_TIMEOUT, Retry,
 use std::path::PathBuf;
 use std::time::Duration;
 
-/// The whole preflight's bound, all hosts together.
+/// The bound of one preflight probe. Every host in one call is probed together, and the call
+/// gives up at this budget. `goalcup start` makes two calls in sequence: the hard hosts, then,
+/// when a model service is named, the harness's default hosts. A blocked hard host ends the start
+/// after at most this budget. A blocked default host adds up to this budget to a start that goes
+/// on with a warning. `goalcup setup`'s machine step makes the same two calls.
 pub(crate) const PREFLIGHT_BUDGET: Duration = Duration::from_secs(10);
 
-/// The port every provider host is probed on.
-pub(crate) const PREFLIGHT_PORT: u16 = 443;
-
-/// A provider host the preflight could not reach. Its `Display` is the whole refusal.
+/// A provider host the preflight could not reach. Its `Display` is the whole refusal. Built by
+/// [`Unreachable::new`] wherever the preflight finds one.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Unreachable {
     pub host: String,
@@ -55,6 +57,23 @@ impl std::fmt::Display for Unreachable {
 }
 
 impl Unreachable {
+    /// The one builder: the host, its port, what the connect failed with, the budget it failed
+    /// within, and this process's executable.
+    pub(crate) fn new(
+        host: impl Into<String>,
+        port: u16,
+        kind: ConnectFailureKind,
+        budget: Duration,
+    ) -> Self {
+        Self {
+            host: host.into(),
+            port,
+            kind,
+            budget,
+            binary: std::env::current_exe().ok(),
+        }
+    }
+
     /// The whole refusal: `goalcup start`'s ([`Display`](std::fmt::Display)), or, for the next
     /// part of the open run `continuing`, one that says the run is still open and names
     /// `goalcup continue`. A start is never advised then: a new start replaces the run.
@@ -109,21 +128,70 @@ fn is_loopback_host(host: &str) -> bool {
             .is_ok_and(|ip| ip.is_loopback())
 }
 
-/// The preflight `goalcup start` runs: every non-loopback host on [`PREFLIGHT_PORT`] within
-/// [`PREFLIGHT_BUDGET`]. Blocks the calling thread for at most the budget.
-pub(crate) fn upstreams_reachable<'a>(
-    hosts: impl IntoIterator<Item = &'a str>,
-) -> Result<(), Unreachable> {
-    let hosts: Vec<String> = hosts
-        .into_iter()
-        .filter(|host| !is_loopback_host(host))
-        .map(str::to_owned)
-        .collect();
-    probe(hosts, PREFLIGHT_PORT, PREFLIGHT_BUDGET)
+/// Whether `host` resolves, on `port`, to addresses that all reach this computer: a name that is
+/// this computer under another spelling. The recording proxy connects by name on every round, so a
+/// model host that resolves here would be recorded as if it were remote (a loopback name, or an
+/// address literal, is refused by its spelling). The lookup is bounded by [`PREFLIGHT_BUDGET`]; one
+/// still blocked at the budget is abandoned. A lookup that fails, times out or finds nothing is
+/// `false`: the probe that follows names that failure.
+pub(crate) fn resolves_only_to_loopback(host: &str, port: u16) -> bool {
+    resolves_only_to_loopback_with(host, port, |host, port| {
+        lookup_within(host, port, PREFLIGHT_BUDGET)
+    })
 }
 
-/// [`upstreams_reachable`] for endpoints that name their own port (`goalcup prep`'s server
-/// address may): every non-loopback `(host, port)` within [`PREFLIGHT_BUDGET`].
+/// The addresses `host` resolves to on `port`, answered within `budget`. The resolver's own lookup
+/// has no timeout, so it runs on a runtime that is shut down without waiting for it.
+fn lookup_within(
+    host: &str,
+    port: u16,
+    budget: Duration,
+) -> std::io::Result<Vec<std::net::SocketAddr>> {
+    let Ok(runtime) = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+    else {
+        return Err(std::io::Error::other("no runtime for the name lookup"));
+    };
+    let answer = runtime.block_on(async {
+        tokio::time::timeout(budget, tokio::net::lookup_host((host, port))).await
+    });
+    runtime.shutdown_background();
+    match answer {
+        Ok(found) => found.map(Iterator::collect),
+        Err(_) => Err(std::io::Error::new(
+            std::io::ErrorKind::TimedOut,
+            "the name lookup took longer than the preflight budget",
+        )),
+    }
+}
+
+/// Whether `address` reaches this computer: a loopback address, or the unspecified address (a
+/// connect to it lands here on Linux and macOS), in plain or IPv4-mapped IPv6 form.
+fn reaches_this_computer(address: std::net::IpAddr) -> bool {
+    let address = address.to_canonical();
+    address.is_loopback() || address.is_unspecified()
+}
+
+/// [`resolves_only_to_loopback`] with the lookup given, so a test can answer it.
+pub(crate) fn resolves_only_to_loopback_with(
+    host: &str,
+    port: u16,
+    lookup: impl Fn(&str, u16) -> std::io::Result<Vec<std::net::SocketAddr>>,
+) -> bool {
+    match lookup(host, port) {
+        Ok(addresses) => {
+            !addresses.is_empty()
+                && addresses
+                    .iter()
+                    .all(|address| reaches_this_computer(address.ip()))
+        }
+        Err(_) => false,
+    }
+}
+
+/// The preflight `goalcup start` and `goalcup prep` run: every non-loopback `(host, port)` within
+/// [`PREFLIGHT_BUDGET`] (`goalcup prep`'s server address and a model service name their own port).
 pub(crate) fn endpoints_reachable<'a>(
     endpoints: impl IntoIterator<Item = (&'a str, u16)>,
 ) -> Result<(), Unreachable> {
@@ -135,24 +203,14 @@ pub(crate) fn endpoints_reachable<'a>(
     probe_endpoints(endpoints, PREFLIGHT_BUDGET)
 }
 
-/// Connects to every host on `port` at once, within `budget`; the first host (in the given
-/// order) that could not be reached is the answer.
-fn probe(hosts: Vec<String>, port: u16, budget: Duration) -> Result<(), Unreachable> {
-    probe_endpoints(hosts.into_iter().map(|host| (host, port)).collect(), budget)
-}
-
-/// [`probe`] with a port for each host.
+/// Connects to every `(host, port)` at once, within `budget`; the first (in the given order) that
+/// could not be reached is the answer.
 fn probe_endpoints(endpoints: Vec<(String, u16)>, budget: Duration) -> Result<(), Unreachable> {
     if endpoints.is_empty() {
         return Ok(());
     }
-    let unreachable = |(host, port): (String, u16), kind| Unreachable {
-        host,
-        port,
-        kind,
-        budget,
-        binary: std::env::current_exe().ok(),
-    };
+    let unreachable =
+        |(host, port): (String, u16), kind| Unreachable::new(host, port, kind, budget);
     // A runtime of its own, gone before the recording proxy's is built. One that cannot be built is
     // not a reason to refuse here: the recording proxy's own start would refuse it a moment later.
     let Ok(runtime) = tokio::runtime::Builder::new_current_thread()
@@ -203,7 +261,7 @@ mod tests {
     fn an_unreachable_host_is_named_with_its_subtype_and_this_binary() {
         let port = dark_port();
         let started = std::time::Instant::now();
-        let refused = probe(vec!["127.0.0.1".into()], port, Duration::from_secs(1))
+        let refused = probe_endpoints(vec![("127.0.0.1".into(), port)], Duration::from_secs(1))
             .expect_err("nothing listens there");
         assert!(
             started.elapsed() < Duration::from_secs(2),
@@ -253,12 +311,14 @@ mod tests {
         let listening = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let port = listening.local_addr().unwrap().port();
         assert_eq!(
-            probe(vec!["127.0.0.1".into()], port, Duration::from_secs(2)),
+            probe_endpoints(vec![("127.0.0.1".into(), port)], Duration::from_secs(2)),
             Ok(())
         );
-        let refused = probe(
-            vec!["127.0.0.1".into(), "preflight-unreachable.invalid".into()],
-            port,
+        let refused = probe_endpoints(
+            vec![
+                ("127.0.0.1".into(), port),
+                ("preflight-unreachable.invalid".into(), port),
+            ],
             Duration::from_secs(2),
         )
         .expect_err("a name that cannot resolve");
@@ -276,8 +336,85 @@ mod tests {
         }
         // Nothing listens on 443 here, so only a skip passes.
         assert_eq!(
-            upstreams_reachable(["localhost", "api.e00.localhost"]),
+            endpoints_reachable([("localhost", 443), ("api.e00.localhost", 443)]),
             Ok(())
+        );
+    }
+
+    /// A lookup that answers `addresses` for every name.
+    fn answers(
+        addresses: Vec<std::net::IpAddr>,
+    ) -> impl Fn(&str, u16) -> std::io::Result<Vec<std::net::SocketAddr>> {
+        move |_, port| {
+            Ok(addresses
+                .iter()
+                .map(|ip| std::net::SocketAddr::new(*ip, port))
+                .collect())
+        }
+    }
+
+    #[test]
+    fn a_name_that_resolves_to_this_computer_is_refused() {
+        let loopback: std::net::IpAddr = "127.0.0.1".parse().unwrap();
+        let public: std::net::IpAddr = "203.0.113.7".parse().unwrap();
+        assert!(resolves_only_to_loopback_with(
+            "localtest.me",
+            443,
+            answers(vec![loopback])
+        ));
+        assert!(resolves_only_to_loopback_with(
+            "localtest.me",
+            443,
+            answers(vec![loopback, "::1".parse().unwrap()])
+        ));
+        assert!(
+            !resolves_only_to_loopback_with("gateway.example.test", 443, answers(vec![public])),
+            "a public address is not this computer"
+        );
+        assert!(
+            !resolves_only_to_loopback_with(
+                "gateway.example.test",
+                443,
+                answers(vec![loopback, public])
+            ),
+            "one public address is enough to leave"
+        );
+        assert!(
+            !resolves_only_to_loopback_with("gateway.example.test", 443, answers(vec![])),
+            "no address is no answer for this check"
+        );
+        let failed = |_: &str, _: u16| Err(std::io::Error::other("no such host"));
+        assert!(
+            !resolves_only_to_loopback_with("gateway.example.test", 443, failed),
+            "a lookup that fails is left to the probe, which names the failure"
+        );
+    }
+
+    /// The unspecified address and the IPv4-mapped forms reach this computer too, so a name that
+    /// answers them is refused as well.
+    #[test]
+    fn a_name_that_resolves_to_an_unspecified_or_mapped_loopback_address_is_this_computer() {
+        for spelling in [
+            "0.0.0.0",
+            "::",
+            "::ffff:127.0.0.1",
+            "::ffff:127.1.2.3",
+            "::ffff:0.0.0.0",
+        ] {
+            let address: std::net::IpAddr = spelling.parse().unwrap();
+            assert!(
+                resolves_only_to_loopback_with("gateway.example.test", 443, answers(vec![address])),
+                "{spelling} reaches this computer"
+            );
+        }
+        let mapped_public: std::net::IpAddr = "::ffff:203.0.113.7".parse().unwrap();
+        assert!(
+            !resolves_only_to_loopback_with(
+                "gateway.example.test",
+                443,
+                answers(vec![mapped_public])
+            ),
+            "a mapped public address is not this computer"
         );
     }
 }

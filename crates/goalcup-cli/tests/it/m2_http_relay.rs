@@ -6,6 +6,7 @@
 use crate::common::m2_http_support;
 
 use goalcup_cli::proxy::api::{HttpOutcome, Upgrade};
+use goalcup_cli::proxy::headers::HEADERS_HINT;
 use goalcup_protocol::capture::{
     CaptureFrame, CaptureMeta, CaptureSource, ConnectionEvent, EndReason, FrameEvent, GapReason,
     MAX_CAPTURE_QUEUE_BYTES, MAX_METADATA_STRING_BYTES, MAX_SEGMENT_BYTES, WireIdentity,
@@ -106,10 +107,16 @@ async fn end_both(mut h: Harness) -> HttpOutcome {
     finish(h.relay).await.expect("relay failed")
 }
 
+/// A header stream (`http-head-v1`): the masked head of an exchange, beside its body stream.
+fn is_head(view: &StreamView) -> bool {
+    view.meta.protocol_hint.as_deref() == Some(HEADERS_HINT)
+}
+
+/// The body stream of one exchange; header streams are read by [`head_of`].
 fn find(views: &[StreamView], source: CaptureSource, exchange: u64) -> &StreamView {
     let mut found = views
         .iter()
-        .filter(|v| v.source == source && exchange_of(v) == exchange);
+        .filter(|v| v.source == source && exchange_of(v) == exchange && !is_head(v));
     let view = found
         .next()
         .unwrap_or_else(|| panic!("no {source:?} stream for exchange {exchange}"));
@@ -123,7 +130,19 @@ fn find(views: &[StreamView], source: CaptureSource, exchange: u64) -> &StreamVi
 fn has(views: &[StreamView], source: CaptureSource, exchange: u64) -> bool {
     views
         .iter()
-        .any(|v| v.source == source && exchange_of(v) == exchange)
+        .any(|v| v.source == source && exchange_of(v) == exchange && !is_head(v))
+}
+
+/// The header stream of one exchange's head.
+fn head_of(views: &[StreamView], source: CaptureSource, exchange: u64) -> &StreamView {
+    let mut found = views
+        .iter()
+        .filter(|v| v.source == source && exchange_of(v) == exchange && is_head(v));
+    let view = found
+        .next()
+        .unwrap_or_else(|| panic!("no {source:?} header stream for exchange {exchange}"));
+    assert!(found.next().is_none(), "two {source:?} header streams");
+    view
 }
 
 fn fixture(name: &str) -> Vec<u8> {
@@ -177,7 +196,7 @@ async fn sse_prefix_reaches_client_before_eof() {
     let response_bytes = |sink: &RecordingSink| {
         streams(&sink.frames())
             .into_iter()
-            .find(|v| v.source == WIRE_RESPONSE)
+            .find(|v| v.source == WIRE_RESPONSE && !is_head(v))
             .map(|v| (v.bytes, v.end))
     };
     wait_until("the first event is captured", || {
@@ -332,7 +351,8 @@ async fn framing_matrix_relays_unchanged_and_captures_decoded_bodies() {
             "request and response are distinct streams"
         );
     }
-    assert_eq!(views.len(), 12);
+    // Twelve body streams and as many header streams: one head per body.
+    assert_eq!(views.len(), 24);
 }
 
 #[tokio::test]
@@ -1251,7 +1271,8 @@ async fn http_recovery_keeps_connection_exchange_identity() {
     assert_eq!(three.key.producer, fresh);
     assert_eq!(three.bytes, b"tres");
     // Stream and sequence numbering restart with the epoch; identity does not.
-    assert_eq!(find(&views, WIRE_REQUEST, 3).key.stream, 1);
+    assert_eq!(head_of(&views, WIRE_REQUEST, 3).key.stream, 1);
+    assert_eq!(find(&views, WIRE_REQUEST, 3).key.stream, 2);
     assert!(find(&views, WIRE_REQUEST, 3).open_at > recovery + 1);
     // Recorder-only recovery: nothing but observation controls and payload in the new epoch.
     for frame in frames.iter().filter(|f| f.stream.producer == fresh) {
@@ -1310,7 +1331,8 @@ async fn pipelined_requests_and_informational_responses_keep_their_exchange() {
     close_both(h).await;
 
     let views = streams(&sink.frames());
-    assert_eq!(views.len(), 6, "interim responses open no stream");
+    // Six bodies and six heads; the interim responses open no stream.
+    assert_eq!(views.len(), 12, "interim responses open no stream");
     for (exchange, path, req_body, status, resp_body) in [
         (1, "/v1/a", &b""[..], 200, &b"A"[..]),
         (2, "/v1/b", b"abc", 201, b"BB"),
@@ -1430,8 +1452,9 @@ async fn two_requests_on_one_connection_count_two() {
 
 /// The run's "no model calls" line counts model calls, not every recorded request: a model list
 /// under the same base path (a `model_host_from` host records the whole base, without a hint) is
-/// recorded but is no call, and a request on a hinted path, or a POST on any recorded path, is
-/// both.
+/// recorded but is no call, and a request on a hinted path, or a POST under the base path, is
+/// both recorded and a call. A POST outside every row is recorded but is no call: it is not
+/// under the base path.
 #[tokio::test]
 async fn only_a_request_on_a_hinted_path_counts_as_a_model_call() {
     let sink = RecordingSink::new();
@@ -1477,6 +1500,24 @@ async fn only_a_request_on_a_hinted_path_counts_as_a_model_call() {
     .await;
     assert_eq!(h.emitter.recorded_requests(), 3);
     assert_eq!(h.emitter.generation_requests(), 2);
+    // A POST outside every row (a token refresh on the same host) is recorded but is no model call.
+    round_trip(
+        &mut h,
+        &request(
+            "POST",
+            "/oauth/token",
+            &[&length(b"grant_type=refresh_token")],
+            b"grant_type=refresh_token",
+        ),
+        &ok,
+    )
+    .await;
+    assert_eq!(h.emitter.recorded_requests(), 4);
+    assert_eq!(
+        h.emitter.generation_requests(),
+        2,
+        "a POST outside the base path is no call"
+    );
     close_both(h).await;
 }
 
@@ -1621,7 +1662,8 @@ async fn accepted_upgrade_hands_off_both_prefixes_once() {
     // The handshake is HTTP evidence; the surplus is not captured here.
     let frames = sink.frames();
     let views = streams(&frames);
-    assert_eq!(views.len(), 2);
+    // Two bodies and two heads.
+    assert_eq!(views.len(), 4);
     let (req_view, resp_view) = (
         find(&views, WIRE_REQUEST, 1),
         find(&views, WIRE_RESPONSE, 1),
@@ -1630,16 +1672,23 @@ async fn accepted_upgrade_hands_off_both_prefixes_once() {
     assert_eq!(resp_view.meta.status, Some(101));
     assert_eq!(req_view.end, Some(EndReason::Complete));
     assert_eq!(resp_view.end, Some(EndReason::Complete));
+    // Only the heads carry bytes; the surplus after the handshake is not captured.
     assert!(
-        !frames
+        views
             .iter()
-            .any(|f| matches!(f.event, FrameEvent::Bytes { .. }))
+            .filter(|v| !is_head(v))
+            .all(|v| v.bytes.is_empty())
     );
 }
 
+/// Every exchange on an opened host is captured whatever its path. A row only supplies the
+/// protocol hint, so an upgrade on an unnamed path keeps its metadata with no hint.
 #[tokio::test]
-async fn excluded_upgrade_relays_without_capture() {
-    for (path, selected) in [("/ws/telemetry", false), ("/v1/realtime", true)] {
+async fn upgrade_on_an_opened_host_is_captured_whatever_its_path() {
+    for (path, hint) in [
+        ("/ws/telemetry", None),
+        ("/v1/realtime", Some("openai-realtime")),
+    ] {
         let sink = RecordingSink::new();
         let mut h = start(
             emitter_for(sink.clone()),
@@ -1655,16 +1704,14 @@ async fn excluded_upgrade_relays_without_capture() {
             .into_iter()
             .filter(|f| f.stream.stream != 0)
             .count();
-        if selected {
-            let capture = upgrade.capture.expect("selected path keeps its metadata");
-            assert_eq!(capture.path.as_deref(), Some(path));
-            assert_eq!(capture.protocol_hint.as_deref(), Some("openai-realtime"));
-            assert_eq!(capture.wire.map(|w| w.exchange), Some(1));
-            assert_eq!(payload_frames, 4, "handshake request and response");
-        } else {
-            assert_eq!(upgrade.capture, None, "relay-only");
-            assert_eq!(payload_frames, 0, "no evidence for an unselected path");
-        }
+        let capture = upgrade
+            .capture
+            .unwrap_or_else(|| panic!("{path} on an opened host keeps its metadata"));
+        assert_eq!(capture.path.as_deref(), Some(path));
+        assert_eq!(capture.protocol_hint.as_deref(), hint, "{path}");
+        assert_eq!(capture.wire.map(|w| w.exchange), Some(1));
+        // Each handshake head is one stream of three frames, and the two bodies are empty.
+        assert_eq!(payload_frames, 10, "{path}: handshake request and response");
     }
 }
 
@@ -1737,9 +1784,11 @@ async fn malformed_accept_and_missing_token_do_not_hand_off() {
     let views = streams(&frames);
     assert_eq!(find(&views, WIRE_RESPONSE, 1).meta.status, Some(101));
     assert!(
-        !frames
+        views
             .iter()
-            .any(|f| matches!(f.event, FrameEvent::Bytes { .. }))
+            .filter(|v| !is_head(v))
+            .all(|v| v.bytes.is_empty()),
+        "no body bytes past the handshake"
     );
     // A request without the Connection upgrade token.
     assert_not_handed_off(
@@ -1905,7 +1954,11 @@ async fn a_response_to_a_lost_request_stays_uncaptured_after_another_connection_
     let on = |connection: &str, source: CaptureSource, exchange: u64| {
         views
             .iter()
-            .filter(|v| v.source == source && wire_of(v) == (connection.to_string(), exchange))
+            .filter(|v| {
+                v.source == source
+                    && wire_of(v) == (connection.to_string(), exchange)
+                    && !is_head(v)
+            })
             .collect::<Vec<_>>()
     };
     assert!(

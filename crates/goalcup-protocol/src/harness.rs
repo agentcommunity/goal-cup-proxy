@@ -38,7 +38,7 @@ mod load;
 mod parse;
 mod schema;
 
-pub use check::glob_matches;
+pub use check::{MAX_NATIVE_ROWS, glob_matches};
 pub use load::{
     LoadedConnector, LoadedSeed, discover_connector_dirs, load_dir, load_dir_resolving_origin,
     load_discovered_dir,

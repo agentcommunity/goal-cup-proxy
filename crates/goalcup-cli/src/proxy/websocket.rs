@@ -60,6 +60,7 @@
 //! `clock_id` with its producer.
 
 use crate::proxy::api::{CaptureEmitter, RelayPair, Upgrade};
+use crate::proxy::metadata::ExchangeMeta;
 use flate2::{Decompress, FlushDecompress, Status};
 use goalcup_protocol::capture::{
     CaptureMeta, CaptureSource, CaptureTime, EndReason, FrameEvent, GapReason, MAX_SEGMENT_BYTES,
@@ -102,6 +103,7 @@ pub async fn relay_websocket(upgrade: Upgrade) -> io::Result<()> {
         upstream_prefix,
         extensions,
         capture,
+        named_by_row,
     } = upgrade;
     let negotiated = negotiate(extensions.as_deref());
     let connection = capture.map(|base| Connection {
@@ -109,6 +111,7 @@ pub async fn relay_websocket(upgrade: Upgrade) -> io::Result<()> {
         id: context.connection.clone(),
         exchange,
         base,
+        named_by_row,
         next_index: Mutex::new(0),
     });
     let emitter = &*context.emitter;
@@ -290,6 +293,9 @@ struct Connection {
     exchange: u64,
     /// The handed-over request's sanitized metadata.
     base: CaptureMeta,
+    /// Whether a host-policy row named the handshake's path. The model-call rule reads it
+    /// through `ExchangeMeta::counts_as_model_call`.
+    named_by_row: bool,
     /// The next message index, shared by both directions and held through each `Open`.
     next_index: Mutex<u64>,
 }
@@ -489,8 +495,13 @@ impl<'c> Direction<'c> {
                         // A message on a WebSocket opened on an evidence path is recorded.
                         if let Some(capture) = &self.capture {
                             emitter.record_recorded_request();
-                            if capture.connection.base.protocol_hint.is_some() {
-                                emitter.record_generation_request();
+                            let connection = &capture.connection;
+                            if ExchangeMeta::counts_as_model_call(
+                                connection.base.protocol_hint.as_deref(),
+                                connection.base.method.as_deref().unwrap_or_default(),
+                                connection.named_by_row,
+                            ) {
+                                emitter.record_generation_request(connection.base.host.as_deref());
                             }
                         }
                     }

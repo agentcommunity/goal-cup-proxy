@@ -406,6 +406,7 @@ impl ConnectorFields {
             receipt: None,
             chunks: Vec::new(),
             seal: None,
+            tunnels: None,
             heartbeats: Vec::new(),
             final_commit: None,
         }
@@ -1122,6 +1123,24 @@ struct SealRequest {
     entry_id: String,
     seal_json: String,
     baseline_json: String,
+    /// The entry's sealed-connection list, optional (UPLOAD-API.md, the seal).
+    #[serde(default)]
+    tunnels_jsonl: Option<String>,
+}
+
+/// The format line the seal's list must start with, as the Worker checks it: a JSON object whose
+/// `format` is `goalcup-tunnels-v1` and whose `entry_id` is the entry the seal names.
+fn check_tunnel_list(text: &str, entry_id: &str) -> Result<(), ApiError> {
+    let first = text.split('\n').next().unwrap_or_default();
+    let head: Value = serde_json::from_str(first).unwrap_or(Value::Null);
+    if head.get("format").and_then(Value::as_str) == Some("goalcup-tunnels-v1")
+        && head.get("entry_id").and_then(Value::as_str) == Some(entry_id)
+    {
+        return Ok(());
+    }
+    Err(ApiError::malformed(
+        "tunnels_jsonl must start with its format line, goalcup-tunnels-v1 for this entry.",
+    ))
 }
 
 async fn seal(
@@ -1145,15 +1164,30 @@ async fn seal(
     if req.seal_json.len() > MAX_SEAL_DOC_BYTES || req.baseline_json.len() > MAX_SEAL_DOC_BYTES {
         return Err(ApiError::too_large("A document is over 16 MiB."));
     }
+    if let Some(text) = &req.tunnels_jsonl {
+        check_tunnel_list(text, &req.entry_id)?;
+    }
     let mut runs = lock_runs(&s);
     find_run(&runs, &who, &run_id)?;
     let run = runs.get_mut(&run_id).expect("just found");
     let entry = named_entry(run, Some(&req.entry_id))?;
     if let Some((seal_json, baseline_json)) = &entry.seal {
         if *seal_json == req.seal_json && *baseline_json == req.baseline_json {
+            // A repeat may be the retry of a seal whose list was not kept: keep it then, and never
+            // replace one already kept.
+            let keep = if entry.tunnels.is_none() {
+                req.tunnels_jsonl.clone()
+            } else {
+                None
+            };
+            let status = run.status.as_str();
+            if let Some(list) = keep {
+                run.entry_mut(&req.entry_id).expect("just found").tunnels = Some(list);
+                s.persist(run);
+            }
             return Ok(json_response(
                 200,
-                json!({"status": "sealed", "run_status": run.status.as_str()}),
+                json!({"status": "sealed", "run_status": status}),
             ));
         }
         return Err(ApiError::conflict(
@@ -1182,7 +1216,9 @@ async fn seal(
         ));
     }
     let entry_id = req.entry_id.clone();
-    run.entry_mut(&entry_id).expect("just found").seal = Some((req.seal_json, req.baseline_json));
+    let entry = run.entry_mut(&entry_id).expect("just found");
+    entry.seal = Some((req.seal_json, req.baseline_json));
+    entry.tunnels = req.tunnels_jsonl;
     // The run is sealed when its current entry is, once it is over.
     run.status = run.status_now(s.close_after_secs);
     s.persist(run);

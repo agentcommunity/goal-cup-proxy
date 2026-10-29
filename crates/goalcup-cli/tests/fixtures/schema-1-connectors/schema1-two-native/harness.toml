@@ -1,0 +1,67 @@
+# FROZEN schema-1 contract fixture (docs/CONNECTOR-SCHEMA.md, "The connector contract").
+# A harness nobody ships: a chat connector like `schema1-chat` that keeps two session files under
+# its config home, one per `[[capture.native]]` row, so a run must record both streams. The
+# connector contract tests load it and run it with a stand-in through `--dev`. Never edit this
+# file to make a test pass: a core change that breaks it breaks every connector written against
+# schema 1, and needs the deprecation rule.
+schema_version = 1
+id = "schema1-two-native"
+
+[participant]
+display_name = "Schema One Two Native"
+first_screen = "Schema One Two Native may ask whether you trust this folder. Choose Yes."
+
+[capture]
+auth_hosts = ["auth.schema-one.example"]
+interactive = true
+continuation = "chat: the participant types the prompt and may type keep going"
+args = []
+resume_args = ["--continue"]
+
+[capture.executable]
+program = "schema-one-two-native"
+version_args = ["--version"]
+
+[capture.env]
+SHELL = "/bin/zsh"
+NODE_USE_ENV_PROXY = "1"
+DISABLE_AUTOUPDATER = "1"
+
+[capture.home]
+run_home = "empty"
+config_home = "shared"
+env = "SCHEMAONE_HOME"
+real_dirs = ["{user_home}/.schemaone"]
+skills_dir = "skills"
+
+[capture.ca]
+env = ["NODE_EXTRA_CA_CERTS"]
+mode = "extend"
+
+[capture.identity]
+source = "none"
+
+[[capture.native]]
+name = "session"
+root = "{config_home}/sessions"
+pattern = "*/*.jsonl"
+form = "append_only"
+protocol_hint = "schema-one-jsonl"
+since_run_start = true
+
+[[capture.native]]
+name = "archive"
+root = "{config_home}/archive"
+pattern = "*/*.jsonl"
+form = "append_only"
+protocol_hint = "schema-one-jsonl"
+since_run_start = true
+
+[capture.termination]
+strategy = "process_group"
+grace_seconds = 10
+
+[[capture.hosts]]
+host = "api.schema-one.example"
+evidence_paths = ["/v1/messages"]
+protocol_hint = "anthropic-messages"

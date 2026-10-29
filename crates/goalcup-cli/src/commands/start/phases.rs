@@ -8,7 +8,8 @@ use super::forked::{
 };
 use super::proxy::{Proxied, admitted, entry_is_sealed, raise_open_file_limit};
 use super::refusals::{
-    holds_the_terminal, interrupted_before_launch, interrupted_refusal, offline_upstreams_for_test,
+    default_host_warning, holds_the_terminal, interrupted_before_launch, interrupted_refusal,
+    offline_upstreams_for_test, reachable,
 };
 use super::server::{UploadHow, open_competition_run, remove_run_keeping_pending_credential};
 use super::{CaptureRun, panic_while_quiet_for_test, pause_at};
@@ -22,6 +23,7 @@ use crate::home::{
 use crate::launch::{gated_handle, spawn_gated};
 use crate::preflight::Level;
 use crate::proxy::connect::ProxyCredential;
+use crate::proxy::preflight::Unreachable;
 use crate::proxy::tls::UpstreamRoots;
 use crate::retry::{retry_busy, retry_busy_entry, retry_busy_process};
 use crate::run::reserve::{RunReserve, artifact_root, reserve_path};
@@ -64,10 +66,11 @@ pub(super) struct CapturePrep {
 /// What a chat-mode run records as its goal. The v5 `Launch` record names the goal stream it
 /// was launched with and the daemon records a launch only after a goal, so a run whose harness
 /// was handed none records this fixed sentence instead: never sent to the harness, and never
-/// anything the participant typed (that is in the harness's session files).
+/// anything the participant typed (that is in the model requests, and in the harness's session
+/// files when it keeps them).
 pub const CHAT_MODE_GOAL: &str = "chat mode (D57): the harness was given no goal; the \
-     participant typed the prompt in the harness's own terminal, and it is recorded in the \
-     harness's session files.";
+     participant typed the prompt in the harness's own terminal. It is recorded in the model \
+     requests and, when the harness keeps one, in its session file.";
 
 /// Phase one: every refusal that comes before anything is created.
 pub(super) fn prepare(
@@ -106,17 +109,34 @@ pub(super) fn prepare(
     // anything is created (the recording proxy module's preflight; it names a firewall holding this
     // binary when they do not).
     if !offline_upstreams_for_test(env) {
-        crate::proxy::preflight::upstreams_reachable(profile.hosts.iter().map(|h| h.host.as_str()))
-            .and_then(|()| {
-                crate::proxy::preflight::endpoints_reachable(
-                    model_host.map(|m| (m.host.as_str(), m.port)),
-                )
-            })
-            .map_err(|unreachable| {
-                CliError::Refused(
-                    unreachable.refusal(cx.continuing.map(|c| c.record.run_id.as_str())),
-                )
-            })?;
+        let refusal = |unreachable: Unreachable| {
+            CliError::Refused(unreachable.refusal(cx.continuing.map(|c| c.record.run_id.as_str())))
+        };
+        // Which hosts are hard and which only warn is decided by `provider_hosts`: the model
+        // service the settings name is the one host a run cannot go without, and the harness's
+        // own hosts are one warning line, not a refusal, when a service is named.
+        let split = crate::model_host::provider_hosts(
+            model_host,
+            profile.hosts.iter().map(|h| h.host.as_str()),
+            profile.auth_hosts.iter().map(String::as_str),
+            crate::model_host::Caller::Start,
+        );
+        match model_host {
+            Some(model) => {
+                // A model service whose name resolves only to this computer is refused before the
+                // probe. This whole block is behind the test-only offline seam, so no integration
+                // test reaches the check; its unit test is
+                // `refuse_if_on_this_computer_uses_the_name_and_reason`.
+                crate::model_host::refuse_if_on_this_computer(model).map_err(|refused| {
+                    CliError::Refused(refused.refusal(c.display_name(), &c.loaded.manifest.id))
+                })?;
+                reachable(env, &endpoint_refs(&split.hard)).map_err(refusal)?;
+                if let Err(missing) = reachable(env, &endpoint_refs(&split.warn)) {
+                    say(out, &default_host_warning(&missing, model))?;
+                }
+            }
+            None => reachable(env, &endpoint_refs(&split.hard)).map_err(refusal)?,
+        }
     }
     // A per-run home is made inside the run directory below. A run directory inside a Git work
     // tree is refused before anything is created: it would hold what the
@@ -495,6 +515,9 @@ pub(super) fn create_and_gate<'a>(
         details.push(format!("run directory: {}", run.dir.display()));
         raise_open_file_limit(out)?;
         let tunnels_file = crate::run::tunnels_path(cfg, &record.run_id, &info.entry_id);
+        // The accept loop's restarts of the run's earlier parts count against its one limit (the
+        // proxy's own count starts here, so a continued run cannot restart more than the run may).
+        let recorder_restarts_before = carried_recorder_restarts(previous.as_ref());
         let proxied = Proxied::start(
             &info,
             profile,
@@ -503,6 +526,7 @@ pub(super) fn create_and_gate<'a>(
             roots,
             credential,
             tunnels_file,
+            recorder_restarts_before,
         )?;
         // A shared CA variable (`SSL_CERT_FILE`, `REQUESTS_CA_BUNDLE`) gets the system's roots
         // plus the recording proxy's CA, so tool children keep their real trust; a harness's own
@@ -682,6 +706,7 @@ pub(super) fn create_and_gate<'a>(
         prompt_file,
         on_clipboard,
         model_calls_before,
+        recorder_restarts_before: carried_recorder_restarts(previous.as_ref()),
         details,
         after_exit: c
             .loaded
@@ -705,10 +730,18 @@ pub(super) fn create_and_gate<'a>(
     Ok((forked, gate))
 }
 
+/// The `(host, port)` pairs of a host list, borrowed, as `reachable` takes them.
+fn endpoint_refs(list: &[(String, u16)]) -> Vec<(&str, u16)> {
+    list.iter()
+        .map(|(host, port)| (host.as_str(), *port))
+        .collect()
+}
+
 /// Whether a continue resumes a harness that left no session file (D73): the connector says a
-/// missing file is no problem (a native row with `warn_missing = false`, D72), the run's earlier
-/// parts recorded model calls, and the harness home's conversation database was written since
-/// the run started. Every other connector keeps the file rule.
+/// missing file is no problem, which holds only when it declares native rows and every one of
+/// them has `warn_missing = false` (D72), the run's earlier parts recorded model calls, and the
+/// harness home's conversation database was written since the run started. A connector with
+/// any file-required row keeps the file rule.
 fn resumes_without_a_file(
     profile: &goalcup_protocol::harness::CaptureSpec,
     calls: u64,
@@ -716,7 +749,8 @@ fn resumes_without_a_file(
     since_unix: u64,
 ) -> bool {
     calls > 0
-        && profile.native.iter().any(|native| !native.warn_missing)
+        && !profile.native.is_empty()
+        && profile.native.iter().all(|native| !native.warn_missing)
         && session_db_written_since(config_home, since_unix)
 }
 
@@ -1021,6 +1055,9 @@ pub(super) fn run_harness<'a>(
     launched.time_left = forked.time_left();
     // The run's model calls so far, which the tick adds this part's to (D73).
     launched.model_calls = Some(forked.model_calls_before.unwrap_or(0));
+    // The restart budget the earlier parts spent, written before the first watch tick copies the
+    // proxy's count in.
+    launched.recorder_restarts = forked.recorder_restarts_before;
     let keeper = crate::run::StateKeeper::begin(
         &crate::run::run_dir(forked.cfg, &forked.record.run_id),
         launched,
@@ -1031,7 +1068,11 @@ pub(super) fn run_harness<'a>(
         Some(proxied) => crate::run::RunSignals::counting(proxied.proxy.model_requests())
             .recording_from(proxied.proxy.recorded_requests())
             .generations_from(proxied.proxy.generation_requests())
-            .client_tls_from(proxied.proxy.client_tls_failures()),
+            .client_tls_from(proxied.proxy.client_tls_failures())
+            .recorder_from(
+                proxied.proxy.recorder_restarts(),
+                proxied.proxy.recorder_lost(),
+            ),
         None => crate::run::RunSignals::default(),
     }
     .model_calls_before(forked.model_calls_before.unwrap_or(0));
@@ -1209,6 +1250,12 @@ pub(super) fn run_harness<'a>(
     pause.end();
     // How long the harness ran, taken before the after-exit commands below can add their time.
     let ran = released_at.elapsed();
+    // What the end-of-run block says of a harness the watch tick did not call silent: how long it
+    // ran, and whether its connections failed the TLS handshake.
+    let silence = crate::run::NoModelCalls {
+        minutes: ran.as_secs() / 60,
+        tls_failing: vitals.client_tls_failures() > 0,
+    };
     // The harness has exited: the terminal is this command's again, if it is still there. First,
     // so a harness that crashed in raw mode does not leave the terminal raw, with Ctrl-C absorbed,
     // while the after-exit commands below run.
@@ -1286,6 +1333,7 @@ pub(super) fn run_harness<'a>(
         wrap_up,
         left_running: swept.and_then(|swept| swept.refusal(&entry_id)),
         keeper,
+        silence,
     })
 }
 
@@ -1454,6 +1502,13 @@ fn unmake(
     abandoned
 }
 
+/// The accept-loop restarts the run's earlier parts recorded, by the last part's `state.json`: the
+/// recording proxy starts its count from them, so the run's limit covers every part. None for a
+/// first launch, and 0 for a state an older build wrote.
+fn carried_recorder_restarts(previous: Option<&crate::run::RunState>) -> u64 {
+    previous.map_or(0, |state| state.recorder_restarts)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1483,6 +1538,22 @@ mod tests {
         );
         assert!(!resumes_without_a_file(hermes, 0, home.path(), now - 5));
         assert!(!resumes_without_a_file(codex, 3, home.path(), now - 5));
+    }
+
+    /// Claude's `subagent-meta` and `tool-results` rows say a missing file is no problem, but its
+    /// main session row does not, so a Claude run keeps the file rule even when a `state.db`
+    /// was written since the run started.
+    #[test]
+    fn a_connector_with_one_file_required_row_keeps_the_file_rule() {
+        let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../connectors");
+        let claude = crate::connector::load_harness(&dir, "claude-code-cli", false).unwrap();
+        let claude = &claude.loaded.manifest.capture;
+        assert!(claude.native.iter().any(|native| !native.warn_missing));
+        assert!(claude.native.iter().any(|native| native.warn_missing));
+        let home = tempfile::tempdir().unwrap();
+        std::fs::write(home.path().join("state.db"), b"").unwrap();
+        let now = crate::run::now_unix();
+        assert!(!resumes_without_a_file(claude, 3, home.path(), now - 5));
     }
 
     /// A resumed harness that exits non-zero at once is a failed resume, and the next continue
@@ -1530,6 +1601,28 @@ mod tests {
         assert_eq!(
             crate::run::read_state(dir.path()).unwrap().model_calls,
             None
+        );
+    }
+
+    /// A continued run's restart budget is the restarts its last part recorded, and the launch
+    /// state keeps them from its first write, so a part stopped before its first watch tick
+    /// does not hand the next one a fresh budget. The call that passes this value to the proxy is
+    /// covered by review only.
+    #[test]
+    fn a_continued_part_carries_the_runs_restarts_from_its_launch() {
+        assert_eq!(carried_recorder_restarts(None), 0);
+        let mut previous = crate::run::RunState::launched("e0", Ok(()));
+        previous.recorder_restarts = 4;
+        assert_eq!(carried_recorder_restarts(Some(&previous)), 4);
+        let dir = tempfile::tempdir().unwrap();
+        let mut launched = crate::run::RunState::launched("e1", Ok(()));
+        launched.recorder_restarts = carried_recorder_restarts(Some(&previous));
+        crate::run::StateKeeper::begin(dir.path(), launched);
+        assert_eq!(
+            crate::run::read_state(dir.path())
+                .unwrap()
+                .recorder_restarts,
+            4
         );
     }
 

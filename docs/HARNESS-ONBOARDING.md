@@ -185,7 +185,7 @@ Cannot be captured:
 
 | Item | Why | What it would take |
 |---|---|---|
-| A database session store (SQLite, LevelDB) | `native.form` is `append_only` or `snapshot` only | A read-only snapshot native form |
+| A database session store the harness writes while the run goes (SQLite, LevelDB) | `native.form` admits `append_only`, `snapshot` and `final_snapshot`. A `final_snapshot` is a copy taken once, after the harness has exited, so a database the harness keeps writing during the run is refused: a copy taken mid-run is not a faithful record | A read-only native form for a live database. A store the harness only settles at exit can use `final_snapshot` |
 | HTTP/2-only or gRPC model traffic | The recording proxy speaks HTTP/1.1 and WebSocket upgrades; an `h2`-only client cannot connect | An `h2` proxy path and a decoder for its framing |
 | A local or loopback model | The recording proxy never sees loopback traffic. A connector that names a loopback or single-label host is refused | A loopback relay Goal Cup Proxy records |
 | A desktop or IDE app | Goal Cup Proxy starts one CLI from argv | Not planned |
@@ -193,8 +193,13 @@ Cannot be captured:
 
 Known gaps. The connector works, but the record is partial. Write each one in the facts sheet:
 
-- Subagents with their own transcript files. Exactly one session-file pattern is recorded.
-  Separate subagent files are seen only as model traffic.
+- Subagents with their own transcript files. Only the files a declared `[[capture.native]]` row
+  matches are recorded. A subagent file no row matches is seen only as model traffic.
+- A per-run native ceiling. All native rows of one run share 32 open streams and 1024 tracked
+  files (the defaults). An append-only file past the 32nd waits until the finish, and a file past
+  the 1024th is not tracked. Each loss is marked as a streamless gap, not dropped silently. A
+  connector with several append-only rows can reach this in a long run. The Claude facts sheet
+  (`harnesses/claude-code-cli.md`, section 11) states the numbers.
 - A binary that updates itself with no flag or variable to stop that. The daemon hashes the build
   at launch. An update during the run is not recorded.
 - A model service the participant switches to inside a running session. The host is read from
@@ -410,7 +415,7 @@ Row numbers stay fixed so other pages can cite them; retired rows are left out.
 | 6 | XDG | the harness falls back to `$HOME` and needs no XDG variable | core change |
 | 7 | CA variable | the harness honours its own variable ending `_CA_CERTIFICATE`, `_CA_CERTIFICATES`, `_CA_CERT`, `_CA_CERTS`, `_CA_BUNDLE` or `_CA_FILE`, or else `SSL_CERT_FILE` or `REQUESTS_CA_BUNDLE` | core change |
 | 8 | Native form | the own-session file is appended JSONL or rewritten whole | core change |
-| 9 | Native row | zero or one local native artifact source (D74); it may be metadata-only and need not be a transcript. With none, the wire is the only record | fits |
+| 9 | Native rows | zero to eight local native artifact sources, one per row (D74); each may be metadata-only and need not be a transcript. With none, the wire is the only record | fits |
 | 10 | Executable | one entry-point file (a binary, or a script with a shebang), not an interpreter | fits |
 | 11 | Endpoint names | you set no endpoint variable at all | issue, not blocking |
 | 12 | Other refusals | no refused env name, argv path or custom regex is needed | core change |
@@ -446,9 +451,13 @@ daemon.
    ([CHEAT-CHECKLIST](CHEAT-CHECKLIST.md#anchoring-and-the-agents-reach)). `SSL_CERT_DIR`,
    `CURL_CA_BUNDLE` and `NODE_TLS_REJECT_UNAUTHORIZED` stay refused. See
    [CONNECTOR-SCHEMA](CONNECTOR-SCHEMA.md#credential-and-ca).
-8. **Native form.** `append_only` or `snapshot` only. A database store is refused.
-9. **Zero or one native row (D74).** Schema 1 admits a connector with none, which records the
-   wire only, and refuses more than one.
+8. **Native form.** `append_only`, `snapshot` or `final_snapshot`. A `final_snapshot` is a database or
+   other store copied once, after the harness has exited; it is never read while the run goes. A
+   database the harness writes during the run, polled live, is refused. `protocol_hint` is refused on
+   `snapshot` and `final_snapshot`.
+9. **Zero to eight native rows (D74).** Schema 1 admits a connector with none, which records the
+   wire only, and up to eight rows. Each row needs its own `name`, and no two rows may share a
+   `root` and `pattern`.
 10. **Executable.** There is no `sha256` (D53). The CLI resolves `program` on `PATH`, follows
     symlinks, and runs the regular file at the end. Any build runs. A pinned `program` cannot be an
     interpreter (`python3`, `node`, `sh`, `env`). A shebang script is fine.

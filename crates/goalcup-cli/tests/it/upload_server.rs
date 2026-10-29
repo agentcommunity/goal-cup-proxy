@@ -709,6 +709,88 @@ fn seal_stores_both_documents_and_seals_the_entry() {
     assert_err(&gone, 409, "conflict");
 }
 
+/// The seal carries its own entry's sealed-connection list: the bytes the writer puts on this
+/// machine at finish go with the seal, the server keeps them beside it, and a repeat of the same
+/// seal keeps them too. A list that names another entry (or no format line) is refused before
+/// anything is kept, as the Worker refuses it.
+#[test]
+fn the_seal_carries_this_entrys_tunnel_list() {
+    let rig = Rig::new();
+    let (run, entry) = rig.open_ok();
+    rig.put_ok(&run, &entry, &Chunk::first());
+    assert_eq!(
+        rig.heartbeat(&run, &entry, 3, &head(3), true, None).status,
+        200
+    );
+    let path = format!("/v1/runs/{run}/seal");
+    let docs = |tunnels: Option<&str>| {
+        let mut body = json!({
+            "entry_id": entry,
+            "seal_json": "{\"a\":1}\n",
+            "baseline_json": "{\"b\":2}",
+        });
+        if let Some(text) = tunnels {
+            body["tunnels_jsonl"] = json!(text);
+        }
+        body
+    };
+
+    // The list the writer makes for this entry, as the finish writes it.
+    let dir = TempDir::new().unwrap();
+    let list = dir
+        .path()
+        .join(goalcup_cli::proxy::tunnels::file_name(&entry));
+    let note = goalcup_cli::proxy::tunnels::TunnelNote {
+        host: "github.example.test".into(),
+        port: 443,
+        reason: "sign_in",
+        opened: std::time::UNIX_EPOCH,
+        closed: std::time::UNIX_EPOCH,
+        up_bytes: Some(10),
+        down_bytes: Some(20),
+    };
+    goalcup_cli::proxy::tunnels::write(&list, &entry, std::slice::from_ref(&note), 0).unwrap();
+    let mine = std::fs::read_to_string(&list).unwrap();
+
+    // Another entry's list, and one with no format line, are refused and keep nothing.
+    let other = json!({"format": "goalcup-tunnels-v1", "entry_id": "e0123456789abcdef"});
+    let theirs = format!("{other}\n{{\"dropped\":0}}\n");
+    assert_err(
+        &rig.json("POST", &path, TOKEN, &docs(Some(&theirs))),
+        400,
+        "malformed",
+    );
+    assert_err(
+        &rig.json("POST", &path, TOKEN, &docs(Some("not a list\n"))),
+        400,
+        "malformed",
+    );
+    assert_eq!(rig.server.tunnels_of(&entry), None);
+    assert_eq!(rig.server.seal_of(&entry), None);
+
+    // This entry's own list goes with the seal, byte for byte.
+    let r = rig.json("POST", &path, TOKEN, &docs(Some(&mine)));
+    assert_eq!(r.status, 200, "{:?}", r.body);
+    assert_eq!(
+        rig.server.tunnels_of(&entry).as_deref(),
+        Some(mine.as_str())
+    );
+    assert_eq!(
+        rig.server.seal(&run),
+        Some(("{\"a\":1}\n".to_string(), "{\"b\":2}".to_string()))
+    );
+
+    // The same seal again is a repeat: 200, and the list kept stays kept.
+    assert_eq!(
+        rig.json("POST", &path, TOKEN, &docs(Some(&mine))).status,
+        200
+    );
+    assert_eq!(
+        rig.server.tunnels_of(&entry).as_deref(),
+        Some(mine.as_str())
+    );
+}
+
 #[test]
 fn a_stopped_server_refuses_and_a_restart_resumes_the_same_state() {
     let dir = TempDir::new().unwrap();

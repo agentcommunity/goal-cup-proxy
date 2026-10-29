@@ -311,6 +311,8 @@ impl Ticker {
         let heartbeat = beat.vitals.heartbeat_trouble();
         let time_left = beat.vitals.time_left();
         let model_calls = beat.vitals.model_calls();
+        let recorder_restarts = beat.vitals.recorder_restarts();
+        let recorder_lost = beat.vitals.recorder_lost();
         let mut count = None;
         beat.keeper.update(|state| {
             if time_left.is_some() {
@@ -334,6 +336,8 @@ impl Ticker {
                 state.no_model_calls = silent;
             }
             state.model_calls = Some(model_calls);
+            state.recorder_restarts = recorder_restarts;
+            state.recorder_lost = recorder_lost;
         });
         if let Some(file) = &beat.time_left_file
             && let Err(error) = super::time_left::keep_file(

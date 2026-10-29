@@ -10,6 +10,7 @@ use crate::common::m2_proxy_support;
 use crate::common::m2_tls_support::{client_config, client_hello};
 
 use goalcup_cli::proxy::api::CaptureEmitter;
+use goalcup_cli::proxy::headers::HEADERS_HINT;
 use goalcup_cli::proxy::tls::CA_CERT_FILE_NAME;
 use goalcup_cli::proxy::{MAX_CONNECTION_TASKS, ProducerClose, StartError};
 use goalcup_protocol::capture::{
@@ -36,6 +37,19 @@ fn assert_all_clean(report: &goalcup_cli::proxy::ProxyStopReport) {
         report.is_clean_drain() && !report.capture_loss() && report.transport_failures() == 0,
         "{report:?}"
     );
+}
+
+/// A header stream (`http-head-v1`): the masked head of an exchange, beside its body stream.
+fn is_head(view: &StreamView) -> bool {
+    view.meta.protocol_hint.as_deref() == Some(HEADERS_HINT)
+}
+
+/// The chain's streams without the header streams: the bodies, which these tests count.
+fn bodies(frames: &[goalcup_protocol::capture::CaptureFrame]) -> Vec<StreamView> {
+    streams(frames)
+        .into_iter()
+        .filter(|v| !is_head(v))
+        .collect()
 }
 
 fn stream_with<'a>(views: &'a [StreamView], marker: &[u8]) -> &'a StreamView {
@@ -305,7 +319,7 @@ async fn sse_prefix_reaches_client_before_upstream_finishes() {
     // The upstream has not finished the body (its next chunk and terminator are unwritten),
     // and the direct sink already holds the first event on a still-open response stream.
     sink.settle().await;
-    let views = streams(&sink.frames());
+    let views = bodies(&sink.frames());
     let response = views
         .iter()
         .find(|v| v.source == CaptureSource::WireResponse)
@@ -349,7 +363,7 @@ async fn sse_prefix_reaches_client_before_upstream_finishes() {
             outcome: ConnectionOutcome::Complete
         }
     );
-    let views = streams(&frames);
+    let views = bodies(&frames);
     assert_eq!(views.len(), 2);
     let (req, resp) = (&views[0], &views[1]);
     assert_eq!(req.source, CaptureSource::WireRequest);
@@ -421,7 +435,7 @@ async fn rejected_websocket_upgrade_stays_http_capture() {
             .iter()
             .any(|c| c.event == ConnectionEvent::UpgradedWebSocket)
     );
-    let views = streams(&frames);
+    let views = bodies(&frames);
     assert!(views.iter().all(|v| matches!(
         v.source,
         CaptureSource::WireRequest | CaptureSource::WireResponse
@@ -462,7 +476,7 @@ async fn unknown_protocol_hint_is_captured_without_a_decoder() {
     let frames = sink.frames();
     check_frames(&frames);
     check_clock(&frames, clock, clock_now());
-    let views = streams(&frames);
+    let views = bodies(&frames);
     assert_eq!(views.len(), 2);
     for view in &views {
         assert_eq!(
@@ -473,6 +487,320 @@ async fn unknown_protocol_hint_is_captured_without_a_decoder() {
     }
     assert_eq!(views[0].bytes, b"\x00opaque-request\xff");
     assert_eq!(views[1].bytes, b"\x01opaque-response\xfe");
+}
+
+/// One `GET path` on a keep-alive connection, answered with `reply`; both ends are checked byte
+/// for byte.
+async fn get_exchange(
+    client: &mut ClientTls,
+    upstream: &mut UpstreamTls,
+    path: &str,
+    reply: &[u8],
+) {
+    let request = format!("GET {path} HTTP/1.1\r\nHost: localhost\r\n\r\n").into_bytes();
+    send(client, &request).await;
+    let (head, got) = read_request(upstream).await;
+    assert_eq!([head, got].concat(), request, "upstream saw other bytes");
+    let response = ok_response("application/json", reply);
+    send(upstream, &response).await;
+    let mut seen = Vec::new();
+    read_at_least(client, &mut seen, response.len()).await;
+    assert_eq!(seen, response, "client saw other bytes");
+}
+
+/// Every request on an opened host is recorded, whatever its path and method: the host policy
+/// only picks the decoder hint. The policy is the production rule for a URL with no path
+/// (`ModelHost::approved`), not a single-path test policy. So `POST /v1/messages` gets its
+/// hint from the `/v1` wire row, `GET /v1/models` is recorded with no hint through the `/v1/`
+/// base-prefix row, and `POST /x/other`, outside every row, is recorded with no hint too.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn every_request_on_an_opened_host_is_recorded() {
+    let clock = clock_start();
+    let pki = TestPki::new("upstream test CA");
+    let mut upstream = Upstream::start(&pki, &["localhost"]).await;
+    let sink = DirectSink::new(QUEUE_BYTES);
+    let mut config = RigConfig::new(&pki);
+    config.approved = vec![
+        goalcup_cli::model_host::ModelHost {
+            host: "localhost".into(),
+            port: 443,
+            base_path: String::new(),
+            from: "test config".into(),
+            edit: None,
+        }
+        .approved(),
+    ];
+    let mut rig = Rig::start(config, sink.clone()).await;
+    let mut client = rig.client(upstream.addr.port()).await;
+    let mut up = upstream.accept().await.tls;
+    exchange(
+        &mut client,
+        &mut up,
+        "/v1/messages",
+        b"{\"messages\":[]}",
+        b"{\"id\":\"m\"}",
+    )
+    .await;
+    get_exchange(&mut client, &mut up, "/v1/models", b"{\"data\":[]}").await;
+    exchange(
+        &mut client,
+        &mut up,
+        "/x/other",
+        b"outside-every-row",
+        b"{\"ok\":true}",
+    )
+    .await;
+    close_both(client, up).await;
+    rig.wait_closed(1).await;
+    let recorded = rig
+        .handle()
+        .recorded_requests()
+        .load(std::sync::atomic::Ordering::SeqCst);
+    let model_calls = rig
+        .handle()
+        .generation_requests()
+        .load(std::sync::atomic::Ordering::SeqCst);
+    assert_all_clean(&rig.stop().await);
+    sink.settle().await;
+
+    let frames = sink.frames();
+    check_frames(&frames);
+    check_clock(&frames, clock, clock_now());
+    let views = bodies(&frames);
+    let requests: Vec<&StreamView> = views
+        .iter()
+        .filter(|v| v.source == CaptureSource::WireRequest)
+        .collect();
+    let responses = views
+        .iter()
+        .filter(|v| v.source == CaptureSource::WireResponse)
+        .count();
+    assert_eq!((requests.len(), responses), (3, 3), "{views:?}");
+    assert_eq!(recorded, 3);
+    // Only the hinted POST is a model call: the GET model list and the POST outside every
+    // row are not.
+    assert_eq!(model_calls, 1);
+    let paths: Vec<&str> = requests
+        .iter()
+        .map(|v| v.meta.path.as_deref().expect("a retained path"))
+        .collect();
+    assert_eq!(paths, ["/v1/messages", "/v1/models", "/x/other"]);
+    let hints: Vec<Option<&str>> = requests
+        .iter()
+        .map(|v| v.meta.protocol_hint.as_deref())
+        .collect();
+    assert_eq!(hints, [Some("anthropic-messages"), None, None]);
+    let exchanges: Vec<u64> = requests.iter().map(|v| v.exchange()).collect();
+    assert_eq!(exchanges, [1, 2, 3]);
+    assert_eq!(requests[2].bytes, b"outside-every-row");
+}
+
+/// A refresh-token request to a token endpoint on an opened host is recorded like any other
+/// request: the proxy hands its body over unchanged. Masking happens in the daemon's redactor,
+/// before a segment is written; that is pinned on decoded segment bytes in the daemon's
+/// `capture_redaction` suite. Sign-in hosts stay sealed (auth hosts), which is a separate rule.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_token_refresh_on_an_opened_host_is_recorded() {
+    let clock = clock_start();
+    let pki = TestPki::new("upstream test CA");
+    let mut upstream = Upstream::start(&pki, &["localhost"]).await;
+    let sink = DirectSink::new(QUEUE_BYTES);
+    let mut rig = Rig::start(RigConfig::new(&pki), sink.clone()).await;
+    let mut client = rig.client(upstream.addr.port()).await;
+    let mut up = upstream.accept().await.tls;
+    let body = br#"{"grant_type":"refresh_token","refresh_token":"rt-0123456789abcdefghij"}"#;
+    exchange(
+        &mut client,
+        &mut up,
+        "/oauth/token",
+        body,
+        br#"{"access_token":"at-0123456789abcdefghij"}"#,
+    )
+    .await;
+    close_both(client, up).await;
+    rig.wait_closed(1).await;
+    let model_calls = rig
+        .handle()
+        .generation_requests()
+        .load(std::sync::atomic::Ordering::SeqCst);
+    assert_all_clean(&rig.stop().await);
+    sink.settle().await;
+
+    let frames = sink.frames();
+    check_frames(&frames);
+    check_clock(&frames, clock, clock_now());
+    assert_eq!(model_calls, 0, "a token refresh is no model call");
+    let views = bodies(&frames);
+    let refresh = views
+        .iter()
+        .find(|v| v.source == CaptureSource::WireRequest)
+        .expect("the refresh request is recorded");
+    assert_eq!(refresh.meta.path.as_deref(), Some("/oauth/token"));
+    assert_eq!(refresh.meta.protocol_hint, None);
+    assert_eq!(refresh.bytes, body);
+}
+
+/// Every recorded exchange on an opened host has one request and one response header stream: its
+/// masked head, under the header hint, with no method. Two exchanges give four, the credentials
+/// are masked in them, and no credential value reaches any frame. The model-call count is the
+/// same as without them: only the hinted POST counts.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn every_recorded_exchange_has_header_streams() {
+    let clock = clock_start();
+    let pki = TestPki::new("upstream test CA");
+    let mut upstream = Upstream::start(&pki, &["localhost"]).await;
+    let sink = DirectSink::new(QUEUE_BYTES);
+    let mut config = RigConfig::new(&pki);
+    config.approved = vec![
+        goalcup_cli::model_host::ModelHost {
+            host: "localhost".into(),
+            port: 443,
+            base_path: String::new(),
+            from: "test config".into(),
+            edit: None,
+        }
+        .approved(),
+    ];
+    let mut rig = Rig::start(config, sink.clone()).await;
+    let mut client = rig.client(upstream.addr.port()).await;
+    let mut up = upstream.accept().await.tls;
+    let extra = "Authorization: Bearer SECRET-bearer-0123\r\nx-api-key: SECRET-key-4567\r\nUser-Agent: example-agent/2.1.312\r\n";
+    let request = post(
+        "/v1/messages?key=SECRET-query-89",
+        b"{\"messages\":[]}",
+        extra,
+    );
+    send(&mut client, &request).await;
+    let (head, got) = read_request(&mut up).await;
+    assert_eq!([head, got].concat(), request, "upstream saw other bytes");
+    let response = ok_response("application/json", b"{\"id\":\"m\"}");
+    send(&mut up, &response).await;
+    let mut seen = Vec::new();
+    read_at_least(&mut client, &mut seen, response.len()).await;
+    assert_eq!(seen, response, "client saw other bytes");
+    get_exchange(&mut client, &mut up, "/v1/models", b"{\"data\":[]}").await;
+    close_both(client, up).await;
+    rig.wait_closed(1).await;
+    let model_calls = rig
+        .handle()
+        .generation_requests()
+        .load(std::sync::atomic::Ordering::SeqCst);
+    assert_all_clean(&rig.stop().await);
+    sink.settle().await;
+
+    let frames = sink.frames();
+    check_frames(&frames);
+    check_clock(&frames, clock, clock_now());
+    assert_eq!(model_calls, 1, "a header stream is never a model call");
+    let views = streams(&frames);
+    let heads: Vec<&StreamView> = views
+        .iter()
+        .filter(|v| v.meta.protocol_hint.as_deref() == Some(HEADERS_HINT))
+        .collect();
+    let request_heads = heads
+        .iter()
+        .filter(|v| v.source == CaptureSource::WireRequest)
+        .count();
+    let response_heads = heads
+        .iter()
+        .filter(|v| v.source == CaptureSource::WireResponse)
+        .count();
+    assert_eq!((request_heads, response_heads), (2, 2), "{views:?}");
+    for head in &heads {
+        assert_eq!(head.meta.method, None, "a header stream has no method");
+        assert_eq!(head.end, Some(EndReason::Complete));
+        assert!(head.gaps.is_empty(), "{:?}", head.gaps);
+    }
+    let first = heads
+        .iter()
+        .find(|v| v.source == CaptureSource::WireRequest && v.exchange() == 1)
+        .expect("the first request has a head stream");
+    let text = String::from_utf8(first.bytes.clone()).expect("a masked head is text");
+    assert!(
+        text.starts_with("POST /v1/messages?key=[masked] HTTP/1.1\r\n"),
+        "{text}"
+    );
+    assert!(text.contains("Authorization: [masked]\r\n"), "{text}");
+    assert!(text.contains("x-api-key: [masked]\r\n"), "{text}");
+    assert!(
+        text.contains("User-Agent: example-agent/2.1.312\r\n"),
+        "{text}"
+    );
+    // The decoded frames hold the masked heads and no credential value, in any stream.
+    assert!(!retained_contains(&sink.retained(), b"SECRET"));
+    let body = views
+        .iter()
+        .find(|v| {
+            v.source == CaptureSource::WireRequest
+                && v.meta.protocol_hint.as_deref() == Some("anthropic-messages")
+        })
+        .expect("the model request body is recorded");
+    assert_eq!(body.bytes, b"{\"messages\":[]}");
+}
+
+/// An exchange the recorder cannot retain (a method over the metadata limit) is still relayed
+/// unchanged and leaves one `LimitExceeded` loss in the chain: it never vanishes silently. The
+/// connection carries on, and the next exchange is recorded under its own exchange number.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_exchange_the_recorder_cannot_retain_is_a_loss() {
+    let clock = clock_start();
+    let pki = TestPki::new("upstream test CA");
+    let mut upstream = Upstream::start(&pki, &["localhost"]).await;
+    let sink = DirectSink::new(QUEUE_BYTES);
+    let mut rig = Rig::start(RigConfig::new(&pki), sink.clone()).await;
+    let mut client = rig.client(upstream.addr.port()).await;
+    let mut up = upstream.accept().await.tls;
+    let method = "M".repeat(65);
+    let request = format!(
+        "{method} /v1/responses HTTP/1.1\r\nHost: localhost\r\nContent-Length: 2\r\n\r\nhi"
+    )
+    .into_bytes();
+    send(&mut client, &request).await;
+    let (head, got) = read_request(&mut up).await;
+    assert_eq!([head, got].concat(), request, "upstream saw other bytes");
+    let response = ok_response("text/plain", b"ok");
+    send(&mut up, &response).await;
+    let mut seen = Vec::new();
+    read_at_least(&mut client, &mut seen, response.len()).await;
+    assert_eq!(seen, response, "client saw other bytes");
+    exchange(
+        &mut client,
+        &mut up,
+        "/v1/responses",
+        b"{\"after\":1}",
+        b"{}",
+    )
+    .await;
+    close_both(client, up).await;
+    rig.wait_closed(1).await;
+    let handle = rig.handle();
+    let model = handle
+        .model_requests()
+        .load(std::sync::atomic::Ordering::SeqCst);
+    let recorded = handle
+        .recorded_requests()
+        .load(std::sync::atomic::Ordering::SeqCst);
+    let report = rig.stop().await;
+    assert!(
+        report.is_clean_drain() && report.transport_failures() == 0,
+        "{report:?}"
+    );
+    sink.settle().await;
+
+    let frames = sink.frames();
+    check_frames(&frames);
+    check_clock(&frames, clock, clock_now());
+    assert_eq!((model, recorded), (2, 1));
+    assert_eq!(
+        losses(&frames)
+            .into_iter()
+            .map(|(_, r)| r)
+            .collect::<Vec<_>>(),
+        vec![GapReason::LimitExceeded]
+    );
+    let views = bodies(&frames);
+    assert_eq!(views.len(), 2, "{views:?}");
+    assert!(views.iter().all(|v| v.exchange() == 2));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -1302,7 +1630,7 @@ async fn stop_with_active_stream_and_blocked_sink_meets_one_deadline() {
         vec![GapReason::ShutdownDeadline],
         "the cut admission is the one chained loss"
     );
-    let views = streams(&frames);
+    let views = bodies(&frames);
     let response = views
         .iter()
         .find(|v| v.source == CaptureSource::WireResponse)
@@ -2143,7 +2471,7 @@ async fn websocket_101_and_first_data_share_one_write() {
         ]
     );
     let connection = controls[0].connection.clone();
-    let views = streams(&frames);
+    let views = bodies(&frames);
     let handshake: Vec<&StreamView> = views
         .iter()
         .filter(|v| {
@@ -2583,4 +2911,115 @@ async fn an_upstream_outage_is_one_window_closed_by_the_next_reach() {
     assert_eq!(closed.first_failure, open.first_failure);
     let recovered = closed.recovered.as_deref().expect("the window closed");
     assert!(recovered >= closed.last_failure.as_str());
+}
+
+/// A dead accept loop is restarted on the same port: the address the harness already has serves a
+/// new connection, and its request is recorded. The test kills the loop; the supervisor binds the
+/// port again and runs a new loop over the same shared state.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_dead_accept_loop_is_restarted_on_the_same_port() {
+    let clock = clock_start();
+    let pki = TestPki::new("upstream test CA");
+    let mut upstream = Upstream::start(&pki, &["localhost"]).await;
+    let sink = DirectSink::new(QUEUE_BYTES);
+    let mut rig = Rig::start(RigConfig::new(&pki), sink.clone()).await;
+    let addr = rig.addr;
+    rig.handle().kill_accept_for_test();
+    eventually("the recorder restarts", || {
+        rig.handle().health().recorder_restarts == 1
+    })
+    .await;
+    assert_eq!(rig.handle().local_addr(), addr);
+    assert!(!rig.handle().health().recorder_lost);
+    let mut client = rig.client(upstream.addr.port()).await;
+    let mut up = upstream.accept().await.tls;
+    exchange(
+        &mut client,
+        &mut up,
+        "/v1/messages",
+        b"{\"messages\":[]}",
+        b"{\"id\":\"m\"}",
+    )
+    .await;
+    close_both(client, up).await;
+    rig.wait_closed(1).await;
+    let recorded = rig
+        .handle()
+        .recorded_requests()
+        .load(std::sync::atomic::Ordering::SeqCst);
+    assert_all_clean(&rig.stop().await);
+    sink.settle().await;
+
+    let frames = sink.frames();
+    check_frames(&frames);
+    check_clock(&frames, clock, clock_now());
+    assert_eq!(recorded, 1);
+    let requests = bodies(&frames)
+        .iter()
+        .filter(|v| v.source == CaptureSource::WireRequest)
+        .count();
+    assert_eq!(requests, 1);
+}
+
+/// The recorder is restarted at most five times in a run. The sixth death is not restarted: the
+/// port is no longer served, and the run reports the recorder lost.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_recorder_is_restarted_at_most_five_times() {
+    let pki = TestPki::new("upstream test CA");
+    let sink = DirectSink::new(QUEUE_BYTES);
+    let mut rig = Rig::start(RigConfig::new(&pki), sink.clone()).await;
+    for restarts in 1..=5u64 {
+        rig.handle().kill_accept_for_test();
+        eventually("a restart", || {
+            rig.handle().health().recorder_restarts == restarts
+        })
+        .await;
+    }
+    rig.handle().kill_accept_for_test();
+    eventually("the sixth death is reported", || {
+        rig.handle().health().recorder_lost
+    })
+    .await;
+    let health = rig.handle().health();
+    assert_eq!(health.recorder_restarts, 5);
+    assert!(health.recorder_lost);
+    assert!(
+        TcpStream::connect(rig.addr).await.is_err(),
+        "the port is still served after the sixth death"
+    );
+    let report = rig.stop().await;
+    assert!(report.accept_loop_lost, "{report:?}");
+    assert_eq!(report.health.recorder_restarts, 5);
+}
+
+/// The restart budget is the run's, not the launch's: a launch that continues a run which already
+/// restarted its recorder four times has one restart left, and the next death is the one past the
+/// limit. The count it starts from shows in its health.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_continued_launch_keeps_the_runs_restart_count() {
+    let pki = TestPki::new("upstream test CA");
+    let sink = DirectSink::new(QUEUE_BYTES);
+    let mut config = RigConfig::new(&pki);
+    config.recorder_restarts_before = 4;
+    let mut rig = Rig::start(config, sink.clone()).await;
+    assert_eq!(rig.handle().health().recorder_restarts, 4);
+    rig.handle().kill_accept_for_test();
+    eventually("the last restart of the run", || {
+        rig.handle().health().recorder_restarts == 5
+    })
+    .await;
+    assert!(!rig.handle().health().recorder_lost);
+    rig.handle().kill_accept_for_test();
+    eventually("the next death is past the run's limit", || {
+        rig.handle().health().recorder_lost
+    })
+    .await;
+    assert_eq!(rig.handle().health().recorder_restarts, 5);
+    assert!(
+        TcpStream::connect(rig.addr).await.is_err(),
+        "the port is still served after the run's limit"
+    );
+    let report = rig.stop().await;
+    assert!(report.accept_loop_lost, "{report:?}");
+    assert_eq!(report.health.recorder_restarts, 5);
 }

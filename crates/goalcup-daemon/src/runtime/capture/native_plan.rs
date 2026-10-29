@@ -1,17 +1,17 @@
-//! The entry's native-store plan: its one schema-declared source, if it has one, the roots it
-//! resolves to and the isolation they are held to. Chat mode names no session
-//! (`identity.source = "none"`), so there is no scope to bind: the store is read from the
+//! The entry's native-store plan: one source for each schema-declared `[[capture.native]]` row,
+//! the roots they resolve to and the isolation they are held to. Chat mode names no session
+//! (`identity.source = "none"`), so there is no scope to bind: the stores are read from the
 //! entry's create on, and a `since_run_start` source reads only files changed at or after the
 //! run's start (D57).
 
 use super::*;
-use goalcup_protocol::harness::RunHome;
+use goalcup_protocol::harness::{NativeSpec, RunHome, glob_matches};
 
 /// Raw native bytes one poll may read: about an eighth of the queue once encoded.
 pub(super) const NATIVE_POLL_BYTES: u64 = 4 * MAX_SEGMENT_BYTES as u64;
 
-/// How an entry reads its harness's one schema-1 native store: the schema-declared source, or
-/// nothing for a harness that declares none.
+/// How an entry reads its harness's native stores: one source per schema-declared row, in row
+/// order, or nothing for a harness that declares none.
 /// `since` is the run's start in Unix seconds, from which a `since_run_start` source reads
 /// (D57) and which any other ignores: the request's `native_since`, or else the entry's own
 /// create time ([`create_time_floor`]).
@@ -23,9 +23,20 @@ pub(super) fn native_plan(
 ) -> Result<Vec<NativeSourceSpec>, DaemonError> {
     // A harness that keeps no conversation file of its own declares none: the entry records
     // the wire alone.
-    let Some(native) = capture.native.first() else {
-        return Ok(Vec::new());
-    };
+    capture
+        .native
+        .iter()
+        .map(|native| native_source(native, run_home, config_home, since))
+        .collect()
+}
+
+/// One `[[capture.native]]` row, planned.
+fn native_source(
+    native: &NativeSpec,
+    run_home: &Path,
+    config_home: &Path,
+    since: u64,
+) -> Result<NativeSourceSpec, DaemonError> {
     let modified_since = if native.since_run_start {
         Some(
             std::time::UNIX_EPOCH
@@ -43,6 +54,7 @@ pub(super) fn native_plan(
     let form = match native.form {
         goalcup_protocol::harness::NativeForm::AppendOnly => NativeStoreForm::AppendOnly,
         goalcup_protocol::harness::NativeForm::Snapshot => NativeStoreForm::Snapshot,
+        goalcup_protocol::harness::NativeForm::FinalSnapshot => NativeStoreForm::FinalSnapshot,
         _ => {
             return Err(DaemonError::Config(
                 "unsupported schema-1 native form".into(),
@@ -55,14 +67,14 @@ pub(super) fn native_plan(
         .map(NativeHint::new)
         .transpose()
         .map_err(|error| DaemonError::Config(format!("native capture: {error}")))?;
-    Ok(vec![NativeSourceSpec {
+    Ok(NativeSourceSpec {
         name: native.name.clone(),
         root,
         pattern: native.pattern.clone(),
         form,
         hint,
         modified_since,
-    }])
+    })
 }
 
 /// The floor a `since_run_start` source reads from when the request names no run start: the
@@ -140,8 +152,8 @@ fn native_root(root: &str, run_home: &Path, config_home: &Path) -> Result<PathBu
 
 /// The baseline's listing of the harness home (D56): every file but the native roots inside it.
 /// The home is the config home, or the run `HOME` when that is shared (D59): the one kept
-/// across runs. Empty when a native root is the home itself; `None` when the home cannot be
-/// read.
+/// across runs. A native root that is the home itself drops only the files its pattern names;
+/// every other file stays listed. `None` when the home cannot be read.
 pub(super) fn listed_home(
     capture: &CaptureSpec,
     run_home: &Path,
@@ -153,17 +165,39 @@ pub(super) fn listed_home(
         config_home
     };
     let mut excluded = Vec::new();
+    // A row rooted at the home itself names files in it, not a folder. Exclusions are folder
+    // prefixes, so those files are dropped by the row's pattern and every other file stays
+    // listed (D56).
+    let mut home_patterns = Vec::new();
     for native in &capture.native {
         let Ok(root) = native_root(&native.root, run_home, config_home) else {
             continue;
         };
         match root.strip_prefix(home) {
-            Ok(rel) if rel.as_os_str().is_empty() => return Some(Vec::new()),
+            Ok(rel) if rel.as_os_str().is_empty() => home_patterns.push(native.pattern.as_str()),
             Ok(rel) => excluded.push(rel.to_string_lossy().replace('\\', "/")),
             Err(_) => {}
         }
     }
-    workspace::list_home(home, &excluded)
+    let mut files = workspace::list_home(home, &excluded)?;
+    files.retain(|file| {
+        !home_patterns
+            .iter()
+            .any(|pattern| pattern_matches(pattern, &file.path))
+    });
+    Some(files)
+}
+
+/// Whether a workspace-relative `path` is named by a native `pattern`: the same number of
+/// `/`-separated components, each matching its glob.
+fn pattern_matches(pattern: &str, path: &str) -> bool {
+    let pattern: Vec<&str> = pattern.split('/').collect();
+    let path: Vec<&str> = path.split('/').collect();
+    pattern.len() == path.len()
+        && pattern
+            .iter()
+            .zip(&path)
+            .all(|(glob, name)| glob_matches(name, glob))
 }
 
 /// A native capture over `sources`, queueing into `sink`.

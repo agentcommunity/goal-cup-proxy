@@ -8,11 +8,12 @@
 //! only to know where a message ends (keep-alive, pipelining, the upgrade boundary); a request
 //! is never reserialized.
 //!
-//! **What is captured.** Only an exchange whose Host names the admitted host and whose
-//! query-free path the host profile selects ([`crate::proxy::metadata`]). A request whose Host
-//! (or absolute-form authority) names any other host turns the connection into an opaque relay,
-//! counted and chained as a loss: another host's traffic never rides uncaptured inside an
-//! admitted connection. Its request body is a
+//! **What is captured.** Every exchange whose Host names the admitted host, whatever its path,
+//! as long as its method is retainable; the host profile only picks each exchange's decoder hint
+//! ([`crate::proxy::metadata`]). An exchange relayed but not retained leaves a `LimitExceeded`
+//! loss in the chain. A request whose Host (or absolute-form authority) names any other host
+//! turns the connection into an opaque relay, counted and chained as a loss: another host's
+//! traffic never rides uncaptured inside an admitted connection. Its request body is a
 //! `WireRequest` stream, its final response body a `WireResponse` stream; both carry the typed
 //! [`goalcup_protocol::capture::WireIdentity`] of this physical connection and a per-connection
 //! exchange counter (starting at one), with `message_index: None`. Informational (1xx) heads
@@ -41,13 +42,16 @@
 //! Either way the fallback is counted on the emitter when it happens, however the connection
 //! then ends, and a relay that ends cleanly after it returns [`HttpOutcome::Opaque`].
 //!
-//! No header value, query, cookie or credential is retained, logged or put in an error: the
-//! parsed heads keep only framing fields, and errors carry fixed text. The one exception is the
-//! content-coding tokens of a body left undecoded, sanitized and bounded, in `host.log` only.
+//! Header values reach the chain only through the header streams (`http-head-v1`, see
+//! [`crate::proxy::headers`]), where credential values and credential-named query values are
+//! masked. The parsed heads keep only framing fields, and errors carry fixed text. The one other
+//! exception is the content-coding tokens of a body left undecoded, sanitized and bounded, in
+//! `host.log` only.
 
 use crate::proxy::api::{
-    BoxIo, CaptureEmitter, CapturePolicy, HttpOutcome, RelayContext, RelayPair, Upgrade,
+    BoxIo, CaptureEmitter, CapturePolicy, HttpOutcome, ProxyLoss, RelayContext, RelayPair, Upgrade,
 };
+use crate::proxy::headers::{HEADERS_HINT, masked_head};
 use crate::proxy::metadata::{self, ExchangeMeta, SafeTarget};
 use brotli_decompressor::{
     Allocator, BrotliDecompressStream, BrotliResult, BrotliState, SliceWrapper, SliceWrapperMut,
@@ -144,6 +148,7 @@ pub async fn relay_http(pair: RelayPair, context: RelayContext) -> io::Result<Ht
                 exchange,
                 extensions,
                 capture,
+                named_by_row,
             } = *hand;
             Ok(HttpOutcome::WebSocket(Upgrade {
                 exchange,
@@ -156,6 +161,7 @@ pub async fn relay_http(pair: RelayPair, context: RelayContext) -> io::Result<Ht
                 upstream_prefix: upstream_in.buf,
                 extensions,
                 capture,
+                named_by_row,
             }))
         }
         _ => Err(io::Error::other(
@@ -203,6 +209,9 @@ struct Pending {
 /// A selected exchange: its retained metadata, and whether its request is being captured.
 struct ExchangeCapture {
     meta: ExchangeMeta,
+    /// True when a host-policy row names the path (a wire row or the base-prefix row). Every
+    /// exchange is recorded, but only one under the base path can be a model call on a POST.
+    named_by_row: bool,
     request_content_type: Option<String>,
     /// True while the request's stream is open or ended normally; false if it never opened
     /// or its capture was lost. A response is captured only behind a captured request.
@@ -249,6 +258,7 @@ struct Handoff {
     exchange: u64,
     extensions: Option<String>,
     capture: Option<CaptureMeta>,
+    named_by_row: bool,
 }
 
 // ---------------------------------------------------------------------------------------
@@ -296,13 +306,24 @@ async fn relay_requests(
         shared.emitter.record_model_request();
         let at = src.at.clone();
         let capture = select(shared, &request, target.as_ref(), exchange);
-        if let Some(capture) = &capture {
-            shared.emitter.record_recorded_request();
-            // A model call is a request on a hinted path, or a POST on any other recorded path
-            // (a provider's own generate route under the base path); a GET there is a model
-            // list or a probe.
-            if capture.meta.protocol_hint.is_some() || capture.meta.method == "POST" {
-                shared.emitter.record_generation_request();
+        match &capture {
+            Some(capture) => {
+                shared.emitter.record_recorded_request();
+                // A model call is decided by `ExchangeMeta::counts_as_model_call`, the one rule the
+                // WebSocket relay also reads.
+                if ExchangeMeta::counts_as_model_call(
+                    capture.meta.protocol_hint.as_deref(),
+                    &capture.meta.method,
+                    capture.named_by_row,
+                ) {
+                    shared.emitter.record_generation_request(Some(shared.host));
+                }
+            }
+            // Relayed unchanged but not retained: the chain says so, once per reason.
+            None => {
+                let _ = shared
+                    .emitter
+                    .proxy_loss(metadata::capture_time(), ProxyLoss::ExchangeOverLimit);
             }
         }
         let request_ok = capture.as_ref().map(|c| c.request_ok.clone());
@@ -338,10 +359,20 @@ async fn relay_requests(
             return requests_opaque(shared, tx, src, dst).await;
         }
 
-        // Recovery only here, at the head of a newly begun selected request.
+        // Recovery only here, at the head of a newly begun selected request. The request's head
+        // stream comes first; without it the body is not opened either, so the response is not
+        // captured behind a request whose head was lost.
         let mut body = BodyCapture::none(shared.emitter);
         if let (Some(meta), Some(flag)) = (meta, request_ok) {
-            if shared.emitter.try_recover(at.clone()) == SubmitResult::Queued {
+            if shared.emitter.try_recover(at.clone()) == SubmitResult::Queued
+                && capture_head(
+                    shared.emitter,
+                    CaptureSource::WireRequest,
+                    meta.clone(),
+                    &src.buf[..end],
+                    &at,
+                )
+            {
                 body = BodyCapture::open(
                     shared.emitter,
                     CaptureSource::WireRequest,
@@ -389,8 +420,10 @@ async fn relay_requests(
     }
 }
 
-/// Decide whether this exchange is captured: the admitted host, a retainable method and
-/// path, and a path the host policy selects.
+/// Decide whether this exchange is captured. Every exchange on the admitted host is, whatever
+/// its path, as long as its method can be retained; the host policy only supplies the decoder
+/// hint for the path (none when no row names it). `None` means the exchange is relayed but
+/// not retained.
 fn select(
     shared: &Shared<'_>,
     request: &RequestHead,
@@ -398,7 +431,8 @@ fn select(
     exchange: u64,
 ) -> Option<ExchangeCapture> {
     let target = target.filter(|_| metadata::is_method(&request.method))?;
-    let path = metadata::select(shared.policy, &target.path)?;
+    let row = metadata::select(shared.policy, &target.path);
+    let protocol_hint = row.and_then(|row| row.protocol_hint.clone());
     Some(ExchangeCapture {
         meta: ExchangeMeta {
             connection: shared.connection.to_string(),
@@ -406,8 +440,9 @@ fn select(
             host: shared.host.to_string(),
             method: request.method.clone(),
             path: target.path.clone(),
-            protocol_hint: path.protocol_hint.clone(),
+            protocol_hint,
         },
+        named_by_row: row.is_some(),
         request_content_type: request.fields.content_type.clone(),
         request_ok: Arc::new(AtomicBool::new(false)),
     })
@@ -491,6 +526,13 @@ async fn relay_responses(
                 .and_then(|a| a.websocket_key.as_deref())
                 .is_some_and(|key| response.accepts_websocket(key));
             if let Some(meta) = response_meta {
+                capture_head(
+                    shared.emitter,
+                    CaptureSource::WireResponse,
+                    meta.clone(),
+                    &src.buf[..end],
+                    &at,
+                );
                 let mut stream = BodyCapture::open(
                     shared.emitter,
                     CaptureSource::WireResponse,
@@ -516,18 +558,34 @@ async fn relay_responses(
             if ask.decision.send(Decision::WebSocket).is_err() {
                 return Err(io::Error::other("the request side of an upgrade is gone"));
             }
-            let capture = pending
-                .capture
-                .map(|c| c.meta.request(c.request_content_type));
+            let (capture, named_by_row) = match pending.capture {
+                Some(c) => {
+                    let named_by_row = c.named_by_row;
+                    (Some(c.meta.request(c.request_content_type)), named_by_row)
+                }
+                None => (None, false),
+            };
             return Ok(ResponseEnd::Upgraded(Box::new(Handoff {
                 upstream: src,
                 client: dst,
                 exchange: pending.exchange,
                 extensions: response.extensions(),
                 capture,
+                named_by_row,
             })));
         }
 
+        // The final response's head stream opens before framing, so even a response this relay
+        // cannot frame has one.
+        if let Some(meta) = &response_meta {
+            capture_head(
+                shared.emitter,
+                CaptureSource::WireResponse,
+                meta.clone(),
+                &src.buf[..end],
+                &at,
+            );
+        }
         let (head_request, connect) = pending
             .as_ref()
             .map_or((false, false), |p| (p.head, p.connect));
@@ -1246,6 +1304,25 @@ where
 // ---------------------------------------------------------------------------------------
 // The capture side channel for one body.
 // ---------------------------------------------------------------------------------------
+
+/// One exchange's header stream: its head, masked ([`masked_head`]), under the header hint and with
+/// no method, so it is never a model call. Opened, written and ended the way a body stream is,
+/// and not gated by the body's own state. Returns whether the stream was opened.
+fn capture_head(
+    emitter: &CaptureEmitter,
+    source: CaptureSource,
+    mut meta: CaptureMeta,
+    head: &[u8],
+    at: &CaptureTime,
+) -> bool {
+    meta.protocol_hint = Some(HEADERS_HINT.to_string());
+    meta.method = None;
+    let mut stream = BodyCapture::open(emitter, source, meta, &[], at, None);
+    let opened = stream.is_open();
+    stream.feed(&masked_head(head), at);
+    stream.finish(true, at);
+    opened
+}
 
 /// One body's capture stream. Never blocks and never fails the relay: every refusal just
 /// ends or abandons the stream. Dropped while open (cancellation), it ends `Interrupted`.
@@ -2080,6 +2157,33 @@ mod tests {
         fn try_close_epoch(&self, _: &str, _: Option<u64>) -> SubmitResult {
             SubmitResult::Queued
         }
+    }
+
+    /// The counted model calls name the hosts they went to, once each: a host the run did not
+    /// configure is named too, and a repeated host is named once.
+    #[test]
+    fn counted_model_calls_name_the_host_they_went_to() {
+        let sink = Arc::new(Recorder::default());
+        let emitter = CaptureEmitter::new("0123456789abcdef0123456789abcdef".into(), sink);
+        emitter.record_generation_request(Some("models.example.test"));
+        emitter.record_generation_request(Some("models.example.test"));
+        emitter.record_generation_request(Some("other.example.test"));
+        emitter.record_generation_request(None);
+        assert_eq!(emitter.generation_requests(), 4);
+        let named = emitter
+            .generation_hosts_shared()
+            .lock()
+            .unwrap()
+            .iter()
+            .cloned()
+            .collect::<Vec<_>>();
+        assert_eq!(
+            named,
+            vec![
+                "models.example.test".to_string(),
+                "other.example.test".to_string()
+            ]
+        );
     }
 
     /// An emit the emitter refuses locally submits nothing and leaves the stream

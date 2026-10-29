@@ -20,8 +20,9 @@
 //!
 //! The goal is accepted once: redacted by the profile's streaming redactor, appended as one
 //! `Goal` stream, closed, and synced before its key is answered. The launch record names that
-//! stream and is appended after the harness is spawned. The profile's one native source names no
-//! session (chat mode) and is read from the create on. Records are durable from the next sync.
+//! stream and is appended after the harness is spawned. The profile's native sources (zero to
+//! eight rows, each its own source) name no session (chat mode) and are read from the create on.
+//! Records are durable from the next sync.
 //!
 //! # Local finish
 //!
@@ -264,6 +265,10 @@ struct OwnerControl {
     drained: AtomicBool,
     /// What the native adapter may still spend when the owner stops.
     finish_budget_ns: AtomicU64,
+    /// Whether the harness is known to have exited when the owner stops: set by a finish whose
+    /// termination is not `Unresolved`. False by default, so a stop without a finish (the entry
+    /// is dropped) never copies a final snapshot of a harness that may still run.
+    harness_exited: AtomicBool,
     #[cfg(test)]
     fault: AtomicBool,
     /// Test seam: the owner parks after its stop request, before it drains, until cleared.
