@@ -880,6 +880,14 @@ fn model_host_problem(cfg: &Path, connector: &HarnessConnector) -> Option<String
     if why.file.is_some() {
         return Some(why.sentence(name));
     }
+    // A value in the file is edited there, as the start refusal says.
+    if let Some(edit) = why.edit_sentence() {
+        return Some(crate::participant::cannot_record_model_service(
+            &why.sentence(name),
+            &connector.loaded.manifest.id,
+            Some(&edit),
+        ));
+    }
     Some(format!(
         "{} In {name}, choose an https model service that is not on this computer, then exit \
          {name}.",

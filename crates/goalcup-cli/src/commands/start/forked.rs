@@ -231,6 +231,7 @@ impl Forked<'_> {
         let _ = say(out, &end.announcement(&info.entry_id));
         let deadline = std::time::Instant::now() + crate::finish_budget();
         if let Some(proxied) = proxied {
+            let model_hosts = proxied.model_hosts.clone();
             let _ = finish(
                 client,
                 &info.entry_id,
@@ -241,6 +242,7 @@ impl Forked<'_> {
                 false,
                 None,
                 None,
+                Some(&model_hosts),
                 out,
             );
         }
@@ -309,6 +311,9 @@ pub(super) struct Exited<'a> {
     pub(super) left_running: Option<CliError>,
     /// The run's state file.
     pub(super) keeper: crate::run::StateKeeper,
+    /// How long the harness ran and whether its connections failed the TLS handshake: what the
+    /// end-of-run block says when the watch tick did not call the harness silent.
+    pub(super) silence: crate::run::NoModelCalls,
 }
 
 #[cfg(test)]

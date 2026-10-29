@@ -167,6 +167,48 @@ fn the_model_host_from_the_harness_config_is_recorded() {
     );
 }
 
+/// A practice run whose harness makes two model calls through the recording proxy says so when it
+/// finishes: the count and the model host the calls were recorded from.
+#[test]
+fn a_practice_run_says_recording_works() {
+    let (_rig, out, _records) = headless_run(|_| {
+        format!(
+            "{}{}",
+            curl(
+                &format!("https://{MODEL_HOST}/v1/chat/completions"),
+                "\"$CODEX_CA_CERTIFICATE\"",
+                "model.status",
+            ),
+            curl(
+                &format!("https://{MODEL_HOST}/v1/chat/completions"),
+                "\"$CODEX_CA_CERTIFICATE\"",
+                "model.status",
+            ),
+        )
+    });
+    let said = out
+        .lines()
+        .find(|line| line.starts_with("Recording works: "))
+        .unwrap_or_else(|| panic!("{out}"));
+    assert_eq!(
+        said,
+        format!("Recording works: 2 model call(s) recorded from {MODEL_HOST}."),
+        "{out}"
+    );
+}
+
+/// A run whose harness makes no model call ends with the no-model-calls block, which says the
+/// recorder saw none, and no "Recording works" line.
+#[test]
+fn a_zero_call_run_prints_the_no_model_calls_block() {
+    let (_rig, out, _records) = headless_run(|_| String::new());
+    assert!(!out.contains("Recording works"), "{out}");
+    assert!(
+        out.contains(goalcup_cli::participant::NO_MODEL_CALLS_MARK),
+        "{out}"
+    );
+}
+
 /// A CONNECT to any other host is relayed as a tunnel the recording proxy never opens: the harness
 /// sees the upstream's own certificate, the tunnel is counted in `proxy admission:`, the chain
 /// holds no record of it, and the entry's sealed-connection list names its host and bytes.
@@ -213,7 +255,7 @@ fn other_hosts_stay_opaque_tunnels() {
     // The tunnel is named only in the sealed-connection list and its one finish line (D74).
     let sealed = out
         .lines()
-        .find(|line| line.starts_with("sealed hosts: "))
+        .find(|line| line.starts_with("sealed hosts (passed through unread): "))
         .unwrap_or_else(|| panic!("{out}"));
     assert!(
         sealed.contains(&format!("{OTHER_HOST}:443 x1 ")),
@@ -371,6 +413,57 @@ fn the_shipped_claude_and_codex_rows_fall_back_without_a_setting() {
     );
 }
 
+/// A value in the harness's config that Goal Cup cannot record is refused at start, and the refusal
+/// says which file to edit: the full path and the key. Where the connector's own hosts stand in
+/// without the value (`absent = "defaults"`), it says so too, and ends with that sentence.
+#[test]
+fn a_refused_address_says_which_file_to_edit() {
+    let rig = Rig::new();
+    let from = reads_model_host(&rig, FAKE_ID);
+    add_default_host(&rig, FAKE_ID, "api.default.example");
+    let file = home(&rig, FAKE_ID).join(&from.file);
+    let goal = rig.run_folder();
+    let http = rig.client();
+    let refused_with = |value: &str| {
+        support::write_model_host_config(&home(&rig, FAKE_ID), &from, value);
+        let (result, out) = std::thread::scope(|s| {
+            rig.start(s, &http, rig.options(&goal, RESERVE), None)
+                .join()
+                .unwrap()
+        });
+        result.expect_err(&out).to_string()
+    };
+    // The fake's config has no default to fall back on: editing the value is the fix.
+    let error = refused_with("http://models.example.test/v1");
+    assert!(
+        error.ends_with(&format!(
+            "Edit {} in {} to an https address Goal Cup can record.",
+            from.key,
+            file.display()
+        )),
+        "{error}"
+    );
+    // With `absent = "defaults"` the run records the connector's own host without the value.
+    let toml = rig.connectors.join(FAKE_ID).join("harness.toml");
+    let text = std::fs::read_to_string(&toml).unwrap();
+    let defaults = text.replace(
+        r#"key = "model.base_url" }"#,
+        r#"key = "model.base_url", absent = "defaults" }"#,
+    );
+    assert_ne!(text, defaults, "the fake names its model host key");
+    std::fs::write(&toml, defaults).unwrap();
+    let error = refused_with("http://models.example.test/v1");
+    assert!(
+        error.ends_with(&format!(
+            "Edit or delete {} in {}; without it Goal Cup records api.default.example.",
+            from.key,
+            file.display()
+        )),
+        "{error}"
+    );
+    assert!(rig.run_dirs().is_empty(), "{:?}", rig.run_dirs());
+}
+
 /// No config, no key, a loopback or address-literal service, plain `http`, an authentication
 /// host or a value that is not a URL: each start is refused with the one sentence, which shows
 /// at most `scheme://host:port`, and nothing is created.
@@ -381,6 +474,7 @@ fn a_missing_or_loopback_model_host_is_refused_at_start() {
     let home = home(&rig, FAKE_ID);
     let goal = rig.run_folder();
     let http = rig.client();
+    let file = home.join(&from.file);
     let refused = |shown: &str, reason: &str, hidden: Option<&str>| {
         let (result, out) = std::thread::scope(|s| {
             rig.start(s, &http, rig.options(&goal, RESERVE), None)
@@ -395,10 +489,23 @@ fn a_missing_or_loopback_model_host_is_refused_at_start() {
             "{error}"
         );
         assert!(error.contains(CANNOT_RECORD), "{error}");
-        assert!(
-            error.contains(&format!("Run goalcup setup --harness {FAKE_ID}")),
-            "{error}"
-        );
+        if shown == "no model service" {
+            // A missing value is set in the harness's settings, through goalcup setup.
+            assert!(
+                error.contains(&format!("Run goalcup setup --harness {FAKE_ID}")),
+                "{error}"
+            );
+        } else {
+            // A value in the file is edited there, and the full path says where it is.
+            assert!(
+                error.contains(&format!(
+                    "Edit {} in {} to an https address Goal Cup can record.",
+                    from.key,
+                    file.display()
+                )),
+                "{error}"
+            );
+        }
         if let Some(hidden) = hidden {
             assert!(!error.contains(hidden), "{error}");
         }
