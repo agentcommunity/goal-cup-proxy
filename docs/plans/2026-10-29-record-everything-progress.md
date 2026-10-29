@@ -25,7 +25,7 @@ on Tenki come later, after the build is clear and good.
 | 2 | Clean model address; never Goal Cup's own host | merged in #291 (86b9dae); gate PASS, live PASS |
 | 3 | Upload reads only its own tunnel list | merged in #290 (444aa15); gate PASS, live PASS |
 | 4 | Probe only what the run needs | merged in #294 (a3987d6); gate PASS, live PASS; the container restart lost the pipeline once, resumed by hand |
-| 5 | Up to 8 session-file rows; Claude subagents captured | not started |
+| 5 | Up to 8 session-file rows; Claude subagents captured | merged in #296 (eb9ad87); gate PASS, live PASS, subagent transcript in the chain; budget is an owner decision (L33) |
 | 6 | Copy a harness database once, after exit | not started |
 | 7 | Header stream per exchange, credentials masked | merged in #293 (1919549); gate PASS, live PASS (44 header streams, [masked] present, no Bearer) |
 | 8 | Evidence label counts model requests only | merged in #289 (5ce4b2a); gate PASS on rerun, live PASS |
@@ -58,3 +58,5 @@ on Tenki come later, after the build is clear and good.
 - 28 Oct: Task 7 merged in #293 (1919549). The sandbox gate failed one kit test on the first two heads: the kit matcher counted the new header stream as a second request. The test now skips artifact-hint streams (fce86a4). Owner notes: known-prefix credentials in non-credential headers rely on the daemon redactor; query masking is wider than the spec wording.
 - 28 Oct: Task 4 merged in #294 (a3987d6). One rule for hard and warn hosts (model_host::provider_hosts), used by start and setup. Test-only seam GOALCUP_TEST_PROBE_ANSWERS needs owner awareness. D74 needs a line for the default-host change. The container restarted during the Task 4 fix round; the uncommitted refactor was compiled, tested, committed and reviewed by hand.
 - 28 Oct: Task 9 merged in #295 (squash, 2bf49ac). Review found that a ChatGPT-login run could be refused for the API host; fixed by probing only the first host without a model service. The fix commit carried a model-named Co-Authored-By line; the squash keeps it off main.
+- 29 Oct: Task 5 merged in #296 (eb9ad87). The live run put the subagent transcript in the chain. The kit's own subagent counter reads 0, which is a bug in that counter, not the chain. Owner decision before any long run: the native budget (32 open append-only streams, 1024 files) can lose transcripts past about 32 subagents (ledger L33).
+- 29 Oct: The container restarted twice more; both interrupted pipelines were resumed by hand from the branch state.
