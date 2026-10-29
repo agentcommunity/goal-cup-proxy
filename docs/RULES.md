@@ -334,7 +334,12 @@ disclosure and no-side-channel rules.
   by itself the next time you run any `goalcup` command, and `goalcup upload` sends it by hand.
 - **What a trace holds.** Everything your agent sent to the model service and everything it saw back:
   the prompts and replies, the tool calls and their results, and the request and response headers of
-  each exchange, with every credential value replaced by `[masked]`. The trace also holds file contents
+  each exchange. Credential headers (`authorization`, `cookie`, `set-cookie`, `x-api-key`, and any
+  header whose name contains `key`, `token`, `secret`, `password` or `auth`) are replaced by
+  `[masked]`, and so is any `Bearer` or `Basic` credential in a header value, the userinfo of a URL,
+  and a credential-named query value. A credential under any other header name is not masked by its
+  value. Credentials in bodies are matched by pattern and replaced by a `<redacted:KIND>` marker, and
+  a key the model repeats in its reply is not reliably caught. The trace also holds file contents
   and file paths from your machine: the harness's own session and chat files, and the files its tools
   read and wrote as the harness reports them. Paths are written as your machine names them. The
   only other facts about your machine are the non-identifying ones listed below.
@@ -350,7 +355,7 @@ disclosure and no-side-channel rules.
   sign-in hosts are among the other addresses, and their traffic is never decrypted. This holds only
   for programs that use the `HTTPS_PROXY` setting: a tool that ignores it (`ssh`, a raw socket, a
   command that unsets `HTTPS_PROXY`) connects directly and is not seen at all. Your ChatGPT, Claude or
-  other credentials are never stored: the recording proxy removes them before anything is written, and keeps neither their values nor any fingerprint of them. Goal Cup Proxy
+  login credentials are not stored as headers: the recording proxy removes their header values before anything is written, and keeps neither their values nor any fingerprint of them. A key the model repeats in its reply can still be recorded (see the recording gap above). Goal Cup Proxy
   does not watch other terminals, your browser, other processes or audio. It also records the harness
   build and non-identifying facts about the machine (operating system and version, architecture, CPU
   count, memory, disk size and free space, WSL2, container, mains power): no host name, user name or

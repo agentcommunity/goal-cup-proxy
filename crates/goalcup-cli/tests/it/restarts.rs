@@ -374,6 +374,13 @@ fn a_run_crosses_two_platform_stops_and_each_continue_keeps_it_whole() {
             "{entry}: what was typed in it"
         );
     }
+    // The clean last segment ran its finish, which wrote its sealed-connection list under its own
+    // entry's name before the seal went up. The killed segments end without a finish, so only
+    // this one is checked here.
+    let list = goalcup_cli::run::tunnels_path(&rig.cfg, &run_id, &entry2);
+    let text = std::fs::read_to_string(&list).unwrap_or_else(|e| panic!("{}: {e}", list.display()));
+    let head: serde_json::Value = serde_json::from_str(text.lines().next().unwrap()).unwrap();
+    assert_eq!(head["entry_id"], entry2.as_str(), "{}", list.display());
 }
 
 /// The run's clone is gone when the participant continues: a sandbox whose work folder was on a
@@ -430,12 +437,12 @@ fn a_continue_whose_clone_is_gone_is_refused_and_changes_nothing() {
     assert_eq!(server.entry_ids(&run_id).len(), 2);
 }
 
-/// Each entry of a continued run keeps its own sealed-connection list. The finish writes an
-/// entry's list to that entry's path, and the upload record names the same path for the seal, so
-/// the seal carries the list of its own segment. A later segment's list is written beside the
-/// earlier one and never replaces it.
+/// Each entry of a continued run has its own sealed-connection list path, one file per entry, so
+/// a later segment's list is written beside the earlier one and never replaces it. This checks the
+/// path helper and the file naming directly. The finish writing its entry's file is checked on a
+/// real continued run in `a_run_crosses_two_platform_stops_and_each_continue_keeps_it_whole`.
 #[test]
-fn continue_keeps_one_tunnel_list_per_entry() {
+fn tunnel_lists_are_one_per_entry() {
     use goalcup_cli::proxy::tunnels::{TunnelNote, file_name, write};
 
     let cfg = tempfile::tempdir().unwrap();

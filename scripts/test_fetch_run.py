@@ -384,6 +384,28 @@ class FetchRunTest(unittest.TestCase):
             ["acks.jsonl", "baseline.json", "chain.jsonl", "seal.json", "tunnels.jsonl"],
         )
 
+    def test_a_list_that_cannot_be_copied_fails_the_fetch(self) -> None:
+        # A copy that fails must fail the fetch, not pass as an absent list. A fake `cp` on PATH
+        # fails only the copy of the list and leaves a partial file behind, which must be removed.
+        self.write_index(self.entry_index("sealed-websocket", ENTRY, 1))
+        self.put(f"traces/goalcup-cup-2026/{RUN}/{ENTRY}/tunnels.jsonl", b'{"format":"goalcup-tunnels-v1"}\n')
+        fake = self.root / "fakebin"
+        fake.mkdir()
+        real_cp = shutil.which("cp")
+        self.assertIsNotNone(real_cp)
+        (fake / "cp").write_text(
+            "#!/bin/sh\n"
+            'case "$*" in *tunnels.jsonl*) echo partial >"$2" 2>/dev/null; exit 1 ;; esac\n'
+            f'exec {real_cp} "$@"\n'
+        )
+        (fake / "cp").chmod(0o755)
+        result = self.run_script(
+            "--index", str(self.index_path), "--store", str(self.store), ENTRY, str(self.out), path_first=fake
+        )
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertIn("could not copy", result.stderr)
+        self.assertFalse((self.out / ENTRY).exists())
+
     def test_an_entry_whose_seal_carried_no_list_gets_none(self) -> None:
         self.write_index(self.entry_index("sealed-websocket", ENTRY, 1))
         result = self.fetch()

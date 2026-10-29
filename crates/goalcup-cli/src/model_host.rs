@@ -1217,11 +1217,12 @@ sessions:
 
     /// The hints the host rule hands out meet the decoders: for every base a harness can name
     /// (a gateway prefix, the `/v1` the SDKs add, or none), each path the rule hints is selected
-    /// with that hint, and a stream carrying it is read by a registered decoder. The decoders
-    /// take their streams by hint; the Anthropic one also reads only an endpoint ending in
-    /// `/messages` (its `ENDPOINT_SUFFIX`), which every `WIRE_PATHS` entry under a base does.
+    /// with that hint, and a stream carrying it is accepted by a registered decoder. The decoders
+    /// take their streams by hint here. This test does not reach the per-record gate: the
+    /// Anthropic decoder also reads only an endpoint ending in `/messages` (its `ENDPOINT_SUFFIX`),
+    /// and only a POST with `application/json` (its `select_gate_tests` module pins that gate).
     #[test]
-    fn every_hinted_path_is_read_by_its_decoder() {
+    fn every_hinted_path_is_accepted_by_its_decoder() {
         use goalcup_protocol::capture::{CaptureSource, StreamKey};
         use goalcup_verifier::capture_analysis::api::StreamOpen;
         use goalcup_verifier::capture_analysis::registry::DecoderRegistry;
@@ -1258,7 +1259,7 @@ sessions:
                 let readers = registry.accepting(&open);
                 assert!(
                     !readers.is_empty(),
-                    "{base:?}: no decoder reads {hint} for {}",
+                    "{base:?}: no decoder accepts {hint} for {}",
                     row.path
                 );
                 if hint == "anthropic-messages" {

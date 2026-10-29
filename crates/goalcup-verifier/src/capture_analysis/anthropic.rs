@@ -1582,3 +1582,57 @@ fn put_withheld(fields: &mut Map<String, Value>, withheld: &BTreeSet<&'static st
         fields.insert("withheld".into(), json!(withheld));
     }
 }
+
+#[cfg(test)]
+mod select_gate_tests {
+    use super::*;
+
+    fn meta(method: &str, path: &str, content_type: &str, status: Option<u16>) -> CaptureMeta {
+        CaptureMeta {
+            wire: None,
+            label: "wire".into(),
+            protocol_hint: Some(PROTOCOL_HINT.into()),
+            method: Some(method.into()),
+            host: Some("models.example.test".into()),
+            path: Some(path.into()),
+            status,
+            content_type: Some(content_type.into()),
+        }
+    }
+
+    /// The gate a hinted `/messages` stream must pass: a POST with `application/json` is read as
+    /// a request document, and an error reply as an error document. Any other method or type is
+    /// not read, and the reason is named.
+    #[test]
+    fn a_hinted_messages_post_json_is_read_and_others_are_named() {
+        let post = meta("POST", "/claude-code/v1/messages", "application/json", None);
+        assert!(matches!(
+            select(CaptureSource::WireRequest, &post),
+            Body::Json(_)
+        ));
+
+        let get = meta("GET", "/v1/messages", "application/json", None);
+        assert!(matches!(
+            select(CaptureSource::WireRequest, &get),
+            Body::Unsupported("unsupported_method")
+        ));
+
+        let text = meta("POST", "/v1/messages", "text/plain", None);
+        assert!(matches!(
+            select(CaptureSource::WireRequest, &text),
+            Body::Unsupported("unsupported_content_type")
+        ));
+
+        let error = meta("POST", "/v1/messages", "application/json", Some(429));
+        assert!(matches!(
+            select(CaptureSource::WireResponse, &error),
+            Body::Json(_)
+        ));
+
+        let elsewhere = meta("POST", "/v1/models", "application/json", None);
+        assert!(matches!(
+            select(CaptureSource::WireRequest, &elsewhere),
+            Body::Unsupported("unsupported_endpoint")
+        ));
+    }
+}

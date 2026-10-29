@@ -252,7 +252,7 @@ get_object() {
 get_optional_object() {
   if [ -n "$store" ]; then
     [ -f "$store/$1" ] || return 2
-    cp "$store/$1" "$2"
+    cp "$store/$1" "$2" || { rm -f "$2"; echo "fetch-run: could not copy $1 from $store" >&2; return 1; }
     return 0
   fi
   enc=$(printf '%s' "$1" | sed 's|/|%2F|g')
