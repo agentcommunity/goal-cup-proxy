@@ -317,13 +317,9 @@ pub fn problem_state_stale(silent: &str, restart: Restart<'_>) -> String {
 /// The recorder's accept loop died and was started again on the same port, `times` times this
 /// run. The recording went on; what was open at each restart was lost.
 pub fn problem_recorder_restarted(times: u64) -> String {
-    let (count, word) = if times == 1 {
-        (1, "time")
-    } else {
-        (times, "times")
-    };
+    let word = if times == 1 { "time" } else { "times" };
     format!(
-        "the recorder restarted {count} {word}: recording went on, but connections open at each \
+        "the recorder restarted {times} {word}: recording went on, but connections open at each \
          restart were lost. If this repeats, run goalcup status."
     )
 }

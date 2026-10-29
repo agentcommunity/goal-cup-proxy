@@ -38,7 +38,11 @@ pub enum ProxyLoss {
     /// An intercepted connection whose relay stopped parsing and went on as bytes. Shares
     /// [`GapReason::DecodeFailed`] with [`ProxyLoss::FailOpenTunnel`], so the two leave one `Loss`.
     OpaqueFallback,
-    /// A connection cut by the shutdown before it settled.
+    /// A connection cut before it settled. The cut comes from the shutdown, or from a restart of
+    /// the accept loop, which drops the connection tasks it held. The protocol has no reason for
+    /// a restart cut, so it is chained as [`GapReason::ShutdownDeadline`], the nearest existing
+    /// reason. That reason also marks a final snapshot the finish skipped. The chain label is
+    /// therefore not a fact about a shutdown: a restart cut carries it too.
     CutUnsettled,
     /// An exchange on an opened host that the recorder cannot retain, such as a method over
     /// the metadata limit. It is relayed unchanged; the chain says it was not recorded.

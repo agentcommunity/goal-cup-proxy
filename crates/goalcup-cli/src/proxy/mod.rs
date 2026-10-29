@@ -249,10 +249,7 @@ pub async fn start(config: ProxyConfig) -> Result<ProxyHandle, StartError> {
     if !local_addr.ip().is_loopback() {
         return Err(StartError::NotLoopback);
     }
-    listener
-        .set_nonblocking(true)
-        .map_err(|e| StartError::Listener(e.kind()))?;
-    let listener = TcpListener::from_std(listener).map_err(|e| StartError::Listener(e.kind()))?;
+    let listener = into_accepting(listener).map_err(|e| StartError::Listener(e.kind()))?;
 
     // The CA key lives only here: every leaf is issued inside `AdmissionConfig::new`.
     let hosts: Vec<String> = approved.iter().map(|rule| rule.host.clone()).collect();
@@ -1029,7 +1026,14 @@ impl Drop for AbortOnDrop {
 /// Runs [`accept_loop`] on `local_addr` until a stop. A loop that ends without one (aborted, or
 /// panicked) is replaced by a new loop on the same port, over the same `shared`, up to
 /// [`MAX_RECORDER_RESTARTS`] times. A restart saves only new connections: the dead loop's
-/// `JoinSet` is dropped with it, which aborts every connection it held.
+/// `JoinSet` is dropped with it, which aborts every connection it held. Each one still unsettled
+/// is chained as [`ProxyLoss::CutUnsettled`], which is `ShutdownDeadline`: the nearest reason the
+/// protocol has for a restart cut, so that label does not mean a shutdown here.
+///
+/// Limit: between the old listener closing and the rebind, nothing listens on the port. A
+/// connection made in that window is refused or reset at the TCP level, so it leaves no chain
+/// record and no restart note mentions it. "Recording went on" means the recorder served again,
+/// not that nothing was lost.
 ///
 /// Returns the last loop's connection tasks on a stop, or `None` when the recorder is lost: the
 /// limit was reached, or the port could not be bound again.
@@ -1079,8 +1083,9 @@ async fn supervise_accept(
                 bump(&counters.recorder_restarts);
                 crate::host_log::log_only(&format!(
                     "the recorder stopped and was restarted on the same port (restart {} of {}). \
-                     Recording went on; connections open at the time were lost. If this \
-                     repeats, run goalcup status.",
+                     Recording went on; connections open at the time were lost, and a connection \
+                     made while the port had no listener was refused and is not recorded. If \
+                     this repeats, run goalcup status.",
                     restarts + 1,
                     MAX_RECORDER_RESTARTS
                 ));
@@ -1098,11 +1103,16 @@ async fn supervise_accept(
     }
 }
 
-/// The listener on `addr`, bound again, as [`start`] makes it.
-fn rebind(addr: SocketAddr) -> std::io::Result<TcpListener> {
-    let listener = std::net::TcpListener::bind(addr)?;
+/// Makes a bound listener ready for the accept loop: non-blocking, then owned by the runtime.
+/// [`start`] and [`rebind`] both set a listener up this way.
+fn into_accepting(listener: std::net::TcpListener) -> std::io::Result<TcpListener> {
     listener.set_nonblocking(true)?;
     TcpListener::from_std(listener)
+}
+
+/// The listener on `addr`, bound again, as [`start`] makes it.
+fn rebind(addr: SocketAddr) -> std::io::Result<TcpListener> {
+    into_accepting(std::net::TcpListener::bind(addr)?)
 }
 
 async fn reap_all(tasks: &mut JoinSet<()>, counters: &Counters) {
