@@ -91,12 +91,20 @@ pub fn project_not_empty(project: &Path, extra: &[String]) -> String {
 }
 
 /// The model service the harness's own config names is one Goal Cup cannot record (D62).
-/// `why` is [`crate::model_host::Unrecordable::sentence`]; `id` is the connector's.
-pub fn cannot_record_model_service(why: &str, id: &str) -> String {
-    format!(
-        "{why} Goal Cup records only an https model service that is not on this computer. Run \
-         goalcup setup --harness {id}, choose such a service there, then run the command again."
-    )
+/// `why` is [`crate::model_host::Unrecordable::sentence`]; `id` is the connector's. A value read
+/// from the config file is fixed in that file: `edit` is its advice
+/// ([`crate::model_host::Unrecordable::edit_sentence`]), and it ends the refusal. Without it, the
+/// way is to choose another service through setup.
+pub fn cannot_record_model_service(why: &str, id: &str, edit: Option<&str>) -> String {
+    match edit {
+        Some(edit) => format!(
+            "{why} Goal Cup records only an https model service that is not on this computer. {edit}"
+        ),
+        None => format!(
+            "{why} Goal Cup records only an https model service that is not on this computer. Run \
+             goalcup setup --harness {id}, choose such a service there, then run the command again."
+        ),
+    }
 }
 
 /// The participant's repository has commits, so a competition or test run cannot use it: by

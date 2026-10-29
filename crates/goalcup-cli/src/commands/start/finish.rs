@@ -7,6 +7,7 @@ use super::{StartOutcome, pause_at};
 use crate::CliError;
 use crate::commands::say;
 use crate::proxy::tunnels;
+use crate::run::NoModelCalls;
 use crate::run::reserve::artifact_root;
 use crate::upload::policy::WrapUp;
 use goalcup_protocol::control::{CaptureFinishReport, DaemonClient, ProxyCounters};
@@ -32,6 +33,7 @@ pub(super) fn finish_run(
         wrap_up,
         left_running,
         keeper,
+        silence,
     } = exited;
     let Forked {
         client,
@@ -43,6 +45,7 @@ pub(super) fn finish_run(
         record,
         home_lock,
         harness_name,
+        model_calls_before,
         ..
     } = forked;
     // A run's hold on the terminal (its hangup absorbed, its log open) lasts to the end
@@ -84,6 +87,15 @@ pub(super) fn finish_run(
     let ended_by_stop = snapshot.stopped_for_its_end();
     let on_server = record.server_url.is_some();
     let over = !on_server || crate::run::is_over(&record, Some(&snapshot), crate::run::now_unix());
+    // The model calls this part of the run recorded: the recorder's count, or, once a deadline
+    // finish stopped the recorder, the count the harness's exit kept (this part's share of it).
+    let recorded = match &calls {
+        Some(calls) => calls.load(std::sync::atomic::Ordering::SeqCst),
+        None => snapshot
+            .model_calls
+            .unwrap_or(0)
+            .saturating_sub(model_calls_before.unwrap_or(0)),
+    };
     // `goalcup continue` can restart the run: a run on a server that is not over. Only such a
     // run keeps its reserve past this host.
     let run_goes_on = crate::run::can_continue(cfg, &record, true, over);
@@ -163,10 +175,9 @@ pub(super) fn finish_run(
     } else {
         crate::participant::Restart::Cannot
     };
-    let recorded = calls
-        .as_ref()
-        .is_some_and(|calls| calls.load(std::sync::atomic::Ordering::SeqCst) > 0);
-    for line in no_model_calls_block(&snapshot, recorded, &harness_name, restart) {
+    // Said on every run that recorded no model call, whether or not the watch tick saw it silent.
+    let silent = snapshot.no_model_calls.unwrap_or(silence);
+    for line in no_model_calls_block(silent, recorded > 0, &harness_name, restart) {
         let _ = say(out, &line);
     }
     // After the seal: the rest of the chain and the seal itself, within the finish budget.
@@ -362,6 +373,10 @@ const RUNNING_HARNESS_SINK_SHUTDOWN: Duration = Duration::from_secs(1);
 /// before the seal ends the harness. If the recording proxy could not queue its producer's close,
 /// the sender is ended too before the seal ([`RUNNING_HARNESS_SINK_SHUTDOWN`]).
 ///
+/// Once the recorder is stopped, a run that recorded model calls says so in one line, with the
+/// hosts those calls went to as the recorder observed them ([`recording_works_line`]). A run whose
+/// harness never ran records no calls, so it says nothing of the recording.
+///
 /// `helper_left` names the harness when it exited but its connector's after-exit commands (D72)
 /// failed: what it left running (Hermes's gateway) may hold the proxy's connections open, so the
 /// stop is bounded by [`RUNNING_HARNESS_PROXY_DRAIN`] too, and the participant is told in one line
@@ -387,6 +402,11 @@ pub(super) fn finish(
         tunnels_file,
         ..
     } = proxied;
+    // The recorder's count is read once it is stopped: the stop may settle a call still in flight.
+    let model_calls = proxy.generation_requests();
+    // Read here as well, while the handle is still whole: the stop consumes it, and the hosts are
+    // read once the recorder is stopped, from this shared set.
+    let generation_hosts = proxy.generation_hosts_shared();
     // A harness that still runs keeps its connections open: they would hold the stop, and the
     // seal that ends the harness, for the whole drain share. They are cut.
     let stopped = if harness_running || helper_left.is_some() {
@@ -415,6 +435,13 @@ pub(super) fn finish(
     let a = &h.admission_failures;
     // Diagnostics are fixed counters only. A failed stdout write must not prevent sealing.
     let _ = say(out, &proxy_admission_line(h, a));
+    // The recording, in one line, when the recorder saw model calls. None is said here: the end of
+    // `goalcup start` says so in its no-model-calls block.
+    let calls = model_calls.load(std::sync::atomic::Ordering::SeqCst);
+    if calls > 0 {
+        let hosts = observed_hosts(&generation_hosts);
+        let _ = say(out, &recording_works_line(calls, &hosts));
+    }
     for line in crate::proxy::outage::finish_lines(h.upstream_outages, &h.outage_windows) {
         let _ = say(out, &line);
     }
@@ -467,19 +494,42 @@ pub(super) fn finish(
     sealed
 }
 
-/// The lines that repeat the watch tick's last "no model calls recorded" verdict at the end of
-/// `goalcup start`, in the past tense (the harness has exited): none when the tick did not call
-/// the harness silent, or when `recorded` says a model call was recorded after the tick's last
-/// look.
+/// The line that says the recording works, said at the finish of a run whose recorder saw
+/// `calls` model calls, from `hosts` (the hosts those calls went to, as observed). Without a host
+/// it names no host.
+pub(super) fn recording_works_line(calls: u64, hosts: &[String]) -> String {
+    if hosts.is_empty() {
+        format!("Recording works: {calls} model call(s) recorded.")
+    } else {
+        format!(
+            "Recording works: {calls} model call(s) recorded from {}.",
+            hosts.join(", ")
+        )
+    }
+}
+
+/// The hosts the recorder observed the counted model calls go to, in order. A set that cannot be
+/// read gives none, and the line then names no host rather than a guess.
+fn observed_hosts(hosts: &std::sync::Mutex<std::collections::BTreeSet<String>>) -> Vec<String> {
+    hosts
+        .lock()
+        .map(|hosts| hosts.iter().cloned().collect())
+        .unwrap_or_default()
+}
+
+/// The lines that say, at the end of `goalcup start`, that no model call was recorded in this
+/// part of the run, in the past tense (the harness has exited): none when `recorded` says a model
+/// call was. `silent` is the watch tick's last verdict when the tick called the harness silent,
+/// else how long the harness ran and whether its connections failed the TLS handshake.
 fn no_model_calls_block(
-    snapshot: &crate::run::RunState,
+    silent: NoModelCalls,
     recorded: bool,
     harness: &str,
     restart: crate::participant::Restart<'_>,
 ) -> Vec<String> {
-    let Some(silent) = snapshot.no_model_calls.filter(|_| !recorded) else {
+    if recorded {
         return Vec::new();
-    };
+    }
     let line = crate::participant::problem_no_model_calls(
         harness,
         silent.minutes,
@@ -499,32 +549,61 @@ mod tests {
     use crate::participant::{NO_MODEL_CALLS_MARK, Restart};
     use crate::run::{NoModelCalls, RunState};
 
-    /// The end-of-run block repeats the tick's last verdict as a `PROBLEM:` line in the past
-    /// tense (nothing to type, nothing to exit), and says nothing when the tick never called the
-    /// harness silent or a model call was recorded after its last look.
+    /// The end-of-run block says no model call was recorded whether or not the watch tick called
+    /// the harness silent, in the past tense (nothing to type, nothing to exit). It says nothing
+    /// when a model call was recorded in this part of the run.
     #[test]
-    fn the_end_of_run_repeats_the_ticks_last_no_model_calls_verdict() {
-        let mut state = RunState::launched("e1", Ok(()));
-        assert!(no_model_calls_block(&state, false, "Some Agent", Restart::Over).is_empty());
-        state.no_model_calls = Some(NoModelCalls {
-            minutes: 4,
-            tls_failing: false,
-        });
-        assert!(
-            no_model_calls_block(&state, true, "Some Agent", Restart::Over).is_empty(),
-            "a call recorded since the tick's look overrides it"
-        );
+    fn the_end_of_run_says_no_model_calls_whether_or_not_the_tick_saw_it() {
         let run_id = "r0123456789abcdef";
-        let lines = no_model_calls_block(&state, false, "Some Agent", Restart::Continue { run_id });
+        let unflagged = NoModelCalls {
+            minutes: 0,
+            tls_failing: false,
+        };
+        let lines =
+            no_model_calls_block(unflagged, false, "Some Agent", Restart::Continue { run_id });
         let line = lines.last().expect("a line");
         assert!(line.starts_with("PROBLEM:"), "{lines:?}");
         assert!(line.contains(NO_MODEL_CALLS_MARK), "{lines:?}");
-        assert!(line.contains("4 minutes"), "{lines:?}");
+        assert!(line.contains("less than a minute"), "{lines:?}");
         assert!(
             line.contains(&format!("goalcup continue {run_id}")),
             "{lines:?}"
         );
         assert!(!line.contains("type it"), "{lines:?}");
         assert!(!line.contains("Exit"), "{lines:?}");
+
+        let mut state = RunState::launched("e1", Ok(()));
+        state.no_model_calls = Some(NoModelCalls {
+            minutes: 4,
+            tls_failing: true,
+        });
+        let silent = state.no_model_calls.expect("the tick's verdict");
+        let line = no_model_calls_block(silent, false, "Some Agent", Restart::Over)
+            .pop()
+            .expect("a line");
+        assert!(line.contains("4 minutes"), "{line}");
+        assert!(line.contains("does not trust"), "{line}");
+        assert!(
+            no_model_calls_block(silent, true, "Some Agent", Restart::Over).is_empty(),
+            "a call recorded in this part of the run says nothing of silence"
+        );
+    }
+
+    /// The recording's one line names the count and the hosts the calls were recorded from.
+    #[test]
+    fn the_recording_line_names_the_calls_and_their_hosts() {
+        assert_eq!(
+            recording_works_line(2, &["models.example.test".to_string()]),
+            "Recording works: 2 model call(s) recorded from models.example.test."
+        );
+        let two = ["chatgpt.com".to_string(), "api.openai.com".to_string()];
+        assert_eq!(
+            recording_works_line(1, &two),
+            "Recording works: 1 model call(s) recorded from chatgpt.com, api.openai.com."
+        );
+        assert_eq!(
+            recording_works_line(3, &[]),
+            "Recording works: 3 model call(s) recorded."
+        );
     }
 }

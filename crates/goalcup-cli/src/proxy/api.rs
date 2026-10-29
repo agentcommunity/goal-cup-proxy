@@ -272,6 +272,8 @@ pub struct CaptureEmitter {
     recorded_requests: Arc<AtomicU64>,
     /// See [`CaptureEmitter::generation_requests`]; shared like `recorded_requests`.
     generation_requests: Arc<AtomicU64>,
+    /// See [`CaptureEmitter::generation_hosts_shared`]; the hosts those counted calls went to.
+    generation_hosts: Arc<Mutex<BTreeSet<String>>>,
 }
 
 impl std::fmt::Debug for CaptureEmitter {
@@ -320,6 +322,7 @@ impl CaptureEmitter {
             model_requests: Arc::new(AtomicU64::new(0)),
             recorded_requests: Arc::new(AtomicU64::new(0)),
             generation_requests: Arc::new(AtomicU64::new(0)),
+            generation_hosts: Arc::new(Mutex::new(BTreeSet::new())),
         }
     }
 
@@ -382,9 +385,21 @@ impl CaptureEmitter {
         self.generation_requests.clone()
     }
 
-    /// Count one request selected on a path with a protocol hint.
-    pub(crate) fn record_generation_request(&self) {
+    /// The hosts the counted model calls went to, observed on the requests themselves (not
+    /// configured), shared for a reader that outlives the recording proxy's handle. A call to a
+    /// host the run did not configure is named too.
+    pub fn generation_hosts_shared(&self) -> Arc<Mutex<BTreeSet<String>>> {
+        self.generation_hosts.clone()
+    }
+
+    /// Count one request selected on a path with a protocol hint, and name the host it went to.
+    /// A request with no host is counted but not named.
+    pub(crate) fn record_generation_request(&self, host: Option<&str>) {
         self.generation_requests.fetch_add(1, Ordering::SeqCst);
+        // A poisoned set only loses the names; the count above still stands.
+        if let (Some(host), Ok(mut hosts)) = (host, self.generation_hosts.lock()) {
+            hosts.insert(host.to_string());
+        }
     }
 
     /// Count one request selected for capture.

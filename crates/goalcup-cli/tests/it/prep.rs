@@ -1526,6 +1526,39 @@ fn prep_keeps_the_home_not_ready_while_the_model_service_cannot_be_recorded() {
     assert!(line(&out, "harness_home").starts_with("[ok]"), "{out}");
 }
 
+/// A refused value in the harness's config is fixed in that file, and prep says so with the same
+/// wording the start refusal uses: the key and the full path to edit, and, when the connector has
+/// a default host the run would record without the value, that host.
+#[test]
+fn prep_says_which_key_and_file_to_edit_for_a_refused_model_service() {
+    let rig = Rig::chat_only();
+    let from = crate::model_host_from::reads_model_host(&rig, CHAT_ID);
+    crate::model_host_from::add_default_host(&rig, CHAT_ID, "api.default.example");
+    // With `absent = "defaults"` the run records the connector's own host without the value.
+    let toml = rig.connectors.join(CHAT_ID).join("harness.toml");
+    let text = std::fs::read_to_string(&toml).unwrap();
+    let defaults = text.replace(
+        r#"key = "model.base_url" }"#,
+        r#"key = "model.base_url", absent = "defaults" }"#,
+    );
+    assert_ne!(text, defaults, "the fake names its model host key");
+    std::fs::write(&toml, defaults).unwrap();
+    let home = rig.cfg.join("capture-homes").join(CHAT_ID);
+    crate::common::support::write_model_host_config(&home, &from, "http://models.example.test/v1");
+    all_but_the_harness(&rig);
+    let (_, out) = prep(&rig, &[], &facts(&[]));
+    let step = line(&out, "harness_home");
+    let edit = format!(
+        "Edit or delete {} in {}; without it Goal Cup records api.default.example.",
+        from.key,
+        home.join(&from.file).display()
+    );
+    assert!(
+        step.starts_with("[todo] harness_home:") && step.contains(&edit),
+        "{out}"
+    );
+}
+
 /// A harness whose settings name a model service: its default host (a host the run does not use
 /// while the service answers) that the network blocks is a `[warn]` on the machine step, which
 /// keeps the step's state, and the run would go on. Without a service the same host is a failure,

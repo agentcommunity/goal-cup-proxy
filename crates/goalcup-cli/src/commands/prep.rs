@@ -880,6 +880,10 @@ fn model_host_problem(cfg: &Path, connector: &HarnessConnector) -> Option<String
     if why.file.is_some() {
         return Some(why.sentence(name));
     }
+    // A value in the file is edited there, as the start refusal says.
+    if why.edit_sentence().is_some() {
+        return Some(why.refusal(name, &connector.loaded.manifest.id));
+    }
     Some(format!(
         "{} In {name}, choose an https model service that is not on this computer, then exit \
          {name}.",

@@ -526,6 +526,7 @@ async fn every_request_on_an_opened_host_is_recorded() {
             port: 443,
             base_path: String::new(),
             from: "test config".into(),
+            edit: None,
         }
         .approved(),
     ];
@@ -656,6 +657,7 @@ async fn every_recorded_exchange_has_header_streams() {
             port: 443,
             base_path: String::new(),
             from: "test config".into(),
+            edit: None,
         }
         .approved(),
     ];

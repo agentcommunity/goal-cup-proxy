@@ -66,10 +66,11 @@ pub(super) struct CapturePrep {
 /// What a chat-mode run records as its goal. The v5 `Launch` record names the goal stream it
 /// was launched with and the daemon records a launch only after a goal, so a run whose harness
 /// was handed none records this fixed sentence instead: never sent to the harness, and never
-/// anything the participant typed (that is in the harness's session files).
+/// anything the participant typed (that is in the model requests, and in the harness's session
+/// files when it keeps them).
 pub const CHAT_MODE_GOAL: &str = "chat mode (D57): the harness was given no goal; the \
-     participant typed the prompt in the harness's own terminal, and it is recorded in the \
-     harness's session files.";
+     participant typed the prompt in the harness's own terminal. It is recorded in the model \
+     requests and, when the harness keeps one, in its session file.";
 
 /// Phase one: every refusal that comes before anything is created.
 pub(super) fn prepare(
@@ -1249,6 +1250,12 @@ pub(super) fn run_harness<'a>(
     pause.end();
     // How long the harness ran, taken before the after-exit commands below can add their time.
     let ran = released_at.elapsed();
+    // What the end-of-run block says of a harness the watch tick did not call silent: how long it
+    // ran, and whether its connections failed the TLS handshake.
+    let silence = crate::run::NoModelCalls {
+        minutes: ran.as_secs() / 60,
+        tls_failing: vitals.client_tls_failures() > 0,
+    };
     // The harness has exited: the terminal is this command's again, if it is still there. First,
     // so a harness that crashed in raw mode does not leave the terminal raw, with Ctrl-C absorbed,
     // while the after-exit commands below run.
@@ -1326,6 +1333,7 @@ pub(super) fn run_harness<'a>(
         wrap_up,
         left_running: swept.and_then(|swept| swept.refusal(&entry_id)),
         keeper,
+        silence,
     })
 }
 

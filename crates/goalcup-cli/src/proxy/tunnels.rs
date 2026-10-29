@@ -136,9 +136,9 @@ fn utc(at: SystemTime) -> String {
     goalcup_protocol::control::format_z(since.as_secs())
 }
 
-/// The one finish line: `sealed hosts: <host>:<port> x<n> <KiB> KiB, …` for the
-/// [`SUMMARY_HOSTS`] hosts with the most bytes both ways, and where the rest are listed. `None`
-/// when nothing was tunnelled.
+/// The one finish line: `sealed hosts (passed through unread): <host>:<port> x<n> <KiB> KiB, …`
+/// for the [`SUMMARY_HOSTS`] hosts with the most bytes both ways, and where the rest are listed. A
+/// host whose tunnels all ended cut says `size unknown`. `None` when nothing was tunnelled.
 pub fn summary_line(entry_id: &str, notes: &[TunnelNote], dropped: u64) -> Option<String> {
     if notes.is_empty() && dropped == 0 {
         return None;
@@ -159,16 +159,19 @@ pub fn summary_line(entry_id: &str, notes: &[TunnelNote], dropped: u64) -> Optio
         .iter()
         .take(SUMMARY_HOSTS)
         .map(|((host, port), (count, bytes))| {
-            let kib = bytes.map_or_else(|| "?".to_string(), |b| (b / 1024).to_string());
+            let size = bytes.map_or_else(
+                || "size unknown".to_string(),
+                |b| format!("{} KiB", b / 1024),
+            );
             // An IPv6 literal is bracketed, as in a CONNECT authority.
             if host.contains(':') {
-                format!("[{host}]:{port} x{count} {kib} KiB")
+                format!("[{host}]:{port} x{count} {size}")
             } else {
-                format!("{host}:{port} x{count} {kib} KiB")
+                format!("{host}:{port} x{count} {size}")
             }
         })
         .collect();
-    let mut line = format!("sealed hosts: {}", named.join(", "));
+    let mut line = format!("sealed hosts (passed through unread): {}", named.join(", "));
     let more = hosts.len().saturating_sub(SUMMARY_HOSTS);
     if more > 0 || dropped > 0 {
         let mut rest = Vec::new();
@@ -248,7 +251,7 @@ mod tests {
         let line = summary_line("e0123456789abcdef", &notes, 0).unwrap();
         assert_eq!(
             line,
-            "sealed hosts: github.com:443 x1 2048 KiB, registry.npmjs.org:443 x1 300 KiB"
+            "sealed hosts (passed through unread): github.com:443 x1 2048 KiB, registry.npmjs.org:443 x1 300 KiB"
         );
         assert_eq!(summary_line("e0123456789abcdef", &[], 0), None);
     }
@@ -263,7 +266,7 @@ mod tests {
         notes.push(cut);
         let line = summary_line("e0123456789abcdef", &notes, 3).unwrap();
         assert!(
-            line.starts_with("sealed hosts: h5.test:443 x1 10 KiB, "),
+            line.starts_with("sealed hosts (passed through unread): h5.test:443 x1 10 KiB, "),
             "{line}"
         );
         assert!(!line.contains("[::1]"), "{line}");
@@ -274,6 +277,9 @@ mod tests {
             "{line}"
         );
         let line = summary_line("e0123456789abcdef", &notes[5..], 0).unwrap();
-        assert_eq!(line, "sealed hosts: [::1]:443 x1 ? KiB");
+        assert_eq!(
+            line,
+            "sealed hosts (passed through unread): [::1]:443 x1 size unknown"
+        );
     }
 }

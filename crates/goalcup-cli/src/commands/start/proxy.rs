@@ -407,6 +407,7 @@ mod tests {
             port: 443,
             base_path: "/x/v1".to_string(),
             from: String::new(),
+            edit: None,
         };
         let approved = approved_hosts(&hosts, Some(&model));
         assert_eq!(approved.len(), profile_rules, "one rule per host");
@@ -424,6 +425,7 @@ mod tests {
             port: 443,
             base_path: String::new(),
             from: String::new(),
+            edit: None,
         };
         let approved = approved_hosts(&hosts, Some(&gateway));
         assert_eq!(approved.len(), profile_rules + 1);

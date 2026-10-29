@@ -472,6 +472,7 @@ pub fn problem_no_model_calls(
     running: bool,
 ) -> String {
     let span = match minutes {
+        0 => "less than a minute".to_string(),
         1 => "1 minute".to_string(),
         n => format!("{n} minutes"),
     };

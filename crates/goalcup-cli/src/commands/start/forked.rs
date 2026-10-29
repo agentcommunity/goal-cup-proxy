@@ -309,6 +309,9 @@ pub(super) struct Exited<'a> {
     pub(super) left_running: Option<CliError>,
     /// The run's state file.
     pub(super) keeper: crate::run::StateKeeper,
+    /// How long the harness ran and whether its connections failed the TLS handshake: what the
+    /// end-of-run block says when the watch tick did not call the harness silent.
+    pub(super) silence: crate::run::NoModelCalls,
 }
 
 #[cfg(test)]

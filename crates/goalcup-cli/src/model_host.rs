@@ -64,6 +64,9 @@ pub struct ModelHost {
     pub base_path: String,
     /// Where it was read: `<key> in <file>`.
     pub from: String,
+    /// The file value to edit when this service cannot be recorded here (the same edit a refused
+    /// value gets, with its full path); `None` for a value that is not in a file.
+    pub edit: Option<Box<EditSetting>>,
 }
 
 impl ModelHost {
@@ -124,6 +127,19 @@ pub struct Unrecordable {
     /// The config file is there but cannot be read: then the advice is about the file, not the
     /// service.
     pub file: Option<Box<UnreadableFile>>,
+    /// The value is in the config file and cannot be recorded: where to edit it.
+    pub edit: Option<Box<EditSetting>>,
+}
+
+/// A value in the config file that Goal Cup cannot record: the key to edit, the file's full path,
+/// and what the run records without the value. `fallback` is the connector's own hosts when a
+/// missing value means them (`absent = "defaults"`); otherwise it is `None`, deleting the value
+/// refuses the run, and only editing it helps.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EditSetting {
+    pub key: String,
+    pub path: std::path::PathBuf,
+    pub fallback: Option<Vec<String>>,
 }
 
 /// A config file that is there but that Goal Cup cannot read: its path, why, and what fixes it.
@@ -144,6 +160,21 @@ pub struct FileProblem {
 }
 
 impl Unrecordable {
+    /// What to do about a value in the config file that cannot be recorded: "Edit or delete
+    /// `<key>` in `<full path>`; without it Goal Cup records `<default hosts>`." When the value
+    /// has no default to fall back on, only the edit. `None` for a value that is not in a file.
+    pub fn edit_sentence(&self) -> Option<String> {
+        let edit = self.edit.as_ref()?;
+        let (key, path) = (&edit.key, edit.path.display());
+        Some(match &edit.fallback {
+            Some(hosts) if !hosts.is_empty() => format!(
+                "Edit or delete {key} in {path}; without it Goal Cup records {}.",
+                hosts.join(", ")
+            ),
+            _ => format!("Edit {key} in {path} to an https address Goal Cup can record."),
+        })
+    }
+
     /// "`<name>` is set to use `<shown>`, which Goal Cup cannot record: `<reason>` (set by
     /// `<key>` in `<file>`)." For a file that cannot be read: "Goal Cup cannot read `<path>`,
     /// where `<name>` keeps its model service setting: the file `<reason>`. `<fix>`."
@@ -173,7 +204,11 @@ impl Unrecordable {
         if self.file.is_some() {
             return format!("{} Then run the command again.", self.sentence(name));
         }
-        crate::participant::cannot_record_model_service(&self.sentence(name), id)
+        crate::participant::cannot_record_model_service(
+            &self.sentence(name),
+            id,
+            self.edit_sentence().as_deref(),
+        )
     }
 }
 
@@ -195,7 +230,13 @@ pub fn check(cfg: &Path, connector: &HarnessConnector) -> Result<Option<ModelHos
         return Ok(None);
     };
     let home = cfg.join(CAPTURE_HOMES_DIR).join(&manifest.id);
-    read(&home, from, &manifest.capture.auth_hosts)
+    let defaults: Vec<String> = manifest
+        .capture
+        .hosts
+        .iter()
+        .map(|h| h.host.clone())
+        .collect();
+    read(&home, from, &manifest.capture.auth_hosts, &defaults)
 }
 
 /// The command asking for provider hosts. It decides whether the harness's sign-in hosts are
@@ -293,11 +334,13 @@ pub(crate) fn default_host_sentence(missing: &str, service: &ModelHost, caller: 
 /// [`check`] on a given config home. With `via`, the name read there stands for the key's `*`
 /// part (one indirection, never two). A missing file, key or `via` value is `Ok(None)` under
 /// `absent = "defaults"` and refused otherwise; a value that is present is held to every
-/// refusal whatever `absent` says.
+/// refusal whatever `absent` says. `defaults` are the connector's own hosts: what a refused value
+/// leaves the run to record when the file's value is deleted.
 pub fn read(
     home: &Path,
     from: &ModelHostFrom,
     auth_hosts: &[String],
+    defaults: &[String],
 ) -> Result<Option<ModelHost>, Unrecordable> {
     let path = home.join(&from.file);
     let refuse = |shown: &str, reason: String| Unrecordable {
@@ -305,6 +348,15 @@ pub fn read(
         reason,
         set_by: None,
         file: None,
+        edit: None,
+    };
+    // A refused value read from the file: where it is, and what the run records without it.
+    let edit_at = |key: &str| {
+        Box::new(EditSetting {
+            key: key.to_string(),
+            path: path.clone(),
+            fallback: matches!(from.absent, ModelHostAbsent::Defaults).then(|| defaults.to_vec()),
+        })
     };
     let missing = |key: &str| match from.absent {
         ModelHostAbsent::Defaults => Ok(None),
@@ -344,13 +396,16 @@ pub fn read(
                     .bytes()
                     .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-');
             if !plain {
-                return Err(refuse(
-                    "an address Goal Cup cannot read",
-                    format!(
-                        "`{via}` in {} names a value that is not a provider name",
-                        from.file
-                    ),
-                ));
+                return Err(Unrecordable {
+                    edit: Some(edit_at(via)),
+                    ..refuse(
+                        "an address Goal Cup cannot read",
+                        format!(
+                            "`{via}` in {} names a value that is not a provider name",
+                            from.file
+                        ),
+                    )
+                });
             }
             from.key
                 .split('.')
@@ -372,14 +427,18 @@ pub fn read(
     let url = match parse_url(&value) {
         Ok(url) => url,
         Err(UrlProblem::NotHttp) => {
-            return Err(refuse(
-                "an address Goal Cup cannot read",
-                format!("{source} is not an http or https URL"),
-            ));
+            return Err(Unrecordable {
+                edit: Some(edit_at(&key)),
+                ..refuse(
+                    "an address Goal Cup cannot read",
+                    format!("{source} is not an http or https URL"),
+                )
+            });
         }
         Err(UrlProblem::SplitAuthority) => {
             return Err(Unrecordable {
                 set_by: Some(source),
+                edit: Some(edit_at(&key)),
                 ..refuse(
                     "an address Goal Cup cannot read",
                     AUTHORITY_REASON.to_string(),
@@ -412,6 +471,7 @@ pub fn read(
     if let Some(reason) = reason {
         return Err(Unrecordable {
             set_by: Some(source),
+            edit: Some(edit_at(&key)),
             ..refuse(&shown, reason.into())
         });
     }
@@ -420,6 +480,7 @@ pub fn read(
         port: url.port,
         base_path: url.path,
         from: format!("{key} in {}", from.file),
+        edit: Some(edit_at(&key)),
     }))
 }
 
@@ -441,13 +502,15 @@ const AUTHORITY_REASON: &str = "its host part has a backslash, a space or a cont
      which a URL parser reads as a different host or refuses";
 
 /// The refusal for a model service whose name resolves only to this computer. It gets the same
-/// words a loopback address in the config gets.
+/// words a loopback address in the config gets, and the same edit advice a refused value in the
+/// config file gets, so the participant is told which file holds the value.
 pub fn resolves_only_here(model: &ModelHost) -> Unrecordable {
     Unrecordable {
         shown: format!("https://{}:{}", model.host, model.port),
         reason: LOOPBACK_REASON.into(),
         set_by: Some(model.from.clone()),
         file: None,
+        edit: model.edit.clone(),
     }
 }
 
@@ -839,7 +902,12 @@ mod tests {
         let from: ModelHostFrom = toml::from_str(from).unwrap();
         let home = tempfile::tempdir().unwrap();
         std::fs::write(home.path().join(name), text).unwrap();
-        read(home.path(), &from, &["auth.example.test".to_string()])
+        read(
+            home.path(),
+            &from,
+            &["auth.example.test".to_string()],
+            &["api.default.example".to_string()],
+        )
     }
 
     const CODEX: &str = r#"
@@ -1111,6 +1179,7 @@ sessions:
             port: 443,
             base_path: "/v1/".into(),
             from: "model.base_url in config.yaml".into(),
+            edit: None,
         };
         let rule = host.approved();
         assert_eq!(rule.host, "models.example.test");
@@ -1240,6 +1309,7 @@ absent = "defaults""#;
             port: 443,
             base_path: String::new(),
             from: "env.MODEL_BASE_URL in config.json".into(),
+            edit: None,
         };
         let asked = std::cell::RefCell::new(Vec::new());
         let refused = refuse_if_on_this_computer_with(&model, |host, port| {
@@ -1264,6 +1334,52 @@ absent = "defaults""#;
         );
     }
 
+    /// A name that resolves only to this computer and comes from the config file is refused with
+    /// the file's full path and the key to edit, the same advice a refused value in the file
+    /// gets, with the connector's own hosts as the fallback. Without that advice the participant
+    /// is sent to setup and never told which file holds the value.
+    #[test]
+    fn a_name_on_this_computer_from_a_file_says_which_file_to_edit() {
+        let model = ModelHost {
+            host: "gateway.example.test".into(),
+            port: 443,
+            base_path: "/v1".into(),
+            from: "env.MODEL_BASE_URL in config.json".into(),
+            edit: Some(Box::new(EditSetting {
+                key: "env.MODEL_BASE_URL".into(),
+                path: "/home/user/config/config.json".into(),
+                fallback: Some(vec!["api.models.example.test".into()]),
+            })),
+        };
+        let refused = refuse_if_on_this_computer_with(&model, |_, _| true).unwrap_err();
+        let text = refused.refusal("Harness", "harness");
+        assert!(
+            text.contains(
+                "Edit or delete env.MODEL_BASE_URL in /home/user/config/config.json; \
+                 without it Goal Cup records api.models.example.test."
+            ),
+            "{text}"
+        );
+        assert!(!text.contains("goalcup setup"), "{text}");
+
+        let no_fallback = ModelHost {
+            edit: Some(Box::new(EditSetting {
+                key: "env.MODEL_BASE_URL".into(),
+                path: "/home/user/config/config.json".into(),
+                fallback: None,
+            })),
+            ..model
+        };
+        let refused = refuse_if_on_this_computer_with(&no_fallback, |_, _| true).unwrap_err();
+        assert!(
+            refused.refusal("Harness", "harness").contains(
+                "Edit env.MODEL_BASE_URL in /home/user/config/config.json to an https address \
+                 Goal Cup can record."
+            ),
+            "{no_fallback:?}"
+        );
+    }
+
     fn named(host: &str, port: u16) -> (String, u16) {
         (host.to_string(), port)
     }
@@ -1278,6 +1394,7 @@ absent = "defaults""#;
             port: 443,
             base_path: String::new(),
             from: String::new(),
+            edit: None,
         };
         let harness = ["api.default.example"];
         let sign_in = ["auth.example.test"];
@@ -1354,6 +1471,7 @@ absent = "defaults""#;
             port: 443,
             base_path: String::new(),
             from: String::new(),
+            edit: None,
         };
         let missing = "api.default.example:443 could not be reached";
         let setup = default_host_sentence(missing, &model, Caller::Setup);
