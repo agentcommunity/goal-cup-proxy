@@ -8,7 +8,7 @@ Run them in parallel: the run measures what is deployed now; the audit decides w
 ```text
 You are a Claude Code cloud agent running a measured 2-hour test of Goal Cup Proxy (agentcommunity/goal-cup-proxy) in a Vercel Sandbox. You act as the participant and the observer. You change no product code.
 
-Read first, from branch smart/sharp-volta-hly7qo (git fetch origin smart/sharp-volta-hly7qo): VISION.md (the seven points), AGENTS.md, docs/OPERATING.md (the "Test runs" and matrix sections), docs/research/VERCEL-COMPAT.md, docs/research/results/2026-10-vercel-gateway.md, docs/plans/2026-10-29-record-everything-progress.md.
+Read first, on main: VISION.md (the seven points), AGENTS.md, docs/OPERATING.md (the "Test runs" and matrix sections), docs/research/VERCEL-COMPAT.md, docs/research/results/2026-10-vercel-gateway.md, docs/plans/2026-10-29-record-everything-progress.md.
 
 Setup:
 - Keys in your environment: CLAUDE_API_KEY, VERCEL_TOKEN, VERCEL_TEAM_ID, VERCEL_PROJECT_ID. Print only "set" or "missing". Never print, log or commit a key, or put one in argv. Put a key in the sandbox only as a 0600 file and in the harness's own settings there. CLAUDE_API_KEY becomes ANTHROPIC_API_KEY only inside the sandbox.
@@ -53,7 +53,7 @@ You are a Claude Code cloud agent. Run a large, read-only, multi-agent workflow 
 
 We over-engineered. Cut first, then add only what the seven points need. No backward compatibility is needed: every run so far is test data, and the protocol, verifier, Worker and client may change together.
 
-Read first, from branch smart/sharp-volta-hly7qo (git fetch origin smart/sharp-volta-hly7qo): VISION.md, AGENTS.md, CLAUDE.md, docs/plans/2026-10-29-record-everything-progress.md (owner decisions after phase 2), docs/plans/2026-10-29-record-everything-phase2-notes.md, docs/DECISIONS.md, docs/RULES.md, docs/ARCHITECTURE.md. If docs/research/results/2026-10-30-two-hour-run.md exists on any branch, read it too.
+Read first, on main: VISION.md, AGENTS.md, CLAUDE.md, docs/plans/2026-10-29-record-everything-progress.md (owner decisions after phase 2), docs/plans/2026-10-29-record-everything-phase2-notes.md, docs/DECISIONS.md, docs/RULES.md, docs/ARCHITECTURE.md. If the 2-hour run report (docs/research/results/2026-10-30-two-hour-run.md) exists on any branch, read it too.
 
 Lanes, run in parallel. Every agent cites file paths and line ranges, or links for web facts.
 A. Inventory: every crate, module, connector, script, Worker route and doc. What it does, its size in lines, and which of the seven points it serves (or none).
