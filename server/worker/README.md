@@ -77,7 +77,7 @@ Variables (in `wrangler.toml` `[vars]`, or `--var` / `.dev.vars` locally):
 | `TEST_EVENT_ID` | none | Event that organizer test runs (mode `test`) belong to. Unset: the server opens no test run (`403`). |
 | `RUN_HOURS` | `168` | A competition run's `deadline_at` = `official_start` + this many hours. |
 | `PRACTICE_RUN_MINUTES` | `10` | A practice run's length. |
-| `MIN_COMPETITION_VERSION` | empty (no minimum) | The oldest goalcup (`x.y.z`; the first three numbers of what it sends) that may sign in for, or start, a competition run. Older, or a version with no `x.y.z` while a minimum is set, is `403` with the update line. A value with no `x.y.z` in it is malformed (parsing is lenient: the first `x.y.z` counts) and makes those two calls `500 misconfigured`; heartbeats and everything else are untouched. For the cup: `0.7.1`, set only once `releases/latest` serves it ([steps](#set-the-minimum-competition-version)). |
+| `MIN_COMPETITION_VERSION` | empty (no minimum) | The oldest goalcup (`x.y.z`; the first three numbers of what it sends) that may sign in for, or start, a competition run. Older, or a version with no `x.y.z` while a minimum is set, is `403` with the update line. A value with no `x.y.z` in it is malformed (parsing is lenient: the first `x.y.z` counts) and makes those two calls `500 misconfigured`; heartbeats and everything else are untouched. For the cup: the cup's minimum release (the first one that carries this build's recording changes), set only once `releases/latest` serves it ([steps](#set-the-minimum-competition-version)). |
 | `RUN_MAX_COMPRESSED_BYTES` | `68719476736` (64 GiB) | The most compressed chunk bytes one run may hold in R2, over all its entries. A chunk that would pass it is `413 quota_exceeded`, nothing stored; goalcup retries, so raising it (a deploy) resumes the upload. Log lines `quota-half`, `quota-full`, `quota-exceeded <run_id>`. |
 | `DB_BACKEND` | `supabase` | `supabase` (production) or `local` (`wrangler dev` and tests only). Never set `local` in the deployed `wrangler.toml`. |
 | `APPROVAL_URL` | in `wrangler.toml` | The website page where a member approves a device request, without a query string. `verification_uri_complete` adds `?code=<user code>`. |
@@ -169,7 +169,12 @@ Each deploy step below repeats them in short form. The details are here.
    (`EVENT_ID`, `MIN_COMPETITION_VERSION`, any other) through a PR to main. Once the cup's minimum is
    set ([Minimum competition version](#set-the-minimum-competition-version)), check after every
    production deploy that `npx wrangler versions view <version-id>` still shows
-   `MIN_COMPETITION_VERSION` = `0.7.1`.
+   `MIN_COMPETITION_VERSION` = the cup's minimum.
+5. **The Worker before the client.** Deploy the Worker from `main` before any client from `main` seals
+   a trace. A seal from the new client carries `tunnels_jsonl`, the sealed-connection list
+   ([CONTRACTS](../../docs/CONTRACTS.md), "Side artifacts"). A Worker that predates it ignores the
+   field, so the seal is accepted and that entry's list is not kept. The client is released after the
+   Worker is live, and `MIN_COMPETITION_VERSION` is set only after that release is published (below).
 
 At the top level, `wrangler deploy` prints "Multiple environments are defined". That is expected for
 production. Go on.
@@ -314,17 +319,18 @@ More on test runs: [OPERATING](../../docs/OPERATING.md#test-runs).
 ### Set the minimum competition version
 
 `MIN_COMPETITION_VERSION` refuses a competition device request and a competition open from an older
-goalcup with `403` and an install line (D70). It ships empty. For the cup it is `0.7.1`, so 0.6.1
-and 0.7.0 clients cannot start a cup run. It must be live before 7 Nov 00:00 UTC.
+goalcup with `403` and an install line (D70). It ships empty. For the cup it is the cup's minimum:
+the first release that carries this build's recording changes. Every older goalcup cannot start a
+cup run. It must be live before 7 Nov 00:00 UTC.
 
-**Only after 0.7.1 is published and GitHub's latest release serves it.** The refusal's install line
-installs `releases/latest`. Set the minimum before that and it installs an older goalcup, which is
-refused again.
+**Only after that release is published and GitHub's latest release serves it.** The refusal's install
+line installs `releases/latest`. Set the minimum before that and it installs an older goalcup, which
+is refused again. Below, `<minimum>` is that release's number and `<older>` is the release before it.
 
 1. Check the release. Every line of
    `curl -fsSL https://github.com/agentcommunity/goal-cup-proxy/releases/latest/download/SHA256SUMS`
-   names `goalcup-0.7.1-`. If not, stop and wait.
-2. On a branch, set `MIN_COMPETITION_VERSION = "0.7.1"` in `wrangler.toml` `[vars]` (production). To
+   names `goalcup-<minimum>-`. If not, stop and wait.
+2. On a branch, set `MIN_COMPETITION_VERSION = "<minimum>"` in `wrangler.toml` `[vars]` (production). To
    try it on staging first, set it in `[env.staging.vars]` in the same PR. Open a PR and merge it to
    main. Never set it in the dashboard: the next deploy wipes it ([Deploy checks](#deploy-checks), rule 4).
 3. On main at that merge commit: `npm ci && npm test`.
@@ -332,14 +338,14 @@ refused again.
    (before), `SHA=$(git rev-parse --short HEAD)`, `npx wrangler deploy --tag "$SHA" --message "$SHA"`
    (add `--var MAINTENANCE:on` if maintenance is on), `npx wrangler deployments list` (after), and
    the domain check.
-5. `npx wrangler versions view <version-id>` shows `MIN_COMPETITION_VERSION` = `0.7.1`.
+5. `npx wrangler versions view <version-id>` shows `MIN_COMPETITION_VERSION` = `<minimum>`.
 6. Ask as an old and as a new client:
    ```sh
-   for v in 0.7.0 0.7.1; do curl -s -o /dev/null -w "$v %{http_code}\n" -XPOST https://ingest.agentcommunity.org/v1/device \
+   for v in <older> <minimum>; do curl -s -o /dev/null -w "$v %{http_code}\n" -XPOST https://ingest.agentcommunity.org/v1/device \
      -H 'content-type: application/json' \
      -d "{\"purpose\":\"run\",\"mode\":\"competition\",\"connector_id\":\"codex-cli\",\"proxy_version\":\"$v\"}"; done
    ```
-   `0.7.0` answers `403`, `0.7.1` answers `200` (a device request nobody approves; it expires by
+   `<older>` answers `403`, `<minimum>` answers `200` (a device request nobody approves; it expires by
    itself).
 
 The EVENT_ID switch may carry the same change in its PR, if step 1 already passes on 6 Nov.
@@ -354,9 +360,9 @@ missed, every cup start on 7 Nov is refused ("after the start window ..."): comp
 the dry-run row, which closed 6 Nov 00:00 UTC.
 
 1. On a branch, set `EVENT_ID = "goalcup-cup-2026"` in `wrangler.toml` `[vars]` (not
-   `[env.staging.vars]`). If `MIN_COMPETITION_VERSION` is not `"0.7.1"` yet and 0.7.1 is the latest
-   release, set it in the same PR ([Minimum competition version](#set-the-minimum-competition-version),
-   step 1 first). If 0.7.1 is not out yet, leave it and do that section on its own once it is,
+   `[env.staging.vars]`). If `MIN_COMPETITION_VERSION` is not the cup's minimum yet and that release is
+   the latest release, set it in the same PR ([Minimum competition version](#set-the-minimum-competition-version),
+   step 1 first). If that release is not out yet, leave it and do that section on its own once it is,
    before 7 Nov 00:00 UTC. Open a PR and merge it to main.
 2. On main at that merge commit: `npm test` (in `server/worker`).
 3. From main only, at that merge commit: run `npm ci`, then the maintenance state check. Run
@@ -368,7 +374,7 @@ the dry-run row, which closed 6 Nov 00:00 UTC.
    (a 7 Nov hotfix too).
 4. Check the live Worker: `npx wrangler deployments status` names the live version, and
    `npx wrangler versions view <version-id>` shows `EVENT_ID` = `goalcup-cup-2026` (or the dashboard:
-   goalcup-ingest, Settings, Variables), and `MIN_COMPETITION_VERSION` = `0.7.1` once it is set.
+   goalcup-ingest, Settings, Variables), and `MIN_COMPETITION_VERSION` = the cup's minimum once it is set.
 5. Open one practice run and one organizer test run against production; both start. Then
    `sh scripts/delete-test-runs.sh --yes` ([Clean up test runs](#clean-up-test-runs)).
 6. A competition start now answers "The start window has not opened yet." (before the switch it

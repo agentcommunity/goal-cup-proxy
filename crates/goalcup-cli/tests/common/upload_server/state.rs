@@ -178,6 +178,9 @@ pub struct EntryRecord {
     pub chunks: Vec<StoredChunk>,
     /// `(seal_json, baseline_json)`, verbatim.
     pub seal: Option<(String, String)>,
+    /// The sealed-connection list sent with the seal, verbatim (`tunnels_jsonl`), once kept.
+    #[serde(default)]
+    pub tunnels: Option<String>,
     /// Every heartbeat accepted, in order.
     #[serde(default)]
     pub heartbeats: Vec<StoredHeartbeat>,

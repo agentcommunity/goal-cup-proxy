@@ -867,10 +867,11 @@ both forms or with neither is refused when the file is parsed. The regex each fo
 | `json_field = "F", value = "scalar"` | `"F"\s*:\s*("[^"\\]*"\|[^,}\s]+)` | a string, else a bare token such as a number |
 | `header_prefix = "P"` | `P[a-z0-9-]+:\s*[^\r\n"]+` | the whole `name: value` text |
 
-`header_prefix` is not a header filter: no HTTP header is ever recorded. It matches the text
-`PREFIX…: value` anywhere in a recorded body or file, not only at the start of a line or a word,
-and only in lowercase: `X-Vendor-Billing: …` is not matched, and no error says so. The match
-ends at a CR, an LF or a `"`. A short prefix over-matches: `x-` also strips `max-age: 3600`.
+`header_prefix` is not a header filter. It matches the text `PREFIX…: value` anywhere in a recorded
+body or file, not only at the start of a line or a word, and only in lowercase: `X-Vendor-Billing: …`
+is not matched, and no error says so. HTTP heads reach the chain as header streams (`http-head-v1`),
+masked by the proxy; no `header_prefix` row changes them. The match ends at a CR, an LF or a `"`. A
+short prefix over-matches: `x-` also strips `max-age: 3600`.
 
 What a form does not remove: `string` leaves a value with a backslash escape raw; `object` leaves
 a value nested four deep raw, and stops early at a brace inside a string; a quoted `scalar` that
