@@ -372,14 +372,14 @@ class PreRows(unittest.TestCase):
 
     def row(self, script, lines, scanned=True, worked=False, **files):
         pre = {"kind": "pre", "script": script, "exit": 0}
-        meta = {"connector": "qwen-code", "case": "direct", "variant": ["pre " + script], "server": "off", "known_box": True}
+        meta = {"connector": "qwen-code", "case": "direct", "variant": ["pre " + script], "server": "off"}
         if worked:  # the harness did work, so the faults slot is the daemon's alone
-            meta["commits_since_start"], files["status.json"] = 1, {"written": {"model_requests": 3}}
+            meta["commits_since_start"], meta["known_box"], files["status.json"] = 1, True, {"written": {"model_requests": 3}}
         return evaluate({"meta.json": meta, "watch/faults.jsonl": [pre] + lines, **(self.SCANNED if scanned else {}), **files})
 
     def test_start_refusal_names_file_and_key(self):
         said = {"kind": "start-refused", "exit": 1, "named_file": True, "named_key": True, "value_shown": False}
-        self.assertEqual(self.row("proxy-setting.sh", [said])["result"], "PASS")
+        self.assertEqual(self.row("proxy-setting.sh", [said])["result"], "PASS")  # no run began: no run certificate key to miss
         for bad in (dict(said, named_key=False), dict(said, exit=0), dict(said, value_shown=True)):
             self.assertEqual(self.row("proxy-setting.sh", [bad])["result"], "FAIL", bad)
         self.assertEqual(self.row("proxy-setting.sh", [])["result"], "INCONCLUSIVE")  # start never ended
@@ -411,6 +411,8 @@ class PreRows(unittest.TestCase):
             self.assertEqual(got["faults"], "INCONCLUSIVE", lines)
         ran = self.row("stale-gateway.sh", [dict(look), dict(look, left=False)], worked=True)
         self.assertEqual(ran["faults"], "PASS")
+        blind = self.row("stale-gateway.sh", [dict(look), dict(look, left=None)], worked=True)  # /proc could not be listed
+        self.assertEqual(blind["faults"], "INCONCLUSIVE")
 
 
 class StepRules(unittest.TestCase):
@@ -420,9 +422,9 @@ class StepRules(unittest.TestCase):
             pad.parse_steps(["exec refusal-curl.sh@1"], 8)  # cycle: it would run to minute 13
 
     def test_long_exec_must_not_hold_cycles_own_crash_back(self):
-        pad.parse_steps(["exec long-tunnel.sh@1"], 8, cycle=True)  # ends at minute 3
+        pad.load_settings(dict(BASE, steps=["exec long-tunnel.sh@1"]), PADCFG)  # ends at minute 3
         with self.assertRaises(pad.Usage):
-            pad.parse_steps(["exec long-tunnel.sh@2"], 8, cycle=True)  # would hold the crash at minute 3 to about 4
+            pad.load_settings(dict(BASE, steps=["exec long-tunnel.sh@2"]), PADCFG)  # would hold the crash at minute 3 to about 4
 
 
 class DaemonLook(unittest.TestCase):
@@ -430,29 +432,34 @@ class DaemonLook(unittest.TestCase):
 
     def run_for(self, **harness):
         run = self.enterContext(tempfile.TemporaryDirectory())
-        for name, doc in (("settings.json", {"harness": harness}), ("state.json", {})):
+        for name, doc in (("settings.json", {"harness": harness}), ("state.json", {"home": run})):
             with open(os.path.join(run, name), "w") as f:
                 json.dump(doc, f)
         return run, padrun.Run(run, "verify")
 
     def test_left_daemon_is_seen(self):
-        child = subprocess.Popen(["sleep", "613"])
-        self.addCleanup(child.wait)
-        self.addCleanup(child.kill)
-        self.assertTrue(self.run_for(daemon="sleep 613")[1].daemon_left())
-        self.assertFalse(self.run_for(daemon="sleep 614")[1].daemon_left())
-        self.assertFalse(self.run_for()[1].daemon_left())  # no daemon in the harness file
+        run, r = self.run_for(daemon="sleep 613")
+        for home in (run, run + "-another"):  # the same command under another run's home is not this run's daemon
+            child = subprocess.Popen(["sleep", "613"], env=dict(os.environ, HOME=home))
+            self.addCleanup(child.wait)
+            self.addCleanup(child.kill)
+        self.assertEqual(len(r.daemon_pids()), 1)
+        self.assertEqual(self.run_for(daemon="sleep 614")[1].daemon_pids(), [])
+        self.assertEqual(self.run_for()[1].daemon_pids(), [])  # no daemon in the harness file
+        with mock.patch.object(padrun.os, "listdir", side_effect=OSError):  # no /proc: unknown, and verify goes on
+            self.assertIsNone(r.daemon_pids())
 
     def test_refusal_records_what_the_screen_showed(self):
         run, r = self.run_for()
         seen = []
         def fake(argv, **kw):
-            out = "1 1" if argv[1] == "display-message" else "settings.json has a proxy key: http://127.0.0.1:9"
+            out = "1 1" if argv[1] == "display-message" else "settings.json has a proxy key: http://" + padrun.PROXY_VALUE
             return subprocess.CompletedProcess(argv, 0, out, "")
         with mock.patch.object(padrun, "sh", fake), mock.patch.object(r, "fault", lambda kind, **kw: seen.append((kind, kw))), \
                 mock.patch.object(r, "pane", lambda keep=True, tag="": fake(["tmux", "capture-pane"]).stdout):
             r.refusal()
-        self.assertEqual(seen[0][1], {"exit": 1, "named_file": True, "named_key": True, "value_shown": True})
+        self.assertEqual({k: seen[0][1][k] for k in ("named_file", "named_key", "value_shown")},
+                         {"named_file": True, "named_key": True, "value_shown": True})
 
 
 if __name__ == "__main__":

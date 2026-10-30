@@ -224,17 +224,20 @@ def judge(r):
     c6(r)
     faults(r)
 
+def pre_exit(r, script):
+    """The exit of the last pre step of `script`; None when it did not run."""
+    return next((f.get("exit") for f in reversed(r.faults) if f.get("kind") == "pre" and f.get("script") == script), None)
+
 def refused(r):
     """Section 3.1, proxy-setting.sh: goalcup start must refuse and name the file and key, so no run is recorded and the
     six checks have nothing to read. The row rests on start's exit and the screen's words, recorded by pad-run (no value)."""
     for name, where in SCANS[1:]:  # no run, so no verifier report: the other two scans, and no scan is never a PASS
         scan(r, name, where)
-    r.flag(r.meta.get("known_box") is not True, "C3", "INCONCLUSIVE", "the run certificate key is not in the known values")
+    began = r.entries or isinstance(r.status, dict) or r.meta.get("entry")  # a refused start makes no run certificate key
+    r.flag(began and r.meta.get("known_box") is not True, "C3", "INCONCLUSIVE", "the run certificate key is not in the known values")
     said = [f for f in r.faults if f.get("kind") == "start-refused"]
     if not said:
-        pre = [f for f in r.faults if f.get("kind") == "pre" and f.get("script") == REFUSES]
-        began = r.entries or isinstance(r.status, dict) or r.meta.get("entry")
-        if began and pre and pre[-1].get("exit") == 0:  # the setting was written and start went on: PRD-11 acceptance 4
+        if began and pre_exit(r, REFUSES) == 0:  # the setting was written and start went on: PRD-11 acceptance 4
             return r.mark("faults", "FAIL", "goalcup start did not refuse the proxy setting: a run was recorded")
         return r.mark("faults", "INCONCLUSIVE", "goalcup start did not end: no refusal recorded")
     f = said[-1]
@@ -246,16 +249,14 @@ def refused(r):
 
 def stale(r):
     """Section 3.1, stale-gateway.sh: the daemon must have been running before start, and neither it nor any process
-    with the daemon command may live after goalcup start or after the harness exited (PRD-11 acceptance 5)."""
+    with the daemon command may live after goalcup start or after the harness exited (PRD-11 acceptance 5). An `alive` or
+    `left` of null is a look /proc could not give: no look."""
     looks = [f for f in r.faults if f.get("kind") == "daemon-check"]
-    pre = [f for f in r.faults if f.get("kind") == "pre" and f.get("script") == STALE]
     r.flag(any(f.get("alive") for f in looks), "faults", "FAIL", "the stale daemon was alive after goalcup start")
     r.flag(any(f.get("left") for f in looks), "faults", "FAIL", "a daemon process was left after the harness exited")
-    r.flag(not pre or pre[-1].get("exit") != 0, "faults", "INCONCLUSIVE",
-           "the stale daemon was not running before start (pre %s exit %s)" % (STALE, pre[-1].get("exit") if pre else "not run"))
-    r.flag(pre and pre[-1].get("exit") == 0 and not looks, "faults", "INCONCLUSIVE",
-           "the stale daemon was not running before start (no pid file, no daemon-check line)")
-    r.flag(looks and not any("left" in f for f in looks), "faults", "INCONCLUSIVE", "no look for left daemons after exit")
+    seen = looks and all(f.get("alive") is not None for f in looks) and any(f.get("left") is not None for f in looks)
+    r.flag(pre_exit(r, STALE) != 0 or not seen, "faults", "INCONCLUSIVE",
+           "the stale daemon did not run before start, or a look after start or after exit is missing or unreadable")
 
 def local(r, few):
     """C1 (no missed call) and C4 (record whole, server copy whole and readable)."""

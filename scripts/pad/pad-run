@@ -20,6 +20,7 @@ STEPS = ("setup", "start", "paste", "wait-calls", "look", "wait-recovery", "keep
 TIMED = ("kill-recorder", "kill-watchdog-recover")  # section 3.1, at <minute> after the paste
 USAGE = "usage: pad-run <run dir> " + "|".join([s + " N" * (s == "wait-calls") for s in STEPS] + [t + "@M" for t in TIMED]
                                                 + ["pre SCRIPT", "exec SCRIPT@M"])
+PROXY_VALUE = "127.0.0.1:9"  # the proxy setting exec/proxy-setting.sh writes (PAD_PROXY); start must not print it
 EVERY = {"status": 10, "procs": 30, "pane": 60, "live": 300}  # section 4: the watch's seconds per kind of line
 OUT = ("verify", "watch", "exec", "status.json", "harness-files.json", "meta-box.json")  # what out.tar carries
 PROXY_CA = tuple(n for p in ("HTTPS", "HTTP", "ALL", "NO") for n in (p + "_PROXY", p.lower() + "_proxy")) + (
@@ -322,7 +323,7 @@ class Run:
             text = self.pane(False)
             self.fault("start-refused", exit=int(dead[1]) if dead[1:] and dead[1].isdigit() else None,
                        named_file="settings.json" in text, named_key=bool(re.search(r"\bproxy\b", text)),
-                       value_shown=bool(re.search(r"127\.0\.0\.1:9(?!\d)", text)))  # proxy-setting.sh's own value
+                       value_shown=bool(re.search(re.escape(PROXY_VALUE) + r"(?!\d)", text)))
 
     def paste(self, _):
         self.need("goalcup")
@@ -461,7 +462,7 @@ class Run:
         script runs in the participant's shell; an exec script with only the harness's names from exec_env."""
         shell = self.gc_env(True)
         env = dict(shell if kind == "pre" else env, PAD_RUN=self.run, PAD_HOME=self.st.get("home") or "",
-                   PAD_MODEL_HOSTS=self.path("model-hosts.toml"), PAD_DAEMON=str(self.h.get("daemon") or ""),
+                   PAD_MODEL_HOSTS=self.path("model-hosts.toml"), PAD_DAEMON=str(self.h.get("daemon") or ""), PAD_PROXY=PROXY_VALUE,
                    PAD_SHELL_ENV=quoted(shell), PAD_HOME_ENV=quoted(self.home_env()))
         p = subprocess.Popen(["bash", os.path.join(PAD, "exec", name)], cwd=self.project, env=env, stdin=subprocess.DEVNULL,
                              stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, errors="replace", start_new_session=True)
@@ -656,10 +657,10 @@ class Run:
         """Section 8 (the server's copy is the conductor's fetched/<entry>/, S13; the git scan needs a push token, none yet),
         each inside the step's limit (a timeout is an exit "timeout"); then meta-box.json, scan and tar, whatever happened."""
         self.stop_watch()  # the watch's last line first, so the tar holds a whole watch/
-        self.daemon_check(True)
         e, exits, result, note = self.entry(), {}, None, ""
         self.st["screen_known"] = self.st.get("screen_known", 0) + (loads(path=self.path("watch", "watch.json")).get("screen_known") or 0)
         try:
+            self.daemon_check(True)  # inside the try: meta-box.json, the out scan and the tar follow whatever happens
             self.need("goalcup-verify", entry=True)
             shutil.copy(os.path.join(e, "status.json"), self.path("status.json"))
             f, on = os.path.join("fetched", self.st["entry"]), self.s["server"] != "off"
@@ -699,44 +700,44 @@ class Run:
         write(self.path("watch.stop"), "")
         wait(lambda: not alive(read_pid(self.path("watch.pid"))), 30, 1)
 
-    def daemon_pid(self):
-        """The pid in exec/stale-gateway.pid while that process lives and its command line names the harness file's
-        `daemon` program (a reused pid is not ours); else None."""
-        pid, want = read_pid(self.path("exec", "stale-gateway.pid")), str(self.h.get("daemon") or "").split()[:1]
-        if pid is None or not want or not alive(pid):
-            return None
+    def daemon_pids(self):
+        """The live pids, not ours, whose command line holds the harness file's `daemon` command and whose environment
+        holds this run's home (the connector's home mapping): the stale daemon, one it forked, or one goalcup started.
+        None when /proc cannot be listed (unknown); another run's or the participant's own daemon is never matched."""
+        want, home = str(self.h.get("daemon") or "").strip(), ["%s=%s" % kv for kv in self.home_env().items()]
+        if not want or not self.st.get("home"):
+            return []
         try:
-            with open("/proc/%d/cmdline" % pid, "rb") as f:
-                return pid if want[0].encode() in f.read() else None
+            names = [int(d) for d in os.listdir("/proc") if d.isdigit() and int(d) != os.getpid()]
         except OSError:
             return None
-
-    def daemon_left(self):
-        """Whether any other process has the harness file's `daemon` command in its command line: the stale daemon, one
-        it forked, or one goalcup started, still alive after the harness exited (PRD-11 acceptance 5)."""
-        want = str(self.h.get("daemon") or "").strip()
-        for d in [d for d in os.listdir("/proc") if d.isdigit() and int(d) != os.getpid()] if want else []:
+        out = []
+        for pid in names:
             try:
-                with open("/proc/%s/cmdline" % d, "rb") as f:
+                with open("/proc/%d/cmdline" % pid, "rb") as f:
                     line = f.read().replace(b"\0", b" ").decode(errors="replace")
+                with open("/proc/%d/environ" % pid, "rb") as f:
+                    env = f.read().decode(errors="replace").split("\0")
             except OSError:
                 continue
-            if want in line and alive(int(d)):
-                return True
-        return False
+            if want in line and all(h in env for h in home) and alive(pid):
+                out.append(pid)
+        return out
 
     def daemon_check(self, end=False):
         """PRD-11 acceptance 5: goalcup start's `before` stops the stale daemon. One faults.jsonl line per look (after
         start, and at verify with `left`: no such process may live after exit); check.py fails the row when either lived.
-        Nothing when stale-gateway.sh left no pid."""
-        if read_pid(self.path("exec", "stale-gateway.pid")) is not None:
-            self.fault("daemon-check", script="stale-gateway.sh", alive=self.daemon_pid() is not None,
-                       **({"left": self.daemon_left()} if end else {}))
+        `alive` and `left` are null when /proc could not be read. Nothing when stale-gateway.sh left no pid."""
+        pid = read_pid(self.path("exec", "stale-gateway.pid"))
+        if pid is not None:
+            pids = self.daemon_pids()
+            self.fault("daemon-check", script="stale-gateway.sh", alive=None if pids is None else pid in pids,
+                       **({"left": None if pids is None else bool(pids)} if end else {}))
 
     def stop_daemon(self):
         """The cleanup after daemon_check: kills the daemon goalcup's start did not stop -> a line for the wipe step, or None."""
-        pid = self.daemon_pid()
-        if pid is None:
+        pid = read_pid(self.path("exec", "stale-gateway.pid"))
+        if pid is None or pid not in (self.daemon_pids() or []):
             return None
         try:
             os.kill(pid, signal.SIGKILL)
