@@ -9,14 +9,6 @@ contract is [UPLOAD-API](UPLOAD-API.md).
 Never write a secret, a key value or a key file path into a doc, an issue, a log or a chat. This page
 names secrets only.
 
-## Contents
-
-[Where things run](#where-things-run) · [Dates and checklist](#dates-and-checklist) · [Deploy](#deploy) ·
-[Test runs and the pad](#test-runs-and-the-pad) · [Fetch and check a run](#fetch-and-check-a-run) ·
-[Runs whose recording is off](#runs-whose-recording-is-off) ·
-[Storage cost and the one manual lever](#storage-cost-and-the-one-manual-lever) · [Bad days](#bad-days) ·
-[Edge cases by hand](#edge-cases-by-hand) · [Releasing](#releasing)
-
 ## Where things run
 
 | | Production | Staging | Local |
@@ -53,15 +45,13 @@ All times UTC.
 
 | Date | What |
 |---|---|
-| 6 Nov | Release 1.0.0 ([Releasing](#releasing)), then the owner deploys production ([Deploy](#deploy)). Releases may continue during the cup. |
 | 23 Oct to 6 Nov 00:00 | Dry-run window (production, `goalcup-dryrun-2026`). Dry runs can start on any day. |
-| 6 Nov | `EVENT_ID` switch, any time from 00:00 on 6 Nov to 00:00 on 7 Nov: [EVENT_ID switch](../server/worker/README.md#event_id-switch-6-nov-2026). |
+| 6 Nov | Release 1.0.0 ([Releasing](#releasing)), then the owner deploys production ([Deploy](#deploy)), then the `EVENT_ID` switch, any time from 00:00 on 6 Nov to 00:00 on 7 Nov ([EVENT_ID switch](../server/worker/README.md#event_id-switch-6-nov-2026)). Releases may continue during the cup. |
 | 7 Nov 00:00 | Start window opens. It lasts 24 hours. |
 | 8 Nov 00:00 | Start window closes |
 | 168 hours after each start | That run's deadline. The latest run ends 192 hours after the window opens. |
 
-Deploy order: staging first (agents may), then the 1.0.0 release, then production (the owner), then the
-`EVENT_ID` switch. Before the window opens:
+Before the window opens:
 
 1. The `goalcup-cup-2026` row in the website's `events` table has `start_window_opens` =
    `2026-11-07T00:00:00Z` and `start_window_closes` = `2026-11-08T00:00:00Z`.
@@ -92,21 +82,12 @@ CLOUDFLARE_ACCOUNT_ID=<id> npx wrangler deploy                # production: top 
 **Staging (agents may).** Deploy with `--env staging` from the integration head. It carries
 `MIN_COMPETITION_VERSION = "1.0.0"` from its first deploy, and every pad run uploads to it.
 
-**Production (the owner, after the merge to `main`).** In this order, once:
-
-1. Check that no real run is open (the query is step 3 of
-   [Deploying 1.0](../server/worker/README.md#deploying-10)).
-2. Publish the 1.0.0 release, so `releases/latest` serves 1.0 ([Releasing](#releasing)).
-3. Deploy production with every deploy check. `wrangler.toml` holds `MIN_COMPETITION_VERSION = "1.0.0"` in
-   both blocks; after the deploy `npx wrangler versions view <version-id>` must show it
-   ([Set the minimum competition version](../server/worker/README.md#set-the-minimum-competition-version)).
-4. Only now delete the old key secret: `npx wrangler secret delete RECEIPT_SIGNING_KEY`. The 0.7 Worker
-   refuses every call without it, so never before. The 1.0 Worker signs nothing and does not read it.
-5. Create the `goalcup-usage` bucket.
-6. Smoke: one practice run with the 1.0 client on production, sealed, fetched and checked.
-
-There is no rollback to the 0.7 Worker: it refuses 1.0 heartbeats and never seals their entries. A bad 1.0
-Worker is held with `MAINTENANCE=on` (clients back off and keep everything) and fixed forward
+**Production (the owner, after the merge to `main`).** Once, in the order of
+[Deploying 1.0](../server/worker/README.md#deploying-10): check that no real run is open, publish the
+1.0.0 release, deploy with every deploy check (`wrangler.toml` holds the `1.0.0` floor in both blocks;
+`npx wrangler versions view <version-id>` must show it), only then delete the old `RECEIPT_SIGNING_KEY`
+secret, create the `goalcup-usage` bucket, and smoke with one practice run, sealed, fetched and checked.
+There is no rollback to the 0.7 Worker. A bad 1.0 Worker is held with `MAINTENANCE=on` and fixed forward
 ([Maintenance](../server/worker/README.md#maintenance-on-and-off); [Rollback](../server/worker/README.md#rollback),
 only to a 1.0 version).
 
@@ -172,13 +153,12 @@ index has a hole, and it never overwrites. Against a local `wrangler dev` use `-
 `check --server` reads the fetched folder; `--json` prints the report, `--local <entry dir>` compares the
 server copy with the participant's own entry, and `--known <file>` (one secret value per line) adds the
 secrets check. `dump` prints one JSON line per record. The report and its exit codes are in
-[RECORD-FORMAT](RECORD-FORMAT.md#the-goalcup-verify-check---json-report). The usage reader is described in a
-later slice of these docs.
+[RECORD-FORMAT](RECORD-FORMAT.md#the-goalcup-verify-check---json-report).
 
 ## Runs whose recording is off
 
 Each heartbeat carries `recording`: `ok`, `gaps` (something was lost) or `failed` (recording is off now:
-the recorder is not running, or its writer has stalled for over a minute while records wait). `failed` is a
+the recorder is in null mode and records nothing, or its writer has stalled for over a minute while records wait). `failed` is a
 state, not a latch (the heartbeat section of [UPLOAD-API](UPLOAD-API.md)). The first heartbeat that says
 `gaps` or `failed` flags the run, and the cron sends the participant one `recording` email. The cron also
 mails silence (no heartbeat for 20 minutes, only when the server itself was well) and idle (no written model
@@ -203,7 +183,7 @@ free ([R2 pricing](https://developers.cloudflare.com/r2/pricing/)). There is no 
 
 The guard is a person: the Worker logs `large-run <run_id> stored=<bytes>` at every 10 GiB a run crosses, and
 `stored_bytes` per entry is in every `fetch.json`. If a run misbehaves, the one lever is to delete that run's
-row in `goal_cup_tracer.run_credentials`: its client then gets `401`, keeps its data and stops uploading.
+row in `goal_cup_tracer.run_credentials`: its client then gets `401` and keeps its data, and the server stores nothing more for that run.
 That is a hand write to the shared database by the owner, not code. Bytes already under the lock cannot be
 deleted for 180 days.
 
@@ -217,7 +197,7 @@ or the client's own count to the deadline. Fix the server and the runs catch up.
 | Symptom | Do |
 |---|---|
 | A bad deploy, or anything you cannot explain | Switch maintenance on with `npx wrangler deploy --var MAINTENANCE:on` from a clean checkout of the commit that is live now ([steps](../server/worker/README.md#maintenance-on-and-off)); do not edit `wrangler.toml`. Every call answers `503 maintenance` with `Retry-After` (default 300 s), clients back off, and the cron pauses. Any deploy during maintenance must repeat `--var MAINTENANCE:on`, or maintenance ends. Then fix forward, and switch it off by a deploy without the flag. It blocks new starts too: there is no separate pause. |
-| A deploy answers runs `401`, `404` (a lost route), `410`, `413` or anything else it should not | Runs keep recording and ask again with backoff; none stops. After repeated refusals the participant's terminal and `goalcup status` say the server refuses the uploads and that nothing is lost. Hotfix, or roll back to a 1.0 version ([Rollback](../server/worker/README.md#rollback)); the uploads catch up by themselves. |
+| A deploy answers runs `401`, `404` (a lost route), `410`, `413` or anything else it should not | Runs keep recording and ask again with backoff; none stops. After repeated refusals the participant's terminal and `goalcup status` say the server refuses this run and that goalcup keeps trying. Hotfix, or roll back to a 1.0 version ([Rollback](../server/worker/README.md#rollback)); the uploads catch up by themselves. |
 | Supabase is down or read-only | The Worker answers `502 upstream_error`; `goalcup` retries for as long as the run lasts. Nothing is lost. Optionally switch maintenance on for a clean `503`. The cron catches up when Supabase is back. |
 | R2 is down | Chunk puts answer `502`; same as above. A retried chunk is safe. |
 | GitHub is down or rate-limits | Opens answer `502` (the client retries). The cron retries the judged commit (the last push to the default branch at or before `ends_at`) each tick for 48 hours; the `ended` mail waits an hour for it, then goes without it. A repository `404` is retried for an hour before it is kept as `none`; an activity API that fails for an hour falls back to the branch's last commit dated before `ends_at`, then to `commits/HEAD`. Those runs are flagged `final_head_fallback`: check them by hand (commit dates can be set by the agent, and the head may include late pushes). Check that `GITHUB_TOKEN` is set and valid: the cron logs `WARNING: GITHUB_TOKEN is not set` without it. |
@@ -230,27 +210,6 @@ or the client's own count to the deadline. Fix the server and the runs catch up.
 | Emails are late | At most 20 go out per 5-minute tick. The queue drains by itself; raise `NOTICES_PER_TICK` in `mail.ts` to speed it. Check `RESEND_API_KEY` and `NOTICE_FROM` are set. |
 | A secret leaked (Supabase, Resend, GitHub, Cloudflare) | Revoke it at its provider, create a new one, `npx wrangler secret put` it, deploy. Treat the old value as public. |
 
-## Edge cases by hand
-
-Each case is a run you start yourself and break on purpose, to find what goes wrong in a week. The pad
-covers the quick ones; the long ones need an organizer test run on staging, never on production. After each
-case, fetch the run and check it ([Fetch and check a run](#fetch-and-check-a-run)). File any failure with
-the exact `goalcup status` text, the log and the run id.
-
-| # | Case | Do | Expect |
-|---|---|---|---|
-| 1 | 30 minutes offline | Test run. Network off for 35 minutes, then on. | Recording continues; `goalcup status` names the silence and then the waiting upload, and says nothing is lost. Back online the uploader retries and catches up, and both lines go away. The server copy checks clean. |
-| 2 | Laptop sleep | Test run. Sleep 30 minutes. | Heartbeats resume within 5 minutes, the uploader catches up, and the deadline counts through the sleep (a deadline that passed while asleep stops the run at wake). |
-| 3 | Agent killed, then `continue` | Kill the harness process, not `goalcup`. | The run stays open until its deadline. `goalcup continue` adds a second entry with the deadline where it was. The first entry checks clean. |
-| 4 | Reboot, then `continue` | Restart the machine during a test run (also a hard power-off, on a separate run). | Nothing runs after reboot. `goalcup continue` closes the segment that was left and opens the next. A torn tail is exit 2 and must be named. |
-| 5 | Tokens run out | Start with an account whose model quota is spent. | The harness reports its own error and idles. Recording continues. `model_requests` stops growing, so a competition run gets the idle mails. |
-| 6 | Window closed, then `continue` | Close the terminal window with the harness running. | The harness and `goalcup start` end and no process of the old run survives. `goalcup continue` opens the next segment. |
-| 7 | The deadline stop | A bounded test run to its deadline. | The harness stops at the deadline, the run seals and uploads, and the server shows `status: sealed`. |
-| 8 | A second start replaces the first | Two configuration directories, same member, a server with an open competition event (staging's dry-run event). Start in each. | Within one heartbeat the first stops, seals and sends its final heartbeat. `GET` for the first run has `ends_at` = the second run's `official_start`, and a chunk past the first run's committed end is `410`. Two practice starts replace nothing. |
-
-The long runs: two 8-hour runs, one on macOS and one on Linux, on staging with a real harness and an
-organizer test run. Start, leave, and at the end `goalcup seal`, then fetch and check.
-
 ## Releasing
 
 The version is written once, in the workspace `Cargo.toml`. In order:
@@ -258,8 +217,8 @@ The version is written once, in the workspace `Cargo.toml`. In order:
 1. If `origin/main` lacks the version, `sh scripts/release.sh prepare <x.y.z>` opens the version pull
    request; merge it under the `main` ruleset.
 2. In a build box, run `sh scripts/gate.sh full` on the merged commit ([README, The gate](../README.md#the-gate)).
-   CI (`.github/workflows/ci.yml`) is one job, `check`, that runs `sh scripts/gate.sh fast` on every pull
-   request and push; there is no scope step and no separate Linux check.
+   CI (`.github/workflows/ci.yml`) is one job, `check`, that runs `sh scripts/gate.sh fast` on pull requests
+   into `main` and pushes to `main` and `v1.0/integration`; there is no scope step and no separate Linux check.
 3. `sh scripts/release.sh tag <x.y.z>` fetches, checks that `origin/main` has the version, runs
    `scripts/pad/table --release-check` on that commit, refuses the tag if it fails, then tags that commit
    and pushes only the tag.

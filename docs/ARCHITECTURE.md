@@ -252,7 +252,7 @@ agent and seals. Details: [UPLOAD-API](UPLOAD-API.md), [server/worker](../server
 
 Deliberately not built: durable ingest replay, automatic recording proxy restart, torn-tail repair, a PTY or
 input relay, continuous workspace hashing, reminders injected by Goal Cup Proxy, cross-harness linking and
-native Windows. Operating the binaries: [OPERATING](OPERATING.md).
+native Windows. Running an event: [OPERATING](OPERATING.md).
 
 ## 12. Terms
 

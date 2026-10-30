@@ -8,13 +8,12 @@ on a tag. "By hand" means nothing runs it for you. The header of each script has
 
 | Script | What it does | Who | Run by |
 |---|---|---|---|
-| `gate.sh` | `fast`: format check, clippy, the Rust tests and doctests, the Worker tests, the script tests below. `full`: fast, then the `#[ignore]` tests, the release build and a check that no test hook is in it. | developer, build box | by hand; CI runs `fast` |
+| `gate.sh` | `fast`: format check, clippy, the Rust tests and doctests, the Worker tests, the script tests below. `full`: fast, then every `#[ignore]` test except `by_hand_*`, the release build and a check that no test hook is in it. | developer, build box | by hand; CI runs `fast` |
 | `fetch-run.sh` | Rebuilds a run's trace from the server's copy (checks each chunk's SHA-256) so `goalcup-verify` can judge it. Needs the organizer's read-only credentials. | organizer | by hand; the pad's `fetch` step |
 | `release.sh` | `prepare` opens the version pull request; `tag` runs the pad's release check, then tags what `main` holds. | maintainer | by hand |
 | `package-release.sh` | Packs one release tarball (`goalcup`, `goalcup-verify`, licences) for one target. | release | release CI |
 | `third-party-licenses.py` | Writes the third-party notices the tarball carries; stops on a licence not allowed. | release | `package-release.sh` |
 | `smoke-release.sh` | Smoke-tests one tarball with an empty environment: versions, the shipped reader on the worked example, no test hook. | release | release CI |
-| `check-links.py` | Checks every relative Markdown link and `#anchor` (Python 3.10 or later). It goes with the docs rewrite. | whoever edits docs | by hand; not the gate, not CI |
 
 ## The test pad (`scripts/pad/`)
 
@@ -38,4 +37,3 @@ Unit tests with stubs and no network. The gate runs the first three, so CI does 
 | `test_install.py` | `packaging/install.sh` (the install never breaks a running recording) |
 | `test_fetch_run.py` | `fetch-run.sh` |
 | `pad/test_pad.py` | The pad: key files, no key in any argument or file, pane replacement, cleanup, `check.py` crash rows (Python 3.11 or later) |
-| `test_check_links.py` | `check-links.py` (by hand with it) |

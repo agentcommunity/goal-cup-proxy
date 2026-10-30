@@ -326,8 +326,8 @@ On the worked example (`python3 read.py < worked-example.gcr`, already raw) it p
 
 ## The `goalcup-verify check --json` report
 
-`goalcup-verify check <path> --json` prints one JSON object on standard output (seam S6, PRD-08
-section 4, code in `crates/goalcup-verify/src/report.rs` and `server.rs`) and its text form on
+`goalcup-verify check <path> --json` prints one JSON object on standard output (code in
+`crates/goalcup-verify/src/report.rs` and `server.rs`) and its text form on
 standard error (per entry, a header, whether it is sealed, each named or failed check's `why` and a
 coverage line). `<path>` is an entry, `rec`, fetched entry (`rec.gcr.zst`) or run folder, a fetched
 outdir, or one part file. `--live` reads an entry still recording up to its last index line;
@@ -336,8 +336,8 @@ outdir, or one part file. `--live` reads an entry still recording up to its last
 `secrets` check (below). `--harness-files` is taken but not read yet.
 
 Exit code and `result`: 0 `pass` (whole); 1 `named` (honest but incomplete: every loss is named, or
-the entry is unsealed, live or has pruned part files); 2 `fail` (a broken invariant or a silent
-loss); 3 no usable report and no JSON (the input, `--local` or `--known` cannot be read, a wrong
+the entry is unsealed, live or has pruned part files); 2 `fail` (a broken invariant, a silent
+loss, or with `--known` a `secrets` hit or big mask); 3 no usable report and no JSON (the input, `--local` or `--known` cannot be read, a wrong
 command line, an internal error). A `warn` (an unknown record kind or GAP reason, or a glued secret
 shape) or a `skip` leaves the exit alone. For a run folder, the worst entry decides. Readers ignore
 keys they do not know.
@@ -367,7 +367,6 @@ this slice": `listed_hosts_decrypted`, `conn_bytes`, `mask_failclosed`, `history
 `wire_keeps_up`, `threads_match` and `subagents_present`. Last of all come the ones that depend on
 an option:
 
-- `secrets` (`inv` null), only with `--known`; see below.
 - For a server input, three that read `fetch.json`, the chunk list beside the copy (S13,
   `scripts/fetch-run.sh`), and without it fail under `--server`, else skip.
   `server_chunks_whole`: the chunks run on and match their SHA-256 and the record's heads; `named`
@@ -375,6 +374,7 @@ an option:
   `--local` part files, so a copy shorter or longer than them can pass; whether the copy is whole
   is `server_chunks_whole`; it skips without them or if pruned. `server_counts_match`: the server's
   row and heartbeat against the seal's totals; it skips if not sealed.
+- `secrets` (`inv` null), last, only with `--known`; see below.
 
 **The label** is a hint for judges, not a judgement. It says which evidence the record holds:
 `wire_and_native` when model requests were written and a `native` or `snapshot` stream holds
@@ -410,12 +410,10 @@ is null and `why` is one line of counts, plus "the record was read only in part"
 
 `goalcup-verify secrets PATH... [--known FILE]` prints one JSON object on standard output and one
 line of counts on standard error; it has no `--json` flag (that is a usage error). A part file is a
-record. A folder holding an entry has its record decoded and every file in it but `rec/` read as raw
-bytes (`goalcup.log`, `upload.json`); `rec/` is the recorder's own state, the run CA key among it, and
-is never read. A folder of part files under another name is read the same way, any other folder is
-walked, and any other file, or `-` (standard input), is raw bytes. The keys are `verifier`, `result`
-(`pass`, `warn` or `fail`), `exit`, `known_values` (values read from `FILE`, 0 without it), `inputs`
-(per path: `path`, `as` `record` or `raw`, `read` `whole` or `partial`) and the six facts above. Exit
-2 on `fail`; else 1 when an input was read only in part (a file in a walk that cannot be read, a folder
-symlink, a record that stopped decoding); else 0, also on `warn`. Exit 3 with no JSON: a path or
-`FILE` cannot be read, or the command line is wrong.
+record. A folder holding an entry has its record decoded and its other files read as raw bytes,
+except `rec/`, the recorder's own state (the run CA key among it), which is never read. Any other
+folder is walked, and any other file, or `-` (standard input), is raw bytes. The keys are `verifier`,
+`result` (`pass`, `warn` or `fail`), `exit`, `known_values` (values read from `FILE`, 0 without it),
+`inputs` (per path: `path`, `as` `record` or `raw`, `read` `whole` or `partial`) and the six facts
+above. Exit 2 on `fail`; else 1 when an input was read only in part; else 0, also on `warn`. Exit 3
+with no JSON: a path or `FILE` cannot be read, or the command line is wrong.

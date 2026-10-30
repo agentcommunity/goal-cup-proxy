@@ -102,7 +102,7 @@ is not proof of a published binary or a successful real harness run.
 ## Known residuals
 
 Listed in [docs/CHEAT-CHECKLIST.md](docs/CHEAT-CHECKLIST.md) (redaction, key-scan blind spots) and
-[docs/TERMINATION.md](docs/archive/TERMINATION.md) (termination windows). Also:
+[docs/archive/TERMINATION.md](docs/archive/TERMINATION.md) (termination windows). Also:
 
 - Same-user control of the daemon (above).
 - The launch is not inode-bound execution. A same-UID writer or an updater can replace the program's
