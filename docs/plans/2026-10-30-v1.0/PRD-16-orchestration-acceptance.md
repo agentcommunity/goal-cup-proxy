@@ -1442,3 +1442,25 @@ kept and now cites BUILD-PROMPT section 5, since B3 no longer carries it.
   `docs/archive/PARTICIPANT-GUIDE-0.6.md:13` (the deleted skill, review A-N1) and `docs/CONTRACTS.md`
   to `#pin-evolution` (moves to the archive in PRD-15's third slice).
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-14 slice 2 (merge 04886295)
+
+- `gate fast: PASS in 122s` on the lane branch at the merged head (gate log 15:06Z). Six paths
+  changed, all PRD-14 owned (`CODEOWNERS`, `ci.yml`, `tests/common/{mod,upstream,worker}.rs`,
+  `release.sh`), no `Cargo.toml` change. `shellcheck` was skipped (not installable in the box).
+- **Size report, PRD-14** (`wc -l` at 04886295, PRD-00 row "Lessons (PRD-17), test support,
+  `rule_code`, `e2e_run` (PRD-14)", 0 src and 3,000 tests, of which PRD-14's line is 1,700):
+  PRD-14 tests are 1,657 (`tests/common/` 1,444, `rule_code.rs` 213, `e2e_run.rs` 0), 97% of its
+  1,700 with HTTP/2, `recorder::real` and `e2e_run.rs` still to come; the slice 3 projection is about
+  1,870, the line plus 10% (PRD-14 note, with the decision on `worker.rs` at 334 of 250). Src 0.
+  Scripts and CI: `release.sh` 121, `ci.yml` 60, `gate.sh` 121, `CODEOWNERS` 19 (was 57).
+- **CI as the independent record:** from 04886295 each push to integration has its own group and runs
+  to the end (PRD-14 note). Phase 3's "CI green" is read from a completed run on the phase 3 head,
+  never from a cancelled one; runs before 04886295 may show `cancelled` and prove nothing.
+- **Trailers:** all 14 commits in 900a24d7..04886295 carry both lines.
+- **Seams:** `common::upstream` (HTTP/1.1, WebSocket) unblocks PRD-17's `lessons_decode` now (PRD-03
+  leaf modules in 0e411074) and `lessons_http1` once `proxy::serve` lands; `common::worker` unblocks PRD-06's failing-PUT backoff case;
+  PRD-04's `Calls` helpers and `recorder::real` go to PRD-14 slice 3 (PRD-04, PRD-06, PRD-17 notes).
+  Release order needs nothing new: `release.sh tag` runs the pad's release check itself (PRD-12 note).
+- **Housekeeping for the end:** remove `v1.0/prd-14-tests-lane-merge-wip` from origin.
+- No locked ledger item is touched and no owner question comes from this slice.

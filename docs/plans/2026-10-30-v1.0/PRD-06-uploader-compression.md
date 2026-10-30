@@ -841,3 +841,12 @@ PRD-12 and PRD-17.
   to status and the end screen, and `time-left`. S9's `upload.json` keys are then a seam with
   `cli/status.rs` and `cli/finish.rs`.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-14 slice 2 (merge 04886295)
+
+- **The fake Worker is on integration** (`tests/common/worker.rs` at 04886295): S5 routes with its own
+  position, chunk answers `{offset, next_seq, head, received_at, sealed}`, a bad `counts` dropped with
+  `200`, and a script of injected answers (status and body, `Retry-After`, delay, drop the answer
+  after commit). The open acceptance case "a Worker failing every other PUT never makes a wait above
+  4 s" can land with `send.rs` on it now; `upload_*` tests drop any private stand-in they kept.
+- No locked ledger item is touched and no owner question comes from this slice.

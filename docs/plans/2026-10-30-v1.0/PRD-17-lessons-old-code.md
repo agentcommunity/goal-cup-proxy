@@ -910,3 +910,15 @@ Names for `LESSONS.md` (the lessons lane writes them; judge 13:06Z):
   in PRD-10's next slice, ahead of `start` (PRD-10 note). The check on the relative `GOALCUP_HOME`
   input from the slice 1 note still applies.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-14 slice 2 (merge 04886295)
+
+- **`common::upstream` is on integration** (04886295) for TLS with a chosen ALPN, HTTP/1.1 (whole,
+  chunked, SSE, codings), WebSocket with permessage-deflate, held handshakes and answers and close
+  after N bytes. PRD-03's `decode`, `ws`, `tls` and `connect` leaf modules reached integration in
+  0e411074, so `lessons_decode.rs` can land now; `lessons_http1.rs` waits only on `proxy::serve`
+  (PRD-03 slice 2). HTTP/2 cases wait on PRD-14 slice 3; a TLS that chooses `h2`
+  panics the fake's task today.
+- `common::recorder::real` (H10, K15) is not on integration; it comes in PRD-14 slice 3 after PRD-02's
+  `Recorder::real_for_tests`.
+- No locked ledger item is touched and no owner question comes from this slice.
