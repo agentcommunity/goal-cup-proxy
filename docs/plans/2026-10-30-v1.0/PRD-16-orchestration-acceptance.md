@@ -1000,3 +1000,21 @@ kept and now cites BUILD-PROMPT section 5, since B3 no longer carries it.
   `LESSONS.md` 197 lines of docs, outside the budget; 3 rows green (L-FW2, L-FW5, L-FW8 at
   `f5b0a6a2`), 6 rows still `(name pending)`.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-15 slice 2 (merge 21c0fd75)
+
+- **Size report, PRD-15 slice 2** (`wc -l` on integration at 21c0fd75). PRD-15 has no row in PRD-00
+  "Size budget"; docs are not counted there, and the slice has no code outside the doc. New
+  `docs/RECORD-FORMAT.md` 324 lines, of which the stdlib Python reader is 51 (PRD-01 allows 60);
+  PRD-15's own estimate for the page is about 280, and two sections are still to come (PRD-15
+  amendment, review B5). `AGENTS.md` 111 (unchanged count, one sentence reworded). `docs/DECISIONS.md`
+  1,416 (was 1,418).
+- **Docs-only slices still pass the gate in about a minute** (`gate fast: PASS in 77s` on 21c0fd75).
+- **Counting rule for the night's checks:** a count made by piping part files through the `zstd`
+  command line tool is a lower bound on a live entry or one not yet recovered (review A, lane log
+  11:56Z). Final acceptance counts on a live or crashed entry come from `goalcup-verify dump` or
+  `check`, never from `zstd -dc` plus the reader. Sealed and recovered entries agree either way (box
+  run 12:02Z: the reader matched the Rust dump on 11 format-crate entries).
+- **Build snapshot Python 3.9 holds for the reader** (box runs 11:49Z, 12:02Z). `check-links.py`
+  still needs 3.10 or later via `uv` in the box (earlier note).
+- No locked ledger item is touched and no owner question comes from this slice.

@@ -881,3 +881,46 @@ What it changes for the slices still to come:
   decisions in force". The per-bullet "(default, PRD-00 question N)" markers already say it, and the
   sentence turns false at the first answer. It is this build's own text, so dropping it edits no old
   entry.
+
+### 2026-10-30, replan after PRD-15 slice 2 (merge 21c0fd75)
+
+Slice 2 merged `docs/RECORD-FORMAT.md` (324 lines, the reader 51 of them), the D4, D61 and D71
+status marks with the stale "None was answered" sentence dropped, and the AGENTS.md Tests "unless"
+wording. `gate fast` passed in 77 s. Two nits came after the merge; per the earlier ruling they go to
+the next slice that touches `docs/RECORD-FORMAT.md` (the one adding the `check --json` and usage
+JSON sections), not a separate merge request:
+
+- **Invariant 4 gets PRD-01's two missing clauses** (review A-N5). Today it reads "DATA offsets are
+  contiguous from `meta.from` (or 0), except where a GAP of that stream fills the hole". Add, from
+  PRD-01 section 13 invariant 4: a GAP with unknown loss (`lost` 0) must sit at the hole, and the
+  hole's size is then reported, not checked; `conn` streams have no DATA, and their GAPs (`off` 0)
+  are exempt. Without it a contributor who recounts from the page flags a valid unknown-loss hole as
+  a break. Doc accuracy only; the code and PRD-08's checks follow PRD-01 already.
+- **Two repeats go** (review B5): (a) in "The seal and events", the recovered-seal sentence (COUNT,
+  `recorder_down` GAP, seal, LINK, frame end, `R` line) becomes "a recovered seal is the `seal` event
+  inside the recovery frame (see Recovery)", so the Recovery bullet is the one source; (b) in "A
+  Python reader", "On a live entry its counts are a lower bound" becomes only "(see the `zstd` note
+  above)", since the note says it more exactly (the CLI "may" stop short, also on an entry not yet
+  recovered). About 3 lines saved.
+- **Size against PRD-15's own estimate** (review B5). Builder notes say "about 280" for the page; it
+  is 324 before the two last sections, so the finished page lands about 30% over. PRD-00 "Size
+  budget" has no docs row, so this is not a ledger L2 ceiling. If the page is still well past 280
+  after those sections, the builder writes a replan `decision` line naming what the extra lines serve
+  (the record tables PRD-01 requires, the worked example, the reader) rather than trimming required
+  content. The reader is 51 lines, under PRD-01's 60.
+- **What waits for PRD-02's merge** (builder decisions, lane log 11:48Z). The page leaves out the
+  numbers no merged code holds: the 256 KiB DATA piece, the 1 s link cadence, the 60 s COUNT and the
+  141 MiB compressor memory; `cursors.json` and `counts.jsonl` are named only as local recorder
+  files. The slice after the core merge (the one with the AGENTS.md map) adds these to the page from
+  `crates/goalcup` (never from a PRD draft) and rechecks the Recovery bullet against PRD-02's recovery code. GAP
+  reasons 8 and 9 stay "reserved, shown as `other(n)`" (PRD-00 line on reserved reasons; the format
+  crate has no names for them). The `PartOptions` field is `rotate_after_ns`, not PRD-01's
+  `rotate_after`; the page follows the code.
+- **The worked-example dump is cited as `crates/goalcup-format/src/dump.rs`** while `goalcup-verify`
+  is not on integration. When PRD-08 merges, the page's "made by" line names `goalcup-verify dump` if
+  the binary is what produced the committed `worked-example.dump.jsonl`; the file stays where it is.
+- **The `zstd` CLI stops short on a live open frame** (review A, lane log 11:56Z): the reader then
+  loses the last flush interval. The page already says so and sends live entries to
+  `goalcup-verify dump`. The guide (third slice) keeps that: a participant reading a live entry by
+  hand uses `dump`, not the CLI pipe.
+- No locked ledger item is touched and no owner question comes from this slice.
