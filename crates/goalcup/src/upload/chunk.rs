@@ -4,7 +4,8 @@
 
 use super::client::{ChunkHeaders, RunPosition};
 use super::state::Confirmed;
-use goalcup_format::{Durable, IndexKind, IndexLine, hex, index_name, part_name, read::read_index};
+use goalcup_format::read::{part_files, read_index};
+use goalcup_format::{Durable, IndexKind, IndexLine, hex, index_name, part_name};
 use hex::FromHex;
 use sha2::{Digest, Sha256};
 use std::fs::{self, File};
@@ -95,7 +96,11 @@ pub fn cut(
             // Case 3: the next part starts at S and is not on disk yet.
             return Ok(Cut::Nothing);
         }
-    } else if parts.is_empty() && s == 0 {
+    } else if parts.iter().all(|&q| q < s)
+        && (s == 0 || confirmed.is_some_and(|c| c.raw == s && c.hash == pos.head))
+    {
+        // Nothing written yet, or case 3 at a pruned boundary: the server holds the whole entry
+        // as `confirmed` says, and no part starts at or after S.
         return Ok(Cut::Nothing);
     } else {
         return stuck("the server's offset is not at a local index line");
@@ -179,21 +184,19 @@ pub fn body(c: &Chunk) -> io::Result<io::Take<File>> {
     Ok(f.take(c.c_end.saturating_sub(c.c_start)))
 }
 
-/// The part files' first raw offsets, in order.
+/// The part files' first raw offsets, in order: the names are zero-padded, so the listing that
+/// recovery uses is already in number order.
 fn parts(rec_dir: &Path) -> io::Result<Vec<u64>> {
-    let mut out = Vec::new();
-    for e in fs::read_dir(rec_dir)? {
-        let name = e?.file_name().to_string_lossy().into_owned();
+    let first = |p: &PathBuf| {
+        let name = p.file_name()?.to_str()?;
         let n = name
-            .strip_prefix("rec-")
-            .and_then(|n| n.strip_suffix(".gcr.zst"));
-        out.extend(
-            n.and_then(|n| n.parse().ok())
-                .filter(|&n| part_name(n) == name),
-        );
-    }
-    out.sort_unstable();
-    Ok(out)
+            .strip_prefix("rec-")?
+            .strip_suffix(".gcr.zst")?
+            .parse()
+            .ok()?;
+        (part_name(n) == name).then_some(n)
+    };
+    Ok(part_files(rec_dir)?.iter().filter_map(first).collect())
 }
 
 /// A part's index lines; none while it has no index yet.

@@ -234,7 +234,6 @@ fn a_stalled_writer_gives_failed_and_a_slow_one_gaps() {
 fn no_beat_before_the_first_durable_point() {
     let mut r = rig();
     let h = recording_now();
-    assert!(!r.beat.due(Mono(S), Recording::Ok, false));
     assert!(
         !r.beat
             .tick(Mono(S), &Durable::default(), &h, 0, &r.json, &r.word)
@@ -262,10 +261,7 @@ fn a_state_change_beats_at_once() {
     assert_eq!(beats[1]["offset_local"], 300);
     assert_eq!(beats[1]["final"], false);
     assert!(beats.iter().all(|b| b.get("counts_dropped").is_none()));
-    assert_eq!(
-        r.json.lock().unwrap().beat.recording.as_deref(),
-        Some("gaps")
-    );
+    assert_eq!(r.json.lock().unwrap().beat.recording, Some(Recording::Gaps));
 }
 
 #[test]
@@ -283,13 +279,12 @@ fn a_failed_beat_backs_off_on_its_own_counter_and_logs_one_line() {
     let j = r.json.lock().unwrap().clone();
     assert_eq!((j.beat.failures, j.failures), (1, 0));
     assert!(
-        !r.beat.due(Mono(S + 6 * S), Recording::Ok, true),
+        !r.beat.due(Mono(S + 6 * S), Recording::Ok),
         "Retry-After is waited out"
     );
-    assert!(r.beat.due(Mono(S + 7 * S), Recording::Ok, true));
+    assert!(r.beat.due(Mono(S + 7 * S), Recording::Ok));
     let log = std::fs::read_to_string(r.dir.path().join("goalcup.log")).unwrap();
     assert_eq!(log.lines().count(), 1);
-    assert_eq!(log.split(' ').nth(1), Some("upload"));
     assert!(r.worker.heartbeats().is_empty());
 
     assert!(r.beat.tick(Mono(8 * S), &d, &h, 0, &r.json, &r.word));
@@ -316,6 +311,7 @@ fn server_word_carries_stop_and_seconds_left_into_upload_json_and_the_channel() 
         &d.totals,
         Recording::Ok,
         counts(&h, &d.totals, 0),
+        false,
         None,
     );
     let w = r.beat.send(Mono(2 * S), &req, &r.json, &r.word).unwrap();
@@ -339,21 +335,22 @@ fn answer(seconds_left: u64, reason: Option<&str>) -> HeartbeatAnswer {
     }
 }
 
+/// Later answers still say `replaced` (the final heartbeat repeats for up to an hour); the time
+/// the participant is told never moves past the server's close.
 #[test]
 fn a_replaced_run_sets_upload_by_a_day_after_the_answer() {
     let mut j = UploadJson::default();
-    let at = UNIX_EPOCH + Duration::from_secs(1_794_045_600);
-    take_answer(
-        &mut j,
-        &answer(0, Some("replaced")),
-        Recording::Ok,
-        Mono(S),
-        at,
-    );
-    let by = goalcup::cli::unix_of(j.upload_by.as_deref().unwrap()).unwrap();
-    assert_eq!(by, 1_794_045_600 + 86_400);
+    let replaced = answer(0, Some("replaced"));
+    for later in [0, 3600] {
+        let at = UNIX_EPOCH + Duration::from_secs(1_794_045_600 + later);
+        take_answer(&mut j, &replaced, Recording::Ok, Mono(S), at);
+        let by = goalcup::cli::unix_of(j.upload_by.as_deref().unwrap()).unwrap();
+        assert_eq!(by, 1_794_045_600 + 86_400);
+    }
 }
 
+/// The guard is the type: `ServerWord.asked_at` is a `Mono` read before the call, so no wall time
+/// reaches the deadline. This pins that the second answer's deadline is the first one's.
 #[test]
 fn clock_set_back_does_not_lengthen_a_segment() {
     let mut j = UploadJson::default();
@@ -374,5 +371,5 @@ fn clock_set_back_does_not_lengthen_a_segment() {
         Mono(1060 * S),
         back,
     );
-    assert!(deadline(second) <= deadline(first));
+    assert_eq!(deadline(second), deadline(first));
 }

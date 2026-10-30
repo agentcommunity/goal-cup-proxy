@@ -13,7 +13,7 @@ use goalcup_format::IndexLine;
 use serde_json::{Map, Value, json};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime};
 use tokio::sync::watch;
 
 /// The recorder as the beat sees it: its mode and its live facts.
@@ -73,22 +73,23 @@ pub fn recording(Health(mode, l): &Health, t: &EntryTotals) -> Recording {
     }
 }
 
-/// The heartbeat for the LINK `point`. `final_repo_head` is `Some` on the final heartbeat only.
+/// The heartbeat for the LINK `point`; `repo_head` goes on the final heartbeat only.
 pub fn request(
     entry_id: &str,
     point: &IndexLine,
     t: &EntryTotals,
     recording: Recording,
     counts: Map<String, Value>,
-    final_repo_head: Option<Option<String>>,
+    is_final: bool,
+    repo_head: Option<String>,
 ) -> HeartbeatRequest {
     HeartbeatRequest {
         entry_id: entry_id.to_owned(),
         seq: point.seq,
         head: goalcup_format::hex(&point.hash),
         offset_local: point.raw_end,
-        is_final: final_repo_head.is_some(),
-        repo_head: final_repo_head.flatten(),
+        is_final,
+        repo_head,
         recording,
         model_requests: t.counts.model_requests(),
         counts,
@@ -97,6 +98,8 @@ pub fn request(
 
 /// Takes a heartbeat answer into `upload.json`. `asked_at` and `asked_wall` were read before the
 /// call; the deadline counts from `asked_at`, boot time, so a wall clock set back never moves it.
+/// `upload_by` after `replaced` only ever moves earlier: every later answer says `replaced` again,
+/// and the server closes the run a day after the replacement itself.
 pub fn take_answer(
     j: &mut UploadJson,
     a: &HeartbeatAnswer,
@@ -114,13 +117,18 @@ pub fn take_answer(
     j.beat.last_ok = Some(file.asked_at.clone());
     j.server_word = Some(file);
     j.beat.failures = 0;
-    j.beat.recording = json!(sent).as_str().map(str::to_owned);
-    j.final_ = if a.sealed { Final::Sealed } else { j.final_ };
+    j.beat.recording = Some(sent);
+    if a.sealed {
+        j.final_ = Final::Sealed;
+    }
     if a.stop && a.reason.as_deref() == Some("replaced") {
-        let day = asked_wall.checked_add(Duration::from_secs(24 * 3600));
-        let secs = day.and_then(|t| t.duration_since(UNIX_EPOCH).ok());
-        j.upload_by =
-            secs.map(|d| goalcup_format::dump::wall(d.as_secs().saturating_mul(1_000_000_000)));
+        let unix = |s: &Option<String>| s.as_deref().and_then(crate::cli::unix_of);
+        let by = asked_wall
+            .checked_add(Duration::from_secs(86_400))
+            .map(state::rfc3339);
+        if unix(&by).is_some_and(|n| unix(&j.upload_by).is_none_or(|o| n < o)) {
+            j.upload_by = by;
+        }
     }
     word
 }
@@ -144,7 +152,7 @@ impl Beat {
             run: run.to_owned(),
             entry: entry.to_owned(),
             entry_dir: entry_dir.to_path_buf(),
-            timer: Timer::beat(p),
+            timer: Timer::new(p.beat, p.spread_first),
             backoff: Backoff::new(p),
             last: None,
         }
@@ -152,9 +160,9 @@ impl Beat {
 
     /// Due once there is a durable point: at once when the state changed, else on the timer, and
     /// never while its backoff waits.
-    pub fn due(&self, now: Mono, recording: Recording, have_point: bool) -> bool {
+    pub fn due(&self, now: Mono, recording: Recording) -> bool {
         let changed = self.last != Some(recording);
-        have_point && self.backoff.due(now) && (changed || self.timer.due(now))
+        self.backoff.due(now) && (changed || self.timer.due(now))
     }
 
     /// One ordinary tick: beats from `durable` if due. True when a beat was answered.
@@ -168,7 +176,10 @@ impl Beat {
         word: &watch::Sender<Option<ServerWord>>,
     ) -> bool {
         let (t, rec) = (&durable.totals, recording(h, &durable.totals));
-        let Some(point) = durable.point.as_ref().filter(|_| self.due(now, rec, true)) else {
+        if !self.due(now, rec) {
+            return false;
+        }
+        let Some(point) = &durable.point else {
             return false;
         };
         let req = request(
@@ -177,6 +188,7 @@ impl Beat {
             t,
             rec,
             counts(h, t, waiting_bytes),
+            false,
             None,
         );
         self.send(now, &req, j, word).is_some()
@@ -217,17 +229,16 @@ impl Beat {
     }
 
     /// `upload what=beat class=<class> status=<n or -> wait_s=<n>`: fixed words and numbers only.
+    /// A 409 has no class (section 5) and logs `none`; an unreadable success is `internal`.
     fn log_failure(&self, e: &ServerError, wait: Duration) {
-        let status = match e {
-            ServerError::Status { status, .. } => Some(*status),
-            _ => None,
+        let (class, status) = match e {
+            ServerError::Status { status, .. } => (
+                class_of_status(*status).map_or("none", Class::word),
+                Fact::N((*status).into()),
+            ),
+            ServerError::Malformed(_) => (Class::Internal.word(), Fact::Word("-")),
+            ServerError::Transport(_) => (Class::Network.word(), Fact::Word("-")),
         };
-        let class = match status.map(class_of_status) {
-            Some(Some(Class::ServerBusy)) => "server_busy",
-            Some(Some(Class::Network)) | None => "network",
-            Some(_) => "refused",
-        };
-        let status = status.map_or(Fact::Word("-"), |s| Fact::N(s.into()));
         let facts = [
             ("what", Fact::Word("beat")),
             ("class", Fact::Word(class)),

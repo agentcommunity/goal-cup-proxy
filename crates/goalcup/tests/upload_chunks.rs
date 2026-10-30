@@ -10,7 +10,7 @@ use common::records::{BOOT_ID, ENTRY, at};
 use goalcup::upload::chunk::{self, Bound, Chunk, Cut, MAX_CHUNK};
 use goalcup::upload::client::RunPosition;
 use goalcup::upload::state::Confirmed;
-use goalcup_format::read::read_index;
+use goalcup_format::read::{part_files, read_index};
 use goalcup_format::{
     Durable, IndexKind, IndexLine, PartOptions, PartWriter, Record, Recover, hex, index_name,
     part_name,
@@ -62,26 +62,20 @@ fn work(w: &mut PartWriter, n: &mut u64, links: usize, size: usize) -> Durable {
     w.sync().unwrap().unwrap()
 }
 
+/// A part file's first raw offset.
+fn first(part: &Path) -> u64 {
+    part.file_name().unwrap().to_str().unwrap()[4..24]
+        .parse()
+        .unwrap()
+}
+
 /// Every index line of the folder, with its part's first raw offset, in order.
 fn lines(dir: &Path) -> Vec<(u64, IndexLine)> {
-    let mut parts: Vec<u64> = fs::read_dir(dir)
-        .unwrap()
-        .filter_map(|e| {
-            let name = e.unwrap().file_name().into_string().unwrap();
-            name.strip_suffix(".idx")?
-                .strip_prefix("rec-")?
-                .parse()
-                .ok()
-        })
-        .collect();
-    parts.sort_unstable();
+    let parts = part_files(dir).unwrap().into_iter().map(|p| first(&p));
     parts
-        .into_iter()
         .flat_map(|p| {
-            read_index(&dir.join(index_name(p)))
-                .unwrap()
-                .into_iter()
-                .map(move |l| (p, l))
+            let idx = read_index(&dir.join(index_name(p))).unwrap_or_default();
+            idx.into_iter().map(move |l| (p, l))
         })
         .collect()
 }
@@ -204,6 +198,24 @@ fn walk_from_zero_sends_every_part_byte_for_byte() {
     assert_eq!((p.offset, p.next_seq), (last.raw_end, last.seq + 1));
     // Case 3: S at the seal's E line and no next part: nothing to send, not stuck.
     assert_eq!(cut(dir.path(), &p, &Bound::OnDisk), Cut::Nothing);
+    // The same once section 7 pruned every part: `confirmed` at S with the server's head says the
+    // entry is stored whole. Without it the copies cannot be compared.
+    for f in fs::read_dir(dir.path()).unwrap() {
+        fs::remove_file(f.unwrap().path()).unwrap();
+    }
+    let done = Confirmed {
+        raw: p.offset,
+        seq: last.seq,
+        hash: p.head.clone(),
+        at: String::new(),
+    };
+    for b in [Bound::OnDisk, durable(parts[parts.len() - 1], last)] {
+        assert_eq!(
+            chunk::cut(dir.path(), &p, &b, Some(&done)).unwrap(),
+            Cut::Nothing
+        );
+        assert!(is_stuck(cut(dir.path(), &p, &b)));
+    }
 }
 
 #[test]
@@ -234,13 +246,9 @@ fn the_four_start_cases() {
     assert!(c.part.ends_with(part_name(p0)));
     assert_eq!(c.c_start, l.c_end);
     // 3: S is an E line's end and the next part is not on disk yet: nothing to send.
-    for f in fs::read_dir(dir.path()).unwrap() {
-        let name = f.unwrap().file_name().into_string().unwrap();
-        let first: Option<u64> = name
-            .strip_prefix("rec-")
-            .and_then(|n| n.strip_suffix(".gcr.zst")?.parse().ok());
-        if first.is_some_and(|q| q >= e.raw_end) {
-            fs::remove_file(dir.path().join(name)).unwrap();
+    for f in part_files(dir.path()).unwrap() {
+        if first(&f) >= e.raw_end {
+            fs::remove_file(f).unwrap();
         }
     }
     assert_eq!(

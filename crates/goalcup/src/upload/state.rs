@@ -5,6 +5,7 @@
 //! [`write`] is safe from any thread; the two threads share one [`UploadJson`] behind one lock.
 
 use super::ServerWord;
+use super::client::Recording;
 use super::policy::Class;
 use crate::pipeline::Mono;
 use serde::{Deserialize, Serialize};
@@ -128,8 +129,8 @@ impl LastError {
 pub struct Beat {
     pub last_ok: Option<String>,
     pub failures: u32,
-    /// `ok`, `gaps` or `failed`, as last sent.
-    pub recording: Option<String>,
+    /// As last sent.
+    pub recording: Option<Recording>,
 }
 
 /// The last heartbeat answer as the file holds it: `asked_at` is a wall time, because
@@ -212,7 +213,7 @@ impl Writer {
 }
 
 /// `2026-11-07T10:00:01Z`: UTC, whole seconds. A time before 1970 is written as 1970.
-fn rfc3339(t: SystemTime) -> String {
+pub(super) fn rfc3339(t: SystemTime) -> String {
     let secs = t.duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs());
     goalcup_format::dump::wall(secs.saturating_mul(1_000_000_000))
 }

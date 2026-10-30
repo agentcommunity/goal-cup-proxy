@@ -73,22 +73,23 @@ pub struct UploadHandle {
 pub fn spawn(ctx: UploadCtx) -> UploadHandle {
     let (word, _) = watch::channel(None);
     let mut json = UploadJson::new(ctx.run, ctx.entry);
-    let server = cli::read_json::<ServerJson>(&cli::server_json(&ctx.run_dir));
-    match server.and_then(|s| s.server) {
-        None => {
+    // Only a readable `server.json` that says off makes the run local; an unreadable one is not
+    // read as "no server".
+    match cli::read_json::<ServerJson>(&cli::server_json(&ctx.run_dir)) {
+        Some(ServerJson { server: None, .. }) => {
             json.state = State::Local;
             json.keep = true;
         }
-        Some(url) => {
-            json.server_url = Some(url);
+        server => {
+            json.server_url = server.and_then(|s| s.server);
+            let text = match json.server_url {
+                Some(_) => "the sender is not in this build yet; nothing is sent",
+                None => "server.json unreadable",
+            };
             json.keep = ctx.keep;
             json.state = State::Waiting;
-            json.last_error = Some(LastError::new(
-                SystemTime::now(),
-                policy::Class::Internal,
-                None,
-                "the sender is not in this build yet; nothing is sent",
-            ));
+            let class = policy::Class::Internal;
+            json.last_error = Some(LastError::new(SystemTime::now(), class, None, text));
         }
     }
     let _ = state::write(&ctx.entry_dir, &json);
@@ -104,5 +105,30 @@ impl UploadHandle {
     /// The seal is durable: send what is left within `wrap_up`. Returns at once in this slice.
     pub fn finish(self, wrap_up: WrapUp, seal: SealFacts) {
         let _ = (wrap_up, seal);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Point 6: a `server.json` that cannot be read never tells the participant the run is local.
+    #[test]
+    fn an_unreadable_server_json_is_not_local() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(cli::server_json(dir.path()), br#"{"server":"https://x"}"#).unwrap();
+        let ctx = UploadCtx {
+            home: dir.path().into(),
+            run_dir: dir.path().into(),
+            entry_dir: dir.path().into(),
+            run: "r".into(),
+            entry: "e".into(),
+            recorder: None,
+            keep: false,
+        };
+        spawn(ctx);
+        let j = state::read(dir.path()).unwrap();
+        assert_eq!((j.state, j.keep), (State::Waiting, false));
+        assert_eq!(j.last_error.unwrap().class, policy::Class::Internal);
     }
 }

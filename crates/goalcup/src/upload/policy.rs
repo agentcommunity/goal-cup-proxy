@@ -141,6 +141,8 @@ impl Backoff {
 }
 
 /// A repeating timer: due at once, then a first interval (spread when asked), then every period.
+/// The beat's runs every `Policy::beat`; a round's every `Policy::round`, and its caller also starts
+/// a round at once when `trigger_bytes` wait.
 #[derive(Clone, Copy, Debug)]
 pub struct Timer {
     period: Duration,
@@ -149,11 +151,10 @@ pub struct Timer {
 }
 
 impl Timer {
-    /// The heartbeat's timer.
-    pub fn beat(p: &Policy) -> Timer {
+    pub fn new(period: Duration, spread_first: bool) -> Timer {
         Timer {
-            period: p.beat,
-            spread_first: p.spread_first,
+            period,
+            spread_first,
             next: None,
         }
     }
@@ -169,34 +170,6 @@ impl Timer {
             _ => self.period,
         };
         self.next = Some(after(now, wait));
-    }
-}
-
-/// When a round is due: its timer, or at once at the size trigger.
-#[derive(Clone, Copy, Debug)]
-pub struct Cadence {
-    timer: Timer,
-    trigger_bytes: u64,
-}
-
-impl Cadence {
-    pub fn new(p: &Policy) -> Cadence {
-        Cadence {
-            timer: Timer {
-                period: p.round,
-                ..Timer::beat(p)
-            },
-            trigger_bytes: p.trigger_bytes,
-        }
-    }
-
-    pub fn due(&self, now: Mono, waiting_bytes: u64) -> bool {
-        waiting_bytes >= self.trigger_bytes || self.timer.due(now)
-    }
-
-    /// A round began at `now`.
-    pub fn started(&mut self, now: Mono) {
-        self.timer.started(now);
     }
 }
 
@@ -227,6 +200,19 @@ pub enum Class {
     Refused,
     Stuck,
     Internal,
+}
+
+impl Class {
+    /// The word `upload.json` and `goalcup.log` use.
+    pub fn word(self) -> &'static str {
+        match self {
+            Class::Network => "network",
+            Class::ServerBusy => "server_busy",
+            Class::Refused => "refused",
+            Class::Stuck => "stuck",
+            Class::Internal => "internal",
+        }
+    }
 }
 
 /// The class of an HTTP status; None for a success and for 409 (read the position again). Only

@@ -138,7 +138,7 @@ pub struct ChunkAnswer {
 }
 
 /// The recording state a heartbeat reports (PRD-06 section 6).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Recording {
     Ok,
