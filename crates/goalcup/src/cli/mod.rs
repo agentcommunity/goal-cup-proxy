@@ -9,8 +9,10 @@ pub mod text;
 use std::env;
 use std::path::{Path, PathBuf};
 
-/// The hidden subcommand PRD-02's watchdog spawns as `goalcup recorder [--null]`; `main.rs`
-/// declares the same name and dispatches it to `pipeline::run_recorder`.
+use text::BAD_SERVER;
+
+/// The hidden subcommand PRD-02's watchdog spawns as `goalcup recorder [--null]`. `main.rs`
+/// takes its subcommand and flag names from these two, so the spawn and the parser cannot drift.
 pub const RECORDER_SUBCOMMAND: &str = "recorder";
 /// The recorder's null-mode flag, `goalcup recorder --null` (PRD-02 watchdog, null mode).
 pub const NULL_FLAG: &str = "--null";
@@ -25,27 +27,44 @@ pub enum Server {
 }
 
 const DEFAULT_SERVER: &str = "https://ingest.agentcommunity.org";
-const BAD_SERVER: &str = "GOALCUP_SERVER must be off, an https:// address, or an http:// address \
-                          on this computer (127.0.0.1, ::1 or localhost).";
 
 fn var(name: &str) -> Option<String> {
     env::var(name).ok().filter(|v| !v.is_empty())
 }
 
 /// Where runs live: `GOALCUP_HOME`, else `~/Library/Application Support/goalcup` on macOS, else
-/// `$XDG_CONFIG_HOME/goalcup` or `~/.config/goalcup`.
-pub fn home() -> PathBuf {
-    if let Some(h) = var("GOALCUP_HOME") {
-        return PathBuf::from(h);
+/// `$XDG_CONFIG_HOME/goalcup` or `~/.config/goalcup`. Always an absolute path: a relative
+/// `GOALCUP_HOME` is taken against the current folder, a relative `HOME` or `XDG_CONFIG_HOME` is
+/// ignored (XDG base directory spec), and with no absolute home left it refuses
+/// ([`text::NO_HOME`]). A relative home would put runs and the credential in the project folder,
+/// which is pushed to a public repository (point 4).
+pub fn home() -> Result<PathBuf, &'static str> {
+    pick_home(
+        var("GOALCUP_HOME"),
+        var("HOME"),
+        var("XDG_CONFIG_HOME"),
+        cfg!(target_os = "macos"),
+    )
+}
+
+fn pick_home(
+    goalcup: Option<String>,
+    user: Option<String>,
+    xdg: Option<String>,
+    macos: bool,
+) -> Result<PathBuf, &'static str> {
+    if let Some(h) = goalcup {
+        return std::path::absolute(h).map_err(|_| text::NO_HOME);
     }
-    let user = PathBuf::from(var("HOME").unwrap_or_default());
-    if cfg!(target_os = "macos") {
-        return user.join("Library/Application Support/goalcup");
-    }
-    match var("XDG_CONFIG_HOME") {
-        Some(x) => PathBuf::from(x).join("goalcup"),
-        None => user.join(".config/goalcup"),
-    }
+    let full = |v: Option<String>| v.map(PathBuf::from).filter(|p| p.is_absolute());
+    let user = full(user);
+    let found = match (macos, full(xdg), user) {
+        (true, _, Some(u)) => Some(u.join("Library/Application Support/goalcup")),
+        (false, Some(x), _) => Some(x.join("goalcup")),
+        (false, None, Some(u)) => Some(u.join(".config/goalcup")),
+        _ => None,
+    };
+    found.ok_or(text::NO_HOME)
 }
 
 /// The server from `GOALCUP_SERVER`: unset gives the production address, `off` a local-only
@@ -133,33 +152,28 @@ pub fn goalcup_log(entry_dir: &Path) -> PathBuf {
 
 #[cfg(test)]
 mod tests {
-    use super::{Server, parse_server};
+    use super::{parse_server, pick_home};
 
+    /// Point 4: runs and the credential never land in a folder relative to the project.
     #[test]
-    fn server_accepts_only_https_or_loopback_http() {
-        let url = |s: &str| Ok(Server::Url(s.to_owned()));
-        assert_eq!(parse_server(None), url("https://ingest.agentcommunity.org"));
-        assert_eq!(parse_server(Some("off")), Ok(Server::Off));
-        assert_eq!(
-            parse_server(Some("https://s.example/")),
-            url("https://s.example")
-        );
-        assert_eq!(
-            parse_server(Some("http://127.0.0.1:8787")),
-            url("http://127.0.0.1:8787")
-        );
-        assert_eq!(parse_server(Some("http://[::1]:1")), url("http://[::1]:1"));
-        assert_eq!(
-            parse_server(Some("http://localhost")),
-            url("http://localhost")
-        );
+    fn home_is_never_relative() {
+        let s = |v: &str| Some(v.to_owned());
+        for macos in [false, true] {
+            assert!(pick_home(None, None, None, macos).is_err());
+            assert!(pick_home(None, s("rel"), s("rel/x"), macos).is_err());
+            let home = pick_home(None, s("/u"), s("rel"), macos).unwrap();
+            assert!(home.starts_with("/u"), "{home:?}");
+            assert!(pick_home(s("rel"), None, None, macos).unwrap().is_absolute());
+        }
+    }
+
+    /// Point 4: no credential in the address, and none sent in the clear off this computer.
+    #[test]
+    fn server_refuses_a_user_part_and_remote_http() {
         for bad in [
             "http://s.example",
             "http://127.0.0.1@s.example",
             "https://user:pw@s.example",
-            "ftp://s.example",
-            "https://",
-            "s.example",
         ] {
             assert!(parse_server(Some(bad)).is_err(), "{bad}");
         }

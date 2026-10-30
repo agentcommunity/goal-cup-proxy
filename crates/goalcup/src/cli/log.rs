@@ -4,10 +4,13 @@
 //! through [`line`] and nothing else. The file is never uploaded and is not part of the record;
 //! the end screen and refusals that need support detail name its path.
 //!
-//! No free text can enter: the event, every key and every [`Fact::Word`] are strings fixed in
-//! the binary, a host is a checked [`Host`], a path is quoted with escapes, and an `io::Error` is
-//! logged by its kind name only. So no header value, body byte, token or credential reaches the
-//! file (point 4).
+//! The event, every key and every [`Fact::Word`] are strings fixed in the binary, and an
+//! `io::Error` is logged by its kind name only. Two facts carry runtime text, and the caller
+//! answers for them: a [`Fact::Host`] is a host the proxy or connector already parsed from a
+//! connection authority or the host list, and a [`Fact::Path`] is a path goalcup built itself (the
+//! home, run or entry paths, or a file flag the participant gave), never a value taken from
+//! traffic or the environment. With that, no header value, body byte, token or credential reaches
+//! the file (point 4).
 //!
 //! Each line is opened, written with one `O_APPEND` write of at most 4 KiB, and closed, so
 //! concurrent writers never interleave inside a line and only one descriptor is held at a time
@@ -22,6 +25,8 @@ use std::path::{Path, PathBuf};
 use std::process::ExitStatus;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use goalcup_format::dump::wall;
+
 /// The longest line written, newline included. A longer line is cut and keeps its newline.
 const MAX_LINE: usize = 4096;
 
@@ -34,21 +39,28 @@ pub enum Fact {
     Time(SystemTime),
     /// A checked host name.
     Host(Host),
-    /// A path, written quoted with escapes, so a newline in it never breaks the line.
+    /// A path goalcup built (home, run or entry paths, or a file flag the participant gave),
+    /// never a value from traffic or the environment. Written quoted with escapes, so a newline in
+    /// it never breaks the line.
     Path(PathBuf),
     /// A word fixed in the binary.
     Word(&'static str),
     /// A child's exit, written `code:N` or `signal:N`.
     Exit(ExitStatus),
-    /// An I/O failure, written as its kind name only.
+    /// An I/O failure, written as its kind name only (PRD-10 section 12's prose; a seventh
+    /// variant beside the six of the S11 shape).
     Io(io::ErrorKind),
 }
 
-/// A host name or address checked for host syntax, with an optional `:port`.
+/// A host as the log writes it: a name or address checked for host syntax, with an optional
+/// `:port`.
 ///
 /// Accepts ASCII letters, digits, `-` and `.` in labels of 1 to 63 characters, at most 253 in
-/// all, with at least one dot (or `localhost`), or a bracketed IPv6 literal. A token-like string
-/// (no dot, a label over 63, any other character) is refused, so a secret cannot pass as a host.
+/// all, with at least one dot (or `localhost`), or a bracketed IPv6 literal. It accepts IP
+/// addresses, `localhost` and ports because the log names the connection it saw, local servers
+/// included; the connector's host list check has its own, stricter rules. The check is about
+/// syntax only and does not tell a secret from a host: pass only hosts the proxy or connector
+/// already parsed.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Host(String);
 
@@ -131,7 +143,7 @@ impl Host {
 /// ```
 pub fn line(entry_dir: &Path, event: &'static str, facts: &[(&'static str, Fact)]) {
     let mut buf = String::with_capacity(128);
-    push_time(&mut buf, SystemTime::now());
+    buf.push_str(&wall_secs(SystemTime::now()));
     buf.push(' ');
     buf.push_str(event);
     for (key, fact) in facts {
@@ -164,7 +176,7 @@ fn push_fact(buf: &mut String, fact: &Fact) {
         Fact::N(n) => {
             let _ = write!(buf, "{n}");
         }
-        Fact::Time(t) => push_time(buf, *t),
+        Fact::Time(t) => buf.push_str(&wall_secs(*t)),
         Fact::Host(h) => buf.push_str(h.as_str()),
         Fact::Path(p) => {
             let _ = write!(buf, "{p:?}");
@@ -184,44 +196,7 @@ fn push_fact(buf: &mut String, fact: &Fact) {
 }
 
 /// RFC 3339 UTC to the second, `YYYY-MM-DDTHH:MM:SSZ`. A time before 1970 is written as 1970.
-fn push_time(buf: &mut String, t: SystemTime) {
-    let secs = t
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
-    let (days, rem) = (secs / 86_400, secs % 86_400);
-    let (y, m, d) = civil_from_days(days);
-    let _ = write!(
-        buf,
-        "{y:04}-{m:02}-{d:02}T{:02}:{:02}:{:02}Z",
-        rem / 3600,
-        rem % 3600 / 60,
-        rem % 60
-    );
-}
-
-/// Days since 1970-01-01 to (year, month, day), proleptic Gregorian (H. Hinnant's algorithm).
-fn civil_from_days(days: u64) -> (u64, u64, u64) {
-    let z = days + 719_468;
-    let era = z / 146_097;
-    let doe = z % 146_097;
-    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = doy - (153 * mp + 2) / 5 + 1;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 };
-    let y = yoe + era * 400 + u64::from(m <= 2);
-    (y, m, d)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::civil_from_days;
-
-    #[test]
-    fn civil_dates() {
-        assert_eq!(civil_from_days(0), (1970, 1, 1));
-        assert_eq!(civil_from_days(11_016), (2000, 2, 29));
-        assert_eq!(civil_from_days(20_756), (2026, 10, 30));
-    }
+fn wall_secs(t: SystemTime) -> String {
+    let secs = t.duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs());
+    wall(secs.saturating_mul(1_000_000_000))
 }

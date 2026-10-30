@@ -15,28 +15,14 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-/// The footer of `goalcup --help` (PRD-10 section 11).
-const AFTER_HELP: &str = "\
-Steps:
-  1. goalcup setup                                   once, until it says Ready.
-  2. goalcup start --practice                         a 10-minute try, no GitHub (optional)
-  3. goalcup start --repo <you>/<repo> --prompt FILE  your run, in the start window; FILE outside the folder
-While it runs: goalcup status (in another terminal). If status says so: goalcup recover.
-If the agent stopped early: goalcup continue.
-Guide: https://github.com/agentcommunity/goal-cup-proxy/blob/main/docs/PARTICIPANT-GUIDE.md
-Help: goalcup@agentcommunity.org
-Exit codes: 0 done; 1 refused, and you can fix it; 3 the command could not do its job.";
-
-/// PRD-10 section 1, "File connectors in competition". Moves to `cli/text.rs` in the core slice.
-const FILE_FLAGS_COMPETE: &str = "--connector and --hosts are for practice and test runs. \
-A competition run uses the connectors built into goalcup.";
+use goalcup::cli::{NULL_FLAG, RECORDER_SUBCOMMAND, text};
 
 /// Record one coding agent's run for the Goal Cup.
 #[derive(Parser)]
 #[command(
     name = "goalcup",
     version,
-    after_help = AFTER_HELP,
+    after_help = text::after_help(),
     subcommand_required = true,
     disable_help_subcommand = true
 )]
@@ -128,10 +114,10 @@ enum Command {
     /// Show how much time your run has left. Your agent may run it too.
     TimeLeft,
     /// The recorder process the watchdog starts (seam S8). Never run by hand.
-    #[command(hide = true)]
+    #[command(name = RECORDER_SUBCOMMAND, hide = true)]
     Recorder {
         /// Null mode: forward without recording.
-        #[arg(long)]
+        #[arg(long = NULL_FLAG.trim_start_matches('-'))]
         null: bool,
     },
 }
@@ -144,11 +130,19 @@ fn main() -> ExitCode {
     run(args.command)
 }
 
-/// Help and version on stdout with 0; every other parse error is one line with 1.
+/// Help and version on stdout with 0; no command at all prints the help on stderr with 1; every
+/// other parse error is one line with 1.
 fn parse_error(e: clap::Error) -> ExitCode {
-    if matches!(e.kind(), ErrorKind::DisplayHelp | ErrorKind::DisplayVersion) {
-        let _ = e.print();
-        return ExitCode::SUCCESS;
+    match e.kind() {
+        ErrorKind::DisplayHelp | ErrorKind::DisplayVersion => {
+            let _ = e.print();
+            return ExitCode::SUCCESS;
+        }
+        ErrorKind::DisplayHelpOnMissingArgumentOrSubcommand => {
+            let _ = e.print();
+            return ExitCode::from(1);
+        }
+        _ => {}
     }
     let text = e.to_string();
     let first = text.lines().next().unwrap_or_default();
@@ -160,65 +154,49 @@ fn run(command: Command) -> ExitCode {
     match command {
         Command::Recorder { null } => goalcup::pipeline::run_recorder(null),
         Command::Start {
-            harness,
             practice,
             test,
-            repo,
-            prompt,
             connector,
             hosts,
+            ..
         } => {
             // Refused before anything is read or created.
             if (connector.is_some() || hosts.is_some()) && !practice && !test {
-                say(FILE_FLAGS_COMPETE);
+                say(text::FILE_FLAGS_COMPETE);
                 return ExitCode::from(1);
             }
-            let _ = (harness, repo, prompt);
             not_built("start")
         }
-        Command::Setup {
-            harness,
-            yes,
-            record_host,
-        } => {
-            let _ = (harness, yes, record_host);
-            not_built("setup")
-        }
-        Command::Continue {
-            run,
-            connector,
-            hosts,
-        } => {
-            let _ = (run, connector, hosts);
-            not_built("continue")
-        }
-        Command::Recover { run } => {
-            let _ = run;
-            not_built("recover")
-        }
-        Command::Status { part, json } => {
-            let _ = (part, json);
-            not_built("status")
-        }
-        Command::Seal { part, yes } => {
-            let _ = (part, yes);
-            not_built("seal")
-        }
-        Command::Upload { part } => {
-            let _ = part;
-            not_built("upload")
-        }
+        Command::Setup { .. } => not_built("setup"),
+        Command::Continue { .. } => not_built("continue"),
+        Command::Recover { .. } => not_built("recover"),
+        Command::Status { .. } => not_built("status"),
+        Command::Seal { .. } => not_built("seal"),
+        Command::Upload { .. } => not_built("upload"),
         Command::TimeLeft => not_built("time-left"),
     }
 }
 
 /// Phase 0 stub: the core slice moves each body into `src/cli/`.
 fn not_built(command: &str) -> ExitCode {
-    say(&format!("{command} is not built yet"));
+    say(&text::not_built(command));
     ExitCode::from(3)
 }
 
 /// One line on stderr. A closed stderr is not worth a panic.
 fn say(text: &str) {
     let _ = writeln!(std::io::stderr(), "goalcup: {text}");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Args, Command, NULL_FLAG, RECORDER_SUBCOMMAND};
+    use clap::Parser;
+
+    /// The argv the watchdog spawns (seam S8) parses as the hidden recorder in null mode.
+    #[test]
+    fn watchdog_argv_parses() {
+        let args = Args::try_parse_from(["goalcup", RECORDER_SUBCOMMAND, NULL_FLAG]).unwrap();
+        assert!(matches!(args.command, Command::Recorder { null: true }));
+    }
 }

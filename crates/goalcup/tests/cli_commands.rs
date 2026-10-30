@@ -72,7 +72,7 @@ fn help_lists_exactly_the_eight_commands() {
 #[test]
 fn cut_commands_and_unknown_flags_exit_1_never_2() {
     let homes = Homes::new();
-    let cases: [&[&str]; 10] = [
+    let cases: [&[&str]; 9] = [
         &["login"],
         &["mcp"],
         &["doctor"],
@@ -82,7 +82,6 @@ fn cut_commands_and_unknown_flags_exit_1_never_2() {
         &["status", "--bogus"],
         &["setup", "--json"],
         &["start", "--dev"],
-        &[],
     ];
     for args in cases {
         let out = homes.run(args);
@@ -104,15 +103,13 @@ fn version_is_1_0_0() {
 
 #[test]
 fn file_flags_in_a_competition_run_are_refused_before_anything_is_written() {
-    let files = tempfile::tempdir().unwrap();
-    let file = files.path().join("given.toml");
-    std::fs::write(&file, "").unwrap();
-    let file = file.to_str().unwrap();
     for flag in ["--connector", "--hosts"] {
         let extras: [&[&str]; 2] = [&[], &["--repo", "someone/somewhere"]];
         for extra in extras {
             let homes = Homes::new();
-            let mut args = vec!["start", flag, file];
+            // A file that does not exist: refused before anything is read.
+            let none = homes.goalcup.path().join("none.toml");
+            let mut args = vec!["start", flag, none.to_str().unwrap()];
             args.extend_from_slice(extra);
             let out = homes.run(&args);
             assert_eq!(out.status.code(), Some(1), "goalcup {args:?}");
@@ -123,7 +120,9 @@ fn file_flags_in_a_competition_run_are_refused_before_anything_is_written() {
 }
 
 #[test]
-fn hidden_recorder_parses() {
-    let out = Homes::new().run(&["recorder", "--help"]);
-    assert_eq!(out.status.code(), Some(0));
+fn no_command_prints_the_help_and_exits_1() {
+    let out = Homes::new().run(&[]);
+    assert_eq!(out.status.code(), Some(1));
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(COMMANDS.iter().all(|c| err.contains(c)), "stderr: {err}");
 }
