@@ -281,11 +281,10 @@ def length(src, offset):
         if not b:
             return None
         if i == 9 and b[0] > 1:
-            sys.exit(f"len at raw offset {offset} is over 64 bits")
+            sys.exit(f"len at raw offset {offset} is over 64 bits or 10 bytes")
         value |= (b[0] & 0x7F) << (7 * i)
         if b[0] < 0x80:
             return value, i + 1
-    sys.exit(f"len at raw offset {offset} is over 10 bytes")
 
 
 def main():
