@@ -707,3 +707,49 @@ revision 3, PRD-08, PRD-12, PRD-15, PRD-16 and the Worker code (`runs.ts`, `db.t
 | G3-07h | Applied in section 7 and the recovery-fallback risk row |
 | G3-07i | Applied in sections 9 and 10 and builder step 5: `delete-test-runs.sh` is the owner's tool; agents edit it, never run it |
 | G3-07j | Applied: `Vitals` is `db.ts:242-249` (checked in code) in the Today table, section 4 and What is cut; `waiting_bytes` cites PRD-06 section 11 |
+
+## Amendments
+
+### 2026-10-30, replan after PRD-07 slice 1 (merge 4dcc1e7b)
+
+Slice 1 merged builder steps 1, 2 and 4. What the merge changed for the slices still to come:
+
+- **Step 3 is smaller.** The fixer already did part of it: the per-run size limit is gone (no 413 path,
+  ledger R5), the `Vitals` type, the local disk-pause twin and the dead seal check are gone, and
+  `test/quota.test.ts` is deleted. Still to delete: `src/sign.ts`, `test/sign.test.ts`,
+  `test/vectors/signing.json`, the signer in `context.ts`, the `receipt` and `abandon` routes
+  (`index.ts:43-46`, `runs.ts` `issueReceipt` and `abandonRun`) and their store calls, `ack` in the
+  chunk answer, `last_ack` in the position answer, the `tracer_version` alias (`runs.ts:145`, `:195`),
+  `RECEIPT_SIGNING_KEY` from `env.ts` and the `wrangler.toml` secret list (only after the new Worker
+  is live, section 12 step 5), and the "sign the ack" line in the `chunks.ts` header. Step 3 adds the
+  `404 not_found` acceptance cases for `/receipt` and `/abandon` (the `/seal` 404 and "no chunk
+  refused for size" are already on integration).
+- **Until step 3 lands, `docs/UPLOAD-API.md` is ahead of the code** (review A3): its line "Gone since
+  0.7, and not coming back" is not yet true for `ack`, `last_ack`, receipt, abandon and the alias. A
+  client built to S5 ignores the extra fields, so nothing breaks. Step 3 makes the line true; no doc
+  edit is needed.
+- **Review nits carried into step 3:** B1, in `db-local.ts`: the `StoredRun` comment (about line 97)
+  and the `withSignals` docstring (about line 593) still describe the disk pause, and line 608 writes
+  `disk_paused_at: null` for nothing; write `...(a.vitals === null ? {} : { last_vitals: a.vitals })`
+  and fix both comments. B2: drop the integration case "counts with an agent_paused key start no pause"
+  (`integration.test.ts` about line 807), or cut it to the `last_vitals` nesting; `local-db.test.ts`
+  (about line 325) and `supabase.test.ts:305-315` stay as the one local and one production guard.
+  `integration.test.ts:185` ("once a receipt exists, repeating the open call ...") needs a receipt
+  and goes with the receipt route.
+- **Review nit N1 for step 4 or 5:** the staging index query keeps to one side by the bucket name
+  (`ev.staging = :'staging'`). A staging run fetched without `--bucket goalcup-traces-staging` stops
+  with "the index holds no entry for <id>". Name the side in that message (and the `--bucket` flag to
+  try). The `--local` check against `wrangler dev` was not re-run after the fixer's trim; rerun it in a
+  box with that change.
+- **`--local` keeps only each entry's last heartbeat**, since the local store holds `last_vitals` only.
+  A full `heartbeats` list is a staging fetch fact. PRD-06's `upload_worker.rs` and PRD-14's full tier
+  read one heartbeat row per entry under `--local`.
+- **Answer to PRD-17's question (lessons log, 10:45Z)** on the Worker test for "a repeated open answers
+  the same run" (S10): `test/device.test.ts:156` ("repeat open with the same session_id returns the
+  same run; another session_id is 409") and `test/lifecycle.test.ts:222` ("a lost-reply repeat of the
+  open is the same run, also after continue"). Both need no receipt and stay through step 3.
+- **Size on integration** (wc -l at 4dcc1e7b, all of `server/worker/src`, the out-of-scope files
+  included): src 3,848 against the row's about 3,440 (11.9% over), tests 5,568 against about 4,950
+  (12.5% over). Step 3 removes `sign.ts` (116), the receipt, abandon and alias code, `sign.test.ts`
+  (68) and `signing.json` (26); report again after it. The conductor's 11:20Z decision makes overage
+  alone a nit; the replan reports the counts.

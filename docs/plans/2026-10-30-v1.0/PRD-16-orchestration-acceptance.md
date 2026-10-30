@@ -917,3 +917,36 @@ wave" and "up to 6 pad boxes", and BUILD-PROMPT section 5 says the other 12 foll
 wave; the ledger wins. Done in the 30 Oct sweep: PRD-00 phases 1a, 2 and 5, BUILD-PROMPT section 5 and PRD-12's
 watcher count now follow B3 and B11. S1 (three failed fixes) is
 kept and now cites BUILD-PROMPT section 5, since B3 no longer carries it.
+
+## Amendments
+
+### 2026-10-30, replan after PRD-07 slice 1 (merge 4dcc1e7b)
+
+- **First staging deploy now waits on PRD-06 alone.** PRD-07 builder step 2 is on integration
+  (4dcc1e7b), with `MIN_COMPETITION_VERSION = "1.0.0"` in both `wrangler.toml` blocks. The workspace
+  version bump the PRD-07 fixer named as an ordering seam (11:11Z) is also on integration: `Cargo.toml`
+  reads `version = "1.0.0"`. So the deploy rule in section 3 holds as written.
+- **Staging before PRD-07 step 3 still answers `/receipt` and `/abandon`** and still sends `ack` and
+  `last_ack`. No 1.0 client calls or reads them, so a staging deploy between the two slices is safe;
+  redeploy after step 3 merges.
+- **X6 and every staging fetch pass `--bucket goalcup-traces-staging`.** `fetch-run.sh` picks the
+  staging or production side of the index by the bucket name, and with no flag it reads production
+  (`goalcup-traces`). Read only, but a staging run fetched without the flag ends with "the index holds
+  no entry". PRD-12 section 3 already passes the flag.
+- **What `fetch-run.sh` reads from the conductor's environment:** `DATABASE_URL` (psql, in a
+  read-only transaction) and `CLOUDFLARE_ACCOUNT_ID` with `CLOUDFLARE_API_TOKEN` (R2 GETs). The
+  conductor holds one Cloudflare token for the staging deploy; the script only reads with it, but the
+  token's own rights are not narrowed by the script.
+- **`--local` keeps only each entry's last heartbeat** (the local store holds `last_vitals` only). X6's
+  check of every heartbeat row runs on a staging fetch, never on `--local`.
+- **Build snapshot Python is 3.9** (lane logs 10:45Z to 10:53Z): `tomllib` is missing and
+  `scripts/check-links.py` needs 3.10. Every Python step the gate or the pad runs in a box must work on
+  3.9, or the snapshot gets 3.10 or later. `test_fetch_run.py` runs on 3.9 (17/17).
+- **Size report, PRD-07 slice 1** (wc -l on integration at 4dcc1e7b): Worker src 3,848 against the
+  "about 3,440" row (11.9% over; the row's src includes the out-of-scope `github.ts`, `mail.ts`,
+  `notices.ts`, `ratelimit.ts` and `auth.ts`, as the 4,001 "today" figure did), down from 4,001.
+  Worker tests 5,568 against "about 4,950" (12.5% over), down from 5,800. Step 3 still deletes
+  `sign.ts` (116), the receipt, abandon and alias code, `sign.test.ts` (68) and `signing.json`
+  (26). Scripts: `fetch-run.sh` 369 (was 349) and `test_fetch_run.py` 364 (was 695), 733 of the
+  "about 900" shared with the gate, release and packaging. `docs/UPLOAD-API.md` 577 (was 596). By the
+  11:20Z decision, overage alone is a nit.

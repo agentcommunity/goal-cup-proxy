@@ -1,23 +1,18 @@
 #!/bin/sh
-# The test gate. `sh scripts/gate.sh fast` before every commit; `sh scripts/gate.sh full`
-# before a release. The last line of output is `gate <tier>: PASS in <N>s` or `gate <tier>: FAIL`.
+# The test gate, two tiers, the same command in a build box and in CI.
 #
-#   fast  the version check (scripts/check-version.py: one version, written in Cargo.toml only),
-#         build, fmt, clippy, then every test except the slow `full` and `m2_cli_lifecycle`
-#         binaries. The per-connector checks (`harness_contract_golden`, `harness_contract_kit`,
-#         `preflight_doctor`, the static `connector_contract`) are in `it`, so the fast tier runs
-#         them; it also runs the one per-connector module of `full`, the dynamic
-#         `connector_contract` (one run of every connector folder).
-#   full  fast's checks, every test including `full`, the CLI's `#[ignore]`d end-to-end tests
-#         (the `m2_synthetic_vertical` and `capture_failure_campaign` modules of its `full`
-#         binary, about 4.5 minutes), the upload Worker's `upload_worker` tests (they run the
-#         real Worker under `wrangler dev` and need `npm ci` in server/worker), the Worker's own
-#         tests (`npm --prefix server/worker test`: typecheck, wrangler.toml guards, rate limits),
-#         the scripts' unit tests and the link check. The other ignored tests need a real Hermes or a disk image
-#         and are run by hand.
+#   sh scripts/gate.sh fast   before every merge into integration, and CI on every push
+#   sh scripts/gate.sh full   phase exits, before the owner's merge to main, before a tag
 #
-# Tests run under cargo-nextest (one process per test, in parallel). Without it the gate falls
-# back to `cargo test`, which runs every tier.
+#   fast  fmt, clippy, every test of the workspace (nextest), doctests, the Worker's tests and
+#         the kept script tests.
+#   full  fast's steps, then every #[ignore] test except by_hand_* (run once by hand, never in a
+#         tier), the release build of the two shipped binaries without dev-dependencies, and a
+#         check that no GOALCUP_TEST_ hook reached the shipped goalcup.
+#
+# The workspace holds only the new crates; the old ones are in its `exclude` list and never
+# built here. No step is skipped and nothing falls back: a skip is a hidden pass. Every step
+# prints its time. The last line is `gate <tier>: PASS in <N>s` or `gate <tier>: FAIL`.
 set -eu
 
 tier=${1:-}
@@ -48,66 +43,65 @@ fail() {
 
 step() {
     echo "+ $*"
+    t0=$(date +%s)
     "$@" || fail
+    echo "  ($(($(date +%s) - t0))s)"
 }
 
-# The Worker's tests need its node_modules; say so at once rather than after the long steps.
-if [ "$tier" = full ] && [ ! -d server/worker/node_modules ]; then
-    echo "run npm ci in server/worker"
+# Every prerequisite, named in one line, before any step.
+missing=
+cargo nextest --version >/dev/null 2>&1 || missing="$missing cargo-nextest"
+for tool in zstd python3 git npm; do
+    command -v "$tool" >/dev/null 2>&1 || missing="$missing $tool"
+done
+[ -d server/worker/node_modules ] || missing="$missing server/worker/node_modules(npm ci --prefix server/worker)"
+if [ -n "$missing" ]; then
+    echo "gate.sh: missing:$missing"
     fail
 fi
 
-# A version written anywhere but the workspace Cargo.toml fails here, before the long steps.
-step python3 scripts/check-version.py
-
-# The CLI tests spawn the sibling target/debug/goalcup-daemon, so the whole workspace is built
-# before any test runs. A stale daemon binary would otherwise be tested.
-step cargo build --offline --workspace
-step cargo fmt --all --check
-step cargo clippy --offline --workspace --all-targets -- -D warnings
-
-if cargo nextest --version >/dev/null 2>&1; then
-    if [ "$tier" = fast ]; then
-        # The slow binaries the fast tier skips: every crate's `full`, and the CLI's standalone
-        # end-to-end lifecycle (about 100 s). `full`'s per-connector run is not slow and stays
-        # in. nextest rejects a filter that names a binary that does not exist, so the exclusion
-        # is probed first; each operator must match a binary.
-        slow="(binary(full) & not test(/^connector_contract::/)) | binary(m2_cli_lifecycle)"
-        if cargo nextest list --offline --workspace --list-type binaries-only \
-            -E "$slow" >/dev/null 2>&1; then
-            step cargo nextest run --offline --workspace -E "not ($slow)"
-        else
-            echo "gate fast: WARNING: no test binary named 'full' or 'm2_cli_lifecycle' was" \
-                "found (renamed?), so the fast tier is running EVERY test, slow ones included" >&2
-            step cargo nextest run --offline --workspace
-        fi
+# One cargo job at a time inside one build box (the gate and the pad's rebuild step share it).
+# A dead holder's lock is taken over.
+lock=target/.build-lock
+mkdir -p target
+while ! mkdir "$lock" 2>/dev/null; do
+    [ -s "$lock/pid" ] || sleep 1 # a new holder writes its pid just after mkdir
+    holder=$(cat "$lock/pid" 2>/dev/null || true)
+    if [ -z "$holder" ] || ! kill -0 "$holder" 2>/dev/null; then
+        echo "gate.sh: taking over the build lock of dead pid ${holder:-unknown}"
+        rm -rf "$lock"
     else
-        step cargo nextest run --offline --workspace
-        # The end-to-end guarantee tests are `#[ignore]`d so a plain run skips them; the
-        # release check runs them by name. The other ignored tests are not selected.
-        step cargo nextest run --offline -p goalcup-cli --test full --run-ignored ignored-only \
-            -E 'test(/^(m2_synthetic_vertical|capture_failure_campaign)::/)'
-        # The real upload Worker against goalcup (a rule change there touches the Worker, its
-        # local database, the SQL proposal and the Rust stand-in: docs/UPLOAD-API.md).
-        step cargo nextest run --offline -p goalcup-cli --test full --run-ignored ignored-only \
-            -E 'test(/upload_worker/)'
+        echo "gate.sh: waiting for the build lock (pid ${holder:-unknown})"
+        sleep 5
     fi
-    # nextest does not run doctests; the compile_fail one in goalcup-protocol guards a promise.
-    step cargo test --offline --workspace --doc
-else
-    echo "cargo-nextest not found; falling back to cargo test (runs every tier, slower)"
-    step cargo test --offline --workspace
-    if [ "$tier" = full ]; then
-        step cargo test --offline -p goalcup-cli --test full -- --ignored \
-            m2_synthetic_vertical:: capture_failure_campaign::
-        step cargo test --offline -p goalcup-cli --test full -- --ignored upload_worker
-    fi
-fi
+done
+echo $$ >"$lock/pid"
+trap 'rm -rf "$lock"' EXIT
+trap 'exit 1' INT TERM HUP
+
+step cargo fmt --all --check
+step cargo clippy --locked --workspace --all-targets -- -D warnings
+step cargo nextest run --locked --workspace
+# nextest does not run doctests.
+step cargo test --locked --workspace --doc
+step npm --prefix server/worker test
+# A named list, not `discover -s scripts`: old script tests name the old crates. A new script test
+# joins only if it guards one of the seven points, the format, masking or the never-stop rules.
+# test_fetch_run.py joins when PRD-07's rewrite merges (today it builds the old goalcup-verifier),
+# and `discover -s scripts/pad` after PRD-12's first test_pad.py merge.
+step python3 -m unittest scripts/test_install.py
 
 if [ "$tier" = full ]; then
-    step npm --prefix server/worker test
-    step python3 -m unittest discover -s scripts
-    step python3 scripts/check-links.py --root .
+    # Every other #[ignore] test (end to end, the real Worker). No --no-tests flag: nextest fails
+    # when none run, so a renamed, un-ignored or missing e2e_run.rs or upload_worker.rs cannot
+    # pass. Until the first of them merges (phase 2) the full tier fails here; phase 1 needs fast.
+    step cargo nextest run --locked --workspace --run-ignored only \
+        -E 'not test(/^by_hand_/)'
+    # The binaries the pad copies, built after the test builds and without dev-dependencies.
+    step cargo build --release --locked -p goalcup -p goalcup-verify
+    hooks=$(grep -ac GOALCUP_TEST_ target/release/goalcup || true)
+    echo "+ GOALCUP_TEST_ in target/release/goalcup: $hooks"
+    [ "$hooks" = 0 ] || fail
 fi
 
 echo "gate $tier: PASS in $(($(date +%s) - start))s"
