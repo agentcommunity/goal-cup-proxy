@@ -7,51 +7,45 @@
 use goalcup::pipeline::{Call, Calls, EndReason, Sid, StreamKind};
 use serde_json::Value;
 
+/// What `f` picks from each call, in call order.
+pub fn pick<T>(c: &Calls, f: impl FnMut(Call) -> Option<T>) -> Vec<T> {
+    c.all().into_iter().filter_map(f).collect()
+}
+
 /// The bytes of every DATA call for `sid`, joined in call order.
-pub fn data_of(calls: &Calls, sid: Sid) -> Vec<u8> {
-    let mut out = Vec::new();
-    for call in calls.all() {
-        if let Call::Data(s, _, _, bytes) = call
-            && s == sid
-        {
-            out.extend_from_slice(&bytes);
-        }
-    }
-    out
+pub fn data_of(c: &Calls, sid: Sid) -> Vec<u8> {
+    let pieces = pick(c, |c| match c {
+        Call::Data(s, .., bytes) if s == sid => Some(bytes.to_vec()),
+        _ => None,
+    });
+    pieces.concat()
 }
 
 /// Every GAP call, in order.
-pub fn gaps(calls: &Calls) -> Vec<Call> {
-    calls
-        .all()
-        .into_iter()
-        .filter(|c| matches!(c, Call::Gap(..)))
-        .collect()
+pub fn gaps(c: &Calls) -> Vec<Call> {
+    pick(c, |c| matches!(c, Call::Gap(..)).then_some(c))
 }
 
 /// Each OPEN as (sid, kind, meta), in order.
 pub fn opens(c: &Calls) -> Vec<(Sid, StreamKind, Value)> {
-    let f = |c: Call| match c {
+    pick(c, |c| match c {
         Call::Open(sid, kind, .., meta) => Some((sid, kind, meta)),
         _ => None,
-    };
-    c.all().into_iter().filter_map(f).collect()
+    })
 }
 
-/// Each END as (sid, reason, seen), in order.
-pub fn ends(c: &Calls) -> Vec<(Sid, EndReason, u64)> {
-    let f = |c: Call| match c {
-        Call::End(sid, _, r, seen, _) => Some((sid, r, seen)),
+/// Each END as (sid, reason, seen, tail), in order.
+pub fn ends(c: &Calls) -> Vec<(Sid, EndReason, u64, Option<Value>)> {
+    pick(c, |c| match c {
+        Call::End(sid, _, r, seen, tail) => Some((sid, r, seen, tail)),
         _ => None,
-    };
-    c.all().into_iter().filter_map(f).collect()
+    })
 }
 
 /// Each EVENT, in order.
 pub fn events(c: &Calls) -> Vec<Value> {
-    let f = |c: Call| match c {
+    pick(c, |c| match c {
         Call::Event(v) => Some(v),
         _ => None,
-    };
-    c.all().into_iter().filter_map(f).collect()
+    })
 }

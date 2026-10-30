@@ -117,11 +117,12 @@ if [ "$tier" = full ]; then
     hooks=$(grep -ac GOALCUP_TEST_ target/release/goalcup || true)
     echo "+ GOALCUP_TEST_ in target/release/goalcup: $hooks"
     [ "$hooks" = 0 ] || fail
-    # The nextest steps built target/debug/goalcup with dev-dependencies, so with the hooks on.
-    # Without the text there the clean count above proves nothing (PRD-05 amendment).
+    # The nextest steps built target/debug/goalcup with dev-dependencies, so it holds the hook
+    # text once a hook is reachable from main. Without it the clean count above proves nothing
+    # (PRD-05 amendment). The seam: PRD-06's uploader must call Policy::from_env.
     hooked=$(grep -ac GOALCUP_TEST_ target/debug/goalcup || true)
     echo "+ GOALCUP_TEST_ in target/debug/goalcup: $hooked"
-    [ "${hooked:-0}" -gt 0 ] || { echo "gate.sh: target/debug/goalcup has no GOALCUP_TEST_ text, so the release grep proves nothing"; fail; }
+    [ "${hooked:-0}" -gt 0 ] || { echo "gate.sh: target/debug/goalcup has no GOALCUP_TEST_ text, so the release grep proves nothing; waits on a hook reachable from main (PRD-06 calls Policy::from_env)"; fail; }
 fi
 
 echo "gate $tier: PASS in $(($(date +%s) - start))s"

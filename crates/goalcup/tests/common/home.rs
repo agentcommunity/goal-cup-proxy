@@ -6,6 +6,9 @@ use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+const HOME_VARS: &str = "CLAUDE_CONFIG_DIR CODEX_HOME HERMES_HOME \
+    XDG_CONFIG_HOME XDG_DATA_HOME XDG_STATE_HOME XDG_CACHE_HOME";
+
 /// A temporary `HOME`, with `GOALCUP_HOME` inside it. Removed when dropped.
 pub struct TempHome {
     dir: tempfile::TempDir,
@@ -27,13 +30,10 @@ impl TempHome {
     }
 
     /// Points `cmd` at the temporary homes and drops every variable that could send a harness
-    /// back to a real home.
+    /// back to a real home ([`HOME_VARS`]).
     pub fn apply<'a>(&self, cmd: &'a mut Command) -> &'a mut Command {
-        for var in ["CLAUDE_CONFIG_DIR", "CODEX_HOME", "HERMES_HOME"] {
+        for var in HOME_VARS.split(' ') {
             cmd.env_remove(var);
-        }
-        for xdg in ["CONFIG", "DATA", "STATE", "CACHE"] {
-            cmd.env_remove(format!("XDG_{xdg}_HOME"));
         }
         cmd.env("HOME", self.home())
             .env("GOALCUP_HOME", self.goalcup_home())
@@ -57,7 +57,6 @@ pub fn guard() -> RealHomeGuard {
 }
 
 pub struct RealHomeGuard(String);
-
 impl Drop for RealHomeGuard {
     fn drop(&mut self) {
         // A test that already failed keeps its own message.

@@ -15,6 +15,7 @@ use std::io::{self, Read as _, Write as _};
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering::SeqCst};
 use std::sync::{Arc, Mutex, MutexGuard};
+use std::task::Poll;
 use std::thread::JoinHandle;
 use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
@@ -91,9 +92,9 @@ pub struct Script {
     /// Hold each answer this long after its request arrived.
     pub hold_answer: Option<Duration>,
     /// Close the connection once this many answer bytes are sent on it, counting from its first
-    /// answer byte (DATA bytes on HTTP/2, then a GOAWAY). The close is clean (a FIN, and over TLS
-    /// a `close_notify`), not a reset, so a test of an upstream dying mid-body relies on the cut
-    /// `Content-Length` or chunked framing (or on HTTP/2, the missing end of the stream).
+    /// answer byte (on HTTP/2, DATA the flow-control windows let out, then a GOAWAY). The close is
+    /// clean (a FIN, and over TLS a `close_notify`), not a reset, so a test of an upstream dying
+    /// mid-body relies on the cut `Content-Length` or chunked framing (or the HTTP/2 stream's end).
     pub close_after: Option<u64>,
 }
 
@@ -151,9 +152,8 @@ impl Upstream {
             Tls::On { names, alpn } => {
                 let names: Vec<&str> = names.iter().map(String::as_str).collect();
                 let alpn: Vec<&[u8]> = alpn.iter().map(Vec::as_slice).collect();
-                Some(tokio_rustls::TlsAcceptor::from(
-                    pki.server_config(&names, &alpn),
-                ))
+                let config = pki.server_config(&names, &alpn);
+                Some(tokio_rustls::TlsAcceptor::from(config))
             }
         };
         let received = Arc::new(Mutex::new(Vec::new()));
@@ -196,12 +196,8 @@ impl Upstream {
 
 impl Drop for Upstream {
     fn drop(&mut self) {
-        if let Some(stop) = self.stop.take() {
-            let _ = stop.send(());
-        }
-        if let Some(thread) = self.thread.take() {
-            let _ = thread.join();
-        }
+        let _ = self.stop.take().map(|stop| stop.send(()));
+        let _ = self.thread.take().map(JoinHandle::join);
     }
 }
 
@@ -213,8 +209,12 @@ struct Shared {
 }
 
 impl Shared {
-    fn next_answer(&self) -> &Answer {
+    /// The answer to a request that has fully arrived, after `hold_answer`.
+    async fn next_answer(&self) -> &Answer {
         let i = self.next.fetch_add(1, SeqCst);
+        if let Some(hold) = self.script.hold_answer {
+            tokio::time::sleep(hold).await;
+        }
         &self.script.answers[i.min(self.script.answers.len() - 1)]
     }
 }
@@ -287,9 +287,7 @@ async fn connection(shared: Arc<Shared>, tcp: tokio::net::TcpStream, conn: usize
 }
 
 /// The request head, with header names in lower case.
-struct Request {
-    headers: Vec<(String, String)>,
-}
+struct Request(Vec<(String, String)>);
 
 impl Request {
     fn parse(head: &[u8]) -> Request {
@@ -300,11 +298,11 @@ impl Request {
             .filter_map(|line| line.split_once(':'))
             .map(|(k, v)| (k.trim().to_ascii_lowercase(), v.trim().to_string()))
             .collect();
-        Request { headers }
+        Request(headers)
     }
 
     fn header(&self, name: &str) -> Option<&str> {
-        self.headers
+        self.0
             .iter()
             .find(|(k, _)| k == name)
             .map(|(_, v)| v.as_str())
@@ -378,11 +376,7 @@ impl Conn {
                 self.skip_chunked().await?;
             }
             let shared = self.shared.clone();
-            let answer = shared.next_answer();
-            if let Some(hold) = shared.script.hold_answer {
-                tokio::time::sleep(hold).await;
-            }
-            match answer {
+            match shared.next_answer().await {
                 Answer::Http {
                     status,
                     headers,
@@ -423,12 +417,8 @@ impl Conn {
         let pieces = coded(body, coding);
         let reason = if status == 200 { "OK" } else { "Answer" };
         let mut head = format!("HTTP/1.1 {status} {reason}\r\n");
-        for (k, v) in headers {
+        for (k, v) in head_fields(headers, body, coding) {
             head += &format!("{k}: {v}\r\n");
-        }
-        if let Some(c) = coding {
-            // The Debug names are the tokens in lower case: gzip, deflate, br, zstd.
-            head += &format!("content-encoding: {}\r\n", format!("{c:?}").to_lowercase());
         }
         if let Body::Whole(_) = body {
             let len: usize = pieces.iter().map(Vec::len).sum();
@@ -436,12 +426,6 @@ impl Conn {
             let mut out = head.into_bytes();
             out.extend(pieces.concat());
             return self.send(&out).await;
-        }
-        let typed = headers
-            .iter()
-            .any(|(k, _)| k.eq_ignore_ascii_case("content-type"));
-        if matches!(body, Body::Sse(_)) && !typed {
-            head += "content-type: text/event-stream\r\n";
         }
         head += "transfer-encoding: chunked\r\n\r\n";
         self.send(head.as_bytes()).await?;
@@ -474,7 +458,6 @@ impl Conn {
         }
         head += "\r\n";
         self.send(head.as_bytes()).await?;
-
         let mut compress = DeflateEncoder::new(Vec::new(), Compression::default());
         let mut closed = false;
         for msg in messages {
@@ -491,7 +474,6 @@ impl Conn {
             self.send(&frame).await?;
             closed |= opcode == 8;
         }
-
         // The client's frames: masked, maybe compressed and fragmented. `fill` has already
         // recorded their raw bytes; only a Close is looked at.
         loop {
@@ -521,6 +503,21 @@ impl Conn {
     }
 }
 
+/// The answer's headers, then its `Content-Encoding`, and for SSE a `Content-Type` if it has none.
+fn head_fields(h: &[(String, String)], body: &Body, c: Option<Coding>) -> Vec<(String, String)> {
+    let mut all = h.to_vec();
+    if let Some(c) = c {
+        // The Debug names are the tokens in lower case: gzip, deflate, br, zstd.
+        let token = format!("{c:?}").to_lowercase();
+        all.push(("content-encoding".into(), token));
+    }
+    let typed = h.iter().any(|(k, _)| k.to_lowercase() == "content-type");
+    if matches!(body, Body::Sse(_)) && !typed {
+        all.push(("content-type".into(), "text/event-stream".into()));
+    }
+    all
+}
+
 /// The body's pieces, compressed with `coding` and split again as [`Coding`] says.
 fn coded(body: &Body, coding: Option<Coding>) -> Vec<Vec<u8>> {
     let pieces = match body {
@@ -546,8 +543,12 @@ async fn http2(shared: Arc<Shared>, io: impl Io, conn: usize) -> Result<(), h2::
                 }
                 _ => return Ok(()),
             },
-            // A GOAWAY, then the connection shuts its stream down (a `close_notify` and a FIN).
-            _ = cut.1.notified() => h2.abrupt_shutdown(h2::Reason::NO_ERROR),
+            // One more turn writes the counted DATA, then a GOAWAY, then the connection shuts its
+            // stream down (a `close_notify` and a FIN).
+            _ = cut.1.notified() => {
+                let _ = std::future::poll_fn(|cx| Poll::Ready(h2.poll_closed(cx))).await;
+                h2.abrupt_shutdown(h2::Reason::NO_ERROR)
+            }
         }
     }
 }
@@ -561,9 +562,7 @@ async fn h2_stream(
 ) -> Result<(), h2::Error> {
     const NONE: &Body = &Body::Whole(Vec::new());
     const HOP: &str = "connection keep-alive proxy-connection te transfer-encoding upgrade";
-    let answer = shared.next_answer();
     let (head, mut body) = req.into_parts();
-    let record = |b: &[u8]| lock(&shared.received)[conn].extend_from_slice(b);
     let (m, u) = (&head.method, &head.uri);
     let s = u.scheme_str().unwrap_or("");
     let a = u.authority().map_or("", |a| a.as_str());
@@ -572,16 +571,15 @@ async fn h2_stream(
     for (k, v) in &head.headers {
         text += &format!("{k}: {}\n", String::from_utf8_lossy(v.as_bytes()));
     }
-    record(format!("{text}\n").as_bytes());
+    let mut text = format!("{text}\n").into_bytes();
     while let Some(data) = body.data().await {
         let data = data?;
         let _ = body.flow_control().release_capacity(data.len());
-        record(&data);
+        text.extend_from_slice(&data);
     }
-    if let Some(hold) = shared.script.hold_answer {
-        tokio::time::sleep(hold).await;
-    }
-    let (status, headers, body, coding) = match answer {
+    // One block per request, so streams that overlap on a connection do not interleave.
+    lock(&shared.received)[conn].extend(text);
+    let (status, headers, body, coding) = match shared.next_answer().await {
         Answer::Http {
             status,
             headers,
@@ -593,17 +591,10 @@ async fn h2_stream(
     };
     let hop = |k: &str| HOP.split(' ').any(|h| k.eq_ignore_ascii_case(h));
     let mut resp = http::Response::builder().status(status);
-    for (k, v) in headers.iter().filter(|(k, _)| !hop(k)) {
-        resp = resp.header(k.as_str(), v.as_str());
-    }
-    if let Some(c) = coding {
-        resp = resp.header("content-encoding", format!("{c:?}").to_lowercase());
-    }
-    let typed = headers
-        .iter()
-        .any(|(k, _)| k.eq_ignore_ascii_case("content-type"));
-    if matches!(body, Body::Sse(_)) && !typed {
-        resp = resp.header("content-type", "text/event-stream");
+    for (k, v) in head_fields(headers, body, coding) {
+        if !hop(&k) {
+            resp = resp.header(k, v);
+        }
     }
     let mut pieces = coded(body, coding);
     pieces.retain(|p| !p.is_empty());
@@ -611,15 +602,24 @@ async fn h2_stream(
     let mut send = respond.send_response(head, pieces.is_empty())?;
     let (written, limit) = (&cut.0, shared.script.close_after);
     for (i, piece) in pieces.iter().enumerate() {
-        let room = limit.map_or(u64::MAX, |l| l.saturating_sub(written.load(SeqCst)));
-        let n = (piece.len() as u64).min(room) as usize;
-        let end = i + 1 == pieces.len() && n == piece.len();
-        send.send_data(bytes::Bytes::copy_from_slice(&piece[..n]), end)?;
-        if limit.is_some_and(|l| written.fetch_add(n as u64, SeqCst) + n as u64 >= l) {
-            cut.1.notify_one();
-            // Kept open until the connection goes, so the stream is not reset before the GOAWAY.
-            let _ = std::future::poll_fn(|cx| send.poll_reset(cx)).await;
-            return Ok(());
+        let mut rest = &piece[..];
+        while !rest.is_empty() {
+            // Only what the windows let out now, so a counted byte is not left queued at the cut.
+            let room = limit.map_or(u64::MAX, |l| l.saturating_sub(written.load(SeqCst)));
+            send.reserve_capacity(rest.len().min(room as usize));
+            let Some(cap) = std::future::poll_fn(|cx| send.poll_capacity(cx)).await else {
+                return Ok(());
+            };
+            let n = cap?.min(rest.len()).min(room as usize);
+            let end = i + 1 == pieces.len() && n == rest.len();
+            send.send_data(bytes::Bytes::copy_from_slice(&rest[..n]), end)?;
+            rest = &rest[n..];
+            if limit.is_some_and(|l| written.fetch_add(n as u64, SeqCst) + n as u64 >= l) {
+                cut.1.notify_one();
+                // Held open until the connection goes, so no reset comes before the GOAWAY.
+                let _ = std::future::poll_fn(|cx| send.poll_reset(cx)).await;
+                return Ok(());
+            }
         }
         // The flush between pieces: the connection task writes this DATA frame first.
         tokio::task::yield_now().await;

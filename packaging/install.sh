@@ -13,12 +13,7 @@
 #   --force             GOALCUP_FORCE=1   install even if a Goal Cup run is recording
 # For tests, GOALCUP_RELEASE_BASE (https:// or file://) replaces the GitHub release URL.
 #
-# Run guard: before anything in the prefix changes, it asks the goalcup it would replace
-# (<prefix>/bin/goalcup, else the one on PATH) for `goalcup status --json` and stops with
-# INSTALL_BLOCKED when `status.mode` is recording, losing, writer_slow or null. Another mode
-# (sealed), exit 1 with nothing on stdout (no run yet) and a first install go on. An answer it
-# cannot read (exit 3, unparsable output, a goalcup from before 1.0, no answer in 10 s) prints
-# INSTALL_UNSURE and goes on.
+# Run guard (INSTALL_BLOCKED, INSTALL_UNSURE): see packaging/README.md.
 #
 # The whole script is one function called on the last line, so a download cut short runs nothing.
 set -eu
@@ -172,11 +167,11 @@ guard_recording_run() {
 
     case $verdict in
     blocked)
-        printf '%s\n' "A Goal Cup run is recording on this computer. Update after it ends, or run the installer again with: curl -fsSL https://github.com/agentcommunity/goal-cup-proxy/releases/latest/download/install.sh | sh -s -- --force" >&2
+        printf '%s\n' "INSTALL_BLOCKED: A Goal Cup run is recording on this computer. Update after it ends, or run the installer again with: curl -fsSL https://github.com/agentcommunity/goal-cup-proxy/releases/latest/download/install.sh | sh -s -- --force" >&2
         exit 1
         ;;
     unsure)
-        printf '%s\n' "Could not tell whether a Goal Cup run is recording. If one is, stop this update and run it after the run ends." >&2
+        printf '%s\n' "INSTALL_UNSURE: Could not tell whether a Goal Cup run is recording. If one is, stop this update and run it after the run ends." >&2
         ;;
     esac
 }
@@ -226,7 +221,8 @@ path_line() {
     esac
     case ${SHELL:-} in
     */zsh) profile="~/.zshrc" ;;
-    */bash) profile="~/.bashrc" ;;
+    # Terminal on macOS starts bash as a login shell, which reads ~/.bash_profile, not ~/.bashrc.
+    */bash) [ "$(uname -s)" = Darwin ] && profile="~/.bash_profile" || profile="~/.bashrc" ;;
     *) profile="~/.profile" ;;
     esac
     export_line="export PATH=\"$dir:\$PATH\""

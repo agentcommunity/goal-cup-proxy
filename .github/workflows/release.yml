@@ -5,8 +5,9 @@
 # - A `v*` tag push builds and publishes the release for that tag. The tag must equal
 #   `v` plus the workspace version in Cargo.toml, because the binaries print that version and
 #   the smoke tests check it. Use `sh scripts/release.sh prepare <x.y.z>` for the version PR when
-#   needed, then merge it, run the full gate and separate Linux check on `origin/main`, and use `sh scripts/release.sh tag
-#   <x.y.z>`.
+#   needed, then merge it, run `sh scripts/gate.sh full` on `origin/main`, and use
+#   `sh scripts/release.sh tag <x.y.z>`, which first runs the pad's release check
+#   (`scripts/pad/table --release-check`).
 # - A manual start builds and packages only: the tarballs are the run's artifacts, and nothing
 #   is published. Use it to try package builds before pushing a release tag.
 #
@@ -70,7 +71,10 @@ jobs:
       # The Rust guards on this machine, so the watchdog, clock and socket-passing tests also run
       # on macOS and Linux arm64 before anything ships.
       - run: cargo nextest run --locked -p goalcup-format -p goalcup -p goalcup-verify
-      # Fetch the locked target graph, including manifests used by licence metadata, once.
+      # Those tests built target/debug/goalcup with the hooks on. Without GOALCUP_TEST_ text there,
+      # the smoke's clean grep of the shipped goalcup proves nothing (PRD-05 amendment).
+      - run: test "$(grep -ac GOALCUP_TEST_ target/debug/goalcup || true)" -gt 0
+      # Fetch the locked graph for this target, including manifests used by licence metadata.
       - run: cargo fetch --locked --target "$TARGET"
       # Built without dev-dependencies, so no test hook reaches the shipped goalcup.
       - run: >-
