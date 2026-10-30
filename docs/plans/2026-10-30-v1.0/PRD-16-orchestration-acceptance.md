@@ -1227,3 +1227,27 @@ kept and now cites BUILD-PROMPT section 5, since B3 no longer carries it.
   known if they are still open at the end.
 - Merge commits on `v1.0/prd-04-native` and 403d9165 carry both trailer lines.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-12 slice 3 (merge 9e259b4d)
+
+- `gate fast: PASS in 82s` on 9e259b4d. The gate does not run `test_pad.py` (PRD-14 note); the 17 pad
+  tests were green in a build box at 9e9e384a only. The merge and its 10 branch commits carry both
+  trailer lines.
+- **What slice 3 adds:** ladder rung 2 wiring with `server = "staging"` (headless approval, the
+  approval key and member id read in the process from env vars named in `pad.toml`), wait-upload on
+  S9, fetch-run into `fetched/<entry>/` with the copy-in, the section 8 server commands in `pad-run
+  verify`, and `table` row mode with `--release-check`. No staging run has been made with it: rung 2
+  waits for rung 1 (a no-key `micro` with `server = "off"`), which waits for PRD-10 core and a non-stub
+  masker (PRD-05 note). A pad row on a stub build is not evidence.
+- **P7 and `--release-check`.** Until PRD-12's nit B3 lands, `table --release-check <integration
+  head>` reads the rows at the checkout's `HEAD`; run it from a checkout at that commit (PRD-12 and
+  PRD-14 notes).
+- **Size report, PRD-12** (`wc -l` at 9e259b4d, fixtures left out; PRD-00 row "about 1,350 to 1,450
+  with its tests"): `scripts/pad/` is 2,077 lines (`pad` 500 of 320, `pad-run` 411 of 330, `check.py`
+  358 of 320, `table` 192 of 150, `test_pad.py` 287 of 90, `sbx.mjs` 133 with no row, the rest 197),
+  306 more than at c7649890 and 43% over the top of the row; the files still to come at their rows
+  make about 2,440. The replan decision line (PRD-12 note) names points 3, 4 and 5 for the extra lines,
+  does not raise the row, and has the next slice cut first (review nits B1 and B2, then `test_pad.py`
+  toward its row). The end-of-build report lists PRD-12's size against its row; whether the row rises
+  is the owner question already open in the pad log (12:53Z).
+- No locked ledger item is touched and no owner question comes from this slice.

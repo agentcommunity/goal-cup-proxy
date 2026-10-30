@@ -775,3 +775,13 @@ PRDs they touch and the code. Where two fixes disagree, the ledger and the later
 - **Mask tests so far:** 367 lines (179 inline in `src/mask/mod.rs`, 188 in `tests/mask_rules.rs`)
   of PRD-05's 2,000. PRD-05's core slice cuts about 105 of them (PRD-05 note).
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-12 slice 3 (merge 9e259b4d)
+
+- **`test_pad.py` is still not in `gate fast`.** At 9e259b4d `scripts/gate.sh` runs only
+  `scripts/test_install.py`; `gate fast: PASS in 82s` there did not run the 17 pad tests. The earlier
+  note stands: add `discover -s scripts/pad` under python3.11.
+- **`table --release-check <commit>` reads `HEAD`'s rows today** (PRD-12 nit B3). Until PRD-12's next
+  slice reads `<sha>:pad-rows.jsonl`, `release.sh tag` runs it from a checkout at `<commit>`, or it
+  judges another commit's rows. No change to the release steps once B3 lands.
+- No locked ledger item is touched and no owner question comes from this slice.
