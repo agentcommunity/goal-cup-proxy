@@ -39,8 +39,8 @@ fn a_star_matches_a_name_that_is_not_utf8() {
 #[test]
 fn bad_patterns_are_refused() {
     for bad in [
-        "", "/a", "/", "a//b", "a/", ".", "a/./b", "..", "a/../b", "{a,b}", "a/{b", "a}",
-        "a\0b", "a**", "**b", "x**y", "a/***",
+        "", "/a", "/", "a//b", "a/", ".", "a/./b", "..", "a/../b", "{a,b}", "a/{b", "a}", "a\0b",
+        "a**", "**b", "x**y", "a/***",
     ] {
         assert!(parse(bad).is_err(), "{bad:?} should be refused");
     }
@@ -76,17 +76,29 @@ fn the_first_matching_row_wins() {
     let file = Path::new("/home/h/projects/sub/x.jsonl");
 
     let rows = [(root, &all), (root, &sub)];
-    assert_eq!(first_match(&rows, file), Some((0, Path::new("sub/x.jsonl"))));
+    assert_eq!(
+        first_match(&rows, file),
+        Some((0, Path::new("sub/x.jsonl")))
+    );
     let rows = [(root, &sub), (root, &all)];
-    assert_eq!(first_match(&rows, file), Some((0, Path::new("sub/x.jsonl"))));
+    assert_eq!(
+        first_match(&rows, file),
+        Some((0, Path::new("sub/x.jsonl")))
+    );
 
     // One root inside the other: the first row still wins, and the ID is relative to its root.
     let outer = Path::new("/home/h");
     let one = p("*/*.jsonl");
     let rows = [(root, &one), (outer, &all)];
-    assert_eq!(first_match(&rows, file), Some((0, Path::new("sub/x.jsonl"))));
+    assert_eq!(
+        first_match(&rows, file),
+        Some((0, Path::new("sub/x.jsonl")))
+    );
     let rows = [(outer, &all), (root, &one)];
-    assert_eq!(first_match(&rows, file), Some((0, Path::new("projects/sub/x.jsonl"))));
+    assert_eq!(
+        first_match(&rows, file),
+        Some((0, Path::new("projects/sub/x.jsonl")))
+    );
 
     // A root is a whole-component prefix, never a string prefix.
     let rows = [(Path::new("/home/h/proj"), &all)];
@@ -122,6 +134,9 @@ fn every_connector_native_pattern_parses_and_matches() {
         ("**/chats/**/*.jsonl", "h1/chats/session-1.jsonl"),
         ("**/chats/**/*.jsonl", "h1/chats/a/b/session-2.jsonl"),
     ] {
-        assert!(p(pattern).matches(Path::new(sample)), "{pattern} vs {sample}");
+        assert!(
+            p(pattern).matches(Path::new(sample)),
+            "{pattern} vs {sample}"
+        );
     }
 }
