@@ -262,7 +262,8 @@ pub(crate) fn write_profile(dir: &Path, path: &str) -> std::io::Result<()> {
         _ => return Ok(()),
     }
     let quoted = path.replace('\'', r"'\''");
-    replace(&file, format!("{PROFILE_HEADER}\nexport PATH='{quoted}'\n").as_bytes())
+    let body = format!("{PROFILE_HEADER}\nexport PATH='{quoted}'\n");
+    replace(&file, body.as_bytes())
 }
 
 /// `doc` with the dotted path `parts` set to `leaf`, every other key kept; `None` when it holds

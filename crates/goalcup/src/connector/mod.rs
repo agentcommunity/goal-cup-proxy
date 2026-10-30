@@ -233,8 +233,8 @@ pub fn plan(connector: &Connector, env: &Env, home: &Path) -> LaunchPlan {
         .flatten();
     // `want` starts a word of the line, a leading `v` stripped: "2." takes v2.1, never 1.12.
     let held = |want: &str, got: &str| {
-        let mut words = got.split_whitespace().map(|w| w.strip_prefix('v').unwrap_or(w));
-        words.any(|w| w.starts_with(want))
+        let starts = |w: &str| w.strip_prefix('v').unwrap_or(w).starts_with(want);
+        got.split_whitespace().any(starts)
     };
     let version_refusal = match (&connector.version, &harness_version) {
         (Some(want), Some(got)) if !held(want, got) => Some(Refusal::VersionMismatch {

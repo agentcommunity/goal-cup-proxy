@@ -239,9 +239,9 @@ fn with_home_swapped_a_login_shell_finds_goalcup() {
     let (e, home, profile) = (env(&bin, &[]), d.join("home"), d.join("home/.profile"));
     let found = |plan: LaunchPlan| {
         let mut sh = std::process::Command::new("sh");
-        sh.args(["-lc", "command -v goalcup"]).env_clear().envs(&plan.env);
-        // As Debian's /etc/profile does: only `.profile` can put the handed PATH back.
-        let out = sh.env("PATH", "/usr/bin:/bin").output().unwrap().stdout;
+        // PATH reset as Debian's /etc/profile does: only `.profile` can put the handed one back.
+        sh.env_clear().envs(&plan.env).env("PATH", "/usr/bin:/bin");
+        let out = sh.args(["-lc", "command -v goalcup"]).output().unwrap().stdout;
         String::from_utf8(out).unwrap()
     };
     let want = format!("{}\n", fake.display());
