@@ -802,3 +802,16 @@ PRD-12 and PRD-17.
 | G3-X23 | Applied as case (2) of `upload_worker.rs`. Partly: the fix list wrote `mode` as the string `"null"`; PRD-07 section 4 sends JSON null, so the test asserts JSON null |
 | G3-X26 | Applied: U6 and the watcher read `fetch.json` `heartbeats` (PRD-07 section 7 adds the list), not a database query |
 | G3-X29 | Applied: `upload_worker.rs` (full tier, `#[ignore]` in fast) with `fetch-run.sh --local` and equal bytes; listed in the PRD-14 interfaces row |
+
+## Amendments
+
+### 2026-10-30, replan after PRD-07 slice 1 (merge 4dcc1e7b)
+
+- **S5 is on integration** (`docs/UPLOAD-API.md`, 4dcc1e7b) and the real Worker follows it for the
+  heartbeat `counts`, the three `recording` states, `sealed` in heartbeat, chunk and position answers,
+  the seal on the final heartbeat and on the completing chunk, no seal route and no 413 path.
+- **Until PRD-07 step 3 merges, the real Worker still sends `ack` in the chunk answer and `last_ack` in
+  the position answer.** The client's types must ignore unknown fields (no strict deny), so the same
+  client works before and after step 3.
+- **`upload_worker.rs` under `fetch-run.sh --local` sees one heartbeat row per entry** (the local
+  store keeps `last_vitals` only). U6's check of every heartbeat row reads a staging fetch.

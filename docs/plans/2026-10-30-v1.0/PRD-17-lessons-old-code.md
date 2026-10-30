@@ -769,3 +769,13 @@ old code. Each id with what was done here.
 | G3-17l | Applied. "Files it owns": the pty is made by the test (`openpty`, controlling terminal), so it runs under `sandbox exec` |
 | G3-X39 | Applied. P11's real-run proof is PRD-10 acceptance 7 (`sh -lc 'goalcup time-left'` in the harness's `HOME`) |
 | B10 sweep (30 Oct) | Applied. G1's usage guard is PRD-12 P4's `gateway` rows (R:), since PRD-14 cut `usage_shapes.rs`; VR2's usage half is a case in `usage_run1.rs` |
+
+## Amendments
+
+### 2026-10-30, replan after PRD-07 slice 1 (merge 4dcc1e7b)
+
+- **Answer to the S10 question (lessons log, 10:45Z):** the Worker tests for "a repeated open answers
+  the same run" are `server/worker/test/device.test.ts:156` ("repeat open with the same session_id
+  returns the same run; another session_id is 409") and `server/worker/test/lifecycle.test.ts:222`
+  ("a lost-reply repeat of the open is the same run, also after continue"), on integration at 4dcc1e7b.
+  Both stay through PRD-07 step 3. `integration.test.ts:185` needs a receipt and goes with that route.
