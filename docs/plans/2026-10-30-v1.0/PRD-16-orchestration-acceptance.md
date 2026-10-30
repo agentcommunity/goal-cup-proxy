@@ -1088,3 +1088,19 @@ kept and now cites BUILD-PROMPT section 5, since B3 no longer carries it.
 - `gate fast` PASS in 76 s on c7649890 (and 75 s on the no-op second run). `test_pad.py` is not in
   the gate yet (PRD-14 note).
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-15 slice 3 (merge 4e0ca793)
+
+- **Size report, PRD-15 slice 3** (`wc -l` on integration at 4e0ca793). PRD-15 has no row in PRD-00
+  "Size budget" (docs are not counted), and the slice has no code. `TODO.md` 59 lines (was 350;
+  PRD-15 asks for under 60), `README.md` 318 (unchanged count, one link repointed).
+- **Docs-only slices still pass the gate in under two minutes** (`gate fast: PASS in 98s` on
+  4e0ca793).
+- **`check-links.py` is not in the gate**, so a broken link merges silently. The PRD-11 box run
+  (harnesses log 12:22Z) counted 33 listed lines with the new TODO overlaid, 30 after its fix. The
+  final acceptance link check filters the history files by name (run 1's report,
+  `docs/RESEARCH-TARGET.md`, `docs/research/**`) and must list nothing else for live docs.
+- **After-merge purge order** (review A7, PRD-15 note): live docs stop linking purged history before
+  the purge, and the purge change runs `check-links.py` itself. The TODO keep list stays at four
+  files.
+- No locked ledger item is touched and no owner question comes from this slice.
