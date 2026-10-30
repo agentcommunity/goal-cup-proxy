@@ -278,6 +278,10 @@ def c6(r):
     high = max([dig(s, "s4_requests") for s in r.samples if isinstance(dig(s, "s4_requests"), int)] or [0])
     r.flag(isinstance(final, int) and high > final, "C6", "FAIL", "a status sample showed %s requests, final %s" % (high, final))
 
+def fired(r, *kinds):
+    """The fault lines of a kill of one of these kinds that fired (a pid was hit)."""
+    return [f for f in r.faults if f.get("kind") in kinds and f.get("pid") is not None]
+
 def faults(r):
     """Section 3.1, for the two faults built so far; any other kind makes the row INCONCLUSIVE."""
     kinds = fault_kinds(r.meta)
@@ -285,15 +289,14 @@ def faults(r):
         r.mark("faults", "INCONCLUSIVE", "expectations for %s not built yet" % k)
     if not set(kinds) & set(BUILT_FAULTS):
         return
-    fired = [f for f in r.faults if f.get("kind") == "kill-recorder" and f.get("pid") is not None]
-    r.flag(len(fired) < kinds.count("kill-recorder"), "faults", "INCONCLUSIVE",
-           "fault did not fire: %d of %d kills" % (len(fired), kinds.count("kill-recorder")))
+    kills = fired(r, "kill-recorder")
+    r.flag(len(kills) < kinds.count("kill-recorder"), "faults", "INCONCLUSIVE",
+           "fault did not fire: %d of %d kills" % (len(kills), kinds.count("kill-recorder")))
     # The record's evidence around each kill: a status sample before and after it (the watch ran), and after a
     # recorder kill, written model requests up by at least 1 (section 1a).
-    reqs = [(when(s.get("pad_at")), dig(s, "s4_requests")) for s in r.samples]
-    reqs = [(t, n) for t, n in reqs if t and isinstance(n, int)]
-    times = [t for t in (when(s.get("pad_at")) for s in r.samples) if t]
-    for f in [f for f in r.faults if f.get("kind") in ("kill-recorder", "kill-watchdog") and f.get("pid") is not None]:
+    pairs = [(t, n) for t, n in ((when(s.get("pad_at")), dig(s, "s4_requests")) for s in r.samples) if t]
+    times, reqs = [t for t, _ in pairs], [(t, n) for t, n in pairs if isinstance(n, int)]
+    for f in fired(r, "kill-recorder", "kill-watchdog"):
         k = when(f.get("at"))
         if not (k and any(t < k for t in times) and any(t > k for t in times)):
             r.mark("faults", "INCONCLUSIVE", "no status sample on both sides of the %s at %s" % (f["kind"], f.get("at")))
@@ -303,7 +306,7 @@ def faults(r):
                    "no model request written after the kill at %s (status samples)" % f.get("at"))
     rec = [s[1] for s in r.meta.get("steps") or [] if isinstance(s, list) and s[:1] == ["wait-recovery"]]
     r.flag(any(x in ("FAIL", "timeout") for x in rec), "faults", "FAIL", "did not stand back up (wait-recovery)")
-    r.flag(fired and "kill-recorder" in kinds and (not rec or set(rec) - {"ok", "FAIL", "timeout"}), "faults",
+    r.flag(kills and "kill-recorder" in kinds and (not rec or set(rec) - {"ok", "FAIL", "timeout"}), "faults",
            "INCONCLUSIVE", "recovery not observed: wait-recovery %s" % (", ".join(map(str, rec)) or "not run"))
     gaps, counts = r.gaps()
     other = sorted(k for k, n in counts.items() if n and k.split(":")[0] not in DOWN + ("after_stop",))  # R2: seal
@@ -319,7 +322,7 @@ def faults(r):
            "faults", "FAIL", "a null_mode gap")
     r.flag(any("mode" in s and dig(s, "s4_mode") in (None, "null") for s in r.samples), "faults", "FAIL",
            "a status.jsonl line with mode null")
-    r.flag(len(gaps) != len(fired), "faults", "FAIL", "%d recorder_down gaps for %d kills" % (len(gaps), len(fired)))
+    r.flag(len(gaps) != len(kills), "faults", "FAIL", "%d recorder_down gaps for %d kills" % (len(gaps), len(kills)))
     for a, b, ms in span:
         ms = ms if isinstance(ms, (int, float)) else (b - a).total_seconds() * 1000 if a and b else None
         r.flag(ms is None or ms >= 2000, "faults", "FAIL", "a recorder_down gap of %s ms, not under 2 s" % ms)
@@ -327,7 +330,7 @@ def faults(r):
 
 def recover(r, gaps):
     for kind in ("kill-watchdog", "kill-recorder"):  # PRD-10 acceptance 11 needs both kills
-        if not any(f.get("kind") == kind and f.get("pid") is not None for f in r.faults):
+        if not fired(r, kind):
             return r.mark("faults", "INCONCLUSIVE", "fault did not fire: %s" % kind)
     if any("goalcup continue" in str(f.get("said")) for f in r.faults):
         return r.mark("faults", "INCONCLUSIVE", "harness lost its terminal")
@@ -342,6 +345,8 @@ def recover(r, gaps):
         r.flag(len({dig(s, name) for s in r.samples} - {None}) > 1, "faults", "FAIL", "the %s changed" % what)
     r.flag(len(gaps) != 1, "faults", "FAIL", "%d recorder_down gaps, the recover row expects 1" % len(gaps))
     seal = dig(r.entry, "s6_seal") or dig(r.status, "s4_seal")
+    if seal not in ("harness_exit", "deadline") and r.meta.get("over_cap") is True:  # section 7: pad sealed it
+        return r.mark("faults", "INCONCLUSIVE", "sealed at the spend cap (seal reason %s)" % seal)
     r.flag(seal not in ("harness_exit", "deadline"), "faults", "FAIL", "seal reason %s" % seal)
 
 def facts(r):

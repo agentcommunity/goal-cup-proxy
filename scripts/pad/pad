@@ -276,6 +276,7 @@ class Run:
         self.box_dir = None  # pad-run's run folder: here, or staged and pushed to the box's ~/run
         self.t0, self.out_root, self.over_cap, self.spender = time.time(), out_root, False, None
         self.usd, self.high, self.models = None, [], []  # the run's priced usage, set by the check step
+        self.usd_live = None  # the last estimate the spend check read: the ledger's fallback for a run left unpriced
         self.spent = threading.Event()  # set when the seal step ends: the spend check stops
         self.price_key = s["gateway_key"] if case == "gateway" else s["key"]
         stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
@@ -321,10 +322,12 @@ class Run:
             except Exception as e:
                 self.line("cleanup", "error", "%s; box %s may be left" % (type(e).__name__, self.name))
             shutil.rmtree(self.tmp, ignore_errors=True)
-            try:  # section 7, the ledger: one line per run, also an interrupted or unpriced one (usd null)
+            try:  # section 7, the ledger: one line per run, also an interrupted or unpriced one (usd null, usd_live its
+                # last live estimate, so the scribe's 200 and 400 USD notices still count a run that spent)
                 append(os.path.join(self.out_root, "spend.jsonl"), {
                     "at": now(), "connector": self.s["harness"], "case": self.case, "mode": self.s["mode"], "key": self.price_key,
-                    "run": self.meta.get("run"), "entry": self.meta.get("entry"), "usd": self.usd, "over_cap": self.over_cap,
+                    "run": self.meta.get("run"), "entry": self.meta.get("entry"), "usd": self.usd, "usd_live": self.usd_live,
+                    "over_cap": self.over_cap,
                     "models": {m["model"]: m["tokens"] for m in self.models}, "priced_high": self.high,
                     "box_minutes": round((time.time() - self.t0) / 60, 1) if self.tried else 0})
             except OSError as e:
@@ -429,21 +432,25 @@ class Run:
                 result, saw, d = self.box("spend", runner_limits(self.s)["spend"] + 120)
             except Exception as e:
                 result, saw, d = "error", type(e).__name__, {}
-            read, models, sealed = result == "ok" and d.get("read") is True, pc.models(d), None
+            # pad-run normalized the S7 models already (pad-run spend): read its own PADSTEP key, never the seam's
+            read, seal_now = d.get("read") is True, None
+            models = [m for m in d.get("models") or [] if isinstance(m, dict) and isinstance(m.get("model"), str)]
             usd, high = price(models, self.pad.get("rates") or {}, self.price_key) if read else (None, [])
             if not read:
                 self.log("spend not read: %s %s" % (result, saw))
-            elif usd >= cap:  # seal-now, then again at every later check until it is sealed
+            else:
+                self.usd_live = round(usd, 2)
+            if read and usd >= cap:  # seal-now, then again at every later check until it is sealed
                 self.over_cap = True
                 try:
-                    sealed, told, _ = self.box("seal-now", runner_limits(self.s)["seal-now"] + 120)
+                    seal_now, told, _ = self.box("seal-now", runner_limits(self.s)["seal-now"] + 120)
                 except Exception as e:
-                    sealed, told = "error", type(e).__name__
-                self.log("spend %.2f USD reached the %g USD cap: seal-now %s %s: %s" % (usd, cap, self.name, sealed, told))
+                    seal_now, told = "error", type(e).__name__
+                self.log("spend %.2f USD reached the %g USD cap: seal-now %s %s: %s" % (usd, cap, self.name, seal_now, told))
             append(os.path.join(self.dir, "watch", "spend.jsonl"), {
                 "at": now(), "read": read, "usage_exit": d.get("exit"), "usd": None if usd is None else round(usd, 2),
-                "priced_high": high, "models": {m["model"]: m["tokens"] for m in models}, "seal_now": sealed})
-            if sealed == "ok":
+                "priced_high": high, "models": {m["model"]: m.get("tokens") for m in models}, "seal_now": seal_now})
+            if seal_now == "ok":
                 return
 
     def end_spend(self):

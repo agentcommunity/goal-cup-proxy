@@ -224,13 +224,13 @@ class CrashRows(unittest.TestCase):
 
     UP = ({"written": {"model_requests": 2}}, {"written": {"model_requests": 5}})  # status samples before and after
 
-    def row(self, kind, gap, samples=UP, steps=(["wait-recovery", "ok", "3:10", ""],)):
+    def row(self, kind, gap, samples=UP, steps=(["wait-recovery", "ok", "3:10", ""],), seal="harness_exit", over_cap=False):
         said = [{"kind": k, "exit": 0, "said": w} for k, w in zip(("recover", "recover", "status"),
                                                                    check.RECOVER + (check.STATUS_RECOVER,))]
         kills = [{"kind": k, "pid": 9, "at": "2026-10-30T10:02:00+00:00"} for k in ("kill-watchdog", "kill-recorder")]
         files = {"meta.json": {"connector": "codex-cli", "case": "direct", "variant": [kind + "@3"], "server": "off",
-                               "keep": True, "commits_since_start": 1, "entry": "e1", "steps": list(steps)},
-                 "verify/check-local.json": {"exit": 1, "entries": [{"entry": "e1", "seal_reason": "harness_exit",
+                               "keep": True, "commits_since_start": 1, "entry": "e1", "steps": list(steps), "over_cap": over_cap},
+                 "verify/check-local.json": {"exit": 1, "entries": [{"entry": "e1", "seal_reason": seal,
                      "counts": {"model_requests": 5, "gaps": {"recorder_down": 1}}, "checks": [
                          {"id": "gap_has_end", "result": "pass"}, {"id": "history_complete", "result": "pass"},
                          {"id": "inv6", "result": "named", "facts": {"gaps": [gap]}}]}]},
@@ -255,6 +255,9 @@ class CrashRows(unittest.TestCase):
         for pid, port, fails in ((7, 5, False), (8, 5, True), (7, 6, True)):
             samples = [{"port": 5, "harness": {"pid": 7}}, {"port": port, "harness": {"pid": pid}}]
             self.assertEqual(self.row("kill-watchdog-recover", gap, samples)["result"] == "FAIL", fails, (pid, port))
+        for over_cap, fails in ((True, False), (False, True)):  # section 7: a seal at the spend cap is not a failure
+            self.assertEqual(self.row("kill-watchdog-recover", gap, seal="command", over_cap=over_cap)["result"] == "FAIL",
+                             fails, over_cap)
 
 
 class SecretCheck(unittest.TestCase):

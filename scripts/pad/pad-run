@@ -80,13 +80,6 @@ def alive(pid):  # a live, not zombie, process
         return False
 
 
-def when(stamp):
-    try:
-        return datetime.datetime.fromisoformat(str(stamp).replace("Z", "+00:00")).timestamp()
-    except ValueError:
-        return 0
-
-
 def kill9(pid):  # SIGKILL, only of a live process whose command line names goalcup: never another process
     try:
         ok = type(pid) is int and pid > 1 and b"goalcup" in open("/proc/%d/cmdline" % pid, "rb").read()
@@ -413,8 +406,8 @@ class Run:
         """kill9 of the recorder in status.json; saves what wait-recovery compares against -> (pid or None, seconds
         since the last written request or None)."""
         st = self.status()
-        pid, last = pc.dig(st, "s4_pid"), when(pc.dig(st, "s4_last"))
-        since = round(time.time() - last, 1) if last else None
+        pid, last = pc.dig(st, "s4_pid"), pc.when(pc.dig(st, "s4_last"))
+        since = round(time.time() - last.timestamp(), 1) if last else None
         if ok := kill9(pid):
             self.st["kill"] = dict(pid=pid, at=time.time(), requests=pc.dig(st, "s4_requests"), off_spans=pc.dig(st, "s4_spans"),
                                    off_ms=pc.dig(st, "s4_down_ms"))
@@ -424,7 +417,7 @@ class Run:
     def kill_recorder(self, m):  # section 3.1; S4 has no open-stream count yet: wait up to 60 s for a request in the last 10 s
         self.need("goalcup", started=True)
         self.at(m)
-        wait(lambda: time.time() - when(pc.dig(self.status(), "s4_last")) < 10, 60, 1)
+        wait(lambda: (t := pc.when(pc.dig(self.status(), "s4_last"))) is not None and time.time() - t.timestamp() < 10, 60, 1)
         pid, since = self.kill_rec(m)
         if not pid:
             raise Step("FAIL", "no live goalcup recorder pid in status.json")
