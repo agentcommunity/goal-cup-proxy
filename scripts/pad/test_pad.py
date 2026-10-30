@@ -224,12 +224,14 @@ class CrashRows(unittest.TestCase):
 
     UP = ({"written": {"model_requests": 2}}, {"written": {"model_requests": 5}})  # status samples before and after
 
-    def row(self, kind, gap, samples=UP, steps=(["wait-recovery", "ok", "3:10", ""],), seal="harness_exit", over_cap=False):
+    def row(self, kind, gap, samples=UP, steps=(["wait-recovery", "ok", "3:10", ""],), seal="harness_exit", over_cap=False,
+            said=check.RECOVER, more=()):
         said = [{"kind": k, "exit": 0, "said": w} for k, w in zip(("recover", "recover", "status"),
-                                                                   check.RECOVER + (check.STATUS_RECOVER,))]
+                                                                   said + (check.STATUS_RECOVER,))]
         kills = [{"kind": k, "pid": 9, "at": "2026-10-30T10:02:00+00:00"} for k in ("kill-watchdog", "kill-recorder")]
         files = {"meta.json": {"connector": "codex-cli", "case": "direct", "variant": [kind + "@3"], "server": "off",
-                               "keep": True, "commits_since_start": 1, "entry": "e1", "steps": list(steps), "over_cap": over_cap},
+                               "keep": True, "commits_since_start": 1, "entry": "e1", "steps": list(steps), "over_cap": over_cap,
+                               "started": "2026-10-30T10:00:00+00:00"},
                  "verify/check-local.json": {"exit": 1, "entries": [{"entry": "e1", "seal_reason": seal,
                      "counts": {"model_requests": 5, "gaps": {"recorder_down": 1}}, "checks": [
                          {"id": "gap_has_end", "result": "pass"}, {"id": "history_complete", "result": "pass"},
@@ -238,7 +240,7 @@ class CrashRows(unittest.TestCase):
                                           "threads": [{"parent": None, "models": {"m": 3}, "wire_calls": 3},
                                                       {"parent": "t0", "models": {"m": 2}, "wire_calls": 2}]},
                  "watch/status.jsonl": [{"at": "2026-10-30T10:0%d:00+00:00" % (4 * i), "status": x} for i, x in enumerate(samples)],
-                 "watch/faults.jsonl": said + kills}
+                 "watch/faults.jsonl": said + kills + list(more)}
         return evaluate(files)
 
     def test_kill_recorder(self):
@@ -258,6 +260,17 @@ class CrashRows(unittest.TestCase):
         for over_cap, fails in ((True, False), (False, True)):  # section 7: a seal at the spend cap is not a failure
             self.assertEqual(self.row("kill-watchdog-recover", gap, seal="command", over_cap=over_cap)["result"] == "FAIL",
                              fails, over_cap)
+
+    def test_seal_at_the_spend_cap_is_not_a_fault_failure(self):  # section 7, ledger T6: the pad's own seal
+        gap = {"start": "2026-10-30T10:00:00Z", "end": "2026-10-30T10:00:01.2Z"}
+        down = [["wait-recovery", "timeout", "0:04", ""]]  # ended by 10:05
+        for at, over_cap, fails in (("10:03", True, False), ("10:03", False, True), ("10:20", True, True)):
+            seal = [{"kind": "seal-now", "exit": 0, "at": "2026-10-30T%s:00+00:00" % at}]
+            self.assertEqual(self.row("kill-recorder", gap, steps=down, over_cap=over_cap, more=seal)["result"] == "FAIL",
+                             fails, (at, over_cap))
+            wgap = {"cause": "watchdog_lost", "start": "2026-10-30T10:01:00Z", "end": "2026-10-30T10:02:00Z"}
+            self.assertEqual(self.row("kill-watchdog-recover", wgap, said=(check.RECOVER[0], "sealed"), over_cap=over_cap,
+                                      more=seal)["result"] == "FAIL", over_cap is False, (at, over_cap))
 
 
 class SecretCheck(unittest.TestCase):

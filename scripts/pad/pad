@@ -409,6 +409,10 @@ class Run:
     def step_box(self, step, limit):
         if self.no_build:
             return "skip", NO_BUILD
+        if step == "start" and not self.spender:  # ledger T6: the cap holds from the moment the prompt may be typed,
+            # whatever start returns or raises; pad-run's spend answers skip "not started" until the paste
+            self.spender = threading.Thread(target=self.spend, daemon=True)
+            self.spender.start()
         result, saw, d = self.box(step, limit + 120)  # pad-run works to `limit`
         if step == "start" and result == "ok" and self.s["server"] != "off":  # off: start pasted too
             self.log("approve " + self.name)  # section 3, 0:03; the device code stays out of the log and the table
@@ -417,9 +421,6 @@ class Run:
                 return "INCONCLUSIVE", got
             result, saw, _ = self.box("paste", limit + 120)
             saw = "approved, prompt pasted" if result == "ok" else saw
-        if step == "start" and result == "ok":
-            self.spender = threading.Thread(target=self.spend, daemon=True)
-            self.spender.start()
         return result, saw
 
     def spend(self):
@@ -498,7 +499,7 @@ class Run:
             self.meta.update(json.load(f))  # pad-run's keys, merged whole; pad's own keys below win
         s, at = self.s, datetime.datetime.fromtimestamp(self.t0, datetime.timezone.utc).isoformat(timespec="seconds")
         use = pc.load(self.dir, "verify/usage/%s.json" % self.meta.get("entry"))  # priced as the spend check does
-        if isinstance(use, dict):
+        if isinstance(pc.dig(use, "s7_models"), list):  # as the live check: no models read is never priced as 0 USD
             self.models = pc.models(use)
             usd, self.high = price(self.models, self.pad.get("rates") or {}, self.price_key)
             self.usd = round(usd, 2)
