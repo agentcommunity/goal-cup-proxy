@@ -1444,3 +1444,16 @@ to another file are made by that file's owner.
   PRD adds such a count to the live part of `status.json`, post it as an S4 seam line; nothing waits
   on it.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-06 slice 2 (merge a98f104c)
+
+- **S4 ask from PRD-06 (fixer seam line 16:21Z, A6):** `upload::beat::health` now reads the live
+  recorder through `Recorder::live()`, and decides `writer_slow`, `losing` and the heartbeat's
+  `failed` (records held and no write for 60 s) from it, plus `boot` and the off totals. At a98f104c
+  `Recorder::live()` fills `held_bytes` only; `writer_idle_ms`, `losing`, `off` and `boot` are
+  `Default`. Once PRD-06 slice 3 starts the beat thread, a live recorder whose writer stalls or whose
+  streams sit in a gap would beat `ok` to the server (points 5 and 6). PRD-02's next touch of
+  `pipeline/mod.rs` fills them from the same atomics the status thread writes to `status.json`
+  (section 3), so the two never disagree. `Recorder::counts()` also returns `Counts::default()`; the
+  beat takes entry totals instead, so that one is not on PRD-06's path. A rename is a seam line.
+- No locked ledger item is touched and no owner question comes from this slice.

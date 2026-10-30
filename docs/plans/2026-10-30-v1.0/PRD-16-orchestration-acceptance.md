@@ -1769,3 +1769,34 @@ kept and now cites BUILD-PROMPT section 5, since B3 no longer carries it.
   unread, so its proxy keys are not checked (named in `unread`); a `--version` line whose number is
   wrapped in punctuation refuses the start.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-06 slice 2 (merge a98f104c)
+
+- `gate fast: PASS in 96s` on a98f104c (nextest summary: 207 tests run, 207 passed). Box runs before
+  the merge: the lane merge at f2987846 (fmt, build, clippy `-D warnings`, goalcup nextest 160/160);
+  reviewers A and B and the breaker at f2987846 and again at f1b4e9a6 (upload tests 25/25 and 26/26,
+  goalcup 161/161); the fixer at 419bdbb6 (fmt, clippy, 175/175). The breaker's throwaway run-1-shape
+  walk (40 then 200 streams, 1.5 MB bursts, a held writer, prune and lost answers) sent 674 MB raw
+  byte for byte with a largest chunk of 26 MB and a peak RSS of 115 MB; it is not a committed test.
+  Nine paths changed, all owned by PRD-06, with no `Cargo.toml` change. All 13 commits in
+  a96d9f71..a98f104c carry both trailer lines.
+- **Size report, PRD-06** (`wc -l` at a98f104c, row "Upload (PRD-06)", 940 src and 1,000 tests). Src
+  1,724 with 176 inline test lines; 1,548 without them (165%), 6 of 9 files; projects to about
+  1,868 (199%) with the last three at their estimates. Tests 984 in files plus 176 inline, 1,160
+  (116%), before the sender, prune and manual tests. The 16:21Z decision line (points 5 and 6)
+  covers this merge; the PRD-06 note asks slices 3 and 4 to cut the inline tests first. The
+  end-of-build report counts the overshoot against the Rust total (about 18,100).
+- **Closed since slice 1:** BR2-r1 (worst case now 30 s) and the loose `server.json` parse. Remove
+  them from the known list of the slice 1 note.
+- **Still open, in build order:** `Policy::from_env` is not called, so `gate full` stays red and no
+  release can be cut until PRD-06 slice 3 merges (PRD-14 slice 3 note). `Recorder::live()` fills
+  `held_bytes` only (PRD-02 note): the live heartbeat's `failed` for a stalled writer and its
+  `losing` state wait on PRD-02, and acceptance proofs that read `recording` from a live run (a held
+  writer, a stream in a gap) cannot pass before both PRD-06 slice 3 and that PRD-02 change are on
+  integration. Every proof that needs a server copy still waits for slice 3.
+- **Acceptance lists as known,** if still open at the end: the every-other-PUT backoff case (lands
+  with `send.rs`), BK1 (a handshake loop with no I/O after a mid-handshake `close_notify`, one line in
+  slice 3), and BK2 (prune deletes the part file before its `.idx`, slice 4).
+- **Housekeeping for the end:** `v1.0/prd-06-upload-mergecheck-tmp` was pushed by mistake (lane log
+  15:59Z) and is still to be removed from origin.
+- No locked ledger item is touched and no owner question comes from this slice.
