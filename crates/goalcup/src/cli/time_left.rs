@@ -49,7 +49,10 @@ fn in_terminal(now: u64) -> Result<String, String> {
     };
     let mut runs = super::runs(&home).into_iter().rev();
     let dir = runs.find(|d| read_json(&super::server_json(d)).is_some_and(open));
-    let name = dir.as_deref().and_then(Path::file_name).and_then(|n| n.to_str());
+    let name = dir
+        .as_deref()
+        .and_then(Path::file_name)
+        .and_then(|n| n.to_str());
     let found = name.and_then(|n| find(&home, Some(n))).ok_or_else(no_run)?;
     let practice = practice(found.server.as_ref());
     line(state::read(&found.entry_dir()).as_ref(), practice, now)

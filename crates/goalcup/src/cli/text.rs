@@ -850,7 +850,10 @@ pub fn upload_line(u: &UploadJson, now: u64, end: bool) -> String {
     let by = by_at.map(local_clock);
     let (err, waiting) = (u.last_error.as_ref(), size_words(u.waiting_bytes));
     let raw = u.confirmed.as_ref().map_or(0, |c| c.raw);
-    let goes = matches!(u.state, Upload::Sending | Upload::CaughtUp | Upload::Waiting);
+    let goes = matches!(
+        u.state,
+        Upload::Sending | Upload::CaughtUp | Upload::Waiting
+    );
     let left = u.waiting_bytes > 0 && (goes || u.state == Upload::Refused);
     let closed = || {
         let on = by.as_ref().map(|b| format!(" on {b}")).unwrap_or_default();
@@ -863,7 +866,10 @@ pub fn upload_line(u: &UploadJson, now: u64, end: bool) -> String {
         return closed();
     }
     if end && goes && u.waiting_bytes > 0 {
-        let before = by.as_ref().map(|b| format!(" before {b}")).unwrap_or_default();
+        let before = by
+            .as_ref()
+            .map(|b| format!(" before {b}"))
+            .unwrap_or_default();
         return format!(
             "Upload: {waiting} still waits on this computer. Run goalcup upload{before}, when you \
              are online. Nothing is lost yet."
@@ -888,7 +894,8 @@ pub fn upload_line(u: &UploadJson, now: u64, end: bool) -> String {
             let since = t(u.last_ok.as_ref()).or(t(err.map(|e| &e.at)));
             let since = since.map(|s| format!(" since {}", local_time(s, false)));
             let why = err.map(|e| format!(" ({})", class_words(e.class)));
-            let rest = (u.waiting_bytes > 0).then(|| format!(" {waiting} waits here and goes up by itself."));
+            let rest = (u.waiting_bytes > 0)
+                .then(|| format!(" {waiting} waits here and goes up by itself."));
             format!(
                 "Upload: not reaching the server{}{}.{} Nothing is lost.",
                 since.as_deref().unwrap_or(" yet"),
@@ -909,7 +916,8 @@ pub fn upload_line(u: &UploadJson, now: u64, end: bool) -> String {
              Nothing more is sent. Write to {SUPPORT_ADDRESS}."
         ),
         Upload::Done if u.keep => {
-            "Upload: done. Every record file is kept on this computer (GOALCUP_KEEP_PARTS).".to_owned()
+            "Upload: done. Every record file is kept on this computer (GOALCUP_KEEP_PARTS)."
+                .to_owned()
         }
         Upload::Done => {
             let n = u.pruned.parts;
@@ -918,7 +926,10 @@ pub fn upload_line(u: &UploadJson, now: u64, end: bool) -> String {
                 format!(" Removed here: {files} the server holds.")
             });
             let whole = size_words(raw);
-            format!("Upload: done. The server holds your whole record ({whole}).{}", removed.unwrap_or_default())
+            format!(
+                "Upload: done. The server holds your whole record ({whole}).{}",
+                removed.unwrap_or_default()
+            )
         }
         Upload::Closed => closed(),
     }
@@ -937,7 +948,11 @@ fn advice(practice: bool) -> &'static str {
 /// The run stops at `stop` (seconds since 1970), as the server last said.
 pub fn time_left(stop: u64, now: u64, practice: bool) -> String {
     match stop.checked_sub(now).filter(|left| *left >= 60) {
-        Some(_) => format!("The run stops {}. {}", end_words(stop, now), advice(practice)),
+        Some(_) => format!(
+            "The run stops {}. {}",
+            end_words(stop, now),
+            advice(practice)
+        ),
         None => format!("Less than a minute left. {}", advice(practice)),
     }
 }

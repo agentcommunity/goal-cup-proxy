@@ -132,9 +132,7 @@ fn bytes_left_at_the_end_name_goalcup_upload_and_upload_by() {
     let entry = part(dir.path());
     put(&entry, "status.json", &sealed());
     let (by, past) = ("2099-11-08T10:00:00Z", "2020-11-08T10:00:00Z");
-    let left = |state: &str, by: &str| {
-        json!({"state": state, "waiting_bytes": 120_000_000, "upload_by": by})
-    };
+    let left = |state: &str, by: &str| json!({"state": state, "waiting_bytes": 120_000_000, "upload_by": by});
     let done = json!({"state": "done", "upload_by": by, "confirmed": {"raw": 95_000_000}});
     let cases = [
         (left("waiting", by), true),
@@ -145,7 +143,11 @@ fn bytes_left_at_the_end_name_goalcup_upload_and_upload_by() {
     ];
     for (p, named) in cases {
         put(&entry, "upload.json", &upload(p.clone()));
-        assert_eq!(end_screen(&entry).unwrap().contains("goalcup upload"), named, "{p}");
+        assert_eq!(
+            end_screen(&entry).unwrap().contains("goalcup upload"),
+            named,
+            "{p}"
+        );
     }
     let clock = text::local_clock(unix_of(by).unwrap());
     put(&entry, "upload.json", &upload(left("sending", by)));
@@ -153,7 +155,14 @@ fn bytes_left_at_the_end_name_goalcup_upload_and_upload_by() {
     let u = upload(left("waiting", by));
     for recorder in [true, false] {
         let cx = live(recorder, false, false, 0);
-        let shown = block(&sealed(), &State::Sealed { at: NOW }, None, Some(&u), &cx, &[]);
+        let shown = block(
+            &sealed(),
+            &State::Sealed { at: NOW },
+            None,
+            Some(&u),
+            &cx,
+            &[],
+        );
         assert_eq!(shown.contains("goalcup upload"), !recorder, "{shown}");
     }
 }
