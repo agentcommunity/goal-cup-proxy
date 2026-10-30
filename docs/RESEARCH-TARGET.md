@@ -45,7 +45,7 @@ tool-output spill collection is not a required fix. Proxy transport/encoding sup
 HTTP/2-only traffic can fail rather than merely go unrecorded. Streaming redaction has known
 semantic-boundary leakage and over-redaction cases. Measure actual effects before widening scope.
 
-Short macOS/Linux Codex and Hermes practices are recorded in [the 22 Oct local test day](research/results/2026-10-22-local-test-day.md).
+Short macOS/Linux Codex and Hermes practices are recorded in [WP0](../TODO.md#wp0-measure).
 Long-run measurements, several platform combinations, and cleaned research delivery remain
 unfinished. Historical measurements are not fresh reproductions. See [architecture](ARCHITECTURE.md),
 [accepted limitations](CHEAT-CHECKLIST.md), and [research report semantics](research/m2-report-format.md).
