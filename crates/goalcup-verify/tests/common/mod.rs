@@ -10,7 +10,9 @@
 use goalcup_format::codec::{Codec, Record};
 use goalcup_format::link::{Chain, ZERO};
 use goalcup_format::read::{open_dir, part_files};
-use goalcup_format::{EndReason, FLAG_FIN, GapReason, Now, PartOptions, PartWriter, Recover};
+use goalcup_format::{
+    EndReason, FLAG_FIN, GapReason, Now, PartOptions, PartWriter, Recover, Recovered,
+};
 use goalcup_format::{StreamKind, index_name, part_name};
 use serde_json::{Map, Value, json};
 use std::collections::{BTreeMap, HashMap};
@@ -318,8 +320,6 @@ pub struct Entry {
     pub boots: Vec<Value>,
     /// The length of every recovery frame's `recorder_down` gap, in ms.
     pub down_ms: Vec<u64>,
-    /// The record clock of the last recovery frame's LINK.
-    down_at: u64,
     sid: u64,
     counts_at: HashMap<u64, Vec<u8>>,
 }
@@ -332,12 +332,19 @@ impl Entry {
 
     /// The same, with wall time starting at `wall0` (a `--live` test passes a time an hour ago).
     pub fn at(name: &str, wall0: u64) -> Self {
+        let mut e = Self::bare(name, wall0);
+        e.event(start(false));
+        e
+    }
+
+    /// The PART alone.
+    fn bare(name: &str, wall0: u64) -> Self {
         let root = tmp(name);
         let dir = root.join(ENTRY);
         let rec = dir.join("rec");
         let clock = Clock { wall0, ns: 0 };
         let w = PartWriter::open(&rec, opts(), ENTRY, BOOT_ID, clock.now()).unwrap();
-        let mut e = Self {
+        Self {
             root,
             dir,
             rec,
@@ -346,12 +353,9 @@ impl Entry {
             tally: Tally::new(0, MONO0),
             boots: vec![],
             down_ms: vec![],
-            down_at: 0,
             sid: 0,
             counts_at: HashMap::new(),
-        };
-        e.event(start(false));
-        e
+        }
     }
 
     /// Writes one record, after tallying it.
@@ -567,27 +571,10 @@ impl Entry {
         w.write(&lost).unwrap();
         drop(w);
         self.idle(down_ms);
-        let now = self.clock.now();
-        let counts = self.counts_at.clone();
-        let count_at = move |seq: u64| counts[&seq].clone();
-        let mut tail = Map::new();
-        tail.insert("cause".into(), cause.into());
-        tail.insert("prev".into(), json!({"signal": 9}));
-        let rc = Recover {
-            entry: ENTRY,
-            boot_id: BOOT_ID,
-            now,
-            durable: None,
-            count_at: &count_at,
-            tail,
-            dead_start: None,
-            seal: None,
-        };
-        let r = PartWriter::recover(&self.rec, opts(), rc).unwrap();
+        let (now, r) = self.recover(cause, None, None);
         let ms = (now.mono_ns - at.mono_ns) / MS;
         self.boots.push(self.tally.count(at.mono_ns));
         self.down_ms.push(ms);
-        self.down_at = now.mono_ns;
         self.w = r.writer;
         self.tally = Tally::new(self.tally.boot + 1, now.mono_ns);
         self.event(start(true));
@@ -643,15 +630,64 @@ impl Entry {
         drop(self.w.take());
         self.idle(down_ms);
         let now = self.clock.now();
-        self.down_ms.push((now.mono_ns - self.down_at) / MS);
-        let tot = totals(&self.boots, &self.down_ms);
-        let seal = json!({"ev": "seal", "reason": "recovered", "exit": null,
-            "harness": "unknown", "workspace_head": null, "dirty": null,
-            "boots": self.boots.len(), "totals": tot});
+        self.down_ms
+            .push((now.mono_ns - self.tally.part_mono) / MS);
+        let seal = recovered_seal(&totals(&self.boots, &self.down_ms), self.boots.len());
+        let (_, r) = self.recover(cause, Some(seal), None);
+        assert!(r.writer.is_none());
+        self.dir
+    }
+
+    /// Both processes die before boot 0's first LINK; `down_ms` later the entry, which left no
+    /// index line, is closed (PRD-01 section 12): recovery starts boot 0 afresh, and the caller
+    /// writes `start`, the `recorder_down` gap and the `recovered` seal. Returns the entry folder.
+    pub fn recovered_before_first_link(name: &str, cause: &str, down_ms: u64) -> PathBuf {
+        let mut e = Self::bare(name, WALL0);
+        let started = e.clock.now();
+        let t = e.clock.tick();
+        let w = e.w.as_mut().unwrap();
+        w.write(&Record::Event {
+            t,
+            json: start(false).to_string().into_bytes(),
+        })
+        .unwrap();
+        drop(e.w.take());
+        e.idle(down_ms);
+        let (now, r) = e.recover(cause, None, Some(started));
+        e.w = r.writer;
+        e.tally = Tally::new(0, now.mono_ns);
+        let write = |e: &mut Self, r: Record| {
+            e.tally.observe(&r);
+            e.w.as_mut().unwrap().write(&r).unwrap();
+        };
+        let t = e.clock.tick();
+        write(&mut e, Record::Event {
+            t,
+            json: start(true).to_string().into_bytes(),
+        });
+        write(&mut e, r.gap_after_start.unwrap());
+        let t = e.clock.tick();
+        let seal = recovered_seal(&totals(&[e.tally.count(t)], &[]), 1);
+        write(&mut e, Record::Event {
+            t,
+            json: seal.to_string().into_bytes(),
+        });
+        e.clock.tick();
+        e.w.take().unwrap().seal(e.clock.now()).unwrap();
+        e.dir
+    }
+
+    /// `PartWriter::recover` now, the gap's tail naming `cause` (and `prev` when it starts a
+    /// boot), closing the entry with `seal` if given.
+    fn recover(&mut self, cause: &str, seal: Option<Value>, dead: Option<Now>) -> (Now, Recovered) {
+        let now = self.clock.now();
         let counts = self.counts_at.clone();
         let count_at = move |seq: u64| counts[&seq].clone();
         let mut tail = Map::new();
         tail.insert("cause".into(), cause.into());
+        if seal.is_none() {
+            tail.insert("prev".into(), json!({"signal": 9}));
+        }
         let rc = Recover {
             entry: ENTRY,
             boot_id: BOOT_ID,
@@ -659,12 +695,10 @@ impl Entry {
             durable: None,
             count_at: &count_at,
             tail,
-            dead_start: None,
-            seal: Some(seal.to_string().into_bytes()),
+            dead_start: dead.map(|d| (d, BOOT_ID)),
+            seal: seal.map(|v| v.to_string().into_bytes()),
         };
-        let r = PartWriter::recover(&self.rec, opts(), rc).unwrap();
-        assert!(r.writer.is_none());
-        self.dir
+        (now, PartWriter::recover(&self.rec, opts(), rc).unwrap())
     }
 
     /// Leaves the entry unsealed, as a crash would: a COUNT, a LINK, both files synced, so the
@@ -674,6 +708,12 @@ impl Entry {
         self.w.take().unwrap().sync().unwrap();
         self.dir
     }
+}
+
+/// A `recovered` seal event with these totals.
+fn recovered_seal(tot: &Value, boots: usize) -> Value {
+    json!({"ev": "seal", "reason": "recovered", "exit": null, "harness": "unknown",
+        "workspace_head": null, "dirty": null, "boots": boots, "totals": tot})
 }
 
 /// A sealed clean entry: launch, exchange, WebSocket, session file, COUNTs.

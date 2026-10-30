@@ -83,6 +83,22 @@ fn recovered_seal_in_a_second_recovery_frame_is_named() {
     assert!(gaps[1]["ms"].as_u64().unwrap() >= 60_000);
 }
 
+/// PRD-01 section 12: both processes die before boot 0's first LINK, so recovery starts boot 0
+/// afresh and the recovered seal follows `start` and the one `recorder_down` gap.
+#[test]
+fn recovered_seal_of_an_entry_with_no_index_line_is_named() {
+    let dir = Entry::recovered_before_first_link("no-index", "killed", 30_000);
+    let (code, v) = check(&dir, &[]);
+    no_fail(&v);
+    assert_eq!(code, 1);
+    assert_eq!(result(&v, "inv6"), "named");
+    assert_eq!(v["entries"][0]["seal_reason"], "recovered");
+    let gaps = item(&v, "inv6")["facts"]["gaps"].as_array().unwrap().clone();
+    assert_eq!(gaps.len(), 1, "{gaps:?}");
+    assert_eq!(gaps[0]["cause"], "killed");
+    assert!(gaps[0]["ms"].as_u64().unwrap() >= 30_000);
+}
+
 #[test]
 fn null_mode_10_minutes_and_watchdog_lost_2_hours_are_named() {
     for (cause, down) in [("null_mode", 10 * 60_000), ("watchdog_lost", 2 * 3_600_000)] {

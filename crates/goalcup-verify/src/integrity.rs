@@ -580,6 +580,9 @@ impl Pass {
                     let cause = tail.get("cause").cloned().unwrap_or(Value::Null);
                     self.down_gaps.push(json!({"cause": cause, "start": wall(*start_wall), "end": wall(*end_wall), "ms": ms}));
                     self.down_after = (self.down_after.0 + 1, self.down_after.1 + ms);
+                    // Every recorder_down gap counts in its recovery frame, the boot-0 head gap
+                    // of an entry that left no index line too (PRD-01 section 12).
+                    self.frame_down += 1;
                     if self.boot_head && self.boot == Some(0) && !self.boot0_gap {
                         self.boot0_gap = true;
                     } else {
@@ -590,7 +593,6 @@ impl Pass {
                             self.fail("inv6", "a recorder_down gap not at the last link", at);
                         }
                         self.pending_down += 1;
-                        self.frame_down += 1;
                     }
                 } else if *sid != 0 {
                     self.gap(*sid, *off, *lost, name, at);
