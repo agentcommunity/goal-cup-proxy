@@ -1694,3 +1694,28 @@ kept and now cites BUILD-PROMPT section 5, since B3 no longer carries it.
 - **Build order unchanged.** The cycle rungs (section 1a, 4 to 6) wait on PRD-10's `seal` and
   `recover`, PRD-05's masker, PRD-09's `usage` and PRD-02's `watchdog::run`.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-10 slice 4 (merge a5d7ddc3)
+
+- `gate fast: PASS in 93s` on the merge (nextest 188 of 188, `test_install.py` 28, pad 16). Thirteen
+  paths changed, all PRD-10 owned, no `Cargo.toml`. All 9 non-merge commits in
+  c4160182..a5d7ddc3^2 carry both trailer lines. `gate full` was not run.
+- **S15 is on integration** (late against H+4). The pad's setup step can now get its isolated home
+  from `goalcup setup --harness <id> --yes`. The cap still cannot seal and the recover row is still
+  not evidence: `seal` and `recover` exit 3 "not built" (PRD-12 note stands).
+- **Size report, PRD-10** (`wc -l` at a5d7ddc3, PRD-00 row "CLI (PRD-10)" about 2,900 src and 1,200
+  tests): src 2,722 (`cli/*.rs` 2,521 plus `main.rs` 201), 94% of the row; `text.rs` 827 against 420,
+  `mod.rs` 467 against 130, `folder.rs` 243 against the 240 the slice 3 note allowed (a three-line cut
+  is named, PRD-10 note), `setup.rs` 236 of 270, `awake.rs` 24 of 150. 1,248 lines are still to come
+  at the table's estimates, projecting about 3,970 (137%), past the 3,190 line. The PRD-10 note keeps
+  the row, asks each later slice to state `text.rs` and `mod.rs` counts in its merge note, and makes
+  the crossing slice bring its own decision line. Tests 1,180 of 1,200 after the trim (697 to 495
+  lines in `cli_status.rs`, `cli_finish.rs` and `cli_common/`).
+- **Build order unchanged.** S8 `watchdog::run` is still on no branch, so `start` and `seal` with
+  `GOALCUP_SERVER=off` still cannot be built. PRD-10's next slice is `time-left` and the upload lines
+  (S9), then the interactive setup.
+- **Acceptance lists as known,** if still open at the end: the WSL1 or Windows-drive check never run
+  in a WSL box; the macOS `caffeinate` probe and `f_fstypename` branch never compiled in a macOS box;
+  `native_walk old_files_are_skipped_and_the_new_one_found_among_five_thousand` failed 1 of 4 runs
+  in a slice 4 box (not touched by that slice; PRD-04's test, in PRD-14's `heavy` group question).
+- No locked ledger item is touched and no owner question comes from this slice.

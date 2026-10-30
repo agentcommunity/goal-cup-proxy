@@ -1358,3 +1358,56 @@ What the pad calls, as merged (PRD-12 note):
   run and its recover row is not evidence until this PRD's slices for them merge. They gate the first
   run with a real key (PRD-16 note).
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-10 slice 4 (merge a5d7ddc3)
+
+- **Built:** S15 `goalcup setup --harness <id> --yes` (`plan` in `$GOALCUP_HOME/homes/<id>`, the
+  `update_off` and `no_prompts` rows written by setup itself, the isolated home printed quoted as the
+  last folder path on stdout, which is what `scripts/pad/pad-run` takes); `setup.json` (`v`,
+  `harness`, and the rows written as file, key and value); `setup` without `--yes` asks, opens and
+  writes nothing, with or without a terminal; `setup --record-host` through `hosts::check`, written to
+  `$GOALCUP_HOME/record-hosts.txt`; the sleep-lock probe `awake::missing` (the lock itself comes with
+  `start`, in `awake.rs`); the WSL1 or Windows-drive check in `folder.rs`, called by setup and by
+  `start` (on the project and on `GOALCUP_HOME`); the test trim of `cli_status.rs` and
+  `cli_finish.rs`; the delete of `skills/goal-cup-setup/`.
+- **Never run:** the WSL check (no WSL box) and the macOS branches (`caffeinate`, `f_fstypename`);
+  the first WSL and macOS runs check them. Listed as known in PRD-16 if still so at the end.
+- **S8 `watchdog::run` is still on no branch** (no `pub fn run` under `src/watchdog` on
+  `v1.0/integration` or `v1.0/prd-02-core` at this replan). The next PRD-10 slice is the one slice 4
+  named: `time-left` and the upload lines in `status` and on the end screen (S9), then the
+  interactive setup (builder-notes step 4). The tier line still lands with the start launch block.
+- **Open nits for the next PRD-10 touch,** none a behaviour change:
+  - A2-n1: `folder.rs` is 243, three past the 240 the slice 3 note allowed. In `wsl()`, fold the two
+    `let windows` lines and the `.any` into one `matches!` on `kind`; that brings it to 240.
+  - A2-n2: `text::server_unreachable` wraps a client error that has its own wording, so the reason
+    reads twice. Pass the inner cause only (point 6, said plainly). No test for it (ledger B10).
+  - B9: `setup.rs` works out each row's file with the same `fill(&row.file, home, Path::new(""))`
+    call as `connector::launch::write_settings`. Until PRD-11 returns the filled file with each row
+    (PRD-11 note), put a one-line comment at that call naming `write_settings`, so the two stay in
+    step.
+- **The `goal-cup-setup` dead link** in `docs/archive/PARTICIPANT-GUIDE-0.6.md:13` is not an owner
+  question: the slice 7 note already rules that PRD-15 keeps it as history. Nothing is asked of
+  PRD-10.
+- **Size** (`wc -l` at a5d7ddc3, PRD-00 row "about 2,900" src, 1,200 tests, the 3,190 line):
+  src 2,722 (`cli/*.rs` 2,521 plus `main.rs` 201): `text.rs` 827 against 420, `mod.rs` 467 against
+  130, `status.rs` 338 against 260, `folder.rs` 243 against 170 (240 allowed), `setup.rs` 236 against
+  270, `log.rs` 202 against 140 with `skill.rs`, `main.rs` 201 against 160, `finish.rs` 142 against 160,
+  `start.rs` 42 of its 340, `awake.rs` 24 of its 150. 468 lines are left under 3,190. The give-back the
+  slice 3 note asked first did not happen in full: `text.rs` gave back 18 lines and then grew by 141,
+  and `mod.rs` grew by 3. Still to write at the table's estimates: 1,248 lines (the rest of `start.rs`
+  298, `approve.rs` 280, `continue_run.rs` 150, the lock in `awake.rs` 126, `push.rs` 110, `seal.rs` and
+  `upload.rs` 90, `recover.rs` 80, `time_left.rs` 80, the interactive part of `setup.rs` 34), plus
+  the messages each adds to `text.rs`. That projects to about 3,970, 137% of the row. **Decision:**
+  the row is not raised here, and the slice whose merge takes the src total past 3,190 brings its
+  own replan `decision` line naming the point each extra part serves (ledger L2), as before. To make
+  the give-back checkable, each later PRD-10 slice states `text.rs` and `mod.rs` line counts before
+  and after in its merge note; `mod.rs` does not grow past 467, and `text.rs` grows only by the new
+  command's own messages. Reviewers found no cut larger than a few lines that keeps behaviour, so the
+  end-of-build report counts the CLI against the row.
+- **Tests:** 1,180 of 1,200 (`cli_status.rs` 391 to 247, `cli_finish.rs` 269 to 164, `cli_common/` 37
+  to 84; `cli_folder.rs` 223, `cli_setup.rs` 198 against about 150, `cli_log.rs` 136,
+  `cli_commands.rs` 128). 140 lines are left under 1,320 for `cli_push`, `cli_continue`,
+  `cli_recover`, `cli_time_left`, `cli_start`, and HF4 and P14 in `cli_commands`. Each new case is
+  one of this PRD's test list or a PRD-17 row and builds through `cli_common/`; a merge past 1,320
+  brings a replan `decision` line.
+- No locked ledger item is touched and no owner question comes from this slice.

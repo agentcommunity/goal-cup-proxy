@@ -175,11 +175,13 @@ fn a_held_home_refuses_and_the_version_probe_never_holds_the_start() {
     assert!(!second.lock.is_held() && !yaml.exists());
     drop((first, second));
     assert!(finished("hermes-cli", &e, d).lock.is_held());
-    let (version, refusal) = probe(d, "echo; echo '  fakeharness 2.1.0  '");
-    assert_eq!(version.as_deref(), Some("fakeharness 2.1.0"));
+    let (version, refusal) = probe(d, "echo; echo '  fakeharness v2.1.0  '");
+    assert_eq!(version.as_deref(), Some("fakeharness v2.1.0"));
     assert_eq!(refusal, None);
-    let refusal = probe(d, "echo fakeharness 1.9.0").1;
-    assert!(matches!(refusal, Some(Refusal::VersionMismatch { .. })));
+    for line in ["echo fakeharness 1.9.0", "echo fakeharness 1.2.0"] {
+        let refusal = probe(d, line).1;
+        assert!(matches!(refusal, Some(Refusal::VersionMismatch { .. })));
+    }
     assert_eq!(probe(d, "sleep 30"), (None, None));
 }
 
@@ -220,4 +222,40 @@ fn settings_are_typed_keep_other_keys_and_never_follow_a_link() {
     assert_eq!(text, want);
     assert!(connector::write_settings(&home, &rows).is_empty());
     assert_eq!(std::fs::read_to_string(&yaml).unwrap(), text);
+}
+
+#[test]
+fn with_home_swapped_a_login_shell_finds_goalcup() {
+    let dir = tempfile::tempdir().unwrap();
+    let (d, bin) = (dir.path(), dir.path().join("bin"));
+    std::fs::create_dir_all(&bin).unwrap();
+    let fake = bin.join("goalcup");
+    std::fs::write(&fake, "#!/bin/sh\n").unwrap();
+    std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let file = d.join("home-swap.toml");
+    let toml = "id = \"home-swap\"\nname = \"H\"\nprogram = \"sh\"\nhome = { HOME = \"{home}\" }\n";
+    std::fs::write(&file, toml).unwrap();
+    let c = connector::load(file.to_str().unwrap(), None).unwrap();
+    let (e, home, profile) = (env(&bin, &[]), d.join("home"), d.join("home/.profile"));
+    let found = |plan: LaunchPlan| {
+        let mut sh = std::process::Command::new("sh");
+        // PATH reset as Debian's /etc/profile does: only `.profile` can put the handed one back.
+        sh.env_clear().envs(&plan.env).env("PATH", "/usr/bin:/bin");
+        let out = sh
+            .args(["-lc", "command -v goalcup"])
+            .output()
+            .unwrap()
+            .stdout;
+        String::from_utf8(out).unwrap()
+    };
+    let want = format!("{}\n", fake.display());
+    assert!(found(connector::plan(&c, &e, &home)).ends_with(&want));
+    // goalcup's own `.profile` is replaced; anything else is kept.
+    let header = std::fs::read_to_string(&profile).unwrap();
+    let header = header.lines().next().unwrap().to_owned();
+    std::fs::write(&profile, format!("{header}\nexport PATH=/nowhere\n")).unwrap();
+    assert!(found(connector::plan(&c, &e, &home)).ends_with(&want));
+    std::fs::write(&profile, "# mine\n").unwrap();
+    drop(connector::plan(&c, &e, &home));
+    assert_eq!(std::fs::read_to_string(&profile).unwrap(), "# mine\n");
 }
