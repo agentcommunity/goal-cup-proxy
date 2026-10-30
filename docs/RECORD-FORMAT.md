@@ -194,8 +194,8 @@ was still open (`cut_at_seal` gaps and ends), an `after_stop` GAP if needed, the
 - **Recovery** after a crash: drop index lines past the part file's length (and, after a reboot,
   past `cursors.json`); delete a part file with no index line left; cut the last part file at its
   last line's `c_end`. If that line is `L`, close the frame by hand with the 3 bytes `01 00 00`
-  (`ZSTD_END_BLOCK`, an empty last raw block). Then add a recovery frame: the dead boot's COUNT, a
-  `recorder_down` GAP, a LINK and an `R` line. The next boot starts a new part file. An entry
+  (`ZSTD_END_BLOCK`, an empty last raw block). Then add a recovery frame: the dead boot's COUNT (unless an
+  earlier recovery frame holds it), a `recorder_down` GAP, a LINK and an `R` line. The next boot starts a new part file. An entry
   already sealed is left as it is.
 
 ## Invariants
