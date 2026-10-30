@@ -484,7 +484,7 @@ mod tests {
             &identity,
         );
         assert_eq!(value_of(&out, ":authority"), "****@h.example");
-        let native = json!({"path": "/home/u/.codex/sessions/2026/rollout-1.jsonl"});
+        let native = json!({"path": "/home/u/.agent/sessions/2026/rollout-1.jsonl"});
         assert_eq!(run(native.clone(), &[], &[], &identity), native);
     }
 
