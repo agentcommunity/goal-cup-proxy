@@ -1057,3 +1057,14 @@ PRD-01, PRD-02, PRD-04, PRD-05 and PRD-11 as they now stand, and the code. No lo
 | G3-X41 | Applied (see G2-07) |
 | R3a, R3b, T4 carried in | R3a: the null-mode status line no longer says "failed 3 times in a row"; it says goalcup passes traffic unrecorded for now and tries again at most 5 minutes apart until the run ends. R3b: new command `goalcup recover` (section 1 row, section 3.2: checks for an unsealed entry, no live watchdog, no live recorder, a live harness, a free port; success and refusal lines), the both-dead state line splits into "Run: goalcup recover" while the harness is alive and "goalcup continue" once it is gone, the stale row and `continue` defer to it, help footer, message list, `recover.rs` (80 lines), risk row, builder trap, acceptance 11 and `cli_recover.rs`; ask N9 to PRD-02 for the key file and the recover entry. T4: acceptance says no proof calls an outside API; acceptance 11 passes from the record only; the history check stays PRD-12's |
 | B10 sweep (30 Oct) | Applied. `cli_finish.rs` checks the "nothing was lost" claim is present or absent, never the sentence (PRD-14 section 2) |
+
+## Amendments
+
+### 2026-10-30, replan after PRD-17 phase 0 slice (merge 1423f8f9)
+
+- **Two cases the lessons gate waits on** (lessons log 10:45Z; `LESSONS.md` marks them `(name
+  pending)`). Name each in the night log when written; the lessons lane puts the name in
+  `LESSONS.md`:
+  - PRD-17 SC1 (`cli_folder.rs`): a project folder inside `$GOALCUP_HOME`, or one that holds it,
+    also through a symlink, is refused (checked on the spelled and the resolved path).
+  - PRD-17 SC6 (`cli_finish.rs`): a `status.json` with no seal never prints the finished line.

@@ -950,3 +950,22 @@ kept and now cites BUILD-PROMPT section 5, since B3 no longer carries it.
   (26). Scripts: `fetch-run.sh` 369 (was 349) and `test_fetch_run.py` 364 (was 695), 733 of the
   "about 900" shared with the gate, release and packaging. `docs/UPLOAD-API.md` 577 (was 596). By the
   11:20Z decision, overage alone is a nit.
+
+### 2026-10-30, replan after PRD-17 phase 0 slice (merge 1423f8f9)
+
+- **A heavy test binary's merge carries one line in PRD-14's `.config/nextest.toml`.** Group
+  `heavy` starts empty (nextest refuses a filter that matches no binary; PRD-14 gate lane, integrator
+  log 10:52Z), so the merge that brings `lessons_launch.rs`, a `watchdog_*`, `e2e_*`,
+  `pipeline_restart`, `pipeline_stall`, `pipeline_many_streams`, `proxy_connect`, `proxy_restart`
+  or `native_walk` binary adds its name to the heavy override. Under merge rule 1 that is a seam
+  change: the integrator reads the PRD-14 lane's 10:52Z note as its approval for that one override
+  line only; any other edit to the file needs a PRD-14 line in the log. Without it a kill test runs
+  in parallel with the others.
+- **Old-gate stall, now gone:** the docs-only `LESSONS.md` slice failed `gate fast` from 10:54Z to
+  11:35Z on the old `scripts/check-version.py` over plan docs, not on its own file, until PRD-14's gate
+  merged. With PRD-14 on integration, a docs-only slice passes (`gate fast: PASS in 59s` on 1423f8f9).
+- **Findings raised on a fix after it merged** (A7, B7 on `LESSONS.md`, both nits) go to the owner
+  lane's next slice through its Amendments note, not a separate merge request.
+- **Size report, PRD-17 phase 0 slice** (`wc -l` on integration at 1423f8f9): 0 lines of PRD-17 code
+  against the shared lessons and test-support tests row of 3,000 (PRD-00 "Size budget"); none of that
+  row is on integration yet. `LESSONS.md` 197 lines of docs, outside the budget.
