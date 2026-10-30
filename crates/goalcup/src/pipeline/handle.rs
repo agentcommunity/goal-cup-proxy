@@ -44,7 +44,6 @@ impl BitOr for OpenFlags {
     }
 }
 
-
 /// One stream, owned by one task; not `Clone`. Nothing blocks and nothing returns a value the
 /// caller must act on. Dropped without `end()`, the stream ends `interrupted`.
 pub struct StreamHandle {
@@ -94,7 +93,8 @@ impl StreamHandle {
     /// After the seal's stop a call on this stream only counts (PRD-02 section 11 step 2).
     pub(super) fn stopped(&self) -> bool {
         let i = &self.rec.inner;
-        i.all_stopped.load(Ordering::Acquire) || (self.wire && i.wire_stopped.load(Ordering::Acquire))
+        i.all_stopped.load(Ordering::Acquire)
+            || (self.wire && i.wire_stopped.load(Ordering::Acquire))
     }
 
     /// One piece; moves the offset by its length, written or dropped.
@@ -149,7 +149,10 @@ impl StreamHandle {
         if self.stopped() {
             // The seal writes what is still open on this stream; only the live count goes.
             if self.gap.take().is_some() {
-                self.rec.inner.streams_in_gap.fetch_sub(1, Ordering::Relaxed);
+                self.rec
+                    .inner
+                    .streams_in_gap
+                    .fetch_sub(1, Ordering::Relaxed);
             }
             return;
         }
@@ -241,7 +244,10 @@ impl StreamHandle {
             lost: Some(gap.lost),
             tail: Some(json!({"guard": "held_bytes", "limit": limit})),
         });
-        self.rec.inner.streams_in_gap.fetch_sub(1, Ordering::Relaxed);
+        self.rec
+            .inner
+            .streams_in_gap
+            .fetch_sub(1, Ordering::Relaxed);
     }
 }
 

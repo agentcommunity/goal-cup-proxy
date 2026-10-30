@@ -34,11 +34,7 @@ pub fn harden() {
 pub fn panic_hook() {
     std::panic::set_hook(Box::new(|info| {
         let line = match info.location() {
-            Some(at) => format!(
-                "goalcup: internal error at {}:{}\n",
-                at.file(),
-                at.line()
-            ),
+            Some(at) => format!("goalcup: internal error at {}:{}\n", at.file(), at.line()),
             None => "goalcup: internal error\n".to_string(),
         };
         let _ = std::io::stderr().lock().write_all(line.as_bytes());
