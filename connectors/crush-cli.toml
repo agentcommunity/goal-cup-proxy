@@ -1,0 +1,21 @@
+# Crush 0.99.0, checked against github.com/charmbracelet/crush (README at v0.99.0: configuration, environment,
+# Hyper, permissions) and the 0.99.0 release binary and source. The JSON config files are hinted; a crushrc is
+# Bash, so a provider added there is not. The session database sits in the workspace (data_directory, --data-dir).
+id = "crush-cli"
+name = "Crush"
+program = "crush"
+resume = ["--continue"]
+home = { XDG_CONFIG_HOME = "{home}/.config", XDG_DATA_HOME = "{home}/.local/share", XDG_STATE_HOME = "{home}/.local/state", XDG_CACHE_HOME = "{home}/.cache" }
+unset = ["CRUSH_CLIENT_SERVER", "CRUSH_GLOBAL_CONFIG", "CRUSH_GLOBAL_DATA"]
+host_hints = [
+  { file = "{home}/.config/crush/crush.json", key = "providers.*.base_url" },
+  { file = "{home}/.local/share/crush/crush.json", key = "providers.*.base_url" },
+  { file = "{workspace}/crush.json", key = "providers.*.base_url" },
+  { file = "{workspace}/.crush.json", key = "providers.*.base_url" },
+  { file = "{workspace}/.crush/crush.json", key = "providers.*.base_url" },
+]
+hint_env = ["HYPER_URL"]
+secret_files = [
+  "{home}/.local/share/crush/crush.json", "{home}/.config/crush/crush.json", "{workspace}/.crush/crush.json",
+]
+native = [{ name = "db", root = "{workspace}/.crush", pattern = "crush.db*", form = "final" }]
