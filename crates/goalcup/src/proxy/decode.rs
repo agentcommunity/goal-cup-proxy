@@ -557,7 +557,8 @@ struct Brotli {
 /// of the body went out yet, [`Brotli::feed`] then answers `Halt::Window` and the state, with its
 /// memory, is dropped at once. A refused body is so over the guard for a moment by up to its
 /// declared window, and refusals on several worker threads stack: the transient is bounded by
-/// worker threads x 16 MiB, which PRD-02's margin between `room()` and its soft guard holds.
+/// worker threads x 16 MiB. PRD-02's margin between `room()` and its soft guard is a quarter of
+/// soft, so it holds that transient only when the soft guard is at least 64 MiB x worker threads.
 struct BrotliHeap {
     rec: Recorder,
     over: Option<u64>,
@@ -674,8 +675,9 @@ impl Brotli {
 /// HTTP `zstd` (RFC 8878 frames, RFC 9659 window limit), one frame or several in a row. The body
 /// is complete when its last frame is. Each frame's window is read from its header before the
 /// decoder sees it, and counted whole with [`ZSTD_STREAM_OVERHEAD`]: libzstd allocates its window
-/// buffer at the frame's window size when the frame starts, whatever the output so far. An RSS reading that looks smaller only
-/// shows pages not yet touched; do not trim this count from it (nor brotli's, [`BrotliHeap`]).
+/// buffer at the frame's window size when the frame starts, whatever the output so far. An RSS
+/// reading that looks smaller only shows pages not yet touched; do not trim this count from it
+/// (nor brotli's, [`BrotliHeap`]).
 struct Zstd {
     /// Built at the first frame, once its window is counted.
     z: Option<zstd::stream::raw::Decoder<'static>>,
