@@ -72,7 +72,10 @@ impl StreamHandle {
     /// One WebSocket piece; `fin` marks a message end.
     pub fn ws(&mut self, t: Mono, opcode: u8, fin: bool, bytes: Bytes) {
         let n = bytes.len() as u64;
-        collect!(self.rec, Call::Ws(self.sid, t, self.off, opcode, fin, bytes));
+        collect!(
+            self.rec,
+            Call::Ws(self.sid, t, self.off, opcode, fin, bytes)
+        );
         self.off += n;
     }
 
