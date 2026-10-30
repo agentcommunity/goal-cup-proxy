@@ -1,9 +1,9 @@
-// Handlers for the run-level calls: open, receipt, abandon, position, seal.
-// The chunk upload is in chunks.ts. Contract: docs/UPLOAD-API.md.
+// Handlers for the run-level calls: open, continue, receipt, abandon, position, heartbeat, and the
+// seal the server makes by itself. The chunk upload is in chunks.ts. Contract: docs/UPLOAD-API.md.
 
 import type { Auth } from "./auth.ts";
 import type { Ctx } from "./context.ts";
-import { type EntryRow, type MachineFacts, type RecordingState, type RunMode, type RunRow, type Vitals, boundCredentialExpiry, endsAt, isPastClose, isPastEnd, isReplaced, statusAt } from "./db.ts";
+import { type EntryRow, type MachineFacts, type RecordingState, type RunMode, type Counts, type HeartbeatVitals, type RunRow, boundCredentialExpiry, endsAt, isPastClose, isPastEnd, isReplaced, statusAt } from "./db.ts";
 import { ApiError, closed, conflict, json, malformed, notFound, tooLarge } from "./errors.ts";
 import { githubHeaders } from "./github.ts";
 import {
@@ -17,16 +17,11 @@ import {
   newId,
   proxyVersionField,
   readBodyCapped,
-  sha256Hex,
   strField,
   versionTriple,
 } from "./util.ts";
 
 const JSON_BODY_MAX = 64 * 1024;
-const SEAL_DOC_MAX = 16 * 1024 * 1024; // each document, bytes
-const TUNNELS_MAX = 8 * 1024 * 1024; // the sealed-connection list, bytes
-const TUNNELS_FORMAT = "goalcup-tunnels-v1"; // the list's first line's format
-const SEAL_BODY_MAX = 2 * SEAL_DOC_MAX + TUNNELS_MAX + JSON_BODY_MAX; // two documents and the list, plus the JSON around them
 
 /**
  * Read a JSON object body of at most `max` bytes. The raw bytes and the decoded text live only
@@ -45,43 +40,6 @@ export async function readJson(request: Request, max: number): Promise<Record<st
     throw malformed("The body is not valid JSON.");
   }
   return asObject(parsed, "The body");
-}
-
-/**
- * Take one document string out of the parsed body as UTF-8 bytes, and remove the string from the
- * body so it can be freed: a seal carries two documents of up to 16 MiB and a list of up to 8 MiB,
- * and the Worker has 128 MB. The optional `check` runs on the text after the size check; if it
- * throws, the request is refused, so the sealed-connection list's first-line rule covers repeat
- * seals too.
- */
-function takeDocument(body: Record<string, unknown>, name: string, max = SEAL_DOC_MAX, check?: (text: string) => void): Uint8Array {
-  const text = body[name];
-  if (typeof text !== "string" || text === "") throw malformed(`${name} must be a non-empty string.`);
-  if (!text.isWellFormed()) throw malformed(`${name} is not well-formed Unicode.`);
-  delete body[name];
-  const bytes = new TextEncoder().encode(text);
-  if (bytes.length > max) throw tooLarge(`${name} is over ${max / (1024 * 1024)} MiB.`);
-  check?.(text);
-  return bytes;
-}
-
-/**
- * A sealed-connection list must start with its own format line: a JSON object whose `format` is
- * `goalcup-tunnels-v1` and whose `entry_id` is the entry the seal names. The keys are read, not
- * the bytes: the client's key order is not part of the format.
- */
-function checkTunnelList(text: string, entryId: string): void {
-  const first = text.split("\n", 1)[0] ?? "";
-  let head: unknown;
-  try {
-    head = JSON.parse(first);
-  } catch {
-    throw malformed(`tunnels_jsonl must start with its format line, ${TUNNELS_FORMAT} for this entry.`);
-  }
-  const fields = typeof head === "object" && head !== null && !Array.isArray(head) ? (head as Record<string, unknown>) : {};
-  if (fields.format !== TUNNELS_FORMAT || fields.entry_id !== entryId) {
-    throw malformed(`tunnels_jsonl must start with its format line, ${TUNNELS_FORMAT} for this entry.`);
-  }
 }
 
 /** A run and one of its entries. */
@@ -135,7 +93,7 @@ function answerStop(ctx: Ctx, run: RunRow) {
   return { stop, deadline_at: run.deadline_at, seconds_left: secondsLeft(run, now), reason };
 }
 
-// ---- D70: the minimum competition version, and --dev -------------------------------------
+// ---- D70: the minimum goalcup version, and --dev ------------------------------------------
 
 export const INSTALL_LINE = "curl -fsSL https://github.com/agentcommunity/goal-cup-proxy/releases/latest/download/install.sh | sh";
 const DEV_COMPETES = "A --dev run never enters the competition. Start without --dev.";
@@ -147,11 +105,12 @@ function isBelow(a: [number, number, number], b: [number, number, number]): bool
 }
 
 /**
- * A competition start (a device request or an open) from a goalcup older than MIN_COMPETITION_VERSION
+ * A start in any mode (a device request or an open) from a goalcup older than MIN_COMPETITION_VERSION
  * is 403, and from one whose version is unknown while a minimum is set. A minimum that is not
- * `x.y.z` is 500 misconfigured, at these two calls only. `sent` is the version string as the client sent it.
+ * `x.y.z` is 500 misconfigured, at these two calls only. `continue` is never checked (D70): a run
+ * already open finishes on the goalcup it began with. `sent` is the version string as the client sent it.
  */
-export function requireCompetitionVersion(ctx: Ctx, sent: string): void {
+export function requireMinimumVersion(ctx: Ctx, sent: string): void {
   const min = ctx.cfg.minCompetitionVersion;
   if (min.kind === "none") return;
   if (min.kind === "malformed") {
@@ -160,7 +119,7 @@ export function requireCompetitionVersion(ctx: Ctx, sent: string): void {
   }
   const have = versionTriple(sent);
   const older = have === null || isBelow(have, min.v);
-  if (older) throw new ApiError(403, "forbidden", `This goalcup (${sent}) is too old for the cup. Update it when no run is open: ${INSTALL_LINE}`);
+  if (older) throw new ApiError(403, "forbidden", `This goalcup (${sent}) is older than this server accepts (${min.v.join(".")}). Update it: ${INSTALL_LINE}`);
 }
 
 /** `dev` on a run in this mode: 403 for a competition run. Practice and test runs count for nothing, so anyone may use it there. */
@@ -179,13 +138,21 @@ function connectorFields(b: Record<string, unknown>) {
   if (!/^[A-Za-z0-9._:-]+$/.test(session_id)) throw malformed("session_id has characters a session id never has.");
   return {
     connector_id: strField(b, "connector_id", 128),
-    manifest_sha256: hexField(b, "manifest_sha256"),
-    connector_dir_sha256: hexField(b, "connector_dir_sha256"),
+    ...connectorDigest(b),
     workspace: strField(b, "workspace", 4096),
     session_id,
     harness_version: strField(b, "harness_version", 64),
     tracer_version: proxyVersionField(b),
   };
+}
+
+/**
+ * `connector_sha256`: the SHA-256 of the connector file the client ran. The database keeps two
+ * NOT NULL digest columns from before; the one value goes into both, so no migration is needed.
+ */
+function connectorDigest(b: Record<string, unknown>): { manifest_sha256: string; connector_dir_sha256: string } {
+  const digest = hexField(b, "connector_sha256");
+  return { manifest_sha256: digest, connector_dir_sha256: digest };
 }
 
 /** `machine`, if sent: a flat object of strings, numbers, booleans and nulls, at most 4 KiB. Null is absent. */
@@ -225,7 +192,7 @@ export async function openRun(ctx: Ctx, auth: Auth, request: Request): Promise<R
     throw conflict(OPENED_ALREADY);
   }
 
-  if (auth.mode === "competition") requireCompetitionVersion(ctx, fields.tracer_version);
+  requireMinimumVersion(ctx, fields.tracer_version);
   if (dev) requireDevAllowed(auth.mode);
 
   // A practice run judges nothing, so its repository is never asked about: 0.7 practice runs all
@@ -433,6 +400,7 @@ export async function getPosition(ctx: Ctx, member: string, runId: string, reque
     last_ack: entry.last_ack,
     stop: isPastEnd(run, ctx.now()),
     final: entry.final,
+    sealed: entry.sealed_at !== null,
   });
 }
 
@@ -456,7 +424,7 @@ export async function heartbeat(ctx: Ctx, member: string, runId: string, request
     throw malformed('recording must be "ok", "gaps", "failed" or "unknown".');
   }
   const model_requests = b.model_requests == null ? null : uintField(b, "model_requests");
-  const vitals = vitalsField(b, runId);
+  const vitals = countsField(b, runId);
   const { run, entry } = await requireRun(ctx, member, runId, entry_id);
   // An abandoned or closed run accepts nothing more, a final heartbeat included.
   requireAccepting(ctx, run);
@@ -478,9 +446,14 @@ export async function heartbeat(ctx: Ctx, member: string, runId: string, request
   });
   switch (result) {
     case "recorded":
+      return json(200, { ...answerStop(ctx, run), sealed: entry.sealed_at !== null });
     case "final_committed":
-    case "final_existing":
-      return json(200, answerStop(ctx, run));
+    case "final_existing": {
+      // The end is committed at (seq, head): seal it now if the server already holds the chain up
+      // to it. If not, the chunk that completes it seals it (chunks.ts).
+      const sealed = entry.sealed_at !== null || (await trySeal(ctx, member, runId, entry.entry_id, head));
+      return json(200, { ...answerStop(ctx, run), sealed });
+    }
     case "final_conflict":
       throw conflict("A different end of the run is already committed, or the server already holds a different chain than this final heartbeat names.");
     case "closed":
@@ -496,142 +469,70 @@ function uintField(o: Record<string, unknown>, name: string, label: string = nam
   return v;
 }
 
-const VITAL_COUNTS = ["disk_free_bytes", "rss_bytes", "cpu_ms", "open_files"] as const;
+/** The most bytes a heartbeat's `counts` may take as JSON, and the longest string value in it. */
+const COUNTS_MAX_BYTES = 2048;
+const COUNT_STRING_MAX_BYTES = 64;
 
 /**
- * `vitals`, if sent: an object of the known fields, each optional, null meaning absent. Keys the
- * server does not know are dropped (a newer goalcup may send more). Vitals never cost a heartbeat
- * (it is what keeps the run alive, D64): a known field of the wrong type is dropped, and a `vitals`
- * that is not an object, or an `agent_paused` other than "disk" or null, drops the whole vitals, so
- * the heartbeat says nothing about a pause (neither starts nor ends one). Each drop is a log line
- * `vitals-dropped <field> <run_id>`, without the value. Only the known fields, nulls left out, go further.
+ * `counts`, if sent, as the heartbeat stores it: `{"counts": <counts>}`. Nested under one key, so no
+ * key the client chose sits at the top level of the stored object. The server fixes no key list;
+ * valid is a flat object whose values are whole numbers, strings of at most 64 bytes, booleans or
+ * nulls, at most 2 KiB as JSON. Counts never cost a heartbeat (it is what keeps the run alive, D64):
+ * a bad `counts` is dropped, the heartbeat stores `{"counts_dropped": <its length as JSON>}`, and one
+ * log line `counts-dropped <run_id>` says so, without the value. Null or absent: nothing (null).
  */
-function vitalsField(b: Record<string, unknown>, runId: string): Vitals | null {
-  const dropped = (field: string) => console.warn(`vitals-dropped ${field} ${runId}`);
-  const v = b.vitals;
-  if (v == null) return null;
-  if (typeof v !== "object" || Array.isArray(v)) {
-    dropped("vitals");
-    return null;
-  }
-  const got: Record<string, unknown> = { ...v };
-  if (got.agent_paused != null && got.agent_paused !== "disk") {
-    dropped("vitals.agent_paused");
-    return null;
-  }
-  const out: Vitals = {};
-  if (got.agent_paused === "disk") out.agent_paused = "disk";
-  for (const name of VITAL_COUNTS) {
-    const n = got[name];
-    if (n == null) continue;
-    if (typeof n === "number" && Number.isSafeInteger(n) && n >= 0) out[name] = n;
-    else dropped(`vitals.${name}`);
-  }
-  if (typeof got.disk_short === "boolean") out.disk_short = got.disk_short;
-  else if (got.disk_short != null) dropped("vitals.disk_short");
-  return out;
+function countsField(b: Record<string, unknown>, runId: string): HeartbeatVitals | null {
+  const counts = b.counts;
+  if (counts == null) return null;
+  const size = utf8Length(JSON.stringify(counts));
+  if (size <= COUNTS_MAX_BYTES && isFlatCounts(counts)) return { counts };
+  console.warn(`counts-dropped ${runId}`);
+  return { counts_dropped: size };
 }
 
-// ---- POST /v1/runs/{id}/seal --------------------------------------------------------------
-
-const SEND_FINAL_FIRST = "Send the final heartbeat first: a seal needs the end of the entry committed.";
-const CHAIN_BEHIND = "The server does not hold the chain up to the end the final heartbeat committed yet; read the position and upload the rest.";
-
-export async function sealRun(ctx: Ctx, member: string, runId: string, request: Request): Promise<Response> {
-  const b = await readJson(request, SEAL_BODY_MAX);
-  const entry_id = b.entry_id;
-  if (!isEntryId(entry_id)) throw malformed("entry_id must be e and 16 lowercase hex digits.");
-  const sealBytes = takeDocument(b, "seal_json");
-  const baselineBytes = takeDocument(b, "baseline_json");
-  // The sealed-connection list (`goalcup-tunnels-v1`), optional: a side artifact kept beside the
-  // seal and outside the chain. It never takes part in the repeat or conflict rule below.
-  const tunnelsBytes = b.tunnels_jsonl === undefined ? null : takeDocument(b, "tunnels_jsonl", TUNNELS_MAX, (text) => checkTunnelList(text, entry_id));
-  const { run, entry } = await requireRun(ctx, member, runId, entry_id);
-  const prefix = `traces/${run.event_id}/${run.run_id}/${entry.entry_id}`;
-
-  const sealSha = await sha256Hex(sealBytes);
-  const baselineSha = await sha256Hex(baselineBytes);
-
-  // Already sealed: same documents is a repeat (200), different documents is a conflict.
-  if (entry.sealed_at !== null) {
-    if (entry.seal_sha256 === sealSha && entry.baseline_sha256 === baselineSha) {
-      // A repeat may be the retry of a seal whose list was not kept; one already kept stays.
-      await keepTunnels(ctx, prefix, tunnelsBytes);
-      return json(200, { status: "sealed", run_status: run.status });
-    }
-    throw conflict("This entry is sealed with different documents.");
+function isFlatCounts(v: unknown): v is Counts {
+  if (typeof v !== "object" || v === null || Array.isArray(v)) return false;
+  for (const [key, value] of Object.entries(v)) {
+    if (!key.isWellFormed()) return false;
+    const ok =
+      value === null ||
+      typeof value === "boolean" ||
+      (typeof value === "number" && Number.isSafeInteger(value) && value >= 0) ||
+      (typeof value === "string" && value.isWellFormed() && utf8Length(value) <= COUNT_STRING_MAX_BYTES);
+    if (!ok) return false;
   }
-  requireAccepting(ctx, run);
-
-  // A seal needs the end the final heartbeat committed, and the chain held all the way to it. (The
-  // chain cannot grow past the committed end, so a check against this snapshot cannot be
-  // overtaken; the database checks it again in the step that seals.)
-  if (entry.final === null) {
-    if (isPastEnd(run, ctx.now())) {
-      throw new ApiError(503, "awaiting_final", "Send the final heartbeat before sealing a run past its end.", { "retry-after": String(FINAL_RETRY_AFTER) });
-    }
-    throw conflict(SEND_FINAL_FIRST);
-  }
-  if (entry.next_seq - 1 !== entry.final.seq || entry.head !== entry.final.head) throw conflict(CHAIN_BEHIND);
-
-  // Store the documents first, under names that contain their hash (so they can never be
-  // overwritten with different content), then record the seal.
-  const sealKey = `${prefix}/seal-${sealSha}.json`;
-  const baselineKey = `${prefix}/baseline-${baselineSha}.json`;
-  await putDocument(ctx, sealKey, sealBytes, sealSha);
-  await putDocument(ctx, baselineKey, baselineBytes, baselineSha);
-  await keepTunnels(ctx, prefix, tunnelsBytes);
-
-  const r = await ctx.db.sealRun({
-    member_id: member,
-    run_id: runId,
-    entry_id: entry.entry_id,
-    seal_sha256: sealSha,
-    baseline_sha256: baselineSha,
-    seal_key: sealKey,
-    baseline_key: baselineKey,
-    sealed_at: formatTime(ctx.now()),
-  });
-  switch (r.kind) {
-    case "sealed":
-    case "already_sealed":
-      return json(200, { status: "sealed", run_status: r.run_status });
-    case "conflict":
-      throw conflict("This entry is sealed with different documents.");
-    case "no_final":
-      throw conflict(SEND_FINAL_FIRST);
-    case "chain_behind":
-      throw conflict(CHAIN_BEHIND);
-    case "closed":
-      throw closed("This run is no longer open.");
-    case "not_found":
-      throw notFound("That entry does not belong to this run.");
-  }
+  return true;
 }
+
+const utf8Length = (text: string): number => new TextEncoder().encode(text).length;
+
+// ---- the seal -----------------------------------------------------------------------------
 
 /**
- * The sealed-connection list beside the seal: one object per entry, `tunnels.jsonl`, create-only,
- * so the first list kept wins and a repeat with another list stores nothing. A put that fails is
- * a 502 like the documents', and the client's retry fills it in. No database row names it.
+ * Seal the entry when the server holds the whole chain: the final heartbeat has committed the end
+ * at `head`, and the chain the server holds reaches it. Called by the final heartbeat (with the head
+ * it committed) and by the chunk that ends at the committed end (with that chunk's head), so
+ * whichever comes second seals. The database checks both facts again under its lock, so a race is
+ * safe and a head that is not the committed one never seals. The two digest columns get the final
+ * head; there are no seal documents, so the two key columns stay null. True when the entry is
+ * sealed now. A failure here is not the caller's: it is logged and answered `sealed: false`, and the
+ * client repeats the final heartbeat until an answer says `sealed: true`.
  */
-async function keepTunnels(ctx: Ctx, prefix: string, bytes: Uint8Array | null): Promise<void> {
-  if (bytes === null) return;
-  await putDocument(ctx, `${prefix}/tunnels.jsonl`, bytes, await sha256Hex(bytes), "application/x-ndjson");
-}
-
-/**
- * Create-only put; "already there" is fine: a seal or baseline name contains the content's hash,
- * and the entry's list is the first one kept.
- */
-async function putDocument(ctx: Ctx, key: string, bytes: Uint8Array, sha256: string, contentType = "application/json"): Promise<void> {
+export async function trySeal(ctx: Ctx, member: string, runId: string, entryId: string, head: string): Promise<boolean> {
   try {
-    await ctx.env.TRACES.put(key, bytes, {
-      sha256,
-      httpMetadata: { contentType },
-      onlyIf: { etagDoesNotMatch: "*" },
+    const r = await ctx.db.sealRun({
+      member_id: member,
+      run_id: runId,
+      entry_id: entryId,
+      seal_sha256: head,
+      baseline_sha256: head,
+      seal_key: null,
+      baseline_key: null,
+      sealed_at: formatTime(ctx.now()),
     });
+    return r.kind === "sealed" || r.kind === "already_sealed"; // no_final, chain_behind: not yet
   } catch (e) {
-    console.error(`R2 put ${key} failed: ${String(e)}`);
-    throw new ApiError(502, "upstream_error", "Storage could not keep the documents right now.");
+    console.error(`seal-failed ${runId}: ${e instanceof Error ? e.message : String(e)}`);
+    return false;
   }
 }

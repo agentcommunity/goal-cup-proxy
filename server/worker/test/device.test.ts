@@ -37,12 +37,12 @@ describe("device flow against wrangler dev", { concurrency: false }, () => {
   const poll = (device_code: string) => api.call("POST", "/v1/device/token", { json: { device_code } });
 
   test("proxy_version or tracer_version names Goal Cup Proxy's version; two that differ are 400", async () => {
-    for (const over of [{ tracer_version: undefined, proxy_version: "0.7.0" }, { proxy_version: undefined, tracer_version: "0.6.0" }, { proxy_version: "0.7.0", tracer_version: "0.7.0" }]) {
+    for (const over of [{ tracer_version: undefined, proxy_version: "1.0.0" }, { proxy_version: undefined, tracer_version: "1.0.1" }, { proxy_version: "1.0.0", tracer_version: "1.0.0" }]) {
       const d = await api.call("POST", "/v1/device", { json: deviceBody(over) });
       assert.equal(d.status, 200, JSON.stringify(d.body));
       deviceCodes.push(d.body.device_code);
     }
-    assertError(await api.call("POST", "/v1/device", { json: deviceBody({ proxy_version: "0.7.0", tracer_version: "0.6.0" }) }), 400, "malformed");
+    assertError(await api.call("POST", "/v1/device", { json: deviceBody({ proxy_version: "1.0.0", tracer_version: "1.0.1" }) }), 400, "malformed");
     assertError(await api.call("POST", "/v1/device", { json: deviceBody({ proxy_version: undefined }) }), 400, "malformed");
     assertError(await api.call("POST", "/v1/device", { json: deviceBody({ tracer_version: undefined, proxy_version: "x".repeat(65) }) }), 400, "malformed");
   });
@@ -205,7 +205,7 @@ describe("device flow against wrangler dev", { concurrency: false }, () => {
     // The clock moves between the open and the heartbeat, so seconds_left is a range, not one number.
     const answered = (body: Record<string, unknown>) => {
       const { seconds_left, ...rest } = body;
-      assert.deepEqual(rest, { stop: false, deadline_at: run.deadline_at, reason: null });
+      assert.deepEqual(rest, { stop: false, deadline_at: run.deadline_at, reason: null, sealed: false });
       assert.ok(typeof seconds_left === "number" && seconds_left > 168 * 3600 - 60 && seconds_left <= 168 * 3600, JSON.stringify(body));
     };
     for (const recording of ["ok", "gaps", "failed", "unknown"]) {
@@ -271,21 +271,18 @@ describe("the test approval is switched off or refused where it must be", () => 
   });
 });
 
-describe("the minimum competition version (D70)", () => {
-  const TOO_OLD = (v: string) =>
-    `This goalcup (${v}) is too old for the cup. Update it when no run is open: curl -fsSL https://github.com/agentcommunity/goal-cup-proxy/releases/latest/download/install.sh | sh`;
-
-  test("a competition device request below the minimum is refused with TOO_OLD", async () => {
+describe("the minimum goalcup version (D70)", () => {
+  test("a device request below the minimum is refused in every mode", async () => {
     const worker = await startWorker({ EVENT_ID: "practice", MIN_COMPETITION_VERSION: "0.7.0" });
     try {
       const api = new Client(worker.url);
-      const old = await api.call("POST", "/v1/device", { json: deviceBody({ proxy_version: "0.6.1" }) });
-      assertError(old, 403, "forbidden");
-      assert.equal(old.body.message, TOO_OLD("0.6.1"));
-      assert.equal((await api.call("POST", "/v1/device", { json: deviceBody({ proxy_version: undefined, tracer_version: "0.6.9-dev" }) })).body.message, TOO_OLD("0.6.9-dev"));
+      for (const mode of ["competition", "practice", "test"]) {
+        assertError(await api.call("POST", "/v1/device", { json: deviceBody({ mode, proxy_version: "0.6.1" }) }), 403, "forbidden");
+      }
+      assertError(await api.call("POST", "/v1/device", { json: deviceBody({ proxy_version: undefined, tracer_version: "0.6.9-dev" }) }), 403, "forbidden");
       assertError(await api.call("POST", "/v1/device", { json: deviceBody({ proxy_version: "latest" }) }), 403, "forbidden"); // unknown while a minimum is set
-      // At the minimum, with a suffix, or newer: fine. Practice and test are not competition starts.
-      for (const over of [{ proxy_version: "0.7.0" }, { proxy_version: "0.7.0-dev" }, { proxy_version: "1.2.0" }, { proxy_version: "0.1.0", mode: "practice" }, { proxy_version: "0.1.0", mode: "test" }]) {
+      // At the minimum, with a suffix, or newer: fine.
+      for (const over of [{ proxy_version: "0.7.0" }, { proxy_version: "0.7.0-dev" }, { proxy_version: "1.2.0" }, { proxy_version: "1.0.0", mode: "practice" }]) {
         assert.equal((await api.call("POST", "/v1/device", { json: deviceBody(over) })).status, 200, JSON.stringify(over));
       }
     } finally {
@@ -293,12 +290,12 @@ describe("the minimum competition version (D70)", () => {
     }
   });
 
-  test("a malformed minimum is 500 misconfigured for a competition request only", async () => {
+  test("a malformed minimum is 500 misconfigured for a device request in every mode", async () => {
     const worker = await startWorker({ EVENT_ID: "practice", MIN_COMPETITION_VERSION: "0.7" });
     try {
       const api = new Client(worker.url);
       assertError(await api.call("POST", "/v1/device", { json: deviceBody() }), 500, "misconfigured");
-      assert.equal((await api.call("POST", "/v1/device", { json: deviceBody({ mode: "practice" }) })).status, 200);
+      assertError(await api.call("POST", "/v1/device", { json: deviceBody({ mode: "practice" }) }), 500, "misconfigured");
     } finally {
       await worker.stop();
     }

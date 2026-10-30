@@ -354,8 +354,9 @@ export class SupabaseDb implements Db {
       p_client_ip: a.client_ip,
       p_client_country: a.client_country,
       p_at: a.at,
-      // Only with vitals: without them the 13-argument form answers (the new 14-argument form has
-      // no DEFAULT, so each call matches exactly one overload; test/supabase.test.ts checks both).
+      // Only with counts (vitals is then {"counts": …} or {"counts_dropped": n}): without them the
+      // 13-argument form answers (the 14-argument form has no DEFAULT, so each call matches exactly
+      // one overload; test/supabase.test.ts checks both).
       ...(a.vitals === null ? {} : { p_vitals: a.vitals }),
     });
     return this.#word("upload_heartbeat", v, ["recorded", "final_committed", "final_existing", "final_conflict", "closed", "not_found"] as const);

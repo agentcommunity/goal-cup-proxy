@@ -30,6 +30,7 @@ import type {
   FinalCommitDetail,
   HeartbeatArgs,
   HeartbeatResult,
+  HeartbeatVitals,
   MachineFacts,
   NoticeKind,
   NoticeOutcome,
@@ -42,9 +43,8 @@ import type {
   SealResult,
   StoreReceiptResult,
   TickRun,
-  Vitals,
 } from "./db.ts";
-import { CLOSE_AFTER_SECONDS, DISK_NOTICE_GAP_SECONDS, FIRST_SEQ, GENESIS, NO_FINAL_DETAIL, TICK_LOOKBACK_SECONDS, UNBOUND_CREDENTIAL_SECONDS, endsAt, isPastEnd, statusAt } from "./db.ts";
+import { CLOSE_AFTER_SECONDS, FIRST_SEQ, GENESIS, NO_FINAL_DETAIL, TICK_LOOKBACK_SECONDS, UNBOUND_CREDENTIAL_SECONDS, endsAt, isPastEnd, statusAt } from "./db.ts";
 import type { StartReceipt } from "./sign.ts";
 import { addSeconds, formatTime, sha256Hex, toHex } from "./util.ts";
 
@@ -64,7 +64,7 @@ interface StoredEntry extends EntryRow {
     head: string;
     offset_local: number;
     recording: string | null;
-    vitals?: Vitals | null;
+    vitals?: HeartbeatVitals | null;
     client_ip: string | null;
     client_country: string | null;
   } | null;
@@ -95,7 +95,7 @@ interface StoredRun extends Omit<RunRow, "first_entry_id" | "current_entry_id" |
   final_force_push?: boolean | null;
   final_head_fallback?: boolean | null;
   /** The latest vitals a heartbeat sent; the start of the running disk pause; the start of the latest pause owed a disk_full email. */
-  last_vitals?: Vitals | null;
+  last_vitals?: HeartbeatVitals | null;
   disk_paused_at?: string | null;
   disk_notice_at?: string | null;
   entries: StoredEntry[];
@@ -604,22 +604,9 @@ function withSignals(run: StoredRun, entry: StoredEntry, a: HeartbeatArgs): Stor
     last_client_country: a.client_country ?? run.last_client_country ?? null,
     ...(flag !== null && run.flagged_at == null ? { flagged_at: a.at, flag_reason: flag } : {}),
     ...(grew ? { last_model_request_at: a.at } : {}),
-    ...diskPause(run, a),
+    // The written counts, stored as given (nested), as the run's latest. They never start a disk pause.
+    ...(a.vitals === null ? {} : { last_vitals: a.vitals, disk_paused_at: null }),
   };
-}
-
-/**
- * The run's vitals and disk pause after this heartbeat. Twin of the rule in
- * goal_cup_tracer.note_heartbeat (website migration 20261021100000_goal_cup_tracer_event_readiness.sql,
- * section 3): change both together.
- */
-function diskPause(run: StoredRun, a: HeartbeatArgs): Pick<StoredRun, "last_vitals" | "disk_paused_at" | "disk_notice_at"> {
-  if (a.vitals === null) return {}; // no vitals: nothing said about a pause
-  if (a.vitals.agent_paused !== "disk") return { last_vitals: a.vitals, disk_paused_at: null };
-  if (run.disk_paused_at != null) return { last_vitals: a.vitals }; // the same pause goes on
-  const gap = formatTime(addSeconds(new Date(a.at), -DISK_NOTICE_GAP_SECONDS));
-  const owed = run.disk_notice_at == null || run.disk_notice_at <= gap;
-  return { last_vitals: a.vitals, disk_paused_at: a.at, ...(owed ? { disk_notice_at: a.at } : {}) };
 }
 
 const newEntry = (

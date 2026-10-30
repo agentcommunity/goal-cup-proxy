@@ -253,7 +253,7 @@ test("sealRun -> upload_seal_run, with the run's status after it", async () => {
     { result: "sealed", run_status: "finished" },
   );
   const a = {
-    member_id: "m", run_id: "r1", entry_id: "e1", seal_sha256: "s", baseline_sha256: "b", seal_key: "sk", baseline_key: "bk", sealed_at: "t",
+    member_id: "m", run_id: "r1", entry_id: "e1", seal_sha256: "s", baseline_sha256: "s", seal_key: null, baseline_key: null, sealed_at: "t",
   };
   assert.deepEqual(await db().sealRun(a), { kind: "sealed", run_status: "sealed" });
   assert.deepEqual(await db().sealRun(a), { kind: "already_sealed", run_status: "open" });
@@ -268,8 +268,8 @@ test("sealRun -> upload_seal_run, with the run's status after it", async () => {
   assert.deepEqual(calls[0], {
     fn: "upload_seal_run",
     args: {
-      p_member_id: "m", p_run_id: "r1", p_entry_id: "e1", p_seal_sha256: "s", p_baseline_sha256: "b",
-      p_seal_key: "sk", p_baseline_key: "bk", p_sealed_at: "t",
+      p_member_id: "m", p_run_id: "r1", p_entry_id: "e1", p_seal_sha256: "s", p_baseline_sha256: "s",
+      p_seal_key: null, p_baseline_key: null, p_sealed_at: "t",
     },
   });
 });
@@ -297,18 +297,22 @@ test("recordHeartbeat -> upload_heartbeat", async () => {
   assert.deepEqual([calls2[0]!.args.p_recording, calls2[0]!.args.p_model_requests, calls2[0]!.args.p_client_ip, calls2[0]!.args.p_client_country], [null, null, null, null]);
 });
 
-test("recordHeartbeat sends p_vitals only when the heartbeat carried vitals (the 13-argument form answers otherwise)", async () => {
+test("recordHeartbeat sends p_vitals, counts nested, only when the heartbeat carried counts (the 13-argument form answers otherwise)", async () => {
   const a = {
     member_id: "m", run_id: "r1", entry_id: "e1", seq: 9, head: H("9"), offset_local: 1234, final: false, repo_head: null,
     recording: null, model_requests: null, client_ip: null, client_country: null, at: "t",
   };
-  const vitals = { disk_free_bytes: 2 ** 53 - 1, disk_short: true, agent_paused: "disk" as const, rss_bytes: 1, cpu_ms: 2, open_files: 3 };
-  const calls = stub("recorded", "recorded");
+  const vitals = { counts: { off_ms: 2300, mode: "recording", agent_paused: "disk", off_since: null } };
+  const calls = stub("recorded", "recorded", "recorded");
   await db().recordHeartbeat({ ...a, vitals });
+  await db().recordHeartbeat({ ...a, vitals: { counts_dropped: 4096 } });
   await db().recordHeartbeat({ ...a, vitals: null });
   assert.deepEqual(calls[0]!.args.p_vitals, vitals);
-  assert.ok(!("p_vitals" in calls[1]!.args), JSON.stringify(calls[1]!.args));
-  assert.equal(Object.keys(calls[0]!.args).length, Object.keys(calls[1]!.args).length + 1);
+  assert.deepEqual(calls[1]!.args.p_vitals, { counts_dropped: 4096 });
+  // Nothing the client named sits at the top level, where the SQL reads agent_paused.
+  for (const c of calls.slice(0, 2)) assert.ok(!("agent_paused" in (c.args.p_vitals as object)), JSON.stringify(c.args));
+  assert.ok(!("p_vitals" in calls[2]!.args), JSON.stringify(calls[2]!.args));
+  assert.equal(Object.keys(calls[0]!.args).length, Object.keys(calls[2]!.args).length + 1);
 });
 
 test("a tick run's disk_notice_at comes through, is checked, and must be there", async () => {

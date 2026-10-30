@@ -244,7 +244,7 @@ const chunk = (first: number, last: number, prev: string, head: string, offset: 
   },
 });
 const seal = (entry = E1, sealed_at = START, h = "1") => ({
-  member_id: "m1", run_id: R1, entry_id: entry, seal_sha256: h, baseline_sha256: "2", seal_key: "k", baseline_key: "k2", sealed_at,
+  member_id: "m1", run_id: R1, entry_id: entry, seal_sha256: h, baseline_sha256: "2", seal_key: null, baseline_key: null, sealed_at,
 });
 
 test("the final heartbeat commits once; same is existing, different is a conflict", async () => {
@@ -313,6 +313,23 @@ test("a seal needs the committed end and the chain held to it, checked in the st
   assert.deepEqual(await db.sealRun({ ...seal(), entry_id: id("e", 9) }), { kind: "not_found" });
   assert.equal(await db.commitChunk(chunk(5, 5, "4".repeat(64), "5".repeat(64), 20)), "closed"); // a sealed entry takes nothing
   assert.equal(await db.closeRun("m1", R1, DEADLINE), "sealed");
+});
+
+test("heartbeat vitals are stored as given, and a repeat of the committed final heartbeat records nothing", async () => {
+  const bucket = new FakeBucket();
+  const db = LocalDb.create(asR2(bucket));
+  await db.openRun(openArgs(1, "s1", START, DEADLINE, await credential(db)));
+  const stored = () => JSON.parse(bucket.map.get(`state/runs/${R1}.json`)!.text) as {
+    last_vitals: unknown; disk_paused_at: string | null; entries: { heartbeat_count: number; last_heartbeat: { vitals: unknown } }[];
+  };
+  const vitals = { counts: { off_ms: 0, agent_paused: "disk", mode: "recording" } };
+  assert.equal(await db.recordHeartbeat({ ...hb(0, G, false), vitals }), "recorded");
+  assert.deepEqual([stored().entries[0]!.last_heartbeat.vitals, stored().last_vitals, stored().disk_paused_at], [vitals, vitals, null]);
+  assert.equal(await db.recordHeartbeat({ ...hb(0, G, true), vitals: { counts_dropped: 4000 } }), "final_committed");
+  assert.deepEqual(stored().last_vitals, { counts_dropped: 4000 });
+  const rows = stored().entries[0]!.heartbeat_count;
+  assert.equal(await db.recordHeartbeat(hb(0, G, true)), "final_existing");
+  assert.equal(stored().entries[0]!.heartbeat_count, rows);
 });
 
 test("sealing the current entry after the end seals the run in the same step; an older entry does not", async () => {
