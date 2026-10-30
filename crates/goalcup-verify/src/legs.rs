@@ -121,7 +121,14 @@ impl<'a> Ctx<'a> {
         let until = (t.threads.iter())
             .filter_map(|x| Some((x.id.as_str(), x.native_until?)))
             .collect();
-        let mut x = Ctx { t, covers, log, until, native: 0, wire: 0 };
+        let mut x = Ctx {
+            t,
+            covers,
+            log,
+            until,
+            native: 0,
+            wire: 0,
+        };
         let native = x.calls().filter(|r| r.leg == Leg::Native).count() as u64;
         (x.native, x.wire) = (native, x.calls().count() as u64 - native);
         x
@@ -159,7 +166,10 @@ pub fn judge(t: &CallTable, covers: &[Cover]) -> Out {
     let x = Ctx::new(t, covers);
     let (keeps, line) = wire_keeps_up(&x);
     let (matched, threads) = threads_match(&x);
-    let wire = t.rows.iter().filter(|r| r.leg == Leg::Wire && r.kind == Kind::Call);
+    let wire = t
+        .rows
+        .iter()
+        .filter(|r| r.leg == Leg::Wire && r.kind == Kind::Call);
     let refused = wire.clone().filter(|r| r.outcome.is_error()).count();
     let coverage = format!(
         "Recorded: {} requests, {refused} refused by the provider. History check: skipped, not \
@@ -265,11 +275,14 @@ fn wire_keeps_up(x: &Ctx) -> (Check, String) {
         why => why,
     };
     if !why.is_empty() {
-        let line = format!("The harness's own log {}.", if x.log == "none" {
-            "is not read for this harness (optional)".to_string()
-        } else {
-            format!("was not compared: {why}")
-        });
+        let line = format!(
+            "The harness's own log {}.",
+            if x.log == "none" {
+                "is not read for this harness (optional)".to_string()
+            } else {
+                format!("was not compared: {why}")
+            }
+        );
         return (skip(c, why), line);
     }
     h.sort_unstable();
@@ -304,8 +317,20 @@ fn wire_keeps_up(x: &Ctx) -> (Check, String) {
         Some(_) => (raw.worst, format!(", {}", raw.span())),
         None => (raw.top, String::new()),
     };
-    let line = format!("The harness's own log: {} calls; harness calls with no recording: {n}{range}.", x.native);
-    (done(c, res, why, found(s.first.or(h.last().copied()), None), facts), line)
+    let line = format!(
+        "The harness's own log: {} calls; harness calls with no recording: {n}{range}.",
+        x.native
+    );
+    (
+        done(
+            c,
+            res,
+            why,
+            found(s.first.or(h.last().copied()), None),
+            facts,
+        ),
+        line,
+    )
 }
 
 #[derive(Default)]
@@ -336,11 +361,19 @@ fn threads_match(x: &Ctx) -> (Check, Vec<Value>) {
             (a.h, a.open) = (a.h + 1, a.open + u64::from(!x.covered(r)));
         } else if !nat {
             threaded = true;
-            *(if r.outcome.is_error() { &mut a.err } else { &mut a.ok }) += 1;
+            *(if r.outcome.is_error() {
+                &mut a.err
+            } else {
+                &mut a.ok
+            }) += 1;
         }
     }
     for th in &x.t.threads {
-        let a = if totals { Some(by.entry(&th.id).or_default()) } else { by.get_mut(th.id.as_str()) };
+        let a = if totals {
+            Some(by.entry(&th.id).or_default())
+        } else {
+            by.get_mut(th.id.as_str())
+        };
         if let Some(a) = a {
             (a.parent, a.total) = (th.parent.clone().or(a.parent.take()), th.native_total);
         }
@@ -355,15 +388,29 @@ fn threads_match(x: &Ctx) -> (Check, Vec<Value>) {
     }
     if totals && !threaded {
         // No wire call names a thread: the entry's totals against its chat calls (PRD-09 section 6).
-        let total = by.values().filter_map(|a| a.total).fold(0, u64::saturating_add);
-        by = BTreeMap::from([("", Acc { total: Some(total), ok: chat, ..Acc::default() })]);
+        let total = by
+            .values()
+            .filter_map(|a| a.total)
+            .fold(0, u64::saturating_add);
+        by = BTreeMap::from([(
+            "",
+            Acc {
+                total: Some(total),
+                ok: chat,
+                ..Acc::default()
+            },
+        )]);
     }
     let any = !x.covers.is_empty();
     let rows: Vec<(Value, Res)> = (by.iter())
         .map(|(id, a)| {
             // The totals form cannot say when: any cover in the entry names the excess.
             let tot = a.total.unwrap_or(0);
-            let (h, open) = if totals { (tot, if any { 0 } else { tot }) } else { (a.h, a.open) };
+            let (h, open) = if totals {
+                (tot, if any { 0 } else { tot })
+            } else {
+                (a.h, a.open)
+            };
             let res = grade(bad(h, a.ok), bad(open, a.ok));
             let thread = Some(*id).filter(|i| !i.is_empty());
             let v = json!({"thread": thread, "parent": a.parent, "harness": h, "wire_ok": a.ok,
@@ -380,9 +427,17 @@ fn threads_match(x: &Ctx) -> (Check, Vec<Value>) {
     let why = format!(
         "{n} of {} threads have more harness calls than recorded ones; first: {who}, {} harness \
          calls against {} recorded",
-        rows.len(), v["harness"], v["wire_ok"]
+        rows.len(),
+        v["harness"],
+        v["wire_ok"]
     );
-    let check = done(c, worst, why, found(None, id), json!({"threads": rows.len(), "bad": n}));
+    let check = done(
+        c,
+        worst,
+        why,
+        found(None, id),
+        json!({"threads": rows.len(), "bad": n}),
+    );
     (check, rows.into_iter().map(|r| r.0).collect())
 }
 
@@ -391,18 +446,36 @@ fn subagents(x: &Ctx) -> Check {
     let Some(kids) = &x.t.children else {
         return skip(c, "parentage was not read");
     };
-    let named = (x.t.threads.iter()).filter(|t| t.native_calls > 0).map(|t| t.id.as_str());
-    let seen: HashSet<&str> = x.calls().filter_map(|r| r.thread.as_deref()).chain(named).collect();
+    let named = (x.t.threads.iter())
+        .filter(|t| t.native_calls > 0)
+        .map(|t| t.id.as_str());
+    let seen: HashSet<&str> = x
+        .calls()
+        .filter_map(|r| r.thread.as_deref())
+        .chain(named)
+        .collect();
     let all: BTreeSet<&String> = kids.values().flatten().collect();
-    let gone: Vec<&String> = all.iter().copied().filter(|k| !seen.contains(k.as_str())).collect();
+    let gone: Vec<&String> = all
+        .iter()
+        .copied()
+        .filter(|k| !seen.contains(k.as_str()))
+        .collect();
     // A child never seen has no time, so any cover in the entry names it.
     let res = grade(!gone.is_empty(), !gone.is_empty() && x.covers.is_empty());
     let first = gone.first().map(|k| k.as_str());
     let why = format!(
         "{} of {} subagents have no call on either leg; first: thread {}",
-        gone.len(), all.len(), first.unwrap_or_default()
+        gone.len(),
+        all.len(),
+        first.unwrap_or_default()
     );
-    done(c, res, why, found(None, first), json!({"children": all.len(), "missing": gone}))
+    done(
+        c,
+        res,
+        why,
+        found(None, first),
+        json!({"children": all.len(), "missing": gone}),
+    )
 }
 
 /// Provider errors by code, one per error row: the wire apart from the harness's own log.
