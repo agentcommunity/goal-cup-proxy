@@ -140,10 +140,19 @@ mod tests {
         let url = |s: &str| Ok(Server::Url(s.to_owned()));
         assert_eq!(parse_server(None), url("https://ingest.agentcommunity.org"));
         assert_eq!(parse_server(Some("off")), Ok(Server::Off));
-        assert_eq!(parse_server(Some("https://s.example/")), url("https://s.example"));
-        assert_eq!(parse_server(Some("http://127.0.0.1:8787")), url("http://127.0.0.1:8787"));
+        assert_eq!(
+            parse_server(Some("https://s.example/")),
+            url("https://s.example")
+        );
+        assert_eq!(
+            parse_server(Some("http://127.0.0.1:8787")),
+            url("http://127.0.0.1:8787")
+        );
         assert_eq!(parse_server(Some("http://[::1]:1")), url("http://[::1]:1"));
-        assert_eq!(parse_server(Some("http://localhost")), url("http://localhost"));
+        assert_eq!(
+            parse_server(Some("http://localhost")),
+            url("http://localhost")
+        );
         for bad in [
             "http://s.example",
             "http://127.0.0.1@s.example",

@@ -26,16 +26,25 @@ fn parses(l: &str) -> bool {
             19 => b == b'Z',
             _ => b.is_ascii_digit(),
         });
-    let event_ok = words.next().is_some_and(|e| !e.is_empty() && !e.contains('='));
+    let event_ok = words
+        .next()
+        .is_some_and(|e| !e.is_empty() && !e.contains('='));
     time_ok
         && event_ok
-        && words.all(|kv| kv.split_once('=').is_some_and(|(k, v)| !k.is_empty() && !v.is_empty()))
+        && words.all(|kv| {
+            kv.split_once('=')
+                .is_some_and(|(k, v)| !k.is_empty() && !v.is_empty())
+        })
 }
 
 #[test]
 fn one_call_writes_one_line() {
     let dir = tempfile::tempdir().unwrap();
-    line(dir.path(), "boot", &[("port", Fact::N(41_000)), ("mode", Fact::Word("null"))]);
+    line(
+        dir.path(),
+        "boot",
+        &[("port", Fact::N(41_000)), ("mode", Fact::Word("null"))],
+    );
     let text = log_of(dir.path());
     assert!(text.ends_with('\n'));
     assert_eq!(text.lines().count(), 1);
@@ -69,14 +78,21 @@ fn concurrent_writers_never_interleave() {
 fn file_is_private() {
     let dir = tempfile::tempdir().unwrap();
     line(dir.path(), "boot", &[]);
-    let mode = fs::metadata(dir.path().join("goalcup.log")).unwrap().permissions().mode();
+    let mode = fs::metadata(dir.path().join("goalcup.log"))
+        .unwrap()
+        .permissions()
+        .mode();
     assert_eq!(mode & 0o777, 0o600);
 }
 
 #[test]
 fn newline_in_a_path_stays_on_one_line() {
     let dir = tempfile::tempdir().unwrap();
-    line(dir.path(), "skill", &[("path", Fact::Path(PathBuf::from("/a\nb\r\nc")))]);
+    line(
+        dir.path(),
+        "skill",
+        &[("path", Fact::Path(PathBuf::from("/a\nb\r\nc")))],
+    );
     let text = log_of(dir.path());
     assert_eq!(text.lines().count(), 1);
     assert_eq!(text.matches('\n').count(), 1);
@@ -85,7 +101,11 @@ fn newline_in_a_path_stays_on_one_line() {
 #[test]
 fn a_long_line_is_cut_and_keeps_its_newline() {
     let dir = tempfile::tempdir().unwrap();
-    line(dir.path(), "skill", &[("path", Fact::Path(PathBuf::from("x".repeat(10_000))))]);
+    line(
+        dir.path(),
+        "skill",
+        &[("path", Fact::Path(PathBuf::from("x".repeat(10_000))))],
+    );
     let text = log_of(dir.path());
     assert!(text.len() <= 4096);
     assert!(text.ends_with('\n'));
@@ -105,7 +125,10 @@ fn host_check_refuses_tokens() {
         assert!(Host::checked(bad).is_none(), "{bad}");
     }
     for good in ["api.openai.com", "localhost:8080", "[::1]:443", "127.0.0.1"] {
-        assert_eq!(Host::checked(good).map(|h| h.as_str().to_owned()), Some(good.to_owned()));
+        assert_eq!(
+            Host::checked(good).map(|h| h.as_str().to_owned()),
+            Some(good.to_owned())
+        );
     }
 }
 
@@ -113,7 +136,11 @@ fn host_check_refuses_tokens() {
 fn missing_entry_dir_is_ignored_and_not_created() {
     let dir = tempfile::tempdir().unwrap();
     let missing = dir.path().join("runs/r1/e1");
-    line(&missing, "boot", &[("why", Fact::Io(std::io::ErrorKind::NotFound))]);
+    line(
+        &missing,
+        "boot",
+        &[("why", Fact::Io(std::io::ErrorKind::NotFound))],
+    );
     assert!(!missing.exists());
     assert!(!dir.path().join("runs").exists());
 }

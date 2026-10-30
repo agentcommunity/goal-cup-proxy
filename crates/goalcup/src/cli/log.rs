@@ -59,7 +59,9 @@ impl Host {
             let (addr, rest) = v6.split_once(']')?;
             let v6_ok = (2..=45).contains(&addr.len())
                 && addr.contains(':')
-                && addr.bytes().all(|b| b.is_ascii_hexdigit() || b == b':' || b == b'.');
+                && addr
+                    .bytes()
+                    .all(|b| b.is_ascii_hexdigit() || b == b':' || b == b'.');
             if !v6_ok {
                 return None;
             }
@@ -183,7 +185,10 @@ fn push_fact(buf: &mut String, fact: &Fact) {
 
 /// RFC 3339 UTC to the second, `YYYY-MM-DDTHH:MM:SSZ`. A time before 1970 is written as 1970.
 fn push_time(buf: &mut String, t: SystemTime) {
-    let secs = t.duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+    let secs = t
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
     let (days, rem) = (secs / 86_400, secs % 86_400);
     let (y, m, d) = civil_from_days(days);
     let _ = write!(
