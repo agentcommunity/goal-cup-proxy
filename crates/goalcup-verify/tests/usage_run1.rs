@@ -6,7 +6,7 @@
 mod common;
 
 use common::{Entry, read_records};
-use goalcup_format::{EndReason, FLAG_FIN, Record, StreamKind};
+use goalcup_format::{EndReason, FLAG_FIN, GapReason, Record, StreamKind};
 use goalcup_verify::usage::{CallRow, CallTable, Calls, Kind, Outcome, Tokens};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
@@ -59,6 +59,24 @@ fn delta() -> Value {
 fn sse(evs: &[Value]) -> String {
     let ev = |v: &Value| format!("event: {}\ndata: {v}\n\n", v["type"].as_str().unwrap());
     evs.iter().map(ev).collect()
+}
+
+/// A WebSocket on its own connection, upgraded at `path`: its conn, up and down sids.
+fn socket(e: &mut Entry, path: &str) -> (u64, u64, u64) {
+    let c = e.conn();
+    let head = json!({"method": "GET", "path": path, "ver": "1.1",
+        "headers": [["upgrade", "websocket"]], "masked": [], "coding": null});
+    let q = e.open(StreamKind::HttpReq, c, 0, head);
+    e.end(q, EndReason::Complete, 0, Value::Null);
+    let up = e.open(StreamKind::WsUp, c, q, json!({"deflate": false}));
+    (c, up, e.open(StreamKind::WsDown, c, q, json!({"deflate": false})))
+}
+
+/// One whole text message `v` on stream `sid` at `*at`, which moves past it.
+fn send(e: &mut Entry, sid: u64, at: &mut u64, v: impl ToString) {
+    let v = v.to_string();
+    e.data(sid, *at, 0x10 | FLAG_FIN, v.as_bytes());
+    *at += v.len() as u64;
 }
 
 /// One POST on its own connection, from `[path, request, status, reply, ended complete]`; the
@@ -139,13 +157,7 @@ fn run1(name: &str) -> (Vec<Record>, BTreeMap<&'static str, Five>) {
     ]);
 
     let mut e = Entry::new(name);
-    let c = e.conn();
-    let head = json!({"method": "GET", "path": "/backend-api/codex/responses", "ver": "1.1",
-        "headers": [["upgrade", "websocket"]], "masked": [], "coding": null});
-    let q = e.open(StreamKind::HttpReq, c, 0, head);
-    e.end(q, EndReason::Complete, 0, Value::Null);
-    let up = e.open(StreamKind::WsUp, c, q, json!({"deflate": false}));
-    let down = e.open(StreamKind::WsDown, c, q, json!({"deflate": false}));
+    let (c, up, down) = socket(&mut e, "/backend-api/codex/responses");
     let (mut u, mut d) = (0, 0);
     for step in ws.as_array().unwrap() {
         let m = step[0].to_string();
@@ -153,9 +165,8 @@ fn run1(name: &str) -> (Vec<Record>, BTreeMap<&'static str, Five>) {
         e.data(up, u, 0x10, x.as_bytes());
         e.data(up, u + x.len() as u64, 0x10 | FLAG_FIN, y.as_bytes());
         u += m.len() as u64;
-        for v in step[1].as_array().unwrap().iter().map(Value::to_string) {
-            e.data(down, d, 0x10 | FLAG_FIN, v.as_bytes());
-            d += v.len() as u64;
+        for v in step[1].as_array().unwrap() {
+            send(&mut e, down, &mut d, v);
         }
     }
     e.end(up, EndReason::Complete, u, json!({"close_code": 1000}));
@@ -224,29 +235,45 @@ fn each_rate_limited_call_is_one_row() {
 #[test]
 fn a_create_cut_by_a_restart_is_a_call_not_whole() {
     let mut e = Entry::new("u-restart");
-    let c = e.conn();
-    let head = json!({"method": "GET", "path": "/v1/responses", "ver": "1.1",
-        "headers": [["upgrade", "websocket"]], "masked": [], "coding": null});
-    let q = e.open(StreamKind::HttpReq, c, 0, head);
-    e.end(q, EndReason::Complete, 0, Value::Null);
-    let up = e.open(StreamKind::WsUp, c, q, json!({"deflate": false}));
-    let down = e.open(StreamKind::WsDown, c, q, json!({"deflate": false}));
+    let (_, up, down) = socket(&mut e, "/v1/responses");
     let m = format!(r#"{{"type":"response.create","model":"fake-ws-x","input":"{MARK}"}}"#);
-    e.data(up, 0, 0x10 | FLAG_FIN, m.as_bytes());
-    let mut d = 0;
+    let (mut u, mut d) = (0, 0);
+    send(&mut e, up, &mut u, &m);
     let done = ev("completed", "ws-x", &usage(9, 0, 1, 0).0);
-    for v in [created("ws-x"), done].map(|v| v.to_string()) {
-        e.data(down, d, 0x10 | FLAG_FIN, v.as_bytes());
-        d += v.len() as u64;
+    for v in [created("ws-x"), done] {
+        send(&mut e, down, &mut d, v);
     }
-    e.data(up, m.len() as u64, 0x10, &m.as_bytes()[..40]);
+    e.data(up, u, 0x10, &m.as_bytes()[..40]);
     e.crash("killed", 1_000);
-    let t = table(&read_records(&e.seal().join("rec")));
-    let calls: Vec<_> = t.rows.iter().filter(|r| r.kind == Kind::Call).collect();
-    let got: Vec<_> = calls.iter().map(|r| (r.boot, r.whole)).collect();
-    assert_eq!(got, [(0, true), (0, false)]);
-    let ends = [&calls[0].outcome, &calls[1].outcome];
-    assert_eq!(ends, [&Outcome::Ok, &Outcome::Unknown]);
+    let calls = whole(&e.seal());
+    assert_eq!(calls, [(0, true, Outcome::Ok), (0, false, Outcome::Unknown)]);
+}
+
+/// A known loss ending where a reply message starts may hold its head (PRD-01 section 7: the
+/// stream goes on at off + lost - 1): that call is not whole, the one before it stays whole.
+#[test]
+fn a_loss_ending_at_a_reply_message_marks_that_call_not_whole() {
+    let mut e = Entry::new("u-loss");
+    let (_, up, down) = socket(&mut e, "/v1/responses");
+    let (mut u, mut d) = (0, 0);
+    send(&mut e, up, &mut u, create("ws-y", None));
+    for v in [created("ws-y"), ev("completed", "ws-y", &usage(9, 0, 1, 0).0)] {
+        send(&mut e, down, &mut d, v);
+    }
+    send(&mut e, up, &mut u, create("ws-z", None));
+    let lost = created("ws-z").to_string().len() as u64;
+    e.gap(down, GapReason::MemoryGuard, 0, d, lost + 1, Value::Null);
+    d += lost;
+    send(&mut e, down, &mut d, ev("completed", "ws-z", &usage(9, 0, 1, 0).0));
+    let calls = whole(&e.seal());
+    assert_eq!(calls, [(0, true, Outcome::Ok), (0, false, Outcome::Ok)]);
+}
+
+/// Boot, `whole` and outcome of each call of a sealed entry.
+fn whole(dir: &std::path::Path) -> Vec<(u64, bool, Outcome)> {
+    let t = table(&read_records(&dir.join("rec")));
+    let calls = t.rows.into_iter().filter(|r| r.kind == Kind::Call);
+    calls.map(|r| (r.boot, r.whole, r.outcome)).collect()
 }
 
 #[test]

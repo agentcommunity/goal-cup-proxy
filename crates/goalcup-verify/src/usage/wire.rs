@@ -91,9 +91,8 @@ struct Ws {
     op: u8,
 }
 
-/// One WebSocket message: stream, number, sid and offsets, FIN and no hole, first and last time.
+/// One WebSocket message: number, socket, sid and offsets, FIN and no hole, first and last time.
 struct Msg {
-    k: Key,
     n: u64,
     sock: Key,
     range: (u64, u64, u64),
@@ -389,7 +388,6 @@ impl Wire {
         };
         let hole = std::mem::take(&mut w.buf.hole);
         let m = Msg {
-            k,
             n: w.msgs,
             sock: w.sock,
             range: (k.1, start, w.buf.next),
@@ -414,10 +412,9 @@ impl Wire {
             Client::Interrupt => Kind::Interrupt,
             Client::Other => return,
         };
-        // The open of a ws stream made its socket, so the entry is always there.
-        let conn = self.socks.entry(m.sock).or_default().conn;
-        let c = self.conns.get(&(m.k.0, conn)).cloned().unwrap_or_default();
-        let i = self.row(ctx, (m.k.1, Some(m.n)), (conn, &c), kind, Via::Ws, m.t0);
+        let conn = self.socks.get(&m.sock).map_or(0, |s| s.conn);
+        let c = self.conns.get(&(ctx.boot, conn)).cloned().unwrap_or_default();
+        let i = self.row(ctx, (m.range.0, Some(m.n)), (conn, &c), kind, Via::Ws, m.t0);
         let (rows, s) = (&mut self.rows, self.socks.entry(m.sock).or_default());
         let r = &mut rows[i];
         (r.up, r.req_ok) = (Some(m.range), m.whole);
@@ -572,10 +569,12 @@ fn decide(mut r: Row, gaps: &[Gap]) -> CallRow {
     row.usage_from = said.iter().any(Option::is_some).then_some(Leg::Wire);
     let (b, t1) = (row.boot, r.t1.unwrap_or(u64::MAX));
     let wall = (row.wall_start, row.wall_end.unwrap_or(u64::MAX));
-    // Half-open ranges: the loss [off, off + lost - 1) against [lo, hi); unknown loss runs on.
+    // A loss hits [lo, hi) when it starts before hi and ends at or after lo: a loss ending at a
+    // message's first byte may hold its head, a loss starting where a message ended does not.
+    // Unknown loss (`lost` 0) runs on; a no-loss GAP (`lost` 1) hits when its offset is in range.
     let hit = |g: &Gap, range: Option<(u64, u64, u64)>| match range {
         Some((sid, lo, hi)) => {
-            g.sid == sid && g.off < hi && (g.lost == 0 || g.off.saturating_add(g.lost - 1) > lo)
+            g.sid == sid && g.off < hi && (g.lost == 0 || g.off.saturating_add(g.lost - 1) >= lo)
         }
         None => false,
     };
