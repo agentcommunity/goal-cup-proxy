@@ -185,6 +185,41 @@ pub fn body(c: &Chunk) -> io::Result<io::Take<File>> {
     Ok(f.take(c.c_end.saturating_sub(c.c_start)))
 }
 
+/// The bound's raw end and the compressed bytes between the server's offset `s` and it, over the
+/// parts on disk (`upload.json` `durable_raw` and `waiting_bytes`). Reads index files only.
+pub fn waiting(rec_dir: &Path, s: u64, bound: &Bound) -> io::Result<(u64, u64)> {
+    let (mut end, mut bytes) = (0, 0);
+    for p in parts(rec_dir)? {
+        let (limit, flen) = match bound {
+            Bound::Durable(d) => (d.line.raw_end, u64::MAX),
+            Bound::OnDisk => (u64::MAX, fs::metadata(rec_dir.join(part_name(p)))?.len()),
+        };
+        let (mut from, mut to) = (0, 0);
+        for l in index(rec_dir, p)?
+            .iter()
+            .take_while(|l| l.raw_end <= limit && l.c_end <= flen)
+        {
+            if l.raw_end <= s {
+                from = l.c_end;
+            }
+            (to, end) = (l.c_end, end.max(l.raw_end));
+        }
+        bytes += to.saturating_sub(from);
+    }
+    if let Bound::Durable(d) = bound {
+        end = d.line.raw_end;
+    }
+    Ok((end, bytes))
+}
+
+/// The index line that ends at raw offset `raw`, when a part on disk holds one.
+pub fn line_at(rec_dir: &Path, raw: u64) -> io::Result<Option<IndexLine>> {
+    let Some(&p) = parts(rec_dir)?.iter().rev().find(|&&p| p < raw) else {
+        return Ok(None);
+    };
+    Ok(index(rec_dir, p)?.into_iter().find(|l| l.raw_end == raw))
+}
+
 /// The part files' first raw offsets, in order: the names are zero-padded, so the listing that
 /// recovery uses is already in number order.
 fn parts(rec_dir: &Path) -> io::Result<Vec<u64>> {

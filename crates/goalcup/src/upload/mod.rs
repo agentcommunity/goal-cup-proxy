@@ -12,6 +12,7 @@ pub mod beat;
 pub mod chunk;
 pub mod client;
 pub mod policy;
+pub mod send;
 pub mod state;
 
 pub use policy::WrapUp;
