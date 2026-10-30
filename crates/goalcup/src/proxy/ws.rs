@@ -19,7 +19,9 @@
 //! any smaller negotiated window. Memory per direction: the 32 KiB piece being filled, a 32 KiB
 //! inflate output buffer, the inflater's 32 KiB window and the current frame header.
 
-use crate::pipeline::{EndReason, GapReason, Mono, OpenFlags, Recorder, Sid, StreamHandle, StreamKind};
+use crate::pipeline::{
+    EndReason, GapReason, Mono, OpenFlags, Recorder, Sid, StreamHandle, StreamKind,
+};
 use bytes::Bytes;
 use flate2::{Decompress, FlushDecompress, Status};
 use serde_json::{Map, Value, json};
@@ -96,7 +98,11 @@ pub fn negotiate(
             .next()
             .is_some_and(|name| name.trim().eq_ignore_ascii_case("permessage-deflate"))
     });
-    if offered { Ok(Some(deflate)) } else { Err(Unsupported) }
+    if offered {
+        Ok(Some(deflate))
+    } else {
+        Err(Unsupported)
+    }
 }
 
 /// One `permessage-deflate` extension with only RFC 7692 parameters, each at most once.
@@ -156,7 +162,14 @@ impl WsConn {
     pub fn open(rec: &Recorder, conn: Sid, req: Sid, deflate: Option<Deflate>, t: Mono) -> WsConn {
         let _ = t;
         let meta = json!({ "deflate": deflate.is_some() });
-        let up = rec.open(StreamKind::WsUp, conn, req, 0, OpenFlags::DECRYPTED, meta.clone());
+        let up = rec.open(
+            StreamKind::WsUp,
+            conn,
+            req,
+            0,
+            OpenFlags::DECRYPTED,
+            meta.clone(),
+        );
         let down = rec.open(StreamKind::WsDown, conn, req, 0, OpenFlags::DECRYPTED, meta);
         WsConn {
             up: Side::new(up, true, deflate.map(|d| d.client_takeover)),

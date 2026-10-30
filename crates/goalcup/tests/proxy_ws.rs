@@ -117,7 +117,8 @@ fn feed(ws: &mut WsConn, rec: &Recorder, dir: Dir, bytes: &[u8], rng: &mut Rng) 
     let mut rest = bytes;
     while !rest.is_empty() {
         let n = (1 + rng.below(700) as usize).min(rest.len());
-        ws.feed(dir, rec.now(), &rest[..n]).expect("parsing goes on");
+        ws.feed(dir, rec.now(), &rest[..n])
+            .expect("parsing goes on");
         rest = &rest[n..];
     }
 }
@@ -297,9 +298,13 @@ fn rfc6455_examples_record_unmasked_payloads() {
     // RFC 6455 section 5.7, byte for byte.
     let up: Vec<u8> = [
         // A single-frame masked text message: "Hello".
-        &[0x81, 0x85, 0x37, 0xfa, 0x21, 0x3d, 0x7f, 0x9f, 0x4d, 0x51, 0x58][..],
+        &[
+            0x81, 0x85, 0x37, 0xfa, 0x21, 0x3d, 0x7f, 0x9f, 0x4d, 0x51, 0x58,
+        ][..],
         // A masked pong: "Hello".
-        &[0x8a, 0x85, 0x37, 0xfa, 0x21, 0x3d, 0x7f, 0x9f, 0x4d, 0x51, 0x58][..],
+        &[
+            0x8a, 0x85, 0x37, 0xfa, 0x21, 0x3d, 0x7f, 0x9f, 0x4d, 0x51, 0x58,
+        ][..],
     ]
     .concat();
     let mut down: Vec<u8> = [
@@ -321,7 +326,8 @@ fn rfc6455_examples_record_unmasked_payloads() {
     down.extend_from_slice(&[0x82, 0x7f, 0, 0, 0, 0, 0, 1, 0, 0]);
     down.extend_from_slice(&big);
     ws.feed(Dir::Up, rec.now(), &up).expect("parsing goes on");
-    ws.feed(Dir::Down, rec.now(), &down).expect("parsing goes on");
+    ws.feed(Dir::Down, rec.now(), &down)
+        .expect("parsing goes on");
     ws.end(rec.now(), EndReason::Complete, 0);
 
     let all = calls.all();
@@ -351,10 +357,18 @@ fn close_code_reaches_the_end_tail() {
     let mut ws = WsConn::open(&rec, 1, 2, None, rec.now());
     let mut up_close = 1000u16.to_be_bytes().to_vec();
     up_close.extend_from_slice(b"done");
-    ws.feed(Dir::Up, rec.now(), &frame(true, false, 0x8, &up_close, Some(rng.key())))
-        .expect("parsing goes on");
-    ws.feed(Dir::Down, rec.now(), &frame(true, false, 0x8, &1001u16.to_be_bytes(), None))
-        .expect("parsing goes on");
+    ws.feed(
+        Dir::Up,
+        rec.now(),
+        &frame(true, false, 0x8, &up_close, Some(rng.key())),
+    )
+    .expect("parsing goes on");
+    ws.feed(
+        Dir::Down,
+        rec.now(),
+        &frame(true, false, 0x8, &1001u16.to_be_bytes(), None),
+    )
+    .expect("parsing goes on");
     ws.end(rec.now(), EndReason::Complete, 7);
 
     let all = calls.all();
