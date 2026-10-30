@@ -1359,3 +1359,14 @@ taken; "rejected" says why. Fixes for other files are made by those files' owner
   never-stop cases.
 - **Python.** `pad` and `pad-run` need 3.11 (`tomllib`; the pad image installs `python3.11`);
   `check.py` and `table` run on 3.9. `test_pad.py` runs under 3.11 (PRD-14 note).
+
+### 2026-10-30, replan after PRD-05 phase 0 slice (merge 82484521)
+
+- **S12 row order confirmed** on integration: counting data lines from 0, `openai_key` 1,
+  `github_token` 3 and 4, `jwt` 7, `private_key` 8, `generic_secret_assignment` 10 and 11,
+  `url_password` 12, `google_key` 13, as C3 reads them.
+- **A pad run on a stub build is not evidence.** With the S2 stub every MASK is `fail_closed`, so C3
+  fails on every planted value. PRD-05 builder note 1 keeps real keys out of pad boxes until
+  `start.mask_rules` has more than one entry (PRD-16 checks it); the stub's list is
+  `["fail_closed"]`.
+- No locked ledger item is touched and no owner question comes from this slice.
