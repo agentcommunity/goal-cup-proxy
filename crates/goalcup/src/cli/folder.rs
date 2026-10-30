@@ -119,9 +119,11 @@ pub fn wsl(dir: &Path, what: &str) -> Option<String> {
         let point = left.split(' ').nth(4)?.replace("\\040", " ");
         Some((point, right.split(' ').next()?))
     });
-    let (_, kind) = mounts.filter(|(p, _)| dir.starts_with(p)).max_by_key(|(p, _)| p.len())?;
+    let mounts = mounts.filter(|(p, _)| dir.starts_with(p));
+    let (_, kind) = mounts.max_by_key(|(p, _)| p.len())?;
     let windows = "9p drvfs virtiofs cifs smb3 smbfs ntfs ntfs3 fuse.ntfs-3g";
-    windows.split(' ').any(|w| w == kind).then(|| text::wsl(what, Some(kind)))
+    let windows = windows.split(' ').any(|w| w == kind);
+    windows.then(|| text::wsl(what, Some(kind)))
 }
 
 /// The key files (`.env`, `.env.*`) and every entry besides them, `.gitignore` and `.DS_Store`,

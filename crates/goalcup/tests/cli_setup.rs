@@ -136,7 +136,8 @@ fn yes_writes_the_settings_only_into_the_isolated_home() {
     let last_folder = |out: &Output| {
         let stdout = lossy(&out.stdout);
         let quoted = stdout.split('"').skip(1).step_by(2);
-        quoted.filter(|p| Path::new(p).is_dir()).last().map(PathBuf::from)
+        let folders = quoted.filter(|p| Path::new(p).is_dir());
+        folders.last().map(PathBuf::from)
     };
     assert_eq!(last_folder(&out), Some(iso.clone()), "{all}");
 
@@ -151,7 +152,8 @@ fn yes_writes_the_settings_only_into_the_isolated_home() {
     let saved: Value = serde_json::from_slice(&saved).expect("setup.json parses");
     assert_eq!(saved["update_off"], Value::Array(vec![]), "{saved}");
     assert_eq!(saved["no_prompts"], Value::Array(vec![]), "{saved}");
-    assert!(files.iter().all(|f| fs::read(f).unwrap() == b"["), "a row was written");
+    let kept = files.iter().all(|f| fs::read(f).unwrap() == b"[");
+    assert!(kept, "a row was written");
     assert_eq!(last_folder(&out), Some(iso), "{all}");
 }
 

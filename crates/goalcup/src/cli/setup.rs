@@ -18,9 +18,10 @@ use std::time::SystemTime;
 
 use serde::{Deserialize, Serialize};
 
-use super::{Server, awake, fail, folder, isolated_home, read_json, record_hosts, setup_json, text};
+use super::{Server, awake, fail, folder, isolated_home, read_json, record_hosts};
+use super::{setup_json, text};
 use crate::connector::launch::{fill, make_dir, resolve_program};
-use crate::connector::{self, Connector, Decision, Env, Form, HostList, Refusal};
+use crate::connector::{self, Connector, Decision, Env, Form, HostList, Refusal, SettingRow};
 use crate::connector::{Source, builtin};
 use crate::upload::client::ServerClient;
 
@@ -123,18 +124,8 @@ fn write_home(
         v.split_whitespace().find(number).unwrap_or(v)
     });
     put(&text::harness_found(&c.name, version, &plan.program));
-    let (mut update_off, mut no_prompts) = (Vec::new(), Vec::new());
-    for (rows, saved) in [(&c.update_off, &mut update_off), (&c.no_prompts, &mut no_prompts)] {
-        for row in rows {
-            let file = PathBuf::from(fill(&row.file, &plan.home, Path::new("")));
-            if !connector::write_settings(&plan.home, std::slice::from_ref(row)).is_empty() {
-                put(&text::not_set(&file, &row.key));
-                continue;
-            }
-            let (key, value) = (row.key.clone(), row.value.clone());
-            saved.push(Row { file, key, value });
-        }
-    }
+    let update_off = write_rows(&plan.home, &c.update_off);
+    let no_prompts = write_rows(&plan.home, &c.no_prompts);
     let (update, prompts) = (!update_off.is_empty(), !no_prompts.is_empty());
     let saved = Saved {
         v: 1,
@@ -148,6 +139,21 @@ fn write_home(
     }
     put(&text::settings_set(&c.name, &plan.home, update, prompts));
     Ok(plan.refusal.as_ref().map(text::refusal))
+}
+
+/// Writes each row into `home` and gives back those written; a row not written gets its line.
+fn write_rows(home: &Path, rows: &[SettingRow]) -> Vec<Row> {
+    let mut written = Vec::new();
+    for row in rows {
+        let file = PathBuf::from(fill(&row.file, home, Path::new("")));
+        if connector::write_settings(home, std::slice::from_ref(row)).is_empty() {
+            let (key, value) = (row.key.clone(), row.value.clone());
+            written.push(Row { file, key, value });
+        } else {
+            put(&text::not_set(&file, &row.key));
+        }
+    }
+    written
 }
 
 /// `setup.json` written beside itself (0600), then renamed over.
@@ -198,7 +204,8 @@ fn installed(vars: &BTreeMap<String, String>) -> Vec<&'static str> {
 fn add_host(home: &Path, name: &str) -> ExitCode {
     let hosts = HostList::from_file(builtin::HOSTS.as_bytes(), "connectors/model-hosts.toml");
     // Fails closed: a built-in list that does not parse lets no host in.
-    let never = |n: &str| hosts.as_ref().ok().is_none_or(|l| l.decide(n) == Decision::Never);
+    let hosts = hosts.as_ref().ok();
+    let never = |n: &str| hosts.is_none_or(|l| l.decide(n) == Decision::Never);
     let host = match connector::hosts::check(name, Source::Participant) {
         Ok(host) if never(&host.name) => return fail(&text::host_refused(text::NEVER_HOST)),
         Ok(host) => host.name,
