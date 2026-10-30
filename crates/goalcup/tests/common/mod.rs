@@ -7,7 +7,7 @@
 //! - [`pki`]: a test CA and leaf certificates.
 //! - [`records`]: a part folder built from a list of records.
 //! - [`upstream`]: the fake upstream (TLS, HTTP/1.1, WebSocket; HTTP/2 comes in slice 3).
-//! - [`worker`]: the fake Worker (a stub until slice 2).
+//! - [`worker`]: the fake Worker (`docs/UPLOAD-API.md` from a script).
 //! - [`recorder`]: helpers over the calls `Recorder::for_tests` collects.
 
 #![allow(dead_code)]

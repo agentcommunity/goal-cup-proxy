@@ -2,40 +2,58 @@
 //! position, with injected answers; it keeps every chunk body and heartbeat and has no continuity
 //! rules (the full tier runs the real Worker). HTTP/1.1, keep-alive, any Bearer; an entry is made
 //! on first use; ids, the credential and times are fixed test data (`seconds_left` too).
+//!
+//! A heartbeat is kept exactly as the client sent it; the fake never reads `counts`, so a bad
+//! `counts` is answered `200`, never `400`. Whether the Worker stores a `counts` is the real
+//! Worker's rule, checked in the full tier.
+//!
+//! An outage: dropping the fake shuts down every connection it accepted (a pooled keep-alive
+//! connection sees the close) and frees the port; `ports::refusing()` gives an address that
+//! refuses from the start. A request with `Connection: close` gets its answer, then the close.
 
-use serde_json::{Map, Value, json};
+use serde_json::{Value, json};
 use std::io::{BufRead, BufReader, Read, Write};
-use std::sync::{Arc, Mutex, atomic::AtomicBool, atomic::Ordering::SeqCst};
+use std::net::{Shutdown, SocketAddr, TcpStream};
+use std::sync::{Arc, Mutex, MutexGuard, atomic::AtomicBool, atomic::Ordering::SeqCst};
 use std::thread::{JoinHandle, sleep, spawn};
-use std::{collections::HashMap, net::SocketAddr, net::TcpStream, time::Duration};
+use std::{collections::HashMap, time::Duration};
 
 pub const RUN_ID: &str = "r00000000000000a1";
 pub const CREDENTIAL: &str = "gcr_000000000000000000000000000000000000000000000000000000000000fa1e";
 pub const SECONDS_LEFT: u64 = 86_400;
 const START: &str = "2026-11-06T10:00:00Z";
 const DEADLINE: &str = "2026-11-07T10:00:00Z";
-const CODES: &str = "400:malformed 401:unauthorized 403:forbidden 404:not_found 409:conflict \
-    410:closed 413:too_large 422:digest_mismatch 429:rate_limited 503:maintenance";
 
 /// A route of the upload API.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Route {
-    Device,      // POST /v1/device
-    DeviceToken, // POST /v1/device/token
-    Open,        // POST /v1/runs
-    Position,    // GET /v1/runs/{run_id}
-    Chunk,       // PUT /v1/runs/{run_id}/chunks/{offset}
-    Heartbeat,   // POST /v1/runs/{run_id}/heartbeat
-    Continue,    // POST /v1/runs/{run_id}/continue
+    /// `POST /v1/device`
+    Device,
+    /// `POST /v1/device/token`
+    DeviceToken,
+    /// `POST /v1/runs`
+    Open,
+    /// `GET /v1/runs/{run_id}`
+    Position,
+    /// `PUT /v1/runs/{run_id}/chunks/{offset}`
+    Chunk,
+    /// `POST /v1/runs/{run_id}/heartbeat`
+    Heartbeat,
+    /// `POST /v1/runs/{run_id}/continue`
+    Continue,
 }
 
 /// One injected answer, used once, for the next call of its route.
 #[derive(Clone, Debug, Default)]
 pub struct Inject {
-    pub status: Option<u16>, // answer it with an error body instead, doing no work
-    pub drop_after_commit: bool, // do the work, then close the connection unanswered
-    pub retry_after: Option<u64>, // a `Retry-After` header, in seconds
-    pub delay: Option<Duration>, // wait this long first
+    /// Answer with this status and an error body instead, doing no work.
+    pub status: Option<u16>,
+    /// Do the work, then close the connection unanswered.
+    pub drop_after_commit: bool,
+    /// A `Retry-After` header, in seconds.
+    pub retry_after: Option<u64>,
+    /// Wait this long first.
+    pub delay: Option<Duration>,
 }
 
 #[derive(Clone, Debug)]
@@ -50,8 +68,16 @@ struct State {
     script: Vec<(Route, Inject)>,
     chunks: Vec<Chunk>,
     heartbeats: Vec<Value>,
-    entries: Vec<Value>, // each entry's position answer, without `status`, `sealed` and `stop`
+    /// Each entry's position answer, without `status`, `sealed` and `stop`.
+    entries: Vec<Value>,
     stop: bool,
+    /// A handle on every accepted connection, shut down when the fake is dropped.
+    conns: Vec<TcpStream>,
+}
+
+/// Locks `m`, passing a poisoned lock on so a test sees the first panic, not a `PoisonError`.
+fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(|e| e.into_inner())
 }
 
 /// The entry named `id`, made on first use as the run's next segment.
@@ -72,7 +98,8 @@ fn sealed(e: &Value) -> bool {
     end && e["final"]["head"] == e["head"]
 }
 
-/// A running fake Worker on a held loopback port. Drop wakes its accept loop and waits for it.
+/// A running fake Worker on a held loopback port. Drop stops its accept loop and shuts down every
+/// connection it accepted.
 pub struct FakeWorker {
     url: String,
     state: Arc<Mutex<State>>,
@@ -86,9 +113,21 @@ impl FakeWorker {
         let (state, done): (Arc<Mutex<State>>, Arc<AtomicBool>) = Default::default();
         let (st, dn) = (state.clone(), done.clone());
         let accept = spawn(move || {
-            let live = listener.incoming().take_while(|_| !dn.load(SeqCst));
-            for (s, st) in live.flatten().zip(std::iter::repeat(st)) {
-                spawn(move || serve(s, &st));
+            for stream in listener
+                .incoming()
+                .take_while(|_| !dn.load(SeqCst))
+                .flatten()
+            {
+                let Ok(handle) = stream.try_clone() else {
+                    continue;
+                };
+                lock(&st).conns.push(handle);
+                let st = st.clone();
+                spawn(move || {
+                    serve(&stream, &st);
+                    // The handle kept in `conns` holds the socket open: close it here.
+                    let _ = stream.shutdown(Shutdown::Both);
+                });
             }
         });
         let (url, stop) = (format!("http://{addr}"), Some((addr, done, accept)));
@@ -100,11 +139,11 @@ impl FakeWorker {
     }
     /// Queues `inject` for the next call of `route` (in the order queued).
     pub fn inject(&self, route: Route, inject: Inject) {
-        self.state.lock().unwrap().script.push((route, inject));
+        lock(&self.state).script.push((route, inject));
     }
     /// Every stored chunk, per entry in the order stored.
     pub fn chunks(&self) -> Vec<Chunk> {
-        self.state.lock().unwrap().chunks.clone()
+        lock(&self.state).chunks.clone()
     }
     /// The stored bodies of `entry_id`, joined in order: its compressed record stream.
     pub fn stream(&self, entry_id: &str) -> Vec<u8> {
@@ -112,11 +151,11 @@ impl FakeWorker {
         chunks.flat_map(|c| c.body).collect()
     }
     pub fn heartbeats(&self) -> Vec<Value> {
-        self.state.lock().unwrap().heartbeats.clone()
+        lock(&self.state).heartbeats.clone()
     }
     /// The run is over from now (`stop: true`, `seconds_left` 0, reason `deadline`), or not.
     pub fn set_stop(&self, stop: bool) {
-        self.state.lock().unwrap().stop = stop;
+        lock(&self.state).stop = stop;
     }
 }
 
@@ -125,44 +164,78 @@ impl Drop for FakeWorker {
         let (addr, done, accept) = self.stop.take().expect("set by start");
         done.store(true, SeqCst);
         TcpStream::connect(addr).map(|_| accept.join()).ok();
+        for conn in lock(&self.state).conns.drain(..) {
+            let _ = conn.shutdown(Shutdown::Both);
+        }
     }
 }
 
-type Request = (String, String, HashMap<String, String>, Vec<u8>); // headers in lower case
-/// Serves one connection, request after request, until the peer closes it or an answer is dropped.
-fn serve(stream: TcpStream, state: &Mutex<State>) -> Option<()> {
+/// One request, header names in lower case.
+struct Request {
+    method: String,
+    target: String,
+    headers: HashMap<String, String>,
+    body: Vec<u8>,
+}
+
+/// Serves one connection, request after request, until the peer closes it, it asks to close, an
+/// answer is dropped, or the fake is dropped.
+fn serve(stream: &TcpStream, state: &Mutex<State>) -> Option<()> {
     let mut r = BufReader::new(stream.try_clone().ok()?);
     loop {
         let mut lines = r.by_ref().lines().map_while(Result::ok);
         let start = lines.next()?;
-        let (mut start, mut headers) = (start.split(' ').map(str::to_string), HashMap::new());
+        let mut start = start.split(' ').map(str::to_string);
+        let mut headers = HashMap::new();
         for line in lines.take_while(|l| !l.is_empty()) {
             let (k, v) = line.split_once(':')?;
             headers.insert(k.trim().to_lowercase(), v.trim().to_string());
         }
-        let len: &str = headers.get("content-length").map_or("0", String::as_str);
-        let body = vec![0; len.parse().ok()?];
-        let mut req = (start.next()?, start.next()?, headers, body);
-        r.read_exact(&mut req.3).ok()?;
+        let len = headers.get("content-length").map_or("0", String::as_str);
+        let mut req = Request {
+            method: start.next()?,
+            target: start.next()?,
+            body: vec![0; len.parse().ok()?],
+            headers,
+        };
+        r.read_exact(&mut req.body).ok()?;
         let (status, retry, body) = answer(&req, state)?;
         let mut head = format!("HTTP/1.1 {status} Fake\r\nContent-Length: {}", body.len());
         head.extend(retry.map(|s| format!("\r\nRetry-After: {s}")));
         let all = format!("{head}\r\nContent-Type: application/json\r\n\r\n{body}");
-        (&stream).write_all(all.as_bytes()).ok()?;
+        (&*stream).write_all(all.as_bytes()).ok()?;
+        if req
+            .headers
+            .get("connection")
+            .is_some_and(|v| v.eq_ignore_ascii_case("close"))
+        {
+            return None;
+        }
     }
 }
 
 fn error(status: u16) -> Value {
-    let (mut codes, s) = (CODES.split(' '), format!("{status}:"));
-    let code = codes.find_map(|c| c.strip_prefix(&s)).unwrap_or("internal");
+    let code = match status {
+        400 => "malformed",
+        401 => "unauthorized",
+        403 => "forbidden",
+        404 => "not_found",
+        409 => "conflict",
+        410 => "closed",
+        413 => "too_large",
+        422 => "digest_mismatch",
+        429 => "rate_limited",
+        503 => "maintenance",
+        _ => "internal",
+    };
     json!({"error": code, "message": format!("The fake Worker answered {status}.")})
 }
 
 /// The answer to `req`: status, `Retry-After` and body; `None` drops the connection unanswered.
 fn answer(req: &Request, state: &Mutex<State>) -> Option<(u16, Option<u64>, String)> {
-    let (path, q) = req.1.split_once('?').unwrap_or((&req.1, ""));
+    let (path, q) = req.target.split_once('?').unwrap_or((&req.target, ""));
     let segs: Vec<&str> = path.trim_matches('/').split('/').collect();
-    let route = match (req.0.as_str(), segs.as_slice()) {
+    let route = match (req.method.as_str(), segs.as_slice()) {
         ("GET", ["v1", "health"]) => return Some((200, None, json!({"status": "ok"}).to_string())),
         ("POST", ["v1", "device"]) => Route::Device,
         ("POST", ["v1", "device", "token"]) => Route::DeviceToken,
@@ -173,7 +246,7 @@ fn answer(req: &Request, state: &Mutex<State>) -> Option<(u16, Option<u64>, Stri
         ("POST", ["v1", "runs", _, "continue"]) => Route::Continue,
         _ => return Some((404, None, error(404).to_string())),
     };
-    let mut s = state.lock().unwrap();
+    let mut s = lock(state);
     let at = s.script.iter().position(|(r, _)| *r == route);
     let inject = at.map(|i| s.script.remove(i).1).unwrap_or_default();
     drop(s);
@@ -182,7 +255,7 @@ fn answer(req: &Request, state: &Mutex<State>) -> Option<(u16, Option<u64>, Stri
         return Some((status, inject.retry_after, error(status).to_string()));
     }
     let ok = 200 + u16::from(matches!(route, Route::Open | Route::Continue)); // 201 Created
-    let body = work(route, req, &segs, q, &mut state.lock().unwrap());
+    let body = work(route, req, &segs, q, &mut lock(state));
     let (status, body) = body.map_or_else(|e| (e, error(e)), |b| (ok, b));
     (!inject.drop_after_commit).then_some((status, inject.retry_after, body.to_string()))
 }
@@ -190,7 +263,7 @@ fn answer(req: &Request, state: &Mutex<State>) -> Option<(u16, Option<u64>, Stri
 /// The normal answer of `route`, or the status of a missing or malformed field (`400`).
 fn work(r: Route, req: &Request, segs: &[&str], q: &str, s: &mut State) -> Result<Value, u16> {
     let (stop, left) = (s.stop, if s.stop { 0 } else { SECONDS_LEFT });
-    let h = |name: &str| req.2.get(name).map(String::as_str).ok_or(400u16);
+    let h = |name: &str| req.headers.get(name).map(String::as_str).ok_or(400u16);
     let num = |name| h(name)?.parse::<u64>().map_err(|_| 400u16);
     Ok(match r {
         Route::Device => json!({"device_code": "de".repeat(32), "user_code": "BCDF-GHJK",
@@ -210,8 +283,10 @@ fn work(r: Route, req: &Request, segs: &[&str], q: &str, s: &mut State) -> Resul
             let last = s.entries.last().map(|e| e["entry_id"].clone());
             let id = named.map(Value::from).or(last).ok_or(404u16)?;
             let mut e = entry(&mut s.entries, id.as_str().unwrap_or_default()).clone();
-            e["status"] = if stop && sealed(&e) { "sealed" } else { "open" }.into();
-            (e["sealed"], e["stop"]) = (sealed(&e).into(), stop.into());
+            let is_sealed = sealed(&e);
+            e["status"] = if stop && is_sealed { "sealed" } else { "open" }.into();
+            e["sealed"] = is_sealed.into();
+            e["stop"] = stop.into();
             e
         }
         Route::Chunk => {
@@ -221,23 +296,18 @@ fn work(r: Route, req: &Request, segs: &[&str], q: &str, s: &mut State) -> Resul
             s.chunks.push(Chunk {
                 entry_id: id.into(),
                 offset,
-                body: req.3.clone(),
+                body: req.body.clone(),
             });
             let e = entry(&mut s.entries, id);
             e["offset"] = (e["offset"].as_u64().unwrap_or(0) + len).into();
-            (e["next_seq"], e["head"]) = ((last + 1).into(), head.into());
+            e["next_seq"] = (last + 1).into();
+            e["head"] = head.into();
             json!({"offset": e["offset"], "next_seq": e["next_seq"], "head": e["head"],
                 "received_at": "2026-11-06T10:00:01Z", "sealed": sealed(e)})
         }
         Route::Heartbeat => {
-            let mut beat: Value = serde_json::from_slice(&req.3).map_err(|_| 400u16)?;
+            let beat: Value = serde_json::from_slice(&req.body).map_err(|_| 400u16)?;
             let id = beat["entry_id"].as_str().ok_or(400u16)?.to_string();
-            let c = &beat["counts"];
-            let deep = |m: &Map<String, Value>| m.values().any(|v| v.is_object() || v.is_array());
-            if !c.is_null() && c.as_object().is_none_or(deep) {
-                let n = c.to_string().len(); // dropped from the kept copy, never refused
-                (beat["counts"], beat["counts_dropped"]) = (Value::Null, n.into());
-            }
             let e = entry(&mut s.entries, &id);
             if beat["final"] == true {
                 e["final"] = json!({"seq": beat["seq"], "head": beat["head"]});

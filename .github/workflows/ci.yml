@@ -1,7 +1,9 @@
 # CI runs the gate, nothing less: one job, `sh scripts/gate.sh fast`, the same command a build box
 # runs before every merge (README.md, "The gate"). There is no scope step and no path filter, so
 # every pull request gets a completed `check` that can be required.
-# Only a superseded pull request run is cancelled; every push to main and v1.0/integration runs to the end.
+# Only a superseded pull request run is cancelled. Each push has a group of its own (its sha), so no
+# push run is ever left pending behind another and cancelled by a third: every push to main and
+# v1.0/integration runs to the end.
 #
 # A test that hangs the runner moves to the full tier (the night log names it); CI is never
 # narrowed by crate.
@@ -19,7 +21,7 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:

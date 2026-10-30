@@ -9,9 +9,9 @@
 use super::pki::{self, TestPki};
 use super::ports;
 use base64::Engine as _;
-use flate2::{Compress, Compression, FlushCompress};
+use flate2::{Compression, write::DeflateEncoder};
 use sha1::{Digest, Sha1};
-use std::io::{self, Read as _};
+use std::io::{self, Read as _, Write as _};
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -45,7 +45,7 @@ pub enum Body {
 
 /// A `Content-Encoding` the body is compressed with before sending. The whole body (every piece
 /// joined) is compressed once, and for `Chunked` and `Sse` the compressed bytes are split again
-/// over the same number of pieces. `Deflate` is the zlib format (RFC 9110 section 8.4.1.2); `Br`
+/// over at most the same number of pieces (fewer when the coded body is short). `Deflate` is the zlib format (RFC 9110 section 8.4.1.2); `Br`
 /// is a valid brotli stream of uncompressed meta-blocks, since no brotli encoder is a dependency.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Coding {
@@ -90,7 +90,8 @@ pub struct Script {
     /// Hold each answer this long after its request arrived.
     pub hold_answer: Option<Duration>,
     /// Close the connection once this many answer bytes are sent on it, counting from its first
-    /// answer byte.
+    /// answer byte. The close is clean (a FIN, and over TLS a `close_notify`), not a reset, so a
+    /// test of an upstream dying mid-body relies on the cut `Content-Length` or chunked framing.
     pub close_after: Option<u64>,
 }
 
@@ -122,17 +123,10 @@ impl Script {
     }
 }
 
-/// What one connection sent the upstream, as raw bytes after TLS.
-#[derive(Clone, Debug, Default)]
-pub struct Received {
-    pub conn: u64,
-    pub bytes: Vec<u8>,
-}
-
 /// A running fake upstream on a held loopback port; it stops when dropped.
 pub struct Upstream {
     addr: SocketAddr,
-    received: Arc<Mutex<Vec<Received>>>,
+    received: Arc<Mutex<Vec<Vec<u8>>>>,
     pki: TestPki,
     stop: Option<oneshot::Sender<()>>,
     thread: Option<JoinHandle<()>>,
@@ -191,8 +185,8 @@ impl Upstream {
         &self.pki
     }
 
-    /// Every connection so far, in accept order.
-    pub fn received(&self) -> Vec<Received> {
+    /// What each connection so far sent the upstream, as raw bytes after TLS, in accept order.
+    pub fn received(&self) -> Vec<Vec<u8>> {
         lock(&self.received).clone()
     }
 }
@@ -211,7 +205,7 @@ impl Drop for Upstream {
 struct Shared {
     script: Script,
     tls: Option<tokio_rustls::TlsAcceptor>,
-    received: Arc<Mutex<Vec<Received>>>,
+    received: Arc<Mutex<Vec<Vec<u8>>>>,
     next: AtomicUsize,
 }
 
@@ -236,17 +230,18 @@ fn serve(listener: std::net::TcpListener, shared: Arc<Shared>, stopped: oneshot:
     rt.block_on(async move {
         let listener = tokio::net::TcpListener::from_std(listener).expect("a tokio listener");
         let accept = async {
-            let mut conn = 0u64;
             loop {
                 let Ok((tcp, _)) = listener.accept().await else {
+                    // A lasting error such as EMFILE must not spin a core.
+                    tokio::time::sleep(Duration::from_millis(10)).await;
                     continue;
                 };
-                lock(&shared.received).push(Received {
-                    conn,
-                    bytes: Vec::new(),
-                });
+                let conn = {
+                    let mut received = lock(&shared.received);
+                    received.push(Vec::new());
+                    received.len() - 1
+                };
                 tokio::spawn(connection(shared.clone(), tcp, conn));
-                conn += 1;
             }
         };
         tokio::select! {
@@ -260,7 +255,7 @@ fn serve(listener: std::net::TcpListener, shared: Arc<Shared>, stopped: oneshot:
 trait Io: AsyncRead + AsyncWrite + Unpin + Send {}
 impl<T: AsyncRead + AsyncWrite + Unpin + Send> Io for T {}
 
-async fn connection(shared: Arc<Shared>, tcp: tokio::net::TcpStream, conn: u64) {
+async fn connection(shared: Arc<Shared>, tcp: tokio::net::TcpStream, conn: usize) {
     if let Some(hold) = shared.script.hold_handshake {
         tokio::time::sleep(hold).await;
     }
@@ -280,7 +275,7 @@ async fn connection(shared: Arc<Shared>, tcp: tokio::net::TcpStream, conn: u64) 
         io,
         buf: Vec::new(),
         shared,
-        conn: conn as usize,
+        conn,
         written: 0,
     };
     let _ = c.http1().await;
@@ -333,9 +328,7 @@ impl Conn {
         if n == 0 {
             return Err(io::ErrorKind::UnexpectedEof.into());
         }
-        lock(&self.shared.received)[self.conn]
-            .bytes
-            .extend_from_slice(&tmp[..n]);
+        lock(&self.shared.received)[self.conn].extend_from_slice(&tmp[..n]);
         self.buf.extend_from_slice(&tmp[..n]);
         Ok(())
     }
@@ -490,7 +483,7 @@ impl Conn {
         head += "\r\n";
         self.send(head.as_bytes()).await?;
 
-        let mut compress = Compress::new(Compression::default(), false);
+        let mut compress = DeflateEncoder::new(Vec::new(), Compression::default());
         let mut closed = false;
         for msg in messages {
             let (opcode, payload) = match msg {
@@ -593,22 +586,12 @@ fn ws_frame(opcode: u8, rsv1: bool, payload: &[u8]) -> Vec<u8> {
     f
 }
 
-/// permessage-deflate (RFC 7692): raw deflate on the one stream of this direction, a sync flush,
-/// and the `00 00 ff ff` tail stripped.
-fn deflate_message(c: &mut Compress, data: &[u8]) -> Vec<u8> {
-    let start = c.total_in();
-    let mut out = Vec::with_capacity(data.len() / 2 + 64);
-    loop {
-        if out.len() == out.capacity() {
-            out.reserve(out.capacity().max(64));
-        }
-        let used = (c.total_in() - start) as usize;
-        c.compress_vec(&data[used..], &mut out, FlushCompress::Sync)
-            .expect("deflate a message");
-        if (c.total_in() - start) as usize == data.len() && out.len() < out.capacity() {
-            break;
-        }
-    }
+/// permessage-deflate (RFC 7692): raw deflate on the one stream of this direction (context
+/// takeover), a sync flush (`flush`), and the `00 00 ff ff` tail stripped.
+fn deflate_message(enc: &mut DeflateEncoder<Vec<u8>>, data: &[u8]) -> Vec<u8> {
+    enc.write_all(data).expect("deflate a message");
+    enc.flush().expect("sync flush a message");
+    let mut out = std::mem::take(enc.get_mut());
     assert!(
         out.ends_with(&[0, 0, 0xff, 0xff]),
         "a sync flush ends in 00 00 ff ff"
