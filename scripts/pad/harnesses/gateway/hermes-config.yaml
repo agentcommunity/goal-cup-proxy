@@ -1,0 +1,4 @@
+# Hermes with its built-in Vercel AI Gateway provider; the key is AI_GATEWAY_API_KEY in {home}/.env.
+model:
+  provider: ai-gateway
+  default: deepseek/deepseek-v4.1-flash
