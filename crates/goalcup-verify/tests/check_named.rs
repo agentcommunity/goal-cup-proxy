@@ -139,7 +139,12 @@ fn counts_equal_the_recorder_rules_for_tunnels_snapshots_and_ws_gaps() {
     let tunnel = e.open(StreamKind::Conn, 0, 0, meta);
     e.count();
     e.gap(tunnel, GapReason::Pinned, 1_000, 0, 0, Value::Null);
-    e.end(tunnel, EndReason::Complete, 0, json!({"up": 512, "down": 2048}));
+    e.end(
+        tunnel,
+        EndReason::Complete,
+        0,
+        json!({"up": 512, "down": 2048}),
+    );
     let meta = json!({"path": "fake:state.db", "gen": 0, "from": 0});
     let snap = e.open(StreamKind::Snapshot, 0, 0, meta);
     e.data(snap, 0, 0, b"fake database bytes");
@@ -150,7 +155,14 @@ fn counts_equal_the_recorder_rules_for_tunnels_snapshots_and_ws_gaps() {
     let q = e.open(StreamKind::HttpReq, c, 0, head);
     e.end(q, EndReason::Complete, 0, Value::Null);
     let up = e.open(StreamKind::WsUp, c, q, json!({"deflate": false}));
-    e.gap(up, GapReason::MemoryGuard, 10, 0, 9, json!({"guard": "held_bytes"}));
+    e.gap(
+        up,
+        GapReason::MemoryGuard,
+        10,
+        0,
+        9,
+        json!({"guard": "held_bytes"}),
+    );
     e.data(up, 8, 0x90 | FLAG_FIN, b"p");
     e.data(up, 9, 0x10 | FLAG_FIN, br#"{"input":"hi"}"#);
     e.end(up, EndReason::Complete, 23, Value::Null);

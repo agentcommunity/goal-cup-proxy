@@ -178,7 +178,9 @@ impl Tally {
                 let s = self.streams.get(sid).cloned().unwrap_or_default();
                 let len = bytes.len() as u64;
                 match s.skind {
-                    Some(StreamKind::Native | StreamKind::Snapshot) => self.add("native_bytes", len),
+                    Some(StreamKind::Native | StreamKind::Snapshot) => {
+                        self.add("native_bytes", len)
+                    }
                     _ => self.add("wire_bytes", len),
                 }
                 let msg = flags & FLAG_FIN != 0 && matches!(flags >> 4, 1 | 2);
@@ -197,7 +199,7 @@ impl Tally {
                 let s = self.streams.get(sid).cloned().unwrap_or_default();
                 if s.skind == Some(StreamKind::HttpReq) && s.post && s.decrypt {
                     self.add("http_post", 1);
-                    self.model_request(s.host, *reason == EndReason::Complete && !s.gapped);
+                    self.model_request(s.host.clone(), *reason == EndReason::Complete && !s.gapped);
                 }
                 if s.tunnel {
                     let t: Value = serde_json::from_slice(tail).unwrap_or(Value::Null);
@@ -230,7 +232,8 @@ impl Tally {
                 if let Some(s) = self.streams.get_mut(sid) {
                     s.gapped = true;
                     if s.tunnel {
-                        self.tunnel_hosts.get_mut(&s.host).unwrap()["listed"] = reason.name().into();
+                        self.tunnel_hosts.get_mut(&s.host).unwrap()["listed"] =
+                            reason.name().into();
                     }
                 }
             }
@@ -279,9 +282,9 @@ pub fn totals(boots: &[Value], down_ms: &[u64]) -> Value {
             *hosts.entry(h.clone()).or_default() += n.as_u64().unwrap();
         }
         for (h, x) in b["tunnel_hosts"].as_object().unwrap() {
-            let t = tunnels.entry(h.clone()).or_insert_with(
-                || json!({"conns": 0, "up": 0, "down": 0, "listed": null}),
-            );
+            let t = tunnels
+                .entry(h.clone())
+                .or_insert_with(|| json!({"conns": 0, "up": 0, "down": 0, "listed": null}));
             for k in ["conns", "up", "down"] {
                 t[k] = json!(t[k].as_u64().unwrap() + x[k].as_u64().unwrap());
             }

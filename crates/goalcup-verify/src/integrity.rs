@@ -967,7 +967,12 @@ impl Pass {
     fn finish(&mut self, open_frame: bool, now_ns: Option<u64>, e: &Entry) {
         if self.boot.is_none() {
             if now_ns.is_some() {
-                self.set("inv1", Res::Skip, "nothing of the live entry is durable yet", None);
+                self.set(
+                    "inv1",
+                    Res::Skip,
+                    "nothing of the live entry is durable yet",
+                    None,
+                );
             } else {
                 self.fail("inv1", "the record holds no PART", At(0, 0, 0));
             }
