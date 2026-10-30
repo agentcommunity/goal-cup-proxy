@@ -4,10 +4,19 @@ use std::ffi::OsStr;
 use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
 
-use goalcup::native::pattern::{Pattern, first_match, parse, path_id};
+use goalcup::native::pattern::{Pattern, Row, first_match, parse, path_id};
 
 fn p(s: &str) -> Pattern {
     parse(s).unwrap_or_else(|e| panic!("{s:?} should parse: {e}"))
+}
+
+fn row(root: &Path, pattern: &Pattern) -> Row {
+    let (name, root, pattern) = ("r".into(), root.into(), pattern.clone());
+    Row {
+        name,
+        root,
+        pattern,
+    }
 }
 
 #[test]
@@ -77,12 +86,12 @@ fn the_first_matching_row_wins() {
     let sub = p("sub/*.jsonl");
     let file = Path::new("/home/h/projects/sub/x.jsonl");
 
-    let rows = [(root, &all), (root, &sub)];
+    let rows = [row(root, &all), row(root, &sub)];
     assert_eq!(
         first_match(&rows, file),
         Some((0, Path::new("sub/x.jsonl")))
     );
-    let rows = [(root, &sub), (root, &all)];
+    let rows = [row(root, &sub), row(root, &all)];
     assert_eq!(
         first_match(&rows, file),
         Some((0, Path::new("sub/x.jsonl")))
@@ -91,19 +100,19 @@ fn the_first_matching_row_wins() {
     // One root inside the other: the first row still wins, and the ID is relative to its root.
     let outer = Path::new("/home/h");
     let one = p("*/*.jsonl");
-    let rows = [(root, &one), (outer, &all)];
+    let rows = [row(root, &one), row(outer, &all)];
     assert_eq!(
         first_match(&rows, file),
         Some((0, Path::new("sub/x.jsonl")))
     );
-    let rows = [(outer, &all), (root, &one)];
+    let rows = [row(outer, &all), row(root, &one)];
     assert_eq!(
         first_match(&rows, file),
         Some((0, Path::new("projects/sub/x.jsonl")))
     );
 
     // A root is a whole-component prefix, never a string prefix.
-    let rows = [(Path::new("/home/h/proj"), &all)];
+    let rows = [row(Path::new("/home/h/proj"), &all)];
     assert_eq!(first_match(&rows, file), None);
 }
 
@@ -115,7 +124,7 @@ fn path_id_escapes_and_never_holds_the_root() {
     let all = p("**/*.jsonl");
     let root = Path::new("/home/secret-root");
     let file = Path::new("/home/secret-root/s/t.jsonl");
-    let (row, rel) = first_match(&[(root, &all)], file).expect("match");
+    let (row, rel) = first_match(&[row(root, &all)], file).expect("match");
     assert_eq!(row, 0);
     let id = path_id("transcripts", rel);
     assert_eq!(id, "transcripts:s/t.jsonl");
