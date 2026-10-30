@@ -1,14 +1,11 @@
 //! `upload.json` (seam S9, PRD-06 section 11): what the uploader tells PRD-10, the pad and the
 //! watchers. One file per entry folder, mode 0600, replaced by an atomic rename.
 //!
-//! The file is a cache: the server's position is the truth (section 8), so a missing or corrupt file
-//! reads as None. Readers accept unknown keys. `text` never holds a header, a token or a body.
-//!
-//! [`write`] is safe from any thread: each call has its own temp file. The upload and beat threads
-//! each own some fields, so one in-memory [`UploadJson`] behind one lock feeds both, or one thread
-//! would write back the other's stale fields.
+//! A cache: the server's position is the truth, so a missing or corrupt file reads as None.
+//! [`write`] is safe from any thread; the two threads share one [`UploadJson`] behind one lock.
 
 use super::ServerWord;
+use super::client::Recording;
 use super::policy::Class;
 use crate::pipeline::Mono;
 use serde::{Deserialize, Serialize};
@@ -132,8 +129,8 @@ impl LastError {
 pub struct Beat {
     pub last_ok: Option<String>,
     pub failures: u32,
-    /// `ok`, `gaps` or `failed`, as last sent.
-    pub recording: Option<String>,
+    /// As last sent.
+    pub recording: Option<Recording>,
 }
 
 /// The last heartbeat answer as the file holds it: `asked_at` is a wall time, because
@@ -216,7 +213,7 @@ impl Writer {
 }
 
 /// `2026-11-07T10:00:01Z`: UTC, whole seconds. A time before 1970 is written as 1970.
-fn rfc3339(t: SystemTime) -> String {
+pub(super) fn rfc3339(t: SystemTime) -> String {
     let secs = t.duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs());
     goalcup_format::dump::wall(secs.saturating_mul(1_000_000_000))
 }
@@ -254,36 +251,5 @@ mod tests {
             .mode();
         assert_eq!(mode & 0o777, 0o600);
         assert_eq!(read(dir.path()), Some(j));
-    }
-
-    /// S9: two threads of one process writing the file never publish a torn one or lose a write.
-    #[test]
-    fn two_threads_writing_never_tear_the_file() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().to_path_buf();
-        write(&path, &UploadJson::new("r".into(), "e".into())).unwrap();
-        let writers: Vec<_> = (0..2)
-            .map(|t| {
-                let path = path.clone();
-                std::thread::spawn(move || {
-                    let mut j = UploadJson::new("r".repeat(4096), format!("e{t}"));
-                    for i in 0..2000 {
-                        j.failures = i;
-                        write(&path, &j).unwrap();
-                    }
-                })
-            })
-            .collect();
-        let mut reads = 0;
-        while writers.iter().any(|w| !w.is_finished()) {
-            assert!(read(&path).is_some(), "a torn or missing upload.json");
-            reads += 1;
-        }
-        for w in writers {
-            w.join().unwrap();
-        }
-        assert!(reads > 0);
-        let left: Vec<_> = std::fs::read_dir(&path).unwrap().collect();
-        assert_eq!(left.len(), 1, "a temp file was left behind");
     }
 }

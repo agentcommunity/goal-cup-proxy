@@ -63,7 +63,7 @@ pub enum Refusal {
     SettingSet { file: PathBuf, key: String },
     /// Another run holds this harness's isolated home.
     HomeLocked { home: PathBuf },
-    /// `program --version` does not hold the connector's `version` prefix.
+    /// No word of `program --version` starts with the connector's `version` prefix.
     VersionMismatch { program: String, want: String },
 }
 
@@ -231,8 +231,13 @@ pub fn plan(connector: &Connector, env: &Env, home: &Path) -> LaunchPlan {
     let harness_version = free
         .then(|| launch::harness_version(&program, &harness_env))
         .flatten();
+    // `want` starts a word of the line, a leading `v` stripped: "2." takes v2.1, never 1.12.
+    let held = |want: &str, got: &str| {
+        let starts = |w: &str| w.strip_prefix('v').unwrap_or(w).starts_with(want);
+        got.split_whitespace().any(starts)
+    };
     let version_refusal = match (&connector.version, &harness_version) {
-        (Some(want), Some(got)) if !got.contains(want.as_str()) => Some(Refusal::VersionMismatch {
+        (Some(want), Some(got)) if !held(want, got) => Some(Refusal::VersionMismatch {
             program: connector.program.clone(),
             want: want.clone(),
         }),
@@ -271,6 +276,17 @@ pub fn plan(connector: &Connector, env: &Env, home: &Path) -> LaunchPlan {
     if free {
         let skipped = write_settings(home, &connector.update_off).into_iter();
         log.extend(skipped.map(|s| format!("update_off not written: {}", s.reason)));
+    }
+    // Where `home` sets `HOME`, a login shell would lose the handed `PATH` (PRD-17 P11).
+    let profile = connector.home.get("HOME").zip(harness_env.get("PATH"));
+    if free
+        && let Some((dir, path)) = profile
+        && let Err(e) = launch::write_profile(Path::new(&fill(dir)), path)
+    {
+        log.push(match e.kind() {
+            std::io::ErrorKind::AlreadyExists => "kept a .profile goalcup did not write".into(),
+            kind => format!("could not write .profile: {kind}"),
+        });
     }
 
     LaunchPlan {

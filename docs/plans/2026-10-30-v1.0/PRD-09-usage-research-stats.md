@@ -931,3 +931,19 @@ PRD-01, PRD-05, PRD-08, PRD-12, PRD-16 and the old code.
 - **Declined, accepted by both reviewers:** A3 (pending creates are not dropped at a `ws_down` GAP;
   `previous_response_id` bounds the shift) and the `End::Failed` arm merge (no line saved).
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-12 slice 4 (merge 69f355c6)
+
+- The pad's spend check, as merged, runs `nice -n 19 goalcup-verify usage <entry> --json` on the open
+  entry every 5 minutes and prices `models[]` `model` and `tokens` `input`, `cached`,
+  `cache_write` and `output` (`reasoning` inside `output`, never added again). A rename of those
+  keys is a seam line, since the T6 cap reads them; exit 3 stays "not read", never 0 USD.
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-04 core slice part 3 (merge a302d688)
+
+- Until PRD-04's `snapshot.rs` lands, a `final` row's database reaches the record only at the seal,
+  as single `snapshot` streams with `form: "snapshot"` and no `set` or `harness_exited` (PRD-04
+  note). The usage reader builds no reading path for that interim shape and takes no fixture from a
+  record made before that slice; it reads databases by `set` as PRD-01 section 4 states.
+- No locked ledger item is touched and no owner question comes from this slice.

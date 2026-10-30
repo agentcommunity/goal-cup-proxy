@@ -163,9 +163,10 @@ fn old_files_are_skipped_and_the_new_one_found_among_five_thousand() {
         let m = fs::metadata(dir.join(format!("{i}.jsonl"))).unwrap();
         last = last.max(m.mtime().max(m.ctime()));
     }
-    // The run starts on the next whole second after the last old change (section 2).
+    // The run starts on the next whole second after the last old change (section 2). File times
+    // come from the kernel's coarse clock, a tick behind `now`, so the new file waits 50 ms more.
     let since = UNIX_EPOCH + Duration::from_secs(last as u64 + 1);
-    while SystemTime::now() < since {
+    while SystemTime::now() < since + Duration::from_millis(50) {
         std::thread::sleep(Duration::from_millis(20));
     }
     fs::write(t.path().join("p7/new.jsonl"), b"new\n").unwrap();
