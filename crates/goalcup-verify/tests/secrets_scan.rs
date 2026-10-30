@@ -152,6 +152,19 @@ fn secrets_known_value_found_in_a_raw_file_and_on_stdin() {
         "{v}"
     );
     assert_eq!(v["inputs"][0]["read"], "partial");
+    // Part files copied into a folder of another name: its other files are read too.
+    let loose = tmp("loose");
+    for d in std::fs::read_dir(e.join("rec")).unwrap() {
+        let d = d.unwrap().path();
+        let n = d.file_name().unwrap().to_string_lossy().into_owned();
+        if n.starts_with("rec-") {
+            std::fs::copy(&d, loose.join(n)).unwrap();
+        }
+    }
+    std::fs::write(loose.join("harness.log"), &k).unwrap();
+    let (code, v) = scan(&[&loose], b"");
+    let hits = v["known_hits"].as_array().map(Vec::len);
+    assert_eq!((code, hits, &v["inputs"][0]["as"]), (2, Some(1), &json!("record")), "{v}");
 }
 
 #[test]

@@ -386,7 +386,8 @@ impl Scan {
     /// Scans one path: whether a record was decoded in it, and whether it was read whole. `-` is
     /// stdin; a part file is a record; a folder holding an entry has its record decoded, then is
     /// walked without its part files and `rec/`, the recorder's own state that is never
-    /// uploaded (index files, the run CA key); a `rec` folder given is its record only; any
+    /// uploaded (index files, the run CA key); a `rec` folder given is its record only; another
+    /// folder holding part files has its record decoded and its other files read raw; any
     /// other folder is walked; anything else is raw. In a walk, a path that cannot be read, and
     /// a symlink to a folder, leave the input partial; what is neither file nor folder is
     /// skipped. Only a top-level path is an error.
@@ -402,9 +403,9 @@ impl Scan {
                 .is_none_or(|e| self.record(r, e).unwrap_or(false));
             let mut rec = e.is_some();
             let skip = |q: &Path| {
-                e.as_ref().is_some_and(|e| {
-                    e.dir != p || q == e.dir.join("rec") || e.files.iter().any(|f| f.0 == q)
-                })
+                let in_rec = |e: &Entry| q.starts_with(e.dir.join("rec"));
+                e.as_ref()
+                    .is_some_and(|e| in_rec(e) || e.files.iter().any(|f| f.0 == q))
             };
             let mut all = std::fs::read_dir(p)?.collect::<io::Result<Vec<_>>>()?;
             all.retain(|d| !skip(&d.path()));
