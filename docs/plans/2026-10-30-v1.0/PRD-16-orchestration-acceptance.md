@@ -1672,3 +1672,25 @@ kept and now cites BUILD-PROMPT section 5, since B3 no longer carries it.
   `h2_stream`, PRD-14 note).
 - **Housekeeping for the end:** `v1.0/prd-14-tests-lane-merge-wip` is still to be removed from origin.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-12 slice 4 (merge 69f355c6)
+
+- `gate fast: PASS in 137s` on 69f355c6 (nextest 188 of 188, 16 pad tests). Six paths changed, all
+  under `scripts/pad/`, no `Cargo.toml`. All 10 non-merge commits in 00fac28d..69f355c6 carry both
+  trailer lines. No real key run; proof by fake-binary probes in build boxes.
+- **Size report, PRD-12** (`wc -l` at 69f355c6, PRD-00 row "the pad, about 1,350 to 1,450 with its
+  tests"): `scripts/pad/` is 2,540 lines (`pad` 610 of 320, `pad-run` 658 of 330, `check.py` 429 of
+  320, `table` 192 of 150, `test_pad.py` 308 of 90, `image` 54 of 60, `sbx.mjs` 133 with no row, the
+  rest 156), 175% of the row's top and 463 more than at 9e259b4d. Still to land: `selftest`, `exec/`,
+  13 harness files and the skill (about 465 at their rows), then six faults, `pre` and the queue. The
+  slice 3 decision (points 3, 4, 5) stands and the 12:53Z owner question on the row stays open; the
+  end-of-build report counts the pad against it.
+- **Before the first pad, A1, A2 or A3 run with a real key,** check two things besides
+  `start.mask_rules` holding more than one entry: `goalcup seal --yes` is built (on integration it
+  exits 3 "not built", so the 10 USD seal of ledger T6 cannot happen), and `goalcup-verify usage` no
+  longer exits 3 (else the spend check reads nothing). Until both, a paid run has no working cap.
+- **Spend scribe:** `pad-out/spend.jsonl` has one line per run; sum `usd`, else `usd_live`, for the
+  200 and 400 USD notices (PRD-12 note lists the keys).
+- **Build order unchanged.** The cycle rungs (section 1a, 4 to 6) wait on PRD-10's `seal` and
+  `recover`, PRD-05's masker, PRD-09's `usage` and PRD-02's `watchdog::run`.
+- No locked ledger item is touched and no owner question comes from this slice.
