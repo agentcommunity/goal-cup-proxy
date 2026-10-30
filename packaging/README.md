@@ -66,8 +66,7 @@ the [README](../README.md#platforms).
 
 The version is written in one place: `version` under `[workspace.package]` in `Cargo.toml`. Every
 crate inherits it, and the binaries and the report fields (`tracer_version`, `daemon_version`,
-`verifier_version`) read it at build time. Docs say "the latest release" and never write it;
-`scripts/check-version.py`, run by both gate tiers, fails on any other copy.
+`verifier_version`) read it at build time. Docs say "the latest release" and never write it.
 
 The active repository ruleset protects `main`, so `scripts/release.sh` never pushes it: the
 version bump is a pull request, and the release is a tag on merged `origin/main`.
