@@ -6,7 +6,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use super::{ConnectorError, ConnectorSource, Form, HostList};
+use super::{ConnectorError, ConnectorSource, Form, HostList, launch};
 
 /// One connector file. PRD-10 reads its participant-facing fields directly. `id`, `name` and
 /// `program` are required; every other key is optional.
@@ -198,49 +198,39 @@ impl From<MaskRule> for RawMaskRule {
     }
 }
 
-/// The `id` key of a connector file, without the other checks.
-pub(crate) fn id_of(text: &str) -> Option<String> {
-    let table: toml::Table = toml::from_str(text).ok()?;
-    table.get("id")?.as_str().map(str::to_string)
-}
-
 /// Parses and checks one connector file. `file` names it in errors.
 pub fn parse(bytes: &[u8], file: &str) -> Result<Connector, ConnectorError> {
-    let text = std::str::from_utf8(bytes).map_err(|_| ConnectorError::Parse {
-        file: file.to_string(),
-        line: 0,
-        message: "not UTF-8".to_string(),
-    })?;
-    let mut connector: Connector = from_toml(text, file)?;
-    check(&connector).map_err(|e| e.in_file(file))?;
+    let mut connector: Connector = from_toml(bytes, file)?;
+    check(&connector, file)?;
     connector.sha256 = hex::encode(Sha256::digest(bytes));
-    connector.source = ConnectorSource::Builtin;
     Ok(connector)
 }
 
-/// TOML into `T`; an error names the line and never quotes a value.
+/// TOML bytes into `T`; an error names the line and never quotes a value.
 pub(crate) fn from_toml<T: serde::de::DeserializeOwned>(
-    text: &str,
+    bytes: &[u8],
     file: &str,
 ) -> Result<T, ConnectorError> {
+    let parse_error = |line, message| ConnectorError::Parse {
+        file: file.to_string(),
+        line,
+        message,
+    };
+    let text = std::str::from_utf8(bytes).map_err(|_| parse_error(0, "not UTF-8".into()))?;
     toml::from_str(text).map_err(|e| {
         let line = e
             .span()
             .and_then(|s| text.get(..s.start))
             .map_or(0, |before| before.matches('\n').count() + 1);
-        ConnectorError::Parse {
-            file: file.to_string(),
-            line,
-            message: safe_message(e.message()),
-        }
+        parse_error(line, safe_message(e.message()))
     })
 }
 
 /// The parser's message without any value it quoted: serde writes a string value in double
-/// quotes and other values after "invalid type" or "invalid value".
+/// quotes, and other values after "invalid type", "invalid value" or "unknown variant".
 fn safe_message(message: &str) -> String {
     let first = message.lines().next().unwrap_or("");
-    for what in ["invalid type", "invalid value", "invalid length"] {
+    for what in ["invalid type", "invalid value", "invalid length", "unknown variant"] {
         if first.starts_with(what) {
             return match first.find(", expected") {
                 Some(i) => format!("{what}{}", &first[i..]),
@@ -254,36 +244,35 @@ fn safe_message(message: &str) -> String {
     }
 }
 
-fn invalid(key: String, reason: &'static str) -> ConnectorError {
-    ConnectorError::Invalid {
-        file: String::new(),
-        key,
-        reason,
-    }
+/// Whether the code owns `name` (PRD-11 section 3): it removes and sets the proxy and CA
+/// variables, sets `NODE_USE_ENV_PROXY`, never sets the variables that turn TLS checks off, and
+/// leaves `HOME` to `home`. No `env` or `ca_env` entry names one; a `home` key names only `HOME`.
+fn code_owned(name: &str) -> bool {
+    launch::REMOVED.contains(&name)
+        || [
+            "NODE_USE_ENV_PROXY",
+            "HOME",
+            "SSL_CERT_DIR",
+            "CURL_CA_BUNDLE",
+            "NODE_TLS_REJECT_UNAUTHORIZED",
+        ]
+        .contains(&name)
 }
-
-/// Variables the code sets itself (PRD-11 section 3); they never go in `env`.
-const CODE_SET: &[&str] = &[
-    "HTTPS_PROXY",
-    "https_proxy",
-    "HTTP_PROXY",
-    "http_proxy",
-    "ALL_PROXY",
-    "all_proxy",
-    "NO_PROXY",
-    "no_proxy",
-    "NODE_EXTRA_CA_CERTS",
-    "SSL_CERT_FILE",
-    "REQUESTS_CA_BUNDLE",
-    "NODE_USE_ENV_PROXY",
-    "HOME",
-];
 
 /// Variable name parts that point a harness at a model address.
 const MODEL_ADDRESS: &[&str] = &["BASE_URL", "API_BASE", "ENDPOINT", "_HOST", "PROXY"];
 
-/// The loader rules of PRD-11 section 2.
-fn check(c: &Connector) -> Result<(), ConnectorError> {
+/// The loader rules of PRD-11 section 2. `file` names the connector in errors.
+fn check(c: &Connector, file: &str) -> Result<(), ConnectorError> {
+    let invalid = |key: String, reason| ConnectorError::Invalid {
+        file: file.to_string(),
+        key,
+        reason,
+    };
+    let address = |key| ConnectorError::ModelAddress {
+        file: file.to_string(),
+        key,
+    };
     let id_ok = (1..=32).contains(&c.id.len())
         && c.id
             .bytes()
@@ -299,44 +288,59 @@ fn check(c: &Connector) -> Result<(), ConnectorError> {
     for (name, value) in &c.env {
         let upper = name.to_ascii_uppercase();
         if MODEL_ADDRESS.iter().any(|p| upper.contains(p)) || value.contains("://") {
-            return Err(ConnectorError::ModelAddress {
-                file: String::new(),
-                key: format!("env.{name}"),
-            });
+            return Err(address(format!("env.{name}")));
         }
     }
     for (list, rows) in [("no_prompts", &c.no_prompts), ("update_off", &c.update_off)] {
         for (i, row) in rows.iter().enumerate() {
             if row.value.contains("://") {
-                return Err(ConnectorError::ModelAddress {
-                    file: String::new(),
-                    key: format!("{list}[{i}].value"),
-                });
+                return Err(address(format!("{list}[{i}].value")));
             }
         }
     }
 
+    // Variables the code sets stay the code's.
     for name in c.env.keys() {
-        let taken = CODE_SET.contains(&name.as_str())
+        if code_owned(name)
             || c.home.contains_key(name)
             || c.ca_env.contains(name)
-            || c.unset.contains(name);
-        if taken {
+            || c.unset.contains(name)
+        {
             return Err(invalid(
                 format!("env.{name}"),
                 "the code sets this variable; use home, ca_env or unset",
             ));
         }
     }
+    for (i, name) in c.ca_env.iter().enumerate() {
+        if code_owned(name) || c.home.contains_key(name) {
+            return Err(invalid(
+                format!("ca_env[{i}]"),
+                "the code sets this variable; ca_env names the harness's own CA variable",
+            ));
+        }
+    }
+    for name in c.home.keys() {
+        if name != "HOME" && code_owned(name) {
+            return Err(invalid(
+                format!("home.{name}"),
+                "the code sets this variable; home names the harness's own folder variables",
+            ));
+        }
+    }
 
+    // Every path stays under the isolated home or the workspace.
     for (name, value) in &c.home {
-        if !value.starts_with("{home}") || !templates_ok(value, &["home"]) {
-            return Err(invalid(format!("home.{name}"), "must start with {home}"));
+        if under(value, &["{home}"]).is_none() {
+            return Err(invalid(
+                format!("home.{name}"),
+                "must start with {home}, with no `.`, `..` or empty component",
+            ));
         }
     }
     for (list, args) in [("args", &c.args), ("resume", &c.resume)] {
         for (i, arg) in args.iter().enumerate() {
-            if !templates_ok(arg, &["workspace"]) {
+            if !templates_ok(arg) {
                 return Err(invalid(
                     format!("{list}[{i}]"),
                     "the only template here is {workspace}",
@@ -345,11 +349,11 @@ fn check(c: &Connector) -> Result<(), ConnectorError> {
         }
     }
     if let Some(dir) = &c.skills_dir
-        && (!dir.starts_with("{home}") || !templates_ok(dir, &["home"]))
+        && under(dir, &["{home}"]).is_none()
     {
         return Err(invalid(
             "skills_dir".into(),
-            "must be under {home}; nothing is added to the workspace",
+            "must be under {home}, no `.`, `..` or empty component; nothing goes in the workspace",
         ));
     }
 
@@ -368,16 +372,16 @@ fn check(c: &Connector) -> Result<(), ConnectorError> {
             files.push((format!("{list}[{i}].file"), &row.file));
         }
     }
-    for (key, file) in files {
-        let Some(rest) = rooted(file) else {
-            return Err(invalid(key, "must start with {home} or {workspace}"));
-        };
-        let parts: Vec<&str> = rest.split('/').collect();
-        let star_early = parts[..parts.len() - 1].iter().any(|p| p.contains('*'));
-        if star_early || rest.contains(['{', '}']) {
+    for (key, path) in files {
+        let star_early = under(path, &["{home}", "{workspace}"]).map(|rest| {
+            let parts: Vec<&str> = rest.split('/').collect();
+            parts[..parts.len() - 1].iter().any(|p| p.contains('*'))
+        });
+        if star_early != Some(false) {
             return Err(invalid(
                 key,
-                "a `*` only in the last component, and no other template",
+                "must start with {home} or {workspace}, with no `.`, `..` or empty component, \
+                 no other template, and a `*` only in the last component",
             ));
         }
     }
@@ -390,10 +394,10 @@ fn check(c: &Connector) -> Result<(), ConnectorError> {
                 "native row names are unique within a connector",
             ));
         }
-        if rooted(&row.root).is_none_or(|rest| rest.contains(['{', '}'])) {
+        if under(&row.root, &["{home}", "{workspace}"]).is_none() {
             return Err(invalid(
                 format!("native[{i}].root"),
-                "must start with {home} or {workspace}",
+                "must start with {home} or {workspace}, with no `.`, `..` or empty component",
             ));
         }
         if !pattern_ok(&row.pattern) {
@@ -406,27 +410,20 @@ fn check(c: &Connector) -> Result<(), ConnectorError> {
     Ok(())
 }
 
-/// The path after a leading `{home}` or `{workspace}`, when it has one.
-fn rooted(path: &str) -> Option<&str> {
-    path.strip_prefix("{home}")
-        .or_else(|| path.strip_prefix("{workspace}"))
-        .filter(|rest| rest.is_empty() || rest.starts_with('/'))
+/// The path after a leading root template from `roots`, when it stays under that root: each
+/// component after it is not empty, `.` or `..`, and holds no brace or NUL.
+fn under<'a>(path: &'a str, roots: &[&str]) -> Option<&'a str> {
+    let rest = roots.iter().find_map(|root| path.strip_prefix(root))?;
+    let clean = |part: &str| {
+        !part.is_empty() && part != "." && part != ".." && !part.contains(['{', '}', '\0'])
+    };
+    let stays = rest.is_empty() || rest.strip_prefix('/').is_some_and(|r| r.split('/').all(clean));
+    stays.then_some(rest)
 }
 
-/// Every brace in `s` is one of the `allowed` templates.
-fn templates_ok(s: &str, allowed: &[&str]) -> bool {
-    let mut rest = s;
-    while let Some(i) = rest.find(['{', '}']) {
-        let after = &rest[i..];
-        let Some(name) = allowed
-            .iter()
-            .find(|name| after.starts_with(&format!("{{{name}}}")))
-        else {
-            return false;
-        };
-        rest = &after[name.len() + 2..];
-    }
-    true
+/// Every brace in `s` is a `{workspace}` template.
+fn templates_ok(s: &str) -> bool {
+    !s.replace("{workspace}", "").contains(['{', '}'])
 }
 
 /// PRD-04 section 2: relative, no `..`, `.`, empty component, braces or NUL; `**` only whole.

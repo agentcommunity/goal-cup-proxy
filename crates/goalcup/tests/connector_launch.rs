@@ -135,9 +135,7 @@ fn no_secret_value_is_read_in_the_default_build() {
     let dir = tempfile::tempdir().unwrap();
     let d = dir.path();
     let e = env(d, &[]);
-    for text in connector::builtin::CONNECTORS {
-        let table: toml::Table = toml::from_str(text).unwrap();
-        let id = table["id"].as_str().unwrap();
+    for (id, _) in connector::builtin::CONNECTORS {
         let home = d.join("goalcup/homes").join(id);
         std::fs::create_dir_all(&home).unwrap();
         for file in ["auth.json", ".env", ".credentials.json"] {

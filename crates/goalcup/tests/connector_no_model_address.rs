@@ -1,5 +1,6 @@
 //! goalcup never sets a model address (hard rule): the loader refuses a connector whose `env`
 //! names one, or whose `env`, `no_prompts` or `update_off` values hold a URL (PRD-11 section 2).
+//! That all shipped connectors load is `connector_builtin.rs`.
 
 use goalcup::connector::{self, ConnectorError};
 
@@ -38,13 +39,4 @@ fn every_refused_shape_fails_load() {
 fn a_plain_switch_loads() {
     let body = "env = { HARNESS_DISABLE_AUTOUPDATE = \"1\" }\nupdate_off = [{ file = \"{home}/c.json\", key = \"a\", value = \"false\" }]";
     load_text(body).unwrap();
-}
-
-#[test]
-fn the_shipped_connectors_load() {
-    for text in connector::builtin::CONNECTORS {
-        let table: toml::Table = toml::from_str(text).unwrap();
-        let id = table["id"].as_str().unwrap();
-        connector::load(id, None).unwrap_or_else(|e| panic!("{id}: {e}"));
-    }
 }

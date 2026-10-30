@@ -47,6 +47,7 @@ pub enum Decision {
 /// One entry of a list.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Host {
+    #[serde(rename = "host")]
     pub name: String,
     pub kind: Kind,
     pub pinned: bool,
@@ -89,16 +90,20 @@ struct RawHosts {
 }
 
 impl HostList {
-    /// Parses a shared host file (`connectors/model-hosts.toml` or a `--hosts` copy).
-    pub fn from_file(bytes: &[u8]) -> Result<HostList, ConnectorError> {
-        let file = "the host list";
-        let text = std::str::from_utf8(bytes).map_err(|_| ConnectorError::Parse {
-            file: file.to_string(),
-            line: 0,
-            message: "not UTF-8".to_string(),
-        })?;
-        let raw: RawHosts = from_toml(text, file)?;
-        let pinned: Vec<String> = raw.pinned.iter().map(|p| p.to_ascii_lowercase()).collect();
+    /// Parses a shared host file (`connectors/model-hosts.toml` or a `--hosts` copy). `file` names
+    /// it in errors.
+    pub fn from_file(bytes: &[u8], file: &str) -> Result<HostList, ConnectorError> {
+        let raw: RawHosts = from_toml(bytes, file)?;
+        let checked = |array: &str, i: usize, name: &str| {
+            check(name, Source::Shared).map_err(|_| ConnectorError::Invalid {
+                file: file.to_string(),
+                key: format!("{array}[{i}]"),
+                reason: "not a host name or pattern",
+            })
+        };
+        let pinned = (raw.pinned.iter().enumerate())
+            .map(|(i, name)| checked("pinned", i, name).map(|h| h.name))
+            .collect::<Result<Vec<_>, _>>()?;
         let mut shared = Vec::new();
         for (array, kind, names) in [
             ("provider", Kind::Provider, &raw.provider),
@@ -106,13 +111,9 @@ impl HostList {
             ("vendor", Kind::Vendor, &raw.vendor),
         ] {
             for (i, name) in names.iter().enumerate() {
-                let host = check(name, Source::Shared).map_err(|_| ConnectorError::Invalid {
-                    file: file.to_string(),
-                    key: format!("{array}[{i}]"),
-                    reason: "not a host name or pattern",
-                })?;
+                let host = checked(array, i, name)?;
                 shared.push(Host {
-                    pinned: pinned.contains(&host.name),
+                    pinned: pinned.iter().any(|p| matches(p, &host.name)),
                     kind,
                     name: host.name,
                 });
@@ -151,16 +152,10 @@ impl HostList {
 
     /// The three lists for the `start` event (PRD-01 section 11).
     pub fn lists(&self) -> serde_json::Value {
-        let list = |hosts: &[Host]| {
-            hosts
-                .iter()
-                .map(|h| serde_json::json!({"host": h.name, "kind": h.kind, "pinned": h.pinned}))
-                .collect::<Vec<_>>()
-        };
         serde_json::json!({
-            "shared": list(&self.shared),
-            "participant": list(&self.participant),
-            "config": list(&self.config),
+            "shared": self.shared,
+            "participant": self.participant,
+            "config": self.config,
         })
     }
 
@@ -185,6 +180,26 @@ impl HostList {
             self.never.push(name);
         }
     }
+}
+
+/// Whether `name` matches the host `pattern`: the exact name, `*.a.b` (one or more labels before
+/// `a.b`), or one `*` inside one label.
+pub(crate) fn matches(pattern: &str, name: &str) -> bool {
+    if let Some(suffix) = pattern.strip_prefix("*.")
+        && !suffix.contains('*')
+    {
+        return name
+            .strip_suffix(suffix)
+            .is_some_and(|before| before.len() > 1 && before.ends_with('.'));
+    }
+    let (p, n): (Vec<&str>, Vec<&str>) = (pattern.split('.').collect(), name.split('.').collect());
+    p.len() == n.len()
+        && p.iter().zip(&n).all(|(p, n)| match p.split_once('*') {
+            Some((head, tail)) => {
+                n.len() >= head.len() + tail.len() && n.starts_with(head) && n.ends_with(tail)
+            }
+            None => p == n,
+        })
 }
 
 /// The one host check for every source. The hosts slice copies the full rules (PRD-17); until

@@ -1,10 +1,9 @@
 //! Every connector file is built in and loads; no native row snapshots a key file (point 4);
 //! the loader refuses duplicate row names and a skills folder in the workspace (PRD-11 section 2).
 
-use std::collections::BTreeSet;
 use std::path::PathBuf;
 
-use goalcup::connector::{self, HostList, builtin};
+use goalcup::connector::{self, HostList, Source, builtin, hosts};
 
 fn connectors_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../connectors")
@@ -37,11 +36,13 @@ fn every_connector_file_is_built_in_and_loads_by_its_id() {
         ids.len(),
         "connector/builtin.rs must list every connectors/*.toml file"
     );
-    let mut seen = BTreeSet::new();
+    for (listed, text) in builtin::CONNECTORS {
+        let table: toml::Table = toml::from_str(text).unwrap();
+        assert_eq!(table["id"].as_str(), Some(*listed), "the listed id is the file's id");
+    }
     for id in &ids {
         let c = connector::load(id, None).unwrap_or_else(|e| panic!("{id}: {e}"));
         assert_eq!(&c.id, id, "file stem equals id");
-        assert!(seen.insert(c.id.clone()), "{id}: ids are unique");
         let bytes = std::fs::read(connectors_dir().join(format!("{id}.toml"))).unwrap();
         assert_eq!(
             c.sha256,
@@ -55,9 +56,14 @@ fn every_connector_file_is_built_in_and_loads_by_its_id() {
 #[test]
 fn the_shared_host_list_parses() {
     let bytes = std::fs::read(connectors_dir().join("model-hosts.toml")).unwrap();
-    let hosts = HostList::from_file(&bytes).unwrap();
+    let hosts = HostList::from_file(&bytes, "model-hosts.toml").unwrap();
     assert_eq!(hosts.sha256(), sha256_hex(&bytes));
-    assert!(!hosts.lists()["shared"].as_array().unwrap().is_empty());
+    let shared = hosts.lists()["shared"].as_array().unwrap().clone();
+    assert!(!shared.is_empty());
+    for entry in shared {
+        let name = entry["host"].as_str().unwrap();
+        assert!(hosts::check(name, Source::Shared).is_ok(), "{name}");
+    }
 }
 
 /// One `/`-free component against a glob of `*` and `?`.
@@ -151,4 +157,32 @@ program = "test"
 skills_dir = "{workspace}/skills"
 "#;
     assert!(load_text(text).is_err());
+}
+
+/// Connector data never reaches outside the isolated home or the workspace (AGENTS.md: nothing
+/// is written into the participant's real harness folders), and never takes a variable the code
+/// sets (a CA or proxy variable pointed elsewhere would break every tunnel, point 3).
+#[test]
+fn connector_data_stays_in_its_home_and_off_the_code_variables() {
+    let refused = [
+        "home = { X = \"{home}/../../.claude\" }",
+        "home = { X = \"{home}/a/./b\" }",
+        "native = [{ name = \"a\", root = \"{home}/../../.claude/projects\", pattern = \"*.jsonl\" }]",
+        "update_off = [{ file = \"{home}/../../.codex/config.toml\", key = \"a\", value = \"b\" }]",
+        "secret_files = [\"{workspace}/../x.json\"]",
+        "skills_dir = \"{home}/../../skills\"",
+        "skills_dir = \"{home}//skills\"",
+        "ca_env = [\"SSL_CERT_FILE\"]",
+        "ca_env = [\"HTTPS_PROXY\"]",
+        "ca_env = [\"HOME\"]",
+        "home = { HTTPS_PROXY = \"{home}/x\" }",
+        "home = { NODE_EXTRA_CA_CERTS = \"{home}/x\" }",
+        "env = { NODE_TLS_REJECT_UNAUTHORIZED = \"0\" }",
+        "env = { SSL_CERT_DIR = \"/x\" }",
+    ];
+    let head = "id = \"test-cli\"\nname = \"Test\"\nprogram = \"test\"\n";
+    for body in refused {
+        assert!(load_text(&format!("{head}{body}\n")).is_err(), "{body}");
+    }
+    load_text(&format!("{head}home = {{ HOME = \"{{home}}\", XDG_CONFIG_HOME = \"{{home}}/.config\" }}\n")).unwrap();
 }

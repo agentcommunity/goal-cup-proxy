@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use super::{Connector, Env, Refusal, SettingRow, Skipped};
 
 /// Removed from the participant's environment before anything is set (step 1).
-const REMOVED: &[&str] = &[
+pub(crate) const REMOVED: &[&str] = &[
     "HTTPS_PROXY",
     "https_proxy",
     "HTTP_PROXY",
@@ -62,7 +62,8 @@ pub(crate) fn fill(s: &str, home: &Path, workspace: &Path) -> String {
         .replace("{workspace}", &workspace.to_string_lossy())
 }
 
-/// The harness environment before the port and the CA paths: steps 1, 3, 4 and 6.
+/// The harness environment before the port and the CA paths: steps 1, 3, 4 and 6. `plan` creates
+/// the `home` folders.
 pub(crate) fn build_env(c: &Connector, env: &Env, home: &Path) -> BTreeMap<String, String> {
     let mut vars = env.vars.clone();
     for name in REMOVED
@@ -76,9 +77,7 @@ pub(crate) fn build_env(c: &Connector, env: &Env, home: &Path) -> BTreeMap<Strin
     vars.insert("no_proxy".into(), NO_PROXY.into());
     vars.insert("NODE_USE_ENV_PROXY".into(), "1".into());
     for (name, template) in &c.home {
-        let dir = fill(template, home, &env.workspace);
-        make_dir(Path::new(&dir));
-        vars.insert(name.clone(), dir);
+        vars.insert(name.clone(), fill(template, home, &env.workspace));
     }
     for (name, value) in &c.env {
         vars.insert(name.clone(), value.clone());

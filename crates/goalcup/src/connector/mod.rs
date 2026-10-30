@@ -65,8 +65,6 @@ pub enum Refusal {
     HomeLocked { home: PathBuf },
     /// `program --version` does not hold the connector's `version` prefix.
     VersionMismatch { program: String, want: String },
-    /// The program is not on the participant's `PATH`.
-    ProgramMissing { program: String },
 }
 
 /// How a session file is read (PRD-04 section 2).
@@ -169,26 +167,6 @@ pub enum ConnectorError {
     ModelAddress { file: String, key: String },
 }
 
-impl ConnectorError {
-    /// The same error, naming `file`.
-    fn in_file(self, name: &str) -> ConnectorError {
-        let file = name.to_string();
-        match self {
-            ConnectorError::Read { kind, .. } => ConnectorError::Read { file, kind },
-            ConnectorError::Parse { line, message, .. } => ConnectorError::Parse {
-                file,
-                line,
-                message,
-            },
-            ConnectorError::Invalid { key, reason, .. } => {
-                ConnectorError::Invalid { file, key, reason }
-            }
-            ConnectorError::ModelAddress { key, .. } => ConnectorError::ModelAddress { file, key },
-            other => other,
-        }
-    }
-}
-
 fn read(path: &Path) -> Result<Vec<u8>, ConnectorError> {
     std::fs::read(path).map_err(|e| ConnectorError::Read {
         file: path.display().to_string(),
@@ -200,11 +178,8 @@ fn read(path: &Path) -> Result<Vec<u8>, ConnectorError> {
 /// ends `.toml`. The hosts come from `hosts_file`, else the built-in list.
 pub fn load(id_or_path: &str, hosts_file: Option<&Path>) -> Result<Connector, ConnectorError> {
     let hosts = match hosts_file {
-        Some(path) => {
-            HostList::from_file(&read(path)?).map_err(|e| e.in_file(&path.display().to_string()))?
-        }
-        None => HostList::from_file(builtin::HOSTS.as_bytes())
-            .map_err(|e| e.in_file("connectors/model-hosts.toml"))?,
+        Some(path) => HostList::from_file(&read(path)?, &path.display().to_string())?,
+        None => HostList::from_file(builtin::HOSTS.as_bytes(), "connectors/model-hosts.toml")?,
     };
     let mut connector = if id_or_path.contains('/') || id_or_path.ends_with(".toml") {
         let path = Path::new(id_or_path);
@@ -212,13 +187,13 @@ pub fn load(id_or_path: &str, hosts_file: Option<&Path>) -> Result<Connector, Co
         c.source = ConnectorSource::File;
         c
     } else {
-        let text = builtin::CONNECTORS
+        let (id, text) = builtin::CONNECTORS
             .iter()
-            .find(|text| schema::id_of(text).as_deref() == Some(id_or_path))
+            .find(|(id, _)| *id == id_or_path)
             .ok_or_else(|| ConnectorError::UnknownId {
                 id: id_or_path.to_string(),
             })?;
-        schema::parse(text.as_bytes(), &format!("connectors/{id_or_path}.toml"))?
+        schema::parse(text.as_bytes(), &format!("connectors/{id}.toml"))?
     };
     connector.hosts = hosts;
     Ok(connector)
@@ -227,19 +202,29 @@ pub fn load(id_or_path: &str, hosts_file: Option<&Path>) -> Result<Connector, Co
 /// The launch plan for `connector` in its isolated `home` (`$GOALCUP_HOME/homes/<id>`). It never
 /// fails: what a participant can fix is a `refusal`.
 pub fn plan(connector: &Connector, env: &Env, home: &Path) -> LaunchPlan {
-    launch::make_dir(home);
+    // A held lock means another run uses this home: the plan then creates, writes and runs
+    // nothing there, so the running harness is not disturbed.
     let (lock, lock_refusal) = match HomeLock::take(home) {
         Ok(lock) => (lock, None),
         Err(refusal) => (HomeLock::default(), Some(refusal)),
     };
+    let free = lock_refusal.is_none();
     let fill = |s: &str| launch::fill(s, home, &env.workspace);
+    if free {
+        launch::make_dir(home);
+        for template in connector.home.values() {
+            launch::make_dir(Path::new(&fill(template)));
+        }
+    }
     let mut argv: Vec<String> = connector.args.iter().map(|a| fill(a)).collect();
     if env.resume {
         argv.extend(connector.resume.iter().map(|a| fill(a)));
     }
     let harness_env = launch::build_env(connector, env, home);
     let program = launch::resolve_program(&connector.program, &env.vars);
-    let harness_version = launch::harness_version(&program, &harness_env);
+    let harness_version = free
+        .then(|| launch::harness_version(&program, &harness_env))
+        .flatten();
     let version_refusal = match (&connector.version, &harness_version) {
         (Some(want), Some(got)) if !got.contains(want.as_str()) => Some(Refusal::VersionMismatch {
             program: connector.program.clone(),
@@ -273,7 +258,9 @@ pub fn plan(connector: &Connector, env: &Env, home: &Path) -> LaunchPlan {
     );
 
     // A row that cannot be written is a log line in the launch slice, never a refusal.
-    let _ = write_settings(home, &connector.update_off);
+    if free {
+        let _ = write_settings(home, &connector.update_off);
+    }
 
     LaunchPlan {
         connector: ConnectorRef {
