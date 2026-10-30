@@ -1625,3 +1625,24 @@ kept and now cites BUILD-PROMPT section 5, since B3 no longer carries it.
   (nested root on another device), RB3 (no-exclusion-list half unguarded), and the missing snapshot
   `fid` on resume (PRD-04 note).
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-09 slice 2 (merge dab0ce1f)
+
+- `gate fast: PASS in 92s` on dab0ce1f (nextest: 188 tests run, 188 passed, 0 skipped; fmt and
+  `clippy -D warnings` green). Before the merge the lane was green in boxes after each of three fix
+  rounds (fmt, `clippy -D warnings`, `doc -D warnings`, nextest 22 of 22 at bce2f879, 31 of 31 on a
+  probe merge with integration). Five paths changed, all PRD-09's, no `Cargo.toml`. All 17 commits in
+  01afcf22..dab0ce1f carry both trailer lines.
+- **Size report, PRD-09** (`wc -l` at dab0ce1f, row "Usage reader (PRD-09)" 1,470 src and 200
+  tests): src 1,525 (`wire.rs` 601, `shapes.rs` 456, `mod.rs` 407, `sse.rs` 61), 104% of the row with
+  `native.rs`, `sqlite.rs`, `hints.rs`, `out.rs`, the join and `run` still to come; tests 299
+  (`usage_run1.rs`), 150% of the row. This replan's decision (PRD-09 note) names point 1 and ledger
+  S2 and sets the ceiling to 2,250 src and 380 tests, with `usage table` and `--text` built only if
+  they fit. The end-of-build report counts it against the Rust totals (about 18,100 src, at most
+  about 14,200 tests); a total past them is the owner's question then.
+- **Build order unchanged.** PRD-09's next slice (native readers, `sqlite.rs`, `hints.rs`, the join,
+  `out.rs` core part, `usage::run`) unblocks PRD-12 C5, the T6 spend check and the watchers'
+  `usage --json`; until then `usage` exits 3 and pad rows say usage was not read (PRD-12 note).
+- **Acceptance lists as known,** if still open at the end: B12 (one way to build a create in
+  `usage_run1.rs`), and `usage table` or `--text` if not built (cut, PRD-09 note).
+- No locked ledger item is touched and no owner question comes from this slice.
