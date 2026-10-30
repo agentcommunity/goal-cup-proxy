@@ -304,7 +304,7 @@ impl File {
                 let total = p.pointer("/info/total_token_usage/total_tokens")?.as_u64();
                 let last = p.pointer("/info/last_token_usage")?.as_object()?;
                 // A repeat with the same or a smaller running total is no new call.
-                if total <= self.top {
+                if Some(total?) <= self.top {
                     self.repeats += 1;
                     return None;
                 }

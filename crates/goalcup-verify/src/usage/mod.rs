@@ -8,14 +8,17 @@
 
 mod hints;
 mod native;
+mod out;
 mod shapes;
 mod sse;
 mod wire;
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::ffi::OsString;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
+use clap::Parser;
 use goalcup_format::Record;
 use serde_json::Value;
 
@@ -247,6 +250,12 @@ pub struct CallTable {
     /// Child rollout lines skipped as copied parent records (timed before the child's own
     /// `session_meta`).
     pub copied_skipped: u64,
+    /// From the `start` event (the entry from the first PART) and whether a `seal` event was read.
+    pub run: Option<String>,
+    pub entry: String,
+    pub connector: Option<String>,
+    pub harness_version: Option<String>,
+    pub sealed: bool,
 }
 
 impl Default for CallTable {
@@ -261,6 +270,11 @@ impl Default for CallTable {
             joined_by_time: 0,
             repeats_skipped: 0,
             copied_skipped: 0,
+            run: None,
+            entry: String::new(),
+            connector: None,
+            harness_version: None,
+            sealed: false,
         }
     }
 }
@@ -288,6 +302,9 @@ fn host_kind(s: Option<&str>) -> Option<HostKind> {
 struct Ctx {
     entry: String,
     connector: Option<String>,
+    run: Option<String>,
+    harness_version: Option<String>,
+    sealed: bool,
     boot: u64,
     /// (wall_ns, mono_ns) of the last PART or LINK of this boot.
     base: Option<(u64, u64)>,
@@ -314,6 +331,8 @@ impl Ctx {
 
     fn start(&mut self, ev: &Value) {
         self.connector = ev["connector"].as_str().map(str::to_string);
+        self.run = ev["run"].as_str().map(str::to_string);
+        self.harness_version = ev["harness_version"].as_str().map(str::to_string);
         let lists = ev
             .get("hosts")
             .and_then(Value::as_object)
@@ -365,8 +384,10 @@ impl Calls {
             } => self.ctx.base = Some((*wall_ns, *mono_ns)),
             Record::Event { json, .. } => {
                 let ev = serde_json::from_slice::<Value>(json).unwrap_or(Value::Null);
-                if ev.get("ev").and_then(Value::as_str) == Some("start") {
-                    self.ctx.start(&ev);
+                match ev.get("ev").and_then(Value::as_str) {
+                    Some("start") => self.ctx.start(&ev),
+                    Some("seal") => self.ctx.sealed = true,
+                    _ => {}
                 }
             }
             _ => {
@@ -379,6 +400,15 @@ impl Calls {
     /// The table: wire rows in (boot, sid, msg) order, then native rows in (path, time) order,
     /// joined by reply id or by time (PRD-09 section 6).
     pub fn finish(self) -> CallTable {
+        let c = &self.ctx;
+        let id = (c.run.clone(), c.entry.clone(), c.connector.clone());
+        let (hv, sealed) = (c.harness_version.clone(), c.sealed);
+        let mut t = self.table();
+        (t.run, t.entry, t.connector, t.harness_version, t.sealed) = (id.0, id.1, id.2, hv, sealed);
+        t
+    }
+
+    fn table(self) -> CallTable {
         let (mut rows, replies) = self.wire.finish(&self.ctx);
         let ok = |r: &CallRow| r.kind == Kind::Call && r.outcome == Outcome::Ok;
         let c = self.ctx.connector.as_deref();
@@ -470,7 +500,10 @@ impl Calls {
                 ..Thread::new(id)
             });
         }
-        // An unmatched wire row of a child thread takes the parent its thread entry gives.
+        rows.extend(nat.into_iter().map(|x| x.0));
+        // A row of a child thread with no parent takes the one its thread entry gives. A thread
+        // only the wire names is pushed with the table's reason and `native_calls` 0: read
+        // `native_calls`, not `readable()`, for "this thread has native rows".
         let parents: HashMap<&str, &String> = threads
             .iter()
             .filter_map(|t| Some((t.id.as_str(), t.parent.as_ref()?)))
@@ -479,7 +512,6 @@ impl Calls {
             let p = r.thread.as_deref().and_then(|t| parents.get(t));
             r.parent = p.map(|p| (*p).clone());
         }
-        rows.extend(nat.into_iter().map(|x| x.0));
         CallTable {
             rows,
             threads,
@@ -489,13 +521,73 @@ impl Calls {
             joined_by_time,
             repeats_skipped: leg.repeats_skipped,
             copied_skipped: leg.copied_skipped,
+            ..CallTable::default()
         }
     }
 }
 
-/// Runs `goalcup-verify usage <args>` (PRD-09 section 7); not built yet, so exits 3 (no report).
+#[derive(Parser)]
+struct Args {
+    path: PathBuf,
+    #[arg(long)]
+    json: bool,
+    #[arg(long)]
+    out: Option<PathBuf>,
+}
+
+/// Runs `goalcup-verify usage <path> [--json] [--out <dir>]` (PRD-09 section 7): an entry, a run
+/// folder or a part file; `--out` writes `<entry>.json` and `<entry>.calls.jsonl`. Exit 3, with a
+/// line naming a path or a reason and never record text, when nothing was read; else 0.
 pub fn run(args: Vec<OsString>) -> ExitCode {
-    let _ = args;
-    eprintln!("goalcup-verify: the usage reader is not built yet");
-    ExitCode::from(3)
+    let a = match Args::try_parse_from(std::iter::once("usage".into()).chain(args)) {
+        Ok(a) => a,
+        Err(e) => {
+            let _ = e.print();
+            return ExitCode::from(3 * u8::from(e.use_stderr()));
+        }
+    };
+    if let Err(e) = read_all(&a) {
+        eprintln!("goalcup-verify: usage: {e}");
+        return ExitCode::from(3);
+    }
+    ExitCode::SUCCESS
+}
+
+fn read_all(a: &Args) -> Result<(), String> {
+    for e in &crate::input::resolve(&a.path, false, false)?.entries {
+        let (rd, _) = crate::input::open(e).map_err(|x| format!("{}: {x}", e.dir.display()))?;
+        let (mut calls, mut n) = (Calls::new(), 0);
+        // The first read error ends the entry: the tail of an open entry is torn, use what came.
+        for it in rd.map_while(Result::ok) {
+            calls.push(&it.rec);
+            n += 1;
+        }
+        let mut t = calls.finish();
+        if n == 0 {
+            return Err(format!("no record could be read in {}", e.dir.display()));
+        }
+        // The entry names the files, so only a plain id does; else the folder's name.
+        let name = e.dir.file_name().unwrap_or_default();
+        if t.entry.is_empty() || !t.entry.bytes().all(|b| b.is_ascii_alphanumeric()) {
+            t.entry = name.to_string_lossy().into();
+        }
+        let sum = out::summary(&t);
+        if a.json || a.out.is_none() {
+            println!("{sum}");
+        }
+        if let Some(d) = &a.out {
+            std::fs::create_dir_all(d).map_err(|x| format!("{}: {x}", d.display()))?;
+            let base = d.join(&t.entry);
+            put(&base.with_extension("json"), &format!("{sum}\n"))?;
+            put(&base.with_extension("calls.jsonl"), &out::calls_jsonl(&t))?;
+        }
+    }
+    Ok(())
+}
+
+/// Writes by a temp name, then renames, so a reader never sees half a file.
+fn put(to: &Path, body: &str) -> Result<(), String> {
+    let tmp = to.with_extension("tmp");
+    let done = std::fs::write(&tmp, body).and_then(|()| std::fs::rename(&tmp, to));
+    done.map_err(|x| format!("{}: {x}", to.display()))
 }

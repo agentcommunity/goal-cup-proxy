@@ -1,15 +1,16 @@
 //! PRD-09's usage test (ledger B10): a run 1 shaped entry, scaled down (PRD-09 section 8), read
 //! through seam U1 only: wire cases and, under `codex-cli` and `claude-code-cli`, the native leg
-//! and join. Every value is an obvious fake; the panic case and the output files come with
-//! `usage::run`.
+//! and join, and the files `usage` writes. Every value is an obvious fake; the panic hook is the
+//! binary's (PRD-08).
 
 mod common;
 
-use common::{Entry, edit_event, read_records};
+use common::{ENTRY, Entry, edit_event, read_records, tmp, write_raw};
+use goalcup_format::read::part_files;
 use goalcup_format::{EndReason, FLAG_FIN, GapReason, Record, StreamKind};
 use goalcup_verify::usage::{CallRow, CallTable, Calls, Join, Kind, Outcome, Tokens};
 use serde_json::{Value, json};
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, fs, path::Path, path::PathBuf, process::Command};
 
 /// Planted in prompts, outputs and error messages; no row may hold it (point 4).
 const MARK: &str = "zebra-lantern-planted-text";
@@ -189,6 +190,7 @@ fn run1(name: &str) -> (Vec<Record>, BTreeMap<&'static str, Five>) {
     let planted = planted
         .into_iter()
         .chain([("fake-http-a", th), ("fake-claude", tc)]);
+    e.count();
     (read_records(&e.seal().join("rec")), planted.collect())
 }
 
@@ -331,7 +333,6 @@ fn totals_equal_the_planted_sum_and_repeat() {
 #[test]
 fn native_leg_joins_codex_threads() {
     let mut recs = run1("u-native").0;
-    let codex = |v: &mut Value| v["connector"] = "codex-cli".into();
     edit_event(&mut recs, "start", 0, codex);
     let t = table(&recs);
     let th = |id| t.threads.iter().find(|x| x.id == id).unwrap();
@@ -353,7 +354,8 @@ fn every_claude_code_subagent_transcript_counts() {
     let mut e = Entry::new("u-claude");
     let files = "S S/subagents/agent-a S/subagents/workflows/w/agent-b";
     for (k, f) in files.split(' ').enumerate() {
-        let v = json!({"type": "assistant", "timestamp": "2300-01-01T00:00:00Z", "message": {"id": k.to_string(),
+        let at = ["2300-01-01T00:00:00Z", "2026-11-07T00:00:00Z"][k.min(1)];
+        let v = json!({"type": "assistant", "timestamp": at, "message": {"id": k.to_string(),
             "usage": {"input_tokens": 3}, "content": MARK}});
         let (path, body) = (format!("transcripts:p/{f}.jsonl"), format!("{v}\n"));
         stream(&mut e, StreamKind::Native, &path, &body);
@@ -378,4 +380,78 @@ fn every_claude_code_subagent_transcript_counts() {
 fn joined(t: &CallTable, j: Join) -> Vec<&str> {
     let rows = t.rows.iter().filter(|r| r.join == Some(j));
     rows.flat_map(|r| r.model_requested.as_deref()).collect()
+}
+
+fn codex(v: &mut Value) {
+    v["connector"] = "codex-cli".into();
+}
+
+fn json(s: &str) -> Value {
+    serde_json::from_str(s).unwrap()
+}
+
+/// The Codex run 1 entry as a folder; `torn` loses its seal LINK and the end of its last frame.
+fn codex_entry(name: &str, torn: bool) -> PathBuf {
+    let (mut recs, dir) = (run1(name).0, tmp(name));
+    let rec = dir.join("rec");
+    fs::create_dir_all(&rec).unwrap();
+    edit_event(&mut recs, "start", 0, codex);
+    recs.truncate(recs.len() - usize::from(torn));
+    write_raw(&rec, &recs, None);
+    let last = part_files(&rec).unwrap().pop().unwrap();
+    let mut bytes = fs::read(&last).unwrap();
+    bytes.truncate(bytes.len() - 8 * usize::from(torn));
+    fs::write(last, bytes).unwrap();
+    dir
+}
+
+/// `usage <path> --json --out <new folder>`: the exit code, stdout, stderr and the two files.
+fn run_usage(path: &Path) -> (Option<i32>, [String; 4]) {
+    let out = tmp("u-out");
+    let (p, o) = (path.to_str().unwrap(), out.to_str().unwrap());
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_goalcup-verify"));
+    let args = ["usage", p, "--json", "--out", o];
+    let got = cmd.args(args).output().unwrap();
+    let text = |b: &[u8]| String::from_utf8_lossy(b).into_owned();
+    let file = |end: &str| fs::read_to_string(out.join(format!("{ENTRY}{end}")));
+    let [sum, calls] = [file(".json"), file(".calls.jsonl")].map(Result::unwrap_or_default);
+    let parts = [text(&got.stdout), text(&got.stderr), sum, calls];
+    (got.status.code(), parts)
+}
+
+#[test]
+fn usage_files_repeat_and_add_up() {
+    let dir = codex_entry("u-files", false);
+    let (a, b) = (run_usage(&dir), run_usage(&dir));
+    assert_eq!(a, b);
+    assert_eq!(a.0, Some(0));
+    let (sum, lines): (Value, Vec<Value>) = (json(&a.1[2]), a.1[3].lines().map(json).collect());
+    let said = |l: &&Value| l["k"] == "call" && !l["usage_from"].is_null();
+    for k in ["input", "cached", "cache_write", "output", "reasoning"] {
+        let col = lines.iter().filter(said);
+        let got = col.filter_map(|l| l[k].as_u64()).reduce(|a, b| a + b);
+        assert_eq!(sum["tokens"]["merged"][k].as_u64(), got, "{k}");
+    }
+    // Warm-ups and interrupts are lines of their own kind, and no call.
+    let n = |k: &str| lines.iter().filter(|l| l["k"] == k).count();
+    assert_eq!([n("warmup"), n("interrupt")], [2, 1]);
+    let calls = CALLS.split_whitespace().count();
+    assert_eq!(sum["coverage"]["wire_calls"], calls);
+}
+
+/// Point 4 on every path: the whole entry, a torn copy of it (exit 0, not sealed), a missing path.
+#[test]
+fn no_record_text_in_any_output() {
+    let check = |path: PathBuf, code: i32, sealed: bool| {
+        let (got, parts) = run_usage(&path);
+        let text = parts.concat();
+        assert_eq!(got, Some(code), "{text}");
+        assert!(!text.is_empty() && !text.contains(MARK));
+        if code == 0 {
+            assert_eq!(json(&parts[2])["sealed"], sealed);
+        }
+    };
+    check(codex_entry("u-whole", false), 0, true);
+    check(codex_entry("u-torn", true), 0, false);
+    check(tmp("u-none").join("absent"), 3, false);
 }
