@@ -65,12 +65,23 @@ the command again:";
 /// The last line of a refusal that came before anything was made.
 pub const NOTHING_CREATED: &str = "Nothing was created.";
 
+/// `start` cannot read the current folder: it was deleted or moved away.
+pub const PROJECT_GONE: &str = "the project folder is gone: the folder this was run in cannot be \
+read any more. Change to your project folder and run the command again.";
+
 /// Stands for a folder entry whose name could not be read.
 pub const UNREADABLE_ENTRY: &str = "an entry that could not be read";
 
+/// Stands for the entries of a folder that could not be listed.
+pub const UNLISTED_FOLDER: &str = "entries that could not be listed";
+
+/// Names in quotes; the two stand-ins above are not names and stay bare.
 fn quoted(names: &[String]) -> String {
-    let names: Vec<String> = names.iter().map(|n| format!("\"{n}\"")).collect();
-    names.join(", ")
+    let quote = |n: &String| match n.as_str() {
+        UNREADABLE_ENTRY | UNLISTED_FOLDER => n.clone(),
+        _ => format!("\"{n}\""),
+    };
+    names.iter().map(quote).collect::<Vec<_>>().join(", ")
 }
 
 pub fn folder_extra(names: &[String]) -> String {
@@ -105,8 +116,8 @@ pub fn beside_goalcup(own: &Path) -> String {
 }
 
 /// The line the push block reads; the value is never shown.
-pub const TOKEN_LINE: &str = "\".env.local\" has no plain GH_TOKEN=<your token> line (no quotes, \
-no export, no spaces). Add one: the push block reads it.";
+pub const TOKEN_LINE: &str = "\".env.local\" needs exactly one plain GH_TOKEN=<your token> line \
+(no quotes, no export, no spaces, no Windows CRLF line ending). Fix it: the push block reads it.";
 
 pub fn prompt_inside(file: &Path) -> String {
     format!(

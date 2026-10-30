@@ -7,6 +7,7 @@
 pub mod finish;
 pub mod folder;
 pub mod log;
+pub mod start;
 pub mod status;
 pub mod text;
 
