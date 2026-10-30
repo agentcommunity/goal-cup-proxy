@@ -249,7 +249,9 @@ pub fn plan(connector: &Connector, env: &Env, home: &Path) -> LaunchPlan {
     };
     let (config, notes) = reader.collect(connector, &hosts);
     hosts.add_config(config);
-    let refusal = lock_refusal.or(version_refusal).or_else(|| reader.refusal(connector));
+    let refusal = lock_refusal
+        .or(version_refusal)
+        .or_else(|| reader.refusal(connector));
     let (unread, mut log) = (reader.unread, reader.log);
 
     let rows = connector.native.iter();

@@ -185,11 +185,16 @@ impl HostList {
     pub(crate) fn add_participant(&mut self, goalcup_home: &Path) -> Vec<String> {
         let text = std::fs::read_to_string(goalcup_home.join("record-hosts.txt"));
         let text = text.unwrap_or_default();
-        let hosts = text.lines().filter_map(|l| check(l.trim(), Source::Participant).ok());
+        let hosts = text
+            .lines()
+            .filter_map(|l| check(l.trim(), Source::Participant).ok());
         let mut log = Vec::new();
         for host in hosts {
             if self.decide(&host.name) == Decision::Never {
-                log.push(format!("record-hosts.txt: {} is never decrypted", host.name));
+                log.push(format!(
+                    "record-hosts.txt: {} is never decrypted",
+                    host.name
+                ));
             } else {
                 add(&mut self.participant, &self.pinned, host);
             }

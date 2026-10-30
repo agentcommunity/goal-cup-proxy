@@ -59,7 +59,12 @@ fn one_hint_per_format_reaches_the_config_list() {
     let cases = [
         (CLAUDE, "settings.json", JSON, "gw.example.com"),
         ("kilo-cli", ".config/kilo/kilo.jsonc", c, "c.example.com"),
-        ("kilo-cli", ".config/kilo/kilo.json", j.as_str(), "j.example.com"),
+        (
+            "kilo-cli",
+            ".config/kilo/kilo.json",
+            j.as_str(),
+            "j.example.com",
+        ),
         ("codex-cli", "config.toml", t, "t.example.com"),
         ("hermes-cli", "config.yaml", y, "y.example.com"),
         ("hermes-cli", "config.yaml", l, "l0.example.com"),
@@ -85,7 +90,11 @@ fn a_link_and_a_file_over_one_mib_are_skipped_and_a_bom_is_read() {
     std::os::unix::fs::symlink(dir.path().join("real.json"), home.join("settings.json")).unwrap();
     let linked = plan_in(dir.path(), CLAUDE, &[]);
     assert!(!config(&linked, "gw.example.com"), "link");
-    assert_eq!(linked.unread, [home.join("settings.json")], "one start line");
+    assert_eq!(
+        linked.unread,
+        [home.join("settings.json")],
+        "one start line"
+    );
 
     let big = format!("{{\"pad\":\"{}\",{}", "x".repeat(1 << 20), &JSON[1..]);
     let (big, _d) = plan(CLAUDE, "settings.json", &big, &[]);
@@ -110,13 +119,30 @@ fn a_loopback_value_gives_one_local_model_note_and_no_host() {
 fn plain_http_an_ip_and_an_unnamed_variable_add_nothing_and_skips_are_logged() {
     let json = "{\"env\":{\"ANTHROPIC_BASE_URL\":\"http://plain.example.com/v1\"}}";
     let ip = ("ANTHROPIC_VERTEX_BASE_URL", "https://203.0.113.9/v1");
-    let (plan, _dir) = plan(CLAUDE, "settings.json", json, &[ip, ("DB_HOST", "https://db.x.io")]);
+    let (plan, _dir) = plan(
+        CLAUDE,
+        "settings.json",
+        json,
+        &[ip, ("DB_HOST", "https://db.x.io")],
+    );
     assert!(no_config(&plan) && plan.notes.is_empty());
     let named = |s: &str| plan.log.iter().filter(|l| l.contains(s)).count();
-    let lines = [named("env.ANTHROPIC_*BASE_URL"), named("ANTHROPIC_VERTEX"), named("DB_HOST")];
-    assert_eq!(lines, [1, 1, 0], "one line per skipped value: {:?}", plan.log);
+    let lines = [
+        named("env.ANTHROPIC_*BASE_URL"),
+        named("ANTHROPIC_VERTEX"),
+        named("DB_HOST"),
+    ];
+    assert_eq!(
+        lines,
+        [1, 1, 0],
+        "one line per skipped value: {:?}",
+        plan.log
+    );
     let shown = format!("{:?}", plan.log);
-    assert!(!shown.contains("plain.example") && !shown.contains("203.0"), "never the value");
+    assert!(
+        !shown.contains("plain.example") && !shown.contains("203.0"),
+        "never the value"
+    );
 }
 
 #[test]

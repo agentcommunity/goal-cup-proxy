@@ -36,7 +36,10 @@ impl Reader<'_> {
                 values.extend(found.map(|v| (from.clone(), v.to_string())));
             }
         }
-        let named = c.hint_env.iter().filter_map(|n| Some((n.clone(), self.env.vars.get(n)?)));
+        let named = c
+            .hint_env
+            .iter()
+            .filter_map(|n| Some((n.clone(), self.env.vars.get(n)?)));
         values.extend(named.map(|(n, v)| (n, v.clone())));
         let mut seen = std::collections::HashSet::new();
         values.retain(|(_, v)| seen.insert(v.clone()));
