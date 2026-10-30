@@ -25,6 +25,7 @@ fn state_rows_in_table_order() {
     let slow = json!({"writer_idle_ms": 14_500});
     let cont = format!("goalcup continue {RUN}");
     // (mode, patch, alive: r recorder w watchdog h harness, age in s, state, the line's command)
+    #[rustfmt::skip]
     let mut rows = vec![
         (M::Sealed, &e, "", 999, S::Sealed { at: T0 }, None),
         (M::Recording, &e, "h", 5, S::Recover { since: T0 }, Some("goalcup recover")),
@@ -43,7 +44,8 @@ fn state_rows_in_table_order() {
         rows.push((mode, &e, "wh", 31, S::OffRestarting { since: T0 }, None));
     }
     for (mode, p, alive, age, want, command) in rows {
-        let cx = live(alive.contains('r'), alive.contains('w'), alive.contains('h'), age);
+        let has = |c: char| alive.contains(c);
+        let cx = live(has('r'), has('w'), has('h'), age);
         let got = decide(&with(mode, p.clone()), &cx);
         assert_eq!(got, want, "{mode:?} {alive} {age}");
         let line = text::state_line(&got, RUN);
@@ -230,9 +232,14 @@ fn status_command_reads_the_files() {
     let upload = json!({"state": "done", "some_key_status_does_not_know": [1, 2]});
     put(&part, "upload.json", &upload);
     for name in [None, Some(ENTRY), Some(RUN)] {
-        let args: Vec<&str> = ["status"].into_iter().chain(name).chain(["--json"]).collect();
+        let args: Vec<&str> = ["status"]
+            .into_iter()
+            .chain(name)
+            .chain(["--json"])
+            .collect();
         let got = json_out(goalcup(&home, &args));
-        assert_eq!(got, json!({"status": st, "upload": upload, "run": run}), "{args:?}");
+        let want = json!({"status": st, "upload": upload, "run": run});
+        assert_eq!(got, want, "{args:?}");
     }
     let plain = goalcup(&home, &["status"]);
     assert_eq!(plain.status.code(), Some(0));

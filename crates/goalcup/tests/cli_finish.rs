@@ -41,7 +41,8 @@ fn nothing_lost_only_without_any_loss() {
             {"conns": 2, "up": 5, "down": 9, "listed": listed}}}})
     };
     let clean_lines = show(json!({})).lines().count();
-    for (kind, p, lost) in [
+    #[rustfmt::skip]
+    let cases = [
         ("no loss", json!({}), false),
         ("unlisted tunnel", tunnel(Value::Null), false),
         ("listed tunnel", tunnel(json!("pinned")), true),
@@ -53,7 +54,8 @@ fn nothing_lost_only_without_any_loss() {
         ("fail-closed byte", json!({"written": {"mask_failclosed_bytes": 1}}), true),
         ("cut file", json!({"cut_files": {"files": 1, "bytes": 10}}), true),
         ("after-seal bytes", json!({"after_seal": {"bytes": 1}}), true),
-    ] {
+    ];
+    for (kind, p, lost) in cases {
         let out = show(p);
         assert_eq!(out.contains(text::NOTHING_LOST), !lost, "{kind}");
         assert!(out.lines().count() >= clean_lines, "{kind} has no line");
@@ -73,7 +75,8 @@ fn counts_and_hosts_are_the_fixtures() {
     let holes = json!({"written": {"req_whole": 896, "req_holes": 9, "lost_bytes": 1_500_000,
         "model_requests": 0}, "off": {"spans": 2, "ms": 150_000}});
     let out = show(holes);
-    assert!(out.contains(&text::whole_and_lost(896, 9, 1_500_000)), "{out}");
+    let shown = text::whole_and_lost(896, 9, 1_500_000);
+    assert!(out.contains(&shown), "{out}");
     assert!(out.contains(&text::off_total(2, 150_000)));
     assert!(out.contains(&text::no_request_written("your agent")));
     let host = |c: char| format!("{c}.example.org");
@@ -102,13 +105,15 @@ fn rule_lines_follow_their_facts() {
     let after = text::after_seal("your agent", 2_000_000, &["api.example.com".into()]);
     let seal_after = |b: u64| json!({"after_seal": {"bytes": b, "hosts": ["api.example.com"]}});
     let (cut, recovered) = (text::cut_files(3, 2_000_000), text::RECOVERED.to_owned());
-    for (p, line, shown) in [
+    #[rustfmt::skip]
+    let cases = [
         (seal_after(0), &after, false),
         (seal_after(2_000_000), &after, true),
         (json!({"cut_files": {"files": 3, "bytes": 2_000_000}}), &cut, true),
         (json!({}), &recovered, false),
         (json!({"seal": {"reason": "recovered"}}), &recovered, true),
-    ] {
+    ];
+    for (p, line, shown) in cases {
         assert_eq!(show(p.clone()).contains(line.as_str()), shown, "{p}");
     }
 }
