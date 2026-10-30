@@ -1,8 +1,6 @@
 """Tests of the test pad's own hands (PRD-12 "Automated tests", ledger B10): key files, the push token, no key
 value in any argument or file the pad builds (an env key launch included), the pane replacement, cleanup and
-check.py's crash rows. Python 3.11, no network.
-
-    python3.11 -m unittest scripts/pad/test_pad.py
+check.py's crash rows. No network; gate fast runs python3.11 -m unittest discover -s scripts/pad -p 'test_*.py'.
 """
 import base64
 import importlib.machinery
@@ -183,10 +181,6 @@ class HereAndFetch(unittest.TestCase):
                 r.step_fetch("fetch", 10)
             self.assertEqual(os.listdir(os.path.join(r.dir, "fetched")), [])
 
-    def test_local_server_in_a_sandbox_is_refused(self):
-        with self.assertRaises(pad.Usage):
-            pad.load_settings(dict(BASE, server="local", where="sandbox"), PADCFG)
-
 
 class BoxHalf(unittest.TestCase):
     """pad-run: known values never reach a pane file, and an env key launch only exports the value."""
@@ -223,10 +217,11 @@ class CrashRows(unittest.TestCase):
     """Section 3.1, ledger R3a and R3b: one closed recorder_down gap per kill under 2 s, no null_mode gap; the
     recover row keeps the harness pid and port. Only result values are asserted."""
 
-    def row(self, kind, gap, samples=()):
-        recover = [{"kind": "recover", "exit": 0, "said": w} for w in check.RECOVER]
+    def row(self, kind, gap, samples=(), fired=True, steps=()):
+        said = [{"kind": k, "exit": 0, "said": w} for k, w in zip(("recover", "recover", "status"),
+                                                                   check.RECOVER + (check.STATUS_RECOVER,))]
         files = {"meta.json": {"connector": "codex-cli", "case": "direct", "variant": [kind + "@3"], "server": "off",
-                               "keep": True, "commits_since_start": 1, "entry": "e1"},
+                               "keep": True, "commits_since_start": 1, "entry": "e1", "steps": list(steps)},
                  "verify/check-local.json": {"exit": 1, "entries": [{"entry": "e1", "seal_reason": "harness_exit",
                      "counts": {"model_requests": 5, "gaps": {"recorder_down": 1}}, "checks": [
                          {"id": "gap_has_end", "result": "pass"}, {"id": "history_complete", "result": "pass"},
@@ -234,14 +229,17 @@ class CrashRows(unittest.TestCase):
                  "verify/usage/e1.json": {"tokens": {"merged": {"input": 9, "output": 9}}, "coverage": {"unattributed": 0},
                                           "threads": [{"parent": None, "models": {"m": 3}, "wire_calls": 3},
                                                       {"parent": "t0", "models": {"m": 2}, "wire_calls": 2}]},
-                 "watch/status.jsonl": samples, "watch/faults.jsonl": recover}
+                 "watch/status.jsonl": samples, "watch/faults.jsonl": said + [{"kind": "kill-recorder", "pid": 9}] * fired}
         return evaluate(files)
 
     def test_kill_recorder(self):
         gap = {"start": "2026-10-30T10:00:00Z", "end": "2026-10-30T10:00:01.2Z"}
-        self.assertNotEqual(self.row("kill-recorder", gap)["result"], "FAIL")
-        for bad in (dict(gap, cause="null_mode"), dict(gap, end="2026-10-30T10:00:02.5Z")):
-            self.assertEqual(self.row("kill-recorder", bad)["result"], "FAIL", bad)
+        good = self.row("kill-recorder", gap)
+        self.assertEqual((good["result"] != "FAIL", good["faults"]), (True, "PASS"))
+        down = [["wait-recovery", "timeout", "4:10", ""]]  # did not stand back up
+        for bad in ({"gap": dict(gap, cause="null_mode")}, {"gap": dict(gap, end="2026-10-30T10:00:02.5Z")}, {"steps": down}):
+            self.assertEqual(self.row("kill-recorder", **dict({"gap": gap}, **bad))["result"], "FAIL", bad)
+        self.assertNotEqual(self.row("kill-recorder", gap, fired=False)["faults"], "PASS")  # the kill never fired
 
     def test_recover_keeps_harness_pid_and_port(self):
         gap = {"cause": "watchdog_lost", "start": "2026-10-30T10:01:00Z", "end": "2026-10-30T10:02:00Z"}

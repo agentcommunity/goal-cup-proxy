@@ -38,6 +38,7 @@ DOWN = ("recorder_down", "null_mode", "watchdog_lost")
 DOWN_ERR = re.compile(r"(?<!\d)5\d\d(?!\d)|overloaded|server_error|api_error|internal", re.I)  # S6 keys are
 REFUSED_ERR = re.compile(r"(?<!\d)40[13](?!\d)|auth|permission|api_key|quota|billing", re.I)  # kinds or codes
 RECOVER = ("nothing to recover", "Recording is on again")  # PRD-10 acceptance 11: first, second recover
+STATUS_RECOVER = "Run: goalcup recover"  # PRD-10 acceptance 11: the status line after the recorder kill
 BUILT_FAULTS = ("kill-recorder", "kill-watchdog-recover")
 C1_IDS = ("gap_has_end", "history_complete", "streams_closed", "seen_matches_written", "recorder_alive", "listed_hosts_decrypted")
 RANK = {"pass": 0, "warn": 1, "skip": 2, "named": 3, "fail": 4}
@@ -271,6 +272,11 @@ def faults(r):
         r.mark("faults", "INCONCLUSIVE", "expectations for %s not built yet" % k)
     if not set(kinds) & set(BUILT_FAULTS):
         return
+    fired = [f for f in r.faults if f.get("kind") == "kill-recorder" and f.get("pid") is not None]
+    r.flag(len(fired) < kinds.count("kill-recorder"), "faults", "INCONCLUSIVE",
+           "fault did not fire: %d of %d kills" % (len(fired), kinds.count("kill-recorder")))
+    r.flag(any(isinstance(s, list) and s[:2] in (["wait-recovery", "FAIL"], ["wait-recovery", "timeout"])
+               for s in r.meta.get("steps") or []), "faults", "FAIL", "did not stand back up (wait-recovery)")
     gaps, counts = r.gaps()
     other = sorted(k for k, n in counts.items() if n and k.split(":")[0] not in DOWN + ("after_stop",))  # R2: seal
     r.flag(other, "faults", "FAIL", "named loss other than the expected gaps: %s" % ", ".join(other))  # C1, C2
@@ -285,8 +291,7 @@ def faults(r):
            "faults", "FAIL", "a null_mode gap")
     r.flag(any("mode" in s and dig(s, "s4_mode") in (None, "null") for s in r.samples), "faults", "FAIL",
            "a status.jsonl line with mode null")
-    kills = kinds.count("kill-recorder")
-    r.flag(len(gaps) != kills, "faults", "FAIL", "%d recorder_down gaps for %d kills" % (len(gaps), kills))
+    r.flag(len(gaps) != len(fired), "faults", "FAIL", "%d recorder_down gaps for %d kills" % (len(gaps), len(fired)))
     for a, b, ms in span:
         ms = ms if isinstance(ms, (int, float)) else (b - a).total_seconds() * 1000 if a and b else None
         r.flag(ms is None or ms >= 2000, "faults", "FAIL", "a recorder_down gap of %s ms, not under 2 s" % ms)
@@ -295,6 +300,8 @@ def faults(r):
 def recover(r, gaps):
     if any("goalcup continue" in str(f.get("said")) for f in r.faults):
         return r.mark("faults", "INCONCLUSIVE", "harness lost its terminal")
+    r.flag(not any(f.get("kind") == "status" and STATUS_RECOVER in str(f.get("said")) for f in r.faults), "faults",
+           "FAIL", "status did not show " + STATUS_RECOVER)
     done = [f for f in r.faults if f.get("kind") == "recover"]
     r.flag(len(done) < 2, "faults", "INCONCLUSIVE", "%d of 2 recover outcomes logged" % len(done))
     for f, words in zip(done, RECOVER):
@@ -310,6 +317,8 @@ def facts(r):
     u, e, m = r.usage or {}, r.entry, r.meta
     read, hist, size = dig(u, "s7_readable") is True, dig(e, "s6_history") or {}, dig(e, "s6_bytes") or {}
     threads = [t for t in dig(u, "s7_threads") or [] if isinstance(t, dict)]
+    rss = [p.get("rss_kb") for x in load(r.folder, "watch/procs.jsonl", 1) for p in x.get("procs") or []
+           if isinstance(p, dict) and p.get("role") == "recorder" and isinstance(p.get("rss_kb"), (int, float))]
     alarm = [x.get("at") for x in load(r.folder, "watch/live.jsonl", 1) if x.get("result") == "fail" or x.get("fail")]
     return {"wire_requests": dig(u, "s7_wire"), "harness_calls": dig(u, "s7_native") if read else None,
             "harness_log": dig(e, "s6_log") if read else None, "local_log": "read" if read else "none",
@@ -321,8 +330,9 @@ def facts(r):
             "secret_hits": r.hits("secrets"), "masks": r.masks() or {}, "plain_hits": r.hits("secrets-plain"),
             "screen_known": m.get("screen_known"), "canary": "not planted", "tokens": dig(u, "s7_tokens"),
             "models": [x.get("model") for x in dig(u, "s7_models") or [] if isinstance(x, dict)],
-            "raw_bytes": size.get("raw"), "compressed_bytes": size.get("compressed"), "recorder_rss_peak_mb": None,
-            "spend_usd_est": None, "priced_high": [], "first_live_alarm": (alarm or [None])[0], "over_cap": False,
+            "raw_bytes": size.get("raw"), "compressed_bytes": size.get("compressed"), "over_cap": m.get("over_cap") is True,
+            "recorder_rss_peak_mb": round(max(rss) / 1024, 1) if rss else None, "spend_usd_est": m.get("spend_usd_est"),
+            "priced_high": m.get("priced_high") or [], "first_live_alarm": (alarm or [None])[0],
             "push": m.get("push"), "wire_only": dig(u, "s7_wire_only"), "local_log_reason": dig(u, "s7_reason")}
 
 def evaluate(folder):
