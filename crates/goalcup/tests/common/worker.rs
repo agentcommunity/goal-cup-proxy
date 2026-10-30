@@ -3,9 +3,9 @@
 //! rules (the full tier runs the real Worker). HTTP/1.1, keep-alive, any Bearer; an entry is made
 //! on first use; ids, the credential and times are fixed test data (`seconds_left` too).
 //!
-//! A heartbeat is kept exactly as the client sent it; the fake never reads `counts`, so a bad
-//! `counts` is answered `200`, never `400`. Whether the Worker stores a `counts` is the real
-//! Worker's rule, checked in the full tier.
+//! A heartbeat is kept as the Worker keeps it: a `counts` outside the S5 bound (a flat object of
+//! whole numbers, strings of at most 64 bytes, booleans or `null`, at most 2 KiB serialized) is
+//! dropped and kept as `counts_dropped` (its serialized byte length), answered `200`, never `400`.
 //!
 //! An outage: dropping the fake shuts down every connection it accepted (a pooled keep-alive
 //! connection sees the close) and frees the port; `ports::refusing()` gives an address that
@@ -46,8 +46,9 @@ pub enum Route {
 /// One injected answer, used once, for the next call of its route.
 #[derive(Clone, Debug, Default)]
 pub struct Inject {
-    /// Answer with this status and an error body instead, doing no work.
-    pub status: Option<u16>,
+    /// Answer with this status and body instead, doing no work: the test names the documented
+    /// code it means, for example `(503, json!({"error": "awaiting_final"}))`.
+    pub answer: Option<(u16, Value)>,
     /// Do the work, then close the connection unanswered.
     pub drop_after_commit: bool,
     /// A `Retry-After` header, in seconds.
@@ -181,7 +182,7 @@ struct Request {
 /// Serves one connection, request after request, until the peer closes it, it asks to close, an
 /// answer is dropped, or the fake is dropped.
 fn serve(stream: &TcpStream, state: &Mutex<State>) -> Option<()> {
-    let mut r = BufReader::new(stream.try_clone().ok()?);
+    let mut r = BufReader::new(stream);
     loop {
         let mut lines = r.by_ref().lines().map_while(Result::ok);
         let start = lines.next()?;
@@ -214,21 +215,27 @@ fn serve(stream: &TcpStream, state: &Mutex<State>) -> Option<()> {
     }
 }
 
-fn error(status: u16) -> Value {
-    let code = match status {
-        400 => "malformed",
-        401 => "unauthorized",
-        403 => "forbidden",
-        404 => "not_found",
-        409 => "conflict",
-        410 => "closed",
-        413 => "too_large",
-        422 => "digest_mismatch",
-        429 => "rate_limited",
-        503 => "maintenance",
-        _ => "internal",
+/// The fake's own errors: `404 not_found` for an unknown route or entry, else `400 malformed`.
+fn own_error(status: u16) -> Value {
+    let code = if status == 404 {
+        "not_found"
+    } else {
+        "malformed"
     };
     json!({"error": code, "message": format!("The fake Worker answered {status}.")})
+}
+
+/// Whether `c` is within the S5 `counts` bound.
+fn counts_ok(c: &Value) -> bool {
+    let flat = c.as_object().is_some_and(|m| {
+        m.values().all(|v| match v {
+            Value::Number(n) => n.is_u64() || n.is_i64(),
+            Value::String(s) => s.len() <= 64,
+            Value::Bool(_) | Value::Null => true,
+            _ => false,
+        })
+    });
+    flat && c.to_string().len() <= 2048
 }
 
 /// The answer to `req`: status, `Retry-After` and body; `None` drops the connection unanswered.
@@ -244,19 +251,20 @@ fn answer(req: &Request, state: &Mutex<State>) -> Option<(u16, Option<u64>, Stri
         ("PUT", ["v1", "runs", _, "chunks", _]) => Route::Chunk,
         ("POST", ["v1", "runs", _, "heartbeat"]) => Route::Heartbeat,
         ("POST", ["v1", "runs", _, "continue"]) => Route::Continue,
-        _ => return Some((404, None, error(404).to_string())),
+        _ => return Some((404, None, own_error(404).to_string())),
     };
     let mut s = lock(state);
     let at = s.script.iter().position(|(r, _)| *r == route);
     let inject = at.map(|i| s.script.remove(i).1).unwrap_or_default();
     drop(s);
     sleep(inject.delay.unwrap_or_default());
-    if let Some(status) = inject.status {
-        return Some((status, inject.retry_after, error(status).to_string()));
+    if let Some((status, body)) = inject.answer {
+        return Some((status, inject.retry_after, body.to_string()));
     }
-    let ok = 200 + u16::from(matches!(route, Route::Open | Route::Continue)); // 201 Created
+    let created = matches!(route, Route::Open | Route::Continue);
+    let ok = if created { 201 } else { 200 };
     let body = work(route, req, &segs, q, &mut lock(state));
-    let (status, body) = body.map_or_else(|e| (e, error(e)), |b| (ok, b));
+    let (status, body) = body.map_or_else(|e| (e, own_error(e)), |b| (ok, b));
     (!inject.drop_after_commit).then_some((status, inject.retry_after, body.to_string()))
 }
 
@@ -306,8 +314,13 @@ fn work(r: Route, req: &Request, segs: &[&str], q: &str, s: &mut State) -> Resul
                 "received_at": "2026-11-06T10:00:01Z", "sealed": sealed(e)})
         }
         Route::Heartbeat => {
-            let beat: Value = serde_json::from_slice(&req.body).map_err(|_| 400u16)?;
+            let mut beat: Value = serde_json::from_slice(&req.body).map_err(|_| 400u16)?;
             let id = beat["entry_id"].as_str().ok_or(400u16)?.to_string();
+            let bad = beat.get("counts").filter(|c| !c.is_null() && !counts_ok(c));
+            if let (Some(n), Some(o)) = (bad.map(|c| c.to_string().len()), beat.as_object_mut()) {
+                o.remove("counts");
+                o.insert("counts_dropped".into(), n.into());
+            }
             let e = entry(&mut s.entries, &id);
             if beat["final"] == true {
                 e["final"] = json!({"seq": beat["seq"], "head": beat["head"]});

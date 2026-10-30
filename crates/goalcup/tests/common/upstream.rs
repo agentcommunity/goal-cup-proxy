@@ -45,8 +45,9 @@ pub enum Body {
 
 /// A `Content-Encoding` the body is compressed with before sending. The whole body (every piece
 /// joined) is compressed once, and for `Chunked` and `Sse` the compressed bytes are split again
-/// over at most the same number of pieces (fewer when the coded body is short). `Deflate` is the zlib format (RFC 9110 section 8.4.1.2); `Br`
-/// is a valid brotli stream of uncompressed meta-blocks, since no brotli encoder is a dependency.
+/// over at most the same number of pieces (fewer when the coded body is short). `Deflate` is the
+/// zlib format (RFC 9110 section 8.4.1.2); `Br` is a valid brotli stream of uncompressed
+/// meta-blocks, since no brotli encoder is a dependency.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Coding {
     Gzip,
