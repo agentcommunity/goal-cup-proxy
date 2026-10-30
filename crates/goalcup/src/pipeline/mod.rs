@@ -238,6 +238,11 @@ impl Recorder {
     /// `mode` and `boot`, `off_spans`, `off_ms` and `off_since` take from a live recorder, so it
     /// never parses `status.json` for them.
     pub fn live(&self) -> Live {
+        self.live_at(clock::awake_ns())
+    }
+
+    /// `live()` with the awake clock at `now`.
+    fn live_at(&self, now: u64) -> Live {
         let i = &self.inner;
         // Idle from the later of the last write and the moment records began to wait.
         let writer_idle_ms = if i.queued.load(Ordering::Relaxed) > 0 {
@@ -245,7 +250,7 @@ impl Recorder {
                 .writer_last_ns
                 .load(Ordering::Relaxed)
                 .max(i.wait_since_ns.load(Ordering::Relaxed));
-            clock::awake_ns().saturating_sub(since) / 1_000_000
+            now.saturating_sub(since) / 1_000_000
         } else {
             0
         };
@@ -485,28 +490,26 @@ mod tests {
     #[test]
     fn the_stall_exit_needs_a_record_waiting_with_no_write() {
         let (rec, rx) = Recorder::pipeline(SOFT_GUARD);
-        let i = &rec.inner;
-        let ago = || clock::awake_ns().saturating_sub(MIN);
-        let stalled = || status::stalled(&rec.live(), SOFT_GUARD);
-        i.writer_last_ns.store(ago(), Ordering::Relaxed);
+        let stalled = |at: u64| status::stalled(&rec.live_at(at), SOFT_GUARD);
+        // The last write was long ago.
+        rec.inner.writer_last_ns.store(0, Ordering::Relaxed);
 
         let window = rec.reserve(16 << 20);
-        assert_eq!(rec.live().writer_idle_ms, 0);
-        assert!(!stalled());
+        let now = clock::awake_ns();
+        assert_eq!(rec.live_at(now + MIN).writer_idle_ms, 0);
+        assert!(!stalled(now + MIN));
 
         rec.event(json!({"ev": "note"}));
-        assert!(rec.live().writer_idle_ms < 60_000);
-        assert!(!stalled());
-
+        let now = clock::awake_ns();
+        assert!(!stalled(now));
         // The record still waits a minute later, with no write since.
-        i.wait_since_ns.store(ago(), Ordering::Relaxed);
-        assert!(stalled());
+        assert!(stalled(now + MIN));
 
         for item in rx.try_iter() {
             rec.release(item.held());
         }
         drop(window);
         assert_eq!(rec.live().held_bytes, 0);
-        assert!(!stalled());
+        assert!(!stalled(clock::awake_ns() + MIN));
     }
 }
