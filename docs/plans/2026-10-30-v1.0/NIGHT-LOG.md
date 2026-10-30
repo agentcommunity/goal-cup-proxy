@@ -1867,3 +1867,21 @@ Keys (checked 2026-10-30 at session start; names only, no values):
 23:26Z | integrator conductor | decision | Owner asked for a handoff ledger (weekly token limit may end this session): docs/plans/2026-10-30-v1.0/HANDOFF.md on integration, with how to resume, decisions, remaining work per PRD and a branch table regenerated at each wake-up; the conductor tools are copied to docs/plans/2026-10-30-v1.0/conductor/ (no secrets; keys come from env).
 23:26Z | pad fixer PRD-12 | stop | A14 A15 A16 A17 A18 N1 N2 N3 fixed; 31 box tests green on python3.11; pushed 6642ea0b; start-refused value_shown and daemon-check left not run against a live tmux and harness
 23:26Z | pad reviewerB PRD-12 | start | re-check of slice 5 fix at 6642ea0b
+23:26Z | format-core fixer PRD-02 | fix | B-3 reverted: one spans field loses boot 0's start gap once part 0 is pruned (boot_zero_start_gap_keeps_its_off_span_once_pruned failed in a box at eec2d52a); kept the own-spans and down_ms split
+23:26Z | format-core fixer PRD-02 | stop | gate fast PASS in a box at c1e65da6 (nextest 251 of 251, integration 64450e32 merged); pushed v1.0/prd-02-core 671cf741..c1e65da6; B-1 B-2 fixed, B-3 B-4 B-5 BRK8-N1 declined
+23:27Z | format-core reviewer-B PRD-02 | decision | re-check of c1e65da6: B-1 and B-2 done, B-3 to B-5 declines accepted
+23:27Z | format-core breaker PRD-02 | start | re-check of prd-02-core after fixer round
+23:27Z | format-core reviewer-A PRD-02 | start | re-check of prd-02-core at c1e65da6 (B-1, B-2 fixes, B-3..BRK8-N1 declines)
+23:27Z | integrator conductor | decision | A stray local commit 937ec7fd (an agent's 'merge integration into prd-14-tests' made in the main checkout on local v1.0/integration) was not pushed: it would bypass the merge rule. Its content (cf34c1b9) is already on origin/v1.0/prd-14-tests; local integration reset to origin, the commit kept on a local backup branch.
+23:27Z | judge reviewerA PRD-08 | stop | re-check done: A8 fixed, one nit on the new test fixture (seen mismatch), box 48 of 48 plus probe pass
+23:27Z | pad reviewerB PRD-12 | stop | re-check done at 6642ea0b: no open blocker or fix, four nits; box tests not re-run
+23:27Z | wire-native reviewer-A PRD-04 | stop | re-review done: A1 A2 A3 A5 A6 fixed; new blocker: tests/common/recorder.rs is PRD-14's; fix: a whole set gone after a whole copy is reported lost at the seal (box probe); native 55/55, clippy clean
+23:27Z | wire-native fixer PRD-04 | start | fixing A7 A8 A9 B8 B9 on v1.0/prd-04-native from 4f218cbc
+23:28Z | judge merge-requester PRD-08 | seam | queued merge request 232813-prd-08-verify for v1.0/prd-08-verify slice 4
+23:28Z | wire-proxy breaker PRD-03 | stop | R1 fix holds (box probe and stress clean at 40/200 conns, tunnels, held 24 MiB reply, 200 ws, debug and release); one new fix: unsent client bytes with no open http_req are recorded nowhere
+23:28Z | wire-proxy fixer PRD-03 | start | fixing R3 (unsent client bytes with no open http_req recorded nowhere) on v1.0/prd-03-proxy
+23:29Z | harnesses preparer PRD-11 | decision | goose-cli uses GOOSE_PATH_ROOT (documented, box-tested) instead of four XDG folders; kimi session_index.jsonl sits at {home} not sessions/; kimi 2.4.1 is current; auth.kimi.ai added to never; README cells for six harnesses
+23:29Z | pad PRD-12 | stop | PRD-12 PRD-12 slice 5: gateway and dodger cases end to end (rungs 7 and 8), exec and pre watcher commands with the seven scripts under scripts/pad/exec/ (rung 9), nit B6-1 not merged: findings still open after the last review round: A19, A20 (branch v1.0/prd-12-pad)
+23:29Z | pad fixer PRD-12 | start | fixing A19 A20 A21 B-1..B-4 on v1.0/prd-12-pad
+23:30Z | integrator merger v1.0/prd-08-verify | gate | gate fast: PASS in 92s on merge 1fdaf2c3 (log /root/gc-night/gate-logs/v1.0_prd-08-verify-2328.log)
+23:30Z | integrator merger v1.0/prd-08-verify | merge | v1.0/prd-08-verify into v1.0/integration as 1fdaf2c3: PRD-08 slice 4: honesty checks listed_hosts_decrypted, conn_bytes, mask_failclosed
