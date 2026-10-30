@@ -104,4 +104,3 @@ impl Calls {
             .push(call);
     }
 }
-

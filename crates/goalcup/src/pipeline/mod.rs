@@ -23,14 +23,14 @@ pub mod fds;
 mod handle;
 pub mod status;
 
+#[cfg(feature = "test-hooks")]
+pub use calls::{Call, Calls};
 pub use clock::Mono;
 pub use counts::{Counts, Durable, TunnelHost, entry_totals};
 pub use cursors::Cursors;
 pub use goalcup_format::{EndReason, GapReason, StreamKind};
 pub use handle::{OpenFlags, StreamHandle};
 pub use status::Status;
-#[cfg(feature = "test-hooks")]
-pub use calls::{Call, Calls};
 
 use serde_json::Value;
 use std::process::ExitCode;

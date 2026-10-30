@@ -72,14 +72,17 @@ impl StreamHandle {
     /// One WebSocket piece; `fin` marks a message end.
     pub fn ws(&mut self, t: Mono, opcode: u8, fin: bool, bytes: Bytes) {
         let (sid, off, n) = (self.sid, self.off, bytes.len() as u64);
-        collect!(self.rec, Call::Ws {
-            sid,
-            t,
-            off,
-            opcode,
-            fin,
-            bytes,
-        });
+        collect!(
+            self.rec,
+            Call::Ws {
+                sid,
+                t,
+                off,
+                opcode,
+                fin,
+                bytes,
+            }
+        );
         self.off += n;
     }
 
@@ -87,28 +90,34 @@ impl StreamHandle {
     /// `Some(n)` moves the offset by `n`; `None` means unknown and leaves it.
     pub fn gap(&mut self, reason: GapReason, start: Mono, lost: Option<u64>, tail: Option<Value>) {
         let (sid, off, end) = (self.sid, self.off, self.rec.now());
-        collect!(self.rec, Call::Gap {
-            sid,
-            reason,
-            start,
-            end,
-            off,
-            lost,
-            tail,
-        });
+        collect!(
+            self.rec,
+            Call::Gap {
+                sid,
+                reason,
+                start,
+                end,
+                off,
+                lost,
+                tail,
+            }
+        );
         self.off += lost.unwrap_or(0);
     }
 
     pub fn end(mut self, t: Mono, reason: EndReason, tail: Option<Value>) {
         self.ended = true;
         let (sid, seen) = (self.sid, self.off);
-        collect!(self.rec, Call::End {
-            sid,
-            t,
-            reason,
-            seen,
-            tail,
-        });
+        collect!(
+            self.rec,
+            Call::End {
+                sid,
+                t,
+                reason,
+                seen,
+                tail,
+            }
+        );
     }
 }
 
@@ -118,12 +127,15 @@ impl Drop for StreamHandle {
             return;
         }
         let (sid, seen, t) = (self.sid, self.off, self.rec.now());
-        collect!(self.rec, Call::End {
-            sid,
-            t,
-            reason: EndReason::Interrupted,
-            seen,
-            tail: None,
-        });
+        collect!(
+            self.rec,
+            Call::End {
+                sid,
+                t,
+                reason: EndReason::Interrupted,
+                seen,
+                tail: None,
+            }
+        );
     }
 }
