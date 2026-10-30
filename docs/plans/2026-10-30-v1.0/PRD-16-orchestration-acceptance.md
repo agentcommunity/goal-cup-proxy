@@ -917,3 +917,71 @@ wave" and "up to 6 pad boxes", and BUILD-PROMPT section 5 says the other 12 foll
 wave; the ledger wins. Done in the 30 Oct sweep: PRD-00 phases 1a, 2 and 5, BUILD-PROMPT section 5 and PRD-12's
 watcher count now follow B3 and B11. S1 (three failed fixes) is
 kept and now cites BUILD-PROMPT section 5, since B3 no longer carries it.
+
+## Amendments
+
+### 2026-10-30, replan after PRD-07 slice 1 (merge 4dcc1e7b)
+
+- **First staging deploy now waits on PRD-06 alone.** PRD-07 builder step 2 is on integration
+  (4dcc1e7b), with `MIN_COMPETITION_VERSION = "1.0.0"` in both `wrangler.toml` blocks. The workspace
+  version bump the PRD-07 fixer named as an ordering seam (11:11Z) is also on integration: `Cargo.toml`
+  reads `version = "1.0.0"`. So the deploy rule in section 3 holds as written.
+- **Staging before PRD-07 step 3 still answers `/receipt` and `/abandon`** and still sends `ack` and
+  `last_ack`. No 1.0 client calls or reads them, so a staging deploy between the two slices is safe;
+  redeploy after step 3 merges.
+- **X6 and every staging fetch pass `--bucket goalcup-traces-staging`.** `fetch-run.sh` picks the
+  staging or production side of the index by the bucket name, and with no flag it reads production
+  (`goalcup-traces`). Read only, but a staging run fetched without the flag ends with "the index holds
+  no entry". PRD-12 section 3 already passes the flag.
+- **What `fetch-run.sh` reads from the conductor's environment:** `DATABASE_URL` (psql, in a
+  read-only transaction) and `CLOUDFLARE_ACCOUNT_ID` with `CLOUDFLARE_API_TOKEN` (R2 GETs). The
+  conductor holds one Cloudflare token for the staging deploy; the script only reads with it, but the
+  token's own rights are not narrowed by the script.
+- **`--local` keeps only each entry's last heartbeat** (the local store holds `last_vitals` only). X6's
+  check of every heartbeat row runs on a staging fetch, never on `--local`.
+- **Build snapshot Python is 3.9** (lane logs 10:45Z to 10:53Z): `tomllib` is missing and
+  `scripts/check-links.py` needs 3.10. Every Python step the gate or the pad runs in a box must work on
+  3.9, or the snapshot gets 3.10 or later. `test_fetch_run.py` runs on 3.9 (17/17).
+- **Size report, PRD-07 slice 1** (wc -l on integration at 4dcc1e7b): Worker src 3,848 against the
+  "about 3,440" row (11.9% over; the row's src includes the out-of-scope `github.ts`, `mail.ts`,
+  `notices.ts`, `ratelimit.ts` and `auth.ts`, as the 4,001 "today" figure did), down from 4,001.
+  Worker tests 5,568 against "about 4,950" (12.5% over), down from 5,800. Step 3 still deletes
+  `sign.ts` (116), the receipt, abandon and alias code, `sign.test.ts` (68) and `signing.json`
+  (26). Scripts: `fetch-run.sh` 369 (was 349) and `test_fetch_run.py` 364 (was 695), 733 of the
+  "about 900" shared with the gate, release and packaging. `docs/UPLOAD-API.md` 577 (was 596). By the
+  11:20Z decision, overage alone is a nit.
+
+### 2026-10-30, replan after PRD-17 phase 0 slice (merge 1423f8f9)
+
+- **A heavy test binary's merge carries one line in PRD-14's `.config/nextest.toml`.** Group
+  `heavy` starts empty (nextest refuses a filter that matches no binary; PRD-14 gate lane, integrator
+  log 10:52Z), so the merge that brings `lessons_launch.rs`, a `watchdog_*`, `e2e_*`,
+  `pipeline_restart`, `pipeline_stall`, `pipeline_many_streams`, `proxy_connect`, `proxy_restart`
+  or `native_walk` binary adds its name to the heavy override. Under merge rule 1 that is a seam
+  change: the integrator reads the PRD-14 lane's 10:52Z note as its approval for that one override
+  line only; any other edit to the file needs a PRD-14 line in the log. Without it a kill test runs
+  in parallel with the others.
+- **Old-gate stall, now gone:** the docs-only `LESSONS.md` slice failed `gate fast` from 10:54Z to
+  11:35Z on the old `scripts/check-version.py` over plan docs, not on its own file, until PRD-14's gate
+  merged. With PRD-14 on integration, a docs-only slice passes (`gate fast: PASS in 59s` on 1423f8f9).
+- **Findings raised on a fix after it merged** (A7, B7 on `LESSONS.md`, both nits) go to the owner
+  lane's next slice through its Amendments note, not a separate merge request.
+- **Size report, PRD-17 phase 0 slice** (`wc -l` on integration at 1423f8f9): 0 lines of PRD-17 code
+  against the shared lessons and test-support tests row of 3,000 (PRD-00 "Size budget"); none of that
+  row is on integration yet. `LESSONS.md` 197 lines of docs, outside the budget.
+
+### 2026-10-30, replan after PRD-15 slice 1 (merge 98bbb7e9)
+
+- **Size report, PRD-15 slice 1** (wc -l on integration at 98bbb7e9). PRD-15 has no row in PRD-00
+  "Size budget"; docs are not counted there. `AGENTS.md` 111 (was 110). `docs/DECISIONS.md` 1,418 (was
+  1,162; plus 256 for the header line, "Owner decisions in force", D75 to D86 and the status rows).
+  `docs/research/results/2026-10-30-two-hour-run.md` 304 (new, a copy). Review B-1 names about 30 to 40
+  DECISIONS lines that can go in the after-merge rewrite. No code.
+- **The phase 3 order holds.** PRD-14 deletes `check-links.py` in the phase 3 merge only after
+  PRD-15's last link run. That run leaves out the run 1 report by name (its 21 evidence links dangle by
+  design, PRD-15 amendment) and runs on Python 3.10 or later in the box. Gate fast does not run
+  `check-links.py`, so those links block no merge.
+- **PRD-15's stale-term grep fails on `AGENTS.md` until PRD-15 slice 2 lands the map** (review B-4):
+  the map and "Read next" still name the old crates, pins, CONTRACTS, TERMINATION and CHEAT-CHECKLIST.
+  Read that check after slice 2, not before.
+- No locked ledger item is touched and no owner question comes from this slice.

@@ -769,3 +769,45 @@ old code. Each id with what was done here.
 | G3-17l | Applied. "Files it owns": the pty is made by the test (`openpty`, controlling terminal), so it runs under `sandbox exec` |
 | G3-X39 | Applied. P11's real-run proof is PRD-10 acceptance 7 (`sh -lc 'goalcup time-left'` in the harness's `HOME`) |
 | B10 sweep (30 Oct) | Applied. G1's usage guard is PRD-12 P4's `gateway` rows (R:), since PRD-14 cut `usage_shapes.rs`; VR2's usage half is a case in `usage_run1.rs` |
+
+## Amendments
+
+### 2026-10-30, replan after PRD-07 slice 1 (merge 4dcc1e7b)
+
+- **Answer to the S10 question (lessons log, 10:45Z):** the Worker tests for "a repeated open answers
+  the same run" are `server/worker/test/device.test.ts:156` ("repeat open with the same session_id
+  returns the same run; another session_id is 409") and `server/worker/test/lifecycle.test.ts:222`
+  ("a lost-reply repeat of the open is the same run, also after continue"), on integration at 4dcc1e7b.
+  Both stay through PRD-07 step 3. `integration.test.ts:185` needs a receipt and goes with that route.
+
+### 2026-10-30, replan after PRD-17 phase 0 slice (merge 1423f8f9)
+
+- **Review nits A7 and B7 go into the lane's next `LESSONS.md` edit** (they came from the fix review
+  and are not in 1423f8f9). In L-H11 and L-W11 the guard parentheses read `(PRD-03 rule 2 ...)`,
+  which by the legend makes PRD-03 the owner, while the Owner column says PRD-17. Drop the
+  parentheses in those two cells, as every other `lessons_` guard already has none (L-C1); the
+  `lessons_` prefix names the owner and the rule 2 source stays in the 10:51Z decision line. Any
+  status or gate script reads the owner from the Owner column, never from guard parentheses. Dropping
+  the Owner column (PRD-17 section 1 lists only ID, guard, status, commit) is optional, not required.
+- **H11, W11 and G1's recording half are this lane's tests now** (lessons log 10:51Z): PRD-03 has no
+  rule 2 case, so `lessons_http1::every_request_on_a_decrypted_host_is_recorded` (a gateway-prefixed
+  path, a Host mismatch, a non-POST method) and `lessons_ws::an_upgrade_on_any_path_is_recorded` are
+  written here and count in the lessons row of the size budget. Section 2's "PRD-03 rule 2 tests" for
+  H11, W11 and G1 reads as these two. PRD-03 writes no duplicate (PRD-03 note).
+- **L-S10 is no longer pending:** the names are in the earlier note above (`device.test.ts:156`,
+  `lifecycle.test.ts:222`). The next `LESSONS.md` edit puts them in and leaves 6 `(name pending)`
+  rows (FW3, VR2, VR3, VR4, SC1, SC6), each now asked in its owner's Amendments (PRD-08, PRD-10).
+- **HF2 answered from PRD-11's own text:** 1.0 writes no Hermes CA entry and no `HERMES_CA_BUNDLE`;
+  PRD-11's macOS risk row and its answer L5-10 leave Hermes "not verified on macOS" (ledger T9, Linux
+  first). L-HF2's guard stays `R: RR6` (Hermes, if run on the owner's Mac). Section 2's `D:
+  connectors/hermes-cli.toml` entry for HF2 names no key and is not used. Check 1 holds, since the row
+  has a guard.
+- **The PRD-14 heavy-group ask is answered, with a change:** `.config/nextest.toml` on integration
+  names `lessons_launch` only in a comment. Group `heavy` starts empty because nextest refuses a
+  `binary()` filter that matches no binary, so the merge that brings `lessons_launch.rs` adds it to
+  the heavy override (see the PRD-16 note for how that one line passes merge rule 1).
+- **Size report** (`wc -l` on integration at 1423f8f9): merged PRD-17 code is 0 lines (no
+  `tests/lessons_*.rs`, no `tests/lessons_fixtures/` yet) against the shared "Lessons (PRD-17), test
+  support, `rule_code`, `e2e_run` (PRD-14)" tests row of 3,000; nothing else of that row is on
+  integration yet. `LESSONS.md` is 197 lines of docs, outside the row. Its 154 rows match the 154 ids
+  of sections 2.1 to 2.16.

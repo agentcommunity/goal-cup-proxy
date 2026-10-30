@@ -835,3 +835,16 @@ Revision 3 against OWNER-DECISIONS.md (the ledger wins). Fix ids are from the al
 | P03-22 | Applied. One `ca_refused` note each time a pair is learned; acceptance 7's third call adds a second note; a no-alert close has GAP tail `{"alert": false}` (section 1 diagram, section 4, `proxy_tls.rs`). PRD-08's part is PRD-08's |
 | P05-21 | Applied in the PRD-05 row |
 | X2-11 | Partly. Moving the "Review answers" and ruled "Asks" into `REVIEW-HISTORY.md` needs a write to a second file, which this pass may not make; it is left to the one pass that owns that file. Here the binding rulings are already in the body, Asks 1 and 2 are marked done, and the "Review answers" section opens with a line saying the body and these answers win |
+
+## Amendments
+
+### 2026-10-30, replan after PRD-17 phase 0 slice (merge 1423f8f9)
+
+- **Rule 2's guard is in the lessons lane, not here** (lessons log 10:51Z): PRD-17 H11, W11 and G1
+  name "PRD-03 rule 2 tests", and this PRD's test list has none, so PRD-17 writes
+  `lessons_http1::every_request_on_a_decrypted_host_is_recorded` (a gateway-prefixed path, a Host
+  mismatch and a non-POST method) and `lessons_ws::an_upgrade_on_any_path_is_recorded`. Do not add a
+  duplicate rule 2 case. Both drive the real `proxy::serve` against PRD-14's `common::upstream`, so
+  a filter by path, method or Host on a decrypted host fails a lessons test, which blocks PRD-13's cut
+  (PRD-17 gate check 2). `proxy::serve` and `common::upstream` keep their PRD-00 "Seams" shapes so
+  those tests can be written against them.

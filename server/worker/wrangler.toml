@@ -48,15 +48,10 @@ TEST_EVENT_ID = "test"
 RUN_HOURS = "168"
 # A practice run lasts this many minutes. Practice has no start window and never replaces a run.
 PRACTICE_RUN_MINUTES = "10"
-# The oldest goalcup (x.y.z) that may start a competition run or sign in for one; older ones are
-# told to update (403). Empty: no minimum. "0.7.1" for the cup, through a PR, only once
-# releases/latest serves 0.7.1 (README "Set the minimum competition version"). A dashboard edit is
-# wiped by the next deploy.
-MIN_COMPETITION_VERSION = ""
-# Per-run size limit: the most compressed bytes one run may hold in R2, over all its entries
-# (64 GiB; owner, WP-D). Over it a chunk is 413 quota_exceeded and nothing is stored; goalcup
-# keeps its data and retries, so raising this (a deploy) resumes the upload.
-RUN_MAX_COMPRESSED_BYTES = "68719476736"
+# The oldest goalcup (x.y.z) that may start a run in any mode or sign in for one; older ones are
+# told to update (403). `continue` is never checked. Empty: no minimum. A dashboard edit is wiped
+# by the next deploy.
+MIN_COMPETITION_VERSION = "1.0.0"
 # Production default. `local` exists for `wrangler dev` and tests only (see README).
 DB_BACKEND = "supabase"
 # Check with the GitHub API that repo_url is a public repository. "on" in production;
@@ -147,8 +142,7 @@ PRACTICE_EVENT_ID = "goalcup-practice-staging"
 TEST_EVENT_ID = "test-staging"
 RUN_HOURS = "168"
 PRACTICE_RUN_MINUTES = "10"
-MIN_COMPETITION_VERSION = ""
-RUN_MAX_COMPRESSED_BYTES = "68719476736"
+MIN_COMPETITION_VERSION = "1.0.0"
 DB_BACKEND = "supabase"
 GITHUB_CHECK = "on"
 # The website's approval page (agentcommunity.org; it signs the member in with the site's session).
