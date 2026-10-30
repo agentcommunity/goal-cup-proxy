@@ -1,0 +1,63 @@
+[package]
+name = "goalcup"
+description = "The goalcup recorder and participant CLI: one process records every model call through a local proxy and the harness's session files, masks, writes and uploads."
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+rust-version.workspace = true
+publish = false
+
+# Every dependency of this crate is declared here once, in the PRD-02 scaffold (PRD-00 phase 0
+# step 5). A PRD that needs one more names it in the night log; PRD-02 adds it.
+#
+# `test-hooks`: dev only, off by default, never in a release build (PRD-00 owner question 12).
+# The integration tests turn it on through the self dev-dependency below, because they are
+# separate crates and do not see `cfg(test)` here. Every gate command that builds
+# dev-dependencies turns it on for the whole package, so `gate full` builds the shipped binary
+# with `cargo build --release` (no dev-dependencies) and greps it for `GOALCUP_TEST_`.
+[features]
+test-hooks = []
+
+[dependencies]
+# Pipeline and watchdog (PRD-02). Channels are `std::sync::mpsc`.
+goalcup-format = { path = "../goalcup-format" }
+bytes = "1"
+serde.workspace = true
+serde_json.workspace = true
+libc.workspace = true
+socket2.workspace = true
+tokio = { workspace = true, features = ["io-util", "sync"] }
+thiserror.workspace = true
+# Proxy (PRD-03 ask 4): TLS on ring only, the run CA, upstream roots, decoders, WebSocket
+# accept, one HPACK decoder for HTTP/2.
+rustls.workspace = true
+tokio-rustls.workspace = true
+rcgen.workspace = true
+webpki-roots.workspace = true
+flate2.workspace = true
+brotli-decompressor.workspace = true
+zstd.workspace = true
+sha1.workspace = true
+sha2.workspace = true
+base64.workspace = true
+loona-hpack = "0.4"
+# Masking (PRD-05).
+regex.workspace = true
+# Uploader and CLI (PRD-06, PRD-10). `ureq` has no TLS feature; TLS goes through its connector
+# hook on the rustls above.
+ureq.workspace = true
+hex.workspace = true
+clap.workspace = true
+# Connectors (PRD-11).
+toml.workspace = true
+
+[dev-dependencies]
+# This crate, back to itself, with `test-hooks` on, for `tests/*.rs`.
+goalcup = { path = ".", features = ["test-hooks"] }
+tempfile.workspace = true
+x509-parser.workspace = true
+# The fake upstream's HTTP/2 side (PRD-14 `tests/common/`).
+h2 = "0.4"
+http = "1"
