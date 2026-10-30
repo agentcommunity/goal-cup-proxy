@@ -457,7 +457,7 @@ fn a_dead_boot_counts_its_last_indexed_line_before_recovery() {
         post(&mut w, &mut c, &mut k, sid);
         link_and_line(&mut w, &c, &mut k, &mut log);
     }
-    let kept = c.counts();
+    let (kept, kept_at) = (c.counts(), k.0);
     post(&mut w, &mut c, &mut k, 4);
     link_and_line(&mut w, &c, &mut k, &mut log);
     std::mem::forget(w);
@@ -470,14 +470,15 @@ fn a_dead_boot_counts_its_last_indexed_line_before_recovery() {
     assert_eq!(kept.model_requests(), 2);
     assert_eq!(entry_totals(entry_dir).counts, kept);
 
-    // Recovery writes that line as the boot's COUNT: the totals stand, plus the off span.
+    // Recovery writes that line as the boot's COUNT: the totals stand, plus the off span from
+    // the kept LINK.
     k.0 += 5 * SEC;
     recover(&rec, entry_dir, opts, k.now(), serde_json::Map::new());
     let got = log.sync(entry_dir).unwrap();
     let mut want = kept;
     want.gaps += 1;
     want.lost_unknown += 1;
-    want.off_ms += 5000;
+    want.off_ms += (k.0 - kept_at) / 1_000_000;
     assert_eq!((got.counts, got.off_spans), (want, 1));
 }
 
