@@ -386,22 +386,34 @@ impl Recorder {
     /// The mask worker took an item worth `n` held bytes off the item channel. From here its
     /// bytes count in `held` only, until [`Recorder::forwarded`]: bytes it holds back for a match
     /// that may go on wait for more input, not for the writer, so a quiet stream never looks
-    /// like a stall.
+    /// like a stall. What it takes is forwarded, dropped or still held: taken = forwarded +
+    /// [`Recorder::dropped`] + held back.
     pub(crate) fn taken(&self, n: u64) {
         sub(&self.inner.queued, n);
     }
 
-    /// The mask worker handed records worth `n` held bytes to the writer's channel. Everything
-    /// it takes is forwarded or released, so `queued` returns to exactly 0 when the writer has
-    /// written all it was handed.
+    /// The mask worker handed records worth `n` held bytes to the writer's channel, so `queued`
+    /// returns to exactly 0 when the writer has written all it was handed.
     pub(crate) fn forwarded(&self, n: u64) {
         self.queue(n);
     }
 
-    /// The writer handed records worth `n` held bytes to the compressor; the mask worker
-    /// releases what it drops (an item after the seal). `release(0)` marks progress with
-    /// nothing written, for work such as a long recount at boot, so it is not a stall. The
-    /// write stamp is stored before `queued` goes down.
+    /// The mask worker dropped an item worth `n` held bytes that it took: one that reached it
+    /// after the seal's drain or marker (an offer or gap that read the stop flag just before it
+    /// was set). Its bytes leave `held` only: they are off `queued` since [`Recorder::taken`] and
+    /// no write happened. `lost` is the item's DATA length or a GAP's known loss, which goes to
+    /// the `after_stop` count, so no byte is lost without a count.
+    pub(crate) fn dropped(&self, n: u64, lost: u64) {
+        sub(&self.inner.held, n);
+        self.inner
+            .after_stop_bytes
+            .fetch_add(lost, Ordering::Relaxed);
+    }
+
+    /// The writer handed records worth `n` held bytes to the compressor. Only the writer calls
+    /// it, for records it was handed. `release(0)` marks progress with nothing written, for work
+    /// such as a long recount at boot, so it is not a stall. The write stamp is stored before
+    /// `queued` goes down.
     pub(crate) fn release(&self, n: u64) {
         self.inner
             .writer_last_ns
@@ -560,6 +572,16 @@ mod tests {
         assert!(!stalled(now + MIN));
         // The held tail goes on to the writer and waits there: that is a stall again.
         rec.forwarded(11);
+        assert!(stalled(clock::awake_ns() + MIN));
+        // An item that reached the mask worker after the seal is dropped and counted; the tail
+        // still waits for the writer, so the stall stays seen.
+        h.data(rec.now(), bytes::Bytes::from_static(b"sixteen bytes ok"));
+        for item in rx.try_iter() {
+            rec.taken(item.held());
+            rec.dropped(item.held(), 16);
+        }
+        assert_eq!(rec.live().held_bytes, 11);
+        assert_eq!(rec.after_stop().0, 16);
         assert!(stalled(clock::awake_ns() + MIN));
         rec.release(11);
         assert_eq!(rec.live().held_bytes, 0);

@@ -148,7 +148,7 @@ fn conn(w: &mut PartWriter, c: &mut Counter, k: &mut Clock) {
 fn boot0(rec: &Path, entry_dir: &Path, k: &mut Clock, opts: PartOptions) -> Counts {
     let rules = ["bearer".to_string(), "fail_closed".to_string()];
     let mut c = Counter::new(&rules);
-    let mut log = CountsLog::open(entry_dir).unwrap();
+    let mut log = CountsLog::open(entry_dir);
     let mut w = PartWriter::open(rec, opts, ENTRY, BOOT_ID, k.now()).unwrap();
 
     conn(&mut w, &mut c, k);
@@ -274,7 +274,7 @@ fn entry_totals_are_each_boot_plus_off_spans() {
     let mut text = std::fs::read(&log_path).unwrap();
     text.extend_from_slice(b"{\"seq\":99,\"cou");
     std::fs::write(&log_path, &text).unwrap();
-    let mut log = CountsLog::open(entry_dir).unwrap();
+    let mut log = CountsLog::open(entry_dir);
 
     // The next boot recovers the dead one, 5 s later.
     k.0 = link_at + 5 * SEC;
@@ -367,7 +367,7 @@ fn boot_zero_start_gap_keeps_its_off_span_once_pruned() {
     let r = PartWriter::recover(&rec, opts, rc).unwrap();
     let mut w = r.writer.unwrap();
     let mut c = Counter::new(&[]);
-    let mut log = CountsLog::open(entry_dir).unwrap();
+    let mut log = CountsLog::open(entry_dir);
     put(&mut w, &mut c, r.gap_after_start.unwrap(), OpenFlags::NONE);
     post(&mut w, &mut c, &mut k, 1);
     count_and_link(&mut w, &c, &mut k, &mut log, 0);
@@ -384,27 +384,34 @@ fn boot_zero_start_gap_keeps_its_off_span_once_pruned() {
     std::fs::remove_file(part).unwrap();
     assert_eq!(entry_totals(entry_dir), live);
 
-    // Boot 0 dies. Boot 1 recovers it and dies before its sync; the sync of a later boot reads
-    // what is on disk, so boot 0's line holds both spans.
+    // Boot 0 dies. Boot 1 recovers it 5 s later and dies before its first LINK and its sync;
+    // the boot after it recovers again 2 s later. Its sync reads what is on disk, so boot 0's
+    // line holds its own span and both recovery gaps.
     std::mem::forget(w);
-    k.0 += 5 * SEC;
     let at = |seq| count_at(entry_dir, seq).unwrap();
-    let rc = Recover {
-        entry: ENTRY,
-        boot_id: BOOT_ID,
-        now: k.now(),
-        durable: None,
-        count_at: &at,
-        tail: serde_json::Map::new(),
-        dead_start: None,
-        seal: None,
+    let recover = |now: Now| {
+        let rc = Recover {
+            entry: ENTRY,
+            boot_id: BOOT_ID,
+            now,
+            durable: None,
+            count_at: &at,
+            tail: serde_json::Map::new(),
+            dead_start: None,
+            seal: None,
+        };
+        PartWriter::recover(&rec, opts, rc).unwrap().writer.unwrap()
     };
-    let mut w = PartWriter::recover(&rec, opts, rc).unwrap().writer.unwrap();
-    let mut log = CountsLog::open(entry_dir).unwrap();
+    k.0 += 5 * SEC;
+    std::mem::forget(recover(k.now()));
+    k.0 += 2 * SEC;
+    let mut w = recover(k.now());
+    assert_eq!(w.boot(), 1);
+    let mut log = CountsLog::open(entry_dir);
     let synced = log.sync(entry_dir).unwrap();
-    assert_eq!(synced.off_spans, 2);
-    assert_eq!(synced.counts.gaps, 2);
-    assert_eq!(synced.counts.off_ms, 10_000);
+    assert_eq!(synced.off_spans, 3);
+    assert_eq!(synced.counts.gaps, 3);
+    assert_eq!(synced.counts.off_ms, 12_000);
 
     // Boot 1 writes; boot 0's last part file is pruned: its line keeps its totals.
     let mut c = Counter::new(&[]);
@@ -417,5 +424,57 @@ fn boot_zero_start_gap_keeps_its_off_span_once_pruned() {
     want.add(&b1);
     let pruned = entry_totals(entry_dir);
     assert_eq!(pruned.counts, want);
-    assert_eq!(pruned.off_spans, 2);
+    assert_eq!(pruned.off_spans, 3);
+}
+
+/// Point 6: a boot that dies 10 s in has a `counts.jsonl` line at each LINK but no COUNT event
+/// yet (one is written every 60 s). Before any recovery (the null recorder, `goalcup upload`)
+/// its totals are its last line, never 0, and recovery keeps them.
+#[test]
+fn a_dead_boot_counts_its_last_line_before_recovery() {
+    let dir = tempfile::tempdir().unwrap();
+    let entry_dir = dir.path();
+    let rec = entry_dir.join("rec");
+    let opts = PartOptions {
+        window_log: 20,
+        ..PartOptions::default()
+    };
+    let mut k = Clock(1000 * SEC);
+    let mut c = Counter::new(&[]);
+    let mut log = CountsLog::open(entry_dir);
+    let mut w = PartWriter::open(&rec, opts, ENTRY, BOOT_ID, k.now()).unwrap();
+    conn(&mut w, &mut c, &mut k);
+    for sid in 2..5 {
+        post(&mut w, &mut c, &mut k, sid);
+        k.0 += 3 * SEC;
+        let line = w.link(k.now()).unwrap();
+        log.append(line.seq, &c.count_event(0, 0, 0, 0), c.off_spans())
+            .unwrap();
+        w.sync().unwrap();
+    }
+    std::mem::forget(w);
+    let dead = c.counts();
+    assert_eq!(dead.model_requests(), 3);
+    assert_eq!(entry_totals(entry_dir).counts, dead);
+
+    // Recovery writes that line as the boot's COUNT: the totals stand, plus the off span.
+    k.0 += 5 * SEC;
+    let at = |seq| count_at(entry_dir, seq).unwrap();
+    let rc = Recover {
+        entry: ENTRY,
+        boot_id: BOOT_ID,
+        now: k.now(),
+        durable: None,
+        count_at: &at,
+        tail: serde_json::Map::new(),
+        dead_start: None,
+        seal: None,
+    };
+    PartWriter::recover(&rec, opts, rc).unwrap().writer.unwrap();
+    let got = log.sync(entry_dir).unwrap();
+    let mut want = dead;
+    want.gaps += 1;
+    want.lost_unknown += 1;
+    want.off_ms += 5000;
+    assert_eq!((got.counts, got.off_spans), (want, 1));
 }

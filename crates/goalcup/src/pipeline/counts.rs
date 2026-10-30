@@ -373,6 +373,13 @@ struct Boot {
     /// or of all of them while it has none.
     #[serde(default)]
     down_ms: Vec<u64>,
+    /// Scan only: a LINK of the boot was read (`seq` is then its last one).
+    #[serde(skip)]
+    linked: bool,
+    /// Scan only: the last LINK read before `count` was taken, so a line with a later `seq`
+    /// holds a later count.
+    #[serde(skip)]
+    count_after: Option<u64>,
 }
 
 impl Boot {
@@ -404,25 +411,13 @@ pub struct CountsLog {
 impl CountsLog {
     const NAME: &'static str = "counts.jsonl";
 
-    /// Reads what the file holds. A torn last line is skipped and the file rewritten without it.
-    pub fn open(entry_dir: &Path) -> io::Result<CountsLog> {
-        let path = entry_dir.join(Self::NAME);
-        let text = match std::fs::read(&path) {
-            Ok(t) => t,
-            Err(e) if e.kind() == io::ErrorKind::NotFound => Vec::new(),
-            Err(e) => return Err(e),
-        };
-        let mut log = CountsLog {
-            path,
+    /// The log of the entry in `entry_dir`. It reads nothing: [`CountsLog::sync`] rewrites the
+    /// file from disk at boot, before the first [`CountsLog::append`].
+    pub fn open(entry_dir: &Path) -> CountsLog {
+        CountsLog {
+            path: entry_dir.join(Self::NAME),
             by_boot: BTreeMap::new(),
-        };
-        for (line, b) in lines(&text) {
-            log.by_boot.insert(b.boot().unwrap_or(0), line.to_string());
         }
-        if !text.is_empty() && !text.ends_with(b"\n") {
-            log.compact()?;
-        }
-        Ok(log)
     }
 
     /// Appends one line at a LINK: this boot's COUNT event JSON at the LINK with that `seq`, and
@@ -456,7 +451,10 @@ impl CountsLog {
     /// disk, its own `recorder_down` spans and the lengths of those after that COUNT), drops
     /// lines of boots that left nothing durable, and returns the entry totals over those boots.
     /// Every line comes from what is on disk, so a crash at any point of a recovery is repaired
-    /// by the next boot's call: only a live recorder prunes part files, after this call.
+    /// by the next boot's call: only a live recorder prunes part files, after this call. It runs
+    /// before this boot writes any record to disk (its start event and boot 0's start gap stay
+    /// in the encoder until the first LINK), so the totals hold no record of this boot and its
+    /// `Counter` adds them once.
     pub fn sync(&mut self, entry_dir: &Path) -> io::Result<EntryTotals> {
         let boots = boots(entry_dir);
         self.by_boot = boots
@@ -471,15 +469,14 @@ impl CountsLog {
 
 /// The whole, parseable lines of a `counts.jsonl` text. A last line without a newline is torn and
 /// skipped; so is any line that does not parse.
-fn lines(text: &[u8]) -> impl Iterator<Item = (&str, Boot)> {
+fn lines(text: &[u8]) -> impl Iterator<Item = Boot> {
     let whole = text
         .iter()
         .rposition(|&b| b == b'\n')
         .map_or(&text[..0], |i| &text[..i]);
-    whole.split(|&b| b == b'\n').filter_map(|l| {
-        let s = std::str::from_utf8(l).ok()?;
-        Some((s, serde_json::from_str(s).ok()?))
-    })
+    whole
+        .split(|&b| b == b'\n')
+        .filter_map(|l| serde_json::from_slice(l).ok())
 }
 
 /// The COUNT event JSON of the `counts.jsonl` line whose `seq` is `seq`: what
@@ -487,9 +484,9 @@ fn lines(text: &[u8]) -> impl Iterator<Item = (&str, Boot)> {
 pub fn count_at(entry_dir: &Path, seq: u64) -> Option<Vec<u8>> {
     let text = std::fs::read(entry_dir.join(CountsLog::NAME)).ok()?;
     lines(&text)
-        .filter(|(_, b)| b.seq == seq)
+        .filter(|b| b.seq == seq)
         .last()
-        .and_then(|(_, b)| serde_json::to_vec(&b.count?).ok())
+        .and_then(|b| serde_json::to_vec(&b.count?).ok())
 }
 
 /// Entry totals over every boot of the entry in `entry_dir` (PRD-01 section 9): one function for
@@ -509,25 +506,38 @@ pub fn entry_totals(entry_dir: &Path) -> EntryTotals {
 
 /// Every boot of the entry. A boot with part files on disk is read from them; its earlier part
 /// files may be pruned, so its own spans are the larger of what they hold and its `counts.jsonl`
-/// line (boot 0's own start gap sits in its first part file). A boot before the first one on disk
-/// (all its part files pruned) is its line. A line of a later boot left nothing durable (its part
-/// file was deleted by recovery) and is not read; with no part file on disk, no line is.
+/// line (boot 0's own start gap sits in its first part file). Its count is its last COUNT event,
+/// or its last line up to its last LINK on disk when that line is later: a dead boot not yet
+/// recovered has a line at each LINK but a COUNT event only every 60 s, and the recovery frame
+/// will take that line. A boot not read from part files (all of them pruned, or the read failed
+/// before it) is its line. A line of a later boot after a whole read left nothing durable (its
+/// part file was deleted by recovery) and is not read.
 fn boots(entry_dir: &Path) -> BTreeMap<u64, Boot> {
     let mut boots: BTreeMap<u64, Boot> = BTreeMap::new();
+    // The boot a failed read stopped in; lines of later boots are kept.
+    let mut stopped = None;
     if let Ok(reader) = goalcup_format::read::open_dir(&entry_dir.join("rec")) {
-        let mut boot = 0;
+        let (mut boot, mut link) = (0, None);
         for item in reader {
-            let Ok(item) = item else { break };
+            let Ok(item) = item else {
+                stopped = Some(boot);
+                break;
+            };
             match &item.rec {
-                Record::Part { boot: b, .. } => boot = *b,
-                Record::Link { seq, .. } => boots.entry(boot).or_default().seq = *seq,
+                Record::Part {
+                    boot: b, next_link, ..
+                } => (boot, link) = (*b, next_link.checked_sub(1)),
+                Record::Link { seq, .. } => {
+                    let b = boots.entry(boot).or_default();
+                    (b.seq, b.linked, link) = (*seq, true, Some(*seq));
+                }
                 Record::Event { json, .. } => {
                     let Ok(v) = serde_json::from_slice::<Value>(json) else {
                         continue;
                     };
                     if v["ev"] == "count" {
                         let e = boots.entry(boot).or_default();
-                        e.count = Some(v);
+                        (e.count, e.count_after) = (Some(v), link);
                         e.down_ms.clear();
                     }
                 }
@@ -546,13 +556,22 @@ fn boots(entry_dir: &Path) -> BTreeMap<u64, Boot> {
             }
         }
     }
-    let first = boots.keys().next().copied().unwrap_or(0);
+    let first = boots.keys().next().copied().unwrap_or(u64::MAX);
     if let Ok(text) = std::fs::read(entry_dir.join(CountsLog::NAME)) {
-        for (_, line) in lines(&text) {
+        for line in lines(&text) {
             let Some(n) = line.boot() else { continue };
             match boots.get_mut(&n) {
-                Some(b) => b.spans = b.spans.max(line.spans),
-                None if n < first => {
+                Some(b) => {
+                    b.spans = b.spans.max(line.spans);
+                    let later = b.count_after.is_none_or(|s| line.seq > s);
+                    if b.linked && line.seq <= b.seq && later {
+                        // The only `recorder_down` gap before its last LINK is its start gap,
+                        // which the line counts.
+                        (b.count, b.count_after) = (line.count, Some(line.seq));
+                        b.down_ms.clear();
+                    }
+                }
+                None if n < first || stopped.is_some_and(|s| n > s) => {
                     boots.insert(n, line);
                 }
                 None => {}

@@ -35,15 +35,13 @@ fn physical_memory() -> Option<u64> {
     (pages as u64).checked_mul(size as u64)
 }
 
-/// Whether a DATA piece of `len` bytes is admitted with `held` bytes held under guard `soft`. A
-/// stream not in a gap admits up to the guard; a stream in a gap admits only under three quarters
-/// of it, so one stream does not flap into many tiny gaps. OPEN, END, GAP and EVENT never ask.
+/// Whether a DATA offer of `len` held bytes is admitted with `held` bytes held under guard
+/// `soft`. A stream not in a gap admits up to the guard; a stream in a gap admits only under three
+/// quarters of it, so one stream does not flap into many tiny gaps. Either way `held` never goes
+/// past the guard, so an offer larger than the guard is dropped behind a GAP and the wire alone
+/// never reaches the stall mark (2 x soft). OPEN, END, GAP and EVENT never ask.
 pub(crate) fn admits(held: u64, len: u64, in_gap: bool, soft: u64) -> bool {
-    if in_gap {
-        held < low_mark(soft)
-    } else {
-        held.saturating_add(len) <= soft
-    }
+    held.saturating_add(len) <= soft && (!in_gap || held < low_mark(soft))
 }
 
 /// Three quarters of the soft guard: where a stream in a gap admits again, and what `room()`

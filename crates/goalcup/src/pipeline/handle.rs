@@ -191,9 +191,10 @@ impl StreamHandle {
     /// The gap rule (PRD-02 section 3), once per offer: the whole offer is admitted or dropped,
     /// then split into pieces of at most 256 KiB (a WebSocket message keeps its opcode on every
     /// piece and `fin` on the last). Native and snapshot offers are always admitted (they read at
-    /// most `room()`, and the file keeps what is not read), and so is an empty message end. An
-    /// offer larger than the guard is admitted only when nothing is held. After a stop the bytes
-    /// only count: they are in no record, so the offset stays where the record ends.
+    /// most `room()`, and the file keeps what is not read), and so is an empty message end. A
+    /// wire offer larger than the guard is dropped behind a GAP, so S1 callers offer pieces far
+    /// below it (PRD-03 offers at most 32 KiB). After a stop the bytes only count: they are in no
+    /// record, so the offset stays where the record ends.
     fn offer(&mut self, t: Mono, ws: Option<Ws>, bytes: Bytes) {
         let rec = &self.rec;
         let n = bytes.len() as u64;
@@ -209,7 +210,7 @@ impl StreamHandle {
         let held = item::data_held(bytes.len());
         let admitted = rec.inner.tx.is_none()
             || rec.hold(held, |h| {
-                always || guard::admits(h, held.min(soft), in_gap, soft)
+                always || guard::admits(h, held, in_gap, soft)
             });
         if !admitted {
             match &self.gap {

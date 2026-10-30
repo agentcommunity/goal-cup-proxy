@@ -70,7 +70,8 @@ pub(crate) fn data_held(len: usize) -> u64 {
 
 impl Item {
     /// What this item counts in `held` from the offer until the writer hands its record to the
-    /// compressor. The mask worker releases exactly this per item.
+    /// compressor: the mask worker takes and forwards (or drops) exactly this per item, and the
+    /// writer releases it.
     pub(crate) fn held(&self) -> u64 {
         match self {
             Item::Data { bytes, .. } => data_held(bytes.len()),
