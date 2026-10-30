@@ -58,7 +58,11 @@ struct Pump<'a> {
 }
 
 /// The parser; the 5a fault (reason, time, panic); plaintext bytes relayed after it.
-type Shared = (Option<Box<dyn Parser>>, Option<(GapReason, Mono, bool)>, u64);
+type Shared = (
+    Option<Box<dyn Parser>>,
+    Option<(GapReason, Mono, bool)>,
+    u64,
+);
 
 impl Pump<'_> {
     /// The parser sees the chunk under a lock that is never held across an await.

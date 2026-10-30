@@ -12,8 +12,8 @@ use goalcup::proxy::pump::{self, Parser};
 use goalcup::proxy::tunnel::{self, Flags, TunnelConn};
 use goalcup::proxy::ws::Dir;
 use serde_json::{Value, json};
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::os::fd::AsFd;
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
@@ -281,7 +281,11 @@ async fn an_upstream_reset_reaches_the_client_as_a_reset_and_a_close_as_a_close(
 /// Peers (client, upstream test sides), feeds, feeds that found their chunk already waiting at
 /// the peer (a non-blocking peek).
 #[derive(Default)]
-struct AtPeer(Arc<OnceLock<[std::net::TcpStream; 2]>>, Arc<AtomicUsize>, Arc<AtomicUsize>);
+struct AtPeer(
+    Arc<OnceLock<[std::net::TcpStream; 2]>>,
+    Arc<AtomicUsize>,
+    Arc<AtomicUsize>,
+);
 
 impl Parser for AtPeer {
     fn feed(&mut self, dir: Dir, _: Mono, bytes: &[u8]) -> Result<(), GapReason> {
@@ -309,7 +313,8 @@ async fn bytes_reach_the_peer_before_the_parser_and_sse_before_eof() {
         let parser = AtPeer::default();
         let (peers, feeds, ok) = (parser.0.clone(), parser.1.clone(), parser.2.clone());
         let mut r = pumped(&rec, Some(Box::new(parser)), Arc::default()).await;
-        let dup = |s: &TcpStream| std::net::TcpStream::from(s.as_fd().try_clone_to_owned().unwrap());
+        let dup =
+            |s: &TcpStream| std::net::TcpStream::from(s.as_fd().try_clone_to_owned().unwrap());
         peers.set([dup(&r.client), dup(&r.upstream)]).unwrap();
         r.client.write_all(&[1; 100]).await.unwrap();
         fed(&feeds, 1).await;
@@ -318,6 +323,10 @@ async fn bytes_reach_the_peer_before_the_parser_and_sse_before_eof() {
         let (mut sse, mut req) = ([0; 9], [0; 100]);
         r.client.read_exact(&mut sse).await.unwrap();
         r.upstream.read_exact(&mut req).await.unwrap();
+        // The parser's copies hold the sockets open: end both sides through them.
+        for peer in peers.get().unwrap() {
+            peer.shutdown(std::net::Shutdown::Write).unwrap();
+        }
         close(r).await;
         assert_eq!(ok.load(Ordering::SeqCst), 2);
     })
