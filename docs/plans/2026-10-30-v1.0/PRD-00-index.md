@@ -602,9 +602,9 @@ Gate to leave: `cargo build` and `cargo test -p goalcup-format` green in a build
 | Slice | What | Gate |
 |---|---|---|
 | **Core slice** (blocks 1a) | Format codec and `PartWriter`; pipeline handle, one mask worker, writer, counts, `status.json`; proxy CONNECT, CA, HTTP/1.1, decoding, WebSocket, tunnels; masking copy with option b and the left guard; native append rows with `**`; launch plans for Claude Code and Codex; `start`, `status`, `seal` with `GOALCUP_SERVER=off`; `goalcup-verify check` (invariants, gaps have an end, counts recount) and `usage` for Codex and Claude Code; `pad-run --where here` | Each PRD's own tests green |
-| **1a. Early real test** | A watcher runs short real runs in pad boxes: Claude Code and Codex, direct key, smoke prompt, one subagent, `--server off`. Check decode, no unexplained gap and the history check from the record (ledger T4), counts against the verifier's recount, no secret. Then one short real run after each later core feature lands | Pass, or a night-log line naming the failing PRD. If the concept fails here, no new feature is added until it is fixed |
-| **Second slice** | Watchdog restart with CA hand-over and null mode; uploader; Worker changes; fetch-run; first staging deploy (after PRD-07's heartbeat step and PRD-06 merge); server checks; secret scan; Hermes connector and `state.db` reading; exact-value masking only if the owner said yes (owner question 3; default not built); gateway and dodger cases; the pad in sandboxes; refusal learning (PRD-03) | Each PRD's own tests green; one short real run per feature |
-| **Third slice** | HTTP/2 (HEADERS, CONTINUATION, DATA, END_STREAM, RST_STREAM, GOAWAY; anything else stops parsing for that connection with GAP `h2_unsupported` while it keeps relaying unparsed, PRD-03 5a); the other 12 connectors; PRD-10's `continue`, `time-left`, `setup`, `--prompt` composition, sleep lock; the usage organizer job and its bucket; PRD-15's docs | Each PRD's own tests green |
+| **1a. Early real test** | The micro rungs of PRD-12 section 1a through the rig (ledger B3, B9), in pad boxes: Claude Code and Codex, one key each, `mode = "micro"`, `server = "off"` first (nothing uploaded), then one layer at a time (upload, subagents, recorder crash, watchdog kill and `goalcup recover`, keep going, gateway, dodger, HTTP/2). Check decode, no unexplained gap and the history check from the record (ledger T4), counts against the verifier's recount, no secret. Then one micro run after each later core feature lands | Pass, or a night-log line naming the failing PRD. If the concept fails here, no new feature is added until it is fixed |
+| **Second slice** | Watchdog restart with CA hand-over and null mode; uploader; Worker changes; fetch-run; first staging deploy (after PRD-07's heartbeat step and PRD-06 merge); server checks; secret scan; Hermes connector and `state.db` reading; exact-value masking only if the owner said yes (owner question 3; default not built); gateway and dodger cases; the pad in sandboxes; refusal learning (PRD-03) | Each PRD's own tests green; one micro run per feature; `cycle` runs per pad (PRD-12 section 1a) as soon as the pad runs in sandboxes and staging is deployed (ledger B3) |
+| **Third slice** | HTTP/2 (HEADERS, CONTINUATION, DATA, END_STREAM, RST_STREAM, GOAWAY; anything else stops parsing for that connection with GAP `h2_unsupported` while it keeps relaying unparsed, PRD-03 5a); the other 12 connectors; PRD-10's `continue`, `time-left`, `setup`, `--prompt` composition, sleep lock; the usage organizer job and its bucket; PRD-15's docs | Each PRD's own tests green; each new connector's `cycle` runs as soon as it lands, many in parallel (ledger B3, B11) |
 
 **ALPN on the release path.** Until the HTTP/2 pad rows pass, the proxy offers upstream only what the
 client offered and prefers `http/1.1` when the client offers both; it mirrors `h2` only for a client that
@@ -615,10 +615,10 @@ offers only `h2`. Then PRD-03 may switch to full mirroring with a night-log line
 
 | Phase | When | What | Gate to leave it |
 |---|---|---|---|
-| 2. Integration | H+8 to H+10 | Everything merged. PRD-17's deletion gate passes on the new core. The pad end to end on staging (Claude Code `smoke`). PRD-12 `selftest` makes the pad trusted. Kill test (PRD-02 R1). `gate full` timed (PRD-14 G1) | `gate fast` green, PRD-17's four checks green |
+| 2. Integration | H+8 to H+10 | Everything merged. PRD-17's deletion gate passes on the new core. The core set's `cycle` rows PASS on staging (the pad end to end, PRD-16 section 5). PRD-12 `selftest` makes the pad trusted. Kill test (PRD-02 R1). `gate full` timed (PRD-14 G1) | `gate fast` green, PRD-17's four checks green |
 | 3. Cut | target H+10; as soon as the gate is green if later | PRD-13 deletes the old crates and cut scripts. PRD-14's gate and CI edits and PRD-15's doc rewrite land earlier, as soon as each is green, guarded to work with the old crates still on disk; the phase 3 merge holds only PRD-13's deletes, PRD-14's delete of `check-links.py` and PRD-16's workspace edit. If PRD-17's gate is not green by H+10, phases 4 to 6 start without the cut and the owner is called under PRD-16 W6 (locked L3 cannot hold on time). The lessons lane keeps working and reruns the gate after each fix merges; the cut lands as soon as it is green, before `REPORT_AT`, with the core set `direct` rows and the Codex kill row rerun on the cut commit. If it is still not green at `REPORT_AT`, `MORNING.md` line 1 reads "Not ready: old crates not deleted (ledger L3)" | `gate full` green; PRD-13's reference guard clean (provenance comments and history docs excluded); CI green |
 | 4. Pad, core set | from H+10, about 2 h | Claude Code, Codex, Hermes in the three cases. All 9 rows (direct, gateway, dodger) run `full`, the 20-minute payments prompt (ledger T5), plus `--kill-recorder` on the three `direct` `full` rows and the fault rows once each (PRD-12 P10, P11). Watchers fix failures; three failed fixes on one cause end that loop with a note | Core set green (done item 1) |
-| 5. Pad, the rest | from phase 4's first wave, about 2.5 h | The other 12 harnesses, up to 6 pad boxes at once, at most 2 per provider key except DeepSeek (R3-9); no key means "not verified: no key" with no run; each "verified" (on a named version) or "not verified" | `connectors/tiers.toml` and the table published |
+| 5. Pad, the rest | with phase 4, all in parallel (ledger B3), about 2.5 h | The other 12 harnesses, all `full`, no box count of our own (ledger B11), at most 2 runs per provider key except DeepSeek (R3-9); no key means "not verified: no key" with no run; each "verified" (on a named version) or "not verified" | `connectors/tiers.toml` and the table published |
 | 6. Acceptance | when the core set is green, about 2.5 h, beside phase 5 | A1 (the 2-hour Codex run, run 1's prompt), A2, A3 at 30 to 60 minutes, A4 as a pad row, all on staging (PRD-16 section 7). The owner may repeat A1 on production after his deploy | `MORNING.md` at H+16 (`REPORT_AT`); the owner decides the merge |
 
 ### Not in this build
@@ -712,7 +712,7 @@ owner's merge decision (PRD-16).
 | Fix loop stop rule | Three failed fixes on the same cause end that loop with a note |
 | Server | The staging Worker with the test approval route. `GOALCUP_SERVER=off` only before staging carries 1.0. Staging carries the 1.0.0 floor from its first deploy |
 | Server access | Read-only database and R2 credentials on the conductor only, never in a box |
-| Pad workload | `full`: about 20 minutes of the payments-platform prompt asking for many subagents in parallel (T5); every release row runs `full`. `smoke`: a short prompt with one subagent, only for phase 1a, the build's short tests and watcher reproduction |
+| Pad workload | `full`: about 20 minutes of the payments-platform prompt asking for many subagents in parallel (T5); every release row runs `full`. `smoke`: a short prompt with one subagent, for the micro rungs from "subagents" on, the build's short tests and watcher reproduction; `micro` (no subagent) for the first micro rung; `cycle` runs use the `full` prompt sealed after a few minutes (PRD-12 section 1a, ledger B3) |
 | Same-length masking | A masked value keeps its length, so the length of a masked value stays visible in the record (PRD-05; a planner default, not in the ledger) |
 | Kept parts | `GOALCUP_KEEP_PARTS=1` on every pad and acceptance run, so the server copy can be compared with local |
 | Chunk cadence | A chunk every 5 minutes, or at once when 16 MiB compressed waits (PRD-06): about 3,000 `chunks` rows per busy entry-week (owner question 1) |
@@ -864,14 +864,14 @@ source for tests.
 | Pipeline and watchdog (PRD-02) | | 1,350 | 1,500 |
 | Proxy (PRD-03) | | 4,250 | 2,000 |
 | Native (PRD-04) | | 780 | 1,000 |
-| Masking (PRD-05) | | 3,530 | 5,000 |
+| Masking (PRD-05) | | 3,530 | 2,000 |
 | Upload (PRD-06) | | 940 | 1,000 |
 | CLI (PRD-10) | | about 2,900 | 1,200 |
 | Connector code (PRD-11) | | 800 | 400 |
 | Verifier (PRD-08) | | 1,400 | 1,100 |
-| Usage reader (PRD-09) | | 1,470 | 600 |
-| Lessons (PRD-17), test support, `rule_code`, `e2e_run` (PRD-14) | | 0 | 3,350 |
-| **Rust** | 86,516 src, 142,413 tests | **about 18,100** | **about 15,000** |
+| Usage reader (PRD-09) | | 1,470 | 200 |
+| Lessons (PRD-17), test support, `rule_code`, `e2e_run` (PRD-14) | | 0 | 3,000 |
+| **Rust** | 86,516 src, 142,413 tests | **about 18,100** | **at most about 14,200** (PRD-14 section 3, after the ledger B10 cuts) |
 | Worker (PRD-07) | 4,001 src, 5,775 tests | about 3,440 | about 4,950 |
 | Scripts | 11,406 src, 10,393 tests | gate, release, packaging, fetch-run (about 900) plus the pad (PRD-12, about 1,350 to 1,450 with its tests; PRD-12's estimate wins) | |
 
@@ -880,7 +880,7 @@ serves no point; past the row by more than 10% needs a replan `decision` line th
 extra lines serve. Reviewer B checks each merge request against its row and against the fresh design's
 row (audit B, B1.11 and B2.12). The Rust totals are targets after the cuts the alignment pass made
 (`--prompt` size limit and start warnings in PRD-10, ALPN mirroring in PRD-03, and the cuts other PRDs
-list): about 18,100 src and about 15,000 tests.
+list): about 18,100 src and at most about 14,200 tests (ledger B10: do not overbuild tests).
 
 ## Builder notes
 
@@ -1241,3 +1241,4 @@ why. Fixes for other files are made by those files' owners; this list covers onl
 | G3-X19 | Applied (see F5/L2-19) |
 | G3-X41 | Applied (see G2-07) |
 | G3-00a | Applied. Seams intro and the risk row: merge integration in, no rebase of a pushed branch |
+| B3, B9, B10, B11 sweep | Applied 30 Oct. Phase 1a is the micro rungs through the rig (`micro`, `server = "off"` first, then one layer at a time); second and third slices add `cycle` runs per pad as each connector lands; phase 2 needs the core set's `cycle` rows on staging; phase 5 starts with phase 4 with no box count of our own; the pad workload default names `micro`, `smoke` and `cycle`. Size budget tests follow PRD-14 section 3 (masking 2,000, usage 200, lessons and PRD-14 3,000, at most about 14,200) |

@@ -469,8 +469,7 @@ Create:
 
 - `crates/goalcup-verify/src/usage/{mod.rs, wire.rs, shapes.rs, sse.rs, native.rs, sqlite.rs,
   hints.rs, out.rs}`
-- `crates/goalcup-verify/tests/usage_shapes.rs`, `usage_join.rs`, `usage_sqlite.rs`,
-  `usage_run1.rs`, `usage_out.rs`
+- `crates/goalcup-verify/tests/usage_run1.rs` (the one usage test file, ledger B10, PRD-14 section 3)
 - `crates/goalcup-verify/tests/usage_fixtures/**` (ownership given by PRD-00)
 - `scripts/usage-job.sh` (third slice; ownership given by PRD-00): list sealed entries with no usage
   object or an older `reader` version (read-only database query, as `fetch-run.sh` does), run
@@ -505,7 +504,7 @@ Must not touch: `crates/goalcup-verify/Cargo.toml` and `src/main.rs` (PRD-08), t
 | PRD-11 | Host kinds reach this PRD through the record (`start` event, `conn` meta), never through an embedded `model-hosts.toml`. Connector names and native row names, used by `hints.rs` | Used here |
 | PRD-12 | S7 and U1: C1 reads `coverage` and `readable` (through PRD-08's `wire_keeps_up` and `threads_match`); C5 reads tokens, threads and `unattributed` (0 means only "no Codex-style call lost its hint"; `wire_only` is reported, not failed). The ledger line per run after the run comes from the summary totals. The per-run spend check (ledger T6) runs `usage --json` on the open entry in the pad box every 5 minutes and prices the totals with the pad's rates; this PRD has no prices and no `--live` mode. Every `goalcup-verify` command runs in the pad box (PRD-12 section 8). X8 reads: every `ok` call has a model; tokens are present or the call is counted in `tokens.calls_without_usage` with its status. Refused calls have no usage by nature (for C5 too). New readers only from pad samples | Used there |
 | PRD-13 | Deletes `crates/goalcup-verifier/` after the fixtures in section 9 are copied | Done there |
-| PRD-14 | `cargo test -p goalcup-verify` covers `tests/usage_*.rs` in `gate fast` | Used there |
+| PRD-14 | `cargo test -p goalcup-verify` covers `tests/usage_run1.rs` in `gate fast` | Used there |
 | PRD-15 | A section of `docs/RECORD-FORMAT.md` (PRD-15's choice): the schema, the token table of section 4, the hint table of section 5; the usage job in `docs/OPERATING.md`. The history docs this PRD cites (`docs/research/m2-report-format.md`, `docs/research/results/2026-10-vercel-gateway.md`) are kept in this build (PRD-00 item 102) | Written there |
 | PRD-16 | Watchers run `goalcup-verify usage <entry> --json` in the run's box after each pad run and A1, and every 5 minutes on the open entry of every pad run and of A1 to A3, for the T6 spend check (section 9); X8 compares A1's totals with run 1's (section 8). X8 reads: every `ok` call has a model; tokens are present or the call is counted in `tokens.calls_without_usage` with its status. Refused calls have no usage by nature; the end-of-build hand-off includes the per-thread table | Used there |
 
@@ -561,29 +560,37 @@ Must not touch: `crates/goalcup-verify/Cargo.toml` and `src/main.rs` (PRD-08), t
    apart; the per-thread table is compared
    with run 1's (section 8) in the hand-off.
 
-### Automated tests (`tests/usage_*.rs`, about 600 lines)
+### Automated tests (`tests/usage_run1.rs`, about 200 lines)
 
-- `usage_shapes.rs`: each copied fixture gives the pinned model and five token numbers; a Chat stream
-  with no usage gives nulls; an OpenRouter-style stream with a keep-alive comment and two
-  `finish_reason`s gives one usage; an Anthropic message with three content-block lines counts once;
-  a `<synthetic>` line is no call; `cost` is never copied; `/v1/messages?beta=true` and
-  `:streamGenerateContent?alt=sse` are calls.
-- `usage_join.rs`: Codex order-and-time join with a retry the provider refused (wire above harness)
-  and a cut window (harness above wire); Claude Code id join, with a side call no transcript names
-  landing in `wire_only`, not `unattributed`, and a reply whose `request-id` matches no transcript
-  joined by time and counted in `joined_by_time`; Hermes entry-wide join of two parallel sessions;
-  one `error` event plus one `response.failed` is one `rate_limited` call; a Codex rollout whose last
-  10 lines repeat after a restart gives the same native calls as without the repeat.
-- `usage_sqlite.rs`: a WAL-mode database whose `-wal` frame has 20 bytes turned to `*` opens with all
-  frames after the repair, and loses those frames without it; with two sets where the newer has a
-  starred page header, the older set is used and named, and with only the broken set `readable` is
-  false with `snapshot_unreadable`.
-- `usage_run1.rs`: PRD-08's run 1 shape builder (Codex WebSocket and HTTP calls, warm-ups,
-  interrupts, rate-limit errors sent both as `error` and `response.failed`, then silence while
-  rollouts go on): `native_only` counts the silent window exactly; warm-ups and interrupts are not
-  calls; each rate-limited call counts once.
-- `usage_out.rs`: facts, not bytes (review B T9): the same input gives the same bytes twice; keys are
-  sorted; totals equal the sum of the rows; no field holds text from a body.
+Few on purpose (ledger B10, PRD-14 section 3). Usage stats are proved by PRD-12 C5 on real runs
+through the rig: model, tokens and status per call and per subagent, for every harness and case. One
+test file guards what a real run cannot show every time. No test pins the output layout, a key order
+or a field name. The shape, join, SQLite repair and output cases below are what the reader must do;
+the rig's real runs and the watcher's count (below) prove them, not separate test files.
+
+- `usage_run1.rs`, the only file: PRD-08's run 1 shape builder (Codex WebSocket and HTTP calls,
+  warm-ups, interrupts, rate-limit errors sent both as `error` and `response.failed`, then silence
+  while rollouts go on): `native_only` counts the silent window exactly; warm-ups and interrupts are
+  not calls; each rate-limited call counts once; totals equal the sum of the rows; no output field
+  holds text from a body, and a panic inside `usage` prints no record text (point 4, PRD-17 VR2).
+
+What the reader must do, proved by the rig's real runs (C5) and the watcher's count, not by test
+files (`usage_shapes.rs`, `usage_join.rs`, `usage_sqlite.rs` and `usage_out.rs` are cut, ledger B10):
+
+- Shapes: each copied fixture gives the pinned model and five token numbers (checked once in the build
+  box, builder note 1); a Chat stream with no usage gives nulls; an OpenRouter-style stream with a
+  keep-alive comment and two `finish_reason`s gives one usage; an Anthropic message with three
+  content-block lines counts once; a `<synthetic>` line is no call; `cost` is never copied;
+  `/v1/messages?beta=true` and `:streamGenerateContent?alt=sse` are calls.
+- Joins: Codex order-and-time join with a retry the provider refused (wire above harness) and a cut
+  window (harness above wire); Claude Code id join, with a side call no transcript names landing in
+  `wire_only`, not `unattributed`, and a reply whose `request-id` matches no transcript joined by time
+  and counted in `joined_by_time`; Hermes entry-wide join of two parallel sessions; a Codex rollout
+  whose last 10 lines repeat after a restart gives the same native calls as without the repeat.
+- SQLite: a `state.db` whose `-wal` frame was masked opens with all frames after the repair; with two
+  sets where the newer is broken, the older set is used and named; with only a broken set `readable`
+  is false with `snapshot_unreadable`.
+- Output: the same input gives the same output twice.
 
 ## Risks and blind spots
 
@@ -653,8 +660,8 @@ Order of work:
 
 Core slice (start at H+0, review B O5):
 
-1. `shapes.rs` and `sse.rs` first, from the copied fixtures; they need no format crate. Pin each
-   fixture's numbers in `usage_shapes.rs` (H+1.5).
+1. `shapes.rs` and `sse.rs` first, from the copied fixtures; they need no format crate. Check each
+   fixture's numbers once in the build box and log them (H+1.5); no `usage_shapes.rs` (ledger B10).
 2. `wire.rs` over F1 records: HTTP pairing by `req`, WebSocket pairing, status, `whole`. Use
    PRD-08's record builders in `tests/common/`.
 3. `native.rs` for Codex and Claude Code; `hints.rs`.
@@ -804,3 +811,4 @@ PRD-01, PRD-05, PRD-08, PRD-12, PRD-16 and the old code.
 | G3-09o | Partly. PRD-05's line numbers have moved since the review, so the row cites PRD-05 section 7, its PRD-09 interfaces row and A3 by name. The row also now says a rate-limit header whose name matches the name rule stays masked (PRD-00 owner question 11, default no), which this reader does not need |
 | G3-09p | Applied. `codex.rs:163-166` (checked in the code) |
 | G3-09q | Applied. `usage::Calls::new()`; the sink reads the `start` EVENT from the pushed records; no `Start` type in F1 |
+| B10 sweep (30 Oct) | Applied. One test file, `usage_run1.rs` (about 200 lines), as PRD-14 section 3 says; it gains the point 4 cases (no body text in output, VR2 panic). Shapes, joins, SQLite repair and output are proved by PRD-12 C5 on real runs and the watcher's count; `usage_shapes.rs`, `usage_join.rs`, `usage_sqlite.rs` and `usage_out.rs` are cut. Builder note 1 logs the fixture numbers once instead of pinning them |

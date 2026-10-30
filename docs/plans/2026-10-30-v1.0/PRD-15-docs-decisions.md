@@ -612,7 +612,8 @@ Sandbox pad box (ledger B1), by a watcher that has not read the PRDs:
    the owner's member id (ledger B4). These two inputs are not counted as guesses. Everything else
    comes from README and the guide. The watcher writes down every step it had to guess and every line
    on screen the guide does not explain. Pass: zero guesses; zero unexplained lines; the three
-   contract words match byte for byte.
+   contract words match byte for byte. The box is removed when the run ends (ledger B3: every run
+   cleans up after itself).
 
 Checks on saved output, no extra harness run (the PRD-15 lane does them):
 
@@ -730,7 +731,8 @@ Order of work (PRD-00 puts PRD-15's docs in the third slice; parts that need no 
 Traps:
 
 - Keep `docs/PARTICIPANT-GUIDE.md` and the README anchors `#platforms` and `#the-gate`.
-- Never name an old crate in a current doc; the reference guard fails the gate after the cut.
+- Never name an old crate in a current doc; PRD-13's reference guard flags it at the cut (a grep by
+  hand, not a gate test, ledger B10).
 - Never write "model calls recorded"; write "model requests written" (rule 5).
 - `goalcup-verify` has four subcommands in this build; the judge view is after the merge.
 - Disk full is exit 74 and null mode, never a `write_error` gap (reason 8 is reserved).
@@ -825,3 +827,4 @@ this file's part of a shared fix is made here.
 | G3-15p | Applied: acceptance 1 in a Vercel Sandbox pad box; the automated checks and builder step 3 in a build box (ledger B1) |
 | G3-15q | Applied. Checked: PRD-14 section 2 has the same-name-prefix clause |
 | Re-read (no id) | Fixed one clear break: D86, guide sections 3 and 4 and the Gemini cell said the auto-update switch is written only on "yes". PRD-00 question 2 (revision 4) and ledger H9 say `update_off` is always written; only the no-prompt values follow the question |
+| B3, B10 sweep (30 Oct) | Applied. The newcomer run's box is removed when it ends; the reference guard is a grep by hand at the cut, not a gate test (PRD-13 section 6) |

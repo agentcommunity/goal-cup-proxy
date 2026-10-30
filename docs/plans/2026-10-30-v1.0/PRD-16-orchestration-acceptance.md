@@ -373,8 +373,8 @@ reruns.
 
 **Newcomer run** (PRD-15 acceptance 1): one practice run in a pad box on staging, after the third slice
 lands the guide, by a watcher given no PRD, only `README.md`, `docs/PARTICIPANT-GUIDE.md` and
-`GOALCUP_SERVER`; the conductor approves it; about 15 minutes, a short prompt. Its result sits in
-`MORNING.md` beside done item 6.
+`GOALCUP_SERVER`; the conductor approves it; about 15 minutes, a short prompt; the box is removed when it
+ends (ledger B3). Its result sits in `MORNING.md` beside done item 6.
 
 ### 7. Final acceptance runs
 
@@ -632,8 +632,9 @@ No tests go here; the tests of the old crates go with PRD-13.
 
 None new (ledger B10: the rig's real runs are the main proof). This PRD writes no code. Its guards are
 other PRDs' tests: PRD-12 `selftest` and `test_pad.py`
-(the pad cannot pass a known fault), PRD-14 `test_gate.py` and `test_release.py` (the gate and the release
-check), PRD-08's check tests, and CI on every integration push.
+(the pad cannot pass a known fault), PRD-14's `gate fast` and `gate full` and PRD-12's
+`table --release-check` (`test_gate.py` and `test_release.py` are deleted in phase 0, ledger B10), PRD-08's
+check tests, and CI on every integration push.
 
 ## Risks and blind spots
 
@@ -913,5 +914,6 @@ points, the format, masking and the never-stop rules; a risk row. B11: no box co
 account's limit, read at H+0; watchers and rig runs get as many workflows as are in flight. The expected
 spend adds about 60 USD for cycle runs. Left for others: PRD-00 phase 5 still says "from phase 4's first
 wave" and "up to 6 pad boxes", and BUILD-PROMPT section 5 says the other 12 follow the core set's first
-wave; the ledger wins, and the replan or PRD-00's author should align them. S1 (three failed fixes) is
+wave; the ledger wins. Done in the 30 Oct sweep: PRD-00 phases 1a, 2 and 5, BUILD-PROMPT section 5 and PRD-12's
+watcher count now follow B3 and B11. S1 (three failed fixes) is
 kept and now cites BUILD-PROMPT section 5, since B3 no longer carries it.

@@ -818,8 +818,8 @@ No proof here calls an outside API to check a count (ledger T4): every pass read
 
 Automated tests that guard them (`tests/cli_*.rs`, facts and contract words only):
 
-- `cli_finish.rs`: from fixture `status.json` and `upload.json` files: zero loss gives "Nothing was
-  lost"; any gap, off time, listed tunnel, fail-closed byte or cut file never does; counts and hosts
+- `cli_finish.rs`: from fixture `status.json` and `upload.json` files: zero loss gives the "nothing was
+  lost" claim (checked present or absent, never the sentence, ledger B10, PRD-14 section 2); any gap, off time, listed tunnel, fail-closed byte or cut file never does; counts and hosts
   printed are the fixture's; `req_whole` is shown when `req_holes` is above 0; the after-seal line
   appears only when `after_seal.bytes` is above 0; every gap reason 1 to 15 has words; a recovered seal
   gives the recovered line.
@@ -1056,3 +1056,4 @@ PRD-01, PRD-02, PRD-04, PRD-05 and PRD-11 as they now stand, and the code. No lo
 | G3-10o | Applied (same change as X2-03): the 64 KiB refusal, its test case and its default row are gone |
 | G3-X41 | Applied (see G2-07) |
 | R3a, R3b, T4 carried in | R3a: the null-mode status line no longer says "failed 3 times in a row"; it says goalcup passes traffic unrecorded for now and tries again at most 5 minutes apart until the run ends. R3b: new command `goalcup recover` (section 1 row, section 3.2: checks for an unsealed entry, no live watchdog, no live recorder, a live harness, a free port; success and refusal lines), the both-dead state line splits into "Run: goalcup recover" while the harness is alive and "goalcup continue" once it is gone, the stale row and `continue` defer to it, help footer, message list, `recover.rs` (80 lines), risk row, builder trap, acceptance 11 and `cli_recover.rs`; ask N9 to PRD-02 for the key file and the recover entry. T4: acceptance says no proof calls an outside API; acceptance 11 passes from the record only; the history check stays PRD-12's |
+| B10 sweep (30 Oct) | Applied. `cli_finish.rs` checks the "nothing was lost" claim is present or absent, never the sentence (PRD-14 section 2) |

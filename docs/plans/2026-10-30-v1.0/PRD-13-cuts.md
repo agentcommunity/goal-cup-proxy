@@ -153,8 +153,8 @@ working with the old crates still on disk (PRD-00 phase 3 row, review B M5):
   `.github/CODEOWNERS` (paths under folders this PRD deletes, checked by `scripts/test_codeowners.py`),
   `ci.yml:68, 80`, `release.yml`, `PULL_REQUEST_TEMPLATE.md:32`, `packaging/install.sh:9, 226, 312-359`,
   `packaging/README.md`, `scripts/package-release.sh:4, 10`, `scripts/test_install.py:28` (reads
-  protocol crate fixtures), `third-party-licenses.py` and its test. PRD-14 also keeps both guards of
-  section 6 as `rule_code.rs` rules 3 and 4, in the forms given there.
+  protocol crate fixtures), `third-party-licenses.py` and its test. The guards of section 6 are not in the gate (ledger B10,
+  PRD-14 section 6): PRD-13 runs them by hand and logs the output.
 - PRD-07: `docs/UPLOAD-API.md` and `scripts/test_fetch_run.py` (`:26` reads the verifier crate's
   `v5-corpus`, `:139` builds `-p goalcup-verifier`).
 - PRD-15: `README.md`, `AGENTS.md` map and rules, `CONTRIBUTING.md`, `SECURITY.md`, `TODO.md`,
@@ -195,11 +195,11 @@ time before `REPORT_AT`, and the core set `direct` rows and the Codex kill row t
 commit. If it is still not green at `REPORT_AT`, line 1 of `MORNING.md` reads "Not ready: old crates
 not deleted (ledger L3), deletion gate <state>", and the owner decides.
 
-### 6. The guards (kept in the gate by PRD-14)
+### 6. The guards (run by hand, not in the gate: ledger B10, PRD-14 section 6)
 
-**Reference guard.** It must print nothing. PRD-14 runs it as `rule_code.rs` rule 4: before the cut
-that rule checks the five old crates are in the workspace `exclude` list (so it never passes by
-skipping); after the cut it runs this `git grep`. The switch needs no edit to `gate.sh`.
+**Reference guard.** It must print nothing. PRD-13 runs it by hand: each hour in phases 1 and 2 with
+the to-be-deleted paths and `Cargo.toml` excluded (section 5), and once on the phase 3 merge, with the
+output in the night log. It is a one-time cleanup check, not a point, so it is no gate test (ledger B10).
 
 ```
 git grep -nE 'goalcup[-_](cli|daemon|platform|protocol|verifier)\b|goalcup-daemon' -- . \
@@ -212,8 +212,9 @@ report once PRD-15 copies it to `docs/research/results/2026-10-30-two-hour-run.m
 item 27). A top-level `docs/*.md` that PRD-15 keeps as history but does not rewrite moves under
 `docs/archive/`, or PRD-15 adds it here by name with a night-log line.
 
-**No-return guard.** It runs from phase 1 as `rule_code.rs` rule 3, because it only reads the new
-code. Rule 3 scans `crates/goalcup*/src/` for every pattern below, and `crates/goalcup*/` (src, tests
+**No-return guard.** PRD-13 runs it by hand once at the phase 3 merge and logs the output; any lane
+may run it on its own diff. It is no gate test: a word list pins words, not behaviour, and the
+never-stop tests guard our own caps (ledger B10, PRD-14 section 6). It scans `crates/goalcup*/src/` for every pattern below, and `crates/goalcup*/` (src, tests
 and `Cargo.toml`) for the two feature patterns: `test-support` anywhere, `test-hooks` outside
 `crates/goalcup`. Every line it prints
 must also survive `grep -v 'v0\.7\.0:'` (a provenance comment such as
@@ -244,7 +245,7 @@ Worker (`server/worker/src/**` and `server/worker/wrangler.toml` only). Patterns
 `server/worker/src/sign.ts` must not exist. `server/worker/sql/` (the database mirror keeps `receipt`,
 `agent_paused`, `disk_free` and `connector_dir_sha256` columns, no migration this build, ledger S3),
 `scripts/check-sql.sh`, `test/` and `README.md` are not scanned (PRD-07 interfaces row PRD-13). This
-Worker half joins `rule_code.rs` rule 4 right after PRD-07's cut merges.
+Worker half is run once by PRD-07 at its cut merge, with the output in the night log (PRD-14 section 6).
 
 A hit is either a real reintroduction (the builder removes it) or a false match (the integrator notes
 it in the night log and narrows the pattern).
@@ -292,7 +293,7 @@ Must not touch: `crates/goalcup/`, `crates/goalcup-format/`, `crates/goalcup-ver
 | PRD-17 | `LESSONS.md` merged and its four deletion-gate checks green (phase 2 exit) | The old code stays readable at `v0.7.0` |
 | PRD-12 | `selftest` passes on integration (precondition for deleting the five kits); its two skill files deleted by PRD-12 itself (PRD-00 ruling; PRD-12's "What is cut" lists them as PRD-13's and should follow PRD-00) | The pad replaces the five kits in section 3 |
 | PRD-16 | Phase 0 `exclude` edit and lock; phase 2 gate green; the phase 3 workspace edit in the same merge; the H+10 cut-off, with the W6 owner call if the gate is late (section 5); the merge after two independent reviews (ledger B2) and the replan after it (B2a) | Four delete commits on one branch |
-| PRD-14 | Its gate, CI, CODEOWNERS, nextest and packaging edits before the cut; both guards as `rule_code.rs` rules 3 and 4 in the forms of section 6; `check-links.py` delete in the phase 3 merge | The list of deleted scripts and binaries. PRD-13 edits no `gate.sh` line |
+| PRD-14 | Its gate, CI, CODEOWNERS, nextest and packaging edits before the cut; no guard of section 6 in the gate (ledger B10; PRD-13 and PRD-07 run them by hand); `check-links.py` delete in the phase 3 merge | The list of deleted scripts and binaries. PRD-13 edits no `gate.sh` line |
 | PRD-15 | Live docs handled before the cut: the `AGENTS.md` map (`AGENTS.md:32-50`), pin rule (`:90-91`), D65 rule (`:83-86`), `scripts/README.md`; the live docs that describe deleted code moved to `docs/archive/` unedited, some after their facts are merged elsewhere (`docs/TERMINATION.md`, `docs/CONTRACTS.md`, `docs/CHEAT-CHECKLIST.md`, `docs/HARNESS-SETUP.md`, `docs/SERVER-DESIGN.md`), the rest rewritten (`docs/CONNECTOR-SCHEMA.md`, `docs/RULES.md:306-321` run labels, `docs/ARCHITECTURE.md`, `docs/OPERATING.md`, `docs/HARNESS-ONBOARDING.md`); run 1's report copied under `docs/research/results/`; `check-links.py` run once | Which docs describe deleted code; the reference guard's history exclusions |
 | PRD-11 | `connectors/<id>.toml` and `model-hosts.toml` on integration; `docs/harnesses/*` without old crate names | The delete of `connectors/*/harness.toml` |
 | PRD-07 | Its own Worker cuts (group F), including `sign.ts` and the signing vectors | The no-return guard scans only `server/worker/src/` and `wrangler.toml` |
@@ -489,18 +490,18 @@ the one source for tests). PRD-00 wins where this table differs.
 | `crates/goalcup` pipeline and watchdog (PRD-02) | | | 1,350 | 1,500 |
 | proxy (PRD-03) | | | 4,250 | 2,000 |
 | native (PRD-04) | | | 780 | 1,000 |
-| mask (PRD-05) | | | 3,530 | 5,000 |
+| mask (PRD-05) | | | 3,530 | 2,000 |
 | upload (PRD-06) | | | 940 | 1,000 |
 | CLI (PRD-10) | | | about 2,900 | 1,200 |
 | connector code (PRD-11) | | | 800 | 400 |
 | `crates/goalcup-verify` check (PRD-08) | | | 1,400 | 1,100 |
-| usage reader (PRD-09) | | | 1,470 | 600 |
-| lessons (PRD-17), test support, `rule_code`, `e2e_run` (PRD-14) | | | 0 | 3,350 |
-| **Rust** | **86,516** | **142,413** (+7,000 fixture lines) | **about 18,100** | **about 15,000** |
+| usage reader (PRD-09) | | | 1,470 | 200 |
+| lessons (PRD-17), test support, `rule_code`, `e2e_run` (PRD-14) | | | 0 | 3,000 |
+| **Rust** | **86,516** | **142,413** (+7,000 fixture lines) | **about 18,100** | **at most about 14,200** (PRD-14 section 3, ledger B10) |
 | Worker (PRD-07) | 4,001 | 5,775 | about 3,440 | about 4,950 |
 | Scripts | 11,406 | 10,393 | about 900 (gate, release, packaging, licences, fetch-run) plus the pad (PRD-12, about 1,350 to 1,450 with its tests; PRD-12's estimate wins) | 1,865 |
 | Packaging, `harnesses/` | 456 | | 394 | |
-| **Code that ships or runs** | **about 102,400** | **about 158,600** | **about 22,850 plus the pad** (minus 78%) | **about 21,800** (minus 86%) |
+| **Code that ships or runs** | **about 102,400** | **about 158,600** | **about 22,850 plus the pad** (minus 78%) | **about 21,000** (minus 87%) |
 | Data: connectors | 556 | | about 390 | |
 | Data: spikes | 23,713 | | 0 (86 corpus files, 6.2 MB, move under `crates/goalcup/tests/mask_corpus/`) | |
 
@@ -549,10 +550,9 @@ Automated checks that guard them:
 
 - `cargo build --locked --workspace` and `sh scripts/gate.sh full` green with the old crates gone
   (PRD-00 phase 3 gate), in a build box as `ubuntu`.
-- The reference guard (section 6, `rule_code.rs` rule 4) prints nothing in `gate fast` after the cut,
-  with no `gate.sh` edit.
-- The no-return guard (section 6, `rule_code.rs` rule 3) prints nothing over the new crates from
-  phase 1, and over `crates/` and the Worker scope after the cut.
+- The reference guard and the no-return guard (section 6), run by hand on the phase 3 merge, print
+  nothing over `crates/` and the Worker scope; the output is in the night log. They are one-time greps,
+  not gate tests (ledger B10).
 - PRD-14's named script-test list and `discover -s scripts/pad` green in a build box, and no
   `scripts/test_*.py` left for a deleted script.
 - CI `check` green on the merge commit (PRD-00 phase 3 gate).
@@ -565,7 +565,7 @@ Automated checks that guard them:
 |---|---|---|
 | A lesson is lost | An edge case the old code handled is not in `LESSONS.md` and the fresh core misses it | Delete only after PRD-17's deletion gate passes; the old code stays at `v0.7.0` for any later look |
 | The cut is late | PRD-17's gate is not green by H+10 | The owner is called under W6 (locked L3 cannot hold on time); the old crates stay on disk, out of the workspace, and nothing builds them; the cut runs as soon as the gate is green, before `REPORT_AT`; otherwise `MORNING.md` line 1 says "Not ready" and it is an owner blocker against L3 (section 5) |
-| A reference hides until the cut | Before the cut, `rule_code.rs` rule 4 checks the `exclude` list, not the `git grep`, so a live file that names an old crate is not caught by the gate | PRD-13's hourly hand-run with the deleted paths excluded (section 5) names each hit and its owner in the night log |
+| A reference hides until the cut | The reference guard is no gate test (ledger B10), so a live file that names an old crate is not caught by the gate | PRD-13's hourly hand-run with the deleted paths excluded (section 5) names each hit and its owner in the night log |
 | Dangling references break the gate | `scripts/test_codeowners.py` fails on any `CODEOWNERS` path that no longer exists; `.config/nextest.toml` names deleted packages; `gate.sh:88-103` runs `-p goalcup-cli` | PRD-14 lands these edits in phase 0 or 1, when the old crates leave the workspace; they no longer wait for the cut |
 | Dry-run participants on 0.7 | Pasted `goalcup mcp` lines now start a missing command; an old `goalcup-daemon` may still run; an old binary stays in `~/.local/bin` | PRD-10: no compatibility, one guide line. PRD-14's installer removes `goalcup-daemon` from the install folder. Whether an old daemon holds a port 1.0 needs is unverified |
 | Judging loses run labels | `docs/RULES.md:306-321` and `docs/CHEAT-CHECKLIST.md` cite labels that only the cut verifier computed | PRD-08 keeps S6 `label` and the coverage line; PRD-15 rewrites the rules text |
@@ -648,7 +648,7 @@ All seven asks of revision 1 are answered (PRD-00 "Review answers", PRD-01 CC 89
 ## Review answers
 
 History of revision 2. Where an answer here disagrees with the body, the ledger or "Alignment answers"
-(the H+10 cut-off and W6 call, the guards as `rule_code.rs` rules 3 and 4, `test-hooks` in
+(the H+10 cut-off and W6 call, the guards as one-time greps by hand (ledger B10), `test-hooks` in
 `crates/goalcup` only, the size ceilings), those win. The move of this section and the ruled asks to
 `REVIEW-HISTORY.md` is left to one later step (alignment X2-11).
 
@@ -714,3 +714,4 @@ PRD-14, PRD-15, PRD-16 and the code.
 | G3-13i | Applied. Automated check uses PRD-14's named script-test list and `discover -s scripts/pad` |
 | G3-13j | Applied. Automated check: CI `check` green on the merge commit |
 | G3-13k | Applied. The stale parenthesis in interfaces row PRD-14 and the last sentence of CC 91 are gone |
+| B10 sweep (30 Oct) | Applied. The reference and no-return guards of section 6 are no longer `rule_code.rs` rules 3 and 4 (PRD-14 section 6 cut them): PRD-13 runs them by hand, hourly in phases 1 and 2 and once at the phase 3 merge, and PRD-07 runs the Worker half at its cut merge; outputs go in the night log. Size table follows PRD-14 section 3 |

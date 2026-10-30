@@ -158,9 +158,9 @@ Every rig run cleans up its sandbox, test repo and local files.
 seven points, the format, masking and the never-stop rules. No tests that pin internal shapes or wording. If a
 test takes longer to change than the code it guards, delete or simplify it.
 
-- **Early proof.** As soon as format, recorder core, proxy and masking record one request end to end, run a short
-  real test (Claude Code and Codex, a smoke prompt, `GOALCUP_SERVER=off`) in pad boxes. Then one short real
-  test after each new core feature (each core feature of PRD-00's second and third slices: native capture,
+- **Early proof.** As soon as format, recorder core, proxy and masking record one request end to end, climb rung 1
+  through the rig (Claude Code and Codex, `mode = "micro"`, `GOALCUP_SERVER=off`) in pad boxes. Then one micro
+  run after each new core feature (each core feature of PRD-00's second and third slices: native capture,
   uploader, watchdog restart and null mode, refusal learning, the gateway and dodger cases, Hermes `state.db`,
   HTTP/2, and exact-value masking only if I said yes, PRD-00 owner question 3). If the concept fails here, stop
   adding features and fix it first.
@@ -168,11 +168,12 @@ test takes longer to change than the code it guards, delete or simplify it.
   platform (like PayPal, under a made-up name) with admin and user accounts, an admin frontend and a user frontend,
   and to use many subagents in parallel. Ask for subagents in the prompt; never force them by config.
 - **Mass testing at the end:** the core set (Claude Code, Codex, Hermes) on all three cases (direct key,
-  gateway, dodger), each a `full` run. The other 12 harnesses follow once the core set's first wave is done.
+  gateway, dodger), each a `full` run. The other 12 harnesses run `full` at the same time, every pad in parallel (ledger B3);
+  the core set has first claim on the Claude, OpenAI and gateway keys (PRD-16 section 6).
   When the core set is green, the acceptance runs start beside them: A2 first, then A1 and A3; A4 is Kilo's
   gateway `full` row (PRD-16 sections 6 and 7). Watchers fix failures and rerun; stop after three failed fixes
-  on one cause and write it down. Watchers may run as up to three workflows of 2 agents beside the real-runs
-  lane, so six can work at once.
+  on one cause and write it down. Start one watcher per named cause, each its own workflow of 2 agents, as
+  many at once as there are causes (ledger B11).
 - **Every real run** is judged by PRD-12's C1 to C6 and nothing looser. The proxy record is the proof (ledger
   T4): no unexplained gap and the history check finds no missed call (the dodger case by PRD-12 section 2); the
   harness's own session files are an optional extra check where it keeps them, and no outside API (no provider
@@ -268,7 +269,7 @@ PRD-12 and PRD-16.
 | G3-X4 | Applied. Integrator changes outside `docs/plans/` go through reviewers A and B |
 | G3-X47 | Applied (see G2-10) |
 | G3-X48 | Applied. Every real run is judged by PRD-12's C1 to C6 |
-| G3-BPa | Applied (see X3-11). Phase 5 starts after the core set's first wave, as PRD-16 section 6 says |
+| G3-BPa | Applied (see X3-11). Superseded by ledger B3 and B11 (30 Oct): phases 4 and 5 start together, as PRD-16 section 6 now says |
 | G3-X46 | Applied (see L6-07). Section 7 also lists PRD-16 section 8's stops, which leave a note and go on (ledger B8) |
 | G3-X12 | Applied in sections 2 and 3. The push token has no secret name in any PRD, so section 3 names it as an owner input, as PRD-12 section 7 does |
 | G3-BPb | Applied. `GOALCUP_SERVER` unset means production (PRD-10 section 2) |
@@ -283,3 +284,4 @@ PRD-12 and PRD-16.
 | G3-BPj | Applied. Audit appendices G and F added |
 | G3-BPk | Applied. Check out the planning branch first |
 | G3-BPl | Applied. The existing `goalcup-traces-staging` for runs, as PRD-07 says; agents may create `goalcup-usage-staging` |
+| B3, B9, B10, B11 sweep | Applied 30 Oct. Section 5 early proof is ladder rung 1 (`micro`) through the rig; the other 12 harnesses run `full` beside the core set, not after its first wave (B3); watchers are one per named cause with no count of our own (B11) |

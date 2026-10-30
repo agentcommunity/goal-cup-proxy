@@ -17,6 +17,7 @@ the two worth answering before the paste are 1 (exact-value masking, which chang
 builds) and 2 (the left guard).
 
 Updated 30 Oct: ledger R3a, R3b and T4 added and carried into PRD-02, 08, 10, 12, 16.
+Updated 30 Oct: ledger B3, B9, B10, B11 (test ladder, simple rig, test economy, parallelism) carried into PRD-12, 14, 16 and BUILD-PROMPT.
 
 ## 1. Ledger coverage
 
