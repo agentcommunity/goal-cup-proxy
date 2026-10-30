@@ -1719,3 +1719,32 @@ kept and now cites BUILD-PROMPT section 5, since B3 no longer carries it.
   `native_walk old_files_are_skipped_and_the_new_one_found_among_five_thousand` failed 1 of 4 runs
   in a slice 4 box (not touched by that slice; PRD-04's test, in PRD-14's `heavy` group question).
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-14 slice 4 (merge ec0d79d8)
+
+- `gate fast: PASS in 134s` on ec0d79d8 (nextest 188 of 188, `native_walk`'s 7 in the `heavy` group).
+  Three paths changed (`.config/nextest.toml`, `scripts/gate.sh`, `tests/common/upstream.rs`), all
+  PRD-14 owned, no `Cargo.toml`. Both non-merge commits in 722b846b..ec0d79d8 carry both trailer
+  lines. `gate full` was not run; it stays red until PRD-06 calls `Policy::from_env` (slice 3 note).
+- **Size report, PRD-14** (`wc -l` at ec0d79d8, PRD-00 row "Lessons (PRD-17), test support,
+  `rule_code`, `e2e_run` (PRD-14)", 0 src and 3,000 tests, of which PRD-14's line is 1,700): tests
+  1,736 (`tests/common/` 1,523 with `upstream.rs` 709, `rule_code.rs` 213, `e2e_run.rs` 0), 102% of
+  the 1,700 line and within the 1,870 ceiling, unchanged by this slice. Src 0. Scripts and CI:
+  `gate.sh` 105 (was 128; section 8 says about 75, which section 8's own required steps rule out,
+  PRD-14 note), `.config/nextest.toml` 21, `release.yml` 132, `release.sh` 121, `ci.yml` 60,
+  `test_install.py` 314, `smoke-release.sh` 53, `package-release.sh` 40, `third-party-licenses.py`
+  231, `install.sh` 355, all unchanged.
+- **Heavy-group rule, refined** (the note after PRD-17 phase 0 slice): a binary joins in the merge
+  that brings its heavy case, not its first case, and adds its name to the one override's
+  alternation. `native_walk` is in. `proxy_connect` is on integration but waits for PRD-03's 2,000
+  connection case (PRD-03 note). `lessons_launch`, `watchdog_*`, `e2e_*`, `pipeline_*` and
+  `proxy_restart` join with their binaries.
+- **Seams closed:** `native_walk` in `heavy` (PRD-04 note), B12. **Open:** `recorder::real`
+  (PRD-02's `Recorder::real_for_tests`), `e2e_run.rs` (phase 2), the `check-links.py` delete (phase 3).
+- **Acceptance lists as known,** if still open at the end: the slice 4 review nits on `gate.sh` and
+  the nextest comment (A1 header format line, A2 the full tier's phase 2 note, A3 the "brings its
+  heavy case" wording, A4 and B2 the script-test admission rule, B1 three behaviour-neutral cuts),
+  all queued for PRD-14's next touch (PRD-14 note).
+- **Housekeeping for the end:** besides `v1.0/prd-14-tests-lane-merge-wip`, the merged PRD-14 task
+  branches (`v1.0/prd-14-tests-*`) are still on origin.
+- No locked ledger item is touched and no owner question comes from this slice.

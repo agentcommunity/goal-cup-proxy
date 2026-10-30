@@ -951,3 +951,45 @@ PRDs they touch and the code. Where two fixes disagree, the ledger and the later
   (about 75), `release.yml` 132 (about 120), `test_install.py` 314 (was 582), `smoke-release.sh` 53,
   `package-release.sh` 40, `third-party-licenses.py` 231.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-14 slice 4 (merge ec0d79d8)
+
+- **Done in slice 4:** `native_walk` is in a `heavy` override in `.config/nextest.toml`
+  (`filter = 'binary(/^native_walk$/)'`, the group's only binary today; its 7 tests run one at a
+  time), which closes the PRD-04 ask and review A10. `gate.sh` went from 128 to 105 lines by comments
+  only: with comment lines stripped its code equals the code at 722b846b, so no step changed (review
+  B1). Nit B12 is done: one `left` closure in `h2_stream`, `upstream.rs` stays 709. `gate fast: PASS
+  in 134s` on ec0d79d8 (nextest 188 of 188). `gate full` was not run; it stays red at the
+  hooked-binary line until PRD-06 calls `Policy::from_env` (slice 3 note).
+- **Next touch of `scripts/gate.sh`** (reviews A1, A2, A4, B1, B2; nits, no behaviour change):
+  - Put back one header line: "Every step prints its time; the last line is `gate <tier>: PASS in
+    <N>s` or `gate <tier>: FAIL`." CI and the night-log watchers read that format (A1).
+  - On the full tier's ignored-tests step, say again that it fails until the first `#[ignore]` test
+    (`e2e_run.rs` or `upload_worker.rs`) merges in phase 2, and that phase 1 needs only `fast` (A2).
+    Without it a watcher reads that failure as a regression.
+  - Next to the named script-test list, restore the admission rule as one clause: a new script test
+    joins only if it guards one of the seven points, the format, masking or the never-stop rules
+    (section 8, ledger B10, risk row "Named script-test list goes stale") (A4, B2).
+  - Pay for those lines with B1's cuts: `[ -z "$missing" ] || { echo "gate.sh: missing:$missing";
+    fail; }` for the four-line `if` (-3); define `fail()` before the root check and end that block
+    with `fail` (-1); drop the comment above the root check that repeats its echo (-1). That lands
+    near 103 lines. Section 8's "about 75" cannot be reached without dropping what section 8 itself
+    requires (the build lock, the python3.11 probe, the two hook greps), so the overage stands and
+    needs no further cut.
+- **Next touch of `.config/nextest.toml`** (review A3): the comment says each binary joins "in the
+  merge that brings it" and lists `proxy_connect` as still to come, but `proxy_connect.rs` is on
+  integration and stays out of `heavy` on purpose (its cases today are ClientHello parses). Word it
+  "joins in the merge that brings its heavy case". The rule stands: `proxy_connect` joins with
+  PRD-03's 2,000-connection case (PRD-03 note), `lessons_launch` with PRD-17's `lessons_launch.rs`,
+  `watchdog_*`, `e2e_*`, `pipeline_restart`, `pipeline_stall`, `pipeline_many_streams` and
+  `proxy_restart` with their binaries. Each adds its name to the one override's alternation,
+  `binary(/^(native_walk|...)$/)`, not a second override block.
+- **Still open:** `recorder::real(dir)` (waits on PRD-02's `Recorder::real_for_tests`, on no branch
+  at this replan), `e2e_run.rs` with `fake.toml` and `fake-hosts.toml` (phase 2), the
+  `check-links.py` and `test_check_links.py` delete (phase 3). `.github/PULL_REQUEST_TEMPLATE.md`
+  already has the `row.json` line, so that item from the slice 3 note is closed.
+- **Size against section 3** (`wc -l` at ec0d79d8): unchanged at 1,736 (`tests/common/` 1,523,
+  `rule_code.rs` 213, `e2e_run.rs` 0) of the 1,700 line, inside the 1,870 ceiling; 134 lines left for
+  `recorder::real` and `e2e_run.rs`. Scripts: `gate.sh` 105 (about 75, see above), `.config/nextest.toml`
+  21, the rest as in the slice 3 note.
+- No locked ledger item is touched and no owner question comes from this slice.
