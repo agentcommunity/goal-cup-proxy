@@ -135,14 +135,16 @@ def release_check(commit):
          and r.get("case") == "direct" and r.get("mode") == "full" and kills(r))
     for s in ("h2-parallel.sh", "long-tunnel.sh"):
         need("exec %s verdict PASS" % s, lambda r, s=s: g(r.get("exec"), s) == "PASS", ok=lambda r: True)
+    ran_on = {}  # the commit each relied-on row ran on, from goalcup "1.0.0+<commit>"
     for name, r in used:
-        c = str(r.get("goalcup") or "").partition("+")[2]
+        ran_on.setdefault(str(r.get("goalcup") or "").partition("+")[2], []).append(name)
+    for c, names in sorted(ran_on.items()):
         d = git("diff", "--name-only", c, sha, "--", *GUARDED) if len(c) >= 7 and c.isalnum() else None
         if d is None or d.returncode:
-            items.append("%s: goalcup %s names no commit here" % (name, r.get("goalcup")))
+            items.append("goalcup commit '%s' names no commit here: %s" % (c, ", ".join(names)))
         elif d.stdout.strip():
-            items.append("%s: ran on %s, which differs from %s under %s" % (
-                name, c[:12], commit, ", ".join(d.stdout.split()[:5])))
+            items.append("%s differs from %s under %s: %s" % (
+                c[:12], commit, ", ".join(d.stdout.split()[:5]), ", ".join(names)))
     print("\n".join(items) if items else "release check: pass at %s" % sha)
     return 1 if items else 0
 
