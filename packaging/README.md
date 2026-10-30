@@ -82,11 +82,11 @@ commands. The release workflow fetches its target graph, then builds with `--off
    sets the version, updates `Cargo.lock`, checks it, commits, pushes the branch and opens a pull
    request. If `origin/main` already has that version, `prepare` says so and does nothing. Merge a
    version PR through the repository ruleset.
-2. Fetch the merged `origin/main` and run `sh scripts/gate.sh full`, then the pad's release check
-   `scripts/pad/table --release-check <commit>`, on that exact versioned commit. The tag command
-   does not run either check.
-3. Run `sh scripts/release.sh tag <x.y.z>`. It fetches, checks that `origin/main` has the version in
-   `Cargo.toml`, tags that commit (never a local branch) and pushes only the tag.
+2. Run `sh scripts/gate.sh full` on the merged versioned commit in a build box. Tag does not run the gate.
+3. Run `sh scripts/release.sh tag <x.y.z>`. It fetches, checks that `origin/main` has the version, runs
+   `scripts/pad/table --release-check` on that commit in a temporary worktree and refuses the tag if it
+   fails: the core rows and the Codex kill row must be PASS from a pad whose commit has no difference to
+   it under the release paths (PRD-12 section 9). Then it tags that commit and pushes only the tag.
 4. The tag starts the workflow. It refuses a tag that differs from `Cargo.toml`, builds the four
    targets and creates the GitHub release with every asset.
 
