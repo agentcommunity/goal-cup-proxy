@@ -73,7 +73,7 @@ while ! mkdir "$lock" 2>/dev/null; do
 done
 echo $$ >"$lock/pid"
 trap 'rm -rf "$lock"' EXIT
-trap 'exit 1' INT TERM HUP
+trap fail INT TERM HUP
 
 step cargo fmt --all --check
 step cargo clippy --locked --workspace --all-targets -- -D warnings
