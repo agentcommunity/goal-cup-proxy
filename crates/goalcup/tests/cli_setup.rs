@@ -21,7 +21,7 @@ use serde_json::Value;
 /// files, which the test parses back.
 fn connector() -> Connector {
     let parsed = |c: &Connector| {
-        let rows = c.update_off.iter().chain(&c.no_prompts);
+        let mut rows = c.update_off.iter().chain(&c.no_prompts);
         rows.all(|r| r.file.ends_with(".json") || r.file.ends_with(".toml"))
     };
     builtin::CONNECTORS

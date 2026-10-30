@@ -484,7 +484,11 @@ pub fn state_line(state: &State, run: &str) -> String {
             t(since)
         ),
         State::Losing { streams, bytes } => {
-            let n = plural(streams, "connection or file has", "connections or files have");
+            let n = plural(
+                streams,
+                "connection or file has",
+                "connections or files have",
+            );
             format!(
                 "Recording is losing data now: {n} a gap ({} so far). Your agent is not slowed. \
                  The end screen will say how much.",
