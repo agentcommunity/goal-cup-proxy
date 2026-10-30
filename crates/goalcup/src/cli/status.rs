@@ -259,7 +259,11 @@ pub fn block(
         w.counts.native_bytes,
     ));
     lines.push(text::off_line(st.off.spans, st.off.ms));
-    let end = !cx.recorder && (st.mode == Mode::Sealed || !cx.watchdog);
+    // Nothing sends the part by itself (as `finish::screen` reads it for the end screen). Not in
+    // `Recover`: `goalcup recover` restarts the recorder, which sends the bytes, while `goalcup
+    // upload` would seal the part and close that path.
+    let recover = matches!(state, State::Recover { .. });
+    let end = !cx.recorder && !recover && (st.mode == Mode::Sealed || !cx.watchdog);
     lines.extend(upload.map(|u| text::upload_line(u, cx.now, end)));
     lines.push(text::parts_line(parts));
     let problems = problems(st, state, cx);

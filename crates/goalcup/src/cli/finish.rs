@@ -39,8 +39,12 @@ pub fn end_screen(entry_dir: &Path) -> Result<String, NotSealed> {
     )
 }
 
-/// The end screen as a pure function of the sealed `status.json`, `server.json`, `upload.json`,
-/// the run id, the `goalcup.log` path and now (seconds since 1970).
+/// The end screen as a function of the sealed `status.json`, `server.json`, `upload.json`, the run
+/// id, the `goalcup.log` path and now (seconds since 1970). The one thing it reads besides those is
+/// process liveness (`super::alive(st.pid, st.start_id)`): a live recorder still sends the wrap-up,
+/// so the upload line names `goalcup upload` only when that process is gone. Whoever seals a dead
+/// recorder's entry (`close_dead_entry`) must write that recorder's `pid` and `start_id`, not the
+/// caller's own, or this screen would see it alive and drop the line.
 pub fn screen(
     st: &Status,
     server: Option<&ServerJson>,

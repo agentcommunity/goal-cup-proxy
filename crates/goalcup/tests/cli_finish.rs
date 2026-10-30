@@ -152,7 +152,15 @@ fn bytes_left_at_the_end_name_goalcup_upload_and_upload_by() {
     let clock = text::local_clock(unix_of(by).unwrap());
     put(&entry, "upload.json", &upload(left("sending", by)));
     assert!(end_screen(&entry).unwrap().contains(&clock));
-    let u = upload(left("waiting", by));
+}
+
+/// The status block names `goalcup upload` only when nothing sends the part by itself: no
+/// recorder and, unless sealed, no watchdog; and not in Recover, where `goalcup recover` is the
+/// command and `goalcup upload` would seal the part.
+#[test]
+fn status_names_goalcup_upload_only_when_nothing_sends_by_itself() {
+    let by = "2099-11-08T10:00:00Z";
+    let u = upload(json!({"state": "waiting", "waiting_bytes": 120_000_000, "upload_by": by}));
     for recorder in [true, false] {
         let cx = live(recorder, false, false, 0);
         let shown = block(
@@ -165,12 +173,6 @@ fn bytes_left_at_the_end_name_goalcup_upload_and_upload_by() {
         );
         assert_eq!(shown.contains("goalcup upload"), !recorder, "{shown}");
     }
-    // The end screen comes first while a live recorder still sends the wrap-up.
-    let me = std::process::id();
-    let sid = proc_start_id(me).unwrap();
-    let st = patch(&sealed(), json!({"pid": me, "start_id": sid}));
-    let shown = screen(&st, None, Some(&u), RUN, Path::new(LOG), NOW).unwrap();
-    assert!(!shown.contains("goalcup upload"), "{shown}");
     // A part that is not sealed, with no recorder and no watchdog, sends nothing by itself.
     let st = with(Mode::Recording, json!({}));
     let state = State::Continue { since: NOW };
@@ -183,6 +185,23 @@ fn bytes_left_at_the_end_name_goalcup_upload_and_upload_by() {
             "{shown}"
         );
     }
+    // Recover: the harness lives and recover restarts the recorder; upload would close that path.
+    let cx = live(false, false, true, 0);
+    let state = State::Recover { since: NOW };
+    let shown = block(&st, &state, None, Some(&u), &cx, &[]);
+    assert!(!shown.contains("goalcup upload"), "{shown}");
+}
+
+/// The end screen comes first while a live recorder still sends the wrap-up.
+#[test]
+fn end_screen_with_a_live_recorder_does_not_name_goalcup_upload() {
+    let by = "2099-11-08T10:00:00Z";
+    let u = upload(json!({"state": "waiting", "waiting_bytes": 120_000_000, "upload_by": by}));
+    let me = std::process::id();
+    let sid = proc_start_id(me).unwrap();
+    let st = patch(&sealed(), json!({"pid": me, "start_id": sid}));
+    let shown = screen(&st, None, Some(&u), RUN, Path::new(LOG), NOW).unwrap();
+    assert!(!shown.contains("goalcup upload"), "{shown}");
 }
 
 /// At the end with no recorder, a refused part says nothing keeps trying, and a part whose bytes

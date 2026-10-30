@@ -843,7 +843,8 @@ fn class_words(class: Class) -> &'static str {
 
 /// The `Upload:` line of `upload.json` at `now`. Once nothing will send the part by itself (`end`:
 /// the end screen, or a part with no recorder and no watchdog), bytes still waiting, or an end the
-/// server has not heard, name `goalcup upload` and `upload_by`; after `upload_by` they cannot be sent (section 5 rule 8).
+/// server has not heard, name `goalcup upload` and `upload_by`; after `upload_by` they cannot be
+/// sent (section 5 rule 8).
 pub fn upload_line(u: &UploadJson, now: u64, end: bool) -> String {
     let t = |s: Option<&String>| s.map(String::as_str).and_then(super::unix_of);
     let by_at = t(u.upload_by.as_ref());
