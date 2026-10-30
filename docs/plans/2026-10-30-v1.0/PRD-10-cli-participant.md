@@ -1135,3 +1135,10 @@ PRD-01, PRD-02, PRD-04, PRD-05 and PRD-11 as they now stand, and the code. No lo
   `write_settings(home, &c.update_off)`. It writes nothing until PRD-11's launch slice, so a setup test
   that reads the written file waits for that merge. After that merge both lists name `{home}` files
   only (PRD-11 note, F1b). `start` with `GOALCUP_SERVER=off` still needs S8 `watchdog::run`.
+
+### 2026-10-30, replan after PRD-15 slice 5 (merge ea0a0fec)
+
+- `docs/CONNECTOR-SCHEMA.md` "Loading a file" names `goalcup continue --connector --hosts` (review
+  A10). When `continue` merges, its merge note says how the two file flags are checked against the
+  run's first part (section 1 table: "must match the run's first entry"), so PRD-15 states that rule
+  from merged code.
