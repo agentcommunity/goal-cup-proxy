@@ -985,3 +985,18 @@ kept and now cites BUILD-PROMPT section 5, since B3 no longer carries it.
   the map and "Read next" still name the old crates, pins, CONTRACTS, TERMINATION and CHEAT-CHECKLIST.
   Read that check after slice 2, not before.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-17 upkeep slice 1 (merge 646737c6)
+
+- **Phase 2 check 1 matches nextest's binary id, not a file path.** Rust guards live under
+  `crates/*/tests/` (PRD-01's `recovery.rs` is in `goalcup-format`), and `LESSONS.md`'s next edit
+  writes `file::test` without `.rs` (PRD-17 note). The check splits each entry on `::` and matches
+  binary id suffix and test name in `cargo nextest list --workspace --message-format oneline`.
+- **A green row's Commit is the commit the box proved** when the guarded crate changed after the
+  test's merge; otherwise the merge that brought the test (review A-3).
+- **Docs-only slices still pass the gate in about 60 s** (`gate fast: PASS in 60s` on 646737c6).
+- **Size report, PRD-17 upkeep slice 1** (`wc -l` on integration at 646737c6): 0 lines of PRD-17
+  code against the shared lessons and test-support tests row of 3,000 (PRD-00 "Size budget").
+  `LESSONS.md` 197 lines of docs, outside the budget; 3 rows green (L-FW2, L-FW5, L-FW8 at
+  `f5b0a6a2`), 6 rows still `(name pending)`.
+- No locked ledger item is touched and no owner question comes from this slice.

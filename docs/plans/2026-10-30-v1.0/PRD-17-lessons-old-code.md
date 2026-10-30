@@ -811,3 +811,33 @@ old code. Each id with what was done here.
   support, `rule_code`, `e2e_run` (PRD-14)" tests row of 3,000; nothing else of that row is on
   integration yet. `LESSONS.md` is 197 lines of docs, outside the row. Its 154 rows match the 154 ids
   of sections 2.1 to 2.16.
+
+### 2026-10-30, replan after PRD-17 upkeep slice 1 (merge 646737c6)
+
+- **One guard name form, for the next `LESSONS.md` edit** (review A-1). A `file::test` entry is
+  written without `.rs` (`recovery::a_sealed_entry_takes_nothing_more`, `upload_beat::...`), as the
+  `lessons_` rows already are; a file-level entry keeps `.rs` (`recovery.rs (PRD-01)`). Fix L-FW2,
+  L-FW5, L-FW8 and L-S7 to that form. The legend says Rust tests live under `crates/*/tests/`, not
+  `crates/goalcup/tests/` only: `recovery.rs` is in `crates/goalcup-format/tests/`.
+- **Phase 2 check 1 follows that form.** For a `file::test` entry it splits on `::` and looks for a
+  line of `cargo nextest list --workspace --message-format oneline` whose binary id ends in
+  `::<file>` and whose test name is `<test>`; for a file-level entry it tests that
+  `crates/*/tests/<file>` or `server/worker/test/<file>` exists. A literal grep of `recovery.rs::...`
+  would report a guard as missing when it is not.
+- **L-FW5 names the test that asserts its first half** (review A-2): add
+  `recovery::a_part_file_cut_at_any_byte_recovers_to_its_last_index_line` (one recovery frame per
+  dead boot, `gaps.len() == 1`) beside the second-frame and sealed-entry tests.
+- **The Commit cell names the commit the build box proved** when the guarded crate changed between
+  the merge that brought the test and the proof (review A-3). For L-FW2, L-FW5 and L-FW8, `f5b0a6a2`
+  stands: nothing in `goalcup-format` changed up to the proof at `15df7cf3`.
+- **L-S10 gives files and owner only** (review B1): `A: server/worker/test/device.test.ts (PRD-07);
+  A: server/worker/test/lifecycle.test.ts (PRD-07)`. The parenthesised text looked like an exact test
+  title and was cut short; the exact titles stay in the 4dcc1e7b note above.
+- **L-FW2 is green on its recovery half only** (review B2). The exit-74 half of FW2 (a write error
+  ends the recorder with exit 74 and a `recorder_down` GAP, PRD-02 section 5) has no named PRD-02
+  test; PRD-02's note asks for one. When it is named, the lane adds it to L-FW2. No lessons test is
+  written for it.
+- **Size report** (`wc -l` on integration at 646737c6): merged PRD-17 code is still 0 lines (no
+  `tests/lessons_*.rs`, no `tests/lessons_fixtures/`) against the shared 3,000-line tests row.
+  `LESSONS.md` stays 197 lines of docs (6 rows changed), outside the row.
+- No locked ledger item is touched and no owner question comes from this slice.
