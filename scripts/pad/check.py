@@ -51,8 +51,12 @@ SEAL_SLACK = datetime.timedelta(seconds=120)  # pad's seal-now limit: a seal may
 WATCHER = ("exec", "pre")  # section 3.1 watcher steps: the owning PRD's pass line decides, not `faults`
 EXPECTS_LOSS = ("refusal-curl.sh",)  # exec scripts whose owner expects a named loss (PRD-03 acceptance 7: a refused call)
 LOSS_GAP = "tls_refused"  # the only loss such a row may name: the curl's own refused connections
-JUDGED = ("proxy-setting.sh", "stale-gateway.sh")  # pre scripts whose row the record decides (section 3.1), as a fault row is
 REFUSES = "proxy-setting.sh"  # the pre script after which goalcup start must refuse: no run is recorded
+STALE = "stale-gateway.sh"  # the pre script that leaves a daemon running for goalcup start to stop
+JUDGED = (REFUSES, STALE)  # pre scripts whose row the record decides (section 3.1), as a fault row is
+# C3's scans (section 5, 7): the verifier's over the record, the box's output folder, the conductor's own folder.
+SCANS = (("secrets", "the local record and the run's files"), ("secrets-out", "the box's output folder"),
+         ("secrets-conductor", "the conductor's run folder (its own secrets, section 7)"))
 GATEWAY = "ai-gateway.vercel.sh"
 COPY = "connector copy"  # pad's variant mark for a connector file from disk (P13): a check row, not a fault
 
@@ -205,8 +209,8 @@ def judge(r):
     if ("pre", REFUSES) in watchers(r.meta):
         return refused(r)
     secrets(r)  # C3 first: a hit is a FAIL whatever else happened
-    r.flag(any(f.get("kind") == "daemon-check" and f.get("alive") for f in r.faults), "faults", "FAIL",
-           "the stale daemon was alive after goalcup start (PRD-11 acceptance 5)")  # whatever else happened, as C3
+    if ("pre", STALE) in watchers(r.meta):
+        stale(r)  # whatever else happened, as C3
     work = (seen or tunnels or r.native or dig(r.usage, "s7_native")) and (r.meta.get("commits_since_start") or 0) >= 1
     stop = cause(r) or (None if work else "the harness did no work (commits since start %s, model requests %s)"
                         % (r.meta.get("commits_since_start"), seen))
@@ -223,16 +227,35 @@ def judge(r):
 def refused(r):
     """Section 3.1, proxy-setting.sh: goalcup start must refuse and name the file and key, so no run is recorded and the
     six checks have nothing to read. The row rests on start's exit and the screen's words, recorded by pad-run (no value)."""
-    for name in ("secrets", "secrets-out", "secrets-conductor"):
-        r.flag(r.hits(name), "C3", "FAIL", "%s hits in the %s scan" % (r.hits(name), name))
+    for name, where in SCANS[1:]:  # no run, so no verifier report: the other two scans, and no scan is never a PASS
+        scan(r, name, where)
+    r.flag(r.meta.get("known_box") is not True, "C3", "INCONCLUSIVE", "the run certificate key is not in the known values")
     said = [f for f in r.faults if f.get("kind") == "start-refused"]
     if not said:
+        pre = [f for f in r.faults if f.get("kind") == "pre" and f.get("script") == REFUSES]
+        began = r.entries or isinstance(r.status, dict) or r.meta.get("entry")
+        if began and pre and pre[-1].get("exit") == 0:  # the setting was written and start went on: PRD-11 acceptance 4
+            return r.mark("faults", "FAIL", "goalcup start did not refuse the proxy setting: a run was recorded")
         return r.mark("faults", "INCONCLUSIVE", "goalcup start did not end: no refusal recorded")
     f = said[-1]
+    r.flag(f.get("value_shown"), "faults", "FAIL", "start printed the proxy value")
     r.flag(f.get("exit") in (None, 0), "faults", "FAIL", "start ended with exit %s, not a refusal" % f.get("exit"))
     r.flag(not (f.get("named_file") and f.get("named_key")), "faults", "FAIL",
            "start refused but the screen did not name settings.json and proxy")
     r.why.append("no run was recorded (start refused): C1, C2, C4 to C6 have nothing to read")
+
+def stale(r):
+    """Section 3.1, stale-gateway.sh: the daemon must have been running before start, and neither it nor any process
+    with the daemon command may live after goalcup start or after the harness exited (PRD-11 acceptance 5)."""
+    looks = [f for f in r.faults if f.get("kind") == "daemon-check"]
+    pre = [f for f in r.faults if f.get("kind") == "pre" and f.get("script") == STALE]
+    r.flag(any(f.get("alive") for f in looks), "faults", "FAIL", "the stale daemon was alive after goalcup start")
+    r.flag(any(f.get("left") for f in looks), "faults", "FAIL", "a daemon process was left after the harness exited")
+    r.flag(not pre or pre[-1].get("exit") != 0, "faults", "INCONCLUSIVE",
+           "the stale daemon was not running before start (pre %s exit %s)" % (STALE, pre[-1].get("exit") if pre else "not run"))
+    r.flag(pre and pre[-1].get("exit") == 0 and not looks, "faults", "INCONCLUSIVE",
+           "the stale daemon was not running before start (no pid file, no daemon-check line)")
+    r.flag(looks and not any("left" in f for f in looks), "faults", "INCONCLUSIVE", "no look for left daemons after exit")
 
 def local(r, few):
     """C1 (no missed call) and C4 (record whole, server copy whole and readable)."""
@@ -305,23 +328,22 @@ def case(r):
     hist = r.check("history_complete")  # not in the report: local() files that
     r.flag(hist not in (None, "skip"), "C1", "FAIL", "history_complete %s, the dodger expects skip" % hist)
     th = r.hosts("s6_tunnel_hosts")
-    r.flag(need("counts.tunnel_hosts", th) and not th.get(own), "C1", "FAIL", "no tunnel to the pinned host " + own)
-    why = sorted({str(v.get("listed")) for e in r.entries for h, v in items(dig(e, "s6_tunnel_hosts"))
-                  if h == own and isinstance(v, dict)} - {"pinned"})  # section 2: every tunnel there has GAP `pinned`
+    r.flag(need("counts.tunnel_hosts", th) and not th.get(own), "C1", "FAIL", "no tunnel to the pinned host %s" % own)
+    tun = [(h, v) for e in r.entries for h, v in items(dig(e, "s6_tunnel_hosts")) if isinstance(v, dict)]
+    why = sorted({str(v.get("listed")) for h, v in tun if h == own} - {"pinned"})  # section 2: every tunnel there has GAP `pinned`
     r.flag(why, "C1", "FAIL", "tunnels to the pinned host %s carry GAP %s, not pinned" % (own, ", ".join(why)))
     r.flag(need("counts.hosts", hs) and hs.get(own), "C1", "FAIL", "the pinned host %s was decrypted" % own)
     expected = {"pinned", "after_stop"} | (set(DOWN) if fault_kinds(r.meta) else set())  # a fault row's own gaps: faults() judges them
     loss = sorted(k for k, n in r.gaps()[1].items() if n and k.split(":")[0] not in expected)
     r.flag(loss, "C1", "FAIL", "the dodger row names a loss other than pinned: " + ", ".join(loss))
-    other = sorted({h for e in r.entries for h, v in items(dig(e, "s6_tunnel_hosts"))
-                    if h != own and isinstance(v, dict) and v.get("listed") is not None})  # a listed host not decrypted
+    other = sorted({h for h, v in tun if h != own and v.get("listed") is not None})  # a listed host not decrypted
     r.flag(other, "C1", "FAIL", "tunnels to other listed hosts: " + ", ".join(other))
     if r.usage and r.calls is None:
         for c in ("C2", "C5"):
             r.mark(c, "INCONCLUSIVE", "usage call rows not in the report")
     mine = [c for c in r.calls or [] if dig(c, "c_host") == own]
-    r.flag(any(dig(c, "c_thread") for c in mine), "C2", "FAIL", "a thread claimed from the pinned host " + own)
-    r.flag(any(c.get(k) for c in mine for k in S7_TOKENS), "C5", "FAIL", "wire tokens claimed for the pinned host " + own)
+    r.flag(any(dig(c, "c_thread") for c in mine), "C2", "FAIL", "a thread claimed from the pinned host %s" % own)
+    r.flag(any(c.get(k) for c in mine for k in S7_TOKENS), "C5", "FAIL", "wire tokens claimed for the pinned host %s" % own)
 
 def usage_checks(r, few):
     """C2 (every subagent recorded) and C5 (usage stats present), both from the S7 summary."""
@@ -346,15 +368,15 @@ def usage_checks(r, few):
            "a thread with no model or no calls")
     r.flag(dig(r.usage, "s7_unattributed") != 0, "C5", "FAIL", "coverage.unattributed %s" % dig(r.usage, "s7_unattributed"))
 
+def scan(r, name, where):
+    """One C3 scan: hits fail; no scan (None) is INCONCLUSIVE, never a PASS."""
+    n = r.hits(name)
+    r.flag(n != 0, "C3", "FAIL" if n else "INCONCLUSIVE", "%s hits in %s" % (n, where) if n else "no scan of " + where)
+
 def secrets(r):
     """C3. The known-value and shape scans ran in the box; only their counts reach this folder."""
-    scans = [("secrets", "the local record and the run's files"), ("secrets-out", "the box's output folder"),
-             ("secrets-conductor", "the conductor's run folder (its own secrets, section 7)")]
-    if r.meta.get("push") == "tested":
-        scans.append(("secrets-git", "the project's git objects"))
-    for name, where in scans:
-        n = r.hits(name)
-        r.flag(n != 0, "C3", "FAIL" if n else "INCONCLUSIVE", "%s hits in %s" % (n, where) if n else "no scan of " + where)
+    for name, where in SCANS + ((("secrets-git", "the project's git objects"),) if r.meta.get("push") == "tested" else ()):
+        scan(r, name, where)
     r.flag("secrets" in r.failed, "C3", "FAIL", "secrets fail in the verifier report: %s" % r.failed.get("secrets"))
     r.flag(r.meta.get("known_box") is not True, "C3", "INCONCLUSIVE", "the run certificate key is not in the known values")
     # Section 5: the setup-check script printed .env.local. Its unmasked no-shape value (plain hits) or a
@@ -503,7 +525,7 @@ def facts(r):
 def watcher(r):
     """Section 3.1: owner lines that need a human read, for report.txt only, never a check."""
     out = ["%s %s exit %s: %s" % (f.get("kind"), f.get("script"), f.get("exit"), "output withheld (known values unreadable)"
-                                  if str(f.get("output")).startswith("withheld") else "read exec/%s.txt" % f.get("script"))
+                                  if f.get("withheld") else "read exec/%s.txt" % f.get("script"))
            for f in r.faults if f.get("kind") in WATCHER and f.get("exit") != 0]
     if r.meta.get("case") != "dodger":
         return out

@@ -365,24 +365,52 @@ class CaseRows(unittest.TestCase):
 
 class PreRows(unittest.TestCase):
     """Section 3.1, pre scripts the record decides: proxy-setting.sh passes when start refused and named the file and
-    key; stale-gateway.sh fails when the daemon lived after goalcup start (PRD-11 acceptance 4 and 5)."""
+    key, with the output and conductor scans read; stale-gateway.sh fails when the daemon lived after goalcup start or a
+    daemon process was left after exit, and says nothing without a daemon that ran (PRD-11 acceptance 4 and 5)."""
 
-    def row(self, script, lines):
-        return evaluate({"meta.json": {"connector": "qwen-code", "case": "direct", "variant": ["pre " + script], "server": "off"},
-                         "watch/faults.jsonl": lines})
+    SCANNED = {"verify/exits.json": {"secrets-out": 0}, "verify/secrets-conductor.json": {"hits": 0}}
+
+    def row(self, script, lines, scanned=True, worked=False, **files):
+        pre = {"kind": "pre", "script": script, "exit": 0}
+        meta = {"connector": "qwen-code", "case": "direct", "variant": ["pre " + script], "server": "off", "known_box": True}
+        if worked:  # the harness did work, so the faults slot is the daemon's alone
+            meta["commits_since_start"], files["status.json"] = 1, {"written": {"model_requests": 3}}
+        return evaluate({"meta.json": meta, "watch/faults.jsonl": [pre] + lines, **(self.SCANNED if scanned else {}), **files})
 
     def test_start_refusal_names_file_and_key(self):
-        said = {"kind": "start-refused", "exit": 1, "named_file": True, "named_key": True}
+        said = {"kind": "start-refused", "exit": 1, "named_file": True, "named_key": True, "value_shown": False}
         self.assertEqual(self.row("proxy-setting.sh", [said])["result"], "PASS")
-        for bad in (dict(said, named_key=False), dict(said, exit=0)):
+        for bad in (dict(said, named_key=False), dict(said, exit=0), dict(said, value_shown=True)):
             self.assertEqual(self.row("proxy-setting.sh", [bad])["result"], "FAIL", bad)
         self.assertEqual(self.row("proxy-setting.sh", [])["result"], "INCONCLUSIVE")  # start never ended
 
+    def test_start_refusal_with_no_scan_is_not_a_pass(self):  # point 4: no scan of the box's output is no evidence
+        said = {"kind": "start-refused", "exit": 1, "named_file": True, "named_key": True, "value_shown": False}
+        got = self.row("proxy-setting.sh", [said], scanned=False)
+        self.assertEqual((got["result"], got["checks"]["C3"]), ("INCONCLUSIVE", "INCONCLUSIVE"))
+        hit = self.row("proxy-setting.sh", [said], **{"verify/exits.json": {"secrets-out": 2}})
+        self.assertEqual((hit["result"], hit["checks"]["C3"]), ("FAIL", "FAIL"))
+
+    def test_start_that_went_on_recording_fails(self):  # acceptance 4: the very defect the row exists to find
+        entry = {"entry": "e1", "checks": [], "counts": {"model_requests": 3}}
+        got = self.row("proxy-setting.sh", [], **{"verify/check-local.json": {"entries": [entry]}})
+        self.assertEqual(got["faults"], "FAIL")
+
     def test_stale_daemon_must_be_gone_after_start(self):
         look = {"kind": "daemon-check", "script": "stale-gateway.sh"}
-        for alive in (False, True):
-            got = self.row("stale-gateway.sh", [dict(look, alive=alive)])
-            self.assertEqual((got["result"] == "FAIL", got["faults"] == "FAIL"), (alive, alive), alive)
+        for alive, left in ((False, False), (True, False), (False, True)):
+            got = self.row("stale-gateway.sh", [dict(look, alive=alive), dict(look, alive=False, left=left)])
+            self.assertEqual((got["result"] == "FAIL", got["faults"] == "FAIL"), (alive or left,) * 2, (alive, left))
+
+    def test_stale_row_needs_a_daemon_that_ran_and_a_look_after_exit(self):
+        look = {"kind": "daemon-check", "script": "stale-gateway.sh", "alive": False}
+        one = [{"kind": "pre", "script": "stale-gateway.sh", "exit": 1}]  # the daemon exited at once
+        for lines in ([], one + [dict(look, left=False)], [dict(look)]):
+            got = evaluate({"meta.json": {"connector": "hermes-cli", "case": "direct", "server": "off", "variant": ["pre stale-gateway.sh"]},
+                            "watch/faults.jsonl": lines})
+            self.assertEqual(got["faults"], "INCONCLUSIVE", lines)
+        ran = self.row("stale-gateway.sh", [dict(look), dict(look, left=False)], worked=True)
+        self.assertEqual(ran["faults"], "PASS")
 
 
 class StepRules(unittest.TestCase):
@@ -390,6 +418,41 @@ class StepRules(unittest.TestCase):
         pad.parse_steps(["exec refusal-curl.sh@1"], 20)
         with self.assertRaises(pad.Usage):
             pad.parse_steps(["exec refusal-curl.sh@1"], 8)  # cycle: it would run to minute 13
+
+    def test_long_exec_must_not_hold_cycles_own_crash_back(self):
+        pad.parse_steps(["exec long-tunnel.sh@1"], 8, cycle=True)  # ends at minute 3
+        with self.assertRaises(pad.Usage):
+            pad.parse_steps(["exec long-tunnel.sh@2"], 8, cycle=True)  # would hold the crash at minute 3 to about 4
+
+
+class DaemonLook(unittest.TestCase):
+    """pad-run: a process with the harness file's daemon command alive after exit is seen; the pane's words become booleans."""
+
+    def run_for(self, **harness):
+        run = self.enterContext(tempfile.TemporaryDirectory())
+        for name, doc in (("settings.json", {"harness": harness}), ("state.json", {})):
+            with open(os.path.join(run, name), "w") as f:
+                json.dump(doc, f)
+        return run, padrun.Run(run, "verify")
+
+    def test_left_daemon_is_seen(self):
+        child = subprocess.Popen(["sleep", "613"])
+        self.addCleanup(child.wait)
+        self.addCleanup(child.kill)
+        self.assertTrue(self.run_for(daemon="sleep 613")[1].daemon_left())
+        self.assertFalse(self.run_for(daemon="sleep 614")[1].daemon_left())
+        self.assertFalse(self.run_for()[1].daemon_left())  # no daemon in the harness file
+
+    def test_refusal_records_what_the_screen_showed(self):
+        run, r = self.run_for()
+        seen = []
+        def fake(argv, **kw):
+            out = "1 1" if argv[1] == "display-message" else "settings.json has a proxy key: http://127.0.0.1:9"
+            return subprocess.CompletedProcess(argv, 0, out, "")
+        with mock.patch.object(padrun, "sh", fake), mock.patch.object(r, "fault", lambda kind, **kw: seen.append((kind, kw))), \
+                mock.patch.object(r, "pane", lambda keep=True, tag="": fake(["tmux", "capture-pane"]).stdout):
+            r.refusal()
+        self.assertEqual(seen[0][1], {"exit": 1, "named_file": True, "named_key": True, "value_shown": True})
 
 
 if __name__ == "__main__":

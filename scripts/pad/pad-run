@@ -314,13 +314,15 @@ class Run:
         return got
 
     def refusal(self):
-        """A goalcup start that ended before recording began (the pane is dead): one faults.jsonl line with its exit and
-        whether the screen named settings.json and proxy, the words PRD-11 acceptance 4 wants. Booleans, never a value."""
+        """A goalcup start that ended before recording began (the pane is dead): one faults.jsonl line with its exit,
+        whether the screen named settings.json and proxy, and whether it printed the pad's proxy value (PRD-11 acceptance
+        4 wants the first two and not the third). Booleans only."""
         dead = sh(["tmux", "display-message", "-p", "-t", self.tmux, "#{pane_dead} #{pane_dead_status}"]).stdout.split()
         if dead[:1] == ["1"]:
             text = self.pane(False)
             self.fault("start-refused", exit=int(dead[1]) if dead[1:] and dead[1].isdigit() else None,
-                       named_file="settings.json" in text, named_key=bool(re.search(r"\bproxy\b", text)))
+                       named_file="settings.json" in text, named_key=bool(re.search(r"\bproxy\b", text)),
+                       value_shown=bool(re.search(r"127\.0\.0\.1:9(?!\d)", text)))  # proxy-setting.sh's own value
 
     def paste(self, _):
         self.need("goalcup")
@@ -471,7 +473,7 @@ class Run:
         values = self.known()
         if values is not None:
             write(self.path("exec", name + ".txt"), replace_known(out, values)[0], 0o644)
-        self.fault(kind, script=name, **kw, exit=code, output="kept" if values is not None else "withheld: known values unreadable")
+        self.fault(kind, script=name, **kw, exit=code, withheld=values is None)
         if code is None:
             raise Step("timeout", "%s %s killed at the step's limit" % (kind, name))
         return ("ok", "%s %s exit 0" % (kind, name)) if code == 0 else ("FAIL", "%s %s exit %d" % (kind, name, code))
@@ -654,7 +656,7 @@ class Run:
         """Section 8 (the server's copy is the conductor's fetched/<entry>/, S13; the git scan needs a push token, none yet),
         each inside the step's limit (a timeout is an exit "timeout"); then meta-box.json, scan and tar, whatever happened."""
         self.stop_watch()  # the watch's last line first, so the tar holds a whole watch/
-        self.daemon_check()
+        self.daemon_check(True)
         e, exits, result, note = self.entry(), {}, None, ""
         self.st["screen_known"] = self.st.get("screen_known", 0) + (loads(path=self.path("watch", "watch.json")).get("screen_known") or 0)
         try:
@@ -679,9 +681,10 @@ class Run:
         keys = ("harness_version", "run", "entry", "screen_known", "end_screen_requests", "commits_since_start", "plain_planted",
                 "known_box")
         write(self.path("meta-box.json"), json.dumps({k: self.st.get(k, 0 if k == "screen_known" else None) for k in keys}), 0o644)
-        if result is None:  # last: every file the tar carries, which is all the conductor's files are built from
+        if tool("goalcup-verify"):  # last, whatever happened above (it needs no entry): every file the tar carries
             exits["secrets-out"] = self.verify_cmd(["secrets", "--known", "known"] + [n for n in OUT if os.path.exists(self.path(n))],
                                                    "secrets-out.json")[0]
+        if result is None:
             result = ("ok", "exits " + ", ".join("%s %s" % kv for kv in exits.items()) + note)
         write(self.path("verify", "exits.json"), json.dumps(exits), 0o644)  # the exits of whatever ran
         # The known files go after the scan; the home only once nothing reads it (else the wipe step takes it).
@@ -708,11 +711,27 @@ class Run:
         except OSError:
             return None
 
-    def daemon_check(self):
+    def daemon_left(self):
+        """Whether any other process has the harness file's `daemon` command in its command line: the stale daemon, one
+        it forked, or one goalcup started, still alive after the harness exited (PRD-11 acceptance 5)."""
+        want = str(self.h.get("daemon") or "").strip()
+        for d in [d for d in os.listdir("/proc") if d.isdigit() and int(d) != os.getpid()] if want else []:
+            try:
+                with open("/proc/%s/cmdline" % d, "rb") as f:
+                    line = f.read().replace(b"\0", b" ").decode(errors="replace")
+            except OSError:
+                continue
+            if want in line and alive(int(d)):
+                return True
+        return False
+
+    def daemon_check(self, end=False):
         """PRD-11 acceptance 5: goalcup start's `before` stops the stale daemon. One faults.jsonl line per look (after
-        start, at verify); check.py fails the row when the daemon lived. Nothing when stale-gateway.sh left no pid."""
+        start, and at verify with `left`: no such process may live after exit); check.py fails the row when either lived.
+        Nothing when stale-gateway.sh left no pid."""
         if read_pid(self.path("exec", "stale-gateway.pid")) is not None:
-            self.fault("daemon-check", script="stale-gateway.sh", alive=self.daemon_pid() is not None)
+            self.fault("daemon-check", script="stale-gateway.sh", alive=self.daemon_pid() is not None,
+                       **({"left": self.daemon_left()} if end else {}))
 
     def stop_daemon(self):
         """The cleanup after daemon_check: kills the daemon goalcup's start did not stop -> a line for the wipe step, or None."""

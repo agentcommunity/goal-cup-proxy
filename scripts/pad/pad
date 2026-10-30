@@ -128,7 +128,7 @@ def script_name(raw):  # "exec refusal-curl.sh@1" -> "refusal-curl.sh"
     return raw.split()[1].split("@")[0]
 
 
-def parse_steps(steps, minutes):
+def parse_steps(steps, minutes, cycle=False):
     out = []
     for raw in steps:
         if not isinstance(raw, str):
@@ -149,7 +149,7 @@ def parse_steps(steps, minutes):
             out.append(("calls", int(raw.split()[1]), raw))
         else:
             raise Usage("unknown step %r" % raw)
-    timed = sorted((m, raw) for kind, m, raw in out if kind == "timed")
+    timed = sorted({(m, raw) for kind, m, raw in out if kind == "timed"} | ({(3, "kill-recorder@3")} if cycle else set()))  # cycle's own crash
     for i, (m, raw) in enumerate(timed):  # the walk runs steps one after another: an exec holds the later ones back
         long = LONG_EXEC.get(script_name(raw), 0) if raw.startswith("exec ") else 0
         if long and m + long > minutes:  # it would hold the seal back
@@ -200,7 +200,7 @@ def load_settings(raw, pad):
             raise Usage("%s is a string" % k)
     if not isinstance(s["steps"], list):
         raise Usage("steps is a list")
-    s["plan"] = parse_steps(s["steps"], s["minutes"])
+    s["plan"] = parse_steps(s["steps"], s["minutes"], s["mode"] == "cycle")
     if s["mode"] == "cycle":  # cycle owns its crash at 3; its stream wait and restart can run past 4:00
         s["plan"] = [("timed", 3, "kill-recorder@3")] + [p for p in s["plan"] if p[2] != "kill-recorder@3"]
         for _, m, r in s["plan"]:
