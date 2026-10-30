@@ -128,7 +128,11 @@ impl BodyDecoder {
     /// none, the body passes through in pieces.
     pub fn new(codings: Vec<Coding>, rec: &Recorder) -> BodyDecoder {
         BodyDecoder {
-            stages: codings.into_iter().rev().map(|c| Stage::new(c, rec)).collect(),
+            stages: codings
+                .into_iter()
+                .rev()
+                .map(|c| Stage::new(c, rec))
+                .collect(),
             guard: Guard {
                 rec: rec.clone(),
                 held: Vec::new(),
@@ -552,23 +556,30 @@ struct BrotliHeap {
     over: Option<u64>,
 }
 
-struct BrotliCells<T>(Box<[T]>, Option<Reserved>);
+/// One allocation and its count in the guard, released together on drop.
+struct BrotliCells<T> {
+    cells: Box<[T]>,
+    _counted: Option<Reserved>,
+}
 
 impl<T> Default for BrotliCells<T> {
     fn default() -> Self {
-        BrotliCells(Box::default(), None)
+        BrotliCells {
+            cells: Box::default(),
+            _counted: None,
+        }
     }
 }
 
 impl<T> SliceWrapper<T> for BrotliCells<T> {
     fn slice(&self) -> &[T] {
-        &self.0
+        &self.cells
     }
 }
 
 impl<T> SliceWrapperMut<T> for BrotliCells<T> {
     fn slice_mut(&mut self) -> &mut [T] {
-        &mut self.0
+        &mut self.cells
     }
 }
 
@@ -581,8 +592,10 @@ impl<T: Clone + Default> Allocator<T> for BrotliHeap {
         if self.strict && room < bytes {
             self.over.get_or_insert(room);
         }
-        let cells = vec![T::default(); len].into_boxed_slice();
-        BrotliCells(cells, Some(self.rec.reserve(bytes)))
+        BrotliCells {
+            cells: vec![T::default(); len].into_boxed_slice(),
+            _counted: Some(self.rec.reserve(bytes)),
+        }
     }
 
     fn free_cell(&mut self, _cells: BrotliCells<T>) {}

@@ -204,7 +204,10 @@ fn a_window_over_room_is_not_decoded() {
     let mut out = |b: Bytes| pieces.push(b);
     let mut dec = BodyDecoder::new(parse_codings(&["br"]).unwrap(), &rec);
     assert_eq!(dec.push(&wire, &mut out), Step::Ok);
-    assert!(LARGE_ROOM - rec.room() >= 1 << 22, "the whole window is counted");
+    assert!(
+        LARGE_ROOM - rec.room() >= 1 << 22,
+        "the whole window is counted"
+    );
     assert_eq!(dec.finish(), Step::Ok);
     assert!(pieces.concat() == plain);
     assert_eq!(rec.room(), LARGE_ROOM);
@@ -220,7 +223,10 @@ fn a_flushed_brotli_body_counts_its_whole_window() {
     let mut dec = BodyDecoder::new(parse_codings(&["br"]).unwrap(), &rec);
     assert_eq!(dec.push(&BR_FLUSHED[..1024], &mut out), Step::Ok);
     assert!(!pieces.is_empty());
-    assert!(LARGE_ROOM - rec.room() >= 1 << 22, "the whole window is counted");
+    assert!(
+        LARGE_ROOM - rec.room() >= 1 << 22,
+        "the whole window is counted"
+    );
     drop(dec);
     assert_eq!(rec.room(), LARGE_ROOM);
 
