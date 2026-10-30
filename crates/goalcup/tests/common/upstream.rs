@@ -607,20 +607,20 @@ async fn h2_stream(
     let head = resp.body(()).expect("a response head");
     let mut send = respond.send_response(head, pieces.is_empty())?;
     let (written, limit) = (&cut.0, shared.script.close_after);
+    // Bytes left before the cut once `w` are sent; with no limit, all of them.
+    let left = |w: u64| limit.map_or(u64::MAX, |l| l.saturating_sub(w));
     for (i, piece) in pieces.iter().enumerate() {
         let mut rest = &piece[..];
         while !rest.is_empty() {
             // Only what the windows let out now, so a counted byte is not left queued at the cut.
-            let room = limit.map_or(u64::MAX, |l| l.saturating_sub(written.load(SeqCst)));
-            send.reserve_capacity(rest.len().min(room as usize));
+            send.reserve_capacity(rest.len().min(left(written.load(SeqCst)) as usize));
             let Some(cap) = std::future::poll_fn(|cx| send.poll_capacity(cx)).await else {
                 return Ok(());
             };
             let want = cap?.min(rest.len()) as u64;
             // Claimed before it goes, so streams that overlap send `close_after` bytes in all.
-            let share = |w: u64| limit.map_or(want, |l| want.min(l.saturating_sub(w)));
-            let w = written.update(SeqCst, SeqCst, |w| w + share(w));
-            let n = share(w) as usize;
+            let w = written.update(SeqCst, SeqCst, |w| w + want.min(left(w)));
+            let n = want.min(left(w)) as usize;
             let end = i + 1 == pieces.len() && n == rest.len();
             send.send_data(bytes::Bytes::copy_from_slice(&rest[..n]), end)?;
             rest = &rest[n..];
