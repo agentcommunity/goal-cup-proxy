@@ -145,7 +145,11 @@ fn url_password_masks_only_the_password() {
     let escaped = format!(r"https:\/\/u:{pass}@h");
     assert_eq!(span(url, escaped.as_bytes()), Some(pass.as_bytes()));
 
-    for left_alone in ["ssh://git@github.com", "https://host:443/path", "npm:react@18"] {
+    for left_alone in [
+        "ssh://git@github.com",
+        "https://host:443/path",
+        "npm:react@18",
+    ] {
         assert_eq!(span(url, left_alone.as_bytes()), None, "{left_alone}");
     }
 }
