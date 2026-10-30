@@ -154,7 +154,7 @@ fn read(path: &Path) -> Option<Value> {
 }
 
 /// The values at a dotted key; a segment may be or hold a `*` glob (any key or index, `*_URL`).
-pub(super) fn at<'a>(doc: &'a Value, key: &str) -> Vec<&'a Value> {
+fn at<'a>(doc: &'a Value, key: &str) -> Vec<&'a Value> {
     let mut found = vec![doc];
     for seg in key.split('.') {
         let glob = pattern::parse(seg).ok();
@@ -214,9 +214,10 @@ fn dotenv(text: &str) -> Value {
 }
 
 /// Block mappings and sequences nested by indentation (a `- ` item at its key's indent or deeper),
-/// scalars as strings; a flow collection stays text and a block scalar (`|`, `>`) is left out.
+/// scalars as strings; an empty flow `[]` or `{}` is an empty list or map, any other flow
+/// collection stays text, and a block scalar (`|`, `>`) is left out.
 /// The small block lookup of PRD-17 N7.
-pub(super) fn yaml(text: &str) -> Value {
+fn yaml(text: &str) -> Value {
     let mut root = Value::Object(Map::new());
     let (mut open, mut block) = (Vec::<(usize, String)>::new(), usize::MAX);
     for line in text.lines() {
@@ -238,7 +239,7 @@ pub(super) fn yaml(text: &str) -> Value {
                 continue;
             };
             open.push((indent + 1, format!("{parent}/{}", list.len())));
-            list.push(scalar.map_or(Value::Null, Value::String));
+            list.push(scalar.unwrap_or(Value::Null));
             line.replace_range(indent..=indent, " ");
         }
         let Some((indent, key, rest)) = yaml_key(&line) else {
@@ -259,7 +260,7 @@ pub(super) fn yaml(text: &str) -> Value {
         } else if rest.starts_with(['|', '>']) {
             block = indent;
         } else if let Some(scalar) = yaml_scalar(rest) {
-            map.insert(key, Value::String(scalar));
+            map.insert(key, scalar);
         }
     }
     root
@@ -284,12 +285,17 @@ pub(super) fn yaml_key(line: &str) -> Option<(usize, String, &str)> {
     plain.then(|| (line.len() - body.len(), key.to_string(), &body[colon + 1..]))
 }
 
-/// A plain or quoted scalar on one line; `None` for anything else.
-fn yaml_scalar(s: &str) -> Option<String> {
+/// A plain or quoted scalar on one line, a plain `[]` or `{}` as an empty list or map; `None`
+/// for anything else.
+fn yaml_scalar(s: &str) -> Option<Value> {
     if let Some(quote) = s.chars().next().filter(|c| *c == '"' || *c == '\'') {
-        return s[1..].split_once(quote).map(|(inner, _)| inner.to_string());
+        return s[1..].split_once(quote).map(|(inner, _)| Value::from(inner));
     }
     let plain = s.find(" #").map_or(s, |at| s[..at].trim_end());
-    let null = plain.is_empty() || plain == "~" || plain.eq_ignore_ascii_case("null");
-    (!null).then(|| plain.to_string())
+    match plain {
+        "[]" => Some(json!([])),
+        "{}" => Some(json!({})),
+        _ if plain.is_empty() || plain == "~" || plain.eq_ignore_ascii_case("null") => None,
+        _ => Some(Value::from(plain)),
+    }
 }

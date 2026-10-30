@@ -201,12 +201,12 @@ fn write_row(file: &Path, key: &str, value: &str) -> Result<(), &'static str> {
     let parts: Vec<&str> = key.split('.').collect();
     let ext = file.extension().and_then(|x| x.to_str()).unwrap_or("");
     let out = if matches!(ext, "yaml" | "yml") {
-        // Already set: the file is not rewritten.
-        let have = Value::String(value.into());
-        if hints::at(&hints::yaml(text), key).contains(&&have) {
+        let out = yaml_set(text, &parts, &format!(" {leaf}"))?;
+        if out == text {
+            // Already set as written: the file is not rewritten.
             return Ok(());
         }
-        yaml_set(text, &parts, &format!(" {leaf}"))?
+        out
     } else {
         let doc = match ext {
             // Comments and trailing commas read as `hints::read` reads them.

@@ -160,16 +160,18 @@ fn a_refuse_if_set_hit_names_file_and_key_never_the_value() {
 }
 
 #[test]
-fn false_is_a_value_that_refuses_in_every_format() {
+fn false_is_a_value_that_refuses_in_every_format_and_empty_is_unset() {
     let dir = tempfile::tempdir().unwrap();
     let (d, home) = (dir.path(), dir.path().join("home"));
     let files = [
-        ("a.json", "{\"x\":{\"on\":false}}", "x.on"),
-        ("a.toml", "[x]\non = false\n", "x.on"),
-        ("a.yaml", "x:\n  on: false\n", "x.on"),
-        (".env", "export ON=false\n", "ON"),
+        ("a.json", "{\"x\":{\"on\":false}}", "x.on", true),
+        ("a.toml", "[x]\non = false\n", "x.on", true),
+        ("a.yaml", "x:\n  on: false\n", "x.on", true),
+        (".env", "export ON=false\n", "ON", true),
+        ("a.yaml", "x:\n  on: []\n", "x.on", false),
+        ("a.yaml", "x:\n  on: {}\n", "x.on", false),
     ];
-    for (file, text, key) in files {
+    for (file, text, key, refused) in files {
         let row = format!("{{ file = \"{{home}}/{file}\", keys = [\"{key}\"] }}");
         let toml = format!("id = \"f\"\nname = \"F\"\nprogram = \"f\"\nrefuse_if_set = [{row}]\n");
         let path = d.join("f.toml");
@@ -187,7 +189,8 @@ fn false_is_a_value_that_refuses_in_every_format() {
         };
         let refusal = connector::plan(&c, &env, &home).refusal;
         let (file, key) = (home.join(file), key.to_string());
-        assert_eq!(refusal, Some(Refusal::SettingSet { file, key }));
+        let want = refused.then_some(Refusal::SettingSet { file, key });
+        assert_eq!(refusal, want);
         std::fs::remove_dir_all(&home).unwrap();
     }
 }

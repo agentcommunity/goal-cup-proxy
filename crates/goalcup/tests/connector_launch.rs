@@ -208,4 +208,14 @@ fn settings_are_typed_keep_other_keys_and_never_follow_a_link() {
     std::fs::write(d.join("target.json"), "{}").unwrap();
     assert_eq!(connector::write_settings(&home, &rows).len(), rows.len());
     assert_eq!(std::fs::read(d.join("target.json")).unwrap(), b"{}");
+    // YAML: a 1.1 loader reads a bare `off` as a bool and a quoted "false" as a string.
+    let hermes = connector::load("hermes-cli", None).unwrap();
+    let rows = [hermes.no_prompts, hermes.update_off].concat();
+    let yaml = home.join("config.yaml");
+    std::fs::write(&yaml, "approvals:\n  mode: off\nupdates:\n  check: \"false\"\n").unwrap();
+    assert!(connector::write_settings(&home, &rows).is_empty());
+    let text = std::fs::read_to_string(&yaml).unwrap();
+    assert_eq!(text, "approvals:\n  mode: \"off\"\nupdates:\n  check: false\n");
+    assert!(connector::write_settings(&home, &rows).is_empty());
+    assert_eq!(std::fs::read_to_string(&yaml).unwrap(), text);
 }
