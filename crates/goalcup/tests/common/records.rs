@@ -40,13 +40,16 @@ pub fn sealed(dir: &Path, records: &[Record]) -> Durable {
 pub fn open(dir: &Path, records: &[Record]) -> Durable {
     let (mut w, n) = write(dir, options(), records);
     w.link(at(n)).expect("link");
-    w.sync().expect("sync").expect("a durable point after a link")
+    w.sync()
+        .expect("sync")
+        .expect("a durable point after a link")
 }
 
 /// Opens a writer with `opts` and writes `records`; returns it and the moment count used.
 pub fn write(dir: &Path, opts: PartOptions, records: &[Record]) -> (PartWriter, u64) {
     let mut n = 0;
-    let mut w = PartWriter::open(dir, opts, ENTRY, BOOT_ID, at(n)).expect("open the part writer");
+    let mut w =
+        PartWriter::open(dir, opts, ENTRY, BOOT_ID, at(n)).expect("open the part writer");
     for r in records {
         match r {
             Record::Part { .. } => panic!("records::write: PART is written by the writer"),

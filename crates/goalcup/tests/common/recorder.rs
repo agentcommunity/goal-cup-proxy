@@ -15,7 +15,7 @@ pub fn start(room: u64) -> (Recorder, Calls) {
 pub fn data_of(calls: &Calls, sid: Sid) -> Vec<u8> {
     let mut out = Vec::new();
     for call in calls.all() {
-        if let Call::Data { sid: s, bytes, .. } = call
+        if let Call::Data(s, _, _, bytes) = call
             && s == sid
         {
             out.extend_from_slice(&bytes);
@@ -29,6 +29,6 @@ pub fn gaps(calls: &Calls) -> Vec<Call> {
     calls
         .all()
         .into_iter()
-        .filter(|c| matches!(c, Call::Gap { .. }))
+        .filter(|c| matches!(c, Call::Gap(..)))
         .collect()
 }
