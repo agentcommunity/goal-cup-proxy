@@ -110,7 +110,7 @@ pub struct LaunchPlan {
     pub argv: Vec<String>,
     /// The complete harness environment, minus the port and the CA paths (`finish_env`).
     pub env: BTreeMap<String, String>,
-    /// The isolated home, created.
+    /// The isolated home, created unless `refusal` is a held lock.
     pub home: PathBuf,
     /// Held as long as the plan lives.
     pub lock: HomeLock,
@@ -232,29 +232,23 @@ pub fn plan(connector: &Connector, env: &Env, home: &Path) -> LaunchPlan {
         }),
         _ => None,
     };
-
-    // The participant list (`record-hosts.txt`) is read by the hosts slice.
     let mut hosts = connector.hosts.clone();
+    hosts.add_participant(&env.goalcup_home);
     let (config, notes) = hints::collect(connector, env, home);
     hosts.add_config(config);
     hosts.add_never(&env.server_host);
-    for own in hosts::OWN_SERVER {
-        hosts.add_never(own);
-    }
 
+    let rows = connector.native.iter();
     let native = NativeSources(
-        connector
-            .native
-            .iter()
-            .map(|row| NativeSource {
-                name: row.name.clone(),
-                root: PathBuf::from(fill(&row.root)),
-                pattern: row.pattern.clone(),
-                form: row.form,
-                since: env.run_start,
-                warn_missing: row.warn_missing,
-            })
-            .collect(),
+        rows.map(|row| NativeSource {
+            name: row.name.clone(),
+            root: PathBuf::from(fill(&row.root)),
+            pattern: row.pattern.clone(),
+            form: row.form,
+            since: env.run_start,
+            warn_missing: row.warn_missing,
+        })
+        .collect(),
     );
 
     // A row that cannot be written is a log line in the launch slice, never a refusal.
