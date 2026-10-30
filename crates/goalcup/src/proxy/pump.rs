@@ -227,7 +227,9 @@ where
     let Shared { parser, mut stop } = pump.shared.into_inner().unwrap_or_else(|e| e.into_inner());
     if let Some(p) = parser {
         let t = rec.now();
-        let ended = catch_unwind(AssertUnwindSafe(move || p.end(t, reason, down_cut, unsent_up)));
+        let ended = catch_unwind(AssertUnwindSafe(move || {
+            p.end(t, reason, down_cut, unsent_up)
+        }));
         match ended {
             Ok(Some(late)) if stop.is_none() => {
                 if !late.at_close {

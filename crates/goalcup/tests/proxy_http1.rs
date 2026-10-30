@@ -57,7 +57,7 @@ fn exchange(room: u64, up: &[u8], down: &[u8], step: usize) -> Calls {
     let mut p = Http1::new(&rec, CONN);
     feed(&mut p, Dir::Up, up, step);
     feed(&mut p, Dir::Down, down, step);
-    let late = Box::new(p).end(Mono::now(), EndReason::Complete, 0);
+    let late = Box::new(p).end(Mono::now(), EndReason::Complete, false, 0);
     assert_eq!(late, None, "nothing held at the close");
     calls
 }
@@ -371,7 +371,7 @@ fn a_101_hands_the_copied_frames_to_the_websocket_parser() {
         &frame(true, &deflate(&mut cup, b"second up"), key),
         1,
     );
-    assert_eq!(Box::new(p).end(Mono::now(), EndReason::Complete, 0), None);
+    assert_eq!(Box::new(p).end(Mono::now(), EndReason::Complete, false, 0), None);
 
     assert!(gaps(&calls).is_empty());
     let [(req, _, _)] = opens(&calls, StreamKind::HttpReq).try_into().unwrap();
@@ -416,7 +416,7 @@ fn a_framing_fault_stops_parsing_for_the_connection() {
     };
     assert_eq!((sid, reason), (req, GapReason::DecodeFailed));
     assert_eq!(end_of(&calls, req).0, EndReason::DecodeError);
-    assert_eq!(Box::new(p).end(t, EndReason::Complete, 0), None);
+    assert_eq!(Box::new(p).end(t, EndReason::Complete, false, 0), None);
     assert_eq!(opens(&calls, StreamKind::HttpReq).len(), 1);
     assert_eq!(gaps(&calls).len(), 1);
 }
@@ -471,7 +471,7 @@ fn bytes_held_at_the_close_are_named() {
     p.feed(Dir::Down, t, resp).unwrap();
     p.feed(Dir::Up, t, req).unwrap();
     let late = Box::new(p)
-        .end(Mono::now(), EndReason::Complete, 0)
+        .end(Mono::now(), EndReason::Complete, false, 0)
         .expect("a stop");
     let held = (resp.len() + req.len()) as u64;
     assert_eq!(
@@ -487,7 +487,7 @@ fn bytes_held_at_the_close_are_named() {
     p.feed(Dir::Up, t, up).unwrap();
     p.feed(Dir::Up, Mono::now(), &[0x81; 790]).unwrap();
     let late = Box::new(p)
-        .end(Mono::now(), EndReason::Complete, 0)
+        .end(Mono::now(), EndReason::Complete, false, 0)
         .expect("a stop");
     assert_eq!((late.held, late.since), (790, t));
 
@@ -496,7 +496,7 @@ fn bytes_held_at_the_close_are_named() {
     p.feed(Dir::Up, t, b"GET /sse HTTP/1.1\r\n\r\n").unwrap();
     let down = b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhello\r\n1";
     p.feed(Dir::Down, t, down).unwrap();
-    assert_eq!(Box::new(p).end(t, EndReason::Interrupted, 0), None);
+    assert_eq!(Box::new(p).end(t, EndReason::Interrupted, false, 0), None);
 }
 
 /// A panic (rule 4): the open stream gets its own GAP with the panic tail and ends decode_error.

@@ -17,11 +17,11 @@ use goalcup::proxy::ws::Dir;
 use serde_json::{Value, json};
 use std::future::Future;
 use std::os::fd::AsFd;
+use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, OnceLock};
-use std::time::Duration;
-use std::pin::Pin;
 use std::task::{Context, Poll};
+use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncReadExt as _, AsyncWrite, AsyncWriteExt as _, DuplexStream};
 use tokio::io::{ReadBuf, duplex};
 use tokio::net::{TcpListener, TcpStream};
@@ -549,7 +549,10 @@ async fn cut_close(up: &[u8], down: &[u8], cut: Dir) -> (Vec<(StreamKind, EndRea
         let (none, quiet) = ((Bytes::new(), Bytes::new()), AtomicU64::new(0));
         let p = pump::relay(&r, &mut conn, legs, none, Some(parser), &quiet, None).await;
         conn.end(r.now(), p.reason, None);
-        assert!(!p.upstream_failed, "a cut is a close, not a failure (rule 8)");
+        assert!(
+            !p.upstream_failed,
+            "a cut is a close, not a failure (rule 8)"
+        );
     });
     client.write_all(up).await.unwrap();
     let mut got = vec![0; up.len()];
@@ -558,7 +561,11 @@ async fn cut_close(up: &[u8], down: &[u8], cut: Dir) -> (Vec<(StreamKind, EndRea
     drop(upstream);
     let mut seen = Vec::new();
     client.read_to_end(&mut seen).await.unwrap();
-    assert_eq!((&got[..], &seen[..]), (up, down), "verbatim, and the close passed on");
+    assert_eq!(
+        (&got[..], &seen[..]),
+        (up, down),
+        "verbatim, and the close passed on"
+    );
     drop(client);
     relay.await.unwrap();
     let all = calls.all();
@@ -582,7 +589,10 @@ fn by_kind(mut ends: Vec<(StreamKind, EndReason)>) -> Vec<(StreamKind, EndReason
 
 /// A WebSocket frame of under 126 bytes.
 fn ws_frame(opcode: u8, payload: &[u8], mask: Option<[u8; 4]>) -> Vec<u8> {
-    let mut out = vec![0x80 | opcode, payload.len() as u8 | (u8::from(mask.is_some()) << 7)];
+    let mut out = vec![
+        0x80 | opcode,
+        payload.len() as u8 | (u8::from(mask.is_some()) << 7),
+    ];
     let key = mask.unwrap_or_default();
     if mask.is_some() {
         out.extend_from_slice(&key);
