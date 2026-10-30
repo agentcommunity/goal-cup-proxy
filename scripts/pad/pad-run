@@ -509,7 +509,7 @@ class Run:
         use = loads(r.stdout)
         read = isinstance(pc.dig(use, "s7_models"), list)
         models = [dict(x, model=replace_known(x["model"], self.known() or [])[0]) for x in pc.models(use)]
-        return ("ok" if read else "skip"), ("%d models" % len(models) if read else "spend not read: usage exit %d" % r.returncode
+        return ("ok" if read else "skip"), ("%d models" % len(models) if read else "usage exit %d, no models read" % r.returncode
                                            ), {"models": models, "exit": r.returncode, "read": read}
 
     def seal_now(self, _):

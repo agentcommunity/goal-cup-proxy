@@ -432,7 +432,7 @@ class Run:
             read, models, sealed = result == "ok" and d.get("read") is True, pc.models(d), None
             usd, high = price(models, self.pad.get("rates") or {}, self.price_key) if read else (None, [])
             if not read:
-                self.log("spend not read: %s %s, usage exit %s" % (result, saw, d.get("exit")))
+                self.log("spend not read: %s %s" % (result, saw))
             elif usd >= cap:  # seal-now, then again at every later check until it is sealed
                 self.over_cap = True
                 try:
