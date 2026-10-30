@@ -141,9 +141,7 @@ pub enum ToRecorder {
     /// The harness was spawned.
     Launch(HarnessFacts),
     /// The harness exited; null when it was not ours to wait on.
-    Exit {
-        exit: Option<Exit>,
-    },
+    Exit { exit: Option<Exit> },
     /// Seal now. `outlived`: the Linux children that started after the harness and are still
     /// alive, listed by the watchdog (the subreaper) for the `outlived` note and the sealed
     /// `status.json`; null elsewhere or when none. Absent on a resent seal, which still parses.
@@ -211,7 +209,9 @@ mod tests {
     #[test]
     fn seal_line_outlived() {
         let line = r#"{"line":"seal","reason":"harness_exit","outlived":{"count":2,"programs":["node","sh"]}}"#;
-        let ToRecorder::Seal { reason, outlived } = serde_json::from_str::<ToRecorder>(line).unwrap() else {
+        let ToRecorder::Seal { reason, outlived } =
+            serde_json::from_str::<ToRecorder>(line).unwrap()
+        else {
             panic!("not a seal line");
         };
         assert_eq!(reason, SealReason::HarnessExit);
