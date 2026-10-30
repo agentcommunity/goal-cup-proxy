@@ -1,11 +1,15 @@
-//! What the CLI tests share: a `status.json` (seam S4) built through its JSON form, so a key
-//! PRD-02 adds changes one place. Options left out read as null.
+//! What the CLI tests share: `status.json` (seam S4) and `server.json` fixtures built through their
+//! JSON form, so a key PRD-02 adds changes one place, and the part folder to write them into.
+//! Options left out read as null.
 
 #![allow(dead_code)]
 
+use std::path::{Path, PathBuf};
+
 use goalcup::cli::status::Ctx;
 use goalcup::pipeline::status::{DurableStatus, Losing, Mode, Off, STATUS_V, Status, Written};
-use serde_json::json;
+use serde::Serialize;
+use serde_json::{Value, json};
 
 /// 2026-11-07T10:00:00Z, the `updated` of [`status`].
 pub const T0: u64 = 1_794_045_600;
@@ -21,6 +25,49 @@ pub fn status(mode: Mode) -> Status {
         "writer_idle_ms": 0, "durable": DurableStatus::default(),
     }))
     .expect("a status.json")
+}
+
+/// [`status`] in `mode` with `p` laid over it, as [`patch`] does.
+pub fn with(mode: Mode, p: Value) -> Status {
+    patch(&status(mode), p)
+}
+
+/// `st` with `p` laid over its JSON form object by object: `{"written": {"gaps": 1}}` sets one
+/// count and keeps the rest; a null clears an option.
+pub fn patch(st: &Status, p: Value) -> Status {
+    fn merge(to: &mut Value, from: Value) {
+        match (to, from) {
+            (Value::Object(to), Value::Object(from)) => {
+                for (k, v) in from {
+                    merge(to.entry(k).or_insert(Value::Null), v);
+                }
+            }
+            (to, from) => *to = from,
+        }
+    }
+    let mut v = serde_json::to_value(st).unwrap();
+    merge(&mut v, p);
+    serde_json::from_value(v).expect("a status.json")
+}
+
+/// The `server.json` of a practice run [`RUN`] with the one part [`ENTRY`].
+pub fn server_json() -> Value {
+    json!({
+        "v": 1, "server": null, "run": RUN, "mode": "practice", "deadline": null, "repo": null,
+        "connector": {"id": "agent", "name": "Agent", "source": "builtin"}, "hosts_file": null,
+        "entries": [{"id": ENTRY, "harness_version": null, "resumed": false}],
+    })
+}
+
+/// The folder of part [`ENTRY`] under the goalcup home `home`.
+pub fn part(home: &Path) -> PathBuf {
+    home.join("runs").join(RUN).join(ENTRY)
+}
+
+/// Writes `value` as JSON to `dir/name`, making `dir` first.
+pub fn put(dir: &Path, name: &str, value: &impl Serialize) {
+    std::fs::create_dir_all(dir).unwrap();
+    std::fs::write(dir.join(name), serde_json::to_vec(value).unwrap()).unwrap();
 }
 
 /// Liveness and now (`T0 + age`); the run is open for a day.
