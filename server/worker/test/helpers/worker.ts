@@ -10,8 +10,6 @@ import { fileURLToPath } from "node:url";
 
 const projectDir = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
-export const TEST_SEED = "07".repeat(32);
-
 export interface RunningWorker {
   url: string;
   /** Where wrangler persisted R2 for this Worker (deleted on stop). */
@@ -38,7 +36,6 @@ export async function startWorker(vars: Record<string, string>): Promise<Running
   const allVars: Record<string, string> = {
     DB_BACKEND: "local",
     GITHUB_CHECK: "off",
-    RECEIPT_SIGNING_KEY: TEST_SEED,
     ...vars,
   };
   const args = [

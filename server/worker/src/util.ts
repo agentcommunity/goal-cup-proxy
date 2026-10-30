@@ -65,7 +65,7 @@ export function asObject(v: unknown, what: string): Record<string, unknown> {
   return v as Record<string, unknown>;
 }
 
-/** A string field, 1..max characters, well-formed Unicode (a lone surrogate cannot be signed). */
+/** A string field, 1..max characters, well-formed Unicode (a lone surrogate is not valid UTF-8). */
 export function strField(o: Record<string, unknown>, name: string, max: number, allowEmpty = false): string {
   const v = o[name];
   if (typeof v !== "string") throw malformed(`${name} must be a string.`);
@@ -76,18 +76,11 @@ export function strField(o: Record<string, unknown>, name: string, max: number, 
 }
 
 /**
- * The Goal Cup Proxy's version from a device or run body: `proxy_version` (the current name) or
- * `tracer_version` (the name older releases send). Either is accepted; when both are sent they must
- * be equal. Null is absent, as for other optional fields. At most 64 characters. Stored as
- * `tracer_version` (the database's name, for now).
+ * The Goal Cup Proxy's version from a device or run body: `proxy_version`, 1..64 characters. Stored
+ * as `tracer_version` (the database's column name).
  */
 export function proxyVersionField(o: Record<string, unknown>): string {
-  const p = o.proxy_version == null ? null : strField(o, "proxy_version", 64);
-  const t = o.tracer_version == null ? null : strField(o, "tracer_version", 64);
-  if (p !== null && t !== null && p !== t) throw malformed("proxy_version and tracer_version differ; send one.");
-  const version = p ?? t;
-  if (version === null) throw malformed("proxy_version must be a string.");
-  return version;
+  return strField(o, "proxy_version", 64);
 }
 
 /** An optional boolean field: `fallback` when missing, 400 `malformed` for anything but true or false (null included). */

@@ -10,12 +10,12 @@
 //   * Every write is atomic: it either applies fully against the state the caller saw, or it
 //     reports why not and changes nothing.
 
-import type { Ack, StartReceipt } from "./sign.ts";
 import { addSeconds, formatTime } from "./util.ts";
 
 /** Twenty-four hours after a run ends the server closes it: no upload is accepted after that. */
 export const CLOSE_AFTER_SECONDS = 24 * 3600;
 
+/** `abandoned` is only read: rows from before 1.0 may carry it, and nothing sets it any more. */
 export type RunStatus = "open" | "sealed" | "incomplete" | "abandoned";
 /** `test`: an organizer's test run (allowlisted accounts only, its own event and R2 prefix, deleted in one go). */
 export type RunMode = "competition" | "practice" | "test";
@@ -100,12 +100,12 @@ export interface RunRow {
   chunk_count: number;
 }
 
-/** One segment of a run: its own chain, receipt and seal. Segment 0 is made by `POST /v1/runs`. */
+/** One segment of a run: its own chain and seal. Segment 0 is made by `POST /v1/runs`. */
 export interface EntryRow {
   entry_id: string;
   run_id: string;
   segment: number;
-  // What the open (or continue) call sent; the receipt signs these.
+  // What the open (or continue) call sent.
   connector_id: string;
   manifest_sha256: string;
   connector_dir_sha256: string;
@@ -115,11 +115,9 @@ export interface EntryRow {
   offset: number;
   next_seq: number;
   head: string;
-  last_ack: Ack | null;
   /** Set once, by the final heartbeat. */
   final: FinalRow | null;
   // Set once.
-  receipt: StartReceipt | null;
   seal_sha256: string | null;
   baseline_sha256: string | null;
   sealed_at: string | null;
@@ -142,7 +140,6 @@ export interface ChunkRecord {
   head: string;
   r2_key: string;
   received_at: string;
-  ack: Ack;
 }
 
 /** The facts about the machine goalcup sends: a flat object of strings, numbers, booleans and nulls. */
@@ -206,15 +203,6 @@ export interface ContinueRunArgs {
  * over, abandoned or closed.
  */
 export type ContinueRunResult = ({ kind: "created" | "existing" } & RunAndEntry) | { kind: "conflict" | "closed" | "not_found" };
-
-export type StoreReceiptResult =
-  | { kind: "stored"; receipt: StartReceipt }
-  | { kind: "existing"; receipt: StartReceipt } // same chain_head as the stored one
-  | { kind: "conflict" } // a receipt exists with a different chain_head
-  | { kind: "closed" } // the run is abandoned or incomplete, or the entry is sealed
-  | { kind: "not_found" };
-
-export type AbandonResult = "abandoned" | "has_chunks" | "closed" | "not_found";
 
 export interface CommitChunkArgs {
   member_id: string;
@@ -469,10 +457,8 @@ export interface Db {
   recordFinalCommit(memberId: string, runId: string, commit: string, at: string, detail?: FinalCommitDetail): Promise<void>;
   /** A stored chunk of the entry that starts at `offset`, or null. */
   getChunk(memberId: string, runId: string, entryId: string, offset: number): Promise<ChunkRecord | null>;
-  storeReceipt(memberId: string, runId: string, entryId: string, chainHead: string, receipt: StartReceipt): Promise<StoreReceiptResult>;
-  abandonRun(memberId: string, runId: string, reason: string, at: string): Promise<AbandonResult>;
   /**
-   * Advance the chunk's entry past `chunk` and record the chunk and its ack, only if the entry still
+   * Advance the chunk's entry past `chunk` and record the chunk, only if the entry still
    * stands where the chunk expects; in the same step add `stored_bytes` and one chunk to the entry's counters.
    */
   commitChunk(args: CommitChunkArgs): Promise<CommitChunkResult>;

@@ -11,7 +11,6 @@ import { afterEach, test } from "node:test";
 import { type ChunkRecord, type EntryRow, NOTICE_KINDS, type NoticeArgs, type OpenRunArgs, type RunRow, type TickRun } from "../src/db.ts";
 import { SupabaseDb } from "../src/db-supabase.ts";
 import { ApiError } from "../src/errors.ts";
-import type { StartReceipt } from "../src/sign.ts";
 
 const realFetch = globalThis.fetch;
 afterEach(() => {
@@ -48,14 +47,12 @@ const run: RunRow = {
 };
 const entry: EntryRow = {
   entry_id: "e0000000000000001", run_id: "r0000000000000001", segment: 0, connector_id: "c", manifest_sha256: H("a"), connector_dir_sha256: H("c"),
-  workspace: "/w", session_id: "s", offset: 0, next_seq: 0, head: H("0"), last_ack: null, final: null, receipt: null, seal_sha256: null,
+  workspace: "/w", session_id: "s", offset: 0, next_seq: 0, head: H("0"), final: null, seal_sha256: null,
   baseline_sha256: null, sealed_at: null,
 };
-const receipt = { claims: { chain_head: H("b") }, public_key: "p", signature: "s" } as unknown as StartReceipt;
 const chunk = {
   entry_id: "e0000000000000001", offset: 0, length: 10, sha256: H("1"), first_seq: 0, last_seq: 2, prev: H("0"), head: H("2"),
   r2_key: "traces/x", received_at: "2026-11-06T09:00:00Z",
-  ack: { entry_id: "e0000000000000001", seq: 2, hash: H("2"), acked_at: "2026-11-06T09:00:00Z", server_signature: "sig" },
 } as ChunkRecord;
 
 test("credential -> upload_credential(p_credential_hash, p_now)", async () => {
@@ -150,7 +147,8 @@ test("continueRun -> upload_continue_run", async () => {
 });
 
 test("getRun -> upload_run_position (the entry named, or null for the current one); getChunk -> upload_get_chunk", async () => {
-  const calls = stub({ run, entry }, { run, entry: null }, null, chunk, null);
+  // The SQL still sends the old ack and receipt columns; the Worker keeps only the fields it uses.
+  const calls = stub({ run, entry: { ...entry, last_ack: {}, receipt: null } }, { run, entry: null }, null, { ...chunk, ack: {} }, null);
   assert.deepEqual(await db().getRun("m", "r1", null), { run, entry });
   assert.deepEqual(await db().getRun("m", "r1", "e9"), { run, entry: null });
   assert.equal(await db().getRun("m", "r2", null), null);
@@ -200,31 +198,12 @@ test("a row that does not look like one is a 502 that names the fields, not the 
   }
 });
 
-test("storeReceipt -> upload_issue_receipt", async () => {
-  const calls = stub({ result: "stored", receipt }, { result: "existing", receipt }, { result: "conflict" }, { result: "closed" }, { result: "not_found" });
-  assert.deepEqual(await db().storeReceipt("m", "r1", "e1", H("b"), receipt), { kind: "stored", receipt });
-  assert.deepEqual(await db().storeReceipt("m", "r1", "e1", H("b"), receipt), { kind: "existing", receipt });
-  assert.deepEqual(await db().storeReceipt("m", "r1", "e1", H("d"), receipt), { kind: "conflict" });
-  assert.deepEqual(await db().storeReceipt("m", "r1", "e1", H("b"), receipt), { kind: "closed" });
-  assert.deepEqual(await db().storeReceipt("m", "r1", "e1", H("b"), receipt), { kind: "not_found" });
-  assert.deepEqual(calls[0], { fn: "upload_issue_receipt", args: { p_member_id: "m", p_run_id: "r1", p_entry_id: "e1", p_chain_head: H("b"), p_receipt: receipt } });
-});
-
-test("abandonRun -> upload_abandon_run", async () => {
-  const calls = stub("abandoned", "has_chunks", "closed", "not_found");
-  assert.equal(await db().abandonRun("m", "r1", "why", "t"), "abandoned");
-  assert.equal(await db().abandonRun("m", "r1", "why", "t"), "has_chunks");
-  assert.equal(await db().abandonRun("m", "r1", "why", "t"), "closed");
-  assert.equal(await db().abandonRun("m", "r1", "why", "t"), "not_found");
-  assert.deepEqual(calls[0], { fn: "upload_abandon_run", args: { p_member_id: "m", p_run_id: "r1", p_reason: "why", p_at: "t" } });
-});
-
-test("commitChunk -> upload_commit_chunk(p_chunk, p_stored_bytes)", async () => {
+test("commitChunk -> upload_commit_chunk(p_chunk, p_stored_bytes), with an empty ack, never null", async () => {
   const calls = stub("committed", "conflict", "beyond_final", "closed", "not_found");
   for (const want of ["committed", "conflict", "beyond_final", "closed", "not_found"]) {
     assert.equal(await db().commitChunk({ member_id: "m", run_id: "r1", chunk, stored_bytes: 4321 }), want);
   }
-  assert.deepEqual(calls[0], { fn: "upload_commit_chunk", args: { p_member_id: "m", p_run_id: "r1", p_chunk: chunk, p_stored_bytes: 4321 } });
+  assert.deepEqual(calls[0], { fn: "upload_commit_chunk", args: { p_member_id: "m", p_run_id: "r1", p_chunk: { ...chunk, ack: {} }, p_stored_bytes: 4321 } });
 });
 
 test("a run's stored_bytes and chunk_count come through, are checked, and must be there", async () => {
