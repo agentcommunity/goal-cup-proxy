@@ -141,9 +141,14 @@ pub struct Upstream {
 impl Upstream {
     /// Starts serving `script` on a held port (`ports::held`).
     pub fn start(script: Script) -> Upstream {
-        assert!(!script.answers.is_empty(), "an upstream script needs an answer");
+        assert!(
+            !script.answers.is_empty(),
+            "an upstream script needs an answer"
+        );
         let (listener, addr) = ports::held();
-        listener.set_nonblocking(true).expect("a non-blocking listener");
+        listener
+            .set_nonblocking(true)
+            .expect("a non-blocking listener");
         let pki = TestPki::new("goalcup test upstream CA");
         let tls = match &script.tls {
             Tls::Off => None,
