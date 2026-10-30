@@ -109,7 +109,8 @@ class Walk(unittest.TestCase):
         env = {"CLAUDE_API_KEY": SENTINEL, "AI_GATEWAY_API_KEY": SENTINEL + "gw", **(extra_env or {})}
         with tempfile.TemporaryDirectory() as out, mock.patch.dict(os.environ, env), \
                 mock.patch.object(pad, "call", self.fake_call):
-            runs = pad.run_all(pad.load_settings(dict(BASE, **settings), PADCFG), PADCFG, self.HARNESS, out)
+            s = pad.load_settings(dict(BASE, **settings), PADCFG)
+            runs = pad.run_all(s, PADCFG, self.HARNESS, out, pad.case_list(s, self.HARNESS)[0])
             with open(os.path.join(out, "spend.jsonl")) as f:  # section 7: one ledger line per run, however it ended
                 self.assertEqual(len(f.readlines()), len(runs))
             for root, _, files in os.walk(out):
@@ -341,12 +342,52 @@ class CaseRows(unittest.TestCase):
     def test_exec_row_keeps_the_exit_rule(self):
         lost = dict(code=1, gaps={"tunnel": 1})
         self.assertEqual(self.row("direct", variant=["exec h2-parallel.sh@1"], **lost)["checks"]["C1"], "FAIL")
-        self.assertEqual(self.row("direct", variant=["exec refusal-curl.sh@1"], **lost)["checks"]["C1"], "PASS")
+        refusal = ["exec refusal-curl.sh@1"]  # PRD-03 acceptance 7: only the curl's refused connections may be named
+        self.assertEqual(self.row("direct", variant=refusal, code=1, gaps={"tls_refused": 2})["checks"]["C1"], "PASS")
+        for gaps in ({"tunnel": 1}, {"dropped": 1, "memory_guard": 1}, {"tls_refused": 1, "dropped": 1}):
+            self.assertEqual(self.row("direct", variant=refusal, code=1, gaps=gaps)["checks"]["C1"], "FAIL", gaps)
+
+    def test_dodger_names_only_the_pinned_loss(self):  # section 2: its exit 1 comes from the pinned tunnels alone
+        pinned = {"api.openai.com": {"conns": 2, "listed": "pinned"}}
+        def c1(gaps, tunnels=pinned):
+            return self.row("dodger", code=1, gaps=gaps, tunnel_hosts=tunnels, hosts={check.GATEWAY: 5})["checks"]["C1"]
+        self.assertEqual(c1({"pinned": 2}), "PASS")
+        self.assertEqual(c1({"pinned": 2, "dropped": 1, "tls_refused": 1}), "FAIL")
+        self.assertEqual(c1({"pinned": 2}, dict(pinned, **{"chatgpt.com": {"conns": 1, "listed": "tls_refused"}})), "FAIL")
 
     def test_dodger_without_a_local_log_passes_c2(self):
         tunnels = {"api.openai.com": {"conns": 2, "listed": "pinned"}}
         row = self.row("dodger", code=1, tunnel_hosts=tunnels, hosts={check.GATEWAY: 5})
         self.assertEqual(row["checks"]["C2"], "PASS", row["why"])
+
+
+class PreRows(unittest.TestCase):
+    """Section 3.1, pre scripts the record decides: proxy-setting.sh passes when start refused and named the file and
+    key; stale-gateway.sh fails when the daemon lived after goalcup start (PRD-11 acceptance 4 and 5)."""
+
+    def row(self, script, lines):
+        return evaluate({"meta.json": {"connector": "qwen-code", "case": "direct", "variant": ["pre " + script], "server": "off"},
+                         "watch/faults.jsonl": lines})
+
+    def test_start_refusal_names_file_and_key(self):
+        said = {"kind": "start-refused", "exit": 1, "named_file": True, "named_key": True}
+        self.assertEqual(self.row("proxy-setting.sh", [said])["result"], "PASS")
+        for bad in (dict(said, named_key=False), dict(said, exit=0)):
+            self.assertEqual(self.row("proxy-setting.sh", [bad])["result"], "FAIL", bad)
+        self.assertEqual(self.row("proxy-setting.sh", [])["result"], "INCONCLUSIVE")  # start never ended
+
+    def test_stale_daemon_must_be_gone_after_start(self):
+        look = {"kind": "daemon-check", "script": "stale-gateway.sh"}
+        for alive in (False, True):
+            got = self.row("stale-gateway.sh", [dict(look, alive=alive)])
+            self.assertEqual((got["result"] == "FAIL", got["faults"] == "FAIL"), (alive, alive), alive)
+
+
+class StepRules(unittest.TestCase):
+    def test_long_exec_must_end_before_the_seal(self):
+        pad.parse_steps(["exec refusal-curl.sh@1"], 20)
+        with self.assertRaises(pad.Usage):
+            pad.parse_steps(["exec refusal-curl.sh@1"], 8)  # cycle: it would run to minute 13
 
 
 if __name__ == "__main__":

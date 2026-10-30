@@ -50,12 +50,20 @@ CHECKS = ("C1", "C2", "C3", "C4", "C5", "C6")
 SEAL_SLACK = datetime.timedelta(seconds=120)  # pad's seal-now limit: a seal may begin that long before its line
 WATCHER = ("exec", "pre")  # section 3.1 watcher steps: the owning PRD's pass line decides, not `faults`
 EXPECTS_LOSS = ("refusal-curl.sh",)  # exec scripts whose owner expects a named loss (PRD-03 acceptance 7: a refused call)
+LOSS_GAP = "tls_refused"  # the only loss such a row may name: the curl's own refused connections
+JUDGED = ("proxy-setting.sh", "stale-gateway.sh")  # pre scripts whose row the record decides (section 3.1), as a fault row is
+REFUSES = "proxy-setting.sh"  # the pre script after which goalcup start must refuse: no run is recorded
 GATEWAY = "ai-gateway.vercel.sh"
 COPY = "connector copy"  # pad's variant mark for a connector file from disk (P13): a check row, not a fault
 
 def fault_kinds(meta):
-    """The variant's fault, exec and pre kinds, a connector copy left out."""
-    return [str(v).split("@")[0].split(" ")[0] for v in meta.get("variant") or [] if v != COPY]
+    """The variant's fault kinds: the connector copy and the watcher steps (watchers() reads those) left out."""
+    kinds = [str(v).split("@")[0].split(" ")[0] for v in meta.get("variant") or [] if v != COPY]
+    return [k for k in kinds if k not in WATCHER]
+
+def judged(meta):
+    """Whether the faults slot of the row holds a verdict: a fault kind, or a pre script the record decides."""
+    return bool(fault_kinds(meta)) or any(s in JUDGED for _, s in watchers(meta))
 
 def watchers(meta):
     """The (kind, script) of each exec and pre variant: ("exec", "h2-parallel.sh") for "exec h2-parallel.sh@1"."""
@@ -194,7 +202,11 @@ def judge(r):
     seen = dig(r.status, "s4_requests") if r.reqs is None else r.reqs  # None: no count in the folder
     pin = r.meta.get("model_host") if r.meta.get("case") == "dodger" else None  # meta.json, written by pad
     tunnels = (r.hosts("s6_tunnel_hosts") or {}).get(pin, 0)  # section 2: a dodger's calls ride `pinned` tunnels
+    if ("pre", REFUSES) in watchers(r.meta):
+        return refused(r)
     secrets(r)  # C3 first: a hit is a FAIL whatever else happened
+    r.flag(any(f.get("kind") == "daemon-check" and f.get("alive") for f in r.faults), "faults", "FAIL",
+           "the stale daemon was alive after goalcup start (PRD-11 acceptance 5)")  # whatever else happened, as C3
     work = (seen or tunnels or r.native or dig(r.usage, "s7_native")) and (r.meta.get("commits_since_start") or 0) >= 1
     stop = cause(r) or (None if work else "the harness did no work (commits since start %s, model requests %s)"
                         % (r.meta.get("commits_since_start"), seen))
@@ -207,6 +219,20 @@ def judge(r):
     usage_checks(r, few)
     c6(r)
     faults(r)
+
+def refused(r):
+    """Section 3.1, proxy-setting.sh: goalcup start must refuse and name the file and key, so no run is recorded and the
+    six checks have nothing to read. The row rests on start's exit and the screen's words, recorded by pad-run (no value)."""
+    for name in ("secrets", "secrets-out", "secrets-conductor"):
+        r.flag(r.hits(name), "C3", "FAIL", "%s hits in the %s scan" % (r.hits(name), name))
+    said = [f for f in r.faults if f.get("kind") == "start-refused"]
+    if not said:
+        return r.mark("faults", "INCONCLUSIVE", "goalcup start did not end: no refusal recorded")
+    f = said[-1]
+    r.flag(f.get("exit") in (None, 0), "faults", "FAIL", "start ended with exit %s, not a refusal" % f.get("exit"))
+    r.flag(not (f.get("named_file") and f.get("named_key")), "faults", "FAIL",
+           "start refused but the screen did not name settings.json and proxy")
+    r.why.append("no run was recorded (start refused): C1, C2, C4 to C6 have nothing to read")
 
 def local(r, few):
     """C1 (no missed call) and C4 (record whole, server copy whole and readable)."""
@@ -225,13 +251,15 @@ def local(r, few):
         r.flag(tm not in ("pass", "named") or not (wk in ("pass", "named") or totals), "C1", "INCONCLUSIVE" if None in
                (tm, wk) else "FAIL", "local log check: threads_match %s, wire_keeps_up %s" % (tm, wk))  # None: not in the report
     case(r)
-    # A failed check is already filed under its own C; with none, exit 0, or exit 1 whose only named loss
-    # is an after_stop GAP (PRD-08 R2: a harness still sending after the seal at `minutes`).
-    code, named = dig(r.local, "s6_exit"), {k for k, n in r.gaps()[1].items() if n}
-    after_stop = code == 1 and named == {"after_stop"} and not any(dig(e, "s6_off") for e in r.entries)
-    quiet = not set(fault_kinds(r.meta)) - set(WATCHER) and not any(s in EXPECTS_LOSS for _, s in watchers(r.meta))
-    r.flag(r.meta.get("case") in ("direct", "gateway") and quiet and not r.failed and code != 0 and not after_stop, "C1", "FAIL", "verifier exit %s, the %s case expects 0 or an after_stop GAP"
-           " only" % (code, r.meta.get("case")))
+    # A failed check is already filed under its own C; with none, exit 0, or exit 1 whose only named losses are an
+    # after_stop GAP (PRD-08 R2: a harness still sending after the seal at `minutes`) and, for a row whose script
+    # expects a refused call, tls_refused GAPs (PRD-03 acceptance 7).
+    code, named = dig(r.local, "s6_exit"), {k.split(":")[0] for k, n in r.gaps()[1].items() if n}
+    allowed = {"after_stop"} | ({LOSS_GAP} if any(s in EXPECTS_LOSS for _, s in watchers(r.meta)) else set())
+    explained = code == 1 and named and named <= allowed and not any(dig(e, "s6_off") for e in r.entries)
+    r.flag(r.meta.get("case") in ("direct", "gateway") and not fault_kinds(r.meta) and not r.failed and code != 0 and not explained,
+           "C1", "FAIL", "verifier exit %s, the %s case expects 0 or only the GAPs %s" % (
+               code, r.meta.get("case"), ", ".join(sorted(allowed))))
     own = sorted(i for i in r.failed if i != "secrets")  # `secrets` is C3's
     half = "local checks failed: %s" % ", ".join(own) if own else "no local check failed (keep from the settings)"
     r.flag(own, "C4", "FAIL", half)
@@ -282,6 +310,12 @@ def case(r):
                   if h == own and isinstance(v, dict)} - {"pinned"})  # section 2: every tunnel there has GAP `pinned`
     r.flag(why, "C1", "FAIL", "tunnels to the pinned host %s carry GAP %s, not pinned" % (own, ", ".join(why)))
     r.flag(need("counts.hosts", hs) and hs.get(own), "C1", "FAIL", "the pinned host %s was decrypted" % own)
+    expected = {"pinned", "after_stop"} | (set(DOWN) if fault_kinds(r.meta) else set())  # a fault row's own gaps: faults() judges them
+    loss = sorted(k for k, n in r.gaps()[1].items() if n and k.split(":")[0] not in expected)
+    r.flag(loss, "C1", "FAIL", "the dodger row names a loss other than pinned: " + ", ".join(loss))
+    other = sorted({h for e in r.entries for h, v in items(dig(e, "s6_tunnel_hosts"))
+                    if h != own and isinstance(v, dict) and v.get("listed") is not None})  # a listed host not decrypted
+    r.flag(other, "C1", "FAIL", "tunnels to other listed hosts: " + ", ".join(other))
     if r.usage and r.calls is None:
         for c in ("C2", "C5"):
             r.mark(c, "INCONCLUSIVE", "usage call rows not in the report")
@@ -368,7 +402,7 @@ def fired(r, *kinds):
 def faults(r):
     """Section 3.1, for the two faults built so far; any other kind makes the row INCONCLUSIVE."""
     kinds = fault_kinds(r.meta)
-    for k in sorted(set(kinds) - set(BUILT_FAULTS) - set(WATCHER)):
+    for k in sorted(set(kinds) - set(BUILT_FAULTS)):
         r.mark("faults", "INCONCLUSIVE", "expectations for %s not built yet" % k)
     if not set(kinds) & set(BUILT_FAULTS):
         return
@@ -468,7 +502,8 @@ def facts(r):
 
 def watcher(r):
     """Section 3.1: owner lines that need a human read, for report.txt only, never a check."""
-    out = ["%s %s exit %s: read exec/%s.txt" % (f.get("kind"), f.get("script"), f.get("exit"), f.get("script"))
+    out = ["%s %s exit %s: %s" % (f.get("kind"), f.get("script"), f.get("exit"), "output withheld (known values unreadable)"
+                                  if str(f.get("output")).startswith("withheld") else "read exec/%s.txt" % f.get("script"))
            for f in r.faults if f.get("kind") in WATCHER and f.get("exit") != 0]
     if r.meta.get("case") != "dodger":
         return out
@@ -493,7 +528,7 @@ def evaluate(folder):
         return None
     r = Run(folder, meta)
     judge(r)
-    fault = r.v["faults"] if set(fault_kinds(meta)) - set(WATCHER) else None
+    fault = r.v["faults"] if judged(meta) else None
     got = [r.v[c] for c in CHECKS] + ([fault] if fault else [])
     row = {k: meta.get(k) for k in ("connector", "harness_version", "case", "mode", "prompt", "variant", "where",
                                     "server", "image", "run", "entry", "started", "minutes", "pad_trusted_at")}

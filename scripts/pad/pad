@@ -121,10 +121,14 @@ def check_push_token(path, repo=REPO):
     return path
 
 
-LONG_EXEC = {"refusal-curl.sh": 12, "long-tunnel.sh": 2}  # minutes an exec script runs (11 min wait; 90 s stream)
+LONG_EXEC = {"refusal-curl.sh": 12, "long-tunnel.sh": 2}  # minutes an exec script runs (11 min wait; 90 s stream); also pad-run's exec limit
 
 
-def parse_steps(steps):
+def script_name(raw):  # "exec refusal-curl.sh@1" -> "refusal-curl.sh"
+    return raw.split()[1].split("@")[0]
+
+
+def parse_steps(steps, minutes):
     out = []
     for raw in steps:
         if not isinstance(raw, str):
@@ -136,7 +140,7 @@ def parse_steps(steps):
                 raise Usage("step %r: no such suffix for %s" % (raw, kind))
             out.append(("timed", int(m.group(2)), raw))
         elif re.fullmatch(r"exec [A-Za-z0-9._-]+@\d+|pre [A-Za-z0-9._-]+", raw):  # section 3.1
-            if not os.path.isfile(os.path.join(HERE, "exec", raw.split()[1].split("@")[0])):
+            if not os.path.isfile(os.path.join(HERE, "exec", script_name(raw))):
                 raise Usage("step %r: no such script under scripts/pad/exec/" % raw)
             out.append(("timed", int(raw.rsplit("@", 1)[1]), raw) if raw.startswith("exec") else ("pre", 0, raw))
         elif raw == "keep-going":
@@ -147,7 +151,9 @@ def parse_steps(steps):
             raise Usage("unknown step %r" % raw)
     timed = sorted((m, raw) for kind, m, raw in out if kind == "timed")
     for i, (m, raw) in enumerate(timed):  # the walk runs steps one after another: an exec holds the later ones back
-        long = LONG_EXEC.get(raw.split()[1].split("@")[0], 0) if raw.startswith("exec ") else 0
+        long = LONG_EXEC.get(script_name(raw), 0) if raw.startswith("exec ") else 0
+        if long and m + long > minutes:  # it would hold the seal back
+            raise Usage("step %r runs about %d minutes and would end after the seal at minute %g: use a longer mode" % (raw, long, minutes))
         for n, other in timed[i + 1:]:
             if n < m + long:
                 raise Usage("step %r runs about %d minutes and holds %r (minute %d) back: put it after minute %d" % (raw, long, other, n, m + long))
@@ -194,7 +200,7 @@ def load_settings(raw, pad):
             raise Usage("%s is a string" % k)
     if not isinstance(s["steps"], list):
         raise Usage("steps is a list")
-    s["plan"] = parse_steps(s["steps"])
+    s["plan"] = parse_steps(s["steps"], s["minutes"])
     if s["mode"] == "cycle":  # cycle owns its crash at 3; its stream wait and restart can run past 4:00
         s["plan"] = [("timed", 3, "kill-recorder@3")] + [p for p in s["plan"] if p[2] != "kill-recorder@3"]
         for _, m, r in s["plan"]:
@@ -222,7 +228,7 @@ def runner_limits(s):
     """Seconds per pad-run step, the ones pad-run reads from settings.json: paste has start's, verify works to the
     check step's limit, wipe to a third of cleanup's (the box's rm and list take the other thirds), and wait-recovery
     to 30 s under its step's limit (pad-run starts later, so its own FAIL line comes before the step times out). The
-    two faults and exec (900 s: refusal-curl.sh's 11 minutes fit) count from minute m; keep-going and the detached
+    two faults and exec (the longest LONG_EXEC script plus 3 minutes) count from minute m; keep-going and the detached
     watch from their start."""
     got = {k: step_limit(s, k) for k in ("setup", "pre", "start", "wait-calls", "look", "seal", "wait-upload",
                                          "wait-recovery")}
@@ -230,7 +236,7 @@ def runner_limits(s):
     got["wait-recovery"] -= 30
     return dict(got, paste=got["start"], verify=step_limit(s, "check"), wipe=step_limit(s, "cleanup") // 3, spend=120,
                 **{"kill-recorder": 120, "kill-watchdog-recover": 240, "keep-going": run, "seal-now": 120, "watch": run + 1800,
-                   "exec": 900})
+                   "exec": (max(LONG_EXEC.values()) + 3) * 60})
 
 
 def pin(data, host):
@@ -622,8 +628,8 @@ def case_list(s, harness):
     return [c for c in cases if not (na and c == "gateway")], na
 
 
-def run_all(s, pad, harness, out_root):
-    runs = [Run(s, c, pad, harness, out_root) for c in case_list(s, harness)[0]]
+def run_all(s, pad, harness, out_root, cases):
+    runs = [Run(s, c, pad, harness, out_root) for c in cases]
     with concurrent.futures.ThreadPoolExecutor() as ex:  # waits stay signal-interruptible on POSIX, so STOP is still set
         return list(ex.map(Run.walk, runs))
 
@@ -645,9 +651,10 @@ def main(argv):
         return 2
     for sig in (signal.SIGINT, signal.SIGTERM):
         signal.signal(sig, lambda *_: STOP.set())
-    results = run_all(s, pad, harness, os.path.join(REPO, "pad-out"))
+    cases, na = case_list(s, harness)
+    results = run_all(s, pad, harness, os.path.join(REPO, "pad-out"), cases)
     sys.stdout.write("".join(table for _, table in results))
-    if case_list(s, harness)[1]:
+    if na:
         print("gateway n/a: %s has no documented gateway route" % s["harness"])
     got = [r for r, _ in results] or ["INCONCLUSIVE"]  # no row at all (gateway n/a) is never "every row PASS"
     return 1 if "FAIL" in got else 3 if "INCONCLUSIVE" in got else 0

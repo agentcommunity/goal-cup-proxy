@@ -298,6 +298,7 @@ class Run:
             sh(["tmux"] + argv)
         if server == "off":  # no approval: paste now
             self.until("Recording in chat mode", "no 'Recording in chat mode'")
+            self.daemon_check()
             return self.type_prompt()
         self.code = self.until(r"shows the code ([A-Z0-9]{4}-[A-Z0-9]{4})\.", "no device code").group(1)  # out once
         self.pane()
@@ -307,13 +308,24 @@ class Run:
         """The first match of `pattern` on the screen within the step's limit; else the step ends INCONCLUSIVE."""
         got = wait(lambda: re.search(pattern, self.pane(False)), self.left(), 3)
         if not got:
+            self.refusal()
             self.pane()
             raise Step("INCONCLUSIVE", "harness did not start: " + why)
         return got
 
+    def refusal(self):
+        """A goalcup start that ended before recording began (the pane is dead): one faults.jsonl line with its exit and
+        whether the screen named settings.json and proxy, the words PRD-11 acceptance 4 wants. Booleans, never a value."""
+        dead = sh(["tmux", "display-message", "-p", "-t", self.tmux, "#{pane_dead} #{pane_dead_status}"]).stdout.split()
+        if dead[:1] == ["1"]:
+            text = self.pane(False)
+            self.fault("start-refused", exit=int(dead[1]) if dead[1:] and dead[1].isdigit() else None,
+                       named_file="settings.json" in text, named_key=bool(re.search(r"\bproxy\b", text)))
+
     def paste(self, _):
         self.need("goalcup")
         self.until("Recording in chat mode", "no 'Recording in chat mode' after the approval")
+        self.daemon_check()
         return self.type_prompt()
 
     def type_prompt(self):  # section 3, 0:04: the ready text, pre keys, the paste, the submit delay and Enter
@@ -456,9 +468,10 @@ class Run:
         except subprocess.TimeoutExpired:
             os.killpg(p.pid, signal.SIGKILL)
             out, code = p.communicate()[0], None
-        if (values := self.known()) is not None:
+        values = self.known()
+        if values is not None:
             write(self.path("exec", name + ".txt"), replace_known(out, values)[0], 0o644)
-        self.fault(kind, script=name, **kw, exit=code)
+        self.fault(kind, script=name, **kw, exit=code, output="kept" if values is not None else "withheld: known values unreadable")
         if code is None:
             raise Step("timeout", "%s %s killed at the step's limit" % (kind, name))
         return ("ok", "%s %s exit 0" % (kind, name)) if code == 0 else ("FAIL", "%s %s exit %d" % (kind, name, code))
@@ -641,6 +654,7 @@ class Run:
         """Section 8 (the server's copy is the conductor's fetched/<entry>/, S13; the git scan needs a push token, none yet),
         each inside the step's limit (a timeout is an exit "timeout"); then meta-box.json, scan and tar, whatever happened."""
         self.stop_watch()  # the watch's last line first, so the tar holds a whole watch/
+        self.daemon_check()
         e, exits, result, note = self.entry(), {}, None, ""
         self.st["screen_known"] = self.st.get("screen_known", 0) + (loads(path=self.path("watch", "watch.json")).get("screen_known") or 0)
         try:
@@ -682,18 +696,34 @@ class Run:
         write(self.path("watch.stop"), "")
         wait(lambda: not alive(read_pid(self.path("watch.pid"))), 30, 1)
 
-    def stop_daemon(self):
-        """The daemon stale-gateway.sh left (its pid is in exec/): killed here if goalcup's start did not stop it, only
-        when its command line names the harness file's `daemon` program -> a line for the wipe step, or None."""
+    def daemon_pid(self):
+        """The pid in exec/stale-gateway.pid while that process lives and its command line names the harness file's
+        `daemon` program (a reused pid is not ours); else None."""
         pid, want = read_pid(self.path("exec", "stale-gateway.pid")), str(self.h.get("daemon") or "").split()[:1]
-        if pid is None or not alive(pid):
-            return None if pid is None else "daemon %d gone" % pid
+        if pid is None or not want or not alive(pid):
+            return None
         try:
             with open("/proc/%d/cmdline" % pid, "rb") as f:
-                ours = bool(want) and want[0].encode() in f.read()
-            return "daemon %d still alive, killed" % pid if ours and os.kill(pid, signal.SIGKILL) is None else "daemon %d alive, not ours to kill" % pid
+                return pid if want[0].encode() in f.read() else None
         except OSError:
-            return "daemon %d gone" % pid
+            return None
+
+    def daemon_check(self):
+        """PRD-11 acceptance 5: goalcup start's `before` stops the stale daemon. One faults.jsonl line per look (after
+        start, at verify); check.py fails the row when the daemon lived. Nothing when stale-gateway.sh left no pid."""
+        if read_pid(self.path("exec", "stale-gateway.pid")) is not None:
+            self.fault("daemon-check", script="stale-gateway.sh", alive=self.daemon_pid() is not None)
+
+    def stop_daemon(self):
+        """The cleanup after daemon_check: kills the daemon goalcup's start did not stop -> a line for the wipe step, or None."""
+        pid = self.daemon_pid()
+        if pid is None:
+            return None
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except OSError:  # it left meanwhile
+            return None
+        return "daemon %d still alive, killed" % pid
 
     def wipe(self, _):
         if os.path.isdir(self.run):  # the watch ends before the run folder goes
@@ -713,8 +743,14 @@ def parse(words):
     if kind == "exec" and arg:
         arg, at, m = arg.partition("@")
     script, minute = arg and re.fullmatch(r"[A-Za-z0-9._-]+", arg), re.fullmatch(r"\d+(\.\d+)?", m)
-    ok = (kind in TIMED and len(words) == 1 and minute or kind == "exec" and script and at and minute
-          or kind == "pre" and script and not at or kind in STEPS and not at and len(words) == 1 + (kind == "wait-calls"))
+    if kind in TIMED:
+        ok = len(words) == 1 and minute
+    elif kind == "exec":
+        ok = script and at and minute
+    elif kind == "pre":
+        ok = script and not at
+    else:
+        ok = kind in STEPS and not at and len(words) == 1 + (kind == "wait-calls")
     return (kind, arg, m) if ok else None
 
 
