@@ -45,7 +45,8 @@ pub fn safe_code(v: Option<&Value>) -> Option<String> {
 fn safe(s: &str) -> bool {
     !s.is_empty()
         && s.len() <= 64
-        && s.bytes().all(|b| b.is_ascii_alphanumeric() || b"_.-".contains(&b))
+        && s.bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"_.-".contains(&b))
 }
 
 /// What a request says: the model asked for and the reasoning effort.
@@ -301,9 +302,10 @@ impl Reply {
             (self.tokens, self.extra) = read(u);
         }
         let choices = v.get("choices").or_else(|| v.get("candidates"));
-        let done = choices
-            .and_then(Value::as_array)
-            .is_some_and(|cs| cs.iter().any(|c| c.get(finish).is_some_and(Value::is_string)));
+        let done = choices.and_then(Value::as_array).is_some_and(|cs| {
+            cs.iter()
+                .any(|c| c.get(finish).is_some_and(Value::is_string))
+        });
         if done {
             self.finish(End::Ok);
         }
@@ -359,7 +361,9 @@ impl Reply {
         let e = e.filter(|e| e.is_object());
         let nested = e.and_then(|e| e.get("error")).filter(|n| n.is_object());
         let field = |k: &str| {
-            let top = e.and_then(|e| e.get(k)).filter(|_| k != "type" || nested.is_none());
+            let top = e
+                .and_then(|e| e.get(k))
+                .filter(|_| k != "type" || nested.is_none());
             top.or_else(|| nested.and_then(|n| n.get(k)))
         };
         let words = [field("code"), field("type"), field("status")];

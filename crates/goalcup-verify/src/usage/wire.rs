@@ -15,7 +15,7 @@ use serde_json::Value;
 
 use super::shapes::{self, Client, End, Reply, Server};
 use super::sse::Sse;
-use super::{CallRow, Ctx, Kind, Leg, Outcome, Shape, Via, host_kind};
+use super::{CallRow, Ctx, HostKind, Kind, Leg, Outcome, Shape, Via, host_kind};
 
 type Key = (u64, u64);
 
@@ -219,23 +219,47 @@ impl Wire {
                 let r = &mut self.rows[i];
                 r.resp = k.1;
                 (r.t1, r.row.wall_end) = (Some(t), ctx.wall(t));
-                r.status = m.get("status").and_then(Value::as_u64).and_then(|n| n.try_into().ok());
-                let sse = m.get("headers").and_then(Value::as_array).is_some_and(|hs| {
-                    hs.iter().any(|h| {
-                        let n = h.get(0).and_then(Value::as_str).unwrap_or("");
-                        let v = h.get(1).and_then(Value::as_str).unwrap_or("");
-                        n.eq_ignore_ascii_case("content-type")
-                            && v.trim_start().to_ascii_lowercase().starts_with("text/event-stream")
-                    })
-                });
+                r.status = m
+                    .get("status")
+                    .and_then(Value::as_u64)
+                    .and_then(|n| n.try_into().ok());
+                let sse = m
+                    .get("headers")
+                    .and_then(Value::as_array)
+                    .is_some_and(|hs| {
+                        hs.iter().any(|h| {
+                            let n = h.get(0).and_then(Value::as_str).unwrap_or("");
+                            let v = h.get(1).and_then(Value::as_str).unwrap_or("");
+                            n.eq_ignore_ascii_case("content-type")
+                                && v.trim_start()
+                                    .to_ascii_lowercase()
+                                    .starts_with("text/event-stream")
+                        })
+                    });
                 let sse = sse.then(|| (Sse::default(), 0));
-                self.resps.insert(k, Resp { row: i, sse, body: Buf::default() });
+                self.resps.insert(
+                    k,
+                    Resp {
+                        row: i,
+                        sse,
+                        body: Buf::default(),
+                    },
+                );
             }
             StreamKind::WsUp | StreamKind::WsDown => {
                 let sock = (k.0, req);
                 self.socks.entry(sock).or_default().conn = conn;
                 let up = sk == StreamKind::WsUp;
-                let w = Ws { sock, up, msgs: 0, buf: Buf::default(), start: None, last_t: t, op: 0, next: 0 };
+                let w = Ws {
+                    sock,
+                    up,
+                    msgs: 0,
+                    buf: Buf::default(),
+                    start: None,
+                    last_t: t,
+                    op: 0,
+                    next: 0,
+                };
                 self.ws.insert(k, w);
             }
             _ => {}
@@ -243,7 +267,15 @@ impl Wire {
     }
 
     /// A new row at (sid, msg) on connection `conn`.
-    fn row(&mut self, ctx: &Ctx, at: (u64, Option<u64>), conn: (u64, &Conn), kind: Kind, via: Via, t: u64) -> usize {
+    fn row(
+        &mut self,
+        ctx: &Ctx,
+        at: (u64, Option<u64>),
+        conn: (u64, &Conn),
+        kind: Kind,
+        via: Via,
+        t: u64,
+    ) -> usize {
         let ((sid, msg), (conn, c)) = (at, conn);
         let mut row = CallRow::new(Leg::Wire, ctx.entry.clone(), ctx.boot, kind);
         row.sid = Some(sid);
@@ -252,7 +284,12 @@ impl Wire {
         row.host_kind = c.kind;
         row.via = Some(via);
         row.wall_start = ctx.wall(t);
-        self.rows.push(Row { row, conn, t0: t, ..Row::default() });
+        self.rows.push(Row {
+            row,
+            conn,
+            t0: t,
+            ..Row::default()
+        });
         self.rows.len() - 1
     }
 
@@ -374,7 +411,9 @@ impl Wire {
             s.pending.push_back((i, prev));
             return;
         }
-        let open = s.cur.filter(|&c| !self.rows[c].seen_terminal && !self.rows[c].seen_error);
+        let open = s
+            .cur
+            .filter(|&c| !self.rows[c].seen_terminal && !self.rows[c].seen_error);
         if let Some(c) = open.or_else(|| s.pending.front().map(|p| p.0)) {
             let r = &mut self.rows[c];
             r.cancelled |= r.reply.end.is_none() && !r.seen_terminal && !r.seen_error;
@@ -391,9 +430,9 @@ impl Wire {
         let open = |c: usize| !rows[c].seen_terminal && !rows[c].seen_error;
         let target = match &kind {
             Server::Created { prev } => {
-                let at = prev.as_deref().and_then(|p| {
-                    s.pending.iter().position(|q| q.1.as_deref() == Some(p))
-                });
+                let at = prev
+                    .as_deref()
+                    .and_then(|p| s.pending.iter().position(|q| q.1.as_deref() == Some(p)));
                 s.pending.remove(at.unwrap_or(0)).map(|q| q.0)
             }
             Server::Terminal { .. } | Server::Error => {
@@ -464,9 +503,19 @@ fn sse_event(reply: &mut Reply, shape: Shape, p: &[u8]) {
 fn decide(mut r: Row, gaps: &[Gap]) -> CallRow {
     let http = r.status.filter(|&s| s >= 400);
     let end = match (http, r.reply.end.take()) {
-        (Some(s), Some(End::Failed { rate, code, .. })) => Some(End::Failed { rate: rate || s == 429, status: Some(s), code }),
-        (Some(s), _) => Some(End::Failed { rate: s == 429, status: Some(s), code: None }),
-        (None, e) if r.row.kind == Kind::Other => e.or((r.resp_ok && r.status.is_some()).then_some(End::Ok)),
+        (Some(s), Some(End::Failed { rate, code, .. })) => Some(End::Failed {
+            rate: rate || s == 429,
+            status: Some(s),
+            code,
+        }),
+        (Some(s), _) => Some(End::Failed {
+            rate: s == 429,
+            status: Some(s),
+            code: None,
+        }),
+        (None, e) if r.row.kind == Kind::Other => {
+            e.or((r.resp_ok && r.status.is_some()).then_some(End::Ok))
+        }
         (None, e) => e,
     };
     let row = &mut r.row;
@@ -474,7 +523,11 @@ fn decide(mut r: Row, gaps: &[Gap]) -> CallRow {
         _ if r.cancelled => Outcome::Cancelled,
         Some(End::Ok) => Outcome::Ok,
         Some(End::Failed { rate, status, code }) => {
-            let d: Vec<String> = status.map(|s| s.to_string()).into_iter().chain(code.clone()).collect();
+            let d: Vec<String> = status
+                .map(|s| s.to_string())
+                .into_iter()
+                .chain(code.clone())
+                .collect();
             row.detail = (!d.is_empty()).then(|| d.join(" "));
             if rate {
                 Outcome::RateLimited { status, code }
@@ -493,19 +546,25 @@ fn decide(mut r: Row, gaps: &[Gap]) -> CallRow {
     row.extra = std::mem::take(&mut r.reply.extra);
     let said = [t.input, t.cached, t.cache_write, t.output, t.reasoning];
     row.usage_from = said.iter().any(Option::is_some).then_some(Leg::Wire);
-    let (b, t1) = (row.boot, r.t1.unwrap_or(u64::MAX));
+    let (b, t1, via, sid) = (row.boot, r.t1.unwrap_or(u64::MAX), row.via, row.sid);
     let wall = (row.wall_start, row.wall_end.unwrap_or(u64::MAX));
     let hit = |g: &Gap, range: Option<(u64, u64, u64)>| match range {
-        Some((sid, lo, hi)) => g.sid == sid && g.off <= hi && (g.lost == 0 || g.off.saturating_add(g.lost - 1) >= lo),
+        Some((sid, lo, hi)) => {
+            g.sid == sid && g.off <= hi && (g.lost == 0 || g.off.saturating_add(g.lost - 1) >= lo)
+        }
         None => false,
     };
     let lost = gaps.iter().any(|g| {
         let mine = g.boot == b
             && (hit(g, r.up)
                 || hit(g, r.down)
-                || (r.row.via == Some(Via::Http) && (r.row.sid == Some(g.sid) || (r.resp != 0 && g.sid == r.resp)))
+                || (via == Some(Via::Http)
+                    && (sid == Some(g.sid) || (r.resp != 0 && g.sid == r.resp)))
                 || (r.conn != 0 && g.sid == r.conn && g.mono.0 <= t1 && g.mono.1 >= r.t0));
-        let all = g.sid == 0 && wall.0.is_some_and(|w0| g.wall.0 <= wall.1 && g.wall.1 >= w0);
+        let all = g.sid == 0
+            && wall
+                .0
+                .is_some_and(|w0| g.wall.0 <= wall.1 && g.wall.1 >= w0);
         mine || all
     });
     row.whole = !lost

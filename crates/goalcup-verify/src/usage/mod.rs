@@ -329,7 +329,11 @@ impl Ctx {
     }
 
     fn start(&mut self, ev: &Value) {
-        let lists = ev.get("hosts").and_then(Value::as_object).into_iter().flatten();
+        let lists = ev
+            .get("hosts")
+            .and_then(Value::as_object)
+            .into_iter()
+            .flatten();
         self.hosts = lists
             .filter_map(|(_, l)| l.as_array())
             .flatten()
