@@ -11,7 +11,8 @@ import sys
 
 # Every key read from another PRD's seam, so a seam change is a one-line edit here. S6: PRD-08 section 4
 # (s6_ keys per entry). S7: PRD-09 section 7 (t_ keys per thread). S13: PRD-07 section 7 fetch.json.
-# S4: PRD-02 section 6 status.json, also each watch/status.jsonl sample.
+# S4: PRD-02 section 6 status.json, also each watch/status.jsonl sample. S9: PRD-06 section 11 upload.json,
+# also each watch/upload.jsonl line.
 SEAM = {k: tuple(v.split(".")) for k, v in {
     "s6_exit": "exit", "s6_entries": "entries", "s6_checks": "checks", "s6_requests": "counts.model_requests",
     "s6_gaps": "counts.gaps", "s6_off": "counts.off_ms", "s6_threads": "counts.threads", "s6_seal": "seal_reason",
@@ -22,19 +23,16 @@ SEAM = {k: tuple(v.split(".")) for k, v in {
     "s7_threads": "threads", "t_parent": "parent", "t_models": "models", "t_wire": "wire_calls",
     "t_native": "native_calls", "s13_requests": "model_requests", "s13_final": "final", "s13_complete": "complete",
     "s4_mode": "mode", "s4_port": "port", "s4_harness_pid": "harness.pid", "s4_requests": "written.model_requests",
-    "s4_off": "written.off_ms", "s4_seal": "seal.reason"}.items()}
+    "s4_off": "written.off_ms", "s4_seal": "seal.reason", "s9_final": "final", "s9_keep": "keep", "s9_state": "state"}.items()}
 # Not fixed yet (asked of PRD-08 in the night log): the `secrets` JSON, and how a recorder_down gap's
 # cause and length appear. Read when present; else hits fall back to verify/exits.json (keyed by the
 # JSON file's stem; PRD-08 section 2: 0 and 1 are no hit, 2 a hit, anything else no scan) and causes to counts.gaps keys ("null_mode",
 # "recorder_down:null_mode"). MASK spans by rule are read from the `masks` key of verify/secrets.json.
 SECRET_HITS = ("hits", "known_hits", "shape_hits")
-# Section 5's planted shaped values, each as the S12 rule kinds (PRD-05 section 10, shapes.tsv) whose MASK
-# covers it: the OpenAI, GitHub and Google keys, the JWT, the PEM, the remote password. A `NAME_API_KEY=` or
-# `NAME_TOKEN=` line also matches the shell rule `generic_secret_assignment` (row 11), which wins an overlap
-# with a later row such as `google_key` (row 13), so it covers those three too. The first kind of each is
-# the value's own shape: a MASK of one of those shows the setup-check output reached the model.
-PLANTED = (("openai_key", "generic_secret_assignment"), ("github_token", "generic_secret_assignment"),
-           ("google_key", "generic_secret_assignment"), ("jwt",), ("private_key",), ("url_password",))
+# Section 5's planted shaped values, each as the S12 rule kinds (PRD-05 section 10) whose MASK covers it. The
+# Google line is masked under the shell rule, row 11, which wins over `google_key`, row 13.
+PLANTED = (("openai_key",), ("github_token",), ("google_key", "generic_secret_assignment"), ("jwt",), ("private_key",),
+           ("url_password",))
 INV6_GAPS = ("gaps", "recorder_down")  # inv6 facts: a list of {cause, start, end, ms}
 DOWN = ("recorder_down", "null_mode", "watchdog_lost")
 DOWN_ERR = re.compile(r"(?<!\d)5\d\d(?!\d)|overloaded|server_error|api_error|internal", re.I)  # S6 keys are
@@ -55,13 +53,13 @@ def items(d):
     return [(str(k), v) for k, v in d.items()] if isinstance(d, dict) else []
 
 def load(folder, rel, lines=False):
-    """A JSON file, or the dicts of a JSONL file (a watch line may wrap the status as {"at", "status"})."""
+    """A JSON file, or the dicts of a JSONL file (a watch line may wrap its file as {"at", "status"} or "upload")."""
     try:
         with open(os.path.join(folder, rel)) as f:
             got = [json.loads(ln) for ln in f if re.match(r"\s*\{.*\}\s*$", ln)] if lines else json.load(f)  # no torn line
     except (OSError, ValueError):
         return [] if lines else None
-    return [v["status"] if isinstance(v.get("status"), dict) else v for v in got if isinstance(v, dict)] if lines else got
+    return [next((v[k] for k in ("status", "upload") if isinstance(v.get(k), dict)), v) for v in got] if lines else got
 
 def when(s):
     try:
@@ -195,6 +193,8 @@ def local(r, reqs):
     r.flag(r.meta.get("keep") is False, "C4", "FAIL", "parts pruned (keep false)")
     if r.meta.get("server", "off") == "off":
         return r.mark("C4", "INCONCLUSIVE", "server off: local pass at best; " + half)
+    up = load(r.folder, "watch/upload.jsonl", 1)
+    r.flag(up and dig(up[-1], "s9_keep") is False, "C4", "FAIL", "parts pruned (upload.json keep false)")
     if not isinstance(r.fetch, dict):
         return r.mark("C4", "FAIL", "server copy not fetched")
     srv = [e for e in dig(r.server, "s6_entries") or [] if isinstance(e, dict)]
@@ -236,10 +236,10 @@ def secrets(r):
     # MASK of a planted value's own shape shows that output reached the model. Never any MASK: the
     # harness's auth header is masked on every call.
     masks = r.masks()
-    if not r.hits("secrets-plain") and not any((masks or {}).get(kinds[0]) for kinds in PLANTED):
-        return r.mark("C3", "INCONCLUSIVE", "secret exercise not done: no plain-value hit and no MASK of a planted shape")
     if masks is None:
         return r.mark("C3", "INCONCLUSIVE", "no MASK counts by rule in verify/secrets.json")
+    if not r.hits("secrets-plain") and not any(masks.get(kinds[0]) for kinds in PLANTED):
+        return r.mark("C3", "INCONCLUSIVE", "secret exercise not done: no plain-value hit and no MASK of a planted shape")
     for kinds in PLANTED:
         r.flag(not any(masks.get(k) for k in kinds), "C3", "FAIL", "no MASK of %s for a planted value" % " or ".join(kinds))
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3.11
-"""The test pad, box half (PRD-12 sections 3 to 6 and 8), `mode = "micro"` with `server = "off"`:
-    pad-run <run dir> setup|start|wait-calls N|look|seal|verify|wipe      (pad writes settings.json)
+"""The test pad, box half (PRD-12 sections 3 to 6 and 8), `mode = "micro"` with `server = "off"` or "staging":
+    pad-run <run dir> <step>      (pad writes settings.json; the steps are STEPS, wait-calls takes N)
 Each step ends with one line `PADSTEP {"result":..,"saw":..}` and exits 0, also on a failure; 2 is a
 usage error. Known values (keys, plants, the remote password) never leave the box: panes are replaced
 before a file gets them and the scans run here. No key or planted value is ever printed, logged or an
@@ -10,9 +10,10 @@ import base64, datetime, glob, json, os, re, secrets, shlex, shutil, subprocess,
 
 PAD = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, PAD)
-import check as pc  # noqa: E402  S6 and S7 keys are read through check.py's SEAM only
+import check as pc  # noqa: E402  S6, S7 and S9 keys are read through check.py's SEAM only
 NO_BUILD = "no goalcup build"
-STEPS = ("setup", "start", "wait-calls", "look", "seal", "verify", "wipe")
+STEPS = ("setup", "start", "paste", "wait-calls", "look", "seal", "wait-upload", "verify", "wipe")
+USAGE = "usage: pad-run <run dir> " + "|".join(s + " N" * (s == "wait-calls") for s in STEPS)
 OUT = ("verify", "watch", "status.json", "harness-files.json", "meta-box.json")  # what out.tar carries
 
 
@@ -108,15 +109,12 @@ class Run:
         if found:
             e = os.path.dirname(found[-1])
             self.st.update(entry_dir=e, entry=os.path.basename(e), run=os.path.basename(os.path.dirname(e)))
-            self.known_box(os.path.join(e, "rec", "run-ca.key"))
+            key = os.path.join(e, "rec", "run-ca.key")  # section 3, 0:04 (ledger R3b): the run certificate key
+            if not self.st.get("known_box") and os.path.isfile(key):  # joins the known values while it lives
+                with open(key) as f, open(self.path("known"), "a") as known:  # PEM body lines, as the planted PEM
+                    known.write("".join(ln for ln in f if ln.strip() and not ln.startswith("-----")))
+                self.st["known_box"] = True
         return self.st.get("entry_dir")
-
-    def known_box(self, key):
-        """Section 3, 0:04 (ledger R3b): the run certificate key joins the known values while it lives."""
-        if not self.st.get("known_box") and os.path.isfile(key):
-            with open(key) as f, open(self.path("known"), "a") as known:  # PEM body lines, as the planted PEM
-                known.write("".join(ln for ln in f if ln.strip() and not ln.startswith("-----")))
-            self.st["known_box"] = True
 
     def status(self):
         return loads(path=os.path.join(self.entry() or self.run, "status.json"))
@@ -191,12 +189,11 @@ class Run:
         return list(shaped.values()) + pem + [password], plain
 
     def start(self, _):
-        s, h = self.s, self.h
-        if s["server"] != "off":
-            raise Step("skip", "staging steps come in a later slice")
+        s = self.s  # section 3, 0:02; with a server, a device code the conductor approves, then paste (PRD-10 section 3)
         self.need("goalcup")
-        lines = ["cd " + shlex.quote(self.project), "export GOALCUP_HOME=%s GOALCUP_SERVER=off GOALCUP_NO_BROWSER=1"
-                 % shlex.quote(self.env["GOALCUP_HOME"])] + ["export GOALCUP_KEEP_PARTS=1"] * bool(s["keep"])
+        server = "off" if s["server"] == "off" else s["server_url"]  # no --repo: push not tested
+        lines = ["cd " + shlex.quote(self.project), "export GOALCUP_HOME=%s GOALCUP_SERVER=%s GOALCUP_NO_BROWSER=1"
+                 % (shlex.quote(self.env["GOALCUP_HOME"]), shlex.quote(server))] + ["export GOALCUP_KEEP_PARTS=1"] * bool(s["keep"])
         lines += ["export %s=%s" % (k, shlex.quote(str(v))) for k, v in self.sec.get("env", {}).items()]
         if self.st.get("key_route") == "env":  # the value is never in argv: the launch shell reads the file
             lines += ['export %s="$(cat %s)"' % (self.st["key_env"], shlex.quote(self.st["key_path"])), "rm -f " + shlex.quote(self.st["key_path"])]
@@ -207,9 +204,32 @@ class Run:
         for argv in (["new-session", "-d", "-s", t, "-x", "200", "-y", "50"], ["set-option", "-w", "-t", t, "remain-on-exit", "on"],
                      ["respawn-pane", "-k", "-t", t, "bash " + shlex.quote(self.path("launch.sh"))]):
             sh(["tmux"] + argv)
-        if not wait(lambda: "Recording in chat mode" in self.pane(False), self.left(), 3):
+        got = self.until(r"shows the code ([A-Z0-9]{4}-[A-Z0-9]{4})\.|Recording in chat mode",
+                         "no 'Recording in chat mode'" if server == "off" else "no device code")
+        if not got.group(1):  # no approval asked: paste now, as with server off
+            return self.type_prompt()
+        self.st["code"] = got.group(1)
+        write(self.path("code.txt"), got.group(1) + "\n", 0o644)
+        self.pane()
+        return "ok", "device code shown"
+
+    def until(self, pattern, why):
+        """The first match of `pattern` on the screen within the step's limit; else the step ends INCONCLUSIVE."""
+        got = []
+        if not wait(lambda: got.append(re.search(pattern, self.pane(False))) or got[-1], self.left(), 3):
             self.pane()
-            raise Step("INCONCLUSIVE", "harness did not start: no 'Recording in chat mode'")
+            raise Step("INCONCLUSIVE", "harness did not start: " + why)
+        return got[-1]
+
+    def paste(self, _):
+        if "pasted" in self.st:
+            return "ok", "pasted at start: no approval asked"
+        self.need("goalcup")
+        self.until("Recording in chat mode", "no 'Recording in chat mode' after the approval")
+        return self.type_prompt()
+
+    def type_prompt(self):  # section 3, 0:04: the ready text, pre keys, the paste, the submit delay and Enter
+        h, t = self.h, self.tmux
         ready = h.get("ready_text")
         if not (ready and wait(lambda: ready in self.pane(False), 30, 2)):
             time.sleep(0 if ready else 30)
@@ -239,6 +259,21 @@ class Run:
                 return "ok", "%d model calls written" % got
             if self.left() < 5:
                 raise Step("timeout", "the harness did no work")
+            time.sleep(5)
+
+    def wait_upload(self, _):
+        """Section 1a: upload.json (S9) every 5 s, each read a line of watch/upload.jsonl, until final is sealed."""
+        if self.s["server"] == "off":
+            raise Step("skip", "server off")
+        self.need("goalcup", started=True)
+        while True:
+            up = loads(path=os.path.join(self.entry(), "upload.json")) if self.entry() else {}
+            append(self.path("watch", "upload.jsonl"), {"upload": {k: up.get(k) for k in ("state", "final", "keep",
+                                                                                          "waiting_bytes", "confirmed", "server_word")}})
+            if pc.dig(up, "s9_final") == "sealed":
+                return "ok", "final: sealed"
+            if self.left() < 5:
+                raise Step("timeout", "final %s, state %s" % (pc.dig(up, "s9_final"), pc.dig(up, "s9_state")))
             time.sleep(5)
 
     def verify_cmd(self, argv, out=None):
@@ -308,17 +343,21 @@ class Run:
         return found
 
     def verify(self, _):
-        """Section 8, the commands that apply with server off, each inside the step's limit (a timeout is an
-        exit of "timeout"); then meta-box.json, the output scan and the tar, written whatever happened."""
-        e, exits, result = self.entry(), {}, None
+        """Section 8 (the server's copy is the conductor's fetched/<entry>/, S13; the git scan needs a push token, none yet),
+        each inside the step's limit (a timeout is an exit "timeout"); then meta-box.json, scan and tar, whatever happened."""
+        e, exits, result, note = self.entry(), {}, None, ""
         try:
             self.need("goalcup-verify", entry=True)
             shutil.copy(os.path.join(e, "status.json"), self.path("status.json"))
             raw = [p for p in (os.path.join(e, "goalcup.log"), os.path.join(e, "upload.json")) if os.path.exists(p)]
-            for name, argv in (("check-local", ["check", "--json", "--known", "known", "--harness-files", "harness-files.json", e]),
-                               ("secrets", ["secrets", "--known", "known", e, "status.json"] + raw),
-                               ("secrets-plain", ["secrets", "--known", "known-plain", e]),
-                               ("usage", ["usage", e, "--json", "--out", os.path.join("verify", "usage")])):
+            f, on = os.path.join("fetched", self.st["entry"]), self.s["server"] != "off"
+            got = on and os.path.isfile(self.path(f, "rec.gcr.zst"))
+            note = "; no fetched copy" if on and not got else ""
+            for name, argv in [("check-local", ["check", "--json", "--known", "known", "--harness-files", "harness-files.json", e])] + [
+                    ("check-server", ["check", "--json", "--server", f, "--local", e, "--known", "known"])] * got + [
+                    ("secrets", ["secrets", "--known", "known", e] + [f] * got + ["status.json"] + raw),
+                    ("secrets-plain", ["secrets", "--known", "known-plain", e] + [f] * got),
+                    ("usage", ["usage", f if got else e, "--json", "--out", os.path.join("verify", "usage")])]:
                 exits[name] = self.verify_cmd(argv, None if name == "usage" else name + ".json")[0]
         except Step as stop:
             result = stop.args
@@ -333,7 +372,7 @@ class Run:
         if result is None:  # last: every file the tar carries, which is all the conductor's files are built from
             exits["secrets-out"] = self.verify_cmd(["secrets", "--known", "known"] + [n for n in OUT if os.path.exists(self.path(n))],
                                                    "secrets-out.json")[0]
-            result = ("ok", "exits " + ", ".join("%s %s" % kv for kv in exits.items()))
+            result = ("ok", "exits " + ", ".join("%s %s" % kv for kv in exits.items()) + note)
         write(self.path("verify", "exits.json"), json.dumps(exits), 0o644)  # the exits of whatever ran
         # The known files go after the scan; the home only once nothing reads it (else the wipe step takes it).
         self.wipe_secrets(known=True, home=self.sealed() or self.dead())
@@ -352,7 +391,7 @@ class Run:
 
 def main(argv):
     if len(argv) not in (3, 4) or argv[2] not in STEPS or (argv[2] == "wait-calls") != (len(argv) == 4):
-        print("usage: pad-run <run dir> setup|start|wait-calls N|look|seal|verify|wipe", file=sys.stderr)
+        print(USAGE, file=sys.stderr)
         return 2
     os.umask(0o077)
     run = None
@@ -365,7 +404,7 @@ def main(argv):
         result, saw = "FAIL", "%s in %s" % (type(e).__name__, argv[2])
     if run and os.path.isdir(run.run):
         write(run.path("state.json"), json.dumps(run.st))
-    print("PADSTEP " + json.dumps({"result": result, "saw": saw}))
+    print("PADSTEP " + json.dumps(dict({k: run.st[k] for k in ("code", "entry", "run") if run and run.st.get(k)}, result=result, saw=saw)))
     return 0
 
 
