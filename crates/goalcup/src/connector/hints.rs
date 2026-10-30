@@ -289,7 +289,9 @@ pub(super) fn yaml_key(line: &str) -> Option<(usize, String, &str)> {
 /// for anything else.
 fn yaml_scalar(s: &str) -> Option<Value> {
     if let Some(quote) = s.chars().next().filter(|c| *c == '"' || *c == '\'') {
-        return s[1..].split_once(quote).map(|(inner, _)| Value::from(inner));
+        return s[1..]
+            .split_once(quote)
+            .map(|(inner, _)| Value::from(inner));
     }
     let plain = s.find(" #").map_or(s, |at| s[..at].trim_end());
     match plain {

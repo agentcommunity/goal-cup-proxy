@@ -212,10 +212,12 @@ fn settings_are_typed_keep_other_keys_and_never_follow_a_link() {
     let hermes = connector::load("hermes-cli", None).unwrap();
     let rows = [hermes.no_prompts, hermes.update_off].concat();
     let yaml = home.join("config.yaml");
-    std::fs::write(&yaml, "approvals:\n  mode: off\nupdates:\n  check: \"false\"\n").unwrap();
+    let was = "approvals:\n  mode: off\nupdates:\n  check: \"false\"\n";
+    std::fs::write(&yaml, was).unwrap();
     assert!(connector::write_settings(&home, &rows).is_empty());
     let text = std::fs::read_to_string(&yaml).unwrap();
-    assert_eq!(text, "approvals:\n  mode: \"off\"\nupdates:\n  check: false\n");
+    let want = "approvals:\n  mode: \"off\"\nupdates:\n  check: false\n";
+    assert_eq!(text, want);
     assert!(connector::write_settings(&home, &rows).is_empty());
     assert_eq!(std::fs::read_to_string(&yaml).unwrap(), text);
 }
