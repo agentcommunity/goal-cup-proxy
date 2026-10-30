@@ -206,8 +206,8 @@ async fn a_listed_tunnel_is_a_named_loss_and_sign_in_is_not() {
     .await;
 }
 
-#[tokio::test]
-async fn the_flag_fires_once_for_a_stream() {
+#[test]
+fn the_flag_fires_once_for_a_stream() {
     let (rec, calls) = Recorder::for_tests(1 << 30);
     let flags = Flags::default();
     let base = 7_000_000_000_000;
@@ -369,6 +369,7 @@ impl Parser for Faulty {
                 tail: None,
                 held,
                 since: t,
+                at_close: false,
             }),
             false => Ok(()),
         }
@@ -379,6 +380,7 @@ impl Parser for Faulty {
             tail: None,
             held: 5,
             since: t,
+            at_close: true,
         })
     }
     fn panicked(self: Box<Self>, t: Mono) -> Stop {
@@ -387,7 +389,8 @@ impl Parser for Faulty {
 }
 
 /// 5a on the relay: the note, and one `conn` GAP whose `lost` is what the parser held plus every
-/// byte relayed after the fault; the faulting chunk counts whole.
+/// byte relayed after the fault; the faulting chunk counts whole. Bytes held at the close get the
+/// GAP alone.
 #[tokio::test]
 async fn a_parse_fault_keeps_relaying_and_counts_what_follows() {
     within_async(HANG, async {
@@ -408,17 +411,18 @@ async fn a_parse_fault_keeps_relaying_and_counts_what_follows() {
                 Fails::AtClose => (5, None, 5),
             };
             assert_eq!(fed.load(Ordering::SeqCst), want_fed);
+            // Bytes only held at the close: parsing never stopped, so no note.
             let stopped = notes(&calls, "parse_stopped");
-            assert_eq!(stopped.len(), 1);
-            assert_eq!(stopped[0]["reason"], "decode_failed");
+            assert_eq!(stopped.len(), usize::from(fails != Fails::AtClose));
             let all = gaps(&calls);
             let [Call::Gap(sid, GapReason::DecodeFailed, _, _, _, got, got_tail)] = &all[..] else {
                 panic!("one conn GAP decode_failed");
             };
-            assert_eq!(
-                (stopped[0]["conn"].as_u64(), *got, got_tail),
-                (Some(*sid), Some(lost), &tail)
-            );
+            assert_eq!((*got, got_tail), (Some(lost), &tail));
+            for note in stopped {
+                let conn = Some(*sid);
+                assert_eq!((note["conn"].as_u64(), &note["reason"]), (conn, &json!("decode_failed")));
+            }
         }
     })
     .await;

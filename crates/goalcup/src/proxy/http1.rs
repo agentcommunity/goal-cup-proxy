@@ -7,19 +7,20 @@
 //! Bodies are de-chunked and decoded through [`BodyDecoder`], each decoded piece written as it is
 //! made; [`Step`] says which GAP a body gets. Framing that cannot be followed stops parsing for
 //! the connection (5a): a bad start line or field, a bad chunk size (more than 16 significant
-//! digits included), a conflicting `Content-Length`, a framing field line kept past the head guard
-//! that grows past [`FIELD_MAX`] (no valid value is that long), a `101` that is not a WebSocket
+//! digits included), a conflicting `Content-Length`, framing field lines kept past the head guard
+//! that grow past [`FIELD_MAX`] in all (no valid head has that much), a `101` that is not a WebSocket
 //! this parser can follow, a 2xx to an inner `CONNECT`. Every open stream then gets its GAP and
 //! ends `decode_error`, and the [`Stop`] counts the relayed bytes recorded in no stream; the relay
 //! writes the `parse_stopped` note and the `conn` GAP. Bytes held unrecorded at the close (a head
-//! cut short) are a [`Stop`] too. A start line past the head guard keeps its first 64 KiB (method
+//! cut short) are a [`Stop`] too, marked `at_close`: the relay writes only the GAP. A start line past the head guard keeps its first 64 KiB (method
 //! and path, or version and status) under GAP `http_head`; a request then has no `ver`.
 //!
 //! After a WebSocket upgrade request, client bytes are only copied (the `upgrade_copy` guard, then
 //! 5a) until the answer: a `101` with the right `Sec-WebSocket-Accept` hands both directions to
 //! [`WsConn`], the copy first; any other final answer replays the copy here. Server bytes that
 //! overtake the feed of the request they answer wait, at most a head's worth, for it; past that,
-//! or at the close, they are a response to no request (`req` 0).
+//! or at the close, they are a response to no request (`req` 0), and so are later server bytes
+//! until a request waits again.
 
 use crate::pipeline::{
     EndReason, GapReason, Mono, OpenFlags, Recorder, Sid, StreamHandle, StreamKind,
@@ -34,7 +35,7 @@ use std::collections::VecDeque;
 const HEAD_LIMIT: usize = 64 * 1024;
 /// The `upgrade_copy` guard: client bytes copied while an upgrade waits for its answer.
 const COPY_LIMIT: usize = 1 << 20;
-/// Past the head guard, a framing field line longer than this cannot be followed (5a).
+/// Past the head guard, framing field lines longer than this in all cannot be followed (5a).
 const FIELD_MAX: usize = 4 * 1024;
 /// Past the head guard, a field line whose name has not ended within this many bytes is not a
 /// field framing needs, so the rest of it is skipped unread.
@@ -92,7 +93,7 @@ pub struct Http1 {
     /// The response being parsed answers no request.
     orphan: bool,
     ws: Option<WsConn>,
-    stopped: Option<GapReason>,
+    stopped: bool,
     /// Bytes fed, and those a stream or note accounts for: heads, bodies on the wire, WebSocket
     /// bytes (5a counts the difference).
     seen: u64,
@@ -131,7 +132,7 @@ impl Http1 {
             early: (Mono::default(), Vec::new()),
             orphan: false,
             ws: None,
-            stopped: None,
+            stopped: false,
             seen: 0,
             kept: 0,
         }
@@ -158,28 +159,40 @@ impl Http1 {
             body.end(t, EndReason::DecodeError, 0, Some((reason, tail.clone())));
         }
         if let Some(ws) = &mut self.ws {
-            ws.stop(t);
+            ws.stop(t, tail.clone());
         }
         let (held, since) = self.held(t);
         self.copy = None;
         self.early.1 = Vec::new();
         self.queue.clear();
-        self.stopped = Some(reason);
+        self.stopped = true;
         Stop {
             reason,
             tail,
             held,
             since,
+            at_close: false,
         }
+    }
+
+    /// Feeds the WebSocket parser. On its stop it wrote its GAPs, and only the bytes it took before
+    /// the frame that stopped it count as kept.
+    fn ws_feed(&mut self, dir: Dir, t: Mono, bytes: &[u8]) -> Result<(), Fault> {
+        let Some(ws) = &mut self.ws else {
+            return Ok(());
+        };
+        let fed = ws.feed(dir, t, bytes);
+        self.kept += match fed {
+            Ok(()) => bytes.len(),
+            Err(ws::Stopped(n)) => n,
+        } as u64;
+        fed.map_err(|_| Fault::Framing)
     }
 
     fn take(&mut self, dir: Dir, t: Mono, mut bytes: &[u8]) -> Result<(), Fault> {
         while !bytes.is_empty() {
-            if let Some(ws) = &mut self.ws {
-                // On a stop the WebSocket parser wrote its GAPs; the whole chunk counts as held.
-                ws.feed(dir, t, bytes).map_err(|_| Fault::Framing)?;
-                self.kept += bytes.len() as u64;
-                return Ok(());
+            if self.ws.is_some() {
+                return self.ws_feed(dir, t, bytes);
             }
             if dir == Dir::Up
                 && let Some((_, copy)) = &mut self.copy
@@ -320,16 +333,14 @@ impl Http1 {
             let extensions = f.extensions();
             let deflate = ws::negotiate(offered.as_deref(), extensions.as_deref())
                 .map_err(|_| Fault::Framing)?;
-            let mut conn = WsConn::open(&self.rec, self.conn, asked.sid, deflate);
+            self.ws = Some(WsConn::open(&self.rec, self.conn, asked.sid, deflate));
             let copy = self.copy.take().map(|c| c.1).unwrap_or_default();
-            let fed = conn.feed(Dir::Up, t, &copy);
-            self.ws = Some(conn);
-            fed.map_err(|_| Fault::Framing)?;
-            self.kept += copy.len() as u64;
-            return Ok(());
+            return self.ws_feed(Dir::Up, t, &copy);
         }
-        let asked = self.queue.pop_front().unwrap_or_default();
-        self.orphan = false;
+        // A response to no request: later server bytes answer none either until a request waits.
+        let asked = self.queue.pop_front();
+        self.orphan = asked.is_none();
+        let asked = asked.unwrap_or_default();
         let framing = if asked.head || status == 204 || status == 304 {
             None
         } else if asked.connect && (200..300).contains(&status) {
@@ -372,19 +383,8 @@ impl Http1 {
 }
 
 impl Parser for Http1 {
-    /// Relayed bytes of one direction in any split, after they were forwarded. A call after a
-    /// stop answers the stop's reason and counts its bytes as held.
+    /// Relayed bytes of one direction in any split, after they were forwarded.
     fn feed(&mut self, dir: Dir, t: Mono, bytes: &[u8]) -> Result<(), Stop> {
-        if let Some(reason) = self.stopped {
-            let held = bytes.len() as u64;
-            let (tail, since) = (None, t);
-            return Err(Stop {
-                reason,
-                tail,
-                held,
-                since,
-            });
-        }
         self.seen += bytes.len() as u64;
         self.take(dir, t, bytes)
             .map_err(|fault| self.stop(t, fault))
@@ -395,7 +395,7 @@ impl Parser for Http1 {
     fn end(mut self: Box<Self>, t: Mono, reason: EndReason, unsent_up: u64) -> Option<Stop> {
         let since = self.held(t).1;
         let mut late = None;
-        if self.stopped.is_none() && self.ws.is_none() {
+        if !self.stopped && self.ws.is_none() {
             // An upgrade never answered: its copy is HTTP after all. Server bytes still waiting
             // for a request answer none.
             let copy = self.copy.take().map(|c| c.1).unwrap_or_default();
@@ -415,6 +415,7 @@ impl Parser for Http1 {
                         tail: None,
                         held,
                         since,
+                        at_close: true,
                     }),
             };
         }
@@ -565,6 +566,8 @@ struct Head {
     stored: usize,
     /// Once past the `http_head` guard: when, and the bytes not stored.
     over: Option<(Mono, u64)>,
+    /// Bytes of framing field lines read but not stored (at most [`FIELD_MAX`]).
+    framed: usize,
     /// Bytes taken, the blank lines before the start line among them, and when the first byte
     /// after those came.
     size: u64,
@@ -629,7 +632,7 @@ impl Head {
             }
             None => self.line.len() <= NAME_MAX,
         };
-        if framing && self.line.len() > FIELD_MAX {
+        if framing && self.framed + self.line.len() > FIELD_MAX {
             return Err(Fault::Framing);
         }
         if !framing {
@@ -673,14 +676,21 @@ impl Head {
             .filter(|n| is_token(n))
             .ok_or(Fault::Framing)?;
         let value = trim_ows(&line[colon + 1..]);
+        let lower = name.to_ascii_lowercase();
         if self.over.is_none() && self.stored + raw.len() <= HEAD_LIMIT {
             self.stored += raw.len();
             let value = String::from_utf8_lossy(value).into_owned();
             self.fields.push((name.to_owned(), value));
         } else {
             self.not_stored(t, raw.len());
+            if FRAMING.contains(&lower.as_str()) {
+                self.framed += raw.len();
+                if self.framed > FIELD_MAX {
+                    return Err(Fault::Framing);
+                }
+            }
         }
-        self.frame.add(&name.to_ascii_lowercase(), value)?;
+        self.frame.add(&lower, value)?;
         Ok(false)
     }
 }
@@ -743,20 +753,12 @@ impl Fields {
     /// The codings to undo, in order of application: content codings, then transfer codings
     /// other than a final `chunked`.
     fn codings(&self) -> Result<Vec<Coding>, Unsupported> {
-        let mut transfer: Vec<&str> = self
-            .values("transfer-encoding")
-            .flat_map(|v| v.split(','))
-            .map(str::trim)
-            .filter(|t| !t.is_empty())
-            .collect();
-        if transfer
-            .last()
-            .is_some_and(|t| t.eq_ignore_ascii_case("chunked"))
-        {
-            transfer.pop();
+        let mut te = self.tokens("transfer-encoding");
+        if self.chunked() == Some(true) {
+            te.pop();
         }
-        let all: Vec<&str> = self.values("content-encoding").chain(transfer).collect();
-        parse_codings(&all)
+        let te = te.iter().map(String::as_str);
+        parse_codings(&self.values("content-encoding").chain(te).collect::<Vec<_>>())
     }
 
     fn websocket(&self) -> bool {
@@ -791,14 +793,11 @@ struct SizeLine {
     /// The size ended (whitespace seen); `ext` once `;` was.
     after: bool,
     ext: bool,
-    /// The line's bytes (END tail `wire`).
-    bytes: u64,
 }
 
 impl SizeLine {
     /// Takes a piece that ends at the line's LF or before it: the size once the line ended.
     fn push(&mut self, piece: &[u8]) -> Result<Option<u64>, Fault> {
-        self.bytes += piece.len() as u64;
         for &b in piece {
             match b {
                 b'\n' if self.any => return Ok(Some(self.size)),
@@ -916,7 +915,7 @@ impl Body {
     }
 
     /// Consumes what `input` holds of this body: `(consumed, done)`. `raw` grows by each piece
-    /// taken whole (a chunk-size line once it ended), also when a later piece faults.
+    /// taken, also when a later piece faults.
     fn advance(&mut self, t: Mono, input: &[u8]) -> Result<(usize, bool), Fault> {
         let Body { framing, sink, raw } = self;
         let chunk = match framing {
@@ -944,8 +943,9 @@ impl Body {
                     let nl = rest.iter().position(|&b| b == b'\n');
                     let piece = &rest[..nl.map_or(rest.len(), |i| i + 1)];
                     pos += piece.len();
-                    if let Some(size) = line.push(piece)? {
-                        *raw += line.bytes;
+                    let size = line.push(piece)?;
+                    *raw += piece.len() as u64;
+                    if let Some(size) = size {
                         *chunk = match size {
                             0 => Chunk::Trailer(Box::new(Head::new(false))),
                             n => Chunk::Data(n),

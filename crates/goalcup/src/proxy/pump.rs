@@ -17,13 +17,15 @@ use tokio::io::{AsyncRead, AsyncReadExt as _, AsyncWrite, AsyncWriteExt as _, Re
 /// Parsing stopped for the connection (5a): the `conn` GAP's reason and tail, and the relayed
 /// plaintext bytes the parser took but recorded in no stream (the rest of the faulting chunk, an
 /// upgrade copy, server bytes waiting for their request, a head cut short), the first of them no
-/// earlier than `since`. The pump adds every byte relayed after it.
+/// earlier than `since`. The pump adds every byte relayed after it. `at_close`: bytes only held
+/// at the close (a head cut short); parsing never stopped, so the GAP comes without the note.
 #[derive(Debug, PartialEq)]
 pub struct Stop {
     pub reason: GapReason,
     pub tail: Option<Value>,
     pub held: u64,
     pub since: Mono,
+    pub at_close: bool,
 }
 
 impl Stop {
@@ -36,6 +38,7 @@ impl Stop {
             tail,
             held,
             since,
+            at_close: false,
         }
     }
 }
@@ -47,7 +50,8 @@ pub trait Parser: Send {
     /// and ended `decode_error`. Later feeds are not made; `end` still is.
     fn feed(&mut self, dir: Dir, t: Mono, bytes: &[u8]) -> Result<(), Stop>;
     /// The connection closed. unsent_up: client bytes read but never forwarded (upstream had
-    /// closed). A `Stop` names bytes still held unrecorded at the close.
+    /// closed). A `Stop` names bytes still held unrecorded at the close. `reason` is
+    /// `interrupted` when a TLS leg closed without close_notify, though the conn ends `complete`.
     fn end(self: Box<Self>, t: Mono, reason: EndReason, unsent_up: u64) -> Option<Stop>;
     /// `feed` panicked: every open stream gets its GAP and ends `decode_error`; the `Stop` counts
     /// the bytes not recorded, the panicking chunk included.
@@ -70,10 +74,13 @@ pub struct Pumped<C, U> {
 /// Called after each chunk moved: its direction, time and length.
 pub type Tap<'a> = &'a (dyn Fn(Dir, Mono, u64) + Sync);
 
-/// How one direction ended. `WriteErr` carries the chunk read and not forwarded.
-#[derive(Clone, Copy)]
+/// How one direction ended. `Cut`: a TLS peer closed without close_notify, passed on as a clean
+/// close (rule 8), though only close_notify proves a close-delimited body whole. `WriteErr`
+/// carries the chunk read and not forwarded.
+#[derive(Clone, Copy, PartialEq)]
 enum Leg {
     Eof,
+    Cut,
     ReadErr,
     WriteErr(u64),
 }
@@ -133,14 +140,16 @@ impl Pump<'_> {
         R: AsyncRead + Unpin,
         W: AsyncWrite + Unpin,
     {
-        let (mut buf, mut prefix) = (vec![0u8; 16 * 1024], Some(prefix));
+        let (mut buf, mut prefix, mut end) = (vec![0u8; 16 * 1024], Some(prefix), Leg::Eof);
         loop {
             let chunk = match prefix.take().filter(|p| !p.is_empty()) {
                 Some(p) => p,
                 None => match from.read(&mut buf).await {
                     Ok(0) => break,
-                    // A TLS peer that closes without close_notify closed all the same (rule 8).
-                    Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => break,
+                    Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => {
+                        end = Leg::Cut;
+                        break;
+                    }
                     Ok(n) => Bytes::copy_from_slice(&buf[..n]),
                     Err(_) => return Leg::ReadErr,
                 },
@@ -158,7 +167,7 @@ impl Pump<'_> {
             self.feed(dir, t, &chunk);
         }
         let _ = to.shutdown().await;
-        Leg::Eof
+        end
     }
 }
 
@@ -197,23 +206,29 @@ where
         tokio::pin!(a, b);
         // An error on one leg ends the other: the connection is over.
         tokio::select! {
-            x = &mut a => (x, if matches!(x, Leg::Eof) { b.await } else { Leg::Eof }),
-            y = &mut b => (if matches!(y, Leg::Eof) { a.await } else { Leg::Eof }, y),
+            x = &mut a => (x, if matches!(x, Leg::Eof | Leg::Cut) { b.await } else { Leg::Eof }),
+            y = &mut b => (if matches!(y, Leg::Eof | Leg::Cut) { a.await } else { Leg::Eof }, y),
         }
     };
     let unsent_up = if let Leg::WriteErr(n) = lu { n } else { 0 };
     let reason = match (lu, ld) {
-        (Leg::Eof, Leg::Eof) => EndReason::Complete,
+        (Leg::Eof | Leg::Cut, Leg::Eof | Leg::Cut) => EndReason::Complete,
         _ => EndReason::Interrupted,
+    };
+    let parsed = match (lu, ld) {
+        (Leg::Cut, _) | (_, Leg::Cut) => EndReason::Interrupted,
+        _ => reason,
     };
     let [up, down] = pump.moved.map(AtomicU64::into_inner);
     let Shared { parser, mut stop } = pump.shared.into_inner().unwrap_or_else(|e| e.into_inner());
     if let Some(p) = parser {
         let t = rec.now();
-        let ended = catch_unwind(AssertUnwindSafe(move || p.end(t, reason, unsent_up)));
+        let ended = catch_unwind(AssertUnwindSafe(move || p.end(t, parsed, unsent_up)));
         match ended {
             Ok(Some(late)) if stop.is_none() => {
-                parse_stopped(rec, conn.sid(), late.reason);
+                if !late.at_close {
+                    parse_stopped(rec, conn.sid(), late.reason);
+                }
                 stop = Some(late);
             }
             // The parser is dropped: its open streams end interrupted, and what it held is unknown.

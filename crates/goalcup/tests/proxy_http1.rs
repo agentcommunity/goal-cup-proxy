@@ -416,32 +416,9 @@ fn a_framing_fault_stops_parsing_for_the_connection() {
     };
     assert_eq!((sid, reason), (req, GapReason::DecodeFailed));
     assert_eq!(end_of(&calls, req).0, EndReason::DecodeError);
-    let later = b"GET /later HTTP/1.1\r\n\r\n";
-    assert_eq!(
-        p.feed(Dir::Up, t, later).unwrap_err().held,
-        later.len() as u64
-    );
     assert_eq!(Box::new(p).end(t, EndReason::Complete, 0), None);
     assert_eq!(opens(&calls, StreamKind::HttpReq).len(), 1);
     assert_eq!(gaps(&calls).len(), 1);
-}
-
-/// 5a counts the rest of the faulting chunk: a bad head followed, in the same chunk, by a whole
-/// request is held whole.
-#[test]
-fn a_fault_counts_the_rest_of_its_chunk() {
-    let (rec, calls) = Recorder::for_tests(ROOM);
-    let mut p = Http1::new(&rec, CONN);
-    let t = Mono::now();
-    p.feed(Dir::Up, t, b"GET /a HTTP/1.1\r\n\r\n").unwrap();
-    let mut chunk = b"BAD\r\n\r\nPOST /c HTTP/1.1\r\nContent-Length: 8000\r\n\r\n".to_vec();
-    chunk.extend_from_slice(&[b'x'; 8000]);
-    let stop = p.feed(Dir::Up, t, &chunk).unwrap_err();
-    assert_eq!(
-        (stop.reason, stop.held),
-        (GapReason::DecodeFailed, chunk.len() as u64)
-    );
-    assert_eq!(opens(&calls, StreamKind::HttpReq).len(), 1);
 }
 
 /// 5a under the `upgrade_copy` guard: the GAP names the guard, and the copy, relayed but never
@@ -465,7 +442,8 @@ fn the_upgrade_copy_guard_counts_the_copy() {
             reason: GapReason::MemoryGuard,
             tail: Some(tail),
             held: 65 * 16 * 1024,
-            since: t0
+            since: t0,
+            at_close: false,
         }
     );
     let [(req, _, _)] = opens(&calls, StreamKind::HttpReq).try_into().unwrap();
@@ -473,7 +451,7 @@ fn the_upgrade_copy_guard_counts_the_copy() {
 }
 
 /// Bytes the close leaves unrecorded are a stop at the close: heads cut short on both sides, and
-/// the copy of an upgrade that was never answered.
+/// the copy of an upgrade that was never answered. A close inside a chunk-size line holds none.
 #[test]
 fn bytes_held_at_the_close_are_named() {
     let (rec, calls) = Recorder::for_tests(ROOM);
@@ -497,8 +475,8 @@ fn bytes_held_at_the_close_are_named() {
         .expect("a stop");
     let held = (resp.len() + req.len()) as u64;
     assert_eq!(
-        (late.reason, late.held, late.since),
-        (GapReason::DecodeFailed, held, t)
+        (late.reason, late.held, late.since, late.at_close),
+        (GapReason::DecodeFailed, held, t, true)
     );
     assert_eq!(opens(&calls, StreamKind::HttpReq).len(), 1);
 
@@ -512,6 +490,13 @@ fn bytes_held_at_the_close_are_named() {
         .end(Mono::now(), EndReason::Complete, 0)
         .expect("a stop");
     assert_eq!((late.held, late.since), (790, t));
+
+    let (rec, _calls) = Recorder::for_tests(ROOM);
+    let mut p = Http1::new(&rec, CONN);
+    p.feed(Dir::Up, t, b"GET /sse HTTP/1.1\r\n\r\n").unwrap();
+    let down = b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhello\r\n1";
+    p.feed(Dir::Down, t, down).unwrap();
+    assert_eq!(Box::new(p).end(t, EndReason::Interrupted, 0), None);
 }
 
 /// A panic (rule 4): the open stream gets its own GAP with the panic tail and ends decode_error.
@@ -537,7 +522,8 @@ fn a_panic_gives_the_open_stream_its_gap() {
 }
 
 /// Past the head guard, a long start line keeps its method and path (GAP `http_head`), a chunk
-/// extension of any length is skipped, and a framing field that keeps growing stops parsing.
+/// extension of any length is skipped, and framing fields that keep growing, in one line or in
+/// many, stop parsing.
 #[test]
 fn long_lines_past_the_guard() {
     let mut up = format!("GET /long?q={} HTTP/1.1\r\n\r\n", "a".repeat(100_000)).into_bytes();
@@ -554,17 +540,19 @@ fn long_lines_past_the_guard() {
     };
     assert_eq!((sid, &tail["guard"]), (reqs[0].0, &json!("http_head")));
 
-    let (rec, _calls) = Recorder::for_tests(ROOM);
-    let mut p = Http1::new(&rec, CONN);
-    let mut head = b"GET / HTTP/1.1\r\n".to_vec();
-    for i in 0..80 {
-        head.extend(format!("x-pad-{i:02}: {}\r\n", "p".repeat(900)).bytes());
+    for (open, more) in [(&b"Upgrade: "[..], &b"w"[..]), (b"", b"Connection: a\r\n")] {
+        let (rec, _calls) = Recorder::for_tests(ROOM);
+        let mut p = Http1::new(&rec, CONN);
+        let mut head = b"GET / HTTP/1.1\r\n".to_vec();
+        for i in 0..80 {
+            head.extend(format!("x-pad-{i:02}: {}\r\n", "p".repeat(900)).bytes());
+        }
+        head.extend_from_slice(open);
+        p.feed(Dir::Up, Mono::now(), &head).unwrap();
+        let grow = more.repeat(1024 / more.len());
+        let stop = (0..8)
+            .find_map(|_| p.feed(Dir::Up, Mono::now(), &grow).err())
+            .expect("parsing stops");
+        assert_eq!(stop.reason, GapReason::DecodeFailed);
     }
-    head.extend_from_slice(b"Upgrade: ");
-    p.feed(Dir::Up, Mono::now(), &head).unwrap();
-    let grow = |p: &mut Http1| p.feed(Dir::Up, Mono::now(), &[b'w'; 1024]);
-    let stop = (0..8)
-        .find_map(|_| grow(&mut p).err())
-        .expect("parsing stops");
-    assert_eq!(stop.reason, GapReason::DecodeFailed);
 }

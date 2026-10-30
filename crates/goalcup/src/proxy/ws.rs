@@ -69,9 +69,10 @@ pub struct Deflate {
 pub struct Unsupported;
 
 /// Parsing stopped for the connection (5a): the caller writes the `parse_stopped` note and the
-/// `conn` GAP. Every later `feed` is ignored and returns this again.
+/// `conn` GAP. Holds the bytes of the chunk taken before the frame that stopped it. Every later
+/// `feed` is ignored and returns this again, with 0.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Stopped;
+pub struct Stopped(pub usize);
 
 /// Reads the `Sec-WebSocket-Extensions` of the upgrade request and of the `101`, each with its
 /// header lines joined by `,`. No answer, or an empty one, is no extension. The answer must be at
@@ -186,27 +187,27 @@ impl WsConn {
     /// Takes relayed bytes of one direction, in any split, after they were forwarded.
     pub fn feed(&mut self, dir: Dir, t: Mono, bytes: &[u8]) -> Result<(), Stopped> {
         if self.stopped {
-            return Err(Stopped);
+            return Err(Stopped(0));
         }
         let side = match dir {
             Dir::Up => &mut self.up,
             Dir::Down => &mut self.down,
         };
-        if side.feed(t, bytes).is_err() {
+        if let Err(stopped) = side.feed(t, bytes) {
             self.stopped = true;
-            self.up.stop(t, dir == Dir::Up);
-            self.down.stop(t, dir == Dir::Down);
-            return Err(Stopped);
+            self.up.stop(t, dir == Dir::Up, None);
+            self.down.stop(t, dir == Dir::Down, None);
+            return Err(stopped);
         }
         Ok(())
     }
 
     /// Parsing stopped for the connection elsewhere (a parser panic): both streams get GAP
-    /// `decode_failed` and end `decode_error` at `end`.
-    pub fn stop(&mut self, t: Mono) {
+    /// `decode_failed` with `tail` and end `decode_error` at `end`.
+    pub fn stop(&mut self, t: Mono, tail: Option<Value>) {
         if !std::mem::replace(&mut self.stopped, true) {
-            self.up.stop(t, true);
-            self.down.stop(t, true);
+            self.up.stop(t, true, tail.clone());
+            self.down.stop(t, true, tail);
         }
     }
 
@@ -396,7 +397,9 @@ impl Side {
     }
 
     fn feed(&mut self, t: Mono, mut data: &[u8]) -> Result<(), Stopped> {
+        let all = data.len();
         while !data.is_empty() {
+            let at = all - data.len();
             if let Some(frame) = &mut self.frame {
                 let take = (frame.len - frame.pos).min(data.len() as u64) as usize;
                 let (mask, pos, control) = (frame.mask, frame.pos, frame.control);
@@ -409,7 +412,7 @@ impl Side {
                 }
             } else if let Some(header) = self.framer.take_header(&mut data) {
                 if header.len >> 63 != 0 {
-                    return Err(Stopped);
+                    return Err(Stopped(at));
                 }
                 self.header(t, header);
                 if header.len == 0 {
@@ -696,7 +699,7 @@ impl Side {
 
     /// Parsing stopped for the connection at `t`: the open message, and on the faulting side the
     /// frame that broke it, get their GAP.
-    fn stop(&mut self, t: Mono, faulted: bool) {
+    fn stop(&mut self, t: Mono, faulted: bool, tail: Option<Value>) {
         let open = self.message.is_some() || self.control.is_some() || self.frame.is_some();
         if let Some(message) = &self.message {
             let opcode = message.opcode;
@@ -704,7 +707,7 @@ impl Side {
         }
         let start = self.message.as_ref().and_then(|m| m.broken).unwrap_or(t);
         if faulted || open {
-            self.gap(start);
+            self.handle.gap(GapReason::DecodeFailed, start, None, tail);
         }
         self.release_held();
         self.message = None;
