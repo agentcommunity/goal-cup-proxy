@@ -3,13 +3,15 @@
 //! This is the phase 0 stub with the final type names, so PRD-08's `legs.rs` and `history.rs` build
 //! against them now. [`Calls`] takes every record of an entry in order ([`Calls::push`]) and
 //! [`Calls::finish`] gives the [`CallTable`]. The sink reads the `start` EVENT from the pushed
-//! records; it takes no argument of its own. Until the reader lands, the table is empty and says
-//! `readable: false` with [`Reason::NoReader`], so PRD-08 skips (never passes) the optional
-//! harness log checks.
+//! records; it takes no argument of its own. Until the reader lands, the table is
+//! [`CallTable::default`]: not readable, [`Reason::NoReader`], threads and children not known.
 //!
-//! Wall times are nanoseconds since the Unix epoch, the same unit as the LINK `wall_ns` of
-//! `goalcup_format`. A token count of `None` means the source did not say; it is never 0 for that
-//! (PRD-09 section 4).
+//! Build a [`CallRow`], [`Thread`] or [`CallTable`] with [`CallRow::new`], [`Thread::new`] or
+//! [`CallTable::default`], then set fields; never with a struct literal, so a field added later
+//! breaks no caller.
+//!
+//! Wall times are nanoseconds since the Unix epoch, as the LINK `wall_ns` of `goalcup_format`. A
+//! token count of `None` means the source did not say; it is never 0 for that (PRD-09 section 4).
 
 use std::collections::BTreeMap;
 use std::ffi::OsString;
@@ -17,7 +19,7 @@ use std::process::ExitCode;
 
 use goalcup_format::Record;
 
-/// Which log a row comes from.
+/// Which log a row comes from; also which leg a call's tokens came from (`usage_from`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Leg {
     /// The recorded wire: a request and its reply.
@@ -77,12 +79,38 @@ pub enum Join {
     Unattributed,
 }
 
+/// The host's kind: the `conn` meta `kind`, else the `start` event's `hosts` (PRD-09 section 7).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HostKind {
+    Provider,
+    Gateway,
+    Vendor,
+    /// Participant and config hosts.
+    Other,
+}
+
+/// The wire shape the request path picks (PRD-09 sections 3 and 4).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Shape {
+    Responses,
+    Anthropic,
+    Chat,
+    Gemini,
+}
+
+/// How a wire call travelled.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Via {
+    Http,
+    Ws,
+}
+
 /// What a connector's native leg can give (PRD-08 section 3.1).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum NativeForm {
     /// Per-call rows with times.
     PerCall,
-    /// Per-session totals only (Hermes `api_call_count`).
+    /// Per-session totals only.
     Totals,
     /// No native leg.
     None,
@@ -97,13 +125,6 @@ pub enum Reason {
     SnapshotUnreadable,
     /// A reader found zero native calls while the wire had calls.
     NoNative,
-}
-
-/// Where a call's tokens came from: never both legs added (PRD-09 section 4).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum UsageFrom {
-    Wire,
-    Native,
 }
 
 /// The five token numbers of one call. `None` means not said, never 0.
@@ -121,36 +142,80 @@ pub struct Tokens {
     pub reasoning: Option<u64>,
 }
 
-/// One row: a wire call, warm-up, interrupt or other request, or a native call.
+/// One row: a wire call, warm-up, interrupt or other request, or a native call. The wire fields
+/// (`sid`, `msg`, `host`, `host_kind`, `shape`, `via`) are `None` on native rows, `path` on wire
+/// rows.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CallRow {
     pub leg: Leg,
     /// The entry id, `e` and 16 hex.
     pub entry: String,
     pub boot: u64,
-    /// The request stream id (wire rows).
+    /// The request stream id.
     pub sid: Option<u64>,
-    /// The session file path (native rows).
+    /// The session file path.
     pub path: Option<String>,
-    /// The WebSocket message number on its stream, for a WebSocket call.
+    /// The WebSocket message number on its stream.
     pub msg: Option<u64>,
     pub thread: Option<String>,
     pub parent: Option<String>,
-    /// Nanoseconds since the Unix epoch, as LINK `wall_ns`.
     pub wall_start: Option<u64>,
-    /// Nanoseconds since the Unix epoch, as LINK `wall_ns`. For a wire call, the reply's end.
+    /// For a wire call, the reply's end.
     pub wall_end: Option<u64>,
+    pub host: Option<String>,
+    pub host_kind: Option<HostKind>,
+    pub shape: Option<Shape>,
+    pub via: Option<Via>,
     pub kind: Kind,
     pub outcome: Outcome,
+    /// A safe reason token beside `outcome`, such as a `response.incomplete` reason.
+    pub detail: Option<String>,
     /// The request, the reply and, for WebSocket, the message ended `complete` with no GAP.
     pub whole: bool,
     /// The model the reply named, else the requested one.
     pub model: Option<String>,
     /// The request body's `model`.
     pub model_requested: Option<String>,
+    pub effort: Option<String>,
     pub tokens: Tokens,
-    pub usage_from: Option<UsageFrom>,
+    /// Other numeric usage members whose name ends in `tokens`, `Tokens` or `TokenCount`.
+    pub extra: BTreeMap<String, u64>,
+    /// Which leg `tokens` came from; never both added.
+    pub usage_from: Option<Leg>,
     pub join: Option<Join>,
+}
+
+impl CallRow {
+    /// A row with every optional field empty, `outcome` `Unknown` and `whole` false.
+    pub fn new(leg: Leg, entry: impl Into<String>, kind: Kind) -> Self {
+        Self {
+            leg,
+            entry: entry.into(),
+            boot: 0,
+            sid: None,
+            path: None,
+            msg: None,
+            thread: None,
+            parent: None,
+            wall_start: None,
+            wall_end: None,
+            host: None,
+            host_kind: None,
+            shape: None,
+            via: None,
+            kind,
+            outcome: Outcome::Unknown,
+            detail: None,
+            whole: false,
+            model: None,
+            model_requested: None,
+            effort: None,
+            tokens: Tokens::default(),
+            extra: BTreeMap::new(),
+            usage_from: None,
+            join: None,
+        }
+    }
 }
 
 /// One agent or subagent thread.
@@ -158,23 +223,44 @@ pub struct CallRow {
 pub struct Thread {
     pub id: String,
     pub parent: Option<String>,
-    /// Codex `agent_path`, Claude Code `agentType`; bounded, printable.
+    /// The harness's own agent label; bounded, printable.
     pub label: Option<String>,
     pub depth: Option<u32>,
     /// Native calls read for this thread.
     pub native_calls: u64,
-    /// The harness's own call total where it keeps one (Hermes `api_call_count`).
+    /// The harness's own call total where it keeps one.
     pub native_total: Option<u64>,
     /// Native calls with no `ok` wire copy.
     pub native_only: u64,
-    /// Native calls after this time are not known (the database copy's time). Nanoseconds since
-    /// the Unix epoch.
+    /// Native calls after this time (the database copy's time) are not known.
     pub native_until: Option<u64>,
     pub readable: bool,
+    /// `None` exactly when `readable` is true.
     pub reason: Option<Reason>,
 }
 
+impl Thread {
+    /// A thread with nothing read: not readable, [`Reason::NoReader`].
+    pub fn new(id: impl Into<String>) -> Self {
+        Self {
+            id: id.into(),
+            parent: None,
+            label: None,
+            depth: None,
+            native_calls: 0,
+            native_total: None,
+            native_only: 0,
+            native_until: None,
+            readable: false,
+            reason: Some(Reason::NoReader),
+        }
+    }
+}
+
 /// The call table of one entry.
+///
+/// When `reason` is [`Reason::NoReader`], `threads` and `children` are not known, not empty:
+/// nothing read them. A check that needs them (`subagents_present`) skips, never passes.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CallTable {
     pub rows: Vec<CallRow>,
@@ -182,17 +268,31 @@ pub struct CallTable {
     /// Parent thread id to the child threads it names.
     pub children: BTreeMap<String, Vec<String>>,
     pub readable: bool,
+    /// `None` exactly when `readable` is true.
     pub reason: Option<Reason>,
     pub native_form: NativeForm,
-    /// Claude Code calls that fell back to the time join.
+    /// Calls that fell back to the time join.
     pub joined_by_time: u64,
+}
+
+impl Default for CallTable {
+    /// The empty table of an entry with no reader: not readable, [`Reason::NoReader`].
+    fn default() -> Self {
+        Self {
+            rows: Vec::new(),
+            threads: Vec::new(),
+            children: BTreeMap::new(),
+            readable: false,
+            reason: Some(Reason::NoReader),
+            native_form: NativeForm::None,
+            joined_by_time: 0,
+        }
+    }
 }
 
 /// The U1 sink: push every record of an entry in order, then finish.
 #[derive(Debug, Default)]
-pub struct Calls {
-    rows: Vec<CallRow>,
-}
+pub struct Calls(());
 
 impl Calls {
     pub fn new() -> Self {
@@ -202,17 +302,9 @@ impl Calls {
     /// Takes one record. The stub reads nothing yet.
     pub fn push(&mut self, _rec: &Record) {}
 
-    /// The table. The stub's is empty and not readable, with [`Reason::NoReader`].
+    /// The table. The stub's is [`CallTable::default`].
     pub fn finish(self) -> CallTable {
-        CallTable {
-            rows: self.rows,
-            threads: Vec::new(),
-            children: BTreeMap::new(),
-            readable: false,
-            reason: Some(Reason::NoReader),
-            native_form: NativeForm::None,
-            joined_by_time: 0,
-        }
+        CallTable::default()
     }
 }
 

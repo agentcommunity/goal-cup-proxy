@@ -1,81 +1,15 @@
 {
  "purpose": "PRD-09 usage reader fixtures: native transcript excerpts (Codex rollout, Claude Code session transcript) for the native readers and the id join",
+ "copy": "all four byte for byte (sha256 equal to the source) from crates/goalcup-verifier/tests/fixtures/m2-native/ at commit 15a6963b57f1cb341b4efcaf10aa92d6dc633c31; already redacted excerpts with ids and workspace paths replaced by placeholders, as the old crates/goalcup-verifier/tests/it/m2_native_observations.rs doc comment says (sha256 6e3cc8725a58861deeeb45a0603fc11eac89e3f38c0d4664e7901d985c1bcef8); the four empty *.redactions.jsonl audit files were not copied",
  "files": {
-  "codex-native-excerpt.jsonl": {
-   "sha256": "d716ba6e8441d882e1a88bd01bc7f5680378fcf71489ddc133ce766d0d2ffd25",
-   "bytes": 6024,
-   "lines": 12,
-   "copied_from": {
-    "path": "crates/goalcup-verifier/tests/fixtures/m2-native/codex-native-excerpt.jsonl",
-    "commit": "15a6963b57f1cb341b4efcaf10aa92d6dc633c31",
-    "sha256": "d716ba6e8441d882e1a88bd01bc7f5680378fcf71489ddc133ce766d0d2ffd25",
-    "bytes": 6024
-   },
-   "copy": "byte for byte (sha256 equal to the source)",
-   "source": "spikes/codex-cli/fixtures/rollout-main-01a06614.jsonl (Codex CLI 0.153.0, TUI launch, sha256 04441b2e0d18be764df692d1445c5b421fbe8fee6285834b6cad653e89238c1a), lines at 0-based ordinals 0, 2, 5, 7, 8, 9, 12, 15, 16, 27, 42, 43"
-  },
-  "codex-native-e01-excerpt.jsonl": {
-   "sha256": "0d6fc5792ef4a9434961d2c0264478ca2cdf51d89524456fd371e54d9ae2c79a",
-   "bytes": 1331,
-   "lines": 2,
-   "copied_from": {
-    "path": "crates/goalcup-verifier/tests/fixtures/m2-native/codex-native-e01-excerpt.jsonl",
-    "commit": "15a6963b57f1cb341b4efcaf10aa92d6dc633c31",
-    "sha256": "0d6fc5792ef4a9434961d2c0264478ca2cdf51d89524456fd371e54d9ae2c79a",
-    "bytes": 1331
-   },
-   "copy": "byte for byte (sha256 equal to the source)",
-   "source": "E01 raw native chain codex-20260928T032110Z/trace/chain.jsonl (Codex CLI 0.153.0, exec launch, chain sha256 8344bcb765127762a764259872a3c400f417921d2ada94308aaf0d427475c330), native-stream JSONL lines at 0-based ordinals 0 and 6"
-  },
-  "claude-code-native-excerpt.jsonl": {
-   "sha256": "fb048b0d8363d2674c601f15bdbbca2098effd4e6b181178fc0af98b392cc97b",
-   "bytes": 7339,
-   "lines": 11,
-   "copied_from": {
-    "path": "crates/goalcup-verifier/tests/fixtures/m2-native/claude-code-native-excerpt.jsonl",
-    "commit": "15a6963b57f1cb341b4efcaf10aa92d6dc633c31",
-    "sha256": "fb048b0d8363d2674c601f15bdbbca2098effd4e6b181178fc0af98b392cc97b",
-    "bytes": 7339
-   },
-   "copy": "byte for byte (sha256 equal to the source)",
-   "source": "spikes/claude-code-cli/fixtures/main-session.jsonl (Claude Code CLI 2.1.259, sha256 832f5d6f97b88d18e5738eb04e56f12e9e4d9553dd66c3d185ee9e156f8d244b), lines at 0-based ordinals 0, 5, 6, 7, 24, 26, 38, 39, 55, 95, 142"
-  },
-  "claude-code-native-e01-excerpt.jsonl": {
-   "sha256": "24e7c70b1d7833800d632aa7483fe6643616c2fd68e66a15a6c496607d0a34e8",
-   "bytes": 4700,
-   "lines": 6,
-   "copied_from": {
-    "path": "crates/goalcup-verifier/tests/fixtures/m2-native/claude-code-native-e01-excerpt.jsonl",
-    "commit": "15a6963b57f1cb341b4efcaf10aa92d6dc633c31",
-    "sha256": "24e7c70b1d7833800d632aa7483fe6643616c2fd68e66a15a6c496607d0a34e8",
-    "bytes": 4700
-   },
-   "copy": "byte for byte (sha256 equal to the source)",
-   "source": "E01 raw native chain claude-20260928T032648Z/trace/chain.jsonl (Claude Code CLI 2.1.283, sdk launch, chain sha256 bb20b7c6ddeba4cc3a7e5215eee769ccd83719044b7df25b407ed9d7fc4bdacf), lines at 0-based ordinals 2, 4, 17, 19, 29, plus one system.api_error line from claude-20260928T032205Z/trace/chain.jsonl (same version, chain sha256 46731498355909078d254a90cdb4798424767c71d21f6bd6ad5257d37ae6bcd0, ordinal 17)"
-  }
+  "codex-native-excerpt.jsonl": {"sha256": "d716ba6e8441d882e1a88bd01bc7f5680378fcf71489ddc133ce766d0d2ffd25", "bytes": 6024, "lines": 12, "source": "Codex CLI 0.153.0 TUI rollout spike fixture"},
+  "codex-native-e01-excerpt.jsonl": {"sha256": "0d6fc5792ef4a9434961d2c0264478ca2cdf51d89524456fd371e54d9ae2c79a", "bytes": 1331, "lines": 2, "source": "Codex CLI 0.153.0 exec, E01 run codex-20260928T032110Z"},
+  "claude-code-native-excerpt.jsonl": {"sha256": "fb048b0d8363d2674c601f15bdbbca2098effd4e6b181178fc0af98b392cc97b", "bytes": 7339, "lines": 11, "source": "Claude Code CLI 2.1.259 main session spike fixture"},
+  "claude-code-native-e01-excerpt.jsonl": {"sha256": "24e7c70b1d7833800d632aa7483fe6643616c2fd68e66a15a6c496607d0a34e8", "bytes": 4700, "lines": 6, "source": "Claude Code CLI 2.1.283 sdk, E01 run claude-20260928T032648Z, plus one system.api_error line from claude-20260928T032205Z"}
  },
- "old_provenance": {
-  "path": "crates/goalcup-verifier/tests/it/m2_native_observations.rs (module doc comment; the old m2-native folder had no provenance.json)",
-  "commit": "15a6963b57f1cb341b4efcaf10aa92d6dc633c31",
-  "sha256": "6e3cc8725a58861deeeb45a0603fc11eac89e3f38c0d4664e7901d985c1bcef8",
-  "facts_copied": {
-   "sanitization": "curated, already-redacted excerpts of real, measured native transcripts. A handful of bulky tool or model text fields (thinking-block signature, tool input and output bodies, base_instructions) were shortened in place, every field the decoders read left unchanged. In the two E01 excerpts every real session id, message, turn and window UUID, msg_/req_/toolu_-prefixed API id and /Users/.../workspace path was replaced by a deterministic placeholder in one pass across both files, so the same original maps to the same placeholder: a bare UUID becomes 00000000-0000-4000-8000-<hex counter>; a msg_/req_/toolu_/ctc_/ctco_/fco_ id keeps its prefix with its suffix replaced by PLACEHOLDER<counter>; an E01 workspace path becomes /Users/placeholder/e01-workspace-<counter>. The source sha256 values are the raw sources', kept for provenance.",
-   "spike_sources": "the two non-E01 source files are committed, sanitized spike fixtures in the old tree",
-   "redaction_audits": "each excerpt had an empty *.redactions.jsonl audit file in the old crate (zero redactions)"
-  }
- },
- "not_copied": "the four *.redactions.jsonl audit files (all empty)",
  "secret_scan": {
-  "command": "grep -o -i -E '(^|[^a-z0-9_])(sk-|sk-ant-|sk-proj-|ghp_|gho_|github_pat_|xox[abposr]-|akia[0-9a-z]{12})|bearer +[a-z0-9._~+/=-]{8,}|eyj[a-z0-9_-]{8,}\\.|-----begin|(key|token|secret|authorization|password)[\"' :=_a-z-]{0,12}[a-z0-9+/=_-]{40,}' FILE | wc -l",
-  "covers": "sk-, sk-ant-, sk-proj-, ghp_, gho_, github_pat_, xox?-, AKIA keys, Bearer followed by a non-mask value, eyJ JWT starts, -----BEGIN blocks, 40+ character hex or base64 runs next to key, token, secret, authorization or password names; case-insensitive, so it over-matches rather than under-matches",
-  "where": "a build box (box.mjs) on the committed branch, not on the conductor",
-  "result": {
-   "codex-native-excerpt.jsonl": 0,
-   "codex-native-e01-excerpt.jsonl": 0,
-   "claude-code-native-excerpt.jsonl": 0,
-   "claude-code-native-e01-excerpt.jsonl": 0
-  },
-  "result_text": "0 hits in every file",
-  "follow_up": "goalcup-verify secrets (PRD-08) does not exist yet; rerun the PRD-08 secret scan over this folder when it lands"
+  "how": "the pattern scan named in ../m2-openai/provenance.json, in a build box on the committed branch",
+  "result": {"codex-native-excerpt.jsonl": 0, "codex-native-e01-excerpt.jsonl": 0, "claude-code-native-excerpt.jsonl": 0, "claude-code-native-e01-excerpt.jsonl": 0},
+  "follow_up": "rerun goalcup-verify secrets (PRD-08) over this folder when it lands"
  }
 }

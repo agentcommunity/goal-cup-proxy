@@ -1,5 +1,5 @@
 {
- "purpose": "PRD-09 usage reader fixture: a real Claude Code headless run, Anthropic Messages over HTTP with SSE responses carrying token usage",
+ "purpose": "PRD-09 usage reader fixture: a real Claude Code 2.1.283 headless run, Anthropic Messages over HTTP with SSE replies carrying token usage",
  "files": {
   "claude-code-2.1.283-e01.jsonl": {
    "sha256": "cabb3f1eae0c372fce531bfc4c60afc99b0a8d7bd950f621bdc19d96593f895b",
@@ -9,152 +9,16 @@
     "path": "crates/goalcup-verifier/tests/fixtures/m2-anthropic/claude-code-2.1.283-e01.jsonl",
     "commit": "15a6963b57f1cb341b4efcaf10aa92d6dc633c31",
     "sha256": "4fbfb96a7d3b8750e1c033cbe14d392a993cadb48660ce9fa243950214035b5f",
-    "bytes": 26062
+    "bytes": 26062,
+    "provenance_sha256": "5473fdb7f44cd31563c0238424a6749e987b9ade144ac65f965ce5b9ffb43488"
    },
-   "streams": {
-    "wire_request": 2,
-    "wire_response": 2
-   },
-   "line_format": "the same line format as m2-openai/codex-0.153.0-ws-run.jsonl: one JSON object per stream in Open order: stream (Open-order number), source, exchange, method (requests) or status (responses), content_type, label, first and last (wall time of the first segment's first and the last segment's last observation), text (the retained bytes as UTF-8). Host api.anthropic.com and path /v1/messages are common to every stream and not repeated.",
-   "conversion": "Converted in a build box from the old v5 chain-shaped lines (open, segment and end records). For each stream, its segments' text was joined in source_offset order (the offsets were checked to be contiguous in source coordinates). The retained text is kept as recorded: stream 1 keeps the two <redacted:email> masks, so its text is 3958 bytes for 3963 source bytes. Dropped: producer and connection ids, mono_ns, clock_id, protocol_hint, part numbers, per-segment offsets and lengths, redaction audit spans and the end records (all four ended with reason complete). No response header naming a request id (request-id) was present in the source metadata, so the lines carry none; the id join reads it only when a recording has it. The conversion script is not committed.",
-   "checked_in_box": "every line parses as JSON; both response streams' text contains a message_start event and a message_delta event, each with a usage object (exchange 1: input 10, cache creation 7637, cache read 13689, output 356 at message_delta; exchange 2: input 8, cache creation 511, cache read 21326, output 61 at message_delta)"
+   "conversion": "In a build box, each stream's v5 segments were joined in source order into one line (keys stream, source, exchange, method or status, content_type, label, first and last wall, text). That is a subset of the m2-openai line keys: no message_index, retained_segments or mono_ns. Masks kept as recorded; ids, offsets, audits and end records (all complete) dropped; the source had no request-id header.",
+   "checked_in_box": "every line parses as JSON; both replies hold message_start and message_delta usage. Exchange 1: input 10, cache creation 7637, cache read 13689, output 356, output_tokens_details.thinking_tokens 182. Exchange 2: input 8, cache creation 511, cache read 21326, output 61, output_tokens_details.thinking_tokens 55. The thinking count is the reasoning token number the reader should take where given."
   }
  },
- "old_provenance": {
-  "path": "crates/goalcup-verifier/tests/fixtures/m2-anthropic/provenance.json",
-  "commit": "15a6963b57f1cb341b4efcaf10aa92d6dc633c31",
-  "sha256": "5473fdb7f44cd31563c0238424a6749e987b9ade144ac65f965ce5b9ffb43488",
-  "facts_copied": {
-   "kind": "m2-t21-anthropic-fixture",
-   "source": {
-    "experiment": "E01 early live capture (docs/qualification/m2-early-live-capture.md, section 7.2)",
-    "run": "claude-20260928T032648Z (measured PASS row)",
-    "chain": "m2-e01-live worktree: spikes/m2-first-release/out/early/live/claude-20260928T032648Z/trace/chain.jsonl (git-ignored; read only)",
-    "chain_sha256": "bb20b7c6ddeba4cc3a7e5215eee769ccd83719044b7df25b407ed9d7fc4bdacf",
-    "harness": "Claude Code 2.1.283 (versions/2.1.283, sha256 d8cb1e5c...5651d21e per E01), headless, --model haiku",
-    "model": "claude-haiku-4-5-20251001",
-    "protocol": "Anthropic Messages over HTTP/1.1: POST api.anthropic.com /v1/messages (application/json), 200 text/event-stream responses; request 2 is a threaded continuation (thread.type continue, previous_message_id) carrying only the two tool_result blocks",
-    "capture": "T13 proxy, T04 stream redaction, T03 v5 writer; decoded body bytes (chunked framing removed by T10)"
-   },
-   "streams": [
-    {
-     "stream": 1,
-     "source": "wire_request",
-     "exchange": 1,
-     "original": {
-      "source_bytes": 85530,
-      "retained_bytes": 85525,
-      "parts": 2,
-      "audit": "2 email spans in part 0"
-     },
-     "fixture": {
-      "source_bytes": 3963,
-      "retained_bytes": 3958,
-      "parts": 2,
-      "audit": "2 email spans in part 0, recomputed"
-     },
-     "changes": "re-serialized after eliding system texts, metadata.user_id, tool descriptions and input_schemas, and five long unredacted system-reminder text blocks; split at the system member"
-    },
-    {
-     "stream": 2,
-     "source": "wire_response",
-     "exchange": 1,
-     "original": {
-      "source_bytes": 7938,
-      "retained_bytes": 7938,
-      "parts": 8
-     },
-     "fixture": {
-      "source_bytes": 7938,
-      "retained_bytes": 7938,
-      "parts": 8
-     },
-     "changes": "same-length placeholders for the message and tool-use IDs and the thinking signature; every part keeps its real length, offset and boundary"
-    },
-    {
-     "stream": 3,
-     "source": "wire_request",
-     "exchange": 2,
-     "original": {
-      "source_bytes": 1367,
-      "retained_bytes": 1367,
-      "parts": 1
-     },
-     "fixture": {
-      "source_bytes": 1009,
-      "retained_bytes": 1009,
-      "parts": 1
-     },
-     "changes": "re-serialized after eliding the system (billing header) text and metadata.user_id; ID placeholders"
-    },
-    {
-     "stream": 4,
-     "source": "wire_response",
-     "exchange": 2,
-     "original": {
-      "source_bytes": 2927,
-      "retained_bytes": 2927,
-      "parts": 3
-     },
-     "fixture": {
-      "source_bytes": 2927,
-      "retained_bytes": 2927,
-      "parts": 3
-     },
-     "changes": "same-length placeholders for the message ID and the thinking signature"
-    }
-   ],
-   "placeholders": {
-    "producer and clock_id": "a0000000000000000000000000000001",
-    "connection": "c0000000000000000000000000000001",
-    "provider IDs": "msg_/toolu_/req_ + PLACEHOLDER + zero-padded ordinal, same length as the original, mapped consistently in chain order (msg_PLACEHOLDER0000000000001 is response 1's message and request 2's thread.previous_message_id)",
-    "thinking signature": "repeated 'elided-signature-' cut to the original length",
-    "elided values": "<elided: N bytes> with the original UTF-8 length; tool input_schema {}"
-   },
-   "observed_protocol_set": {
-    "request_blocks": [
-     "text",
-     "tool_result"
-    ],
-    "response_events": [
-     "message_start",
-     "content_block_start",
-     "content_block_delta",
-     "content_block_stop",
-     "message_delta",
-     "message_stop",
-     "ping"
-    ],
-    "response_blocks": [
-     "thinking",
-     "tool_use",
-     "text"
-    ],
-    "deltas": [
-     "thinking_delta",
-     "signature_delta",
-     "input_json_delta",
-     "text_delta"
-    ],
-    "not_observed": "error events, JSON error documents, other blocks and deltas: synthetic tests only"
-   },
-   "checks": {
-    "redact_py": "spikes/redact.py: 0 redactions on the fixture and on derive.py; output byte-identical",
-    "needle_scan": "0 hits for the e-mail addresses and organizationUuid of the raw native transcript copy, the account_uuid, device_id and session_id of the raw request metadata, the billing-header cc_prompt_id/cc_prev_req/cch values, every original msg_/toolu_/req_ ID and both original thinking signatures",
-    "patterns": "0 '@', 0 UUID-shaped strings, 0 'sk-', 0 'Bearer', 0 JWT prefixes, 0 refresh_token, 0 proxy credentials, 0 long base64 runs; the one '/Users/' match is the Read tool's split path fragment '/Users/' + 'Shared/goalcup-' (the shared run directory, not a home path)",
-    "eye_review": "every record read; kept request text: the goal, the total_tokens and date reminders, and the userEmail and attribution reminders whose addresses T04 had already replaced with <redacted:email>; the tool_result contents (including the harness-appended total_tokens system-reminder on the Read result) and the SSE input_json_delta fragments keep the shared run path /Users/Shared/goalcup-m2-e01/<run> (not personal data)"
-   }
-  }
- },
- "not_copied": "derive.py (the old derivation script) and the v5 record wrapper fields listed under conversion",
  "secret_scan": {
-  "command": "grep -o -i -E '(^|[^a-z0-9_])(sk-|sk-ant-|sk-proj-|ghp_|gho_|github_pat_|xox[abposr]-|akia[0-9a-z]{12})|bearer +[a-z0-9._~+/=-]{8,}|eyj[a-z0-9_-]{8,}\\.|-----begin|(key|token|secret|authorization|password)[\"' :=_a-z-]{0,12}[a-z0-9+/=_-]{40,}' FILE | wc -l",
-  "covers": "sk-, sk-ant-, sk-proj-, ghp_, gho_, github_pat_, xox?-, AKIA keys, Bearer followed by a non-mask value, eyJ JWT starts, -----BEGIN blocks, 40+ character hex or base64 runs next to key, token, secret, authorization or password names; case-insensitive, so it over-matches rather than under-matches",
-  "where": "a build box (box.mjs) on the committed branch, not on the conductor",
-  "result": {
-   "claude-code-2.1.283-e01.jsonl": 0
-  },
-  "result_text": "0 hits in every file",
-  "follow_up": "goalcup-verify secrets (PRD-08) does not exist yet; rerun the PRD-08 secret scan over this folder when it lands"
+  "how": "the pattern scan named in ../m2-openai/provenance.json, in a build box on the committed branch",
+  "result": {"claude-code-2.1.283-e01.jsonl": 0},
+  "follow_up": "rerun goalcup-verify secrets (PRD-08) over this folder when it lands"
  }
 }
