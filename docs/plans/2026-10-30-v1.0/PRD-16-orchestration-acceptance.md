@@ -1,7 +1,7 @@
 # PRD-16: Build orchestration and acceptance
 
-Id: PRD-16. Version: goalcup 1.0. Status: plan for the one-day build, revision 3 (PRD-00 rulings R3-8 to R3-11 and the
-alignment pass applied). Date: 30 October 2026. Base: main at 4b226de2. Index: [PRD-00](PRD-00-index.md). Ledger:
+Id: PRD-16. Version: goalcup 1.0. Status: plan for the one-day build, revision 4 (ledger B3, B9, B10 and B11 carried in;
+revision 3: PRD-00 rulings R3-8 to R3-11 and the alignment pass applied). Date: 30 October 2026. Base: main at 4b226de2. Index: [PRD-00](PRD-00-index.md). Ledger:
 [OWNER-DECISIONS](OWNER-DECISIONS.md). Format: [PRD-01](PRD-01-record-format.md).
 
 ## Goal
@@ -14,8 +14,8 @@ Nothing reaches `main`, a tag or production without the owner.
 
 All seven, as the gate that decides whether the build serves them. 1 and 2: the proxy record is the
 proof (ledger T4): no unexplained gap, the history check, every subagent recorded; the harness's own
-local log is an optional extra check where it keeps one. 3: the kill and fault runs, `goalcup recover`
-after a watchdog kill, and the load runs. 4: secret scans of every record, server copy, log and pushed repository. 5: server copy
+local log is an optional extra check where it keeps one. 3: the kill and fault runs, the crash and stand-back-up step
+of every cycle run, `goalcup recover` after a watchdog kill, and the load runs. 4: secret scans of every record, server copy, log and pushed repository. 5: server copy
 checks on staging. 6: counts the participant saw against the verifier's recount. 7: 15 harnesses run the
 way people run them, gateways included.
 
@@ -41,14 +41,32 @@ way people run them, gateways included.
 - **Lanes are parallel workflows in this one session**, a planner per PRD, builders in worktrees, at least
   two independent reviewers per merge request, a third on core parts; separate cloud sessions are a
   fallback only (ledger B2). A replan after each PRD merges (ledger B2a).
-- Short real tests during the build, mass testing at the end, watchers that fix and rerun, three failed
-  fixes on one cause end that loop with a note (ledger B3).
+- **The test ladder, from tiny to massive** (ledger B3), every rung through PRD-12's rig (section 1a):
+  (1) **micro tests** during phase 1: one harness, one key, a few calls, local capture first
+  (`server = "off"`, nothing uploaded), then one layer at a time (section 3, phase 1a); (2) **cycle runs**
+  per pad, a few minutes each, for every harness and case as soon as its connector lands, many in
+  parallel (section 3, phase 1b); (3) **full runs** at the end: 20 minutes with the payments prompt, every
+  pad, all in parallel, until they pass (section 6). Every run cleans up its sandbox, test repo and local
+  files (PRD-12 section 3.2); every build box is removed when its job ends.
+- **One small rig for agents** (ledger B9): every real run is `scripts/pad/pad <settings file>`. An agent
+  writes the settings, runs the command and reads the table; it never drives a step by hand. The rig is
+  trusted only after `selftest` fails it on run 1's known bugs and the rig reader has read its first
+  outputs by hand against the record (section 3, "Trusting the rig").
+- **Do not overbuild tests** (ledger B10). The rig's real runs are the main proof. Automated tests guard
+  only the seven points, the format, masking and the never-stop rules. Reviewer B flags a test that pins
+  an internal shape or wording, or takes longer to change than the code it guards (section 1).
+- **All the parallelism we can afford** (ledger B11). Every build, test and experiment runs in Vercel
+  Sandboxes, many at once, with no box count of our own: only the per-key queue (section 9) and the
+  account's own limit. This session only drives agents: many subagents for tasks, reviews, rig runs and
+  fixes, in as many workflows at once as the work needs.
+- Watchers fix and rerun; three failed fixes on one cause end that loop with a note (S1, BUILD-PROMPT
+  section 5).
 - **Staging only**: every run uploads to the staging Worker, approved with the staging test approval key and the owner's member id;
   agents may deploy staging; production, the merge to `main` and tags are the owner's; no website
   database schema migration (ledger B4 to B6, S3).
 - Spend: 10 USD per run (ledger T6), checked live by the pad every 5 minutes; no whole-build cap, since
-  cost is otherwise not a constraint (section 9). Pad runs are about 20 minutes of real work with many subagents
-  (ledger T5). Keys in 0600 files, separate keys per harness where possible, read-only database and R2
+  cost is otherwise not a constraint (section 9). Full pad runs are about 20 minutes of real work with many subagents
+  (ledger T5); micro and cycle runs are shorter by design (ledger B3). Keys in 0600 files, separate keys per harness where possible, read-only database and R2
   credentials on the conductor only (PRD-00 defaults).
 - The long run uses run 1's Codex prompt, so the two runs compare; without it, a load comparison
   (PRD-00 owner question 6, old 16).
@@ -78,8 +96,8 @@ way people run them, gateways included.
 | Run 1 | run report (scratchpad copy `run-report-74daaa03.md`), on `origin/smart/tender-clarke-qupne3` | 2 hours, Codex 0.165.0, about 20 subagents at once, 42 in all; wire stopped for good at 15:43:15Z; 473 calls (37.5%) and 15 of 42 subagents with no wire record; finish line said 1,736; server stored 1,766; 405 MB uploaded at `-3`, 100.8 MB at `--long=27`; about $1.50 by Codex's own record |
 | Run 1 prompt | `docs/research/results/2026-10-30-two-hour-run/` on that branch | **Not in the repository.** `start-pane.txt` shows only the Codex banner; the report says only "as written by the owner" |
 | Where the PRDs live | branch `smart/intelligent-newton-0avrpi`, docs-only commits ahead of `main` 4b226de2 | The integration branch starts from `main`, so it has none of the PRDs until they are merged in |
-| Agent concurrency | the workflow runner's own limit | At most min(16, CPUs minus 2) agents at once per workflow. On this 4-CPU container that is **2** per workflow; several workflows run at once (ledger B2) |
-| Vercel Sandbox | `docs/research/VERCEL-COMPAT.md:41`, `:50`, `:52` | Sessions end at 45 minutes on Hobby, 24 hours on Pro; Pro boxes up to 8 vCPU and 16 GB; $0.128 per active CPU-hour, $0.0212 per GB-hour |
+| Agent concurrency | the workflow runner's own limit | At most min(16, CPUs minus 2) agents at once per workflow. On this 4-CPU container that is **2** per workflow; so several workflows run at once (ledger B2), as many as the work needs (ledger B11) |
+| Vercel Sandbox | `docs/research/VERCEL-COMPAT.md:41`, `:50`, `:52` | Sessions end at 45 minutes on Hobby, 24 hours on Pro; Pro boxes up to 8 vCPU and 16 GB; $0.128 per active CPU-hour, $0.0212 per GB-hour. The account's limit on boxes at once is unverified; read at H+0 |
 | DeepSeek limits | https://api-docs.deepseek.com/quick_start/rate_limit | Concurrency limits per account, at least 500 requests at once, a 429 past it. So one DeepSeek key can feed six pad boxes at once |
 
 ## Design
@@ -89,8 +107,8 @@ way people run them, gateways included.
 | Host | What runs there | Holds |
 |---|---|---|
 | **Conductor** | This cloud session, 4 CPUs, root. The lane workflows, their agents, git worktrees, `scripts/pad/pad` (conductor half: sandboxes, approval, test repos, fetch, copy-in, read-only queries), `fetch-run`. `fetch-run` runs here because only the conductor holds the read-only credentials. It never compiles, tests or runs `goalcup` or `goalcup-verify`: it copies the fetched folder into the run's pad box (or a build box) with `sandbox copy`, and every check runs there (PRD-12 section 8). Nothing from the build under test executes on the conductor (ledger B1) | The approval key and the owner's member id, read-only database and R2 credentials, the `goalcup-usage-staging` write token (PRD-09), `GH_TOKEN` (creates test repos; never enters a box), the Cloudflare token for staging, the known-values files, all key files and push token files under `~/.pad-keys/` (0600) until copied into a box. Never a production write credential |
-| **Build boxes** | Vercel Sandboxes, 8 vCPU and 16 GB, user `ubuntu`, from the build snapshot | The Rust toolchain from `rust-toolchain.toml`, nextest, zstd, Node 22, Python 3, a warm cargo cache. No key, no token |
-| **Pad boxes** | Vercel Sandboxes from PRD-12's pad image, 4 vCPU, `--non-persistent` | One harness; its key file, for `gateway` the gateway key file, and the run's push token (fine-grained, throwaway pad owner, Contents read and write; never `GH_TOKEN`), each 0600, for the life of the run; `goalcup` and `goalcup-verify` from the build under test; after the seal, the fetched copy and the per-run known-values file (only values that entered this box, deleted after the scan) for the checks |
+| **Build boxes** | Vercel Sandboxes, 8 vCPU and 16 GB, user `ubuntu`, from the build snapshot. One per builder task, test run, reviewer check or gate run, as many at once as the account allows (ledger B11); removed when its job ends | The Rust toolchain from `rust-toolchain.toml`, nextest, zstd, Node 22, Python 3, a warm cargo cache. No key, no token |
+| **Pad boxes** | Vercel Sandboxes from PRD-12's pad image, 4 vCPU, `--non-persistent`. One per rig run, as many at once as the per-key queue allows (section 9); removed by the rig's `cleanup` step (PRD-12 section 3.2) | One harness; its key file, for `gateway` the gateway key file, and the run's push token (fine-grained, throwaway pad owner, Contents read and write; never `GH_TOKEN`), each 0600, for the life of the run; `goalcup` and `goalcup-verify` from the build under test; after the seal, the fetched copy and the per-run known-values file (only values that entered this box, deleted after the scan) for the checks |
 | **Staging Worker** | `goalcup-ingest-staging` on Cloudflare, 1.0 code from the integration branch | Its own bucket; the shared database through the Worker's own calls only |
 
 Why build boxes: the gate refuses root (`scripts/gate.sh:32-39`), the conductor runs as root, and many
@@ -99,8 +117,8 @@ non-root, has 8 CPUs, and is thrown away. Code goes in as a `git bundle` with `s
 ever enters a box. JUnit and the gate's last line come back out.
 
 **Lanes.** Each lane is one workflow in this session, at most 2 agents at once, and all lanes run in
-parallel (ledger B2). The real-runs lane may run as up to three workflows of 2 agents each, so six
-watchers can work at once. This table replaces BUILD-PROMPT section 4's older table (PRD-00 R3-10);
+parallel (ledger B2). The real-runs lane runs as many workflows of 2 agents as there are rig runs and
+watcher loops in flight (ledger B11); there is no count of our own. This table replaces BUILD-PROMPT section 4's older table (PRD-00 R3-10);
 ledger B1, B2 and B2a win over both. A phase 0 seam diff (PRD-01's types, the PRD-02 scaffold, the S1 to
 S4 stubs) gets reviewers A and B and no breaker, so the Format and core lane can ship PRD-01's types by
 H+1 and the PRD-02 scaffold by H+1.5.
@@ -114,11 +132,11 @@ H+1 and the PRD-02 scaffold by H+1.5.
 | Wire | PRD-03, PRD-04 | after the S1 and S3 stubs |
 | Upload and server | PRD-07 at H+0; PRD-06 after S1 and S4 | H+0 |
 | Judge | PRD-08, PRD-09 (from fixtures) | H+0 |
-| Harnesses and pad | PRD-11, PRD-12 | H+0 |
+| Harnesses and pad | PRD-11, PRD-12 (the rig first, ledger B9) | H+0 |
 | Participant | PRD-10 (`main.rs` stubs in phase 0) | H+0 |
 | Test support and gate | PRD-14 (gate change first, `tests/common/`) | H+0 |
 | Cut and docs | PRD-13 (read only, its copy ledger, until phase 3), PRD-15 | H+0 |
-| Real runs | Watchers, from phase 1a | when the core slice records |
+| Real runs | Rig runners, the rig reader and watchers: micro rungs (phase 1a), cycle runs per pad (phase 1b), full runs (phases 4 to 6) | when the core slice records |
 
 **Roles inside the lanes:**
 
@@ -129,10 +147,12 @@ H+1 and the PRD-02 scaffold by H+1.5.
 | Scribe | 1, in the integrator lane | Merges the lane logs into `NIGHT-LOG.md`; writes `MORNING.md` and `ACCEPTANCE.md` | Copies a key, token or planted value into any file |
 | Planner | one per PRD | Reads the PRD, the ledger, its seams, the code and the PRD's Amendments note; writes a short task list, each task inside the PRD's owned paths | Plans a task outside ownership |
 | Builder | one or more per PRD | Builds tasks on `v1.0/prd-NN-<slug>-<task>` from the PRD branch, in its own worktree, merged into `v1.0/prd-NN-<slug>` by the lane before its merge request;, runs its tests in a build box | Edits a path its PRD does not own |
-| Reviewers A and B | at least two per merge request | A: correctness, the seven points, the ledger (a break of one of the seven points or of a locked ledger item is a blocker), masking before disk, no drop without a GAP. B: code quality and less code, and the PRD's row in PRD-00 "Size budget". Given the diff and the PRD, not the builder's summary. Each is a fresh agent, not the builder, and writes its findings before it sees the other reviewer's | Rewrite the code; they return findings |
+| Reviewers A and B | at least two per merge request | A: correctness, the seven points, the ledger (a break of one of the seven points or of a locked ledger item is a blocker), masking before disk, no drop without a GAP. B: code quality and less code, the PRD's row in PRD-00 "Size budget", and overbuilt tests (ledger B10: a test that pins an internal shape or wording, or takes longer to change than the code it guards, is deleted or simplified). Given the diff and the PRD, not the builder's summary. Each is a fresh agent, not the builder, and writes its findings before it sees the other reviewer's | Rewrite the code; they return findings |
 | Breaker | one per core merge request (PRD-01, 02, 03, 05, 06) | Tries to break it against run 1's shape (about 40 and then about 200 synthetic subagents, 1.5 MB bodies in bursts, a held writer, WebSockets) with PRD-02's `pipeline_guard.rs`, `pipeline_stall.rs` and `by_hand_load`, and the latest pad smoke row, once per merge request. There is no run 1 replay tool | Runs a real 2-hour replay per diff |
 | Replan | one per merge of a PRD branch (each slice), the last step of that PRD's lane pipeline, run in the integrator lane | Reads review findings, test and real-run results; appends an "Amendments" note to each remaining PRD it affects and to this PRD, which with PRD-00 "Build order" is the build plan of ledger B2a (lanes, order, phases, runs); posts `wc -l` of the merged PRD against its PRD-00 "Size budget" row; one docs-only commit on integration with an `amendment` night-log line. Reviewer A of that lane reads the note against the ledger. The conductor re-reads this PRD's Amendments before each phase and each new lane task; planners read their PRD's before each task | Rewrites a section a builder is working from, edits BUILD-PROMPT.md, OWNER-DECISIONS.md or VISION.md, or changes a locked ledger item (that calls the owner, W6) |
-| Watcher | one per named cause, at most 6 at once, run as up to three real-runs workflows of 2 agents each, started by the conductor | PRD-12 section 13: read, name the cause, reproduce, fix on the owning branch, rerun | Changes a check to make it pass without record evidence |
+| Rig runner | one per rig run in flight, no count of our own (ledger B11) | Writes one settings file (PRD-12 section 1), runs `scripts/pad/pad <file>` on the conductor, reads the table, writes a `run` log line with the row link; a FAIL or INCONCLUSIVE row goes to a watcher | Drives a step by hand, runs `goalcup` on the conductor, or leaves a box, repo or folder behind without a log line naming it |
+| Rig reader | 1, a fresh agent in the real-runs lane | Reads the rig's first `micro` table and first `cycle` table by hand against the record (PRD-12 section 13 step 1's `dump`, in a check box) and says per step whether it tested what its line claims; again after any change under `scripts/pad/` (ledger B9) | Trusts the table's own words |
+| Watcher | one per named cause, as many at once as there are causes (ledger B11), each its own real-runs workflow of 2 agents, started by the conductor | PRD-12 section 13: read, name the cause, reproduce, fix on the owning branch, rerun | Changes a check to make it pass without record evidence |
 
 Fallback: if the session cannot hold the lanes (workflows refused, or the conductor's own tokens or
 memory run out), builders move to separate cloud sessions, one per lane, started with the session tool and
@@ -154,7 +174,8 @@ B2). A `Cargo.lock` refresh whose only cause is a reviewed `Cargo.toml` change n
 docs merge of step 3, the scribe's `NIGHT-LOG.md`, `MORNING.md` and `ACCEPTANCE.md` commits and the
 replan's Amendments commits are direct docs-only commits; N6 scans them.
 
-1. At H+0: the Vercel plan and session limit (Pro, or A1 cannot run), that a `v1.0/*` push works, and which
+1. At H+0: the Vercel plan and session limit (Pro, or A1 cannot run), the account's limit on boxes at
+   once (ledger B11 runs as many as it allows), that a `v1.0/*` push works, and which
    keys are present (names only, never values; the staging approval key and member id included). The
    start line of the night log.
 2. Branch `v1.0/integration` from `main` at 4b226de2 and push it. Pushes go only to `v1.0/*` branches.
@@ -199,8 +220,13 @@ Exit gate (PRD-00): `cargo build` and `cargo test -p goalcup-format` green in a 
 PRD-00 "Phase 1" defines the core, second and third slices by file. This PRD adds how they run.
 
 - Each planner starts with its PRD, PRD-00, PRD-01, the seams it uses and the PRD's builder notes.
-- **Build-box rule.** No agent runs cargo on the conductor. A builder sends a bundle to its build box and
-  runs `cargo nextest run -p <its crate> -E <its tests>`, then `gate fast`, before asking to merge.
+- **Build-box rule.** No agent runs cargo on the conductor. A builder sends a bundle to its own build box
+  and runs `cargo nextest run -p <its crate> -E <its tests>`, then `gate fast`, before asking to merge.
+  Every builder, reviewer check and gate run gets its own box, many at once (ledger B11); the box is
+  removed when the job ends.
+- **Tests, not too many** (ledger B10). A builder writes automated tests only for the seven points, the
+  format, masking and the never-stop rules, plus its PRD's acceptance cases. No test pins an internal
+  shape or wording. The rig's real runs are the main proof.
 - **Merge requests early.** A lane asks to merge whenever a slice of its PRD is green, not only at the end.
   Seams land first as compiling stubs by the "stable by" hours of PRD-00's seam table.
 - **Seam change.** Only the seam's owner changes a seam, with a log line `seam S<n>: <change>, users
@@ -211,23 +237,52 @@ PRD-00 "Phase 1" defines the core, second and third slices by file. This PRD add
 - **PRD-17** publishes `LESSONS.md` by H+3 (PRD-00 R3-8, PRD-17 builder notes); `tests/lessons_*.rs` follow as
   modules land.
 
-**Phase 1a, the early real test.** As soon as the core slice records one request (PRD-00 core slice), the
-real-runs lane runs PRD-12's P2: Claude Code and Codex, `direct`, `--prompt smoke`, `--server off`, in pad
-boxes. Precondition: PRD-05's core-slice masker (option b, the left guard, `boundary()`) is merged on the
-commit under test, checked in the `start` event, whose `mask_rules` names the shared kinds and not only
-`fail_closed` (the S2 stub). No real key enters a pad box before that (ledger M1, point 4). Then one short
-real run after each later core feature lands (each core feature of PRD-00's second and third slices:
-native capture, uploader, watchdog restart and null mode, `goalcup recover`, refusal learning, the gateway and dodger cases,
-Hermes `state.db`, HTTP/2, and exact-value masking only if the owner said yes, PRD-00 owner question 3).
-If the concept fails here, no lane adds a new feature until it is fixed (BUILD-PROMPT section 5).
+**Phase 1a, the micro rungs (ledger B3, step 1: micro tests).** As soon as the core slice records one
+request (PRD-00 core slice), the real-runs lane climbs PRD-12 section 1a's ladder through the rig, one
+rung at a time. Precondition: PRD-05's core-slice masker (option b, the left guard, `boundary()`) is
+merged on the commit under test, checked in the `start` event, whose `mask_rules` names the shared kinds
+and not only `fail_closed` (the S2 stub). No real key enters a pad box before that (ledger M1, point 4).
+
+- **Rung 1, local capture** (PRD-12 P2): Claude Code with the Claude key, and Codex with the OpenAI key,
+  each `mode = "micro"`, `case = "direct"`, `server = "off"`: nothing uploaded. Until the pad's sandbox
+  lifecycle lands, PRD-12 builder notes' hand-made pad box with `where = "here"` stands in.
+- **Then one layer at a time,** each rung as soon as the feature it needs is merged. Rungs 2 and 3 build
+  on the rung before; rungs 4 to 9 each change one line of rung 3's settings, so a failure points at one
+  layer: rung 2 upload to staging (after the first
+  staging deploy), rung 3 subagents, rung 4 a recorder crash (watchdog restart), rung 5 a watchdog kill
+  and `goalcup recover`, rung 6 "keep going", rung 7 the gateway case, rung 8 the dodger case, rung 9
+  HTTP/2. Each rung runs first on one harness and one key, then on the other core harness in parallel.
+- **Core features with no rung of their own** (native capture, refusal learning, Hermes `state.db`, and
+  exact-value masking only if the owner said yes, PRD-00 owner question 3) get one micro run on a harness
+  that uses them, the day they merge.
+- When a rung fails, its layer is fixed before the next rung. If rung 1 fails, no lane adds a new feature
+  until it is fixed (BUILD-PROMPT section 5). A micro run costs a few minutes; rerun freely.
+
+**Trusting the rig (ledger B9).** `selftest` runs as soon as the rig and the checks it maps are merged
+(its offline controls cost nothing; K5, K7 and K8 are short real runs), not first at the phase 2 exit, then again
+after any change under `scripts/pad/`, `crates/goalcup-verify/` or a check threshold (PRD-12 section
+12). The rig reader reads the first `micro` table and the first `cycle` table by hand against the record.
+Until both hold, a rig row proves only that a piece is live and gives no tier (`pad_trusted_at` empty).
+
+**Phase 1b, cycle runs per pad (ledger B3, step 2).** As soon as a harness's connector (PRD-11) and its
+pad harness file (PRD-12 section 6) are merged, the pad runs in sandboxes (second slice) and staging is deployed (below),
+the real-runs lane starts a `cycle` run for that harness with `case = "all"` (three sandboxes at once, each
+case with a key) on staging. The rig walks it in about 12 minutes: setup, data flows, look at the
+recorded data, a recorder kill at minute 3 and the wait for it to stand back up, "keep going" where the
+harness file says `keep_going = true`, the seal at minute 8, upload, fetch, the server copy check,
+cleanup. Many at once: every harness with a key, limited only by the per-key queue (section 9). The core
+set first (Claude Code and Codex in the second slice, Hermes when its connector lands), the other 12 as
+the third slice lands each connector. A cycle FAIL goes to a watcher at once (PRD-12 section 13), so most
+fixes land before the full runs. A cycle row carries its crash, so it is a fault row and never gives a
+tier (PRD-12 section 1a). It reruns after any merge that touches its harness or the core.
 
 **First staging deploy.** As soon as PRD-07's builder step 2 (heartbeat and floor) and PRD-06 are merged
 (PRD-07 section 12 step 2), the integrator deploys staging: `wrangler deploy --env staging` from the
 integration head, with `MIN_COMPETITION_VERSION = "1.0.0"` in both blocks of `wrangler.toml` (PRD-07
-section 6). From then on, smoke runs use `--server staging` and check the server copy. Every staging deploy
+section 6). From then on, rig runs use `server = "staging"` and check the server copy. Every staging deploy
 writes a log line with the commit and the Worker version id. A 0.7 client on staging is refused from then
 on; nobody runs one in this build, and it tests the refusal path. Before that deploy, runs use
-`--server off` or `--server local`: they upload nowhere, so B4 holds. The integrator deploys staging the
+`server = "off"` or `"local"`: they upload nowhere, so B4 holds. The integrator deploys staging the
 hour PRD-07 step 2 and PRD-06 merge; no run ever targets production.
 
 ### 4. The merge rule
@@ -259,9 +314,11 @@ it is green or the log names it as a runner fault. A watcher's fix is a merge re
 ### 5. Phase 2 and 3: integration and the cut (H+8 to H+10)
 
 - **Phase 2 exit:** everything merged; `gate fast` green; PRD-17's deletion gate green on the new core;
-  the pad end to end on staging for Claude Code `smoke`; the Codex kill row (PRD-02 R1, PRD-00 phase 2)
+  the core set's `cycle` rows PASS on staging (Claude Code, Codex and Hermes, every case: the pad end to
+  end on staging); the Codex kill row (PRD-02 R1, PRD-00 phase 2)
   once, `direct` with `--kill-recorder 8,10` on `full`, because both kill minutes fall after a 3-minute
-  `smoke` run ends; PRD-12's `selftest` makes the pad trusted (PRD-12 P1); `gate full` timed (PRD-14 G1).
+  `smoke` run ends; PRD-12's `selftest` reruns on the phase 2 commit and the pad is trusted there (PRD-12 P1; its first
+  run was in phase 1, section 3); `gate full` timed (PRD-14 G1).
 - **Phase 3, the cut:** PRD-14's gate and CI edits and PRD-15's docs have landed earlier, as soon as each
   was green. The phase 3 merge holds only PRD-13's four delete commits, PRD-14's delete of `check-links.py`
   after PRD-15's last run, and this PRD's workspace edit: drop the `exclude` entries and every workspace
@@ -277,7 +334,14 @@ it is green or the log names it as a runner fault. A watcher's fix is a merge re
   and `Cargo.lock` (PRD-12 section 9). If the gate is still not green at `REPORT_AT`, line 1 of
   `MORNING.md` reads "Not ready: old crates not deleted (ledger L3), deletion gate <state>".
 
-### 6. Phase 4, 5 and 6: real runs (H+10 to about H+15)
+### 6. Phase 4, 5 and 6: full runs, all in parallel (H+10 to about H+15)
+
+The top rung of the ladder (ledger B3): `mode = "full"`, 20 minutes, the payments prompt, for every pad,
+all in parallel, until they pass. Phases 4 and 5 start together; the core set has first claim on the
+Claude, OpenAI and gateway keys, and the other harnesses run beside it on their own keys. There is no box
+count of our own (ledger B11); the per-key queue of section 9 is the only limit. A row that fails goes to
+a watcher; after each fix merges, every row it can touch reruns, all at once, until every row passes or
+S1 ends that loop. Every run ends in the rig's `cleanup` step.
 
 All runs use PRD-12's pad on staging, with binaries built from the integration head in a build box. The
 commit under test is in every row. A fix merged during a phase starts a rerun of the rows it can touch; the
@@ -287,15 +351,15 @@ and `rust-toolchain.toml`.
 
 | Phase | Runs | Parallel | Est. time |
 |---|---|---|---|
-| 4. Core set | Claude Code, Codex, Hermes: `direct`, `gateway` and `dodger`, all `full`, the 20-minute payments prompt (ledger T5, PRD-00 done item 1): 9 rows. The kill rows `--kill-recorder 8,10` on all three `direct` `full` (PRD-12 P10). The fault rows once each (PRD-12 P11) | 6 boxes; per key, section 9 | about 2 h with fix loops |
-| 5. The rest | The other 12 harnesses, each case that applies; no key means "not verified: no key" with no run (Amp, Factory Droid, OpenRouter cases). All rows run `full`. Kilo's `gateway` row is A4. As each harness's first `full` sample lands, a PRD-09 builder may write its log reader from that sample (PRD-09) for the optional local log check. A harness with no reader is judged from the record (ledger T4); a missing reader is never a "not verified" reason | 6 boxes, from when phase 4's first wave is done and keys are free | about 2.5 h |
-| 6. Acceptance | A1, A2, A3 (section 7) | Starts when the core set is green; shares the box limit with phase 5 | about 2.5 h, A1 is the longest |
+| 4. Core set | Claude Code, Codex, Hermes: `direct`, `gateway` and `dodger`, all `full`, the 20-minute payments prompt (ledger T5, PRD-00 done item 1): 9 rows. The kill rows `--kill-recorder 8,10` on all three `direct` `full` (PRD-12 P10). The fault rows once each (PRD-12 P11) | All 9 rows and the kill and fault rows at once; per key, section 9 | about 2 h with fix loops |
+| 5. The rest | The other 12 harnesses, each case that applies; no key means "not verified: no key" with no run (Amp, Factory Droid, OpenRouter cases). All rows run `full`. Kilo's `gateway` row is A4. As each harness's first `full` sample lands, a PRD-09 builder may write its log reader from that sample (PRD-09) for the optional local log check. A harness with no reader is judged from the record (ledger T4); a missing reader is never a "not verified" reason | All at once, together with phase 4 (ledger B3: every pad in parallel); per key, section 9 | about 2 h with fix loops, beside phase 4 |
+| 6. Acceptance | A1, A2, A3 (section 7) | Starts when the core set is green, beside phase 5; per key, section 9 | about 2.5 h, A1 is the longest |
 
 Keys and rate limits: run 1 hit 2M tokens a minute on one OpenAI key with about 20 subagents (run report,
 measure 9). So A1 holds the OpenAI key alone while it runs; a phase 5 run that would use the cheap OpenAI
 model on the same key waits, or uses DeepSeek. The Claude key and the gateway key: at most 2 runs at once
-each. DeepSeek: up to all 6 boxes at once, because DeepSeek limits concurrency per account at 500 or more
-requests (link in Today), far above six runs with 20 subagents each; a 429 share above 5% in a row's
+each. DeepSeek: up to 6 runs at once (PRD-00 R3-9, PRD-12 section 7), because DeepSeek limits concurrency
+per account at 500 or more requests (link in Today), far above six runs with 20 subagents each; a 429 share above 5% in a row's
 `provider_errors` drops it back to 2 for the rest of the build, with a log line.
 
 After the last phase 5 merge that touches any path the release check compares, the nine core rows and the
@@ -315,8 +379,9 @@ lands the guide, by a watcher given no PRD, only `README.md`, `docs/PARTICIPANT-
 ### 7. Final acceptance runs
 
 Real runs on staging after the core set is green, each longer than a pad row, each with the pad's checks
-(C1 to C6, PRD-12 section 8) plus the X lines below. The pad runs them with `--prompt-file`, `--minutes`,
-`--keep-going` and `--kill-recorder` (PRD-12 section 1). Typing "keep going" when the agent sits idle is
+(C1 to C6, PRD-12 section 8) plus the X lines below. The rig runs each from one settings file (`mode = "full"` with
+`prompt`, `minutes` and the steps `keep-going` and `kill-recorder@m`; PRD-12 section 1 maps the old
+flags `--prompt-file`, `--minutes`, `--keep-going` and `--kill-recorder`). Typing "keep going" when the agent sits idle is
 what a participant may do (`AGENTS.md:83-84`); goalcup itself never does it.
 
 | Id | Harness, case | Prompt | Length | Why |
@@ -378,10 +443,11 @@ spend instead.
 | Per run: every pad row, A1, A2, A3 | 10 USD (ledger T6). A `smoke` run is expected near 2 USD: an estimate, not a cap | Every 5 minutes during the run, `pad` runs `goalcup-verify usage <open entry> --json` in the box with `sandbox exec` (an open entry reads to its last whole frame, PRD-09), prices the totals with PRD-12's per-model rate lines (which err high), and at 10 USD runs `goalcup seal --yes` in the box (PRD-12 section 7). The row gets `over_cap: true` and a night-log line; the checks run on what was recorded. Not a check failure. If X2 is INCONCLUSIVE for that reason in A1 to A3, the report asks the owner for a higher cap and a rerun |
 | Build model spend | No cap (ledger T6) | The scribe writes a `spend` line at the top of `NIGHT-LOG.md` at 200 and 400 USD by the pad's ledger estimate; the report shows it; runs go on |
 | Build sandboxes | No cap | A `spend` line at 75 and 150 USD, estimated at Pro rates (`VERCEL-COMPAT.md:52`); builds go on |
-| Boxes at once | 6 pad boxes; per key as section 6; build boxes one per active lane plus one for the integrator | A queue in the conductor |
+| Boxes at once | No count of our own (ledger B11): as many pad and build boxes as the Vercel account allows, read at H+0. Per key: at most 2 runs at once per provider key, DeepSeek up to 6 (PRD-12 section 7); A1 holds the OpenAI key alone | A queue in the conductor per key; past the account's limit, runs wait in the queue |
 
-Expected model spend is about 200 USD, at most about 300: phase 1a and selftest about 35; phase 4 up to
-180 with fault rows and reruns; phase 5 about 25 runs on DeepSeek at 1 to 2 USD each; acceptance up to 30.
+Expected model spend is about 260 USD, at most about 360 (estimates, unverified): micro rungs and
+selftest about 35; cycle runs about 60 (about 40 rows with reruns, most on DeepSeek); phase 4 up to 180
+with fault rows and reruns; phase 5 about 25 runs on DeepSeek at 1 to 2 USD each; acceptance up to 30.
 The ledger is an estimate from the record; no check reads a provider usage or billing page (ledger T4). The owner's own dashboards stay the owner's check of real spend (PRD-12 section 7). Agent tokens of the
 build itself are not in these lines; the workflow's token budget applies if the owner set one, and the
 report states tokens used.
@@ -454,6 +520,8 @@ only these rules:
   count written requests. No email code changed; the owner confirms this is wanted before the production
   deploy (PRD-07 section 12 step 3).
 - The newcomer run (section 6) sits beside done item 6.
+- **The ladder line**: per rung 1 to 9, the first PASS `micro` row; per harness, its last `cycle` row;
+  and what cleanup left behind (N9, N10), each with a link.
 
 `ACCEPTANCE.md` (same folder) holds the A1 to A4 prompts as run (run 1's prompt only if the owner agreed it
 may be committed), each run's row, its X lines, and the commands to repeat it.
@@ -526,7 +594,7 @@ included (PRD-00 ownership table).
 | PRD-08 | `check`, `check --server --local`, `check --live`, `secrets`, `timeline`; tolerances owned by "PRD-16" in its defaults: kept as PRD-08 states them; `conn_bytes` as PRD-08 rules | Used here |
 | PRD-09 | `usage --json` on open and fetched entries, for X8 and the pad's per-run spend check; a log reader per harness written from its phase 5 sample; the per-thread table in the report | Used here |
 | PRD-11 | Connector data and the one host list the gateway and dodger rows rely on | Used here |
-| PRD-12 | The pad, `selftest`, rows, `PAD-RESULTS.md`, `connectors/tiers.toml`, `--release-check`, the watchers' loop, the ledger, the per-model rate lines and the 5-minute spend check; `--prompt-file`, `--minutes`, `--keep-going`, `--kill-recorder`; P10 and P11 scheduled in phase 4 | Used here |
+| PRD-12 | The rig (`scripts/pad/pad <settings file>`), its modes `micro`, `cycle` and `full`, the ladder rungs 1 to 9 (section 1a), `cleanup` (section 3.2); `selftest` (its first run timed here, section 3), rows, `PAD-RESULTS.md`, `connectors/tiers.toml`, `--release-check`, the watchers' loop, the ledger, the per-model rate lines and the 5-minute spend check; `--prompt-file`, `--minutes`, `--keep-going`, `--kill-recorder`; P10 and P11 scheduled in phase 4 | Used here |
 | PRD-13 | The phase 3 merge: four delete commits plus this PRD's workspace edit; the H+10 cut target and the W6 call if the gate is late | Done together |
 | PRD-14 | `gate fast` and `gate full` in build boxes as `ubuntu`; build lock; CI on integration pushes; G1, G3, G4 in the build; G2, G5, G6, G7 at release; the release check in `release.sh tag`. Old crates are out of `members` from phase 0, so no exclude line | Used here |
 | PRD-15 | Docs land as soon as green; README "The gate" numbers from G1; the newcomer run (acceptance 1, section 6) | Used here |
@@ -556,11 +624,14 @@ No tests go here; the tests of the old crates go with PRD-13.
 | N5 | **The release check accepts the verified commit and refuses another.** PRD-14 G6, by a watcher | `scripts/pad/table --release-check <N1 commit>` exits 0; against a scratch commit that changes one line under `crates/` it exits 1. Nothing is tagged during the build; `release.sh tag` runs only at the owner's release |
 | N6 | **Nothing leaked.** After phase 6 | `goalcup-verify secrets` with the build's known values, run in one check box from the build snapshot, `--non-persistent`, holding the full known-values file for the scan only and removed right after (a `decision` line: the one step where all keys meet a box): 0 hits over every kept record, server copy, `pad-out/`, `NIGHT-LOG.md`, the lane logs, `MORNING.md`, `ACCEPTANCE.md`, every `gc-pad-*` repository and the integration branch history |
 | N7 | **Nothing touched production.** After phase 6 | The staging Worker was the only deploy (Cloudflare deployments list, read with an account-level read token, or the owner checks the production list); no row with a production event id was created by the build (read-only query); no request to the production host in any box's `goalcup.log` |
+| N9 | **Every run cleaned up after itself** (ledger B3). At report time | No sandbox is left except those of rows still running (`sandbox list`); no `gc-pad-*` repository is left except those a cleanup line listed as "repo kept"; no key file in any kept run folder. Every leftover has a night-log line |
+| N10 | **The ladder was climbed** (ledger B3). At report time | Rungs 1 to 9 each have a PASS `micro` row; every harness with a key has a `cycle` row before its first `full` row; the rig reader's two readings and the first `selftest` are in the log before any row gives a tier |
 | N8 | **The report is complete.** At `REPORT_AT` | Every item of section 13 is filled, every claim links to a row, a gate line, a CI run or a commit; a reader who was away can decide in 10 minutes |
 
 ### Automated tests that guard them
 
-None new. This PRD writes no code. Its guards are other PRDs' tests: PRD-12 `selftest` and `test_pad.py`
+None new (ledger B10: the rig's real runs are the main proof). This PRD writes no code. Its guards are
+other PRDs' tests: PRD-12 `selftest` and `test_pad.py`
 (the pad cannot pass a known fault), PRD-14 `test_gate.py` and `test_release.py` (the gate and the release
 check), PRD-08's check tests, and CI on every integration push.
 
@@ -568,11 +639,11 @@ check), PRD-08's check tests, and CI on every integration push.
 
 | Risk | What we do |
 |---|---|
-| 2 agents per workflow make the build crawl | Twelve lanes as parallel workflows; the three slices let the core slice prove the concept first; S2 reorders phase 5 and never drops a run for time. If the session cannot hold the lanes, the cloud-session fallback (section 1) |
+| 2 agents per workflow make the build crawl | Twelve lanes as parallel workflows, and as many real-runs workflows as runs in flight (ledger B11); the three slices let the core slice prove the concept first; S2 reorders phase 5 and never drops a run for time. If the session cannot hold the lanes, the cloud-session fallback (section 1) |
 | Many lanes on one repository step on each other | One owner per path, worktrees, seams as stubs first, every dependency in the scaffold, merges only through the integrator, lane logs off git |
 | A seam changes late and three PRDs break | Seam changes only by the owner with a log line; users merge integration into their branch within the hour |
 | A replan edits a PRD a builder is reading | Replan only appends an Amendments note; planners read it before each task |
-| Vercel Sandbox limits: concurrent boxes, session length, egress | Concurrency for 6 pad boxes plus up to 13 build boxes is unverified; the conductor queues. A1 needs a box of about 2.5 hours: Pro allows 24 hours, Hobby 45 minutes (`VERCEL-COMPAT.md:41`), checked at H+0. Never turn on credential brokering for a model host (`VERCEL-COMPAT.md:46`) |
+| Vercel Sandbox limits: concurrent boxes, session length, egress | The account's limit on boxes at once is unverified; read at H+0. There is no count of our own (ledger B11); past the limit the conductor queues. A1 needs a box of about 2.5 hours: Pro allows 24 hours, Hobby 45 minutes (`VERCEL-COMPAT.md:41`), checked at H+0. Never turn on credential brokering for a model host (`VERCEL-COMPAT.md:46`) |
 | Staging is shared by other people's tests | The 1.0 floor refuses 0.7 clients on staging from the first deploy; said in the report. Runs are told apart by run and entry id |
 | The staging Worker writes into the shared website database | Only through its own calls, with today's tables (PRD-07). W3 calls the owner if the database looks hurt |
 | A provider outage looks like 15 failures | PRD-12's `provider_down` and `provider_refused` come first; W5 only for a core key |
@@ -587,6 +658,9 @@ check), PRD-08's check tests, and CI on every integration push.
 | The run certificate key sits on disk during the run (ledger R3b) | Accepted by the owner. X7 and N6 scan for it; PRD-02 removes it at the seal |
 | Sleep, network change and hours of many subagents are untested | PRD-12 P11 runs `freeze` and `route-drop` on Codex in phase 4; A2 runs 60 minutes of up to 20 subagents before A1 |
 | Linux only | The owner's Mac run (section 14 step 6); macOS-only paths run in PRD-14's release workflow on each target |
+| The rig passes a run it should fail: it tests the wrong thing (ledger B9) | `selftest` must turn run 1's known bugs into FAIL; the rig reader reads the first `micro` and `cycle` tables by hand against the record; both again after any change under `scripts/pad/`; no tier before both |
+| Many runs at once leave boxes, repos or folders behind | The rig's `cleanup` step always runs; boxes are `--non-persistent` with a timeout; at each phase exit the integrator lists sandboxes and `gc-pad-*` repositories and removes any not tied to a running row, with a log line; N9 |
+| Tests grow until a one-line change costs three test edits (ledger B10) | Reviewer B flags such tests; they are deleted or simplified; the rig's real runs stay the main proof |
 | The night log grows a secret by quoting an error | Section 12 rule; N6 scans it and the lane logs |
 | The report is too long to read | Section 13 puts the decision on the first line and acceptance second |
 
@@ -594,7 +668,9 @@ check), PRD-08's check tests, and CI on every integration push.
 
 | Default | Value | Who may change it |
 |---|---|---|
-| Lanes | Twelve workflows in this session; cloud sessions only as fallback | Owner |
+| Lanes | Twelve workflows in this session, plus as many real-runs workflows as runs in flight; cloud sessions only as fallback | Owner |
+| Boxes at once | No count of our own; the Vercel account's limit and the per-key queue (ledger B11) | Owner (ledger) |
+| Cycle run | 8 minutes to the seal, recorder kill at minute 3, `case = "all"` (PRD-12 section 1a) | PRD-12 |
 | `REPORT_AT` | H+16 | Owner |
 | Cut target | H+10; later if the gate is green later, before `REPORT_AT`, with a W6 call at H+10 | Owner |
 | Build spend report lines | 200 and 400 USD model, 75 and 150 USD sandboxes; no cap (ledger T6) | Owner |
@@ -618,8 +694,9 @@ Order of work for the integrator and the scribe:
    stubs.
 4. Merge on request by section 4, seams first. First staging deploy as soon as PRD-07 step 2 and PRD-06
    are in.
-5. Phase 1a smoke runs; then one short run per new core feature.
-6. Phase 2 exit, phase 3 merge, phases 4 to 6, the report.
+5. Phase 1a micro rungs, one layer at a time; `selftest` and the rig reader as soon as the rig lands;
+   phase 1b cycle runs per pad as each connector lands, many at once.
+6. Phase 2 exit, phase 3 merge, phases 4 to 6 (full runs, all in parallel), the report.
 
 Traps:
 
@@ -641,6 +718,9 @@ Traps:
 - One OpenAI key with 20 subagents hit 2M tokens a minute in run 1: A1 holds its key alone.
 - Never check a pruned folder: `GOALCUP_KEEP_PARTS=1` on every run (PRD-12).
 - A lane never commits to `NIGHT-LOG.md` itself; it appends to its own lane file.
+- Never drive a rig step by hand: change a settings line and run the rig again (ledger B9).
+- Every run ends in the rig's `cleanup`; at each phase exit, list sandboxes and `gc-pad-*` repositories
+  and remove any not tied to a running row (N9).
 
 How a watcher proves this PRD in a real run: at report time, open `MORNING.md`, follow the first line's
 commit to its 9 core rows and the Codex kill row in `PAD-RESULTS.md` and the A1 to A3 rows in
@@ -816,3 +896,22 @@ record is the proof (T4): X1, X2 and N3 pass on the record (no unexplained gap, 
 subagent recorded) and the harness's local log comparisons are optional extras; X8 states usage comes
 from the record only and the run 1 ratio is informative; section 9 and W4 read no provider dashboard,
 so no check calls an outside API. Points served, owner decisions, phase 1a, risks and defaults follow.
+
+**B3, B9, B10, B11 carried in.** B3: the test ladder now shapes the phases. Phase 1a is the micro rungs
+of PRD-12 section 1a, local capture first (rung 1, `server = "off"`), then one layer at a time (upload,
+subagents, recorder crash, watchdog kill and `goalcup recover`, keep going, gateway, dodger, HTTP/2);
+new phase 1b runs `cycle` rows per pad, many in parallel, as soon as each connector lands; the phase 2
+exit asks for the core set's `cycle` rows on staging; section 6 makes phases 4 and 5 full runs for every
+pad, all in parallel, started together, until they pass (phase 5 no longer waits for phase 4's first
+wave). Every run cleans up: build boxes are removed after each job, N9 checks nothing is left, a risk row
+and a trap sweep leftovers at each phase exit. B9: every real run goes through `scripts/pad/pad
+<settings file>`; new roles rig runner and rig reader; `selftest` runs first in phase 1 ("Trusting the
+rig"), not only at the phase 2 exit; no tier before the hand reading; section 7 uses settings files; N10
+checks the ladder. B10: reviewer B flags overbuilt tests; the build-box rule limits tests to the seven
+points, the format, masking and the never-stop rules; a risk row. B11: no box count of our own anywhere
+(the 6 pad boxes, the build box count and the six-watcher cap are gone), only the per-key queue and the
+account's limit, read at H+0; watchers and rig runs get as many workflows as are in flight. The expected
+spend adds about 60 USD for cycle runs. Left for others: PRD-00 phase 5 still says "from phase 4's first
+wave" and "up to 6 pad boxes", and BUILD-PROMPT section 5 says the other 12 follow the core set's first
+wave; the ledger wins, and the replan or PRD-00's author should align them. S1 (three failed fixes) is
+kept and now cites BUILD-PROMPT section 5, since B3 no longer carries it.

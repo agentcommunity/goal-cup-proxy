@@ -466,13 +466,28 @@ Must not touch: any test file another PRD names (`pipeline_*`, `watchdog_*`, `pr
 | `scripts/check-links.py` | 1,349 | `test_check_links.py` 1,672 | here, phase 3 merge, after PRD-15's last run; out of the gate from phase 0. Serves no point; PRD-15 rewrites most docs and would fight it all day |
 | `scripts/ci-scope.py` | 90 | `test_ci_scope.py` 134 | here. CI runs the gate; nothing to scope |
 | `scripts/linux-check.sh`, `.github/workflows/linux-x86_64.yml` | 169 | `test_linux_check.py` 107 | here. It ran old test names in Docker; the build is tested natively in Linux build boxes |
-| `scripts/gate.sh` version step, binary probe, `cargo test` fallback, old steps | about 40 | 6 of 16 cases in `test_gate.py` | here |
+| `scripts/gate.sh` version step, binary probe, `cargo test` fallback, old steps | about 40 | all of `test_gate.py` (B10 table below) | here |
 | `.config/nextest.toml` old groups and priorities | about 40 | none | here |
 | Smoke `doctor`, pin and connector checks; packaged connectors; install guard's daemon-status parsing | about 120 | install guard cases rewritten to `status.mode` fixtures written inline (no protocol crate fixtures) | here |
-| **Here, in all** | **about 2,000** | **about 2,100** | |
+| **Here, in all (revision 2)** | **about 2,000** | **about 2,100** | |
 
-Script tests that stay: `test_gate.py`, `test_install.py`, `test_release.py`, `test_codeowners.py`,
-`test_third_party_licenses.py` (here), `test_fetch_run.py` (PRD-07), `scripts/pad/test_pad.py` (PRD-12).
+**Cut by ledger B10** (tests that go beyond the seven points, the format, masking and never-stop, or pin
+internal shapes or wording), one line each:
+
+| Planned test | Why it goes |
+|---|---|
+| `scripts/test_gate.py` (226 today, was to be rewritten to 110) | Pins the gate's step order, prerequisite line and last-line wording; costs more to change than the 75-line script it guards. A gate break shows on the next merge |
+| `scripts/test_release.py` | Release tooling, not a point. G6 proves the release check by a real run |
+| `scripts/test_codeowners.py` | Repository hygiene, not a point. Reviewers check the paths |
+| `scripts/test_third_party_licenses.py` | Packaging, not a point. The script changes one line (`SHIPPED`) |
+| `test_install.py` cases "two binaries" and "one PATH line printed" | Pin packaging shape and wording. Kept: the run guard per `status.mode`, `INSTALL_UNSURE` goes on, no profile file written, and the existing rollback and checksum cases only where they pass unchanged |
+| `rule_code.rs` rules 2 to 4 (ports, no-return words, after-the-cut guard) | Hygiene and word lists, not behaviour (section 6). About 140 lines |
+| `e2e_run.rs` same-`conn`-shape check | Pins an internal shape (section 7) |
+| PRD-09 `usage_*` beyond `usage_run1` | Usage stats are proved by C5 on real runs; the rest pin output layout (section 3) |
+| `cli_finish.rs` exact sentence | It checks the claim is there or not, never the wording (section 2) |
+
+Script tests that stay: `test_install.py` (here), `test_fetch_run.py` (PRD-07), `scripts/pad/test_pad.py`
+(PRD-12).
 
 ## Acceptance
 
@@ -485,35 +500,33 @@ Script tests that stay: `test_gate.py`, `test_install.py`, `test_release.py`, `t
 | G4 | **CI is the gate.** The push of the phase 3 commit to `v1.0/integration` | Build | `check` green on the 4-CPU runner; its time in the night log |
 | G2 | **The guards catch the failures that matter.** Four one-line sabotages on a scratch branch, one at a time: the writer skips one GAP record; COUNT counts a record at offer instead of at write; the `url_password` rule is removed; the proxy refuses the 1,001st connection | After merge (PRD-00) | `gate fast` FAILs each time on a guard named in advance (`pipeline_guard` for the GAP sabotage and the COUNT sabotage, `mask_rules`, `proxy_connect`). Branch deleted after. A sabotage the gate misses is a missing guard: a note to the owning PRD |
 | G5 | **Every target runs the guards.** `release.yml` on the release commit | Owner's release (PRD-00) | Four green builds: Rust guards pass on macOS arm64, macOS x86_64, Linux x86_64 and Linux arm64; smoke and `install.sh` pass; `GOALCUP_TEST_` absent from every shipped `goalcup` |
-| G6 | **The tag is what the pad verified.** In the build, a watcher runs `scripts/pad/table --release-check <N1 commit>` and `--release-check <a scratch commit that changes one line under crates/>`. Nothing is tagged during the build. At the owner's release, `release.sh tag 1.0.0` runs the same check first | Build, at the end (PRD-16 N5); owner's release | The N1 commit exits 0; the scratch commit exits 1 with the differing paths named (a differing `connectors/tiers.toml` alone does not refuse). `test_release.py` proves `tag` stops on a failed check |
+| G6 | **The tag is what the pad verified.** In the build, a watcher runs `scripts/pad/table --release-check <N1 commit>` and `--release-check <a scratch commit that changes one line under crates/>`. Nothing is tagged during the build. At the owner's release, `release.sh tag 1.0.0` runs the same check first | Build, at the end (PRD-16 N5); owner's release | The N1 commit exits 0; the scratch commit exits 1 with the differing paths named (a differing `connectors/tiers.toml` alone does not refuse). At the owner's release, `release.sh tag` on the scratch commit stops and says why (a real run, no `test_release.py`, ledger B10) |
 | G7 | **Install from the release.** `curl .../install.sh \| sh` on Linux and on the owner's Mac | Owner's release | Two binaries installed, one PATH line printed, `goalcup --version` prints 1.0.0 |
 
 ### Automated tests that guard them
 
-- `scripts/test_gate.py` (about 110 lines): fast runs fmt, clippy, nextest, doctests, Worker tests and the
-  named script tests in that order and nothing from full; full adds its three steps (the ignored tests, the
-  release build, the hook grep last) and no release-mode test step; root is refused unless `GOALCUP_GATE_ALLOW_ROOT=1`;
-  missing prerequisites are all named on one line and no step runs; the last line format; a held build
-  lock waits and a dead holder's lock is taken.
-- `scripts/test_install.py`: two binaries; each `status.mode` value blocks or not as section 9 says;
-  unreadable output gives `INSTALL_UNSURE`; one PATH line printed and no profile file written. Existing
-  rollback and checksum cases kept.
-- `scripts/test_release.py`: `tag` stops when the release check fails and says why.
-- `crates/goalcup/tests/rule_code.rs` (section 6) and `e2e_run.rs` (section 7).
+The gate script itself has no test (ledger B10; `test_gate.py` is cut): G1, G3 and G4 run it for real on
+every merge. The tests this PRD writes:
+
+- `scripts/test_install.py`: each `status.mode` value blocks or not as section 9 says (the install never
+  breaks a running recording); unreadable output gives `INSTALL_UNSURE` and goes on; no profile file
+  written. Existing rollback and checksum cases kept only where they pass unchanged.
+- `crates/goalcup/tests/rule_code.rs` (section 6, rule 1 only) and `e2e_run.rs` (section 7).
 
 ## Risks and blind spots
 
 | Risk | What could go wrong | What we do |
 |---|---|---|
-| Too few automated tests | A regression between pad runs ships | Every merge runs the guards; the pad reruns the core set on the release commit (G6); G2 after merge shows the guards bite |
+| Too few automated tests | A regression between rig runs ships | Every merge runs the guards; the ladder (ledger B3) runs micro tests and cycle runs on every new core feature and connector, many at once in sandboxes (ledger B11); the rig reruns the core set on the release commit (G6); G2 after merge shows the guards bite |
+| Too many automated tests | Changing a test takes longer than changing the code, and builders slow down | Ledger B10: reviewer B rejects a test that pins an internal shape or wording; such a test is deleted or simplified in the same merge request. The section 3 numbers are ceilings |
 | Worker tests in the fast tier are slow | Their time is not recorded anywhere (`J-tests-gate.md:422`) | G1 measures; if over 90 s, they move to full with a night-log note and CI keeps them |
 | CI on every integration push | Many runs during the build | Public repository, so free minutes; newest run only |
 | CI hangs like the old suites | `ci.yml:15-16` | The `heavy` group runs one at a time; the hanging test moves to full |
 | `e2e_run.rs` depends on every PRD | It cannot pass until phase 2 | Full tier only; phase 1 merges need only fast. Each assertion names its owning PRD |
-| `rule_code.rs` false hits | A host name in an error message; a no-return pattern in a word | Only string literals for rule 1; `ALLOWED` with reasons; PRD-13 narrows a pattern with a night-log note |
-| Rule 4 before the cut | It cannot check the reference guard while old crates are on disk | It checks the `exclude` list instead, so it never passes by skipping; the cut turns the real check on |
+| `rule_code.rs` false hits | A host name in an error message | Only string literals; `ALLOWED` with reasons |
+| No-return words come back | With rule 3 cut, an old name (a cap, `receipt`) could return unseen | The behaviour is what matters and the never-stop guards catch a cap; PRD-13 and PRD-07 grep once at their cut merges; reviewer A reads each diff for the seven points |
 | A hook binary ships | A by-hand `cargo nextest run --release` leaves a hooked `goalcup` in `target/release` | `gate full` has no release-mode test step and builds the shipped binary without dev-dependencies; its last step and the release smoke grep the binary |
-| Named script-test list goes stale | A new `scripts/test_*.py` is never run | The list is one line in `gate.sh`; `test_gate.py` reads it; a new script test adds itself there (night-log note) |
+| Named script-test list goes stale | A new `scripts/test_*.py` is never run | The list is one line in `gate.sh`; a new script test adds itself there (night-log note) and reviewers check it |
 | Cutting the link check | Broken links in the participant guide (point 6) | PRD-15 runs it once on the final docs before the delete; cheap to restore later |
 | Cutting the version check | A second version string slips into a doc | The release workflow checks tag and `Cargo.toml`; the smoke checks every binary's version |
 | Build box lacks tools | nextest, zstd or `node_modules` missing | The gate names all missing tools on its first line; PRD-16's build snapshot holds them (phase 0 step 6) |
@@ -531,7 +544,7 @@ Script tests that stay: `test_gate.py`, `test_install.py`, `test_release.py`, `t
 | Worker tests | in fast | PRD-16 after G1 |
 | CI | runs `gate fast` on PRs into main, pushes to main and integration | Owner (the old rule was "CI stays lean", `ci.yml:5`) |
 | Release workflow | Rust guards on all four targets before the build; first run at the owner's release | Owner (may start it by hand on integration earlier for an early macOS signal) |
-| Test budget | about 15,000 Rust test lines | PRD-16 |
+| Test budget | at most about 14,200 Rust test lines, a ceiling (ledger B10) | PRD-16, only downward; up needs the owner (B10 is locked) |
 | nextest | required, no `cargo test` fallback, no retries | PRD-14 |
 | Link, version and SQL-mirror checks | out of the gate | Owner |
 | Release check on tag | core set PASS on a commit with no code difference, `tiers.toml` left out | Owner |
@@ -544,8 +557,9 @@ Order of work:
 1. **H+0, by PRD-14's lane, first in its queue, reviewed by reviewers A and B and merged by the
    integrator (PRD-00 phase 0 step 2), from this section's text.** One merge request: `gate.sh` (drop the
    version step, the binary probe and the fallback; add the prerequisite check and the build lock;
-   `--workspace` steps as in section 8; the named script tests), the new `.config/nextest.toml`, the
-   rewritten `test_gate.py`, and the deletes of `check-version.py`, `ci-scope.py` and their tests. The
+   `--workspace` steps as in section 8; the named script tests), the new `.config/nextest.toml`, and the
+   deletes of `check-version.py`, `ci-scope.py` and their tests, and of `test_gate.py`,
+   `test_release.py`, `test_codeowners.py` and `test_third_party_licenses.py` (ledger B10). The
    named script list holds only tests that exist on integration; PRD-14 adds `discover -s scripts/pad` in
    the edit that follows PRD-12's first `test_pad.py` merge (PRD-12 writes a night-log note). It goes
    through the merge rule like any merge request: reviewers A and B read the diff (ledger B2). Rule 3 of
@@ -573,10 +587,13 @@ Traps from the audit:
 - The gate's `--offline` needed a prior `cargo fetch` (AGENTS.md:76-77); new crates add dependencies, so
   the gate uses `--locked` and lets cargo fetch.
 - `test_install.py` reads status fixtures from the protocol crate (`:28`): rewrite before PRD-13 deletes it.
-- `test_codeowners.py` fails the moment an owned path is deleted: CODEOWNERS lists only new paths before
-  the cut.
+- CODEOWNERS lists only new paths before the cut, so it never names a deleted path
+  (`test_codeowners.py` is deleted in phase 0, ledger B10).
 - Tests run as `ubuntu` in build boxes and as the runner user in CI; neither is root.
 - Dev-dependency features unify into every test build, `--release` included (section 4).
+
+Parallel work (ledger B11): notes 1, 2, 4 and 5 start at once in separate worktrees and sandboxes; each
+gate run takes its own sandbox. A builder never adds a test outside section 2 (ledger B10).
 
 How a watcher proves it in a real run: run `sh scripts/gate.sh fast` in a build box and read the step
 times; push and read `gh run list --workflow ci.yml --branch v1.0/integration`; after the core-set pad rows
@@ -703,3 +720,4 @@ PRDs they touch and the code. Where two fixes disagree, the ledger and the later
 | G3-14h | Applied (section 4: Linux-only and macOS-only cases are `#[cfg(target_os = ...)]`) |
 | G3-14i | Applied. Point 6 row adds `upload_beat.rs`; new usage stats row (ledger S2, PRD-12 C5, `usage_run1.rs`, `usage_join.rs`, PRD-09) |
 | G3-14j | Applied. Asks 1 to 3 marked ruled by PRD-00 R3-11 and applied there; PRD-16 ask 3 applied (section 8, G3-X9) |
+| B3, B9, B10, B11 carried in | Applied (ledger, locked; they win over earlier rows above, such as the `test_gate.py`, rule 3 and rule 4 rows and the 15,000 total). Goal and section 1: the rig (PRD-12, B9) is the main proof, run as the B3 ladder (micro tests with local capture first, cycle runs per pad, 20-minute full runs in parallel); the gate is not a rung. Owner decisions gain B3, B9, B10, B11 lines. B10 cuts, each listed with a line in "What is cut": `test_gate.py`, `test_release.py`, `test_codeowners.py`, `test_third_party_licenses.py` deleted in phase 0; `test_install.py` loses its packaging-shape and wording cases; `rule_code.rs` keeps rule 1 only (220 to 80 lines; ports, no-return words and the after-the-cut guard go to review and one-time greps by PRD-13 and PRD-07); `e2e_run.rs` drops its `conn` shape check (150 to 140); PRD-09 keeps `usage_run1` only (600 to 200); `cli_finish.rs` checks the claim, not the sentence. Section 1 rule and section 3: no test pins internal shapes or wording, a costly test is deleted or simplified, reviewer B enforces it, budget is a ceiling (at most about 14,200). B11: one sandbox per gate run, builder notes 1, 2, 4 and 5 start at once. Notes to PRD-09 and PRD-13 go through the replan agent (B2a) |
