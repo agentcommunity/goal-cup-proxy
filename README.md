@@ -205,9 +205,8 @@ facts sheet. No `.rs` file and no test of your own. Start with the
 2. **Fill the facts sheet**: copy `skills/adding-a-capture-harness/templates/harness-facts.md` to
    `docs/harnesses/<id>.md`.
 3. **Copy the template**: `skills/adding-a-capture-harness/templates/connector-harness.toml` to
-   `connectors/<id>/harness.toml`. Fill the one-screen field table in
-   [the key table](docs/CONNECTOR-SCHEMA.md#keys). The
-   closest example is [connectors/codex-cli](connectors/codex-cli/harness.toml).
+   `connectors/<id>/harness.toml`. (This step is 0.7 text, being rewritten; the 1.0 keys are in
+   [CONNECTOR-SCHEMA](docs/CONNECTOR-SCHEMA.md).) The closest example is [connectors/codex-cli](connectors/codex-cli/harness.toml).
 4. **Pin and regenerate**: `sh scripts/pin-manifests.sh`, then the two golden commands in
    [Test a connector](docs/HARNESS-ONBOARDING.md#test-a-connector).
 5. **Check**: `sh scripts/check-connector.sh <id>`, then `sh scripts/gate.sh fast`.
