@@ -24,18 +24,18 @@ SEAM = {k: tuple(v.split(".")) for k, v in {
     "t_native": "native_calls", "s13_requests": "model_requests", "s13_final": "final", "s13_complete": "complete",
     "s4_mode": "mode", "s4_port": "port", "s4_harness_pid": "harness.pid", "s4_requests": "written.model_requests",
     "s4_off": "written.off_ms", "s4_seal": "seal.reason", "s4_pid": "pid", "s4_spans": "off.spans", "s4_down_ms": "off.ms",
-    "s4_since": "off.since", "s4_last": "last_request_at", "s9_final": "final", "s9_keep": "keep", "s9_state": "state"}.items()}
+    "s4_since": "off.since", "s4_last": "last_request_at", "s9_final": "final", "s9_keep": "keep", "s9_state": "state",
+    "s6_hosts": "counts.hosts", "s6_tunnel_hosts": "counts.tunnel_hosts", "c_row": "k", "c_host": "host",
+    "c_kind": "host_kind", "c_thread": "thread"}.items()}  # c_: one S7 calls.jsonl line
 S7_TOKENS = ("input", "cached", "cache_write", "output", "reasoning")  # S7 models[].tokens keys
-# Not fixed yet (asked of PRD-08 in the night log): the `secrets` JSON, and how a recorder_down gap's
-# cause and length appear. Read when present; else hits fall back to verify/exits.json (keyed by the
-# JSON file's stem; PRD-08 section 2: 0 and 1 are no hit, 2 a hit, anything else no scan) and causes to counts.gaps keys ("null_mode",
-# "recorder_down:null_mode"). MASK spans by rule are read from the `masks` key of verify/secrets.json.
+# Not fixed yet (asked of PRD-08 in the night log): the `secrets` JSON. Read when present; else hits fall back to
+# verify/exits.json (keyed by the JSON file's stem; PRD-08 section 2: 0 and 1 are no hit, 2 a hit, anything else no
+# scan). MASK spans by rule are read from the `masks` key of verify/secrets.json.
 SECRET_HITS = ("hits", "known_hits", "shape_hits")
 # Section 5's planted shaped values, each as the S12 rule kinds (PRD-05 section 10) whose MASK covers it. The
 # Google line is masked under the shell rule, row 11, which wins over `google_key`, row 13.
 PLANTED = (("openai_key",), ("github_token",), ("google_key", "generic_secret_assignment"), ("jwt",), ("private_key",),
            ("url_password",))
-INV6_GAPS = ("gaps", "recorder_down")  # inv6 facts: a list of {cause, start, end, ms}
 DOWN = ("recorder_down", "null_mode", "watchdog_lost")
 DOWN_ERR = re.compile(r"(?<!\d)5\d\d(?!\d)|overloaded|server_error|api_error|internal", re.I)  # S6 keys are
 REFUSED_ERR = re.compile(r"(?<!\d)40[13](?!\d)|auth|permission|api_key|quota|billing", re.I)  # kinds or codes
@@ -47,6 +47,8 @@ RANK = {"pass": 0, "warn": 1, "skip": 2, "named": 3, "fail": 4}
 ORDER = {"PASS": 0, "INCONCLUSIVE": 1, "FAIL": 2}
 CHECKS = ("C1", "C2", "C3", "C4", "C5", "C6")
 SEAL_SLACK = datetime.timedelta(seconds=120)  # pad's seal-now limit: a seal may begin that long before its line
+WATCHER = ("exec", "pre")  # section 3.1 watcher steps: the owning PRD's pass line decides, not `faults`
+GATEWAY = "ai-gateway.vercel.sh"
 COPY = "connector copy"  # pad's variant mark for a connector file from disk (P13): a check row, not a fault
 
 def fault_kinds(meta):
@@ -109,10 +111,12 @@ class Run:
         entry = meta.get("entry") or next((e["entry"] for e in self.entries[::-1] if e.get("entry")), None)
         self.entry = next((e for e in self.entries if e.get("entry") == entry), (self.entries or [{}])[-1])
         usage = os.path.join(folder, "verify/usage")
-        names = sorted(os.listdir(usage)) if os.path.isdir(usage) else []
+        names = sorted(n for n in os.listdir(usage) if n.endswith(".json")) if os.path.isdir(usage) else []
         name = "%s.json" % entry if "%s.json" % entry in names else names[0] if len(names) == 1 else None
         got = load(usage, name) if name else None
         self.usage = got if isinstance(got, dict) else None
+        calls = name and os.path.join(usage, name[:-5] + ".calls.jsonl")
+        self.calls = [c for c in load(usage, calls, 1) if dig(c, "c_row") == "call"] if calls and os.path.isfile(calls) else None
         self.server, self.status = load(folder, "verify/check-server.json"), load(folder, "status.json")
         self.fetch = load(folder, "fetched/%s/fetch.json" % entry) if entry else None
         self.samples, self.faults = load(folder, "watch/status.jsonl", 1), load(folder, "watch/faults.jsonl", 1)
@@ -127,14 +131,24 @@ class Run:
 
     def mark(self, check, result, why):
         self.v[check] = max(self.v[check], result, key=ORDER.get)
-        self.why.append("%s %s: %s" % (check, result, why))
+        self.why += ["%s %s: %s" % (check, result, why)] * ("%s %s: %s" % (check, result, why) not in self.why)
 
     def flag(self, cond, check, result, why):
         if cond:
             self.mark(check, result, why)
 
     def check(self, cid):
-        return worst(self.entries, cid).get("result")
+        """One S6 check's worst result; None when absent or `skip` "not built" (not in the report)."""
+        c = worst(self.entries, cid)
+        return None if c.get("result") == "skip" and "not built" in str(c.get("why")) else c.get("result")
+
+    def hosts(self, name):
+        """S6 counts.hosts or tunnel_hosts ({conns, up, down, listed} or a count) as {host: (conns, listed)}; None: absent."""
+        got, out = [dig(e, name) for e in self.entries if isinstance(dig(e, name), dict)], {}
+        for h, v in (kv for d in got for kv in items(d)):
+            n = v.get("conns") if isinstance(v, dict) else v
+            out[h] = (out.get(h, (0,))[0] + (n if type(n) is int else 0), v.get("listed") if isinstance(v, dict) else "")
+        return out if got else None
 
     def gaps(self):
         """recorder_down gaps from inv6's facts (None when no entry lists them), and counts.gaps summed."""
@@ -142,9 +156,8 @@ class Run:
         for e in self.entries:
             for k, n in items(dig(e, "s6_gaps")):
                 counts[k] = counts.get(k, 0) + count(n)
-            facts = worst([e], "inv6").get("facts") or {}
-            key = next((k for k in INV6_GAPS if isinstance(facts.get(k), list)), None)
-            seen, listed = seen or key is not None, listed + (facts[key] if key else [])
+            got = (worst([e], "inv6").get("facts") or {}).get("gaps")  # inv6 facts.gaps: [{cause, start, end, ms}]
+            seen, listed = seen or isinstance(got, list), listed + (got if isinstance(got, list) else [])
         return ([g for g in listed if isinstance(g, dict)] if seen else None), counts
 
     def hits(self, name):
@@ -171,7 +184,8 @@ def cause(r):
 
 def judge(r):
     seen = dig(r.status, "s4_requests") if r.reqs is None else r.reqs  # None: no count in the folder
-    reqs = seen or 0
+    pin = r.meta.get("pinned_host") if r.meta.get("case") == "dodger" else None  # meta.json, written by pad
+    reqs = (seen or 0) + (r.hosts("s6_tunnel_hosts") or {}).get(pin, (0,))[0]  # section 2: its calls are `pinned` tunnels
     secrets(r)  # C3 first: a hit is a FAIL whatever else happened
     work = (reqs or r.native or dig(r.usage, "s7_native")) and (r.meta.get("commits_since_start") or 0) >= 1
     stop = cause(r) or (None if work else "the harness did no work (commits since start %s, model requests %s)"
@@ -199,16 +213,16 @@ def local(r, reqs):
     if dig(r.usage, "s7_readable") is True:  # the local log check counts only where that log was read
         tm, wk = r.check("threads_match"), r.check("wire_keeps_up")
         totals = dig(r.entry, "s6_log") == "totals" and wk == "skip"
-        r.flag(tm not in ("pass", "named") or not (wk in ("pass", "named") or totals), "C1", "FAIL",
-               "local log check: threads_match %s, wire_keeps_up %s" % (tm, wk))
-    if r.meta.get("case") != "direct":
-        r.mark("C1", "INCONCLUSIVE", "case %s expectations not built yet" % r.meta.get("case"))
+        r.flag(tm not in ("pass", "named") or not (wk in ("pass", "named") or totals), "C1", "INCONCLUSIVE" if None in
+               (tm, wk) else "FAIL", "local log check: threads_match %s, wire_keeps_up %s" % (tm, wk))  # None: not in the report
+    case(r)
     # A failed check is already filed under its own C; with none, exit 0, or exit 1 whose only named loss
     # is an after_stop GAP (PRD-08 R2: a harness still sending after the seal at `minutes`).
     code, named = dig(r.local, "s6_exit"), {k for k, n in r.gaps()[1].items() if n}
     after_stop = code == 1 and named == {"after_stop"} and not any(dig(e, "s6_off") for e in r.entries)
-    r.flag(r.meta.get("case") == "direct" and not fault_kinds(r.meta) and not r.failed and code != 0 and not after_stop,
-           "C1", "FAIL", "verifier exit %s, the direct case expects 0 or an after_stop GAP only" % code)
+    r.flag(r.meta.get("case") in ("direct", "gateway") and not set(fault_kinds(r.meta)) - {"pre"} and not r.failed
+           and code != 0 and not after_stop, "C1", "FAIL", "verifier exit %s, the %s case expects 0 or an after_stop GAP"
+           " only" % (code, r.meta.get("case")))
     own = sorted(i for i in r.failed if i != "secrets")  # `secrets` is C3's
     half = "local checks failed: %s" % ", ".join(own) if own else "no local check failed (keep from the settings)"
     r.flag(own, "C4", "FAIL", half)
@@ -226,6 +240,42 @@ def local(r, reqs):
     r.flag(not dig(r.fetch, "s13_final") or dig(r.fetch, "s13_complete") is not True, "C4", "FAIL",
            "fetch.json is not final and complete")
 
+def case(r):
+    """Section 2's rows beyond the six checks, from S6 counts.hosts and tunnel_hosts and S7's call rows. A fact not in
+    the report is INCONCLUSIVE, never PASS or FAIL. Gateway and direct exit 0 is local()'s rule."""
+    kind, code, pin, hs = r.meta.get("case"), dig(r.local, "s6_exit"), r.meta.get("pinned_host"), r.hosts("s6_hosts")
+
+    def need(fact, got):
+        r.flag(got is None, "C1", "INCONCLUSIVE", "%s not in the report" % fact)
+        return got is not None
+    if kind == "direct" and hs is not None:
+        r.flag(not any(n and lst is not None for n, lst in hs.values()), "C1", "FAIL", "no decrypted model host in counts.hosts")
+    if kind == "gateway":
+        got = r.check("listed_hosts_decrypted")
+        r.flag(need("listed_hosts_decrypted", got) and got != "pass", "C1", "FAIL", "listed_hosts_decrypted %s" % got)
+        r.flag(need("counts.hosts", hs) and not hs.get(GATEWAY, (0,))[0], "C1", "FAIL", GATEWAY + " not decrypted in counts.hosts")
+        own = r.meta.get("model_host")  # the vendor's own host, compared only where meta.json names it
+        bad = sorted({str(dig(c, "c_host")) for c in r.calls or []
+                      if dig(c, "c_kind") != "gateway" or own and dig(c, "c_host") == own})
+        r.flag(bad, "C1", "FAIL", "model calls not through the gateway: " + ", ".join(bad))
+    if kind != "dodger":
+        return
+    r.flag(code in (0, 2), "C1", "FAIL", "verifier exit %s%s" % (code, ": the hosts copy was not used" if code == 0 else ""))
+    r.flag(code not in (0, 1, 2), "C1", "INCONCLUSIVE", "verifier exit %s, the dodger case expects 1" % code)
+    for cid, ok in (("listed_hosts_decrypted", ("named",)), ("history_complete", ("skip",)), ("wire_keeps_up", ("named", "skip"))):
+        got = r.check(cid)
+        r.flag(need(cid, got) and got not in ok, "C1", "FAIL", "%s %s, the dodger expects %s" % (cid, got, " or ".join(ok)))
+    if not pin:
+        return r.mark("C1", "INCONCLUSIVE", "meta.json names no pinned_host")
+    th = r.hosts("s6_tunnel_hosts")
+    r.flag(need("counts.tunnel_hosts", th) and not th.get(pin, (0,))[0], "C1", "FAIL", "no tunnel to the pinned host " + pin)
+    r.flag(need("counts.hosts", hs) and hs.get(pin, (0,))[0], "C1", "FAIL", "the pinned host %s was decrypted" % pin)
+    for c in ("C2", "C5") * bool(r.usage and r.calls is None):
+        r.mark(c, "INCONCLUSIVE", "usage call rows not in the report")
+    mine = [c for c in r.calls or [] if dig(c, "c_host") == pin]
+    r.flag(any(dig(c, "c_thread") for c in mine), "C2", "FAIL", "a thread claimed from the pinned host " + pin)
+    r.flag(any(c.get(k) for c in mine for k in S7_TOKENS), "C5", "FAIL", "wire tokens claimed for the pinned host " + pin)
+
 def usage_checks(r, reqs):
     """C2 (every subagent recorded) and C5 (usage stats present), both from the S7 summary."""
     if not r.usage:
@@ -237,11 +287,13 @@ def usage_checks(r, reqs):
     r.flag(any(not (dig(t, "t_wire") or dig(t, "t_native")) for t in threads), "C2", "FAIL",
            "a thread with no wire calls and no native stream")
     sub = r.check("subagents_present")
-    r.flag(dig(r.usage, "s7_readable") is True and sub not in ("pass", "named"), "C2", "FAIL", "subagents_present %s" % sub)
+    r.flag(dig(r.usage, "s7_readable") is True and sub not in ("pass", "named"), "C2", "FAIL" if sub else "INCONCLUSIVE",
+           "subagents_present %s" % (sub or "not in the report"))
     if reqs < 2:
         return r.mark("C5", "INCONCLUSIVE", "the record holds fewer than 2 model calls")
     tok = dict(items(dig(r.usage, "s7_tokens")))
-    r.flag((tok.get("input") or 0) + (tok.get("output") or 0) <= 0, "C5", "FAIL", "merged input plus output tokens are 0")
+    native = r.meta.get("case") != "dodger" or dig(r.usage, "s7_readable") is True  # a dodger's tokens are native only
+    r.flag(native and (tok.get("input") or 0) + (tok.get("output") or 0) <= 0, "C5", "FAIL", "merged input plus output tokens are 0")
     r.flag(any(not dig(t, "t_models") or not (dig(t, "t_wire") or dig(t, "t_native")) for t in threads), "C5", "FAIL",
            "a thread with no model or no calls")
     r.flag(dig(r.usage, "s7_unattributed") != 0, "C5", "FAIL", "coverage.unattributed %s" % dig(r.usage, "s7_unattributed"))
@@ -299,7 +351,7 @@ def fired(r, *kinds):
 def faults(r):
     """Section 3.1, for the two faults built so far; any other kind makes the row INCONCLUSIVE."""
     kinds = fault_kinds(r.meta)
-    for k in sorted(set(kinds) - set(BUILT_FAULTS)):
+    for k in sorted(set(kinds) - set(BUILT_FAULTS) - set(WATCHER)):
         r.mark("faults", "INCONCLUSIVE", "expectations for %s not built yet" % k)
     if not set(kinds) & set(BUILT_FAULTS):
         return
@@ -332,7 +384,8 @@ def faults(r):
     r.flag(kills and "kill-recorder" in kinds and (not res or set(res) - {"ok", "FAIL"}), "faults",
            "INCONCLUSIVE", "recovery not observed: wait-recovery %s" % (", ".join(map(str, res)) or "not run"))
     gaps, counts = r.gaps()
-    other = sorted(k for k, n in counts.items() if n and k.split(":")[0] not in DOWN + ("after_stop",))  # R2: seal
+    ok = DOWN + ("after_stop",) + ("pinned",) * (r.meta.get("case") == "dodger")  # R2: seal; section 2: the dodger
+    other = sorted(k for k, n in counts.items() if n and k.split(":")[0] not in ok)
     r.flag(other, "faults", "FAIL", "named loss other than the expected gaps: %s" % ", ".join(other))  # C1, C2
     if gaps is None:
         return r.mark("faults", "INCONCLUSIVE", "recorder_down gaps not readable from inv6")
@@ -396,22 +449,53 @@ def facts(r):
             "priced_high": m.get("priced_high") or [], "first_live_alarm": (alarm or [None])[0],
             "push": m.get("push"), "wire_only": dig(u, "s7_wire_only"), "local_log_reason": dig(u, "s7_reason")}
 
-def evaluate(folder):
+def watcher(r):
+    """Section 3.1: owner lines that need a human read, for report.txt only, never a check."""
+    out = ["%s %s exit %s: read exec/%s.txt" % (f.get("kind"), f.get("script"), f.get("exit"), f.get("script"))
+           for f in r.faults if f.get("kind") in WATCHER and f.get("exit") != 0]
+    if r.meta.get("case") != "dodger":
+        return out
+    pin, watch = r.meta.get("pinned_host"), os.path.join(r.folder, "watch")
+    panes = [n for n in (os.listdir(watch) if os.path.isdir(watch) else []) if re.fullmatch(r"pane-\D*\d+\.txt", n)]
+    last, text = max(panes, key=lambda n: int(re.sub(r"\D", "", n)), default=None), ""
+    try:
+        with open(os.path.join(watch, last)) as f:
+            text = f.read()
+    except (OSError, TypeError):
+        pass
+    seen = bool(pin) and "Not recorded" in text and pin in text
+    return out + ["the start event's hosts_sha256 must equal meta.json's %s" % r.meta.get("hosts_sha256"),
+                  "the launch block must show: Host list from a file: <path> (not verified).",
+                  "the end screen names %s under 'Not recorded': %s" % (pin, "on %s" % last if seen else "not seen on the saved screen")]
+
+def verdict(folder, script):
+    """Section 3.1: the first word of the watcher's exec/<script>.verdict when PASS or FAIL, else pending."""
+    try:
+        with open(os.path.join(folder, "exec", script + ".verdict")) as f:
+            return next((w for w in f.read().split()[:1] if w in ("PASS", "FAIL")), "pending")
+    except OSError:
+        return "pending"
+
+def evaluate(folder, notes=None):
     meta = load(folder, "meta.json")
     if not isinstance(meta, dict):
         return None
     r = Run(folder, meta)
     judge(r)
-    fault = r.v["faults"] if fault_kinds(meta) else None
+    notes is None or notes.extend(watcher(r))
+    fault = r.v["faults"] if set(fault_kinds(meta)) - set(WATCHER) else None
+    scripts = [w[1].split("@")[0] for w in (str(v).split() for v in meta.get("variant") or []) if w[:1] == ["exec"] and w[1:]]
     got = [r.v[c] for c in CHECKS] + [fault] * bool(fault)
     row = {k: meta.get(k) for k in ("connector", "harness_version", "case", "mode", "prompt", "variant", "where",
                                     "server", "image", "run", "entry", "started", "minutes", "pad_trusted_at")}
-    row.update(os=None, goalcup=None, checks={c: r.v[c] for c in CHECKS}, faults=fault, exec={}, why=r.why,
+    row.update(os=None, goalcup=None, checks={c: r.v[c] for c in CHECKS}, faults=fault, why=r.why,
+               exec={s: verdict(folder, s) for s in scripts},
                result="FAIL" if "FAIL" in got else "PASS" if set(got) == {"PASS"} else "INCONCLUSIVE", facts=facts(r))
     return row
 
 def main(argv):
-    row = evaluate(argv[1]) if len(argv) == 2 else None
+    notes = []
+    row = evaluate(argv[1], notes) if len(argv) == 2 else None
     if row is None:
         print("usage: scripts/pad/check.py <run folder with a readable meta.json>", file=sys.stderr)
         return 2
@@ -419,6 +503,7 @@ def main(argv):
              "checks: " + ", ".join("%s %s" % kv for kv in sorted(row["checks"].items()))]
     lines += ["why: " + w for w in row["why"]] + ["facts: " + json.dumps(row["facts"], sort_keys=True)]
     lines += ["for the watcher: read goalcup.log and the panes for a failed call the harness did not retry"] * bool(fault_kinds(row))
+    lines += ["for the watcher: " + n for n in notes]
     for name, text in (("row.json", json.dumps(row, sort_keys=True, indent=1)), ("report.txt", "\n".join(lines))):
         with open(os.path.join(argv[1], name), "w") as f:
             f.write(text + "\n")
