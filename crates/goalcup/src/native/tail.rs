@@ -84,7 +84,7 @@ impl Tail {
     ) {
         let now = rec.now();
         let Some(e) = self.files.get_mut(&id) else {
-            if !taken(&stat, self.since) {
+            if !self.taken(&stat) {
                 return;
             }
             let (generation, off) = match self.cursors.native.get(&id) {
@@ -132,6 +132,11 @@ impl Tail {
         }
     }
 
+    /// The run-start rule (section 2, D57): max(mtime, ctime) in whole seconds at or after `since`.
+    pub fn taken(&self, stat: &Stat) -> bool {
+        stat.mtime_ns.max(stat.ctime_ns).div_euclid(1_000_000_000) >= self.since
+    }
+
     /// Paths not settled since the last sweep are gone: GAP if unread, END `source_changed`. A gone
     /// snapshot whose last state was not copied whole gets a copy of its own (see `last_copy`) and
     /// its exact loss, since no later copy comes. A path under one of the walk's `unlisted` folders
@@ -156,18 +161,15 @@ impl Tail {
     pub fn read(&mut self, rec: &Recorder, slice: u64, settle: Duration) -> Stop {
         let now = rec.now().ns();
         let settle = u64::try_from(settle.as_nanos()).unwrap_or(u64::MAX);
-        let mut due: Vec<String> = self
-            .files
-            .iter()
-            .filter(|(_, e)| match e.snap {
-                false => e.h.is_some() && e.stat.size > e.off,
-                true => {
-                    let settled = now.saturating_sub(e.seen_at.ns()) >= settle;
-                    e.copy.is_some() || (settled && e.done != Some(e.stat))
-                }
-            })
-            .map(|(id, _)| id.clone())
-            .collect();
+        let is_due = |e: &Entry| match e.snap {
+            false => e.h.is_some() && e.stat.size > e.off,
+            true => {
+                let settled = now.saturating_sub(e.seen_at.ns()) >= settle;
+                e.copy.is_some() || (settled && e.done != Some(e.stat))
+            }
+        };
+        let due = self.files.iter().filter(|(_, e)| is_due(e));
+        let mut due: Vec<String> = due.map(|(id, _)| id.clone()).collect();
         let after = self
             .last
             .as_ref()
@@ -181,7 +183,12 @@ impl Tail {
             let Some(e) = self.files.get_mut(&id) else {
                 continue;
             };
-            let got = read_one(rec, &id, e, &mut left);
+            let copying = e.copy.is_some();
+            let mut got = read_one(rec, &id, e, &mut left);
+            // A copy torn by a state already seen and settled: that state is copied now, once.
+            if copying && e.copy.is_none() && is_due(e) {
+                got = read_one(rec, &id, e, &mut left);
+            }
             if let Err(err) = &got {
                 let errno = err.raw_os_error().unwrap_or(0);
                 let what = "native_unreadable";
@@ -268,7 +275,10 @@ fn read_one(rec: &Recorder, id: &str, e: &mut Entry, left: &mut u64) -> io::Resu
         let whole = e.off == c.size && a.as_ref().ok() == Some(&c);
         if whole {
             e.done = Some(c);
-        } else if let Ok(a) = a {
+        } else if let Ok(a) = a
+            && a != e.stat
+        {
+            // Only a state not seen before restarts the settle clock: the one seen keeps its own.
             (e.stat, e.seen_at) = (a, rec.now());
         }
         let reason = if whole { Complete } else { SourceChanged };
@@ -310,7 +320,7 @@ fn end(rec: &Recorder, mut h: StreamHandle, e: &Entry, reason: EndReason, exact:
     let n = want(e).saturating_sub(e.off);
     if n > 0 && reason == CutAtSeal {
         h.gap(GapReason::CutAtSeal, e.seen_at, Some(n), None);
-    } else if n > 0 && (exact || !e.snap) {
+    } else if n > 0 {
         let tail = Some(json!({"unread_at_least": n}));
         let lost = exact.then_some(n);
         h.gap(GapReason::SourceChanged, e.seen_at, lost, tail);
@@ -346,11 +356,6 @@ fn want(e: &Entry) -> u64 {
 pub(crate) fn fid_hex(fid: Fid) -> String {
     let birth = fid.birth_ns.map(|b| format!(".{b:x}")).unwrap_or_default();
     format!("{:x}.{:x}{birth}", fid.dev, fid.ino)
-}
-
-/// The run-start rule (section 2, D57): max(mtime, ctime) in whole seconds at or after `since`.
-pub(crate) fn taken(stat: &Stat, since_secs: i64) -> bool {
-    stat.mtime_ns.max(stat.ctime_ns).div_euclid(1_000_000_000) >= since_secs
 }
 
 /// Opens `root/rel` with no symlink followed: the root, each folder, then the file with `fid`.
