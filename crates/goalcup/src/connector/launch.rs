@@ -274,6 +274,9 @@ fn yaml_set(text: &str, parts: &[&str], leaf: &str) -> Result<String, &'static s
         };
         let block = (i + 1..end).find(|&j| indent(&lines[j]).is_some_and(|d| d <= pad));
         let block = block.unwrap_or(end);
+        // Blank and comment lines after the block belong to what follows it.
+        let block = (i + 1..block).rev().find(|&j| indent(&lines[j]).is_some());
+        let block = block.map_or(i + 1, |j| j + 1);
         if n + 1 == parts.len() {
             lines.splice(i..block, [format!("{}{part}:{leaf}", " ".repeat(pad))]);
             break;
