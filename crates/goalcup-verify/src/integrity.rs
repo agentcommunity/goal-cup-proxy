@@ -384,7 +384,10 @@ impl Pass {
         };
         self.t = t;
         self.end_off = it.off;
-        let at = At(it.off, sid, self.wall_of(t));
+        let at = match it.rec {
+            Record::Part { wall_ns, .. } => At(it.off, 0, wall_ns),
+            _ => At(it.off, sid, self.wall_of(t)),
+        };
         let is_down = matches!(
             it.rec,
             Record::Gap {
@@ -429,7 +432,11 @@ impl Pass {
             && let Some((a, gap)) = self.tentative.take()
             && !is_down
         {
-            self.fail("recorder_alive", &format!("no COUNT for {} s within a boot", gap / 1_000_000_000), a);
+            self.fail(
+                "recorder_alive",
+                &format!("no COUNT for {} s within a boot", gap / 1_000_000_000),
+                a,
+            );
         }
         if !matches!(it.rec, Record::Part { .. } | Record::Link { .. })
             && !matches!(ev_name.as_str(), "start" | "prev_boot")
@@ -483,7 +490,11 @@ impl Pass {
                         }
                         if *boot != b {
                             if self.pending_down == 0 {
-                                self.fail("inv6", &format!("boot {boot} has no recorder_down gap before it"), at);
+                                self.fail(
+                                    "inv6",
+                                    &format!("boot {boot} has no recorder_down gap before it"),
+                                    at,
+                                );
                             }
                             self.end_boot();
                             (self.boots, self.partial) = (self.boots + 1, false);
@@ -547,7 +558,12 @@ impl Pass {
                 }
                 let name = reason.name();
                 if let GapReason::Other(_) = reason {
-                    self.set("gap_reason_unknown", Res::Warn, &format!("a GAP has reason {name}"), Some(at));
+                    self.set(
+                        "gap_reason_unknown",
+                        Res::Warn,
+                        &format!("a GAP has reason {name}"),
+                        Some(at),
+                    );
                 }
                 let lost_b = lost.saturating_sub(1);
                 self.cur.add("gaps", 1);
@@ -623,7 +639,11 @@ impl Pass {
                     self.fail("inv2", "a link hash does not recompute", at);
                 }
                 if *seq != self.next_seq {
-                    self.fail("inv2", &format!("link seq {seq} where {} was due", self.next_seq), at);
+                    self.fail(
+                        "inv2",
+                        &format!("link seq {seq} where {} was due", self.next_seq),
+                        at,
+                    );
                 }
                 self.next_seq = seq + 1;
                 self.last_hash = *hash;
@@ -633,7 +653,12 @@ impl Pass {
                 }
             }
             Record::Unknown { .. } => {
-                self.set("record_kind_unknown", Res::Warn, "records of an unknown kind were skipped", Some(at));
+                self.set(
+                    "record_kind_unknown",
+                    Res::Warn,
+                    "records of an unknown kind were skipped",
+                    Some(at),
+                );
                 self.bump("record_kind_unknown", "records", 1);
             }
         }
@@ -647,7 +672,12 @@ impl Pass {
         let s = |k: &str| meta.get(k).and_then(Value::as_str).map(String::from);
         let from = meta.get("from").and_then(Value::as_u64).unwrap_or(0);
         let parent = self.streams.get(&conn).and_then(|c| c.host.clone());
-        let mut st = St { kind: Some(kind), from, next: from, ..Default::default() };
+        let mut st = St {
+            kind: Some(kind),
+            from,
+            next: from,
+            ..Default::default()
+        };
         match kind {
             StreamKind::Conn => {
                 self.cur.add("conns", 1);
@@ -686,7 +716,11 @@ impl Pass {
                     meta.get("gen").and_then(Value::as_u64).unwrap_or(0),
                 );
                 if !self.natives_boot.insert(key.clone()) {
-                    self.fail("native_path_gen", "two native streams of one boot share path and gen", at);
+                    self.fail(
+                        "native_path_gen",
+                        "two native streams of one boot share path and gen",
+                        at,
+                    );
                 }
                 if let Some((end, unknown)) = self.natives.get(&key)
                     && from > *end
@@ -728,7 +762,11 @@ impl Pass {
             }
             i = b;
         }
-        let (kind, host, msg_gap) = (st.kind.unwrap_or(StreamKind::Other(0)), st.host.clone(), st.msg_gap);
+        let (kind, host, msg_gap) = (
+            st.kind.unwrap_or(StreamKind::Other(0)),
+            st.host.clone(),
+            st.msg_gap,
+        );
         let fin = flags & FLAG_FIN != 0;
         if fin {
             st.msg_gap = false;
@@ -773,11 +811,20 @@ impl Pass {
         }
         if st.kind != Some(StreamKind::Conn) {
             if st.holed {
-                self.set("seen_matches_written", Res::Named, "unknown-loss holes are reported, not checked", Some(at));
+                self.set(
+                    "seen_matches_written",
+                    Res::Named,
+                    "unknown-loss holes are reported, not checked",
+                    Some(at),
+                );
                 self.bump("seen_matches_written", "holes", 1);
                 self.bump("seen_matches_written", "hole_bytes", st.hole);
             } else if seen != st.next || seen < st.from {
-                self.fail("seen_matches_written", "an END's seen differs from what was written", at);
+                self.fail(
+                    "seen_matches_written",
+                    "an END's seen differs from what was written",
+                    at,
+                );
             }
         }
         if let Some((host, _)) = &st.tunnel {
@@ -832,7 +879,11 @@ impl Pass {
             "count" => {
                 let d = differ(&Value::Object(m), &self.cur);
                 if !d.is_empty() {
-                    self.fail("inv7", &format!("a COUNT does not equal the recount: {}", d.join(", ")), at);
+                    self.fail(
+                        "inv7",
+                        &format!("a COUNT does not equal the recount: {}", d.join(", ")),
+                        at,
+                    );
                 }
                 let gap = self
                     .t
@@ -850,16 +901,29 @@ impl Pass {
                 total.merge(&self.boot_total());
                 let d = differ(m.get("totals").unwrap_or(&Value::Null), &total);
                 if !d.is_empty() {
-                    self.fail("counts_match_seal", &format!(
-                            "the seal's totals differ from the recount: {}", d.join(", ")
-                        ), at);
+                    self.fail(
+                        "counts_match_seal",
+                        &format!(
+                            "the seal's totals differ from the recount: {}",
+                            d.join(", ")
+                        ),
+                        at,
+                    );
                 }
                 let recovered = m.get("reason").and_then(Value::as_str) == Some("recovered");
                 if recovered && self.pending_down != 1 {
-                    self.fail("inv6", "a recovered seal without exactly one recorder_down gap", at);
+                    self.fail(
+                        "inv6",
+                        "a recovered seal without exactly one recorder_down gap",
+                        at,
+                    );
                 }
                 if self.pending_down == 0 && !self.streams.is_empty() {
-                    self.fail("streams_closed", &format!("{} streams have no END at the seal", self.streams.len()), at);
+                    self.fail(
+                        "streams_closed",
+                        &format!("{} streams have no END at the seal", self.streams.len()),
+                        at,
+                    );
                 }
                 self.pending_down = 0;
                 self.seal = Some(m);
@@ -884,7 +948,11 @@ impl Pass {
     /// Closes the boot: cadence until its last regular link, native ends, totals.
     fn end_boot(&mut self) {
         if let Some((a, gap)) = self.tentative.take() {
-            self.fail("recorder_alive", &format!("no COUNT for {} s within a boot", gap / 1_000_000_000), a);
+            self.fail(
+                "recorder_alive",
+                &format!("no COUNT for {} s within a boot", gap / 1_000_000_000),
+                a,
+            );
         }
         if let Some(t) = self.regular_link_t.take() {
             let gap = t
@@ -892,9 +960,14 @@ impl Pass {
                 .saturating_sub(self.suspend);
             if gap > CADENCE_NS {
                 let at = At(self.end_off, 0, self.wall_of(t));
-                self.fail("recorder_alive", &format!(
-                        "no COUNT for {} s before the boot's last link", gap / 1_000_000_000
-                    ), at);
+                self.fail(
+                    "recorder_alive",
+                    &format!(
+                        "no COUNT for {} s before the boot's last link",
+                        gap / 1_000_000_000
+                    ),
+                    at,
+                );
             }
         }
         for st in self.streams.values() {
@@ -933,7 +1006,12 @@ impl Pass {
         if !sealed {
             self.set("counts_match_seal", Res::Skip, "not sealed", None);
         } else if self.pruned {
-            self.set("counts_match_seal", Res::Skip, "local part files were pruned", None);
+            self.set(
+                "counts_match_seal",
+                Res::Skip,
+                "local part files were pruned",
+                None,
+            );
         }
         if !sealed && !open.is_empty() {
             let why = format!(
@@ -957,7 +1035,12 @@ impl Pass {
                 .or_else(|| status.get("null_since"));
             if status.get("mode").and_then(Value::as_str) == Some("null") {
                 let since = since.and_then(Value::as_str).unwrap_or("an unknown time");
-                self.set("recorder_alive", Res::Named, &format!("null mode since {since}"), None);
+                self.set(
+                    "recorder_alive",
+                    Res::Named,
+                    &format!("null mode since {since}"),
+                    None,
+                );
             } else {
                 let why = format!(
                     "no COUNT for {} s: the recorder and its watchdog may both be gone",
@@ -979,7 +1062,12 @@ impl Pass {
                     )
                 })
                 .collect();
-            self.set("inv6", Res::Named, &format!("recording was off {n} times: {}", causes.join(", ")), None);
+            self.set(
+                "inv6",
+                Res::Named,
+                &format!("recording was off {n} times: {}", causes.join(", ")),
+                None,
+            );
         }
         let gaps = std::mem::take(&mut self.down_gaps);
         self.fact("inv6", "gaps", gaps.into());
@@ -996,8 +1084,14 @@ impl Pass {
             .collect();
         let total = self.all.get("gaps");
         if total > 0 {
-            self.set("gaps_named", Res::Named, &format!("{total} GAPs record a loss"), None);
+            self.set(
+                "gaps_named",
+                Res::Named,
+                &format!("{total} GAPs record a loss"),
+                None,
+            );
         }
-        self.fact("gaps_named", "reasons", by.into());
+        let i = self.idx("gaps_named");
+        self.checks[i].facts = by;
     }
 }
