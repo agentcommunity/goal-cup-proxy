@@ -6,10 +6,10 @@ mod cli_common;
 
 use std::path::Path;
 
-use cli_common::{RUN, T0 as NOW, live, part, patch, put, with};
+use cli_common::{RUN, T0 as NOW, live, part, patch, put, upload, with};
 use goalcup::cli::finish::{NotSealed, end_screen, screen};
 use goalcup::cli::status::{State, block};
-use goalcup::cli::text;
+use goalcup::cli::{text, unix_of};
 use goalcup::pipeline::status::{Mode, Status};
 use goalcup_format::GapReason;
 use serde_json::{Map, Value, json};
@@ -32,7 +32,7 @@ const LOG: &str = "/home/x/Application Support/goalcup.log";
 /// The end screen of `sealed()` with `p` laid over it.
 fn show(p: Value) -> String {
     let st = patch(&sealed(), p);
-    screen(&st, None, RUN, Path::new(LOG), NOW).expect("sealed")
+    screen(&st, None, None, RUN, Path::new(LOG), NOW).expect("sealed")
 }
 
 /// Rule 1: the "nothing was lost" claim with no loss, and never with any one, whose line takes its
@@ -123,6 +123,21 @@ fn rule_lines_follow_their_facts() {
     assert!(out.trim_end().ends_with(&format!("\"{LOG}\"")), "{out}");
 }
 
+/// Rule 8: bytes still waiting at the end name `goalcup upload` and `upload_by`; a done upload does
+/// not.
+#[test]
+fn bytes_left_at_the_end_name_goalcup_upload_and_upload_by() {
+    let by = "2026-11-08T10:00:00Z";
+    let waiting = json!({"state": "waiting", "waiting_bytes": 120_000_000, "upload_by": by});
+    let done = json!({"state": "done", "upload_by": by, "confirmed": {"raw": 95_000_000}});
+    let by = text::local_clock(unix_of(by).unwrap());
+    for (p, left) in [(waiting, true), (done, false)] {
+        let out = screen(&sealed(), None, Some(&upload(p)), RUN, Path::new(LOG), NOW).unwrap();
+        assert_eq!(out.contains("goalcup upload"), left, "{out}");
+        assert_eq!(out.contains(&by), left, "{out}");
+    }
+}
+
 #[test]
 fn every_gap_reason_has_words() {
     let other = |n: u8| format!("other ({n})");
@@ -150,11 +165,12 @@ fn unsealed_status_never_reads_as_finished() {
     for p in cases {
         let st = patch(&sealed(), p.clone());
         let log = Path::new("/l");
-        assert_eq!(screen(&st, None, RUN, log, NOW), Err(NotSealed), "{p}");
+        let got = screen(&st, None, None, RUN, log, NOW);
+        assert_eq!(got, Err(NotSealed), "{p}");
         put(&entry, "status.json", &st);
         assert_eq!(end_screen(&entry), Err(NotSealed), "{p}");
         for state in [State::Recording, State::Continue { since: NOW }] {
-            let shown = block(&st, &state, None, &cx, &[state.word()]);
+            let shown = block(&st, &state, None, None, &cx, &[state.word()]);
             let finished = shown.contains(text::FINISHED) || shown.contains(text::PART_RECORDED);
             assert!(!finished, "{p}");
         }

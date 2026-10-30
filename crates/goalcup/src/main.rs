@@ -177,7 +177,7 @@ fn run(command: Command) -> ExitCode {
         Command::Status { part, json } => cli::status::run(part, json),
         Command::Seal { .. } => not_built("seal"),
         Command::Upload { .. } => not_built("upload"),
-        Command::TimeLeft => not_built("time-left"),
+        Command::TimeLeft => cli::time_left::run(),
     }
 }
 

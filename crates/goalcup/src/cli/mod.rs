@@ -9,6 +9,7 @@ pub mod setup;
 pub mod start;
 pub mod status;
 pub mod text;
+pub mod time_left;
 
 use std::env;
 use std::fs;
@@ -165,11 +166,6 @@ pub fn goalcup_log(entry_dir: &Path) -> PathBuf {
 /// `runs/<run>/<entry>/status.json` (PRD-02 section 6, seam S4).
 pub fn status_json(entry_dir: &Path) -> PathBuf {
     entry_dir.join("status.json")
-}
-
-/// `runs/<run>/<entry>/upload.json` (PRD-06, seam S9). Status passes it through, unread.
-pub fn upload_json(entry_dir: &Path) -> PathBuf {
-    entry_dir.join("upload.json")
 }
 
 /// One line `goalcup: <text>` on stderr. A closed stderr is not worth a panic.

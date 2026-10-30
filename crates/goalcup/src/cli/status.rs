@@ -1,5 +1,5 @@
-//! `goalcup status` (PRD-10 section 4): reads `status.json` (seam S4), `server.json` and, for
-//! `--json` only, `upload.json`, and never talks to the recorder. It works the same while a part
+//! `goalcup status` (PRD-10 section 4): reads `status.json` (seam S4), `server.json` and
+//! `upload.json` (seam S9), and never talks to the recorder. It works the same while a part
 //! records, after it ends and after a crash. It shows only what `status.json` holds as written,
 //! with no counter of its own (ledger L2).
 
@@ -9,6 +9,7 @@ use serde_json::Value;
 
 use super::{Found, ServerJson, fail, find, home, read_json, say, text};
 use crate::pipeline::status::{Mode, Status};
+use crate::upload::state::{self as up, UploadJson};
 
 /// The recording state, one row of the section 4 table each. Times are seconds since 1970.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -220,10 +221,12 @@ pub fn by_count(hosts: &std::collections::BTreeMap<String, u64>) -> Vec<(&str, u
 }
 
 /// The status block (section 4), the same shape in every state. `parts`: the word for each part.
+/// `upload` gives the `Upload:` line, which is also the "upload behind" row (app. F 9).
 pub fn block(
     st: &Status,
     state: &State,
     run: Option<&ServerJson>,
+    upload: Option<&UploadJson>,
     cx: &Ctx<'_>,
     parts: &[&str],
 ) -> String {
@@ -256,6 +259,7 @@ pub fn block(
         w.counts.native_bytes,
     ));
     lines.push(text::off_line(st.off.spans, st.off.ms));
+    lines.extend(upload.map(|u| text::upload_line(u, cx.now, false)));
     lines.push(text::parts_line(parts));
     let problems = problems(st, state, cx);
     lines.push(text::problems_head(problems.len()));
@@ -289,7 +293,7 @@ pub fn run(part: Option<String>, json: bool) -> ExitCode {
             return ExitCode::from(3);
         };
         let run: Option<Value> = read_json(&super::server_json(&found.run_dir));
-        let upload: Option<Value> = read_json(&super::upload_json(&dir));
+        let upload: Option<Value> = read_json(&dir.join(up::FILE));
         let all = serde_json::json!({ "status": status, "upload": upload, "run": run });
         println!("{all}");
         return ExitCode::SUCCESS;
@@ -334,5 +338,11 @@ fn show(found: &Found, st: &Status, now: u64) -> String {
             }
         })
         .collect();
-    block(st, &state, run, &cx, &parts)
+    // A local run says so even before its uploader wrote `upload.json`.
+    let local = run.is_some_and(|r| r.server.is_none()).then(|| UploadJson {
+        state: up::State::Local,
+        ..UploadJson::default()
+    });
+    let upload = up::read(&found.entry_dir()).or(local);
+    block(st, &state, run, upload.as_ref(), &cx, &parts)
 }

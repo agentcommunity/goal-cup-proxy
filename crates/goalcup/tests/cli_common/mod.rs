@@ -1,6 +1,6 @@
-//! What the CLI tests share: `status.json` (seam S4) and `server.json` fixtures built through their
-//! JSON form, so a key PRD-02 adds changes one place, and the part folder to write them into.
-//! Options left out read as null.
+//! What the CLI tests share: `status.json` (seam S4), `upload.json` (S9) and `server.json`
+//! fixtures built through their JSON form, so a key PRD-02 or PRD-06 adds changes one place, and
+//! the part folder to write them into. Options left out read as null.
 
 #![allow(dead_code)]
 
@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 
 use goalcup::cli::status::Ctx;
 use goalcup::pipeline::status::{DurableStatus, Losing, Mode, Off, STATUS_V, Status, Written};
+use goalcup::upload::state::UploadJson;
 use serde::Serialize;
 use serde_json::{Value, json};
 
@@ -35,19 +36,27 @@ pub fn with(mode: Mode, p: Value) -> Status {
 /// `st` with `p` laid over its JSON form object by object: `{"written": {"gaps": 1}}` sets one
 /// count and keeps the rest; a null clears an option.
 pub fn patch(st: &Status, p: Value) -> Status {
-    fn merge(to: &mut Value, from: Value) {
-        match (to, from) {
-            (Value::Object(to), Value::Object(from)) => {
-                for (k, v) in from {
-                    merge(to.entry(k).or_insert(Value::Null), v);
-                }
-            }
-            (to, from) => *to = from,
-        }
-    }
     let mut v = serde_json::to_value(st).unwrap();
     merge(&mut v, p);
     serde_json::from_value(v).expect("a status.json")
+}
+
+/// The `upload.json` of part [`ENTRY`] with `p` laid over it, as [`patch`] does.
+pub fn upload(p: Value) -> UploadJson {
+    let mut v = serde_json::to_value(UploadJson::new(RUN.into(), ENTRY.into())).unwrap();
+    merge(&mut v, p);
+    serde_json::from_value(v).expect("an upload.json")
+}
+
+fn merge(to: &mut Value, from: Value) {
+    match (to, from) {
+        (Value::Object(to), Value::Object(from)) => {
+            for (k, v) in from {
+                merge(to.entry(k).or_insert(Value::Null), v);
+            }
+        }
+        (to, from) => *to = from,
+    }
 }
 
 /// The `server.json` of a practice run [`RUN`] with the one part [`ENTRY`].
