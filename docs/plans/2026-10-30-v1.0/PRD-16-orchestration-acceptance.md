@@ -1911,3 +1911,33 @@ kept and now cites BUILD-PROMPT section 5, since B3 no longer carries it.
 - **Acceptance lists as known,** if still open at the end: the PRD-09 slice 3 nits A2-1, A2-2 and
   A2-3 (PRD-09 note).
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-08 slice 4 (merge 1fdaf2c3)
+
+- `gate fast: PASS in 92s` on 1fdaf2c3 (nextest 237 of 237, 0 skipped; Node 253 of 253). Box runs
+  before the merge: the builder's two task branches (fmt, clippy `-D warnings`, 36 and 45 tests), the
+  lane merge at 5c92ab79 (45 of 45), the fixers at 71abb3d8 (47 of 47) and 84eb26d3 (48 of 48 and
+  the reviewer's probe); each re-checked by a reviewer, the last leaving no open finding. Six paths
+  changed (`honesty.rs`, `integrity.rs`, `lib.rs`, `report.rs`, `tests/check_conn_bytes.rs`,
+  `tests/check_named.rs`), all PRD-08 owned, no `Cargo.toml`. `gate full` was not run.
+- **Trailers:** of the 7 non-merge commits in 5cc59b65..84eb26d3, three carry neither trailer line:
+  71abb3d8 (rustfmt), ae15edae and efe3595f (test fixes). The branch is merged and not rewritten;
+  the end-of-build report lists them as known.
+- **Size report, PRD-08** (`wc -l` at 1fdaf2c3, row "Verifier (PRD-08)", 1,400 src and 1,100 tests;
+  the slice 3 ceilings were 2,730 and 1,990). Src without PRD-09's `usage/` is 2,678, 191% of the
+  row and 98% of 2,730 (`integrity.rs` 991, `secrets.rs` 509, `honesty.rs` 435, `server.rs` 201,
+  `main.rs` 200, `input.rs` 198, `report.rs` 130, `lib.rs` 14). Tests are 2,083, 189% of the row and
+  93 over 1,990 (`tests/common/` 877, `check_named.rs` 341, `check_invariants.rs` 329,
+  `secrets_scan.rs` 214, `server_compare.rs` 188, `check_conn_bytes.rs` 134). With `legs.rs` 240,
+  `history.rs` 155 and the `input.rs` cut of 40, and two test files of 80, the crate projects to
+  about 3,033 src and 2,243 tests. PRD-08's decision line (PRD-08 note) names points 1, 2 and 4,
+  keeps `honesty.rs` at 435, and sets the ceilings to **3,040 src and 2,245 tests**. The
+  end-of-build report nets these against the Rust totals (about 18,100 src, at most about 14,200
+  tests); only a total past those becomes the owner's question.
+- **Build order, PRD-08:** `legs.rs`, `history.rs` and the run 1 shape builder remain, in this plan's
+  order; the PRD-01 `input.rs` cut still comes first.
+- **Seams:** the `conn_bytes` duties of the proxy are in the PRD-03 note (plain tails, `wire`,
+  `conn` GAP on a parser fault); the pad's reading of the three ids is in the PRD-12 note.
+- **Acceptance lists as known,** if still open at the end: the PRD-08 slice 4 nits A9, B-R1, B-R6
+  and B-R7 (PRD-08 note), and the three commits without trailers above.
+- No locked ledger item is touched and no owner question comes from this slice.

@@ -1586,3 +1586,18 @@ taken; "rejected" says why. Fixes for other files are made by those files' owner
   C3 tests only for a non-zero count per planted kind, so the sum changes nothing. C3 still needs
   PRD-05's masker writing MASK records and a `goalcup` build on integration before it can PASS.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-08 slice 4 (merge 1fdaf2c3): reading the three honesty checks
+
+- `listed_hosts_decrypted`, `conn_bytes` and `mask_failclosed` now report (PRD-08 note). C4's "no
+  `fail`" already covers a silent listed tunnel (`listed_hosts_decrypted` `fail`) and a silent loss
+  (`conn_bytes` `fail`, exit 2). C1 also reads `listed_hosts_decrypted`: `pass` in `direct` and
+  `gateway` rows, `named` only where the row expects it (dodger, fault rows). A `warn` is not a
+  FAIL; `facts.refusal_after_trust` is listed in the row.
+- **`conn_bytes` `skip` is not a FAIL but is not evidence.** In a `dodger` row it is `skip` "no
+  decrypted connection to judge", as expected. In a `direct` or `gateway` row a `skip` (facts
+  `no_plain_tail` above 0) means a decrypted connection ended with no `plain_up` or `plain_down`:
+  the row stays as it is and the night log gets one line naming PRD-03.
+- `mask_failclosed` is `warn` at most and keeps exit 0. The row prints `facts.streams` and
+  `facts.bytes` beside PRD-05 A1's `mask_failclosed_bytes`; neither lowers a PASS.
+- No locked ledger item is touched and no owner question comes from this slice.
