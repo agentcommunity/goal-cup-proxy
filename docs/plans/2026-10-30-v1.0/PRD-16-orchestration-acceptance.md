@@ -1158,3 +1158,26 @@ kept and now cites BUILD-PROMPT section 5, since B3 no longer carries it.
   the box image) and `check-links.py` (box Python 3.9 lacks the 3.10 syntax it uses). The script's
   stubbed cases are not in the gate.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-05 phase 0 slice (merge 82484521)
+
+- **Size report, PRD-05** (`wc -l` at 82484521, against PRD-00 "Size budget", row "Masking (PRD-05)",
+  3,530 src and 2,000 tests): src 247 (`src/mask/mod.rs` without its tests), 7% of the row;
+  `shapes.tsv` 32 is data, not counted; tests 367 (179 inline in `mod.rs`, 188 in
+  `tests/mask_rules.rs`), 18% of the row. The corpus (86 files, 6,216,905 bytes) is data. The stub
+  `mod.rs` is over PRD-05's own file estimate (247 against 160 for the final `mod.rs`); the core
+  slice replaces the stub, and reviews B1 to B3 cut about 111 lines (PRD-05 note).
+- `gate fast: PASS in 78s` on 82484521. The breaker's throwaway stress (40 and 200 streams, 1.5 MB
+  bodies, WebSocket boundaries) lost no byte and released no raw byte, peak RSS 93 MB; it is not in
+  the gate.
+- **The no-real-key check works on the stub:** `mask_rules()` is `["fail_closed"]`, length 1, so the
+  "`mask_rules` length above 1 in the `start` event" check tells a stub build from a core build, as
+  designed. Any pad or acceptance row on a stub build is not evidence (PRD-12 note).
+- **Next masking dependency:** S3 (PRD-11) on integration, for the concrete `Masker::new` type and
+  the connector rules `meta.rs` reads. The core slice builds against S3's PRD-00 final shape meanwhile.
+  PRD-13 may delete `spikes/` as far as PRD-05 is concerned (PRD-13 note).
+- **Trailers:** merge commit df84011c (`v1.0/prd-05-masking-s12-shapes`) has no
+  `Co-Authored-By` and `Claude-Session` lines. It stays (no force-push, no rebase) and the
+  end-of-build report lists it. Mergers and builders add both lines to every merge commit, an
+  integration-into-task merge included.
+- No locked ledger item is touched and no owner question comes from this slice.

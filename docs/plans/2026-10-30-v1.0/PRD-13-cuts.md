@@ -738,3 +738,11 @@ PRD-14, PRD-15, PRD-16 and the code.
 - **`connector_dir_sha256` stays in Worker `src/`** as the fill of a NOT NULL database column
   (`runs.ts:153`, `db-*.ts`; no migration, ledger S3). It is not in the Worker pattern list and must not
   be added there; it is not on the wire (`docs/UPLOAD-API.md` line 15).
+
+### 2026-10-30, replan after PRD-05 phase 0 slice (merge 82484521)
+
+- **The corpus copy is done.** `crates/goalcup/tests/mask_corpus/` holds the 86 files, sha256 equal to
+  their `spikes/*/fixtures/` sources. PRD-05 no longer needs `spikes/`; its delete waits only on
+  PRD-13's own order. PRD-05's core slice deletes the 50 `*.redactions.jsonl` logs from the copy
+  (PRD-05 note), so the move table's "86 files" ends as 36.
+- No locked ledger item is touched and no owner question comes from this slice.
