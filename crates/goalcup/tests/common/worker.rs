@@ -225,17 +225,18 @@ fn own_error(status: u16) -> Value {
     json!({"error": code, "message": format!("The fake Worker answered {status}.")})
 }
 
-/// Whether `c` is within the S5 `counts` bound.
-fn counts_ok(c: &Value) -> bool {
+/// The size of `c` as JSON when it breaks the S5 `counts` bound (the Worker's `counts_dropped`).
+fn counts_bad(c: &Value) -> Option<usize> {
+    let size = c.to_string().len();
     let flat = c.as_object().is_some_and(|m| {
         m.values().all(|v| match v {
-            Value::Number(n) => n.is_u64() || n.is_i64(),
+            Value::Number(n) => n.as_u64().is_some_and(|n| n < 1 << 53),
             Value::String(s) => s.len() <= 64,
             Value::Bool(_) | Value::Null => true,
             _ => false,
         })
     });
-    flat && c.to_string().len() <= 2048
+    (!flat || size > 2048).then_some(size)
 }
 
 /// The answer to `req`: status, `Retry-After` and body; `None` drops the connection unanswered.
@@ -316,8 +317,8 @@ fn work(r: Route, req: &Request, segs: &[&str], q: &str, s: &mut State) -> Resul
         Route::Heartbeat => {
             let mut beat: Value = serde_json::from_slice(&req.body).map_err(|_| 400u16)?;
             let id = beat["entry_id"].as_str().ok_or(400u16)?.to_string();
-            let bad = beat.get("counts").filter(|c| !c.is_null() && !counts_ok(c));
-            if let (Some(n), Some(o)) = (bad.map(|c| c.to_string().len()), beat.as_object_mut()) {
+            let bad = beat.get("counts").filter(|c| !c.is_null()).and_then(counts_bad);
+            if let (Some(n), Some(o)) = (bad, beat.as_object_mut()) {
                 o.remove("counts");
                 o.insert("counts_dropped".into(), n.into());
             }
