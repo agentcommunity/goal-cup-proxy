@@ -202,7 +202,11 @@ fn unclear_token_or_ignore_or_listing_is_refused() {
     }
     // As git: only trailing spaces and one CR leave a line (a tab or form feed stays, so git
     // tracks .env.local), and a leading UTF-8 BOM is skipped.
-    for (ignore, ok) in [(".env*\t\n", false), (".env*\x0c\n", false), ("\u{feff}.env* \r\n", true)] {
+    for (ignore, ok) in [
+        (".env*\t\n", false),
+        (".env*\x0c\n", false),
+        ("\u{feff}.env* \r\n", true),
+    ] {
         let got = check(&[(".gitignore", ignore), token[1]]);
         assert_eq!(got.is_ok(), ok, "{ignore:?}: {got:?}");
     }

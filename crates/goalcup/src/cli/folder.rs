@@ -113,8 +113,14 @@ fn entries(project: &Path) -> (Vec<String>, Vec<String>) {
 /// Exactly one line `GH_TOKEN=<value>`, the value visible ASCII with no quotes (so no CR): the
 /// push block's `sed -n s/^GH_TOKEN=//p` then prints one plain value. It is never kept or shown.
 fn token(env_local: String) -> bool {
-    let plain = |v: &str| !v.is_empty() && v.bytes().all(|b| b.is_ascii_graphic() && !b"\"'".contains(&b));
-    let mut values = env_local.split('\n').filter_map(|l| l.strip_prefix("GH_TOKEN="));
+    let plain = |v: &str| {
+        !v.is_empty()
+            && v.bytes()
+                .all(|b| b.is_ascii_graphic() && !b"\"'".contains(&b))
+    };
+    let mut values = env_local
+        .split('\n')
+        .filter_map(|l| l.strip_prefix("GH_TOKEN="));
     values.next().is_some_and(plain) && values.next().is_none()
 }
 
@@ -126,7 +132,9 @@ fn tangled(a: &Path, b: &Path) -> bool {
 /// `path` with its nearest existing ancestor resolved (links followed) and the rest appended,
 /// `..` folded: the rest does not exist, so goalcup would make it as plain folders.
 fn resolved(path: &Path) -> PathBuf {
-    let real = path.ancestors().find_map(|at| Some(fs::canonicalize(at).ok()?.join(path.strip_prefix(at).ok()?)));
+    let real = path
+        .ancestors()
+        .find_map(|at| Some(fs::canonicalize(at).ok()?.join(path.strip_prefix(at).ok()?)));
     lexical(&real.unwrap_or_else(|| path.to_owned()))
 }
 
@@ -152,7 +160,10 @@ fn lexical(path: &Path) -> PathBuf {
 /// such a `!` line always re-includes.
 fn ignored(ignore: &str, name: &str) -> bool {
     let mut verdict = false;
-    let ignore = ignore.strip_prefix('\u{feff}').unwrap_or(ignore).split('\n');
+    let ignore = ignore
+        .strip_prefix('\u{feff}')
+        .unwrap_or(ignore)
+        .split('\n');
     for line in ignore.map(|l| l.strip_suffix('\r').unwrap_or(l).trim_end_matches(' ')) {
         if line.is_empty() || line.starts_with('#') || line.ends_with('/') {
             continue;
