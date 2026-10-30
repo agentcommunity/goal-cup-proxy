@@ -1,12 +1,13 @@
 //! The harness environment (PRD-11 section 3): the participant's own variables pass through,
 //! their proxy and CA variables are replaced, the code never sets the variables that turn TLS
-//! checks off, and no secret file is read in the default build.
+//! checks off, and no secret file is read in the default build. Also the home lock and settings.
 
 use std::collections::BTreeMap;
+use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::time::SystemTime;
 
-use goalcup::connector::{self, Env, LaunchPlan};
+use goalcup::connector::{self, Env, LaunchPlan, Refusal};
 
 const PROXY_AND_CA: &[&str] = &[
     "HTTPS_PROXY",
@@ -30,7 +31,7 @@ const NEVER_SET: &[&str] = &[
 
 fn env(dir: &Path, extra: &[(&str, &str)]) -> Env {
     let mut vars: BTreeMap<String, String> = BTreeMap::new();
-    vars.insert("PATH".into(), "/usr/bin:/bin".into());
+    vars.insert("PATH".into(), format!("{}:/usr/bin:/bin", dir.display()));
     vars.insert("OPENAI_API_KEY".into(), "participant-key-value".into());
     for name in PROXY_AND_CA {
         vars.insert((*name).into(), "participant-value".into());
@@ -144,4 +145,79 @@ fn no_secret_value_is_read_in_the_default_build() {
         let plan = finished(id, &e, d);
         assert!(plan.secret_values.is_empty(), "{id}");
     }
+}
+
+/// The plan's version and refusal for a connector whose program, on `PATH`, runs `body`.
+fn probe(d: &Path, body: &str) -> (Option<String>, Option<Refusal>) {
+    const FAKE: &str = "id = \"fake-cli\"\nname = \"F\"\nprogram = \"fakev\"\nversion = \"2.\"";
+    let (program, file) = (d.join("fakev"), d.join("fake-cli.toml"));
+    std::fs::write(&program, format!("#!/bin/sh\n{body}\n")).unwrap();
+    std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
+    std::fs::write(&file, FAKE).unwrap();
+    let c = connector::load(file.to_str().unwrap(), None).unwrap();
+    let plan = connector::plan(&c, &env(d, &[]), &d.join("home"));
+    (plan.harness_version, plan.refusal)
+}
+
+#[test]
+fn a_held_home_refuses_and_the_version_probe_never_holds_the_start() {
+    let dir = tempfile::tempdir().unwrap();
+    let (d, e) = (dir.path(), env(dir.path(), &[]));
+    let yaml = d.join("goalcup/homes/hermes-cli/config.yaml");
+    let first = finished("hermes-cli", &e, d);
+    assert!(d.join("goalcup/homes/hermes-cli.goalcup.lock").is_file());
+    let text = std::fs::read_to_string(&yaml).unwrap();
+    assert!(text.contains("updates:\n  check: false\n"), "{text}");
+    std::fs::remove_file(&yaml).unwrap();
+    let second = finished("hermes-cli", &e, d);
+    let home = first.home.clone();
+    assert_eq!(second.refusal, Some(Refusal::HomeLocked { home }));
+    assert!(!second.lock.is_held() && !yaml.exists());
+    drop((first, second));
+    assert!(finished("hermes-cli", &e, d).lock.is_held());
+    let (version, refusal) = probe(d, "echo; echo '  fakeharness 2.1.0  '");
+    assert_eq!(version.as_deref(), Some("fakeharness 2.1.0"));
+    assert_eq!(refusal, None);
+    let refusal = probe(d, "echo fakeharness 1.9.0").1;
+    assert!(matches!(refusal, Some(Refusal::VersionMismatch { .. })));
+    assert_eq!(probe(d, "sleep 30"), (None, None));
+}
+
+#[test]
+fn settings_are_typed_keep_other_keys_and_never_follow_a_link() {
+    let dir = tempfile::tempdir().unwrap();
+    let (d, home) = (dir.path(), dir.path().join("goalcup/homes/codex-cli"));
+    std::fs::create_dir_all(&home).unwrap();
+    std::fs::write(home.join("config.toml"), "model = \"m\"\n").unwrap();
+    drop(finished("codex-cli", &env(d, &[]), d));
+    let toml = std::fs::read_to_string(home.join("config.toml"));
+    let toml: toml::Table = toml.unwrap().parse().unwrap();
+    let check = &toml["check_for_update_on_startup"];
+    assert_eq!((check, toml["model"].as_str()), (&false.into(), Some("m")));
+    let rows = connector::load("claude-code-cli", None).unwrap();
+    let (rows, json) = (rows.no_prompts, home.join("settings.json"));
+    // Comments and a trailing comma, as a JSONC-reading harness accepts them.
+    std::fs::write(&json, "{ // c\n\"model\":\"m\",\"permissions\":{},}").unwrap();
+    assert!(connector::write_settings(&home, &rows).is_empty());
+    let v: serde_json::Value = serde_json::from_slice(&std::fs::read(&json).unwrap()).unwrap();
+    assert_eq!(v["permissions"]["defaultMode"], "bypassPermissions");
+    assert_eq!(v["skipDangerousModePermissionPrompt"], true);
+    assert_eq!(v["model"], "m");
+    std::fs::remove_file(&json).unwrap();
+    std::os::unix::fs::symlink(d.join("target.json"), &json).unwrap();
+    std::fs::write(d.join("target.json"), "{}").unwrap();
+    assert_eq!(connector::write_settings(&home, &rows).len(), rows.len());
+    assert_eq!(std::fs::read(d.join("target.json")).unwrap(), b"{}");
+    // YAML: a 1.1 loader reads a bare `off` as a bool and a quoted "false" as a string.
+    let hermes = connector::load("hermes-cli", None).unwrap();
+    let rows = [hermes.no_prompts, hermes.update_off].concat();
+    let yaml = home.join("config.yaml");
+    let was = "approvals:\n  mode: off\n\n# updates\nupdates:\n  check: \"false\"\n";
+    std::fs::write(&yaml, was).unwrap();
+    assert!(connector::write_settings(&home, &rows).is_empty());
+    let text = std::fs::read_to_string(&yaml).unwrap();
+    let want = "approvals:\n  mode: \"off\"\n\n# updates\nupdates:\n  check: false\n";
+    assert_eq!(text, want);
+    assert!(connector::write_settings(&home, &rows).is_empty());
+    assert_eq!(std::fs::read_to_string(&yaml).unwrap(), text);
 }

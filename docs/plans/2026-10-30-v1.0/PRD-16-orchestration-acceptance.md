@@ -1490,3 +1490,31 @@ kept and now cites BUILD-PROMPT section 5, since B3 no longer carries it.
   (PRD-17 note).
 - No locked ledger item is touched and no owner question comes from this slice (the 14:47Z one
   needs no W6, PRD-02 note).
+
+### 2026-10-30, replan after PRD-06 slice 1 (merge e6bd8a50)
+
+- `gate fast: PASS in 109s` on e6bd8a50 (nextest summary: 127 tests run, 127 passed). Box runs before
+  the merge: the fixer and reviewer A at 3b94c4d4 ran fmt, clippy `-D warnings` and goalcup nextest
+  (63/63). The breaker re-checked 3b94c4d4 merged with integration (63/63) and ran throwaway stress:
+  8 writers doing 3,000 `upload.json` writes each gave 0 bad reads, and held and slow PUT servers ended
+  in 123 s. A status-line trickle found BR1. BR1 was fixed at 79f22106 (fmt, clippy, 63/63; the https
+  trickle was not run then). BR2 was fixed at 67a9e9c0, with a handshake probe ending at 30.0 s. No
+  full nextest box run was logged at 67a9e9c0 itself; the merge gate covers it. Five paths changed,
+  all owned by PRD-06, with no `Cargo.toml` change.
+- **Size report, PRD-06** (`wc -l` at e6bd8a50, row "Upload (PRD-06)", 940 src and 1,000 tests). The src
+  files total 1,359 (145% of the row): `client.rs` 692, `state.rs` 289, `policy.rs` 264, `mod.rs` 114.
+  That includes 232 inline `#[cfg(test)]` lines; without them the src is 1,127 (120%). This is 4 of 9
+  files. Their own estimates add up to 430 (262%), and the module projects to about 1,737 (185%) with
+  the rest at their estimates. The 13:12Z decision line (points 5 and 6) covers this merge. The PRD-06
+  note makes each later merge carry its own decision line and cut before it adds. Tests are
+  `upload_backoff.rs` 95 plus the 232 inline lines, 327 of 1,000. The end-of-build report counts the
+  overshoot against the Rust total (about 18,100). A total past that is the owner's question then.
+- **Trailers:** all 16 commits in 2be5c719..e6bd8a50 carry both lines, the merge included.
+- **Seams:** S9, S10 and S18 are on integration with PRD-00's final shapes (PRD-02, PRD-10 and PRD-12
+  notes). No thread runs yet, so nothing is uploaded from a run, `finish` returns at once, and no
+  `ServerWord` reaches the watchdog. Every acceptance proof that needs a server copy waits for PRD-06's
+  send and beat slices.
+- **Acceptance lists as known,** if still open at the end: BR2-r1 (JSON call worst case about 60 s and
+  PUT handshake about 90 s on a peer that trickles bytes, against the 30 s and 600 s defaults), the
+  every-other-PUT backoff case (it lands with `send.rs`), and the loose `server.json` parse.
+- No locked ledger item is touched and no owner question comes from this slice.

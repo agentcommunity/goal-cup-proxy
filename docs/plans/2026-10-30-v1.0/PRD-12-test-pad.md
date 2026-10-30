@@ -1456,3 +1456,12 @@ taken; "rejected" says why. Fixes for other files are made by those files' owner
   must stay 3.9-clean, since `release.sh` calls `python3`.
 - `CODEOWNERS` now names `/scripts/pad/` (`@nembal`).
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-06 slice 1 (merge e6bd8a50)
+
+- `upload.json` (S9) is on integration, but no sender is yet. Until PRD-06's send and beat slices
+  merge, a pad run with a server ends with `upload.json` at `state: waiting` and `final: none`, so
+  `wait-upload` times out. Rows that need the server copy (C4's server checks, U3, U5, U8) are then
+  "not run: sender not merged", not FAIL. `server = "off"` runs are not affected. The `watch/upload.jsonl`
+  reader can be built against the S9 type now (`goalcup::upload::state`).
+- No locked ledger item is touched and no owner question comes from this slice.
