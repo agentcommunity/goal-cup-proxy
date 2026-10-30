@@ -180,14 +180,21 @@ impl HostList {
     }
 
     /// The participant's hosts from `$GOALCUP_HOME/record-hosts.txt` (PRD-10), one per line. A
-    /// missing file adds nothing; a line that fails the check (a `#` line too) is never logged.
-    pub(crate) fn add_participant(&mut self, goalcup_home: &Path) {
+    /// missing file adds nothing; a line that fails the check (a `#` line too) is never logged. A
+    /// `never` host is left out with the log line returned (section 4).
+    pub(crate) fn add_participant(&mut self, goalcup_home: &Path) -> Vec<String> {
         let text = std::fs::read_to_string(goalcup_home.join("record-hosts.txt"));
-        for line in text.unwrap_or_default().lines() {
-            if let Ok(host) = check(line.trim(), Source::Participant) {
+        let text = text.unwrap_or_default();
+        let hosts = text.lines().filter_map(|l| check(l.trim(), Source::Participant).ok());
+        let mut log = Vec::new();
+        for host in hosts {
+            if self.decide(&host.name) == Decision::Never {
+                log.push(format!("record-hosts.txt: {} is never decrypted", host.name));
+            } else {
                 add(&mut self.participant, &self.pinned, host);
             }
         }
+        log
     }
 
     /// A name that is never decrypted.

@@ -1,67 +1,115 @@
 //! Host hints and refusals from the harness's config files and named variables (PRD-11 sections
 //! 2 and 3). Each format becomes a `serde_json::Value` for one key walker. A linked, oversized,
-//! unreadable or unparsable file is skipped (a memory guard); no value reaches a log or an error.
+//! unreadable or unparsable file is skipped (a memory guard) and named in `unread`; a skipped hint
+//! is a log line naming the file or variable, the key and the reason. No value reaches either.
 
 use std::io::Read;
 use std::net::{IpAddr, ToSocketAddrs};
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 
-use serde_json::{Map, Value};
+use serde_json::{Map, Value, json};
 
-use super::hosts::{self, Decision, Source};
+use super::hosts::{self, Decision, HostList, Source};
 use super::{Connector, Env, Host, Refusal, launch};
 use crate::native::pattern;
 
-/// The `config` hosts named by `host_hints` keys and `hint_env` variables, and `local_model` notes.
-pub(crate) fn collect(connector: &Connector, env: &Env, home: &Path) -> (Vec<Host>, Vec<Value>) {
-    let mut values: Vec<String> = Vec::new();
-    for row in &connector.host_hints {
-        for (doc, _) in docs(&row.file, env, home) {
-            let found = at(&doc, &row.key).into_iter().filter_map(Value::as_str);
-            values.extend(found.map(String::from));
-        }
-    }
-    let named = connector.hint_env.iter().filter_map(|n| env.vars.get(n));
-    values.extend(named.cloned());
-    let (mut hosts, mut notes) = (Vec::new(), Vec::new());
-    for (https, host, port) in values.iter().filter_map(|v| authority(v)) {
-        let local = match hosts::check(host, Source::Config) {
-            Err(skipped) => skipped.local,
-            Ok(checked) => {
-                let addrs = (checked.name.as_str(), 443).to_socket_addrs();
-                let addrs: Vec<IpAddr> = addrs.into_iter().flatten().map(|a| a.ip()).collect();
-                let here = hosts::resolves_only_here(&addrs);
-                let never = connector.hosts.decide(&checked.name) == Decision::Never
-                    || checked.name.eq_ignore_ascii_case(&env.server_host);
-                if https && !here && !never {
-                    hosts.push(checked);
-                }
-                here
-            }
-        };
-        let (l, r) = [("", ""), ("[", "]")][host.contains(':') as usize];
-        let shown = format!("{l}{host}{r}:{port}");
-        let note = serde_json::json!({ "what": "local_model", "host": shown });
-        if local && !notes.contains(&note) {
-            notes.push(note);
-        }
-    }
-    (hosts, notes)
+/// Reads one start's hint and refusal files and keeps what PRD-10 shows: each file there but not
+/// read, and the log lines.
+pub(crate) struct Reader<'a> {
+    pub(crate) env: &'a Env,
+    pub(crate) home: &'a Path,
+    pub(crate) unread: Vec<PathBuf>,
+    pub(crate) log: Vec<String>,
 }
 
-/// The first `refuse_if_set` key that holds a non-empty value: file and key, never the value.
-pub(crate) fn refusal(connector: &Connector, env: &Env, home: &Path) -> Option<Refusal> {
-    let set = |v: &&Value| !v.is_null() && v.as_str() != Some("");
-    for row in &connector.refuse_if_set {
-        for (doc, file) in docs(&row.file, env, home) {
-            if let Some(key) = row.keys.iter().find(|k| at(&doc, k).iter().any(set)) {
-                let key = key.clone();
-                return Some(Refusal::SettingSet { file, key });
+impl Reader<'_> {
+    /// The `config` hosts named by `host_hints` keys and `hint_env` variables, and `local_model`
+    /// notes. `hosts` already holds every `never` name, so `decide` is the one never test.
+    pub(crate) fn collect(&mut self, c: &Connector, hosts: &HostList) -> (Vec<Host>, Vec<Value>) {
+        // Each value once, with where it came from: file and key, or the variable.
+        let mut values: Vec<(String, String)> = Vec::new();
+        for row in &c.host_hints {
+            for (doc, file) in self.docs(&row.file) {
+                let from = format!("{}: {}", file.display(), row.key);
+                let found = at(&doc, &row.key).into_iter().filter_map(Value::as_str);
+                values.extend(found.map(|v| (from.clone(), v.to_string())));
             }
         }
+        let named = c.hint_env.iter().filter_map(|n| Some((n.clone(), self.env.vars.get(n)?)));
+        values.extend(named.map(|(n, v)| (n, v.clone())));
+        let mut seen = std::collections::HashSet::new();
+        values.retain(|(_, v)| seen.insert(v.clone()));
+        let (mut found, mut notes) = (Vec::new(), Vec::new());
+        let here = |name: &str| {
+            let addrs = (name, 443).to_socket_addrs().into_iter().flatten();
+            hosts::resolves_only_here(&addrs.map(|a| a.ip()).collect::<Vec<IpAddr>>())
+        };
+        let never = |h: &Host| hosts.decide(&h.name) == Decision::Never;
+        for (from, value) in &values {
+            let Some((https, host, port)) = authority(value) else {
+                self.log.push(format!("{from}: not a URL, skipped"));
+                continue;
+            };
+            let checked = hosts::check(host, Source::Config);
+            if checked.as_ref().map_or_else(|s| s.local, |h| here(&h.name)) {
+                let (l, r) = [("", ""), ("[", "]")][host.contains(':') as usize];
+                let note = json!({ "what": "local_model", "host": format!("{l}{host}{r}:{port}") });
+                notes.extend((!notes.contains(&note)).then_some(note));
+                continue;
+            }
+            let why = match checked {
+                Err(skipped) => skipped.reason,
+                Ok(h) if never(&h) => "a host never decrypted".into(),
+                Ok(_) if !https => "plain http, not https".into(),
+                Ok(h) => {
+                    found.push(h);
+                    continue;
+                }
+            };
+            self.log.push(format!("{from}: {why}, skipped"));
+        }
+        (found, notes)
     }
-    None
+
+    /// The first `refuse_if_set` key holding a value (not null, false, "", [] or {}): file and key,
+    /// never the value.
+    pub(crate) fn refusal(&mut self, c: &Connector) -> Option<Refusal> {
+        let empty = [json!(null), json!(false), json!(""), json!([]), json!({})];
+        for row in &c.refuse_if_set {
+            for (doc, file) in self.docs(&row.file) {
+                let set = |k: &&String| at(&doc, k).into_iter().any(|v| !empty.contains(v));
+                if let Some(key) = row.keys.iter().find(set).cloned() {
+                    return Some(Refusal::SettingSet { file, key });
+                }
+            }
+        }
+        None
+    }
+
+    /// Each readable file a `file` template names (its last component a PRD-04 pattern), and its
+    /// path. A file there but not read goes in `unread` once; a folder whose name fits is skipped.
+    fn docs(&mut self, template: &str) -> Vec<(Value, PathBuf)> {
+        let path = PathBuf::from(launch::fill(template, self.home, &self.env.workspace));
+        let name = path.file_name().unwrap_or_default().to_string_lossy();
+        let (Some(dir), Ok(glob)) = (path.parent(), pattern::parse(&name)) else {
+            return Vec::new();
+        };
+        let entries = std::fs::read_dir(dir).into_iter().flatten().flatten();
+        let entries = entries.filter(|e| !e.file_type().is_ok_and(|t| t.is_dir()));
+        let fits = |p: &PathBuf| p.file_name().is_some_and(|n| glob.matches(Path::new(n)));
+        let mut paths: Vec<PathBuf> = entries.map(|e| e.path()).filter(fits).collect();
+        paths.sort();
+        let mut out = Vec::new();
+        for path in paths {
+            match read(&path) {
+                Some(doc) => out.push((doc, path)),
+                None if !self.unread.contains(&path) => self.unread.push(path),
+                None => {}
+            }
+        }
+        out
+    }
 }
 
 /// Whether a URL is `https`, and its host and port, the userinfo dropped first. `None` without a
@@ -82,23 +130,9 @@ fn authority(value: &str) -> Option<(bool, &str, u16)> {
     Some((https, host, port))
 }
 
-/// Each readable file a `file` template names (its last component a PRD-04 pattern), and its path.
-fn docs(template: &str, env: &Env, home: &Path) -> Vec<(Value, PathBuf)> {
-    let path = PathBuf::from(launch::fill(template, home, &env.workspace));
-    let name = path.file_name().unwrap_or_default().to_string_lossy();
-    let (Some(dir), Ok(glob)) = (path.parent(), pattern::parse(&name)) else {
-        return Vec::new();
-    };
-    let entries = std::fs::read_dir(dir).into_iter().flatten().flatten();
-    let fits = |p: &PathBuf| p.file_name().is_some_and(|n| glob.matches(Path::new(n)));
-    let mut paths: Vec<PathBuf> = entries.map(|e| e.path()).filter(fits).collect();
-    paths.sort();
-    let readable = |p: PathBuf| Some((read(&p)?, p));
-    paths.into_iter().filter_map(readable).collect()
-}
-
 /// One regular file of at most 1 MiB, never through a link (PRD-17 N7), as UTF-8 with a BOM
-/// stripped, read by its extension: JSON, JSON with comments, TOML, YAML, else dotenv.
+/// stripped, read by its extension: JSON (comments and trailing commas allowed, as the OpenCode
+/// family reads every config file), TOML, YAML, else dotenv.
 fn read(path: &Path) -> Option<Value> {
     let file = (std::fs::OpenOptions::new().read(true))
         .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
@@ -109,8 +143,7 @@ fn read(path: &Path) -> Option<Value> {
     let text = std::io::read_to_string(file.take(1 << 20)).ok()?;
     let text = text.strip_prefix('\u{feff}').unwrap_or(&text);
     match path.extension().and_then(|e| e.to_str()) {
-        Some("json") => serde_json::from_str(text).ok(),
-        Some("jsonc") => serde_json::from_str(&strip_jsonc(text)).ok(),
+        Some("json" | "jsonc") => serde_json::from_str(&strip_jsonc(text)).ok(),
         Some("toml") => toml::from_str(text).ok(),
         Some("yaml" | "yml") => Some(yaml(text)),
         _ => Some(dotenv(text)),
@@ -175,21 +208,49 @@ fn dotenv(text: &str) -> Value {
     Value::Object(text.lines().filter_map(pair).collect())
 }
 
-/// Block mappings nested by indentation, as `yaml.safe_dump` writes them, scalars as strings;
-/// sequences and flow collections are left out. Adapted from 0.7's `model_host.rs:682`.
+/// Block mappings and sequences nested by indentation (a `- ` item at its key's indent or deeper),
+/// scalars as strings; a flow collection stays text and a block scalar (`|`, `>`) is left out.
+/// The small block lookup of PRD-17 N7.
 fn yaml(text: &str) -> Value {
     let mut root = Value::Object(Map::new());
-    let mut open: Vec<(usize, String)> = Vec::new();
-    for (indent, key, rest) in text.lines().filter_map(yaml_key) {
+    let (mut open, mut block) = (Vec::<(usize, String)>::new(), usize::MAX);
+    for line in text.lines() {
+        let mut line = line.to_string();
+        let body = line.trim_start_matches(' ');
+        let indent = line.len() - body.len();
+        if body.is_empty() || body.starts_with('#') || indent > block {
+            continue;
+        }
+        block = usize::MAX;
+        if body == "-" || body.starts_with("- ") {
+            // A new element of the parent's list; its own `key: rest`, if any, follows below.
+            let rest = &body[1..];
+            let scalar = yaml_key(rest).map_or_else(|| yaml_scalar(rest.trim()), |_| None);
+            open.retain(|(i, _)| *i <= indent);
+            let parent = open.last().map_or(String::new(), |(_, p)| p.clone());
+            let slot = root.pointer_mut(&parent).map(|v| filled(v, json!([])));
+            let Some(Value::Array(list)) = slot else {
+                continue;
+            };
+            open.push((indent + 1, format!("{parent}/{}", list.len())));
+            list.push(scalar.map_or(Value::Null, Value::String));
+            line.replace_range(indent..=indent, " ");
+        }
+        let Some((indent, key, rest)) = yaml_key(&line) else {
+            continue;
+        };
         open.retain(|(i, _)| *i < indent);
         let parent = open.last().map_or(String::new(), |(_, p)| p.clone());
-        let Some(Value::Object(map)) = root.pointer_mut(&parent) else {
+        let slot = root.pointer_mut(&parent).map(|v| filled(v, json!({})));
+        let Some(Value::Object(map)) = slot else {
             continue;
         };
         let rest = rest.trim();
         if rest.is_empty() || rest.starts_with('#') {
             open.push((indent, format!("{parent}/{key}")));
-            map.insert(key, Value::Object(Map::new()));
+            map.insert(key, Value::Null);
+        } else if rest.starts_with(['|', '>']) {
+            block = indent;
         } else if let Some(scalar) = yaml_scalar(rest) {
             map.insert(key, Value::String(scalar));
         }
@@ -197,9 +258,17 @@ fn yaml(text: &str) -> Value {
     root
 }
 
+/// `v`, set to `empty` first while it is null: a key whose children have not been read yet.
+fn filled(v: &mut Value, empty: Value) -> &mut Value {
+    if v.is_null() {
+        *v = empty;
+    }
+    v
+}
+
 /// The indent, key and rest of a `key: rest` line; `None` for a comment, a sequence item or a
 /// line with no key.
-fn yaml_key(line: &str) -> Option<(usize, String, &str)> {
+pub(super) fn yaml_key(line: &str) -> Option<(usize, String, &str)> {
     let body = line.trim_start_matches(' ');
     let b = body.as_bytes();
     let colon = (0..b.len()).find(|&i| b[i] == b':' && b.get(i + 1).is_none_or(|&n| n == b' '))?;

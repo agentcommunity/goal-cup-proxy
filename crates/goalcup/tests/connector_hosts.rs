@@ -48,7 +48,7 @@ fn record_hosts_fill_the_participant_list_and_bad_lines_are_skipped() {
     let dir = tempfile::tempdir().unwrap();
     let d = dir.path();
     std::fs::create_dir_all(d.join("goalcup")).unwrap();
-    let lines = "# mine\n\n  models.example.net  \nbad host\n127.0.0.1\nlocalhost\n*.wild.example.org\na.*.example.org\n";
+    let lines = "# mine\n\n  models.example.net  \nbad host\n127.0.0.1\nlocalhost\n*.wild.example.org\na.*.example.org\nauth.openai.com\ningest.example.org\n";
     std::fs::write(d.join("goalcup/record-hosts.txt"), lines).unwrap();
     let env = Env {
         vars: BTreeMap::from([("PATH".to_string(), "/usr/bin:/bin".to_string())]),
@@ -68,7 +68,9 @@ fn record_hosts_fill_the_participant_list_and_bad_lines_are_skipped() {
     assert_eq!(plan.hosts.decide("models.example.net"), other);
     assert_eq!(plan.hosts.decide("x.wild.example.org"), other);
     let participant = plan.hosts.lists()["participant"].as_array().unwrap().len();
-    assert_eq!(participant, 2, "only the two good lines");
+    assert_eq!(participant, 2, "only the two good lines, never hosts left out");
+    let never = plan.log.iter().filter(|l| l.contains("record-hosts.txt")).count();
+    assert_eq!(never, 2, "one line per never host: {:?}", plan.log);
 }
 
 #[test]
@@ -84,4 +86,6 @@ fn ca_subtrees_are_wildcard_free_suffixes() {
         "b.example.io",
     ];
     assert_eq!(hosts.ca_subtrees(), want);
+    assert!(matches!(hosts.decide("x-mid-y.b.example.io"), Decision::Listed { .. }));
+    assert_eq!(hosts.decide("x-mid.b.example.io"), Decision::NotListed, "in-label `*`");
 }

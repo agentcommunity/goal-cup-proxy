@@ -48,18 +48,31 @@ fn no_config(plan: &LaunchPlan) -> bool {
 fn one_hint_per_format_reaches_the_config_list() {
     let c = "{ // a \"comment\"\n \"provider\": { \"gw\": { \"options\": {\n \
                  \"baseURL\": \"https://c.example.com/v1\", /* a, b */ }, }, }, }\n";
+    let j = c.replace("c.example", "j.example");
     let t = "[model_providers.gw]\nbase_url = \"https://t.example.com/v1\"\n";
     let y = "model:\n  default: x\nproviders:\n  gw:\n    base_url: https://y.example.com\n";
+    // `*` over list indexes, items at the key's indent or deeper; block scalar text is no key.
+    let l = "custom_providers:\n- name: a\n  base_url: https://l0.example.com\n- name: b\n  \
+             notes: |\n    base_url: https://no.example.com\n  base_url: https://l1.example.com\n";
+    let deep = "custom_providers:\n  - name: a\n    base_url: https://l2.example.com\n";
     let d = "# keys\nexport GW_BASE_URL=\"https://d.example.com/v1\"\n";
     let cases = [
         (CLAUDE, "settings.json", JSON, "gw.example.com"),
         ("kilo-cli", ".config/kilo/kilo.jsonc", c, "c.example.com"),
+        ("kilo-cli", ".config/kilo/kilo.json", j.as_str(), "j.example.com"),
         ("codex-cli", "config.toml", t, "t.example.com"),
         ("hermes-cli", "config.yaml", y, "y.example.com"),
+        ("hermes-cli", "config.yaml", l, "l0.example.com"),
+        ("hermes-cli", "config.yaml", l, "l1.example.com"),
+        ("hermes-cli", "config.yaml", deep, "l2.example.com"),
         ("hermes-cli", ".env", d, "d.example.com"),
+        (CLAUDE, "unrelated.txt", "", "ev.example.com"),
     ];
+    let vars = [("ANTHROPIC_BASE_URL", "https://ev.example.com")];
     for (id, file, text, host) in cases {
-        assert!(config(&plan(id, file, text, &[]).0, host), "{id} {file}");
+        let plan = plan(id, file, text, &vars).0;
+        assert!(config(&plan, host), "{id} {file} {host}");
+        assert!(!config(&plan, "no.example.com"), "{id} {file}");
     }
 }
 
@@ -72,10 +85,12 @@ fn a_link_and_a_file_over_one_mib_are_skipped_and_a_bom_is_read() {
     std::os::unix::fs::symlink(dir.path().join("real.json"), home.join("settings.json")).unwrap();
     let linked = plan_in(dir.path(), CLAUDE, &[]);
     assert!(!config(&linked, "gw.example.com"), "link");
+    assert_eq!(linked.unread, [home.join("settings.json")], "one start line");
 
     let big = format!("{{\"pad\":\"{}\",{}", "x".repeat(1 << 20), &JSON[1..]);
     let (big, _d) = plan(CLAUDE, "settings.json", &big, &[]);
     assert!(!config(&big, "gw.example.com"), "over 1 MiB");
+    assert_eq!(big.unread.len(), 1, "over 1 MiB");
     let (bom, _d) = plan(CLAUDE, "settings.json", &format!("\u{feff}{JSON}"), &[]);
     assert!(config(&bom, "gw.example.com"), "BOM");
 }
@@ -92,10 +107,16 @@ fn a_loopback_value_gives_one_local_model_note_and_no_host() {
 }
 
 #[test]
-fn a_variable_not_named_in_hint_env_adds_nothing() {
-    let vars = [("DB_HOST", "https://db.example.com")];
-    let (plan, _dir) = plan(CLAUDE, "unrelated.txt", "", &vars);
+fn plain_http_an_ip_and_an_unnamed_variable_add_nothing_and_skips_are_logged() {
+    let json = "{\"env\":{\"ANTHROPIC_BASE_URL\":\"http://plain.example.com/v1\"}}";
+    let ip = ("ANTHROPIC_VERTEX_BASE_URL", "https://203.0.113.9/v1");
+    let (plan, _dir) = plan(CLAUDE, "settings.json", json, &[ip, ("DB_HOST", "https://db.x.io")]);
     assert!(no_config(&plan) && plan.notes.is_empty());
+    let named = |s: &str| plan.log.iter().filter(|l| l.contains(s)).count();
+    let lines = [named("env.ANTHROPIC_*BASE_URL"), named("ANTHROPIC_VERTEX"), named("DB_HOST")];
+    assert_eq!(lines, [1, 1, 0], "one line per skipped value: {:?}", plan.log);
+    let shown = format!("{:?}", plan.log);
+    assert!(!shown.contains("plain.example") && !shown.contains("203.0"), "never the value");
 }
 
 #[test]

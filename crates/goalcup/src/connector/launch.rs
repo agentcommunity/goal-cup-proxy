@@ -1,7 +1,7 @@
 //! The harness environment, the isolated home and the program (PRD-11 section 3).
 
 use std::collections::BTreeMap;
-use std::fs::{File, OpenOptions};
+use std::fs::{File, OpenOptions, TryLockError};
 use std::io::{Read, Write};
 use std::os::fd::AsRawFd;
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
@@ -12,6 +12,7 @@ use std::time::{Duration, Instant};
 
 use serde_json::Value;
 
+use super::hints::yaml_key;
 use super::{Connector, Env, Refusal, SettingRow, Skipped};
 
 /// Removed from the participant's environment before anything is set (step 1).
@@ -47,13 +48,11 @@ impl HomeLock {
         let Ok(file) = opts().create(true).open(&path) else {
             return Ok(HomeLock::default());
         };
-        // SAFETY: `flock` on a descriptor `file` owns; no memory is touched.
-        if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 {
-            return Ok(HomeLock { file: Some(file) });
-        }
-        match std::io::Error::last_os_error().raw_os_error() {
-            Some(libc::EWOULDBLOCK) => Err(Refusal::HomeLocked { home: home.into() }),
-            _ => Ok(HomeLock::default()),
+        // `flock(LOCK_EX | LOCK_NB)` on Linux.
+        match file.try_lock() {
+            Ok(()) => Ok(HomeLock { file: Some(file) }),
+            Err(TryLockError::WouldBlock) => Err(Refusal::HomeLocked { home: home.into() }),
+            Err(_) => Ok(HomeLock::default()),
         }
     }
 
@@ -200,19 +199,25 @@ fn write_row(file: &Path, key: &str, value: &str) -> Result<(), &'static str> {
     let text = text.trim_start_matches('\u{feff}');
     let leaf = value.parse().map_or(Value::from(value), Value::Bool);
     let parts: Vec<&str> = key.split('.').collect();
-    let out = match file.extension().and_then(|x| x.to_str()).unwrap_or("") {
-        "json" => {
-            let doc = serde_json::from_str(if text.trim().is_empty() { "{}" } else { text });
-            let doc = set(doc.map_err(bad)?, &parts, leaf)?;
-            serde_json::to_string_pretty(&doc).map_err(bad)? + "\n"
+    let ext = file.extension().and_then(|x| x.to_str()).unwrap_or("");
+    let out = if matches!(ext, "yaml" | "yml") {
+        yaml_set(text, &parts, &format!(" {leaf}"))?
+    } else {
+        let doc = match ext {
+            "json" => serde_json::from_str(if text.trim().is_empty() { "{}" } else { text }),
+            "toml" => serde_json::to_value(text.parse::<toml::Table>().map_err(bad)?),
+            _ => return Err("format not writable"),
+        };
+        let Some(doc) = set(doc.map_err(bad)?, &parts, leaf)? else {
+            return Ok(());
+        };
+        match ext {
+            "json" => serde_json::to_string_pretty(&doc).map_err(bad)? + "\n",
+            _ => {
+                let doc: toml::Table = serde_json::from_value(doc).map_err(bad)?;
+                toml::to_string(&doc).map_err(bad)?
+            }
         }
-        "toml" => {
-            let doc = serde_json::to_value(text.parse::<toml::Table>().map_err(bad)?);
-            let doc = serde_json::from_value::<toml::Table>(set(doc.map_err(bad)?, &parts, leaf)?);
-            toml::to_string(&doc.map_err(bad)?).map_err(bad)?
-        }
-        "yaml" | "yml" => yaml_set(text, &parts, &format!(" {leaf}"))?,
-        _ => return Err("format not writable"),
     };
     let parent = file.parent().unwrap_or(Path::new("."));
     make_dir(parent);
@@ -226,15 +231,17 @@ fn write_row(file: &Path, key: &str, value: &str) -> Result<(), &'static str> {
     Ok(())
 }
 
-/// `doc` with the dotted path `parts` set to `leaf`, every other key kept.
-fn set(mut doc: Value, parts: &[&str], leaf: Value) -> Result<Value, &'static str> {
+/// `doc` with the dotted path `parts` set to `leaf`, every other key kept; `None` when it holds
+/// `leaf` already, so the file is not rewritten (a TOML file keeps its comments).
+fn set(mut doc: Value, parts: &[&str], leaf: Value) -> Result<Option<Value>, &'static str> {
     let mut at = &mut doc;
     for part in parts {
         let map = at.as_object_mut().ok_or("a key part is not a table")?;
         at = map.entry(*part).or_insert(serde_json::json!({}));
     }
+    let same = *at == leaf;
     *at = leaf;
-    Ok(doc)
+    Ok((!same).then_some(doc))
 }
 
 /// Sets `parts` in block YAML: replaces the key's line, else adds the rest under its parent.
@@ -247,8 +254,8 @@ fn yaml_set(text: &str, parts: &[&str], leaf: &str) -> Result<String, &'static s
     let (mut from, mut end, mut pad) = (0, lines.len(), 0);
     for (n, part) in parts.iter().enumerate() {
         let entry = |line: &str| {
-            let (k, v) = line.trim_start().split_once(':')?;
-            (k.trim_matches(['"', '\'']) == *part).then(|| v.trim().to_owned())
+            let (_, _, rest) = yaml_key(line).filter(|(_, k, _)| k == *part)?;
+            Some(rest.trim().to_owned())
         };
         let at_pad = |i: &usize| indent(&lines[*i]) == Some(pad) && entry(&lines[*i]).is_some();
         let Some(i) = (from..end).find(at_pad) else {
