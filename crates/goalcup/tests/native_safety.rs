@@ -1,6 +1,6 @@
 //! PRD-04 acceptance `native_safety.rs` (points 3, 4 and 7): no symlink is followed, a FIFO is
 //! never read and never hangs the reader, a replaced file is refused, no descriptor is kept, the
-//! root never reaches a path, and `src/native/` names no harness.
+//! root never reaches a path, and `src/native/` names no harness and holds no exclusion list.
 
 use std::ffi::{OsStr, OsString};
 use std::fs;
@@ -235,6 +235,35 @@ fn no_native_source_file_names_a_built_in_harness() {
                 "{} names `{name}`",
                 path.display()
             );
+        }
+    }
+}
+
+#[test]
+fn no_native_source_file_holds_an_exclusion_list() {
+    // Section 9: secret files are kept out by the rows (PRD-11), never by a list here. Quoted text
+    // outside comments names no secret file, and no const or static holds a list of names.
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/native");
+    for entry in fs::read_dir(&dir).unwrap() {
+        let path = entry.unwrap().path();
+        let name = path.display();
+        let mut code = String::new();
+        for l in fs::read_to_string(&path).unwrap().to_lowercase().lines() {
+            if !l.trim_start().starts_with("//") {
+                code += &format!("{l}\n");
+            }
+        }
+        for escaped in [r"\\", r#"\""#, r#"'"'"#] {
+            code = code.replace(escaped, "");
+        }
+        for q in code.split('"').skip(1).step_by(2) {
+            for bad in [".env", "secret", "credential", "id_rsa", ".pem", ".key"] {
+                assert!(!q.contains(bad), "{name} quotes `{q}`");
+            }
+        }
+        for l in code.lines() {
+            let def = l.split_whitespace().any(|w| w == "const" || w == "static");
+            assert!(!(def && l.contains("[&")), "{name} lists names: {l}");
         }
     }
 }
