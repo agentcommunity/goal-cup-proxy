@@ -23,7 +23,7 @@ use super::{setup_json, text};
 use crate::connector::launch::{fill, make_dir, resolve_program};
 use crate::connector::{self, Connector, Decision, Env, Form, HostList, Refusal, SettingRow};
 use crate::connector::{Source, builtin};
-use crate::upload::client::{ServerClient, ServerError};
+use crate::upload::client::ServerClient;
 
 /// `$GOALCUP_HOME/setup.json`: the saved harness and the rows written: file, key and value.
 #[derive(Serialize, Deserialize)]
@@ -178,11 +178,7 @@ fn machine(home: &Path, server: &Server, vars: &BTreeMap<String, String>) {
         Server::Url(base) => ServerClient::new(base, None)
             .json::<serde_json::Value, ()>("GET", "/v1/health", None)
             .err()
-            .map(|e| match e {
-                ServerError::Transport(why) | ServerError::Malformed(why) => why,
-                ServerError::Status { status, .. } => format!("HTTP {status}"),
-            })
-            .map(|why| text::server_unreachable(&why)),
+            .map(|e| text::server_unreachable(&e.to_string())),
     };
     let lines = [
         awake::missing(vars).map(text::no_sleep_lock),

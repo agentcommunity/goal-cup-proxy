@@ -20,7 +20,7 @@ fn a_fresh_word_counts_down_from_asked_at() {
     let fresh = asked(300, false).expect("fresh");
     assert!(fresh.contains(&left_words(7200 - 300)), "{fresh}");
     let stop = asked(300, true).expect("time is up");
-    assert_ne!(stop, fresh);
+    assert!(!stop.contains(&left_words(7200 - 300)), "{stop}");
 }
 
 #[test]

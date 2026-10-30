@@ -271,12 +271,17 @@ fn dirs(dir: &Path, first: char, when: impl Fn(&Path) -> Option<SystemTime>) -> 
     found.into_iter().map(|(_, p)| p).collect()
 }
 
+/// The run folders, oldest first by `server.json` time, else the folder's.
+fn runs(home: &Path) -> Vec<PathBuf> {
+    let when = |p: &Path| mtime(&server_json(p)).or_else(|| mtime(p));
+    dirs(&home.join("runs"), 'r', when)
+}
+
 /// The run and part for `goalcup status [PART]`: no argument is the newest run (by `server.json`
 /// time, else the folder's) and its newest part; `r…` is that run; `e…` is that part in whichever
 /// run holds it. None when there is no such run or it has no part yet.
 pub fn find(home: &Path, arg: Option<&str>) -> Option<Found> {
-    let when = |p: &Path| mtime(&server_json(p)).or_else(|| mtime(p));
-    let runs = dirs(&home.join("runs"), 'r', when);
+    let runs = runs(home);
     let (run_dir, entry) = match arg {
         None => (runs.last()?.clone(), None),
         Some(a) if a.starts_with('r') => (runs.into_iter().find(|p| p.ends_with(a))?, None),

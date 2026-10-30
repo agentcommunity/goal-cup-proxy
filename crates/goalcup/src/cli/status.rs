@@ -259,7 +259,8 @@ pub fn block(
         w.counts.native_bytes,
     ));
     lines.push(text::off_line(st.off.spans, st.off.ms));
-    lines.extend(upload.map(|u| text::upload_line(u, cx.now, false)));
+    let end = st.mode == Mode::Sealed && !cx.recorder;
+    lines.extend(upload.map(|u| text::upload_line(u, cx.now, end)));
     lines.push(text::parts_line(parts));
     let problems = problems(st, state, cx);
     lines.push(text::problems_head(problems.len()));
@@ -338,11 +339,6 @@ fn show(found: &Found, st: &Status, now: u64) -> String {
             }
         })
         .collect();
-    // A local run says so even before its uploader wrote `upload.json`.
-    let local = run.is_some_and(|r| r.server.is_none()).then(|| UploadJson {
-        state: up::State::Local,
-        ..UploadJson::default()
-    });
-    let upload = up::read(&found.entry_dir()).or(local);
+    let upload = up::read(&found.entry_dir());
     block(st, &state, run, upload.as_ref(), &cx, &parts)
 }

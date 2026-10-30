@@ -123,18 +123,38 @@ fn rule_lines_follow_their_facts() {
     assert!(out.trim_end().ends_with(&format!("\"{LOG}\"")), "{out}");
 }
 
-/// Rule 8: bytes still waiting at the end name `goalcup upload` and `upload_by`; a done upload does
-/// not.
+/// Rule 8, from `upload.json` files: bytes still waiting once nothing sends them by itself name
+/// `goalcup upload` and `upload_by`; not when the upload is done, stuck or refused, nor after
+/// `upload_by`, nor in status while the recorder still sends.
 #[test]
 fn bytes_left_at_the_end_name_goalcup_upload_and_upload_by() {
-    let by = "2026-11-08T10:00:00Z";
-    let waiting = json!({"state": "waiting", "waiting_bytes": 120_000_000, "upload_by": by});
+    let dir = tempfile::tempdir().unwrap();
+    let entry = part(dir.path());
+    put(&entry, "status.json", &sealed());
+    let (by, past) = ("2099-11-08T10:00:00Z", "2020-11-08T10:00:00Z");
+    let left = |state: &str, by: &str| {
+        json!({"state": state, "waiting_bytes": 120_000_000, "upload_by": by})
+    };
     let done = json!({"state": "done", "upload_by": by, "confirmed": {"raw": 95_000_000}});
-    let by = text::local_clock(unix_of(by).unwrap());
-    for (p, left) in [(waiting, true), (done, false)] {
-        let out = screen(&sealed(), None, Some(&upload(p)), RUN, Path::new(LOG), NOW).unwrap();
-        assert_eq!(out.contains("goalcup upload"), left, "{out}");
-        assert_eq!(out.contains(&by), left, "{out}");
+    let cases = [
+        (left("waiting", by), true),
+        (done, false),
+        (left("stuck", by), false),
+        (left("refused", by), false),
+        (left("waiting", past), false),
+    ];
+    for (p, named) in cases {
+        put(&entry, "upload.json", &upload(p.clone()));
+        assert_eq!(end_screen(&entry).unwrap().contains("goalcup upload"), named, "{p}");
+    }
+    let clock = text::local_clock(unix_of(by).unwrap());
+    put(&entry, "upload.json", &upload(left("sending", by)));
+    assert!(end_screen(&entry).unwrap().contains(&clock));
+    let u = upload(left("waiting", by));
+    for recorder in [true, false] {
+        let cx = live(recorder, false, false, 0);
+        let shown = block(&sealed(), &State::Sealed { at: NOW }, None, Some(&u), &cx, &[]);
+        assert_eq!(shown.contains("goalcup upload"), !recorder, "{shown}");
     }
 }
 

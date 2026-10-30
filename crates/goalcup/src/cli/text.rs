@@ -257,7 +257,7 @@ pub fn no_sleep_lock(why: &str) -> String {
 pub const SERVER_OFF: &str = "Server check skipped: GOALCUP_SERVER=off, so nothing is uploaded.";
 
 pub fn server_unreachable(why: &str) -> String {
-    format!("goalcup could not reach its server now ({why}). A run needs it to start.")
+    format!("goalcup checked its server: {why}. A run needs it to start.")
 }
 
 pub const NO_GIT: &str = "git is not installed. Your agent needs it to push its repository.";
@@ -841,16 +841,29 @@ fn class_words(class: Class) -> &'static str {
     }
 }
 
-/// The `Upload:` line of `upload.json` at `now`. On the end screen (`end`), bytes still waiting
-/// name `goalcup upload` and `upload_by` (section 5 rule 8).
+/// The `Upload:` line of `upload.json` at `now`. Once nothing will send the part by itself (`end`:
+/// the end screen, or a sealed part with no recorder), bytes still waiting name `goalcup upload`
+/// and `upload_by`; after `upload_by` they cannot be sent (section 5 rule 8).
 pub fn upload_line(u: &UploadJson, now: u64, end: bool) -> String {
     let t = |s: Option<&String>| s.map(String::as_str).and_then(super::unix_of);
-    let by = t(u.upload_by.as_ref()).map(local_clock);
+    let by_at = t(u.upload_by.as_ref());
+    let by = by_at.map(local_clock);
     let (err, waiting) = (u.last_error.as_ref(), size_words(u.waiting_bytes));
     let raw = u.confirmed.as_ref().map_or(0, |c| c.raw);
-    let left = !matches!(u.state, Upload::Local | Upload::Done | Upload::Closed);
-    if end && left && u.waiting_bytes > 0 {
-        let before = by.map(|b| format!(" before {b}")).unwrap_or_default();
+    let goes = matches!(u.state, Upload::Sending | Upload::CaughtUp | Upload::Waiting);
+    let left = u.waiting_bytes > 0 && (goes || u.state == Upload::Refused);
+    let closed = || {
+        let on = by.as_ref().map(|b| format!(" on {b}")).unwrap_or_default();
+        format!(
+            "Upload: the server closed this run{on}. {waiting} stays on this computer and cannot \
+             be sent."
+        )
+    };
+    if left && by_at.is_some_and(|b| now >= b) {
+        return closed();
+    }
+    if end && goes && u.waiting_bytes > 0 {
+        let before = by.as_ref().map(|b| format!(" before {b}")).unwrap_or_default();
         return format!(
             "Upload: {waiting} still waits on this computer. Run goalcup upload{before}, when you \
              are online. Nothing is lost yet."
@@ -863,7 +876,11 @@ pub fn upload_line(u: &UploadJson, now: u64, end: bool) -> String {
             let Some(at) = at else {
                 return "Upload: sending; the server holds nothing of this part yet.".to_owned();
             };
-            let ago = span_words(now.saturating_sub(at) * 1000);
+            let ago = match now.saturating_sub(at) {
+                s @ 0..60 => format!("{s} s"),
+                s @ 60..3600 => format!("{} min", s / 60),
+                s => span_words(s * 1000),
+            };
             let at = local_time(at, false);
             format!("Upload: the server holds everything up to {at} ({ago} ago).")
         }
@@ -871,11 +888,12 @@ pub fn upload_line(u: &UploadJson, now: u64, end: bool) -> String {
             let since = t(u.last_ok.as_ref()).or(t(err.map(|e| &e.at)));
             let since = since.map(|s| format!(" since {}", local_time(s, false)));
             let why = err.map(|e| format!(" ({})", class_words(e.class)));
+            let rest = (u.waiting_bytes > 0).then(|| format!(" {waiting} waits here and goes up by itself."));
             format!(
-                "Upload: not reaching the server{}{}. {waiting} waits here and goes up by itself. \
-                 Nothing is lost.",
+                "Upload: not reaching the server{}{}.{} Nothing is lost.",
                 since.as_deref().unwrap_or(" yet"),
-                why.unwrap_or_default()
+                why.unwrap_or_default(),
+                rest.unwrap_or_default()
             )
         }
         Upload::Refused => {
@@ -890,55 +908,47 @@ pub fn upload_line(u: &UploadJson, now: u64, end: bool) -> String {
             "Upload: stopped. The server's copy and this computer's copy differ at byte {raw}. \
              Nothing more is sent. Write to {SUPPORT_ADDRESS}."
         ),
-        Upload::Done if u.keep => KEPT.to_owned(),
-        Upload::Done => format!(
-            "Upload: done. The server holds your whole record ({}). Removed here: {} the server \
-             holds.",
-            size_words(raw),
-            plural(u.pruned.parts, "record file", "record files")
-        ),
-        Upload::Closed => {
-            let on = by.map(|b| format!(" on {b}")).unwrap_or_default();
-            format!(
-                "Upload: the server closed this run{on}. {waiting} stays on this computer and \
-                 cannot be sent."
-            )
+        Upload::Done if u.keep => {
+            "Upload: done. Every record file is kept on this computer (GOALCUP_KEEP_PARTS).".to_owned()
         }
+        Upload::Done => {
+            let n = u.pruned.parts;
+            let removed = (n > 0).then(|| {
+                let files = plural(n, "record file", "record files");
+                format!(" Removed here: {files} the server holds.")
+            });
+            let whole = size_words(raw);
+            format!("Upload: done. The server holds your whole record ({whole}).{}", removed.unwrap_or_default())
+        }
+        Upload::Closed => closed(),
     }
 }
 
-const KEPT: &str = "Upload: done. Every record file is kept on this computer (GOALCUP_KEEP_PARTS).";
-
 // Time left (section 10, D66): the agent may run it too.
-
-pub const PUSH_OFTEN: &str = "Push your work often; work not pushed when the run stops is lost.";
-
-/// A practice run has no repository (D69).
-pub const PRACTICE_NO_PUSH: &str =
-    "This is a practice run: it needs no repository, so there is nothing to push.";
 
 fn advice(practice: bool) -> &'static str {
     if practice {
-        PRACTICE_NO_PUSH
+        "This is a practice run: it needs no repository, so there is nothing to push."
     } else {
-        PUSH_OFTEN
+        "Push your work often; work not pushed when the run stops is lost."
     }
 }
 
 /// The run stops at `stop` (seconds since 1970), as the server last said.
 pub fn time_left(stop: u64, now: u64, practice: bool) -> String {
-    let advice = advice(practice);
-    format!("The run stops {}. {advice}", end_words(stop, now))
+    match stop.checked_sub(now).filter(|left| *left >= 60) {
+        Some(_) => format!("The run stops {}. {}", end_words(stop, now), advice(practice)),
+        None => format!("Less than a minute left. {}", advice(practice)),
+    }
 }
 
 /// The server said the run's time is up.
 pub const TIME_IS_UP: &str = "Time is up.";
 
 pub fn time_left_unknown(practice: bool) -> String {
-    let advice = advice(practice);
     format!(
-        "{advice} The time left is unknown right now: goalcup has no fresh word from the \
-         server."
+        "{} The time left is unknown right now: goalcup has no fresh word from the server.",
+        advice(practice)
     )
 }
 

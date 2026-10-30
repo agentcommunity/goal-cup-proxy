@@ -29,7 +29,8 @@ pub fn run() -> ExitCode {
     }
 }
 
-/// Inside the harness, whose `HOME` is the isolated home: only the file named is read.
+/// Inside the harness, whose `HOME` is the isolated home: only the file named and its run's
+/// `server.json` are read.
 fn in_harness(file: &Path, now: u64) -> Result<String, String> {
     let run_dir = file.parent().and_then(Path::parent);
     let run = run_dir.and_then(|r| read_json::<ServerJson>(&super::server_json(r)));
@@ -37,16 +38,21 @@ fn in_harness(file: &Path, now: u64) -> Result<String, String> {
     line(upload.as_ref(), practice(run.as_ref()), now)
 }
 
-/// In the person's own terminal: the newest run's newest part, while the run is open.
+/// In the person's own terminal: the newest open run's newest part. A run is open when it has a
+/// server and its deadline, if any, has not passed.
 fn in_terminal(now: u64) -> Result<String, String> {
     let no_run = || text::NO_OPEN_RUN_TIME_LEFT.to_owned();
-    let found = find(&home().map_err(str::to_owned)?, None).ok_or_else(no_run)?;
-    let run = found.server.as_ref();
-    let deadline = run.and_then(|r| r.deadline.as_deref()).and_then(unix_of);
-    if deadline.is_some_and(|d| d <= now) {
-        return Err(no_run());
-    }
-    line(state::read(&found.entry_dir()).as_ref(), practice(run), now)
+    let home = home().map_err(str::to_owned)?;
+    let open = |r: ServerJson| {
+        let deadline = r.deadline.as_deref().and_then(unix_of);
+        r.server.is_some() && deadline.is_none_or(|d| d > now)
+    };
+    let mut runs = super::runs(&home).into_iter().rev();
+    let dir = runs.find(|d| read_json(&super::server_json(d)).is_some_and(open));
+    let name = dir.as_deref().and_then(Path::file_name).and_then(|n| n.to_str());
+    let found = name.and_then(|n| find(&home, Some(n))).ok_or_else(no_run)?;
+    let practice = practice(found.server.as_ref());
+    line(state::read(&found.entry_dir()).as_ref(), practice, now)
 }
 
 fn practice(run: Option<&ServerJson>) -> bool {
