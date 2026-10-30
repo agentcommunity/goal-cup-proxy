@@ -726,3 +726,15 @@ PRD-14, PRD-15, PRD-16 and the code.
   lines; their owner is PRD-15 slice 2, so they are not new findings.
 - The run 1 report copy at `docs/research/results/2026-10-30-two-hour-run.md` is on integration; the
   guard's `docs/research/**` exclusion covers it.
+
+### 2026-10-30, replan after PRD-07 slice 2 (merge 2f4bc6a0)
+
+- **Worker guard result (section 6 Worker half, run once on 2f4bc6a0):** `server/worker/src/sign.ts`
+  does not exist; `receipt`, `agent_paused`, `RECEIPT_SIGNING_KEY` and `RUN_MAX_COMPRESSED_BYTES` have
+  no hit in `server/worker/src/`. One false match: `server/worker/wrangler.toml:83`, a comment telling
+  the owner to delete the old `RECEIPT_SIGNING_KEY` secret after the 1.0 Worker is live in production
+  (PRD-07 section 12 step 5). The pattern is narrowed: in `wrangler.toml` only non-comment lines are
+  scanned. A secret name in a `[vars]` key or a binding still hits.
+- **`connector_dir_sha256` stays in Worker `src/`** as the fill of a NOT NULL database column
+  (`runs.ts:153`, `db-*.ts`; no migration, ledger S3). It is not in the Worker pattern list and must not
+  be added there; it is not on the wire (`docs/UPLOAD-API.md` line 15).

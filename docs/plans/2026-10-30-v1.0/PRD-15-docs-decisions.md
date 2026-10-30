@@ -924,3 +924,14 @@ JSON sections), not a separate merge request:
   `goalcup-verify dump`. The guide (third slice) keeps that: a participant reading a live entry by
   hand uses `dump`, not the CLI pipe.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-07 slice 2 (merge 2f4bc6a0)
+
+- **`docs/SERVER-DESIGN.md` can move to `docs/archive/` now.** `server/worker/README.md` holds its
+  still-true facts on integration at 2f4bc6a0 (PRD-07 seam line 11:46Z, the log line the builder notes wait for). Links
+  to repoint in the same slice: `README.md:306`, `docs/ARCHITECTURE.md:68` and `:251`,
+  `docs/OPERATING.md:6`, `docs/README.md:22`. `docs/ARCHITECTURE.md:68` also says the upload server
+  "signs receipts and acknowledgements", false since 2f4bc6a0. The two `crates/goalcup-cli/src/upload/`
+  comments that cite SERVER-DESIGN go with the cut, not here.
+- **`docs/UPLOAD-API.md` line 15 is now true** (signing, `ack`, `last_ack`, receipt, abandon and the
+  alias are gone from the Worker); no doc edit follows from it.

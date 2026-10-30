@@ -1035,3 +1035,22 @@ kept and now cites BUILD-PROMPT section 5, since B3 no longer carries it.
   `LESSONS.md` 203 lines of docs (was 197), outside the budget; 6 rows green, 6 rows still
   `(name pending)`.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-07 slice 2 (merge 2f4bc6a0)
+
+- **Size report, PRD-07 slice 2** (`wc -l` on integration at 2f4bc6a0): Worker src 3,557 against the
+  "about 3,440" row (3.4% over; out-of-scope files included as before), down from 3,848. Worker tests
+  5,258 against "about 4,950" (6.2% over), down from 5,568. Scripts: `fetch-run.sh` 375 and
+  `test_fetch_run.py` 366, 741 of the "about 900" shared with the gate, release and packaging.
+  `server/worker/README.md` 562 lines of docs (absorbs SERVER-DESIGN), outside the budget.
+- **Redeploy staging after this merge** (the slice 1 note): from 2f4bc6a0 on, staging answers
+  `/receipt` and `/abandon` with `404 not_found` and sends no `ack` or `last_ack`.
+- **PRD-13 Worker guard ran at PRD-07's cut merge**: clean in `src/`; one false match, the
+  `wrangler.toml:83` comment about deleting `RECEIPT_SIGNING_KEY` after production, narrowed by the
+  PRD-13 note to non-comment lines. The secret deletion stays an owner step after production; nothing
+  in this build deletes it.
+- **`--local` rerun against `wrangler dev` 4.149.0 passed** (lane log 11:49Z): three chunks plus the
+  final heartbeat, `rec` equal to chunks, `complete` true, one heartbeat row.
+- **Gate on PRD-07 slice 2:** `gate fast: PASS in 82s`; `test_fetch_run.py` still outside the gate
+  (PRD-14 note).
+- No locked ledger item is touched and no owner question comes from this slice.

@@ -862,3 +862,11 @@ old code. Each id with what was done here.
   `LESSONS.md` is 203 lines of docs, outside the row; 6 rows green (L-FW2, L-FW5, L-FW8 at
   `f5b0a6a2`; L-S2, L-S3, L-S10 at `b474329d`), 6 rows still `(name pending)`.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-07 slice 2 (merge 2f4bc6a0)
+
+- **L-S1's new title is on integration**: `server/worker/test/integration.test.ts:250` "a retry of the
+  same chunk is 200 with the very same stored answer, body unread" (the upkeep 3 seam line at 12:11Z saw
+  the old title at 5ec35393). Check 1 matches the new title. L-S2 (`integration.test.ts:278`), L-S3
+  (`:542`) and L-S10 (`device.test.ts:150`, `lifecycle.test.ts:201`) keep their titles; only line
+  numbers moved. The gate proved them on 2f4bc6a0: Worker `npm test` 253 pass, 0 fail.

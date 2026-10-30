@@ -761,3 +761,27 @@ Slice 1 merged builder steps 1, 2 and 4. What the merge changed for the slices s
   `device.test.ts` and in `lifecycle.test.ts`. A slice that renames one writes the new title in the
   lessons log, as the 11:47Z seam line did for the chunk retry; a slice that removes one names the
   case that now carries the lesson. No other step changes.
+
+### 2026-10-30, replan after PRD-07 slice 2 (merge 2f4bc6a0)
+
+- **Builder step 3 is done on integration.** `src/sign.ts`, `test/sign.test.ts`,
+  `test/vectors/signing.json`, the signer, the `receipt` and `abandon` routes, `ack`, `last_ack` and the
+  `tracer_version` alias are gone; `docs/UPLOAD-API.md` line 15 ("Gone since 0.7") is now true.
+  `tracer_version` stays only as the database column name the `proxy_version` field fills
+  (`runs.ts:145`), and `connector_dir_sha256` stays in `src/` only as the second NOT NULL digest column
+  the one `connector_sha256` fills (`runs.ts:153`, no migration, ledger S3). Neither is on the wire.
+- **The section 11 PRD-13 Worker guard, run once on 2f4bc6a0:** no `sign.ts`; no hit in `src/`; one
+  hit, `wrangler.toml:83`, the comment telling the owner to delete the old `RECEIPT_SIGNING_KEY` secret
+  after the 1.0 Worker is live (section 12 step 5). That is a false match, not a reintroduction: the
+  secret deletion is an owner step after production, outside this build, so the comment stays and the
+  guard skips comment lines in `wrangler.toml` (PRD-13 note). Drop the comment in the slice after the
+  owner deletes the secret.
+- **What is left for PRD-07:** the third-slice `delete-test-runs.sh` usage-bucket step, after PRD-09's
+  usage job merges. Review nit A-N2 was skipped as optional; A-N3 stays (a row tolerance, by choice).
+- **Lesson-guarded Worker cases at 2f4bc6a0** (for PRD-17 check 1): L-S1
+  `integration.test.ts:250` "a retry of the same chunk is 200 with the very same stored answer, body
+  unread" (renamed, logged 11:47Z); L-S2 `integration.test.ts:278`; L-S3 `integration.test.ts:542`;
+  L-S10 `device.test.ts:150` and `lifecycle.test.ts:201`. Titles of L-S2, L-S3, L-S10 unchanged.
+- **Size on integration** (`wc -l` at 2f4bc6a0, all of `server/worker/src` as before): src 3,557
+  against about 3,440 (3.4% over, was 3,848), tests 5,258 (`test/*.ts` plus helpers) against about
+  4,950 (6.2% over, was 5,568). A nit by the 11:20Z decision.
