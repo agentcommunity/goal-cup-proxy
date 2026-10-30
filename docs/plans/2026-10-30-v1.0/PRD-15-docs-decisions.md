@@ -1051,3 +1051,84 @@ links and dropped the signing claim from ARCHITECTURE section 10 (fix bdcea297, 
 - `README.md` "The gate": the first measured `gate fast` with the script steps is 87 s on 22fe5926 in
   a build box. CI has not yet finished a run on integration (PRD-14 note), so there is no CI time to
   quote.
+
+### 2026-10-30, replan after PRD-15 slice 5 (merge ea0a0fec)
+
+Slice 5 rewrote `docs/CONNECTOR-SCHEMA.md` for 1.0 from the merged `crates/goalcup/src/connector/`
+code: 113 lines against the "about 90" of the docs table (the 21-row key table, the mask grammar and
+eight **(next slice)** marks carry the extra lines). `gate fast` passed in 83 s. Two review nits stay
+open; both go in the next PRD-15 slice that touches these files, not a separate merge request:
+
+- **A10, `continue` and the file flags.** `CONNECTOR-SCHEMA.md` lines 97-100 say `start` and
+  `continue` both take `--connector` and `--hosts`, then give only the start rule. `continue` has no
+  `--practice` or `--test`; its rule (PRD-10 section 1 command table, and the `main.rs` help "The
+  connector file of the run's first part, if it used one") is that the two file flags match the run's
+  first part. Add that clause, marked **(next slice)** while `continue` is still `not_built`, and drop
+  the mark when PRD-10 merges `continue`.
+- **B12, two links to a page without the fact.** `docs/ARCHITECTURE.md:118` (the run home's `.profile`
+  that exports `PATH`) and `docs/HARNESS-ONBOARDING.md:562` ("pinned, or `--dev` only") now link the
+  bare CONNECTOR-SCHEMA page, which says neither; it says "Nothing is pinned". Delete the two
+  parenthetical links. The `.profile` fact is 1.0 behaviour that arrives with PRD-11's launch slice
+  (`launch.rs`, PRD-17 P11); the ARCHITECTURE rewrite states it from that merged code, not from
+  CONNECTOR-SCHEMA. The pin and `--dev` text goes with the HARNESS-ONBOARDING rewrite.
+- **The (next slice) marks.** When PRD-11's next slice (`hosts.rs`, `hints.rs`, `launch.rs`) merges,
+  PRD-15 drops the eight marks and their "today" clauses and checks each rule against the merged
+  files (reviews A7, B8; the fixer's seam line at 13:21Z). If that slice is not reached in this build,
+  the marks stay; they are true of the code.
+- **Known broken link:** `docs/CONTRACTS.md:615` points at the removed `#pin-evolution` anchor. It is
+  left on purpose: CONTRACTS moves byte for byte to `docs/archive/` in the third slice, and the last
+  link check names it in its filter list if the move has not landed.
+- **Still waiting, unchanged:** the RECORD-FORMAT `check --json` and usage sections (PRD-08, PRD-09),
+  the AGENTS.md map, ARCHITECTURE and RECORD-FORMAT numbers (PRD-02 core merge), the
+  HARNESS-ONBOARDING pointer (PRD-12's skill rewrite), and the third slice.
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-08 slice 1 (merge d10feef7)
+
+- **RECORD-FORMAT's `check --json` section can start.** The S6 shape for the integrity ids is on
+  integration (`crates/goalcup-verify/src/report.rs`, field list in the PRD-08 note); the later ids
+  are in the report as `skip` "not built in this slice" and the page marks them so. `usage` waits for
+  PRD-09.
+- **The worked-example "made by" line** may name `goalcup-verify dump`: it uses
+  `goalcup_format::dump::Dumper` and its output on the worked example equals the committed file as
+  JSON (judge 12:35Z box).
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-10 slice 2 (merge 56495dd6)
+
+- `skills/goal-cup/SKILL.md` has no MCP paragraph now. PRD-10 deletes `skills/goal-cup-setup/` only
+  after nothing links it, because CI runs check-links. Integration links it from four places:
+  `README.md:20`, `docs/PARTICIPANT-GUIDE.md:9`, `docs/README.md:14` and `AGENTS.md:40` (the
+  `skills/` map row). PRD-15's rewrites of these pages drop the links. The merge note of the slice
+  that removes the last one says so, so PRD-10's delete can follow.
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-15 slice 6 (merge 9e89a22d)
+
+Slice 6 closed A10 (the `continue` file-flag rule in `docs/CONNECTOR-SCHEMA.md`, marked
+**(next slice, ruled in PRD-10)** until `continue` merges) and B12 (the two bare CONNECTOR-SCHEMA
+links). It added the `check --json` report section to `docs/RECORD-FORMAT.md` from the merged S6 code
+(`crates/goalcup-verify/src/report.rs`), closed the slice 2 nits A-N5 and B5, and named
+`goalcup-verify dump` (on the `zstd -dc` copy) as the worked example's maker.
+
+- **Open nit B-N4, the reader intro.** `docs/RECORD-FORMAT.md` lines 263-265 end "and a total (see
+  the `zstd` note above)"; the pointer no longer says why the note matters. The next slice that
+  touches the page (the usage section, or the PRD-02 numbers) changes it, with no new line, to "and a
+  total, a lower bound on a live entry (see the `zstd` note above)", or drops the parenthetical.
+  Not a separate merge request.
+- **The `check --json` section follows the code.** It lists ten check ids as always `skip` "not built
+  in this slice" and `server`, `harness_log`, `provider_errors`, `history` and `threads` as not
+  filled. Each later PRD-08 slice that builds one of them names it in its merge note (PRD-08 note),
+  and the next PRD-15 slice moves it out of the skip list or fills its row, rechecked in a box against
+  `check --json` output as slice 6 was (key sets, check ids, `inv` numbers, skip list). If a check is
+  not built in this build, its line stays; it is true of the code.
+- **The `continue` mark** goes when PRD-10 merges `continue` (PRD-10 note); until then it stays.
+- **Size:** the page is 374 lines against the docs table's "about 280" (134%). The builder's decision
+  line (14:36Z) names what the lines serve: the PRD-01 record tables, the worked example, the 51-line
+  reader and the S6 key tables. The usage section adds to it; that slice states its own count and
+  cuts repetition before adding. Docs have no PRD-00 size row, so this is not a ledger L2 ceiling.
+- Review items A5, A6 and N3 were declined by the fixer (14:48Z) and stay closed.
+- **Still waiting, unchanged:** the usage section (PRD-09 core), the AGENTS.md map, ARCHITECTURE and
+  RECORD-FORMAT numbers (PRD-02 core merge), the HARNESS-ONBOARDING pointer (PRD-12's skill rewrite),
+  and the third slice.
+- No locked ledger item is touched and no owner question comes from this slice.

@@ -1135,3 +1135,88 @@ PRD-01, PRD-02, PRD-04, PRD-05 and PRD-11 as they now stand, and the code. No lo
   `write_settings(home, &c.update_off)`. It writes nothing until PRD-11's launch slice, so a setup test
   that reads the written file waits for that merge. After that merge both lists name `{home}` files
   only (PRD-11 note, F1b). `start` with `GOALCUP_SERVER=off` still needs S8 `watchdog::run`.
+
+### 2026-10-30, replan after PRD-15 slice 5 (merge ea0a0fec)
+
+- `docs/CONNECTOR-SCHEMA.md` "Loading a file" names `goalcup continue --connector --hosts` (review
+  A10). When `continue` merges, its merge note says how the two file flags are checked against the
+  run's first part (section 1 table: "must match the run's first entry"), so PRD-15 states that rule
+  from merged code.
+
+### 2026-10-30, replan after PRD-10 slice 2 (merge 56495dd6)
+
+- **Slice 2 is on integration:** `goalcup status [PART] [--json]` (`cli/status.rs`, the state table
+  of section 4 as `status::State`, the block, problem and note lines), the end screen as the library
+  function `finish::screen(st, server, run, log, now)`, pid and harness liveness and the run and part
+  lookup `cli::find` in `cli/mod.rs`, nits A8, B13 and B14 closed, and `skills/goal-cup/SKILL.md`
+  without its MCP paragraph. `status --json` already prints `upload.json` whole when it exists.
+- **`server.json` shape** (`cli::ServerJson`, section 2): `v`, `server` (null for
+  `GOALCUP_SERVER=off`), `run`, `mode` (`practice`, `test`, `competition`), `deadline` (RFC 3339 UTC
+  or null), `repo` (null for practice), `connector {id, name, source}` (`source` is `builtin` or the
+  `--connector` path), `hosts_file`, `entries [{id, harness_version, resumed}]` in start order. No
+  credential field. `start` and `continue` write it through this type; read it with
+  `cli::read_json::<ServerJson>(&cli::server_json(run_dir))`.
+- **Section 4 "alive" is changed by the fixer's A1 decision** (lane log 13:23Z): alive is
+  `kill(pid, 0)` plus the written start id (`cli::proc_start_id`: Linux `/proc/<pid>/stat` field 22,
+  macOS BSD start time in microseconds). The program-file check of line 285 (`/proc/<pid>/exe`,
+  `proc_pidpath`) is dropped on both platforms: PRD-02's `PR_SET_DUMPABLE` 0 closes `exe` to the
+  participant, and the start id already names the process. The box showed a not-dumpable child reads
+  as alive. The macOS liveness path has not been compiled in a box yet; the first macOS pad run or
+  release build checks it.
+- **Decisions to keep** (lane log 13:05Z and 13:23Z): a dead part past the deadline is state `Over`
+  and says `goalcup seal`, also with the harness alive (`recover` refuses past the deadline). A
+  both-dead `status.json` older than 2 minutes shows the stale line instead of the continue state
+  line, so each cause gives one PROBLEM line.
+- **Not built yet; the problem table and the end screen are not complete** (A5, A11):
+  - End screen rule 7's "Its record ends at <time>." and the final native rows line: no
+    `status.json` key holds either (ledger L2). They come when PRD-02 adds the keys to S4 (a seam
+    line naming PRD-10), or stay out with a replan line.
+  - Rule 2's tier line for zero model requests waits for section 6.
+  - The vendor row of section 4 ("<harness> runs its model calls on its vendor's servers...") waits
+    for PRD-11's hosts slice. `written.hosts` holds names and counts only, and
+    `HostList::decide` answers `NotListed` for every name until that slice merges. Status then
+    loads the run's host list as `server.json` names it (`hosts_file` or built in) and asks
+    `decide` for the kind. No new `status.json` key is needed.
+  - The upload lines in status and on the end screen, and `time-left`, wait for S9
+    (`v1.0/prd-06-upload`, not merged).
+- **What the next slice can take.** S3 `connector::load` and `plan` are on integration (PRD-11
+  slice 2). The planner's 12:56Z line that S3 is in review is stale. `start` and `seal` with
+  `GOALCUP_SERVER=off` wait only for S8 `watchdog::run`, and `continue` also waits for
+  `pipeline::close_dead_entry`. `cli/folder.rs` with PRD-17 SC1, and SC2's folder-refusal case
+  ("Nothing was created.", nothing written), need neither S3 nor S8. They can be the next slice,
+  called by `start` before anything is created. The start line for a hint file `plan` could not
+  read has no `LaunchPlan` field (PRD-11 lane 13:22Z). PRD-11's slice 3 replan settles it.
+- **Ownership:** `crates/goalcup/tests/cli_common/` is PRD-10's (A10, B2). It is a folder, so it
+  does not build as its own test binary, and `tests/common/` stays PRD-14's. See the PRD-00 note.
+- **Open nits for the next PRD-10 touch**, none a behaviour change:
+  - B1: `finish::screen` sets one `lost` flag as it pushes each loss line and puts
+    `NOTHING_LOST` second when no flag is set. Rule 1 then holds by construction. Drop
+    `nothing_lost`, or make it private (only `screen` calls it; the test goes through `screen`).
+  - B2: move `live()` into `tests/cli_common/`. `cli_finish.rs` lines 245 to 253 copy it.
+  - B3: `text::agent_exited` builds on `has_exited`. `after_seal` and `outlived` share one helper
+    for the optional ` (a, b)` list.
+  - B4: `local_offset` calls `libc::tzset()` in place of its own `extern "C"` block, if the locked
+    libc (0.2.189) exports it on both targets. Check it in the box, not by reading.
+- **Own file estimates** (`wc -l` at 56495dd6, against this PRD's "Files it owns" table):
+  `status.rs` 341 against 260, `finish.rs` 144 against 160, `text.rs` 613 against 420, `cli/mod.rs`
+  462 against 130 (it now holds liveness, `ServerJson`, `find`, `unix_of`, `local_offset` and about 30
+  lines of unit tests), `main.rs` 197 against 160, `log.rs` 202 against 140 with `skill.rs`. The six
+  files are 1,959 lines against an estimate of 1,270 (154%). The extra serves points 3 and 6: the state
+  rows, both-dead and stale lines, the loss lines on the end screen, and local times. The 12 files not
+  yet written are estimated at 1,720 lines. At that rate the CLI projects to about 3,680 lines, 127% of
+  the row. **Decision:** the row stays about 2,900, and the >10% line (3,190) applies to the merged total.
+  Each later slice builds its files at or under their table estimates, and `text.rs` grows only by
+  the messages of the commands that slice builds. Cut B1, B3 and B4 first. Before adding a time helper,
+  use `cli::unix_of` to parse a time and `goalcup_format::dump::wall` to write one. A merge that
+  takes the total past 3,190 needs its own replan `decision` line naming the point.
+- PRD-17 SC6 is named: `crates/goalcup/tests/cli_finish.rs` `unsealed_status_never_reads_as_finished`.
+  SC1 stays pending until `cli_folder.rs`.
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-15 slice 6 (merge 9e89a22d)
+
+- `docs/CONNECTOR-SCHEMA.md` states the `continue` rule (the two file flags match the run's first
+  entry) marked **(next slice, ruled in PRD-10)**. The slice that merges `continue` says in its merge
+  note whether that rule holds as written, so PRD-15 drops the mark or corrects the line. No code
+  change is asked of PRD-10.
+- No locked ledger item is touched and no owner question comes from this slice.
