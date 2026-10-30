@@ -283,12 +283,19 @@ enum Form {
     /// `(?:\\{0,3}/){2}[^\s/?#@:"'<>\\]{0,256}:([^\s/?#@"'<>\\]{1,1024})@`
     UrlPassword,
     /// A connector rule on one JSON field: `KEY\s*:\s*VALUE`, `KEY` the quoted field name.
-    Field { key: Box<[u8]>, scalar: bool },
+    Field {
+        key: Box<[u8]>,
+        scalar: bool,
+    },
     /// A connector rule on one header: `PREFIX[a-z0-9-]+:\s*[^\r\n"]+`.
-    HeaderPrefix { prefix: Box<[u8]> },
+    HeaderPrefix {
+        prefix: Box<[u8]>,
+    },
     /// Form `i` of the exact values ([`RunSecrets`]): printable ASCII, with at most one line
     /// break in each gap between two of its bytes ([`Progress`]).
-    Literal { form: usize },
+    Literal {
+        form: usize,
+    },
 }
 
 struct Shape {
@@ -948,10 +955,21 @@ impl MaskWalk {
 /// one can be dropped.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Walk {
-    Prefixed { pos: u8, count: u8 },
+    Prefixed {
+        pos: u8,
+        count: u8,
+    },
     Masked(MaskWalk),
-    Bearer { pos: u8, spaced: bool, count: u8 },
-    Jwt { pos: u8, seg: u8, count: u8 },
+    Bearer {
+        pos: u8,
+        spaced: bool,
+        count: u8,
+    },
+    Jwt {
+        pos: u8,
+        seg: u8,
+        count: u8,
+    },
     Pem(Pem),
     Json(Json),
     Shell(Shell),
@@ -977,12 +995,10 @@ impl Url {
     /// `after` is the offset after this unit.
     fn step(&mut self, u: Unit, after: u64) -> Step {
         let next = match *self {
-            Url::Slashes { done, backslashes } if is(u, b'\\') && backslashes < 3 => {
-                Url::Slashes {
-                    done,
-                    backslashes: backslashes + 1,
-                }
-            }
+            Url::Slashes { done, backslashes } if is(u, b'\\') && backslashes < 3 => Url::Slashes {
+                done,
+                backslashes: backslashes + 1,
+            },
             Url::Slashes { done: 0, .. } if is(u, b'/') => Url::Slashes {
                 done: 1,
                 backslashes: 0,
@@ -1453,7 +1469,11 @@ impl Candidate {
             Form::UrlPassword => is(u, b'/') || is(u, b'\\'),
             Form::Field { key, .. } => key.first().is_some_and(|&b| is(u, b)),
             Form::HeaderPrefix { prefix } => prefix.first().is_some_and(|&b| is(u, b)),
-            Form::Literal { form } => policy.secrets.form(*form).first().is_some_and(|&b| is(u, b)),
+            Form::Literal { form } => policy
+                .secrets
+                .form(*form)
+                .first()
+                .is_some_and(|&b| is(u, b)),
         };
         if !starts {
             return None;
@@ -2194,17 +2214,85 @@ mod tests {
     }
 
     const PIECES: &[&[u8]] = &[
-        b"sk-ant-", b"sk-", b"proj-", b"ghp_", b"AKIA", b"bearer", b"Bearer", b"eyJ", b".",
-        b"-----BEGIN ", b"RSA ", b"PRIVATE KEY", b"-----", b"-----END ", b"\"", b":", b"=",
-        b"api_key", b"x-api-key", b"token", b"secret", b"password", b"@", b"xoxb-", b"AIza",
-        b"hf_", b"npm_", b"xai-", b"sk_live_", b"glpat-", b"dop_v1_", b" ", b"\n", b"\t", b"'",
-        b"\\", b"\xff", "\u{17f}".as_bytes(), "\u{212a}".as_bytes(), "\u{a0}".as_bytes(),
-        b"abcdefghij", b"ABCDEFGHIJ", b"0123456789", b"deadbeef", b"_", b"-", b"%", b"+",
-        b"\"api_key\":\"", b"\\\"api_key\\\": \\\"", b"\\\"", b"password: \\\"",
-        b"\"token\" : \"", b"token = '", b"Bearer  ", b"eyJabcdefghij.",
-        b"-----BEGIN RSA PRIVATE KEY-----\n", b"SK-ab", b"***", b"...", "\u{2026}".as_bytes(),
-        b"\\u2026", b"wxyz", b"\\n", b"\\\\n", b"%3D", b"\x1b[32m", b"\\u001b[1m", b"x", b"_",
-        b"//", b"https://", b"\\/\\/", b"u:", b":p@", b"postgres://app:", b"?", b"#", b"<",
+        b"sk-ant-",
+        b"sk-",
+        b"proj-",
+        b"ghp_",
+        b"AKIA",
+        b"bearer",
+        b"Bearer",
+        b"eyJ",
+        b".",
+        b"-----BEGIN ",
+        b"RSA ",
+        b"PRIVATE KEY",
+        b"-----",
+        b"-----END ",
+        b"\"",
+        b":",
+        b"=",
+        b"api_key",
+        b"x-api-key",
+        b"token",
+        b"secret",
+        b"password",
+        b"@",
+        b"xoxb-",
+        b"AIza",
+        b"hf_",
+        b"npm_",
+        b"xai-",
+        b"sk_live_",
+        b"glpat-",
+        b"dop_v1_",
+        b" ",
+        b"\n",
+        b"\t",
+        b"'",
+        b"\\",
+        b"\xff",
+        "\u{17f}".as_bytes(),
+        "\u{212a}".as_bytes(),
+        "\u{a0}".as_bytes(),
+        b"abcdefghij",
+        b"ABCDEFGHIJ",
+        b"0123456789",
+        b"deadbeef",
+        b"_",
+        b"-",
+        b"%",
+        b"+",
+        b"\"api_key\":\"",
+        b"\\\"api_key\\\": \\\"",
+        b"\\\"",
+        b"password: \\\"",
+        b"\"token\" : \"",
+        b"token = '",
+        b"Bearer  ",
+        b"eyJabcdefghij.",
+        b"-----BEGIN RSA PRIVATE KEY-----\n",
+        b"SK-ab",
+        b"***",
+        b"...",
+        "\u{2026}".as_bytes(),
+        b"\\u2026",
+        b"wxyz",
+        b"\\n",
+        b"\\\\n",
+        b"%3D",
+        b"\x1b[32m",
+        b"\\u001b[1m",
+        b"x",
+        b"_",
+        b"//",
+        b"https://",
+        b"\\/\\/",
+        b"u:",
+        b":p@",
+        b"postgres://app:",
+        b"?",
+        b"#",
+        b"<",
         "\u{e9}".as_bytes(),
     ];
 
@@ -2311,20 +2399,38 @@ mod tests {
                     if s < k && k < t {
                         checked += 1;
                         let held = scanner.decoded_end <= s
-                            || scanner.candidates.iter().any(|c| c.lit == lit && c.start <= s);
-                        assert!(held, "seed {seed}: rule {lit} match {s}..{t} not held at {k}");
-                        assert!(scanner.held_start <= s, "seed {seed}: a live match released");
+                            || scanner
+                                .candidates
+                                .iter()
+                                .any(|c| c.lit == lit && c.start <= s);
+                        assert!(
+                            held,
+                            "seed {seed}: rule {lit} match {s}..{t} not held at {k}"
+                        );
+                        assert!(
+                            scanner.held_start <= s,
+                            "seed {seed}: a live match released"
+                        );
                     }
                     if k >= t + 4 && k < t + 5 {
                         checked += 1;
-                        let gone = !scanner.candidates.iter().any(|c| c.lit == lit && c.start == s);
+                        let gone = !scanner
+                            .candidates
+                            .iter()
+                            .any(|c| c.lit == lit && c.start == s);
                         assert!(gone, "seed {seed}: rule {lit} match {s}..{t} held at {k}");
                     }
                 }
             }
-            assert_eq!(sink.bytes.len() as u64 + scanner.held_bytes() as u64, text.len() as u64);
+            assert_eq!(
+                sink.bytes.len() as u64 + scanner.held_bytes() as u64,
+                text.len() as u64
+            );
         }
-        assert!(checked > 5_000, "the generator reaches the rules: {checked}");
+        assert!(
+            checked > 5_000,
+            "the generator reaches the rules: {checked}"
+        );
         Ok(())
     }
 
@@ -2333,7 +2439,10 @@ mod tests {
     #[test]
     fn held_state_stays_bounded() -> Result<(), MaskError> {
         let bodies: [(&[u8], &[u8]); 8] = [
-            (b"-----BEGIN RSA PRIVATE KEY-----\n", b"MIIEowIBAAKCAQEA+/=\n"),
+            (
+                b"-----BEGIN RSA PRIVATE KEY-----\n",
+                b"MIIEowIBAAKCAQEA+/=\n",
+            ),
             (b"{\"", b"abcdefghijklmnopqrstuvwxyz"),
             (b"{\"api_key\":\"", b"abc/+= xyz"),
             (b"bearer", b" \t "),

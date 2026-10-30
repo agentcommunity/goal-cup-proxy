@@ -178,10 +178,13 @@ impl ConnRule {
             }
             ConnPattern::HeaderPrefix(prefix) => {
                 let ok = (1..=64).contains(&prefix.len())
-                    && prefix.as_bytes().first().is_some_and(u8::is_ascii_lowercase)
-                    && prefix.bytes().all(|b| {
-                        b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-'
-                    });
+                    && prefix
+                        .as_bytes()
+                        .first()
+                        .is_some_and(u8::is_ascii_lowercase)
+                    && prefix
+                        .bytes()
+                        .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-');
                 ok.then(|| format!(r#"{prefix}[a-z0-9-]+:\s*[^\r\n"]+"#))
             }
         }
@@ -620,7 +623,10 @@ pub(crate) fn select(candidates: Vec<Claim>) -> Vec<Claim> {
             next += 1;
         }
         if at < candidate.end {
-            remainders.push(Claim { start: at, ..candidate });
+            remainders.push(Claim {
+                start: at,
+                ..candidate
+            });
         }
     }
     claimed.extend(remainders);
@@ -740,7 +746,11 @@ pub(crate) struct Run {
 
 /// How many backslashes end just before `at`.
 fn backslashes_before(bytes: &[u8], at: usize) -> usize {
-    bytes[..at].iter().rev().take_while(|&&b| b == b'\\').count()
+    bytes[..at]
+        .iter()
+        .rev()
+        .take_while(|&&b| b == b'\\')
+        .count()
 }
 
 /// The runs that rule spans star over `bytes` (PRD-05 section 3): each span is cut at every
@@ -823,7 +833,10 @@ mod tests {
     }
 
     fn spans(claims: &[Claim]) -> Vec<(usize, usize, usize)> {
-        claims.iter().map(|c| (c.start, c.end, c.priority)).collect()
+        claims
+            .iter()
+            .map(|c| (c.start, c.end, c.priority))
+            .collect()
     }
 
     /// Two blocks and the one claim across both edges become one span; a claim inside a block

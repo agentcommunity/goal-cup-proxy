@@ -100,7 +100,9 @@ fn planted() -> Vec<Vec<u8>> {
     let gh = keys()[3].0.clone();
     let mut bad = format!("{{\"k\":\"{}", &gh[..10]).into_bytes();
     bad.push(0xff);
-    bad.extend(format!("{}\"}}\n\xff\xfe x \\\\\\n{gh} \u{e9}", &gh[10..]).bytes());
+    bad.extend(format!("{}\"}}\n", &gh[10..]).bytes());
+    bad.extend(b"\xff\xfe");
+    bad.extend(format!(" x \\\\\\n{gh} \u{e9}").bytes());
     bad.extend(b"\xe2\x80");
     out.push(bad);
     out.push(format!("\x1b[32m{gh}\x1b[0m \\\\u001b[1m{gh} xx{gh} %3D{gh}").into_bytes());

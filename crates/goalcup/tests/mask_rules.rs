@@ -158,24 +158,44 @@ fn guarded_keys() -> Vec<(&'static str, String)> {
     let hex = b"0123456789abcdef";
     let upper = b"ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
     vec![
-        ("anthropic_key", ["sk-", "ant-", "api03-", &run(ALNUM, 30, 1)].concat()),
+        (
+            "anthropic_key",
+            ["sk-", "ant-", "api03-", &run(ALNUM, 30, 1)].concat(),
+        ),
         ("openai_key", ["sk-", "proj-", &run(ALNUM, 30, 2)].concat()),
-        ("github_token", ["github", "_pat_", &run(ALNUM, 30, 3)].concat()),
+        (
+            "github_token",
+            ["github", "_pat_", &run(ALNUM, 30, 3)].concat(),
+        ),
         ("github_token", ["gh", "p_", &run(ALNUM, 30, 4)].concat()),
         ("aws_access_key", ["AK", "IA", &run(upper, 16, 5)].concat()),
         (
             "jwt",
-            ["ey", "J", &run(ALNUM, 12, 6), ".", &run(ALNUM, 12, 7), ".", &run(ALNUM, 12, 8)]
-                .concat(),
+            [
+                "ey",
+                "J",
+                &run(ALNUM, 12, 6),
+                ".",
+                &run(ALNUM, 12, 7),
+                ".",
+                &run(ALNUM, 12, 8),
+            ]
+            .concat(),
         ),
         ("slack_token", ["xo", "xb-", &run(ALNUM, 20, 9)].concat()),
         ("google_key", ["AI", "za", &run(ALNUM, 35, 10)].concat()),
-        ("huggingface_token", ["h", "f_", &run(ALNUM, 30, 11)].concat()),
+        (
+            "huggingface_token",
+            ["h", "f_", &run(ALNUM, 30, 11)].concat(),
+        ),
         ("npm_token", ["np", "m_", &run(ALNUM, 30, 12)].concat()),
         ("xai_key", ["xa", "i-", &run(ALNUM, 30, 13)].concat()),
         ("stripe_key", ["sk", "_live_", &run(ALNUM, 24, 14)].concat()),
         ("gitlab_token", ["gl", "pat-", &run(ALNUM, 24, 15)].concat()),
-        ("digitalocean_token", ["do", "p_v1_", &run(hex, 40, 16)].concat()),
+        (
+            "digitalocean_token",
+            ["do", "p_v1_", &run(hex, 40, 16)].concat(),
+        ),
     ]
 }
 
@@ -216,7 +236,10 @@ fn assert_masks(m: &Masker, input: &str, secret: &str) {
     let out = m.mask_whole(input.as_bytes());
     check_shape(input.as_bytes(), &out);
     let at = input.find(secret).unwrap_or(usize::MAX);
-    assert!(at != usize::MAX && starred(&out, at, secret), "{input:?} not masked");
+    assert!(
+        at != usize::MAX && starred(&out, at, secret),
+        "{input:?} not masked"
+    );
 }
 
 fn assert_clear(m: &Masker, input: &str) {
@@ -261,7 +284,11 @@ fn url_password_cases() -> Res {
     assert_eq!(out.bytes, b"postgres://app:*******@localhost:5432");
     assert_eq!(kinds(&m, &out), ["url_password"]);
     assert_masks(&m, &format!(r#"{{"u":"https:\/\/u:{pass}@h"}}"#), &pass);
-    assert_masks(&m, &format!("git remote -v\norigin\thttps://bob:{pass}@git.example.test/r"), &pass);
+    assert_masks(
+        &m,
+        &format!("git remote -v\norigin\thttps://bob:{pass}@git.example.test/r"),
+        &pass,
+    );
     for left_alone in [
         "ssh://git@github.com",
         "https://host:443/path",
@@ -285,7 +312,11 @@ fn long_url_credentials_stay_masked() -> Res {
     let m = masker()?;
     let t81 = run(ALNUM, 81, 20);
     let t190 = run(ALNUM, 190, 21);
-    assert_masks(&m, &format!("curl https://user:{t81}@artifacts.example.com/x\n"), &t81);
+    assert_masks(
+        &m,
+        &format!("curl https://user:{t81}@artifacts.example.com/x\n"),
+        &t81,
+    );
     assert_masks(
         &m,
         &format!("origin\thttps://x-token-auth:{t190}@bitbucket.org/team/repo.git (fetch)\n"),
@@ -299,15 +330,36 @@ fn long_url_credentials_stay_masked() -> Res {
 fn the_left_guard_keeps_escapes_and_drops_glue() -> Res {
     let m = masker()?;
     let contexts = [
-        "", "\n", "\\n", "\\\\n", "\\\\\\\\n", "\t", "\\t", "\\u0041", "\\x41", "%3D", "%20",
-        "\x1b[32m", "\\u001b[32m", "\\\\u001b[1;32m", "\\x1b[0m", "-", "token-", " ", "=", "\"",
+        "",
+        "\n",
+        "\\n",
+        "\\\\n",
+        "\\\\\\\\n",
+        "\t",
+        "\\t",
+        "\\u0041",
+        "\\x41",
+        "%3D",
+        "%20",
+        "\x1b[32m",
+        "\\u001b[32m",
+        "\\\\u001b[1;32m",
+        "\\x1b[0m",
+        "-",
+        "token-",
+        " ",
+        "=",
+        "\"",
     ];
     for (kind, key) in guarded_keys() {
         for ctx in contexts {
             let input = format!("{ctx}{key} end");
             let out = m.mask_whole(input.as_bytes());
             check_shape(input.as_bytes(), &out);
-            assert!(starred(&out, ctx.len(), &key), "{kind} after {ctx:?} not masked");
+            assert!(
+                starred(&out, ctx.len(), &key),
+                "{kind} after {ctx:?} not masked"
+            );
         }
         for glue in ["x", "Z", "7", "_", "KEY_", "\\\\"] {
             let input = format!("{glue}{key} end");
@@ -422,11 +474,17 @@ fn masked_key_forms_are_masked() -> Res {
     let m = masker()?;
     let stars = "*".repeat(39);
     for (text, mask) in [
-        ("Incorrect API key provided: sk-abcde...wxyz.", "sk-abcde...wxyz"),
+        (
+            "Incorrect API key provided: sk-abcde...wxyz.",
+            "sk-abcde...wxyz",
+        ),
         ("key sk-0...cdef here", "sk-0...cdef"),
         ("'sk-ab\u{2026}wxyz'", "sk-ab\u{2026}wxyz"),
         (r#""sk-ab…wxyz""#, r"sk-ab…wxyz"),
-        (&format!("sk-R7aMV{stars}oKYo"), &format!("sk-R7aMV{stars}oKYo")),
+        (
+            &format!("sk-R7aMV{stars}oKYo"),
+            &format!("sk-R7aMV{stars}oKYo"),
+        ),
     ] {
         let out = m.mask_whole(text.as_bytes());
         check_shape(text.as_bytes(), &out);
@@ -453,7 +511,9 @@ fn no_rule_span_holds_a_quote_or_splits_an_escape() -> Res {
         format!("token = '{value}'"),
         format!("Bearer {value}\\\"x"),
         format!("{{\"k\":\"\u{e9}{key}\u{e9}\"}}"),
-        format!("{{\"c\":\"-----BEGIN RSA PRIVATE KEY-----\\n{value}\\\"{value}\\n-----END RSA PRIVATE KEY-----\"}}"),
+        format!(
+            "{{\"c\":\"-----BEGIN RSA PRIVATE KEY-----\\n{value}\\\"{value}\\n-----END RSA PRIVATE KEY-----\"}}"
+        ),
     ];
     let fail_closed = m.mask_rules().len() - 1;
     for input in &inputs {
@@ -470,9 +530,16 @@ fn no_rule_span_holds_a_quote_or_splits_an_escape() -> Res {
                     "{input}: a span holds a quote"
                 );
             }
-            assert_eq!(before(s.start) % 2, 0, "{input}: a span starts inside an escape");
+            assert_eq!(
+                before(s.start) % 2,
+                0,
+                "{input}: a span starts inside an escape"
+            );
             let end = s.start + s.len;
-            assert!(end == b.len() || before(end) % 2 == 0, "{input}: a span ends on an escape");
+            assert!(
+                end == b.len() || before(end) % 2 == 0,
+                "{input}: a span ends on an escape"
+            );
         }
     }
     Ok(())

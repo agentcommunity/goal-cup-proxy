@@ -17,7 +17,10 @@ fn token() -> String {
 fn masker(value: &str) -> Result<Masker, goalcup::mask::MaskError> {
     Masker::new(
         &[],
-        vec![SecretValue::new(ValueSource::Workspace, value.as_bytes().to_vec())],
+        vec![SecretValue::new(
+            ValueSource::Workspace,
+            value.as_bytes().to_vec(),
+        )],
     )
 }
 
@@ -83,7 +86,11 @@ fn the_gh_token_is_masked_in_every_form_whole_and_streamed() -> Res {
         assert!(forms.contains(input), "the planted text holds a form");
         let whole = m.mask_whole(input);
         assert_eq!(whole.bytes.len(), input.len());
-        assert!(!forms.contains(&whole.bytes), "{:?}", String::from_utf8_lossy(input));
+        assert!(
+            !forms.contains(&whole.bytes),
+            "{:?}",
+            String::from_utf8_lossy(input)
+        );
         assert!(
             whole.spans.iter().any(|s| rules[s.rule] == "run_secret"),
             "{:?}",
@@ -104,7 +111,10 @@ fn workspace_values_reads_the_last_gh_token_of_the_first_key_file() -> Res {
     std::fs::write(dir.path().join(".env"), format!("GH_TOKEN={a}\n"))?;
     std::fs::write(
         dir.path().join(".env.local"),
-        format!("export GH_TOKEN=\"{}\"\nOTHER=1\n  GH_TOKEN = '{c}'\n", "e".repeat(25)),
+        format!(
+            "export GH_TOKEN=\"{}\"\nOTHER=1\n  GH_TOKEN = '{c}'\n",
+            "e".repeat(25)
+        ),
     )?;
     std::fs::write(dir.path().join("notes.txt"), format!("GH_TOKEN={a}\n"))?;
     let values = workspace_values(dir.path());
@@ -120,7 +130,10 @@ fn workspace_values_reads_the_last_gh_token_of_the_first_key_file() -> Res {
     assert!(m.mask_whole(a.as_bytes()).bytes.iter().all(|&b| b == b'*'));
 
     std::fs::write(dir.path().join(".env.local"), "GH_TOKEN=short_value_19c\n")?;
-    assert!(workspace_values(dir.path()).is_empty(), "a value under 20 bytes is not used");
+    assert!(
+        workspace_values(dir.path()).is_empty(),
+        "a value under 20 bytes is not used"
+    );
     assert!(workspace_values(&dir.path().join("missing")).is_empty());
     Ok(())
 }
@@ -147,7 +160,10 @@ fn nothing_value_derived_is_printed() -> Res {
     }
     let bad = Masker::new(
         &[],
-        vec![SecretValue::new(ValueSource::Env, b"has a space in it, so unusable".to_vec())],
+        vec![SecretValue::new(
+            ValueSource::Env,
+            b"has a space in it, so unusable".to_vec(),
+        )],
     )?;
     assert_eq!(bad.value_counts().skipped, 1);
     Ok(())
