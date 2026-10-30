@@ -158,8 +158,8 @@ impl Beat {
         }
     }
 
-    /// Due once there is a durable point: at once when the state changed, else on the timer, and
-    /// never while its backoff waits.
+    /// At once when the state changed, else on the timer, and never while its backoff waits;
+    /// `tick` beats only with a durable point.
     pub fn due(&self, now: Mono, recording: Recording) -> bool {
         let changed = self.last != Some(recording);
         self.backoff.due(now) && (changed || self.timer.due(now))

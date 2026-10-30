@@ -96,11 +96,12 @@ pub fn cut(
             // Case 3: the next part starts at S and is not on disk yet.
             return Ok(Cut::Nothing);
         }
-    } else if parts.iter().all(|&q| q < s)
+    } else if parts.is_empty()
         && (s == 0 || confirmed.is_some_and(|c| c.raw == s && c.hash == pos.head))
     {
-        // Nothing written yet, or case 3 at a pruned boundary: the server holds the whole entry
-        // as `confirmed` says, and no part starts at or after S.
+        // Nothing written yet, or case 3 at a pruned boundary: section 7 prunes a prefix, so no
+        // part file is left at all, and the server holds the whole entry as `confirmed` says. A
+        // part still on disk with no line at S means the server holds bytes the local copy lost.
         return Ok(Cut::Nothing);
     } else {
         return stuck("the server's offset is not at a local index line");

@@ -17,7 +17,7 @@ use goalcup_format::{
 };
 use sha2::{Digest, Sha256};
 use std::fs;
-use std::io::Read;
+use std::io::{self, Read};
 use std::path::Path;
 
 const ZERO: [u8; 32] = [0; 32];
@@ -74,7 +74,11 @@ fn lines(dir: &Path) -> Vec<(u64, IndexLine)> {
     let parts = part_files(dir).unwrap().into_iter().map(|p| first(&p));
     parts
         .flat_map(|p| {
-            let idx = read_index(&dir.join(index_name(p))).unwrap_or_default();
+            // Only a part with no index yet has no lines; any other read error fails the test.
+            let idx = match read_index(&dir.join(index_name(p))) {
+                Err(e) if e.kind() == io::ErrorKind::NotFound => Vec::new(),
+                r => r.unwrap(),
+            };
             idx.into_iter().map(move |l| (p, l))
         })
         .collect()
@@ -464,6 +468,30 @@ fn a_head_or_seq_the_index_does_not_hold_is_stuck() {
     assert!(is_stuck(
         chunk::cut(dir.path(), &p, &bound, Some(&wrong)).unwrap()
     ));
+}
+
+/// The server is ahead of the local copy: it confirmed bytes past every index line of a part
+/// still on disk (a disk that lied about a sync, a restored folder). Stuck with either bound, never
+/// Nothing, even with a `confirmed` that matches the server.
+#[test]
+fn a_server_ahead_of_a_part_on_disk_is_stuck() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut n = 0;
+    let mut w = PartWriter::open(dir.path(), opts(u64::MAX), ENTRY, BOOT_ID, at(0)).unwrap();
+    let d = work(&mut w, &mut n, 6, 6 << 10);
+    let s = d.line.raw_end + 1000;
+    let p = pos(s, d.line.seq + 2, [7; 32]);
+    let ahead = Confirmed {
+        raw: s,
+        seq: d.line.seq + 1,
+        hash: hex(&[7; 32]),
+        at: String::new(),
+    };
+    for bound in [Bound::Durable(d), Bound::OnDisk] {
+        assert!(is_stuck(
+            chunk::cut(dir.path(), &p, &bound, Some(&ahead)).unwrap()
+        ));
+    }
 }
 
 /// With no live writer, a part whose last `L` line lies past the file's length is sent only up to

@@ -128,6 +128,8 @@ mod tests {
         };
         spawn(ctx);
         let j = state::read(dir.path()).unwrap();
+        // Valid JSON that is not a ServerJson: the unreadable branch, not the URL one.
+        assert_eq!(j.server_url, None);
         assert_eq!((j.state, j.keep), (State::Waiting, false));
         assert_eq!(j.last_error.unwrap().class, policy::Class::Internal);
     }
