@@ -32,11 +32,10 @@ base="https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/r2/bu
 tmp=$(mktemp -d) && trap 'rm -rf "$tmp"' EXIT
 
 # list BUCKET PREFIX: add every key under PREFIX to $tmp/keys and set status=ok, or on a failure set
-# status to the HTTP status and R2 error codes (HTTP 000 when no answer came).
+# status to the HTTP status (HTTP 000 when no answer came).
 list() {
   status=ok cursor=
   while :; do
-    rm -f "$tmp/page.json"
     code=$(curl -sS -G -o "$tmp/page.json" -w '%{http_code}' "$base/$1/objects" --data-urlencode "prefix=$2" \
       --data-urlencode per_page=1000 ${cursor:+--data-urlencode "cursor=$cursor"} -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN") || code=000
     cursor=$(python3 - "$tmp/page.json" "$tmp/keys" "$code" <<'PY'
@@ -47,8 +46,7 @@ except Exception:
     page = None
 page = page if isinstance(page, dict) else {}
 if sys.argv[3] != "200" or not page.get("success"):
-    codes = ",".join(str(e.get("code")) for e in page.get("errors") or [] if isinstance(e, dict))
-    print(f"!HTTP {sys.argv[3]}" + (f" code {codes}" if codes else "")); sys.exit()
+    print(f"!HTTP {sys.argv[3]}"); sys.exit()
 with open(sys.argv[2], "a") as out:
     for o in page.get("result") or []:
         out.write(o["key"] + "\n")
@@ -70,8 +68,9 @@ for pair in goalcup-traces:traces/test/ goalcup-traces-staging:traces/test-stagi
   list "$bucket" "$prefix"
   case ${prefix%%/*}:$status in
     *:ok) ;;
-    usage:'HTTP 403'* | usage:'HTTP 404 code 10006'*)
-      echo "delete-test-runs: R2 $bucket is missing or not open to this token ($status), skipped" >&2
+    usage:'HTTP 403'* | usage:'HTTP 404'*)
+      echo "delete-test-runs: R2 $bucket is missing or not open to this token ($status), skipped;" \
+        "its test objects stay until a run without --older-than with a token that reaches it" >&2
       continue ;;
     *) echo "delete-test-runs: listing R2 $bucket failed ($status); nothing changed" >&2; exit 1 ;;
   esac
