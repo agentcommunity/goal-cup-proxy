@@ -11,6 +11,8 @@
 //! rules ([`policy`]). The threads come in the next slices; until then [`spawn`] starts none and
 //! says so plainly in `upload.json`.
 
+pub mod beat;
+pub mod chunk;
 pub mod client;
 pub mod policy;
 pub mod state;
