@@ -182,8 +182,7 @@ fn fw3_pruned_entry_is_named_and_server_copy_stands_in() {
         assert_eq!((code, r), (0, ["pass", "skip"]), "{n}");
     }
     // A folder that never was an entry is no pruned entry: unreadable input, exit 3.
-    let wrong = tmp("pruned-wrong");
-    let o = out.to_str().unwrap();
-    let args = ["check", o, "--json", "--server", "--local", wrong.to_str().unwrap()];
+    let (o, wrong) = (out.to_str().unwrap(), tmp("pruned-wrong"));
+    let args = ["check", o, "--server", "--local", wrong.to_str().unwrap()];
     assert_eq!(run(&args).0, 3);
 }
