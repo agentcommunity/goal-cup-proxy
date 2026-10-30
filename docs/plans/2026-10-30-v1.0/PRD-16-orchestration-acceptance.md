@@ -1575,3 +1575,29 @@ kept and now cites BUILD-PROMPT section 5, since B3 no longer carries it.
   `local_model` notes, and the N6 lookup has no wait of its own (PRD-11 note).
 - **Trailers:** all 18 commits in 669f5d92..c14d63b8 carry both lines, the merge included.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-10 slice 3 (merge f66ce4a5)
+
+- `gate fast: PASS in 143s` on f66ce4a5 (nextest: 152 tests run, 152 passed, 0 skipped). Before the
+  merge the lane was green in boxes after each round: fmt, clippy `-D warnings`, nextest goalcup
+  73/73 at the lane merge, 75/75 after the A1 to A3 fixes, 74/74 at 91a7c294,
+  doctests passing; both reviewers found no blocker. Linux only: the macOS `statfs` branch is not
+  compiled. Ten paths changed, all PRD-10's, no `Cargo.toml`.
+- **Size report, PRD-10** (`wc -l` at f66ce4a5 against PRD-00's "CLI (PRD-10)" row, about 2,900 src
+  and 1,200 tests): src 2,298 in 8 files, 79% of the row with 9 files and most of `start.rs` still to
+  write; at the file table's estimates the CLI projects to at least 3,801 (131%), past the 3,190 line.
+  Tests 1,184, 99% of the row, with seven test files still to come. The PRD-10 note sets `folder.rs`
+  at up to 240, asks the next slice to give back lines from `text.rs` (704 against 420) and `mod.rs`
+  (464 against 130) first, and asks the slice that passes 3,190 src or 1,320 tests for its own
+  decision line. The end-of-build report counts the CLI against the Rust totals.
+- **Seam fixed for the start slice:** `connector::load`, then `folder::check`, then `connector::plan`
+  (the plan writes into the isolated home; PRD-10 and PRD-17 notes). SC2's folder case depends on it.
+- **Unblocked:** PRD-17 rows SC1 and SC2 (folder case) point at `cli_folder.rs`; PRD-15 can fix the
+  guide's start appendix against `folder.rs` (PRD-15 note). **Still waiting:** `start` and `seal`
+  with `GOALCUP_SERVER=off` on S8 `watchdog::run`; `continue` on `pipeline::close_dead_entry`;
+  `setup --yes` (S15) can now use PRD-11's real `write_settings` and version probe; the upload lines
+  and `time-left` can use S9's `upload::state::read`, with `server_word` null until PRD-06's sender.
+- **Acceptance list as known,** if still open at the end: the WSL1 or Windows-drive check (PRD-10
+  section 3 step 2) is not built.
+- **Trailers:** all 13 commits in bab29a0c..f66ce4a5 carry both lines, the merge included.
+- No locked ledger item is touched and no owner question comes from this slice.

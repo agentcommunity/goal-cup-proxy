@@ -1271,3 +1271,65 @@ PRD-01, PRD-02, PRD-04, PRD-05 and PRD-11 as they now stand, and the code. No lo
   shows or logs each, never a refusal. `plan` already writes `update_off` at every start, so setup's
   own `update_off` write only matters for the harness session setup opens. Rows into a dotenv or other
   file come back "format not writable". The setup test that reads the written file can land.
+
+### 2026-10-30, replan after PRD-10 slice 3 (merge f66ce4a5)
+
+- **Built:** `cli/folder.rs` (`folder::check(project, home, needs_token, prompt)` returns
+  `Err(problems)` or `Ok(warnings)`, reading only) and `cli/start.rs`, which `main.rs` now calls:
+  the file-flag refusal, `home()`, the folder checks with one refusal ending "Nothing was created.",
+  the warnings, then the `not_built("start")` stub (exit 3). Checks built: extra entries, an `.env`
+  file `.gitignore` does not cover, inside a Git work tree, SC1, the `GH_TOKEN` line with `--repo`,
+  the `--prompt` file inside the folder or missing; warnings for a synced folder (by name on the
+  resolved path) and NFS or SMB (by `statfs`, on the project and on `GOALCUP_HOME`). The review
+  fixes made the token guards fail closed: a `!` line the short `.gitignore` reader cannot read
+  re-includes, a leading BOM is skipped and only trailing spaces and one CR leave a line (as git),
+  two `GH_TOKEN` lines or a CRLF line refuse, and a folder that cannot be listed is not empty.
+- **Not built:** step 2's WSL1 or Windows-drive check (lane log 14:49Z). It goes in `folder.rs` in the
+  slice that wires the rest of `start` or in the setup slice, whichever comes first, as one check
+  both call. The macOS `statfs` branch (`f_fstypename`) has not been compiled in a box, like the
+  macOS liveness path; the first macOS build checks it.
+- **Order for the start slice: `load`, then `folder::check`, then `plan`.** Section 3 puts
+  `connector::plan` in step 1, before the folder checks. On integration `plan` is not read-only: it
+  takes `<home>.goalcup.lock` (created), makes the isolated home and its folders, runs the harness's
+  `--version` probe and writes the `update_off` rows (PRD-11 slice 3). Called before step 2, a folder
+  refusal would no longer be "Nothing was created." and `refused_start_creates_nothing` would fail.
+  `connector::load` reads only, so a bad connector or hosts file still refuses first. A refusal from
+  `plan` (`HomeLocked`, `VersionMismatch`, a `refuse_if_set` hit) then comes after the folder checks;
+  its last line must be true: no run was opened, but the isolated home, its lock file and the
+  `update_off` rows may now exist (setup makes the same home), so it does not say "Nothing was
+  created." unless the slice shows nothing was.
+- **The guide says the folder is checked again right after the approval** (`docs/PARTICIPANT-GUIDE.md`
+  appendix: "if it changed meanwhile ... the start stops there, before the run is opened"). Section 3
+  does not ask for it. The start slice either calls `folder::check` a second time after the approval
+  (one call, no new check) or says in its merge note that it does not, so PRD-15 drops the sentence.
+- **Nits closed:** B1 and B2 (`finish.rs` 144 to 142, `live()` in `tests/cli_common/`), B3
+  (`listed` helper, `agent_exited` on `has_exited`). **B4 closed as not possible:** libc 0.2.189
+  declares `tzset` only for Windows (checked in a box, confirmed by reviewer B), so `local_offset`
+  keeps its own `extern "C"` block. N7 (`folder.rs` past its estimate) is answered under size below.
+- **PRD-17 SC1 and SC2's folder case are named:** `tests/cli_folder.rs`
+  `project_folder_and_goalcup_home_never_hold_each_other` (its inputs include a relative
+  `GOALCUP_HOME=gc`, review A8) and `refused_start_creates_nothing`. SC2's other cases (Ctrl-C, a
+  denial, an expired code, an absent server) come with `approve.rs`.
+- **Size** (`wc -l` at f66ce4a5, PRD-00 row "about 2,900" src, 1,200 tests; the 3,190 line from the
+  slice 2 note): src 2,298 (`text.rs` 704 against 420, `mod.rs` 464 against 130, `status.rs` 341
+  against 260, `log.rs` 202 against 140 with `skill.rs`, `folder.rs` 201 against 170, `main.rs` 197
+  against 160, `finish.rs` 142 against 160, `start.rs` 47 of its 340). Not yet written, at the table's
+  estimates: 1,503 lines (the rest of `start.rs` 293, `approve.rs` 280, `setup.rs` 270, `continue_run.rs`
+  150, `awake.rs` 150, `push.rs` 110, `seal.rs` and `upload.rs` 90, `recover.rs` 80, `time_left.rs`
+  80), plus the messages each adds to `text.rs`. That projects to at least 3,801, 131% of the row and
+  611 past the 3,190 line; 892 lines are left under it. **Decision:** `folder.rs` may hold up to 240
+  with the WSL check; its 31 lines past the estimate serve point 4 (the token guards that fail
+  closed) and SC1 (point 1: the agent never sees the record). The row is not raised here. The next
+  PRD-10 slice first gives back lines from `text.rs` and `mod.rs`, the two files furthest past their
+  estimates, before it adds code; each later file stays at or under its estimate. The slice whose
+  merge takes the src total past 3,190 brings its own replan `decision` line naming the point each
+  extra part serves (ledger L2).
+- **Tests are at the row:** 1,184 of 1,200 (`cli_status.rs` 391, `cli_finish.rs` 269,
+  `cli_folder.rs` 223, `cli_log.rs` 136, `cli_commands.rs` 128, `cli_common/` 37). Seven test files of
+  the test list are still to come (`cli_push`, `cli_setup`, `cli_continue`, `cli_recover`,
+  `cli_time_left`, `cli_start`, and HF4 and P14 in `cli_commands`), with 136 lines left under the
+  10% line (1,320). Each new case covers only a case in this PRD's test list or a PRD-17 row (ledger
+  B10), shares fixtures through `cli_common/`, and the slice that adds `cli_setup.rs` or
+  `cli_continue.rs` first trims `cli_status.rs` and `cli_finish.rs` (fixture building repeated across
+  cases). A merge past 1,320 brings a replan `decision` line, as for src.
+- No locked ledger item is touched and no owner question comes from this slice.

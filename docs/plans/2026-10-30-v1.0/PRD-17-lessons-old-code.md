@@ -963,3 +963,19 @@ Names for `LESSONS.md` (the lessons lane writes them; judge 14:56Z, 15:13Z):
   its guard goes through `plan` with a hint file, as `connector_hints.rs` does. HF1 to HF8 rows whose
   guard is `connector_launch.rs` (lock, version probe, typed settings, never a link) are on
   integration at c14d63b8 and can turn green after a box run on the integration head.
+
+### 2026-10-30, replan after PRD-10 slice 3 (merge f66ce4a5)
+
+- **SC1 is named and green:** `crates/goalcup/tests/cli_folder.rs`
+  `project_folder_and_goalcup_home_never_hold_each_other`. It refuses a project inside
+  `$GOALCUP_HOME` and one that holds it, also through a link and with `..` in the spelled path; its
+  inputs include the relative `GOALCUP_HOME=gc` of the A8 note, so the check the lane was asked to
+  make is in the case. The "side by side" part of the rule has no input of its own in the case. Row 2.16 SC1 can point at it.
+- **SC2's folder case is named and green:** `cli_folder.rs::refused_start_creates_nothing` (the
+  refusal ends "Nothing was created.", the project's listing of names, sizes and times is unchanged,
+  and neither `GOALCUP_HOME` nor its parent exists). SC2's other cases (Ctrl-C, a denial, an expired code, an absent
+  server) wait for PRD-10's `approve.rs`. For the start slice the PRD-10 note fixes the order
+  `connector::load`, `folder::check`, then `connector::plan`, because `plan` creates the isolated
+  home, its lock file and the `update_off` rows; without that order this case would fail.
+- PRD-10's SC row in this PRD's acceptance table (P14, S7, HF4, HF6 still to come) is unchanged.
+- No locked ledger item is touched and no owner question comes from this slice.
