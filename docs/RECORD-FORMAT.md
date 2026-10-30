@@ -328,10 +328,10 @@ On the worked example (`python3 read.py < worked-example.gcr`, already raw) it p
 
 `goalcup-verify check <path> --json` prints one JSON object on standard output (seam S6, PRD-08
 section 4, code in `crates/goalcup-verify/src/report.rs` and `server.rs`) and its text form on
-standard error (per entry, each named or failed check's `why` and a coverage line). `<path>` is an
-entry, `rec`, fetched entry (`rec.gcr.zst`) or run folder, a fetched outdir, or one part file.
-`--live` reads an entry still recording up to its last index line; `--server` marks a server copy (a
-fetched `rec.gcr.zst` is one anyway); `--live` wins over both. `--local ENTRY_DIR` is the local
+standard error (per entry, a header, whether it is sealed, each named or failed check's `why` and a
+coverage line). `<path>` is an entry, `rec`, fetched entry (`rec.gcr.zst`) or run folder, a fetched
+outdir, or one part file. `--live` reads an entry still recording up to its last index line;
+`--server` marks a server copy (a fetched `rec.gcr.zst` is one anyway); `--live` wins over both. `--local ENTRY_DIR` is the local
 entry a server copy is compared with. `--known` and `--harness-files` are taken but not read yet.
 
 Exit code and `result`: 0 `pass` (whole); 1 `named` (honest but incomplete: every loss is named, or
@@ -344,7 +344,7 @@ alone. For a run folder, the worst entry decides. Readers ignore keys they do no
 |---|---|
 | `verifier`, `input` | The verifier's version; `local`, `server` or `live` |
 | `run`, `result`, `exit` | The run id from the first `start` event (or null); as above |
-| `server` | For a server input: `chunks` (in every `fetch.json`), `whole` (true when every `server_chunks_whole` passes), `equals_local` and `db_match` (true when every entry passes `server_equals_local` or `server_counts_match`, false on a `fail`, else null). Null for a local or live input |
+| `server` | For a server input: `chunks` (summed over every `fetch.json`), `whole` (true when every `server_chunks_whole` passes), `equals_local` and `db_match` (true when every entry passes `server_equals_local` or `server_counts_match` respectively, false on a `fail`, else null). Null for a local or live input |
 | `entries` | One object per entry, in order of first wall time, with the keys below |
 
 | Entry key | Holds |
@@ -360,14 +360,18 @@ alone. For a run folder, the worst entry decides. Readers ignore keys they do no
 **Check ids.** `inv1` to `inv9` and `inv14` check the invariant of that number; `streams_closed`,
 `seen_matches_written`, `gap_has_end` and `recorder_alive` check invariants 10 to 13. With `inv`
 null: `torn_tail`, `native_path_gen`, `counts_match_seal`, `gaps_named`, `record_decode`,
-`parts_pruned`, `record_kind_unknown` and `gap_reason_unknown`; for a server input, three that read
+`parts_pruned`, `record_kind_unknown` and `gap_reason_unknown`. Always `skip` with "not built in
+this slice": `listed_hosts_decrypted`, `conn_bytes`, `mask_failclosed`, `history_complete`,
+`wire_keeps_up`, `threads_match` and `subagents_present`. For a server input, three more read
 `fetch.json`, the chunk list beside the copy (S13, `scripts/fetch-run.sh`), and without it fail
-under `--server`, else skip: `server_chunks_whole` (the chunks run on and match their SHA-256 and
-the record's heads; `named` for an open end, no final heartbeat), `server_equals_local` (the bytes
-equal the `--local` part files; skips without them or if pruned) and `server_counts_match` (the
-server's row and heartbeat against the seal's totals; skips if not sealed). Always `skip` with
-"not built in this slice": `listed_hosts_decrypted`, `conn_bytes`, `mask_failclosed`,
-`history_complete`, `wire_keeps_up`, `threads_match` and `subagents_present`.
+under `--server`, else skip:
+
+- `server_chunks_whole`: the chunks run on and match their SHA-256 and the record's heads; `named`
+  for an open end, no final heartbeat.
+- `server_equals_local`: the bytes both hold equal the `--local` part files, so a copy shorter or
+  longer than them can pass; whether the copy is whole is `server_chunks_whole`. Skips without
+  them or if pruned.
+- `server_counts_match`: the server's row and heartbeat against the seal's totals; skips if not sealed.
 
 **The label** is a hint for judges, not a judgement. It says which evidence the record holds:
 `wire_and_native` when model requests were written and a `native` or `snapshot` stream holds

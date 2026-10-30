@@ -29,7 +29,7 @@ is the participant's project folder.
 | `ca_env` | string list | `[]` | The harness's own CA variables. Each is pointed at the run CA |
 | `unset` | string list | `[]` | Participant variables removed before launch, for those that beat `HTTPS_PROXY` |
 | `refuse_if_set` | list of `{file, keys}` | `[]` | A value at any of `keys` in `file` refuses the start, naming the file and key, never the value. `null`, `""`, `[]` and `{}` are unset; `false` is a value |
-| `host_hints` | list of `{file, key}` | `[]` | Config file keys whose `https` URL values add the host to the `config` list. A loopback value gives a `local_model` note instead; any other value that adds nothing is a log line naming the file and key |
+| `host_hints` | list of `{file, key}` | `[]` | Config file keys whose `https` URL values add the host to the `config` list. A value at this computer or on a private network (a loopback, private or link-local address, a `localhost` name, or a name that resolves only here) gives a `local_model` note instead; any other string value that adds nothing is a log line naming the file and key |
 | `hint_env` | string list | `[]` | Participant variables read as `host_hints` values are. Only the names listed |
 | `secret_files` | string list | `[]` | The harness's own key files. The default build reads none of them for masking |
 | `before`, `after` | list of string lists | `[]` | Arguments without the program: the watchdog runs `program` followed by each, before launch and after the harness exits |
@@ -40,12 +40,15 @@ is the participant's project folder.
 | `update_off` | list of `{file, key, value}` | `[]` | An auto-update switch that exists only as a setting. Written into the isolated home with no question, again at every `goalcup start` and `continue`. Where an env switch exists, it goes in `env` |
 | `skills_dir` | template | none | Where the goal-cup skill is installed, under `{home}`. Absent: no skill is installed |
 
-A key is dotted (`env.HTTPS_PROXY`); a part may hold `*`, matching any key or list index. A hint or
-refusal file is read by extension: `.json` and `.jsonc` as JSON with comments and trailing commas,
-`.toml`, `.yaml` and `.yml` as block YAML, else as `KEY=value` lines; a link, a file over 1 MiB or
-one that cannot be read or parsed is skipped, and the plan names it. Settings rows write `.json`,
-`.toml` and `.yaml` files only, never through a link, keeping the other keys; `"true"` and `"false"`
-become the format's boolean, any other value a string. A row not written is a log line, not a refusal.
+A key is dotted (`env.HTTPS_PROXY`); in a hint or refusal key a part may hold `*`, matching any key
+or list index. The last component of a hint or refusal `file` is a pattern: every regular file that
+fits is read, a folder is skipped. Each is read by extension: `.json` and `.jsonc` as JSON with
+comments and trailing commas, `.toml` as TOML, `.yaml` and `.yml` as block YAML, else as `KEY=value`
+lines; a link, a file over 1 MiB or one that cannot be read or parsed is skipped, and the plan names
+it. Settings rows write `.json`, `.toml`, `.yaml` and `.yml` files only (`.jsonc` and `KEY=value`
+are not writable), never through a link, keeping the other keys; there, as in `skills_dir`, a `*` is
+a literal name. `"true"` and `"false"` become the format's boolean, any other value a string. A row
+not written is a log line, not a refusal.
 
 ## Load checks
 
@@ -86,8 +89,8 @@ config lists in that order; a host in none is a tunnel. One host check serves ev
 is lowercased; labels of 1 to 63 letters, digits or `-`, at most 253 characters, at least two labels,
 no trailing dot, no IP literal or numeric spelling of an address, no `localhost` form, no backslash,
 space or control byte, not goalcup's server. `participant` takes an exact name or one `*.` before at
-least two labels, `config` exact names only. A participant line that fails is skipped, a config value
-that fails is a log line, and a `never` host from either is left out with a log line.
+least two labels, `config` exact names only. A participant line that fails is skipped; a `never`
+host from the participant list or a hint is left out with a log line.
 
 ## Loading a file
 
