@@ -1299,3 +1299,22 @@ here; the other files carry their own part.
   remaining connector files of section 6 (four of 16 are on integration: `claude-code-cli`,
   `codex-cli`, `hermes-cli`, `kilo-cli`). Each new file is checked by `rule_code` (PRD-14 note).
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-12 slice 4 (merge 69f355c6)
+
+- The pad now reads the flat `connectors/<id>.toml`: top-level `home` (it fills `{home}` only, for
+  the harness login in the box) and `native` rows `name`, `root` and `pattern`. A `home` value that
+  uses `{workspace}`, or a rename of those keys, is a seam line; the pad follows.
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-10 slice 4 (merge a5d7ddc3)
+
+- **`setup` copies one call of `write_settings`** (review B9): to report and save the file a row
+  went to, `cli/setup.rs` fills each row's file with the same `fill(&row.file, home, Path::new(""))`
+  as `connector::launch::write_settings` and calls `write_settings` once per row. The cleaner cut is
+  PRD-11's, at its next touch of `launch.rs`: `write_settings` returns, for each row, the filled
+  file and whether it was written (or the row index with each `Skipped`). PRD-10 then drops its own
+  `fill` call in the same merge. Until then, a change to how `write_settings` fills a row's file is
+  a seam line, and PRD-10 follows in the same merge, or setup prints and saves a path that was never
+  written.
+- No locked ledger item is touched and no owner question comes from this slice.

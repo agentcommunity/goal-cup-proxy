@@ -5,26 +5,21 @@ use std::io::Write as _;
 use std::path::Path;
 use std::process::ExitCode;
 
-use super::{folder, home, say, text};
+use super::{fail, folder, home, say, text};
 
 /// `file_flags`: `--connector` or `--hosts` was given; `trial`: a practice or test run; `repo`:
 /// `--repo` was given, so the push block needs `GH_TOKEN`.
 pub fn run(trial: bool, file_flags: bool, repo: bool, prompt: Option<&Path>) -> ExitCode {
     if file_flags && !trial {
-        say(text::FILE_FLAGS_COMPETE);
-        return ExitCode::from(1);
+        return fail(text::FILE_FLAGS_COMPETE);
     }
     // Section 3's order: the connector (step 1) first, then the folder checks (step 2).
     let home = match home() {
         Ok(home) => home,
-        Err(e) => {
-            say(e);
-            return ExitCode::from(1);
-        }
+        Err(e) => return fail(e),
     };
     let Ok(project) = std::env::current_dir() else {
-        say(text::PROJECT_GONE);
-        return ExitCode::from(1);
+        return fail(text::PROJECT_GONE);
     };
     match folder::check(&project, &home, repo, prompt) {
         Err(problems) => {

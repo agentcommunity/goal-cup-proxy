@@ -894,3 +894,14 @@ PRD-12 and PRD-17.
   232 inline lines, 327 of 1,000.
 - No locked ledger item is touched and no owner question comes from this slice. The overshoot goes into
   the end-of-build size report against the Rust total.
+
+### 2026-10-30, replan after PRD-14 slice 3 (merge 00fac28d)
+
+- **`Policy::from_env` must be called from the path the `goalcup` binary runs.** PRD-14's `gate full`
+  and `release.yml` now require `GOALCUP_TEST_` text in the hooked `target/debug/goalcup` before they
+  trust the clean grep of the release binary (PRD-05 amendment). `GOALCUP_TEST_UPLOAD_POLICY` in
+  `upload/policy.rs` is the only such read in `src`, and nothing calls `Policy::from_env`, on
+  integration or on `v1.0/prd-06-upload` at this replan, so the linker drops it and both checks fail.
+  PRD-06's next slice has the uploader take its policy from `Policy::from_env()`; until then
+  `gate full` is red and no release can be cut. A plain release build still reads no hook.
+- No locked ledger item is touched and no owner question comes from this slice.

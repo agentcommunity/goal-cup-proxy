@@ -1433,3 +1433,14 @@ to another file are made by that file's owner.
   needs no reading path (no 0.7 compatibility). Acceptance lists the gap as known if it is still
   open at the end.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-12 slice 4 (merge 69f355c6)
+
+- The pad's fault rows read S4 `pid`, `mode`, `last_request_at`, `written.model_requests`,
+  `off.spans`, `off.ms` and `off.since`, and the first number of `rec/watchdog.pid` (S8). All match
+  `pipeline/status.rs` on integration. A rename is a seam line; the pad follows.
+- **An ask, not a requirement:** S4 has no count of streams open now, so the pad's `kill-recorder`
+  takes `last_request_at` within the last 10 s as the sign of an open stream (pad log 13:12Z). If this
+  PRD adds such a count to the live part of `status.json`, post it as an S4 seam line; nothing waits
+  on it.
+- No locked ledger item is touched and no owner question comes from this slice.

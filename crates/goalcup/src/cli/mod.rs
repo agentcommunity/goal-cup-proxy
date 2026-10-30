@@ -1,12 +1,11 @@
-//! The participant commands (PRD-10): environment, home and the run and entry paths.
-//!
-//! PRD-10 section 2. `GOALCUP_HOME` is the only home variable; `GOALCUP_CONFIG_DIR` is not read
-//! (no 0.7 compatibility). Section 4: pid liveness, `server.json` and the run and part lookup
-//! that `goalcup status` and the end screen read.
+//! The participant commands (PRD-10): environment, home, the run and entry paths (section 2;
+//! `GOALCUP_HOME` only, no 0.7 compatibility), pid liveness and the run and part lookup (section 4).
 
+pub mod awake;
 pub mod finish;
 pub mod folder;
 pub mod log;
+pub mod setup;
 pub mod start;
 pub mod status;
 pub mod text;
@@ -15,13 +14,14 @@ use std::env;
 use std::fs;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
+use std::process::ExitCode;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
-/// The hidden subcommand PRD-02's watchdog spawns as `goalcup recorder [--null]`. `main.rs`
-/// takes its subcommand and flag names from these two, so the spawn and the parser cannot drift.
+/// The hidden subcommand PRD-02's watchdog spawns as `goalcup recorder [--null]`; `main.rs`
+/// parses with these two names, so the spawn and the parser cannot drift.
 pub const RECORDER_SUBCOMMAND: &str = "recorder";
 /// The recorder's null-mode flag, `goalcup recorder --null` (PRD-02 watchdog, null mode).
 pub const NULL_FLAG: &str = "--null";
@@ -35,18 +35,14 @@ pub enum Server {
     Off,
 }
 
-const DEFAULT_SERVER: &str = "https://ingest.agentcommunity.org";
-
 fn var(name: &str) -> Option<String> {
     env::var(name).ok().filter(|v| !v.is_empty())
 }
 
-/// Where runs live: `GOALCUP_HOME`, else `~/Library/Application Support/goalcup` on macOS, else
-/// `$XDG_CONFIG_HOME/goalcup` or `~/.config/goalcup`. Always an absolute path: a relative
-/// `GOALCUP_HOME` is taken against the current folder, a relative `HOME` or `XDG_CONFIG_HOME` is
-/// ignored (XDG base directory spec), and with no absolute home left it refuses
-/// ([`text::NO_HOME`]; [`text::NO_CWD`] when the current folder is gone). A relative home would put runs and the credential in the project folder,
-/// which is pushed to a public repository (point 4).
+/// Where runs live: `GOALCUP_HOME` (taken against the current folder), else `~/Library/Application
+/// Support/goalcup` on macOS, else `$XDG_CONFIG_HOME/goalcup` or `~/.config/goalcup`, a relative
+/// `HOME` or `XDG_CONFIG_HOME` ignored. Never relative: runs and the credential stay out of the
+/// project folder, which is pushed to a public repository (point 4).
 pub fn home() -> Result<PathBuf, &'static str> {
     pick_home(
         var("GOALCUP_HOME"),
@@ -76,57 +72,59 @@ fn pick_home(
     found.ok_or(text::NO_HOME)
 }
 
-/// The server from `GOALCUP_SERVER`: unset gives the production address, `off` a local-only
-/// run, an `https://` address is taken, an `http://` address only for a loopback host. An
-/// address with a user part (`user@`) is refused, so no credential rides in it.
+/// `GOALCUP_SERVER`: unset is production, `off` a local-only run, `https://` any host, `http://`
+/// only a loopback host; a user part (`user@`) is refused, so no credential rides in it.
 pub fn server() -> Result<Server, &'static str> {
     parse_server(var("GOALCUP_SERVER").as_deref())
 }
 
 fn parse_server(raw: Option<&str>) -> Result<Server, &'static str> {
     let Some(raw) = raw else {
-        return Ok(Server::Url(DEFAULT_SERVER.to_owned()));
+        return Ok(Server::Url("https://ingest.agentcommunity.org".to_owned()));
     };
     if raw == "off" {
         return Ok(Server::Off);
     }
-    let (rest, https) = match (raw.strip_prefix("https://"), raw.strip_prefix("http://")) {
-        (Some(r), _) => (r, true),
-        (None, Some(r)) => (r, false),
-        _ => return Err(text::BAD_SERVER),
+    let Some((authority, https)) = authority(raw) else {
+        return Err(text::BAD_SERVER);
     };
-    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
     if authority.is_empty() || authority.contains('@') || raw.contains(char::is_whitespace) {
         return Err(text::BAD_SERVER);
     }
-    let host = match authority.strip_prefix('[') {
-        Some(v6) => v6.split(']').next().unwrap_or(""),
-        None => authority.split(':').next().unwrap_or(""),
-    };
-    if !https && !matches!(host, "127.0.0.1" | "::1" | "localhost") {
+    let server = Server::Url(raw.trim_end_matches('/').to_owned());
+    if !https && !matches!(server.host(), Some("127.0.0.1" | "::1" | "localhost")) {
         return Err(text::BAD_SERVER);
     }
-    Ok(Server::Url(raw.trim_end_matches('/').to_owned()))
+    Ok(server)
 }
 
-/// `GOALCUP_KEEP_PARTS=1`: keep every record file (PRD-06 section 7).
-pub fn keep_parts() -> bool {
-    var("GOALCUP_KEEP_PARTS").as_deref() == Some("1")
+/// The authority of an `https://` or `http://` address, and whether it is `https`.
+fn authority(url: &str) -> Option<(&str, bool)> {
+    let (rest, https) = match (url.strip_prefix("https://"), url.strip_prefix("http://")) {
+        (Some(r), _) => (r, true),
+        (None, Some(r)) => (r, false),
+        _ => return None,
+    };
+    Some((rest.split(['/', '?', '#']).next().unwrap_or(""), https))
 }
 
-/// `GOALCUP_NO_BROWSER=1`: print the approval address instead of opening a browser.
-pub fn no_browser() -> bool {
-    var("GOALCUP_NO_BROWSER").as_deref() == Some("1")
-}
-
-/// `$GOALCUP_HOME/runs/`.
-pub fn runs_dir(home: &Path) -> PathBuf {
-    home.join("runs")
+impl Server {
+    /// The host of `Url`, an IPv6 address without its brackets: `never` in every plan (S3).
+    pub fn host(&self) -> Option<&str> {
+        let Server::Url(url) = self else {
+            return None;
+        };
+        let authority = authority(url)?.0;
+        Some(match authority.strip_prefix('[') {
+            Some(v6) => v6.split(']').next().unwrap_or(""),
+            None => authority.split(':').next().unwrap_or(""),
+        })
+    }
 }
 
 /// `$GOALCUP_HOME/runs/<run>/`.
 pub fn run_dir(home: &Path, run: &str) -> PathBuf {
-    runs_dir(home).join(run)
+    home.join("runs").join(run)
 }
 
 /// `$GOALCUP_HOME/runs/<run>/<entry>/` (PRD-01 section 1).
@@ -142,6 +140,11 @@ pub fn setup_json(home: &Path) -> PathBuf {
 /// `$GOALCUP_HOME/record-hosts.txt`: hosts the participant registered, one per line.
 pub fn record_hosts(home: &Path) -> PathBuf {
     home.join("record-hosts.txt")
+}
+
+/// `$GOALCUP_HOME/homes/<id>`: the harness's isolated home (PRD-11 section 3).
+pub fn isolated_home(home: &Path, id: &str) -> PathBuf {
+    home.join("homes").join(id)
 }
 
 /// `runs/<run>/server.json`: never holds the credential.
@@ -174,8 +177,14 @@ pub fn say(text: &str) {
     let _ = writeln!(std::io::stderr(), "goalcup: {text}");
 }
 
-/// `runs/<run>/server.json` (section 2): written by `start` before the watchdog starts. It never
-/// holds the credential (that is `runs/<run>/credential`), so `status --json` prints it whole.
+/// [`say`], then exit code 1.
+pub fn fail(text: &str) -> ExitCode {
+    say(text);
+    ExitCode::from(1)
+}
+
+/// `runs/<run>/server.json` (section 2), written by `start`. It never holds the credential, so
+/// `status --json` prints it whole.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ServerJson {
     pub v: u32,
@@ -212,7 +221,6 @@ pub struct ConnectorSource {
     pub source: String,
 }
 
-/// One part of a run.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EntryFacts {
     /// `e` and 16 hex.
@@ -271,9 +279,8 @@ fn dirs(dir: &Path, first: char, when: impl Fn(&Path) -> Option<SystemTime>) -> 
 /// time, else the folder's) and its newest part; `r…` is that run; `e…` is that part in whichever
 /// run holds it. None when there is no such run or it has no part yet.
 pub fn find(home: &Path, arg: Option<&str>) -> Option<Found> {
-    let runs = dirs(&runs_dir(home), 'r', |p| {
-        mtime(&server_json(p)).or_else(|| mtime(p))
-    });
+    let when = |p: &Path| mtime(&server_json(p)).or_else(|| mtime(p));
+    let runs = dirs(&home.join("runs"), 'r', when);
     let (run_dir, entry) = match arg {
         None => (runs.last()?.clone(), None),
         Some(a) if a.starts_with('r') => (runs.into_iter().find(|p| p.ends_with(a))?, None),
@@ -359,28 +366,21 @@ pub fn local_offset(unix: u64) -> Option<(i64, String)> {
     if done.is_null() {
         return None;
     }
-    let zone = if tm.tm_zone.is_null() {
-        String::new()
-    } else {
-        // SAFETY: a non-null `tm_zone` from `localtime_r` points at a NUL-terminated name in
-        // libc's static zone table, which lives as long as the process.
-        unsafe { std::ffi::CStr::from_ptr(tm.tm_zone) }
-            .to_string_lossy()
-            .into_owned()
-    };
+    // SAFETY: a non-null `tm_zone` from `localtime_r` points at a NUL-terminated name in libc's
+    // static zone table, which lives as long as the process.
+    let zone = (!tm.tm_zone.is_null()).then(|| unsafe { std::ffi::CStr::from_ptr(tm.tm_zone) });
+    let zone = zone.map_or_else(String::new, |z| z.to_string_lossy().into_owned());
     #[allow(clippy::useless_conversion)] // `c_long` is 32 bits on some targets.
     let offset = i64::from(tm.tm_gmtoff);
     Some((offset, zone))
 }
 
-// Pid liveness (section 4). A pid is alive when `kill(pid, 0)` answers and its OS start time is
-// the one written down, so a reused pid is never taken for the process that wrote it. The program
-// file is not checked: PRD-02 sets the recorder and watchdog not dumpable, so `/proc/<pid>/exe` is
-// closed to the participant, and the start id already names the process.
+// Pid liveness (section 4): `kill(pid, 0)` answers and the OS start time is the one written
+// down, so a reused pid is never taken for its writer. The program file is not checked: PRD-02
+// makes the recorder and watchdog not dumpable, and the start id already names the process.
 
-/// The OS start time of `pid`: on Linux field 22 of `/proc/<pid>/stat` (clock ticks after boot),
-/// on macOS the BSD start time in microseconds. The same number PRD-02 writes as `start_id` in
-/// `status.json` and `rec/watchdog.pid`. None when the process is gone.
+/// The OS start time of `pid` as PRD-02 writes `start_id`: on Linux field 22 of `/proc/<pid>/stat`
+/// (clock ticks after boot), on macOS the BSD start time in microseconds. None when it is gone.
 #[cfg(target_os = "linux")]
 pub fn proc_start_id(pid: u32) -> Option<u64> {
     let stat = fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
@@ -460,5 +460,8 @@ mod tests {
         ] {
             assert!(parse_server(Some(bad)).is_err(), "{bad}");
         }
+        // goalcup's own server is the plan's `never` host, IPv6 included.
+        let v6 = parse_server(Some("http://[::1]:8787/")).unwrap();
+        assert_eq!(v6.host(), Some("::1"));
     }
 }
