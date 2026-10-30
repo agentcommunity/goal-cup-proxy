@@ -1831,3 +1831,64 @@ kept and now cites BUILD-PROMPT section 5, since B3 no longer carries it.
   missing snapshot `fid` on resume, review nits N1, N2, N3 and N5 (PRD-04 note), and, until
   `snapshot.rs` merges, `final` rows copied only at the seal as single `snapshot` files.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-08 slice 3 (merge 7a995b6e)
+
+- `gate fast: PASS in 105s` on 7a995b6e (nextest summary: 218 tests run, 218 passed, 0 skipped). Box
+  runs before the merge: the builder at c42bfce1 (fmt, clippy `-D warnings`, workspace build,
+  goalcup-verify 30 of 30); the lane merge at aaf7879b (36 of 36); reviewers A and B with probes
+  (39 and 42 tests with their probes); the fixer at 3bd40ba6, fc81212c and a76e0bce (fmt, clippy,
+  36 of 36 each), each re-checked by a reviewer; the last re-check left no open finding. Six paths
+  changed, all owned by PRD-08, no `Cargo.toml`. All 5 non-merge commits in ed6f7bf6..7a995b6e and
+  the merge carry both trailer lines. `gate full` was not run.
+- **Size report, PRD-08** (`wc -l` at 7a995b6e, row "Verifier (PRD-08)", 1,400 src and 1,100 tests;
+  the slice 2 ceilings were 2,450 and 1,830). Src without PRD-09's `usage/` is 2,235, 160% of the row
+  and 91% of 2,450, seven of ten files: `integrity.rs` 982, `secrets.rs` 509, `server.rs` 201,
+  `main.rs` 200, `input.rs` 198, `report.rs` 133, `lib.rs` 12. Tests are 1,826, 166% of the row and
+  1,826 of 1,830: `tests/common/` 877, `check_invariants.rs` 329, `check_named.rs` 218,
+  `secrets_scan.rs` 214, `server_compare.rs` 188. With the three unwritten files and two test files at
+  their ceilings the crate projects to about 2,770 src and 1,986 tests. PRD-08's decision line
+  (PRD-08 note) caps `secrets.rs` at 509 and sets the ceilings to 2,730 src (with the PRD-01 cut of
+  about 40 lines of `input.rs`, now due before `legs.rs`) and 1,990 tests, naming points 4 and 3.
+  The end-of-build report nets these against the Rust totals (about 18,100 src, at most about 14,200
+  tests). Only a total past those becomes the owner's question.
+- **Closed:** the A9/B3 `main.rs` nit (200 of 200). Remove it from the known list of the slice 2 note.
+- **Owner-question line answered without the owner:** the fixer's 16:27Z line (kind owner question)
+  asked for PRD-08 section 3's delta wording to add the Chat Completions keys. That is PRD text, not
+  a ledger item; the PRD-08 note settles it. No W6 line.
+- **What is unblocked:** X7 and N6 can run `goalcup-verify secrets` now. Both pass only paths that
+  exist: one unreadable path on the command line exits 3 with no report, while one inside a walked
+  folder only marks that input `partial`. `-` reads the project's git objects from stdin. PRD-12's C3
+  is no longer held by PRD-08; it still waits on PRD-05's masker and a `goalcup` build, and on the
+  pad's two small changes (PRD-12 note).
+- **Build order, PRD-08:** honesty, legs, history and the run 1 shape builder remain, in this plan's
+  order; none waits on PRD-09 (slice 2 note). The PRD-01 ask is cut first.
+- **Acceptance lists as known,** if still open at the end: the PRD-08 slice 3 items in the PRD-08
+  note (A5 nits 2 and 3, A7, A8, F11, the double count of a file named twice, the PRD-01 ask).
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-14 slice 5 (merge b3747b6a)
+
+- `gate fast: PASS in 126s` on b3747b6a (nextest 218 of 218, 0 skipped). Box runs before the merge:
+  the builder's `gate fast` PASS in 59s at 1f201719 (213 of 213, root refusal and missing-prerequisite
+  FAIL lines checked) and `sh -n release.sh` at 0eef7d25; the fixer's `gate fast` PASS at 7795b322;
+  reviewer A's re-check left no open finding. Four paths changed (`.config/nextest.toml`,
+  `packaging/README.md`, `scripts/gate.sh`, `scripts/release.sh`), all PRD-14 owned, no `Cargo.toml`.
+  All 3 non-merge commits in 7a995b6e..7795b322 carry both trailer lines. `gate full` was not run; it
+  stays red at the hooked-binary line until PRD-06 calls `Policy::from_env` (slice 3 note).
+- **Size report, PRD-14** (`wc -l` at b3747b6a, PRD-00 row "Lessons (PRD-17), test support,
+  `rule_code`, `e2e_run` (PRD-14)", 0 src and 3,000 tests, of which PRD-14's line is 1,700): tests
+  1,736 (`tests/common/` 1,523 with `upstream.rs` 709, `rule_code.rs` 213, `e2e_run.rs` 0), 102% of
+  the 1,700 line and within the 1,870 ceiling, unchanged by this slice. Src 0. Scripts and CI:
+  `gate.sh` 103 (was 105), `.config/nextest.toml` 21, `packaging/README.md` 104 (was 103),
+  `release.sh` 121, `release.yml` 132, `ci.yml` 60, `test_install.py` 314, `smoke-release.sh` 53,
+  `package-release.sh` 40, `third-party-licenses.py` 231, `install.sh` 355.
+- **Closed:** the slice 4 review nits A1, A2, A3, A4, B1 and B2. Remove them from the known list of
+  the slice 4 note. **New known item** if still open at the end: review B-N4 (the signal trap in
+  `gate.sh` is set only after the build lock, so a kill before then prints no FAIL line), queued for
+  PRD-14's next touch of `gate.sh` (PRD-14 note).
+- **Seams, unchanged:** `recorder::real` (PRD-02's `Recorder::real_for_tests`), `e2e_run.rs`
+  (phase 2), the `check-links.py` delete (phase 3), `proxy_connect`'s heavy case (PRD-03).
+- **Housekeeping for the end:** add `v1.0/prd-14-tests-gate-nits-nextest-comment` and
+  `v1.0/prd-14-tests-packaging-readme-tag-check` to the merged PRD-14 task branches still on origin.
+- No locked ledger item is touched and no owner question comes from this slice.
