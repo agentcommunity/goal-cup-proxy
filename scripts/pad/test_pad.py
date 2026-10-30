@@ -79,22 +79,22 @@ class Walk(unittest.TestCase):
         env = {"CLAUDE_API_KEY": SENTINEL, "AI_GATEWAY_API_KEY": SENTINEL + "gw"}
         with tempfile.TemporaryDirectory() as out, mock.patch.dict(os.environ, env), \
                 mock.patch.object(pad, "call", self.fake_call):
-            (_, table), = pad.run_all(pad.load_settings(dict(BASE, **settings), PADCFG), PADCFG, self.HARNESS, out)
+            pad.run_all(pad.load_settings(dict(BASE, **settings), PADCFG), PADCFG, self.HARNESS, out)
             for root, _, files in os.walk(out):
                 for name in files:
                     with open(os.path.join(root, name), "rb") as f:
                         self.assertNotIn(b"PADSENTINEL", f.read(), name)
         self.assertFalse([a for c in self.calls for a in c if "PADSENTINEL" in a])
-        return [c[2:] for c in self.calls], table
+        return [c[2:] for c in self.calls]
 
     def test_sandbox_passes_names_only(self):
-        calls, _ = self.walk(case="gateway")
+        calls = self.walk(case="gateway")
         self.assertEqual(sorted(c[c.index("--env") + 1] for c in calls if c[0] == "put-env"),
                          ["AI_GATEWAY_API_KEY", "CLAUDE_API_KEY"])
-        self.assertFalse([c for c in self.walk(case="gateway", key="none")[0] if c[0] == "put-env"])
+        self.assertFalse([c for c in self.walk(case="gateway", key="none") if c[0] == "put-env"])
 
     def test_create_timeout_still_removes_the_box(self):
-        calls, table = self.walk(hang=("create",))
+        calls = self.walk(hang=("create",))
         name = calls[0][calls[0].index("--name") + 1]
         self.assertIn(["rm", name], calls)
         self.assertIn(["list", "--prefix", "pad-"], calls)

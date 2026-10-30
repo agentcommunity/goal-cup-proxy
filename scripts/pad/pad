@@ -13,6 +13,7 @@ A sandbox run needs node with the @vercel/sandbox package: sbx.mjs looks in PAD_
 NODE_PATH, then next to itself, and its last error line shows in the table's `saw` column.
 Needs Python 3.11 or later (tomllib); under an older python3 it re-runs itself with one from PATH.
 """
+import concurrent.futures
 import datetime
 import json
 import math
@@ -370,17 +371,8 @@ class Run:
 def run_all(s, pad, harness, out_root):
     cases = ["direct", "gateway", "dodger"] if s["case"] == "all" else [s["case"]]
     runs = [Run(s, c, pad, harness, out_root) for c in cases]
-    results = [None] * len(runs)
-
-    def go(i):
-        results[i] = runs[i].walk()
-    threads = [threading.Thread(target=go, args=(i,)) for i in range(len(runs))]
-    for t in threads:
-        t.start()
-    for t in threads:
-        while t.is_alive():
-            t.join(0.5)
-    return results
+    with concurrent.futures.ThreadPoolExecutor() as ex:  # waits stay signal-interruptible on POSIX, so STOP is still set
+        return list(ex.map(Run.walk, runs))
 
 
 def main(argv):
