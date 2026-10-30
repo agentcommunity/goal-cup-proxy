@@ -1,6 +1,7 @@
 //! The folder checks of `goalcup start` (PRD-10 section 3 step 2, PRD-17 SC1): every problem in
 //! one refusal (app. F 5), found by reading only, so a refused start creates nothing. A synced
-//! folder and NFS or SMB are warnings; overlayfs, tmpfs, btrfs, ZFS and FUSE are accepted.
+//! folder and NFS or SMB are warnings; overlayfs, tmpfs, btrfs, ZFS and FUSE are accepted. The WSL
+//! check ([`wsl`]) is shared with `setup`; no box runs WSL, so it has never run.
 
 use std::ffi::CString;
 use std::fs;
@@ -38,6 +39,7 @@ pub fn check(
         own.then(|| text::beside_goalcup(home)),
         no_token.then(|| text::TOKEN_LINE.to_owned()),
         prompt,
+        wsl(&real, "It"),
     ]
     .into_iter()
     .flatten()
@@ -48,7 +50,8 @@ pub fn check(
     let synced = synced(&real).then(|| text::synced_folder(project));
     let network = [real.as_path(), home].into_iter().filter_map(|dir| {
         let at = dir.ancestors().find(|a| a.exists()).unwrap_or(dir);
-        fs_kind(at).map(|kind| text::network_folder(dir, kind))
+        let kind = fs_type(at).and_then(|(magic, name)| network_fs(magic, &name));
+        kind.map(|kind| text::network_folder(dir, kind))
     });
     Ok(synced.into_iter().chain(network).collect())
 }
@@ -63,7 +66,8 @@ pub fn network_fs(magic: u64, name: &str) -> Option<&'static str> {
     }
 }
 
-fn fs_kind(path: &Path) -> Option<&'static str> {
+/// The `statfs` type of `path`: the Linux magic number, or the macOS type name.
+fn fs_type(path: &Path) -> Option<(u64, String)> {
     let c = CString::new(path.as_os_str().as_bytes()).ok()?;
     let mut st = std::mem::MaybeUninit::<libc::statfs>::uninit();
     // SAFETY: `c` is NUL-terminated and `st` is a writable statfs for the call.
@@ -75,14 +79,45 @@ fn fs_kind(path: &Path) -> Option<&'static str> {
     // A Linux magic number fits 32 bits; macOS names the type (not compiled in a box yet).
     #[cfg(not(target_os = "macos"))]
     {
-        network_fs(u64::from(st.f_type as u32), "")
+        Some((u64::from(st.f_type as u32), String::new()))
     }
     #[cfg(target_os = "macos")]
     {
         let name = st.f_fstypename.map(|c| c as u8);
         let name = name.split(|&b| b == 0).next().unwrap_or_default();
-        network_fs(0, &String::from_utf8_lossy(name))
+        Some((0, String::from_utf8_lossy(name).into_owned()))
     }
+}
+
+/// `Some(1)` on WSL1, `Some(2)` on WSL2, None elsewhere, from the kernel release as 0.7 read it
+/// (`goalcup-platform/src/machine.rs`): both say `-microsoft`, WSL2 `microsoft-standard` or
+/// `wsl2`, WSL1 is the fixed `4.4.0-<build>-Microsoft`.
+pub fn wsl_version() -> Option<u8> {
+    let release = fs::read_to_string("/proc/sys/kernel/osrelease").unwrap_or_default();
+    let release = release.trim().to_ascii_lowercase();
+    if !release.contains("-microsoft") && !release.contains("wsl2") {
+        return None;
+    }
+    let two = release.contains("wsl2") || release.contains("microsoft-standard");
+    Some(if two || !release.starts_with("4.4.") { 2 } else { 1 })
+}
+
+/// Section 3 step 2, one check for `start` (a problem) and `setup` (a warning), from 0.7's
+/// `folder_gate.rs`: WSL1, or WSL2 with `dir` on a Windows drive, told by its `statfs` type (9p,
+/// SMB, NTFS), never by a path prefix, since a drive can be mounted anywhere. `what` names `dir`.
+pub fn wsl(dir: &Path, what: &str) -> Option<String> {
+    if wsl_version()? == 1 {
+        return Some(text::wsl(what, None));
+    }
+    let at = dir.ancestors().find(|a| a.exists()).unwrap_or(dir);
+    let drive = match fs_type(at)?.0 {
+        0x0102_1997 => "9p",
+        0xFF53_4D42 => "cifs",
+        0xFE53_4D42 => "smb3",
+        0x5346_544E => "ntfs",
+        _ => return None,
+    };
+    Some(text::wsl(what, Some(drive)))
 }
 
 /// The key files (`.env`, `.env.*`) and every entry besides them, `.gitignore` and `.DS_Store`,
