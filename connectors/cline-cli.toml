@@ -1,0 +1,17 @@
+# Cline CLI 3.0.74, checked against docs.cline.bot (cli/cli-reference, troubleshooting/networking-and-proxies) and the
+# 3.0.74 package. `hub stop` reads the hub record under CLINE_DATA_DIR, so it stops only this home's hub (box test).
+id = "cline-cli"
+name = "Cline CLI"
+program = "cline"
+home = { CLINE_DIR = "{home}", CLINE_DATA_DIR = "{home}/data" }
+env = { CLINE_SESSION_BACKEND_MODE = "local", CLINE_NO_AUTO_UPDATE = "1" }
+# Each would move the hub record, sessions, index or key file out of the isolated home.
+unset = ["CLINE_HUB_DISCOVERY_PATH", "CLINE_SESSION_DATA_DIR", "CLINE_DB_DATA_DIR", "CLINE_PROVIDER_SETTINGS_PATH"]
+before = [["hub", "stop"]]
+after = [["hub", "stop"]]
+host_hints = [{ file = "{home}/data/settings/providers.json", key = "providers.*.settings.baseUrl" }]
+secret_files = ["{home}/data/settings/providers.json"]
+native = [
+  { name = "sessions", root = "{home}/data/sessions", pattern = "**/*" },
+  { name = "index", root = "{home}/data/db", pattern = "sessions.db*", form = "final" },
+]
