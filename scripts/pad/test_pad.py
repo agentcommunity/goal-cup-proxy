@@ -9,6 +9,7 @@ import importlib.machinery
 import importlib.util
 import json
 import os
+import shutil
 import subprocess
 import tarfile
 import tempfile
@@ -84,7 +85,12 @@ class Walk(unittest.TestCase):
     HARNESS = {"version": "1.2.3", "version_cmd": "x --version", "keep_going": True}
 
     def fake_call(self, argv, timeout=None, env=None):
-        if argv[0] != "node":  # check.py runs for real on the run folder
+        if argv[0] == "sh":  # fetch-run: no organizer secret but its own reaches it
+            self.assertFalse({"GH_TOKEN", *pad.APPROVAL} & set(env))
+            os.makedirs(os.path.join(argv[-1], argv[-2]))
+            with open(os.path.join(argv[-1], argv[-2], "fetch.json"), "w") as f:
+                f.write("{}")
+        elif argv[0] != "node":  # check.py runs for real on the run folder
             return self.real_call(argv, timeout, env)
         self.calls.append(list(argv))
         if argv[2] in self.hang:
@@ -94,12 +100,15 @@ class Walk(unittest.TestCase):
                 with open(os.path.join(d, "meta-box.json"), "w") as f:
                     f.write("{}")
                 t.add(os.path.join(d, "meta-box.json"), "meta-box.json")
-        out = 'PADSTEP {"result": "skip", "saw": "no goalcup build"}\n' if argv[2] == "exec" else ""
-        return subprocess.CompletedProcess(argv, 0, out, "")
+        if argv[2] == "exec":  # pad-run answers by step, as the fake box is told; by default as with no build
+            with open(argv[argv.index("--script") + 1]) as f:
+                step = f.read().split()[-1]
+            out = "PADSTEP " + json.dumps(self.answers.get(step, {"result": "skip", "saw": "no goalcup build"}))
+        return subprocess.CompletedProcess(argv, 0, out if argv[2] == "exec" else "", "")
 
-    def walk(self, hang=(), **settings):
-        self.calls, self.hang, self.real_call = [], hang, pad.call
-        env = {"CLAUDE_API_KEY": SENTINEL, "AI_GATEWAY_API_KEY": SENTINEL + "gw"}
+    def walk(self, hang=(), answers=None, extra_env=None, **settings):
+        self.calls, self.hang, self.real_call, self.answers = [], hang, pad.call, answers or {}
+        env = {"CLAUDE_API_KEY": SENTINEL, "AI_GATEWAY_API_KEY": SENTINEL + "gw", **(extra_env or {})}
         with tempfile.TemporaryDirectory() as out, mock.patch.dict(os.environ, env), \
                 mock.patch.object(pad, "call", self.fake_call):
             pad.run_all(pad.load_settings(dict(BASE, **settings), PADCFG), PADCFG, self.HARNESS, out)
@@ -121,6 +130,62 @@ class Walk(unittest.TestCase):
         name = calls[0][calls[0].index("--name") + 1]
         self.assertIn(["rm", name], calls)
         self.assertIn(["list", "--prefix", "pad-"], calls)
+
+    def test_staging_approval_values_reach_only_the_request(self):  # rung 2; the scan in walk covers argv and files
+        ok = {"result": "ok", "saw": ""}
+        resp = mock.MagicMock(status=200)
+        resp.__enter__.return_value = resp
+        with mock.patch.object(pad.urllib.request, "urlopen", return_value=resp) as urlopen:
+            self.walk(mode="micro", server="staging", answers={
+                "setup": ok, "start": dict(ok, code="BCDF-GHJK"), "paste": ok, "wait-upload": dict(ok, entry="e" + "0" * 16)},
+                extra_env={"GOALCUP_TEST_APPROVAL_KEY": SENTINEL + "ap", "GOALCUP_TEST_MEMBER_ID": "PADSENTINEL-m1",
+                           "GH_TOKEN": SENTINEL + "gh"})
+        req = urlopen.call_args.args[0]
+        self.assertEqual(req.get_header("Authorization"), "Bearer " + SENTINEL + "ap")
+        self.assertEqual(json.loads(req.data)["member_id"], "PADSENTINEL-m1")
+
+
+class HereAndFetch(unittest.TestCase):
+    """Section 7: here is the box, so no organizer secret reaches pad-run; a killed fetch-run leaves no work folder."""
+
+    SECRETS = {"GOALCUP_TEST_APPROVAL_KEY": SENTINEL + "ap", "GH_TOKEN": SENTINEL + "gh", "DATABASE_URL": SENTINEL + "db"}
+
+    def run_for(self, out, **settings):
+        s = pad.load_settings(dict(BASE, mode="micro", **settings), PADCFG)
+        r = pad.Run(s, "direct", PADCFG, Walk.HARNESS, out)
+        self.addCleanup(shutil.rmtree, r.tmp, True)
+        return r
+
+    def test_here_pad_run_gets_no_organizer_secret(self):
+        seen = []
+        def fake(argv, timeout=None, env=None):
+            seen.append(env)
+            return subprocess.CompletedProcess(argv, 0, 'PADSTEP {"result": "ok"}', "")
+        with tempfile.TemporaryDirectory() as out, mock.patch.dict(os.environ, self.SECRETS), \
+                mock.patch.object(pad, "call", fake):
+            r = self.run_for(out, where="here")
+            r.box_dir = out
+            r.box("setup", 10)
+        self.assertIsNotNone(seen[0])
+        self.assertFalse(set(pad.NEVER_IN_BOX) & set(seen[0]))
+
+    def test_killed_fetch_run_leaves_no_work_folder(self):
+        def fake(argv, timeout=None, env=None):
+            work = os.path.join(argv[-1], ".fetch-run.abc123")
+            os.makedirs(work)
+            with open(os.path.join(work, "pg_service.conf"), "w") as f:
+                f.write("password=" + SENTINEL)
+            raise subprocess.TimeoutExpired(argv, timeout)
+        with tempfile.TemporaryDirectory() as out, mock.patch.object(pad, "call", fake):
+            r = self.run_for(out, server="staging")
+            r.meta["entry"] = "e" + "0" * 16
+            with self.assertRaises(subprocess.TimeoutExpired):
+                r.step_fetch("fetch", 10)
+            self.assertEqual(os.listdir(os.path.join(r.dir, "fetched")), [])
+
+    def test_local_server_in_a_sandbox_is_refused(self):
+        with self.assertRaises(pad.Usage):
+            pad.load_settings(dict(BASE, server="local", where="sandbox"), PADCFG)
 
 
 class BoxHalf(unittest.TestCase):
@@ -194,7 +259,7 @@ class SecretCheck(unittest.TestCase):
 
     def c3(self, masks, secrets_exit=1, plain_exit=0):
         return evaluate({"meta.json": {"connector": "codex-cli", "case": "direct", "known_box": True, "entry": "e1"},
-                         "verify/secrets.json": {"masks": masks},
+                         "verify/secrets.json": {"masks": masks}, "verify/secrets-conductor.json": {"hits": 0},
                          "verify/exits.json": {"secrets": secrets_exit, "secrets-out": 0, "secrets-plain": plain_exit}}
                         )["checks"]["C3"]
 
@@ -204,6 +269,14 @@ class SecretCheck(unittest.TestCase):
     def test_known_value_hit_fails(self):
         self.assertEqual(self.c3(self.PLANTED, secrets_exit=2), "FAIL")
         self.assertEqual(self.c3(dict(self.PLANTED, jwt=0)), "FAIL")
+
+    def test_conductor_scan_counts_its_own_secrets(self):  # section 7: the approval key in the run folder is a hit
+        run = mock.Mock(dir=self.enterContext(tempfile.TemporaryDirectory()))
+        with open(os.path.join(run.dir, "calls.log"), "w") as f:
+            f.write("approve " + SENTINEL + "ap\n")
+        with mock.patch.dict(os.environ, {"GOALCUP_TEST_APPROVAL_KEY": SENTINEL + "ap"}):
+            pad.Run.scan_out(run)
+        self.assertEqual(check.Run(run.dir, {}).hits("secrets-conductor"), 1)
 
     def test_exercise_not_done_is_inconclusive(self):
         self.assertEqual(self.c3({"auth": 8}), "INCONCLUSIVE")

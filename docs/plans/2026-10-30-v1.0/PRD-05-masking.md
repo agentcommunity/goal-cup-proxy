@@ -824,3 +824,60 @@ A1 reports it as a stated loss instead of failing on it.
   overlap with row 11 and row 11 winning over row 13, as section 10 orders them. A renamed kind or a
   reordered row is posted as a seam line in the night log in the same merge request, so the pad lane
   follows; otherwise a pad row shows a false C3 FAIL.
+
+### 2026-10-30, replan after PRD-05 phase 0 slice (merge 82484521)
+
+- **On integration:** the S2 stub in `src/mask/mod.rs`, S12 `src/mask/shapes.tsv` (20 data lines,
+  `url_password` at line 12 counting data lines from 0, guard column), the first part of
+  `tests/mask_rules.rs`, and `tests/mask_corpus/` (86 files, 6,216,905 bytes, sha256 equal to the
+  `spikes/` sources). `gate fast: PASS in 78s` on 82484521.
+- **`Masker::new` takes `&[connector::MaskRule]` in the first PRD-05 merge after S3 is on
+  integration** (review A2). Today it is `new<R>(rules: &[R], ..)`: `Masker::new(&[], values)` cannot
+  infer `R`, and the tests' `Masker::new::<()>` stops compiling at the switch, so the same merge fixes
+  them. At 82484521 S3 is not on integration (only a doc comment in `watchdog/mod.rs` names
+  `MaskRule`).
+- **Stub `mask_meta` reach** (review A1). The stub stars every string leaf, header names, method,
+  host and a native stream's `path` (the stream ID, point 5) included, and sets no `meta.masked`.
+  Section 7 rules the core slice; until then PRD-02, PRD-04 and PRD-08 are told not to read meta back
+  (their notes). If a stub-only PRD-05 merge comes before the core slice, it says so in the stub's doc
+  comment. Object keys stay clear in the core slice too (review A5): PRD-01 meta carries headers as
+  `[name, value]` arrays, so no upstream text is a key today. A PRD that adds a meta object keyed by
+  upstream data asks PRD-05 first.
+- **Test-only gate** (review A3, B3). The clear masker moves from `cfg(any(test, feature =
+  "test-hooks"))` to `feature = "test-hooks"` alone, as the pipeline and watchdog gate, with one
+  `is_clear` whose body is `#[cfg(feature = "test-hooks")] return self.clear;` then `false` (about 6
+  lines less). Builder note 1's `#[cfg(test)]` reads as this feature (integration tests need it). The
+  release smoke is PRD-14's (PRD-14 note).
+- **Tests cut in the core slice** (ledger B10; reviews A4, B1, B2). In `mod.rs` keep
+  `secret_value_never_prints_and_round_trips` (point 4, S17), `passthrough_keeps_bytes` and the
+  `Send`/`Sync`/size const asserts; delete the stub-only tests (`assert_starred`,
+  `push_stars_every_byte_same_length`, `boundary_gap_finish_return_nothing_raw`,
+  `mask_meta_keeps_lengths_and_no_original`) when the real `StreamMasker` replaces the stub, about 70
+  lines. In `tests/mask_rules.rs` drop the second `row.len()` loop, the three index asserts after
+  `assert_eq!(kinds, KINDS)` (their comment moves to `KINDS`) and the `distinct` block, about 35
+  lines. `the_codex_rate_limit_object_is_no_secret` cannot fail for the reason its name gives (the
+  rows that masked `rate_limits` were connector rows); it becomes a Masker-level case in
+  `mask_stream.rs` with the Codex connector rules loaded, once PRD-11's connector file is on
+  integration, and the shapes-only version goes.
+- **Corpus** (review B4). Of the 86 copied files, 36 are captures (one, `codex-app/hooks.jsonl`, is
+  empty) and 50 are the old script's `*.redactions.jsonl` logs (offsets and hashes, most empty, some
+  for parents never copied). They carry no masking signal. The core slice deletes the 50 logs and
+  `mask_corpus.rs` reads every other file under `tests/mask_corpus/`. "Files it owns" then reads 36
+  copied files plus the four synthetic ones.
+- **Size** (`wc -l` at 82484521): `mod.rs` 426 (247 code, 179 inline tests) against this PRD's
+  file estimate of 160 for the final `mod.rs`; `shapes.tsv` 32 (data); `tests/mask_rules.rs` 188.
+  The cuts above take about 111 lines. PRD-16 note carries the row figure.
+- **Trailers** (review A6): merge commit df84011c on `v1.0/prd-05-masking-s12-shapes` has no
+  `Co-Authored-By` and `Claude-Session` lines. It stays (no force-push, no rebase). Every PRD-05
+  merge commit, an integration-into-task merge included, carries both lines.
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-11 slice 2 (merge b9fa50f8)
+
+- **S3 is on integration**, so `Masker::new` switches to `&[connector::MaskRule]` in PRD-05's next
+  merge (PRD-05 note of 82484521). The type: `MaskRule { kind: String, pattern: MaskPattern }`,
+  `MaskPattern::JsonField { field, value: FieldValue }` or `MaskPattern::HeaderPrefix(String)`,
+  `FieldValue::{String, Scalar}`; it serializes in the TOML row shape `{kind, json_field, value}` or
+  `{kind, header_prefix}`. The loader already checks the grammar (the `kind`, field and prefix
+  patterns) when it builds a `MaskRule`, so a `MaskRule` is valid by construction and `Masker::new`
+  does not check it again.
