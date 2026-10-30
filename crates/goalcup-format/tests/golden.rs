@@ -167,9 +167,8 @@ fn part_writer_writes_the_worked_example_at_window_27() {
     // The part file at the flush point is an open frame that decodes to the worked example.
     let mut rd = open_dir(&dir).unwrap();
     let items: Vec<_> = rd.by_ref().collect::<Result<_, _>>().unwrap();
-    assert!(rd.tail().open_frame);
-    assert_eq!(rd.tail().truncated, None);
-    assert_eq!(rd.tail().raw, GCR.len() as u64);
+    let t = rd.tail();
+    assert_eq!((t.open_frame, t.truncated, t.raw), (true, None, GCR.len() as u64));
     let back: Vec<Record> = items.into_iter().map(|i| i.rec).collect();
     assert_eq!(back, records());
 

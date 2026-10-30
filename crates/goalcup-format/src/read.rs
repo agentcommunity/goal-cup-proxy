@@ -31,7 +31,8 @@ pub struct Tail {
     pub truncated: Option<u64>,
     /// The raw bytes the reader took from its input, counted from the first byte of the stream
     /// rather than from the first PART's `raw_offset`. Final once [`Reader::next`] has returned
-    /// `None`; it includes the bytes of a record cut at the end ([`Tail::truncated`]).
+    /// `None`; it includes the bytes of a record cut at the end ([`Tail::truncated`]). After an
+    /// error it counts only the bytes read up to the bad record, not the whole input.
     pub raw: u64,
 }
 
