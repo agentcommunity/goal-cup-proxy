@@ -3,11 +3,13 @@
 use super::OpenFlags;
 use super::clock::Mono;
 use super::status::write_private;
-use goalcup_format::{EndReason, GapReason, Record, StreamKind};
+use goalcup_format::{EndReason, GapReason, IndexLine, Record, StreamKind};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, HashMap};
-use std::io::{self, Write};
+use std::fs::File;
+use std::io::{self, Read, Write};
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -362,7 +364,8 @@ fn off_ms(r: &Record) -> u64 {
 /// One boot as `counts.jsonl` keeps it, and as [`entry_totals`] reads it from the part files.
 #[derive(Default, Serialize, Deserialize)]
 struct Boot {
-    /// The LINK of the line: the COUNT's LINK when appended, the boot's last LINK when synced.
+    /// The LINK of the line: the COUNT's LINK when appended, the boot's last LINK when synced
+    /// (as read: its last LINK up to the last whole index line).
     seq: u64,
     /// The boot's last COUNT event JSON.
     count: Option<Value>,
@@ -373,9 +376,6 @@ struct Boot {
     /// or of all of them while it has none.
     #[serde(default)]
     down_ms: Vec<u64>,
-    /// Scan only: a LINK of the boot was read (`seq` is then its last one).
-    #[serde(skip)]
-    linked: bool,
     /// Scan only: the last LINK read before `count` was taken, so a line with a later `seq`
     /// holds a later count.
     #[serde(skip)]
@@ -495,8 +495,9 @@ pub fn count_at(entry_dir: &Path, seq: u64) -> Option<Vec<u8>> {
 /// Per boot (the PART before it) the last COUNT event, summed with [`Counts::add`]; then every
 /// `sid 0` `recorder_down` GAP adds one off span, and, when no later COUNT of its boot covers it
 /// (a recovery frame's GAP follows that frame's COUNT), 1 to `gaps` and `lost_unknown` and its
-/// length to `off_ms`. Reads up to where the reader stops (a torn or unclosed tail of a live
-/// entry), never panics and never fails: no part file gives the default.
+/// length to `off_ms`. Reads each part file up to its last whole index line, which recovery keeps,
+/// so a boot's totals never go down when it is recovered; never panics and never fails: no part
+/// file gives the default.
 ///
 /// It decodes every part file left on disk: the writer calls it once at boot (through
 /// [`CountsLog::sync`]) and adds this boot's counter after, never at each durable point.
@@ -504,39 +505,121 @@ pub fn entry_totals(entry_dir: &Path) -> EntryTotals {
     totals(&boots(entry_dir))
 }
 
-/// Every boot of the entry. A boot with part files on disk is read from them; its earlier part
-/// files may be pruned, so its own spans are the larger of what they hold and its `counts.jsonl`
-/// line (boot 0's own start gap sits in its first part file). Its count is its last COUNT event,
-/// or, while it has no recovery frame, its last line up to its last LINK on disk when that line
-/// is later: a dead boot not yet recovered has a line at each LINK but a COUNT event only every
-/// 60 s, and the recovery frame will take that line. A boot not read from part files (all of them pruned, or the read failed
-/// before it) is its line. A line of a later boot after a whole read left nothing durable (its
-/// part file was deleted by recovery) and is not read.
+/// Every boot of the entry. Each part file is read only up to its last whole index line, what
+/// recovery keeps (PRD-01 section 12 step 1), so no count here is one a recovery takes back.
+///
+/// A boot read from part files counts from its last COUNT event. While it has no recovery frame
+/// (a COUNT, then a `recorder_down` gap), its latest `counts.jsonl` line up to its last LINK read
+/// wins when later: a dead boot not yet recovered has a line at each LINK but a COUNT event only
+/// every 60 s, and its recovery frame will take that line. Its own spans are the larger of what
+/// its part files and its line hold, since its first part file (boot 0's start gap) may be
+/// pruned.
+///
+/// A boot not read (its part files pruned, or a read failed in it or before it) is its latest
+/// line up to the last whole index line on disk; the boot a read failed in takes that line too
+/// when it is later than what was read. Lines of a later boot after a whole read are left out:
+/// that boot left nothing recovery keeps (its part file is deleted and its number reused).
 fn boots(entry_dir: &Path) -> BTreeMap<u64, Boot> {
+    let (mut boots, stopped, kept) = scan(&entry_dir.join("rec"));
+    let first = boots.keys().next().copied().unwrap_or(u64::MAX);
+    // Each boot's latest line within its bound; on a tie the later one in the file.
+    let mut latest: BTreeMap<u64, Boot> = BTreeMap::new();
+    if let Ok(text) = std::fs::read(entry_dir.join(CountsLog::NAME)) {
+        for line in lines(&text) {
+            let Some(n) = line.boot() else { continue };
+            let bound = match boots.get(&n) {
+                Some(b) if stopped != Some(n) => Some(b.seq),
+                _ => kept,
+            };
+            if bound.is_some_and(|s| line.seq > s) {
+                continue;
+            }
+            match latest.entry(n) {
+                Entry::Occupied(e) if e.get().seq > line.seq => {}
+                Entry::Occupied(mut e) => {
+                    let spans = e.get().spans.max(line.spans);
+                    *e.get_mut() = Boot { spans, ..line };
+                }
+                Entry::Vacant(e) => {
+                    e.insert(line);
+                }
+            }
+        }
+    }
+    for (n, line) in latest {
+        match boots.get_mut(&n) {
+            Some(b) => {
+                b.spans = b.spans.max(line.spans);
+                let recovered = b.count.is_some() && !b.down_ms.is_empty();
+                if !recovered && b.count_after.is_none_or(|s| line.seq > s) {
+                    // Its only `recorder_down` gap is its start gap, which the line counts.
+                    (b.seq, b.count) = (b.seq.max(line.seq), line.count);
+                    b.down_ms.clear();
+                }
+            }
+            None if n < first || stopped.is_some_and(|s| n >= s) => {
+                boots.insert(n, line);
+            }
+            None => {}
+        }
+    }
+    boots
+}
+
+/// Reads every part file of `rec` up to its last whole index line. Returns the boots read, the
+/// boot a failed read stopped in (0 before any PART), and the `seq` of the last whole index line
+/// on disk (None when there is none, or the index that would hold it could not be read).
+fn scan(rec: &Path) -> (BTreeMap<u64, Boot>, Option<u64>, Option<u64>) {
     let mut boots: BTreeMap<u64, Boot> = BTreeMap::new();
-    // The boot a failed read stopped in; lines of later boots are kept.
-    let mut stopped = None;
-    if let Ok(reader) = goalcup_format::read::open_dir(&entry_dir.join("rec")) {
-        let (mut boot, mut link) = (0, None);
+    let files = match goalcup_format::read::part_files(rec) {
+        Ok(files) => files,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Vec::new(),
+        Err(_) => return (boots, Some(0), None),
+    };
+    let ends: Vec<io::Result<Option<IndexLine>>> = files.iter().map(|p| last_line(p)).collect();
+    let mut kept = None;
+    for end in ends.iter().rev() {
+        match end {
+            Ok(None) => continue,
+            Ok(Some(l)) => kept = Some(l.seq),
+            Err(_) => {}
+        }
+        break;
+    }
+    let mut boot = None;
+    for (p, end) in files.iter().zip(ends) {
+        let end = match end {
+            Ok(Some(l)) => l.c_end,
+            // Recovery deletes a part file with no whole index line.
+            Ok(None) => continue,
+            Err(_) => return (boots, Some(boot.unwrap_or(0)), kept),
+        };
+        let reader = match File::open(p).and_then(|f| goalcup_format::read::decode(f.take(end))) {
+            Ok(r) => r,
+            // Pruned after upload since it was listed.
+            Err(e) if e.kind() == io::ErrorKind::NotFound => continue,
+            Err(_) => return (boots, Some(boot.unwrap_or(0)), kept),
+        };
+        let mut link = None;
         for item in reader {
             let Ok(item) = item else {
-                stopped = Some(boot);
-                break;
+                return (boots, Some(boot.unwrap_or(0)), kept);
             };
+            let n = boot.unwrap_or(0);
             match &item.rec {
                 Record::Part {
                     boot: b, next_link, ..
-                } => (boot, link) = (*b, next_link.checked_sub(1)),
+                } => (boot, link) = (Some(*b), next_link.checked_sub(1)),
                 Record::Link { seq, .. } => {
-                    let b = boots.entry(boot).or_default();
-                    (b.seq, b.linked, link) = (*seq, true, Some(*seq));
+                    boots.entry(n).or_default().seq = *seq;
+                    link = Some(*seq);
                 }
                 Record::Event { json, .. } => {
                     let Ok(v) = serde_json::from_slice::<Value>(json) else {
                         continue;
                     };
                     if v["ev"] == "count" {
-                        let e = boots.entry(boot).or_default();
+                        let e = boots.entry(n).or_default();
                         (e.count, e.count_after) = (Some(v), link);
                         e.down_ms.clear();
                     }
@@ -546,7 +629,7 @@ fn boots(entry_dir: &Path) -> BTreeMap<u64, Boot> {
                     reason: GapReason::RecorderDown,
                     ..
                 } => {
-                    let b = boots.entry(boot).or_default();
+                    let b = boots.entry(n).or_default();
                     b.down_ms.push(off_ms(r));
                     if b.count.is_none() {
                         b.spans += 1;
@@ -556,33 +639,27 @@ fn boots(entry_dir: &Path) -> BTreeMap<u64, Boot> {
             }
         }
     }
-    let first = boots.keys().next().copied().unwrap_or(u64::MAX);
-    if let Ok(text) = std::fs::read(entry_dir.join(CountsLog::NAME)) {
-        for line in lines(&text) {
-            let Some(n) = line.boot() else { continue };
-            match boots.get_mut(&n) {
-                Some(b) => {
-                    b.spans = b.spans.max(line.spans);
-                    // A recovery frame is a COUNT then a gap; once there, the boot's lines are
-                    // in its COUNT already.
-                    let recovered = b.count.is_some() && !b.down_ms.is_empty();
-                    let later = b.count_after.is_none_or(|s| line.seq > s);
-                    if !recovered && b.linked && line.seq <= b.seq && later {
-                        // Its only `recorder_down` gap is its start gap, which the line counts.
-                        (b.count, b.count_after) = (line.count, Some(line.seq));
-                        b.down_ms.clear();
-                    }
-                }
-                None if n < first || stopped.is_some_and(|s| n > s) => {
-                    boots.insert(n, line);
-                }
-                None => {}
-            }
-        }
-    }
-    boots
+    (boots, None, kept)
 }
 
+/// A part file's last whole index line: one whose `c_end` is within the file, as recovery reads
+/// it. None when it has none, or when the files are gone (pruned since they were listed).
+fn last_line(part: &Path) -> io::Result<Option<IndexLine>> {
+    let gone = |e: io::Error| match e.kind() {
+        io::ErrorKind::NotFound => Ok(None),
+        _ => Err(e),
+    };
+    let len = match std::fs::metadata(part) {
+        Ok(m) => m.len(),
+        Err(e) => return gone(e),
+    };
+    let name = part.file_name().and_then(|n| n.to_str()).unwrap_or_default();
+    let idx = part.with_file_name(format!("{}.idx", name.trim_end_matches(".gcr.zst")));
+    match goalcup_format::read::read_index(&idx) {
+        Ok(lines) => Ok(lines.into_iter().take_while(|l| l.c_end <= len).last()),
+        Err(e) => gone(e),
+    }
+}
 fn totals(boots: &BTreeMap<u64, Boot>) -> EntryTotals {
     let mut t = EntryTotals::default();
     for b in boots.values() {

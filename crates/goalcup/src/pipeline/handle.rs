@@ -11,7 +11,7 @@ use goalcup_format::{EndReason, GapReason, StreamKind};
 use serde_json::Value;
 use std::ops::BitOr;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::Ordering;
 
 /// The largest DATA piece (PRD-01 section 3): bigger offers are split, with no copy, after the
 /// whole offer is admitted or dropped, so no queued piece keeps a dropped one's memory alive.
@@ -211,22 +211,10 @@ impl StreamHandle {
         let admitted = rec.inner.tx.is_none()
             || rec.hold(held, |h| always || guard::admits(h, held, in_gap, soft));
         if !admitted {
-            match &self.gap {
-                Some(gap) => {
-                    gap.lost.fetch_add(n, Ordering::Relaxed);
-                }
-                None => {
-                    let gap = Arc::new(GuardGap {
-                        start: t,
-                        off: self.off,
-                        lost: AtomicU64::new(n),
-                    });
-                    rec.gap_opened(self.sid, gap.clone());
-                    self.gap = Some(gap);
-                }
+            // After a full stop that raced this offer the bytes only count, as above.
+            if rec.guard_drop(self.sid, &mut self.gap, t, self.off, n) {
+                self.off += n;
             }
-            rec.inner.dropped_bytes.fetch_add(n, Ordering::Relaxed);
-            self.off += n;
             return;
         }
         self.close_gap(t);
@@ -275,6 +263,7 @@ mod tests {
     use super::*;
     use serde_json::json;
     use std::collections::BTreeMap;
+    use std::sync::atomic::AtomicU64;
     use std::sync::mpsc::Receiver;
 
     const MIB: u64 = 1 << 20;
@@ -608,6 +597,46 @@ mod tests {
         drop(conn);
         assert!(drain(&rec, &rx).is_empty());
         assert_eq!(rec.after_stop(), (100, vec!["github.com".to_string()]));
+    }
+
+    /// Point 3 and no drop without a GAP: relay threads dropping under a full guard while the
+    /// seal stops everything and closes the open gaps. Every byte lands in a GAP the seal or the
+    /// handle sent, or in the `after_stop` count, and no stream is left in a gap.
+    #[test]
+    fn a_drop_racing_the_seal_is_in_a_gap_or_after_stop() {
+        static PIECE64: [u8; 64] = [b'r'; 64];
+        for _ in 0..300 {
+            let (rec, rx) = Recorder::pipeline(MIB);
+            let full = rec.reserve(MIB);
+            let mut handles: Vec<StreamHandle> = (0..16)
+                .map(|_| open(&rec, StreamKind::HttpResp, 0))
+                .collect();
+            let offered = AtomicU64::new(0);
+            std::thread::scope(|s| {
+                for h in handles.iter_mut() {
+                    let (rec, offered) = (rec.clone(), &offered);
+                    s.spawn(move || {
+                        for _ in 0..2000 {
+                            h.data(rec.now(), Bytes::from_static(&PIECE64));
+                            offered.fetch_add(64, Ordering::Relaxed);
+                        }
+                    });
+                }
+                std::thread::yield_now();
+                rec.stop_all();
+                rec.close_open_gaps(rec.now());
+            });
+            drop((handles, full));
+            let lost: u64 = drain(&rec, &rx)
+                .iter()
+                .filter_map(|i| match i {
+                    Item::Gap { lost, .. } => *lost,
+                    _ => None,
+                })
+                .sum();
+            assert_eq!(lost + rec.after_stop().0, offered.into_inner());
+            assert_eq!(rec.live().losing.streams_in_gap, 0);
+        }
     }
 
     /// An offer is queued whole or dropped whole, so no queued piece keeps a dropped piece's

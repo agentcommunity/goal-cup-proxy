@@ -138,6 +138,37 @@ fn last_seq(rec: &Path) -> u64 {
         .seq
 }
 
+/// Recovers the dead boot as the next boot does, its COUNT from `counts.jsonl`.
+fn recover(
+    rec: &Path,
+    entry_dir: &Path,
+    opts: PartOptions,
+    now: Now,
+    tail: serde_json::Map<String, serde_json::Value>,
+) -> PartWriter {
+    let at = |seq| count_at(entry_dir, seq).expect("a counts.jsonl line at the kept LINK");
+    let rc = Recover {
+        entry: ENTRY,
+        boot_id: BOOT_ID,
+        now,
+        durable: None,
+        count_at: &at,
+        tail,
+        dead_start: None,
+        seal: None,
+    };
+    PartWriter::recover(rec, opts, rc).unwrap().writer.unwrap()
+}
+
+/// A LINK and its `counts.jsonl` line, then a sync, with no COUNT event (one comes every 60 s).
+fn link_and_line(w: &mut PartWriter, c: &Counter, k: &mut Clock, log: &mut CountsLog) {
+    k.0 += 3 * SEC;
+    let line = w.link(k.now()).unwrap();
+    log.append(line.seq, &c.count_event(w.boot(), 0, 0, 0), c.off_spans())
+        .unwrap();
+    w.sync().unwrap();
+}
+
 fn conn(w: &mut PartWriter, c: &mut Counter, k: &mut Clock) {
     let meta = json!({"host": HOST, "port": 443, "mode": "decrypt", "listed": "shared",
                       "kind": "provider", "reason": null});
@@ -278,20 +309,9 @@ fn entry_totals_are_each_boot_plus_off_spans() {
 
     // The next boot recovers the dead one, 5 s later.
     k.0 = link_at + 5 * SEC;
-    let at = |seq| count_at(entry_dir, seq).expect("a counts.jsonl line at the kept LINK");
     let mut tail = serde_json::Map::new();
     tail.insert("cause".into(), json!({"code": 9}));
-    let rc = Recover {
-        entry: ENTRY,
-        boot_id: BOOT_ID,
-        now: k.now(),
-        durable: None,
-        count_at: &at,
-        tail,
-        dead_start: None,
-        seal: None,
-    };
-    let mut w = PartWriter::recover(&rec, opts, rc).unwrap().writer.unwrap();
+    let mut w = recover(&rec, entry_dir, opts, k.now(), tail);
     assert_eq!(w.boot(), 1);
     // The recovery frame is on disk: the next boot syncs counts.jsonl from it.
     let before = log.sync(entry_dir).unwrap();
@@ -388,24 +408,11 @@ fn boot_zero_start_gap_keeps_its_off_span_once_pruned() {
     // the boot after it recovers again 2 s later. Its sync reads what is on disk, so boot 0's
     // line holds its own span and both recovery gaps.
     std::mem::forget(w);
-    let at = |seq| count_at(entry_dir, seq).unwrap();
-    let recover = |now: Now| {
-        let rc = Recover {
-            entry: ENTRY,
-            boot_id: BOOT_ID,
-            now,
-            durable: None,
-            count_at: &at,
-            tail: serde_json::Map::new(),
-            dead_start: None,
-            seal: None,
-        };
-        PartWriter::recover(&rec, opts, rc).unwrap().writer.unwrap()
-    };
+    let next = |now: Now| recover(&rec, entry_dir, opts, now, serde_json::Map::new());
     k.0 += 5 * SEC;
-    std::mem::forget(recover(k.now()));
+    std::mem::forget(next(k.now()));
     k.0 += 2 * SEC;
-    let mut w = recover(k.now());
+    let mut w = next(k.now());
     assert_eq!(w.boot(), 1);
     let mut log = CountsLog::open(entry_dir);
     let synced = log.sync(entry_dir).unwrap();
@@ -429,9 +436,11 @@ fn boot_zero_start_gap_keeps_its_off_span_once_pruned() {
 
 /// Point 6: a boot that dies 10 s in has a `counts.jsonl` line at each LINK but no COUNT event
 /// yet (one is written every 60 s). Before any recovery (the null recorder, `goalcup upload`)
-/// its totals are its last line, never 0, and recovery keeps them.
+/// its totals are its line at its last whole index line, never 0, and recovery keeps them. It
+/// died after its last LINK and line were written but before that LINK's index line: recovery
+/// cuts that LINK, so the totals never count it (S4: never ahead of the record).
 #[test]
-fn a_dead_boot_counts_its_last_line_before_recovery() {
+fn a_dead_boot_counts_its_last_indexed_line_before_recovery() {
     let dir = tempfile::tempdir().unwrap();
     let entry_dir = dir.path();
     let rec = entry_dir.join("rec");
@@ -444,37 +453,82 @@ fn a_dead_boot_counts_its_last_line_before_recovery() {
     let mut log = CountsLog::open(entry_dir);
     let mut w = PartWriter::open(&rec, opts, ENTRY, BOOT_ID, k.now()).unwrap();
     conn(&mut w, &mut c, &mut k);
-    for sid in 2..5 {
+    for sid in 2..4 {
         post(&mut w, &mut c, &mut k, sid);
-        k.0 += 3 * SEC;
-        let line = w.link(k.now()).unwrap();
-        log.append(line.seq, &c.count_event(0, 0, 0, 0), c.off_spans())
-            .unwrap();
-        w.sync().unwrap();
+        link_and_line(&mut w, &c, &mut k, &mut log);
     }
+    let kept = c.counts();
+    post(&mut w, &mut c, &mut k, 4);
+    link_and_line(&mut w, &c, &mut k, &mut log);
     std::mem::forget(w);
-    let dead = c.counts();
-    assert_eq!(dead.model_requests(), 3);
-    assert_eq!(entry_totals(entry_dir).counts, dead);
+    // The last index line never reached the file.
+    let idx = first_part(&rec).1;
+    let text = std::fs::read(&idx).unwrap();
+    let cut = text[..text.len() - 1].iter().rposition(|&b| b == b'\n').unwrap() + 1;
+    std::fs::write(&idx, &text[..cut]).unwrap();
+
+    assert_eq!(kept.model_requests(), 2);
+    assert_eq!(entry_totals(entry_dir).counts, kept);
 
     // Recovery writes that line as the boot's COUNT: the totals stand, plus the off span.
     k.0 += 5 * SEC;
-    let at = |seq| count_at(entry_dir, seq).unwrap();
-    let rc = Recover {
-        entry: ENTRY,
-        boot_id: BOOT_ID,
-        now: k.now(),
-        durable: None,
-        count_at: &at,
-        tail: serde_json::Map::new(),
-        dead_start: None,
-        seal: None,
-    };
-    PartWriter::recover(&rec, opts, rc).unwrap().writer.unwrap();
+    recover(&rec, entry_dir, opts, k.now(), serde_json::Map::new());
     let got = log.sync(entry_dir).unwrap();
-    let mut want = dead;
+    let mut want = kept;
     want.gaps += 1;
     want.lost_unknown += 1;
     want.off_ms += 5000;
     assert_eq!((got.counts, got.off_spans), (want, 1));
+}
+
+/// A boot read from `counts.jsonl` alone (no part file can be read) is its latest line, not
+/// its first.
+#[test]
+fn a_boot_not_read_from_part_files_is_its_latest_line() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut log = CountsLog::open(dir.path());
+    log.append(5, &json!({"ev": "count", "boot": 0, "http_post": 1}), 0)
+        .unwrap();
+    log.append(6, &json!({"ev": "count", "boot": 0, "http_post": 5}), 0)
+        .unwrap();
+    assert_eq!(entry_totals(dir.path()).counts.http_post, 5);
+}
+
+/// A read that fails partway through a boot (here the index of its second part file) never
+/// takes that boot below its latest line, and the sync keeps that line.
+#[test]
+fn a_failed_read_keeps_the_latest_line_of_its_boot() {
+    let dir = tempfile::tempdir().unwrap();
+    let entry_dir = dir.path();
+    let rec = entry_dir.join("rec");
+    let opts = PartOptions {
+        window_log: 20,
+        rotate_after_ns: 60 * SEC,
+        ..PartOptions::default()
+    };
+    let mut k = Clock(1000 * SEC);
+    let mut c = Counter::new(&[]);
+    let mut log = CountsLog::open(entry_dir);
+    let mut w = PartWriter::open(&rec, opts, ENTRY, BOOT_ID, k.now()).unwrap();
+    conn(&mut w, &mut c, &mut k);
+    post(&mut w, &mut c, &mut k, 2);
+    count_and_link(&mut w, &c, &mut k, &mut log, 0);
+    k.0 += 61 * SEC;
+    assert!(w.rotate_if_due(k.now()).unwrap().is_some());
+    for sid in 3..5 {
+        post(&mut w, &mut c, &mut k, sid);
+        link_and_line(&mut w, &c, &mut k, &mut log);
+    }
+    std::mem::forget(w);
+    let latest = c.counts();
+    assert_eq!(latest.model_requests(), 3);
+    assert_eq!(entry_totals(entry_dir).counts, latest);
+
+    let parts = goalcup_format::read::part_files(&rec).unwrap();
+    let name = parts[1].file_name().unwrap().to_str().unwrap();
+    let idx = parts[1].with_file_name(format!("{}.idx", name.trim_end_matches(".gcr.zst")));
+    std::fs::write(&idx, b"not an index line\n").unwrap();
+    assert_eq!(entry_totals(entry_dir).counts, latest);
+    assert_eq!(log.sync(entry_dir).unwrap().counts, latest);
+    assert_eq!(entry_totals(entry_dir).counts, latest);
 }
