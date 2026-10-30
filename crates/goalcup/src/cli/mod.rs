@@ -273,7 +273,8 @@ fn dirs(dir: &Path, first: char, when: impl Fn(&Path) -> Option<SystemTime>) -> 
 
 /// The run folders, oldest first by `server.json` time, else the folder's.
 fn runs(home: &Path) -> Vec<PathBuf> {
-    dirs(&home.join("runs"), 'r', |p| mtime(&server_json(p)).or_else(|| mtime(p)))
+    let when = |p: &Path| mtime(&server_json(p)).or_else(|| mtime(p));
+    dirs(&home.join("runs"), 'r', when)
 }
 
 /// The run and part for `goalcup status [PART]`: no argument is the newest run (by `server.json`
