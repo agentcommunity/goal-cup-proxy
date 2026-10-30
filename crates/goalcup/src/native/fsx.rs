@@ -147,7 +147,7 @@ impl Dir {
             return Err(io::Error::last_os_error());
         }
         // SAFETY: the call succeeded, so it filled `st`.
-        Ok(from_stat(unsafe { &st.assume_init() }))
+        Ok(from_stat(unsafe { st.assume_init() }))
     }
 
     /// Opens a regular file whose `fid` must equal `expect` (`unix.rs:214-253`). A symlink, FIFO,
@@ -190,10 +190,10 @@ fn fstat(fd: RawFd) -> io::Result<Stat> {
         return Err(io::Error::last_os_error());
     }
     // SAFETY: the call succeeded, so it filled `st`.
-    Ok(from_stat(unsafe { &st.assume_init() }))
+    Ok(from_stat(unsafe { st.assume_init() }))
 }
 
-fn from_stat(st: &libc::stat) -> Stat {
+fn from_stat(st: libc::stat) -> Stat {
     let kind = match st.st_mode & libc::S_IFMT {
         libc::S_IFREG => Kind::File,
         libc::S_IFDIR => Kind::Dir,
