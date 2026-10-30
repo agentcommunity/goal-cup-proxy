@@ -470,6 +470,14 @@ impl Calls {
                 ..Thread::new(id)
             });
         }
+        // An unmatched wire row of a child thread takes the parent its thread entry gives.
+        let parents: HashMap<&str, &String> = threads
+            .iter()
+            .filter_map(|t| Some((t.id.as_str(), t.parent.as_ref()?)))
+            .collect();
+        for r in rows.iter_mut().filter(|r| r.parent.is_none()) {
+            r.parent = r.thread.as_deref().and_then(|t| parents.get(t)).map(|p| (*p).clone());
+        }
         rows.extend(nat.into_iter().map(|x| x.0));
         CallTable {
             rows,

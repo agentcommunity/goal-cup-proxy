@@ -329,7 +329,7 @@ fn totals_equal_the_planted_sum_and_repeat() {
 }
 
 #[test]
-fn native_only_counts_the_silent_window() {
+fn native_leg_joins_codex_threads() {
     let mut recs = run1("u-native").0;
     let codex = |v: &mut Value| v["connector"] = "codex-cli".into();
     edit_event(&mut recs, "start", 0, codex);
@@ -353,13 +353,14 @@ fn every_claude_code_subagent_transcript_counts() {
     let mut e = Entry::new("u-claude");
     let files = "S S/subagents/agent-a S/subagents/workflows/w/agent-b";
     for (k, f) in files.split(' ').enumerate() {
-        let v = json!({"type": "assistant", "message": {"id": k.to_string(),
+        let v = json!({"type": "assistant", "timestamp": "2300-01-01T00:00:00Z", "message": {"id": k.to_string(),
             "usage": {"input_tokens": 3}, "content": MARK}});
         let (path, body) = (format!("transcripts:p/{f}.jsonl"), format!("{v}\n"));
         stream(&mut e, StreamKind::Native, &path, &body);
     }
     let meta = "meta:p/S/subagents/workflows/w/agent-b.meta.json";
     stream(&mut e, StreamKind::Snapshot, meta, r#"{"agentType":"x"}"#);
+    stream(&mut e, StreamKind::Snapshot, "meta:p/S/subagents/agent-c.meta.json", "{}");
     let mut recs = read_records(&e.seal().join("rec"));
     let claude = |v: &mut Value| v["connector"] = "claude-code-cli".into();
     edit_event(&mut recs, "start", 0, claude);
@@ -369,6 +370,7 @@ fn every_claude_code_subagent_transcript_counts() {
     let parent = |id| th(id).parent.as_deref();
     assert_eq!([parent("a"), parent("b")], [Some("S"); 2]);
     assert_eq!(th("b").label.as_deref(), Some("x"));
+    assert!(th("a").readable() && !th("c").readable());
     assert!(!format!("{t:?}").contains(MARK));
 }
 

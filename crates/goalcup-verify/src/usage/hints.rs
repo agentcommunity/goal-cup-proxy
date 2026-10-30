@@ -16,13 +16,12 @@ pub(super) enum Reader {
 pub(super) fn reader(connector: Option<&str>, path: &str) -> Option<Reader> {
     let (row, rel) = path.split_once(':')?;
     let file = rel.rsplit_once('/').map_or(rel, |(_, f)| f);
-    let r = match (connector?, row, file.ends_with(".jsonl")) {
+    Some(match (connector?, row, file.ends_with(".jsonl")) {
         ("codex-cli", "sessions", true) if file.starts_with("rollout-") => Reader::CodexRollout,
         ("claude-code-cli", "transcripts", true) => Reader::ClaudeTranscript,
         ("claude-code-cli", "meta", _) if file.ends_with(".meta.json") => Reader::ClaudeMeta,
         _ => return None,
-    };
-    Some(r)
+    })
 }
 
 /// For a connector this build has a native reader for: (its wire requests carry their thread, as

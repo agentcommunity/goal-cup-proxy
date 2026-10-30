@@ -14,12 +14,13 @@ use serde_json::Value;
 
 use super::hints::{self, Reader};
 use super::shapes::{extra, less, model_name, safe_code};
-use super::{CallRow, Ctx, Kind, Leg, Outcome, Thread, Tokens};
+use super::{CallRow, Ctx, Kind, Leg, Outcome, Reason, Thread, Tokens};
 
 pub(super) struct NativeLeg {
     /// One per native call, with its Claude Code `requestId` (else `None`).
     pub(super) rows: Vec<(CallRow, Option<String>)>,
-    /// Every thread a file, a spawn or a meta snapshot names; reason `None`.
+    /// Every thread a file, a spawn or a meta snapshot names. Readable (reason `None`) only when it
+    /// owns a read session file; the others keep their entry and parent with [`Reason::NoNative`].
     pub(super) threads: Vec<Thread>,
     /// `Some` when any session file named its thread.
     pub(super) children: Option<BTreeMap<String, Vec<String>>>,
@@ -136,11 +137,12 @@ impl Native {
                 },
                 None => {}
             },
-            Record::Gap { sid, lost, .. } if *lost != 1 => match self.streams.get_mut(&key(sid)) {
-                Some(Src::File(file)) => self.files.get_mut(file).into_iter().for_each(File::hole),
-                Some(Src::Snap(_, buf)) => *buf = None,
-                None => {}
-            },
+            // A hole in a session file shows in `data` by its offset; a snapshot is dropped here.
+            Record::Gap { sid, lost, .. } if *lost != 1 => {
+                if let Some(Src::Snap(_, buf)) = self.streams.get_mut(&key(sid)) {
+                    *buf = None;
+                }
+            }
             Record::End { sid, .. } => {
                 if let Some(Src::Snap(path, Some(buf))) = self.streams.remove(&key(sid))
                     && let (Some(id), Some(session), _) = claude_thread(&path)
@@ -161,8 +163,8 @@ impl Native {
         let (mut owner, mut threads) = (HashMap::new(), BTreeMap::new());
         let mut kids: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
         let (mut repeats_skipped, mut copied_skipped) = (0, 0);
-        let read = |id: &String| Thread {
-            reason: None,
+        let named = |id: &String| Thread {
+            reason: Some(Reason::NoNative),
             ..Thread::new(id)
         };
         for ((path, _), f) in self.files {
@@ -184,20 +186,22 @@ impl Native {
                 kids.entry(p.clone()).or_default().insert(id.clone());
             }
             kids.entry(id.clone()).or_default().extend(f.spawned);
-            let t = threads.entry(id.clone()).or_insert_with(|| read(&id));
+            let t = threads.entry(id.clone()).or_insert_with(|| named(&id));
+            t.reason = None;
             (t.parent, t.depth) = (t.parent.take().or(parent.clone()), t.depth.or(depth));
             t.label = t.label.take().or(label);
+            // Keyed by path: after a source_changed generation, older rows take the newest one's.
             owner.insert(path, (id, parent));
         }
         for (id, (session, label)) in self.agents {
-            let t = threads.entry(id.clone()).or_insert_with(|| read(&id));
+            let t = threads.entry(id.clone()).or_insert_with(|| named(&id));
             (t.label, t.depth) = (label.or(t.label.take()), t.depth.or(Some(1)));
             kids.entry(session).or_default().insert(id);
         }
         // A thread only a spawn or a meta snapshot names still gets its entry and parent.
         for (p, cs) in &kids {
             for c in cs {
-                let t = threads.entry(c.clone()).or_insert_with(|| read(c));
+                let t = threads.entry(c.clone()).or_insert_with(|| named(c));
                 t.parent.get_or_insert_with(|| p.clone());
             }
         }
@@ -279,7 +283,7 @@ impl File {
     ) -> Option<CallRow> {
         let p = &v["payload"];
         let child = self.meta.as_ref().filter(|m| m.parent.is_some());
-        let copied = child.is_some_and(|m| at < m.at);
+        let copied = child.is_some_and(|m| at.zip(m.at).is_some_and(|(a, s)| a < s));
         match (v["type"].as_str()?, p["type"].as_str()) {
             ("session_meta", _) if self.meta.is_none() => {
                 let s = |k: &str| id_at(p, &format!("/source/subagent/thread_spawn/{k}"));
@@ -424,7 +428,7 @@ fn ts(s: &str) -> Option<u64> {
     let [y, m, d, h, mi, se] = f?[..] else {
         return None;
     };
-    let ok = (1..=12).contains(&m) && (1..=31).contains(&d) && h < 24 && mi < 60 && se <= 60;
+    let ok = (1970..=2200).contains(&y) && (1..=12).contains(&m) && (1..=31).contains(&d) && h < 24 && mi < 60 && se <= 60;
     let ns = num(frac).filter(|_| ok && frac.len() <= 9)? * 10i64.pow(9 - frac.len() as u32);
     // Days from civil (H. Hinnant): years start in March, eras of 400 years.
     let y = if m <= 2 { y - 1 } else { y };
