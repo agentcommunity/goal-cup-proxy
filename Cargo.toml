@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/goalcup-format"]
+members = ["crates/goalcup", "crates/goalcup-format"]
 # The 0.x crates. They stay on disk as reference and are never built, linted or tested again.
 exclude = [
     "crates/goalcup-cli",

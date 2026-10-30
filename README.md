@@ -177,7 +177,7 @@ Worker). The details and the glossary (run, part, segment, chain file, seal, rec
 |---|---|
 | macOS, Apple silicon | Measured. Use the arm64 build of `goalcup` and of the harness. |
 | macOS, Intel | Builds. No run measured. |
-| Linux, arm64 | Docker gates and logged-in Codex and Hermes staging practices passed. Longer runs pending ([measurements](TODO.md#wp0-measure)). |
+| Linux, arm64 | Docker gates and logged-in Codex and Hermes staging practices passed. Longer runs pending ([measurements](docs/research/results/2026-10-22-local-test-day.md)). |
 | Linux, x86_64 | Reservation tests and a no-login harness smoke pass on a hosted runner. Full suites not measured. |
 | Windows | Use WSL2 (below). Real-machine validation is pending. Native Windows is planned. |
 
