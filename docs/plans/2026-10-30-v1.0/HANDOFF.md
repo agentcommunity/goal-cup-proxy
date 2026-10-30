@@ -76,18 +76,18 @@ was learned; read it before planning that PRD.
 
 Not done at all yet: any real-key run, any staging deploy, phases 2 to 6, the cut.
 
-## Branches (30 Oct 23:26Z, integration at 50040272)
+## Branches (30 Oct 23:30Z, integration at 86a7dfbf)
 
 | Branch | Commits not yet on integration | Last merge into integration |
 |---|---:|---|
 | `v1.0/prd-01-format` | 7 | f5b0a6a2 Merge v1.0/prd-01-format: phase 0 first group |
-| `v1.0/prd-02-core` | 30 | 675077f7 Merge v1.0/prd-02-core: PRD-02 scaffold: crates/goalcup with every dependency, lib.rs module list, S1 |
+| `v1.0/prd-02-core` | 34 | 675077f7 Merge v1.0/prd-02-core: PRD-02 scaffold: crates/goalcup with every dependency, lib.rs module list, S1 |
 | `v1.0/prd-03-proxy` | 22 | 0e411074 Merge v1.0/prd-03-proxy: PRD-03 proxy core slice 1: ca, tls, connect, decode, ws leaf modules |
 | `v1.0/prd-04-native` | 10 | a302d688 Merge v1.0/prd-04-native: PRD-04 native reader: native::start, loop duty cycle, finish steps 1,2,4,5, |
 | `v1.0/prd-05-masking` | 21 | 82484521 Merge v1.0/prd-05-masking: PRD-05 masking phase 0: S2 stub, S12 shapes.tsv, mask_rules pin, corpus co |
 | `v1.0/prd-06-upload` | 10 | a98f104c Merge v1.0/prd-06-upload: PRD-06 slice 2: chunk cut, heartbeat body and beat tick, size-amendment cut |
 | `v1.0/prd-07-worker` | 0 | 8db60d0e Merge v1.0/prd-07-worker: PRD-07: collision-safe wrangler dev ports in the Worker test helper (gate f |
-| `v1.0/prd-08-verify` | 11 | 7a995b6e Merge v1.0/prd-08-verify: PRD-08 slice 3: secret scan subcommand and check --known secrets ids |
+| `v1.0/prd-08-verify` | 0 | 1fdaf2c3 Merge v1.0/prd-08-verify: PRD-08 slice 4: honesty checks listed_hosts_decrypted, conn_bytes, mask_fai |
 | `v1.0/prd-09-usage` | 0 | 1a2c3537 Merge v1.0/prd-09-usage: PRD-09 slice 3: native leg (Codex rollouts, Claude Code transcripts) and the |
 | `v1.0/prd-10-cli` | 0 | 64450e32 Merge v1.0/prd-10-cli: PRD-10 slice 5: goalcup time-left, upload lines in status and end screen, nits |
 | `v1.0/prd-11-connectors` | 1 | a96d9f71 Merge v1.0/prd-11-connectors: PRD-11 slice 4: six more connectors, builtin macro form, .profile write |
