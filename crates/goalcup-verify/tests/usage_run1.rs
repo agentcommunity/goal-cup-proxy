@@ -7,16 +7,15 @@ mod common;
 
 use common::{Entry, HOST, read_records};
 use goalcup_format::{EndReason, FLAG_FIN, Record, StreamKind};
-use goalcup_verify::usage::{
-    CallRow, CallTable, Calls, HostKind, Kind, Outcome, Shape, Tokens, Via,
-};
+use goalcup_verify::usage::{CallRow, CallTable, Calls, HostKind, Kind, Outcome, Shape};
+use goalcup_verify::usage::{Tokens, Via};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 
 /// Planted in prompts, outputs and error messages; no row may hold it (point 4).
 const MARK: &str = "zebra-lantern-planted-text";
-const TEXT: u8 = 0x10;
 const RL: &str = "rate_limit_exceeded";
+const TEXT: u8 = 0x10;
 
 /// A Responses usage object and the five numbers the reader must give for it.
 fn usage(input: u64, cached: u64, output: u64, reasoning: u64) -> (Value, Tokens) {
@@ -33,17 +32,29 @@ fn usage(input: u64, cached: u64, output: u64, reasoning: u64) -> (Value, Tokens
     (v, t)
 }
 
-fn create(model: &str, prev: Option<&str>) -> Value {
-    json!({"type": "response.create", "model": model, "previous_response_id": prev,
-        "reasoning": {"effort": "low"}, "store": false, "stream": true,
-        "input": [{"type": "message", "role": "user",
-                   "content": [{"type": "input_text", "text": MARK}]}]})
+/// A request for model `fake-<k>`; its reply is `r_<k>`, model `fake-<k>-dated`.
+fn create(k: &str, prev: Option<&str>) -> Value {
+    json!({"type": "response.create", "model": format!("fake-{k}"), "reasoning": {"effort": "low"},
+        "previous_response_id": prev.map(|p| format!("r_{p}")), "store": false, "stream": true,
+        "input": [{"type": "message", "role": "user", "content": [{"type": "input_text", "text": MARK}]}]})
 }
 
-fn resp(ev: &str, id: &str, model: &str, extra: Value) -> Value {
-    let mut r = json!({"id": id, "model": model, "status": "in_progress", "usage": null});
-    r.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+fn resp(ev: &str, k: &str, status: &str, more: Value) -> Value {
+    let mut r = json!({"id": format!("r_{k}"), "model": format!("fake-{k}-dated"), "status": status});
+    r.as_object_mut().unwrap().extend(more.as_object().unwrap().clone());
     json!({"type": ev, "response": r})
+}
+
+fn created(k: &str) -> Value {
+    resp("response.created", k, "in_progress", json!({"usage": null}))
+}
+
+fn done(k: &str, u: &Value) -> Value {
+    resp("response.completed", k, "completed", json!({"usage": u}))
+}
+
+fn failed(k: &str, rl: &Value) -> Value {
+    resp("response.failed", k, "failed", json!({"error": rl, "usage": null}))
 }
 
 fn delta() -> Value {
@@ -52,53 +63,77 @@ fn delta() -> Value {
 
 /// SSE text of these events, each named by its `type`.
 fn sse(evs: &[Value]) -> String {
-    evs.iter()
-        .map(|v| format!("event: {}\ndata: {v}\n\n", v["type"].as_str().unwrap()))
-        .collect()
+    let ev = |v: &Value| format!("event: {}\ndata: {v}\n\n", v["type"].as_str().unwrap());
+    evs.iter().map(ev).collect()
 }
 
-/// One WebSocket: client messages arrive in two pieces, server messages in one.
-struct Ws(u64, u64, u64, u64);
-
-impl Ws {
-    fn send(&mut self, e: &mut Entry, v: Value) {
-        let b = v.to_string();
-        let (x, y) = b.split_at(b.len() / 2);
-        e.data(self.0, self.2, TEXT, x.as_bytes());
-        e.data(self.0, self.2 + x.len() as u64, TEXT | FLAG_FIN, y.as_bytes());
-        self.2 += b.len() as u64;
-    }
-    fn recv(&mut self, e: &mut Entry, evs: &[Value]) {
-        for v in evs {
-            let b = v.to_string();
-            e.data(self.1, self.3, TEXT | FLAG_FIN, b.as_bytes());
-            self.3 += b.len() as u64;
-        }
-    }
-}
-
-/// One POST on its own connection; the reply body comes in two pieces and ends `end`.
-fn post(e: &mut Entry, path: &str, req: Value, status: u16, ctype: &str, body: &str, end: EndReason) {
-    let c = e.conn();
-    let head = json!({"method": "POST", "path": path, "ver": "1.1", "masked": [], "coding": null,
+/// One POST on its own connection; the reply body (SSE text, else JSON) comes in two pieces.
+fn post(e: &mut Entry, s: &Value) {
+    let (c, req) = (e.conn(), s[1].to_string());
+    let head = json!({"method": "POST", "path": s[0], "ver": "1.1", "masked": [], "coding": null,
         "headers": [["content-type", "application/json"]]});
     let q = e.open(StreamKind::HttpReq, c, 0, head);
-    let b = req.to_string();
-    e.data(q, 0, 0, b.as_bytes());
-    e.end(q, EndReason::Complete, b.len() as u64, json!({"wire": b.len()}));
-    let head = json!({"status": status, "ver": "1.1", "headers": [["content-type", ctype]],
+    e.data(q, 0, 0, req.as_bytes());
+    e.end(q, EndReason::Complete, req.len() as u64, Value::Null);
+    let (body, ctype) = match s[3].as_str() {
+        Some(t) => (t.to_owned(), "text/event-stream"),
+        None => (s[3].to_string(), "application/json"),
+    };
+    let head = json!({"status": s[2], "ver": "1.1", "headers": [["content-type", ctype]],
         "masked": [], "coding": null, "decoded": true});
     let p = e.open(StreamKind::HttpResp, c, q, head);
     let (x, y) = body.split_at(body.len() / 2);
     e.data(p, 0, 0, x.as_bytes());
     e.data(p, x.len() as u64, 0, y.as_bytes());
-    e.end(p, end, body.len() as u64, json!({"wire": body.len()}));
+    let end = match s[4].as_bool() {
+        Some(true) => EndReason::Complete,
+        _ => EndReason::Interrupted,
+    };
+    e.end(p, end, body.len() as u64, Value::Null);
     e.end(c, EndReason::Complete, 0, json!({"up": 900, "down": 900}));
 }
 
 /// The entry's records and the tokens planted per call, by requested model.
 fn run1(name: &str) -> (Vec<Record>, BTreeMap<&'static str, Tokens>) {
-    let mut planted = BTreeMap::new();
+    let ((ua, ta), (ub, tb), (ue, te)) = (usage(1000, 600, 200, 50), usage(1300, 1100, 90, 0), usage(2000, 1500, 300, 120));
+    let ((uw, _), (uh, th)) = (usage(500, 0, 0, 0), usage(700, 100, 90, 30));
+    let rl = json!({"code": RL, "message": MARK});
+    let err = json!({"type": "error", "status": 429, "error": rl});
+    let mut warm = create("warm", None);
+    warm["generate"] = false.into();
+    // Each step: a client message, then the server messages that answer it.
+    let ws = json!([
+        [warm, [created("warm"), done("warm", &uw)]],
+        [create("ws-a", None), [created("ws-a"), delta(), done("ws-a", &ua)]],
+        [create("ws-b", Some("ws-a")), [created("ws-b"), done("ws-b", &ub)]],
+        [warm, [created("warm"), done("warm", &uw)]],
+        [create("ws-d", None), [created("ws-d"), delta()]],
+        [{"type": "response.interrupt"}, []],
+        [create("ws-r1", None), [created("ws-r1"), err, failed("ws-r1", &rl)]],
+        [create("ws-r2", None), [created("ws-r2"), failed("ws-r2", &rl), err]],
+        [create("ws-e", Some("ws-b")), [created("ws-e"), done("ws-e", &ue)]]
+    ]);
+    let au = |out: u64| json!({"input_tokens": 300, "cache_read_input_tokens": 40,
+        "cache_creation_input_tokens": 20, "output_tokens": out});
+    let claude = sse(&[
+        json!({"type": "message_start", "message": {"id": "msg_fake_1", "model": "fake-claude-dated", "usage": au(1)}}),
+        json!({"type": "ping"}),
+        json!({"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": MARK}}),
+        json!({"type": "message_delta", "delta": {"stop_reason": null}, "usage": au(30)}),
+        json!({"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": au(75)}),
+        json!({"type": "message_stop"}),
+    ]);
+    let tc = Tokens { input: Some(300), cached: Some(40), cache_write: Some(20), output: Some(75), ..Tokens::default() };
+    let http = |k: &str| json!({"model": format!("fake-{k}"), "stream": true, "input": MARK});
+    // Each POST: path, request body, status, reply body, whether the reply ended `complete`.
+    let posts = json!([
+        ["/v1/responses", http("http-a"), 200, sse(&[created("http-a"), delta(), done("http-a", &uh)]), true],
+        ["/v1/responses", http("http-429"), 429, {"error": rl}, true],
+        ["/v1/responses", http("http-cut"), 200, sse(&[created("http-cut"), delta()]), false],
+        ["/v1/messages?beta=true", {"model": "fake-claude", "stream": true, "messages": [{"role": "user", "content": MARK}]}, 200, claude, true],
+        ["/v1/fake-events", {"event": MARK}, 200, {"ok": true}, true]
+    ]);
+
     let mut e = Entry::new(name);
     let c = e.conn();
     let head = json!({"method": "GET", "path": "/backend-api/codex/responses", "ver": "1.1",
@@ -107,85 +142,29 @@ fn run1(name: &str) -> (Vec<Record>, BTreeMap<&'static str, Tokens>) {
     e.end(q, EndReason::Complete, 0, Value::Null);
     let up = e.open(StreamKind::WsUp, c, q, json!({"deflate": false}));
     let down = e.open(StreamKind::WsDown, c, q, json!({"deflate": false}));
-    let mut ws = Ws(up, down, 0, 0);
-    let (zero, _) = usage(500, 0, 0, 0);
-    let mut warm = create("fake-warm", None);
-    warm["generate"] = json!(false);
-    let calls = [("fake-ws-a", None, usage(1000, 600, 200, 50)), ("fake-ws-b", Some("r_a"), usage(1300, 1100, 90, 0))];
-    for (i, (model, prev, (u, t))) in calls.into_iter().enumerate() {
-        if i == 0 {
-            ws.send(&mut e, warm.clone());
-            let w = [resp("response.created", "r_w1", "fake-warm-dated", json!({})),
-                resp("response.completed", "r_w1", "fake-warm-dated", json!({"status": "completed", "usage": zero}))];
-            ws.recv(&mut e, &w);
+    let (mut u, mut d) = (0, 0);
+    for step in ws.as_array().unwrap() {
+        let m = step[0].to_string();
+        let (x, y) = m.split_at(m.len() / 2);
+        e.data(up, u, TEXT, x.as_bytes());
+        e.data(up, u + x.len() as u64, TEXT | FLAG_FIN, y.as_bytes());
+        u += m.len() as u64;
+        for v in step[1].as_array().unwrap() {
+            e.data(down, d, TEXT | FLAG_FIN, v.to_string().as_bytes());
+            d += v.to_string().len() as u64;
         }
-        let id = format!("r_{}", &model[8..]);
-        let reply = format!("{model}-dated");
-        ws.send(&mut e, create(model, prev));
-        let done = resp("response.completed", &id, &reply, json!({"status": "completed", "usage": u}));
-        ws.recv(&mut e, &[resp("response.created", &id, &reply, json!({})), delta(), done]);
-        planted.insert(model, t);
     }
-    ws.send(&mut e, warm);
-    ws.recv(&mut e, &[resp("response.created", "r_w2", "fake-warm-dated", json!({})),
-        resp("response.completed", "r_w2", "fake-warm-dated", json!({"status": "completed", "usage": zero}))]);
-    // Interrupted in flight: no terminal event follows.
-    ws.send(&mut e, create("fake-ws-d", None));
-    ws.recv(&mut e, &[resp("response.created", "r_d", "fake-ws-d-dated", json!({})), delta()]);
-    ws.send(&mut e, json!({"type": "response.interrupt"}));
-    // Rate limited, sent both as `error` and `response.failed`, in both orders.
-    let rl = json!({"code": RL, "message": MARK});
-    let err = json!({"type": "error", "status": 429, "error": rl});
-    for (model, id, error_first) in [("fake-ws-r1", "r_r1", true), ("fake-ws-r2", "r_r2", false)] {
-        ws.send(&mut e, create(model, None));
-        let failed = resp("response.failed", id, model, json!({"status": "failed", "error": rl}));
-        let (x, y) = if error_first { (err.clone(), failed) } else { (failed, err.clone()) };
-        ws.recv(&mut e, &[resp("response.created", id, model, json!({})), x, y]);
-    }
-    let (u, t) = usage(2000, 1500, 300, 120);
-    ws.send(&mut e, create("fake-ws-e", Some("r_b")));
-    ws.recv(&mut e, &[resp("response.created", "r_e", "fake-ws-e-dated", json!({})),
-        resp("response.completed", "r_e", "fake-ws-e-dated", json!({"status": "completed", "usage": u}))]);
-    planted.insert("fake-ws-e", t);
-    e.end(up, EndReason::Complete, ws.2, json!({"close_code": 1000}));
-    e.end(down, EndReason::Complete, ws.3, json!({"close_code": 1000}));
+    e.end(up, EndReason::Complete, u, json!({"close_code": 1000}));
+    e.end(down, EndReason::Complete, d, json!({"close_code": 1000}));
     e.end(c, EndReason::Complete, 0, json!({"up": 900, "down": 900}));
-
-    let http = |m: &str| json!({"model": m, "stream": true, "reasoning": {"effort": "low"}, "input": MARK});
-    let (u, t) = usage(700, 100, 90, 30);
-    let body = sse(&[resp("response.created", "r_h1", "fake-http-a-dated", json!({})), delta(),
-        resp("response.completed", "r_h1", "fake-http-a-dated", json!({"status": "completed", "usage": u}))]);
-    post(&mut e, "/v1/responses", http("fake-http-a"), 200, "text/event-stream", &body, EndReason::Complete);
-    planted.insert("fake-http-a", t);
-    let body = json!({"error": rl}).to_string();
-    post(&mut e, "/v1/responses", http("fake-http-429"), 429, "application/json", &body, EndReason::Complete);
-    let body = sse(&[resp("response.created", "r_cut", "fake-http-cut", json!({})), delta()]);
-    post(&mut e, "/v1/responses", http("fake-http-cut"), 200, "text/event-stream", &body, EndReason::Interrupted);
-    let au = |out: u64| json!({"input_tokens": 300, "cache_read_input_tokens": 40,
-        "cache_creation_input_tokens": 20, "output_tokens": out});
-    let body = sse(&[
-        json!({"type": "message_start", "message": {"id": "msg_fake_1", "model": "fake-claude-dated", "usage": au(1)}}),
-        json!({"type": "ping"}),
-        json!({"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": MARK}}),
-        json!({"type": "message_delta", "delta": {"stop_reason": null}, "usage": au(30)}),
-        json!({"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": au(75)}),
-        json!({"type": "message_stop"}),
-    ]);
-    let req = json!({"model": "fake-claude", "max_tokens": 64, "stream": true,
-        "messages": [{"role": "user", "content": MARK}]});
-    post(&mut e, "/v1/messages?beta=true", req, 200, "text/event-stream", &body, EndReason::Complete);
-    let t = Tokens { input: Some(300), cached: Some(40), cache_write: Some(20), output: Some(75), ..Tokens::default() };
-    planted.insert("fake-claude", t);
-    post(&mut e, "/v1/fake-events", json!({"event": MARK}), 200, "application/json", r#"{"ok":true}"#, EndReason::Complete);
-    let dir = e.seal();
-    (read_records(&dir.join("rec")), planted)
+    posts.as_array().unwrap().iter().for_each(|s| post(&mut e, s));
+    let planted = [("fake-ws-a", ta), ("fake-ws-b", tb), ("fake-ws-e", te), ("fake-http-a", th), ("fake-claude", tc)];
+    (read_records(&e.seal().join("rec")), planted.into())
 }
 
 fn table(recs: &[Record]) -> CallTable {
     let mut calls = Calls::new();
-    for r in recs {
-        calls.push(r);
-    }
+    recs.iter().for_each(|r| calls.push(r));
     calls.finish()
 }
 
@@ -218,15 +197,14 @@ fn each_rate_limited_call_is_one_row() {
     let t = table(&recs);
     for m in ["fake-ws-r1", "fake-ws-r2"] {
         let r = row(&t, m);
-        assert_eq!(r.kind, Kind::Call);
-        assert!(matches!(&r.outcome, Outcome::RateLimited { code: Some(c), .. } if c == RL), "{m}: {r:?}");
+        let rl = matches!(&r.outcome, Outcome::RateLimited { code: Some(c), .. } if c == RL);
+        assert!(r.kind == Kind::Call && rl, "{m}: {r:?}");
     }
     let r = row(&t, "fake-http-429");
     assert!(matches!(r.outcome, Outcome::RateLimited { status: Some(429), .. }), "{r:?}");
     assert_eq!(t.rows.iter().filter(|r| r.outcome.is_error()).count(), 3);
     let after = row(&t, "fake-ws-e");
-    assert_eq!(after.outcome, Outcome::Ok);
-    assert_eq!(after.tokens, planted["fake-ws-e"]);
+    assert_eq!((&after.outcome, after.tokens), (&Outcome::Ok, planted["fake-ws-e"]));
 }
 
 #[test]
@@ -235,9 +213,8 @@ fn tokens_and_outcomes_follow_the_shape() {
     let t = table(&recs);
     let a = row(&t, "fake-ws-a");
     assert_eq!((a.kind, &a.outcome, a.whole), (Kind::Call, &Outcome::Ok, true));
-    assert_eq!(a.tokens, planted["fake-ws-a"]);
-    assert_eq!(a.model.as_deref(), Some("fake-ws-a-dated"));
-    assert_eq!(a.effort.as_deref(), Some("low"));
+    assert_eq!(a.tokens, planted["fake-ws-a"], "input less cached, output with reasoning");
+    assert_eq!((a.model.as_deref(), a.effort.as_deref()), (Some("fake-ws-a-dated"), Some("low")));
     assert_eq!((a.via, a.shape), (Some(Via::Ws), Some(Shape::Responses)));
     assert_eq!((a.host.as_deref(), a.host_kind), (Some(HOST), Some(HostKind::Provider)));
     let h = row(&t, "fake-http-a");
@@ -254,15 +231,14 @@ fn totals_equal_the_planted_sum_and_repeat() {
     let (recs, planted) = run1("u-sum");
     let t = table(&recs);
     let sum = |ts: Vec<&Tokens>| {
-        ts.iter().fold([0u64; 5], |mut s, x| {
-            for (i, v) in [x.input, x.cached, x.cache_write, x.output, x.reasoning].iter().enumerate() {
-                s[i] += v.unwrap_or(0);
-            }
-            s
-        })
+        let f = |x: &&Tokens| [x.input, x.cached, x.cache_write, x.output, x.reasoning];
+        let add = |s: [u64; 5], v: [Option<u64>; 5]| -> [u64; 5] {
+            std::array::from_fn(|i| s[i] + v[i].unwrap_or(0))
+        };
+        ts.iter().map(f).fold([0u64; 5], add)
     };
-    let calls: Vec<&Tokens> = t.rows.iter().filter(|r| r.kind == Kind::Call).map(|r| &r.tokens).collect();
-    assert_eq!(sum(calls), sum(planted.values().collect()));
+    let calls = t.rows.iter().filter(|r| r.kind == Kind::Call).map(|r| &r.tokens);
+    assert_eq!(sum(calls.collect()), sum(planted.values().collect()));
     assert_eq!(table(&recs), t);
 }
 
