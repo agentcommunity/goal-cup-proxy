@@ -1831,3 +1831,38 @@ kept and now cites BUILD-PROMPT section 5, since B3 no longer carries it.
   missing snapshot `fid` on resume, review nits N1, N2, N3 and N5 (PRD-04 note), and, until
   `snapshot.rs` merges, `final` rows copied only at the seal as single `snapshot` files.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-08 slice 3 (merge 7a995b6e)
+
+- `gate fast: PASS in 105s` on 7a995b6e (nextest summary: 218 tests run, 218 passed, 0 skipped). Box
+  runs before the merge: the builder at c42bfce1 (fmt, clippy `-D warnings`, workspace build,
+  goalcup-verify 30 of 30); the lane merge at aaf7879b (36 of 36); reviewers A and B with probes
+  (39 and 42 tests with their probes); the fixer at 3bd40ba6, fc81212c and a76e0bce (fmt, clippy,
+  36 of 36 each), each re-checked by a reviewer; the last re-check left no open finding. Six paths
+  changed, all owned by PRD-08, no `Cargo.toml`. All 5 non-merge commits in ed6f7bf6..7a995b6e and
+  the merge carry both trailer lines. `gate full` was not run.
+- **Size report, PRD-08** (`wc -l` at 7a995b6e, row "Verifier (PRD-08)", 1,400 src and 1,100 tests;
+  the slice 2 ceilings were 2,450 and 1,830). Src without PRD-09's `usage/` is 2,235, 160% of the row
+  and 91% of 2,450, seven of ten files: `integrity.rs` 982, `secrets.rs` 509, `server.rs` 201,
+  `main.rs` 200, `input.rs` 198, `report.rs` 133, `lib.rs` 12. Tests are 1,826, 166% of the row and
+  1,826 of 1,830: `tests/common/` 877, `check_invariants.rs` 329, `check_named.rs` 218,
+  `secrets_scan.rs` 214, `server_compare.rs` 188. With the three unwritten files and two test files at
+  their ceilings the crate projects to about 2,770 src and 1,986 tests. PRD-08's decision line
+  (PRD-08 note) caps `secrets.rs` at 509 and sets the ceilings to 2,730 src (with the PRD-01 cut of
+  about 40 lines of `input.rs`, now due before `legs.rs`) and 1,990 tests, naming points 4 and 3.
+  The end-of-build report nets these against the Rust totals (about 18,100 src, at most about 14,200
+  tests). Only a total past those becomes the owner's question.
+- **Closed:** the A9/B3 `main.rs` nit (200 of 200). Remove it from the known list of the slice 2 note.
+- **Owner-question line answered without the owner:** the fixer's 16:27Z line (kind owner question)
+  asked for PRD-08 section 3's delta wording to add the Chat Completions keys. That is PRD text, not
+  a ledger item; the PRD-08 note settles it. No W6 line.
+- **What is unblocked:** X7 and N6 can run `goalcup-verify secrets` now. Both pass only paths that
+  exist: one unreadable path on the command line exits 3 with no report, while one inside a walked
+  folder only marks that input `partial`. `-` reads the project's git objects from stdin. PRD-12's C3
+  is no longer held by PRD-08; it still waits on PRD-05's masker and a `goalcup` build, and on the
+  pad's two small changes (PRD-12 note).
+- **Build order, PRD-08:** honesty, legs, history and the run 1 shape builder remain, in this plan's
+  order; none waits on PRD-09 (slice 2 note). The PRD-01 ask is cut first.
+- **Acceptance lists as known,** if still open at the end: the PRD-08 slice 3 items in the PRD-08
+  note (A5 nits 2 and 3, A7, A8, F11, the double count of a file named twice, the PRD-01 ask).
+- No locked ledger item is touched and no owner question comes from this slice.
