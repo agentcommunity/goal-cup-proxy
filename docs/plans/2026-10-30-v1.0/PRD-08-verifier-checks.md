@@ -974,3 +974,69 @@ log; the pad lane follows.
 - A call joined by time has `join` `Matched` as one joined by id; `legs.rs` does not tell them apart
   (the count `joined_by_time` is in the summary only).
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-08 slice 4 (merge 1fdaf2c3)
+
+- **Built:** `honesty.rs` with `listed_hosts_decrypted`, `conn_bytes` and `mask_failclosed`, fed one
+  record at a time from integrity's single pass (`Pass::item` and `Pass::mask`); `report.rs` `LATER`
+  now holds four ids: `history_complete`, `wire_keeps_up`, `threads_match`, `subagents_present`.
+  A record of a stream never seen open is ignored by honesty (integrity reports it); state is
+  dropped at END and at a new boot.
+- **`conn_bytes` as merged** (PRD-03 and PRD-12 notes read it):
+  - A decrypted connection is judged at its END, per direction, from the END tail `plain_up` and
+    `plain_down` against what its streams account for: head sizes (approximate), END `wire` of each
+    HTTP stream (`seen` when `wire` is absent), WebSocket DATA bytes, and a `conn` GAP's `lost - 1`.
+    `fail` above 1 MiB and above 50% unaccounted with no GAP on the connection; `warn` above 1 MiB
+    and above 10%.
+  - **A stream GAP names only its own bytes.** An HTTP stream GAP adds nothing and never waives the
+    fail rule for another request on the same connection (review A8). A WebSocket stream GAP adds
+    `lost - 1` to what is accounted for; one of unknown size (`lost` 0) waives the rule for the
+    connection. Only a `conn` GAP waives it otherwise.
+  - A decrypted connection that ends with no `plain_up` or `plain_down` makes the whole check
+    `skip` (facts `no_plain_tail`), as does a run with no decrypted connection ("no decrypted
+    connection to judge"). A missing tail never reads as a pass.
+- **`mask_failclosed`:** `warn` once a stream passes 1 MiB of `fail_closed` MASK bytes, counted per
+  stream; never `fail`, so the exit stays 0. Facts `streams` and `bytes`.
+- **`listed_hosts_decrypted`:** a listed tunnel is judged at its END: a sign-in is no loss, a GAP of
+  its own reason is `named`, none is `fail`. A conn GAP on a decrypted listed connection is
+  `named`. `warn` for a refusal after trust (unless its GAP tail says `alert: false`) and for a long
+  tunnel to an unlisted host. The facts key `refusal_after_trust` is read by PRD-12, so it is a
+  named seam key and the tests may assert it. `streams` is not read by anything outside the crate.
+- **Size decision** (`wc -l` at 1fdaf2c3). Src without PRD-09's `usage/` is 2,678, 191% of the
+  PRD-00 row (1,400) and 98% of the 2,730 ceiling: `integrity.rs` 991, `secrets.rs` 509, `honesty.rs`
+  435, `server.rs` 201, `main.rs` 200, `input.rs` 198, `report.rs` 130, `lib.rs` 14. Tests (without
+  PRD-09's `usage_run1.rs`) are 2,083, 189% of the row (1,100) and 93 over the 1,990 ceiling:
+  `tests/common/` 877, `check_named.rs` 341, `check_invariants.rs` 329, `secrets_scan.rs` 214,
+  `check_conn_bytes.rs` 134, `server_compare.rs` 188. `honesty.rs` is 435 against its 140 ceiling.
+  **Decision:** `honesty.rs` is capped at 435, `check_conn_bytes.rs` at 134 and `check_named.rs`
+  at 341 (as merged). The extra lines serve point 1 (a request lost on a reused connection must not
+  pass: `conn_bytes` fails it, and a stream GAP cannot hide another stream's loss; a record that
+  claims too little or too much must not panic, L-VR3), point 2 (a listed tunnel with no named GAP is
+  a blind spot) and point 4 (fail-closed masking is counted and warned). The tests are the PRD-08
+  acceptance cases (ledger B10). The crate ceilings become **3,040 src and 2,245 tests**: the src
+  figure is 2,678 plus `legs.rs` 240 and `history.rs` 155 minus the PRD-01 cut of about 40 lines of
+  `input.rs` (still due before `legs.rs`; if PRD-01 declines it, a decision line nets the 40
+  elsewhere); the test figure is 2,083 plus `check_run1_shape.rs` 80 and `check_history.rs` 80. The
+  per-file ceilings for `legs.rs` 240, `history.rs` 155, `check_run1_shape.rs` 80 and
+  `check_history.rs` 80 stay. `integrity.rs` is 991 of 1,000: a hook for `legs.rs` or `history.rs`
+  must fit in 9 lines or net against the file. A slice past these numbers needs another decision
+  line. PRD-16's end-of-build report nets this against the Rust totals; only a total past about
+  18,100 src or 14,200 tests becomes an owner question.
+- **Review nits, disposition.** Fixed or accepted: A8 and its fix, B-R2, B-R3. Still open, taken up
+  at the next touch of the file and listed as known if open at the end:
+  - A9: in `check_conn_bytes.rs` the case `a_small_stream_gap_does_not_cover_a_silently_lost_request`
+    ends the GAPped response with `seen` 2 while the loss runs to offset 12 (invariant 11), so the
+    case fails `seen_matches_written` as well as `conn_bytes`. Fix: end that response with `seen`
+    `2 + lost - 1`, and assert the failing ids are exactly `["conn_bytes"]`.
+  - B-R6: reword the doc comment on `Conn.gaps` to say it counts conn GAPs and WebSocket stream GAPs
+    of unknown size.
+  - B-R7: `conn_gapped` picks the GAPped response by value; use `enumerate` and the last index. The
+    `facts.streams` assert in `check_named.rs` pins a name only this crate reads; assert the result
+    and exit code. `facts.refusal_after_trust` stays (PRD-12 reads it).
+  - B-R1: OPEN meta, END tail and GAP tail are parsed twice (integrity and honesty). Declined for
+    now (a two-file refactor for about 20 lines); it is the first cut if the crate nears its ceiling.
+- **Build order, unchanged:** `legs.rs` (`wire_keeps_up`, `threads_match`, `subagents_present`),
+  then `history.rs`, then the run 1 shape builder, in PRD-16's order. The PRD-01 `input.rs` cut comes
+  before `legs.rs`. `docs/RECORD-FORMAT.md` and the check list in PRD-15's text follow the three new
+  ids in PRD-15's next slice.
+- No locked ledger item is touched and no owner question comes from this slice.
