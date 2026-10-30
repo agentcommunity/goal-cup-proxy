@@ -392,7 +392,7 @@ To remove an operator, delete the row with the same `member_id`.
 and `goalcup-usage-staging/usage/test-staging/` only). It lists R2 first, so a failed listing changes
 nothing. The token needs R2 read and write on both traces buckets and on each usage bucket that exists.
 A usage bucket that is missing or not open to the token (`404` or `403`) is skipped with one line; its
-test objects stay until a run with a token that reaches it. It needs `psql`,
+test objects stay until a run without `--older-than` with a token that reaches it. It needs `psql`,
 `curl` and `python3`, and `DATABASE_URL`, `CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_API_TOKEN` in the
 environment. `DATABASE_URL` is the website database URL: set it from `DATABASE_URL_REMOTE`
 (`export DATABASE_URL="$DATABASE_URL_REMOTE"`). Run the script in `server/worker`.
