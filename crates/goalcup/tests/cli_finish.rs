@@ -9,7 +9,7 @@ use std::path::Path;
 use cli_common::{RUN, T0 as NOW, live, part, patch, put, upload, with};
 use goalcup::cli::finish::{NotSealed, end_screen, screen};
 use goalcup::cli::status::{State, block};
-use goalcup::cli::{text, unix_of};
+use goalcup::cli::{proc_start_id, text, unix_of};
 use goalcup::pipeline::status::{Mode, Status};
 use goalcup_format::GapReason;
 use serde_json::{Map, Value, json};
@@ -165,6 +165,40 @@ fn bytes_left_at_the_end_name_goalcup_upload_and_upload_by() {
         );
         assert_eq!(shown.contains("goalcup upload"), !recorder, "{shown}");
     }
+    // The end screen comes first while a live recorder still sends the wrap-up.
+    let me = std::process::id();
+    let sid = proc_start_id(me).unwrap();
+    let st = patch(&sealed(), json!({"pid": me, "start_id": sid}));
+    let shown = screen(&st, None, Some(&u), RUN, Path::new(LOG), NOW).unwrap();
+    assert!(!shown.contains("goalcup upload"), "{shown}");
+    // A part that is not sealed, with no recorder and no watchdog, sends nothing by itself.
+    let st = with(Mode::Recording, json!({}));
+    let state = State::Continue { since: NOW };
+    for (recorder, watchdog) in [(true, false), (false, true), (false, false)] {
+        let cx = live(recorder, watchdog, true, 0);
+        let shown = block(&st, &state, None, Some(&u), &cx, &[]);
+        assert_eq!(
+            shown.contains("goalcup upload"),
+            !recorder && !watchdog,
+            "{shown}"
+        );
+    }
+}
+
+/// At the end with no recorder, a refused part says nothing keeps trying, and a part whose bytes
+/// are all up but whose end the server has not heard still names `goalcup upload`; once the
+/// server has the end, it does not.
+#[test]
+fn refused_and_unsent_end_at_the_end() {
+    let (by, now) = ("2099-11-08T10:00:00Z", NOW);
+    let line = |p: Value, end: bool| text::upload_line(&upload(p), now, end);
+    let refused = json!({"state": "refused", "upload_by": by});
+    assert!(line(refused.clone(), false).contains("keeps trying"));
+    assert!(!line(refused, true).contains("keeps trying"));
+    let all_up = |end: &str| json!({"state": "waiting", "upload_by": by, "final": end});
+    assert!(line(all_up("none"), true).contains("goalcup upload"));
+    assert!(!line(all_up("none"), false).contains("goalcup upload"));
+    assert!(!line(all_up("sealed"), true).contains("goalcup upload"));
 }
 
 #[test]

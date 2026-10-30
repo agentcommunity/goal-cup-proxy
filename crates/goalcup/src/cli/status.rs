@@ -259,7 +259,7 @@ pub fn block(
         w.counts.native_bytes,
     ));
     lines.push(text::off_line(st.off.spans, st.off.ms));
-    let end = st.mode == Mode::Sealed && !cx.recorder;
+    let end = !cx.recorder && (st.mode == Mode::Sealed || !cx.watchdog);
     lines.extend(upload.map(|u| text::upload_line(u, cx.now, end)));
     lines.push(text::parts_line(parts));
     let problems = problems(st, state, cx);

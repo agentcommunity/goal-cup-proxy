@@ -142,8 +142,10 @@ pub fn screen(
     for l in &body {
         out += &format!("  {l}\n");
     }
+    // The wrap-up sends while the recorder lives: only then is the end screen not the last word.
+    let end = !super::alive(st.pid, st.start_id);
     if let Some(u) = upload {
-        out += &format!("{}\n", text::upload_line(u, now, true));
+        out += &format!("{}\n", text::upload_line(u, now, end));
     }
     out += &format!("{}\n", text::details_at(log));
     Ok(out)

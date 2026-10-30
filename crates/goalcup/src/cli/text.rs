@@ -8,7 +8,7 @@ use super::RunMode;
 use super::status::State;
 use crate::connector::Refusal;
 use crate::upload::policy::Class;
-use crate::upload::state::{State as Upload, UploadJson};
+use crate::upload::state::{Final, State as Upload, UploadJson};
 use crate::watchdog::Exit;
 
 /// The start of the line that says the harness is being recorded.
@@ -842,8 +842,8 @@ fn class_words(class: Class) -> &'static str {
 }
 
 /// The `Upload:` line of `upload.json` at `now`. Once nothing will send the part by itself (`end`:
-/// the end screen, or a sealed part with no recorder), bytes still waiting name `goalcup upload`
-/// and `upload_by`; after `upload_by` they cannot be sent (section 5 rule 8).
+/// the end screen, or a part with no recorder and no watchdog), bytes still waiting, or an end the
+/// server has not heard, name `goalcup upload` and `upload_by`; after `upload_by` they cannot be sent (section 5 rule 8).
 pub fn upload_line(u: &UploadJson, now: u64, end: bool) -> String {
     let t = |s: Option<&String>| s.map(String::as_str).and_then(super::unix_of);
     let by_at = t(u.upload_by.as_ref());
@@ -865,11 +865,20 @@ pub fn upload_line(u: &UploadJson, now: u64, end: bool) -> String {
     if left && by_at.is_some_and(|b| now >= b) {
         return closed();
     }
-    if end && goes && u.waiting_bytes > 0 {
+    // Everything is up, but the server has not heard that the part ended.
+    let end_unsent =
+        u.state == Upload::Waiting && u.final_ == Final::None && by_at.is_none_or(|b| now < b);
+    if end && goes && (u.waiting_bytes > 0 || end_unsent) {
         let before = by
             .as_ref()
             .map(|b| format!(" before {b}"))
             .unwrap_or_default();
+        if u.waiting_bytes == 0 {
+            return format!(
+                "Upload: the server holds everything but has not heard that this part ended. Run \
+                 goalcup upload{before}, when you are online."
+            );
+        }
         return format!(
             "Upload: {waiting} still waits on this computer. Run goalcup upload{before}, when you \
              are online. Nothing is lost yet."
@@ -906,10 +915,13 @@ pub fn upload_line(u: &UploadJson, now: u64, end: bool) -> String {
         Upload::Refused => {
             let status = err.and_then(|e| e.status).map(|s| format!(" ({s})"));
             let status = status.unwrap_or_default();
-            format!(
-                "Upload: the server refuses this run{status}. It keeps trying. If this lasts, \
-                 write to {SUPPORT_ADDRESS}."
-            )
+            // With no recorder (`end`) nothing keeps trying.
+            let tail = if end {
+                format!("Nothing more is sent. Write to {SUPPORT_ADDRESS}.")
+            } else {
+                format!("It keeps trying. If this lasts, write to {SUPPORT_ADDRESS}.")
+            };
+            format!("Upload: the server refuses this run{status}. {tail}")
         }
         Upload::Stuck => format!(
             "Upload: stopped. The server's copy and this computer's copy differ at byte {raw}. \
@@ -947,13 +959,15 @@ fn advice(practice: bool) -> &'static str {
 
 /// The run stops at `stop` (seconds since 1970), as the server last said.
 pub fn time_left(stop: u64, now: u64, practice: bool) -> String {
-    match stop.checked_sub(now).filter(|left| *left >= 60) {
-        Some(_) => format!(
-            "The run stops {}. {}",
+    // Not `end_words` alone: at 0 it prints the clock with no "left".
+    if stop.saturating_sub(now) >= 60 {
+        format!(
+            "The run stops on {}. {}",
             end_words(stop, now),
             advice(practice)
-        ),
-        None => format!("Less than a minute left. {}", advice(practice)),
+        )
+    } else {
+        format!("Less than a minute left. {}", advice(practice))
     }
 }
 
