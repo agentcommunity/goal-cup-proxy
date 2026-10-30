@@ -63,17 +63,13 @@ impl Dir {
     /// Opens a root by path; a symlink as the last component or a non-folder fails. Symlinks in
     /// the root's parents are followed (for example `/var` on macOS).
     pub fn open_root(path: &Path) -> io::Result<Dir> {
-        let c = cname(path.as_os_str())?;
-        // SAFETY: `c` is a live NUL-terminated string for the call.
-        let fd = owned(unsafe { libc::open(c.as_ptr(), DIR_FLAGS) })?;
+        let fd = open_at(libc::AT_FDCWD, path.as_os_str(), DIR_FLAGS)?;
         Ok(Dir { fd })
     }
 
     /// Opens a child folder; a symlink or a non-folder fails.
     pub fn open_child(&self, name: &OsStr) -> io::Result<Dir> {
-        let c = cname(name)?;
-        // SAFETY: the parent descriptor is open and `c` is a live NUL-terminated string.
-        let fd = owned(unsafe { libc::openat(self.fd.as_raw_fd(), c.as_ptr(), DIR_FLAGS) })?;
+        let fd = open_at(self.fd.as_raw_fd(), name, DIR_FLAGS)?;
         Ok(Dir { fd })
     }
 
@@ -114,21 +110,10 @@ impl Dir {
     /// this folder. A name that has vanished gives `io::ErrorKind::NotFound`.
     pub fn stat_at(&self, name: &OsStr) -> io::Result<Stat> {
         let c = cname(name)?;
-        let mut st = MaybeUninit::<libc::stat>::uninit();
         // SAFETY: the parent descriptor is open, `c` is NUL terminated, `st` is a writable output.
-        let r = unsafe {
-            libc::fstatat(
-                self.fd.as_raw_fd(),
-                c.as_ptr(),
-                st.as_mut_ptr(),
-                libc::AT_SYMLINK_NOFOLLOW,
-            )
-        };
-        if r != 0 {
-            return Err(io::Error::last_os_error());
-        }
-        // SAFETY: the call succeeded, so it filled `st`.
-        Ok(from_stat(unsafe { st.assume_init() }))
+        stat_by(|st| unsafe {
+            libc::fstatat(self.fd.as_raw_fd(), c.as_ptr(), st, libc::AT_SYMLINK_NOFOLLOW)
+        })
     }
 
     /// Opens a regular file whose `fid` must equal `expect`. When the file that was seen is no
@@ -137,33 +122,38 @@ impl Dir {
     /// failure with its errno.
     pub fn open_file(&self, name: &OsStr, expect: Fid) -> io::Result<File> {
         let gone = || io::Error::from(io::ErrorKind::NotFound);
-        let c = cname(name)?;
-        // SAFETY: the parent descriptor is open and `c` is NUL terminated; O_NONBLOCK keeps a FIFO
-        // open from hanging.
-        let opened = owned(unsafe { libc::openat(self.fd.as_raw_fd(), c.as_ptr(), FILE_FLAGS) });
-        // One component with O_NOFOLLOW: ELOOP only means the name is now a symlink.
-        if opened.as_ref().err().and_then(io::Error::raw_os_error) == Some(libc::ELOOP) {
+        // O_NONBLOCK keeps a FIFO open from hanging.
+        let opened = open_at(self.fd.as_raw_fd(), name, FILE_FLAGS);
+        // One component with O_NOFOLLOW: ELOOP only means the name is now a symlink; ENXIO
+        // (Linux) and EOPNOTSUPP (macOS) mean it is now a socket. The next walk settles both.
+        let errno = opened.as_ref().err().and_then(io::Error::raw_os_error);
+        if matches!(errno, Some(libc::ELOOP | libc::ENXIO | libc::EOPNOTSUPP)) {
             return Err(gone());
         }
-        let fd = opened?;
-        let st = fstat(fd.as_raw_fd())?;
+        let f = File::from(opened?);
+        let st = file_stat(&f)?;
         if st.kind != Kind::File || st.fid() != expect {
             return Err(gone());
         }
-        Ok(File::from(fd))
+        Ok(f)
     }
 }
 
 /// `fstat` on an open file, for the re-check after a read.
 pub fn file_stat(f: &File) -> io::Result<Stat> {
-    fstat(f.as_raw_fd())
+    // SAFETY: `f` is open and `st` is a writable output.
+    stat_by(|st| unsafe { libc::fstat(f.as_raw_fd(), st) })
 }
 
 fn cname(name: &OsStr) -> io::Result<CString> {
     CString::new(name.as_bytes()).map_err(|_| io::Error::from(io::ErrorKind::InvalidInput))
 }
 
-fn owned(raw: RawFd) -> io::Result<OwnedFd> {
+/// `openat` from `dir` (or `AT_FDCWD`), owning the new descriptor.
+fn open_at(dir: RawFd, name: &OsStr, flags: libc::c_int) -> io::Result<OwnedFd> {
+    let c = cname(name)?;
+    // SAFETY: `dir` is open or `AT_FDCWD`, and `c` is a live NUL-terminated string.
+    let raw = unsafe { libc::openat(dir, c.as_ptr(), flags) };
     if raw < 0 {
         return Err(io::Error::last_os_error());
     }
@@ -171,10 +161,10 @@ fn owned(raw: RawFd) -> io::Result<OwnedFd> {
     Ok(unsafe { OwnedFd::from_raw_fd(raw) })
 }
 
-fn fstat(fd: RawFd) -> io::Result<Stat> {
+/// Runs one stat call into a fresh buffer, read only after it returns 0.
+fn stat_by(call: impl FnOnce(*mut libc::stat) -> libc::c_int) -> io::Result<Stat> {
     let mut st = MaybeUninit::<libc::stat>::uninit();
-    // SAFETY: `fd` is open and `st` is a writable output, read only after success.
-    if unsafe { libc::fstat(fd, st.as_mut_ptr()) } != 0 {
+    if call(st.as_mut_ptr()) != 0 {
         return Err(io::Error::last_os_error());
     }
     // SAFETY: the call succeeded, so it filled `st`.
@@ -188,10 +178,9 @@ fn from_stat(st: libc::stat) -> Stat {
         libc::S_IFLNK => Kind::Symlink,
         _ => Kind::Other,
     };
-    // dev_t is u64 on Linux glibc but i32 on macOS, where `u64::from` does not compile.
     #[allow(
         clippy::unnecessary_cast,
-        reason = "dev_t is i32 on macOS; the cast widens there even though it is a no-op on Linux glibc"
+        reason = "dev_t is i32 on macOS, where `u64::from` does not compile; a no-op on Linux"
     )]
     let dev = st.st_dev as u64;
     #[cfg(target_os = "macos")]

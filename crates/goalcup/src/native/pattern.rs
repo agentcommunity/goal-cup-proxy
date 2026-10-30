@@ -56,7 +56,7 @@ pub fn parse(s: &str) -> Result<Pattern, PatternError> {
 impl Pattern {
     /// True when the file at `rel` (relative to the row's root) matches.
     pub fn matches(&self, rel: &Path) -> bool {
-        !rel.as_os_str().is_empty() && self.states(rel).is_some_and(|s| s[self.parts.len()])
+        self.states(rel).is_some_and(|s| s[self.parts.len()])
     }
 
     /// True when some file below the folder `rel_dir` could still match; always true once a `**`
