@@ -74,7 +74,10 @@ fn recovered_seal_in_a_second_recovery_frame_is_named() {
     assert_eq!(result(&v, "inv6"), "named");
     assert_eq!(v["entries"][0]["seal_reason"], "recovered");
     assert_eq!(v["entries"][0]["boots"], 1);
-    let gaps = item(&v, "inv6")["facts"]["gaps"].as_array().unwrap().clone();
+    let gaps = item(&v, "inv6")["facts"]["gaps"]
+        .as_array()
+        .unwrap()
+        .clone();
     assert_eq!(gaps.len(), 2, "{gaps:?}");
     assert_eq!(gaps[0]["ms"], first);
     assert!(gaps[1]["ms"].as_u64().unwrap() >= 60_000);
