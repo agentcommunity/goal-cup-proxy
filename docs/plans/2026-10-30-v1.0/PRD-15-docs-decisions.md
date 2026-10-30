@@ -1,12 +1,13 @@
 # PRD-15: Docs, AGENTS.md and decisions
 
-Id: PRD-15. Version: goalcup 1.0. Revision 2, 30 October 2026 (revision 1: 29 October). Base: main at
-4b226de2. Index: [PRD-00](PRD-00-index.md) revision 2. Format: [PRD-01](PRD-01-record-format.md)
-revision 2 (binding).
+Id: PRD-15. Version: goalcup 1.0. Revision 3, 30 October 2026 (the alignment pass against the ledger;
+revision 2: earlier the same day; revision 1: 29 October). Base: main at 4b226de2. Index:
+[PRD-00](PRD-00-index.md) revision 4. Format: [PRD-01](PRD-01-record-format.md) revision 2 (binding).
+The ledger, [OWNER-DECISIONS.md](OWNER-DECISIONS.md), wins over this file where they differ.
 
-Revision 2 follows PRD-00 and PRD-01 revision 2 and answers the three reviews of 30 October (the
-consistency check, review A, review B). The last section, "Review answers", lists each item and what
-was done.
+Revision 2 answered the three reviews of 30 October (the consistency check, review A, review B) in
+"Review answers", now history. Revision 3 answers the alignment fix lists in "Alignment answers", the
+last section.
 
 ## Goal
 
@@ -18,20 +19,23 @@ nothing else. In this build: about 20 live docs rewritten or written, five dead 
 ## Points served
 
 6 (lead: the participant guide, README and RULES say plainly what is recorded, what is lost and what
-each harness tier means), 7 (the harness table, the gateway paragraph and the contributor path),
+each harness tier means), 7 (the link to the one harness table, the gateway paragraph and the
+contributor path),
 4 (the masking paragraph says what can still be recorded), 1, 2, 3 and 5 (README maps each point to
 the tests that guard it; AGENTS.md makes those tests undeletable while the point stands).
 
 ## Owner decisions it carries out
 
 - Replace README's P1 to P7 with the seven points (answer 1, BRIEF2).
-- AGENTS.md hard rules stand. Two updates only: the P1 to P7 test rule becomes the seven points, and
-  the D65 disk-freeze exception goes. The map changes because the daemon goes (BRIEF3, ledger
-  section 7).
+- AGENTS.md hard rules stand, with the changes ledger section 7 lists: the P1 to P7 rule becomes the
+  seven points, D65 goes, the pin rule goes with the pins, and "daemon" becomes "recorder". The map
+  changes because the daemon goes (BRIEF3, ledger section 7).
 - No backward compatibility before Edition 01; old crates deleted in this build (ledger L3, L7).
 - Disk full: no special handling (progress doc, owner decisions of 29 Oct; ledger section 7).
 - No caps of our own; a limit guards a real cost and says so (VISION, ledger R5).
-- Masking option b, plus a left word boundary (ledger M1).
+- Masking option b, plus a left word boundary (ledger M1). Exact-value masking beyond today's
+  `GH_TOKEN`, and test keys and webhook secrets, only with the owner's yes (PRD-00 question 3, default
+  no).
 - One system for every harness: a gateway is one more host on the one host list; a dodger gets
   tunnels, session files, a named gap and, if it ignores the proxy, the tier "not supported", never a
   hack (ledger H1 to H5). The relayed question "isn't that also something we easily solve?" is
@@ -40,9 +44,12 @@ the tests that guard it; AGENTS.md makes those tests undeletable while the point
 - Counts: the participant, status, heartbeat and server see only written counts and off time (R6).
 - `VISION.md` is the owner's and is not edited. Owner decisions live in `docs/DECISIONS.md`
   ("Owner decisions in force").
-- PRD-00 revision 2 rulings: history docs are kept in this build; PRD-15's docs are in the third
-  slice and land as soon as each is green, not in the phase 3 merge; only the newcomer acceptance run
-  happens in this build; owner questions live in PRD-00 alone (this PRD cites their numbers).
+- PRD-00 rulings (made in revision 2, still in force): history docs are kept in this build; PRD-15's
+  docs are in the third slice and land as soon as each is green, not in the phase 3 merge; only the
+  newcomer acceptance run happens in this build; owner questions live in PRD-00 alone (this PRD cites
+  their numbers).
+- Question numbers are PRD-00 revision 4's (twelve questions; PRD-00 maps the old numbers 1 to 19 to
+  them). "Review answers" at the end still uses the old numbers.
 
 ## Today
 
@@ -56,7 +63,7 @@ the tests that guard it; AGENTS.md makes those tests undeletable while the point
 | The pin rule | `AGENTS.md:90-91` | Pins are cut (PRD-11, PRD-13); nothing left to act on |
 | The promise-test rule | `AGENTS.md:99-101`, `README.md:276-288` | "Never delete a test in the promises list (P1 to P7)"; P5 is the control API, P2 the v5 corpus: both cut |
 | README false or dead lines | `README.md:79-80` (disk pause), `:150-151` ("no header is recorded", false since header streams), `:158-160` (the daemon), `:162-168` (crate table), `:72-73`, `:102` (`goalcup mcp`), `:97-107` (eleven commands), `:109-114` (`--capture-integrity`, `--research-json`) | Every one changes with 1.0 |
-| RULES contract lines | `docs/RULES.md:10-11` and `:254` (`goalcup login`), `:16` ("one known gap"), `:42-43` (0.6.1), `:306-321` (labels incl. `wire_undecoded`), `:322-325` (disk), `:341-348` (`[masked]`, `<redacted:KIND>` markers), `:385` (disk types), `:398-413` (`goalcup doctor`, four harnesses), `:485-489` (still to decide) | The contract participants agree to |
+| RULES contract lines | `docs/RULES.md:10-11` and `:254` (`goalcup login`), `:16` ("one known gap"), `:42-43` (0.6.1), `:306-321` (labels incl. `wire_undecoded`), `:322-325` (disk), `:332-335` (upload), `:336-348` (`[masked]`, `<redacted:KIND>` markers), `:385` (disk types), `:398-413` (`goalcup doctor`, four harnesses), `:485-489` (still to decide) | The contract participants agree to |
 | DECISIONS | `docs/DECISIONS.md:1-50` status table, 57 entries `## D1` to `## D74` | The file's own rule (`:3-6`, `:15`): add an entry when a rule changes and update the status table in the same change. No D entry covers masking option b, disk full, no caps, or the 1.0 shape (appendix K finding 1) |
 | Owner decisions outside DECISIONS | `docs/plans/2026-10-29-record-everything-progress.md:80-100`; the ledger `OWNER-DECISIONS.md`; PRD-00 owner questions | Plan files, not the decision record |
 | Paths the old binary links | `crates/goalcup-cli/src/main.rs:59` (`docs/PARTICIPANT-GUIDE.md`), `commands/prep.rs:896` (`docs/HARNESS-SETUP.md`), `:558` (`docs/HARNESS-ONBOARDING.md`) | 1.0's help footer still links the guide (PRD-10 section 11). The other two are linked by 0.7 only, which the Worker refuses after the floor is set (PRD-00 question 5) |
@@ -84,7 +91,8 @@ the tests that guard it; AGENTS.md makes those tests undeletable while the point
    (PRD-01 section 9). "Recording works" appears nowhere.
 6. **Plain English, about grade 9, short sentences, no em dashes**, the house style (BRIEF.md).
 7. **No history in current docs.** No "since 0.6.1", no "removed by", no fix plan numbers. Git keeps
-   history. A doc may name `v0.7.0` once, where a 0.7 tester must act (guide appendix C).
+   history. No current doc has a section for 0.7 testers (ledger L7); one line in the 1.0.0 release
+   notes covers them (section 9 item 10).
 8. **Words for files.** On every participant page, one `start` or `continue` is a "part" and the
    compressed files are "record files" (PRD-10 section 1). Contributor pages say "part file" for a
    `rec-*.gcr.zst` file and "entry" for a part (PRD-01). The ARCHITECTURE glossary maps both.
@@ -94,7 +102,7 @@ the tests that guard it; AGENTS.md makes those tests undeletable while the point
 | Reader | Doc | Lines (est.) | Home of |
 |---|---|---:|---|
 | Participant | `README.md` top half | 120 of 220 | What it is, install, quick start, commands |
-| Participant | `docs/PARTICIPANT-GUIDE.md` (path kept: the binary links it) | 400 | Every step and message; the harness table with tiers; gateways; what is and is not recorded |
+| Participant | `docs/PARTICIPANT-GUIDE.md` (path kept: the binary links it) | 400 | Every step and message; a link to `docs/harnesses/README.md`; gateways; what is and is not recorded |
 | Participant | `docs/RULES.md` | 430 | The contract |
 | Participant | `SECURITY.md` | 110 | What runs on your machine, trust, what a check does not prove |
 | Participant | `skills/goal-cup/SKILL.md` | PRD-10 | The agent's one page |
@@ -109,7 +117,7 @@ the tests that guard it; AGENTS.md makes those tests undeletable while the point
 | Contributor | `docs/RECORD-FORMAT.md` (new) | 280 | GCR1 for readers, the Python reader, the `check --json` report, the usage JSON |
 | Contributor | `docs/CONNECTOR-SCHEMA.md` | 90 | PRD-11 section 2 as a reference page |
 | Contributor | `docs/DECISIONS.md` | 1,162 plus about 130 | Today's entries unchanged, the status table updated, owner decisions in force, D75 to D86 |
-| Contributor | `docs/harnesses/*.md` | PRD-11 | One facts sheet per harness |
+| Participant, contributor | `docs/harnesses/README.md`, `docs/harnesses/*.md` | PRD-11 | The one harness table (tier columns generated from `connectors/tiers.toml`); one facts sheet per harness |
 | Contributor | `skills/adding-a-capture-harness/**` | PRD-12 | The pad as the one way to add a harness |
 | Contributor | `docs/HARNESS-ONBOARDING.md` | 5 | A pointer to the skill (PRD-12 section 11) |
 | Contributor | `scripts/README.md` | 30 | The kept scripts and the pad |
@@ -166,7 +174,8 @@ This repository holds Goal Cup Proxy (`goalcup`), the recorder for Goal Cup runs
 participant's machine records every model request a coding agent's harness makes, through a loopback
 proxy, plus the harness's own session files, and writes every loss as a gap with a start and an end.
 It uploads the record while the run goes on. `goalcup-verify` checks a record and reads usage from it
-later. macOS and Linux; Windows through WSL2. Open work is in [TODO.md](TODO.md).
+later. Linux; macOS pending the owner's Mac run; Windows through WSL2. Open work is in
+[TODO.md](TODO.md).
 
 ## The seven points
 
@@ -184,6 +193,7 @@ Less code is better. Cut before you add. Ready by Friday 6 November 2026.
 
 Read first: [VISION.md](VISION.md), then [ARCHITECTURE](docs/ARCHITECTURE.md), then
 [DECISIONS](docs/DECISIONS.md) from "Owner decisions in force". While the 1.0 build runs, also the
+[ledger](docs/plans/2026-10-30-v1.0/OWNER-DECISIONS.md), which wins over every PRD, then the
 [PRD index](docs/plans/2026-10-30-v1.0/PRD-00-index.md).
 
 ## Map
@@ -203,6 +213,9 @@ Read first: [VISION.md](VISION.md), then [ARCHITECTURE](docs/ARCHITECTURE.md), t
 The dependency rule: the recorder never links the verifier, and the verifier never links the
 recorder. They share only `goalcup-format`. A test checks it.
 
+Core code is `crates/goalcup` and `crates/goalcup-format`. The usage reader in `crates/goalcup-verify`
+reads harness session formats after the run, chosen by connector id.
+
 ## The gate
 
 (PRD-14's text: the two tiers and what CI runs.)
@@ -210,15 +223,19 @@ recorder. They share only `goalcup-format`. A test checks it.
 ## Hard rules
 
 - **Never set a model base URL on any harness.** The only wire path is the loopback recording
-  proxy, reached through the harness's process-scoped `HTTPS_PROXY` (D1, D81).
+  proxy, reached through the harness's process-scoped `HTTPS_PROXY` (D1, D81). The test pad
+  configures a harness the way a participant would (for example pointing it at DeepSeek or a gateway,
+  in goalcup's isolated home); goalcup's own launch code never does.
 - **Goal Cup Proxy records and never manages the agent.** No prompting, no auto "keep going", no
   finish tool. The participant types the prompt and may type only "keep going". One exception: D66,
-  the agent may ask `goalcup time-left` how much time is left (pull only, nothing is pushed).
+  the agent may ask `goalcup time-left` how much time is left (pull only, nothing is pushed). A full
+  disk gets no special handling: the recorder restarts, then runs in null mode, and the harness keeps
+  working (D78).
 - **No harness names in core code.** A harness is data (a connector) plus shared modules.
 - **Never write into `~/.claude`, `~/.codex`, `~/.hermes` or any app-wide config.** Goal Cup Proxy
   makes isolated homes. A test that launches a harness uses a private `HOME`.
-- **Never commit** anything under `pad-out/`, `harnesses/` or `target/`, a key, or a real run's
-  record. A committed fixture is masked and reviewed by eye.
+- **Never commit** anything under the repository root's `/pad-out/` or `/harnesses/`, or any
+  `target/`, a key, or a real run's record. A committed fixture is masked and reviewed by eye.
 - **Record raw, interpret later.** The recorder captures bytes. The verifier and the usage reader
   judge them. Do not put rule logic in the recorder (D3).
 
@@ -227,12 +244,14 @@ recorder. They share only `goalcup-format`. A test checks it.
 One test per behaviour you add or change. Test the promise, not the shape: no golden snapshots of
 internal structures, and no assertions on doc text or message wording unless the text is the
 contract. Every behaviour that serves one of the seven points has a test, and that test is not
-deleted while the point stands. Where they are: [README](README.md#the-seven-points-and-their-tests).
+deleted while the point stands, or is replaced in the same change by a test with the same name prefix
+that asserts the same promise. Where they are: [README](README.md#the-seven-points-and-their-tests).
 
 ## Done
 
 1. `sh scripts/gate.sh fast` passes. `full` too before a release.
-2. One reviewer reads the PR once.
+2. At least two independent reviewers read each diff during the 1.0 build (ledger B2); after it, one
+   reviewer reads the PR once.
 3. `README.md`, the participant guide or `TODO.md` is updated if behaviour changed.
 
 Rust edition 2024, stable toolchain (`rust-toolchain.toml`). Questions about rules or scope go to
@@ -243,16 +262,16 @@ What changed against the hard rules, line by line:
 
 | Today | 1.0 | Kind |
 |---|---|---|
-| D65 exception (`AGENTS.md:84-86`) | Gone; "Two exceptions" becomes "One exception" | Owner rule change 2 |
+| D65 exception (`AGENTS.md:84-86`) | Gone; "Two exceptions" becomes "One exception"; one sentence says a full disk gets no special handling (D78) | Owner rule change 2 |
 | Promise-test rule (`:99-101`) | Seven points rule, in PRD-00's words | Owner rule change 1 |
 | Pin rule (`:90-91`) | Gone | Consequence of the pin cut (ledger section 7, L6; default taken in PRD-00) |
-| `spikes/*/out/`, `spikes/redact.py` (`:92-93`) | `pad-out/` beside `harnesses/` and `target/`; keys and real records named; masked fixture | Consequence of deleting `spikes/` (PRD-13 phase 3 step 2). Same rule, live paths |
+| `spikes/*/out/`, `spikes/redact.py` (`:92-93`) | Root `/pad-out/` beside root `/harnesses/` and any `target/` (root-anchored, so `docs/harnesses/` stays committable); keys and real records named; masked fixture | Consequence of deleting `spikes/` (PRD-13 phase 3 step 2). Same rule, live paths. The wording is on the owner list (G3-O4, default yes) |
 | "The daemon captures bytes" (`:94-95`) | "The recorder captures bytes"; the usage reader judges too | Ledger section 7 wording |
-| D1, D36 | D1, D81 | D81 is the one host list (section 6); D36's text stays as history |
+| D1, D36 | D1, D81; one sentence says the pad configures a harness as a participant would and goalcup never does | D81 is the one host list (section 6); D36's text stays as history. The sentence is ledger section 7 row 1 |
 
 Ending the harness at the deadline and on `goalcup seal` is today's behaviour and stays (PRD-00
-question 11). It is written in D85 and the guide, not in the hard-rule text, because the ledger allows
-two rule changes only.
+question 2, old 11). It is written in D85 and the guide, not in the hard-rule text, because ledger
+section 7 changes only the rows it lists and changes no other hard rule.
 
 ### 5. README.md for 1.0
 
@@ -260,7 +279,7 @@ Outline, about 220 lines:
 
 1. **Title and five lines.** What `goalcup` records (model requests through a loopback proxy, session
    files, gaps), that it uploads while the run goes on, and that it runs on the participant's machine.
-   No harness list here (it is in the guide).
+   No harness list here (it is in `docs/harnesses/README.md`, PRD-11).
 2. **Quick start for participants** (about 40 lines): install, `goalcup setup`, `goalcup start --practice`,
    repository, token and folder, `goalcup start --repo <you>/<repo> --prompt prompt.txt`. Same steps as
    the help footer (PRD-10 section 11). Links to the guide for each step.
@@ -281,12 +300,12 @@ Outline, about 220 lines:
    > model host goalcup does not know is added once with `goalcup setup --record-host <host>`. Some
    > harnesses talk only to their vendor (Amp, Copilot with GitHub's models): goalcup records what
    > the harness sends to the vendor; the vendor's own model calls happen on its servers. A harness
-   > that ignores goalcup's proxy is "not supported": goalcup still records its session files and
-   > the connections it sees, and says plainly what it could not read.
+   > that ignores goalcup's proxy is "not supported": goalcup records its session files only, not its
+   > model calls, and says so.
 
 6. **Platforms** (anchor `#platforms` kept): macOS (the owner's Mac run is pending, said plainly until
-   it passes), Linux x86_64 and arm64 (tested in Linux sandboxes), Windows through WSL2. The APFS, ext4
-   or XFS rule goes (PRD-10 cuts the filesystem list).
+   it passes), Linux x86_64 (tested in sandboxes), Linux arm64 built, not yet tested, Windows through
+   WSL2. The APFS, ext4 or XFS rule goes (PRD-10 cuts the filesystem list).
 7. **Add a harness**: five lines and a link to the skill and the pad (PRD-12 section 11).
 8. **For developers**: build, the gate (anchor `#the-gate` kept; PRD-14's text with its measured
    times), the dependency rule.
@@ -324,26 +343,28 @@ so nothing conflicts with other lanes and every old cite still resolves:
    option b (D80). 29 Oct night (ledger): goalcup 1.0, fresh core, old crates deleted, no backward
    compatibility (D84); one process (D75); GCR1 (D76); written counts (D77); one system for every
    harness, gateways included (D81); tiers by the pad (D82); usage stats after upload (D83). Answered
-   or defaulted PRD-00 owner questions enter only with their answer: ending the harness (question 11,
-   D85), no-prompt settings (question 8, D86), cut login and file connectors (questions 9 and 15,
-   D84), tier and eligibility (question 14, D82), exact-value masking (question 12, D80). A default
-   the owner has not confirmed is marked "(default, PRD-00 question N)". The open list is in `TODO.md`.
+   or defaulted PRD-00 owner questions enter only with their answer: ending the harness (question 2,
+   D85), no-prompt settings (question 2, D86), cut login and file connectors (questions 2 and 4,
+   D84), tier and eligibility (question 4, D82), exact-value masking (question 3, D80), the
+   watchdog's jobs (question 9, D75), the left guard class (question 10, D80), the test-only build
+   feature (question 12, D84). A default the owner has not confirmed is marked "(default, PRD-00
+   question N)". The open list is in `TODO.md`.
 3. **D75 to D86**, appended, each one to eight lines:
 
 | D | Rule (the entry, shortened here) | Status table rows it changes | Asked by |
 |---|---|---|---|
-| D75 | One goalcup process records everything: proxy, session-file reader, masker, writer, uploader. The watchdog is the `start` or `continue` process: it holds the listen port, mints the run CA once per entry, runs the connector's helper stops, starts and ends the harness (D85) and restarts a dead recorder at once on the same port with the same CA. No producers, no shared queue, no failure budget. After repeated fast exits the recorder runs in null mode: it relays, records nothing, says so and retries later. Core dumps are off and a panic writes only file, line and fixed text. Every timer runs on boot time | D4 superseded; D58 superseded | PRD-02, PRD-00 done item 6 |
-| D76 | The record format is GCR1: binary framing, raw bytes, one stream per WebSocket direction, one link per flush, zstd with a 2^27 window written at record time. The part file is the upload unit. A session file's path is its ID. Session files are not compared byte for byte with the disk. No reader for older formats | D53, D54, D55 superseded; D2 partly (the byte-for-byte clause) | PRD-01, PRD-00 done item 6 |
-| D77 | Counts are written counts. The participant, status, heartbeat and server see only counts of bytes already written, and how long recording was off. No screen says "recording works" | none | PRD-01 section 9, PRD-10 |
+| D75 | One goalcup process records everything: proxy, session-file reader, masker, writer, uploader. The `start` or `continue` process launches and ends the harness (D85) and is also the watchdog: its only recording job is to restart a dead recorder at once on the same port with the same CA (ledger R3). Beside that it holds the listen port, mints the run CA once per entry and runs the connector's helper stops; it never touches a recorded byte (default, PRD-00 question 9). No producers, no shared queue, no failure budget. After repeated fast exits the recorder runs in null mode: it relays, records nothing, says so and retries later. Core dumps are off and a panic writes only file, line and fixed text. Every timer runs on boot time | D4 superseded; D58 superseded | PRD-02, PRD-00 done item 6 |
+| D76 | The record format is GCR1: binary framing, raw bytes, one stream per WebSocket direction, one link per flush, zstd with a 2^27 window written at record time. The part file is the upload unit. A session file's path is its ID. Session files are not compared byte for byte with the disk. No reader for older formats. Upload: a chunk every 5 minutes or when 16 MiB waits; retry backoff resets when the server's offset moves and is capped short; a local part file is pruned once the server confirms it (PRD-06) | D53, D54, D55 superseded; D2 partly (the byte-for-byte clause); D64 partly (its backoff clause) | PRD-01, PRD-00 done item 6 |
+| D77 | Counts are written counts. The participant, status, heartbeat and server see only counts of bytes already written, and how long recording was off. No screen says "recording works". The heartbeat says `recording: failed` while recording is off; mail about it is out of scope | none | PRD-01 section 9, PRD-10 |
 | D78 | Every loss is a gap with a start, an end, a reason and the lost bytes when known. No loss is silent. Load never turns recording off, and nothing counts failures while the recorder answers. A full disk gets no special handling: a write error ends the recorder, the watchdog restarts it, after repeated failures it runs in null mode, status says recording is off, and the next good boot's `recorder_down` gap covers the time. The harness keeps working | D65 superseded; D9 partly; D64 (its D65 clause) | Run 1 handover items 1 to 4; PRD-02 section 5 |
 | D79 | No caps of our own. No cap on streams, files, subagents, connections or a run's size. A kept limit guards a real cost and names it where it is set (PRD-02 memory guards, PRD-07 section 5). A memory guard never stops recording: past it, a gap, and recording goes on | none (D58 is in D75) | VISION, owner answers 2 and 3 |
-| D80 | Masking happens before any byte reaches disk. Every secret rule stays; the URL password rule is added; the email and Codex rate-limit rules go; a key needs a left word boundary (with `jwt`). A masked byte becomes `*`, same length, with a MASK record. A fail-closed span is named and counted. The run's own secrets and the key values from the four sources of PRD-05 section 9 are masked by exact value (default, PRD-00 question 12). What can still be recorded is in the guide | D14, D36, D60 partly; D41 (its key-fragment rule) | PRD-05 |
+| D80 | Masking happens before any byte reaches disk. Every secret rule stays; the URL password rule is added; the email and Codex rate-limit rules go; a key needs a left word boundary (with `jwt`): a guarded rule is dropped when the byte before it is a letter, a digit or `_` (PRD-00 question 10; `-` is added only with the owner's yes). A masked byte becomes `*`, same length, with a MASK record. A fail-closed span is named and counted. The run's `GH_TOKEN` is masked by exact value, as today. Exact-value masking of the other sources of PRD-05 section 9, and widening the Stripe rule to test keys and webhook secrets, are built only with the owner's yes (PRD-00 question 3, default no); with a yes this entry says so. What can still be recorded is in the guide | D14, D36, D60 partly; D41 (its key-fragment rule) | PRD-05 |
 | D81 | One host list for every harness. Shared model hosts (providers, gateways, cloud model services, vendor backends), hosts the participant registers and hosts the harness config names are decrypted and recorded. Every other connection is a tunnel recorded with host, bytes and times, and a long or large tunnel to one host is flagged. Sign-in hosts are never decrypted. A client that pins or refuses the run CA falls back to a tunnel with a named gap. A harness that ignores `HTTPS_PROXY` or the run CA is never hacked around. A model server on loopback is not recorded and is named (`local_model`). The run CA is trusted only through the harness's own variables | D1 partly (the "hosts the connector declares" clause); D62, D74 partly | PRD-03, PRD-11 |
-| D82 | Harness tiers come from the test pad: "verified on `<version>`", "not verified" with a reason, or "not supported". `connectors/tiers.toml` is the one source. A tier says how well goalcup records a harness, not whether a run is eligible (default, PRD-00 question 14) | none (D23 already retired) | PRD-12 |
-| D83 | Usage stats are read after upload: `goalcup-verify usage` reads the record and the harness's own session files and writes tokens, models and calls per call, per subagent and per run. An organizer job stores them as JSON in R2. Organizers see them (default, PRD-00 question 4). The recorder never parses for stats | D26 partly | PRD-09 |
-| D84 | What 1.0 removes: signing and receipts, pins, deny lists, the connector contract freeze, the termination proof, the control API, `goalcup login`, `doctor`, `mcp` and `--dev`. No backward compatibility before Edition 01. Connectors are compiled in; `--connector` and `--hosts` load a file in practice and test runs only (default, PRD-00 question 15). The Worker refuses clients below `MIN_COMPETITION_VERSION` in every mode; production gets 1.0.0 after the 1.0.0 release is published (default, PRD-00 question 5) | D16 partly (the receipt); D24, D30, D63, D68 superseded; D42, D43, D70 partly | PRD-00 "Not in this build", PRD-07, PRD-10, PRD-13 |
-| D85 | goalcup ends the harness only at the deadline, on `goalcup seal` and on the server's `stop`: SIGTERM to the harness tree, SIGKILL after 10 s. `goalcup seal` refuses inside the harness. There is no termination proof (default, PRD-00 question 11) | D22 partly; D66 unchanged | PRD-02 section 8, PRD-10 |
-| D86 | `goalcup setup` writes the connector's no-prompt values and the auto-update switch into goalcup's own isolated harness home after one question, never into app-wide config (default, PRD-00 question 8). If the owner answers no, D86 is not written and D67 stands | D67 superseded | PRD-10, PRD-11 |
+| D82 | Harness tiers come from the test pad: "verified on `<version>`", "not verified" with a reason, or "not supported". `connectors/tiers.toml` is the one source. A tier says how well goalcup records a harness, not whether a run is eligible (default, PRD-00 question 4) | none (D23 already retired) | PRD-12 |
+| D83 | Usage stats are read after upload: `goalcup-verify usage` reads the record and the harness's own session files and writes tokens, models and calls per call, per subagent and per run. An organizer job stores them as JSON in R2. Organizers see them (default, PRD-00 question 1). The recorder never parses for stats | D26 partly | PRD-09 |
+| D84 | What 1.0 removes: signing and receipts, pins, deny lists, the connector contract freeze, the termination proof, the control API, `goalcup login`, `doctor`, `mcp` and `--dev`. No backward compatibility before Edition 01. Connectors are compiled in; `--connector` and `--hosts` load a file in practice and test runs only (default, PRD-00 question 4). The Worker refuses clients below `MIN_COMPETITION_VERSION` in every mode; production gets 1.0.0 after the 1.0.0 release is published (default, PRD-00 question 5). Also removed: research decoders except the model and usage parts PRD-09 keeps, research scripts, the separate daemon (D75), disk-full handling (D78), legacy and test seams (one test-only build feature stays, never in a release build: default, PRD-00 question 12), retired versions | D16 partly (the receipt); D24, D30, D63, D68 superseded; D42, D43, D70 partly | PRD-00 "Not in this build", PRD-07, PRD-10, PRD-13 |
+| D85 | goalcup ends the harness only at the deadline, on `goalcup seal` and on the server's `stop`: SIGTERM to the harness tree, SIGKILL after 10 s. `goalcup seal` refuses inside the harness. There is no termination proof (default, PRD-00 question 2) | D22 partly; D66 unchanged | PRD-02 section 8, PRD-10 |
+| D86 | `goalcup setup` always writes the connector's auto-update switch into goalcup's own isolated harness home (ledger H9), and after one question writes the no-prompt values there too, never into app-wide config (default, PRD-00 question 2). If the owner answers no, the no-prompt clause is not written and D67 stands for it | D67 superseded | PRD-10, PRD-11 |
 
 4. **Status table** (`:17-50`): one row per entry in the column "Status table rows it changes",
    naming the new entry. The builder then reads every entry once and marks any other clause 1.0
@@ -362,17 +383,16 @@ Path kept (`main.rs:59` today, PRD-10 section 11 in 1.0). Outline, about 400 lin
 | What goalcup does for you | Five lines: records your harness's model requests and session files, uploads them, never slows your agent, hides secrets before saving, tells you exactly what it wrote and what it lost | Seven points |
 | 1. What you need | Agent Community account; a harness on the list; a key or a login; macOS, Linux or WSL2; a GitHub account for the real run | `RULES.md` |
 | 2. Install | One command, the PATH line, `goalcup --version`; one line on firewalls such as Little Snitch (asked once per binary, again after updates) | PRD-10 section 7, PRD-14 |
-| 3. Set up | `goalcup setup`: pick the harness; sign in inside goalcup's own harness home; the one question and what "yes" writes there (no-prompt values and the auto-update switch); machine warnings; `Ready.`. How to use a gateway: configure it inside goalcup's home, nothing else to do. A model host goalcup does not know: `goalcup setup --record-host <host>`, and what is refused (an IP address, a sign-in host, a wide pattern) | PRD-10 sections 1, 7; PRD-11 sections 4, 7 |
-| 4. Your harness: the list and the tiers | The three tiers in plain words, the table below, then the general setup notes from today's HARNESS-SETUP sections 1 to 7 (no prompts, push, turn limits, sign-in lifetime, subagents and their models, tools on PATH, first-run screens) and one paragraph on auto-update: goalcup turns it off by an env switch where one exists; for Hermes, Gemini CLI and Qwen Code, `goalcup setup` writes the switch into goalcup's home when you answer yes; an update matters only at the next `goalcup continue`, and the record names the version at every start | PRD-11 section 7, PRD-12 section 9 |
+| 3. Set up | `goalcup setup`: pick the harness; sign in inside goalcup's own harness home; the auto-update switch goalcup always writes there; the one question and what "yes" writes there (the no-prompt values); machine warnings; `Ready.`. How to use a gateway: configure it inside goalcup's home, nothing else to do. A model host goalcup does not know: `goalcup setup --record-host <host>`, and what is refused (an IP address, a sign-in host, a wide pattern) | PRD-10 sections 1, 7; PRD-11 sections 4, 7 |
+| 4. Your harness: the list and the tiers | The three tiers in plain words, a link to the one harness table `docs/harnesses/README.md` (PRD-11; never copied into the guide), then the general setup notes from today's HARNESS-SETUP sections 1 to 7 (no prompts, push, turn limits, sign-in lifetime, subagents and their models, tools on PATH, first-run screens) and one paragraph on auto-update: goalcup turns it off by an env switch where one exists; for Hermes, Gemini CLI and Qwen Code, `goalcup setup` writes the switch into goalcup's home; an update matters only at the next `goalcup continue`, and the record names the version at every start | PRD-11 section 7, PRD-12 section 9 |
 | 5. A practice run | `goalcup start --practice`, about 10 minutes, no GitHub, never counts | PRD-10 |
 | 6. Your run | Repository, token, folder (`.gitignore`, `.env.local`), `--prompt FILE`, the approval code, the one first message on the clipboard and in `first-message.txt`, "keep going" only | PRD-10 sections 3, 8 |
-| 7. During the run | The status block line by line; the recording states (on, restarting, off, losing data, behind, finished) and what each asks of you, including "recording off: disk write failed" (free space, goalcup retries by itself); each `PROBLEM:` line and its fix, including the line for a host that streamed and was not recorded (`--record-host`, then `continue`); `goalcup continue`; `goalcup time-left`; sleep and the sleep lock line | PRD-10 sections 4, 9, 10; PRD-02 section 5 |
-| 8. The end | The end screen line by line (written requests by host, requests with missing parts, session files, off time, hosts that passed through unread, upload); if upload has not finished, the line "Run `goalcup upload` before <time>" and why (the server takes uploads until 24 hours after the run ends); what is removed from the computer and why; delete the token, log out or rotate keys; the videos | PRD-10 section 5, PRD-06 section 10, PRD-00 question 2 |
+| 7. During the run | The status block line by line; the recording states (on, restarting, off, losing data, behind, finished) and what each asks of you, including "recording off: disk write failed" (free space, goalcup retries by itself); each `PROBLEM:` line and its fix, including the line for a host that streamed and was not recorded (`--record-host`, then `goalcup seal` and `goalcup continue`: the host is recorded from the next part); `goalcup continue`; `goalcup time-left`; sleep and the sleep lock line | PRD-10 sections 4, 9, 10; PRD-02 section 5 |
+| 8. The end | The end screen line by line (written requests by host, requests with missing parts, session files, off time, hosts that passed through unread, upload); if upload has not finished, the line "Run `goalcup upload` before <time>" and why (the server takes uploads until 24 hours after the run ends); what is removed from the computer and why; delete the token, log out or rotate keys; the videos | PRD-10 section 5, PRD-06 section 10, PRD-00 question 1 |
 | 9. What is recorded, and what is not | PRD-05 section 12's paragraph verbatim as merged. Then one line each: tunnels (host, bytes and times only); vendor backends (the harness's traffic to its vendor, not the vendor's own model calls); harnesses that ignore the proxy ("not supported"); a harness that starts another harness as a subagent ("wire only": its calls are recorded, its session files are not); a model server on this computer (Ollama, LM Studio: not recorded, named in status); HTTP/3, QUIC and ECH never reach a proxy; a network that re-signs TLS and needs its own proxy is not supported; a token used as the user name of a URL with no password may be recorded; SQLite harnesses' databases are copied at the seal; on Linux, memory goalcup holds can reach unencrypted swap | PRD-05, PRD-03, PRD-04, PRD-11 section 8, PRD-17 T9 and K12, review A 5 and 7 |
 | 10. Help | Support address; paste `goalcup status` and the run id, never a token; `goalcup.log` path | PRD-10 section 12 |
 | Appendix A: start refusals | Each refusal and its fix, from `src/cli/text.rs`, including `--connector` and `--hosts` refused in a competition run | PRD-10 sections 1, 13 |
 | Appendix B: gap reasons in plain words | PRD-01 section 3's table as merged (reasons 1 to 15; 8 and 9 reserved and not listed), in PRD-10's words | PRD-01, PRD-10 section 5 |
-| Appendix C: if you tested 0.7 | Reinstall; `goalcup login`, `doctor`, `entries` and `mcp` are gone; remove a `goalcup mcp` line from your harness config (a 1.0 harness shows a failed MCP server and goes on); `GOALCUP_CONFIG_DIR` is now `GOALCUP_HOME`; 0.7 runs cannot be continued | PRD-10 sections 1, 2, 11 |
 
 **The tiers, as the guide says them** (rules from PRD-12 section 9):
 
@@ -384,23 +404,25 @@ Path kept (`main.rs:59` today, PRD-10 section 11 in 1.0). Outline, about 400 lin
   harness yet. The table says why (for example "no key" or "no log reader"). `goalcup status` tells
   you if model requests seem to be missing.
 - **Not supported**: the harness ignores goalcup's proxy or refuses its certificate. goalcup records
-  its session files and the connections it can see, not its model calls. A tier does not decide
-  whether you may take part (RULES; PRD-00 question 14).
+  its session files and, if it refused the certificate, the connection as a tunnel; its model calls
+  are not recorded. A tier does not decide whether you may take part (RULES; PRD-00 question 4).
 
-**The harness table.** One row per harness (OpenCode 1 and 2 share a row). The tier and version
-columns are generated from `connectors/tiers.toml` after phase 5; before that every row says "not
-verified". "Know this" is the one fact a participant must act on, from PRD-11 section 7.
+**The harness table is not in the guide.** The one harness table is `docs/harnesses/README.md`
+(PRD-11); its tier columns are generated from `connectors/tiers.toml` (PRD-12), and the guide, README
+and RULES link to it (rule 2). The cells below are PRD-15's draft of the participant columns, handed to
+PRD-11 to check and own (ask 5): one row per harness (OpenCode 1 and 2 share a row); "Know this" is the
+one fact a participant must act on, from PRD-11 section 7.
 
 | Harness | `goalcup` id | Sign in | Gateway | Know this |
 |---|---|---|---|---|
-| Claude Code | `claude-code-cli` | Key or subscription | `ANTHROPIC_BASE_URL` in goalcup's home | goalcup refuses to start if `settings.json` there sets a proxy |
+| Claude Code | `claude-code-cli` | Key or subscription | You set `ANTHROPIC_BASE_URL` in the `settings.json` of goalcup's Claude Code home; goalcup never sets it | goalcup refuses to start if `settings.json` there sets a proxy |
 | Codex | `codex-cli` | Key or ChatGPT sign-in | A custom provider in goalcup's home | Do not put a proxy or CA in `$CODEX_HOME/.env` |
 | Hermes | `hermes-cli` | Keys in its `.env`, or Nous sign-in | Its built-in providers, or `model.base_url` | goalcup stops a running Hermes gateway before the start; its `copilot-acp` child is wire only |
 | OpenCode 1 and 2 | `opencode-cli`, `opencode2-cli` | Key or OpenCode account | Its own gateway or a provider | goalcup stops OpenCode 2's background service first |
 | OpenClaw | `openclaw-cli` | Keys in its `.env` | Provider plugins | Leave its own proxy setting empty; subagents unmeasured |
 | Amp | `amp-cli` | Amp account | Not needed | Amp's servers call the model; goalcup records what Amp sends there |
 | GitHub Copilot CLI | `copilot-cli` | GitHub sign-in (GitHub's models) or your own key | Your own key | `/delegate` runs in GitHub's cloud and is not allowed (RULES) |
-| Gemini CLI | `gemini-cli` | Gemini key, or Google sign-in (Google's servers call the model) | Not needed | Answer yes in setup so auto-update is off |
+| Gemini CLI | `gemini-cli` | Gemini key, or Google sign-in (Google's servers call the model) | Not needed | Setup turns auto-update off in goalcup's home |
 | Goose | `goose-cli` | Key | A custom provider | |
 | Kilo CLI | `kilo-cli` | Key or Kilo account | Vercel AI Gateway or Kilo's gateway | |
 | Qwen Code | `qwen-cli` | Key | Not needed | Leave its own `proxy` setting empty; its built-in `claude-code` and `codex` subagents start another harness and are not allowed (RULES) |
@@ -408,30 +430,30 @@ verified". "Know this" is the one fact a participant must act on, from PRD-11 se
 | Factory Droid | `droid-cli` | Factory account plus your key | Your own key | Cloud computers are not allowed (RULES) |
 | Kimi Code | `kimi-code-cli` | Kimi sign-in or a provider key | A provider in its config | |
 | Cline CLI | `cline-cli` | Key or Cline account | Cline's provider | A Cline hub already running may bypass goalcup; quit it first |
-| Cursor CLI | none | | | Not supported: no connector |
+| Cursor CLI | none | | | Out of 1.0: no connector. Documented as the dodger case in `docs/harnesses/` |
 
-Every row is checked against PRD-11's connector and the pad row at phase 5. A "Know this" line that
+PRD-11 checks every row against its connector and the pad row at phase 5. A "Know this" line that
 the pad shows to be wrong is removed, not hedged.
 
 ### 8. RULES.md edits
 
 | Line | Today | 1.0 |
 |---|---|---|
-| `:10-11`, `:254` | Two approvals; `goalcup login` | One approval per run (PRD-00 question 9) |
+| `:10-11`, `:254` | Two approvals; `goalcup login` | One approval per run (PRD-00 question 2) |
 | `:16` | "one known gap" | One sentence: secrets are masked by shape and by exact value; the guide lists what can still be recorded (PRD-05 section 12) |
 | `:42-43` | 0.6.1 dry run | Delete |
 | `:112-113` | `goalcup time-left` (D66) | Kept as is; D66 keeps its number |
 | `:306-321` | Four labels including `wire_undecoded`; D74 | The `label` of `goalcup-verify check --json`: `wire_and_native`, `wire_only`, `native_only`, `none`, and the coverage line of the text output (PRD-08 section 5). A label is a hint for judges, not a judgement. Admissibility text unchanged |
 | `:322-325` | Full disk is a red flag; the disk pause (D65) | "If the disk fills, recording goes off until there is space again, and the record shows the gap. Judges read it like any other gap." (D78) |
-| `:335-339` | Upload every 30 minutes; one hour after the stop | The cadence and windows PRD-06 and PRD-07 ship, read from the merged code (default: every 5 minutes; up to 60 minutes after the seal; the server takes uploads until 24 hours after the run ends) |
-| `:341-348` | `[masked]`, `<redacted:KIND>` markers | Stars of the same length; the PRD-05 list of what is still recorded |
+| `:332-335` | Upload every 30 minutes; one hour after the stop | The cadence and windows PRD-06 and PRD-07 ship, read from the merged code (default: every 5 minutes; up to 60 minutes after the seal; the server takes uploads until 24 hours after the run ends) |
+| `:336-348` | `[masked]`, `<redacted:KIND>` markers | Stars of the same length; the PRD-05 list of what is still recorded |
 | `:385` | APFS, ext4 or XFS required | Delete (PRD-10 cuts the filesystem list) |
-| `:398-413` | `goalcup doctor --harness all`; four connectors | The 15 harnesses and their tiers (link to guide section 4); `/delegate`, Droid cloud computers and Qwen Code's harness-starting subagents named under "Other agents" and cloud modes (PRD-00 question 14); `--connector` and `--hosts` refused in a competition run (PRD-00 question 15) |
+| `:398-413` | `goalcup doctor --harness all`; four connectors | The 15 harnesses and their tiers (link to `docs/harnesses/README.md`); `/delegate`, Droid cloud computers and Qwen Code's harness-starting subagents named under "Other agents" and cloud modes (PRD-00 question 4); `--connector` and `--hosts` refused in a competition run (PRD-00 question 4) |
 | `:485-489` | Still to decide | Move to `TODO.md` |
 
 RULES is the participant's contract. The lines that change what a participant may do (the three
-cloud modes, the tier sentence, file connectors) carry PRD-00's defaults for questions 14 and 15 and
-are marked in `TODO.md` as defaults until the owner answers. Edits that only follow cut code do not
+cloud modes, the tier sentence, file connectors) carry PRD-00's default for question 4 and are
+marked in `TODO.md` as defaults until the owner answers. Edits that only follow cut code do not
 need the owner.
 
 ### 9. OPERATING.md for 1.0
@@ -453,13 +475,17 @@ Keep the runbook, drop the binary reference that 1.0 makes small. About 280 line
    The organizer query `stopped-runs.sql` comes after the merge (TODO).
 7. **The usage job**: how to run it and where the JSON lands (PRD-09 section 7; third slice).
 8. **Storage and the manual lever**: PRD-07 section 5's cost table and the one hand write.
-9. **Bad days**: kept and updated; the case "disk nearly full" (`:457`) goes.
-10. **Releasing**: PRD-14's text.
+9. **Bad days** (`:468-491`): kept and updated. "Edge cases by hand" (`:435-467`): row 4, disk nearly
+   full (`:457`), goes; the rest moves to the pad or goes.
+10. **Releasing**: PRD-14's text, plus the one line for 0.7 testers that the 1.0.0 release notes carry:
+   "If you tested 0.7, install 1.0 fresh; 0.7 runs cannot be continued." (PRD-10 section 11).
 
 Cut: "Running the daemon" (`:571-610`), "Running a capture with the CLI" (`:611-655`, now the README
 quick start), "Running the verifier" (`:656-730`, now PRD-08's four subcommands in README),
 "Pinning connectors" (`:731-746`) and "Finding codes" (`:747-863`, replaced by PRD-08's
-`check --json` report, documented in RECORD-FORMAT's last sections).
+`check --json` report, documented in RECORD-FORMAT's last sections). "Building and verifying" becomes
+the README developer section plus PRD-14's CI text (`:530`); "Installing the participant binaries"
+becomes one link to `packaging/README.md`.
 
 ### 10. Contributor docs
 
@@ -536,7 +562,7 @@ Must not touch: `docs/UPLOAD-API.md`, `server/**` (PRD-07); `connectors/**`, `do
 
 | PRD | What crosses | Direction |
 |---|---|---|
-| PRD-00 | Ownership; owner questions 2, 4, 5, 8, 9, 11, 12, 14, 15, cited by number; definition of done item 6; "Not in this build" (history, DECISIONS rewrite, acceptance runs) | Used here |
+| PRD-00 | Ownership; owner questions 1, 2, 3, 4, 5, 9, 10, 12 (revision 4 numbers), cited by number; definition of done item 6; "Not in this build" (history, DECISIONS rewrite, acceptance runs) | Used here |
 | PRD-01 | `docs/RECORD-FORMAT.md` is written from revision 2; the final GAP reason table for guide appendix B; "part file" in prose | Used here |
 | PRD-02 | D75 text (one process, guard, watchdog restart, null mode, no core dumps, boot-time timers); `status.json` modes for the guide's state table; disk full as exit 74 and null mode (D78, README, RULES); the swap residual for SECURITY | Used here |
 | PRD-03 | Host list behaviour, tunnel notes, the per-host long-tunnel flag, the `never` list, the HTTP/3 and ECH line | Used here |
@@ -546,12 +572,12 @@ Must not touch: `docs/UPLOAD-API.md`, `server/**` (PRD-07); `connectors/**`, `do
 | PRD-07 | `server/worker/README.md` absorbs SERVER-DESIGN (they confirm before the move); deploy order, floor, test bucket and storage cost for OPERATING; PRD-07's list of stale docs (OPERATING, SERVER-DESIGN, CHEAT-CHECKLIST) is done here | Both |
 | PRD-08 | Four subcommands and exit codes for README and AGENTS; the S6 `label` and the coverage line for RULES and SECURITY; the `check --json` report for RECORD-FORMAT; the judge view is after the merge | Used here |
 | PRD-09 | Usage JSON schema, token and hint tables as a RECORD-FORMAT section; the organizer job for OPERATING | Used here |
-| PRD-10 | Guide sections 3 to 10, the message list, "part" and "record file", the 0.7 leftover line, the firewall line, the guide path in the help footer, the `local_model` and long-tunnel lines, the file-connector refusal | Used here |
-| PRD-11 | CONNECTOR-SCHEMA from its section 2; harness facts from its section 7; "wire only" (section 8) and `local_model` in the guide; the gateway answer for README | Used here |
-| PRD-12 | The skill replaces HARNESS-ONBOARDING (shrunk to a pointer); `connectors/tiers.toml` and `PAD-RESULTS.md` feed the guide table and README; tier rules for the guide; OPERATING points to the pad | Used here |
+| PRD-10 | Guide sections 3 to 10, the message list, "part" and "record file", the 0.7 release-notes line (OPERATING "Releasing"), the firewall line, the guide path in the help footer, the `local_model` and long-tunnel lines, the file-connector refusal | Used here |
+| PRD-11 | CONNECTOR-SCHEMA from its section 2; harness facts from its section 7; "wire only" (section 8) and `local_model` in the guide; the gateway answer for README; `docs/harnesses/README.md`, the one harness table the guide, README and RULES link (PRD-15 hands it the draft participant cells of section 7) | Both |
+| PRD-12 | The skill replaces HARNESS-ONBOARDING (shrunk to a pointer); `connectors/tiers.toml` feeds the tier columns of `docs/harnesses/README.md` (PRD-11), which the guide and README link; `PAD-RESULTS.md` feeds README's seven-points table; tier rules for the guide; OPERATING points to the pad | Used here |
 | PRD-13 | The reference guard and its exclusions (`docs/archive/**`, `docs/research/**`, `docs/plans/**`, `docs/DECISIONS.md`); its list of live docs that name old crates | Used here |
 | PRD-14 | Gate text for README, AGENTS and CONTRIBUTING with measured times; the guard list (section 2) for README's seven-points table; release text for OPERATING; `check-links.py` stays until PRD-15's run, then PRD-14 deletes it in the phase 3 merge | Both |
-| PRD-16 | Merge timing (as soon as green; the tier columns after phase 5); the night log | Used here |
+| PRD-16 | Merge timing (as soon as green); the night log; the newcomer run's slot (ask 4) | Both |
 | PRD-17 | `LESSONS.md` linked from ARCHITECTURE; T9 and K12 into the guide's known limits | Used here |
 
 ## What is cut
@@ -575,12 +601,15 @@ tests are PRD-14's (PRD-00 ownership).
 
 ## Acceptance
 
-Real-run proof first, on the integration branch after the third slice lands the guide, on a Linux
-sandbox, by a watcher that has not read the PRDs:
+Real-run proof first, on the integration branch after the third slice lands the guide, in a Vercel
+Sandbox pad box (ledger B1), by a watcher that has not read the PRDs:
 
 1. **A newcomer completes a practice run from the docs alone.** Given only `README.md` and
-   `docs/PARTICIPANT-GUIDE.md`, the watcher installs the 1.0 build, runs `goalcup setup` and a
-   practice run against the staging Worker, and writes down every step it had to guess and every line
+   `docs/PARTICIPANT-GUIDE.md`, the watcher installs the 1.0 build in a Vercel Sandbox pad box, runs
+   `goalcup setup` and a practice run against the staging Worker. The watcher is given only
+   `GOALCUP_SERVER` for staging; the conductor approves the run with the staging test approval key and
+   the owner's member id (ledger B4). These two inputs are not counted as guesses. Everything else
+   comes from README and the guide. The watcher writes down every step it had to guess and every line
    on screen the guide does not explain. Pass: zero guesses; zero unexplained lines; the three
    contract words match byte for byte.
 
@@ -599,7 +628,8 @@ Checks on saved output, no extra harness run (the PRD-15 lane does them):
 After the merge (TODO): the contributor run (a harness added from CONTRIBUTING, the skill and
 CONNECTOR-SCHEMA alone) and the organizer run (every OPERATING command as written).
 
-Automated, run once before the last PRD-15 merge ahead of the phase 3 merge (no new gate code):
+Automated, run once before the last PRD-15 merge ahead of the phase 3 merge (no new gate code), in a
+build box (ledger B1):
 
 - Link check, only for the files this PRD writes: `python3 scripts/check-links.py --root .` (or, if
   PRD-14 has already removed it, `git show 4b226de2:scripts/check-links.py > <tmp>/check-links.py`
@@ -611,10 +641,9 @@ Automated, run once before the last PRD-15 merge ahead of the phase 3 merge (no 
   `goalcup-cli`, `goalcup-protocol`, `goalcup-verifier`, `goalcup-platform`, `goalcup login`,
   `goalcup doctor`, `goalcup mcp`, `goalcup entries`, `prep.json`, `--capture-integrity`,
   `--research-json`, `pin-manifests`, `receipt`, `SIGSTOP`, `paused`, `Recording works`,
-  `protocol v5`, `P1 to P7`, `D65`, `goalcup-verify judge`. Allowed: guide appendix C (names the four
-  0.7 commands that are gone) and the D entries and status rows in DECISIONS.
-- Every `goalcup <command>` in README, the guide, RULES and OPERATING is one of PRD-10's seven (guide
-  appendix C excepted), and every `goalcup-verify <subcommand>` one of PRD-08's four.
+  `protocol v5`, `P1 to P7`, `D65`, `goalcup-verify judge`. Allowed: the D entries and status rows in
+  DECISIONS.
+- Every `goalcup <command>` in README, the guide, RULES and OPERATING is one of PRD-10's seven, and every `goalcup-verify <subcommand>` one of PRD-08's four.
 - Every `D<number>` cited in surviving code, connectors, server, skills and docs is an entry in
   DECISIONS; a cite in new code is a current entry or D75 to D86, not a superseded one.
 - A grep for the em dash character (U+2014) over the files this PRD writes prints nothing.
@@ -624,17 +653,17 @@ Automated, run once before the last PRD-15 merge ahead of the phase 3 merge (no 
 | Risk | What could go wrong | What we do |
 |---|---|---|
 | Docs written from PRDs that change during the build | The guide quotes a line PRD-10 changed late | Participant text is written in the third slice from merged `src/cli/text.rs`; only the contract words are quoted |
-| A tier printed before the pad ran | A participant trusts "verified" for an untested harness | Tiers only from `connectors/tiers.toml`; default "not verified"; check 2 |
+| A tier printed before the pad ran | A participant trusts "verified" for an untested harness | Tiers only from `connectors/tiers.toml`, shown only in `docs/harnesses/README.md` (PRD-11); default "not verified"; no PRD-15 doc copies a tier |
 | DECISIONS grows instead of shrinking | 57 entries plus 12 new, with old text that contradicts 1.0 | The header and status table send readers to D75 to D86 first; the rewrite to 24 is on the after-merge list. Accepted for one week |
 | History kept | A later agent reads a dead doc as current | Dead live docs sit in `docs/archive/`; AGENTS' read-first list names only current docs; the guard keeps old crate names out of every current doc |
 | Link check over the whole tree | After the cut, history docs link into deleted crates, so a plain run fails | The run is filtered to this PRD's files; history links are accepted as broken |
 | No link check after the build | Links rot after PRD-14 deletes `check-links.py` | Accepted (PRD-14); the run here is the last one, and main's copy stays runnable by hand |
-| 0.7 links break | 0.7 testers clicking `HARNESS-SETUP.md` get a 404 | 0.7 is refused once the floor is set; guide appendix C tells testers to reinstall; HARNESS-ONBOARDING stays as a pointer |
-| RULES is a contract | Changing eligibility wording without the owner changes the deal participants signed | Lines that change what a participant may do carry PRD-00's defaults (questions 14, 15) and are marked as defaults in TODO |
-| The guide grows with 15 harnesses | A long table nobody reads | One line per harness; detail stays in `docs/harnesses/` |
+| 0.7 links break | 0.7 testers clicking `HARNESS-SETUP.md` get a 404 | 0.7 is refused once the floor is set; one line in the 1.0.0 release notes covers testers (ledger L7); HARNESS-ONBOARDING stays as a pointer |
+| RULES is a contract | Changing eligibility wording without the owner changes the deal participants signed | Lines that change what a participant may do carry PRD-00's default (question 4) and are marked as defaults in TODO |
+| The guide grows with 15 harnesses | A long table nobody reads | The guide links the one table in `docs/harnesses/README.md`; detail stays in `docs/harnesses/` |
 | "Part" means two things | A participant reads "Parts: 2" and a contributor reads "part file" | Rule 8; glossary in ARCHITECTURE |
 | Owner questions unanswered | Docs show defaults as facts | Each default is named as a default in TODO and in its D entry |
-| macOS untested in this build | README says macOS works | README says "macOS: the owner's Mac run is pending" until it passes |
+| macOS and Linux arm64 untested in this build | README says they work | README says "macOS: the owner's Mac run is pending" and "Linux arm64 built, not yet tested" until each passes (ledger T9) |
 | The run 1 report names old crates | The reference guard would flag it | It lives under `docs/research/results/`, which the guard excludes (PRD-13 section 6) |
 | Swap is the one raw-bytes leak left | A participant on Linux with unencrypted swap | SECURITY and the guide say so plainly; nothing is built for it |
 
@@ -658,9 +687,9 @@ The eleven asks of PRD-00 and four of PRD-01 in revision 1 are answered (PRD-00 
 revision 2, "Review answers"). Rulings this revision follows: ownership as asked; history kept (ask 2
 rejected); docs land as soon as green (ask 3 changed); one tier file, `connectors/tiers.toml`
 (ask 4); DECISIONS is the home for owner decisions (ask 5); tier and eligibility and file connectors
-are PRD-00 questions 14 and 15 (asks 6, 8); the connector fields PRD-10 needs are kept (ask 7); the
+are PRD-00 question 4, old 14 and 15 (asks 6, 8); the connector fields PRD-10 needs are kept (ask 7); the
 run 1 report is copied here and excluded from the guard (ask 9); staging is deployed by agents
-(ask 10); `login` is cut (ask 11, question 9). PRD-01: "part file" in prose, revision 2 is settled,
+(ask 10); `login` is cut (ask 11, question 2, old 9). PRD-01: "part file" in prose, revision 2 is settled,
 the reader reads standard input, reason 12 `mask_failed` and 13 `upstream_untrusted`.
 
 Left, small:
@@ -671,6 +700,11 @@ Left, small:
    run". If it goes earlier, PRD-15 runs main's copy (Acceptance); nothing blocks.
 3. **PRD-08.** The rewritten CHEAT-CHECKLIST text lives in SECURITY "What a check does not prove";
    point there, not at `docs/CHEAT-CHECKLIST.md`.
+4. **PRD-16.** Schedule the newcomer run: one practice run in a pad box on staging, after the third
+   slice lands the guide, by a watcher given no PRD; about 15 minutes, `smoke` budget.
+5. **PRD-11.** `docs/harnesses/README.md` carries, per harness, the sign-in, gateway and "Know this"
+   cells a participant needs; PRD-15's draft is in section 7. PRD-11 checks and owns them; the guide,
+   README and RULES only link the table.
 
 ## Builder notes
 
@@ -683,12 +717,14 @@ Order of work (PRD-00 puts PRD-15's docs in the third slice; parts that need no 
    (PRD-01 revision 2 is settled), `docs/CONNECTOR-SCHEMA.md` (after PRD-11's schema merges).
 3. **Third slice, from merged code:** the guide, README, RULES, OPERATING, SECURITY, CONTRIBUTING,
    HARNESS-ONBOARDING, `scripts/README.md`, TODO; the moves to `docs/archive/` and the delete of
-   `docs/README.md` in the same merge, since the new docs replace their links. Read `src/cli/text.rs`,
-   `goalcup --help` and `goalcup-verify --help` from the build; never from a PRD draft.
+   `docs/README.md` in the same merge, since the new docs replace their links. Read `src/cli/text.rs`
+   from the merged code, and `goalcup --help` and `goalcup-verify --help` from the build's output in a
+   build box; never from a PRD draft.
 4. **Before the phase 3 merge:** the automated checks of Acceptance; night-log line "link check run".
    Nothing of PRD-15 goes into the phase 3 merge.
-5. **After phase 5:** generate the tier and version columns from `connectors/tiers.toml` into the
-   guide table and README; one small merge. Then checks 2 and 3 on the core-set pad rows.
+5. **After phase 5:** confirm the guide, README and RULES link `docs/harnesses/README.md` and copy no
+   tier (PRD-11 generates its tier columns from `connectors/tiers.toml`). Then checks 2 and 3 on the
+   core-set pad rows.
 
 Traps:
 
@@ -706,12 +742,15 @@ The after-merge list for `TODO.md`: the history purge; the DECISIONS rewrite to 
 retired-numbers table; Hermes notes from D61 and D72 into its facts sheet; PRD-15's contributor and
 organizer runs; and the items other PRDs defer (PRD-00 "Not in this build").
 
-How a watcher proves it in a real run: run acceptance 1 on the first green build that has the guide,
+How a watcher proves it in a real run: run acceptance 1 (ask 4) on the first green build that has the guide,
 then checks 2 and 3 on the three core-set pad rows. Write every unexplained line into the night log
 with the screen it came from; the fix is a guide edit, or a `text.rs` edit by PRD-10 when the screen
 is wrong.
 
 ## Review answers
+
+History of revision 2. It uses PRD-00 revision 2's owner question numbers (PRD-00 maps them to
+revision 4's). The body above, the ledger and "Alignment answers" win over it.
 
 CC is the consistency check, A is review A, B is review B.
 
@@ -746,3 +785,42 @@ CC is the consistency check, A is review A, B is review B.
 | PRD-12 HARNESS-ONBOARDING | Accepted. Shrunk to a pointer, not deleted |
 | PRD-17 T9 and K12 | Accepted. Both in the guide's known limits |
 | Owner's relayed question (a gateway is an HTTPS proxy with another address; strong pads for proxy and gateway, dodgers use the same pipe) | Answered yes in README section 5 and the guide: direct key and gateway are one path, vendor backends and dodgers are named, nothing else is built |
+
+## Alignment answers
+
+Revision 3 answers the three alignment fix lists for this file (groups 1 to 3). The ledger wins.
+"Applied" means the body above now says it; "partly" says what was taken; "rejected" says why. Only
+this file's part of a shared fix is made here.
+
+| Id | Answer |
+|---|---|
+| L4-1 | Applied. D80: only the run's `GH_TOKEN` is masked by exact value, as today; the other PRD-05 section 9 sources and the wider Stripe rule only with the owner's yes (PRD-00 question 3, default no). "Owner decisions it carries out" says the same |
+| L4-8 | Applied. D80 names the guard class: a letter, a digit or `_`; `-` only with the owner's yes (PRD-00 question 10, owner list OW-02) |
+| L7-05 | Applied. AGENTS.md map paragraph names the core code and the usage reader in `crates/goalcup-verify`; the hard-rule line is unchanged |
+| L7-07 | Applied, merged with G3-15g. The section 4 note cites ledger section 7 and PRD-00 question 2, old 11 |
+| L7-08 | Applied in the draft cells of section 7, which now go to PRD-11's one table (X2-09) |
+| L7-11 | Applied. The "Never commit" rule names root `/pad-out/` and `/harnesses/`, so `docs/harnesses/` stays committable; any `target/`, keys and real records. The change table row says the wording is on the owner list (G3-O4, default yes) |
+| X2-08 | Applied. Guide appendix C, rule 7's exception and both acceptance exceptions are gone; one release-notes line for 0.7 testers is in OPERATING "Releasing" (PRD-10 section 11 points here); the risk row says 0.7 is refused once the floor is set |
+| X2-09 | Applied. `docs/harnesses/README.md` (PRD-11) is the one harness table; the guide, README and RULES link it. Section 7's table is kept only as draft cells handed to PRD-11 (new ask 5), so the facts are not lost; builder step 5, interfaces and risks follow |
+| X2-11 | Partly, as PRD-00 did. This pass may edit only this file, so nothing moves to `REVIEW-HISTORY.md`. "Review answers" now says it is history, uses the old question numbers, and that the body, the ledger and these answers win over it. The move may run once, after every alignment pass, by one agent |
+| G3-15a | Applied, with revision 4's numbers, not revision 3's: PRD-00 is now revision 4 with twelve questions (1 to 8 as revision 3, 9 to 12 new). Header, owner decisions, D entries, guide, RULES, interfaces, risks and asks use them; "Review answers" keeps the old ones as history |
+| G3-15b | Partly. The sentence is added to the existing "records and never manages" rule, not as a new bullet, because ledger section 7 lists no new hard rule; acceptance 4 is answered by it |
+| G3-15c | Applied |
+| G3-15d | Applied |
+| G3-15e | Applied to D76; status rows add "D64 partly (its backoff clause)". No numbers for the backoff: they come from PRD-06's merged code (rule 4) |
+| G3-15f | Applied |
+| G3-X31 | Applied as ask 4 to PRD-16; builder notes point to it |
+| G3-X17 | Applied. Checked against PRD-10's `long_tunnel` lines |
+| G3-15g | Applied, merged with L7-07 |
+| G3-X19 | Applied. D75 cites ledger R3 and PRD-00 question 9 (default yes) |
+| G3-15h | Applied |
+| G3-15i | Applied, with the test seams clause naming the one test-only build feature (PRD-00 question 12) |
+| G3-15j | Rejected as a default. It conflicts with L4-1 (a blocker) and PRD-00 question 3, default no: ledger M1 is the masking list. D80 names the Stripe widening as built only with the owner's yes |
+| G3-15k | Applied. Checked in the tree: RULES upload is `:332-335`, masking `:336-348`; OPERATING "Edge cases by hand" `:435-467`, "Bad days" `:468-491` (the fix list said `:493`; corrected) |
+| G3-15l | Applied in section 9 after the cut list |
+| G3-15m | Applied (ledger T9); the macOS risk row also names Linux arm64 |
+| G3-15n | Applied in README and the guide's tier text |
+| G3-15o | Applied in the draft cells (ledger T1, H5) |
+| G3-15p | Applied: acceptance 1 in a Vercel Sandbox pad box; the automated checks and builder step 3 in a build box (ledger B1) |
+| G3-15q | Applied. Checked: PRD-14 section 2 has the same-name-prefix clause |
+| Re-read (no id) | Fixed one clear break: D86, guide sections 3 and 4 and the Gemini cell said the auto-update switch is written only on "yes". PRD-00 question 2 (revision 4) and ledger H9 say `update_off` is always written; only the no-prompt values follow the question |

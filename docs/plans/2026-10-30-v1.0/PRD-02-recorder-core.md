@@ -1,12 +1,12 @@
 # PRD-02: Recorder core (one process pipeline, guards, writer, watchdog)
 
-Id: PRD-02. Version: goalcup 1.0. Revision 2, 30 October 2026 (revision 1: 29 October). Base: main at
-4b226de2. Index: [PRD-00](PRD-00-index.md) revision 2. Format: [PRD-01](PRD-01-record-format.md)
-revision 2 (binding).
+Id: PRD-02. Version: goalcup 1.0. Revision 3, 30 October 2026 (revision 2 earlier the same day,
+revision 1: 29 October). Base: main at 4b226de2. Index: [PRD-00](PRD-00-index.md) revision 4. Format:
+[PRD-01](PRD-01-record-format.md) (binding).
 
-Revision 2 brings this PRD into line with PRD-00 and PRD-01 revision 2 and answers the three reviews
-of 30 October (the consistency check, review A, review B). The last section lists each item and what
-was done.
+Revision 2 brought this PRD into line with PRD-00 and PRD-01 revision 2 and answered the three reviews
+of 30 October (section "Review answers", now history). Revision 3 is the alignment pass against the
+ledger (OWNER-DECISIONS.md); section "Alignment answers" at the end lists each fix and what was done.
 
 ## Goal
 
@@ -25,16 +25,22 @@ uploader sends from), 6 (written counts and off time in `status.json`).
 
 - Architecture option B, one process: proxy, native reader, masking, writer and uploader in the
   recorder process. The proxy to daemon hand-off (IPC, producers, epochs, the shared queue, failure
-  budgets) is removed (ledger L2).
+  budgets) is removed (ledger L5).
 - No caps of our own. Only stated memory guards that never stop recording: past one, write a gap
   and go on.
 - Never block the harness. A drop caused by load never counts toward "the recorder is dead". Loss is
   never silent. Count a request only once its bytes are written. Show how long recording was off.
 - The recorder never stops for good (ledger R3): it restarts on the same port fast, writes a gap for
-  the dead time and marks the failure. A tiny watchdog that only restarts the recorder is allowed.
+  the dead time and marks the failure. A tiny watchdog is allowed (R3); in 1.0 it is the `goalcup
+  start` or `continue` process, with the jobs in section 8 (PRD-00 owner question 9).
 - Check open file handles first (macOS default 256 per process) and raise the limit.
-- Disk full: no special handling. The harness stops and the participant cleans up.
-- Ending the harness at the deadline and on `goalcup seal` stays (owner question 11, default yes).
+- Disk full: no special handling (ledger L6; D65 is gone). A write error ends the recorder like any
+  crash; after three fast exits null mode keeps the harness working, unrecorded, and status says why.
+  Recording goes off, goalcup never stops or freezes the harness, and the gap covers the time
+  (section 5).
+- Ending the harness at the deadline and on `goalcup seal` stays (PRD-00 owner question 2, old 11,
+  default yes). Nothing else ends it: a server `stop` for any other reason seals the recording only
+  (section 8 step 10).
 - Fresh core: copy only proven tricky parts; old crates are deleted in the same build.
 
 ## Today
@@ -84,7 +90,7 @@ flowchart LR
     G{{guard: one held-bytes counter}}
     MW[mask worker, low priority]
     WT[writer thread, low priority]
-    ST[status.json, counts.jsonl, cursors.json]
+    ST[status.json by the status thread, counts.jsonl, cursors.json]
     UP[uploader: two plain threads]
   end
   LS -. fd 3 .-> PX
@@ -101,7 +107,8 @@ flowchart LR
   watchdog (section 8). No recorded byte is ever serialised for another process.
 - **Threads.** Relay tasks on a tokio runtime with 2 worker threads (PRD-03 states the count). One
   native thread (PRD-04). **One mask worker** in 1.0; a pool is built only if R8 shows masking is
-  the slow stage (section 4). One writer thread. The uploader's two plain threads with a blocking
+  the slow stage (section 4). One writer thread. One status thread that writes `status.json` each
+  second from live atomics and checks the stall exit (sections 3 and 5). The uploader's two plain threads with a blocking
   client (PRD-06), never on the relay runtime. The mask worker, the writer, the native thread and
   the uploader run at low priority through `pipeline::low_priority()`: Linux `setpriority` per
   thread, nice 10. On macOS it is a no-op in 1.0 (per-thread QoS is deferred, PRD-00 "Not in this
@@ -117,7 +124,8 @@ flowchart LR
 
 ### 2. The recorder handle (seam S1, owned here)
 
-This is PRD-00's S1 block, plus `reserve()` (review A finding 10), added by a night-log line.
+This is PRD-00's S1 block (revision 4, rulings R3-1 and R3-2), plus a test constructor for the real
+pipeline and `fds::raise`, each added by a night-log line (`seam S1: ...`).
 
 ```rust
 #[derive(Clone)] pub struct Recorder { /* Arc inside */ }
@@ -131,8 +139,10 @@ impl Recorder {
     pub fn now(&self) -> Mono;                            // boot time in ns, counts a suspend
     pub fn counts(&self) -> Counts;                       // S4
     pub fn durable(&self) -> tokio::sync::watch::Receiver<Durable>;   // S4
+    #[cfg(feature = "test-hooks")]                        // pending PRD-00 owner question 12
+    pub fn for_tests(room: u64) -> (Recorder, Calls);     // records every call, before masking; PRD-14
     #[cfg(feature = "test-hooks")]
-    pub fn for_tests(room: u64) -> (Recorder, Calls);     // records every call; for PRD-14
+    pub fn real_for_tests(dir: &Path, masker: Masker) -> Recorder; // real mask worker and writer
 }
 pub struct StreamHandle { /* sid, next_off, guard gap state; owned by one task, not Clone */ }
 impl StreamHandle {
@@ -144,15 +154,20 @@ impl StreamHandle {
 }
 impl Drop for StreamHandle { /* no end() called: END interrupted */ }
 pub fn low_priority();                                    // for PRD-04 and PRD-06 threads
-pub mod fds { pub fn may_accept() -> bool; }              // section 10, for PRD-03
+pub mod fds { pub fn may_accept() -> bool;               // section 10, for PRD-03
+              pub fn raise(target: Target) -> u64; }      // the watchdog's pre_exec and tests
+pub fn entry_totals(entry_dir: &Path) -> Counts;          // S4, R3-2, for PRD-06 and PRD-10
 ```
 
 Rules every caller can rely on:
 
 1. **Nothing blocks and nothing returns a value the caller must act on.** Every call is an atomic
    load, a counter update and an unbounded channel send (`std::sync::mpsc`) of a `Bytes` (a
-   reference count, no copy). No lock is held across a call. A call after the seal's stop is a no-op
-   that only counts (section 11).
+   reference count, no copy). No lock is held across a call. After the seal's stop, a call on a wire
+   stream (`conn`, `http_req`, `http_resp`, `ws_up`, `ws_down`) is a no-op that only counts; `native`
+   and `snapshot` calls stay admitted until `NativeReader::finish` returns (section 11, PRD-00 R3-3).
+   A send whose receiver is gone (a pipeline thread died) exits the process with 70, once, from the
+   first caller, so the watchdog restarts it and a `recorder_down` gap covers the span.
 2. **The handle owns offsets.** `from` is the first offset (0 for wire streams; the resumed cursor
    for native, section 9.3). Each `data` or `ws` piece moves the offset by its length, written or
    dropped.
@@ -171,9 +186,10 @@ Rules every caller can rely on:
    offer, so a guard drop never breaks a decoder's state: the dropped bytes are decoded bytes and
    the decoder goes on.
 7. **`reserve(n)`** adds `n` to `held` and takes it off when the returned `Reserved` drops. PRD-03
-   uses it for a decoder window (a brotli body may hold up to 16 MiB) after checking `room()`; with
-   no room it does not decode that body and writes GAP `memory_guard` with guard `decoder_window`
-   (PRD-01 guard list). Whether to use it is PRD-03's call; the guard then sees decoder memory.
+   uses it for every decoder window (a brotli body may hold up to 16 MiB): it checks `room()`, holds
+   `reserve(window)` until the body ends, and with no room does not decode that body and writes GAP
+   `memory_guard` with guard `decoder_window` (PRD-01 guard list). So decoder memory sits inside the
+   one guard, and PRD-03 keeps no process-wide decoder limit of its own.
 
 ### 3. Memory guards
 
@@ -185,7 +201,7 @@ two thresholds.
 | Guard | Default | What passing it does | What it guards |
 |---|---|---|---|
 | **Soft** | 512 MiB, or one eighth of RAM if that is smaller (floor 128 MiB) | The offered DATA or WS piece is dropped and counted on its stream's open gap. OPEN, END, GAP and EVENT items are always admitted (they are small). Native reads only `room()`, so native never drops | The participant's memory. Run 1's worst burst was about 30 MB, 65 MB with 43 subagents (M section 3); 512 MiB is about 8 times that |
-| **Hard** | 2 x soft | The recorder exits with code 75. The watchdog restarts it; the next boot writes `recorder_down` with cause `memory_guard_hard` | Memory when the writer is stuck for a long time (a hung disk) and control items keep coming |
+| **Writer stall** (the hard mark) | 2 x soft, or 60 s of boot time with no write while records wait | The recorder exits with code 75. The watchdog restarts it; the next boot writes `recorder_down` with cause `writer_stalled`. This is a recorder failure under R3, not an R5 guard: past the soft guard only control items fill memory, so reaching 2 x soft means the writer is stuck. It is the one stall exit | Memory and the participant's view when the writer or the mask worker is stuck (a hung disk, a masker loop) and control items keep coming |
 
 The gap rule, kept entirely inside the `StreamHandle`, so no shared map is needed:
 
@@ -208,7 +224,9 @@ Fairness: one guard means the stream that offers when memory is full loses bytes
 small WebSocket message while a large body is held. Accepted; the hysteresis and the 3/4 rule give
 streams in a gap a lower claim. Per-stream shares are not built.
 
-Why the hard guard still exits (review A finding 4b weighed): past the hard mark only small control
+The status thread checks the stall exit each second from the live atomics (`held`, `writer_idle_ms`,
+boot time), so a stuck writer cannot hide it. Why a stall exits instead of dropping more (review A
+finding 4b weighed): past the hard mark only small control
 items are filling memory, which means the writer has written nothing for a long time. Dropping
 control items too would leave streams with no OPEN or no END that no reader can place, and a stuck
 writer cannot write the gaps anyway. A new boot recovers the part file and names the span. The cost
@@ -223,16 +241,22 @@ is one reset per open connection, the same as any crash. On Linux the recorder a
 - Per item: OPEN runs `mask_meta`; DATA runs `push(bytes)` and gets back masked bytes and spans; a
   piece with `fin` (end of a WebSocket message) then runs `boundary()`, so a fail-closed span never
   crosses a message (review A finding 3); GAP first runs the masker's `gap()` (held bytes decided as
-  end of input) and then passes the GAP on; END runs `gap()` when its reason is not `complete`, then
-  `finish()`, and masks a tail with upstream text (`trailers`) through `mask_meta`. The worker emits
+  end of input) and then passes the GAP on, its tail through `mask_meta`; END runs `gap()` when its
+  reason is not `complete`, then `finish()`, and its tail (for example `trailers`) runs `mask_meta`;
+  EVENT runs `mask_meta` on its body, every event (cheap, and no caller has to know which ones carry
+  upstream text). The worker emits
   DATA, then one MASK record per span (PRD-01 section 8), then the next item. `fin` goes on the last
   DATA of the message; an empty message gets one empty DATA with `fin`.
 - A DATA record's time is the time of the earliest input piece whose bytes it holds (the hold can
   merge pieces). Its `off` is the source offset of its first byte, which equals the record offset
   because masks keep length.
 - **A masker panic never writes raw bytes.** Each item runs inside `catch_unwind`. On a panic the
-  piece is dropped, the stream's masker is replaced with a fresh one, and the worker writes a GAP
-  with reason `mask_failed` (12) and the piece's length. The stream goes on.
+  piece and the masker's held bytes are dropped, the stream's masker is replaced with a fresh one,
+  and the worker writes one GAP with reason `mask_failed` (12): `off` is the first byte the old masker
+  had not yet emitted, `lost` is the held bytes plus the piece's length, plus one (PRD-01 encoding);
+  start is the time of the earliest held byte, end the panic. The worker knows both offsets, so DATA
+  and GAP stay exactly contiguous (PRD-01 invariant 4). The stream goes on. A panic outside the
+  per-item `catch_unwind` (the worker's own loop) exits 70 (section 9.2).
 - Worker to writer: one bounded channel of 256 records. A full channel makes the worker wait. That
   wait never reaches a relay: it only lets `held` grow until the soft guard drops at the front.
 - **The pool, when measured.** If R8 shows the mask worker is the slow stage, the builder adds
@@ -252,15 +276,20 @@ loop:
    the clocks: add `{"ev":"clock"}` when wall time moved more than 2 s from the record clock, and
    `{"ev":"suspend"}` when the record clock moved more than 2 s past the awake clock (PRD-01
    section 6).
-3. COUNT every 60 s (PRD-01 section 9, all its keys), followed by a LINK. Append the same counts with
-   the link's `seq` to `counts.jsonl` (local only), so a later boot can sum boots without decoding
-   part files.
+3. COUNT every 60 s (PRD-01 section 9, all its keys), followed by a LINK. At every LINK, before its
+   index line, append this boot's counters at that LINK with the link's `seq` to `counts.jsonl` (one
+   compact line, local only). At each durable point rewrite the file by atomic rename (written and
+   synced before the rename) to one line per earlier boot plus this boot's latest, so it stays small.
+   A later boot takes the dead boot's COUNT from it (section 9.2) without decoding part files.
 4. `fdatasync` the part file, then the index, at most every 5 s, at rotation and at the seal. Then
    publish the **durable point** (part path, `c_end`, `raw_end`, link `seq` and hash, and the
-   counters as they stood at that LINK) on the `watch` channel (seam S4), and write `cursors.json`
+   counters as they stood at that LINK, as entry totals: `pipeline::entry_totals`, S4) on the `watch`
+   channel (seam S4), and write `cursors.json`
    (per native path: generation, file identity, written offset; per snapshot: size and `mtime_ns`)
    by atomic rename. Counts that leave the machine are these, never ahead of the durable LINK.
-5. Every second, write `status.json` by atomic rename (section 6).
+5. The writer does not write `status.json`. Every second a status thread (not the writer) writes it
+   by atomic rename from the live atomics: `written`, `losing`, `held_bytes`, `writer_idle_ms`
+   (section 6). The same thread checks the stall exit (section 3), so a stuck writer is seen.
 6. Rotate when PRD-01's rule says so (512 MiB raw or 60 minutes). Under `test-hooks`,
    `GOALCUP_TEST_ROTATE_MB` sets `PartOptions.rotate_at`; `goalcup-format` has no hooks.
 
@@ -274,41 +303,56 @@ fails, the watchdog moves to null mode (section 8), the harness keeps working, a
 ### 6. Written counts, off spans and `status.json`
 
 - **Counted at write, by the writer only.** The keys are PRD-01 section 9's. `http_post` counts
-  `http_req` OPENs written with `POST` and `DECRYPTED`; `ws_up_msgs` counts `ws_up` DATA written with
+  `http_req` streams with `POST` and `DECRYPTED` whose END is written (a request counts once its body
+  is in the record; `req_holes` says which have holes); `ws_up_msgs` counts `ws_up` DATA written with
   `fin` and a text or binary opcode. `http_post + ws_up_msgs` is "model requests written", a request
   count, not a call count. Nothing counts at selection (run 1 counted at selection:
-  `proxy/http.rs:306-320`).
-- **Entry totals** = the sum over earlier boots of their last durable COUNT (from `counts.jsonl`,
-  keeping only lines whose link `seq` is at or below the recovered last link) plus this boot's live
-  counters.
+  `proxy/http.rs:306-320`). Status shows `req_holes` and `req_whole` beside `model_requests` whenever
+  `req_holes` is above 0, so a request whose body is in a gap is never shown as whole.
+- **Entry totals** (`pipeline::entry_totals`, S4, R3-2: one function for boot recovery,
+  `close_dead_entry`, the null recorder and `goalcup upload`) = each earlier boot's last COUNT (for a
+  dead boot, the COUNT in its recovery frame), plus each recovery frame's `recorder_down` GAP, summed
+  as PRD-01 section 9 says, plus this boot's counters. `written` in `status.json` shows them at the
+  last LINK whose index line is written (at most about 1 s behind; recovery keeps that LINK after a
+  process crash), so it never goes down across a crash.
 - **Off time** = the sum of the lengths of `sid 0` `recorder_down` gaps. Status adds the open span
   while a null recorder runs.
-- **Only recorders write `status.json`** (normal or null), so it has one writer. The watchdog's facts
-  (harness pid, start, exit) reach the recorder on the control socket and the recorder writes them.
-  In `mode: sealed`, `written` and `off` are the seal's `totals`, so the end screen equals the
-  verifier's recount.
+- **Only the recorder writes `status.json`** (normal or null: its status thread, and the seal step
+  once that thread has stopped), so it has one writer. The watchdog's facts (harness pid, start, exit)
+  reach the recorder on the control socket and the recorder writes them. In `mode: sealed`, `written`
+  and `off` are the seal's `totals`, so the end screen equals the verifier's recount.
+- `written` carries every COUNT key (PRD-01 section 9) as entry totals; the example below is abridged.
+  In `mode: sealed` the file also carries `seal {reason, workspace_head}`, `cut_files {files, bytes}`
+  from `NativeFinish` (PRD-04), `outlived` (section 11 step 7) and `after_seal {bytes, hosts}`
+  (section 11 step 6). `close_dead_entry` writes the same sealed file.
 
 ```json
 {"v":1,"updated":"2026-11-07T10:00:01Z","pid":4242,"boot":2,"port":53817,"mode":"recording",
  "harness":{"pid":4250,"started":"2026-11-07T08:00:03Z","exit":null},
- "written":{"model_requests":905,"http_post":243,"ws_up_msgs":662,"conns":120,"tunnels":118,
-            "native_files":43,"native_bytes":48200000,"gaps":3,"lost_bytes":1500000,
-            "hosts":{"api.openai.com":905}},
+ "written":{"model_requests":905,"http_post":243,"ws_up_msgs":662,"req_whole":896,"req_holes":9,
+            "conns":120,"tunnels":118,"native_files":43,"native_bytes":48200000,"gaps":3,
+            "lost_bytes":1500000,"lost_unknown":0,"off_ms":2300,"mask_failclosed_bytes":0,
+            "hosts":{"api.openai.com":905},
+            "tunnel_hosts":{"github.com":{"conns":12,"up":40960,"down":2097152,"listed":null}}},
  "last_request_at":"2026-11-07T09:59:58Z","last_native_at":"2026-11-07T09:59:59Z",
  "losing":{"streams_in_gap":0,"dropped_bytes":0},
  "off":{"spans":1,"ms":2300,"since":null},
  "notes":[{"at":"2026-11-07T09:12:00Z","what":"long_tunnel","host":"example.net"}],
  "held_bytes":1048576,"held_peak":67108864,"guard":536870912,"writer_idle_ms":12,
- "durable":{"seq":3601,"raw_end":726000000},"deadline":"2026-11-14T00:00:00Z"}
+ "durable":{"seq":3601,"raw_end":726000000},"deadline":"2026-11-14T00:00:00Z","sealing":null}
 ```
 
-`mode` is `recording`, `losing` (some stream in a gap), `writer_slow` (records wait and nothing was
-written for 10 s; display only), `null` (records nothing; `off.since` is set), or `sealed`.
-`notes` holds the last 20 `note` events. `last_request_at` and `last_native_at` are the wall times of
+`mode` is `recording`, `losing` (some stream in a gap, or a connection whose `parse_stopped` note is
+written and whose closing GAP is not yet: that loss runs on, PRD-03), `writer_slow` (records wait and
+nothing was written for 10 s; display only; at 60 s the stall exit of section 3 follows), `null`
+(records nothing; `off.since` is set), or `sealed`. While the seal reads session files with no time
+guard, `sealing` says `reading session files` (null otherwise).
+`notes` holds the first note of each `what` and the last 20 `note` events. `last_request_at` and `last_native_at` are the wall times of
 the last written model request and native DATA (PRD-10's "agent is working but no request was
 written" line). `port` lets `goalcup continue` ask for the same port (section 8). The participant
 and the heartbeat see `written`, `losing` and `off`; never an offered or selected count. The
-heartbeat's `failed` means `mode: null` (PRD-06, PRD-07).
+heartbeat's `failed` means recording is off: `mode: null`, or `writer_idle_ms` over 60 s while records
+wait (PRD-06 section 6 computes it from `Durable` age and these atomics, not only from this file).
 
 ### 7. Never block or slow the harness: the rules
 
@@ -317,8 +361,8 @@ heartbeat's `failed` means `mode: null` (PRD-06, PRD-07).
    where the file is the buffer (`room()`).
 3. Loss under load is a stream gap, never a recorder state. There is nothing to count toward "dead":
    no producer, no epoch, no socket between proxy and recorder.
-4. No cap on connections, streams, subagents, files or bytes. The only limits are the two memory
-   guards (section 3) and the operating system's file limit (section 10), and neither refuses a
+4. No cap on connections, streams, subagents, files or bytes. The only limits are the memory guard
+   and the stall exit (section 3) and the operating system's file limit (section 10), and neither refuses a
    harness connection.
 5. Recording work runs at low priority; relays at normal priority.
 6. A crash of the recorder resets the harness's open connections once; new connections wait in the
@@ -329,7 +373,13 @@ heartbeat's `failed` means `mode: null` (PRD-06, PRD-07).
 
 The watchdog is the `goalcup start` or `goalcup continue` process itself, after PRD-10 has done the
 approval, the mask values and the connector checks. PRD-10 calls
-`watchdog::run(plan: LaunchPlan, facts: StartFacts) -> ExitCode`. It records nothing itself.
+`watchdog::run(plan: LaunchPlan, facts: StartFacts) -> ExitCode` (`StartFacts` is seam S17). It
+records nothing itself. Its only recording duty is the restart loop. Everything else it does is what
+`goalcup start` already did (spawn, terminal, deadline, run CA, helpers); none of it records or
+touches recorded bytes. Why this fits ledger R3: it is the process the participant already runs, and
+it holds the socket and the CA only so a restart keeps the same port and the same trust (R3: "on the
+same port fast"). All recording stays in the one recorder process (L5). This reading awaits the owner
+(PRD-00 owner question 9, default yes).
 
 1. **Make the process safe and raise limits.** `PR_SET_DUMPABLE` 0 (Linux) at once: the watchdog
    holds the CA key and the exact mask values. Raise its own soft `RLIMIT_NOFILE` (section 10).
@@ -347,7 +397,9 @@ approval, the mask values and the connector checks. PRD-10 calls
    `FD_CLOEXEC` on those two only, `RLIMIT_CORE` 0, and the soft open-file limit to the hard limit
    (section 10). The harness never inherits fd 3 or fd 4. The first control line is below.
 5. **Wait for `ready`** (proxy accepting, part file opened) for at most 10 s on the first boot only.
-   If the first boot fails, refuse to launch the harness (nothing to break yet); PRD-10 words it.
+   If the first boot fails, refuse to launch the harness (nothing to break yet); PRD-10 words it. A
+   recorder that cannot build its `Masker` from built-in shapes exits 78 before `ready`; the watchdog
+   passes 78 to PRD-10, which shows PRD-05's fixed text.
 6. **Run `plan.before`** (stop the connector's background helpers: OpenCode server, Hermes gateway,
    Codex app server, Droid), 10 s each, a failure only logged. PRD-10 no longer does this.
 7. **Spawn the harness** from `plan` (argv, env with `HTTPS_PROXY=http://127.0.0.1:<port>`, no
@@ -361,23 +413,33 @@ approval, the mask values and the connector checks. PRD-10 calls
 8. **Restart loop.** When the recorder exits without having sealed, start the next one at once,
    with how the previous one ended. The port never closes because the watchdog holds the listener;
    connections made meanwhile wait in the backlog. Pause between restarts: 0, 0.1, 0.5, 1, 2, then
-   5 s, reset after 10 minutes alive. There is no restart cap.
+   5 s, reset after 10 minutes alive. There is no restart cap. If a `seal` line was sent and not
+   answered with `sealed`, the watchdog sends it again to the new boot after `ready`.
 9. **Null mode.** After 3 exits within 10 minutes, each less than 60 s after its start, the next
    recorder starts with `--null` and `null_since` on its first line: the proxy relays exactly as
    normal, every S1 call is a no-op, the writer does not run, the uploader still sends what is on
    disk, and the null recorder writes `status.json` with `mode: "null"`. After 5 minutes the watchdog
-   tries a normal boot again (SIGTERM the null recorder, which resets its connections once, then
-   start a normal one); each failed try doubles the wait, up to 60 minutes. The next normal boot's
-   `recorder_down` gap covers the whole span, tail `{"cause":"null_mode","exits":n,"last":{...}}`.
+   tries a normal boot again: it sends the null recorder a `restart` control line (it exits 0 without
+   sealing, which resets its connections once), then starts a normal one. Each failed try doubles the
+   wait, up to 10 minutes; the wait never passes that ceiling. Null mode is not a failure budget: it
+   only spaces out boots that crash at once, so a crash loop does not reset the harness's connections
+   every few seconds (point 3), and the ceiling keeps the restart fast (ledger R3). Every fast exit
+   counts toward the 3, a SIGKILL included: an OOM-kill loop is exactly the loop null mode spaces out,
+   and a null recorder holds no records, so memory comes back. The next normal boot's `recorder_down`
+   gap covers the whole span, tail `{"cause":"null_mode","exits":n,"last":{...}}`. A seal while in
+   null mode: section 11.
 10. **End of the run.** The watchdog owns the deadline timer (boot time, from the start facts, reset
     by the server's `seconds_left` which the recorder forwards). On the deadline, on `goalcup seal`
-    (SIGUSR1 to the pid in `rec/watchdog.pid`) and on the server's `stop` (forwarded by the
-    recorder), it ends the harness: SIGTERM to the harness tree, SIGKILL after 10 s. The tree is the
+    (SIGUSR1 to the pid in `rec/watchdog.pid`) and on the server's `stop` with `server_reason:
+    "deadline"` (forwarded by the recorder), it ends the harness: SIGTERM to the harness tree, SIGKILL after 10 s. The tree is the
     harness pid, its descendants by a parent walk (Linux `/proc/*/stat`, macOS `ps -A -o pid=,ppid=`),
     and on Linux the watchdog's own children that started no earlier than the harness and are not a
     recorder (orphans reparented by the subreaper; Codex's npm wrapper hides the native binary, D22,
     PRD-17 P7). The watchdog's own process group is never signalled. On a plain harness exit it ends
-    nothing.
+    nothing. On a server `stop` with any other reason it ends nothing either: it sends `seal`
+    (`server_stop`, `harness: "running"`) at once and leaves the harness alone (ledger section 7:
+    records and never manages the agent); the recorder keeps relaying until the harness exits, and
+    PRD-10 says one line.
 11. **Then the seal.** After the harness has exited or been ended: send `exit`, run `plan.after`
     (10 s each), then send `seal` with the reason (`harness_exit`, `deadline`, `seal_command`,
     `server_stop`). Wait for `sealed`, give SIGINT, SIGQUIT and SIGTSTP back (`Shield::harness_exited`),
@@ -390,9 +452,10 @@ are never logged.
 
 | Direction | Line | Carries |
 |---|---|---|
-| Watchdog to recorder, first | `start` | Start facts (run, entry, deadline, server time, workspace, connector, `keep`, `build`, host list, native sources, mask rules), the exact mask values, the run CA (certificate and key, PEM), how the previous boot ended (`{"code":n}`, `{"signal":n}` or null), the harness pid and start time if launched, `null_since` for a null recorder. The boot number comes from the last part file, not from this line |
+| Watchdog to recorder, first | `start` | `StartFacts` (seam S17): run, entry, deadline, server time, local wall, workspace, connector ref, `keep`, `build`, `HostList`, `NativeSources`, mask rules, the exact mask values, the run CA (certificate and key, PEM), how the previous boot ended (`{"code":n}`, `{"signal":n}` or null), the harness pid and start time if launched, `null_since` for a null recorder, and `LaunchPlan.notes` (written with `Recorder::event` after `start`, on boot 0 only). Every type serializes with serde. The boot number comes from the last part file, not from this line |
 | Watchdog to recorder | `launch`, `exit` | Harness pid and program; exit code or signal. The recorder writes the `launch` and `exit` events and the `harness` block of `status.json` |
 | Watchdog to recorder | `seal` | The reason; the recorder seals (section 11) |
+| Watchdog to recorder | `restart` | Null recorder only: exit 0 without sealing (step 9). SIGTERM stays the seal signal for outside callers |
 | Recorder to watchdog | `ready`, `sealed` | Boot started; seal durable |
 | Recorder to watchdog | `server` | The heartbeat answer's `stop`, `reason` and `seconds_left` (PRD-06's `ServerWord`, S10) |
 
@@ -407,9 +470,10 @@ Size target: the watchdog about 450 src lines, of which about 266 are the copied
 
 | What dies | Harness's open connections | New connections | Recording | How it ends |
 |---|---|---|---|---|
-| The recorder (crash, OOM kill, `kill -9`, exit 70, 74 or 75) | Reset once; the harness retries (Codex: `stream_max_retries` 5 and `request_max_retries` 4 by default; Claude Code's retry watchdog; others unverified, `docs/plans/2026-10-30-audit/F-week-long-risks.md:597-607`) | Wait in the kernel backlog, then are served by the next boot | One `recorder_down` gap from the last durable LINK to the next boot's first record | Automatic |
+| The recorder (crash, OOM kill, `kill -9`, exit 70, 74 or 75) | Reset once; the harness retries (Codex: `stream_max_retries` 5 and `request_max_retries` 4 by default; Claude Code's retry watchdog; others unverified, `docs/plans/2026-10-30-audit/F-week-long-risks.md:597-607`) | Wait in the kernel backlog, then are served by the next boot | One `recorder_down` gap from the last LINK named by an index line (the point recovery truncates to, PRD-01 section 12 step 1; after a plain process kill at most about 1 s before the kill) to the next boot's first record | Automatic |
 | Recorder crash loop | As above, each time | Served by the null recorder | Off, shown in status with its start time | Automatic retry of normal mode |
-| The watchdog only | Unaffected: the recorder holds the listener and serves on | Served | Goes on | The recorder sees EOF on fd 4, then watches the harness pid every second (pid plus start time, against reuse) and runs its own deadline timer. When the harness is gone, or at the deadline, it seals with reason `harness_exit` (exit null) or `deadline`. Nobody ends the harness or runs `plan.after` then |
+| The watchdog only | Unaffected: the recorder holds the listener and serves on | Served | Goes on. A non-TUI harness is unaffected; a TUI harness likely loses its terminal (the shell takes the foreground back), so it may stop or exit | The recorder sees EOF on fd 4, then watches the harness pid every second (pid plus start time, against reuse) and runs its own deadline timer. When the harness is gone, or at the deadline, it seals with reason `harness_exit` (exit null) or `deadline`. Nobody ends the harness or runs `plan.after` then |
+| The watchdog, then later the recorder | Refused once the recorder is gone: nobody holds the port | Refused | Off; nothing sends a heartbeat; `goalcup status` says off (PRD-10 both-dead line) | `goalcup continue` closes it `recovered` (9.4) |
 | Both (power loss, laptop crash, `kill -9` of both) | Refused: nobody holds the port | Refused | Off until the participant acts | `goalcup continue` closes the dead entry (9.4) and starts a new one. The harness must be restarted too |
 
 The recorder never asks the harness to wait and never sets a base URL. The only harness-visible
@@ -427,8 +491,10 @@ than one reset the harness already survives (R1). The kill case runs on all thre
 1. Before reading anything: core dumps off (`setrlimit(RLIMIT_CORE, 0)`, `prctl(PR_SET_DUMPABLE, 0)`
    on Linux), `oom_score_adj` 500 (Linux), and the panic hook: it writes only file, line and a fixed
    text to stderr and `goalcup.log`, never the panic message (an `expect` could format a value). A
-   panic in the writer, the native thread or the uploader then exits 70; a panic inside a relay task
-   or a masker call is caught where it happens (PRD-03 rule 4, section 4).
+   panic in the writer, the mask worker's loop or the native thread then exits 70; a panic inside a
+   relay task or a masker call is caught where it happens (PRD-03 rule 4, section 4). The uploader
+   catches its own panics and never ends the process (PRD-06 section 1): recording never depends on
+   it.
 2. Read the first control line (it holds the CA key). Take the entry lock (`rec/lock`, `flock`),
    waiting up to 10 s for a dying previous boot to let go; if it is still held, exit 73 (two
    recorders never write one entry).
@@ -436,13 +502,17 @@ than one reset the harness already survives (R1). The kill case runs on all thre
    extra_roots })`), so a slow recovery never holds the harness. Records offered from now on wait
    under the guard.
 4. On the writer thread: `PartWriter::recover()` (PRD-01 section 12): truncate to the last index
-   line, close the frame, write the recovery frame with `GAP {sid 0, recorder_down, start = last
-   LINK, end = now, lost 0, tail {"cause": <from the previous exit>, "prev": {...}}}` and a LINK.
+   line, close the frame, write the recovery frame (PRD-01 section 12 step 3): the dead boot's COUNT,
+   taken from the `counts.jsonl` line whose `seq` equals the recovered last LINK, so that boot's last
+   COUNT recounts every record it kept; then `GAP {sid 0, recorder_down, start = last LINK, end = now,
+   lost 0, tail {"cause": <from the previous exit>, "prev": {...}}}`; then a LINK. If no line has
+   that `seq` (a power loss can lose the file's tail), the writer recounts the dead boot from its part
+   files first; the proxy is already serving, so this only delays writing.
    The boot number is the last PART's boot plus one, read from the part file, never from the
    watchdog. Then PART, `start` (with `resume: true`, `fd_limit`, `mask_values`), `prev_boot`, then
    the queued records.
 5. Start the native reader (`native::start(rec, sources) -> NativeReader`) with the cursors of 9.3,
-   then the uploader (`upload::spawn`, PRD-06). Send `ready`.
+   then the uploader (`upload::spawn(ctx) -> UploadHandle`, seam S18, PRD-06). Send `ready`.
 
 Streams that were open in the dead boot have no END; the reader reads them as cut by the
 `recorder_down` gap (PRD-01 section 7). In-flight requests are not resumed; the harness's retry is a
@@ -469,10 +539,11 @@ new request on a new stream.
 
 1. Take `rec/lock` without waiting. If it is held, a recorder still lives: return `StillRecording`
    and let PRD-10 tell the participant to run `goalcup seal` first.
-2. Recover the last part file as in 9.2 step 4, but the recovery frame holds `GAP {sid 0,
-   recorder_down, start = last LINK, end = now, tail {"cause":"abandoned"}}`, the last COUNT totals
-   from `counts.jsonl`, a `seal` event with reason `recovered` and `harness: "unknown"`, a LINK, the
-   frame end and an `R` index line (PRD-01 section 12). Nothing is appended after it.
+2. Recover the last part file as in 9.2 step 4, but the recovery frame holds the dead boot's COUNT
+   (as in 9.2 step 4), `GAP {sid 0, recorder_down, start = last LINK, end = now, tail
+   {"cause":"abandoned"}}`, a `seal` event with reason `recovered`, `harness: "unknown"` and the entry
+   totals (`entry_totals`), a LINK, the frame end and an `R` index line (PRD-01 section 12). Nothing
+   is appended after it. Then write the sealed `status.json` (section 6).
 3. Leave the part files for the uploader (PRD-06 uploads and commits the dead entry before the new
    one).
 
@@ -507,6 +578,8 @@ So the recorder needs about 64 fixed descriptors plus 2 per open connection.
   1,048,576, and tools the agent runs that loop over every descriptor or use `select()` slow down or
   break past 1,024 (review A finding 11). Codex with 20 subagents held up to 97 (measure 7).
 - **The watchdog** raises its own soft limit the same way as the harness; it holds few descriptors.
+  All three raises go through `pipeline::fds::raise(target) -> u64`, which returns the limit set; the
+  watchdog's `pre_exec` and PRD-14's tests call it.
 - **Reserve** (an interface PRD-03 calls before each `accept`): `pipeline::fds::may_accept()` is
   true while `2 x open connections + 64` is under the recorder's limit. When false, the accept loop
   waits 10 ms and tries again, so new connections wait in the backlog: slower, never refused. PRD-03
@@ -514,7 +587,9 @@ So the recorder needs about 64 fixed descriptors plus 2 per open connection.
   `fd_limit` is written once per episode with the limit and the connection count. The 1,024 task cap
   and the 503 (`proxy/mod.rs:112, 120, 991-996`) are gone.
 - On a 256 default whose raise fails, about 96 connections can be open at once; the rest wait. The
-  owner's macOS pad run must watch this case.
+  owner's macOS pad run must watch this case. Past that, with long-lived WebSockets, waiting
+  connections may never be served: the recorder writes the `fd_limit` note, and `goalcup status` and
+  the end screen say `Too few open files: N agent connections waited.`
 - The native handle budget (`handle_budget.rs:13`, 32 handles) is not copied.
 
 ### 11. The seal
@@ -522,38 +597,68 @@ So the recorder needs about 64 fixed descriptors plus 2 per open connection.
 Triggers: the `seal` line from the watchdog (section 8 step 11, after the harness exited or was
 ended and `plan.after` ran); when no watchdog lives, the recorder's own harness watch and deadline
 timer, and the server's `stop` (reason `server_stop`, `harness: "running"`); SIGTERM to the recorder
-(reason `signal`).
+(reason `signal`). SIGTERM is the seal signal for outside callers only; the watchdog ends a null
+recorder with the `restart` line (section 8 step 9).
 
 1. **Grace on a harness exit.** For reason `harness_exit` only, keep recording until no relay has
    moved a byte for 5 s, at most 30 s after the `exit` line, so a helper or child that finishes a
-   call just after the harness is still recorded (review A finding 8; PRD-03's `ProxyHandle::idle`
-   gives the quiet time). A connection held open and
+   call just after the harness is still recorded (review A finding 8). The quiet time comes from
+   PRD-03's `ProxyHandle::quiet_since()`, the `Recorder::now()` of the last byte any relay moved: the
+   grace ends when it is 5 s old, or 30 s after the `exit` line. A connection held open and
    idle (Hermes's gateway holds them up to 600 s, PRD-17 P8) never holds the seal: idle is no
    bytes, not no connections.
-2. **Stop.** Every S1 call after this point is a no-op that only counts: bytes offered after the
-   stop and the `conn` streams that carried them, with their hosts (the writer's table for
-   connections open at the stop; a short list for `conn` OPENs after it). Relays keep relaying.
-3. **Drain:** wait until `held` is 0, at most 60 s (5 s for `signal`).
-4. **Native finish:** `NativeReader::finish(harness_exited)`, which reads to the end and copies the
-   `final` rows within PRD-04's 180 s guard.
+2. **Stop the wire.** Every S1 call on a wire stream (`conn`, `http_req`, `http_resp`, `ws_up`,
+   `ws_down`) after this point is a no-op that only counts: bytes offered after the stop and the
+   `conn` streams that carried them, with their hosts (the writer's table for connections open at the
+   stop; a short list for `conn` OPENs after it). Relays keep relaying. `native` and `snapshot` calls
+   stay admitted until `NativeReader::finish` returns (PRD-00 R3-3).
+3. **Drain** (wire bytes only): wait until no wire bytes are held. There is no time limit while
+   records keep being written (ledger R5). A writer that writes nothing for 60 s while records wait is
+   the stall exit (section 3): the watchdog restarts the recorder and sends `seal` again, and the
+   next boot's `recorder_down` gap names the span. On `signal` the drain stops after 5 s, and wire
+   bytes still queued become `cut_at_seal` gaps (step 5).
+4. **Native finish:** `NativeReader::finish`, which reads every file to the size seen in its first
+   pass and copies the `final` rows. Its 180 s time guard (today's finish budget) applies only when
+   the reason is `deadline`, `server_stop` or `signal`, where it guards the end of the run window. On
+   `harness_exit` and `seal_command` there is no time guard (ledger R5, H8), and `status.json`
+   `sealing` says `reading session files` meanwhile. `finish` needs the reason for this (ask 10).
 5. **Writer:** for every sid with records still unwritten, a `GAP cut_at_seal` with their bytes; for
    every open guard gap, a GAP ending at the seal; for every sid still open, `END cut_at_seal`; when
-   bytes were relayed after the stop, one `GAP after_stop` (15) on `sid 0` with tail `{"conns": n,
-   "hosts": [...]}` (not off time). Then COUNT, the `seal` event (reason, `server_reason` for
+   bytes were relayed after the stop, one `GAP after_stop` (15) on `sid 0` with start = the stop time
+   (step 2), end = the seal time, `lost` = the bytes counted after the stop plus one, and tail
+   `{"conns": n, "hosts": [...]}` (not off time). Then COUNT, the `seal` event (reason, `server_reason` for
    `server_stop`, exit, `harness`, `workspace_head` from `git rev-parse HEAD`, `dirty` = SHA-256 of
-   `git status --porcelain -z`, each `git` call with a 10 s budget, null on failure, boots and
+   `git --no-optional-locks status --porcelain -z` (it never takes the workspace's index lock), each
+   `git` call with a 10 s budget, null on failure, boots and
    totals), LINK, frame end, `E` line, `fdatasync`, durable point.
-6. Send `sealed`, write `status.json` with `mode: "sealed"`, and let the uploader finish (PRD-06).
-   Bytes relayed after the seal's LINK cannot be recorded; their count goes to `goalcup.log`.
+6. Send `sealed`, write `status.json` with `mode: "sealed"`, and hand over with
+   `UploadHandle::finish(wrap_up, seal_facts)` (seam S18), `seal_facts` holding `reason`,
+   `workspace_head` and `totals`. Bytes relayed after the seal's LINK cannot be recorded; their count
+   and hosts go to `goalcup.log` and to the sealed `status.json` (`after_seal {bytes, hosts}`, kept
+   current while the recorder lives), and PRD-10's end screen and `goalcup status` name them in the
+   `after_stop` line.
 7. **Outlived processes.** At the seal the watchdog lists its Linux children that started after the
    harness and are still alive (the subreaper keeps them findable); the recorder writes one `note`
-   `outlived` with the count and program names (an ask of PRD-01), and PRD-10 says one line.
+   `outlived` with the count and program names (PRD-00 R3-4), and PRD-10 says one line.
 
-**The bound.** At the deadline the harness is ended within 10 s (SIGKILL after SIGTERM), `plan.after`
-takes at most 10 s per command, the drain at most 60 s and the native finish at most 180 s. So the
-seal LINK is durable at most about 4 minutes after the deadline plus the `after` commands. On a
-harness exit add the grace (at most 30 s). The upload wrap-up after that never holds the harness.
-PRD-02 owns the 60 s and 180 s numbers (PRD-00 S8).
+**In null mode.** A `seal` line, the deadline or a server `stop` while a null recorder runs: the null
+recorder (which holds `rec/lock` like any boot) seals through `close_dead_entry`'s recovery steps
+(9.4): recover the last part file and write one recovery frame with the dead boot's COUNT, `GAP
+recorder_down` with cause `null_mode` up to now, the `seal` event with the real reason, `harness` and
+the entry totals, a LINK, the frame end and the `R` line; then the uploader finishes as usual. If that
+fails too (the cause of the crash loop may still hold), the null recorder exits, its last heartbeat
+says `failed`, and the entry is left for `close_dead_entry` (seal reason `recovered`) on the next
+`goalcup continue`, `seal` or `upload`.
+
+**The bound.** At the end of the run window (`deadline`, `server_stop`, `signal`) the harness, where
+it is ended, is ended within 10 s (SIGKILL after SIGTERM), `plan.after` takes at most 10 s per command,
+the drain lasts while the writer writes (at most the held bytes, under the soft guard, at the
+writer's rate; 60 s with no write is the stall exit) and the native finish at most 180 s. So the seal
+LINK is durable about 4 minutes after the deadline plus the `after` commands. On `harness_exit` and
+`seal_command` the native finish has no time guard: it reads every session file to the size seen in
+its first pass, and status says so; on a harness exit add the grace (at most 30 s). The upload
+wrap-up after that never holds the harness. PRD-02 owns the 60 s and 180 s numbers (PRD-00 S8, whose
+"drain 60 s" reads as 60 s with no write).
 
 ### 12. The silent-loss paths of run 1, P1 to P14
 
@@ -629,8 +734,14 @@ Create:
   | Dev only (PRD-14) | `tempfile` 3.27.0, `x509-parser` 0.18.1, `h2` for the fake upstream (version unverified, not in the lock), the crate itself with `test-hooks` |
 
   A PRD that needs one more names it in the night log in the first hour; the scaffold adds it. The
-  `test-hooks` feature is declared here, off by default.
-- `crates/goalcup/src/lib.rs`: the module list, frozen after the scaffold.
+  `test-hooks` feature is declared here, off by default, pending the owner (PRD-00 owner question 12;
+  ledger L6 cut the test seams): one compile-time feature in `crates/goalcup` only, never in a release
+  build (PRD-14 greps the shipped binary for `GOALCUP_TEST_`), because restart, guard and rotation
+  cannot be proven from a real run in the gate's time. No `GOALCUP_TEST_*` variable is read by a
+  release build.
+- `crates/goalcup/src/lib.rs`: the module list, frozen after the scaffold, and an empty placeholder
+  `mod.rs` in every other module folder of `crates/goalcup/src/` (PRD-00 phase 0 step 5, the one
+  ownership exception; each owner replaces its own placeholder in its first merge).
 - `crates/goalcup/src/pipeline/`: `mod.rs` (`Recorder`, `run_recorder`, `low_priority`), `handle.rs`
   (`StreamHandle`, the gap rule), `guard.rs`, `mask_worker.rs`, `writer.rs`, `counts.rs`, `clock.rs`,
   `status.rs`, `cursors.rs`, `seal.rs`, `boot.rs`, `dead.rs` (`close_dead_entry`), `fds.rs`,
@@ -650,21 +761,21 @@ Must not touch: `src/proxy/` (PRD-03), `src/native/` (PRD-04), `src/mask/` (PRD-
 
 | PRD | What crosses | Direction |
 |---|---|---|
-| PRD-00 | S1, S4 and S8 as written in PRD-00 revision 2, plus `Recorder::reserve` (night-log line) | Both |
+| PRD-00 | S1, S4, S8 and S17 as written in PRD-00 revision 4 (rulings R3-1 to R3-3), plus `Recorder::real_for_tests` and `fds::raise` (night-log lines) | Both |
 | PRD-01 | `PartWriter::{open(dir, PartOptions), recover, write, link, rotate_if_due, seal}`, `Record`, `StreamKind`, `GapReason`, `EndReason`, `IndexLine` (F1); GAP reasons 1, 2, 10, 12, 15; seal reasons incl. `recovered`, `server_stop`; notes `fd_limit`, `writer_slow`; the `clock` and `suspend` events; COUNT keys | Used here |
-| PRD-03 | S1; `proxy::serve(listener, ProxyCtx { recorder, hosts, ca, extra_roots }) -> ProxyHandle`; `pipeline::fds::may_accept()`; `Recorder::reserve` for decoder windows; `proxy::ca::RunCa::{mint, write_files, export, import}` called by the watchdog (mint) and the recorder (import). PRD-03 must: relay first, then offer the same `Bytes`; decode before the offer; never hold a lock across an S1 call; never deduplicate losses; keep a panic inside one connection's task; not raise the open-file limit itself; run 2 relay threads | Both |
-| PRD-04 | S1 with `kind = native` or `snapshot`, `from` = cursor; `room()` (already leaves a quarter of the soft guard free); `native_cursors()` with `gen`, `fid`, offset, snapshot size and `mtime_ns`; `low_priority()`; `native::start(rec, sources) -> NativeReader` at boot step 5; `NativeReader::finish(self, harness_exited) -> NativeFinish` at seal step 4, after the watchdog ran `plan.after` | Both |
-| PRD-05 | S2: `Masker::new(rules, values) -> Result`, `Masker::stream(kind)`, `mask_meta`, `mask_rules`, `value_counts`; `StreamMasker::{push, boundary, gap, finish}` returning `Masked {bytes, spans}`. Must be `Send`, keep length, never return an error after `new` | Used here |
-| PRD-06 | S4: `Counts`, `Durable` (with the counters at the durable LINK) on a `watch` channel, read by `borrow()` from plain threads; `status.json`; `upload::spawn` after boot recovery and in null mode; the seal hands over with `UploadHandle::finish`; S10 `ServerWord` read by the recorder and forwarded to the watchdog as the `server` line; `close_dead_entry` for `goalcup upload` | Both |
-| PRD-08 | Gap tail keys written here: `guard`, `limit`, `cause`, `prev`, `exits`, `last`, `conns`, `hosts`. Exit codes 70, 73, 74, 75 as `recorder_down` causes | Used there |
-| PRD-10 | `watchdog::run(plan, facts) -> ExitCode` for `start` and `continue`; the hidden recorder subcommand dispatched to `pipeline::run_recorder`; `pipeline::close_dead_entry(dir) -> Result<Closed, StillRecording>`; `status.json` (section 6, S4); `goalcup seal` sends SIGUSR1 to the pid in `rec/watchdog.pid`, or SIGTERM to the recorder's pid in `status.json` when no watchdog lives. PRD-10 drops its own helper stop (start step 7) and harness end; the sleep lock stays PRD-10's, held in the watchdog process | Used there |
-| PRD-11 | S3 `LaunchPlan` (`program`, `argv`, `env`, `home`, `before`, `after`, `hosts`, `native`, `mask_rules`, `secret_values`), `finish_env(port, run_ca, bundle)` | Used here |
+| PRD-03 | S1; `proxy::serve(listener, ProxyCtx { recorder, hosts, ca, extra_roots }) -> ProxyHandle`; `pipeline::fds::may_accept()`; `Recorder::room` and `Recorder::reserve` for every decoder window; `ProxyHandle::quiet_since()` for the seal's grace; a `parse_stopped` note when a connection stops parsing (status `losing`); `proxy::ca::RunCa::{mint, write_files, export, import}` called by the watchdog (mint) and the recorder (import). PRD-03 must: relay first, then offer the same `Bytes`; decode before the offer; never hold a lock across an S1 call; never deduplicate losses; keep a panic inside one connection's task; not raise the open-file limit itself; run 2 relay threads | Both |
+| PRD-04 | S1 with `kind = native` or `snapshot`, `from` = cursor; `room()` (already leaves a quarter of the soft guard free); `native_cursors()` with `gen`, `fid`, offset, snapshot size and `mtime_ns`; `low_priority()`; `native::start(rec, sources) -> NativeReader` at boot step 5; `NativeReader::finish(self, harness_exited) -> NativeFinish` at seal step 4, after the watchdog ran `plan.after`, plus the seal reason for the time guard (ask 10); `NativeFinish.cut_files` and `cut_bytes` for the sealed `status.json` | Both |
+| PRD-05 | S2: `Masker::new(rules, values) -> Result`, `Masker::stream(kind)`, `mask_meta`, `mask_rules`, `value_counts`; `StreamMasker::{push, boundary, gap, finish}` returning `Masked {bytes, spans}`. Must be `Send`, keep length, never return an error after `new`. The S2 stub stars every byte until the core-slice masker lands; a `MaskError` on a built-in shape is exit 78 | Used here |
+| PRD-06 | S4: `Counts`, `Durable` (with the counters at the durable LINK) on a `watch` channel, read by `borrow()` from plain threads; `status.json`, from which with `Durable` age and the live atomics PRD-06 computes the heartbeat's `failed`; `pipeline::entry_totals`; `upload::spawn(ctx) -> UploadHandle` after boot recovery and in null mode (S18); the seal hands over with `UploadHandle::finish(wrap_up, seal_facts)` (S18); S10 `ServerWord` read by the recorder and forwarded to the watchdog as the `server` line; `close_dead_entry` for `goalcup upload` | Both |
+| PRD-08 | Gap tail keys written here: `guard`, `limit`, `cause`, `prev`, `exits`, `last`, `conns`, `hosts`. Exit codes 70, 73, 74 and 75 (cause `writer_stalled`), and the causes `null_mode` and `abandoned`, as `recorder_down` causes | Used there |
+| PRD-10 | `watchdog::run(plan, facts) -> ExitCode` for `start` and `continue`; the hidden recorder subcommand dispatched to `pipeline::run_recorder`; `pipeline::close_dead_entry(dir) -> Result<Closed, StillRecording>`; `status.json` (section 6, S4); `goalcup seal` sends SIGUSR1 to the pid in `rec/watchdog.pid`, or SIGTERM to the recorder's pid in `status.json` when no watchdog lives. PRD-10 drops its own helper stop (start step 7) and harness end; the sleep lock stays PRD-10's, held in the watchdog process. PRD-10 shows: exit 78's text, `sealing`, `after_seal` in the `after_stop` line, `req_whole` beside `model_requests`, the `fd_limit` line, the both-dead line | Used there |
+| PRD-11 | S3 `LaunchPlan` (`program`, `argv`, `env`, `home`, `before`, `after`, `hosts`, `native`, `mask_rules`, `secret_values`, `notes`), `finish_env(port, run_ca, bundle)`; `HostList`, `NativeSources` and `MaskRule` serialize with serde (S17) | Used here |
 | PRD-12 | Pad cases: the kill case on all three core harnesses (`--kill-recorder`), the low file limit, the watchdog kill, continue after both die | Used there |
 | PRD-13 | The deletions in section 13 | Done there |
-| PRD-14 | The `test-hooks` feature in this scaffold; hooks `GOALCUP_TEST_WRITER_STALL`, `GOALCUP_TEST_GUARD_MB`, `GOALCUP_TEST_CRASH_AT_BOOT`, `GOALCUP_TEST_ROTATE_MB` (owner PRD-02, sets `PartOptions.rotate_at`); `Recorder::for_tests`. No silent-drop hook (cut, PRD-00) | Both |
+| PRD-14 | The `test-hooks` feature in this scaffold; hooks `GOALCUP_TEST_WRITER_STALL`, `GOALCUP_TEST_GUARD_MB`, `GOALCUP_TEST_CRASH_AT_BOOT`, `GOALCUP_TEST_ROTATE_MB` (owner PRD-02, sets `PartOptions.rotate_at`), all pending owner question 12; `Recorder::for_tests` (calls before masking) and `Recorder::real_for_tests(dir, masker)` (the real mask worker and writer in a temp entry folder, for `common::recorder::real(dir)`). No silent-drop hook (cut, PRD-00) | Both |
 | PRD-15 | A DECISIONS entry: one process, one guard, restart by watchdog, null mode, no core dumps | Written there |
-| PRD-16 | Kill test R1 (2 s on the Codex pad run); X4's 5 s under A2 load is a different run; X3 reads `held_peak` | Used there |
-| PRD-17 | Cases P1, P3 to P8, P15, R1, R2, R4, C11, C12 (listener is loopback only) | Used here |
+| PRD-16 | Kill test R1 (2 s on the Codex pad run); X4's 5 s under A2 load is a different run; X3 reads `held_peak`; the breaker uses `pipeline_guard.rs`, `pipeline_stall.rs` and `by_hand_load` at 40 and 200 streams | Used there |
+| PRD-17 | Cases P1, P3 to P8, P15, R1, R2, R4, C11, C12 (listener is loopback only); H10 and K15 run through `real_for_tests`, because `for_tests` shows bytes before masking | Used here |
 
 ## What is cut
 
@@ -683,53 +794,63 @@ PRD-13 deletes; this PRD only makes them dead. New code here: about 1,350 src li
 
 ## Acceptance
 
-### Real-run proofs (on the pad, PRD-12, Linux sandbox, `GOALCUP_KEEP_PARTS=1`)
+### Real-run proofs (on the pad, PRD-12, Vercel Sandbox (Linux), `GOALCUP_KEEP_PARTS=1`)
 
 No real-run proof here needs a `test-hooks` build (review B T2). R2 and R6 keep their numbers so
 other PRDs' references hold; they are automated tests now.
 
 | # | Proof | Pass |
 |---|---|---|
-| R1 | **Kill test** (PRD-00 done item 2, PRD-01 acceptance 3). A Codex direct-key pad run (`full` prompt). `kill -9` the recorder twice, 2 minutes apart, while a response streams. PRD-12 runs the same `--kill-recorder` case on Claude Code and Hermes | The harness finishes its turn with no participant action and its own log shows no failed call it did not retry. The entry decodes; exactly two `recorder_down` gaps, start before end, each under 2 s long; links verify across three boots; the watchdog log shows the first accept after each kill within 1 s; written model requests after the second kill are above zero; every new `conn` to a listed host after a restart is `decrypt` (same CA); the server copy equals local |
+| R1 | **Kill test** (PRD-00 done item 2, PRD-01 acceptance 3). A Codex direct-key pad run (`full` prompt). `kill -9` the recorder twice, 2 minutes apart, while a response streams (no test hooks). The first kill comes after the first heartbeat row. PRD-12 runs the same `--kill-recorder` case on Claude Code and Hermes | The harness finishes its turn with no participant action and its own log shows no failed call it did not retry. The entry decodes; exactly two `recorder_down` gaps, start before end, each under 2 s long; links verify across three boots; `goalcup.log` shows the next boot's `ready` within 1 s of each kill, and the next boot's first `conn` OPEN comes after its `recorder_down` gap end (`goalcup-verify dump`); written model requests after the second kill are above zero; every new `conn` to a listed host after a restart is `decrypt` (same CA); the server copy equals local |
 | R2 | **Stalled writer**: now `pipeline_stall.rs` (below) | |
 | R3 | **Counts are written counts.** A Claude Code run with one subagent, then `goalcup-verify check` | The seal's `model_requests` equals the verifier's recount; a watcher reading `status.json` every second never saw a model request count above the verifier's recount at that second; the end screen's numbers equal the seal's totals |
-| R4 | **Low file limit.** `ulimit -Sn 256` in the sandbox shell, then a Codex run whose prompt asks for 20 subagents | `start` event shows the raised `fd_limit`; `/proc/<pid>/limits` shows the hard limit (or 10,240 on macOS) for the recorder and at least 4,096 for the harness; no EMFILE in the logs; no refused connection |
-| R5 | **Watchdog death.** `kill -9` the watchdog mid-run in a Claude Code run | The harness goes on; the recorder keeps writing; after the harness exits the entry seals with reason `harness_exit` and exit null within 35 s (1 s watch plus at most 30 s grace) |
+| R4 | **Low file limit.** `ulimit -Sn 256` in the sandbox shell, then a Codex run whose prompt asks for 20 subagents | `start` event shows the raised `fd_limit`; `/proc/<pid>/limits` shows the hard limit (or 10,240 on macOS) for the recorder and at least `min(4096, hard)` for the harness; no EMFILE in the logs; no refused connection |
+| R5 | **Watchdog death.** `kill -9` the watchdog mid-run in a Claude Code run | The recorder keeps writing while the harness runs; the watcher writes down whether the harness kept working (a TUI harness may lose its terminal, section 9.1); once the harness exits, the seal starts within 31 s of the exit (`goalcup.log`) and the `seal` event, reason `harness_exit` and exit null, is written within the section 11 bound |
 | R6 | **Null mode**: now `watchdog_null.rs` (below). PRD-10 acceptance 2 and PRD-06 U6 may still use the hook on a real run | |
-| R7 | **Continue after both die.** `kill -9` watchdog and recorder together, then `goalcup continue` | The old entry ends with `seal` reason `recovered` and an `abandoned` gap and is uploaded; the new entry's native streams start at the old cursors (no session file byte is recorded twice outside the crash overlap: verifier invariant 14); the new entry got the same port |
-| R8 | **Writer throughput, measured.** `by_hand_load` (below) once on a 4 vCPU sandbox | Reported, never a pass line (PRD-00: no speed number fails a gate). At or above 50 MB/s sustained through mask and writer, nothing changes. Below it, the night log names the slow stage: the mask worker gets the pool (section 4), or PRD-06 lowers zstd settings |
+| R7 | **Continue after both die.** `kill -9` watchdog and recorder together, then `goalcup continue` | The old entry ends with `seal` reason `recovered` and an `abandoned` gap and is uploaded; per native path, the new entry's first `from` equals the old entry's last written offset (checked from both `goalcup-verify dump` outputs); the new entry got the same port |
+| R8 | **Writer throughput, measured.** `by_hand_load` (below), both sizes, on a 4 vCPU Vercel Sandbox (Linux) | Reported, never a pass line (PRD-00: no speed number fails a gate): mask and writer MB/s, `held_peak`, the `memory_guard` gap count and S1 call time for 40 and for 200 streams. At or above 50 MB/s sustained through mask and writer, nothing changes. Below it, the night log names the slow stage: the mask worker gets the pool (section 4), or PRD-06 lowers the zstd level only; the 2^27 window and long matching stay (ledger F2, locked) |
 
 ### Automated tests that guard them
 
 No upper bound on elapsed time below 5 s; "never waits" is shown by holding the other side forever and
 seeing the call return (PRD-14 section 4).
 
-- `pipeline_guard.rs`: a writer held still by `GOALCUP_TEST_WRITER_STALL`; 40 streams offer 2 GiB in
-  1.5 MB bodies. Every S1 call returns while the writer is held; the decoded record has one GAP per
+- `pipeline_guard.rs`: a writer held still by `GOALCUP_TEST_WRITER_STALL` (under the 60 s stall exit);
+  40 streams, then 200 streams, each offer 2 GiB in 1.5 MB bodies. Every S1 call returns while the writer is held; the decoded record has one GAP per
   drop episode per stream, start before end, holes filled exactly; COUNT equals a recount.
 - `pipeline_stall.rs` (was R2): the real binary, a fake upstream (PRD-14), 20 clients streaming 1.5 MB
-  POSTs and one WebSocket, `GOALCUP_TEST_GUARD_MB=64`, the writer held for 90 s. Every client exchange
-  completes (`within(30 s)` guards a hang only); every hole is a `memory_guard` GAP; `status.json`
-  showed `losing` during the stall; no `recorder_down` gap; `held_peak` under 64 MiB plus 1 MiB.
+  POSTs and one WebSocket, `GOALCUP_TEST_GUARD_MB=64`, the writer held for 50 s (under the 60 s stall
+  exit). Every client exchange completes (`within(30 s)` guards a hang only); every hole is a
+  `memory_guard` GAP; `status.json` showed `losing` during the stall; no `recorder_down` gap;
+  `held_peak` under 64 MiB plus 1 MiB. Then hold the writer 70 s: the recorder exits 75, the next boot
+  writes one `recorder_down` gap with cause `writer_stalled`, clients that reconnect are served, and
+  the heartbeat said `failed` once `writer_idle_ms` passed 60 s.
 - `pipeline_many_streams.rs`: 20,000 open streams and 5,000 `conn` streams at once, no refusal.
 - `pipeline_native_room.rs`: guard full while a 10 MB file grows; after release, every file byte is
   in DATA, no gap.
 - `pipeline_mask_panic.rs`: a test masker panics on a marker; a `mask_failed` GAP, the marker's bytes
   appear nowhere in the part file, the stream goes on. A `fin` piece reaches the masker as
-  `boundary()`.
+  `boundary()`. A panic while bytes are held leaves DATA plus GAP exactly contiguous (PRD-01
+  invariant 4). An EVENT body with a planted key is masked.
 - `pipeline_restart.rs` and `watchdog_restart.rs`: the real binary with a fake upstream; `kill -9`
   the recorder; the port is unchanged and bound to `127.0.0.1` only; a connection made during the
   restart is served; boot numbers are contiguous; `prev_boot` names the signal; cursors resume; a
   decrypted connection after the restart verifies against the same `run-ca.pem`.
 - `watchdog_null.rs` (was R6): `GOALCUP_TEST_CRASH_AT_BOOT=4` and a forced first kill. Connections are
   answered throughout; `status.json` shows `null` with a start time; the next normal boot writes one
-  `recorder_down` gap with cause `null_mode` covering the span.
+  `recorder_down` gap with cause `null_mode` covering the span; the retry uses the `restart` line,
+  never SIGTERM. A harness exit during null mode gives a sealed entry with one `null_mode` gap that
+  verifies.
 - `watchdog_end.rs`: a fake harness that forks a child and a detached grandchild; at the deadline and
   on SIGUSR1 all three get SIGTERM then SIGKILL; the watchdog and the recorder are never signalled;
   `plan.before` runs before the spawn and `plan.after` before the native finish.
-- `pipeline_seal.rs`: open streams end `cut_at_seal`; queued bytes past the drain budget become
-  `cut_at_seal` gaps; bytes relayed after the stop give one `after_stop` GAP; nothing follows the
-  seal's LINK; a held-open idle connection does not delay the seal past the grace.
+- `pipeline_seal.rs`: open streams end `cut_at_seal`; on `signal`, wire bytes still queued after 5 s
+  become `cut_at_seal` gaps; bytes relayed after the stop give one `after_stop` GAP with start, end and
+  lost bytes; a relay call after the stop only counts; a native file that grows during the seal and a
+  `final` set are both in the record after the seal (R3-3); nothing follows the seal's LINK; a
+  held-open idle connection does not delay the seal past the grace.
+- `pipeline_panic.rs`: kill the mask worker loop with a test hook; the recorder exits 70, the next
+  boot writes `recorder_down`, and relays never hang.
 - `pipeline_secure.rs`: `/proc/<pid>/limits` of the recorder shows a core size of 0; `PR_GET_DUMPABLE`
   inside it returns 0; a panic whose message holds a marker writes file and line and never the
   marker.
@@ -737,23 +858,28 @@ seeing the call return (PRD-14 section 4).
   the hard limit, the harness to 4,096 (with a macOS branch for the clamp).
 - `pipeline_no_latch.rs`: 1,000 guard episodes in a row; recording resumes after every one.
 
-`by_hand_load`, `#[ignore]`, run by hand once: a fake upstream, 40 clients sending 1.5 MB POSTs, one
-WebSocket at 50 messages a second, 20 minutes; reports mask and writer MB/s, `held_peak`, RSS, and S1
-call time at the 99.9th percentile.
+`by_hand_load`, `#[ignore]`, run by hand twice: a fake upstream, 40 clients and then 200 clients
+sending 1.5 MB POSTs in bursts (all at once every 60 s, as after a rate-limit window), plus 200
+WebSockets at 1 message a second each, 20 minutes each; reports mask and writer MB/s, `held_peak`,
+RSS, the `memory_guard` gap count and S1 call time at the 99.9th percentile.
 
 ## Risks and blind spots
 
 - **Writer throughput is unmeasured.** zstd with a 2^27 window and long matching, SHA-256 and
   masking per byte: if the sustained rate is below the inflow, a heavy run spends time in gaps. R8
-  measures it in phase 1a; the mask worker can become a pool, the writer cannot.
-- **Memory.** Up to 512 MiB held, plus about 141 MiB of compressor, plus relay buffers and decoder
-  windows not reserved by PRD-03: about 750 MiB peak beside a 400 MB harness. On a small machine the
+  measures it in phase 1a; the mask worker can become a pool, the writer cannot. PRD-06 may lower
+  the zstd level only; the 2^27 window and long matching stay (ledger F2).
+- **Memory.** Up to 512 MiB held (decoder windows sit inside the 512 MiB guard through `reserve`),
+  plus about 141 MiB of compressor, plus relay buffers: under about 750 MiB peak beside a 400 MB
+  harness. On a small machine the
   RAM/8 rule lowers the guard. An OOM kill is a `recorder_down` gap, not a silent loss, and
   `oom_score_adj` makes the recorder the kernel's first choice on Linux.
 - **Connection resets on a crash and on planned replacements.** A harness without retries shows the
   agent an error. Hermes and most of the 15 are unmeasured (`F-week-long-risks.md:607`); the kill
   case on all three core harnesses measures it. A null-mode retry resets open connections once per
-  try (at most about once an hour after the first tries).
+  try (at most about six tries an hour, every 10 minutes at the ceiling).
+- **The stall exit on a slow but live disk.** A disk that hangs 60 s and then recovers costs one reset
+  per open connection and a `recorder_down` gap with cause `writer_stalled`.
 - **Backlog limits.** macOS `kern.ipc.somaxconn` is 128 by default and Linux `somaxconn` is 4,096
   since kernel 5.4 (both unverified on the target machines). Past it, a client's SYN is dropped and
   retried after about a second: slower, not refused (unverified on macOS).
@@ -762,6 +888,9 @@ call time at the 99.9th percentile.
 - **The watchdog is the single point of failure for the port only together with the recorder.** If
   both die the harness's calls are refused until the participant restarts. If only the watchdog
   dies, nobody ends the harness at the deadline or runs `plan.after`.
+- **Watchdog death under a TUI harness.** The shell takes the terminal's foreground back, so a TUI
+  harness likely stops or exits. Recording goes on and the recorder seals when the harness exits; R5
+  records what the harness did.
 - **Ending the harness tree** by a parent walk misses a process that double-forked away before the
   walk on macOS (no subreaper there). It keeps using the port until the watchdog exits, then is
   refused; the `outlived` note is Linux only.
@@ -771,6 +900,8 @@ call time at the 99.9th percentile.
 - **`PR_SET_DUMPABLE` 0** makes `/proc/<pid>` of the recorder owned by root, so a same-user tool
   cannot read its `/proc` files. `goalcup status` reads files and checks pids with `kill(pid, 0)`,
   which still works. Memory paged to unencrypted swap on Linux is not covered (PRD-15 says so).
+  PRD-12's open-file count of the recorder and watchdog needs root in the sandbox (or reads the
+  `fd_limit` note and `status.json` instead).
 - **Low priority threads on macOS** are not lowered in 1.0 (QoS deferred). The owner's Mac run
   should report `held_peak`.
 - **Two writers on one entry** are prevented by `flock`, which does not work on some network
@@ -784,19 +915,19 @@ call time at the 99.9th percentile.
 | Default | Value | Who may change it |
 |---|---|---|
 | Soft guard | 512 MiB, or RAM/8 if smaller, floor 128 MiB | PRD-02, with `pipeline_stall` and R8 numbers |
-| Hard guard | 2 x soft, then exit 75 | PRD-02 |
+| Writer stall exit | 2 x soft, or 60 s with no write while records wait; exit 75, cause `writer_stalled` | PRD-02 |
 | Resume mark for a stream in a gap, and `room()` | 3/4 of soft | PRD-02 |
 | Mask workers | 1; the pool `clamp(cores / 2, 1, 4)` only after R8 | PRD-02 |
 | Relay worker threads | 2 | PRD-03 |
 | Background priority | nice 10 (Linux); none on macOS in 1.0 | PRD-02 |
 | `oom_score_adj` of the recorder | 500 (Linux) | PRD-02 |
 | Restart pauses | 0, 0.1, 0.5, 1, 2, 5 s; reset after 10 min alive | PRD-02 |
-| Null mode | after 3 exits in 10 min each under 60 s; retry after 5 min, doubling to 60 min | PRD-02 |
+| Null mode | after 3 exits in 10 min each under 60 s (SIGKILL included); retry by the `restart` line after 5 min, doubling to 10 min, never more | PRD-02 |
 | First boot ready wait | 10 s | PRD-10 |
-| Harness end | SIGTERM to the tree, SIGKILL after 10 s | PRD-02 (owner question 11) |
+| Harness end | SIGTERM to the tree, SIGKILL after 10 s; only at the deadline (incl. a server `stop` for the deadline) and on `goalcup seal` | PRD-02 (PRD-00 owner question 2, old 11) |
 | Grace after a harness exit | until 5 s with no relayed byte, at most 30 s | PRD-02 |
-| Seal drain | 60 s (5 s on a signal) | PRD-02 |
-| Native finish guard | 180 s (PRD-04 builds it) | PRD-02, which owns the seal bound |
+| Seal drain | wire bytes only; no time limit while the writer writes (60 s with no write is the stall exit); 5 s on a signal | PRD-02 |
+| Native finish guard | 180 s only at `deadline`, `server_stop` and `signal`; none on `harness_exit` and `seal_command` (PRD-04 builds it) | PRD-02, which owns the seal bound |
 | Kill-test gap bound | 2 s on the Codex pad run (R1); PRD-16 X4 uses 5 s under A2's load | PRD-02 |
 | Listen backlog | 4,096 | PRD-02 |
 | File-handle reserve | 64 | PRD-02 |
@@ -810,11 +941,14 @@ Order of work, by PRD-00's slices:
 
 1. **Phase 0 (H+0 to H+1.5): the scaffold.** `Cargo.toml` with the dependency table above, `lib.rs`,
    S1 (with `for_tests` and `reserve`), S4 and S8 as compiling stubs (`Recorder` whose calls do
-   nothing, `watchdog::run` that spawns the harness with no recorder), so PRD-03, PRD-04, PRD-06,
+   nothing, `watchdog::run` that spawns the harness with no recorder), placeholder module roots for
+   every other folder (PRD-00 phase 0 step 5), so PRD-03, PRD-04, PRD-06,
    PRD-10 and PRD-14 can build at once. Publish the exact signatures in the night log.
 2. **Core slice.** `clock.rs` (boot time, awake time), `handle.rs` with the gap rule, `guard.rs`, the
-   writer thread on `PartWriter` (with a pass-through masker until PRD-05 lands), `secure.rs`. Get
-   one HTTP request through PRD-03 into a part file: that unlocks phase 1a. Then `mask_worker.rs`
+   writer thread on `PartWriter` (with PRD-05's S2 stub, which stars every byte, until PRD-05's
+   masker lands; never a pass-through masker, ledger M1), `secure.rs`. Get one HTTP request through
+   PRD-03 into a part file: that unlocks phase 1a only once PRD-05's core-slice masker (option b, left
+   guard, `boundary()`) is merged; the stub masker is for fake-upstream tests only. Then `mask_worker.rs`
    with S2, `counts.rs`, `status.rs`, `cursors.rs`. A minimal watchdog: bind, mint the CA, the first
    control line, spawn one recorder, `ready`, spawn the harness, shield, `exit` and `seal` lines,
    `seal.rs` on a harness exit.
@@ -822,6 +956,9 @@ Order of work, by PRD-00's slices:
    split file limits, `plan.before` and `plan.after`, ending the harness tree with the subreaper, the
    deadline, `goalcup seal`, the server `stop`, port reuse. Then R1 on the pad.
 4. Measure R8 once the masker is real; build the pool only if it says so.
+
+After each item above that changes recording (mask worker, seal, restart, null mode, native resume),
+one short real `smoke` run in a sandbox (PRD-16 watchers, ledger B3).
 
 Traps from the audit:
 
@@ -858,16 +995,18 @@ first line, `src/watchdog/` folder, S1 shape, null mode in the rules, `mask_fail
 9 reserved, `meta.from`, seal reasons `recovered` and `server_stop`, notes `fd_limit` and
 `writer_slow`, local files). What is left:
 
-1. **PRD-00 S1:** add `Recorder::reserve(n) -> Reserved` (section 2 rule 7) and the
+1. **PRD-00 S1** (ruled R3-1): add `Recorder::reserve(n) -> Reserved` (section 2 rule 7) and the
    `low_priority()` and `fds::may_accept()` helpers to the S1 block.
-2. **PRD-01 section 11:** a `note` value `outlived` (`count`, `programs`), written at the seal when
+2. **PRD-01 section 11** (ruled R3-4): a `note` value `outlived` (`count`, `programs`), written at the seal when
    processes started by the harness are still alive (section 11 step 7).
 3. **PRD-01 invariant 6 and section 12:** none needed; this PRD keeps the recovered seal inside the
    recovery frame (no close boot).
 4. **PRD-03:** its revision 2 already takes `fds::may_accept()`, 2 relay threads and the CA on the
-   first control line, and gives `ProxyHandle::idle`. Left: use `Recorder::reserve` for decoder
-   windows if PRD-03 counts them (guard name `decoder_window`).
-5. **PRD-04:** read at most `room()` with no subtraction of its own (it already stops at 3/4 of the
+   first control line. Left: `ProxyHandle` offers one accessor, `quiet_since()` (`idle()`,
+   `stop_accepting()` and `open_conns()` go); use `Recorder::room` and `reserve` for every decoder
+   window, with no process-wide decoder limit of its own (guard name `decoder_window`); write a
+   `parse_stopped` note when a connection stops parsing, so status can say `losing`.
+5. **PRD-04** (ruled: PRD-02's text stands): read at most `room()` with no subtraction of its own (it already stops at 3/4 of the
    soft guard). The database copy in `close_dead_entry` is not built (section 9.4).
 6. **PRD-10:** drop start step 7 (helper stops) and the harness end at deadline and seal; both are
    the watchdog's. `status.json` has one writer, the recorder (`harness` included). Call
@@ -876,11 +1015,15 @@ first line, `src/watchdog/` folder, S1 shape, null mode in the rules, `mask_fail
 8. **PRD-14:** drop `GOALCUP_TEST_SILENT_DROP` from the hook registry (cut, PRD-00) and make
    `GOALCUP_TEST_ROTATE_MB` PRD-02's (it sets `PartOptions.rotate_at`).
 9. **PRD-16:** X3 reads `held_peak` (not `queue_bytes`); X4 cites PRD-02's defaults table for the 5 s
-   bound; X6's `failed` means `mode: null`.
+   bound; X6's `failed` means recording is off (`mode: null`, or a writer stalled past 60 s).
+10. **PRD-04 and PRD-00 S8:** `NativeReader::finish` takes the seal reason (or whether its time guard
+    applies), so the 180 s guard runs only at `deadline`, `server_stop` and `signal`; `NativeFinish`
+    gains `cut_bytes` beside `cut_files`.
 
 ## Review answers
 
-Sources: CC = the consistency check item; A = review A finding; B = review B item. Verdicts:
+History of revision 2. The body above, the ledger and the alignment answers below win over this
+table. Sources: CC = the consistency check item; A = review A finding; B = review B item. Verdicts:
 accepted, partly accepted, rejected.
 
 | Item | Verdict and what changed |
@@ -931,3 +1074,86 @@ accepted, partly accepted, rejected.
 | B T3 (speed numbers in the gate) | Accepted. R8 is measured and reported, never a pass line |
 | B W8 (time to first byte within 20%) | Accepted. Dropped with R2's move; `by_hand_load` reports S1 call time |
 | B section 10 (smaller plan) | Accepted in substance through PRD-00's slices |
+
+## Alignment answers
+
+Revision 3 answers the three fix lists for this file (groups 1 to 3) from the alignment reviews. The
+ledger wins, and PRD-00 revision 4's rulings are followed where it already ruled. "Applied" means the
+body above now says it; "partly" says what was taken; "rejected" says why. Parts of a fix that belong
+to another file are made by that file's owner.
+
+### Group 1
+
+| Id | Answer |
+|---|---|
+| L2-01 | Applied, merged with G2-22. S1 rule 1 and section 11 step 2: after the stop only wire-stream calls are no-ops; `native` and `snapshot` calls stay admitted until `NativeReader::finish` returns (R3-3). `pipeline_seal.rs` gains the growing-file and `final` case |
+| F6/L2-06 | Applied, as PRD-00 revision 4 ruled. Null mode retries after 5 minutes, doubling, never past 10 minutes (section 8 step 9, defaults, risks: about six tries an hour) |
+| L2-02 | Applied, merged with P05-6. One `mask_failed` GAP from the first unemitted byte, lost = held bytes plus the piece plus one, start at the earliest held byte; `pipeline_mask_panic.rs` checks DATA plus GAP stay contiguous |
+| L2-03 | Applied, merged with L2-07 and G2-31. A status thread writes `status.json` from live atomics; one stall exit (60 s with no write while records wait, or 2 x soft) exits 75 with cause `writer_stalled`; `failed` covers it. `pipeline_stall.rs` holds the writer 50 s (no exit), then 70 s (exit) |
+| L2-04 | Partly, merged with G2-21. `counts.jsonl` gets a line at every LINK and the recovery frame's COUNT comes from the line whose `seq` equals the recovered LINK (as PRD-01 section 12 step 3 now says), with a recount fallback if the line is gone. `written` shows counts at the last indexed LINK rather than the durable point: recovery keeps that LINK after a process crash, so it never goes down, and it is fresher. Heartbeat counts stay at the durable point |
+| L3-4 | Applied, merged with G2-28. The 180 s guard applies only at `deadline`, `server_stop` and `signal`; `sealing: reading session files` in status; ask 10 asks PRD-04 and PRD-00 S8 to pass the reason into `finish` |
+| F5/L2-19 | Applied, merged with G2-17. Owner decisions and section 8 name the watchdog's jobs and why they fit R3, pending PRD-00 owner question 9 |
+| F7 | Applied (ledger L5) |
+| L2-07 | Applied (see L2-03) |
+| L2-11 | Applied. The `after_stop` GAP has start = the stop, end = the seal, lost = bytes after the stop plus one |
+| L2-12 | Partly. Count and hosts go to `goalcup.log` and to the sealed `status.json` as `after_seal {bytes, hosts}`, not to `upload.json`: that file is PRD-06's (S9) and `status.json` is the one file the recorder writes. PRD-10 names them in the `after_stop` line (interfaces row) |
+| L2-13 | Applied. New 9.1 row: watchdog, then later the recorder |
+| L2-17 | Applied. `http_post` counts streams whose END is written |
+
+### Group 2
+
+| Id | Answer |
+|---|---|
+| G2-01 | Applied for PRD-02's part. Builder note 2: the S2 stub that stars every byte, never a pass-through masker; phase 1a only after PRD-05's core-slice masker merges |
+| G2-20 | Partly. R8 and risks: only the zstd level may drop, the 2^27 window and long matching stay (F2). Written as "PRD-06 lowers" rather than "PRD-01 lowers", because the fix's own PRD-01 row gives the level to PRD-06 |
+| G2-22 | Applied (see L2-01). The drain waits for wire bytes only |
+| G2-06 | Applied. Builder note 1 and Files it owns: placeholder module roots |
+| G2-08 | Applied. Control-line `start` row lists S17 and `LaunchPlan.notes`; PRD-11 row adds `notes` and serde |
+| G2-09 | Applied. 9.1 recorder row: the gap starts at the last LINK named by an index line |
+| G2-10 | Applied. `pipeline_guard.rs` at 40 then 200 streams; `by_hand_load` twice with bursts and 200 WebSockets; R8 reports both sizes; PRD-16 row |
+| G2-16 | Partly. "Not a failure budget" and a wait that never grows past a ceiling are applied. The 30 s then 60 s timer is rejected, as PRD-00 revision 4 ruled: each failed normal boot resets every harness connection, so a 60 s retry would do that once a minute while a lasting cause such as a full disk holds (R2, point 3). The SIGKILL exemption is rejected: an OOM-kill loop is exactly the crash loop null mode spaces out, and a null recorder frees the memory; R1's kills are 2 minutes apart, so they never reach null mode anyway |
+| G2-17 | Applied (see F5/L2-19) |
+| G2-19 | Applied. Files it owns, S1 comment and PRD-14 row: `test-hooks` pending PRD-00 owner question 12 |
+| G2-21 | Applied (see L2-04) |
+| G2-23 | Applied. Rule 7: PRD-03 reserves every decoder window, with no limit of its own; risks "Memory"; ask 4 |
+| G2-24 | Applied. Grace uses `ProxyHandle::quiet_since()`; ask 4 and the PRD-03 interfaces row |
+| G2-28 | Applied (see L3-4); "The bound" and defaults row too |
+| G2-29 | Applied. Ask 5 marked ruled |
+| G2-31 | Applied (see L2-03) |
+| G2-32 | Applied. 9.2 step 1, S1 rule 1 (exit 70 on a dead receiver), section 4 (worker loop panic), `pipeline_panic.rs` added to the test list |
+| P02-10 | Applied. Section 8 step 10: only a server `stop` for the deadline ends the harness; any other reason seals and leaves it alone; owner decisions and defaults row |
+| P02-11 | Applied. 9.1 watchdog row, R5 pass line, a risks row |
+| P02-2 | Applied. `entry_totals` in the S1 block, section 5 step 4, section 6 (every COUNT key, first note of each `what`, sealed fields), 9.4 writes the sealed file |
+| P02-5 | Applied. EVENT bodies and GAP and END tails run `mask_meta`; a test line |
+| P02-6 | Applied. `restart` control line; SIGTERM is for outside callers only |
+| P02-7 | Applied, merged with group 1's L2-05 fallback. Section 11 "In null mode": the null recorder seals through the recovery steps with one `null_mode` gap; if that fails, `close_dead_entry` closes it `recovered`. `watchdog_null.rs` case added |
+| P04-8 | Applied for PRD-02's part: sealed `status.json` `cut_files {files, bytes}`; ask 10 names `cut_bytes` |
+| P05-6 | Applied (see L2-02) |
+| G2-12 | Applied. Owner question 2 (old 11) in owner decisions and defaults; header names PRD-00 revision 4; section 2 cites rulings R3-1 and R3-2 |
+| G2-14 | Applied. R1 pass line uses `goalcup.log` `ready` and the first `conn` OPEN after the gap |
+| G2-15 | Applied. `upload::spawn(ctx) -> UploadHandle` and `UploadHandle::finish(wrap_up, seal_facts)` (S18) in 9.2 step 5, section 11 step 6 and the PRD-06 row |
+| G2-33 | Applied. Section 6: `req_holes` and `req_whole` beside `model_requests` |
+| P02-14 | Applied (same as F7) |
+| P02-15 | Applied, merged with G3-X18 |
+| P02-19 | Applied. R4: at least `min(4096, hard)` |
+| P02-20 | Applied, merged with P02-11 in R5 |
+| P02-21 | Applied. R7: first `from` equals the last written offset, from both dumps |
+| P02-22 | Applied. `git --no-optional-locks status --porcelain -z` |
+| P02-25 | Applied. `fds::raise(target) -> u64` in S1 and section 10, a night-log seam line |
+| P02-26 | Applied. Risks `PR_SET_DUMPABLE` row |
+| P02-27 | Applied. "Vercel Sandbox (Linux)" in the acceptance header and R8 |
+| P02-28 | Applied. A short real `smoke` run after each recording item (ledger B3), as a paragraph after the numbered steps so their numbers stay stable |
+| P03-19 | Applied. Section 6 `losing` covers an open `parse_stopped` connection; ask 4 asks PRD-03 for the note. This replaces review A 2's "small blind spot" in the history table |
+| X1-8 | Applied. Section 10: the `Too few open files` line |
+| X2-05 | Partly. The drain has no time limit while records are written (R5) and stops only on the stall rule. A writer that writes nothing for 60 s is the one stall exit (section 3), not an early drain stop, because a stuck writer cannot write `cut_at_seal` gaps; the watchdog resends `seal` to the next boot. On `signal` the drain still stops after 5 s with `cut_at_seal` gaps. PRD-00 S8's "drain 60 s" reads as 60 s with no write; flagged for the replan |
+| X2-11 | Partly. Moving every review section into a new `REVIEW-HISTORY.md` is not done here: this pass edits only this file, and seventeen writers of one new file would race (as PRD-00 revision 4 answered). "Review answers" now says it is history and that the body, the ledger and these answers win. The move may run once, after every alignment pass, as one commit by one agent |
+| X3-22 | Applied for PRD-02's part. Section 8 step 5: exit 78 before `ready` when the `Masker` cannot be built from built-in shapes |
+
+### Group 3
+
+| Id | Answer |
+|---|---|
+| G3-X18 | Applied, merged with P02-15. Owner decisions: recording goes off (null mode), goalcup never stops or freezes the harness, the gap covers the time |
+| G3-X20 | Applied (see P02-2). The example adds `req_whole`, `req_holes`, `lost_unknown`, `off_ms`, `mask_failclosed_bytes` and `tunnel_hosts`, marked abridged |
+| G3-X32 | Applied. `Recorder::real_for_tests(dir, masker)` under `test-hooks`: the real mask worker and writer in a temp entry folder, for PRD-14's `common::recorder::real(dir)`; PRD-17 H10 and K15 run through it |
+| G3-X56 | Applied. R1: the first kill comes after the first heartbeat row |

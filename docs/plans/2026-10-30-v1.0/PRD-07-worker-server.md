@@ -1,9 +1,10 @@
 # PRD-07: Worker, server and database
 
-Id: PRD-07. Version: goalcup 1.0. Revision 2, 30 October 2026 (revision 1: same day, before the
-reviews). Base: main at 4b226de2. Index: [PRD-00](PRD-00-index.md) revision 2 (binding). Format:
-[PRD-01](PRD-01-record-format.md). Ledger: [OWNER-DECISIONS](OWNER-DECISIONS.md). Owns seam S5 (the
-upload HTTP contract, `docs/UPLOAD-API.md`) and seam S13 (the fetched layout).
+Id: PRD-07. Version: goalcup 1.0. Revision 3, 30 October 2026 (the alignment pass against the ledger;
+revision 2 and revision 1 earlier the same day). Base: main at 4b226de2. Index: [PRD-00](PRD-00-index.md)
+revision 4 (binding). Format: [PRD-01](PRD-01-record-format.md). Ledger: [OWNER-DECISIONS](OWNER-DECISIONS.md)
+wins over this file. Owns seam S5 (the upload HTTP contract, `docs/UPLOAD-API.md`) and seam S13 (the
+fetched layout). Revision 3 applies the alignment fix lists (section "Alignment answers" at the end).
 
 ## Goal
 
@@ -36,7 +37,7 @@ inside it. It seals an entry as soon as it holds the whole chain, and it needs n
 - The usage job writes JSON to R2 in its own bucket, in the third slice (PRD-00 S7, build order).
 
 Not in this PRD: the device flow and its approval page, the notices and mail in the cron, the GitHub
-judged-commit cron and start-time repository checks (PRD-00 question 3: untouched in 1.0). They stay
+judged-commit cron and start-time repository checks (PRD-00 question 4: untouched in 1.0). They stay
 exactly as they are.
 
 ## Today
@@ -57,7 +58,7 @@ exactly as they are.
 | Tables | `sql/goal-cup-tracer-upload.sql:131-161` (entries), `:163-177` (heartbeats), `:203-216` (chunks; `ack jsonb NOT NULL` at `:214`, `length > 0` at `:206`), `:2549-2553` (stored bytes, `vitals` must be an object) | The website repo owns them; this file is a mirror (`:1-24`) |
 | Heartbeat SQL | `sql:2811-2842` (`note_heartbeat`; reads `p_vitals ->> 'agent_paused'` at `:2819`), `:2871-2922` (14-argument `goal_cup_upload_heartbeat`) | Stores `vitals` on the row and as `runs.last_vitals`; `flag_reason` is first-wins (`:2831-2832`); a repeated final heartbeat (`final_existing`) inserts no row |
 | Seal SQL | `sql:1409-1448` | Needs final committed and the chain held to it, rechecked under a row lock; stores the two digest strings it is given; keys may be null |
-| Disk-pause twin | `db-local.ts:612-623` (`diskPause`), `db.ts:239-282` (`Vitals`) | Mirrors the SQL disk pause for the local store |
+| Disk-pause twin | `db-local.ts:612-623` (`diskPause`), `db.ts:242-249` (`Vitals`) | Mirrors the SQL disk pause for the local store |
 | Rebuild | `scripts/fetch-run.sh` (349) | Decodes each chunk alone (`:327`); refuses to write an entry whose chunks stop short (`:214-219`); writes acks, receipt, seal docs; reads R2 by HTTPS with a read-only token (`:24-36`) |
 | Run 1 on the server | run report, "What the server shows" | `recording` never `failed`; `model_requests` 1,766 for 842 recorded; nine heartbeats in a row with the same `seq`; no screen shows the loss |
 
@@ -75,7 +76,8 @@ what makes GCR1 work on the server unchanged:
 - The 128 MiB decompression window (PRD-01 sections 12 and 15) is therefore never met inside a
   Worker isolate, which has 128 MB ([Workers limits](https://developers.cloudflare.com/workers/platform/limits/)).
   Rule for every later change: **no server-side reading runs in a Worker.** Decoding happens in the
-  verifier and the usage reader on an organizer machine (PRD-08, PRD-09).
+  verifier and the usage reader on an organizer machine, or in a box during the build (PRD-08, PRD-09,
+  ledger B1).
 - The chunk headers keep their names and checks. Their meaning moves to GCR1, as PRD-01 section 12
   says: path offset and `Goalcup-Length` are raw GCR1 stream offsets and lengths; `Goalcup-First-Seq`,
   `Goalcup-Last-Seq`, `Goalcup-Prev`, `Goalcup-Head` are LINK sequence numbers and link hashes. The
@@ -168,14 +170,17 @@ Body (S5, sent by PRD-06):
   over boots, **as of the durable point**, so the server's number never exceeds what a server copy
   can show. It goes to `entries.model_requests` (kept as the highest per entry, `sql:2817-2821`).
 - `counts` is a flat JSON object of whole numbers, short strings (at most 64 bytes), booleans and nulls,
-  at most 2 KiB serialized. `mode` is `"recording"`, `"losing"`, `"writer_slow"` or null (null mode).
+  at most 2 KiB serialized. `mode` is `"recording"`, `"losing"`, `"writer_slow"`, JSON null (null
+  mode) or `"sealed"` (PRD-02 section 6; the final heartbeat sends `mode: sealed`).
   `off_since` is the start of the open off span as an RFC 3339 string, or null. `waiting_bytes` is the
-  compressed bytes on disk not yet confirmed by the server (PRD-06 section 6).
+  compressed bytes on disk not yet confirmed by the server (PRD-06 section 11). The Worker fixes no key
+  list inside `counts`; PRD-06 section 6 names the keys and `docs/UPLOAD-API.md` copies them.
 - **The client always sends `recording`, `model_requests` and `counts`** (PRD-00 ruling): the beat
-  thread from S4, and `goalcup upload` of a sealed or recovered entry from the seal's totals read from
-  the record. The Worker still treats all three as optional facts, as today (`runs.ts:455-459`): a
-  missing one is stored as null. A `counts` that is not a flat object within 2 KiB is **dropped**, with
-  the log line `counts-dropped <run_id>` (no value), and the heartbeat is recorded without it. It is
+  thread from S4, and `goalcup upload` of a sealed or recovered entry from `pipeline::entry_totals`
+  (R3-2), which equal the seal's totals. The Worker still treats all three as optional facts, as today
+  (`runs.ts:455-459`): a missing one is stored as null. A `counts` that is not a flat object within
+  2 KiB is **dropped**: the heartbeat is recorded with `p_vitals` `{"counts_dropped": <serialized byte
+  length>}` and the log line `counts-dropped <run_id>` (no value), so the drop is visible on the row. It is
   never a `400`: a refused heartbeat is a heartbeat lost, and a refused final heartbeat would leave the
   entry unsealed and every later chunk `503`. That is D64's rule for vitals today (`runs.ts:502-507`).
 - **Storage.** The Worker passes `{"counts": <counts>}` as `p_vitals` to the existing 14-argument SQL
@@ -185,16 +190,17 @@ Body (S5, sent by PRD-06):
   A heartbeat without `counts` calls the 13-argument form, as today (`db-supabase.ts:357-359`). The
   server interprets nothing. Column names stay `vitals` because renaming is a migration;
   `docs/UPLOAD-API.md` says so in one line.
-- The old `vitals` validator (`runs.ts:499-533`), the `Vitals` fields in `db.ts:239-245` and the
+- The old `vitals` validator (`runs.ts:499-533`), the `Vitals` fields in `db.ts:242-249` and the
   local disk-pause twin (`db-local.ts:612-623`) go. `db-local.ts` stores `last_vitals` as given; its
   `disk_paused_at` and `disk_notice_at` stay null, as the SQL columns will.
-- `recording`, mapped from PRD-02's `status.json` and S4 by PRD-06:
+- `recording`, decided by PRD-06 section 6 from `mode` and the counts (one rule for PRD-06, PRD-07,
+  PRD-08 and PRD-16; PRD-06's text wins if they ever differ):
 
 | `recording` | Means | Client sends it when |
 |---|---|---|
-| `ok` | recording, nothing lost | `mode` `recording`, no GAP in the entry, `off_ms` 0 |
-| `gaps` | recording now, something was lost | recording now, and any GAP was written, a stream is losing now (`mode` `losing`), or `off_ms` is above 0 |
-| `failed` | **recording is off now** | `mode` null (null mode), or the entry ended while off |
+| `ok` | recording, nothing lost | `mode` `recording` (or `sealed`), and `gaps`, `lost_bytes`, `lost_unknown`, `off_ms` and `streams_in_gap` are all 0 |
+| `gaps` | recording now (or sealed), something was lost | any of those is above 0, or `mode` is `losing` or `writer_slow`. A recovered entry is `gaps` (PRD-06 section 6) |
+| `failed` | **recording is off now** | null mode, or a writer stalled past 60 s (`writer_idle_ms` over 60 s while records wait); and only then |
 
 1.0 never sends `unknown` (no heartbeat goes before the first durable point). The Worker and the SQL
 CHECK (`sql:174`) keep accepting it; nothing changes there.
@@ -202,7 +208,7 @@ CHECK (`sql:174`) keep accepting it; nothing changes there.
 `failed` is a state, not a latch: the next heartbeat after a good boot says `gaps`. The server keeps
 every heartbeat row, so the off spans are visible in time order. `runs.flag_reason` stays first-wins
 (`sql:2831-2832`): a run flagged `gaps` first never shows `failed` there, which is why every reader
-(fetch-run's `fetch.json`, PRD-16's checks) reads the heartbeat rows, not the flag.
+reads the `heartbeats` list in fetch-run's `fetch.json` (section 7), not the flag.
 
 The answer gains `sealed`. `stop`, `reason`, `deadline_at`, `seconds_left` are unchanged (D64, D66).
 
@@ -221,6 +227,7 @@ egress free: [R2 pricing](https://developers.cloudflare.com/r2/pricing/)):
 |---|---|---|
 | Run 1 rate, 2 hours, whole | 75 to 150 MB (PRD-01 section 14) | under $0.01 a month |
 | A busy week at run 1's rate | 10 to 20 GB (PRD-01 section 14) | $0.15 to $0.30 a month; the competition prefix is locked 180 days (`wrangler.toml:31`), so about $0.90 to $1.80 per run in all |
+| 200 agents at once, a week (PRD-01 section 14 estimate) | about 400 GB | about $6 a month |
 | 1,500 busy weeks | 15 to 30 TB | $225 to $450 a month, about $1,350 to $2,700 over the lock |
 | A stuck or hostile client at 100 Mbit/s for 8 days | about 8.6 TB | about $130 a month, about $780 over the lock, for that one run |
 | Class A writes, a chunk every 5 minutes or at once when 16 MiB compressed waits (PRD-06 section 4) | up to about 3,000 per busy entry-week (2,016 time-driven plus bursts); 1,500 runs about 4.5 million | about $16 above the free million in the event month |
@@ -247,6 +254,9 @@ already under the lock cannot be deleted for 180 days.
   owner deploys production, after the 1.0.0 release is published (PRD-14), so nobody is refused while
   1.0 cannot be downloaded. A dashboard edit is wiped by the next deploy (`wrangler.toml:51-55`).
   `continue` stays unchecked (D70).
+- **The `403` text becomes mode-neutral** (today it says "too old for the cup", `runs.ts:163`):
+  `This goalcup (<sent>) is older than this server accepts (<min>). Update it: <INSTALL_LINE>`.
+  PRD-10 shows it as is.
 - Everything else in open and continue stays: server clock (D16), one main run, the start window,
   GitHub public-and-empty check, `machine`, the IP and country columns (owner may cut them later).
 
@@ -264,18 +274,25 @@ The file is `fetch.json`, not `server.json`, so it never clashes with the client
 (PRD-10). It is the one source for PRD-08 (`server_chunks_whole`, `server_counts_match`), PRD-12 (C4,
 K6) and PRD-16 (X6).
 
-- **Where it runs.** On the conductor, with the read-only database URL and a read-only R2 token from
-  the environment (never printed, `fetch-run.sh:24-36`), never in a pad or build box. Staging:
-  `--bucket goalcup-traces-staging`.
+- **Where it runs.** Against staging: on the conductor, with the read-only database URL and a read-only
+  R2 token from the environment (never printed, `fetch-run.sh:24-36`), never in a box. Staging:
+  `--bucket goalcup-traces-staging`. With `--local` (no credential): in the build or pad box where
+  `wrangler dev` runs. The fetched folder is then copied into a box, and every `goalcup-verify`
+  command runs there (ledger B1, PRD-00 "Where the build runs").
 - **Index:** one `BEGIN READ ONLY` query as today (`fetch-run.sh:121-137`), now selecting per entry
   `run_id`, `segment`, `upload_offset`, `next_seq`, `head`, `model_requests`, `final_seq`, `final_head`,
-  `final_at`, `sealed_at`, `stored_bytes`, `chunk_count`; the latest heartbeat row (`received_at`,
-  `seq`, `recording`, `model_requests`, `vitals -> 'counts'`); and per chunk `offset`, `length`,
+  `final_at`, `sealed_at`, `stored_bytes`, `chunk_count`; every heartbeat row of the entry in time
+  order (`received_at`, `seq`, `offset_local`, `final`, `recording`, `model_requests`,
+  `vitals -> 'counts'`, `vitals -> 'counts_dropped'`); and per chunk `offset`, `length`,
   `stored_bytes`, `sha256`, `first_seq`, `last_seq`, `prev`, `head`, `r2_key`, `received_at`. The
-  `ack`, `receipt`, `seal_key` and `baseline_key` columns are no longer read.
+  `ack`, `receipt`, `seal_key` and `baseline_key` columns are no longer read. At one heartbeat row per
+  5 minutes plus state changes, a 168-hour entry has about 2,100 rows, under 5 MB even with every
+  `counts` at its 2 KiB bound.
 - **Checks, per entry:** offsets run on from 0; `first_seq` runs on from 0; each chunk's `prev` is the
   previous chunk's `head` (genesis for the first; today's script never compares them); each object
-  matches its SHA-256; the last chunk ends at `upload_offset`.
+  matches its SHA-256; the last chunk ends at `upload_offset`. An object that is missing or fails its
+  SHA-256 ends that entry there: `rec.gcr.zst` holds the chunks before it, `missing` gains
+  `"why":"object_bad"` and the key, and the script exits 1.
 - **Partial is normal.** An entry whose chunks stop before the committed end, or that has no final
   heartbeat, is written as far as it goes, and `fetch.json` says what is missing. Today the script
   writes nothing then (`fetch-run.sh:214-219`). A hole in the middle cannot happen (the Worker accepts
@@ -289,6 +306,8 @@ K6) and PRD-16 (X6).
  "sealed_at":"2026-11-14T00:00:09Z","complete":true,"missing":null,
  "last_heartbeat":{"received_at":"…","seq":3601,"recording":"gaps","model_requests":905,
                    "counts":{"off_ms":2300,"…":"…"}},
+ "heartbeats":[{"received_at":"…","seq":12,"offset_local":2400000,"final":false,"recording":"ok",
+                "model_requests":4,"counts":{"…":"…"},"counts_dropped":null}],
  "stored_bytes":96000000,"chunk_count":121,
  "chunks":[{"offset":0,"length":16777216,"bytes":1810000,"sha256":"<hex>","first_seq":0,"last_seq":18,
             "prev":"<hex>","head":"<hex>","r2_key":"traces/…","received_at":"…"}]}
@@ -296,8 +315,10 @@ K6) and PRD-16 (X6).
 
   `complete` is true when `final` is set and `next_seq - 1 = final.seq` with the same head. Otherwise
   `missing` is `{"from_offset": <upload_offset>, "from_seq": <next_seq>, "to_seq": <final.seq or null>}`.
-  `bytes` is each chunk's compressed size, so a reader can find each chunk's place in `rec.gcr.zst`
-  (needed only if PRD-01's recovery fallback is used and part files must be decoded one by one).
+  `heartbeats` holds every heartbeat row of the entry in `received_at` order (PRD-06 U6 and PRD-16 X6
+  read it instead of their own query); `last_heartbeat` is its last element, kept for short readers.
+  `bytes` gives each chunk's place in `rec.gcr.zst`. If PRD-01's recovery fallback is used, the reader
+  finds part starts by trying a zstd frame header (`28 b5 2f fd`) at each chunk start.
 - **Decoding is the reader's job.** `goalcup-verify check --server <dir>` (PRD-08) and the usage reader
   (PRD-09) decode `rec.gcr.zst` with window 2^27, which is also the default limit of `zstd -d`
   (appendix M section 4.4). A person can run `zstd -dc --long=27 rec.gcr.zst`; an entry that is not
@@ -306,16 +327,18 @@ K6) and PRD-16 (X6).
 - **Byte equality.** `rec.gcr.zst` equals the concatenated local part files, byte for byte, up to the
   server's offset (PRD-01 acceptance 2), when the run kept its parts (`GOALCUP_KEEP_PARTS=1`).
 - **`--local PERSIST_DIR`** reads a local Worker (`wrangler dev` with `DB_BACKEND=local`), for builds
-  before staging carries 1.0 and for contributors without staging access: the index from
-  `state/runs/<run>.json` (`db-local.ts:5-12`) and each object with
+  before staging carries 1.0 and for contributors without staging access (PRD-14's `upload_worker.rs`
+  and the full-tier Worker test use it, so it stays). The index is read from the R2 object
+  `state/runs/<run>.json` in the local persist store (`db-local.ts:5-12`), not a file, and its shape is
+  `db-local.ts`'s, not the SQL index. Each object is read with
   `npx wrangler r2 object get <bucket>/<key> --local --persist-to <dir> --file <dest>`. Whether those
   two flags work on `r2 object get` in wrangler 4.149.0 is **unverified**; the builder checks it first.
   Fallback if they do not: `--store DIR` over a mirror made per key, and no test-only Worker route.
 
 ### 8. After merge: finding runs whose recording stopped
 
-Not in this build (PRD-00 "Not in this build"; review B N11). Until then, organizers read the heartbeat
-rows through `fetch.json` and PRD-16's read-only checks. The design is kept here so the later work does
+Not in this build (PRD-00 "Not in this build"; review B N11). Until then, organizers read the
+`heartbeats` list in `fetch.json` (section 7) per run. The design is kept here so the later work does
 not start over:
 
 - New file `server/worker/scripts/stopped-runs.sql`, run read-only (`BEGIN READ ONLY` ... `ROLLBACK`),
@@ -338,7 +361,8 @@ not start over:
 | R2, usage | Read: an Object Read token on the usage bucket. Write: only the usage job (PRD-09) | none |
 
 Test runs use the existing staging bucket `goalcup-traces-staging`; no separate test bucket is made.
-`delete-test-runs.sh` already cleans test runs there.
+`delete-test-runs.sh` already cleans test runs there. `delete-test-runs.sh` is the owner's tool (it
+writes to the shared database and to R2). Agents never run it (ledger B8, S3).
 
 ### 10. Where the usage stats live (third slice)
 
@@ -353,7 +377,8 @@ Test runs use the existing staging bucket `goalcup-traces-staging`; no separate 
   the production deploy.
 - `server/worker/scripts/delete-test-runs.sh` also empties `usage/test/` and `usage/test-staging/` in
   the usage buckets, so a test-run cleanup leaves no orphan stats. This lands with the job, in the third
-  slice; before that the usage buckets hold nothing to clean.
+  slice; before that the usage buckets hold nothing to clean. Agents edit the script; only the owner
+  runs it (section 9).
 
 ### 11. Website database: nothing to migrate in 1.0
 
@@ -363,12 +388,12 @@ Test runs use the existing staging bucket `goalcup-traces-staging`; no separate 
 | No seal documents | final head into both digest columns, null keys (section 3) | rename or drop |
 | Counts and off time | `heartbeats.vitals`, `runs.last_vitals` as `{"counts": ...}` (jsonb object, `sql:2552-2553`) | rename to `counts` |
 | No disk pause | `runs.disk_paused_at` and `disk_notice_at` stay null: no `agent_paused` key reaches `note_heartbeat` | drop them and the `disk_full` notice |
-| `failed` after `gaps` | read heartbeat rows; `flag_reason` stays first-wins | make the flag the latest state |
+| `failed` after `gaps` | read `fetch.json` `heartbeats` (every row); `flag_reason` stays first-wins | make the flag the latest state |
 | One connector digest | write it into both digest columns | merge them |
 | Usage stats | R2 JSON (section 10) | add tables if organizers want SQL over them |
 | Version floor in all modes | Worker only | none |
 | Receipt and abandon | the SQL functions stay, unused | drop them and the 13-argument overloads |
-| 24-hour close and credential life | unchanged (`sql:323`, `:2603`) | lengthen both together for point 5 (PRD-00 question 2) |
+| 24-hour close and credential life | unchanged (`sql:323`, `:2603`) | lengthen both together for point 5 (PRD-00 question 1) |
 
 Only the owner applies a migration to the shared production database (website CLAUDE.md); none is needed.
 
@@ -385,10 +410,13 @@ Only the owner applies a migration to the shared production database (website CL
    (`SELECT count(*) FROM goal_cup_tracer.runs WHERE status='open' AND NOT staging AND mode <> 'test'`
    inside `BEGIN READ ONLY`). Every run so far is test data, but a 0.7 client mid-run would stop
    uploading after the deploy (its seal and receipt routes are gone); it keeps its data.
+   Note for the owner: with 1.0 the unchanged cron sends the `recording` email when a heartbeat says
+   `failed`, and the idle notices count written requests. No email code changed; confirm this is
+   wanted before the production deploy (PRD-16 `MORNING.md` owner steps carry the same line).
 4. **Release:** tag `v1.0.0` (PRD-14), so `releases/latest` serves 1.0.
 5. **Production (owner, from his own device):** `wrangler deploy` from the same commit, then delete the
    `RECEIPT_SIGNING_KEY` secret (only after the deploy: the 0.7 Worker refuses every call without it,
-   `context.ts:136`). Create `goalcup-usage` if the usage job is in.
+   `context.ts:136`). Create `goalcup-usage` (the usage job is in this build, third slice).
 6. **Smoke (owner):** one practice run with the 1.0 client on production, sealed, fetched, checked.
 7. The `EVENT_ID` switch stays the owner's manual deploy between 6 Nov 00:00 and 7 Nov 00:00 UTC
    (`wrangler.toml:37-42`); it can be the same deploy as step 5 if the timing fits.
@@ -426,19 +454,19 @@ Must not touch: `server/worker/sql/**` (the website's mirror; regenerated only f
 
 | PRD | What | Direction |
 |---|---|---|
-| PRD-00 | S5 and S13 as ruled; staging floor; read-only credentials on the conductor; questions 2, 3, 5 | binding here |
+| PRD-00 | S5 and S13 as ruled; staging floor; read-only credentials on the conductor; questions 1, 4, 5 | binding here |
 | PRD-01 | Chunk headers, key, raw offsets, link seq and hash (section 12); seal LINK and "no seal call" (section 11); counts at the durable point (section 9); recovery fallback (section 12) | used here, unchanged |
 | PRD-02 | S4 durable point and `status.json` (`mode`, written counts, off); null mode | the heartbeat's source |
-| PRD-06 | **S5**: open and continue bodies, chunk headers and answers (with `sealed`), heartbeat body (flat `counts` with `waiting_bytes`, `repo_head`) and the three states it sends, the rule "repeat the final heartbeat until an answer says `sealed`", `goalcup upload` sends the seal's totals, error table, backoff (D64 unchanged). Cadence: a chunk every 5 minutes or at once when 16 MiB compressed waits (PRD-00 question 6). PRD-06 section 6's nested body and "if PRD-07 keeps a seal route" hedge give way to this | owned here, published by H+2 |
-| PRD-08 | **S13**: `<entry>/rec.gcr.zst` and `<entry>/fetch.json` (entry row, last heartbeat, chunk list with keys, SHA-256 and compressed size); `check --server` decodes and compares | owned here |
+| PRD-06 | **S5**: chunk headers and answers (with `sealed`), heartbeat body (flat `counts` with `waiting_bytes`, `repo_head`; PRD-06 section 6 names the `counts` keys) and the three states it sends (PRD-06 section 6's rule), the rule "repeat the final heartbeat until an answer says `sealed`", `goalcup upload` sends `pipeline::entry_totals` (R3-2), error table, backoff (D64 unchanged). Cadence: a chunk every 5 minutes or at once when 16 MiB compressed waits (PRD-00 question 1) | owned here, published by H+2 |
+| PRD-08 | **S13**: `<entry>/rec.gcr.zst` and `<entry>/fetch.json` (entry row, last heartbeat, every heartbeat row, chunk list with keys, SHA-256 and compressed size); `check --server` decodes and compares | owned here |
 | PRD-09 | S7 key; the usage bucket names; reads fetch-run output | bucket named here, third slice |
-| PRD-10 | `sealed` in heartbeat, chunk and position answers; the plain words for `failed`; the local `server.json` stays PRD-10's | used there |
+| PRD-10 | **S5**: open and continue bodies (`connector_sha256`, `proxy_version` only), the version floor `403` and its text (section 6); `sealed` in heartbeat, chunk and position answers; the plain words for `failed`; the local `server.json` stays PRD-10's | used there |
 | PRD-11 | `connector_sha256` value | used here |
-| PRD-12 | `fetch-run` from the conductor against staging, `--local` before staging; `fetch.json` for C4 and K6; test runs in `goalcup-traces-staging` | used there |
+| PRD-12 | `fetch-run` from the conductor against staging, `--local` in the box where `wrangler dev` runs before staging; the fetched copy is copied into the pad box and every `goalcup-verify` check runs there; `fetch.json` for C4 and K6; test runs in `goalcup-traces-staging` | used there |
 | PRD-13 | Deletes the Rust stand-in server `crates/goalcup-cli/tests/common/upload_server/` (2,514 test lines) with the old crate. Its no-return guard must skip `server/worker/sql/` (the mirror keeps `receipt` and `agent_paused`); after this PRD, Worker `src/` names neither | one server, not two |
 | PRD-14 | Gate runs `npm test` in `server/worker` and `scripts/test_fetch_run.py`; PRD-06's tests run against `wrangler dev` or the fake Worker in `tests/common/`, which follows S5 | used there |
-| PRD-15 | Fix stale docs that name signing, receipts, acks, the seal call, the verify job (`docs/OPERATING.md`, `docs/SERVER-DESIGN.md`, `docs/CHEAT-CHECKLIST.md`) | done there |
-| PRD-16 | First staging deploy after builder step 2 and PRD-06; production deploy order (section 12); X6 reads `fetch.json` and heartbeat rows (`failed` only while `mode` is null) | used there |
+| PRD-15 | Fix stale docs that name signing, receipts, acks, the seal call, the verify job (`docs/OPERATING.md`, `docs/SERVER-DESIGN.md`, `docs/CHEAT-CHECKLIST.md`); `server/worker/README.md` absorbs SERVER-DESIGN's still-true facts (builder step 5), then PRD-15 moves that file | done there |
+| PRD-16 | First staging deploy after builder step 2 and PRD-06; production deploy order (section 12); X6 reads `fetch.json` `heartbeats` (`failed` only while recording is off, section 4's rule) and runs its checks in the run's pad box | used there |
 
 ## What is cut
 
@@ -449,7 +477,7 @@ Must not touch: `server/worker/sql/**` (the website's mirror; regenerated only f
 | Abandon route and DB methods (`runs.ts:393-414`, `db-*.ts`) | about 60 | abandon cases in `integration`, `local-db`, `supabase`, `config` (about 120, est.) |
 | Seal route, documents, tunnel list (`runs.ts:25-29, 57-85, 535-637`) | about 140, replaced by about 20 (section 3, both paths) | seal-document and tunnel cases in `integration.test.ts` (14 tunnel references), `lifecycle`, `segments` (about 250, est.) |
 | Per-run size limit (`chunks.ts:74, 123-144`, `context.ts:11-12, 26-27, 61-67, 126`) | about 50 | `test/quota.test.ts` (114), `config.test.ts:237` |
-| Vitals validator (`runs.ts:499-533`) and `Vitals` fields (`db.ts:239-245`) | about 45, replaced by about 12 | vitals cases in `notices.test.ts` (31 references, about 70 lines) |
+| Vitals validator (`runs.ts:499-533`) and `Vitals` fields (`db.ts:242-249`) | about 45, replaced by about 12 | vitals cases in `notices.test.ts` (31 references, about 70 lines) |
 | Local disk-pause twin (`db-local.ts:612-623`) | about 12 | disk-pause cases in `local-db.test.ts` (est. 40) |
 | `tracer_version` alias (`util.ts:79-91`) | about 10 | `lifecycle.test.ts:481-505`, `device-unit.test.ts` alias cases |
 | fetch-run acks, receipt, seal docs, per-chunk decode (`fetch-run.sh:12-14, 174-184, 222-226, 282-318, 326-332`) | about 80 removed, about 45 added | matching cases in `scripts/test_fetch_run.py` |
@@ -462,16 +490,18 @@ Tests about 5,750 to about 4,950 lines (est.). Secrets the owner holds drop from
 ## Acceptance
 
 Real-run proofs first (pad, PRD-12, Linux sandbox, **staging Worker**; `fetch-run` on the conductor with
-`--bucket goalcup-traces-staging`; every run with `GOALCUP_KEEP_PARTS=1`). Before staging carries 1.0,
-the same proofs may run once against `--local` as an early signal; they count only on staging.
+`--bucket goalcup-traces-staging`, the fetched copy then copied into the run's pad box, where every
+`goalcup-verify` command runs (ledger B1); every run with `GOALCUP_KEEP_PARTS=1`). Before staging
+carries 1.0, the same proofs may run once against `--local` in a box as an early signal; they count
+only on staging.
 
 1. **Whole server copy, sealed.** Claude Code, direct key, `smoke` prompt. Pass: an answer says
    `sealed: true`; `fetch-run` writes `rec.gcr.zst` whose SHA-256 equals that of the concatenated local
    parts; `fetch.json` has `complete: true` and `model_requests` equal to the seal's written total;
    `goalcup-verify check --server` passes.
-2. **Kill test on the server side.** The Codex run of PRD-02 R1 (recorder killed twice). Pass: the
-   server copy equals local; heartbeat rows show `ok` before the first kill and `gaps` after; no chunk was
-   refused except `409` re-reads; the entry seals.
+2. **Kill test on the server side.** The Codex run of PRD-02 R1. Pass: PRD-06 U6 holds; the server
+   copy equals local; the entry seals; `upload.json` and `goalcup.log` show no chunk answer other than
+   `200` and `409`. The first kill comes after the first heartbeat row (PRD-02 R1 says so).
 3. **Partial, then whole.** The run of PRD-06 U8 (watchdog and recorder killed together mid-run). Pass,
    before `goalcup upload`: `fetch-run` writes `rec.gcr.zst` with `complete: false` and `missing` naming
    `from_seq`, and `goalcup-verify check --server` reports an open end, not an error. After
@@ -480,8 +510,10 @@ the same proofs may run once against `--local` as an early signal; they count on
 4. **Size, measured.** From the A1 and A2 runs (PRD-16), report compressed bytes per hour from
    `fetch.json` `stored_bytes` into section 5's table. No `413` appears in any run (there is no 413 path).
 
-The forced-null-mode proof of `failed` is PRD-06 U6 (a `test-hooks` build); on the server side it is
-an automated test below (review B T2).
+`failed` end to end: one automated test in a build box runs the `test-hooks` binary with forced null
+mode (PRD-02 `watchdog_null.rs` setup) against `wrangler dev` (`DB_BACKEND=local`) and asserts a stored
+heartbeat with `recording` `failed` and `vitals.counts.mode` JSON null, then `gaps` after the next good
+boot. No real-run spend. Owner of the test: PRD-06 (`upload_worker.rs` case 2), against this PRD's Worker.
 
 Automated tests that guard them:
 
@@ -489,14 +521,17 @@ Automated tests that guard them:
   chunks: the last chunk's answer says `sealed: true` with no repeat; a repeat final heartbeat after
   that answers `sealed: true` and adds no row; position says `sealed`; a heartbeat with
   `recording: "failed"` and `counts` stores both, `vitals` as `{"counts": ...}` on the row and the run;
-  a `counts` over 2 KiB or not flat gives `200`, a row without vitals and one `counts-dropped` log line;
+  a `counts` over 2 KiB or not flat gives `200`, a row whose `vitals` is `{"counts_dropped": n}` and one
+  `counts-dropped` log line;
   a `counts` with an `agent_paused` key starts no pause; receipt, abandon and seal paths are `404`; no
   chunk is refused for size.
 - `config.test.ts`: `MIN_COMPETITION_VERSION` refuses a 0.7 practice and test open and device request;
   `continue` is not refused.
 - `test_fetch_run.py`: a partial entry is written with `missing`; a chunk whose `prev` is not the
-  previous `head` stops that entry; output equals the concatenated chunk bodies; `fetch.json` holds the
-  last heartbeat's `recording` and `counts`.
+  previous `head` stops that entry; a missing object or one that fails its SHA-256 ends that entry
+  there with `"why":"object_bad"` and exit 1; output equals the concatenated chunk bodies; `fetch.json`
+  holds the last heartbeat's `recording` and `counts`; `heartbeats` holds every row in `received_at`
+  order.
 
 ## Risks and blind spots
 
@@ -506,14 +541,14 @@ Automated tests that guard them:
 | One lost chunk | A chunk is not decodable alone, so a missing middle chunk loses the rest of its part (PRD-01 risks) | The Worker accepts only the next offset; fetch-run checks prev and head continuity |
 | Seal on the chunk path | One more database call, only on the chunk that ends at a committed final | The SQL rechecks under its lock; a wrong head cannot seal because the path tries only with the committed final head |
 | Final heartbeat races the last chunk | Neither path sees both facts, the entry stays unsealed | The client repeats the final heartbeat until `sealed` (S5) |
-| `counts` dropped silently | A client bug sends a bad `counts` and the server keeps only `recording` and `model_requests` | The log line `counts-dropped`; PRD-06's `upload_beat.rs` test pins the body; a dropped `counts` never loses the heartbeat (D64) |
+| `counts` dropped | A client bug sends a bad `counts` and the server keeps only `recording` and `model_requests` | The row's `vitals` is `{"counts_dropped": n}` (shown in `fetch.json` `heartbeats`) and the log line `counts-dropped`; PRD-06's `upload_beat.rs` test pins the body; a dropped `counts` never loses the heartbeat (D64) |
 | `vitals` named wrongly | A reader of the website database thinks `vitals` holds disk facts | One line in `docs/UPLOAD-API.md`; readers use `vitals -> 'counts'`; rename in a later migration |
-| `flag_reason` first-wins | The cron's `recording` email and the run flag say `gaps` even when recording later failed | Readers use heartbeat rows; email work is out of scope |
+| `flag_reason` first-wins | The cron's `recording` email and the run flag say `gaps` even when recording later failed | Readers use `fetch.json` `heartbeats`; email work is out of scope |
 | Cron reads the new numbers | `idle_3h` and `idle_6h` (`notices.ts:163-171`) now see written requests, so a run whose proxy dies gets an idle email it did not get before | That is the honest signal; out of scope to change |
-| No organizer query in this build | During the build nobody is told a staging run stopped recording | Watchers read `fetch.json` and heartbeat rows per run (PRD-16 X6); `stopped-runs.sql` after merge |
-| 24-hour close | A laptop off for a day after the deadline loses its tail (point 5), `sql:323` | PRD-00 question 2: unchanged, with PRD-06's one-line "run `goalcup upload` before <time>" warning (review A finding 15) |
+| No organizer query in this build | During the build nobody is told a staging run stopped recording | Watchers read `fetch.json` `heartbeats` per run (PRD-16 X6); `stopped-runs.sql` after merge |
+| 24-hour close | A laptop off for a day after the deadline loses its tail (point 5), `sql:323` | PRD-00 question 1: unchanged, with PRD-06's one-line "run `goalcup upload` before <time>" warning (review A finding 15) |
 | Old client mid-run at deploy | Its routes are gone and it never seals | Owner checks no real run is open (section 12 step 3) |
-| Recovery fallback in PRD-01 | A plain concatenation stops at the first crashed part | `fetch.json` lists each chunk's compressed size, so a reader can split by part |
+| Recovery fallback in PRD-01 | A plain concatenation stops at the first crashed part | `fetch.json` `bytes` gives each chunk's place; the reader finds part starts by trying a zstd frame header (`28 b5 2f fd`) at each chunk start |
 | `wrangler r2 object get --local` | The flags may not exist on that command | Builder checks first; fallback `--store` (section 7) |
 | Organizer access | The read-only credential is the owner's choice of role; `BEGIN READ ONLY` guards only mistakes | Conductor only; the reader role is a later owner choice |
 | Zone body limit | The zone's plan is unverified (appendix I section 7); 100 MB on Free and Pro | 32 MiB chunks fit any plan |
@@ -524,13 +559,13 @@ Automated tests that guard them:
 | Default | Value | Who may change it |
 |---|---|---|
 | Version floor | `1.0.0`, every mode; staging from its first 1.0 deploy, production at the owner's deploy | owner |
-| Bad `counts` | dropped with a log line, heartbeat kept | this PRD |
+| Bad `counts` | dropped with a log line and `{"counts_dropped": n}` on the row, heartbeat kept | this PRD |
 | `counts` bound | 2 KiB, flat, strings at most 64 bytes | this PRD |
 | Usage storage | separate bucket `goalcup-usage` (`-staging` in the build) | owner, PRD-09 |
 | Test bucket | the existing `goalcup-traces-staging` | PRD-16 |
 | Large-run log line | every 10 GiB per run | owner |
 | IP and country columns | kept as today | owner (appendix I suggests cutting) |
-| Close and credential life | 24 hours after the end | owner, by website migration (PRD-00 question 2) |
+| Close and credential life | 24 hours after the end | owner, by website migration (PRD-00 question 1) |
 | Reader role | not created; SQL proposed | owner |
 
 ## Builder notes
@@ -547,8 +582,15 @@ Order of work (step 2 is the milestone that lets PRD-16 deploy staging, review B
 3. Deletions: `sign.ts`, signer in `context.ts`, receipt, abandon, seal, quota, vitals validator and
    `Vitals` fields, local disk-pause twin, alias. `npm test` green after removing the matching cases.
 4. `fetch-run.sh` rewrite and `test_fetch_run.py` (S13, by H+3); check `--local` against a `wrangler dev`
-   run first, then staging from the conductor.
-5. `wrangler.toml` comments, `README.md`. Third slice: `delete-test-runs.sh` for the usage buckets.
+   run in a build box first, then a staging fetch from the conductor (fetch only, no check there).
+5. `wrangler.toml` comments, `README.md`. Fold the still-true facts of `docs/SERVER-DESIGN.md` into
+   `server/worker/README.md` and write one night-log line "SERVER-DESIGN facts are in the Worker
+   README" for PRD-15. Third slice: `delete-test-runs.sh` for the usage buckets (edited, never run by
+   an agent, section 9).
+
+`npm test`, `test_fetch_run.py` and every `wrangler dev` run happen in a build box (ledger B1). The
+only Worker step on the conductor is `wrangler deploy --env staging`, because the staging token never
+enters a box; it deploys, it does not test.
 
 Traps from the audit:
 
@@ -568,25 +610,41 @@ Traps from the audit:
 - Never put the read-only database URL or R2 token in a pad or build box, a log or a command line.
 
 How a watcher proves it in a real run: after each pad run, on the conductor, run
-`sh scripts/fetch-run.sh --bucket goalcup-traces-staging <run> <out>`, then compare
-`sha256sum <out>/<entry>/rec.gcr.zst` with `cat rec-*.gcr.zst | sha256sum` from the kept local entry,
-read `complete`, `model_requests` and `last_heartbeat` in `fetch.json`, and run
-`goalcup-verify check --server <out>/<entry> --local <entry dir>`. For the heartbeat, read the
-`heartbeats` rows of the entry in a `BEGIN READ ONLY` transaction and check each row's `recording` and
-`vitals -> 'counts'` against the `status.json` snapshots the pad took at the same minutes.
+`sh scripts/fetch-run.sh --bucket goalcup-traces-staging <run> <out>`, then copy `<out>/<entry>` into
+the run's pad box and, there, compare `sha256sum rec.gcr.zst` with `cat rec-*.gcr.zst | sha256sum`
+from the kept local entry, read `complete`, `model_requests` and `last_heartbeat` in `fetch.json`, and
+run `goalcup-verify check --server <copied entry> --local <entry dir>` (ledger B1: no build binary runs
+on the conductor). For the heartbeat, read the `heartbeats` list in `fetch.json` and check each row's
+`recording` and `counts` against the `status.json` snapshots the pad took at the same minutes.
 
 ## Asks of PRD-00 and PRD-01
 
 All ten asks of revision 1 are closed by PRD-00 revision 2 and PRD-01 revision 2 (PRD-00 review answers,
 "PRD-07 asks 1 to 7"; PRD-01 review answers, "PRD-07 asks 8 to 10"). Ask 2 was ruled the other way
-(read-only credentials on the conductor) and ask 5 changed to 16 MiB; this revision follows both. Two
-small notes for the next PRD-00 touch, neither a new ruling:
+(read-only credentials on the conductor) and ask 5 changed to 16 MiB; this revision follows both. The
+two notes revision 2 left for PRD-00 are applied by PRD-00 R3-6:
 
-1. S5's text "the final heartbeat repeated until the answer says `sealed: true`" can add "or a chunk or
-   position answer": the completing chunk now seals too (section 3).
-2. S13's `fetch.json` now also carries the last heartbeat's `counts` and each chunk's compressed size.
+1. S5's text "the final heartbeat repeated until the answer says `sealed: true`" adds "or a chunk or
+   position answer": the completing chunk now seals too (section 3). Applied by PRD-00 R3-6.
+2. S13's `fetch.json` also carries the last heartbeat's `counts` and each chunk's compressed size.
+   Applied by PRD-00 R3-6.
+
+Open asks of revision 3:
+
+3. **PRD-06 and PRD-14:** section 6 and its builder notes say a bad `counts` is dropped with a
+   `counts-dropped` log line and the heartbeat is kept (`200`), never `400`; its interfaces row gives the
+   chunk answer as `{offset, next_seq, head, received_at, sealed}`. PRD-14's fake Worker follows the
+   same. (PRD-06 revision 3 already says so; PRD-14's fake Worker is the open part.)
+4. **PRD-08:** when `fetch.json` has `final` null, `server_chunks_whole` checks continuity only and
+   reports the open end as incomplete (exit 1, never `fail`); `server_counts_match` is `skip` "not
+   sealed". Acceptance 3 depends on it.
+5. **PRD-16:** X6 reads `fetch.json` `heartbeats` instead of its own query, uses section 4's `recording`
+   rule (`failed` only for null mode or a writer stalled past 60 s), and runs its checks in the run's
+   pad box.
 
 ## Review answers
+
+This section is history. The body, the ledger and the "Alignment answers" below win over it.
 
 Sources: `prd-consistency.md` (CC), `prd-review-A.md` (RA), `prd-review-B.md` (RB). Code checked where
 an item was disputed.
@@ -595,14 +653,14 @@ an item was disputed.
 |---|---|---|
 | CC 67, RB C6 | Heartbeat body differs from PRD-06 | **Accepted.** S5 is the flat `counts`; `waiting_bytes` added; `repo_head` kept. PRD-06 follows (PRD-00 ruling) |
 | CC 68 | Manual `goalcup upload` heartbeat without counts | **Accepted, with a server change.** The client always sends the seal's totals (PRD-00 ruling). The Worker treats the three facts as optional as today and **drops** a bad `counts` instead of a `400`: checked in code, `runs.ts:502-507` and D64 say vitals never cost a heartbeat, and a refused final heartbeat would block the seal and every later chunk |
-| CC 69, RB C6 | `unknown` in the client table | **Accepted.** Dropped from the table; the Worker and SQL CHECK still accept it, no code change. `failed` also covers "the entry ended while off" (PRD-06) |
+| CC 69, RB C6 | `unknown` in the client table | **Accepted.** Dropped from the table; the Worker and SQL CHECK still accept it, no code change |
 | CC 70 | Final heartbeat repeat rule | **Accepted and extended.** Repeat until `sealed`; the chunk that completes a committed end now seals too, so a client that stops after its last chunk still seals (section 3). Checked against `sql:1409-1448` (lock and recheck) and `chunks.ts:46-47` |
 | CC 21, CC 81, RB C23 | Chunk cadence and the cost table | **Accepted.** 5 minutes or 16 MiB compressed; Class A row recomputed (about 3,000 per entry-week, about $16 for 1,500 runs) |
 | CC 79, RB C9, CC 72 | Fetched layout differs from PRD-08 and PRD-12 | **Accepted.** `fetch.json` (S13) with the entry row, `model_requests`, final, the last heartbeat (`recording`, `counts`) and the chunk list with keys, SHA-256 and compressed size. Not `server.json`, to avoid the clash with PRD-10's local file |
 | CC 80, RB C10 | Overnight deploy story contradicts the ledger | **Accepted.** Section 12 rewritten: agents deploy staging after builder step 2 and PRD-06; acceptance on staging; `--local` only before staging carries 1.0 |
 | CC 82, CC 86 | `agent_paused` and receipt names in Worker code hit PRD-13's guard | **Accepted, done here.** `counts` is stored nested, so the Worker never names `agent_paused`; the local disk-pause twin, `Vitals`, `receipt`, `last_ack` types go. Only the SQL mirror keeps the names; PRD-13 skips `server/worker/sql/` |
 | CC 19, CC ask 2 | Server access overnight | **Accepted.** Read-only database and R2 credentials on the conductor only (section 9); ask 2 of revision 1 withdrawn |
-| CC 20, RB C22 | Judged-commit logic | **Accepted.** Untouched in 1.0 (PRD-00 question 3) |
+| CC 20, RB C22 | Judged-commit logic | **Accepted.** Untouched in 1.0 (PRD-00 question 4) |
 | CC 22, RB N14 | Staging floor | **Accepted as PRD-00 ruled** (N14 rejected there): `1.0.0` in both blocks from the first staging deploy; production refuses 0.7 only from the owner's deploy after the release |
 | CC 8 | PRD-00 row and ask 1 (signing scope) | **Closed.** PRD-00 row says signing and receipts deleted, the rest untouched |
 | CC 99 | Test bucket | **Accepted.** The existing `goalcup-traces-staging`; no new bucket |
@@ -613,6 +671,39 @@ an item was disputed.
 | RB T2 | Real-run proof of `failed` needs a hooks build | **Partly.** PRD-07's acceptance 3 removed as a duplicate of PRD-06 U6; the server half is an integration test. The partial-upload proof now reuses PRD-06 U8 (plain kills, no hooks, no firewall rule, also answers RB W5 for this PRD) |
 | RB O7 | Staging waits on PRD-07's order | **Accepted.** The heartbeat, seal and floor work moved to builder step 2, before the deletions |
 | RA finding 6 | Unlisted model host tunnels go unflagged; `wire_quiet` misses partly recorded runs | **Partly.** Noted as a known limit in section 8; the live client-side check belongs to PRD-02 and PRD-10; the query itself is after merge |
-| RA finding 15 | Worker outage near the end loses the tail after 24 h | **Partly.** PRD-00 question 2 (unchanged window) with PRD-06's warning line; this PRD lists it in risks and section 11. The longer window needs a website migration, the owner's |
+| RA finding 15 | Worker outage near the end loses the tail after 24 h | **Partly.** PRD-00 question 1 (unchanged window) with PRD-06's warning line; this PRD lists it in risks and section 11. The longer window needs a website migration, the owner's |
 | CC 1 (asks not absorbed) | PRD-07's ten asks | **Closed.** All ruled in PRD-00 and PRD-01 revision 2; the asks section now says so |
 | Relayed user request (gateways, "one system") | Is a gateway just another HTTPS host? | **No change here.** The Worker stores bytes and never sees hosts; gateway handling is PRD-03 and PRD-11 (ledger H4) |
+
+## Alignment answers
+
+Revision 3. Fix lists g1, g2 and g3, checked against the ledger, PRD-00 revision 4, PRD-02, PRD-06
+revision 3, PRD-08, PRD-12, PRD-15, PRD-16 and the Worker code (`runs.ts`, `db.ts`, `db-local.ts`).
+
+| Fix id | What was done |
+|---|---|
+| L6-05 | Applied the PRD-07 part: "How a watcher proves it" copies `<out>/<entry>` into the pad box and runs `goalcup-verify check --server ... --local ...` there. The acceptance preamble says the same (ledger B1) |
+| L2-08 | Partly, merged with G2-31 and G3-X8. "A recovered entry is `gaps`" applied. "And only then" kept, but after G2-31's writer stall: `failed` is null mode or a writer stalled past 60 s, as PRD-06 revision 3 section 6 now says |
+| L4-6 | Applied: section 12 step 5 creates `goalcup-usage` (the usage job is in this build, third slice) |
+| L7-09 | Partly: the owner note is in section 12 step 3. The id "OW-12" is not defined in any file yet, so the note points to PRD-16's `MORNING.md` owner steps instead; that line is PRD-16's part |
+| G2-31 | Applied the PRD-07 part: the `failed` row reads "null mode, or a writer stalled past 60 s"; a recovered entry is `gaps`; `sealed` added to the `mode` list (the final heartbeat sends `mode: sealed`) |
+| 06-23 | Applied: `goalcup upload` sends `pipeline::entry_totals` (R3-2) in section 4 and the PRD-06 interfaces row |
+| X1-7 | Applied: cost table row "200 agents at once, a week: about 400 GB, about $6 a month" |
+| X2-11 | Partly. Moving the review sections into a new `REVIEW-HISTORY.md` is not done here: this pass edits only this file, and many writers of one new file would race (as PRD-00 revision 4 answered). "Review answers" now says it is history and that the body, the ledger and these answers win. The two revision 2 notes are marked applied by R3-6. The move may run once, after every alignment pass, by one agent |
+| G3-X8 | Partly. The table now follows PRD-06 section 6 (`ok` with `recording` or `sealed` and all loss counts 0; `gaps` for any loss, `losing`, `writer_slow` or a recovered entry). `mode` list gains `sealed`. CC 69's "entry ended while off" removed. Rejected two parts: "`failed` only for null mode" (G2-31 and PRD-06 revision 3 add the 60 s writer stall), and `mode` as the string `"null"` (PRD-06 and its test use JSON null) |
+| G3-X22 | Applied: section 4 says the Worker fixes no key list inside `counts`; ask 3 added (PRD-06 already says so in revision 3; PRD-14's fake Worker is the open part) |
+| G3-X23 | Applied, with JSON null instead of `"null"` (see G3-X8). The note names PRD-06 `upload_worker.rs` case 2 as the test |
+| G3-X1 | Applied: "Where it runs" split (staging fetch on the conductor; `--local` in the box with `wrangler dev`; every `goalcup-verify` in a box); builder notes say `npm test`, `test_fetch_run.py` and `wrangler dev` run in a build box and only `wrangler deploy --env staging` runs on the conductor; step 4 and the PRD-12 row follow |
+| G3-X26 | Applied: index query and `fetch.json` gain `heartbeats` (every row, time order); `test_fetch_run.py` checks it; sections 4, 8 and 11, risks, the watcher text and the PRD-16 row read it. Partly: the size line says "under 5 MB" (2,100 rows at the 2 KiB `counts` bound), not "under 3 MB". The PRD-06 U6 and PRD-16 X6 parts are theirs (ask 5) |
+| G3-X24 | Applied: ask 4 to PRD-08; acceptance 3 unchanged |
+| G3-X56 | Applied: acceptance 2 rewritten as given |
+| G3-07a | Applied: a dropped `counts` stores `{"counts_dropped": n}` in `p_vitals` with the log line; integration test, risk row, default row and `fetch.json` `heartbeats` show it. No `agent_paused` key, so the old disk-pause rule is not reached |
+| G3-07b | Applied: `--local` kept; the index is the R2 object `state/runs/<run>.json` in the local persist store with `db-local.ts`'s shape (checked at `db-local.ts:1-12`) |
+| G3-07c | Applied: open and continue bodies and the `403` text moved to the PRD-10 row (PRD-10 opens the run, its section 1 step 5) |
+| G3-07d | Applied: builder step 5 folds SERVER-DESIGN's still-true facts into `server/worker/README.md` with the night-log line; PRD-15 row says so |
+| G3-07e | Applied: header revision 3 against PRD-00 revision 4 (the fix said revision 3; PRD-00 is now at 4). Question numbers mapped to revision 4: judged-commit 3 to 4, cadence 6 to 1, tail window 2 to 1, interfaces "2, 3, 5" to "1, 4, 5". The two notes say "Applied by PRD-00 R3-6" |
+| G3-07f | Applied: section 6 gives the mode-neutral `403` text (today's is "too old for the cup", `runs.ts:163`) |
+| G3-07g | Applied: a missing or bad object ends the entry with `"why":"object_bad"` and exit 1; `test_fetch_run.py` case added |
+| G3-07h | Applied in section 7 and the recovery-fallback risk row |
+| G3-07i | Applied in sections 9 and 10 and builder step 5: `delete-test-runs.sh` is the owner's tool; agents edit it, never run it |
+| G3-07j | Applied: `Vitals` is `db.ts:242-249` (checked in code) in the Today table, section 4 and What is cut; `waiting_bytes` cites PRD-06 section 11 |

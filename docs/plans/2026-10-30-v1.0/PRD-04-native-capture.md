@@ -1,8 +1,9 @@
 # PRD-04: Native capture (session files and harness database copies)
 
-Id: PRD-04. Version: goalcup 1.0. Status: plan for the overnight build, revision 2. Date: 30 October
+Id: PRD-04. Version: goalcup 1.0. Status: plan for the overnight build, revision 3. Date: 30 October
 2026. Revision 2 follows PRD-00 and PRD-01 revision 2 and the three reviews (section "Review answers"
-at the end). Base: main at 4b226de2. Index: [PRD-00](PRD-00-index.md). Format:
+at the end). Revision 3 applies the alignment fixes against the ledger (section "Alignment answers"
+at the end); where the review history disagrees with the body or those answers, the body wins. Base: main at 4b226de2. Index: [PRD-00](PRD-00-index.md). Format:
 [PRD-01](PRD-01-record-format.md). Core: [PRD-02](PRD-02-recorder-core.md).
 
 ## Goal
@@ -71,15 +72,19 @@ every seal. The file is the buffer: under load we read later, we never drop.
 
 ### 1. Shape
 
-One native thread inside the recorder. PRD-02 starts it at boot step 4 (PRD-02 section 9.2) and
-the seal calls `finish` (PRD-00, "Smaller interface rulings").
+One native thread inside the recorder. PRD-02 starts it at boot step 5 (PRD-02 section 9.2) and
+the seal calls `finish` at seal step 4 (PRD-00, "Smaller interface rulings").
 
 ```rust
 pub fn start(rec: Recorder, sources: NativeSources) -> NativeReader;   // spawns the thread
 impl NativeReader {
-    pub fn finish(self, harness_exited: bool) -> NativeFinish;         // called by PRD-02's seal
+    // called by PRD-02's seal; `guard` is Some(180 s) for reasons `deadline`, `server_stop`
+    // and `signal`, None for `harness_exit` and `seal_command` (section 8 step 5, PRD-00 S8)
+    pub fn finish(self, harness_exited: bool, guard: Option<Duration>) -> NativeFinish;
 }
-pub struct NativeFinish { pub streams: u64, pub snapshots: u64, pub cut_files: u64, pub took_ms: u64 }
+pub struct NativeFinish {
+    pub streams: u64, pub snapshots: u64, pub cut_files: u64, pub cut_bytes: u64, pub took_ms: u64,
+}
 ```
 
 The loop, once per pass:
@@ -92,11 +97,12 @@ The loop, once per pass:
    due (section 6).
 4. **Sleep** until the next pass (section 3, duty cycle). If reading stopped because the 64 MiB slice
    was used, read again at once without a walk. If it stopped because `room()` was too small, wait
-   100 ms, then read again without a walk.
+   100 ms, then read again without a walk. A walk still runs once the pass interval has passed, even
+   with unread bytes, so a new file is never kept waiting behind a large one.
 
 The thread runs at low priority with PRD-02's per-thread call (PRD-02 section 1). It calls only S1 in
 PRD-00's final shape: `open(kind, 0, 0, from, flags, meta)`, `StreamHandle::data(t, bytes)`,
-`gap(reason, start, lost, tail)`, `end(t, reason, tail)`, `event`, `room`, `now`, `native_cursors`.
+`gap(reason, start, lost, tail)`, `end(t, reason, tail)`, `event`, `room`, `now`, `native_cursors`, `counts`.
 The handle owns offsets, so a native stream's DATA offsets are file offsets from `from`. The reader
 never parses file content.
 
@@ -112,7 +118,7 @@ pattern, form, since, warn_missing }`):
 | `pattern` | `/`-separated, relative to `root`. Components: a literal name, a glob with `*` and `?`, or `**` |
 | `form` | `append` (read as it grows), `snapshot` (read whole each time it changes and settles), `final` (a database: copied as a set during the run and at every seal, section 6) |
 | `since` | The run start, the same for every row (below) |
-| `warn_missing` | Optional. When set, a row that finds no file is named (below) |
+| `warn_missing` | Default `true` (PRD-11); `false` silences the note. When on, a row that finds no file is named (below) |
 
 **`**` rules.** `**` is a whole component and matches zero or more folders. `a/**/b.jsonl` matches
 `a/b.jsonl`, `a/x/b.jsonl` and `a/x/y/z/b.jsonl`. Anything else in a component (`*`, `?`, literal)
@@ -121,8 +127,10 @@ matches inside one name, never across `/`, with the single-component matcher cop
 an absolute pattern, braces, a NUL byte, `**` glued to other text (`a**`). There is no depth limit:
 since no symlink is followed and no mount is crossed (section 9), a walk cannot loop.
 
-**Rows.** No row cap (the 8-row limit goes). Rows of one harness may overlap; a file is read once,
-by the **first** row (in file order) whose pattern matches it. That keeps the path ID unique.
+**Rows.** No row cap (the 8-row limit goes). Row names are unique within a connector (refused at
+load, PRD-11). Rows may overlap; a file is read once, by the **first** row (in file order) that
+matches it, compared by the file's absolute path under the resolved roots. That keeps the path ID
+unique.
 
 **Every row reads from the run start.** A file is taken once `max(mtime, ctime)`, in whole seconds,
 is at or after `since` (copied rule, D57; `native_capture.rs:1303-1308`; lesson PRD-17 F1). The flag
@@ -130,13 +138,15 @@ is at or after `since` (copied rule, D57; `native_capture.rs:1303-1308`; lesson 
 `goalcup continue` keeps the same floor. A file once taken stays taken, and is read whole from
 offset 0 the first time (a `--continue` that appends to an old transcript gets the whole file).
 
-**Rows that find nothing.** For a row with `warn_missing`, if no file has been taken 5 minutes after
-the entry starts, the reader writes one `note` event `native_missing` with the row name, once per
-entry. PRD-10 words the line from that note (PRD-02's `status.json` keeps the last 20 notes).
+**Rows that find nothing.** For a row with `warn_missing` on, if no file has been taken 5 minutes
+after the first model request was written (`rec.counts()`), the reader writes one `note` event
+`native_missing` with the row name, once per entry. A run that never makes a model request gets no
+such note. PRD-10 words the line from that note (PRD-02's `status.json` keeps the last 20 notes).
 
 **What `**` buys.** Claude Code's six rows (`connectors/claude-code-cli/harness.toml:92-148`) become
 three, and a subagent started one level deeper in a future release is still found. PRD-11 section 6
-writes them as:
+writes them as (abridged: PRD-11 section 6 is the source, and its `tool-results` and `meta` rows
+also carry `warn_missing = false`):
 
 ```toml
 native = [
@@ -155,11 +165,10 @@ table. It gives the rule a row must follow:
 | A file written whole and rewritten (JSON meta, settings, a manifest) | `snapshot` |
 | A SQLite database | `final`, with a pattern that ends in `*` (`state.db*`) so the `-wal` and `-shm` files come too |
 
-Two points for PRD-11 to check on the pad (both unverified): the Hermes row
-`cache/delegation/live/**/*` as `append` also takes `manifest.json`; if Hermes rewrites that file,
-it belongs in its own `snapshot` row (`**/manifest.json`) before the `append` row for `**/task-*.log`.
-The Codex row `*.sqlite*` matches every SQLite file in the Codex home, not only the state database;
-that is allowed (no caps), but a large log database would be copied too.
+PRD-11 already gives Hermes's `manifest.json` its own `snapshot` row before the `task-*.log` row.
+One point for PRD-11 to check on the pad (unverified): the Codex row `*.sqlite*` matches every SQLite
+file in the Codex home, not only the state database; that is allowed (no caps), but a large log
+database would be copied too.
 
 ### 3. Discovery: a full walk on a duty cycle
 
@@ -198,8 +207,11 @@ stretches the interval instead.
 ### 4. Reading: appends, rewrites and generations
 
 Each taken file has a **generation** (`gen` 0 first) and, while it is being read, one open `native`
-stream (PRD-01 section 4). For each matching file the reader compares the new `stat` with the last
-one:
+stream (PRD-01 section 4). A file's `native` stream is opened when the file is first taken, before
+any read, so a later loss always has a stream to carry its GAP. A file still unreadable at `finish`
+gets `gap(SourceChanged, start, Some(size - offset), {"unread_at_least": size - offset})` and END
+`source_changed` (PRD-01 GAP 5; reason 9 `read_error` stays reserved). For each matching file the
+reader compares the new `stat` with the last one:
 
 | What it sees | What it does |
 |---|---|
@@ -229,16 +241,16 @@ read boundary, because the stream continues.
 once its `stat` has not changed for 1 s (settled), so a file being rewritten many times a second is
 copied once it rests, not every time. Read to the size seen at open, then `fstat` the open file again;
 if size, mtime or ctime moved, the copy is torn: END `source_changed`, and the next settled pass reads
-a new generation. Otherwise END `complete`. A changed snapshot later is a new generation (copied rule,
-`native_capture.rs:47-49`).
+it again as a new `snapshot` stream (snapshots carry no `gen`; `mtime_ns` and `fid` tell copies
+apart). Otherwise END `complete`. A changed snapshot later is a new `snapshot` stream too (copied
+rule, `native_capture.rs:47-49`).
 
 ### 5. Backpressure: the file is the buffer
 
-- Before each read the reader asks `rec.room()` (S1, bytes free under the soft guard). It keeps a
-  reserve of a quarter of the largest `room()` it has seen (that is the soft guard, since `room()`
-  equals the guard whenever nothing is held) and reads at most `room()` minus that reserve. So native
-  never pushes the pipeline into the band where the wire starts to drop (PRD-02 section 3), and no
-  new seam is needed. If that is 0 it reads nothing; the offset stays, the bytes stay in the file, and
+- Before each read the reader asks `rec.room()` (S1) and reads at most `room()`. `room()` already
+  answers against three quarters of the soft guard (PRD-00 S1, PRD-02 section 3), so native never
+  pushes the wire into the band where it drops, and the reader subtracts nothing of its own. If
+  `room()` is 0 it reads nothing; the offset stays, the bytes stay in the file, and
   it asks again after 100 ms. No GAP, no latch, no "try later" protocol.
 - Each pass reads at most a 64 MiB slice in all, starting after the file where the last pass stopped
   (round robin, copied idea from `native_capture.rs:1180-1187`), so one huge file cannot starve the
@@ -246,8 +258,8 @@ a new generation. Otherwise END `complete`. A changed snapshot later is a new ge
 - Pieces are handed to `StreamHandle::data` as read; PRD-02 splits them into DATA records of at most
   256 KiB. Each piece's time is `rec.now()` just before its `pread`.
 - The only native loss left is a file that vanishes or is truncated or replaced while bytes in it are
-  still unread (section 4), and bytes still unread when the seal's time runs out (section 8). Each is
-  a GAP with a start and an end, never silent.
+  still unread (section 4), and bytes still unread when the seal's time guard runs out (section 8,
+  only at the end of the run window). Each is a GAP with a start and an end, never silent.
 
 This is why P14 (native latched off by a refusal) cannot happen: the reader never offers more than
 there is room for, and S1 never refuses.
@@ -257,25 +269,31 @@ there is room for, and S1 never refuses.
 Hermes (`state.db`), OpenCode, OpenClaw, Goose, Kilo, Crush, Copilot's store and Cline keep their
 sessions and subagent links in SQLite. A raw copy of a live SQLite file may be torn, so these rows
 have the `final` form and are copied as a **set** (`x.db`, `x.db-wal`, `x.db-shm`, whatever the row
-matches):
+matches). A set is one database: the files of one row's matches that share a name once a `-wal`,
+`-shm` or `-journal` suffix is removed. Each set has its own `set` id, interval and retry.
 
 1. **When.** At every seal, in `NativeReader::finish` (section 8). And during the run, a **periodic
    copy** when a file of the set changed since the last copy and the interval has passed: 60 minutes,
    or one minute per 2 MiB of the set's size if that is longer (a 400 MiB database every 200
    minutes). The first is due 60 minutes after the entry starts. So periodic copies add at most about
-   2 MiB a minute raw (about 3 GB a day before zstd), the stated guard on upload and storage cost;
-   the seal copy is always taken. A `continue` that follows gets its own copies.
+   2 MiB a minute raw (about 3 GB a day before zstd): a cadence chosen for upload and storage cost; it
+   never skips the seal copy and never drops a byte. It is not a cap: every database is copied whole
+   at every seal. The interval restarts at each boot (a restart may copy one interval late). A
+   `continue` that follows gets its own copies.
 2. **What.** Each file of the set is its own `snapshot` stream with `form: "final"` and one shared
    `set` (`"<boot>.<n>"`, PRD-01 section 4). After a clean exit SQLite usually has folded and removed
    the `-wal`; after a crash, and in every periodic copy, the `-wal` holds committed rows the main file
-   lacks, so it is copied too.
+   lacks, so it is copied too. A set is taken whole: if any file of a `final` row's set passes the
+   run-start rule, every file of that set is copied, whatever its own times.
 3. **How.** Raw bytes, read with the same no-follow open, at the room rule of section 5. Never opened
    with SQLite and no SQLite dependency (record raw). Read each file to the size seen, then `fstat`
-   again. If any file of the set moved during the read, read the whole set once more; if it moved
-   again, keep the second copy and add a `note` event `snapshot_unstable` with the path. One retry,
-   not three (review B N8).
+   again. If any file of the set moved during the read, END every stream of that copy
+   `source_changed`, then read the whole set once more as a new `set`. If that copy also moved, END
+   it `complete` and add a `note` event `snapshot_unstable` with the path. Both copies stay in the
+   record; PRD-09 takes the newest that opens. One retry, not three (review B N8).
 4. **Harness still running.** Periodic copies always have `"harness_exited": false`. A seal copy while
-   the harness still runs (the deadline seal, or a `seal` command) is taken anyway, with
+   the harness still runs (a seal the recorder runs with no live watchdog, for example the server's
+   `stop`, or a harness the watchdog could not end) is taken anyway, with
    `"harness_exited": false` and a `note` `final_snapshot_live`. Today the copy is skipped and the run
    keeps nothing (`owner.rs:146-150`). A possibly torn copy, said plainly, is worth more to research
    than none.
@@ -292,7 +310,7 @@ matches):
    still open. Decision: record as is. The wire record stays the primary record.
 7. **Background daemons.** A harness's own background process (Hermes gateway, OpenCode server) can
    keep writing after the harness exits. The watchdog runs the connector's `after` commands (PRD-11
-   data) before it calls `finish` (PRD-00 S8). If the process still writes, step 3 marks the copy.
+   data) before it sends the `seal` line, so they run before the seal calls `finish` (PRD-00 S8). If the process still writes, step 3 marks the copy.
 8. **Dead entries.** No copy is taken in `close_dead_entry`: that recovery writes a closed frame and
    nothing after it (PRD-02 section 9.4), and nobody knows whether the harness still runs. The
    periodic copies cover a dead entry up to its last interval, and a harness database holds every
@@ -325,22 +343,29 @@ matches):
 
 ### 8. Finish at the seal
 
-`NativeReader::finish(harness_exited)` stops the loop and runs on the native thread. Its S1 calls are
-admitted until it returns (PRD-02's seal step 1 stops the proxy's payload, not this; see Interfaces).
+`NativeReader::finish(harness_exited, guard)` stops the loop and runs on the native thread. The seal's
+stop (PRD-02 section 11 step 2) applies to wire streams only (`conn`, `http_req`, `http_resp`,
+`ws_up`, `ws_down`). `native` and `snapshot` streams are never stopped: the native loop's S1 calls stay
+admitted from the stop until `finish` returns. The drain (step 3) waits for wire bytes only. `finish`
+is seal step 4 (PRD-00 R3-3).
 
 1. One full pass: every folder listed, every file checked.
-2. Read every append file to its current size and every unsettled snapshot as it is. No 64 MiB cap
-   (`owner.rs:13` goes). Reads still follow the room rule, while PRD-02's writer drains.
+2. Read every append file to the size seen in step 1's pass, and every unsettled snapshot as it is.
+   No 64 MiB cap (`owner.rs:13` goes). Reads still follow the room rule, while PRD-02's writer drains.
 3. Copy every `final` set (section 6), with `harness_exited` as given.
 4. END every open native stream `complete` when read to the last size seen.
-5. **Time guard: 180 s** (today's finish budget, `control.rs:708`). It is part of the seal bound that
-   PRD-02 owns (drain 60 s plus native finish 180 s, PRD-00 S8), because the seal can be the deadline.
-   What is not read by then gets a GAP `cut_at_seal` per file with its exact `lost` (we know the size
-   and the offset) and END `cut_at_seal`. A database set cut part way is cut for every file of that
-   set, and the record keeps the last periodic copy whole. The count goes into
-   `NativeFinish.cut_files` and status (PRD-10). A GAP here names the file, unlike today's stream-less
-   gaps (`owner.rs:139-150`). At about 30 MB/s through one mask worker (PRD-05's target, estimate),
-   180 s is about 5 GB.
+5. **Time guard: 180 s, only when the seal reason is `deadline`, `server_stop` or `signal`** (today's
+   finish budget, `control.rs:708`); it guards the end of the run window and is part of the seal bound
+   PRD-02 owns (drain 60 s plus native finish 180 s, PRD-00 S8). PRD-02 passes it as `guard`. On
+   `harness_exit` and `seal_command`, `guard` is `None`: finish reads every file to the size seen in
+   step 1 with no time guard, and status shows `sealing: reading session files` meanwhile (PRD-00 S8).
+   Where the guard applies, what is not read by then gets a GAP `cut_at_seal` per file with its exact
+   `lost` (we know the size and the offset) and END `cut_at_seal`. A database set cut part way is cut
+   for every file of that set, and the record keeps the last periodic copy whole. The count and bytes
+   go into `NativeFinish.cut_files` and `cut_bytes`, and PRD-02 writes them as sealed `status.json`
+   `cut_files {files, bytes}` (PRD-10). A GAP here names the file, unlike today's stream-less gaps
+   (`owner.rs:139-150`). At PRD-05's 50 MB/s target (unmeasured), 180 s is about 9 GB; at 30 MB/s
+   about 5 GB.
 
 ### 9. Safety: what is never opened or followed
 
@@ -358,9 +383,13 @@ Copied behaviour from `crates/goalcup-platform/src/sourcecap/unix.rs`, rewritten
   never read, and `O_NONBLOCK` means opening one can never hang the thread.
 - **Same device only.** A folder whose `st_dev` differs from its root's is not entered (a mount
   inside a session folder, perhaps a slow network mount). This replaces the `statx` mount check
-  (`unix.rs:476-560`) with a free compare.
+  (`unix.rs:476-560`) with a free compare. Each such folder gets one `note` `native_other_device`
+  (`row`, the path relative to the root) per entry, so the miss is named in status and on the end
+  screen (PRD-01 note list, PRD-10).
 - No file is ever written, locked, renamed or deleted by the reader. No row may name a `.env` or key
-  file: those are PRD-05's exact values, never recorded.
+  file: those are PRD-05's exact values, never recorded. PRD-11's connector test refuses a native row
+  whose pattern matches any of the connector's own `secret_files`; `src/native/` holds no such check
+  and no exclusion list.
 
 ### 10. The three pad cases
 
@@ -395,13 +424,13 @@ there), `src/mask/` (PRD-05), `src/connector/` (PRD-11; rows are parsed there), 
 | PRD | What crosses | Direction |
 |---|---|---|
 | PRD-00 | S1 final shape; S3 `NativeSource`; S8 (the watchdog runs `after` before `finish`); "Smaller interface rulings" row PRD-02 and PRD-04 | Used here |
-| PRD-01 | `StreamKind::{Native, Snapshot}`; meta keys `from`, `fid`, `set`, `harness_exited`; END `source_changed`, `complete`, `cut_at_seal`; GAP 5 `source_changed` with tail `unread_at_least`, GAP 10 `cut_at_seal` (written by PRD-04 for unread native bytes, through PRD-02's handle); notes `native_unreadable`, `native_symlink`, `snapshot_unstable`, `final_snapshot_live`, and `native_missing` (ask below) | Used here |
-| PRD-02 | S1 calls; `room()` (the reserve rule of section 5 needs no new call); `native_cursors()` carrying per path `gen`, `fid`, written offset, and `mtime_ns` for snapshots (the writer reads it from the OPEN meta); per-thread low priority (PRD-02 section 1); the seal calls `NativeReader::finish(harness_exited)`, and the native thread's S1 calls are admitted during it (ask below) | Both |
+| PRD-01 | `StreamKind::{Native, Snapshot}`; meta keys `from`, `fid`, `set`, `harness_exited`; END `source_changed`, `complete`, `cut_at_seal`; GAP 5 `source_changed` with tail `unread_at_least`, GAP 10 `cut_at_seal` (written by PRD-04 for unread native bytes, through PRD-02's handle); notes `native_unreadable`, `native_symlink`, `snapshot_unstable`, `final_snapshot_live`, `native_missing`, `native_other_device` | Used here |
+| PRD-02 | S1 calls; `room()` (already 3/4 of the soft guard; nothing subtracted here); `native_cursors()` carrying per path `gen`, `fid`, written offset, and `mtime_ns` for snapshots (the writer reads it from the OPEN meta); `counts()` for the `native_missing` clock; per-thread low priority (PRD-02 section 1); `native::start` at boot step 5; seal step 4 calls `NativeReader::finish(harness_exited, guard)` with `guard` 180 s for `deadline`, `server_stop`, `signal` and `None` otherwise; the stop covers wire streams only, so native S1 calls stay admitted until `finish` returns (PRD-00 R3-3); PRD-02 writes `NativeFinish.cut_files` and `cut_bytes` into sealed `status.json` | Both |
 | PRD-05 | Masks every native and snapshot stream, binary bytes included; `*` of the same length | Used here |
 | PRD-08 | Checks: per path, DATA contiguous from `from` across boots (invariants 4 and 14); every GAP of a native stream has a reason in section 4 or 8; no two streams of one boot share a path and `gen` | Used there |
 | PRD-09 | Reads native streams by `path`; groups database copies by `set`, takes the latest readable set, repairs WAL checksums first, reports `readable: false` for a copy it cannot open | Used there |
-| PRD-10 | Status shows `native_files`, `cut_files`; the `native_missing` note gives the "no session file" line for a `warn_missing` row | Used there |
-| PRD-11 | S3 rows (section 6 is the one source of the rows), roots resolved and isolated, `{home}` and `{workspace}` templates, `warn_missing` per row, `after` commands that stop daemons | Used here |
+| PRD-10 | Status shows `native_files`, `cut_files {files, bytes}`; the `native_missing` note gives the "no session file" line for a `warn_missing` row; one plain line for `native_other_device`; `sealing: reading session files` while an unguarded finish runs | Used there |
+| PRD-11 | S3 rows (section 6 is the one source of the rows), roots resolved and isolated, `{home}` and `{workspace}` templates, `warn_missing` per row (default `true`), row names unique per connector (refused at load), a connector test that refuses a native row matching the connector's own `secret_files`, `after` commands that stop daemons | Used here |
 | PRD-12 | Pad check "every subagent recorded": list files under each root matching the rows and changed since the start; each must have a native stream whose last END `seen` equals its size at the seal (`seen` is an end offset, PRD-01), or a named GAP | Used there |
 | PRD-14 | `Recorder::for_tests(room)` (PRD-00 S1) collects S1 calls with a settable `room()`; `native_walk.rs` in the `heavy` group | Used here |
 | PRD-17 | Lessons F1 to F7 on session files: run-start rule, truncate and replace, no-follow and FIFO, partial lines, Hermes atomic rewrite and `request_dump_*`, final copy, one stream per rollout | Used here |
@@ -420,7 +449,7 @@ there), `src/mask/` (PRD-05), `src/connector/` (PRD-11; rows are parsed there), 
 | Revision 1 parts never built | none | Hot and quiet scheduler, list-on-change, the 60 s sweep, the 64-byte tail witness, the 20,000-file soak script, three snapshot retries (review B N8, N9, T1) |
 | Tests | `crates/goalcup-daemon/tests/it/capture_native.rs` 2,664; `crates/goalcup-platform/tests/it/unix_sourcecap.rs` 261; `runtime/capture/tests.rs:1745-2060` about 315; the native part of `tests/full/capture_finish_budget.rs` (1,267, shared with PRD-02) | Deleted with the crates. Cases copied below |
 
-Net: about 3,700 src lines (native capture, plan, sourcecap, handle budget, owner glue) become about
+Net: about 3,400 src lines (native capture, plan, sourcecap, handle budget, owner glue) become about
 780.
 
 ## Acceptance
@@ -436,9 +465,10 @@ Net: about 3,700 src lines (native capture, plan, sourcecap, handle budget, owne
    `thread_spawn`, as in run 1's `final-reconcile.txt`). No file missing, whatever their number
    (run 1 lost 11 of 43; lesson PRD-17 F7). Core slice (phase 1a).
 3. **Hermes, direct key, one delegated child.** Pass: seal copy of `state.db` (and its `-wal` if
-   present) with one `set` and `harness_exited: true`; after the WAL checksum repair (PRD-09),
-   `sqlite3` opens the copy and `sessions` has a row with `parent_session_id` set (column name
-   unverified on 0.22.5). This copy is what C1 option (a) of PRD-00 compares per session.
+   present) with one `set` and `harness_exited: true`. `goalcup-verify usage --json` (PRD-09) on the
+   entry reports `readable: true`, `db_set` naming the seal set, and a thread whose parent comes from
+   `sessions.parent_session_id` (column name unverified on 0.22.5). This copy is what C1 option (a)
+   of PRD-00 compares per session.
 4. **OpenCode and OpenClaw** (not release blocking). Pass: database copies present and open with
    `sqlite3`; or the harness is marked "not verified" with the reason.
 5. **Kill test** (PRD-01 acceptance 3, Codex, plain `kill -9`). Pass: for every rollout path, DATA
@@ -448,19 +478,21 @@ Net: about 3,700 src lines (native capture, plan, sourcecap, handle budget, owne
    thread's CPU from `/proc/<pid>/task/<tid>/stat` and the recorder's descriptor count. Logged, never
    a pass line (PRD-14: no speed number fails a gate). A thread above 2% of one core on average is a
    night-log line for PRD-04.
+7. **A1, the 2-hour Codex run (PRD-16).** At least one periodic `final` set with
+   `harness_exited: false` per Codex database that changed, and a seal set. Logged, as acceptance 6.
 
 ### Automated tests that guard them
 
 | Test file | Cases |
 |---|---|
 | `native_pattern.rs` | `**` matches zero and many levels; first matching row wins; refused patterns (empty, `.`, `..`, absolute, brace, NUL, `a**`) |
-| `native_walk.rs` | A folder made at depth 6 is found; a store that does not exist yet is found once it appears (`capture_native.rs:1074`); 20,000 files in 4,000 folders are all taken (no cap) and the walk time is printed, not asserted; no descriptor stays open between passes; a folder on another device is not entered; old files are skipped and the new one found among 5,000 (`:2128`); backdated mtime with a new ctime is taken (`:2261`); a file a second before the start is skipped (`:2320`) |
-| `native_tail.rs` | Live EOF is not an end (`:1238`); a partial last line is kept (`:566, 1710`); truncate then append never reuses offsets (`:1321`); rename over is a new generation (`:1278`); a vanished file with unread bytes gives a GAP with `unread_at_least`; binary bytes survive (`:1207`); a rewrite in place that grows past the offset is read as an append (stated limit) |
-| `native_room.rs` | With `room()` 0 nothing is read and nothing is lost; after room returns, every byte is read in order; reads stop at the reserve; one huge file does not starve a small one |
-| `native_snapshot.rs` | A snapshot is read once it settles; a torn read is a new generation (`:1962`); a periodic copy is taken when the set changed and the interval passed, not when it is unchanged, and the interval grows with size (interval as a test parameter); every file of one copy shares a `set`; a set still written during the copy gives `snapshot_unstable` after one retry; a seal copy while the harness runs is marked; `-wal` and `-shm` each get a stream |
-| `native_safety.rs` | A symlinked file and a symlinked folder are not read (`:631, 2059`); a FIFO is never opened and the test does not hang (`:686`); the path never holds the root (`:717`); Hermes `request_dump_*` is never matched (`:1906`) |
+| `native_walk.rs` | A folder made at depth 6 is found; a store that does not exist yet is found once it appears (`capture_native.rs:1074`); 20,000 files in 4,000 folders are all taken (no cap) and the walk time is printed, not asserted; no descriptor stays open between passes; a folder whose `st_dev` differs (an existing mount under the test root, or skipped with a printed reason when none exists) is not entered and gives one `native_other_device` note; old files are skipped and the new one found among 5,000 (`:2128`); backdated mtime with a new ctime is taken (`:2261`); a file a second before the start is skipped (`:2320`) |
+| `native_tail.rs` | Live EOF is not an end (`:1238`); a partial last line is kept (`:566, 1710`); truncate then append never reuses offsets (`:1321`); rename over is a new generation (`:1278`); a vanished file with unread bytes gives a GAP with `unread_at_least`; a file unreadable from the first pass to the seal gives an OPEN, one GAP `source_changed` and an END; binary bytes survive (`:1207`); a rewrite in place that grows past the offset is read as an append (stated limit) |
+| `native_room.rs` | With `room()` 0 nothing is read and nothing is lost; after room returns, every byte is read in order; a read never exceeds `room()`; one huge file does not starve a small one |
+| `native_snapshot.rs` | A snapshot is read once it settles; a torn read is a new generation (`:1962`); a periodic copy is taken when the set changed and the interval passed, not when it is unchanged, and the interval grows with size (interval as a test parameter); every file of one copy shares a `set`; a set still written during the copy ends its first copy `source_changed` and gives `snapshot_unstable` after one retry, both copies kept; a database file older than the run start whose `-wal` is new is copied with its `-wal`; a seal copy while the harness runs is marked; `-wal` and `-shm` each get a stream |
+| `native_safety.rs` | A symlinked file and a symlinked folder are not read (`:631, 2059`); a FIFO is never opened and the test does not hang (`:686`); the path never holds the root (`:717`); the Hermes rows from PRD-11's embedded connector, run against a home holding `sessions/request_dump_x.json`, match no such file (`:1906`); `src/native/` holds no exclusion list and no harness name |
 | `native_resume.rs` | Cursors from a previous boot: the new stream starts at `from`; a changed `fid` or a size below the cursor starts a new generation; an unchanged snapshot is not read again |
-| `native_finish.rs` | Finish reads everything with no byte cap; past the time guard each file gets `cut_at_seal` with its exact `lost`; a set cut part way is cut for every file and the earlier periodic copy stays whole; a `warn_missing` row with no file gives one `native_missing` note |
+| `native_finish.rs` | Finish reads everything with no byte cap; with `guard` `None` it reads every file to the size seen in its first pass, however long that takes; with a guard, past it each file gets `cut_at_seal` with its exact `lost`; a set cut part way is cut for every file and the earlier periodic copy stays whole; `cut_files` and `cut_bytes` match the GAPs; native S1 calls made after the seal's stop are written; a `warn_missing` row with no file gives one `native_missing` note |
 
 ## Risks and blind spots
 
@@ -507,29 +539,27 @@ Net: about 3,700 src lines (native capture, plan, sourcecap, handle budget, owne
 | Duty cycle of the walk | 2% of one core (interval at least 50 times the walk) | PRD-04 |
 | Wait when `room()` is too small | 100 ms | PRD-04 |
 | Snapshot settle | 1 s unchanged | PRD-04 |
-| Native share of the pipeline | `room()` minus a quarter of the largest `room()` seen | PRD-02 and PRD-04 together |
+| Native share of the pipeline | `room()` (3/4 of the soft guard, PRD-02) | PRD-02 |
 | Slice per pass | 64 MiB | PRD-04 |
-| Periodic database copy | every 60 minutes when changed, or one minute per 2 MiB of the set if longer | Owner (it costs upload and storage) |
+| Periodic database copy | every 60 minutes when changed, or one minute per 2 MiB of the set if longer; never skips the seal copy | Owner (it costs upload and storage) |
 | Snapshot retries | 1 | PRD-04 |
-| `native_missing` delay | 5 minutes after the entry starts | PRD-04 and PRD-10 |
-| Finish time guard | 180 s | PRD-02 (part of the seal bound, PRD-00 S8) |
+| `native_missing` delay | 5 minutes after the first model request is written | PRD-04 and PRD-10 |
+| Finish time guard | 180 s at `deadline`, `server_stop`, `signal`; none otherwise | Owner (PRD-02 passes it, PRD-00 S8) |
 | Seal copy of a database when the harness still runs | on | Owner |
 
-## Asks of PRD-00, PRD-01 and PRD-02 (after revision 2)
+## Asks of PRD-00, PRD-01 and PRD-02 (after revision 3)
 
-Closed by PRD-00 and PRD-01 revision 2: the native API, the S3 row shape with `warn_missing` and
-`{workspace}`, the seal order, the size budget, the path text, `from`, `fid`, `set`,
-`harness_exited`, END `source_changed` with no GAP, `unread_at_least`, the four notes, the `-shm` and
-WAL rule, reason 9 reserved. Still open, all small:
+Ruled. PRD-01 has the notes `native_missing` and `native_other_device` and lists PRD-04 as a writer
+of GAP 10 `cut_at_seal`. PRD-00 R3-3 rules that the seal's stop covers wire streams only, that
+native and snapshot calls stay admitted until `finish` returns, that the drain waits for wire bytes
+only, and that `cursors.json` keeps `mtime_ns` for snapshot paths. PRD-02 uses the names
+`native::start` and `NativeReader::finish`. Still open, one small item:
 
-1. **PRD-01:** add the note `native_missing` (`what`, `row`) to the `note` list, and PRD-04 beside
-   PRD-02 as a writer of GAP 10 `cut_at_seal`.
-2. **PRD-02:** seal step 1 ("every S1 call after this point is a no-op") must not cover the native
-   thread while `finish` runs (step 3), or the seal copy and the last reads are lost. Stop the proxy's
-   payload only.
-3. **PRD-02:** `cursors.json` keeps `mtime_ns` for snapshot paths (from the OPEN meta), so an unchanged
-   snapshot is not read again after a restart or a `continue`. PRD-02's sections 9.2 and 11 should use
-   the names `native::start` and `NativeReader::finish` (PRD-00 ruling).
+1. **PRD-00 and PRD-02:** the ruling row "PRD-02 and PRD-04" and PRD-02's interface row carry the
+   `guard: Option<Duration>` argument of `finish` (section 1), so the seal passes 180 s only for
+   `deadline`, `server_stop` and `signal` (PRD-00 S8 already states the rule), and the sealed
+   `status.json` carries `cut_files {files, bytes}` from `NativeFinish.cut_files` and `cut_bytes`.
+   PRD-02 and PRD-10 give `status.json` the `sealing: reading session files` state.
 
 ## Builder notes
 
@@ -561,10 +591,14 @@ Traps from the old code and the audit:
   `max(mtime, ctime)` (D57); a `continue` passes the run's start, not its own.
 - Never parse a session file, not even to find a newline. Raw bytes only.
 - Never take a database copy in `close_dead_entry`, and never add a row for a `.env` or key file.
+  The check that a row does not match a connector's `secret_files` is PRD-11's connector test, not
+  code in `src/native/`.
+- Mount tests: use `find <root> -xdev` to list what a same-device walk should see.
 
 How a watcher proves it in a real run: after any pad run, `goalcup-verify dump <entry> | jq -c
 'select(.k=="open" and (.skind=="native" or .skind=="snapshot")) | .meta.path'` gives the recorded
-paths. Compare with `find <root> -type f -newermt <run start>` filtered by the connector's rows: every
+paths. Compare with `find <root> -xdev -type f \( -newermt @<since> -o -newerct @<since> \)`, with
+`<since>` the run start in whole seconds, filtered by the connector's rows: every
 file must appear. For each path, the last END `seen` of its last generation equals the file's size at
 the seal, or a GAP names why. During the run, read `status.json` once a minute: `native_files` must
 never fall. Log the native thread's CPU (`top -H -p <pid>`); a value above 2% is a night-log line, not
@@ -572,7 +606,9 @@ a failure.
 
 ## Review answers
 
-Sources: CC = `prd-consistency.md` item; A = review A finding; B = review B item.
+History of revision 2. Where an answer here disagrees with the body or the "Alignment answers"
+section, those win (ask numbers here are revision 2's). Sources: CC = `prd-consistency.md` item;
+A = review A finding; B = review B item.
 
 | Item | What it asked | Answer and what changed |
 |---|---|---|
@@ -599,5 +635,37 @@ Sources: CC = `prd-consistency.md` item; A = review A finding; B = review B item
 | A 8 | Processes that outlive the harness | No change here (PRD-02). The seal copy still marks a database a leftover process writes (`snapshot_unstable`) |
 | A 12 | Watch `.env` files on the native thread | Rejected here. PRD-00 routes it to PRD-05 (owner question 12). The native thread must never record a `.env` file; section 9 and the builder notes say so |
 | A 16 | Cross-harness subagents write into the real home | No change here. A child harness's rows are just more rows (no row cap); PRD-11 decides whether to add them or name the case "wire only". Listed in Risks |
-| Own check | Room reserve needed the soft guard value, which S1 does not expose | Fixed without a seam change: the reserve is a quarter of the largest `room()` seen (section 5) |
 | Own check | Room at 0 made the loop spin | Fixed: wait 100 ms, then read again (section 1) |
+
+## Alignment answers
+
+Revision 3, from the fix lists of the alignment reviews (group 1 and group 2; no group 3 list). The
+ledger wins over every row here.
+
+| Fix | What was done |
+|---|---|
+| G2-22 | Applied. Section 8 says the seal's stop covers wire streams only, native and snapshot calls stay admitted until `finish` returns, and the drain waits for wire bytes only (PRD-00 R3-3). Old ask 2 is ruled and removed |
+| G2-28, L3-4 | Applied. Step 2 reads to the size seen in step 1's pass. Step 5: the 180 s guard applies only to `deadline`, `server_stop` and `signal`; on `harness_exit` and `seal_command` finish has no time guard and status shows `sealing: reading session files`. Defaults row changed to the owner. To make that buildable, `finish` takes `guard: Option<Duration>` (section 1); asked of PRD-00 and PRD-02 (ask 1), since PRD-00 S8 already states the rule |
+| G2-29, L2-09 | Applied. Section 5 reads at most `room()`, which is already 3/4 of the soft guard; the reserve, its test case and the "Own check" review row are gone. Defaults row owned by PRD-02 |
+| P04-4 | Applied. A file's stream opens when first taken; a file still unreadable at `finish` gets a GAP `source_changed` (PRD-01 GAP 5, not 9: 9 stays reserved) and END; new `native_tail.rs` case |
+| P04-5, L2-10 | Applied. Section 9 writes one `native_other_device` note per folder per entry; `native_walk.rs` case and builder note (`find -xdev`) added. PRD-01 already lists the note |
+| P04-6 | Applied. A `final` set is taken whole when any of its files passes the run-start rule; new `native_snapshot.rs` case |
+| P04-7 | Applied. Section 6 defines a set; a moved copy ends `source_changed` and the retry is a new `set`; both copies stay |
+| P04-8 | Applied. `NativeFinish` gains `cut_bytes`; PRD-02 writes `cut_files {files, bytes}` to sealed status (in ask 1) |
+| P04-9 | Applied. `warn_missing` defaults to `true` (PRD-11); the 5-minute clock starts at the first written model request; example marked abridged |
+| P04-10 | Applied. Boot step 5; seal step 2 is the stop and step 4 is native finish |
+| P04-11 | Applied. The Hermes point is dropped (PRD-11 already has the `manifest.json` row); the Codex point stays |
+| P04-12 | Applied. Section 6 step 4 names the seals where the harness can still run |
+| P04-13 | Applied. The `after` commands run before the `seal` line, so before `finish` |
+| P04-14 | Applied. `native_safety.rs` case uses PRD-11's Hermes rows; no exclusion list or harness name in `src/native/` |
+| P04-15 | Applied. The `secret_files` check is PRD-11's connector test (section 9, interfaces, builder notes); none in `src/native/` |
+| P04-16 | Applied. Row names unique per connector, refused at load by PRD-11; first match by absolute path |
+| P04-17 | Applied. Section 1 step 4: a walk still runs once the interval has passed |
+| P04-18 | Applied. A torn or changed snapshot is a new `snapshot` stream; snapshots carry no `gen` |
+| P04-19 | Applied. Acceptance 3 reads `goalcup-verify usage --json` (PRD-09) |
+| P04-20 | Applied. Acceptance 7: A1 logs periodic and seal sets per changed Codex database |
+| P04-21 | Applied. Watcher proof uses `find -xdev` with `-newermt` or `-newerct` at the run start in whole seconds |
+| P04-22 | Applied. Net is about 3,400 src lines (the listed parts sum to 3,397) |
+| P04-23 | Applied. 180 s is about 9 GB at PRD-05's 50 MB/s target, about 5 GB at 30 MB/s |
+| P04-24, L2-18 | Applied. The periodic interval is a cadence for upload and storage cost, not a cap; it never skips the seal copy and restarts at each boot |
+| X2-11 | Partly. Moving the review sections into a new `REVIEW-HISTORY.md` is not done here: this pass may edit only this file, and many writers of one new file would race. Instead "Review answers" now says it is history and that the body and these answers win. Every ruling still binding is in the body. The move may run once, after every PRD's alignment pass, by one agent |

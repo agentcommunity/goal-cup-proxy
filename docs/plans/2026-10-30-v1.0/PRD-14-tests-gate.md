@@ -30,6 +30,8 @@ Point 3 also directly: the gate stops tests that pin caps, latches or failure bu
   appears in recorder source, so no per-harness or per-gateway patch can slip in.
 - Builds, tests and the gate run in Vercel Sandbox build boxes as `ubuntu` (ledger B1, PRD-00 "Where
   the build runs"). The conductor never compiles. The gate keeps its root refusal.
+- Every PRD-14 change, the first gate change included, is a merge request on its own `v1.0/prd-14-*`
+  branch, read by reviewers A and B before the integrator merges it (ledger B2).
 - No speed number fails a gate (PRD-00 rules of the shape). Speed is measured and logged.
 - Release: tag `v1.0.0` after the owner's merge (PRD-00 question 5), from the commit the pad verified.
 - Early quick real tests during the build; mass harness testing at the end (BRIEF3, 30 Oct early). The
@@ -74,7 +76,7 @@ every automated check passed while 37.5% of calls went unrecorded.
 | Layer | Proves | Runs where | Cost |
 |---|---|---|---|
 | **Real runs (PRD-12 pad)** | All seven points on real harnesses, keys and the staging Worker: wire against the harness's own log, every subagent, no secret, server copy whole, counts the participant saw | Pad boxes; the owner's Mac after the build | Keys, minutes, money |
-| **`gate full`** | One short end-to-end run of the real binary through every part, the real Worker under `wrangler dev`, the shipped binary built and checked for hook text, the masking bench reported | Build box at phase 2 and 3 exits, before the owner's merge, before the tag | About 15 minutes |
+| **`gate full`** | One short end-to-end run of the real binary through every part, the real Worker under `wrangler dev`, the shipped binary built and checked for hook text | Build box at phase 2 and 3 exits, before the owner's merge, before the tag | About 15 minutes |
 | **`gate fast`** | Format, masking, never-stop, upload contract, connectors, participant words, code rules | Build box before every merge into integration; CI on every push | Under 5 minutes |
 
 Rule: an automated test is written only where a real run cannot show the failure every time. A real run
@@ -90,12 +92,13 @@ prefix that asserts the same promise.
 | Point | Real-run proof | Guard tests (fast tier unless marked) | Owner |
 |---|---|---|---|
 | 1 Every model call | PRD-12 C1; PRD-03 proofs | `proxy_connect.rs` (2,000 connections, no refusal), `proxy_ws.rs` (Codex deflate fixture), `proxy_http1.rs`, `lessons_*.rs` (PRD-17) | PRD-03, PRD-17 |
-| 2 Every subagent | PRD-12 C2 | `native_walk.rs` (20,000 files, no cap), `native_capture.rs`, `native_resume.rs`, `pipeline_many_streams.rs` (20,000 streams) | PRD-04, PRD-02 |
+| 2 Every subagent | PRD-12 C2 | `native_walk.rs` (20,000 files, no cap), `native_tail.rs` (live EOF, truncation, a vanished file gives a GAP), `native_finish.rs` (finish reads everything, no byte cap), `native_resume.rs`, `pipeline_many_streams.rs` (20,000 streams) | PRD-04, PRD-02 |
 | 3 Never block | PRD-02 R1 kill test (plain `kill -9`, no hooks) | `pipeline_guard.rs` (every S1 call returns while the writer is held; every drop is a GAP), `pipeline_stall.rs` (real binary, 90 s stall, every client exchange completes), `pipeline_no_latch.rs` (1,000 guard episodes, recording resumes each time), `watchdog_restart.rs` (`kill -9`, same port, connection served), `watchdog_null.rs` (crash loop, connections answered) | PRD-02 |
 | 4 No secrets | PRD-12 C3 | `mask_stream.rs` (every split point), `mask_rules.rs` (`url_password`, left guard), `secrets_scan.rs` | PRD-05, PRD-08 |
 | 5 Upload everything | PRD-12 C4 | `upload_chunks.rs` (concatenated chunks equal the parts), `server_compare.rs`, Worker `test/integration.test.ts`; full: `upload_worker.rs` | PRD-06, PRD-08, PRD-07 |
-| 6 Tell plainly | PRD-12 C6 | `check_invariants.rs` invariant 7 (COUNT equals a recount), `cli_finish.rs` ("Nothing was lost" only with zero gaps and zero off time) | PRD-08, PRD-10 |
+| 6 Tell plainly | PRD-12 C6 | `pipeline_guard.rs` (COUNT equals a recount of what was written), `check_invariants.rs` invariant 7 (the verifier's recount), `cli_finish.rs` ("Nothing was lost" only with zero gaps and zero off time), `upload_beat.rs` (`failed` while recording is off) | PRD-02, PRD-08, PRD-10, PRD-06 |
 | 7 Real harnesses | PRD-12 table, tiers | `connector_builtin.rs`, `connector_launch.rs`, `rule_code.rs` (section 6), `scripts/test_install.py` | PRD-11, PRD-14 |
+| Usage stats (ledger S2) | PRD-12 C5 | `usage_run1.rs`, `usage_join.rs` | PRD-09 |
 | Format (base of 1, 5, 6) | PRD-01 acceptance on the pad | `golden.rs`, `recovery.rs`, `check_invariants.rs` | PRD-01, PRD-08 |
 | All together | PRD-00 done items 1 and 2 | full: `e2e_run.rs` (section 7) | PRD-14 |
 
@@ -107,22 +110,23 @@ copies it). Numbers come from each PRD where it states one.
 
 | PRD | Test files (from its Acceptance) | Lines (est.) |
 |---|---|---:|
-| PRD-01 format | `golden`, `roundtrip`, `recovery` | 800 (estimate here) |
-| PRD-02 core | 12 `pipeline_*` and `watchdog_*` | 1,500 (PRD-02) |
+| PRD-01 format | `zstd_close`, `golden`, `roundtrip`, `recovery` | 800 (estimate here) |
+| PRD-02 core | 14 `pipeline_*` and `watchdog_*` | 1,500 (PRD-02) |
 | PRD-03 proxy | 7 `proxy_*` plus fixtures | 2,000 (PRD-03) |
 | PRD-04 native | `native_*` | 1,000 (PRD-04 expects about 800) |
-| PRD-05 masking | 6 `mask_*` plus the copied corpus (data) | 5,000 (PRD-05) |
+| PRD-05 masking | 6 `mask_*` plus the copied corpus (data) | 2,000 (PRD-05) |
 | PRD-06 upload | `upload_*` plus `upload_worker` (full) | 1,000 (estimate here) |
 | PRD-08 verifier | `check_invariants`, `check_named`, `check_conn_bytes`, `check_run1_shape`, `server_compare`, `secrets_scan` (no `judge_view`, deferred) | 1,100 (PRD-08) |
 | PRD-09 usage | 5 `usage_*` | 600 (PRD-09) |
 | PRD-10 CLI | `cli_*` | 1,200 (PRD-10) |
 | PRD-11 connectors | 4 `connector_*` | 400 (estimate here) |
-| PRD-17 lessons | `lessons_*` | 1,500 (estimate here) |
-| PRD-14 | `tests/common/` (1,470), `rule_code.rs` (220), `e2e_run.rs` (150) | 1,850 |
-| **Rust total** | | **about 18,000**, against 142,447 today (126,112 in `tests/` plus 16,335 inline) |
+| PRD-17 lessons | `lessons_*` | 1,300 (PRD-17) |
+| PRD-14 | `tests/common/` (1,480), `rule_code.rs` (220), `e2e_run.rs` (150) | 1,850 |
+| **Rust total** | | **about 15,000**, against 142,413 today (PRD-00 and PRD-13 measure) |
 
-A builder who goes over its line says why in the night log (PRD-00 size rule). Masking is the largest
-share on purpose: point 4 is the one point a real run can only sample.
+A builder who goes over its line says why in the night log (PRD-00 size rule). Masking and the proxy are
+the largest shares: point 4 is the one point a real run can only sample, and the masking corpus is copied
+as data, not as test code (PRD-05).
 
 ### 4. Test rules (flakes do not come back)
 
@@ -158,10 +162,14 @@ More rules:
   makes long-window compression slow. PRD-16's phase 0 workspace edit sets opt-level 3 for `zstd-sys`,
   `sha2`, `brotli-decompressor` and the deflate backend in dev, as already done for regex
   (`Cargo.toml:40-54`), and removes `[profile.dev.package.goalcup-daemon]` (`:61`).
+- **Linux-only and macOS-only cases.** A test that reads `/proc` or calls a Linux-only API is
+  `#[cfg(target_os = "linux")]`; a macOS-only case is gated the same way with `"macos"`. So the build
+  (Linux only, ledger T9) and G5's macOS targets each run exactly the cases that apply to them.
 - **Hooks reach any binary built with dev-dependencies.** `cargo nextest run`, `cargo clippy --all-targets`
-  and `cargo nextest run --release` all build `goalcup` with `test-hooks` on (the trap named at
-  `crates/goalcup-daemon/Cargo.toml:17-19`). So in `gate full` the release-mode test step runs before the
-  release build, and the last step checks the shipped binary has no hook text (section 8).
+  and any `cargo nextest run --release` (such as a by-hand run of `by_hand_mask_bench`) build `goalcup`
+  with `test-hooks` on (the trap named at `crates/goalcup-daemon/Cargo.toml:17-19`). So `gate full` runs no
+  release-mode test step; it builds the shipped binary with `cargo build --release` (no dev-dependencies),
+  and its last step checks that binary has no hook text (section 8).
 
 ### 5. Test support (`crates/goalcup/tests/common/`) and the `test-hooks` feature
 
@@ -177,8 +185,8 @@ removed at phase 3.
 | `home.rs` | temp homes, real-home guard | 120 | `real_home_guard.rs` (171) |
 | `pki.rs` | a test CA and leaf certificates | 120 | `m2_common` `TestPki` |
 | `upstream.rs` | fake upstream: TLS with chosen ALPN, HTTP/1.1 (chunked, SSE, codings), HTTP/2 (`h2` crate server), WebSocket with permessage-deflate; scripted answers, including "hold the handshake or the answer for N seconds" and "close after N bytes"; records what it received | 700 | `m2_tls_support` (525), `m2_http_support` (486), `m2_ws_support` (783); HTTP/2 is new |
-| `worker.rs` | fake Worker: position, chunk PUT, heartbeat, device and open routes from `docs/UPLOAD-API.md` (S5); keeps chunk bodies; a script of injected answers (status, drop the answer after commit, `Retry-After`, delay) | 250 | new; never copies Worker rules (no continuity check) |
-| `recorder.rs` | helpers over `Recorder::for_tests(room)` (S1): read the collected `Calls`, change `room()` during a test | 40 | none; S1 provides the test constructor |
+| `worker.rs` | fake Worker: position, chunk PUT, heartbeat, device and open routes from `docs/UPLOAD-API.md` (S5); keeps chunk bodies; a chunk answer is `{offset, next_seq, head, received_at, sealed}` and a heartbeat with a bad `counts` is answered `200` with the `counts` dropped, never `400` (PRD-07 section 4); a script of injected answers (status, drop the answer after commit, `Retry-After`, delay) | 250 | new; never copies Worker rules (no continuity check) |
+| `recorder.rs` | helpers over `Recorder::for_tests(room)` (S1): read the collected `Calls`, change `room()` during a test; `real(dir)` starts the pipeline with masking and the writer in a temp entry folder over `Recorder::real_for_tests(dir, masker)` (PRD-02) and returns the folder (PRD-17 H10 and K15) | 50 | none; S1 provides the test constructors |
 | `records.rs` | build a part folder from a list of records (for CLI and upload tests) | 100 | over `goalcup_format::PartWriter` |
 
 Every dev-dependency these need (`socket2`, `h2`, `tempfile`, `x509-parser`, the TLS crates the proxy
@@ -218,7 +226,7 @@ removed. There is no silent-drop hook (cut, PRD-00). The release smoke (section 
 
 Copied and cut from `crates/goalcup-protocol/tests/it/no_family_literals.rs` (378). Four rules:
 
-1. **One system.** No string literal in `crates/goalcup/src/**` contains a connector id (the file names
+1. **One system.** No string literal in `crates/goalcup/src/**` or `crates/goalcup-format/src/**` contains a connector id (the file names
    of `connectors/*.toml`, leaving out `model-hosts.toml` and `tiers.toml`, as whole tokens) or a host
    name from `connectors/model-hosts.toml` (providers, gateways such as `ai-gateway.vercel.sh` and
    `openrouter.ai`, vendor backends). Hosts and harnesses are data. Provider key shapes in `src/mask/`
@@ -230,13 +238,18 @@ Copied and cut from `crates/goalcup-protocol/tests/it/no_family_literals.rs` (37
    `tests/common/ports.rs`.
 3. **No return.** PRD-13's no-return patterns (section 6 of PRD-13, as data in this file) match nothing
    under `crates/goalcup*/src/`: the daemon and its IPC, our own caps, disk handling, signing, pins and
-   deny lists, termination proof, research decoders, `pause_at(`, `_FOR_TEST`. The `test-hooks` feature
-   is not a pattern (PRD-00 ruling on consistency item 86). Provenance comments `v0.7.0:` are skipped.
-   PRD-13 changes the list with a night-log note.
+   deny lists, termination proof, research decoders, `pause_at(`, `_FOR_TEST`. The two feature patterns
+   are scanned over `crates/goalcup*/` (src, tests and `Cargo.toml`): `test-support` anywhere, and a
+   `test-hooks` feature declared in any `Cargo.toml` other than `crates/goalcup/Cargo.toml`. The
+   `test-hooks` feature in `crates/goalcup` itself is allowed (PRD-00 ruling on consistency item 86).
+   Provenance comments `v0.7.0:` are skipped. PRD-13 changes the list with a night-log note.
+   **Worker half:** in `server/worker/src/**` and `server/worker/wrangler.toml` (not `sql/`, `test/`,
+   `README.md` or `scripts/check-sql.sh`), `receipt`, `agent_paused`, `RECEIPT_SIGNING_KEY` and
+   `RUN_MAX_COMPRESSED_BYTES` match nothing, and `server/worker/src/sign.ts` does not exist. This half
+   joins the gate in the PRD-14 edit right after PRD-07's cut merges (PRD-07 writes a night-log note).
 4. **After the cut.** Once `crates/goalcup-daemon/` is gone, PRD-13's reference guard (its `git grep`
-   for the old crate names, with its exclusions) prints nothing, and rule 3's patterns match nothing
-   under `server/worker/src/` (not `server/worker/sql/`, the database mirror). Before the cut this rule
-   checks instead that the five old crates are in the workspace `exclude` list, so it is never a skip.
+   for the old crate names, with its exclusions) prints nothing. Before the cut this rule checks instead
+   that the five old crates are in the workspace `exclude` list, so it is never a skip.
 
 ### 7. The one end-to-end test (`crates/goalcup/tests/e2e_run.rs`, full tier, about 150 lines)
 
@@ -252,7 +265,8 @@ N12): it proves the parts join; each part's depth is in its own tests and on the
 - One session file that grows while the run goes on.
 - One planted secret (an `sk-` shaped value) sent split across two writes.
 - One `kill -9` of the recorder; `GOALCUP_TEST_ROTATE_MB=1` so the entry has two parts.
-- `goalcup seal`, upload to the fake Worker, then `goalcup-verify check --json --known`.
+- `goalcup seal`, upload to the fake Worker, then
+  `goalcup-verify check --json --known <file with the planted value>`.
 
 Pass, each assertion naming its owning PRD in its failure text so a failure points somewhere: every
 response the test received is byte for byte what the upstream sent (PRD-03); every request and WebSocket
@@ -279,8 +293,8 @@ prerequisite and print one line that names all missing ones, then fail before an
 `zstd`, `python3`, `git`, `npm` with `server/worker/node_modules`. No fallback to `cargo test`, no
 skipped step: a skip is a hidden pass (the same rule as PRD-12 C4). Then take the build lock
 `target/.build-lock` (a `mkdir` lock with the holder's pid; a dead holder's lock is taken over). It
-matters only where two cargo jobs share one machine: a build box used by the gate and PRD-12's rebuild
-step, or the fallback of PRD-16 S8 (builds one at a time on the conductor as a non-root user).
+matters only where two cargo jobs share one build box: the gate and PRD-12's rebuild step. Nothing ever
+builds on the conductor, even while sandboxes are down (ledger B1, PRD-16 S8).
 
 | Step | fast | full | Why |
 |---|:-:|:-:|---|
@@ -289,10 +303,9 @@ step, or the fallback of PRD-16 S8 (builds one at a time on the conductor as a n
 | `cargo nextest run --locked --workspace` | yes | yes | every guard in section 2 |
 | `cargo test --locked --workspace --doc` | yes | yes | nextest skips doctests; one line |
 | `npm --prefix server/worker test` | yes | yes | the Worker changes in the same build (PRD-07); a wire change without it is run 1's risk again |
-| `python3 -m unittest` on the kept script tests, and `discover -s scripts/pad` | yes | yes | `test_gate.py`, `test_install.py`, `test_release.py`, `test_codeowners.py`, `test_third_party_licenses.py`, `test_fetch_run.py` (PRD-07), `scripts/pad/test_pad.py` (PRD-12). A named list, not `discover -s scripts`: until the cut, 13 old script tests name old crates or `cargo` and would fail with the old crates out of the workspace. A new script test is added to the list |
-| `cargo nextest run --locked --workspace --run-ignored only -E 'not test(/^(by_hand\|release)_/)'` | | yes | `e2e_run`, `upload_worker` (real Worker), other slow cases |
-| `cargo nextest run --release --locked -p goalcup --run-ignored only -E 'test(/^release_/)'` | | yes | `release_mask_bench` prints MB/s and start-up time for the night log; it has no floor and fails only if it crashes (PRD-05, PRD-00 "no speed number fails a gate") |
-| `cargo build --release --locked -p goalcup -p goalcup-verify` | | yes | the binaries the pad copies; after the release-mode test step, so the shipped build is the last one in `target/release` |
+| `python3 -m unittest` on the kept script tests, and `discover -s scripts/pad` | yes | yes | `test_gate.py`, `test_install.py`, `test_release.py`, `test_codeowners.py`, `test_third_party_licenses.py`, `test_fetch_run.py` (PRD-07), `scripts/pad/test_pad.py` (PRD-12). A named list, not `discover -s scripts`: until the cut, 13 old script tests name old crates or `cargo` and would fail with the old crates out of the workspace. The list holds only script tests that exist on integration: `discover -s scripts/pad` joins it in the PRD-14 edit right after PRD-12's first `test_pad.py` merge (PRD-12 writes a night-log note), and a new script test is added the same way |
+| `cargo nextest run --locked --workspace --run-ignored only -E 'not test(/^by_hand_/)'` | | yes | `e2e_run`, `upload_worker` (real Worker), other slow cases |
+| `cargo build --release --locked -p goalcup -p goalcup-verify` | | yes | the binaries the pad copies, built without dev-dependencies |
 | `grep -ac GOALCUP_TEST_ target/release/goalcup` is 0 | | yes | section 4 "Hooks reach any binary built with dev-dependencies" |
 
 - `--workspace` holds only the new crates: PRD-16's phase 0 workspace edit moves the five old crates to
@@ -300,15 +313,17 @@ step, or the fallback of PRD-16 S8 (builds one at a time on the conductor as a n
 - The version check and the link check are not steps. `server/worker/scripts/check-sql.sh` is not a step
   either: no schema change in this build (ledger S3) and `stopped-runs.sql` is after the merge (PRD-07).
 - Every step prints its time; the last line stays `gate <tier>: PASS in <N>s` or `gate <tier>: FAIL`.
-- Test names: `by_hand_*` are `#[ignore]` and never in a tier (PRD-02 `by_hand_load`); `release_*` are
-  `#[ignore]` and run only in the release-mode step; every other `#[ignore]` test is the full tier. No
-  binary-name filter, so the probe and its fallback (`gate.sh:69-83`) go.
+- Test names: `by_hand_*` are `#[ignore]` and never in a tier (PRD-02 `by_hand_load`, PRD-05
+  `by_hand_mask_bench`, run once by hand in a release build, report only); every other `#[ignore]` test is
+  the full tier. The gate's steps use no binary-name filter, so the probe and its fallback
+  (`gate.sh:69-83`) go.
 - `.config/nextest.toml` (about 25 lines): `fail-fast = false`, `retries = 0`, slow period 30 s with
   terminate after 6, JUnit on; group `heavy` (one at a time) for tests that kill processes, change limits
-  or open thousands of descriptors: `binary(/^(watchdog_|e2e_)/) | binary(pipeline_restart) |
-  binary(pipeline_stall) | binary(pipeline_many_streams) | binary(proxy_connect) | binary(proxy_restart) |
-  binary(native_walk)`; e2e tests may run 600 s. A builder who adds such a test adds its binary here (a
-  night-log note).
+  or open thousands of descriptors, as one regex:
+  `binary(/^(watchdog_.*|e2e_.*|lessons_launch|pipeline_restart|pipeline_stall|pipeline_many_streams|proxy_connect|proxy_restart|native_walk)$/)`;
+  e2e tests may run 600 s. In phase 0 the builder runs `cargo nextest list` on the scaffold; if nextest
+  refuses a regex that matches nothing, the group starts empty and PRD-14 adds each name in the merge that
+  brings its binary. A builder who adds such a test adds its binary here (a night-log note).
 
 **Target times** (an 8 vCPU build box, warm): `fast` under 3 minutes, alarm at 5; `full` under 15
 minutes, alarm at 20. CI's 4-CPU runner may take up to twice that. Past an alarm, the night log names the
@@ -345,18 +360,19 @@ shipped reader on each target; `grep -ac GOALCUP_TEST_ bin/goalcup` is 0. The `d
 checks go (`smoke-release.sh:39-54`). **`scripts/third-party-licenses.py`**: `SHIPPED = {"goalcup",
 "goalcup-verify"}` (`:24`).
 
-**`packaging/install.sh`** (PRD-10 interface): installs `goalcup` and `goalcup-verify`; on upgrade it deletes
-a `goalcup-daemon` left by 0.7 in the prefix and the 0.7 `share/goalcup/connectors/` folder; the run guard
+**`packaging/install.sh`** (PRD-10 interface): installs `goalcup` and `goalcup-verify`; the run guard
 asks `goalcup status --json` and blocks when `status.mode` is `recording`, `losing`, `writer_slow` or
 `null` (PRD-02 S4), and an answer it cannot read is `INSTALL_UNSURE` and goes on (no reader for 0.7's
-signed status: no backward compatibility); one PATH line that both exports and appends to the right profile
-file (H8). About 300 lines.
+signed status, and no 0.7 clean-up: no backward compatibility, ledger L7); it prints one line that, when
+the participant runs it, exports PATH and appends itself to the right profile file (audit H, item 8).
+`install.sh` writes no profile itself. About 300 lines.
 
 **`scripts/release.sh`**: the version check call goes (`:101-104`); the next-step text says "gate full, then
 the pad's release check" instead of `linux-check.sh`. `tag` first runs `scripts/pad/table --release-check
 <commit>` (PRD-12 section 9): exit 0 only when the core rows and the Codex kill row are PASS with a trusted
 pad, built from a commit with no difference to the tag commit under `crates/`, `server/worker/src/`,
-`connectors/` and `Cargo.lock`, leaving out `connectors/tiers.toml`. So the tag is the binary the pad
+`connectors/`, `Cargo.toml`, `Cargo.lock` and `rust-toolchain.toml`, leaving out `connectors/tiers.toml`
+(the same path list as PRD-12 section 9; a profile or toolchain change makes a different binary). So the tag is the binary the pad
 verified, with only the tier text newer.
 
 **Release order** (PRD-00 question 5, PRD-16 section 14): owner merges to main; `gate full` on main in a
@@ -412,8 +428,8 @@ Must not touch: any test file another PRD names (`pipeline_*`, `watchdog_*`, `pr
 | PRD-02 | `test-hooks` feature in its scaffold with every dev-dependency `tests/common/` needs; hooks in section 5's registry (incl. `GOALCUP_TEST_ROTATE_MB`); `Recorder::for_tests(room)` (S1); `pipeline_guard.rs` asserts "returns while the writer is held", and the 99.9th percentile figure is reported by `by_hand_load` | Both |
 | PRD-03 | `common::upstream` (TLS, HTTP/1.1, HTTP/2, WebSocket, held handshakes); `GOALCUP_TEST_UPSTREAM`, `GOALCUP_TEST_EXTRA_ROOTS`; `proxy_connect.rs` calls `fds::raise`; `panic = "unwind"` stays (no profile sets `abort`) | Both |
 | PRD-04 | `Recorder::for_tests(room)` and `common::recorder`; `native_walk.rs` in the `heavy` group | Used there |
-| PRD-05 | `mask_bench` becomes `release_mask_bench`, run in the full tier's release step, report only | Used there |
-| PRD-06 | `common::worker` (S5); owns `upload_worker.rs` (full tier, real Worker, `fetch-run.sh --local`, equal bytes) | Both |
+| PRD-05 | `mask_bench.rs` holds one `#[ignore]` test, `by_hand_mask_bench`, in no gate tier; run once by hand in a release build, report only | Used there |
+| PRD-06 | `common::worker` (S5); `upload_worker.rs` per PRD-06 Amendments (full tier: real client against `wrangler dev`, `fetch-run.sh --local`, equal bytes) | Both |
 | PRD-07 | Gate runs `npm test` (fast and full) and `test_fetch_run.py` (fast). `check-sql.sh` is not a gate step in this build | Used here |
 | PRD-08, PRD-09 | `cargo nextest` covers `crates/goalcup-verify` in the fast tier; the six PRD-08 files of section 3 and PRD-09's `usage_*`; their own `tests/common/` record builders stay in that crate; that crate has no `test-hooks` | Used here |
 | PRD-10 | `install.sh` reads `status --json` `status.mode`; `cli_*.rs` use `common::worker` and `common::home`; `start --connector --hosts` (S16) loads `e2e_run`'s fake connector | Both |
@@ -422,7 +438,7 @@ Must not touch: any test file another PRD names (`pipeline_*`, `watchdog_*`, `pr
 | PRD-13 | Deletes the old crates, their tests and the cut scripts. Its reference and no-return guards live in `rule_code.rs` rules 3 and 4; it does not edit `gate.sh` | Done there |
 | PRD-15 | README "The gate" (two tiers, prerequisites, measured times, the guard list of section 2 as the promise list), AGENTS.md lines 68-77 and 105, `docs/OPERATING.md` "CI" (line 530), `scripts/README.md`; runs `check-links.py` on its final docs before PRD-14 deletes it | Written there |
 | PRD-16 | Workspace `Cargo.toml` (old crates in `exclude`, profile changes, the version comment); `gate fast` at every merge in a build box as `ubuntu`; G1, G3, G4 in its schedule; G2, G5, G6, G7 are release steps after the merge | Used there |
-| PRD-17 | `lessons_*.rs` run in the fast tier; deleting old crates waits for them | Used here |
+| PRD-17 | `lessons_*.rs` run in the fast tier, `lessons_launch` in the `heavy` group; `common::recorder::real(dir)` for H10 and K15; deleting old crates waits for them | Both |
 
 ## What is cut
 
@@ -449,24 +465,24 @@ Script tests that stay: `test_gate.py`, `test_install.py`, `test_release.py`, `t
 
 | # | Proof | When | Pass |
 |---|---|---|---|
-| G1 | **Gate time, measured.** `gate fast` and `gate full` in a build box at the end of phases 0, 2 and 3, with the step times | Build | Fast under 5 minutes warm, full under 20; numbers, the `release_mask_bench` report and the three slowest tests (from JUnit) in the night log |
+| G1 | **Gate time, measured.** `gate fast` and `gate full` in a build box at the end of phases 0, 2 and 3, with the step times | Build | Step times and the three slowest tests (from JUnit) in the night log. Past an alarm (5 or 20 minutes) the slowest step and test are named and PRD-16 decides. No pass or fail on time |
 | G3 | **No flake.** Every `gate fast` run in a build box and every CI `check` on integration during the build | Build, read at phase 3 | No red run that a rerun with no code change turned green. Any such run is named in the night log with its JUnit output and the test is fixed; never retried away |
 | G4 | **CI is the gate.** The push of the phase 3 commit to `v1.0/integration` | Build | `check` green on the 4-CPU runner; its time in the night log |
-| G2 | **The guards catch the failures that matter.** Four one-line sabotages on a scratch branch, one at a time: the writer skips one GAP record; COUNT counts a record at offer instead of at write; the `url_password` rule is removed; the proxy refuses the 1,001st connection | After merge (PRD-00) | `gate fast` FAILs each time on a guard named in advance (`check_invariants`/`pipeline_guard`, `check_invariants` inv 7, `mask_rules`, `proxy_connect`). Branch deleted after. A sabotage the gate misses is a missing guard: a note to the owning PRD |
+| G2 | **The guards catch the failures that matter.** Four one-line sabotages on a scratch branch, one at a time: the writer skips one GAP record; COUNT counts a record at offer instead of at write; the `url_password` rule is removed; the proxy refuses the 1,001st connection | After merge (PRD-00) | `gate fast` FAILs each time on a guard named in advance (`pipeline_guard` for the GAP sabotage and the COUNT sabotage, `mask_rules`, `proxy_connect`). Branch deleted after. A sabotage the gate misses is a missing guard: a note to the owning PRD |
 | G5 | **Every target runs the guards.** `release.yml` on the release commit | Owner's release (PRD-00) | Four green builds: Rust guards pass on macOS arm64, macOS x86_64, Linux x86_64 and Linux arm64; smoke and `install.sh` pass; `GOALCUP_TEST_` absent from every shipped `goalcup` |
-| G6 | **The tag is what the pad verified.** `scripts/release.sh tag 1.0.0` on a commit that differs from the pad's core rows under `crates/` | Owner's release; also by a watcher on a scratch commit at the end of the build (PRD-16 N5) | Refused with the differing paths named; on the verified commit it tags (a differing `connectors/tiers.toml` alone does not refuse) |
-| G7 | **Install from the release.** `curl .../install.sh \| sh` on Linux and on the owner's Mac, over a 0.7 install | Owner's release | Two binaries installed, `goalcup-daemon` and the old connectors folder removed, one PATH line printed, `goalcup --version` prints 1.0.0 |
+| G6 | **The tag is what the pad verified.** In the build, a watcher runs `scripts/pad/table --release-check <N1 commit>` and `--release-check <a scratch commit that changes one line under crates/>`. Nothing is tagged during the build. At the owner's release, `release.sh tag 1.0.0` runs the same check first | Build, at the end (PRD-16 N5); owner's release | The N1 commit exits 0; the scratch commit exits 1 with the differing paths named (a differing `connectors/tiers.toml` alone does not refuse). `test_release.py` proves `tag` stops on a failed check |
+| G7 | **Install from the release.** `curl .../install.sh \| sh` on Linux and on the owner's Mac | Owner's release | Two binaries installed, one PATH line printed, `goalcup --version` prints 1.0.0 |
 
 ### Automated tests that guard them
 
 - `scripts/test_gate.py` (about 110 lines): fast runs fmt, clippy, nextest, doctests, Worker tests and the
-  named script tests in that order and nothing from full; full adds its five steps, the release-mode test
-  step before the release build and the hook grep last; root is refused unless `GOALCUP_GATE_ALLOW_ROOT=1`;
+  named script tests in that order and nothing from full; full adds its three steps (the ignored tests, the
+  release build, the hook grep last) and no release-mode test step; root is refused unless `GOALCUP_GATE_ALLOW_ROOT=1`;
   missing prerequisites are all named on one line and no step runs; the last line format; a held build
   lock waits and a dead holder's lock is taken.
-- `scripts/test_install.py`: two binaries; a 0.7 `goalcup-daemon` and connectors folder are removed on
-  upgrade; each `status.mode` value blocks or not as section 9 says; unreadable output gives
-  `INSTALL_UNSURE`; one PATH line. Existing rollback and checksum cases kept.
+- `scripts/test_install.py`: two binaries; each `status.mode` value blocks or not as section 9 says;
+  unreadable output gives `INSTALL_UNSURE`; one PATH line printed and no profile file written. Existing
+  rollback and checksum cases kept.
 - `scripts/test_release.py`: `tag` stops when the release check fails and says why.
 - `crates/goalcup/tests/rule_code.rs` (section 6) and `e2e_run.rs` (section 7).
 
@@ -481,14 +497,14 @@ Script tests that stay: `test_gate.py`, `test_install.py`, `test_release.py`, `t
 | `e2e_run.rs` depends on every PRD | It cannot pass until phase 2 | Full tier only; phase 1 merges need only fast. Each assertion names its owning PRD |
 | `rule_code.rs` false hits | A host name in an error message; a no-return pattern in a word | Only string literals for rule 1; `ALLOWED` with reasons; PRD-13 narrows a pattern with a night-log note |
 | Rule 4 before the cut | It cannot check the reference guard while old crates are on disk | It checks the `exclude` list instead, so it never passes by skipping; the cut turns the real check on |
-| A hook binary ships | `cargo nextest run --release` leaves a hooked `goalcup` in `target/release` | Release build runs after it; `gate full`'s last step and the release smoke grep the binary |
+| A hook binary ships | A by-hand `cargo nextest run --release` leaves a hooked `goalcup` in `target/release` | `gate full` has no release-mode test step and builds the shipped binary without dev-dependencies; its last step and the release smoke grep the binary |
 | Named script-test list goes stale | A new `scripts/test_*.py` is never run | The list is one line in `gate.sh`; `test_gate.py` reads it; a new script test adds itself there (night-log note) |
 | Cutting the link check | Broken links in the participant guide (point 6) | PRD-15 runs it once on the final docs before the delete; cheap to restore later |
 | Cutting the version check | A second version string slips into a doc | The release workflow checks tag and `Cargo.toml`; the smoke checks every binary's version |
 | Build box lacks tools | nextest, zstd or `node_modules` missing | The gate names all missing tools on its first line; PRD-16's build snapshot holds them (phase 0 step 6) |
 | macOS only at release | No Mac in the build; G5 waits for the owner's release | A macOS-only guard failure shows at G5 before publish (publish needs a green build); the owner's pad run on a Mac (PRD-12 P9) |
-| Load numbers only by hand | Throughput regressions are not caught by the gate | PRD-02 R8 and PRD-05 A5 reported on the pad and in G1; never a pass line |
-| `binary(/regex/)` filters in nextest groups | Unverified that a regex matching no binary is accepted (the exact form was refused, `gate.sh:73-74`) | The builder checks with `cargo nextest list` in phase 0 |
+| Load numbers only by hand | Throughput regressions are not caught by the gate | PRD-02 R8 and PRD-05 A5 (`by_hand_load`, `by_hand_mask_bench`) reported in the night log; never a pass line |
+| `binary(/regex/)` filter in the `heavy` group | Unverified that a regex matching no binary is accepted (the exact form was refused, `gate.sh:73-74`) | One regex (section 8); the builder checks with `cargo nextest list` in phase 0; if refused, the group starts empty and each name is added in the merge that brings its binary |
 | No test reproduces run 1's exact load | The suite passed while run 1 lost 37.5% | `pipeline_stall.rs` replays its shape (20 clients, 1.5 MB bodies, a WebSocket, a stalled writer); the pad's `full` rows and A1 are the real proof |
 
 ## Overridable defaults
@@ -500,7 +516,7 @@ Script tests that stay: `test_gate.py`, `test_install.py`, `test_release.py`, `t
 | Worker tests | in fast | PRD-16 after G1 |
 | CI | runs `gate fast` on PRs into main, pushes to main and integration | Owner (the old rule was "CI stays lean", `ci.yml:5`) |
 | Release workflow | Rust guards on all four targets before the build; first run at the owner's release | Owner (may start it by hand on integration earlier for an early macOS signal) |
-| Test budget | about 18,000 Rust test lines | PRD-16 |
+| Test budget | about 15,000 Rust test lines | PRD-16 |
 | nextest | required, no `cargo test` fallback, no retries | PRD-14 |
 | Link, version and SQL-mirror checks | out of the gate | Owner |
 | Release check on tag | core set PASS on a commit with no code difference, `tiers.toml` left out | Owner |
@@ -510,12 +526,20 @@ Script tests that stay: `test_gate.py`, `test_install.py`, `test_release.py`, `t
 
 Order of work:
 
-1. **H+0, by the integrator (PRD-00 phase 0 step 2), from this section's text.** `gate.sh`: drop the
-   version step, the binary probe and the fallback, add the prerequisite check and the build lock,
-   `--workspace` steps as in section 8, the named script tests. Delete `check-version.py`, `ci-scope.py`
-   and their tests. This must land before any other merge: the gate is red today without it.
+1. **H+0, by PRD-14's lane, first in its queue, reviewed by reviewers A and B and merged by the
+   integrator (PRD-00 phase 0 step 2), from this section's text.** One merge request: `gate.sh` (drop the
+   version step, the binary probe and the fallback; add the prerequisite check and the build lock;
+   `--workspace` steps as in section 8; the named script tests), the new `.config/nextest.toml`, the
+   rewritten `test_gate.py`, and the deletes of `check-version.py`, `ci-scope.py` and their tests. The
+   named script list holds only tests that exist on integration; PRD-14 adds `discover -s scripts/pad` in
+   the edit that follows PRD-12's first `test_pad.py` merge (PRD-12 writes a night-log note). It goes
+   through the merge rule like any merge request: reviewers A and B read the diff (ledger B2). Rule 3 of
+   the merge rule is met by the new gate run on the merged result, because the old gate is red on
+   `docs/plans/` (PRD-00 Today). The new gate is run on the result of the first workspace edit (PRD-16
+   section 2), and the two merge back to back. This must land before any other merge: the gate is red
+   today without it.
 2. **H+0, own lane.** `tests/common/` as compiling stubs by H+1.5 (`ports`, `fds`, `home`, `pki` real;
-   `upstream`, `worker`, `recorder` stubs); `.config/nextest.toml`. Measure G1 on the scaffold.
+   `upstream`, `worker`, `recorder` stubs). Measure G1 on the scaffold.
 3. **By H+3.** `upstream.rs` (TLS, HTTP/1.1, WebSocket), `worker.rs` (S5 stable at H+2), `recorder.rs`
    (after PRD-02's `for_tests`). HTTP/2 by the third slice.
 4. `ci.yml`; delete `linux-x86_64.yml` and `linux-check.sh`; push the integration branch once to see CI run.
@@ -528,8 +552,9 @@ Traps from the audit:
 
 - The open flake is a port reuse race; never write `bind(":0")` then drop (`J-tests-gate.md:471-472`).
 - Sub-second bounds on a loaded machine are the main flake source (`J-tests-gate.md:474`, `:496-498`).
-- nextest refuses a filter naming a binary that does not exist (`gate.sh:73-74`); the gate uses test-name
-  prefixes, not binary names.
+- nextest refuses a filter naming a binary that does not exist (`gate.sh:73-74`); the gate's steps use
+  test-name prefixes, not binary names, and the `heavy` group is one regex checked with `cargo nextest
+  list` in phase 0 (section 8).
 - The gate's `--offline` needed a prior `cargo fetch` (AGENTS.md:76-77); new crates add dependencies, so
   the gate uses `--locked` and lets cargo fetch.
 - `test_install.py` reads status fixtures from the protocol crate (`:28`): rewrite before PRD-13 deletes it.
@@ -540,32 +565,36 @@ Traps from the audit:
 
 How a watcher proves it in a real run: run `sh scripts/gate.sh fast` in a build box and read the step
 times; push and read `gh run list --workflow ci.yml --branch v1.0/integration`; after the core-set pad rows
-pass, run `scripts/release.sh tag` on a scratch commit that changes a line under `crates/` and see the
-refusal (G6).
+pass, run `scripts/pad/table --release-check <N1 commit>` (exit 0) and `--release-check <a scratch commit
+that changes one line under crates/>` (exit 1, the differing paths named) (G6). Nothing is tagged during
+the build.
 
 ## Asks (after PRD-00 revision 2)
 
 PRD-00 revision 2 ruled on all eight asks of revision 1 (accepted, item 6 partly: the release workflow is
 the owner's step) and PRD-01 accepted all three (`PartOptions`, the 998-byte worked example as files, the
-converter cut). Left:
+converter cut). All three asks below are ruled: PRD-00 R3-11 accepted them, and they are applied
+there. PRD-16 ask 3 (drop the conductor fallback from the build lock): applied (section 8, G3-X9).
 
-1. **PRD-16:** section 5 says "PRD-14 G2 (sabotage) and G3 (five clean runs) run here" at phase 3. PRD-00
+1. **PRD-16** (ruled, PRD-00 R3-11, applied there): section 5 says "PRD-14 G2 (sabotage) and G3 (five clean runs) run here" at phase 3. PRD-00
    moved G2 and G5 after the merge; G3 is now read from the build's own gate and CI runs, at no extra
    cost. Section 1 and traps: the build box is the only place the gate runs; this PRD keeps the root
    refusal. Phase 0 workspace edit: update the `Cargo.toml` version comment (`:14-17`, "the gate fails on
    any other hard-coded copy"), which is no longer true. Interfaces row PRD-11: tiers come from
    `connectors/tiers.toml`.
-2. **PRD-13:** section 5 "same merge" no longer needs PRD-14's edits (they land earlier, section 10);
+2. **PRD-13** (ruled, PRD-00 R3-11, applied there): section 5 "same merge" no longer needs PRD-14's edits (they land earlier, section 10);
    section 6's guards are kept in `rule_code.rs` rules 3 and 4, and the `test-hooks` pattern is dropped
    from the no-return list; `check-version.py`, `check-links.py`, `ci-scope.py` and `linux-check.sh` with
    their tests are PRD-14's deletes, so drop them from group D and section 7. Section 7's
    `db-local.ts` reason stands (`wrangler dev` in the full tier).
-3. **PRD-07:** `check-sql.sh` is not a gate step in this build; keep it for the owner's next schema change.
+3. **PRD-07** (ruled, PRD-00 R3-11, applied there): `check-sql.sh` is not a gate step in this build; keep it for the owner's next schema change.
 
 ## Review answers
 
 Items from the consistency check (CC), review A and review B that concern this PRD, or where it is the
-natural owner. "Accepted" means the change is in the body.
+natural owner. "Accepted" means the change is in the body. This section is history: where it differs
+from the body (for example the S8 conductor fallback, `release_mask_bench`, or `install.sh` removing 0.7
+files), the body, the ledger and the alignment answers below win.
 
 ### Consistency check
 
@@ -623,3 +652,39 @@ natural owner. "Accepted" means the change is in the body.
 | `check-sql.sh` in `gate full` | Self-found. Removed: no schema change in this build and `stopped-runs.sql` is after the merge (PRD-07); PostgreSQL leaves the prerequisites |
 | Old script tests before the cut | Self-found. 13 script tests name `cargo`, `target/` or old crates; the gate runs a named list of kept tests instead of `discover -s scripts` |
 | Hooks in `target/release` | Self-found. `cargo nextest run --release` builds a hooked `goalcup`; the release build now runs after it and `gate full` greps the result |
+
+## Alignment answers
+
+Fix lists g1, g2 and g3 of the alignment review, checked against the ledger (OWNER-DECISIONS.md), the
+PRDs they touch and the code. Where two fixes disagree, the ledger and the later PRD text win.
+
+| Id | Answer |
+|---|---|
+| L6-06 | Applied with G3-X9's wording (section 8 build lock): the lock matters only inside one build box; nothing ever builds on the conductor (ledger B1, PRD-16 S8) |
+| L7-05 | Applied (PRD-14 part). Rule 1 scans `crates/goalcup/src/**` and `crates/goalcup-format/src/**`. The AGENTS.md map line is PRD-15's |
+| X3-2 | Applied (PRD-14 part). Builder note 1: by PRD-14's lane, first in its queue, reviewed by reviewers A and B and merged by the integrator. Owner decisions gain a B2 line |
+| X2-02 | Applied (PRD-14 part). Section 3: PRD-05 at 2,000; total about 15,000 (matching PRD-00 and PRD-13); the "largest share" sentence now says masking and the proxy, with the corpus as data. Overridable default updated |
+| G2-35 | Applied. The release-mode test step is gone from section 8; `by_hand_mask_bench` is a `by_hand_*` test in no tier (as PRD-05 already says); the full-tier filter is `not test(/^by_hand_/)`; G1, section 1, section 4 hooks bullet, `test_gate.py`, the PRD-05 interface row and the risk rows follow |
+| P04-25 | Applied (PRD-14 part): `native_capture.rs` dropped from point 2 (with G3-14b) |
+| X2-08 | Applied (PRD-14 part). `install.sh` no longer deletes 0.7 files; G7 and `test_install.py` drop the 0.7 removal (ledger L7) |
+| X2-11 | Partly. Moving "Review answers" and ruled asks into `REVIEW-HISTORY.md` needs a write to a second file, which this pass may not make, and many writers of one new file would race. "Review answers" now opens with a line saying it is history and that the body, the ledger and these answers win; the asks are marked ruled. The move may run once, after every alignment pass, by one agent |
+| G3-X9 | Applied (section 8 build lock) |
+| G3-X27 | Applied. Builder note 1 is one merge request with `gate.sh`, `.config/nextest.toml`, `test_gate.py` and the deletes; the named script list holds only tests on integration, and `discover -s scripts/pad` joins after PRD-12's first `test_pad.py` merge; the new gate runs on the first workspace edit and the two merge back to back. Note 2 drops `.config/nextest.toml`. Section 8 script row says the same |
+| G3-X15 | Applied. The `heavy` group is one regex including `lessons_launch`; phase 0 `cargo nextest list` check with an empty-group fallback; trap and risk rows updated |
+| G3-X28 | Applied. G6 and the watcher line: `scripts/pad/table --release-check` on the N1 commit (exit 0) and a scratch commit (exit 1); nothing tagged during the build; `release.sh tag` runs the check at the owner's release (ledger B5, B6) |
+| G3-14a | Applied. G2 guards: `pipeline_guard` for the GAP and COUNT sabotages, `mask_rules`, `proxy_connect`. Point 6 row names `pipeline_guard.rs` first (PRD-02 says it asserts COUNT equals a recount) |
+| G3-14b | Applied. Point 2 row names `native_tail.rs` and `native_finish.rs` (PRD-04 acceptance) |
+| G3-X29 | Applied. Interfaces row PRD-06 points to PRD-06's `upload_worker.rs`; sections 2 and 5 already agree |
+| G3-X14 | Applied, with one change: `test-hooks` is allowed only in `crates/goalcup/Cargo.toml`, as PRD-13 section 6 now says (not "two allowed crates"). Rule 3 scans the two feature patterns over src, tests and `Cargo.toml`, and gains the Worker half, which joins after PRD-07's cut. Rule 4 keeps only the reference guard and its pre-cut `exclude` check |
+| G3-X4 | Applied. Builder note 1 and owner decisions: reviewers A and B read the diff (ledger B2); merge rule 3 is met by the new gate on the merged result |
+| G3-X22 | Applied. `common::worker`: chunk answer `{offset, next_seq, head, received_at, sealed}`; a bad `counts` is dropped and answered `200`, never `400` (PRD-07 section 4) |
+| G3-X32 | Applied. `common::recorder::real(dir)` over PRD-02's `Recorder::real_for_tests(dir, masker)`; `recorder.rs` 50 lines; interfaces row PRD-17 names it and `lessons_launch` in `heavy` |
+| G3-14c | Partly. G1 pass: step times and the three slowest tests, named past an alarm, PRD-16 decides, no pass or fail on time. The `release_mask_bench` report is left out (G2-35) |
+| G3-14d | Partly. PRD-01 row adds `zstd_close`; PRD-17 row 1,300; "today" is PRD-00's 142,413. PRD-02 row says 14, not 13: PRD-02 lists ten `pipeline_*` and four `watchdog_*` files. Total about 15,000, not 17,750, because masking is 2,000 (X2-02) |
+| G3-14e | Applied (section 7: `--known <file with the planted value>`) |
+| G3-14f | Rejected. Superseded by G2-35: PRD-05 already names the test `by_hand_mask_bench` in no gate tier, and the release-mode step is gone |
+| G3-X43 | Applied. The release check compares `Cargo.toml` and `rust-toolchain.toml` too; PRD-12 section 9 takes the same list (G3-X43 in its fix list) |
+| G3-14g | Applied. `install.sh` prints one line that exports PATH and appends itself to the profile when the participant runs it; it writes no profile itself. `test_install.py` checks no profile file is written |
+| G3-14h | Applied (section 4: Linux-only and macOS-only cases are `#[cfg(target_os = ...)]`) |
+| G3-14i | Applied. Point 6 row adds `upload_beat.rs`; new usage stats row (ledger S2, PRD-12 C5, `usage_run1.rs`, `usage_join.rs`, PRD-09) |
+| G3-14j | Applied. Asks 1 to 3 marked ruled by PRD-00 R3-11 and applied there; PRD-16 ask 3 applied (section 8, G3-X9) |

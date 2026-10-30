@@ -5,6 +5,7 @@ Format: [PRD-01](PRD-01-record-format.md). Owner of `crates/goalcup/src/proxy/`,
 `crates/goalcup/tests/proxy_*.rs` and `crates/goalcup/tests/proxy_fixtures/`.
 Revision 2, 30 October 2026: acts on every PRD-03 item of the consistency check and reviews A and B, and
 follows PRD-00 and PRD-01 revision 2 (section "Review answers" at the end).
+Revision 3, 30 October 2026: alignment fixes against the ledger (section "Alignment answers" at the end).
 
 ## Goal
 
@@ -117,6 +118,7 @@ harness --TCP--> 127.0.0.1:<port> (socket held by the watchdog, PRD-02)
     server first                     -> tunnel (not_tls)
     plain HTTP request, listed host  -> HTTP/1.1 parser, conn tls null
     other non-TLS bytes              -> tunnel (not_tls)
+    ClientHello past 64 KiB          -> tunnel (hello_too_big), + GAP memory_guard if the CONNECT host is listed
     ClientHello                      -> read SNI, ALPN list, fingerprint
        decide(SNI, else CONNECT host)
          Never (sign-in host)               -> tunnel (sign_in)
@@ -128,7 +130,7 @@ harness --TCP--> 127.0.0.1:<port> (socket held by the watchdog, PRD-02)
             upstream TLS fails              -> new TCP, tunnel + GAP upstream_untrusted
             serve the client a leaf from the run CA, ALPN = what upstream chose
                client alert on our leaf     -> learn (host, fingerprint), GAP tls_refused, close
-               client closes, no alert      -> GAP tls_refused, close, nothing learned
+               client closes, no alert      -> GAP tls_refused {"alert": false}, close, nothing learned
                ALPN h2                      -> pump + passive HTTP/2 parser
                ALPN http/1.1 or none        -> pump + passive HTTP/1.1 parser (WebSocket on 101)
 ```
@@ -147,8 +149,9 @@ Rules that hold everywhere:
    deadline after the CONNECT head, no failure budget. Every TLS or protocol failure falls back to a
    working tunnel or keeps relaying unparsed. The only answers that are not `200` are for broken CONNECT
    requests (`400`, `431`), a non-CONNECT request (`405`, see Overridable defaults), and an upstream that
-   cannot be reached at all (`502`, the same failure the harness would see without us; one log line, no
-   record, since no connection exists).
+   cannot be reached at all (`502`, the same failure the harness would see without us). Each non-`200`
+   answer writes one `note` `connect_refused` `{host, status}` (host only when the head parsed), at most
+   one per host and status per minute; no `conn` stream, since no connection exists.
 4. **A parser bug never touches the relay.** Each parser call runs inside `catch_unwind`. A panic ends
    parsing for that connection as in section 5a (GAP `decode_failed`, tail `{"panic":true}`) and the pump
    goes on. The workspace keeps `panic = "unwind"` (PRD-14).
@@ -179,9 +182,9 @@ Rules that hold everywhere:
   chosen path (PRD-17 C1). A broken head is never echoed (C2).
 - **Upstream TCP:** copy `connect_host` and `connect_addresses` (`connect.rs:962-1041`): each round
   re-resolves, IPv4 first, `TCP_NODELAY`, keepalive 60 s / 15 s / 4. Retry until 25 s when the CONNECT
-  target is listed (a short outage costs a slower answer, not a `502`); one round otherwise, because
-  retrying the agent's own traffic changes the run being measured (C6). No idle timeout anywhere: SSE
-  and WebSocket streams idle legitimately (`connect.rs:960-961`). No `TCP_USER_TIMEOUT`: the harness's
+  target is listed (a short outage costs a slower answer, not a `502`; the cost is a Risks row); one
+  round otherwise, because retrying the agent's own traffic changes the run being measured (C6). No idle
+  timeout anywhere: SSE and WebSocket streams idle legitimately (`connect.rs:960-961`). No `TCP_USER_TIMEOUT`: the harness's
   own socket would wait the same kernel time without us (rule 8 passes the failure on when it comes).
 - **First bytes:** after `200`, race the client's first bytes against the server's. Server first means
   a tunnel (`reason: not_tls`). This fixes the 30 s hang for server-speaks-first protocols.
@@ -190,7 +193,11 @@ Rules that hold everywhere:
   SHA-256 of the legacy version, the cipher suites sorted, the extension types sorted, the supported groups
   sorted, all with GREASE values removed (RFC 8701). Sorting makes it stable for TLS stacks that shuffle
   extensions. The bytes read are replayed into whichever path is chosen (`PrefixedIo`, `connect.rs:1215-1280`).
-  Guard 64 KiB (`client_hello`); past it, a tunnel. `conn` meta `fingerprint` holds the first 16 hex.
+  Guard 64 KiB (`client_hello`; today 32 KiB, `connect.rs:75`, doubled for post-quantum key shares,
+  PRD-17 C4); past it, a tunnel and the CONNECT host decides. The `conn` gets tunnel reason
+  `hello_too_big`; on a listed host its close GAP is `memory_guard` with
+  `{"guard":"client_hello","limit":65536}`, `off` 0, `lost` = `up` + `down` + 1 (PRD-01 section 4).
+  `conn` meta `fingerprint` holds the first 16 hex.
 - **The deciding name is the SNI.** When there is no SNI, the CONNECT host decides. A listed SNI behind an
   IP literal or another name is decrypted and recorded, and the upstream TLS check uses the SNI name, so a
   local fake server can never pose as a listed host (it fails the check and becomes a tunnel, PRD-17
@@ -209,8 +216,8 @@ Matching rules the proxy relies on (PRD-11 implements them in S3; `connector_hos
 
 - An entry is an exact name (`api.openai.com`), a subdomain pattern (`*.openai.azure.com`), or a pattern
   with one `*` inside one label (`bedrock-runtime.*.amazonaws.com`, `*-aiplatform.googleapis.com`).
-- `never` entries (sign-in hosts: `auth.openai.com`, `platform.claude.com`, `authapi.ampcode.com`, and
-  goalcup's own server) win over every pattern and every source (point 4).
+- `never` entries (PRD-11 section 4, plus goalcup's own server added in code) win over every pattern
+  and every source (point 4).
 - `pinned = true` marks a host whose clients are known to pin: always a tunnel with GAP `pinned`. Empty
   at ship; the pad's dodger case sets it in its own list copy.
 - The list is fixed for an entry. A host added mid-run takes effect at the next `goalcup continue`,
@@ -246,9 +253,11 @@ Copy `proxy/tls.rs:100-215` and `crates/goalcup-cli/src/ca_bundle.rs` (207 lines
    Whatever upstream chooses (or none) is the only protocol offered back to the client. Both legs speak the
    same protocol and bytes pass unchanged. This keeps the new HTTP/2 parser off the core set's main path
    (all three ran on HTTP/1.1 in run 1 and the audit) while an `h2`-only client, such as Cursor's, is
-   served and recorded (PRD-00 "ALPN on the release path"). A switch `Alpn::Mirror` (offer the client's
-   full filtered list) exists from the start; PRD-03 flips the default to it only after the HTTP/2 pad
-   rows (acceptance 3 and 10 with mirroring) pass, with a night-log line.
+   served and recorded (PRD-00 "ALPN on the release path"). Mirroring the client's full list is not
+   built in 1.0; `PreferH1` is the only ALPN mode. It may be added after the build once HTTP/2 rows pass.
+   If upstream rejects the offered ALPN (alert `no_application_protocol`, or it picks none for an
+   `h2`-only client), open a fresh TCP connection and tunnel with `reason: "alpn_other"` and GAP
+   `protocol_other`.
 5. **Upstream roots are the Mozilla set plus the OS store** (the same OS read as the bundle). That covers
    a corporate inspection CA or a private gateway CA the machine already trusts (PRD-17 T9). If upstream
    validation still fails, or upstream asks for a client certificate, the proxy opens a fresh TCP
@@ -264,14 +273,16 @@ harness itself for days. The rules:
   `certificate_unknown`, `unsupported_certificate`, `access_denied` (rustls reports
   `AlertReceived(..)`). A plain close, a reset or a timeout during the handshake teaches nothing: it is
   what a harness does when its own timer fires during a rate-limit burst, a Wi-Fi change or a wake from
-  sleep. That connection gets GAP `tls_refused` and closes; the next one is decrypted again.
+  sleep. That connection gets GAP `tls_refused` with tail `{"alert": false}` and closes; the next one
+  is decrypted again.
 - **A trusted set beats the refusal table.** A `(host, fingerprint)` pair that completed a handshake
   with our leaf in this boot is never learned as refusing. The harness connects first and often, so its
   own pair is trusted within seconds of start and after each restart.
 - **A learned refusal expires after 10 minutes.** The next connection of that pair tries our leaf again.
   At most one failed call per refusing pair per 10 minutes.
-- On learning: a `note` `ca_refused` (host and fingerprint prefix, never a secret) once per pair.
-  Every later connection of the pair, until expiry, is a tunnel with GAP `tls_refused`.
+- On learning: one `note` `ca_refused` (host and fingerprint prefix, never a secret) each time a pair
+  is learned, so again after each expiry. Every later connection of the pair, until expiry, is a tunnel
+  with GAP `tls_refused`.
 - Both tables live in memory, per boot. Not persisted: after a restart the harness reconnects first (its
   connections were reset) and is trusted again at once, and the expiry bounds any other case.
 - Pinned clients look the same on the wire, so learned refusals are always `tls_refused`; `pinned` is
@@ -283,11 +294,18 @@ Copy the framing from `proxy/http.rs:706-1265`: head scan, fields, request and r
 (length, chunked, close-delimited), `Chunked`, chunk-size lines, pipelining order, `HEAD`, `204` and
 `304`, 1xx. Copy `websocket_accept_key` (`http.rs:73-82`). Rewrite the relay as passive:
 
-- The request side opens one `http_req` stream per request (meta: method, path with query, `ver: "1.1"`,
-  headers in wire order, `coding` as a list or null). The response side opens `http_resp` with `req` = the
+- The request side opens one `http_req` stream per request (meta: method, path without query, `ver:
+  "1.1"`, headers in wire order, `coding` as a list or null). The proxy drops the query and fragment
+  when it builds the meta, as 0.7 does (copy `safe_target`, `metadata.rs:75-106`; PRD-01 `http_req`
+  meta). The response side opens `http_resp` with `req` = the
   request's sid (meta: status, headers, `coding`, `decoded`). Headers go raw into meta in memory; PRD-02
   calls PRD-05's `mask_meta` before anything is written.
 - 1xx heads become a `note` event (`informational_response`) with status and headers.
+- **Head guard** (`http_head`, 64 KiB). Past it, the parser stops storing fields but keeps scanning the
+  field lines for the ones framing needs (`content-length`, `transfer-encoding`, `content-encoding`,
+  `connection`, `upgrade`), opens the stream with the fields stored so far, and writes on it GAP
+  `memory_guard` with `off` 0, `lost` 0 and tail `{"guard":"http_head","limit":65536,"head":<bytes not
+  stored>}`. Then it goes on with the body and later requests. It never stops parsing (ledger R5).
 - Bodies are de-chunked and decoded (section 7), then sent as DATA pieces through the handle (the handle
   owns offsets, PRD-00 S1). END tails: `wire` (body bytes on the wire before decoding), `trailers`
   (chunked trailers, masked like headers), `unsent` on `http_req` when the upstream closed before the
@@ -306,8 +324,9 @@ to HTTP/1.1 framing faults, the upgrade copy guard, a parser panic, and the HTTP
 
 1. The open stream gets its own GAP (`decode_failed`, `memory_guard` or `h2_unsupported`) and ends
    `decode_error`.
-2. At the fault, one `note` `parse_stopped` `{conn, reason}` is written, so status can say "losing"
-   while the connection lives (see Asks; readers show an unknown note as is).
+2. At the fault, one `note` `parse_stopped` `{conn, reason}` is written (PRD-01 note list). PRD-02 sets
+   status `losing` while a `parse_stopped` connection is open and clears it at that connection's close
+   GAP (Asks), so the participant sees the loss while it happens.
 3. The connection keeps relaying unparsed. The proxy counts every plaintext byte relayed after the fault.
 4. At close, the `conn` stream gets one GAP with the same reason, start = the fault time, end = the close,
    `off` 0, `lost` = plaintext bytes relayed after the fault + 1, so every request made later on that
@@ -324,7 +343,8 @@ Both legs carry the same frames, so the parser only observes. It is narrow on pu
   code in the END tail (`h2_error`). `GOAWAY` ends streams above its last stream id. `PRIORITY`, `PING`,
   `SETTINGS`, `WINDOW_UPDATE` and unknown frame types are skipped by length (RFC 9113 section 4.1).
 - Streams: one `http_req` per client stream, one `http_resp` per server response, meta `ver: "2"`, `h2`
-  stream id, headers including pseudo-headers in wire order (PRD-01 section 4).
+  stream id, headers including pseudo-headers in wire order (PRD-01 section 4); `:path` has its query
+  dropped like `path` (section 5).
 - **Not followed in 1.0, and never silent:**
   - `PUSH_PROMISE` (clients normally disable push): parsing stops for the connection (5a,
     `h2_unsupported`).
@@ -332,10 +352,12 @@ Both legs carry the same frames, so the parser only observes. It is narrow on pu
     `lost` = its DATA bytes + 1 at its end, and no DATA bytes are recorded for it (they may be
     compressed WebSocket frames). The rest of the connection keeps parsing.
   - A message-level coding (`grpc-encoding`, `connect-content-encoding`) other than `identity`: GAP
-    `unsupported_encoding` for that body and no body bytes, so no compressed byte reaches disk (D14).
-    Five lines; it stays because point 4 needs it.
+    `unsupported_encoding` for that body (tail as in section 7) and no body bytes, so no compressed byte
+    reaches disk (D14). Five lines; it stays because point 4 needs it.
   - An HPACK error, a table past the 1 MiB guard (`hpack_table`), or a frame over the 16 MiB maximum:
     parsing stops for the connection (5a). Never a refused connection.
+- `h2_unsupported` is never a tunnel reason: the connection is already decrypted, so it keeps relaying
+  unparsed (5a).
 - HPACK: one decoder crate added in the scaffold (first choice `loona-hpack`, the maintained fork of
   `hpack`; check the version on crates.io first, unverified). If no crate is fit, write a decoder against
   the RFC 7541 appendix C vectors (about 500 lines with the Huffman table).
@@ -344,7 +366,9 @@ Both legs carry the same frames, so the parser only observes. It is narrow on pu
 
 Copy `proxy/http.rs:1514-2022` into `src/proxy/decode.rs`: gzip (with `x-gzip`), deflate (zlib and raw),
 brotli (`brotli-decompressor`), zstd. At most one content coding; more than one, or an unknown one, is a
-GAP `unsupported_encoding` naming the codings and no body bytes (`http.rs:18-24`, PRD-17 D5). A coding that
+GAP `unsupported_encoding` with tail `{"codings": [...]}` (each token at most 32 bytes, at most 4 tokens),
+`lost` 0 and tail key `wire` (encoded bytes, PRD-01 section 3), and no body bytes (`http.rs:18-24`,
+PRD-17 D5). A coding that
 breaks part way keeps the decoded prefix, writes a GAP `decode_failed` and ends the stream `decode_error`.
 Changes:
 
@@ -353,13 +377,14 @@ Changes:
   1032 to 1, so the work stays bounded by the input (PRD-17 D7).
 - The zstd window limit stays at 8 MiB for HTTP `zstd` (RFC 9659 section 3, `http.rs:102`). Codex encodes
   its request bodies with zstd level 3 (`E-providers.md` E8.1).
-- **Decoder memory is guarded** (review A finding 10). A process-wide counter holds the window each open
-  decoder may allocate: `1 << WBITS` for brotli (read from the first one or two bytes of the body,
-  RFC 7932 section 9.1), the frame's declared window for zstd (at most 8 MiB), 32 KiB for gzip and
-  deflate. It goes down when the body ends. When a new coded body would take the counter past 256 MiB
-  (`decoder_window`), that body is not decoded: its stream gets GAP `memory_guard` with
-  `{"guard":"decoder_window","limit":268435456}` and `lost` = its wire bytes + 1, and the relay goes on.
-  Run 1's worst case (about 40 open bodies) stays under it unless every one is a 16 MiB brotli window.
+- **Decoder memory is guarded** (review A finding 10) inside PRD-02's one memory guard, with no counter
+  of its own. Before a coded body is decoded, call `Recorder::room()`; if the window (`1 << WBITS` for
+  brotli, read from the first one or two bytes of the body, RFC 7932 section 9.1; the zstd frame window,
+  at most 8 MiB; 32 KiB for gzip and deflate) fits, hold `Recorder::reserve(window)` until the body
+  ends. If it does not fit, the body is not decoded: its stream gets GAP `memory_guard` with `lost` 0
+  and tail `{"guard":"decoder_window","limit":<room at that moment>,"wire":<encoded bytes>}`, and the
+  relay goes on. Run 1 had about 40 open bodies at once; at brotli's default 4 MiB window that is
+  160 MiB, inside `room()` (the windows Anthropic sends are unverified, Risks).
 
 ### 8. WebSocket (passive parser)
 
@@ -385,15 +410,16 @@ framer (`:324-420`), unmasking and the per-direction inflater with context takeo
 
 Every connection that is not decrypted is a `conn` stream with `mode: "tunnel"` and a `reason` (one of
 PRD-01's list: `not_listed`, `sign_in`, `tls_refused`, `pinned`, `upstream_untrusted`, `alpn_other`,
-`not_tls`, `h2_unsupported`), opened when the decision is made and ended at close. Bytes are copied with
+`not_tls`, `hello_too_big`), opened when the decision is made and ended at close. Bytes are copied with
 `copy_bidirectional` (`connect.rs:672-690`), no parse.
 
 - END tail for every `conn`: `up` and `down`, bytes each way on the TCP wire (TLS records included).
   A decrypted `conn` also has `plain_up` and `plain_down` (PRD-01 section 3), which PRD-08's
   `conn_bytes` compares with its streams.
 - **A tunnel to a listed host is a loss.** At close its `conn` stream gets one GAP with the matching
-  reason (6 `tls_refused`, 7 `pinned`, 11 `h2_unsupported`, 13 `upstream_untrusted`, 14
-  `protocol_other` for `alpn_other` and `not_tls`), `off` 0, `lost` = `up` + `down` + 1 (PRD-01
+  reason (1 `memory_guard` with `{"guard":"client_hello","limit":65536}` for `hello_too_big`,
+  6 `tls_refused`, 7 `pinned`, 13 `upstream_untrusted`, 14 `protocol_other` for `alpn_other` and
+  `not_tls`), `off` 0, `lost` = `up` + `down` + 1 (PRD-01
   section 4). A `sign_in` tunnel is no loss (that host is never decrypted by design, point 4) and gets
   no GAP.
 - **The unlisted model host flag, per host** (review A finding 6). For each unlisted host the proxy
@@ -418,16 +444,11 @@ What the proxy does:
 
 - `proxy::serve(listener, ProxyCtx { recorder, hosts, ca, extra_roots }) -> ProxyHandle` accepts on the
   inherited socket; it binds nothing itself. Listen backlog 4,096, set by the watchdog.
-- `ProxyHandle` gives PRD-02 what a graceful hand-over and the after-seal grace need (review A findings 4
-  and 8), about 40 lines:
-  - `stop_accepting()`: the accept loop ends; open connections keep relaying (and recording while S1
-    calls still record). Two boots may hold the listener for a moment; the kernel gives each new
-    connection to the one that accepts.
-  - `idle() -> impl Future`: resolves when no connection is open.
-  - `open_conns() -> Vec<ConnSummary { host, up, down, since }>`: what is still relaying, so PRD-02 can
-    write GAP 15 `after_stop` with conns and hosts once S1 calls are no-ops.
-  Whether and when PRD-02 uses them (a hand-over on planned changes, the grace after a harness-exit seal)
-  is PRD-02's call.
+- `ProxyHandle` offers one accessor, `quiet_since() -> Mono`: the `Recorder::now()` of the last byte any
+  relay moved (review A finding 8). Open but silent connections do not count, so a connection held open
+  and idle never delays the seal (PRD-17 P8). PRD-02 uses it for the grace after a harness-exit seal
+  (PRD-02 seal step 1); GAP 15 `after_stop` takes its conns and hosts from the writer's table, not from
+  the proxy. There is no graceful hand-over (PRD-02 section 9.1 weighed and dropped it).
 - On a crash, in-flight connections of the dead boot are cut by the kernel. The harness sees a reset and
   retries, as it would after any network drop. New connections wait in the backlog.
 - The new boot imports the same CA, so the harness keeps trusting it. Leaves, the trusted set and the
@@ -439,9 +460,13 @@ What the proxy does:
 The proxy holds per connection two read buffers (16 KiB), the TLS states, one HPACK table per direction,
 an inflater window per WebSocket direction (32 KiB), and a decoder per open body. Stated guards, each
 writing a GAP `memory_guard` with `{"guard": <name>, "limit": <bytes>}` (PRD-01 section 3 names) and going
-on: `client_hello` 64 KiB (then a tunnel), `http_head` 64 KiB (5a), `upgrade_copy` 1 MiB (5a),
-`hpack_table` 1 MiB (5a), `decoder_window` 256 MiB process-wide (section 7). Everything after the parser
-is PRD-02's `held_bytes` guard. There is no connection, stream or byte cap.
+on: `client_hello` 64 KiB (then a tunnel, `hello_too_big`), `http_head` 64 KiB (the head's later fields
+are not stored; parsing goes on, section 5), `upgrade_copy` 1 MiB (5a), `hpack_table` 1 MiB (5a),
+`decoder_window` (a body whose window does not fit `Recorder::room()`, section 7). Each stops parsing at
+most for the one connection that passed it. `upgrade_copy` and `hpack_table` keep the 5a stop because
+they are rare (more than 1 MiB sent before a `101` answer; a table 256 times HTTP/2's 4 KiB default) and
+following on would cost a second code path. Everything after the parser is PRD-02's `held_bytes` guard,
+and decoder windows sit inside it through `reserve`. There is no connection, stream or byte cap.
 
 ### 12. What a pad run sees per harness case
 
@@ -460,7 +485,7 @@ Create (all under `crates/goalcup/`):
 
 | Path | What | Estimate, src lines |
 |---|---|---|
-| `src/proxy/mod.rs` | `serve`, `ProxyCtx`, `ProxyHandle`, accept loop with `may_accept`, per-connection task, panic guard, test hooks | 240 |
+| `src/proxy/mod.rs` | `serve`, `ProxyCtx`, `ProxyHandle::quiet_since`, accept loop with `may_accept`, per-connection task, panic guard, test hooks | 240 |
 | `src/proxy/connect.rs` | CONNECT head, upstream TCP with retry, first-bytes race, ClientHello (SNI, ALPN, fingerprint), decision, reset on upstream error | 650 (about 450 copied) |
 | `src/proxy/ca.rs` | `RunCa` mint, export, import, `write_files`, subtrees from the list, leaf cache, bundle | 400 (about 330 copied) |
 | `src/proxy/tls.rs` | upstream client config per ALPN offer, harness-facing server config per chosen ALPN, alert classification | 220 (about 120 copied) |
@@ -470,14 +495,17 @@ Create (all under `crates/goalcup/`):
 | `src/proxy/http1.rs` | passive HTTP/1.1 parser, upgrade copy, 5a | 900 (about 600 copied) |
 | `src/proxy/h2.rs` | narrow passive HTTP/2 parser | 450 |
 | `src/proxy/ws.rs` | passive WebSocket parser | 600 (about 500 copied) |
-| `src/proxy/decode.rs` | gzip, deflate, brotli, zstd, decoder window guard | 540 (about 500 copied) |
-| **Total** | | **about 4,400** (PRD-00 size row). HTTP/2 shrank by 200; the refusal rules, 5a, the decoder guard, the per-host flag and `ProxyHandle` took it back |
+| `src/proxy/decode.rs` | gzip, deflate, brotli, zstd, decoder window check through `room` and `reserve` | 540 (about 500 copied) |
+| **Total** | | **about 4,250** (PRD-00 size row). HTTP/2 shrank by 200; the refusal rules, 5a, the decoder check and the per-host flag took most of it back; no `Alpn::Mirror` and a one-accessor `ProxyHandle` saved about 150 |
 
 Tests (about 2,000 lines, PRD-14's table): `tests/proxy_connect.rs`, `tests/proxy_tls.rs`,
 `tests/proxy_http1.rs`, `tests/proxy_h2.rs`, `tests/proxy_ws.rs`, `tests/proxy_tunnel.rs`,
 `tests/proxy_restart.rs`, and fixtures in `tests/proxy_fixtures/` (an Anthropic brotli SSE body, a zstd
-request body, an h2 session made with `curl --http2`, the RFC WebSocket examples, and a masked real Codex
-WebSocket deflate capture from the phase 1a run, PRD-17 risk "fixtures are partly synthetic"). They use
+request body, an h2 session made with `curl --http2`, the RFC WebSocket examples, and a Codex-shaped
+WebSocket deflate fixture: take the inflated, masked `ws_up` and `ws_down` messages of a phase 1a record,
+re-deflate them with context takeover in the test, and commit only the masked plaintext source. It is
+reviewed by eye before commit (AGENTS.md). No raw wire capture is ever written to disk; PRD-17 risk
+"fixtures are partly synthetic"). They use
 PRD-14's `tests/common/` fake upstream (a private helper until it lands, removed at phase 3) and
 `Recorder::for_tests(room)`.
 
@@ -494,10 +522,10 @@ Must not touch: `src/pipeline/` and `src/watchdog/` (PRD-02), `src/mask/` (PRD-0
 | PRD | What this PRD uses or gives | Seam |
 |---|---|---|
 | PRD-00 | S1, S3, S8 final shapes; the `ProxyCtx` ruling; 2 relay threads; ALPN on the release path; slices (core: CONNECT, CA, HTTP/1.1, decode, WebSocket, tunnels; second: refusal learning, restart with the CA hand-over; third: HTTP/2) | |
-| PRD-01 | Stream kinds `conn`, `http_req`, `http_resp`, `ws_up`, `ws_down`; meta keys (`kind`, `fingerprint`, `tls` null, pseudo-headers, `coding` list); END tails `up`, `down`, `plain_up`, `plain_down`, `wire`, `trailers`, `h2_error`, `close_code`, `unsent`; GAP reasons 1, 3, 4, 6, 7, 11, 13, 14 and the `conn` GAP rules (tunnels to listed hosts, a connection that stops parsing); guard names `client_hello`, `http_head`, `upgrade_copy`, `hpack_table`, `decoder_window`; notes `long_tunnel`, `ca_refused`, `informational_response`, `unsupported_coding`, and asked: `parse_stopped` | F1 through S1 |
-| PRD-02 | Uses `Recorder::open(kind, conn, req, 0, flags, meta)`, `StreamHandle::{data, ws, gap, end}` (the handle owns offsets; `gap(reason, start, lost, tail)` reports a loss when it ends), `Recorder::event`, `Recorder::now`, `pipeline::fds::may_accept()`. Gives `proxy::serve(listener, ProxyCtx { recorder, hosts, ca, extra_roots }) -> ProxyHandle` with `stop_accepting`, `idle`, `open_conns`. The watchdog calls `RunCa::mint`, `write_files` and `export` and sends the PEM on the first control line; each boot calls `RunCa::import`. PRD-02 turns core dumps off and installs the fixed-text panic hook before reading that line | S1, S8 |
-| PRD-05 | Meta holds raw headers and path in memory; PRD-02 masks them with `mask_meta` before writing. Copy the name rules from `proxy/headers.rs:20-46` and the start-line, value and query rules (`headers.rs:153-240`). WebSocket `fin` reaches `StreamMasker::boundary()` through PRD-02. No proxy credential, so no credential rule | S2 (via PRD-02) |
-| PRD-08 | Every named tunnel reason on a listed host (GAP 6, 7, 11, 13, 14) counts as `named` in `listed_hosts_decrypted` and `wire_keeps_up` (PRD-00 ruling). With 5a, every unparsed byte on a decrypted connection sits inside a `conn` GAP, so `conn_bytes` may fail (not only warn) on bytes outside streams and outside such a GAP; PRD-08 and PRD-16 decide when | records |
+| PRD-01 | Stream kinds `conn`, `http_req`, `http_resp`, `ws_up`, `ws_down`; meta keys (`kind`, `fingerprint`, `tls` null, pseudo-headers, `coding` list, `path` without query); tunnel reason `hello_too_big`; END tails `up`, `down`, `plain_up`, `plain_down`, `wire`, `trailers`, `h2_error`, `close_code`, `unsent`; GAP reasons 1, 3 (tail `codings`), 4, 6, 7, 11 (never a tunnel reason), 13, 14, the `lost` 0 plus `wire` rule, and the `conn` GAP rules (tunnels to listed hosts, a connection that stops parsing); guard names `client_hello`, `http_head`, `upgrade_copy`, `hpack_table`, `decoder_window`; notes `long_tunnel`, `ca_refused`, `informational_response`, `connect_refused`, `parse_stopped` | F1 through S1 |
+| PRD-02 | Uses `Recorder::open(kind, conn, req, 0, flags, meta)`, `StreamHandle::{data, ws, gap, end}` (the handle owns offsets; `gap(reason, start, lost, tail)` reports a loss when it ends), `Recorder::event`, `Recorder::now`, `Recorder::room` and `Recorder::reserve` (decoder windows), `pipeline::fds::may_accept()`. Gives `proxy::serve(listener, ProxyCtx { recorder, hosts, ca, extra_roots }) -> ProxyHandle` with `quiet_since()`. Asks PRD-02 to show `losing` while a `parse_stopped` connection is open. The watchdog calls `RunCa::mint`, `write_files` and `export` and sends the PEM on the first control line; each boot calls `RunCa::import`. PRD-02 turns core dumps off and installs the fixed-text panic hook before reading that line | S1, S8 |
+| PRD-05 | Meta holds raw headers and the query-free path in memory; PRD-02 masks them with `mask_meta` before writing. PRD-05 copies the header rules into `src/mask/meta.rs`; PRD-03 copies none. WebSocket `fin` reaches `StreamMasker::boundary()` through PRD-02. No proxy credential, so no credential rule | S2 (via PRD-02) |
+| PRD-08 | Every named loss on a listed host's `conn` (GAP 1 for `hello_too_big`, 6, 7, 13, 14 for tunnels; 11 and the other 5a reasons for a connection that stopped parsing) counts as `named` in `listed_hosts_decrypted` and `wire_keeps_up` (PRD-00 ruling). With 5a, every unparsed byte on a decrypted connection sits inside a `conn` GAP, so `conn_bytes` may fail (not only warn) on bytes outside streams and outside such a GAP; PRD-08 and PRD-16 decide when | records |
 | PRD-10 | Status lines for `long_tunnel` (both `why` values), `ca_refused`, GAP `pinned` and `tls_refused` (no `pinned_host` note exists), `parse_stopped` ("recording of one connection to <host> stopped; its traffic still passes"), vendor backend; the `--record-host` input | records |
 | PRD-11 | Uses `HostList::decide(name) -> Listed { source, kind, pinned } \| Never \| NotListed` and `ca_subtrees()`; the list itself is PRD-11 section 4. PRD-11 sets `HTTPS_PROXY` and `https_proxy` to `http://127.0.0.1:<port>`, `NO_PROXY=127.0.0.1,localhost,::1`, `NODE_USE_ENV_PROXY=1`, extend-mode CA variables to `run-ca.pem` and replace-mode ones (`SSL_CERT_FILE`, `REQUESTS_CA_BUNDLE`) to `bundle.pem` (tunnels go through the proxy and the client checks the real certificate). PRD-03 owns the code that writes both PEM files; PRD-02's watchdog calls it | S3 |
 | PRD-12 | The dodger case passes a copy of `model-hosts.toml` with the harness's model host `pinned = true` through `goalcup start --hosts <file>` (S16). The gateway case uses Vercel AI Gateway for the core set. Watchers run the acceptance 3, 7 and 9 commands themselves in the pad box | S16 |
@@ -517,8 +545,8 @@ From `crates/goalcup-cli/src/proxy/` (lines with inline tests, `wc -l`):
 | `outage.rs` (outage windows) | 316 | deleted |
 | `tunnels.rs` (side list, 10,000 rows) | 285 | deleted; tunnels are records |
 | `preflight.rs` (TCP probe before launch) | 420 | deleted; the harness shows its own network errors, and a run with no model requests says so |
-| `metadata.rs` (allowlist, hints, labels) | 407 | deleted; meta is the masked head |
-| `headers.rs` (header streams, masking) | 403 | deleted; PRD-05 copies the name and query rules |
+| `metadata.rs` (allowlist, hints, labels) | 407 | deleted except `safe_target` (query and fragment drop, about 30 lines, into `http1.rs`); meta is the masked head |
+| `headers.rs` (header streams, masking) | 403 | deleted; PRD-05 copies the header rules |
 | `connect.rs` | 1,565 | about 450 copied (head parse, authority, upstream connect, ClientHello, `PrefixedIo`); credential, failure classes, deadlines, `refuse` table deleted |
 | `tls.rs` | 295 | about 200 copied (CA, leaf, roots), ALPN policy rewritten |
 | `http.rs` | 2,257 | about 1,100 copied (framing, decoders); the active relay, selection, Host check, budget deleted |
@@ -544,13 +572,13 @@ the agent may not run, the watcher runs it itself in the pad box, in the harness
 
 1. **Direct key, HTTP/1.1, brotli** (core slice, phase 1a). Claude Code with one subagent. Pass: every
    `conn` to `api.anthropic.com` is `decrypt` with `alpn: "http/1.1"`; every `http_resp` with a `br`
-   coding has `decoded: true` and its DATA parses as SSE; POSTs to `/v1/messages` equal the assistant
-   turns in the session files (PRD-12's check); zero `unsupported_encoding`, zero `tls_refused` on a
-   listed host.
+   coding has `decoded: true` and its DATA parses as SSE when `content-type` is `text/event-stream`,
+   else as JSON; PRD-12 check C1 passes (PRD-08 `threads_match` and `wire_keeps_up`); zero
+   `unsupported_encoding`, zero `tls_refused` on a listed host.
 2. **Direct key, WebSocket with deflate** (core slice). Codex with one subagent. Pass: one `ws_up` and
-   one `ws_down` per WebSocket connection; every `ws_up` text message parses as JSON; the count of
-   `response.create` messages equals Codex's own turn count within the rate-limit retries; zero
-   `decode_failed`; Codex's HTTP fallback, if used, shows `alpn: "http/1.1"`.
+   one `ws_down` per WebSocket connection; every `ws_up` text message parses as JSON; PRD-12 check C1
+   passes (PRD-08 `threads_match` and `wire_keeps_up`); zero `decode_failed`; Codex's HTTP fallback, if
+   used, shows `alpn: "http/1.1"`.
 3. **HTTP/2** (third slice). During a Codex pad run the watcher runs an `h2`-only client against a
    listed host: `curl --http2-prior-knowledge --parallel --parallel-max 4` with four URLs to
    `https://api.openai.com/v1/models` (check with `-v` that curl offers only `h2` over TLS; unverified;
@@ -558,10 +586,11 @@ the agent may not run, the watcher runs it itself in the pad box, in the harness
    stream ids on it, decoded bodies, zero `h2_unsupported`.
 4. **Gateway** (second slice; the strong case the owner asked for). The pad's `gateway` case for Claude
    Code, Codex and Hermes through Vercel AI Gateway (key provided), as Vercel documents each route
-   (PRD-12 section 2), and Kilo through Vercel AI Gateway if Kilo's current docs give a route (T7;
-   unverified). Pass for each: `ai-gateway.vercel.sh` is `decrypt`, `listed: shared`, `kind: gateway`,
-   with no participant or config entry needed; wire POSTs and WebSocket messages equal the harness's own
-   calls; the gateway key header is masked; zero GAPs on that host. OpenRouter: **not run: no key**
+   (PRD-12 section 2), and Kilo through Vercel AI Gateway by the route PRD-11 and PRD-12 cite (recheck
+   the docs on the day, T7). Pass for each: `ai-gateway.vercel.sh` is `decrypt`, `listed: shared`,
+   `kind: gateway`, with no participant or config entry needed; PRD-12 check C1 passes (PRD-08
+   `threads_match` and `wire_keeps_up`; Hermes by the per-session totals form, PRD-08 section 3.1,
+   PRD-00 done item 1); the gateway key header is masked; zero GAPs on that host. OpenRouter: **not run: no key**
    (ledger T2); it ships "not verified" and runs as written when a key exists.
 5. **Vendor backend.** Amp: **not run: no key** (ledger T2); ships "not verified". When an account
    exists, pass: `ampcode.com` is decrypted; the thread WebSocket is recorded in both directions; no
@@ -572,7 +601,8 @@ the agent may not run, the watcher runs it itself in the pad box, in the harness
 7. **Refusal fallback** (second slice). During a Claude Code pad run the watcher runs
    `curl --cacert /etc/ssl/certs/ca-certificates.crt https://api.openai.com/v1/models` twice, then once
    more after 11 minutes. Pass: the first fails with one GAP `tls_refused` and one `ca_refused` note; the
-   second gets a `401` through a tunnel; the third fails once more (expiry) and is learned again; the
+   second gets a `401` through a tunnel; the third fails once more (expiry) and is learned again, with a
+   second `ca_refused` note; the
    harness's own calls to listed hosts stay `decrypt` throughout.
 8. **Restart** (second slice). The kill test of PRD-02 R1 (Codex, `kill -9` twice). Pass: after each
    restart the harness's new connections are `decrypt` (the CA survived), not `tls_refused`; the harness
@@ -580,29 +610,35 @@ the agent may not run, the watcher runs it itself in the pad box, in the harness
 9. **Long tunnel** (core slice). The watcher runs `curl -N https://stream.wikimedia.org/v2/stream/recentchange`
    for 90 s in the pad box. Pass: one `long_tunnel` note with `why: "stream"` for that host, no other
    effect, no GAP.
-10. **Load** (phase 6, A2). Codex with 20 or more subagents for 30 minutes. Pass: zero proxy GAPs of any
-    kind on listed hosts; no `503` or refused connection; wire POSTs plus `response.create` messages match
-    Codex's record per 10-minute bucket (the run 1 comparison); recorder RSS and any `decoder_window` GAPs
-    reported. When the ALPN default is flipped to mirroring, this run is repeated with it first.
+10. **Load** (phase 6, PRD-16 A1 and A2, as PRD-16 runs them under the 10 USD cap). Pass on each: zero
+    proxy GAPs of any kind on listed hosts, `memory_guard` included (PRD-16 X3); no `503` or refused
+    connection; PRD-16 X1 holds per 10-minute bucket; recorder RSS reported. Connections cut by A2's
+    planned kill are PRD-02's `recorder_down`, not a proxy GAP. The ALPN default stays `PreferH1` in 1.0;
+    no mirrored load run is scheduled.
 
 Automated tests that guard them (fake upstream, `Recorder::for_tests`):
 
 - `proxy_connect.rs`: SNI decides, no SNI uses the CONNECT host, a listed SNI behind an IP literal is
   decrypted, a server-first protocol tunnels with no wait, 2,000 concurrent connections are all served
-  (no cap), `may_accept()` false makes accepts wait and never refuse, a non-CONNECT request gets `405`,
-  an upstream reset reaches the client as a reset.
+  (no cap), `may_accept()` false makes accepts wait and never refuse, a non-CONNECT request gets `405`
+  and one `connect_refused` note, an upstream reset reaches the client as a reset, a ClientHello past
+  64 KiB to a listed CONNECT host tunnels with reason `hello_too_big` and its GAP 1 `memory_guard`.
 - `proxy_tls.rs`: the ALPN matrix (client h2+h1, h1, h2 only, none, other) against upstream h2, h1 and
-  none, under both `Alpn::PreferH1` and `Alpn::Mirror`; upstream certificate failure falls back to a
-  tunnel with GAP `upstream_untrusted`; an `unknown_ca` alert teaches the table and a second fingerprint
-  is still decrypted; a plain close teaches nothing; a pair in the trusted set is never learned; a
+  none, under `PreferH1` (the only mode), including an upstream that rejects the offered ALPN (a fresh
+  TCP connection, a tunnel with `alpn_other` and GAP `protocol_other`); upstream certificate failure
+  falls back to a tunnel with GAP `upstream_untrusted`; an `unknown_ca` alert teaches the table, writes
+  one `ca_refused` note, and a second fingerprint is still decrypted; a plain close teaches nothing and
+  its GAP has `{"alert": false}`; a pair in the trusted set is never learned; a
   learned refusal expires after 10 minutes on the test clock; a CA exported and imported signs leaves the
   first boot's `run-ca.pem` trusts.
 - `proxy_http1.rs`: each coding decodes to the plaintext; an unknown coding writes no body byte; chunked
   trailers reach the END tail; pipelining pairs responses; `HEAD` and `304` have no body; the SSE prefix
   reaches the client before EOF; a parser panic leaves the relay running; **after a framing fault, a
   second request on the same connection sits inside a `conn` GAP whose `lost` equals the bytes relayed
-  after the fault plus one, and a `parse_stopped` note exists**; with the decoder guard set low, the next
-  `br` body gets GAP `memory_guard` `decoder_window` and the client still gets every byte.
+  after the fault plus one, and a `parse_stopped` note exists**; with `Recorder::for_tests(room)` small,
+  the next `br` body gets GAP `memory_guard` `decoder_window` with `lost` 0 and a `wire` tail, and the
+  client still gets every byte; a head past 64 KiB gets GAP `memory_guard` `http_head`, its body and the
+  next request on the connection are still recorded; a request target's query never reaches the meta.
 - `proxy_h2.rs`: CONTINUATION, HPACK dynamic table and size updates, padding, trailers, `RST_STREAM`,
   `GOAWAY`; `grpc-encoding: gzip` gives a GAP and no body bytes; an extended CONNECT stream gets its GAP
   and no DATA while other streams keep parsing; `PUSH_PROMISE` and an HPACK error give `h2_unsupported`,
@@ -613,14 +649,14 @@ Automated tests that guard them (fake upstream, `Recorder::for_tests`):
   `up` + `down` + 1; a `sign_in` tunnel gets none; the per-host flag fires once for a stream and once
   for 1 MiB sent up across short tunnels, and not for a 50 MiB download.
 - `proxy_restart.rs`: `serve` on an inherited listener after the first boot is dropped; a queued
-  connection is served by the second boot with the same CA; `stop_accepting` then `idle` resolves after
-  the last open connection closes, with no reset to it.
+  connection is served by the second boot with the same CA; `quiet_since` moves with relayed bytes and a
+  silent open connection does not delay it.
 
 ## Risks and blind spots
 
 | Risk | What could go wrong | What we do |
 |---|---|---|
-| Preferring HTTP/1.1 changes what an h2-capable client uses | A client that would use h2 without us uses HTTP/1.1 through us, so one more connection per parallel call | All three core harnesses ran on HTTP/1.1 through 0.7 and in run 1; point 7 is met as long as the harness works. Mirroring is one switch, flipped after its pad rows pass |
+| Preferring HTTP/1.1 changes what an h2-capable client uses | A client that would use h2 without us uses HTTP/1.1 through us, so one more connection per parallel call | All three core harnesses ran on HTTP/1.1 through 0.7 and in run 1; point 7 is met as long as the harness works. The ALPN default stays `PreferH1` in 1.0; mirroring is not built and no mirrored load run is scheduled |
 | A cut handshake is not learned | A client that refuses our CA by closing without an alert fails on every call, never falling back | Every common TLS stack (OpenSSL, BoringSSL, Go, Java, rustls) sends an alert on an untrusted chain. The GAP `tls_refused` names each failure; acceptance 7 checks curl |
 | A tool shares the harness's TLS fingerprint and refuses | With the trusted set, that tool's calls keep failing once per call, since its pair is never learned | Accepted: point 1 (the harness stays recorded) over one tool's calls. The GAP and note name it; the participant can run that tool without the CA variables |
 | Refusal expiry | A refusing tool fails one call every 10 minutes | Accepted; most clients retry. Overridable default |
@@ -629,24 +665,25 @@ Automated tests that guard them (fake upstream, `Recorder::for_tests`):
 | Wider decryption records the agent's own calls to listed hosts | A test suite calling `api.openai.com` with the bundle shows up as model requests; Amp's `/api/internal` (e-mail, secret fingerprints, `connectors/amp-cli/harness.toml:105-109`) is recorded | Masking still applies (point 4). PRD-09 tells calls apart by headers and thread hints. PRD-12's wire-against-log check allows extra wire calls and reports them |
 | Name constraints use wide suffixes for cloud patterns | `amazonaws.com` as a permitted subtree weakens the leaked-key guard for AWS names | The key never leaves memory or the control socket; only processes we launch trust the CA |
 | CA handed over the control line | A bug in the hand-off makes every restart refuse all hosts | Acceptance 8 and `proxy_restart.rs` prove it |
-| Decoder guard drops a body | Past 256 MiB of open decoder windows a coded body is a GAP, not a record | Stated guard with a name; measured in acceptance 10. Raise it if RSS allows |
+| Decoder guard drops a body | When a body's window does not fit `Recorder::room()`, that coded body is a GAP, not a record | Stated guard with a name; decoder windows sit inside PRD-02's 512 MiB guard through `reserve`; acceptance 10 requires zero such GAPs |
+| Upstream connect retry | A listed host outage holds the harness's CONNECT up to 25 s instead of failing fast | Accepted: one slow answer beats a failed call (PRD-17 C6). Unlisted targets are not retried. Overridable default |
 | Upstream reset passed on as a reset | A harness that treated our clean close as "done" now sees an error | That is what it sees without us (point 7); it retries |
 | ECH, HTTP/3, UDP | A client with Encrypted Client Hello shows its public outer name; QUIC and WebRTC never reach a CONNECT proxy | Tunnel by outer name; not supported, stated in PRD-15's guide |
 | No credential | Another local user can route traffic through the proxy into this run | Loopback only; it cannot read anything out. Single-user sandboxes and laptops are the target |
 | `405` for non-CONNECT | A client that sends `http://` requests to `HTTPS_PROXY` is refused | goalcup never sets `HTTP_PROXY`, so no harness should; the pad counts `405`s. A local model server on plain HTTP is reached past the proxy and named by PRD-11 and PRD-10 (`local_model`) |
 | HPACK crate quality | An unmaintained or panicking decoder | Panic guard; RFC 7541 vectors in `proxy_h2.rs`; own decoder as the fallback |
-| Unverified facts | Bun `fetch` and HTTP/2 through a proxy; whether `curl --http2-prior-knowledge` offers only `h2` over TLS; Kilo's Vercel AI Gateway route; brotli window sizes Anthropic sends; a client that sends only a post-quantum key share (rustls with ring does not do hybrid key exchange) | Each is a pad row or a watcher check, not an assumption |
+| Unverified facts | Bun `fetch` and HTTP/2 through a proxy; whether `curl --http2-prior-knowledge` offers only `h2` over TLS; Kilo's Vercel AI Gateway route (PRD-11 and PRD-12 cite one; recheck on the day, T7); brotli window sizes Anthropic sends; a client that sends only a post-quantum key share (rustls with ring does not do hybrid key exchange) | Each is a pad row or a watcher check, not an assumption |
 
 ## Overridable defaults
 
 | Default | Value | Who may change it |
 |---|---|---|
 | Upstream connect retry for listed targets | until 25 s, pause 250 ms doubling to 2 s (`connect.rs:86-89`) | PRD-03 |
-| ALPN | `PreferH1` (h2 only for an h2-only client) | PRD-03, to `Mirror` after acceptance 3 and 10 pass with it, with a night-log line |
+| ALPN | `PreferH1` (h2 only for an h2-only client); the only mode in 1.0, no mirrored load run is scheduled | Owner, after the build |
 | Relay threads | 2 | PRD-03, if acceptance 10 shows relay lag |
 | Long tunnel, per host | one tunnel open 60 s with bytes in 10 different seconds, or 1 MiB sent up in 10 minutes | PRD-10 with PRD-03 |
 | Refusal learning | explicit alert only; trusted set wins; expiry 10 minutes; per boot | PRD-03 |
-| Memory guards | `client_hello` 64 KiB, `http_head` 64 KiB, `upgrade_copy` 1 MiB, `hpack_table` 1 MiB, `decoder_window` 256 MiB | PRD-03 |
+| Memory guards | `client_hello` 64 KiB, `http_head` 64 KiB, `upgrade_copy` 1 MiB, `hpack_table` 1 MiB, `decoder_window` = `Recorder::room()` at that moment (no number of its own) | PRD-03 |
 | Non-CONNECT requests | `405` | Owner (the ledger says never refuse; this refuses a request type no harness sends) |
 | Proxy credential | none | Owner |
 
@@ -655,13 +692,13 @@ Automated tests that guard them (fake upstream, `Recorder::for_tests`):
 PRD-00 and PRD-01 revision 2 took this PRD's twelve first-round asks. What is left:
 
 1. **PRD-01:** add `parse_stopped` to the note list (tail `{conn, reason}`), and `why`, `conns`, `up`,
-   `down`, `secs` as `long_tunnel` facts. Both are written today regardless; readers show unknown notes
-   as is.
+   `down`, `secs` as `long_tunnel` facts. Ruled by PRD-00 R3-4; PRD-01 copies them (P01-6). Done.
 2. **PRD-00:** the risk row and review-A answer for refusal learning say "a trusted set kept in the
    entry folder" and "earlier in the entry". This PRD keeps both tables per boot, with a 10-minute expiry
-   (section 4, reason there). Please read "in this boot".
-3. **PRD-02:** use `ProxyHandle::{stop_accepting, idle, open_conns}` for the hand-over and the after-seal
-   grace if you build them; read the CA line only after core dumps are off.
+   (section 4, reason there). Ruled by PRD-00 R3-5. Done.
+3. **PRD-02:** take the after-seal grace's quiet time from `ProxyHandle::quiet_since()`; read the CA
+   line only after core dumps are off; set status `losing` while a `parse_stopped` connection is open,
+   and clear it at that connection's close GAP.
 4. **PRD-08:** `conn_bytes` may become `fail` for unaccounted bytes outside any `conn` GAP (5a).
 5. **PRD-10:** words for `parse_stopped` and for `long_tunnel` with `why: "upload"`; key the pinned line
    off GAP `pinned`, since `pinned_host` was dropped (PRD-01).
@@ -676,9 +713,12 @@ Order of work, by PRD-00's slices:
    `pump.rs`, `decode.rs` (with the decoder guard) and `http1.rs` with 5a against S1 stubs: the first
    piece for the early real test (phase 1a, acceptance 1, Claude Code direct key). Then `ws.rs`: the
    second early test (acceptance 2, Codex). The per-host flag lands with `tunnel.rs`.
-2. **Second slice.** Refusal learning with the trusted set and expiry; `ProxyHandle` and the restart
-   test with an imported CA; the gateway and dodger rows.
-3. **Third slice.** `h2.rs`, then acceptance 3; flip to `Mirror` only after acceptance 3 and 10 pass with it.
+2. **Second slice.** Refusal learning with the trusted set and expiry; `ProxyHandle::quiet_since` and
+   the restart test with an imported CA; the gateway and dodger rows.
+3. **Third slice.** `h2.rs`, then acceptance 3. ALPN stays `PreferH1`.
+
+Build and run every test here in a build box (Vercel Sandbox, ledger B1); the cloud session only writes
+and reviews code.
 
 Traps from the audit and the old code:
 
@@ -700,8 +740,9 @@ Traps from the audit and the old code:
 - `catch_unwind` needs `UnwindSafe`; wrap the parser state in `AssertUnwindSafe` and drop that
   connection's parser after a panic (5a).
 - Set `SO_LINGER` 0 on the harness leg only when the upstream leg failed; a clean close stays clean.
-- Every implementer checks the vendor's current docs before a harness-specific assumption (T7): Kilo's
-  gateway route, curl's ALPN with `--http2-prior-knowledge`, the HPACK crate.
+- Every implementer checks the vendor's current docs before a harness-specific assumption (T7): Kilo
+  through Vercel AI Gateway by the route PRD-11 and PRD-12 cite, curl's ALPN with
+  `--http2-prior-knowledge`, the HPACK crate.
 
 How a watcher proves it in a real run: after each pad run, `goalcup-verify dump <entry> | jq` for
 `k=="open" and skind=="conn"`; every listed host must show `mode: "decrypt"` except the cases in
@@ -710,6 +751,10 @@ is a failure); grep for `parse_stopped` (zero expected); compare wire POSTs plus
 with the harness's own log (PRD-12); read each `long_tunnel` host by eye.
 
 ## Review answers
+
+History of revision 2. Where an answer here disagrees with the body or the "Alignment answers" section
+(`ProxyHandle::{stop_accepting, idle, open_conns}`, the 256 MiB decoder counter, the `Mirror` switch,
+the masked Codex capture), the body and "Alignment answers" win.
 
 Sources: CC = `prd-consistency.md` item; A = review A finding; B = review B item; U = the owner's
 relayed message of 30 Oct. Verdicts: accepted, partly accepted, rejected, not this PRD.
@@ -754,3 +799,37 @@ relayed message of 30 Oct. Verdicts: accepted, partly accepted, rejected, not th
 | B W1, W2 | Watcher runs the commands | Accepted. Acceptance 3, 7 and 9 are run by the watcher in the pad box |
 | B M3 | `tests/common/` not ready | Accepted. A private helper until it lands, removed at phase 3 |
 | B T6 | RR6 real run for host hints | Not this PRD (PRD-17); hint parsing is PRD-11's |
+
+## Alignment answers
+
+Revision 3 against OWNER-DECISIONS.md (the ledger wins). Fix ids are from the alignment fix lists.
+
+| Fix | What was done |
+|---|---|
+| L4-5 | Applied. `path` and HTTP/2 `:path` drop the query and fragment, as 0.7 does (sections 5 and 6); `safe_target` is copied; a test checks no query reaches the meta; the PRD-05 row and the cut table no longer copy query rules (ledger M1, point 4) |
+| L2-14 | Rejected. It conflicts with P03-14, which group 2 decided after it, and with PRD-17 C6, whose lesson test `listed_refusal_is_retried` keeps the retry. The retry never delays a working call; its cost is now a Risks row. Recording it in PRD-15's decisions is PRD-15's part |
+| L2-15 | Applied. `http_head` no longer stops parsing: the parser keeps scanning framing fields, stores no more, writes GAP `memory_guard` (`lost` 0, tail `head`) and goes on (section 5, section 11, a test). `upgrade_copy` and `hpack_table` keep the 5a stop, stated as rare in section 11 (ledger R5) |
+| L2-16 | Partly. Applied with P03-4's names, as PRD-01 already did: tunnel reason `hello_too_big`, close GAP 1 `memory_guard` on a listed host with `lost` = `up` + `down` + 1. `memory_guard` is not used as a tunnel reason, since PRD-01 keeps GAP reasons and `conn` reasons apart |
+| G2-11 | Applied. Acceptance 10 runs on PRD-16 A1 and A2 under the 10 USD cap with X1 and X3; the ALPN default stays `PreferH1`, with no mirrored run (acceptance 10, Risks, Overridable defaults). PRD-08's part is PRD-08's |
+| G2-23 | Applied. The process-wide 256 MiB counter is gone: a decoder checks `Recorder::room()` and holds `Recorder::reserve(window)` (section 7, section 11, Overridable defaults, PRD-02 row, test with `for_tests(room)` small) |
+| G2-24 | Applied. `ProxyHandle` has only `quiet_since() -> Mono`; `stop_accepting`, `idle` and `open_conns` are gone from section 10, the PRD-02 row, the builder notes, Asks 3 and `proxy_restart.rs` |
+| G2-25 | Applied. `Alpn::Mirror` is not built; `PreferH1` is the only mode; the `proxy_tls.rs` matrix runs under it; size about 4,250 (ledger L2) |
+| G2-26 | Applied. A body not decoded under `decoder_window`, and an `unsupported_encoding` body, get `lost` 0 and a `wire` tail (section 7) |
+| G2-27 | Applied. Asks 1 and 2 are marked ruled by PRD-00 R3-4 and R3-5 |
+| P03-4 | Applied (section 1 diagram, section 2, section 9, `proxy_connect.rs`, PRD-01 and PRD-08 rows). PRD-01 and PRD-08's parts are theirs |
+| P03-5 | Applied. `h2_unsupported` is out of the tunnel reasons and the listed-tunnel GAP list; section 6 says it is never a tunnel reason (ledger H6) |
+| P03-6 | Applied. The Codex fixture is re-deflated in the test from masked plaintext of a phase 1a record; no raw wire capture is written; reviewed by eye (point 4, ledger M1, AGENTS.md) |
+| P03-7 | Applied. Acceptance 1, 2 and 4 use PRD-12 check C1 (PRD-08 `threads_match` and `wire_keeps_up`; Hermes by the per-session totals form). The Hermes reference names PRD-08 section 3.1 and PRD-00 done item 1, since PRD-12 cites a different owner question number than the fix list |
+| P03-8 | Applied in acceptance 1 |
+| P03-9 | Applied. GAP 3 tail `codings` with its bounds; `unsupported_coding` removed from the PRD-01 row |
+| P03-11 | Applied. Upstream ALPN rejection gives a fresh TCP connection, a tunnel with `alpn_other` and GAP `protocol_other` (section 4, `proxy_tls.rs`) |
+| P03-14 | Applied. The listed-target retry stays; a Risks row states the cost |
+| P03-15 | Applied. Every non-`200` answer writes one `connect_refused` note, at most one per host and status per minute (rule 3, test) |
+| P03-16 | Applied in section 3 |
+| P03-17 | Applied in acceptance 4, Risks "Unverified facts" and the builder notes |
+| P03-19 | Applied in 5a item 2, the PRD-02 row and Asks 3 |
+| P03-20 | Applied in the builder notes (ledger B1) |
+| P03-21 | Applied in section 2 (checked: `connect.rs:75` is 32 KiB today) |
+| P03-22 | Applied. One `ca_refused` note each time a pair is learned; acceptance 7's third call adds a second note; a no-alert close has GAP tail `{"alert": false}` (section 1 diagram, section 4, `proxy_tls.rs`). PRD-08's part is PRD-08's |
+| P05-21 | Applied in the PRD-05 row |
+| X2-11 | Partly. Moving the "Review answers" and ruled "Asks" into `REVIEW-HISTORY.md` needs a write to a second file, which this pass may not make; it is left to the one pass that owns that file. Here the binding rulings are already in the body, Asks 1 and 2 are marked done, and the "Review answers" section opens with a line saying the body and these answers win |

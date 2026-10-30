@@ -1,10 +1,12 @@
 # PRD-06: Uploader and compression
 
-Id: PRD-06. Version: goalcup 1.0. Revision 2, 30 October 2026 (revision 1: earlier the same day).
-Base: main at 4b226de2. Index: [PRD-00](PRD-00-index.md) revision 2. Format:
+Id: PRD-06. Version: goalcup 1.0. Revision 3, 30 October 2026 (the alignment pass against the ledger;
+revision 2 and revision 1 earlier the same day). Base: main at 4b226de2. Index: [PRD-00](PRD-00-index.md)
+revision 4. Ledger: [OWNER-DECISIONS.md](OWNER-DECISIONS.md) wins over this file. Format:
 [PRD-01](PRD-01-record-format.md) revision 2 (binding). Upload contract: [PRD-07](PRD-07-worker-server.md)
-seam S5 (binding). Revision 2 takes PRD-00's rulings on this PRD's asks and answers the three reviews
-(section "Review answers" at the end).
+seam S5 (binding). Revision 2 took PRD-00's rulings on this PRD's asks and answered the three reviews
+(section "Review answers"). Revision 3 applies the alignment fix lists (section "Alignment answers" at
+the end).
 
 ## Goal
 
@@ -20,23 +22,25 @@ server and what waits), 1 and 2 (no cap of ours on bytes, chunks or entries).
 
 ## Owner decisions it carries out
 
-- zstd with a long window (`--long=27`): run 1's server copy was 4 times smaller (100.8 MB against
-  408.9 MB, run report "Size and compression").
-- Prune a part once the server saved it (owner answer 9, BRIEF2).
-- No caps of our own; the per-run size limit goes (owner answers 2 and 3). Only stated memory guards.
-- Upload in smaller chunks, more often, with a capped backoff (run report "Fix first").
-- The participant, status, heartbeat and server see only written counts and off time (BRIEF3).
-- Email work is out of scope: the heartbeat says `failed`; the server can mail later (BRIEF3).
-- One process: the uploader lives in the recorder process (option B, BRIEF3), on two plain threads
-  (PRD-00 "Smaller interface rulings").
+- F2 (locked): zstd with a long window (`--long=27`): run 1's server copy was 4 times smaller
+  (100.8 MB against 408.9 MB, run report "Size and compression").
+- U1 (locked): prune a part once the server confirmed it stored it.
+- R5 (locked): no caps of our own; the per-run size limit goes. Only stated memory guards.
+- U1 (locked): upload often, in small chunks, with a backoff that is capped short and resets when the
+  server's offset moves.
+- R6 and R7 (locked): the participant, status, heartbeat and server see only written counts and off
+  time; the heartbeat says `failed` when recording is off. Email work is out of scope; the server can
+  mail later.
+- L5 (locked): one process. The uploader lives in the recorder process, on two plain threads (PRD-00
+  "Smaller interface rulings"), and never ends that process.
 - Keep every part on test runs: `GOALCUP_KEEP_PARTS=1` on every pad and acceptance run (PRD-00
   defaults "Kept parts", done item 1).
-- Chunk cadence: every 5 minutes, or at once when 16 MiB compressed waits (PRD-00 defaults, owner
-  question 6).
-- Every build and acceptance run uses the **staging** Worker with the test approval route; nothing
-  here touches production (BRIEF3, 30 Oct early; PRD-00 defaults "Server").
+- Chunk cadence: every 5 minutes, or at once when 16 MiB compressed waits (PRD-00 defaults, PRD-00
+  owner question 1, old 6).
+- B4 (locked): every build and acceptance run uses the **staging** Worker with the test approval
+  route; nothing here touches production.
 - The tail window stays 24 hours in 1.0, and the participant is told the time once (PRD-00 owner
-  question 2).
+  question 1, old 2).
 
 ## Today
 
@@ -81,12 +85,23 @@ upload thread --> upload.json (S9: state, server_word, for PRD-10 and the pad)
 - **Two plain threads**, `upload` and `beat`, started by `run_recorder` after boot recovery (PRD-02
   section 9.2 step 5) and lowered with `pipeline::low_priority()` (PRD-02; no macOS QoS class in
   1.0). They use the blocking `ureq` client copied from `http.rs`. They never touch the relay
-  runtime, so a hung server cannot reach a relay task. They read `Durable` with `borrow()` on their
-  1 s tick (PRD-02 S4). Settled by PRD-00; no `spawn_blocking` variant.
+  runtime, so a hung server cannot reach a relay task. They copy `Durable` out with `*rx.borrow()`
+  (or `borrow().clone()`) on their 1 s tick (PRD-02 S4) and drop the borrow at once; no `Ref` is held
+  across a read, a hash or a call, so the writer never waits on them. Settled by PRD-00; no
+  `spawn_blocking` variant.
+- **The uploader never ends the process.** Each upload round and each beat runs inside
+  `catch_unwind`. A panic there writes one fixed-text line through `cli::log::line` (S11), sets
+  `upload.json` `state` `waiting` with class `internal`, backs off by section 5 and never ends the
+  process. Recording never depends on the uploader (PRD-02 9.2 step 1 lists no uploader exit).
 - **One queue of entries.** The upload thread serves every entry on this computer whose
-  `upload.json` is not `done`, whose run's credential is still there and that is not being sent by
-  another uploader (section 9): oldest entry first, the live entry last. That covers a dead entry
-  closed by `close_dead_entry` (PRD-02 section 9.4) and an earlier run whose wrap-up ran out.
+  `upload.json` is not `done` or `closed`, whose run's credential is still there and that is not
+  being sent by another uploader (section 9). Each round serves the live entry first, then one round
+  for each older entry, oldest first. An entry that is `refused`, `stuck` or waiting on backoff never
+  holds the queue: the thread moves on and comes back when its `next_try` is due. An entry whose
+  `upload_by` has passed is dropped from the queue and its `upload.json` says `closed`. The upload
+  thread (not the beat thread) sends the final heartbeat of every non-live entry. The queue covers a
+  dead entry closed by `close_dead_entry` (PRD-02 section 9.4) and an earlier run whose wrap-up ran
+  out.
 - **In null mode** (PRD-02 section 8 step 9) the null recorder still runs both threads: what is on
   disk is sent (with the `fdatasync` rule of section 3), and the heartbeat says `failed`.
 - **No harness-specific code.** Direct key, gateway or dodger: the record is the same format, so the
@@ -102,8 +117,8 @@ matching on, content checksum off, one frame per part, flushed at every LINK. Th
 needs the `zstdmt` feature, and we do not use it.
 
 **Decision: window 27 on every machine, no small-machine fallback in 1.0.** One setting means every
-reader needs the same 128 MiB and no code decides by RAM. PRD-01 allows window 26; we do not use it
-until a measured machine needs it.
+reader needs the same 128 MiB and no code decides by RAM. Window 27 with long matching is locked
+(ledger F2); a smaller window needs the owner.
 
 Memory, measured with Python `zstandard` 0.25 streaming 300 MiB (appendix M 4.5,
 `M-two-hour-run.md:424-425`), unverified in Rust until built:
@@ -111,7 +126,6 @@ Memory, measured with Python `zstandard` 0.25 streaming 300 MiB (appendix M 4.5,
 | Item | Client memory | Note |
 |---|---|---|
 | Compressor, level 3, no long window (today's uploader) | about 7 MiB | Only while a chunk was built |
-| Compressor, `window_log` 26 with long matching | about 73 MiB | Not used in 1.0 |
 | **Compressor, `window_log` 27 with long matching (1.0)** | **about 141 MiB** | For the whole run, in the writer. The window fills as data flows: an idle run grows toward it slowly |
 | Compressor at level 9, `window_log` 27 | about 159 MiB | Not used |
 | Uploader | under 1 MiB | No spool, no body in memory: it hashes the range in one read pass and streams it in a second, with a 64 KiB buffer each |
@@ -133,8 +147,8 @@ of the steady cost, not of the guard.
   machines is unmeasured. PRD-02 R8 measures it and reports it; it is never a pass line (PRD-00:
   no speed number fails a gate). If R8 reports under 50 MB/s and names the compressor as the slow
   stage, the first change is level 1 with the same window and long matching, because the long
-  window is where the gain is. Any change needs that measured reason in the night log (PRD-01
-  overridable defaults).
+  window is where the gain is. A level change needs that measured reason in the night log (PRD-01
+  overridable defaults); the window and long matching never change without the owner (ledger F2).
 
 ### 3. Chunks from parts
 
@@ -219,8 +233,8 @@ failures = 0 whenever the server's offset moved forward (a stored chunk, or a po
              the last known offset), and whenever the entry is caught up
 ```
 
-So the waits run 1, 2, 4, 8 ... up to 2 minutes, never more, and a flaky network that still makes
-progress never escalates. That fixes the run 1 bug (`lifecycle.rs:513-533`). The clock is the
+So the nominal waits are 2, 4, 8 ... 120 s, each times a random 0.5 to 1.0, and never more than
+120 s, and a flaky network that still makes progress never escalates. That fixes the run 1 bug (`lifecycle.rs:513-533`). The clock is the
 recorder's `now()` (boot time, counts sleep), checked on a 1 s tick, so a wait is never stretched by
 a suspend.
 
@@ -229,12 +243,17 @@ a suspend.
 | No answer, reset, timeout (connect 15 s, `http.rs:15`; no byte moved for 60 s; whole PUT 600 s) | `network` | Backoff |
 | 429, 5xx, 503 maintenance | `server_busy` | Backoff |
 | 503 `awaiting_final` | `server_busy` | Wait until `upload.json` `final` is `sent` (the beat thread had the final heartbeat committed, section 6), then retry at once. The Worker's `Retry-After: 60` (`FINAL_RETRY_AFTER`, `server/worker/src/runs.ts:440`) is not waited out once the final is committed |
-| 409 | none | Read the position again at once and go on from there (kept from `session.rs:349-353`) |
+| 409 | none | Read the position again at once and go on from there (kept from `session.rs:349-353`). A 409 whose re-read shows no forward move counts as a failure for the backoff |
 | 400, 413, 422, 401, 404, 410 | `refused` | Backoff, for ever, while the process lives: a bad deploy is fixed on the server (D64 holds). Said once after 3 in a row, kept in `upload.json` until the server answers normally |
 | The two copies disagree (section 3, step 4 or a hash mismatch) | `stuck` | Read the position again every 2 minutes; never send across the disagreement; say so plainly |
 
 Only `goalcup upload` by hand gives up, on 401, 404, 410 and `stuck`, and says why (kept from
-`policy.rs:248-265`). A 422 (SHA-256 refused) re-hashes the range before the retry.
+`policy.rs:248-265`). A 422 (SHA-256 refused) re-hashes the range before the retry. A panic inside a
+round or a beat (section 1) is class `internal` and backs off like `network`.
+
+Every failed call writes one `goalcup.log` line through `cli::log::line` (S11):
+`upload: <class> <status or -> wait <s>s` (no URL, header or body). The watcher reads the waits from
+these lines (U3, U4).
 
 ### 6. Heartbeat
 
@@ -255,13 +274,17 @@ counter. The body is PRD-07's seam S5 (PRD-07 section 4 owns it; this PRD fills 
   point there is nothing to say and no beat is sent, so `recording: "unknown"` is never sent.
 - `model_requests`: model requests written, `http_post + ws_up_msgs`, entry totals over boots (PRD-01
   section 9, PRD-02 section 6). Never a selected or offered count.
-- `counts`: one **flat** object, at most 2 KiB (PRD-07 refuses anything else with `400`): every
-  whole-number COUNT counter of PRD-01 section 9 as entry totals at the durable LINK (maps such as
-  `hosts` are left out, so it stays flat), plus `v`, `boot`, `mode` (from `status.json`), `off_ms`
-  and `off_spans` (the sum of `recorder_down` spans, plus the open span while in null mode),
-  `off_since` (the null span's start, else null) and `waiting_bytes` (section 11). If PRD-07's key
-  list and PRD-01's COUNT keys ever differ, PRD-07's list wins for the wire and PRD-01's for the
-  record.
+- `counts`: one **flat** object, at most 2 KiB. PRD-07 drops anything else with a `counts-dropped`
+  log line and records the heartbeat without it (`200`, never `400`, PRD-07 section 4), so the loss
+  is silent; `upload_beat.rs` guards the size. The keys, named here (PRD-07 fixes no key list;
+  `docs/UPLOAD-API.md` copies these): every whole-number COUNT counter of PRD-01 section 9 as entry
+  totals at the durable LINK (maps such as `hosts` are left out, so it stays flat), plus `v`, `boot`,
+  `mode`, `off_ms` and `off_spans` (the sum of `recorder_down` spans, plus the open span while in
+  null mode), `off_since` (the null span's start, else null) and `waiting_bytes` (section 11).
+- **`mode`.** A live recorder computes it from the `Durable` snapshot's age and PRD-02's live atomics
+  (`written`, `losing`, `held_bytes`, `writer_idle_ms`), not only from `status.json`. A null
+  recorder, `goalcup upload` and a dead entry read it from `status.json`. The final heartbeat sends
+  `mode: sealed`.
 - **Where the numbers come from.** A live recorder: the `Durable` snapshot (PRD-02 S4: counters at
   the durable LINK, entry totals). A null recorder, `goalcup upload` and a dead entry: PRD-02's
   entry totals read from `counts.jsonl` up to the last link on disk (`pipeline::entry_totals`, ask
@@ -277,12 +300,13 @@ counter. The body is PRD-07's seam S5 (PRD-07 section 4 owns it; this PRD fills 
 
 | State | When |
 |---|---|
-| `ok` | `mode` `recording` or `writer_slow` (or `sealed`), and `gaps`, `lost_bytes`, `lost_unknown`, `off_ms` and `streams_in_gap` are all 0 |
-| `gaps` | Recording now (or sealed), and any of those is above 0, or `mode` is `losing`. A recovered entry is `gaps`: its `abandoned` span is off time |
-| `failed` | `mode: null`, and only then. A state, not a latch: the next beat after a good boot says `gaps` |
+| `ok` | `mode` `recording` (or `sealed`), and `gaps`, `lost_bytes`, `lost_unknown`, `off_ms` and `streams_in_gap` are all 0 |
+| `gaps` | Recording now (or sealed), and any of those is above 0, or `mode` is `losing` or `writer_slow` (records wait unwritten for 10 to 60 s). A recovered entry is `gaps`: its `abandoned` span is off time |
+| `failed` | Recording is off: `mode` null, or `writer_idle_ms` over 60 s while records wait (PRD-02's stall exit follows and the next boot writes a `recorder_down` gap with cause `writer_stalled`). A state, not a latch: the next beat after a good boot says `gaps` |
 
 - The Worker stores `counts` in the existing `heartbeats.vitals` jsonb column
-  (`server/worker/sql/goal-cup-tracer-upload.sql:2552`), so no website migration (PRD-00 owner question 1).
+  (`server/worker/sql/goal-cup-tracer-upload.sql:2552`), so no website migration (ledger S3; PRD-00
+  owner question 1).
   Disk and process vitals (`api.rs:214-235`, `src/vitals.rs`) are gone.
 - **The answer** (`stop`, `reason`, `deadline_at`, `seconds_left`, `sealed`; PRD-07 section 3) is
   published as `ServerWord {stop, reason, seconds_left, asked_at}` on a `watch` channel (seam S10),
@@ -295,14 +319,18 @@ counter. The body is PRD-07's seam S5 (PRD-07 section 4 owns it; this PRD fills 
 - **Final heartbeat.** Once the seal is durable (PRD-02 section 11 step 5), the beat thread sends
   `final: true` with the seal LINK's `seq`, hash and `raw_end` (the last `E` or `R` index line) and
   `repo_head`. It goes before the rest of the chunks, because past the deadline the Worker refuses
-  chunks until the end is committed (`chunks.ts:52-60`). After the last chunk is stored it sends the
-  final heartbeat again, and repeats it with backoff until the answer says `sealed: true` (PRD-07
+  chunks until the end is committed (`chunks.ts:52-60`). After the last chunk is stored, if its
+  answer did not say `sealed: true`, it sends the final heartbeat again, and repeats it with backoff
+  until the answer says `sealed: true` (PRD-07
   section 3; a repeat is `final_existing` and costs nothing) or the wrap-up ends. Once a final
   heartbeat was sent, no ordinary heartbeat follows for that entry (PRD-17 S4). For a dead entry
   closed by `close_dead_entry`, the final heartbeat names its `recovered` seal the same way.
 - **No seal call.** PRD-07 cuts `POST .../seal`. `seal.json`, `baseline.json` and the tunnel list are
-  records now (PRD-01 section 11). The entry is complete when the answer (or `GET` position) says
-  `sealed: true`.
+  records now (PRD-01 section 11). The entry is complete when a heartbeat, chunk or position answer
+  says `sealed: true`.
+- **A replaced run.** When a heartbeat answer says `stop` with reason `replaced`, `upload_by`
+  (section 9) becomes the answer's time plus 24 hours, because the Worker closes a replaced run
+  24 hours after `replaced_at` (`server/worker/src/db.ts:23-26, 38-40`).
 
 ### 7. Prune, and keep on test runs
 
@@ -329,7 +357,7 @@ fully stored, its folder still holds every other local file of PRD-00's list: `u
 **`keep` is true** (nothing is ever pruned) when:
 
 - `goalcup start` or `continue` ran with `GOALCUP_KEEP_PARTS=1` in its environment. The pad (PRD-12)
-  and the 2-hour run (PRD-16) set it. PRD-10 passes it in the start facts and may also offer a flag.
+  and the 2-hour run (PRD-16) set it. PRD-10 passes it in the start facts (no flag).
 - The run has no server (local only): nothing can be confirmed.
 
 `keep` is written into `upload.json`, so the verifier and the pad know why parts are there. A
@@ -351,14 +379,15 @@ participant who sets it only keeps more on their own disk; that is harmless.
 
 - **After the seal** the recorder process stays alive for the wrap-up: final heartbeat, then rounds,
   then the final heartbeat again until `sealed`, for at most 60 minutes counted on boot time (kept
-  from `policy.rs:86`). PRD-10 shows progress from `upload.json` once a second. Ctrl-C at any moment
-  is safe: what is left waits on disk. The wrap-up never holds the harness: PRD-02 bounds the seal
+  from `policy.rs:86`). PRD-10 shows progress from `upload.json` once a second. Ctrl-C ends the
+  watchdog's wait only; the recorder finishes the wrap-up alone (PRD-02 section 8 step 11). Whatever
+  is left after 60 minutes waits on disk. The wrap-up never holds the harness: PRD-02 bounds the seal
   itself (PRD-00 S8), and the wrap-up starts after it.
 - **The tail window.** The run credential and the server's intake end 24 hours after the run's
   deadline (`server/worker/src/db.ts:17`, `:57`). `upload.json` carries that time as `upload_by`
-  (deadline from the run's `server.json` plus 24 hours). When the wrap-up ends with bytes left, the
-  finish line names it once: "Run goalcup upload before <time>." (review A finding 15, PRD-00 owner
-  question 2).
+  (deadline from the run's `server.json` plus 24 hours; for a replaced run, section 6). When the
+  wrap-up ends with bytes left, the finish line names it once: "Run goalcup upload before <time>."
+  (review A finding 15, PRD-00 owner question 1, old 2).
 - **`goalcup upload [entry]`** (PRD-10 dispatches, this PRD implements `upload::manual::run`):
   1. Take `upload.lock` (an `flock` in the entry folder, never `rec/lock`, so a restarting recorder
      is never shut out: PRD-02 9.2 step 2 exits 73 on a `rec/lock` held past 10 s).
@@ -412,9 +441,10 @@ mode 0600. Read by PRD-10 (status, finish), PRD-12 (pad), PRD-16 (watchers).
  "server_word":{"stop":false,"reason":null,"seconds_left":561540,"asked_at":"2026-11-07T10:00:00Z"}}
 ```
 
-`state` is `local`, `sending`, `caught_up`, `waiting` (network or server busy), `refused`, `stuck`
-or `done`. `final` is `none`, `sent` (the server committed the final heartbeat) or `sealed` (an
-answer said `sealed: true`). `waiting_bytes` is compressed bytes between the server's offset and the
+`state` is `local`, `sending`, `caught_up`, `waiting` (network, server busy or `internal`), `refused`,
+`stuck`, `done` or `closed` (`upload_by` passed with bytes left; section 1). `final` is `none`, `sent`
+(the server committed the final heartbeat) or `sealed` (a heartbeat, chunk or position answer said
+`sealed: true`). `waiting_bytes` is compressed bytes between the server's offset and the
 durable point. `server_url` is the server's address (renamed from `server`, which PRD-10 first asked
 for the answer; PRD-00 named that key `server_word`). `server_word` is the last heartbeat answer,
 null before the first one; `goalcup time-left` computes the time left as `seconds_left` minus the
@@ -437,7 +467,7 @@ Nothing is linked from the old crate (PRD-13 deletes it). "Copied" means rewritt
 | `uploader/finish.rs` (354 / 121) | **Changes**: final heartbeat then the rest stay; seal documents, tunnel list reading (`:236-348`) go | in `upload/send.rs` |
 | `uploader/local.rs` (246 / 81) | **Goes** mostly: `lock_entry` (now `upload.lock`), `repo_head` (the seal records `workspace_head`), `sent` marker (now `upload.json` `done`), chain end and link lookups (now index lookups) | `upload/state.rs`, about 70 |
 | `prune.rs` (173 / 248) | **Changes**: section 7's four conditions; the 2-hour timer, `AckAges`, disk pressure, `clean_finished` and `clean_finished_runs` go | `upload/prune.rs`, about 50 |
-| `api.rs` (291 / 51) | **Changes**: `RunPosition` without `last_ack`; `ChunkAnswer` without `ack`; new `HeartbeatRequest`; `HeartbeatAnswer` kept. Open, continue and device types move to PRD-10; the dual `tracer_version` name (`api.rs:310-341`) goes; seal, receipt and abandon types go | in `upload/client.rs` and PRD-10's files |
+| `api.rs` (291 / 51) | **Changes**: `RunPosition` without `last_ack`; `ChunkAnswer` without `ack`; new `HeartbeatRequest`; `HeartbeatAnswer` kept. Open, continue and device types move to PRD-10; the dual `tracer_version` name (`api.rs:18-61`, tests at `:310-341`) goes; seal, receipt and abandon types go | in `upload/client.rs` and PRD-10's files |
 | `mod.rs` (523 / 0) | **Splits**: `open_run`, `continue_run`, `is_run_id` (about 200) move to PRD-10; receipt, `keep_run`, abandon, give-back and `pending-open.json` (about 250) go; `UploadRecord` becomes the run's `$GOALCUP_HOME/runs/<run>/server.json`, written by PRD-10 | `upload/mod.rs`, about 60 |
 | `uploader.rs` (57 / 25) | Doc and re-exports, rewritten | `upload/mod.rs` |
 | Outside the module: `commands/upload.rs` (426), `participant/upload.rs` (107), `src/vitals.rs` (209), leftovers in `main.rs:349-383` | Manual upload logic becomes `upload/manual.rs` (about 90); words move to PRD-10; vitals and leftovers go | |
@@ -450,7 +480,8 @@ outside it. PRD-00's size budget carries the 940.
 
 Create (all new, in the fresh crate):
 
-- `crates/goalcup/src/upload/mod.rs` (`spawn(ctx) -> UploadHandle`, the entry queue, `finish`)
+- `crates/goalcup/src/upload/mod.rs` (seam S18: `spawn(ctx) -> UploadHandle`,
+  `UploadHandle::finish(wrap_up, seal_facts { reason, workspace_head, totals })`; the entry queue)
 - `crates/goalcup/src/upload/client.rs` (copied HTTP client, request and answer types for upload)
 - `crates/goalcup/src/upload/chunk.rs` (index lookup, chunk cut, headers, the hash pass)
 - `crates/goalcup/src/upload/send.rs` (rounds, retries, position, conflict, final order)
@@ -458,7 +489,7 @@ Create (all new, in the fresh crate):
 - `crates/goalcup/src/upload/policy.rs` (cadence, backoff, wrap-up)
 - `crates/goalcup/src/upload/prune.rs`, `crates/goalcup/src/upload/state.rs` (`upload.json`),
   `crates/goalcup/src/upload/manual.rs` (`goalcup upload`)
-- `crates/goalcup/tests/upload_*.rs` (acceptance below)
+- `crates/goalcup/tests/upload_*.rs` (acceptance below), including `upload_worker.rs` (full tier)
 - Local files in the entry folder: `upload.json`, `upload.lock`
 
 Must not touch: `crates/goalcup-format/` (PRD-01; the compressor settings live in `part.rs`),
@@ -471,17 +502,18 @@ Must not touch: `crates/goalcup-format/` (PRD-01; the compressor settings live i
 | PRD | What crosses | Direction |
 |---|---|---|
 | PRD-01 (F1) | `IndexLine {kind L/E/R, seq, raw_end, c_end, hash}`, `read_index(path)`, part naming by first raw offset, the 16 MiB flush bound, `hash(-1)`, write order (index line after its bytes; only newline-ended lines count), rotation order (sync part, sync index, durable point at `E`, drop the old encoder, then open the next); compressor constants in `part.rs` | Used here; old asks B1 to B3 taken by PRD-01 revision 2 |
-| PRD-02 (S4, S8) | `Recorder::durable()` watch (`Durable` with entry-total counters at the durable LINK, read by `borrow()`); `status.json` `mode` and `off.since`; `Recorder::now()` (boot time); `pipeline::low_priority()`; `upload::spawn` after recovery (9.2 step 5) and in null mode; the seal hands over with `UploadHandle::finish(wrap_up, seal_facts)`; `pipeline::close_dead_entry` and `pipeline::entry_totals` used by `goalcup upload` | Both; asks P1 to P3 |
+| PRD-02 (S4, S8) | `Recorder::durable()` watch (`Durable` with entry-total counters at the durable LINK, copied out of `borrow()` at once); the live atomics `written`, `losing`, `held_bytes`, `writer_idle_ms` for `mode`; `status.json` `mode` and `off.since`; `Recorder::now()` (boot time); `pipeline::low_priority()`; `upload::spawn` after recovery (9.2 step 5) and in null mode; the seal hands over with `UploadHandle::finish(wrap_up, seal_facts { reason, workspace_head, totals })` (seam S18); `pipeline::close_dead_entry` and `pipeline::entry_totals` used by `goalcup upload` | Both; asks P1 to P3 |
 | PRD-02 and PRD-10 (S10, S9) | `ServerWord {stop, reason, seconds_left, asked_at}` on a `watch` channel: the recorder forwards it to the watchdog as the `server` line; the watchdog resets its deadline timer from `seconds_left` and on `stop` ends the harness and seals with reason `server_stop`. The same answer is `upload.json` `server_word`, which `goalcup time-left` reads | Given here |
-| PRD-07 (S5, S13) | `GET` position without `last_ack`, with `sealed`; `PUT` chunk with today's headers, answer `{offset, next_seq, head, received_at}`; heartbeat with one flat `counts` object (at most 2 KiB, plus `waiting_bytes`), `repo_head` on the final, `recording` required (`ok`, `gaps`, `failed`; no `unknown` from the client); answer adds `sealed`; the final heartbeat repeated until `sealed: true`; no seal route; no run size limit (413 no longer sent); the 32 MiB cap stays; `GENESIS` stays 64 zeros; `Retry-After` on 429 and 503. `fetch-run.sh` writes `rec.gcr.zst` (chunks joined, not decoded) and `fetch.json` (S13) | Used here |
+| PRD-07 (S5, S13) | `GET` position without `last_ack`, with `sealed`; `PUT` chunk with today's headers, answer `{offset, next_seq, head, received_at, sealed}`; heartbeat with one flat `counts` object (at most 2 KiB, plus `waiting_bytes`; a bad one is dropped with a `counts-dropped` log line, the heartbeat kept, never `400`; keys named in section 6), `repo_head` on the final, `recording` required (`ok`, `gaps`, `failed`; no `unknown` from the client); answer adds `sealed`; the final heartbeat repeated until `sealed: true`; no seal route; no run size limit (413 no longer sent); the 32 MiB cap stays; `GENESIS` stays 64 zeros; `Retry-After` on 429 and 503. `fetch-run.sh` writes `rec.gcr.zst` (chunks joined, not decoded) and `fetch.json` (S13), whose `heartbeats` list U6 reads | Used here |
 | PRD-08 | Server copy check: `rec.gcr.zst` equals concatenated local parts (only with `keep`) | Used there |
 | PRD-09 | Nothing from the client; reads the fetched copy | none |
 | PRD-10 | Writes `$GOALCUP_HOME/runs/<run>/server.json` (server URL, run, deadline) and the run credential before `start` launches; passes `keep` in the start facts; reads `upload.json` (S9, incl. `server_word` and `upload_by`); renders section 10's lines; dispatches `goalcup upload` to `upload::manual::run`; uses `upload::client::ServerClient` for device flow, open and continue | Both |
-| PRD-12 | Sets `GOALCUP_KEEP_PARTS=1`; reads `upload.json` (`keep`, `final: sealed`) for its upload wait; runs the cut of U3 and U5 with one `/etc/hosts` line | Used there |
+| PRD-12 | Sets `GOALCUP_KEEP_PARTS=1`; reads `upload.json` (`keep`, `final: sealed`) for its upload wait; runs the cut of U3 and U5 (`cut-worker@1+10`, one `/etc/hosts` line; its stand-in never terminates TLS) | Used there |
+| PRD-10 (S11) | `cli::log::line`: the one fixed-text `upload:` line per failed call and the panic line (sections 1 and 5) | Used here |
 | PRD-13 | Deletes `crates/goalcup-cli/src/upload/**`, `commands/upload.rs`, `vitals.rs` and the tests listed below | Done there |
-| PRD-14 | The fake Worker in `tests/common/` (position, chunk, heartbeat routes with injectable failures; until it lands this PRD keeps a private one, removed at phase 3); the `test-hooks` hooks `GOALCUP_TEST_UPLOAD_POLICY` (round, trigger and backoff in ms) and `GOALCUP_TEST_FSYNC_COUNT`. `GOALCUP_TEST_ROTATE_MB` is PRD-02's and no proof here needs it | Used here |
+| PRD-14 | The fake Worker in `tests/common/` (position, chunk, heartbeat routes with injectable failures; until it lands this PRD keeps a private one, removed at phase 3); the `test-hooks` hooks `GOALCUP_TEST_UPLOAD_POLICY` (round, trigger and backoff in ms) and `GOALCUP_TEST_FSYNC_COUNT` (the feature is pending the owner, PRD-00 owner question 12; default kept, never in a release build). `GOALCUP_TEST_ROTATE_MB` is PRD-02's and no proof here needs it. The clock case of `upload_backoff.rs` needs no hook: `policy.rs` takes `now` as an argument. `upload_worker.rs` (full tier: the real client against `wrangler dev`, `fetch-run.sh --local`, equal bytes) is this PRD's | Used here |
 | PRD-16 | First staging deploy after this PRD and PRD-07's heartbeat step merge; the 2-hour run sets `keep`; watcher checks U2 (X5) and U7 (X9) | Used there |
-| PRD-17 | Lessons S1 to S6, S8, S9: lag bug, prune at seal, lost answer after commit, `409` re-read, `awaiting_final` order, no ordinary beat after the final, heartbeat after a cut | Used here |
+| PRD-17 | Lessons S1 to S9 (S7: a clock set back does not lengthen a segment): lag bug, prune at seal, lost answer after commit, `409` re-read, `awaiting_final` order, no ordinary beat after the final, heartbeat after a cut | Used here |
 
 ## What is cut
 
@@ -493,7 +525,7 @@ Must not touch: `crates/goalcup-format/` (PRD-01; the compressor settings live i
 | `crates/goalcup-cli/src/vitals.rs` | 209 | its unit tests; vitals cases in `tests/it/upload_server.rs` |
 | Leftovers step, `crates/goalcup-cli/src/main.rs:349-383` | 35 | in `tests/it/upload_*.rs` |
 | Signed acks and receipts on the client (`acks.jsonl`, `receipt.json`, `session.rs:449-496`, `mod.rs:243-295`) | inside the above | ack and receipt cases in `tests/it/upload_chunks.rs`, `upload_open.rs` |
-| Upload integration tests | none | `tests/it/upload_chunks.rs` (1,736), `upload_open.rs` (1,548), `upload_server.rs` (1,419), `upload_server_device.rs` (529), `upload_server_segments.rs` (961), `tests/full/upload_worker.rs` (456), the Rust stand-in server `tests/common/upload_server/` (2,514): 9,163 test lines. Device and open cases PRD-10 still needs are rewritten there |
+| Upload integration tests | none | `tests/it/upload_chunks.rs` (1,736), `upload_open.rs` (1,548), `upload_server.rs` (1,419), `upload_server_device.rs` (529), `upload_server_segments.rs` (961), the Rust stand-in server `tests/common/upload_server/` (2,514): 8,707 test lines. `tests/full/upload_worker.rs` (456) is rewritten as this PRD's `upload_worker.rs`. Device and open cases PRD-10 still needs are rewritten there |
 
 ## Acceptance
 
@@ -513,13 +545,14 @@ unverified; the watcher checks it first with `getent hosts <worker host>` before
 
 | # | Proof | Pass |
 |---|---|---|
-| U1 | **Server copy equals local.** Any pad run with `keep`. After the finish, `fetch-run.sh` the entry | `rec.gcr.zst` has the same SHA-256 as `cat rec-*.gcr.zst`; `zstd -dc --long=27` exits 0 on both; in `fetch.json` every chunk is at most 32 MiB compressed and has raw length above 0, and each chunk's start and end are a part name or an index line's `raw_end` of the same part (no chunk crosses a part); `upload.json` `final` is `sealed` |
-| U2 | **The upload keeps up.** A Codex `full` pad run (the payments prompt with many subagents, `keep` on), and again during A1 (PRD-16 X5). A watcher reads `upload.json` every minute; the conductor reads `entries.upload_offset` | At every minute the server is at most 6 minutes or 64 MiB (raw) behind the durable point. No wait over 120 s in `upload.json` history. After the seal, `done` within 2 minutes |
-| U3 | **Network cut.** During a Claude Code `smoke` pad run with one subagent, the cut for 10 minutes, then lifted | The harness turn completes, and its own log shows no error during the cut; in every minute of the cut in which the harness log shows a call, `status.json` written model requests rise. `upload.json` shows `waiting` with class `network` within 1 minute; waits are 2 s, 4 s ... capped at 120 s; the first heartbeat after the lift goes within 2 minutes; the server catches up within 3 minutes of the lift; U1 holds |
-| U4 | **Crash mid-PUT.** The kill test (PRD-02 R1). The watcher times one of the two kills for a moment when `upload.json` says `sending`, when it can | U1 holds; the Worker log shows at most one repeat of the in-flight chunk; no `stuck`. If no kill met a PUT, the row says so and `upload_resume.rs` stands for it |
-| U5 | **Prune.** A Claude Code `smoke` pad run **without** `keep`, with the cut for its first 10 minutes. The watcher lists the entry folder every 30 s | No part file is deleted while the Worker is blocked. After the finish, every part file and `.idx` is gone and every other local file of section 7 is still there; each part was deleted after the `received_at` of the chunk that ended it (`fetch.json` against the watcher's listings); the server copy decodes and passes `goalcup-verify check --server`. Pruning of parts closed during a run (rotation) is proven by `upload_prune.rs`, because a 20-minute run does not rotate and rotation by hook is not a real-run proof |
-| U6 | **Heartbeat says the truth.** The kill test run (PRD-02 R1, two plain `kill -9`) | Database `heartbeats` rows: `recording` is `ok` before the first kill and `gaps` after it, never `failed` (no null mode in that run); `model_requests` never above the verifier's recount at that row's `seq`; the final row's `vitals.off_ms` equals the sum of the two `recorder_down` gaps; the final row's `repo_head` equals the seal's `workspace_head`. The `failed` state is proven by `upload_beat.rs` against PRD-02's `watchdog_null.rs` output |
-| U7 | **Memory.** U2's run, with `ps` every 10 s | Recorder RSS minus `held_bytes` (from `status.json`) stays under 260 MiB; no step of about 140 MiB at rotation (seen in A1, which rotates at 60 minutes) |
+| U1 | **Server copy equals local.** Any pad run with `keep`. After the finish, `fetch-run.sh` the entry | `rec.gcr.zst` has the same SHA-256 as `cat rec-*.gcr.zst`; `zstd -dc --long=27` exits 0 on both (if PRD-01's recovery fallback is in force, decode part by part instead, using `fetch.json` `bytes` to split `rec.gcr.zst`; each part decodes, and only parts closed by a crash may end inside a frame at an index line); in `fetch.json` every chunk is at most 32 MiB compressed and has raw length above 0, and each chunk's start and end are a part name or an index line's `raw_end` of the same part (no chunk crosses a part); `upload.json` `final` is `sealed` |
+| U2 | **The upload keeps up.** A Codex `full` pad run (the payments prompt with many subagents, `keep` on), and again during A1 (PRD-16 X5). A watcher reads `upload.json` every minute; the conductor reads `entries.upload_offset` | At every minute t of the watcher's log, `entries.upload_offset` is at or past the `durable_raw` the log shows at t minus 6 minutes, except while `upload.json` shows a network or server error. No wait over 120 s in the `upload:` lines of `goalcup.log`. After the seal, `done` within 2 minutes |
+| U3 | **Network cut.** During a Claude Code `smoke` pad run with one subagent, the cut for 10 minutes, then lifted | The harness turn completes, and its own log shows no error during the cut; in every minute of the cut in which the harness log shows a call, `status.json` written model requests rise. `upload.json` shows `waiting` with class `network` within 1 minute of the first round or heartbeat due after the cut began (at most 6 minutes after it); in the `upload:` lines of `goalcup.log` (section 5), each wait is at most 2^n s for the n-th failure in a row, and none above 120 s; the first heartbeat after the lift goes within 2 minutes; the server catches up within 3 minutes of the lift; U1 holds |
+| U4 | **Crash mid-PUT.** The kill test (PRD-02 R1). The watcher times one of the two kills for a moment when `upload.json` says `sending`, when it can | U1 holds: `fetch.json` checks pass with no hole; the `upload:` lines of `goalcup.log` show at most one resend of the chunk that was in flight at the kill; no `stuck`. If no kill met a PUT, the row says so and `upload_resume.rs` stands for it |
+| U5 | **Prune.** A Claude Code `smoke` pad run **without** `keep`, with the cut from minute 1 for 10 minutes (PRD-12 `cut-worker@1+10`). The watcher lists the entry folder every 30 s | No part file is deleted while the Worker is blocked. After the finish, every part file and `.idx` is gone and every other local file of section 7 is still there; each part was deleted after the `received_at` of the chunk that ended it (`fetch.json` against the watcher's listings); the server copy decodes and passes `goalcup-verify check --server`. Pruning of parts closed during a run (rotation) is proven by `upload_prune.rs`, because a 20-minute run does not rotate and rotation by hook is not a real-run proof |
+| U6 | **Heartbeat says the truth.** The kill test run (PRD-02 R1, two plain `kill -9`) | The heartbeat rows in `fetch.json` `heartbeats` (PRD-07 section 7; no hand-written database query): `recording` is `ok` before the first kill and `gaps` after it, never `failed` (no null mode in that run); `model_requests` never above the verifier's recount at that row's `seq`; the final row's `counts` `off_ms` (`vitals -> 'counts' ->> 'off_ms'`) equals the sum of the two `recorder_down` gaps; the final row's `repo_head` equals the seal's `workspace_head`. The `failed` state is proven by `upload_beat.rs` against PRD-02's `watchdog_null.rs` output and end to end by `upload_worker.rs` |
+| U7a | **Memory.** U2's run, with `ps` every 10 s | Recorder RSS minus `held_bytes` (from `status.json`) stays under 260 MiB |
+| U7b | **Memory at rotation.** A1 (PRD-16 X9), with `ps` every 10 s | No step of about 140 MiB at the 60-minute rotation |
 | U8 | **Manual upload of a dead entry.** `kill -9` watchdog and recorder together mid-run (PRD-02 R7), then `goalcup upload` | The entry is closed `recovered`; the final heartbeat is committed with `recording: "gaps"` and the counts of `counts.jsonl`; `final` is `sealed`; U1 holds; the participant line says what was sent |
 
 Sleep. macOS (owner's run): close the lid for 10 minutes mid-run. Linux stand-in (PRD-12 and
@@ -536,12 +569,16 @@ choice (boot time runs on under `SIGSTOP`); the clock is proven by `upload_backo
   is sent whole; the first `Goalcup-Prev` is 64 zeros; concatenating every chunk equals the part
   files.
 - `upload_backoff.rs`: the wait sequence and the 120 s cap; `Retry-After: 900` waits 120 s; a fake
-  Worker that fails every other PUT never makes a wait above 4 s (reset on progress); with a fake
-  `now()` moved 10 minutes ahead in one step, the round and the heartbeat are due on the next tick.
+  Worker that fails every other PUT never makes a wait above 4 s (reset on progress); with `now`
+  moved 10 minutes ahead in one step, the round and the heartbeat are due on the next tick. `policy.rs`
+  takes `now` as an argument; the clock case is a unit test of that pure function, with no new
+  `GOALCUP_TEST_*` hook.
 - `upload_resume.rs`: the fake Worker commits a chunk and drops the answer; the next attempt reads
   the position and goes on with no duplicate. A `409` re-reads and moves only to a position a local
   index line confirms. A server offset inside a pruned range gives `stuck`, no send, no panic. A part
-  whose last `L` line lies past the file length is never sent.
+  whose last `L` line lies past the file length is never sent. A `409` whose re-read shows no forward
+  move counts as a failure and backs off. A scripted answer that panics the parser leaves the recorder
+  running, writes one `goalcup.log` line and sets class `internal`.
 - `upload_prune.rs`: with the test's own `PartWriter` at a small `rotate_at`: closed parts are pruned
   during the run once confirmed; never the open part, never unconfirmed, never with `keep`, always a
   prefix; only part and `.idx` files are deleted; `upload.json` is written before the delete.
@@ -550,12 +587,21 @@ choice (boot time runs on under `SIGSTOP`); the clock is proven by `upload_backo
   beats at once; the final heartbeat goes before chunks after the seal and repeats until
   `sealed: true`; no ordinary beat after a final; `503 awaiting_final` is retried at once after the
   final is committed; `ServerWord` carries `stop` and `seconds_left` and lands in `upload.json`
-  `server_word`.
+  `server_word`; `writer_idle_ms` over 60 s while records wait gives `failed`, `writer_slow` gives
+  `gaps`; a `stop` with reason `replaced` sets `upload_by` to the answer's time plus 24 hours;
+  `clock_set_back_does_not_lengthen_a_segment`: the wall clock set back a day between two beats does
+  not move the deadline from `ServerWord` later (it counts on `Recorder::now()`, boot time; PRD-17 S7).
 - `upload_manual.rs`: gives up on 401, 404, 410 and `stuck` with the reason; refuses while a recorder
   lives; never takes `rec/lock`; sends `counts` from `counts.jsonl`; an entry the position already
   calls `sealed` is not sent again.
 - `upload_null.rs`: with no live writer, the uploader calls `fdatasync` before sending (a test hook
   counts calls) and sends up to the last whole index line.
+- `upload_worker.rs` (full tier, `#[ignore]` in fast, in a build box): the real client against the
+  real Worker under `wrangler dev` with its local database (`DB_BACKEND=local`). (1) A sealed entry
+  with two parts; `scripts/fetch-run.sh --local`; the fetched `rec.gcr.zst` equals `cat rec-*.gcr.zst`
+  byte for byte; the entry is `sealed`. (2) `failed` end to end: the `test-hooks` binary with forced
+  null mode (PRD-02 `watchdog_null.rs` setup); a stored heartbeat has `recording` `failed` and
+  `vitals.counts.mode` JSON null (PRD-07 section 4), then `gaps` after the next good boot.
 
 ## Risks and blind spots
 
@@ -566,11 +612,11 @@ choice (boot time runs on under `SIGSTOP`); the clock is proven by `upload_backo
   `goalcup-verify check` then covers only what is left; PRD-08's server check is the full one.
 - **Database rows.** Up to about 3,000 `chunks` rows per busy entry-week in the shared website
   database, against about 336 today; with 1,500 busy entries that is about 4.5 million rows a week
-  (estimate). Idle time sends nothing. A 10-minute round halves it (overridable default).
+  (estimate). Idle time sends nothing. A 10-minute round halves it (overridable default, PRD-00 owner question 1).
 - **Credential and close window.** The run credential and the server's intake end 24 hours after the
   run's deadline (`server/worker/src/db.ts:17`, `:57`, appendix I section 6). A laptop offline longer
   than that, or a Worker outage near the end, loses its tail for good. The participant is told the
-  time once (section 9, `upload_by`); a longer window is the owner's (PRD-00 owner question 2).
+  time once (section 9, `upload_by`); a longer window is the owner's (PRD-00 owner question 1, old 2).
 - **The errors of run 1 are unexplained** (appendix M 4.7: os errors 11, 104, 32). Smaller chunks
   and a 2-minute cap shrink their cost; they do not remove the cause.
 - **No proxy support for the upload.** `try_proxy_from_env(false)` stays (`http.rs:167`), so the run
@@ -580,8 +626,9 @@ choice (boot time runs on under `SIGSTOP`); the clock is proven by `upload_backo
   Unmeasured in Rust; U7 measures it.
 - **Write-time compression speed** is unmeasured (PRD-02 R8 reports it). The uploader cannot help if
   the writer is slow; the guard writes gaps instead.
-- **The cut in U3 and U5 relies on `/etc/hosts`** being read on each lookup. If the box caches names,
-  the cut does not bite and the row says "not run: cut did not take"; the automated tests still
+- **The cut in U3 and U5 relies on `/etc/hosts`** being read on each lookup. If `getent` shows the
+  cut did not take, PRD-12's stand-in is used (a local listener that refuses or holds the connection;
+  it never terminates TLS); else the row says "not run: cut did not take"; the automated tests still
   cover the behaviour.
 - **Counts for a dead entry come from `counts.jsonl`**, not from decoding the record. If that file
   is lost, the final heartbeat sends zeros (never above the recount) and the verifier's server
@@ -595,17 +642,18 @@ choice (boot time runs on under `SIGSTOP`); the clock is proven by `upload_backo
 
 | Default | Value | Who may change it |
 |---|---|---|
-| Round cadence | 5 minutes, first interval random | Owner (PRD-00 owner question 6) |
+| Round cadence | 5 minutes, first interval random | Owner (PRD-00 owner question 1, old 6) |
 | Size trigger | 16 MiB compressed waiting | PRD-06 after U2 |
 | Chunk size | as many index lines as fit in 32 MiB | PRD-07's cap bounds it |
 | Backoff | 2 s doubling, cap 120 s, jitter 0.5 to 1.0, reset on progress | PRD-06 |
 | Timeouts | connect 15 s, no progress 60 s, whole PUT 600 s, JSON 30 s | PRD-06 |
 | Heartbeat | every 5 minutes, and on state change | PRD-06 |
 | Wrap-up | 60 minutes on boot time | PRD-10 |
-| zstd | level 3, window 27, long matching, all machines | PRD-06 with a measured reason; level 1 first if R8 names the compressor as slow |
+| zstd level | 3, all machines | PRD-06 with a measured reason; level 1 first if R8 names the compressor as slow |
+| zstd window 27 and long matching | locked (ledger F2) | Owner only |
 | Prune | at once after confirmation; never with `keep` | Owner |
-| `keep` | `GOALCUP_KEEP_PARTS=1`, or no server (`GOALCUP_SERVER=off`) | PRD-10 may add a flag |
-| Tail window and its warning | 24 hours after the deadline; one line with the time | Owner (PRD-00 owner question 2) |
+| `keep` | `GOALCUP_KEEP_PARTS=1`, or no server (`GOALCUP_SERVER=off`); no flag | Owner |
+| Tail window and its warning | 24 hours after the deadline (after `replaced_at` for a replaced run); one line with the time | Owner (PRD-00 owner question 1, old 2) |
 | How U3 and U5 cut the Worker | one `/etc/hosts` line with `sudo` | PRD-12's watcher, if the box needs another way |
 
 ## Builder notes
@@ -639,16 +687,18 @@ Traps from the audit and the old code:
 - Never take `rec/lock` from the uploader (PRD-02 9.2 step 2 exits 73 on it).
 - The final heartbeat goes before the tail of chunks past the deadline (`chunks.ts:52-60`), and is
   repeated after the last chunk until `sealed: true`. No ordinary beat after a final.
-- `counts` must stay flat and under 2 KiB, or every heartbeat is a `400`. Never put the `hosts` map
+- `counts` must stay flat and under 2 KiB, or the server drops every `counts` silently. Never put the `hosts` map
   in it.
 - No `Authorization` value, body byte or header value in `upload.json` or any log line.
 - No 0-length chunk: if the cut gives raw length 0, the index is wrong; stop and say so.
 - Read the part file through a second descriptor; never seek the writer's.
+- Copy `Durable` out of the watch at once; never hold the `borrow()` across a read, a hash or a call.
+- Catch every panic in a round or a beat; the uploader never ends the recorder process.
 
 How a watcher proves it in a real run: start the pad with `GOALCUP_KEEP_PARTS=1` on staging; every
 minute log `upload.json` (`confirmed.raw`, `durable_raw`, `state`, `next_try`, `final`) and ask the
 conductor for `entries.upload_offset`; after the finish run `fetch-run.sh`, compare the SHA-256 of
-`rec.gcr.zst` with `cat rec-*.gcr.zst`, and have the conductor read the `heartbeats` rows for U6. For
+`rec.gcr.zst` with `cat rec-*.gcr.zst`, and read `fetch.json` `heartbeats` for U6. For
 U3 and U5, add and remove the one `/etc/hosts` line of "The cut" and read the same log.
 
 ## Asks of other PRDs
@@ -657,14 +707,14 @@ Revision 1's asks, as ruled:
 
 | # | Of | Ask | Ruling |
 |---|---|---|---|
-| A1 | PRD-00 | Cadence every 5 minutes or 16 MiB, about 3,000 `chunks` rows per busy entry-week | Taken: PRD-00 defaults and owner question 6 |
+| A1 | PRD-00 | Cadence every 5 minutes or 16 MiB, about 3,000 `chunks` rows per busy entry-week | Taken: PRD-00 defaults and owner question 1 (old 6) |
 | A2 | PRD-00 | Seams S9 `upload.json` and S10 `ServerWord` | Taken: S9 (with `server_word`) and S10 in PRD-00's seam table |
 | A3 | PRD-00 | Upload size about 940 src lines | Taken: PRD-00 size budget |
-| A4 | PRD-00 | Owner question on the 24-hour tail window | Taken: owner question 2, with the one-line warning (section 9) |
+| A4 | PRD-00 | Owner question on the 24-hour tail window | Taken: owner question 1 (old 2), with the one-line warning (section 9) |
 | A5 | PRD-00 | `GOALCUP_KEEP_PARTS=1` on the pad and acceptance runs | Taken: PRD-00 defaults and done item 1 |
 | B1 to B3 | PRD-01 | Rotation sync order, drop the encoder first, index line only after its bytes | Taken: PRD-01 revision 2 section 1 |
 
-New in revision 2:
+New in revision 2 (all ruled by PRD-00 R3-2, R3-6 and R3-11; the body above carries the rulings):
 
 | # | Of | Ask | Why |
 |---|---|---|---|
@@ -676,13 +726,15 @@ New in revision 2:
 
 ## Review answers
 
+This section is history. The body, the ledger and the "Alignment answers" below win over it.
+
 Sources: CC = the consistency check item; A = review A finding; B = review B item.
 
 | Item | Verdict and what changed |
 |---|---|
 | CC 1 (asks not absorbed) | Accepted. PRD-00 and PRD-01 revision 2 took A1 to A5 and B1 to B3; "Asks of other PRDs" lists the rulings and five new asks |
-| CC 21, B C23 (cadence numbers) | Accepted, unchanged: 5 minutes or 16 MiB, about 3,000 rows. Question number updated to PRD-00 owner question 6. PRD-07's table is ask P4 |
-| CC 23 (A4 as owner question) | Accepted by PRD-00 (owner question 2). Section 9 adds `upload_by` and the one-line warning |
+| CC 21, B C23 (cadence numbers) | Accepted, unchanged: 5 minutes or 16 MiB, about 3,000 rows. Question number updated to PRD-00 owner question 6 (now 1). PRD-07's table is ask P4 |
+| CC 23 (A4 as owner question) | Accepted by PRD-00 (owner question 2, now 1). Section 9 adds `upload_by` and the one-line warning |
 | CC 31 (seal reason for the server's `stop`) | Accepted. Section 6: the watchdog seals with `server_stop` and `server_reason`; "reason `deadline` or `replaced`" removed |
 | CC 40 (B1 to B3) | Accepted by PRD-01 revision 2. Interfaces row PRD-01 cites the write and rotation order |
 | CC 46, B C7 (uploader runtime) | Accepted. Two plain threads; the `spawn_blocking` hedge and the macOS QoS class removed (`pipeline::low_priority()`, PRD-02 has no QoS in 1.0) |
@@ -706,7 +758,47 @@ Sources: CC = the consistency check item; A = review A finding; B = review B ite
 | B O7 (first staging deploy) | Accepted. Builder notes step 5: merge with PRD-07's heartbeat step, then staging, then U1 on one smoke run |
 | B section 10 (slices) | Accepted. The uploader is second slice; steps 1 and 2 may start early because they need only F1 |
 | B T2 (hook-based real runs) | Accepted. U5 runs without a rotation hook; U6 moves to the plain kill-test run; the `failed` state and rotation pruning are automated tests. U4 no longer asks for a 32 MiB burst it cannot cause |
-| B W5 (firewall needs root) | Partly. Root is there (passwordless `sudo`, `docs/research/VERCEL-COMPAT.md:47`), so no forwarder: a TCP forwarder breaks TLS name checks against the Worker's host. The cut is one `/etc/hosts` line; the watcher checks with `getent` that it takes |
+| B W5 (firewall needs root) | Partly. Root is there (passwordless `sudo`, `docs/research/VERCEL-COMPAT.md:47`). A forwarder that terminates TLS breaks name checks against the Worker's host. The cut is one `/etc/hosts` line; the watcher checks with `getent` that it takes. Revision 3: "so no forwarder" removed; PRD-12's stand-in never terminates TLS |
 | B W8 (time to first byte within 20%) | Accepted. Dropped from U3; the pass is now "the harness log shows no error and written requests keep rising during the cut", which a flaky provider cannot fail |
 | B W10 (server equals local needs kept parts) | Accepted; already so. PRD-00 done item 1 says it |
 | A run 1 table (lag bug, prune at seal) | No change needed: sections 5 and 7 already answer them |
+
+## Alignment answers
+
+Revision 3. Fix lists g1, g2 and g3, checked against the ledger, PRD-00 revision 4, PRD-02, PRD-07,
+PRD-12 and PRD-17.
+
+| Fix id | What was done |
+|---|---|
+| F3 | Applied the PRD-06 part: `upload_beat.rs` gains `clock_set_back_does_not_lengthen_a_segment` (PRD-17 S7); the PRD-17 interfaces row names S7. Moving S7's owner to PRD-06 in PRD-17 is that file's part |
+| L2-03 | Applied the PRD-06 part (merged with G2-31): section 6 computes `mode` from `Durable` age and the live atomics, and sends `failed` once `writer_idle_ms` passes 60 s while records wait. The status thread and stall exit are PRD-02's part |
+| L4-2 | Applied (merged with G2-20): section 2 says window 27 is locked (ledger F2); the 73 MiB window 26 row is dropped; the defaults row is split into level (PRD-06 with a measured reason) and window with long matching (owner only) |
+| G2-20 | Applied, as L4-2. The throughput paragraph allows only a level change without the owner |
+| 06-1 | Applied: live entry first, then one round per older entry; `refused`, `stuck` or backing-off entries never hold the queue; past `upload_by` the entry is `closed`; the upload thread sends non-live final heartbeats; `closed` added to section 11 |
+| 06-3 | Applied: U3's `waiting` timing counts from the first round or beat due after the cut; section 5 adds one S11 `goalcup.log` line per failed call; U3 reads the waits from those lines; S11 row added to the interfaces table |
+| 06-4 | Applied: U2's pass line compares `entries.upload_offset` with `durable_raw` six minutes earlier, except while a network or server error shows; no byte-size line. PRD-16 X5 is that file's part |
+| 06-5 | Applied in section 1 and in the builder traps: `Durable` is copied out and the borrow dropped at once |
+| 06-6 | Applied (merged with G3-X29): `upload_worker.rs` added to the tests and to the files it owns; dropped from "What is cut" (test line total now 8,707) |
+| G2-19 | Applied the PRD-06 part: `policy.rs` takes `now`; the clock case is a unit test with no new hook. The PRD-14 row cites PRD-00 owner question 12 (the `test-hooks` feature, called O-3 in the fix list) |
+| G2-31 | Applied the PRD-06 part: `mode` from `Durable` age and live atomics; `writer_slow` removed from `ok`; `failed` row covers null mode and `writer_idle_ms` over 60 s; the final heartbeat sends `mode: sealed`. Partly: the fix list did not say where `writer_slow` goes, so it maps to `gaps` (records wait unwritten), never `ok` |
+| G2-32 | Applied the PRD-06 part: section 1 puts every round and beat inside `catch_unwind`, class `internal`, never ending the process; `upload_resume.rs` gains the parser-panic case |
+| 06-11 | Applied: chunk answer carries `sealed`; the final heartbeat repeats only if the last chunk's answer did not seal; section 11 `final` names all three answers |
+| 06-13 | Applied (merged with G3-X26): U6 reads `counts` `off_ms`, path `vitals -> 'counts' ->> 'off_ms'` |
+| 06-14 | Applied: U1 decodes part by part under PRD-01's recovery fallback |
+| 06-15 | Applied: section 6 sets `upload_by` from a `replaced` stop; section 9 and defaults cite it; `upload_beat.rs` case added |
+| 06-16 | Applied: U4 uses `fetch.json` checks and the `goalcup.log` lines, not a Worker log |
+| 06-17 | Applied the PRD-06 part: U5 uses `cut-worker@1+10`; Risks name PRD-12's stand-in that never terminates TLS; "so no forwarder" removed from B W5 |
+| 06-18 | Applied: Ctrl-C ends the watchdog's wait only; the recorder finishes the wrap-up (PRD-02 section 8 step 11) |
+| 06-19 | Applied: no `keep` flag; the defaults row's owner is the owner |
+| 06-20 | Applied: U7 split into U7a (U2's run) and U7b (A1, PRD-16 X9) |
+| 06-22 | Applied: `api.rs:18-61` (tests at `:310-341`) |
+| 06-7 | Applied: section 5 states the nominal waits with jitter and the 120 s ceiling; U3 as 06-3 |
+| 06-8 | Applied: a 409 with no forward move counts as a failure; `upload_resume.rs` case added |
+| 06-9 | Applied (merged with G3-X22): a bad `counts` is dropped silently by PRD-07, never `400`; trap line changed |
+| G2-12 | Applied: PRD-00 is now revision 4 with twelve questions, so old 6 and old 2 are both question 1 and are written "owner question 1, old N"; "Owner decisions it carries out" tags each line with its ledger id (F2, U1, R5, R6, R7, L5, B4) |
+| G2-15 | Applied: Files and Interfaces give seam S18's signature `UploadHandle::finish(wrap_up, seal_facts { reason, workspace_head, totals })` |
+| X2-11 | Partly. Moving the review sections into a new `REVIEW-HISTORY.md` is not done here: this pass edits only this file, and many writers of one new file would race. "Review answers" now says it is history and that the body, the ledger and these answers win; the revision 2 asks are marked ruled. The move may run once, after every alignment pass, by one agent |
+| G3-X22 | Applied: section 6 says a bad `counts` is dropped with `counts-dropped` and the heartbeat kept; section 6 names the keys and `docs/UPLOAD-API.md` copies them; the chunk answer has `sealed` |
+| G3-X23 | Applied as case (2) of `upload_worker.rs`. Partly: the fix list wrote `mode` as the string `"null"`; PRD-07 section 4 sends JSON null, so the test asserts JSON null |
+| G3-X26 | Applied: U6 and the watcher read `fetch.json` `heartbeats` (PRD-07 section 7 adds the list), not a database query |
+| G3-X29 | Applied: `upload_worker.rs` (full tier, `#[ignore]` in fast) with `fetch-run.sh --local` and equal bytes; listed in the PRD-14 interfaces row |

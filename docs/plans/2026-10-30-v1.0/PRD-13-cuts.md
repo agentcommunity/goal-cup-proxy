@@ -2,8 +2,9 @@
 
 Id: PRD-13. Version: goalcup 1.0. Status: plan for the build, phase 3 (PRD-00 "Build order").
 Date: 30 October 2026. Revision 2: follows PRD-00 revision 2 and answers the consistency check and
-reviews A and B (section "Review answers" at the end). Base: main at 4b226de2 (working tree at
-7fd36019, docs only since).
+reviews A and B (section "Review answers" at the end). Revision 3: alignment pass against
+`OWNER-DECISIONS.md` (the ledger; section "Alignment answers" at the end). Base: main at 4b226de2
+(working tree at 7fd36019, docs only since).
 Index: [PRD-00](PRD-00-index.md). Format: [PRD-01](PRD-01-record-format.md).
 
 ## Goal
@@ -20,17 +21,23 @@ patched. Every cut is checked against the seven points in the table "Point check
 
 ## Owner decisions it carries out
 
-- All planned cuts are in this build: research decoders, research scripts, disk-full handling, pins,
+- L6: all planned cuts are in this build: research decoders, research scripts, disk-full handling, pins,
   deny lists, termination proof, signing, the separate daemon, legacy and test seams, retired versions
   (BRIEF3, 29 Oct evening). Everything in the plan's after-Edition-01 list moves in if it serves no point.
-- Fresh core in this repo. Old crates are deleted in the same build, after a lessons list is extracted
-  (BRIEF3, 29 Oct night). Not a new repo; not edit in place.
-- Architecture B, one process. The proxy to daemon hand-off (IPC, producers, epochs, the shared queue,
-  failure budgets) is removed.
-- One system for every harness, no patchwork (owner, 29 Oct night; the relayed request asks the same).
-- No backward compatibility before Edition 01. No v5 reader is kept, and the run 1 converter is cut
+- L3 and L4: fresh core in this repo. Old crates are deleted in the same build, after the lessons list
+  (PRD-17) is written and its deletion gate passes (BRIEF3, 29 Oct night). Not a new repo; not edit in
+  place. Connector data is copied on purpose (section 4).
+- L5: architecture B, one process. The proxy to daemon hand-off (IPC, producers, epochs, the shared
+  queue, failure budgets) is removed.
+- H1: one system for every harness, no patchwork (owner, 29 Oct night; the relayed request asks the same).
+- L7: no backward compatibility before Edition 01. No v5 reader is kept, and the run 1 converter is cut
   (PRD-00 "Not in this build").
-- Disk full: no special handling (owner, phase 2 decisions).
+- Ledger section 7 (D65 goes): disk full gets no special handling (owner, phase 2 decisions).
+- R5: no caps of our own; every old cap goes with its crate and the no-return guard keeps it out
+  (group B, section 6).
+- M1: the email rule and the Codex rate-limit, plan and credit mask rows go with the old connector
+  files (group G).
+- S3: no website database migration; `server/worker/sql/` stays as it is (section 7).
 - Rulings of PRD-00 revision 2 that bound this PRD: history docs are kept in this build; judged-commit
   logic in the Worker is kept and untouched (PRD-00 question 3); old crates leave the workspace in
   phase 0 by PRD-16's `exclude` edit; the phase 3 merge holds only the deletes and the matching
@@ -85,13 +92,14 @@ proves the tree builds, gates and records with nothing old left.
    suffer and why it does not (table "Point check").
 5. **No cap of our own comes back.** The no-return guard in section 6 checks that the cut concepts
    are not rebuilt in the new crates, from phase 1 on.
-6. **PRD-13 edits no file it does not delete.** `scripts/gate.sh`, `Cargo.toml` and `Cargo.lock`
-   belong to PRD-14 and PRD-16 (PRD-00 ownership table).
+6. **PRD-13 edits no file it does not delete,** except the two `spikes` lines of `.gitignore` it
+   removes with `spikes/` (PRD-00 ownership table, `.gitignore` row). `scripts/gate.sh`, `Cargo.toml`
+   and `Cargo.lock` belong to PRD-14 and PRD-16 (PRD-00 ownership table).
 
 ### 3. Why cutting is how we get one system
 
 The relayed request asks for one system, not a patchwork: a gateway is just another HTTPS host, and
-dodgers get the light path. PRD-00 already answers that in the design. This PRD removes the patchwork
+a client that pins or ignores the proxy gets the light path. PRD-00 already answers that in the design. This PRD removes the patchwork
 that would otherwise sit beside it:
 
 | Patchwork today | Where | 1.0 |
@@ -100,7 +108,7 @@ that would otherwise sit beside it:
 | The Hermes "recorder" provider that set a model base URL | `connectors/hermes-cli/harness.toml:145-152` (`[launch_prep]`) and its `configure` rows | Gone. Hermes goes through `HTTPS_PROXY` like every harness (AGENTS.md hard rule, D1) |
 | A start-time provider probe per connector | `crates/goalcup-cli/src/proxy/preflight.rs` (250 src, 170 tests) | Gone. A run with no model requests says so (PRD-10) |
 | Per-harness termination tables and argv guards | `[capture.termination]` in all four connectors (for example `claude-code-cli/harness.toml:150`), `hermes-cli/harness.toml:124` | Gone with termination proof |
-| Dodger prototypes and plugins | `spikes/openclaw` (7,887 lines), `spikes/cursor-cli` (1,681), plugin code in `spikes/hermes` and `spikes/opencode` | Gone. Dodgers get tunnel records, session files, a named gap and the tier "not supported" (PRD-00, PRD-03) |
+| Spike prototypes and plugins | `spikes/openclaw` (7,887 lines), `spikes/cursor-cli` (1,681), plugin code in `spikes/hermes` and `spikes/opencode` | Gone. Vendor backends (Amp, Cursor) are decrypted on the one host list like a gateway (H5, H10). Only a client that pins, refuses the run CA or ignores `HTTPS_PROXY` gets a tunnel record, session files, a named gap and, when it ignores the proxy or CA on its own model host, the tier "not supported" (T3). OpenClaw is a normal harness whose own proxy setting its connector handles (PRD-11) |
 | Five test harness kits: matrix, linux matrix, campaign, harness smoke, connector check | `scripts/matrix.sh`, `linux-matrix.sh`, `campaign.py`, `linux-harness-smoke.sh`, `check-connector.sh` (5,842 lines plus `kit_settle.py` 302; 4,482 test lines) | One test pad, also the contributor path (PRD-12). `kit_settle.py`'s first-run answers move to PRD-11's `no_prompts` data |
 
 ### 4. The copy ledger (preconditions for each delete)
@@ -125,6 +133,8 @@ lane). Ranges are the owners' own citations.
 | `crates/goalcup-cli/src/model_host.rs:682` onward (YAML), `launch.rs` env build, `harness/schema.rs:905-1112` (mask grammar) | `crates/goalcup/src/connector/` | PRD-11 | About 370 lines |
 | `crates/goalcup-verifier/src/capture_analysis/{openai,anthropic,chat,thread}.rs`, `native/*`, `stats.rs` (model, usage, error parts) and fixtures `m2-openai`, `m2-anthropic`, `m2-native`, `connectors` | `crates/goalcup-verify/src/usage/`, `tests/usage_fixtures/` | PRD-09 | Model and usage readers; fixtures as decoded bodies |
 | `crates/goalcup-verifier/src/bin/goalcup-verify.rs:264-310` | `crates/goalcup-verify/` | PRD-08 | Output file creation, parse rule |
+| `connectors/{amp-cli,claude-code-cli,codex-cli,hermes-cli}/harness.toml` (hosts, session patterns, CA and home variables, `no_prompts`, `first_screen`, `warn_missing`) | `connectors/<id>.toml`, `connectors/model-hosts.toml` | PRD-11 | Facts kept per group G |
+| `scripts/kit_settle.py` first-run answers | `no_prompts` in `connectors/<id>.toml` | PRD-11 | First-run prompts answered |
 | `crates/goalcup-cli/tests/common/**` (`m2_common/mod.rs`, `real_home_guard.rs` and others) | `crates/goalcup/tests/common/` | PRD-14 | About 1,200 lines of test support (PRD-14 section 5) |
 | `crates/goalcup-cli/tests/fixtures/m2-tls/*.hex` and other lesson inputs | `crates/goalcup/tests/lessons_fixtures/` | PRD-17 | Byte inputs of the lessons cases |
 | Every old crate, test and `docs/DECISIONS.md` | `docs/plans/2026-10-30-v1.0/LESSONS.md`, `crates/goalcup/tests/lessons_*.rs` | PRD-17 | Edge cases as acceptance cases |
@@ -138,14 +148,18 @@ working with the old crates still on disk (PRD-00 phase 3 row, review B M5):
   never built, linted or tested again, and `Cargo.lock` is regenerated without them. No rename and no
   `--exclude` line in `gate.sh` (PRD-00 ruling on consistency item 13).
 - PRD-14: `scripts/gate.sh` (drop the `-p goalcup-cli --test full` steps at `:88-103` and the daemon
-  comment at `:63`), `.config/nextest.toml` (filters naming `goalcup-daemon` and `goalcup-cli` at
-  `:16-17, 37, 46, 56`), `.github/CODEOWNERS` (paths under folders this PRD deletes, checked by
-  `scripts/test_codeowners.py`), `ci.yml:68, 80`, `release.yml`, `PULL_REQUEST_TEMPLATE.md:32`,
-  `packaging/install.sh:9, 226, 312-359`, `packaging/README.md`, `scripts/package-release.sh:4, 10`,
-  `scripts/test_install.py:28` (reads protocol crate fixtures), `third-party-licenses.py` and its test.
-  PRD-14 also adds both guards of section 6 to `gate fast` in the form given there.
+  comment at `:63`), `scripts/test_gate.py` (`:193` names `-p goalcup-cli`), `.config/nextest.toml`
+  (comments and filters naming `goalcup-daemon` and `goalcup-cli` at `:13, 16-17, 22, 37, 46, 56`),
+  `.github/CODEOWNERS` (paths under folders this PRD deletes, checked by `scripts/test_codeowners.py`),
+  `ci.yml:68, 80`, `release.yml`, `PULL_REQUEST_TEMPLATE.md:32`, `packaging/install.sh:9, 226, 312-359`,
+  `packaging/README.md`, `scripts/package-release.sh:4, 10`, `scripts/test_install.py:28` (reads
+  protocol crate fixtures), `third-party-licenses.py` and its test. PRD-14 also keeps both guards of
+  section 6 as `rule_code.rs` rules 3 and 4, in the forms given there.
+- PRD-07: `docs/UPLOAD-API.md` and `scripts/test_fetch_run.py` (`:26` reads the verifier crate's
+  `v5-corpus`, `:139` builds `-p goalcup-verifier`).
 - PRD-15: `README.md`, `AGENTS.md` map and rules, `CONTRIBUTING.md`, `SECURITY.md`, `TODO.md`,
-  `scripts/README.md`, and every live `docs/*.md` that names an old crate.
+  `scripts/README.md`, and every live `docs/*.md` that names an old crate except `docs/UPLOAD-API.md`
+  (PRD-07's).
 - PRD-11: `docs/harnesses/{claude-code-cli,codex-cli,hermes-cli}.md`.
 - PRD-12: deletes `skills/adding-a-capture-harness/writing-a-decoder.md` and
   `templates/connector-harness.toml`, rewrites `templates/harness-facts.md:56`.
@@ -160,10 +174,11 @@ surprise.
 Commits, in this order, each building on its own:
 
 1. `git rm -r` the five old crate folders.
-2. `git rm -r spikes/` and `scripts/test_early_crosscheck.py` (it reads `spikes/m2-first-release/e02/`).
+2. `git rm -r spikes/` and `scripts/test_early_crosscheck.py` (it reads `spikes/m2-first-release/e02/`),
+   and remove the `spikes/*/out/` and `spikes/wire-pty/out/` lines from `.gitignore`.
 3. `git rm` the scripts and tests of group D, `harnesses/install.sh` and `.claude/agents/campaign-cell.md`.
-4. `git rm connectors/*/harness.toml` once PRD-11's `connectors/<id>.toml` and `model-hosts.toml` are on
-   integration (the delete is listed by PRD-11; PRD-13 runs it here).
+4. `git rm connectors/*/harness.toml` once PRD-11's ledger rows (section 4) say "copied, tests green"
+   (the delete is listed by PRD-11; PRD-13 runs it here).
 
 The phase 3 merge holds these four commits plus two small commits by their owners: PRD-16's workspace
 edit (drop the five `exclude` entries and every workspace dependency only the old crates used, checked
@@ -172,15 +187,19 @@ and its test after PRD-15's last run. Nothing else.
 
 PRD-07's Worker cuts and PRD-15's doc rewrite do not wait for phase 3. They touch no old crate.
 
-If PRD-17's deletion gate is not green by the time PRD-16 sets (H+9 today), the cut does not happen:
-the old crates stay on disk, out of the workspace, and the end-of-build report says so (PRD-16
-section 5). Nothing breaks, because nothing builds them.
+**If the gate is late.** The cut target is H+10 (PRD-00 R3-8, phase 3). If PRD-17's deletion gate is
+not green by H+10, the cut waits and the owner is called under PRD-16 W6: locked L3 cannot hold on
+time. Phases 4 to 6 still run on the build with the old crates on disk and out of the workspace. The
+lessons lane keeps working; the cut lands in the same build as soon as the gate turns green, at any
+time before `REPORT_AT`, and the core set `direct` rows and the Codex kill row then rerun on the cut
+commit. If it is still not green at `REPORT_AT`, line 1 of `MORNING.md` reads "Not ready: old crates
+not deleted (ledger L3), deletion gate <state>", and the owner decides.
 
 ### 6. The guards (kept in the gate by PRD-14)
 
-**Reference guard.** It must print nothing. PRD-14 adds it to `gate fast` in phase 0 or 1 in a form
-that skips, with the one line `reference guard: skipped, old crates on disk`, while
-`crates/goalcup-cli/` exists. After the cut it runs with no edit to `gate.sh`.
+**Reference guard.** It must print nothing. PRD-14 runs it as `rule_code.rs` rule 4: before the cut
+that rule checks the five old crates are in the workspace `exclude` list (so it never passes by
+skipping); after the cut it runs this `git grep`. The switch needs no edit to `gate.sh`.
 
 ```
 git grep -nE 'goalcup[-_](cli|daemon|platform|protocol|verifier)\b|goalcup-daemon' -- . \
@@ -193,7 +212,10 @@ report once PRD-15 copies it to `docs/research/results/2026-10-30-two-hour-run.m
 item 27). A top-level `docs/*.md` that PRD-15 keeps as history but does not rewrite moves under
 `docs/archive/`, or PRD-15 adds it here by name with a night-log line.
 
-**No-return guard.** It runs from phase 1, because it only reads the new code. Every line it prints
+**No-return guard.** It runs from phase 1 as `rule_code.rs` rule 3, because it only reads the new
+code. Rule 3 scans `crates/goalcup*/src/` for every pattern below, and `crates/goalcup*/` (src, tests
+and `Cargo.toml`) for the two feature patterns: `test-support` anywhere, `test-hooks` outside
+`crates/goalcup`. Every line it prints
 must also survive `grep -v 'v0\.7\.0:'` (a provenance comment such as
 `copied from v0.7.0:crates/goalcup-verifier/src/capture_analysis/openai.rs` is not a hit).
 
@@ -203,24 +225,26 @@ all of `crates/`). Each pattern must print nothing:
 | Concept cut | Pattern |
 |---|---|
 | Separate daemon and its IPC | `goalcup-daemon`, `IngestListener`, `DaemonClient`; `epoch` under `src/proxy/` only |
-| Our own caps | `MAX_OPEN_STREAMS`, `MAX_OPEN_CONNECTIONS`, `MAX_LIVE_PRODUCERS`, `MAX_CONNECTION_FAILURES`, `MAX_RECORDER_RESTARTS`, `MAX_TUNNEL_NOTES`, `max_files` |
+| Our own caps | `MAX_OPEN_STREAMS`, `MAX_OPEN_CONNECTIONS`, `MAX_LIVE_PRODUCERS`, `MAX_PRODUCERS`, `MAX_CONNECTION_FAILURES`, `MAX_CONNECTION_TASKS`, `MAX_RECORDER_RESTARTS`, `MAX_TUNNEL_NOTES`, `MAX_CAPTURE_QUEUE_BYTES`, `CHAIN_QUOTA_BYTES`, `MAX_GIT_LIVE_HANDLES`, `MAX_GOAL_STREAMS`, `max_files`, `max_dir_entries` |
 | Disk handling | `AgentPause`, `DiskPolicy`, `ReserveFile`, `reserve_path`, `disk_free`, `agent_paused` |
 | Signing | `ed25519`, `receipt`, `acks.jsonl` |
 | Pins and deny lists | `pin-manifests`, `connector_dir_sha256`, `capture_policy` |
 | Termination proof | `TerminationOutcome`, `released_child`, `observed_gone` |
-| Test seams | `test-support` feature, `pause_at(`, `_FOR_TEST`; a `test-hooks` feature in any `Cargo.toml` other than `crates/goalcup/Cargo.toml` and `crates/goalcup-verify/Cargo.toml` |
+| Test seams | `test-support` feature, `pause_at(`, `_FOR_TEST`; a `test-hooks` feature in any `Cargo.toml` other than `crates/goalcup/Cargo.toml` |
 | Research decoders | `capture_analysis`, `--research-json`, `--capture-integrity` |
 
-The `test-hooks` feature itself is allowed in those two crates, off by default (PRD-00 ruling on
-consistency item 86). That the shipped binary carries no hook is PRD-14's release smoke: no
-`GOALCUP_TEST_` text in the release binaries. The Linux subreaper is allowed: PRD-02 copies it on
+The `test-hooks` feature itself is allowed in `crates/goalcup` only, off by default (PRD-00 owner
+question 12, default keep; `goalcup-verify` gets no hooks unless PRD-08 names one it needs, and then
+this pattern is widened by a night-log note). That the shipped binary carries no hook is PRD-14's
+release smoke: no `GOALCUP_TEST_` text in the release binaries. The Linux subreaper is allowed: PRD-02 copies it on
 purpose (review A finding 8), so `subreaper` is not a pattern.
 
-Worker (`server/worker/src/` and `server/worker/wrangler.toml` only). Patterns: `receipt`,
-`agent_paused`, `RECEIPT_SIGNING_KEY`, `RUN_MAX_COMPRESSED_BYTES`, and the file `src/sign.ts` must not
-exist. `server/worker/sql/` (the database mirror keeps `receipt`, `agent_paused`, `disk_free` and
-`connector_dir_sha256` columns, no migration this build), `scripts/check-sql.sh`, `test/` and
-`README.md` are not scanned (PRD-07 interfaces row PRD-13).
+Worker (`server/worker/src/**` and `server/worker/wrangler.toml` only). Patterns: `receipt`,
+`agent_paused`, `RECEIPT_SIGNING_KEY`, `RUN_MAX_COMPRESSED_BYTES`, and the file
+`server/worker/src/sign.ts` must not exist. `server/worker/sql/` (the database mirror keeps `receipt`,
+`agent_paused`, `disk_free` and `connector_dir_sha256` columns, no migration this build, ledger S3),
+`scripts/check-sql.sh`, `test/` and `README.md` are not scanned (PRD-07 interfaces row PRD-13). This
+Worker half joins `rule_code.rs` rule 4 right after PRD-07's cut merges.
 
 A hit is either a real reintroduction (the builder removes it) or a false match (the integrator notes
 it in the night log and narrows the pattern).
@@ -236,6 +260,7 @@ it in the night log and narrows the pattern).
 | `scripts/gate.sh`, `release.sh`, `package-release.sh`, `smoke-release.sh`, `third-party-licenses.py` and their tests, `test_install.py`, `test_codeowners.py` | 559 src, 1,170 tests | Release and gate; PRD-14 owns them |
 | `scripts/check-version.py`, `check-links.py`, `ci-scope.py`, `linux-check.sh`, `.github/workflows/linux-x86_64.yml` | 1,751 src (plus 63 workflow lines), 2,041 tests | Not PRD-13's to cut. PRD-14 owns them and decides (PRD-00 ownership table); its default deletes all five, `check-links.py` last, after PRD-15's run |
 | `packaging/install.sh` | 394 | Install path; PRD-14 drops `goalcup-daemon` from it |
+| `test-hooks` feature in `crates/goalcup` (the `GOALCUP_TEST_*` hooks PRD-02 and PRD-14 register, `Recorder::for_tests`, `Recorder::real_for_tests`) | small, counted in PRD-02's and PRD-14's rows | A new seam, not an old one kept: tests prove points 1 to 3 (restart, guard, rotation) without real faults in the gate's time (PRD-00 owner question 12, default keep). Off by default; PRD-14's release smoke fails if `GOALCUP_TEST_` appears in a release binary; no other crate may declare it (no-return guard) |
 | `docs/plans/**`, `docs/archive/**`, `docs/research/**`, `docs/DECISIONS.md` history | | Kept in this build (PRD-00 "Not in this build"); PRD-15 owns them; the reference guard skips them |
 
 ## Files it owns
@@ -250,7 +275,8 @@ Delete (PRD-13 runs the `git rm`):
 - `connectors/{amp-cli,claude-code-cli,codex-cli,hermes-cli}/harness.toml` (the delete is listed by
   PRD-11; PRD-13 runs it in the cut commit).
 
-Create: nothing. Change: nothing.
+Create: nothing. Change: `.gitignore`, only to remove the `spikes/*/out/` and `spikes/wire-pty/out/`
+lines in the commit that deletes `spikes/` (PRD-00 ownership table; PRD-12 owns the `/pad-out/` line).
 
 Must not touch: `crates/goalcup/`, `crates/goalcup-format/`, `crates/goalcup-verify/` (the new code),
 `Cargo.toml`, `Cargo.lock` (PRD-16), `server/worker/**` (PRD-07 cuts its own parts), `docs/**`,
@@ -265,9 +291,9 @@ Must not touch: `crates/goalcup/`, `crates/goalcup-format/`, `crates/goalcup-ver
 | PRD-02, 03, 04, 05, 06, 08, 09, 10, 11, 14, 17 | "copied, tests green" line per ledger row (section 4) | The delete of the source |
 | PRD-17 | `LESSONS.md` merged and its four deletion-gate checks green (phase 2 exit) | The old code stays readable at `v0.7.0` |
 | PRD-12 | `selftest` passes on integration (precondition for deleting the five kits); its two skill files deleted by PRD-12 itself (PRD-00 ruling; PRD-12's "What is cut" lists them as PRD-13's and should follow PRD-00) | The pad replaces the five kits in section 3 |
-| PRD-16 | Phase 0 `exclude` edit and lock; phase 2 gate green; the phase 3 workspace edit in the same merge; the H+9 rule for skipping the cut | Four delete commits on one branch |
-| PRD-14 | Its gate, CI, CODEOWNERS, nextest and packaging edits before the cut; both guards in `gate fast` in the forms of section 6; `check-links.py` delete in the phase 3 merge | The list of deleted scripts and binaries. PRD-13 edits no `gate.sh` line (PRD-14's interfaces row PRD-13 and section 4 still mention an exclude line PRD-13 deletes; PRD-00 ruled it away) |
-| PRD-15 | Live docs rewritten before the cut: the `AGENTS.md` map (`AGENTS.md:32-50`), pin rule (`:90-91`), D65 rule (`:83-86`), `scripts/README.md`, and the live docs that describe deleted code (`docs/TERMINATION.md`, `docs/CONTRACTS.md` v5 freeze `:510-560`, `docs/CONNECTOR-SCHEMA.md`, `docs/RULES.md:306-321` run labels, `docs/CHEAT-CHECKLIST.md` bounds, `docs/ARCHITECTURE.md`, `docs/OPERATING.md`, `docs/SERVER-DESIGN.md`, `docs/HARNESS-ONBOARDING.md`); run 1's report copied under `docs/research/results/`; `check-links.py` run once | Which docs describe deleted code; the reference guard's history exclusions |
+| PRD-16 | Phase 0 `exclude` edit and lock; phase 2 gate green; the phase 3 workspace edit in the same merge; the H+10 cut-off, with the W6 owner call if the gate is late (section 5); the merge after two independent reviews (ledger B2) and the replan after it (B2a) | Four delete commits on one branch |
+| PRD-14 | Its gate, CI, CODEOWNERS, nextest and packaging edits before the cut; both guards as `rule_code.rs` rules 3 and 4 in the forms of section 6; `check-links.py` delete in the phase 3 merge | The list of deleted scripts and binaries. PRD-13 edits no `gate.sh` line |
+| PRD-15 | Live docs handled before the cut: the `AGENTS.md` map (`AGENTS.md:32-50`), pin rule (`:90-91`), D65 rule (`:83-86`), `scripts/README.md`; the live docs that describe deleted code moved to `docs/archive/` unedited, some after their facts are merged elsewhere (`docs/TERMINATION.md`, `docs/CONTRACTS.md`, `docs/CHEAT-CHECKLIST.md`, `docs/HARNESS-SETUP.md`, `docs/SERVER-DESIGN.md`), the rest rewritten (`docs/CONNECTOR-SCHEMA.md`, `docs/RULES.md:306-321` run labels, `docs/ARCHITECTURE.md`, `docs/OPERATING.md`, `docs/HARNESS-ONBOARDING.md`); run 1's report copied under `docs/research/results/`; `check-links.py` run once | Which docs describe deleted code; the reference guard's history exclusions |
 | PRD-11 | `connectors/<id>.toml` and `model-hosts.toml` on integration; `docs/harnesses/*` without old crate names | The delete of `connectors/*/harness.toml` |
 | PRD-07 | Its own Worker cuts (group F), including `sign.ts` and the signing vectors | The no-return guard scans only `server/worker/src/` and `wrangler.toml` |
 | PRD-10 | Session sniffing on `continue` replaced by its written-count resume rule; pasted `goalcup mcp` lines get no compatibility, one guide line (PRD-10 section 3.1, review row "PRD-13 rows") | `commands/mcp.rs`, `login.rs`, `ssh_keys.rs`, `account/github.rs` are deleted here |
@@ -301,7 +327,7 @@ Every cap goes with its crate. Listed so the no-return guard knows them.
 |---|---|---|
 | 8 MiB shared capture queue | `crates/goalcup-protocol/src/capture.rs:51` | One stated memory guard that drops DATA of one stream and writes a GAP (PRD-02) |
 | 128 open streams, 128 connections, 128 live producers | `capture.rs:58-66` | None |
-| 32 native streams (`MAX_OPEN_STREAMS / 4`), 1,024 files | `crates/goalcup-daemon/src/native_capture.rs:279-280` | None (PRD-04) |
+| 32 native streams (`MAX_OPEN_STREAMS / 4`), 1,024 files, 8,192 directory entries | `crates/goalcup-daemon/src/native_capture.rs:279-281` | None (PRD-04) |
 | 1,024 connection tasks then 503; 5 recorder restarts then an unserved port | `crates/goalcup-cli/src/proxy/mod.rs:112, 1022` | Watchdog restarts with no cap (PRD-02) |
 | 10,000 tunnel rows | `crates/goalcup-cli/src/proxy/tunnels.rs:20` | Tunnels are `conn` records (PRD-01) |
 | Handle budget of 32 | `crates/goalcup-platform/src/handle_budget.rs:13` | None |
@@ -312,16 +338,16 @@ Every cap goes with its crate. Listed so the no-return guard knows them.
 
 | Path | src / inline | Biggest tests that go | Replaced by | Owner of the copy |
 |---|---|---|---|---|
-| `crates/goalcup-cli/src/proxy/` other files (`mod`, `connect`, `tls`, `http`, `websocket`, `headers`, `metadata`, `outage`, `preflight`, `tunnels`) and `ca_bundle.rs` | 7,459 / 1,308 | `m2_proxy_integration.rs` (3,025), `m2_http_relay.rs` (2,249), `m2_websocket_relay.rs` (2,074), `m2_tls_connect.rs` (1,275) | `crates/goalcup/src/proxy/` (about 4,400) | PRD-03 |
+| `crates/goalcup-cli/src/proxy/` other files (`mod`, `connect`, `tls`, `http`, `websocket`, `headers`, `metadata`, `outage`, `preflight`, `tunnels`) and `ca_bundle.rs` | 7,459 / 1,308 | `m2_proxy_integration.rs` (3,025), `m2_http_relay.rs` (2,249), `m2_websocket_relay.rs` (2,074), `m2_tls_connect.rs` (1,275) | `crates/goalcup/src/proxy/` (about 4,250) | PRD-03 |
 | `crates/goalcup-cli/src/upload/`, `commands/upload.rs`, `vitals.rs` | 4,457 / 921 | `upload_chunks.rs` (1,736), `upload_open.rs` (1,548), `full/upload_e2e.rs` (2,518), Rust Worker stand-in `tests/common/upload_server/` (2,514), `upload_server*.rs` (2,909) | `crates/goalcup/src/upload/` (about 940) | PRD-06 |
 | `crates/goalcup-cli/src/run/` (watch, pause, reserve, time left) | 2,893 / 2,085 | `full/t25_disk_full.rs` (1,173) | Time left in `src/cli/` (PRD-10); disk code: nothing | PRD-10 |
-| `crates/goalcup-cli/src/commands/` (all but `upload.rs`) | 8,739 / 1,129 | `m2_cli_lifecycle.rs` (1,944), `status_views.rs` (1,869), `prep.rs` (1,600), `start_launch.rs` (1,481) | `crates/goalcup/src/cli/` and `main.rs` (about 2,960 with the next three rows) | PRD-10 |
+| `crates/goalcup-cli/src/commands/` (all but `upload.rs`) | 8,739 / 1,129 | `m2_cli_lifecycle.rs` (1,944), `status_views.rs` (1,869), `prep.rs` (1,600), `start_launch.rs` (1,481) | `crates/goalcup/src/cli/` and `main.rs` (about 2,900 with the next three rows) | PRD-10 |
 | `crates/goalcup-cli/src/{participant/,participant.rs,push_lines.rs,host_log.rs,skill.rs,entries.rs,prep_file.rs,ssh_keys.rs}` | 2,767 / 888 | `account.rs` (1,195) | Trimmed text in `src/cli/` | PRD-10 |
 | `crates/goalcup-cli/src/account/` (device flow, credential, `github.rs` 466) | 1,028 / 18 | `login.rs` (159) | Device flow only (PRD-10); `git-credential` and old token: nothing (K8) | PRD-10 |
 | `crates/goalcup-cli/src/{config.rs,server.rs,main.rs,lib.rs,folder_gate.rs}` | 1,959 / 279 | `env_resolution.rs` (217), `contract_gate.rs` (782) | `src/main.rs`, `src/cli/` | PRD-10 |
-| `crates/goalcup-cli/src/{model_host.rs,connector.rs,home.rs,per_run_home.rs,harness_version.rs,preflight/}` | 2,742 / 929 | `model_host_from.rs` (793), `connector_contract.rs` (994), `harness_contract_golden.rs` (975), `harness_contract_kit.rs` (805), `per_run_home.rs` (438), `shipped_connectors.rs` (411) | `crates/goalcup/src/connector/` (about 750) | PRD-11 |
-| `crates/goalcup-daemon/src/redact.rs`, `redact/` | 4,152 / 1,135 | `capture_redaction.rs` (4,745), `redaction.rs` (2,629), `capture_redaction_extra.rs` (1,113) | `crates/goalcup/src/mask/` (about 3,550) | PRD-05 |
-| `crates/goalcup-daemon/src/native_capture.rs` | 1,632 / 0 | `capture_native.rs` (2,664) | `crates/goalcup/src/native/` (about 870) | PRD-04 |
+| `crates/goalcup-cli/src/{model_host.rs,connector.rs,home.rs,per_run_home.rs,harness_version.rs,preflight/}` | 2,742 / 929 | `model_host_from.rs` (793), `connector_contract.rs` (994), `harness_contract_golden.rs` (975), `harness_contract_kit.rs` (805), `per_run_home.rs` (438), `shipped_connectors.rs` (411) | `crates/goalcup/src/connector/` (about 800) | PRD-11 |
+| `crates/goalcup-daemon/src/redact.rs`, `redact/` | 4,152 / 1,135 | `capture_redaction.rs` (4,745), `redaction.rs` (2,629), `capture_redaction_extra.rs` (1,113) | `crates/goalcup/src/mask/` (about 3,530) | PRD-05 |
+| `crates/goalcup-daemon/src/native_capture.rs` | 1,632 / 0 | `capture_native.rs` (2,664) | `crates/goalcup/src/native/` (about 780) | PRD-04 |
 | `crates/goalcup-daemon/src/terminate/`, `runtime/termination.rs` (termination proof) | 2,428 / 355 | `terminate_sim.rs` (2,714), `full/process_kill.rs` (1,285), 12 shell fixtures (213) | Nothing. The watchdog ends the harness tree at the deadline and on seal with no proof (PRD-02 section 8); the seal records how the harness exited (PRD-01 section 11) | none |
 | `crates/goalcup-daemon/src/workspace.rs`, `workspace_git.rs` (seal-time walk, K21) | 1,015 / 19 | `workspace_layout.rs` (643) | Two `git` calls in the seal (PRD-02 section 11) | PRD-02 |
 | `crates/goalcup-platform/src/tracecap*`, `sourcecap*`, `handle_budget.rs` (K9, K15) | 3,197 / 320 | `unix_tracecap.rs` (325), `unix_sourcecap.rs` (261) | No-follow open chain, about 120 lines (PRD-04) | PRD-04 |
@@ -333,7 +359,7 @@ Every cap goes with its crate. Listed so the no-return guard knows them.
 | `crates/goalcup-protocol/src/{pins.rs,connector_dir.rs,manifest.rs,constant_time.rs}`, `pins/`, `providers.toml` (K17) | 811 / 432 | `connector_pins.rs` (303), `pins_build_fails.rs` (86), `connector_template.rs` (120) | `connector_sha256` in the start event (PRD-11) | PRD-11 |
 | `crates/goalcup-protocol/src/process.rs` and rest | 674 / 314 | | Nothing | none |
 | `crates/goalcup-verifier/src/capture_analysis/` decoders (K1) | 6,582 / 401 | `m2_anthropic_decoder.rs` (2,658), `m2_chat_decoder.rs` (2,524), `m2_openai_decoder.rs` (2,149), `m2_native_observations.rs` (1,737), `m2_decoder_v1.rs` (1,126) | Usage reader, about 1,470 (PRD-09) | PRD-09 |
-| `crates/goalcup-verifier/src/capture_analysis/` reader, framework, report, stats; `bin/`, `lib.rs` | 5,571 / 934 | `m2_capture_integrity.rs` (3,737), `m2_research_report.rs` (2,456), `m2_run_stats.rs` (873), `v5_corpus.rs` (718, K26) | `crates/goalcup-verify/` (about 1,500, PRD-08) | PRD-08 |
+| `crates/goalcup-verifier/src/capture_analysis/` reader, framework, report, stats; `bin/`, `lib.rs` | 5,571 / 934 | `m2_capture_integrity.rs` (3,737), `m2_research_report.rs` (2,456), `m2_run_stats.rs` (873), `v5_corpus.rs` (718, K26) | `crates/goalcup-verify/` (about 1,400, PRD-08) | PRD-08 |
 | Test fixtures of the old crates | 7,000 lines in 165 non-`.rs` files | `harness-golden` (2,110, K4), `v5-corpus` (912), `m2-*`, `frozen-connectors`, `schema-1-connectors` | Copied only where a ledger row says so | PRD-03, PRD-05, PRD-09, PRD-17 |
 | Test seams: features `test-hooks` (`crates/goalcup-daemon/Cargo.toml:20-21`, `crates/goalcup-protocol/Cargo.toml:14-15`), `test-support` (`crates/goalcup-cli/Cargo.toml:25-26`), `pause_at` hooks (for example `commands/start/phases.rs:286, 830, 856, 1009`) | in the above | | One `test-hooks` feature in `crates/goalcup` (PRD-02 scaffold, PRD-14 registry), off by default; none in the release binary | PRD-14 |
 
@@ -450,39 +476,42 @@ corrections (`docs/plans/2026-10-30-audit/R-reviews.md:166-298`).
 | Pins, deny checks | 4, 7 | Review is the control for connectors (`CODEOWNERS` comment); the start event carries `connector_sha256` |
 | Provider probe | 6 | A run with no model requests says so plainly (PRD-10) |
 | Scripts and spikes | none | Organizer and research tools; the pad replaces the test kits |
+| Old test suites (all `tests/` and inline tests of the five crates) | 1 to 7 | Each point keeps a test in the new crates (ledger section 7: a test stays if it proves a point): PRD-14's guard list plus PRD-17's lessons cases. PRD-17's deletion gate is the precondition (rule 2) |
 
 ## Target size after 1.0
 
-New-code numbers are the owning PRDs' estimates: src from each PRD, tests from PRD-14's test budget
-(PRD-14 section 3, the one source for tests, PRD-00 "Size budget").
+New-code numbers are PRD-00's "Size budget" (src from each owning PRD, tests from PRD-14's test budget,
+the one source for tests). PRD-00 wins where this table differs.
 
 | Area | Today src | Today tests | 1.0 src | 1.0 tests |
 |---|---:|---:|---:|---:|
 | `crates/goalcup-format` (PRD-01) | | | 1,000 | 800 |
 | `crates/goalcup` pipeline and watchdog (PRD-02) | | | 1,350 | 1,500 |
-| proxy (PRD-03) | | | 4,400 | 2,000 |
-| native (PRD-04) | | | 870 | 1,000 |
-| mask (PRD-05) | | | 3,550 | 5,000 |
+| proxy (PRD-03) | | | 4,250 | 2,000 |
+| native (PRD-04) | | | 780 | 1,000 |
+| mask (PRD-05) | | | 3,530 | 5,000 |
 | upload (PRD-06) | | | 940 | 1,000 |
-| CLI (PRD-10) | | | 2,960 | 1,200 |
-| connector code (PRD-11) | | | 750 | 400 |
-| `crates/goalcup-verify` check (PRD-08) | | | 1,500 | 1,200 |
+| CLI (PRD-10) | | | about 2,900 | 1,200 |
+| connector code (PRD-11) | | | 800 | 400 |
+| `crates/goalcup-verify` check (PRD-08) | | | 1,400 | 1,100 |
 | usage reader (PRD-09) | | | 1,470 | 600 |
-| lessons (PRD-17) | | | 0 | 1,500 |
-| test support, `rule_code`, `e2e_run` (PRD-14) | | | 0 | 1,800 |
-| **Rust** | **86,516** | **142,413** (+7,000 fixture lines) | **about 18,800** | **about 18,000** |
+| lessons (PRD-17), test support, `rule_code`, `e2e_run` (PRD-14) | | | 0 | 3,350 |
+| **Rust** | **86,516** | **142,413** (+7,000 fixture lines) | **about 18,100** | **about 15,000** |
 | Worker (PRD-07) | 4,001 | 5,775 | about 3,440 | about 4,950 |
-| Scripts | 11,406 | 10,393 | 908 (gate, release, packaging, licences, fetch-run) plus the pad (PRD-12; about 1,350 by review B, unverified) | 1,865 plus the pad's |
+| Scripts | 11,406 | 10,393 | about 900 (gate, release, packaging, licences, fetch-run) plus the pad (PRD-12, about 1,350 to 1,450 with its tests; PRD-12's estimate wins) | 1,865 |
 | Packaging, `harnesses/` | 456 | | 394 | |
-| **Code that ships or runs** | **about 102,400** | **about 158,600** | **about 23,550 plus the pad** (minus 77%) | **about 24,800 plus the pad's** (minus 84%) |
+| **Code that ships or runs** | **about 102,400** | **about 158,600** | **about 22,850 plus the pad** (minus 78%) | **about 21,800** (minus 86%) |
 | Data: connectors | 556 | | about 390 | |
 | Data: spikes | 23,713 | | 0 (86 corpus files, 6.2 MB, move under `crates/goalcup/tests/mask_corpus/`) | |
 
-The Rust src sum is 18,790; PRD-00 rounds the same table to about 18,700 because it took PRD-02 at
-1,300. The judge view and the run 1 converter are out of this build (PRD-00 "Not in this build"), so
-PRD-08 may land lower. The binaries drop from three to two; `Cargo.lock` already loses
-`ed25519-dalek`, `redb`, `axum` and what only they pull in when PRD-16 regenerates it in phase 0 with
-the old crates excluded (today 218 packages; unverified until built).
+Each row is a ceiling, not an estimate (ledger L2, PRD-00 "Size budget"). A builder who would pass its
+row first cuts what serves no point; past the row by more than 10% needs a replan `decision` line that
+names the point the extra lines serve. The Rust totals are PRD-00's targets after the cuts the
+alignment pass made; the rows above sum a little higher, and PRD-00 settles the gap. The judge view and
+the run 1 converter are out of this build (PRD-00 "Not in this build"), so PRD-08 may land lower. The
+binaries drop from three to two; `Cargo.lock` already loses `ed25519-dalek`, `redb`, `axum` and what
+only they pull in when PRD-16 regenerates it in phase 0 with the old crates excluded (today 218
+packages; unverified until built).
 
 How to recount after the cut (the watcher posts the output in the night log):
 
@@ -496,18 +525,22 @@ git ls-files scripts | xargs wc -l | tail -1
 ## Acceptance
 
 Real-run proofs first. Each runs on the post-cut commit, built in a fresh Vercel Sandbox build box from
-a fresh clone of `v1.0/integration`, against the staging Worker, with `GOALCUP_KEEP_PARTS=1`.
+a fresh clone of `v1.0/integration`, against the staging Worker, with `GOALCUP_KEEP_PARTS=1` (ledger B1;
+only `fetch-run` runs on the conductor, item 4).
 
-1. **The core set still passes after the cut.** The pad (PRD-12) runs Claude Code, Codex and Hermes,
-   direct-key case, on binaries built from the post-cut commit. Pass: the same pass or fail row per
-   harness as the last pre-cut pad run; any new failure blocks the merge of the cut.
+1. **The core set still passes after the cut.** Before the merge: one Codex direct-key `smoke` pad row
+   from the cut branch head on staging passes every pad check. After the merge: the phase 4 core-set pad
+   rows (Claude Code, Codex, Hermes, direct `full`) are built from the post-cut commit; any failure that
+   a pre-cut build did not have names PRD-13 in the night log and is fixed before release.
 2. **One process, two binaries.** During the Codex run, `ps -eo pid,comm` shows the `goalcup` watchdog
    and recorder and no `goalcup-daemon`; `ls target/release` after `cargo build --release --locked`
    shows `goalcup` and `goalcup-verify` and no third binary. Pass: both true.
 3. **Kill test still holds.** PRD-01 acceptance 3 (PRD-02 R1) re-run once on the post-cut build. Pass:
    as there.
-4. **Server copy whole.** `scripts/fetch-run.sh` plus `goalcup-verify check --server` on the Codex run
-   (PRD-07, PRD-08). Pass: equal SHA-256 to the kept local parts.
+4. **Server copy whole.** `scripts/fetch-run.sh` on the conductor (it alone holds the read-only
+   credentials); the fetched folder is copied into a build box and
+   `goalcup-verify check --server <fetched> --local <entry dir>` runs there on the Codex run (PRD-07,
+   PRD-08, ledger B1). Pass: equal SHA-256 to the kept local parts.
 5. **Release tarball.** `scripts/package-release.sh` and `smoke-release.sh` (PRD-14) on the post-cut
    commit. Pass: the tarball holds two binaries, the smoke passes, and neither binary contains the text
    `GOALCUP_TEST_`.
@@ -516,27 +549,30 @@ Automated checks that guard them:
 
 - `cargo build --locked --workspace` and `sh scripts/gate.sh full` green with the old crates gone
   (PRD-00 phase 3 gate), in a build box as `ubuntu`.
-- The reference guard (section 6) prints nothing in `gate fast` after the cut, with no `gate.sh` edit.
-- The no-return guard (section 6) prints nothing over the new crates from phase 1, and over `crates/`
-  and the Worker scope after the cut.
-- `python3 -m unittest discover -s scripts` green with no test for a deleted script left behind.
-- The size recount is posted, and each area is within 30% of its row in "Target size", or the owner
-  of that area names the reason in the night log.
+- The reference guard (section 6, `rule_code.rs` rule 4) prints nothing in `gate fast` after the cut,
+  with no `gate.sh` edit.
+- The no-return guard (section 6, `rule_code.rs` rule 3) prints nothing over the new crates from
+  phase 1, and over `crates/` and the Worker scope after the cut.
+- PRD-14's named script-test list and `discover -s scripts/pad` green in a build box, and no
+  `scripts/test_*.py` left for a deleted script.
+- CI `check` green on the merge commit (PRD-00 phase 3 gate).
+- The size recount is posted, and each area is within its row in PRD-00 "Size budget", or past it by
+  at most 10%, or a replan `decision` line names the point the extra lines serve.
 
 ## Risks and blind spots
 
 | Risk | What could go wrong | What we do |
 |---|---|---|
 | A lesson is lost | An edge case the old code handled is not in `LESSONS.md` and the fresh core misses it | Delete only after PRD-17's deletion gate passes; the old code stays at `v0.7.0` for any later look |
-| The cut is skipped | PRD-17's gate is not green by PRD-16's cut-off | The old crates stay on disk, out of the workspace; nothing builds them; the end-of-build report says so and the cut lands in a later merge |
-| A reference hides until the cut | The reference guard skips while old crates are on disk, so a live file that names an old crate is not caught by the gate | PRD-13's hourly hand-run with the deleted paths excluded (section 5) names each hit and its owner in the night log |
+| The cut is late | PRD-17's gate is not green by H+10 | The owner is called under W6 (locked L3 cannot hold on time); the old crates stay on disk, out of the workspace, and nothing builds them; the cut runs as soon as the gate is green, before `REPORT_AT`; otherwise `MORNING.md` line 1 says "Not ready" and it is an owner blocker against L3 (section 5) |
+| A reference hides until the cut | Before the cut, `rule_code.rs` rule 4 checks the `exclude` list, not the `git grep`, so a live file that names an old crate is not caught by the gate | PRD-13's hourly hand-run with the deleted paths excluded (section 5) names each hit and its owner in the night log |
 | Dangling references break the gate | `scripts/test_codeowners.py` fails on any `CODEOWNERS` path that no longer exists; `.config/nextest.toml` names deleted packages; `gate.sh:88-103` runs `-p goalcup-cli` | PRD-14 lands these edits in phase 0 or 1, when the old crates leave the workspace; they no longer wait for the cut |
 | Dry-run participants on 0.7 | Pasted `goalcup mcp` lines now start a missing command; an old `goalcup-daemon` may still run; an old binary stays in `~/.local/bin` | PRD-10: no compatibility, one guide line. PRD-14's installer removes `goalcup-daemon` from the install folder. Whether an old daemon holds a port 1.0 needs is unverified |
 | Judging loses run labels | `docs/RULES.md:306-321` and `docs/CHEAT-CHECKLIST.md` cite labels that only the cut verifier computed | PRD-08 keeps S6 `label` and the coverage line; PRD-15 rewrites the rules text |
 | Docs links break | `check-links.py` goes in the same build in which PRD-15 rewrites many docs | PRD-15 runs it once on the final docs; PRD-14 deletes it last |
 | Linux filesystem coverage | `linux-check.sh` ran the gate on ext4 and XFS in Docker; if PRD-14 cuts it, that coverage goes | The pad runs on Linux sandboxes; macOS is the owner's run after the build (PRD-00) |
 | Website database keeps dead columns | Receipt, ack and disk-pause columns stay unused; no migration in this build | Owner question in PRD-00; the no-return guard skips `server/worker/sql/` |
-| Size overrun | The new code is larger than budget | Recount at the cut; each area over its estimate by 30% names why |
+| Size overrun | The new code is larger than budget | Recount at the cut; each row of PRD-00 "Size budget" is a ceiling; past it by more than 10% needs a replan `decision` line naming the point served |
 | A guard pattern hits a fair use | For example a variable called `receipt` in an unrelated sense, or a copied test comment | The integrator narrows the pattern in the night log; provenance comments are filtered; the guard never blocks a build on its own |
 | The subreaper comes back as termination proof | The copied 20 lines grow into the old sweep and refusal | PRD-02 copies only `PR_SET_CHILD_SUBREAPER` and the start-time filter; `released_child`, `TerminationOutcome` and `observed_gone` stay guarded |
 
@@ -548,7 +584,7 @@ Automated checks that guard them:
 | Judged commit in the Worker | Kept, untouched (PRD-00 question 3) | Owner |
 | Where the old code lives | Tag `v0.7.0` and main `4b226de2`; no new tag | PRD-16 may add `v0.7-final` |
 | History docs in the reference guard | Excluded: `docs/plans/**`, `docs/archive/**`, `docs/research/**`, `docs/DECISIONS.md`, `CHANGELOG*` | PRD-15, by a night-log line |
-| Size tolerance | 30% over the owner's estimate, with a reason | PRD-16 |
+| Size tolerance | PRD-00 "Size budget": each row a ceiling; more than 10% over needs a replan `decision` line | PRD-00 (replan, ledger B2a) |
 
 ## Builder notes
 
@@ -562,9 +598,14 @@ Order of work:
    green.
 3. **Phase 3:** check every ledger row says "copied, tests green", PRD-17's deletion gate is green and
    PRD-12's `selftest` passed. Apply the four commits. Run the build, the two guards and `gate full` in
-   a build box, then hand the branch to PRD-16 for the merge with its workspace edit and PRD-14's
-   `check-links.py` delete.
-4. **After merge:** a watcher runs acceptance 1 to 5 and posts the size recount.
+   a build box. Open the merge request. Two independent reviewers read it (ledger B2): the first checks
+   that every ledger row says "copied, tests green", PRD-17's gate and `selftest` passed, and the guard
+   and `gate full` outputs; the second checks that the diff deletes only paths in "Files it owns" and
+   adds nothing. Fix, then PRD-16 merges with its workspace edit and PRD-14's `check-links.py` delete.
+   After the merge the replan agent appends Amendments notes to the remaining PRDs and PRD-16 from what
+   the cut found (ledger B2a).
+4. **Before merge:** the Codex smoke row (acceptance 1) and the automated checks. **After merge:**
+   acceptance 2 to 5 and the size recount, by a watcher.
 
 Traps from the audit:
 
@@ -586,7 +627,8 @@ Traps from the audit:
 How a watcher proves it in a real run: in a fresh sandbox, clone `v1.0/integration` at the merge
 commit, build release, run the pad's Codex direct-key case with the payments prompt and many
 subagents against staging, watch `ps` for a `goalcup-daemon` (there must be none), run
-`goalcup-verify check` on the entry and on the fetched server copy, and post the pad row, the `ps`
+`goalcup-verify check` on the entry and on the server copy (fetched on the conductor, copied into the
+box), and post the pad row, the `ps`
 line, the two guard outputs and the size recount in the night log.
 
 ## Asks of PRD-00 and PRD-01
@@ -605,6 +647,11 @@ All seven asks of revision 1 are answered (PRD-00 "Review answers", PRD-01 CC 89
 
 ## Review answers
 
+History of revision 2. Where an answer here disagrees with the body, the ledger or "Alignment answers"
+(the H+10 cut-off and W6 call, the guards as `rule_code.rs` rules 3 and 4, `test-hooks` in
+`crates/goalcup` only, the size ceilings), those win. The move of this section and the ruled asks to
+`REVIEW-HISTORY.md` is left to one later step (alignment X2-11).
+
 Sources: `prd-consistency.md` (CC), `prd-review-A.md` (RA), `prd-review-B.md` (RB). Code checked where
 an item was disputed.
 
@@ -615,7 +662,7 @@ an item was disputed.
 | CC 88 | Ledger `terminal.rs:1-60` is the module comment | **Accepted, checked.** Lines 1-25 are the module comment and `Shield` starts at 53. Ledger now uses PRD-02's `:27-292` into `src/watchdog/shield.rs` |
 | CC 89, ask 7 | v5 size and `run_secret.rs` in PRD-01 | **Closed.** PRD-01 took the numbers and the wording |
 | CC 90 | Test numbers differ from PRD-14 | **Accepted.** Target size copies PRD-14 section 3 (about 18,000) |
-| CC 91, CC 13, RB C17, RB M9 | Asks 1 and 3; the `gate.sh` exclude line | **Accepted.** PRD-16's phase 0 `exclude`; no rename; PRD-13 edits no `gate.sh` line (rule 6). PRD-14's lines about an exclude line PRD-13 deletes are stale against PRD-00 |
+| CC 91, CC 13, RB C17, RB M9 | Asks 1 and 3; the `gate.sh` exclude line | **Accepted.** PRD-16's phase 0 `exclude`; no rename; PRD-13 edits no `gate.sh` line (rule 6) |
 | CC 92 | `db-local.ts` reason; `ci-scope.py` row | **Accepted, checked.** `db-local.ts` stays because the Worker's tests and `npm run dev` use `DB_BACKEND:local` (`server/worker/package.json:11`); the "pad's local Worker" reason is gone (staging). `ci-scope.py` is PRD-14's |
 | CC 9 | Two leftover files to PRD-13 | **Accepted.** `campaign-cell.md` and `harnesses/install.sh` stay in Files it owns |
 | CC 10, RB C21 | `check-version.py`, `check-links.py`, `ci-scope.py` have two deleters | **Accepted.** Removed from group D; PRD-14 owns them (section 7), `check-links.py` deleted in the phase 3 merge after PRD-15's run. Group D recounted: 8,840 lines, 6,487 test lines (`wc -l`). `linux-check.sh` also moved to PRD-14 per PRD-00 |
@@ -635,3 +682,35 @@ an item was disputed.
 | PRD-10 rows | Session sniffing, `goalcup mcp` | **Closed.** PRD-10 decided both; the overridable default row is gone |
 | PRD-12 What is cut | Lists `linux-check.sh` and its skill files as PRD-13's | **Rejected for this PRD.** PRD-00 gives `linux-check.sh` to PRD-14 and the skill files to PRD-12; noted in the interfaces row |
 | CC 112 | Style | Checked: no em dash, no model names |
+
+## Alignment answers
+
+Fix lists g1, g2 and g3 of the alignment pass, checked against `OWNER-DECISIONS.md`, PRD-00, PRD-07,
+PRD-14, PRD-15, PRD-16 and the code.
+
+| Fix | What was done |
+|---|---|
+| F1 | Applied with G3-X6. Section 5 "If the gate is late": H+10 target, owner called under W6, the cut lands in the same build as soon as the gate is green, before `REPORT_AT`. Risk row renamed "The cut is late"; interfaces row PRD-16 follows. Same as PRD-00 phase 3 |
+| L7-01 | Applied for this file. Rule 6, cut commit 2 and "Files it owns" (Change) now remove the `spikes/*/out/` and `spikes/wire-pty/out/` lines from `.gitignore` with `spikes/`, as PRD-00's `.gitignore` row says. The PRD-12 and PRD-00 parts are theirs |
+| F8 | Partly. Section 7 gains the `test-hooks` row, but for `crates/goalcup` only: PRD-00 owner question 12 and PRD-14 give `goalcup-verify` no hooks. The hook count and "about 60 src" are not stated (PRD-02 names more hooks than six); the row points to PRD-02's and PRD-14's counts. The no-return pattern and its note now allow `crates/goalcup` only |
+| F11 | Applied with G3-X10: H+10 (PRD-00 R3-8) in section 5 and the PRD-16 interfaces row |
+| L3-5 | Applied through G3-13a's wording, which covers it: vendor backends are decrypted; only a client that ignores the proxy or CA on its own model host gets "not supported" (T3) |
+| G2-38 | Applied. Target size copies PRD-00 "Size budget": Rust about 18,100 src and about 15,000 tests, pad "about 1,350 to 1,450 (PRD-12's estimate wins)", each row a ceiling with the 10% replan rule; totals and percentages recomputed |
+| P04-25 | Applied. Native is 780 src in group C and in Target size |
+| X2-11 | Partly. This pass edits only this file, so the move to `REVIEW-HISTORY.md` is left to the one later step that owns that file. "Review answers" opens with a line saying it is history and that the body, the ledger and these answers win. Every ruling still binding is in the body; the asks were all answered already |
+| G3-X1 | Applied. Acceptance 4: `fetch-run.sh` on the conductor, the fetched folder copied into a build box, `check --server <fetched> --local <entry dir>` there; the preamble and the watcher paragraph say the same |
+| G3-X6 | Applied, merged with F1 (section 5, risk row, interfaces row PRD-16) |
+| G3-13a | Applied. Section 3 row "Spike prototypes and plugins" and line 94 reworded as given |
+| G3-13b | Applied. Acceptance 1 split into a pre-merge Codex `smoke` row and the post-merge phase 4 core-set rows; builder note step 4 follows |
+| G3-X14 | Applied, with `test-hooks` allowed in `crates/goalcup` only (see F8). Section 6: reference guard is `rule_code.rs` rule 4 (`exclude` check before the cut, the `git grep` after), no-return guard is rule 3 with the stated scan scope, Worker half joins after PRD-07's cut; section 5 PRD-14 bullet, automated checks, interfaces row PRD-14 and the risk row follow |
+| G3-13c | Applied. Caps pattern list extended (all names checked in the code; `MAX_GIT_LIVE_HANDLES` matches `MAX_GIT_LIVE_HANDLES_V1`); group B native row names 8,192 directory entries (`native_capture.rs:281`) |
+| G3-13d | Applied. Two copy ledger rows for connector data and `kit_settle.py` answers (PRD-11); cut commit 4 waits for PRD-11's ledger rows |
+| G3-13e | Applied. Builder note step 3: two independent reviewers with the given split (B2), merge by PRD-16, replan after the merge (B2a); interfaces row PRD-16 names both |
+| G3-13f | Applied. Point check row for the old test suites; "Owner decisions" bullets tagged with ledger ids, plus R5, M1 and S3 |
+| G3-X10 | Applied (see F11) |
+| G3-X40 | Partly. PRD-00's numbers copied into Target size and into group C (proxy 4,250, native 780, mask 3,530, CLI about 2,900, connector 800, verifier 1,400 and 1,100). The total is about 18,100, not 18,700: PRD-00 now says 18,100 (G2-38). The tolerance follows PRD-00's ceiling and 10% replan rule, not 30% |
+| G3-13g | Applied. Pre-cut edits name PRD-07's `docs/UPLOAD-API.md` and `scripts/test_fetch_run.py` (`:26`, `:139`), PRD-14's `scripts/test_gate.py` (`:193`) and the nextest lines `:13, 16-17, 22, 37, 46, 56` (checked in the code); PRD-15 bullet excludes `docs/UPLOAD-API.md` |
+| G3-13h | Applied. Interfaces row PRD-15 splits the docs moved to `docs/archive/` from those rewritten, as PRD-15 lists them |
+| G3-13i | Applied. Automated check uses PRD-14's named script-test list and `discover -s scripts/pad` |
+| G3-13j | Applied. Automated check: CI `check` green on the merge commit |
+| G3-13k | Applied. The stale parenthesis in interfaces row PRD-14 and the last sentence of CC 91 are gone |
