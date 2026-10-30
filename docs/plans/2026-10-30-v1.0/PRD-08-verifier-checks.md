@@ -821,3 +821,62 @@ log; the pad lane follows.
   changes an exit rule, or builds a skipped check names each change in its merge note, so PRD-15's
   next slice updates the page (PRD-15 note). No code change is asked of PRD-08.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-08 slice 2 (merge 669f5d92)
+
+- **Built and checked.** `check --server <fetched> [--local <entry dir>]` gives real
+  `server_chunks_whole`, `server_equals_local` and `server_counts_match` results and the S6 top-level
+  `server` object `{chunks, whole, equals_local, db_match}` from PRD-07's S13 layout. Gate on
+  669f5d92: `gate fast: PASS in 89s`, nextest 136 of 136 (goalcup-verify 25 of 25). Nine paths
+  changed, all owned here. The slice 1 debts are paid except `main.rs`: `integrity.rs` 982 of
+  1,000, B13 done in `tests/common/` (877 of 900), `check_invariants.rs` 329 of 330.
+- **Rules as merged (S6; PRD-12, PRD-15 and PRD-07 notes).** Under `--server`, a copy with no
+  `fetch.json` gives all three server checks `fail`; a bare `rec.gcr.zst` checked without
+  `--server` still skips them. `fetch.json` `missing.why` set gives `server_chunks_whole` `fail` with
+  `first.o` = `missing.offset`, also when `final` is null. `final` null alone gives
+  `server_chunks_whole` `named` (open end, exit 1, never `fail`) and `server_counts_match` `skip`
+  "not sealed", as PRD-07 asked. A seal with no `reason` or no `totals` is reported, never exit 3.
+  Record sums and offsets saturate. `server_equals_local` is `skip` when the `--local` entry's first
+  part is pruned or its `rec/` is empty; a `--local` folder that never held a record is exit 3.
+  Top-level `equals_local` and `db_match` are true only when every entry passes, false on any `fail`,
+  else null; `whole` is true only when every entry passes.
+- **Lesson names** (judge 14:56Z, 15:13Z, PRD-17 note): L-FW3 (both halves, plus the wrong-path case)
+  is `tests/server_compare.rs` `fw3_pruned_entry_is_named_and_server_copy_stands_in`; the
+  `check_named.rs` test the slice 1 note planned for the local half is not needed. L-FW9 is
+  `server_compare.rs` `fw9_one_flipped_byte_fails_the_copy`. **L-VR2 is settled** by
+  `server_compare.rs` `vr2_seal_without_reason_or_totals_is_reported` and the `("inv5",
+  m_mask_at_top)` row of `check_invariants.rs` `vr3_every_mutation_fails_its_check_with_exit_2`;
+  both exited 3 before the fix. The panic hook in `main.rs` stays as a review check for inputs no
+  test reaches.
+- **Size decision** (`wc -l` at 669f5d92). Src without PRD-09's `usage/` is 1,724: `integrity.rs` 982,
+  `server.rs` 201, `main.rs` 206, `input.rs` 198, `report.rs` 126, `lib.rs` 11. That is six of ten
+  files, 72% of the 2,400 crate ceiling and 123% of the PRD-00 row (1,400). Past their per-file
+  ceilings: `server.rs` (201 of 130), `input.rs` (198 of 150, the PRD-01 ask is still open) and
+  `main.rs` (206 of 200, review nits A9 and B3 still open). Tests are 1,612: `tests/common/` 877,
+  `check_invariants.rs` 329, `check_named.rs` 218 and `server_compare.rs` 188 (60 was set). With the
+  four unwritten files at their ceilings (honesty 150, legs 260, history 170, secrets 175) and
+  `report.rs` at 150, src comes to about 2,503. With `check_run1_shape.rs`, `check_history.rs` and
+  `secrets_*.rs` at theirs, tests come to about 1,802. **Decision:** `server.rs` is capped at 201 (as
+  merged) and `server_*.rs` at 190. The extra lines serve point 5: the server copy is whole, equal
+  to the local bytes and matches its row, checked by entry id. They also serve point 3: review fixes
+  A1 to A4, F2 and F4 replaced exit-3 crashes and false passes on odd seals and odd `fetch.json` with
+  named results. The tests are lessons acceptance cases L-FW3, L-FW9 and L-VR2 (ledger B10 allows
+  these). The crate ceilings become **2,450 src and 1,830 tests**. Per-file ceilings for what is
+  left: `main.rs` 200, `honesty.rs` 140, `legs.rs` 240, `history.rs` 155, `secrets.rs` 160 and
+  `report.rs` 150; tests keep their slice 1 numbers. **Cut first:** slice 3 touches `main.rs` for
+  `secrets`, and before it adds anything it brings `main.rs` back to 200 with the A9/B3 cut: dump's
+  `--sid` arm becomes `Some(None) => return no_report(&"--sid takes N or BOOT.N")`, and `check()`
+  shares one `now` binding. Same exit 3, same stderr prefix. The PRD-01 ask (about 40 lines of
+  `input.rs`) is the next cut. A slice that would pass these numbers needs another decision line.
+  PRD-16's end-of-build report nets this against the Rust totals, and only a test total past about
+  14,200 becomes an owner question.
+- **U1 is no reason to wait.** The slice 2 scope said `legs.rs` and `history.rs` wait for PRD-09's U1.
+  U1's stub, with its final names, has been on integration since f5a529c8 (`usage/mod.rs`, 304 lines
+  at 669f5d92; PRD-09 slice 1 note above). Those files can start against it now, in the order PRD-16
+  sets. Only `readable()` as a method waits for PRD-09's core slice; the rule in that note covers
+  either merge order.
+- **For PRD-15:** this slice builds the three `server_*` ids (no longer "not built in this slice"
+  under `--server`), adds the top-level `server` object and changes the exit rules above.
+  `docs/RECORD-FORMAT.md` follows in PRD-15's next slice (PRD-15 note).
+- Acceptance lists as known, if still open at the end: the A9/B3 `main.rs` nit and the PRD-01 ask.
+- No locked ledger item is touched and no owner question comes from this slice.

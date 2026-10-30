@@ -1518,3 +1518,60 @@ kept and now cites BUILD-PROMPT section 5, since B3 no longer carries it.
   PUT handshake about 90 s on a peer that trickles bytes, against the 30 s and 600 s defaults), the
   every-other-PUT backoff case (it lands with `send.rs`), and the loose `server.json` parse.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-08 slice 2 (merge 669f5d92)
+
+- On 669f5d92: `gate fast: PASS in 89s`, with a nextest summary of 136 tests run and 136 passed. Box
+  runs before the merge: the builder at d1e7f065 ran fmt, clippy `-D warnings` and nextest (22/22).
+  The lane merge at 2f77d55b ran the same plus a workspace build. Reviewers A and B ran it again, and
+  reviewer A added three probes. The fixer ran 25/25 and a workspace build at 50d7c49a, the commit
+  before the fmt-only 6225c707, which reviewer A re-checked with six probes. The fixer's last push,
+  f174fd13, got fmt, clippy, a workspace build and 25/25, and both reviewers re-checked it. Nine paths
+  changed, all owned by PRD-08, with no `Cargo.toml` change.
+- **Size report, PRD-08** (`wc -l` at 669f5d92, row "Verifier (PRD-08)", 1,400 src and 1,100 tests;
+  the slice 1 decision ceilings were 2,400 and 1,700). Src without PRD-09's `usage/` is 1,724, which
+  is 123% of the row and 72% of 2,400. That is six of ten files: `integrity.rs` 982, `server.rs` 201,
+  `main.rs` 206, `input.rs` 198, `report.rs` 126, `lib.rs` 11. Tests are 1,612, which is 147% of the
+  row and 95% of 1,700: `tests/common/` 877, `check_invariants.rs` 329, `check_named.rs` 218,
+  `server_compare.rs` 188. With every unwritten file at its ceiling, the crate projects to about
+  2,503 src and 1,802 tests. PRD-08's decision line (PRD-08 note) sets the ceilings to 2,450 src and
+  1,830 tests. It names point 5, server copy proven whole and equal by entry id, and point 3, review
+  fixes that turned exit-3 crashes and false passes into named results. It also names the lessons
+  tests L-FW3, L-FW9 and L-VR2. The end-of-build report nets these against the Rust totals (about
+  18,100 src, at most about 14,200 tests). Only a total past those becomes the owner's question.
+- **Open size nit:** A9 and B3 (`main.rs` 206 of 200). Slice 3 must fold it first, since it touches
+  `main.rs`. Acceptance lists it as known if it is still open at the end.
+- **Build order:** the slice 2 scope said `legs.rs` and `history.rs` wait for U1 on integration. U1's
+  stub with final names has been there since f5a529c8, so PRD-08's honesty, legs and history slices
+  need not wait for PRD-09. Only `readable()` as a method still does, and PRD-08 covers either order.
+- **Integrator:** a stray branch `v1.0/prd-08-verify-lanemerge-tmp` (2f77d55b, the same as an older
+  `v1.0/prd-08-verify` tip) was pushed by mistake. The remote refused its delete (judge 14:59Z). It
+  is left for the integrator to remove.
+- **Trailers:** all 12 commits in a8e284db..669f5d92 carry both lines, the merge included.
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-11 slice 3 (merge c14d63b8)
+
+- `gate fast: PASS in 88s` on c14d63b8 (nextest: 147 tests run, 147 passed, 0 skipped). Before the
+  merge the lane was green in boxes after each fix round: fmt, clippy with and without `test-hooks`,
+  and 80 of 80 connector, `rule_code` and `native_pattern` tests at 72a1d813, 5e143d9c and ccc77a4f;
+  reviewer A's last box re-check at ccc77a4f ran eight extra YAML cases. Linux only. Nine paths
+  changed, all PRD-11's, no `Cargo.toml`.
+- **Size report, PRD-11** (`wc -l` at c14d63b8, PRD-00 row "Connector code (PRD-11)" 800 src and 400
+  tests, replan ceiling 1,510 and 620): src 1,646 (`schema.rs` 423, `hints.rs` 303, `mod.rs` 301,
+  `hosts.rs` 301, `launch.rs` 291, `builtin.rs` 27), 206% of the row and 109% of the ceiling;
+  tests 721 (`connector_launch.rs` 223, `connector_hints.rs` 196, `connector_builtin.rs` 155,
+  `connector_hosts.rs` 105, `connector_no_model_address.rs` 42), 180% of the row and 116% of the
+  ceiling. The fixer's 14:59Z decision line named points 1, 6 and 7; this replan's decision (PRD-11
+  note) sets the final ceiling to 1,700 src and 760 tests, 900 and 360 over the row. The end-of-build
+  report counts it against the Rust totals (about 18,100 src, at most about 14,200 tests); a total
+  past them is the owner's question then.
+- **Unblocked:** PRD-17 `lessons_hosts.rs` and the HF rows guarded in `connector_launch.rs`; PRD-10's
+  `start` wiring with `unread` and `log` (S3 addition, PRD-00 note), `--record-host` on the real
+  check, and the setup settings test; PRD-15's CONNECTOR-SCHEMA pass; the core slice's launch plans
+  for Claude Code and Codex now decide hosts for real. Still waiting on PRD-11's third slice: the
+  `.profile` writer and the 12 remaining connector files.
+- **Acceptance lists as known,** if still open at the end: numeric address spellings are not
+  `local_model` notes, and the N6 lookup has no wait of its own (PRD-11 note).
+- **Trailers:** all 18 commits in 669f5d92..c14d63b8 carry both lines, the merge included.
+- No locked ledger item is touched and no owner question comes from this slice.
