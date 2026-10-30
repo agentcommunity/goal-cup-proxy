@@ -3,6 +3,7 @@
 #   fast  before every merge into integration, and CI on every push
 #   full  fast's steps, every #[ignore] test but by_hand_*, the release build and its hook check;
 #         phase exits, before the owner's merge to main, before a tag
+# Every step prints its time; the last line is `gate <tier>: PASS in <N>s` or `gate <tier>: FAIL`.
 # No step is skipped and nothing falls back: a skip is a hidden pass.
 set -eu
 
@@ -15,21 +16,19 @@ fast | full) ;;
     ;;
 esac
 
-# A root process can open a file mode 000 forbids, so some permission tests always fail as root.
-if [ "$(id -u)" = 0 ] && [ "${GOALCUP_GATE_ALLOW_ROOT:-}" != 1 ]; then
-    echo "gate.sh: do not run the gate as root; some permission tests always fail as root." >&2
-    echo "Run it as a normal user, or set GOALCUP_GATE_ALLOW_ROOT=1 to run it anyway." >&2
-    echo "gate $tier: FAIL"
-    exit 1
-fi
-
-cd "$(dirname "$0")/.."
-start=$(date +%s)
-
 fail() {
     echo "gate $tier: FAIL"
     exit 1
 }
+
+if [ "$(id -u)" = 0 ] && [ "${GOALCUP_GATE_ALLOW_ROOT:-}" != 1 ]; then
+    echo "gate.sh: do not run the gate as root; some permission tests always fail as root." >&2
+    echo "Run it as a normal user, or set GOALCUP_GATE_ALLOW_ROOT=1 to run it anyway." >&2
+    fail
+fi
+
+cd "$(dirname "$0")/.."
+start=$(date +%s)
 
 step() {
     echo "+ $*"
@@ -56,10 +55,7 @@ if [ -z "$py311" ] && command -v dnf >/dev/null 2>&1 && sudo -n dnf install -y -
     py311=python3.11
 fi
 [ -n "$py311" ] || missing="$missing python3.11"
-if [ -n "$missing" ]; then
-    echo "gate.sh: missing:$missing"
-    fail
-fi
+[ -z "$missing" ] || { echo "gate.sh: missing:$missing"; fail; }
 
 # One cargo job at a time in one build box (the gate and the pad's rebuild step).
 lock=target/.build-lock
@@ -77,19 +73,21 @@ while ! mkdir "$lock" 2>/dev/null; do
 done
 echo $$ >"$lock/pid"
 trap 'rm -rf "$lock"' EXIT
-trap 'exit 1' INT TERM HUP
+trap fail INT TERM HUP
 
 step cargo fmt --all --check
 step cargo clippy --locked --workspace --all-targets -- -D warnings
 step cargo nextest run --locked --workspace
 step cargo test --locked --workspace --doc # nextest does not run doctests
 step npm --prefix server/worker test
-# A named list, not `discover -s scripts`: old script tests name the old crates.
+# A named list, not `discover -s scripts`: old script tests name the old crates. A new script test
+# joins only if it guards one of the seven points, the format, masking or the never-stop rules (B10).
 step python3 -m unittest scripts/test_install.py scripts/test_fetch_run.py
 step "$py311" -m unittest discover -s scripts/pad -p 'test_*.py'
 
 if [ "$tier" = full ]; then
-    # No --no-tests: nextest fails when none run, so a missing e2e_run.rs cannot pass.
+    # Fails until the first #[ignore] test (e2e_run.rs or upload_worker.rs) merges in phase 2; phase 1
+    # needs only fast. No --no-tests: nextest fails when none run, so a missing e2e_run.rs cannot pass.
     step cargo nextest run --locked --workspace --run-ignored only \
         -E 'not test(/^by_hand_/)'
     step cargo build --release --locked -p goalcup -p goalcup-verify
