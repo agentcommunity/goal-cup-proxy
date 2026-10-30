@@ -164,7 +164,11 @@ impl Sender {
             }) if code == "awaiting_final" => {
                 // No failure counted: the wait ends when the final heartbeat is committed.
                 self.awaiting_final = true;
-                let why = (Class::ServerBusy, Some(503), "the server waits for the final heartbeat");
+                let why = (
+                    Class::ServerBusy,
+                    Some(503),
+                    "the server waits for the final heartbeat",
+                );
                 self.say(j, "chunk", State::Waiting, why, Duration::ZERO);
                 Step::Idle
             }
@@ -203,11 +207,13 @@ impl Sender {
 
     /// Takes a position the server answered: progress resets the backoff.
     fn took(&mut self, p: RunPosition, confirm: bool, j: &Mutex<UploadJson>) {
+        // Only progress ends a row of refusals: a position read between refused PUTs does not.
         let moved = p.offset > self.known;
         if moved {
             self.backoff.progress();
+            self.refusals = 0;
         }
-        (self.known, self.refusals) = (self.known.max(p.offset), 0);
+        self.known = self.known.max(p.offset);
         let stored = self.inflight.take().filter(|i| moved && i.0 == p.offset);
         let at = rfc3339(SystemTime::now());
         let open = self.target.is_some_and(|t| p.offset < t);
@@ -240,7 +246,7 @@ impl Sender {
 
     /// The round is over, or nothing waits: progress for the backoff.
     fn caught_up(&mut self, j: &Mutex<UploadJson>) {
-        self.target = None;
+        (self.target, self.refusals) = (None, 0);
         self.backoff.progress();
         self.update(j, |j| {
             j.state = if j.final_ == Final::Sealed {
@@ -274,7 +280,14 @@ impl Sender {
     }
 
     /// Why nothing moved: `state`, `last_error` in fixed words, `next_try`, and one log line.
-    fn say(&self, j: &Mutex<UploadJson>, what: &'static str, state: State, why: Why<'_>, wait: Duration) {
+    fn say(
+        &self,
+        j: &Mutex<UploadJson>,
+        what: &'static str,
+        state: State,
+        why: Why<'_>,
+        wait: Duration,
+    ) {
         let (class, status, text) = why;
         self.update(j, |j| {
             j.state = state;
@@ -326,9 +339,10 @@ const UNREAD: Why<'static> = (Class::Internal, None, "a part file could not be r
 /// The class, status and fixed words of a failed call.
 fn words(e: &ServerError) -> Why<'static> {
     let (class, status) = match e {
-        ServerError::Status { status, .. } => {
-            (class_of_status(*status).unwrap_or(Class::Network), Some(*status))
-        }
+        ServerError::Status { status, .. } => (
+            class_of_status(*status).unwrap_or(Class::Network),
+            Some(*status),
+        ),
         ServerError::Transport(_) => (Class::Network, None),
         ServerError::Malformed(_) => (Class::Internal, None),
     };

@@ -95,7 +95,8 @@ impl Rig {
                 return;
             }
             let (now, next) = (self.t.get(), self.s.backoff.next_try);
-            self.t.set(next.filter(|m| m.0 > now).map_or(now + S, |m| m.0));
+            self.t
+                .set(next.filter(|m| m.0 > now).map_or(now + S, |m| m.0));
         }
         panic!("never caught up: {:?}", self.j());
     }
@@ -162,9 +163,9 @@ fn a_409_moves_only_to_a_position_a_local_line_confirms() {
         line: l,
     });
     let zero: RunPosition = serde_json::from_value(json!({"offset": 0, "next_seq": 0,
-        "head": "0".repeat(64)})).unwrap();
-    let Cut::Chunk(c) = chunk::cut(&r.rec, &zero, &early, None).unwrap()
-    else {
+        "head": "0".repeat(64)}))
+    .unwrap();
+    let Cut::Chunk(c) = chunk::cut(&r.rec, &zero, &early, None).unwrap() else {
         panic!("no first chunk");
     };
     let h = chunk::headers(ENTRY, &c, chunk::sha256(&c).unwrap());
