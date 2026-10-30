@@ -209,15 +209,20 @@ fn unreadable_to_the_seal(snapshot: bool) {
         rec, calls, tail, ..
     } = t;
     let closed = tail.close(&rec, false);
-    assert_eq!((closed.streams, closed.cut_files), (u64::from(!snapshot), 0));
+    let streams = u64::from(!snapshot);
+    assert_eq!((closed.streams, closed.cut_files), (streams, 0));
     let c = &calls;
-    let ev = |c: Call| if let Call::Event(v) = c { Some(v) } else { None };
+    let ev = |c: Call| match c {
+        Call::Event(v) => Some(v),
+        _ => None,
+    };
     let notes: Vec<Value> = c.all().into_iter().filter_map(ev).collect();
     assert_eq!(notes.len(), 1);
     assert_eq!(notes[0]["what"], "native_unreadable");
     assert_eq!(notes[0]["errno"], libc::ENAMETOOLONG);
     let (sid, kind, _) = opens(c)[0].clone();
-    assert_eq!((opens(c).len(), kind == StreamKind::Snapshot), (1, snapshot));
+    let snap = kind == StreamKind::Snapshot;
+    assert_eq!((opens(c).len(), snap), (1, snapshot));
     let tail = Some(json!({"unread_at_least": 10}));
     assert_eq!(lost(c), [(sid, GapReason::SourceChanged, Some(10), tail)]);
     assert_eq!(ends(c), [(sid, EndReason::SourceChanged, 10)]);

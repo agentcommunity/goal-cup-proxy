@@ -45,7 +45,12 @@ impl Walker {
     /// One full walk. A root that is not there (not made yet, say) is skipped silently.
     pub fn pass(&mut self, rec: &Recorder, rows: &[Row]) -> Walked {
         let noted = &mut self.noted;
-        let mut p = Pass { rec, rows, noted, out: Walked::default() };
+        let mut p = Pass {
+            rec,
+            rows,
+            noted,
+            out: Walked::default(),
+        };
         for (i, row) in rows.iter().enumerate() {
             if rows[..i].iter().any(|r| r.root == row.root) {
                 continue;
