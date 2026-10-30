@@ -1,7 +1,9 @@
-//! `goalcup-verify` (PRD-08): reads GCR1 records, proves them whole and names every loss. [`input`]
-//! resolves the input; [`integrity`] runs PRD-01's 14 invariants in one streaming pass and feeds
-//! [`honesty`] (the checks that fail run 1's shape); [`server`] and [`secrets`] are S13 and S12;
-//! [`report`] builds the S6 report; [`usage`] is PRD-09's.
+//! `goalcup-verify` (PRD-08): reads GCR1 records, proves them whole and names every loss.
+//! [`input`] resolves entry, rec, run, fetched and live inputs; [`integrity`] runs PRD-01's 14
+//! invariants and the record checks in one streaming pass and feeds [`honesty`] (the checks that
+//! fail run 1's shape); [`server`] proves a fetched server copy (seam S13); [`secrets`] is the
+//! secret scan (S12); [`report`] builds the `check --json` report (S6), its exit code and the text
+//! form; [`usage`] is PRD-09's usage reader.
 
 pub mod honesty;
 pub mod input;

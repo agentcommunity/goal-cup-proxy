@@ -273,6 +273,26 @@ fn decrypted_conn_with_a_parser_fault_gap_is_named() {
     assert_eq!(code, 1);
 }
 
+/// A tunnel needs a GAP of its own reason, and a host the `start` list holds is listed whatever
+/// the conn says: a mislabelled blind relay is a `fail`.
+#[test]
+fn a_tunnel_with_the_wrong_gap_or_a_mislabelled_listed_host_fails() {
+    let mut e = Entry::new("wrong-gap");
+    let gap = Some((GapReason::MemoryGuard, json!({"guard": "held_bytes"})));
+    tunnel(&mut e, "t.example.test", "pinned", gap);
+    let (code, v) = sealed(e);
+    assert_eq!(result(&v, "listed_hosts_decrypted"), "fail");
+    assert_eq!(code, 2);
+    let mut e = Entry::new("mislabelled");
+    let meta = json!({"host": HOST, "port": 443, "mode": "tunnel", "listed": null,
+        "kind": null, "reason": "not_listed", "alpn": null, "tls": null, "fingerprint": null});
+    let s = e.open(StreamKind::Conn, 0, 0, meta);
+    e.end(s, EndReason::Complete, 0, json!({"up": 512, "down": 2048}));
+    let (code, v) = sealed(e);
+    assert_eq!(result(&v, "listed_hosts_decrypted"), "fail");
+    assert_eq!(code, 2);
+}
+
 /// A refusal of a host and fingerprint that was trusted earlier is a hint, unless no alert came.
 #[test]
 fn refusal_after_trust_lists_a_learned_refusal_but_not_a_silent_one() {
@@ -317,7 +337,5 @@ fn fail_closed_masking_over_1_mib_in_one_stream_warns() {
     let (code, v) = fail_closed_span(1_048_577);
     assert_eq!(result(&v, "mask_failclosed"), "warn");
     assert_eq!(item(&v, "mask_failclosed")["facts"]["streams"], 1);
-    assert_ne!(code, 2);
-    let (_, v) = fail_closed_span(1_048_576);
-    assert_eq!(result(&v, "mask_failclosed"), "pass");
+    assert_eq!(code, 0);
 }

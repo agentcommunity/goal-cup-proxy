@@ -13,9 +13,8 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 const CADENCE_NS: u64 = 180_000_000_000;
 
 /// A check result. Ordered from least to most severe.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Res {
-    #[default]
     Pass,
     Skip,
     Warn,
@@ -30,7 +29,7 @@ impl Res {
 }
 
 /// One check of S6: id, invariant number, result, one plain line, the first finding, facts.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct Check {
     pub id: &'static str,
     pub inv: Option<u8>,
@@ -357,7 +356,6 @@ impl Pass {
             Record::Part { wall_ns, .. } => At(it.off, 0, wall_ns),
             _ => At(it.off, sid, self.wall_of(t)),
         };
-        self.h.item(it, at, &self.mask_rules);
         let is_down = matches!(
             it.rec,
             Record::Gap {
@@ -373,6 +371,7 @@ impl Pass {
             }
             _ => Map::new(),
         };
+        self.h.item(it, at, &ev);
         let ev_name = ev
             .get("ev")
             .and_then(Value::as_str)
@@ -578,6 +577,7 @@ impl Pass {
                     .is_some_and(|r| r == "fail_closed")
                 {
                     self.cur.add("mask_failclosed_bytes", *len);
+                    self.h.mask(*sid, *len, at);
                 }
             }
             Record::Event { .. } => self.event(&ev_name, ev, at),

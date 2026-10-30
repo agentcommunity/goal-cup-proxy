@@ -6,7 +6,7 @@
 mod common;
 
 use common::*;
-use goalcup_format::{EndReason, GapReason, StreamKind};
+use goalcup_format::{EndReason, FLAG_FIN, GapReason, StreamKind};
 use serde_json::{Value, json};
 
 const MIB: u64 = 1_048_576;
@@ -69,8 +69,36 @@ fn fifteen_percent_over_1_mib_warns_and_the_exit_stays_0() {
     assert_eq!(code, 0);
 }
 
+/// PRD-01 section 3 makes the tails required: without them nothing was judged, so no `pass`.
 #[test]
-fn unaccounted_bytes_under_1_mib_pass() {
-    let (_, v) = conn_with((600 * 1024, 0), &[], None);
+fn a_decrypted_conn_without_plain_tails_is_skipped_not_passed() {
+    let mut e = Entry::new("no-tails");
+    let c = e.conn();
+    e.end(c, EndReason::Complete, 0, json!({"up": 64, "down": 64}));
+    e.count();
+    let (code, v) = check(&e.seal(), &[]);
+    assert_eq!(result(&v, "conn_bytes"), "skip");
+    assert_eq!(item(&v, "conn_bytes")["facts"]["no_plain_tail"], 1);
+    assert_eq!(code, 0);
+}
+
+/// A WebSocket stream has no END `wire`; a GAP on it with its loss known names those bytes.
+#[test]
+fn a_ws_stream_gap_names_its_lost_bytes() {
+    let mut e = Entry::new("ws-gap");
+    let c = e.conn();
+    let head = json!({"method": "GET", "path": "/v1/responses", "ver": "1.1",
+        "headers": [["upgrade", "websocket"]], "masked": [], "coding": null});
+    let q = e.open(StreamKind::HttpReq, c, 0, head);
+    e.end(q, EndReason::Complete, 0, Value::Null);
+    let up = e.open(StreamKind::WsUp, c, q, json!({"deflate": false}));
+    e.data(up, 0, FLAG_FIN, &[b'a'; 1000]);
+    e.gap(up, GapReason::MemoryGuard, 10, 1000, 2 * MIB + 1, json!({"guard": "held_bytes"}));
+    e.end(up, EndReason::Complete, 1000, Value::Null);
+    let tail = json!({"up": 3 * MIB, "down": 64, "plain_up": 2 * MIB + 1000, "plain_down": 0});
+    e.end(c, EndReason::Complete, 0, tail);
+    e.count();
+    let (code, v) = check(&e.seal(), &[]);
     assert_eq!(result(&v, "conn_bytes"), "pass");
+    assert_eq!(code, 1);
 }

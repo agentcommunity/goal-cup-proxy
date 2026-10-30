@@ -4,7 +4,7 @@
 //! (integrity reports it); a crafted record must not panic (L-VR3).
 
 use crate::integrity::{At, Check, Res};
-use goalcup_format::{GapReason, Item, Record, StreamKind};
+use goalcup_format::{EndReason, GapReason, Item, Record, StreamKind};
 use serde_json::{Map, Value, json};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
@@ -20,46 +20,112 @@ struct Conn {
     listed: bool,
     /// A tunnel to a host that earlier finished a decrypted connection with this fingerprint.
     after_trust: bool,
+    /// GAPs on the connection or on one of its streams: a loss `conn_bytes` need not guess at.
     gaps: u64,
     lost: u64,
-    /// A GAP whose reason names a tunnel's loss.
-    named: bool,
+    /// A GAP names this tunnel's own reason (PRD-01 section 4).
+    gap_named: bool,
     /// A GAP tail says `alert: false`: nothing was learned from the refusal.
     quiet: bool,
     /// Plain bytes its streams account for: up, down.
     acc: [u64; 2],
 }
 
+/// An open stream of a connection: the connection's sid, direction (0 up, 1 down), WebSocket.
+struct Sub {
+    conn: u64,
+    dir: usize,
+    ws: bool,
+}
+
+#[derive(Default)]
+struct Counts {
+    listed: u64,
+    decrypted: u64,
+    sign_in: u64,
+    conn_gaps: u64,
+    unnamed: u64,
+    checked: u64,
+    warn: u64,
+    fail: u64,
+    no_plain_tail: u64,
+    unaccounted: u64,
+    streams: u64,
+    mask_bytes: u64,
+}
+
+struct Checks {
+    listed: Check,
+    bytes: Check,
+    mask: Check,
+}
+
+impl Default for Checks {
+    fn default() -> Self {
+        let new = |id| Check::new(id, None, Res::Pass, "");
+        Checks {
+            listed: new("listed_hosts_decrypted"),
+            bytes: new("conn_bytes"),
+            mask: new("mask_failclosed"),
+        }
+    }
+}
+
 #[derive(Default)]
 pub struct Honesty {
     boot: Option<u64>,
     conns: HashMap<u64, Conn>,
-    /// Open streams of a connection: its sid, direction (0 up, 1 down), WebSocket.
-    subs: HashMap<u64, (u64, usize, bool)>,
+    subs: HashMap<u64, Sub>,
+    /// Fail-closed MASK bytes per open stream.
     masks: HashMap<u64, u64>,
+    /// The `start` event's host list: exact names and `*.suffix` patterns.
+    on_list: Vec<String>,
     trusted: HashSet<(String, String)>,
     listed: BTreeSet<String>,
     long: BTreeSet<String>,
     refused: BTreeSet<(String, String)>,
     hosts: BTreeSet<String>,
-    named: BTreeMap<String, u64>,
-    n: BTreeMap<&'static str, u64>,
-    lh: Check,
-    cb: Check,
-    mf: Check,
+    tunnels_named: BTreeMap<String, u64>,
+    n: Counts,
+    checks: Checks,
 }
 
 fn obj(b: &[u8]) -> Map<String, Value> {
     serde_json::from_slice(b).unwrap_or_default()
 }
 
-impl Honesty {
-    fn add(&mut self, k: &'static str, by: u64) {
-        let v = self.n.entry(k).or_default();
-        *v = v.saturating_add(by);
-    }
+fn inc(x: &mut u64, by: u64) {
+    *x = x.saturating_add(by);
+}
 
-    pub(crate) fn item(&mut self, it: &Item, at: At, mask_rules: &[String]) {
+/// A head is approximate on purpose: each name and value, 4 bytes of framing, 32 for the start
+/// line.
+fn head_size(m: &Map<String, Value>) -> u64 {
+    let len = |v: &Value| v.as_str().map_or(0, |s| s.len() as u64);
+    let pair = |p: &Value| p.as_array().map_or(0, |p| p.iter().map(len).sum::<u64>()) + 4;
+    let heads = m.get("headers").and_then(Value::as_array);
+    heads.into_iter().flatten().map(pair).sum::<u64>() + 32
+}
+
+/// Whether a GAP of `gap` names a listed tunnel of `reason` (PRD-01 section 4). A reason this
+/// build does not know takes any of the five.
+fn names_tunnel(reason: &str, gap: GapReason) -> bool {
+    use GapReason::*;
+    match reason {
+        "tls_refused" => gap == TlsRefused,
+        "pinned" => gap == Pinned,
+        "upstream_untrusted" => gap == UpstreamUntrusted,
+        "alpn_other" | "not_tls" => gap == ProtocolOther,
+        "hello_too_big" => gap == MemoryGuard,
+        _ => matches!(
+            gap,
+            MemoryGuard | TlsRefused | Pinned | UpstreamUntrusted | ProtocolOther
+        ),
+    }
+}
+
+impl Honesty {
+    pub(crate) fn item(&mut self, it: &Item, at: At, ev: &Map<String, Value>) {
         match &it.rec {
             Record::Part { boot, .. } if self.boot != Some(*boot) => {
                 self.boot = Some(*boot);
@@ -73,10 +139,10 @@ impl Honesty {
                 ..
             } => self.open(*sid, *skind, *conn, &obj(meta)),
             Record::Data { sid, bytes, .. } => {
-                if let Some(&(c, d, true)) = self.subs.get(sid)
-                    && let Some(c) = self.conns.get_mut(&c)
+                if let Some(&Sub { conn, dir, ws: true }) = self.subs.get(sid)
+                    && let Some(c) = self.conns.get_mut(&conn)
                 {
-                    c.acc[d] = c.acc[d].saturating_add(bytes.len() as u64);
+                    inc(&mut c.acc[dir], bytes.len() as u64);
                 }
             }
             Record::Gap {
@@ -87,55 +153,75 @@ impl Honesty {
                 ..
             } => self.gap(*sid, *reason, *lost, &obj(tail), at),
             Record::End {
-                sid, seen, tail, ..
-            } => self.end(*sid, *seen, &obj(tail), at),
-            Record::Mask { sid, len, rule, .. } => {
-                let rule = usize::try_from(*rule).ok().and_then(|i| mask_rules.get(i));
-                if rule.is_some_and(|r| r == "fail_closed") {
-                    self.add("bytes", *len);
-                    let s = self.masks.entry(*sid).or_default();
-                    let (before, now) = (*s, s.saturating_add(*len));
-                    *s = now;
-                    let top = self.n.entry("largest").or_default();
-                    *top = (*top).max(now);
-                    if before <= MIB && now > MIB {
-                        self.add("streams", 1);
-                        self.mf.raise(Res::Warn, "", Some(at));
-                    }
-                }
-            }
-            Record::Event { json, .. } => {
-                let e = obj(json);
-                let is = |k: &str, v: &str| e.get(k).and_then(Value::as_str) == Some(v);
-                if is("ev", "note")
-                    && is("what", "long_tunnel")
-                    && let Some(h) = e.get("host").and_then(Value::as_str)
-                {
-                    self.long.insert(h.into());
-                }
-            }
+                sid,
+                reason,
+                seen,
+                tail,
+                ..
+            } => self.end(*sid, *reason, *seen, &obj(tail), at),
+            Record::Event { .. } => self.event(ev),
             _ => {}
         }
+    }
+
+    fn event(&mut self, e: &Map<String, Value>) {
+        let is = |k: &str, v: &str| e.get(k).and_then(Value::as_str) == Some(v);
+        if is("ev", "note")
+            && is("what", "long_tunnel")
+            && let Some(h) = e.get("host").and_then(Value::as_str)
+        {
+            self.long.insert(h.into());
+        } else if is("ev", "start")
+            && let Some(Value::Object(by_source)) = e.get("hosts")
+        {
+            let all = by_source.values().filter_map(Value::as_array).flatten();
+            let names = all.filter_map(|h| h.get("host")?.as_str());
+            self.on_list = names.map(Into::into).collect();
+        }
+    }
+
+    /// A fail-closed MASK of `len` bytes on stream `sid`; integrity has resolved the rule.
+    pub(crate) fn mask(&mut self, sid: u64, len: u64, at: At) {
+        let s = self.masks.entry(sid).or_default();
+        let before = *s;
+        *s = s.saturating_add(len);
+        inc(&mut self.n.mask_bytes, len);
+        if before <= MIB && *s > MIB {
+            inc(&mut self.n.streams, 1);
+            self.checks.mask.raise(Res::Warn, "", Some(at));
+        }
+    }
+
+    /// Whether the `start` event's host list holds `host`.
+    fn is_on_list(&self, host: &str) -> bool {
+        let hit = |p: &String| {
+            let suffix = p.strip_prefix('*');
+            p == host || suffix.is_some_and(|s| host.len() > s.len() && host.ends_with(s))
+        };
+        self.on_list.iter().any(hit)
     }
 
     fn open(&mut self, sid: u64, kind: StreamKind, conn: u64, m: &Map<String, Value>) {
         let s = |k: &str| m.get(k).and_then(Value::as_str);
         if kind == StreamKind::Conn {
+            let host = s("host").unwrap_or_default();
             let mut c = Conn {
-                host: s("host").unwrap_or_default().into(),
+                host: host.into(),
                 reason: s("reason").unwrap_or("unknown").into(),
                 fp: s("fingerprint").map(Into::into),
                 tunnel: s("mode") == Some("tunnel"),
-                listed: s("listed").is_some(),
+                // The conn's own word, or the start event's list: a recorder that mislabels a
+                // listed host as unlisted must not hide a blind relay.
+                listed: s("listed").is_some() || self.is_on_list(host),
                 ..Default::default()
             };
             if c.listed {
-                self.add("listed_conns", 1);
+                inc(&mut self.n.listed, 1);
                 self.listed.insert(c.host.clone());
                 if !c.tunnel {
-                    self.add("decrypted", 1);
+                    inc(&mut self.n.decrypted, 1);
                 } else if c.reason == "sign_in" {
-                    self.add("sign_in", 1);
+                    inc(&mut self.n.sign_in, 1);
                 }
                 let key = c.fp.clone().map(|f| (c.host.clone(), f));
                 let seen = key.is_some_and(|k| self.trusted.contains(&k));
@@ -153,49 +239,44 @@ impl Honesty {
         let Some(c) = self.conns.get_mut(&conn) else {
             return;
         };
-        // A head is approximate on purpose: each name and value, 4 bytes of framing, 32 for the
-        // start line.
-        let len = |v: &Value| v.as_str().map_or(0, |s| s.len() as u64);
-        let pair = |p: &Value| {
-            let both = p.as_array().map_or(0, |p| p.iter().map(len).sum::<u64>());
-            both.saturating_add(4)
-        };
-        let heads = m.get("headers").and_then(Value::as_array);
-        let head = heads.map_or(0, |h| h.iter().map(pair).sum::<u64>());
-        c.acc[dir] = c.acc[dir].saturating_add(if ws { 0 } else { head.saturating_add(32) });
-        self.subs.insert(sid, (conn, dir, ws));
+        if !ws {
+            inc(&mut c.acc[dir], head_size(m));
+        }
+        self.subs.insert(sid, Sub { conn, dir, ws });
     }
 
     fn gap(&mut self, sid: u64, reason: GapReason, lost: u64, tail: &Map<String, Value>, at: At) {
+        // A GAP on a stream of a connection is a named loss: a WebSocket stream has no END
+        // `wire`, so the bytes it lost count as accounted for.
+        if let Some(&Sub { conn, dir, ws }) = self.subs.get(&sid) {
+            if let Some(c) = self.conns.get_mut(&conn) {
+                inc(&mut c.gaps, 1);
+                if ws {
+                    inc(&mut c.acc[dir], lost.saturating_sub(1));
+                }
+            }
+            return;
+        }
         let Some(c) = self.conns.get_mut(&sid) else {
             return;
         };
-        c.gaps = c.gaps.saturating_add(1);
-        c.lost = c.lost.saturating_add(lost.saturating_sub(1));
-        c.named |= matches!(
-            reason,
-            GapReason::MemoryGuard
-                | GapReason::TlsRefused
-                | GapReason::Pinned
-                | GapReason::UpstreamUntrusted
-                | GapReason::ProtocolOther
-        );
+        inc(&mut c.gaps, 1);
+        inc(&mut c.lost, lost.saturating_sub(1));
+        c.gap_named |= names_tunnel(&c.reason, reason);
         c.quiet |= tail.get("alert") == Some(&Value::Bool(false));
-        if c.listed {
-            if !c.tunnel {
-                self.hosts.insert(c.host.clone());
-                self.lh.raise(Res::Named, "", Some(at));
-            }
-            self.add("conn_gaps", 1);
+        if c.listed && !c.tunnel {
+            self.hosts.insert(c.host.clone());
+            inc(&mut self.n.conn_gaps, 1);
+            self.checks.listed.raise(Res::Named, "", Some(at));
         }
     }
 
-    fn end(&mut self, sid: u64, seen: u64, tail: &Map<String, Value>, at: At) {
+    fn end(&mut self, sid: u64, reason: EndReason, seen: u64, tail: &Map<String, Value>, at: At) {
         self.masks.remove(&sid);
-        if let Some((conn, dir, ws)) = self.subs.remove(&sid) {
+        if let Some(Sub { conn, dir, ws }) = self.subs.remove(&sid) {
             if let (false, Some(c)) = (ws, self.conns.get_mut(&conn)) {
                 let wire = tail.get("wire").and_then(Value::as_u64).unwrap_or(seen);
-                c.acc[dir] = c.acc[dir].saturating_add(wire);
+                inc(&mut c.acc[dir], wire);
             }
             return;
         }
@@ -205,122 +286,137 @@ impl Honesty {
         if c.tunnel {
             self.tunnel_end(&c, at);
         } else {
-            if let Some(fp) = &c.fp {
+            if let (EndReason::Complete, Some(fp)) = (reason, &c.fp) {
                 self.trusted.insert((c.host.clone(), fp.clone()));
             }
             self.plain_end(&c, tail, at);
         }
     }
 
-    /// A listed tunnel is judged at its END: a sign-in is no loss, a named GAP is `named`, none is
-    /// a silent loss.
+    /// A listed tunnel is judged at its END: a sign-in is no loss, a GAP of its own reason is
+    /// `named`, none is a silent loss.
     fn tunnel_end(&mut self, c: &Conn, at: At) {
+        let check = &mut self.checks.listed;
         if c.after_trust && !c.quiet {
-            self.lh.raise(Res::Warn, "", Some(at));
-            self.refused
-                .insert((c.host.clone(), c.fp.clone().unwrap_or_default()));
+            check.raise(Res::Warn, "", Some(at));
+            let fp = c.fp.clone().unwrap_or_default();
+            self.refused.insert((c.host.clone(), fp));
         }
         if !c.listed || c.reason == "sign_in" {
             return;
         }
         self.hosts.insert(c.host.clone());
-        if c.named {
-            *self.named.entry(c.reason.clone()).or_default() += 1;
-            self.lh.raise(Res::Named, "", Some(at));
+        if c.gap_named {
+            *self.tunnels_named.entry(c.reason.clone()).or_default() += 1;
+            check.raise(Res::Named, "", Some(at));
         } else {
-            self.add("tunnels_unnamed", 1);
-            self.lh.raise(Res::Fail, "", Some(at));
+            inc(&mut self.n.unnamed, 1);
+            check.raise(Res::Fail, "", Some(at));
         }
     }
 
     /// A decrypted connection's plain bytes against what its streams account for, per direction.
     fn plain_end(&mut self, c: &Conn, tail: &Map<String, Value>, at: At) {
+        let plain = ["plain_up", "plain_down"].map(|k| tail.get(k).and_then(Value::as_u64));
+        if plain.contains(&None) {
+            inc(&mut self.n.no_plain_tail, 1);
+        }
         let mut worst = None;
-        for (d, key) in ["plain_up", "plain_down"].into_iter().enumerate() {
-            let Some(plain) = tail.get(key).and_then(Value::as_u64) else {
+        for (d, plain) in plain.into_iter().enumerate() {
+            let Some(plain) = plain else {
                 continue;
             };
             let un = plain.saturating_sub(c.acc[d].saturating_add(c.lost));
-            self.add("unaccounted_bytes", un);
-            let (big, un_x) = (un > MIB, u128::from(un));
-            let res = if big && un_x * 2 > u128::from(plain) && c.gaps == 0 {
+            inc(&mut self.n.unaccounted, un);
+            let big = un > MIB;
+            let res = if big && un > plain / 2 && c.gaps == 0 {
                 Res::Fail
-            } else if big && un_x * 10 > u128::from(plain) {
+            } else if big && un > plain / 10 {
                 Res::Warn
             } else {
                 Res::Pass
             };
             worst = worst.max(Some(res));
-            self.cb.raise(res, "", Some(at));
+            self.checks.bytes.raise(res, "", Some(at));
         }
         if let Some(w) = worst {
-            self.add("checked", 1);
+            inc(&mut self.n.checked, 1);
             match w {
-                Res::Fail => self.add("fail", 1),
-                Res::Warn => self.add("warn", 1),
+                Res::Fail => inc(&mut self.n.fail, 1),
+                Res::Warn => inc(&mut self.n.warn, 1),
                 _ => {}
             }
         }
     }
 
-    pub fn finish(mut self) -> Vec<Check> {
-        let n = std::mem::take(&mut self.n);
-        let g = |k: &str| n.get(k).copied().unwrap_or(0);
+    pub fn finish(self) -> Vec<Check> {
+        let n = &self.n;
         let long: Vec<&String> = (self.long.iter())
             .filter(|h| !self.listed.contains(*h))
             .collect();
+        let Checks {
+            mut listed,
+            mut bytes,
+            mut mask,
+        } = self.checks;
         if !long.is_empty() {
-            self.lh.raise(Res::Warn, "", None);
+            listed.raise(Res::Warn, "", None);
+        }
+        // Nothing judged, or a decrypted connection with no plain byte count, is no evidence.
+        if n.checked == 0 || n.no_plain_tail > 0 {
+            bytes.raise(Res::Skip, "", None);
         }
         let refused: Vec<Value> = (self.refused.iter())
             .map(|(host, fingerprint)| json!({"host": host, "fingerprint": fingerprint}))
             .collect();
         let hosts = (self.hosts.iter().chain(long.iter().copied())).cloned();
         let hosts = hosts.collect::<Vec<_>>().join(", ");
-        let blind = self.named.values().sum::<u64>() + g("tunnels_unnamed");
-        let whys = [
-            format!(
-                "{} listed connections: {} decrypted, {} sign-in, {blind} blind ({} with no GAP), \
-                 {} conn GAPs, {} long tunnels to unlisted hosts, {} refusals after trust; \
-                 hosts: {hosts}",
-                g("listed_conns"),
-                g("decrypted"),
-                g("sign_in"),
-                g("tunnels_unnamed"),
-                g("conn_gaps"),
-                long.len(),
-                refused.len()
-            ),
-            format!(
-                "{} of {} decrypted connections have bytes no stream accounts for ({} bytes)",
-                g("warn") + g("fail"),
-                g("checked"),
-                g("unaccounted_bytes")
-            ),
-            format!(
-                "{} streams have over 1 MiB of fail-closed masking ({} bytes in all)",
-                g("streams"),
-                g("bytes")
-            ),
-        ];
-        let facts = [
-            json!({"listed_conns": g("listed_conns"), "decrypted": g("decrypted"),
-                "sign_in": g("sign_in"), "tunnels_named": self.named,
-                "tunnels_unnamed": g("tunnels_unnamed"), "conn_gaps": g("conn_gaps"),
-                "long_tunnel_unlisted": long, "refusal_after_trust": refused}),
-            json!({"checked": g("checked"), "warn": g("warn"), "fail": g("fail"),
-                "unaccounted_bytes": g("unaccounted_bytes")}),
-            json!({"streams": g("streams"), "bytes": g("bytes"), "largest": g("largest")}),
-        ];
-        let ids = ["listed_hosts_decrypted", "conn_bytes", "mask_failclosed"];
-        let mut out = vec![self.lh, self.cb, self.mf];
-        for (((c, id), why), f) in out.iter_mut().zip(ids).zip(whys).zip(facts) {
-            c.id = id;
-            c.facts = f.as_object().cloned().unwrap_or_default();
-            if c.result > Res::Pass {
-                c.why = why;
-            }
+        let blind = self.tunnels_named.values().sum::<u64>() + n.unnamed;
+        let why = format!(
+            "{} listed connections: {} decrypted, {} sign-in, {blind} blind ({} with no GAP of \
+             their reason), {} conn GAPs on decrypted ones, {} long tunnels to unlisted hosts, \
+             {} refusals after trust; hosts: {hosts}",
+            n.listed,
+            n.decrypted,
+            n.sign_in,
+            n.unnamed,
+            n.conn_gaps,
+            long.len(),
+            refused.len()
+        );
+        let facts = json!({"listed_conns": n.listed, "decrypted": n.decrypted,
+            "sign_in": n.sign_in, "tunnels_named": self.tunnels_named,
+            "tunnels_unnamed": n.unnamed, "conn_gaps": n.conn_gaps,
+            "long_tunnel_unlisted": long, "refusal_after_trust": refused});
+        fill(&mut listed, why, facts);
+        let mut why = format!(
+            "{} of {} decrypted connections have bytes no stream accounts for ({} bytes)",
+            n.warn + n.fail,
+            n.checked,
+            n.unaccounted
+        );
+        if n.no_plain_tail > 0 {
+            why += &format!(
+                "; {} decrypted connections ended with no plain_up or plain_down",
+                n.no_plain_tail
+            );
         }
-        out
+        let facts = json!({"checked": n.checked, "warn": n.warn, "fail": n.fail,
+            "unaccounted_bytes": n.unaccounted, "no_plain_tail": n.no_plain_tail});
+        fill(&mut bytes, why, facts);
+        let why = format!(
+            "{} streams have over 1 MiB of fail-closed masking ({} bytes in all)",
+            n.streams, n.mask_bytes
+        );
+        fill(&mut mask, why, json!({"streams": n.streams, "bytes": n.mask_bytes}));
+        vec![listed, bytes, mask]
+    }
+}
+
+/// Sets a check's facts, and its one plain line when it is not a pass.
+fn fill(c: &mut Check, why: String, facts: Value) {
+    c.facts = facts.as_object().cloned().unwrap_or_default();
+    if c.result > Res::Pass {
+        c.why = why;
     }
 }
