@@ -231,7 +231,12 @@ pub(crate) fn from_toml<T: serde::de::DeserializeOwned>(
 /// keep only their prefix words.
 fn safe_message(message: &str) -> String {
     let first = message.lines().next().unwrap_or("");
-    let words = ["invalid type", "invalid value", "invalid length", "unknown variant"];
+    let words = [
+        "invalid type",
+        "invalid value",
+        "invalid length",
+        "unknown variant",
+    ];
     if let Some(what) = words.iter().find(|w| first.starts_with(**w)) {
         return what.to_string();
     }
@@ -291,7 +296,7 @@ fn check(c: &Connector, file: &str) -> Result<(), ConnectorError> {
             return Err(address(format!("env.{name}")));
         }
     }
-    // File keys and how many `ROOTS` each may use: settings go into the isolated home only.
+    // Paths and how many `ROOTS` each may use: what is written goes into the isolated home only.
     let mut files: Vec<(String, &str, usize)> = Vec::new();
     for (list, rows) in [("no_prompts", &c.no_prompts), ("update_off", &c.update_off)] {
         for (i, row) in rows.iter().enumerate() {
@@ -351,15 +356,9 @@ fn check(c: &Connector, file: &str) -> Result<(), ConnectorError> {
             }
         }
     }
-    if let Some(dir) = &c.skills_dir
-        && under(dir, &["{home}"]).is_none()
-    {
-        return Err(invalid(
-            "skills_dir".into(),
-            "must be under {home}, no `.`, `..` or empty component; nothing goes in the workspace",
-        ));
+    if let Some(dir) = &c.skills_dir {
+        files.push(("skills_dir".into(), dir, 1));
     }
-
     for (i, row) in c.refuse_if_set.iter().enumerate() {
         files.push((format!("refuse_if_set[{i}].file"), &row.file, 2));
     }

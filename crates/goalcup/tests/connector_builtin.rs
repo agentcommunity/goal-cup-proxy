@@ -153,4 +153,3 @@ fn connector_data_stays_in_its_home_and_off_the_code_variables() {
     ))
     .unwrap();
 }
-
