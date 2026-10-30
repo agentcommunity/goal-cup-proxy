@@ -138,11 +138,12 @@ def cause(r):
     return None
 
 def judge(r):
-    reqs = (dig(r.status, "s4_requests") if r.reqs is None else r.reqs) or 0
+    seen = dig(r.status, "s4_requests") if r.reqs is None else r.reqs  # None: no count in the folder
+    reqs = seen or 0
     secrets(r)  # C3 first: a hit is a FAIL whatever else happened
     work = (reqs or r.native or dig(r.usage, "s7_native")) and (r.meta.get("commits_since_start") or 0) >= 1
     stop = cause(r) or (None if work else "the harness did no work (commits since start %s, model requests %s)"
-                        % (r.meta.get("commits_since_start"), reqs))
+                        % (r.meta.get("commits_since_start"), seen))
     if stop:
         return [r.mark(c, "INCONCLUSIVE", stop) for c in ("C1", "C2", "C4", "C5", "C6", "faults")]
     local(r, reqs)
@@ -308,8 +309,7 @@ def main(argv):
     lines = ["pad check %(connector)s %(case)s %(mode)s: result %(result)s, faults %(faults)s" % row,
              "checks: " + ", ".join("%s %s" % kv for kv in sorted(row["checks"].items()))]
     lines += ["why: " + w for w in row["why"]] + ["facts: " + json.dumps(row["facts"], sort_keys=True)]
-    if row["variant"]:
-        lines.append("for the watcher: read goalcup.log and the panes for a failed call the harness did not retry")
+    lines += ["for the watcher: read goalcup.log and the panes for a failed call the harness did not retry"] * bool(row["variant"])
     for name, text in (("row.json", json.dumps(row, sort_keys=True, indent=1)), ("report.txt", "\n".join(lines))):
         with open(os.path.join(argv[1], name), "w") as f:
             f.write(text + "\n")
