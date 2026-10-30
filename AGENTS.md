@@ -97,8 +97,8 @@ setup, project build and gate Cargo commands run with `--offline`.
 One test per behaviour you add or change. Test the promise, not the shape: no golden snapshots of
 internal structures, and no assertions on doc text or message wording unless the text is the
 contract. Every behaviour that serves one of the seven points has a test, and that test is not
-deleted while the point stands, unless it is replaced in the same change by a test with the same name prefix
-that asserts the same promise.
+deleted while the point stands, unless it is replaced in the same change by a test with the same
+name prefix that asserts the same promise.
 
 ## Done
 

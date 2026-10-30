@@ -3,15 +3,11 @@
 This page is for contributors and anyone who wants to read a record by hand. The design and its
 reasons are in [PRD-01](plans/2026-10-30-v1.0/PRD-01-record-format.md) and
 [D76](DECISIONS.md#d76-the-record-format-is-gcr1-and-the-part-file-is-the-upload-unit). Where this
-page and the code differ, the code in `crates/goalcup-format/src` is right.
-
-## What the format is for
+page differs from PRD-01 or the code, they are right: `crates/goalcup-format/src` for framing,
+records and links, and the recorder (PRD-02, PRD-05) for counts, gaps, masks and the seal.
 
 One entry (one `goalcup start` or `goalcup continue`) is one record stream. It holds every
 recorded byte raw, every loss as a gap with a start and an end, and counts of what was written.
-It serves the [seven points](../VISION.md): it holds every model call and subagent the recorder sees (1, 2), a loss is
-a gap and never a stop (3), secrets are masked before a byte reaches disk (4), the part file is
-what is uploaded (5), and the written counts are what the participant is told (6).
 
 ## Files on disk
 
@@ -36,10 +32,8 @@ rec-00000000000536870982.idx
 - **Rotation.** A part file is closed when it holds 512 MiB of raw records, or when it has been open
   60 minutes on the record clock and holds a link. Closing writes a LINK, ends the frame and writes
   one `E` line. There is never an `L` line for the last link of a closed part file.
-- **Local files around it.** The entry folder also holds `cursors.json` (the durable index length:
-  part file name and index bytes, for recovery after a reboot) and `counts.jsonl` (one COUNT line
-  per LINK, for the recovery frame). The recorder writes them. They are not part of the format and
-  are never uploaded.
+- **Local files.** `cursors.json` (the durable index length, for recovery after a reboot) and
+  `counts.jsonl` (one COUNT per LINK, for the recovery frame) are the recorder's, not the format's.
 
 ## Framing
 
@@ -50,7 +44,7 @@ Every record is `kind` (one byte), `len` (a varint) and then `len` bytes of body
   0, 1, 2, 3) and is then written as a varint.
 - Kind `0x00` is never valid. A reader **skips an unknown kind by its length**. That is how a later
   1.x adds kinds. An unknown record still counts for the link hash.
-- A reader refuses a `len` over 16 MiB (`MAX_BODY`), so a corrupt file cannot make it allocate wildly.
+- A reader refuses a `len` over 16 MiB (`MAX_BODY`), so a corrupt file cannot make it allocate.
 - JSON bodies are compact UTF-8. Key order means nothing, and readers ignore keys they do not know.
 - An optional JSON tail (END, GAP) is the rest of the body. No tail means no bytes, not `{}`.
 
@@ -85,10 +79,10 @@ Every record is `kind` (one byte), `len` (a varint) and then `len` bytes of body
 | n | Kind | One stream is |
 |---|---|---|
 | 1 | `conn` | One client connection through the proxy, decrypted or tunnelled. No DATA. `meta` has `host`, `port`, `mode` (`decrypt` or `tunnel`), `listed`, `kind`, `reason` |
-| 2 | `http_req` | One request body. `meta` holds the head: `method`, `path` (no query), `ver`, masked `headers`, `masked`, `coding` |
-| 3 | `http_resp` | One final response body. `req` names its request. Bodies are de-chunked and decoded |
-| 4 | `ws_up` | Every message the client sent on one WebSocket, inflated, in order |
-| 5 | `ws_down` | Every message the server sent on it |
+| 2 | `http_req` | One request body. `meta` holds the head: `method`, `path` (no query), `ver`, `h2` (HTTP/2 stream id, absent for 1.1), masked `headers`, `masked`, `coding` |
+| 3 | `http_resp` | One final response body. `req` names its request. Bodies are de-chunked and decoded. `meta` has `status`, `ver`, `h2`, `headers`, `masked`, `coding`, `decoded` |
+| 4 | `ws_up` | Every message the client sent on one WebSocket, inflated, in order. `meta.deflate` is true when permessage-deflate was in use |
+| 5 | `ws_down` | Every message the server sent on it. `meta` as `ws_up` |
 | 6 | `native` | One generation of one append-only session file. `meta.path` is `<source>:<relative path>` |
 | 7 | `snapshot` | One whole-file copy at one moment |
 
@@ -140,9 +134,11 @@ starts (0 for `sid` 0 and for `conn` streams).
 | 14 | `protocol_other` | A listed host spoken to in a protocol the proxy does not parse; tunnelled |
 | 15 | `after_stop` | Bytes relayed after the seal began. `sid` 0 |
 
-**Off spans.** Recording is off only while the recorder is not running. That time is a
-`recorder_down` GAP from the last kept LINK to the next boot (or to the recovery of a dead entry).
-The sum of those gaps is the off time.
+**Off spans.** Recording is off only while the recorder is not running or runs in null mode. That
+time is a `recorder_down` GAP from the last kept LINK to the next boot (or to the recovery of a dead
+entry). The sum of those gaps is the off time. A GAP whose end was taken under another `boot_id`
+than its start carries tail key `boot_id`; its length, for off time and invariant 12, is `end_wall`
+minus `start_wall`, never the two record clock times.
 
 ## Masks
 
@@ -155,9 +151,19 @@ Masked header values in `meta` keep their length too, and `meta.masked` names th
 ## Written counts
 
 A `count` EVENT holds counts of records **already written before it** in the same boot, so a
-reader can recount it exactly. `http_post` plus `ws_up_msgs` is the number of **model requests
-written**. It is a request count, not a call count: warm-ups and other POSTs to listed hosts count
-too. A boot's counts end with its last COUNT; the seal's `totals` sum the boots.
+reader can recount it exactly. A record belongs to the boot of the nearest PART before it, so a
+recovery frame belongs to the dead boot. `http_post` plus `ws_up_msgs` is the number of **model
+requests written**. It is a request count, not a call count: warm-ups and other POSTs to listed
+hosts count too.
+
+- `http_post` counts a POST `http_req` stream on a decrypted connection once its END is written,
+  not at its OPEN.
+- `ws_up_msgs` counts `ws_up` DATA with the end-of-message flag and a text or binary opcode (so not
+  ping, pong or close), when that DATA is written.
+- The **entry total** takes each boot's last COUNT (for a dead boot, the COUNT in its recovery
+  frame), sums counters and maps per key, keeps the largest `held_peak` and leaves gauges out. Then,
+  for every `recorder_down` GAP in a recovery frame, it adds 1 to `gaps` and `lost_unknown` and the
+  gap's length to `off_ms`. The seal's `totals` are this entry total.
 
 ## Links
 
@@ -180,37 +186,47 @@ index line.
 EVENT JSON always has `ev`: `start` (once per boot, with `mask_rules`), `prev_boot`, `launch`,
 `exit`, `count`, `clock`, `suspend`, `note` (with `what`) and `seal`. A sealed entry ends with what
 was still open (`cut_at_seal` gaps and ends), an `after_stop` GAP if needed, the last COUNT, the
-`seal` event, a LINK and the frame end. Nothing follows the seal's LINK.
+`seal` event, a LINK and the frame end. A `recovered` seal (a dead entry closed later) sits in a
+recovery frame instead: the dead boot's COUNT, a `recorder_down` GAP, the `seal` event, a LINK, the
+frame end and an `R` line. Nothing follows the seal's LINK.
 
 ## Compression, chunks and crash recovery
 
 - Each part file is one zstd frame (plus recovery frames): level 3 (`LEVEL`), window 2^27
   (`WINDOW_LOG` 27, 128 MiB), long distance matching, no checksum, no content size. Part files
   joined together are one valid zstd stream: `cat rec-*.gcr.zst | zstd -dc --long=27`.
-- A chunk the uploader sends is the compressed bytes between two index lines of one part file. It
+- A chunk the uploader sends is the compressed bytes of one part file from one index line, or from
+  the file start, to a later index line. It usually spans many flushes and never two part files. It
   is not decodable alone; decode a whole part file from its start.
-- A live entry's last part file ends inside an open frame. A decoder gives every record up to the
-  last flush and reports the open end. That is expected.
+- A live entry's last part file ends inside an open frame. `goalcup-verify dump` (the Rust decoder)
+  gives every record up to the last flush and reports the open end. That is expected. The `zstd`
+  command line tool may stop short of the last flush on such a file, or on an entry not yet
+  recovered after a crash, so counts made through it are then a lower bound. For a live entry, use
+  `goalcup-verify dump`.
 - **Recovery** after a crash: drop index lines past the part file's length (and, after a reboot,
   past `cursors.json`); delete a part file with no index line left; cut the last part file at its
   last line's `c_end`. If that line is `L`, close the frame by hand with the 3 bytes `01 00 00`
-  (`ZSTD_END_BLOCK`, an empty last raw block). Then add a recovery frame: the dead boot's COUNT (unless an
-  earlier recovery frame holds it), a `recorder_down` GAP, a LINK and an `R` line. The next boot starts a new part file. An entry
-  already sealed is left as it is.
+  (`ZSTD_END_BLOCK`, an empty last raw block). Then add a recovery frame: the dead boot's COUNT
+  (unless an earlier recovery frame holds it), a `recorder_down` GAP, a LINK and an `R` line. The
+  next boot starts a new part file. An entry already sealed is left as it is.
 
 ## Invariants
 
-1. The stream starts with PART (boot 0, part 0); every part file starts with PART; boots have no hole.
+1. The stream starts with PART (boot 0, part 0); every part file starts with PART; boots have no
+   hole.
 2. LINK `seq` runs 0, 1, 2 with no hole across part files and boots, and every hash recomputes.
 3. Every DATA, END, GAP (non-zero `sid`) and MASK follows its stream's OPEN in the same boot.
-4. DATA offsets are contiguous from `meta.from` (or 0), except where a GAP of that stream fills the hole.
+4. DATA offsets are contiguous from `meta.from` (or 0), except where a GAP of that stream fills the
+   hole.
 5. Every MASK lies inside bytes already written for its stream, and those bytes are all `*`.
-6. Every boot after 0 follows `recorder_down` gaps from the last kept LINK to recovery (boot 0: at most one, after `start`).
+6. Every boot after 0 follows `recorder_down` gaps from the last kept LINK to recovery (boot 0: at
+   most one, after `start`).
 7. Every COUNT equals a recount of its boot before it; the seal's `totals` equal the entry total.
 8. A sealed entry ends with `seal`, then LINK, then a frame end.
 9. Every `http_resp` names a `req` on the same `conn`, or 0.
 10. In a sealed entry every stream has an END, or its boot is followed by a `recorder_down` gap.
-11. An END's `seen` equals the end of the stream's last DATA or known GAP.
+11. A non-`conn` END's `seen` equals the end of the stream's last DATA or known GAP. A stream with
+    an unknown-loss GAP is reported, not checked.
 12. A GAP has an extent: `end_mono` after `start_mono`, or `lost` above 1.
 13. In each boot, COUNT events are at most 180 s apart on the record clock, less sleep.
 14. A session file resumed in a later stream starts at or below what was written before.
@@ -219,7 +235,9 @@ was still open (`cut_at_seal` gaps and ends), an `after_stop` GAP if needed, the
 
 `crates/goalcup-format/tests/data/worked-example.gcr` is one HTTP/1.1 POST with a streamed reply
 and a link: 998 raw bytes, 10 records. `crates/goalcup-format/tests/golden.rs` checks it. Its dump
-(`worked-example.dump.jsonl`, made by `crates/goalcup-format/src/dump.rs`) is:
+(`worked-example.dump.jsonl`, made by `crates/goalcup-format/src/dump.rs`) is below. Its `conn`
+meta has no `kind`: the example predates that key and is kept as is, which also shows that readers
+ignore a missing optional key.
 
 ```json
 {"o":0,"k":"part","entry":"e0123456789abcdef","boot":0,"part":0,"raw_offset":0,"wall":"2026-11-07T00:00:00Z","mono":5000000000,"next_link":0}
@@ -241,88 +259,67 @@ The LINK hash is SHA-256 of `GCR1-LINK`, 32 zero bytes and raw bytes 0 to 965:
 ## A Python reader
 
 This reader needs only the Python standard library (3.9 or later). It reads the decompressed stream
-from standard input and prints each record kind with its count, a total, and the event names and
-gap reasons it saw:
+from standard input and prints each record kind with its count and a total. On a live entry its
+counts are a lower bound (see the `zstd` note above):
 
 ```
 cat rec-*.gcr.zst | zstd -dc --long=27 | python3 read.py
 ```
 
 ```python
-import json
 import sys
 
 KINDS = {1: "part", 2: "open", 3: "data", 4: "end", 5: "gap", 6: "mask", 7: "event", 8: "link"}
-GAPS = {1: "memory_guard", 2: "recorder_down", 3: "unsupported_encoding", 4: "decode_failed",
-        5: "source_changed", 6: "tls_refused", 7: "pinned", 10: "cut_at_seal",
-        11: "h2_unsupported", 12: "mask_failed", 13: "upstream_untrusted",
-        14: "protocol_other", 15: "after_stop"}
 MAX_BODY = 16 << 20
 
 
-def varint(buf, pos):
-    """Unsigned LEB128 at buf[pos:]: (value, next pos), or None if buf ends first."""
+def length(src, offset):
+    """The varint after a kind byte: (value, its size), or None if the input ends first."""
     value = 0
     for i in range(10):
-        if pos + i >= len(buf):
+        b = src.read(1)
+        if not b:
             return None
-        b = buf[pos + i]
-        value |= (b & 0x7F) << (7 * i)
-        if b < 0x80:
-            return value, pos + i + 1
-    raise ValueError("varint over 10 bytes")
+        if i == 9 and b[0] > 1:
+            sys.exit(f"len at raw offset {offset} is over 64 bits")
+        value |= (b[0] & 0x7F) << (7 * i)
+        if b[0] < 0x80:
+            return value, i + 1
+    sys.exit(f"len at raw offset {offset} is over 10 bytes")
 
 
 def main():
     src = sys.stdin.buffer
-    kinds, details, offset = {}, {}, 0
+    kinds, offset = {}, 0
     while True:
         head = src.read(1)
         if not head:
             break
-        if head[0] == 0:
+        kind = head[0]
+        if kind == 0:
             sys.exit(f"kind 0 at raw offset {offset}: not a GCR1 stream")
-        found = None
-        while found is None:
-            more = src.read(1)
-            if not more:
-                break
-            head += more
-            found = varint(head, 1)
-        if found is not None and found[0] > MAX_BODY:
-            sys.exit(f"record at raw offset {offset} is over 16 MiB")
-        body = src.read(found[0]) if found else b""
-        if found is None or len(body) < found[0]:
+        found = length(src, offset)
+        if found is None:
             print(f"cut record at raw offset {offset}")
             break
-        kind = head[0]
+        if found[0] > MAX_BODY:
+            sys.exit(f"record at raw offset {offset} is over 16 MiB")
+        body = src.read(found[0])
+        if len(body) < found[0]:
+            print(f"cut record at raw offset {offset}")
+            break
         if offset == 0 and (kind != 1 or body[:4] != b"GCR1"):
             sys.exit("the stream does not start with a GCR1 PART record")
         name = KINDS.get(kind, f"unknown({kind})")  # an unknown kind is skipped by its length
         kinds[name] = kinds.get(name, 0) + 1
-        if kind == 5:  # GAP: sid, then the reason byte
-            reason = body[varint(body, 0)[1]]
-            detail = "gap " + GAPS.get(reason, f"other({reason})")
-        elif kind == 7:  # EVENT: dt, then JSON
-            try:
-                detail = "event " + str(json.loads(body[varint(body, 0)[1]:]).get("ev"))
-            except ValueError:
-                detail = "event (not JSON)"
-        else:
-            detail = None
-        if detail:
-            details[detail] = details.get(detail, 0) + 1
-        offset += len(head) + len(body)
+        offset += 1 + found[1] + len(body)
     for name, n in kinds.items():
         print(f"{name} {n}")
     print(f"total {sum(kinds.values())} records, {offset} raw bytes")
-    for detail, n in sorted(details.items()):
-        print(f"  {detail} {n}")
 
 
 main()
 ```
 
 On the worked example (`python3 read.py < worked-example.gcr`, already raw) it prints `part 1`,
-`event 1`, `open 3`, `data 2`, `end 2`, `link 1`, `total 10 records, 998 raw bytes` and
-`  event start 1`.
+`event 1`, `open 3`, `data 2`, `end 2`, `link 1` and `total 10 records, 998 raw bytes`.
