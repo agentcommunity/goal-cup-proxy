@@ -50,9 +50,16 @@ pub trait Parser: Send {
     /// and ended `decode_error`. Later feeds are not made; `end` still is.
     fn feed(&mut self, dir: Dir, t: Mono, bytes: &[u8]) -> Result<(), Stop>;
     /// The connection closed. unsent_up: client bytes read but never forwarded (upstream had
-    /// closed). A `Stop` names bytes still held unrecorded at the close. `reason` is
-    /// `interrupted` when a TLS leg closed without close_notify, though the conn ends `complete`.
-    fn end(self: Box<Self>, t: Mono, reason: EndReason, unsent_up: u64) -> Option<Stop>;
+    /// closed). A `Stop` names bytes still held unrecorded at the close. `down_cut`: the
+    /// upstream closed TLS without close_notify, so only a body that ends at the server's close
+    /// is not known whole; framing shows whether anything else is.
+    fn end(
+        self: Box<Self>,
+        t: Mono,
+        reason: EndReason,
+        down_cut: bool,
+        unsent_up: u64,
+    ) -> Option<Stop>;
     /// `feed` panicked: every open stream gets its GAP and ends `decode_error`; the `Stop` counts
     /// the bytes not recorded, the panicking chunk included.
     fn panicked(self: Box<Self>, t: Mono) -> Stop;
@@ -77,7 +84,7 @@ pub type Tap<'a> = &'a (dyn Fn(Dir, Mono, u64) + Sync);
 /// How one direction ended. `Cut`: a TLS peer closed without close_notify, passed on as a clean
 /// close (rule 8), though only close_notify proves a close-delimited body whole. `WriteErr`
 /// carries the chunk read and not forwarded.
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy)]
 enum Leg {
     Eof,
     Cut,
@@ -215,15 +222,12 @@ where
         (Leg::Eof | Leg::Cut, Leg::Eof | Leg::Cut) => EndReason::Complete,
         _ => EndReason::Interrupted,
     };
-    let parsed = match (lu, ld) {
-        (Leg::Cut, _) | (_, Leg::Cut) => EndReason::Interrupted,
-        _ => reason,
-    };
+    let down_cut = matches!(ld, Leg::Cut);
     let [up, down] = pump.moved.map(AtomicU64::into_inner);
     let Shared { parser, mut stop } = pump.shared.into_inner().unwrap_or_else(|e| e.into_inner());
     if let Some(p) = parser {
         let t = rec.now();
-        let ended = catch_unwind(AssertUnwindSafe(move || p.end(t, parsed, unsent_up)));
+        let ended = catch_unwind(AssertUnwindSafe(move || p.end(t, reason, down_cut, unsent_up)));
         match ended {
             Ok(Some(late)) if stop.is_none() => {
                 if !late.at_close {

@@ -69,10 +69,10 @@ pub struct Deflate {
 pub struct Unsupported;
 
 /// Parsing stopped for the connection (5a): the caller writes the `parse_stopped` note and the
-/// `conn` GAP. Holds the bytes of the chunk taken before the frame that stopped it. Every later
-/// `feed` is ignored and returns this again, with 0.
+/// `conn` GAP. Holds the bytes of the chunk taken before the frame that stopped it, and the bytes
+/// of that frame's header taken from earlier chunks.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Stopped(pub usize);
+pub struct Stopped(pub usize, pub usize);
 
 /// Reads the `Sec-WebSocket-Extensions` of the upgrade request and of the `101`, each with its
 /// header lines joined by `,`. No answer, or an empty one, is no extension. The answer must be at
@@ -186,9 +186,6 @@ impl WsConn {
 
     /// Takes relayed bytes of one direction, in any split, after they were forwarded.
     pub fn feed(&mut self, dir: Dir, t: Mono, bytes: &[u8]) -> Result<(), Stopped> {
-        if self.stopped {
-            return Err(Stopped(0));
-        }
         let side = match dir {
             Dir::Up => &mut self.up,
             Dir::Down => &mut self.down,
@@ -410,9 +407,15 @@ impl Side {
                 if done {
                     self.frame_end(t);
                 }
-            } else if let Some(header) = self.framer.take_header(&mut data) {
+            } else {
+                // Header bytes buffered from earlier chunks: a header within one chunk is taken
+                // whole or up to the chunk's end.
+                let back = self.framer.have;
+                let Some(header) = self.framer.take_header(&mut data) else {
+                    continue;
+                };
                 if header.len >> 63 != 0 {
-                    return Err(Stopped(at));
+                    return Err(Stopped(at, back));
                 }
                 self.header(t, header);
                 if header.len == 0 {

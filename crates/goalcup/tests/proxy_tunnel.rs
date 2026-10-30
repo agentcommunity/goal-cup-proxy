@@ -20,7 +20,10 @@ use std::os::fd::AsFd;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
-use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+use std::pin::Pin;
+use std::task::{Context, Poll};
+use tokio::io::{AsyncRead, AsyncReadExt as _, AsyncWrite, AsyncWriteExt as _, DuplexStream};
+use tokio::io::{ReadBuf, duplex};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::task::JoinHandle;
 
@@ -303,7 +306,7 @@ impl Parser for AtPeer {
         self.1.fetch_add(1, Ordering::SeqCst);
         Ok(())
     }
-    fn end(self: Box<Self>, _: Mono, _: EndReason, _: u64) -> Option<Stop> {
+    fn end(self: Box<Self>, _: Mono, _: EndReason, _: bool, _: u64) -> Option<Stop> {
         None
     }
     fn panicked(self: Box<Self>, t: Mono) -> Stop {
@@ -374,7 +377,7 @@ impl Parser for Faulty {
             false => Ok(()),
         }
     }
-    fn end(self: Box<Self>, t: Mono, _: EndReason, _: u64) -> Option<Stop> {
+    fn end(self: Box<Self>, t: Mono, _: EndReason, _: bool, _: u64) -> Option<Stop> {
         (self.0 == Fails::AtClose).then_some(Stop {
             reason: GapReason::DecodeFailed,
             tail: None,
@@ -494,6 +497,131 @@ async fn quiet_moves_with_relayed_bytes_not_with_an_idle_connection() {
         tokio::time::sleep(Duration::from_millis(100)).await;
         assert_eq!(quiet.load(Ordering::SeqCst), moved);
         close(r).await;
+    })
+    .await;
+}
+
+/// A proxy-side leg whose clean read EOF comes out as `UnexpectedEof` when `.1`: a TLS peer gone
+/// without close_notify, as tokio-rustls reports it.
+struct Cuts(DuplexStream, bool);
+
+impl AsyncRead for Cuts {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        let before = buf.filled().len();
+        let r = Pin::new(&mut self.0).poll_read(cx, buf);
+        if self.1 && matches!(r, Poll::Ready(Ok(()))) && buf.filled().len() == before {
+            return Poll::Ready(Err(std::io::ErrorKind::UnexpectedEof.into()));
+        }
+        r
+    }
+}
+
+impl AsyncWrite for Cuts {
+    fn poll_write(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<std::io::Result<usize>> {
+        Pin::new(&mut self.0).poll_write(cx, buf)
+    }
+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        Pin::new(&mut self.0).poll_flush(cx)
+    }
+    fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        Pin::new(&mut self.0).poll_shutdown(cx)
+    }
+}
+
+/// Relays `up`, then `down`, through [`Http1`]; the upstream closes, then the client, and the
+/// `cut` leg closes without close_notify. Each stream's kind and END reason, by kind, and the GAPs.
+async fn cut_close(up: &[u8], down: &[u8], cut: Dir) -> (Vec<(StreamKind, EndReason)>, Vec<Call>) {
+    let (rec, calls) = Recorder::for_tests(1 << 30);
+    let ((mut client, cp), (mut upstream, up_)) = (duplex(1 << 16), duplex(1 << 16));
+    let legs = (Cuts(cp, cut == Dir::Up), Cuts(up_, cut == Dir::Down));
+    let r = rec.clone();
+    let relay = tokio::spawn(async move {
+        let mut conn = r.open(StreamKind::Conn, 0, 0, 0, OpenFlags::NONE, json!({}));
+        let parser: Box<dyn Parser> = Box::new(Http1::new(&r, conn.sid()));
+        let (none, quiet) = ((Bytes::new(), Bytes::new()), AtomicU64::new(0));
+        let p = pump::relay(&r, &mut conn, legs, none, Some(parser), &quiet, None).await;
+        conn.end(r.now(), p.reason, None);
+        assert!(!p.upstream_failed, "a cut is a close, not a failure (rule 8)");
+    });
+    client.write_all(up).await.unwrap();
+    let mut got = vec![0; up.len()];
+    upstream.read_exact(&mut got).await.unwrap();
+    upstream.write_all(down).await.unwrap();
+    drop(upstream);
+    let mut seen = Vec::new();
+    client.read_to_end(&mut seen).await.unwrap();
+    assert_eq!((&got[..], &seen[..]), (up, down), "verbatim, and the close passed on");
+    drop(client);
+    relay.await.unwrap();
+    let all = calls.all();
+    let kind = |sid| {
+        all.iter().find_map(|c| match c {
+            Call::Open(s, k, ..) if *s == sid => Some(*k),
+            _ => None,
+        })
+    };
+    let ends = all.iter().filter_map(|c| match c {
+        Call::End(sid, _, reason, ..) => Some((kind(*sid).unwrap(), *reason)),
+        _ => None,
+    });
+    (by_kind(ends.collect()), gaps(&calls))
+}
+
+fn by_kind(mut ends: Vec<(StreamKind, EndReason)>) -> Vec<(StreamKind, EndReason)> {
+    ends.sort_by_key(|e| e.0.to_u8());
+    ends
+}
+
+/// A WebSocket frame of under 126 bytes.
+fn ws_frame(opcode: u8, payload: &[u8], mask: Option<[u8; 4]>) -> Vec<u8> {
+    let mut out = vec![0x80 | opcode, payload.len() as u8 | (u8::from(mask.is_some()) << 7)];
+    let key = mask.unwrap_or_default();
+    if mask.is_some() {
+        out.extend_from_slice(&key);
+    }
+    out.extend(payload.iter().enumerate().map(|(i, b)| b ^ key[i & 3]));
+    out
+}
+
+#[tokio::test]
+async fn only_an_upstream_cut_leaves_a_close_delimited_reply_unproven() {
+    within_async(HANG, async {
+        use EndReason::{Complete, Interrupted};
+        use StreamKind::{Conn, HttpReq, HttpResp, WsDown, WsUp};
+        let get = b"GET /events HTTP/1.1\r\nHost: a.example\r\n\r\n";
+        let sse = b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n\r\ndata: 1\n\n";
+        for (cut, resp) in [(Dir::Up, Complete), (Dir::Down, Interrupted)] {
+            let (ends, gaps) = cut_close(get, sse, cut).await;
+            let want = vec![(HttpReq, Complete), (HttpResp, resp), (Conn, Complete)];
+            assert_eq!(ends, by_kind(want));
+            assert!(gaps.is_empty());
+        }
+        // A whole WebSocket session, a Close each way: whole whichever leg is cut.
+        let mut up = b"GET /ws HTTP/1.1\r\nHost: a.example\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\
+            Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n"
+            .to_vec();
+        let close = 1000u16.to_be_bytes();
+        up.extend(ws_frame(1, b"hi", Some([1, 2, 3, 4])));
+        up.extend(ws_frame(8, &close, Some([5, 6, 7, 8])));
+        let mut down = b"HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\
+            Sec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=\r\n\r\n"
+            .to_vec();
+        down.extend(ws_frame(1, b"yo", None));
+        down.extend(ws_frame(8, &close, None));
+        for cut in [Dir::Up, Dir::Down] {
+            let (ends, gaps) = cut_close(&up, &down, cut).await;
+            let whole = [HttpReq, WsUp, WsDown, Conn].map(|k| (k, Complete));
+            assert_eq!(ends, by_kind(whole.to_vec()));
+            assert!(gaps.is_empty());
+        }
     })
     .await;
 }

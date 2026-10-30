@@ -185,7 +185,11 @@ impl Http1 {
         let fed = ws.feed(dir, t, bytes);
         self.kept += match fed {
             Ok(()) => bytes.len(),
-            Err(ws::Stopped(n)) => n,
+            // The bad frame's header bytes from earlier chunks were counted kept then.
+            Err(ws::Stopped(n, back)) => {
+                self.kept = self.kept.saturating_sub(back as u64);
+                n
+            }
         } as u64;
         fed.map_err(|_| Fault::Framing)
     }
@@ -393,7 +397,13 @@ impl Parser for Http1 {
 
     /// End open streams (interrupted when inside a message, complete otherwise; decode_error
     /// after a stop); unsent_up goes to the open http_req (or ws_up) END tail.
-    fn end(mut self: Box<Self>, t: Mono, reason: EndReason, unsent_up: u64) -> Option<Stop> {
+    fn end(
+        mut self: Box<Self>,
+        t: Mono,
+        reason: EndReason,
+        down_cut: bool,
+        unsent_up: u64,
+    ) -> Option<Stop> {
         let since = self.held(t).1;
         let mut late = None;
         if !self.stopped && self.ws.is_none() {
@@ -427,8 +437,9 @@ impl Parser for Http1 {
             body.end(t, EndReason::Interrupted, unsent_up, None);
         }
         if let Some(body) = self.down.body.take() {
+            // Only the server's close ends this body, and a cut close may come early.
             let close = matches!(body.framing, Framing::Close);
-            let reason = if close {
+            let reason = if close && !down_cut {
                 reason
             } else {
                 EndReason::Interrupted
@@ -443,7 +454,7 @@ impl Parser for Http1 {
 
     fn panicked(mut self: Box<Self>, t: Mono) -> Stop {
         let stop = self.stop(t, Fault::Panic);
-        let _ = self.end(t, EndReason::DecodeError, 0);
+        let _ = self.end(t, EndReason::DecodeError, false, 0);
         stop
     }
 }
