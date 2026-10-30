@@ -17,6 +17,10 @@ const CREDENTIAL_PARTS: [&str; 5] = ["key", "token", "secret", "password", "auth
 /// Authorization schemes whose credential is the rest of the value. Masked in any header.
 const CREDENTIAL_SCHEMES: [&str; 2] = ["bearer", "basic"];
 
+/// The HTTP/2 host pseudo-header. Its name holds `auth`, but it is the host, which is never
+/// masked: only a userinfo before its last `@` is.
+const AUTHORITY: &str = ":authority";
+
 /// Meta keys whose values are never masked.
 const CLEAR_KEYS: [&str; 5] = ["method", "status", "host", "port", "alpn"];
 
@@ -32,7 +36,10 @@ impl Names<'_> {
         let name = String::from_utf8_lossy(name.trim_ascii()).to_ascii_lowercase();
         CREDENTIAL_NAMES.contains(&name.as_str())
             || CREDENTIAL_PARTS.iter().any(|p| name.contains(p))
-            || self.header_prefixes.iter().any(|p| name.starts_with(p.as_str()))
+            || self
+                .header_prefixes
+                .iter()
+                .any(|p| name.starts_with(p.as_str()))
             || self.field_names.contains(&name)
     }
 
@@ -132,11 +139,17 @@ fn mask_pair(
         }
     };
     let before = value.clone();
-    if value.contains(['\r', '\n']) || names.is_credential(name.as_bytes()) {
+    let authority = name.eq_ignore_ascii_case(AUTHORITY);
+    if value.contains(['\r', '\n']) || (!authority && names.is_credential(name.as_bytes())) {
         *value = "*".repeat(value.len());
     } else {
         scrub_in_place(value, scrub);
-        mask_bytes_of(value, |bytes| mask_value(bytes, names));
+        mask_bytes_of(value, |bytes| {
+            if authority && let Some(at) = bytes.iter().rposition(|&b| b == b'@') {
+                bytes[..at].fill(b'*');
+            }
+            mask_value(bytes, names);
+        });
     }
     if *value != before {
         masked.push(name.clone());
@@ -302,7 +315,12 @@ mod tests {
 
     /// Runs `mask_meta` with `scrub` and checks every string kept its byte length and every
     /// header name stayed. Returns the masked meta.
-    fn run(meta: Value, prefixes: &[&str], fields: &[&str], scrub: &dyn Fn(&str) -> String) -> Value {
+    fn run(
+        meta: Value,
+        prefixes: &[&str],
+        fields: &[&str],
+        scrub: &dyn Fn(&str) -> String,
+    ) -> Value {
         let prefixes: Vec<String> = prefixes.iter().map(|s| s.to_string()).collect();
         let fields: Vec<String> = fields.iter().map(|s| s.to_string()).collect();
         let mut out = meta.clone();
@@ -335,7 +353,9 @@ mod tests {
     }
 
     fn value_of<'a>(meta: &'a Value, name: &str) -> &'a str {
-        let pair = meta["headers"].as_array().and_then(|h| h.iter().find(|p| p[0] == name));
+        let pair = meta["headers"]
+            .as_array()
+            .and_then(|h| h.iter().find(|p| p[0] == name));
         pair.and_then(|p| p[1].as_str()).unwrap_or("<absent>")
     }
 
@@ -389,7 +409,12 @@ mod tests {
 
     #[test]
     fn nothing_masked_lists_nothing() {
-        let out = run(head(&[("content-type", "application/json")]), &[], &[], &identity);
+        let out = run(
+            head(&[("content-type", "application/json")]),
+            &[],
+            &[],
+            &identity,
+        );
         assert_eq!(out["masked"], json!([]));
         let out = run(json!({"path": "/x"}), &[], &[], &identity);
         assert!(out.get("masked").is_none());
@@ -420,7 +445,10 @@ mod tests {
                 "https://h.example/cb?next=https://u:pw@b.example/&token=T1",
                 "https://h.example/cb?next=https://u:pw@b.example/&token=**",
             ),
-            ("/cb?key=S5&next=https://a.example/b", "/cb?key=**&next=https://a.example/b"),
+            (
+                "/cb?key=S5&next=https://a.example/b",
+                "/cb?key=**&next=https://a.example/b",
+            ),
         ];
         for (input, expected) in cases {
             let out = run(head(&[("x-link", input)]), &[], &[], &identity);
@@ -449,6 +477,8 @@ mod tests {
         assert_eq!(value_of(&out, ":path"), "https://****@h.example/x");
         assert_eq!(value_of(&out, ":authority"), "h.example");
         assert_eq!(out["masked"], json!([":path"]));
+        let out = run(head(&[(":authority", "u:pw@h.example")]), &[], &[], &identity);
+        assert_eq!(value_of(&out, ":authority"), "****@h.example");
         let native = json!({"path": "/home/u/.codex/sessions/2026/rollout-1.jsonl"});
         assert_eq!(run(native.clone(), &[], &[], &identity), native);
     }
