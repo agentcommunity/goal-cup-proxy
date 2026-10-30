@@ -1312,3 +1312,29 @@ to another file are made by that file's owner.
   COUNT) before the call. The rule holds after the core slice too: a path or host holding a secret
   shape is still masked. PRD-02 does not add `meta.masked` itself; PRD-05 owns it.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-10 slice 1 (merge d55030ee)
+
+- **S8 spawn names are on integration:** the watchdog spawns `goalcup recorder` and `goalcup recorder
+  --null` from `goalcup::cli::RECORDER_SUBCOMMAND` and `goalcup::cli::NULL_FLAG`, never from string
+  literals. `main.rs` dispatches the hidden command to the scaffold's `pipeline::run_recorder(null) ->
+  ExitCode`; keep that signature.
+- **S11 is on integration** (`goalcup::cli::log::{line, Fact, Host}`). Use `Fact::Io(kind)` for a write
+  error before exit 74 (EIO, ENOSPC, EMFILE), `Fact::Exit` for a child's exit, `Fact::Path` only for
+  paths goalcup built, and `Fact::Word` for causes. The panic hook writes file, line and fixed text; the
+  panic payload never goes into a `Fact`. `line` never creates a folder: create the entry folder
+  before the first boot line, or that line is lost.
+- `cli::home()` returns `Result<PathBuf, &'static str>` and refuses with no absolute home; code that
+  needs the home takes it from the start facts or that call, never from the raw variable.
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-04 core slice part 1 (merge 403d9165)
+
+- **`NativeReader::finish` takes the guard.** Ask 10 and PRD-04's ask 1 agree; PRD-00's ruling row
+  "PRD-02 and PRD-04" omits the argument. PRD-04's next slice builds
+  `finish(self, harness_exited: bool, guard: Option<Duration>) -> NativeFinish`; the seal passes
+  `Some(180 s)` for `deadline`, `server_stop` and `signal` and `None` for `harness_exit` and
+  `seal_command` (section 11). PRD-02's seal calls that shape.
+- `native::fsx` uses `pipeline::cursors::Fid` as its file identity, so a change to `Fid` touches the
+  native reader too.
+- No locked ledger item is touched and no owner question comes from this slice.

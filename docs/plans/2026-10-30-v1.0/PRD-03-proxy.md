@@ -848,3 +848,13 @@ Revision 3 against OWNER-DECISIONS.md (the ledger wins). Fix ids are from the al
   a filter by path, method or Host on a decrypted host fails a lessons test, which blocks PRD-13's cut
   (PRD-17 gate check 2). `proxy::serve` and `common::upstream` keep their PRD-00 "Seams" shapes so
   those tests can be written against them.
+
+### 2026-10-30, replan after PRD-10 slice 1 (merge d55030ee)
+
+- **S11 is on integration** (`goalcup::cli::log::{line, Fact, Host}`). A host enters the log only as
+  `Fact::Host(Host::checked(s)?)` where `s` is the connection authority the proxy already parsed or a
+  host from the host list; a request path, query, header value or other traffic text is never a
+  `Fact::Host` or `Fact::Path`. When `Host::checked` returns `None`, log a fixed `Fact::Word` in its
+  place, never the text. Accept and socket errors (EMFILE included) go in as `Fact::Io(kind)`, counts as
+  `Fact::N`. After S3 lands, PRD-10 adds `From<connector::hosts::Host>` for hosts from the list.
+- No locked ledger item is touched and no owner question comes from this slice.

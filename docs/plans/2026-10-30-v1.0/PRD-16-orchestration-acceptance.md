@@ -1181,3 +1181,49 @@ kept and now cites BUILD-PROMPT section 5, since B3 no longer carries it.
   end-of-build report lists it. Mergers and builders add both lines to every merge commit, an
   integration-into-task merge included.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-10 slice 1 (merge d55030ee)
+
+- `gate fast: PASS in 76s` on d55030ee. Before the merge, the merged-with-integration tree was green
+  in a box: `fmt`, `clippy -D warnings`, `nextest` on `goalcup` 26 of 26, doctests (two
+  `compile_fail`).
+- **S11 is on integration** (due H+1.5), with a seventh `Fact` variant, `Io(io::ErrorKind)`, and a
+  checked `cli::log::Host` (PRD-10 note). PRD-02, PRD-03 and PRD-06 build against it now.
+- **Phase 0 did not include `start` with `GOALCUP_SERVER=off` against stubs** (PRD-10 builder notes
+  step 1): `watchdog::run` (S8) and `connector::load` and `plan` (S3) are on no branch. It moves to
+  PRD-10's core slice, which PRD-00's core slice row already lists, so the build order is unchanged.
+  Anything that runs `goalcup start` (the pad's first `server = "off"` micro rung, PRD-14's e2e test)
+  waits for S3 and the watchdog's `run`, then PRD-10 core. Every command is a stub that exits 3 until
+  then; a pad or acceptance row against this build is not evidence.
+- **Size report, PRD-10 slice 1** (`wc -l` at d55030ee, row "CLI (PRD-10)", about 2,900 src and 1,200
+  tests): src 596 (`main.rs` 190, `cli/mod.rs` 152, `cli/log.rs` 202, `cli/text.rs` 52, inline
+  test modules left out), 21% of the row; tests 308 (`tests/cli_commands.rs` 128, `tests/cli_log.rs`
+  135, 45 inline in `main.rs` and `cli/mod.rs`), 26% of the row. Three files are over PRD-10's own
+  file estimates (`main.rs` 190 against 160, `cli/mod.rs` 152 against 130, `cli/log.rs` 202 against
+  140 shared with `skill.rs`); the row is the ceiling, and PRD-10's note names where to cut.
+- **Open nits** A8, B13 and B14 go to PRD-10's next touch (PRD-10 note); acceptance lists them as
+  known if they are still open at the end.
+- **Trailers:** merge commits aab5cec4 and 2486380a on `v1.0/prd-10-cli` have no `Co-Authored-By` and
+  `Claude-Session` lines. They stay (no force-push, no rebase) and the end-of-build report lists them
+  beside df84011c.
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-04 core slice part 1 (merge 403d9165)
+
+- `gate fast: PASS in 94s` on 403d9165. Before the merge the lane was green in a box at 4fd26f3f:
+  `fmt`, `clippy -D warnings`, `native_pattern` and `native_safety` 13 of 13. Linux only: no native
+  test ran on macOS; reviewer A reported a macOS stub check passing in a box, which is not a macOS
+  test run.
+- **Size report, PRD-04** (`wc -l` at 403d9165, row "Native (PRD-04)", 780 src and 1,000 tests): src
+  401 (`fsx.rs` 226, `pattern.rs` 167, `mod.rs` 8), 51% of the row from two of six files; tests 246
+  (`tests/native_pattern.rs` 123, `tests/native_safety.rs` 123), 25% of the row. `fsx.rs` is 226
+  against its 120 estimate and `pattern.rs` 167 against 100. Built to PRD-04's estimates the remaining
+  files would put the area near 950, about 22% over the row; PRD-04's note sets the next slice to the
+  379 src lines left, with review B9 and B8 as the first cuts.
+- **Seam:** `NativeReader::finish` takes `guard: Option<Duration>` (PRD-00, PRD-02 and PRD-04 notes).
+  The build order is unchanged: PRD-04's next slice (`start`, `finish`, walk, tail, snapshot, loop)
+  waits for PRD-11's S3 stub.
+- **Open nits** A8, B8, B9 and B10 go to PRD-04's next slice (PRD-04 note); acceptance lists them as
+  known if they are still open at the end.
+- Merge commits on `v1.0/prd-04-native` and 403d9165 carry both trailer lines.
+- No locked ledger item is touched and no owner question comes from this slice.
