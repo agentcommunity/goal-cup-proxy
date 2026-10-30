@@ -38,6 +38,9 @@ fn sealed() -> Status {
     st
 }
 
+/// One kind of loss, made in a clean sealed part.
+type Lose = fn(&mut Status);
+
 fn show(st: &Status) -> String {
     screen(st, None, RUN, &PathBuf::from("/home/x/goalcup.log"), NOW).expect("sealed")
 }
@@ -63,7 +66,7 @@ fn nothing_lost_only_without_any_loss() {
         show(&quiet).contains(text::NOTHING_LOST),
         "an unlisted tunnel is not a loss"
     );
-    let losses: Vec<(&str, fn(&mut Status))> = vec![
+    let losses: Vec<(&str, Lose)> = vec![
         ("gap", |s| s.written.counts.gaps = 1),
         ("gap of unknown size", |s| {
             s.written.counts.gaps = 1;
@@ -89,7 +92,9 @@ fn nothing_lost_only_without_any_loss() {
                 },
             );
         }),
-        ("fail-closed byte", |s| s.written.counts.mask_failclosed_bytes = 1),
+        ("fail-closed byte", |s| {
+            s.written.counts.mask_failclosed_bytes = 1
+        }),
         ("cut file", |s| {
             s.cut_files = Some(CutFiles {
                 files: 1,

@@ -77,7 +77,10 @@ pub fn screen(
         body.push(line);
     };
     if c.req_holes > 0 || c.lost_bytes > 0 {
-        loss(&mut body, text::whole_and_lost(c.req_whole, c.req_holes, c.lost_bytes));
+        loss(
+            &mut body,
+            text::whole_and_lost(c.req_whole, c.req_holes, c.lost_bytes),
+        );
     }
     // Gaps no other line names: of unknown size beyond the off spans, or, with no other loss
     // line, gaps that lost no byte. `recorder_down` gaps are the off line's.
