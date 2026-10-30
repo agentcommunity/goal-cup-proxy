@@ -188,11 +188,11 @@ def load_settings(raw, pad):
     if not isinstance(s["steps"], list):
         raise Usage("steps is a list")
     s["plan"] = parse_steps(s["steps"])
-    if s["mode"] == "cycle":  # cycle adds its own kill-recorder@3, which needs a live watchdog
-        s["plan"] = [p for p in s["plan"] if p[2] != "kill-recorder@3"]
+    if s["mode"] == "cycle":  # cycle owns its crash at 3; its stream wait and restart can run past 4:00
+        s["plan"] = [("timed", 3, "kill-recorder@3")] + [p for p in s["plan"] if p[2] != "kill-recorder@3"]
         for _, m, r in s["plan"]:
-            if r.startswith("kill-watchdog-recover@") or (r.startswith(("kill-watchdog@", "kill-both@")) and m <= 3):
-                raise Usage("step %r: in cycle the watchdog must live past the crash at minute 3" % r)
+            if r.startswith(("kill-watchdog", "kill-both@")) and (m <= 4 or "recover" in r):
+                raise Usage("step %r does not fit cycle's own crash at minute 3" % r)
     return s
 
 
@@ -201,8 +201,6 @@ def step_list(s, harness):
     plan = s["plan"]
     calls = [n for kind, n, _ in plan if kind == "calls"]
     timed = [(m, r) for kind, m, r in plan if kind == "timed"]
-    if s["mode"] == "cycle":
-        timed.insert(0, (3, "kill-recorder@3"))
     timed.sort(key=lambda t: t[0])
     seq = ["setup"] + [r for kind, _, r in plan if kind == "pre"]
     seq += ["start", "wait-calls %d" % (calls[-1] if calls else s["calls"]), "look"]
@@ -230,15 +228,8 @@ class Run:
         self.create_late = False  # create hit its limit: the box may still appear after cleanup
         self.t0 = time.time()
         stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-        base = os.path.join(out_root, s["harness"], case, stamp)
-        self.dir, n = base, 1
-        while True:
-            try:
-                os.makedirs(self.dir)
-                break
-            except FileExistsError:
-                n += 1
-                self.dir = "%s-%d" % (base, n)
+        self.dir = os.path.join(out_root, s["harness"], case, stamp + "-" + self.name)
+        os.makedirs(self.dir)
 
     def sbx(self, verb, *args, limit=None):
         """One sandbox call; calls.log gets the verb and the box name, never a value."""

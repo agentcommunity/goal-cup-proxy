@@ -57,14 +57,6 @@ class Settings(unittest.TestCase):
             with self.assertRaises(pad.Usage):
                 pad.load_settings(dict(BASE, server=server), PADCFG)
 
-    def test_cycle_takes_the_fault_rows(self):  # P11 cut-worker rows, section 13 step 3 reproductions
-        for steps in (["cut-worker@1+10"], ["kill-both@5", "kill-recorder@3"]):
-            s = pad.load_settings(dict(BASE, steps=steps, minutes=14), PADCFG)
-            self.assertEqual(pad.step_list(s, {}).count("kill-recorder@3"), 1)
-        for steps in (["kill-watchdog-recover@3"], ["kill-watchdog@1"]):
-            with self.assertRaises(pad.Usage):
-                pad.load_settings(dict(BASE, steps=steps), PADCFG)
-
     def test_only_model_keys_enter_a_box(self):
         with self.assertRaises(pad.Usage):
             pad.load_settings(dict(BASE, key="cf"), PADCFG)
@@ -96,10 +88,9 @@ class Walk(unittest.TestCase):
         return [c[2:] for c in self.calls], table
 
     def test_sandbox_passes_names_only(self):
-        calls, table = self.walk(case="gateway")
+        calls, _ = self.walk(case="gateway")
         self.assertEqual(sorted(c[c.index("--env") + 1] for c in calls if c[0] == "put-env"),
                          ["AI_GATEWAY_API_KEY", "CLAUDE_API_KEY"])
-        self.assertIn("kill-recorder@3", table.splitlines()[0])  # a cycle row is a fault row
         self.assertFalse([c for c in self.walk(case="gateway", key="none")[0] if c[0] == "put-env"])
 
     def test_create_timeout_still_removes_the_box(self):

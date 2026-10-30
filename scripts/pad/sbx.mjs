@@ -62,7 +62,7 @@ async function create() {
     } catch (e) {
       log(`create failed attempt ${attempt}: ${short(e)}`);
       if (attempt >= 3) throw e; // 30 s and 60 s waits: the whole create ends inside the pad's 5 min setup limit
-      await new Promise(r => setTimeout(r, Math.min(300, 15 * 2 ** attempt) * 1000));
+      await new Promise(r => setTimeout(r, attempt * 30 * 1000));
     }
   }
 }
