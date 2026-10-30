@@ -52,14 +52,22 @@ pub fn keys() -> Vec<(&'static str, String, usize)> {
             ["sk-", "ant-", "api03-", &run(ALNUM, 30, 1)].concat(),
             3,
         ),
-        ("openai_key", ["sk-", "proj-", &run(ALNUM, 30, 2)].concat(), 3),
+        (
+            "openai_key",
+            ["sk-", "proj-", &run(ALNUM, 30, 2)].concat(),
+            3,
+        ),
         (
             "github_token",
             ["github", "_pat_", &run(ALNUM, 30, 3)].concat(),
             11,
         ),
         ("github_token", ["gh", "p_", &run(ALNUM, 30, 4)].concat(), 4),
-        ("aws_access_key", ["AK", "IA", &run(upper, 16, 5)].concat(), 4),
+        (
+            "aws_access_key",
+            ["AK", "IA", &run(upper, 16, 5)].concat(),
+            4,
+        ),
         ("jwt", jwt.concat(), 3),
         ("slack_token", ["xo", "xb-", &run(ALNUM, 20, 9)].concat(), 5),
         ("google_key", ["AI", "za", &run(ALNUM, 35, 10)].concat(), 4),
@@ -70,8 +78,16 @@ pub fn keys() -> Vec<(&'static str, String, usize)> {
         ),
         ("npm_token", ["np", "m_", &run(ALNUM, 30, 12)].concat(), 4),
         ("xai_key", ["xa", "i-", &run(ALNUM, 30, 13)].concat(), 4),
-        ("stripe_key", ["sk", "_live_", &run(ALNUM, 24, 14)].concat(), 8),
-        ("gitlab_token", ["gl", "pat-", &run(ALNUM, 24, 15)].concat(), 6),
+        (
+            "stripe_key",
+            ["sk", "_live_", &run(ALNUM, 24, 14)].concat(),
+            8,
+        ),
+        (
+            "gitlab_token",
+            ["gl", "pat-", &run(ALNUM, 24, 15)].concat(),
+            6,
+        ),
         (
             "digitalocean_token",
             ["do", "p_v1_", &run(b"0123456789abcdef", 40, 16)].concat(),
@@ -130,5 +146,7 @@ pub fn only_spans_changed(input: &[u8], out: &Masked) -> bool {
 
 /// Every byte of `r` in `out` is `*`.
 pub fn starred(out: &Masked, r: Range<usize>) -> bool {
-    out.bytes.get(r).is_some_and(|b| b.iter().all(|&b| b == b'*'))
+    out.bytes
+        .get(r)
+        .is_some_and(|b| b.iter().all(|&b| b == b'*'))
 }

@@ -32,7 +32,10 @@ fn masker(value: &str) -> Result<Masker, goalcup::mask::MaskError> {
 /// `form` between `lead` and `tail`, and where it sits.
 fn around(lead: &str, form: &str, tail: &str) -> (Vec<u8>, Range<usize>) {
     let at = lead.len();
-    (format!("{lead}{form}{tail}").into_bytes(), at..at + form.len())
+    (
+        format!("{lead}{form}{tail}").into_bytes(),
+        at..at + form.len(),
+    )
 }
 
 /// The 11 forms of `v`, each inside some text a harness might write, with the range of the
@@ -60,7 +63,10 @@ fn texts(v: &str) -> Vec<(Vec<u8>, Range<usize>)> {
         plain.extend(format!("{v} and more text").bytes());
         // Character `i` holds bits `6i..6i + 6`: it depends on `v` alone when both its bytes do.
         let (first, past) = ((lead * 8).div_ceil(6), (lead + v.len()) * 8 / 6);
-        for text in [STANDARD_NO_PAD.encode(&plain), URL_SAFE_NO_PAD.encode(&plain)] {
+        for text in [
+            STANDARD_NO_PAD.encode(&plain),
+            URL_SAFE_NO_PAD.encode(&plain),
+        ] {
             let (input, _) = around("b64 ", &text, " end");
             out.push((input, 4 + first..4 + past));
         }

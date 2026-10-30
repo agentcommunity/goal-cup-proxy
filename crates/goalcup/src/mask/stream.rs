@@ -250,8 +250,7 @@ fn url_user(u: Unit) -> bool {
 }
 /// `[^\s/?#@"'<>\\]`, its password.
 fn url_password_char(u: Unit) -> bool {
-    !u.is_whitespace()
-        && !matches!(u, '/' | '?' | '#' | '@' | '"' | '\'' | '<' | '>' | '\\')
+    !u.is_whitespace() && !matches!(u, '/' | '?' | '#' | '@' | '"' | '\'' | '<' | '>' | '\\')
 }
 
 // ── the streaming form of each rule ────────────────────────────────────────────────────

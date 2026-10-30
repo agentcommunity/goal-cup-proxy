@@ -75,12 +75,7 @@ fn by_hand_mask_bench() {
     let mut rng = common::Rng(0xBE7C);
     let mut values = || -> Vec<SecretValue> {
         (0..32)
-            .map(|_| {
-                SecretValue::new(
-                    ValueSource::Env,
-                    rng.chars(common::ALNUM, 256).into_bytes(),
-                )
-            })
+            .map(|_| SecretValue::new(ValueSource::Env, rng.chars(common::ALNUM, 256).into_bytes()))
             .collect()
     };
     let rss_before = status_kb("VmRSS:");

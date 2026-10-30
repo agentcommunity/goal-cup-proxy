@@ -510,7 +510,10 @@ fn a_settings_file_keeps_its_model_and_base_url() -> Res {
     let settings = synthetic::harness_settings();
     let whole = m.mask_whole(&settings.bytes);
     for (_, r) in &settings.at {
-        assert!(starred(&whole, r.clone()), "a key in the settings file survived");
+        assert!(
+            starred(&whole, r.clone()),
+            "a key in the settings file survived"
+        );
     }
     let out: serde_json::Value = serde_json::from_slice(&whole.bytes)?;
     assert_eq!(out["model"], "example-coder-large");

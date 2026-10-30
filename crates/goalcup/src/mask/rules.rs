@@ -631,7 +631,8 @@ fn absorb_into_blocks(blocks: Vec<Claim>, touching: Vec<Claim>, claimed: Vec<Cla
     all.extend(blocks);
     all.extend(touching);
     all.extend(claimed.into_iter().filter(|c| !c.block));
-    all.sort_unstable_by_key(|c| (c.start, c.end, !c.block));
+    // A tie goes to the lowest rule, so a group's name does not depend on the input order.
+    all.sort_unstable_by_key(|c| (c.start, c.end, !c.block, c.priority));
     let mut out: Vec<Claim> = Vec::with_capacity(all.len());
     let mut current: Option<Claim> = None;
     for c in all {

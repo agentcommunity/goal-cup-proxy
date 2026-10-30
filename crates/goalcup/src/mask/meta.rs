@@ -317,12 +317,12 @@ mod tests {
         fields: &[&str],
         scrub: &dyn Fn(&str) -> String,
     ) -> Value {
-        let names = Names {
+        let rules = Names {
             header_prefixes: prefixes.iter().map(|s| s.to_string()).collect(),
             field_names: fields.iter().map(|s| s.to_string()).collect(),
         };
         let mut out = meta.clone();
-        mask_meta(&mut out, &names, scrub);
+        mask_meta(&mut out, &rules, scrub);
         let mut masked_out = out.clone();
         if let Some(map) = masked_out.as_object_mut() {
             map.remove("masked");

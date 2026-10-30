@@ -375,11 +375,26 @@ fn a_pem_block_with_an_exact_value_absorbs_a_claim_past_its_end() -> Res {
     let v = &value;
     // Each input with the text of the claim that runs past a block's END line.
     let cases = [
-        (format!("{begin}{v}\"{v}\".{v}{header}{end}e\"\x1b{v}-{v}"), format!("{end}e")),
-        (format!("{begin}\"n{v}{header}{end}\\\n{begin}"), format!("{end}\\")),
-        (format!("{begin}\"_{v}{header}{end}@\"{begin}"), format!("{end}@")),
-        (format!("{begin}{end}{begin}{v}apikey=\"----BAKI{end}"), "----BAKI-----END".into()),
-        (format!("{begin}{end}{begin}{v}{header}{end}:\""), format!("{end}:")),
+        (
+            format!("{begin}{v}\"{v}\".{v}{header}{end}e\"\x1b{v}-{v}"),
+            format!("{end}e"),
+        ),
+        (
+            format!("{begin}\"n{v}{header}{end}\\\n{begin}"),
+            format!("{end}\\"),
+        ),
+        (
+            format!("{begin}\"_{v}{header}{end}@\"{begin}"),
+            format!("{end}@"),
+        ),
+        (
+            format!("{begin}{end}{begin}{v}apikey=\"----BAKI{end}"),
+            "----BAKI-----END".into(),
+        ),
+        (
+            format!("{begin}{end}{begin}{v}{header}{end}:\""),
+            format!("{end}:"),
+        ),
         (format!("{v}{begin}{v}{header}{end}-\""), format!("{end}-")),
     ];
     for (input, claim) in &cases {
