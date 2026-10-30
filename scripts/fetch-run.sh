@@ -262,7 +262,11 @@ else:
     with open(index_path) as f:
         entries = json.load(f)
 if not isinstance(entries, list) or not entries:
-    sys.exit(f"fetch-run: the index holds no entry for {wanted}")
+    # The index keeps to one side by the bucket name; say which, and how to search the other.
+    side, other, flag = (("staging", "production", "goalcup-traces") if bucket.endswith("-staging")
+                         else ("production", "staging", "goalcup-traces-staging"))
+    sys.exit(f"fetch-run: the {side} index (bucket {bucket}) holds no entry for {wanted}; "
+             f"for a {other} run, pass --bucket {flag}")
 for e in entries:
     if not isinstance(e, dict) or not isinstance(e.get("entry_id"), str) or not ENTRY.match(e["entry_id"]):
         sys.exit("fetch-run: the index names a bad entry id")

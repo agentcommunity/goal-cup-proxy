@@ -351,6 +351,17 @@ class FetchRunTest(unittest.TestCase):
         self.assertEqual(absent.returncode, 1, absent.stderr)
         self.assertEqual(self.fetched()[1]["missing"]["why"], "object_bad")
 
+    def test_a_run_on_the_other_side_fails_and_writes_nothing(self) -> None:
+        # A production run looked up with the staging bucket: the query keeps to staging, finds none.
+        self.index_path.write_text("[]")
+        self.entry()
+        result = self.run_script("--store", str(self.store), "--bucket", "goalcup-traces-staging", RUN, str(self.out),
+                                 env=self.fakes())
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("staging=true", (self.root / "fake.psql.args").read_text())
+        self.assertFalse(list(self.out.rglob("rec.gcr.zst")), "nothing is written")
+        self.assertFalse(list(self.out.glob(".fetch-run.*")), "no temporary directory is left")
+
     def test_a_staging_bucket_is_named_in_the_url(self) -> None:
         self.write_index(self.entry())
         env = {**self.fakes(), "EXPECT_BUCKET": "goalcup-traces-staging"}
