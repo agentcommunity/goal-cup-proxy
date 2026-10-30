@@ -12,11 +12,11 @@ use goalcup::pipeline::{Counts, Durable, EntryTotals, Live, Mono, Status};
 use goalcup::upload::beat::{
     Beat, FinalFacts, Health, counts, health, point_on_disk, recording, request, take_answer,
 };
-use goalcup::upload::{SealFacts, ServerWord};
-use goalcup::watchdog::SealReason;
 use goalcup::upload::client::{HeartbeatAnswer, Recording, ServerClient, Token};
 use goalcup::upload::policy::{Policy, after};
 use goalcup::upload::state::{self, Final, UploadJson};
+use goalcup::upload::{SealFacts, ServerWord};
+use goalcup::watchdog::SealReason;
 use goalcup_format::{IndexKind, IndexLine, Record};
 use serde_json::{Value, json};
 use std::path::Path;
@@ -430,14 +430,21 @@ fn the_final_heartbeat_names_the_seal_and_ends_the_ordinary_beat() {
     };
     r.worker.inject(Route::Heartbeat, inject);
     assert!(r.beat.final_due(Mono(2 * S)));
-    r.beat.final_beat(Mono(2 * S), &f, &r.json, &r.word).unwrap();
+    r.beat
+        .final_beat(Mono(2 * S), &f, &r.json, &r.word)
+        .unwrap();
     assert_eq!(r.json.lock().unwrap().final_, Final::Sealed);
-    r.beat.final_beat(Mono(3 * S), &f, &r.json, &r.word).unwrap();
+    r.beat
+        .final_beat(Mono(3 * S), &f, &r.json, &r.word)
+        .unwrap();
     assert_eq!(state::read(r.dir.path()).unwrap().final_, Final::Sealed);
 
     let n = r.worker.heartbeats().len();
     let (d, losing) = (point(9), Health(Mode::Losing, Live::default()));
-    assert!(!r.beat.tick(Mono(3600 * S), &d, &losing, 0, &r.json, &r.word));
+    assert!(
+        !r.beat
+            .tick(Mono(3600 * S), &d, &losing, 0, &r.json, &r.word)
+    );
     assert_eq!(r.worker.heartbeats().len(), n);
 }
 

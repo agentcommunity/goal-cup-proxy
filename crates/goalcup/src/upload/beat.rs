@@ -51,7 +51,10 @@ pub fn health(live: Option<&Live>, entry_dir: &Path, t: &EntryTotals) -> Health 
 /// part and index synced (section 3). A part with no `.idx` has no lines.
 pub fn point_on_disk(rec_dir: &Path) -> io::Result<Option<IndexLine>> {
     for part in part_files(rec_dir)?.iter().rev() {
-        let name = part.file_name().and_then(|n| n.to_str()).unwrap_or_default();
+        let name = part
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or_default();
         let idx = part.with_file_name(name.replace(".gcr.zst", ".idx"));
         let lines = match read_index(&idx) {
             Err(e) if e.kind() == io::ErrorKind::NotFound => continue,
