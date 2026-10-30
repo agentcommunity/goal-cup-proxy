@@ -138,7 +138,9 @@ fn listing(t: &Tally) -> String {
 fn only_spans_changed(input: &[u8], out: &Masked) -> bool {
     let mut set = vec![false; input.len()];
     for s in &out.spans {
-        set[s.start..s.start + s.len].iter_mut().for_each(|b| *b = true);
+        set[s.start..s.start + s.len]
+            .iter_mut()
+            .for_each(|b| *b = true);
     }
     out.bytes.len() == input.len()
         && (0..input.len()).all(|i| {
@@ -227,7 +229,10 @@ fn the_corpus_gets_spans_only_where_listed() {
             }
         }
     }
-    assert!(blob_count >= 37, "the Codex blobs went missing: {blob_count}");
+    assert!(
+        blob_count >= 37,
+        "the Codex blobs went missing: {blob_count}"
+    );
     assert!(
         outside == tally(KNOWN_CATCHES),
         "spans outside the listed catches; the corpus now gives:\n{}",
@@ -378,7 +383,11 @@ fn the_billing_header_in_a_system_prompt_is_masked() -> Res {
     let whole = m.mask_whole(input);
     let at = body.find(header).ok_or("the header in the body")?;
     let value = at + header.find(':').ok_or("a colon")? + 2;
-    assert!(whole.bytes[value..at + header.len()].iter().all(|&b| b == b'*'));
+    assert!(
+        whole.bytes[value..at + header.len()]
+            .iter()
+            .all(|&b| b == b'*')
+    );
     assert!(
         whole
             .spans
@@ -458,7 +467,10 @@ fn the_generated_codex_request_keeps_its_blobs() {
     assert!(req.bytes.len() >= 1_500_000 && req.dashed >= 3 && req.glued >= 50);
     let cuts: Vec<usize> = (1..=req.bytes.len() / 16384).map(|i| i * 16384).collect();
     let got = stream_in(&m, StreamKind::HttpReq, &req.bytes, &cuts);
-    assert!(got == m.mask_whole(&req.bytes), "the stream equals the whole");
+    assert!(
+        got == m.mask_whole(&req.bytes),
+        "the stream equals the whole"
+    );
     assert!(only_spans_changed(&req.bytes, &got));
     let mut kinds: BTreeMap<String, usize> = BTreeMap::new();
     for s in &got.spans {
@@ -466,7 +478,10 @@ fn the_generated_codex_request_keeps_its_blobs() {
         assert!(
             guarded.contains(kind)
                 && req.bytes[s.start - 1] == b'-'
-                && req.blobs.iter().any(|b| b.start <= s.start && s.start + s.len <= b.end),
+                && req
+                    .blobs
+                    .iter()
+                    .any(|b| b.start <= s.start && s.start + s.len <= b.end),
             "a {kind} span outside a blob or not right after a '-'"
         );
         *kinds.entry(kind.clone()).or_default() += 1;
@@ -518,7 +533,10 @@ fn a_pem_key_over_sse_deltas_loses_every_body_byte() -> Res {
         assert!(starred(&whole, r), "a PEM piece survived");
     }
     let block = key[0].start..key[key.len() - 1].end;
-    let (ins, outs) = (sse.bytes.split(|&b| b == b'\n'), whole.bytes.split(|&b| b == b'\n'));
+    let (ins, outs) = (
+        sse.bytes.split(|&b| b == b'\n'),
+        whole.bytes.split(|&b| b == b'\n'),
+    );
     let (mut at, mut inside_block) = (0, 0);
     for (a, b) in ins.zip(outs) {
         let line = at..at + a.len();
@@ -549,12 +567,18 @@ fn a_settings_file_keeps_its_model_and_base_url() -> Res {
     }
     let out: serde_json::Value = serde_json::from_slice(&whole.bytes)?;
     assert_eq!(out["model"], "example-coder-large");
-    assert_eq!(out["providers"]["gateway"]["models"][0], "example-coder-large");
+    assert_eq!(
+        out["providers"]["gateway"]["models"][0],
+        "example-coder-large"
+    );
     assert_eq!(
         out["providers"]["gateway"]["baseURL"],
         "https://gateway.example.test/v1"
     );
-    assert_eq!(out["env"]["OPENAI_BASE_URL"], "https://gateway.example.test/v1");
+    assert_eq!(
+        out["env"]["OPENAI_BASE_URL"],
+        "https://gateway.example.test/v1"
+    );
     assert_eq!(
         out["providers"]["openai"]["base_url"],
         "https://api.example.test/v1"
