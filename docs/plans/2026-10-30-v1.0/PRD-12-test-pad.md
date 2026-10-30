@@ -1411,3 +1411,10 @@ taken; "rejected" says why. Fixes for other files are made by those files' owner
   file against the rows above. Whether the row itself rises stays the open owner question logged at
   12:53Z; no new one.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-11 slice 2 (merge b9fa50f8)
+
+- A pad row run on an integration build between b9fa50f8 and PRD-11's hosts and launch merges is not
+  evidence: `decide` tunnels every host (zero decrypted requests), no hint or `local_model` note, no
+  home lock, no version, and `update_off` is not written. The 1a micro rungs wait for those two merges
+  plus S8 `watchdog::run` and PRD-10's `start`.

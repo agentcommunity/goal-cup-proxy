@@ -1251,3 +1251,28 @@ kept and now cites BUILD-PROMPT section 5, since B3 no longer carries it.
   toward its row). The end-of-build report lists PRD-12's size against its row; whether the row rises
   is the owner question already open in the pad log (12:53Z).
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-11 slice 2 (merge b9fa50f8)
+
+- `gate fast: PASS in 94s` on b9fa50f8. Before the merge the lane was green in build boxes: at
+  2ed4bb82 `fmt`, build, `clippy -D warnings` and 15 of 15 connector tests; after the review fixes at
+  111db2ed `fmt`, `clippy` and the 15 connector tests. Reviewers A and B each ran fmt, clippy and the
+  connector tests green in a box. Linux only.
+- **S3 is on integration as a skeleton** (PRD-11 note lists the stubs). Unblocked by its shape: PRD-02
+  `watchdog::run`, PRD-03 slice 2, PRD-04's next slice, PRD-05's `MaskRule` switch, PRD-10's
+  `From<Host>`. Real behaviour (host decisions, hints, lock, version, settings) comes with PRD-11's next
+  slice, three parallel tasks (`hosts.rs`, `hints.rs`, `launch.rs`, one test each). The core slice's
+  "launch plans for Claude Code and Codex", the 1a micro rungs and PRD-17's `lessons_hosts.rs` and
+  `lessons_launch.rs` wait for it; a run before it tunnels every host and is not evidence.
+- **Size report, PRD-11** (`wc -l` at b9fa50f8, row "Connector code (PRD-11)", 800 src and 400
+  tests): src 1,149 (`mod.rs` 290, `schema.rs` 446, `hosts.rs` 229, `launch.rs` 136, `builtin.rs` 27,
+  `hints.rs` 21), 144% of the row with three files still stubs; tests 384 (`connector_builtin.rs` 195,
+  `connector_launch.rs` 147, `connector_no_model_address.rs` 42), 96% of the row. The merge passed the
+  row by more than 10% without a decision line; the replan's decision (PRD-11 note) sets the ceiling to
+  1,510 src and 620 tests with per-file ceilings and named cuts. That is 710 src and 220 tests over the
+  row, on top of PRD-04's projected 22% and PRD-10's files over their estimates: the end-of-build report
+  gives the Rust totals per row against about 18,100 src and at most about 14,200 tests.
+- **Open nits** F5b, F1b, B12 and B13 go to PRD-11's next slice (launch task); acceptance lists them as
+  known if they are still open at the end. B7 (one pattern check) is in the same slice.
+- All commits in d8922216..b9fa50f8 carry both trailer lines.
+- No locked ledger item is touched and no owner question comes from this slice.

@@ -1026,3 +1026,12 @@ links and dropped the signing claim from ARCHITECTURE section 10 (fix bdcea297, 
   line 394) or the script's skip line, not from the script header. The header (lines 14-15) does not
   yet say that a skipped usage bucket keeps its test objects until a run without `--older-than`
   (PRD-07 note, review A-N1). The usage skip rule is now plain `403` or `404`.
+
+### 2026-10-30, replan after PRD-11 slice 2 (merge b9fa50f8)
+
+- **`docs/CONNECTOR-SCHEMA.md`** can be written from `crates/goalcup/src/connector/schema.rs` after
+  PRD-11's next merge, which changes three rules: `no_prompts` and `update_off` files under `{home}`
+  only (F1b); a `.jsonc` file read as JSON with comments; `"true"` and `"false"` written as booleans.
+  Also from the PRD-11 note of b9fa50f8: a pattern ending in `**` is refused (PRD-04's check); a load
+  error names the file and the line or key, never a value; built-in connectors are one TOML file plus
+  one line in `builtin.rs`.

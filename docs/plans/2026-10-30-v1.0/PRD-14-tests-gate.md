@@ -785,3 +785,12 @@ PRDs they touch and the code. Where two fixes disagree, the ledger and the later
   slice reads `<sha>:pad-rows.jsonl`, `release.sh tag` runs it from a checkout at `<commit>`, or it
   judges another commit's rows. No change to the release steps once B3 lands.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-11 slice 2 (merge b9fa50f8)
+
+- **Test budget:** the replan decision sets PRD-11's connector tests ceiling to 620 (row 400; PRD-11
+  note), with `connector_hosts.rs` at 90 because the N1 to N6 host cases live only in PRD-17's
+  `lessons_hosts.rs`.
+- `rule_code.rs`: `src/connector/builtin.rs` stays its one allowed file. It remains the hand-written
+  list (no `build.rs`); if PRD-11's third slice uses a macro with `concat!`, the ids are still string
+  literals in that file only.
