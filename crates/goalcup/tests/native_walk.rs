@@ -25,15 +25,8 @@ fn rels(found: &[Found]) -> Vec<PathBuf> {
 }
 
 fn events(calls: &goalcup::pipeline::Calls) -> Vec<Value> {
-    let all = calls.all().into_iter();
-    all.filter_map(|c| {
-        if let Call::Event(v) = c {
-            Some(v)
-        } else {
-            None
-        }
-    })
-    .collect()
+    let ev = |c: Call| if let Call::Event(v) = c { Some(v) } else { None };
+    calls.all().into_iter().filter_map(ev).collect()
 }
 
 #[test]

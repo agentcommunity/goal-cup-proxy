@@ -44,13 +44,8 @@ struct Pass<'a> {
 impl Walker {
     /// One full walk. A root that is not there (not made yet, say) is skipped silently.
     pub fn pass(&mut self, rec: &Recorder, rows: &[Row]) -> Walked {
-        let (noted, out) = (&mut self.noted, Walked::default());
-        let mut p = Pass {
-            rec,
-            rows,
-            noted,
-            out,
-        };
+        let noted = &mut self.noted;
+        let mut p = Pass { rec, rows, noted, out: Walked::default() };
         for (i, row) in rows.iter().enumerate() {
             if rows[..i].iter().any(|r| r.root == row.root) {
                 continue;
@@ -91,6 +86,9 @@ impl Pass<'_> {
             };
             match (stat.kind, hit, enter) {
                 // Nested roots reach a file twice; only the walk of its own row's root takes it.
+                // Stated limit: a nested root on another device holding a file that first-matches
+                // the outer row is taken by no row (the outer walk stops at the device with a
+                // `native_other_device` note naming the outer row).
                 (Kind::File, Some((row, r)), _) if rows[row].root == root => {
                     let rel = r.to_path_buf();
                     self.out.found.push(Found { row, rel, stat });

@@ -171,7 +171,7 @@ impl Tail {
         let mut left = slice;
         for id in due {
             if left == 0 || rec.room() == 0 {
-                return if left == 0 { Stop::Slice } else { Stop::Room };
+                return stop(left);
             }
             let Some(e) = self.files.get_mut(&id) else {
                 continue;
@@ -191,12 +191,13 @@ impl Tail {
         Stop::Done
     }
 
-    /// Ends every open stream (section 8 steps 4 and 5). `cut`: the seal's time guard ran out, and
-    /// a changed snapshot not copied yet is cut too, on a stream of its own.
+    /// Ends every open stream (section 8 steps 4 and 5). A changed snapshot not copied whole (never
+    /// opened, say) gets a stream of its own, so its loss is named. `cut`: the seal's time guard ran
+    /// out, so unread bytes are `cut_at_seal`, else `source_changed`.
     pub fn close(self, rec: &Recorder, cut: bool) -> Closed {
         let mut c = Closed::default();
         for (id, mut e) in self.files {
-            let uncopied = cut && e.snap && e.copy.is_none() && e.done != Some(e.stat);
+            let uncopied = e.snap && e.copy.is_none() && e.done != Some(e.stat);
             if uncopied {
                 (e.copy, e.off) = (Some(e.stat), 0);
                 e.h = Some(open_snapshot(rec, &id, &e.stat));
@@ -240,7 +241,7 @@ fn read_one(rec: &Recorder, id: &str, e: &mut Entry, left: &mut u64) -> io::Resu
     while e.off < to {
         let n = rec.room().min(256 << 10).min(to - e.off).min(*left);
         if n == 0 {
-            return Ok(Some(if *left == 0 { Stop::Slice } else { Stop::Room }));
+            return Ok(Some(stop(*left)));
         }
         let mut buf = vec![0; n as usize];
         let t = rec.now();
@@ -276,12 +277,13 @@ fn read_one(rec: &Recorder, id: &str, e: &mut Entry, left: &mut u64) -> io::Resu
 }
 
 /// Ends a stream; seen bytes left unread get a GAP first, `exact` at the seal and a lower bound
-/// when the file changed (sections 4 and 8). A torn snapshot copy needs none. Returns the unread.
+/// when the file changed (sections 4 and 8). A torn snapshot copy needs none before the seal, where
+/// a later copy follows. Returns the unread.
 fn end(rec: &Recorder, mut h: StreamHandle, e: &Entry, reason: EndReason, exact: bool) -> u64 {
     let n = want(e).saturating_sub(e.off);
     if n > 0 && reason == CutAtSeal {
         h.gap(GapReason::CutAtSeal, e.seen_at, Some(n), None);
-    } else if n > 0 && !e.snap {
+    } else if n > 0 && (exact || !e.snap) {
         let tail = Some(json!({"unread_at_least": n}));
         let lost = exact.then_some(n);
         h.gap(GapReason::SourceChanged, e.seen_at, lost, tail);
@@ -301,6 +303,11 @@ fn open_snapshot(rec: &Recorder, id: &str, st: &Stat) -> StreamHandle {
     let fid = fid_hex(st.fid());
     let meta = json!({"path": id, "form": "snapshot", "size": st.size, "mtime_ns": st.mtime_ns, "fid": fid});
     rec.open(StreamKind::Snapshot, 0, 0, 0, OpenFlags::NONE, meta)
+}
+
+/// Why a read stopped short: the slice is used up, else the room.
+fn stop(left: u64) -> Stop {
+    if left == 0 { Stop::Slice } else { Stop::Room }
 }
 
 /// The size a read goes to: the copy's for a snapshot copy, else the last seen.

@@ -181,6 +181,11 @@ fn a_file_under_a_folder_the_walk_could_not_list_is_not_gone() {
 
 #[test]
 fn a_file_unreadable_to_the_seal_gives_one_open_one_gap_and_one_end() {
+    unreadable_to_the_seal(false);
+    unreadable_to_the_seal(true);
+}
+
+fn unreadable_to_the_seal(snapshot: bool) {
     // A 300-byte name fails every open with ENAMETOOLONG, whoever runs the test.
     let mut t = T::new(UNIX_EPOCH);
     let name = "n".repeat(300);
@@ -196,7 +201,7 @@ fn a_file_unreadable_to_the_seal_gives_one_open_one_gap_and_one_end() {
     for _ in 0..2 {
         let (root, rel) = (t.dir.path(), Path::new(&name));
         t.tail
-            .settle(&t.rec, "row:long".into(), root, rel, st, false);
+            .settle(&t.rec, "row:long".into(), root, rel, st, snapshot);
         t.tail.sweep(&t.rec, &[]);
         t.read(Duration::ZERO);
     }
@@ -204,20 +209,15 @@ fn a_file_unreadable_to_the_seal_gives_one_open_one_gap_and_one_end() {
         rec, calls, tail, ..
     } = t;
     let closed = tail.close(&rec, false);
-    assert_eq!((closed.streams, closed.cut_files), (1, 0));
+    assert_eq!((closed.streams, closed.cut_files), (u64::from(!snapshot), 0));
     let c = &calls;
-    let notes: Vec<Value> = c
-        .all()
-        .into_iter()
-        .filter_map(|c| match c {
-            Call::Event(v) if v["what"] == "native_unreadable" => Some(v),
-            _ => None,
-        })
-        .collect();
+    let ev = |c: Call| if let Call::Event(v) = c { Some(v) } else { None };
+    let notes: Vec<Value> = c.all().into_iter().filter_map(ev).collect();
     assert_eq!(notes.len(), 1);
+    assert_eq!(notes[0]["what"], "native_unreadable");
     assert_eq!(notes[0]["errno"], libc::ENAMETOOLONG);
-    let sid = opens(c)[0].0;
-    assert_eq!(opens(c).len(), 1);
+    let (sid, kind, _) = opens(c)[0].clone();
+    assert_eq!((opens(c).len(), kind == StreamKind::Snapshot), (1, snapshot));
     let tail = Some(json!({"unread_at_least": 10}));
     assert_eq!(lost(c), [(sid, GapReason::SourceChanged, Some(10), tail)]);
     assert_eq!(ends(c), [(sid, EndReason::SourceChanged, 10)]);
