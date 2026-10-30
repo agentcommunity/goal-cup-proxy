@@ -2,16 +2,17 @@
 // (section "PUT /v1/runs/{run_id}/chunks/{offset}"); the steps below follow its order.
 //
 //   1. refuse early, before the body is read (offset, size, headers, the run and entry)
-//   2. a retry of a chunk already stored: answer with the stored ack, body unread (before the
+//   2. a retry of a chunk already stored: answer from the stored chunk, body unread (before the
 //      run state is looked at, so a retry is answered whatever has happened since)
 //   3. the run state: open, the entry not sealed, and nothing past the end of the run
 //   4. offset / prev / first_seq must continue exactly where the entry stands (409 otherwise)
 //   5. stream the body into R2, create-only, with R2 checking the sha256 (422 if wrong); there is
 //      no per-run size limit, a run that crosses each 10 GiB writes one log line instead
-//   6. sign the ack; one atomic database step advances offset/head, records chunk + ack, and adds
-//      the chunk's compressed size to the entry's stored_bytes and one to its chunk_count
-//   7. return the ack and the new position; if this chunk ends at the end the final heartbeat
-//      committed, the server now holds the whole chain and seals the entry (runs.ts trySeal)
+//   6. one atomic database step advances offset/head, records the chunk, and adds the chunk's
+//      compressed size to the entry's stored_bytes and one to its chunk_count
+//   7. answer with the new position {offset, next_seq, head, received_at, sealed}; if this chunk
+//      ends at the end the final heartbeat committed, the server now holds the whole chain and
+//      seals the entry (runs.ts trySeal)
 
 import type { Ctx } from "./context.ts";
 import { type ChunkRecord, type EntryRow, type RunRow, isPastEnd } from "./db.ts";
@@ -42,11 +43,11 @@ export async function putChunk(ctx: Ctx, member: string, runId: string, offsetTe
   const { run, entry } = await requireRun(ctx, member, runId, h.entryId);
 
   // 2. A chunk the server already holds, sent again (a reply was lost): same offset, same length,
-  //    same head -> the stored ack, without touching the body, and `sealed` as the entry stands.
+  //    same head -> the same answer as the first time, without touching the body, and `sealed` as the entry stands.
   const held = offset < entry.offset ? await ctx.db.getChunk(member, runId, entry.entry_id, offset) : null;
   if (held !== null && held.length === h.length && held.head === h.head) return storedAnswer(held, entry.sealed_at !== null);
 
-  // 3. The run state: open (not abandoned, not closed) and the entry not sealed.
+  // 3. The run state: open (not closed) and the entry not sealed.
   requireOpen(ctx, run, entry);
 
   // 3. ...and the end. Once the run is over a chunk is accepted only after the final heartbeat has
@@ -73,9 +74,8 @@ export async function putChunk(ctx: Ctx, member: string, runId: string, offsetTe
   const key = chunkKey(run, entry, offset, h.sha256);
   await storeBody(ctx, request, contentLength, key, h.sha256);
 
-  // 6. The ack, then one atomic step that records everything; 7. the answer.
+  // 6. One atomic step that records everything; 7. the answer.
   const receivedAt = formatTime(ctx.now());
-  const ack = await ctx.signer.signAck(entry.entry_id, h.lastSeq, h.head, receivedAt);
   const chunk: ChunkRecord = {
     entry_id: entry.entry_id,
     offset,
@@ -87,7 +87,6 @@ export async function putChunk(ctx: Ctx, member: string, runId: string, offsetTe
     head: h.head,
     r2_key: key,
     received_at: receivedAt,
-    ack,
   };
   const result = await ctx.db.commitChunk({ member_id: member, run_id: runId, chunk, stored_bytes: contentLength });
   switch (result) {
@@ -96,7 +95,7 @@ export async function putChunk(ctx: Ctx, member: string, runId: string, offsetTe
       return storedAnswer(chunk, await sealIfComplete(ctx, member, runId, entry, h));
     case "conflict": {
       // Someone moved the run between our check and our commit. If that someone was a retry of
-      // this very chunk, its ack is the answer; otherwise goalcup must re-read the position.
+      // this very chunk, answer as for that retry; otherwise goalcup must re-read the position.
       const stored = await ctx.db.getChunk(member, runId, entry.entry_id, offset);
       if (stored !== null && stored.length === h.length && stored.head === h.head) return storedAnswer(stored, await sealIfComplete(ctx, member, runId, entry, h));
       throw conflict("The run moved while this chunk was being stored; read the position again.");
@@ -134,7 +133,7 @@ function goesBeyond(h: ChunkHeaders, final: { seq: number; head: string }): bool
 }
 
 function storedAnswer(c: ChunkRecord, sealed: boolean): Response {
-  return json(200, { ack: c.ack, offset: c.offset + c.length, next_seq: c.last_seq + 1, head: c.head, received_at: c.received_at, sealed });
+  return json(200, { offset: c.offset + c.length, next_seq: c.last_seq + 1, head: c.head, received_at: c.received_at, sealed });
 }
 
 /** traces/{event}/{run_id}/{entry_id}/{offset:016}-{sha256}.zst. The hash is in the name, so a name is only ever those bytes. */

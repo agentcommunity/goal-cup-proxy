@@ -1,11 +1,10 @@
-// Per-request context: parsed configuration, the database, the signer.
+// Per-request context: parsed configuration and the database.
 
 import { CLOSE_AFTER_SECONDS, type Db } from "./db.ts";
 import { LocalDb } from "./db-local.ts";
 import { SupabaseDb } from "./db-supabase.ts";
 import type { Env } from "./env.ts";
 import { ApiError } from "./errors.ts";
-import { Signer } from "./sign.ts";
 import { isTime, versionTriple } from "./util.ts";
 
 export interface Config {
@@ -39,7 +38,6 @@ function minVersion(raw: string | undefined): MinVersion {
 export interface Ctx {
   env: Env;
   db: Db;
-  signer: Signer;
   cfg: Config;
   now: () => Date;
 }
@@ -116,20 +114,6 @@ export function readConfig(env: Env): Config {
   };
 }
 
-let cachedSigner: { seed: string; signer: Signer } | undefined;
-
-async function getSigner(env: Env): Promise<Signer> {
-  if (typeof env.RECEIPT_SIGNING_KEY !== "string") throw misconfigured("RECEIPT_SIGNING_KEY is not set.");
-  if (cachedSigner?.seed === env.RECEIPT_SIGNING_KEY) return cachedSigner.signer;
-  try {
-    const signer = await Signer.fromSeedHex(env.RECEIPT_SIGNING_KEY);
-    cachedSigner = { seed: env.RECEIPT_SIGNING_KEY, signer };
-    return signer;
-  } catch {
-    throw misconfigured("RECEIPT_SIGNING_KEY is not a 64-hex-character Ed25519 seed.");
-  }
-}
-
 export async function getDb(env: Env): Promise<Db> {
   // Production is the default. `local` must be asked for by name.
   const backend = env.DB_BACKEND ?? "supabase";
@@ -151,7 +135,6 @@ export async function getDb(env: Env): Promise<Db> {
 
 export async function makeCtx(env: Env): Promise<Ctx> {
   const cfg = readConfig(env);
-  const signer = await getSigner(env);
   const db = await getDb(env);
-  return { env, db, signer, cfg, now: () => new Date(Math.floor(Date.now() / 1000) * 1000) };
+  return { env, db, cfg, now: () => new Date(Math.floor(Date.now() / 1000) * 1000) };
 }

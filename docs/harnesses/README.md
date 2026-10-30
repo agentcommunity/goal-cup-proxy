@@ -9,7 +9,9 @@ A sheet is also a complete contribution on its own. A harness that does not fit 
 sends its sheet with status `facts only`, and the sheet shows what to build.
 
 The sheets so far: [codex-cli](codex-cli.md) (the worked example), [claude-code-cli](claude-code-cli.md),
-[hermes-cli](hermes-cli.md) and [amp-cli](amp-cli.md). The Amp sheet is a draft that Goal Cup wrote for the
+[hermes-cli](hermes-cli.md), [kilo-cli](kilo-cli.md) and [amp-cli](amp-cli.md). The Kilo sheet's
+section 5 names two rules the 1.0 hint reader must follow (`.jsonc` read as JSON with comments; at
+most one `*` in a file's last component). The Amp sheet is a draft that Goal Cup wrote for the
 Amp team to correct; its connector records a metadata log, not a transcript, as the native leg.
 
 Current research validation evidence and its limits are tracked in the

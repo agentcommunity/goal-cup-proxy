@@ -1,4 +1,4 @@
-// Handlers for the run-level calls: open, continue, receipt, abandon, position, heartbeat, and the
+// Handlers for the run-level calls: open, continue, position, heartbeat, and the
 // seal the server makes by itself. The chunk upload is in chunks.ts. Contract: docs/UPLOAD-API.md.
 
 import type { Auth } from "./auth.ts";
@@ -64,7 +64,7 @@ export async function requireRun(ctx: Ctx, member: string, runId: string, entryI
   return { run, entry: found.entry };
 }
 
-/** 410 unless the run still takes uploads: it is not abandoned, and it has not been over for the close time. */
+/** 410 unless the run still takes uploads: it has not been over for the close time. */
 export function requireAccepting(ctx: Ctx, run: RunRow): void {
   if (run.status === "abandoned") throw closed("This run is abandoned.");
   if (isPastClose(run, ctx.now(), ctx.cfg.closeAfterSeconds)) throw closed("This run is closed.");
@@ -314,72 +314,6 @@ async function requireEmptyGithubRepo(ctx: Ctx, repoUrl: string): Promise<void> 
   throw new ApiError(502, "upstream_error", "GitHub could not check the repository right now.");
 }
 
-// ---- POST /v1/runs/{id}/receipt -----------------------------------------------------------
-
-export async function issueReceipt(ctx: Ctx, member: string, runId: string, request: Request): Promise<Response> {
-  const b = await readJson(request, JSON_BODY_MAX);
-  const entry_id = b.entry_id;
-  if (!isEntryId(entry_id)) throw malformed("entry_id must be e and 16 lowercase hex digits.");
-  const chain_head = hexField(b, "chain_head");
-  const { run, entry } = await requireRun(ctx, member, runId, entry_id);
-  requireOpen(ctx, run, entry);
-
-  if (entry.receipt !== null) {
-    if (entry.receipt.claims.chain_head !== chain_head) throw conflict("This entry already has a receipt for a different chain_head.");
-    return json(200, { start_receipt: entry.receipt });
-  }
-
-  // The entry's own connector facts and session, the run's start and deadline.
-  const receipt = await ctx.signer.signReceipt({
-    entry_id: entry.entry_id,
-    connector_id: entry.connector_id,
-    workspace: entry.workspace,
-    session_id: entry.session_id,
-    started_at: run.official_start,
-    deadline_at: run.deadline_at,
-    manifest_sha256: entry.manifest_sha256,
-    chain_head,
-    connector_dir_sha256: entry.connector_dir_sha256,
-  });
-  const stored = await ctx.db.storeReceipt(member, runId, entry.entry_id, chain_head, receipt);
-  switch (stored.kind) {
-    case "stored":
-    case "existing":
-      return json(200, { start_receipt: stored.receipt });
-    case "conflict":
-      throw conflict("This entry already has a receipt for a different chain_head.");
-    case "closed":
-      throw closed("This run is no longer open.");
-    case "not_found":
-      throw notFound("That entry does not belong to this run.");
-  }
-}
-
-// ---- POST /v1/runs/{id}/abandon -----------------------------------------------------------
-
-export async function abandonRun(ctx: Ctx, member: string, runId: string, request: Request): Promise<Response> {
-  const { run } = await requireRun(ctx, member, runId);
-  const b = await readJson(request, JSON_BODY_MAX);
-  const reason = strField(b, "reason", 4000, true);
-  if ([...reason].length > 500) throw malformed("reason is longer than 500 characters.");
-
-  // A repeat of an abandon whose answer was lost is not an error.
-  if (run.status === "abandoned") return json(200, { status: "abandoned" });
-  if (run.status !== "open") throw closed(`This run is ${run.status}.`);
-
-  const r = await ctx.db.abandonRun(member, runId, reason, formatTime(ctx.now()));
-  switch (r) {
-    case "abandoned":
-      return json(200, { status: "abandoned" });
-    case "has_chunks":
-      throw conflict("Chunks are already stored for this run, so it cannot be abandoned.");
-    case "closed":
-      throw closed("This run is no longer open.");
-    case "not_found":
-      throw notFound("No such run for this credential.");
-  }
-}
-
 // ---- GET /v1/runs/{id}[?entry_id=…] -------------------------------------------------------
 
 export async function getPosition(ctx: Ctx, member: string, runId: string, request: Request): Promise<Response> {
@@ -397,7 +331,6 @@ export async function getPosition(ctx: Ctx, member: string, runId: string, reque
     offset: entry.offset,
     next_seq: entry.next_seq,
     head: entry.head,
-    last_ack: entry.last_ack,
     stop: isPastEnd(run, ctx.now()),
     final: entry.final,
     sealed: entry.sealed_at !== null,
@@ -426,7 +359,7 @@ export async function heartbeat(ctx: Ctx, member: string, runId: string, request
   const model_requests = b.model_requests == null ? null : uintField(b, "model_requests");
   const vitals = countsField(b, runId);
   const { run, entry } = await requireRun(ctx, member, runId, entry_id);
-  // An abandoned or closed run accepts nothing more, a final heartbeat included.
+  // A closed run accepts nothing more, a final heartbeat included.
   requireAccepting(ctx, run);
 
   const result = await ctx.db.recordHeartbeat({

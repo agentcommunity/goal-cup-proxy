@@ -12,7 +12,7 @@ import { REPO_URL, boolField, parseSafeUint, versionTriple } from "../src/util.t
 import { credentialFor, openBody } from "./helpers/client.ts";
 import { inProcess } from "./helpers/inproc.ts";
 
-const baseEnv = { EVENT_ID: "cup", PRACTICE_EVENT_ID: "practice", RECEIPT_SIGNING_KEY: "07".repeat(32), TRACES: {} } as unknown as Env;
+const baseEnv = { EVENT_ID: "cup", PRACTICE_EVENT_ID: "practice", TRACES: {} } as unknown as Env;
 
 /** Run `fn` with console.error captured; returns what was logged. */
 async function captureErrors(fn: () => Promise<unknown>): Promise<string> {
@@ -170,7 +170,7 @@ test("SupabaseDb: unknown credential is null; errors become 502; odd answers bec
   stubFetch(() => new Response('{"message":"boom"}', { status: 500 }));
   await assert.rejects(db.credential("x", "t"), (e) => e instanceof ApiError && e.status === 502);
   stubFetch(() => new Response('"surprise"', { status: 200 }));
-  await assert.rejects(db.abandonRun("m", "r0000000000000000", "why", "2026-11-06T09:00:00Z"), (e) => e instanceof ApiError && e.status === 502);
+  await assert.rejects(db.closeRun("m", "r0000000000000000", "2026-11-06T09:00:00Z"), (e) => e instanceof ApiError && e.status === 502);
   stubFetch(() => {
     throw new TypeError("network down");
   });

@@ -6,11 +6,8 @@
 
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
-import { Signer } from "../src/sign.ts";
-import type { StartReceipt } from "../src/sign.ts";
-import { GENESIS, makeChunk, openBody, sha256, verifyReceipt } from "./helpers/client.ts";
+import { GENESIS, makeChunk, sha256 } from "./helpers/client.ts";
 import { type Opened, T0, WINDOW, lifecycle, rig } from "./helpers/rig.ts";
-import { TEST_SEED } from "./helpers/worker.ts";
 
 // The chunk upload needs the Workers runtime's FixedLengthStream; a pass-through stands in for it
 // here (test/integration.test.ts has the real one).
@@ -21,7 +18,6 @@ g.FixedLengthStream ??= class extends TransformStream<Uint8Array, Uint8Array> {
   }
 };
 
-const publicKey = (await Signer.fromSeedHex(TEST_SEED)).publicKeyHex;
 /** The default run length (RUN_HOURS 168), in seconds. */
 const WEEK = 168 * 3600;
 
@@ -166,11 +162,9 @@ describe("the start window and practice runs", () => {
 });
 
 describe("continue and segments", () => {
-  lifecycle("continue mints segment 1 with its own entry and receipt", async (r) => {
+  lifecycle("continue mints segment 1 with its own entry", async (r) => {
     const alice = await r.cred("alice");
     const a = await r.start(alice, "s1");
-    const first = await r.api.call("POST", `/v1/runs/${a.run_id}/receipt`, { token: alice, json: { entry_id: a.entry_id, chain_head: "b".repeat(64) } });
-    assert.equal(first.status, 200, JSON.stringify(first.body));
     r.after(300);
 
     const c = await r.cont(alice, a.run_id, a.entry_id, "s-two");
@@ -183,21 +177,6 @@ describe("continue and segments", () => {
     assert.equal(c.body.official_start, a.official_start); // the run's clock, not a new one
     assert.equal(c.body.deadline_at, a.deadline_at);
 
-    // Its receipt claims this entry's own connector facts and session, the run's start and deadline.
-    const r1 = await r.api.call("POST", `/v1/runs/${a.run_id}/receipt`, { token: alice, json: { entry_id: c.body.entry_id, chain_head: "d".repeat(64) } });
-    assert.equal(r1.status, 200, JSON.stringify(r1.body));
-    const receipt: StartReceipt = r1.body.start_receipt;
-    assert.deepEqual(receipt.claims, {
-      entry_id: c.body.entry_id, connector_id: "other-cli", workspace: "/w/two", session_id: "s-two",
-      started_at: a.official_start, deadline_at: a.deadline_at, manifest_sha256: "1".repeat(64),
-      chain_head: "d".repeat(64), connector_dir_sha256: "1".repeat(64),
-    });
-    assert.equal(await verifyReceipt(receipt, publicKey), true);
-    // Segment 0 keeps its own.
-    const again = await r.api.call("POST", `/v1/runs/${a.run_id}/receipt`, { token: alice, json: { entry_id: a.entry_id, chain_head: "b".repeat(64) } });
-    assert.deepEqual(again.body.start_receipt, first.body.start_receipt);
-    assert.equal(again.body.start_receipt.claims.workspace, openBody().workspace);
-
     // The position answers the current entry, or the one asked for.
     const now = await r.get(alice, a.run_id);
     assert.equal(now.body.entry_id, c.body.entry_id);
@@ -207,7 +186,7 @@ describe("continue and segments", () => {
     assert.equal(old.body.entry_id, a.entry_id);
     assert.equal(old.body.segment, 0);
     assert.deepEqual(Object.keys(old.body).sort(), [
-      "deadline_at", "ends_at", "entry_id", "final", "head", "last_ack", "next_seq", "official_start", "offset", "run_id", "sealed", "segment", "status", "stop",
+      "deadline_at", "ends_at", "entry_id", "final", "head", "next_seq", "official_start", "offset", "run_id", "sealed", "segment", "status", "stop",
     ]);
     assertError(await r.get(alice, a.run_id, "e" + "7".repeat(16)), 404, "not_found");
     assertError(await r.get(alice, a.run_id, "nope"), 400, "malformed");
@@ -300,7 +279,8 @@ describe("continue and segments", () => {
     assert.equal((await r.get(alice, a.run_id)).body.status, "open");
 
     // The entry that was sealed takes no more chain; the run is not its alone.
-    const dead = await r.api.call("POST", `/v1/runs/${a.run_id}/receipt`, { token: alice, json: { entry_id: a.entry_id, chain_head: "b".repeat(64) } });
+    const late = makeChunk(a.entry_id, 5, 1, h0, "late");
+    const dead = await r.api.call("PUT", `/v1/runs/${a.run_id}/chunks/10`, { token: alice, body: late.body, headers: { ...late.headers, "content-length": String(late.body.length) } });
     assertError(dead, 410, "closed");
   });
 
@@ -429,7 +409,7 @@ describe("no per-run size limit (ledger R5)", () => {
     const head = sha256(`${a.entry_id}:4`);
     const held = {
       entry_id: a.entry_id, offset: 0, length: 10, sha256: "1".repeat(64), first_seq: 0, last_seq: 4, prev: GENESIS, head, r2_key: "k",
-      received_at: T0, ack: { entry_id: a.entry_id, seq: 4, hash: head, acked_at: T0, server_signature: "s" },
+      received_at: T0,
     };
     assert.equal(await r.db().commitChunk({ member_id: "alice", run_id: a.run_id, chunk: held, stored_bytes: 70 * 1024 ** 3 }), "committed");
 
@@ -491,25 +471,19 @@ describe("facts about the machine and the connection", () => {
     }
   });
 
-  test("open and continue take proxy_version or tracer_version, store it as tracer_version, and refuse two that differ", async () => {
+  test("open and continue take proxy_version, store it as tracer_version, and refuse a body without it", async () => {
     const r = rig({}, T0);
     try {
       const versions = (run: string) => (r.storedRun(run).entries as { tracer_version: string }[]).map((e) => e.tracer_version);
       const alice = await r.cred("alice");
-      const opened = await r.open(alice, "s1", { proxy_version: "0.7.0" });
+      const opened = await r.open(alice, "s1", { proxy_version: "1.0.0" });
       assert.equal(opened.status, 201, JSON.stringify(opened.body));
       const run = opened.body as Opened;
-      assert.deepEqual(versions(run.run_id), ["0.7.0"]);
-      // A continue from an older release says tracer_version; one from this release may say both.
-      const c1 = await r.cont(alice, run.run_id, run.entry_id, "s-two", { tracer_version: "0.6.0" });
+      const c1 = await r.cont(alice, run.run_id, run.entry_id, "s-two", { proxy_version: "1.0.1" });
       assert.equal(c1.status, 201, JSON.stringify(c1.body));
-      assertError(await r.cont(alice, run.run_id, c1.body.entry_id, "s-three", { proxy_version: "0.7.1", tracer_version: "0.7.0" }), 400, "malformed");
-      assertError(await r.cont(alice, run.run_id, c1.body.entry_id, "s-three", { tracer_version: undefined }), 400, "malformed");
-      assertError(await r.cont(alice, run.run_id, c1.body.entry_id, "s-three", { tracer_version: undefined, proxy_version: "x".repeat(65) }), 400, "malformed");
-      const c2 = await r.cont(alice, run.run_id, c1.body.entry_id, "s-three", { proxy_version: "0.7.1", tracer_version: "0.7.1" });
-      assert.equal(c2.status, 201, JSON.stringify(c2.body));
-      assert.deepEqual(versions(run.run_id), ["0.7.0", "0.6.0", "0.7.1"]);
-      assertError(await r.open(await r.cred("bob"), "s4", { proxy_version: "0.7.0", tracer_version: "0.6.0" }), 400, "malformed");
+      assert.deepEqual(versions(run.run_id), ["1.0.0", "1.0.1"]);
+      assertError(await r.cont(alice, run.run_id, c1.body.entry_id, "s-three", { proxy_version: undefined }), 400, "malformed");
+      assertError(await r.cont(alice, run.run_id, c1.body.entry_id, "s-three", { proxy_version: "x".repeat(65) }), 400, "malformed");
       assertError(await r.open(await r.cred("carol"), "s5", { proxy_version: undefined }), 400, "malformed");
     } finally {
       r.stop();
@@ -598,7 +572,6 @@ describe("--dev runs and the minimum goalcup version (D70)", () => {
     const [alice, bob, carol] = [await r.cred("alice"), await r.cred("bob"), await r.cred("carol")];
     r.env.MIN_COMPETITION_VERSION = "0.7.0";
     assertError(await r.open(alice, "s1", { proxy_version: "0.6.1" }), 403, "forbidden");
-    assert.equal((await r.open(alice, "s1", { proxy_version: undefined, tracer_version: "0.6.9" })).status, 403); // the older name counts too
     assertError(await r.open(alice, "s1", { proxy_version: "unknown" }), 403, "forbidden"); // unknown while a minimum is set
     assert.equal((await r.open(alice, "s1", { proxy_version: "0.7.0" })).status, 201);
     assert.equal((await r.open(bob, "s2", { proxy_version: "1.0.0" })).status, 201);

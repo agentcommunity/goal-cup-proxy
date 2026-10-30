@@ -26,7 +26,7 @@ set -eu
 set +x
 umask 077
 
-bucket= index= store= persist=
+bucket= index= store= persist= queried=
 while [ $# -gt 0 ]; do
   case $1 in
     --bucket) bucket=${2:?--bucket needs a bucket name}; shift ;;
@@ -108,7 +108,7 @@ fd = os.open(sys.argv[1], os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
 with os.fdopen(fd, "w") as f:
     f.write("[fetchrun]\n" + "".join(f"{k}={v}\n" for k, v in pairs.items()))
 PY
-  index=$tmp/index.json
+  index=$tmp/index.json queried=$staging
   PGSERVICEFILE="$tmp/pg_service.conf" PGSERVICE=fetchrun \
     psql -X -q -At -v ON_ERROR_STOP=1 -v id="$id" -v staging="$staging" >"$index" <<'SQL'
 BEGIN READ ONLY;
@@ -145,10 +145,10 @@ fi
 
 # 2. Check the index, fetch every object, write each entry. The R2 token, when used, reaches curl in
 # its configuration on stdin; it is never in an argument or the output.
-FETCH_RUN_WORKER_DIR=$worker_dir python3 -I - "$id" "$out" "$tmp" "$bucket" "$index" "$store" "$persist" <<'PY'
+FETCH_RUN_WORKER_DIR=$worker_dir python3 -I - "$id" "$out" "$tmp" "$bucket" "$index" "$store" "$persist" "$queried" <<'PY'
 import hashlib, json, os, re, shutil, subprocess, sys
 
-wanted, out, tmp, bucket, index_path, store, persist = sys.argv[1:8]
+wanted, out, tmp, bucket, index_path, store, persist, queried = sys.argv[1:9]
 GENESIS = "0" * 64
 HEX64 = re.compile(r"^[0-9a-f]{64}$")
 ENTRY = re.compile(r"^e[0-9a-f]{16}$")
@@ -262,7 +262,13 @@ else:
     with open(index_path) as f:
         entries = json.load(f)
 if not isinstance(entries, list) or not entries:
-    sys.exit(f"fetch-run: the index holds no entry for {wanted}")
+    if not queried:
+        sys.exit(f"fetch-run: the index holds no entry for {wanted}")
+    # The query keeps to one side by the bucket name; say which, and how to search the other.
+    side, other, flag = ("staging", "production", "goalcup-traces") if queried == "true" else \
+        ("production", "staging", "goalcup-traces-staging")
+    sys.exit(f"fetch-run: the {side} index (bucket {bucket}) holds no entry for {wanted}; "
+             f"for a {other} run, pass --bucket {flag}")
 for e in entries:
     if not isinstance(e, dict) or not isinstance(e.get("entry_id"), str) or not ENTRY.match(e["entry_id"]):
         sys.exit("fetch-run: the index names a bad entry id")
