@@ -881,3 +881,23 @@ A1 reports it as a stated loss instead of failing on it.
   `{kind, header_prefix}`. The loader already checks the grammar (the `kind`, field and prefix
   patterns) when it builds a `MaskRule`, so a `MaskRule` is valid by construction and `Masker::new`
   does not check it again.
+
+### 2026-10-30, replan after PRD-08 slice 3 (merge 7a995b6e)
+
+- **The joined-delta scan exists** (PRD-08 note). `goalcup-verify secrets` joins streamed text per
+  stream: `delta`, `text` and `partial_json` anywhere, and `content`, `reasoning_content`, `thinking`
+  and `arguments` inside a `delta` object. So this PRD's reliance in section 12 and Risks ("a key the
+  model repeats across deltas is not masked; PRD-08's scan joins deltas and flags it") holds for
+  Responses, Anthropic Messages, Chat Completions (text, reasoning and tool-call arguments) and
+  Gemini (`parts[].text`). A delta key outside these is not joined; a new wire shape is a seam line
+  to PRD-08.
+- **S12 as read:** `shapes.tsv` is compiled into the verifier with `include_str!` from
+  `crates/goalcup/src/mask/shapes.tsv`, so moving or renaming the file breaks the verifier's build;
+  a line that is not kind, guard `0` or `1` and a regex fails every scan test. The guard column is
+  read: a guarded rule's hit after a letter, digit or `_` is `warn` `glued_shape`, except when the
+  bytes just before it are an escape the masker's guard still masks (backslash, `\u`, `\x`, percent,
+  ANSI escape). That list mirrors section 4: a change to the guard's escape cases is a seam line
+  and the same change in PRD-08's `secrets.rs`.
+- **MASK counts by rule** are read from the start event's `mask_rules` (an index with no name shows
+  as `other(n)`). Renaming a kind changes what PRD-12's C3 sees; that stays a seam line, as before.
+- No locked ledger item is touched and no owner question comes from this slice.

@@ -905,3 +905,53 @@ PRD-12 and PRD-17.
   PRD-06's next slice has the uploader take its policy from `Policy::from_env()`; until then
   `gate full` is red and no release can be cut. A plain release build still reads no hook.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-06 slice 2 (merge a98f104c)
+
+- **On integration:** `chunk.rs` (the cut from index lines), `beat.rs` (heartbeat body, `recording`,
+  `take_answer`, the ordinary tick), `tests/upload_chunks.rs` and `tests/upload_beat.rs`. The size
+  amendment's cuts landed: `mod.rs` reads `cli::read_json::<cli::ServerJson>` (the loose parse is
+  closed), and `Bounded` sets the socket timeout to the smaller of the time left and `STALL_TIMEOUT`
+  on each call (BR2-r1 is closed; the 15:58Z probe ends a position call and a PUT handshake at
+  30.0 s). Still no thread: `send.rs`, the final heartbeat order and the thread wiring are slice 3;
+  `prune.rs` and `manual.rs` are slice 4.
+- **BK1 (nit) goes to slice 3, which touches `client.rs` for the sender.** `RustlsConnector::connect`
+  loops `while session.is_handshaking() { session.complete_io(&mut io)?; }`. The deadline is checked
+  only inside `Bounded`'s read and write, and rustls 0.23's `complete_io` returns `Ok` with no I/O
+  when it wants neither (after an authenticated `close_notify` mid-handshake). The loop would then
+  spin for ever and stop the beat or send thread (a never-stop rule). Take the one line: call
+  `io.left()?;` at the top of the loop body, so the same 30 s bounds it. Only a peer holding the
+  server's keys can reach it; no probe and no committed test (ledger B10).
+- **BK2, a rule for slice 4 (`prune.rs`), added to section 7:** delete the part file first and its
+  `.idx` second. Since R1, `chunk::cut` reads a part file with no `.idx` as a part with no lines,
+  which is `Stuck` at a pruned boundary, and nothing can prune it again (rule 1 needs its last index
+  line), so a crash between the two deletes in the other order would leave the entry stuck for good.
+  An `.idx` left without its part is ignored (`part_files` lists part files only) and costs a few
+  KiB; prune does not look for it. No new test: slice 4's prune acceptance case covers the order.
+- **`Policy::from_env` is still not called** at a98f104c (the PRD-14 slice 3 note stands). Slice 3
+  builds the threads, so it takes the policy from `Policy::from_env()` there; until it merges,
+  `gate full` stays red at its hooked-binary line and no release can be cut.
+- **Carry-forward for slice 3** (fixer seam line 16:21Z, all on the sender and thread wiring):
+  - Null mode: build `Durable.point` from the on-disk index and beat with `health(None, ..)`, or
+    `failed` never reaches the server (A4, ledger R7).
+  - The sender reads `now` after a call and before `backoff.fail` (N3).
+  - Answer types keep ignoring unknown fields; no `deny_unknown_fields` (N6).
+  - A recovered seal with 0 off ms needs a seal-reason check once `close_dead_entry` lands (N5).
+  - The live beat's `writer_slow`, `losing`, `failed` and off totals come from `Recorder::live()`,
+    which at a98f104c fills `held_bytes` only (A6; PRD-02 note of this date). The beat code is right;
+    the facts are missing upstream. Slice 3 adds no workaround that reads `status.json` for a live
+    recorder.
+- **Size** (`wc -l` at a98f104c, row "Upload (PRD-06)", 940 src and 1,000 tests). Src files total
+  1,724: `client.rs` 642, `state.rs` 255, `beat.rs` 250, `policy.rs` 232, `chunk.rs` 209, `mod.rs`
+  136. Of those, 176 are inline `#[cfg(test)]` modules (client 115, state 35, mod 26). Without them
+  the src is 1,548, 165% of the row with 6 of 9 files written (was 1,127 at e6bd8a50; the slice
+  added chunk 209 and beat 250 against estimates of 150 and 140 and cut 38 from the first four).
+  With `send.rs` 180, `prune.rs` 50 and `manual.rs` 90 at their estimates, the module projects to
+  about 1,868 (199%). Tests: `upload_chunks.rs` 516, `upload_beat.rs` 375, `upload_backoff.rs` 93,
+  984, plus the 176 inline lines, 1,160 (116% of 1,000) before slices 3 and 4 add any. The 16:21Z
+  decision line (points 5 and 6: the A1 to A3 fixes) covers this merge. For slices 3 and 4: each
+  carries its own decision line; the inline tests in `client.rs`, `state.rs` and `mod.rs` are the
+  first test lines to cut (a case that guards none of ledger B10's list goes, a duplicate of an
+  `upload_*` file goes); a slice 3 or 4 test file over 200 lines needs a reason in its decision line.
+- No locked ledger item is touched and no owner question comes from this slice. Ledger L2 is "cut
+  before you add", not a number; the overshoot goes into the end-of-build size report.

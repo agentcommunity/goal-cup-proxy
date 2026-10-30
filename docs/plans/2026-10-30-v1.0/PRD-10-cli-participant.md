@@ -1411,3 +1411,20 @@ What the pad calls, as merged (PRD-12 note):
   one of this PRD's test list or a PRD-17 row and builds through `cli_common/`; a merge past 1,320
   brings a replan `decision` line.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-11 slice 4, part 1 (merge a96d9f71)
+
+- **`LaunchPlan.log` can now hold two `.profile` rows:** "kept a .profile goalcup did not write" and
+  "could not write .profile: <kind>". They mean `goalcup time-left` may not be found from a login
+  shell in that harness; the slice that wires `plan` into `start` shows them with the other `log`
+  rows (point 6). No shape change.
+- **Acceptance 7 (P11's real-run proof) applies where the connector's `home` sets `HOME`:** today
+  none of the ten connectors on integration; Amp and Droid in PRD-11 slice 5. For the others the
+  login shell reads the participant's own `HOME` and `.profile`.
+- **Two connectors share `program = "opencode"`** (`opencode-cli` with `version = "1."`,
+  `opencode2-cli` with `"2."`). A `VersionMismatch` for `opencode` should name the other id, found
+  by the same `program` in `connector::builtin::CONNECTORS`, so the participant is told which
+  `--harness` to use. No seam change.
+- **B9 is still open:** PRD-11 did not change `write_settings` in this slice; keep the `fill` copy
+  in `cli/setup.rs` until PRD-11's merge that does, and drop it in that same merge (PRD-11 note).
+- No locked ledger item is touched and no owner question comes from this slice.
