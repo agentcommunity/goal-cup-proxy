@@ -93,7 +93,14 @@ fn a_ws_stream_gap_names_its_lost_bytes() {
     e.end(q, EndReason::Complete, 0, Value::Null);
     let up = e.open(StreamKind::WsUp, c, q, json!({"deflate": false}));
     e.data(up, 0, FLAG_FIN, &[b'a'; 1000]);
-    e.gap(up, GapReason::MemoryGuard, 10, 1000, 2 * MIB + 1, json!({"guard": "held_bytes"}));
+    e.gap(
+        up,
+        GapReason::MemoryGuard,
+        10,
+        1000,
+        2 * MIB + 1,
+        json!({"guard": "held_bytes"}),
+    );
     e.end(up, EndReason::Complete, 1000 + 2 * MIB, Value::Null);
     let tail = json!({"up": 3 * MIB, "down": 64, "plain_up": 2 * MIB + 1000, "plain_down": 0});
     e.end(c, EndReason::Complete, 0, tail);

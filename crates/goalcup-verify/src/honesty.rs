@@ -139,7 +139,11 @@ impl Honesty {
                 ..
             } => self.open(*sid, *skind, *conn, &obj(meta)),
             Record::Data { sid, bytes, .. } => {
-                if let Some(&Sub { conn, dir, ws: true }) = self.subs.get(sid)
+                if let Some(&Sub {
+                    conn,
+                    dir,
+                    ws: true,
+                }) = self.subs.get(sid)
                     && let Some(c) = self.conns.get_mut(&conn)
                 {
                     inc(&mut c.acc[dir], bytes.len() as u64);
@@ -408,7 +412,11 @@ impl Honesty {
             "{} streams have over 1 MiB of fail-closed masking ({} bytes in all)",
             n.streams, n.mask_bytes
         );
-        fill(&mut mask, why, json!({"streams": n.streams, "bytes": n.mask_bytes}));
+        fill(
+            &mut mask,
+            why,
+            json!({"streams": n.streams, "bytes": n.mask_bytes}),
+        );
         vec![listed, bytes, mask]
     }
 }
