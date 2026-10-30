@@ -4,8 +4,8 @@
 use bytes::Bytes;
 use goalcup::pipeline::{Call, Recorder};
 use goalcup::proxy::connect::{
-    CLIENT_HELLO_GUARD, First, Hello, NoHead, Refused, RefusalNotes, connect_upstream,
-    first_bytes, peek_client_hello, read_head,
+    CLIENT_HELLO_GUARD, First, Hello, NoHead, RefusalNotes, Refused, connect_upstream, first_bytes,
+    peek_client_hello, read_head,
 };
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -100,7 +100,11 @@ async fn rustls_client_hello_gives_sni_and_alpn() {
     };
     assert_eq!(info.sni.as_deref(), Some("api.openai.com"));
     assert_eq!(info.alpn, vec![b"h2".to_vec(), b"http/1.1".to_vec()]);
-    assert_eq!(&info.bytes[..], &sent[..], "every byte read is kept for replay");
+    assert_eq!(
+        &info.bytes[..],
+        &sent[..],
+        "every byte read is kept for replay"
+    );
 }
 
 #[tokio::test]
@@ -139,7 +143,11 @@ async fn fingerprint_ignores_order_and_grease_and_sees_ciphers() {
         Hello::Parsed(info) => info.fingerprint,
         other => panic!("not parsed: {other:?}"),
     };
-    let (fa, fb, fc) = (fp(parse(&a).await), fp(parse(&b).await), fp(parse(&c).await));
+    let (fa, fb, fc) = (
+        fp(parse(&a).await),
+        fp(parse(&b).await),
+        fp(parse(&c).await),
+    );
     assert_eq!(fa, fb);
     assert_ne!(fa, fc);
 }
@@ -148,10 +156,7 @@ async fn fingerprint_ignores_order_and_grease_and_sees_ciphers() {
 async fn client_hello_past_64_kib_is_too_big_and_keeps_every_byte() {
     // Extensions hold at most 64 KiB, so a long cipher list takes the hello past the guard.
     let suites: Vec<u16> = (0..1_000).map(|i| 0x1301 + i).collect();
-    let sent = hello(
-        &suites,
-        &[sni_ext("api.openai.com"), (21, vec![0; 64_000])],
-    );
+    let sent = hello(&suites, &[sni_ext("api.openai.com"), (21, vec![0; 64_000])]);
     assert!(sent.len() > CLIENT_HELLO_GUARD);
     let mut io = &sent[..];
     let Hello::TooBig(kept) = peek_client_hello(&mut io, Bytes::new()).await else {
@@ -160,7 +165,10 @@ async fn client_hello_past_64_kib_is_too_big_and_keeps_every_byte() {
     assert!(!kept.is_empty() && kept.len() <= CLIENT_HELLO_GUARD);
     let mut replay = kept.to_vec();
     replay.extend_from_slice(io);
-    assert_eq!(replay, sent, "the bytes read plus the unread rest are the whole hello");
+    assert_eq!(
+        replay, sent,
+        "the bytes read plus the unread rest are the whole hello"
+    );
 }
 
 #[tokio::test]
