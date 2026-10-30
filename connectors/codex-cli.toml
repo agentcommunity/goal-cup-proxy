@@ -1,0 +1,28 @@
+# Codex 0.165.0: values checked against the vendor's docs on 30 Oct 2026.
+id = "codex-cli"
+name = "Codex"
+program = "codex"
+args = ["--no-daemon", "-C", "{workspace}"]
+resume = ["resume", "--last"]
+home = { CODEX_HOME = "{home}", CODEX_SQLITE_HOME = "{home}" }
+ca_env = ["CODEX_CA_CERTIFICATE"]
+refuse_if_set = [{ file = "{home}/.env", keys = ["HTTPS_PROXY", "https_proxy", "ALL_PROXY", "all_proxy", "NO_PROXY", "no_proxy", "SSL_CERT_FILE", "NODE_EXTRA_CA_CERTS"] }]
+host_hints = [{ file = "{home}/config.toml", key = "model_providers.*.base_url" }, { file = "{home}/config.toml", key = "openai_base_url" }]
+hint_env = ["OPENAI_BASE_URL"]
+secret_files = ["{home}/auth.json", "{home}/.env"]
+native = [
+  { name = "sessions", root = "{home}/sessions", pattern = "**/rollout-*.jsonl" },
+  { name = "state", root = "{home}", pattern = "*.sqlite*", form = "final" },
+]
+no_prompts = [
+  { file = "{home}/config.toml", key = "approval_policy", value = "never" },
+  { file = "{home}/config.toml", key = "sandbox_mode", value = "danger-full-access" },
+]
+update_off = [{ file = "{home}/config.toml", key = "check_for_update_on_startup", value = "false" }]
+first_screen = "Codex may ask whether you trust this folder. Choose Yes."
+skills_dir = "{home}/skills"
+mask = [
+  { kind = "codex_installation_id", json_field = "x-codex-installation-id", value = "scalar" },
+  { kind = "codex_safety_identifier", json_field = "safety_identifier", value = "scalar" },
+  { kind = "codex_turn_state", json_field = "x-codex-turn-state", value = "scalar" },
+]
