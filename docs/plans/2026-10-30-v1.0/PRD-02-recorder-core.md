@@ -1312,3 +1312,18 @@ to another file are made by that file's owner.
   COUNT) before the call. The rule holds after the core slice too: a path or host holding a secret
   shape is still masked. PRD-02 does not add `meta.masked` itself; PRD-05 owns it.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-10 slice 1 (merge d55030ee)
+
+- **S8 spawn names are on integration:** the watchdog spawns `goalcup recorder` and `goalcup recorder
+  --null` from `goalcup::cli::RECORDER_SUBCOMMAND` and `goalcup::cli::NULL_FLAG`, never from string
+  literals. `main.rs` dispatches the hidden command to the scaffold's `pipeline::run_recorder(null) ->
+  ExitCode`; keep that signature.
+- **S11 is on integration** (`goalcup::cli::log::{line, Fact, Host}`). Use `Fact::Io(kind)` for a write
+  error before exit 74 (EIO, ENOSPC, EMFILE), `Fact::Exit` for a child's exit, `Fact::Path` only for
+  paths goalcup built, and `Fact::Word` for causes. The panic hook writes file, line and fixed text; the
+  panic payload never goes into a `Fact`. `line` never creates a folder: create the entry folder
+  before the first boot line, or that line is lost.
+- `cli::home()` returns `Result<PathBuf, &'static str>` and refuses with no absolute home; code that
+  needs the home takes it from the start facts or that call, never from the raw variable.
+- No locked ledger item is touched and no owner question comes from this slice.
