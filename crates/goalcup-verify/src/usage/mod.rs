@@ -12,7 +12,7 @@ mod shapes;
 mod sse;
 mod wire;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::ffi::OsString;
 use std::process::ExitCode;
 
@@ -242,6 +242,11 @@ pub struct CallTable {
     pub native_form: NativeForm,
     /// Calls that fell back to the time join.
     pub joined_by_time: u64,
+    /// Codex `token_count` repeats skipped (no larger running total; PRD-09 section 4).
+    pub repeats_skipped: u64,
+    /// Child rollout lines skipped as copied parent records (timed before the child's own
+    /// `session_meta`).
+    pub copied_skipped: u64,
 }
 
 impl Default for CallTable {
@@ -254,6 +259,8 @@ impl Default for CallTable {
             reason: Some(Reason::NoReader),
             native_form: NativeForm::None,
             joined_by_time: 0,
+            repeats_skipped: 0,
+            copied_skipped: 0,
         }
     }
 }
@@ -375,7 +382,7 @@ impl Calls {
         let (mut rows, replies) = self.wire.finish(&self.ctx);
         let ok = |r: &CallRow| r.kind == Kind::Call && r.outcome == Outcome::Ok;
         let c = self.ctx.connector.as_deref();
-        if !hints::has_reader(c) {
+        let Some((per_thread, by_id)) = hints::join_of(c) else {
             for r in rows.iter_mut().filter(|r| r.kind == Kind::Call) {
                 r.join = Some(Join::WireOnly);
             }
@@ -383,15 +390,20 @@ impl Calls {
                 rows,
                 ..CallTable::default()
             };
-        }
-        let leg = self.native.finish(&self.ctx);
-        let mut nat: Vec<(CallRow, Option<String>)> = leg.rows.into_iter().zip(leg.ids).collect();
+        };
+        let leg = self.native.finish();
+        let mut nat = leg.rows;
         nat.sort_by(|a, b| (&a.0.path, a.0.wall_end).cmp(&(&b.0.path, b.0.wall_end)));
         let (mut pair, mut taken) = (vec![None; nat.len()], vec![false; rows.len()]);
-        let (by_id, per_thread) = (hints::by_id(c), hints::wire_hint(c));
+        // By reply id: each native `requestId` takes the first unmatched ok wire call with it.
+        let mut by_reply: HashMap<&str, Vec<usize>> = HashMap::new();
+        for w in (0..rows.len()).rev().filter(|&w| by_id && ok(&rows[w])) {
+            if let Some(id) = replies[w].as_deref() {
+                by_reply.entry(id).or_default().push(w);
+            }
+        }
         for (n, (_, id)) in nat.iter().enumerate() {
-            let free = |w: &usize| by_id && id.is_some() && !taken[*w] && ok(&rows[*w]);
-            if let Some(w) = (0..rows.len()).find(|w| free(w) && replies[*w] == *id) {
+            if let Some(w) = id.as_deref().and_then(|i| by_reply.get_mut(i)?.pop()) {
                 (taken[w], pair[n]) = (true, Some(w));
             }
         }
@@ -406,14 +418,13 @@ impl Calls {
             let (nr, Some(t)) = (&nat[n].0, nat[n].0.wall_end) else {
                 continue;
             };
-            let fits = |w: &&usize| {
-                let r = &rows[**w];
-                let near = r.wall_end.is_some_and(|e| {
-                    e.saturating_add(120_000_000_000) >= t && e <= t.saturating_add(5_000_000_000)
-                });
-                !taken[**w] && near && (!per_thread || r.thread.is_some() && r.thread == nr.thread)
+            let early = |&w: &usize| rows[w].wall_end.is_none_or(|e| e.saturating_add(120_000_000_000) < t);
+            let near = |&&w: &&usize| rows[w].wall_end <= Some(t.saturating_add(5_000_000_000));
+            let free = |&&w: &&usize| {
+                !taken[w] && (!per_thread || rows[w].thread.is_some() && rows[w].thread == nr.thread)
             };
-            if let Some(&w) = wires.iter().find(fits) {
+            let from = wires.partition_point(early);
+            if let Some(&w) = wires[from..].iter().take_while(near).find(free) {
                 (taken[w], pair[n]) = (true, Some(w));
                 joined_by_time += u64::from(by_id);
             }
@@ -439,27 +450,32 @@ impl Calls {
         }
         let reason = (nat.is_empty() && rows.iter().any(ok)).then_some(Reason::NoNative);
         let mut threads = leg.threads;
-        for id in rows.iter().filter_map(|r| r.thread.as_ref()) {
-            if !threads.iter().any(|t| &t.id == id) {
-                threads.push(Thread {
-                    reason,
-                    ..Thread::new(id.clone())
-                });
-            }
+        let mut per: HashMap<&str, (u64, u64)> = HashMap::new();
+        for (id, join) in nat.iter().filter_map(|x| Some((x.0.thread.as_deref()?, x.0.join))) {
+            let e = per.entry(id).or_default();
+            (e.0, e.1) = (e.0 + 1, e.1 + u64::from(join == Some(Join::NativeOnly)));
         }
         for t in &mut threads {
-            let mine = nat.iter().filter(|x| x.0.thread.as_ref() == Some(&t.id));
-            t.native_calls = mine.clone().count() as u64;
-            t.native_only = mine.filter(|x| x.0.join == Some(Join::NativeOnly)).count() as u64;
+            (t.native_calls, t.native_only) = per.get(t.id.as_str()).copied().unwrap_or_default();
+        }
+        let known: HashSet<String> = threads.iter().map(|t| t.id.clone()).collect();
+        let wire_only: BTreeSet<&String> = rows.iter().filter_map(|r| r.thread.as_ref()).collect();
+        for id in wire_only.into_iter().filter(|id| !known.contains(*id)) {
+            threads.push(Thread {
+                reason,
+                ..Thread::new(id)
+            });
         }
         rows.extend(nat.into_iter().map(|x| x.0));
         CallTable {
             rows,
             threads,
-            children: leg.children.filter(|_| leg.read),
+            children: leg.children,
             reason,
             native_form: reason.map_or(NativeForm::PerCall, |_| NativeForm::None),
             joined_by_time,
+            repeats_skipped: leg.repeats_skipped,
+            copied_skipped: leg.copied_skipped,
         }
     }
 }

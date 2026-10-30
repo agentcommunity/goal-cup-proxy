@@ -1,25 +1,32 @@
 //! The native leg (PRD-09 sections 4 and 5): Codex rollouts and Claude Code transcripts read back
 //! out of the record's `native` streams, Claude Code agent labels out of its `snapshot` streams.
 //! Bytes are deduped by (path, gen, offset) across boots (PRD-01 section 15 point 5); only lines
-//! that end in a newline are parsed, and a hole drops the partial line. Only ids, labels, model
-//! names and numbers leave this file. Vendor pages: Codex `protocol.rs` at rust-v0.165.0; Claude
-//! Code "Explore the .claude directory" and "Subagents".
+//! that end in a newline are parsed, and a hole drops the partial line. Rows carry their session
+//! file `path` (U1 allows it, but it can name the participant's folders, so section 7 keeps it out
+//! of the output files); otherwise only ids, labels, model names and numbers leave this file.
+//! Vendor pages: Codex `protocol.rs` at rust-v0.165.0; Claude Code "Explore the .claude
+//! directory" and "Subagents".
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use goalcup_format::{Record, StreamKind};
-use serde_json::{Map, Value};
+use serde_json::Value;
 
 use super::hints::{self, Reader};
-use super::shapes::{model_name, safe_code};
+use super::shapes::{extra, less, model_name, safe_code};
 use super::{CallRow, Ctx, Kind, Leg, Outcome, Thread, Tokens};
 
 pub(super) struct NativeLeg {
-    pub(super) rows: Vec<CallRow>,       // one per native call
-    pub(super) ids: Vec<Option<String>>, // same length as rows: Claude Code requestId, else None
-    pub(super) threads: Vec<Thread>,     // every thread read, reason None
-    pub(super) children: Option<BTreeMap<String, Vec<String>>>, // Some when any file was read
-    pub(super) read: bool, // a reader of this connector read at least one session file
+    /// One per native call, with its Claude Code `requestId` (else `None`).
+    pub(super) rows: Vec<(CallRow, Option<String>)>,
+    /// Every thread a file, a spawn or a meta snapshot names; reason `None`.
+    pub(super) threads: Vec<Thread>,
+    /// `Some` when any session file named its thread.
+    pub(super) children: Option<BTreeMap<String, Vec<String>>>,
+    /// Codex `token_count` repeats (no larger running total), skipped.
+    pub(super) repeats_skipped: u64,
+    /// Child rollout lines timed before the child's own `session_meta` (copied parent records).
+    pub(super) copied_skipped: u64,
 }
 
 /// A Claude Code call: its row, usage counts (largest per member) and `requestId`.
@@ -33,7 +40,7 @@ pub(super) struct Native {
     codex: Vec<CallRow>,
     /// Claude Code calls by `message.id`.
     msgs: BTreeMap<String, Msg>,
-    /// Claude Code agent id to its session and the last meta snapshot's `agentType`.
+    /// Claude Code agent id to its session and the last `agentType` a meta snapshot gave.
     agents: BTreeMap<String, (String, Option<String>)>,
 }
 
@@ -43,17 +50,18 @@ enum Src {
     Snap(String, Option<Vec<u8>>),
 }
 
-type Meta = (
-    Option<String>,
-    Option<String>,
-    Option<u32>,
-    Option<String>,
-    Option<u64>,
-);
+/// A Codex `session_meta`: thread id, parent, depth, `agent_path` label and its time.
+struct Meta {
+    id: Option<String>,
+    parent: Option<String>,
+    depth: Option<u32>,
+    label: Option<String>,
+    at: Option<u64>,
+}
 
 /// One generation of a session file: next expected offset, partial line (with the boot of its
-/// first byte), and for Codex the `session_meta` (id, parent, depth, label, time), the latest
-/// `turn_context`, the largest running total and the threads it spawned.
+/// first byte), and for Codex the `session_meta`, the latest `turn_context` model and effort, the
+/// largest running total, the threads it spawned and the lines it skipped.
 #[derive(Default)]
 struct File {
     codex: bool,
@@ -65,6 +73,8 @@ struct File {
     turn: (Option<String>, Option<String>),
     top: Option<u64>,
     spawned: Vec<String>,
+    repeats: u64,
+    copied: u64,
 }
 
 impl Native {
@@ -76,24 +86,20 @@ impl Native {
                 sid, skind, meta, ..
             } => {
                 let m: Value = serde_json::from_slice(meta).unwrap_or(Value::Null);
-                let n = |k: &str| m[k].as_u64().unwrap_or(0);
                 let Some(p) = m["path"].as_str() else { return };
+                let file = (p.to_string(), m["gen"].as_u64().unwrap_or(0));
                 let src = match (skind, hints::reader(ctx.connector.as_deref(), p)) {
                     (StreamKind::Snapshot, Some(Reader::ClaudeMeta)) => {
-                        Src::Snap(p.to_string(), Some(Vec::new()))
+                        Src::Snap(file.0, Some(Vec::new()))
                     }
-                    (
-                        StreamKind::Native,
-                        Some(r @ (Reader::CodexRollout | Reader::ClaudeTranscript)),
-                    ) => {
-                        let (codex, next) = (r == Reader::CodexRollout, n("from"));
+                    (StreamKind::Native, Some(r)) if r != Reader::ClaudeMeta => {
                         let f = File {
-                            codex,
-                            next,
+                            codex: r == Reader::CodexRollout,
+                            next: m["from"].as_u64().unwrap_or(0),
                             ..File::default()
                         };
-                        self.files.entry((p.to_string(), n("gen"))).or_insert(f);
-                        Src::File((p.to_string(), n("gen")))
+                        self.files.entry(file.clone()).or_insert(f);
+                        Src::File(file)
                     }
                     _ => return,
                 };
@@ -110,15 +116,17 @@ impl Native {
                         let Ok(v) = serde_json::from_slice::<Value>(&line) else {
                             continue;
                         };
-                        let mut row =
-                            CallRow::new(Leg::Native, ctx.entry.clone(), boot, Kind::Call);
-                        (row.path, row.outcome, row.whole) =
-                            (Some(file.0.clone()), Outcome::Ok, true);
-                        row.wall_start = v["timestamp"].as_str().and_then(ts);
+                        let at = v["timestamp"].as_str().and_then(ts);
+                        let row = || {
+                            let mut r = CallRow::new(Leg::Native, &ctx.entry, boot, Kind::Call);
+                            (r.path, r.wall_start) = (Some(file.0.clone()), at);
+                            (r.outcome, r.whole) = (Outcome::Ok, true);
+                            r
+                        };
                         if f.codex {
-                            self.codex.extend(f.rollout(row, &v));
+                            self.codex.extend(f.rollout(&v, at, row));
                         } else {
-                            claude(&mut self.msgs, row, &v);
+                            claude(&mut self.msgs, &v, at, row);
                         }
                     }
                 }
@@ -135,85 +143,88 @@ impl Native {
             },
             Record::End { sid, .. } => {
                 if let Some(Src::Snap(path, Some(buf))) = self.streams.remove(&key(sid))
-                    && let Some((id, session)) = agent(&path, ".meta.json")
+                    && let (Some(id), Some(session), _) = claude_thread(&path)
                 {
+                    // A later snapshot that gives no `agentType` keeps the earlier one.
                     let v = serde_json::from_slice(&buf).unwrap_or(Value::Null);
-                    self.agents.insert(id, (session, id_at(&v, "/agentType")));
+                    let a = self.agents.entry(id).or_insert((session, None));
+                    a.1 = id_at(&v, "/agentType").or(a.1.take());
                 }
             }
             _ => {}
         }
     }
 
-    /// The native rows (in time order), threads and children of the entry.
-    pub(super) fn finish(self, _ctx: &Ctx) -> NativeLeg {
+    /// The native rows, threads and children of the entry. A file that names no thread keeps its
+    /// rows, with `thread` `None`, so no native call leaves the count.
+    pub(super) fn finish(self) -> NativeLeg {
         let (mut owner, mut threads) = (HashMap::new(), BTreeMap::new());
         let mut kids: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+        let (mut repeats_skipped, mut copied_skipped) = (0, 0);
+        let read = |id: &String| Thread {
+            reason: None,
+            ..Thread::new(id)
+        };
         for ((path, _), f) in self.files {
-            let (id, parent, depth, label) = match (f.codex, f.meta) {
-                (true, Some((id, p, d, l, _))) => (id.or_else(|| file_uuid(&path)), p, d, l),
-                (true, None) => (file_uuid(&path), None, None, None),
-                _ => match agent(&path, ".jsonl") {
-                    Some((id, s)) => (Some(id), Some(s), Some(1), None),
-                    None => (session_of(&path), None, None, None),
-                },
+            repeats_skipped += f.repeats;
+            copied_skipped += f.copied;
+            let (id, parent, depth, label) = match f.meta {
+                Some(m) => {
+                    let depth = m.depth.or(m.parent.is_none().then_some(0));
+                    (m.id.or_else(|| file_uuid(&path)), m.parent, depth, m.label)
+                }
+                None if f.codex => (file_uuid(&path), None, None, None),
+                None => {
+                    let (id, parent, depth) = claude_thread(&path);
+                    (id, parent, depth, None)
+                }
             };
             let Some(id) = id else { continue };
             if let Some(p) = &parent {
                 kids.entry(p.clone()).or_default().insert(id.clone());
             }
             kids.entry(id.clone()).or_default().extend(f.spawned);
-            let new = Thread {
-                reason: None,
-                ..Thread::new(&id)
-            };
-            let t = threads.entry(id.clone()).or_insert(new);
+            let t = threads.entry(id.clone()).or_insert_with(|| read(&id));
             (t.parent, t.depth) = (t.parent.take().or(parent.clone()), t.depth.or(depth));
             t.label = t.label.take().or(label);
             owner.insert(path, (id, parent));
         }
+        for (id, (session, label)) in self.agents {
+            let t = threads.entry(id.clone()).or_insert_with(|| read(&id));
+            (t.label, t.depth) = (label.or(t.label.take()), t.depth.or(Some(1)));
+            kids.entry(session).or_default().insert(id);
+        }
+        // A thread only a spawn or a meta snapshot names still gets its entry and parent.
+        for (p, c) in kids.iter().flat_map(|(p, cs)| cs.iter().map(move |c| (p, c))) {
+            let t = threads.entry(c.clone()).or_insert_with(|| read(c));
+            t.parent.get_or_insert_with(|| p.clone());
+        }
         // A model of `<synthetic>` or an all-zero usage is not a call.
         let claude = self.msgs.into_values().filter_map(|(r, c, rid)| {
             let real = r.model.as_deref() != Some("<synthetic>") && c.values().any(|&n| n > 0);
-            let (tokens, extra) = split(c, CLAUDE, 0);
+            let (tokens, extra) = split(c, CLAUDE);
             real.then_some((CallRow { tokens, extra, ..r }, rid))
         });
         let all = self.codex.into_iter().map(|r| (r, None)).chain(claude);
-        let mut rows: Vec<_> = all
-            .filter_map(|(r, rid)| {
-                let (id, parent) = owner.get(r.path.as_deref()?)?.clone();
-                threads.get_mut(&id)?.native_calls += 1;
-                let at = r.wall_start;
-                Some((
-                    CallRow {
-                        thread: Some(id),
-                        parent,
-                        wall_end: at,
-                        ..r
-                    },
-                    rid,
-                ))
-            })
-            .collect();
-        for (id, (session, label)) in self.agents {
-            if let Some(t) = threads.get_mut(&id) {
-                t.label = label.or(t.label.take());
-            }
-            kids.entry(session).or_default().insert(id);
-        }
+        let rows = all.map(|(r, rid)| {
+            let (thread, parent) = r.path.as_ref().and_then(|p| owner.get(p)).cloned().unzip();
+            let (parent, wall_end) = (parent.flatten(), r.wall_start);
+            let r = CallRow {
+                thread,
+                parent,
+                wall_end,
+                ..r
+            };
+            (r, rid)
+        });
         kids.retain(|_, v| !v.is_empty());
-        rows.sort_by_key(|(r, _)| r.wall_start);
-        let (rows, ids) = rows.into_iter().unzip();
-        let read = !owner.is_empty();
         let list = |(k, v): (String, BTreeSet<String>)| (k, v.into_iter().collect());
-        let children = read.then(|| kids.into_iter().map(list).collect());
-        let threads = threads.into_values().collect();
         NativeLeg {
-            rows,
-            ids,
-            threads,
-            children,
-            read,
+            rows: rows.collect(),
+            children: (!owner.is_empty()).then(|| kids.into_iter().map(list).collect()),
+            threads: threads.into_values().collect(),
+            repeats_skipped,
+            copied_skipped,
         }
     }
 }
@@ -255,27 +266,30 @@ impl File {
         out
     }
 
-    /// One Codex `RolloutLine` (`timestamp`, `type`, `payload`); `Some` for a call. In a child
-    /// file, lines timed before its own `session_meta` are copied parent records and are skipped.
-    fn rollout(&mut self, row: CallRow, v: &Value) -> Option<CallRow> {
-        let (p, at) = (&v["payload"], row.wall_start);
-        let child = self.meta.as_ref().filter(|m| m.1.is_some());
+    /// One Codex `RolloutLine` (`timestamp`, `type`, `payload`) timed `at`; `Some` for a call. In
+    /// a child file, lines timed before its own `session_meta` are copied parent records: skipped
+    /// and counted.
+    fn rollout(
+        &mut self,
+        v: &Value,
+        at: Option<u64>,
+        row: impl FnOnce() -> CallRow,
+    ) -> Option<CallRow> {
+        let p = &v["payload"];
+        let copied = self.meta.as_ref().is_some_and(|m| m.parent.is_some() && at < m.at);
         match (v["type"].as_str()?, p["type"].as_str()) {
             ("session_meta", _) if self.meta.is_none() => {
                 let s = |k: &str| id_at(p, &format!("/source/subagent/thread_spawn/{k}"));
                 let depth = p.pointer("/source/subagent/thread_spawn/depth");
-                let depth = depth
-                    .and_then(Value::as_u64)
-                    .and_then(|d| u32::try_from(d).ok());
-                self.meta = Some((
-                    id_at(p, "/id"),
-                    s("parent_thread_id"),
-                    depth,
-                    s("agent_path"),
+                self.meta = Some(Meta {
+                    id: id_at(p, "/id"),
+                    parent: s("parent_thread_id"),
+                    depth: depth.and_then(Value::as_u64).and_then(|d| d.try_into().ok()),
+                    label: s("agent_path"),
                     at,
-                ));
+                });
             }
-            _ if child.is_some_and(|m| at < m.4) => {}
+            _ if copied => self.copied += 1,
             ("turn_context", _) => {
                 self.turn = (model_name(p.get("model")), safe_code(p.get("effort")))
             }
@@ -283,18 +297,21 @@ impl File {
                 let total = p.pointer("/info/total_token_usage/total_tokens")?.as_u64();
                 let last = p.pointer("/info/last_token_usage")?.as_object()?;
                 // A repeat with the same or a smaller running total is no new call.
-                if total > self.top {
-                    self.top = total;
-                    let (model, effort) = self.turn.clone();
-                    let (tokens, extra) = split(counts(last), CODEX, 1);
-                    return Some(CallRow {
-                        model,
-                        effort,
-                        tokens,
-                        extra,
-                        ..row
-                    });
+                if total <= self.top {
+                    self.repeats += 1;
+                    return None;
                 }
+                self.top = total;
+                let (model, effort) = self.turn.clone();
+                let (mut tokens, extra) = split(extra(last, &[]), CODEX);
+                tokens.input = less(tokens.input, tokens.cached);
+                return Some(CallRow {
+                    model,
+                    effort,
+                    tokens,
+                    extra,
+                    ..row()
+                });
             }
             ("event_msg", Some("item_completed")) => {
                 let item = &p["item"];
@@ -310,33 +327,26 @@ impl File {
     }
 }
 
-/// One Claude Code transcript line: an `assistant` line is part of the call its `message.id`
-/// names, whose usage it repeats; per member, the largest value wins.
-fn claude(msgs: &mut BTreeMap<String, Msg>, row: CallRow, v: &Value) -> Option<()> {
+/// One Claude Code transcript line timed `at`: an `assistant` line is part of the call its
+/// `message.id` names, whose usage it repeats; per member, the largest value wins.
+fn claude(
+    msgs: &mut BTreeMap<String, Msg>,
+    v: &Value,
+    at: Option<u64>,
+    row: impl FnOnce() -> CallRow,
+) -> Option<()> {
     let m = (v["type"] == "assistant").then_some(&v["message"])?;
-    let c = counts(m["usage"].as_object()?);
-    let (at, rid) = (row.wall_start, id_at(v, "/requestId"));
+    let c = extra(m["usage"].as_object()?, &[]);
     let (r, have, id) = msgs
         .entry(id_at(m, "/id")?)
-        .or_insert((row, BTreeMap::new(), None));
+        .or_insert_with(|| (row(), BTreeMap::new(), None));
     for (k, n) in c {
         let e = have.entry(k).or_insert(n);
         *e = (*e).max(n);
     }
-    (r.wall_start, *id) = (r.wall_start.max(at), id.take().or(rid));
+    (r.wall_start, *id) = (r.wall_start.max(at), id.take().or(id_at(v, "/requestId")));
     r.model = model_name(m.get("model")).or(r.model.take());
     Some(())
-}
-
-/// A usage object's top-level integer members named `…tokens`, `…Tokens` or `…TokenCount`.
-fn counts(u: &Map<String, Value>) -> BTreeMap<String, u64> {
-    let named =
-        |k: &str| k.ends_with("tokens") || k.ends_with("Tokens") || k.ends_with("TokenCount");
-    let ok = |k: &String| named(k) && hints::id(k).is_some();
-    u.iter()
-        .filter(|(k, _)| ok(k))
-        .filter_map(|(k, v)| Some((k.clone(), v.as_u64()?)))
-        .collect()
 }
 
 /// Usage member names per the token table: input, cached, cache write, output, reasoning.
@@ -355,25 +365,18 @@ const CLAUDE: [&str; 5] = [
     "",
 ];
 
-/// The five numbers by member name per the token table ("" for one the source never gives),
-/// the rest as `extra`; with `less` 1 the cached tokens are inside `input` and come out of it.
-fn split(
-    mut c: BTreeMap<String, u64>,
-    names: [&str; 5],
-    less: u64,
-) -> (Tokens, BTreeMap<String, u64>) {
+/// The five numbers by member name per the token table ("" for one the source never gives), the
+/// rest as `extra`.
+fn split(mut c: BTreeMap<String, u64>, names: [&str; 5]) -> (Tokens, BTreeMap<String, u64>) {
     let [input, cached, cache_write, output, reasoning] = names.map(|n| c.remove(n));
-    let input = input.map(|i| i.saturating_sub(less * cached.unwrap_or(0)));
-    (
-        Tokens {
-            input,
-            cached,
-            cache_write,
-            output,
-            reasoning,
-        },
-        c,
-    )
+    let tokens = Tokens {
+        input,
+        cached,
+        cache_write,
+        output,
+        reasoning,
+    };
+    (tokens, c)
 }
 
 /// An id or label at a JSON pointer (see [`hints::id`]).
@@ -381,22 +384,19 @@ fn id_at(v: &Value, ptr: &str) -> Option<String> {
     hints::id(v.pointer(ptr)?.as_str()?)
 }
 
-/// Claude Code `<p>/<session>/subagents/agent-<id><ext>`: (id, session).
-fn agent(path: &str, ext: &str) -> Option<(String, String)> {
-    let parts: Vec<&str> = path.split_once(':')?.1.split('/').collect();
-    let [_, session, "subagents", file] = parts[..] else {
-        return None;
-    };
-    let id = hints::id(file.strip_prefix("agent-")?.strip_suffix(ext)?)?;
-    Some((id, hints::id(session)?))
-}
-
-/// The session of a Claude Code main transcript `<p>/<session>.jsonl` (the stem before its first
-/// dot, so a set-aside copy names the same session).
-fn session_of(path: &str) -> Option<String> {
-    let parts: Vec<&str> = path.split_once(':')?.1.split('/').collect();
-    let [_, file] = parts[..] else { return None };
-    hints::id(file.strip_suffix(".jsonl")?.split('.').next()?)
+/// The Claude Code thread of a transcript or meta path `<row>:<p>/…`: (id, parent, depth). A file
+/// `agent-<id>…` at any depth under `<session>/subagents/` (workflow agents included) is that
+/// agent, a child of the session; any other file is a thread of its own, named by its stem
+/// before the first dot (a main transcript `<p>/<session>.jsonl`, depth 0, or a set-aside copy).
+fn claude_thread(path: &str) -> (Option<String>, Option<String>, Option<u32>) {
+    let parts: Vec<&str> = path.split_once(':').map_or(path, |p| p.1).split('/').collect();
+    let (dirs, file) = parts.split_at(parts.len() - 1);
+    let stem = file[0].split('.').next().unwrap_or_default();
+    let session = dirs.windows(2).find(|w| w[1] == "subagents").map(|w| w[0]);
+    match (session, stem.strip_prefix("agent-")) {
+        (Some(s), Some(id)) => (hints::id(id), hints::id(s), Some(1)),
+        _ => (hints::id(stem), None, (dirs.len() == 1).then_some(0)),
+    }
 }
 
 /// The thread UUID that ends a Codex rollout file name, for a file read with no `session_meta`.

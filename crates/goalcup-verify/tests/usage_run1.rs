@@ -86,9 +86,10 @@ fn send(e: &mut Entry, sid: u64, at: &mut u64, v: impl ToString) {
 /// header or null]`; the reply body (SSE text, else JSON) comes in two pieces.
 fn post(e: &mut Entry, s: &Value) {
     let (c, req) = (e.conn(), s[1].to_string());
-    let h = json!([["content-type", "application/json"], ["thread-id", s[5]]]);
+    let mut h = vec![json!(["content-type", "application/json"])];
+    h.extend(s[5].is_string().then(|| json!(["thread-id", s[5]])));
     let head = json!({"method": "POST", "path": s[0], "ver": "1.1", "masked": [], "coding": null,
-        "headers": &h.as_array().unwrap()[..1 + usize::from(s[5].is_string())]});
+        "headers": h});
     let q = e.open(StreamKind::HttpReq, c, 0, head);
     e.data(q, 0, 0, req.as_bytes());
     e.end(q, EndReason::Complete, req.len() as u64, Value::Null);
@@ -190,22 +191,30 @@ fn run1(name: &str) -> (Vec<Record>, BTreeMap<&'static str, Five>) {
     (read_records(&e.seal().join("rec")), planted.collect())
 }
 
-/// A Codex rollout of thread `id` (spawned by `parent`), a `token_count` at each time `at`.
+/// A Codex rollout of thread `id` (spawned by `parent`, with a label too long to keep), a
+/// message holding MARK, then a `token_count` at each time `at`.
 fn rollout(e: &mut Entry, id: &str, parent: Option<&str>, at: &[&str]) {
-    let src = json!({"thread_spawn": {"parent_thread_id": parent, "depth": 1, "agent_path": "/x"}});
+    let p = MARK.repeat(6);
+    let src = json!({"thread_spawn": {"parent_thread_id": parent, "depth": 1, "agent_path": p}});
     let meta = json!({"timestamp": "2026-11-07T00:00:00Z", "type": "session_meta", "payload":
         {"id": id, "source": parent.map_or(json!("cli"), |_| json!({"subagent": src}))}});
-    let mut f = format!("{meta}\n");
+    let item = json!({"timestamp": "2026-11-07T00:00:00Z", "type": "response_item", "payload":
+        {"type": "message", "role": "assistant", "content": MARK}});
+    let mut f = format!("{meta}\n{item}\n");
     for (n, t) in (1..).zip(at) {
         let v = json!({"timestamp": format!("2026-11-07T{t}Z"), "type": "event_msg", "payload":
             {"type": "token_count", "info": {"total_token_usage": {"total_tokens": 11 * n},
             "last_token_usage": {"input_tokens": 9, "output_tokens": 2, "total_tokens": 11}}}});
         f += &format!("{v}\n");
     }
-    let m = json!({"path": format!("sessions:2026/11/07/rollout-{id}.jsonl"), "gen": 0, "from": 0});
-    let s = e.open(StreamKind::Native, 0, 0, m);
-    e.data(s, 0, 0, f.as_bytes());
-    e.end(s, EndReason::Complete, f.len() as u64, Value::Null);
+    stream(e, StreamKind::Native, &format!("sessions:2026/11/07/rollout-{id}.jsonl"), &f);
+}
+
+/// One stream of `skind` holding `body` as the file at `path`, ended complete.
+fn stream(e: &mut Entry, skind: StreamKind, path: &str, body: &str) {
+    let s = e.open(skind, 0, 0, json!({"path": path, "gen": 0, "from": 0}));
+    e.data(s, 0, 0, body.as_bytes());
+    e.end(s, EndReason::Complete, body.len() as u64, Value::Null);
 }
 
 fn table(recs: &[Record]) -> CallTable {
@@ -262,10 +271,7 @@ fn each_rate_limited_call_is_one_row() {
 fn a_create_cut_by_a_restart_is_a_call_not_whole() {
     let mut e = Entry::new("u-restart");
     let (_, up, down) = socket(&mut e, "/v1/responses");
-    // Sent `type` first, as a client does (`json!` sorts keys), so the cut still names it.
-    let mut v = create("ws-x", None);
-    let ty = v.as_object_mut().unwrap().remove("type").unwrap();
-    let m = format!("{{\"type\":{ty},{}", &v.to_string()[1..]);
+    let m = format!(r#"{{"type":"response.create","model":"fake-ws-x","input":"{MARK}"}}"#);
     let (mut u, mut d) = (0, 0);
     send(&mut e, up, &mut u, &m);
     let done = ev("completed", "ws-x", &usage(9, 0, 1, 0).0);
@@ -341,6 +347,30 @@ fn native_only_counts_the_silent_window() {
     let ok = ["fake-ws-a", "fake-ws-b", "fake-ws-e", "fake-http-a"];
     assert_eq!(joined(&t, Join::Matched), ok);
     assert_eq!(joined(&t, Join::Unattributed), ["fake-claude"]);
+    assert!(!format!("{t:?}").contains(MARK), "a row or thread holds session file text");
+}
+
+/// Point 2: a Claude Code subagent counts wherever its transcript sits under its session's
+/// `subagents/` (a workflow agent too), with its `agentType` from the meta snapshot.
+#[test]
+fn every_claude_code_subagent_transcript_counts() {
+    let mut e = Entry::new("u-claude");
+    let files = [("s", "S1"), ("a", "S1/subagents/agent-a1")];
+    for (k, f) in files.into_iter().chain([("w", "S1/subagents/workflows/wf1/agent-a2")]) {
+        let v = json!({"type": "assistant", "timestamp": "2026-11-07T00:00:01Z", "message":
+            {"id": k, "model": "fake-claude", "usage": {"input_tokens": 3}, "content": MARK}});
+        stream(&mut e, StreamKind::Native, &format!("transcripts:p/{f}.jsonl"), &format!("{v}\n"));
+    }
+    let meta = "meta:p/S1/subagents/workflows/wf1/agent-a2.meta.json";
+    stream(&mut e, StreamKind::Snapshot, meta, r#"{"agentType":"fake-type"}"#);
+    let mut recs = read_records(&e.seal().join("rec"));
+    edit_event(&mut recs, "start", 0, |v| v["connector"] = "claude-code-cli".into());
+    let t = table(&recs);
+    assert_eq!(t.rows.iter().filter(|r| r.thread.is_some()).count(), 3);
+    let th = |id| t.threads.iter().find(|x| x.id == id).unwrap();
+    assert_eq!([&th("a1").parent, &th("a2").parent], [&Some("S1".to_string()); 2]);
+    assert_eq!(th("a2").label.as_deref(), Some("fake-type"));
+    assert!(!format!("{t:?}").contains(MARK), "a row or thread holds transcript text");
 }
 
 fn joined(t: &CallTable, j: Join) -> Vec<&str> {

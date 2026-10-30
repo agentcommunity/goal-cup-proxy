@@ -15,7 +15,7 @@ pub(super) enum Reader {
 /// The reader of a native or snapshot stream by its connector and `meta.path` (`<row>:<rel>`).
 pub(super) fn reader(connector: Option<&str>, path: &str) -> Option<Reader> {
     let (row, rel) = path.split_once(':')?;
-    let file = rel.rsplit('/').next().unwrap_or(rel);
+    let file = rel.rsplit_once('/').map_or(rel, |(_, f)| f);
     let r = match (connector?, row, file.ends_with(".jsonl")) {
         ("codex-cli", "sessions", true) if file.starts_with("rollout-") => Reader::CodexRollout,
         ("claude-code-cli", "transcripts", true) => Reader::ClaudeTranscript,
@@ -25,19 +25,14 @@ pub(super) fn reader(connector: Option<&str>, path: &str) -> Option<Reader> {
     Some(r)
 }
 
-/// True when this build has a native reader for the connector.
-pub(super) fn has_reader(connector: Option<&str>) -> bool {
-    matches!(connector, Some("codex-cli" | "claude-code-cli"))
-}
-
-/// True when the connector's wire requests carry their thread (Codex).
-pub(super) fn wire_hint(connector: Option<&str>) -> bool {
-    connector == Some("codex-cli")
-}
-
-/// True when native calls join the wire by the reply's request id (Claude Code).
-pub(super) fn by_id(connector: Option<&str>) -> bool {
-    connector == Some("claude-code-cli")
+/// For a connector this build has a native reader for: (its wire requests carry their thread, as
+/// Codex's do; native calls join the wire by the reply's request id, as Claude Code's do).
+pub(super) fn join_of(connector: Option<&str>) -> Option<(bool, bool)> {
+    match connector? {
+        "codex-cli" => Some((true, false)),
+        "claude-code-cli" => Some((false, true)),
+        _ => None,
+    }
 }
 
 /// The thread a wire request names: Codex's `thread-id` header (HTTP), else
@@ -48,7 +43,8 @@ pub(super) fn wire_thread(
     body: Option<&Value>,
 ) -> Option<String> {
     let body = || id(body?.pointer("/client_metadata/thread_id")?.as_str()?);
-    wire_hint(connector).then(|| header(headers, "thread-id").or_else(body))?
+    let hint = join_of(connector).is_some_and(|j| j.0);
+    hint.then(|| header(headers, "thread-id").or_else(body))?
 }
 
 /// The reply's `request-id` header; Claude Code's native `requestId` equals it.
