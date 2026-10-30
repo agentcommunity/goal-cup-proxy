@@ -2,6 +2,8 @@
 //! never read and never hangs the reader, a replaced file is refused, no descriptor is kept, the
 //! root never reaches a path, and `src/native/` names no harness and holds no exclusion list.
 
+mod common;
+
 use std::ffi::{OsStr, OsString};
 use std::fs;
 use std::os::unix::fs::symlink;
@@ -9,11 +11,12 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::time::Duration;
 
+use common::recorder::events;
 use goalcup::connector::{self, builtin::CONNECTORS};
 use goalcup::native::fsx::{Dir, Kind, file_stat};
 use goalcup::native::pattern::{parse, path_id};
 use goalcup::native::walk::{Row, Walker};
-use goalcup::pipeline::{Call, Calls, Recorder};
+use goalcup::pipeline::Recorder;
 use serde_json::Value;
 
 fn n(s: &str) -> &OsStr {
@@ -136,14 +139,6 @@ fn row(name: &str, root: &Path, pattern: &str) -> Row {
     }
 }
 
-fn notes(calls: &Calls, what: &str) -> Vec<Value> {
-    let f = |c: Call| match c {
-        Call::Event(v) if v["what"] == what => Some(v),
-        _ => None,
-    };
-    calls.all().into_iter().filter_map(f).collect()
-}
-
 #[test]
 fn a_walk_follows_no_symlink_and_names_a_linked_file_once() {
     let t = tempfile::tempdir().unwrap();
@@ -160,7 +155,10 @@ fn a_walk_follows_no_symlink_and_names_a_linked_file_once() {
     let mut walker = Walker::default();
     assert!(walker.pass(&rec, &rows).found.is_empty());
     assert!(walker.pass(&rec, &rows).found.is_empty());
-    let linked = notes(&calls, "native_symlink");
+    let linked: Vec<Value> = events(&calls)
+        .into_iter()
+        .filter(|v| v["what"] == "native_symlink")
+        .collect();
     assert_eq!(linked.len(), 1, "one note per path: {linked:?}");
     assert_eq!(linked[0]["path"], path_id("r", Path::new("link.jsonl")));
 }
@@ -176,7 +174,10 @@ fn the_root_never_reaches_a_path() {
     let (rec, calls) = Recorder::for_tests(1 << 20);
     let found = Walker::default().pass(&rec, &rows).found;
     let mut ids: Vec<String> = found.iter().map(|f| path_id("r", &f.rel)).collect();
-    let linked = notes(&calls, "native_symlink");
+    let linked: Vec<Value> = events(&calls)
+        .into_iter()
+        .filter(|v| v["what"] == "native_symlink")
+        .collect();
     ids.extend(linked.iter().map(|n| n["path"].to_string()));
     let marker = t.path().to_string_lossy().into_owned();
     assert!(
