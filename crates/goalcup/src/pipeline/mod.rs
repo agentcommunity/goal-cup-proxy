@@ -30,7 +30,7 @@ pub use counts::{Counts, Durable, TunnelHost, entry_totals};
 pub use cursors::Cursors;
 pub use goalcup_format::{EndReason, GapReason, StreamKind};
 pub use handle::{OpenFlags, StreamHandle};
-pub use status::Status;
+pub use status::{Live, Status};
 
 use serde_json::Value;
 use std::process::ExitCode;
@@ -141,6 +141,16 @@ impl Recorder {
     /// Live written counts of this entry (seam S4).
     pub fn counts(&self) -> Counts {
         Counts::default()
+    }
+
+    /// The recorder's live state (seam S4), read from its atomics: what the uploader's heartbeat
+    /// `mode` and `boot`, `off_spans`, `off_ms` and `off_since` take from a live recorder, so it
+    /// never parses `status.json` for them.
+    pub fn live(&self) -> Live {
+        Live {
+            held_bytes: self.inner.held.load(Ordering::Relaxed),
+            ..Live::default()
+        }
     }
 
     /// The durable point (seam S4). Plain threads read it with `borrow()` and copy it out at once.

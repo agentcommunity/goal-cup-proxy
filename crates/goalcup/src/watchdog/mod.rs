@@ -25,19 +25,21 @@ pub enum Exit {
 /// `{"cause":"watchdog_lost"}` from `goalcup recover`, or after null mode
 /// `{"cause":"null_mode","exits":n,"last":{"code":n}}`. Null on boot 0. The next boot's
 /// `recorder_down` GAP tail is written from it (PRD-02 section 8 step 9, section 9.2 step 4).
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum Prev {
     Exit(Exit),
-    Cause {
-        cause: String,
-        /// Null mode: the fast exits that started it.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        exits: Option<u64>,
-        /// Null mode: how the last recorder before it ended.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        last: Option<Exit>,
-    },
+    Cause(Cause),
+}
+
+/// A previous boot that ended with no exit status of its own.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "cause", rename_all = "snake_case")]
+pub enum Cause {
+    /// `goalcup recover` replaced a recorder whose watchdog was gone (section 8.1).
+    WatchdogLost,
+    /// Null mode, which always follows fast exits: how many, and how the last recorder ended.
+    NullMode { exits: u64, last: Exit },
 }
 
 /// The seal reasons (PRD-01 section 11).
@@ -178,4 +180,37 @@ pub enum ToWatchdog {
         reason: Option<String>,
         seconds_left: Option<u64>,
     },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The `prev` shapes the `recorder_down` GAP tail is written from (PRD-02 section 8).
+    #[test]
+    fn prev_json_shapes() {
+        let cases = [
+            (Prev::Exit(Exit::Code(75)), r#"{"code":75}"#),
+            (Prev::Exit(Exit::Signal(9)), r#"{"signal":9}"#),
+            (Prev::Cause(Cause::WatchdogLost), r#"{"cause":"watchdog_lost"}"#),
+            (
+                Prev::Cause(Cause::NullMode {
+                    exits: 3,
+                    last: Exit::Code(70),
+                }),
+                r#"{"cause":"null_mode","exits":3,"last":{"code":70}}"#,
+            ),
+        ];
+        for (prev, json) in cases {
+            assert_eq!(serde_json::to_string(&prev).unwrap(), json);
+            assert_eq!(serde_json::from_str::<Prev>(json).unwrap(), prev);
+        }
+        for bad in [
+            r#"{"cause":"null_mode"}"#,
+            r#"{"cause":"watchdog_lots"}"#,
+            r#"{"cause":"null_mode","exits":3}"#,
+        ] {
+            assert!(serde_json::from_str::<Prev>(bad).is_err(), "{bad}");
+        }
+    }
 }

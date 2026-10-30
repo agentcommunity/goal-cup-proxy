@@ -15,6 +15,9 @@ pub struct Status {
     pub updated: String,
     /// The recorder's pid.
     pub pid: u32,
+    /// The recorder's OS start time (as `HarnessFacts::start_id`), so `goalcup recover` never
+    /// signals a process that reused its pid.
+    pub start_id: u64,
     pub boot: u64,
     /// The listen port, so `goalcup continue` and `goalcup recover` can ask for it again.
     pub port: u16,
@@ -64,8 +67,11 @@ pub enum Mode {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HarnessStatus {
     pub pid: u32,
-    /// Wall time, RFC 3339 UTC.
+    /// Wall time, RFC 3339 UTC, for display only.
     pub started: String,
+    /// `HarnessFacts::start_id`: the OS start time of `pid`. The harness is alive only while
+    /// `pid` answers and this still matches; `started` is never compared.
+    pub start_id: u64,
     pub exit: Option<Exit>,
 }
 
@@ -86,8 +92,22 @@ impl Written {
     }
 }
 
+/// `Recorder::live()` (seam S4): the live atomics `status.json` is written from each second.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Live {
+    pub boot: u64,
+    /// Bytes offered and not yet written, plus reservations. Records wait while this is not 0.
+    pub held_bytes: u64,
+    /// Boot time since the writer last wrote.
+    pub writer_idle_ms: u64,
+    pub losing: Losing,
+    /// Entry totals over boots, the open null span included.
+    pub off: Off,
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Losing {
+    /// Streams in a gap, plus `parse_stopped` connections whose closing GAP is not yet written.
     pub streams_in_gap: u64,
     /// Bytes dropped this boot.
     pub dropped_bytes: u64,
