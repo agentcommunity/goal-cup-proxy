@@ -53,8 +53,8 @@ You change the Rust code, the Worker or the scripts.
 - [README](../README.md): build, install, run one capture, the gate.
 - [ARCHITECTURE](ARCHITECTURE.md): how the parts fit, the glossary, and where each guarantee is tested.
 - [DECISIONS](DECISIONS.md): the rules code cites as `D<number>`, with a status table at the top.
-- [CONTRACTS](CONTRACTS.md): byte and format rules for v5 capture, the local finish and the control API.
-- [TERMINATION](TERMINATION.md): what `Confirmed` termination does and does not claim.
+- [CONTRACTS](archive/CONTRACTS.md): byte and format rules for v5 capture, the local finish and the control API.
+- [TERMINATION](archive/TERMINATION.md): what `Confirmed` termination does and does not claim.
 - [CHEAT-CHECKLIST](CHEAT-CHECKLIST.md): read before you trust a verifier Pass.
 - [TODO](../TODO.md): open work and known issues.
 - [Simplification plan](research/SIMPLIFICATION-2026-10-21.md): what to simplify before and after the event.

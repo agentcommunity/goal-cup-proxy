@@ -1,7 +1,7 @@
 # Architecture
 
 How do the parts of Goal Cup Proxy fit, and where is each guarantee tested? For contributors and
-their agents. Wire formats are in [CONTRACTS](CONTRACTS.md); rules that bind the code are in
+their agents. Wire formats are in [CONTRACTS](archive/CONTRACTS.md); rules that bind the code are in
 [DECISIONS](DECISIONS.md). Section 12 lists the terms. Use them exactly.
 
 ## 1. What Goal Cup Proxy is for
@@ -151,7 +151,7 @@ CLI phases are in `commands/start/phases.rs` (`prepare`, `create_and_gate`, `reg
    sends heartbeats.
 5. **Stop the harness.** A standalone seal enters the daemon's entry run lock, then SIGTERM,
    the connector's grace, SIGKILL, sweep and reconfirm run with wire and native capture still live.
-   This runs outside the capture budget ([TERMINATION](TERMINATION.md)); both the drain-share
+   This runs outside the capture budget ([TERMINATION](archive/TERMINATION.md)); both the drain-share
    boundary and final deadline move by actual termination time. The launcher sees the child exit
    and stops its recording proxy; competing finishes share one terminal.
 6. **Finish capture.** Close admission, drain the existing producers, persist explicit loss,
