@@ -1,13 +1,15 @@
 //! The end screen (PRD-10 section 5): what a sealed part wrote, what it lost, how long recording
 //! was off and what is still on this computer. It prints only what the sealed `status.json` holds
 //! (its `written` and `off` equal the seal's totals) and adds no counter (ledger L2), so the screen
-//! and `goalcup-verify check` agree by construction. The upload lines follow with seam S9.
+//! and `goalcup-verify check` agree by construction. The upload line comes from `upload.json`
+//! (seam S9).
 
 use std::path::Path;
 
 use super::status::by_count;
 use super::{ServerJson, text};
 use crate::pipeline::status::{Mode, Status};
+use crate::upload::state::{self as up, UploadJson};
 use crate::watchdog::SealReason;
 
 /// The part is not sealed (or its `status.json` cannot be read): there is no end screen yet.
@@ -17,7 +19,8 @@ pub struct NotSealed;
 /// How many unlisted tunnel hosts are named on screen (rule 4).
 const SHOWN_HOSTS: usize = 5;
 
-/// The end screen of the part in `entry_dir`, from its `status.json` and its run's `server.json`.
+/// The end screen of the part in `entry_dir`, from its `status.json`, `upload.json` and its run's
+/// `server.json`.
 pub fn end_screen(entry_dir: &Path) -> Result<String, NotSealed> {
     let st: Status = super::read_json(&super::status_json(entry_dir)).ok_or(NotSealed)?;
     let run_dir = entry_dir.parent().ok_or(NotSealed)?;
@@ -29,17 +32,19 @@ pub fn end_screen(entry_dir: &Path) -> Result<String, NotSealed> {
     screen(
         &st,
         server.as_ref(),
+        up::read(entry_dir).as_ref(),
         &run,
         &super::goalcup_log(entry_dir),
         super::now(),
     )
 }
 
-/// The end screen as a pure function of the sealed `status.json`, `server.json`, the run id, the
-/// `goalcup.log` path and now (seconds since 1970).
+/// The end screen as a pure function of the sealed `status.json`, `server.json`, `upload.json`,
+/// the run id, the `goalcup.log` path and now (seconds since 1970).
 pub fn screen(
     st: &Status,
     server: Option<&ServerJson>,
+    upload: Option<&UploadJson>,
     run: &str,
     log: &Path,
     now: u64,
@@ -136,6 +141,9 @@ pub fn screen(
     out += &format!("{}\n", text::PART_RECORDED);
     for l in &body {
         out += &format!("  {l}\n");
+    }
+    if let Some(u) = upload {
+        out += &format!("{}\n", text::upload_line(u, now, true));
     }
     out += &format!("{}\n", text::details_at(log));
     Ok(out)

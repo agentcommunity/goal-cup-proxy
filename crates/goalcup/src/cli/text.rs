@@ -7,6 +7,8 @@ use std::path::Path;
 use super::RunMode;
 use super::status::State;
 use crate::connector::Refusal;
+use crate::upload::policy::Class;
+use crate::upload::state::{State as Upload, UploadJson};
 use crate::watchdog::Exit;
 
 /// The start of the line that says the harness is being recorded.
@@ -825,3 +827,120 @@ killed).";
 pub fn details_at(log: &Path) -> String {
     format!("Details for support are in \"{}\"", log.display())
 }
+
+// Upload (PRD-06 section 10): bytes only, never a count of requests or calls.
+
+/// `last_error.class` in plain words; its `text` is never shown.
+fn class_words(class: Class) -> &'static str {
+    match class {
+        Class::Network => "no network",
+        Class::ServerBusy => "the server is busy",
+        Class::Refused => "the server refused it",
+        Class::Stuck => "the copies differ",
+        Class::Internal => "a fault in goalcup",
+    }
+}
+
+/// The `Upload:` line of `upload.json` at `now`. On the end screen (`end`), bytes still waiting
+/// name `goalcup upload` and `upload_by` (section 5 rule 8).
+pub fn upload_line(u: &UploadJson, now: u64, end: bool) -> String {
+    let t = |s: Option<&String>| s.map(String::as_str).and_then(super::unix_of);
+    let by = t(u.upload_by.as_ref()).map(local_clock);
+    let (err, waiting) = (u.last_error.as_ref(), size_words(u.waiting_bytes));
+    let raw = u.confirmed.as_ref().map_or(0, |c| c.raw);
+    let left = !matches!(u.state, Upload::Local | Upload::Done | Upload::Closed);
+    if end && left && u.waiting_bytes > 0 {
+        let before = by.map(|b| format!(" before {b}")).unwrap_or_default();
+        return format!(
+            "Upload: {waiting} still waits on this computer. Run goalcup upload{before}, when you \
+             are online. Nothing is lost yet."
+        );
+    }
+    match u.state {
+        Upload::Local => "Upload: none. This run stays on this computer.".to_owned(),
+        Upload::Sending | Upload::CaughtUp => {
+            let at = t(u.confirmed.as_ref().map(|c| &c.at)).or(t(u.last_ok.as_ref()));
+            let Some(at) = at else {
+                return "Upload: sending; the server holds nothing of this part yet.".to_owned();
+            };
+            let ago = span_words(now.saturating_sub(at) * 1000);
+            let at = local_time(at, false);
+            format!("Upload: the server holds everything up to {at} ({ago} ago).")
+        }
+        Upload::Waiting => {
+            let since = t(u.last_ok.as_ref()).or(t(err.map(|e| &e.at)));
+            let since = since.map(|s| format!(" since {}", local_time(s, false)));
+            let why = err.map(|e| format!(" ({})", class_words(e.class)));
+            format!(
+                "Upload: not reaching the server{}{}. {waiting} waits here and goes up by itself. \
+                 Nothing is lost.",
+                since.as_deref().unwrap_or(" yet"),
+                why.unwrap_or_default()
+            )
+        }
+        Upload::Refused => {
+            let status = err.and_then(|e| e.status).map(|s| format!(" ({s})"));
+            let status = status.unwrap_or_default();
+            format!(
+                "Upload: the server refuses this run{status}. It keeps trying. If this lasts, \
+                 write to {SUPPORT_ADDRESS}."
+            )
+        }
+        Upload::Stuck => format!(
+            "Upload: stopped. The server's copy and this computer's copy differ at byte {raw}. \
+             Nothing more is sent. Write to {SUPPORT_ADDRESS}."
+        ),
+        Upload::Done if u.keep => KEPT.to_owned(),
+        Upload::Done => format!(
+            "Upload: done. The server holds your whole record ({}). Removed here: {} the server \
+             holds.",
+            size_words(raw),
+            plural(u.pruned.parts, "record file", "record files")
+        ),
+        Upload::Closed => {
+            let on = by.map(|b| format!(" on {b}")).unwrap_or_default();
+            format!(
+                "Upload: the server closed this run{on}. {waiting} stays on this computer and \
+                 cannot be sent."
+            )
+        }
+    }
+}
+
+const KEPT: &str = "Upload: done. Every record file is kept on this computer (GOALCUP_KEEP_PARTS).";
+
+// Time left (section 10, D66): the agent may run it too.
+
+pub const PUSH_OFTEN: &str = "Push your work often; work not pushed when the run stops is lost.";
+
+/// A practice run has no repository (D69).
+pub const PRACTICE_NO_PUSH: &str =
+    "This is a practice run: it needs no repository, so there is nothing to push.";
+
+fn advice(practice: bool) -> &'static str {
+    if practice {
+        PRACTICE_NO_PUSH
+    } else {
+        PUSH_OFTEN
+    }
+}
+
+/// The run stops at `stop` (seconds since 1970), as the server last said.
+pub fn time_left(stop: u64, now: u64, practice: bool) -> String {
+    let advice = advice(practice);
+    format!("The run stops {}. {advice}", end_words(stop, now))
+}
+
+/// The server said the run's time is up.
+pub const TIME_IS_UP: &str = "Time is up.";
+
+pub fn time_left_unknown(practice: bool) -> String {
+    let advice = advice(practice);
+    format!(
+        "{advice} The time left is unknown right now: goalcup has no fresh word from the \
+         server."
+    )
+}
+
+pub const NO_OPEN_RUN_TIME_LEFT: &str = "Run goalcup status to see your runs. No run is open on \
+this computer, so there is no time left to show.";
