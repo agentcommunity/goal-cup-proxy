@@ -206,7 +206,7 @@ facts sheet. No `.rs` file and no test of your own. Start with the
    `docs/harnesses/<id>.md`.
 3. **Copy the template**: `skills/adding-a-capture-harness/templates/connector-harness.toml` to
    `connectors/<id>/harness.toml`. Fill the one-screen field table in
-   [What a chat connector writes](docs/CONNECTOR-SCHEMA.md#what-a-chat-connector-writes). The
+   [the key table](docs/CONNECTOR-SCHEMA.md#keys). The
    closest example is [connectors/codex-cli](connectors/codex-cli/harness.toml).
 4. **Pin and regenerate**: `sh scripts/pin-manifests.sh`, then the two golden commands in
    [Test a connector](docs/HARNESS-ONBOARDING.md#test-a-connector).
