@@ -8,16 +8,12 @@ slow-timeout = { period = "30s", terminate-after = 6 }
 [profile.default.junit]
 path = "junit.xml"
 
-# Tests that kill processes, change limits or open thousands of descriptors, one at a time.
-# A builder who adds such a test binary adds its name here.
+# Tests that kill processes, change limits or open thousands of descriptors run one at a time in
+# group `heavy`: watchdog_*, e2e_*, lessons_launch, pipeline_restart, pipeline_stall,
+# pipeline_many_streams, proxy_connect, proxy_restart, native_walk. nextest refuses a binary()
+# filter that matches no binary, so each name joins a `[[profile.default.overrides]]` entry for
+# this group in the merge that brings its binary, for example
+# filter = 'binary(/^(e2e_run|watchdog_null)$/)'. End-to-end binaries also get
+# slow-timeout = { period = "60s", terminate-after = 10 } (600 s).
 [test-groups]
 heavy = { max-threads = 1 }
-
-[[profile.default.overrides]]
-filter = 'binary(/^(watchdog_.*|e2e_.*|lessons_launch|pipeline_restart|pipeline_stall|pipeline_many_streams|proxy_connect|proxy_restart|native_walk)$/)'
-test-group = "heavy"
-
-# End-to-end tests may run 600 s.
-[[profile.default.overrides]]
-filter = 'binary(/^e2e_/)'
-slow-timeout = { period = "60s", terminate-after = 10 }
