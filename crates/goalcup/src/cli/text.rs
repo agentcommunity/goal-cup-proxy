@@ -6,8 +6,6 @@
 
 use std::path::Path;
 
-use goalcup_format::GapReason;
-
 use super::RunMode;
 use super::status::State;
 use crate::watchdog::Exit;
@@ -172,30 +170,33 @@ pub fn exit_words(exit: Exit) -> String {
     }
 }
 
-/// Gap reasons in plain words (section 5 table). 8, 9 and unknown numbers read `other (n)`.
-pub fn gap_words(n: u8) -> String {
-    match n {
-        1 => "under heavy load",
-        2 => "recording was off",
-        3 | 4 => "a reply in a form goalcup cannot read",
-        5 => "a session file was replaced or cut short",
-        6 | 7 => "the program refused the recorder",
-        10 => "still arriving when the part ended",
-        11 => "a connection goalcup could not follow",
-        12 => "goalcup could not check it for secrets, so it dropped it",
-        13 => "the model service's certificate was not one goalcup trusts",
-        14 => "a connection in a form goalcup does not read",
-        15 => "sent after the agent ended",
-        _ => return format!("other ({n})"),
+/// A GAP reason, by its name (`GapReason::name`, `tunnel_hosts` `listed`), in plain words (section
+/// 5 table). 8, 9 and unknown reasons read `other (n)`.
+pub fn gap_words(name: &str) -> String {
+    match name {
+        "memory_guard" => "under heavy load",
+        "recorder_down" => "recording was off",
+        "unsupported_encoding" | "decode_failed" => "a reply in a form goalcup cannot read",
+        "source_changed" => "a session file was replaced or cut short",
+        "tls_refused" | "pinned" => "the program refused the recorder",
+        "cut_at_seal" => "still arriving when the part ended",
+        "h2_unsupported" => "a connection goalcup could not follow",
+        "mask_failed" => "goalcup could not check it for secrets, so it dropped it",
+        "upstream_untrusted" => "the model service's certificate was not one goalcup trusts",
+        "protocol_other" => "a connection in a form goalcup does not read",
+        "after_stop" => "sent after the agent ended",
+        _ => {
+            let n = name.strip_prefix("other(").and_then(|n| n.strip_suffix(')'));
+            return format!("other ({})", n.unwrap_or(name));
+        }
     }
     .to_owned()
 }
 
-/// The words of a GAP reason given by name (`tunnel_hosts` `listed`).
-pub fn gap_name_words(name: &str) -> String {
-    (1..=u8::MAX)
-        .find(|n| GapReason::from_u8(*n).name() == name)
-        .map_or_else(|| name.to_owned(), gap_words)
+/// `api.example.com 812, chat.example.com 93`.
+fn host_list(hosts: &[(&str, u64)]) -> String {
+    let list: Vec<String> = hosts.iter().map(|(h, n)| format!("{h} {n}")).collect();
+    list.join(", ")
 }
 
 // Status (section 4).
@@ -244,6 +245,11 @@ pub fn state_line(state: &State, run: &str) -> String {
             "{PROBLEM} Recording is off since {}: goalcup is not running. To go on, run: goalcup continue {run}",
             t(since)
         ),
+        State::Over { since } => format!(
+            "{PROBLEM} Recording is off since {}: goalcup is not running. Time is up for this run. \
+             To close the part, run: goalcup seal",
+            t(since)
+        ),
         State::Stale { since } => format!(
             "{PROBLEM} goalcup has not updated this run since {}. The computer may have slept or \
              restarted. To go on, run: goalcup continue {run}",
@@ -260,9 +266,9 @@ pub fn state_line(state: &State, run: &str) -> String {
             t(since)
         ),
         State::Losing { streams, bytes } => format!(
-            "Recording is losing data now: {} have a gap ({} so far). Your agent is not slowed. \
+            "Recording is losing data now: {} a gap ({} so far). Your agent is not slowed. \
              The end screen will say how much.",
-            plural(streams, "connection or file", "connections or files"),
+            plural(streams, "connection or file has", "connections or files have"),
             size_words(bytes)
         ),
         State::WriterSlow { secs } => {
@@ -280,12 +286,7 @@ pub fn status_head(mode: Option<RunMode>, name: &str, state: &State) -> String {
         Some(RunMode::Competition) => "competition run",
         None => "run",
     };
-    let word = match state {
-        State::Sealed { .. } => "finished",
-        s if s.is_problem() => "recording is off",
-        _ => "recording",
-    };
-    format!("Your {kind} with {name}: {word}.")
+    format!("Your {kind} with {name}: {}.", state.word())
 }
 
 /// The harness line of the block: `running.`, `exited (exit code 0).`, `not running.`.
@@ -305,8 +306,7 @@ pub fn written_line(requests: u64, hosts: &[(&str, u64)], whole: u64, holes: u64
         plural(requests, "model request", "model requests")
     );
     if !hosts.is_empty() {
-        let list: Vec<String> = hosts.iter().map(|(h, n)| format!("{h} {n}")).collect();
-        line += &format!(" ({})", list.join(", "));
+        line += &format!(" ({})", host_list(hosts));
     }
     if holes > 0 {
         line += &format!("; {whole} whole, {holes} with missing parts");
@@ -331,20 +331,14 @@ pub fn off_line(spans: u64, ms: u64) -> String {
     }
 }
 
-/// `Parts: 2. Part 1 sealed. Part 2 recording.`
-pub fn parts_line(sealed: &[bool]) -> String {
-    let each: Vec<String> = sealed
+/// `Parts: 2. Part 1 sealed. Part 2 recording.`, one word per part.
+pub fn parts_line(words: &[&str]) -> String {
+    let each: Vec<String> = words
         .iter()
         .enumerate()
-        .map(|(i, s)| {
-            format!(
-                " Part {} {}.",
-                i + 1,
-                if *s { "sealed" } else { "recording" }
-            )
-        })
+        .map(|(i, w)| format!(" Part {} {w}.", i + 1))
         .collect();
-    format!("Parts: {}.{}", sealed.len(), each.concat())
+    format!("Parts: {}.{}", words.len(), each.concat())
 }
 
 /// `Problems: none.`, or the heading over one line per cause.
@@ -366,8 +360,12 @@ pub fn quiet_proxy(name: &str) -> String {
 }
 
 /// No model request at all 5 minutes after the launch.
-pub const NO_REQUEST_YET: &str = "PROBLEM: No model request was written yet. If your agent is \
-working, it may not use the recording proxy.";
+pub fn no_request_yet() -> String {
+    format!(
+        "{PROBLEM} No model request was written yet. If your agent is working, it may not use the \
+         recording proxy."
+    )
+}
 
 pub fn native_missing(row: &str, name: &str) -> String {
     format!(
@@ -409,7 +407,7 @@ pub fn listed_tunnel(host: &str, reason: &str) -> String {
         ),
         _ => format!(
             "{PROBLEM} Not recorded: {host} ({}). Its traffic passed through unread.",
-            gap_name_words(reason)
+            gap_words(reason)
         ),
     }
 }
@@ -497,11 +495,10 @@ pub fn no_request_written(name: &str) -> String {
 }
 
 pub fn requests_written(n: u64, hosts: &[(&str, u64)]) -> String {
-    let list: Vec<String> = hosts.iter().map(|(h, n)| format!("{h} {n}")).collect();
     format!(
         "{} written: {}.",
         plural(n, "model request", "model requests"),
-        list.join(", ")
+        host_list(hosts)
     )
 }
 
@@ -517,6 +514,16 @@ pub fn whole_and_lost(whole: u64, holes: u64, lost: u64) -> String {
         parts.push(format!("{} was not recorded.", size_words(lost)));
     }
     parts.join(" ")
+}
+
+/// Rule 1: gaps no other line names, of unknown size or with no byte lost.
+pub fn gaps_line(n: u64, unknown: bool) -> String {
+    let what = if unknown {
+        "of unknown size: some data was not recorded there"
+    } else {
+        "with no byte known lost"
+    };
+    format!("The record has {} {what}.", plural(n, "gap", "gaps"))
 }
 
 pub fn session_files(files: u64, bytes: u64) -> String {
@@ -539,7 +546,7 @@ pub fn off_total(spans: u64, ms: u64) -> String {
 pub fn tunnel_listed(host: &str, reason: &str, conns: u64, bytes: u64) -> String {
     format!(
         "Not recorded, passed through unread: {host} ({}; {}, {}).",
-        gap_name_words(reason),
+        gap_words(reason),
         plural(conns, "connection", "connections"),
         size_words(bytes)
     )

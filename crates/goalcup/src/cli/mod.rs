@@ -15,6 +15,7 @@ use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
 /// The hidden subcommand PRD-02's watchdog spawns as `goalcup recorder [--null]`. `main.rs`
@@ -219,9 +220,9 @@ pub struct EntryFacts {
     pub resumed: bool,
 }
 
-/// `server.json` of a run folder, when it is there and parses.
-pub fn read_server_json(run_dir: &Path) -> Option<ServerJson> {
-    serde_json::from_slice(&fs::read(server_json(run_dir)).ok()?).ok()
+/// A JSON file read into `T`; None when it is missing or does not parse.
+pub fn read_json<T: DeserializeOwned>(path: &Path) -> Option<T> {
+    serde_json::from_slice(&fs::read(path).ok()?).ok()
 }
 
 /// A run and one of its parts, as `goalcup status [PART]` picks them.
@@ -279,7 +280,7 @@ pub fn find(home: &Path, arg: Option<&str>) -> Option<Found> {
             Some(a.to_owned()),
         ),
     };
-    let server = read_server_json(&run_dir);
+    let server: Option<ServerJson> = read_json(&server_json(&run_dir));
     let mut entries: Vec<String> = match &server {
         Some(s) if !s.entries.is_empty() => s.entries.iter().map(|e| e.id.clone()).collect(),
         _ => dirs(&run_dir, 'e', mtime)
@@ -308,17 +309,19 @@ pub fn now() -> u64 {
         .map_or(0, |d| d.as_secs())
 }
 
-/// An RFC 3339 time (`2026-11-07T10:00:01Z`, a fraction and an offset allowed) in whole seconds
+/// A UTC time as goalcup writes it (`2026-11-07T10:00:01Z`, a fraction allowed) in whole seconds
 /// since 1970. None when it does not parse.
 pub fn unix_of(t: &str) -> Option<u64> {
+    let b = t.as_bytes();
     let num = |at: usize, len: usize| -> Option<i64> {
         let s = t.get(at..at + len)?;
-        s.bytes()
-            .all(|b| b.is_ascii_digit())
-            .then(|| s.parse().ok())?
+        s.bytes().all(|b| b.is_ascii_digit()).then(|| s.parse().ok())?
     };
-    let sep = |at: usize, c: &[u8]| t.as_bytes().get(at).is_some_and(|b| c.contains(b));
-    if !(sep(4, b"-") && sep(7, b"-") && sep(10, b"Tt ") && sep(13, b":") && sep(16, b":")) {
+    let seps = [(4, b'-'), (7, b'-'), (10, b'T'), (13, b':'), (16, b':')];
+    let frac = t.get(19..)?.strip_prefix('.').unwrap_or(t.get(19..)?);
+    if !seps.iter().all(|(i, c)| b.get(*i) == Some(c))
+        || frac.strip_suffix('Z')?.bytes().any(|b| !b.is_ascii_digit())
+    {
         return None;
     }
     let (y, mo, d) = (num(0, 4)?, num(5, 2)?, num(8, 2)?);
@@ -326,30 +329,13 @@ pub fn unix_of(t: &str) -> Option<u64> {
     if !(1..=12).contains(&mo) || !(1..=31).contains(&d) || h > 23 || mi > 59 || s > 60 {
         return None;
     }
-    let mut rest = &t[19..];
-    if let Some(f) = rest.strip_prefix('.') {
-        rest = f.trim_start_matches(|c: char| c.is_ascii_digit());
-    }
-    let off = match rest {
-        "Z" | "z" => 0,
-        _ if rest.len() == 6 && rest.as_bytes()[3] == b':' => {
-            let part = |r: std::ops::Range<usize>| rest.get(r)?.parse::<i64>().ok();
-            let v = part(1..3)? * 3600 + part(4..6)? * 60;
-            match rest.as_bytes()[0] {
-                b'+' => v,
-                b'-' => -v,
-                _ => return None,
-            }
-        }
-        _ => return None,
-    };
     // Days since 1970-01-01 from the civil date (Howard Hinnant's algorithm).
     let y = if mo <= 2 { y - 1 } else { y };
     let era = y.div_euclid(400);
     let yoe = y - era * 400;
     let doy = (153 * ((mo + 9) % 12) + 2) / 5 + d - 1;
     let days = era * 146_097 + yoe * 365 + yoe / 4 - yoe / 100 + doy - 719_468;
-    u64::try_from(days * 86_400 + h * 3600 + mi * 60 + s - off).ok()
+    u64::try_from(days * 86_400 + h * 3600 + mi * 60 + s).ok()
 }
 
 /// This computer's offset from UTC at `unix` in seconds east, and the zone's short name.
@@ -383,17 +369,10 @@ pub fn local_offset(unix: u64) -> Option<(i64, String)> {
     Some((offset, zone))
 }
 
-// Pid liveness (section 4). A pid is checked with `kill(pid, 0)` and its OS start time, so a
-// reused pid is never taken for the process that wrote it down.
-
-fn answers(pid: u32) -> bool {
-    // `kill(0, 0)` and negative pids address process groups: never ask for those.
-    let Ok(pid) = libc::pid_t::try_from(pid) else {
-        return false;
-    };
-    // SAFETY: signal 0 sends nothing; it only checks that the pid exists and may be signalled.
-    pid > 0 && unsafe { libc::kill(pid, 0) } == 0
-}
+// Pid liveness (section 4). A pid is alive when `kill(pid, 0)` answers and its OS start time is
+// the one written down, so a reused pid is never taken for the process that wrote it. The program
+// file is not checked: PRD-02 sets the recorder and watchdog not dumpable, so `/proc/<pid>/exe` is
+// closed to the participant, and the start id already names the process.
 
 /// The OS start time of `pid`: on Linux field 22 of `/proc/<pid>/stat` (clock ticks after boot),
 /// on macOS the BSD start time in microseconds. The same number PRD-02 writes as `start_id` in
@@ -421,47 +400,18 @@ pub fn proc_start_id(pid: u32) -> Option<u64> {
     (n == size).then(|| info.pbi_start_tvsec * 1_000_000 + info.pbi_start_tvusec)
 }
 
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
-pub fn proc_start_id(_pid: u32) -> Option<u64> {
-    None
+/// The process written down as `pid` with `start_id` still runs: the recorder, the watchdog or
+/// the harness.
+pub fn alive(pid: u32, start_id: u64) -> bool {
+    // `kill(0, 0)` and negative pids address process groups: never ask for those.
+    let Ok(p) = libc::pid_t::try_from(pid) else {
+        return false;
+    };
+    // SAFETY: signal 0 sends nothing; it only checks that the pid exists and may be signalled.
+    p > 0 && unsafe { libc::kill(p, 0) } == 0 && proc_start_id(pid) == Some(start_id)
 }
 
-/// The file name of the program `pid` runs.
-#[cfg(target_os = "linux")]
-fn exe_name(pid: u32) -> Option<String> {
-    let exe = fs::read_link(format!("/proc/{pid}/exe")).ok()?;
-    Some(exe.file_name()?.to_string_lossy().into_owned())
-}
-
-#[cfg(target_os = "macos")]
-fn exe_name(pid: u32) -> Option<String> {
-    let pid = libc::c_int::try_from(pid).ok()?;
-    let mut buf = vec![0u8; libc::PROC_PIDPATHINFO_MAXSIZE as usize];
-    let len = u32::try_from(buf.len()).ok()?;
-    // SAFETY: `buf` is a writable buffer of `len` bytes that outlives the call.
-    let n = unsafe { libc::proc_pidpath(pid, buf.as_mut_ptr().cast(), len) };
-    buf.truncate(usize::try_from(n).ok().filter(|n| *n > 0)?);
-    let path = PathBuf::from(String::from_utf8_lossy(&buf).into_owned());
-    Some(path.file_name()?.to_string_lossy().into_owned())
-}
-
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
-fn exe_name(_pid: u32) -> Option<String> {
-    None
-}
-
-/// The pid answers and runs a `goalcup` binary.
-pub fn goalcup_alive(pid: u32) -> bool {
-    answers(pid) && exe_name(pid).is_some_and(|n| n.starts_with("goalcup"))
-}
-
-/// The harness (or any process written down with its start id) still runs: the pid answers and
-/// its start time still matches.
-pub fn harness_alive(pid: u32, start_id: u64) -> bool {
-    answers(pid) && proc_start_id(pid) == Some(start_id)
-}
-
-/// `rec/watchdog.pid`: one line `<pid> <start_id>`, written by PRD-02's watchdog.
+/// `rec/watchdog.pid`: one line `<pid> <start_id>`, written by PRD-02's watchdog (seam S8).
 pub fn watchdog_pid(entry_dir: &Path) -> Option<(u32, u64)> {
     let text = fs::read_to_string(entry_dir.join("rec").join("watchdog.pid")).ok()?;
     let mut it = text.split_whitespace();
@@ -470,11 +420,9 @@ pub fn watchdog_pid(entry_dir: &Path) -> Option<(u32, u64)> {
     it.next().is_none().then_some((pid, start_id))
 }
 
-/// The watchdog of `entry_dir` lives: its pid is a goalcup binary with the start id written down.
-/// A missing or odd `rec/watchdog.pid` means no.
+/// The watchdog of `entry_dir` lives. A missing or odd `rec/watchdog.pid` means no.
 pub fn watchdog_alive(entry_dir: &Path) -> bool {
-    watchdog_pid(entry_dir)
-        .is_some_and(|(pid, start_id)| goalcup_alive(pid) && proc_start_id(pid) == Some(start_id))
+    watchdog_pid(entry_dir).is_some_and(|(pid, start_id)| alive(pid, start_id))
 }
 
 #[cfg(test)]

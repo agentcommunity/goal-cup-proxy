@@ -3,7 +3,6 @@
 //! (its `written` and `off` equal the seal's totals) and adds no counter (ledger L2), so the screen
 //! and `goalcup-verify check` agree by construction. The upload lines follow with seam S9.
 
-use std::fs;
 use std::path::Path;
 
 use super::status::by_count;
@@ -20,12 +19,9 @@ const SHOWN_HOSTS: usize = 5;
 
 /// The end screen of the part in `entry_dir`, from its `status.json` and its run's `server.json`.
 pub fn end_screen(entry_dir: &Path) -> Result<String, NotSealed> {
-    let st: Status = fs::read(super::status_json(entry_dir))
-        .ok()
-        .and_then(|b| serde_json::from_slice(&b).ok())
-        .ok_or(NotSealed)?;
+    let st: Status = super::read_json(&super::status_json(entry_dir)).ok_or(NotSealed)?;
     let run_dir = entry_dir.parent().ok_or(NotSealed)?;
-    let server = super::read_server_json(run_dir);
+    let server: Option<ServerJson> = super::read_json(&super::server_json(run_dir));
     let run = run_dir
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
@@ -93,6 +89,15 @@ pub fn screen(
         body.push(text::NOTHING_LOST.to_owned());
     } else if c.req_holes > 0 || c.lost_bytes > 0 {
         body.push(text::whole_and_lost(c.req_whole, c.req_holes, c.lost_bytes));
+    }
+    // Gaps no other line names (rule 1): of unknown size beyond the off spans, or, with no other
+    // loss line, gaps that lost no byte. `recorder_down` gaps are the off line's.
+    let unknown = c.lost_unknown.saturating_sub(st.off.spans);
+    let listed = c.tunnel_hosts.values().any(|t| t.listed.is_some());
+    if unknown > 0 {
+        body.push(text::gaps_line(unknown, true));
+    } else if c.gaps > st.off.spans && c.lost_bytes == 0 && !listed {
+        body.push(text::gaps_line(c.gaps - st.off.spans, false));
     }
     body.push(text::session_files(c.native_files, c.native_bytes));
     if st.off.spans > 0 || st.off.ms > 0 {

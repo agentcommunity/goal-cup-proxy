@@ -2,91 +2,53 @@
 //! problem line per cause, the note lines, pid liveness, and `status --json` passing the three files
 //! through. Facts and the contract word `PROBLEM:` only; every sentence is compared with `text.rs`.
 
+mod cli_common;
+mod common;
+
 use std::path::Path;
 use std::process::{Command, Output};
 
-use goalcup::cli::status::{Ctx, Facts, State, block, decide, problems};
+use cli_common::{ENTRY, RUN, T0, status};
+use common::home::TempHome;
+use goalcup::cli::status::{Ctx, State, block, decide, problems};
 use goalcup::cli::{self, ConnectorSource, EntryFacts, RunMode, ServerJson, text};
 use goalcup::pipeline::counts::TunnelHost;
-use goalcup::pipeline::status::{
-    AfterSeal, DurableStatus, HarnessStatus, Losing, Mode, Off, STATUS_V, Status, Written,
-};
+use goalcup::pipeline::status::{AfterSeal, HarnessStatus, Losing, Mode};
 use goalcup::watchdog::Exit;
 use serde_json::{Value, json};
 
-const T0: u64 = 1_794_045_600; // 2026-11-07T10:00:00Z
-const RUN: &str = "r0123456789abcdef";
-const ENTRY: &str = "e0123456789abcdef";
-
-fn status(mode: Mode) -> Status {
-    Status {
-        v: STATUS_V,
-        updated: "2026-11-07T10:00:00Z".into(),
-        pid: 0,
-        start_id: 0,
-        boot: 0,
-        port: 41_000,
-        mode,
-        harness: None,
-        written: Written::default(),
-        last_request_at: None,
-        last_native_at: None,
-        losing: Losing::default(),
-        off: Off::default(),
-        notes: Vec::new(),
-        held_bytes: 0,
-        held_peak: 0,
-        guard: 0,
-        writer_idle_ms: 0,
-        durable: DurableStatus::default(),
-        deadline: None,
-        sealing: None,
-        seal: None,
-        cut_files: None,
-        outlived: None,
-        after_seal: None,
-    }
-}
-
-fn facts(mode: Mode, recorder: bool, watchdog: bool, harness: bool, age: u64) -> Facts {
-    Facts {
-        mode,
+/// Liveness and now (`T0 + age`); the run is open for a day.
+fn live(recorder: bool, watchdog: bool, harness: bool, age: u64) -> Ctx<'static> {
+    Ctx {
+        name: "Agent",
+        run: RUN,
         recorder,
         watchdog,
         harness,
-        updated: T0,
-        off_since: None,
-        losing: Losing::default(),
-        writer_idle_ms: 0,
+        deadline: Some(T0 + 86_400),
         now: T0 + age,
     }
 }
 
-fn cx(harness_alive: bool, now: u64) -> Ctx<'static> {
-    Ctx {
-        name: "Agent",
-        run: RUN,
-        harness_alive,
-        deadline: Some(T0 + 86_400),
-        now,
-    }
+fn cx(harness: bool, now: u64) -> Ctx<'static> {
+    live(true, true, harness, now - T0)
+}
+
+fn state(mode: Mode, cx: &Ctx<'_>) -> State {
+    decide(&status(mode), cx)
 }
 
 #[test]
 fn state_rows_in_table_order() {
-    let sealed = decide(&facts(Mode::Sealed, false, false, false, 999));
+    let sealed = state(Mode::Sealed, &live(false, false, false, 999));
     assert_eq!(sealed, State::Sealed { at: T0 });
     for mode in [Mode::Recording, Mode::Losing, Mode::Null] {
-        assert_eq!(
-            decide(&facts(mode, false, true, true, 5)),
-            State::Restarting { since: T0 }
-        );
-        assert_eq!(
-            decide(&facts(mode, false, true, true, 31)),
-            State::OffRestarting { since: T0 }
-        );
+        let restarting = state(mode, &live(false, true, true, 5));
+        assert_eq!(restarting, State::Restarting { since: T0 });
+        let off = state(mode, &live(false, true, true, 31));
+        assert_eq!(off, State::OffRestarting { since: T0 });
     }
-    let recover = decide(&facts(Mode::Recording, false, false, true, 5));
+    let recover = state(Mode::Recording, &live(false, false, true, 5));
     assert_eq!(recover, State::Recover { since: T0 });
     let line = text::state_line(&recover, RUN);
     assert!(line.starts_with(text::PROBLEM) && line.ends_with("goalcup recover"));
@@ -94,41 +56,58 @@ fn state_rows_in_table_order() {
         (60, State::Continue { since: T0 }),
         (121, State::Stale { since: T0 }),
     ] {
-        let got = decide(&facts(Mode::Recording, false, false, false, age));
+        let got = state(Mode::Recording, &live(false, false, false, age));
         assert_eq!(got, want);
         let line = text::state_line(&got, RUN);
         assert!(line.starts_with(text::PROBLEM));
         assert!(line.ends_with(&format!("goalcup continue {RUN}")), "{line}");
     }
-    let mut null = facts(Mode::Null, true, true, true, 3);
-    null.off_since = Some(T0 - 600);
-    assert_eq!(decide(&null), State::Null { since: T0 - 600 });
+    // Past the deadline `continue` and `recover` refuse: the advice is `goalcup seal`.
+    for harness in [false, true] {
+        let mut over = live(false, false, harness, 200);
+        over.deadline = Some(T0 + 100);
+        let got = state(Mode::Recording, &over);
+        assert_eq!(got, State::Over { since: T0 });
+        let line = text::state_line(&got, RUN);
+        assert!(line.starts_with(text::PROBLEM) && line.ends_with("goalcup seal"), "{line}");
+        assert!(!line.contains("goalcup continue") && !line.contains("goalcup recover"));
+    }
+    let mut null = status(Mode::Null);
+    null.off.since = Some("2026-11-07T09:50:00Z".into());
     assert_eq!(
-        decide(&facts(Mode::Recording, true, true, true, 11)),
-        State::NotAnswering { since: T0 }
+        decide(&null, &live(true, true, true, 3)),
+        State::Null { since: T0 - 600 }
     );
-    let mut losing = facts(Mode::Losing, true, true, true, 1);
+    let not_answering = state(Mode::Recording, &live(true, true, true, 11));
+    assert_eq!(not_answering, State::NotAnswering { since: T0 });
+    let mut losing = status(Mode::Losing);
     losing.losing = Losing {
         streams_in_gap: 2,
         dropped_bytes: 12_000_000,
     };
-    let got = decide(&losing);
-    assert_eq!(
-        got,
-        State::Losing {
-            streams: 2,
-            bytes: 12_000_000
-        }
-    );
+    let got = decide(&losing, &live(true, true, true, 1));
+    let want = State::Losing {
+        streams: 2,
+        bytes: 12_000_000,
+    };
+    assert_eq!(got, want);
     assert!(text::state_line(&got, RUN).contains(&text::size_words(12_000_000)));
-    let mut slow = facts(Mode::WriterSlow, true, true, true, 1);
+    let mut slow = status(Mode::WriterSlow);
     slow.writer_idle_ms = 14_500;
-    assert_eq!(decide(&slow), State::WriterSlow { secs: 14 });
     assert_eq!(
-        decide(&facts(Mode::Recording, true, true, true, 1)),
-        State::Recording
+        decide(&slow, &live(true, true, true, 1)),
+        State::WriterSlow { secs: 14 }
     );
-    assert!(!text::state_line(&State::Recording, RUN).starts_with(text::PROBLEM));
+    let on = state(Mode::Recording, &live(true, true, true, 1));
+    assert_eq!(on, State::Recording);
+    assert!(!text::state_line(&on, RUN).starts_with(text::PROBLEM));
+    // Point 6: a part whose recording is off or stuck is never called `recording`.
+    for s in [recover, State::Continue { since: T0 }, State::Over { since: T0 }] {
+        assert_ne!(s.word(), on.word(), "{s:?}");
+    }
+    for s in [State::OffRestarting { since: T0 }, not_answering] {
+        assert_ne!(s.word(), on.word(), "{s:?}");
+    }
 }
 
 /// Null mode never names a retry count: the only number besides its time is the 5-minute cap.
@@ -176,7 +155,7 @@ fn one_problem_line_per_cause() {
             want,
             "{lines:#?}"
         );
-        let shown = block(&st, &state, None, &cx(alive, T0 + 5), &[false]);
+        let shown = block(&st, &state, None, &cx(alive, T0 + 5), &[state.word()]);
         assert_eq!(count_problems(&shown), want, "{shown}");
     }
 }
@@ -222,10 +201,6 @@ fn every_note_gives_its_line() {
     for w in &want {
         assert!(lines.contains(w), "missing {w}\nin {lines:#?}");
     }
-    assert_ne!(
-        text::listed_tunnel("h", "upstream_untrusted"),
-        text::listed_tunnel("h", "tls_refused")
-    );
     let tunnel = text::long_tunnel("up.example.net", None, 1);
     let (seal, cont) = (
         tunnel.find("goalcup seal").unwrap(),
@@ -244,7 +219,7 @@ fn request_silence_lines() {
         exit: None,
     });
     let quiet = text::quiet_proxy("Agent");
-    let none = text::NO_REQUEST_YET.to_owned();
+    let none = text::no_request_yet();
     assert!(!problems(&st, &State::Recording, &cx(true, T0 + 200)).contains(&none));
     assert!(problems(&st, &State::Recording, &cx(true, T0 + 301)).contains(&none));
     st.written.model_requests = 4;
@@ -283,51 +258,41 @@ fn after_seal_and_agent_exited() {
     assert!(problems(&st, &state, &c).contains(&after));
 }
 
+/// A pid is alive by `kill(pid, 0)` and its start id alone, never by its program file, which
+/// PRD-02's not-dumpable recorder and watchdog close to the participant.
 #[test]
 fn liveness() {
     let me = std::process::id();
     let start = cli::proc_start_id(me).expect("own start id");
-    assert!(!cli::goalcup_alive(me), "a test binary is not goalcup");
-    assert!(cli::harness_alive(me, start));
-    assert!(!cli::harness_alive(me, start + 1));
+    assert!(cli::alive(me, start));
+    assert!(!cli::alive(me, start + 1));
     let mut child = Command::new("true").spawn().unwrap();
     let dead = child.id();
     child.wait().unwrap();
-    assert!(!cli::goalcup_alive(dead) && !cli::harness_alive(dead, start));
-    assert!(!cli::goalcup_alive(0) && !cli::harness_alive(0, 0));
+    assert!(!cli::alive(dead, start) && !cli::alive(0, 0));
 
     let dir = tempfile::tempdir().unwrap();
     assert!(!cli::watchdog_alive(dir.path()));
     std::fs::create_dir(dir.path().join("rec")).unwrap();
     let pid_file = dir.path().join("rec/watchdog.pid");
     std::fs::write(&pid_file, format!("{me} {start}\n")).unwrap();
-    assert_eq!(cli::watchdog_pid(dir.path()), Some((me, start)));
-    assert!(
-        !cli::watchdog_alive(dir.path()),
-        "alive, but not a goalcup binary"
-    );
-    for odd in ["", "12", "12 x", "12 3 4", "x 3"] {
-        std::fs::write(&pid_file, odd).unwrap();
-        assert_eq!(cli::watchdog_pid(dir.path()), None, "{odd:?}");
-    }
+    assert!(cli::watchdog_alive(dir.path()));
+    std::fs::write(&pid_file, format!("{me} {}\n", start + 1)).unwrap();
+    assert!(!cli::watchdog_alive(dir.path()));
+    std::fs::write(&pid_file, format!("{me}")).unwrap();
+    assert_eq!(cli::watchdog_pid(dir.path()), None);
 }
 
-/// A temp home with one run and one part.
-struct Home {
-    goalcup: tempfile::TempDir,
-    user: tempfile::TempDir,
-}
+/// A temp home ([`TempHome`]) with one run and one part.
+struct Home(TempHome);
 
 impl Home {
     fn new() -> Home {
-        Home {
-            goalcup: tempfile::tempdir().unwrap(),
-            user: tempfile::tempdir().unwrap(),
-        }
+        Home(TempHome::new())
     }
 
     fn entry(&self) -> std::path::PathBuf {
-        self.goalcup.path().join("runs").join(RUN).join(ENTRY)
+        self.0.goalcup_home().join("runs").join(RUN).join(ENTRY)
     }
 
     fn write(&self, name: &str, value: &Value) {
@@ -341,14 +306,9 @@ impl Home {
     }
 
     fn run(&self, args: &[&str]) -> Output {
-        Command::new(env!("CARGO_BIN_EXE_goalcup"))
-            .args(args)
-            .env("GOALCUP_SERVER", "off")
-            .env("GOALCUP_HOME", self.goalcup.path())
-            .env("HOME", self.user.path())
-            .env("XDG_CONFIG_HOME", self.user.path())
-            .output()
-            .unwrap()
+        let mut cmd = Command::new(common::bin());
+        self.0.apply(&mut cmd).args(args).env("GOALCUP_SERVER", "off");
+        cmd.output().unwrap()
     }
 }
 

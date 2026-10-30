@@ -2,62 +2,40 @@
 //! fixture's counts and hosts, the rule lines when their facts are there, the gap words, and no
 //! finished block for a part that is not sealed (PRD-17 SC6). Sentences come from `text.rs`.
 
+mod cli_common;
+
 use std::path::{Path, PathBuf};
 
+use cli_common::{RUN, T0 as NOW, status};
 use goalcup::cli::finish::{NotSealed, end_screen, screen};
 use goalcup::cli::status::{Ctx, State, block};
 use goalcup::cli::text;
 use goalcup::pipeline::counts::TunnelHost;
-use goalcup::pipeline::status::{
-    AfterSeal, CutFiles, DurableStatus, Losing, Mode, Off, STATUS_V, SealStatus, Status, Written,
-};
+use goalcup::pipeline::status::{AfterSeal, CutFiles, Mode, Off, SealStatus, Status};
 use goalcup::watchdog::SealReason;
+use goalcup_format::GapReason;
 
-const NOW: u64 = 1_794_045_600;
-const RUN: &str = "r0123456789abcdef";
-
+/// A sealed part that wrote 905 requests and 43 session files and lost nothing.
 fn sealed() -> Status {
-    let mut written = Written::default();
-    written.counts.http_post = 905;
-    written.counts.req_whole = 905;
-    written.counts.native_files = 43;
-    written.counts.native_bytes = 48_200_000;
-    written.counts.hosts = [
+    let mut st = status(Mode::Sealed);
+    let c = &mut st.written.counts;
+    c.http_post = 905;
+    c.req_whole = 905;
+    c.native_files = 43;
+    c.native_bytes = 48_200_000;
+    c.hosts = [
         ("api.example.com".to_owned(), 812),
         ("chat.example.com".to_owned(), 93),
     ]
     .into();
-    written.model_requests = written.counts.model_requests();
-    Status {
-        v: STATUS_V,
-        updated: "2026-11-07T10:00:00Z".into(),
-        pid: 0,
-        start_id: 0,
-        boot: 0,
-        port: 41_000,
-        mode: Mode::Sealed,
-        harness: None,
-        written,
-        last_request_at: None,
-        last_native_at: None,
-        losing: Losing::default(),
-        off: Off::default(),
-        notes: Vec::new(),
-        held_bytes: 0,
-        held_peak: 0,
-        guard: 0,
-        writer_idle_ms: 0,
-        durable: DurableStatus::default(),
-        deadline: None,
-        sealing: None,
-        seal: Some(SealStatus {
-            reason: SealReason::HarnessExit,
-            workspace_head: None,
-        }),
-        cut_files: Some(CutFiles::default()),
-        outlived: None,
-        after_seal: Some(AfterSeal::default()),
-    }
+    st.written.model_requests = st.written.counts.model_requests();
+    st.seal = Some(SealStatus {
+        reason: SealReason::HarnessExit,
+        workspace_head: None,
+    });
+    st.cut_files = Some(CutFiles::default());
+    st.after_seal = Some(AfterSeal::default());
+    st
 }
 
 fn show(st: &Status) -> String {
@@ -86,6 +64,10 @@ fn nothing_lost_only_without_any_loss() {
     );
     let losses: Vec<fn(&mut Status)> = vec![
         |s| s.written.counts.gaps = 1,
+        |s| {
+            s.written.counts.gaps = 1;
+            s.written.counts.lost_unknown = 1;
+        },
         |s| s.written.counts.lost_bytes = 10,
         |s| s.written.counts.req_holes = 1,
         |s| {
@@ -120,10 +102,14 @@ fn nothing_lost_only_without_any_loss() {
             })
         },
     ];
+    // Each loss has its line (rule 1): one at least takes the place of "Nothing was lost.".
+    let clean_lines = show(&clean).lines().count();
     for (i, lose) in losses.iter().enumerate() {
         let mut st = clean.clone();
         lose(&mut st);
-        assert!(!show(&st).contains(text::NOTHING_LOST), "loss {i}");
+        let out = show(&st);
+        assert!(!out.contains(text::NOTHING_LOST), "loss {i}");
+        assert!(out.lines().count() >= clean_lines, "loss {i} has no line:\n{out}");
     }
 }
 
@@ -222,13 +208,13 @@ fn rule_lines_follow_their_facts() {
 #[test]
 fn every_gap_reason_has_words() {
     let other = |n: u8| format!("other ({n})");
+    let words = |n: u8| text::gap_words(&GapReason::from_u8(n).name());
     for n in 1..=15u8 {
-        let words = text::gap_words(n);
-        assert!(!words.is_empty());
-        assert_eq!(words == other(n), n == 8 || n == 9, "{n}: {words}");
+        assert!(!words(n).is_empty());
+        assert_eq!(words(n) == other(n), n == 8 || n == 9, "{n}: {}", words(n));
     }
     for n in [0u8, 16, 200] {
-        assert_eq!(text::gap_words(n), other(n));
+        assert_eq!(words(n), other(n));
     }
 }
 
@@ -256,12 +242,14 @@ fn unsealed_status_never_reads_as_finished() {
             let cx = Ctx {
                 name: "Agent",
                 run: RUN,
-                harness_alive: true,
+                recorder: true,
+                watchdog: true,
+                harness: true,
                 deadline: None,
                 now: NOW,
             };
             for state in [State::Recording, State::Continue { since: NOW }] {
-                let shown = block(&st, &state, None, &cx, &[false]);
+                let shown = block(&st, &state, None, &cx, &[state.word()]);
                 assert!(!shown.contains(text::FINISHED) && !shown.contains(text::PART_RECORDED));
             }
         }

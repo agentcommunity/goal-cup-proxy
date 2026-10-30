@@ -3,30 +3,12 @@
 //! records, after it ends and after a crash. It shows only what `status.json` holds as written,
 //! with no counter of its own (ledger L2).
 
-use std::fs;
-use std::path::Path;
 use std::process::ExitCode;
 
 use serde_json::Value;
 
-use super::{Found, ServerJson, find, home, say, text};
-use crate::pipeline::status::{Losing, Mode, Status};
-
-/// The facts the recording state is decided from. Times are seconds since 1970.
-#[derive(Clone, Debug)]
-pub struct Facts {
-    pub mode: Mode,
-    pub recorder: bool,
-    pub watchdog: bool,
-    pub harness: bool,
-    /// `status.json` `updated`.
-    pub updated: u64,
-    /// `status.json` `off.since` (null mode).
-    pub off_since: Option<u64>,
-    pub losing: Losing,
-    pub writer_idle_ms: u64,
-    pub now: u64,
-}
+use super::{Found, ServerJson, find, home, read_json, say, text};
+use crate::pipeline::status::{Mode, Status};
 
 /// The recording state, one row of the section 4 table each. Times are seconds since 1970.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -54,6 +36,10 @@ pub enum State {
     Stale {
         since: u64,
     },
+    /// Both gone and the run's time is up: `goalcup seal`, as `recover` and `continue` refuse.
+    Over {
+        since: u64,
+    },
     Null {
         since: u64,
     },
@@ -78,46 +64,64 @@ impl State {
             State::Recover { .. }
                 | State::Continue { .. }
                 | State::Stale { .. }
+                | State::Over { .. }
                 | State::Null { .. }
         )
+    }
+
+    /// The word for the part this state is about, in the head and the parts line.
+    pub fn word(&self) -> &'static str {
+        match self {
+            State::Sealed { .. } => "finished",
+            State::Recording | State::Losing { .. } | State::WriterSlow { .. } => "recording",
+            State::Restarting { .. } => "recording is restarting",
+            State::NotAnswering { .. } => "recording is not answering",
+            _ => "recording is off",
+        }
     }
 }
 
 /// The recording state, in the section 4 order.
-pub fn decide(f: &Facts) -> State {
-    let age = f.now.saturating_sub(f.updated);
-    let since = match f.mode {
-        Mode::Null => f.off_since.unwrap_or(f.updated),
-        _ => f.updated,
+pub fn decide(st: &Status, cx: &Ctx<'_>) -> State {
+    let updated = super::unix_of(&st.updated).unwrap_or(0);
+    let age = cx.now.saturating_sub(updated);
+    let since = match st.mode {
+        Mode::Null => at(st.off.since.as_deref()).unwrap_or(updated),
+        _ => updated,
     };
-    match f.mode {
-        Mode::Sealed => State::Sealed { at: f.updated },
-        _ if !f.recorder && f.watchdog && age <= 30 => State::Restarting { since },
-        _ if !f.recorder && f.watchdog => State::OffRestarting { since },
-        _ if !f.recorder && f.harness => State::Recover { since },
-        _ if !f.recorder && age > 120 => State::Stale { since },
-        _ if !f.recorder => State::Continue { since },
+    let over = cx.deadline.is_some_and(|d| d <= cx.now);
+    match st.mode {
+        Mode::Sealed => State::Sealed { at: updated },
+        _ if !cx.recorder && cx.watchdog && age <= 30 => State::Restarting { since },
+        _ if !cx.recorder && cx.watchdog => State::OffRestarting { since },
+        _ if !cx.recorder && over => State::Over { since },
+        _ if !cx.recorder && cx.harness => State::Recover { since },
+        _ if !cx.recorder && age > 120 => State::Stale { since },
+        _ if !cx.recorder => State::Continue { since },
         Mode::Null => State::Null { since },
         _ if age > 10 => State::NotAnswering { since },
         Mode::Losing => State::Losing {
-            streams: f.losing.streams_in_gap,
-            bytes: f.losing.dropped_bytes,
+            streams: st.losing.streams_in_gap,
+            bytes: st.losing.dropped_bytes,
         },
         Mode::WriterSlow => State::WriterSlow {
-            secs: f.writer_idle_ms / 1000,
+            secs: st.writer_idle_ms / 1000,
         },
         Mode::Recording => State::Recording,
     }
 }
 
-/// What the block needs beside `status.json`.
+/// What the state and the block need beside `status.json`: names, liveness and times (seconds
+/// since 1970).
 #[derive(Clone, Debug)]
 pub struct Ctx<'a> {
     /// The harness name from the connector.
     pub name: &'a str,
     pub run: &'a str,
-    pub harness_alive: bool,
-    /// The run's deadline in seconds since 1970, when there is one.
+    pub recorder: bool,
+    pub watchdog: bool,
+    pub harness: bool,
+    /// The run's deadline, when there is one.
     pub deadline: Option<u64>,
     pub now: u64,
 }
@@ -143,7 +147,7 @@ pub fn problems(st: &Status, state: &State, cx: &Ctx<'_>) -> Vec<String> {
     }
     let w = &st.written;
     let started = st.harness.as_ref().and_then(|h| super::unix_of(&h.started));
-    if cx.harness_alive && st.mode != Mode::Sealed {
+    if cx.harness && st.mode != Mode::Sealed {
         let (req, native) = (
             at(st.last_request_at.as_deref()),
             at(st.last_native_at.as_deref()),
@@ -153,7 +157,7 @@ pub fn problems(st: &Status, state: &State, cx: &Ctx<'_>) -> Vec<String> {
                 add(text::quiet_proxy(cx.name))
             }
             (None, _) if w.model_requests == 0 && started.is_some_and(|s| cx.now >= s + 300) => {
-                add(text::NO_REQUEST_YET.to_owned())
+                add(text::no_request_yet())
             }
             _ => {}
         }
@@ -215,13 +219,13 @@ pub fn by_count(hosts: &std::collections::BTreeMap<String, u64>) -> Vec<(&str, u
     v
 }
 
-/// The status block (section 4), the same shape in every state. `parts`: per part, sealed or not.
+/// The status block (section 4), the same shape in every state. `parts`: the word for each part.
 pub fn block(
     st: &Status,
     state: &State,
     run: Option<&ServerJson>,
     cx: &Ctx<'_>,
-    parts: &[bool],
+    parts: &[&str],
 ) -> String {
     let w = &st.written;
     let h = st.harness.as_ref();
@@ -236,7 +240,7 @@ pub fn block(
     }
     lines.push(text::harness_line(
         cx.name,
-        cx.harness_alive,
+        cx.harness,
         h.and_then(|h| h.exit),
         h.is_some(),
     ));
@@ -267,32 +271,6 @@ pub fn block(
     out
 }
 
-fn read_status(entry_dir: &Path) -> Option<Status> {
-    serde_json::from_slice(&fs::read(super::status_json(entry_dir)).ok()?).ok()
-}
-
-fn raw(path: &Path) -> Option<Value> {
-    serde_json::from_slice(&fs::read(path).ok()?).ok()
-}
-
-/// The facts of one part as this computer sees them now.
-pub fn facts(st: &Status, entry_dir: &Path, now: u64) -> Facts {
-    Facts {
-        mode: st.mode,
-        recorder: super::goalcup_alive(st.pid) && super::proc_start_id(st.pid) == Some(st.start_id),
-        watchdog: super::watchdog_alive(entry_dir),
-        harness: st
-            .harness
-            .as_ref()
-            .is_some_and(|h| super::harness_alive(h.pid, h.start_id)),
-        updated: super::unix_of(&st.updated).unwrap_or(0),
-        off_since: at(st.off.since.as_deref()),
-        losing: st.losing,
-        writer_idle_ms: st.writer_idle_ms,
-        now,
-    }
-}
-
 /// `goalcup status [PART] [--json]`: 0 shown, 1 no run yet, 3 `status.json` unreadable.
 pub fn run(part: Option<String>, json: bool) -> ExitCode {
     let home = match home() {
@@ -309,17 +287,17 @@ pub fn run(part: Option<String>, json: bool) -> ExitCode {
     let dir = found.entry_dir();
     let path = super::status_json(&dir);
     if json {
-        let Some(status) = raw(&path) else {
+        let Some(status) = read_json::<Value>(&path) else {
             say(&text::status_unreadable(&path));
             return ExitCode::from(3);
         };
-        let run = raw(&super::server_json(&found.run_dir));
-        let upload = raw(&super::upload_json(&dir));
+        let run: Option<Value> = read_json(&super::server_json(&found.run_dir));
+        let upload: Option<Value> = read_json(&super::upload_json(&dir));
         let all = serde_json::json!({ "status": status, "upload": upload, "run": run });
         println!("{all}");
         return ExitCode::SUCCESS;
     }
-    let Some(st) = read_status(&dir) else {
+    let Some(st) = read_json::<Status>(&path) else {
         say(&text::status_unreadable(&path));
         return ExitCode::from(3);
     };
@@ -328,8 +306,6 @@ pub fn run(part: Option<String>, json: bool) -> ExitCode {
 }
 
 fn show(found: &Found, st: &Status, now: u64) -> String {
-    let f = facts(st, &found.entry_dir(), now);
-    let state = decide(&f);
     let run = found.server.as_ref();
     let deadline = run
         .and_then(|r| r.deadline.as_deref())
@@ -337,14 +313,29 @@ fn show(found: &Found, st: &Status, now: u64) -> String {
     let cx = Ctx {
         name: run.map_or("your agent", |r| r.connector.name.as_str()),
         run: &found.run,
-        harness_alive: f.harness,
+        recorder: super::alive(st.pid, st.start_id),
+        watchdog: super::watchdog_alive(&found.entry_dir()),
+        harness: st
+            .harness
+            .as_ref()
+            .is_some_and(|h| super::alive(h.pid, h.start_id)),
         deadline: at(deadline),
         now,
     };
-    let parts: Vec<bool> = found
+    let state = decide(st, &cx);
+    let parts: Vec<&str> = found
         .entries
         .iter()
-        .map(|e| read_status(&found.run_dir.join(e)).is_some_and(|s| s.mode == Mode::Sealed))
+        .map(|e| {
+            let st: Option<Status> = read_json(&super::status_json(&found.run_dir.join(e)));
+            if st.is_some_and(|s| s.mode == Mode::Sealed) {
+                "sealed"
+            } else if *e == found.entry {
+                state.word()
+            } else {
+                "not sealed"
+            }
+        })
         .collect();
     block(st, &state, run, &cx, &parts)
 }
