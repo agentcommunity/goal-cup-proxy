@@ -136,9 +136,9 @@ impl Reserve {
         if ok {
             self.episode.store(IDLE, Ordering::Relaxed);
         } else {
-            let _ = self
-                .episode
-                .compare_exchange(IDLE, PENDING, Ordering::Relaxed, Ordering::Relaxed);
+            let _ =
+                self.episode
+                    .compare_exchange(IDLE, PENDING, Ordering::Relaxed, Ordering::Relaxed);
         }
         ok
     }
