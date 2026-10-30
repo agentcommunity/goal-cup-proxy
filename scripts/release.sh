@@ -5,13 +5,14 @@
 # is a tag on what that pull request merged.
 #
 #   sh scripts/release.sh prepare <x.y.z>   when needed, branch release/v<x.y.z> from origin/main, set the
-#                                           version, update Cargo.lock, run the version check,
-#                                           commit, push the branch and open a pull request.
+#                                           version, update Cargo.lock, commit, push the branch
+#                                           and open a pull request.
 #                                           If origin/main already has <x.y.z>, it says so and
 #                                           does nothing.
 #   sh scripts/release.sh tag <x.y.z>       after the version is on origin/main and the full gate
-#                                           and separate Linux check passed there: fetch, check origin/main's version, tag
-#                                           its commit (not a local branch) and push only the tag.
+#                                           passed there: fetch, check the version, run the pad's
+#                                           release check on origin/main's commit, then tag that
+#                                           commit (not a local branch) and push only the tag.
 #
 # The tag starts .github/workflows/release.yml, which builds the four targets and publishes the
 # release. It refuses a tag that differs from Cargo.toml.
@@ -34,6 +35,7 @@ if ! printf '%s\n' "$new" | grep -Eq '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9
     echo "release: '$new' is not a version of the form x.y.z" >&2
     exit 2
 fi
+next="run sh scripts/gate.sh full, then scripts/pad/table --release-check <commit>, on that origin/main commit before sh scripts/release.sh tag $new"
 
 cd "$(dirname "$0")/.."
 
@@ -58,12 +60,20 @@ if [ "$command" = tag ]; then
         [ -n "$(git ls-remote --tags origin "refs/tags/v$new")" ]; then
         die "the tag v$new already exists"
     fi
-    git tag -a "v$new" -m "goalcup $new" origin/main
+    # The pad judges origin/main's own committed rows, whatever is checked out here.
+    sha=$(git rev-parse origin/main)
+    tmp=$(mktemp -d)
+    trap 'git worktree remove --force "$tmp" 2>/dev/null; rm -rf "$tmp"' EXIT
+    trap 'exit 1' HUP INT TERM
+    git worktree add -q --detach "$tmp" "$sha"
+    (cd "$tmp" && python3 scripts/pad/table --release-check "$sha") ||
+        die "the pad's release check (scripts/pad/table --release-check $sha) refused origin/main; see above"
+    git tag -a "v$new" -m "goalcup $new" "$sha"
     if ! git push origin "refs/tags/v$new"; then
         git tag -d "v$new" >/dev/null
         die "could not push the tag v$new; the local tag was removed"
     fi
-    echo "release: tagged origin/main ($(git rev-parse --short origin/main)) as v$new and pushed the tag."
+    echo "release: tagged origin/main ($sha) as v$new and pushed the tag."
     echo "The release workflow is running: gh run list --workflow release.yml"
     exit 0
 fi
@@ -71,7 +81,7 @@ fi
 # prepare
 if [ "$main_version" = "$new" ]; then
     echo "release: origin/main is already at version $new, so there is nothing to bump."
-    echo "Next: on that origin/main commit, run sh scripts/gate.sh full, then sh scripts/linux-check.sh, then sh scripts/release.sh tag $new"
+    echo "Next: $next"
     exit 0
 fi
 highest=$(printf '%s\n%s\n' "$main_version" "$new" | sort -t. -k1,1n -k2,2n -k3,3n | tail -n 1)
@@ -103,9 +113,9 @@ git add Cargo.toml Cargo.lock
 git commit -q -m "Release $new"
 if ! { git push -q -u origin "$branch" &&
     gh pr create --base main --head "$branch" --title "Release $new" \
-        --body "Sets the workspace version to $new. After it is merged, run sh scripts/gate.sh full and then sh scripts/linux-check.sh on that origin/main commit before sh scripts/release.sh tag $new"; }; then
+        --body "Sets the workspace version to $new. After it is merged, $next"; }; then
     git checkout -q "$start"
     die "the release commit is on the local branch $branch (and on origin if the push worked). Finish by hand: git push -u origin $branch && gh pr create --base main --head $branch"
 fi
 git checkout -q "$start"
-echo "release: pull request opened for $branch. After it is merged, run sh scripts/gate.sh full and then sh scripts/linux-check.sh on that origin/main commit before sh scripts/release.sh tag $new"
+echo "release: pull request opened for $branch. After it is merged, $next"

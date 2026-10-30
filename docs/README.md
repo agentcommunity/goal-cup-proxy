@@ -11,7 +11,6 @@ You run one agent for 168 hours.
 - [PARTICIPANT-GUIDE](PARTICIPANT-GUIDE.md): one page: install, setup, the repository, token and project folder, start, status, continue, the end. The long 0.6 guide is in `archive/`.
 - [HARNESS-SETUP](HARNESS-SETUP.md): the harness settings for a 168-hour run (permission prompts, commits, step limits, sign-in, subagents, `PATH`, first-run screens), per harness.
 - [RULES](RULES.md): the contract. What a run may and may not do, and what Goal Cup Proxy touches.
-- [goal-cup-setup skill](../skills/goal-cup-setup/SKILL.md): hand the setup to your own agent.
 - [SECURITY](../SECURITY.md): what the tool does on your machine, and how to report a problem.
 
 ## Organizer
@@ -41,7 +40,7 @@ You add a coding-agent harness as a connector.
 
 - [adding-a-capture-harness skill](../skills/adding-a-capture-harness/SKILL.md): where to start.
 - [HARNESS-ONBOARDING](HARNESS-ONBOARDING.md): the one procedure, with commands, expected output and stop rules.
-- [CONNECTOR-SCHEMA](CONNECTOR-SCHEMA.md): what a chat connector writes, then every `harness.toml` field.
+- [CONNECTOR-SCHEMA](CONNECTOR-SCHEMA.md): every connector key and the host list rules.
 - [Harness facts sheets](harnesses/README.md): one page per harness, and the rules for writing one.
 - [writing-a-decoder](../skills/adding-a-capture-harness/writing-a-decoder.md): a separate verifier change, not part of a connector.
 - [CONTRIBUTING](../CONTRIBUTING.md): how to send a change, and what a maintainer asks for.

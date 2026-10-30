@@ -186,9 +186,8 @@ index line.
 EVENT JSON always has `ev`: `start` (once per boot, with `mask_rules`), `prev_boot`, `launch`,
 `exit`, `count`, `clock`, `suspend`, `note` (with `what`) and `seal`. A sealed entry ends with what
 was still open (`cut_at_seal` gaps and ends), an `after_stop` GAP if needed, the last COUNT, the
-`seal` event, a LINK and the frame end. A `recovered` seal (a dead entry closed later) sits in a
-recovery frame instead: the dead boot's COUNT, a `recorder_down` GAP, the `seal` event, a LINK, the
-frame end and an `R` line. Nothing follows the seal's LINK.
+`seal` event, a LINK and the frame end. A `recovered` seal (a dead entry closed later) is the `seal`
+event inside the recovery frame (see Recovery). Nothing follows the seal's LINK.
 
 ## Compression, chunks and crash recovery
 
@@ -199,16 +198,16 @@ frame end and an `R` line. Nothing follows the seal's LINK.
   the file start, to a later index line. It usually spans many flushes and never two part files. It
   is not decodable alone; decode a whole part file from its start.
 - A live entry's last part file ends inside an open frame. `goalcup-verify dump` (the Rust decoder)
-  gives every record up to the last flush and reports the open end. That is expected. The `zstd`
-  command line tool may stop short of the last flush on such a file, or on an entry not yet
-  recovered after a crash, so counts made through it are then a lower bound. For a live entry, use
-  `goalcup-verify dump`.
+  gives every record up to the last flush and reports the open end; use it for a live entry. The
+  `zstd` command line tool may stop short of the last flush on such a file, or on an entry not yet
+  recovered after a crash, so counts made through it are then a lower bound.
 - **Recovery** after a crash: drop index lines past the part file's length (and, after a reboot,
   past `cursors.json`); delete a part file with no index line left; cut the last part file at its
   last line's `c_end`. If that line is `L`, close the frame by hand with the 3 bytes `01 00 00`
   (`ZSTD_END_BLOCK`, an empty last raw block). Then add a recovery frame: the dead boot's COUNT
-  (unless an earlier recovery frame holds it), a `recorder_down` GAP, a LINK and an `R` line. The
-  next boot starts a new part file. An entry already sealed is left as it is.
+  (unless an earlier recovery frame holds it), a `recorder_down` GAP, the `seal` event when the dead
+  entry is being closed (`recovered`), a LINK and an `R` line. Without a seal the next boot starts a
+  new part file. An entry already sealed is left as it is.
 
 ## Invariants
 
@@ -217,7 +216,8 @@ frame end and an `R` line. Nothing follows the seal's LINK.
 2. LINK `seq` runs 0, 1, 2 with no hole across part files and boots, and every hash recomputes.
 3. Every DATA, END, GAP (non-zero `sid`) and MASK follows its stream's OPEN in the same boot.
 4. DATA offsets are contiguous from `meta.from` (or 0), except where a GAP of that stream fills the
-   hole.
+   hole. A GAP with unknown loss (`lost` 0) must sit at the hole; the hole's size is then reported,
+   not checked. `conn` streams have no DATA, and their GAPs (`off` 0) are exempt.
 5. Every MASK lies inside bytes already written for its stream, and those bytes are all `*`.
 6. Every boot after 0 follows `recorder_down` gaps from the last kept LINK to recovery (boot 0: at
    most one, after `start`).
@@ -234,10 +234,11 @@ frame end and an `R` line. Nothing follows the seal's LINK.
 ## The worked example
 
 `crates/goalcup-format/tests/data/worked-example.gcr` is one HTTP/1.1 POST with a streamed reply
-and a link: 998 raw bytes, 10 records. `crates/goalcup-format/tests/golden.rs` checks it. Its dump
-(`worked-example.dump.jsonl`, made by `crates/goalcup-format/src/dump.rs`) is below. Its `conn`
-meta has no `kind`: the example predates that key and is kept as is, which also shows that readers
-ignore a missing optional key.
+and a link: 998 raw bytes, 10 records. `crates/goalcup-format/tests/golden.rs` checks it. The file
+is raw and `goalcup-verify` reads only zstd input, so its dump (`worked-example.dump.jsonl`, below)
+is `goalcup-verify dump --text` on a zstd copy (`zstd -c worked-example.gcr > rec-0.gcr.zst`). Its
+`conn` meta has no `kind`: the example predates that key and is kept as is, which also shows that
+readers ignore a missing optional key.
 
 ```json
 {"o":0,"k":"part","entry":"e0123456789abcdef","boot":0,"part":0,"raw_offset":0,"wall":"2026-11-07T00:00:00Z","mono":5000000000,"next_link":0}
@@ -259,8 +260,8 @@ The LINK hash is SHA-256 of `GCR1-LINK`, 32 zero bytes and raw bytes 0 to 965:
 ## A Python reader
 
 This reader needs only the Python standard library (3.9 or later). It reads the decompressed stream
-from standard input and prints each record kind with its count and a total. On a live entry its
-counts are a lower bound (see the `zstd` note above):
+from standard input and prints each record kind with its count and a total, a lower bound on a live
+entry (see the `zstd` note above):
 
 ```
 cat rec-*.gcr.zst | zstd -dc --long=27 | python3 read.py
@@ -322,3 +323,56 @@ main()
 
 On the worked example (`python3 read.py < worked-example.gcr`, already raw) it prints `part 1`,
 `event 1`, `open 3`, `data 2`, `end 2`, `link 1` and `total 10 records, 998 raw bytes`.
+
+## The `goalcup-verify check --json` report
+
+`goalcup-verify check <path> --json` prints one JSON object on standard output (seam S6, PRD-08
+section 4, code in `crates/goalcup-verify/src/report.rs` and `server.rs`) and its text form on
+standard error (per entry, a header, whether it is sealed, each named or failed check's `why` and a
+coverage line). `<path>` is an entry, `rec`, fetched entry (`rec.gcr.zst`) or run folder, a fetched
+outdir, or one part file. `--live` reads an entry still recording up to its last index line;
+`--server` marks a server copy (a fetched `rec.gcr.zst` is one anyway); `--live` wins over both. `--local ENTRY_DIR` is the local
+entry a server copy is compared with. `--known` and `--harness-files` are taken but not read yet.
+
+Exit code and `result`: 0 `pass` (whole); 1 `named` (honest but incomplete: every loss is named, or
+the entry is unsealed, live or has pruned part files); 2 `fail` (a broken invariant or a silent
+loss); 3 no usable report and no JSON (the input or `--local` cannot be read, a wrong command line,
+an internal error). A `warn` (an unknown record kind or GAP reason) or a `skip` leaves the exit
+alone. For a run folder, the worst entry decides. Readers ignore keys they do not know.
+
+| Top-level key | Holds |
+|---|---|
+| `verifier`, `input` | The verifier's version; `local`, `server` or `live` |
+| `run`, `result`, `exit` | The run id from the first `start` event (or null); as above |
+| `server` | For a server input: `chunks` (summed over every `fetch.json`), `whole` (true when every `server_chunks_whole` passes), `equals_local` and `db_match` (true when every entry passes `server_equals_local` or `server_counts_match` respectively, false on a `fail`, else null). Null for a local or live input |
+| `entries` | One object per entry, in order of first wall time, with the keys below |
+
+| Entry key | Holds |
+|---|---|
+| `entry`, `sealed`, `seal_reason`, `boots` | The PART's entry id (else the folder name); whether a `seal` event was read, and its `reason`; boots read |
+| `connector`, `keep`, `label` | The first two from the `start` event, or null; the evidence label, below |
+| `bytes` | `raw` (decompressed), `compressed` (bytes of the files read) and `framing` (raw minus DATA payload) |
+| `links` | LINK records read |
+| `checks` | Per check: `id`; `inv` (the invariant number, or null); `result` (`pass`, `skip`, `warn`, `named` or `fail`); `why` (one plain line, empty on a pass); `first` (`o`, `sid` and `wall` of the first finding at the worst level reached, or null); `facts` (an object) |
+| `counts` | Recounted from the records: `model_requests` (model requests written, `http_post` plus `ws_up_msgs`), `req_whole`, `req_holes`, `gaps` (a count per reason name seen), `lost_bytes`, `lost_unknown`, `after_stop_bytes`, `mask_failclosed_bytes`, `off_ms`, `tunnels`, `native_files`, and `threads` (null) |
+| `harness_log`, `provider_errors`, `history`, `threads` | Not filled yet: the first three null, `threads` an empty list |
+
+**Check ids.** `inv1` to `inv9` and `inv14` check the invariant of that number; `streams_closed`,
+`seen_matches_written`, `gap_has_end` and `recorder_alive` check invariants 10 to 13. With `inv`
+null: `torn_tail`, `native_path_gen`, `counts_match_seal`, `gaps_named`, `record_decode`,
+`parts_pruned`, `record_kind_unknown` and `gap_reason_unknown`. Always `skip` with "not built in
+this slice": `listed_hosts_decrypted`, `conn_bytes`, `mask_failclosed`, `history_complete`,
+`wire_keeps_up`, `threads_match` and `subagents_present`. For a server input, three more read
+`fetch.json`, the chunk list beside the copy (S13, `scripts/fetch-run.sh`), and without it fail
+under `--server`, else skip:
+
+- `server_chunks_whole`: the chunks run on and match their SHA-256 and the record's heads; `named`
+  for an open end, no final heartbeat.
+- `server_equals_local`: the bytes both hold equal the `--local` part files, so a copy shorter or
+  longer than them can pass; whether the copy is whole is `server_chunks_whole`. Skips without
+  them or if pruned.
+- `server_counts_match`: the server's row and heartbeat against the seal's totals; skips if not sealed.
+
+**The label** is a hint for judges, not a judgement. It says which evidence the record holds:
+`wire_and_native` when model requests were written and a `native` or `snapshot` stream holds
+written bytes, `wire_only` or `native_only` when only one of the two, `none` when neither.

@@ -1,57 +1,19 @@
-# Connectors are trusted code: a template, env entry or host can run or leak things on every
-# machine that uses a merged build. Pins are regenerated in the same PR, so they do not protect
-# against a malicious merge. Review is the control. See SECURITY.md.
-#
-# @nembal is the maintainer and is expected to hold admin on this repository; see
-# CONTRIBUTING.md ("What main requires") for how code-owner review is enforced and the
-# temporary single-maintainer exception.
+# Connectors and masking are trusted code: a connector's template, environment entry or host, or a
+# masking rule, runs on every machine that uses a merged build and decides what is recorded and what
+# stays secret. Review is the control. See SECURITY.md and CONTRIBUTING.md ("What main requires").
 
 /connectors/                                        @nembal
-/crates/goalcup-protocol/src/manifest.rs            @nembal
-/scripts/pin-manifests.sh                           @nembal
-
-# The harness contract (D43): the schema, the trust tables, the hint vocabulary, the pins data
-# file and its reader, the tests that gate every connector, the checklist and the skill.
-/crates/goalcup-protocol/pins/                      @nembal
-/crates/goalcup-protocol/src/pins.rs                @nembal
-/crates/goalcup-protocol/src/harness.rs             @nembal
-/crates/goalcup-protocol/src/harness/               @nembal
-/crates/goalcup-protocol/src/capture_policy.rs      @nembal
-/crates/goalcup-protocol/src/hints.rs               @nembal
-/crates/goalcup-protocol/src/capture.rs             @nembal
-/crates/goalcup-protocol/src/envelope.rs            @nembal
-/crates/goalcup-protocol/tests/it/harness_conformance.rs @nembal
-/crates/goalcup-protocol/tests/it/connector_pins.rs    @nembal
-/crates/goalcup-protocol/tests/it/harness_schema.rs    @nembal
-/crates/goalcup-protocol/tests/it/harness_loader.rs    @nembal
-/crates/goalcup-verifier/src/capture_analysis/        @nembal
+/crates/goalcup/src/mask/                           @nembal
+/crates/goalcup/src/connector/                      @nembal
+/crates/goalcup-format/                             @nembal
+/scripts/pad/                                       @nembal
 /skills/adding-a-capture-harness/                   @nembal
 /docs/CONNECTOR-SCHEMA.md                           @nembal
-/docs/HARNESS-ONBOARDING.md                         @nembal
 /docs/DECISIONS.md                                  @nembal
 
-# Launch, environment, seed files and the recording proxy.
-/crates/goalcup-cli/src/proxy/                      @nembal
-/crates/goalcup-cli/src/launch.rs                   @nembal
-/crates/goalcup-cli/src/per_run_home.rs             @nembal
-/crates/goalcup-cli/src/commands/start/            @nembal
-
-# Redaction and the capture path in the daemon.
-/crates/goalcup-daemon/src/redact.rs                @nembal
-/crates/goalcup-daemon/src/redact/                  @nembal
-/crates/goalcup-daemon/src/runtime/capture/         @nembal
-
-# Policy, packaging and automation.
+# Packaging, automation, the upload server (production route, staging fence, authentication) and
+# the security policy.
 /packaging/                                         @nembal
 /.github/                                           @nembal
-
-# The upload server: wrangler.toml holds the production route and the staging fence, and src/
-# holds authentication. The next `wrangler deploy` from main would ship a merged change.
 /server/                                            @nembal
 /SECURITY.md                                        @nembal
-
-# The v5 reader corpus: a changed expectation is a verdict change and needs a DECISIONS row
-# (D43 ruling 7). The record goldens are the writer's half of the same freeze.
-/crates/goalcup-verifier/tests/fixtures/v5-corpus/  @nembal
-/crates/goalcup-verifier/tests/it/v5_corpus.rs         @nembal
-/crates/goalcup-protocol/tests/it/m2_contract.rs       @nembal

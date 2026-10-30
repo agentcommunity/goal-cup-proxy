@@ -848,3 +848,64 @@ Revision 3 against OWNER-DECISIONS.md (the ledger wins). Fix ids are from the al
   a filter by path, method or Host on a decrypted host fails a lessons test, which blocks PRD-13's cut
   (PRD-17 gate check 2). `proxy::serve` and `common::upstream` keep their PRD-00 "Seams" shapes so
   those tests can be written against them.
+
+### 2026-10-30, replan after PRD-10 slice 1 (merge d55030ee)
+
+- **S11 is on integration** (`goalcup::cli::log::{line, Fact, Host}`). A host enters the log only as
+  `Fact::Host(Host::checked(s)?)` where `s` is the connection authority the proxy already parsed or a
+  host from the host list; a request path, query, header value or other traffic text is never a
+  `Fact::Host` or `Fact::Path`. When `Host::checked` returns `None`, log a fixed `Fact::Word` in its
+  place, never the text. Accept and socket errors (EMFILE included) go in as `Fact::Io(kind)`, counts as
+  `Fact::N`. After S3 lands, PRD-10 adds `From<connector::hosts::Host>` for hosts from the list.
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-11 slice 2 (merge b9fa50f8)
+
+- **S3 is on integration.** `HostList::decide(&self, &str) -> Decision` (`Listed { source, kind,
+  pinned }`, `Never`, `NotListed`) and `HostList::ca_subtrees() -> Vec<String>` have their final
+  signatures, so slice 2 (serve, hosts, tunnel, pump, http1) builds against them now. Both are stubs
+  until PRD-11's hosts slice: every name is `NotListed` and there are no subtrees. A proxy test that
+  needs a `Listed` or `Never` answer waits for that merge; nothing in `src/proxy/` copies the
+  matching meanwhile.
+
+### 2026-10-30, replan after core slice 1 (merge 0e411074)
+
+- **Section 7 as built.** Brotli is counted per allocation, not as `1 << WBITS` read from the header:
+  brotli-decompressor 5.0.3 allocates the whole declared window at the first meta-block, so a flushed
+  (SSE) body counts its full window from the first push (about 4.24 MB at WBITS 22, 16.8 MB at 24). A
+  body is refused only before its first piece went out; a body already decoding is never refused. A
+  refused body's allocation is made and dropped at once, a transient of up to 16 MiB per worker
+  thread outside `held` (`BrotliHeap` doc). Zstd counts its frame window plus 512 KiB
+  (`ZSTD_STREAM_OVERHEAD`). Section 7's "40 bodies is 160 MiB" holds at WBITS 22; at WBITS 24
+  `room()` at the default soft guard (384 MiB, less what is held) fits about 23 open bodies, under
+  run 1's about 40. The window Anthropic sends stays the Risks row's pad check. Wire-proxy's 14:47Z
+  owner question (acceptance 10 holds for about 40 concurrent coded bodies, not 200) touches no
+  locked item: R5 holds, the lever is PRD-02's soft default, measured by PRD-16 X3 and PRD-02 R8.
+  The proxy adds no cap and no uncounted decoder for it.
+- **Slice 2 carries three nits from the last review** (owned files): delete the last block of
+  `a_flushed_brotli_body_counts_its_whole_window` in `tests/proxy_decode.rs` (room `1 << 20`), which
+  repeats the first block of `a_window_over_room_is_not_decoded`, and drop "and refuses a body whose
+  window does not fit" from its doc (B14, R2); rewrap the `Zstd` struct doc in `decode.rs` (lines
+  674 to 678, one line at 127 columns) to the file's 100 (B15). The `BrotliHeap` doc's claim that
+  PRD-02's margin holds the refusal transient is true only when the soft guard is at least
+  64 MiB times the worker threads (the margin is a quarter of soft); say that bound instead.
+- **R1 is declined for 1.0:** single-segment zstd frames are over-counted by up to about 384 KiB per
+  body. It only makes the guard more cautious, touches no record byte, and would add lines to the
+  file most over its estimate. Reopen only if A1 to A3 show a `decoder_window` GAP on a zstd body.
+  A17 (refuse brotli allocations) stays skipped: the crate's Huffman table sites use an empty
+  slice unchecked and could panic.
+- **Size (decision line 15:16Z in the wire-proxy log).** Slice 1 is 2,873 src lines against its
+  files' 2,410 estimate (+19%): `decode.rs` 810 against 540, `ws.rs` 735 against 600, `ca.rs` 439
+  against 400, `connect.rs` 673 against 650, `tls.rs` 203 against 220, `mod.rs` 13. The extra in
+  `decode.rs` serves point 3 (decoder memory counted as allocated, so the guard writes a GAP where
+  the process once grew unseen: the breaker measured 3.2 GB allocated against 384 MiB counted) and in
+  `ws.rs` point 1 (every control frame recorded, the data message kept whole); both accepted. The
+  4,250 row stays the ceiling: `mod.rs`, `hosts.rs`, `pump.rs`, `tunnel.rs`, `http1.rs` and `h2.rs`
+  get at most 1,802 lines together (4,250 plus 10%, less 2,873), against their 1,990 estimate. The
+  builder cuts what serves no point first; past 1,802 needs its own decision line naming the point.
+  Tests: 1,029 lines in 4 of the 7 planned files against the 2,000 row; `proxy_http1.rs`,
+  `proxy_h2.rs`, `proxy_tunnel.rs` and `proxy_restart.rs` share the 971 left (fixtures not counted).
+- **On integration now:** `proxy::{ca, tls, connect, decode, ws}` with `RunCa`, `Tls`,
+  `BodyDecoder`, `Step`, `parse_codings`, `WsConn`, `PrefixedIo`. Slice 2 builds `serve`, `hosts`,
+  `pump`, `tunnel` and `http1` on them; `http1` feeds `BodyDecoder` and records what each `Step` says.
+- No locked ledger item is touched. No new owner question comes from this slice.
