@@ -1,0 +1,6 @@
+{
+  "env": {
+    "ANTHROPIC_BASE_URL": "https://ai-gateway.vercel.sh/claude-code",
+    "ANTHROPIC_API_KEY": ""
+  }
+}

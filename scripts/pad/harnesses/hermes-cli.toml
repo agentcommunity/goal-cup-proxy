@@ -1,0 +1,32 @@
+# Pad data for Hermes Agent (PRD-12 section 6): test data, never connector data; goalcup never reads it.
+# Vendor pages read 30 Oct 2026: https://hermes-agent.nousresearch.com/docs/getting-started/installation (installer,
+# ~/.local/bin/hermes), https://github.com/NousResearch/hermes-agent/releases (v0.22.5 is commit bf0203a794),
+# scripts/install.sh at v0.22.5 (--skip-setup, --commit), hermes_cli/auth.py at v0.22.5 (provider "deepseek" reads
+# DEEPSEEK_API_KEY, provider "ai-gateway" reads AI_GATEWAY_API_KEY), https://api-docs.deepseek.com/quick_start/pricing.
+version = "0.22.5"
+version_cmd = "hermes --version"
+install = "curl -fsSL https://raw.githubusercontent.com/NousResearch/hermes-agent/v0.22.5/scripts/install.sh | bash -s -- --skip-setup --skip-browser --skip-computer-use --commit bf0203a794a07aac3ff764972ab9087baa4e4f4e"
+key_kind = "deepseek"
+key_route = "file"
+login = ""
+key_file = "{home}/.env"
+key_line = "DEEPSEEK_API_KEY={key}"
+key_env = ""
+ready_text = ""
+pre_keys = ""
+exit_keys = '/exit\r'
+daemon = "hermes gateway run"
+submit_delay = 2
+subagent_word = "subagent"
+keep_going = true
+
+[direct]
+files = { "config.yaml" = "direct/hermes-config.yaml" }
+env = { }
+
+[gateway]
+files = { "config.yaml" = "gateway/hermes-config.yaml" }
+env = { }
+key_route = "file"
+key_file = "{home}/.env"
+key_line = "AI_GATEWAY_API_KEY={key}"

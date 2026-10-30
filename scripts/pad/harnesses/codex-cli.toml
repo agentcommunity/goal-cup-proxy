@@ -1,0 +1,32 @@
+# Pad data for Codex (PRD-12 section 6): test data, never connector data; goalcup never reads it.
+# Vendor pages read 30 Oct 2026: https://github.com/openai/codex/releases/tag/rust-v0.165.0 (the release),
+# https://learn.chatgpt.com/docs/auth (`codex login --with-api-key` reads the key on stdin; auth.json in CODEX_HOME),
+# https://vercel.com/docs/ai-gateway/coding-agents/openai-codex (gateway provider in config.toml, AI_GATEWAY_API_KEY).
+version = "0.165.0"
+version_cmd = "codex --version"
+install = "npm i -g @openai/codex@0.165.0"
+key_kind = "openai"
+key_route = "login"
+login = "codex login --with-api-key"
+key_file = ""
+key_line = ""
+key_env = ""
+ready_text = ""
+pre_keys = ""
+exit_keys = '/quit\r'
+daemon = ""
+submit_delay = 2
+subagent_word = "sub-agent"
+keep_going = true
+
+[direct]
+files = { }
+env = { }
+
+[gateway]
+files = { "config.toml" = "gateway/codex-config.toml" }
+env = { }
+# Only this line in {home}/.env: Codex's .env overwrites HTTPS_PROXY, NO_PROXY and SSL_CERT_FILE.
+key_route = "file"
+key_file = "{home}/.env"
+key_line = "AI_GATEWAY_API_KEY={key}"
