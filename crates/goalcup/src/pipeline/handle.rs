@@ -395,7 +395,7 @@ mod tests {
     fn end_and_drop_send_the_open_gap_first() {
         let (rec, rx) = Recorder::pipeline(MIB);
         let full = rec.reserve(MIB);
-        let mut h = open(&rec, StreamKind::Native, 100);
+        let mut h = open(&rec, StreamKind::HttpReq, 0);
         for _ in 0..3 {
             h.data(rec.now(), Bytes::from(vec![b'y'; 1000]));
         }
@@ -409,7 +409,7 @@ mod tests {
         let stream: Vec<&Item> = items.iter().filter(|i| sid_of(i) == 1).collect();
         assert_eq!(stream.len(), 3);
         assert!(matches!(stream[1], Item::Gap { .. }));
-        assert_eq!(check_stream(&stream, 100), 3100);
+        assert_eq!(check_stream(&stream, 0), 3000);
 
         let dropped: Vec<&Item> = items.iter().filter(|i| sid_of(i) == 2).collect();
         assert!(matches!(dropped[1], Item::Gap { .. }));
