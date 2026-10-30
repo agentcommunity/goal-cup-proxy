@@ -74,8 +74,18 @@ fn end(t: u64, sid: u64, seen: u64) -> Record {
 fn post(w: &mut PartWriter, c: &mut Counter, k: &mut Clock, sid: u64) {
     let model = OpenFlags::POST | OpenFlags::DECRYPTED;
     let head = json!({"method": "POST", "path": "/v1/responses"});
-    put(w, c, open(k.tick(), sid, StreamKind::HttpReq, 1, head), model);
-    put(w, c, data(k.tick(), sid, 0, 0, b"{\"a\":1}"), OpenFlags::NONE);
+    put(
+        w,
+        c,
+        open(k.tick(), sid, StreamKind::HttpReq, 1, head),
+        model,
+    );
+    put(
+        w,
+        c,
+        data(k.tick(), sid, 0, 0, b"{\"a\":1}"),
+        OpenFlags::NONE,
+    );
     put(w, c, end(k.tick(), sid, 7), OpenFlags::NONE);
 }
 
@@ -126,8 +136,18 @@ fn boot0(rec: &Path, entry_dir: &Path, k: &mut Clock, opts: PartOptions) -> Coun
     // A POST with a hole in its body.
     let model = OpenFlags::POST | OpenFlags::DECRYPTED;
     let head = json!({"method": "POST", "path": "/v1/responses"});
-    put(&mut w, &mut c, open(k.tick(), 3, StreamKind::HttpReq, 1, head.clone()), model);
-    put(&mut w, &mut c, data(k.tick(), 3, 0, 0, b"abc"), OpenFlags::NONE);
+    put(
+        &mut w,
+        &mut c,
+        open(k.tick(), 3, StreamKind::HttpReq, 1, head.clone()),
+        model,
+    );
+    put(
+        &mut w,
+        &mut c,
+        data(k.tick(), 3, 0, 0, b"abc"),
+        OpenFlags::NONE,
+    );
     let start = k.tick();
     let gap = Record::Gap {
         sid: 3,
@@ -141,21 +161,59 @@ fn boot0(rec: &Path, entry_dir: &Path, k: &mut Clock, opts: PartOptions) -> Coun
         tail: br#"{"guard":"held_bytes","limit":536870912}"#.to_vec(),
     };
     put(&mut w, &mut c, gap, OpenFlags::NONE);
-    put(&mut w, &mut c, data(k.tick(), 3, 13, 0, b"xy"), OpenFlags::NONE);
+    put(
+        &mut w,
+        &mut c,
+        data(k.tick(), 3, 13, 0, b"xy"),
+        OpenFlags::NONE,
+    );
     put(&mut w, &mut c, end(k.tick(), 3, 15), OpenFlags::NONE);
     // One WebSocket text message from the client, in two pieces.
-    put(&mut w, &mut c, open(k.tick(), 4, StreamKind::WsUp, 1, json!({"deflate": false})), OpenFlags::DECRYPTED);
-    put(&mut w, &mut c, data(k.tick(), 4, 0, 0x10, b"hel"), OpenFlags::NONE);
-    put(&mut w, &mut c, data(k.tick(), 4, 3, 0x11, b"lo"), OpenFlags::NONE);
+    put(
+        &mut w,
+        &mut c,
+        open(k.tick(), 4, StreamKind::WsUp, 1, json!({"deflate": false})),
+        OpenFlags::DECRYPTED,
+    );
+    put(
+        &mut w,
+        &mut c,
+        data(k.tick(), 4, 0, 0x10, b"hel"),
+        OpenFlags::NONE,
+    );
+    put(
+        &mut w,
+        &mut c,
+        data(k.tick(), 4, 3, 0x11, b"lo"),
+        OpenFlags::NONE,
+    );
     // A ping from the client is not a request.
-    put(&mut w, &mut c, data(k.tick(), 4, 5, 0x91, b"p"), OpenFlags::NONE);
+    put(
+        &mut w,
+        &mut c,
+        data(k.tick(), 4, 5, 0x91, b"p"),
+        OpenFlags::NONE,
+    );
     // A POST whose END is never written.
-    put(&mut w, &mut c, open(k.tick(), 5, StreamKind::HttpReq, 1, head), model);
-    put(&mut w, &mut c, data(k.tick(), 5, 0, 0, b"{\"b\""), OpenFlags::NONE);
+    put(
+        &mut w,
+        &mut c,
+        open(k.tick(), 5, StreamKind::HttpReq, 1, head),
+        model,
+    );
+    put(
+        &mut w,
+        &mut c,
+        data(k.tick(), 5, 0, 0, b"{\"b\""),
+        OpenFlags::NONE,
+    );
 
     let counts = count_and_link(&mut w, &c, k, &mut log, 0);
     assert_eq!(counts.http_req, 3);
-    assert_eq!(counts.http_post, 2, "a request counts once its END is written");
+    assert_eq!(
+        counts.http_post, 2,
+        "a request counts once its END is written"
+    );
     assert_eq!(counts.ws_up_msgs, 1);
     assert_eq!(c.open_streams(), 3);
     // The writer dies here: the frame stays open, nothing after the last index line.

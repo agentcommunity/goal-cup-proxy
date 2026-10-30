@@ -1,7 +1,7 @@
 //! Written counts (seam S4): the COUNT keys of PRD-01 section 9, the durable point, entry totals.
 
-use super::clock::Mono;
 use super::OpenFlags;
+use super::clock::Mono;
 use super::status::write_private;
 use goalcup_format::{EndReason, GapReason, Record, StreamKind};
 use serde::{Deserialize, Serialize};
@@ -248,7 +248,10 @@ impl Counter {
                 }
                 if o.tunnel {
                     let t: Value = serde_json::from_slice(tail).unwrap_or(Value::Null);
-                    let (up, down) = (t["up"].as_u64().unwrap_or(0), t["down"].as_u64().unwrap_or(0));
+                    let (up, down) = (
+                        t["up"].as_u64().unwrap_or(0),
+                        t["down"].as_u64().unwrap_or(0),
+                    );
                     c.tunnel_up += up;
                     c.tunnel_down += down;
                     let h = c
@@ -280,10 +283,8 @@ impl Counter {
                     }
                 }
             }
-            Record::Mask { len, rule, .. } => {
-                if self.fail_closed.contains(rule) {
-                    c.mask_failclosed_bytes += len;
-                }
+            Record::Mask { len, rule, .. } if self.fail_closed.contains(rule) => {
+                c.mask_failclosed_bytes += len;
             }
             _ => {}
         }
@@ -421,7 +422,11 @@ impl CountsLog {
     /// earlier boot plus this boot's latest.
     pub fn compact(&mut self) -> io::Result<()> {
         let mut out = String::new();
-        for l in self.earlier.values().chain(self.latest.as_ref().map(|(_, l)| l)) {
+        for l in self
+            .earlier
+            .values()
+            .chain(self.latest.as_ref().map(|(_, l)| l))
+        {
             out.push_str(l);
             out.push('\n');
         }
@@ -496,7 +501,11 @@ pub fn entry_totals(entry_dir: &Path) -> EntryTotals {
                     ..
                 } => {
                     off_spans += 1;
-                    boots.entry(boot.unwrap_or(0)).or_default().down.push(off_ms(r));
+                    boots
+                        .entry(boot.unwrap_or(0))
+                        .or_default()
+                        .down
+                        .push(off_ms(r));
                 }
                 _ => {}
             }
@@ -507,8 +516,7 @@ pub fn entry_totals(entry_dir: &Path) -> EntryTotals {
     if let Ok(text) = std::fs::read(entry_dir.join(CountsLog::NAME)) {
         for (_, v) in lines(&text) {
             if let Some(b) = v["count"]["boot"].as_u64().filter(|b| *b < first) {
-                boots.entry(b).or_default().last =
-                    serde_json::from_value(v["count"].clone()).ok();
+                boots.entry(b).or_default().last = serde_json::from_value(v["count"].clone()).ok();
             }
         }
     }

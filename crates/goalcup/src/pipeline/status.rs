@@ -376,7 +376,13 @@ impl Board {
 
     /// The status from the live atomics, this entry's written counts, the durable point and these
     /// facts. In `mode: sealed`, `written` and `off` are the seal's totals.
-    pub fn status(&self, live: &Live, counts: Counts, durable: DurableStatus, guard: u64) -> Status {
+    pub fn status(
+        &self,
+        live: &Live,
+        counts: Counts,
+        durable: DurableStatus,
+        guard: u64,
+    ) -> Status {
         let f = self.facts();
         let sealed = f.seal.is_some();
         let (counts, off) = match (&f.totals, sealed) {
@@ -453,7 +459,9 @@ pub fn spawn(rec: Recorder, entry_dir: PathBuf, board: Board, guard: u64) -> Joi
                         raw_end: p.line.raw_end,
                     })
                     .unwrap_or_default();
-                let _ = board.status(&live, rec.counts(), d, guard).write(&entry_dir);
+                let _ = board
+                    .status(&live, rec.counts(), d, guard)
+                    .write(&entry_dir);
                 if stalled(&live, guard) {
                     let _ = io::stderr()
                         .write_all(b"goalcup recorder: the writer stalled; exiting to restart\n");
