@@ -1941,3 +1941,26 @@ kept and now cites BUILD-PROMPT section 5, since B3 no longer carries it.
 - **Acceptance lists as known,** if still open at the end: the PRD-08 slice 4 nits A9, B-R1, B-R6
   and B-R7 (PRD-08 note), and the three commits without trailers above.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-12 slice 5 (merge 9e71bde0)
+
+- `gate fast: PASS in 131s` on 9e71bde0; the gate runs the pad's tests (python3.11 step). Box runs
+  before the merge: 31 pad tests at f7d585fa, 20 at 96df4f07 after the C-1 to C-5 cuts, each round
+  re-checked by a reviewer, the last leaving no open finding but the A-1 and C-7 nits. Sixteen paths
+  changed, all PRD-12 owned. All 16 non-merge commits carry both trailer lines. `gate full` was not
+  run and no real-key run was made.
+- **Size report, PRD-12** (`wc -l` at 9e71bde0, row "pad" about 1,350 to 1,450 with its tests):
+  3,041 under `scripts/pad/` (`pad` 654, `pad-run` 801, `check.py` 583, `test_pad.py` 366, `table`
+  192, `sbx.mjs` 133, `exec/` 96, `image` 54, `pad.toml` 31, prompts and runs 32, harness files 98,
+  `image.id` 1), 110% over the top of the row. About 3,440 projected with `selftest`, 13 harness files
+  and the skill, before the six faults and the queue. PRD-12's decision line (PRD-12 note) names points
+  1, 3 and 4. The owner question on the row stays open (12:53Z); the end-of-build report lists the
+  pad as over its row, with the per-file figures. Nothing blocks on it.
+- **Acceptance lists as known,** if still open at the end: the PRD-12 slice 5 nit A-1 (`c3` `more`),
+  the unproven live looks (`start-refused` `value_shown`, `daemon-check`) until the first real-run
+  read, and the six faults that still answer skip.
+- **Pad rungs 7 to 9 are in** (gateway, dodger, `exec` and `pre`); PRD-03 acceptance 3, 7 and 9 and
+  PRD-11 acceptance 3, 4 and 5 and PRD-10 acceptance 7 now have their watcher scripts. They run only in
+  a real-key row, so none is evidence before PRD-10's `seal` and `recover` merge and the first `micro`
+  row is read by hand (P1, ledger T6).
+- No locked ledger item is touched and no owner question comes from this slice.
