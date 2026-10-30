@@ -1,15 +1,12 @@
 //! The uploader (PRD-06): sends every part file to the server in small chunks soon after it is
 //! written, tells the server the written counts in a heartbeat, and frees local disk once the
-//! server holds the bytes.
+//! server holds the bytes. It runs on two plain threads with a blocking client, never on the
+//! recorder's runtime, and never ends the process.
 //!
-//! It lives in the recorder process on two plain threads, `upload` and `beat`, with a blocking HTTP
-//! client, never on the recorder's async runtime, so a hung server never reaches a relay task. It
-//! never ends the process: recording never depends on it.
-//!
-//! This slice holds the seams only: [`ServerWord`] (S10), [`spawn`], [`UploadCtx`],
-//! [`UploadHandle::finish`] and [`SealFacts`] (S18), `upload.json` ([`state`], S9) and the timing
-//! rules ([`policy`]). The threads come in the next slices; until then [`spawn`] starts none and
-//! says so plainly in `upload.json`.
+//! Present: the seams ([`ServerWord`] S10, [`spawn`], [`UploadCtx`], [`SealFacts`] S18,
+//! `upload.json` S9), the timing rules ([`policy`]), the client, the chunk cut ([`chunk`]) and the
+//! heartbeat ([`beat`]). The threads come in slice 3; until then [`spawn`] starts none and says
+//! so plainly in `upload.json`.
 
 pub mod beat;
 pub mod chunk;
@@ -19,11 +16,12 @@ pub mod state;
 
 pub use policy::WrapUp;
 
+use crate::cli::{self, ServerJson};
 use crate::pipeline::{EntryTotals, Mono, Recorder};
 use crate::watchdog::SealReason;
 use serde::{Deserialize, Serialize};
 use state::{LastError, State, UploadJson};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::time::SystemTime;
 use tokio::sync::watch;
 
@@ -75,7 +73,8 @@ pub struct UploadHandle {
 pub fn spawn(ctx: UploadCtx) -> UploadHandle {
     let (word, _) = watch::channel(None);
     let mut json = UploadJson::new(ctx.run, ctx.entry);
-    match server_url(&ctx.run_dir) {
+    let server = cli::read_json::<ServerJson>(&cli::server_json(&ctx.run_dir));
+    match server.and_then(|s| s.server) {
         None => {
             json.state = State::Local;
             json.keep = true;
@@ -106,11 +105,4 @@ impl UploadHandle {
     pub fn finish(self, wrap_up: WrapUp, seal: SealFacts) {
         let _ = (wrap_up, seal);
     }
-}
-
-/// The run's server address from `run_dir/server.json` (PRD-10), or None for a local run.
-fn server_url(run_dir: &Path) -> Option<String> {
-    let raw = std::fs::read(crate::cli::server_json(run_dir)).ok()?;
-    let v: serde_json::Value = serde_json::from_slice(&raw).ok()?;
-    Some(v.get("server")?.as_str()?.to_owned())
 }

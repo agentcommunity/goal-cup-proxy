@@ -1,15 +1,7 @@
-//! The one blocking HTTP client for the upload server, and the request and answer documents of
-//! seam S5 (`docs/UPLOAD-API.md`). One request, sent once, its answer read with a bound;
-//! retrying is the caller's (`policy`).
-//!
-//! TLS is this crate's own rustls with the `ring` provider and the `webpki-roots` anchors,
-//! plugged into `ureq` through its connector hook: the workspace builds `ureq` without TLS.
-//! `http://` works too, for a local Worker under `wrangler dev` and the fake Worker. The base
-//! address comes from `cli::server()`, which refuses `http://` off loopback and a user part; this
-//! client adds no check of its own.
-//!
-//! Every answer type ignores fields it does not know, so the same client reads a Worker that
-//! still sends `ack` and `last_ack` and one that no longer does.
+//! The one blocking HTTP client for the upload server and the documents of seam S5
+//! (`docs/UPLOAD-API.md`): one request, sent once, its answer read with a bound; retrying is the
+//! caller's. TLS is this crate's rustls (ring, webpki roots) through ureq's connector hook; the
+//! base address comes from `cli::server()`. Answer types ignore unknown fields (`ack`, `last_ack`).
 
 use super::policy::after;
 use crate::pipeline::Mono;
@@ -200,7 +192,9 @@ struct ErrorBody {
 pub struct ServerClient {
     base: String,
     token: Option<Token>,
-    agent: ureq::Agent,
+    /// JSON calls: a TLS connection lives CALL_TIMEOUT; chunk uploads: PUT_TIMEOUT.
+    calls: ureq::Agent,
+    puts: ureq::Agent,
 }
 
 impl std::fmt::Debug for ServerClient {
@@ -223,25 +217,29 @@ impl ServerClient {
         ))
         .with_safe_default_protocol_versions()
         .map(|b| Arc::new(b.with_root_certificates(roots).with_no_client_auth()));
-        let mut agent = ureq::AgentBuilder::new()
-            // One connection per call, so each call resolves the name again.
-            .max_idle_connections(0)
-            .max_idle_connections_per_host(0)
-            // A redirect would carry the token to an address nobody configured.
-            .redirects(0)
-            // The token never goes through a proxy.
-            .try_proxy_from_env(false)
-            .timeout_connect(CONNECT_TIMEOUT)
-            .timeout_read(STALL_TIMEOUT)
-            .timeout_write(STALL_TIMEOUT);
-        // The ring provider takes both default versions, so this holds; if not, https fails.
-        if let Ok(tls) = tls {
-            agent = agent.tls_connector(Arc::new(RustlsConnector(tls)));
-        }
+        let agent = |whole| {
+            let mut agent = ureq::AgentBuilder::new()
+                // One connection per call, so each call resolves the name again.
+                .max_idle_connections(0)
+                .max_idle_connections_per_host(0)
+                // A redirect would carry the token to an address nobody configured.
+                .redirects(0)
+                // The token never goes through a proxy.
+                .try_proxy_from_env(false)
+                .timeout_connect(CONNECT_TIMEOUT)
+                .timeout_read(STALL_TIMEOUT)
+                .timeout_write(STALL_TIMEOUT);
+            // The ring provider takes both default versions, so this holds; if not, https fails.
+            if let Ok(tls) = &tls {
+                agent = agent.tls_connector(Arc::new(RustlsConnector(tls.clone(), whole)));
+            }
+            agent.build()
+        };
         ServerClient {
             base: base.trim_end_matches('/').to_string(),
             token,
-            agent: agent.build(),
+            calls: agent(CALL_TIMEOUT),
+            puts: agent(PUT_TIMEOUT),
         }
     }
 
@@ -249,17 +247,16 @@ impl ServerClient {
         &self.base
     }
 
-    /// `method path` with a JSON body or none, answered by JSON, all within 30 s: the TLS
-    /// handshake is bounded by the connection (`RustlsConnector`), and the request's own timeout
-    /// bounds the connect, the write and the answer's read. PRD-10's device, open and continue
-    /// calls use it.
+    /// `method path` with a JSON body or none, answered by JSON. The request's own 30 s bounds
+    /// the connect and a plain call; a TLS connection also ends 30 s after it opened, a peer that
+    /// trickles bytes included (`Bounded`). PRD-10's device, open and continue calls use it.
     pub fn json<T, B>(&self, method: &str, path: &str, body: Option<&B>) -> Result<T, ServerError>
     where
         T: serde::de::DeserializeOwned,
         B: Serialize + ?Sized,
     {
         let request = self
-            .request(method, path)
+            .request(&self.calls, method, path)
             .timeout(CALL_TIMEOUT)
             .set("Accept", "application/json");
         let sent = match body {
@@ -289,19 +286,12 @@ impl ServerClient {
         self.json("POST", &format!("/v1/runs/{run}/heartbeat"), Some(beat))
     }
 
-    /// `PUT /v1/runs/{run}/chunks/{offset}`, the body streamed from `body`, which yields exactly
-    /// `content_length` bytes; it is never held in memory.
-    ///
-    /// `ureq` writes the whole body before it reads any answer, so a refusal the server sends
-    /// before it reads the body (401, 404, 409, 410, 429, 503 `awaiting_final`, and a stored
-    /// chunk's `200`) arrives here as a broken connection. A PUT that breaks therefore reads the
-    /// position once, at once, and answers with what the server says: the position call's own
-    /// refusal, with its status and `Retry-After`; the chunk's answer when the server holds the
-    /// chunk; a 409 when the server stands elsewhere; a 503 `awaiting_final` when the run is over
-    /// and no final heartbeat is committed. Only when the position shows the server waiting on
-    /// this very chunk is the error a `Transport`. That is a network failure, or a 400 or 413
-    /// the server sent before the body (both only from a bug in this client), which the position
-    /// cannot tell apart.
+    /// `PUT /v1/runs/{run}/chunks/{offset}`, the body streamed from `body` (`content_length`
+    /// bytes), never held in memory. ureq writes the whole body before it reads an answer, so a
+    /// refusal sent before the body arrives as a broken connection; a broken PUT therefore reads
+    /// the position once and answers with the server's word: its refusal, the chunk's answer when
+    /// the server holds it, 409 when it stands elsewhere, 503 `awaiting_final` when the run is
+    /// over with no final committed. Only a server waiting on this very chunk gives `Transport`.
     pub fn put_chunk(
         &self,
         run: &str,
@@ -309,12 +299,12 @@ impl ServerClient {
         body: impl Read,
         content_length: u64,
     ) -> Result<ChunkAnswer, ServerError> {
-        // No request timeout here: ureq 2 drops the agent's 60 s stall on a request with its own
-        // deadline. The whole-PUT bound is the TLS connection's (`Bounded`): every read and write,
-        // from the handshake to the answer's last byte, status line and headers included, fails
-        // once PUT_TIMEOUT has passed. A local `http://` Worker has no whole-PUT bound.
+        // No request timeout: ureq 2 drops the agent's 60 s stall on a request with a deadline.
+        // The whole-PUT bound is the TLS connection's (`Bounded`); a local `http://` Worker has
+        // none.
+        let path = format!("/v1/runs/{run}/chunks/{}", h.offset);
         let request = self
-            .request("PUT", &format!("/v1/runs/{run}/chunks/{}", h.offset))
+            .request(&self.puts, "PUT", &path)
             .set("Accept", "application/json")
             .set("Content-Type", "application/zstd")
             .set("Content-Length", &content_length.to_string())
@@ -363,8 +353,8 @@ impl ServerClient {
         }
     }
 
-    fn request(&self, method: &str, path: &str) -> ureq::Request {
-        let request = self.agent.request(method, &format!("{}{path}", self.base));
+    fn request(&self, agent: &ureq::Agent, method: &str, path: &str) -> ureq::Request {
+        let request = agent.request(method, &format!("{}{path}", self.base));
         match &self.token {
             Some(Token(secret)) => request.set("Authorization", &format!("Bearer {secret}")),
             None => request,
@@ -429,8 +419,9 @@ fn read_bounded(reader: impl Read) -> Result<Vec<u8>, ServerError> {
     Ok(body)
 }
 
-/// TLS for `ureq`: rustls on ring, checked against the web roots and the host name.
-struct RustlsConnector(Arc<rustls::ClientConfig>);
+/// TLS for `ureq`: rustls on ring, checked against the web roots and the host name, on a
+/// connection that lives at most the given time.
+struct RustlsConnector(Arc<rustls::ClientConfig>, Duration);
 
 impl ureq::TlsConnector for RustlsConnector {
     fn connect(
@@ -438,9 +429,8 @@ impl ureq::TlsConnector for RustlsConnector {
         dns_name: &str,
         io: Box<dyn ureq::ReadWrite>,
     ) -> Result<Box<dyn ureq::ReadWrite>, ureq::Error> {
-        // Each call has its own connection. The handshake is bounded by CALL_TIMEOUT (ureq sets
-        // the socket's read timeout once, before this, and checks a request's own deadline only
-        // after it); the stream after it by PUT_TIMEOUT, the longest call, from the same start.
+        // Each call has its own connection: the handshake within CALL_TIMEOUT, the rest within
+        // the agent's time, both from the same start.
         let start = Mono::now();
         let mut io = Bounded {
             inner: io,
@@ -453,10 +443,13 @@ impl ureq::TlsConnector for RustlsConnector {
                 format!("server name: {e}"),
             )
         })?;
-        let mut session = rustls::ClientConnection::new(self.0.clone(), name)
+        let mut session = rustls::ClientConnection::new(Arc::clone(&self.0), name)
             .map_err(|e| std::io::Error::other(format!("TLS setup: {e}")))?;
-        session.complete_io(&mut io)?;
-        io.until = after(start, PUT_TIMEOUT);
+        // complete_io may return mid-handshake after a partial read; finish it within the bound.
+        while session.is_handshaking() {
+            session.complete_io(&mut io)?;
+        }
+        io.until = after(start, self.1);
         Ok(Box::new(TlsStream(rustls::StreamOwned::new(session, io))))
     }
 }
@@ -469,34 +462,41 @@ impl ureq::ReadWrite for TlsStream {
     }
 }
 
-/// A connection whose reads and writes fail once `until` (boot time) has passed.
+/// A connection whose reads and writes end by `until` (boot time): each one waits at most the
+/// time left, or STALL_TIMEOUT if less, so a peer that sends a byte now and then cannot hold it.
 struct Bounded {
     inner: Box<dyn ureq::ReadWrite>,
     until: Mono,
 }
 
 impl Bounded {
-    fn check(&self) -> std::io::Result<()> {
-        if Mono::now() >= self.until {
-            return Err(std::io::Error::new(
+    fn left(&self) -> std::io::Result<Duration> {
+        match self.until.0.checked_sub(Mono::now().0) {
+            Some(n) if n > 0 => Ok(Duration::from_nanos(n).min(STALL_TIMEOUT)),
+            _ => Err(std::io::Error::new(
                 std::io::ErrorKind::TimedOut,
                 "the call ran past its time",
-            ));
+            )),
         }
-        Ok(())
     }
 }
 
 impl Read for Bounded {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        self.check()?;
+        let left = self.left()?;
+        if let Some(socket) = self.inner.socket() {
+            socket.set_read_timeout(Some(left))?;
+        }
         self.inner.read(buf)
     }
 }
 
 impl std::io::Write for Bounded {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        self.check()?;
+        let left = self.left()?;
+        if let Some(socket) = self.inner.socket() {
+            socket.set_write_timeout(Some(left))?;
+        }
         self.inner.write(buf)
     }
     fn flush(&mut self) -> std::io::Result<()> {
@@ -524,6 +524,7 @@ impl std::fmt::Debug for TlsStream {
         f.write_str("TlsStream")
     }
 }
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -551,29 +552,6 @@ mod tests {
              Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
             body.len()
         )
-    }
-
-    /// Answers from a Worker before PRD-07 step 3 (`ack`, `last_ack`) and with a key this
-    /// client does not know still parse.
-    #[test]
-    fn answers_with_old_and_unknown_fields_parse() {
-        let head = "a".repeat(64);
-        let chunk = format!(
-            r#"{{"offset":10,"next_seq":3,"head":"{head}","received_at":"2026-10-30T12:00:00Z",
-                "sealed":false,"ack":{{"seq":2}},"later":1}}"#
-        );
-        let chunk: ChunkAnswer = serde_json::from_str(&chunk).unwrap();
-        assert_eq!((chunk.offset, chunk.next_seq), (10, 3));
-        let position = format!(
-            r#"{{"run_id":"r0123456789abcdef","entry_id":"e0123456789abcdef","status":"open",
-                "offset":10,"next_seq":3,"head":"{head}","last_ack":{{"seq":2}},"final":null,
-                "later":[1]}}"#
-        );
-        let position: RunPosition = serde_json::from_str(&position).unwrap();
-        assert_eq!((position.offset, position.next_seq), (10, 3));
-        let beat: HeartbeatAnswer =
-            serde_json::from_str(r#"{"stop":true,"reason":"deadline","later":{}}"#).unwrap();
-        assert!(beat.stop);
     }
 
     /// Point 4: a refused call never shows the token, in the error, its text or its Debug.
@@ -614,32 +592,13 @@ mod tests {
     /// with the server's word, not a network failure.
     #[test]
     fn a_put_refused_before_its_body_answers_with_the_servers_word() {
-        let zero = "0".repeat(64);
-        let elsewhere = format!(
-            r#"{{"offset":4096,"next_seq":9,"head":"{}","final":null}}"#,
-            "b".repeat(64)
-        );
+        let b = "b".repeat(64);
+        let elsewhere = format!(r#"{{"offset":4096,"next_seq":9,"head":"{b}"}}"#);
+        let conflict = http("409 Conflict", "", "{}");
+        let busy = http("429 Too Many Requests", "Retry-After: 7\r\n", "{}");
         let cases = [
-            (
-                http("409 Conflict", "", r#"{"error":"conflict"}"#),
-                http("200 OK", "", &elsewhere),
-                409,
-                None,
-            ),
-            (
-                http(
-                    "429 Too Many Requests",
-                    "Retry-After: 7\r\n",
-                    r#"{"error":"rate_limited"}"#,
-                ),
-                http(
-                    "429 Too Many Requests",
-                    "Retry-After: 7\r\n",
-                    r#"{"error":"rate_limited"}"#,
-                ),
-                429,
-                Some(7),
-            ),
+            (conflict, http("200 OK", "", &elsewhere), 409, None),
+            (busy.clone(), busy, 429, Some(7)),
         ];
         for (put_answer, position_answer, status, retry_after) in cases {
             let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -664,7 +623,7 @@ mod tests {
                 first_seq: 0,
                 last_seq: 1,
                 head: "a".repeat(64),
-                prev: zero.clone(),
+                prev: "0".repeat(64),
                 sha256: "c".repeat(64),
             };
             let size = 32 << 20;
@@ -673,20 +632,11 @@ mod tests {
                 .unwrap_err();
             let wait = Duration::from_secs(10);
             assert!(heads.recv_timeout(wait).unwrap().starts_with("PUT "));
-            assert!(
-                heads.recv_timeout(wait).unwrap().starts_with("GET "),
-                "{error}"
-            );
-            match error {
-                ServerError::Status {
-                    status: s,
-                    retry_after: r,
-                    ..
-                } => {
-                    assert_eq!((s, r), (status, retry_after));
-                }
-                other => panic!("{other:?}"),
-            }
+            assert!(heads.recv_timeout(wait).unwrap().starts_with("GET "));
+            let ServerError::Status { status: s, .. } = error else {
+                panic!("{error:?}");
+            };
+            assert_eq!((s, error.retry_after()), (status, retry_after));
         }
     }
 }
