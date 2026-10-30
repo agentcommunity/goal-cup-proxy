@@ -225,7 +225,7 @@ fn own_error(status: u16) -> Value {
     json!({"error": code, "message": format!("The fake Worker answered {status}.")})
 }
 
-/// The size of `c` as JSON when it breaks the S5 `counts` bound (the Worker's `counts_dropped`).
+/// The size of a non-null `c` as JSON when it breaks the S5 `counts` bound (`counts_dropped`).
 fn counts_bad(c: &Value) -> Option<usize> {
     let size = c.to_string().len();
     let flat = c.as_object().is_some_and(|m| {
@@ -236,7 +236,7 @@ fn counts_bad(c: &Value) -> Option<usize> {
             _ => false,
         })
     });
-    (!flat || size > 2048).then_some(size)
+    (!c.is_null() && (!flat || size > 2048)).then_some(size)
 }
 
 /// The answer to `req`: status, `Retry-After` and body; `None` drops the connection unanswered.
@@ -317,7 +317,7 @@ fn work(r: Route, req: &Request, segs: &[&str], q: &str, s: &mut State) -> Resul
         Route::Heartbeat => {
             let mut beat: Value = serde_json::from_slice(&req.body).map_err(|_| 400u16)?;
             let id = beat["entry_id"].as_str().ok_or(400u16)?.to_string();
-            let bad = beat.get("counts").filter(|c| !c.is_null()).and_then(counts_bad);
+            let bad = beat.get("counts").and_then(counts_bad);
             if let (Some(n), Some(o)) = (bad, beat.as_object_mut()) {
                 o.remove("counts");
                 o.insert("counts_dropped".into(), n.into());
