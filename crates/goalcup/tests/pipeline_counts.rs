@@ -464,7 +464,11 @@ fn a_dead_boot_counts_its_last_indexed_line_before_recovery() {
     // The last index line never reached the file.
     let idx = first_part(&rec).1;
     let text = std::fs::read(&idx).unwrap();
-    let cut = text[..text.len() - 1].iter().rposition(|&b| b == b'\n').unwrap() + 1;
+    let cut = text[..text.len() - 1]
+        .iter()
+        .rposition(|&b| b == b'\n')
+        .unwrap()
+        + 1;
     std::fs::write(&idx, &text[..cut]).unwrap();
 
     assert_eq!(kept.model_requests(), 2);

@@ -653,7 +653,10 @@ fn last_line(part: &Path) -> io::Result<Option<IndexLine>> {
         Ok(m) => m.len(),
         Err(e) => return gone(e),
     };
-    let name = part.file_name().and_then(|n| n.to_str()).unwrap_or_default();
+    let name = part
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or_default();
     let idx = part.with_file_name(format!("{}.idx", name.trim_end_matches(".gcr.zst")));
     match goalcup_format::read::read_index(&idx) {
         Ok(lines) => Ok(lines.into_iter().take_while(|l| l.c_end <= len).last()),
