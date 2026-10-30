@@ -20,7 +20,14 @@ type Opened = (Value, u64, Vec<(u64, Vec<u8>)>);
 fn boot(dir: &Path, name: &str, cursors: Cursors, snapshot: bool) -> Vec<Opened> {
     let (rec, calls) = Recorder::for_tests(1 << 30);
     let mut tail = Tail::new(UNIX_EPOCH, cursors);
-    tail.settle(&rec, format!("row:{name}"), dir, Path::new(name), stat(dir, name), snapshot);
+    tail.settle(
+        &rec,
+        format!("row:{name}"),
+        dir,
+        Path::new(name),
+        stat(dir, name),
+        snapshot,
+    );
     tail.read(&rec, 1 << 30, Duration::ZERO);
     let c = calls.all();
     let data = |sid: u64| {
@@ -38,12 +45,22 @@ fn boot(dir: &Path, name: &str, cursors: Cursors, snapshot: bool) -> Vec<Opened>
 }
 
 fn stat(dir: &Path, name: &str) -> Stat {
-    Dir::open_root(dir).unwrap().stat_at(OsStr::new(name)).unwrap()
+    Dir::open_root(dir)
+        .unwrap()
+        .stat_at(OsStr::new(name))
+        .unwrap()
 }
 
 fn cursor(id: &str, generation: u64, st: &Stat, off: u64) -> Cursors {
     let mut c = Cursors::default();
-    c.native.insert(id.into(), NativeCursor { generation, fid: st.fid(), off });
+    c.native.insert(
+        id.into(),
+        NativeCursor {
+            generation,
+            fid: st.fid(),
+            off,
+        },
+    );
     c
 }
 
@@ -54,7 +71,10 @@ fn the_same_file_resumes_its_generation_at_the_cursor() {
     let st = stat(dir.path(), "a");
     let o = boot(dir.path(), "a", cursor("row:a", 3, &st, 4), false);
     assert_eq!(o.len(), 1);
-    assert_eq!((&o[0].0["gen"], &o[0].0["from"], o[0].1), (&Value::from(3), &Value::from(4), 4));
+    assert_eq!(
+        (&o[0].0["gen"], &o[0].0["from"], o[0].1),
+        (&Value::from(3), &Value::from(4), 4)
+    );
     assert_eq!(o[0].2, [(4, b"456789".to_vec())]);
 }
 
@@ -78,7 +98,10 @@ fn a_snapshot_equal_to_its_cursor_is_not_copied_again() {
     fs::write(dir.path().join("m.json"), b"{}").unwrap();
     let st = stat(dir.path(), "m.json");
     let mut c = Cursors::default();
-    let snap = SnapshotCursor { size: st.size, mtime_ns: st.mtime_ns };
+    let snap = SnapshotCursor {
+        size: st.size,
+        mtime_ns: st.mtime_ns,
+    };
     c.snapshots.insert("row:m.json".into(), snap);
     assert!(boot(dir.path(), "m.json", c.clone(), true).is_empty());
     fs::write(dir.path().join("m.json"), b"{\"v\":1}").unwrap();

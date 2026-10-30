@@ -63,11 +63,23 @@ impl Tail {
     pub fn new(since: SystemTime, cursors: Cursors) -> Tail {
         let secs = since.duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs());
         let since = i64::try_from(secs).unwrap_or(i64::MAX);
-        Tail { since, cursors, ..Tail::default() }
+        Tail {
+            since,
+            cursors,
+            ..Tail::default()
+        }
     }
 
     /// One walked file against what was seen last (section 4).
-    pub fn settle(&mut self, rec: &Recorder, id: String, root: &Path, rel: &Path, stat: Stat, snapshot: bool) {
+    pub fn settle(
+        &mut self,
+        rec: &Recorder,
+        id: String,
+        root: &Path,
+        rel: &Path,
+        stat: Stat,
+        snapshot: bool,
+    ) {
         let now = rec.now();
         let Some(e) = self.files.get_mut(&id) else {
             if !taken(&stat, self.since) {
@@ -133,7 +145,9 @@ impl Tail {
     pub fn read(&mut self, rec: &Recorder, slice: u64, settle: Duration) -> Stop {
         let now = rec.now().ns();
         let settle = u64::try_from(settle.as_nanos()).unwrap_or(u64::MAX);
-        let mut due: Vec<String> = self.files.iter()
+        let mut due: Vec<String> = self
+            .files
+            .iter()
             .filter(|(_, e)| match e.snap {
                 false => e.h.is_some() && e.stat.size > e.off,
                 true => {
@@ -143,20 +157,23 @@ impl Tail {
             })
             .map(|(id, _)| id.clone())
             .collect();
-        due.rotate_left(self.last.as_ref().map_or(0, |l| due.partition_point(|id| id <= l)));
+        let after = self.last.as_ref().map(|l| due.partition_point(|id| id <= l));
+        due.rotate_left(after.unwrap_or(0));
         let mut left = slice;
         for id in due {
             if left == 0 || rec.room() == 0 {
                 return if left == 0 { Stop::Slice } else { Stop::Room };
             }
-            let Some(e) = self.files.get_mut(&id) else { continue };
+            let Some(e) = self.files.get_mut(&id) else {
+                continue;
+            };
             let got = read_one(rec, &id, e, &mut left);
-            let errno = got.as_ref().err().map(|err| err.raw_os_error().unwrap_or(0));
-            if let Some(errno) = errno
-                && self.noted.insert((id.clone(), errno))
-            {
-                let note = json!({"ev": "note", "what": "native_unreadable", "path": id, "errno": errno});
-                rec.event(note);
+            if let Err(err) = &got {
+                let errno = err.raw_os_error().unwrap_or(0);
+                if self.noted.insert((id.clone(), errno)) {
+                    let what = "native_unreadable";
+                    rec.event(json!({"ev": "note", "what": what, "path": id, "errno": errno}));
+                }
             }
             self.last = Some(id);
             if let Ok(Some(stop)) = got {
@@ -206,7 +223,9 @@ fn read_one(rec: &Recorder, id: &str, e: &mut Entry, left: &mut u64) -> io::Resu
         (e.copy, e.off) = (Some(st), 0);
         e.h = Some(rec.open(StreamKind::Snapshot, 0, 0, 0, OpenFlags::NONE, meta));
     }
-    let (to, Some(h)) = (want(e), e.h.as_mut()) else { return Ok(None) };
+    let (to, Some(h)) = (want(e), e.h.as_mut()) else {
+        return Ok(None);
+    };
     while e.off < to {
         let n = rec.room().min(256 << 10).min(to - e.off).min(*left);
         if n == 0 {
@@ -234,7 +253,8 @@ fn read_one(rec: &Recorder, id: &str, e: &mut Entry, left: &mut u64) -> io::Resu
         } else if let Ok(a) = a {
             (e.stat, e.seen_at) = (a, rec.now());
         }
-        h.end(rec.now(), if whole { Complete } else { SourceChanged }, None);
+        let reason = if whole { Complete } else { SourceChanged };
+        h.end(rec.now(), reason, None);
     }
     Ok(None)
 }
@@ -247,7 +267,8 @@ fn end(rec: &Recorder, mut h: StreamHandle, e: &Entry, reason: EndReason, exact:
         h.gap(GapReason::CutAtSeal, e.seen_at, Some(n), None);
     } else if n > 0 && !e.snap {
         let tail = Some(json!({"unread_at_least": n}));
-        h.gap(GapReason::SourceChanged, e.seen_at, exact.then_some(n), tail);
+        let lost = exact.then_some(n);
+        h.gap(GapReason::SourceChanged, e.seen_at, lost, tail);
     }
     h.end(rec.now(), reason, None);
     n

@@ -24,7 +24,12 @@ impl T {
     fn new(since: SystemTime) -> T {
         let (rec, calls) = Recorder::for_tests(1 << 30);
         let dir = tempfile::tempdir().unwrap();
-        T { dir, rec, calls, tail: Tail::new(since, Cursors::default()) }
+        T {
+            dir,
+            rec,
+            calls,
+            tail: Tail::new(since, Cursors::default()),
+        }
     }
 
     fn p(&self, name: &str) -> std::path::PathBuf {
@@ -34,9 +39,18 @@ impl T {
     /// One walk: settles the named files that exist, then sweeps.
     fn walk(&mut self, names: &[&str], snapshot: bool) {
         for name in names {
-            let Ok(st) = stat(self.dir.path(), name) else { continue };
+            let Ok(st) = stat(self.dir.path(), name) else {
+                continue;
+            };
             let id = format!("row:{name}");
-            self.tail.settle(&self.rec, id, self.dir.path(), Path::new(name), st, snapshot);
+            self.tail.settle(
+                &self.rec,
+                id,
+                self.dir.path(),
+                Path::new(name),
+                st,
+                snapshot,
+            );
         }
         self.tail.sweep(&self.rec);
     }
@@ -51,7 +65,13 @@ fn stat(dir: &Path, name: &str) -> std::io::Result<Stat> {
 }
 
 fn append(p: &Path, b: &[u8]) {
-    OpenOptions::new().create(true).append(true).open(p).unwrap().write_all(b).unwrap();
+    OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(p)
+        .unwrap()
+        .write_all(b)
+        .unwrap();
 }
 
 fn opens(c: &[Call]) -> Vec<(u64, StreamKind, Value)> {
@@ -113,7 +133,10 @@ fn live_eof_is_no_end_and_partial_lines_and_binary_bytes_are_kept() {
     let o = opens(&c);
     assert_eq!(o.len(), 1);
     assert_eq!(o[0].1, StreamKind::Native);
-    assert_eq!((&o[0].2["gen"], &o[0].2["from"]), (&Value::from(0), &Value::from(0)));
+    assert_eq!(
+        (&o[0].2["gen"], &o[0].2["from"]),
+        (&Value::from(0), &Value::from(0))
+    );
     assert_eq!(data(&c, o[0].0), [first, b"\":1}\n".to_vec()].concat());
     assert!(ends(&c).is_empty() && gaps(&c).is_empty());
 }
@@ -138,7 +161,13 @@ fn truncate_and_rename_over_start_a_new_generation_from_zero() {
     assert_eq!(data(&c, o[1].0), b"hi\n");
     assert_eq!(data(&c, o[2].0), b"replaced\n");
     let e = ends(&c);
-    assert_eq!(e, [(o[0].0, EndReason::SourceChanged, 6), (o[1].0, EndReason::SourceChanged, 3)]);
+    assert_eq!(
+        e,
+        [
+            (o[0].0, EndReason::SourceChanged, 6),
+            (o[1].0, EndReason::SourceChanged, 3)
+        ]
+    );
     assert!(gaps(&c).is_empty(), "every byte seen was read");
 }
 
@@ -164,17 +193,24 @@ fn a_file_unreadable_to_the_seal_gives_one_open_one_gap_and_one_end() {
     t.walk(&["a"], false);
     t.read(Duration::ZERO);
     t.read(Duration::ZERO);
-    let T { rec, calls, tail, .. } = t;
+    let T {
+        rec, calls, tail, ..
+    } = t;
     let closed = tail.close(&rec, false);
     assert_eq!((closed.streams, closed.cut_files), (1, 0));
     let c = calls.all();
-    let notes = c.iter().filter(|c| matches!(c, Call::Event(v) if v["what"] == "native_unreadable"));
+    let notes = c
+        .iter()
+        .filter(|c| matches!(c, Call::Event(v) if v["what"] == "native_unreadable"));
     assert_eq!(notes.count(), 1);
     assert_eq!(opens(&c).len(), 1);
     let g = gaps(&c);
     assert_eq!(g.len(), 1);
     assert_eq!((g[0].1, g[0].2), (GapReason::SourceChanged, Some(10)));
-    assert_eq!(ends(&c)[..], [(opens(&c)[0].0, EndReason::SourceChanged, 10)]);
+    assert_eq!(
+        ends(&c)[..],
+        [(opens(&c)[0].0, EndReason::SourceChanged, 10)]
+    );
 }
 
 #[test]
@@ -189,7 +225,11 @@ fn a_rewrite_in_place_that_grows_past_the_offset_reads_as_an_append() {
     t.read(Duration::ZERO);
     let c = t.calls.all();
     assert_eq!(opens(&c).len(), 1);
-    assert_eq!(data(&c, opens(&c)[0].0), b"aaaabbbb", "stated limit: read as an append");
+    assert_eq!(
+        data(&c, opens(&c)[0].0),
+        b"aaaabbbb",
+        "stated limit: read as an append"
+    );
     assert!(ends(&c).is_empty());
 }
 
@@ -229,10 +269,19 @@ fn a_snapshot_is_copied_once_settled_and_again_after_a_change() {
     let c = t.calls.all();
     let o = opens(&c);
     assert_eq!(o.len(), 2);
-    assert!(o.iter().all(|o| o.1 == StreamKind::Snapshot && o.2["form"] == "snapshot"));
+    assert!(
+        o.iter()
+            .all(|o| o.1 == StreamKind::Snapshot && o.2["form"] == "snapshot")
+    );
     assert_eq!(data(&c, o[0].0), b"{\"v\":1}");
     assert_eq!(data(&c, o[1].0), b"{\"v\":22}");
-    assert_eq!(ends(&c), [(o[0].0, EndReason::Complete, 7), (o[1].0, EndReason::Complete, 8)]);
+    assert_eq!(
+        ends(&c),
+        [
+            (o[0].0, EndReason::Complete, 7),
+            (o[1].0, EndReason::Complete, 8)
+        ]
+    );
 }
 
 #[test]
@@ -244,13 +293,28 @@ fn close_with_the_guard_out_cuts_with_the_exact_loss() {
     append(&t.p("a"), &[1; 10]);
     append(&t.p("b"), &[2; 20]);
     t.walk(&["done", "a", "b"], false);
-    let T { rec, calls, tail, .. } = t;
+    let T {
+        rec, calls, tail, ..
+    } = t;
     let closed = tail.close(&rec, true);
-    assert_eq!((closed.streams, closed.cut_files, closed.cut_bytes), (3, 2, 30));
+    assert_eq!(
+        (closed.streams, closed.cut_files, closed.cut_bytes),
+        (3, 2, 30)
+    );
     let c = calls.all();
     let lost: Vec<_> = gaps(&c).into_iter().map(|g| (g.1, g.2)).collect();
-    assert_eq!(lost, [(GapReason::CutAtSeal, Some(10)), (GapReason::CutAtSeal, Some(20))]);
+    assert_eq!(
+        lost,
+        [
+            (GapReason::CutAtSeal, Some(10)),
+            (GapReason::CutAtSeal, Some(20))
+        ]
+    );
     let reasons: Vec<_> = ends(&c).into_iter().map(|e| (e.1, e.2)).collect();
-    let want = [(EndReason::CutAtSeal, 10), (EndReason::CutAtSeal, 20), (EndReason::Complete, 4)];
+    let want = [
+        (EndReason::CutAtSeal, 10),
+        (EndReason::CutAtSeal, 20),
+        (EndReason::Complete, 4),
+    ];
     assert_eq!(reasons, want);
 }

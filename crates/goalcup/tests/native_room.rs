@@ -49,13 +49,19 @@ fn no_room_reads_nothing_and_every_byte_arrives_in_order_once_room_returns() {
     let (rec, calls) = Recorder::for_tests(0);
     let mut tail = Tail::new(UNIX_EPOCH, Cursors::default());
     walk(&rec, &mut tail, dir.path(), &["big"]);
-    assert!(matches!(tail.read(&rec, 64 << 20, Duration::ZERO), Stop::Room));
+    assert!(matches!(
+        tail.read(&rec, 64 << 20, Duration::ZERO),
+        Stop::Room
+    ));
     assert!(!calls.all().iter().any(|c| matches!(c, Call::Data(..))));
     calls.set_room(100_000);
     while !matches!(tail.read(&rec, 64 << 20, Duration::ZERO), Stop::Done) {}
     let (at, bytes) = pieces(&calls.all(), "row:big");
     assert!(contiguous(&at));
-    assert!(at.iter().all(|a| a.1 <= 100_000), "no piece is longer than room()");
+    assert!(
+        at.iter().all(|a| a.1 <= 100_000),
+        "no piece is longer than room()"
+    );
     assert_eq!(bytes, body);
 }
 
@@ -67,7 +73,10 @@ fn a_huge_file_does_not_starve_a_small_one() {
     let (rec, calls) = Recorder::for_tests(1 << 30);
     let mut tail = Tail::new(UNIX_EPOCH, Cursors::default());
     walk(&rec, &mut tail, dir.path(), &["a-huge", "b-small"]);
-    assert!(matches!(tail.read(&rec, 1 << 20, Duration::ZERO), Stop::Slice));
+    assert!(matches!(
+        tail.read(&rec, 1 << 20, Duration::ZERO),
+        Stop::Slice
+    ));
     assert!(pieces(&calls.all(), "row:b-small").1.is_empty());
     tail.read(&rec, 1 << 20, Duration::ZERO);
     assert_eq!(pieces(&calls.all(), "row:b-small").1, b"small\n");
