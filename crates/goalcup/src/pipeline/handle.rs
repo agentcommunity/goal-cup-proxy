@@ -209,9 +209,7 @@ impl StreamHandle {
         let (soft, in_gap, always) = (rec.inner.guard, self.gap.is_some(), !self.wire || n == 0);
         let held = item::data_held(bytes.len());
         let admitted = rec.inner.tx.is_none()
-            || rec.hold(held, |h| {
-                always || guard::admits(h, held, in_gap, soft)
-            });
+            || rec.hold(held, |h| always || guard::admits(h, held, in_gap, soft));
         if !admitted {
             match &self.gap {
                 Some(gap) => {

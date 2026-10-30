@@ -507,9 +507,9 @@ pub fn entry_totals(entry_dir: &Path) -> EntryTotals {
 /// Every boot of the entry. A boot with part files on disk is read from them; its earlier part
 /// files may be pruned, so its own spans are the larger of what they hold and its `counts.jsonl`
 /// line (boot 0's own start gap sits in its first part file). Its count is its last COUNT event,
-/// or its last line up to its last LINK on disk when that line is later: a dead boot not yet
-/// recovered has a line at each LINK but a COUNT event only every 60 s, and the recovery frame
-/// will take that line. A boot not read from part files (all of them pruned, or the read failed
+/// or, while it has no recovery frame, its last line up to its last LINK on disk when that line
+/// is later: a dead boot not yet recovered has a line at each LINK but a COUNT event only every
+/// 60 s, and the recovery frame will take that line. A boot not read from part files (all of them pruned, or the read failed
 /// before it) is its line. A line of a later boot after a whole read left nothing durable (its
 /// part file was deleted by recovery) and is not read.
 fn boots(entry_dir: &Path) -> BTreeMap<u64, Boot> {
@@ -563,10 +563,12 @@ fn boots(entry_dir: &Path) -> BTreeMap<u64, Boot> {
             match boots.get_mut(&n) {
                 Some(b) => {
                     b.spans = b.spans.max(line.spans);
+                    // A recovery frame is a COUNT then a gap; once there, the boot's lines are
+                    // in its COUNT already.
+                    let recovered = b.count.is_some() && !b.down_ms.is_empty();
                     let later = b.count_after.is_none_or(|s| line.seq > s);
-                    if b.linked && line.seq <= b.seq && later {
-                        // The only `recorder_down` gap before its last LINK is its start gap,
-                        // which the line counts.
+                    if !recovered && b.linked && line.seq <= b.seq && later {
+                        // Its only `recorder_down` gap is its start gap, which the line counts.
                         (b.count, b.count_after) = (line.count, Some(line.seq));
                         b.down_ms.clear();
                     }
