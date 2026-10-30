@@ -235,9 +235,9 @@ event inside the recovery frame (see Recovery). Nothing follows the seal's LINK.
 
 `crates/goalcup-format/tests/data/worked-example.gcr` is one HTTP/1.1 POST with a streamed reply
 and a link: 998 raw bytes, 10 records. `crates/goalcup-format/tests/golden.rs` checks it. Its dump
-(`worked-example.dump.jsonl`, made by `crates/goalcup-format/src/dump.rs`) is below. Its `conn`
-meta has no `kind`: the example predates that key and is kept as is, which also shows that readers
-ignore a missing optional key.
+(`worked-example.dump.jsonl`, made by `goalcup-verify dump --text`, which uses
+`goalcup_format::dump::Dumper`) is below. Its `conn` meta has no `kind`: the example predates that
+key and is kept as is, which also shows that readers ignore a missing optional key.
 
 ```json
 {"o":0,"k":"part","entry":"e0123456789abcdef","boot":0,"part":0,"raw_offset":0,"wall":"2026-11-07T00:00:00Z","mono":5000000000,"next_link":0}
@@ -326,11 +326,13 @@ On the worked example (`python3 read.py < worked-example.gcr`, already raw) it p
 ## The `goalcup-verify check --json` report
 
 `goalcup-verify check <path> --json` prints one JSON object on standard output (seam S6, PRD-08
-section 4) and its text form on standard error: `why` for each named or failed check, then one
-coverage line. `<path>` is an entry folder, a `rec` folder, a fetched entry folder (`rec.gcr.zst`),
-a run folder whose subfolders are entries, or one part file. `--live` reads an entry still recording
-up to its last index line; `--server` marks a server copy (a fetched `rec.gcr.zst` is one anyway).
-The code is `crates/goalcup-verify/src/report.rs`. Readers ignore keys they do not know.
+section 4) and its text form on standard error: per entry, `why` for each named or failed check,
+then one coverage line. `<path>` is an entry folder, a `rec` folder, a fetched entry folder
+(`rec.gcr.zst`), a run folder or fetched outdir whose subfolders are entries, or one part file.
+`--live` reads an entry still recording up to its last index line; `--server` marks a server copy (a
+fetched `rec.gcr.zst` is one anyway); `--live` wins over both. `--local`, `--known` and
+`--harness-files` are taken but not read yet. The code is `crates/goalcup-verify/src/report.rs`.
+Readers ignore keys they do not know.
 
 Exit code and `result`: 0 `pass` (whole); 1 `named` (honest but incomplete: every loss is named, or
 the entry is unsealed, live or has pruned part files); 2 `fail` (a broken invariant or a silent
