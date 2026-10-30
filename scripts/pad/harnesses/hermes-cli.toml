@@ -8,12 +8,8 @@ version_cmd = "hermes --version"
 install = "curl -fsSL https://raw.githubusercontent.com/NousResearch/hermes-agent/v0.22.5/scripts/install.sh | bash -s -- --skip-setup --skip-browser --skip-computer-use --commit bf0203a794a07aac3ff764972ab9087baa4e4f4e"
 key_kind = "deepseek"
 key_route = "file"
-login = ""
 key_file = "{home}/.env"
 key_line = "DEEPSEEK_API_KEY={key}"
-key_env = ""
-ready_text = ""
-pre_keys = ""
 exit_keys = '/exit\r'
 daemon = "hermes gateway run"
 submit_delay = 2
@@ -22,11 +18,9 @@ keep_going = true
 
 [direct]
 files = { "config.yaml" = "direct/hermes-config.yaml" }
-env = { }
 
 [gateway]
 files = { "config.yaml" = "gateway/hermes-config.yaml" }
-env = { }
 key_route = "file"
 key_file = "{home}/.env"
 key_line = "AI_GATEWAY_API_KEY={key}"

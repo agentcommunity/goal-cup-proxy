@@ -1,7 +1,5 @@
 # The test pad's own settings (PRD-12 sections 1, 7 and "Overridable defaults").
-# The only server address the pad knows besides loopback: the staging Worker
-# (scripts/matrix.sh:258). Production is refused whatever is written here (ledger B4).
-staging = "https://goalcup-ingest-staging.b-9a5.workers.dev"
+# No server address here: the staging Worker and loopback are fixed in `pad` (ledger B4).
 cap_usd = 10              # per run, ledger T6
 per_key = 2               # sandboxes at once per provider key
 per_key_deepseek = 6      # back to per_key once a row's 429 share passes 5%
@@ -9,7 +7,7 @@ box_vcpus = 4
 box_extra_minutes = 30    # box timeout is the run's minutes plus this
 
 # Key name in a settings file -> the conductor environment variable that holds it.
-# Names only: the pad never reads a value, sbx.mjs put-env reads it inside node.
+# Names only, each a *_API_KEY: the pad never reads a value, sbx.mjs put-env reads it inside node.
 [keys]
 claude = "CLAUDE_API_KEY"
 openai = "OPENAI_API_KEY"

@@ -8,24 +8,13 @@ install = "npm i -g @openai/codex@0.165.0"
 key_kind = "openai"
 key_route = "login"
 login = "codex login --with-api-key"
-key_file = ""
-key_line = ""
-key_env = ""
-ready_text = ""
-pre_keys = ""
 exit_keys = '/quit\r'
-daemon = ""
 submit_delay = 2
 subagent_word = "sub-agent"
 keep_going = true
 
-[direct]
-files = { }
-env = { }
-
 [gateway]
 files = { "config.toml" = "gateway/codex-config.toml" }
-env = { }
 # Only this line in {home}/.env: Codex's .env overwrites HTTPS_PROXY, NO_PROXY and SSL_CERT_FILE.
 key_route = "file"
 key_file = "{home}/.env"

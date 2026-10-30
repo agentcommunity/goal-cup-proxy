@@ -7,26 +7,16 @@ version_cmd = "claude --version"
 install = "npm i -g @anthropic-ai/claude-code@2.1.312"
 key_kind = "claude"
 key_route = "env"
-login = ""
-key_file = ""
-key_line = ""
 key_env = "ANTHROPIC_API_KEY"
-ready_text = ""
 # Down, Enter: "Yes, I trust this folder" (measured on 2.1.283, docs/harnesses/claude-code-cli.md section 10).
 # The once-only "use this API key?" question and any first-run screen are unmeasured on 2.1.312.
 pre_keys = '\033[B\r'
 exit_keys = '/exit\r'
-daemon = ""
 submit_delay = 2
 subagent_word = "subagent"
 keep_going = true
 
-[direct]
-files = { }
-env = { }
-
 [gateway]
 files = { "settings.json" = "gateway/claude-code-settings.json" }
-env = { }
 key_route = "env"
 key_env = "ANTHROPIC_AUTH_TOKEN"
