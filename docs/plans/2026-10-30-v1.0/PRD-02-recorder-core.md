@@ -1312,3 +1312,56 @@ to another file are made by that file's owner.
   COUNT) before the call. The rule holds after the core slice too: a path or host holding a secret
   shape is still masked. PRD-02 does not add `meta.masked` itself; PRD-05 owns it.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-10 slice 1 (merge d55030ee)
+
+- **S8 spawn names are on integration:** the watchdog spawns `goalcup recorder` and `goalcup recorder
+  --null` from `goalcup::cli::RECORDER_SUBCOMMAND` and `goalcup::cli::NULL_FLAG`, never from string
+  literals. `main.rs` dispatches the hidden command to the scaffold's `pipeline::run_recorder(null) ->
+  ExitCode`; keep that signature.
+- **S11 is on integration** (`goalcup::cli::log::{line, Fact, Host}`). Use `Fact::Io(kind)` for a write
+  error before exit 74 (EIO, ENOSPC, EMFILE), `Fact::Exit` for a child's exit, `Fact::Path` only for
+  paths goalcup built, and `Fact::Word` for causes. The panic hook writes file, line and fixed text; the
+  panic payload never goes into a `Fact`. `line` never creates a folder: create the entry folder
+  before the first boot line, or that line is lost.
+- `cli::home()` returns `Result<PathBuf, &'static str>` and refuses with no absolute home; code that
+  needs the home takes it from the start facts or that call, never from the raw variable.
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-04 core slice part 1 (merge 403d9165)
+
+- **`NativeReader::finish` takes the guard.** Ask 10 and PRD-04's ask 1 agree; PRD-00's ruling row
+  "PRD-02 and PRD-04" omits the argument. PRD-04's next slice builds
+  `finish(self, harness_exited: bool, guard: Option<Duration>) -> NativeFinish`; the seal passes
+  `Some(180 s)` for `deadline`, `server_stop` and `signal` and `None` for `harness_exit` and
+  `seal_command` (section 11). PRD-02's seal calls that shape.
+- `native::fsx` uses `pipeline::cursors::Fid` as its file identity, so a change to `Fid` touches the
+  native reader too.
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-11 slice 2 (merge b9fa50f8)
+
+- **S3 is on integration; `watchdog::run` builds against it now.** Keep `plan.lock` alive for the
+  whole watchdog run and drop it last (`LaunchPlan` is not `Clone`; it owns the lock). Run each
+  `before` and `after` entry as `plan.program` followed by the entry's arguments. Call
+  `finish_env(port, run_ca, bundle)` after the CA files exist; it also fills the connector's `ca_env`
+  variables. `hosts`, `native`, `mask_rules` and `notes` are `Serialize` for the start facts. A plan
+  with `refusal` set never reaches the watchdog (PRD-10 stops first).
+- Until PRD-11's hosts slice merges, `hosts.decide` answers `NotListed` for every name and
+  `ca_subtrees` is empty: a watchdog test that needs a decrypted request waits for that merge.
+
+### 2026-10-30, replan after PRD-08 slice 1 (merge d10feef7)
+
+- **`pipeline/counts.rs` has a second reader.** PRD-08's `integrity.rs` recounts every COUNT key
+  from the record to the rules of format-core 12:37Z (`native_bytes` is DATA bytes of native and
+  snapshot streams, `wire_bytes` every other DATA; `tunnel_hosts` listed is `null` until a GAP is
+  written on that tunnel conn, then that GAP's reason name; a GAP on `ws_up` makes the next text or
+  binary message end holed; `off_ms` only from sid 0 `recorder_down`, floored to ms) and the
+  `hosts` rule of format-core 13:19Z. `inv7` and `counts_match_seal` fail when a known key is
+  missing or differs, and ignore keys they do not know. So: a new COUNT key is safe; a renamed or
+  removed key, or a changed counting rule, is a seam line naming PRD-08 and the same change in
+  `crates/goalcup-verify/src/integrity.rs` in one merge window, or every real entry fails `inv7`.
+- **Recovered seals.** The verifier counts a recovered seal's `recorder_down` gap in its own recovery
+  frame, including the boot-0 head gap and a second recovery frame (fixes N1 and N2). A change to how
+  `recover` writes the seal or the gap after `start` is likewise a seam line naming PRD-08.
+- No locked ledger item is touched and no owner question comes from this slice.

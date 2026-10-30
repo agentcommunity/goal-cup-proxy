@@ -1075,3 +1075,70 @@ PRD-01, PRD-02, PRD-04, PRD-05 and PRD-11 as they now stand, and the code. No lo
   typed slice (`&plan.mask_rules`), never a bare `&[]`: the stub is generic over the rule type until
   S3 lands, and PRD-05 switches it to `&[connector::MaskRule]` then (PRD-05 note).
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-10 slice 1 (merge d55030ee)
+
+- **Slice 1 is on integration:** `main.rs` (eight commands, every flag, the hidden
+  `recorder [--null]` dispatched to `pipeline::run_recorder(null) -> ExitCode`), `cli/mod.rs`,
+  `cli/log.rs` (S11) and `cli/text.rs` with the three contract words. Every command body is a stub
+  that prints `<command> is not built yet` and exits 3; the competition refusal of `--connector` and
+  `--hosts` already runs (exit 1, before anything is read).
+- **Builder notes step 1's last item moved to step 2.** `start` with `GOALCUP_SERVER=off` is the first
+  item of the core slice. It needs `watchdog::run` (S8) and `connector::load` and `plan` (S3); the
+  watchdog scaffold on integration has neither yet (its module doc says `run` and `recover` follow S3).
+  Build against PRD-00's final shapes meanwhile and poll as the lane rules say. PRD-00's core slice row
+  already lists `start` with `GOALCUP_SERVER=off`, so the build order does not change.
+- **S11 as merged** (users PRD-02, PRD-03, PRD-06): `line(entry_dir, event: &'static str, facts:
+  &[(&'static str, Fact)])` as section 12. `Fact` has a seventh variant, `Io(io::ErrorKind)`, which is
+  section 12's "logged by its kind name only". `Fact::Host` takes `cli::log::Host`, built only by
+  `Host::checked(&str)` (host syntax; IP literals, `localhost` and a port allowed). When S3's
+  `connector::hosts::Host` is on integration, PRD-10 adds `From<connector::hosts::Host>` in `log.rs`.
+  `Fact::Path` carries runtime text the caller answers for: a path goalcup built (home, run or entry
+  paths, or a file flag the participant gave), never a value from traffic or the environment. Section
+  12's "There is no free text" reads with these two caller-vouched facts; the rule that no header
+  value, body byte, token or credential reaches the file is unchanged. `line` never creates a
+  folder: a line for a missing entry folder is lost, by design.
+- **`cli::home()` returns `Result<PathBuf, &'static str>`**, always absolute, else `text::NO_HOME`. A
+  relative `HOME` or `XDG_CONFIG_HOME` is ignored; a relative `GOALCUP_HOME` is accepted and made
+  absolute against the current folder (review A1's allowed option). So `GOALCUP_HOME=gc` started in
+  the project folder gives `<project>/gc`, and only PRD-17 SC1's refusal of "a project folder that
+  holds `$GOALCUP_HOME`" stops it: SC1 in `cli_folder.rs` is load-bearing. The core slice's SC1 case
+  takes the home from `cli::home()`, never from the raw variable, and includes a relative
+  `GOALCUP_HOME` among its inputs in the same test (no new test file, ledger B10).
+- **Spawn names:** `cli::RECORDER_SUBCOMMAND` and `cli::NULL_FLAG` are the recorder's argv; `main.rs`
+  derives its parser from them and one unit test parses the watchdog's argv. PRD-02 spawns with them.
+- **Open nits for the next PRD-10 touch** (the core slice), none a behaviour change:
+  - A8: the `home()` doc says the SC1 guard is what protects a relative `GOALCUP_HOME`. When
+    `std::path::absolute` fails (the current folder was deleted), the refusal must not say "HOME is not
+    set to a full path": give that case its own wording in `text.rs`, or word `NO_HOME` to cover both.
+  - B13: the header of `tests/cli_log.rs` drops "no free text" (no test there checks it; the two
+    `compile_fail` doctests in `log.rs` do) or names what the file tests.
+  - B14: `parse_error` in `main.rs` as one match whose arms each yield the `ExitCode`; `cli/mod.rs`
+    uses one import style for the `text` constants.
+- **Own file estimates** (the row total holds, see PRD-16 note): `main.rs` 190 src lines against 160;
+  `cli/mod.rs` 152 against 130, before pid liveness; `cli/log.rs` 202 alone against 140 for
+  `skill.rs` and `log.rs` together (about 50 lines are `Host::checked`, about 25 are doctests). When
+  S3 lands, check whether `Host::checked` can shrink to the `From` impl plus the IP, `localhost` and
+  port cases; keep `skill.rs` small.
+- PRD-17 SC1 and SC6 names are still pending: `cli_folder.rs` and `cli_finish.rs` come with the core
+  slice.
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-11 slice 2 (merge b9fa50f8)
+
+- **S3 is on integration.** `connector::hosts::Host { name, kind, pinned }` is there, so
+  `From<connector::hosts::Host>` for `cli::log::Host` can land. `hosts::check` is a stub (label shape
+  only) until PRD-11's hosts slice; `Host::checked` keeps its IP, `localhost` and port forms until then.
+- **Refusals to word** (file, key, home, program and the wanted prefix only, never a value):
+  `Refusal::SettingSet { file, key }`, `HomeLocked { home }`, `VersionMismatch { program, want }`.
+- `goalcup setup` calls `connector::write_settings(home, &c.no_prompts)` and
+  `write_settings(home, &c.update_off)`. It writes nothing until PRD-11's launch slice, so a setup test
+  that reads the written file waits for that merge. After that merge both lists name `{home}` files
+  only (PRD-11 note, F1b). `start` with `GOALCUP_SERVER=off` still needs S8 `watchdog::run`.
+
+### 2026-10-30, replan after PRD-15 slice 5 (merge ea0a0fec)
+
+- `docs/CONNECTOR-SCHEMA.md` "Loading a file" names `goalcup continue --connector --hosts` (review
+  A10). When `continue` merges, its merge note says how the two file flags are checked against the
+  run's first part (section 1 table: "must match the run's first entry"), so PRD-15 states that rule
+  from merged code.

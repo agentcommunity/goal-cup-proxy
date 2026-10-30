@@ -1,5 +1,8 @@
 # Add a harness
 
+**Being rewritten.** The steps below are 0.7 text; the 1.0 connector keys are in
+[CONNECTOR-SCHEMA](CONNECTOR-SCHEMA.md).
+
 **For contributors.** The one guide for adding a coding-agent harness to Goal Cup Proxy, any
 harness, not only the ones that ship. It is for a harness team and for the coding agent that team
 uses. Every step has a command, its expected output and a stop rule. To set up a harness that
@@ -8,9 +11,8 @@ participants. The contributor skill
 ([adding-a-capture-harness](../skills/adding-a-capture-harness/SKILL.md)) points here and holds no
 steps of its own. Three other documents complete it:
 
-- [CONNECTOR-SCHEMA](CONNECTOR-SCHEMA.md): every `harness.toml` field and the rule that refuses it.
-  Its first section, [the connector contract](CONNECTOR-SCHEMA.md#the-connector-contract), is what
-  your connector may rely on and what core changes will not break.
+- [CONNECTOR-SCHEMA](CONNECTOR-SCHEMA.md): every connector key and the rule that refuses it.
+  Its [connector contract](CONNECTOR-SCHEMA.md#the-connector-contract) is what your connector may set.
 - [docs/harnesses](harnesses/README.md): one facts sheet per harness.
 - [writing-a-decoder](../skills/adding-a-capture-harness/writing-a-decoder.md): a separate
   verifier change. A connector needs no decoder.
@@ -298,8 +300,8 @@ is the harness executable. Run every command from the repository root.
    Replace every `<PLACEHOLDER>` and delete unused options. The template is chat mode
    (`interactive = true`), the only mode: the harness opens in the participant's terminal and the
    participant types the prompt. No goal slot, identity `none`, and `since_run_start = true` on the
-   native row. Every shipped connector uses it. [What a chat connector writes](CONNECTOR-SCHEMA.md#what-a-chat-connector-writes)
-   lists every field on one screen. The sign-in must last across runs, so pick the home by one
+   native row. Every shipped connector uses it. [CONNECTOR-SCHEMA](CONNECTOR-SCHEMA.md)
+   lists every 1.0 key. The sign-in must last across runs, so pick the home by one
    question, "does the harness have a variable that moves its config?":
    - **Yes** (like `CODEX_HOME`): set `home.env`, `config_home = "shared"`, `run_home = "empty"`
      (or `"keychain_link"`), a `{config_home}/...` native root, and `skills_dir` if the harness
@@ -450,7 +452,7 @@ daemon.
    roots plus the recording proxy CA, and a direct connection by the harness then succeeds unrecorded
    ([CHEAT-CHECKLIST](CHEAT-CHECKLIST.md#anchoring-and-the-agents-reach)). `SSL_CERT_DIR`,
    `CURL_CA_BUNDLE` and `NODE_TLS_REJECT_UNAUTHORIZED` stay refused. See
-   [CONNECTOR-SCHEMA](CONNECTOR-SCHEMA.md#credential-and-ca).
+   [CONNECTOR-SCHEMA](CONNECTOR-SCHEMA.md#load-checks).
 8. **Native form.** `append_only`, `snapshot` or `final_snapshot`. A `final_snapshot` is a database or
    other store copied once, after the harness has exited; it is never read while the run goes. A
    database the harness writes during the run, polled live, is refused. `protocol_hint` is refused on
@@ -557,7 +559,7 @@ qualification.
 A harness joins by being merged and shipped in a release (D70). Releases continue during the cup,
 so there is no cutoff: a merged connector ships in the next point release. A connector runs without
 `--dev` only when a release pins it. Before that it runs only with `--dev`, which never competes
-([pinned, or `--dev` only](CONNECTOR-SCHEMA.md#pinned-or---dev-only)). A player has to install the
+([CONNECTOR-SCHEMA](CONNECTOR-SCHEMA.md)). A player has to install the
 release that carries the connector before they start a run. Point releases keep
 `CONTROL_API_VERSION`, so a running run is never broken by an update. To get yours in:
 

@@ -1026,3 +1026,70 @@ links and dropped the signing claim from ARCHITECTURE section 10 (fix bdcea297, 
   line 394) or the script's skip line, not from the script header. The header (lines 14-15) does not
   yet say that a skipped usage bucket keeps its test objects until a run without `--older-than`
   (PRD-07 note, review A-N1). The usage skip rule is now plain `403` or `404`.
+
+### 2026-10-30, replan after PRD-11 slice 2 (merge b9fa50f8)
+
+- **`docs/CONNECTOR-SCHEMA.md`** can be written from `crates/goalcup/src/connector/schema.rs` after
+  PRD-11's next merge, which changes three rules: `no_prompts` and `update_off` files under `{home}`
+  only (F1b); a `.jsonc` file read as JSON with comments; `"true"` and `"false"` written as booleans.
+  Also from the PRD-11 note of b9fa50f8: a pattern ending in `**` is refused (PRD-04's check); a load
+  error names the file and the line or key, never a value; built-in connectors are one TOML file plus
+  one line in `builtin.rs`.
+
+### 2026-10-30, replan after PRD-14 slice 1 (merge 22fe5926)
+
+- **Docs still name deleted scripts.** PRD-14 deleted `scripts/linux-check.sh`,
+  `scripts/test_linux_check.py` and `.github/workflows/linux-x86_64.yml` (and earlier
+  `check-version.py`, `ci-scope.py` and their tests). On integration at 22fe5926 these still name
+  them: `README.md:292` and `:294` (the release steps: now `gate full`, then
+  `scripts/pad/table --release-check <commit>`, then `release.sh tag`), `docs/OPERATING.md:50`, `:145`,
+  `:534` and `:540-541` (CI is one job that runs `gate fast`; there is no scope step and no Linux
+  check), `scripts/README.md:6`, `:14`, `:15`, `:17`, `:61`, `:62` and `:68`, and
+  `docs/research/LOCAL-NEXT-STEPS.md:27`, `:31` and `:172`. `packaging/README.md` was fixed in the
+  slice. `docs/CONNECTOR-SCHEMA.md` and the skill template name the platform `linux-x86_64`, not the
+  workflow; they are not stale for this reason.
+- `README.md` "The gate": the first measured `gate fast` with the script steps is 87 s on 22fe5926 in
+  a build box. CI has not yet finished a run on integration (PRD-14 note), so there is no CI time to
+  quote.
+
+### 2026-10-30, replan after PRD-15 slice 5 (merge ea0a0fec)
+
+Slice 5 rewrote `docs/CONNECTOR-SCHEMA.md` for 1.0 from the merged `crates/goalcup/src/connector/`
+code: 113 lines against the "about 90" of the docs table (the 21-row key table, the mask grammar and
+eight **(next slice)** marks carry the extra lines). `gate fast` passed in 83 s. Two review nits stay
+open; both go in the next PRD-15 slice that touches these files, not a separate merge request:
+
+- **A10, `continue` and the file flags.** `CONNECTOR-SCHEMA.md` lines 97-100 say `start` and
+  `continue` both take `--connector` and `--hosts`, then give only the start rule. `continue` has no
+  `--practice` or `--test`; its rule (PRD-10 section 1 command table, and the `main.rs` help "The
+  connector file of the run's first part, if it used one") is that the two file flags match the run's
+  first part. Add that clause, marked **(next slice)** while `continue` is still `not_built`, and drop
+  the mark when PRD-10 merges `continue`.
+- **B12, two links to a page without the fact.** `docs/ARCHITECTURE.md:118` (the run home's `.profile`
+  that exports `PATH`) and `docs/HARNESS-ONBOARDING.md:562` ("pinned, or `--dev` only") now link the
+  bare CONNECTOR-SCHEMA page, which says neither; it says "Nothing is pinned". Delete the two
+  parenthetical links. The `.profile` fact is 1.0 behaviour that arrives with PRD-11's launch slice
+  (`launch.rs`, PRD-17 P11); the ARCHITECTURE rewrite states it from that merged code, not from
+  CONNECTOR-SCHEMA. The pin and `--dev` text goes with the HARNESS-ONBOARDING rewrite.
+- **The (next slice) marks.** When PRD-11's next slice (`hosts.rs`, `hints.rs`, `launch.rs`) merges,
+  PRD-15 drops the eight marks and their "today" clauses and checks each rule against the merged
+  files (reviews A7, B8; the fixer's seam line at 13:21Z). If that slice is not reached in this build,
+  the marks stay; they are true of the code.
+- **Known broken link:** `docs/CONTRACTS.md:615` points at the removed `#pin-evolution` anchor. It is
+  left on purpose: CONTRACTS moves byte for byte to `docs/archive/` in the third slice, and the last
+  link check names it in its filter list if the move has not landed.
+- **Still waiting, unchanged:** the RECORD-FORMAT `check --json` and usage sections (PRD-08, PRD-09),
+  the AGENTS.md map, ARCHITECTURE and RECORD-FORMAT numbers (PRD-02 core merge), the
+  HARNESS-ONBOARDING pointer (PRD-12's skill rewrite), and the third slice.
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-08 slice 1 (merge d10feef7)
+
+- **RECORD-FORMAT's `check --json` section can start.** The S6 shape for the integrity ids is on
+  integration (`crates/goalcup-verify/src/report.rs`, field list in the PRD-08 note); the later ids
+  are in the report as `skip` "not built in this slice" and the page marks them so. `usage` waits for
+  PRD-09.
+- **The worked-example "made by" line** may name `goalcup-verify dump`: it uses
+  `goalcup_format::dump::Dumper` and its output on the worked example equals the committed file as
+  JSON (judge 12:35Z box).
+- No locked ledger item is touched and no owner question comes from this slice.
