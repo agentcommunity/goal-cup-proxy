@@ -2020,7 +2020,10 @@ impl Scanner {
         let base = self.held_start;
         let until = self.open_block.map_or(0, |ob| self.open_end(ob));
         let Some(mut start) = self.candidates.iter().map(|c| c.start).min() else {
-            let n = self.held.len();
+            // No candidate: release the hold, but keep one byte of an odd trailing backslash
+            // run, so the rest of the run keeps the parity the whole input has.
+            let tail = self.held.iter().rev().take_while(|&&b| b == b'\\').count();
+            let n = self.held.len() - tail % 2;
             let runs = self.runs(n);
             return self.emit(n, runs, out);
         };

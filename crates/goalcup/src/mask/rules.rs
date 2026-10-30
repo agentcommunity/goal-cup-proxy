@@ -174,7 +174,7 @@ impl ConnRule {
                 } else {
                     r#""([^"\\]+)""#
                 };
-                ok.then(|| format!(r#""{}"\s*:\s*{value}"#, regex::escape(name)))
+                ok.then(|| format!(r#""{name}"\s*:\s*{value}"#))
             }
             ConnPattern::HeaderPrefix(prefix) => {
                 let ok = (1..=64).contains(&prefix.len())
@@ -182,7 +182,7 @@ impl ConnRule {
                     && prefix.bytes().all(|b| {
                         b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-'
                     });
-                ok.then(|| format!(r#"{}[a-z0-9-]+:\s*[^\r\n"]+"#, regex::escape(prefix)))
+                ok.then(|| format!(r#"{prefix}[a-z0-9-]+:\s*[^\r\n"]+"#))
             }
         }
     }
@@ -515,7 +515,7 @@ pub(crate) fn string_pieces_from(
     };
     let (mut inside, mut from, mut slashes) = (quotes.inside, start, usize::from(quotes.escaped));
     for (at, &b) in bytes.iter().enumerate().take(end).skip(start) {
-        if b == b'"' && slashes % 2 == 0 {
+        if b == b'"' && slashes.is_multiple_of(2) {
             if inside || holds_a_base64_run(&bytes[from..at]) {
                 push(from, at);
             }
@@ -756,7 +756,7 @@ pub(crate) fn finish_spans(bytes: &[u8], spans: impl IntoIterator<Item = Run>) -
         let mut slashes = backslashes_before(bytes, from);
         for at in span.start..end {
             let b = bytes[at];
-            if b == b'"' && slashes % 2 == 0 {
+            if b == b'"' && slashes.is_multiple_of(2) {
                 push_aligned(bytes, from, at, span.lit, &mut out);
                 from = at + 1;
             }
@@ -773,10 +773,10 @@ fn push_aligned(bytes: &[u8], start: usize, end: usize, lit: usize, out: &mut Ve
     }
     let mut start = start;
     let mut end = end;
-    if backslashes_before(bytes, start) % 2 == 1 {
+    if !backslashes_before(bytes, start).is_multiple_of(2) {
         start -= 1;
     }
-    if end < bytes.len() && backslashes_before(bytes, end) % 2 == 1 {
+    if end < bytes.len() && !backslashes_before(bytes, end).is_multiple_of(2) {
         end += 1;
     }
     out.push(Run {
