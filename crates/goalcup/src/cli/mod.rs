@@ -163,7 +163,11 @@ mod tests {
             assert!(pick_home(None, s("rel"), s("rel/x"), macos).is_err());
             let home = pick_home(None, s("/u"), s("rel"), macos).unwrap();
             assert!(home.starts_with("/u"), "{home:?}");
-            assert!(pick_home(s("rel"), None, None, macos).unwrap().is_absolute());
+            assert!(
+                pick_home(s("rel"), None, None, macos)
+                    .unwrap()
+                    .is_absolute()
+            );
         }
     }
 

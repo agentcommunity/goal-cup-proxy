@@ -52,7 +52,10 @@ fn concurrent_writers_never_interleave() {
         assert_eq!(words[1], "tick", "{l}");
         let w = words[2].strip_prefix("writer=").expect(l);
         let i = words[3].strip_prefix("i=").expect(l);
-        assert!(seen.insert((w.parse::<u64>().unwrap(), i.parse::<u64>().unwrap())), "{l}");
+        assert!(
+            seen.insert((w.parse::<u64>().unwrap(), i.parse::<u64>().unwrap())),
+            "{l}"
+        );
     }
     let all: HashSet<(u64, u64)> = (0..2).flat_map(|w| (0..500).map(move |i| (w, i))).collect();
     assert_eq!(seen, all);
@@ -98,7 +101,16 @@ fn a_long_line_is_cut_and_keeps_its_newline() {
 
 #[test]
 fn host_check_is_host_syntax() {
-    for bad in ["", "no dots", "a..b", "-a.b", "a.b:99999", "a.b:", "[zz::1]", "a/b.c"] {
+    for bad in [
+        "",
+        "no dots",
+        "a..b",
+        "-a.b",
+        "a.b:99999",
+        "a.b:",
+        "[zz::1]",
+        "a/b.c",
+    ] {
         assert!(Host::checked(bad).is_none(), "{bad}");
     }
     for good in ["api.openai.com", "localhost:8080", "[::1]:443", "127.0.0.1"] {
