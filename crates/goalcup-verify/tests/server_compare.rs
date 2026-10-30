@@ -179,7 +179,7 @@ fn fw3_pruned_entry_is_named_and_server_copy_stands_in() {
             assert_eq!(ids_with(&v, "named"), ["parts_pruned"]);
         }
         let (code, v) = check(&out, &local);
-        let r = (result(&v, "server_chunks_whole"), result(&v, "server_equals_local"));
-        assert_eq!((code, r), (0, ("pass", "skip")), "{n}");
+        let r = ["server_chunks_whole", "server_equals_local"].map(|id| result(&v, id));
+        assert_eq!((code, r), (0, ["pass", "skip"]), "{n}");
     }
 }

@@ -118,7 +118,11 @@ fn equal(e: &Entry, o: &Outcome, local: Option<&Input>) -> Check {
     let Some((l, rec)) = found.find(ours) else {
         // A `--local` folder whose part files were all pruned resolves to no entry (main.rs).
         let gone = local.is_some_and(|i| i.entries.is_empty());
-        let why = if gone { pruned } else { "no --local entry with this entry id" };
+        let why = if gone {
+            pruned
+        } else {
+            "no --local entry with this entry id"
+        };
         return c(Res::Skip, why);
     };
     if !matches!(rec, Record::Part { raw_offset: 0, .. }) {

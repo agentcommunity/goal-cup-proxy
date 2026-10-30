@@ -86,7 +86,11 @@ pub fn resolve(path: &Path, live: bool, server: bool) -> Result<Input, String> {
         (false, true) => "server",
         (false, false) => "local",
     };
-    Ok(Input { kind, entries, server })
+    Ok(Input {
+        kind,
+        entries,
+        server,
+    })
 }
 
 /// The entry at `dir`: a fetched entry, an entry with `rec/`, or a `rec` folder itself.
