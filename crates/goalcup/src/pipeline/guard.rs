@@ -19,7 +19,7 @@ pub(crate) fn soft_guard() -> u64 {
         return mb << 20;
     }
     match physical_memory() {
-        Some(ram) => (ram / 8).min(CEILING).max(FLOOR),
+        Some(ram) => (ram / 8).clamp(FLOOR, CEILING),
         None => CEILING,
     }
 }
