@@ -582,10 +582,7 @@ impl Side {
     /// Pushes unmasked compressed payload through the inflater, delivering what it yields.
     fn inflate(&mut self, t: Mono, mut input: &[u8]) {
         let mut out = std::mem::take(&mut self.out);
-        loop {
-            let Some(inflater) = &mut self.inflater else {
-                break;
-            };
+        while let Some(inflater) = &mut self.inflater {
             let (before_in, before_out) = (inflater.total_in(), inflater.total_out());
             let result = inflater.decompress(input, &mut out, FlushDecompress::None);
             let consumed = (inflater.total_in() - before_in) as usize;
