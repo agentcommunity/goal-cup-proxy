@@ -2,9 +2,9 @@
 // Credentials come only from VERCEL_TOKEN, VERCEL_TEAM_ID and VERCEL_PROJECT_ID in this process's
 // environment: never printed, never an argument. Boxes are never persistent (PRD-12 section 7).
 //
-//   create --name pad-<id> --minutes N [--snapshot ID] [--vcpus 4]   prints {"id":...,"name":...}
+//   create --name pad-<id> --minutes N [--snapshot ID] [--vcpus 4]   prints {"name":...}
 //   put ID BOXPATH --file LOCAL [--mode 600|644|755]
-//   put-env ID BOXPATH --env VAR [--line 'TEMPLATE with {key}']     value read here, written 0600
+//   put-env ID BOXPATH --env VAR                                    value read here, written 0600
 //   push-dir ID LOCALDIR BOXDIR | exec ID --script FILE [--sudo] | get ID BOXPATH LOCALPATH
 //   rm ID | list [--prefix pad-] | snapshot ID                         prints {"snapshot":...}
 // A box path may start with ~/ (the box user's $HOME). Exit 2: usage; 3: missing box file; 4: unset variable.
@@ -68,7 +68,7 @@ async function create() {
 }
 
 const cmds = {
-  async create() { const sb = await create(); console.log(JSON.stringify({ id: sb.name, name: sb.name })); },
+  async create() { const sb = await create(); console.log(JSON.stringify({ name: sb.name })); },
   async put() {
     const [id, to] = need(2); const file = opt('file') ?? usage('put needs --file');
     const sb = await box(id); await write(sb, await boxPath(sb, to), fs.readFileSync(file), parseInt(opt('mode', '644'), 8));
@@ -77,9 +77,8 @@ const cmds = {
     const [id, to] = need(2); const name = opt('env') ?? usage('put-env needs --env');
     const value = process.env[name];
     if (!value) { process.stderr.write(`sbx: ${name} is not set or empty; nothing written\n`); process.exit(4); }
-    const line = opt('line');
     const sb = await box(id);
-    await write(sb, await boxPath(sb, to), line === undefined ? value : line.split('{key}').join(value) + '\n', 0o600);
+    await write(sb, await boxPath(sb, to), value, 0o600);
   },
   async 'push-dir'() {
     const [id, from, to] = need(3); const sb = await box(id); const base = await boxPath(sb, to);

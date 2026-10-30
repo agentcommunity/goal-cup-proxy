@@ -1,24 +1,32 @@
 """Tests of the test pad's own hands (PRD-12 "Automated tests", ledger B10): key files, the push token, no key
-value in any argument the pad builds, the fixed servers, cleanup and check.py's crash rows. Python 3.11, no network.
+value in any argument or file the pad builds (an env key launch included), the pane replacement, cleanup and
+check.py's crash rows. Python 3.11, no network.
 
     python3.11 -m unittest scripts/pad/test_pad.py
 """
+import base64
 import importlib.machinery
 import importlib.util
 import json
 import os
 import subprocess
+import tarfile
 import tempfile
 import unittest
+import urllib.parse
 from unittest import mock
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-_loader = importlib.machinery.SourceFileLoader("pad", os.path.join(HERE, "pad"))
-pad = importlib.util.module_from_spec(importlib.util.spec_from_loader("pad", _loader))
-_loader.exec_module(pad)
-_loader = importlib.machinery.SourceFileLoader("padcheck", os.path.join(HERE, "check.py"))
-check = importlib.util.module_from_spec(importlib.util.spec_from_loader("padcheck", _loader))
-_loader.exec_module(check)
+
+
+def load(name, file):
+    loader = importlib.machinery.SourceFileLoader(name, os.path.join(HERE, file))
+    mod = importlib.util.module_from_spec(importlib.util.spec_from_loader(name, loader))
+    loader.exec_module(mod)
+    return mod
+
+
+pad, check, padrun = load("pad", "pad"), load("padcheck", "check.py"), load("padrun", "pad-run")
 
 SENTINEL = "sk-ant-PADSENTINEL-9f3c1e"
 PADCFG = {"keys": {"claude": "CLAUDE_API_KEY", "gateway": "AI_GATEWAY_API_KEY", "cf": "CLOUDFLARE_API_TOKEN"}}
@@ -66,14 +74,21 @@ class Walk(unittest.TestCase):
     HARNESS = {"version": "1.2.3", "version_cmd": "x --version", "keep_going": True}
 
     def fake_call(self, argv, timeout=None, env=None):
+        if argv[0] != "node":  # check.py runs for real on the run folder
+            return self.real_call(argv, timeout, env)
         self.calls.append(list(argv))
         if argv[2] in self.hang:
             raise subprocess.TimeoutExpired(argv, timeout)
-        out = {"create": '{"id":"x"}', "exec": "PADVER=1.2.3\n"}.get(argv[2], "")
+        if argv[2] == "get":  # the box half's tar: meta-box.json only, as a run with no build leaves it
+            with tempfile.TemporaryDirectory() as d, tarfile.open(argv[-1], "w") as t:
+                with open(os.path.join(d, "meta-box.json"), "w") as f:
+                    f.write("{}")
+                t.add(os.path.join(d, "meta-box.json"), "meta-box.json")
+        out = 'PADSTEP {"result": "skip", "saw": "no goalcup build"}\n' if argv[2] == "exec" else ""
         return subprocess.CompletedProcess(argv, 0, out, "")
 
     def walk(self, hang=(), **settings):
-        self.calls, self.hang = [], hang
+        self.calls, self.hang, self.real_call = [], hang, pad.call
         env = {"CLAUDE_API_KEY": SENTINEL, "AI_GATEWAY_API_KEY": SENTINEL + "gw"}
         with tempfile.TemporaryDirectory() as out, mock.patch.dict(os.environ, env), \
                 mock.patch.object(pad, "call", self.fake_call):
@@ -96,6 +111,37 @@ class Walk(unittest.TestCase):
         name = calls[0][calls[0].index("--name") + 1]
         self.assertIn(["rm", name], calls)
         self.assertIn(["list", "--prefix", "pad-"], calls)
+
+
+class BoxHalf(unittest.TestCase):
+    """pad-run: known values never reach a pane file, and an env key launch only exports the value."""
+
+    def test_pane_replacement(self):
+        v = "PADSENTINEL-9f3c1e/+x"
+        forms = [v, base64.b64encode(v.encode()).decode(), urllib.parse.quote(v, safe="")]
+        safe, n = padrun.replace_known(" | ".join(forms), ["other-known-value", v])
+        self.assertEqual(n, 3)
+        for form in forms:
+            self.assertNotIn(form, safe)
+        self.assertIn("[known:2]", safe)
+
+    def test_env_key_launch_holds_no_value(self):
+        run = self.enterContext(tempfile.TemporaryDirectory())
+        os.makedirs(os.path.join(run, "keys"))
+        key = key_file(os.path.join(run, "keys"))
+        for name, doc in (("settings.json", {"server": "off", "harness_id": "claude-code-cli", "keep": True, "harness": {}}),
+                          ("state.json", {"key_route": "env", "key_env": "ANTHROPIC_API_KEY", "key_path": key})):
+            with open(os.path.join(run, name), "w") as f:
+                json.dump(doc, f)
+        argvs = []
+        fake = lambda argv, **kw: argvs.append(argv) or subprocess.CompletedProcess(argv, 0, "", "")  # noqa: E731
+        with mock.patch.object(padrun, "sh", fake), mock.patch.object(padrun, "tool", lambda n: "/bin/true"), \
+                mock.patch.object(padrun, "wait", lambda *a: False):
+            with self.assertRaises(padrun.Step):  # the fake tmux never shows "Recording": the step ends after the launch
+                padrun.Run(run, "start").start(None)
+        with open(os.path.join(run, "launch.sh")) as f:
+            self.assertNotIn("PADSENTINEL", f.read())
+        self.assertFalse([a for argv in argvs for a in argv if "PADSENTINEL" in a])
 
 
 class CrashRows(unittest.TestCase):

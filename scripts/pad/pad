@@ -32,13 +32,12 @@ NEVER_IN_BOX = ("GH_TOKEN", "GOALCUP_TEST_APPROVAL_KEY", "GOALCUP_TEST_MEMBER_ID
 KEY_VAR = re.compile(r"[A-Z0-9_]+_API_KEY")  # put-env copies model and gateway keys only
 NO_BUILD = "no goalcup build"
 NEEDS_LATER = "comes in a later slice"
-BOX_META = ("harness_version", "run", "entry", "plain_planted", "screen_known", "end_screen_requests", "commits_since_start")
 
 MODES = {"micro": {"server": "off", "prompt": "micro", "minutes": 3, "calls": 2},  # section 1a: defaults, wait-calls
          "cycle": {"server": "staging", "prompt": "full", "minutes": 8, "calls": 3},
          "full": {"server": "staging", "prompt": "full", "minutes": 20, "calls": 3}}
 LIMITS = {"setup": 5, "start": 3, "wait-calls": 4, "look": 1, "wait-recovery": 3,
-          "seal": 5, "wait-upload": 10, "fetch": 5, "check": 10, "cleanup": 5}  # minutes
+          "seal": 5, "wait-upload": 10, "fetch": 5, "check": 10, "cleanup": 5}  # minutes; seal and check add the run's
 KEYS = {"harness", "key", "case", "mode", "server", "prompt", "minutes", "steps", "where",
         "gateway_key", "version", "build", "connector", "hosts", "keep", "keep_going"}
 FAULTS = {"kill-recorder", "kill-watchdog", "kill-watchdog-recover", "kill-both", "freeze",
@@ -167,6 +166,11 @@ def load_settings(raw, pad):
     return s
 
 
+def step_limit(s, kind):
+    """Seconds; the one owner of every step limit (pad-run reads them from settings.json)."""
+    return LIMITS.get(kind, 5) * 60 + (s["minutes"] * 60 if kind in ("seal", "check") else 0)
+
+
 def step_list(s, harness):
     """Section 1a: the mode's steps, with the settings' steps added in time order."""
     plan = s["plan"]
@@ -212,7 +216,7 @@ class Run:
                     self.line(step, "skip", "interrupted" if STOP.is_set() else "setup failed")
                     continue
                 kind = step.split("@")[0].split(" ")[0]
-                limit = LIMITS.get(kind, 5) * 60 + (self.s["minutes"] * 60 if kind == "seal" else 0)
+                limit = step_limit(self.s, kind)
                 try:
                     self.line(step, *getattr(self, "step_" + kind.replace("-", "_"), self.step_box)(step, limit))
                 except Exception as e:  # a rig error writes its line and the walk goes on
@@ -233,17 +237,24 @@ class Run:
         left = lambda: max(1, deadline - time.time())  # noqa: E731
         names = [] if s["key"] == "none" else [s["key"]] + [s["gateway_key"]] * (self.case == "gateway")
         stage = self.box_dir = tempfile.mkdtemp(prefix="pad-run-", dir=None if s["where"] == "here" else self.tmp)
-        if s["where"] == "here":
+        if s["where"] == "here":  # pad-run works on 0600 copies in the run folder; ~/.pad-keys stays whole
             for name in names + ["push"] * os.path.lexists(os.path.expanduser("~/.pad-keys/push")):
                 (check_push_token if name == "push" else check_key_file)(os.path.expanduser("~/.pad-keys/" + name))
+            os.mkdir(os.path.join(stage, "keys"), 0o700)
+            for name in names:
+                with open(os.path.expanduser("~/.pad-keys/" + name), "rb") as a, \
+                        os.fdopen(os.open(os.path.join(stage, "keys", name), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "wb") as b:
+                    shutil.copyfileobj(a, b)
         cpath = s.get("connector") or os.path.join(REPO, "connectors", s["harness"], "harness.toml")
         cap = read_toml(cpath).get("capture", {}) if os.path.isfile(cpath) else {}
         shutil.copy(os.path.join(HERE, "prompts", s["prompt"] + ".txt") if s["prompt"] in ("micro", "smoke", "full")
                     else s["prompt"], os.path.join(stage, "prompt-source.txt"))
         for k in ("connector", "hosts"):  # S16 files, passed to goalcup start from the run folder
             shutil.copy(s[k], os.path.join(stage, k + ".toml")) if s.get(k) else None
+        limits = dict({k: step_limit(s, k) for k in LIMITS}, verify=step_limit(s, "check"), wipe=step_limit(s, "cleanup") // 3)
         with open(os.path.join(stage, "settings.json"), "w") as f:  # pad-run's input: names, never a value
             json.dump(dict({k: v for k, v in s.items() if k != "plan"}, harness_id=s["harness"], harness=self.harness,
+                           session=self.name, limits=limits,
                            case=self.case, version=s.get("version") or self.harness["version"], key_files=names,
                            route_key=names[-1] if names else None, home_env=cap.get("home", {}).get("env"),
                            native=[{k: r.get(k) for k in ("name", "root", "pattern")} for r in cap.get("native", [])],
@@ -269,7 +280,7 @@ class Run:
                 if r.returncode:
                     raise Refused(said("%s not copied" % args[0], r))
             for name, var in ((n, self.pad["keys"][n]) for n in names):  # presence only; sbx.mjs reads the value
-                if var not in os.environ or self.sbx("put-env", self.name, "~/.pad-keys/" + name, "--env", var, limit=left()).returncode:
+                if var not in os.environ or self.sbx("put-env", self.name, "~/run/keys/" + name, "--env", var, limit=left()).returncode:
                     raise Refused("key %s: %s is not set, or not copied" % (name, var))
         result, saw = self.box("setup", left())
         self.no_build = result == "skip" and saw.endswith(NO_BUILD)
@@ -292,30 +303,29 @@ class Run:
     def step_box(self, step, limit):
         if step.split("@")[0].split(" ")[0] not in ("start", "wait-calls", "look", "seal"):
             return "skip", NEEDS_LATER
-        return ("skip", NO_BUILD) if self.no_build else self.box(step, limit + 120)  # pad-run keeps its own limits
+        return ("skip", NO_BUILD) if self.no_build else self.box(step, limit + 120)  # pad-run works to `limit`
 
     def step_check(self, step, limit):
-        """Section 8: pad-run verify, its tar copied out, meta.json, then check.py's PADCHECK line."""
-        result, saw = self.box("verify", limit / 2)
+        """Section 8: pad-run verify (sized to the run, it always writes its tar), the tar copied out, meta.json,
+        then check.py's PADCHECK line."""
+        self.box("verify", limit + 120)
         tar = os.path.join(self.dir, "box.tar")
         if self.s["where"] == "here":
             shutil.copy(os.path.join(self.box_dir, "out.tar"), tar)
-        elif self.sbx("get", self.name, "~/run/out.tar", tar, limit=limit / 4).returncode:
+        elif self.sbx("get", self.name, "~/run/out.tar", tar, limit=300).returncode:
             return "error", "results not copied out"
         with tarfile.open(tar) as t:
             t.extractall(self.dir, **({"filter": "data"} if hasattr(tarfile, "data_filter") else {}))
         os.remove(tar)
         with open(os.path.join(self.dir, "meta-box.json")) as f:
-            self.meta.update({k: v for k, v in json.load(f).items() if k in BOX_META})
+            self.meta.update(json.load(f))  # pad-run's keys, merged whole; pad's own keys below win
         s, at = self.s, datetime.datetime.fromtimestamp(self.t0, datetime.timezone.utc).isoformat(timespec="seconds")
         with open(os.path.join(self.dir, "meta.json"), "w") as f:
-            json.dump(dict({k: None for k in BOX_META + ("image",)}, connector=s["harness"], case=self.case, mode=s["mode"],
-                           prompt=s["prompt"], variant=self.variant(), where=s["where"], server=s["server"], keep=s["keep"],
-                           minutes=s["minutes"], started=at, push="not tested", pad_trusted_at=None,
-                           steps=[list(ln) for ln in self.lines], **self.meta), f, indent=1, sort_keys=True)
-        if not os.path.isfile(os.path.join(HERE, "check.py")):
-            return result, saw
-        result, saw = self.box(step, limit / 4, "PADCHECK", [sys.executable, os.path.join(HERE, "check.py"), self.dir])
+            json.dump(dict(self.meta, connector=s["harness"], case=self.case, mode=s["mode"], prompt=s["prompt"],
+                           variant=self.variant(), where=s["where"], server=s["server"], keep=s["keep"], minutes=s["minutes"],
+                           started=at, push="not tested", pad_trusted_at=None, steps=[list(ln) for ln in self.lines]),
+                      f, indent=1, sort_keys=True)
+        result, saw = self.box(step, 300, "PADCHECK", [sys.executable, os.path.join(HERE, "check.py"), self.dir])
         self.row = result if result in ("PASS", "FAIL", "INCONCLUSIVE") else None
         return result, saw
 

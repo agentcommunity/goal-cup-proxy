@@ -25,10 +25,17 @@ SEAM = {k: tuple(v.split(".")) for k, v in {
     "s4_off": "written.off_ms", "s4_seal": "seal.reason"}.items()}
 # Not fixed yet (asked of PRD-08 in the night log): the `secrets` JSON, and how a recorder_down gap's
 # cause and length appear. Read when present; else hits fall back to verify/exits.json (keyed by the
-# JSON file's stem; exit 0 is no hit) and causes to counts.gaps keys ("null_mode", "recorder_down:null_mode").
+# JSON file's stem; exit 0 is no hit, 1 or 2 a hit) and causes to counts.gaps keys ("null_mode",
+# "recorder_down:null_mode"). MASK spans by rule are read from the `masks` key of verify/secrets.json.
 SECRET_HITS = ("hits", "known_hits", "shape_hits")
+# Section 5's planted shaped values, each as the S12 rule kinds (PRD-05 shapes.tsv; today's names) whose
+# MASK covers it: the OpenAI, GitHub and Google keys (or the shell rule), the JWT, the PEM, the remote password.
+PLANTED = (("openai_key", "api_key"), ("github_token", "api_key"), ("google_key", "api_key"), ("jwt",),
+           ("private_key",), ("url_password",))
 INV6_GAPS = ("gaps", "recorder_down")  # inv6 facts: a list of {cause, start, end, ms}
 DOWN = ("recorder_down", "null_mode", "watchdog_lost")
+DOWN_ERR = re.compile(r"(?<!\d)5\d\d(?!\d)|overloaded|server_error|api_error|internal", re.I)  # S6 keys are
+REFUSED_ERR = re.compile(r"(?<!\d)40[13](?!\d)|auth|permission|api_key|quota|billing", re.I)  # kinds or codes
 RECOVER = ("nothing to recover", "Recording is on again")  # PRD-10 acceptance 11: first, second recover
 BUILT_FAULTS = ("kill-recorder", "kill-watchdog-recover")
 C1_IDS = ("gap_has_end", "history_complete", "streams_closed", "seen_matches_written", "recorder_alive", "listed_hosts_decrypted")
@@ -83,7 +90,8 @@ class Run:
         usage = os.path.join(folder, "verify/usage")
         names = sorted(os.listdir(usage)) if os.path.isdir(usage) else []
         name = "%s.json" % entry if "%s.json" % entry in names else names[0] if len(names) == 1 else None
-        self.usage = load(usage, name) if name and isinstance(load(usage, name), dict) else None
+        got = load(usage, name) if name else None
+        self.usage = got if isinstance(got, dict) else None
         self.server, self.status = load(folder, "verify/check-server.json"), load(folder, "status.json")
         self.fetch = load(folder, "fetched/%s/fetch.json" % entry) if entry else None
         self.samples, self.faults = load(folder, "watch/status.jsonl", 1), load(folder, "watch/faults.jsonl", 1)
@@ -121,20 +129,21 @@ class Run:
         if isinstance(doc, dict) and any(k in doc for k in SECRET_HITS):
             return sum(count(doc.get(k)) for k in SECRET_HITS)
         code = self.exits.get(name)
-        return int(code != 0) if isinstance(code, int) else None
+        return {0: 0, 1: 1, 2: 1}.get(code) if isinstance(code, int) else None
+
+    def masks(self):
+        """MASK spans by rule kind from the record scan, or None when the report has none."""
+        doc = load(self.folder, "verify/secrets.json")
+        got = doc.get("masks") if isinstance(doc, dict) else None
+        return {k: count(n) for k, n in items(got)} if isinstance(got, dict) else None
 
 def cause(r):
     """Section 8: the INCONCLUSIVE causes that are never goalcup's failure, from the record first."""
     errs = [(k, n) for e in r.entries for k, n in items(dig(e, "s6_errors")) if isinstance(n, int)]
-    if r.reqs and 2 * sum(n for k, n in errs if re.search(r"(?<!\d)5\d\d(?!\d)", k)) > r.reqs:
+    if r.reqs and 2 * sum(n for k, n in errs if DOWN_ERR.search(k)) > r.reqs:
         return "provider_down: most recorded model responses are 5xx"
-    if any(n and re.search(r"(?<!\d)40[13](?!\d)", k) for k, n in errs):
+    if any(n and REFUSED_ERR.search(k) for k, n in errs):
         return "provider_refused: 401 or 403 from the model host"
-    for step, result, _, saw in (s for s in r.meta.get("steps") or [] if isinstance(s, list) and len(s) == 4):
-        if result == "lost" or re.search(r"box (vanished|lost|gone)|sandbox lost", str(saw), re.I):
-            return "sandbox_lost: the box went away (%s)" % step
-        if step == "setup" and result == "FAIL" and "install" in str(saw):
-            return "harness_install: %s" % saw
     return None
 
 def judge(r):
@@ -145,7 +154,9 @@ def judge(r):
     stop = cause(r) or (None if work else "the harness did no work (commits since start %s, model requests %s)"
                         % (r.meta.get("commits_since_start"), seen))
     if stop:
-        return [r.mark(c, "INCONCLUSIVE", stop) for c in ("C1", "C2", "C4", "C5", "C6", "faults")]
+        for c in ("C1", "C2", "C4", "C5", "C6", "faults"):
+            r.mark(c, "INCONCLUSIVE", stop)
+        return
     local(r, reqs)
     usage_checks(r, reqs)
     c6(r)
@@ -154,7 +165,9 @@ def judge(r):
 def local(r, reqs):
     """C1 (no missed call) and C4 (record whole, server copy whole and readable)."""
     if not r.entries:
-        return [r.mark(c, "INCONCLUSIVE", "no local verifier report") for c in ("C1", "C4")]
+        for c in ("C1", "C4"):
+            r.mark(c, "INCONCLUSIVE", "no local verifier report")
+        return
     r.flag(reqs < 2, "C1", "INCONCLUSIVE", "the record holds fewer than 2 model calls")
     for cid in ("gap_has_end", "history_complete"):
         r.flag(not r.check(cid), "C1", "INCONCLUSIVE", "%s not in the report" % cid)
@@ -167,10 +180,15 @@ def local(r, reqs):
                "local log check: threads_match %s, wire_keeps_up %s" % (tm, wk))
     if r.meta.get("case") != "direct":
         r.mark("C1", "INCONCLUSIVE", "case %s expectations not built yet" % r.meta.get("case"))
-    r.flag(r.meta.get("case") == "direct" and not r.meta.get("variant") and dig(r.local, "s6_exit") != 0, "C1",
-           "FAIL", "verifier exit %s, the direct case expects 0" % dig(r.local, "s6_exit"))
-    half = "local half FAIL (%s)" % ", ".join(sorted(r.failed)) if r.failed else "local half pass"
-    r.flag(r.failed, "C4", "FAIL", half)
+    # A failed check is already filed under its own C; with none, exit 0, or exit 1 whose only named loss
+    # is an after_stop GAP (PRD-08 R2: a harness still sending after the seal at `minutes`).
+    code, named = dig(r.local, "s6_exit"), {k for k, n in r.gaps()[1].items() if n}
+    after_stop = code == 1 and named == {"after_stop"} and not any(dig(e, "s6_off") for e in r.entries)
+    r.flag(r.meta.get("case") == "direct" and not r.meta.get("variant") and not r.failed and code != 0 and not after_stop,
+           "C1", "FAIL", "verifier exit %s, the direct case expects 0 or an after_stop GAP only" % code)
+    own = sorted(i for i in r.failed if i != "secrets")  # `secrets` is C3's
+    half = "local checks failed: %s" % ", ".join(own) if own else "no local check failed (keep from the settings)"
+    r.flag(own, "C4", "FAIL", half)
     r.flag(r.meta.get("keep") is False, "C4", "FAIL", "parts pruned (keep false)")
     if r.meta.get("server", "off") == "off":
         return r.mark("C4", "INCONCLUSIVE", "server off: local pass at best; " + half)
@@ -186,10 +204,11 @@ def local(r, reqs):
 def usage_checks(r, reqs):
     """C2 (every subagent recorded) and C5 (usage stats present), both from the S7 summary."""
     if not r.usage:
-        return [r.mark(c, "INCONCLUSIVE", "no usage summary") for c in ("C2", "C5")]
+        for c in ("C2", "C5"):
+            r.mark(c, "INCONCLUSIVE", "no usage summary")
+        return
     threads = [t for t in dig(r.usage, "s7_threads") or [] if isinstance(t, dict)]
-    r.flag(not any(dig(t, "t_parent") for t in threads), "C2", "INCONCLUSIVE",
-           r.meta.get("harness_subagents_unavailable") and "harness_subagents_unavailable" or "no thread with a parent")
+    r.flag(not any(dig(t, "t_parent") for t in threads), "C2", "INCONCLUSIVE", "no thread with a parent")
     r.flag(any(not (dig(t, "t_wire") or dig(t, "t_native")) for t in threads), "C2", "FAIL",
            "a thread with no wire calls and no native stream")
     sub = r.check("subagents_present")
@@ -204,12 +223,21 @@ def usage_checks(r, reqs):
 
 def secrets(r):
     """C3. The known-value and shape scans ran in the box; only their counts reach this folder."""
-    scans = [("secrets", "the record and the run's files"), ("secrets-out", "the output folder")]
+    scans = [("secrets", "the local record and the run's files"), ("secrets-out", "the box's output folder")]
     for name, where in scans + [("secrets-git", "the project's git objects")] * (r.meta.get("push") == "tested"):
         n = r.hits(name)
         r.flag(n != 0, "C3", "FAIL" if n else "INCONCLUSIVE", "%s hits in %s" % (n, where) if n else "no scan of " + where)
-    # Section 5's setup-check script: no S6 or S7 fact shows yet that it ran. Plain hits are facts only.
-    r.mark("C3", "INCONCLUSIVE", "secret exercise not done: exercise not detectable yet")
+    r.flag("secrets" in r.failed, "C3", "FAIL", "secrets fail in the verifier report: %s" % r.failed.get("secrets"))
+    r.flag(r.meta.get("known_box") is not True, "C3", "INCONCLUSIVE", "the run certificate key is not in the known values")
+    # Section 5: the setup-check script printed .env.local. Its unmasked no-shape value (plain hits) or a
+    # MASK in the record shows that output reached the model.
+    masks = r.masks()
+    if not r.hits("secrets-plain") and not any((masks or {}).values()):
+        return r.mark("C3", "INCONCLUSIVE", "secret exercise not done: no plain-value hit and no MASK in the record")
+    if masks is None:
+        return r.mark("C3", "INCONCLUSIVE", "no MASK counts by rule in verify/secrets.json")
+    for kinds in PLANTED:
+        r.flag(not any(masks.get(k) for k in kinds), "C3", "FAIL", "no MASK of %s for a planted value" % " or ".join(kinds))
 
 def c6(r):
     st, final = r.status, dig(r.status, "s4_requests")
@@ -234,7 +262,7 @@ def faults(r):
     if not set(kinds) & set(BUILT_FAULTS):
         return
     gaps, counts = r.gaps()
-    other = sorted(k for k, n in counts.items() if n and k.split(":")[0] not in DOWN)
+    other = sorted(k for k, n in counts.items() if n and k.split(":")[0] not in DOWN + ("after_stop",))  # R2: seal
     r.flag(other, "faults", "FAIL", "named loss other than the expected gaps: %s" % ", ".join(other))  # C1, C2
     if gaps is None:
         return r.mark("faults", "INCONCLUSIVE", "recorder_down gaps not readable from inv6")
@@ -272,7 +300,7 @@ def facts(r):
     u, e, m = r.usage or {}, r.entry, r.meta
     read, hist, size = dig(u, "s7_readable") is True, dig(e, "s6_history") or {}, dig(e, "s6_bytes") or {}
     threads = [t for t in dig(u, "s7_threads") or [] if isinstance(t, dict)]
-    alarm = [x.get("at") for x in load(r.folder, "watch/live.jsonl", 1) if x.get("result") == "fail" or x.get("failed")]
+    alarm = [x.get("at") for x in load(r.folder, "watch/live.jsonl", 1) if x.get("result") == "fail" or x.get("fail")]
     return {"wire_requests": dig(u, "s7_wire"), "harness_calls": dig(u, "s7_native") if read else None,
             "harness_log": dig(e, "s6_log") if read else None, "local_log": "read" if read else "none",
             "history": {"state": r.check("history_complete"), "answers": hist.get("checked"),
@@ -280,7 +308,8 @@ def facts(r):
             "threads": len(threads) if r.usage else dig(e, "s6_threads"), "native_files": dig(e, "s6_native"),
             "subagents": sum(1 for t in threads if dig(t, "t_parent")), "gaps": r.gaps()[1], "off_ms": dig(e, "s6_off"),
             "provider_errors": dict(kn for en in r.entries for kn in items(dig(en, "s6_errors"))),
-            "secret_hits": r.hits("secrets"), "masks": {}, "plain_hits": r.hits("secrets-plain"),
+            "secret_hits": r.hits("secrets"), "masks": r.masks() or {}, "plain_hits": r.hits("secrets-plain"),
+            "output_scan": "box files; meta.json, calls.log, table.txt, row.json, report.txt are built from them",
             "screen_known": m.get("screen_known"), "canary": "not planted", "tokens": dig(u, "s7_tokens"),
             "models": [x.get("model") for x in dig(u, "s7_models") or [] if isinstance(x, dict)],
             "raw_bytes": size.get("raw"), "compressed_bytes": size.get("compressed"), "recorder_rss_peak_mb": None,
