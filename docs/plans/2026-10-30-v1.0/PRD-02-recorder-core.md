@@ -1457,3 +1457,24 @@ to another file are made by that file's owner.
   (section 3), so the two never disagree. `Recorder::counts()` also returns `Counts::default()`; the
   beat takes entry totals instead, so that one is not on PRD-06's path. A rename is a seam line.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-04 core slice part 3 (merge a302d688)
+
+- **The native seam is on integration with its final shape:** `native::start(rec, sources) ->
+  NativeReader` (boot step 5) and `NativeReader::finish(self, harness_exited: bool, guard:
+  Option<Duration>) -> NativeFinish { streams, snapshots, cut_files, cut_bytes, took_ms }` (seal
+  step 4, `Some(180 s)` only for `deadline`, `server_stop` and `signal`). Nothing in `src/pipeline/`
+  or `src/watchdog/` calls either yet; PRD-02's next touch of boot and seal wires both, and writes
+  `cut_files` and `cut_bytes` into sealed `status.json` (the `CutFiles` key is already there).
+  A reader dropped without `finish` closes every unread file with a `cut_at_seal` GAP, so a path that
+  must not seal (a restart that hands over) still calls `finish` or accepts those GAPs.
+- **Fill `Recorder::counts()`** (points 6 and 1): the native reader's `native_missing` clock starts at
+  the first model request it sees in `rec.counts().model_requests()`, and `counts()` returns
+  `Counts::default()` at a302d688, so a real run never writes the note and PRD-10's "has found no
+  <row> file" line never shows. Fill at least `model_requests` from the same atomics the status thread
+  writes to `status.json` (the PRD-06 slice 2 note asks the same for `live()`). A rename is a seam line.
+- **R3-3 `pipeline_seal.rs` case:** a `final` row is copied at the seal today, but as single files with
+  `form: "snapshot"` and no `set` until PRD-04's `snapshot.rs` lands (PRD-04 note). A seal test that
+  asserts `form: "final"` or `set` waits for that slice; one that asserts the bytes are in the record
+  after the seal can run now.
+- No locked ledger item is touched and no owner question comes from this slice.

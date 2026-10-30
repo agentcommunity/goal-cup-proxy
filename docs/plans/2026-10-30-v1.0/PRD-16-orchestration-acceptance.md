@@ -1800,3 +1800,34 @@ kept and now cites BUILD-PROMPT section 5, since B3 no longer carries it.
 - **Housekeeping for the end:** `v1.0/prd-06-upload-mergecheck-tmp` was pushed by mistake (lane log
   15:59Z) and is still to be removed from origin.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-04 core slice part 3 (merge a302d688)
+
+- `gate fast: PASS in 87s` on a302d688 (nextest summary: 213 tests run, 213 passed, 0 skipped;
+  `native_walk` ran in the `heavy` group). Before the merge, three review rounds closed every finding
+  (F1, RB-1 to RB-5, A-R3-1, B-R4-1); the last box runs at 328cb905 were fmt, `clippy -D warnings`,
+  native 49 of 49 three times and goalcup 150 of 150. Linux only; no native test ran on macOS. Five
+  paths changed, all PRD-04's, no `Cargo.toml`. All 10 non-merge commits in a98f104c..a302d688^2 carry
+  both trailer lines. `gate full` was not run.
+- **Size report, PRD-04** (`wc -l` at a302d688, PRD-00 row "Native (PRD-04)" 780 src and 1,000 tests):
+  src 1,144 (`tail.rs` 368, `mod.rs` 258, `fsx.rs` 213, `pattern.rs` 174, `walk.rs` 131), 147% of
+  the row and 6 under the 1,150 ceiling of the part 2 note, with `snapshot.rs` still to come; tests
+  1,474 (`native_tail.rs` 469, `native_safety.rs` 250, `native_finish.rs` 227, `native_walk.rs` 203,
+  `native_pattern.rs` 132, `native_resume.rs` 106, `native_room.rs` 87), 147% of the row, 126 under
+  the 1,600 ceiling. This replan's decision (PRD-04 note) names points 1 and 3 and sets the src
+  ceiling to 1,260 (about 162% of the row); tests stay at 1,600. The end-of-build report counts it
+  against the Rust totals (about 18,100 src, at most about 14,200 tests); a total past them is the
+  owner's question then.
+- **Build order:** PRD-04's last slice is `snapshot.rs` with `native_snapshot.rs` and the finish step 3
+  hookup. PRD-02 can wire `native::start` (boot step 5) and `finish` (seal step 4) now; nothing calls
+  them on integration yet, so no real run reads a session file until that PRD-02 slice merges. Pad
+  rows that check native streams (PRD-12) wait for it.
+- **Seams to close, in build order:** PRD-02 fills `Recorder::counts()` (at least `model_requests`),
+  or `native_missing` never fires in a real run (PRD-02 note); PRD-02 adds `fid` to `SnapshotCursor`
+  (part 2 note, still open).
+- **Closed since part 2:** RB7, RB3 and the `native_walk` run-start flake. Remove them from the known
+  list of the part 2 and PRD-14 slice 4 notes.
+- **Acceptance lists as known,** if still open at the end: C2 (nested root on another device), the
+  missing snapshot `fid` on resume, review nits N1, N2, N3 and N5 (PRD-04 note), and, until
+  `snapshot.rs` merges, `final` rows copied only at the seal as single `snapshot` files.
+- No locked ledger item is touched and no owner question comes from this slice.
