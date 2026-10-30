@@ -910,3 +910,56 @@ Names for `LESSONS.md` (the lessons lane writes them; judge 13:06Z):
   in PRD-10's next slice, ahead of `start` (PRD-10 note). The check on the relative `GOALCUP_HOME`
   input from the slice 1 note still applies.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-14 slice 2 (merge 04886295)
+
+- **`common::upstream` is on integration** (04886295) for TLS with a chosen ALPN, HTTP/1.1 (whole,
+  chunked, SSE, codings), WebSocket with permessage-deflate, held handshakes and answers and close
+  after N bytes. PRD-03's `decode`, `ws`, `tls` and `connect` leaf modules reached integration in
+  0e411074, so `lessons_decode.rs` can land now; `lessons_http1.rs` waits only on `proxy::serve`
+  (PRD-03 slice 2). HTTP/2 cases wait on PRD-14 slice 3; a TLS that chooses `h2`
+  panics the fake's task today.
+- `common::recorder::real` (H10, K15) is not on integration; it comes in PRD-14 slice 3 after PRD-02's
+  `Recorder::real_for_tests`.
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-03 core slice 1 (merge 0e411074)
+
+- **`lessons_decode.rs` need not wait for `http1`.** `proxy::decode::{parse_codings, BodyDecoder,
+  Step}` is on integration and driven alone over `Recorder::for_tests(room)`, as PRD-03's
+  `tests/proxy_decode.rs` does. D1, D2, D3, D4 and D6 can be written against it now; D7's bomb test
+  checks a `memory_guard` GAP in the record, so it waits for `http1` (PRD-03 slice 2). Reuse
+  `tests/proxy_fixtures/anthropic-sse.br` and `sse-flushed.br` rather than adding copies, and do not
+  repeat PRD-03's cases (each coding decodes, an unknown coding writes no body byte, a window over
+  `room()` is not decoded).
+- **`lessons_tls.rs` T1, T2, T4 and T5** can use `proxy::ca::RunCa` (`mint`, `leaf`, `write_files`,
+  `export`, `import`) and `proxy::ca::certificates` now. T3 and every `lessons_connect` row drive
+  `proxy::serve`, which comes in PRD-03 slice 2.
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-08 slice 2 (merge 669f5d92)
+
+Names for `LESSONS.md` (the lessons lane writes them; judge 14:56Z, 15:13Z):
+
+- L-FW3 (local and server halves, plus a wrong `--local` path exiting 3):
+  `crates/goalcup-verify/tests/server_compare.rs`
+  `fw3_pruned_entry_is_named_and_server_copy_stands_in`. This replaces the `(name pending)`.
+- L-FW9: `crates/goalcup-verify/tests/server_compare.rs` `fw9_one_flipped_byte_fails_the_copy`.
+- L-VR2: `crates/goalcup-verify/tests/server_compare.rs`
+  `vr2_seal_without_reason_or_totals_is_reported`, plus the `("inv5", m_mask_at_top)` row of
+  `check_invariants.rs` `vr3_every_mutation_fails_its_check_with_exit_2`. Both inputs exited 3 before
+  the fix. The panic hook itself (file and line, exit 3) is recorded as a review check, because no
+  test input reaches it.
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-11 slice 3 (merge c14d63b8)
+
+- **`hosts::check` is the full rule set on integration**, so `lessons_hosts.rs` and the lessons
+  fixtures can land against it. Facts the guards meet: N2 forms (`0.0.0.0`, `::`, mapped loopback)
+  come back `Skipped { local: true }`, as do private and link-local addresses; N3 numeric spellings
+  (`127.1`, `0x7f.1`) are refused with `local` false (PRD-11 note, known), so N3's guard asserts the
+  refusal only. N6 uses `hosts::resolves_only_here(&[IpAddr])` (public), so the stub-resolver guard
+  calls it directly. N1's userinfo and backslash handling is `hints::authority` (crate-private);
+  its guard goes through `plan` with a hint file, as `connector_hints.rs` does. HF1 to HF8 rows whose
+  guard is `connector_launch.rs` (lock, version probe, typed settings, never a link) are on
+  integration at c14d63b8 and can turn green after a box run on the integration head.
