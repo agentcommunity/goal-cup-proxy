@@ -828,3 +828,16 @@ PRD-12 and PRD-17.
   `Server::Off`; it refuses a user part in the address and `http://` off loopback. The uploader takes
   the base address from it and adds no check of its own.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-10 slice 2 (merge 56495dd6)
+
+- **`server.json` is on integration** as `cli::ServerJson` (PRD-10 note). On `v1.0/prd-06-upload`,
+  `upload::server_url` parses it as a loose `serde_json::Value`. Read it instead as
+  `cli::read_json::<cli::ServerJson>(&cli::server_json(run_dir))` and take `.server`
+  (`None` for off). One shape and less code. The shape is compatible today, so this is not a blocker.
+- To write a time, use `goalcup_format::dump::wall`. To parse one, use `cli::unix_of`. Add no
+  third time helper.
+- `status --json` already prints `upload.json` whole. When S9 merges, PRD-10 adds the upload lines
+  to status and the end screen, and `time-left`. S9's `upload.json` keys are then a seam with
+  `cli/status.rs` and `cli/finish.rs`.
+- No locked ledger item is touched and no owner question comes from this slice.

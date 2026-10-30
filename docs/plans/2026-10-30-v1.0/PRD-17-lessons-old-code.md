@@ -887,3 +887,26 @@ old code. Each id with what was done here.
   signature, but as a stub (lowercase and label shape only). `lessons_hosts.rs` waits for PRD-11's hosts
   slice, which copies the full check (section 3); a lesson test against the stub would pass or fail for
   the wrong reason. `lessons_launch.rs` waits for the launch slice (lock, `.profile`) and S8.
+
+### 2026-10-30, replan after PRD-08 slice 1 (merge d10feef7)
+
+Names for `LESSONS.md` (the lessons lane writes them; judge 13:06Z):
+
+- L-VR3: `crates/goalcup-verify/tests/check_invariants.rs`
+  `vr3_every_mutation_fails_its_check_with_exit_2` (21 rows; each asserts its own check fails and exit
+  2). The 12:49Z name is superseded.
+- L-VR4: `crates/goalcup-verify/tests/check_named.rs` `clean_record_with_interrupted_end_exits_0`.
+- L-FW3: the local half (`parts_pruned` named, exit 1) is built but has no test yet; PRD-08's next
+  slice names it. L-VR2: the panic hook is built (file and line, exit 3), its test comes with the
+  server slice (PRD-08 note). Both stay `(name pending)`.
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-10 slice 2 (merge 56495dd6)
+
+- **L-SC6 is named:** `crates/goalcup/tests/cli_finish.rs` `unsealed_status_never_reads_as_finished`.
+  A `status.json` with no seal never yields the end screen's finished block, and status never
+  prints the sealed state line. The lessons lane replaces its `(name pending)`.
+- L-SC1 stays pending. `cli/folder.rs` and `cli_folder.rs` need neither S3 nor S8, so they may come
+  in PRD-10's next slice, ahead of `start` (PRD-10 note). The check on the relative `GOALCUP_HOME`
+  input from the slice 1 note still applies.
+- No locked ledger item is touched and no owner question comes from this slice.

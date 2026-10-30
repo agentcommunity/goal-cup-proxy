@@ -1304,3 +1304,73 @@ kept and now cites BUILD-PROMPT section 5, since B3 no longer carries it.
 - **Open nit** B8 (`release.sh` next-step text written three times) goes to PRD-14's release slice
   (PRD-14 note); acceptance lists it as known if it is still open at the end.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-15 slice 5 (merge ea0a0fec)
+
+- `gate fast: PASS in 83s` on ea0a0fec. Docs only: `README.md`, `docs/ARCHITECTURE.md`,
+  `docs/CONNECTOR-SCHEMA.md`, `docs/HARNESS-ONBOARDING.md`, `docs/README.md` (+117, -1005). Box link
+  check at c24908e4: no broken link from CONNECTOR-SCHEMA; 39 known others, of which one is new to
+  this slice (`docs/CONTRACTS.md:615` to `#pin-evolution`, left for the CONTRACTS move). Lane box
+  runs: em dash grep clean, stale-term grep clean on the page, key set equal both ways with the
+  schema (22 keys with `mask`).
+- **Size report, PRD-15.** PRD-15 merged no code, and PRD-00 "Size budget" has no docs row, so there
+  is nothing to count against a row. Against PRD-15's own docs table ("CONNECTOR-SCHEMA 1,002 to 90"):
+  the page is 113 lines (126%), the extra being the key table, the mask grammar and the eight
+  **(next slice)** marks, which go when PRD-11's next slice merges.
+- **Trailers.** Lane merge commit 16b62b8c ("Merge remote-tracking branch
+  'origin/v1.0/prd-15-docs-connector-schema'") carries neither trailer line; the other six commits in
+  3d56fffc..ea0a0fec carry both. It is pushed and is not rewritten; the end-of-build report lists it.
+  Lane mergers write the two lines on merge commits too.
+- **Open nits** A10 (`continue` file-flag rule) and B12 (two links to a page without the fact) go to
+  PRD-15's next slice (PRD-15 note); acceptance lists them as known if they are still open at the end.
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-08 slice 1 (merge d10feef7)
+
+- `gate fast: PASS in 119s` on d10feef7 (83 tests, 16 of them `goalcup-verify`'s); the extra 32 to
+  36 s against earlier merges is the crate's first compile with bundled SQLite. Box runs before the
+  merge: fmt, clippy `-D warnings` and the crate's tests green at each fix round (judge 13:09Z to
+  13:28Z). Workspace membership was added by the merge requester (94d204f1), as planned.
+- **Size report, PRD-08** (`wc -l` at d10feef7, row "Verifier (PRD-08)", 1,400 src and 1,100 tests):
+  src 1,635 (`integrity.rs` 1,089, `main.rs` 209, `input.rs` 192, `report.rs` 122, `usage/mod.rs`
+  12 placeholder, `lib.rs` 11; `Cargo.toml` 27 not counted), 117% of the row with four of ten source
+  files written; tests 1,471 (`tests/common/mod.rs` 907, `check_invariants.rs` 346,
+  `check_named.rs` 218), 134% with three of seven files. The merge passed the row by more than 10%;
+  the fixer's line (judge 13:09Z) named points 5 and 6, and the replan's decision (PRD-08 note) sets
+  the ceiling to 2,400 src and 1,700 tests with per-file ceilings and named cuts. That is about 1,000
+  src and 600 tests over the row, on top of PRD-11's 710 and 220 and PRD-04's projected 22%: the
+  end-of-build report gives the Rust totals per row against about 18,100 src and at most about 14,200
+  tests, and a test total past 14,200 is an owner question then.
+- **Trailers.** Lane merge commit a5a4bf18 ("Merge remote-tracking branch 'origin/v1.0/integration'
+  into v1.0/prd-08-verify") carries neither trailer line (review F10, declined because the branch was
+  pushed); the other 15 commits in ea0a0fec..d10feef7 carry both. The end-of-build report lists it.
+- **Open nit** B13 (test builder duplicate write path) goes to PRD-08's next slice (PRD-08 note);
+  acceptance lists it as known if it is still open at the end.
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-10 slice 2 (merge 56495dd6)
+
+- `gate fast: PASS in 88s` on 56495dd6 (98 tests run in the nextest summary). Box runs before the
+  merge: the builder ran fmt, clippy `-D warnings` and goalcup nextest (41/41) plus gate fast. The
+  fixer ran goalcup nextest (69/69), and reviewer A re-checked on a local merge with 77e01fbb (fmt,
+  workspace clippy, 69/69, doctests). The macOS liveness path has not been compiled in any box
+  (skipped, no macOS box). Ten paths changed, all owned by PRD-10, with no `Cargo.toml` change.
+- **Size report, PRD-10** (`wc -l` at 56495dd6, row "CLI (PRD-10)", about 2,900 src and 1,200 tests).
+  Src is 1,959, 68% of the row with 6 of 18 files written: `text.rs` 613, `cli/mod.rs` 462,
+  `status.rs` 341, `log.rs` 202, `main.rs` 197, `finish.rs` 144. The same six files have own
+  estimates of 1,270, so they run at 154%, and the CLI projects to about 3,680 (127%). The replan
+  decision (PRD-10 note) keeps the row, makes later slices build at their estimates, cuts B1, B3 and
+  B4 first, and needs a decision line for any merge past 3,190. Tests are 965, 80% of the row with
+  5 of the planned files (`cli_status.rs` 404, `cli_finish.rs` 274, `cli_log.rs` 136,
+  `cli_commands.rs` 128, `tests/cli_common/mod.rs` 23). `cli_folder.rs`, `cli_start.rs`,
+  `cli_continue.rs` and the setup tests are still to come, so the tests row will likely pass 1,200.
+  They reuse `tests/cli_common/` and PRD-14's `common::home` and `common::worker`. The
+  end-of-build report counts it against the Rust test total (a total past about 14,200 is an owner
+  question then).
+- **Trailers:** all 10 commits in 77e01fbb..56495dd6 carry both lines.
+- **Ownership:** the integrator accepts `crates/goalcup/tests/cli_common/` as PRD-10's (PRD-00 note).
+- **Open nits** B1 to B4 go to PRD-10's next slice (PRD-10 note). Acceptance lists them as known if
+  they are still open at the end. The vendor problem row, end-screen rule 7's end time, the native
+  rows line and the upload lines are not built yet. Acceptance does not count the section 4 problem
+  table or the end screen as complete until they are built or a replan line rules them out.
+- No locked ledger item is touched and no owner question comes from this slice.
