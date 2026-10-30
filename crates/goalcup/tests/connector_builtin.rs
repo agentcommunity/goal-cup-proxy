@@ -38,7 +38,11 @@ fn every_connector_file_is_built_in_and_loads_by_its_id() {
     );
     for (listed, text) in builtin::CONNECTORS {
         let table: toml::Table = toml::from_str(text).unwrap();
-        assert_eq!(table["id"].as_str(), Some(*listed), "the listed id is the file's id");
+        assert_eq!(
+            table["id"].as_str(),
+            Some(*listed),
+            "the listed id is the file's id"
+        );
     }
     for id in &ids {
         let c = connector::load(id, None).unwrap_or_else(|e| panic!("{id}: {e}"));
@@ -184,5 +188,8 @@ fn connector_data_stays_in_its_home_and_off_the_code_variables() {
     for body in refused {
         assert!(load_text(&format!("{head}{body}\n")).is_err(), "{body}");
     }
-    load_text(&format!("{head}home = {{ HOME = \"{{home}}\", XDG_CONFIG_HOME = \"{{home}}/.config\" }}\n")).unwrap();
+    load_text(&format!(
+        "{head}home = {{ HOME = \"{{home}}\", XDG_CONFIG_HOME = \"{{home}}/.config\" }}\n"
+    ))
+    .unwrap();
 }

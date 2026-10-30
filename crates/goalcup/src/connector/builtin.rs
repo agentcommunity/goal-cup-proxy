@@ -5,10 +5,22 @@
 
 /// Every built-in connector file as `(id, text)`; the id is the file's own `id` key.
 pub const CONNECTORS: &[(&str, &str)] = &[
-    ("claude-code-cli", include_str!("../../../../connectors/claude-code-cli.toml")),
-    ("codex-cli", include_str!("../../../../connectors/codex-cli.toml")),
-    ("hermes-cli", include_str!("../../../../connectors/hermes-cli.toml")),
-    ("kilo-cli", include_str!("../../../../connectors/kilo-cli.toml")),
+    (
+        "claude-code-cli",
+        include_str!("../../../../connectors/claude-code-cli.toml"),
+    ),
+    (
+        "codex-cli",
+        include_str!("../../../../connectors/codex-cli.toml"),
+    ),
+    (
+        "hermes-cli",
+        include_str!("../../../../connectors/hermes-cli.toml"),
+    ),
+    (
+        "kilo-cli",
+        include_str!("../../../../connectors/kilo-cli.toml"),
+    ),
 ];
 
 /// The shared host list (PRD-11 section 4).

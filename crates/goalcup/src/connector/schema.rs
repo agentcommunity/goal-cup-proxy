@@ -230,7 +230,12 @@ pub(crate) fn from_toml<T: serde::de::DeserializeOwned>(
 /// quotes, and other values after "invalid type", "invalid value" or "unknown variant".
 fn safe_message(message: &str) -> String {
     let first = message.lines().next().unwrap_or("");
-    for what in ["invalid type", "invalid value", "invalid length", "unknown variant"] {
+    for what in [
+        "invalid type",
+        "invalid value",
+        "invalid length",
+        "unknown variant",
+    ] {
         if first.starts_with(what) {
             return match first.find(", expected") {
                 Some(i) => format!("{what}{}", &first[i..]),
@@ -417,7 +422,10 @@ fn under<'a>(path: &'a str, roots: &[&str]) -> Option<&'a str> {
     let clean = |part: &str| {
         !part.is_empty() && part != "." && part != ".." && !part.contains(['{', '}', '\0'])
     };
-    let stays = rest.is_empty() || rest.strip_prefix('/').is_some_and(|r| r.split('/').all(clean));
+    let stays = rest.is_empty()
+        || rest
+            .strip_prefix('/')
+            .is_some_and(|r| r.split('/').all(clean));
     stays.then_some(rest)
 }
 
