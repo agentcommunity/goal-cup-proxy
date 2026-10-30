@@ -115,10 +115,11 @@ fn no_report(e: &dyn std::fmt::Display) -> ExitCode {
 }
 
 fn check(a: &CheckArgs) -> ExitCode {
-    // A `--local` folder whose part files were all pruned (PRD-06 section 7) holds no record: it
-    // is no entry, `server_equals_local` skips it as pruned and the server checks still run.
+    // A `--local` entry pruned of every part file (PRD-06 section 7) keeps an empty `rec/`: it is
+    // no entry and `server_equals_local` skips it as pruned. Any other resolve error is exit 3.
     let local = a.local.as_ref().map(|l| {
-        let all_pruned = l.is_dir().then(input::Input::default);
+        let rec = goalcup_format::read::part_files(&l.join("rec"));
+        let all_pruned = rec.is_ok_and(|p| p.is_empty()).then(input::Input::default);
         input::resolve(l, false, false).or_else(|e| all_pruned.ok_or(e))
     });
     let (input, local) = match (input::resolve(&a.path, a.live, a.server), local.transpose()) {

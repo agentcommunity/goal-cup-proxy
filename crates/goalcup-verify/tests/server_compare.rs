@@ -130,8 +130,7 @@ fn vr2_seal_without_reason_or_totals_is_reported() {
                 v.as_object_mut().unwrap().remove(k);
             })
         });
-        let local = ["--server", "--local", d.to_str().unwrap()];
-        let (code, v) = check(&fetch(&d, &format!("vr2-{k}-f"), |_, _| {}), &local);
+        let (code, v) = check(&fetch(&d, &format!("vr2-{k}-f"), |_, _| {}), &["--server"]);
         assert!(code < 3, "{k}");
         if k == "totals" {
             assert_eq!((code, result(&v, "counts_match_seal")), (2, "fail"));
@@ -182,4 +181,9 @@ fn fw3_pruned_entry_is_named_and_server_copy_stands_in() {
         let r = ["server_chunks_whole", "server_equals_local"].map(|id| result(&v, id));
         assert_eq!((code, r), (0, ["pass", "skip"]), "{n}");
     }
+    // A folder that never was an entry is no pruned entry: unreadable input, exit 3.
+    let wrong = tmp("pruned-wrong");
+    let o = out.to_str().unwrap();
+    let args = ["check", o, "--json", "--server", "--local", wrong.to_str().unwrap()];
+    assert_eq!(run(&args).0, 3);
 }
