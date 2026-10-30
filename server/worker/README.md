@@ -78,7 +78,6 @@ Variables (in `wrangler.toml` `[vars]`, or `--var` / `.dev.vars` locally):
 | `RUN_HOURS` | `168` | A competition run's `deadline_at` = `official_start` + this many hours. |
 | `PRACTICE_RUN_MINUTES` | `10` | A practice run's length. |
 | `MIN_COMPETITION_VERSION` | empty (no minimum) | The oldest goalcup (`x.y.z`; the first three numbers of what it sends) that may sign in for, or start, a competition run. Older, or a version with no `x.y.z` while a minimum is set, is `403` with the update line. A value with no `x.y.z` in it is malformed (parsing is lenient: the first `x.y.z` counts) and makes those two calls `500 misconfigured`; heartbeats and everything else are untouched. For the cup: the cup's minimum release (the first one that carries this build's recording changes), set only once `releases/latest` serves it ([steps](#set-the-minimum-competition-version)). |
-| `RUN_MAX_COMPRESSED_BYTES` | `68719476736` (64 GiB) | The most compressed chunk bytes one run may hold in R2, over all its entries. A chunk that would pass it is `413 quota_exceeded`, nothing stored; goalcup retries, so raising it (a deploy) resumes the upload. Log lines `quota-half`, `quota-full`, `quota-exceeded <run_id>`. |
 | `DB_BACKEND` | `supabase` | `supabase` (production) or `local` (`wrangler dev` and tests only). Never set `local` in the deployed `wrangler.toml`. |
 | `APPROVAL_URL` | in `wrangler.toml` | The website page where a member approves a device request, without a query string. `verification_uri_complete` adds `?code=<user code>`. |
 | `STAGING` | off | `on` marks a staging deployment: the only place besides `DB_BACKEND=local` where `TEST_APPROVAL_KEY` may be set. Set only in `[env.staging.vars]`. |
@@ -115,8 +114,8 @@ Without `routes = []`, a staging deploy would move `ingest.agentcommunity.org` t
   33,554,432, `Content-Type` and all seven `Goalcup-*` headers are well formed, and the maintenance
   switch is off.
 - **Then:** offset, `prev` and first sequence must continue exactly where the entry stands (`409`).
-- **Then the run's size limit:** the run's `stored_bytes` plus this chunk's `Content-Length` must stay
-  within `RUN_MAX_COMPRESSED_BYTES` (`413 quota_exceeded`, body unread, nothing stored).
+- **No per-run size limit.** The run's `stored_bytes` grows with each chunk; a log line
+  `large-run <run_id> stored=<bytes>` marks each 10 GiB a run crosses.
 - **Storage:** the body is piped (never buffered) into R2 with a create-only put, and R2 checks the
   SHA-256 (`422 digest_mismatch`, nothing stored). If the name already exists, an earlier attempt stored
   it but its database step failed, and the upload continues from there.

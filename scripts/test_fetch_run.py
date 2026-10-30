@@ -105,7 +105,7 @@ class FetchRunTest(unittest.TestCase):
             last = seq + count - 1
             key = f"traces/goalcup-cup-2026/{RUN}/{entry}/{offset:016d}-{sha256(body)}.zst"
             row = {
-                "offset": offset, "length": 1000 + n, "stored_bytes": len(body), "sha256": sha256(body),
+                "offset": offset, "length": 1000 + n, "sha256": sha256(body),
                 "first_seq": seq, "last_seq": last, "prev": head, "head": link(entry, last), "r2_key": key,
                 "received_at": f"2026-11-14T00:0{n}:00Z",
             }
@@ -239,14 +239,13 @@ class FetchRunTest(unittest.TestCase):
         self.assertEqual(result.returncode, 1, result.stderr)
         self.assertFalse((self.out / ENTRY).exists())
 
-    def test_fetch_json_holds_the_last_heartbeat_and_every_heartbeat_in_time_order(self) -> None:
+    def test_fetch_json_holds_the_last_heartbeat_and_every_heartbeat(self) -> None:
         e = self.entry()
         rows = list(e["heartbeats"])
-        e["heartbeats"] = rows[3:] + rows[:3]  # the index in any order
         self.write_index(e)
         self.assertEqual(self.fetch().returncode, 0)
         _, doc = self.fetched()
-        self.assertEqual(doc["heartbeats"], rows, "every row, in received_at order")
+        self.assertEqual(doc["heartbeats"], rows, "every row, in the index's received_at order")
         self.assertEqual(doc["last_heartbeat"], rows[-1])
         self.assertEqual(doc["last_heartbeat"]["recording"], "failed")
         self.assertEqual(doc["last_heartbeat"]["counts"], {"v": 1, "off_ms": 50, "mode": "recording"})
@@ -301,6 +300,7 @@ class FetchRunTest(unittest.TestCase):
         self.assertNotIn(RUN, sql, "the id is a psql variable, never spliced into the SQL")
         args = (self.root / "fake.psql.args").read_text()
         self.assertIn(f"id={RUN}", args)
+        self.assertIn("staging=false", args, "the production bucket reads only production runs")
         for secret in ("db-password", "db.invalid"):
             self.assertNotIn(secret, args, "the connection is not on psql's command line")
         service = (self.root / "fake.psql.service").read_text()

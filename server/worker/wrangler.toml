@@ -52,10 +52,6 @@ PRACTICE_RUN_MINUTES = "10"
 # told to update (403). `continue` is never checked. Empty: no minimum. A dashboard edit is wiped
 # by the next deploy.
 MIN_COMPETITION_VERSION = "1.0.0"
-# Per-run size limit: the most compressed bytes one run may hold in R2, over all its entries
-# (64 GiB; owner, WP-D). Over it a chunk is 413 quota_exceeded and nothing is stored; goalcup
-# keeps its data and retries, so raising this (a deploy) resumes the upload.
-RUN_MAX_COMPRESSED_BYTES = "68719476736"
 # Production default. `local` exists for `wrangler dev` and tests only (see README).
 DB_BACKEND = "supabase"
 # Check with the GitHub API that repo_url is a public repository. "on" in production;
@@ -147,7 +143,6 @@ TEST_EVENT_ID = "test-staging"
 RUN_HOURS = "168"
 PRACTICE_RUN_MINUTES = "10"
 MIN_COMPETITION_VERSION = "1.0.0"
-RUN_MAX_COMPRESSED_BYTES = "68719476736"
 DB_BACKEND = "supabase"
 GITHUB_CHECK = "on"
 # The website's approval page (agentcommunity.org; it signs the member in with the site's session).

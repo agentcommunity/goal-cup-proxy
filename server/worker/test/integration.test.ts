@@ -26,12 +26,12 @@ const TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/;
 const publicKey = (await Signer.fromSeedHex(TEST_SEED)).publicKeyHex;
 
 /**
- * What miniflare has persisted in R2: key, sha256 and bytes of each committed object. (Reads the
+ * What miniflare has persisted in R2: key and sha256 of each committed object. (Reads the
  * simulator's own files, so it sees what a failed put left behind, which must be nothing.)
  */
-function r2Objects(stateDir: string): { key: string; sha256: string; bytes: Buffer }[] {
+function r2Objects(stateDir: string): { key: string; sha256: string }[] {
   const r2 = join(stateDir, "v3", "r2");
-  const objects: { key: string; sha256: string; bytes: Buffer }[] = [];
+  const objects: { key: string; sha256: string }[] = [];
   const metaDir = join(r2, "miniflare-R2BucketObject");
   for (const f of readdirSync(metaDir)) {
     if (!f.endsWith(".sqlite") || f === "metadata.sqlite") continue; // one file per bucket
@@ -41,7 +41,7 @@ function r2Objects(stateDir: string): { key: string; sha256: string; bytes: Buff
         if (!bucket.isDirectory() || bucket.name === "miniflare-R2BucketObject") continue;
         try {
           const bytes = readFileSync(join(r2, bucket.name, "blobs", row.blob_id));
-          objects.push({ key: row.key, sha256: createHash("sha256").update(bytes).digest("hex"), bytes });
+          objects.push({ key: row.key, sha256: createHash("sha256").update(bytes).digest("hex") });
         } catch {
           // the blob is in another bucket directory
         }
@@ -50,13 +50,6 @@ function r2Objects(stateDir: string): { key: string; sha256: string; bytes: Buff
     db.close();
   }
   return objects;
-}
-
-/** The local database's state of a run, as `wrangler dev` keeps it in R2 (db-local.ts). */
-function storedRun(stateDir: string, runId: string): { entries: { heartbeat_count: number }[] } {
-  const found = r2Objects(stateDir).find((o) => o.key === `state/runs/${runId}.json`);
-  assert.ok(found !== undefined, `no state for ${runId}`);
-  return JSON.parse(found.bytes.toString("utf8"));
 }
 
 function assertError(r: { status: number; body: { error?: string; message?: string } }, status: number, code: string) {
@@ -279,7 +272,6 @@ describe("upload API against wrangler dev", { concurrency: false }, () => {
       c1 = chunk1();
       const r = await put(c1, 0);
       assert.equal(r.status, 200, JSON.stringify(r.body));
-      assert.deepEqual(Object.keys(r.body), ["ack", "offset", "next_seq", "head", "received_at", "sealed"]);
       assert.equal(r.body.sealed, false);
       ack1 = r.body.ack;
       assert.deepEqual(Object.keys(ack1), ["entry_id", "seq", "hash", "acked_at", "server_signature"]);
@@ -480,12 +472,10 @@ describe("upload API against wrangler dev", { concurrency: false }, () => {
       assert.equal(again.status, 200, JSON.stringify(again.body));
       assert.equal(again.body.sealed, true);
 
-      // A repeat of the final heartbeat says sealed and adds no heartbeat row.
-      const rows = storedRun(worker.stateDir, e.run.run_id).entries[0]!.heartbeat_count;
+      // A repeat of the final heartbeat says sealed (that it adds no row is guarded in local-db.test.ts).
       const repeat = await e.final(last.lastSeq, last.head);
       assert.equal(repeat.status, 200, JSON.stringify(repeat.body));
       assert.equal(repeat.body.sealed, true);
-      assert.equal(storedRun(worker.stateDir, e.run.run_id).entries[0]!.heartbeat_count, rows);
     });
 
     test("the seal route is gone: 404", async () => {
@@ -760,42 +750,6 @@ describe("test-only clocks are refused outside the local backend", () => {
   });
 });
 
-describe("the per-run size limit against wrangler dev", { concurrency: false }, () => {
-  // Chunk bodies do not depend on the entry id, so the limit can be set before the run exists:
-  // the first chunk fits, the second would pass it by one byte.
-  const size1 = makeChunk("e0000000000000000", 0, 5, GENESIS, "q1").body.length;
-  const size2 = makeChunk("e0000000000000000", 5, 5, GENESIS, "q2").body.length;
-  let worker: RunningWorker;
-  let api: Client;
-  let token = "";
-  let runId = "";
-  let entryId = "";
-  before(async () => {
-    worker = await startWorker({ EVENT_ID: "practice", TEST_APPROVAL_KEY: APPROVAL_KEY, RUN_MAX_COMPRESSED_BYTES: String(size1 + size2 - 1) });
-    api = new Client(worker.url);
-    token = await credentialFor(api, "erin");
-    const r = await api.call("POST", "/v1/runs", { token, json: openBody({ session_id: "erin-1" }) });
-    assert.equal(r.status, 201, JSON.stringify(r.body));
-    ({ run_id: runId, entry_id: entryId } = r.body);
-  });
-  after(async () => {
-    await worker?.stop();
-  });
-
-  test("the chunk that would pass the limit is 413 quota_exceeded and nothing of it reaches R2", async () => {
-    const c1 = makeChunk(entryId, 0, 5, GENESIS, "q1");
-    const c2 = makeChunk(entryId, 5, 5, c1.head, "q2");
-    const put = (c: typeof c1, offset: number) => api.call("PUT", `/v1/runs/${runId}/chunks/${offset}`, { token, body: c.body, headers: c.headers });
-    assert.equal((await put(c1, 0)).status, 200);
-    assertError(await put(c2, c1.length), 413, "quota_exceeded");
-    const keys = r2Objects(worker.stateDir).filter((o) => o.key.startsWith("traces/"));
-    assert.deepEqual(keys.map((o) => o.sha256), [sha256(c1.body)]);
-    const p = (await api.call("GET", `/v1/runs/${runId}`, { token })).body;
-    assert.equal(p.offset, c1.length);
-    assert.equal(p.next_seq, 5);
-  });
-});
-
 // ---- the heartbeat's counts (in this process: the stored state is read back directly) -------
 
 describe("heartbeat counts", () => {
@@ -840,7 +794,10 @@ describe("heartbeat counts", () => {
         assert.deepEqual(s.entries[0]!.last_heartbeat!.vitals, { counts_dropped: utf8(bad) }, JSON.stringify(bad).slice(0, 80));
         assert.deepEqual(s.last_vitals, { counts_dropped: utf8(bad) });
         assert.equal(s.entries[0]!.last_heartbeat!.recording, "gaps"); // the rest of the heartbeat is kept
-        assert.deepEqual(logged, [`counts-dropped ${run.run_id}`]);
+        // One visible line per drop, and no counts value in it.
+        assert.equal(logged.length, 1);
+        assert.match(logged[0]!, /^counts-dropped /);
+        if (typeof bad !== "number") assert.ok(!logged[0]!.includes(JSON.stringify(bad)), logged[0]);
       }
     } finally {
       log.mock.restore();

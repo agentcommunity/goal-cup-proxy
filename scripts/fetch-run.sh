@@ -1,63 +1,26 @@
 #!/bin/sh
-# Fetch a run's server copy, whole or partial, for an organizer. It fetches bytes and decodes nothing.
+# Fetch a run's server copy, whole or partial, for an organizer. It reads bytes and decodes nothing.
 #
 #   sh scripts/fetch-run.sh [--bucket B] [--index FILE] [--store DIR] [--local PERSIST_DIR] <run | entry> <outdir>
 #
-# For every entry of the run, or for the one entry named, it writes <outdir>/<entry>/ holding
-#   rec.gcr.zst   every chunk object of the entry, SHA-256 checked, concatenated in offset order and
-#                 never decompressed: the entry's GCR1 stream as the server holds it
-#   fetch.json    the entry's server facts: the entry row (upload_offset, next_seq, head,
-#                 model_requests, final, sealed_at, stored_bytes, chunk_count), whether the copy is
-#                 complete and what is missing, every heartbeat row in received_at order (recording,
-#                 model_requests, counts, counts_dropped) with the last one again as last_heartbeat,
-#                 and the list of the chunks rec.gcr.zst holds (offset, length, bytes, sha256,
-#                 first_seq, last_seq, prev, head, r2_key, received_at); `bytes` is each object's
-#                 size, so each chunk starts in rec.gcr.zst where the one before it ends
-# then prints each directory on stdout.
+# Writes <outdir>/<entry>/ for every entry of the run (or the one entry named) and prints each path:
+#   rec.gcr.zst  the entry's chunk objects, SHA-256 checked, joined in offset order, never decompressed
+#   fetch.json   the entry row, "complete" and "missing", every heartbeat row, and the chunks written
+# Layout and checks: PRD-07 section 7 (seam S13). Exit 1 when an object is missing or bad, the chain
+# breaks or the index has a hole; a partial entry is normal and exits 0. Nothing is ever overwritten.
 #
-# The chunk index comes from the database (an R2 listing could show an orphan object that lost a race,
-# so it is never used). Checks per entry: offsets run on from 0, first_seq runs on from 0, each chunk's
-# prev is the previous chunk's head (64 zeros for the first), each object matches its SHA-256, and the
-# chunks end at the entry row's upload_offset, next_seq and head.
-#   - Partial is normal. An entry whose chunks stop before the committed end, or that has no final
-#     heartbeat, is written as far as it goes; fetch.json says "complete": false and "missing" names
-#     {from_offset, from_seq, to_seq}. Exit 0.
-#   - An object that is missing or fails its SHA-256 ends that entry there: rec.gcr.zst holds the chunks
-#     before it and "missing" gains "why": "object_bad" and the key. A chunk whose prev is not the
-#     previous head ends it the same way with "why": "chain_break", and chunks that do not reach the
-#     entry row's end with "why": "index_mismatch". Exit 1.
-#   - A hole or an overlap in the index's offsets or seqs (the Worker accepts only the next offset, so
-#     it cannot happen): no output for that entry. Exit 1.
-# It never overwrites: if any <outdir>/<entry> already exists, nothing is fetched. An entry appears in
-# <outdir> only once it is written, so an interrupted fetch leaves no half directory.
-#
-# Decoding is the reader's job: `goalcup-verify check --server <dir>` (PRD-08), the usage reader, or by
-# hand `zstd -dc --long=27 rec.gcr.zst`. An entry that is not sealed ends inside an open zstd frame, so
-# zstd reports a truncated input after writing every whole block; that is expected.
-#
-# Sources (python3 is always needed):
-#   default    psql and curl, with in the environment
-#                DATABASE_URL           a Postgres URL; give it a read-only role. The query runs inside
-#                                       BEGIN READ ONLY and ends ROLLBACK, so it cannot write
-#                CLOUDFLARE_ACCOUNT_ID  and CLOUDFLARE_API_TOKEN (an R2 token with read-only access)
-#   --index FILE   read the index from FILE (the JSON this script's query returns) instead of the database
-#   --store DIR    read each object from DIR/<r2 key> instead of R2 (a mirror of the bucket)
-#   --local PERSIST_DIR
-#                  read a local Worker (`wrangler dev` with DB_BACKEND=local and --persist-to
-#                  PERSIST_DIR): the index from the object state/runs/<run>.json, each object with
-#                  `npx wrangler r2 object get <bucket>/<key> --local --persist-to PERSIST_DIR --file <dest>`
-#                  run in server/worker (npm ci there first). It takes a run id, not an entry id. The
-#                  bucket defaults to goalcup-traces-staging: `wrangler dev` keeps its local R2 under
-#                  wrangler.toml's preview_bucket_name (checked with wrangler 4.149.0). The local store
-#                  keeps only an entry's last heartbeat, so "heartbeats" holds that one row.
-#                  Fallback, should a wrangler version stop reading the local store this way: mirror
-#                  the objects per key into a directory and pass --index and --store.
-# --bucket B is the R2 bucket (default goalcup-traces, or goalcup-traces-staging with --local; staging
-# is goalcup-traces-staging).
-# Credentials are read from the environment only. They are never printed (tracing is switched off
-# first, so `sh -x` shows none) or passed on a command line, and the script only ever reads (a SELECT,
-# and GET requests). The database connection reaches psql through a private service file; the R2
-# token reaches curl through its configuration on stdin.
+# Sources (python3 always):
+#   default        psql with DATABASE_URL (a read-only role; the query runs in BEGIN READ ONLY and ends
+#                  ROLLBACK, and keeps to the staging or production events by the bucket's name), and
+#                  curl with CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN (read-only R2)
+#   --index FILE   the index (this script's query result) from FILE instead of the database
+#   --store DIR    each object from DIR/<r2 key> instead of R2
+#   --local DIR    a `wrangler dev` Worker (DB_BACKEND=local, --persist-to DIR): the index from
+#                  state/runs/<run>.json, objects through `npx wrangler r2 object get --local` in
+#                  server/worker. Takes a run id; keeps only each entry's last heartbeat
+#   --bucket B     default goalcup-traces, or goalcup-traces-staging with --local (wrangler dev keeps
+#                  local R2 under preview_bucket_name)
+# Credentials come from the environment only, never reach argv or output, and tracing is off.
 set -eu
 # Before any secret is read, and for good: `sh -x` must not echo a credential.
 set +x
@@ -70,7 +33,7 @@ while [ $# -gt 0 ]; do
     --index) index=${2:?--index needs a file}; shift ;;
     --store) store=${2:?--store needs a directory}; shift ;;
     --local) persist=${2:?--local needs the wrangler persist directory}; shift ;;
-    -h | --help) sed -n '2,60p' "$0"; exit 0 ;;
+    -h | --help) sed -n '2,23p' "$0"; exit 0 ;;
     -*) echo "fetch-run: unknown option $1" >&2; exit 2 ;;
     *) break ;;
   esac
@@ -91,23 +54,21 @@ if [ -z "$bucket" ]; then
 fi
 case $bucket in
   '' | *[!A-Za-z0-9._-]*) echo "fetch-run: bad bucket name" >&2; exit 2 ;;
+  *-staging) staging=true ;;
+  *) staging=false ;;
 esac
-command -v python3 >/dev/null 2>&1 || { echo "fetch-run: python3 is needed" >&2; exit 2; }
 if [ -n "$persist" ]; then
   [ -d "$persist" ] || { echo "fetch-run: --local $persist is not a directory" >&2; exit 2; }
   persist=$(cd "$persist" && pwd)
   case $id in
     e*) [ -n "$index" ] || { echo "fetch-run: with --local, name the run (r...), not an entry" >&2; exit 2; } ;;
   esac
-  command -v npx >/dev/null 2>&1 || { echo "fetch-run: npx is needed for --local" >&2; exit 2; }
 fi
 if [ -z "$index" ] && [ -z "$persist" ]; then
   : "${DATABASE_URL:?set DATABASE_URL (a read-only Postgres URL), or pass --index FILE or --local DIR}"
-  command -v psql >/dev/null 2>&1 || { echo "fetch-run: psql is needed" >&2; exit 2; }
 fi
 if [ -z "$store" ] && [ -z "$persist" ]; then
   : "${CLOUDFLARE_ACCOUNT_ID:?set CLOUDFLARE_ACCOUNT_ID, or pass --store DIR or --local DIR}" "${CLOUDFLARE_API_TOKEN:?set CLOUDFLARE_API_TOKEN, or pass --store DIR or --local DIR}"
-  command -v curl >/dev/null 2>&1 || { echo "fetch-run: curl is needed" >&2; exit 2; }
   case $CLOUDFLARE_ACCOUNT_ID in
     '' | *[!A-Za-z0-9]*) echo "fetch-run: bad CLOUDFLARE_ACCOUNT_ID" >&2; exit 2 ;;
   esac
@@ -119,8 +80,7 @@ tmp=$(mktemp -d "$out/.fetch-run.XXXXXX") || { echo "fetch-run: cannot make a te
 trap 'rm -rf "$tmp"' EXIT
 trap 'exit 1' HUP INT TERM
 
-# 1. The index from the database: one JSON array, an element per entry. (--index and --local are read
-# in step 2.)
+# 1. The index from the database: one JSON array, an element per entry.
 if [ -z "$index" ] && [ -z "$persist" ]; then
   # The URL goes into a private service file, not onto psql's command line (where `ps` shows it).
   FETCH_RUN_URL=$DATABASE_URL python3 -I - "$tmp/pg_service.conf" <<'PY'
@@ -150,7 +110,7 @@ with os.fdopen(fd, "w") as f:
 PY
   index=$tmp/index.json
   PGSERVICEFILE="$tmp/pg_service.conf" PGSERVICE=fetchrun \
-    psql -X -q -At -v ON_ERROR_STOP=1 -v id="$id" >"$index" <<'SQL'
+    psql -X -q -At -v ON_ERROR_STOP=1 -v id="$id" -v staging="$staging" >"$index" <<'SQL'
 BEGIN READ ONLY;
 SELECT coalesce(jsonb_agg(jsonb_build_object(
   'run_id', e.run_id, 'entry_id', e.id, 'segment', e.segment,
@@ -167,7 +127,7 @@ SELECT coalesce(jsonb_agg(jsonb_build_object(
       ORDER BY h.received_at, h.id), '[]'::jsonb)
     FROM goal_cup_tracer.heartbeats h WHERE h.entry_id = e.id),
   'chunks', (SELECT coalesce(jsonb_agg(jsonb_build_object(
-      'offset', c."offset", 'length', c.length, 'stored_bytes', c.stored_bytes, 'sha256', c.sha256,
+      'offset', c."offset", 'length', c.length, 'sha256', c.sha256,
       'first_seq', c.first_seq, 'last_seq', c.last_seq, 'prev', c.prev, 'head', c.head,
       'r2_key', c.r2_key,
       'received_at', to_char(c.received_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'))
@@ -175,7 +135,10 @@ SELECT coalesce(jsonb_agg(jsonb_build_object(
     FROM goal_cup_tracer.chunks c WHERE c.entry_id = e.id)
   ) ORDER BY e.run_id, e.segment), '[]'::jsonb)
 FROM goal_cup_tracer.entries e
-WHERE e.run_id = :'id' OR e.id = :'id';
+JOIN goal_cup_tracer.runs r ON r.id = e.run_id
+JOIN goal_cup_tracer.events ev ON ev.id = r.event_id
+-- Staging and production share one database: keep to the side the bucket names.
+WHERE (e.run_id = :'id' OR e.id = :'id') AND ev.staging = :'staging';
 ROLLBACK;
 SQL
 fi
@@ -190,7 +153,7 @@ GENESIS = "0" * 64
 HEX64 = re.compile(r"^[0-9a-f]{64}$")
 ENTRY = re.compile(r"^e[0-9a-f]{16}$")
 RUN = re.compile(r"^r[0-9a-f]{16}$")
-KEY = re.compile(r"^(traces|state)/[A-Za-z0-9._/-]+$")
+KEY = re.compile(r"^traces/[A-Za-z0-9._/-]+$")
 
 
 def say(text):
@@ -317,8 +280,7 @@ def index_hole(chunks):
                 and is_int(c.get("first_seq")) and is_int(c.get("last_seq"))
                 and c["first_seq"] <= c["last_seq"] and isinstance(c.get("sha256"), str)
                 and HEX64.match(c["sha256"]) and isinstance(c.get("prev"), str)
-                and isinstance(c.get("head"), str) and key_ok(c.get("r2_key"))
-                and c["r2_key"].startswith("traces/")):
+                and isinstance(c.get("head"), str) and key_ok(c.get("r2_key"))):
             return "a malformed chunk row"
         if c["offset"] != offset:
             return f"the chunk at byte {c['offset']} follows one that ends at {offset}"
@@ -331,9 +293,7 @@ def index_hole(chunks):
 failed = False
 for e in entries:
     entry = e["entry_id"]
-    chunks = e.get("chunks") or []
-    if all(isinstance(c, dict) and is_int(c.get("offset")) for c in chunks):
-        chunks = sorted(chunks, key=lambda c: c["offset"])
+    chunks = e.get("chunks") or []  # in offset order, as the query and the local store give them
     hole = index_hole(chunks)
     if hole:
         say(f"entry {entry}: the index has a hole ({hole}); nothing was written for it")
@@ -391,7 +351,6 @@ for e in entries:
         {k: h.get(k) for k in ("received_at", "seq", "offset_local", "final", "recording", "model_requests", "counts", "counts_dropped")}
         for h in (e.get("heartbeats") or []) if isinstance(h, dict)
     ]
-    heartbeats.sort(key=lambda h: str(h["received_at"] or ""))
     doc = {
         "v": 1, "run_id": e["run_id"], "entry_id": entry, "segment": e.get("segment"),
         "upload_offset": upload_offset, "next_seq": next_seq, "head": entry_head,

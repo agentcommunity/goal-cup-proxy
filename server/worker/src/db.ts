@@ -93,8 +93,8 @@ export interface RunRow {
   current_sealed_at: string | null;
   /**
    * What the run holds in R2 so far, over all its entries: the compressed bytes (each committed
-   * chunk's Content-Length) and the number of committed chunks. The per-run size limit
-   * (RUN_MAX_COMPRESSED_BYTES) is checked against `stored_bytes`.
+   * chunk's Content-Length) and the number of committed chunks. There is no per-run size limit;
+   * the chunk path logs each 10 GiB a run crosses.
    */
   stored_bytes: number;
   chunk_count: number;
@@ -234,21 +234,6 @@ export type CommitChunkResult = "committed" | "conflict" | "beyond_final" | "clo
 export type RecordingState = "ok" | "gaps" | "failed" | "unknown";
 
 /**
- * What a heartbeat may say about goalcup's own processes and the machine's free disk, and
- * nothing else (docs/UPLOAD-API.md, heartbeat). Every field is optional; a field goalcup sent
- * as null is left out. `agent_paused: "disk"`: goalcup has paused the agent because the disk is
- * almost full; vitals without it say the agent is not paused.
- */
-export interface Vitals {
-  disk_free_bytes?: number;
-  disk_short?: boolean;
-  agent_paused?: "disk";
-  rss_bytes?: number;
-  cpu_ms?: number;
-  open_files?: number;
-}
-
-/**
  * A heartbeat's written counts (docs/UPLOAD-API.md, heartbeat): a flat object the server checks for
  * shape and size only and never interprets. It fixes no key list.
  */
@@ -261,9 +246,6 @@ export type Counts = Record<string, number | string | boolean | null>;
  * the top level of this object.
  */
 export type HeartbeatVitals = { counts: Counts } | { counts_dropped: number };
-
-/** A disk pause that begins is owed a disk_full email unless the run's last one began less than this long ago. */
-export const DISK_NOTICE_GAP_SECONDS = 6 * 3600;
 
 export interface HeartbeatArgs {
   member_id: string;

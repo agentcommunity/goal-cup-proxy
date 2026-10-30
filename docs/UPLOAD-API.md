@@ -346,7 +346,9 @@ rule; if this table ever differs, PRD-06 wins.
 | `gaps` | recording now (or sealed), something was lost | any of those is above 0, or `mode` is `losing` or `writer_slow`. A recovered entry is `gaps` |
 | `failed` | **recording is off now** | `mode` is null, or the writer has stalled past 60 s while records wait; and only then |
 
-`failed` is a state, not a latch: the next heartbeat after a good boot says `gaps`. 1.0 never sends
+`streams_in_gap` is the recorder's live count of streams in a gap (PRD-02 section 3), which the
+client reads for this decision; it is not a `counts` key, so the server cannot recompute the state
+from the stored counts alone. `failed` is a state, not a latch: the next heartbeat after a good boot says `gaps`. 1.0 never sends
 `unknown` (no heartbeat goes before the first durable point); the server still accepts it.
 
 **`counts`.** A flat JSON object whose values are whole numbers, strings of at most 64 bytes,

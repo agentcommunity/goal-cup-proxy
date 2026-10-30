@@ -13,7 +13,7 @@ import { type Opened, T0, WINDOW, lifecycle, rig } from "./helpers/rig.ts";
 import { TEST_SEED } from "./helpers/worker.ts";
 
 // The chunk upload needs the Workers runtime's FixedLengthStream; a pass-through stands in for it
-// here (test/quota.test.ts does the same; test/integration.test.ts has the real one).
+// here (test/integration.test.ts has the real one).
 const g = globalThis as unknown as { FixedLengthStream?: unknown };
 g.FixedLengthStream ??= class extends TransformStream<Uint8Array, Uint8Array> {
   constructor(_length: number) {
@@ -418,6 +418,27 @@ describe("what a seal needs", () => {
     const again = await r.beat(alice, a.run_id, a.entry_id, { seq: 9, head: "9".repeat(64), final: true });
     assert.equal(again.body.sealed, false); // past the end too: an end is committed, the chain is behind it
     assert.equal((await r.get(alice, a.run_id)).body.sealed, false);
+  }, {});
+});
+
+describe("no per-run size limit (ledger R5)", () => {
+  lifecycle("a run that already holds more than the old 64 GiB limit still gets its next chunk stored", async (r) => {
+    const alice = await r.cred("alice");
+    const a = await r.start(alice, "s1");
+    // Records 0..4, put in through the database with a stored size well past 64 GiB.
+    const head = sha256(`${a.entry_id}:4`);
+    const held = {
+      entry_id: a.entry_id, offset: 0, length: 10, sha256: "1".repeat(64), first_seq: 0, last_seq: 4, prev: GENESIS, head, r2_key: "k",
+      received_at: T0, ack: { entry_id: a.entry_id, seq: 4, hash: head, acked_at: T0, server_signature: "s" },
+    };
+    assert.equal(await r.db().commitChunk({ member_id: "alice", run_id: a.run_id, chunk: held, stored_bytes: 70 * 1024 ** 3 }), "committed");
+
+    const chunk = makeChunk(a.entry_id, 5, 3, head, "big");
+    const put = await r.api.call("PUT", `/v1/runs/${a.run_id}/chunks/10`, { token: alice, body: chunk.body, headers: { ...chunk.headers, "content-length": String(chunk.body.length) } });
+    assert.equal(put.status, 200, JSON.stringify(put.body));
+    assert.equal(put.body.offset, 10 + chunk.length);
+    const run = (await r.db().getRun("alice", a.run_id, null))!.run;
+    assert.equal(run.stored_bytes, 70 * 1024 ** 3 + chunk.body.length);
   }, {});
 });
 

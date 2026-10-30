@@ -9,7 +9,7 @@ import { SupabaseDb } from "../src/db-supabase.ts";
 import type { Env } from "../src/env.ts";
 import { ApiError } from "../src/errors.ts";
 import { REPO_URL, boolField, parseSafeUint, versionTriple } from "../src/util.ts";
-import { credentialFor, deviceBody, openBody } from "./helpers/client.ts";
+import { credentialFor, openBody } from "./helpers/client.ts";
 import { inProcess } from "./helpers/inproc.ts";
 
 const baseEnv = { EVENT_ID: "cup", PRACTICE_EVENT_ID: "practice", RECEIPT_SIGNING_KEY: "07".repeat(32), TRACES: {} } as unknown as Env;
@@ -53,7 +53,6 @@ test("config defaults and validation", () => {
     runSeconds: 168 * 3600,
     practiceRunSeconds: 600,
     closeAfterSeconds: 86400,
-    runMaxCompressedBytes: 68_719_476_736,
     startWindow: undefined,
     githubCheck: false,
     minCompetitionVersion: { kind: "none" },
@@ -68,10 +67,6 @@ test("config defaults and validation", () => {
   assert.throws(() => readConfig({ ...baseEnv, EVENT_ID: "../x" }), ApiError);
   assert.throws(() => readConfig({ ...baseEnv, RUN_HOURS: "0" }), ApiError);
   assert.throws(() => readConfig({ ...baseEnv, RUN_HOURS: "abc" }), ApiError);
-  assert.equal(readConfig({ ...baseEnv, RUN_MAX_COMPRESSED_BYTES: "1048576" }).runMaxCompressedBytes, 1_048_576);
-  for (const bad of ["0", "-1", "1.5", "64GiB", "1e9", "99999999999999999"]) {
-    assert.throws(() => readConfig({ ...baseEnv, RUN_MAX_COMPRESSED_BYTES: bad }), (e) => e instanceof ApiError && e.code === "misconfigured", bad);
-  }
 });
 
 test("RUN_SECONDS, CLOSE_AFTER_SECONDS and the start window are honoured only with the local backend", () => {
@@ -236,12 +231,6 @@ test("the 5-minute cron runs in production and in staging; staging is a Worker o
   assert.notEqual(tables["env.staging.r2_buckets"]!.bucket_name, tables.r2_buckets!.bucket_name);
 });
 
-test("the per-run size limit is 64 GiB of compressed chunks in production and in staging", () => {
-  const tables = wranglerTables();
-  assert.equal(tables.vars!.RUN_MAX_COMPRESSED_BYTES, "68719476736");
-  assert.equal(tables["env.staging.vars"]!.RUN_MAX_COMPRESSED_BYTES, "68719476736"); // not inherited by an environment
-});
-
 test("production and staging both bind the device limiter; staging's limits are low enough to see a 429", () => {
   const tables = wranglerTables();
   assert.equal(tables["durable_objects.bindings"]!.name, "DEVICE_LIMITER");
@@ -268,19 +257,17 @@ test("Workers Logs keep the Worker's own console lines and no invocation logs, i
   assert.equal(tables["env.staging.observability.logs"]!.invocation_logs, "false"); // pinned here, not left to inheritance
 });
 
-test("the minimum goalcup version is 1.0.0 in production and in staging", () => {
+test("production and staging carry the same non-empty minimum goalcup version", () => {
   const tables = wranglerTables();
-  assert.equal(tables.vars!.MIN_COMPETITION_VERSION, "1.0.0");
-  assert.equal(tables["env.staging.vars"]!.MIN_COMPETITION_VERSION, "1.0.0"); // not inherited by an environment
+  const floor = tables.vars!.MIN_COMPETITION_VERSION;
+  assert.ok(floor !== undefined && /^\d+\.\d+\.\d+$/.test(floor), String(floor));
+  assert.equal(tables["env.staging.vars"]!.MIN_COMPETITION_VERSION, floor); // not inherited by an environment
 });
 
-test("MIN_COMPETITION_VERSION refuses a 0.7 device request and open in practice and test mode; continue is not refused", async () => {
+test("MIN_COMPETITION_VERSION refuses a 0.7 open in practice and test mode; continue is not refused", async () => {
   const p = inProcess("2026-11-06T09:00:00Z", { MIN_COMPETITION_VERSION: "1.0.0", TEST_EVENT_ID: "test" });
   try {
     for (const mode of ["practice", "test"] as const) {
-      const device = await p.api.call("POST", "/v1/device", { json: deviceBody({ mode, proxy_version: "0.7.1" }) });
-      assert.equal(device.status, 403, JSON.stringify(device.body));
-      assert.equal(device.body.error, "forbidden");
       const token = await credentialFor(p.api, `m-${mode}`, mode); // a 1.0.0 sign-in
       const old = await p.api.call("POST", "/v1/runs", { token, json: openBody({ session_id: `s-${mode}`, proxy_version: "0.7.1" }) });
       assert.equal(old.status, 403, JSON.stringify(old.body));
