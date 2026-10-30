@@ -22,7 +22,11 @@ const PROXY_AND_CA: &[&str] = &[
     "REQUESTS_CA_BUNDLE",
 ];
 
-const NEVER_SET: &[&str] = &["SSL_CERT_DIR", "CURL_CA_BUNDLE", "NODE_TLS_REJECT_UNAUTHORIZED"];
+const NEVER_SET: &[&str] = &[
+    "SSL_CERT_DIR",
+    "CURL_CA_BUNDLE",
+    "NODE_TLS_REJECT_UNAUTHORIZED",
+];
 
 fn env(dir: &Path, extra: &[(&str, &str)]) -> Env {
     let mut vars: BTreeMap<String, String> = BTreeMap::new();
@@ -119,7 +123,10 @@ fn codex_gets_no_dash_c_override() {
         e.resume = resume;
         let plan = finished("codex-cli", &e, d);
         assert!(!plan.argv.iter().any(|a| a == "-c"), "{:?}", plan.argv);
-        assert!(plan.argv.contains(&e.workspace.to_string_lossy().into_owned()));
+        assert!(
+            plan.argv
+                .contains(&e.workspace.to_string_lossy().into_owned())
+        );
     }
 }
 

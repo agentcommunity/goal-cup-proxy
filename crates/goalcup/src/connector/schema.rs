@@ -158,7 +158,10 @@ impl TryFrom<RawMaskRule> for MaskRule {
             }
             (None, None, Some(prefix)) => {
                 let ok = prefix.len() <= 64
-                    && prefix.as_bytes().first().is_some_and(u8::is_ascii_lowercase)
+                    && prefix
+                        .as_bytes()
+                        .first()
+                        .is_some_and(u8::is_ascii_lowercase)
                     && prefix
                         .bytes()
                         .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-');
@@ -430,6 +433,9 @@ fn templates_ok(s: &str, allowed: &[&str]) -> bool {
 fn pattern_ok(pattern: &str) -> bool {
     !pattern.contains(['{', '}', '\0'])
         && pattern.split('/').all(|part| {
-            !part.is_empty() && part != "." && part != ".." && (part == "**" || !part.contains("**"))
+            !part.is_empty()
+                && part != "."
+                && part != ".."
+                && (part == "**" || !part.contains("**"))
         })
 }

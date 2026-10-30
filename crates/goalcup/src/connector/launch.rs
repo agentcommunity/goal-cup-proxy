@@ -65,7 +65,11 @@ pub(crate) fn fill(s: &str, home: &Path, workspace: &Path) -> String {
 /// The harness environment before the port and the CA paths: steps 1, 3, 4 and 6.
 pub(crate) fn build_env(c: &Connector, env: &Env, home: &Path) -> BTreeMap<String, String> {
     let mut vars = env.vars.clone();
-    for name in REMOVED.iter().copied().chain(c.unset.iter().map(String::as_str)) {
+    for name in REMOVED
+        .iter()
+        .copied()
+        .chain(c.unset.iter().map(String::as_str))
+    {
         vars.remove(name);
     }
     vars.insert("NO_PROXY".into(), NO_PROXY.into());

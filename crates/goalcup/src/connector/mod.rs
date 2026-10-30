@@ -200,8 +200,9 @@ fn read(path: &Path) -> Result<Vec<u8>, ConnectorError> {
 /// ends `.toml`. The hosts come from `hosts_file`, else the built-in list.
 pub fn load(id_or_path: &str, hosts_file: Option<&Path>) -> Result<Connector, ConnectorError> {
     let hosts = match hosts_file {
-        Some(path) => HostList::from_file(&read(path)?)
-            .map_err(|e| e.in_file(&path.display().to_string()))?,
+        Some(path) => {
+            HostList::from_file(&read(path)?).map_err(|e| e.in_file(&path.display().to_string()))?
+        }
         None => HostList::from_file(builtin::HOSTS.as_bytes())
             .map_err(|e| e.in_file("connectors/model-hosts.toml"))?,
     };
@@ -240,12 +241,10 @@ pub fn plan(connector: &Connector, env: &Env, home: &Path) -> LaunchPlan {
     let program = launch::resolve_program(&connector.program, &env.vars);
     let harness_version = launch::harness_version(&program, &harness_env);
     let version_refusal = match (&connector.version, &harness_version) {
-        (Some(want), Some(got)) if !got.contains(want.as_str()) => {
-            Some(Refusal::VersionMismatch {
-                program: connector.program.clone(),
-                want: want.clone(),
-            })
-        }
+        (Some(want), Some(got)) if !got.contains(want.as_str()) => Some(Refusal::VersionMismatch {
+            program: connector.program.clone(),
+            want: want.clone(),
+        }),
         _ => None,
     };
 

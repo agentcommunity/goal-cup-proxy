@@ -43,7 +43,11 @@ fn every_connector_file_is_built_in_and_loads_by_its_id() {
         assert_eq!(&c.id, id, "file stem equals id");
         assert!(seen.insert(c.id.clone()), "{id}: ids are unique");
         let bytes = std::fs::read(connectors_dir().join(format!("{id}.toml"))).unwrap();
-        assert_eq!(c.sha256, sha256_hex(&bytes), "{id}: built-in bytes are the file's");
+        assert_eq!(
+            c.sha256,
+            sha256_hex(&bytes),
+            "{id}: built-in bytes are the file's"
+        );
         assert_eq!(c.source, connector::ConnectorSource::Builtin);
     }
 }
@@ -60,7 +64,9 @@ fn the_shared_host_list_parses() {
 fn glob(pattern: &[u8], name: &[u8]) -> bool {
     match (pattern.first(), name.first()) {
         (None, None) => true,
-        (Some(b'*'), _) => glob(&pattern[1..], name) || (!name.is_empty() && glob(pattern, &name[1..])),
+        (Some(b'*'), _) => {
+            glob(&pattern[1..], name) || (!name.is_empty() && glob(pattern, &name[1..]))
+        }
         (Some(b'?'), Some(_)) => glob(&pattern[1..], &name[1..]),
         (Some(p), Some(n)) if p == n => glob(&pattern[1..], &name[1..]),
         _ => false,
@@ -73,13 +79,17 @@ fn matches(pattern: &[&str], path: &[&str]) -> bool {
         None => path.is_empty(),
         Some(&"**") => (0..=path.len()).any(|skip| matches(&pattern[1..], &path[skip..])),
         Some(p) => {
-            !path.is_empty() && glob(p.as_bytes(), path[0].as_bytes()) && matches(&pattern[1..], &path[1..])
+            !path.is_empty()
+                && glob(p.as_bytes(), path[0].as_bytes())
+                && matches(&pattern[1..], &path[1..])
         }
     }
 }
 
 fn resolve(template: &str) -> String {
-    template.replace("{home}", "/h").replace("{workspace}", "/w")
+    template
+        .replace("{home}", "/h")
+        .replace("{workspace}", "/w")
 }
 
 #[test]

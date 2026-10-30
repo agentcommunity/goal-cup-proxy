@@ -194,7 +194,10 @@ pub fn check(name: &str, source: Source) -> Result<Host, Skipped> {
     let label_ok = |label: &str| {
         (1..=63).contains(&label.len())
             && label.bytes().all(|b| {
-                b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-' || (b == b'*' && source == Source::Shared)
+                b.is_ascii_lowercase()
+                    || b.is_ascii_digit()
+                    || b == b'-'
+                    || (b == b'*' && source == Source::Shared)
             })
     };
     if name.len() > 253 || name.split('.').count() < 2 || !name.split('.').all(label_ok) {
