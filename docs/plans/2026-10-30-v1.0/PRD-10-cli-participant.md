@@ -1253,3 +1253,21 @@ PRD-01, PRD-02, PRD-04, PRD-05 and PRD-11 as they now stand, and the code. No lo
   60 s on a peer that trickles bytes, until PRD-06 takes BR2-r1. The device-flow poll measures its
   expiry on its own clock and does not count calls.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-11 slice 3 (merge c14d63b8)
+
+- **S3 is real.** In the slice that wires `connector::plan` into `start`: one start line per
+  `plan.unread` entry ("goalcup could not read <file>; a model service named there may not be
+  recorded."), every `plan.log` line through `cli::log`, and `refusal` worded as before. A second
+  `start` on a home whose lock is held gets `Refusal::HomeLocked` (HF4,
+  `cli_commands.rs::second_start_on_one_home_refuses` can land). The version probe is real, so
+  `VersionMismatch` can now come back.
+- **`hosts::check` is the full rule set.** `setup --record-host` calls it and refuses on `Err` with
+  `Skipped.reason`, which never repeats the input (one entry point, PRD-17 N1 to N6).
+  `cli::log::Host::checked` stays the log's syntax check and keeps its IP, `localhost` and port forms,
+  since the log names local connections the proxy saw; the slice 2 note's "until then" is read that
+  way.
+- **`write_settings` writes.** It returns `Vec<Skipped>` whose reason names the file and key; setup
+  shows or logs each, never a refusal. `plan` already writes `update_off` at every start, so setup's
+  own `update_off` write only matters for the harness session setup opens. Rows into a dotenv or other
+  file come back "format not writable". The setup test that reads the written file can land.

@@ -1168,3 +1168,15 @@ note is closed; PRD-10's delete of the skill can follow (PRD-10 note).
   never exit 3. The seven local ids stay `skip` "not built in this slice" until their slices.
   PRD-15's next slice updates the page; no code change is asked of PRD-08.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-11 slice 3 (merge c14d63b8)
+
+- PRD-11's merge c14d63b8 makes real every rule `docs/CONNECTOR-SCHEMA.md` marks **(next slice)**:
+  the version probe (first non-empty line of `program --version`, 5 s, a prefix the line must
+  contain), `refuse_if_set` (`false` is a value; null, `""`, `[]` and `{}` are unset),
+  `host_hints` and `hint_env` (https URLs only, userinfo dropped, a loopback value is a
+  `local_model` note), a pattern ending in `**` refused by PRD-04's `pattern::parse`, the settings
+  files (every `.json` and `.jsonc` read with comments and trailing commas; booleans written typed;
+  dotenv not writable), host decisions and the full host check. Also state: a `file` template's last
+  component is a pattern, and every file that fits is read. Drop the marks and check each rule against
+  merged `hosts.rs`, `hints.rs`, `launch.rs` and `mod.rs` (PRD-11 note lists the facts).

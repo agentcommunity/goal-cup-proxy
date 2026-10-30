@@ -951,3 +951,15 @@ Names for `LESSONS.md` (the lessons lane writes them; judge 14:56Z, 15:13Z):
   the fix. The panic hook itself (file and line, exit 3) is recorded as a review check, because no
   test input reaches it.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-11 slice 3 (merge c14d63b8)
+
+- **`hosts::check` is the full rule set on integration**, so `lessons_hosts.rs` and the lessons
+  fixtures can land against it. Facts the guards meet: N2 forms (`0.0.0.0`, `::`, mapped loopback)
+  come back `Skipped { local: true }`, as do private and link-local addresses; N3 numeric spellings
+  (`127.1`, `0x7f.1`) are refused with `local` false (PRD-11 note, known), so N3's guard asserts the
+  refusal only. N6 uses `hosts::resolves_only_here(&[IpAddr])` (public), so the stub-resolver guard
+  calls it directly. N1's userinfo and backslash handling is `hints::authority` (crate-private);
+  its guard goes through `plan` with a hint file, as `connector_hints.rs` does. HF1 to HF8 rows whose
+  guard is `connector_launch.rs` (lock, version probe, typed settings, never a link) are on
+  integration at c14d63b8 and can turn green after a box run on the integration head.
