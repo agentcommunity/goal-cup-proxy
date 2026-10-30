@@ -306,7 +306,7 @@ impl Ctx {
     }
 
     fn start(&mut self, ev: &Value) {
-        self.connector = ev.get("connector").and_then(Value::as_str).map(str::to_string);
+        self.connector = ev["connector"].as_str().map(str::to_string);
         let lists = ev
             .get("hosts")
             .and_then(Value::as_object)
@@ -374,7 +374,8 @@ impl Calls {
     pub fn finish(self) -> CallTable {
         let (mut rows, replies) = self.wire.finish(&self.ctx);
         let ok = |r: &CallRow| r.kind == Kind::Call && r.outcome == Outcome::Ok;
-        let Some(c) = self.ctx.connector.as_deref().filter(|c| hints::has_reader(c)) else {
+        let c = self.ctx.connector.as_deref();
+        let Some(c) = c.filter(|c| hints::has_reader(c)) else {
             for r in rows.iter_mut().filter(|r| r.kind == Kind::Call) {
                 r.join = Some(Join::WireOnly);
             }
@@ -388,9 +389,9 @@ impl Calls {
         nat.sort_by(|a, b| (&a.0.path, a.0.wall_end).cmp(&(&b.0.path, b.0.wall_end)));
         let (mut pair, mut taken) = (vec![None; nat.len()], vec![false; rows.len()]);
         let (by_id, per_thread) = (hints::by_id(c), hints::wire_hint(c));
-        for (n, (_, id)) in nat.iter().enumerate().filter(|(_, x)| by_id && x.1.is_some()) {
-            let w = (0..rows.len()).find(|&w| !taken[w] && ok(&rows[w]) && replies[w] == *id);
-            if let Some(w) = w {
+        for (n, (_, id)) in nat.iter().enumerate() {
+            let free = |w: &usize| by_id && id.is_some() && !taken[*w] && ok(&rows[*w]);
+            if let Some(w) = (0..rows.len()).find(|w| free(w) && replies[*w] == *id) {
                 (taken[w], pair[n]) = (true, Some(w));
             }
         }
@@ -432,9 +433,9 @@ impl Calls {
             }
             (r.join, nr.join) = (Some(Join::Matched), Some(Join::Matched));
         }
-        for r in rows.iter_mut().filter(|r| r.kind == Kind::Call && r.join.is_none()) {
-            let lost = per_thread && ok(r) && r.thread.is_none();
-            r.join = Some(if lost { Join::Unattributed } else { Join::WireOnly });
+        for r in rows.iter_mut().filter(|r| r.kind == Kind::Call) {
+            let lost = (per_thread && ok(r) && r.thread.is_none()).then_some(Join::Unattributed);
+            r.join = r.join.or(lost).or(Some(Join::WireOnly));
         }
         let reason = (nat.is_empty() && rows.iter().any(ok)).then_some(Reason::NoNative);
         let mut threads = leg.threads;
