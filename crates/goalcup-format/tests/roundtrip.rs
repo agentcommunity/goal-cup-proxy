@@ -154,12 +154,21 @@ fn a_body_over_16_mib_is_refused() {
     let mut c = Codec::default();
     let big = Record::Data {
         sid: 1,
-        t: 0,
+        t: 5000,
         off: 0,
         flags: 0,
         bytes: vec![0; 16 << 20],
     };
-    assert!(c.encode(&big, &mut Vec::new()).is_err());
+    // A refused record writes nothing and leaves the running time as it was.
+    let ev = |t| Record::Event {
+        t,
+        json: b"{}".to_vec(),
+    };
+    let mut raw = Vec::new();
+    c.encode(&ev(100), &mut raw).unwrap();
+    assert!(c.encode(&big, &mut raw).is_err());
+    c.encode(&ev(200), &mut raw).unwrap();
+    assert_eq!(decode(&raw), [ev(100), ev(200)]);
 }
 
 #[test]

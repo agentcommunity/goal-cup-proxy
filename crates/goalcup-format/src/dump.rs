@@ -5,7 +5,7 @@
 use crate::codec::Record;
 use crate::read::Item;
 use crate::{FLAG_FIN, hex, ws_opcode_name};
-use serde_json::{Map, Value, json};
+use serde_json::{Value, json};
 use std::io::{self, Read, Write};
 
 /// Turns records into dump lines. Holds the `mask_rules` of the last `start` event.
@@ -15,14 +15,10 @@ pub struct Dumper {
 }
 
 impl Dumper {
-    /// The dump line of one record.
+    /// The dump line of one record. Keys that do not apply (a zero `conn`, an empty tail) are
+    /// left out.
     pub fn line(&mut self, it: &Item) -> Value {
-        let mut m = Map::new();
-        m.insert("o".into(), it.off.into());
-        let mut put = |k: &str, v: Value| {
-            m.insert(k.into(), v);
-        };
-        match &it.rec {
+        let mut v = match &it.rec {
             Record::Part {
                 entry,
                 boot,
@@ -32,16 +28,9 @@ impl Dumper {
                 mono_ns,
                 next_link,
                 ..
-            } => {
-                put("k", "part".into());
-                put("entry", entry.as_str().into());
-                put("boot", (*boot).into());
-                put("part", (*part).into());
-                put("raw_offset", (*raw_offset).into());
-                put("wall", wall(*wall_ns).into());
-                put("mono", (*mono_ns).into());
-                put("next_link", (*next_link).into());
-            }
+            } => json!({"k": "part", "entry": entry, "boot": boot, "part": part,
+                "raw_offset": raw_offset, "wall": wall(*wall_ns), "mono": mono_ns,
+                "next_link": next_link}),
             Record::Open {
                 sid,
                 t,
@@ -49,19 +38,9 @@ impl Dumper {
                 conn,
                 req,
                 meta,
-            } => {
-                put("k", "open".into());
-                put("sid", (*sid).into());
-                put("t", (*t).into());
-                put("skind", skind.name().into());
-                if *conn != 0 {
-                    put("conn", (*conn).into());
-                }
-                if *req != 0 {
-                    put("req", (*req).into());
-                }
-                put("meta", json_or_text(meta));
-            }
+            } => json!({"k": "open", "sid": sid, "t": t, "skind": skind.name(),
+                "conn": (*conn != 0).then_some(conn), "req": (*req != 0).then_some(req),
+                "meta": json_or_text(meta)}),
             Record::Data {
                 sid,
                 t,
@@ -69,20 +48,13 @@ impl Dumper {
                 flags,
                 bytes,
             } => {
-                put("k", "data".into());
-                put("sid", (*sid).into());
-                put("t", (*t).into());
-                put("off", (*off).into());
-                if *flags != 0 {
-                    let op = flags >> 4;
-                    let op = ws_opcode_name(op).map_or_else(|| op.into(), Value::from);
-                    put("flags", json!({"fin": flags & FLAG_FIN != 0, "op": op}));
-                }
-                put("len", bytes.len().into());
-                match std::str::from_utf8(bytes) {
-                    Ok(s) => put("text", s.into()),
-                    Err(_) => put("hex", hex(bytes).into()),
-                }
+                let op = flags >> 4;
+                let op = ws_opcode_name(op).map_or_else(|| op.into(), Value::from);
+                let fl = json!({"fin": flags & FLAG_FIN != 0, "op": op});
+                let s = std::str::from_utf8(bytes);
+                json!({"k": "data", "sid": sid, "t": t, "off": off,
+                    "flags": (*flags != 0).then_some(fl), "len": bytes.len(),
+                    "text": s.ok(), "hex": s.is_err().then(|| hex(bytes))})
             }
             Record::End {
                 sid,
@@ -90,16 +62,8 @@ impl Dumper {
                 reason,
                 seen,
                 tail,
-            } => {
-                put("k", "end".into());
-                put("sid", (*sid).into());
-                put("t", (*t).into());
-                put("reason", reason.name().into());
-                put("seen", (*seen).into());
-                if !tail.is_empty() {
-                    put("tail", json_or_text(tail));
-                }
-            }
+            } => json!({"k": "end", "sid": sid, "t": t, "reason": reason.name(), "seen": seen,
+                "tail": opt_json(tail)}),
             Record::Gap {
                 sid,
                 reason,
@@ -110,82 +74,57 @@ impl Dumper {
                 off,
                 lost,
                 tail,
-            } => {
-                put("k", "gap".into());
-                put("sid", (*sid).into());
-                put("reason", reason.name().into());
-                put("start", wall(*start_wall).into());
-                put("end", wall(*end_wall).into());
-                put("start_mono", (*start_mono).into());
-                put("end_mono", (*end_mono).into());
-                put("off", (*off).into());
-                put("lost", (*lost).into());
-                if !tail.is_empty() {
-                    put("tail", json_or_text(tail));
-                }
-            }
+            } => json!({"k": "gap", "sid": sid, "reason": reason.name(),
+                "start": wall(*start_wall), "end": wall(*end_wall), "start_mono": start_mono,
+                "end_mono": end_mono, "off": off, "lost": lost, "tail": opt_json(tail)}),
             Record::Mask {
                 sid,
                 off,
                 len,
                 rule,
             } => {
-                put("k", "mask".into());
-                put("sid", (*sid).into());
-                put("off", (*off).into());
-                put("len", (*len).into());
                 let name = usize::try_from(*rule)
                     .ok()
                     .and_then(|i| self.mask_rules.get(i));
-                put(
-                    "rule",
-                    name.map_or_else(|| (*rule).into(), |n| n.as_str().into()),
-                );
+                json!({"k": "mask", "sid": sid, "off": off, "len": len,
+                    "rule": name.map_or_else(|| (*rule).into(), |n| Value::from(n.as_str()))})
             }
-            Record::Event { t, json } => {
-                put("k", "event".into());
-                put("t", (*t).into());
-                match json_or_text(json) {
-                    Value::Object(ev) => {
-                        if ev.get("ev").and_then(Value::as_str) == Some("start")
-                            && let Some(Value::Array(r)) = ev.get("mask_rules")
-                        {
-                            self.mask_rules = r
-                                .iter()
-                                .map(|v| v.as_str().unwrap_or_default().to_string())
-                                .collect();
-                        }
-                        for (k, v) in ev {
-                            if !matches!(k.as_str(), "o" | "k" | "t") {
-                                put(&k, v);
-                            }
-                        }
-                    }
-                    other => put("json", other),
-                }
-            }
+            Record::Event { t, .. } => json!({"k": "event", "t": t}),
             Record::Link {
                 seq,
                 wall_ns,
                 mono_ns,
                 hash,
-            } => {
-                put("k", "link".into());
-                put("seq", (*seq).into());
-                put("wall", wall(*wall_ns).into());
-                put("mono", (*mono_ns).into());
-                put("hash", hex(hash).into());
-                if it.link_ok == Some(false) {
-                    put("hash_ok", false.into());
+            } => json!({"k": "link", "seq": seq, "wall": wall(*wall_ns), "mono": mono_ns,
+                "hash": hex(hash), "hash_ok": (it.link_ok == Some(false)).then_some(false)}),
+            Record::Unknown { kind, body } => {
+                json!({"k": "unknown", "kind": kind, "len": body.len()})
+            }
+        };
+        let m = v.as_object_mut().expect("an object");
+        m.retain(|_, x| !x.is_null());
+        m.insert("o".into(), it.off.into());
+        if let Record::Event { json, .. } = &it.rec {
+            match json_or_text(json) {
+                Value::Object(ev) => {
+                    if ev.get("ev").and_then(Value::as_str) == Some("start")
+                        && let Some(Value::Array(r)) = ev.get("mask_rules")
+                    {
+                        let name = |v: &Value| v.as_str().unwrap_or_default().to_string();
+                        self.mask_rules = r.iter().map(name).collect();
+                    }
+                    for (k, x) in ev {
+                        if !matches!(k.as_str(), "o" | "k" | "t") {
+                            m.insert(k, x);
+                        }
+                    }
+                }
+                other => {
+                    m.insert("json".into(), other);
                 }
             }
-            Record::Unknown { kind, body } => {
-                put("k", "unknown".into());
-                put("kind", (*kind).into());
-                put("len", body.len().into());
-            }
         }
-        Value::Object(m)
+        v
     }
 }
 
@@ -206,6 +145,11 @@ pub fn dump<R: Read, W: Write>(r: R, out: &mut W) -> io::Result<()> {
         )?;
     }
     Ok(())
+}
+
+/// A tail as a value, or null when there is none.
+fn opt_json(b: &[u8]) -> Option<Value> {
+    (!b.is_empty()).then(|| json_or_text(b))
 }
 
 /// A JSON body as a value, or as text when it does not parse.

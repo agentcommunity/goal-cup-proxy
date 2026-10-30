@@ -4,7 +4,7 @@
 //! deleted and its number reused; a part file already closed by `R` takes a second recovery frame;
 //! the recovery frame's COUNT equals a recount of its boot.
 
-use goalcup_format::read::{Item, open_dir, part_files, read_all, read_index};
+use goalcup_format::read::{Item, decode, open_dir, part_files, read_index};
 use goalcup_format::{
     GapReason, IndexKind, Now, PartOptions, PartWriter, Record, Recover, StreamKind,
 };
@@ -92,20 +92,33 @@ fn kill(w: PartWriter) {
     std::mem::forget(w);
 }
 
-fn recover(d: &Path, c: &mut Clock, counts: &HashMap<u64, Vec<u8>>) -> goalcup_format::Recovered {
-    let count_at = |seq: u64| counts.get(&seq).cloned();
-    let rc = Recover {
+fn rc<'a>(now: Now, count_at: &'a dyn Fn(u64) -> Vec<u8>) -> Recover<'a> {
+    let serde_json::Value::Object(tail) = serde_json::json!({"cause": {"signal": 9}, "exits": 1})
+    else {
+        unreachable!()
+    };
+    Recover {
         entry: ENTRY,
         boot_id: BOOT_A,
-        now: c.now(),
+        now,
         durable: None,
-        count_at: &count_at,
-        cause: serde_json::json!({"signal": 9}),
+        count_at,
+        tail,
         dead_start: None,
-        exits: 1,
         seal: None,
+    }
+}
+
+fn recover(d: &Path, c: &mut Clock, counts: &HashMap<u64, Vec<u8>>) -> goalcup_format::Recovered {
+    let count_at = |seq: u64| counts[&seq].clone();
+    PartWriter::recover(d, PartOptions::default(), rc(c.now(), &count_at)).unwrap()
+}
+
+fn tail_of(g: &Record) -> serde_json::Value {
+    let Record::Gap { tail, .. } = g else {
+        panic!("not a gap")
     };
-    PartWriter::recover(d, PartOptions::default(), rc).unwrap()
+    serde_json::from_slice(tail).unwrap()
 }
 
 /// Reads the whole entry and checks what holds for any recovered entry: no error, closed frames,
@@ -126,9 +139,9 @@ fn read_entry(d: &Path) -> Vec<Item> {
         .collect();
     assert_eq!(seqs, (0..seqs.len() as u64).collect::<Vec<_>>());
     for p in part_files(d).unwrap() {
-        let (alone, tail) = read_all(fs::File::open(&p).unwrap()).unwrap();
-        assert_eq!(tail, Default::default(), "{p:?} decodes alone");
-        assert!(alone.iter().all(|i| i.link_ok != Some(false)));
+        let mut rd = decode(fs::File::open(&p).unwrap()).unwrap();
+        assert!(rd.by_ref().all(|i| i.unwrap().link_ok != Some(false)));
+        assert_eq!(rd.tail(), Default::default(), "{p:?} decodes alone");
     }
     items
 }
@@ -308,18 +321,9 @@ fn an_entry_with_no_index_line_starts_boot_0_with_a_gap() {
     work(&mut w, &mut c, 3, &mut HashMap::new());
     kill(w);
 
-    let count_at = |_: u64| None;
-    let rc = Recover {
-        entry: ENTRY,
-        boot_id: BOOT_A,
-        now: c.now(),
-        durable: None,
-        count_at: &count_at,
-        cause: serde_json::json!({"signal": 9}),
-        dead_start: Some(started),
-        exits: 1,
-        seal: None,
-    };
+    let none = |_: u64| unreachable!("no LINK, no COUNT");
+    let mut rc = rc(c.now(), &none);
+    rc.dead_start = Some((started, BOOT_A));
     let r = PartWriter::recover(&d, PartOptions::default(), rc).unwrap();
     let mut w = r.writer.unwrap();
     assert_eq!(w.boot(), 0);
@@ -350,4 +354,45 @@ fn an_entry_with_no_index_line_starts_boot_0_with_a_gap() {
     let items = read_entry(&d);
     assert_eq!(boots(&items), [0]);
     assert_eq!(down_gaps(&items), [2]);
+}
+
+#[test]
+fn a_no_index_line_gap_has_an_extent_and_names_a_new_clock() {
+    let none = |_: u64| unreachable!("no LINK, no COUNT");
+    let now = Clock(0).now();
+    // No part file and no start time from the watchdog: the gap still has an extent.
+    let d = dir("recovery-empty");
+    let g = PartWriter::recover(&d, PartOptions::default(), rc(now, &none))
+        .unwrap()
+        .gap_after_start
+        .unwrap();
+    let Record::Gap {
+        start_mono,
+        end_mono,
+        ..
+    } = g
+    else {
+        unreachable!()
+    };
+    assert!(end_mono > start_mono);
+    assert_eq!(tail_of(&g).get("boot_id"), None);
+    // A start taken before a reboot: the tail names the new clock, wall times give the extent.
+    let d = dir("recovery-reboot");
+    let mut r = rc(now, &none);
+    r.dead_start = Some((now, [0xbb; 16]));
+    let g = PartWriter::recover(&d, PartOptions::default(), r)
+        .unwrap()
+        .gap_after_start
+        .unwrap();
+    let Record::Gap {
+        start_wall,
+        end_wall,
+        ..
+    } = g
+    else {
+        unreachable!()
+    };
+    assert!(end_wall > start_wall);
+    assert_eq!(tail_of(&g)["boot_id"], "aa".repeat(16));
+    assert_eq!(tail_of(&g)["cause"]["signal"], 9);
 }

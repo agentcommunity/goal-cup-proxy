@@ -154,19 +154,9 @@ impl PartWriter {
         self.boot
     }
 
-    /// The raw offset of the next byte.
-    pub fn raw_offset(&self) -> u64 {
-        self.raw
-    }
-
     /// Raw bytes written since the last LINK.
     pub fn raw_since_link(&self) -> u64 {
         self.raw - self.raw_at_link
-    }
-
-    /// The `seq` the next LINK takes.
-    pub fn next_seq(&self) -> u64 {
-        self.seq
     }
 
     /// Writes one record. PART and LINK are the writer's own and are refused here.
@@ -365,23 +355,26 @@ impl PartWriter {
         let Some((path, lines)) = last else {
             // Nothing with an index line: start boot 0 afresh, with a recorder_down gap that the
             // caller writes right after its start event.
-            let start = rc.dead_start.unwrap_or_else(|| {
+            // The deleted file's time is taken on this boot's clock.
+            let (start, id) = rc.dead_start.unwrap_or_else(|| {
                 let wall = dead_mtime
                     .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
                     .map_or(rc.now.wall_ns, |d| d.as_nanos() as u64);
-                Now {
-                    wall_ns: wall,
-                    mono_ns: rc
-                        .now
-                        .mono_ns
-                        .saturating_sub(rc.now.wall_ns.saturating_sub(wall)),
-                }
+                let back = rc.now.wall_ns.saturating_sub(wall);
+                let mono_ns = rc.now.mono_ns.saturating_sub(back);
+                (
+                    Now {
+                        wall_ns: wall,
+                        mono_ns,
+                    },
+                    rc.boot_id,
+                )
             });
-            let tail = serde_json::json!({"cause": rc.cause, "exits": rc.exits});
+            let down = gap(start, &rc, id);
             let writer = Self::open(dir, opts, rc.entry, rc.boot_id, rc.now)?;
             return Ok(Recovered {
                 writer: Some(writer),
-                gap_after_start: Some(gap(start, rc.now, tail)),
+                gap_after_start: Some(down),
                 line: None,
             });
         };
@@ -448,19 +441,14 @@ impl PartWriter {
         w.idx = Some(OpenOptions::new().append(true).open(idx_path(&path))?);
         w.idx_len = fs::metadata(idx_path(&path))?.len();
         w.enc = Some(new_encoder(Out { f, n }, opts.window_log)?);
-        if line.kind != IndexKind::R
-            && let Some(count) = (rc.count_at)(line.seq)
-        {
+        if line.kind != IndexKind::R {
+            let json = (rc.count_at)(line.seq);
             w.write(&Record::Event {
                 t: at.mono_ns,
-                json: count,
+                json,
             })?;
         }
-        let mut tail = serde_json::json!({"cause": rc.cause});
-        if boot_id != rc.boot_id {
-            tail["boot_id"] = hex(&rc.boot_id).into();
-        }
-        w.write(&gap(at, rc.now, tail))?;
+        w.write(&gap(at, &rc, boot_id))?;
         if let Some(seal) = rc.seal {
             w.write(&Record::Event {
                 t: rc.now.mono_ns,
@@ -497,14 +485,16 @@ pub struct Recover<'a> {
     /// `cursors.json`'s durable index length (part file name, index bytes). Pass it only when
     /// the machine rebooted since it was written (a new `boot_id`).
     pub durable: Option<(&'a str, u64)>,
-    /// The dead boot's COUNT event JSON at the given LINK `seq` (its `counts.jsonl` line).
-    pub count_at: &'a dyn Fn(u64) -> Option<Vec<u8>>,
-    /// The `cause` of the `recorder_down` gap.
-    pub cause: serde_json::Value,
-    /// For an entry that left no index line: the dead boot's start time if the watchdog has it
-    /// (else the deleted part file's modification time), and how many boots died this way.
-    pub dead_start: Option<Now>,
-    pub exits: u64,
+    /// The dead boot's COUNT event JSON at the given LINK `seq`: its `counts.jsonl` line, or a
+    /// recount of the dead boot from its part files when that line is missing.
+    pub count_at: &'a dyn Fn(u64) -> Vec<u8>,
+    /// The tail of the `recorder_down` gap: `{"cause": ..., "prev": {...}}`, plus `"exits": n`
+    /// for an entry that left no index line. Recovery adds `boot_id` when the gap's start was
+    /// taken under another `boot_id` (section 6).
+    pub tail: serde_json::Map<String, serde_json::Value>,
+    /// For an entry that left no index line: the dead boot's start time and the `boot_id` it was
+    /// taken under, if the watchdog has them (else the deleted part file's modification time).
+    pub dead_start: Option<(Now, [u8; 16])>,
     /// A `recovered` seal event JSON: close the entry instead of starting a boot. For an entry
     /// that left no index line, the caller writes it after the start event and the gap instead.
     pub seal: Option<Vec<u8>>,
@@ -522,17 +512,29 @@ pub struct Recovered {
     pub line: Option<IndexLine>,
 }
 
-fn gap(start: Now, end: Now, tail: serde_json::Value) -> Record {
+/// The `recorder_down` GAP from `start` (taken under `boot_id`) to now. A GAP has an extent
+/// (invariant 12): on one clock the record clock moves at least 1 ns; across a reboot the tail
+/// names the new clock and the wall time moves at least 1 ns.
+fn gap(start: Now, rc: &Recover<'_>, boot_id: [u8; 16]) -> Record {
+    let mut tail = rc.tail.clone();
+    let end = rc.now;
+    let (mut start_wall, mut start_mono) = (start.wall_ns.min(end.wall_ns), start.mono_ns);
+    if boot_id == rc.boot_id {
+        start_mono = start_mono.min(end.mono_ns.saturating_sub(1));
+    } else {
+        tail.insert("boot_id".into(), hex(&rc.boot_id).into());
+        start_wall = start_wall.min(end.wall_ns.saturating_sub(1));
+    }
     Record::Gap {
         sid: 0,
         reason: GapReason::RecorderDown,
-        start_wall: start.wall_ns,
+        start_wall,
         end_wall: end.wall_ns,
-        start_mono: start.mono_ns,
+        start_mono,
         end_mono: end.mono_ns,
         off: 0,
         lost: 0,
-        tail: tail.to_string().into_bytes(),
+        tail: serde_json::Value::Object(tail).to_string().into_bytes(),
     }
 }
 

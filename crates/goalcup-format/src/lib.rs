@@ -33,10 +33,6 @@ pub const VERSION: u8 = 1;
 pub const LINK_DOMAIN: &[u8] = b"GCR1-LINK";
 /// The largest record body a reader accepts, so a corrupt file cannot make it allocate wildly.
 pub const MAX_BODY: u64 = 16 << 20;
-/// The largest DATA payload a writer writes.
-pub const MAX_DATA: usize = 256 << 10;
-/// The largest OPEN metadata or EVENT body a writer writes.
-pub const MAX_JSON: usize = 1 << 20;
 /// A zstd block header with Last_Block 1, type raw, size 0 (RFC 8878 section 3.1.1.2): it closes
 /// an open frame that ends on a block boundary (section 12, recovery step 2).
 pub const ZSTD_END_BLOCK: [u8; 3] = [0x01, 0x00, 0x00];
@@ -73,10 +69,6 @@ macro_rules! named {
             pub fn name(self) -> String {
                 match self { $(Self::$v => $s.to_string(),)* Self::Other(n) => format!("other({n})") }
             }
-            pub fn from_name(s: &str) -> Option<Self> { match s { $($s => Some(Self::$v),)* _ => None } }
-        }
-        impl fmt::Display for $name {
-            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result { f.write_str(&self.name()) }
         }
     };
 }
@@ -146,18 +138,6 @@ pub const GUARDS: &[&str] = &[
     "decoder_window",
 ];
 
-/// `conn` meta `reason` for a tunnel (section 4).
-pub const TUNNEL_REASONS: &[&str] = &[
-    "not_listed",
-    "sign_in",
-    "tls_refused",
-    "pinned",
-    "upstream_untrusted",
-    "alpn_other",
-    "not_tls",
-    "hello_too_big",
-];
-
 /// The GAP reason a tunnel to a listed host writes at close, by its `conn` meta `reason`
 /// (section 4). `not_listed` and `sign_in` are not a loss and get none.
 pub fn tunnel_gap(reason: &str) -> Option<GapReason> {
@@ -170,19 +150,6 @@ pub fn tunnel_gap(reason: &str) -> Option<GapReason> {
         _ => None,
     }
 }
-
-/// Event names, the `ev` key (section 11).
-pub const EVENTS: &[&str] = &[
-    "start",
-    "prev_boot",
-    "launch",
-    "exit",
-    "count",
-    "clock",
-    "suspend",
-    "note",
-    "seal",
-];
 
 /// The `what` of a `note` event (section 11). Readers show an unknown `what` as is.
 pub const NOTES: &[&str] = &[
@@ -203,36 +170,6 @@ pub const NOTES: &[&str] = &[
     "local_model",
     "mask_values",
 ];
-
-/// The facts of the notes other PRDs read (section 11, PRD-00 R3-4), besides `what`.
-pub const NOTE_FACTS: &[(&str, &[&str])] = &[
-    (
-        "long_tunnel",
-        &["host", "why", "conns", "up", "down", "secs"],
-    ),
-    ("parse_stopped", &["conn", "reason"]),
-    ("connect_refused", &["host", "status"]),
-    ("outlived", &["count", "programs"]),
-    ("native_missing", &["row"]),
-    ("native_other_device", &["row", "path"]),
-];
-
-/// `long_tunnel` `why`.
-pub const LONG_TUNNEL_WHY: &[&str] = &["stream", "upload"];
-
-/// Seal `reason` (section 11).
-pub const SEAL_REASONS: &[&str] = &[
-    "harness_exit",
-    "deadline",
-    "server_stop",
-    "seal_command",
-    "signal",
-    "recovered",
-];
-
-/// The keys of each `tunnel_hosts` value in COUNT (section 9). `listed` is the GAP reason name of
-/// a listed host's tunnels, null for an unlisted host (PRD-00 R3-4).
-pub const TUNNEL_HOST_KEYS: &[&str] = &["conns", "up", "down", "listed"];
 
 /// One line of a part file's flush index (section 1).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

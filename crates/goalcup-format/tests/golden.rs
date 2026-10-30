@@ -4,7 +4,7 @@
 
 use goalcup_format::codec::{Codec, Record};
 use goalcup_format::dump::Dumper;
-use goalcup_format::link::{ZERO, link_hash};
+use goalcup_format::link::{Chain, ZERO};
 use goalcup_format::read::{Reader, open_dir};
 use goalcup_format::{EndReason, Now, PartOptions, PartWriter, StreamKind, hex};
 use sha2::{Digest, Sha256};
@@ -130,7 +130,7 @@ fn unhex(s: &str) -> [u8; 32] {
 fn records_encode_to_the_committed_bytes_and_back() {
     assert_eq!(GCR.len(), 998);
     assert_eq!(hex(&Sha256::digest(GCR)), FILE_HASH);
-    assert_eq!(hex(&link_hash(ZERO, &GCR[..966])), LINK_HASH);
+    assert_eq!(hex(&Chain::new(ZERO).link(&GCR[..966])), LINK_HASH);
 
     let mut codec = Codec::default();
     let mut out = Vec::new();

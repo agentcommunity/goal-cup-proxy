@@ -134,15 +134,6 @@ impl<R: Read> Reader<R> {
         }
     }
 
-    pub fn get_ref(&self) -> &R {
-        self.r.get_ref()
-    }
-
-    /// The raw offset of the next record.
-    pub fn offset(&self) -> u64 {
-        self.off
-    }
-
     fn next_item(&mut self) -> io::Result<Option<Item>> {
         self.buf.clear();
         if !self.fill(1)? {
@@ -232,11 +223,4 @@ impl<R: Read> Iterator for Reader<R> {
         }
         r
     }
-}
-
-/// Reads every record of a compressed stream into memory, with how it ended.
-pub fn read_all<R: Read>(r: R) -> io::Result<(Vec<Item>, Tail)> {
-    let mut rd = decode(r)?;
-    let items = rd.by_ref().collect::<io::Result<Vec<_>>>()?;
-    Ok((items, rd.tail()))
 }

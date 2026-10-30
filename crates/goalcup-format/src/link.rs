@@ -17,7 +17,6 @@ pub const ZERO: [u8; 32] = [0; 32];
 #[derive(Clone)]
 pub struct Chain {
     h: Sha256,
-    prev: [u8; 32],
 }
 
 impl Chain {
@@ -26,12 +25,7 @@ impl Chain {
         let mut h = Sha256::new();
         h.update(LINK_DOMAIN);
         h.update(prev);
-        Self { h, prev }
-    }
-
-    /// The last link hash.
-    pub fn prev(&self) -> [u8; 32] {
-        self.prev
+        Self { h }
     }
 
     pub fn feed(&mut self, raw: &[u8]) {
@@ -45,9 +39,4 @@ impl Chain {
         *self = Self::new(hash);
         hash
     }
-}
-
-/// `hash(n)` of `covered` after `prev`, in one call.
-pub fn link_hash(prev: [u8; 32], covered: &[u8]) -> [u8; 32] {
-    Chain::new(prev).link(covered)
 }
