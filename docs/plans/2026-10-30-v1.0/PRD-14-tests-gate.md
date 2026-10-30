@@ -898,3 +898,13 @@ PRDs they touch and the code. Where two fixes disagree, the ledger and the later
 - **Housekeeping:** the stray branch `v1.0/prd-14-tests-lane-merge-wip` (same sha as the lane merge
   8a7f5c05) is still on origin; the remote refused its delete. The integrator removes it at the end.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-04 core slice part 2 (merge 01afcf22)
+
+- **`native_walk` binary is on integration and not yet in the `heavy` group.** `.config/nextest.toml`
+  names it in the comment but has no `[[profile.default.overrides]]` entry for it, so the 20,000 and
+  5,000 file cases run in parallel with the rest (gate fast passed anyway: 182 of 182 at 01afcf22).
+  PRD-14's next slice adds `binary(/^native_walk$/)` to the heavy override (PRD-04 ask 14:31Z).
+- The `opens`, `ends` and `events` helpers over `Calls` (slice 3) also replace `lost` in
+  `native_tail.rs` and `events` in `native_walk.rs`; PRD-04 deletes its copies after that merge.
+- No locked ledger item is touched and no owner question comes from this slice.
