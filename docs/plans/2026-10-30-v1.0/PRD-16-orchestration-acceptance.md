@@ -1054,3 +1054,53 @@ kept and now cites BUILD-PROMPT section 5, since B3 no longer carries it.
 - **Gate on PRD-07 slice 2:** `gate fast: PASS in 82s`; `test_fetch_run.py` still outside the gate
   (PRD-14 note).
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-12 slice 2 (merge c7649890)
+
+- **Merge bookkeeping.** c7649890, titled "PRD-12 slice 1", holds both PRD-12 slices (branch head
+  62bd0ed3, slice 2 fixes included). The integrator log's 12:17Z line names 15a6963b as the slice 2
+  merge, but 15a6963b is the PRD-07 replan docs commit: the branch was already in, and the merge step
+  logged HEAD after a merge with nothing to do. The night log cites c7649890 for both slices. The
+  merge step should say "already merged at <sha>" instead of logging HEAD as a merge.
+- **Ladder rung 1 (PRD-12 P2) still waits.** The rig walks a no-key `micro` run with `server = "off"`
+  in a real pad box (setup, start, wait-calls, look, seal, cleanup; box removed, no known file left),
+  but no `goalcup` build is on integration, so `check` was skipped and no row was judged. P2's C3 PASS
+  also waits on PRD-08's `secrets --json` `masks` key and on PRD-05's masker (PRD-08 and PRD-12 notes).
+- **Open seams with PRD-08** (PRD-08 note): the `secrets --json` keys, the gap cause and length in
+  `check --json`, `keep` in S6, and the stale C1 clause in PRD-08's PRD-12 interfaces row (PRD-12 and
+  ledger T4 win: a history `skip` passes C1).
+- **Seam keys read by the pad.** The `SEAM` table at the top of `scripts/pad/check.py` lists every key
+  it reads from S4 (`mode`, `port`, `harness.pid`, `written.model_requests`, `written.off_ms`,
+  `seal.reason`), S6, S7 and S13. A seam owner who renames one posts a seam line; only the pad lane
+  edits `scripts/pad/`.
+- **Size report, PRD-12** (`wc -l` on integration at c7649890): `scripts/pad/` is 1,771 lines
+  (`pad` 419, `pad-run` 373, `check.py` 352, `test_pad.py` 214, `sbx.mjs` 133, `table` 84, `image` 54,
+  `pad.toml` 17, harness files 92, prompts and settings 34), plus the generated `connectors/tiers.toml`
+  (81). PRD-00's row is "about 1,350 to 1,450 with its tests" and PRD-12's own estimate about 1,400:
+  22% over the top of the row with `selftest` (100), `exec/` (70), 13 harness files (about 195), the
+  skill (100) and the second and third slice steps still to come, so at least about 2,140 if those land
+  at their rows. Per the integrator's 11:20Z decision, overage on an owner estimate is reported, not
+  held. The extra lines so far serve point 3 (every pad step has its own wait and limit, and a timed-out
+  step never stops the rig), point 4 (known values never leave the box: plants, pane replacement and
+  the output scan run in `pad-run`) and point 7 (`sbx.mjs` drives real Vercel Sandbox boxes, the way
+  the rig is run). The next PRD-12 slice applies the three cuts in the PRD-12 note before adding lines.
+  The end-of-build report carries the final figure for the owner.
+- `gate fast` PASS in 76 s on c7649890 (and 75 s on the no-op second run). `test_pad.py` is not in
+  the gate yet (PRD-14 note).
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-15 slice 3 (merge 4e0ca793)
+
+- **Size report, PRD-15 slice 3** (`wc -l` on integration at 4e0ca793). PRD-15 has no row in PRD-00
+  "Size budget" (docs are not counted), and the slice has no code. `TODO.md` 59 lines (was 350;
+  PRD-15 asks for under 60), `README.md` 318 (unchanged count, one link repointed).
+- **Docs-only slices still pass the gate in under two minutes** (`gate fast: PASS in 98s` on
+  4e0ca793).
+- **`check-links.py` is not in the gate**, so a broken link merges silently. The PRD-11 box run
+  (harnesses log 12:22Z) counted 33 listed lines with the new TODO overlaid, 30 after its fix. The
+  final acceptance link check filters the history files by name (run 1's report,
+  `docs/RESEARCH-TARGET.md`, `docs/research/**`) and must list nothing else for live docs.
+- **After-merge purge order** (review A7, PRD-15 note): live docs stop linking purged history before
+  the purge, and the purge change runs `check-links.py` itself. The TODO keep list stays at four
+  files.
+- No locked ledger item is touched and no owner question comes from this slice.
