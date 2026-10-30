@@ -2,37 +2,15 @@
 //! templates under `synthetic/` with double-brace placeholders; the 1.5 MB Codex-shaped request
 //! is generated here from a fixed seed. Every value is fake and assembled from pieces in code,
 //! so no committed file holds a contiguous shaped key. Included by `tests/mask_corpus.rs` and
-//! `tests/mask_bench.rs` with `#[path]`; nothing else reads these inputs.
+//! `tests/mask_bench.rs` with `#[path]`, next to `common.rs`; nothing else reads these inputs.
 
-#![allow(dead_code)]
-
+use crate::common::{ALNUM, Rng};
 use std::ops::Range;
 
 pub const PLANTED_ENV: &str = include_str!("synthetic/planted.env");
 pub const PEM_SSE: &str = include_str!("synthetic/pem-sse.txt");
 pub const HARNESS_SETTINGS: &str = include_str!("synthetic/harness-settings.json");
 
-/// A small xorshift generator: deterministic, no dependency.
-pub struct Rng(pub u64);
-
-impl Rng {
-    pub fn next(&mut self) -> u64 {
-        self.0 ^= self.0 << 13;
-        self.0 ^= self.0 >> 7;
-        self.0 ^= self.0 << 17;
-        self.0
-    }
-
-    pub fn below(&mut self, n: usize) -> usize {
-        (self.next() % n as u64) as usize
-    }
-
-    pub fn chars(&mut self, set: &[u8], n: usize) -> String {
-        (0..n).map(|_| set[self.below(set.len())] as char).collect()
-    }
-}
-
-pub const ALNUM: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
 pub const UPPER: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
 pub const HEX: &[u8] = b"0123456789abcdef";
 pub const B64: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
@@ -42,17 +20,6 @@ pub const B64URL: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz
 pub struct Filled {
     pub bytes: Vec<u8>,
     pub at: Vec<(String, Range<usize>)>,
-}
-
-impl Filled {
-    /// The ranges every placeholder `name` was filled at.
-    pub fn ranges(&self, name: &str) -> Vec<Range<usize>> {
-        self.at
-            .iter()
-            .filter(|(n, _)| n == name)
-            .map(|(_, r)| r.clone())
-            .collect()
-    }
 }
 
 /// Replace every `{{name}}` in `template` by `value(name)`, called once per occurrence.

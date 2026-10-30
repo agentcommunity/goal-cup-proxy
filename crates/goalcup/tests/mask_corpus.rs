@@ -2,16 +2,19 @@
 //! K4, K5, K10). The corpus is every capture under `tests/mask_corpus/` (the `synthetic/`
 //! templates excepted); the copied fixtures' `<redacted:...>` markers are data and stay.
 
+#[allow(dead_code)]
+#[path = "mask_corpus/common.rs"]
+mod common;
 #[path = "mask_corpus/synthetic.rs"]
 mod synthetic;
 
+use common::{Rng, only_spans_changed, random_cuts, starred, stream_in};
 use goalcup::connector::MaskRule;
 use goalcup::mask::{Masked, Masker, Span};
 use goalcup_format::StreamKind;
 use std::collections::BTreeMap;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
-use synthetic::Rng;
 
 type Res = Result<(), Box<dyn std::error::Error>>;
 type Tally = BTreeMap<(String, String), usize>;
@@ -134,47 +137,6 @@ fn listing(t: &Tally) -> String {
         .join("\n")
 }
 
-/// Bytes outside spans are the input's, bytes inside are `*`, and the length is kept.
-fn only_spans_changed(input: &[u8], out: &Masked) -> bool {
-    let mut set = vec![false; input.len()];
-    for s in &out.spans {
-        set[s.start..s.start + s.len]
-            .iter_mut()
-            .for_each(|b| *b = true);
-    }
-    out.bytes.len() == input.len()
-        && (0..input.len()).all(|i| {
-            if set[i] {
-                out.bytes[i] == b'*'
-            } else {
-                out.bytes[i] == input[i]
-            }
-        })
-}
-
-/// One stream fed in pieces cut at `cuts`, ended by `finish`, spans made absolute.
-fn stream_in(m: &Masker, kind: StreamKind, input: &[u8], cuts: &[usize]) -> Masked {
-    let mut s = m.stream(kind);
-    let mut all = Masked::default();
-    let mut at = 0;
-    for &cut in cuts.iter().chain([input.len()].iter()) {
-        let cut = cut.clamp(at, input.len());
-        append(&mut all, s.push(&input[at..cut]));
-        at = cut;
-    }
-    append(&mut all, s.finish());
-    all
-}
-
-fn append(all: &mut Masked, piece: Masked) {
-    let base = all.bytes.len();
-    all.bytes.extend(piece.bytes);
-    all.spans.extend(piece.spans.into_iter().map(|mut s| {
-        s.start += base;
-        s
-    }));
-}
-
 /// Runs `f` on every item, spread over the machine's threads; a panic in one fails the test.
 fn par_each<T: Sync>(items: &[T], f: impl Fn(&T) + Sync) {
     let next = std::sync::atomic::AtomicUsize::new(0);
@@ -190,16 +152,6 @@ fn par_each<T: Sync>(items: &[T], f: impl Fn(&T) + Sync) {
             });
         }
     });
-}
-
-fn random_cuts(rng: &mut Rng, len: usize, max: usize) -> Vec<usize> {
-    let mut cuts = Vec::new();
-    let mut at = 0;
-    while at < len {
-        at += 1 + rng.below(max);
-        cuts.push(at.min(len));
-    }
-    cuts
 }
 
 /// Known catches and K5: over every capture, `mask_whole` adds spans only where the lists say;
@@ -358,7 +310,7 @@ fn edge_splits(m: &Masker, name: &str, bytes: &[u8], whole: &Masked) -> usize {
     splits
 }
 
-/// K10: Claude Code's billing header text inside the system prompt body is masked by the
+/// K10: a harness's billing header text inside the system prompt body is masked by the
 /// connector's header-prefix rule; the rest of the body stays readable and parses.
 #[test]
 fn the_billing_header_in_a_system_prompt_is_masked() -> Res {
@@ -407,11 +359,6 @@ fn the_billing_header_in_a_system_prompt_is_masked() -> Res {
     Ok(())
 }
 
-/// Every byte of `r` in `out` is `*`.
-fn starred(out: &Masked, r: &Range<usize>) -> bool {
-    out.bytes[r.clone()].iter().all(|&b| b == b'*')
-}
-
 /// Section 10: every shaped planted value is masked, raw and inside a JSON tool result; the
 /// AWS-style value with no shape is not (a stated loss of the default build, owner question 3).
 #[test]
@@ -449,7 +396,7 @@ fn every_shaped_planted_value_is_masked() -> Res {
                 assert!(whole.spans.iter().all(|s| !overlaps(s, &r)), "{form}");
                 assert_eq!(&whole.bytes[r], text.as_bytes(), "{form}: no shape, kept");
             } else {
-                assert!(starred(&whole, &r), "{form}: {name} is masked");
+                assert!(starred(&whole, r), "{form}: {name} is masked");
             }
         }
     }
@@ -530,7 +477,7 @@ fn a_pem_key_over_sse_deltas_loses_every_body_byte() -> Res {
     let key: Vec<Range<usize>> = sse.at.iter().map(|(_, r)| r.clone()).collect();
     assert_eq!(key.len(), 18);
     for r in &key {
-        assert!(starred(&whole, r), "a PEM piece survived");
+        assert!(starred(&whole, r.clone()), "a PEM piece survived");
     }
     let block = key[0].start..key[key.len() - 1].end;
     let (ins, outs) = (
@@ -563,7 +510,7 @@ fn a_settings_file_keeps_its_model_and_base_url() -> Res {
     let settings = synthetic::harness_settings();
     let whole = m.mask_whole(&settings.bytes);
     for (_, r) in &settings.at {
-        assert!(starred(&whole, r), "a key in the settings file survived");
+        assert!(starred(&whole, r.clone()), "a key in the settings file survived");
     }
     let out: serde_json::Value = serde_json::from_slice(&whole.bytes)?;
     assert_eq!(out["model"], "example-coder-large");

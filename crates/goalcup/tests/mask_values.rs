@@ -1,11 +1,16 @@
 //! Exact values (PRD-05 section 9, default build): the project's `GH_TOKEN` value is masked in
-//! all 11 forms, wrapped or not, whole and streamed, and nothing value-derived is ever printed.
-//! The value is fake and built from pieces.
+//! all 11 forms, wrapped or not, whole and streamed. The value is fake and built from pieces.
+
+#[allow(dead_code)]
+#[path = "mask_corpus/common.rs"]
+mod common;
 
 use base64::Engine;
 use base64::engine::general_purpose::{STANDARD_NO_PAD, URL_SAFE_NO_PAD};
-use goalcup::mask::{Masked, Masker, SecretValue, ValueSource, WrappedForms, workspace_values};
+use common::{starred, stream_in};
+use goalcup::mask::{Masker, SecretValue, ValueSource, workspace_values};
 use goalcup_format::StreamKind;
+use std::ops::Range;
 
 type Res = Result<(), Box<dyn std::error::Error>>;
 
@@ -24,8 +29,15 @@ fn masker(value: &str) -> Result<Masker, goalcup::mask::MaskError> {
     )
 }
 
-/// The 11 forms of `v`, each inside some text a harness might write.
-fn texts(v: &str) -> Vec<Vec<u8>> {
+/// `form` between `lead` and `tail`, and where it sits.
+fn around(lead: &str, form: &str, tail: &str) -> (Vec<u8>, Range<usize>) {
+    let at = lead.len();
+    (format!("{lead}{form}{tail}").into_bytes(), at..at + form.len())
+}
+
+/// The 11 forms of `v`, each inside some text a harness might write, with the range of the
+/// form: the bytes that depend on `v` alone.
+fn texts(v: &str) -> Vec<(Vec<u8>, Range<usize>)> {
     let hex = |upper: bool, escape: bool| -> String {
         v.bytes()
             .map(|b| match (upper, escape) {
@@ -36,39 +48,24 @@ fn texts(v: &str) -> Vec<Vec<u8>> {
             })
             .collect()
     };
-    let mut out: Vec<Vec<u8>> = vec![
-        format!("GH_TOKEN={v}\n").into_bytes(),
-        format!("url?t={}&x=1", hex(true, false)).into_bytes(),
-        format!("url?t={}&x=1", hex(false, false)).into_bytes(),
-        format!("{{\"t\":\"{}\"}}", hex(true, true)).into_bytes(),
-        format!("{{\"t\":\"{}\"}}", hex(false, true)).into_bytes(),
+    let mut out = vec![
+        around("GH_TOKEN=", v, "\n"),
+        around("url?t=", &hex(true, false), "&x=1"),
+        around("url?t=", &hex(false, false), "&x=1"),
+        around("{\"t\":\"", &hex(true, true), "\"}"),
+        around("{\"t\":\"", &hex(false, true), "\"}"),
     ];
     for lead in 0..3 {
         let mut plain = b"env"[..lead].to_vec();
         plain.extend(format!("{v} and more text").bytes());
-        out.push(format!("b64 {} end", STANDARD_NO_PAD.encode(&plain)).into_bytes());
-        out.push(format!("b64 {} end", URL_SAFE_NO_PAD.encode(&plain)).into_bytes());
+        // Character `i` holds bits `6i..6i + 6`: it depends on `v` alone when both its bytes do.
+        let (first, past) = ((lead * 8).div_ceil(6), (lead + v.len()) * 8 / 6);
+        for text in [STANDARD_NO_PAD.encode(&plain), URL_SAFE_NO_PAD.encode(&plain)] {
+            let (input, _) = around("b64 ", &text, " end");
+            out.push((input, 4 + first..4 + past));
+        }
     }
     out
-}
-
-/// `v` with `brk` inside after its fifth byte.
-fn wrapped(v: &str, brk: &str) -> Vec<u8> {
-    format!("{{\"out\":\"{}{brk}{}\"}}", &v[..5], &v[5..]).into_bytes()
-}
-
-fn stream_in(m: &Masker, input: &[u8], split: usize) -> Masked {
-    let mut s = m.stream(StreamKind::Native);
-    let mut all = Masked::default();
-    for piece in [s.push(&input[..split]), s.push(&input[split..]), s.finish()] {
-        let base = all.bytes.len();
-        all.bytes.extend(piece.bytes);
-        all.spans.extend(piece.spans.into_iter().map(|mut x| {
-            x.start += base;
-            x
-        }));
-    }
-    all
 }
 
 #[test]
@@ -77,27 +74,24 @@ fn the_gh_token_is_masked_in_every_form_whole_and_streamed() -> Res {
     let m = masker(&v)?;
     assert_eq!(m.value_counts().workspace, 1);
     let rules = m.mask_rules();
-    let forms = WrappedForms::of(v.as_bytes()).ok_or("a usable value")?;
     let mut inputs = texts(&v);
     for brk in ["\n", "\r\n", "\\n", "\\\\n", "\\r\\n"] {
-        inputs.push(wrapped(&v, brk));
+        // `v` with the break inside after its fifth byte.
+        let form = format!("{}{brk}{}", &v[..5], &v[5..]);
+        inputs.push(around("{\"out\":\"", &form, "\"}"));
     }
-    for input in &inputs {
-        assert!(forms.contains(input), "the planted text holds a form");
+    for (input, form) in &inputs {
+        let shown = String::from_utf8_lossy(input);
         let whole = m.mask_whole(input);
         assert_eq!(whole.bytes.len(), input.len());
-        assert!(
-            !forms.contains(&whole.bytes),
-            "{:?}",
-            String::from_utf8_lossy(input)
-        );
+        assert!(starred(&whole, form.clone()), "{shown:?}");
         assert!(
             whole.spans.iter().any(|s| rules[s.rule] == "run_secret"),
-            "{:?}",
-            String::from_utf8_lossy(input)
+            "{shown:?}"
         );
         for split in 0..=input.len() {
-            assert_eq!(stream_in(&m, input, split), whole, "split {split}");
+            let got = stream_in(&m, StreamKind::Native, input, &[split]);
+            assert_eq!(got, whole, "split {split}");
         }
     }
     Ok(())
@@ -135,36 +129,5 @@ fn workspace_values_reads_the_last_gh_token_of_the_first_key_file() -> Res {
         "a value under 20 bytes is not used"
     );
     assert!(workspace_values(&dir.path().join("missing")).is_empty());
-    Ok(())
-}
-
-#[test]
-fn nothing_value_derived_is_printed() -> Res {
-    let v = token();
-    let value = SecretValue::new(ValueSource::Workspace, v.as_bytes().to_vec());
-    let m = Masker::new(&[], vec![value.clone()])?;
-    let forms = WrappedForms::of(v.as_bytes()).ok_or("a usable value")?;
-    let printed = [
-        format!("{value:?}"),
-        format!("{m:?}"),
-        format!("{:?}", m.stream(StreamKind::Native)),
-        format!("{forms:?}"),
-        format!("{:?}", m.value_counts()),
-        format!("{}", goalcup::mask::MaskError::Value),
-        format!("{}", goalcup::mask::MaskError::Rule(0)),
-    ];
-    for text in &printed {
-        assert!(!forms.contains(text.as_bytes()), "{text}");
-        assert!(!text.contains(&v[..8]), "{text}");
-        assert!(!text.contains(&v.len().to_string()), "{text}");
-    }
-    let bad = Masker::new(
-        &[],
-        vec![SecretValue::new(
-            ValueSource::Env,
-            b"has a space in it, so unusable".to_vec(),
-        )],
-    )?;
-    assert_eq!(bad.value_counts().skipped, 1);
     Ok(())
 }

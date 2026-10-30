@@ -232,64 +232,6 @@ pub fn wrapped_regex(form: &[u8]) -> String {
     re
 }
 
-/// Every form of one value, found with the breaks [`Progress`] takes: an independent search for
-/// tests and readers of a record. `Debug` prints a count; the forms are wiped when it drops.
-pub struct WrappedForms {
-    by_first: Vec<Vec<Vec<u8>>>,
-    count: usize,
-}
-
-impl std::fmt::Debug for WrappedForms {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "WrappedForms({} forms)", self.count)
-    }
-}
-
-impl Drop for WrappedForms {
-    fn drop(&mut self) {
-        for group in &mut self.by_first {
-            for form in group {
-                wipe(form);
-            }
-        }
-    }
-}
-
-impl WrappedForms {
-    /// The forms of `value`, or `None` when it is not usable ([`is_usable`]).
-    pub fn of(value: &[u8]) -> Option<WrappedForms> {
-        if !is_usable(value) {
-            return None;
-        }
-        let mut by_first: Vec<Vec<Vec<u8>>> = vec![Vec::new(); 256];
-        let mut count = 0;
-        for form in encoded_forms(value) {
-            if let Some(&first) = form.first() {
-                count += 1;
-                by_first[usize::from(first)].push(form);
-            }
-        }
-        Some(WrappedForms { by_first, count })
-    }
-
-    /// Whether `text` holds any form, with or without breaks.
-    pub fn contains(&self, text: &[u8]) -> bool {
-        for (start, &first) in text.iter().enumerate() {
-            for form in &self.by_first[usize::from(first)] {
-                let mut progress = Progress::default();
-                for &b in &text[start..] {
-                    match progress.step(form, b) {
-                        Advance::Live => {}
-                        Advance::Complete => return true,
-                        Advance::Dead => break,
-                    }
-                }
-            }
-        }
-        false
-    }
-}
-
 /// The compiled forms of the exact values, shared by the whole-record matcher and the stream
 /// (kind `run_secret`). `Debug` prints a count; the forms are wiped when it drops.
 #[derive(Default)]

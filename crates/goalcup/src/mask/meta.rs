@@ -25,12 +25,13 @@ const AUTHORITY: &str = ":authority";
 const CLEAR_KEYS: [&str; 5] = ["method", "status", "host", "port", "alpn"];
 
 /// The connector name rules: `header_prefix` values and `json_field` names, lower-cased.
-struct Names<'a> {
-    header_prefixes: &'a [String],
-    field_names: &'a [String],
+#[derive(Debug, Default)]
+pub(crate) struct Names {
+    pub(crate) header_prefixes: Vec<String>,
+    pub(crate) field_names: Vec<String>,
 }
 
-impl Names<'_> {
+impl Names {
     /// Is this name, lower-cased and trimmed, one whose value is a credential?
     fn is_credential(&self, name: &[u8]) -> bool {
         let name = String::from_utf8_lossy(name.trim_ascii()).to_ascii_lowercase();
@@ -53,21 +54,16 @@ impl Names<'_> {
 
 /// Masks `meta` in place (section 7). `scrub` is the whole-record masker on one string; an
 /// answer of another byte length stars that string whole.
-pub(crate) fn mask_meta(
-    meta: &mut Value,
-    header_prefixes: &[String],
-    field_names: &[String],
-    scrub: &dyn Fn(&str) -> String,
-) {
-    let names = Names {
-        header_prefixes,
-        field_names,
-    };
-    walk(meta, &names, scrub);
+///
+/// An object with `headers` gets a `masked` list of the header and trailer names whose value
+/// changed, in order, a name once per pair (two `cookie` headers list it twice). `masked` is
+/// PRD-01's OPEN meta field, so an object with only `trailers` gets none.
+pub(crate) fn mask_meta(meta: &mut Value, names: &Names, scrub: &dyn Fn(&str) -> String) {
+    walk(meta, names, scrub);
 }
 
 /// Steps 1 to 5 over one value and everything under it.
-fn walk(meta: &mut Value, names: &Names<'_>, scrub: &dyn Fn(&str) -> String) {
+fn walk(meta: &mut Value, names: &Names, scrub: &dyn Fn(&str) -> String) {
     let mut stack: Vec<&mut Value> = vec![meta];
     while let Some(value) = stack.pop() {
         let map = match value {
@@ -117,7 +113,7 @@ fn walk(meta: &mut Value, names: &Names<'_>, scrub: &dyn Fn(&str) -> String) {
 /// goes into `masked` when any byte changed. A pair of another shape has every string scrubbed.
 fn mask_pair(
     pair: &mut Value,
-    names: &Names<'_>,
+    names: &Names,
     scrub: &dyn Fn(&str) -> String,
     masked: &mut Vec<String>,
 ) {
@@ -176,7 +172,7 @@ fn mask_bytes_of(s: &mut String, rule: impl FnOnce(&mut [u8])) {
 
 /// Step 3: the credential of a `Bearer` or `Basic` value, else each URL's userinfo and
 /// credential query values.
-fn mask_value(value: &mut [u8], names: &Names<'_>) {
+fn mask_value(value: &mut [u8], names: &Names) {
     let start = value
         .iter()
         .position(|&b| b != b' ' && b != b'\t')
@@ -246,7 +242,7 @@ fn mask_userinfo_end(url: &mut [u8]) -> usize {
 
 /// Stars the value of each credential query parameter after the first `?`. Parameters split on
 /// `&`; one without `=` has no value.
-fn mask_query(target: &mut [u8], names: &Names<'_>) {
+fn mask_query(target: &mut [u8], names: &Names) {
     let Some(question) = target.iter().position(|&b| b == b'?') else {
         return;
     };
@@ -321,10 +317,12 @@ mod tests {
         fields: &[&str],
         scrub: &dyn Fn(&str) -> String,
     ) -> Value {
-        let prefixes: Vec<String> = prefixes.iter().map(|s| s.to_string()).collect();
-        let fields: Vec<String> = fields.iter().map(|s| s.to_string()).collect();
+        let names = Names {
+            header_prefixes: prefixes.iter().map(|s| s.to_string()).collect(),
+            field_names: fields.iter().map(|s| s.to_string()).collect(),
+        };
         let mut out = meta.clone();
-        mask_meta(&mut out, &prefixes, &fields, scrub);
+        mask_meta(&mut out, &names, scrub);
         let mut masked_out = out.clone();
         if let Some(map) = masked_out.as_object_mut() {
             map.remove("masked");

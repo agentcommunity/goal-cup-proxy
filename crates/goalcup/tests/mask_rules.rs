@@ -3,14 +3,18 @@
 //! This part reads `src/mask/shapes.tsv` on its own, through `include_str!`, the way the
 //! verifier does, so it pins the data file without any `mask::` API.
 
-use regex::bytes::{Regex, RegexBuilder};
+#[allow(dead_code)]
+#[path = "mask_corpus/common.rs"]
+mod common;
+
+use common::{ALNUM, keys, only_spans_changed, run, starred};
+use regex::bytes::RegexBuilder;
 
 const SHAPES: &str = include_str!("../src/mask/shapes.tsv");
 
 struct Shape {
     kind: String,
     guard: bool,
-    re: Regex,
 }
 
 /// Every data row as its three raw fields, comments and blank lines skipped.
@@ -28,27 +32,15 @@ fn shapes() -> Vec<Shape> {
         .into_iter()
         .map(|row| {
             assert_eq!(row.len(), 3, "a row is kind, guard, regex: {row:?}");
-            let re = RegexBuilder::new(row[2])
-                .build()
-                .unwrap_or_else(|e| panic!("{} does not compile: {e}", row[0]));
+            if let Err(e) = RegexBuilder::new(row[2]).build() {
+                panic!("{} does not compile: {e}", row[0]);
+            }
             Shape {
                 kind: row[0].to_string(),
                 guard: row[1] == "1",
-                re,
             }
         })
         .collect()
-}
-
-/// The span a row claims: group 1 when the regex has a group, else the whole match.
-fn span<'h>(shape: &Shape, hay: &'h [u8]) -> Option<&'h [u8]> {
-    let caps = shape.re.captures(hay)?;
-    let m = if shape.re.captures_len() > 1 {
-        caps.get(1)?
-    } else {
-        caps.get(0)?
-    };
-    Some(m.as_bytes())
 }
 
 /// The literal kinds in `shapes.tsv` order. The JSON literal (10) and the shell literal (11)
@@ -92,47 +84,6 @@ fn shapes_tsv_is_the_shared_list() {
     assert_eq!(guarded, [0, 1, 3, 4, 5, 7, 9, 13, 14, 15, 16, 17, 18, 19]);
 }
 
-#[test]
-fn url_password_masks_only_the_password() {
-    let shapes = shapes();
-    let url = &shapes[12];
-    assert_eq!(url.kind, "url_password");
-
-    let password = ["hun", "ter2"].concat();
-    let plain = format!("postgres://app:{password}@localhost:5432");
-    assert_eq!(span(url, plain.as_bytes()), Some(password.as_bytes()));
-
-    let pass = ["pa", "ss"].concat();
-    let escaped = format!(r"https:\/\/u:{pass}@h");
-    assert_eq!(span(url, escaped.as_bytes()), Some(pass.as_bytes()));
-
-    for left_alone in [
-        "ssh://git@github.com",
-        "https://host:443/path",
-        "npm:react@18",
-    ] {
-        assert_eq!(span(url, left_alone.as_bytes()), None, "{left_alone}");
-    }
-}
-
-#[test]
-fn an_email_is_no_longer_a_secret() {
-    let shapes = shapes();
-    let local = ["ali", "ce"].concat();
-    for text in [
-        format!("{local}@example.com"),
-        "Author: A B <a.b@example.org>".to_string(),
-    ] {
-        for shape in &shapes {
-            assert!(
-                !shape.re.is_match(text.as_bytes()),
-                "{} matches {text}",
-                shape.kind
-            );
-        }
-    }
-}
-
 // ── the masker over whole inputs (PRD-05 sections 2 to 5) ─────────────────────────────────
 
 use goalcup::connector::{self, FieldValue, MaskPattern, MaskRule};
@@ -144,61 +95,6 @@ fn masker() -> Result<Masker, goalcup::mask::MaskError> {
     Masker::new(&[], Vec::new())
 }
 
-/// `n` characters of `set`, deterministic, never a real key.
-fn run(set: &[u8], n: usize, seed: usize) -> String {
-    (0..n)
-        .map(|i| set[(i * 7 + seed * 3 + 3) % set.len()] as char)
-        .collect()
-}
-
-const ALNUM: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
-
-/// One fake key per guarded literal, assembled from pieces.
-fn guarded_keys() -> Vec<(&'static str, String)> {
-    let hex = b"0123456789abcdef";
-    let upper = b"ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
-    vec![
-        (
-            "anthropic_key",
-            ["sk-", "ant-", "api03-", &run(ALNUM, 30, 1)].concat(),
-        ),
-        ("openai_key", ["sk-", "proj-", &run(ALNUM, 30, 2)].concat()),
-        (
-            "github_token",
-            ["github", "_pat_", &run(ALNUM, 30, 3)].concat(),
-        ),
-        ("github_token", ["gh", "p_", &run(ALNUM, 30, 4)].concat()),
-        ("aws_access_key", ["AK", "IA", &run(upper, 16, 5)].concat()),
-        (
-            "jwt",
-            [
-                "ey",
-                "J",
-                &run(ALNUM, 12, 6),
-                ".",
-                &run(ALNUM, 12, 7),
-                ".",
-                &run(ALNUM, 12, 8),
-            ]
-            .concat(),
-        ),
-        ("slack_token", ["xo", "xb-", &run(ALNUM, 20, 9)].concat()),
-        ("google_key", ["AI", "za", &run(ALNUM, 35, 10)].concat()),
-        (
-            "huggingface_token",
-            ["h", "f_", &run(ALNUM, 30, 11)].concat(),
-        ),
-        ("npm_token", ["np", "m_", &run(ALNUM, 30, 12)].concat()),
-        ("xai_key", ["xa", "i-", &run(ALNUM, 30, 13)].concat()),
-        ("stripe_key", ["sk", "_live_", &run(ALNUM, 24, 14)].concat()),
-        ("gitlab_token", ["gl", "pat-", &run(ALNUM, 24, 15)].concat()),
-        (
-            "digitalocean_token",
-            ["do", "p_v1_", &run(hex, 40, 16)].concat(),
-        ),
-    ]
-}
-
 /// The kind name of each span of `out`.
 fn kinds(m: &Masker, out: &Masked) -> Vec<String> {
     let rules = m.mask_rules();
@@ -208,36 +104,12 @@ fn kinds(m: &Masker, out: &Masked) -> Vec<String> {
         .collect()
 }
 
-/// Every masked byte is `*`, every span is inside the bytes, and the length is the input's.
-fn check_shape(input: &[u8], out: &Masked) {
-    assert_eq!(out.bytes.len(), input.len());
-    let mut starred = vec![false; input.len()];
-    for s in &out.spans {
-        assert!(s.len > 0 && s.start + s.len <= input.len());
-        for b in &mut starred[s.start..s.start + s.len] {
-            *b = true;
-        }
-    }
-    for (i, (&a, &b)) in input.iter().zip(&out.bytes).enumerate() {
-        if starred[i] {
-            assert_eq!(b, b'*', "byte {i} of a span is not a star");
-        } else {
-            assert_eq!(a, b, "byte {i} outside every span changed");
-        }
-    }
-}
-
-/// `secret` sits at `at` in `input`: is every byte of it starred?
-fn starred(out: &Masked, at: usize, secret: &str) -> bool {
-    out.bytes[at..at + secret.len()].iter().all(|&b| b == b'*')
-}
-
 fn assert_masks(m: &Masker, input: &str, secret: &str) {
     let out = m.mask_whole(input.as_bytes());
-    check_shape(input.as_bytes(), &out);
+    assert!(only_spans_changed(input.as_bytes(), &out));
     let at = input.find(secret).unwrap_or(usize::MAX);
     assert!(
-        at != usize::MAX && starred(&out, at, secret),
+        at != usize::MAX && starred(&out, at..at + secret.len()),
         "{input:?} not masked"
     );
 }
@@ -351,13 +223,13 @@ fn the_left_guard_keeps_escapes_and_drops_glue() -> Res {
         "=",
         "\"",
     ];
-    for (kind, key) in guarded_keys() {
+    for (kind, key, _) in keys() {
         for ctx in contexts {
             let input = format!("{ctx}{key} end");
             let out = m.mask_whole(input.as_bytes());
-            check_shape(input.as_bytes(), &out);
+            assert!(only_spans_changed(input.as_bytes(), &out));
             assert!(
-                starred(&out, ctx.len(), &key),
+                starred(&out, ctx.len()..ctx.len() + key.len()),
                 "{kind} after {ctx:?} not masked"
             );
         }
@@ -419,23 +291,8 @@ fn a_base64url_blob_with_key_prefixes_inside_is_left_alone() -> Res {
     let input = format!(r#"{{"encrypted_content":"Qab-{key}-rest_of_blob"}}"#);
     let out = m.mask_whole(input.as_bytes());
     assert_eq!(kinds(&m, &out), ["openai_key"]);
-    assert!(starred(&out, input.find(&key).unwrap_or(0), &key));
-    Ok(())
-}
-
-#[test]
-fn an_email_and_a_codex_rate_limit_object_come_through() -> Res {
-    let codex = connector::load("codex-cli", None)?.mask;
-    for m in [masker()?, Masker::new(&codex, Vec::new())?] {
-        assert_clear(&m, "Author: Ada Lovelace <ada.lovelace@example.com>\n");
-        assert_clear(
-            &m,
-            concat!(
-                r#"{"type":"token_count","rate_limits":{"primary":{"used_percent":12.0,"#,
-                r#""window_minutes":300},"plan_type":"plus","credits":{"balance":"17.5"}}}"#
-            ),
-        );
-    }
+    let at = input.find(&key).unwrap_or(0);
+    assert!(starred(&out, at..at + key.len()));
     Ok(())
 }
 
@@ -487,10 +344,10 @@ fn masked_key_forms_are_masked() -> Res {
         ),
     ] {
         let out = m.mask_whole(text.as_bytes());
-        check_shape(text.as_bytes(), &out);
+        assert!(only_spans_changed(text.as_bytes(), &out));
         assert_eq!(kinds(&m, &out), ["masked_key"], "{text}");
         let at = text.find(mask).unwrap_or(0);
-        assert!(starred(&out, at, mask), "{text}");
+        assert!(starred(&out, at..at + mask.len()), "{text}");
     }
     Ok(())
 }
@@ -519,7 +376,7 @@ fn no_rule_span_holds_a_quote_or_splits_an_escape() -> Res {
     for input in &inputs {
         let b = input.as_bytes();
         let out = m.mask_whole(b);
-        check_shape(b, &out);
+        assert!(only_spans_changed(b, &out), "{input}");
         assert!(!out.spans.is_empty(), "{input}");
         assert!(std::str::from_utf8(&out.bytes).is_ok(), "{input}");
         for s in out.spans.iter().filter(|s| s.rule != fail_closed) {

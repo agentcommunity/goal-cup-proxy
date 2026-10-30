@@ -4,6 +4,10 @@
 //!
 //! `cargo test --release -p goalcup --test mask_bench -- --ignored --nocapture by_hand_mask_bench`
 
+#[allow(dead_code)]
+#[path = "mask_corpus/common.rs"]
+mod common;
+#[allow(dead_code)]
 #[path = "mask_corpus/synthetic.rs"]
 mod synthetic;
 
@@ -68,13 +72,13 @@ fn by_hand_mask_bench() {
         None => println!("mask_bench: no transcript under {}", dir.display()),
     }
 
-    let mut rng = synthetic::Rng(0xBE7C);
+    let mut rng = common::Rng(0xBE7C);
     let mut values = || -> Vec<SecretValue> {
         (0..32)
             .map(|_| {
                 SecretValue::new(
                     ValueSource::Env,
-                    rng.chars(synthetic::ALNUM, 256).into_bytes(),
+                    rng.chars(common::ALNUM, 256).into_bytes(),
                 )
             })
             .collect()

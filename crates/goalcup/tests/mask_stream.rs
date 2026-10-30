@@ -3,71 +3,29 @@
 //! overflows; past the hold it masks more, never less; a gap never releases a secret prefix raw;
 //! a fail-closed window ends at the message. Every planted key is fake and built from pieces.
 
+#[allow(dead_code)]
+#[path = "mask_corpus/common.rs"]
+mod common;
+
+use common::{ALNUM, Rng, append, keys, random_cuts, run, starred};
 use goalcup::connector::{self, FieldValue, MaskPattern, MaskRule};
-use goalcup::mask::{Masked, Masker, StreamMasker};
+use goalcup::mask::{Masked, Masker, SecretValue, StreamMasker, ValueSource};
 use goalcup_format::StreamKind;
 
 type Res = Result<(), Box<dyn std::error::Error>>;
 
-struct Rng(u64);
-
-impl Rng {
-    fn next(&mut self) -> u64 {
-        self.0 ^= self.0 << 13;
-        self.0 ^= self.0 >> 7;
-        self.0 ^= self.0 << 17;
-        self.0
-    }
-    fn below(&mut self, n: usize) -> usize {
-        (self.next() % n as u64) as usize
-    }
+fn stream_in(m: &Masker, input: &[u8], cuts: &[usize]) -> Masked {
+    common::stream_in(m, StreamKind::Native, input, cuts)
 }
 
-const ALNUM: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
-
-fn run(set: &[u8], n: usize, seed: usize) -> String {
-    (0..n)
-        .map(|i| set[(i * 7 + seed * 3 + 3) % set.len()] as char)
-        .collect()
+/// The bytes `mask_whole` stars that `got` leaves raw (input stars aside).
+fn released_raw(input: &[u8], whole: &Masked, got: &Masked) -> usize {
+    (0..input.len())
+        .filter(|&i| whole.bytes[i] == b'*' && input[i] != b'*' && got.bytes[i] != b'*')
+        .count()
 }
 
-/// Fake keys with the length of their fixed prefix.
-fn keys() -> Vec<(String, usize)> {
-    let upper = b"ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
-    vec![
-        (["sk-", "ant-", "api03-", &run(ALNUM, 30, 1)].concat(), 3),
-        (["sk-", "proj-", &run(ALNUM, 30, 2)].concat(), 3),
-        (["github", "_pat_", &run(ALNUM, 30, 3)].concat(), 11),
-        (["gh", "p_", &run(ALNUM, 30, 4)].concat(), 4),
-        (["AK", "IA", &run(upper, 16, 5)].concat(), 4),
-        (
-            [
-                "ey",
-                "J",
-                &run(ALNUM, 12, 6),
-                ".",
-                &run(ALNUM, 12, 7),
-                ".",
-                &run(ALNUM, 12, 8),
-            ]
-            .concat(),
-            3,
-        ),
-        (["xo", "xb-", &run(ALNUM, 20, 9)].concat(), 5),
-        (["AI", "za", &run(ALNUM, 35, 10)].concat(), 4),
-        (["h", "f_", &run(ALNUM, 30, 11)].concat(), 3),
-        (["np", "m_", &run(ALNUM, 30, 12)].concat(), 4),
-        (["xa", "i-", &run(ALNUM, 30, 13)].concat(), 4),
-        (["sk", "_live_", &run(ALNUM, 24, 14)].concat(), 8),
-        (["gl", "pat-", &run(ALNUM, 24, 15)].concat(), 6),
-        (
-            ["do", "p_v1_", &run(b"0123456789abcdef", 40, 16)].concat(),
-            7,
-        ),
-    ]
-}
-
-/// The masker with a rule of every connector form: the shipped Codex and Claude Code rows and
+/// The masker with a rule of every connector form: two shipped connectors' rows and
 /// a JSON string field.
 fn masker() -> Result<Masker, Box<dyn std::error::Error>> {
     let mut rules: Vec<MaskRule> = connector::load("codex-cli", None)?.mask;
@@ -87,7 +45,7 @@ fn planted() -> Vec<Vec<u8>> {
     let v = run(ALNUM, 24, 30);
     let mut out: Vec<Vec<u8>> = Vec::new();
     let mut line = Vec::new();
-    for (key, _) in keys() {
+    for (_, key, _) in keys() {
         line.extend(format!("{{\"k\":\"{key}\"}}\n").bytes());
     }
     out.push(line);
@@ -124,7 +82,7 @@ fn planted() -> Vec<Vec<u8>> {
         )
         .into_bytes(),
     );
-    let gh = keys()[3].0.clone();
+    let gh = keys()[3].1.clone();
     let mut bad = format!("{{\"k\":\"{}", &gh[..10]).into_bytes();
     bad.push(0xff);
     bad.extend(format!("{}\"}}\n", &gh[10..]).bytes());
@@ -134,49 +92,6 @@ fn planted() -> Vec<Vec<u8>> {
     out.push(bad);
     out.push(format!("\x1b[32m{gh}\x1b[0m \\\\u001b[1m{gh} xx{gh} %3D{gh}").into_bytes());
     out
-}
-
-/// The output of one stream fed in `pieces`, ended by `finish`, with spans made absolute.
-fn stream_in(m: &Masker, input: &[u8], cuts: &[usize]) -> Masked {
-    let mut s = m.stream(StreamKind::Native);
-    let mut all = Masked::default();
-    let mut at = 0;
-    for &cut in cuts.iter().chain([input.len()].iter()) {
-        let cut = cut.clamp(at, input.len());
-        append(&mut all, s.push(&input[at..cut]));
-        at = cut;
-    }
-    append(&mut all, s.finish());
-    all
-}
-
-fn append(all: &mut Masked, piece: Masked) {
-    let base = all.bytes.len();
-    all.bytes.extend(piece.bytes);
-    all.spans.extend(piece.spans.into_iter().map(|mut s| {
-        s.start += base;
-        s
-    }));
-}
-
-fn random_cuts(rng: &mut Rng, len: usize, max: usize) -> Vec<usize> {
-    let mut cuts = Vec::new();
-    let mut at = 0;
-    while at < len {
-        at += 1 + rng.below(max);
-        cuts.push(at.min(len));
-    }
-    cuts
-}
-
-fn starred_set(out: &Masked) -> Vec<bool> {
-    let mut set = vec![false; out.bytes.len()];
-    for s in &out.spans {
-        for b in &mut set[s.start..s.start + s.len] {
-            *b = true;
-        }
-    }
-    set
 }
 
 /// K1: at every split point and over seeded random chunkings, the stream equals `mask_whole`,
@@ -217,7 +132,7 @@ fn every_split_equals_the_whole_record_masker() -> Res {
 #[test]
 fn never_less_past_the_hold() -> Res {
     let m = masker()?;
-    let gh = keys()[3].0.clone();
+    let gh = keys()[3].1.clone();
     let long = |unit: &str| unit.repeat(20 * 1024 / unit.len() + 1);
     let cases = [
         format!("{{\"api_key\":\"{}\"}}\n{gh}\n", long("a")),
@@ -233,7 +148,7 @@ fn never_less_past_the_hold() -> Res {
     let mut rng = Rng(0x5EC2E7);
     for input in &cases {
         let input = input.as_bytes();
-        let want = starred_set(&m.mask_whole(input));
+        let whole = m.mask_whole(input);
         let max = rng.below(3000) + 1;
         for cuts in [
             vec![16 * 1024],
@@ -242,12 +157,11 @@ fn never_less_past_the_hold() -> Res {
         ] {
             let got = stream_in(&m, input, &cuts);
             assert_eq!(got.bytes.len(), input.len());
-            let have = starred_set(&got);
-            let missing = want.iter().zip(&have).filter(|(w, h)| **w && !**h).count();
+            let missing = released_raw(input, &whole, &got);
             assert_eq!(missing, 0, "{missing} whole-record bytes released raw");
-            let tail = &got.bytes[got.bytes.len() - gh.len() - 1..got.bytes.len() - 1];
+            let end = input.len() - 1;
             assert!(
-                tail.iter().all(|&b| b == b'*'),
+                starred(&got, end - gh.len()..end),
                 "the key after the overflow is masked"
             );
         }
@@ -260,7 +174,7 @@ fn never_less_past_the_hold() -> Res {
 #[test]
 fn a_gap_or_boundary_never_releases_a_secret_prefix_raw() -> Res {
     let m = masker()?;
-    for (key, prefix) in keys() {
+    for (_, key, prefix) in keys() {
         let input = format!("{{\"k\":\"{key}\"}}");
         let at = input.find(&key).unwrap_or(0);
         for k in at..=at + key.len() {
@@ -269,10 +183,7 @@ fn a_gap_or_boundary_never_releases_a_secret_prefix_raw() -> Res {
             append(&mut out, s.gap());
             assert_eq!(out.bytes.len(), k);
             if k >= at + prefix {
-                assert!(
-                    out.bytes[at..k].iter().all(|&b| b == b'*'),
-                    "{key} cut at {k}"
-                );
+                assert!(starred(&out, at..k), "{key} cut at {k}");
             }
             let mut s = m.stream(StreamKind::WsUp);
             let mut out = s.push(&input.as_bytes()[..k]);
@@ -327,17 +238,17 @@ fn a_fail_closed_window_ends_at_the_message() -> Res {
 #[test]
 fn a_key_right_after_a_boundary_is_masked() -> Res {
     let m = masker()?;
-    let gh = keys()[3].0.clone();
+    let gh = keys()[3].1.clone();
     let mut s = m.stream(StreamKind::WsUp);
     let out = messages(&mut s, b"previous message ends in a letter x");
     assert!(out.spans.is_empty());
     let out = messages(&mut s, format!("{gh} rest").as_bytes());
-    assert!(out.bytes[..gh.len()].iter().all(|&b| b == b'*'));
+    assert!(starred(&out, 0..gh.len()));
     Ok(())
 }
 
-/// K4: Claude Code's Read tool prints a key with `N→` before every line, JSON-escaped. It is
-/// one masked block at every split point, and the record after it is untouched.
+/// K4: a file-reading tool prints a key with `N→` before every line, JSON-escaped. It is one
+/// masked block at every split point, and the record after it is untouched.
 #[test]
 fn a_key_printed_by_the_read_tool_is_one_block() -> Res {
     let m = masker()?;
@@ -414,21 +325,83 @@ fn a_long_codex_reasoning_item_streams_through_intact() -> Res {
     Ok(())
 }
 
-/// A Codex `rate_limits` object is data, not a secret, with the Codex connector's rules loaded.
+/// An email and a Codex `rate_limits` object are data, not secrets, with the Codex connector's
+/// rules loaded.
 #[test]
-fn a_codex_rate_limit_object_streams_through_with_its_rules() -> Res {
+fn an_email_and_a_codex_rate_limit_object_stream_through() -> Res {
     let m = Masker::new(&connector::load("codex-cli", None)?.mask, Vec::new())?;
     let input = concat!(
         r#"{"type":"event_msg","payload":{"type":"token_count","rate_limits":{"primary":"#,
         r#"{"used_percent":12.0,"window_minutes":300,"resets_in_seconds":4211}},"#,
         r#""plan_type":"plus","credits":{"has_credits":true,"balance":"17.5"}}}"#,
-        "\n"
+        "\nAuthor: Ada Lovelace <ada.lovelace@example.com>\n"
     )
     .as_bytes();
     for split in 0..=input.len() {
         let got = stream_in(&m, input, &[split]);
         assert_eq!(got.bytes, input);
         assert!(got.spans.is_empty());
+    }
+    Ok(())
+}
+
+/// Breaker case B1: a PEM block meets an exact value and a connector header or a shell value
+/// whose match runs past the block's END line (or past the hold's cut). Exact values are blocks
+/// too, so the blocks nest; the claim that crosses the block's edge is still absorbed, whole and
+/// streamed. At every split point a message end equals `mask_whole`, and a gap never releases a
+/// byte `mask_whole` stars.
+#[test]
+fn a_pem_block_with_an_exact_value_absorbs_a_claim_past_its_end() -> Res {
+    let value = ["gh", "p_", &Rng(77).chars(ALNUM, 36)].concat();
+    let scalar = |kind: &str, field: &str| MaskRule {
+        kind: kind.into(),
+        pattern: MaskPattern::JsonField {
+            field: field.into(),
+            value: FieldValue::Scalar,
+        },
+    };
+    let rules = [
+        MaskRule {
+            kind: "billing_header".into(),
+            pattern: MaskPattern::HeaderPrefix("x-vendor-billing-".into()),
+        },
+        scalar("installation_id", "x-codex-installation-id"),
+        scalar("turn_state", "x-codex-turn-state"),
+    ];
+    let secret = SecretValue::new(ValueSource::Workspace, value.clone().into_bytes());
+    let m = Masker::new(&rules, vec![secret])?;
+    let (begin, end) = ("-----BEGIN PRIVATE KEY-----", "-----END PRIVATE KEY-----");
+    let header = "x-vendor-billing-x:";
+    let v = &value;
+    // Each input with the text of the claim that runs past a block's END line.
+    let cases = [
+        (format!("{begin}{v}\"{v}\".{v}{header}{end}e\"\x1b{v}-{v}"), format!("{end}e")),
+        (format!("{begin}\"n{v}{header}{end}\\\n{begin}"), format!("{end}\\")),
+        (format!("{begin}\"_{v}{header}{end}@\"{begin}"), format!("{end}@")),
+        (format!("{begin}{end}{begin}{v}apikey=\"----BAKI{end}"), "----BAKI-----END".into()),
+        (format!("{begin}{end}{begin}{v}{header}{end}:\""), format!("{end}:")),
+        (format!("{v}{begin}{v}{header}{end}-\""), format!("{end}-")),
+    ];
+    for (input, claim) in &cases {
+        let input = input.as_bytes();
+        let whole = m.mask_whole(input);
+        let at = input
+            .windows(claim.len())
+            .position(|w| w == claim.as_bytes())
+            .ok_or("the claim")?;
+        assert!(starred(&whole, at..at + claim.len()), "{claim:?} is masked");
+        for split in 0..=input.len() {
+            let mut s = m.stream(StreamKind::WsUp);
+            let mut got = s.push(&input[..split]);
+            append(&mut got, s.push(&input[split..]));
+            append(&mut got, s.boundary());
+            assert_eq!(got, whole, "message end, split {split}");
+            let mut s = m.stream(StreamKind::WsUp);
+            let mut got = s.push(&input[..split]);
+            append(&mut got, s.push(&input[split..]));
+            append(&mut got, s.gap());
+            assert_eq!(released_raw(input, &whole, &got), 0, "gap, split {split}");
+        }
     }
     Ok(())
 }

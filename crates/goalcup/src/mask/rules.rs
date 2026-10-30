@@ -4,11 +4,13 @@
 //!
 //! Copied from the 0.x `goalcup-daemon` redactor (`redact.rs`): `match_view`, `candidates`,
 //! `select` and the PEM pieces are as they were. New here: the left guard ([`glued`]), the
-//! same-length fill ([`finish_spans`]) in place of the marker, and the connector rule type.
+//! same-length fill ([`finish_spans`]) in place of the marker, and the connector rules
+//! ([`connector`]).
 //!
 //! **No interpretation.** A match is a byte comparison against a regular expression, never a
 //! judgement about what the text means.
 
+use crate::connector::{FieldValue, MaskPattern, MaskRule};
 use regex::bytes::Regex;
 use std::sync::OnceLock;
 
@@ -25,9 +27,9 @@ pub(crate) const SOFT_KIND: &str = "masked_key";
 pub(crate) const BLOCK_KIND: &str = "private_key";
 
 /// The most bytes the `private_key` rule takes after its `BEGIN` line. Both arms of the
-/// literal spell it (`{0,15872}`). 15.5 KiB holds an RSA-16384 body as Claude Code's Read tool
-/// prints it, escaped twice; it stays 512 bytes under the stream's 16 KiB hold, room for a
-/// `BEGIN` and an `END` line, so a block is decided below the hold.
+/// literal spell it (`{0,15872}`). 15.5 KiB holds an RSA-16384 body as a file-reading tool
+/// prints it, numbered and escaped twice; it stays 512 bytes under the stream's 16 KiB hold,
+/// room for a `BEGIN` and an `END` line, so a block is decided below the hold.
 pub(crate) const PEM_BODY_MAX: usize = 15_872;
 
 /// Where a lone `BEGIN`'s window is cut in two, so the stream may release the first part and
@@ -133,75 +135,32 @@ impl Pattern {
     }
 }
 
-/// A connector rule (PRD-11 data, seam S3) as the masker holds it. `object` values are not a
-/// form here: a rule cannot say it.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct ConnRule {
-    pub(crate) kind: String,
-    pub(crate) pattern: ConnPattern,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum ConnPattern {
-    /// `"name": value`: a non-empty string without escapes, or with `scalar` a string without
-    /// escapes, else a bare token.
-    Field { name: String, scalar: bool },
-    /// `prefix[a-z0-9-]+: value`
-    HeaderPrefix(String),
-}
-
-impl ConnRule {
-    /// The regex the rule stands for, or `None` when its kind or name is outside the grammar
-    /// (`kind` `^[a-z][a-z0-9_]{0,47}$`, a field 1 to 64 bytes of `[A-Za-z0-9_-]`, a prefix 1 to
-    /// 64 bytes of `[a-z0-9-]` starting with a letter). The recognizer compares names byte for
-    /// byte, which the grammar makes safe.
-    pub(crate) fn regex(&self) -> Option<String> {
-        let mut k = self.kind.bytes();
-        let kind_ok = self.kind.len() <= 48
-            && k.next().is_some_and(|b| b.is_ascii_lowercase())
-            && k.all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_');
-        if !kind_ok {
-            return None;
+/// The compiled form of a connector rule (PRD-11 data, seam S3): `"field"\s*:\s*VALUE` with the
+/// value as group 1, or `PREFIX[a-z0-9-]+:\s*[^\r\n"]+`. The loader checks the grammar, so a
+/// rule is valid by construction; the names are escaped all the same. `None` when it does not
+/// compile.
+pub(crate) fn connector(rule: &MaskRule) -> Option<Pattern> {
+    let source = match &rule.pattern {
+        MaskPattern::JsonField { field, value } => {
+            let value = match value {
+                FieldValue::Scalar => r#"("[^"\\]*"|[^,}\s]+)"#,
+                FieldValue::String => r#""([^"\\]+)""#,
+            };
+            format!(r#""{}"\s*:\s*{value}"#, regex::escape(field))
         }
-        match &self.pattern {
-            ConnPattern::Field { name, scalar } => {
-                let ok = (1..=64).contains(&name.len())
-                    && name
-                        .bytes()
-                        .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-');
-                let value = if *scalar {
-                    r#"("[^"\\]*"|[^,}\s]+)"#
-                } else {
-                    r#""([^"\\]+)""#
-                };
-                ok.then(|| format!(r#""{name}"\s*:\s*{value}"#))
-            }
-            ConnPattern::HeaderPrefix(prefix) => {
-                let ok = (1..=64).contains(&prefix.len())
-                    && prefix
-                        .as_bytes()
-                        .first()
-                        .is_some_and(u8::is_ascii_lowercase)
-                    && prefix
-                        .bytes()
-                        .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-');
-                ok.then(|| format!(r#"{prefix}[a-z0-9-]+:\s*[^\r\n"]+"#))
-            }
+        MaskPattern::HeaderPrefix(prefix) => {
+            format!(r#"{}[a-z0-9-]+:\s*[^\r\n"]+"#, regex::escape(prefix))
         }
-    }
-
-    /// The compiled rule, or `None` when the rule is outside the grammar.
-    pub(crate) fn compile(&self) -> Option<Pattern> {
-        let re = Regex::new(&self.regex()?).ok()?;
-        Some(Pattern {
-            span_group: span_group_of(&re),
-            soft: false,
-            block: false,
-            pem: false,
-            guard: false,
-            re,
-        })
-    }
+    };
+    let re = Regex::new(&source).ok()?;
+    Some(Pattern {
+        span_group: span_group_of(&re),
+        soft: false,
+        block: false,
+        pem: false,
+        guard: false,
+        re,
+    })
 }
 
 /// The bytes the rules match on: `bytes`, with every byte that is not part of a valid UTF-8
@@ -641,12 +600,22 @@ fn select_blocks(candidates: Vec<Claim>) -> Vec<Claim> {
     }
     let mut blocks: Vec<Claim> = candidates.iter().filter(|c| c.block).copied().collect();
     blocks.sort_unstable_by_key(|c| (c.start, c.end));
+    // Blocks may nest (an exact value inside a PEM piece), so their ends are not sorted: a claim
+    // touches a block when the furthest end among the blocks that start before it ends is past
+    // its start.
+    let reach: Vec<usize> = blocks
+        .iter()
+        .scan(0, |far, b| {
+            *far = b.end.max(*far);
+            Some(*far)
+        })
+        .collect();
     let touching: Vec<Claim> = candidates
         .iter()
         .filter(|c| !c.block)
         .filter(|c| {
-            let at = blocks.partition_point(|b| b.end <= c.start);
-            blocks.get(at).is_some_and(|b| b.start < c.end)
+            let before = blocks.partition_point(|b| b.start < c.end);
+            before > 0 && reach[before - 1] > c.start
         })
         .copied()
         .collect();

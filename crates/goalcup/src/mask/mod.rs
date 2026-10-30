@@ -16,13 +16,13 @@ mod rules;
 mod stream;
 mod values;
 
-use crate::connector::{FieldValue, MaskPattern, MaskRule};
+use crate::connector::{MaskPattern, MaskRule};
 use goalcup_format::StreamKind;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::sync::Arc;
 
-pub use values::{WrappedForms, workspace_values};
+pub use values::workspace_values;
 
 /// The name of the rule that stars bytes the masker could not decide.
 pub const FAIL_CLOSED: &str = stream::FAIL_CLOSED_KIND;
@@ -52,8 +52,6 @@ pub enum MaskError {
     /// A connector rule, by its index in the rules given.
     #[error("a connector mask rule cannot be used (rule {0})")]
     Rule(usize),
-    #[error("a mask value could not be used")]
-    Value,
 }
 
 /// Counts of exact values by source: the start event's `mask_values` object (PRD-01 section 8).
@@ -114,43 +112,32 @@ impl Drop for SecretValue {
 #[derive(Debug, Clone)]
 pub struct Masker {
     policy: Arc<stream::Policy>,
-    /// The connector `header_prefix` values and `json_field` names, lower-cased, for meta.
-    meta_names: Arc<(Vec<String>, Vec<String>)>,
+    /// The connector names that make a header a credential in meta.
+    meta_names: Arc<meta::Names>,
 }
 
 impl Masker {
     /// Builds the masker: the shared shapes, then `rules` (PRD-11 data), then the exact values.
     /// A built-in shape that differs from its recognizer or does not compile is
-    /// `MaskError::Shape`; a connector rule outside its grammar is `MaskError::Rule`. A value
-    /// that cannot be used is skipped and counted in `skipped`, never an error.
+    /// `MaskError::Shape`; a connector rule whose regex does not compile, or whose kind is
+    /// `run_secret` or `fail_closed`, is `MaskError::Rule`. A value that cannot be used is
+    /// skipped and counted in `skipped`, never an error.
     pub fn new(rules: &[MaskRule], values: Vec<SecretValue>) -> Result<Masker, MaskError> {
-        let conn: Vec<rules::ConnRule> = rules
-            .iter()
-            .map(|rule| rules::ConnRule {
-                kind: rule.kind.clone(),
-                pattern: match &rule.pattern {
-                    MaskPattern::JsonField { field, value } => rules::ConnPattern::Field {
-                        name: field.clone(),
-                        scalar: *value == FieldValue::Scalar,
-                    },
-                    MaskPattern::HeaderPrefix(prefix) => {
-                        rules::ConnPattern::HeaderPrefix(prefix.clone())
-                    }
-                },
-            })
-            .collect();
-        let policy = stream::Policy::new(&conn, &values)?;
-        let mut prefixes = Vec::new();
-        let mut fields = Vec::new();
-        for rule in &conn {
+        let policy = stream::Policy::new(rules, &values)?;
+        let mut names = meta::Names::default();
+        for rule in rules {
             match &rule.pattern {
-                rules::ConnPattern::Field { name, .. } => fields.push(name.to_ascii_lowercase()),
-                rules::ConnPattern::HeaderPrefix(p) => prefixes.push(p.to_ascii_lowercase()),
+                MaskPattern::JsonField { field, .. } => {
+                    names.field_names.push(field.to_ascii_lowercase());
+                }
+                MaskPattern::HeaderPrefix(prefix) => {
+                    names.header_prefixes.push(prefix.to_ascii_lowercase());
+                }
             }
         }
         Ok(Masker {
             policy: Arc::new(policy),
-            meta_names: Arc::new((prefixes, fields)),
+            meta_names: Arc::new(names),
         })
     }
 
@@ -192,8 +179,7 @@ impl Masker {
             let masked = self.mask_whole(text.as_bytes());
             String::from_utf8(masked.bytes).unwrap_or_else(|e| "*".repeat(e.into_bytes().len()))
         };
-        let (prefixes, fields) = &*self.meta_names;
-        meta::mask_meta(meta, prefixes, fields, &scrub);
+        meta::mask_meta(meta, &self.meta_names, &scrub);
     }
 
     /// One name per kind, indexed by MASK `rule`: the shared kinds, the connector kinds, then
