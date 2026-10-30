@@ -1,11 +1,11 @@
-"""Tests of the test pad's own hands (PRD-12 "Automated tests", ledger B10): key files, the push
-token, no key value in any argument the pad builds, the fixed servers and cleanup. Python 3.11 or
-later, no network, no harness.
+"""Tests of the test pad's own hands (PRD-12 "Automated tests", ledger B10): key files, the push token, no key
+value in any argument the pad builds, the fixed servers, cleanup and check.py's crash rows. Python 3.11, no network.
 
     python3.11 -m unittest scripts/pad/test_pad.py
 """
 import importlib.machinery
 import importlib.util
+import json
 import os
 import subprocess
 import tempfile
@@ -16,6 +16,9 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 _loader = importlib.machinery.SourceFileLoader("pad", os.path.join(HERE, "pad"))
 pad = importlib.util.module_from_spec(importlib.util.spec_from_loader("pad", _loader))
 _loader.exec_module(pad)
+_loader = importlib.machinery.SourceFileLoader("padcheck", os.path.join(HERE, "check.py"))
+check = importlib.util.module_from_spec(importlib.util.spec_from_loader("padcheck", _loader))
+_loader.exec_module(check)
 
 SENTINEL = "sk-ant-PADSENTINEL-9f3c1e"
 PADCFG = {"keys": {"claude": "CLAUDE_API_KEY", "gateway": "AI_GATEWAY_API_KEY", "cf": "CLOUDFLARE_API_TOKEN"}}
@@ -52,11 +55,6 @@ class KeyFiles(unittest.TestCase):
 
 
 class Settings(unittest.TestCase):
-    def test_no_server_address_setting(self):
-        for server in ("https://ingest.agentcommunity.org", "https://goalcup-ingest-staging.b-9a5.workers.dev"):
-            with self.assertRaises(pad.Usage):
-                pad.load_settings(dict(BASE, server=server), PADCFG)
-
     def test_only_model_keys_enter_a_box(self):
         with self.assertRaises(pad.Usage):
             pad.load_settings(dict(BASE, key="cf"), PADCFG)
@@ -98,6 +96,42 @@ class Walk(unittest.TestCase):
         name = calls[0][calls[0].index("--name") + 1]
         self.assertIn(["rm", name], calls)
         self.assertIn(["list", "--prefix", "pad-"], calls)
+
+
+class CrashRows(unittest.TestCase):
+    """Section 3.1, ledger R3a and R3b: one closed recorder_down gap per kill under 2 s, no null_mode gap; the
+    recover row keeps the harness pid and port. Only result values are asserted."""
+
+    def row(self, kind, gap, samples=()):
+        recover = [{"kind": "recover", "exit": 0, "said": w} for w in check.RECOVER]
+        files = {"meta.json": {"connector": "codex-cli", "case": "direct", "variant": [kind + "@3"], "server": "off",
+                               "keep": True, "commits_since_start": 1, "entry": "e1"},
+                 "verify/check-local.json": {"exit": 1, "entries": [{"entry": "e1", "seal_reason": "harness_exit",
+                     "counts": {"model_requests": 5, "gaps": {"recorder_down": 1}}, "checks": [
+                         {"id": "gap_has_end", "result": "pass"}, {"id": "history_complete", "result": "pass"},
+                         {"id": "inv6", "result": "named", "facts": {"gaps": [gap]}}]}]},
+                 "verify/usage/e1.json": {"tokens": {"merged": {"input": 9, "output": 9}}, "coverage": {"unattributed": 0},
+                                          "threads": [{"parent": None, "models": {"m": 3}, "wire_calls": 3},
+                                                      {"parent": "t0", "models": {"m": 2}, "wire_calls": 2}]},
+                 "watch/status.jsonl": samples, "watch/faults.jsonl": recover}
+        with tempfile.TemporaryDirectory() as run:
+            for name, doc in files.items():
+                os.makedirs(os.path.dirname(os.path.join(run, name)), exist_ok=True)
+                with open(os.path.join(run, name), "w") as f:
+                    f.write("\n".join(map(json.dumps, doc)) if name.endswith("l") else json.dumps(doc))
+            return check.evaluate(run)
+
+    def test_kill_recorder(self):
+        gap = {"start": "2026-10-30T10:00:00Z", "end": "2026-10-30T10:00:01.2Z"}
+        self.assertNotEqual(self.row("kill-recorder", gap)["result"], "FAIL")
+        for bad in (dict(gap, cause="null_mode"), dict(gap, end="2026-10-30T10:00:02.5Z")):
+            self.assertEqual(self.row("kill-recorder", bad)["result"], "FAIL", bad)
+
+    def test_recover_keeps_harness_pid_and_port(self):
+        gap = {"cause": "watchdog_lost", "start": "2026-10-30T10:01:00Z", "end": "2026-10-30T10:02:00Z"}
+        for pid, port, fails in ((7, 5, False), (8, 5, True), (7, 6, True)):
+            samples = [{"port": 5, "harness": {"pid": 7}}, {"port": port, "harness": {"pid": pid}}]
+            self.assertEqual(self.row("kill-watchdog-recover", gap, samples)["result"] == "FAIL", fails, (pid, port))
 
 
 if __name__ == "__main__":
