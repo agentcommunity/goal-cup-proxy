@@ -741,3 +741,13 @@ PRDs they touch and the code. Where two fixes disagree, the ledger and the later
 - **Build snapshot Python is 3.9**: `scripts/check-links.py` needs 3.10 and was skipped in a box at
   10:49Z. It is deleted in phase 3 (PRD-16 section 4); until then a gate step that runs it needs 3.10
   or a skip line.
+
+### 2026-10-30, replan after PRD-07 slice 2 (merge 2f4bc6a0)
+
+- **The real Worker now matches the fake Worker row exactly**: the chunk answer has no `ack` and the
+  position answer no `last_ack` on integration at 2f4bc6a0; `/receipt` and `/abandon` answer
+  `404 not_found`.
+- **`test_fetch_run.py` is still not in the gate** at 2f4bc6a0 (`scripts/gate.sh:90` keeps the stale
+  "builds the old goalcup-verifier" comment); the gate log for this merge shows Worker `npm test`
+  253/253 and the named unittest list (27 tests, `test_install.py`) only. The earlier note stands: add
+  it to the named list; it ran 17 tests green on Python 3.9 in the fixer's box.

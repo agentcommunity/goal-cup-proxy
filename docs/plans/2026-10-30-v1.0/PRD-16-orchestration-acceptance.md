@@ -1000,3 +1000,57 @@ kept and now cites BUILD-PROMPT section 5, since B3 no longer carries it.
   `LESSONS.md` 197 lines of docs, outside the budget; 3 rows green (L-FW2, L-FW5, L-FW8 at
   `f5b0a6a2`), 6 rows still `(name pending)`.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-15 slice 2 (merge 21c0fd75)
+
+- **Size report, PRD-15 slice 2** (`wc -l` on integration at 21c0fd75). PRD-15 has no row in PRD-00
+  "Size budget"; docs are not counted there, and the slice has no code outside the doc. New
+  `docs/RECORD-FORMAT.md` 324 lines, of which the stdlib Python reader is 51 (PRD-01 allows 60);
+  PRD-15's own estimate for the page is about 280, and two sections are still to come (PRD-15
+  amendment, review B5). `AGENTS.md` 111 (unchanged count, one sentence reworded). `docs/DECISIONS.md`
+  1,416 (was 1,418).
+- **Docs-only slices still pass the gate in about a minute** (`gate fast: PASS in 77s` on 21c0fd75).
+- **Counting rule for the night's checks:** a count made by piping part files through the `zstd`
+  command line tool is a lower bound on a live entry or one not yet recovered (review A, lane log
+  11:56Z). Final acceptance counts on a live or crashed entry come from `goalcup-verify dump` or
+  `check`, never from `zstd -dc` plus the reader. Sealed and recovered entries agree either way (box
+  run 12:02Z: the reader matched the Rust dump on 11 format-crate entries).
+- **Build snapshot Python 3.9 holds for the reader** (box runs 11:49Z, 12:02Z). `check-links.py`
+  still needs 3.10 or later via `uv` in the box (earlier note).
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-17 upkeep slice 2 (merge ae970618)
+
+- **Phase 2 check 1 reads exact titles for file-level Worker guards** (PRD-17 note): a bare file name
+  alone would pass after the guarded case left the file. The check matches the night-log title of
+  L-S1, L-S2, L-S3 and L-S10 in the named file under `server/worker/test/`.
+- **A lane merger that finds nothing new to join pushes nothing** (lessons log 11:58Z): no empty
+  merge commit; the merge request goes on from the lane head as it is.
+- **Box-only held, with one lapse logged** (lessons log 11:57Z): a docs structure script was once
+  started on the conductor machine, its output discarded; the recorded proof is the box run. No
+  rule change; scripts that check docs run in a box too.
+- **Docs-only slices still pass the gate in about 60 s** (`gate fast: PASS in 59s` on ae970618).
+- **Size report, PRD-17 upkeep slice 2** (`wc -l` on integration at ae970618): 0 lines of PRD-17
+  code against the shared lessons and test-support tests row of 3,000 (PRD-00 "Size budget").
+  `LESSONS.md` 203 lines of docs (was 197), outside the budget; 6 rows green, 6 rows still
+  `(name pending)`.
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-07 slice 2 (merge 2f4bc6a0)
+
+- **Size report, PRD-07 slice 2** (`wc -l` on integration at 2f4bc6a0): Worker src 3,557 against the
+  "about 3,440" row (3.4% over; out-of-scope files included as before), down from 3,848. Worker tests
+  5,258 against "about 4,950" (6.2% over), down from 5,568. Scripts: `fetch-run.sh` 375 and
+  `test_fetch_run.py` 366, 741 of the "about 900" shared with the gate, release and packaging.
+  `server/worker/README.md` 562 lines of docs (absorbs SERVER-DESIGN), outside the budget.
+- **Redeploy staging after this merge** (the slice 1 note): from 2f4bc6a0 on, staging answers
+  `/receipt` and `/abandon` with `404 not_found` and sends no `ack` or `last_ack`.
+- **PRD-13 Worker guard ran at PRD-07's cut merge**: clean in `src/`; one false match, the
+  `wrangler.toml:83` comment about deleting `RECEIPT_SIGNING_KEY` after production, narrowed by the
+  PRD-13 note to non-comment lines. The secret deletion stays an owner step after production; nothing
+  in this build deletes it.
+- **`--local` rerun against `wrangler dev` 4.149.0 passed** (lane log 11:49Z): three chunks plus the
+  final heartbeat, `rec` equal to chunks, `complete` true, one heartbeat row.
+- **Gate on PRD-07 slice 2:** `gate fast: PASS in 82s`; `test_fetch_run.py` still outside the gate
+  (PRD-14 note).
+- No locked ledger item is touched and no owner question comes from this slice.

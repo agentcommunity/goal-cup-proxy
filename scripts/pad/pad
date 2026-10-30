@@ -1,0 +1,419 @@
+#!/usr/bin/env python3
+"""The test pad, conductor half (PRD-12 sections 1, 1a, 3, 3.2 and 7).
+
+    scripts/pad/pad <settings file>
+
+Walks every step of the settings' mode with a limit per step, always cleans up, prints one plain
+table. Sandbox calls go through `node scripts/pad/sbx.mjs` (it finds @vercel/sandbox in PAD_NODE_MODULES,
+NODE_PATH or beside itself), box steps through `pad-run`. The pad never reads a key value: it passes
+`sbx.mjs put-env` the name of the variable that holds it. Exit: 0 every row PASS, 1 any FAIL, 3 any
+INCONCLUSIVE and no FAIL, 2 usage error. Needs Python 3.11 or later; an older python3 re-runs it.
+"""
+import concurrent.futures, datetime, json, math, os, re, secrets, shutil, signal, stat  # noqa: E401
+import subprocess, sys, tarfile, tempfile, threading, time  # noqa: E401
+
+if sys.version_info < (3, 11) and __name__ == "__main__":  # the node22 image and many Macs give 3.9
+    for exe in ("python3.14", "python3.13", "python3.12", "python3.11"):
+        if shutil.which(exe):
+            os.execvp(exe, [exe] + sys.argv)
+    print("pad: needs Python 3.11 or later (tomllib); no python3.11 or newer on PATH", file=sys.stderr)
+    sys.exit(2)
+import tomllib  # noqa: E402
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+REPO = os.path.dirname(os.path.dirname(HERE))
+SBX = os.path.join(HERE, "sbx.mjs")
+# The only servers (ledger B4; scripts/matrix.sh:253-258): the one staging Worker and loopback, fixed
+# here. There is no server address setting, and production is never one.
+SERVERS = {"staging": "https://goalcup-ingest-staging.b-9a5.workers.dev", "local": "http://127.0.0.1:8787"}
+# Organizer secrets that never enter a box (PRD-12 section 7): they are not even in the
+# environment of the node process that talks to the sandbox.
+NEVER_IN_BOX = ("GH_TOKEN", "GOALCUP_TEST_APPROVAL_KEY", "GOALCUP_TEST_MEMBER_ID", "DATABASE_URL")
+KEY_VAR = re.compile(r"[A-Z0-9_]+_API_KEY")  # put-env copies model and gateway keys only
+NO_BUILD = "no goalcup build"
+NEEDS_LATER = "comes in a later slice"
+
+MODES = {"micro": {"server": "off", "prompt": "micro", "minutes": 3, "calls": 2},  # section 1a: defaults, wait-calls
+         "cycle": {"server": "staging", "prompt": "full", "minutes": 8, "calls": 3},
+         "full": {"server": "staging", "prompt": "full", "minutes": 20, "calls": 3}}
+LIMITS = {"setup": 5, "start": 3, "wait-calls": 4, "look": 1, "wait-recovery": 3,
+          "seal": 5, "wait-upload": 10, "fetch": 5, "check": 10, "cleanup": 5}  # minutes; seal and check add the run's
+KEYS = {"harness", "key", "case", "mode", "server", "prompt", "minutes", "steps", "where",
+        "gateway_key", "version", "build", "connector", "hosts", "keep", "keep_going"}
+FAULTS = {"kill-recorder", "kill-watchdog", "kill-watchdog-recover", "kill-both", "freeze",
+          "cut-worker", "route-drop", "fd-limit"}
+SPAN = {"freeze", "cut-worker", "route-drop"}  # the faults that take +<minutes>
+NAME = re.compile(r"[a-z0-9][a-z0-9_-]*")
+FMT = "%-17s %-7s %-6s %s"
+STOP = threading.Event()  # set by SIGINT or SIGTERM: every run goes straight to cleanup
+
+
+Usage, Refused = type("Usage", (Exception,), {}), type("Refused", (Exception,), {})
+
+
+def read_toml(path):
+    with open(path, "rb") as f:
+        return tomllib.load(f)
+
+
+def said(what, r):
+    """`what`, then sbx's last stderr line (sbx prints only short error texts, never a value)."""
+    tail = (r.stderr or "").strip().splitlines()
+    return what + (": " + tail[-1][:160] if r.returncode and tail else "")
+
+
+def call(argv, timeout=None, env=None):
+    """The one place the pad runs a command."""
+    return subprocess.run(argv, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=timeout, env=env)
+
+
+def check_key_file(path, repo=REPO):
+    """A regular file, no link, no group or world bits, outside the checkout (scripts/matrix.sh:92-104, :1015-1031)."""
+    if os.path.islink(path) or not os.path.isfile(path):
+        raise Refused("key file must be a regular file, not a link: %s" % path)
+    if stat.S_IMODE(os.stat(path).st_mode) & 0o077:
+        raise Refused("key file must be mode 0600: %s" % path)
+    real, here = os.path.realpath(path), os.path.realpath(repo)
+    if real == here or real.startswith(here + os.sep):
+        raise Refused("key file is inside the checkout: %s" % path)
+    return path
+
+
+def check_push_token(path, repo=REPO):
+    """The key file rule, then matrix.sh:1032-1041: one line, optional GH_TOKEN=, visible characters, no gho_ or ghp_."""
+    check_key_file(path, repo)
+    if os.path.getsize(path) > 4096:
+        raise Refused("push token file is over 4 KiB")
+    with open(path, encoding="utf-8", errors="replace") as f:
+        lines = [ln for ln in f.read().split("\n") if ln.strip()]
+    value = lines[0].strip() if len(lines) == 1 else ""
+    value = value[len("GH_TOKEN="):] if value.startswith("GH_TOKEN=") else value
+    if not re.fullmatch(r"[!#-&(-~]+", value):
+        raise Refused("push token file must hold one token of visible characters, no quote or space")
+    if value.startswith(("gho_", "ghp_")):
+        raise Refused("push token is a gh login or classic token: give a fine-grained one")
+    return path
+
+
+def parse_steps(steps):
+    out = []
+    for raw in steps:
+        if not isinstance(raw, str):
+            raise Usage("steps holds a value that is not a string")
+        m = re.fullmatch(r"([a-z-]+)@(\d+)(?:\+(\d+|upload))?", raw)
+        if m and m.group(1) in FAULTS:
+            kind, extra = m.group(1), m.group(3)
+            if extra and not (kind in SPAN and extra.isdigit() or kind == "kill-both" and extra == "upload"):
+                raise Usage("step %r: no such suffix for %s" % (raw, kind))
+            out.append(("timed", int(m.group(2)), raw))
+        elif re.fullmatch(r"exec [A-Za-z0-9._-]+@\d+", raw):
+            out.append(("timed", int(raw.rsplit("@", 1)[1]), raw))
+        elif re.fullmatch(r"pre [A-Za-z0-9._-]+", raw):
+            out.append(("pre", 0, raw))
+        elif raw == "keep-going":
+            out.append(("keep-going", 0, raw))
+        elif re.fullmatch(r"wait-calls \d+", raw):  # P14 forces a timeout with `wait-calls 999`
+            out.append(("calls", int(raw.split()[1]), raw))
+        else:
+            raise Usage("unknown step %r" % raw)
+    return out
+
+
+def load_settings(raw, pad):
+    """Settings dict (already parsed) to a full settings dict, or Usage."""
+    unknown = sorted(set(raw) - KEYS)
+    if unknown:
+        raise Usage("unknown setting: %s" % ", ".join(unknown))
+    for k in ("harness", "key", "mode"):
+        if not isinstance(raw.get(k), str):
+            raise Usage("%s is required" % k)
+    if not NAME.fullmatch(raw["harness"]):
+        raise Usage("bad harness id")
+    if raw["mode"] not in MODES:
+        raise Usage("mode is micro, cycle or full")
+    s = {"case": "direct", "where": "sandbox", "steps": [], "keep": True, "keep_going": 1, "gateway_key": "gateway",
+         **MODES[raw["mode"]], **raw}
+    if s["case"] not in ("direct", "gateway", "dodger", "all"):
+        raise Usage("case is direct, gateway, dodger or all")
+    if s["server"] != "off" and s["server"] not in SERVERS:
+        raise Usage("server is off, local or staging (there is no server address setting)")
+    if s["where"] not in ("sandbox", "here"):
+        raise Usage("where is sandbox or here")
+    for k in ("key", "gateway_key"):
+        if not (s[k] == "none" and k == "key") and not NAME.fullmatch(s[k]):
+            raise Usage("bad %s name" % k)
+        used = s["key"] != "none" and (k == "key" or s["case"] in ("gateway", "all"))
+        if s["where"] == "sandbox" and used and not KEY_VAR.fullmatch(str(pad.get("keys", {}).get(s[k]))):
+            raise Usage("%s %r: pad.toml [keys] must map it to a *_API_KEY variable" % (k, s[k]))
+    if s["prompt"] not in ("micro", "smoke", "full") and not os.path.isfile(str(s["prompt"])):
+        raise Usage("prompt is micro, smoke, full or a prompt file")
+    for k in ("minutes", "keep_going"):
+        if isinstance(s[k], bool) or not isinstance(s[k], (int, float)) or s[k] <= 0:
+            raise Usage("%s is a number above 0" % k)
+    if not isinstance(s["keep"], bool):
+        raise Usage("keep is true or false")
+    for k in ("version", "build", "connector", "hosts"):
+        if k in s and not isinstance(s[k], str):
+            raise Usage("%s is a string" % k)
+    if not isinstance(s["steps"], list):
+        raise Usage("steps is a list")
+    s["plan"] = parse_steps(s["steps"])
+    if s["mode"] == "cycle":  # cycle owns its crash at 3; its stream wait and restart can run past 4:00
+        s["plan"] = [("timed", 3, "kill-recorder@3")] + [p for p in s["plan"] if p[2] != "kill-recorder@3"]
+        for _, m, r in s["plan"]:
+            if r.startswith(("kill-watchdog", "kill-both@")) and (m <= 4 or "recover" in r):
+                raise Usage("step %r does not fit cycle's own crash at minute 3" % r)
+    return s
+
+
+def step_limit(s, kind):
+    """Seconds; the one owner of every step limit (pad-run's own come from it through runner_limits)."""
+    return LIMITS.get(kind, 5) * 60 + (s["minutes"] * 60 if kind in ("seal", "check") else 0)
+
+
+def runner_limits(s):
+    """Seconds per pad-run step, the ones pad-run reads from settings.json: verify works to the check step's
+    limit, and wipe to a third of cleanup's (the box's rm and list take the other thirds)."""
+    got = {k: step_limit(s, k) for k in ("setup", "start", "wait-calls", "look", "seal")}
+    return dict(got, verify=step_limit(s, "check"), wipe=step_limit(s, "cleanup") // 3)
+
+
+def step_list(s, harness):
+    """Section 1a: the mode's steps, with the settings' steps added in time order."""
+    plan = s["plan"]
+    calls = [n for kind, n, _ in plan if kind == "calls"]
+    timed = sorted(((m, r) for kind, m, r in plan if kind == "timed"), key=lambda t: t[0])
+    seq = ["setup"] + [r for kind, _, r in plan if kind == "pre"]
+    seq += ["start", "wait-calls %d" % (calls[-1] if calls else s["calls"]), "look"]
+    seq += [x for _, r in timed for x in [r] + ["wait-recovery"] * r.startswith("kill-recorder@")]
+    if any(kind == "keep-going" for kind, _, _ in plan) or s["mode"] == "cycle" and harness.get("keep_going") is True:
+        seq.append("keep-going")
+    return seq + ["seal"] + ["wait-upload", "fetch"] * (s["server"] != "off") + ["check", "cleanup"]
+
+
+class Run:
+    def __init__(self, s, case, pad, harness, out_root):
+        self.s, self.case, self.pad, self.harness = s, case, pad, harness
+        # tried: set before create, from then on cleanup removes the box by its name. create_late: create
+        # hit its limit, the box may still appear after cleanup. meta: meta-box.json; row: check.py's result.
+        self.tried = self.create_late = self.no_build = self.setup_failed = False
+        self.name, self.lines, self.meta, self.row = "pad-" + secrets.token_hex(3), [], {}, None
+        self.tmp = tempfile.mkdtemp(prefix="pad-")  # box scripts; never in the run folder
+        self.box_dir = None  # pad-run's run folder: here, or staged and pushed to the box's ~/run
+        self.t0 = time.time()
+        stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        self.dir = os.path.join(out_root, s["harness"], case, stamp + "-" + self.name)
+        os.makedirs(self.dir)
+
+    def sbx(self, verb, *args, limit=None):
+        """One sandbox call; calls.log gets the verb and the box name, never a value."""
+        with open(os.path.join(self.dir, "calls.log"), "a") as f:
+            f.write("%s sbx %s %s\n" % (time.strftime("%H:%M:%SZ", time.gmtime()), verb, self.name))
+        env = {k: v for k, v in os.environ.items() if k not in NEVER_IN_BOX}
+        return call(["node", SBX, verb] + list(args), timeout=limit, env=env)
+
+    def line(self, step, result, saw):
+        at = int(time.time() - self.t0) // 60
+        self.lines.append((step, result, "%d:%02d" % (at // 60, at % 60), saw))
+
+    def walk(self):
+        try:
+            for step in step_list(self.s, self.harness)[:-1]:
+                if STOP.is_set() or self.setup_failed:
+                    self.line(step, "skip", "interrupted" if STOP.is_set() else "setup failed")
+                    continue
+                kind = step.split("@")[0].split(" ")[0]
+                limit = step_limit(self.s, kind)
+                try:
+                    self.line(step, *getattr(self, "step_" + kind.replace("-", "_"), self.step_box)(step, limit))
+                except Exception as e:  # a rig error writes its line and the walk goes on
+                    late = isinstance(e, subprocess.TimeoutExpired)
+                    why = "no answer in %d min" % (limit // 60) if late else str(e) if isinstance(e, Refused) else type(e).__name__
+                    self.setup_failed = kind == "setup"  # a failed setup skips every later step
+                    self.line(step, "FAIL" if self.setup_failed else "timeout" if late else "error", why)
+        finally:
+            try:
+                self.line("cleanup", *self.step_cleanup("cleanup", LIMITS["cleanup"] * 60))
+            except Exception as e:
+                self.line("cleanup", "error", "%s; box %s may be left" % (type(e).__name__, self.name))
+            shutil.rmtree(self.tmp, ignore_errors=True)
+        return self.finish()
+
+    def step_setup(self, step, limit):
+        s, deadline = self.s, time.time() + limit
+        left = lambda: max(1, deadline - time.time())  # noqa: E731
+        names = [] if s["key"] == "none" else [s["key"]] + [s["gateway_key"]] * (self.case == "gateway")
+        stage = self.box_dir = tempfile.mkdtemp(prefix="pad-run-", dir=None if s["where"] == "here" else self.tmp)
+        if s["where"] == "here":  # pad-run works on 0600 copies in the run folder; ~/.pad-keys stays whole
+            for name in names + ["push"] * os.path.lexists(os.path.expanduser("~/.pad-keys/push")):
+                (check_push_token if name == "push" else check_key_file)(os.path.expanduser("~/.pad-keys/" + name))
+            os.mkdir(os.path.join(stage, "keys"), 0o700)
+            for name in names:
+                with open(os.path.expanduser("~/.pad-keys/" + name), "rb") as a, \
+                        os.fdopen(os.open(os.path.join(stage, "keys", name), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "wb") as b:
+                    shutil.copyfileobj(a, b)
+        cpath = s.get("connector") or os.path.join(REPO, "connectors", s["harness"], "harness.toml")
+        cap = read_toml(cpath).get("capture", {}) if os.path.isfile(cpath) else {}
+        shutil.copy(os.path.join(HERE, "prompts", s["prompt"] + ".txt") if s["prompt"] in ("micro", "smoke", "full")
+                    else s["prompt"], os.path.join(stage, "prompt-source.txt"))
+        for k in ("connector", "hosts"):  # S16 files, passed to goalcup start from the run folder
+            if s.get(k):
+                shutil.copy(s[k], os.path.join(stage, k + ".toml"))
+        with open(os.path.join(stage, "settings.json"), "w") as f:  # pad-run's input: names, never a value
+            json.dump(dict({k: v for k, v in s.items() if k != "plan"}, harness_id=s["harness"], harness=self.harness,
+                           session=self.name, limits=runner_limits(s),
+                           case=self.case, version=s.get("version") or self.harness["version"], key_files=names,
+                           route_key=names[-1] if names else None, home_env=cap.get("home", {}).get("env"),
+                           native=[{k: r.get(k) for k in ("name", "root", "pattern")} for r in cap.get("native", [])],
+                           **{k: k + ".toml" for k in ("connector", "hosts") if s.get(k)}), f)
+        if s["where"] == "sandbox":
+            if not os.path.isfile(os.path.join(HERE, "image.id")):
+                raise Refused("no pad image: scripts/pad/image.id")
+            self.meta["image"], self.tried = open(os.path.join(HERE, "image.id")).read().strip(), True
+            mins = math.ceil(s["minutes"]) + int(self.pad.get("box_extra_minutes", 30))
+            try:
+                r = self.sbx("create", "--name", self.name, "--minutes", str(mins), "--snapshot", self.meta["image"],
+                             "--vcpus", str(self.pad.get("box_vcpus", 4)), limit=limit)
+            except subprocess.TimeoutExpired:
+                self.create_late = True
+                raise
+            if r.returncode:
+                raise Refused(said("box not created", r))
+            build = os.path.join(REPO, s.get("build") or self.pad.get("build", "pad-out/build"))
+            bins = [b for b in ("goalcup", "goalcup-verify") if os.path.isfile(os.path.join(build, b))]  # none: "no goalcup build"
+            for verb, args in [("push-dir", (HERE, "~/pad")), ("push-dir", (stage, "~/run"))] + [
+                    ("put", ("~/bin/" + b, "--file", os.path.join(build, b), "--mode", "755")) for b in bins]:
+                r = self.sbx(verb, self.name, *args, limit=left())
+                if r.returncode:
+                    raise Refused(said("%s not copied" % args[0], r))
+            for name, var in ((n, self.pad["keys"][n]) for n in names):  # presence only; sbx.mjs reads the value
+                if var not in os.environ or self.sbx("put-env", self.name, "~/run/keys/" + name, "--env", var, limit=left()).returncode:
+                    raise Refused("key %s: %s is not set, or not copied" % (name, var))
+        result, saw = self.box("setup", left())
+        self.no_build = result == "skip" and saw.endswith(NO_BUILD)
+        if result != "ok" and not self.no_build:
+            raise Refused(saw)
+        return "ok", saw
+
+    def box(self, step, limit, tag="PADSTEP", argv=None):
+        """One pad-run step (in the box, or a subprocess here) -> (result, saw) from its last `tag` line."""
+        if argv is None and self.s["where"] == "sandbox":
+            with open(os.path.join(self.tmp, "step.sh"), "w") as f:
+                f.write("exec python3.11 ~/pad/pad-run ~/run %s\n" % step)
+            r = self.sbx("exec", self.name, "--script", os.path.join(self.tmp, "step.sh"), limit=limit)
+        else:
+            r = call(argv or [sys.executable, os.path.join(HERE, "pad-run"), self.box_dir] + step.split(), timeout=limit)
+        got = [ln[len(tag) + 1:] for ln in (r.stdout or "").splitlines() if ln.startswith(tag + " ")]
+        d = json.loads(got[-1]) if got else {"result": "error", "saw": said("%s: no %s line" % (step, tag), r)}
+        return d.get("result", "error"), d.get("saw", "")
+
+    def step_box(self, step, limit):
+        if step.split("@")[0].split(" ")[0] not in ("start", "wait-calls", "look", "seal"):
+            return "skip", NEEDS_LATER
+        return ("skip", NO_BUILD) if self.no_build else self.box(step, limit + 120)  # pad-run works to `limit`
+
+    def step_check(self, step, limit):
+        """Section 8: pad-run verify (sized to the run, it always writes its tar), the tar copied out, meta.json,
+        then check.py's PADCHECK line."""
+        self.box("verify", runner_limits(self.s)["verify"] + 120)
+        tar = os.path.join(self.dir, "box.tar")
+        if self.s["where"] == "here":
+            shutil.copy(os.path.join(self.box_dir, "out.tar"), tar)
+        elif self.sbx("get", self.name, "~/run/out.tar", tar, limit=300).returncode:
+            return "error", "results not copied out"
+        with tarfile.open(tar) as t:
+            t.extractall(self.dir, **({"filter": "data"} if hasattr(tarfile, "data_filter") else {}))
+        os.remove(tar)
+        with open(os.path.join(self.dir, "meta-box.json")) as f:
+            self.meta.update(json.load(f))  # pad-run's keys, merged whole; pad's own keys below win
+        s, at = self.s, datetime.datetime.fromtimestamp(self.t0, datetime.timezone.utc).isoformat(timespec="seconds")
+        with open(os.path.join(self.dir, "meta.json"), "w") as f:
+            json.dump(dict(self.meta, connector=s["harness"], case=self.case, mode=s["mode"], prompt=s["prompt"],
+                           variant=self.variant(), where=s["where"], server=s["server"], keep=s["keep"], minutes=s["minutes"],
+                           started=at, push="not tested", pad_trusted_at=None, steps=[list(ln) for ln in self.lines]),
+                      f, indent=1, sort_keys=True)
+        result, saw = self.box(step, 300, "PADCHECK", [sys.executable, os.path.join(HERE, "check.py"), self.dir])
+        self.row = result if result in ("PASS", "FAIL", "INCONCLUSIVE") else None
+        return result, saw
+
+    def step_cleanup(self, step, limit):
+        """Section 3.2: pad-run wipe, box removed by name, then a list to confirm. Never changes a result."""
+        saw, third = [], runner_limits(self.s)["wipe"]
+        try:
+            result, wiped = self.box("wipe", third) if self.tried or self.s["where"] == "here" and self.box_dir else ("ok", "")
+            saw += [wiped if result == "ok" else "wipe %s: %s" % (result, wiped)] if wiped else []
+        except Exception as e:
+            saw.append("wipe %s" % type(e).__name__)
+        if not self.tried:
+            shutil.rmtree(self.box_dir or self.tmp, ignore_errors=True)
+            return "ok", ", ".join(saw + ["no box"])
+        try:
+            r = self.sbx("rm", self.name, limit=third)
+            saw.append("rm exit %d" % r.returncode if r.returncode else "box removed")
+        except Exception as e:
+            saw.append("rm %s" % type(e).__name__)
+        try:
+            r = self.sbx("list", "--prefix", "pad-", limit=third)
+            live = [b.get("status") for b in (json.loads(x) for x in r.stdout.splitlines() if x.startswith("{"))
+                    if b.get("name") == self.name] if r.returncode == 0 else ["unknown"]
+            if all(st in ("stopped", "deleted", "failed") for st in live):
+                late = ["create timed out, box may appear until its timeout"] if self.create_late else []
+                return "ok", ", ".join(saw + ["list shows no live box"] + late)
+            saw.append(said("left: box %s %s" % (self.name, ",".join(map(str, live))), r))
+        except Exception as e:
+            saw.append("list %s, box %s may be left" % (type(e).__name__, self.name))
+        return "left", ", ".join(saw)
+
+    def variant(self):
+        """The row's `variant` (section 8): faults, exec and pre scripts, a cycle row's own crash too."""
+        return [st for st in step_list(self.s, self.harness) if st.split("@")[0] in FAULTS or st.startswith(("exec ", "pre "))]
+
+    def finish(self):
+        """table.txt only: row.json and report.txt are check.py's (PRD-12 "Files it owns")."""
+        s, secs = self.s, int(time.time() - self.t0)
+        result = self.row or ("FAIL" if any(r == "FAIL" for _, r, _, _ in self.lines) else "INCONCLUSIVE")
+        head = "pad %s %s %s   variant %s   run %s  entry %s  box %s   %dm %02ds" % (
+            s["harness"], self.case, s["mode"], ",".join(self.variant()) or "-", self.meta.get("run") or "-",
+            self.meta.get("entry") or "-", self.name if self.tried else "-", secs // 60, secs % 60)
+        rows = [head, FMT % ("step", "result", "at", "saw")] + [FMT % ln for ln in self.lines]
+        rows.append("%-17s %-14s %s" % ("result", result, os.path.relpath(self.dir, REPO) + "/"))
+        table = "\n".join(rows) + "\n"
+        with open(os.path.join(self.dir, "table.txt"), "w") as f:
+            f.write(table)
+        return result, table
+
+
+def run_all(s, pad, harness, out_root):
+    cases = ["direct", "gateway", "dodger"] if s["case"] == "all" else [s["case"]]
+    runs = [Run(s, c, pad, harness, out_root) for c in cases]
+    with concurrent.futures.ThreadPoolExecutor() as ex:  # waits stay signal-interruptible on POSIX, so STOP is still set
+        return list(ex.map(Run.walk, runs))
+
+
+def main(argv):
+    if len(argv) != 2 or argv[1].startswith("-"):
+        print("usage: scripts/pad/pad <settings file>", file=sys.stderr)
+        return 2
+    try:
+        pad = read_toml(os.path.join(HERE, "pad.toml"))
+        s = load_settings(read_toml(argv[1]), pad)
+        hpath = os.path.join(HERE, "harnesses", s["harness"] + ".toml")
+        if not os.path.isfile(hpath):
+            raise Usage("no harness file scripts/pad/harnesses/%s.toml" % s["harness"])
+        harness = read_toml(hpath)
+        if not (harness.get("version") and harness.get("version_cmd")):
+            raise Usage("scripts/pad/harnesses/%s.toml needs version and version_cmd" % s["harness"])
+    except (Usage, OSError, ValueError, TypeError) as e:
+        print("pad: %s" % e, file=sys.stderr)
+        return 2
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        signal.signal(sig, lambda *_: STOP.set())
+    results = run_all(s, pad, harness, os.path.join(REPO, "pad-out"))
+    for _, table in results:
+        sys.stdout.write(table)
+    got = [r for r, _ in results]
+    return 1 if "FAIL" in got else 3 if "INCONCLUSIVE" in got else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))

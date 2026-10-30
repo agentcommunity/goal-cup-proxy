@@ -1,0 +1,54 @@
+#!/usr/bin/env bash
+# Builds the pad image (PRD-12 section 10): one Vercel Sandbox snapshot from the base node22 runtime
+# (Amazon Linux 2023, user vercel-sandbox) with the pad's tools and every harness in harnesses/*.toml at
+# its pinned version, installed as the non-root user (Claude Code refuses bypass mode as root).
+# No key, no goalcup build, no sign-in ever enters it. Writes the snapshot id to image.id.
+# Usage: scripts/pad/image        (Sandbox control only; the build runs in the box)
+set -euo pipefail
+here=$(cd "$(dirname "$0")" && pwd)
+sbx() { node "$here/sbx.mjs" "$@"; }
+tmp=$(mktemp -d)
+id=""
+cleanup() { [ -n "$id" ] && sbx rm "$id" >/dev/null 2>&1; rm -rf "$tmp"; }
+trap cleanup EXIT
+
+# A top-level string field of a harness file (before its first [table]).
+field() { sed -nE "0,/^\[/{s/^$2 = [\"'](.*)[\"']\$/\\1/p}" "$1" | head -1; }
+
+cat > "$tmp/root.sh" <<'EOF'
+set -euo pipefail
+dnf install -y -q tmux sqlite zstd jq git iproute procps-ng python3.11 tar xz findutils which >/dev/null
+curl -fsSL https://cli.github.com/packages/rpm/gh-cli.repo -o /etc/yum.repos.d/gh-cli.repo
+dnf install -y -q gh >/dev/null
+cat > /etc/profile.d/pad.sh <<'PROFILE'
+# Pad image: harnesses live under the user's own npm prefix and ~/.local/bin.
+export NPM_CONFIG_PREFIX="$HOME/.npm-global"
+case ":$PATH:" in *":$HOME/.npm-global/bin:"*) ;; *) PATH="$HOME/.npm-global/bin:$PATH" ;; esac
+case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *) PATH="$HOME/.local/bin:$PATH" ;; esac
+export PATH
+PROFILE
+EOF
+
+{
+  echo 'set -euo pipefail'
+  echo '[ "$(id -u)" != 0 ] || { echo "image: harnesses must install as the non-root user"; exit 1; }'
+  echo 'cd "$HOME"'
+  echo 'check() { local out; out=$(bash -lc "$2" 2>&1 | head -3) || true; printf "%s: %s\n" "$1" "$(printf "%s" "$out" | head -1)";'
+  echo '  printf "%s\n" "$out" | grep -Eq "(^|[^0-9.])v?${3//./\\.}([^0-9.]|\$)" || { echo "image: $1 is not $3"; exit 1; }; }'
+  for f in "$here"/harnesses/*.toml; do
+    h=$(basename "$f" .toml); v=$(field "$f" version); c=$(field "$f" version_cmd); i=$(field "$f" install)
+    [ -n "$v" ] && [ -n "$c" ] && [ -n "$i" ] || { echo "image: $h lacks version, version_cmd or install" >&2; exit 1; }
+    printf 'echo "== %s %s"\nif ! ( %s ) > /tmp/pad-install.log 2>&1; then tail -40 /tmp/pad-install.log; exit 1; fi\nhash -r\ncheck %q %q %q\n' "$h" "$v" "$i" "$h" "$c" "$v"
+  done
+  echo 'rm -f /tmp/pad-install.log'
+} > "$tmp/user.sh"
+
+id=$(sbx create --name "pad-image-$(date -u +%Y%m%d%H%M)-$RANDOM" --minutes 60 | sed -nE 's/.*"id":"([^"]+)".*/\1/p')
+[ -n "$id" ] || { echo "image: no box" >&2; exit 1; }
+echo "image: box $id" >&2
+sbx exec "$id" --script "$tmp/root.sh" --sudo
+sbx exec "$id" --script "$tmp/user.sh"
+snap=$(sbx snapshot "$id" | sed -nE 's/.*"snapshot":"([^"]+)".*/\1/p')
+[ -n "$snap" ] || { echo "image: no snapshot id" >&2; exit 1; }
+echo "$snap" > "$here/image.id"
+echo "image: snapshot $snap written to scripts/pad/image.id"
