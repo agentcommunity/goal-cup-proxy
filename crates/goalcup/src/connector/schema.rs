@@ -227,21 +227,13 @@ pub(crate) fn from_toml<T: serde::de::DeserializeOwned>(
 }
 
 /// The parser's message without any value it quoted: serde writes a string value in double
-/// quotes, and other values after "invalid type", "invalid value" or "unknown variant".
+/// quotes, and other values after "invalid type", "invalid value" or "unknown variant", so those
+/// keep only their prefix words.
 fn safe_message(message: &str) -> String {
     let first = message.lines().next().unwrap_or("");
-    for what in [
-        "invalid type",
-        "invalid value",
-        "invalid length",
-        "unknown variant",
-    ] {
-        if first.starts_with(what) {
-            return match first.find(", expected") {
-                Some(i) => format!("{what}{}", &first[i..]),
-                None => what.to_string(),
-            };
-        }
+    let words = ["invalid type", "invalid value", "invalid length", "unknown variant"];
+    if let Some(what) = words.iter().find(|w| first.starts_with(**w)) {
+        return what.to_string();
     }
     match first.find('"') {
         Some(i) => first[..i].trim_end().to_string(),
@@ -263,6 +255,9 @@ fn code_owned(name: &str) -> bool {
         ]
         .contains(&name)
 }
+
+/// The two roots a connector path starts with.
+const ROOTS: [&str; 2] = ["{home}", "{workspace}"];
 
 /// Variable name parts that point a harness at a model address.
 const MODEL_ADDRESS: &[&str] = &["BASE_URL", "API_BASE", "ENDPOINT", "_HOST", "PROXY"];
@@ -296,11 +291,14 @@ fn check(c: &Connector, file: &str) -> Result<(), ConnectorError> {
             return Err(address(format!("env.{name}")));
         }
     }
+    // File keys and how many `ROOTS` each may use: settings go into the isolated home only.
+    let mut files: Vec<(String, &str, usize)> = Vec::new();
     for (list, rows) in [("no_prompts", &c.no_prompts), ("update_off", &c.update_off)] {
         for (i, row) in rows.iter().enumerate() {
             if row.value.contains("://") {
                 return Err(address(format!("{list}[{i}].value")));
             }
+            files.push((format!("{list}[{i}].file"), &row.file, 1));
         }
     }
 
@@ -362,31 +360,25 @@ fn check(c: &Connector, file: &str) -> Result<(), ConnectorError> {
         ));
     }
 
-    let mut files: Vec<(String, &str)> = Vec::new();
     for (i, row) in c.refuse_if_set.iter().enumerate() {
-        files.push((format!("refuse_if_set[{i}].file"), &row.file));
+        files.push((format!("refuse_if_set[{i}].file"), &row.file, 2));
     }
     for (i, row) in c.host_hints.iter().enumerate() {
-        files.push((format!("host_hints[{i}].file"), &row.file));
+        files.push((format!("host_hints[{i}].file"), &row.file, 2));
     }
     for (i, file) in c.secret_files.iter().enumerate() {
-        files.push((format!("secret_files[{i}]"), file));
+        files.push((format!("secret_files[{i}]"), file, 2));
     }
-    for (list, rows) in [("no_prompts", &c.no_prompts), ("update_off", &c.update_off)] {
-        for (i, row) in rows.iter().enumerate() {
-            files.push((format!("{list}[{i}].file"), &row.file));
-        }
-    }
-    for (key, path) in files {
-        let star_early = under(path, &["{home}", "{workspace}"]).map(|rest| {
+    for (key, path, roots) in files {
+        let star_early = under(path, &ROOTS[..roots]).map(|rest| {
             let parts: Vec<&str> = rest.split('/').collect();
             parts[..parts.len() - 1].iter().any(|p| p.contains('*'))
         });
         if star_early != Some(false) {
             return Err(invalid(
                 key,
-                "must start with {home} or {workspace}, with no `.`, `..` or empty component, \
-                 no other template, and a `*` only in the last component",
+                "must start with {home}, or {workspace} for a file only read, with no `.`, `..` \
+                 or empty component, no other template, and a `*` only in the last component",
             ));
         }
     }
@@ -399,17 +391,14 @@ fn check(c: &Connector, file: &str) -> Result<(), ConnectorError> {
                 "native row names are unique within a connector",
             ));
         }
-        if under(&row.root, &["{home}", "{workspace}"]).is_none() {
+        if under(&row.root, &ROOTS).is_none() {
             return Err(invalid(
                 format!("native[{i}].root"),
                 "must start with {home} or {workspace}, with no `.`, `..` or empty component",
             ));
         }
-        if !pattern_ok(&row.pattern) {
-            return Err(invalid(
-                format!("native[{i}].pattern"),
-                "relative, no `..`, `.`, empty component, braces or NUL, `**` a whole component",
-            ));
+        if let Err(e) = crate::native::pattern::parse(&row.pattern) {
+            return Err(invalid(format!("native[{i}].pattern"), e.0));
         }
     }
     Ok(())
@@ -432,15 +421,4 @@ fn under<'a>(path: &'a str, roots: &[&str]) -> Option<&'a str> {
 /// Every brace in `s` is a `{workspace}` template.
 fn templates_ok(s: &str) -> bool {
     !s.replace("{workspace}", "").contains(['{', '}'])
-}
-
-/// PRD-04 section 2: relative, no `..`, `.`, empty component, braces or NUL; `**` only whole.
-fn pattern_ok(pattern: &str) -> bool {
-    !pattern.contains(['{', '}', '\0'])
-        && pattern.split('/').all(|part| {
-            !part.is_empty()
-                && part != "."
-                && part != ".."
-                && (part == "**" || !part.contains("**"))
-        })
 }
