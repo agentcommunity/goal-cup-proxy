@@ -1088,3 +1088,40 @@ kept and now cites BUILD-PROMPT section 5, since B3 no longer carries it.
 - `gate fast` PASS in 76 s on c7649890 (and 75 s on the no-op second run). `test_pad.py` is not in
   the gate yet (PRD-14 note).
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-15 slice 3 (merge 4e0ca793)
+
+- **Size report, PRD-15 slice 3** (`wc -l` on integration at 4e0ca793). PRD-15 has no row in PRD-00
+  "Size budget" (docs are not counted), and the slice has no code. `TODO.md` 59 lines (was 350;
+  PRD-15 asks for under 60), `README.md` 318 (unchanged count, one link repointed).
+- **Docs-only slices still pass the gate in under two minutes** (`gate fast: PASS in 98s` on
+  4e0ca793).
+- **`check-links.py` is not in the gate**, so a broken link merges silently. The PRD-11 box run
+  (harnesses log 12:22Z) counted 33 listed lines with the new TODO overlaid, 30 after its fix. The
+  final acceptance link check filters the history files by name (run 1's report,
+  `docs/RESEARCH-TARGET.md`, `docs/research/**`) and must list nothing else for live docs.
+- **After-merge purge order** (review A7, PRD-15 note): live docs stop linking purged history before
+  the purge, and the purge change runs `check-links.py` itself. The TODO keep list stays at four
+  files.
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-07 slice 3 (merge 323b1a0f)
+
+- **PRD-07 is done on integration.** Slice 3, the last, gave `delete-test-runs.sh` the two usage
+  prefixes (S7 shape, built before PRD-09's job) and lists R2 before the database changes. No Worker
+  src or test changed. `gate fast: PASS in 83s` on 323b1a0f. The fixer's 10 stubbed script cases ran
+  once in a build box and are not in the gate; the script itself is never run in this build (owner
+  tool, PRD-07 section 9), so acceptance cites the stubbed run and says the real-bucket run was not
+  done.
+- **Three nits are open** (RA-N2, B2-N1, B2-N2; PRD-07 note) and one hand-off to PRD-15 (RA-N1, the
+  OPERATING test-runs lines; PRD-15 note). None blocks. If no later PRD-07 slice comes, the end-of-build
+  report lists them as known.
+- **Size report, PRD-07** (`wc -l` at 323b1a0f, against PRD-00 "Size budget", row "Worker (PRD-07)"):
+  src (`server/worker/src`, all files) 3,557 against about 3,440, 3.4% over; tests (`server/worker/test`
+  `*.ts` plus helpers) 5,258 against about 4,950, 6.2% over. Both within the 10% the row allows
+  without a replan decision. Down from 4,001 and 5,775 before the build. Outside the row:
+  `server/worker/scripts/delete-test-runs.sh` 122 (was 95) and `scripts/fetch-run.sh`, in the scripts
+  row.
+- **Seam to watch at PRD-09's job merge:** S7's key layout and the bucket-per-side rule are what the
+  cleanup script relies on (PRD-09 note). The reviewer of that merge checks it.
+- No locked ledger item is touched and no owner question comes from this slice.

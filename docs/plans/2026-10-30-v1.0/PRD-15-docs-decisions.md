@@ -935,3 +935,52 @@ JSON sections), not a separate merge request:
   comments that cite SERVER-DESIGN go with the cut, not here.
 - **`docs/UPLOAD-API.md` line 15 is now true** (signing, `ack`, `last_ack`, receipt, abandon and the
   alias are gone from the Worker); no doc edit follows from it.
+
+### 2026-10-30, replan after PRD-15 slice 3 (merge 4e0ca793)
+
+Slice 3 merged `TODO.md` for 1.0 (59 lines, was 350) and repointed one README link. `gate fast`
+passed in 98 s. One nit came after the merge (review A7); it goes to the third slice, not a separate
+merge request:
+
+- **The after-merge purge must break no live link** (review A7). `README.md:180` now links
+  `docs/research/results/2026-10-22-local-test-day.md`, which the TODO purge bullet deletes (only
+  four files in `docs/research/` are kept). The keep list does not grow: the third-slice README
+  rewrite builds its platform table from merged code and the TODO known issue ("only Linux x86_64 is
+  built and tested in this build"), so the Linux arm64 "measurements" link goes. The same rule holds
+  for every live doc the third slice rewrites (guide, RULES, OPERATING, SECURITY, CONTRIBUTING,
+  `scripts/README.md`): link into `docs/research/` or `docs/archive/` only the four kept files and
+  run 1's report; a still-true fact cites those or stands without a link. Live links into purged
+  paths on integration at 4e0ca793: `README.md:180`, `README.md:307` (RESEARCH-TARGET and
+  `research/coverage-matrix.md`), `docs/PARTICIPANT-GUIDE.md:131`, `docs/RULES.md:158`,
+  `docs/OPERATING.md:187` (26 Oct results), `scripts/README.md:28` and `:37` (`LOCAL-CAMPAIGN.md`,
+  `replay-comparison.md`; `campaign.py` is cut by PRD-13). `docs/HARNESS-SETUP.md` and
+  `docs/CHEAT-CHECKLIST.md` go to `docs/archive/` and need nothing. `docs/DECISIONS.md` lines 820,
+  836, 837 and 1017 link research results; it is history in this build, and the after-merge
+  DECISIONS rewrite drops those links. The harness pages are PRD-11's (PRD-11 note).
+- **The purge itself runs `check-links.py` with the purged files gone** and fixes any live link it
+  lists in the same change. That is an after-merge step on the TODO list already; no TODO edit is
+  needed for it now.
+- **The removed TODO anchors.** PRD-11 dropped the three harness-page links to `#wp0-measure` and
+  `#research-recorder-validation` on `v1.0/prd-11-connectors-harness-page-todo-links` (0c0a18d5,
+  harnesses log 12:22Z; not yet on integration). `docs/RESEARCH-TARGET.md:48` (`#wp0-measure`) and
+  `docs/research/results/2026-10-26-mac-retest.md:91` stay broken: history, untouched, purged after
+  the merge. The last link check filters both by name with the run 1 report and says so in the
+  night-log line.
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-07 slice 3 (merge 323b1a0f)
+
+- **`docs/OPERATING.md` "Test runs" is out of date since 323b1a0f** (review RA-N1). Lines 135-138
+  still say the script "touches only `goalcup-traces/traces/test/` and
+  `goalcup-traces-staging/traces/test-staging/`" and ask for "R2 read and write". The script now also
+  empties `goalcup-usage/usage/test/` and `goalcup-usage-staging/usage/test-staging/`, lists R2 before
+  the database changes, and skips a usage bucket the token cannot reach with one line. An owner who
+  scopes the token from OPERATING alone leaves the test stats behind, which breaks PRD-07 section 10's
+  "leaves no orphan stats". The third-slice OPERATING rewrite (section 9, item 4 "Test runs and the
+  pad", and item 1 "Where things run") says, in plain words: the four bucket and prefix pairs; the
+  token needs R2 read and write on both traces buckets and on each usage bucket that exists; a usage
+  bucket skipped by a run with `--older-than` keeps its test objects until a run without
+  `--older-than` (PRD-07 note, RA-N2). Copy the facts from `server/worker/README.md` "Clean up test
+  runs" and the script header as merged, not from this note. If the rewrite is not reached in this
+  build, the two-line fix to lines 135-138 goes in alone; it is a PRD-15 file.
+- No locked ledger item is touched and no owner question comes from this slice.
