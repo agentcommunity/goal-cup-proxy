@@ -9,6 +9,7 @@ pub const CONNECTORS: &[(&str, &str)] = &[
     entry!("claude-code-cli"),
     entry!("codex-cli"),
     entry!("copilot-cli"),
+    entry!("crush-cli"),
     entry!("gemini-cli"),
     entry!("hermes-cli"),
     entry!("kilo-cli"),
