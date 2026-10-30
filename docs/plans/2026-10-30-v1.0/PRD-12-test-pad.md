@@ -1428,3 +1428,40 @@ taken; "rejected" says why. Fixes for other files are made by those files' owner
 - `release.sh` and `packaging/README.md` now name `scripts/pad/table --release-check <commit>` as the
   check after `gate full`; `tag` does not run it yet (PRD-14's next release slice). PRD-12's nit B3
   still decides whether that call is right from any checkout.
+
+### 2026-10-30, replan after PRD-08 slice 1 (merge d10feef7)
+
+`goalcup-verify` is on integration with `check --json` (S6) for the integrity checks. What
+`check.py` reads, as merged (PRD-08 note):
+
+- A `recorder_down` gap's cause and length: the `inv6` check's `facts.gaps`, a list of `{cause,
+  start, end, ms}` (`start`, `end` UTC text). `counts.gaps` is a map from reason name to count.
+  `check.py`'s fallback to `counts.gaps` keys is only for older output.
+- `keep`: each S6 entry carries `keep` from the start event, so C4 can read it from the record
+  instead of the settings.
+- `--local`, `--known` and `--harness-files` are accepted and read nothing yet; the checks that need
+  them, and `history_complete`, `wire_keeps_up`, `threads_match`, `subagents_present` and the
+  `server_*` ids, are `skip` "not built in this slice", so C1 and C2 stay INCONCLUSIVE and C3 waits
+  on `secrets --json` `masks`.
+- `--live`: null mode is read from `status.json` `off.since` only; a live entry with nothing
+  durable yet exits 1 with `inv1` `skip`; a part file that cannot be opened exits 3.
+- Selftest's K2 still waits on PRD-08's run 1 shape builder (next slice, with U1).
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-14 slice 2 (merge 04886295)
+
+- `scripts/release.sh tag` now runs `python3 scripts/pad/table --release-check <sha>` from a detached
+  worktree at origin/main's sha, so nit B3 no longer makes the tag judge another commit's rows. B3 is
+  still worth taking (a run by hand from any checkout), but the release no longer waits on it. `table`
+  must stay 3.9-clean, since `release.sh` calls `python3`.
+- `CODEOWNERS` now names `/scripts/pad/` (`@nembal`).
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-06 slice 1 (merge e6bd8a50)
+
+- `upload.json` (S9) is on integration, but no sender is yet. Until PRD-06's send and beat slices
+  merge, a pad run with a server ends with `upload.json` at `state: waiting` and `final: none`, so
+  `wait-upload` times out. Rows that need the server copy (C4's server checks, U3, U5, U8) are then
+  "not run: sender not merged", not FAIL. `server = "off"` runs are not affected. The `watch/upload.jsonl`
+  reader can be built against the S9 type now (`goalcup::upload::state`).
+- No locked ledger item is touched and no owner question comes from this slice.

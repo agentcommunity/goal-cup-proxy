@@ -1349,3 +1349,76 @@ to another file are made by that file's owner.
   with `refusal` set never reaches the watchdog (PRD-10 stops first).
 - Until PRD-11's hosts slice merges, `hosts.decide` answers `NotListed` for every name and
   `ca_subtrees` is empty: a watchdog test that needs a decrypted request waits for that merge.
+
+### 2026-10-30, replan after PRD-08 slice 1 (merge d10feef7)
+
+- **`pipeline/counts.rs` has a second reader.** PRD-08's `integrity.rs` recounts every COUNT key
+  from the record to the rules of format-core 12:37Z (`native_bytes` is DATA bytes of native and
+  snapshot streams, `wire_bytes` every other DATA; `tunnel_hosts` listed is `null` until a GAP is
+  written on that tunnel conn, then that GAP's reason name; a GAP on `ws_up` makes the next text or
+  binary message end holed; `off_ms` only from sid 0 `recorder_down`, floored to ms) and the
+  `hosts` rule of format-core 13:19Z. `inv7` and `counts_match_seal` fail when a known key is
+  missing or differs, and ignore keys they do not know. So: a new COUNT key is safe; a renamed or
+  removed key, or a changed counting rule, is a seam line naming PRD-08 and the same change in
+  `crates/goalcup-verify/src/integrity.rs` in one merge window, or every real entry fails `inv7`.
+- **Recovered seals.** The verifier counts a recovered seal's `recorder_down` gap in its own recovery
+  frame, including the boot-0 head gap and a second recovery frame (fixes N1 and N2). A change to how
+  `recover` writes the seal or the gap after `start` is likewise a seam line naming PRD-08.
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-10 slice 2 (merge 56495dd6)
+
+- **S8 pid file, as PRD-10 reads it:** `rec/watchdog.pid` is one line `<pid> <start_id>`. It has
+  exactly two decimal fields separated by whitespace, and nothing else. A missing or odd file reads as
+  "no watchdog". `start_id` has the same meaning as `status.json` `start_id`. Write every start id
+  (the watchdog's, the recorder's in `status.json`, `HarnessFacts::start_id`) with
+  `goalcup::cli::proc_start_id(pid)`, never a second reader of `/proc`. Status, `recover` and
+  `seal` all use the liveness test `cli::alive(pid, start_id)`, which is `kill(pid, 0)` plus a
+  matching start id with no program-file check. This fits `PR_SET_DUMPABLE` 0 (PRD-10 note).
+- **What status reads from S4 today:** `mode`, `updated` (status shows the stale line when a
+  both-dead `status.json` is more than 2 minutes old, so keep writing it each second while live),
+  `pid`, `start_id`, `harness`, `written`, `losing`, `off`, `notes`, `after_seal`.
+- **Two end-screen facts have no key** (PRD-10 note, A5): the record's end time and the final native
+  rows count. If PRD-02 adds them to `status.json`, write a seam line naming PRD-10. A renamed or
+  removed S4 key breaks `cli_status.rs` and `cli_finish.rs`, which build `status.json` through its
+  JSON form in `tests/cli_common/`.
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-03 core slice 1 (merge 0e411074)
+
+- **`reserve` as PRD-03 uses it.** Brotli reserves each allocation its decoder makes, and zstd its
+  frame window plus 512 KiB, so a flushed `br` body holds 4 to 16 MiB of `held` from its first push
+  until it ends. A brotli body already decoding keeps reserving past `room()`; only a body with no
+  piece out yet is refused. `held` can so sit above three quarters of soft from reservations
+  alone, and the next DATA pieces then meet the soft guard sooner. That is the
+  design (one counter), not a defect.
+- **A transient outside `held`:** a refused brotli body's window (up to 16 MiB) is allocated and
+  freed at once on its worker thread. PRD-03 relies on the margin between `room()` and soft (a
+  quarter of soft) to hold it; that is true while soft is at least 64 MiB times the worker threads
+  (the 128 MiB floor holds 2 threads, the 512 MiB default holds 8). R8's `by_hand_load` reports RSS
+  next to `held_peak`, so a gap between them shows here first. No change asked.
+- **Capacity under the default soft guard** (wire-proxy owner question 14:47Z): about 23 open
+  flushed `br` bodies at WBITS 24, about 45 zstd bodies at the 8 MiB window, about 95 `br` bodies at
+  WBITS 22; run 1 had about 40. The soft default is this PRD's number, not a locked item, so no W6.
+  If PRD-16 X3 fails on a `decoder_window` GAP, the fix is the soft default, never a proxy cap.
+- No locked ledger item is touched.
+
+### 2026-10-30, replan after PRD-06 slice 1 (merge e6bd8a50)
+
+- **S18 and S10 are on integration** with these shapes, so the second slice's `server` line and the
+  seal hand-over can build now. `upload::spawn(UploadCtx) -> UploadHandle`, with
+  `UploadCtx { home, run_dir, entry_dir, run, entry, recorder: Option<Recorder>, keep }` (`recorder` is
+  None in null mode; `keep` comes from the start facts). `UploadHandle::server_word()` returns a
+  `tokio::sync::watch::Receiver<Option<ServerWord>>`, with
+  `ServerWord { stop, reason: Option<String>, seconds_left: Option<u64>, asked_at: Mono }`.
+  `UploadHandle::finish(self, upload::WrapUp, SealFacts { reason: watchdog::SealReason,
+  workspace_head: Option<String>, totals: pipeline::EntryTotals })`.
+- **This slice starts no uploader thread.** The receiver stays None and `finish` returns at once. So
+  until PRD-06's beat and send slices merge, no test can see a server `stop` or deadline come through
+  the uploader, and no test can time a wrap-up. A test of the `server` line before then sends the
+  line to the watchdog directly.
+- **A heartbeat call can take about 60 s** on a peer that trickles bytes (PRD-06 note, BR2-r1) until
+  PRD-06 takes the fix. The deadline counts from `asked_at`, which is taken before the call, so a slow
+  answer never stretches it. The watchdog reckons `seconds_left` from `asked_at` and not from when the
+  word arrived.
+- No locked ledger item is touched and no owner question comes from this slice.

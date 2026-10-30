@@ -828,3 +828,69 @@ PRD-12 and PRD-17.
   `Server::Off`; it refuses a user part in the address and `http://` off loopback. The uploader takes
   the base address from it and adds no check of its own.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-10 slice 2 (merge 56495dd6)
+
+- **`server.json` is on integration** as `cli::ServerJson` (PRD-10 note). On `v1.0/prd-06-upload`,
+  `upload::server_url` parses it as a loose `serde_json::Value`. Read it instead as
+  `cli::read_json::<cli::ServerJson>(&cli::server_json(run_dir))` and take `.server`
+  (`None` for off). One shape and less code. The shape is compatible today, so this is not a blocker.
+- To write a time, use `goalcup_format::dump::wall`. To parse one, use `cli::unix_of`. Add no
+  third time helper.
+- `status --json` already prints `upload.json` whole. When S9 merges, PRD-10 adds the upload lines
+  to status and the end screen, and `time-left`. S9's `upload.json` keys are then a seam with
+  `cli/status.rs` and `cli/finish.rs`.
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-14 slice 2 (merge 04886295)
+
+- **The fake Worker is on integration** (`tests/common/worker.rs` at 04886295): S5 routes with its own
+  position, chunk answers `{offset, next_seq, head, received_at, sealed}`, a bad `counts` dropped with
+  `200`, and a script of injected answers (status and body, `Retry-After`, delay, drop the answer
+  after commit). The open acceptance case "a Worker failing every other PUT never makes a wait above
+  4 s" can land with `send.rs` on it now; `upload_*` tests drop any private stand-in they kept.
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-06 slice 1 (merge e6bd8a50)
+
+- **On integration:** S18 (`upload::spawn`, `UploadCtx`, `UploadHandle::finish`, `SealFacts`), S10
+  (`ServerWord` on a `watch` channel), S9 (`state.rs`), `policy.rs`, `client.rs` and
+  `tests/upload_backoff.rs`. `chunk.rs`, `send.rs`, `beat.rs`, `prune.rs` and `manual.rs` are later
+  slices. Until they merge, `spawn` starts no thread and writes `upload.json` once (`local` with
+  `keep` when the server is off, else `waiting` with `last_error` class `internal`), no `ServerWord`
+  is ever published, and `finish` returns at once.
+- **BR2-r1 (nit, open) goes to the next slice that touches `client.rs`.** `Bounded` checks its deadline
+  before each read, but the read then blocks for the socket read timeout that ureq 2.12.1 sets once at
+  connect (`src/stream.rs:433-436`). A peer that sends one byte just before the deadline and then goes
+  quiet holds a heartbeat or position call for about 60 s and a PUT handshake for about 90 s, not 30 s.
+  Take the reviewer's two lines: in `Bounded::read`, before the inner read, set the socket's read
+  timeout to the smaller of the time left and `STALL_TIMEOUT`. Check it with a throwaway box probe
+  whose peer sends one byte at 29 s and then nothing (the 13:03Z probe trickled every 5 s, so it did
+  not reach this case); it is not a committed test (ledger B10). If the lines are not taken, the
+  `json()` doc says "about 30 s" and acceptance lists the 60 s and 90 s worst cases. The watchdog is
+  not affected: the beat has its own thread and `ServerWord.asked_at` is taken before the call.
+- **`server_url` still parses `server.json` as a loose `serde_json::Value`.** The PRD-10 slice 2 note
+  stands: the next slice that touches `mod.rs` reads `cli::read_json::<cli::ServerJson>` and takes
+  `.server`. It also saves lines.
+- **Acceptance case open:** "a worker failing every other PUT never makes a wait above 4 s" was cut from
+  `upload_backoff.rs` (13:12Z decision) and lands with `send.rs`. PRD-14's fake Worker
+  (`tests/common/worker.rs`, on integration) already serves it: queue alternating
+  `Inject { answer: Some((503, ..)), .. }` and `Inject::default()` on `Route::Chunk`. Each inject is
+  used once, in order. PRD-14 needs no change for it.
+- **Size** (`wc -l` at e6bd8a50, row "Upload (PRD-06)", 940 src and 1,000 tests). Src files total 1,359
+  (`client.rs` 692, `state.rs` 289, `policy.rs` 264, `mod.rs` 114). Of those, 232 are inline
+  `#[cfg(test)]` modules (client 166, state 66). Without them the src is 1,127, which is 120% of the row
+  with 4 of 9 files written. The same four files' own estimates (section 12) add up to 430 (client 220,
+  policy 80, state 70, mod 60), so they run at 262%. With the other five at their estimates (chunk 150,
+  send 180, beat 140, prune 50, manual 90, together 610), the module projects to about 1,737
+  (185%), or 1,969 with the inline tests. The 13:12Z decision line (points 5 and 6: bounded timeouts,
+  own TLS, the refusal read after a broken PUT, the `upload.json` fields) covers this merge. It was
+  written at 1,106, and the BR1 and BR2 fixes added about 21 lines to `client.rs` after it. From now
+  on, later slices build at their own estimates. Each merge needs its own decision line, because the
+  module is already past 1,034 (row plus 10%). Before a slice adds anything, it cuts: the loose
+  `server.json` parse (above); inline test cases that guard none of the seven points, the format,
+  masking, a never-stop rule or an acceptance case (ledger B10); and `policy.rs`, which runs at 330%
+  of its estimate, is reviewer B's first place to look. Tests: `tests/upload_backoff.rs` 95 and the
+  232 inline lines, 327 of 1,000.
+- No locked ledger item is touched and no owner question comes from this slice. The overshoot goes into
+  the end-of-build size report against the Rust total.
