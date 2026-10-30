@@ -1866,3 +1866,29 @@ kept and now cites BUILD-PROMPT section 5, since B3 no longer carries it.
 - **Acceptance lists as known,** if still open at the end: the PRD-08 slice 3 items in the PRD-08
   note (A5 nits 2 and 3, A7, A8, F11, the double count of a file named twice, the PRD-01 ask).
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-14 slice 5 (merge b3747b6a)
+
+- `gate fast: PASS in 126s` on b3747b6a (nextest 218 of 218, 0 skipped). Box runs before the merge:
+  the builder's `gate fast` PASS in 59s at 1f201719 (213 of 213, root refusal and missing-prerequisite
+  FAIL lines checked) and `sh -n release.sh` at 0eef7d25; the fixer's `gate fast` PASS at 7795b322;
+  reviewer A's re-check left no open finding. Four paths changed (`.config/nextest.toml`,
+  `packaging/README.md`, `scripts/gate.sh`, `scripts/release.sh`), all PRD-14 owned, no `Cargo.toml`.
+  All 3 non-merge commits in 7a995b6e..7795b322 carry both trailer lines. `gate full` was not run; it
+  stays red at the hooked-binary line until PRD-06 calls `Policy::from_env` (slice 3 note).
+- **Size report, PRD-14** (`wc -l` at b3747b6a, PRD-00 row "Lessons (PRD-17), test support,
+  `rule_code`, `e2e_run` (PRD-14)", 0 src and 3,000 tests, of which PRD-14's line is 1,700): tests
+  1,736 (`tests/common/` 1,523 with `upstream.rs` 709, `rule_code.rs` 213, `e2e_run.rs` 0), 102% of
+  the 1,700 line and within the 1,870 ceiling, unchanged by this slice. Src 0. Scripts and CI:
+  `gate.sh` 103 (was 105), `.config/nextest.toml` 21, `packaging/README.md` 104 (was 103),
+  `release.sh` 121, `release.yml` 132, `ci.yml` 60, `test_install.py` 314, `smoke-release.sh` 53,
+  `package-release.sh` 40, `third-party-licenses.py` 231, `install.sh` 355.
+- **Closed:** the slice 4 review nits A1, A2, A3, A4, B1 and B2. Remove them from the known list of
+  the slice 4 note. **New known item** if still open at the end: review B-N4 (the signal trap in
+  `gate.sh` is set only after the build lock, so a kill before then prints no FAIL line), queued for
+  PRD-14's next touch of `gate.sh` (PRD-14 note).
+- **Seams, unchanged:** `recorder::real` (PRD-02's `Recorder::real_for_tests`), `e2e_run.rs`
+  (phase 2), the `check-links.py` delete (phase 3), `proxy_connect`'s heavy case (PRD-03).
+- **Housekeeping for the end:** add `v1.0/prd-14-tests-gate-nits-nextest-comment` and
+  `v1.0/prd-14-tests-packaging-readme-tag-check` to the merged PRD-14 task branches still on origin.
+- No locked ledger item is touched and no owner question comes from this slice.

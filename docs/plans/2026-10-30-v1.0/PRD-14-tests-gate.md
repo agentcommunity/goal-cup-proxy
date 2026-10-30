@@ -993,3 +993,38 @@ PRDs they touch and the code. Where two fixes disagree, the ledger and the later
   `recorder::real` and `e2e_run.rs`. Scripts: `gate.sh` 105 (about 75, see above), `.config/nextest.toml`
   21, the rest as in the slice 3 note.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-14 slice 5 (merge b3747b6a)
+
+- **Done in slice 5:** the slice 4 note's queued nits. `scripts/gate.sh` has the header line on the
+  output format (A1), the full tier's note that its ignored-tests step fails until the first
+  `#[ignore]` test merges in phase 2 (A2) and the admission rule beside the named script-test list
+  (A4, B2), paid for by B1's three cuts: 105 to 103 lines, and B1 is the only code change (`fail()`
+  defined before the root check, the one-line `missing` test). `.config/nextest.toml` now says a
+  binary joins the one override's alternation "in the merge that brings its heavy case" and names
+  `proxy_connect` with PRD-03's 2,000 connections (A3); `native_walk` is still the group's only
+  binary. `packaging/README.md` "Cutting a release" now says `release.sh tag` runs
+  `scripts/pad/table --release-check` on `origin/main`'s commit in a temporary worktree and refuses
+  the tag when it fails, and points to PRD-12 section 9 for what that check needs instead of restating
+  it (review B-F1); step 2 keeps `gate.sh full` as the one check the tag command does not run.
+  `release.sh`'s `next=` hint no longer tells the user to run the release check by hand.
+- **Next touch of `scripts/gate.sh`** (review B-N4, nit, no line cost): move `trap fail INT TERM HUP`
+  from after the lock to just after `fail()`'s definition. Today a watcher that kills the gate during
+  the prerequisite checks, or while it waits for the build lock (which can last minutes), gets no
+  `gate <tier>: FAIL` line, so the new header's "the last line is PASS or FAIL" is not true for that
+  window. It is safe there: before the lock no EXIT trap is set, so `fail`'s exit removes nothing that
+  is not the gate's, and a signal between `mkdir "$lock"` and the EXIT trap leaves a lock with a dead
+  or missing pid, which the next run takes over. `trap 'rm -rf "$lock"' EXIT` stays where it is.
+- **Still open, unchanged:** `recorder::real(dir)` (PRD-02's `Recorder::real_for_tests` is on no
+  branch at this replan; the only hit is the doc mention in `tests/common/recorder.rs`), `e2e_run.rs`
+  with `fake.toml` and `fake-hosts.toml` (phase 2: `goalcup start` still prints `not_built` after the
+  folder checks, integration has no writer and no `GOALCUP_TEST_ROTATE_MB` hook), the
+  `check-links.py` and `test_check_links.py` delete (phase 3). No new heavy-group binary is on
+  integration and `proxy_connect` has no 2,000-connection case yet. `gate full` stays red at the
+  hooked-binary line: `Policy::from_env` (`crates/goalcup/src/upload/policy.rs`) still has no caller.
+- **Size against section 3** (`wc -l` at b3747b6a): tests unchanged at 1,736 (`tests/common/` 1,523
+  with `upstream.rs` 709, `rule_code.rs` 213, `e2e_run.rs` 0) of the 1,700 line, inside the 1,870
+  ceiling; 134 lines left for `recorder::real` and `e2e_run.rs`. Scripts: `gate.sh` 103 (section 8
+  says about 75; the slice 4 note lets the overage stand), `.config/nextest.toml` 21,
+  `packaging/README.md` 104 (was 103), `release.sh` 121, the rest as in the slice 3 note.
+- No locked ledger item is touched and no owner question comes from this slice.
