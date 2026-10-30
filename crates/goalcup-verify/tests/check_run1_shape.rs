@@ -53,7 +53,7 @@ fn fetch(d: &Path) -> PathBuf {
     let n = t["http_post"].as_u64().unwrap() + t["ws_up_msgs"].as_u64().unwrap();
     let hb = json!({"recording": "gaps", "model_requests": n, "counts": t});
     let doc = json!({"upload_offset": raw, "model_requests": n + 1, "last_heartbeat": hb,
-        "final": {"seq": chunks.len() - 1, "head": prev}, "chunks": chunks});
+        "final": {"seq": chunks[chunks.len() - 1]["last_seq"], "head": prev}, "chunks": chunks});
     fs::write(out.join("fetch.json"), doc.to_string()).unwrap();
     out
 }
