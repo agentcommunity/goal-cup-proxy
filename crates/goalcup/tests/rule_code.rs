@@ -1,9 +1,15 @@
 //! Point 7 and the AGENTS.md hard rule: no harness names in core code. A harness and a model host
 //! are data (`connectors/`), so no string literal in `crates/goalcup/src` or
-//! `crates/goalcup-format/src` holds a connector id (the stem of each flat `connectors/*.toml`) or a
-//! host from `connectors/model-hosts.toml`, both matched case-insensitively as whole tokens. The
-//! lists are read at test time, so a new connector or host is covered with no edit here. Comments
-//! and identifiers are not scanned.
+//! `crates/goalcup-format/src` holds a connector id (the stem of each flat `connectors/*.toml`), a
+//! connector's `program` (`codex`, `claude`, ...) or a host from `connectors/model-hosts.toml`, all
+//! matched case-insensitively as whole tokens. The lists are read at test time, so a new connector
+//! or host is covered with no edit here. Comments and identifiers are not scanned.
+//!
+//! It also includes the shared support code, so the gate compiles and lints `tests/common` on every
+//! merge even before another test binary uses it.
+
+#[allow(unused)]
+mod common;
 
 use std::path::{Path, PathBuf};
 
@@ -15,8 +21,9 @@ const ALLOWED: &[(&str, &str, &str)] = &[(
     "the one include_str! list that embeds the connector files by id (PRD-11); skipped while absent",
 )];
 
-/// Connector ids, then the fixed dotted parts of each host pattern (`*.maas.aliyuncs.com` gives
-/// `maas.aliyuncs.com`, `bedrock-runtime.*.amazonaws.com` gives `amazonaws.com`).
+/// Connector ids and programs, then the fixed dotted parts of each host pattern
+/// (`*.maas.aliyuncs.com` gives `maas.aliyuncs.com`, `bedrock-runtime.*.amazonaws.com` gives
+/// `amazonaws.com`).
 fn banned(root: &Path) -> Vec<String> {
     let mut out = Vec::new();
     for entry in std::fs::read_dir(root.join("connectors")).expect("connectors/") {
@@ -29,7 +36,12 @@ fn banned(root: &Path) -> Vec<String> {
         if path.extension().is_some_and(|e| e == "toml")
             && !["model-hosts", "tiers"].contains(&&*stem)
         {
-            out.push(stem);
+            let text = std::fs::read_to_string(&path).expect("connector file");
+            let program = text
+                .lines()
+                .find_map(|l| l.strip_prefix("program = \"")?.strip_suffix('"'))
+                .unwrap_or_else(|| panic!("{}: no program line", path.display()));
+            out.extend([stem, program.to_ascii_lowercase()]);
         }
     }
     let hosts = std::fs::read_to_string(root.join("connectors/model-hosts.toml")).expect("hosts");
@@ -91,11 +103,11 @@ fn string_literals(source: &str) -> Vec<(usize, String)> {
             b'\n' => line += 1,
             // A char literal ('"', '\'', '\u{22}'); a lifetime has no closing quote.
             b'\'' => {
+                // The escaped character itself may be a quote ('\''), so the close is after it.
                 let end = if b.get(i + 1) == Some(&b'\\') {
-                    b[i + 2..]
-                        .iter()
-                        .position(|c| *c == b'\'')
-                        .map(|p| i + 2 + p)
+                    b.get(i + 3..)
+                        .and_then(|rest| rest.iter().position(|c| *c == b'\''))
+                        .map(|p| i + 3 + p)
                 } else {
                     let len = source[i + 1..].chars().next().map_or(1, char::len_utf8);
                     (b.get(i + 1 + len) == Some(&b'\'')).then_some(i + 1 + len)

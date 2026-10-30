@@ -1,15 +1,10 @@
-//! Helpers over `Recorder::for_tests(room)` (seam S1): a recorder that collects every call
-//! before masking, with `room()` set by the test.
+//! Helpers over the calls of `Recorder::for_tests(room)` (seam S1), the recorder that collects
+//! every call before masking, with `room()` set by the test. Tests call that seam directly.
 //!
 //! `real(dir)`, the pipeline with masking and the writer in a temp entry folder, comes once
 //! PRD-02's `Recorder::real_for_tests(dir, masker)` exists (PRD-14 slice 2).
 
-use goalcup::pipeline::{Call, Calls, Recorder, Sid};
-
-/// A recorder whose `room()` answers against `room`, and its collected calls.
-pub fn start(room: u64) -> (Recorder, Calls) {
-    Recorder::for_tests(room)
-}
+use goalcup::pipeline::{Call, Calls, Sid};
 
 /// The bytes of every DATA call for `sid`, joined in call order.
 pub fn data_of(calls: &Calls, sid: Sid) -> Vec<u8> {

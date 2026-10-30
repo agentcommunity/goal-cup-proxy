@@ -37,11 +37,16 @@ jobs:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           persist-credentials: false
-      # The one compiler, the channel rust-toolchain.toml names, with clippy and rustfmt.
-      - run: rustup toolchain install --profile minimal --component clippy,rustfmt "$(sed -n 's/^channel = "\(.*\)"$/\1/p' rust-toolchain.toml)"
+      # The one compiler: with no arguments rustup installs what rust-toolchain.toml names,
+      # components included.
+      - run: rustup toolchain install
       - uses: taiki-e/install-action@86f7a0ffb25f40114606501a311ebcfaf882ea32 # v2.88.0
         with:
           tool: cargo-nextest
+      # The Worker tests run .ts files natively (server/worker/package.json: node >=22.18).
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: 22
       - run: npm ci --prefix server/worker
       - run: sh scripts/gate.sh fast
       - if: failure()

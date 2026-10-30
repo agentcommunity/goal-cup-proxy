@@ -71,7 +71,7 @@ fi
 # prepare
 if [ "$main_version" = "$new" ]; then
     echo "release: origin/main is already at version $new, so there is nothing to bump."
-    echo "Next: on that origin/main commit, run sh scripts/gate.sh full, then the pad's release check, before sh scripts/release.sh tag $new"
+    echo "Next: on that origin/main commit, run sh scripts/gate.sh full, then the pad's release check (scripts/pad/table --release-check <commit>), before sh scripts/release.sh tag $new"
     exit 0
 fi
 highest=$(printf '%s\n%s\n' "$main_version" "$new" | sort -t. -k1,1n -k2,2n -k3,3n | tail -n 1)
@@ -103,9 +103,9 @@ git add Cargo.toml Cargo.lock
 git commit -q -m "Release $new"
 if ! { git push -q -u origin "$branch" &&
     gh pr create --base main --head "$branch" --title "Release $new" \
-        --body "Sets the workspace version to $new. After it is merged, run sh scripts/gate.sh full, then the pad's release check, on that origin/main commit before sh scripts/release.sh tag $new"; }; then
+        --body "Sets the workspace version to $new. After it is merged, run sh scripts/gate.sh full, then the pad's release check (scripts/pad/table --release-check <commit>), on that origin/main commit before sh scripts/release.sh tag $new"; }; then
     git checkout -q "$start"
     die "the release commit is on the local branch $branch (and on origin if the push worked). Finish by hand: git push -u origin $branch && gh pr create --base main --head $branch"
 fi
 git checkout -q "$start"
-echo "release: pull request opened for $branch. After it is merged, run sh scripts/gate.sh full, then the pad's release check, on that origin/main commit before sh scripts/release.sh tag $new"
+echo "release: pull request opened for $branch. After it is merged, run sh scripts/gate.sh full, then the pad's release check (scripts/pad/table --release-check <commit>), on that origin/main commit before sh scripts/release.sh tag $new"

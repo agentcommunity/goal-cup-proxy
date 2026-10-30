@@ -9,7 +9,7 @@
 - [ ] I ran `sh scripts/gate.sh fast` and pasted its last line, `gate fast: PASS in <N>s`, here.
       Platform and Rust version used:
 - [ ] No credential, token, real transcript or trace is in this PR, its commits, or its description.
-      Nothing under `target/` is committed.
+      Nothing under `target/`, `/pad-out/` or `/harnesses/` is committed.
 - [ ] The change sets no model base URL and writes no app-wide config (`~/.claude`, `~/.codex`,
       `~/.hermes`); tests that launch a harness use a private HOME.
 

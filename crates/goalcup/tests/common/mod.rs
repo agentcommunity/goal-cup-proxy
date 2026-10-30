@@ -7,7 +7,7 @@
 //! - [`pki`]: a test CA and leaf certificates.
 //! - [`records`]: a part folder built from a list of records.
 //! - [`upstream`], [`worker`]: the fake upstream and the fake Worker (stubs until slice 2).
-//! - [`recorder`]: helpers over `Recorder::for_tests`.
+//! - [`recorder`]: helpers over the calls `Recorder::for_tests` collects.
 
 #![allow(dead_code)]
 
@@ -52,11 +52,6 @@ pub async fn within_async<F: Future>(bound: Duration, fut: F) -> F::Output {
     tokio::time::timeout(bound, fut)
         .await
         .unwrap_or_else(|_| panic!("hang: still waiting after {bound:?} (a hang bound)"))
-}
-
-/// A temporary directory, removed when dropped.
-pub fn tempdir() -> tempfile::TempDir {
-    tempfile::tempdir().expect("create a temporary directory")
 }
 
 /// The `goalcup` binary cargo built for these tests (with `test-hooks`).

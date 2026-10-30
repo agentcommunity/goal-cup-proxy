@@ -15,7 +15,7 @@ pub struct TempHome {
 
 impl TempHome {
     pub fn new() -> TempHome {
-        let dir = super::tempdir();
+        let dir = tempfile::tempdir().expect("create a temporary directory");
         std::fs::create_dir_all(dir.path().join(".goalcup")).expect("create GOALCUP_HOME");
         TempHome { dir }
     }
