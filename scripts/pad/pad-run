@@ -6,7 +6,8 @@ usage error. Known values (keys, plants, the remote password) never leave the bo
 before a file gets them and the scans run here. No key or planted value is ever printed, logged or an
 argument. Python 3.11 standard library only.
 """
-import base64, datetime, glob, json, os, re, secrets, shlex, shutil, signal, subprocess, sys, tarfile, time, urllib.parse  # noqa: E401
+import base64, datetime, glob, json, os, re, secrets, shlex, shutil, signal, subprocess, sys, tarfile, threading, time  # noqa: E401
+import urllib.parse
 
 PAD = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, PAD)
@@ -507,7 +508,7 @@ class Run:
         the seal (and final upload) after one last pane, or the box's end. Panes only while the known file lives."""
         write(self.path("watch.pid"), str(os.getpid()), 0o644)
         self.st.update(panes=0, screen_known=0)  # the watch's own pane-w<n> files and count, in watch.json
-        stop, due, last = self.st["pasted"] + float(self.s["minutes"]) * 60 + 1800, {"live": time.time() + 300}, False
+        stop, due, last, live = self.st["pasted"] + float(self.s["minutes"]) * 60 + 1800, {"live": time.time() + 300}, False, None
         while not (last or os.path.exists(self.path("watch.stop")) or time.time() > stop):
             st, now, e = self.status(), time.time(), self.st.get("entry_dir") or self.run
             up = loads(path=os.path.join(e, "upload.json"))
@@ -527,9 +528,9 @@ class Run:
                 write(self.path("watch", "watch.json"), json.dumps({k: self.st[k] for k in ("panes", "screen_known")}), 0o644)
                 if self.s.get("server") != "off":
                     append(self.path("watch", "upload.jsonl"), {"upload": up})
-            if "live" in go and tool("goalcup-verify") and self.st.get("entry_dir"):  # under nice -n 19, within look's limit
-                self.end = now + float((self.s.get("limits") or {}).get("look", 60))
-                self.look_line()
+            if "live" in go and tool("goalcup-verify") and self.st.get("entry_dir") and not (live and live.is_alive()):
+                self.end = now + float((self.s.get("limits") or {}).get("look", 60))  # beside the loop, so no status line waits
+                (live := threading.Thread(target=self.look_line, daemon=True)).start()
             time.sleep(1)
         return "ok", "stopped"
 
