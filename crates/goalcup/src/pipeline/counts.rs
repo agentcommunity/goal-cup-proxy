@@ -311,7 +311,7 @@ impl Counter {
     }
 
     /// The COUNT event (PRD-01 section 9): every key, over the records written before it in this
-    /// boot. `held_bytes` is the gauge now; `held_peak` the boot's peak, from `Recorder::live()`.
+    /// boot. `held_bytes` is the gauge now; `held_peak` the boot's peak, from the recorder.
     pub fn count_event(&self, boot: u64, up_ms: u64, held_bytes: u64, held_peak: u64) -> Value {
         let mut v = serde_json::to_value(&self.counts).unwrap_or(Value::Null);
         if let Value::Object(m) = &mut v {

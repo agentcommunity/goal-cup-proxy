@@ -113,11 +113,9 @@ pub struct Live {
     pub boot: u64,
     /// Bytes offered and not yet written, plus reservations. Each queued item also counts its
     /// cost in memory: 128 per DATA piece, 256 plus its JSON per control item (`Item::held`).
+    /// The boot's peak and the soft guard are not here: the status thread reads them from the
+    /// recorder, so this shape stays the one PRD-06 builds.
     pub held_bytes: u64,
-    /// The most bytes held at once this boot.
-    pub held_peak: u64,
-    /// The soft guard in bytes.
-    pub guard: u64,
     /// While records wait: awake time since the later of the writer's last write and the moment
     /// records began to wait. 0 while none wait; a reservation is never a record waiting.
     pub writer_idle_ms: u64,
@@ -250,9 +248,9 @@ pub fn mode(live: &Live, sealed: bool) -> Mode {
 }
 
 /// The stall exit (PRD-02 section 3): records wait and nothing was written for 60 s of awake time
-/// (a suspend is not a stall), or held bytes reached twice the soft guard.
-pub fn stalled(live: &Live) -> bool {
-    live.writer_idle_ms >= 60_000 || live.held_bytes >= live.guard.saturating_mul(2)
+/// (a suspend is not a stall), or held bytes reached twice the soft guard `guard`.
+pub fn stalled(live: &Live, guard: u64) -> bool {
+    live.writer_idle_ms >= 60_000 || live.held_bytes >= guard.saturating_mul(2)
 }
 
 /// The facts `status.json` carries that the live atomics do not, as a `Status` the status thread
@@ -325,8 +323,9 @@ impl Board {
 
     /// These facts with the live atomics, this entry's written counts and the durable point over
     /// them. In `mode: sealed`, `written` and `off` stay the seal's totals. `held_peak` is the
-    /// larger of the live peak and the written one, so a stuck writer never freezes it.
-    pub fn status(&self, live: &Live, counts: Counts, durable: DurableStatus) -> Status {
+    /// larger of the boot's live peak `held_peak` and the written one, so a stuck writer never
+    /// freezes it.
+    pub fn status(&self, live: &Live, held_peak: u64, counts: Counts, durable: DurableStatus) -> Status {
         let f = self.facts();
         let mut s = f.status.clone();
         let sealed = s.seal.is_some();
@@ -347,8 +346,7 @@ impl Board {
         s.mode = mode(live, sealed);
         s.losing = live.losing;
         s.held_bytes = live.held_bytes;
-        s.held_peak = live.held_peak.max(s.written.counts.held_peak);
-        s.guard = live.guard;
+        s.held_peak = held_peak.max(s.written.counts.held_peak);
         s.writer_idle_ms = live.writer_idle_ms;
         s.durable = durable;
         s
@@ -366,6 +364,8 @@ pub fn spawn(rec: Recorder, entry_dir: PathBuf, board: Board) -> JoinHandle<()> 
         .spawn(move || {
             let _exit = ExitOnPanic;
             let durable = rec.durable();
+            let guard = rec.inner.guard;
+            board.set(|s| s.guard = guard);
             while !board.stopped() {
                 let live = rec.live();
                 let d = durable
@@ -377,8 +377,9 @@ pub fn spawn(rec: Recorder, entry_dir: PathBuf, board: Board) -> JoinHandle<()> 
                         raw_end: p.line.raw_end,
                     })
                     .unwrap_or_default();
-                let _ = board.status(&live, rec.counts(), d).write(&entry_dir);
-                if stalled(&live) {
+                let peak = rec.inner.held_peak.load(Ordering::Relaxed);
+                let _ = board.status(&live, peak, rec.counts(), d).write(&entry_dir);
+                if stalled(&live, guard) {
                     secure::exit(EXIT_WRITER_STALLED, "writer_stalled");
                 }
                 std::thread::sleep(Duration::from_secs(1));
@@ -405,15 +406,17 @@ mod tests {
     #[test]
     fn stall_exit_at_its_two_marks() {
         let guard = 512 << 20;
-        let live = |held_bytes, writer_idle_ms| Live {
-            held_bytes,
-            guard,
-            writer_idle_ms,
-            ..Live::default()
+        let stalled = |held_bytes, writer_idle_ms| {
+            let live = Live {
+                held_bytes,
+                writer_idle_ms,
+                ..Live::default()
+            };
+            stalled(&live, guard)
         };
-        assert!(!stalled(&live(1, 59_999)));
-        assert!(stalled(&live(1, 60_000)));
-        assert!(!stalled(&live(2 * guard - 1, 0)));
-        assert!(stalled(&live(2 * guard, 0)));
+        assert!(!stalled(1, 59_999));
+        assert!(stalled(1, 60_000));
+        assert!(!stalled(2 * guard - 1, 0));
+        assert!(stalled(2 * guard, 0));
     }
 }

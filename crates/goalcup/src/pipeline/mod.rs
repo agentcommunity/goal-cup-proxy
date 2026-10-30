@@ -255,8 +255,6 @@ impl Recorder {
         Live {
             boot: i.boot.load(Ordering::Relaxed),
             held_bytes: i.held.load(Ordering::Relaxed),
-            held_peak: i.held_peak.load(Ordering::Relaxed),
-            guard: i.guard,
             writer_idle_ms,
             losing: Losing {
                 streams_in_gap: i.streams_in_gap.load(Ordering::Relaxed),
@@ -561,7 +559,7 @@ mod tests {
     #[test]
     fn the_stall_exit_needs_a_record_waiting_with_no_write() {
         let (rec, rx) = Recorder::pipeline(guard::CEILING);
-        let stalled = |at: u64| status::stalled(&rec.live_at(at));
+        let stalled = |at: u64| status::stalled(&rec.live_at(at), rec.inner.guard);
         // The last write was long ago.
         rec.inner.writer_last_ns.store(0, Ordering::Relaxed);
 
@@ -589,7 +587,7 @@ mod tests {
     #[test]
     fn a_candidate_held_by_the_mask_worker_is_not_a_stall() {
         let (rec, rx) = Recorder::pipeline(1 << 20);
-        let stalled = |at: u64| status::stalled(&rec.live_at(at));
+        let stalled = |at: u64| status::stalled(&rec.live_at(at), rec.inner.guard);
         rec.inner.writer_last_ns.store(0, Ordering::Relaxed);
         let mut h = rec.open(StreamKind::HttpResp, 0, 0, 0, OpenFlags::NONE, json!({}));
         h.data(
