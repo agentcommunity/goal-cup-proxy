@@ -12,7 +12,7 @@ use std::io::{self, Write};
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
@@ -274,20 +274,16 @@ struct Facts {
 const LAST_NOTES: usize = 20;
 
 impl Board {
-    fn facts(&self) -> MutexGuard<'_, Facts> {
-        self.0.lock().unwrap_or_else(|e| e.into_inner())
-    }
-
     /// Sets facts the live atomics do not hold: `pid`, `start_id`, `port`, `deadline`, `harness`,
     /// `last_request_at`, `last_native_at`, `sealing`, `after_seal`, `cut_files`, `outlived`.
     /// The live fields are overwritten at each write.
     pub fn set(&self, f: impl FnOnce(&mut Status)) {
-        f(&mut self.facts().status);
+        f(&mut super::lock(&self.0).status);
     }
 
     /// A `note` event as written.
     pub fn note(&self, note: Value) {
-        let mut f = self.facts();
+        let mut f = super::lock(&self.0);
         let n = f.notes_seen;
         f.notes_seen += 1;
         let what = &note["what"];
@@ -302,7 +298,7 @@ impl Board {
 
     /// The seal: from now on `mode` is sealed and `written` and `off` are the seal's totals.
     pub fn sealed(&self, seal: SealStatus, totals: &EntryTotals) {
-        let s = &mut self.facts().status;
+        let s = &mut super::lock(&self.0).status;
         s.seal = Some(seal);
         s.written = Written::new(totals.counts.clone());
         s.off = Off {
@@ -314,11 +310,11 @@ impl Board {
 
     /// Stops the status thread after its current write.
     pub fn stop(&self) {
-        self.facts().stop = true;
+        super::lock(&self.0).stop = true;
     }
 
     fn stopped(&self) -> bool {
-        self.facts().stop
+        super::lock(&self.0).stop
     }
 
     /// These facts with the live atomics, this entry's written counts and the durable point over
@@ -332,7 +328,7 @@ impl Board {
         counts: Counts,
         durable: DurableStatus,
     ) -> Status {
-        let f = self.facts();
+        let f = super::lock(&self.0);
         let mut s = f.status.clone();
         let sealed = s.seal.is_some();
         if !sealed {

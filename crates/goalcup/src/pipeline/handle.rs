@@ -1,16 +1,15 @@
 //! `StreamHandle` (seam S1): one stream's calls. The handle owns the stream's offset and runs the
-//! gap rule (PRD-02 section 3); an open guard gap is also kept in the recorder's `open_gaps`, so
+//! gap rule (PRD-02 section 3); an open guard gap lives in the recorder's `open_gaps`, so
 //! the seal can close one whose handle is never called again.
 
 #[cfg(feature = "test-hooks")]
 use super::Call;
 use super::item::{self, Item, Ws};
-use super::{GuardGap, Mono, Recorder, Sid, fds, guard};
+use super::{Mono, Recorder, Sid, fds, guard};
 use bytes::Bytes;
 use goalcup_format::{EndReason, GapReason, StreamKind};
 use serde_json::Value;
 use std::ops::BitOr;
-use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
 /// The largest DATA piece (PRD-01 section 3): bigger offers are split, with no copy, after the
@@ -58,8 +57,8 @@ pub struct StreamHandle {
     /// Its OPEN was sent: false for a stream opened after a stop, which sends nothing.
     opened: bool,
     off: u64,
-    /// The guard gap open on this stream, if any; also in the recorder's `open_gaps`.
-    gap: Option<Arc<GuardGap>>,
+    /// A guard gap is open on this stream; it lives in the recorder's `open_gaps`.
+    in_gap: bool,
     ended: bool,
 }
 
@@ -84,7 +83,7 @@ impl StreamHandle {
             conn,
             opened: true,
             off: from,
-            gap: None,
+            in_gap: false,
             ended: false,
         };
         h.opened = !h.stopped();
@@ -204,7 +203,7 @@ impl StreamHandle {
             // Only a message end has anything to say with no bytes.
             return;
         }
-        let (soft, in_gap, always) = (rec.inner.guard, self.gap.is_some(), !self.wire || n == 0);
+        let (soft, in_gap, always) = (rec.inner.guard, self.in_gap, !self.wire || n == 0);
         // What the pieces below count in `held` together, so the hold and their `Item::held` match.
         let pieces = bytes.len().div_ceil(MAX_PIECE).max(1) as u64;
         let held = n + pieces * item::DATA_ITEM_HELD;
@@ -212,7 +211,7 @@ impl StreamHandle {
             || rec.hold(held, |h| always || guard::admits(h, held, in_gap, soft));
         if !admitted {
             // After a full stop that raced this offer the bytes only count, as above.
-            if rec.guard_drop(self.sid, &mut self.gap, t, self.off, n) {
+            if rec.guard_drop(self.sid, &mut self.in_gap, t, self.off, n) {
                 self.off += n;
             }
             return;
@@ -243,7 +242,7 @@ impl StreamHandle {
 
     /// Sends the open guard gap, if the seal has not taken it, ending at `end`.
     fn close_gap(&mut self, end: Mono) {
-        if self.gap.take().is_some() {
+        if std::mem::take(&mut self.in_gap) {
             self.rec.close_gap(self.sid, end);
         }
     }
@@ -359,18 +358,18 @@ mod tests {
         // Drain and offer again until every stream has recovered.
         let mut items = drain(&rec, &rx);
         for _ in 0..1000 {
-            if handles.iter().all(|h| h.gap.is_none()) {
+            if handles.iter().all(|h| !h.in_gap) {
                 break;
             }
             for (h, n) in handles.iter_mut().zip(offered.iter_mut()) {
-                if h.gap.is_some() {
+                if h.in_gap {
                     h.data(rec.now(), payload.clone());
                     *n += PIECE as u64;
                 }
             }
             items.extend(drain(&rec, &rx));
         }
-        assert!(handles.iter().all(|h| h.gap.is_none()));
+        assert!(handles.iter().all(|h| !h.in_gap));
         assert_eq!(rec.live().losing.streams_in_gap, 0);
         for h in handles {
             let t = rec.now();

@@ -78,7 +78,7 @@ struct Inner {
     streams_in_gap: AtomicU64,
     /// The guard gap open on each stream that is in one (PRD-02 section 3), so the seal can close
     /// a gap whose handle is never called again. Taken at each guard drop and when a gap closes.
-    open_gaps: Mutex<HashMap<Sid, Arc<GuardGap>>>,
+    open_gaps: Mutex<HashMap<Sid, GuardGap>>,
     /// Awake time of the writer's last write. The awake clock stops during sleep, so a suspend
     /// is never a stall.
     writer_last_ns: AtomicU64,
@@ -322,18 +322,11 @@ impl Recorder {
     }
 
     /// The guard dropped `n` bytes of stream `sid` at offset `off`: they go into its open guard
-    /// gap `gap`, or open one starting at `t`. Under the `open_gaps` lock the full stop is checked
+    /// gap, or open one starting at `t`. Under the `open_gaps` lock the full stop is checked
     /// again, and `close_open_gaps` drains that map under the same lock after the stop, so the
     /// bytes land in a GAP the seal or the handle sends, or else in the `after_stop` count, never
     /// in neither. False when they went to the `after_stop` count.
-    pub(crate) fn guard_drop(
-        &self,
-        sid: Sid,
-        gap: &mut Option<Arc<GuardGap>>,
-        t: Mono,
-        off: u64,
-        n: u64,
-    ) -> bool {
+    pub(crate) fn guard_drop(&self, sid: Sid, in_gap: &mut bool, t: Mono, off: u64, n: u64) -> bool {
         let i = &self.inner;
         let mut open = lock(&i.open_gaps);
         if i.all_stopped.load(Ordering::Acquire) {
@@ -341,22 +334,12 @@ impl Recorder {
             self.count_after_stop(n);
             return false;
         }
-        match gap {
-            Some(g) => {
-                g.lost.fetch_add(n, Ordering::Relaxed);
-            }
-            None => {
-                let g = Arc::new(GuardGap {
-                    start: t,
-                    off,
-                    lost: AtomicU64::new(n),
-                });
-                open.insert(sid, g.clone());
-                i.streams_in_gap.fetch_add(1, Ordering::Relaxed);
-                *gap = Some(g);
-            }
-        }
+        open.entry(sid).and_modify(|g| g.lost += n).or_insert_with(|| {
+            i.streams_in_gap.fetch_add(1, Ordering::Relaxed);
+            GuardGap { start: t, off, lost: n }
+        });
         drop(open);
+        *in_gap = true;
         i.dropped_bytes.fetch_add(n, Ordering::Relaxed);
         true
     }
@@ -378,21 +361,21 @@ impl Recorder {
             start: gap.start,
             end: end.max(Mono(gap.start.ns() + 1)),
             off: gap.off,
-            lost: Some(gap.lost.load(Ordering::Relaxed)),
+            lost: Some(gap.lost),
             tail: Some(json!({"guard": "held_bytes", "limit": self.inner.guard})),
         });
         sub(&self.inner.streams_in_gap, 1);
     }
 }
 
-/// Bytes the guard dropped on one stream since its last admitted piece. Shared by the handle
-/// and `open_gaps`; only the handle adds to `lost`, under the `open_gaps` lock.
-pub(crate) struct GuardGap {
+/// Bytes the guard dropped on one stream since its last admitted piece. Lives only in
+/// `open_gaps`, changed under its lock.
+struct GuardGap {
     /// The first dropped piece's time.
-    pub(crate) start: Mono,
+    start: Mono,
     /// The offset of its first byte.
-    pub(crate) off: u64,
-    pub(crate) lost: AtomicU64,
+    off: u64,
+    lost: u64,
 }
 
 /// `a -= n`, never below 0: the one rule for taking off a counter.
