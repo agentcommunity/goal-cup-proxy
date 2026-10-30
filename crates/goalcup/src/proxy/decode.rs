@@ -426,7 +426,9 @@ fn gzip_header_len(h: &[u8]) -> Result<Option<usize>, Halt> {
     }
     for flag in [0x08, 0x10] {
         if flags & flag != 0 {
-            let Some(zero) = h.get(pos..).and_then(|rest| rest.iter().position(|&b| b == 0))
+            let Some(zero) = h
+                .get(pos..)
+                .and_then(|rest| rest.iter().position(|&b| b == 0))
             else {
                 return Ok(None);
             };
@@ -481,7 +483,12 @@ impl Deflate {
         self.inflate(input, g, emit)
     }
 
-    fn inflate(&mut self, mut input: &[u8], g: &mut Guard, emit: &mut Emit<'_>) -> Result<(), Halt> {
+    fn inflate(
+        &mut self,
+        mut input: &[u8],
+        g: &mut Guard,
+        emit: &mut Emit<'_>,
+    ) -> Result<(), Halt> {
         if self.ended {
             return if input.is_empty() {
                 Ok(())

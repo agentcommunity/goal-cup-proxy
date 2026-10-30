@@ -45,7 +45,10 @@ fn assert_plain(codings: &[&str], wire: &[u8], plain: &[u8]) {
     let (_, step, pieces) = decode(codings, wire, LARGE_ROOM);
     assert_eq!(step, Step::Ok, "{codings:?}");
     assert!(pieces.iter().all(|p| p.len() <= PIECE), "{codings:?}");
-    assert!(pieces.concat() == plain, "{codings:?} decodes to the plaintext");
+    assert!(
+        pieces.concat() == plain,
+        "{codings:?} decodes to the plaintext"
+    );
 }
 
 fn gzip(data: &[u8]) -> Vec<u8> {
