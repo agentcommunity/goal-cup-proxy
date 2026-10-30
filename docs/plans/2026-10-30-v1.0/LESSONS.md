@@ -7,11 +7,17 @@ lessons lane (PRD-17); read by the deletion gate (PRD-17 Acceptance, checks 1 to
 - **Ids.** `L-<id>` here (`L-H2`); `PRD-17 <id>` everywhere else. The ledger and other PRDs reuse
   letters such as H2 with other meanings.
 - **Guard codes.** `A:` an automated test, as `file::test` or as a test file name (Rust under
-  `crates/goalcup/tests/`, or a Worker test under `server/worker/test/`). `R:` a real-run check: a pad
-  row (PRD-12) or RR1 to RR6 below. `D:` a data or docs file plus the key or section. `X:` the owner
-  decision or PRD that dropped or inverted the case. Entries are separated by `; `, and no entry holds
-  a `;` of its own; the owner PRD of a test stands in parentheses after it. `see L-<id>` reuses that
-  row's guard. `(name pending)` is the one pending marker: a case PRD-17 asked its owner to name in the
+  `crates/*/tests/`, such as `recovery.rs` in `crates/goalcup-format/tests/`, or a Worker test under
+  `server/worker/test/`). `R:` a real-run check: a pad row (PRD-12) or RR1 to RR6 below. `D:` a data
+  or docs file plus the key or section. `X:` the owner decision or PRD that dropped or inverted the
+  case. Entries are separated by `; `, and no entry holds a `;` of its own. `see L-<id>` reuses that
+  row's guard.
+- **One name form.** A `file::test` entry is written without `.rs`
+  (`recovery::a_sealed_entry_takes_nothing_more`); a file-level entry keeps its extension
+  (`recovery.rs (PRD-01)`, `server/worker/test/device.test.ts (PRD-07)`). The owner PRD of a test
+  stands in parentheses after it. Parentheses hold only that owner PRD, plus a short qualifier where
+  one already stands (`full tier`, `the reset rule`), never a test title; exact titles go in the
+  night log. `(name pending)` is the one pending marker: a case PRD-17 asked its owner to name in the
   night log.
 - **Status.** `open` (not yet shown), `green` (every `A:` guard passes on integration in a build box),
   `real-run pass` (every `R:` guard shown in a pad run), `dropped: <decision>`. Every row starts `open`;
@@ -130,16 +136,16 @@ lessons lane (PRD-17); read by the deletion gate (PRD-17 Acceptance, checks 1 to
 | L-F6 | 2.9 | A: native_snapshot.rs (PRD-04); A: native_room.rs (PRD-04) | PRD-04 | open | - |
 | L-F7 | 2.9 | R: PRD-04 acceptance 2 | PRD-04 | open | - |
 | L-F8 | 2.9 | X: PRD-11; R: PRD-12 P3 Hermes full row | PRD-11 | open | - |
-| L-S1 | 2.10 | A: server/worker/test/integration.test.ts (PRD-07, kept case "a retry of the same chunk is 200 with the very same stored ack"); A: upload_resume.rs (PRD-06) | PRD-06, PRD-07 | open | - |
-| L-S2 | 2.10 | A: server/worker/test/integration.test.ts (PRD-07, kept case "a body that does not match Goalcup-Sha256 is 422, nothing is committed, and the right body then succeeds") | PRD-07 | open | - |
-| L-S3 | 2.10 | A: server/worker/test/integration.test.ts (PRD-07, kept case "a chunk past the deadline with no final heartbeat is 503 with Retry-After, and nothing is stored") | PRD-07 | open | - |
+| L-S1 | 2.10 | A: server/worker/test/integration.test.ts (PRD-07); A: upload_resume.rs (PRD-06) | PRD-06, PRD-07 | open | - |
+| L-S2 | 2.10 | A: server/worker/test/integration.test.ts (PRD-07) | PRD-07 | green | b474329d |
+| L-S3 | 2.10 | A: server/worker/test/integration.test.ts (PRD-07) | PRD-07 | green | b474329d |
 | L-S4 | 2.10 | A: upload_beat.rs (PRD-06) | PRD-06 | open | - |
 | L-S5 | 2.10 | A: upload_resume.rs (PRD-06) | PRD-06 | open | - |
 | L-S6 | 2.10 | R: PRD-06 U3 | PRD-06 | open | - |
-| L-S7 | 2.10 | A: upload_beat.rs::clock_set_back_does_not_lengthen_a_segment (PRD-06); A: cli_start.rs (PRD-10) | PRD-06, PRD-10 | open | - |
+| L-S7 | 2.10 | A: upload_beat::clock_set_back_does_not_lengthen_a_segment (PRD-06); A: cli_start.rs (PRD-10) | PRD-06, PRD-10 | open | - |
 | L-S8 | 2.10 | R: PRD-06 U2; R: PRD-06 U5 | PRD-06 | open | - |
 | L-S9 | 2.10 | R: PRD-06 U3 | PRD-06 | open | - |
-| L-S10 | 2.10 | A: server/worker/test/device.test.ts (PRD-07, repeat open with the same session_id returns the same run); A: server/worker/test/lifecycle.test.ts (PRD-07, a lost-reply repeat of the open is the same run, also after continue) | PRD-07 | open | - |
+| L-S10 | 2.10 | A: server/worker/test/device.test.ts (PRD-07); A: server/worker/test/lifecycle.test.ts (PRD-07) | PRD-07 | green | b474329d |
 | L-R1 | 2.11 | A: pipeline_no_latch.rs (PRD-02) | PRD-02 | open | - |
 | L-R2 | 2.11 | A: pipeline_guard.rs (PRD-02); A: pipeline_stall.rs (PRD-02) | PRD-02 | open | - |
 | L-R3 | 2.11 | A: check_invariants.rs (PRD-08, invariant 12 gap_has_end); A: proxy_http1.rs (PRD-03, fault case); A: see L-H2, L-H9, L-W2, L-W7, L-W10 | PRD-08, PRD-03 | open | - |
@@ -151,8 +157,8 @@ lessons lane (PRD-17); read by the deletion gate (PRD-17 Acceptance, checks 1 to
 | L-HF1 | 2.12 | R: PRD-11 acceptance 5; R: RR3 | PRD-11 | open | - |
 | L-HF2 | 2.12 | R: RR6 | PRD-11 | open | - |
 | L-HF3 | 2.12 | D: connectors/hermes-cli.toml before, after; A: watchdog_end.rs (PRD-02) | PRD-11, PRD-02 | open | - |
-| L-HF4 | 2.12 | A: cli_commands.rs::second_start_on_one_home_refuses (PRD-10) | PRD-10 | open | - |
-| L-HF5 | 2.12 | A: connector_launch.rs::codex_gets_no_dash_c_override (PRD-11); D: connectors/codex-cli.toml args | PRD-11 | open | - |
+| L-HF4 | 2.12 | A: cli_commands::second_start_on_one_home_refuses (PRD-10) | PRD-10 | open | - |
+| L-HF5 | 2.12 | A: connector_launch::codex_gets_no_dash_c_override (PRD-11); D: connectors/codex-cli.toml args | PRD-11 | open | - |
 | L-HF6 | 2.12 | A: cli_continue.rs (PRD-10); D: docs/plans/2026-10-30-v1.0/PRD-10-cli-participant.md section 3.1 step 3 | PRD-10 | open | - |
 | L-HF7 | 2.12 | R: PRD-12 pass rule | PRD-12 | open | - |
 | L-HF8 | 2.12 | A: connector_hosts.rs (PRD-11) | PRD-11 | open | - |
@@ -162,13 +168,13 @@ lessons lane (PRD-17); read by the deletion gate (PRD-17 Acceptance, checks 1 to
 | L-G4 | 2.13 | R: PRD-12 gateway case config | PRD-12 | open | - |
 | L-G5 | 2.13 | R: PRD-12 pad boxes (--non-persistent, tmux) | PRD-12 | open | - |
 | L-FW1 | 2.14 | A: pipeline_guard.rs (PRD-02) | PRD-02 | open | - |
-| L-FW2 | 2.14 | A: recovery.rs::a_part_file_cut_at_any_byte_recovers_to_its_last_index_line (PRD-01) | PRD-01 | green | f5b0a6a2 |
+| L-FW2 | 2.14 | A: recovery::a_part_file_cut_at_any_byte_recovers_to_its_last_index_line (PRD-01) | PRD-01 | green | f5b0a6a2 |
 | L-FW3 | 2.14 | A: server_compare.rs (PRD-08); A: PRD-08 pruned local parts case (name pending) | PRD-08 | open | - |
 | L-FW4 | 2.14 | A: check_invariants.rs (PRD-08) | PRD-08 | open | - |
-| L-FW5 | 2.14 | A: recovery.rs::a_boot_with_no_index_line_is_deleted_and_an_r_closed_part_file_takes_a_second_frame (PRD-01); A: recovery.rs::a_sealed_entry_takes_nothing_more (PRD-01) | PRD-01 | green | f5b0a6a2 |
+| L-FW5 | 2.14 | A: recovery::a_part_file_cut_at_any_byte_recovers_to_its_last_index_line (PRD-01); A: recovery::a_boot_with_no_index_line_is_deleted_and_an_r_closed_part_file_takes_a_second_frame (PRD-01); A: recovery::a_sealed_entry_takes_nothing_more (PRD-01) | PRD-01 | green | f5b0a6a2 |
 | L-FW6 | 2.14 | A: pipeline_seal.rs (PRD-02); A: check_invariants.rs (PRD-08) | PRD-02, PRD-08 | open | - |
 | L-FW7 | 2.14 | A: check_invariants.rs (PRD-08); A: recovery.rs (PRD-01) | PRD-01, PRD-08 | open | - |
-| L-FW8 | 2.14 | A: recovery.rs::a_part_file_cut_at_any_byte_recovers_to_its_last_index_line (PRD-01); R: RR4 | PRD-01 | green | f5b0a6a2 |
+| L-FW8 | 2.14 | A: recovery::a_part_file_cut_at_any_byte_recovers_to_its_last_index_line (PRD-01); R: RR4 | PRD-01 | green | f5b0a6a2 |
 | L-FW9 | 2.14 | A: server_compare.rs (PRD-08) | PRD-08 | open | - |
 | L-VR1 | 2.15 | A: check_invariants.rs (PRD-08) | PRD-08 | open | - |
 | L-VR2 | 2.15 | A: PRD-08 and PRD-09 panic-in-check case (name pending) | PRD-08, PRD-09 | open | - |
