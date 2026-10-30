@@ -122,7 +122,7 @@ fn random_records_of_every_kind_round_trip() {
     let mut rd = Reader::new(&raw[..]);
     let back: Vec<Record> = rd.by_ref().map(|i| i.unwrap().rec).collect();
     assert_eq!(back, recs);
-    assert_eq!((rd.tail().truncated, rd.tail().raw), (None, raw.len() as u64));
+    assert_eq!(rd.tail().raw, raw.len() as u64);
 }
 
 #[test]

@@ -146,7 +146,7 @@ fn read_entry(d: &Path) -> Vec<Item> {
     for p in part_files(d).unwrap() {
         let mut rd = decode(fs::File::open(&p).unwrap()).unwrap();
         assert!(rd.by_ref().all(|i| i.unwrap().link_ok != Some(false)));
-        assert_eq!((rd.tail().open_frame, rd.tail().truncated), (false, None), "{p:?} alone");
+        assert_eq!((rd.tail().open_frame, rd.tail().truncated), (false, None));
     }
     items
 }
