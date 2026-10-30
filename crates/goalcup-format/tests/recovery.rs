@@ -404,7 +404,9 @@ fn a_sealed_entry_takes_nothing_more() {
             let count_at = |seq: u64| counts[&seq].clone();
             let mut r = rc(c.now(), &count_at);
             r.seal = Some(seal.to_vec());
-            PartWriter::recover(&d, PartOptions::default(), r).unwrap().line
+            PartWriter::recover(&d, PartOptions::default(), r)
+                .unwrap()
+                .line
         } else {
             w.write(&ev).unwrap();
             Some(w.seal(c.now()).unwrap().line)
