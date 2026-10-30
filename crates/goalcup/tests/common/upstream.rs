@@ -1,10 +1,10 @@
 //! The fake upstream (PRD-14 section 5): TLS with a chosen ALPN or plain TCP, HTTP/1.1 (whole,
-//! chunked, SSE, a content coding) and WebSocket with permessage-deflate, from a script. It records
-//! every byte it receives as the bytes arrive, so a test can read them while a connection is open.
+//! chunked, SSE, a content coding), HTTP/2 over the `h2` crate when TLS chose `h2`, and WebSocket
+//! with permessage-deflate, from a script. It records what it receives as it arrives, so a test
+//! can read it while a connection is open.
 //!
 //! One tokio runtime on its own thread serves a held port; dropping the [`Upstream`] stops it on
-//! that thread, so a `#[tokio::test]` may drop it. HTTP/2 over the `h2` crate comes in PRD-14
-//! slice 3: today a connection whose TLS chose `h2` panics its task with a clear line.
+//! that thread, so a `#[tokio::test]` may drop it.
 
 use super::pki::{self, TestPki};
 use super::ports;
@@ -13,12 +13,12 @@ use flate2::{Compression, write::DeflateEncoder};
 use sha1::{Digest, Sha1};
 use std::io::{self, Read as _, Write as _};
 use std::net::SocketAddr;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering::SeqCst};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread::JoinHandle;
 use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
-use tokio::sync::oneshot;
+use tokio::sync::{Notify, oneshot};
 
 /// TLS or not, and the ALPN protocols offered (`pki::HTTP11`, `pki::H2`).
 #[derive(Clone, Debug)]
@@ -76,7 +76,7 @@ pub enum Answer {
     },
     /// `101`, then these messages, compressed with permessage-deflate when `deflate` and the
     /// client offered it (context takeover kept both ways). The upstream then reads the client's
-    /// frames until the client closes, and answers a client Close with a Close.
+    /// frames until the client closes, and answers a client Close with a Close. Over HTTP/2: 501.
     Ws { deflate: bool, messages: Vec<WsMsg> },
 }
 
@@ -91,8 +91,9 @@ pub struct Script {
     /// Hold each answer this long after its request arrived.
     pub hold_answer: Option<Duration>,
     /// Close the connection once this many answer bytes are sent on it, counting from its first
-    /// answer byte. The close is clean (a FIN, and over TLS a `close_notify`), not a reset, so a
-    /// test of an upstream dying mid-body relies on the cut `Content-Length` or chunked framing.
+    /// answer byte (DATA bytes on HTTP/2, then a GOAWAY). The close is clean (a FIN, and over TLS
+    /// a `close_notify`), not a reset, so a test of an upstream dying mid-body relies on the cut
+    /// `Content-Length` or chunked framing (or on HTTP/2, the missing end of the stream).
     pub close_after: Option<u64>,
 }
 
@@ -187,6 +188,7 @@ impl Upstream {
     }
 
     /// What each connection so far sent the upstream, as raw bytes after TLS, in accept order.
+    /// Over HTTP/2, per request: its (pseudo-)headers as `name: value` lines, a blank line, a body.
     pub fn received(&self) -> Vec<Vec<u8>> {
         lock(&self.received).clone()
     }
@@ -212,7 +214,7 @@ struct Shared {
 
 impl Shared {
     fn next_answer(&self) -> &Answer {
-        let i = self.next.fetch_add(1, Ordering::SeqCst);
+        let i = self.next.fetch_add(1, SeqCst);
         &self.script.answers[i.min(self.script.answers.len() - 1)]
     }
 }
@@ -267,7 +269,8 @@ async fn connection(shared: Arc<Shared>, tcp: tokio::net::TcpStream, conn: usize
                 return;
             };
             if tls.get_ref().1.alpn_protocol() == Some(pki::H2) {
-                panic!("fake upstream: the connection chose h2; HTTP/2 comes in PRD-14 slice 3");
+                let _ = http2(shared.clone(), tls, conn).await;
+                return;
             }
             Box::new(tls)
         }
@@ -417,18 +420,7 @@ impl Conn {
         body: &Body,
         coding: Option<Coding>,
     ) -> io::Result<()> {
-        let pieces = match body {
-            Body::Whole(b) => vec![b.clone()],
-            Body::Chunked(p) | Body::Sse(p) => p.clone(),
-        };
-        let pieces = match coding {
-            None => pieces,
-            Some(c) => {
-                let coded = encode(c, &pieces.concat());
-                let size = coded.len().div_ceil(pieces.len().max(1)).max(1);
-                coded.chunks(size).map(<[u8]>::to_vec).collect()
-            }
-        };
+        let pieces = coded(body, coding);
         let reason = if status == 200 { "OK" } else { "Answer" };
         let mut head = format!("HTTP/1.1 {status} {reason}\r\n");
         for (k, v) in headers {
@@ -436,8 +428,7 @@ impl Conn {
         }
         if let Some(c) = coding {
             // The Debug names are the tokens in lower case: gzip, deflate, br, zstd.
-            let name = format!("{c:?}").to_lowercase();
-            head += &format!("content-encoding: {name}\r\n");
+            head += &format!("content-encoding: {}\r\n", format!("{c:?}").to_lowercase());
         }
         if let Body::Whole(_) = body {
             let len: usize = pieces.iter().map(Vec::len).sum();
@@ -528,6 +519,112 @@ impl Conn {
             }
         }
     }
+}
+
+/// The body's pieces, compressed with `coding` and split again as [`Coding`] says.
+fn coded(body: &Body, coding: Option<Coding>) -> Vec<Vec<u8>> {
+    let pieces = match body {
+        Body::Whole(b) => vec![b.clone()],
+        Body::Chunked(p) | Body::Sse(p) => p.clone(),
+    };
+    let Some(c) = coding else { return pieces };
+    let coded = encode(c, &pieces.concat());
+    let size = coded.len().div_ceil(pieces.len().max(1)).max(1);
+    coded.chunks(size).map(<[u8]>::to_vec).collect()
+}
+
+/// One HTTP/2 connection; `cut` counts its answer DATA bytes and signals the `close_after` close.
+async fn http2(shared: Arc<Shared>, io: impl Io, conn: usize) -> Result<(), h2::Error> {
+    let mut h2 = h2::server::handshake(io).await?;
+    let cut = Arc::new((AtomicU64::new(0), Notify::new()));
+    loop {
+        tokio::select! {
+            biased;
+            next = h2.accept() => match next {
+                Some(Ok((req, respond))) => {
+                    _ = tokio::spawn(h2_stream(shared.clone(), conn, cut.clone(), req, respond))
+                }
+                _ => return Ok(()),
+            },
+            // A GOAWAY, then the connection shuts its stream down (a `close_notify` and a FIN).
+            _ = cut.1.notified() => h2.abrupt_shutdown(h2::Reason::NO_ERROR),
+        }
+    }
+}
+
+async fn h2_stream(
+    shared: Arc<Shared>,
+    conn: usize,
+    cut: Arc<(AtomicU64, Notify)>,
+    req: http::Request<h2::RecvStream>,
+    mut respond: h2::server::SendResponse<bytes::Bytes>,
+) -> Result<(), h2::Error> {
+    const NONE: &Body = &Body::Whole(Vec::new());
+    const HOP: &str = "connection keep-alive proxy-connection te transfer-encoding upgrade";
+    let answer = shared.next_answer();
+    let (head, mut body) = req.into_parts();
+    let record = |b: &[u8]| lock(&shared.received)[conn].extend_from_slice(b);
+    let (m, u) = (&head.method, &head.uri);
+    let s = u.scheme_str().unwrap_or("");
+    let a = u.authority().map_or("", |a| a.as_str());
+    let p = u.path_and_query().map_or("", |p| p.as_str());
+    let mut text = format!(":method: {m}\n:scheme: {s}\n:authority: {a}\n:path: {p}\n");
+    for (k, v) in &head.headers {
+        text += &format!("{k}: {}\n", String::from_utf8_lossy(v.as_bytes()));
+    }
+    record(format!("{text}\n").as_bytes());
+    while let Some(data) = body.data().await {
+        let data = data?;
+        let _ = body.flow_control().release_capacity(data.len());
+        record(&data);
+    }
+    if let Some(hold) = shared.script.hold_answer {
+        tokio::time::sleep(hold).await;
+    }
+    let (status, headers, body, coding) = match answer {
+        Answer::Http {
+            status,
+            headers,
+            body,
+            coding,
+        } => (*status, &headers[..], body, *coding),
+        // WebSocket over HTTP/2 (RFC 8441 extended CONNECT) is needed by no PRD.
+        Answer::Ws { .. } => (501, &[][..], NONE, None),
+    };
+    let hop = |k: &str| HOP.split(' ').any(|h| k.eq_ignore_ascii_case(h));
+    let mut resp = http::Response::builder().status(status);
+    for (k, v) in headers.iter().filter(|(k, _)| !hop(k)) {
+        resp = resp.header(k.as_str(), v.as_str());
+    }
+    if let Some(c) = coding {
+        resp = resp.header("content-encoding", format!("{c:?}").to_lowercase());
+    }
+    let typed = headers
+        .iter()
+        .any(|(k, _)| k.eq_ignore_ascii_case("content-type"));
+    if matches!(body, Body::Sse(_)) && !typed {
+        resp = resp.header("content-type", "text/event-stream");
+    }
+    let mut pieces = coded(body, coding);
+    pieces.retain(|p| !p.is_empty());
+    let head = resp.body(()).expect("a response head");
+    let mut send = respond.send_response(head, pieces.is_empty())?;
+    let (written, limit) = (&cut.0, shared.script.close_after);
+    for (i, piece) in pieces.iter().enumerate() {
+        let room = limit.map_or(u64::MAX, |l| l.saturating_sub(written.load(SeqCst)));
+        let n = (piece.len() as u64).min(room) as usize;
+        let end = i + 1 == pieces.len() && n == piece.len();
+        send.send_data(bytes::Bytes::copy_from_slice(&piece[..n]), end)?;
+        if limit.is_some_and(|l| written.fetch_add(n as u64, SeqCst) + n as u64 >= l) {
+            cut.1.notify_one();
+            // Kept open until the connection goes, so the stream is not reset before the GOAWAY.
+            let _ = std::future::poll_fn(|cx| send.poll_reset(cx)).await;
+            return Ok(());
+        }
+        // The flush between pieces: the connection task writes this DATA frame first.
+        tokio::task::yield_now().await;
+    }
+    Ok(())
 }
 
 fn encode(coding: Coding, body: &[u8]) -> Vec<u8> {
