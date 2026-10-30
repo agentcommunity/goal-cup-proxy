@@ -224,7 +224,7 @@ commit. It installs the pinned wrangler. Check that `npx wrangler --version` pri
 [Deploy checks](#deploy-checks) · [Maintenance](#maintenance-on-and-off) · [Rollback](#rollback) ·
 [Logs](#logs) · [Change a start window](#change-a-start-window) · [Add a test operator](#add-a-test-operator) ·
 [Clean up test runs](#clean-up-test-runs) · [Minimum competition version](#set-the-minimum-competition-version) ·
-[EVENT_ID switch](#event_id-switch-6-nov-2026)
+[EVENT_ID switch](#event_id-switch-6-nov-2026) · [Deploying 1.0](#deploying-10)
 
 ### Deploy checks
 
