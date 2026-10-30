@@ -13,17 +13,17 @@ lessons lane (PRD-17); read by the deletion gate (PRD-17 Acceptance, checks 1 to
   case. Entries are separated by `; `, and no entry holds a `;` of its own. `see L-<id>` reuses that
   row's guard.
 - **One name form.** A `file::test` entry is written without `.rs`
-  (`recovery::a_sealed_entry_takes_nothing_more`); a file-level entry keeps its extension
-  (`recovery.rs (PRD-01)`, `server/worker/test/device.test.ts (PRD-07)`). The owner PRD of a test
-  stands in parentheses after it. Parentheses hold only that owner PRD, plus a short qualifier where
-  one already stands (`full tier`, `the reset rule`), never a test title; exact titles go in the
-  night log. `(name pending)` is the one pending marker: a case PRD-17 asked its owner to name in the
-  night log.
+  (`recovery::a_sealed_entry_takes_nothing_more`); a file-level `A:` entry is a bare file name with
+  its extension, never a path (`recovery.rs (PRD-01)`, `device.test.ts (PRD-07)`); the line above
+  says where Rust and Worker test files live. The owner PRD of a test stands in parentheses after it,
+  with at most a short qualifier; exact test titles go in the night log. `(name pending)` is the one
+  pending marker: a case PRD-17 asked its owner to name in the night log.
 - **Status.** `open` (not yet shown), `green` (every `A:` guard passes on integration in a build box),
   `real-run pass` (every `R:` guard shown in a pad run), `dropped: <decision>`. Every row starts `open`;
   rows whose only guard is `X:` stay `open` until the lane flips them at the gate. A row with both `A:`
   and `R:` guards reads `green` until its `R:` guards are shown, then `real-run pass`.
-- **Commit.** The integration commit that made the row `green`, or `-`.
+- **Commit.** The integration commit on which a build box proved every `A:` guard of the row, or
+  `-`. It need not be the commit that changed the guarded code.
 - **A renamed guard** is fixed by the lessons lane with an edit to this file and a night-log line. It
   is never a gate failure; only a lesson with no guard at all fails check 1.
 
@@ -136,16 +136,16 @@ lessons lane (PRD-17); read by the deletion gate (PRD-17 Acceptance, checks 1 to
 | L-F6 | 2.9 | A: native_snapshot.rs (PRD-04); A: native_room.rs (PRD-04) | PRD-04 | open | - |
 | L-F7 | 2.9 | R: PRD-04 acceptance 2 | PRD-04 | open | - |
 | L-F8 | 2.9 | X: PRD-11; R: PRD-12 P3 Hermes full row | PRD-11 | open | - |
-| L-S1 | 2.10 | A: server/worker/test/integration.test.ts (PRD-07); A: upload_resume.rs (PRD-06) | PRD-06, PRD-07 | open | - |
-| L-S2 | 2.10 | A: server/worker/test/integration.test.ts (PRD-07) | PRD-07 | green | b474329d |
-| L-S3 | 2.10 | A: server/worker/test/integration.test.ts (PRD-07) | PRD-07 | green | b474329d |
+| L-S1 | 2.10 | A: integration.test.ts (PRD-07); A: upload_resume.rs (PRD-06) | PRD-06, PRD-07 | open | - |
+| L-S2 | 2.10 | A: integration.test.ts (PRD-07) | PRD-07 | green | b474329d |
+| L-S3 | 2.10 | A: integration.test.ts (PRD-07) | PRD-07 | green | b474329d |
 | L-S4 | 2.10 | A: upload_beat.rs (PRD-06) | PRD-06 | open | - |
 | L-S5 | 2.10 | A: upload_resume.rs (PRD-06) | PRD-06 | open | - |
 | L-S6 | 2.10 | R: PRD-06 U3 | PRD-06 | open | - |
 | L-S7 | 2.10 | A: upload_beat::clock_set_back_does_not_lengthen_a_segment (PRD-06); A: cli_start.rs (PRD-10) | PRD-06, PRD-10 | open | - |
 | L-S8 | 2.10 | R: PRD-06 U2; R: PRD-06 U5 | PRD-06 | open | - |
 | L-S9 | 2.10 | R: PRD-06 U3 | PRD-06 | open | - |
-| L-S10 | 2.10 | A: server/worker/test/device.test.ts (PRD-07); A: server/worker/test/lifecycle.test.ts (PRD-07) | PRD-07 | green | b474329d |
+| L-S10 | 2.10 | A: device.test.ts (PRD-07); A: lifecycle.test.ts (PRD-07) | PRD-07 | green | b474329d |
 | L-R1 | 2.11 | A: pipeline_no_latch.rs (PRD-02) | PRD-02 | open | - |
 | L-R2 | 2.11 | A: pipeline_guard.rs (PRD-02); A: pipeline_stall.rs (PRD-02) | PRD-02 | open | - |
 | L-R3 | 2.11 | A: check_invariants.rs (PRD-08, invariant 12 gap_has_end); A: proxy_http1.rs (PRD-03, fault case); A: see L-H2, L-H9, L-W2, L-W7, L-W10 | PRD-08, PRD-03 | open | - |
