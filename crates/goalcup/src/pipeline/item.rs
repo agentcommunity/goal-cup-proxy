@@ -6,8 +6,8 @@ use bytes::Bytes;
 use goalcup_format::{EndReason, GapReason, StreamKind};
 use serde_json::Value;
 
-/// What every item but DATA counts in `held`: a fixed size for its small fields and JSON, so
-/// control items fill memory only slowly and the stall exit can still see them.
+/// What every item but DATA counts in `held` for its fixed fields; its JSON counts on top
+/// ([`json_held`]), so control items fill `held` as they fill memory and the stall exit sees them.
 pub(crate) const CONTROL_HELD: u64 = 256;
 
 /// The WebSocket facts of one DATA piece: the message's opcode on every piece, `fin` on its last.
@@ -64,12 +64,19 @@ pub(crate) enum Item {
 
 /// What every DATA piece counts in `held` beyond its bytes: its queue slot and its `Bytes`
 /// allocation, so many small pieces fill memory in `held` as they do in the process, and an
-/// empty message end still counts in `queued`.
+/// empty message end still counts in `queued`. `held` is therefore not payload bytes alone.
 pub(crate) const DATA_ITEM_HELD: u64 = 128;
 
-/// What a DATA piece of `len` bytes counts in `held`.
-pub(crate) fn data_held(len: usize) -> u64 {
-    (len as u64).saturating_add(DATA_ITEM_HELD)
+/// What a JSON value in a control item counts in `held`: 64 bytes for each value and each object
+/// key (node and allocation) plus its string bytes, so an OPEN with many headers counts near what
+/// it costs in memory and the stall mark bounds OPEN-heavy load too.
+fn json_held(v: &Value) -> u64 {
+    64 + match v {
+        Value::String(s) => s.len() as u64,
+        Value::Array(a) => a.iter().map(json_held).sum(),
+        Value::Object(o) => o.iter().map(|(k, v)| 64 + k.len() as u64 + json_held(v)).sum(),
+        _ => 0,
+    }
 }
 
 impl Item {
@@ -78,8 +85,11 @@ impl Item {
     /// writer releases it.
     pub(crate) fn held(&self) -> u64 {
         match self {
-            Item::Data { bytes, .. } => data_held(bytes.len()),
-            _ => CONTROL_HELD,
+            Item::Data { bytes, .. } => bytes.len() as u64 + DATA_ITEM_HELD,
+            Item::Open { meta: v, .. } | Item::Event { ev: v, .. } => CONTROL_HELD + json_held(v),
+            Item::Gap { tail, .. } | Item::End { tail, .. } => {
+                CONTROL_HELD + tail.as_ref().map_or(0, json_held)
+            }
         }
     }
 }

@@ -62,11 +62,11 @@ pub struct Fid {
     pub birth_ns: Option<i64>,
 }
 
-/// A snapshot file as last read whole: a replaced file of the same size and `mtime_ns` has another
-/// `fid`, so it is read again (point 1).
+/// A snapshot file as last read whole. It carries no `fid` yet: a file replaced with the same size
+/// and `mtime_ns` is not read again on resume (known gap, PRD-02 amendment after 01afcf22). The
+/// `fid` lands with PRD-04's matching change to `Tail::new` and `tests/native_resume.rs`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SnapshotCursor {
-    pub fid: Fid,
     pub size: u64,
     pub mtime_ns: i64,
 }
