@@ -950,3 +950,53 @@ kept and now cites BUILD-PROMPT section 5, since B3 no longer carries it.
   (26). Scripts: `fetch-run.sh` 369 (was 349) and `test_fetch_run.py` 364 (was 695), 733 of the
   "about 900" shared with the gate, release and packaging. `docs/UPLOAD-API.md` 577 (was 596). By the
   11:20Z decision, overage alone is a nit.
+
+### 2026-10-30, replan after PRD-17 phase 0 slice (merge 1423f8f9)
+
+- **A heavy test binary's merge carries one line in PRD-14's `.config/nextest.toml`.** Group
+  `heavy` starts empty (nextest refuses a filter that matches no binary; PRD-14 gate lane, integrator
+  log 10:52Z), so the merge that brings `lessons_launch.rs`, a `watchdog_*`, `e2e_*`,
+  `pipeline_restart`, `pipeline_stall`, `pipeline_many_streams`, `proxy_connect`, `proxy_restart`
+  or `native_walk` binary adds its name to the heavy override. Under merge rule 1 that is a seam
+  change: the integrator reads the PRD-14 lane's 10:52Z note as its approval for that one override
+  line only; any other edit to the file needs a PRD-14 line in the log. Without it a kill test runs
+  in parallel with the others.
+- **Old-gate stall, now gone:** the docs-only `LESSONS.md` slice failed `gate fast` from 10:54Z to
+  11:35Z on the old `scripts/check-version.py` over plan docs, not on its own file, until PRD-14's gate
+  merged. With PRD-14 on integration, a docs-only slice passes (`gate fast: PASS in 59s` on 1423f8f9).
+- **Findings raised on a fix after it merged** (A7, B7 on `LESSONS.md`, both nits) go to the owner
+  lane's next slice through its Amendments note, not a separate merge request.
+- **Size report, PRD-17 phase 0 slice** (`wc -l` on integration at 1423f8f9): 0 lines of PRD-17 code
+  against the shared lessons and test-support tests row of 3,000 (PRD-00 "Size budget"); none of that
+  row is on integration yet. `LESSONS.md` 197 lines of docs, outside the budget.
+
+### 2026-10-30, replan after PRD-15 slice 1 (merge 98bbb7e9)
+
+- **Size report, PRD-15 slice 1** (wc -l on integration at 98bbb7e9). PRD-15 has no row in PRD-00
+  "Size budget"; docs are not counted there. `AGENTS.md` 111 (was 110). `docs/DECISIONS.md` 1,418 (was
+  1,162; plus 256 for the header line, "Owner decisions in force", D75 to D86 and the status rows).
+  `docs/research/results/2026-10-30-two-hour-run.md` 304 (new, a copy). Review B-1 names about 30 to 40
+  DECISIONS lines that can go in the after-merge rewrite. No code.
+- **The phase 3 order holds.** PRD-14 deletes `check-links.py` in the phase 3 merge only after
+  PRD-15's last link run. That run leaves out the run 1 report by name (its 21 evidence links dangle by
+  design, PRD-15 amendment) and runs on Python 3.10 or later in the box. Gate fast does not run
+  `check-links.py`, so those links block no merge.
+- **PRD-15's stale-term grep fails on `AGENTS.md` until PRD-15 slice 2 lands the map** (review B-4):
+  the map and "Read next" still name the old crates, pins, CONTRACTS, TERMINATION and CHEAT-CHECKLIST.
+  Read that check after slice 2, not before.
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-17 upkeep slice 1 (merge 646737c6)
+
+- **Phase 2 check 1 matches nextest's binary id, not a file path.** Rust guards live under
+  `crates/*/tests/` (PRD-01's `recovery.rs` is in `goalcup-format`), and `LESSONS.md`'s next edit
+  writes `file::test` without `.rs` (PRD-17 note). The check splits each entry on `::` and matches
+  binary id suffix and test name in `cargo nextest list --workspace --message-format oneline`.
+- **A green row's Commit is the commit the box proved** when the guarded crate changed after the
+  test's merge; otherwise the merge that brought the test (review A-3).
+- **Docs-only slices still pass the gate in about 60 s** (`gate fast: PASS in 60s` on 646737c6).
+- **Size report, PRD-17 upkeep slice 1** (`wc -l` on integration at 646737c6): 0 lines of PRD-17
+  code against the shared lessons and test-support tests row of 3,000 (PRD-00 "Size budget").
+  `LESSONS.md` 197 lines of docs, outside the budget; 3 rows green (L-FW2, L-FW5, L-FW8 at
+  `f5b0a6a2`), 6 rows still `(name pending)`.
+- No locked ledger item is touched and no owner question comes from this slice.

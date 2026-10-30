@@ -779,3 +779,65 @@ old code. Each id with what was done here.
   returns the same run; another session_id is 409") and `server/worker/test/lifecycle.test.ts:222`
   ("a lost-reply repeat of the open is the same run, also after continue"), on integration at 4dcc1e7b.
   Both stay through PRD-07 step 3. `integration.test.ts:185` needs a receipt and goes with that route.
+
+### 2026-10-30, replan after PRD-17 phase 0 slice (merge 1423f8f9)
+
+- **Review nits A7 and B7 go into the lane's next `LESSONS.md` edit** (they came from the fix review
+  and are not in 1423f8f9). In L-H11 and L-W11 the guard parentheses read `(PRD-03 rule 2 ...)`,
+  which by the legend makes PRD-03 the owner, while the Owner column says PRD-17. Drop the
+  parentheses in those two cells, as every other `lessons_` guard already has none (L-C1); the
+  `lessons_` prefix names the owner and the rule 2 source stays in the 10:51Z decision line. Any
+  status or gate script reads the owner from the Owner column, never from guard parentheses. Dropping
+  the Owner column (PRD-17 section 1 lists only ID, guard, status, commit) is optional, not required.
+- **H11, W11 and G1's recording half are this lane's tests now** (lessons log 10:51Z): PRD-03 has no
+  rule 2 case, so `lessons_http1::every_request_on_a_decrypted_host_is_recorded` (a gateway-prefixed
+  path, a Host mismatch, a non-POST method) and `lessons_ws::an_upgrade_on_any_path_is_recorded` are
+  written here and count in the lessons row of the size budget. Section 2's "PRD-03 rule 2 tests" for
+  H11, W11 and G1 reads as these two. PRD-03 writes no duplicate (PRD-03 note).
+- **L-S10 is no longer pending:** the names are in the earlier note above (`device.test.ts:156`,
+  `lifecycle.test.ts:222`). The next `LESSONS.md` edit puts them in and leaves 6 `(name pending)`
+  rows (FW3, VR2, VR3, VR4, SC1, SC6), each now asked in its owner's Amendments (PRD-08, PRD-10).
+- **HF2 answered from PRD-11's own text:** 1.0 writes no Hermes CA entry and no `HERMES_CA_BUNDLE`;
+  PRD-11's macOS risk row and its answer L5-10 leave Hermes "not verified on macOS" (ledger T9, Linux
+  first). L-HF2's guard stays `R: RR6` (Hermes, if run on the owner's Mac). Section 2's `D:
+  connectors/hermes-cli.toml` entry for HF2 names no key and is not used. Check 1 holds, since the row
+  has a guard.
+- **The PRD-14 heavy-group ask is answered, with a change:** `.config/nextest.toml` on integration
+  names `lessons_launch` only in a comment. Group `heavy` starts empty because nextest refuses a
+  `binary()` filter that matches no binary, so the merge that brings `lessons_launch.rs` adds it to
+  the heavy override (see the PRD-16 note for how that one line passes merge rule 1).
+- **Size report** (`wc -l` on integration at 1423f8f9): merged PRD-17 code is 0 lines (no
+  `tests/lessons_*.rs`, no `tests/lessons_fixtures/` yet) against the shared "Lessons (PRD-17), test
+  support, `rule_code`, `e2e_run` (PRD-14)" tests row of 3,000; nothing else of that row is on
+  integration yet. `LESSONS.md` is 197 lines of docs, outside the row. Its 154 rows match the 154 ids
+  of sections 2.1 to 2.16.
+
+### 2026-10-30, replan after PRD-17 upkeep slice 1 (merge 646737c6)
+
+- **One guard name form, for the next `LESSONS.md` edit** (review A-1). A `file::test` entry is
+  written without `.rs` (`recovery::a_sealed_entry_takes_nothing_more`, `upload_beat::...`), as the
+  `lessons_` rows already are; a file-level entry keeps `.rs` (`recovery.rs (PRD-01)`). Fix L-FW2,
+  L-FW5, L-FW8 and L-S7 to that form. The legend says Rust tests live under `crates/*/tests/`, not
+  `crates/goalcup/tests/` only: `recovery.rs` is in `crates/goalcup-format/tests/`.
+- **Phase 2 check 1 follows that form.** For a `file::test` entry it splits on `::` and looks for a
+  line of `cargo nextest list --workspace --message-format oneline` whose binary id ends in
+  `::<file>` and whose test name is `<test>`; for a file-level entry it tests that
+  `crates/*/tests/<file>` or `server/worker/test/<file>` exists. A literal grep of `recovery.rs::...`
+  would report a guard as missing when it is not.
+- **L-FW5 names the test that asserts its first half** (review A-2): add
+  `recovery::a_part_file_cut_at_any_byte_recovers_to_its_last_index_line` (one recovery frame per
+  dead boot, `gaps.len() == 1`) beside the second-frame and sealed-entry tests.
+- **The Commit cell names the commit the build box proved** when the guarded crate changed between
+  the merge that brought the test and the proof (review A-3). For L-FW2, L-FW5 and L-FW8, `f5b0a6a2`
+  stands: nothing in `goalcup-format` changed up to the proof at `15df7cf3`.
+- **L-S10 gives files and owner only** (review B1): `A: server/worker/test/device.test.ts (PRD-07);
+  A: server/worker/test/lifecycle.test.ts (PRD-07)`. The parenthesised text looked like an exact test
+  title and was cut short; the exact titles stay in the 4dcc1e7b note above.
+- **L-FW2 is green on its recovery half only** (review B2). The exit-74 half of FW2 (a write error
+  ends the recorder with exit 74 and a `recorder_down` GAP, PRD-02 section 5) has no named PRD-02
+  test; PRD-02's note asks for one. When it is named, the lane adds it to L-FW2. No lessons test is
+  written for it.
+- **Size report** (`wc -l` on integration at 646737c6): merged PRD-17 code is still 0 lines (no
+  `tests/lessons_*.rs`, no `tests/lessons_fixtures/`) against the shared 3,000-line tests row.
+  `LESSONS.md` stays 197 lines of docs (6 rows changed), outside the row.
+- No locked ledger item is touched and no owner question comes from this slice.

@@ -828,3 +828,56 @@ this file's part of a shared fix is made here.
 | G3-15q | Applied. Checked: PRD-14 section 2 has the same-name-prefix clause |
 | Re-read (no id) | Fixed one clear break: D86, guide sections 3 and 4 and the Gemini cell said the auto-update switch is written only on "yes". PRD-00 question 2 (revision 4) and ledger H9 say `update_off` is always written; only the no-prompt values follow the question |
 | B3, B10 sweep (30 Oct) | Applied. The newcomer run's box is removed when it ends; the reference guard is a grep by hand at the cut, not a gate test (PRD-13 section 6) |
+
+## Amendments
+
+### 2026-10-30, replan after PRD-15 slice 1 (merge 98bbb7e9)
+
+Slice 1 merged builder step 1: the DECISIONS header line, "Owner decisions in force", D75 to D86 and
+the status rows; the AGENTS.md read-first paragraph, hard rules, Tests and Done; the run 1 report copy.
+What it changes for the slices still to come:
+
+- **The last link check leaves out the run 1 report by name** (reviews A1, B-3). The copy keeps 21
+  relative links into `2026-10-30-two-hour-run/`, which is not copied (section 3, "copied as is").
+  Acceptance filters to "Files it owns", and the report is in the Create list, so the check as written
+  lists them. Filter out `docs/research/results/2026-10-30-two-hour-run.md` by name, and the night-log
+  line "link check run" says it was left out and why. Do not edit the report. The stale-term grep
+  leaves it out the same way (it is history and names 0.7 terms on 7 lines). The em dash grep keeps it
+  (it has none). PRD-13's reference guard already skips `docs/research/**`.
+- **`scripts/check-links.py` needs Python 3.10 or later**, and the box snapshot's `python3` is 3.9.
+  Slice 1 ran it with `python3.11` in the box (lane log 10:46Z). The last run does the same.
+- **Slice 2 (the AGENTS.md map) drops every pin mention** (review A4): "Pinned by digest" in the
+  `connectors/<id>/` row (`AGENTS.md:37` on integration), "pins" in the `scripts/` row (`:39`) and
+  "connector pins" in the `goalcup-protocol` row (`:32`). Until the cut, the old crates still refuse an
+  unpinned `connectors/<id>/harness.toml` edit while the hard rules no longer say so; accepted for the
+  window.
+- **The Tests pointer comes back with the README section it points to** (review B-4): "Where they
+  are: [README](README.md#the-seven-points-and-their-tests)" (section 4) lands in the same merge that
+  gives README that section, since the anchor does not exist before it and the link check would flag
+  it. Likewise the read-first paragraph gains "then [ARCHITECTURE](docs/ARCHITECTURE.md)" in the merge
+  that rewrites ARCHITECTURE.
+- **Tests sentence wording** (review A5): the next AGENTS.md slice writes "that test is not deleted
+  while the point stands, unless it is replaced in the same change by a test with the same name prefix
+  that asserts the same promise". The "or" in section 4 reads as either/or. Same rule as ledger
+  section 7 ("a test stays if it proves one of them"); wording only.
+- **The never-commit line keeps `spikes/*/out/` while `spikes/` is on disk** (lane log 10:43Z);
+  section 4's text drops it. Nothing of PRD-15 goes into the phase 3 merge, so the first PRD-15 merge
+  after PRD-13 deletes `spikes/` drops that clause.
+- **Status-table marks for the read-through of section 6 item 4** (review A3), in a later slice that
+  touches DECISIONS, status-table cells only: D71's row also names D84 for its 0.6.1 compatibility
+  clause (the hidden git-credential helper and the `github.json` loader) and its `prep.json`
+  read-and-ignore clause. D4's row says "partly" for D75 unless its one-workspace, one-entry paragraph
+  is really gone in 1.0 (D75 does not restate it; check PRD-02 and PRD-10 first). D61's "forwards no
+  key" clause is touched by PRD-00 question 2's whole-environment default (review N15), which has no
+  entry among D75 to D86: its row reads "partly, PRD-00 question 2 (default)" until the owner answers,
+  and the item stays on the `TODO.md` open list.
+- **Left for the after-merge DECISIONS rewrite** (already on the TODO list; reviews A2, B-1): each
+  replacing entry's "This supersedes" line names every old entry whose row points to it (D3, D9, D37,
+  D40, D43, D45, D46, D52, D53 and D71 are not named today), and D75, D76, D80, D81 and D84 go back to
+  the one-to-eight-line prose of section 6, without the "This supersedes" paragraph that repeats the
+  status rows (about 30 to 40 lines).
+- **Drop one sentence at the first owner answer at the latest** (review B-2): "None was answered when
+  these entries were written, so each default below holds until the owner answers" in "Owner
+  decisions in force". The per-bullet "(default, PRD-00 question N)" markers already say it, and the
+  sentence turns false at the first answer. It is this build's own text, so dropping it edits no old
+  entry.

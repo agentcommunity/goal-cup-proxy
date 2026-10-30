@@ -1282,3 +1282,15 @@ to another file are made by that file's owner.
 | Id | Answer |
 |---|---|
 | R3a, R3b, T4 carried in | Applied. R3a: section 8 step 8 restarts at once (the 0 to 5 s pauses and the 10 minute reset are gone); step 9 null mode retries after 30 s, 1, 2, then every 5 minutes, never stopping, and the count resets after 60 s up; defaults locked; risks say 12 tries an hour; `next_wait` unit test. This supersedes F6/L2-06 and the G2-16 rejection of a short timer. R3b: section 8 step 3 writes `rec/run-ca.key` (0600, `O_EXCL`), removed at the seal (section 11 step 6, 9.4 step 2, a refused first boot); new section 8.1 `goalcup recover` (same port, same CA, SIGKILL of a live orphan, one `recorder_down` gap with cause `watchdog_lost`, never touches the harness); 9.1 rows; the "one CA per run, not done" risk replaced; new risks; interfaces, asks 11 to 13, files, size; acceptance R9 and `watchdog_recover.rs`. T4: the proof is the proxy record and no outside API, stated in owner decisions and the acceptance header; R1, R9 and the watcher paragraph run the pad's history check |
+
+## Amendments
+
+### 2026-10-30, replan after PRD-17 upkeep slice 1 (merge 646737c6)
+
+- **Name the exit-74 case for PRD-17 FW2, if one exists.** PRD-17 FW2's second half is section 5's
+  rule: a write error (EIO, ENOSPC, EMFILE) ends the recorder with exit 74 and the next boot writes a
+  `recorder_down` GAP. `L-FW2` is green on PRD-01 `recovery.rs` for the first half only; no test in
+  "Automated tests that guard them" names exit 74. If a PRD-02 test shows it (for example in
+  `pipeline_restart.rs` or `watchdog_restart.rs`), post its `file::test` name in the lessons log
+  so the lane adds it to L-FW2. This asks for a name, not for a new test hook: "No silent-drop hook"
+  (PRD-00 cut) holds, and no cap or disk-full handling comes back (ledger L6).

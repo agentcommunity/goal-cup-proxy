@@ -58,7 +58,7 @@ lessons lane (PRD-17); read by the deletion gate (PRD-17 Acceptance, checks 1 to
 | L-H8 | 2.3 | A: lessons_http1::eof_inside_a_body_is_interrupted; A: lessons_http1::request_after_upstream_close_is_marked_unsent | PRD-17 | open | - |
 | L-H9 | 2.3 | A: lessons_http1::head_over_64k_relays_inside_a_named_loss | PRD-17 | open | - |
 | L-H10 | 2.3 | A: lessons_http1::authorization_forwarded_unchanged_and_starred_in_meta | PRD-17 | open | - |
-| L-H11 | 2.3 | A: lessons_http1::every_request_on_a_decrypted_host_is_recorded (PRD-03 rule 2: a gateway-prefixed path, a Host mismatch and a non-POST method) | PRD-17 | open | - |
+| L-H11 | 2.3 | A: lessons_http1::every_request_on_a_decrypted_host_is_recorded | PRD-17 | open | - |
 | L-H12 | 2.3 | X: PRD-03 rule 2 | PRD-03 | open | - |
 | L-D1 | 2.4 | A: proxy_http1.rs (PRD-03); A: lessons_decode::brotli_whole_32k_pieces_and_trailing_bytes; R: RR2 | PRD-03, PRD-17 | open | - |
 | L-D2 | 2.4 | A: lessons_decode::zstd_frame_ending_on_the_buffer_edge_is_complete; A: lessons_decode::zstd_cut_after_whole_pieces_is_a_gap; R: a pad run with a ChatGPT sign-in, else not shown in a real run | PRD-17 | open | - |
@@ -78,7 +78,7 @@ lessons lane (PRD-17); read by the deletion gate (PRD-17 Acceptance, checks 1 to
 | L-W8 | 2.5 | A: proxy_ws.rs (PRD-03) | PRD-03 | open | - |
 | L-W9 | 2.5 | A: lessons_ws::upgrade_101_and_first_frame_in_one_write | PRD-17 | open | - |
 | L-W10 | 2.5 | A: lessons_ws::rejected_upgrade_stays_http; A: lessons_ws::bad_accept_is_a_named_loss_not_a_websocket | PRD-17 | open | - |
-| L-W11 | 2.5 | A: lessons_ws::an_upgrade_on_any_path_is_recorded (PRD-03 rule 2) | PRD-17 | open | - |
+| L-W11 | 2.5 | A: lessons_ws::an_upgrade_on_any_path_is_recorded | PRD-17 | open | - |
 | L-W12 | 2.5 | A: lessons_ws::a_long_message_is_offered_before_its_last_frame | PRD-17 | open | - |
 | L-W13 | 2.5 | A: lessons_ws::eof_mid_message_is_interrupted | PRD-17 | open | - |
 | L-W14 | 2.5 | R: RR1 | PRD-12 | open | - |
@@ -139,7 +139,7 @@ lessons lane (PRD-17); read by the deletion gate (PRD-17 Acceptance, checks 1 to
 | L-S7 | 2.10 | A: upload_beat.rs::clock_set_back_does_not_lengthen_a_segment (PRD-06); A: cli_start.rs (PRD-10) | PRD-06, PRD-10 | open | - |
 | L-S8 | 2.10 | R: PRD-06 U2; R: PRD-06 U5 | PRD-06 | open | - |
 | L-S9 | 2.10 | R: PRD-06 U3 | PRD-06 | open | - |
-| L-S10 | 2.10 | A: server/worker/test/ (PRD-07, name pending) | PRD-07 | open | - |
+| L-S10 | 2.10 | A: server/worker/test/device.test.ts (PRD-07, repeat open with the same session_id returns the same run); A: server/worker/test/lifecycle.test.ts (PRD-07, a lost-reply repeat of the open is the same run, also after continue) | PRD-07 | open | - |
 | L-R1 | 2.11 | A: pipeline_no_latch.rs (PRD-02) | PRD-02 | open | - |
 | L-R2 | 2.11 | A: pipeline_guard.rs (PRD-02); A: pipeline_stall.rs (PRD-02) | PRD-02 | open | - |
 | L-R3 | 2.11 | A: check_invariants.rs (PRD-08, invariant 12 gap_has_end); A: proxy_http1.rs (PRD-03, fault case); A: see L-H2, L-H9, L-W2, L-W7, L-W10 | PRD-08, PRD-03 | open | - |
@@ -162,13 +162,13 @@ lessons lane (PRD-17); read by the deletion gate (PRD-17 Acceptance, checks 1 to
 | L-G4 | 2.13 | R: PRD-12 gateway case config | PRD-12 | open | - |
 | L-G5 | 2.13 | R: PRD-12 pad boxes (--non-persistent, tmux) | PRD-12 | open | - |
 | L-FW1 | 2.14 | A: pipeline_guard.rs (PRD-02) | PRD-02 | open | - |
-| L-FW2 | 2.14 | A: recovery.rs (PRD-01) | PRD-01 | open | - |
+| L-FW2 | 2.14 | A: recovery.rs::a_part_file_cut_at_any_byte_recovers_to_its_last_index_line (PRD-01) | PRD-01 | green | f5b0a6a2 |
 | L-FW3 | 2.14 | A: server_compare.rs (PRD-08); A: PRD-08 pruned local parts case (name pending) | PRD-08 | open | - |
 | L-FW4 | 2.14 | A: check_invariants.rs (PRD-08) | PRD-08 | open | - |
-| L-FW5 | 2.14 | A: recovery.rs (PRD-01) | PRD-01 | open | - |
+| L-FW5 | 2.14 | A: recovery.rs::a_boot_with_no_index_line_is_deleted_and_an_r_closed_part_file_takes_a_second_frame (PRD-01); A: recovery.rs::a_sealed_entry_takes_nothing_more (PRD-01) | PRD-01 | green | f5b0a6a2 |
 | L-FW6 | 2.14 | A: pipeline_seal.rs (PRD-02); A: check_invariants.rs (PRD-08) | PRD-02, PRD-08 | open | - |
 | L-FW7 | 2.14 | A: check_invariants.rs (PRD-08); A: recovery.rs (PRD-01) | PRD-01, PRD-08 | open | - |
-| L-FW8 | 2.14 | A: recovery.rs (PRD-01); R: RR4 | PRD-01 | open | - |
+| L-FW8 | 2.14 | A: recovery.rs::a_part_file_cut_at_any_byte_recovers_to_its_last_index_line (PRD-01); R: RR4 | PRD-01 | green | f5b0a6a2 |
 | L-FW9 | 2.14 | A: server_compare.rs (PRD-08) | PRD-08 | open | - |
 | L-VR1 | 2.15 | A: check_invariants.rs (PRD-08) | PRD-08 | open | - |
 | L-VR2 | 2.15 | A: PRD-08 and PRD-09 panic-in-check case (name pending) | PRD-08, PRD-09 | open | - |
