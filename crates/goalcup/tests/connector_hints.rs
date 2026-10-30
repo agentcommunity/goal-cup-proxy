@@ -55,6 +55,7 @@ fn one_hint_per_format_reaches_the_config_list() {
     let l = "custom_providers:\n- name: a\n  base_url: https://l0.example.com\n- name: b\n  \
              notes: |\n    base_url: https://no.example.com\n  base_url: https://l1.example.com\n";
     let deep = "custom_providers:\n  - name: a\n    base_url: https://l2.example.com\n";
+    let slash = "providers:\n  gw/eu~1:\n    base_url: https://s.example.com\n";
     let d = "# keys\nexport GW_BASE_URL=\"https://d.example.com/v1\"\n";
     let cases = [
         (CLAUDE, "settings.json", JSON, "gw.example.com"),
@@ -70,6 +71,8 @@ fn one_hint_per_format_reaches_the_config_list() {
         ("hermes-cli", "config.yaml", l, "l0.example.com"),
         ("hermes-cli", "config.yaml", l, "l1.example.com"),
         ("hermes-cli", "config.yaml", deep, "l2.example.com"),
+        // A `/` or `~` in a key name (RFC 6901 escaping) keeps its children.
+        ("hermes-cli", "config.yaml", slash, "s.example.com"),
         ("hermes-cli", ".env", d, "d.example.com"),
         (CLAUDE, "unrelated.txt", "", "ev.example.com"),
     ];
@@ -154,4 +157,37 @@ fn a_refuse_if_set_hit_names_file_and_key_never_the_value() {
     let key = "env.HTTPS_PROXY".to_string();
     assert_eq!(plan.refusal, Some(Refusal::SettingSet { file, key }));
     assert!(!format!("{:?}", plan.refusal).contains("fixture-proxy-value"));
+}
+
+#[test]
+fn false_is_a_value_that_refuses_in_every_format() {
+    let dir = tempfile::tempdir().unwrap();
+    let (d, home) = (dir.path(), dir.path().join("home"));
+    let files = [
+        ("a.json", "{\"x\":{\"on\":false}}", "x.on"),
+        ("a.toml", "[x]\non = false\n", "x.on"),
+        ("a.yaml", "x:\n  on: false\n", "x.on"),
+        (".env", "export ON=false\n", "ON"),
+    ];
+    for (file, text, key) in files {
+        let row = format!("{{ file = \"{{home}}/{file}\", keys = [\"{key}\"] }}");
+        let toml = format!("id = \"f\"\nname = \"F\"\nprogram = \"f\"\nrefuse_if_set = [{row}]\n");
+        let path = d.join("f.toml");
+        std::fs::write(&path, toml).unwrap();
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::write(home.join(file), text).unwrap();
+        let c = connector::load(path.to_str().unwrap(), None).unwrap();
+        let env = Env {
+            vars: BTreeMap::new(),
+            workspace: d.join("workspace"),
+            resume: false,
+            run_start: SystemTime::now(),
+            goalcup_home: d.join("goalcup"),
+            server_host: "ingest.example.org".into(),
+        };
+        let refusal = connector::plan(&c, &env, &home).refusal;
+        let (file, key) = (home.join(file), key.to_string());
+        assert_eq!(refusal, Some(Refusal::SettingSet { file, key }));
+        std::fs::remove_dir_all(&home).unwrap();
+    }
 }

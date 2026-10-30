@@ -196,7 +196,8 @@ fn settings_are_typed_keep_other_keys_and_never_follow_a_link() {
     assert_eq!((check, toml["model"].as_str()), (&false.into(), Some("m")));
     let rows = connector::load("claude-code-cli", None).unwrap();
     let (rows, json) = (rows.no_prompts, home.join("settings.json"));
-    std::fs::write(&json, r#"{"model":"m","permissions":{}}"#).unwrap();
+    // Comments and a trailing comma, as a JSONC-reading harness accepts them.
+    std::fs::write(&json, "{ // c\n\"model\":\"m\",\"permissions\":{},}").unwrap();
     assert!(connector::write_settings(&home, &rows).is_empty());
     let v: serde_json::Value = serde_json::from_slice(&std::fs::read(&json).unwrap()).unwrap();
     assert_eq!(v["permissions"]["defaultMode"], "bypassPermissions");

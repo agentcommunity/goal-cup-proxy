@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 
 use serde_json::Value;
 
-use super::hints::yaml_key;
+use super::hints::{self, yaml_key};
 use super::{Connector, Env, Refusal, SettingRow, Skipped};
 
 /// Removed from the participant's environment before anything is set (step 1).
@@ -201,10 +201,17 @@ fn write_row(file: &Path, key: &str, value: &str) -> Result<(), &'static str> {
     let parts: Vec<&str> = key.split('.').collect();
     let ext = file.extension().and_then(|x| x.to_str()).unwrap_or("");
     let out = if matches!(ext, "yaml" | "yml") {
+        // Already set: the file is not rewritten.
+        let have = Value::String(value.into());
+        if hints::at(&hints::yaml(text), key).contains(&&have) {
+            return Ok(());
+        }
         yaml_set(text, &parts, &format!(" {leaf}"))?
     } else {
         let doc = match ext {
-            "json" => serde_json::from_str(if text.trim().is_empty() { "{}" } else { text }),
+            // Comments and trailing commas read as `hints::read` reads them.
+            "json" if text.trim().is_empty() => Ok(Value::Object(Default::default())),
+            "json" => serde_json::from_str(&hints::strip_jsonc(text)),
             "toml" => serde_json::to_value(text.parse::<toml::Table>().map_err(bad)?),
             _ => return Err("format not writable"),
         };

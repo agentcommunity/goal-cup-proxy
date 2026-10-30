@@ -75,10 +75,10 @@ impl Reader<'_> {
         (found, notes)
     }
 
-    /// The first `refuse_if_set` key holding a value (not null, false, "", [] or {}): file and key,
-    /// never the value.
+    /// The first `refuse_if_set` key holding a value (not null, "", [] or {}; `false` is a value):
+    /// file and key, never the value.
     pub(crate) fn refusal(&mut self, c: &Connector) -> Option<Refusal> {
-        let empty = [json!(null), json!(false), json!(""), json!([]), json!({})];
+        let empty = [json!(null), json!(""), json!([]), json!({})];
         for row in &c.refuse_if_set {
             for (doc, file) in self.docs(&row.file) {
                 let set = |k: &&String| at(&doc, k).into_iter().any(|v| !empty.contains(v));
@@ -154,7 +154,7 @@ fn read(path: &Path) -> Option<Value> {
 }
 
 /// The values at a dotted key; a segment may be or hold a `*` glob (any key or index, `*_URL`).
-fn at<'a>(doc: &'a Value, key: &str) -> Vec<&'a Value> {
+pub(super) fn at<'a>(doc: &'a Value, key: &str) -> Vec<&'a Value> {
     let mut found = vec![doc];
     for seg in key.split('.') {
         let glob = pattern::parse(seg).ok();
@@ -176,7 +176,7 @@ fn at<'a>(doc: &'a Value, key: &str) -> Vec<&'a Value> {
 }
 
 /// JSON with `//` and `/* */` comments and trailing commas removed outside strings.
-fn strip_jsonc(text: &str) -> String {
+pub(super) fn strip_jsonc(text: &str) -> String {
     let (mut out, mut chars, mut in_string) = (String::new(), text.chars().peekable(), false);
     while let Some(c) = chars.next() {
         in_string ^= c == '"';
@@ -214,7 +214,7 @@ fn dotenv(text: &str) -> Value {
 /// Block mappings and sequences nested by indentation (a `- ` item at its key's indent or deeper),
 /// scalars as strings; a flow collection stays text and a block scalar (`|`, `>`) is left out.
 /// The small block lookup of PRD-17 N7.
-fn yaml(text: &str) -> Value {
+pub(super) fn yaml(text: &str) -> Value {
     let mut root = Value::Object(Map::new());
     let (mut open, mut block) = (Vec::<(usize, String)>::new(), usize::MAX);
     for line in text.lines() {
@@ -250,7 +250,9 @@ fn yaml(text: &str) -> Value {
         };
         let rest = rest.trim();
         if rest.is_empty() || rest.starts_with('#') {
-            open.push((indent, format!("{parent}/{key}")));
+            // RFC 6901: a `/` or `~` in a key is escaped, so its children are still read.
+            let token = key.replace('~', "~0").replace('/', "~1");
+            open.push((indent, format!("{parent}/{token}")));
             map.insert(key, Value::Null);
         } else if rest.starts_with(['|', '>']) {
             block = indent;
