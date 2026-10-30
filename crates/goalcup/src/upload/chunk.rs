@@ -46,7 +46,10 @@ pub enum Cut {
     /// Nothing waits past the server's offset.
     Nothing,
     /// The two copies disagree, or the index is wrong: nothing is sent across it.
-    Stuck { reason: &'static str, offset: u64 },
+    Stuck {
+        reason: &'static str,
+        offset: u64,
+    },
 }
 
 /// The next chunk past the server's position (section 3).
@@ -63,7 +66,10 @@ pub fn cut(
     let mut at_s = None;
     if let Some(&p) = parts.iter().rev().find(|&&p| p < s) {
         let lines = index(rec_dir, p)?;
-        at_s = lines.iter().position(|l| l.raw_end == s).map(|i| (p, lines, i));
+        at_s = lines
+            .iter()
+            .position(|l| l.raw_end == s)
+            .map(|i| (p, lines, i));
     }
     let (part, c_start, prev, lines, from) = if parts.contains(&s) {
         // Case 1, first: S names a part (this also covers PRD-01's recovery fallback).
@@ -104,7 +110,10 @@ pub fn cut(
         Bound::OnDisk => (u64::MAX, fs::metadata(&path)?.len()),
     };
     let mut taken: Option<(IndexLine, IndexLine)> = None;
-    for l in lines[from..].iter().take_while(|l| l.raw_end <= limit && l.c_end <= flen) {
+    for l in lines[from..]
+        .iter()
+        .take_while(|l| l.raw_end <= limit && l.c_end <= flen)
+    {
         if l.c_end.saturating_sub(c_start) > MAX_CHUNK {
             if taken.is_none() {
                 return stuck("an index line lies more than 32 MiB on: a writer bug");
@@ -175,8 +184,13 @@ fn parts(rec_dir: &Path) -> io::Result<Vec<u64>> {
     let mut out = Vec::new();
     for e in fs::read_dir(rec_dir)? {
         let name = e?.file_name().to_string_lossy().into_owned();
-        let n = name.strip_prefix("rec-").and_then(|n| n.strip_suffix(".gcr.zst"));
-        out.extend(n.and_then(|n| n.parse().ok()).filter(|&n| part_name(n) == name));
+        let n = name
+            .strip_prefix("rec-")
+            .and_then(|n| n.strip_suffix(".gcr.zst"));
+        out.extend(
+            n.and_then(|n| n.parse().ok())
+                .filter(|&n| part_name(n) == name),
+        );
     }
     out.sort_unstable();
     Ok(out)
