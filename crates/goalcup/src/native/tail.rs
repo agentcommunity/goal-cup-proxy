@@ -132,16 +132,22 @@ impl Tail {
         }
     }
 
-    /// Paths not settled since the last sweep are gone: GAP if unread, END `source_changed`. A path
-    /// under one of the walk's `unlisted` folders was not looked at, so it is left alone.
+    /// Paths not settled since the last sweep are gone: GAP if unread, END `source_changed`. A gone
+    /// snapshot whose last state was not copied whole gets a stream of its own if it has none, and
+    /// its exact loss, since no later copy comes. A path under one of the walk's `unlisted` folders
+    /// was not looked at, so it is left alone.
     pub fn sweep(&mut self, rec: &Recorder, unlisted: &[PathBuf]) {
-        self.files.retain(|_, e| {
+        self.files.retain(|id, e| {
             let held = || unlisted.iter().any(|d| e.root.join(&e.rel).starts_with(d));
             if std::mem::take(&mut e.live) || held() {
                 return true;
             }
+            if e.snap && e.h.is_none() && e.done != Some(e.stat) {
+                (e.copy, e.off) = (Some(e.stat), 0);
+                e.h = Some(open_snapshot(rec, id, &e.stat));
+            }
             if let Some(h) = e.h.take() {
-                end(rec, h, e, SourceChanged, false);
+                end(rec, h, e, SourceChanged, e.snap);
             }
             !e.snap
         });
@@ -222,9 +228,12 @@ impl Tail {
 fn read_one(rec: &Recorder, id: &str, e: &mut Entry, left: &mut u64) -> io::Result<Option<Stop>> {
     let f = match open_rel(&e.root, &e.rel, e.copy.unwrap_or(e.stat).fid()) {
         Err(err) if err.kind() == io::ErrorKind::NotFound => {
-            if e.copy.take().is_some()
+            // A copy torn by a newer state ends here, as that state gets a copy of its own; else
+            // the next walk says gone (sweep names the loss) or replaced (settle sees the change).
+            if e.copy.is_some_and(|c| c != e.stat)
                 && let Some(h) = e.h.take()
             {
+                e.copy = None;
                 h.end(rec.now(), SourceChanged, None);
             }
             return Ok(None);
@@ -276,9 +285,9 @@ fn read_one(rec: &Recorder, id: &str, e: &mut Entry, left: &mut u64) -> io::Resu
     Ok(None)
 }
 
-/// Ends a stream; seen bytes left unread get a GAP first, `exact` at the seal and a lower bound
-/// when the file changed (sections 4 and 8). A torn snapshot copy needs none before the seal, where
-/// a later copy follows. Returns the unread.
+/// Ends a stream; seen bytes left unread get a GAP first, `exact` at the seal or for a gone
+/// snapshot, a lower bound when the file changed (sections 4 and 8). A snapshot copy torn by a
+/// newer state needs none before the seal, where a later copy follows. Returns the unread.
 fn end(rec: &Recorder, mut h: StreamHandle, e: &Entry, reason: EndReason, exact: bool) -> u64 {
     let n = want(e).saturating_sub(e.off);
     if n > 0 && reason == CutAtSeal {

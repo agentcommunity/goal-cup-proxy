@@ -137,15 +137,11 @@ fn row(name: &str, root: &Path, pattern: &str) -> Row {
 }
 
 fn notes(calls: &Calls, what: &str) -> Vec<Value> {
-    let all = calls.all().into_iter();
-    let events = all.filter_map(|c| {
-        if let Call::Event(v) = c {
-            Some(v)
-        } else {
-            None
-        }
-    });
-    events.filter(|e| e["what"] == what).collect()
+    let f = |c: Call| match c {
+        Call::Event(v) if v["what"] == what => Some(v),
+        _ => None,
+    };
+    calls.all().into_iter().filter_map(f).collect()
 }
 
 #[test]

@@ -374,3 +374,29 @@ fn close_with_the_guard_out_cuts_a_snapshot_not_copied_yet() {
     assert_eq!(lost(c), [(o[0].0, GapReason::CutAtSeal, Some(7), None)]);
     assert_eq!(ends(c), [(o[0].0, EndReason::CutAtSeal, 7)]);
 }
+
+#[test]
+fn a_snapshot_gone_with_bytes_unread_gives_its_gap_and_end() {
+    // Slice 10: the copy stops part way. Slice 0: the settled copy never starts.
+    for (slice, read) in [(10, 10), (0, 0)] {
+        let mut t = T::new(UNIX_EPOCH);
+        fs::write(t.p("m.json"), [7; 100]).unwrap();
+        t.walk(&["m.json"], true);
+        t.tail.read(&t.rec, slice, Duration::ZERO);
+        fs::remove_file(t.p("m.json")).unwrap();
+        t.read(Duration::ZERO);
+        t.walk(&["m.json"], true);
+        t.read(Duration::ZERO);
+        let T {
+            rec, calls, tail, ..
+        } = t;
+        tail.close(&rec, false);
+        let c = &calls;
+        let o = opens(c);
+        assert_eq!((o.len(), o[0].1), (1, StreamKind::Snapshot));
+        let tail = Some(json!({"unread_at_least": 100 - read}));
+        let gap = (o[0].0, GapReason::SourceChanged, Some(100 - read), tail);
+        assert_eq!(lost(c), [gap]);
+        assert_eq!(ends(c), [(o[0].0, EndReason::SourceChanged, read)]);
+    }
+}
