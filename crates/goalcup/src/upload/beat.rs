@@ -1,7 +1,8 @@
 //! The heartbeat (PRD-06 section 6): the flat `counts`, the recording state, the answer as
-//! [`ServerWord`] and `upload.json` `server_word`, and the ordinary beat. The final heartbeat comes
-//! with the sender.
+//! [`ServerWord`] and `upload.json` `server_word`, the ordinary beat, the final heartbeat, and the
+//! on-disk point a beat names when no live writer publishes one.
 
+use super::SealFacts;
 use super::ServerWord;
 use super::client::{HeartbeatAnswer, HeartbeatRequest, Recording, ServerClient, ServerError};
 use super::policy::{Backoff, Class, Policy, Timer, class_of_status};
@@ -10,7 +11,10 @@ use crate::cli::log::{Fact, line};
 use crate::pipeline::status::Mode;
 use crate::pipeline::{Durable, EntryTotals, Live, Mono, Status};
 use goalcup_format::IndexLine;
+use goalcup_format::read::{part_files, read_index};
 use serde_json::{Map, Value, json};
+use std::fs::{self, File};
+use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{Duration, SystemTime};
@@ -40,6 +44,30 @@ pub fn health(live: Option<&Live>, entry_dir: &Path, t: &EntryTotals) -> Health 
     (l.boot, l.held_bytes, l.writer_idle_ms) = (s.boot, s.held_bytes, s.writer_idle_ms);
     (l.losing, l.off) = (s.losing, s.off);
     Health(s.mode, l)
+}
+
+/// The point a beat names when no live writer publishes one (null mode, `goalcup upload`, a dead
+/// entry): the last whole index line of the last part file whose `c_end` is within that file, its
+/// part and index synced (section 3). A part with no `.idx` has no lines.
+pub fn point_on_disk(rec_dir: &Path) -> io::Result<Option<IndexLine>> {
+    for part in part_files(rec_dir)?.iter().rev() {
+        let name = part
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or_default();
+        let idx = part.with_file_name(name.replace(".gcr.zst", ".idx"));
+        let lines = match read_index(&idx) {
+            Err(e) if e.kind() == io::ErrorKind::NotFound => continue,
+            r => r?,
+        };
+        let len = fs::metadata(part)?.len();
+        if let Some(l) = lines.iter().rev().find(|l| l.c_end <= len) {
+            File::open(part)?.sync_data()?;
+            File::open(&idx)?.sync_data()?;
+            return Ok(Some(*l));
+        }
+    }
+    Ok(None)
 }
 
 /// The heartbeat's `counts`: one flat object, every whole-number COUNT counter as entry totals
@@ -133,7 +161,16 @@ pub fn take_answer(
     word
 }
 
-/// The ordinary beat of one entry, with its own backoff.
+/// What the final heartbeat names: the seal LINK (the last `E` or `R` index line), the seal's
+/// facts, and the recorder's live facts, sent as `mode: sealed`.
+pub struct FinalFacts<'a> {
+    pub point: &'a IndexLine,
+    pub seal: &'a SealFacts,
+    pub live: &'a Live,
+    pub waiting_bytes: u64,
+}
+
+/// The beat of one entry, ordinary and final, with its own backoff.
 pub struct Beat {
     client: ServerClient,
     run: String,
@@ -143,6 +180,8 @@ pub struct Beat {
     pub backoff: Backoff,
     /// The recording state last answered.
     last: Option<Recording>,
+    /// A final heartbeat was tried: no ordinary beat follows (PRD-17 S4).
+    finals: bool,
 }
 
 impl Beat {
@@ -155,14 +194,38 @@ impl Beat {
             timer: Timer::new(p.beat, p.spread_first),
             backoff: Backoff::new(p),
             last: None,
+            finals: false,
         }
     }
 
     /// At once when the state changed, else on the timer, and never while its backoff waits;
-    /// `tick` beats only with a durable point.
+    /// `tick` beats only with a durable point. Never once a final heartbeat was tried.
     pub fn due(&self, now: Mono, recording: Recording) -> bool {
         let changed = self.last != Some(recording);
-        self.backoff.due(now) && (changed || self.timer.due(now))
+        !self.finals && self.backoff.due(now) && (changed || self.timer.due(now))
+    }
+
+    /// Whether the final heartbeat may go (again): only its backoff waits. The caller repeats it
+    /// until `upload.json` `final` says sealed or the wrap-up ends.
+    pub fn final_due(&self, now: Mono) -> bool {
+        self.backoff.due(now)
+    }
+
+    /// Sends the final heartbeat once: `final: true` at the seal LINK with the seal's
+    /// `workspace_head` and totals. From here on `tick` sends nothing.
+    pub fn final_beat(
+        &mut self,
+        now: Mono,
+        f: &FinalFacts<'_>,
+        j: &Mutex<UploadJson>,
+        word: &watch::Sender<Option<ServerWord>>,
+    ) -> Option<ServerWord> {
+        self.finals = true;
+        let (h, t) = (Health(Mode::Sealed, f.live.clone()), &f.seal.totals);
+        let c = counts(&h, t, f.waiting_bytes);
+        let head = f.seal.workspace_head.clone();
+        let req = request(&self.entry, f.point, t, recording(&h, t), c, true, head);
+        self.send(now, &req, j, word)
     }
 
     /// One ordinary tick: beats from `durable` if due. True when a beat was answered.
@@ -209,6 +272,9 @@ impl Beat {
         let out = match answer {
             Ok(a) => {
                 let w = take_answer(&mut j, &a, req.recording, now, wall);
+                if req.is_final && j.final_ == Final::None {
+                    j.final_ = Final::Sent;
+                }
                 self.backoff.progress();
                 self.timer.started(now);
                 self.last = Some(req.recording);
