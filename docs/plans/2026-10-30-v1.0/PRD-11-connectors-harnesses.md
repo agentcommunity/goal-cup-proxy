@@ -1299,3 +1299,59 @@ here; the other files carry their own part.
   remaining connector files of section 6 (four of 16 are on integration: `claude-code-cli`,
   `codex-cli`, `hermes-cli`, `kilo-cli`). Each new file is checked by `rule_code` (PRD-14 note).
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-12 slice 4 (merge 69f355c6)
+
+- The pad now reads the flat `connectors/<id>.toml`: top-level `home` (it fills `{home}` only, for
+  the harness login in the box) and `native` rows `name`, `root` and `pattern`. A `home` value that
+  uses `{workspace}`, or a rename of those keys, is a seam line; the pad follows.
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-10 slice 4 (merge a5d7ddc3)
+
+- **`setup` copies one call of `write_settings`** (review B9): to report and save the file a row
+  went to, `cli/setup.rs` fills each row's file with the same `fill(&row.file, home, Path::new(""))`
+  as `connector::launch::write_settings` and calls `write_settings` once per row. The cleaner cut is
+  PRD-11's, at its next touch of `launch.rs`: `write_settings` returns, for each row, the filled
+  file and whether it was written (or the row index with each `Skipped`). PRD-10 then drops its own
+  `fill` call in the same merge. Until then, a change to how `write_settings` fills a row's file is
+  a seam line, and PRD-10 follows in the same merge, or setup prints and saves a path that was never
+  written.
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-11 slice 4, part 1 (merge a96d9f71)
+
+- **On integration now:** ten connector files (`claude-code-cli`, `codex-cli`, `copilot-cli`,
+  `gemini-cli`, `hermes-cli`, `kilo-cli`, `openclaw-cli`, `opencode-cli`, `opencode2-cli`,
+  `qwen-cli`), `builtin.rs` in the one-line `entry!` form (21 lines at 10 ids; 27 at 16), the
+  `.profile` writer (PRD-17 P11) and the 15-row harness table in `docs/harnesses/README.md`, which
+  is the one harness table: other pages link to it and never copy it. Facts the merge settled:
+  - **Version check:** a word of the first non-empty line of `program --version`, a leading `v`
+    stripped, must start with `version` (`"2."` takes `v2.1.0`, never `1.12`). A version wrapped in
+    punctuation, such as `(2.1.0)`, is not a word start and refuses; OpenCode's two connectors are
+    told apart only by this rule, so the pad's first row of each is its proof on a real binary.
+  - **`.profile`:** written by `plan` at every start while the home lock is free, only where the
+    connector's `home` sets `HOME` and the harness environment has `PATH`, into the filled `HOME`
+    folder. Only a `.profile` that starts with goalcup's own header line is replaced (beside and
+    renamed over, never through a link); any other file is kept and `log` gets "kept a .profile
+    goalcup did not write"; another error gives "could not write .profile: <kind>". No connector on
+    integration sets `HOME`, so the first real use is Amp and Droid in slice 5.
+  - OpenClaw's `openclaw.json` is JSON5 when hand-written; one that does not parse as JSON is named
+    in `unread`, so its proxy keys are not checked and the participant is told (known, README row 5).
+- **Not done in this part, moved:** the new-shape facts sheets for `claude-code-cli`, `codex-cli`,
+  `hermes-cli` and `kilo-cli`. The README now says the sheets stay in the old shape and are rewritten
+  from what the pad shows. All 15 sheets (and the group-A sheets planned for slice 5) move to the
+  last slice, after the pad's rows, with the README tier refresh. Slice 5 keeps amp, droid, goose,
+  crush, kimi-code and cline with their six `entry!` lines.
+- **Still open from the PRD-10 note (review B9):** `write_settings` still returns only the skips, so
+  `cli/setup.rs` keeps its own `fill` copy and the seam line rule of that note holds.
+- **Size (ledger L2), `wc -l` at a96d9f71.** src 1,689 of the 1,700 ceiling: `schema.rs` 423,
+  `mod.rs` 317, `launch.rs` 324, `hints.rs` 303, `hosts.rs` 301, `builtin.rs` 21. Tests 759 of 760:
+  `connector_launch.rs` 261, `connector_hints.rs` 196, `connector_builtin.rs` 155,
+  `connector_hosts.rs` 105, `connector_no_model_address.rs` 42. Slice 5's six `entry!` lines bring
+  src to 1,695. **Decision:** the 1,700 and 760 ceilings stand. The B9 change is the one exception:
+  it may pass 1,700 by at most the lines PRD-10 drops from `cli/setup.rs` in the same merge, so the
+  crate total does not grow (point 6: setup reports the file that was really written). It adds no
+  test file case; its proof is PRD-10's existing setup test. Anything else past 1,700 or 760 needs
+  another decision line, and a new connector adds only data and its `entry!` line.
+- No locked ledger item is touched and no owner question comes from this slice.
