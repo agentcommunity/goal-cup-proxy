@@ -1,0 +1,6 @@
+# Ladder rung 1: local capture, nothing uploaded (PRD-12 section 1a). Copy, change a line, run
+#   scripts/pad/pad <your copy>
+harness = "claude-code-cli"
+key = "claude"
+case = "direct"
+mode = "micro"
