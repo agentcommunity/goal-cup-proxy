@@ -95,9 +95,8 @@ migration to the shared database.
 **Usage stats (third slice, not built yet).** An organizer job writes `usage/{event}/{run}/{entry}.json`
 to a bucket of its own, `goalcup-usage` (`goalcup-usage-staging` during the build), never the traces
 bucket: the job needs write access and R2 tokens scope only to whole buckets. The Worker neither binds
-nor serves it. The owner creates `goalcup-usage` with the production deploy. The job itself is not built yet;
-`scripts/delete-test-runs.sh` already empties `usage/test/` and `usage/test-staging/` in the usage buckets and skips
-a usage bucket that does not exist yet.
+nor serves it. The owner creates `goalcup-usage` with the production deploy. Test runs' usage objects go
+with [Clean up test runs](#clean-up-test-runs).
 
 ## Run it locally
 
@@ -390,8 +389,10 @@ To remove an operator, delete the row with the same `member_id`.
 
 `scripts/delete-test-runs.sh` deletes all organizer test runs, in the database and in R2
 (`goalcup-traces/traces/test/`, `goalcup-traces-staging/traces/test-staging/`, `goalcup-usage/usage/test/`
-and `goalcup-usage-staging/usage/test-staging/` only; a usage bucket that does not exist yet is skipped
-with one line, and the token needs R2 read and write on all four buckets). It needs `psql`,
+and `goalcup-usage-staging/usage/test-staging/` only). It lists R2 first, so a failed listing changes
+nothing. The token needs R2 read and write on both traces buckets and on each usage bucket that exists.
+A usage bucket that is missing or not open to the token (`404` or `403`) is skipped with one line; its
+test objects stay until a run with a token that reaches it. It needs `psql`,
 `curl` and `python3`, and `DATABASE_URL`, `CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_API_TOKEN` in the
 environment. `DATABASE_URL` is the website database URL: set it from `DATABASE_URL_REMOTE`
 (`export DATABASE_URL="$DATABASE_URL_REMOTE"`). Run the script in `server/worker`.
@@ -400,7 +401,8 @@ environment. `DATABASE_URL` is the website database URL: set it from `DATABASE_U
 2. Read the list. If it is right, run `sh scripts/delete-test-runs.sh --yes`.
 3. To keep recent runs, add `--older-than '7 days'`. If the script reports objects not deleted, run it
    again without `--older-than`. That run deletes every test run. (With `--older-than`, a second run no longer
-   knows the keys, because the rows are gone.)
+   knows the runs, because the rows are gone.) A test run still uploading while the script runs can leave
+   objects behind; a run without `--older-than` removes them too.
 
 More on test runs: [OPERATING](../../docs/OPERATING.md#test-runs).
 

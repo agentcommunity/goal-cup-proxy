@@ -6,13 +6,14 @@
 #
 # Needs: psql, curl, python3, and in the environment
 #   DATABASE_URL           the website's Supabase Postgres URL (it calls goal_cup_tracer.delete_test_runs)
-#   CLOUDFLARE_ACCOUNT_ID  and CLOUDFLARE_API_TOKEN (R2 read and write on the four buckets below)
+#   CLOUDFLARE_ACCOUNT_ID  and CLOUDFLARE_API_TOKEN (R2 read and write on the buckets below)
 # The database holds the test runs of production and staging together, so one call covers both.
 # Only these bucket:prefix pairs are touched: goalcup-traces:traces/test/,
 # goalcup-traces-staging:traces/test-staging/, goalcup-usage:usage/test/ and
-# goalcup-usage-staging:usage/test-staging/ (usage stats). A usage bucket that does not exist yet is
-# skipped with one line. Without --older-than every test run goes and all four prefixes are emptied;
-# with it, only the objects of the runs deleted (for usage, everything under <prefix><run>/).
+# goalcup-usage-staging:usage/test-staging/ (usage stats). R2 is listed before the database changes,
+# so a failed listing changes nothing. A usage bucket that is missing or not open to the token is
+# skipped with one line. Without --older-than every test run goes and all prefixes are emptied; with
+# it, only what is under <prefix><run>/ for the runs deleted.
 set -eu
 
 older='0' yes=no
@@ -20,7 +21,7 @@ while [ $# -gt 0 ]; do
   case $1 in
     --older-than) older=${2:?--older-than needs an interval, like '7 days'}; shift ;;
     --yes) yes=yes ;;
-    -h | --help) sed -n '2,15p' "$0"; exit 0 ;;
+    -h | --help) sed -n '2,16p' "$0"; exit 0 ;;
     *) echo "delete-test-runs: unknown argument $1" >&2; exit 2 ;;
   esac
   shift
@@ -30,28 +31,24 @@ case $older in *\'*) echo "delete-test-runs: bad interval" >&2; exit 2 ;; esac
 base="https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/r2/buckets"
 tmp=$(mktemp -d) && trap 'rm -rf "$tmp"' EXIT
 
-# 1. The database. A dry run is the same call in a transaction that is rolled back.
-end=ROLLBACK
-[ "$yes" = yes ] && end=COMMIT
-psql "$DATABASE_URL" -X -q -At -v ON_ERROR_STOP=1 >"$tmp/db.json" <<SQL
-BEGIN;
-SELECT goal_cup_tracer.delete_test_runs('$older'::interval);
-$end;
-SQL
-
-# list BUCKET PREFIX: add every key under PREFIX to $tmp/keys. A bucket that does not exist (R2 API
-# 404, code 10006) sets missing=yes; any other failure stops the script.
+# list BUCKET PREFIX: add every key under PREFIX to $tmp/keys and set status=ok, or on a failure set
+# status to the HTTP status and R2 error codes (HTTP 000 when no answer came).
 list() {
-  cursor=
+  status=ok cursor=
   while :; do
+    rm -f "$tmp/page.json"
     code=$(curl -sS -G -o "$tmp/page.json" -w '%{http_code}' "$base/$1/objects" --data-urlencode "prefix=$2" \
-      --data-urlencode per_page=1000 ${cursor:+--data-urlencode "cursor=$cursor"} -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN")
+      --data-urlencode per_page=1000 ${cursor:+--data-urlencode "cursor=$cursor"} -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN") || code=000
     cursor=$(python3 - "$tmp/page.json" "$tmp/keys" "$code" <<'PY'
 import json, sys
-page = json.load(open(sys.argv[1]))
-if sys.argv[3] == "404" and any(e.get("code") == 10006 for e in page.get("errors") or []):
-    print("missing"); sys.exit()
-assert sys.argv[3] == "200" and page.get("success"), (sys.argv[3], page.get("errors"))
+try:
+    page = json.load(open(sys.argv[1]))
+except Exception:
+    page = None
+page = page if isinstance(page, dict) else {}
+if sys.argv[3] != "200" or not page.get("success"):
+    codes = ",".join(str(e.get("code")) for e in page.get("errors") or [] if isinstance(e, dict))
+    print(f"!HTTP {sys.argv[3]}" + (f" code {codes}" if codes else "")); sys.exit()
 with open(sys.argv[2], "a") as out:
     for o in page.get("result") or []:
         out.write(o["key"] + "\n")
@@ -59,55 +56,59 @@ info = page.get("result_info") or {}
 print(info.get("cursor", "") if info.get("is_truncated") else "")
 PY
 )
-    if [ "$cursor" = missing ]; then missing=yes; break; fi
-    if [ -z "$cursor" ]; then break; fi
+    case $cursor in '!'*) status=${cursor#!}; return ;; '') return ;; esac
   done
 }
 
-# 2. R2, per bucket: every object under its prefix (all runs), or only those of the runs the database
-# named (traces: the keys it returns; usage: what is listed under <prefix><run>/).
-python3 -c 'import json,sys; [print(r) for r in json.load(open(sys.argv[1]))["runs"]]' "$tmp/db.json" >"$tmp/runs"
+# 1. R2, before anything changes: every object under each prefix.
 : >"$tmp/plan"
-: >"$tmp/buckets"
+buckets=
 for pair in goalcup-traces:traces/test/ goalcup-traces-staging:traces/test-staging/ \
   goalcup-usage:usage/test/ goalcup-usage-staging:usage/test-staging/; do
   bucket=${pair%%:*} prefix=${pair#*:}
   : >"$tmp/keys"
-  missing=no
-  if [ "$older" = 0 ]; then
-    list "$bucket" "$prefix"
-  elif [ "${prefix%%/*}" = traces ]; then
-    python3 -c 'import json,sys; [print(k) for k in json.load(open(sys.argv[1]))["r2_keys"] if k.startswith(sys.argv[2])]' "$tmp/db.json" "$prefix" >"$tmp/keys"
-  else
-    while read -r run; do
-      list "$bucket" "$prefix$run/"
-      if [ "$missing" = yes ]; then break; fi
-    done <"$tmp/runs"
-  fi
-  if [ "$missing" = yes ]; then
-    echo "delete-test-runs: bucket $bucket not found, skipped" >&2
-    continue
-  fi
+  list "$bucket" "$prefix"
+  case ${prefix%%/*}:$status in
+    *:ok) ;;
+    usage:'HTTP 403'* | usage:'HTTP 404 code 10006'*)
+      echo "delete-test-runs: R2 $bucket is missing or not open to this token ($status), skipped" >&2
+      continue ;;
+    *) echo "delete-test-runs: listing R2 $bucket failed ($status); nothing changed" >&2; exit 1 ;;
+  esac
   # Never anything outside the prefix.
   if grep -v "^$prefix" "$tmp/keys" >/dev/null; then
-    echo "delete-test-runs: a key outside $bucket/$prefix; nothing deleted from R2" >&2
+    echo "delete-test-runs: a key outside $bucket/$prefix; nothing changed" >&2
     exit 1
   fi
   sed "s|^|$bucket |" "$tmp/keys" >>"$tmp/plan"
-  echo "$bucket" >>"$tmp/buckets"
+  buckets="$buckets $bucket"
 done
 
-python3 - "$tmp/db.json" "$tmp/plan" "$yes" "$tmp/buckets" <<'PY'
-import collections, json, sys
+# 2. The database. A dry run is the same call in a transaction that is rolled back.
+end=ROLLBACK
+[ "$yes" = yes ] && end=COMMIT
+psql "$DATABASE_URL" -X -q -At -v ON_ERROR_STOP=1 >"$tmp/db.json" <<SQL
+BEGIN;
+SELECT goal_cup_tracer.delete_test_runs('$older'::interval);
+$end;
+SQL
+python3 - "$tmp/db.json" "$yes" "$tmp/runs" <<'PY'
+import json, sys
 d = json.load(open(sys.argv[1]))
-plan = [l.split(" ", 1) for l in open(sys.argv[2]).read().split("\n") if l]
-verb = "Deleted" if sys.argv[3] == "yes" else "Would delete"
+open(sys.argv[3], "w").write("".join(r + "\n" for r in d["runs"]))
+verb = "Deleted" if sys.argv[2] == "yes" else "Would delete"
 print(f"{verb} {len(d['runs'])} test run(s): {', '.join(d['runs']) or '-'}")
 print("  rows: " + ", ".join(f"{k} {v}" for k, v in sorted(d["counts"].items())))
-n = collections.Counter(b for b, _ in plan)
-for bucket in open(sys.argv[4]).read().split():
-    print(f"  R2 {bucket}: {n[bucket]} object(s)")
 PY
+
+# 3. With --older-than, keep only the objects of the runs deleted (<prefix><run>/...).
+if [ "$older" != 0 ]; then
+  awk 'FILENAME == ARGV[1] { run[$0]; next } { split($2, p, "/") } p[3] in run' "$tmp/runs" "$tmp/plan" >"$tmp/keep"
+  mv "$tmp/keep" "$tmp/plan"
+fi
+for bucket in $buckets; do
+  echo "  R2 $bucket: $(grep -c "^$bucket " "$tmp/plan") object(s)"
+done
 
 if [ "$yes" = yes ]; then
   failed=0
