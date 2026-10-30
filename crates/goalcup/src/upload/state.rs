@@ -46,7 +46,12 @@ pub struct UploadJson {
 
 impl UploadJson {
     pub fn new(run: String, entry: String) -> UploadJson {
-        UploadJson { v: V, run, entry, ..UploadJson::default() }
+        UploadJson {
+            v: V,
+            run,
+            entry,
+            ..UploadJson::default()
+        }
     }
 }
 
@@ -108,7 +113,12 @@ pub struct LastError {
 
 impl LastError {
     pub fn new(at: SystemTime, class: Class, status: Option<u16>, text: &str) -> LastError {
-        LastError { at: rfc3339(at), class, status, text: text.to_owned() }
+        LastError {
+            at: rfc3339(at),
+            class,
+            status,
+            text: text.to_owned(),
+        }
     }
 }
 
@@ -175,7 +185,11 @@ pub struct Writer {
 
 impl Writer {
     pub fn new(entry_dir: PathBuf) -> Writer {
-        Writer { dir: entry_dir, last: None, at: None }
+        Writer {
+            dir: entry_dir,
+            last: None,
+            at: None,
+        }
     }
 
     /// Writes `value` if it is due; true when the file was written.
@@ -243,9 +257,15 @@ mod tests {
 
         let dir = tempfile::tempdir().unwrap();
         write(dir.path(), &j).unwrap();
-        let mode = std::fs::metadata(dir.path().join(FILE)).unwrap().permissions().mode();
+        let mode = std::fs::metadata(dir.path().join(FILE))
+            .unwrap()
+            .permissions()
+            .mode();
         assert_eq!(mode & 0o777, 0o600);
         assert_eq!(read(dir.path()), Some(j));
-        assert_eq!(rfc3339(UNIX_EPOCH + Duration::from_secs(1_794_045_601)), "2026-11-07T10:00:01Z");
+        assert_eq!(
+            rfc3339(UNIX_EPOCH + Duration::from_secs(1_794_045_601)),
+            "2026-11-07T10:00:01Z"
+        );
     }
 }

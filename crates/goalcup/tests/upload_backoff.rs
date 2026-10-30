@@ -16,7 +16,9 @@ const S: fn(u64) -> Duration = Duration::from_secs;
 #[test]
 fn waits_double_from_2_s_and_never_pass_120_s() {
     let p = Policy::default();
-    let waits: Vec<u64> = (1..=8).map(|n| backoff(&p, n, None, 1.0).as_secs()).collect();
+    let waits: Vec<u64> = (1..=8)
+        .map(|n| backoff(&p, n, None, 1.0).as_secs())
+        .collect();
     assert_eq!(waits, [2, 4, 8, 16, 32, 64, 120, 120]);
 
     for step in 0..=10 {
@@ -65,7 +67,10 @@ fn progress_resets_the_wait() {
 #[test]
 fn a_clock_jump_makes_the_round_and_the_beat_due_on_the_next_tick() {
     for spread_first in [false, true] {
-        let p = Policy { spread_first, ..Policy::default() };
+        let p = Policy {
+            spread_first,
+            ..Policy::default()
+        };
         let t0 = Mono(1_000_000_000_000);
         let mut round = Cadence::new(&p);
         let mut beat = Timer::beat(&p);
@@ -100,7 +105,9 @@ fn flaky_worker(puts: usize) -> u16 {
     let port = listener.local_addr().unwrap().port();
     std::thread::spawn(move || {
         for n in 0..puts {
-            let Ok((mut stream, _)) = listener.accept() else { return };
+            let Ok((mut stream, _)) = listener.accept() else {
+                return;
+            };
             let mut seen = Vec::new();
             let mut buf = [0u8; 4096];
             let end = loop {
@@ -125,11 +132,17 @@ fn flaky_worker(puts: usize) -> u16 {
                 }
             }
             let (status, body) = if n % 2 == 0 {
-                ("503 Service Unavailable", r#"{"error":"maintenance"}"#.to_string())
+                (
+                    "503 Service Unavailable",
+                    r#"{"error":"maintenance"}"#.to_string(),
+                )
             } else {
                 let at = (n as u64).div_ceil(2) * 10;
                 let head = "a".repeat(64);
-                ("200 OK", format!(r#"{{"offset":{at},"next_seq":{n},"head":"{head}"}}"#))
+                (
+                    "200 OK",
+                    format!(r#"{{"offset":{at},"next_seq":{n},"head":"{head}"}}"#),
+                )
             };
             let answer = format!(
                 "HTTP/1.1 {status}\r\nContent-Type: application/json\r\n\
@@ -171,7 +184,10 @@ fn a_worker_failing_every_other_put_never_makes_a_wait_above_4_s() {
             }
             Err(e) => {
                 let wait = b.fail(Mono(0), e.retry_after().map(Duration::from_secs));
-                assert!(wait <= Duration::from_secs(4), "put {n}: {e}, wait {wait:?}");
+                assert!(
+                    wait <= Duration::from_secs(4),
+                    "put {n}: {e}, wait {wait:?}"
+                );
                 failed += 1;
             }
         }

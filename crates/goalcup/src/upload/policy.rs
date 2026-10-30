@@ -90,7 +90,10 @@ fn test_policy() -> Option<Policy> {
 
 /// `now` plus `d`, on boot time.
 pub fn after(now: Mono, d: Duration) -> Mono {
-    Mono(now.0.saturating_add(u64::try_from(d.as_nanos()).unwrap_or(u64::MAX)))
+    Mono(
+        now.0
+            .saturating_add(u64::try_from(d.as_nanos()).unwrap_or(u64::MAX)),
+    )
 }
 
 /// The wait after `failures` failures in a row:
@@ -124,7 +127,11 @@ pub struct Backoff {
 
 impl Backoff {
     pub fn new(p: &Policy) -> Backoff {
-        Backoff { policy: *p, failures: 0, next_try: None }
+        Backoff {
+            policy: *p,
+            failures: 0,
+            next_try: None,
+        }
     }
 
     /// One more failure at `now`; returns the wait.
@@ -159,7 +166,11 @@ pub struct Timer {
 impl Timer {
     /// The heartbeat's timer.
     pub fn beat(p: &Policy) -> Timer {
-        Timer { period: p.beat, spread_first: p.spread_first, next: None }
+        Timer {
+            period: p.beat,
+            spread_first: p.spread_first,
+            next: None,
+        }
     }
 
     pub fn due(&self, now: Mono) -> bool {
@@ -186,7 +197,11 @@ pub struct Cadence {
 impl Cadence {
     pub fn new(p: &Policy) -> Cadence {
         Cadence {
-            timer: Timer { period: p.round, spread_first: p.spread_first, next: None },
+            timer: Timer {
+                period: p.round,
+                spread_first: p.spread_first,
+                next: None,
+            },
             trigger_bytes: p.trigger_bytes,
         }
     }
@@ -210,7 +225,9 @@ pub struct WrapUp {
 
 impl WrapUp {
     pub fn starting(now: Mono, p: &Policy) -> WrapUp {
-        WrapUp { until: after(now, p.wrap_up) }
+        WrapUp {
+            until: after(now, p.wrap_up),
+        }
     }
 
     pub fn over(&self, now: Mono) -> bool {

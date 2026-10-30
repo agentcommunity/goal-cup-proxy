@@ -390,7 +390,10 @@ fn token_may_go_to(base: &str) -> bool {
         Some(v6) => v6.split(']').next().unwrap_or_default(),
         None => authority.split(':').next().unwrap_or_default(),
     };
-    host == "localhost" || host.parse::<std::net::IpAddr>().is_ok_and(|ip| ip.is_loopback())
+    host == "localhost"
+        || host
+            .parse::<std::net::IpAddr>()
+            .is_ok_and(|ip| ip.is_loopback())
 }
 
 /// A reader that fails once `until` (boot time) has passed.
@@ -479,7 +482,10 @@ impl ureq::TlsConnector for RustlsConnector {
     ) -> Result<Box<dyn ureq::ReadWrite>, ureq::Error> {
         let host = dns_name.trim_start_matches('[').trim_end_matches(']');
         let name = rustls::pki_types::ServerName::try_from(host.to_string()).map_err(|e| {
-            std::io::Error::new(std::io::ErrorKind::InvalidInput, format!("server name: {e}"))
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!("server name: {e}"),
+            )
         })?;
         let mut session = rustls::ClientConnection::new(self.0.clone(), name)
             .map_err(|e| std::io::Error::other(format!("TLS setup: {e}")))?;
@@ -628,7 +634,10 @@ mod tests {
     #[test]
     fn a_put_refused_before_its_body_answers_with_the_servers_word() {
         let zero = "0".repeat(64);
-        let elsewhere = format!(r#"{{"offset":4096,"next_seq":9,"head":"{}","final":null}}"#, "b".repeat(64));
+        let elsewhere = format!(
+            r#"{{"offset":4096,"next_seq":9,"head":"{}","final":null}}"#,
+            "b".repeat(64)
+        );
         let cases = [
             (
                 http("409 Conflict", "", r#"{"error":"conflict"}"#),
@@ -637,8 +646,16 @@ mod tests {
                 None,
             ),
             (
-                http("429 Too Many Requests", "Retry-After: 7\r\n", r#"{"error":"rate_limited"}"#),
-                http("429 Too Many Requests", "Retry-After: 7\r\n", r#"{"error":"rate_limited"}"#),
+                http(
+                    "429 Too Many Requests",
+                    "Retry-After: 7\r\n",
+                    r#"{"error":"rate_limited"}"#,
+                ),
+                http(
+                    "429 Too Many Requests",
+                    "Retry-After: 7\r\n",
+                    r#"{"error":"rate_limited"}"#,
+                ),
                 429,
                 Some(7),
             ),
@@ -649,7 +666,9 @@ mod tests {
             let (seen, heads) = mpsc::channel();
             std::thread::spawn(move || {
                 for answer in [put_answer, position_answer] {
-                    let Ok((mut stream, _)) = listener.accept() else { return };
+                    let Ok((mut stream, _)) = listener.accept() else {
+                        return;
+                    };
                     let head = read_head(&mut stream);
                     let _ = stream.write_all(answer.as_bytes());
                     let _ = seen.send(head.lines().next().unwrap_or_default().to_string());
@@ -673,9 +692,16 @@ mod tests {
                 .unwrap_err();
             let wait = Duration::from_secs(10);
             assert!(heads.recv_timeout(wait).unwrap().starts_with("PUT "));
-            assert!(heads.recv_timeout(wait).unwrap().starts_with("GET "), "{error}");
+            assert!(
+                heads.recv_timeout(wait).unwrap().starts_with("GET "),
+                "{error}"
+            );
             match error {
-                ServerError::Status { status: s, retry_after: r, .. } => {
+                ServerError::Status {
+                    status: s,
+                    retry_after: r,
+                    ..
+                } => {
                     assert_eq!((s, r), (status, retry_after));
                 }
                 other => panic!("{other:?}"),
