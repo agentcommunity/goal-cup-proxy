@@ -1,6 +1,7 @@
 #!/usr/bin/env python3.11
 """The test pad, box half (PRD-12 sections 1a, 3 to 8), modes micro and cycle:
-    pad-run <run dir> <step>      (pad writes settings.json; the steps are STEPS and TIMED@<minute>, wait-calls takes N)
+    pad-run <run dir> <step>      (pad writes settings.json; the steps are STEPS, TIMED@<minute>, wait-calls N,
+                                   pre <script> and exec <script>@<minute>, the scripts in exec/ beside this file)
 Each step ends with one line `PADSTEP {"result":..,"saw":..}` and exits 0, also on a failure; 2 is a
 usage error. Known values (keys, plants, the remote password) never leave the box: panes are replaced
 before a file gets them and the scans run here. No key or planted value is ever printed, logged or an
@@ -17,9 +18,12 @@ BESIDE = ("spend", "seal-now", "watch")  # these run beside the other steps, so 
 STEPS = ("setup", "start", "paste", "wait-calls", "look", "wait-recovery", "keep-going", "seal", "wait-upload", "verify",
          "wipe") + BESIDE
 TIMED = ("kill-recorder", "kill-watchdog-recover")  # section 3.1, at <minute> after the paste
-USAGE = "usage: pad-run <run dir> " + "|".join([s + " N" * (s == "wait-calls") for s in STEPS] + [t + "@M" for t in TIMED])
+USAGE = "usage: pad-run <run dir> " + "|".join([s + " N" * (s == "wait-calls") for s in STEPS] + [t + "@M" for t in TIMED]
+                                                + ["pre SCRIPT", "exec SCRIPT@M"])
 EVERY = {"status": 10, "procs": 30, "pane": 60, "live": 300}  # section 4: the watch's seconds per kind of line
-OUT = ("verify", "watch", "status.json", "harness-files.json", "meta-box.json")  # what out.tar carries
+OUT = ("verify", "watch", "exec", "status.json", "harness-files.json", "meta-box.json")  # what out.tar carries
+PROXY_CA = tuple(n for p in ("HTTPS", "HTTP", "ALL", "NO") for n in (p + "_PROXY", p.lower() + "_proxy")) + (
+    "SSL_CERT_FILE", "SSL_CERT_DIR", "NODE_EXTRA_CA_CERTS", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE")
 
 
 class Step(Exception):  # a step's end: args are (result, saw)
@@ -41,6 +45,12 @@ def replace_known(text, values):
         count += text.count(f)
         text = text.replace(f, "[known:%d]" % n)
     return text, count
+
+
+def exec_env(environ, ca_names=()):
+    """Section 3.1: from /proc/<pid>/environ bytes, only the proxy and CA names (and settings' ca_env), never a key."""
+    pairs = (item.decode(errors="replace").partition("=") for item in environ.split(b"\0"))
+    return {k: v for k, eq, v in pairs if eq and k in PROXY_CA + tuple(ca_names)}
 
 
 def sh(argv, timeout=120, stdin=subprocess.DEVNULL, **kw):
@@ -128,7 +138,8 @@ class Run:
         self.sec = self.h.get("gateway" if self.s.get("case") == "gateway" else "direct", {})
         self.keys, self.tmux = self.path("keys"), self.s.get("session") or "pad"  # copies only, never ~/.pad-keys
         lim = float((self.s.get("limits") or {}).get(kind, 300))  # pad's limit for this step; a timed one's runs from its minute
-        self.end = max(time.time(), self.st.get("pasted", 0) + float(m) * 60 if m else 0) + lim
+        self.m = float(m) if m else None
+        self.end = max(time.time(), self.st.get("pasted", 0) + self.m * 60 if m else 0) + lim
 
     def path(self, *p):
         return os.path.join(self.run, *p)
@@ -263,7 +274,8 @@ class Run:
         if self.st.get("key_route") == "env":  # the value is never in argv: the launch shell reads the file
             lines += ['export %s="$(cat %s)"' % (self.st["key_env"], shlex.quote(self.st["key_path"])), "rm -f " + shlex.quote(self.st["key_path"])]
         argv = [tool("goalcup"), "start", "--test", "--harness", s["harness_id"], "--prompt", self.path("prompt.txt")]
-        argv += [a for k in ("connector", "hosts") if s.get(k) for a in ("--" + k, self.path(s[k]))]
+        hosts = s.get("hosts") or os.path.exists(self.path("hosts.toml")) and "hosts.toml"  # a pre script may write it
+        argv += [a for k, v in (("connector", s.get("connector")), ("hosts", hosts)) if v for a in ("--" + k, self.path(v))]
         write(self.path("launch.sh"), "\n".join(lines + [shlex.join(argv)]) + "\n", 0o700)
         t = self.tmux  # one session per run, so runs on one machine never meet
         for argv in (["new-session", "-d", "-s", t, "-x", "200", "-y", "50"], ["set-option", "-w", "-t", t, "remain-on-exit", "on"],
@@ -401,6 +413,38 @@ class Run:
 
     def at(self, m):  # sleep until minute m after the paste
         time.sleep(max(0, self.st["pasted"] + m * 60 - time.time()))
+
+    def pre(self, script):  # section 3.1: once, after setup and before start
+        return self.script("pre", script, {})
+
+    def exec(self, script):  # section 3.1: at minute m, in the harness's proxy and CA environment, never its keys
+        self.need(started=True)
+        self.at(self.m)
+        if not alive(pid := pc.dig(self.status(), "s4_harness_pid")):
+            raise Step("skip", "no harness process")
+        with open("/proc/%d/environ" % pid, "rb") as f:  # filtered by name before anything holds it
+            env = exec_env(f.read(), self.s.get("ca_env") or ())
+        return self.script("exec", script, env, minute=self.m)
+
+    def script(self, kind, name, env, **kw):
+        """bash exec/<name> in the project, its process group killed at the step's limit; only the replaced output
+        reaches exec/<name>.txt; one faults.jsonl line. No key file path or key value is in its environment."""
+        env = dict(env, **self.gc_env(True), PAD_RUN=self.run, PAD_PROJECT=self.project, PAD_HOME=self.st.get("home") or "",
+                   PAD_MODEL_HOSTS=self.path(self.s.get("model_hosts") or "model-hosts.toml"),
+                   PAD_DAEMON=str(self.h.get("daemon") or ""))
+        p = subprocess.Popen(["bash", os.path.join(PAD, "exec", name)], cwd=self.project, env=env, stdin=subprocess.DEVNULL,
+                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, errors="replace", start_new_session=True)
+        try:
+            out, code = p.communicate(timeout=max(1, self.left()))[0], p.returncode
+        except subprocess.TimeoutExpired:
+            os.killpg(p.pid, signal.SIGKILL)
+            out, code = p.communicate()[0], None
+        if (values := self.known()) is not None:
+            write(self.path("exec", name + ".txt"), replace_known(out, values)[0], 0o644)
+        self.fault(kind, script=name, **kw, exit=code)
+        if code is None:
+            raise Step("timeout", "%s %s killed at the step's limit" % (kind, name))
+        return ("ok", "%s %s exit 0" % (kind, name)) if code == 0 else ("FAIL", "%s %s exit %d" % (kind, name, code))
 
     def kill_rec(self, m):
         """kill9 of the recorder in status.json; saves what wait-recovery compares against -> (pid or None, seconds
@@ -631,15 +675,21 @@ class Run:
 
 def main(argv):
     kind, at, m = argv[2].partition("@") if len(argv) in (3, 4) else ("", "", "")
-    timed = kind in TIMED and len(argv) == 3 and re.fullmatch(r"\d+(\.\d+)?", m)
-    if not (timed or kind in STEPS and not at and len(argv) == 3 + (kind == "wait-calls")):
+    arg = argv[3] if len(argv) == 4 else None
+    if kind in ("pre", "exec") and arg and not at:  # pre <script>, exec <script>@<m>
+        arg, at, m = arg.partition("@")
+        ok = re.fullmatch(r"[A-Za-z0-9._-]+", arg) and (re.fullmatch(r"\d+(\.\d+)?", m) if kind == "exec" else not at)
+    else:
+        ok = kind in TIMED and len(argv) == 3 and re.fullmatch(r"\d+(\.\d+)?", m) or (
+            kind in STEPS and not at and len(argv) == 3 + (kind == "wait-calls"))
+    if not ok:
         print(USAGE, file=sys.stderr)
         return 2
     os.umask(0o077)
     run, extra = None, {}
     try:
         run = Run(argv[1], kind, m)
-        result, saw, *more = getattr(run, kind.replace("-", "_"))(float(m) if timed else argv[3] if len(argv) == 4 else None)
+        result, saw, *more = getattr(run, kind.replace("-", "_"))(float(m) if kind in TIMED else arg)
         extra = more[0] if more else {}
     except Step as stop:
         result, saw = stop.args
