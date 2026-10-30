@@ -87,9 +87,9 @@ step cargo test --locked --workspace --doc
 step npm --prefix server/worker test
 # A named list, not `discover -s scripts`: old script tests name the old crates. A new script test
 # joins only if it guards one of the seven points, the format, masking or the never-stop rules.
-# test_fetch_run.py joins when PRD-07's rewrite merges (today it builds the old goalcup-verifier),
-# and `discover -s scripts/pad` after PRD-12's first test_pad.py merge.
-step python3 -m unittest scripts/test_install.py
+# test_fetch_run.py builds nothing (no database, R2, zstd or verifier). `discover -s scripts/pad`
+# joins after PRD-12's first test_pad.py merge.
+step python3 -m unittest scripts/test_install.py scripts/test_fetch_run.py
 
 if [ "$tier" = full ]; then
     # Every other #[ignore] test (end to end, the real Worker). No --no-tests flag: nextest fails
