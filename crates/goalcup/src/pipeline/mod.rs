@@ -326,7 +326,14 @@ impl Recorder {
     /// again, and `close_open_gaps` drains that map under the same lock after the stop, so the
     /// bytes land in a GAP the seal or the handle sends, or else in the `after_stop` count, never
     /// in neither. False when they went to the `after_stop` count.
-    pub(crate) fn guard_drop(&self, sid: Sid, in_gap: &mut bool, t: Mono, off: u64, n: u64) -> bool {
+    pub(crate) fn guard_drop(
+        &self,
+        sid: Sid,
+        in_gap: &mut bool,
+        t: Mono,
+        off: u64,
+        n: u64,
+    ) -> bool {
         let i = &self.inner;
         let mut open = lock(&i.open_gaps);
         if i.all_stopped.load(Ordering::Acquire) {
@@ -334,10 +341,16 @@ impl Recorder {
             self.count_after_stop(n);
             return false;
         }
-        open.entry(sid).and_modify(|g| g.lost += n).or_insert_with(|| {
-            i.streams_in_gap.fetch_add(1, Ordering::Relaxed);
-            GuardGap { start: t, off, lost: n }
-        });
+        open.entry(sid)
+            .and_modify(|g| g.lost += n)
+            .or_insert_with(|| {
+                i.streams_in_gap.fetch_add(1, Ordering::Relaxed);
+                GuardGap {
+                    start: t,
+                    off,
+                    lost: n,
+                }
+            });
         drop(open);
         *in_gap = true;
         i.dropped_bytes.fetch_add(n, Ordering::Relaxed);
