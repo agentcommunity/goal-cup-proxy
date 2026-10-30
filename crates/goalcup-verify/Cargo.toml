@@ -1,0 +1,27 @@
+[package]
+name = "goalcup-verify"
+description = "The goalcup verifier: proves a GCR1 record whole, names every loss, dumps records, and runs the usage reader."
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+rust-version.workspace = true
+publish = false
+
+[[bin]]
+name = "goalcup-verify"
+path = "src/main.rs"
+
+# Every dependency of PRD-08 and PRD-09, declared once. Nothing async, no TLS, no test hooks.
+# `rusqlite` with `bundled` reads Hermes's session database (PRD-09); it compiles SQLite's C.
+[dependencies]
+goalcup-format = { path = "../goalcup-format" }
+zstd.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+clap.workspace = true
+regex.workspace = true
+base64.workspace = true
+rusqlite = { version = "0.41", features = ["bundled"] }

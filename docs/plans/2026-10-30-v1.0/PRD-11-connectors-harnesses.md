@@ -1239,3 +1239,15 @@ here; the other files carry their own part.
   `connectors/amp-cli.toml` runs `rule_code` first and, on a hit, adds the literal to its `ALLOWED`
   list with a reason. The program name stays as the vendor ships it.
 - `src/connector/builtin.rs` stays the one allowed file (PRD-14 note of b9fa50f8).
+
+### 2026-10-30, replan after PRD-15 slice 5 (merge ea0a0fec)
+
+- `docs/CONNECTOR-SCHEMA.md` on integration now describes the merged `connector/` code and marks eight
+  places **(next slice)** with what the stubs do today: the version probe, `refuse_if_set`,
+  `host_hints`, `hint_env`, a pattern ending in `**`, the settings files (`.jsonc`, `no_prompts` and
+  `update_off` under `{home}` only, booleans), host decisions (today every host is a tunnel) and the
+  three host sources with the full host check. The merge note of PRD-11's next slice names the rules it makes
+  real, so PRD-15 can drop those marks and check each against the merged `hosts.rs`, `hints.rs`, `launch.rs`
+  and `mod.rs`. A rule the slice rules differently from the page is a PRD-15 fix, not a PRD-11 one.
+- The launch slice's `.profile` (PRD-17 P11) is not on the page; PRD-15's ARCHITECTURE rewrite states
+  it from merged `launch.rs`.
