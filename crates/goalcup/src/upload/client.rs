@@ -348,10 +348,7 @@ impl ServerClient {
             message: format!("read from the position after the upload broke ({why})"),
             retry_after: None,
         };
-        if at.offset == h.offset + h.raw_len
-            && at.head == h.head
-            && at.next_seq == h.last_seq + 1
-        {
+        if at.offset == h.offset + h.raw_len && at.head == h.head && at.next_seq == h.last_seq + 1 {
             Ok(ChunkAnswer {
                 offset: at.offset,
                 next_seq: at.next_seq,
