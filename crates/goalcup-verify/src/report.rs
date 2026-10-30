@@ -3,6 +3,7 @@
 
 use crate::input::Input;
 use crate::integrity::{self, Check, Outcome, Res};
+use crate::secrets::{self, Rules};
 use crate::server;
 use serde_json::{Map, Value, json};
 use std::path::Path;
@@ -27,8 +28,13 @@ pub struct Report {
 }
 
 /// Checks every entry of the input. `now_ns` is set for `--live`; `local` is `--local`, the
-/// local entries a server copy is compared with.
-pub fn build(input: &Input, now_ns: Option<u64>, local: Option<&Input>) -> Report {
+/// local entries a server copy is compared with; `known` (`--known`) adds the `secrets` check.
+pub fn build(
+    input: &Input,
+    now_ns: Option<u64>,
+    local: Option<&Input>,
+    known: Option<&Rules>,
+) -> Report {
     let is_server = input.kind == "server";
     let (mut exit, mut text, mut entries) = (0u8, String::new(), Vec::new());
     let (mut run, mut all) = (Value::Null, Vec::new());
@@ -41,6 +47,7 @@ pub fn build(input: &Input, now_ns: Option<u64>, local: Option<&Input>) -> Repor
         if let Some(f) = &f {
             checks.extend(server::checks(e, f, &o, local));
         }
+        checks.extend(known.map(|k| secrets::check(k, e)));
         let worst = checks.iter().map(|c| c.result).max().unwrap_or(Res::Pass);
         let partial = !o.sealed || input.kind == "live" || o.pruned;
         exit = exit.max(match worst {
