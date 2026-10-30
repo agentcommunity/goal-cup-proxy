@@ -715,3 +715,26 @@ PRD-14, PRD-15, PRD-16 and the code.
 | G3-13j | Applied. Automated check: CI `check` green on the merge commit |
 | G3-13k | Applied. The stale parenthesis in interfaces row PRD-14 and the last sentence of CC 91 are gone |
 | B10 sweep (30 Oct) | Applied. The reference and no-return guards of section 6 are no longer `rule_code.rs` rules 3 and 4 (PRD-14 section 6 cut them): PRD-13 runs them by hand, hourly in phases 1 and 2 and once at the phase 3 merge, and PRD-07 runs the Worker half at its cut merge; outputs go in the night log. Size table follows PRD-14 section 3 |
+
+## Amendments
+
+### 2026-10-30, replan after PRD-15 slice 1 (merge 98bbb7e9)
+
+- **The pin rule and the D65 rule are gone from the `AGENTS.md` hard rules** (98bbb7e9). The map is
+  now `AGENTS.md:28-47` (the PRD-15 interface row's `AGENTS.md:32-50` moved) and still names the old
+  crates and the pins until PRD-15 slice 2. The hourly reference-guard hand-run will list those map
+  lines; their owner is PRD-15 slice 2, so they are not new findings.
+- The run 1 report copy at `docs/research/results/2026-10-30-two-hour-run.md` is on integration; the
+  guard's `docs/research/**` exclusion covers it.
+
+### 2026-10-30, replan after PRD-07 slice 2 (merge 2f4bc6a0)
+
+- **Worker guard result (section 6 Worker half, run once on 2f4bc6a0):** `server/worker/src/sign.ts`
+  does not exist; `receipt`, `agent_paused`, `RECEIPT_SIGNING_KEY` and `RUN_MAX_COMPRESSED_BYTES` have
+  no hit in `server/worker/src/`. One false match: `server/worker/wrangler.toml:83`, a comment telling
+  the owner to delete the old `RECEIPT_SIGNING_KEY` secret after the 1.0 Worker is live in production
+  (PRD-07 section 12 step 5). The pattern is narrowed: in `wrangler.toml` only non-comment lines are
+  scanned. A secret name in a `[vars]` key or a binding still hits.
+- **`connector_dir_sha256` stays in Worker `src/`** as the fill of a NOT NULL database column
+  (`runs.ts:153`, `db-*.ts`; no migration, ledger S3). It is not in the Worker pattern list and must not
+  be added there; it is not on the wire (`docs/UPLOAD-API.md` line 15).

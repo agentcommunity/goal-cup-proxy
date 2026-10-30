@@ -8,46 +8,116 @@ superseded or retired is retained to explain history and references; follow the 
 Entries are short on purpose. The code and its tests are the detail. D1 to D26 are older decisions
 retained for references; some have been superseded or retired.
 
+From goalcup 1.0, read [Owner decisions in force](#owner-decisions-in-force) and D75 to D86
+first; they replace the clauses the status table names.
+
+## Owner decisions in force
+
+The owner's decisions for goalcup 1.0. Each points to the entry that carries it.
+
+**29 Oct 2026**, after phase 2 ([progress notes](plans/2026-10-29-record-everything-progress.md#owner-decisions-after-phase-2-29-oct)):
+
+- Less code is better. Cut first ([VISION](../VISION.md)).
+- Record everything, and never block the harness (D78).
+- No caps of our own (D79).
+- A full disk gets no special handling (D78).
+- A session file's path is its ID, and session files are not compared byte for byte with the disk (D76).
+- Masking option b (D80).
+
+**29 Oct 2026, night** ([the ledger](plans/2026-10-30-v1.0/OWNER-DECISIONS.md)):
+
+- goalcup 1.0: a fresh core, the old crates deleted, no backward compatibility (D84).
+- One process (D75).
+- The GCR1 record format (D76).
+- Written counts (D77).
+- One system for every harness, gateways included (D81).
+- Tiers come from the test pad (D82).
+- Usage stats are worked out after upload (D83).
+
+**PRD-00 owner questions** ([the list](plans/2026-10-30-v1.0/PRD-00-index.md#owner-questions)).
+
+- goalcup ends the harness only at the deadline, on `goalcup seal` and on the server's `stop`,
+  with no termination proof (D85) (default, PRD-00 question 2).
+- `goalcup setup` always writes the auto-update switch, and writes the no-prompt values after one
+  question (D86) (default, PRD-00 question 2).
+- `goalcup login` is cut, and file connectors load in practice and test runs only (D84) (default,
+  PRD-00 questions 2 and 4).
+- A tier says how well goalcup records a harness, not whether a run is eligible (D82) (default,
+  PRD-00 question 4).
+- No exact-value masking beyond the run's `GH_TOKEN`, and no wider Stripe rule (D80) (default,
+  PRD-00 question 3).
+- The watchdog is the `start` or `continue` process, and its only recording job is the restart
+  (D75) (default, PRD-00 question 9).
+- The left guard class is a letter, a digit or `_` (D80) (default, PRD-00 question 10).
+- One test-only build feature stays, never in a release build (D84) (default, PRD-00 question 12).
+
+The open list is in [TODO](../TODO.md).
+
 ## Status
 
-Where each entry stands on 28 Oct 2026. "Current" means follow it as written. "Partly superseded"
+Where each entry stands on 30 Oct 2026. "Current" means follow it as written. "Partly superseded"
 means some clauses are replaced; the entry names which. Read the replacing entry for those clauses.
 Update this table in the same PR as any entry it lists.
 
 | D | Status | Replaced by |
 |---|---|---|
-| D1 to D5 | current | |
+| D1 | partly superseded | D81 (the "hosts the connector declares" clause: one host list for every harness); the no-base-URL rule stands |
+| D2 | partly superseded | D76 (session files are not compared byte for byte with the disk) |
+| D3 | partly superseded | D75 (the daemon is now the recorder inside the one goalcup process; record raw, interpret later stands), D84 (signing) |
+| D4 | partly superseded | D75 (the run-scoped daemon, its start on `control.json`, the registry lock race and the residual held in a daemon's memory: one goalcup process records each entry); the one-workspace, one-entry paragraph stands, with `goalcup continue` closing a dead entry before the next part takes over the workspace |
+| D5 | current | |
 | D7 | superseded | D37, D57 |
-| D9, D10, D11 | current | D11's clone case is D56 |
-| D12 | superseded | D53 |
-| D14, D16, D22 | current | D14's rule detail is D36 |
+| D9 | partly superseded | D78 (every loss is a gap with a start, an end, a reason and the lost bytes when known), D76 (a gap is a GCR1 record, not a chained one) |
+| D10 | current | |
+| D11 | current | D11's clone case is D56 |
+| D12 | superseded | D53 (itself superseded by D76) |
+| D14 | partly superseded | D80 (the masking rules; the evidence is a MASK record); D14's rule detail is D36 |
+| D16 | partly superseded | D84 (the signed receipt is removed) |
+| D22 | partly superseded | D85 (when and how goalcup ends the harness; no termination proof) |
 | D23 | retired | `connectors/` and RULES |
-| D24 | current | |
+| D24 | superseded | D84 (the control API is removed) |
 | D25 | partly superseded | D66 (the agent may ask for the time left) |
-| D26, D30, D36, D37 | current | |
+| D26 | partly superseded | D83 (usage stats are read after upload by `goalcup-verify usage`) |
+| D30 | superseded | D84 (no termination proof) |
+| D36 | partly superseded | D80 (the masking rules), D84 (decoders: only the model and usage parts stay) |
+| D37 | partly superseded | D75 (clause 5, the loopback ingest), D76 (the v5 `LocalFinish` paragraph), D78 (clause 3, disk capacity before launch) |
 | D38 | partly superseded | D52 (the cheapest-model clause), D69 and D71 (the agent's git login) |
 | D39 | partly superseded | D57 (chat mode; the headless launch clause is removed) |
-| D40 | partly superseded | D61 (the Hermes clause), D56 (the 180 s budget) |
-| D41 | partly superseded | D43 (CA rule), D52 (model clause), D61 (seed and key scan) |
-| D42 | current | |
-| D43 | partly superseded | D61 (ruling 2); ruling 3 amended by WP12; ruling 4 withdrawn by D70 |
-| D44 to D48 | current | |
+| D40 | partly superseded | D61 (the Hermes clause), D56 (the 180 s budget), D75 (producers and the drain share), D78 (the disk reservation), D85 (the termination bound) |
+| D41 | partly superseded | D43 (CA rule), D52 (model clause), D61 (seed and key scan), D80 (the key-fragment rule) |
+| D42 | partly superseded | D84 (the v5 freeze: no backward compatibility before Edition 01) |
+| D43 | partly superseded | D61 (ruling 2); ruling 3 amended by WP12; ruling 4 withdrawn by D70; D84 (the pin tests of ruling 5, `goalcup doctor` in ruling 7), D76 (the v5 fields of ruling 6) |
+| D44 | current | |
+| D45 | superseded | D76 (no reader for v5 traces, so no v5 integrity exit) |
+| D46 | superseded | D75 (no separate daemon), D84 (no pins) |
+| D47, D48 | current | |
 | D49 | superseded | D60, D61 |
 | D50 | superseded | D61 |
-| D51 to D55, D57 to D60 | current | |
-| D56 | partly superseded | D71 (a clone is decided at finish; the workspace admission rule) |
-| D61 | partly superseded | D62 (model traffic for listed providers only), D71 (the home's `.env` is not hashed), D72 (Hermes 0.22: a trust entry for the model URL; the session file is optional), D74 (the token sentence) |
-| D62 | partly superseded | D74 (a missing value may fall back to the connector's hosts; `env` is no longer a deny word; one indirection through `via`) |
-| D63 | current | |
-| D64 | partly superseded | D65 (the disk watch pauses, never stops) |
-| D65, D66, D67 | current | |
-| D68 | proposed, owner to approve | The open pin question is settled by D70 |
-| D69 | partly superseded | D71 (the clone, the practice folder, the five login variables and the push check are gone; no keys held, the four-step setup and no GitHub in setup stand) |
-| D70 | current | |
-| D71 | current | |
+| D51 | partly superseded | D84 (pins: connectors are compiled in), D81 (the shared provider host table is the one host list) |
+| D52 | partly superseded | D76 (the v5 `Launch` fields) |
+| D53 | superseded | D76 |
+| D54 | superseded | D76 |
+| D55 | superseded | D76 |
+| D56 | partly superseded | D71 (a clone is decided at finish; the workspace admission rule), D75 (the daemon's drain share) |
+| D57 | partly superseded | D79 (the `max_files` cap and its gap), D75 (the create request to the daemon) |
+| D58 | superseded | D75 |
+| D59 | current | |
+| D60 | partly superseded | D80 (a masked byte is `*`, same length, with a MASK record, not `<redacted:run_secret>`), D75 (the hand-off to the daemon) |
+| D61 | partly superseded | D62 (model traffic for listed providers only), D71 (the home's `.env` is not hashed), D72 (Hermes 0.22: a trust entry for the model URL; the session file is optional), D74 (the token sentence), and in part PRD-00 question 2 as a default until the owner answers (the harness gets the participant's whole environment minus proxy and CA variables, which touches the forwards-no-key clause) |
+| D62 | partly superseded | D74 (a missing value may fall back to the connector's hosts; `env` is no longer a deny word; one indirection through `via`), D81 (one host list for every harness) |
+| D63 | superseded | D84 (signing and receipts are removed) |
+| D64 | partly superseded | D78 (its disk-watch clause, changed by D65 before: a full disk gets no special handling), D76 (its backoff clause) |
+| D65 | superseded | D78 |
+| D66 | partly superseded | D84 (the `goalcup mcp` tool is removed); pull-only `goalcup time-left` and the seal refusal (D85) stand |
+| D67 | superseded | D86 (default, PRD-00 question 2) |
+| D68 | superseded | D84 (the connector contract freeze is removed) |
+| D69 | partly superseded | D71 (the clone, the practice folder, the five login variables and the push check are gone; no keys held, the four-step setup and no GitHub in setup stand), D84 (`goalcup login` in setup) |
+| D70 | partly superseded | D84 (pins and `--dev` are removed; the Worker refuses clients below `MIN_COMPETITION_VERSION` in every mode) |
+| D71 | partly superseded | D84 (the `--dev` clause; the 0.6.1 clause that keeps the hidden `goalcup git-credential` and the `github.json` loader; the clause that reads and ignores an old `prep.json` holding `work_root`), D75 (the daemon restart in the run secrets clause), D76 (the v5 `seal.json` field) |
 | D72 | partly superseded | D73 (`goalcup continue` resumes Hermes once model calls are recorded; setup removes the stale CA file) |
-| D73 | current | |
-| D74 | current | |
+| D73 | partly superseded | D75, D84 (the sentence on the daemon and the control API) |
+| D74 | partly superseded | D81 (the host rule and the tunnel list), D79 (the tunnel list's row cap) |
+| D75 to D86 | current | |
 
 ## D1. No API proxy. The harness's own transcript is the evidence.
 
@@ -1160,3 +1230,187 @@ from nothing.
 
 This supersedes D62's refusal of a missing value (it now holds only with `absent = "refuse"`), its
 `env` deny word and its one-key form.
+
+## D75. One goalcup process records everything, and the process that starts the harness is its watchdog.
+
+*30 Oct 2026, owner ledger ([OWNER-DECISIONS](plans/2026-10-30-v1.0/OWNER-DECISIONS.md) L5, R3, R3a and R3b); asked by
+[PRD-02](plans/2026-10-30-v1.0/PRD-02-recorder-core.md) and [PRD-00](plans/2026-10-30-v1.0/PRD-00-index.md) done item 6.*
+
+- One goalcup process holds the proxy, the session-file reader, the masker, the writer and the
+  uploader. No producers, no shared queue, no failure budget.
+- The `start` or `continue` process launches and ends the harness (D85) and is also the
+  watchdog. Its only recording job is to restart a dead recorder at once, on the same port with
+  the same CA. Beside that it holds the listen port, mints the run CA once per entry and runs the
+  connector's helper stops. It never touches a recorded byte (default, PRD-00 question 9).
+- Only a crash loop (3 crashes within 10 minutes, each within 60 s of its start) puts the recorder
+  in null mode: it relays, records nothing and says so. It retries a normal boot after 30 s, 1
+  minute, 2 minutes, then every 5 minutes, and never stops trying. The count resets once a
+  recorder stays up 60 s.
+- If the watchdog itself died, `goalcup recover` restarts only the recorder, on the same port
+  with the same CA, and writes a gap for the time it was down. The harness never restarts. For
+  that, the run CA key is kept in a 0600 file during the entry and removed at the seal.
+- Core dumps are off, and a panic writes only file, line and fixed text. Every timer runs on boot
+  time.
+
+This supersedes D4 and D58.
+
+## D76. The record format is GCR1, and the part file is the upload unit.
+
+*30 Oct 2026, owner ledger ([OWNER-DECISIONS](plans/2026-10-30-v1.0/OWNER-DECISIONS.md) L7, F1, F2, H8 and U1) and the
+owner decisions of 29 Oct; asked by [PRD-01](plans/2026-10-30-v1.0/PRD-01-record-format.md) and
+[PRD-00](plans/2026-10-30-v1.0/PRD-00-index.md) done item 6.*
+
+- GCR1: binary framing, raw bytes, one stream per WebSocket direction, one link per flush, zstd
+  with a 2^27 window written at record time. No reader for older formats.
+- A session file's path is its ID. Session files are not compared byte for byte with the disk.
+- The part file is the upload unit. A chunk goes every 5 minutes or when 16 MiB waits. Retry
+  backoff resets when the server's offset moves and is capped short
+  ([PRD-06](plans/2026-10-30-v1.0/PRD-06-uploader-compression.md)). A local part file is pruned once the server
+  confirms it.
+
+This supersedes D53, D54 and D55, D2 where it asks for a byte-for-byte match with the disk, and
+D64's backoff clause.
+
+## D77. Counts are written counts.
+
+*30 Oct 2026, owner ledger ([OWNER-DECISIONS](plans/2026-10-30-v1.0/OWNER-DECISIONS.md) R6 and R7); asked by
+[PRD-01](plans/2026-10-30-v1.0/PRD-01-record-format.md) section 9 and [PRD-10](plans/2026-10-30-v1.0/PRD-10-cli-participant.md).*
+
+The participant, status, heartbeat and server see only counts of bytes already written, and how
+long recording was off. A model request counts once its bytes are in the record. No screen claims
+more than the written counts show. The heartbeat says `recording: failed` while recording is
+off; mail about it is out of scope.
+
+This supersedes no entry.
+
+## D78. Every loss is a gap, and a full disk gets no special handling.
+
+*30 Oct 2026, owner ledger ([OWNER-DECISIONS](plans/2026-10-30-v1.0/OWNER-DECISIONS.md) R2, R4 and section 7) and the
+owner decisions of 29 Oct; asked by the run 1 handover, items 1 to 4, and
+[PRD-02](plans/2026-10-30-v1.0/PRD-02-recorder-core.md) section 5.*
+
+- Every loss is a gap with a start, an end, a reason and the lost bytes when known. No loss is
+  silent.
+- Load never turns recording off, and nothing counts failures while the recorder answers.
+- A full disk gets no special handling. A write error ends the recorder and the watchdog restarts
+  it (D75). After repeated failures it runs in null mode, status says recording is off, and the
+  next good boot's `recorder_down` gap covers the time. The harness keeps working.
+
+This supersedes D65 and D64's disk-watch clause, and narrows D9: its rule stands, and a gap now
+also carries its end and the lost bytes.
+
+## D79. No caps of our own.
+
+*30 Oct 2026, owner ledger ([OWNER-DECISIONS](plans/2026-10-30-v1.0/OWNER-DECISIONS.md) R5) and the owner decisions of
+29 Oct; [VISION](../VISION.md), owner answers 2 and 3.*
+
+No cap on streams, files, subagents, connections or a run's size. A kept limit guards a real cost
+and names it where it is set (PRD-02 memory guards, PRD-07 section 5). A memory guard never stops
+recording: past it, a gap is written and recording goes on.
+
+This supersedes D57's file cap (`max_files`) and D74's row cap on the tunnel list. D58's limits
+go with D75.
+
+## D80. Masking happens before any byte reaches disk: option b, with a left word boundary.
+
+*30 Oct 2026, owner ledger ([OWNER-DECISIONS](plans/2026-10-30-v1.0/OWNER-DECISIONS.md) M1) and the owner decisions of
+29 Oct (option b); asked by [PRD-05](plans/2026-10-30-v1.0/PRD-05-masking.md).*
+
+- Every secret rule stays. The URL password rule is added. The email rule and the Codex
+  rate-limit rules go.
+- A key needs a left word boundary (with `jwt`): a guarded rule is dropped when the byte before
+  it is a letter, a digit or `_` (default, PRD-00 question 10). `-` joins that class only with
+  the owner's yes.
+- A masked byte becomes `*`, same length, with a MASK record. A fail-closed span is named and
+  counted.
+- The run's `GH_TOKEN` is masked by exact value, as today. Exact-value masking of the other
+  sources in PRD-05 section 9, and widening the Stripe rule to test keys and webhook secrets, are
+  built only with the owner's yes (default no, PRD-00 question 3). With a yes, this entry says so.
+- What can still be recorded is in the [participant guide](PARTICIPANT-GUIDE.md).
+
+This supersedes, in part, D14 (the evidence is a MASK record), D36 (the rule list), D60 (the
+`<redacted:run_secret>` marker) and D41's key-fragment rule.
+
+## D81. One host list for every harness.
+
+*30 Oct 2026, owner ledger ([OWNER-DECISIONS](plans/2026-10-30-v1.0/OWNER-DECISIONS.md) H1 to H5); asked by
+[PRD-03](plans/2026-10-30-v1.0/PRD-03-proxy.md) and [PRD-11](plans/2026-10-30-v1.0/PRD-11-connectors-harnesses.md).*
+
+- Shared model hosts (providers, gateways, cloud model services, vendor backends), hosts the
+  participant registers and hosts the harness config names are decrypted and recorded. A gateway
+  is one more host on the list.
+- Every other connection is a tunnel recorded with host, bytes and times. A long or large tunnel
+  to one host is flagged. Sign-in hosts are never decrypted.
+- A client that pins or refuses the run CA falls back to a tunnel with a named gap. A harness that
+  ignores `HTTPS_PROXY` or the run CA is never hacked around.
+- A model server on loopback is not recorded and is named (`local_model`).
+- The run CA is trusted only through the harness's own variables.
+
+This supersedes D1's "hosts the connector declares" clause and, in part, D62 and D74 (their
+per-connector host rules). D1's no-base-URL rule stands.
+
+## D82. Harness tiers come from the test pad.
+
+*30 Oct 2026, owner ledger ([OWNER-DECISIONS](plans/2026-10-30-v1.0/OWNER-DECISIONS.md) T3 and T4); asked by
+[PRD-12](plans/2026-10-30-v1.0/PRD-12-test-pad.md).*
+
+A harness is "verified on `<version>`", "not verified" with a reason, or "not supported".
+`connectors/tiers.toml` is the one source. A tier says how well goalcup records a harness, not
+whether a run is eligible (default, PRD-00 question 4).
+
+This supersedes no entry; D23 stays retired.
+
+## D83. Usage stats are read after upload.
+
+*30 Oct 2026, owner ledger ([OWNER-DECISIONS](plans/2026-10-30-v1.0/OWNER-DECISIONS.md) S2 and R8); asked by
+[PRD-09](plans/2026-10-30-v1.0/PRD-09-usage-research-stats.md).*
+
+`goalcup-verify usage` reads the record and the harness's own session files and writes tokens,
+models and calls per call, per subagent and per run. An organizer job stores them as JSON in R2.
+Organizers see them (default, PRD-00 question 1). The recorder never parses for stats.
+
+This supersedes D26 in part: no rule sets a token budget, as before; where and when usage is
+worked out is this entry.
+
+## D84. What goalcup 1.0 removes.
+
+*30 Oct 2026, owner ledger ([OWNER-DECISIONS](plans/2026-10-30-v1.0/OWNER-DECISIONS.md) L3, L6 and L7); asked by
+[PRD-00](plans/2026-10-30-v1.0/PRD-00-index.md) "Not in this build", [PRD-07](plans/2026-10-30-v1.0/PRD-07-worker-server.md),
+[PRD-10](plans/2026-10-30-v1.0/PRD-10-cli-participant.md) and [PRD-13](plans/2026-10-30-v1.0/PRD-13-cuts.md).*
+
+- Removed: signing and receipts, pins, deny lists, the connector contract freeze, the termination
+  proof, the control API, `goalcup login`, `doctor`, `mcp` and `--dev`. Also the research
+  decoders except the model and usage parts PRD-09 keeps, the research scripts, the separate
+  daemon (D75), disk-full handling (D78), legacy and test seams, and retired versions.
+- One test-only build feature stays, never in a release build (default, PRD-00 question 12).
+- No backward compatibility before Edition 01. The old crates are deleted in this build.
+- Connectors are compiled in. `--connector` and `--hosts` load a file in practice and test runs
+  only (default, PRD-00 question 4).
+- The Worker refuses clients below `MIN_COMPETITION_VERSION` in every mode. In production it is
+  set to `1.0.0` after the goalcup 1.0 release is published (default, PRD-00 question 5).
+
+This supersedes D24, D30, D63 and D68, D16's receipt and, in part, D42 (the v5 freeze), D43 (pins
+and `doctor`) and D70 (pins and `--dev`).
+
+## D85. goalcup ends the harness only at the deadline, on `goalcup seal` and on the server's `stop`.
+
+*30 Oct 2026, owner ledger ([OWNER-DECISIONS](plans/2026-10-30-v1.0/OWNER-DECISIONS.md) L6); asked by
+[PRD-02](plans/2026-10-30-v1.0/PRD-02-recorder-core.md) section 8 and [PRD-10](plans/2026-10-30-v1.0/PRD-10-cli-participant.md).*
+
+SIGTERM goes to the harness tree, then SIGKILL after 10 s. `goalcup seal` refuses inside the
+harness. There is no termination proof (default, PRD-00 question 2).
+
+This supersedes D22 in part (the connector's grace and the termination proof). It does not change
+D66.
+
+## D86. `goalcup setup` writes the auto-update switch, and the no-prompt values after one question.
+
+*30 Oct 2026, owner ledger ([OWNER-DECISIONS](plans/2026-10-30-v1.0/OWNER-DECISIONS.md) H7 and H9); asked by
+[PRD-10](plans/2026-10-30-v1.0/PRD-10-cli-participant.md) and [PRD-11](plans/2026-10-30-v1.0/PRD-11-connectors-harnesses.md).*
+
+`goalcup setup` always writes the connector's auto-update switch (`update_off`) into goalcup's
+own isolated harness home. After one question it writes the no-prompt values there too, never into
+app-wide config (default, PRD-00 question 2). If the owner answers no, the no-prompt clause is not
+written and D67 stands for it.
+
+This supersedes D67.

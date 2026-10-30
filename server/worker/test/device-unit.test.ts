@@ -46,25 +46,15 @@ test("a bound credential lasts until 24 hours after the deadline", () => {
 
 const isMalformed = (e: unknown) => e instanceof ApiError && e.status === 400 && e.code === "malformed";
 
-test("Goal Cup Proxy's version is proxy_version or tracer_version; both must agree", () => {
-  assert.equal(proxyVersionField({ proxy_version: "0.7.0" }), "0.7.0");
-  assert.equal(proxyVersionField({ tracer_version: "0.6.0" }), "0.6.0");
-  assert.equal(proxyVersionField({ proxy_version: "0.7.0", tracer_version: "0.7.0" }), "0.7.0");
+test("Goal Cup Proxy's version is proxy_version, and it must be there", () => {
+  assert.equal(proxyVersionField({ proxy_version: "1.0.0" }), "1.0.0");
   assert.equal(proxyVersionField({ proxy_version: "x".repeat(64) }), "x".repeat(64));
-  // Null is absent, as for other optional fields.
-  assert.equal(proxyVersionField({ proxy_version: null, tracer_version: "0.6.0" }), "0.6.0");
-  assert.equal(proxyVersionField({ proxy_version: "0.7.0", tracer_version: null }), "0.7.0");
   for (const bad of [
     {},
-    { proxy_version: "0.7.0", tracer_version: "0.6.0" },
     { proxy_version: "" },
-    { tracer_version: "" },
     { proxy_version: "x".repeat(65) },
-    { tracer_version: "x".repeat(65) },
     { proxy_version: 7 },
     { proxy_version: null },
-    { proxy_version: null, tracer_version: null },
-    { proxy_version: "0.7.0", tracer_version: "x".repeat(65) },
   ]) assert.throws(() => proxyVersionField(bad), isMalformed, JSON.stringify(bad));
 });
 
@@ -73,15 +63,13 @@ test("POST /v1/device stores proxy_version as the device's tracer_version", asyn
   const ctx = {
     env: { DB_BACKEND: "local", APPROVAL_URL: "https://example.org/approve" } as unknown as Env,
     db: { createDevice: async (a: CreateDeviceArgs) => void stored.push(a) },
+    cfg: { minCompetitionVersion: { kind: "none" } },
     now: () => new Date("2026-10-21T10:00:00Z"),
   } as unknown as Ctx;
   const post = (body: Record<string, unknown>) =>
     createDevice(ctx, new Request("https://w/v1/device", { method: "POST", body: JSON.stringify({ purpose: "run", mode: "practice", connector_id: "c", ...body }) }));
-  assert.equal((await post({ proxy_version: "0.7.0" })).status, 200);
-  assert.equal((await post({ tracer_version: "0.6.0" })).status, 200);
-  assert.equal((await post({ proxy_version: "0.7.1", tracer_version: "0.7.1" })).status, 200);
-  assert.deepEqual(stored.map((d) => d.tracer_version), ["0.7.0", "0.6.0", "0.7.1"]);
-  await assert.rejects(post({ proxy_version: "0.7.0", tracer_version: "0.6.0" }), isMalformed);
+  assert.equal((await post({ proxy_version: "1.0.0" })).status, 200);
+  assert.deepEqual(stored.map((d) => d.tracer_version), ["1.0.0"]);
   await assert.rejects(post({}), isMalformed);
-  assert.equal(stored.length, 3, "a refused body stores nothing");
+  assert.equal(stored.length, 1, "a refused body stores nothing");
 });

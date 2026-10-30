@@ -98,10 +98,6 @@ if ! cargo update --workspace --offline; then
     restore
     die "cargo could not update Cargo.lock"
 fi
-if ! python3 scripts/check-version.py; then
-    restore
-    die "the version check fails with $new; nothing was committed"
-fi
 git switch -q -c "$branch"
 git add Cargo.toml Cargo.lock
 git commit -q -m "Release $new"

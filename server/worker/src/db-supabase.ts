@@ -13,7 +13,6 @@
 // back is a freshly minted credential, once, from upload_poll_device.
 
 import type {
-  AbandonResult,
   ApproveDeviceResult,
   ChunkRecord,
   ClaimedNotice,
@@ -37,12 +36,10 @@ import type {
   RunStatus,
   SealArgs,
   SealResult,
-  StoreReceiptResult,
   TickRun,
 } from "./db.ts";
 import { NOTICE_KINDS, NO_FINAL_DETAIL } from "./db.ts";
 import { ApiError } from "./errors.ts";
-import type { StartReceipt } from "./sign.ts";
 import { RUN_ID, isEntryId, isHex64, isTime } from "./util.ts";
 
 const STATUS_WORDS = ["open", "sealed", "incomplete", "abandoned"] as const;
@@ -102,9 +99,7 @@ const ENTRY_SHAPE: Record<string, Check> = {
   offset: uint,
   next_seq: uint,
   head: hex64,
-  last_ack: nullable(isObject),
   final: nullable(END),
-  receipt: nullable(isObject),
   seal_sha256: nullable(hex64),
   baseline_sha256: nullable(hex64),
   sealed_at: nullable(isTime),
@@ -128,7 +123,6 @@ const CHUNK_SHAPE: Record<string, Check> = {
   head: hex64,
   r2_key: text,
   received_at: isTime,
-  ack: isObject,
 };
 
 /** Every function the Worker calls is `public.goal_cup_<name>`, the website's naming convention. */
@@ -315,27 +309,11 @@ export class SupabaseDb implements Db {
     return v === null ? null : this.#row<ChunkRecord>("upload_get_chunk", v, "chunk", CHUNK_SHAPE);
   }
 
-  async storeReceipt(memberId: string, runId: string, entryId: string, chainHead: string, receipt: StartReceipt): Promise<StoreReceiptResult> {
-    const v = (await this.#rpc("upload_issue_receipt", {
-      p_member_id: memberId,
-      p_run_id: runId,
-      p_entry_id: entryId,
-      p_chain_head: chainHead,
-      p_receipt: receipt,
-    })) as { result?: unknown; receipt?: StartReceipt } | null;
-    const result = this.#word("upload_issue_receipt", v?.result, ["stored", "existing", "conflict", "closed", "not_found"] as const);
-    if (result === "conflict" || result === "closed" || result === "not_found") return { kind: result };
-    if (!v?.receipt) throw new ApiError(502, "upstream_error", "The database answered with something unexpected.");
-    return { kind: result, receipt: v.receipt };
-  }
-
-  async abandonRun(memberId: string, runId: string, reason: string, at: string): Promise<AbandonResult> {
-    const v = await this.#rpc("upload_abandon_run", { p_member_id: memberId, p_run_id: runId, p_reason: reason, p_at: at });
-    return this.#word("upload_abandon_run", v, ["abandoned", "has_chunks", "closed", "not_found"] as const);
-  }
-
   async commitChunk(a: CommitChunkArgs): Promise<CommitChunkResult> {
-    const v = await this.#rpc("upload_commit_chunk", { p_member_id: a.member_id, p_run_id: a.run_id, p_chunk: a.chunk, p_stored_bytes: a.stored_bytes });
+    // The SQL still writes `ack` into two columns, one of them NOT NULL; the Worker no longer has
+    // anything to put there, so it always sends an empty object, never null.
+    const p_chunk = { ...a.chunk, ack: {} };
+    const v = await this.#rpc("upload_commit_chunk", { p_member_id: a.member_id, p_run_id: a.run_id, p_chunk, p_stored_bytes: a.stored_bytes });
     return this.#word("upload_commit_chunk", v, ["committed", "conflict", "beyond_final", "closed", "not_found"] as const);
   }
 
@@ -354,8 +332,9 @@ export class SupabaseDb implements Db {
       p_client_ip: a.client_ip,
       p_client_country: a.client_country,
       p_at: a.at,
-      // Only with vitals: without them the 13-argument form answers (the new 14-argument form has
-      // no DEFAULT, so each call matches exactly one overload; test/supabase.test.ts checks both).
+      // Only with counts (vitals is then {"counts": …} or {"counts_dropped": n}): without them the
+      // 13-argument form answers (the 14-argument form has no DEFAULT, so each call matches exactly
+      // one overload; test/supabase.test.ts checks both).
       ...(a.vitals === null ? {} : { p_vitals: a.vitals }),
     });
     return this.#word("upload_heartbeat", v, ["recorded", "final_committed", "final_existing", "final_conflict", "closed", "not_found"] as const);

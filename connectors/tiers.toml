@@ -1,0 +1,81 @@
+# Written by scripts/pad/table (PRD-12 section 9). Do not edit by hand.
+
+[amp-cli]
+tier = "not verified"
+version = ""
+reason = "not yet run on the pad"
+
+[claude-code-cli]
+tier = "not verified"
+version = ""
+reason = "not yet run on the pad"
+
+[cline-cli]
+tier = "not verified"
+version = ""
+reason = "not yet run on the pad"
+
+[codex-cli]
+tier = "not verified"
+version = ""
+reason = "not yet run on the pad"
+
+[copilot-cli]
+tier = "not verified"
+version = ""
+reason = "not yet run on the pad"
+
+[crush-cli]
+tier = "not verified"
+version = ""
+reason = "not yet run on the pad"
+
+[droid-cli]
+tier = "not verified"
+version = ""
+reason = "not yet run on the pad"
+
+[gemini-cli]
+tier = "not verified"
+version = ""
+reason = "not yet run on the pad"
+
+[goose-cli]
+tier = "not verified"
+version = ""
+reason = "not yet run on the pad"
+
+[hermes-cli]
+tier = "not verified"
+version = ""
+reason = "not yet run on the pad"
+
+[kilo-cli]
+tier = "not verified"
+version = ""
+reason = "not yet run on the pad"
+
+[kimi-code-cli]
+tier = "not verified"
+version = ""
+reason = "not yet run on the pad"
+
+[openclaw-cli]
+tier = "not verified"
+version = ""
+reason = "not yet run on the pad"
+
+[opencode-cli]
+tier = "not verified"
+version = ""
+reason = "not yet run on the pad"
+
+[opencode2-cli]
+tier = "not verified"
+version = ""
+reason = "not yet run on the pad"
+
+[qwen-cli]
+tier = "not verified"
+version = ""
+reason = "not yet run on the pad"

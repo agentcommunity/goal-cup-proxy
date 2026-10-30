@@ -671,3 +671,17 @@ with cause `null_mode` or `watchdog_lost` are named of any length (inv6); `--liv
 is `named` in null mode, `fail` otherwise (the `goalcup recover` alarm); the run CA key from
 `rec/run-ca.key` joins the `--known` file and R7; a `check_named.rs` case. Estimate up to about 1,600
 src lines.
+
+## Amendments
+
+### 2026-10-30, replan after PRD-17 phase 0 slice (merge 1423f8f9)
+
+- **Four cases the lessons gate waits on** (lessons log 10:45Z; `LESSONS.md` marks them `(name
+  pending)`). Name each in the night log when written; the lessons lane puts the name in
+  `LESSONS.md`. Each is a point 1, 3 or 4 case, so ledger B10 keeps it:
+  - PRD-17 FW3: a part folder whose first parts are gone exits 1 (only the server copy can be judged
+    whole), next to the `server_compare.rs` missing-middle case.
+  - PRD-17 VR2: a panic inside a check prints file and line, never record text (PRD-09 has the
+    `usage` half in `usage_run1.rs`).
+  - PRD-17 VR3 (`check_invariants.rs`): every mutation gives its id and exit 1 or 2, never 3.
+  - PRD-17 VR4 (`check_named.rs`): a clean record with an `interrupted` END exits 0.

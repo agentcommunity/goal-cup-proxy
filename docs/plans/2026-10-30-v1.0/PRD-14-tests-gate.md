@@ -721,3 +721,33 @@ PRDs they touch and the code. Where two fixes disagree, the ledger and the later
 | G3-14i | Applied. Point 6 row adds `upload_beat.rs`; new usage stats row (ledger S2, PRD-12 C5, `usage_run1.rs`, `usage_join.rs`, PRD-09) |
 | G3-14j | Applied. Asks 1 to 3 marked ruled by PRD-00 R3-11 and applied there; PRD-16 ask 3 applied (section 8, G3-X9) |
 | B3, B9, B10, B11 carried in | Applied (ledger, locked; they win over earlier rows above, such as the `test_gate.py`, rule 3 and rule 4 rows and the 15,000 total). Goal and section 1: the rig (PRD-12, B9) is the main proof, run as the B3 ladder (micro tests with local capture first, cycle runs per pad, 20-minute full runs in parallel); the gate is not a rung. Owner decisions gain B3, B9, B10, B11 lines. B10 cuts, each listed with a line in "What is cut": `test_gate.py`, `test_release.py`, `test_codeowners.py`, `test_third_party_licenses.py` deleted in phase 0; `test_install.py` loses its packaging-shape and wording cases; `rule_code.rs` keeps rule 1 only (220 to 80 lines; ports, no-return words and the after-the-cut guard go to review and one-time greps by PRD-13 and PRD-07); `e2e_run.rs` drops its `conn` shape check (150 to 140); PRD-09 keeps `usage_run1` only (600 to 200); `cli_finish.rs` checks the claim, not the sentence. Section 1 rule and section 3: no test pins internal shapes or wording, a costly test is deleted or simplified, reviewer B enforces it, budget is a ceiling (at most about 14,200). B11: one sandbox per gate run, builder notes 1, 2, 4 and 5 start at once. Notes to PRD-09 and PRD-13 go through the replan agent (B2a) |
+
+## Amendments
+
+### 2026-10-30, replan after PRD-07 slice 1 (merge 4dcc1e7b)
+
+- **`test_fetch_run.py` can join the gate's named list now.** The rewrite on integration (4dcc1e7b)
+  builds nothing: no database, no R2, no zstd and no verifier (a directory stands in for the bucket).
+  It ran 17/17 in a box on Python 3.9. The `gate.sh` comment at line 90 ("today it builds the old
+  goalcup-verifier") is no longer true.
+- **The real Worker's answers match the fake Worker row** (`worker.rs`): chunk answer
+  `{offset, next_seq, head, received_at, sealed}`, a bad `counts` dropped with `200`, no 413 path.
+  Until PRD-07 step 3 the real chunk answer also carries `ack` and the position answer `last_ack`; the
+  fake Worker need not send them.
+- **`fetch-run.sh --local` keeps only each entry's last heartbeat** (the local store holds
+  `last_vitals` only), and its default bucket under `--local` is `goalcup-traces-staging`
+  (`wrangler dev` keeps local R2 under `preview_bucket_name`). A full-tier case reads one heartbeat
+  row per entry.
+- **Build snapshot Python is 3.9**: `scripts/check-links.py` needs 3.10 and was skipped in a box at
+  10:49Z. It is deleted in phase 3 (PRD-16 section 4); until then a gate step that runs it needs 3.10
+  or a skip line.
+
+### 2026-10-30, replan after PRD-07 slice 2 (merge 2f4bc6a0)
+
+- **The real Worker now matches the fake Worker row exactly**: the chunk answer has no `ack` and the
+  position answer no `last_ack` on integration at 2f4bc6a0; `/receipt` and `/abandon` answer
+  `404 not_found`.
+- **`test_fetch_run.py` is still not in the gate** at 2f4bc6a0 (`scripts/gate.sh:90` keeps the stale
+  "builds the old goalcup-verifier" comment); the gate log for this merge shows Worker `npm test`
+  253/253 and the named unittest list (27 tests, `test_install.py`) only. The earlier note stands: add
+  it to the named list; it ran 17 tests green on Python 3.9 in the fixer's box.

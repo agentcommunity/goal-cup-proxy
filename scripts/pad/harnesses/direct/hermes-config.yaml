@@ -1,0 +1,4 @@
+# Hermes with its native DeepSeek provider (ledger T2); the key is DEEPSEEK_API_KEY in {home}/.env.
+model:
+  provider: deepseek
+  default: deepseek-flash

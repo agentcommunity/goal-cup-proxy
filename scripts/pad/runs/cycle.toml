@@ -1,0 +1,5 @@
+# A few minutes per pad: crash at minute 3, recovery, seal at 8, staging copy (PRD-12 section 1a).
+harness = "codex-cli"
+key = "openai"
+case = "direct"
+mode = "cycle"

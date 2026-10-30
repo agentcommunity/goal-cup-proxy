@@ -1,0 +1,16 @@
+[package]
+name = "goalcup-format"
+description = "The goalcup record format (GCR1): records, framing, link hashes, zstd part files, recovery, reader and dump."
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+rust-version.workspace = true
+publish = false
+
+# Nothing async, no TLS. zstd is the C library through `zstd-sys`, as for the uploader today.
+[dependencies]
+sha2.workspace = true
+serde_json.workspace = true
+zstd.workspace = true
