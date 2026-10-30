@@ -947,3 +947,52 @@ PRD-01, PRD-05, PRD-08, PRD-12, PRD-16 and the old code.
   note). The usage reader builds no reading path for that interim shape and takes no fixture from a
   record made before that slice; it reads databases by `set` as PRD-01 section 4 states.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-09 slice 3 (merge 1a2c3537)
+
+- **On integration:** `hints.rs` (the connector's reader and thread hints) and `native.rs` (Codex
+  rollouts, Claude Code transcripts and their subagent transcripts), and the join in `Calls::finish`.
+  Rows now carry `thread`, `parent` and `join`; native rows are `usage_from` where the join picks the
+  native leg; `CallTable.children` is `Some` once a native leg was read; matching is by id first, then
+  by time (`joined_by_time` counted). Timestamps that do not parse are no time (the row keeps `None`),
+  never a stop (F1); a thread counts as readable only when it owns a read session file (F2).
+- **Gate:** `gate fast: PASS in 119s` on 1a2c3537 (nextest 219 of 219, 0 skipped). Box runs before the
+  merge: reviewers A and B (fmt, clippy `-D warnings`, 32 and 35 tests with probes for the id join,
+  the time join and the restart repeat), the fixer at 7b04a910 and 13596574 (fmt, clippy, doc
+  `-D warnings`, `goalcup-verify` 32 of 32), each re-checked by a reviewer. Six paths changed, all
+  PRD-09 owned, no `Cargo.toml`. `gate full` was not run.
+- **Size decision** (`wc -l` at 1a2c3537; the slice 2 ceilings are 2,250 src and 380 tests). Src
+  2,137: `mod.rs` 501, `wire.rs` 607, `shapes.rs` 456, `native.rs` 445 (limit 250), `hints.rs` 67,
+  `sse.rs` 61. Tests: `usage_run1.rs` 381, one past 380. With `sqlite.rs` and `out.rs` still to come
+  the crate projects to about 2,450 src, which is 167% of the row (1,470) and 109% of the 2,250
+  ceiling. The extra lines serve point 1 (every call counted once, on either leg, joined by id and
+  then by time) and point 2 (every Codex thread and every Claude Code subagent transcript becomes a
+  thread with its parent), not features; the reviewers found no cut that keeps the behaviour (B-2,
+  N3, B-3 and B-4 declines accepted). **Decision: the ceilings become 2,450 src and 400 tests.**
+  Limits for what is left: `sqlite.rs` 150, `out.rs` 120, `run` and totals at most 40 more in
+  `mod.rs`; no further line in `native.rs` or `wire.rs` unless a fix nets to zero. The CSV
+  (`usage table`) and `--text` are built last and only if they fit under 2,450; acceptance lists one
+  not built as cut. The 20 extra test lines are for one `sqlite.rs` case (a database copy read by
+  `set`, and the unreadable copy giving `SnapshotUnreadable`); no other test is added (ledger B10).
+- **Open nits, taken at the next touch of the file, all same-size:**
+  - A2-1 (`native.rs`, the `token_count` repeat guard): `total_tokens` that is present but not an
+    unsigned integer (null, float, negative) reads as `None`, and `None <= top` skips the call as a
+    repeat. Use `let Some(total) = ...as_u64() else { return None };` before the comparison, so only a
+    real repeat reaches `repeats_skipped`. Same shape as the B-1 fix.
+  - A2-2 (`mod.rs`): a thread that only the wire names is pushed with the table-level `reason`, so
+    it is `readable()` with `native_calls` 0 beside a spawn-only thread that is not. Keep the
+    behaviour and say so in the `NativeLeg::threads` doc: a wire-only thread has no read file and
+    its readability is the table's; consumers read `native_calls`, not `readable()`, for "this
+    thread has native rows" (PRD-08 note). The parent backfill (N4) runs before native rows are
+    appended, so a native row of a Codex file without `session_meta` whose thread only a parent's
+    spawn names keeps `parent` `None` while its thread entry has the parent; move the backfill after
+    the append if it costs no line, else leave it and let `parents` in the thread list be the source.
+  - A2-3 (`usage_run1.rs`): the Claude Code case stamps every line 2300-01-01, so no Claude native
+    row has a time and nothing in the file covers the Claude time join. Stamp one line 2300 and the
+    others with a normal time when the file is next touched (no extra line); the rig's `cycle` runs
+    cover the real Claude time join (ledger B10).
+- **For the next slice:** `sqlite.rs` reads a database by its `set` (PRD-01 section 4) and builds
+  no reading path for the interim single-`snapshot` shape (earlier note, PRD-04 part 3); `out.rs`
+  writes S7 from `Thread`/`CallTable` as merged, and the pad's spend keys stay as the PRD-12 note
+  names them.
+- No locked ledger item is touched and no owner question comes from this slice.

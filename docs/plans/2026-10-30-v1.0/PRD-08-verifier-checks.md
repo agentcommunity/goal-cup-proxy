@@ -961,3 +961,16 @@ log; the pad lane follows.
 - **Later slices, unchanged:** honesty, legs, history and the run 1 shape builder, in PRD-16's order.
   `docs/RECORD-FORMAT.md` follows the new keys in PRD-15's next slice (PRD-15 note).
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-09 slice 3 (merge 1a2c3537)
+
+- **U1 now has native rows, threads and parents** (PRD-09 note). `legs.rs` and `history.rs` read
+  them as merged: `CallTable.children` is `Some` once a native leg was read (`subagents_present`
+  skips only on `None`); `Thread.readable()` is true only for a thread that owns a read session
+  file, with one exception: a thread that only the wire names is listed with the table's own
+  `reason`, so it is readable with `native_calls` 0. A check that asks whether a thread has native
+  rows reads `native_calls`, never `readable()` alone. This changes no result today (wire-only
+  threads are reported, not failed), and PRD-09 documents it in the next slice.
+- A call joined by time has `join` `Matched` as one joined by id; `legs.rs` does not tell them apart
+  (the count `joined_by_time` is in the summary only).
+- No locked ledger item is touched and no owner question comes from this slice.

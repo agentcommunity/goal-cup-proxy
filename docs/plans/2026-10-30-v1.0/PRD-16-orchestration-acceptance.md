@@ -1892,3 +1892,22 @@ kept and now cites BUILD-PROMPT section 5, since B3 no longer carries it.
 - **Housekeeping for the end:** add `v1.0/prd-14-tests-gate-nits-nextest-comment` and
   `v1.0/prd-14-tests-packaging-readme-tag-check` to the merged PRD-14 task branches still on origin.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-09 slice 3 (merge 1a2c3537)
+
+- `gate fast: PASS in 119s` on 1a2c3537 (nextest 219 of 219, 0 skipped); box runs and reviewer
+  re-checks are in the PRD-09 note. `gate full` was not run.
+- **Size report, PRD-09** (`wc -l` at 1a2c3537, row "Usage reader (PRD-09)", 1,470 src and 200
+  tests; the slice 2 ceilings were 2,250 and 380): src 2,137, 145% of the row and 95% of 2,250
+  (`wire.rs` 607, `mod.rs` 501, `shapes.rs` 456, `native.rs` 445, `hints.rs` 67, `sse.rs` 61); tests
+  `usage_run1.rs` 381, 190% of the row and one past 380. With `sqlite.rs` 150, `out.rs` 120 and
+  `run` 40 the crate projects to about 2,450. PRD-09's decision line (PRD-09 note) sets the
+  ceilings to **2,450 src and 400 tests**, naming points 1 and 2. The end-of-build report nets this
+  against the Rust totals (about 18,100 src, at most about 14,200 tests); only a total past those
+  becomes the owner's question.
+- **Build order, PRD-09:** the fourth slice is `sqlite.rs`, `out.rs` and `run`, then the CSV and
+  `--text` only if they fit. Nothing else waits on it except PRD-12's spend check, which reads the
+  summary keys already named.
+- **Acceptance lists as known,** if still open at the end: the PRD-09 slice 3 nits A2-1, A2-2 and
+  A2-3 (PRD-09 note).
+- No locked ledger item is touched and no owner question comes from this slice.
