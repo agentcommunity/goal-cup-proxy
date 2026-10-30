@@ -1155,3 +1155,12 @@ here; the other files carry their own part.
   `v1.0/prd-11-connectors-harness-page-todo-links` (harnesses log 12:22Z) and land with the lane's
   next merge.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-04 core slice part 1 (merge 403d9165)
+
+- **PRD-04's pattern check is on integration** as `crate::native::pattern::parse` (merge 403d9165).
+  `connector_builtin.rs` calls it for every `native` row. It refuses one shape more than PRD-04
+  section 2 lists: a trailing `**` (`**` alone, or a pattern ending in `/**`), since `**` matches
+  folders only. No row in section 6 or in `connectors/*.toml` ends in `**`; a row that names every
+  file below a folder writes `<folder>/**/*`.
+- No locked ledger item is touched and no owner question comes from this slice.

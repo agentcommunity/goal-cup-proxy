@@ -1327,3 +1327,14 @@ to another file are made by that file's owner.
 - `cli::home()` returns `Result<PathBuf, &'static str>` and refuses with no absolute home; code that
   needs the home takes it from the start facts or that call, never from the raw variable.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-04 core slice part 1 (merge 403d9165)
+
+- **`NativeReader::finish` takes the guard.** Ask 10 and PRD-04's ask 1 agree; PRD-00's ruling row
+  "PRD-02 and PRD-04" omits the argument. PRD-04's next slice builds
+  `finish(self, harness_exited: bool, guard: Option<Duration>) -> NativeFinish`; the seal passes
+  `Some(180 s)` for `deadline`, `server_stop` and `signal` and `None` for `harness_exit` and
+  `seal_command` (section 11). PRD-02's seal calls that shape.
+- `native::fsx` uses `pipeline::cursors::Fid` as its file identity, so a change to `Fid` touches the
+  native reader too.
+- No locked ledger item is touched and no owner question comes from this slice.

@@ -1242,3 +1242,13 @@ why. Fixes for other files are made by those files' owners; this list covers onl
 | G3-X41 | Applied (see G2-07) |
 | G3-00a | Applied. Seams intro and the risk row: merge integration in, no rebase of a pushed branch |
 | B3, B9, B10, B11 sweep | Applied 30 Oct. Phase 1a is the micro rungs through the rig (`micro`, `server = "off"` first, then one layer at a time); second and third slices add `cycle` runs per pad as each connector lands; phase 2 needs the core set's `cycle` rows on staging; phase 5 starts with phase 4 with no box count of our own; the pad workload default names `micro`, `smoke` and `cycle`. Size budget tests follow PRD-14 section 3 (masking 2,000, usage 200, lessons and PRD-14 3,000, at most about 14,200) |
+
+## Amendments
+
+### 2026-10-30, replan after PRD-04 core slice part 1 (merge 403d9165)
+
+- **Ruling row "PRD-02 and PRD-04" reads with the guard:** `NativeReader::finish(self, harness_exited,
+  guard: Option<Duration>) -> NativeFinish`, as PRD-04 section 1 and PRD-02 ask 10 both state and S8's
+  rule needs (180 s only at `deadline`, `server_stop` and `signal`). The row above is not rewritten;
+  this note is the shape both builders use.
+- No locked ledger item is touched and no owner question comes from this slice.
