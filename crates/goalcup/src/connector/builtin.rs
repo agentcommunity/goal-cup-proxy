@@ -1,27 +1,21 @@
-//! The connectors built into the binary. This is the one source file that names connector files
-//! (PRD-14 `rule_code.rs` allows it). A new connector is one TOML file in `connectors/` plus one
-//! line here; `tests/connector_builtin.rs` fails when a file is missing from this list or its `id`
-//! differs from the listed one.
-
+//! The connectors built into the binary, one line per `connectors/<id>.toml` file. The one source
+//! file that names connector files (PRD-14 `rule_code.rs` allows it); `tests/connector_builtin.rs`
+//! fails when a file is missing here or its `id` differs from the listed one.
+macro_rules! entry {
+    ($id:literal) => { ($id, include_str!(concat!("../../../../connectors/", $id, ".toml"))) };
+}
 /// Every built-in connector file as `(id, text)`; the id is the file's own `id` key.
 pub const CONNECTORS: &[(&str, &str)] = &[
-    (
-        "claude-code-cli",
-        include_str!("../../../../connectors/claude-code-cli.toml"),
-    ),
-    (
-        "codex-cli",
-        include_str!("../../../../connectors/codex-cli.toml"),
-    ),
-    (
-        "hermes-cli",
-        include_str!("../../../../connectors/hermes-cli.toml"),
-    ),
-    (
-        "kilo-cli",
-        include_str!("../../../../connectors/kilo-cli.toml"),
-    ),
+    entry!("claude-code-cli"),
+    entry!("codex-cli"),
+    entry!("copilot-cli"),
+    entry!("gemini-cli"),
+    entry!("hermes-cli"),
+    entry!("kilo-cli"),
+    entry!("openclaw-cli"),
+    entry!("opencode-cli"),
+    entry!("opencode2-cli"),
+    entry!("qwen-cli"),
 ];
-
 /// The shared host list (PRD-11 section 4).
 pub const HOSTS: &str = include_str!("../../../../connectors/model-hosts.toml");
