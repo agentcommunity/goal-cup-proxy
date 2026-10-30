@@ -41,13 +41,13 @@ pub struct Status {
     /// `reading session files` while the seal reads them with no time guard; null otherwise.
     pub sealing: Option<String>,
     // Sealed only (`mode: sealed`).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub seal: Option<SealStatus>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub cut_files: Option<CutFiles>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub outlived: Option<Outlived>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub after_seal: Option<AfterSeal>,
 }
 

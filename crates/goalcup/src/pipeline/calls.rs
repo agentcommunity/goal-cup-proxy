@@ -29,48 +29,21 @@ impl Recorder {
     }
 }
 
-/// One S1 call as `Recorder::for_tests` saw it, before masking.
+/// One S1 call as `Recorder::for_tests` saw it, before masking. Fields in the order of the call's
+/// arguments, after the stream ID; `Gap` adds its end time before `off`, and `End` the handle's
+/// offset as `seen`.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Call {
-    Open {
-        sid: Sid,
-        kind: StreamKind,
-        conn: Sid,
-        req: Sid,
-        from: u64,
-        flags: OpenFlags,
-        meta: Value,
-    },
-    Data {
-        sid: Sid,
-        t: Mono,
-        off: u64,
-        bytes: Bytes,
-    },
-    Ws {
-        sid: Sid,
-        t: Mono,
-        off: u64,
-        opcode: u8,
-        fin: bool,
-        bytes: Bytes,
-    },
-    Gap {
-        sid: Sid,
-        reason: GapReason,
-        start: Mono,
-        end: Mono,
-        off: u64,
-        lost: Option<u64>,
-        tail: Option<Value>,
-    },
-    End {
-        sid: Sid,
-        t: Mono,
-        reason: EndReason,
-        seen: u64,
-        tail: Option<Value>,
-    },
+    /// sid, kind, conn, req, from, flags, meta.
+    Open(Sid, StreamKind, Sid, Sid, u64, OpenFlags, Value),
+    /// sid, t, off, bytes.
+    Data(Sid, Mono, u64, Bytes),
+    /// sid, t, off, opcode, fin, bytes.
+    Ws(Sid, Mono, u64, u8, bool, Bytes),
+    /// sid, reason, start, end, off, lost, tail.
+    Gap(Sid, GapReason, Mono, Mono, u64, Option<u64>, Option<Value>),
+    /// sid, t, reason, seen, tail.
+    End(Sid, Mono, EndReason, u64, Option<Value>),
     Event(Value),
 }
 

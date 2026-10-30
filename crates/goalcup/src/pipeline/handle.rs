@@ -64,78 +64,44 @@ impl StreamHandle {
 
     /// One piece; moves the offset by its length, written or dropped.
     pub fn data(&mut self, t: Mono, bytes: Bytes) {
-        let (sid, off, n) = (self.sid, self.off, bytes.len() as u64);
-        collect!(self.rec, Call::Data { sid, t, off, bytes });
+        let n = bytes.len() as u64;
+        collect!(self.rec, Call::Data(self.sid, t, self.off, bytes));
         self.off += n;
     }
 
     /// One WebSocket piece; `fin` marks a message end.
     pub fn ws(&mut self, t: Mono, opcode: u8, fin: bool, bytes: Bytes) {
-        let (sid, off, n) = (self.sid, self.off, bytes.len() as u64);
-        collect!(
-            self.rec,
-            Call::Ws {
-                sid,
-                t,
-                off,
-                opcode,
-                fin,
-                bytes,
-            }
-        );
+        let n = bytes.len() as u64;
+        collect!(self.rec, Call::Ws(self.sid, t, self.off, opcode, fin, bytes));
         self.off += n;
     }
 
     /// The caller's own loss, reported when it ends: `off` is the handle's offset, the end is now.
     /// `Some(n)` moves the offset by `n`; `None` means unknown and leaves it.
     pub fn gap(&mut self, reason: GapReason, start: Mono, lost: Option<u64>, tail: Option<Value>) {
-        let (sid, off, end) = (self.sid, self.off, self.rec.now());
+        let end = self.rec.now();
         collect!(
             self.rec,
-            Call::Gap {
-                sid,
-                reason,
-                start,
-                end,
-                off,
-                lost,
-                tail,
-            }
+            Call::Gap(self.sid, reason, start, end, self.off, lost, tail)
         );
         self.off += lost.unwrap_or(0);
     }
 
     pub fn end(mut self, t: Mono, reason: EndReason, tail: Option<Value>) {
+        self.finish(t, reason, tail);
+    }
+
+    fn finish(&mut self, t: Mono, reason: EndReason, tail: Option<Value>) {
         self.ended = true;
-        let (sid, seen) = (self.sid, self.off);
-        collect!(
-            self.rec,
-            Call::End {
-                sid,
-                t,
-                reason,
-                seen,
-                tail,
-            }
-        );
+        collect!(self.rec, Call::End(self.sid, t, reason, self.off, tail));
     }
 }
 
 impl Drop for StreamHandle {
     fn drop(&mut self) {
-        if self.ended {
-            return;
+        if !self.ended {
+            let t = self.rec.now();
+            self.finish(t, EndReason::Interrupted, None);
         }
-        let (sid, seen, t) = (self.sid, self.off, self.rec.now());
-        collect!(
-            self.rec,
-            Call::End {
-                sid,
-                t,
-                reason: EndReason::Interrupted,
-                seen,
-                tail: None,
-            }
-        );
     }
 }

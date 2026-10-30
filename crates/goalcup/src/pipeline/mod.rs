@@ -90,18 +90,7 @@ impl Recorder {
         meta: Value,
     ) -> StreamHandle {
         let sid = self.inner.next_sid.fetch_add(1, Ordering::Relaxed);
-        collect!(
-            self,
-            Call::Open {
-                sid,
-                kind,
-                conn,
-                req,
-                from,
-                flags,
-                meta,
-            }
-        );
+        collect!(self, Call::Open(sid, kind, conn, req, from, flags, meta));
         StreamHandle::new(self.clone(), sid, from)
     }
 

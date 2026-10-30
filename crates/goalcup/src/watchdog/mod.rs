@@ -147,7 +147,6 @@ pub enum ToRecorder {
     /// `status.json`; null elsewhere or when none. Absent on a resent seal, which still parses.
     Seal {
         reason: SealReason,
-        #[serde(default)]
         outlived: Option<Outlived>,
     },
     /// Null recorder only: exit 0 without sealing.
@@ -162,12 +161,8 @@ pub enum ToWatchdog {
     Ready,
     /// The seal is durable.
     Sealed,
-    /// The last heartbeat answer (PRD-06 `ServerWord`, seam S10).
-    Server {
-        stop: bool,
-        reason: Option<String>,
-        seconds_left: Option<u64>,
-    },
+    // The `server` line (the last heartbeat answer) carries PRD-06's `ServerWord` (seam S10) as
+    // `Server(upload::ServerWord)` once that stub is on integration.
 }
 
 #[cfg(test)]
@@ -203,23 +198,5 @@ mod tests {
         ] {
             assert!(serde_json::from_str::<Prev>(bad).is_err(), "{bad}");
         }
-    }
-
-    /// The `outlived` facts ride on the seal line; a seal line without them still parses.
-    #[test]
-    fn seal_line_outlived() {
-        let line = r#"{"line":"seal","reason":"harness_exit","outlived":{"count":2,"programs":["node","sh"]}}"#;
-        let ToRecorder::Seal { reason, outlived } =
-            serde_json::from_str::<ToRecorder>(line).unwrap()
-        else {
-            panic!("not a seal line");
-        };
-        assert_eq!(reason, SealReason::HarnessExit);
-        assert_eq!(outlived.unwrap().programs, ["node", "sh"]);
-        let resent = r#"{"line":"seal","reason":"recovered"}"#;
-        assert!(matches!(
-            serde_json::from_str::<ToRecorder>(resent).unwrap(),
-            ToRecorder::Seal { outlived: None, .. }
-        ));
     }
 }
