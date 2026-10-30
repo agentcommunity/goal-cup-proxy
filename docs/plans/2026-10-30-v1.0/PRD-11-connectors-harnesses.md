@@ -1225,3 +1225,17 @@ here; the other files carry their own part.
   to the prefix word. Reviewer B checks each merge against these numbers; past them needs another
   decision line.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-14 slice 1 (merge 22fe5926)
+
+- **`rule_code.rs` reads every flat connector file at test time.** For each `connectors/*.toml` other
+  than `model-hosts.toml` and `tiers.toml` it bans the file stem and the `program` value as whole
+  tokens, case-insensitively, in string literals under `crates/goalcup/src` and
+  `crates/goalcup-format/src`. It finds `program` as a line that starts exactly `program = "` and
+  panics when none is there, so a connector writes `program = "name"` unindented, double-quoted, on
+  one line. A new non-connector `.toml` placed flat in `connectors/` must be added to its leave-out
+  list in the same merge (a PRD-14 edit). The `opencode`, `openclaw` and `amp` connectors become
+  banned words when they land; `amp` is also an ordinary text (`&amp;`), so a merge that adds
+  `connectors/amp-cli.toml` runs `rule_code` first and, on a hit, adds the literal to its `ALLOWED`
+  list with a reason. The program name stays as the vendor ships it.
+- `src/connector/builtin.rs` stays the one allowed file (PRD-14 note of b9fa50f8).

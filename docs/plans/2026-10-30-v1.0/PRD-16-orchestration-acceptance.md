@@ -1276,3 +1276,31 @@ kept and now cites BUILD-PROMPT section 5, since B3 no longer carries it.
   known if they are still open at the end. B7 (one pattern check) is in the same slice.
 - All commits in d8922216..b9fa50f8 carry both trailer lines.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-14 slice 1 (merge 22fe5926)
+
+- `gate fast: PASS in 87s` on 22fe5926; it now runs 44 named script tests (`test_install.py`,
+  `test_fetch_run.py`) and the 17 pad tests on python3.11, so the PRD-12 slice 3 note "the gate does
+  not run `test_pad.py`" is closed. The merge and its branch commits carry both trailer lines.
+- **CI.** `ci.yml` runs `gate fast` on pushes to `v1.0/integration`. Every run so far was cancelled by
+  the next push (`cancel-in-progress: true` on one group per ref; the replan pushes docs-only commits
+  within about two minutes of each merge): run 41060500797 for 22fe5926 was cancelled at 1m35s. The
+  phase 3 exit needs "CI green, G1 and G4 in the log"; a cancelled run is neither. PRD-14's next CI
+  edit cancels only pull request runs (PRD-14 note); a watcher counts only `completed success` runs.
+  The "Today" row on `release.sh` ("the next-step text names `linux-check.sh`") is no longer true.
+- **For every lane that writes tests in `crates/goalcup/tests/`:** declare the shared support as
+  `#[allow(unused)] mod common;` (as `rule_code.rs` does), or `clippy -D warnings` fails on helpers the
+  binary does not call. `common::upstream::Upstream::start` and `common::worker::FakeWorker::start` are
+  still `todo!` until PRD-14 slice 2 (by H+3); a test that needs them before then keeps a private
+  helper, removed at phase 3. `rule_code` now also bans connector `program` names in core string
+  literals (PRD-14 and PRD-11 notes).
+- **Size report, PRD-14** (`wc -l` at 22fe5926; PRD-00 row "Lessons (PRD-17), test support,
+  `rule_code`, `e2e_run` (PRD-14)", 3,000 tests, of which PRD-14 section 3 gives PRD-14 1,700):
+  `tests/common/` 740 of 1,480, `rule_code.rs` 213 of 80, `e2e_run.rs` 0 of 140, in all 953 of 1,700.
+  `rule_code.rs` is past its line by more than 10%; the replan decision (PRD-14 note, and the
+  test-support log) names point 7 and keeps the PRD-14 total within 1,870 without raising the row.
+  Scripts (PRD-00 row "gate, release, packaging, fetch-run, about 900"): `gate.sh` 121, `ci.yml` 57,
+  `release.sh` 111, with 384 lines deleted in the slice.
+- **Open nit** B8 (`release.sh` next-step text written three times) goes to PRD-14's release slice
+  (PRD-14 note); acceptance lists it as known if it is still open at the end.
+- No locked ledger item is touched and no owner question comes from this slice.
