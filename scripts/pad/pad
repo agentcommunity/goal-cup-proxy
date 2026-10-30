@@ -9,7 +9,7 @@ NODE_PATH or beside itself), box steps through `pad-run`. The pad never reads a 
 `sbx.mjs put-env` the name of the variable that holds it; the approval key it reads only to send it. Exit: 0 every row PASS, 1 any FAIL, 3 any
 INCONCLUSIVE and no FAIL, 2 usage error. Needs Python 3.11 or later; an older python3 re-runs it.
 """
-import concurrent.futures, datetime, json, math, operator, os, re, secrets, shutil, signal, stat  # noqa: E401
+import concurrent.futures, datetime, json, math, os, re, secrets, shutil, signal, stat  # noqa: E401
 import subprocess, sys, tarfile, tempfile, threading, time, urllib.request  # noqa: E401
 
 if sys.version_info < (3, 11) and __name__ == "__main__":  # the node22 image and many Macs give 3.9
@@ -27,9 +27,11 @@ SBX = os.path.join(HERE, "sbx.mjs")
 # here. There is no server address setting, and production is never one.
 SERVERS = {"staging": "https://goalcup-ingest-staging.b-9a5.workers.dev", "local": "http://127.0.0.1:8787"}
 STAGING_BUCKET = "goalcup-traces-staging"  # fetch-run's bucket for staging; no setting, and never production's
-# Organizer secrets that never enter a box (PRD-12 section 7): they are not even in the
-# environment of the node process that talks to the sandbox.
-NEVER_IN_BOX = ("GH_TOKEN", "GOALCUP_TEST_APPROVAL_KEY", "GOALCUP_TEST_MEMBER_ID", "DATABASE_URL")
+# Organizer secrets that never enter a box (PRD-12 section 7): they are not even in the environment of the
+# node process that talks to the sandbox, and the conductor's scan of its run folder looks for each value.
+APPROVAL = ("GOALCUP_TEST_APPROVAL_KEY", "GOALCUP_TEST_MEMBER_ID")  # the staging test approval's key, member id
+FETCH = ("DATABASE_URL", "CLOUDFLARE_ACCOUNT_ID", "CLOUDFLARE_API_TOKEN")  # fetch-run's read-only credentials
+NEVER_IN_BOX = ("GH_TOKEN", *APPROVAL, *FETCH)
 KEY_VAR = re.compile(r"[A-Z0-9_]+_API_KEY")  # put-env copies model and gateway keys only
 NO_BUILD = "no goalcup build"
 NEEDS_LATER = "comes in a later slice"
@@ -46,7 +48,6 @@ FAULTS = {"kill-recorder": 0, "kill-watchdog": 3, "kill-watchdog-recover": 2, "k
 SPAN = {"freeze", "cut-worker", "route-drop"}  # the faults that take +<minutes>
 NAME = re.compile(r"[a-z0-9][a-z0-9_-]*")
 FMT = "%-17s %-7s %-6s %s"
-PAIR = operator.itemgetter("result", "saw")
 STOP = threading.Event()  # set by SIGINT or SIGTERM: every run goes straight to cleanup
 
 
@@ -172,8 +173,8 @@ def step_limit(s, kind):
     """Seconds; the one owner of every step limit (pad-run's own come from it through runner_limits). wait-upload:
     10 min, or 5 after the last fault ends (minutes from the paste, so a wait from the seal never falls short)."""
     if kind == "wait-upload":
-        ends = [m + (int(r.split("+")[1]) if r.split("@")[0] in SPAN and "+" in r else FAULTS[r.split("@")[0]])
-                for _, m, r in s["plan"] if r.split("@")[0] in FAULTS]
+        ends = [m + (int(rest.split("+")[1]) if f in SPAN and "+" in rest else FAULTS[f])
+                for _, m, r in s["plan"] for f, _, rest in [r.partition("@")] if f in FAULTS]
         return 60 * max(LIMITS[kind], 5 + max(ends, default=0))
     return LIMITS.get(kind, 5) * 60 + (s["minutes"] * 60 if kind in ("seal", "check") else 0)
 
@@ -185,12 +186,12 @@ def runner_limits(s):
     return dict(got, paste=got["start"], verify=step_limit(s, "check"), wipe=step_limit(s, "cleanup") // 3)
 
 
-def approve(server, code, names):
+def approve(server, code):
     """Section 3, 0:03: PRD-07's test approval, from this process. The key and the member id are read from the
-    variables pad.toml [approval] names, here at the call, and go into the request only."""
-    key, member = (os.environ.get(names.get(k) or "") for k in ("key", "member"))
-    if not (key and member and code):
-        return "approval key or member id not set" if code else "no device code from goalcup start"
+    APPROVAL variables here at the call, and go into the request only."""
+    key, member = map(os.environ.get, APPROVAL)
+    if not (key and member):
+        return "approval key or member id not set"
     req = urllib.request.Request(SERVERS[server] + "/v1/device/approve", method="POST", data=json.dumps(
         {"user_code": code, "member_id": member, "approve": True}).encode(),
         headers={"authorization": "Bearer " + key, "content-type": "application/json"})
@@ -317,14 +318,15 @@ class Run:
             for name, var in ((n, self.pad["keys"][n]) for n in names):  # presence only; sbx.mjs reads the value
                 if var not in os.environ or self.sbx("put-env", self.name, "~/run/keys/" + name, "--env", var, limit=left()).returncode:
                     raise Refused("key %s: %s is not set, or not copied" % (name, var))
-        result, saw = PAIR(self.box("setup", left()))
+        result, saw, _ = self.box("setup", left())
         self.no_build = result == "skip" and saw.endswith(NO_BUILD)
         if result != "ok" and not self.no_build:
             raise Refused(saw)
         return "ok", saw
 
     def box(self, step, limit, tag="PADSTEP", argv=None):
-        """One pad-run step (in the box, or a subprocess here) -> its last `tag` line's dict, result and saw set."""
+        """One pad-run step (in the box, or a subprocess here) -> (result, saw, its last `tag` line's dict). The
+        entry and run ids it names go into meta."""
         if argv is None and self.s["where"] == "sandbox":
             with open(os.path.join(self.tmp, "step.sh"), "w") as f:
                 f.write("exec python3.11 ~/pad/pad-run ~/run %s\n" % step)
@@ -333,23 +335,25 @@ class Run:
             r = call(argv or [sys.executable, os.path.join(HERE, "pad-run"), self.box_dir] + step.split(), timeout=limit)
         got = [ln[len(tag) + 1:] for ln in (r.stdout or "").splitlines() if ln.startswith(tag + " ")]
         d = json.loads(got[-1]) if got else {"result": "error", "saw": said("%s: no %s line" % (step, tag), r)}
-        return dict({"result": "error", "saw": ""}, **d)
+        self.meta.update({k: d[k] for k in ("entry", "run") if d.get(k)})
+        return d.get("result", "error"), d.get("saw", ""), d
 
     def step_box(self, step, limit):
         if step.split("@")[0].split(" ")[0] not in ("start", "wait-calls", "look", "seal", "wait-upload"):
             return "skip", NEEDS_LATER
         if self.no_build:
             return "skip", NO_BUILD
-        d = self.box(step, limit + 120)  # pad-run works to `limit`
-        self.meta.update({k: d[k] for k in ("entry", "run") if d.get(k)})  # wait-upload's ids
-        if step != "start" or d["result"] != "ok" or self.s["server"] == "off":  # off: start pasted too
-            return PAIR(d)
+        result, saw, d = self.box(step, limit + 120)  # pad-run works to `limit`
+        if step != "start" or result != "ok" or self.s["server"] == "off":  # off: start pasted too
+            return result, saw
+        if self.s["server"] == "local" and self.s["where"] == "sandbox":  # the box's loopback is not this one
+            return "skip", "approval on a box's own loopback " + NEEDS_LATER
         self.log("approve " + self.name)  # section 3, 0:03; the device code stays out of the log and the table
-        got = approve(self.s["server"], d.get("code"), self.pad.get("approval", {}))
+        got = approve(self.s["server"], d.get("code"))
         if got != "approved":
             return "INCONCLUSIVE", got
-        d = self.box("paste", limit + 120)
-        return ("ok", "approved, prompt pasted") if d["result"] == "ok" else PAIR(d)
+        result, saw, _ = self.box("paste", limit + 120)
+        return ("ok", "approved, prompt pasted") if result == "ok" else (result, saw)
 
     def step_fetch(self, step, limit):
         """Section 3, 0:27: fetch-run here (it reads DATABASE_URL and the read-only CLOUDFLARE_* itself, never in
@@ -360,7 +364,7 @@ class Run:
         if not re.fullmatch(r"e[0-9a-f]{16}", entry):
             return "FAIL", "server copy not fetched: no entry id"
         self.log("fetch-run " + entry)
-        got, hide = os.path.join(self.dir, "fetched", entry), {"GH_TOKEN", *self.pad.get("approval", {}).values()}
+        got, hide = os.path.join(self.dir, "fetched", entry), set(NEVER_IN_BOX) - set(FETCH)
         r = call(["sh", os.path.join(REPO, "scripts", "fetch-run.sh"), "--bucket", STAGING_BUCKET, entry,
                   os.path.dirname(got)], timeout=limit, env={k: v for k, v in os.environ.items() if k not in hide})
         if r.returncode or not os.path.isfile(os.path.join(got, "fetch.json")):  # a partial entry exits 0
@@ -391,15 +395,29 @@ class Run:
                            variant=self.variant(), where=s["where"], server=s["server"], keep=s["keep"], minutes=s["minutes"],
                            started=at, push="not tested", pad_trusted_at=None, steps=[list(ln) for ln in self.lines]),
                       f, indent=1, sort_keys=True)
-        result, saw = PAIR(self.box(step, 300, "PADCHECK", [sys.executable, os.path.join(HERE, "check.py"), self.dir]))
+        self.scan_out()
+        result, saw, _ = self.box(step, 300, "PADCHECK", [sys.executable, os.path.join(HERE, "check.py"), self.dir])
         self.row = result if result in ("PASS", "FAIL", "INCONCLUSIVE") else None
         return result, saw
+
+    def scan_out(self):
+        """Section 7 and C3: the conductor's scan of its run folder for the raw values of its own secrets (8
+        characters or more, as pad-run's forms), before the row. Only the count is written, for check.py."""
+        values, hits = [v.encode() for v in map(os.environ.get, NEVER_IN_BOX) if v and len(v) >= 8], 0
+        for root, _, files in os.walk(self.dir):
+            for name in files:
+                with open(os.path.join(root, name), "rb") as f:
+                    data = f.read()
+                hits += sum(data.count(v) for v in values)
+        os.makedirs(os.path.join(self.dir, "verify"), exist_ok=True)
+        with open(os.path.join(self.dir, "verify", "secrets-conductor.json"), "w") as f:
+            json.dump({"hits": hits}, f)
 
     def step_cleanup(self):
         """Section 3.2: pad-run wipe, box removed by name, then a list to confirm. Never changes a result."""
         saw, third = [], runner_limits(self.s)["wipe"]
         try:
-            result, wiped = PAIR(self.box("wipe", third)) if self.tried or self.s["where"] == "here" and self.box_dir else ("ok", "")
+            result, wiped, _ = self.box("wipe", third) if self.tried or self.s["where"] == "here" and self.box_dir else ("ok", "")
             saw += [wiped if result == "ok" else "wipe %s: %s" % (result, wiped)] if wiped else []
         except Exception as e:
             saw.append("wipe %s" % type(e).__name__)
@@ -424,8 +442,10 @@ class Run:
         return "left", ", ".join(saw)
 
     def variant(self):
-        """The row's `variant` (section 8): faults, exec and pre scripts, a cycle row's own crash too."""
-        return [st for st in step_list(self.s, self.harness) if st.split("@")[0] in FAULTS or st.startswith(("exec ", "pre "))]
+        """The row's `variant` (section 8): faults, exec and pre scripts, a cycle row's own crash too, and a
+        connector copy (P13: a check row, never a tier row)."""
+        return [st for st in step_list(self.s, self.harness) if st.split("@")[0] in FAULTS or st.startswith(("exec ", "pre "))
+                ] + ["connector copy"] * bool(self.s.get("connector"))
 
     def finish(self):
         """table.txt only: row.json and report.txt are check.py's (PRD-12 "Files it owns")."""

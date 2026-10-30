@@ -69,12 +69,14 @@ def loads(text=None, path=None):
 
 
 def wait(ok, limit, every):
+    """ok()'s first true value within `limit` seconds, else its last value."""
     end = time.time() + limit
     while time.time() < end:
-        if ok():
-            return True
+        v = ok()
+        if v:
+            return v
         time.sleep(every)
-    return bool(ok())
+    return ok()
 
 
 class Run:
@@ -204,26 +206,22 @@ class Run:
         for argv in (["new-session", "-d", "-s", t, "-x", "200", "-y", "50"], ["set-option", "-w", "-t", t, "remain-on-exit", "on"],
                      ["respawn-pane", "-k", "-t", t, "bash " + shlex.quote(self.path("launch.sh"))]):
             sh(["tmux"] + argv)
-        got = self.until(r"shows the code ([A-Z0-9]{4}-[A-Z0-9]{4})\.|Recording in chat mode",
-                         "no 'Recording in chat mode'" if server == "off" else "no device code")
-        if not got.group(1):  # no approval asked: paste now, as with server off
+        if server == "off":  # no approval: paste now
+            self.until("Recording in chat mode", "no 'Recording in chat mode'")
             return self.type_prompt()
-        self.st["code"] = got.group(1)
-        write(self.path("code.txt"), got.group(1) + "\n", 0o644)
+        self.code = self.until(r"shows the code ([A-Z0-9]{4}-[A-Z0-9]{4})\.", "no device code").group(1)  # out once
         self.pane()
         return "ok", "device code shown"
 
     def until(self, pattern, why):
         """The first match of `pattern` on the screen within the step's limit; else the step ends INCONCLUSIVE."""
-        got = []
-        if not wait(lambda: got.append(re.search(pattern, self.pane(False))) or got[-1], self.left(), 3):
+        got = wait(lambda: re.search(pattern, self.pane(False)), self.left(), 3)
+        if not got:
             self.pane()
             raise Step("INCONCLUSIVE", "harness did not start: " + why)
-        return got[-1]
+        return got
 
     def paste(self, _):
-        if "pasted" in self.st:
-            return "ok", "pasted at start: no approval asked"
         self.need("goalcup")
         self.until("Recording in chat mode", "no 'Recording in chat mode' after the approval")
         return self.type_prompt()
@@ -267,9 +265,9 @@ class Run:
             raise Step("skip", "server off")
         self.need("goalcup", started=True)
         while True:
-            up = loads(path=os.path.join(self.entry(), "upload.json")) if self.entry() else {}
-            append(self.path("watch", "upload.jsonl"), {"upload": {k: up.get(k) for k in ("state", "final", "keep",
-                                                                                          "waiting_bytes", "confirmed", "server_word")}})
+            e = self.entry()
+            up = loads(path=os.path.join(e, "upload.json")) if e else {}
+            append(self.path("watch", "upload.jsonl"), {"upload": up})  # raw: S9 keys are read through SEAM only
             if pc.dig(up, "s9_final") == "sealed":
                 return "ok", "final: sealed"
             if self.left() < 5:
@@ -356,8 +354,8 @@ class Run:
             for name, argv in [("check-local", ["check", "--json", "--known", "known", "--harness-files", "harness-files.json", e])] + [
                     ("check-server", ["check", "--json", "--server", f, "--local", e, "--known", "known"])] * got + [
                     ("secrets", ["secrets", "--known", "known", e] + [f] * got + ["status.json"] + raw),
-                    ("secrets-plain", ["secrets", "--known", "known-plain", e] + [f] * got),
-                    ("usage", ["usage", f if got else e, "--json", "--out", os.path.join("verify", "usage")])]:
+                    ("secrets-plain", ["secrets", "--known", "known-plain", e] + [f] * got)] + [  # C5 is the server copy's
+                    ("usage", ["usage", f if got else e, "--json", "--out", os.path.join("verify", "usage")])] * (got or not on):
                 exits[name] = self.verify_cmd(argv, None if name == "usage" else name + ".json")[0]
         except Step as stop:
             result = stop.args
@@ -404,7 +402,8 @@ def main(argv):
         result, saw = "FAIL", "%s in %s" % (type(e).__name__, argv[2])
     if run and os.path.isdir(run.run):
         write(run.path("state.json"), json.dumps(run.st))
-    print("PADSTEP " + json.dumps(dict({k: run.st[k] for k in ("code", "entry", "run") if run and run.st.get(k)}, result=result, saw=saw)))
+    ids = dict({k: run.st.get(k) for k in ("entry", "run")}, code=getattr(run, "code", None)) if run else {}  # code: start's only
+    print("PADSTEP " + json.dumps(dict({k: v for k, v in ids.items() if v}, result=result, saw=saw)))
     return 0
 
 

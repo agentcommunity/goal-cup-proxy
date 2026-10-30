@@ -43,6 +43,11 @@ C1_IDS = ("gap_has_end", "history_complete", "streams_closed", "seen_matches_wri
 RANK = {"pass": 0, "warn": 1, "skip": 2, "named": 3, "fail": 4}
 ORDER = {"PASS": 0, "INCONCLUSIVE": 1, "FAIL": 2}
 CHECKS = ("C1", "C2", "C3", "C4", "C5", "C6")
+COPY = "connector copy"  # pad's variant mark for a connector file from disk (P13): a check row, not a fault
+
+def fault_kinds(meta):
+    """The variant's fault, exec and pre kinds, a connector copy left out."""
+    return [str(v).split("@")[0].split(" ")[0] for v in meta.get("variant") or [] if v != COPY]
 
 def dig(doc, name):
     for key in SEAM[name]:
@@ -185,7 +190,7 @@ def local(r, reqs):
     # is an after_stop GAP (PRD-08 R2: a harness still sending after the seal at `minutes`).
     code, named = dig(r.local, "s6_exit"), {k for k, n in r.gaps()[1].items() if n}
     after_stop = code == 1 and named == {"after_stop"} and not any(dig(e, "s6_off") for e in r.entries)
-    r.flag(r.meta.get("case") == "direct" and not r.meta.get("variant") and not r.failed and code != 0 and not after_stop,
+    r.flag(r.meta.get("case") == "direct" and not fault_kinds(r.meta) and not r.failed and code != 0 and not after_stop,
            "C1", "FAIL", "verifier exit %s, the direct case expects 0 or an after_stop GAP only" % code)
     own = sorted(i for i in r.failed if i != "secrets")  # `secrets` is C3's
     half = "local checks failed: %s" % ", ".join(own) if own else "no local check failed (keep from the settings)"
@@ -226,7 +231,8 @@ def usage_checks(r, reqs):
 
 def secrets(r):
     """C3. The known-value and shape scans ran in the box; only their counts reach this folder."""
-    scans = [("secrets", "the local record and the run's files"), ("secrets-out", "the box's output folder")]
+    scans = [("secrets", "the local record and the run's files"), ("secrets-out", "the box's output folder"),
+             ("secrets-conductor", "the conductor's run folder (its own secrets, section 7)")]
     for name, where in scans + [("secrets-git", "the project's git objects")] * (r.meta.get("push") == "tested"):
         n = r.hits(name)
         r.flag(n != 0, "C3", "FAIL" if n else "INCONCLUSIVE", "%s hits in %s" % (n, where) if n else "no scan of " + where)
@@ -260,7 +266,7 @@ def c6(r):
 
 def faults(r):
     """Section 3.1, for the two faults built so far; any other kind makes the row INCONCLUSIVE."""
-    kinds = [str(v).split("@")[0].split(" ")[0] for v in r.meta.get("variant") or []]
+    kinds = fault_kinds(r.meta)
     for k in sorted(set(kinds) - set(BUILT_FAULTS)):
         r.mark("faults", "INCONCLUSIVE", "expectations for %s not built yet" % k)
     if not set(kinds) & set(BUILT_FAULTS):
@@ -325,7 +331,7 @@ def evaluate(folder):
         return None
     r = Run(folder, meta)
     judge(r)
-    fault = r.v["faults"] if meta.get("variant") else None
+    fault = r.v["faults"] if fault_kinds(meta) else None
     got = [r.v[c] for c in CHECKS] + [fault] * bool(fault)
     row = {k: meta.get(k) for k in ("connector", "harness_version", "case", "mode", "prompt", "variant", "where",
                                     "server", "image", "run", "entry", "started", "minutes", "pad_trusted_at")}

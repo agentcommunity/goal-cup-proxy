@@ -5,7 +5,7 @@ With no row.json under pad-out/, write the seed connectors/tiers.toml; with rows
 PAD-RESULTS.md. `--release-check <commit>` reads only the committed pad-rows.jsonl: exit 0 when the release
 rows hold, 1 naming each missing or differing item, 2 on a usage error. Python 3.9: no tomllib.
 """
-import json, subprocess, sys
+import json, re, subprocess, sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -37,7 +37,7 @@ def write(path, text):
 
 def g(d, k): return d.get(k) if isinstance(d, dict) else None
 def started(r): return str(r.get("started") or "")
-def is_fault(r): return bool(r.get("variant")) or r.get("mode") == "cycle"  # every cycle row is a fault row
+def is_fault(r): return bool(r.get("variant"))  # a cycle row's own crash and a connector copy are in it too
 def kills(r): return any(str(s).startswith("kill-recorder") for s in r.get("variant") or [])
 
 def latest(rows, want):
@@ -49,14 +49,20 @@ def tier_row(cids, case):
     return lambda r: (r.get("connector") in cids and r.get("case") == case and r.get("mode") == "full"
                       and not is_fault(r))
 
+def harness_lines(cid):
+    f = ROOT / "scripts" / "pad" / "harnesses" / (cid + ".toml")
+    return [ln.strip() for ln in f.read_text(encoding="utf-8").splitlines()] if f.is_file() else []
+
 def has_gateway(cid, rows):
     # gateway is n/a, and does not block, when the harness file has no [gateway] table (no documented route).
-    f = ROOT / "scripts" / "pad" / "harnesses" / (cid + ".toml")
-    lines = f.read_text(encoding="utf-8").splitlines() if f.is_file() else []
-    return "[gateway]" in [ln.strip() for ln in lines] or latest(rows, tier_row((cid,), "gateway")) is not None
+    return "[gateway]" in harness_lines(cid) or latest(rows, tier_row((cid,), "gateway")) is not None
 
 def tier_for(cid, rows):
-    # "not supported" is a watcher decision (section 9), never computed from rows here.
+    # "not supported" is the watcher's decision (section 9), kept as `not_supported = "<reason>"` in the pad
+    # harness file, never computed from rows.
+    said = [m.group(1) for m in map(re.compile(r'not_supported\s*=\s*"(.*)"').fullmatch, harness_lines(cid)) if m]
+    if said:
+        return ("not supported", "", said[0])
     if not any(r.get("connector") == cid for r in rows):
         return ("not verified", "", "not yet run on the pad")
     got = [(c, latest(rows, tier_row((cid,), c))) for c in CASES if c != "gateway" or has_gateway(cid, rows)]
@@ -68,9 +74,11 @@ def tier_for(cid, rows):
             first = next((w for w in why if w.startswith(bad + " ")), why[0])
             reasons.append((2, "%s %s %s" % (r.get("case"), bad, first.split(": ", 1)[-1])))
     reasons += [(3, "no full %s row" % c) for c, r in got if not r]
+    versions = {str(r.get("harness_version") or "") for _, r in got if r}  # section 9: verified "on that version"
+    reasons += [(4, "case rows on different versions")] * (len(versions) > 1)
     if reasons:
         return ("not verified", "", min(reasons, key=lambda x: x[0])[1])
-    return ("verified", str(got[0][1].get("harness_version") or ""), "")
+    return ("verified", versions.pop(), "")
 
 def cell(v):
     return "-" if v in (None, "", [], {}) else str(v).replace("|", "/").replace("\n", " ")
@@ -101,7 +109,7 @@ def results_md(rows, tiers):
         summary.append([h, " / ".join(dict.fromkeys(tier)), " / ".join(dict.fromkeys(tiers[c][1] for c in cids))]
                        + [g(latest(rows, tier_row(cids, c)), "result") for c in CASES]
                        + [g(kill, "result"), started(last)[:10] if last else None])
-        for title, fault in (("runs", False), ("fault runs", True)):
+        for title, fault in (("runs", False), ("fault and check runs", True)):
             sel = sorted((r for r in rows if r.get("connector") in cids and is_fault(r) == fault), key=started)
             body += ["", "## %s, %s" % (h, title), ""] + table(HEAD, [run_cells(r, len(cids) > 1)
                                                                     for r in reversed(sel)]) if sel else []
@@ -117,24 +125,26 @@ def release_check(commit):
         print("table: --release-check: %s is not a commit" % commit, file=sys.stderr)
         return 2
     shown, rows, items, used = git("show", "HEAD:" + ROWS_REL), [], [], []
+    if shown.returncode:
+        return print("no committed %s at HEAD" % ROWS_REL) or 1
     try:
         rows = [r for r in map(json.loads, shown.stdout.splitlines()) if isinstance(r, dict)]
     except ValueError:
         items.append("pad-rows.jsonl unreadable")
-    items += ["no committed %s at HEAD" % ROWS_REL] * bool(shown.returncode)
 
-    def need(name, want, ok=lambda r: r.get("result") == "PASS" and r.get("pad_trusted_at")):
+    def need(name, want, ok=lambda r: r.get("result") == "PASS" and r.get("pad_trusted_at"),
+             say=lambda r: "result %s, pad_trusted_at %s" % (r.get("result"), r.get("pad_trusted_at"))):
         r = latest(rows, want)
         if r is not None and ok(r):
             return used.append((name, r))
-        items.append("%s: %s" % (name, "missing" if r is None else "result %s, pad_trusted_at %s" % (
-            r.get("result"), r.get("pad_trusted_at"))))
+        items.append("%s: %s" % (name, "missing" if r is None else say(r)))
     for cid, case in [(cid, case) for cid in CORE for case in CASES]:
         need("%s %s full" % (cid, case), tier_row((cid,), case))
     need("codex-cli direct full kill-recorder", lambda r: r.get("connector") == "codex-cli"
          and r.get("case") == "direct" and r.get("mode") == "full" and kills(r))
-    for s in ("h2-parallel.sh", "long-tunnel.sh"):
-        need("exec %s verdict PASS" % s, lambda r, s=s: g(r.get("exec"), s) == "PASS", ok=lambda r: True)
+    for s in ("h2-parallel.sh", "long-tunnel.sh"):  # the latest verdict for s, which must be PASS
+        need("exec %s verdict PASS" % s, lambda r, s=s: g(r.get("exec"), s) is not None,
+             ok=lambda r, s=s: r["exec"][s] == "PASS", say=lambda r, s=s: "verdict %s" % r["exec"][s])
     ran_on = {}  # the commit each relied-on row ran on, from goalcup "1.0.0+<commit>"
     for name, r in used:
         ran_on.setdefault(str(r.get("goalcup") or "").partition("+")[2], []).append(name)
@@ -156,12 +166,14 @@ def main(argv):
         return 2
     rows, found = [], sorted(PAD_OUT.rglob("row.json")) if PAD_OUT.is_dir() else []
     for p in found:
+        r = None
         try:
-            rows.append(json.loads(p.read_text(encoding="utf-8")))
+            r = json.loads(p.read_text(encoding="utf-8"))
         except (OSError, ValueError):
-            rows.append(None)
-        if not isinstance(rows[-1], dict):
-            rows.pop()
+            pass
+        if isinstance(r, dict):
+            rows.append(r)
+        else:
             print("table: skipped unreadable %s" % p.relative_to(ROOT), file=sys.stderr)
     tiers = {cid: tier_for(cid, rows) for cid in CONNECTOR_IDS}  # no rows: the phase 0 seed
     write(TIERS, render_tiers(tiers))

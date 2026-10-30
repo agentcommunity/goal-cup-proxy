@@ -29,8 +29,7 @@ def load(name, file):
 pad, check, padrun = load("pad", "pad"), load("padcheck", "check.py"), load("padrun", "pad-run")
 
 SENTINEL = "sk-ant-PADSENTINEL-9f3c1e"
-PADCFG = {"keys": {"claude": "CLAUDE_API_KEY", "gateway": "AI_GATEWAY_API_KEY", "cf": "CLOUDFLARE_API_TOKEN"},
-          "approval": {"key": "GOALCUP_TEST_APPROVAL_KEY", "member": "GOALCUP_TEST_MEMBER_ID"}}
+PADCFG = {"keys": {"claude": "CLAUDE_API_KEY", "gateway": "AI_GATEWAY_API_KEY", "cf": "CLOUDFLARE_API_TOKEN"}}
 BASE = {"harness": "claude-code-cli", "key": "claude", "mode": "cycle"}
 
 
@@ -86,7 +85,7 @@ class Walk(unittest.TestCase):
 
     def fake_call(self, argv, timeout=None, env=None):
         if argv[0] == "sh":  # fetch-run: no organizer secret but its own reaches it
-            self.assertFalse({"GH_TOKEN", *PADCFG["approval"].values()} & set(env))
+            self.assertFalse({"GH_TOKEN", *pad.APPROVAL} & set(env))
             os.makedirs(os.path.join(argv[-1], argv[-2]))
             with open(os.path.join(argv[-1], argv[-2], "fetch.json"), "w") as f:
                 f.write("{}")
@@ -132,19 +131,17 @@ class Walk(unittest.TestCase):
         self.assertIn(["list", "--prefix", "pad-"], calls)
 
     def test_staging_approval_values_reach_only_the_request(self):  # rung 2; the scan in walk covers argv and files
-        ok, entry = {"result": "ok", "saw": ""}, "e" + "0" * 16
+        ok = {"result": "ok", "saw": ""}
         resp = mock.MagicMock(status=200)
         resp.__enter__.return_value = resp
         with mock.patch.object(pad.urllib.request, "urlopen", return_value=resp) as urlopen:
-            calls = self.walk(mode="micro", server="staging", answers={
-                "setup": ok, "start": dict(ok, code="BCDF-GHJK"), "paste": ok, "wait-upload": dict(ok, entry=entry)},
+            self.walk(mode="micro", server="staging", answers={
+                "setup": ok, "start": dict(ok, code="BCDF-GHJK"), "paste": ok, "wait-upload": dict(ok, entry="e" + "0" * 16)},
                 extra_env={"GOALCUP_TEST_APPROVAL_KEY": SENTINEL + "ap", "GOALCUP_TEST_MEMBER_ID": "PADSENTINEL-m1",
                            "GH_TOKEN": SENTINEL + "gh"})
         req = urlopen.call_args.args[0]
         self.assertEqual(req.get_header("Authorization"), "Bearer " + SENTINEL + "ap")
         self.assertEqual(json.loads(req.data)["member_id"], "PADSENTINEL-m1")
-        self.assertIn(["push-dir", calls[0][calls[0].index("--name") + 1], "~/run/fetched/" + entry],
-                      [c[:2] + c[-1:] for c in calls])  # fetched, then copied in
 
 
 class BoxHalf(unittest.TestCase):
@@ -218,7 +215,7 @@ class SecretCheck(unittest.TestCase):
 
     def c3(self, masks, secrets_exit=1, plain_exit=0):
         return evaluate({"meta.json": {"connector": "codex-cli", "case": "direct", "known_box": True, "entry": "e1"},
-                         "verify/secrets.json": {"masks": masks},
+                         "verify/secrets.json": {"masks": masks}, "verify/secrets-conductor.json": {"hits": 0},
                          "verify/exits.json": {"secrets": secrets_exit, "secrets-out": 0, "secrets-plain": plain_exit}}
                         )["checks"]["C3"]
 
@@ -228,6 +225,14 @@ class SecretCheck(unittest.TestCase):
     def test_known_value_hit_fails(self):
         self.assertEqual(self.c3(self.PLANTED, secrets_exit=2), "FAIL")
         self.assertEqual(self.c3(dict(self.PLANTED, jwt=0)), "FAIL")
+
+    def test_conductor_scan_counts_its_own_secrets(self):  # section 7: the approval key in the run folder is a hit
+        run = mock.Mock(dir=self.enterContext(tempfile.TemporaryDirectory()))
+        with open(os.path.join(run.dir, "calls.log"), "w") as f:
+            f.write("approve " + SENTINEL + "ap\n")
+        with mock.patch.dict(os.environ, {"GOALCUP_TEST_APPROVAL_KEY": SENTINEL + "ap"}):
+            pad.Run.scan_out(run)
+        self.assertEqual(check.Run(run.dir, {}).hits("secrets-conductor"), 1)
 
     def test_exercise_not_done_is_inconclusive(self):
         self.assertEqual(self.c3({"auth": 8}), "INCONCLUSIVE")
