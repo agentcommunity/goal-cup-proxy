@@ -67,7 +67,10 @@ impl Sets {
     pub fn see(&mut self, row: &str, root: &Path, rel: &Path, st: Stat, taken: bool) {
         let b = rel.as_os_str().as_bytes();
         let strip = |x: &&str| b.strip_suffix(x.as_bytes());
-        let b = ["-wal", "-shm", "-journal"].iter().find_map(strip).unwrap_or(b);
+        let b = ["-wal", "-shm", "-journal"]
+            .iter()
+            .find_map(strip)
+            .unwrap_or(b);
         let key = (row.into(), root.into(), OsStr::from_bytes(b).into());
         let s = self.sets.entry(key).or_default();
         s.taken |= taken;
@@ -95,7 +98,10 @@ impl Sets {
         let (mut left, iv, born) = (slice, self.iv, self.born);
         loop {
             if self.copy.is_none() {
-                let mut ready = self.sets.iter().filter(|(_, s)| due(s, iv, born, rec.now()));
+                let mut ready = self
+                    .sets
+                    .iter()
+                    .filter(|(_, s)| due(s, iv, born, rec.now()));
                 let next = match &mut self.seal {
                     Some((todo, ..)) => todo.pop(),
                     None => ready.next().map(|(k, _)| k.clone()),
@@ -115,7 +121,11 @@ impl Sets {
     /// every file, each with its exact loss. `streams` counts what the seal opened.
     pub fn close(mut self, rec: &Recorder) -> Closed {
         let mut c = Closed::default();
-        let mut todo = self.seal.as_mut().map(|s| std::mem::take(&mut s.0)).unwrap_or_default();
+        let mut todo = self
+            .seal
+            .as_mut()
+            .map(|s| std::mem::take(&mut s.0))
+            .unwrap_or_default();
         loop {
             if let Some(Copying(_, parts, began, ..)) = self.copy.take() {
                 for Part(_, st, off, mut h, _) in parts {
@@ -171,10 +181,16 @@ impl Sets {
             }
         }
         let Copying(key, parts, _, retry, seal) = self.copy.take()?;
-        let now: Vec<_> = parts.iter().map(|p| tail::stat_rel(&key.1, &p.0).ok()).collect();
+        let now: Vec<_> = parts
+            .iter()
+            .map(|p| tail::stat_rel(&key.1, &p.0).ok())
+            .collect();
         let moved = |(p, now): (&Part, &Option<Stat>)| p.4 || *now != Some(p.1);
         let any = parts.iter().zip(&now).any(moved);
-        let fresh = parts.iter().zip(&now).filter_map(|(p, st)| Some((p.0.clone(), (*st)?)));
+        let fresh = parts
+            .iter()
+            .zip(&now)
+            .filter_map(|(p, st)| Some((p.0.clone(), (*st)?)));
         let fresh: Files = fresh.filter(|(_, st)| st.kind == Kind::File).collect();
         for (p, now) in parts.into_iter().zip(&now) {
             if retry && moved((&p, now)) {
@@ -182,7 +198,11 @@ impl Sets {
                 rec.event(json!({"ev": "note", "what": "snapshot_unstable", "path": path}));
             }
             let whole = !any || (retry && p.2 == p.1.size);
-            p.3.end(rec.now(), if whole { Complete } else { SourceChanged }, None);
+            p.3.end(
+                rec.now(),
+                if whole { Complete } else { SourceChanged },
+                None,
+            );
         }
         if any && !retry {
             self.sets.get_mut(&key)?.files = fresh;
@@ -195,6 +215,8 @@ impl Sets {
 /// A taken set changed since its last copy and its interval passed (section 6 step 1).
 fn due(s: &Set, iv: Interval, born: Mono, now: Mono) -> bool {
     let size: u64 = s.files.values().map(|st| st.size).sum();
-    let every = iv.per_2mib.saturating_mul(u32::try_from(size >> 21).unwrap_or(u32::MAX));
+    let every = iv
+        .per_2mib
+        .saturating_mul(u32::try_from(size >> 21).unwrap_or(u32::MAX));
     s.taken && s.files != s.copied && elapsed(s.at.max(born), now) >= iv.base.max(every)
 }

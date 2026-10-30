@@ -123,7 +123,10 @@ impl Reader {
             self.pass();
             let next = PASS.max(elapsed(began, self.rec.now()) * 50);
             loop {
-                let read = (self.tail.read(&self.rec, SLICE, SETTLE), self.sets.read(&self.rec, SLICE));
+                let read = (
+                    self.tail.read(&self.rec, SLICE, SETTLE),
+                    self.sets.read(&self.rec, SLICE),
+                );
                 let wait = match read {
                     (Stop::Room, _) | (_, Stop::Room) => ROOM_WAIT,
                     (Stop::Slice, _) | (_, Stop::Slice) => Duration::ZERO,

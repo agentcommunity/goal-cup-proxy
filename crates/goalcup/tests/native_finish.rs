@@ -40,7 +40,10 @@ fn append(p: &Path, b: &[u8]) {
 }
 
 fn notes(calls: &Calls, what: &str) -> Vec<Value> {
-    events(calls).into_iter().filter(|v| v["what"] == what).collect()
+    events(calls)
+        .into_iter()
+        .filter(|v| v["what"] == what)
+        .collect()
 }
 
 /// The stream ID opened for path ID `id`.
@@ -134,11 +137,19 @@ fn finish_with_no_guard_reads_whole_a_snapshot_rewritten_under_a_copy_in_progres
 fn a_guard_that_runs_out_names_each_unread_file_exactly() {
     let dir = tempfile::tempdir().unwrap();
     let (rec, calls) = Recorder::for_tests(0);
-    let sizes = [("a.jsonl", 10u64), ("b.jsonl", 70_000), ("c.jsonl", 1), ("d.db", 9)];
+    let sizes = [
+        ("a.jsonl", 10u64),
+        ("b.jsonl", 70_000),
+        ("c.jsonl", 1),
+        ("d.db", 9),
+    ];
     for (name, n) in sizes {
         fs::write(dir.path().join(name), vec![b'x'; n as usize]).unwrap();
     }
-    let mut rows = sources(&[("t", dir.path(), "*.jsonl", true), ("t", dir.path(), "*.db", true)]);
+    let mut rows = sources(&[
+        ("t", dir.path(), "*.jsonl", true),
+        ("t", dir.path(), "*.db", true),
+    ]);
     rows.0[1].form = Form::Final;
     let reader = native::start(rec, rows);
     let done = common::within(common::HANG, move || {

@@ -13,24 +13,31 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use common::recorder::{data_of, ends, events, gaps, opens};
 use goalcup::connector::{Form, NativeSource, NativeSources};
+use goalcup::native;
 use goalcup::native::fsx::Dir;
 use goalcup::native::snapshot::{Interval, Sets};
 use goalcup::native::tail::{Stop, Tail};
-use goalcup::native;
 use goalcup::pipeline::{Call, Calls, Cursors, EndReason, GapReason, Recorder};
 use serde_json::Value;
 
 const MS: Duration = Duration::from_millis(1);
 
 fn append(p: &Path, b: &[u8]) {
-    let mut f = OpenOptions::new().create(true).append(true).open(p).unwrap();
+    let mut f = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(p)
+        .unwrap();
     f.write_all(b).unwrap();
 }
 
 /// One walk of every file in `dir`, handed to `sets` as the reader's pass does for row `t`, with
 /// the run start `since`.
 fn walk(sets: &mut Sets, dir: &Path, since: SystemTime) {
-    let (root, tail) = (Dir::open_root(dir).unwrap(), Tail::new(since, Cursors::default()));
+    let (root, tail) = (
+        Dir::open_root(dir).unwrap(),
+        Tail::new(since, Cursors::default()),
+    );
     for name in root.names().unwrap() {
         let st = root.stat_at(&name).unwrap();
         sets.see("t", dir, Path::new(&name), st, tail.taken(&st));
@@ -51,11 +58,16 @@ fn copies(c: &Calls) -> Vec<(Value, Vec<(u64, Value)>)> {
 }
 
 fn end_of(c: &Calls, sid: u64) -> Option<EndReason> {
-    ends(c).into_iter().find_map(|(s, r, ..)| (s == sid).then_some(r))
+    ends(c)
+        .into_iter()
+        .find_map(|(s, r, ..)| (s == sid).then_some(r))
 }
 
 fn notes(c: &Calls, what: &str) -> Vec<Value> {
-    events(c).into_iter().filter(|v| v["what"] == what).collect()
+    events(c)
+        .into_iter()
+        .filter(|v| v["what"] == what)
+        .collect()
 }
 
 /// Every stream of `copy` ended `reason` holding as many bytes as its meta `size`.
@@ -74,7 +86,10 @@ fn a_changed_set_is_copied_whole_once_its_interval_passes_and_the_interval_grows
         fs::write(d.join(name), b).unwrap();
     }
     let (rec, calls) = Recorder::for_tests(1 << 30);
-    let iv = Interval { base: 300 * MS, per_2mib: 1000 * MS };
+    let iv = Interval {
+        base: 300 * MS,
+        per_2mib: 1000 * MS,
+    };
     let mut sets = Sets::new(iv);
     walk(&mut sets, d, UNIX_EPOCH);
     sets.read(&rec, u64::MAX);
@@ -83,9 +98,16 @@ fn a_changed_set_is_copied_whole_once_its_interval_passes_and_the_interval_grows
     sets.read(&rec, u64::MAX);
     let t0 = Instant::now();
     let first = copies(&calls);
-    assert_eq!((first.len(), first[0].1.len()), (1, 3), "one set, a stream per file");
+    assert_eq!(
+        (first.len(), first[0].1.len()),
+        (1, 3),
+        "one set, a stream per file"
+    );
     for (sid, meta) in &first[0].1 {
-        assert!(meta["form"] == "final" && meta["harness_exited"] == false, "{meta}");
+        assert!(
+            meta["form"] == "final" && meta["harness_exited"] == false,
+            "{meta}"
+        );
         let name = meta["path"].as_str().unwrap().strip_prefix("t:").unwrap();
         assert_eq!(data_of(&calls, *sid), fs::read(d.join(name)).unwrap());
     }
@@ -98,7 +120,11 @@ fn a_changed_set_is_copied_whole_once_its_interval_passes_and_the_interval_grows
     append(&d.join("x.db-wal"), &vec![b'w'; 4 << 20]);
     walk(&mut sets, d, UNIX_EPOCH);
     sets.read(&rec, u64::MAX);
-    assert_eq!(copies(&calls).len(), 1, "a large set was copied before its longer interval");
+    assert_eq!(
+        copies(&calls).len(),
+        1,
+        "a large set was copied before its longer interval"
+    );
     std::thread::sleep((2100 * MS).saturating_sub(t0.elapsed()));
     sets.read(&rec, u64::MAX);
     let all = copies(&calls);
@@ -115,7 +141,10 @@ fn a_set_written_during_its_copy_is_copied_once_more_then_kept_as_unstable() {
     let (rec, calls) = Recorder::for_tests(0);
     let mut sets = Sets::new(Interval::default());
     walk(&mut sets, d, UNIX_EPOCH);
-    assert!(matches!(sets.read(&rec, u64::MAX), Stop::Room), "no room, nothing read");
+    assert!(
+        matches!(sets.read(&rec, u64::MAX), Stop::Room),
+        "no room, nothing read"
+    );
     append(&wal, b"more");
     calls.set_room(1 << 30);
     // The first copy reads the 20 bytes it saw; the slice ends as its retry begins.
@@ -129,7 +158,10 @@ fn a_set_written_during_its_copy_is_copied_once_more_then_kept_as_unstable() {
         assert_eq!(end_of(&calls, *sid), Some(EndReason::SourceChanged));
     }
     whole(&calls, &c[1].1, EndReason::Complete);
-    let unstable: Vec<Value> = notes(&calls, "snapshot_unstable").iter().map(|n| n["path"].clone()).collect();
+    let unstable: Vec<Value> = notes(&calls, "snapshot_unstable")
+        .iter()
+        .map(|n| n["path"].clone())
+        .collect();
     assert_eq!(unstable, ["t:x.db-wal"]);
     assert!(gaps(&calls).is_empty());
 }
@@ -151,7 +183,10 @@ fn a_database_older_than_the_run_start_is_copied_with_its_new_wal() {
     let mut sets = Sets::new(Interval::default());
     walk(&mut sets, d, since);
     sets.read(&rec, u64::MAX);
-    let mut paths: Vec<Value> = opens(&calls).into_iter().map(|o| o.2["path"].clone()).collect();
+    let mut paths: Vec<Value> = opens(&calls)
+        .into_iter()
+        .map(|o| o.2["path"].clone())
+        .collect();
     paths.sort_by_key(|p| p.to_string());
     assert_eq!(paths, ["t:x.db", "t:x.db-wal"]);
 }
@@ -174,7 +209,11 @@ fn a_seal_copy_says_whether_the_harness_still_ran_and_is_counted() {
         let done = native::start(rec, rows).finish(exited, None);
         let c = copies(&calls);
         assert_eq!((c.len(), c[0].1.len(), done.snapshots), (1, 2, 2));
-        assert!(c[0].1.iter().all(|(_, m)| m["harness_exited"] == exited && m["form"] == "final"));
+        assert!(
+            c[0].1
+                .iter()
+                .all(|(_, m)| m["harness_exited"] == exited && m["form"] == "final")
+        );
         whole(&calls, &c[0].1, EndReason::Complete);
         let live = notes(&calls, "final_snapshot_live");
         assert_eq!(live.len(), usize::from(!exited));
@@ -213,5 +252,8 @@ fn a_seal_cut_by_its_guard_cuts_every_file_of_the_set_and_keeps_the_periodic_cop
         lost_sum += lost.unwrap();
     }
     assert_eq!(gaps(&calls).len(), 2);
-    assert_eq!((closed.cut_files, closed.cut_bytes, closed.streams), (2, lost_sum, 2));
+    assert_eq!(
+        (closed.cut_files, closed.cut_bytes, closed.streams),
+        (2, lost_sum, 2)
+    );
 }
