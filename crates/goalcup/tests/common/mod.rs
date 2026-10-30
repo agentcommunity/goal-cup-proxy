@@ -6,7 +6,8 @@
 //! - [`home`]: temporary homes for a child, and the real-home guard.
 //! - [`pki`]: a test CA and leaf certificates.
 //! - [`records`]: a part folder built from a list of records.
-//! - [`upstream`], [`worker`]: the fake upstream and the fake Worker (stubs until slice 2).
+//! - [`upstream`]: the fake upstream (TLS, HTTP/1.1, WebSocket; HTTP/2 comes in slice 3).
+//! - [`worker`]: the fake Worker (a stub until slice 2).
 //! - [`recorder`]: helpers over the calls `Recorder::for_tests` collects.
 
 #![allow(dead_code)]
