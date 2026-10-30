@@ -401,3 +401,66 @@ fn a_snapshot_gone_with_bytes_unread_gives_its_gap_and_end() {
         assert_eq!(ends(c), [(o[0].0, EndReason::SourceChanged, 100)]);
     }
 }
+
+/// A copy of 100 bytes stops at 10, then the file is rewritten in place to `size` bytes and seen.
+fn torn_at_10(size: usize) -> T {
+    let mut t = T::new(UNIX_EPOCH);
+    fs::write(t.p("m.json"), [7; 100]).unwrap();
+    t.walk(&["m.json"], true);
+    t.tail.read(&t.rec, 10, Duration::ZERO);
+    fs::write(t.p("m.json"), vec![8; size]).unwrap();
+    t.walk(&["m.json"], true);
+    t
+}
+
+/// The torn copy ends with no GAP; the last state gets its own stream, its exact loss and END.
+fn torn_then_last(c: &Calls, size: u64, gap: GapReason, end: EndReason) {
+    let o = opens(c);
+    assert_eq!(o.len(), 2);
+    assert!(o.iter().all(|o| o.1 == StreamKind::Snapshot));
+    assert_eq!(o[1].2["size"], size);
+    assert_eq!(data_of(c, o[0].0), [7; 10]);
+    let tail = (gap == GapReason::SourceChanged).then(|| json!({"unread_at_least": size}));
+    assert_eq!(lost(c), [(o[1].0, gap, Some(size), tail)]);
+    let e = ends(c);
+    assert_eq!(e, [(o[0].0, EndReason::SourceChanged, 10), (o[1].0, end, size)]);
+}
+
+#[test]
+fn a_snapshot_rewritten_during_a_copy_then_gone_names_the_last_state_lost() {
+    // Rewritten larger or smaller; gone seen by a read first or by the walk alone.
+    for (size, read_first) in [(200, false), (200, true), (50, false), (50, true)] {
+        let mut t = torn_at_10(size);
+        fs::remove_file(t.p("m.json")).unwrap();
+        if read_first {
+            t.read(Duration::ZERO);
+        }
+        t.walk(&["m.json"], true);
+        t.read(Duration::ZERO);
+        let T {
+            rec, calls, tail, ..
+        } = t;
+        let closed = tail.close(&rec, true);
+        assert_eq!((closed.cut_files, closed.cut_bytes), (0, 0));
+        let (size, gap) = (size as u64, GapReason::SourceChanged);
+        torn_then_last(&calls, size, gap, EndReason::SourceChanged);
+    }
+}
+
+#[test]
+fn a_snapshot_rewritten_during_a_copy_and_cut_at_the_seal_counts_the_last_state() {
+    // Rewritten larger or smaller; still there at the seal or gone before it unseen.
+    for (size, gone) in [(200, false), (200, true), (50, false), (50, true)] {
+        let t = torn_at_10(size);
+        if gone {
+            fs::remove_file(t.p("m.json")).unwrap();
+        }
+        let T {
+            rec, calls, tail, ..
+        } = t;
+        let closed = tail.close(&rec, true);
+        let size = size as u64;
+        assert_eq!((closed.cut_files, closed.cut_bytes), (1, size));
+        torn_then_last(&calls, size, GapReason::CutAtSeal, EndReason::CutAtSeal);
+    }
+}

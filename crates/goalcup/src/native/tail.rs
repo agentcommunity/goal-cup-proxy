@@ -133,7 +133,7 @@ impl Tail {
     }
 
     /// Paths not settled since the last sweep are gone: GAP if unread, END `source_changed`. A gone
-    /// snapshot whose last state was not copied whole gets a stream of its own if it has none, and
+    /// snapshot whose last state was not copied whole gets a copy of its own (see `last_copy`) and
     /// its exact loss, since no later copy comes. A path under one of the walk's `unlisted` folders
     /// was not looked at, so it is left alone.
     pub fn sweep(&mut self, rec: &Recorder, unlisted: &[PathBuf]) {
@@ -142,9 +142,8 @@ impl Tail {
             if std::mem::take(&mut e.live) || held() {
                 return true;
             }
-            if e.snap && e.h.is_none() && e.done != Some(e.stat) {
-                (e.copy, e.off) = (Some(e.stat), 0);
-                e.h = Some(open_snapshot(rec, id, &e.stat));
+            if e.snap {
+                last_copy(rec, id, e);
             }
             if let Some(h) = e.h.take() {
                 end(rec, h, e, SourceChanged, e.snap);
@@ -197,16 +196,15 @@ impl Tail {
         Stop::Done
     }
 
-    /// Ends every open stream (section 8 steps 4 and 5). A changed snapshot not copied whole (never
-    /// opened, say) gets a stream of its own, so its loss is named. `cut`: the seal's time guard ran
-    /// out, so unread bytes are `cut_at_seal`, else `source_changed`.
+    /// Ends every open stream (section 8 steps 4 and 5). A snapshot whose last state was not copied
+    /// whole (never opened, or its copy torn by that state) gets a copy of its own, so its loss is
+    /// named. `cut`: the seal's time guard ran out, so unread bytes are `cut_at_seal`, else
+    /// `source_changed`.
     pub fn close(self, rec: &Recorder, cut: bool) -> Closed {
         let mut c = Closed::default();
         for (id, mut e) in self.files {
-            let uncopied = e.snap && e.copy.is_none() && e.done != Some(e.stat);
-            if uncopied {
-                (e.copy, e.off) = (Some(e.stat), 0);
-                e.h = Some(open_snapshot(rec, &id, &e.stat));
+            if e.snap {
+                last_copy(rec, &id, &mut e);
             }
             let Some(h) = e.h.take() else { continue };
             let reason = match want(&e) == e.off {
@@ -230,19 +228,13 @@ fn read_one(rec: &Recorder, id: &str, e: &mut Entry, left: &mut u64) -> io::Resu
         Err(err) if err.kind() == io::ErrorKind::NotFound => {
             // A copy torn by a newer state ends here, as that state gets a copy of its own; else
             // the next walk says gone (sweep names the loss) or replaced (settle sees the change).
-            if e.copy.is_some_and(|c| c != e.stat)
-                && let Some(h) = e.h.take()
-            {
-                e.copy = None;
-                h.end(rec.now(), SourceChanged, None);
-            }
+            end_torn(rec, e);
             return Ok(None);
         }
         f => f?,
     };
     if e.snap && e.copy.is_none() {
-        (e.copy, e.off) = (Some(e.stat), 0);
-        e.h = Some(open_snapshot(rec, id, &e.stat));
+        begin_copy(rec, id, e);
     }
     let (to, Some(h)) = (want(e), e.h.as_mut()) else {
         return Ok(None);
@@ -285,9 +277,35 @@ fn read_one(rec: &Recorder, id: &str, e: &mut Entry, left: &mut u64) -> io::Resu
     Ok(None)
 }
 
+/// A gone or sealed snapshot's last state: a copy torn by it ends, and if that state was not
+/// copied whole it gets a copy of its own, which the caller ends with the exact loss.
+fn last_copy(rec: &Recorder, id: &str, e: &mut Entry) {
+    end_torn(rec, e);
+    if e.copy.is_none() && e.done != Some(e.stat) {
+        begin_copy(rec, id, e);
+    }
+}
+
+/// A snapshot copy of a state older than the last seen ends `source_changed` with no GAP: the
+/// newer state gets a copy of its own, which names any loss.
+fn end_torn(rec: &Recorder, e: &mut Entry) {
+    if e.copy.is_some_and(|c| c != e.stat)
+        && let Some(h) = e.h.take()
+    {
+        e.copy = None;
+        h.end(rec.now(), SourceChanged, None);
+    }
+}
+
+/// Starts a snapshot copy of the last state seen, from byte 0.
+fn begin_copy(rec: &Recorder, id: &str, e: &mut Entry) {
+    (e.copy, e.off) = (Some(e.stat), 0);
+    e.h = Some(open_snapshot(rec, id, &e.stat));
+}
+
 /// Ends a stream; seen bytes left unread get a GAP first, `exact` at the seal or for a gone
-/// snapshot, a lower bound when the file changed (sections 4 and 8). A snapshot copy torn by a
-/// newer state needs none before the seal, where a later copy follows. Returns the unread.
+/// snapshot, a lower bound when the file changed (sections 4 and 8). A torn snapshot copy never
+/// comes here (`end_torn`). Returns the unread.
 fn end(rec: &Recorder, mut h: StreamHandle, e: &Entry, reason: EndReason, exact: bool) -> u64 {
     let n = want(e).saturating_sub(e.off);
     if n > 0 && reason == CutAtSeal {
