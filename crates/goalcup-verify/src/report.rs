@@ -3,11 +3,12 @@
 
 use crate::input::Input;
 use crate::integrity::{self, Check, Outcome, Res};
+use crate::server;
 use serde_json::{Map, Value, json};
 use std::path::Path;
 
 /// Checks a later slice builds: in the report as `skip`, so readers see every id now.
-const LATER: &[&str] = &[
+const LATER: [&str; 7] = [
     "listed_hosts_decrypted",
     "conn_bytes",
     "mask_failclosed",
@@ -15,11 +16,6 @@ const LATER: &[&str] = &[
     "wire_keeps_up",
     "threads_match",
     "subagents_present",
-];
-const LATER_SERVER: &[&str] = &[
-    "server_chunks_whole",
-    "server_equals_local",
-    "server_counts_match",
 ];
 const NOT_BUILT: &str = "not built in this slice";
 
@@ -30,16 +26,23 @@ pub struct Report {
     pub text: String,
 }
 
-/// Checks every entry of the input. `now_ns` is set for `--live`.
-pub fn build(input: &Input, now_ns: Option<u64>) -> Report {
+/// Checks every entry of the input. `now_ns` is set for `--live`; `local` is `--local`, the
+/// local entries a server copy is compared with.
+pub fn build(input: &Input, now_ns: Option<u64>, local: Option<&Input>) -> Report {
     let server = input.kind == "server";
     let (mut exit, mut text, mut entries) = (0u8, String::new(), Vec::new());
-    let mut run = Value::Null;
+    let (mut run, mut copies) = (Value::Null, Vec::new());
     for e in &input.entries {
-        let mut o = integrity::check(e, now_ns);
+        let f = server.then(|| server::read(e));
+        let want = f.as_ref().map(server::wanted).unwrap_or_default();
+        let mut o = integrity::check(e, now_ns, &want);
         let mut checks = std::mem::take(&mut o.checks);
-        let later = LATER.iter().chain(if server { LATER_SERVER } else { &[] });
-        checks.extend(later.map(|id| Check::new(id, None, Res::Skip, NOT_BUILT)));
+        checks.extend(LATER.map(|id| Check::new(id, None, Res::Skip, NOT_BUILT)));
+        if let Some(f) = &f {
+            let c = server::checks(e, f, &o, local);
+            checks.extend_from_slice(&c);
+            copies.extend(c);
+        }
         let worst = checks.iter().map(|c| c.result).max().unwrap_or(Res::Pass);
         let partial = !o.sealed || input.kind == "live" || o.pruned;
         exit = exit.max(match worst {
@@ -54,9 +57,10 @@ pub fn build(input: &Input, now_ns: Option<u64>) -> Report {
         text += &self::text(&name, &o, &checks);
         entries.push(entry(name, &o, &checks));
     }
+    let server = server.then(|| server::summary(&copies));
     let result = ["pass", "named", "fail"][usize::from(exit)];
     let json = json!({"verifier": env!("CARGO_PKG_VERSION"), "input": input.kind, "run": run,
-        "result": result, "exit": exit, "entries": entries, "server": null});
+        "result": result, "exit": exit, "entries": entries, "server": server});
     Report { json, exit, text }
 }
 
@@ -94,7 +98,8 @@ fn entry(name: String, o: &Outcome, checks: &[Check]) -> Value {
         })
         .collect();
     let s = |k: &str| o.start.get(k).cloned().unwrap_or(Value::Null);
-    json!({"entry": name, "sealed": o.sealed, "seal_reason": o.seal_reason, "boots": o.boots,
+    let reason = o.seal.as_ref().map(|s| &s["reason"]);
+    json!({"entry": name, "sealed": o.sealed, "seal_reason": reason, "boots": o.boots,
         "connector": s("connector"), "keep": s("keep"), "label": label, "harness_log": null,
         "provider_errors": null,
         "bytes": {"raw": o.raw, "compressed": o.compressed, "framing": o.raw.saturating_sub(o.data_bytes)},

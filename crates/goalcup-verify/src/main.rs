@@ -28,40 +28,9 @@ struct Args {
 #[derive(Subcommand)]
 enum Cmd {
     /// Checks an entry, rec, run or fetched folder, or one part file.
-    Check {
-        path: PathBuf,
-        /// Print the report (S6) as JSON to stdout.
-        #[arg(long)]
-        json: bool,
-        /// The entry is still recording: read to the durable point.
-        #[arg(long)]
-        live: bool,
-        /// The input is a server copy.
-        #[arg(long)]
-        server: bool,
-        /// The local entry to compare the server copy with (not read yet).
-        #[arg(long, value_name = "ENTRY_DIR")]
-        local: Option<PathBuf>,
-        /// Known secret values, one per line (not read yet).
-        #[arg(long, value_name = "FILE")]
-        known: Option<PathBuf>,
-        /// The pad's list of harness files on disk (not read yet).
-        #[arg(long, value_name = "MANIFEST")]
-        harness_files: Option<PathBuf>,
-    },
+    Check(CheckArgs),
     /// One JSON line per record. Payload is printed only with --text.
-    Dump {
-        path: PathBuf,
-        /// A stream id, or BOOT.SID for one boot.
-        #[arg(long)]
-        sid: Option<String>,
-        /// Only records of this kind (part, open, data, end, gap, mask, event, link).
-        #[arg(long)]
-        kind: Option<String>,
-        /// Print DATA payload (`text` or `hex`).
-        #[arg(long)]
-        text: bool,
-    },
+    Dump(DumpArgs),
     /// The usage reader.
     #[command(disable_help_flag = true)]
     Usage {
@@ -70,13 +39,50 @@ enum Cmd {
     },
 }
 
+#[derive(clap::Args)]
+struct DumpArgs {
+    path: PathBuf,
+    /// A stream id, or BOOT.SID for one boot.
+    #[arg(long)]
+    sid: Option<String>,
+    /// Only records of this kind (part, open, data, end, gap, mask, event, link).
+    #[arg(long)]
+    kind: Option<String>,
+    /// Print DATA payload (`text` or `hex`).
+    #[arg(long)]
+    text: bool,
+}
+
+#[derive(clap::Args)]
+struct CheckArgs {
+    path: PathBuf,
+    /// Print the report (S6) as JSON to stdout.
+    #[arg(long)]
+    json: bool,
+    /// The entry is still recording: read to the durable point.
+    #[arg(long)]
+    live: bool,
+    /// The input is a server copy.
+    #[arg(long)]
+    server: bool,
+    /// The local entry to compare the server copy with.
+    #[arg(long, value_name = "ENTRY_DIR")]
+    local: Option<PathBuf>,
+    /// Known secret values, one per line (not read yet).
+    #[arg(long, value_name = "FILE")]
+    known: Option<PathBuf>,
+    /// The pad's list of harness files on disk (not read yet).
+    #[arg(long, value_name = "MANIFEST")]
+    harness_files: Option<PathBuf>,
+}
+
 fn main() -> ExitCode {
     // A panic prints where it happened, never its message: that could hold record text.
     std::panic::set_hook(Box::new(|info| {
-        let at = info.location().map_or_else(
-            || "an unknown place".into(),
-            |l| format!("{}:{}", l.file(), l.line()),
-        );
+        let at = info
+            .location()
+            .map(|l| format!("{}:{}", l.file(), l.line()));
+        let at = at.unwrap_or_else(|| "an unknown place".into());
         eprintln!("goalcup-verify: internal error at {at}");
     }));
     std::panic::catch_unwind(run).unwrap_or(ExitCode::from(3))
@@ -96,40 +102,31 @@ fn run() -> ExitCode {
         }
     };
     match args.cmd {
-        // `--local`, `--known` and `--harness-files` are taken now and read by the checks that
-        // need them, which are `skip` until a later slice builds them.
-        Cmd::Check {
-            path,
-            json,
-            live,
-            server,
-            ..
-        } => check(&path, json, live, server),
-        Cmd::Dump {
-            path,
-            sid,
-            kind,
-            text,
-        } => dump(&path, sid.as_deref(), kind.as_deref(), text),
+        Cmd::Check(a) => check(&a),
+        Cmd::Dump(d) => dump(&d.path, d.sid.as_deref(), d.kind.as_deref(), d.text),
         Cmd::Usage { args } => usage::run(args),
     }
 }
 
-fn check(path: &std::path::Path, json: bool, live: bool, server: bool) -> ExitCode {
-    let input = match input::resolve(path, live, server) {
-        Ok(i) => i,
-        Err(e) => {
-            eprintln!("goalcup-verify: {e}");
-            return ExitCode::from(3);
-        }
+/// A plain line for exit 3.
+fn no_report(e: &dyn std::fmt::Display) -> ExitCode {
+    eprintln!("goalcup-verify: {e}");
+    ExitCode::from(3)
+}
+
+fn check(a: &CheckArgs) -> ExitCode {
+    let local = a.local.as_ref().map(|l| input::resolve(l, false, false));
+    let (input, local) = match (input::resolve(&a.path, a.live, a.server), local.transpose()) {
+        (Ok(i), Ok(l)) => (i, l),
+        (Err(e), _) | (_, Err(e)) => return no_report(&e),
     };
-    let now = live.then(|| {
+    let now = a.live.then(|| {
         let d = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH);
         d.map_or(0, |d| u64::try_from(d.as_nanos()).unwrap_or(u64::MAX))
     });
-    let r = report::build(&input, now);
+    let r = report::build(&input, now, local.as_ref());
     eprint!("{}", r.text);
-    if json {
+    if a.json {
         let _ = writeln!(std::io::stdout(), "{}", r.json);
     }
     ExitCode::from(r.exit)
@@ -152,20 +149,14 @@ fn dump(path: &std::path::Path, sid: Option<&str>, kind: Option<&str>, text: boo
     };
     let input = match input::resolve(path, false, false) {
         Ok(i) => i,
-        Err(e) => {
-            eprintln!("goalcup-verify: {e}");
-            return ExitCode::from(3);
-        }
+        Err(e) => return no_report(&e),
     };
     let mut out = std::io::BufWriter::new(std::io::stdout().lock());
     let mut broke = false;
     for e in &input.entries {
         let (mut rd, meter) = match input::open(e) {
             Ok(r) => r,
-            Err(e) => {
-                eprintln!("goalcup-verify: {e}");
-                return ExitCode::from(3);
-            }
+            Err(e) => return no_report(&e),
         };
         let (mut d, mut boot) = (Dumper::default(), 0u64);
         let mut tail_line = None;
