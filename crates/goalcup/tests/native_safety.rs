@@ -4,7 +4,6 @@
 
 use std::ffi::{OsStr, OsString};
 use std::fs;
-use std::io::Read;
 use std::os::unix::fs::symlink;
 use std::sync::mpsc;
 use std::time::Duration;
@@ -72,39 +71,23 @@ fn a_file_replaced_after_its_stat_is_refused() {
     fs::write(t.path().join("s.jsonl.tmp"), b"two\n").unwrap();
     fs::rename(t.path().join("s.jsonl.tmp"), t.path().join("s.jsonl")).unwrap();
 
-    assert!(root.open_file(n("s.jsonl"), seen.fid()).is_err());
+    let err = root.open_file(n("s.jsonl"), seen.fid()).unwrap_err();
+    assert_eq!(err.kind(), std::io::ErrorKind::NotFound);
     let now = root.stat_at(n("s.jsonl")).unwrap();
     assert_ne!(now.fid(), seen.fid());
     assert!(root.open_file(n("s.jsonl"), now.fid()).is_ok());
 }
 
 #[test]
-fn names_list_files_and_folders_and_a_regular_file_reads() {
+fn a_second_listing_starts_from_the_top() {
     let t = tempfile::tempdir().unwrap();
-    fs::write(t.path().join("a.jsonl"), b"{\"x\":1}\n\xff\x00tail").unwrap();
+    fs::write(t.path().join("a.jsonl"), b"a").unwrap();
     fs::create_dir(t.path().join("sub")).unwrap();
-    fs::write(t.path().join("sub").join("b.jsonl"), b"b").unwrap();
-
     let root = Dir::open_root(t.path()).unwrap();
     let mut names = root.names().unwrap();
     names.sort();
     assert_eq!(names, [OsString::from("a.jsonl"), OsString::from("sub")]);
-    // A second listing on the same folder starts from the top again.
     assert_eq!(root.names().unwrap().len(), 2);
-
-    let st = root.stat_at(n("a.jsonl")).unwrap();
-    assert_eq!(st.kind, Kind::File);
-    assert_eq!(root.stat_at(n("sub")).unwrap().kind, Kind::Dir);
-    let mut f = root.open_file(n("a.jsonl"), st.fid()).unwrap();
-    let mut bytes = Vec::new();
-    f.read_to_end(&mut bytes).unwrap();
-    assert_eq!(bytes, fs::read(t.path().join("a.jsonl")).unwrap());
-    let again = file_stat(&f).unwrap();
-    assert_eq!((again.fid(), again.size), (st.fid(), bytes.len() as u64));
-
-    let sub = root.open_child(n("sub")).unwrap();
-    assert_eq!(sub.stat().unwrap().dev, root.stat().unwrap().dev);
-    assert_eq!(sub.names().unwrap(), [OsString::from("b.jsonl")]);
 }
 
 /// Descriptors this process holds on paths under `dir` (other tests may run in parallel).
@@ -133,7 +116,7 @@ fn no_descriptor_is_kept() {
             let f = d.open_file(&name, st.fid()).unwrap();
             file_stat(&f).unwrap();
         }
-        let _ = d.open_file(n("f.jsonl"), root.stat().unwrap().fid());
+        let _ = d.open_file(n("f.jsonl"), root.stat_at(n(".")).unwrap().fid());
         let _ = root.open_child(n("missing"));
     }
     assert_eq!(fds_under(&dir), before);

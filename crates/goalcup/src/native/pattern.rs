@@ -1,5 +1,5 @@
 //! Native row patterns (PRD-04 sections 2 and 7): `/`-separated components relative to a row's
-//! root, each a literal name, a glob with `*` and `?`, or `**` (zero or more whole folders). No
+//! root, each a name or a glob with `*` and `?`, or `**` (zero or more whole folders). No
 //! I/O, no length or depth limit, no row cap: a walk cannot loop because no symlink is followed
 //! and no mount is crossed (section 9).
 
@@ -14,8 +14,8 @@ pub struct PatternError(pub &'static str);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Part {
-    Literal(String),
-    Glob(String),
+    /// A name or a glob; a name with no `*` or `?` matches only itself.
+    Glob(Vec<char>),
     AnyDepth,
 }
 
@@ -26,7 +26,7 @@ pub struct Pattern {
 }
 
 /// Parses a row pattern, refusing an empty or absolute pattern, empty components, `.`, `..`,
-/// braces, a NUL byte and `**` glued to other text.
+/// braces, a NUL byte, `**` glued to other text and a trailing `**` (it names folders, not files).
 pub fn parse(s: &str) -> Result<Pattern, PatternError> {
     if s.is_empty() {
         return Err(PatternError("empty pattern"));
@@ -37,6 +37,9 @@ pub fn parse(s: &str) -> Result<Pattern, PatternError> {
     if s.contains(['{', '}', '\0']) {
         return Err(PatternError("braces or a NUL byte"));
     }
+    if s == "**" || s.ends_with("/**") {
+        return Err(PatternError("trailing `**`"));
+    }
     let parts = s
         .split('/')
         .map(|c| match c {
@@ -44,8 +47,7 @@ pub fn parse(s: &str) -> Result<Pattern, PatternError> {
             "." | ".." => Err(PatternError("`.` or `..` component")),
             "**" => Ok(Part::AnyDepth),
             c if c.contains("**") => Err(PatternError("`**` glued to other text")),
-            c if c.contains(['*', '?']) => Ok(Part::Glob(c.to_string())),
-            c => Ok(Part::Literal(c.to_string())),
+            c => Ok(Part::Glob(c.chars().collect())),
         })
         .collect::<Result<_, _>>()?;
     Ok(Pattern { parts })
@@ -75,13 +77,13 @@ impl Pattern {
             let Component::Normal(name) = component else {
                 return None;
             };
+            let name: Vec<char> = name.to_string_lossy().chars().collect();
             let mut next = vec![false; n + 1];
             for i in (0..n).filter(|&i| set[i]) {
                 match &self.parts[i] {
                     Part::AnyDepth => next[i] = true,
-                    Part::Literal(l) if name.as_bytes() == l.as_bytes() => next[i + 1] = true,
-                    Part::Glob(g) if glob_matches(&name.to_string_lossy(), g) => next[i + 1] = true,
-                    _ => {}
+                    Part::Glob(g) if glob_matches(&name, g) => next[i + 1] = true,
+                    Part::Glob(_) => {}
                 }
             }
             self.close(&mut next);
@@ -111,8 +113,8 @@ pub fn first_match<'a>(rows: &[(&Path, &Pattern)], abs: &'a Path) -> Option<(usi
 }
 
 /// The path ID `<row>:<rel>` (PRD-01 section 5), components joined with `/`. The root is never
-/// part of it. Escaping copied from `crates/goalcup-daemon/src/native_capture.rs:1156-1178`:
-/// `\\` for a backslash, `\u{..}` for a control character, `\x..` for each byte that is not UTF-8.
+/// part of it. Escaping as in 0.x: `\\` for a backslash, `\u{..}` for a control character,
+/// `\x..` for each byte that is not UTF-8.
 pub fn path_id(row: &str, rel: &Path) -> String {
     let mut out = format!("{row}:");
     for (index, name) in rel.iter().enumerate() {
@@ -138,10 +140,8 @@ pub fn path_id(row: &str, rel: &Path) -> String {
 }
 
 /// One component: `*` any run (including none), `?` one character, anything else itself.
-/// Copied from `crates/goalcup-protocol/src/harness/check.rs:326-351` (`glob_matches`).
-fn glob_matches(name: &str, pattern: &str) -> bool {
-    let name: Vec<char> = name.chars().collect();
-    let pattern: Vec<char> = pattern.chars().collect();
+/// Copied from the 0.x single-component matcher.
+fn glob_matches(name: &[char], pattern: &[char]) -> bool {
     let (mut i, mut j) = (0usize, 0usize);
     let (mut star, mut matched) = (None, 0usize);
     while i < name.len() {

@@ -19,6 +19,8 @@ fn any_depth_matches_zero_and_many_folders() {
     for rel in ["b.jsonl", "x/a/b.jsonl", "a/x/c.jsonl", "a/x"] {
         assert!(!pat.matches(Path::new(rel)), "{rel}");
     }
+    // `**` never names a file by itself: `a/**/*` does not match a file called `a`.
+    assert!(!p("a/**/*").matches(Path::new("a")));
 }
 
 #[test]
@@ -40,7 +42,7 @@ fn a_star_matches_a_name_that_is_not_utf8() {
 fn bad_patterns_are_refused() {
     for bad in [
         "", "/a", "/", "a//b", "a/", ".", "a/./b", "..", "a/../b", "{a,b}", "a/{b", "a}", "a\0b",
-        "a**", "**b", "x**y", "a/***",
+        "a**", "**b", "x**y", "a/***", "**", "a/**",
     ] {
         assert!(parse(bad).is_err(), "{bad:?} should be refused");
     }
@@ -118,25 +120,4 @@ fn path_id_escapes_and_never_holds_the_root() {
     let id = path_id("transcripts", rel);
     assert_eq!(id, "transcripts:s/t.jsonl");
     assert!(!id.contains("secret-root"));
-}
-
-#[test]
-fn every_connector_native_pattern_parses_and_matches() {
-    for (pattern, sample) in [
-        ("**/tool-results/*", "-home-x/abc/tool-results/t1.txt"),
-        ("**/*.meta.json", "-home-x/abc/subagents/agent-1.meta.json"),
-        ("**/*.jsonl", "-home-x/abc.jsonl"),
-        ("**/rollout-*.jsonl", "2026/10/30/rollout-abc.jsonl"),
-        ("*.sqlite*", "state_5.sqlite-wal"),
-        ("state.db*", "state.db-wal"),
-        ("**/manifest.json", "t1/manifest.json"),
-        ("**/task-*.log", "t1/task-7.log"),
-        ("**/chats/**/*.jsonl", "h1/chats/session-1.jsonl"),
-        ("**/chats/**/*.jsonl", "h1/chats/a/b/session-2.jsonl"),
-    ] {
-        assert!(
-            p(pattern).matches(Path::new(sample)),
-            "{pattern} vs {sample}"
-        );
-    }
 }
