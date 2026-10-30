@@ -103,7 +103,11 @@ pub fn local_clock(unix: u64) -> String {
         format!("UTC{sign}{:02}:{:02}", a / 3600, a % 3600 / 60)
     };
     let (utc_day, utc) = day_and_time(unix);
-    let utc = if utc_day == day { utc[..5].to_owned() } else { format!("{utc_day}, {}", &utc[..5]) };
+    let utc = if utc_day == day {
+        utc[..5].to_owned()
+    } else {
+        format!("{utc_day}, {}", &utc[..5])
+    };
     format!("{day}, {} {zone} ({utc} UTC)", &time[..5])
 }
 
@@ -197,11 +201,14 @@ pub fn gap_name_words(name: &str) -> String {
 // Status (section 4).
 
 /// No run on this computer.
-pub const NO_RUN_YET: &str = "There is no run on this computer yet. To start one, run: goalcup start";
+pub const NO_RUN_YET: &str =
+    "There is no run on this computer yet. To start one, run: goalcup start";
 
 /// `goalcup status <PART>` names nothing on this computer.
 pub fn no_such_part(arg: &str) -> String {
-    format!("There is no run or part {arg} on this computer. Run goalcup status to see the newest run.")
+    format!(
+        "There is no run or part {arg} on this computer. Run goalcup status to see the newest run."
+    )
 }
 
 /// `status.json` is missing or does not parse.
@@ -219,7 +226,10 @@ pub const FINISHED: &str = "Recording: finished at";
 pub fn state_line(state: &State, run: &str) -> String {
     let t = |at: u64| local_time(at, true);
     match *state {
-        State::Sealed { at } => format!("{FINISHED} {}. Nothing is recorded now.", local_time(at, false)),
+        State::Sealed { at } => format!(
+            "{FINISHED} {}. Nothing is recorded now.",
+            local_time(at, false)
+        ),
         State::Restarting { since } => format!("Recording is restarting (since {}).", t(since)),
         State::OffRestarting { since } => format!(
             "Recording is off since {}. Your agent keeps working; this time will show as a gap.",
@@ -255,9 +265,9 @@ pub fn state_line(state: &State, run: &str) -> String {
             plural(streams, "connection or file", "connections or files"),
             size_words(bytes)
         ),
-        State::WriterSlow { secs } => format!(
-            "Recording is behind: nothing written for {secs} s. Your agent is not slowed."
-        ),
+        State::WriterSlow { secs } => {
+            format!("Recording is behind: nothing written for {secs} s. Your agent is not slowed.")
+        }
         State::Recording => "Recording: on.".to_owned(),
     }
 }
@@ -290,7 +300,10 @@ pub fn harness_line(name: &str, alive: bool, exit: Option<Exit>, started: bool) 
 
 /// `Written so far:`, with the hosts by count and the whole count when some have holes.
 pub fn written_line(requests: u64, hosts: &[(&str, u64)], whole: u64, holes: u64) -> String {
-    let mut line = format!("Written so far: {}", plural(requests, "model request", "model requests"));
+    let mut line = format!(
+        "Written so far: {}",
+        plural(requests, "model request", "model requests")
+    );
     if !hosts.is_empty() {
         let list: Vec<String> = hosts.iter().map(|(h, n)| format!("{h} {n}")).collect();
         line += &format!(" ({})", list.join(", "));
@@ -310,7 +323,11 @@ pub fn session_files_line(files: u64, bytes: u64) -> String {
 pub fn off_line(spans: u64, ms: u64) -> String {
     match (spans, ms) {
         (0, 0) => "Off: never.".to_owned(),
-        _ => format!("Off: {}, {} in total.", plural(spans, "time", "times"), span_words(ms)),
+        _ => format!(
+            "Off: {}, {} in total.",
+            plural(spans, "time", "times"),
+            span_words(ms)
+        ),
     }
 }
 
@@ -319,14 +336,24 @@ pub fn parts_line(sealed: &[bool]) -> String {
     let each: Vec<String> = sealed
         .iter()
         .enumerate()
-        .map(|(i, s)| format!(" Part {} {}.", i + 1, if *s { "sealed" } else { "recording" }))
+        .map(|(i, s)| {
+            format!(
+                " Part {} {}.",
+                i + 1,
+                if *s { "sealed" } else { "recording" }
+            )
+        })
         .collect();
     format!("Parts: {}.{}", sealed.len(), each.concat())
 }
 
 /// `Problems: none.`, or the heading over one line per cause.
 pub fn problems_head(n: usize) -> String {
-    if n == 0 { "Problems: none.".to_owned() } else { "Problems:".to_owned() }
+    if n == 0 {
+        "Problems: none.".to_owned()
+    } else {
+        "Problems:".to_owned()
+    }
 }
 
 /// Harness running, no request for 10 minutes, session files newer.
@@ -390,7 +417,9 @@ pub fn listed_tunnel(host: &str, reason: &str) -> String {
 /// Note `parse_stopped`; the host and time when the note has them.
 pub fn parse_stopped(host: Option<&str>, at: Option<u64>) -> String {
     let to = host.map(|h| format!(" to {h}")).unwrap_or_default();
-    let when = at.map(|t| format!(" at {}", local_time(t, false))).unwrap_or_default();
+    let when = at
+        .map(|t| format!(" at {}", local_time(t, false)))
+        .unwrap_or_default();
     format!(
         "Recording of one connection{to} stopped{when}; its traffic still passes. Requests on it \
          after that are not recorded."
@@ -420,7 +449,11 @@ pub fn unknown_note(what: &str) -> String {
 
 /// Section 5 rule 6: bytes after the seal's last link.
 pub fn after_seal(name: &str, bytes: u64, hosts: &[String]) -> String {
-    let hosts = if hosts.is_empty() { String::new() } else { format!(" ({})", hosts.join(", ")) };
+    let hosts = if hosts.is_empty() {
+        String::new()
+    } else {
+        format!(" ({})", hosts.join(", "))
+    };
     format!(
         "Programs {name} started sent {} after this part ended{hosts}; that was not recorded.",
         size_words(bytes)
@@ -458,19 +491,27 @@ pub fn continue_now(run: &str) -> String {
 
 /// Rule 2.
 pub fn no_request_written(name: &str) -> String {
-    format!("No model request was written. {name} may not use the recording proxy, or it made no call.")
+    format!(
+        "No model request was written. {name} may not use the recording proxy, or it made no call."
+    )
 }
 
 pub fn requests_written(n: u64, hosts: &[(&str, u64)]) -> String {
     let list: Vec<String> = hosts.iter().map(|(h, n)| format!("{h} {n}")).collect();
-    format!("{} written: {}.", plural(n, "model request", "model requests"), list.join(", "))
+    format!(
+        "{} written: {}.",
+        plural(n, "model request", "model requests"),
+        list.join(", ")
+    )
 }
 
 /// Rule 3: whole beside the request count when some have holes, and the bytes not recorded.
 pub fn whole_and_lost(whole: u64, holes: u64, lost: u64) -> String {
     let mut parts = Vec::new();
     if holes > 0 {
-        parts.push(format!("{whole} of them written whole, {holes} with missing parts."));
+        parts.push(format!(
+            "{whole} of them written whole, {holes} with missing parts."
+        ));
     }
     if lost > 0 {
         parts.push(format!("{} was not recorded.", size_words(lost)));
@@ -479,11 +520,19 @@ pub fn whole_and_lost(whole: u64, holes: u64, lost: u64) -> String {
 }
 
 pub fn session_files(files: u64, bytes: u64) -> String {
-    format!("{}, {}.", plural(files, "session file", "session files"), size_words(bytes))
+    format!(
+        "{}, {}.",
+        plural(files, "session file", "session files"),
+        size_words(bytes)
+    )
 }
 
 pub fn off_total(spans: u64, ms: u64) -> String {
-    format!("Recording was off {}, {} in total.", plural(spans, "time", "times"), span_words(ms))
+    format!(
+        "Recording was off {}, {} in total.",
+        plural(spans, "time", "times"),
+        span_words(ms)
+    )
 }
 
 /// Rule 4: a listed host, always on its own line.
@@ -502,7 +551,11 @@ pub fn tunnels_unlisted(shown: &[(&str, u64, u64)], more: usize) -> String {
         .iter()
         .enumerate()
         .map(|(i, (h, c, b))| match i {
-            0 => format!("{h} ({}, {})", plural(*c, "connection", "connections"), size_words(*b)),
+            0 => format!(
+                "{h} ({}, {})",
+                plural(*c, "connection", "connections"),
+                size_words(*b)
+            ),
             _ => format!("{h} ({c}, {})", size_words(*b)),
         })
         .collect();
@@ -510,7 +563,10 @@ pub fn tunnels_unlisted(shown: &[(&str, u64, u64)], more: usize) -> String {
         0 => String::new(),
         n => format!(", and {}", plural(n as u64, "more host", "more hosts")),
     };
-    format!("Not recorded, passed through unread: {}{more}.", list.join(", "))
+    format!(
+        "Not recorded, passed through unread: {}{more}.",
+        list.join(", ")
+    )
 }
 
 /// Rule 5.
@@ -524,7 +580,11 @@ pub fn cut_files(files: u64, bytes: u64) -> String {
 
 /// Rule 6, outlived processes.
 pub fn outlived(name: &str, count: u64, programs: &[String]) -> String {
-    let list = if programs.is_empty() { String::new() } else { format!(" ({})", programs.join(", ")) };
+    let list = if programs.is_empty() {
+        String::new()
+    } else {
+        format!(" ({})", programs.join(", "))
+    };
     format!(
         "{} {name} started were still running at the end{list}. goalcup did not stop them.",
         plural(count, "program", "programs")

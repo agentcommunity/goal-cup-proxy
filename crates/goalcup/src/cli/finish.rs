@@ -26,8 +26,17 @@ pub fn end_screen(entry_dir: &Path) -> Result<String, NotSealed> {
         .ok_or(NotSealed)?;
     let run_dir = entry_dir.parent().ok_or(NotSealed)?;
     let server = super::read_server_json(run_dir);
-    let run = run_dir.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-    screen(&st, server.as_ref(), &run, &super::goalcup_log(entry_dir), super::now())
+    let run = run_dir
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    screen(
+        &st,
+        server.as_ref(),
+        &run,
+        &super::goalcup_log(entry_dir),
+        super::now(),
+    )
 }
 
 /// Rule 1: nothing was lost, so the screen may say so.
@@ -54,14 +63,20 @@ pub fn screen(
     log: &Path,
     now: u64,
 ) -> Result<String, NotSealed> {
-    let seal = st.seal.as_ref().filter(|_| st.mode == Mode::Sealed).ok_or(NotSealed)?;
+    let seal = st
+        .seal
+        .as_ref()
+        .filter(|_| st.mode == Mode::Sealed)
+        .ok_or(NotSealed)?;
     let name = server.map_or("your agent", |s| s.connector.name.as_str());
     let c = &st.written.counts;
     let mut head = Vec::new();
     if let Some(exit) = st.harness.as_ref().and_then(|h| h.exit) {
         head.push(text::has_exited(name, exit));
     }
-    let deadline = server.and_then(|s| s.deadline.as_deref()).and_then(super::unix_of);
+    let deadline = server
+        .and_then(|s| s.deadline.as_deref())
+        .and_then(super::unix_of);
     if let Some(d) = deadline.filter(|d| *d > now) {
         head.push(text::still_open(&text::end_words(d, now)));
         head.push(text::continue_now(run));

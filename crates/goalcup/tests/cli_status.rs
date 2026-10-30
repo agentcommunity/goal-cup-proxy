@@ -90,7 +90,10 @@ fn state_rows_in_table_order() {
     assert_eq!(recover, State::Recover { since: T0 });
     let line = text::state_line(&recover, RUN);
     assert!(line.starts_with(text::PROBLEM) && line.ends_with("goalcup recover"));
-    for (age, want) in [(60, State::Continue { since: T0 }), (121, State::Stale { since: T0 })] {
+    for (age, want) in [
+        (60, State::Continue { since: T0 }),
+        (121, State::Stale { since: T0 }),
+    ] {
         let got = decide(&facts(Mode::Recording, false, false, false, age));
         assert_eq!(got, want);
         let line = text::state_line(&got, RUN);
@@ -105,14 +108,26 @@ fn state_rows_in_table_order() {
         State::NotAnswering { since: T0 }
     );
     let mut losing = facts(Mode::Losing, true, true, true, 1);
-    losing.losing = Losing { streams_in_gap: 2, dropped_bytes: 12_000_000 };
+    losing.losing = Losing {
+        streams_in_gap: 2,
+        dropped_bytes: 12_000_000,
+    };
     let got = decide(&losing);
-    assert_eq!(got, State::Losing { streams: 2, bytes: 12_000_000 });
+    assert_eq!(
+        got,
+        State::Losing {
+            streams: 2,
+            bytes: 12_000_000
+        }
+    );
     assert!(text::state_line(&got, RUN).contains(&text::size_words(12_000_000)));
     let mut slow = facts(Mode::WriterSlow, true, true, true, 1);
     slow.writer_idle_ms = 14_500;
     assert_eq!(decide(&slow), State::WriterSlow { secs: 14 });
-    assert_eq!(decide(&facts(Mode::Recording, true, true, true, 1)), State::Recording);
+    assert_eq!(
+        decide(&facts(Mode::Recording, true, true, true, 1)),
+        State::Recording
+    );
     assert!(!text::state_line(&State::Recording, RUN).starts_with(text::PROBLEM));
 }
 
@@ -138,7 +153,12 @@ fn one_problem_line_per_cause() {
     st.notes = vec![tunnel.clone(), ca.clone(), tunnel, ca];
     st.written.counts.tunnel_hosts.insert(
         "pinned.example.com".into(),
-        TunnelHost { conns: 3, up: 10, down: 20, listed: Some("tls_refused".into()) },
+        TunnelHost {
+            conns: 3,
+            up: 10,
+            down: 20,
+            listed: Some("tls_refused".into()),
+        },
     );
     for (alive, state) in [
         (true, State::Recording),
@@ -148,7 +168,14 @@ fn one_problem_line_per_cause() {
     ] {
         let lines = problems(&st, &state, &cx(alive, T0 + 5));
         let want = 2 + usize::from(state.is_problem());
-        assert_eq!(lines.iter().filter(|l| l.starts_with(text::PROBLEM)).count(), want, "{lines:#?}");
+        assert_eq!(
+            lines
+                .iter()
+                .filter(|l| l.starts_with(text::PROBLEM))
+                .count(),
+            want,
+            "{lines:#?}"
+        );
         let shown = block(&st, &state, None, &cx(alive, T0 + 5), &[false]);
         assert_eq!(count_problems(&shown), want, "{shown}");
     }
@@ -170,7 +197,12 @@ fn every_note_gives_its_line() {
     ];
     st.written.counts.tunnel_hosts.insert(
         "proxy.example.com".into(),
-        TunnelHost { conns: 1, up: 1, down: 1, listed: Some("upstream_untrusted".into()) },
+        TunnelHost {
+            conns: 1,
+            up: 1,
+            down: 1,
+            listed: Some("upstream_untrusted".into()),
+        },
     );
     st.written.counts.mask_failclosed_bytes = 2_000_000;
     let lines = problems(&st, &State::Recording, &cx(true, T0));
@@ -195,7 +227,10 @@ fn every_note_gives_its_line() {
         text::listed_tunnel("h", "tls_refused")
     );
     let tunnel = text::long_tunnel("up.example.net", None, 1);
-    let (seal, cont) = (tunnel.find("goalcup seal").unwrap(), tunnel.find("goalcup continue").unwrap());
+    let (seal, cont) = (
+        tunnel.find("goalcup seal").unwrap(),
+        tunnel.find("goalcup continue").unwrap(),
+    );
     assert!(seal < cont, "{tunnel}");
 }
 
@@ -229,10 +264,18 @@ fn after_seal_and_agent_exited() {
         start_id: 1,
         exit: Some(Exit::Code(0)),
     });
-    st.after_seal = Some(AfterSeal { bytes: 0, hosts: vec!["api.example.com".into()] });
+    st.after_seal = Some(AfterSeal {
+        bytes: 0,
+        hosts: vec!["api.example.com".into()],
+    });
     let state = State::Sealed { at: T0 };
     let c = cx(false, T0);
-    let exited = text::agent_exited("Agent", Exit::Code(0), &text::end_words(T0 + 86_400, T0), RUN);
+    let exited = text::agent_exited(
+        "Agent",
+        Exit::Code(0),
+        &text::end_words(T0 + 86_400, T0),
+        RUN,
+    );
     let after = text::after_seal("Agent", 2_000_000, &["api.example.com".into()]);
     let lines = problems(&st, &state, &c);
     assert!(lines.contains(&exited) && !lines.contains(&after));
@@ -259,7 +302,10 @@ fn liveness() {
     let pid_file = dir.path().join("rec/watchdog.pid");
     std::fs::write(&pid_file, format!("{me} {start}\n")).unwrap();
     assert_eq!(cli::watchdog_pid(dir.path()), Some((me, start)));
-    assert!(!cli::watchdog_alive(dir.path()), "alive, but not a goalcup binary");
+    assert!(
+        !cli::watchdog_alive(dir.path()),
+        "alive, but not a goalcup binary"
+    );
     for odd in ["", "12", "12 x", "12 3 4", "x 3"] {
         std::fs::write(&pid_file, odd).unwrap();
         assert_eq!(cli::watchdog_pid(dir.path()), None, "{odd:?}");
@@ -274,7 +320,10 @@ struct Home {
 
 impl Home {
     fn new() -> Home {
-        Home { goalcup: tempfile::tempdir().unwrap(), user: tempfile::tempdir().unwrap() }
+        Home {
+            goalcup: tempfile::tempdir().unwrap(),
+            user: tempfile::tempdir().unwrap(),
+        }
     }
 
     fn entry(&self) -> std::path::PathBuf {
@@ -282,7 +331,11 @@ impl Home {
     }
 
     fn write(&self, name: &str, value: &Value) {
-        let dir = if name == "server.json" { self.entry().parent().unwrap().to_owned() } else { self.entry() };
+        let dir = if name == "server.json" {
+            self.entry().parent().unwrap().to_owned()
+        } else {
+            self.entry()
+        };
         std::fs::create_dir_all(self.entry()).unwrap();
         std::fs::write(dir.join(name), serde_json::to_vec(value).unwrap()).unwrap();
     }
@@ -307,14 +360,27 @@ fn server_json() -> ServerJson {
         mode: RunMode::Practice,
         deadline: None,
         repo: None,
-        connector: ConnectorSource { id: "agent".into(), name: "Agent".into(), source: "builtin".into() },
+        connector: ConnectorSource {
+            id: "agent".into(),
+            name: "Agent".into(),
+            source: "builtin".into(),
+        },
         hosts_file: None,
-        entries: vec![EntryFacts { id: ENTRY.into(), harness_version: None, resumed: false }],
+        entries: vec![EntryFacts {
+            id: ENTRY.into(),
+            harness_version: None,
+            resumed: false,
+        }],
     }
 }
 
 fn stdout_json(out: &Output) -> Value {
-    assert_eq!(out.status.code(), Some(0), "{}", String::from_utf8_lossy(&out.stderr));
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     serde_json::from_slice(&out.stdout).unwrap()
 }
 
@@ -329,9 +395,17 @@ fn json_passes_the_three_files_through() {
     assert_eq!(got, json!({"status": st, "upload": null, "run": run}));
     let upload = json!({"state": "done", "some_key_status_does_not_know": [1, 2]});
     home.write("upload.json", &upload);
-    for args in [&["status", "--json"][..], &["status", ENTRY, "--json"], &["status", RUN, "--json"]] {
+    for args in [
+        &["status", "--json"][..],
+        &["status", ENTRY, "--json"],
+        &["status", RUN, "--json"],
+    ] {
         let got = stdout_json(&home.run(args));
-        assert_eq!(got, json!({"status": st, "upload": upload, "run": run}), "{args:?}");
+        assert_eq!(
+            got,
+            json!({"status": st, "upload": upload, "run": run}),
+            "{args:?}"
+        );
     }
     let plain = home.run(&["status"]);
     assert_eq!(plain.status.code(), Some(0));
@@ -352,6 +426,9 @@ fn no_run_and_unreadable_status() {
         assert_eq!(out.status.code(), Some(3));
         assert!(out.stdout.is_empty());
     }
-    assert_eq!(home.run(&["status", "e00000000000000ff"]).status.code(), Some(1));
+    assert_eq!(
+        home.run(&["status", "e00000000000000ff"]).status.code(),
+        Some(1)
+    );
     assert!(Path::new(&home.entry()).is_dir());
 }

@@ -22,7 +22,11 @@ fn sealed() -> Status {
     written.counts.req_whole = 905;
     written.counts.native_files = 43;
     written.counts.native_bytes = 48_200_000;
-    written.counts.hosts = [("api.example.com".to_owned(), 812), ("chat.example.com".to_owned(), 93)].into();
+    written.counts.hosts = [
+        ("api.example.com".to_owned(), 812),
+        ("chat.example.com".to_owned(), 93),
+    ]
+    .into();
     written.model_requests = written.counts.model_requests();
     Status {
         v: STATUS_V,
@@ -46,7 +50,10 @@ fn sealed() -> Status {
         durable: DurableStatus::default(),
         deadline: None,
         sealing: None,
-        seal: Some(SealStatus { reason: SealReason::HarnessExit, workspace_head: None }),
+        seal: Some(SealStatus {
+            reason: SealReason::HarnessExit,
+            workspace_head: None,
+        }),
         cut_files: Some(CutFiles::default()),
         outlived: None,
         after_seal: Some(AfterSeal::default()),
@@ -61,24 +68,57 @@ fn show(st: &Status) -> String {
 fn nothing_lost_only_without_any_loss() {
     let clean = sealed();
     assert!(show(&clean).contains(text::NOTHING_LOST));
-    let unlisted = TunnelHost { conns: 2, up: 5, down: 9, listed: None };
+    let unlisted = TunnelHost {
+        conns: 2,
+        up: 5,
+        down: 9,
+        listed: None,
+    };
     let mut quiet = clean.clone();
-    quiet.written.counts.tunnel_hosts.insert("registry.example.org".into(), unlisted);
-    assert!(show(&quiet).contains(text::NOTHING_LOST), "an unlisted tunnel is not a loss");
+    quiet
+        .written
+        .counts
+        .tunnel_hosts
+        .insert("registry.example.org".into(), unlisted);
+    assert!(
+        show(&quiet).contains(text::NOTHING_LOST),
+        "an unlisted tunnel is not a loss"
+    );
     let losses: Vec<fn(&mut Status)> = vec![
         |s| s.written.counts.gaps = 1,
         |s| s.written.counts.lost_bytes = 10,
         |s| s.written.counts.req_holes = 1,
-        |s| s.off = Off { spans: 1, ms: 150_000, since: None },
+        |s| {
+            s.off = Off {
+                spans: 1,
+                ms: 150_000,
+                since: None,
+            }
+        },
         |s| {
             s.written.counts.tunnel_hosts.insert(
                 "pinned.example.com".into(),
-                TunnelHost { conns: 1, up: 1, down: 1, listed: Some("pinned".into()) },
+                TunnelHost {
+                    conns: 1,
+                    up: 1,
+                    down: 1,
+                    listed: Some("pinned".into()),
+                },
             );
         },
         |s| s.written.counts.mask_failclosed_bytes = 1,
-        |s| s.cut_files = Some(CutFiles { files: 1, bytes: 10 }),
-        |s| s.after_seal = Some(AfterSeal { bytes: 1, hosts: Vec::new() }),
+        |s| {
+            s.cut_files = Some(CutFiles {
+                files: 1,
+                bytes: 10,
+            })
+        },
+        |s| {
+            s.after_seal = Some(AfterSeal {
+                bytes: 1,
+                hosts: Vec::new(),
+            })
+        },
     ];
     for (i, lose) in losses.iter().enumerate() {
         let mut st = clean.clone();
@@ -98,9 +138,16 @@ fn counts_and_hosts_are_the_fixtures() {
     st.written.counts.req_whole = 896;
     st.written.counts.req_holes = 9;
     st.written.counts.lost_bytes = 1_500_000;
-    st.off = Off { spans: 2, ms: 150_000, since: None };
+    st.off = Off {
+        spans: 2,
+        ms: 150_000,
+        since: None,
+    };
     let out = show(&st);
-    assert!(out.contains(&text::whole_and_lost(896, 9, 1_500_000)), "{out}");
+    assert!(
+        out.contains(&text::whole_and_lost(896, 9, 1_500_000)),
+        "{out}"
+    );
     assert!(out.contains(&text::off_total(2, 150_000)));
     st.written.model_requests = 0;
     assert!(show(&st).contains(&text::no_request_written("your agent")));
@@ -110,11 +157,27 @@ fn counts_and_hosts_are_the_fixtures() {
 fn tunnels_largest_first_and_listed_alone() {
     let mut st = sealed();
     for (i, host) in ["a", "b", "c", "d", "e", "f", "g"].iter().enumerate() {
-        let t = TunnelHost { conns: 1, up: 1000 * (i as u64 + 1), down: 0, listed: None };
-        st.written.counts.tunnel_hosts.insert(format!("{host}.example.org"), t);
+        let t = TunnelHost {
+            conns: 1,
+            up: 1000 * (i as u64 + 1),
+            down: 0,
+            listed: None,
+        };
+        st.written
+            .counts
+            .tunnel_hosts
+            .insert(format!("{host}.example.org"), t);
     }
-    let pinned = TunnelHost { conns: 4, up: 1, down: 2, listed: Some("pinned".into()) };
-    st.written.counts.tunnel_hosts.insert("z.example.com".into(), pinned);
+    let pinned = TunnelHost {
+        conns: 4,
+        up: 1,
+        down: 2,
+        listed: Some("pinned".into()),
+    };
+    st.written
+        .counts
+        .tunnel_hosts
+        .insert("z.example.com".into(), pinned);
     let out = show(&st);
     let top: Vec<(String, u64, u64)> = ["g", "f", "e", "d", "c"]
         .iter()
@@ -123,24 +186,37 @@ fn tunnels_largest_first_and_listed_alone() {
         .collect();
     let top: Vec<(&str, u64, u64)> = top.iter().map(|(h, c, b)| (h.as_str(), *c, *b)).collect();
     assert!(out.contains(&text::tunnels_unlisted(&top, 2)), "{out}");
-    assert!(out.contains(&text::tunnel_listed("z.example.com", "pinned", 4, 3)), "{out}");
+    assert!(
+        out.contains(&text::tunnel_listed("z.example.com", "pinned", 4, 3)),
+        "{out}"
+    );
 }
 
 #[test]
 fn rule_lines_follow_their_facts() {
     let mut st = sealed();
     let after = text::after_seal("your agent", 2_000_000, &["api.example.com".into()]);
-    st.after_seal = Some(AfterSeal { bytes: 0, hosts: vec!["api.example.com".into()] });
+    st.after_seal = Some(AfterSeal {
+        bytes: 0,
+        hosts: vec!["api.example.com".into()],
+    });
     assert!(!show(&st).contains(&after));
     st.after_seal.as_mut().unwrap().bytes = 2_000_000;
     assert!(show(&st).contains(&after));
-    st.cut_files = Some(CutFiles { files: 3, bytes: 2_000_000 });
+    st.cut_files = Some(CutFiles {
+        files: 3,
+        bytes: 2_000_000,
+    });
     assert!(show(&st).contains(&text::cut_files(3, 2_000_000)));
     assert!(!show(&st).contains(text::RECOVERED));
     st.seal.as_mut().unwrap().reason = SealReason::Recovered;
     assert!(show(&st).contains(text::RECOVERED));
     let log = Path::new("/home/x/Application Support/goalcup.log");
-    assert!(screen(&st, None, RUN, log, NOW).unwrap().contains(&text::details_at(log)));
+    assert!(
+        screen(&st, None, RUN, log, NOW)
+            .unwrap()
+            .contains(&text::details_at(log))
+    );
 }
 
 #[test]
@@ -163,7 +239,13 @@ fn unsealed_status_never_reads_as_finished() {
     let entry = dir.path().join(RUN).join("e0123456789abcdef");
     std::fs::create_dir_all(&entry).unwrap();
     for mode in [Mode::Recording, Mode::Losing, Mode::WriterSlow, Mode::Null] {
-        for seal in [None, Some(SealStatus { reason: SealReason::HarnessExit, workspace_head: None })] {
+        for seal in [
+            None,
+            Some(SealStatus {
+                reason: SealReason::HarnessExit,
+                workspace_head: None,
+            }),
+        ] {
             let mut st = sealed();
             st.mode = mode;
             st.seal = seal;
@@ -171,7 +253,13 @@ fn unsealed_status_never_reads_as_finished() {
             assert_eq!(screen(&st, None, RUN, &log, NOW), Err(NotSealed));
             std::fs::write(entry.join("status.json"), serde_json::to_vec(&st).unwrap()).unwrap();
             assert_eq!(end_screen(&entry), Err(NotSealed));
-            let cx = Ctx { name: "Agent", run: RUN, harness_alive: true, deadline: None, now: NOW };
+            let cx = Ctx {
+                name: "Agent",
+                run: RUN,
+                harness_alive: true,
+                deadline: None,
+                now: NOW,
+            };
             for state in [State::Recording, State::Continue { since: NOW }] {
                 let shown = block(&st, &state, None, &cx, &[false]);
                 assert!(!shown.contains(text::FINISHED) && !shown.contains(text::PART_RECORDED));
@@ -181,7 +269,15 @@ fn unsealed_status_never_reads_as_finished() {
     let mut st = sealed();
     st.seal = None;
     std::fs::write(entry.join("status.json"), serde_json::to_vec(&st).unwrap()).unwrap();
-    assert_eq!(end_screen(&entry), Err(NotSealed), "sealed mode with no seal facts");
-    std::fs::write(entry.join("status.json"), serde_json::to_vec(&sealed()).unwrap()).unwrap();
+    assert_eq!(
+        end_screen(&entry),
+        Err(NotSealed),
+        "sealed mode with no seal facts"
+    );
+    std::fs::write(
+        entry.join("status.json"),
+        serde_json::to_vec(&sealed()).unwrap(),
+    )
+    .unwrap();
     assert!(end_screen(&entry).unwrap().contains(text::PART_RECORDED));
 }

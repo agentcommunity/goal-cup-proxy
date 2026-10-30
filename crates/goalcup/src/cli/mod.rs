@@ -253,7 +253,11 @@ fn dirs(dir: &Path, first: char, when: impl Fn(&Path) -> Option<SystemTime>) -> 
         .flatten()
         .flatten()
         .map(|e| e.path())
-        .filter(|p| p.is_dir() && p.file_name().is_some_and(|n| n.to_string_lossy().starts_with(first)))
+        .filter(|p| {
+            p.is_dir()
+                && p.file_name()
+                    .is_some_and(|n| n.to_string_lossy().starts_with(first))
+        })
         .map(|p| (when(&p), p))
         .collect();
     found.sort();
@@ -264,11 +268,16 @@ fn dirs(dir: &Path, first: char, when: impl Fn(&Path) -> Option<SystemTime>) -> 
 /// time, else the folder's) and its newest part; `r…` is that run; `e…` is that part in whichever
 /// run holds it. None when there is no such run or it has no part yet.
 pub fn find(home: &Path, arg: Option<&str>) -> Option<Found> {
-    let runs = dirs(&runs_dir(home), 'r', |p| mtime(&server_json(p)).or_else(|| mtime(p)));
+    let runs = dirs(&runs_dir(home), 'r', |p| {
+        mtime(&server_json(p)).or_else(|| mtime(p))
+    });
     let (run_dir, entry) = match arg {
         None => (runs.last()?.clone(), None),
         Some(a) if a.starts_with('r') => (runs.into_iter().find(|p| p.ends_with(a))?, None),
-        Some(a) => (runs.into_iter().find(|p| p.join(a).is_dir())?, Some(a.to_owned())),
+        Some(a) => (
+            runs.into_iter().find(|p| p.join(a).is_dir())?,
+            Some(a.to_owned()),
+        ),
     };
     let server = read_server_json(&run_dir);
     let mut entries: Vec<String> = match &server {
@@ -278,14 +287,18 @@ pub fn find(home: &Path, arg: Option<&str>) -> Option<Found> {
             .filter_map(|p| Some(p.file_name()?.to_string_lossy().into_owned()))
             .collect(),
     };
-    if let Some(e) = &entry {
-        if !entries.contains(e) {
-            entries.push(e.clone());
-        }
+    if let Some(e) = entry.as_ref().filter(|e| !entries.contains(e)) {
+        entries.push(e.clone());
     }
     let entry = entry.or_else(|| entries.last().cloned())?;
     let run = run_dir.file_name()?.to_string_lossy().into_owned();
-    Some(Found { run, run_dir, server, entries, entry })
+    Some(Found {
+        run,
+        run_dir,
+        server,
+        entries,
+        entry,
+    })
 }
 
 /// Now, in whole seconds since 1970.
@@ -300,7 +313,9 @@ pub fn now() -> u64 {
 pub fn unix_of(t: &str) -> Option<u64> {
     let num = |at: usize, len: usize| -> Option<i64> {
         let s = t.get(at..at + len)?;
-        s.bytes().all(|b| b.is_ascii_digit()).then(|| s.parse().ok())?
+        s.bytes()
+            .all(|b| b.is_ascii_digit())
+            .then(|| s.parse().ok())?
     };
     let sep = |at: usize, c: &[u8]| t.as_bytes().get(at).is_some_and(|b| c.contains(b));
     if !(sep(4, b"-") && sep(7, b"-") && sep(10, b"Tt ") && sep(13, b":") && sep(16, b":")) {
@@ -401,15 +416,8 @@ pub fn proc_start_id(pid: u32) -> Option<u64> {
     let mut info: libc::proc_bsdinfo = unsafe { std::mem::zeroed() };
     let size = libc::c_int::try_from(std::mem::size_of::<libc::proc_bsdinfo>()).ok()?;
     // SAFETY: the buffer is `info`, of exactly `size` bytes, and outlives the call.
-    let n = unsafe {
-        libc::proc_pidinfo(
-            pid,
-            libc::PROC_PIDTBSDINFO,
-            0,
-            (&raw mut info).cast(),
-            size,
-        )
-    };
+    let n =
+        unsafe { libc::proc_pidinfo(pid, libc::PROC_PIDTBSDINFO, 0, (&raw mut info).cast(), size) };
     (n == size).then(|| info.pbi_start_tvsec * 1_000_000 + info.pbi_start_tvusec)
 }
 

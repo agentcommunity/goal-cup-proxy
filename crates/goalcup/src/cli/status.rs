@@ -31,21 +31,42 @@ pub struct Facts {
 /// The recording state, one row of the section 4 table each. Times are seconds since 1970.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum State {
-    Sealed { at: u64 },
+    Sealed {
+        at: u64,
+    },
     /// The recorder is gone, its watchdog lives, for up to 30 s.
-    Restarting { since: u64 },
+    Restarting {
+        since: u64,
+    },
     /// The same, after 30 s.
-    OffRestarting { since: u64 },
+    OffRestarting {
+        since: u64,
+    },
     /// Both gone, the harness lives: `goalcup recover`.
-    Recover { since: u64 },
+    Recover {
+        since: u64,
+    },
     /// Both gone, the harness too: `goalcup continue`.
-    Continue { since: u64 },
+    Continue {
+        since: u64,
+    },
     /// As `Continue`, and `status.json` is older than 2 minutes: the computer may have slept.
-    Stale { since: u64 },
-    Null { since: u64 },
-    NotAnswering { since: u64 },
-    Losing { streams: u64, bytes: u64 },
-    WriterSlow { secs: u64 },
+    Stale {
+        since: u64,
+    },
+    Null {
+        since: u64,
+    },
+    NotAnswering {
+        since: u64,
+    },
+    Losing {
+        streams: u64,
+        bytes: u64,
+    },
+    WriterSlow {
+        secs: u64,
+    },
     Recording,
 }
 
@@ -54,7 +75,10 @@ impl State {
     pub fn is_problem(&self) -> bool {
         matches!(
             self,
-            State::Recover { .. } | State::Continue { .. } | State::Stale { .. } | State::Null { .. }
+            State::Recover { .. }
+                | State::Continue { .. }
+                | State::Stale { .. }
+                | State::Null { .. }
         )
     }
 }
@@ -120,7 +144,10 @@ pub fn problems(st: &Status, state: &State, cx: &Ctx<'_>) -> Vec<String> {
     let w = &st.written;
     let started = st.harness.as_ref().and_then(|h| super::unix_of(&h.started));
     if cx.harness_alive && st.mode != Mode::Sealed {
-        let (req, native) = (at(st.last_request_at.as_deref()), at(st.last_native_at.as_deref()));
+        let (req, native) = (
+            at(st.last_request_at.as_deref()),
+            at(st.last_native_at.as_deref()),
+        );
         match (req, native) {
             (Some(r), Some(n)) if cx.now.saturating_sub(r) >= 600 && n > r => {
                 add(text::quiet_proxy(cx.name))
@@ -134,17 +161,22 @@ pub fn problems(st: &Status, state: &State, cx: &Ctx<'_>) -> Vec<String> {
     for n in &st.notes {
         let host = note_str(n, "host");
         let line = match note_str(n, "what") {
-            Some("native_missing") => text::native_missing(note_str(n, "row").unwrap_or("session"), cx.name),
+            Some("native_missing") => {
+                text::native_missing(note_str(n, "row").unwrap_or("session"), cx.name)
+            }
             Some("native_other_device") => {
                 text::native_other_device(note_str(n, "path").unwrap_or("a folder"), cx.name)
             }
             Some("long_tunnel") => {
                 let num = |k: &str| n.get(k).and_then(Value::as_u64);
-                let minutes = (note_str(n, "why") == Some("stream")).then(|| num("secs").unwrap_or(0) / 60);
+                let minutes =
+                    (note_str(n, "why") == Some("stream")).then(|| num("secs").unwrap_or(0) / 60);
                 text::long_tunnel(host.unwrap_or("a host"), minutes, num("up").unwrap_or(0))
             }
             Some("ca_refused") => text::listed_tunnel(host.unwrap_or("a host"), "tls_refused"),
-            Some("parse_stopped") => text::parse_stopped(host, note_str(n, "at").and_then(super::unix_of)),
+            Some("parse_stopped") => {
+                text::parse_stopped(host, note_str(n, "at").and_then(super::unix_of))
+            }
             Some("local_model") => text::local_model(host.unwrap_or("a local address")),
             Some("fd_limit") => text::fd_limit(n.get("limit").and_then(Value::as_u64)),
             Some(what) if !goalcup_format::NOTES.contains(&what) => text::unknown_note(what),
@@ -166,7 +198,12 @@ pub fn problems(st: &Status, state: &State, cx: &Ctx<'_>) -> Vec<String> {
     let exit = st.harness.as_ref().and_then(|h| h.exit);
     let open = cx.deadline.filter(|d| *d > cx.now);
     if let (Some(e), Some(d), false) = (exit, open, state.is_problem()) {
-        add(text::agent_exited(cx.name, e, &text::end_words(d, cx.now), cx.run));
+        add(text::agent_exited(
+            cx.name,
+            e,
+            &text::end_words(d, cx.now),
+            cx.run,
+        ));
     }
     out
 }
@@ -179,15 +216,30 @@ pub fn by_count(hosts: &std::collections::BTreeMap<String, u64>) -> Vec<(&str, u
 }
 
 /// The status block (section 4), the same shape in every state. `parts`: per part, sealed or not.
-pub fn block(st: &Status, state: &State, run: Option<&ServerJson>, cx: &Ctx<'_>, parts: &[bool]) -> String {
+pub fn block(
+    st: &Status,
+    state: &State,
+    run: Option<&ServerJson>,
+    cx: &Ctx<'_>,
+    parts: &[bool],
+) -> String {
     let w = &st.written;
     let h = st.harness.as_ref();
-    let recording = if state.is_problem() { "Recording: off.".to_owned() } else { text::state_line(state, cx.run) };
+    let recording = if state.is_problem() {
+        "Recording: off.".to_owned()
+    } else {
+        text::state_line(state, cx.run)
+    };
     let mut lines = vec![text::status_head(run.map(|r| r.mode), cx.name, state)];
     if let Some(d) = cx.deadline {
         lines.push(text::ends_line(d, cx.now));
     }
-    lines.push(text::harness_line(cx.name, cx.harness_alive, h.and_then(|h| h.exit), h.is_some()));
+    lines.push(text::harness_line(
+        cx.name,
+        cx.harness_alive,
+        h.and_then(|h| h.exit),
+        h.is_some(),
+    ));
     lines.push(recording);
     lines.push(text::written_line(
         w.model_requests,
@@ -195,7 +247,10 @@ pub fn block(st: &Status, state: &State, run: Option<&ServerJson>, cx: &Ctx<'_>,
         w.counts.req_whole,
         w.counts.req_holes,
     ));
-    lines.push(text::session_files_line(w.counts.native_files, w.counts.native_bytes));
+    lines.push(text::session_files_line(
+        w.counts.native_files,
+        w.counts.native_bytes,
+    ));
     lines.push(text::off_line(st.off.spans, st.off.ms));
     lines.push(text::parts_line(parts));
     let problems = problems(st, state, cx);
@@ -226,7 +281,10 @@ pub fn facts(st: &Status, entry_dir: &Path, now: u64) -> Facts {
         mode: st.mode,
         recorder: super::goalcup_alive(st.pid) && super::proc_start_id(st.pid) == Some(st.start_id),
         watchdog: super::watchdog_alive(entry_dir),
-        harness: st.harness.as_ref().is_some_and(|h| super::harness_alive(h.pid, h.start_id)),
+        harness: st
+            .harness
+            .as_ref()
+            .is_some_and(|h| super::harness_alive(h.pid, h.start_id)),
         updated: super::unix_of(&st.updated).unwrap_or(0),
         off_since: at(st.off.since.as_deref()),
         losing: st.losing,
@@ -273,7 +331,9 @@ fn show(found: &Found, st: &Status, now: u64) -> String {
     let f = facts(st, &found.entry_dir(), now);
     let state = decide(&f);
     let run = found.server.as_ref();
-    let deadline = run.and_then(|r| r.deadline.as_deref()).or(st.deadline.as_deref());
+    let deadline = run
+        .and_then(|r| r.deadline.as_deref())
+        .or(st.deadline.as_deref());
     let cx = Ctx {
         name: run.map_or("your agent", |r| r.connector.name.as_str()),
         run: &found.run,
