@@ -243,8 +243,10 @@ fn a_create_cut_by_a_restart_is_a_call_not_whole() {
     e.crash("killed", 1_000);
     let t = table(&read_records(&e.seal().join("rec")));
     let calls: Vec<_> = t.rows.iter().filter(|r| r.kind == Kind::Call).collect();
-    let got: Vec<_> = calls.iter().map(|r| (r.boot, r.whole, &r.outcome)).collect();
-    assert_eq!(got, [(0, true, &Outcome::Ok), (0, false, &Outcome::Unknown)]);
+    let got: Vec<_> = calls.iter().map(|r| (r.boot, r.whole)).collect();
+    assert_eq!(got, [(0, true), (0, false)]);
+    let ends = [&calls[0].outcome, &calls[1].outcome];
+    assert_eq!(ends, [&Outcome::Ok, &Outcome::Unknown]);
 }
 
 #[test]
