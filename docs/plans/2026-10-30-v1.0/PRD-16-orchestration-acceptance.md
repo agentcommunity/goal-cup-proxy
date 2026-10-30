@@ -1125,3 +1125,20 @@ kept and now cites BUILD-PROMPT section 5, since B3 no longer carries it.
 - **Seam to watch at PRD-09's job merge:** S7's key layout and the bucket-per-side rule are what the
   cleanup script relies on (PRD-09 note). The reviewer of that merge checks it.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-15 slice 4 (merge 7be8bf98)
+
+- **Size report, PRD-15 slice 4** (`wc -l` on integration at 7be8bf98). PRD-15 has no row in PRD-00
+  "Size budget" (docs are not counted), and the slice has no code. `docs/ARCHITECTURE.md` 349 (was
+  350; target about 160 after its rewrite), `docs/README.md` 82 (was 83), `docs/OPERATING.md` 863 and
+  `README.md` 318 (unchanged counts, one link each), `docs/archive/SERVER-DESIGN.md` 164 (moved,
+  unchanged).
+- **Docs-only slices still pass the gate in under two minutes** (`gate fast: PASS in 100s` on
+  7be8bf98).
+- **The final link check filters moved archive files by name** (PRD-15 note): 8 of the 40 broken
+  links at bdcea297 are in `docs/archive/SERVER-DESIGN.md`. `check-links.py` is still not in the
+  gate; acceptance cites the last box run and its filter list.
+- **A merge-order point for the ARCHITECTURE rewrite** (review A-N3): its reviewer checks that no
+  line says the server signs receipts or acknowledgements (lines 31, 276 and 277 today). If the
+  third slice is not reached, the end-of-build report lists `SECURITY.md:69` as a known false line.
+- No locked ledger item is touched and no owner question comes from this slice.

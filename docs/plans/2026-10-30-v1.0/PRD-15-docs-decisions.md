@@ -984,3 +984,37 @@ merge request:
   runs" and the script header as merged, not from this note. If the rewrite is not reached in this
   build, the two-line fix to lines 135-138 goes in alone; it is a PRD-15 file.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-15 slice 4 (merge 7be8bf98)
+
+Slice 4 moved `docs/SERVER-DESIGN.md` to `docs/archive/` byte for byte, repointed its five live
+links and dropped the signing claim from ARCHITECTURE section 10 (fix bdcea297, review B1).
+`gate fast` passed in 100 s. What follows goes to later slices, not a separate merge request:
+
+- **The ARCHITECTURE rewrite drops every server-signing claim** (review A-N3). Still on integration at
+  7be8bf98: `docs/ARCHITECTURE.md:31` ("server's signed receipt and acknowledgements"), the glossary
+  at `:276` ("the server's signed start receipt") and `:277` ("the server's signed note that it stored
+  the chain"); the `Signed` anchor at `:183` and `:303` describes the old verifier and goes with it.
+  `server/worker/README.md` says the server signs nothing. The section 10 rewrite (after the PRD-02
+  core merge) builds its terms list from merged code, so none of these survive; the reviewer of that
+  merge greps the new page for `signed receipt`, `signed note` and `acknowledg` and expects none
+  that claims the server signs.
+- **The same claim in the other third-slice pages.** `SECURITY.md:69` (the server "signs start
+  receipts and acknowledgements with an Ed25519 key") is false today; `README.md:130` and `:155`,
+  `AGENTS.md:52` and `README.md:171` (glossary words receipt, ack) and the receipt, ack and
+  `RECEIPT_SIGNING_KEY` lines in `docs/OPERATING.md` (107, 303 to 312, 333, 489, 675 to 692, 711,
+  751 to 777) describe the old client or server. The builder left them on purpose for the README,
+  SECURITY, AGENTS map and OPERATING rewrites. Each rewrite drops them, citing merged code; none is
+  fixed alone unless that rewrite is not reached in this build, in which case `SECURITY.md:69` gets a
+  one-line fix first because it is a false statement about the server today.
+- **Files moved into `docs/archive/` keep their old relative links** (reviews A-N1 and B2, skipped by
+  the fixer as plan text). `docs/archive/SERVER-DESIGN.md` has 8 broken relative links, 8 of the 40
+  the box link check listed at bdcea297. The last link check leaves moved archive files out by name,
+  as it does run 1's report, and says so in the night-log line. Later moves (CONTRACTS, TERMINATION,
+  HARNESS-SETUP, CHEAT-CHECKLIST) follow the same rule: move byte for byte, fix only the live links
+  into them.
+- **Still waiting, unchanged:** the HARNESS-ONBOARDING pointer (after PRD-12's skill rewrite), the
+  RECORD-FORMAT nits (check --json and usage slice), the AGENTS.md map, ARCHITECTURE and
+  RECORD-FORMAT numbers (PRD-02 core merge), CONNECTOR-SCHEMA (PRD-11 schema), and the third slice.
+  The two `crates/goalcup-cli/src/upload/` comments that cite SERVER-DESIGN go with the cut (PRD-13).
+- No locked ledger item is touched and no owner question comes from this slice.
