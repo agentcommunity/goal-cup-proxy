@@ -49,7 +49,7 @@ pub const BUNDLE_FILE: &str = "bundle.pem";
 
 /// The Linux distribution bundles, in the order tried (Debian and Ubuntu, Fedora and RHEL,
 /// openSUSE, RHEL 7+, Alpine).
-pub const LINUX_BUNDLES: &[&str] = &[
+const LINUX_BUNDLES: &[&str] = &[
     "/etc/ssl/certs/ca-certificates.crt",
     "/etc/pki/tls/certs/ca-bundle.crt",
     "/etc/ssl/ca-bundle.pem",
@@ -181,11 +181,6 @@ impl RunCa {
     /// The CA certificate, DER.
     pub fn cert_der(&self) -> &CertificateDer<'static> {
         &self.inner.cert_der
-    }
-
-    /// The CA certificate, PEM.
-    pub fn cert_pem(&self) -> &str {
-        &self.inner.cert_pem
     }
 
     /// Writes `run-ca.pem` (the certificate alone) and `bundle.pem` (the run CA, then the OS
@@ -354,7 +349,7 @@ fn write_new(path: &Path, bytes: &[u8]) -> io::Result<()> {
 
 /// The OS trust store's roots as PEM text: the macOS System Roots keychain through
 /// `/usr/bin/security`, else the first Linux bundle in [`LINUX_BUNDLES`] holding a certificate.
-pub fn system_roots_source() -> Result<Vec<u8>, CaError> {
+fn system_roots_source() -> Result<Vec<u8>, CaError> {
     if cfg!(target_os = "macos") {
         let out = std::process::Command::new("/usr/bin/security")
             .args(["find-certificate", "-a", "-p", MACOS_ROOTS_KEYCHAIN])
@@ -377,7 +372,7 @@ pub fn system_roots_source() -> Result<Vec<u8>, CaError> {
 }
 
 /// The OS roots, the same read as the bundle; empty when the store cannot be read.
-pub fn os_roots() -> Vec<CertificateDer<'static>> {
+pub(crate) fn os_roots() -> Vec<CertificateDer<'static>> {
     system_roots_source()
         .map(|source| certificates(&source))
         .unwrap_or_default()
@@ -417,7 +412,7 @@ pub fn certificates(pem: &[u8]) -> Vec<Vec<u8>> {
 }
 
 /// One certificate as a PEM block, 64 base64 characters a line.
-pub fn pem_block(der: &[u8]) -> String {
+fn pem_block(der: &[u8]) -> String {
     let b64 = base64::engine::general_purpose::STANDARD.encode(der);
     let mut out = String::from("-----BEGIN CERTIFICATE-----\n");
     for chunk in b64.as_bytes().chunks(64) {
@@ -431,7 +426,7 @@ pub fn pem_block(der: &[u8]) -> String {
 /// The bundle text: the run CA, then every root certificate in `roots_source`. An error when the
 /// source holds no root, since the file would then trust the run CA alone and break every
 /// connection that does not go through the proxy.
-pub fn bundle_pem(roots_source: &[u8], ca_der: &[u8]) -> Result<String, CaError> {
+fn bundle_pem(roots_source: &[u8], ca_der: &[u8]) -> Result<String, CaError> {
     let roots = certificates(roots_source);
     if roots.is_empty() {
         return Err(CaError::NoSystemRoots);

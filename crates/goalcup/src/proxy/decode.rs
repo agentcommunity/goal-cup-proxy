@@ -8,7 +8,9 @@
 //!
 //! There is no budget of our own. Deflate expands by at most about 1032 to 1, so the work per
 //! push stays bounded by its input (PRD-17 D7), and PRD-02's memory guard decides about the
-//! decoded bytes. A decoder's window is counted in that guard through `Recorder::reserve`.
+//! decoded bytes. A decoder's memory is counted in that guard through `Recorder::reserve`: the
+//! 32 KiB window of gzip and deflate, the window of each zstd frame, and every allocation the
+//! brotli decoder makes.
 
 use crate::pipeline::{Recorder, Reserved};
 use brotli_decompressor::{
@@ -21,9 +23,6 @@ use flate2::{Crc, Decompress, FlushDecompress, Status};
 const PIECE: usize = 32 * 1024;
 /// The window counted for gzip and deflate.
 const DEFLATE_WINDOW: u64 = 32 * 1024;
-/// The part of a brotli window admitted before the first piece. The decoder's ring buffer grows
-/// with its output up to the declared window, so the rest is counted as the output grows.
-const BROTLI_FIRST_WINDOW: u64 = 64 * 1024;
 /// The largest zstd window accepted, as a power of two: 8 MiB, the most an HTTP `zstd` content
 /// coding may use (RFC 9659 section 3). A larger frame is a decode failure.
 const ZSTD_WINDOW_LOG_MAX: u32 = 23;
@@ -129,7 +128,7 @@ impl BodyDecoder {
     /// none, the body passes through in pieces.
     pub fn new(codings: Vec<Coding>, rec: &Recorder) -> BodyDecoder {
         BodyDecoder {
-            stages: codings.into_iter().rev().map(Stage::new).collect(),
+            stages: codings.into_iter().rev().map(|c| Stage::new(c, rec)).collect(),
             guard: Guard {
                 rec: rec.clone(),
                 held: Vec::new(),
@@ -169,10 +168,7 @@ impl BodyDecoder {
         let step = match result {
             Ok(()) => return Step::Ok,
             Err(Halt::Invalid) => Step::Fault,
-            // Room at that moment: this body's own windows are still held.
-            Err(Halt::Window) => Step::NotDecoded {
-                limit: self.guard.rec.room(),
-            },
+            Err(Halt::Window(limit)) => Step::NotDecoded { limit },
         };
         // Decoding is over: the windows go back to the guard now, not when the body ends.
         self.guard.held.clear();
@@ -185,8 +181,9 @@ impl BodyDecoder {
 enum Halt {
     /// Not a valid stream of its coding (or incomplete at the end of the body).
     Invalid,
-    /// A window did not fit `Recorder::room()` before the first piece went out.
-    Window,
+    /// A window did not fit `Recorder::room()` before the first piece went out; the room at that
+    /// moment, this body's own earlier windows still held.
+    Window(u64),
 }
 
 /// The `decoder_window` guard of one body: the windows it holds, and whether a piece went out.
@@ -201,16 +198,12 @@ impl Guard {
     /// window that does not fit `room()` stops decoding. After it, the body is part recorded and
     /// the window is only counted (a later zstd frame), so PRD-02's guard sees it.
     fn admit(&mut self, window: u64) -> Result<(), Halt> {
-        if !self.emitted && self.rec.room() < window {
-            return Err(Halt::Window);
+        let room = self.rec.room();
+        if !self.emitted && room < window {
+            return Err(Halt::Window(room));
         }
-        self.count(window);
+        self.held.push(self.rec.reserve(window));
         Ok(())
-    }
-
-    /// Counts `n` more of a window that is already admitted; never refuses.
-    fn count(&mut self, n: u64) {
-        self.held.push(self.rec.reserve(n));
     }
 }
 
@@ -249,11 +242,11 @@ enum Kind {
 }
 
 impl Stage {
-    fn new(coding: Coding) -> Stage {
+    fn new(coding: Coding, rec: &Recorder) -> Stage {
         let kind = match coding {
             Coding::Gzip => Kind::Gzip(Box::default()),
             Coding::Deflate => Kind::Deflate(Box::default()),
-            Coding::Br => Kind::Brotli(Box::default()),
+            Coding::Br => Kind::Brotli(Box::new(Brotli::new(rec))),
             Coding::Zstd => Kind::Zstd(Box::default()),
         };
         Stage { kind, fed: false }
@@ -265,7 +258,7 @@ impl Stage {
         }
         if !self.fed {
             self.fed = true;
-            // Brotli and zstd count their windows in their own `feed`.
+            // Brotli counts its allocations, zstd each frame's window, in their own code.
             if matches!(self.kind, Kind::Gzip(_) | Kind::Deflate(_)) {
                 g.admit(DEFLATE_WINDOW)?;
             }
@@ -533,47 +526,37 @@ impl Deflate {
     }
 }
 
-/// The window brotli declares in its first byte (RFC 7932 section 9.1): `1 << WBITS`. `None`
-/// for the reserved pattern (the large-window extension), which the strict decoder refuses.
-fn brotli_window(b0: u8) -> Option<u64> {
-    let wbits = if b0 & 1 == 0 {
-        16
-    } else {
-        match (b0 >> 1) & 7 {
-            0 => match (b0 >> 4) & 7 {
-                0 => 17,
-                1 => return None,
-                m => 8 + m,
-            },
-            n => 17 + n,
-        }
-    };
-    Some(1 << wbits)
-}
-
 /// HTTP `br` (RFC 7932), strict: no large window, and bytes after the stream's end are invalid.
-/// Its window is counted as its ring buffer grows: [`BROTLI_FIRST_WINDOW`] (or the whole window
-/// when smaller) is admitted before the first piece, and the count doubles toward the declared
-/// window as the decoded output passes it, counted only, never refused.
+/// Its memory is counted as its decoder allocates it ([`BrotliHeap`]).
 struct Brotli {
     state: BrotliState<BrotliHeap, BrotliHeap, BrotliHeap>,
     ended: bool,
-    /// The window the stream declares, and how much of it is counted so far (0: not yet read).
-    window: u64,
-    counted: u64,
-    produced: u64,
     out: Vec<u8>,
 }
 
-/// The brotli decoder's memory: zeroed boxed slices from the global allocator, freed on drop.
-#[derive(Default)]
-struct BrotliHeap;
+/// The brotli decoder's memory: zeroed boxed slices from the global allocator, each counted in
+/// PRD-02's guard (`Recorder::reserve`) until it is freed or dropped. The count is the
+/// allocation itself, not the output so far and not resident pages: brotli-decompressor 5.0.3
+/// allocates the ring buffer, the whole declared window, at the first meta-block, and shrinks it
+/// only when that meta-block is also the last. A flushed stream (SSE) is many meta-blocks, so it
+/// holds its full window, up to 16 MiB, from the first push. Untouched calloc pages that look
+/// small in RSS are still this memory once the allocator hands out reused heap.
+///
+/// While `strict` (no piece of the body went out yet), an allocation larger than `room()` sets
+/// `over` to that room. The decoder cannot be refused memory without failing, so the allocation
+/// is made; [`Brotli::feed`] then answers `Halt::Window` before any output goes out, and the
+/// state, with its memory, is dropped at once.
+struct BrotliHeap {
+    rec: Recorder,
+    strict: bool,
+    over: Option<u64>,
+}
 
-struct BrotliCells<T>(Box<[T]>);
+struct BrotliCells<T>(Box<[T]>, Option<Reserved>);
 
 impl<T> Default for BrotliCells<T> {
     fn default() -> Self {
-        BrotliCells(Box::default())
+        BrotliCells(Box::default(), None)
     }
 }
 
@@ -593,38 +576,50 @@ impl<T: Clone + Default> Allocator<T> for BrotliHeap {
     type AllocatedMemory = BrotliCells<T>;
 
     fn alloc_cell(&mut self, len: usize) -> BrotliCells<T> {
-        BrotliCells(vec![T::default(); len].into_boxed_slice())
+        let bytes = (len * std::mem::size_of::<T>()) as u64;
+        let room = self.rec.room();
+        if self.strict && room < bytes {
+            self.over.get_or_insert(room);
+        }
+        let cells = vec![T::default(); len].into_boxed_slice();
+        BrotliCells(cells, Some(self.rec.reserve(bytes)))
     }
 
     fn free_cell(&mut self, _cells: BrotliCells<T>) {}
 }
 
-impl Default for Brotli {
-    fn default() -> Self {
+impl Brotli {
+    fn new(rec: &Recorder) -> Brotli {
+        let heap = || BrotliHeap {
+            rec: rec.clone(),
+            strict: true,
+            over: None,
+        };
         Brotli {
-            state: BrotliState::new_strict(BrotliHeap, BrotliHeap, BrotliHeap),
+            state: BrotliState::new_strict(heap(), heap(), heap()),
             ended: false,
-            window: 0,
-            counted: 0,
-            produced: 0,
             out: vec![0; PIECE],
         }
     }
-}
 
-impl Brotli {
+    /// Sets each heap's `strict`; answers the room an allocation did not fit while strict.
+    fn heaps(&mut self, strict: bool) -> Option<u64> {
+        let s = &mut self.state;
+        [&mut s.alloc_u8, &mut s.alloc_u32, &mut s.alloc_hc]
+            .into_iter()
+            .fold(None, |over, heap| {
+                heap.strict = strict;
+                over.or(heap.over)
+            })
+    }
+
     fn feed(&mut self, input: &[u8], g: &mut Guard, emit: &mut Emit<'_>) -> Result<(), Halt> {
         if self.ended {
             return Err(Halt::Invalid);
         }
-        if self.counted == 0 {
-            // RFC 7932 section 9.1: the window is in the first byte.
-            self.window = brotli_window(input[0]).ok_or(Halt::Invalid)?;
-            self.counted = self.window.min(BROTLI_FIRST_WINDOW);
-            g.admit(self.counted)?;
-        }
         let (mut available_in, mut input_offset) = (input.len(), 0);
         loop {
+            self.heaps(!g.emitted);
             let (mut available_out, mut output_offset, mut total_out) = (self.out.len(), 0, 0);
             let result = BrotliDecompressStream(
                 &mut available_in,
@@ -636,14 +631,12 @@ impl Brotli {
                 &mut total_out,
                 &mut self.state,
             );
+            // Set only while no piece went out: refused before this call's output is emitted.
+            if let Some(room) = self.heaps(!g.emitted) {
+                return Err(Halt::Window(room));
+            }
             // Emitted before the result is looked at: output decoded before corruption is kept.
             if output_offset > 0 {
-                self.produced += output_offset as u64;
-                while self.produced > self.counted && self.counted < self.window {
-                    let more = self.counted.min(self.window - self.counted);
-                    g.count(more);
-                    self.counted += more;
-                }
                 emit(&self.out[..output_offset], g)?;
             }
             match result {
@@ -665,7 +658,9 @@ impl Brotli {
 
 /// HTTP `zstd` (RFC 8878 frames, RFC 9659 window limit), one frame or several in a row. The body
 /// is complete when its last frame is. Each frame's window is read from its header before the
-/// decoder sees it.
+/// decoder sees it, and counted whole: libzstd allocates its window buffer at the frame's window
+/// size when the frame starts, whatever the output so far. An RSS reading that looks smaller only
+/// shows pages not yet touched; do not trim this count from it (nor brotli's, [`BrotliHeap`]).
 struct Zstd {
     /// Built at the first frame, once its window is counted.
     z: Option<zstd::stream::raw::Decoder<'static>>,

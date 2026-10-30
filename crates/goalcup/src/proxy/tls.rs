@@ -107,10 +107,10 @@ impl Tls {
     /// The harness-facing config offering exactly what upstream chose (`None`: no ALPN), for a
     /// ClientHello that carries SNI.
     pub fn server(&self, chosen_alpn: Option<&[u8]>) -> Arc<ServerConfig> {
-        match chosen_alpn {
+        match offered(chosen_alpn) {
             Some(H1) => self.down_h1.clone(),
-            Some(H2) => self.down_h2.clone(),
-            _ => self.down_none.clone(),
+            Some(_) => self.down_h2.clone(),
+            None => self.down_none.clone(),
         }
     }
 
@@ -121,8 +121,17 @@ impl Tls {
         chosen_alpn: Option<&[u8]>,
         connect_host: &str,
     ) -> Result<Arc<ServerConfig>, CaError> {
-        let alpn = chosen_alpn.filter(|p| *p == H1 || *p == H2);
-        Ok(server_config(self.ca.resolver_for(connect_host)?, alpn))
+        let resolver = self.ca.resolver_for(connect_host)?;
+        Ok(server_config(resolver, offered(chosen_alpn)))
+    }
+}
+
+/// What the harness is offered for upstream's choice: `http/1.1` or `h2`, anything else no ALPN.
+fn offered(chosen_alpn: Option<&[u8]>) -> Option<&'static [u8]> {
+    match chosen_alpn {
+        Some(H1) => Some(H1),
+        Some(H2) => Some(H2),
+        _ => None,
     }
 }
 

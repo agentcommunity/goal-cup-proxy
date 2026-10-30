@@ -1,9 +1,9 @@
 //! PRD-03 acceptance for body decoding (section 7 and the `decoder_window` guard of section 11):
 //! each coding decodes to the plaintext (a gzip header of any length included: no cap of our own),
 //! an unknown coding writes no body byte, and a window that does not fit `Recorder::room()` leaves
-//! the body undecoded. The cases PRD-17 owns (gzip members
-//! and a bad CRC, deflate split after byte one, the zstd buffer edge, a corrupt tail, a bomb) are
-//! in `lessons_decode.rs`.
+//! the body undecoded, a flushed brotli stream (the SSE shape) included. The cases PRD-17 owns
+//! (gzip members and a bad CRC, deflate split after byte one, the zstd buffer edge, a corrupt
+//! tail, a bomb) are in `lessons_decode.rs`.
 
 use bytes::Bytes;
 use flate2::Compression;
@@ -15,6 +15,9 @@ use std::io::Write;
 
 /// Made with `brotli -q 11` from [`text`], not a real capture.
 const BR: &[u8] = include_bytes!("proxy_fixtures/anthropic-sse.br");
+/// [`text`] as a server streams it: Python `brotli.Compressor(quality=5, lgwin=22)`, `process`
+/// then `flush` every 2 KiB, so a window of `1 << 22` (4 MiB) over many meta-blocks.
+const BR_FLUSHED: &[u8] = include_bytes!("proxy_fixtures/sse-flushed.br");
 const PIECE: usize = 32 * 1024;
 const LARGE_ROOM: u64 = 1 << 30;
 
@@ -143,6 +146,7 @@ fn each_coding_decodes_to_the_plaintext() {
     let plain = text();
     let text = plain.repeat(2);
     assert_plain(&["br"], BR, &plain);
+    assert_plain(&["br"], BR_FLUSHED, &plain);
     assert_plain(&["gzip"], &gzip(&text), &text);
     assert_plain(&["gzip"], &gzip_long_header(&text), &text);
     assert_plain(&["identity", "X-Gzip"], &gzip(&text), &text);
@@ -169,13 +173,21 @@ fn an_unknown_coding_writes_no_body_byte() {
     assert_eq!(codings, ["br", &long[..32], "a", "b"]);
 }
 
+/// The step of a body refused by the `decoder_window` guard, with the room it saw.
+fn refused(step: Step) -> u64 {
+    match step {
+        Step::NotDecoded { limit } => limit,
+        other => panic!("not refused: {other:?}"),
+    }
+}
+
 #[test]
 fn a_window_over_room_is_not_decoded() {
     let plain = text();
     let wire = br_4mib(&plain);
     let room = 32 * 1024;
     let (rec, step, pieces) = decode(&["br"], &wire, room);
-    assert_eq!(step, Step::NotDecoded { limit: room });
+    assert!(refused(step) <= room);
     assert!(pieces.is_empty());
     assert_eq!(rec.room(), room);
 
@@ -183,12 +195,7 @@ fn a_window_over_room_is_not_decoded() {
     // limit is the room at that moment.
     let room = 80 * 1024;
     let (rec, step, pieces) = decode(&["br, gzip"], &gzip(&wire), room);
-    assert_eq!(
-        step,
-        Step::NotDecoded {
-            limit: room - 32 * 1024
-        }
-    );
+    assert!(refused(step) <= room - 32 * 1024);
     assert!(pieces.is_empty());
     assert_eq!(rec.room(), room);
 
@@ -197,8 +204,29 @@ fn a_window_over_room_is_not_decoded() {
     let mut out = |b: Bytes| pieces.push(b);
     let mut dec = BodyDecoder::new(parse_codings(&["br"]).unwrap(), &rec);
     assert_eq!(dec.push(&wire, &mut out), Step::Ok);
-    assert!(rec.room() < LARGE_ROOM, "the window is counted");
+    assert!(LARGE_ROOM - rec.room() >= 1 << 22, "the whole window is counted");
     assert_eq!(dec.finish(), Step::Ok);
     assert!(pieces.concat() == plain);
     assert_eq!(rec.room(), LARGE_ROOM);
+}
+
+/// The SSE shape: a flushed brotli stream holds its whole window from its first meta-block, so
+/// the guard counts the window at the first push and refuses a body whose window does not fit.
+#[test]
+fn a_flushed_brotli_body_counts_its_whole_window() {
+    let (rec, _calls) = Recorder::for_tests(LARGE_ROOM);
+    let mut pieces = Vec::new();
+    let mut out = |b: Bytes| pieces.push(b);
+    let mut dec = BodyDecoder::new(parse_codings(&["br"]).unwrap(), &rec);
+    assert_eq!(dec.push(&BR_FLUSHED[..1024], &mut out), Step::Ok);
+    assert!(!pieces.is_empty());
+    assert!(LARGE_ROOM - rec.room() >= 1 << 22, "the whole window is counted");
+    drop(dec);
+    assert_eq!(rec.room(), LARGE_ROOM);
+
+    let room = 1 << 20;
+    let (rec, step, pieces) = decode(&["br"], BR_FLUSHED, room);
+    assert!(refused(step) <= room);
+    assert!(pieces.is_empty());
+    assert_eq!(rec.room(), room);
 }

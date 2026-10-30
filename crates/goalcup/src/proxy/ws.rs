@@ -16,14 +16,16 @@
 //! goes on whole with its own opcode (PRD-17 W8). Once the data message has handed over a piece,
 //! such a control message (at most 125 bytes) is held and written right after the data message's
 //! last piece, so the masker, which ends a message at each `fin`, sees the data message as one run
-//! of bytes (PRD-05 section 7).
+//! of bytes (PRD-05 section 7). A held message keeps its own read time, so its `t` can be earlier
+//! than the piece written before it (the format's `dt` allows that).
 //!
 //! Inflation is raw DEFLATE with the fixed 15-bit window (`flate2` on `miniz_oxide`), which decodes
 //! any smaller negotiated window. Memory per direction: the 32 KiB piece being filled, a 32 KiB
-//! inflate output buffer, the inflater's 32 KiB window and the current frame header.
+//! inflate output buffer, the inflater's 32 KiB window, the current frame header, and the held
+//! control messages, each counted in PRD-02's guard (`Recorder::reserve`) until it is written.
 
 use crate::pipeline::{
-    EndReason, GapReason, Mono, OpenFlags, Recorder, Sid, StreamHandle, StreamKind,
+    EndReason, GapReason, Mono, OpenFlags, Recorder, Reserved, Sid, StreamHandle, StreamKind,
 };
 use bytes::Bytes;
 use flate2::{Decompress, FlushDecompress, Status};
@@ -174,8 +176,8 @@ impl WsConn {
         );
         let down = rec.open(StreamKind::WsDown, conn, req, 0, OpenFlags::DECRYPTED, meta);
         WsConn {
-            up: Side::new(up, true, deflate.map(|d| d.client_takeover)),
-            down: Side::new(down, false, deflate.map(|d| d.server_takeover)),
+            up: Side::new(up, rec, true, deflate.map(|d| d.client_takeover)),
+            down: Side::new(down, rec, false, deflate.map(|d| d.server_takeover)),
             stopped: false,
         }
     }
@@ -333,6 +335,7 @@ struct Control {
 /// One direction: framing, unmasking, inflation and its stream.
 struct Side {
     handle: StreamHandle,
+    rec: Recorder,
     /// The client side: frames must be masked.
     client: bool,
     /// `Some(takeover)` when permessage-deflate was negotiated.
@@ -342,8 +345,8 @@ struct Side {
     message: Option<Message>,
     control: Option<Control>,
     /// Control messages that ended inside a data message that already handed over a piece,
-    /// written after that message.
-    held: Vec<Control>,
+    /// written after that message; each counted in the guard while it waits.
+    held: Vec<(Control, Reserved)>,
     inflater: Option<Decompress>,
     /// Takeover history lost: later compressed messages cannot be decoded faithfully.
     history_lost: bool,
@@ -357,9 +360,10 @@ struct Side {
 }
 
 impl Side {
-    fn new(handle: StreamHandle, client: bool, takeover: Option<bool>) -> Side {
+    fn new(handle: StreamHandle, rec: &Recorder, client: bool, takeover: Option<bool>) -> Side {
         Side {
             handle,
+            rec: rec.clone(),
             client,
             takeover,
             framer: Framer::default(),
@@ -512,7 +516,9 @@ impl Side {
         if frame.control {
             if let Some(ctrl) = self.control.take() {
                 if self.message.as_ref().is_some_and(|m| m.handed) {
-                    self.held.push(ctrl);
+                    let size = ctrl.buf.capacity() + std::mem::size_of::<Control>();
+                    let counted = self.rec.reserve(size as u64);
+                    self.held.push((ctrl, counted));
                 } else {
                     self.control_out(ctrl, true);
                 }
@@ -536,7 +542,7 @@ impl Side {
             return;
         };
         match message.broken {
-            Some(start) => self.handle.gap(GapReason::DecodeFailed, start, None, None),
+            Some(start) => self.gap(start),
             None => {
                 let at = if self.pending.is_empty() {
                     t
@@ -595,7 +601,7 @@ impl Side {
     /// when the frame ended. A frame cut short with no bytes read writes nothing.
     fn control_out(&mut self, ctrl: Control, fin: bool) {
         if ctrl.broken {
-            self.handle.gap(GapReason::DecodeFailed, ctrl.t, None, None);
+            self.gap(ctrl.t);
         } else if fin || !ctrl.buf.is_empty() {
             if fin && ctrl.opcode == OP_CLOSE && ctrl.buf.len() >= 2 {
                 self.close_code = Some(u16::from_be_bytes([ctrl.buf[0], ctrl.buf[1]]));
@@ -607,9 +613,14 @@ impl Side {
 
     /// Writes the control messages held back while a data message was open.
     fn release_held(&mut self) {
-        for ctrl in std::mem::take(&mut self.held) {
+        for (ctrl, _counted) in std::mem::take(&mut self.held) {
             self.control_out(ctrl, true);
         }
+    }
+
+    /// GAP `decode_failed` for the message that broke at `start` (unknown loss).
+    fn gap(&mut self, start: Mono) {
+        self.handle.gap(GapReason::DecodeFailed, start, None, None);
     }
 
     /// Adds decoded bytes to the pending piece, handing a full one over only when more follow, so
@@ -664,9 +675,7 @@ impl Side {
                     }
                     if consumed == 0 && produced == 0 {
                         // No progress with input left: the rest of the message cannot decode.
-                        if !input.is_empty() {
-                            self.mark_broken(t);
-                        }
+                        self.mark_broken(t);
                         break;
                     }
                 }
@@ -685,7 +694,7 @@ impl Side {
         }
         let start = self.message.as_ref().and_then(|m| m.broken).unwrap_or(t);
         if faulted || open {
-            self.handle.gap(GapReason::DecodeFailed, start, None, None);
+            self.gap(start);
         }
         self.release_held();
         self.message = None;
@@ -698,7 +707,7 @@ impl Side {
         // The data message's last bytes first, so they follow its earlier pieces.
         if let Some(message) = &self.message {
             match message.broken {
-                Some(start) => self.handle.gap(GapReason::DecodeFailed, start, None, None),
+                Some(start) => self.gap(start),
                 None => self.flush(message.opcode),
             }
         }

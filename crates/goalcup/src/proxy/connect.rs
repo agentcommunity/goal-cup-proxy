@@ -551,23 +551,25 @@ fn u16_list(bytes: &[u8]) -> Vec<u16> {
         .collect()
 }
 
-/// A `server_name` body (RFC 6066): one `host_name` at most, a DNS-style name (`dns_name`).
+/// A `server_name` body (RFC 6066): one `host_name` at most. A name that is not a DNS-style name
+/// (`dns_name`) is no SNI, so the CONNECT host decides (section 2); rustls ignores it the same way.
 fn parse_server_name(data: &[u8]) -> Option<Option<String>> {
     let mut r = Reader(data);
     let list = usize::from(r.u16()?);
     if list == 0 || list != r.0.len() {
         return None;
     }
-    let mut host = None;
+    let (mut host, mut seen) = (None, false);
     while !r.0.is_empty() {
         let kind = r.u8()?;
         let len = r.u16()?;
         let name = r.take(usize::from(len))?;
         if kind == 0 {
-            if host.is_some() {
+            if seen {
                 return None;
             }
-            host = Some(dns_name(std::str::from_utf8(name).ok()?)?);
+            seen = true;
+            host = std::str::from_utf8(name).ok().and_then(dns_name);
         }
     }
     Some(host)
