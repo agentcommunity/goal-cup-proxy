@@ -9,7 +9,7 @@ type Res = Result<(), Box<dyn std::error::Error>>;
 /// The masker with no connector rules and no exact values. The S3 switch of `Masker::new` to
 /// `&[connector::MaskRule]` changes only this line.
 fn masker() -> Result<Masker, Box<dyn std::error::Error>> {
-    Ok(Masker::new::<()>(&[], Vec::new())?)
+    Ok(Masker::new(&[], Vec::new())?)
 }
 
 fn header<'a>(meta: &'a Value, name: &str) -> Option<&'a str> {
