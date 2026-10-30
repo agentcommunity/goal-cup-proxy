@@ -36,8 +36,8 @@ pub fn build(input: &Input, now_ns: Option<u64>) -> Report {
     let (mut exit, mut text, mut entries) = (0u8, String::new(), Vec::new());
     let mut run = Value::Null;
     for e in &input.entries {
-        let o = integrity::check(e, now_ns);
-        let mut checks = o.checks.clone();
+        let mut o = integrity::check(e, now_ns);
+        let mut checks = std::mem::take(&mut o.checks);
         let later = LATER.iter().chain(if server { LATER_SERVER } else { &[] });
         checks.extend(later.map(|id| Check::new(id, None, Res::Skip, NOT_BUILT)));
         let worst = checks.iter().map(|c| c.result).max().unwrap_or(Res::Pass);

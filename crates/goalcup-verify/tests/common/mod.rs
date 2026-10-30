@@ -318,6 +318,8 @@ pub struct Entry {
     pub boots: Vec<Value>,
     /// The length of every recovery frame's `recorder_down` gap, in ms.
     pub down_ms: Vec<u64>,
+    /// The record clock of the last recovery frame's LINK.
+    down_at: u64,
     sid: u64,
     counts_at: HashMap<u64, Vec<u8>>,
 }
@@ -344,6 +346,7 @@ impl Entry {
             tally: Tally::new(0, MONO0),
             boots: vec![],
             down_ms: vec![],
+            down_at: 0,
             sid: 0,
             counts_at: HashMap::new(),
         };
@@ -584,6 +587,7 @@ impl Entry {
         let ms = (now.mono_ns - at.mono_ns) / MS;
         self.boots.push(self.tally.count(at.mono_ns));
         self.down_ms.push(ms);
+        self.down_at = now.mono_ns;
         self.w = r.writer;
         self.tally = Tally::new(self.tally.boot + 1, now.mono_ns);
         self.event(start(true));
@@ -628,6 +632,38 @@ impl Entry {
         );
         self.clock.tick();
         self.w.take().unwrap().seal(self.clock.now()).unwrap();
+        self.dir
+    }
+
+    /// The boot after a recovery dies before its first LINK, and `down_ms` later the dead entry
+    /// is closed with a `recovered` seal (PRD-01 section 12 step 3): its part file is deleted, and
+    /// the part file closed by `R` takes a second recovery frame of GAP, seal and LINK. Returns
+    /// the entry folder.
+    pub fn seal_recovered(mut self, cause: &str, down_ms: u64) -> PathBuf {
+        drop(self.w.take());
+        self.idle(down_ms);
+        let now = self.clock.now();
+        self.down_ms.push((now.mono_ns - self.down_at) / MS);
+        let tot = totals(&self.boots, &self.down_ms);
+        let seal = json!({"ev": "seal", "reason": "recovered", "exit": null,
+            "harness": "unknown", "workspace_head": null, "dirty": null,
+            "boots": self.boots.len(), "totals": tot});
+        let counts = self.counts_at.clone();
+        let count_at = move |seq: u64| counts[&seq].clone();
+        let mut tail = Map::new();
+        tail.insert("cause".into(), cause.into());
+        let rc = Recover {
+            entry: ENTRY,
+            boot_id: BOOT_ID,
+            now,
+            durable: None,
+            count_at: &count_at,
+            tail,
+            dead_start: None,
+            seal: Some(seal.to_string().into_bytes()),
+        };
+        let r = PartWriter::recover(&self.rec, opts(), rc).unwrap();
+        assert!(r.writer.is_none());
         self.dir
     }
 

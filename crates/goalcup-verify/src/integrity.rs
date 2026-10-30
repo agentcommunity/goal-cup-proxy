@@ -185,8 +185,8 @@ struct St {
     unknown: Option<u64>,
     hole: u64,
     holed: bool,
+    /// A GAP since the last text or binary message end: the next model request has holes.
     gapped: bool,
-    msg_gap: bool,
     /// An `http_req` POST on a decrypted connection.
     post: bool,
     /// The host of a decrypted connection (its own for `conn`), for `hosts`.
@@ -269,9 +269,9 @@ pub fn check(e: &Entry, now_ns: Option<u64>) -> Outcome {
         sealed: p.seal.is_some(),
         seal_reason,
         boots: p.boots,
-        start: p.start.clone().unwrap_or_default(),
-        counts: p.all.clone(),
-        entry: p.entry.clone(),
+        start: p.start.take().unwrap_or_default(),
+        counts: std::mem::take(&mut p.all),
+        entry: p.entry.take(),
         raw: meter.raw.get(),
         compressed: input::compressed(e),
         data_bytes: p.data_bytes,
@@ -314,6 +314,8 @@ struct Pass {
     boot_head: bool,
     boot0_gap: bool,
     pending_down: usize,
+    /// The `recorder_down` gaps since the last LINK: those in the current recovery frame.
+    frame_down: usize,
     cadence_t: u64,
     suspend: u64,
     regular_link_t: Option<u64>,
@@ -588,6 +590,7 @@ impl Pass {
                             self.fail("inv6", "a recorder_down gap not at the last link", at);
                         }
                         self.pending_down += 1;
+                        self.frame_down += 1;
                     }
                 } else if *sid != 0 {
                     self.gap(*sid, *off, *lost, name, at);
@@ -637,6 +640,7 @@ impl Pass {
                 self.next_seq = seq + 1;
                 self.last_hash = *hash;
                 self.last_link = Some((*wall_ns, *mono_ns));
+                self.frame_down = 0;
                 if self.down_after.0 == 0 {
                     self.regular_link_t = Some(*mono_ns);
                 }
@@ -744,15 +748,15 @@ impl Pass {
             }
             i = b;
         }
-        let (kind, host, msg_gap) = (
+        let (kind, host, gapped) = (
             st.kind.unwrap_or(StreamKind::Other(0)),
             st.host.clone(),
-            st.msg_gap,
+            st.gapped,
         );
         // A message end with a text or binary opcode; only that clears a gap before it.
         let msg = flags & FLAG_FIN != 0 && matches!(flags >> 4, 1 | 2);
         if msg {
-            st.msg_gap = false;
+            st.gapped = false;
         }
         let snap = matches!(kind, StreamKind::Native | StreamKind::Snapshot);
         self.cur
@@ -762,7 +766,7 @@ impl Pass {
         }
         if msg && kind == StreamKind::WsUp {
             self.cur.add("ws_up_msgs", 1);
-            self.request(host, !msg_gap);
+            self.request(host, !gapped);
         }
         if bad {
             self.fail("inv4", "a DATA hole that no GAP fills", at);
@@ -826,7 +830,7 @@ impl Pass {
         let Some(st) = self.streams.get_mut(&sid) else {
             return self.fail("inv3", "a GAP of a stream not open", at);
         };
-        (st.gapped, st.msg_gap) = (true, true);
+        st.gapped = true;
         if let Some(host) = &st.tunnel {
             self.cur.tunnel.entry(host.clone()).or_default().3 = Some(reason);
         }
@@ -895,7 +899,9 @@ impl Pass {
                     );
                 }
                 let recovered = m.get("reason").and_then(Value::as_str) == Some("recovered");
-                if recovered && self.pending_down != 1 {
+                // A part file closed by `R` can take a second recovery frame (PRD-01 section 12
+                // step 3): only this frame's gaps count.
+                if recovered && self.frame_down != 1 {
                     self.fail(
                         "inv6",
                         "a recovered seal without exactly one recorder_down gap",

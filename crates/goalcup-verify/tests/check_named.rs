@@ -60,6 +60,26 @@ fn killed_boot_recovered_into_a_second_boot_is_named() {
     assert_one_down_gap(&e.seal(), "killed", ms);
 }
 
+/// PRD-01 section 12 step 3: the boot after a recovery dies before its first LINK, so the part
+/// file closed by `R` takes a second frame with the recovered seal. Two named gaps, no fail.
+#[test]
+fn recovered_seal_in_a_second_recovery_frame_is_named() {
+    let mut e = Entry::new("second-frame");
+    e.standard();
+    let first = e.crash("killed", 5_000);
+    let dir = e.seal_recovered("killed", 60_000);
+    let (code, v) = check(&dir, &[]);
+    no_fail(&v);
+    assert_eq!(code, 1);
+    assert_eq!(result(&v, "inv6"), "named");
+    assert_eq!(v["entries"][0]["seal_reason"], "recovered");
+    assert_eq!(v["entries"][0]["boots"], 1);
+    let gaps = item(&v, "inv6")["facts"]["gaps"].as_array().unwrap().clone();
+    assert_eq!(gaps.len(), 2, "{gaps:?}");
+    assert_eq!(gaps[0]["ms"], first);
+    assert!(gaps[1]["ms"].as_u64().unwrap() >= 60_000);
+}
+
 #[test]
 fn null_mode_10_minutes_and_watchdog_lost_2_hours_are_named() {
     for (cause, down) in [("null_mode", 10 * 60_000), ("watchdog_lost", 2 * 3_600_000)] {
