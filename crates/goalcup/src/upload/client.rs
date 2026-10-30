@@ -249,9 +249,10 @@ impl ServerClient {
         &self.base
     }
 
-    /// `method path` with a JSON body or none, answered by JSON, all within 30 s (the request's
-    /// own timeout bounds the connect, the write and the answer's read). PRD-10's device, open
-    /// and continue calls use it.
+    /// `method path` with a JSON body or none, answered by JSON, all within 30 s: the TLS
+    /// handshake is bounded by the connection (`RustlsConnector`), and the request's own timeout
+    /// bounds the connect, the write and the answer's read. PRD-10's device, open and continue
+    /// calls use it.
     pub fn json<T, B>(&self, method: &str, path: &str, body: Option<&B>) -> Result<T, ServerError>
     where
         T: serde::de::DeserializeOwned,
@@ -437,10 +438,13 @@ impl ureq::TlsConnector for RustlsConnector {
         dns_name: &str,
         io: Box<dyn ureq::ReadWrite>,
     ) -> Result<Box<dyn ureq::ReadWrite>, ureq::Error> {
-        // Each call has its own connection, so this bounds the whole call by the longest one.
+        // Each call has its own connection. The handshake is bounded by CALL_TIMEOUT (ureq sets
+        // the socket's read timeout once, before this, and checks a request's own deadline only
+        // after it); the stream after it by PUT_TIMEOUT, the longest call, from the same start.
+        let start = Mono::now();
         let mut io = Bounded {
             inner: io,
-            until: after(Mono::now(), PUT_TIMEOUT),
+            until: after(start, CALL_TIMEOUT),
         };
         let host = dns_name.trim_start_matches('[').trim_end_matches(']');
         let name = rustls::pki_types::ServerName::try_from(host.to_string()).map_err(|e| {
@@ -452,6 +456,7 @@ impl ureq::TlsConnector for RustlsConnector {
         let mut session = rustls::ClientConnection::new(self.0.clone(), name)
             .map_err(|e| std::io::Error::other(format!("TLS setup: {e}")))?;
         session.complete_io(&mut io)?;
+        io.until = after(start, PUT_TIMEOUT);
         Ok(Box::new(TlsStream(rustls::StreamOwned::new(session, io))))
     }
 }
