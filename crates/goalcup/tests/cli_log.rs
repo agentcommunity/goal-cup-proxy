@@ -1,5 +1,6 @@
-//! `goalcup.log` (seam S11): one line per call, never interleaved, mode 0600, no free text, and
-//! never a reason to stop (points 3 and 4).
+//! `goalcup.log` (seam S11): one line per call, never interleaved, mode 0600, a path or long line
+//! kept to one line, host syntax checked, and never a reason to stop (points 3 and 4). The rule
+//! that no free text reaches the file is checked by the two `compile_fail` doctests in `log.rs`.
 
 use std::collections::HashSet;
 use std::fs;
