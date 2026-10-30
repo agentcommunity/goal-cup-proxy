@@ -27,3 +27,4 @@ spikes/wire-pty/out/
 
 # Agent worktrees (local only)
 .claude/worktrees/
+/pad-out/

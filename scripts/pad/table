@@ -1,0 +1,84 @@
+#!/usr/bin/env python3
+"""The pad's table (PRD-12 section 9).
+
+Phase 0 builds only the seed: with no row.json under pad-out/, write
+connectors/tiers.toml with every connector "not verified". Row mode
+(PAD-RESULTS.md, pad-rows.jsonl, the tier rule) and --release-check come
+later and plug into tiers_from_rows() and main().
+
+Runs on Python 3.9: no tomllib.
+"""
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[2]
+PAD_OUT = ROOT / "pad-out"
+TIERS = ROOT / "connectors" / "tiers.toml"
+
+# The 16 connector ids, PRD-11 section 5.
+CONNECTOR_IDS = [
+    "amp-cli",
+    "claude-code-cli",
+    "cline-cli",
+    "codex-cli",
+    "copilot-cli",
+    "crush-cli",
+    "droid-cli",
+    "gemini-cli",
+    "goose-cli",
+    "hermes-cli",
+    "kilo-cli",
+    "kimi-code-cli",
+    "openclaw-cli",
+    "opencode-cli",
+    "opencode2-cli",
+    "qwen-cli",
+]
+
+HEADER = "# Written by scripts/pad/table (PRD-12 section 9). Do not edit by hand.\n"
+
+
+def toml_str(s):
+    return '"' + s.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def render_tiers(tiers):
+    """tiers: {connector id: (tier, version, reason)} -> tiers.toml text (PRD-10 T1)."""
+    blocks = []
+    for cid in sorted(tiers):
+        tier, version, reason = tiers[cid]
+        blocks.append(
+            "[%s]\ntier = %s\nversion = %s\nreason = %s\n"
+            % (cid, toml_str(tier), toml_str(version), toml_str(reason))
+        )
+    return HEADER + "\n" + "\n".join(blocks)
+
+
+def seed_tiers():
+    return {cid: ("not verified", "", "not yet run on the pad") for cid in CONNECTOR_IDS}
+
+
+def find_rows():
+    return sorted(PAD_OUT.rglob("row.json")) if PAD_OUT.is_dir() else []
+
+
+def write(path, text):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(text.encode("utf-8"))
+
+
+def main(argv):
+    if argv:
+        print("table: no options yet (--release-check is not built yet)", file=sys.stderr)
+        return 2
+    if find_rows():
+        print("table: row.json found under pad-out/, but row mode is not built yet; nothing written",
+              file=sys.stderr)
+        return 2
+    write(TIERS, render_tiers(seed_tiers()))
+    print("table: wrote seed %s (%d connectors)" % (TIERS.relative_to(ROOT), len(CONNECTOR_IDS)))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
