@@ -13,7 +13,10 @@
 //! length can no longer be trusted, so no later frame boundary can be.
 //!
 //! A control frame inside a fragmented data message is its own one-piece message; the data message
-//! goes on whole with its own opcode.
+//! goes on whole with its own opcode (PRD-17 W8). Once the data message has handed over a piece,
+//! such a control message (at most 125 bytes) is held and written right after the data message's
+//! last piece, so the masker, which ends a message at each `fin`, sees the data message as one run
+//! of bytes (PRD-05 section 7).
 //!
 //! Inflation is raw DEFLATE with the fixed 15-bit window (`flate2` on `miniz_oxide`), which decodes
 //! any smaller negotiated window. Memory per direction: the 32 KiB piece being filled, a 32 KiB
@@ -159,8 +162,7 @@ pub struct WsConn {
 
 impl WsConn {
     /// Opens `ws_up` then `ws_down` on connection `conn` for upgrade request `req`.
-    pub fn open(rec: &Recorder, conn: Sid, req: Sid, deflate: Option<Deflate>, t: Mono) -> WsConn {
-        let _ = t;
+    pub fn open(rec: &Recorder, conn: Sid, req: Sid, deflate: Option<Deflate>) -> WsConn {
         let meta = json!({ "deflate": deflate.is_some() });
         let up = rec.open(
             StreamKind::WsUp,
@@ -218,6 +220,13 @@ struct Header {
     opcode: u8,
     mask: Option<[u8; 4]>,
     len: u64,
+}
+
+/// XORs `bytes` with the masking `key`, `pos` being the payload offset of `bytes[0]`.
+fn unmask(bytes: &mut [u8], key: [u8; 4], pos: u64) {
+    for (i, byte) in bytes.iter_mut().enumerate() {
+        *byte ^= key[((pos + i as u64) & 3) as usize];
+    }
 }
 
 fn header_len(second: u8) -> usize {
@@ -308,6 +317,8 @@ struct Message {
     inflating: bool,
     /// When the message broke: its bytes from then on are a GAP `decode_failed`.
     broken: Option<Mono>,
+    /// A piece without `fin` was handed over.
+    handed: bool,
 }
 
 /// The control frame being read: at most 125 bytes, recorded as one message at its end.
@@ -330,6 +341,9 @@ struct Side {
     frame: Option<Frame>,
     message: Option<Message>,
     control: Option<Control>,
+    /// Control messages that ended inside a data message that already handed over a piece,
+    /// written after that message.
+    held: Vec<Control>,
     inflater: Option<Decompress>,
     /// Takeover history lost: later compressed messages cannot be decoded faithfully.
     history_lost: bool,
@@ -352,6 +366,7 @@ impl Side {
             frame: None,
             message: None,
             control: None,
+            held: Vec::new(),
             inflater: takeover.map(|_| Decompress::new(false)),
             history_lost: false,
             pending: Vec::new(),
@@ -432,6 +447,7 @@ impl Side {
                 inflating: compressed && !lost,
                 // A continuation with no message open belongs to no message.
                 broken: (!starts || lost).then_some(t),
+                handed: false,
             });
         }
         let rsv1_ok = if starts {
@@ -455,9 +471,7 @@ impl Side {
             let at = ctrl.buf.len();
             ctrl.buf.extend_from_slice(data);
             if let Some(key) = mask {
-                for (i, byte) in ctrl.buf[at..].iter_mut().enumerate() {
-                    *byte ^= key[((pos + i as u64) & 3) as usize];
-                }
+                unmask(&mut ctrl.buf[at..], key, pos);
             }
             return;
         }
@@ -470,18 +484,22 @@ impl Side {
             if message.broken.is_some() || (message.compressed && !message.inflating) {
                 break;
             }
-            scratch.clear();
-            scratch.extend_from_slice(piece);
-            if let Some(key) = mask {
-                for (i, byte) in scratch.iter_mut().enumerate() {
-                    *byte ^= key[((pos + i as u64) & 3) as usize];
+            let compressed = message.compressed;
+            // Server payload is not masked: no copy.
+            let bytes = match mask {
+                Some(key) => {
+                    scratch.clear();
+                    scratch.extend_from_slice(piece);
+                    unmask(&mut scratch, key, pos);
+                    &scratch[..]
                 }
-            }
+                None => piece,
+            };
             pos += piece.len() as u64;
-            if message.compressed {
-                self.inflate(t, &scratch);
+            if compressed {
+                self.inflate(t, bytes);
             } else {
-                self.deliver(t, &scratch);
+                self.deliver(t, bytes);
             }
         }
         self.scratch = scratch;
@@ -493,14 +511,10 @@ impl Side {
         };
         if frame.control {
             if let Some(ctrl) = self.control.take() {
-                if ctrl.broken {
-                    self.handle.gap(GapReason::DecodeFailed, ctrl.t, None, None);
+                if self.message.as_ref().is_some_and(|m| m.handed) {
+                    self.held.push(ctrl);
                 } else {
-                    if ctrl.opcode == OP_CLOSE && ctrl.buf.len() >= 2 {
-                        self.close_code = Some(u16::from_be_bytes([ctrl.buf[0], ctrl.buf[1]]));
-                    }
-                    self.handle
-                        .ws(ctrl.t, ctrl.opcode, true, Bytes::from(ctrl.buf));
+                    self.control_out(ctrl, true);
                 }
             }
             return;
@@ -533,6 +547,7 @@ impl Side {
                 self.handle.ws(at, message.opcode, true, bytes);
             }
         }
+        self.release_held();
         if message.compressed {
             match self.takeover {
                 Some(true) if message.broken.is_some() => self.history_lost = true,
@@ -569,8 +584,32 @@ impl Side {
         if self.pending.is_empty() {
             return;
         }
+        if let Some(message) = &mut self.message {
+            message.handed = true;
+        }
         let bytes = Bytes::from(std::mem::take(&mut self.pending));
         self.handle.ws(self.pending_t, opcode, false, bytes);
+    }
+
+    /// Records a control message: its GAP when the frame broke RFC 6455, else its bytes, `fin`
+    /// when the frame ended. A frame cut short with no bytes read writes nothing.
+    fn control_out(&mut self, ctrl: Control, fin: bool) {
+        if ctrl.broken {
+            self.handle.gap(GapReason::DecodeFailed, ctrl.t, None, None);
+        } else if fin || !ctrl.buf.is_empty() {
+            if fin && ctrl.opcode == OP_CLOSE && ctrl.buf.len() >= 2 {
+                self.close_code = Some(u16::from_be_bytes([ctrl.buf[0], ctrl.buf[1]]));
+            }
+            self.handle
+                .ws(ctrl.t, ctrl.opcode, fin, Bytes::from(ctrl.buf));
+        }
+    }
+
+    /// Writes the control messages held back while a data message was open.
+    fn release_held(&mut self) {
+        for ctrl in std::mem::take(&mut self.held) {
+            self.control_out(ctrl, true);
+        }
     }
 
     /// Adds decoded bytes to the pending piece, handing a full one over only when more follow, so
@@ -620,8 +659,14 @@ impl Side {
                     break;
                 }
                 Ok(Status::Ok | Status::BufError) => {
-                    let drained = input.is_empty() && produced < out.len();
-                    if drained || (consumed == 0 && produced == 0) {
+                    if input.is_empty() && produced < out.len() {
+                        break;
+                    }
+                    if consumed == 0 && produced == 0 {
+                        // No progress with input left: the rest of the message cannot decode.
+                        if !input.is_empty() {
+                            self.mark_broken(t);
+                        }
                         break;
                     }
                 }
@@ -642,6 +687,7 @@ impl Side {
         if faulted || open {
             self.handle.gap(GapReason::DecodeFailed, start, None, None);
         }
+        self.release_held();
         self.message = None;
         self.control = None;
         self.frame = None;
@@ -649,19 +695,17 @@ impl Side {
 
     fn end(mut self, t: Mono, reason: EndReason, unsent: u64) {
         let mid = self.framer.have > 0 || self.frame.is_some() || self.message.is_some();
-        if let Some(ctrl) = self.control.take() {
-            if ctrl.broken {
-                self.handle.gap(GapReason::DecodeFailed, ctrl.t, None, None);
-            } else if !ctrl.buf.is_empty() {
-                self.handle
-                    .ws(ctrl.t, ctrl.opcode, false, Bytes::from(ctrl.buf));
-            }
-        }
-        if let Some(message) = self.message.take() {
+        // The data message's last bytes first, so they follow its earlier pieces.
+        if let Some(message) = &self.message {
             match message.broken {
                 Some(start) => self.handle.gap(GapReason::DecodeFailed, start, None, None),
                 None => self.flush(message.opcode),
             }
+        }
+        self.message = None;
+        self.release_held();
+        if let Some(ctrl) = self.control.take() {
+            self.control_out(ctrl, false);
         }
         let reason = if reason == EndReason::Complete && mid {
             EndReason::Interrupted

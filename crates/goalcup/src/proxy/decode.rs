@@ -21,8 +21,9 @@ use flate2::{Crc, Decompress, FlushDecompress, Status};
 const PIECE: usize = 32 * 1024;
 /// The window counted for gzip and deflate.
 const DEFLATE_WINDOW: u64 = 32 * 1024;
-/// The largest gzip member header (extra field, name and comment included).
-const MAX_GZIP_HEADER_BYTES: usize = 64 * 1024;
+/// The part of a brotli window admitted before the first piece. The decoder's ring buffer grows
+/// with its output up to the declared window, so the rest is counted as the output grows.
+const BROTLI_FIRST_WINDOW: u64 = 64 * 1024;
 /// The largest zstd window accepted, as a power of two: 8 MiB, the most an HTTP `zstd` content
 /// coding may use (RFC 9659 section 3). A larger frame is a decode failure.
 const ZSTD_WINDOW_LOG_MAX: u32 = 23;
@@ -98,7 +99,9 @@ fn cut(token: &str) -> String {
     token[..end].to_owned()
 }
 
-/// What the caller records after a [`BodyDecoder`] call.
+/// What the caller records after a [`BodyDecoder`] call. Once a call answered `Fault` or
+/// `NotDecoded`, every later call answers the same again; the caller writes the GAP once, when
+/// the body ends, so its `wire` tail counts the whole body.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Step {
     /// Nothing to record beyond the pieces already handed out.
@@ -106,7 +109,7 @@ pub enum Step {
     /// The coding broke part way, or the body ended inside it. The decoded prefix already went
     /// out; the caller writes GAP `decode_failed` and ends the stream `decode_error`.
     Fault,
-    /// The `decoder_window` guard: the windows did not fit `Recorder::room()`, so the body is not
+    /// The `decoder_window` guard: the window did not fit `Recorder::room()`, so the body is not
     /// decoded and no piece went out. The caller writes GAP `memory_guard` with `lost` 0 and tail
     /// `{"guard":"decoder_window","limit":limit,"wire":wire()}`, and relays on.
     NotDecoded { limit: u64 },
@@ -153,9 +156,8 @@ impl BodyDecoder {
     }
 
     /// The body ended on the wire: `Fault` if a coding is cut short. Every decoder hands its
-    /// output out as it goes, so nothing is left for `out` today.
-    pub fn finish(mut self, out: &mut dyn FnMut(Bytes)) -> Step {
-        let _ = out;
+    /// output out as it goes, so nothing is left to hand out here.
+    pub fn finish(mut self) -> Step {
         if let Some(step) = self.stop {
             return step;
         }
@@ -167,12 +169,10 @@ impl BodyDecoder {
         let step = match result {
             Ok(()) => return Step::Ok,
             Err(Halt::Invalid) => Step::Fault,
-            Err(Halt::Window) => {
-                self.guard.held.clear();
-                Step::NotDecoded {
-                    limit: self.guard.rec.room(),
-                }
-            }
+            // Room at that moment: this body's own windows are still held.
+            Err(Halt::Window) => Step::NotDecoded {
+                limit: self.guard.rec.room(),
+            },
         };
         // Decoding is over: the windows go back to the guard now, not when the body ends.
         self.guard.held.clear();
@@ -204,8 +204,13 @@ impl Guard {
         if !self.emitted && self.rec.room() < window {
             return Err(Halt::Window);
         }
-        self.held.push(self.rec.reserve(window));
+        self.count(window);
         Ok(())
+    }
+
+    /// Counts `n` more of a window that is already admitted; never refuses.
+    fn count(&mut self, n: u64) {
+        self.held.push(self.rec.reserve(n));
     }
 }
 
@@ -260,11 +265,9 @@ impl Stage {
         }
         if !self.fed {
             self.fed = true;
-            match &self.kind {
-                Kind::Gzip(_) | Kind::Deflate(_) => g.admit(DEFLATE_WINDOW)?,
-                Kind::Brotli(_) => g.admit(brotli_window(input[0]).ok_or(Halt::Invalid)?)?,
-                // Read per frame, from the frame header.
-                Kind::Zstd(_) => {}
+            // Brotli and zstd count their windows in their own `feed`.
+            if matches!(self.kind, Kind::Gzip(_) | Kind::Deflate(_)) {
+                g.admit(DEFLATE_WINDOW)?;
             }
         }
         match &mut self.kind {
@@ -334,15 +337,85 @@ struct Gzip {
 }
 
 enum GzipState {
-    Header(Vec<u8>),
+    Header(GzHead),
     Body,
     Trailer(Vec<u8>),
+}
+
+/// Where a member header stands (RFC 1952 section 2.3). It holds none of the header's bytes,
+/// only counters, so a header of any length is read: the 10 fixed bytes, then each optional
+/// field its flags name, cleared from `flags` once read.
+#[derive(Default)]
+struct GzHead {
+    /// Fixed bytes seen, 0 to 10.
+    fixed: u8,
+    flags: u8,
+    /// FEXTRA length bytes seen, and the length read so far.
+    xlen_seen: u8,
+    xlen: usize,
+    /// Bytes of FEXTRA data or FHCRC still to skip.
+    skip: usize,
+}
+
+const FHCRC: u8 = 0x02;
+const FEXTRA: u8 = 0x04;
+const FNAME: u8 = 0x08;
+const FCOMMENT: u8 = 0x10;
+
+impl GzHead {
+    /// Takes header bytes from `input`; `true` once the header is complete. Reserved flags and a
+    /// wrong magic or method are refused.
+    fn take(&mut self, input: &mut &[u8]) -> Result<bool, Halt> {
+        loop {
+            let n = self.skip.min(input.len());
+            *input = &input[n..];
+            self.skip -= n;
+            if self.skip > 0 {
+                return Ok(false);
+            }
+            if self.fixed < 10 || (self.flags & FEXTRA != 0 && self.xlen_seen < 2) {
+                let Some((&b, rest)) = input.split_first() else {
+                    return Ok(false);
+                };
+                *input = rest;
+                match self.fixed {
+                    0..=2 if b != [0x1f, 0x8b, 8][usize::from(self.fixed)] => {
+                        return Err(Halt::Invalid);
+                    }
+                    3 if b & 0xe0 != 0 => return Err(Halt::Invalid),
+                    3 => self.flags = b,
+                    10 => {
+                        self.xlen |= usize::from(b) << (8 * self.xlen_seen);
+                        self.xlen_seen += 1;
+                    }
+                    _ => {}
+                }
+                self.fixed = (self.fixed + 1).min(10);
+            } else if self.flags & FEXTRA != 0 {
+                self.flags &= !FEXTRA;
+                self.skip = self.xlen;
+            } else if let Some(flag) = [FNAME, FCOMMENT].into_iter().find(|f| self.flags & *f != 0)
+            {
+                let Some(zero) = input.iter().position(|&b| b == 0) else {
+                    *input = &[];
+                    return Ok(false);
+                };
+                *input = &input[zero + 1..];
+                self.flags &= !flag;
+            } else if self.flags & FHCRC != 0 {
+                self.flags &= !FHCRC;
+                self.skip = 2;
+            } else {
+                return Ok(true);
+            }
+        }
+    }
 }
 
 impl Default for Gzip {
     fn default() -> Self {
         Gzip {
-            state: GzipState::Header(Vec::new()),
+            state: GzipState::Header(GzHead::default()),
             z: Decompress::new(false),
             crc: Crc::new(),
             out: vec![0; PIECE],
@@ -356,20 +429,10 @@ impl Gzip {
         while !input.is_empty() {
             match &mut self.state {
                 GzipState::Header(header) => {
-                    let before = header.len();
-                    let take = input.len().min(MAX_GZIP_HEADER_BYTES + 1 - before);
-                    header.extend_from_slice(&input[..take]);
-                    match gzip_header_len(header)? {
-                        Some(len) => {
-                            input = &input[len - before..];
-                            self.z.reset(false);
-                            self.crc.reset();
-                            self.state = GzipState::Body;
-                        }
-                        None if header.len() > MAX_GZIP_HEADER_BYTES => {
-                            return Err(Halt::Invalid);
-                        }
-                        None => input = &input[take..],
+                    if header.take(&mut input)? {
+                        self.z.reset(false);
+                        self.crc.reset();
+                        self.state = GzipState::Body;
                     }
                 }
                 GzipState::Body => {
@@ -391,7 +454,7 @@ impl Gzip {
                             return Err(Halt::Invalid);
                         }
                         self.members += 1;
-                        self.state = GzipState::Header(Vec::new());
+                        self.state = GzipState::Header(GzHead::default());
                     }
                 }
             }
@@ -400,51 +463,16 @@ impl Gzip {
     }
 
     fn complete(&self) -> bool {
-        self.members > 0 && matches!(&self.state, GzipState::Header(h) if h.is_empty())
+        self.members > 0 && matches!(&self.state, GzipState::Header(h) if h.fixed == 0)
     }
-}
-
-/// The length of a complete gzip member header at the start of `h`; `None` if more bytes are
-/// needed. Reserved flags are refused.
-fn gzip_header_len(h: &[u8]) -> Result<Option<usize>, Halt> {
-    const MAGIC: [u8; 3] = [0x1f, 0x8b, 8];
-    if h.iter().zip(MAGIC).any(|(got, want)| *got != want) {
-        return Err(Halt::Invalid);
-    }
-    let Some(&flags) = h.get(3) else {
-        return Ok(None);
-    };
-    if flags & 0xe0 != 0 {
-        return Err(Halt::Invalid);
-    }
-    let mut pos = 10;
-    if flags & 0x04 != 0 {
-        let Some(len) = h.get(pos..pos + 2) else {
-            return Ok(None);
-        };
-        pos += 2 + usize::from(u16::from_le_bytes([len[0], len[1]]));
-    }
-    for flag in [0x08, 0x10] {
-        if flags & flag != 0 {
-            let Some(zero) = h
-                .get(pos..)
-                .and_then(|rest| rest.iter().position(|&b| b == 0))
-            else {
-                return Ok(None);
-            };
-            pos += zero + 1;
-        }
-    }
-    if flags & 0x02 != 0 {
-        pos += 2;
-    }
-    Ok((h.len() >= pos).then_some(pos))
 }
 
 /// HTTP `deflate`: zlib (RFC 1950) as specified, or the raw deflate some servers send, told
 /// apart by the zlib header check on the first two bytes. The first byte may arrive alone.
 struct Deflate {
-    z: Option<Decompress>,
+    z: Decompress,
+    /// The first two bytes were seen and `z` is set for zlib or raw.
+    told: bool,
     first: Option<u8>,
     ended: bool,
     out: Vec<u8>,
@@ -453,7 +481,8 @@ struct Deflate {
 impl Default for Deflate {
     fn default() -> Self {
         Deflate {
-            z: None,
+            z: Decompress::new(true),
+            told: false,
             first: None,
             ended: false,
             out: vec![0; PIECE],
@@ -462,27 +491,29 @@ impl Default for Deflate {
 }
 
 impl Deflate {
+    /// `input` is never empty (`Stage::feed`).
     fn feed(&mut self, input: &[u8], g: &mut Guard, emit: &mut Emit<'_>) -> Result<(), Halt> {
-        if self.z.is_none() {
-            let (b0, b1) = match (self.first, input) {
-                (Some(b0), [b1, ..]) => (b0, *b1),
-                (None, [b0, b1, ..]) => (*b0, *b1),
-                (None, [b0]) => {
-                    self.first = Some(*b0);
+        if !self.told {
+            let (b0, b1, held) = match self.first.take() {
+                Some(b0) => (b0, input[0], true),
+                None if input.len() == 1 => {
+                    self.first = Some(input[0]);
                     return Ok(());
                 }
-                (_, _) => return Ok(()),
+                None => (input[0], input[1], false),
             };
             let zlib =
                 b0 & 0x0f == 8 && b0 >> 4 <= 7 && (u16::from(b0) << 8 | u16::from(b1)) % 31 == 0;
-            self.z = Some(Decompress::new(zlib));
-            if let Some(b0) = self.first.take() {
+            self.z.reset(zlib);
+            self.told = true;
+            if held {
                 self.inflate(&[b0], g, emit)?;
             }
         }
         self.inflate(input, g, emit)
     }
 
+    /// `input` is never empty.
     fn inflate(
         &mut self,
         mut input: &[u8],
@@ -490,16 +521,9 @@ impl Deflate {
         emit: &mut Emit<'_>,
     ) -> Result<(), Halt> {
         if self.ended {
-            return if input.is_empty() {
-                Ok(())
-            } else {
-                Err(Halt::Invalid)
-            };
+            return Err(Halt::Invalid);
         }
-        let Some(z) = self.z.as_mut() else {
-            return Ok(());
-        };
-        if inflate(z, &mut self.out, &mut input, None, g, emit)? {
+        if inflate(&mut self.z, &mut self.out, &mut input, None, g, emit)? {
             self.ended = true;
             if !input.is_empty() {
                 return Err(Halt::Invalid);
@@ -528,9 +552,16 @@ fn brotli_window(b0: u8) -> Option<u64> {
 }
 
 /// HTTP `br` (RFC 7932), strict: no large window, and bytes after the stream's end are invalid.
+/// Its window is counted as its ring buffer grows: [`BROTLI_FIRST_WINDOW`] (or the whole window
+/// when smaller) is admitted before the first piece, and the count doubles toward the declared
+/// window as the decoded output passes it, counted only, never refused.
 struct Brotli {
     state: BrotliState<BrotliHeap, BrotliHeap, BrotliHeap>,
     ended: bool,
+    /// The window the stream declares, and how much of it is counted so far (0: not yet read).
+    window: u64,
+    counted: u64,
+    produced: u64,
     out: Vec<u8>,
 }
 
@@ -573,6 +604,9 @@ impl Default for Brotli {
         Brotli {
             state: BrotliState::new_strict(BrotliHeap, BrotliHeap, BrotliHeap),
             ended: false,
+            window: 0,
+            counted: 0,
+            produced: 0,
             out: vec![0; PIECE],
         }
     }
@@ -582,6 +616,12 @@ impl Brotli {
     fn feed(&mut self, input: &[u8], g: &mut Guard, emit: &mut Emit<'_>) -> Result<(), Halt> {
         if self.ended {
             return Err(Halt::Invalid);
+        }
+        if self.counted == 0 {
+            // RFC 7932 section 9.1: the window is in the first byte.
+            self.window = brotli_window(input[0]).ok_or(Halt::Invalid)?;
+            self.counted = self.window.min(BROTLI_FIRST_WINDOW);
+            g.admit(self.counted)?;
         }
         let (mut available_in, mut input_offset) = (input.len(), 0);
         loop {
@@ -598,6 +638,12 @@ impl Brotli {
             );
             // Emitted before the result is looked at: output decoded before corruption is kept.
             if output_offset > 0 {
+                self.produced += output_offset as u64;
+                while self.produced > self.counted && self.counted < self.window {
+                    let more = self.counted.min(self.window - self.counted);
+                    g.count(more);
+                    self.counted += more;
+                }
                 emit(&self.out[..output_offset], g)?;
             }
             match result {
@@ -677,14 +723,14 @@ impl Zstd {
         emit: &mut Emit<'_>,
     ) -> Result<&'a [u8], Halt> {
         use zstd::stream::raw::{DParameter, Decoder, InBuffer, Operation, OutBuffer};
-        if self.z.is_none() {
-            let mut z = Decoder::new().map_err(|_| Halt::Invalid)?;
-            z.set_parameter(DParameter::WindowLogMax(ZSTD_WINDOW_LOG_MAX))
-                .map_err(|_| Halt::Invalid)?;
-            self.z = Some(z);
-        }
-        let Some(z) = self.z.as_mut() else {
-            return Err(Halt::Invalid);
+        let z = match &mut self.z {
+            Some(z) => z,
+            slot => {
+                let mut z = Decoder::new().map_err(|_| Halt::Invalid)?;
+                z.set_parameter(DParameter::WindowLogMax(ZSTD_WINDOW_LOG_MAX))
+                    .map_err(|_| Halt::Invalid)?;
+                slot.insert(z)
+            }
         };
         let mut source = InBuffer::around(input);
         loop {

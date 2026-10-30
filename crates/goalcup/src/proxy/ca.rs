@@ -10,6 +10,9 @@
 //! key cannot sign an unrelated name. It is valid from one hour before minting for 8 days. Leaves
 //! are minted per name on first use and cached for the boot; each carries one DNS SAN, the
 //! serverAuth EKU and the Authority Key Identifier (Python 3.13 refuses a leaf without it).
+//!
+//! [`RunCa::mint`] takes the subtrees themselves (`HostList::ca_subtrees()`), not the host list,
+//! so this module needs nothing of seam S3; the watchdog calls `mint(&hosts.ca_subtrees())`.
 //! Certificate dates are wall time, as X.509 needs; no proxy timer reads them.
 //!
 //! Copied from `crates/goalcup-cli/src/proxy/tls.rs:100-215` (CA and leaves) and
@@ -103,7 +106,7 @@ impl RunCa {
     pub fn mint(subtrees: &[String]) -> Result<RunCa, CaError> {
         let mut names = BTreeSet::new();
         for name in subtrees {
-            if !is_dns_name(name) {
+            if leaf_name(name).as_ref() != Some(name) {
                 return Err(CaError::InvalidName);
             }
             names.insert(name.clone());
@@ -187,22 +190,20 @@ impl RunCa {
 
     /// Writes `run-ca.pem` (the certificate alone) and `bundle.pem` (the run CA, then the OS
     /// roots, certificates only) into `entry_dir`, each a new 0600 file. An existing file or
-    /// link at either path is refused, never followed. The key is not written here.
+    /// link at either path is refused, never followed. The bundle is built before either file is
+    /// written, so a failed OS roots read leaves no file behind. The key is not written here.
     pub fn write_files(&self, entry_dir: &Path) -> io::Result<()> {
-        write_new(&entry_dir.join(RUN_CA_FILE), self.inner.cert_pem.as_bytes())?;
         let bundle = system_roots_source()
             .and_then(|source| bundle_pem(&source, &self.inner.cert_der))
             .map_err(|e| io::Error::new(io::ErrorKind::NotFound, e))?;
+        write_new(&entry_dir.join(RUN_CA_FILE), self.inner.cert_pem.as_bytes())?;
         write_new(&entry_dir.join(BUNDLE_FILE), bundle.as_bytes())
     }
 
     /// The leaf for `name`, minted on first use and kept for the boot. No cap: a pattern entry
     /// can match many names.
     pub fn leaf(&self, name: &str) -> Result<Arc<CertifiedKey>, CaError> {
-        let name = name.trim_end_matches('.').to_ascii_lowercase();
-        if !is_dns_name(&name) {
-            return Err(CaError::InvalidName);
-        }
+        let name = leaf_name(name).ok_or(CaError::InvalidName)?;
         let mut leaves = lock(&self.inner.leaves);
         if let Some(leaf) = leaves.get(&name) {
             return Ok(leaf.clone());
@@ -212,10 +213,17 @@ impl RunCa {
         Ok(leaf)
     }
 
-    /// The harness-facing certificate source: the leaf for the client's SNI. A ClientHello
-    /// without SNI gets none, so the connection layer tunnels those.
+    /// The harness-facing certificate source shared by every connection: the leaf for the
+    /// client's SNI. A ClientHello without SNI gets none from it; for that case the connection
+    /// layer uses [`RunCa::resolver_for`] with the CONNECT host (section 2).
     pub fn resolver(&self) -> Arc<dyn ResolvesServerCert> {
         Arc::new(LeafResolver(self.clone()))
+    }
+
+    /// A certificate source bound to `name`: its leaf whatever the ClientHello says. For a client
+    /// that sent no SNI, where the CONNECT host decides.
+    pub fn resolver_for(&self, name: &str) -> Result<Arc<dyn ResolvesServerCert>, CaError> {
+        Ok(Arc::new(FixedLeaf(self.leaf(name)?)))
     }
 }
 
@@ -258,6 +266,15 @@ impl ResolvesServerCert for LeafResolver {
     }
 }
 
+#[derive(Debug)]
+struct FixedLeaf(Arc<CertifiedKey>);
+
+impl ResolvesServerCert for FixedLeaf {
+    fn resolve(&self, _hello: ClientHello<'_>) -> Option<Arc<CertifiedKey>> {
+        Some(self.0.clone())
+    }
+}
+
 /// The ring provider, named so rustls never consults a process default (PRD-17 T8).
 pub(crate) fn ring_provider() -> Arc<CryptoProvider> {
     Arc::new(rustls::crypto::ring::default_provider())
@@ -290,12 +307,15 @@ fn set_window(params: &mut CertificateParams) {
     params.not_after = epoch + now + CA_VALIDITY;
 }
 
-/// Lowercase labels of letters, digits, `-` and `_`, 1 to 63 bytes, no empty label, at most 253
-/// bytes. No wildcard, port, trailing dot or IP literal.
-fn is_dns_name(name: &str) -> bool {
-    !name.is_empty()
+/// `name` lowercased with one trailing dot dropped, if it is a DNS-style name: labels of letters,
+/// digits, `-` and `_`, 1 to 63 bytes, not starting or ending with `-`, at most 253 bytes in all.
+/// No wildcard or port. An IPv4 literal passes (a CONNECT host may be one); [`leaf_name`] refuses
+/// it. The one name rule of the proxy: the CONNECT head, the SNI and the leaves all use it.
+pub(crate) fn dns_name(name: &str) -> Option<String> {
+    let name = name.to_ascii_lowercase();
+    let name = name.strip_suffix('.').unwrap_or(&name);
+    let valid = !name.is_empty()
         && name.len() <= 253
-        && name.parse::<std::net::IpAddr>().is_err()
         && name.split('.').all(|label| {
             !label.is_empty()
                 && label.len() <= 63
@@ -304,7 +324,13 @@ fn is_dns_name(name: &str) -> bool {
                 && label
                     .bytes()
                     .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-' || b == b'_')
-        })
+        });
+    valid.then(|| name.to_owned())
+}
+
+/// A name a leaf or a subtree may carry: [`dns_name`], and not an IP literal.
+fn leaf_name(name: &str) -> Option<String> {
+    dns_name(name).filter(|n| n.parse::<std::net::IpAddr>().is_err())
 }
 
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {

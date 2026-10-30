@@ -6,6 +6,7 @@
 //! Nothing here logs. Errors are fixed text: never a header value, a body byte or a target.
 
 use crate::pipeline::{Mono, Recorder};
+use crate::proxy::ca::dns_name;
 use bytes::{Bytes, BytesMut};
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -25,7 +26,9 @@ pub const HEAD_GUARD: usize = 8 * 1024;
 /// How long the CONNECT head may take to arrive. The only deadline of admission.
 pub const HEAD_DEADLINE: Duration = Duration::from_secs(30);
 
-/// Memory guard `client_hello`: the most bytes held while reading a ClientHello.
+/// Memory guard `client_hello`: the most bytes held while reading a ClientHello, counted on the
+/// wire, TLS record headers included (PRD-01's tail `limit` 65536). A handshake message just
+/// under 64 KiB that needs more than 64 KiB of records is past the guard.
 pub const CLIENT_HELLO_GUARD: usize = 64 * 1024;
 
 /// A listed target is retried until this long after the first attempt.
@@ -34,7 +37,8 @@ pub const LISTED_RETRY_FOR: Duration = Duration::from_secs(25);
 pub const RETRY_PAUSE_FIRST: Duration = Duration::from_millis(250);
 /// The longest pause between two connect rounds.
 pub const RETRY_PAUSE_MAX: Duration = Duration::from_secs(2);
-/// One upstream address attempt, so one dead route cannot hold the others back.
+/// One upstream address attempt while another address of the round remains, so one dead route
+/// cannot hold the others back (IPv4 to IPv6). The last address waits for the kernel.
 pub const CONNECT_ATTEMPT: Duration = Duration::from_secs(5);
 
 /// Upstream TCP keepalive: idle time, probe interval, probes.
@@ -55,7 +59,8 @@ pub struct Head {
     pub rest: Bytes,
 }
 
-/// A head that gets a non-`200` answer. `host` is set only when the head parsed.
+/// A head that gets a non-`200` answer. `host` is set only when the head parsed (a `405` whose
+/// target names a host).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Refused {
     /// `400` broken line or a head that did not arrive in time, `405` a method other than
@@ -139,9 +144,24 @@ fn parse_head(head: &[u8]) -> Result<(String, u16), NoHead> {
         }
     }
     if method != b"CONNECT" {
-        return Err(NoHead::status(405));
+        return Err(NoHead::Refused(Refused {
+            status: 405,
+            host: target_host(target),
+        }));
     }
     parse_authority(target).ok_or_else(broken)
+}
+
+/// The host of a non-CONNECT request target (`http://host:port/path` or `host:port`), never its
+/// userinfo, path or query.
+fn target_host(target: &[u8]) -> Option<String> {
+    let target = std::str::from_utf8(target).ok()?;
+    let rest = target.split_once("://").map_or(target, |(_, rest)| rest);
+    let authority = rest.split(['/', '?', '#']).next()?;
+    let host = authority
+        .rsplit_once('@')
+        .map_or(authority, |(_, host)| host);
+    dns_name(host.rsplit_once(':').map_or(host, |(name, _)| name))
 }
 
 /// RFC 9110 `tchar`.
@@ -160,30 +180,13 @@ fn parse_authority(target: &[u8]) -> Option<(String, u16)> {
         )
     } else {
         let (host, port) = target.rsplit_once(':')?;
-        (normalize_host(host)?, port)
+        (dns_name(host)?, port)
     };
     if port.is_empty() || port.len() > 5 || !port.bytes().all(|b| b.is_ascii_digit()) {
         return None;
     }
     let port: u16 = port.parse().ok()?;
     (port != 0).then_some((host, port))
-}
-
-/// Lowercases a name and drops one trailing dot. DNS-style labels (letters, digits, hyphen,
-/// underscore) and IPv4 literals only.
-fn normalize_host(host: &str) -> Option<String> {
-    let host = host.to_ascii_lowercase();
-    let host = host.strip_suffix('.').unwrap_or(&host);
-    let valid = !host.is_empty()
-        && host.len() <= 253
-        && host.split('.').all(|label| {
-            !label.is_empty()
-                && label.len() <= 63
-                && label
-                    .bytes()
-                    .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-' || b == b'_')
-        });
-    valid.then(|| host.to_owned())
 }
 
 /// Writes one fixed answer: `200`, `400`, `405`, `431` or `502` (any other status is a `400`).
@@ -207,10 +210,6 @@ pub struct RefusalNotes {
 }
 
 impl RefusalNotes {
-    pub fn new() -> RefusalNotes {
-        RefusalNotes::default()
-    }
-
     /// Writes the note unless one for this host and status was written within the minute.
     pub fn note(&self, rec: &Recorder, host: Option<&str>, status: u16) {
         let now = rec.now();
@@ -233,18 +232,21 @@ impl RefusalNotes {
 }
 
 /// Connects the upstream leg. Each round re-resolves `name` (or takes `test_override`) and tries
-/// every address, IPv4 first, each for at most [`CONNECT_ATTEMPT`]. A `listed` target is retried
-/// until [`LISTED_RETRY_FOR`], pausing 250 ms doubling to 2 s; any other gets one round, since
-/// retrying the agent's own traffic changes the run (PRD-17 C6). Nothing has been sent upstream,
-/// so a retry replays nothing. The socket gets `TCP_NODELAY` and keepalive; no idle timeout and
-/// no `TCP_USER_TIMEOUT`.
+/// every address, IPv4 first, each but the last for at most [`CONNECT_ATTEMPT`]; the last waits
+/// for the kernel, so no deadline of our own fails a connect the harness would make without us.
+/// A `listed` target is retried until [`LISTED_RETRY_FOR`] after the first attempt, timed by
+/// `rec.now()` (rule 9), pausing 250 ms doubling to 2 s; any other gets one round, since retrying
+/// the agent's own traffic changes the run (PRD-17 C6). Nothing has been sent upstream, so a
+/// retry replays nothing. The socket gets `TCP_NODELAY` and keepalive; no idle timeout and no
+/// `TCP_USER_TIMEOUT`.
 pub async fn connect_upstream(
+    rec: &Recorder,
     name: &str,
     port: u16,
     listed: bool,
     test_override: Option<SocketAddr>,
 ) -> io::Result<TcpStream> {
-    let until = tokio::time::Instant::now() + LISTED_RETRY_FOR;
+    let until = rec.now().ns() + LISTED_RETRY_FOR.as_nanos() as u64;
     let mut pause = RETRY_PAUSE_FIRST;
     loop {
         let round = match test_override {
@@ -265,7 +267,7 @@ pub async fn connect_upstream(
             Ok(stream) => return Ok(stream),
             Err(e) => e,
         };
-        if !listed || tokio::time::Instant::now() + pause >= until {
+        if !listed || rec.now().ns() + pause.as_nanos() as u64 >= until {
             return Err(err);
         }
         tokio::time::sleep(pause).await;
@@ -275,8 +277,14 @@ pub async fn connect_upstream(
 
 async fn connect_addresses(addrs: Vec<SocketAddr>) -> io::Result<TcpStream> {
     let mut last = io::Error::new(io::ErrorKind::NotFound, "upstream name has no address");
-    for addr in addrs {
-        match tokio::time::timeout(CONNECT_ATTEMPT, TcpStream::connect(addr)).await {
+    let count = addrs.len();
+    for (i, addr) in addrs.into_iter().enumerate() {
+        let attempt = if i + 1 < count {
+            tokio::time::timeout(CONNECT_ATTEMPT, TcpStream::connect(addr)).await
+        } else {
+            Ok(TcpStream::connect(addr).await)
+        };
+        match attempt {
             Ok(Ok(stream)) => {
                 let _ = stream.set_nodelay(true);
                 let keepalive = socket2::TcpKeepalive::new()
@@ -336,12 +344,14 @@ where
 /// What the ClientHello says.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ClientHelloInfo {
-    /// The `host_name`, lowercase, one trailing dot dropped.
+    /// The `host_name` as `dns_name` gives it: lowercase, one trailing dot dropped.
     pub sni: Option<String>,
     /// The ALPN names in the client's order.
     pub alpn: Vec<Vec<u8>>,
     /// SHA-256 over the legacy version and the sorted cipher suites, extension types and
-    /// supported groups, GREASE values (RFC 8701) removed.
+    /// supported groups, GREASE values (RFC 8701) removed. `padding`, `pre_shared_key` and
+    /// `early_data` are left out of the types: they come and go between a client's fresh and
+    /// resumed connections.
     pub fingerprint: [u8; 32],
     /// Every byte read, for replay.
     pub bytes: Bytes,
@@ -410,6 +420,9 @@ const CLIENT_HELLO: u8 = 1;
 const EXT_SERVER_NAME: u16 = 0;
 const EXT_SUPPORTED_GROUPS: u16 = 10;
 const EXT_ALPN: u16 = 16;
+/// Extension types a client sends on some connections only (padding, pre_shared_key,
+/// early_data): not part of the fingerprint.
+const EXT_PER_CONNECTION: [u16; 3] = [21, 41, 42];
 
 /// Joins consecutive handshake records and parses the ClientHello once it is whole. Pure:
 /// callable on any prefix.
@@ -513,6 +526,7 @@ fn parse_body(body: &[u8]) -> Option<Facts> {
     }
     let mut hash = Sha256::new();
     hash.update(version.to_be_bytes());
+    types.retain(|t| !EXT_PER_CONNECTION.contains(t));
     for list in [&mut suites, &mut types, &mut groups] {
         list.retain(|&v| !is_grease(v));
         list.sort_unstable();
@@ -537,7 +551,7 @@ fn u16_list(bytes: &[u8]) -> Vec<u16> {
         .collect()
 }
 
-/// A `server_name` body (RFC 6066): one `host_name` at most, non-empty ASCII.
+/// A `server_name` body (RFC 6066): one `host_name` at most, a DNS-style name (`dns_name`).
 fn parse_server_name(data: &[u8]) -> Option<Option<String>> {
     let mut r = Reader(data);
     let list = usize::from(r.u16()?);
@@ -550,11 +564,10 @@ fn parse_server_name(data: &[u8]) -> Option<Option<String>> {
         let len = r.u16()?;
         let name = r.take(usize::from(len))?;
         if kind == 0 {
-            if host.is_some() || name.is_empty() || !name.is_ascii() {
+            if host.is_some() {
                 return None;
             }
-            let name = std::str::from_utf8(name).ok()?.to_ascii_lowercase();
-            host = Some(name.strip_suffix('.').map(str::to_owned).unwrap_or(name));
+            host = Some(dns_name(std::str::from_utf8(name).ok()?)?);
         }
     }
     Some(host)
@@ -608,19 +621,6 @@ pub struct PrefixedIo<T> {
 impl<T> PrefixedIo<T> {
     pub fn new(prefix: Bytes, inner: T) -> PrefixedIo<T> {
         PrefixedIo { prefix, inner }
-    }
-
-    pub fn get_ref(&self) -> &T {
-        &self.inner
-    }
-
-    pub fn get_mut(&mut self) -> &mut T {
-        &mut self.inner
-    }
-
-    /// The inner stream; prefix bytes not yet read are dropped.
-    pub fn into_inner(self) -> T {
-        self.inner
     }
 }
 

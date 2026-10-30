@@ -5,10 +5,13 @@
 //! the client, so both legs speak one protocol and bytes pass unchanged. Configs are built once
 //! per offer and per chosen protocol, never per connection: three upstream client configs over
 //! the Mozilla roots plus the OS store, and three harness-facing server configs sharing the run
-//! CA's leaf resolver. The ring provider is named on every builder (PRD-17 T8).
+//! CA's leaf resolver, which picks the leaf by SNI. A client that sends no SNI gets a config of its
+//! own from [`Tls::server_for`], bound to the CONNECT host (section 2). The ring provider is named
+//! on every builder (PRD-17 T8).
 
-use crate::proxy::ca::{RunCa, os_roots, ring_provider};
+use crate::proxy::ca::{CaError, RunCa, os_roots, ring_provider};
 use rustls::pki_types::CertificateDer;
+use rustls::server::ResolvesServerCert;
 use rustls::{AlertDescription, ClientConfig, Error, PeerMisbehaved, RootCertStore, ServerConfig};
 use std::fmt;
 use std::io;
@@ -45,6 +48,7 @@ pub fn upstream_offer(client_alpn: &[Vec<u8>]) -> Offer {
 
 /// The six configs, built once per boot and shared.
 pub struct Tls {
+    ca: RunCa,
     up_h1: Arc<ClientConfig>,
     up_h2: Arc<ClientConfig>,
     up_none: Arc<ClientConfig>,
@@ -78,22 +82,15 @@ impl Tls {
             Arc::new(config)
         };
         let resolver = ca.resolver();
-        let server = |alpn: &[&[u8]]| {
-            let mut config = ServerConfig::builder_with_provider(ring_provider())
-                .with_safe_default_protocol_versions()
-                .expect("the ring provider supports the default TLS versions")
-                .with_no_client_auth()
-                .with_cert_resolver(resolver.clone());
-            config.alpn_protocols = alpn.iter().map(|p| p.to_vec()).collect();
-            Arc::new(config)
-        };
+        let server = |alpn: &[u8]| server_config(resolver.clone(), Some(alpn));
         Tls {
+            ca: ca.clone(),
             up_h1: client(&[H1]),
             up_h2: client(&[H2]),
             up_none: client(&[]),
-            down_h1: server(&[H1]),
-            down_h2: server(&[H2]),
-            down_none: server(&[]),
+            down_h1: server(H1),
+            down_h2: server(H2),
+            down_none: server_config(resolver.clone(), None),
         }
     }
 
@@ -107,7 +104,8 @@ impl Tls {
         }
     }
 
-    /// The harness-facing config offering exactly what upstream chose (`None`: no ALPN).
+    /// The harness-facing config offering exactly what upstream chose (`None`: no ALPN), for a
+    /// ClientHello that carries SNI.
     pub fn server(&self, chosen_alpn: Option<&[u8]>) -> Arc<ServerConfig> {
         match chosen_alpn {
             Some(H1) => self.down_h1.clone(),
@@ -115,6 +113,28 @@ impl Tls {
             _ => self.down_none.clone(),
         }
     }
+
+    /// As [`Tls::server`], for a ClientHello without SNI: the leaf is for `connect_host`. Built
+    /// per such connection, which is rare.
+    pub fn server_for(
+        &self,
+        chosen_alpn: Option<&[u8]>,
+        connect_host: &str,
+    ) -> Result<Arc<ServerConfig>, CaError> {
+        let alpn = chosen_alpn.filter(|p| *p == H1 || *p == H2);
+        Ok(server_config(self.ca.resolver_for(connect_host)?, alpn))
+    }
+}
+
+/// A harness-facing config offering `alpn` alone, or no ALPN.
+fn server_config(resolver: Arc<dyn ResolvesServerCert>, alpn: Option<&[u8]>) -> Arc<ServerConfig> {
+    let mut config = ServerConfig::builder_with_provider(ring_provider())
+        .with_safe_default_protocol_versions()
+        .expect("the ring provider supports the default TLS versions")
+        .with_no_client_auth()
+        .with_cert_resolver(resolver);
+    config.alpn_protocols = alpn.map(|p| vec![p.to_vec()]).unwrap_or_default();
+    Arc::new(config)
 }
 
 /// How the harness ended a handshake on our leaf.
@@ -143,33 +163,28 @@ pub fn classify_client_handshake(err: &io::Error) -> Refusal {
     Refusal::Alert(name)
 }
 
-/// Why the upstream handshake failed.
+/// Why the upstream handshake failed. Every failure falls back to a working tunnel on a fresh
+/// TCP connection (section 1 rule 3), never a dropped harness connection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UpstreamFail {
-    /// A certificate that does not validate, or a client-certificate demand: a fresh TCP
-    /// connection and a tunnel, GAP 13 `upstream_untrusted`. Trust is never lowered.
-    Untrusted,
-    /// Upstream rejected the offered ALPN: a fresh TCP connection and a tunnel with
-    /// `alpn_other`, GAP 14 `protocol_other`.
+    /// Upstream rejected the offered ALPN: a tunnel with `alpn_other`, GAP 14 `protocol_other`.
     AlpnRejected,
-    /// Anything else (reset, EOF, version mismatch).
-    Other,
+    /// Everything else: a certificate that does not validate, a client-certificate demand (TLS
+    /// 1.3 `certificate_required`, or under TLS 1.2 usually `handshake_failure` or
+    /// `bad_certificate` after our empty certificate), a reset, an EOF, a version or cipher
+    /// mismatch. A tunnel with `upstream_untrusted`, GAP 13: the harness then meets the real
+    /// server itself, so trust is never lowered.
+    Untrusted,
 }
 
 /// Classifies the error of the upstream handshake.
 pub fn classify_upstream_handshake(err: &io::Error) -> UpstreamFail {
     match rustls_error(err) {
-        Some(Error::InvalidCertificate(_) | Error::NoCertificatesPresented) => {
-            UpstreamFail::Untrusted
-        }
-        Some(Error::AlertReceived(AlertDescription::CertificateRequired)) => {
-            UpstreamFail::Untrusted
-        }
         Some(
             Error::AlertReceived(AlertDescription::NoApplicationProtocol)
             | Error::PeerMisbehaved(PeerMisbehaved::SelectedUnofferedApplicationProtocol),
         ) => UpstreamFail::AlpnRejected,
-        _ => UpstreamFail::Other,
+        _ => UpstreamFail::Untrusted,
     }
 }
 

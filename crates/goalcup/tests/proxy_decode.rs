@@ -1,21 +1,34 @@
 //! PRD-03 acceptance for body decoding (section 7 and the `decoder_window` guard of section 11):
-//! each coding decodes to the plaintext, an unknown coding writes no body byte, and a window that
-//! does not fit `Recorder::room()` leaves the body undecoded. The cases PRD-17 owns (gzip members
+//! each coding decodes to the plaintext (a gzip header of any length included: no cap of our own),
+//! an unknown coding writes no body byte, and a window that does not fit `Recorder::room()` leaves
+//! the body undecoded. The cases PRD-17 owns (gzip members
 //! and a bad CRC, deflate split after byte one, the zstd buffer edge, a corrupt tail, a bomb) are
 //! in `lessons_decode.rs`.
 
 use bytes::Bytes;
 use flate2::Compression;
+use flate2::GzBuilder;
 use flate2::write::{DeflateEncoder, GzEncoder, ZlibEncoder};
 use goalcup::pipeline::Recorder;
 use goalcup::proxy::decode::{BodyDecoder, Step, Unsupported, parse_codings};
 use std::io::Write;
 
-/// Made with `brotli -q 11` from the synthetic text beside it, not a real capture.
+/// Made with `brotli -q 11` from [`text`], not a real capture.
 const BR: &[u8] = include_bytes!("proxy_fixtures/anthropic-sse.br");
-const TEXT: &[u8] = include_bytes!("proxy_fixtures/anthropic-sse.txt");
 const PIECE: usize = 32 * 1024;
 const LARGE_ROOM: u64 = 1 << 30;
+
+/// 2,000 synthetic SSE events, the plaintext of [`BR`].
+fn text() -> Vec<u8> {
+    (0..2000)
+        .map(|i| {
+            format!(
+                "event: content_block_delta\ndata: {{\"index\":{i},\"delta\":{{\"text\":\"token {i}\"}}}}\n\n"
+            )
+        })
+        .collect::<String>()
+        .into_bytes()
+}
 
 /// Feeds `wire` in irregular splits and answers the last step with every piece handed out.
 fn decode(codings: &[&str], wire: &[u8], room: u64) -> (Recorder, Step, Vec<Bytes>) {
@@ -36,7 +49,7 @@ fn decode(codings: &[&str], wire: &[u8], room: u64) -> (Recorder, Step, Vec<Byte
     }
     assert_eq!(dec.wire(), wire.len() as u64);
     if step == Step::Ok {
-        step = dec.finish(&mut out);
+        step = dec.finish();
     }
     (rec, step, pieces)
 }
@@ -59,6 +72,17 @@ fn gzip(data: &[u8]) -> Vec<u8> {
 
 fn zlib(data: &[u8]) -> Vec<u8> {
     let mut e = ZlibEncoder::new(Vec::new(), Compression::default());
+    e.write_all(data).unwrap();
+    e.finish().unwrap()
+}
+
+/// A gzip member whose extra field, name and comment take its header past 128 KiB.
+fn gzip_long_header(data: &[u8]) -> Vec<u8> {
+    let mut e = GzBuilder::new()
+        .extra(vec![1; 65_000])
+        .filename(vec![b'n'; 40_000])
+        .comment(vec![b'c'; 40_000])
+        .write(Vec::new(), Compression::default());
     e.write_all(data).unwrap();
     e.finish().unwrap()
 }
@@ -116,9 +140,11 @@ impl Bits {
 
 #[test]
 fn each_coding_decodes_to_the_plaintext() {
-    let text = TEXT.repeat(2);
-    assert_plain(&["br"], BR, TEXT);
+    let plain = text();
+    let text = plain.repeat(2);
+    assert_plain(&["br"], BR, &plain);
     assert_plain(&["gzip"], &gzip(&text), &text);
+    assert_plain(&["gzip"], &gzip_long_header(&text), &text);
     assert_plain(&["identity", "X-Gzip"], &gzip(&text), &text);
     assert_plain(&["deflate"], &zlib(&text), &text);
     assert_plain(&["deflate"], &raw_deflate(&text), &text);
@@ -145,10 +171,24 @@ fn an_unknown_coding_writes_no_body_byte() {
 
 #[test]
 fn a_window_over_room_is_not_decoded() {
-    let wire = br_4mib(TEXT);
-    let room = 1 << 20;
+    let plain = text();
+    let wire = br_4mib(&plain);
+    let room = 32 * 1024;
     let (rec, step, pieces) = decode(&["br"], &wire, room);
     assert_eq!(step, Step::NotDecoded { limit: room });
+    assert!(pieces.is_empty());
+    assert_eq!(rec.room(), room);
+
+    // `br, gzip`: the gzip stage holds its 32 KiB when the brotli window is refused, and the
+    // limit is the room at that moment.
+    let room = 80 * 1024;
+    let (rec, step, pieces) = decode(&["br, gzip"], &gzip(&wire), room);
+    assert_eq!(
+        step,
+        Step::NotDecoded {
+            limit: room - 32 * 1024
+        }
+    );
     assert!(pieces.is_empty());
     assert_eq!(rec.room(), room);
 
@@ -157,8 +197,8 @@ fn a_window_over_room_is_not_decoded() {
     let mut out = |b: Bytes| pieces.push(b);
     let mut dec = BodyDecoder::new(parse_codings(&["br"]).unwrap(), &rec);
     assert_eq!(dec.push(&wire, &mut out), Step::Ok);
-    assert!(rec.room() <= LARGE_ROOM - (4 << 20), "the window is held");
-    assert_eq!(dec.finish(&mut out), Step::Ok);
-    assert!(pieces.concat() == TEXT);
+    assert!(rec.room() < LARGE_ROOM, "the window is counted");
+    assert_eq!(dec.finish(), Step::Ok);
+    assert!(pieces.concat() == plain);
     assert_eq!(rec.room(), LARGE_ROOM);
 }

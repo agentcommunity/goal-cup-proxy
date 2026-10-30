@@ -1,24 +1,23 @@
 //! PRD-03 acceptance for the passive WebSocket parser (`proxy_ws.rs`): the Codex-shaped fixture
 //! inflates to its messages with and without context takeover, a fragmented message stays one
-//! message around a control frame, control frames are recorded, client masking is removed, and a
-//! close code reaches the END tail.
+//! message around a control frame (and a control frame inside a message past 32 KiB is written
+//! after it, so the masker sees the message as one run), control frames are recorded, client
+//! masking is removed, and a close code reaches the END tail.
 
 use bytes::Bytes;
 use flate2::{Compress, Compression, FlushCompress};
 use goalcup::pipeline::{Call, Calls, EndReason, Recorder, Sid, StreamKind};
 use goalcup::proxy::ws::{Deflate, Dir, WsConn, negotiate};
-use std::hash::BuildHasher;
 
 const FIXTURE: &str = include_str!("proxy_fixtures/codex-ws.jsonl");
 const PIECE: usize = 32 * 1024;
 
+/// A fixed seed, so a failure reproduces.
+const SEED: u64 = 0x2545_f491_4f6c_dd1d;
+
 struct Rng(u64);
 
 impl Rng {
-    fn new() -> Rng {
-        Rng(std::collections::hash_map::RandomState::new().hash_one(0u8) | 1)
-    }
-
     fn next(&mut self) -> u64 {
         self.0 ^= self.0 << 13;
         self.0 ^= self.0 >> 7;
@@ -140,20 +139,17 @@ fn streams(calls: &[Call]) -> (Sid, Sid) {
 }
 
 /// The messages of one stream, `(opcode, bytes)` in the order they end. Control pieces are whole
-/// messages; data pieces join up to `fin`. Offsets must run on with no hole, every piece at most
-/// 32 KiB.
+/// messages; data pieces join up to `fin`. Every piece is at most 32 KiB.
 fn messages(calls: &[Call], sid: Sid) -> Vec<(u8, Vec<u8>)> {
-    let (mut off, mut data, mut out) = (0u64, Vec::new(), Vec::new());
+    let (mut data, mut out) = (Vec::new(), Vec::new());
     for call in calls {
-        let Call::Ws(s, _, at, opcode, fin, bytes) = call else {
+        let Call::Ws(s, _, _, opcode, fin, bytes) = call else {
             continue;
         };
         if *s != sid {
             continue;
         }
-        assert_eq!(*at, off, "offsets run over the inflated bytes");
         assert!(bytes.len() <= PIECE, "a piece is at most 32 KiB");
-        off += bytes.len() as u64;
         if opcode & 0x8 != 0 {
             assert!(fin, "a control message is one piece");
             out.push((*opcode, bytes.to_vec()));
@@ -185,14 +181,14 @@ fn end_of(calls: &[Call], sid: Sid) -> (EndReason, Option<serde_json::Value>) {
 }
 
 fn run_fixture(deflate: Deflate, takeover: bool) {
-    let mut rng = Rng::new();
+    let mut rng = Rng(SEED);
     let (rec, calls): (Recorder, Calls) = Recorder::for_tests(1 << 30);
     let (up_msgs, down_msgs) = (fixture(Dir::Up), fixture(Dir::Down));
     assert!(up_msgs.len() >= 2 && down_msgs.len() >= 3);
     let up_wire = wire(&up_msgs, takeover, true, &mut rng);
     let down_wire = wire(&down_msgs, takeover, false, &mut rng);
 
-    let mut ws = WsConn::open(&rec, 1, 2, Some(deflate), rec.now());
+    let mut ws = WsConn::open(&rec, 1, 2, Some(deflate));
     // Interleave the two directions in irregular rounds.
     let (mut u, mut d) = (&up_wire[..], &down_wire[..]);
     while !u.is_empty() || !d.is_empty() {
@@ -258,9 +254,9 @@ fn codex_fixture_inflates_without_context_takeover() {
 
 #[test]
 fn fragmented_message_stays_whole_around_a_ping() {
-    let mut rng = Rng::new();
+    let mut rng = Rng(SEED);
     let (rec, calls) = Recorder::for_tests(1 << 30);
-    let mut ws = WsConn::open(&rec, 1, 2, None, rec.now());
+    let mut ws = WsConn::open(&rec, 1, 2, None);
     let mut bytes = frame(false, false, 0x1, b"Hel", Some(rng.key()));
     bytes.extend(frame(true, false, 0x9, b"are you there", Some(rng.key())));
     bytes.extend(frame(false, false, 0x0, b"lo, ", Some(rng.key())));
@@ -291,10 +287,54 @@ fn fragmented_message_stays_whole_around_a_ping() {
     assert_eq!(msgs.len(), 2);
 }
 
+/// A ping between the fragments of a 40,000 byte message, after its first 32 KiB piece went out:
+/// the ping is written after the message's `fin`, so no control bytes or message end fall inside
+/// the data message, and a marker across the 32 KiB cut stays in one run (point 4).
+#[test]
+fn a_ping_inside_a_long_message_is_written_after_it() {
+    let mut rng = Rng(SEED);
+    let (rec, calls) = Recorder::for_tests(1 << 30);
+    let mut ws = WsConn::open(&rec, 1, 2, None);
+    let mut msg: Vec<u8> = (0..40_000u32).map(|i| b'a' + (i % 26) as u8).collect();
+    msg[32_760..32_776].copy_from_slice(b"MARKERMARKER0123");
+    let mut bytes = frame(false, false, 0x1, &msg[..33_000], Some(rng.key()));
+    bytes.extend(frame(true, false, 0x9, b"PINGPAYLOAD", Some(rng.key())));
+    bytes.extend(frame(true, false, 0x0, &msg[33_000..], Some(rng.key())));
+    for b in bytes.chunks(4096) {
+        ws.feed(Dir::Up, rec.now(), b).expect("parsing goes on");
+    }
+    ws.end(rec.now(), EndReason::Complete, 0);
+
+    let all = calls.all();
+    no_gaps(&all);
+    let (up, _) = streams(&all);
+    let pieces: Vec<(u8, bool)> = all
+        .iter()
+        .filter_map(|c| match c {
+            Call::Ws(s, _, _, op, fin, _) if *s == up => Some((*op, *fin)),
+            _ => None,
+        })
+        .collect();
+    let ping = pieces.iter().position(|(op, _)| *op == 0x9).expect("ping");
+    let fin = pieces
+        .iter()
+        .position(|(op, fin)| *op == 0x1 && *fin)
+        .expect("fin");
+    assert!(
+        pieces.len() > 2,
+        "the message went out in more than one piece"
+    );
+    assert!(ping > fin, "the ping follows the data message's last piece");
+    assert_eq!(
+        messages(&all, up),
+        vec![(0x1, msg), (0x9, b"PINGPAYLOAD".to_vec())]
+    );
+}
+
 #[test]
 fn rfc6455_examples_record_unmasked_payloads() {
     let (rec, calls) = Recorder::for_tests(1 << 30);
-    let mut ws = WsConn::open(&rec, 1, 2, None, rec.now());
+    let mut ws = WsConn::open(&rec, 1, 2, None);
     // RFC 6455 section 5.7, byte for byte.
     let up: Vec<u8> = [
         // A single-frame masked text message: "Hello".
@@ -352,9 +392,9 @@ fn rfc6455_examples_record_unmasked_payloads() {
 
 #[test]
 fn close_code_reaches_the_end_tail() {
-    let mut rng = Rng::new();
+    let mut rng = Rng(SEED);
     let (rec, calls) = Recorder::for_tests(1 << 30);
-    let mut ws = WsConn::open(&rec, 1, 2, None, rec.now());
+    let mut ws = WsConn::open(&rec, 1, 2, None);
     let mut up_close = 1000u16.to_be_bytes().to_vec();
     up_close.extend_from_slice(b"done");
     ws.feed(

@@ -108,7 +108,7 @@ async fn rustls_client_hello_gives_sni_and_alpn() {
 }
 
 #[tokio::test]
-async fn fingerprint_ignores_order_and_grease_and_sees_ciphers() {
+async fn fingerprint_ignores_order_grease_and_resumption_and_sees_ciphers() {
     let a = hello(
         &[0x0a0a, 0x1301, 0x1302, 0xc02b],
         &[
@@ -128,6 +128,10 @@ async fn fingerprint_ignores_order_and_grease_and_sees_ciphers() {
             alpn_ext(&[b"http/1.1"]),
             groups_ext(&[0x0017, 0x6a6a, 0x001d]),
             sni_ext("api.anthropic.com"),
+            // Padding and a resumption's early_data and pre_shared_key: same client.
+            (21, vec![0; 40]),
+            (42, vec![]),
+            (41, vec![0; 8]),
         ],
     );
     let c = hello(
@@ -186,9 +190,11 @@ async fn server_speaks_first_is_seen_at_once() {
         .await
         .unwrap();
     let (mut client_leg, _) = front.accept().await.unwrap();
-    let mut upstream_leg = connect_upstream("server-first.test", 25, true, Some(upstream_addr))
-        .await
-        .unwrap();
+    let (rec, _calls) = Recorder::for_tests(1 << 20);
+    let mut upstream_leg =
+        connect_upstream(&rec, "server-first.test", 25, true, Some(upstream_addr))
+            .await
+            .unwrap();
 
     let started = Instant::now();
     let first = tokio::time::timeout(
@@ -204,18 +210,17 @@ async fn server_speaks_first_is_seen_at_once() {
 #[tokio::test]
 async fn non_connect_gets_405_and_one_note_per_minute() {
     let (rec, calls) = Recorder::for_tests(1 << 20);
-    let notes = RefusalNotes::new();
+    let notes = RefusalNotes::default();
     for _ in 0..2 {
-        let mut io: &[u8] = b"GET http://example.com/ HTTP/1.1\r\nHost: example.com\r\n\r\n";
+        let mut io: &[u8] =
+            b"GET http://someone@Example.com:80/x?q=1 HTTP/1.1\r\nHost: example.com\r\n\r\n";
         let got = read_head(&mut io, &rec).await;
-        assert_eq!(
-            got,
-            Err(NoHead::Refused(Refused {
-                status: 405,
-                host: None
-            }))
-        );
-        notes.note(&rec, None, 405);
+        let refused = Refused {
+            status: 405,
+            host: Some("example.com".into()),
+        };
+        assert_eq!(got, Err(NoHead::Refused(refused.clone())));
+        notes.note(&rec, refused.host.as_deref(), refused.status);
     }
     let all = calls.all();
     let refused: Vec<_> = all
@@ -228,7 +233,10 @@ async fn non_connect_gets_405_and_one_note_per_minute() {
     assert_eq!(refused.len(), 1);
     assert_eq!(refused[0]["ev"], "note");
     assert_eq!(refused[0]["status"], 405);
-    assert!(refused[0].get("host").is_none());
+    assert_eq!(
+        refused[0]["host"], "example.com",
+        "the host, never its userinfo"
+    );
     assert!(
         !all.iter().any(|c| matches!(c, Call::Open(..))),
         "a refusal opens no stream"

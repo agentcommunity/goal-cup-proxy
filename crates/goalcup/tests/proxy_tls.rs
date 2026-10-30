@@ -78,6 +78,28 @@ async fn an_imported_ca_signs_leaves_the_first_boots_run_ca_trusts() {
     assert_eq!(&got, b"ping");
 }
 
+/// Section 2: a ClientHello without SNI gets the leaf of the CONNECT host, and the client that
+/// trusts the run CA accepts it.
+#[tokio::test]
+async fn no_sni_gets_the_connect_hosts_leaf() {
+    let ca = RunCa::mint(&["openai.com".to_string()]).unwrap();
+    let tls = Tls::new(&ca, Vec::new());
+    let config = tls.server_for(Some(b"http/1.1"), "api.openai.com").unwrap();
+    let acceptor = TlsAcceptor::from(config);
+    let mut client = (*client_trusting(vec![ca.cert_der().clone()], &[b"http/1.1"])).clone();
+    client.enable_sni = false;
+    let connector = TlsConnector::from(Arc::new(client));
+    let (client_io, server_io) = duplex(64 * 1024);
+    let (server, client) = tokio::join!(
+        acceptor.accept(server_io),
+        connector.connect(name("api.openai.com"), client_io)
+    );
+    let server = server.expect("the server handshake");
+    assert_eq!(server.get_ref().1.server_name(), None, "no SNI was sent");
+    let client = client.expect("the client trusts the CONNECT host's leaf");
+    assert_eq!(client.get_ref().1.alpn_protocol(), Some(&b"http/1.1"[..]));
+}
+
 /// Section 4 point 4, `PreferH1`: what upstream is offered for each client offer.
 #[test]
 fn the_alpn_offer_follows_prefer_h1() {
