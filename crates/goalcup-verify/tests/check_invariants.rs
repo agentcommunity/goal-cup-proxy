@@ -13,7 +13,10 @@ use std::path::PathBuf;
 
 /// A sid of the first OPEN of this kind.
 fn sid_of(recs: &[Record], kind: StreamKind) -> u64 {
-    match &recs[find(recs, |r| matches!(r, Record::Open { skind, .. } if *skind == kind))] {
+    match &recs[find(
+        recs,
+        |r| matches!(r, Record::Open { skind, .. } if *skind == kind),
+    )] {
         Record::Open { sid, .. } => *sid,
         _ => unreachable!(),
     }
@@ -47,7 +50,15 @@ fn m_link_wrong_hash(name: &str) -> PathBuf {
 
 fn m_data_before_open(name: &str) -> PathBuf {
     mutate(&clean(name), None, |r| {
-        let i = find(r, |x| matches!(x, Record::Open { skind: StreamKind::HttpReq, .. }));
+        let i = find(r, |x| {
+            matches!(
+                x,
+                Record::Open {
+                    skind: StreamKind::HttpReq,
+                    ..
+                }
+            )
+        });
         r.swap(i, i + 1);
     })
 }
@@ -55,7 +66,10 @@ fn m_data_before_open(name: &str) -> PathBuf {
 fn m_offset_hole(name: &str) -> PathBuf {
     mutate(&clean(name), None, |r| {
         let s = sid_of(r, StreamKind::Native);
-        let i = find(r, |x| matches!(x, Record::Data { sid, off, .. } if *sid == s && *off > 0));
+        let i = find(
+            r,
+            |x| matches!(x, Record::Data { sid, off, .. } if *sid == s && *off > 0),
+        );
         if let Record::Data { off, .. } = &mut r[i] {
             *off += 10;
         }
@@ -81,24 +95,45 @@ fn m_boot_without_gap(name: &str) -> PathBuf {
     e.crash("killed", 5_000);
     e.count();
     mutate(&e.seal(), None, |r| {
-        r.retain(|x| !matches!(x, Record::Gap { reason: GapReason::RecorderDown, .. }));
+        r.retain(|x| {
+            !matches!(
+                x,
+                Record::Gap {
+                    reason: GapReason::RecorderDown,
+                    ..
+                }
+            )
+        });
     })
 }
 
 fn m_count_off_by_one(name: &str) -> PathBuf {
-    mutate(&clean(name), None, |r| edit_event(r, "count", 0, |v| bump(v, "http_post", 1)))
+    mutate(&clean(name), None, |r| {
+        edit_event(r, "count", 0, |v| bump(v, "http_post", 1))
+    })
 }
 
 fn m_record_after_seal(name: &str) -> PathBuf {
     mutate(&clean(name), None, |r| {
         let json = br#"{"ev":"note","what":"outlived","count":1,"programs":["fake"]}"#.to_vec();
-        r.push(Record::Event { t: MONO0 + 3_600_000 * MS, json });
+        r.push(Record::Event {
+            t: MONO0 + 3_600_000 * MS,
+            json,
+        });
     })
 }
 
 fn m_resp_names_missing_req(name: &str) -> PathBuf {
     mutate(&clean(name), None, |r| {
-        let i = find(r, |x| matches!(x, Record::Open { skind: StreamKind::HttpResp, .. }));
+        let i = find(r, |x| {
+            matches!(
+                x,
+                Record::Open {
+                    skind: StreamKind::HttpResp,
+                    ..
+                }
+            )
+        });
         if let Record::Open { req, .. } = &mut r[i] {
             *req = 99;
         }
@@ -242,9 +277,18 @@ fn clean_entry_passes_as_parts_and_as_fetched_copy() {
     for n in 1..=9 {
         assert_eq!(result(&v, &format!("inv{n}")), "pass", "inv{n}");
     }
-    for id in ["streams_closed", "seen_matches_written", "gap_has_end", "recorder_alive", "inv14",
-        "counts_match_seal", "torn_tail", "native_path_gen", "gaps_named", "record_decode"]
-    {
+    for id in [
+        "streams_closed",
+        "seen_matches_written",
+        "gap_has_end",
+        "recorder_alive",
+        "inv14",
+        "counts_match_seal",
+        "torn_tail",
+        "native_path_gen",
+        "gaps_named",
+        "record_decode",
+    ] {
         assert_eq!(result(&v, id), "pass", "{id}");
     }
     let e = &v["entries"][0];
@@ -274,7 +318,10 @@ fn counts_apart_by_a_suspend_pass() {
 fn unknown_record_kind_warns_and_keeps_the_exit() {
     let mut e = Entry::new("unknown-kind");
     e.standard();
-    e.put(Record::Unknown { kind: 0x20, body: b"future".to_vec() });
+    e.put(Record::Unknown {
+        kind: 0x20,
+        body: b"future".to_vec(),
+    });
     e.count();
     let (code, v) = check(&e.seal(), &[]);
     assert_eq!(result(&v, "record_kind_unknown"), "warn");
@@ -294,7 +341,10 @@ fn gap_reason_8_warns_and_does_not_crash() {
 /// or 2 and names its check. (An unknown record kind is not a loss and exits 0.)
 #[test]
 fn every_mutation_exits_1_or_2_never_3() {
-    let all = FAILS.iter().copied().chain([("gap_reason_unknown", m_gap_reason_8 as Build)]);
+    let all = FAILS
+        .iter()
+        .copied()
+        .chain([("gap_reason_unknown", m_gap_reason_8 as Build)]);
     for (i, (id, build)) in all.enumerate() {
         let (code, v) = check(&build(&format!("vr3-{i}")), &[]);
         assert!(code == 1 || code == 2, "mutation {i} ({id}) exited {code}");

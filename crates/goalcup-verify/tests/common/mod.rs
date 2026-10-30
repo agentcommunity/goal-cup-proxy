@@ -29,20 +29,40 @@ pub const WALL0: u64 = 1_794_009_600_000_000_000;
 pub const MONO0: u64 = 5_000_000_000;
 pub const MASK_RULES: [&str; 3] = ["bearer", "openai_key", "fail_closed"];
 const COUNTERS: [&str; 19] = [
-    "http_req", "http_post", "ws_up_msgs", "ws_down_msgs", "req_whole", "req_holes", "conns",
-    "tunnels", "tunnel_up", "tunnel_down", "wire_bytes", "native_files", "native_bytes",
-    "snapshots", "gaps", "lost_bytes", "lost_unknown", "off_ms", "mask_failclosed_bytes",
+    "http_req",
+    "http_post",
+    "ws_up_msgs",
+    "ws_down_msgs",
+    "req_whole",
+    "req_holes",
+    "conns",
+    "tunnels",
+    "tunnel_up",
+    "tunnel_down",
+    "wire_bytes",
+    "native_files",
+    "native_bytes",
+    "snapshots",
+    "gaps",
+    "lost_bytes",
+    "lost_unknown",
+    "off_ms",
+    "mask_failclosed_bytes",
 ];
 
 pub fn opts() -> PartOptions {
-    PartOptions { window_log: 20, ..PartOptions::default() }
+    PartOptions {
+        window_log: 20,
+        ..PartOptions::default()
+    }
 }
 
 /// A fresh, empty folder under the test target dir.
 pub fn tmp(name: &str) -> PathBuf {
     static N: AtomicU64 = AtomicU64::new(0);
     let n = N.fetch_add(1, Ordering::Relaxed);
-    let d = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("{name}-{}-{n}", std::process::id()));
+    let d =
+        Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("{name}-{}-{n}", std::process::id()));
     let _ = fs::remove_dir_all(&d);
     fs::create_dir_all(&d).unwrap();
     d
@@ -57,7 +77,10 @@ pub struct Clock {
 
 impl Clock {
     pub fn now(&self) -> Now {
-        Now { wall_ns: self.wall0 + self.ns, mono_ns: MONO0 + self.ns }
+        Now {
+            wall_ns: self.wall0 + self.ns,
+            mono_ns: MONO0 + self.ns,
+        }
     }
     /// Moves 1 ms and returns the record clock.
     pub fn tick(&mut self) -> u64 {
@@ -89,7 +112,11 @@ pub struct Tally {
 
 impl Tally {
     fn new(boot: u64, part_mono: u64) -> Self {
-        Self { boot, part_mono, ..Self::default() }
+        Self {
+            boot,
+            part_mono,
+            ..Self::default()
+        }
     }
 
     fn add(&mut self, k: &'static str, v: u64) {
@@ -103,10 +130,21 @@ impl Tally {
 
     pub fn observe(&mut self, r: &Record) {
         match r {
-            Record::Open { sid, skind, conn, meta, .. } => {
+            Record::Open {
+                sid,
+                skind,
+                conn,
+                meta,
+                ..
+            } => {
                 let m: Value = serde_json::from_slice(meta).unwrap_or(Value::Null);
                 let c = self.streams.get(conn).cloned().unwrap_or_default();
-                let mut s = Stream { skind: Some(*skind), host: c.host, decrypt: c.decrypt, ..Stream::default() };
+                let mut s = Stream {
+                    skind: Some(*skind),
+                    host: c.host,
+                    decrypt: c.decrypt,
+                    ..Stream::default()
+                };
                 match skind {
                     StreamKind::Conn => {
                         s.host = m["host"].as_str().unwrap_or_default().to_string();
@@ -126,14 +164,19 @@ impl Tally {
                 self.open += 1;
                 self.streams.insert(*sid, s);
             }
-            Record::Data { sid, flags, bytes, .. } => {
+            Record::Data {
+                sid, flags, bytes, ..
+            } => {
                 let s = self.streams.get(sid).cloned().unwrap_or_default();
                 let len = bytes.len() as u64;
                 match s.skind {
                     Some(StreamKind::Native) => self.add("native_bytes", len),
-                    Some(StreamKind::HttpReq | StreamKind::HttpResp | StreamKind::WsUp | StreamKind::WsDown) => {
-                        self.add("wire_bytes", len)
-                    }
+                    Some(
+                        StreamKind::HttpReq
+                        | StreamKind::HttpResp
+                        | StreamKind::WsUp
+                        | StreamKind::WsDown,
+                    ) => self.add("wire_bytes", len),
                     _ => {}
                 }
                 let msg = flags & FLAG_FIN != 0 && matches!(flags >> 4, 1 | 2);
@@ -144,7 +187,9 @@ impl Tally {
                     self.add("ws_down_msgs", 1);
                 }
             }
-            Record::End { sid, reason, tail, .. } => {
+            Record::End {
+                sid, reason, tail, ..
+            } => {
                 let s = self.streams.get(sid).cloned().unwrap_or_default();
                 if s.skind == Some(StreamKind::HttpReq) && s.post && s.decrypt {
                     self.add("http_post", 1);
@@ -157,7 +202,14 @@ impl Tally {
                 }
                 self.open = self.open.saturating_sub(1);
             }
-            Record::Gap { sid, reason, start_mono, end_mono, lost, .. } => {
+            Record::Gap {
+                sid,
+                reason,
+                start_mono,
+                end_mono,
+                lost,
+                ..
+            } => {
                 self.add("gaps", 1);
                 match lost {
                     0 => self.add("lost_unknown", 1),
@@ -199,7 +251,14 @@ pub fn totals(boots: &[Value], down_ms: &[u64]) -> Value {
     let mut t = Map::new();
     let mut hosts: BTreeMap<String, u64> = BTreeMap::new();
     for k in COUNTERS {
-        t.insert(k.into(), boots.iter().map(|b| b[k].as_u64().unwrap()).sum::<u64>().into());
+        t.insert(
+            k.into(),
+            boots
+                .iter()
+                .map(|b| b[k].as_u64().unwrap())
+                .sum::<u64>()
+                .into(),
+        );
     }
     for b in boots {
         for (h, n) in b["hosts"].as_object().unwrap() {
@@ -272,32 +331,62 @@ impl Entry {
 
     pub fn event(&mut self, v: Value) {
         let t = self.clock.tick();
-        self.put(Record::Event { t, json: v.to_string().into_bytes() });
+        self.put(Record::Event {
+            t,
+            json: v.to_string().into_bytes(),
+        });
     }
 
     pub fn open(&mut self, skind: StreamKind, conn: u64, req: u64, meta: Value) -> u64 {
         self.sid += 1;
         let (sid, t) = (self.sid, self.clock.tick());
-        self.put(Record::Open { sid, t, skind, conn, req, meta: meta.to_string().into_bytes() });
+        self.put(Record::Open {
+            sid,
+            t,
+            skind,
+            conn,
+            req,
+            meta: meta.to_string().into_bytes(),
+        });
         sid
     }
 
     pub fn data(&mut self, sid: u64, off: u64, flags: u8, bytes: &[u8]) {
         let t = self.clock.tick();
-        self.put(Record::Data { sid, t, off, flags, bytes: bytes.to_vec() });
+        self.put(Record::Data {
+            sid,
+            t,
+            off,
+            flags,
+            bytes: bytes.to_vec(),
+        });
     }
 
     pub fn end(&mut self, sid: u64, reason: EndReason, seen: u64, tail: Value) {
         let t = self.clock.tick();
-        let tail = if tail.is_null() { vec![] } else { tail.to_string().into_bytes() };
-        self.put(Record::End { sid, t, reason, seen, tail });
+        let tail = if tail.is_null() {
+            vec![]
+        } else {
+            tail.to_string().into_bytes()
+        };
+        self.put(Record::End {
+            sid,
+            t,
+            reason,
+            seen,
+            tail,
+        });
     }
 
     /// A GAP lasting `ms` that ends now. `start == end` when `ms` is 0.
     pub fn gap(&mut self, sid: u64, reason: GapReason, ms: u64, off: u64, lost: u64, tail: Value) {
         self.clock.ns += ms * MS + MS;
         let end = self.clock.now();
-        let tail = if tail.is_null() { vec![] } else { tail.to_string().into_bytes() };
+        let tail = if tail.is_null() {
+            vec![]
+        } else {
+            tail.to_string().into_bytes()
+        };
         self.put(Record::Gap {
             sid,
             reason,
@@ -327,8 +416,18 @@ impl Entry {
         let q = self.open(StreamKind::HttpReq, c, 0, head);
         let body = br#"{"model":"m1","input":"hi","key":"****"}"#;
         self.data(q, 0, 0, body);
-        self.put(Record::Mask { sid: q, off: body.len() as u64 - 6, len: 4, rule: 0 });
-        self.end(q, EndReason::Complete, body.len() as u64, json!({"wire": body.len()}));
+        self.put(Record::Mask {
+            sid: q,
+            off: body.len() as u64 - 6,
+            len: 4,
+            rule: 0,
+        });
+        self.end(
+            q,
+            EndReason::Complete,
+            body.len() as u64,
+            json!({"wire": body.len()}),
+        );
         let head = json!({"status": 200, "ver": "1.1", "headers": [["content-type", "text/event-stream"]],
             "masked": [], "coding": null, "decoded": true});
         let p = self.open(StreamKind::HttpResp, c, q, head);
@@ -351,7 +450,12 @@ impl Entry {
         let down = self.open(StreamKind::WsDown, c, q, json!({"deflate": false}));
         self.data(up, 0, 0x10, br#"{"type":"response.create","#);
         self.data(up, 26, 0x10 | FLAG_FIN, br#""input":"hi"}"#);
-        self.data(down, 0, 0x10 | FLAG_FIN, br#"{"type":"response.completed"}"#);
+        self.data(
+            down,
+            0,
+            0x10 | FLAG_FIN,
+            br#"{"type":"response.completed"}"#,
+        );
         self.end(up, EndReason::Complete, 39, json!({"close_code": 1000}));
         self.end(down, EndReason::Complete, 29, json!({"close_code": 1000}));
         let tail = json!({"up": 400, "down": 300, "plain_up": 200, "plain_down": 100});
@@ -360,7 +464,8 @@ impl Entry {
 
     /// One native stream of `path` and `gen` from `from`, two DATA pieces, ended `complete`.
     pub fn native(&mut self, path: &str, gen_: u64, from: u64) -> u64 {
-        let meta = json!({"path": path, "gen": gen_, "size_at_open": from, "from": from, "fid": "1a2b"});
+        let meta =
+            json!({"path": path, "gen": gen_, "size_at_open": from, "from": from, "fid": "1a2b"});
         let s = self.open(StreamKind::Native, 0, 0, meta);
         let (a, b) = (b"{\"line\":1}\n", b"{\"line\":2}\n");
         self.data(s, from, 0, a);
@@ -383,7 +488,8 @@ impl Entry {
         self.clock.tick();
         let now = self.clock.now();
         let seq = self.w.as_mut().unwrap().link(now).unwrap().seq;
-        self.counts_at.insert(seq, self.tally.count(now.mono_ns).to_string().into_bytes());
+        self.counts_at
+            .insert(seq, self.tally.count(now.mono_ns).to_string().into_bytes());
         now
     }
 
@@ -396,7 +502,10 @@ impl Entry {
         let t = self.clock.tick();
         let mut v = self.tally.count(t);
         f(&mut v);
-        self.put(Record::Event { t, json: v.to_string().into_bytes() });
+        self.put(Record::Event {
+            t,
+            json: v.to_string().into_bytes(),
+        });
         self.link();
     }
 
@@ -420,7 +529,10 @@ impl Entry {
         let at = self.link();
         let mut w = self.w.take().unwrap();
         w.sync().unwrap();
-        let lost = Record::Event { t: self.clock.tick(), json: br#"{"ev":"note","what":"writer_slow"}"#.to_vec() };
+        let lost = Record::Event {
+            t: self.clock.tick(),
+            json: br#"{"ev":"note","what":"writer_slow"}"#.to_vec(),
+        };
         w.write(&lost).unwrap();
         drop(w);
         self.idle(down_ms);
@@ -430,8 +542,16 @@ impl Entry {
         let mut tail = Map::new();
         tail.insert("cause".into(), cause.into());
         tail.insert("prev".into(), json!({"signal": 9}));
-        let rc = Recover { entry: ENTRY, boot_id: BOOT_ID, now, durable: None, count_at: &count_at,
-            tail, dead_start: None, seal: None };
+        let rc = Recover {
+            entry: ENTRY,
+            boot_id: BOOT_ID,
+            now,
+            durable: None,
+            count_at: &count_at,
+            tail,
+            dead_start: None,
+            seal: None,
+        };
         let r = PartWriter::recover(&self.rec, opts(), rc).unwrap();
         let ms = (now.mono_ns - at.mono_ns) / MS;
         self.boots.push(self.tally.count(at.mono_ns));
@@ -445,7 +565,14 @@ impl Entry {
 
     /// An `after_stop` GAP: bytes relayed after the seal began.
     pub fn after_stop(&mut self) {
-        self.gap(0, GapReason::AfterStop, 2_000, 0, 4097, json!({"conns": 1, "hosts": [HOST]}));
+        self.gap(
+            0,
+            GapReason::AfterStop,
+            2_000,
+            0,
+            4097,
+            json!({"conns": 1, "hosts": [HOST]}),
+        );
     }
 
     /// The final COUNT, the seal with its totals, the seal's LINK. Returns the entry folder.
@@ -458,14 +585,19 @@ impl Entry {
         self.event(json!({"ev": "exit", "code": 0}));
         let t = self.clock.tick();
         let last = self.tally.count(t);
-        self.put(Record::Event { t, json: last.to_string().into_bytes() });
+        self.put(Record::Event {
+            t,
+            json: last.to_string().into_bytes(),
+        });
         let mut boots = self.boots.clone();
         boots.push(last);
         let mut tot = totals(&boots, &self.down_ms);
         f(&mut tot);
-        self.event(json!({"ev": "seal", "reason": "harness_exit", "exit": {"code": 0},
+        self.event(
+            json!({"ev": "seal", "reason": "harness_exit", "exit": {"code": 0},
             "harness": "exited", "workspace_head": null, "dirty": null,
-            "boots": boots.len(), "totals": tot}));
+            "boots": boots.len(), "totals": tot}),
+        );
         self.clock.tick();
         self.w.take().unwrap().seal(self.clock.now()).unwrap();
         self.dir
@@ -518,7 +650,12 @@ pub fn write_raw(rec: &Path, recs: &[Record], bad_link: Option<u64>) {
     let mut last_link: Option<(u64, usize, [u8; 32])> = None;
     for (i, r) in recs.iter().enumerate() {
         let mut r = r.clone();
-        if let Record::Part { raw_offset, prev: p, .. } = &mut r {
+        if let Record::Part {
+            raw_offset,
+            prev: p,
+            ..
+        } = &mut r
+        {
             if i > 0 {
                 flush(rec, start, &buf, last_link.take());
                 buf.clear();
@@ -553,7 +690,11 @@ fn flush(rec: &Path, start: u64, raw: &[u8], link: Option<(u64, usize, [u8; 32])
     }
     fs::write(rec.join(part_name(start)), z).unwrap();
     if let Some((seq, end, hash)) = link {
-        let line = format!("E {seq} {} {c_end} {}\n", start + end as u64, goalcup_format::hex(&hash));
+        let line = format!(
+            "E {seq} {} {c_end} {}\n",
+            start + end as u64,
+            goalcup_format::hex(&hash)
+        );
         fs::write(rec.join(index_name(start)), line).unwrap();
     }
 }
@@ -609,8 +750,14 @@ pub fn fetched(dir: &Path, out: &Path) -> PathBuf {
 
 /// Runs `goalcup-verify` with `args`: the exit code and stdout parsed as JSON, if it is.
 pub fn run(args: &[&str]) -> (i32, Option<Value>) {
-    let out = Command::new(env!("CARGO_BIN_EXE_goalcup-verify")).args(args).output().unwrap();
-    (out.status.code().unwrap_or(-1), serde_json::from_slice(&out.stdout).ok())
+    let out = Command::new(env!("CARGO_BIN_EXE_goalcup-verify"))
+        .args(args)
+        .output()
+        .unwrap();
+    (
+        out.status.code().unwrap_or(-1),
+        serde_json::from_slice(&out.stdout).ok(),
+    )
 }
 
 /// `check <dir> --json [extra]`.
@@ -618,7 +765,10 @@ pub fn check(dir: &Path, extra: &[&str]) -> (i32, Value) {
     let mut args = vec!["check", dir.to_str().unwrap(), "--json"];
     args.extend_from_slice(extra);
     let (code, v) = run(&args);
-    (code, v.unwrap_or_else(|| panic!("no S6 JSON for {dir:?}, exit {code}")))
+    (
+        code,
+        v.unwrap_or_else(|| panic!("no S6 JSON for {dir:?}, exit {code}")),
+    )
 }
 
 /// The first entry's check item with this id.
@@ -638,6 +788,11 @@ pub fn result<'a>(v: &'a Value, id: &str) -> &'a str {
 pub fn ids_with(v: &Value, res: &str) -> Vec<String> {
     v["entries"][0]["checks"]
         .as_array()
-        .map(|c| c.iter().filter(|c| c["result"] == res).map(|c| c["id"].as_str().unwrap().to_string()).collect())
+        .map(|c| {
+            c.iter()
+                .filter(|c| c["result"] == res)
+                .map(|c| c["id"].as_str().unwrap().to_string())
+                .collect()
+        })
         .unwrap_or_default()
 }

@@ -14,7 +14,11 @@ use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 fn no_fail(v: &Value) {
-    assert!(ids_with(v, "fail").is_empty(), "failed: {:?}", ids_with(v, "fail"));
+    assert!(
+        ids_with(v, "fail").is_empty(),
+        "failed: {:?}",
+        ids_with(v, "fail")
+    );
 }
 
 /// Checks a recovered entry: exit 1, `inv6` named with one gap of this cause and length.
@@ -23,7 +27,10 @@ fn assert_one_down_gap(dir: &Path, cause: &str, ms: u64) {
     no_fail(&v);
     assert_eq!(code, 1);
     assert_eq!(result(&v, "inv6"), "named");
-    let gaps = item(&v, "inv6")["facts"]["gaps"].as_array().unwrap().clone();
+    let gaps = item(&v, "inv6")["facts"]["gaps"]
+        .as_array()
+        .unwrap()
+        .clone();
     assert_eq!(gaps.len(), 1, "{gaps:?}");
     assert_eq!(gaps[0]["cause"], cause);
     assert_eq!(gaps[0]["ms"], ms);
@@ -92,7 +99,10 @@ fn unsealed_crashed_entry_is_named() {
 
 /// An unsealed entry whose last COUNT is an hour old by the wall clock.
 fn stale_live_entry(name: &str) -> std::path::PathBuf {
-    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos() as u64;
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos() as u64;
     let mut e = Entry::at(name, now - 3_600 * 1_000_000_000);
     e.standard();
     e.leave()
