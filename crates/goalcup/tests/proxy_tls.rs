@@ -83,7 +83,11 @@ async fn an_imported_ca_signs_leaves_the_first_boots_run_ca_trusts() {
 fn the_alpn_offer_follows_prefer_h1() {
     let ca = RunCa::mint(&["openai.com".to_string()]).unwrap();
     let tls = Tls::new(&ca, Vec::new());
-    type Case = (&'static [&'static str], Offer, Option<&'static [&'static str]>);
+    type Case = (
+        &'static [&'static str],
+        Offer,
+        Option<&'static [&'static str]>,
+    );
     let cases: [Case; 5] = [
         (&["h2", "http/1.1"], Offer::Http1, Some(&["http/1.1"][..])),
         (&["http/1.1"], Offer::Http1, Some(&["http/1.1"][..])),
