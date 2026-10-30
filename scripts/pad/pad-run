@@ -1,0 +1,330 @@
+#!/usr/bin/env python3.11
+"""The test pad, box half (PRD-12 sections 3 to 6 and 8), `mode = "micro"` with `server = "off"`:
+    pad-run <run dir> setup|start|wait-calls N|look|seal|verify|wipe      (pad writes settings.json)
+Each step ends with one line `PADSTEP {"result":..,"saw":..}` and exits 0, also on a failure; 2 is a
+usage error. Known values (keys, plants, the remote password) never leave the box: panes are replaced
+before a file gets them and the scans run here. No key or planted value is ever printed, logged or an
+argument. Python 3.11 standard library only.
+"""
+import base64, datetime, glob, json, os, re, secrets, shlex, shutil, subprocess, sys, tarfile, time, urllib.parse  # noqa: E401
+
+KEYS = os.path.expanduser("~/.pad-keys")
+PAD = os.path.dirname(os.path.abspath(__file__))
+NO_BUILD = "no goalcup build"
+STEPS = ("setup", "start", "wait-calls", "look", "seal", "verify", "wipe")
+
+
+class Step(Exception):  # a step's end: args are (result, saw)
+    pass
+
+
+def forms(v):
+    """The forms PRD-08 scans: raw, base64 in all three alignments, percent and JSON-escaped."""
+    b, out = v.encode(), {v, urllib.parse.quote(v, safe=""), json.dumps(v)[1:-1]}
+    for k in range(3):  # only the base64 characters made of the value's own bits
+        out.add(base64.b64encode(b"\0" * k + b).decode()[-(-8 * k // 6):8 * (k + len(b)) // 6])
+    return {f for f in out if len(f) >= 8}
+
+
+def replace_known(text, values):
+    """Every form of every known value in `text` becomes `[known:<n>]`; returns (text, count)."""
+    count = 0
+    for f, n in sorted(((f, n) for n, v in enumerate(values, 1) if v for f in forms(v)), key=lambda p: -len(p[0])):
+        count += text.count(f)
+        text = text.replace(f, "[known:%d]" % n)
+    return text, count
+
+
+def sh(argv, timeout=120, stdin=subprocess.DEVNULL, **kw):
+    return subprocess.run(argv, capture_output=True, text=True, timeout=timeout, stdin=stdin, **kw)
+
+
+def tool(name):  # ~/bin first (pad puts the build there), then PATH
+    mine = os.path.expanduser("~/bin/" + name)
+    return mine if os.access(mine, os.X_OK) else shutil.which(name)
+
+
+def write(path, text, mode=0o600):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with os.fdopen(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, mode), "w") as f:
+        f.write(text)
+    os.chmod(path, mode)
+
+
+def append(path, obj):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "a") as f:
+        f.write(json.dumps(dict(obj, at=datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"))) + "\n")
+
+
+def loads(text=None, path=None):
+    try:
+        got = json.loads(text if path is None else open(path).read())
+    except (OSError, ValueError):
+        return {}
+    return got if isinstance(got, dict) else {}
+
+
+def wait(ok, limit, every):
+    end = time.time() + limit
+    while time.time() < end:
+        if ok():
+            return True
+        time.sleep(every)
+    return bool(ok())
+
+
+class Run:
+    def __init__(self, run):
+        self.run, self.s, self.st = run, loads(path=os.path.join(run, "settings.json")), loads(path=os.path.join(run, "state.json"))
+        self.h, self.project = self.s.get("harness", {}), os.path.join(run, "project")  # wipe needs no settings
+        self.env = dict(os.environ, GOALCUP_HOME=os.path.join(run, "home"))
+        self.sec = self.h.get("gateway" if self.s.get("case") == "gateway" else "direct", {})
+
+    def path(self, *p):
+        return os.path.join(self.run, *p)
+
+    def pane(self, keep=True):
+        """Section 4: the screen. Only its replaced form reaches a file (watch/pane-<n>.txt)."""
+        text = sh(["tmux", "capture-pane", "-p", "-J", "-t", "pad"]).stdout
+        if keep:
+            values = [v for k in ("known", "known-plain") if os.path.exists(self.path(k)) for v in open(self.path(k)).read().splitlines()]
+            safe, hits = replace_known(text, values)
+            n = self.st["panes"] = self.st.get("panes", 0) + 1
+            self.st["screen_known"] = self.st.get("screen_known", 0) + hits
+            write(self.path("watch", "pane-%d.txt" % n), safe, 0o644)
+        return text
+
+    def entry(self):
+        """The newest entry folder under GOALCUP_HOME (PRD-10: runs/<run>/<entry>/status.json)."""
+        found = sorted(glob.glob(os.path.join(self.env["GOALCUP_HOME"], "runs", "*", "*", "status.json")), key=os.path.getmtime)
+        if found:
+            e = os.path.dirname(found[-1])
+            self.st.update(entry_dir=e, entry=os.path.basename(e), run=os.path.basename(os.path.dirname(e)))
+        return self.st.get("entry_dir")
+
+    def status(self):
+        return loads(path=os.path.join(self.entry() or self.run, "status.json"))
+
+    def need(self, *names, started=False, entry=False):
+        if not all(tool(n) for n in names):
+            raise Step("skip", NO_BUILD)
+        if started and "pasted" not in self.st or entry and not self.entry():
+            raise Step("skip", "no entry" if "pasted" in self.st or not started else "not started")
+
+    def setup(self, _):
+        h, s, sec = self.h, self.s, self.sec
+        got = re.search(r"(\d+\.\d+\.\d+[0-9A-Za-z.+-]*)", sh(["bash", "-lc", h["version_cmd"]]).stdout)
+        version = got and got.group(1)  # section 3, 0:01: installed equals pinned
+        if version != s["version"]:
+            raise Step("FAIL", "%s %s installed, %s pinned" % (s["harness_id"], version or "none", s["version"]))
+        self.st.update(harness_version=version, plain_planted=True)
+        known, plain = self.plant()
+        known += [open(os.path.join(KEYS, name)).read().strip() for name in s["key_files"]]
+        write(self.path("known"), "\n".join(known) + "\n")
+        write(self.path("known-plain"), plain + "\n")
+        text = open(self.path("prompt-source.txt")).read()  # the prompt file pad staged; the harness's subagent word
+        write(self.path("prompt.txt"), text.replace("subagent", h.get("subagent_word", "subagent")), 0o644)
+        saw = "%s %s (pinned), project and plants" % (s["harness_id"], version)
+        if not tool("goalcup"):
+            raise Step("skip", saw + "; " + NO_BUILD)
+        r = sh([tool("goalcup"), "setup", "--harness", s["harness_id"], "--yes"], env=self.env)
+        homes = [p for p in ((a or b).rstrip(".,:;)") for a, b in re.findall(r'"([^"]+)"|(/\S+)', r.stdout)) if os.path.isdir(p)]
+        if r.returncode or not homes:  # S15 prints the isolated home's path
+            raise Step("FAIL", "goalcup setup exit %d, %d home paths printed" % (r.returncode, len(homes)))
+        home = self.st["home"] = homes[-1]
+        for name, src in sec.get("files", {}).items():  # provider config, as a participant writes it
+            write(os.path.join(home, name), open(os.path.join(PAD, "harnesses", src)).read(), 0o644)
+        get = lambda k: sec.get(k, h.get(k))  # noqa: E731
+        key, route = (os.path.join(KEYS, s["route_key"]), get("key_route")) if s["route_key"] else (None, None)  # section 6
+        self.st.update(key_route=route, key_env=get("key_env"), key_path=key)
+        if route == "login":
+            with open(key) as f:  # the key goes to stdin, never an argument
+                r = sh(shlex.split(get("login")), stdin=f, env=dict(self.env, **{s["home_env"] or "HOME": home}))
+            if r.returncode:
+                raise Step("FAIL", "harness login exit %d" % r.returncode)
+        elif route == "file":
+            with open(key) as f:
+                write(get("key_file").replace("{home}", home), get("key_line").replace("{key}", f.read().strip()) + "\n")
+        for name in s["key_files"]:  # env: the launch shell reads the file, then removes it
+            if not (route == "env" and name == s["route_key"]):
+                os.remove(os.path.join(KEYS, name))
+        return "ok", saw + ", goalcup setup, key route %s" % route
+
+    def plant(self):
+        """Section 5: one fake value per PRD-05 section 10 shape, the no-shape value, the remote password."""
+        an = lambda n: "".join(secrets.choice("ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789") for _ in range(n))  # noqa: E731
+        b64 = lambda d: base64.urlsafe_b64encode(json.dumps(d).encode()).decode().rstrip("=")  # noqa: E731
+        pem = [base64.b64encode(secrets.token_bytes(48)).decode() for _ in range(4)]  # known line by line
+        shaped = {"OPENAI_API_KEY": "sk-proj-" + an(40), "GITHUB_TOKEN": "ghp_" + an(36), "GOOGLE_API_KEY": "AIza" + an(35),
+                  "PAD_JWT": "%s.%s.%s" % (b64({"alg": "HS256", "typ": "JWT"}), b64({"sub": an(16)}), an(43))}
+        plain, password = secrets.token_hex(20), secrets.token_hex(16)
+        env = ["%s=%s" % kv for kv in shaped.items()] + ["PAD_SECRET_PLAIN=" + plain,
+                                                        'PAD_PEM="-----BEGIN PRIVATE KEY-----\n%s\n-----END PRIVATE KEY-----"' % "\n".join(pem)]
+        write(os.path.join(self.project, ".env.local"), "\n".join(env) + "\n")
+        write(os.path.join(self.project, ".gitignore"), ".env*\n", 0o644)
+        shutil.copy(os.path.join(PAD, "prompts", "pad-setup-check.sh"), self.project)
+        git = ["git", "-C", self.project, "-c", "user.name=pad", "-c", "user.email=pad@example.invalid"]
+        for argv in (["init", "-q"], ["add", ".gitignore", "pad-setup-check.sh"], ["commit", "-q", "-m", "pad start"]):
+            if sh(git + argv).returncode:
+                raise Step("FAIL", "git %s failed" % argv[0])
+        with open(os.path.join(self.project, ".git", "config"), "a") as f:  # written, never an argument
+            f.write('[remote "pad"]\n\turl = https://pad:%s@example.invalid/pad.git\n' % password)
+        self.st["head"] = sh(git + ["rev-parse", "HEAD"]).stdout.strip()
+        return list(shaped.values()) + pem + [password], plain
+
+    def start(self, _):
+        s, h = self.s, self.h
+        if s["server"] != "off":
+            raise Step("skip", "staging steps come in a later slice")
+        self.need("goalcup")
+        lines = ["cd " + shlex.quote(self.project), "export GOALCUP_HOME=%s GOALCUP_SERVER=off GOALCUP_NO_BROWSER=1"
+                 % shlex.quote(self.env["GOALCUP_HOME"])] + ["export GOALCUP_KEEP_PARTS=1"] * bool(s["keep"])
+        lines += ["export %s=%s" % (k, shlex.quote(str(v))) for k, v in self.sec.get("env", {}).items()]
+        if self.st.get("key_route") == "env":  # the value is never in argv: the launch shell reads the file
+            lines += ['export %s="$(cat %s)"' % (self.st["key_env"], shlex.quote(self.st["key_path"])), "rm -f " + shlex.quote(self.st["key_path"])]
+        argv = [tool("goalcup"), "start", "--test", "--harness", s["harness_id"], "--prompt", self.path("prompt.txt")]
+        argv += [a for k in ("connector", "hosts") if s.get(k) for a in ("--" + k, self.path(s[k]))]
+        write(self.path("launch.sh"), "\n".join(lines + [shlex.join(argv)]) + "\n", 0o700)
+        for argv in (["new-session", "-d", "-s", "pad", "-x", "200", "-y", "50"], ["set-option", "-w", "-t", "pad", "remain-on-exit", "on"],
+                     ["respawn-pane", "-k", "-t", "pad", "bash " + shlex.quote(self.path("launch.sh"))]):
+            sh(["tmux"] + argv)
+        if not wait(lambda: "Recording in chat mode" in self.pane(False), 170, 3):
+            self.pane()
+            raise Step("INCONCLUSIVE", "harness did not start: no 'Recording in chat mode'")
+        ready = h.get("ready_text")
+        if not (ready and wait(lambda: ready in self.pane(False), 30, 2)):
+            time.sleep(0 if ready else 30)
+        if h.get("pre_keys"):
+            sh(["tmux", "send-keys", "-t", "pad", "-l", h["pre_keys"].encode().decode("unicode_escape")])
+            time.sleep(2)
+        first = glob.glob(os.path.join(self.env["GOALCUP_HOME"], "runs", "*", "first-message.txt"))
+        text = open(first[-1] if first else self.path("prompt.txt")).read().strip()
+        # tmux(1) FORMATS: bracket_paste_flag. Without it a multi-line paste can submit early: join lines.
+        bracketed = sh(["tmux", "list-panes", "-t", "pad", "-F", "#{bracket_paste_flag}"]).stdout.strip() == "1"
+        write(self.path("paste.txt"), text if bracketed else " ".join(text.split()))
+        sh(["tmux", "load-buffer", "-b", "pad", self.path("paste.txt")])
+        sh(["tmux", "paste-buffer", "-p", "-d", "-b", "pad", "-t", "pad"])
+        os.remove(self.path("paste.txt"))
+        time.sleep(float(h.get("submit_delay", 2)))
+        sh(["tmux", "send-keys", "-t", "pad", "Enter"])
+        self.st["pasted"] = time.time()
+        self.pane()
+        return "ok", "recording, %s pasted%s" % ("first message" if first else "prompt", "" if bracketed else ", lines joined")
+
+    def wait_calls(self, n):
+        self.need("goalcup", started=True)
+        for _ in range(49):  # every 5 s for 4 min
+            status = self.status()
+            append(self.path("watch", "status.jsonl"), {"status": status})
+            if (got := (status.get("written") or {}).get("model_requests", 0)) >= int(n):
+                return "ok", "%d model calls written" % got
+            time.sleep(5)
+        raise Step("timeout", "the harness did no work")
+
+    def verify_cmd(self, argv, out=None):
+        r = sh(["nice", "-n", "19", tool("goalcup-verify")] + argv, timeout=900, cwd=self.run)
+        if out:
+            write(self.path("verify", out), r.stdout, 0o644)
+        return r.returncode, loads(r.stdout)
+
+    def look(self, _):
+        self.need("goalcup-verify", started=True, entry=True)
+        rep = self.verify_cmd(["check", "--live", "--json", "--known", "known", self.st["entry_dir"]])[1]
+        use = self.verify_cmd(["usage", self.st["entry_dir"], "--json"])[1]
+        facts = {"calls": (rep.get("counts") or {}).get("model_requests", 0), "threads": len(use.get("threads") or []),
+                 "gaps": len(rep.get("gaps") or []), "known hits": (rep.get("secrets") or {}).get("known_hits", 0)}
+        fails = [c.get("id") for c in rep.get("checks") or [] if isinstance(c, dict) and c.get("result") == "fail"]
+        append(self.path("watch", "live.jsonl"), dict(facts, result=rep.get("result"), fail=fails))
+        return "ok", ", ".join("%s %s" % kv for kv in facts.items())
+
+    def seal(self, _):
+        self.need("goalcup", started=True)
+        dead = lambda: sh(["tmux", "list-panes", "-t", "pad", "-F", "#{pane_dead}"]).stdout.strip() != "0"  # noqa: E731
+        sealed = lambda: self.status().get("mode") == "sealed"  # noqa: E731
+        wait(lambda: sealed() or dead(), self.st["pasted"] + float(self.s["minutes"]) * 60 - time.time(), 5)
+        why = "at the harness's exit" if sealed() or dead() else "at %s min" % self.s["minutes"]
+        if not sealed():
+            sh([tool("goalcup"), "seal", "--yes"], env=self.env, cwd=self.project)
+        ok = wait(sealed, 180, 5)
+        found = re.findall(r"([\d,]+) model requests written", self.pane())
+        self.st["end_screen_requests"] = int(found[-1].replace(",", "")) if found else None
+        self.harness_files()
+        self.wipe_secrets()
+        return ("ok", "sealed %s, %s model requests written" % (why, (self.status().get("written") or {}).get("model_requests"))
+                ) if ok else ("timeout", "%s, not sealed 3 min after goalcup seal" % why)
+
+    def harness_files(self):
+        """Files under the connector's native roots changed since the start, as [{path, size}] (PRD-08 section 1)."""
+        out, since = [], self.st.get("pasted", 0) - 120
+        for row in self.s.get("native") or []:
+            root = row["root"].replace("{config_home}", self.st.get("home") or "/nonexistent")
+            for p in glob.glob(os.path.join(root, row.get("pattern", "**")), recursive=True):
+                if os.path.isfile(p) and os.path.getmtime(p) >= since:
+                    out.append({"path": "%s:%s" % (row["name"], os.path.relpath(p, root)), "size": os.path.getsize(p)})
+        write(self.path("harness-files.json"), json.dumps(out), 0o644)
+
+    def wipe_secrets(self, known=False):
+        found, ks = [], ("known", "known-plain", "paste.txt") if known else ()
+        for what, p in [("keys", KEYS), (".env.local", os.path.join(self.project, ".env.local")),
+                        ("harness home", self.st.get("home"))] + [(k, self.path(k)) for k in ks]:
+            if p and os.path.lexists(p):
+                found += [what] if not os.path.isdir(p) or os.listdir(p) else []
+                shutil.rmtree(p, ignore_errors=True) if os.path.isdir(p) and not os.path.islink(p) else os.remove(p)
+        return found
+
+    def verify(self, _):
+        """Section 8, the commands that apply with server off; then the tar for copy-out."""
+        e, exits = self.entry(), {}
+        try:
+            self.need("goalcup-verify", entry=True)
+            shutil.copy(os.path.join(e, "status.json"), self.path("status.json"))
+            for name, argv in (("check-local", ["check", "--json", "--known", "known", "--harness-files", "harness-files.json", e]),
+                               ("secrets", ["secrets", "--known", "known", "status.json", os.path.join(e, "goalcup.log")]),
+                               ("secrets-plain", ["secrets", "--known", "known-plain", e]),
+                               ("secrets-out", ["secrets", "--known", "known", "watch", "harness-files.json"]),
+                               ("usage", ["usage", e, "--json", "--out", os.path.join("verify", "usage")])):
+                exits[name] = self.verify_cmd(argv, None if name == "usage" else name + ".json")[0]
+            write(self.path("verify", "exits.json"), json.dumps(exits), 0o644)
+            result = ("ok", "exits " + ", ".join("%s %d" % kv for kv in exits.items()))
+        except Step as stop:
+            result = stop.args
+        if self.st.get("head"):
+            r = sh(["git", "-C", self.project, "rev-list", "--count", self.st["head"] + "..HEAD"])
+            self.st["commits_since_start"] = int(r.stdout) if r.returncode == 0 else None
+        self.wipe_secrets(known=True)  # the known files go after the scan; keys were wiped at the seal
+        keys = ("harness_version", "run", "entry", "screen_known", "end_screen_requests", "commits_since_start", "plain_planted")
+        write(self.path("meta-box.json"), json.dumps({k: self.st.get(k, 0 if k == "screen_known" else None) for k in keys}), 0o644)
+        with tarfile.open(self.path("out.tar"), "w") as t:
+            for name in ("verify", "watch", "status.json", "harness-files.json", "meta-box.json"):
+                if os.path.exists(self.path(name)):
+                    t.add(self.path(name), name)
+        return result
+
+    def wipe(self, _):
+        shutil.which("tmux") and sh(["tmux", "kill-session", "-t", "pad"])
+        found = self.wipe_secrets(known=True)
+        return "ok", "found and wiped: " + ", ".join(found) if found else "nothing key-like left"
+
+
+def main(argv):
+    if len(argv) not in (3, 4) or argv[2] not in STEPS or (argv[2] == "wait-calls") != (len(argv) == 4):
+        print("usage: pad-run <run dir> setup|start|wait-calls N|look|seal|verify|wipe", file=sys.stderr)
+        return 2
+    os.umask(0o077)
+    run = None
+    try:
+        run = Run(argv[1])
+        result, saw = getattr(run, argv[2].replace("-", "_"))(argv[3] if len(argv) == 4 else None)
+    except Step as stop:
+        result, saw = stop.args
+    except Exception as e:  # never the message, which could quote a value: only the kind
+        result, saw = "FAIL", "%s in %s" % (type(e).__name__, argv[2])
+    if run and os.path.isdir(run.run):
+        write(run.path("state.json"), json.dumps(run.st))
+    print("PADSTEP " + json.dumps({"result": result, "saw": saw}))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))
