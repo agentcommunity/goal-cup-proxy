@@ -113,9 +113,13 @@ fn entries(project: &Path) -> (Vec<String>, Vec<String>) {
 /// Exactly one line `GH_TOKEN=<value>`, the value visible ASCII with no quotes (so no CR): the
 /// push block's `sed -n s/^GH_TOKEN=//p` then prints one plain value. It is never kept or shown.
 fn token(env_local: String) -> bool {
-    let mut values = env_local.split('\n').filter_map(|l| l.strip_prefix("GH_TOKEN="));
+    let mut values = env_local
+        .split('\n')
+        .filter_map(|l| l.strip_prefix("GH_TOKEN="));
     let plain = |b: u8| b.is_ascii_graphic() && !b"\"'".contains(&b);
-    let one = values.next().filter(|v| !v.is_empty() && v.bytes().all(plain));
+    let one = values
+        .next()
+        .filter(|v| !v.is_empty() && v.bytes().all(plain));
     one.is_some() && values.next().is_none()
 }
 

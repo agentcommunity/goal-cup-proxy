@@ -89,7 +89,10 @@ fn three_problems_one_refusal() {
     assert_eq!(err.matches(text::FOLDER_REFUSED).count(), 1, "{err}");
     assert!(err.contains("notes.txt"), "{err}");
     // `.env` is named and the ignored `.env.local` is not.
-    assert!(err.contains(&text::env_not_ignored(&[".env".to_owned()])), "{err}");
+    assert!(
+        err.contains(&text::env_not_ignored(&[".env".to_owned()])),
+        "{err}"
+    );
     assert!(err.contains(&prompt.display().to_string()), "{err}");
     assert!(err.contains(text::NOTHING_CREATED), "{err}");
 }
@@ -200,7 +203,8 @@ fn unclear_token_or_ignore_or_listing_is_refused() {
 
     // A folder that cannot be listed does not pass as empty.
     let s = Setup::new(&token);
-    let mode = |m| std::fs::set_permissions(&s.project, std::fs::Permissions::from_mode(m)).unwrap();
+    let mode =
+        |m| std::fs::set_permissions(&s.project, std::fs::Permissions::from_mode(m)).unwrap();
     mode(0o311);
     let unlisted = std::fs::read_dir(&s.project).is_err();
     let got = folder::check(&s.project, &s.gc, true, None);
