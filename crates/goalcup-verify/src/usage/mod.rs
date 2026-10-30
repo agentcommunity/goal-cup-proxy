@@ -375,7 +375,7 @@ impl Calls {
         let (mut rows, replies) = self.wire.finish(&self.ctx);
         let ok = |r: &CallRow| r.kind == Kind::Call && r.outcome == Outcome::Ok;
         let c = self.ctx.connector.as_deref();
-        let Some(c) = c.filter(|c| hints::has_reader(c)) else {
+        if !hints::has_reader(c) {
             for r in rows.iter_mut().filter(|r| r.kind == Kind::Call) {
                 r.join = Some(Join::WireOnly);
             }
@@ -383,7 +383,7 @@ impl Calls {
                 rows,
                 ..CallTable::default()
             };
-        };
+        }
         let leg = self.native.finish(&self.ctx);
         let mut nat: Vec<(CallRow, Option<String>)> = leg.rows.into_iter().zip(leg.ids).collect();
         nat.sort_by(|a, b| (&a.0.path, a.0.wall_end).cmp(&(&b.0.path, b.0.wall_end)));
