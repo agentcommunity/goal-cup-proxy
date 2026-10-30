@@ -751,3 +751,27 @@ PRDs they touch and the code. Where two fixes disagree, the ledger and the later
   "builds the old goalcup-verifier" comment); the gate log for this merge shows Worker `npm test`
   253/253 and the named unittest list (27 tests, `test_install.py`) only. The earlier note stands: add
   it to the named list; it ran 17 tests green on Python 3.9 in the fixer's box.
+
+### 2026-10-30, replan after PRD-12 slice 2 (merge c7649890)
+
+- **`test_pad.py` is on integration and not yet in the gate.** `scripts/gate.sh` says the pad tests
+  join "after PRD-12's first test_pad.py merge"; that merge is c7649890. Add
+  `python3.11 -m unittest discover -s scripts/pad` to `gate fast`. The build snapshot's `python3` is
+  3.9 and `test_pad.py` (and `pad`, which needs `tomllib`) needs 3.11, so the step installs
+  `python3.11` (`sudo dnf install -y -q python3.11`) when it is missing. The pad lane ran it green in
+  build boxes (12 tests at 62bd0ed3). `check.py` and `table` stay 3.9-clean.
+- `gate fast` passed on the merge: 76 s at c7649890.
+
+### 2026-10-30, replan after PRD-05 phase 0 slice (merge 82484521)
+
+- **The release smoke cannot see `test-hooks` yet** (PRD-05 review A3). At 82484521 no
+  `GOALCUP_TEST_` text is in `crates/goalcup/src`; the only `test-hooks` item is
+  `Masker::passthrough_for_tests()`, which carries no such text. A release build with the feature on
+  would pass the grep today. It is caught once PRD-02's first `GOALCUP_TEST_` read is merged, since
+  every build with the feature then carries that text. Nothing outside tests calls the passthrough.
+  The release smoke checks this before trusting a clean grep: at least one `GOALCUP_TEST_` string in
+  a `--features test-hooks` build. List `Masker::passthrough_for_tests` beside
+  `Recorder::for_tests` as a test-only item.
+- **Mask tests so far:** 367 lines (179 inline in `src/mask/mod.rs`, 188 in `tests/mask_rules.rs`)
+  of PRD-05's 2,000. PRD-05's core slice cuts about 105 of them (PRD-05 note).
+- No locked ledger item is touched and no owner question comes from this slice.

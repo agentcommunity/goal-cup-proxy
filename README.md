@@ -177,7 +177,7 @@ Worker). The details and the glossary (run, part, segment, chain file, seal, rec
 |---|---|
 | macOS, Apple silicon | Measured. Use the arm64 build of `goalcup` and of the harness. |
 | macOS, Intel | Builds. No run measured. |
-| Linux, arm64 | Docker gates and logged-in Codex and Hermes staging practices passed. Longer runs pending ([measurements](TODO.md#wp0-measure)). |
+| Linux, arm64 | Docker gates and logged-in Codex and Hermes staging practices passed. Longer runs pending ([measurements](docs/research/results/2026-10-22-local-test-day.md)). |
 | Linux, x86_64 | Reservation tests and a no-login harness smoke pass on a hosted runner. Full suites not measured. |
 | Windows | Use WSL2 (below). Real-machine validation is pending. Native Windows is planned. |
 
@@ -303,7 +303,7 @@ Every doc, grouped by who reads it: [docs/README.md](docs/README.md). The key on
 | A participant | [PARTICIPANT-GUIDE](docs/PARTICIPANT-GUIDE.md), [HARNESS-SETUP](docs/HARNESS-SETUP.md), [RULES](docs/RULES.md), [SECURITY](SECURITY.md) |
 | A harness builder | [skill](skills/adding-a-capture-harness/SKILL.md), [HARNESS-ONBOARDING](docs/HARNESS-ONBOARDING.md), [CONNECTOR-SCHEMA](docs/CONNECTOR-SCHEMA.md), [facts sheets](docs/harnesses/README.md) |
 | A developer | [AGENTS](AGENTS.md), [ARCHITECTURE](docs/ARCHITECTURE.md), [DECISIONS](docs/DECISIONS.md), [CONTRACTS](docs/CONTRACTS.md), [TODO](TODO.md) |
-| An organizer | [OPERATING](docs/OPERATING.md), [UPLOAD-API](docs/UPLOAD-API.md), [SERVER-DESIGN](docs/SERVER-DESIGN.md), [server/worker](server/worker/README.md) |
+| An organizer | [OPERATING](docs/OPERATING.md), [UPLOAD-API](docs/UPLOAD-API.md), [server/worker](server/worker/README.md) |
 | A researcher | [RESEARCH-TARGET](docs/RESEARCH-TARGET.md), [CHEAT-CHECKLIST](docs/CHEAT-CHECKLIST.md), [coverage matrix](docs/research/coverage-matrix.md) |
 
 ## Support, security and license

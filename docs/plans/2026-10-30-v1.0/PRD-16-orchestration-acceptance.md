@@ -1054,3 +1054,130 @@ kept and now cites BUILD-PROMPT section 5, since B3 no longer carries it.
 - **Gate on PRD-07 slice 2:** `gate fast: PASS in 82s`; `test_fetch_run.py` still outside the gate
   (PRD-14 note).
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-12 slice 2 (merge c7649890)
+
+- **Merge bookkeeping.** c7649890, titled "PRD-12 slice 1", holds both PRD-12 slices (branch head
+  62bd0ed3, slice 2 fixes included). The integrator log's 12:17Z line names 15a6963b as the slice 2
+  merge, but 15a6963b is the PRD-07 replan docs commit: the branch was already in, and the merge step
+  logged HEAD after a merge with nothing to do. The night log cites c7649890 for both slices. The
+  merge step should say "already merged at <sha>" instead of logging HEAD as a merge.
+- **Ladder rung 1 (PRD-12 P2) still waits.** The rig walks a no-key `micro` run with `server = "off"`
+  in a real pad box (setup, start, wait-calls, look, seal, cleanup; box removed, no known file left),
+  but no `goalcup` build is on integration, so `check` was skipped and no row was judged. P2's C3 PASS
+  also waits on PRD-08's `secrets --json` `masks` key and on PRD-05's masker (PRD-08 and PRD-12 notes).
+- **Open seams with PRD-08** (PRD-08 note): the `secrets --json` keys, the gap cause and length in
+  `check --json`, `keep` in S6, and the stale C1 clause in PRD-08's PRD-12 interfaces row (PRD-12 and
+  ledger T4 win: a history `skip` passes C1).
+- **Seam keys read by the pad.** The `SEAM` table at the top of `scripts/pad/check.py` lists every key
+  it reads from S4 (`mode`, `port`, `harness.pid`, `written.model_requests`, `written.off_ms`,
+  `seal.reason`), S6, S7 and S13. A seam owner who renames one posts a seam line; only the pad lane
+  edits `scripts/pad/`.
+- **Size report, PRD-12** (`wc -l` on integration at c7649890): `scripts/pad/` is 1,771 lines
+  (`pad` 419, `pad-run` 373, `check.py` 352, `test_pad.py` 214, `sbx.mjs` 133, `table` 84, `image` 54,
+  `pad.toml` 17, harness files 92, prompts and settings 34), plus the generated `connectors/tiers.toml`
+  (81). PRD-00's row is "about 1,350 to 1,450 with its tests" and PRD-12's own estimate about 1,400:
+  22% over the top of the row with `selftest` (100), `exec/` (70), 13 harness files (about 195), the
+  skill (100) and the second and third slice steps still to come, so at least about 2,140 if those land
+  at their rows. Per the integrator's 11:20Z decision, overage on an owner estimate is reported, not
+  held. The extra lines so far serve point 3 (every pad step has its own wait and limit, and a timed-out
+  step never stops the rig), point 4 (known values never leave the box: plants, pane replacement and
+  the output scan run in `pad-run`) and point 7 (`sbx.mjs` drives real Vercel Sandbox boxes, the way
+  the rig is run). The next PRD-12 slice applies the three cuts in the PRD-12 note before adding lines.
+  The end-of-build report carries the final figure for the owner.
+- `gate fast` PASS in 76 s on c7649890 (and 75 s on the no-op second run). `test_pad.py` is not in
+  the gate yet (PRD-14 note).
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-15 slice 3 (merge 4e0ca793)
+
+- **Size report, PRD-15 slice 3** (`wc -l` on integration at 4e0ca793). PRD-15 has no row in PRD-00
+  "Size budget" (docs are not counted), and the slice has no code. `TODO.md` 59 lines (was 350;
+  PRD-15 asks for under 60), `README.md` 318 (unchanged count, one link repointed).
+- **Docs-only slices still pass the gate in under two minutes** (`gate fast: PASS in 98s` on
+  4e0ca793).
+- **`check-links.py` is not in the gate**, so a broken link merges silently. The PRD-11 box run
+  (harnesses log 12:22Z) counted 33 listed lines with the new TODO overlaid, 30 after its fix. The
+  final acceptance link check filters the history files by name (run 1's report,
+  `docs/RESEARCH-TARGET.md`, `docs/research/**`) and must list nothing else for live docs.
+- **After-merge purge order** (review A7, PRD-15 note): live docs stop linking purged history before
+  the purge, and the purge change runs `check-links.py` itself. The TODO keep list stays at four
+  files.
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-07 slice 3 (merge 323b1a0f)
+
+- **PRD-07 is done on integration.** Slice 3, the last, gave `delete-test-runs.sh` the two usage
+  prefixes (S7 shape, built before PRD-09's job) and lists R2 before the database changes. No Worker
+  src or test changed. `gate fast: PASS in 83s` on 323b1a0f. The fixer's 10 stubbed script cases ran
+  once in a build box and are not in the gate; the script itself is never run in this build (owner
+  tool, PRD-07 section 9), so acceptance cites the stubbed run and says the real-bucket run was not
+  done.
+- **Three nits are open** (RA-N2, B2-N1, B2-N2; PRD-07 note) and one hand-off to PRD-15 (RA-N1, the
+  OPERATING test-runs lines; PRD-15 note). None blocks. If no later PRD-07 slice comes, the end-of-build
+  report lists them as known.
+- **Size report, PRD-07** (`wc -l` at 323b1a0f, against PRD-00 "Size budget", row "Worker (PRD-07)"):
+  src (`server/worker/src`, all files) 3,557 against about 3,440, 3.4% over; tests (`server/worker/test`
+  `*.ts` plus helpers) 5,258 against about 4,950, 6.2% over. Both within the 10% the row allows
+  without a replan decision. Down from 4,001 and 5,775 before the build. Outside the row:
+  `server/worker/scripts/delete-test-runs.sh` 122 (was 95) and `scripts/fetch-run.sh`, in the scripts
+  row.
+- **Seam to watch at PRD-09's job merge:** S7's key layout and the bucket-per-side rule are what the
+  cleanup script relies on (PRD-09 note). The reviewer of that merge checks it.
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-15 slice 4 (merge 7be8bf98)
+
+- **Size report, PRD-15 slice 4** (`wc -l` on integration at 7be8bf98). PRD-15 has no row in PRD-00
+  "Size budget" (docs are not counted), and the slice has no code. `docs/ARCHITECTURE.md` 349 (was
+  350; target about 160 after its rewrite), `docs/README.md` 82 (was 83), `docs/OPERATING.md` 863 and
+  `README.md` 318 (unchanged counts, one link each), `docs/archive/SERVER-DESIGN.md` 164 (moved,
+  unchanged).
+- **Docs-only slices still pass the gate in under two minutes** (`gate fast: PASS in 100s` on
+  7be8bf98).
+- **The final link check filters moved archive files by name** (PRD-15 note): 8 of the 40 broken
+  links at bdcea297 are in `docs/archive/SERVER-DESIGN.md`. `check-links.py` is still not in the
+  gate; acceptance cites the last box run and its filter list.
+- **A merge-order point for the ARCHITECTURE rewrite** (review A-N3): its reviewer checks that no
+  line says the server signs receipts or acknowledgements (lines 31, 276 and 277 today). If the
+  third slice is not reached, the end-of-build report lists `SECURITY.md:69` as a known false line.
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-07 slice 4 (merge c4ada44a)
+
+- **PRD-07 is complete on integration.** Every builder step (4dcc1e7b, 2f4bc6a0, 323b1a0f) and the
+  nit cleanup (c4ada44a) are merged. Two optional nits stay open with no slice planned: the script's
+  `--help` header lacks the RA-N2 caveat, and a 2-line simplification of its Python parse (PRD-07
+  note). Acceptance lists them as known, not as failures.
+- **Size report, PRD-07** (`wc -l` on integration at c4ada44a), row "Worker (PRD-07)": src
+  (`server/worker/src`, all files) 3,557 against about 3,440, 3.4% over; tests (`server/worker/test`
+  `*.ts` plus helpers) 5,258 against about 4,950, 6.2% over. Both unchanged by this slice and within
+  the 10% the row allows without a replan decision. Outside the row:
+  `server/worker/scripts/delete-test-runs.sh` 121 (was 122).
+- **Checks skipped in boxes, for acceptance to state as skipped:** `shellcheck` and `dash -n` (not in
+  the box image) and `check-links.py` (box Python 3.9 lacks the 3.10 syntax it uses). The script's
+  stubbed cases are not in the gate.
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-05 phase 0 slice (merge 82484521)
+
+- **Size report, PRD-05** (`wc -l` at 82484521, against PRD-00 "Size budget", row "Masking (PRD-05)",
+  3,530 src and 2,000 tests): src 247 (`src/mask/mod.rs` without its tests), 7% of the row;
+  `shapes.tsv` 32 is data, not counted; tests 367 (179 inline in `mod.rs`, 188 in
+  `tests/mask_rules.rs`), 18% of the row. The corpus (86 files, 6,216,905 bytes) is data. The stub
+  `mod.rs` is over PRD-05's own file estimate (247 against 160 for the final `mod.rs`); the core
+  slice replaces the stub, and reviews B1 to B3 cut about 111 lines (PRD-05 note).
+- `gate fast: PASS in 78s` on 82484521. The breaker's throwaway stress (40 and 200 streams, 1.5 MB
+  bodies, WebSocket boundaries) lost no byte and released no raw byte, peak RSS 93 MB; it is not in
+  the gate.
+- **The no-real-key check works on the stub:** `mask_rules()` is `["fail_closed"]`, length 1, so the
+  "`mask_rules` length above 1 in the `start` event" check tells a stub build from a core build, as
+  designed. Any pad or acceptance row on a stub build is not evidence (PRD-12 note).
+- **Next masking dependency:** S3 (PRD-11) on integration, for the concrete `Masker::new` type and
+  the connector rules `meta.rs` reads. The core slice builds against S3's PRD-00 final shape meanwhile.
+  PRD-13 may delete `spikes/` as far as PRD-05 is concerned (PRD-13 note).
+- **Trailers:** merge commit df84011c (`v1.0/prd-05-masking-s12-shapes`) has no
+  `Co-Authored-By` and `Claude-Session` lines. It stays (no force-push, no rebase) and the
+  end-of-build report lists it. Mergers and builders add both lines to every merge commit, an
+  integration-into-task merge included.
+- No locked ledger item is touched and no owner question comes from this slice.
