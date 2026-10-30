@@ -681,7 +681,11 @@ impl AsyncWrite for Stalls {
     ) -> Poll<std::io::Result<usize>> {
         let n = buf.len().min(self.0.load(Ordering::SeqCst));
         self.0.fetch_sub(n, Ordering::SeqCst);
-        if n == 0 { Poll::Pending } else { Poll::Ready(Ok(n)) }
+        if n == 0 {
+            Poll::Pending
+        } else {
+            Poll::Ready(Ok(n))
+        }
     }
     fn poll_flush(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<std::io::Result<()>> {
         Poll::Ready(Ok(()))
@@ -741,22 +745,32 @@ async fn reset_mid_upload(chunk: &[u8], took: usize) -> ((u64, u64, u64), Option
 #[tokio::test]
 async fn an_upstream_reset_mid_upload_counts_the_rest_of_the_chunk_unsent() {
     within_async(HANG, async {
-        let mut post = b"POST /up HTTP/1.1\r\nHost: a.example\r\nContent-Length: 5000\r\n\r\n".to_vec();
+        let mut post =
+            b"POST /up HTTP/1.1\r\nHost: a.example\r\nContent-Length: 5000\r\n\r\n".to_vec();
         let head = post.len();
         post.extend([b'u'; 5000]);
         let all = post.len() as u64;
         let (counts, unsent, lost) = reset_mid_upload(&post, head + 1000).await;
         let sent = head as u64 + 1000;
-        assert_eq!((counts, unsent, lost), ((sent, 4000, 0), Some(json!(4000)), vec![]));
+        assert_eq!(
+            (counts, unsent, lost),
+            ((sent, 4000, 0), Some(json!(4000)), vec![])
+        );
         // A head cut short: no request opened, its forwarded part is the conn GAP.
         let (counts, unsent, lost) = reset_mid_upload(&post, 20).await;
-        assert_eq!((counts, unsent, lost), ((20, all - 20, all - 20), None, vec![20]));
+        assert_eq!(
+            (counts, unsent, lost),
+            ((20, all - 20, all - 20), None, vec![20])
+        );
         // A pipelined request behind the body is not the first request's.
         let next = b"GET /next HTTP/1.1\r\nHost: a.example\r\n\r\n";
         post.extend(next);
         let (counts, unsent, lost) = reset_mid_upload(&post, head + 1000).await;
         let rest = 4000 + next.len() as u64;
-        assert_eq!((counts, unsent, lost), ((sent, rest, rest - 4000), Some(json!(4000)), vec![]));
+        assert_eq!(
+            (counts, unsent, lost),
+            ((sent, rest, rest - 4000), Some(json!(4000)), vec![])
+        );
     })
     .await;
 }

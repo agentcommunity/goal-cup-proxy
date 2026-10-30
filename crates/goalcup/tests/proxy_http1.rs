@@ -10,8 +10,8 @@
 mod common;
 
 use common::recorder::{data_of, gaps};
-use flate2::write::{GzEncoder, ZlibEncoder};
 use flate2::Compression;
+use flate2::write::{GzEncoder, ZlibEncoder};
 use goalcup::pipeline::{Call, Calls, EndReason, GapReason, Mono, Recorder, Sid, StreamKind};
 use goalcup::proxy::http1::Http1;
 use goalcup::proxy::pump::{Parser, Stop};
@@ -468,7 +468,10 @@ fn bytes_held_at_the_close_are_named() {
     p.feed(Dir::Up, t, b"GET /sse HTTP/1.1\r\n\r\n").unwrap();
     let down = b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhello\r\n1";
     p.feed(Dir::Down, t, down).unwrap();
-    assert_eq!(Box::new(p).end(t, EndReason::Interrupted, false, &mut 0), None);
+    assert_eq!(
+        Box::new(p).end(t, EndReason::Interrupted, false, &mut 0),
+        None
+    );
 }
 
 /// A panic (rule 4): the open stream gets its own GAP with the panic tail and ends decode_error.
