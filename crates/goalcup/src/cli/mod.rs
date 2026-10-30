@@ -5,6 +5,7 @@
 //! that `goalcup status` and the end screen read.
 
 pub mod finish;
+pub mod folder;
 pub mod log;
 pub mod status;
 pub mod text;

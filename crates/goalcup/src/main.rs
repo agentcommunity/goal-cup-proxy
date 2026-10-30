@@ -11,6 +11,7 @@
 
 use clap::error::ErrorKind;
 use clap::{Parser, Subcommand};
+use std::io::Write as _;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
@@ -156,6 +157,8 @@ fn run(command: Command) -> ExitCode {
         Command::Start {
             practice,
             test,
+            repo,
+            prompt,
             connector,
             hosts,
             ..
@@ -164,6 +167,35 @@ fn run(command: Command) -> ExitCode {
             if (connector.is_some() || hosts.is_some()) && !practice && !test {
                 say(text::FILE_FLAGS_COMPETE);
                 return ExitCode::from(1);
+            }
+            // The built `start` keeps PRD-10 section 3's order: the connector (step 1) first,
+            // then these folder checks (step 2). Nothing is created before or during them.
+            let home = match cli::home() {
+                Ok(home) => home,
+                Err(e) => {
+                    say(e);
+                    return ExitCode::from(1);
+                }
+            };
+            let Ok(project) = std::env::current_dir() else {
+                say(text::NO_CWD);
+                return ExitCode::from(1);
+            };
+            match cli::folder::check(&project, &home, repo.is_some(), prompt.as_deref()) {
+                Err(problems) => {
+                    say(text::FOLDER_REFUSED);
+                    let mut err = std::io::stderr().lock();
+                    for p in problems {
+                        let _ = writeln!(err, "  {p}");
+                    }
+                    let _ = writeln!(err, "{}", text::NOTHING_CREATED);
+                    return ExitCode::from(1);
+                }
+                Ok(warnings) => {
+                    for w in warnings {
+                        say(&w);
+                    }
+                }
             }
             not_built("start")
         }
