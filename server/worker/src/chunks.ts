@@ -11,12 +11,13 @@
 //   6. stream the body into R2, create-only, with R2 checking the sha256 (422 if wrong)
 //   7. sign the ack; one atomic database step advances offset/head, records chunk + ack, and adds
 //      the chunk's compressed size to the entry's stored_bytes and one to its chunk_count
-//   8. return the ack
+//   8. return the ack and the new position; if this chunk ends at the end the final heartbeat
+//      committed, the server now holds the whole chain and seals the entry (runs.ts trySeal)
 
 import type { Ctx } from "./context.ts";
 import { type ChunkRecord, type EntryRow, type RunRow, isPastEnd } from "./db.ts";
 import { ApiError, closed, conflict, json, malformed, notFound, tooLarge } from "./errors.ts";
-import { FINAL_RETRY_AFTER, requireOpen, requireRun } from "./runs.ts";
+import { FINAL_RETRY_AFTER, requireOpen, requireRun, trySeal } from "./runs.ts";
 import { formatTime, isEntryId, isHex64, parseSafeUint } from "./util.ts";
 
 export const MAX_CHUNK_BYTES = 33_554_432; // 32 MiB, compressed
@@ -42,9 +43,9 @@ export async function putChunk(ctx: Ctx, member: string, runId: string, offsetTe
   const { run, entry } = await requireRun(ctx, member, runId, h.entryId);
 
   // 2. A chunk the server already holds, sent again (a reply was lost): same offset, same length,
-  //    same head -> the stored ack, without touching the body.
+  //    same head -> the stored ack, without touching the body, and `sealed` as the entry stands.
   const held = offset < entry.offset ? await ctx.db.getChunk(member, runId, entry.entry_id, offset) : null;
-  if (held !== null && held.length === h.length && held.head === h.head) return storedAnswer(held);
+  if (held !== null && held.length === h.length && held.head === h.head) return storedAnswer(held, entry.sealed_at !== null);
 
   // 3. The run state: open (not abandoned, not closed) and the entry not sealed.
   requireOpen(ctx, run, entry);
@@ -97,12 +98,12 @@ export async function putChunk(ctx: Ctx, member: string, runId: string, offsetTe
   switch (result) {
     case "committed":
       noteQuota(ctx, run, contentLength);
-      return storedAnswer(chunk);
+      return storedAnswer(chunk, await sealIfComplete(ctx, member, runId, entry, h));
     case "conflict": {
       // Someone moved the run between our check and our commit. If that someone was a retry of
       // this very chunk, its ack is the answer; otherwise goalcup must re-read the position.
       const stored = await ctx.db.getChunk(member, runId, entry.entry_id, offset);
-      if (stored !== null && stored.length === h.length && stored.head === h.head) return storedAnswer(stored);
+      if (stored !== null && stored.length === h.length && stored.head === h.head) return storedAnswer(stored, await sealIfComplete(ctx, member, runId, entry, h));
       throw conflict("The run moved while this chunk was being stored; read the position again.");
     }
     case "beyond_final":
@@ -143,13 +144,23 @@ function noteQuota(ctx: Ctx, run: RunRow, contentLength: number): void {
   else if (2 * before < max && 2 * after >= max) console.warn(`quota-half ${run.run_id} stored=${after} max=${max}`);
 }
 
+/**
+ * After a commit: if the final heartbeat had committed an end and this chunk ends exactly there, the
+ * server holds the whole chain, so it seals the entry. Only the committed final head is ever passed.
+ */
+async function sealIfComplete(ctx: Ctx, member: string, runId: string, entry: EntryRow, h: ChunkHeaders): Promise<boolean> {
+  if (entry.sealed_at !== null) return true;
+  if (entry.final === null || h.lastSeq !== entry.final.seq || h.head !== entry.final.head) return false;
+  return trySeal(ctx, member, runId, entry.entry_id, entry.final.head);
+}
+
 /** Past the committed end: it ends after the final seq, or ends at it with another head. */
 function goesBeyond(h: ChunkHeaders, final: { seq: number; head: string }): boolean {
   return h.lastSeq > final.seq || (h.lastSeq === final.seq && h.head !== final.head);
 }
 
-function storedAnswer(c: ChunkRecord): Response {
-  return json(200, { ack: c.ack, offset: c.offset + c.length, next_seq: c.last_seq + 1, head: c.head });
+function storedAnswer(c: ChunkRecord, sealed: boolean): Response {
+  return json(200, { ack: c.ack, offset: c.offset + c.length, next_seq: c.last_seq + 1, head: c.head, received_at: c.received_at, sealed });
 }
 
 /** traces/{event}/{run_id}/{entry_id}/{offset:016}-{sha256}.zst. The hash is in the name, so a name is only ever those bytes. */

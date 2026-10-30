@@ -73,6 +73,7 @@ test("POST /v1/device stores proxy_version as the device's tracer_version", asyn
   const ctx = {
     env: { DB_BACKEND: "local", APPROVAL_URL: "https://example.org/approve" } as unknown as Env,
     db: { createDevice: async (a: CreateDeviceArgs) => void stored.push(a) },
+    cfg: { minCompetitionVersion: { kind: "none" } },
     now: () => new Date("2026-10-21T10:00:00Z"),
   } as unknown as Ctx;
   const post = (body: Record<string, unknown>) =>

@@ -30,6 +30,7 @@ import type {
   FinalCommitDetail,
   HeartbeatArgs,
   HeartbeatResult,
+  HeartbeatVitals,
   MachineFacts,
   NoticeKind,
   NoticeOutcome,
@@ -42,7 +43,6 @@ import type {
   SealResult,
   StoreReceiptResult,
   TickRun,
-  Vitals,
 } from "./db.ts";
 import { CLOSE_AFTER_SECONDS, DISK_NOTICE_GAP_SECONDS, FIRST_SEQ, GENESIS, NO_FINAL_DETAIL, TICK_LOOKBACK_SECONDS, UNBOUND_CREDENTIAL_SECONDS, endsAt, isPastEnd, statusAt } from "./db.ts";
 import type { StartReceipt } from "./sign.ts";
@@ -64,7 +64,7 @@ interface StoredEntry extends EntryRow {
     head: string;
     offset_local: number;
     recording: string | null;
-    vitals?: Vitals | null;
+    vitals?: HeartbeatVitals | null;
     client_ip: string | null;
     client_country: string | null;
   } | null;
@@ -95,7 +95,7 @@ interface StoredRun extends Omit<RunRow, "first_entry_id" | "current_entry_id" |
   final_force_push?: boolean | null;
   final_head_fallback?: boolean | null;
   /** The latest vitals a heartbeat sent; the start of the running disk pause; the start of the latest pause owed a disk_full email. */
-  last_vitals?: Vitals | null;
+  last_vitals?: HeartbeatVitals | null;
   disk_paused_at?: string | null;
   disk_notice_at?: string | null;
   entries: StoredEntry[];
@@ -615,7 +615,8 @@ function withSignals(run: StoredRun, entry: StoredEntry, a: HeartbeatArgs): Stor
  */
 function diskPause(run: StoredRun, a: HeartbeatArgs): Pick<StoredRun, "last_vitals" | "disk_paused_at" | "disk_notice_at"> {
   if (a.vitals === null) return {}; // no vitals: nothing said about a pause
-  if (a.vitals.agent_paused !== "disk") return { last_vitals: a.vitals, disk_paused_at: null };
+  // Heartbeat vitals are stored as given, with the counts nested, so nothing reaches this test now.
+  if ((a.vitals as Record<string, unknown>).agent_paused !== "disk") return { last_vitals: a.vitals, disk_paused_at: null };
   if (run.disk_paused_at != null) return { last_vitals: a.vitals }; // the same pause goes on
   const gap = formatTime(addSeconds(new Date(a.at), -DISK_NOTICE_GAP_SECONDS));
   const owed = run.disk_notice_at == null || run.disk_notice_at <= gap;

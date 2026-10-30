@@ -248,6 +248,20 @@ export interface Vitals {
   open_files?: number;
 }
 
+/**
+ * A heartbeat's written counts (docs/UPLOAD-API.md, heartbeat): a flat object the server checks for
+ * shape and size only and never interprets. It fixes no key list.
+ */
+export type Counts = Record<string, number | string | boolean | null>;
+
+/**
+ * What a heartbeat stores in its `vitals` column and as the run's `last_vitals` (the column names
+ * stay; renaming them would be a migration): the counts nested under one key, or, when the
+ * heartbeat's `counts` was not valid, only its length as JSON. Nothing the client names ever sits at
+ * the top level of this object.
+ */
+export type HeartbeatVitals = { counts: Counts } | { counts_dropped: number };
+
 /** A disk pause that begins is owed a disk_full email unless the run's last one began less than this long ago. */
 export const DISK_NOTICE_GAP_SECONDS = 6 * 3600;
 
@@ -263,8 +277,8 @@ export interface HeartbeatArgs {
   /** Optional facts the heartbeat carries; null when it did not send them. */
   recording: RecordingState | null;
   model_requests: number | null;
-  /** Null when the heartbeat sent none. */
-  vitals: Vitals | null;
+  /** Null when the heartbeat sent no `counts`. */
+  vitals: HeartbeatVitals | null;
   /** Server-side facts about the connection (never shown to anyone). */
   client_ip: string | null;
   client_country: string | null;
@@ -276,11 +290,10 @@ export interface HeartbeatArgs {
  * the run (once, the first wins). `model_requests` is kept per entry (a continued process counts
  * from zero): the first one an entry reports, and any above that entry's stored value, stores it
  * and moves the run's last model request to `at`; a lower or equal one changes nothing. `vitals`
- * are kept on the heartbeat and as the run's latest (none keeps the last). Vitals saying
- * `agent_paused: "disk"` start a disk pause if none is running, and set the run's `disk_notice_at`
- * to `at` unless it is less than `DISK_NOTICE_GAP_SECONDS` old; vitals without it end the pause;
- * no vitals change neither (a pause that began while one began less than that long ago is
- * owed nothing). Anything else changes nothing. `final_committed` / `final_existing`: the final
+ * (`HeartbeatVitals`) are kept, as given, on the heartbeat and as the run's latest (none keeps the
+ * last); nothing in them starts a disk pause, because the counts sit one level down. Anything else
+ * changes nothing. A repeat of the committed final heartbeat (`final_existing`) records nothing:
+ * no heartbeat row. `final_committed` / `final_existing`: the final
  * heartbeat's (seq, head) is now / already was the committed end. `final_conflict`: a different end is committed, or the
  * chain the server holds already contradicts this one. `closed`: the run is abandoned or incomplete.
  */
@@ -292,8 +305,9 @@ export interface SealArgs {
   entry_id: string;
   seal_sha256: string;
   baseline_sha256: string;
-  seal_key: string;
-  baseline_key: string;
+  /** Null when the seal stores no documents of its own: the server seals by itself with the final head. */
+  seal_key: string | null;
+  baseline_key: string | null;
   sealed_at: string;
 }
 /**

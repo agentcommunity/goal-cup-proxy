@@ -350,7 +350,7 @@ lifecycle("a heartbeat without the new fields is still 200 and changes nothing a
   r.after(MIN);
   const plain = await r.beat(token, run.run_id, run.entry_id);
   assert.equal(plain.status, 200, JSON.stringify(plain.body));
-  assert.deepEqual(plain.body, { stop: false, deadline_at: run.deadline_at, seconds_left: 168 * 3600 - MIN, reason: null });
+  assert.deepEqual(plain.body, { stop: false, deadline_at: run.deadline_at, seconds_left: 168 * 3600 - MIN, reason: null, sealed: false });
   const nulls = await r.beat(token, run.run_id, run.entry_id, { recording: null, model_requests: null });
   assert.equal(nulls.status, 200, JSON.stringify(nulls.body));
   const s = r.storedRun(run.run_id) as { entries: { model_requests: number | null }[] } & ReturnType<typeof r.storedRun>;
@@ -425,7 +425,7 @@ lifecycle("the open keeps its IP and country; heartbeats and a continue keep the
   assert.deepEqual([stored().client_ip, stored().client_country], ["203.0.113.9", "DE"]);
 
   const beat = await r.beat(token, run.run_id, run.entry_id, {}, { "cf-connecting-ip": "203.0.113.50" });
-  assert.deepEqual(Object.keys(beat.body).sort(), ["deadline_at", "reason", "seconds_left", "stop"]);
+  assert.deepEqual(Object.keys(beat.body).sort(), ["deadline_at", "reason", "sealed", "seconds_left", "stop"]);
   assert.deepEqual([stored().client_ip, stored().last_client_ip, stored().last_client_country], ["203.0.113.9", "203.0.113.50", "DE"]);
   const hb = stored().entries[0]!.last_heartbeat;
   assert.deepEqual([hb.client_ip, hb.client_country], ["203.0.113.50", "DE"]);
@@ -734,8 +734,7 @@ lifecycle("the ended notice of a run the server holds sealed says it is all in",
   stubGithub(pushed(SHA));
   const token = await r.cred("alice");
   const run = await r.start(token, "s1");
-  await r.finish(token, run.run_id, run.entry_id, await r.hold("alice", run.run_id, run.entry_id));
-  assert.equal((await r.seal(token, run.run_id, run.entry_id)).status, 200);
+  assert.equal((await r.finish(token, run.run_id, run.entry_id, await r.hold("alice", run.run_id, run.entry_id))).sealed, true);
   r.at(settled(run.deadline_at));
   await r.tick();
   assert.deepEqual(only(r, "ended").map((n) => [n.payload.uploaded, n.payload.closes_at]), [[true, closes(run.deadline_at)]]);
@@ -832,8 +831,7 @@ lifecycle("the cron closes a run that is over, so its status is final without an
   const [c1, c2] = [await r.cred("alice"), await r.cred("bob")];
   const sealed = await r.start(c1, "s1");
   const lost = await r.start(c2, "s2");
-  await r.finish(c1, sealed.run_id, sealed.entry_id, await r.hold("alice", sealed.run_id, sealed.entry_id));
-  assert.equal((await r.seal(c1, sealed.run_id, sealed.entry_id)).body.run_status, "open"); // sealed before its end
+  assert.equal((await r.finish(c1, sealed.run_id, sealed.entry_id, await r.hold("alice", sealed.run_id, sealed.entry_id))).sealed, true); // sealed before its end
   await r.tick();
   assert.deepEqual([r.storedRun(sealed.run_id).status, r.storedRun(lost.run_id).status], ["open", "open"]);
 
@@ -852,8 +850,8 @@ lifecycle("a step that fails does not stop the others", async (r) => {
   stubGithub(pushed(SHA));
   const token = await r.cred("alice");
   const run = await r.start(token, "s1");
-  await r.finish(token, run.run_id, run.entry_id, await r.hold("alice", run.run_id, run.entry_id));
-  assert.equal((await r.seal(token, run.run_id, run.entry_id)).status, 200); // at the deadline the run is to be closed as sealed
+  // Sealed, so at the deadline the run is to be closed as sealed.
+  assert.equal((await r.finish(token, run.run_id, run.entry_id, await r.hold("alice", run.run_id, run.entry_id))).sealed, true);
   const closeRun = mock.method(LocalDb.prototype, "closeRun", async () => {
     throw new Error("boom");
   });
@@ -887,164 +885,6 @@ lifecycle("the cron reads every run, however many there are, a page at a time", 
   await r.tick();
   assert.equal(only(r, "started").length, 7);
 });
-
-// ---- vitals and the disk_full email ----------------------------------------------------------
-
-const PAUSED = { vitals: { disk_free_bytes: 1024, disk_short: true, agent_paused: "disk" } };
-const RUNNING = { vitals: { disk_free_bytes: 50 * 2 ** 30, disk_short: false, agent_paused: null } };
-type DiskState = { last_vitals: unknown; disk_paused_at: string | null; disk_notice_at: string | null; entries: { last_heartbeat: { vitals?: unknown } }[] };
-
-lifecycle("vitals are kept on the heartbeat and as the run's latest; unknown keys and nulls are dropped", async (r) => {
-  const token = await r.cred("alice");
-  const run = await r.start(token, "s1");
-  const stored = () => r.storedRun(run.run_id) as unknown as DiskState;
-  r.after(MIN);
-  const sent = { disk_free_bytes: 2 ** 53 - 1, disk_short: false, agent_paused: null, rss_bytes: 123_456_789, cpu_ms: 4200, open_files: 17, gpu_temp: 80, nested: { x: 1 } };
-  const res = await r.beat(token, run.run_id, run.entry_id, { vitals: sent });
-  assert.equal(res.status, 200, JSON.stringify(res.body));
-  const kept = { disk_free_bytes: 2 ** 53 - 1, disk_short: false, rss_bytes: 123_456_789, cpu_ms: 4200, open_files: 17 };
-  assert.deepEqual(stored().entries[0]!.last_heartbeat.vitals, kept);
-  assert.deepEqual(stored().last_vitals, kept);
-
-  // A heartbeat without vitals has none on its own record and keeps the run's latest.
-  r.after(5 * MIN);
-  for (const without of [{}, { vitals: null }]) assert.equal((await r.beat(token, run.run_id, run.entry_id, without)).status, 200);
-  assert.equal(stored().entries[0]!.last_heartbeat.vitals ?? null, null);
-  assert.deepEqual(stored().last_vitals, kept);
-  // An empty object is vitals with nothing measured.
-  await r.beat(token, run.run_id, run.entry_id, { vitals: { cpu_ms: null } });
-  assert.deepEqual(stored().last_vitals, {});
-});
-
-lifecycle("malformed vitals never cost the heartbeat: a bad field is dropped and logged, without its value", async (r) => {
-  const token = await r.cred("alice");
-  const run = await r.start(token, "s1");
-  const stored = () => r.storedRun(run.run_id) as unknown as DiskState & { last_heartbeat_at: string | null };
-  const logged: string[] = [];
-  const log = mock.method(console, "warn", (...args: unknown[]) => void logged.push(args.map(String).join(" ")));
-  try {
-    for (const [field, bad] of [
-      ["disk_free_bytes", -1], ["disk_free_bytes", 1.5], ["disk_free_bytes", "12"], ["disk_free_bytes", 2 ** 53],
-      ["rss_bytes", true], ["cpu_ms", {}], ["open_files", []], ["disk_short", "yes"], ["disk_short", 1],
-    ] as const) {
-      logged.length = 0;
-      const good = field === "cpu_ms" ? "rss_bytes" : "cpu_ms"; // a sound field beside it is kept
-      const res = await r.beat(token, run.run_id, run.entry_id, { vitals: { [good]: 7, [field]: bad } });
-      assert.equal(res.status, 200, JSON.stringify(res.body));
-      assert.deepEqual(stored().last_vitals, { [good]: 7 }, `${field}: ${JSON.stringify(bad)}`);
-      assert.deepEqual(logged, [`vitals-dropped vitals.${field} ${run.run_id}`]);
-    }
-  } finally {
-    log.mock.restore();
-  }
-  assert.notEqual(stored().last_heartbeat_at, null);
-});
-
-lifecycle("a vitals that is not an object, or an unknown agent_paused, says nothing about a pause and costs nothing", async (r) => {
-  const token = await r.cred("alice");
-  const run = await r.start(token, "s1");
-  const stored = () => r.storedRun(run.run_id) as unknown as DiskState;
-  r.after(MIN);
-  await r.beat(token, run.run_id, run.entry_id, PAUSED);
-  const log = mock.method(console, "warn", () => {});
-  try {
-    for (const vitals of [5, "disk", [], true, { agent_paused: "memory" }, { agent_paused: true }, { agent_paused: "" }]) {
-      r.after(MIN);
-      const res = await r.beat(token, run.run_id, run.entry_id, { vitals });
-      assert.equal(res.status, 200, JSON.stringify(vitals));
-      // Neither ends the running pause nor replaces the run's latest vitals.
-      assert.deepEqual([stored().disk_paused_at, stored().last_vitals], [t(MIN), PAUSED.vitals], JSON.stringify(vitals));
-    }
-    await r.beat(token, run.run_id, run.entry_id, RUNNING);
-    assert.equal(stored().disk_paused_at, null);
-    for (const vitals of [{ agent_paused: "memory", disk_free_bytes: 1 }, "disk"]) {
-      await r.beat(token, run.run_id, run.entry_id, { vitals });
-      assert.equal(stored().disk_paused_at, null, `${JSON.stringify(vitals)} started no pause`);
-    }
-  } finally {
-    log.mock.restore();
-  }
-});
-
-lifecycle("a disk pause queues one disk_full notice per pause, again after a resume, but not twice within 6 hours", async (r) => {
-  const token = await r.cred("alice");
-  const run = await r.start(token, "s1");
-  const beat = (at: number, extra: Record<string, unknown>) => {
-    r.at(t(at));
-    return r.beat(token, run.run_id, run.entry_id, extra);
-  };
-  const tickAt = async (at: number) => {
-    r.at(t(at));
-    await r.tick();
-  };
-  const stored = () => {
-    const s = r.storedRun(run.run_id) as unknown as DiskState;
-    return [s.disk_paused_at, s.disk_notice_at];
-  };
-  const disk = () => only(r, "disk_full").map((n) => [n.dedupe_key, n.payload]);
-
-  await beat(MIN, PAUSED);
-  await beat(2 * MIN, PAUSED); // the same pause
-  assert.deepEqual(stored(), [t(MIN), t(MIN)]);
-  assert.deepEqual(disk(), []); // the cron decides, not the request
-  await tickAt(5 * MIN);
-  assert.deepEqual(disk(), [[t(MIN), { since: t(MIN) }]]);
-  await tickAt(10 * MIN);
-  assert.equal(disk().length, 1, "one pause, one email");
-
-  // Space again: the pause ends. A new pause within 6 hours of the last email is owed nothing.
-  await beat(20 * MIN, RUNNING);
-  assert.deepEqual(stored(), [null, t(MIN)]);
-  await beat(HOURS, PAUSED);
-  assert.deepEqual(stored(), [t(HOURS), t(MIN)]);
-  await tickAt(HOURS + 5 * MIN);
-  assert.equal(disk().length, 1, "throttled: less than 6 hours since the last");
-  await beat(HOURS + 10 * MIN, { vitals: {} }); // vitals without agent_paused: not paused
-  assert.deepEqual(stored(), [null, t(MIN)]);
-
-  // Six hours after the last email, a new pause is owed one.
-  await beat(6 * HOURS + MIN, PAUSED);
-  assert.deepEqual(stored(), [t(6 * HOURS + MIN), t(6 * HOURS + MIN)]);
-  await tickAt(6 * HOURS + 5 * MIN);
-  assert.deepEqual(disk().map(([key]) => key), [t(MIN), t(6 * HOURS + MIN)]);
-});
-
-lifecycle("a heartbeat without vitals neither starts nor ends a disk pause", async (r) => {
-  const token = await r.cred("alice");
-  const run = await r.start(token, "s1");
-  const paused = () => (r.storedRun(run.run_id) as unknown as DiskState).disk_paused_at;
-  r.after(MIN);
-  await r.beat(token, run.run_id, run.entry_id, { model_requests: 1 });
-  assert.equal(paused() ?? null, null);
-  await r.beat(token, run.run_id, run.entry_id, PAUSED);
-  r.after(MIN);
-  await r.beat(token, run.run_id, run.entry_id, { vitals: null, model_requests: 2 });
-  assert.equal(paused(), t(MIN));
-});
-
-lifecycle("no disk_full for a practice run; a test run gets one (its operator's, marked [TEST] by the database)", async (r) => {
-  const practice = await r.cred("alice", "practice");
-  const p = await r.start(practice, "p1");
-  const test_ = await credentialFor(r.api, "op-1", "test");
-  const tr = await r.start(test_, "t1");
-  r.after(MIN);
-  await r.beat(practice, p.run_id, p.entry_id, PAUSED);
-  await r.beat(test_, tr.run_id, tr.entry_id, PAUSED);
-  assert.equal((r.storedRun(p.run_id) as unknown as DiskState).disk_notice_at, t(MIN)); // recorded all the same
-  await r.tick();
-  assert.deepEqual(kinds(r, p.run_id), []);
-  assert.deepEqual(kinds(r, tr.run_id), ["disk_full", "started"]);
-}, { ...WINDOW, TEST_EVENT_ID: "test" });
-
-lifecycle("after the run's end a disk pause is owed no email", async (r) => {
-  stubGithub(pushed(SHA));
-  const token = await r.cred("alice");
-  const run = await r.start(token, "s1");
-  r.at(run.deadline_at);
-  await r.beat(token, run.run_id, run.entry_id, PAUSED);
-  await r.tick();
-  assert.deepEqual(only(r, "disk_full"), []);
-}, HOUR);
 
 test("without GITHUB_TOKEN outside local tests the final-commit step warns loudly and still runs", async () => {
   const due = { run_id: "r0000000000000001", member_id: "m", mode: "competition", repo_url: REPO, official_start: T0, deadline_at: t(3600), replaced_at: null, final_commit: null } as unknown as TickRun;

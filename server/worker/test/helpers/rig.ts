@@ -1,5 +1,5 @@
 // The Worker in this process on a clock the test moves, and the calls a lifecycle test makes
-// again and again: a credential, an open, a heartbeat, a seal, a continue.
+// again and again: a credential, an open, a heartbeat, a continue, and an entry the server holds whole.
 
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -36,8 +36,6 @@ export function rig(vars: Record<string, string> = WINDOW, start = T0, cf?: Reco
       json: { entry_id: entry, seq: 0, head: GENESIS, offset_local: 0, final: false, repo_head: null, ...over },
     });
   const get = (token: string, run: string, entry?: string) => api.call("GET", `/v1/runs/${run}${entry === undefined ? "" : `?entry_id=${entry}`}`, { token });
-  const seal = (token: string, run: string, entry: string) =>
-    api.call("POST", `/v1/runs/${run}/seal`, { token, json: { entry_id: entry, seal_json: '{"s":1}', baseline_json: '{"b":1}' } });
   const cont = (token: string, run: string, previous: string, session: string, extra: Record<string, unknown> = {}, headers: Record<string, string> = {}) =>
     api.call("POST", `/v1/runs/${run}/continue`, {
       token,
@@ -45,8 +43,7 @@ export function rig(vars: Record<string, string> = WINDOW, start = T0, cf?: Reco
       json: {
         previous_entry_id: previous,
         connector_id: "other-cli",
-        manifest_sha256: "1".repeat(64),
-        connector_dir_sha256: "2".repeat(64),
+        connector_sha256: "1".repeat(64),
         workspace: "/w/two",
         session_id: session,
         harness_version: "9",
@@ -64,13 +61,14 @@ export function rig(vars: Record<string, string> = WINDOW, start = T0, cf?: Reco
     assert.equal(await p.db().commitChunk({ member_id: member, run_id: run, chunk, stored_bytes: 10 }), "committed");
     return head;
   };
-  /** Commit the end of an entry that `hold` filled. */
+  /** Commit the end of an entry that `hold` filled: the server then holds it whole and seals it. The answer. */
   const finish = async (token: string, run: string, entry: string, head: string) => {
     const f = await beat(token, run, entry, { seq: 4, head, final: true });
     assert.equal(f.status, 200, JSON.stringify(f.body));
+    return f.body as { stop: boolean; sealed: boolean };
   };
   const storedRun = (run: string) => JSON.parse(p.bucket.map.get(`state/runs/${run}.json`)!.text) as Record<string, unknown>;
-  return { ...p, cred, open, start: start_, beat, get, seal, cont, hold, finish, storedRun };
+  return { ...p, cred, open, start: start_, beat, get, cont, hold, finish, storedRun };
 }
 export type Rig = ReturnType<typeof rig>;
 
