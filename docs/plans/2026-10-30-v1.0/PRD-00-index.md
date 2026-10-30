@@ -1267,3 +1267,22 @@ why. Fixes for other files are made by those files' owners; this list covers onl
   620 tests (PRD-11 note names the points the lines serve). That is 710 src and 220 tests over the
   row; the Rust totals of about 18,100 src and at most about 14,200 tests hold only if other rows come
   in under them. PRD-16 tracks the totals.
+
+### 2026-10-30, replan after PRD-10 slice 2 (merge 56495dd6)
+
+- **Ownership:** `crates/goalcup/tests/cli_common/` (the CLI tests' shared `status.json` builder) is
+  PRD-10's, under its `tests/cli_*.rs` row (reviews A10 and B2). A folder module does not build as its
+  own test binary, and `tests/common/` stays PRD-14's. Read the PRD-10 row as `tests/cli_*`.
+
+### 2026-10-30, replan after PRD-11 slice 3 (merge c14d63b8)
+
+- **S3 additions to the final shape:** `LaunchPlan.unread: Vec<PathBuf>` (hint and refusal files
+  there but not read: linked, over 1 MiB, unreadable or unparsable) and `LaunchPlan.log: Vec<String>`
+  (fixed-text lines naming files, keys and hosts, never a value: a hint skipped, a `never` host left
+  out, an `update_off` row not written, a bad `record-hosts.txt` line). PRD-10 prints one start line
+  per `unread` entry ("goalcup could not read <file>; a model service named there may not be
+  recorded.", PRD-11 section 2) and writes each `log` line through `cli::log`. Users: PRD-10, PRD-12.
+  `write_settings` and `hosts::check` keep the signatures above.
+- **Size table, row "Connector code (PRD-11)":** a replan decision moves its ceiling to 1,700 src and
+  760 tests (PRD-11 note names the points). That is 900 src and 360 tests over the row; PRD-16 tracks
+  the Rust totals.

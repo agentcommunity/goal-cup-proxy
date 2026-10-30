@@ -1,9 +1,10 @@
 //! Every connector file is built in and loads; no native row snapshots a key file (point 4);
-//! the loader refuses duplicate row names and a skills folder in the workspace (PRD-11 section 2).
+//! the loader refuses what PRD-11 section 2 refuses.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
-use goalcup::connector::{self, HostList, Source, builtin, hosts};
+use goalcup::connector::{self, ConnectorError, HostList, Source, builtin, hosts};
+use goalcup::native::pattern;
 
 fn connectors_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../connectors")
@@ -36,14 +37,6 @@ fn every_connector_file_is_built_in_and_loads_by_its_id() {
         ids.len(),
         "connector/builtin.rs must list every connectors/*.toml file"
     );
-    for (listed, text) in builtin::CONNECTORS {
-        let table: toml::Table = toml::from_str(text).unwrap();
-        assert_eq!(
-            table["id"].as_str(),
-            Some(*listed),
-            "the listed id is the file's id"
-        );
-    }
     for id in &ids {
         let c = connector::load(id, None).unwrap_or_else(|e| panic!("{id}: {e}"));
         assert_eq!(&c.id, id, "file stem equals id");
@@ -70,32 +63,6 @@ fn the_shared_host_list_parses() {
     }
 }
 
-/// One `/`-free component against a glob of `*` and `?`.
-fn glob(pattern: &[u8], name: &[u8]) -> bool {
-    match (pattern.first(), name.first()) {
-        (None, None) => true,
-        (Some(b'*'), _) => {
-            glob(&pattern[1..], name) || (!name.is_empty() && glob(pattern, &name[1..]))
-        }
-        (Some(b'?'), Some(_)) => glob(&pattern[1..], &name[1..]),
-        (Some(p), Some(n)) if p == n => glob(&pattern[1..], &name[1..]),
-        _ => false,
-    }
-}
-
-/// A `/`-separated pattern where `**` matches zero or more whole components.
-fn matches(pattern: &[&str], path: &[&str]) -> bool {
-    match pattern.first() {
-        None => path.is_empty(),
-        Some(&"**") => (0..=path.len()).any(|skip| matches(&pattern[1..], &path[skip..])),
-        Some(p) => {
-            !path.is_empty()
-                && glob(p.as_bytes(), path[0].as_bytes())
-                && matches(&pattern[1..], &path[1..])
-        }
-    }
-}
-
 fn resolve(template: &str) -> String {
     template
         .replace("{home}", "/h")
@@ -109,14 +76,12 @@ fn no_native_row_reads_a_key_file() {
         for secret in &c.secret_files {
             let secret = resolve(secret).replace('*', "x");
             for row in &c.native {
-                let root = resolve(&row.root);
-                let Some(rest) = secret.strip_prefix(&format!("{root}/")) else {
+                let Some(rest) = secret.strip_prefix(&format!("{}/", resolve(&row.root))) else {
                     continue;
                 };
-                let path: Vec<&str> = rest.split('/').collect();
-                let pattern: Vec<&str> = row.pattern.split('/').collect();
+                let pattern = pattern::parse(&row.pattern).unwrap();
                 assert!(
-                    !matches(&pattern, &path),
+                    !pattern.matches(Path::new(rest)),
                     "{id}: native row {} would read key file {secret}",
                     row.name
                 );
@@ -152,20 +117,10 @@ native = [
     assert!(load_text(text).is_err());
 }
 
-#[test]
-fn a_skills_folder_in_the_workspace_is_refused() {
-    let text = r#"
-id = "test-cli"
-name = "Test"
-program = "test"
-skills_dir = "{workspace}/skills"
-"#;
-    assert!(load_text(text).is_err());
-}
-
 /// Connector data never reaches outside the isolated home or the workspace (AGENTS.md: nothing
 /// is written into the participant's real harness folders), and never takes a variable the code
-/// sets (a CA or proxy variable pointed elsewhere would break every tunnel, point 3).
+/// sets (a CA or proxy variable pointed elsewhere would break every tunnel, point 3). Settings
+/// are written into the isolated home only; a native pattern passes PRD-04's check.
 #[test]
 fn connector_data_stays_in_its_home_and_off_the_code_variables() {
     let refused = [
@@ -174,6 +129,10 @@ fn connector_data_stays_in_its_home_and_off_the_code_variables() {
         "native = [{ name = \"a\", root = \"{home}/../../.claude/projects\", pattern = \"*.jsonl\" }]",
         "update_off = [{ file = \"{home}/../../.codex/config.toml\", key = \"a\", value = \"b\" }]",
         "secret_files = [\"{workspace}/../x.json\"]",
+        "no_prompts = [{ file = \"{workspace}/x.json\", key = \"a\", value = \"b\" }]",
+        "update_off = [{ file = \"{workspace}/x.json\", key = \"a\", value = \"b\" }]",
+        "native = [{ name = \"a\", root = \"{home}\", pattern = \"logs/**\" }]",
+        "skills_dir = \"{workspace}/skills\"",
         "skills_dir = \"{home}/../../skills\"",
         "skills_dir = \"{home}//skills\"",
         "ca_env = [\"SSL_CERT_FILE\"]",
@@ -186,7 +145,8 @@ fn connector_data_stays_in_its_home_and_off_the_code_variables() {
     ];
     let head = "id = \"test-cli\"\nname = \"Test\"\nprogram = \"test\"\n";
     for body in refused {
-        assert!(load_text(&format!("{head}{body}\n")).is_err(), "{body}");
+        let got = load_text(&format!("{head}{body}\n"));
+        assert!(matches!(got, Err(ConnectorError::Invalid { .. })), "{body}");
     }
     load_text(&format!(
         "{head}home = {{ HOME = \"{{home}}\", XDG_CONFIG_HOME = \"{{home}}/.config\" }}\n"

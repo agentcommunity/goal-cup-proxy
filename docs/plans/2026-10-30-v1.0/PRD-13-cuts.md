@@ -746,3 +746,14 @@ PRD-14, PRD-15, PRD-16 and the code.
   PRD-13's own order. PRD-05's core slice deletes the 50 `*.redactions.jsonl` logs from the copy
   (PRD-05 note), so the move table's "86 files" ends as 36.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-09 slice 1 (merge f5a529c8)
+
+- **PRD-09's fixture copy is done.** `crates/goalcup-verify/tests/usage_fixtures/` holds the six files
+  PRD-09 section 9 names (`m2-openai`, `m2-anthropic`, four `m2-native` excerpts) with a
+  `provenance.json` per folder, sha256 checked against the old crate. Deleting
+  `crates/goalcup-verifier/` no longer waits on PRD-09 for fixtures.
+- **The `connectors` fixtures in the move table row for PRD-09 are not copied** and go with the old
+  crate: the five `tests/fixtures/connectors/*/*.json` files are the old decoders' expected-count
+  snapshots (ledger B10) that only point at the `m2-native` files already copied (PRD-09 note).
+- No locked ledger item is touched and no owner question comes from this slice.

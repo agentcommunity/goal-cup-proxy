@@ -1,0 +1,25 @@
+{
+ "purpose": "PRD-09 usage reader fixture: a real Codex CLI 0.153.0 run over one WebSocket to chatgpt.com /backend-api/codex/responses (OpenAI Responses events with token usage)",
+ "files": {
+  "codex-0.153.0-ws-run.jsonl": {
+   "sha256": "e47820691f28e95ba72f49bd6a90ceb774d9abeb63919b7cf240d37b63febb9a",
+   "bytes": 267812,
+   "lines": 456,
+   "copied_from": {
+    "path": "crates/goalcup-verifier/tests/fixtures/m2-openai/codex-0.153.0-ws-run.jsonl",
+    "commit": "15a6963b57f1cb341b4efcaf10aa92d6dc633c31",
+    "sha256": "e47820691f28e95ba72f49bd6a90ceb774d9abeb63919b7cf240d37b63febb9a",
+    "provenance_sha256": "8aec2e6d541a7c04eaab294a454a61c4b1608c0718025ed8e001c668ad8ca227"
+   },
+   "copy": "byte for byte; sanitized E01 run codex-20260928T032110Z (provider ids to consistent placeholders, client metadata and context texts dropped, token usage kept)",
+   "line_format": "one JSON object per stream in Open order. The reader needs only stream, source, exchange, message_index (WebSocket), method, status, label, first and last wall, and text; retained_segments and mono_ns stay from the byte-for-byte copy and are not read. Host and path are common to every stream and not repeated.",
+   "streams": {"wire_request": 1, "wire_response": 1, "ws_client": 6, "ws_server": 448}
+  }
+ },
+ "secret_scan": {
+  "command": "grep -o -i -E '(^|[^a-z0-9_])(sk-|sk-ant-|sk-proj-|ghp_|gho_|github_pat_|xox[abposr]-|akia[0-9a-z]{12})|bearer +[a-z0-9._~+/=-]{8,}|eyj[a-z0-9_-]{8,}\\.|-----begin|(key|token|secret|authorization|password)[\"' :=_a-z-]{0,12}[a-z0-9+/=_-]{40,}' FILE | wc -l",
+  "where": "a build box on the committed branch; the same scan covers ../m2-anthropic and ../m2-native",
+  "result": {"codex-0.153.0-ws-run.jsonl": 0},
+  "follow_up": "rerun goalcup-verify secrets (PRD-08) over this folder when it lands"
+ }
+}

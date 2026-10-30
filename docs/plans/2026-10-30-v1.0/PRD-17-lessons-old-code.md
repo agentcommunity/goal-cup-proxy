@@ -887,3 +887,95 @@ old code. Each id with what was done here.
   signature, but as a stub (lowercase and label shape only). `lessons_hosts.rs` waits for PRD-11's hosts
   slice, which copies the full check (section 3); a lesson test against the stub would pass or fail for
   the wrong reason. `lessons_launch.rs` waits for the launch slice (lock, `.profile`) and S8.
+
+### 2026-10-30, replan after PRD-08 slice 1 (merge d10feef7)
+
+Names for `LESSONS.md` (the lessons lane writes them; judge 13:06Z):
+
+- L-VR3: `crates/goalcup-verify/tests/check_invariants.rs`
+  `vr3_every_mutation_fails_its_check_with_exit_2` (21 rows; each asserts its own check fails and exit
+  2). The 12:49Z name is superseded.
+- L-VR4: `crates/goalcup-verify/tests/check_named.rs` `clean_record_with_interrupted_end_exits_0`.
+- L-FW3: the local half (`parts_pruned` named, exit 1) is built but has no test yet; PRD-08's next
+  slice names it. L-VR2: the panic hook is built (file and line, exit 3), its test comes with the
+  server slice (PRD-08 note). Both stay `(name pending)`.
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-10 slice 2 (merge 56495dd6)
+
+- **L-SC6 is named:** `crates/goalcup/tests/cli_finish.rs` `unsealed_status_never_reads_as_finished`.
+  A `status.json` with no seal never yields the end screen's finished block, and status never
+  prints the sealed state line. The lessons lane replaces its `(name pending)`.
+- L-SC1 stays pending. `cli/folder.rs` and `cli_folder.rs` need neither S3 nor S8, so they may come
+  in PRD-10's next slice, ahead of `start` (PRD-10 note). The check on the relative `GOALCUP_HOME`
+  input from the slice 1 note still applies.
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-14 slice 2 (merge 04886295)
+
+- **`common::upstream` is on integration** (04886295) for TLS with a chosen ALPN, HTTP/1.1 (whole,
+  chunked, SSE, codings), WebSocket with permessage-deflate, held handshakes and answers and close
+  after N bytes. PRD-03's `decode`, `ws`, `tls` and `connect` leaf modules reached integration in
+  0e411074, so `lessons_decode.rs` can land now; `lessons_http1.rs` waits only on `proxy::serve`
+  (PRD-03 slice 2). HTTP/2 cases wait on PRD-14 slice 3; a TLS that chooses `h2`
+  panics the fake's task today.
+- `common::recorder::real` (H10, K15) is not on integration; it comes in PRD-14 slice 3 after PRD-02's
+  `Recorder::real_for_tests`.
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-03 core slice 1 (merge 0e411074)
+
+- **`lessons_decode.rs` need not wait for `http1`.** `proxy::decode::{parse_codings, BodyDecoder,
+  Step}` is on integration and driven alone over `Recorder::for_tests(room)`, as PRD-03's
+  `tests/proxy_decode.rs` does. D1, D2, D3, D4 and D6 can be written against it now; D7's bomb test
+  checks a `memory_guard` GAP in the record, so it waits for `http1` (PRD-03 slice 2). Reuse
+  `tests/proxy_fixtures/anthropic-sse.br` and `sse-flushed.br` rather than adding copies, and do not
+  repeat PRD-03's cases (each coding decodes, an unknown coding writes no body byte, a window over
+  `room()` is not decoded).
+- **`lessons_tls.rs` T1, T2, T4 and T5** can use `proxy::ca::RunCa` (`mint`, `leaf`, `write_files`,
+  `export`, `import`) and `proxy::ca::certificates` now. T3 and every `lessons_connect` row drive
+  `proxy::serve`, which comes in PRD-03 slice 2.
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-08 slice 2 (merge 669f5d92)
+
+Names for `LESSONS.md` (the lessons lane writes them; judge 14:56Z, 15:13Z):
+
+- L-FW3 (local and server halves, plus a wrong `--local` path exiting 3):
+  `crates/goalcup-verify/tests/server_compare.rs`
+  `fw3_pruned_entry_is_named_and_server_copy_stands_in`. This replaces the `(name pending)`.
+- L-FW9: `crates/goalcup-verify/tests/server_compare.rs` `fw9_one_flipped_byte_fails_the_copy`.
+- L-VR2: `crates/goalcup-verify/tests/server_compare.rs`
+  `vr2_seal_without_reason_or_totals_is_reported`, plus the `("inv5", m_mask_at_top)` row of
+  `check_invariants.rs` `vr3_every_mutation_fails_its_check_with_exit_2`. Both inputs exited 3 before
+  the fix. The panic hook itself (file and line, exit 3) is recorded as a review check, because no
+  test input reaches it.
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-11 slice 3 (merge c14d63b8)
+
+- **`hosts::check` is the full rule set on integration**, so `lessons_hosts.rs` and the lessons
+  fixtures can land against it. Facts the guards meet: N2 forms (`0.0.0.0`, `::`, mapped loopback)
+  come back `Skipped { local: true }`, as do private and link-local addresses; N3 numeric spellings
+  (`127.1`, `0x7f.1`) are refused with `local` false (PRD-11 note, known), so N3's guard asserts the
+  refusal only. N6 uses `hosts::resolves_only_here(&[IpAddr])` (public), so the stub-resolver guard
+  calls it directly. N1's userinfo and backslash handling is `hints::authority` (crate-private);
+  its guard goes through `plan` with a hint file, as `connector_hints.rs` does. HF1 to HF8 rows whose
+  guard is `connector_launch.rs` (lock, version probe, typed settings, never a link) are on
+  integration at c14d63b8 and can turn green after a box run on the integration head.
+
+### 2026-10-30, replan after PRD-10 slice 3 (merge f66ce4a5)
+
+- **SC1 is named and green:** `crates/goalcup/tests/cli_folder.rs`
+  `project_folder_and_goalcup_home_never_hold_each_other`. It refuses a project inside
+  `$GOALCUP_HOME` and one that holds it, also through a link and with `..` in the spelled path; its
+  inputs include the relative `GOALCUP_HOME=gc` of the A8 note, so the check the lane was asked to
+  make is in the case. The "side by side" part of the rule has no input of its own in the case. Row 2.16 SC1 can point at it.
+- **SC2's folder case is named and green:** `cli_folder.rs::refused_start_creates_nothing` (the
+  refusal ends "Nothing was created.", the project's listing of names, sizes and times is unchanged,
+  and neither `GOALCUP_HOME` nor its parent exists). SC2's other cases (Ctrl-C, a denial, an expired code, an absent
+  server) wait for PRD-10's `approve.rs`. For the start slice the PRD-10 note fixes the order
+  `connector::load`, `folder::check`, then `connector::plan`, because `plan` creates the isolated
+  home, its lock file and the `update_off` rows; without that order this case would fail.
+- PRD-10's SC row in this PRD's acceptance table (P14, S7, HF4, HF6 still to come) is unchanged.
+- No locked ledger item is touched and no owner question comes from this slice.
