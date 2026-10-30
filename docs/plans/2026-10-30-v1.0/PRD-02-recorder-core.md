@@ -1422,3 +1422,14 @@ to another file are made by that file's owner.
   answer never stretches it. The watchdog reckons `seconds_left` from `asked_at` and not from when the
   word arrived.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-04 core slice part 2 (merge 01afcf22)
+
+- **Seam ask from PRD-04 (log 14:31Z), still open at 01afcf22:** `pipeline::cursors::SnapshotCursor`
+  holds `size` and `mtime_ns` only. Section 9.3 and PRD-04 section 7 give every native file a `fid`,
+  so a snapshot replaced by a new file of the same size and `mtime_ns` is skipped on resume today
+  (point 1). PRD-02's next touch of `cursors.rs` adds `fid: Fid` to `SnapshotCursor` (the same `Fid`
+  `NativeCursor` and `native::fsx` use); PRD-04 then compares it in `Tail::new`. Old `cursors.json`
+  needs no reading path (no 0.7 compatibility). Acceptance lists the gap as known if it is still
+  open at the end.
+- No locked ledger item is touched and no owner question comes from this slice.

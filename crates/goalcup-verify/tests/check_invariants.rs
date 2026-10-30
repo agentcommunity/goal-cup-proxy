@@ -11,12 +11,13 @@ use goalcup_format::{GapReason, StreamKind};
 use serde_json::{Value, json};
 use std::path::PathBuf;
 
+fn is_open(r: &Record, kind: StreamKind) -> bool {
+    matches!(r, Record::Open { skind, .. } if *skind == kind)
+}
+
 /// A sid of the first OPEN of this kind.
 fn sid_of(recs: &[Record], kind: StreamKind) -> u64 {
-    match &recs[find(
-        recs,
-        |r| matches!(r, Record::Open { skind, .. } if *skind == kind),
-    )] {
+    match &recs[find(recs, |r| is_open(r, kind))] {
         Record::Open { sid, .. } => *sid,
         _ => unreachable!(),
     }
@@ -24,6 +25,13 @@ fn sid_of(recs: &[Record], kind: StreamKind) -> u64 {
 
 fn bump(v: &mut Value, k: &str, by: u64) {
     v[k] = json!(v[k].as_u64().unwrap() + by);
+}
+
+/// An entry with the clean content written, not yet sealed.
+fn standard(name: &str) -> Entry {
+    let mut e = Entry::new(name);
+    e.standard();
+    e
 }
 
 fn m_no_part_first(name: &str) -> PathBuf {
@@ -50,15 +58,7 @@ fn m_link_wrong_hash(name: &str) -> PathBuf {
 
 fn m_data_before_open(name: &str) -> PathBuf {
     mutate(&clean(name), None, |r| {
-        let i = find(r, |x| {
-            matches!(
-                x,
-                Record::Open {
-                    skind: StreamKind::HttpReq,
-                    ..
-                }
-            )
-        });
+        let i = find(r, |x| is_open(x, StreamKind::HttpReq));
         r.swap(i, i + 1);
     })
 }
@@ -89,21 +89,23 @@ fn m_mask_over_text(name: &str) -> PathBuf {
     })
 }
 
+/// L-VR2: a MASK at the top of u64 overflows no sum (a panic would be exit 3).
+fn m_mask_at_top(name: &str) -> PathBuf {
+    mutate(&clean(name), None, |r| {
+        let i = find(r, |x| matches!(x, Record::Mask { .. }));
+        if let Record::Mask { off, len, .. } = &mut r[i] {
+            (*off, *len) = (u64::MAX - 1, 2);
+        }
+    })
+}
+
 fn m_boot_without_gap(name: &str) -> PathBuf {
-    let mut e = Entry::new(name);
-    e.standard();
+    let mut e = standard(name);
     e.crash("killed", 5_000);
     e.count();
     mutate(&e.seal(), None, |r| {
-        r.retain(|x| {
-            !matches!(
-                x,
-                Record::Gap {
-                    reason: GapReason::RecorderDown,
-                    ..
-                }
-            )
-        });
+        let down = GapReason::RecorderDown;
+        r.retain(|x| !matches!(x, Record::Gap { reason, .. } if *reason == down));
     })
 }
 
@@ -133,15 +135,7 @@ fn m_record_after_seal(name: &str) -> PathBuf {
 
 fn m_resp_names_missing_req(name: &str) -> PathBuf {
     mutate(&clean(name), None, |r| {
-        let i = find(r, |x| {
-            matches!(
-                x,
-                Record::Open {
-                    skind: StreamKind::HttpResp,
-                    ..
-                }
-            )
-        });
+        let i = find(r, |x| is_open(x, StreamKind::HttpResp));
         if let Record::Open { req, .. } = &mut r[i] {
             *req = 99;
         }
@@ -166,16 +160,14 @@ fn m_seen_off(name: &str) -> PathBuf {
 }
 
 fn m_gap_without_extent(name: &str) -> PathBuf {
-    let mut e = Entry::new(name);
-    e.standard();
+    let mut e = standard(name);
     let tail = json!({"guard": "held_bytes", "limit": 1});
     e.gap(0, GapReason::MemoryGuard, 0, 0, 0, tail);
     e.seal()
 }
 
 fn m_count_silence(name: &str) -> PathBuf {
-    let mut e = Entry::new(name);
-    e.standard();
+    let mut e = standard(name);
     e.idle(200_000);
     e.count();
     e.seal()
@@ -183,31 +175,25 @@ fn m_count_silence(name: &str) -> PathBuf {
 
 /// A COUNT more than 180 s late, written by recovery at the dead boot's last kept LINK.
 fn m_count_silence_then_crash(name: &str) -> PathBuf {
-    let mut e = Entry::new(name);
-    e.standard();
+    let mut e = standard(name);
     e.idle(200_000);
     e.crash("killed", 1_000);
     e.seal()
 }
 
 fn m_native_resume_hole(name: &str) -> PathBuf {
-    let mut e = Entry::new(name);
-    e.standard();
+    let mut e = standard(name);
     e.crash("killed", 1_000);
     e.native("fake:sessions/s1.jsonl", 0, 50);
     e.seal()
 }
 
 fn m_seal_totals_wrong(name: &str) -> PathBuf {
-    let mut e = Entry::new(name);
-    e.standard();
-    e.seal_with(|t| bump(t, "http_post", 1))
+    standard(name).seal_with(|t| bump(t, "http_post", 1))
 }
 
 fn m_seal_totals_key_missing(name: &str) -> PathBuf {
-    let mut e = Entry::new(name);
-    e.standard();
-    e.seal_with(|t| {
+    standard(name).seal_with(|t| {
         t.as_object_mut().unwrap().remove("hosts");
     })
 }
@@ -220,15 +206,13 @@ fn m_torn_tail(name: &str) -> PathBuf {
 }
 
 fn m_native_path_gen_twice(name: &str) -> PathBuf {
-    let mut e = Entry::new(name);
-    e.standard();
+    let mut e = standard(name);
     e.native("fake:sessions/s1.jsonl", 0, 22);
     e.seal()
 }
 
 fn m_gap_reason_8(name: &str) -> PathBuf {
-    let mut e = Entry::new(name);
-    e.standard();
+    let mut e = standard(name);
     e.gap(0, GapReason::from_u8(8), 1_000, 0, 1, Value::Null);
     e.seal()
 }
@@ -243,6 +227,7 @@ const FAILS: &[(&str, Build)] = &[
     ("inv3", m_data_before_open),
     ("inv4", m_offset_hole),
     ("inv5", m_mask_over_text),
+    ("inv5", m_mask_at_top),
     ("inv6", m_boot_without_gap),
     ("inv7", m_count_off_by_one),
     ("inv7", m_count_key_missing),
@@ -306,8 +291,7 @@ fn clean_entry_passes_as_parts_and_as_fetched_copy() {
 
 #[test]
 fn counts_apart_by_a_suspend_pass() {
-    let mut e = Entry::new("suspend");
-    e.standard();
+    let mut e = standard("suspend");
     e.sleep(200_000);
     e.count();
     let (code, v) = check(&e.seal(), &[]);
@@ -317,8 +301,7 @@ fn counts_apart_by_a_suspend_pass() {
 
 #[test]
 fn unknown_record_kind_warns_and_keeps_the_exit() {
-    let mut e = Entry::new("unknown-kind");
-    e.standard();
+    let mut e = standard("unknown-kind");
     e.put(Record::Unknown {
         kind: 0x20,
         body: b"future".to_vec(),
