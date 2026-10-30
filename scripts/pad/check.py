@@ -23,7 +23,9 @@ SEAM = {k: tuple(v.split(".")) for k, v in {
     "s7_threads": "threads", "t_parent": "parent", "t_models": "models", "t_wire": "wire_calls",
     "t_native": "native_calls", "s13_requests": "model_requests", "s13_final": "final", "s13_complete": "complete",
     "s4_mode": "mode", "s4_port": "port", "s4_harness_pid": "harness.pid", "s4_requests": "written.model_requests",
-    "s4_off": "written.off_ms", "s4_seal": "seal.reason", "s9_final": "final", "s9_keep": "keep", "s9_state": "state"}.items()}
+    "s4_off": "written.off_ms", "s4_seal": "seal.reason", "s4_pid": "pid", "s4_spans": "off.spans", "s4_down_ms": "off.ms",
+    "s4_since": "off.since", "s4_last": "last_request_at", "s9_final": "final", "s9_keep": "keep", "s9_state": "state"}.items()}
+S7_TOKENS = ("input", "cached", "cache_write", "output", "reasoning")  # S7 models[].tokens keys
 # Not fixed yet (asked of PRD-08 in the night log): the `secrets` JSON, and how a recorder_down gap's
 # cause and length appear. Read when present; else hits fall back to verify/exits.json (keyed by the
 # JSON file's stem; PRD-08 section 2: 0 and 1 are no hit, 2 a hit, anything else no scan) and causes to counts.gaps keys ("null_mode",
@@ -38,11 +40,13 @@ DOWN = ("recorder_down", "null_mode", "watchdog_lost")
 DOWN_ERR = re.compile(r"(?<!\d)5\d\d(?!\d)|overloaded|server_error|api_error|internal", re.I)  # S6 keys are
 REFUSED_ERR = re.compile(r"(?<!\d)40[13](?!\d)|auth|permission|api_key|quota|billing", re.I)  # kinds or codes
 RECOVER = ("nothing to recover", "Recording is on again")  # PRD-10 acceptance 11: first, second recover
+STATUS_RECOVER = "Run: goalcup recover"  # PRD-10 acceptance 11: the status line after the recorder kill
 BUILT_FAULTS = ("kill-recorder", "kill-watchdog-recover")
 C1_IDS = ("gap_has_end", "history_complete", "streams_closed", "seen_matches_written", "recorder_alive", "listed_hosts_decrypted")
 RANK = {"pass": 0, "warn": 1, "skip": 2, "named": 3, "fail": 4}
 ORDER = {"PASS": 0, "INCONCLUSIVE": 1, "FAIL": 2}
 CHECKS = ("C1", "C2", "C3", "C4", "C5", "C6")
+SEAL_SLACK = datetime.timedelta(seconds=120)  # pad's seal-now limit: a seal may begin that long before its line
 COPY = "connector copy"  # pad's variant mark for a connector file from disk (P13): a check row, not a fault
 
 def fault_kinds(meta):
@@ -58,13 +62,15 @@ def items(d):
     return [(str(k), v) for k, v in d.items()] if isinstance(d, dict) else []
 
 def load(folder, rel, lines=False):
-    """A JSON file, or the dicts of a JSONL file (a watch line may wrap its file as {"at", "status"} or "upload")."""
+    """A JSON file, or the dicts of a JSONL file (a watch line may wrap its file as {"at", "status"} or "upload": then
+    the file's dict, with the line's time as pad_at)."""
     try:
         with open(os.path.join(folder, rel)) as f:
             got = [json.loads(ln) for ln in f if re.match(r"\s*\{.*\}\s*$", ln)] if lines else json.load(f)  # no torn line
     except (OSError, ValueError):
         return [] if lines else None
-    return [next((v[k] for k in ("status", "upload") if isinstance(v.get(k), dict)), v) for v in got] if lines else got
+    return [dict(v[k], pad_at=v.get("at")) if k else v for v in got
+            for k in [next((k for k in ("status", "upload") if isinstance(v.get(k), dict)), None)]] if lines else got
 
 def when(s):
     try:
@@ -77,6 +83,15 @@ def count(v):
     if isinstance(v, (bool, int)):
         return int(v)
     return len(v) if isinstance(v, list) else sum(count(n) for _, n in items(v))
+
+def models(doc):
+    """S7 `models` as [{model, tokens}], each token count an int or null: what the spend check and the ledger price."""
+    got, out = dig(doc, "s7_models"), []
+    for x in got if isinstance(got, list) else []:
+        tok = x.get("tokens") if isinstance(x, dict) and isinstance(x.get("tokens"), dict) else {}
+        if isinstance(x, dict) and isinstance(x.get("model"), str):
+            out.append({"model": x["model"], "tokens": {k: tok[k] if type(tok.get(k)) is int else None for k in S7_TOKENS}})
+    return out
 
 def worst(entries, cid):
     """The worst result of one S6 check id across the entries, as the check's dict; {} when absent."""
@@ -105,6 +120,8 @@ class Run:
         self.failed = {c.get("id"): c.get("why") for e in self.entries for c in dig(e, "s6_checks") or []
                        if isinstance(c, dict) and c.get("result") == "fail" and isinstance(c.get("id"), str)}
         self.v = dict.fromkeys(CHECKS + ("faults",), "PASS")
+        seals = [when(f.get("at")) for f in self.faults if f.get("kind") == "seal-now" and f.get("exit") == 0]  # section 7,
+        self.cap_at = min([t for t in seals if t], default=None) if meta.get("over_cap") is True else None  # as pad-run
         got = [dig(e, "s6_requests") for e in self.entries if isinstance(dig(e, "s6_requests"), int)]
         self.reqs, self.native = sum(got) if got else None, sum(count(dig(e, "s6_native")) for e in self.entries)
 
@@ -264,6 +281,21 @@ def c6(r):
     high = max([dig(s, "s4_requests") for s in r.samples if isinstance(dig(s, "s4_requests"), int)] or [0])
     r.flag(isinstance(final, int) and high > final, "C6", "FAIL", "a status sample showed %s requests, final %s" % (high, final))
 
+def capped(r, start, end):
+    """Section 7: the pad sealed the run at the spend cap between start and end (None: open), so what a fault
+    expectation in that window waits for may be cut short by the rig, not by goalcup."""
+    s = r.cap_at
+    return bool(s and start and s >= start and (end is None or s - SEAL_SLACK <= end))
+
+def fail(r, cond, start, end, why):
+    """A faults FAIL, or INCONCLUSIVE when the pad's seal at the spend cap falls in the expectation's window."""
+    if cond:
+        r.mark("faults", *(("INCONCLUSIVE", "sealed at the spend cap: " + why) if capped(r, start, end) else ("FAIL", why)))
+
+def fired(r, *kinds):
+    """The fault lines of a kill of one of these kinds that fired (a pid was hit)."""
+    return [f for f in r.faults if f.get("kind") in kinds and f.get("pid") is not None]
+
 def faults(r):
     """Section 3.1, for the two faults built so far; any other kind makes the row INCONCLUSIVE."""
     kinds = fault_kinds(r.meta)
@@ -271,6 +303,34 @@ def faults(r):
         r.mark("faults", "INCONCLUSIVE", "expectations for %s not built yet" % k)
     if not set(kinds) & set(BUILT_FAULTS):
         return
+    kills = fired(r, "kill-recorder")
+    missed = [when(f.get("at")) for f in r.faults if f.get("kind") == "kill-recorder" and f.get("pid") is None]
+    short = "fault did not fire: %d of %d kills" % (len(kills), kinds.count("kill-recorder"))
+    if r.cap_at and any(t and t + SEAL_SLACK >= r.cap_at for t in missed):  # section 7: the pad's seal left nothing to kill
+        short = "sealed at the spend cap: " + short
+    r.flag(len(kills) < kinds.count("kill-recorder"), "faults", "INCONCLUSIVE", short)
+    # The record's evidence around each kill: a status sample before and after it (the watch ran), and after a
+    # recorder kill, written model requests up by at least 1 (section 1a).
+    pairs = [(t, n) for t, n in ((when(s.get("pad_at")), dig(s, "s4_requests")) for s in r.samples) if t]
+    times, reqs = [t for t, _ in pairs], [(t, n) for t, n in pairs if isinstance(n, int)]
+    rec = [(f.get("result"), when(f.get("at"))) for f in r.faults if f.get("kind") == "wait-recovery"]
+    killed = [t for t in (when(f.get("at")) for f in kills) if t]
+    # Each kill's window runs to the end of the wait-recovery after it (open when unknown); a wait-recovery's from
+    # the last kill before it. A record-only check (gaps, null_mode) is judged whatever the pad did after.
+    for f in fired(r, "kill-recorder", "kill-watchdog"):
+        k = when(f.get("at"))
+        if not (k and any(t < k for t in times) and any(t > k for t in times)):
+            r.mark("faults", "INCONCLUSIVE", "no status sample on both sides of the %s at %s" % (f["kind"], f.get("at")))
+        elif f["kind"] == "kill-recorder" and "kill-recorder" in kinds:
+            old, new = [n for t, n in reqs if t < k], [n for t, n in reqs if t > k]
+            fail(r, old and new and max(new) <= max(old), k, next((e for _, e in rec if e is None or e >= k), None),
+                 "no model request written after the kill at %s (status samples)" % f.get("at"))
+    for got, end in rec:
+        fail(r, got == "FAIL", max([k for k in killed if end is None or k <= end], default=None), end,
+             "did not stand back up (wait-recovery)")
+    res = [x for x, _ in rec]
+    r.flag(kills and "kill-recorder" in kinds and (not res or set(res) - {"ok", "FAIL"}), "faults",
+           "INCONCLUSIVE", "recovery not observed: wait-recovery %s" % (", ".join(map(str, res)) or "not run"))
     gaps, counts = r.gaps()
     other = sorted(k for k, n in counts.items() if n and k.split(":")[0] not in DOWN + ("after_stop",))  # R2: seal
     r.flag(other, "faults", "FAIL", "named loss other than the expected gaps: %s" % ", ".join(other))  # C1, C2
@@ -285,31 +345,41 @@ def faults(r):
            "faults", "FAIL", "a null_mode gap")
     r.flag(any("mode" in s and dig(s, "s4_mode") in (None, "null") for s in r.samples), "faults", "FAIL",
            "a status.jsonl line with mode null")
-    kills = kinds.count("kill-recorder")
-    r.flag(len(gaps) != kills, "faults", "FAIL", "%d recorder_down gaps for %d kills" % (len(gaps), kills))
+    r.flag(len(gaps) != len(kills), "faults", "FAIL", "%d recorder_down gaps for %d kills" % (len(gaps), len(kills)))
     for a, b, ms in span:
         ms = ms if isinstance(ms, (int, float)) else (b - a).total_seconds() * 1000 if a and b else None
         r.flag(ms is None or ms >= 2000, "faults", "FAIL", "a recorder_down gap of %s ms, not under 2 s" % ms)
-    r.flag(dig(r.local, "s6_exit") != 1, "faults", "FAIL", "verifier exit %s, a kill row expects 1" % dig(r.local, "s6_exit"))
+    r.flag(kills and dig(r.local, "s6_exit") != 1, "faults", "FAIL", "verifier exit %s, a kill row expects 1" % dig(r.local, "s6_exit"))
 
 def recover(r, gaps):
+    for kind in ("kill-watchdog", "kill-recorder"):  # PRD-10 acceptance 11 needs both kills
+        if not fired(r, kind):
+            return r.mark("faults", "INCONCLUSIVE", "fault did not fire: %s" % kind)
     if any("goalcup continue" in str(f.get("said")) for f in r.faults):
         return r.mark("faults", "INCONCLUSIVE", "harness lost its terminal")
+    for what, name in (("harness pid", "s4_harness_pid"), ("port", "s4_port")):  # record-only: judged whatever came after
+        r.flag(len({dig(s, name) for s in r.samples} - {None}) > 1, "faults", "FAIL", "the %s changed" % what)
     done = [f for f in r.faults if f.get("kind") == "recover"]
+    if capped(r, when(fired(r, "kill-watchdog")[0].get("at")), when(done[1].get("at")) if len(done) > 1 else None):
+        return r.mark("faults", "INCONCLUSIVE", "sealed at the spend cap between the watchdog kill and the second recover")
+    r.flag(not any(f.get("kind") == "status" and STATUS_RECOVER in str(f.get("said")) for f in r.faults), "faults",
+           "FAIL", "status did not show " + STATUS_RECOVER)
     r.flag(len(done) < 2, "faults", "INCONCLUSIVE", "%d of 2 recover outcomes logged" % len(done))
     for f, words in zip(done, RECOVER):
         r.flag(f.get("exit") != 0 or words not in str(f.get("said")), "faults", "FAIL",
                "recover at %s: exit %s, not the expected outcome" % (f.get("at"), f.get("exit")))
-    for what, name in (("harness pid", "s4_harness_pid"), ("port", "s4_port")):
-        r.flag(len({dig(s, name) for s in r.samples} - {None}) > 1, "faults", "FAIL", "the %s changed" % what)
     r.flag(len(gaps) != 1, "faults", "FAIL", "%d recorder_down gaps, the recover row expects 1" % len(gaps))
     seal = dig(r.entry, "s6_seal") or dig(r.status, "s4_seal")
+    if seal not in ("harness_exit", "deadline") and r.meta.get("over_cap") is True:  # section 7: pad sealed it
+        return r.mark("faults", "INCONCLUSIVE", "sealed at the spend cap (seal reason %s)" % seal)
     r.flag(seal not in ("harness_exit", "deadline"), "faults", "FAIL", "seal reason %s" % seal)
 
 def facts(r):
     u, e, m = r.usage or {}, r.entry, r.meta
     read, hist, size = dig(u, "s7_readable") is True, dig(e, "s6_history") or {}, dig(e, "s6_bytes") or {}
     threads = [t for t in dig(u, "s7_threads") or [] if isinstance(t, dict)]
+    rss = [p.get("rss_kb") for x in load(r.folder, "watch/procs.jsonl", 1) for p in x.get("procs") or []
+           if isinstance(p, dict) and p.get("role") == "recorder" and isinstance(p.get("rss_kb"), (int, float))]
     alarm = [x.get("at") for x in load(r.folder, "watch/live.jsonl", 1) if x.get("result") == "fail" or x.get("fail")]
     return {"wire_requests": dig(u, "s7_wire"), "harness_calls": dig(u, "s7_native") if read else None,
             "harness_log": dig(e, "s6_log") if read else None, "local_log": "read" if read else "none",
@@ -321,8 +391,9 @@ def facts(r):
             "secret_hits": r.hits("secrets"), "masks": r.masks() or {}, "plain_hits": r.hits("secrets-plain"),
             "screen_known": m.get("screen_known"), "canary": "not planted", "tokens": dig(u, "s7_tokens"),
             "models": [x.get("model") for x in dig(u, "s7_models") or [] if isinstance(x, dict)],
-            "raw_bytes": size.get("raw"), "compressed_bytes": size.get("compressed"), "recorder_rss_peak_mb": None,
-            "spend_usd_est": None, "priced_high": [], "first_live_alarm": (alarm or [None])[0], "over_cap": False,
+            "raw_bytes": size.get("raw"), "compressed_bytes": size.get("compressed"), "over_cap": m.get("over_cap") is True,
+            "recorder_rss_peak_mb": round(max(rss) / 1024, 1) if rss else None, "spend_usd_est": m.get("spend_usd_est"),
+            "priced_high": m.get("priced_high") or [], "first_live_alarm": (alarm or [None])[0],
             "push": m.get("push"), "wire_only": dig(u, "s7_wire_only"), "local_log_reason": dig(u, "s7_reason")}
 
 def evaluate(folder):

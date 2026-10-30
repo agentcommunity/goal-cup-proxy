@@ -3,6 +3,7 @@
 
 #![allow(dead_code)]
 
+use goalcup::cli::status::Ctx;
 use goalcup::pipeline::status::{DurableStatus, Losing, Mode, Off, STATUS_V, Status, Written};
 use serde_json::json;
 
@@ -20,4 +21,17 @@ pub fn status(mode: Mode) -> Status {
         "writer_idle_ms": 0, "durable": DurableStatus::default(),
     }))
     .expect("a status.json")
+}
+
+/// Liveness and now (`T0 + age`); the run is open for a day.
+pub fn live(recorder: bool, watchdog: bool, harness: bool, age: u64) -> Ctx<'static> {
+    Ctx {
+        name: "Agent",
+        run: RUN,
+        recorder,
+        watchdog,
+        harness,
+        deadline: Some(T0 + 86_400),
+        now: T0 + age,
+    }
 }

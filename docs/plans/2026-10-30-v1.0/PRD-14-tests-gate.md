@@ -898,3 +898,56 @@ PRDs they touch and the code. Where two fixes disagree, the ledger and the later
 - **Housekeeping:** the stray branch `v1.0/prd-14-tests-lane-merge-wip` (same sha as the lane merge
   8a7f5c05) is still on origin; the remote refused its delete. The integrator removes it at the end.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-04 core slice part 2 (merge 01afcf22)
+
+- **`native_walk` binary is on integration and not yet in the `heavy` group.** `.config/nextest.toml`
+  names it in the comment but has no `[[profile.default.overrides]]` entry for it, so the 20,000 and
+  5,000 file cases run in parallel with the rest (gate fast passed anyway: 182 of 182 at 01afcf22).
+  PRD-14's next slice adds `binary(/^native_walk$/)` to the heavy override (PRD-04 ask 14:31Z).
+- The `opens`, `ends` and `events` helpers over `Calls` (slice 3) also replace `lost` in
+  `native_tail.rs` and `events` in `native_walk.rs`; PRD-04 deletes its copies after that merge.
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-09 slice 2 (merge dab0ce1f)
+
+- **`usage_run1.rs` is 299 lines** (6 cases) against section 3's 200. The PRD-09 replan note sets its
+  ceiling to 380 with the native-only and VR2 panic cases still to come; the end-of-build report nets
+  it against the test total (at most about 14,200).
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-14 slice 3 (merge 00fac28d)
+
+- **Done in slice 3:** HTTP/2 in `upstream.rs` (h2 crate; `close_after` counts DATA bytes actually
+  sent, claimed from the connection count before each send, so overlapping streams cut exactly);
+  `opens`, `ends` and `events` in `recorder.rs` over one `pick` helper; `home.rs` cut to 121;
+  `install.sh` run guard over `goalcup status --json` `.status.mode` (an awk walk, since `run` also
+  has a `mode` key); `test_install.py` rewritten (28 tests in the gate); `package-release.sh`,
+  `smoke-release.sh`, `third-party-licenses.py` and `release.yml` for the two binaries; `gate full`
+  and `release.yml` both refuse a hooked `target/debug/goalcup` with no `GOALCUP_TEST_` text.
+  `gate fast: PASS in 101s` on 00fac28d (nextest 188 of 188).
+- **`gate full` and every release run are red until a `GOALCUP_TEST_` read is reachable from the
+  `goalcup` binary** (review A2, kept on purpose). On integration `Policy::from_env` is the only
+  reader and nothing calls it, also on `v1.0/prd-06-upload` at this replan; PRD-06's next slice wires
+  it (PRD-06 note). This is the known seam, not a regression; a watcher reads `gate full` only after
+  that merge.
+- **Heavy group, next touch of `.config/nextest.toml`:** `native_walk` is on integration since
+  01afcf22, so the review's A10 is unblocked: add `binary(/^native_walk$/)` to a `heavy` override
+  now. `proxy_connect` joins in the merge that brings its 2,000-connection case (PRD-03).
+- **Review nit B12 for the next touch of `upstream.rs`:** `h2_stream` computes "bytes left before the
+  cut" twice (`room` and the `share` closure). Define it once before the loop,
+  `let left = |w: u64| limit.map_or(u64::MAX, |l| l.saturating_sub(w));`, and use it for
+  `reserve_capacity`, the `written.update` claim and `n`. Same lines, same behaviour, one definition.
+- **Still open:** `recorder::real(dir)` (waits on PRD-02's `Recorder::real_for_tests`, on no branch
+  at this replan), `e2e_run.rs` with `fake.toml` and `fake-hosts.toml` (phase 2), the
+  `check-links.py` and `test_check_links.py` delete (phase 3), `.github/PULL_REQUEST_TEMPLATE.md`'s
+  `row.json` line.
+- **Size against section 3** (`wc -l` at 00fac28d): `tests/common/` 1,523 (`mod` 61, `ports` 33,
+  `fds` 27, `home` 121, `pki` 115, `upstream` 709, `worker` 334, `recorder` 51, `records` 72),
+  `rule_code.rs` 213, `e2e_run.rs` 0: 1,736 of the 1,700 line, inside the 1,870 ceiling the slice 2
+  note set. `recorder::real` and `e2e_run.rs` share the 134 lines left; `e2e_run.rs` drops cases
+  that serve no point before it passes that. The fixer's 16:08Z decision line names point 1 for
+  `upstream.rs` at 709 of 700. Scripts: `install.sh` 355 (section says about 300), `gate.sh` 128
+  (about 75), `release.yml` 132 (about 120), `test_install.py` 314 (was 582), `smoke-release.sh` 53,
+  `package-release.sh` 40, `third-party-licenses.py` 231.
+- No locked ledger item is touched and no owner question comes from this slice.

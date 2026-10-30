@@ -850,3 +850,17 @@ Slice 1 merged builder steps 1, 2 and 4. What the merge changed for the slices s
   is a seam line in the same commit, so PRD-12 follows it; otherwise a timed-out fetch leaves a
   credential file on the conductor (point 4).
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-08 slice 2 (merge 669f5d92)
+
+- The ask to PRD-08 (item 4) is met: with `final` null, `server_chunks_whole` checks continuity
+  and names the open end (exit 1, never `fail`), and `server_counts_match` is `skip` "not sealed".
+- `goalcup-verify` now reads these S13 `fetch.json` fields. From `chunks[]`: `offset`, `length`,
+  `first_seq`, `last_seq`, `head`, `prev` and `bytes`. Also `missing.offset` and `missing.why`,
+  `final.seq` and `final.head`, `model_requests` and `upload_offset`. From `last_heartbeat`:
+  `recording`, `model_requests` and `counts` (`gaps`, `lost_bytes`, `off_ms`, and `lost_unknown`
+  when present). A rename or a change of meaning in any of these is a seam line. The same merge
+  window carries the matching change in PRD-08's `server.rs` (PRD-08 note). A folder with no
+  `fetch.json` fails all three server checks, so `fetch-run.sh` always writes it, also for a partial
+  copy.
+- No locked ledger item is touched and no owner question comes from this slice.
