@@ -1156,3 +1156,15 @@ note is closed; PRD-10's delete of the skill can follow (PRD-10 note).
   the `continue` mark (PRD-10 `continue`), the CONNECTOR-SCHEMA (next slice) marks, nit B-N4, and the
   third slice.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-08 slice 2 (merge 669f5d92)
+
+- For `docs/RECORD-FORMAT.md` (the `check --json` section), from PRD-08's merge note. Under
+  `--server`, the three ids `server_chunks_whole`, `server_equals_local` and `server_counts_match`
+  are built and no longer "not built in this slice". The top-level `server` object
+  `{chunks, whole, equals_local, db_match}` is filled. New exit rules: a missing `fetch.json` under
+  `--server` gives all three `fail`; `final` null gives `server_chunks_whole` `named` (exit 1); a
+  `--local` path that never held a record exits 3; a seal with no `reason` or `totals` is reported,
+  never exit 3. The seven local ids stay `skip` "not built in this slice" until their slices.
+  PRD-15's next slice updates the page; no code change is asked of PRD-08.
+- No locked ledger item is touched and no owner question comes from this slice.
