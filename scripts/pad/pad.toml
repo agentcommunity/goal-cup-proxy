@@ -15,3 +15,10 @@ openai = "OPENAI_API_KEY"
 deepseek = "DEEPSEEK_API_KEY"
 gemini = "GEMINI_API_KEY"
 gateway = "AI_GATEWAY_API_KEY"
+
+# The staging test approval (section 7): the names of the conductor variables that hold the approval key and
+# the owner's member id. Names only: pad reads each value inside the process at the approval call, and never
+# writes one to a file, argument, log or table. Both names are in NEVER_IN_BOX.
+[approval]
+key = "GOALCUP_TEST_APPROVAL_KEY"
+member = "GOALCUP_TEST_MEMBER_ID"
