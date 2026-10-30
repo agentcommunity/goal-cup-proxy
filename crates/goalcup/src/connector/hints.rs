@@ -158,7 +158,9 @@ pub(super) fn at<'a>(doc: &'a Value, key: &str) -> Vec<&'a Value> {
     let mut found = vec![doc];
     for seg in key.split('.') {
         let glob = pattern::parse(seg).ok();
-        let fits = |k: &str| k == seg || glob.as_ref().is_some_and(|g| g.matches(Path::new(k)));
+        // The glob matches one path component, so a `/` in a key is not a separator to it.
+        let one = |k: &str| PathBuf::from(k.replace('/', "\u{2215}"));
+        let fits = |k: &str| k == seg || glob.as_ref().is_some_and(|g| g.matches(&one(k)));
         let mut next = Vec::new();
         for value in found {
             match value {
