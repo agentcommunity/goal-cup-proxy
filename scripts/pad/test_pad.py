@@ -56,8 +56,14 @@ class Settings(unittest.TestCase):
         for server in ("https://ingest.agentcommunity.org", "https://goalcup-ingest-staging.b-9a5.workers.dev"):
             with self.assertRaises(pad.Usage):
                 pad.load_settings(dict(BASE, server=server), PADCFG)
-        s = pad.load_settings(BASE, dict(PADCFG, staging="https://ingest.agentcommunity.org"))
-        self.assertEqual(s["server_url"], "https://goalcup-ingest-staging.b-9a5.workers.dev")
+
+    def test_cycle_takes_the_fault_rows(self):  # P11 cut-worker rows, section 13 step 3 reproductions
+        for steps in (["cut-worker@1+10"], ["kill-both@5", "kill-recorder@3"]):
+            s = pad.load_settings(dict(BASE, steps=steps, minutes=14), PADCFG)
+            self.assertEqual(pad.step_list(s, {}).count("kill-recorder@3"), 1)
+        for steps in (["kill-watchdog-recover@3"], ["kill-watchdog@1"]):
+            with self.assertRaises(pad.Usage):
+                pad.load_settings(dict(BASE, steps=steps), PADCFG)
 
     def test_only_model_keys_enter_a_box(self):
         with self.assertRaises(pad.Usage):
@@ -100,7 +106,7 @@ class Walk(unittest.TestCase):
         calls, table = self.walk(hang=("create",))
         name = calls[0][calls[0].index("--name") + 1]
         self.assertIn(["rm", name], calls)
-        self.assertIn("list shows no live box", table)
+        self.assertIn(["list", "--prefix", "pad-"], calls)
 
 
 if __name__ == "__main__":

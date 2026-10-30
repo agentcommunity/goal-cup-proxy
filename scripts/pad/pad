@@ -9,6 +9,8 @@ The pad never reads a key value: in a sandbox it passes only the name of the env
 that holds it to `sbx.mjs put-env`, which writes it 0600 inside the box.
 
 Exit: 0 every row PASS, 1 any FAIL, 3 any INCONCLUSIVE and no FAIL, 2 usage error.
+A sandbox run needs node with the @vercel/sandbox package: sbx.mjs looks in PAD_NODE_MODULES, then
+NODE_PATH, then next to itself, and its last error line shows in the table's `saw` column.
 Needs Python 3.11 or later (tomllib); under an older python3 it re-runs itself with one from PATH.
 """
 import datetime
@@ -75,6 +77,12 @@ class Refused(Exception):
 def read_toml(path):
     with open(path, "rb") as f:
         return tomllib.load(f)
+
+
+def said(what, r):
+    """`what`, then sbx's last stderr line (sbx prints only short error texts, never a value)."""
+    tail = (r.stderr or "").strip().splitlines()
+    return what + (": " + tail[-1][:160] if r.returncode and tail else "")
 
 
 def call(argv, timeout=None, env=None):
@@ -157,7 +165,7 @@ def load_settings(raw, pad):
         s.setdefault(k, v)
     if s["case"] not in ("direct", "gateway", "dodger", "all"):
         raise Usage("case is direct, gateway, dodger or all")
-    if s["server"] not in ("off", "local", "staging"):
+    if s["server"] != "off" and s["server"] not in SERVERS:
         raise Usage("server is off, local or staging (there is no server address setting)")
     if s["where"] not in ("sandbox", "here"):
         raise Usage("where is sandbox or here")
@@ -180,9 +188,11 @@ def load_settings(raw, pad):
     if not isinstance(s["steps"], list):
         raise Usage("steps is a list")
     s["plan"] = parse_steps(s["steps"])
-    if s["mode"] == "cycle" and any(r.split("@")[0] in FAULTS for _, _, r in s["plan"]):
-        raise Usage("cycle has its own crash (kill-recorder@3): put other faults in a full run")
-    s["server_url"] = SERVERS.get(s["server"])
+    if s["mode"] == "cycle":  # cycle adds its own kill-recorder@3, which needs a live watchdog
+        s["plan"] = [p for p in s["plan"] if p[2] != "kill-recorder@3"]
+        for _, m, r in s["plan"]:
+            if r.startswith("kill-watchdog-recover@") or (r.startswith(("kill-watchdog@", "kill-both@")) and m <= 3):
+                raise Usage("step %r: in cycle the watchdog must live past the crash at minute 3" % r)
     return s
 
 
@@ -216,8 +226,8 @@ class Run:
         self.name = "pad-" + secrets.token_hex(3)
         self.lines = []
         self.tmp = tempfile.mkdtemp(prefix="pad-")  # box scripts; never in the run folder
-        self.version = None
         self.setup_failed = False
+        self.create_late = False  # create hit its limit: the box may still appear after cleanup
         self.t0 = time.time()
         stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
         base = os.path.join(out_root, s["harness"], case, stamp)
@@ -279,11 +289,17 @@ class Run:
             with open(os.path.join(HERE, "image.id")) as f:
                 image, self.tried = f.read().strip(), True
             mins = math.ceil(s["minutes"]) + int(self.pad.get("box_extra_minutes", 30))
-            if self.sbx("create", "--name", self.name, "--minutes", str(mins), "--snapshot", image,
-                        "--vcpus", str(self.pad.get("box_vcpus", 4)), limit=limit).returncode:
-                raise Refused("box not created")
-            if self.sbx("push-dir", self.name, HERE, "~/pad", limit=left()).returncode:
-                raise Refused("scripts/pad not copied")
+            try:
+                r = self.sbx("create", "--name", self.name, "--minutes", str(mins), "--snapshot", image,
+                             "--vcpus", str(self.pad.get("box_vcpus", 4)), limit=limit)
+            except subprocess.TimeoutExpired:
+                self.create_late = True
+                raise
+            if r.returncode:
+                raise Refused(said("box not created", r))
+            r = self.sbx("push-dir", self.name, HERE, "~/pad", limit=left())
+            if r.returncode:
+                raise Refused(said("scripts/pad not copied", r))
             names = [] if s["key"] == "none" else [s["key"]] + [s["gateway_key"]] * (self.case == "gateway")
             for name in names:
                 var = self.pad["keys"][name]
@@ -298,10 +314,10 @@ class Run:
         r = (call(["bash", script], timeout=left()) if s["where"] == "here"
              else self.sbx("exec", self.name, "--script", script, limit=left()))
         got = re.search(r"PADVER=.*?(\d+\.\d+\.\d+[0-9A-Za-z.+-]*)", r.stdout or "")
-        self.version, want = got and got.group(1), s.get("version") or self.harness["version"]
-        if self.version != want:
-            raise Refused("%s %s installed, %s pinned" % (s["harness"], self.version or "none", want))
-        return "ok", "%s %s (pinned)" % (s["harness"], self.version)
+        version, want = got and got.group(1), s.get("version") or self.harness["version"]
+        if version != want:
+            raise Refused("%s %s installed, %s pinned" % (s["harness"], version or "none", want))
+        return "ok", "%s %s (pinned)" % (s["harness"], version)
 
     def step_goalcup(self, limit):
         return "skip", "no key" if self.s["key"] == "none" else NEEDS_GOALCUP
@@ -336,8 +352,9 @@ class Run:
             live = [b.get("status") for b in (json.loads(x) for x in r.stdout.splitlines() if x.startswith("{"))
                     if b.get("name") == self.name] if r.returncode == 0 else ["unknown"]
             if all(st in ("stopped", "deleted", "failed") for st in live):
-                return "ok", ", ".join(saw + ["list shows no live box"])
-            saw.append("left: box %s %s" % (self.name, ",".join(map(str, live))))
+                late = ["create timed out, box may appear until its timeout"] if self.create_late else []
+                return "ok", ", ".join(saw + ["list shows no live box"] + late)
+            saw.append(said("left: box %s %s" % (self.name, ",".join(map(str, live))), r))
         except Exception as e:
             saw.append("list %s, box %s may be left" % (type(e).__name__, self.name))
         return "left", ", ".join(saw)
@@ -347,8 +364,7 @@ class Run:
         s, secs = self.s, int(time.time() - self.t0)
         # The row's `variant` (section 8): faults, exec and pre scripts, a cycle row's own crash too.
         var = [st for st in step_list(s, self.harness) if st.split("@")[0] in FAULTS or st.startswith(("exec ", "pre "))]
-        failed = self.setup_failed or any(r == "FAIL" for _, r, _, _ in self.lines)
-        result = "FAIL" if failed else "INCONCLUSIVE"
+        result = "FAIL" if any(r == "FAIL" for _, r, _, _ in self.lines) else "INCONCLUSIVE"
         head = "pad %s %s %s   variant %s   run -  entry -  box %s   %dm %02ds" % (
             s["harness"], self.case, s["mode"], ",".join(var) or "-",
             self.name if self.tried else "-", secs // 60, secs % 60)
@@ -389,7 +405,7 @@ def main(argv):
         harness = read_toml(hpath)
         if not (harness.get("version") and harness.get("version_cmd")):
             raise Usage("scripts/pad/harnesses/%s.toml needs version and version_cmd" % s["harness"])
-    except (Usage, OSError, ValueError) as e:
+    except (Usage, OSError, ValueError, TypeError) as e:
         print("pad: %s" % e, file=sys.stderr)
         return 2
     for sig in (signal.SIGINT, signal.SIGTERM):

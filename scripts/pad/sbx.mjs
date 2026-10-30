@@ -18,7 +18,9 @@ function loadSdk() {
   for (const d of dirs) {
     try { return createRequire(path.join(path.resolve(d), 'x.js'))('@vercel/sandbox'); } catch {}
   }
-  return createRequire(import.meta.url)('@vercel/sandbox');
+  try { return createRequire(import.meta.url)('@vercel/sandbox'); } catch {}
+  process.stderr.write('sbx: cannot load @vercel/sandbox; set PAD_NODE_MODULES to a node_modules that has it\n');
+  process.exit(2);
 }
 const { Sandbox } = loadSdk();
 const creds = Object.fromEntries(Object.entries({ token: process.env.VERCEL_TOKEN,
@@ -59,7 +61,7 @@ async function create() {
       return await Sandbox.create(p);
     } catch (e) {
       log(`create failed attempt ${attempt}: ${short(e)}`);
-      if (attempt >= 6) throw e;
+      if (attempt >= 3) throw e; // 30 s and 60 s waits: the whole create ends inside the pad's 5 min setup limit
       await new Promise(r => setTimeout(r, Math.min(300, 15 * 2 ** attempt) * 1000));
     }
   }
