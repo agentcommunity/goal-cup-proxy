@@ -1,12 +1,12 @@
 # PRD-12: The test pad and the real-run loop
 
-Id: PRD-12. Version: goalcup 1.0. Revision 3, 30 October 2026 (the alignment pass against the ledger;
-revision 2 and revision 1: earlier the same day). Base: main at 4b226de2. Index: [PRD-00](PRD-00-index.md)
+Id: PRD-12. Version: goalcup 1.0. Revision 4, 30 October 2026 (ledger items R3a, R3b and T4;
+revision 3: the alignment pass against the ledger; revision 2 and revision 1: earlier the same day). Base: main at 4b226de2. Index: [PRD-00](PRD-00-index.md)
 (revision 4). Format: [PRD-01](PRD-01-record-format.md).
 Ledger: [OWNER-DECISIONS.md](OWNER-DECISIONS.md) wins where it differs.
 
-Revision 3 applies the alignment fix lists; "Alignment answers", the last section, says what was done
-with each. Revision 2's answers to the three earlier reviews are kept as history above it.
+Revision 3 applies the alignment fix lists; revision 4 carries in ledger items R3a, R3b and T4.
+"Alignment answers", the last section, says what was done with each. Revision 2's answers to the three earlier reviews are kept as history above it.
 
 ## Goal
 
@@ -15,9 +15,10 @@ prints one pass or fail row per harness and case. It is also how a contributor a
 
 ## Points served
 
-1 (wire calls match the harness's own log), 2 (every subagent recorded), 3 (the harness finishes its task;
+1 (the proxy record shows no missed call: no unexplained gap, and the history check; the harness's own
+log is an extra check where it keeps one), 2 (every subagent recorded), 3 (the harness finishes its task;
 the dodger case is relayed untouched; fault rows show a recorder crash, a frozen machine or a cut network
-do not stop the harness), 4 (no secret in the record, the server copy or the pad's own output), 5 (server
+do not stop the harness, and `goalcup recover` brings recording back without restarting it), 4 (no secret in the record, the server copy or the pad's own output), 5 (server
 copy whole, equal to local, readable), 6 (the counts the participant saw equal the verifier's recount),
 7 (real harnesses, run the way people run them: a terminal, a typed first message, subagents asked for
 in the prompt, never forced by config).
@@ -25,16 +26,34 @@ in the prompt, never forced by config).
 ## Owner decisions it carries out
 
 - 15 harnesses tested through one test pad: a connector plus a key, one real prompt, then the checks
-  "wire calls match the harness's own log, every subagent recorded, no secret, server copy whole, usage
-  stats present"; one pass or fail table; the same pad is the contributor path (ledger T4).
+  of ledger T4: no unexplained gap, every subagent recorded, no secret in the record, server copy whole,
+  usage stats present, and the history check; one pass or fail table; the same pad is the contributor
+  path (ledger T4).
+- **The proxy record is the proof** (ledger T4). Every check reads the record, `status.json` and the
+  staging server copy. The harness's own session files are an optional extra check, the local log
+  check, where the harness keeps them and PRD-09 reads them. A harness with no local log (Hermes run
+  through its gateway, Amp) reaches "verified" from the record alone (section 8).
+- **No outside API is called to verify** (ledger T4): no provider usage or billing lookup, no provider
+  status page, no clone of the pushed repo. The pushed-repo scan reads the project's own git store in
+  the box (section 8).
 - Three cases: direct key, through a gateway, and a dodger. Same checks for each (ledger T4). A harness
   that ignores `HTTPS_PROXY` or our CA is "not supported", never hacked around (ledger T3).
 - Tiers: "verified" (passed on a named version) and "not verified" (ledger T3).
 - Core set that blocks release: Claude Code, Codex, Hermes (ledger T8, "1 core OK").
 - Definition of done item 1 (PRD-00): direct key, gateway and dodger, all `full`, kept parts, every
-  check; Hermes compares per session; the dodger passes by showing its loss honestly. Done item 9: the
+  check; Hermes's per-session comparison is now the local log check (ledger T4); the dodger passes by
+  showing its loss honestly. Done item 9: the
   HTTP/2 and long-tunnel `--exec` rows (ledger H6, H3).
 - Usage stats are part of the build; the pad checks they are present (ledger S2).
+- A recorder crash is restarted at once; only a crash loop (3 crashes within 10 minutes, each within
+  60 s of its start) goes to pass-through, with retries never more than 5 minutes apart (ledger R3a).
+  The `kill-recorder` rows kill 2 minutes apart, so they expect an eager restart and no `null_mode` gap
+  (section 3.1). The crash loop itself is PRD-02's proof (`watchdog_null.rs`), not a pad row.
+- `goalcup recover` restarts only the recorder after the watchdog died, on the same port with the same
+  run certificate, with a gap for the time it was down; the harness never restarts (ledger R3b). The
+  pad runs it as the fault `kill-watchdog-recover` (section 3.1, P12). The run certificate key now sits
+  in a 0600 file in the run folder during the run, so the pad adds it to the box's known values and C3
+  proves it reaches no record, server copy or log.
 - Watcher agents read failures and fix them; three failed fixes on one cause end that loop with a note
   (ledger B3).
 - Staging Worker for every run, approved by the test route with the staging approval key and the owner's
@@ -94,7 +113,7 @@ What run 1 taught the pad (run report, scratchpad copy `run-report-74daaa03.md`)
 
 | # | Run 1 bug | How it hid | Pad check that must catch it |
 |---|---|---|---|
-| B1 | Wire recording stopped at 15:43:15Z for good, no GAP; 473 harness calls after it (sections "Root cause" and 4) | The verifier's `cross_leg` said `consistent` | C1 wire against the harness's log |
+| B1 | Wire recording stopped at 15:43:15Z for good, no GAP; 473 harness calls after it (sections "Root cause" and 4) | The verifier's `cross_leg` said `consistent` | C1: no unexplained gap and the history check, from the record; the harness's log as the extra check where kept |
 | B2 | 23 gaps with one time each and `lost_bytes: null` (section 3) | Gaps only made the verdict "incomplete" | C4 record whole (`gap_has_end`) |
 | B3 | Finish line said 1,736 recorded; the server stored 1,766; the record held 842 (Verdict 3, section 5) | Counted at selection, not at write | C6 counts the participant saw |
 | B4 | 32 native slots for 43 rollout files; 11 subagents with neither leg (section 3) | One unnamed `limit_exceeded` gap | C2 every subagent recorded |
@@ -164,13 +183,15 @@ pad" applies.
 |---|---|---|
 | `direct` | The vendor key, through the harness's own login or config (section 6) | Every `conn` to the model host is `decrypt`, `listed: shared`, `kind: provider` (PRD-03 section 12). Verifier exit 0 |
 | `gateway` | Vercel AI Gateway: the harness's own base URL setting and the gateway key, as Vercel documents it on the day (ledger T7). Claude Code: `ANTHROPIC_BASE_URL` with the `/claude-code` path and `ANTHROPIC_AUTH_TOKEN`, https://vercel.com/docs/ai-gateway/coding-agents/claude-code . Codex: a custom provider at `https://ai-gateway.vercel.sh/v1` with `wire_api = "responses"`, https://vercel.com/docs/ai-gateway/coding-agents/openai-codex , key in `$CODEX_HOME/.env` (measured 28 Oct, `2026-10-vercel-gateway.md:54`). Hermes: its built-in `ai-gateway` provider with `AI_GATEWAY_API_KEY` (measured 28 Oct, `:55`). Kilo: an OpenAI-compatible provider, https://vercel.com/docs/ai-gateway/coding-agents/kilo-code (PRD-16 A4) | `ai-gateway.vercel.sh` is `decrypt`, `listed: shared`, `kind: gateway`, with no participant or config entry needed; no `conn` to the vendor's own model host carries a model call; usage call rows show `host_kind: gateway` (PRD-09). Verifier exit 0. A harness with no documented gateway route gets `n/a`, never a made-up config |
-| `dodger` | `direct`, plus a copy of `connectors/model-hosts.toml` in the run folder with the harness's model host added to `pinned` (PRD-11 section 4), passed with `goalcup start --hosts <copy>` (S16) | The harness finishes; every `conn` to that host is `tunnel` with a GAP `pinned`; zero decrypted model requests to it; native streams are whole; the start event's `hosts` shows the host `pinned` and `hosts_sha256` equals the copy's SHA-256 (PRD-01); the launch block shows `Host list from a file: <path> (not verified).` and the end screen names the host under "Not recorded" (PRD-10 acceptance 3), never "recording works"; usage says "not recorded on the wire". Verifier exit 1, from `listed_hosts_decrypted: named` (PRD-08 R4); `wire_keeps_up` is `named` where it runs and `skip` "no per-call times" for a totals harness (Hermes). Exit 0 is FAIL (the copy was not used); exit 2 is FAIL |
+| `dodger` | `direct`, plus a copy of `connectors/model-hosts.toml` in the run folder with the harness's model host added to `pinned` (PRD-11 section 4), passed with `goalcup start --hosts <copy>` (S16) | The harness finishes; every `conn` to that host is `tunnel` with a GAP `pinned`; zero decrypted model requests to it; native streams are whole; the start event's `hosts` shows the host `pinned` and `hosts_sha256` equals the copy's SHA-256 (PRD-01); the launch block shows `Host list from a file: <path> (not verified).` and the end screen names the host under "Not recorded" (PRD-10 acceptance 3), never "recording works"; usage says "not recorded on the wire". Verifier exit 1, from `listed_hosts_decrypted: named` (PRD-08 R4); `wire_keeps_up` is `named` where it runs and `skip` "no per-call times" for a totals harness (Hermes); the history check is `skip` (no decrypted call to that host). Exit 0 is FAIL (the copy was not used); exit 2 is FAIL |
 
 Why the dodger case is simulated: the real dodgers have no key this cycle (Amp) or are out (Cursor,
 `O-harness-access.md:107-142`). A list entry marked `pinned` takes the tunnel path a real pinning client
 reaches after refusal learning, but skips the learning itself. That path, with its one refused call, is
 proven by PRD-03 acceptance 7 and `proxy_tls.rs`, not by the dodger rows. Amp, when it has an account, is run as `direct`: the pad
-then expects the vendor-backend row of PRD-03 section 12.
+then expects the vendor-backend row of PRD-03 section 12. A dodger with no session files on disk still
+passes by showing its loss honestly: C1, C2 and C5 read the named `pinned` tunnels and claim no call,
+thread or token the record did not see (section 8).
 
 ### 3. One run, step by step (`--where sandbox`)
 
@@ -180,10 +201,10 @@ then expects the vendor-backend row of PRD-03 section 12.
 | 0:01 | | Check the harness version equals the pinned one; refuse otherwise. Make the project folder; with a push token, write it to `.env.local` as `GH_TOKEN=<push token>`, 0600 (PRD-10 start step 2 needs that line). Plant files (section 5). Apply a `fd-limit` fault if scheduled. `goalcup setup --harness <id> --yes` (S15). Run the `--pre` script if given. Give the key to the harness by its `key_route` (section 6): the harness's own login with the key file on stdin, a file in goalcup's isolated home, or the launch shell's environment. Delete each copied key file once its route has used it |
 | 0:02 | | `GOALCUP_SERVER=<staging>`, `GOALCUP_KEEP_PARTS=1` (unless `--no-keep`), `GOALCUP_NO_BROWSER=1`; in tmux session `pad`: `goalcup start --test --harness <id> [--repo <repo>] --prompt prompt.txt [--connector <file>] [--hosts <copy>]` (`--repo` only with a push token). Write the device code goalcup prints (contract words "shows the code XXXX-XXXX.", PRD-10 section 3 step 4) to `code.txt`. With `--server off`: `GOALCUP_SERVER=off`, no repo, no approval |
 | 0:03 | Read `code.txt`; approve on the staging test route `POST /v1/device/approve` (PRD-07) with the approval key and the owner's member id, each piped from its own 0600 file (copied from `matrix.sh:839-887`) | |
-| 0:04 | | Wait for "Recording in chat mode", then the harness's ready text from the pad harness file (default 30 s). Send pre-prompt keys if the file names any. Paste `runs/<run>/first-message.txt` if goalcup wrote it (PRD-10 section 8), else the prompt file, with `tmux load-buffer` and `tmux paste-buffer -p`; wait the submit delay (default 2 s); send Enter. Start the fault and exec schedule (section 3.1) |
+| 0:04 | | Wait for "Recording in chat mode", then the harness's ready text from the pad harness file (default 30 s). Send pre-prompt keys if the file names any. Paste `runs/<run>/first-message.txt` if goalcup wrote it (PRD-10 section 8), else the prompt file, with `tmux load-buffer` and `tmux paste-buffer -p`; wait the submit delay (default 2 s); send Enter. Start the fault and exec schedule (section 3.1). Copy the run certificate key file (ledger R3b; its name and place are PRD-02's) into `pad-run`'s own 0600 file `known-box`, for C3 |
 | 0:04 to 0:24 | Every 2 min: copy out `watch/*.jsonl` and the panes, with known values replaced (section 4). Every 5 min: the spend check (section 7) | Watch (section 4) |
 | 0:24 | | `goalcup seal --yes` at `--minutes` after the paste, at the spend cap, or when the harness exits. Save the last screen. Wait until `upload.json` says `final: sealed` (PRD-06, S9), up to 10 minutes or until 5 minutes after the last scheduled fault ends, whichever is later. Write `harness-files.json`. Wipe keys, `.env.local` and the harness home |
-| 0:27 | `sandbox copy` out `rec/`, `status.json` series, `goalcup.log`, `upload.json`, panes, `harness-files.json`, `watch/`, `exec/` (panes with known values replaced). `scripts/fetch-run.sh --bucket goalcup-traces-staging <entry> <out>` (PRD-07, S13: `<out>/<entry>/rec.gcr.zst` and `fetch.json`). `sandbox copy` the fetched entry and the per-run known-values files in. `sandbox exec` the commands of section 8. Copy out their JSON. `sandbox remove pad-<id>` | Run the section 8 commands; delete the known-values files after the scan |
+| 0:27 | `sandbox copy` out `rec/`, `status.json` series, `goalcup.log`, `upload.json`, panes, `harness-files.json`, `watch/`, `exec/` (panes with known values replaced). `scripts/fetch-run.sh --bucket goalcup-traces-staging <entry> <out>` (PRD-07, S13: `<out>/<entry>/rec.gcr.zst` and `fetch.json`). `sandbox copy` the fetched entry and the per-run known-values files in. `sandbox exec` the commands of section 8. Copy out their JSON. `sandbox remove pad-<id>` | Append `known-box` to the known-values file. Run the section 8 commands; delete the known-values files and `known-box` after the scan |
 | 0:28 | Write `row.json` and `report.txt` from the JSON; scan the pad's own output folder for every known value, the approval key and the conductor's credentials included; append to the ledger | |
 
 `--where here` runs both halves on one machine, in a fresh temp folder with a fresh `GOALCUP_HOME`.
@@ -205,8 +226,9 @@ process, and writes what it did with the wall time to `watch/faults.jsonl`.
 
 | Kind | What `pad-run` does | Owner and pass line | What the checks expect |
 |---|---|---|---|
-| `kill-recorder@m` | Waits from minute m until `status.json` shows an open response stream (up to 60 s, else kills anyway and says so), then `kill -9` of the recorder pid in `status.json` | PRD-02 R1 (Codex, done item 2) and its kill case on Claude Code and Hermes; PRD-06 U4 and U6; PRD-10 acceptance 2 | Verifier exit 1. Exactly one `recorder_down` gap per kill, start before end, each under 2 s (PRD-02 defaults). C1 and C2 may be `named` only by those gaps; any other named loss is FAIL |
+| `kill-recorder@m` | Waits from minute m until `status.json` shows an open response stream (up to 60 s, else kills anyway and says so), then `kill -9` of the recorder pid in `status.json` | PRD-02 R1 (Codex, done item 2) and its kill case on Claude Code and Hermes; PRD-06 U4 and U6; PRD-10 acceptance 2 | Verifier exit 1. Exactly one `recorder_down` gap per kill, start before end, each under 2 s (PRD-02 defaults). No `null_mode` gap, and no `status.jsonl` line with `mode: null`: the kills are 2 minutes apart, so each restart is eager and no crash loop forms (ledger R3a). C1 and C2 may be `named` only by those gaps; any other named loss is FAIL |
 | `kill-watchdog@m` | `kill -9` of the pid in `rec/watchdog.pid`. At minute m+3 `pad-run` sends the harness file's `exit_keys` and runs no `goalcup seal` | PRD-02 R5 | Seal reason `harness_exit` within 35 s of the harness's exit; checks as a clean run |
+| `kill-watchdog-recover@m` | `kill -9` of the pid in `rec/watchdog.pid`. Then `goalcup recover` at once in a new tmux window `pad:recover`, whose shell has the run's `GOALCUP_*` values and none of the harness's proxy or CA variables (the recorder still lives). At m+1, `kill -9` of the recorder pid in `status.json`; nothing restarts it now. Plain `goalcup status` every 2 s for 10 s. At m+2, `goalcup recover` again in `pad:recover`. The harness is never touched. At `--minutes`, send `exit_keys`, then SIGTERM to `harness.pid` after 30 s if it still lives; no `goalcup seal` | PRD-10 acceptance 11 (ledger R3b); PRD-02 section 9.1 row "The watchdog, then later the recorder". PRD-10 kills both together; the pad's one-minute split covers that case and the order the ledger names | The first `recover` exits 0 with `Recording is on; there is nothing to recover.` Status shows the line ending `Run: goalcup recover` within 10 s of the recorder kill. The second `recover` exits 0 with `Recording is on again`. `status.jsonl` shows the same harness pid and the same `port` before and after. Exactly one `recorder_down` gap, from the recorder kill to the recovered boot's first record, start before end. Every later `conn` to a listed host is `decrypt` (same run certificate). Written model requests after the recover above 0. Seal reason `harness_exit` (or `deadline`). C1 and C2 `named` only by that gap. If the harness lost its terminal when the watchdog died (PRD-02 section 9.1), status must show the `goalcup continue` line instead; the row is INCONCLUSIVE "harness lost its terminal" and the watcher follows PRD-10 acceptance 11 |
 | `kill-both@m` | `kill -9` of watchdog and recorder together; send `exit_keys`, then SIGTERM to `harness.pid` from `status.json` after 30 s if it still lives; then `goalcup continue` in a new tmux window `pad:cont` (or `goalcup upload` for PRD-06 U8, named in the fault: `kill-both@m+upload`). Typing, panes and the watch follow that window | PRD-02 R7, PRD-06 U8 | Old entry sealed `recovered` with an `abandoned` gap; checks run on both entries; named loss only inside the crash window |
 | `freeze@m+n` | `SIGSTOP` the whole process tree (watchdog, recorder, harness and its children) for n minutes (default 10), then `SIGCONT` | PRD-06 sleep stand-in; review A coverage gap. Not a clock proof (boot time runs on under `SIGSTOP`, PRD-02) | First heartbeat after `SIGCONT` within 10 s; server catches up within 3 minutes; checks as a clean run |
 | `cut-worker@m+n` | Appends `127.0.0.1 <worker host>` to `/etc/hosts` with `sudo` for n minutes (default 10); `getent hosts <worker host>` before, during and after, logged. If the lookup does not change, a local listener that refuses or holds the connection stands in; it never terminates TLS (PRD-06 risks). If neither takes, the row says "not run: cut did not take" | PRD-06 U3, U5 | Checks as a clean run; `upload.json` lines of PRD-06 read from `watch/upload.jsonl` |
@@ -400,8 +422,8 @@ The ledger `pad-out/spend.jsonl` has one line per run, written after the checks:
 case, time. Prices come from one rate line per model the pad keys use in `scripts/pad/pad.toml` (input,
 cached input and output per million tokens, copied from the vendor's pricing page on the day), applied
 per model from `usage` `models[].tokens`. A model with no line is priced at the highest rate the vendor
-lists for that key, and the row says `priced_high: <model>`. The owner's provider dashboards are the
-truth.
+lists for that key, and the row says `priced_high: <model>`. The pad reads no provider usage or billing
+page (ledger T4); the owner's own dashboards stay the owner's check of real spend.
 
 ### 8. The checks and the row
 
@@ -414,31 +436,61 @@ goalcup-verify check --json --known <known> --harness-files harness-files.json <
 goalcup-verify check --json --server <fetched entry> --local <local entry> --known <known>
 goalcup-verify secrets --known <known> <fetched entry> status.json goalcup.log upload.json
 goalcup-verify secrets --known <plain> <local entry> <fetched entry>   # the no-shape value (section 5)
-git clone <pushed repo> pushed && git -C pushed log -p --all | goalcup-verify secrets --known <known> -
+git -C <project> cat-file --batch-all-objects --batch | goalcup-verify secrets --known <known> -
 goalcup-verify usage <fetched entry> --json --out usage
 ```
 
-The clone line runs only when the run had a push token; the repo is public, so it needs none. The
-conductor copies the JSON out, removes the box, and `check.py` maps it to the row.
+The `cat-file` line reads every object in the project's own git store in the box, which holds
+everything the agent pushed; it runs only when the run had a push token. The pad clones nothing: no
+outside API is called to verify (ledger T4). The known-values file holds `known-box` (the run
+certificate key, ledger R3b) by then. The conductor copies the JSON out, removes the box, and
+`check.py` maps it to the row.
 
 `harness-files.json` is made in the box before the seal's wait ends: every file under the connector's
 native roots (PRD-11 native rows) changed since the start marker, as `[{"path": "<source>:<relative
-path>", "size": n}]` (PRD-08 section 1). The verifier never walks a home folder itself.
+path>", "size": n}]` (PRD-08 section 1). The verifier never walks a home folder itself. A connector
+with no native roots, or a harness that wrote no file there, gives an empty list; the local log check
+is then `skip`.
 
-The six checks. Each is PASS, FAIL or INCONCLUSIVE. Keys are PRD-08's S6 report, PRD-09's S7 summary and
-PRD-07's `fetch.json` (S13).
+The six checks. Each is PASS, FAIL or INCONCLUSIVE. **They read the proxy record** (ledger T4): PRD-08's
+S6 report, PRD-09's S7 summary and PRD-07's `fetch.json` (S13). The harness's own session files add
+one optional check, the **local log check** (PRD-08's `threads_match` and `wire_keeps_up`, with
+`subagents_present` on the manifest), where the harness keeps them and PRD-09 reads them
+(`readable: true`). With `readable: false` (`no_reader`, `snapshot_unreadable`, `no_native`) it is
+`skip`, the row says `local_log: none`, and nothing else changes: it never blocks a PASS or a tier.
+Where it runs and fails, it is a FAIL like any other.
 
 | # | Check | PASS when | INCONCLUSIVE when | Catches |
 |---|---|---|---|---|
-| C1 | Wire calls match the harness's own log | `threads_match` is `pass`, and `wire_keeps_up` is `pass` or, for a harness whose log has per-session totals only (`harness_log: "totals"`, Hermes), `skip` "no per-call times" with `threads_match` passing in the totals form (PRD-08 section 3.1, PRD-00 done item 1, owner question 7); usage `readable: true` and at least 2 harness calls; the case rows of section 2 hold. Dodger: `named` as section 2 says | usage `readable: false` (`no_reader`, `snapshot_unreadable` or `no_native`: "not verified: no log reader", the contributor path, section 11); the harness made fewer than 2 calls | B1 |
-| C2 | Every subagent recorded | `subagents_present` `pass` with the manifest; usage `threads` has at least one thread with a parent; every thread has a native stream or wire calls | no thread with a parent in the harness's own log (the agent did not spawn one; rerun once, then a prompt note); `readable: false` as in C1 | B4 |
-| C3 | No secret | 0 known-value hits in local parts, the server copy, `status.json`, `goalcup.log`, `upload.json`, the pad's output folder (after the pane replacement of section 4) and the pushed repo's git objects (leak scan copied from `matrix.sh:1267-1320`; "push not tested" without a push token); 0 unexpected shape hits; every planted shaped value has at least one MASK. Hits of the no-shape value are `facts.plain_hits`, not a FAIL, in the default build (section 5) | the setup-check script never ran (section 5) | B8 |
+| C1 | No missed call | No unexplained gap: `gap_has_end` `pass`, and every `named` loss sits in a gap with a start, an end and a reason (in a fault row, only the gaps section 3.1 expects). The history check (below) is `pass` or `skip`. The local log check, where it runs: `threads_match` `pass`, and `wire_keeps_up` `pass` or, for a totals log (`harness_log: "totals"`, Hermes), `skip` "no per-call times" with `threads_match` passing in the totals form (PRD-08 section 3.1). At least 2 model calls in the record; the case rows of section 2 hold. Dodger: `named` as section 2 says | the record holds fewer than 2 model calls | B1 |
+| C2 | Every subagent recorded | usage `threads` has at least one thread with a parent, and every thread has wire calls or a native stream. Threads and parents come from the record (PRD-09's thread hints and the history check's chains, below), plus native streams where read; with a local log, `subagents_present` `pass` with the manifest too. Dodger: every `conn` to the pinned host is a named tunnel and no thread is claimed from it; with a local log, the native streams carry the threads | no thread with a parent (the agent did not spawn one; rerun once, then a prompt note) | B4 |
+| C3 | No secret | 0 known-value hits in local parts, the server copy, `status.json`, `goalcup.log`, `upload.json`, the pad's output folder (after the pane replacement of section 4) and the project's git objects (leak scan copied from `matrix.sh:1267-1320`, read in the box; "push not tested" without a push token); the known values include the run certificate key (`known-box`, ledger R3b); 0 unexpected shape hits; every planted shaped value has at least one MASK. Hits of the no-shape value are `facts.plain_hits`, not a FAIL, in the default build (section 5) | the setup-check script never ran (section 5) | B8 |
 | C4 | Record whole, server copy whole and readable | local `check`: no `fail`; `server_chunks_whole`, `server_equals_local`, `server_counts_match` all `pass` (from `fetch.json`); parts kept (start event `keep: true` and `upload.json` `keep: true`). A `skip` on `server_equals_local` is FAIL, not skip | `--server off` (row is "local pass" at best) | B2, B5, B6 |
-| C5 | Usage stats present | usage on the server copy: merged input plus output tokens above 0; every thread has a model and calls above 0; one row per subagent; `coverage.unattributed` 0 with PRD-09's meaning (only a hint-bearing call that lost its hint); `wire_only` calls are reported, never failed. Dodger: native tokens present, wire none, the summary says "not recorded on the wire" | same as C1 (no reader) | the usage reader silently reading nothing |
+| C5 | Usage stats present | usage on the server copy, from the wire calls (native tokens added where read): merged input plus output tokens above 0; every thread has a model and calls above 0; one row per subagent; `coverage.unattributed` 0 with PRD-09's meaning (only a hint-bearing call that lost its hint); `wire_only` calls are reported, never failed. Dodger: wire none, the summary says "not recorded on the wire"; native tokens present where a local log is read, and none claimed where there is none | the record holds fewer than 2 model calls | the usage reader silently reading nothing |
 | C6 | Counts the participant saw | `status.json` in `mode: sealed`: `written.model_requests` equals the verifier's `counts.model_requests` and `fetch.json`'s `model_requests`; `written.off_ms` equals the verifier's `off_ms`; the number on the saved end screen is that same number; no `status.jsonl` sample has `written.model_requests` above the final recount | none | B3 |
 
-Hermes before PRD-09's `sqlite.rs` lands (second slice) has `readable: false`, so its C1 is INCONCLUSIVE
-"no log reader", not FAIL (PRD-09 ask 2).
+**The history check** (ledger T4; worked out by PRD-09 from the record, ask 5). Most harnesses resend
+the whole conversation with each call. So each call's request holds the earlier answers of its thread,
+and each such answer must be in the record as a response of its own.
+
+- **Match.** An earlier answer matches a recorded response by its tool call ids where it has any,
+  else by its text with whitespace made even. Masked bytes match, since both sides passed the same
+  masking. Thinking blocks are left out (providers drop or encrypt them). An answer from an earlier
+  part of the run is matched against that part's entry.
+- **Orphan.** An answer with no recorded response is a missed call. Inside a named gap it is part of
+  that gap's stated loss. Outside every named gap it fails C1, named by thread, `sid` and time.
+- **Skip.** A thread whose calls never resend an earlier answer (the harness keeps the history on the
+  provider's side, for example by a previous-response id) is `skip` "no resent history". All threads
+  skipped: the check is `skip`.
+- **A hint, not a proof.** It sees a missed call only when a later call resends its answer. The last
+  answer of a thread is out of its reach, and so is a harness that rewrites its history (risks).
+- **Chains for C2.** A call that continues no earlier conversation starts a thread. A child's final
+  answer, returned to another thread's resent conversation as a tool result, names that thread as its
+  parent. Thread ids on the wire (Codex's `thread-id` header) come first.
+
+A harness with no local log (Hermes run through its gateway, Amp, any harness before PRD-09 has its
+reader; Hermes before `sqlite.rs` lands in the second slice) is judged on C1, C2 and C5 from the
+record alone and can reach "verified" (section 9).
 
 INCONCLUSIVE causes that are never goalcup's failure, decided first from the record's own `http_resp`
 statuses (`O-harness-access.md:280-281`). After them, and before any check: the run must have done work.
@@ -448,7 +500,7 @@ no work" (a first-run dialog ate the prompt, a login failed).
 
 | Cause | Sign |
 |---|---|
-| `provider_down` | Most model responses are 5xx, or the provider's status page shows an incident |
+| `provider_down` | Most recorded model responses are 5xx (from the record only; the pad reads no status page, ledger T4) |
 | `provider_refused` | 401 or 403 on the model host (a bad or unfunded key) |
 | `sandbox_lost` | The box vanished or timed out before the seal |
 | `harness_install` | The pinned version would not install |
@@ -462,7 +514,8 @@ Row, `row.json` (sorted keys, no secret, no path outside the run folder):
  "goalcup":"1.0.0+<commit>","server":"staging",
  "run":"r…","entry":"e…","started":"…","minutes":20.1,"result":"PASS",
  "checks":{"C1":"PASS","C2":"PASS","C3":"PASS","C4":"PASS","C5":"PASS","C6":"PASS"},
- "why":[], "facts":{"wire_requests":0,"harness_calls":0,"harness_log":"per_call","threads":0,
+ "why":[], "facts":{"wire_requests":0,"harness_calls":0,"harness_log":"per_call","local_log":"read",
+  "history":{"state":"pass","answers":0,"orphans":0,"orphans_in_gaps":0},"threads":0,
   "subagents":0,"native_files":0,"gaps":{},"off_ms":0,"provider_errors":{},"secret_hits":0,
   "masks":{},"plain_hits":0,"screen_known":0,"canary":"not planted",
   "tokens":{"input":0,"cached":0,"output":0,"reasoning":0},
@@ -474,7 +527,8 @@ Row, `row.json` (sorted keys, no secret, no path outside the run folder):
 
 `variant` lists the faults, `--exec` and `--pre` scripts (section 3.1), for example
 `["kill-recorder@8","kill-recorder@10"]`; empty for a plain run. `exec` maps each script to its
-watcher verdict (`exec/<script>.verdict`), for example `{"h2-parallel.sh":"PASS"}`. `goalcup` comes from the start event's `build` key (PRD-01). `why` holds one plain line
+watcher verdict (`exec/<script>.verdict`), for example `{"h2-parallel.sh":"PASS"}`. Without a local
+log, `local_log` is `none`, `harness_calls` and `harness_log` are null, and `history` still holds. `goalcup` comes from the start event's `build` key (PRD-01). `why` holds one plain line
 per non-PASS check, copied from the verifier's `why`. The row result is PASS when all six are PASS, FAIL
 when any is FAIL, otherwise INCONCLUSIVE.
 
@@ -495,7 +549,7 @@ when any is FAIL, otherwise INCONCLUSIVE.
 [codex-cli]
 tier = "verified"            # "verified", "not verified" or "not supported"
 version = "<pinned version>" # empty unless verified
-reason = ""                  # one plain line unless verified, e.g. "no key", "no log reader"
+reason = ""                  # one plain line unless verified, e.g. "no key", "C1 history orphan"
 ```
 
 3. `docs/plans/2026-10-30-v1.0/pad-rows.jsonl`: every `row.json` as one sorted line (rows hold no secret
@@ -511,8 +565,8 @@ Tier rule:
 - **verified on `<version>`**: on that version, from the release commit (below), with a trusted pad
   (section 12): the latest `direct`, `gateway` and `dodger` runs, all `full`, are PASS. `gateway` counts only where a documented route exists; `n/a` does not block.
   Fault rows never give or take a tier.
-- **not verified**: anything else, with the reason (`no key`, `no log reader`, a failing check, `loop
-  stopped after three fixes`).
+- **not verified**: anything else, with the reason (`no key`, a failing check, `loop stopped after
+  three fixes`). A missing local log reader is never a reason: the record is the proof (ledger T4).
 - **not supported**: the harness ignores `HTTPS_PROXY` or refuses the run CA on its model host in the
   `direct` case, so the direct run looks like a dodger (tunnels with `tls_refused`, or nothing reaching the
   proxy while session files grow). Never hacked around.
@@ -550,12 +604,13 @@ rewritten to these steps, about 60 lines:
 2. Write `scripts/pad/harnesses/<id>.toml` (section 6).
 3. Run `scripts/pad/pad <id> --connector connectors/<id>.toml --key <your key file> --case direct
    --prompt smoke --where here --server off`. `--connector` loads the new file into the shipped binary,
-   so no rebuild is needed. Read `report.txt`. Fix the connector until C1 to C3 and C6 pass or are
-   INCONCLUSIVE only for "no log reader".
-4. If C1 says "no log reader": attach the masked native streams of the run (`goalcup-verify dump --kind
-   native <entry>`) to the pull request. A reader is then written in PRD-09's module from that sample
-   (PRD-09: "a reader for a session format is written only from a real pad sample"). A contributor may
-   write it; it is a code change reviewed as such.
+   so no rebuild is needed. Read `report.txt`. Fix the connector until C1 to C3 and C6 pass and C4's
+   local half passes (the record is the proof; no log reader is needed).
+4. Optional: if the harness keeps session files and the row says `local_log: none`, attach the masked
+   native streams of the run (`goalcup-verify dump --kind native <entry>`) to the pull request. A reader
+   may then be written in PRD-09's module from that sample (PRD-09: "a reader for a session format is
+   written only from a real pad sample"). It adds the local log check; it is not needed for a tier. A
+   contributor may write it; it is a code change reviewed as such.
 5. Open the pull request with `row.json`. A maintainer runs the pad on staging, all three cases. PASS
    gives the tier.
 
@@ -579,7 +634,7 @@ Control ids are kept from revision 1 so other PRDs' references hold; K1, K3 and 
 | Control | Input | Must give |
 |---|---|---|
 | K1 | Cut (the run 1 converter is cut, PRD-00). Run 1's real numbers come from PRD-16 A1 | |
-| K2 run 1 shape | PRD-08's run 1 shape builder (`check_run1_shape.rs`), written as a part folder and as a fake fetched copy | C1 FAIL (`wire_keeps_up`, `threads_match`), C2 FAIL (`subagents_present`), C4 FAIL (`gap_has_end`, `streams_closed`, `server_counts_match`), C6 FAIL against a fake `status.json` whose `written.model_requests` is run 1's finish-line 1,736 |
+| K2 run 1 shape | PRD-08's run 1 shape builder (`check_run1_shape.rs`), written as a part folder and as a fake fetched copy | C1 FAIL (`gap_has_end`; local log check `wire_keeps_up`, `threads_match`), C2 FAIL (`subagents_present`), C4 FAIL (`gap_has_end`, `streams_closed`, `server_counts_match`), C6 FAIL against a fake `status.json` whose `written.model_requests` is run 1's finish-line 1,736 |
 | K3, K4 | Cut (the silent-drop hook is cut, PRD-00). The C1 and C2 mapping on a silent loss is proven by K2 | |
 | K5 secret leak, real | Claude Code `smoke`, plus a value planted in a file outside the workspace that the setup script also prints, listed in the main known-values file. PRD-05 section 10: such a value is not masked | C3 FAIL with one known-value hit, in local parts and server copy |
 | K6 server tamper | A copy of K7's fetched folder: one flipped byte in `rec.gcr.zst`; one middle chunk removed from `fetch.json` and its bytes from `rec.gcr.zst`; `model_requests` in `fetch.json` plus one | C4 FAIL for each |
@@ -587,10 +642,11 @@ Control ids are kept from revision 1 so other PRDs' references hold; K1, K3 and 
 | K8 pruned | K7 again with `--no-keep` (PRD-06 U5's run may stand in when it runs on the same commit) | C4 FAIL ("parts pruned"), never PASS or skip |
 | K9 count tamper | K7's `status.json` with `written` plus one | C6 FAIL |
 | K10 usage gone | K7 with the usage summary emptied | C5 FAIL |
+| K11 missed call (history) | PRD-09's history fixtures (synthetic, no secret, under `scripts/pad/fixtures/`): (a) a record that leaves out one response while later requests resend its answer, with no gap; (b) the same with a named gap over it; (c) a record whose calls never resend history; (d) a clean record with no native stream at all | (a) C1 FAIL with one orphan; (b) C1 PASS, the orphan counted in the gap; (c) history `skip`, C1 PASS; (d) local log check `skip`, all six PASS (the no-local-log path to "verified") |
 
-K2, K6, K9 and K10 cost nothing and run in seconds in a check box (a build box with no key, ledger B1).
-K2's part folder and fake fetched copy are written by PRD-08's test in a build box and committed under
-`scripts/pad/fixtures/` (synthetic, no secret). K5, K7 and K8 are short real runs, about 1.5 USD in all.
+K2, K6, K9, K10 and K11 cost nothing and run in seconds in a check box (a build box with no key, ledger
+B1). K2's part folder and fake fetched copy are written by PRD-08's test, K11's by PRD-09's, in a build
+box, and committed under `scripts/pad/fixtures/` (synthetic, no secret). K5, K7 and K8 are short real runs, about 1.5 USD in all.
 
 ### 13. The watcher loop
 
@@ -615,6 +671,8 @@ table as is.
    | Known value or shape in the record | PRD-05 |
    | `server_*` | PRD-06, then PRD-07 |
    | `inv*`, `gap_has_end`, `streams_closed` | PRD-01, PRD-02 |
+   | A history orphan outside every gap | PRD-02 (a write lost), then PRD-03 (a stream not recorded), then PRD-09 (the match rule) |
+   | A `recover` line (refused, wrong port, harness restarted) | PRD-10, then PRD-02 |
    | C6 | PRD-02 (counts), PRD-10 (text) |
    | A fault row's own line (gap length, restart, catch-up) | The fault's owner in section 3.1 |
    | The pad itself (a wrong manifest, a typed prompt split, a fault that did not fire) | PRD-12 |
@@ -639,7 +697,7 @@ Rules that never bend:
 
 - A watcher never makes a check pass by changing the check, a tolerance or the pad's expectation, unless it
   shows with record evidence that the check was wrong. That change goes to the check's owner (PRD-08 or
-  PRD-12), is written in the night log as "check changed", and `selftest` must still turn K2 and K5 to K10
+  PRD-12), is written in the night log as "check changed", and `selftest` must still turn K2 and K5 to K11
   into their expected results before any row is trusted again.
 - Never hack around a harness: no base URL from goalcup, no patched harness, no disabled pinning. A harness
   that will not use the proxy is "not supported".
@@ -652,7 +710,7 @@ Create (about 1,500 lines in all, against 6,208 src and 4,482 test lines of the 
 | Path | What | Lines (est.) |
 |---|---|---:|
 | `scripts/pad/pad` | Conductor half: arguments, key files from the environment secrets, key file rules, push token rule, test repo creation, server allowlist (copied from `matrix.sh:253-258`, `:559-600`, production always refused), sandbox lifecycle, approval (`:839-887`), fetch, copy-in, the spend check, pane replacement, ledger, queue | 320 |
-| `scripts/pad/pad-run` | Box half: version check, project and push token, plants (canary only with the owner's yes), setup, `--pre`, key route, tmux start, typing, keep-going, watch, fault and exec schedule, seal, upload wait, wipe, the section 8 commands | 300 |
+| `scripts/pad/pad-run` | Box half: version check, project and push token, plants (canary only with the owner's yes), setup, `--pre`, key route, tmux start, typing, keep-going, watch, fault and exec schedule (with the `pad:recover` window), `known-box`, seal, upload wait, wipe, the section 8 commands | 300 |
 | `scripts/pad/check.py` | Section 8: maps the S6, S7 and `fetch.json` JSON the box's commands wrote to C1 to C6, fault expectations, INCONCLUSIVE causes, `row.json`, `report.txt`, the known-value scan of the output folder, the ledger line. It never runs `goalcup-verify` itself | 320 |
 | `scripts/pad/selftest` | Section 12 | 100 |
 | `scripts/pad/table` | Section 9, including `--release-check` | 150 |
@@ -660,7 +718,7 @@ Create (about 1,500 lines in all, against 6,208 src and 4,482 test lines of the 
 | `scripts/pad/pad.toml` | The per-run cap, parallelism, staging address, rate lines per model | 30 |
 | `scripts/pad/prompts/smoke.txt`, `full.txt`, `pad-setup-check.sh` | Section 5 | 20 |
 | `scripts/pad/exec/h2-parallel.sh`, `refusal-curl.sh`, `long-tunnel.sh`, `time-left.sh`, `hint-local.sh`, `proxy-setting.sh`, `stale-gateway.sh` | Section 3.1, watcher and `--pre` commands other PRDs' proofs need | 70 |
-| `scripts/pad/fixtures/` | K2's part folder and fake fetched copy, written by PRD-08's test (section 12) | generated |
+| `scripts/pad/fixtures/` | K2's part folder and fake fetched copy, written by PRD-08's test; K11's history fixtures, written by PRD-09's (section 12) | generated |
 | `scripts/pad/harnesses/<connector id>.toml` and `gateway/` snippets | Section 6, one per connector (16) | 16 x 15 |
 | `scripts/pad/test_pad.py` | Automated tests below | 270 |
 | `docs/plans/2026-10-30-v1.0/PAD-RESULTS.md`, `pad-rows.jsonl` | Generated by `table` (section 9) | |
@@ -683,17 +741,17 @@ the run folder, never in the checkout), `scripts/gate.sh` and CI (PRD-14), `docs
 
 | PRD | What crosses | Direction |
 |---|---|---|
-| PRD-00 | Done item 1 (direct, gateway and dodger, all `full`, Hermes per session, dodger pass) and done item 9 (HTTP/2 and long-tunnel exec rows); owner question 3 (masking, default no); defaults for keys, spend, server, kept parts; seams S9, S13, S15, S16; the conductor and build boxes; the `.gitignore` ownership row | Used here |
+| PRD-00 | Done item 1 (direct, gateway and dodger, all `full`, Hermes per session as the local log check, dodger pass) and done item 9 (HTTP/2 and long-tunnel exec rows); owner question 3 (masking, default no); defaults for keys, spend, server, kept parts; seams S9, S13, S15, S16; the conductor and build boxes; the `.gitignore` ownership row | Used here |
 | PRD-01 | `rec/` layout, `zstd -dc --long=27` on parts; the start event's `hosts` (with `kind` and `pinned`), `hosts_sha256`, `connector`, `connector_source`, `harness_version`, `keep`, `build`, `fd_limit` | Used here |
-| PRD-02 | `status.json` (S4: mode, written, off, losing); `GOALCUP_KEEP_PARTS`; `rec/watchdog.pid`; proofs R1, R3, R4, R5, R7 run on the pad through faults (section 3.1); the kill case on Claude Code and Hermes `full` rows with R1's pass lines; the 2 s gap bound | Used here; proofs owned there |
+| PRD-02 | `status.json` (S4: mode, written, off, losing); `GOALCUP_KEEP_PARTS`; `rec/watchdog.pid`; proofs R1, R3, R4, R5, R7 run on the pad through faults (section 3.1); the kill case on Claude Code and Hermes `full` rows with R1's pass lines; the 2 s gap bound; the eager restart and crash-loop rule (ledger R3a: no `null_mode` gap in the kill rows); for `goalcup recover` (R3b), the run certificate key file (0600, run folder, kept for the run) and the recover entry (PRD-10 ask N9, open) | Used here; proofs owned there |
 | PRD-03 | Section 12 per-case expectations; the dodger case is the `pinned` list copy through `--hosts`; acceptance 3, 7 and 9 run as `--exec` scripts, and the verdicts of 3 and 9 feed `--release-check`; the route-drop fault | Used here; proofs owned there |
 | PRD-04 | The manifest rule for C2 (PRD-04 interfaces row PRD-12) | Used here |
 | PRD-05 | The planted file shapes (section 10) and A1; the no-shape value as a stated loss in the default build; `sk_test_`, `whsec_` and the canary only with the owner's yes to PRD-00 question 3 | Used here |
 | PRD-06 | `upload.json` (S9: `keep`, `final: sealed`, waits) for the upload wait and the watch; U3, U5 via the `cut-worker` fault; U8 via `kill-both`; the `freeze` stand-in | Used here; proofs owned there |
 | PRD-07 | `fetch-run.sh --bucket goalcup-traces-staging` from the conductor (read only) and `--local`; S13 `rec.gcr.zst` and `fetch.json`; the staging test approval route `POST /v1/device/approve` | Used here |
-| PRD-08 | S6 `check --json`, `--harness-files`, `--known`, `--server --local`, `secrets` (with `-` for the pushed repo), `check --live` (under `nice -n 19`), `dump`, all run in a box (PRD-08 section 1 "Where it runs"); the totals form and `skip` rules of section 3.1; dodger exit 1 from `listed_hosts_decrypted: named` (R4); `refusal_after_trust`; `check_run1_shape.rs` for K2 | Used here |
-| PRD-09 | U1 and S7 via `usage --json --out`; `usage --json` on the open entry for the spend check (`models[].tokens`); `readable` and `reason`, `coverage` (`unattributed` with its narrow meaning, `wire_only` reported), `threads`, `host_kind`; no `--live`, no pricing inside goalcup; new readers only from pad samples (PRD-16 phase 5 reader step) | Used here |
-| PRD-10 | `GOALCUP_SERVER`, `GOALCUP_HOME`, `GOALCUP_KEEP_PARTS`, `GOALCUP_NO_BROWSER`; `start --test --repo --prompt --connector --hosts` (S16) and `first-message.txt`; `continue`; `seal --yes`; `status --json`; contract words; `setup --harness <id> --yes` (S15); reads `connectors/tiers.toml` in the T1 shape | Both |
+| PRD-08 | S6 `check --json`, `--harness-files`, `--known`, `--server --local`, `secrets` (with `-` for the project's git objects), `gap_has_end` and `named` losses for C1; `threads_match`, `wire_keeps_up` and `subagents_present` as the optional local log check (ask 6), `check --live` (under `nice -n 19`), `dump`, all run in a box (PRD-08 section 1 "Where it runs"); the totals form and `skip` rules of section 3.1; dodger exit 1 from `listed_hosts_decrypted: named` (R4); `refusal_after_trust`; `check_run1_shape.rs` for K2 | Used here |
+| PRD-09 | U1 and S7 via `usage --json --out`; the history check and the wire threads and parents of C2 in S7 (ask 5, ledger T4); `usage --json` on the open entry for the spend check (`models[].tokens`); `readable` and `reason`, `coverage` (`unattributed` with its narrow meaning, `wire_only` reported), `threads`, `host_kind`; no `--live`, no pricing inside goalcup; new readers only from pad samples (PRD-16 phase 5 reader step) | Used here |
+| PRD-10 | `GOALCUP_SERVER`, `GOALCUP_HOME`, `GOALCUP_KEEP_PARTS`, `GOALCUP_NO_BROWSER`; `start --test --repo --prompt --connector --hosts` (S16) and `first-message.txt`; `continue`; `seal --yes`; `status --json`; contract words; `setup --harness <id> --yes` (S15); `goalcup recover` and the status line ending `Run: goalcup recover` (section 3.2 and 4, ledger R3b; acceptance 11 runs as the `kill-watchdog-recover` fault); reads `connectors/tiers.toml` in the T1 shape | Both |
 | PRD-11 | Flat connector files and the launch plan; native roots for the manifest; `pinned` in `model-hosts.toml`; loading for `--connector` and `--hosts`; acceptance 1 to 6 run on the pad, 3 to 5 set up by `--pre` scripts (PRD-11 ask 6); the OpenClaw subagent outlook; OpenCode counted once with both versions | Used here |
 | PRD-13 | Deletes the replaced scripts and their tests (below) once `selftest` passes | Done there |
 | PRD-14 | `scripts/pad/test_pad.py` in `gate fast`; `scripts/pad/table --release-check <commit>` for `release.sh tag`; the build lock inside build boxes. The pad needs no `test-hooks` build | Both |
@@ -726,27 +784,36 @@ Deleted by this PRD (section 11): `writing-a-decoder.md` 277 and `templates/conn
 
 | # | Proof | Pass |
 |---|---|---|
-| P1 | **The pad fails before it passes.** `scripts/pad/selftest` on the integration commit, end of phase 2 | K2, K5, K6, K8, K9, K10 each FAIL on exactly the named checks; K7 PASS on all six |
-| P2 | **Phase 1a smoke.** As soon as the core slice records one request (PRD-00): Claude Code and Codex, `direct`, `smoke`, `--server off`, `pad --where here` inside pad boxes (builder notes step 2), never on the conductor | C1, C2, C3 and C6 PASS or INCONCLUSIVE only for "no log reader"; C4's local half PASS |
-| P3 | **Core set, release.** Claude Code, Codex, Hermes: `direct`, `gateway` and `dodger`, all `full`; staging; trusted pad | Nine PASS rows on named versions (PRD-00 done item 1). Each `direct` row shows subagents above 1, tokens above 0, `provider_errors` listed. Hermes passes C1 by the totals form |
-| P4 | **One system for gateways.** The three `gateway` rows of P3, plus Kilo's `gateway` `full` row (PRD-16 A4) | `ai-gateway.vercel.sh` is `listed: shared`, `kind: gateway` in every `conn`; no connector has a gateway-specific line; usage calls show `host_kind: gateway`; C1 within PRD-08's tolerance |
+| P1 | **The pad fails before it passes.** `scripts/pad/selftest` on the integration commit, end of phase 2 | K2, K5, K6, K8, K9, K10 each FAIL on exactly the named checks; K7 PASS on all six; K11 gives its four named results |
+| P2 | **Phase 1a smoke.** As soon as the core slice records one request (PRD-00): Claude Code and Codex, `direct`, `smoke`, `--server off`, `pad --where here` inside pad boxes (builder notes step 2), never on the conductor | C1, C2, C3 and C6 PASS from the record; C4's local half PASS |
+| P3 | **Core set, release.** Claude Code, Codex, Hermes: `direct`, `gateway` and `dodger`, all `full`; staging; trusted pad | Nine PASS rows on named versions (PRD-00 done item 1). Each `direct` row shows subagents above 1, tokens above 0, `provider_errors` listed, and the history check `pass` or `skip` with 0 orphans outside gaps. Hermes passes C1 from the record; its totals form is the local log check where `state.db` is read |
+| P4 | **One system for gateways.** The three `gateway` rows of P3, plus Kilo's `gateway` `full` row (PRD-16 A4) | `ai-gateway.vercel.sh` is `listed: shared`, `kind: gateway` in every `conn`; no connector has a gateway-specific line; usage calls show `host_kind: gateway`; C1 PASS |
 | P5 | **Parallel.** Shown by phase 4's normal waves (up to six boxes at once), no separate run | No cross-talk: distinct runs and entries; each row's known values found nowhere in another run's record; no 429 caused by the pad's own queue rule being ignored |
 | P6 | **Provider refusal is not our failure.** Hermes `smoke` with a DeepSeek key file holding a wrong key | Row INCONCLUSIVE `provider_refused`; C4 and C6 still PASS (the 401s are recorded) |
 | P7 | **The table.** After phase 5 | `PAD-RESULTS.md` has 15 harnesses (OpenCode once), a tier and a reason for each, a named version for each "verified", and `pad_trusted_at` on every row; `connectors/tiers.toml` has 16 tables; `table --release-check <integration head>` exits 0 |
-| P8 | **Contributor dry run.** After the merge to main (PRD-00 "Not in this build"): a builder who did not write the pad adds a harness with only the skill and the pad, `--where here --server off` | A row with C1 PASS or "no log reader", under one hour of work |
+| P8 | **Contributor dry run.** After the merge to main (PRD-00 "Not in this build"): a builder who did not write the pad adds a harness with only the skill and the pad, `--where here --server off` | A row with C1 PASS, under one hour of work |
 | P9 | **The Mac.** The owner runs `scripts/pad/pad claude-code-cli --key <file> --case direct --where here` on a Mac after the build | PASS, or a named failure the night log turns into a fix. Hermes on macOS reads the OS trust store (appendix O H3.3); goalcup never adds the run CA to a keychain; if Hermes cannot trust it there, Hermes on macOS is "not supported on macOS" with that reason |
 | P10 | **Kill case on the core set.** Codex (PRD-02 R1, done item 2), Claude Code and Hermes: `direct` `full` with `--kill-recorder 8,10` | Each row PASS with the `kill-recorder` expectations of section 3.1. The Codex row is in `--release-check`; a Claude Code or Hermes FAIL is a named risk in the end-of-build report |
 | P11 | **The other faults, once each** (phase 2 or 4, shared with other rows' boxes): `freeze@6+10` on Codex `full`; `route-drop@6+1` on Codex `full`; `cut-worker@1+10` on Claude Code `smoke` with `--minutes 14` (U3), and the same with `--no-keep` (U5); `fd-limit@0` on Codex with 20 subagents asked (R4); `kill-watchdog@5` on Claude Code (R5); `kill-both@5` on Claude Code (R7, and `+upload` for U8); the `--pre` rows of PRD-11 acceptance 3 to 5 | Each row PASS with its section 3.1 expectations; the owner PRD's remaining lines read by the watcher from `report.txt` |
+| P12 | **Recover** (ledger R3b, PRD-10 acceptance 11). Codex `direct`, `--prompt full --minutes 10 --fault kill-watchdog-recover@3`, so the agent still works after the recover (PRD-10 names `smoke`; a 3-minute run may end before it). Phase 4, after PRD-02's recover entry lands | Row PASS with the `kill-watchdog-recover` expectations of section 3.1, judged from the record, `status.json` and the server copy only (ledger T4). Answers given before the recorder kill and resent after the recover match recorded responses or sit in the one gap |
+| P13 | **No local log, verified** (ledger T4). The first harness that keeps no session file the pad reads (Amp when it has a key; else Codex with its native roots left out by a `--connector` copy, `--prompt full`, `direct`, once in phase 4; the copy makes it a check row, not a tier row) | All six PASS with `local_log: none`; C2 finds a thread with a parent from the record's chains; C5 tokens above 0 from the wire |
 
 ### Automated tests that guard them
 
 `scripts/pad/test_pad.py` (Python `unittest`, no network, no harness):
 
-- Mapping: S6, S7 and `fetch.json` fixtures (clean, run 1 shape, dodger, Hermes totals, pruned, no reader)
-  give the expected C1 to C6 and row result; a `skip` on `server_equals_local` is FAIL; `readable: false`
-  is INCONCLUSIVE, never PASS; a dodger with exit 0 or 2 is FAIL.
+- Mapping: S6, S7 and `fetch.json` fixtures (clean, run 1 shape, dodger, dodger with no local log,
+  Hermes totals, pruned, no reader, history orphan in and out of a gap, no resent history) give the
+  expected C1 to C6 and row result; a `skip` on `server_equals_local` is FAIL; `readable: false` makes
+  the local log check `skip` and a clean record still PASS; an orphan outside every named gap is C1 FAIL,
+  one inside is not; a dodger with exit 0 or 2 is FAIL.
 - Faults: a kill fixture with two `recorder_down` gaps inside the kill windows is PASS; one gap over 2 s,
-  or a named loss outside the windows, is FAIL.
+  a `null_mode` gap, or a named loss outside the windows, is FAIL. A recover fixture with one gap from
+  the recorder kill to the recovered boot, the same harness pid and port, and seal `harness_exit` is
+  PASS; a changed harness pid or port, a second gap, or a missing `Recording is on again` line is FAIL.
+- No outside call to verify: the commands `pad`, `pad-run` and `check.py` build (a recorded `subprocess`
+  call list) hold no `git clone` and no provider host. Their only outside calls are the sandbox CLI,
+  repo creation with `GH_TOKEN`, approval on the staging Worker and `fetch-run.sh`.
 - INCONCLUSIVE causes: 5xx-heavy, 401 and empty records classify as in section 8.
 - Key rules: a key file that is 0644, a symlink, or inside the checkout is refused; a push token that
   starts `gho_` or `ghp_` is refused; no key value appears in any argument the pad builds (a fake key
@@ -772,10 +839,13 @@ Deleted by this PRD (section 11): `writing-a-decoder.md` 277 and `templates/conn
 | A harness's first-run screen changes and eats the prompt | The "did work" gate makes it INCONCLUSIVE, not a false PASS; pane captures show the screen; `pre_keys` and `ready_text` are data |
 | The agent does not spawn a subagent, or refuses to print `.env` | C2 or C3 INCONCLUSIVE, rerun once; the prompt word is per harness. A run never passes on a missing exercise |
 | False alarms in C1 (a harness writes a call twice, a log format changes) | PRD-08's tolerance and "harness above wire only" rule; P3 must pass before any other harness is judged; a check change follows the rule in section 13 |
+| The history check flags an answer the harness made itself (a compaction summary sent as an answer, a trimmed or edited answer, an answer from a session the run did not record) | The orphan is named by thread, `sid` and time; the watcher shows it with record evidence and the match rule changes by section 13's rule, in PRD-09. Never a looser C1 without that evidence |
+| The history check cannot see the last answer of a thread, or a stop for good near the end of a run | It is a hint, not a proof (ledger T4). In 1.0 one process holds the port, so a recorder that stops cuts the harness off and shows as a `recorder_down` gap, never a silent stop (PRD-02); `streams_closed` and the counts in C6 catch a record that ends early; K2 proves the run 1 shape fails; the local log check sees it where a log is kept |
+| With no local log, a subagent whose every call was missed and whose answer never came back to its parent leaves no trace in the record | The prompt asks for at least five named subagents, so a run with fewer threads than that is read by the watcher; any loss on the wire also shows as a gap or an orphan in the child's own resent history; P13 shows the path on a real run |
 | The pad itself has a bug that hides a loss | `selftest` before trust; `pad_trusted_at` on every row |
 | With K3 and K4 cut, no real run proves C1 and C2 catch a silent loss | K2 proves the mapping on run 1's shape; PRD-08's `check_run1_shape.rs` proves the checks; PRD-16 A1 repeats run 1's load on 1.0. A silent loss in 1.0 would need a design bug PRD-02 section 12 rules out; if one shows, a real FAIL row is the evidence |
-| Only Codex, Claude Code and Hermes have log readers in 1.0 (PRD-09) | The other 12 get C1 INCONCLUSIVE "no log reader" and ship "not verified" until the PRD-16 phase 5 reader step writes one from their sample. The table says so per harness |
-| Hermes C1 before `sqlite.rs` lands | INCONCLUSIVE, not FAIL (PRD-09 ask 2); the core set cannot be green until the second slice delivers it |
+| Only Codex, Claude Code and Hermes have log readers in 1.0 (PRD-09) | The record is the proof (ledger T4): the other 12 are judged from it, with the local log check `skip` and `local_log: none` in the table, and may be "verified". The PRD-16 phase 5 reader step may still add a reader from their sample, as an extra check |
+| Hermes before `sqlite.rs` lands, or run through its gateway with no `state.db` the pad reads | Judged from the record; the local log check is `skip` (PRD-09 ask 2) |
 | A dodger simulated by a pinned list is not a real dodger | A list entry marked `pinned` takes the tunnel path a real pinning client reaches after refusal learning, but skips the learning itself. That path, with its one refused call, is proven by PRD-03 acceptance 7 and `proxy_tls.rs`, not by the dodger rows. A real one (Amp) is run when an account exists; Cursor stays the documented case |
 | Typing into a TUI through tmux differs from a person typing | tmux is a real terminal; the paste uses bracketed paste when the harness asked for it. If a harness has it off, a multi-line first message can submit early: the pad then joins lines with spaces as `matrix.sh:109-118` does, and the row says so. Which tmux format shows a pane's bracketed paste state is unverified; the builder checks `tmux list-panes -F` first |
 | `route-drop` cuts the box's own control channel | The route comes back by a detached timer in the box; the conductor retries `sandbox copy` and the spend check after it. Whether `sandbox exec` and `sandbox copy` use the box's default route is unverified; the first route-drop run checks it with a 30 s drop |
@@ -784,8 +854,10 @@ Deleted by this PRD (section 11): `writing-a-decoder.md` 277 and `templates/conn
 | Vercel Sandbox concurrency and egress limits | Unverified for 6 at once; the queue default is a value in `pad.toml`. The 28 Oct runs showed direct egress and no TLS re-termination (`2026-10-vercel-gateway.md`, Round 2) |
 | Keys outlive the run | `--non-persistent`, `sandbox remove`, wipe step, no key in the image or a build box; `GH_TOKEN` never in a box, only the push token; C3 scans the pad's own output |
 | The agent sends `.env.local` to the model provider | It holds only the push token (Contents read and write on the throwaway owner) and fake values; the real harness key lives in the isolated home or the launch shell, as for a participant |
-| Provider outage looks like 15 failures | `provider_down` from recorded statuses first (`O-harness-access.md:266-281`) |
-| A runaway run (Claude Code with 20 subagents) passes 10 USD inside 20 minutes | The spend check every 5 minutes seals it at 10 USD; between checks it can overshoot by up to 5 minutes of spend, and an open entry reads to its last whole frame, so the check errs low by at most one frame; the row says `over_cap`. Provider budgets are the backstop where they exist (unverified per vendor); the owner's dashboards are the truth |
+| Provider outage looks like 15 failures | `provider_down` from recorded statuses only (`O-harness-access.md:266-281`); no status page is read (ledger T4) |
+| `goalcup recover` needs the run certificate key on disk for the whole run (ledger R3b) | Accepted by the owner: a participant who meddles with it breaks the rules anyway. The pad adds the key to `known-box`, so C3 fails if it ever reaches the record, the server copy or a log |
+| The harness loses its terminal when the watchdog dies, so `recover` has nothing to keep recording | The `kill-watchdog-recover` row is INCONCLUSIVE "harness lost its terminal", status must show the `goalcup continue` line, and the watcher follows PRD-10 acceptance 11 |
+| A runaway run (Claude Code with 20 subagents) passes 10 USD inside 20 minutes | The spend check every 5 minutes seals it at 10 USD; between checks it can overshoot by up to 5 minutes of spend, and an open entry reads to its last whole frame, so the check errs low by at most one frame; the row says `over_cap`. Provider budgets are the backstop where they exist (unverified per vendor); the pad reads no provider usage page (ledger T4); the owner's dashboards stay the owner's check |
 | The spend check slows the harness | It runs under `nice -n 19` every 5 minutes, like `check --live`; `procs.jsonl` shows its cost |
 | A "verified" version is not the one people run on 7 Nov | The row names the version; connectors turn auto-update off (PRD-11); PRD-16 reruns the core set on 5 Nov |
 | The release binary embeds a newer `tiers.toml` than the binary the pad ran | Only the tier text differs; `--release-check` excludes exactly that one file and nothing else |
@@ -809,7 +881,7 @@ Deleted by this PRD (section 11): `writing-a-decoder.md` 277 and `templates/conn
 | Rerun of INCONCLUSIVE | once | PRD-16 |
 | Failed fixes per cause | 3 | Owner |
 | Tier needs | `direct`, `gateway` and `dodger` `full` PASS, trusted pad | Owner |
-| Fault defaults | kill at minutes 8 and 10; freeze 10 min; cut 10 min; route drop 1 min | Owner PRD of each fault |
+| Fault defaults | kill at minutes 8 and 10; freeze 10 min; cut 10 min; route drop 1 min; recover: recorder killed 1 minute after the watchdog, `recover` 1 minute later | Owner PRD of each fault |
 | Canary minute | 5, only with the owner's yes to PRD-00 question 3 | PRD-05 |
 | Push token | none until the owner provides one: rows run without `--repo` | Owner |
 
@@ -821,7 +893,7 @@ Order of work (PRD-00 slices):
    `.gitignore`; `scripts/pad/table` seeds `connectors/tiers.toml` (section 9) for the integrator to
    commit with PRD-11's phase 0 connectors.
 2. **Core slice:** `check.py` and `test_pad.py` against fixture S6, S7 and `fetch.json` JSON (S6 stable by
-   H+3, S7 and U1 by H+4, S13 by H+3). Then the offline controls K2, K6, K9, K10 in `selftest`. This is
+   H+3, S7 and U1 by H+4, S13 by H+3). Then the offline controls K2, K6, K9, K10 and K11 in `selftest`. This is
    the part everything else trusts; the offline controls run in a check box. Then `pad-run` and `pad`
    with `--where here --server off` for Claude Code and Codex `smoke`: phase 1a needs it (P2). Before
    the sandbox lifecycle lands, the watcher creates a pad box by hand (`sandbox create --snapshot <pad
@@ -831,8 +903,8 @@ Order of work (PRD-00 slices):
 3. **Second slice:** sandbox lifecycle, then `--server local`, then staging, approval and `fetch-run`;
    the three cases for the core set (harness files for Claude Code, Codex and Hermes first, after reading
    each vendor's current docs or `--help` of the pinned version, cited in the commit, ledger T7); the
-   spend check; faults, `--exec` and `--pre` scripts; the real controls K5, K7, K8; mark the pad trusted
-   at the end of phase 2.
+   spend check; faults, `--exec` and `--pre` scripts (`kill-watchdog-recover` once PRD-02's recover
+   entry lands); the real controls K5, K7, K8; mark the pad trusted at the end of phase 2.
 4. **Third slice:** `table`, `tiers.toml`, `pad-rows.jsonl` and `--release-check`, the ledger and the queue; the
    `--prompt-file`, `--minutes`, `--keep-going` flags for PRD-16; then the other 13 harness files, each
    written after reading the vendor's current docs (ledger T7); the image gains their harnesses.
@@ -860,21 +932,25 @@ Traps from the audit:
 - `--exec` reads `/proc/<pid>/environ`, which holds the harness's keys: filter by name before anything
   is stored or passed, and test the filter.
 - Run 1's observer had no live alarm; the pad records the first `check --live` failure time.
+- `goalcup recover` refuses inside the harness's environment: run it in the `pad:recover` window, never
+  in the harness's pane or with `/proc/<pid>/environ` values (PRD-10 section 3.2).
+- Never call an outside API to verify (ledger T4): no provider usage or billing lookup, no status page,
+  no clone. If a check seems to need one, the fact belongs in the record; ask its owner.
 
 How a watcher proves it in a real run: run `scripts/pad/selftest` (its offline controls run in a check
-box) and confirm K2 and K5 to K10 in its output; then `scripts/pad/pad codex-cli --key
+box) and confirm K2 and K5 to K11 in its output; then `scripts/pad/pad codex-cli --key
 ~/.pad-keys/openai --case direct --prompt full`; during the
 run `tail -f pad-out/codex-cli/direct/<stamp>/watch/status.jsonl`; after it, read `row.json` and confirm
-`subagents` above 1, `wire_requests` within tolerance of `harness_calls`, `secret_hits` 0, C4 PASS, and
-`pad_trusted_at` set; then `scripts/pad/table` and read the Codex table in `PAD-RESULTS.md` and its
+`subagents` above 1, `history.orphans` 0 outside gaps, `wire_requests` within tolerance of
+`harness_calls` where `local_log` is `read`, `secret_hits` 0, C4 PASS, and `pad_trusted_at` set; then `scripts/pad/table` and read the Codex table in `PAD-RESULTS.md` and its
 table in `connectors/tiers.toml`.
 
 ## Asks (ruled)
 
 PRD-00 revision 2 ruled on revision 1's nine asks of PRD-00 (accepted except the hook, cut, and the tier
 copy, now this PRD's own file) and PRD-01 accepted both asks of PRD-01 (`pinned`, `hosts_sha256`, `keep`
-in the start event). PRD-00 R3-11 accepted the four below as written; they are kept for the owning
-PRDs' builders. None is open.
+in the start event). PRD-00 R3-11 accepted asks 1 to 4 as written; they are kept for the owning
+PRDs' builders. Asks 5 and 6 are new in revision 4 (ledger T4, locked) and open; the replan places them.
 
 1. **PRD-16:** drop "`pad-run` seals at 80% of the live estimate" from its spend table (live pricing is
    cut; section 7 here), drop "tiers copied from `pad-out/tiers.json`" (the file is
@@ -887,6 +963,17 @@ PRDs' builders. None is open.
 4. **PRD-08:** a shape hit is `fail` "unless the pad lists it as expected": the pad has no such list in
    1.0 and passes none; please drop the clause or name the input. Done by PRD-00 R3-11; PRD-08 reports a
    glued shape as `warn` `glued_shape`.
+5. **PRD-09 (open, ledger T4):** add the history check to S7 as `history {state: pass | fail | skip,
+   reason, answers, orphans: [{thread, sid, at, in_gap}]}`, by the match rule of section 8, worked out
+   after upload from the record (ledger R8), with no harness name. Give `threads` and `parent` from the
+   record when no native stream is read: a thread hint on the wire first, else the resent-conversation
+   chains, a child named by its final answer coming back to a parent as a tool result. Write the K11
+   fixtures. Without this, C1 and C2 cannot judge a harness with no local log.
+6. **PRD-08 (open, ledger T4):** C1 is now `gap_has_end`, the `named` losses and the history check;
+   `threads_match`, `wire_keeps_up` and `subagents_present`'s native half are the optional local log
+   check. With `readable: false` they are `skip` "no local log" and must not lower the exit code on
+   their own. PRD-08's T4 bullet and PRD-12 interfaces row ("C1 = `wire_keeps_up` + `threads_match`")
+   follow.
 
 ## Review answers
 
@@ -939,7 +1026,7 @@ body at revision 2.
 | C16 Rebuild on the conductor | Accepted. Build boxes only |
 | C25 Seam numbers | Accepted |
 | A4 Phase 1a slice | Accepted. `pad-run --where here` is in the core slice (builder notes) |
-| A8 Native readers for 12 harnesses | Accepted. C1 INCONCLUSIVE "no log reader" gives "not verified: no log reader"; a reader may come from a phase 5 sample (PRD-09) |
+| A8 Native readers for 12 harnesses | Accepted. C1 INCONCLUSIVE "no log reader" gives "not verified: no log reader"; a reader may come from a phase 5 sample (PRD-09). Superseded by ledger T4: C1 is judged from the record and a missing reader is no tier reason |
 | A11 Dodger exit code | Partly. The observable pass lines are in section 2; exit 1 stays, because PRD-08 derives it from the named `pinned` tunnels, which every core harness has, not from `wire_keeps_up` |
 | R1 Hermes cannot pass C1 | Accepted, option (a) per PRD-00: C1 passes by the totals form |
 | B6 Real-run phase size | Accepted. Tier and done item need gateway and dodger at least `smoke` |
@@ -1024,3 +1111,9 @@ taken; "rejected" says why. Fixes for other files are made by those files' owner
 | G3-X37 | Applied. Section 2 dodger row: the launch block's `Host list from a file` line and the end screen, as PRD-10 acceptance 3 says |
 | G3-X43 | Applied. `Cargo.toml` and `rust-toolchain.toml` in the compared paths, and a test |
 | G3-X45 | Applied. Interfaces PRD-17 row |
+
+### Ledger update (30 Oct)
+
+| Id | Answer |
+|---|---|
+| R3a, R3b, T4 carried in | **T4:** the proxy record is the proof. C1 is now "No missed call": no unexplained gap plus the new history check (section 8: match rule, orphans, `skip` where a harness does not resend history, a hint not a proof); `threads_match`, `wire_keeps_up` and `subagents_present` on the manifest became the optional local log check, `skip` with no log. C2 and C5 read threads, parents and tokens from the record, native streams added where read. So a harness with no local log (Hermes through its gateway, Amp) can reach "verified"; "no log reader" is gone as an INCONCLUSIVE cause and a tier reason (sections 8, 9, 11, risks, P2, P3, P4, P8). No outside API is called to verify: the pushed-repo clone became a scan of the project's git objects in the box, `provider_down` no longer reads a status page, and the pad reads no provider usage page (sections 7, 8, risks, a no-outside-call test). New: control K11 (history fixtures, including a clean record with no native stream), P13 (a real no-local-log row), row facts `local_log` and `history`, a watcher row for orphans, asks 5 (PRD-09) and 6 (PRD-08). **R3b:** new fault `kill-watchdog-recover@m` (section 3.1): kill the watchdog, `goalcup recover` (expects "nothing to recover"), kill the recorder a minute later, `goalcup recover` again from a clean window; pass lines from PRD-10 acceptance 11 read from the record, plus P12, a fixture test, a defaults row and two risk rows. The run certificate key now on disk is added to `known-box`, so C3 proves it never leaves the box in the record, the server copy or a log. **R3a:** the `kill-recorder` rows now also expect no `null_mode` gap (kills 2 minutes apart are no crash loop); the crash loop stays PRD-02's proof. PRD-08's interfaces row for PRD-12, PRD-09's "no reader means C1 INCONCLUSIVE" lines and PRD-16's "not verified: no log reader" wording are those files' owners' to follow |

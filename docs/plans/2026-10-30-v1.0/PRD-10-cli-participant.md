@@ -3,12 +3,13 @@
 Id: PRD-10. Version: goalcup 1.0. Date: 30 October 2026. Revision 2: follows PRD-00 and PRD-01
 revision 2, PRD-02 to PRD-06 revision 2 and the three reviews (section "Review answers" at the end).
 Revision 3: the alignment pass against OWNER-DECISIONS.md (section "Alignment answers" at the end).
+Revision 4: ledger items R3a, R3b and T4 (30 Oct): `goalcup recover`, the null-mode line, pad proofs.
 Base: main at 4b226de2.
 Index: [PRD-00](PRD-00-index.md). Format: [PRD-01](PRD-01-record-format.md) (binding).
 
 ## Goal
 
-Seven commands, about 75 messages, and one end screen that says exactly what was written, what was
+Eight commands, about 80 messages, and one end screen that says exactly what was written, what was
 lost, how long recording was off and what is still on this computer. Nothing on screen is ever
 wider than what the record holds.
 
@@ -80,6 +81,7 @@ stays in its file; the push block never holds it; `goalcup.log` takes fixed text
 | `goalcup setup [--harness ID] [--yes] [--record-host HOST]` | **keep, smaller** | Pick the harness, open it once in goalcup's own home to sign in, write the auto-update switch and the no-prompt settings there (section 7), check the machine. `--yes` (seam S15): no question, no harness opened; writes the connector's `update_off` and no-prompt values into the isolated home and prints that home's path (the pad and scripted installs). Without a terminal and without `--yes` it asks nothing, opens nothing, writes nothing and prints the steps: that replaces `doctor` and `--json`. `--record-host` adds a model host to the participant's list |
 | `goalcup start [--harness ID] [--practice] [--test] [--repo NAME] [--prompt FILE] [--connector FILE] [--hosts FILE]` | **keep** | Checks, approval, open the run, then hand over to PRD-02's `watchdog::run`. `--harness` defaults to the one setup saved (app. H 7). `--prompt` is new (section 8). `--connector` and `--hosts` (seam S16) load a connector or a host list from a file; PRD-11 loads and checks them; practice and test runs only |
 | `goalcup continue [RUN] [--connector FILE] [--hosts FILE]` | keep | Close a dead entry (`pipeline::close_dead_entry`), continue on the server, relaunch with the connector's resume arguments (section 3.1). The two file flags must match the run's first entry |
+| `goalcup recover [RUN]` | **new** (ledger R3b) | When the watchdog and the recorder are both dead but the harness still runs: restart only the recorder on the same port with the same run certificate, so the running harness reaches the model service again and is recorded again. Never restarts the harness (section 3.2) |
 | `goalcup status [PART] [--json]` | **keep, rewritten** | One plain block from `status.json`, `upload.json` and `server.json`. Lists the run's parts (replaces `entries`) |
 | `goalcup seal [PART] [--yes]` | keep | Asks, then signals PRD-02: SIGUSR1 to the pid in `rec/watchdog.pid`, or SIGTERM to the recorder pid in `status.json` when no watchdog lives. On a dead entry: `close_dead_entry`, then the uploader. Refused inside the harness (D66, `seal_inside_harness`) |
 | `goalcup upload [PART]` | keep | Dispatch to `upload::manual::run` (PRD-06 section 9) |
@@ -90,7 +92,7 @@ stays in its file; the push block never holds it; `goalcup.log` takes fixed text
 | `goalcup entries` | **cut** | `goalcup status` lists the parts |
 | `git-credential` (hidden), `prep` alias, `setup --json`, `setup --dev`, `start --dev` | **cut** | Backward compatibility (app. F 8) or pins, which are cut (PRD-13). `--connector` and `--hosts` replace `--dev` |
 
-Seven commands. Exit codes stay 0 done, 1 refused and fixable, 3 could not do its job
+Eight commands. Exit codes stay 0 done, 1 refused and fixable, 3 could not do its job
 (`main.rs:49-60`); the sentence "never exits with 2 or 4" goes. `main.rs` keeps `Args::try_parse()`
 and maps every parse error to exit 1, so clap's own exit 2 never shows. Every error is one line
 `goalcup: <text>` on stderr (`main.rs:275`).
@@ -201,6 +203,10 @@ done by PRD-02's watchdog with no proof machinery (PRD-00 question 2, old 11). P
 
 1. If the last entry has no seal and no live recorder: `pipeline::close_dead_entry(dir)` (PRD-02 9.4).
    `StillRecording` gives "This part is still recording. To end it, run: goalcup seal".
+   Before that, if the last entry has no seal and its harness is still alive (section 4, harness
+   liveness), `continue` refuses (exit 1): `<harness> from the last part is still running. To record
+   it again, run: goalcup recover. To start a new part instead, end <harness> first.` Two harnesses
+   on one isolated home at once is what `home_busy` exists to stop (PRD-17 HF4).
 2. The same steps as `start` without the folder-empty and repository checks, and without a new
    approval when the run credential is valid. PRD-02 asks for the previous entry's port.
 3. **Resume or new session** (replaces the session sniffing of `phases.rs:296-361` and
@@ -215,12 +221,70 @@ done by PRD-02's watchdog with no proof machinery (PRD-00 question 2, old 11). P
 4. If the harness version differs from the previous part's (in `server.json`): one line,
    `<harness> was updated from <a> to <b> since the last part.` (PRD-11's auto-update note).
 
+#### 3.2 `goalcup recover` (ledger R3b)
+
+For the one case the watchdog cannot handle itself: the watchdog died, then the recorder died too
+(PRD-02 section 9.1, row "The watchdog, then later the recorder"), while the harness still runs. Nobody
+holds the port, so the harness cannot reach the model service. `recover` brings back only the recorder.
+It never restarts, ends or signals the harness, and it never takes the terminal.
+
+**Checks, in order** (each refusal is one line, exit 1, nothing is started):
+
+| Check | Refusal when it fails |
+|---|---|
+| A run with an open last entry exists (`RUN`, else the newest run in `GOALCUP_HOME`) | `no_run_yet`, kept |
+| Not run inside the harness (the same test as `seal_inside_harness`): the recorder must not start with the agent's environment, whose proxy setting points at the dead port | `goalcup recover runs outside your agent. Run it in another terminal.` |
+| The entry is not sealed (`status.json` `mode` is not `sealed`) and the run is not over (deadline from `server.json`) | Sealed: `This part has ended, so there is nothing to recover. To go on, run: goalcup continue <run>`. Over: `Time is up for this run. To close the part, run: goalcup seal` |
+| No watchdog is alive (`rec/watchdog.pid`, liveness as in section 4) | `goalcup is still running for this part and restarts recording itself. See: goalcup status` |
+| No recorder is alive (`status.json` `pid`) | Not a refusal: `Recording is on; there is nothing to recover.` (exit 0) |
+| The harness is alive (`status.json` `harness` pid and start time, section 4) | `<harness> is not running, so there is nothing to keep recording. To go on, run: goalcup continue <run>` |
+
+**What it does** once every check passes:
+
+1. Rebuild the start facts the way `start` and `continue` do, from the run's own files: the part's
+   connector and host list as named in `server.json` (a file given with `--connector` or `--hosts` is
+   read again; a changed file is refused as on `continue`), the exact mask values again from
+   `mask::workspace_values` (start step 6; nothing secret is stored for this), the harness pid and
+   start time from `status.json` `harness`, and the run certificate from `run-ca.pem` plus its key
+   file (0600, in the run folder, kept for the whole run: ledger R3b, PRD-02 owns it).
+2. Call PRD-02's recover entry (`watchdog::recover(entry_dir, facts)`, ask N9). It binds the port in
+   `status.json` `port`, which must be free or held by no live process (a port left by a dead
+   recorder rebinds), starts the recorder alone, and waits for `ready` for at most 10 s, as on a
+   first boot. The new boot's recovery writes the `recorder_down` gap for the time recording was down
+   (PRD-02 section 9.2 step 4), so the dead time is a gap with a start and an end, never silent (R4).
+   With no watchdog, the recorder runs as in PRD-02's "watchdog only" row: it watches the harness pid,
+   runs its own deadline timer and seals with `harness_exit` or `deadline`.
+3. Write one `goalcup.log` line `recover` (off since, port, outcome).
+
+**What it prints.** On success (exit 0):
+
+```
+Recording is on again for part 2 of your run with Codex, on the same port.
+It was off from 15:43:15 to 15:51:02 (7 min 47 s); this time is in the record as a gap.
+Codex was not restarted. This part ends when Codex exits or at the deadline.
+Check it any time with: goalcup status
+```
+
+Port taken by another program, or the key file missing or unreadable (exit 1): `goalcup cannot
+reopen recording on port <port>: <the port is used by another program | the run certificate key is
+missing>. Your agent cannot reach the model service until this part ends. To go on, run: goalcup
+seal, then goalcup continue <run>`. No `ready` within 10 s (exit 3): `goalcup could not restart
+recording. Your agent still cannot reach the model service. Run goalcup recover once more; if it
+fails again, run goalcup seal, then goalcup continue <run>, and write to <support> naming run <id>.`
+plus the "Details for support are in <log>" line.
+
+`recover` holds no sleep lock (that lived in the dead watchdog), stops no helpers and runs no
+`plan.after`. An email that tells a participant to run it is a later server-side follow-up (R3b), not
+part of this build.
+
 ### 4. Status: `goalcup status`
 
 It reads three files and never talks to the recorder: `status.json` (PRD-02 section 6, seam S4, every 1 s),
 `upload.json` (PRD-06, seam S9) and `server.json`. It works the same while a run records, after it ends,
 and after a crash. A pid is "alive" when `kill(pid, 0)` succeeds and the process is a `goalcup`
-binary (Linux `/proc/<pid>/exe`, macOS `proc_pidpath`).
+binary (Linux `/proc/<pid>/exe`, macOS `proc_pidpath`). The harness is "alive" when its pid in
+`status.json` `harness` answers `kill(pid, 0)` and its start time still matches (pid reuse), the same
+test PRD-02's recorder uses when no watchdog lives.
 
 **Recording state**, decided in this order:
 
@@ -228,8 +292,9 @@ binary (Linux `/proc/<pid>/exe`, macOS `proc_pidpath`).
 |---|---|
 | `mode: sealed` | `Recording: finished at 16:54. Nothing is recorded now.` |
 | Recorder pid (`status.json` `pid`) not alive, watchdog pid (`rec/watchdog.pid`) alive | `Recording is restarting (since 15:43:15).` After 30 s: `Recording is off since 15:43:15. Your agent keeps working; this time will show as a gap.` |
-| Recorder and watchdog both not alive, no seal | `PROBLEM: Recording is off since 15:43:15: goalcup is not running, so your agent cannot reach the model service. Run: goalcup continue <run>` |
-| `mode: null` | `PROBLEM: Recording is off since 15:43:15 (it failed 3 times in a row). Your agent keeps working. goalcup keeps trying to restart it. The server is told.` |
+| Recorder and watchdog both not alive, no seal, harness alive | `PROBLEM: Recording is off since 15:43:15: goalcup stopped, so your agent cannot reach the model service. Your agent is still running. Run: goalcup recover` |
+| Recorder and watchdog both not alive, no seal, harness not alive | `PROBLEM: Recording is off since 15:43:15: goalcup is not running. To go on, run: goalcup continue <run>` |
+| `mode: null` | `PROBLEM: Recording is off since 15:43:15: it stopped right after each restart, so goalcup lets your agent's traffic pass unrecorded for now. Your agent keeps working. goalcup tries again at most 5 minutes apart until the run ends. The server is told.` |
 | Recorder alive, `updated` older than 10 s | `Recording is not answering since 15:43:15. Your agent is not slowed.` |
 | `mode: losing` | `Recording is losing data now: 2 connections or files have a gap (12 MB so far). Your agent is not slowed. The end screen will say how much.` (`losing.streams_in_gap`, `losing.dropped_bytes`) |
 | `mode: writer_slow` | `Recording is behind: nothing written for 14 s. Your agent is not slowed.` |
@@ -287,7 +352,7 @@ line per cause, never one per tick). Notes come from `status.json` `notes`.
 | Note `fd_limit` (PRD-02) | `Many connections are open at once (limit <n>). New ones wait a moment; none is refused.` |
 | Upload behind (PRD-06 `state`) | One line, PRD-06 section 10 (app. F 9 merges five lines into this one) |
 | Sealed `status.json` `after_seal.bytes` above 0 (PRD-02 section 11 step 6) | The after-seal line of section 5 rule 6 |
-| `status.json` older than 2 minutes, no process alive, run still open | `PROBLEM: goalcup has not updated this run since 13:40. The computer may have slept or restarted. To go on, run: goalcup continue <run>` (H: `problem_state_stale`, kept) |
+| `status.json` older than 2 minutes, no goalcup process and no harness alive, run still open (with the harness alive, the state line says `goalcup recover` instead) | `PROBLEM: goalcup has not updated this run since 13:40. The computer may have slept or restarted. To go on, run: goalcup continue <run>` (H: `problem_state_stale`, kept) |
 | Agent exited, run open | `<harness> has exited (exit code 0). The run is still open until <time>. To go on, run: goalcup continue <run>` (H: `problem_agent_exited` without the disk branch) |
 
 Lines from the launch plan, printed once at start and kept in status (no harness names in code; they
@@ -555,7 +620,8 @@ Steps:
   1. goalcup setup                                   once, until it says Ready.
   2. goalcup start --practice                         a 10-minute try, no GitHub (optional)
   3. goalcup start --repo <you>/<repo> --prompt FILE  your run, in the start window; FILE outside the folder
-While it runs: goalcup status (in another terminal). If the agent stopped early: goalcup continue.
+While it runs: goalcup status (in another terminal). If status says so: goalcup recover.
+If the agent stopped early: goalcup continue.
 Guide: https://github.com/agentcommunity/goal-cup-proxy/blob/main/docs/PARTICIPANT-GUIDE.md
 Help: goalcup@agentcommunity.org
 Exit codes: 0 done; 1 refused, and you can fix it; 3 the command could not do its job.
@@ -603,7 +669,8 @@ words, never whole sentences (AGENTS.md "Tests").
 | Seal | `seal_inside_harness`, `seal_question`, `seal_not_confirmed`, `seal_needs_terminal` | `seal_done` without disk words; three endings: "still finishing, run goalcup seal again", "could not finish, write to support", "already sealed" | entry, terminal record, seal.json, anchor, termination lines |
 | Upload | PRD-06 section 10 lines; `entries_intro` becomes the "Parts:" line | `upload_not_opened` and `upload_local_run` merged; "server closed" | `upload_seal_missing` disk words |
 | Setup | frame line, harness pick, home step, machine warnings, `Ready.` block | `update_off` line (always) and the no-prompt question (section 7); `--yes` line; `--record-host` lines | login, `goalcup mcp` lines, SSH, disk, old token notice, "N of 4 steps" |
-| Continue | resume and new-session lines (D73) | harness updated line; recovered part line | session store notes ("the harness's session store could not be read") |
+| Continue | resume and new-session lines (D73) | harness updated line; recovered part line; "harness from the last part is still running" refusal | session store notes ("the harness's session store could not be read") |
+| Recover (new, R3b) | | the success block, five refusals and two failure lines of section 3.2; the two both-dead state lines of section 4; the null-mode line without a retry count | |
 | Time left | `time_left_unknown`, `no_open_run_time_left` | reads `upload.json` `server_word` | MCP answer |
 | Masking | PRD-05 section 12 paragraph, in the guide and once at setup | its default text (PRD-00 question 3 defaults to no) | |
 
@@ -613,12 +680,13 @@ Create (under `crates/goalcup/`, PRD-00 ownership map):
 
 | Path | What | Src lines (estimate) |
 |---|---|---:|
-| `src/main.rs` | clap tree of seven commands, every flag (incl. `--connector`, `--hosts`, `setup --yes`), the hidden recorder entry; exit codes. Published in phase 0 with stubs that call each owner's module | 160 |
+| `src/main.rs` | clap tree of eight commands, every flag (incl. `--connector`, `--hosts`, `setup --yes`), the hidden recorder entry; exit codes. Published in phase 0 with stubs that call each owner's module | 160 |
 | `src/cli/mod.rs` | `GOALCUP_HOME`, `GOALCUP_SERVER`, run and entry paths, `setup.json`, `record-hosts.txt`, pid liveness | 130 |
 | `src/cli/start.rs` | section 3 steps 1 to 10, `StartFacts`, competition refusal of file flags | 340 |
 | `src/cli/folder.rs` | folder checks in one refusal, token line, WSL and network file system checks (from `start/project.rs` 363 and `folder_gate.rs` 224) | 170 |
 | `src/cli/approve.rs` | device flow, run credential, repo pre-check (from `account/device.rs`, `credential.rs`, `commands/run_repo.rs`) | 280 |
 | `src/cli/continue_run.rs` | section 3.1: close dead entry, continue, resume rule, version line | 150 |
+| `src/cli/recover.rs` | section 3.2: the checks, rebuilt start facts, the call to PRD-02's recover entry | 80 |
 | `src/cli/status.rs` | section 4 | 260 |
 | `src/cli/finish.rs` | section 5, wrap-up progress | 160 |
 | `src/cli/seal.rs`, `src/cli/upload.rs` | ask, signal, dispatch | 90 |
@@ -628,7 +696,7 @@ Create (under `crates/goalcup/`, PRD-00 ownership map):
 | `src/cli/awake.rs` | section 9 | 150 |
 | `src/cli/skill.rs`, `src/cli/log.rs` | skill install; `goalcup.log` writer (seam S11) | 140 |
 | `src/cli/text.rs` | every message (section 13) | 420 |
-| **Total** | | **about 2,910** (PRD-00's CLI row: about 2,900) |
+| **Total** | | **about 2,990** (PRD-00's CLI row: about 2,900; `recover` is new, ledger R3b) |
 
 Tests: `crates/goalcup/tests/cli_*.rs` (section Acceptance), using PRD-14's `tests/common/` fake Worker
 and temp homes (a private helper until common lands, removed at phase 3). Repo files:
@@ -646,7 +714,7 @@ Must not touch: `src/pipeline/`, `src/watchdog/` (PRD-02), `src/proxy/` (PRD-03)
 |---|---|---|
 | PRD-00 | Seams S11 (`cli::log::line`), S15 (`setup --yes`), S16 (`--connector`, `--hosts`) owned here; questions 2 (old 8 to 11) and 4 (old 15) carry this PRD's defaults; question 3 (old 12) decides the extra mask calls | Both |
 | PRD-01 | COUNT and seal keys (section 9) incl. `hosts`, `tunnel_hosts`, `req_holes`, `mask_failclosed_bytes`; GAP reasons 1 to 15 (section 3); seal reasons incl. `recovered`, `server_stop` and `harness`; notes `long_tunnel`, `ca_refused`, `fd_limit`, `local_model`, `parse_stopped`, `native_missing`, `native_other_device`, `outlived` (PRD-00 R3-4); `tunnel_hosts` `listed`; `req_whole`; `goalcup` in the start event | Used here |
-| PRD-02 | `watchdog::run(plan, facts) -> ExitCode` (seam S8); the hidden recorder subcommand dispatched to `pipeline::run_recorder`; `pipeline::close_dead_entry(dir) -> Result<Closed, StillRecording>`; `status.json` (seam S4: `pid`, `mode`, `harness`, `written`, `last_request_at`, `last_native_at`, `losing`, `off`, `notes`, `port`; sealed: `seal`, `cut_files`, `outlived`, `after_seal {bytes, hosts}`); `rec/watchdog.pid` (SIGUSR1 for `goalcup seal`, else SIGTERM to the recorder pid); the watchdog runs `plan.before` and `plan.after` and ends the harness; the sleep lock is held in the watchdog process. N7 and N8 ruled by PRD-00 R3-2 | Both |
+| PRD-02 | `watchdog::run(plan, facts) -> ExitCode` (seam S8); the hidden recorder subcommand dispatched to `pipeline::run_recorder`; `pipeline::close_dead_entry(dir) -> Result<Closed, StillRecording>`; `status.json` (seam S4: `pid`, `mode`, `harness`, `written`, `last_request_at`, `last_native_at`, `losing`, `off`, `notes`, `port`; sealed: `seal`, `cut_files`, `outlived`, `after_seal {bytes, hosts}`); `rec/watchdog.pid` (SIGUSR1 for `goalcup seal`, else SIGTERM to the recorder pid); the watchdog runs `plan.before` and `plan.after` and ends the harness; the sleep lock is held in the watchdog process. N7 and N8 ruled by PRD-00 R3-2. For `goalcup recover` (R3b): `watchdog::recover(entry_dir, facts)`, the run certificate key file (0600, run folder, kept for the run) and `status.json` `harness {pid, started}` (ask N9) | Both |
 | PRD-03 | Notes `long_tunnel` (`why` stream or upload), `ca_refused`, `parse_stopped`; tunnel GAP reasons 6, 7, 13, 14; status wording in section 4 | Used here |
 | PRD-04 | `written.native_files`, `native_bytes`, `NativeFinish.cut_files` (via sealed `status.json`), note `native_missing` for a `warn_missing` row, note `native_other_device`; run start in whole seconds in the start facts | Both |
 | PRD-05 | `mask::workspace_values` (`GH_TOKEN` only by default); `mask::env_values`, `mask::harness_values` and `skipped` only after the owner's yes to PRD-00 question 3; `MaskError`; `mask_failclosed_bytes`; section 12 text | Used here |
@@ -735,6 +803,18 @@ here needs a `test-hooks` build.
 10. **Continue resumes.** A Codex `smoke` pad run, then `goalcup seal`, then `goalcup continue`. Pass:
    the harness opens with the connector's resume arguments, and `server.json` marks the second part
    as resumed.
+11. **Recover brings recording back** (ledger R3b). A Codex `smoke` pad run; `kill -9` the watchdog and
+   the recorder together (as PRD-02 R7); within 10 s plain `goalcup status` shows the "Run: goalcup
+   recover" line; then `goalcup recover` from another shell. Pass, from the record only (ledger T4):
+   the harness pid in `status.json` is unchanged; the same port is bound; model requests written after
+   the recover are in the record; `goalcup-verify dump` shows one `recorder_down` gap from the kill
+   to the new boot's first record; the part seals with `harness_exit` or `deadline` and verifies. If
+   the harness lost its terminal and exited (PRD-02 section 9.1), the watcher writes it down, checks
+   that status shows the `goalcup continue` line instead, and the case runs again on a harness the pad
+   starts without a TUI.
+
+No proof here calls an outside API to check a count (ledger T4): every pass reads the record,
+`status.json` and the staging server copy. The history check is the pad's (PRD-12).
 
 Automated tests that guard them (`tests/cli_*.rs`, facts and contract words only):
 
@@ -744,7 +824,9 @@ Automated tests that guard them (`tests/cli_*.rs`, facts and contract words only
   appears only when `after_seal.bytes` is above 0; every gap reason 1 to 15 has words; a recovered seal
   gives the recovered line.
 - `cli_status.rs`: each row of the state table in section 4 from a fixture, including a dead recorder
-  with a live watchdog, both dead, a null-mode file and a `losing` file (the memory-guard and null
+  with a live watchdog, both dead with the harness alive (the `recover` line) and with it gone (the
+  `continue` line), a null-mode file whose line has no retry count and says it keeps trying, and a
+  `losing` file (the memory-guard and null
   proofs move here from real runs, review B T2); one `PROBLEM:` per cause; every note in section 4
   gives its line; the `long_tunnel` fix names `seal` before `continue`.
 - `cli_push.rs`: first-message composition (the push block only with `--repo`); a `--prompt` file that
@@ -756,12 +838,17 @@ Automated tests that guard them (`tests/cli_*.rs`, facts and contract words only
   `no_prompts` value; no `goalcup mcp` text; `--record-host` refuses an IP, a loopback name and a `never`
   host.
 - `cli_continue.rs`: the resume rule from fixture `status.json` files (written requests, session
-  files, a quick non-zero exit after a resume).
+  files, a quick non-zero exit after a resume); a live harness from the last part refuses with the
+  `goalcup recover` line.
+- `cli_recover.rs`: each check of section 3.2 from fixture files and fake pids (sealed, run over,
+  watchdog alive, recorder alive, harness gone, inside the harness), each giving its line and exit
+  code; a port held by another listener and a missing key file refuse with exit 1 and start nothing;
+  `recover` never sends a signal to the harness pid.
 - `cli_time_left.rs`: from `upload.json` `server_word`, fresh, older than 11 minutes, null, and
   `stop`.
 - `cli_log.rs`: `cli::log::line` writes one line per call with `O_APPEND`; two threads never
   interleave inside a line; the API has no way to pass a free string (a compile-fail doc test).
-- `cli_commands.rs`: `--help` lists exactly the seven commands; `goalcup login` and `goalcup mcp`
+- `cli_commands.rs`: `--help` lists exactly the eight commands; `goalcup login` and `goalcup mcp`
   are usage errors (exit 1); `--connector` or `--hosts` on a real run is refused before any file is
   written; `second_start_on_one_home_refuses`: a second `start` on one isolated home while the first
   runs gives `home_busy` (PRD-17 HF4); no timer before the launch is shorter than 15 minutes: a fake
@@ -787,7 +874,8 @@ Automated tests that guard them (`tests/cli_*.rs`, facts and contract words only
 | No sleep lock under WSL or in containers | The machine sleeps mid-run | One honest line, never `PROBLEM:`; the guide says to set Windows sleep to Never |
 | `caffeinate -s` | Lid close on a MacBook still sleeps | Line says "lid open"; unverified for clamshell mode |
 | WSL2 | Not tested in this build (Linux sandboxes only) | Folder gate and opener are copied unchanged; marked unverified |
-| Size | About 2,910 src lines against PRD-00's CLI row of about 2,900 | The device flow, sleep lock and folder rules are copied, not new; the sleep lock, `--prompt` and WSL rules come in the third slice and can be dropped if the day runs out (the old behaviour without them is still honest) |
+| Recover runs without a watchdog | After `goalcup recover` nobody holds the sleep lock, stops helpers or ends the harness at the deadline; the run certificate key sits on disk for the run | The recorder seals at the harness's exit or the deadline (PRD-02 "watchdog only" row); the harness is not ended, as when the watchdog dies today. The key file is 0600 and accepted by the owner (R3b): a participant who meddles with it breaks the rules anyway |
+| Size | About 2,990 src lines against PRD-00's CLI row of about 2,900 (the 80 over is `recover`, R3b) | The device flow, sleep lock and folder rules are copied, not new; the sleep lock, `--prompt` and WSL rules come in the third slice and can be dropped if the day runs out (the old behaviour without them is still honest) |
 
 ## Overridable defaults
 
@@ -809,7 +897,8 @@ PRD-01 section 9; A2 (`recovered`) taken in section 11; A3 (`mask_failed` is 12)
 taken (command list, `GOALCUP_HOME`, `GOALCUP_SERVER`, seams S9 and S11); P1 to P4 are PRD-00 owner
 question 2 (old 8 to 11). N1 to N6 of PRD-02 are taken in seams S4 and S8; N4 of PRD-06 is seam S9 `server_word`.
 
-Revision 2's asks, all ruled by PRD-00 (none is open; new asks go in the replan's Amendments note):
+Revision 2's asks, all ruled by PRD-00. N9 (revision 4, ledger R3b) is open and goes to the replan's
+Amendments note:
 
 | # | Of | Ask | Ruling |
 |---|---|---|---|
@@ -819,6 +908,7 @@ Revision 2's asks, all ruled by PRD-00 (none is open; new asks go in the replan'
 | C1 | PRD-11 | `update_off` is a key of its own, always written by setup with no question (ledger H9); `connector::load` takes a path for `--connector` and a host file for `--hosts`; keep `first_screen`, `warn_missing`, `skills_dir` as PRD-00 seam S3 says | R3-11; closed: PRD-11 has `update_off` and `skills_dir`, and `load` and `plan` replace `PlanCtx` |
 | T1 | PRD-12 | `connectors/tiers.toml` shape: one table per connector id with `tier` (`verified`, `not verified`, `not supported`), `version` and `reason` | R3-11 |
 | W1 | PRD-15 | "Part" is one `start` or `continue`; the compressed files are "record files" in the guide | R3-11 |
+| N9 | PRD-02 | For R3b: keep the run certificate key in a 0600 file in the run folder for the whole run (PRD-02 step 3 says today the key never touches disk), and give `watchdog::recover(entry_dir, facts) -> Result<Recovered, NotRecovered>` (`PortTaken`, `KeyMissing`, `NoReady`) that binds the part's port, starts the recorder alone with those facts and waits for `ready`. For R3a: the null-mode retry is 30 s, 1, 2 then 5 minutes, never more than 5 minutes apart (PRD-02 step 9 says 5 doubling to 10) | Met: PRD-02 now carries R3a and R3b (section 8 steps 8 and 9, section 8.1, `rec/run-ca.key`) |
 
 ## Builder notes
 
@@ -853,6 +943,8 @@ Traps from the audit:
 - Keep "shows the code XXXX-XXXX." and "Recording in chat mode" byte for byte; the pad reads them.
 - Do not stop helpers, end the harness or chase descendants in the CLI: PRD-02's watchdog does all
   three. Do not read harness session stores to decide a resume.
+- `goalcup recover` restarts only the recorder. It never restarts or signals the harness, never takes
+  the terminal and never writes the key file (PRD-02 does).
 - Nothing before the launch may time out sooner than the approval code (15 minutes, PRD-17 P14).
 - No harness names in `src/cli/`: every harness-specific word comes from connector data or plan facts.
 - Keep `Args::try_parse()` (`main.rs:256` today) and map every parse error to exit 1; clap's own
@@ -963,3 +1055,4 @@ PRD-01, PRD-02, PRD-04, PRD-05 and PRD-11 as they now stand, and the code. No lo
 | G3-10n | Applied: section 10 and start step 9 add `GOALCUP_TIME_LEFT_FILE` to `plan.env` before `watchdog::run` |
 | G3-10o | Applied (same change as X2-03): the 64 KiB refusal, its test case and its default row are gone |
 | G3-X41 | Applied (see G2-07) |
+| R3a, R3b, T4 carried in | R3a: the null-mode status line no longer says "failed 3 times in a row"; it says goalcup passes traffic unrecorded for now and tries again at most 5 minutes apart until the run ends. R3b: new command `goalcup recover` (section 1 row, section 3.2: checks for an unsealed entry, no live watchdog, no live recorder, a live harness, a free port; success and refusal lines), the both-dead state line splits into "Run: goalcup recover" while the harness is alive and "goalcup continue" once it is gone, the stale row and `continue` defer to it, help footer, message list, `recover.rs` (80 lines), risk row, builder trap, acceptance 11 and `cli_recover.rs`; ask N9 to PRD-02 for the key file and the recover entry. T4: acceptance says no proof calls an outside API; acceptance 11 passes from the record only; the history check stays PRD-12's |

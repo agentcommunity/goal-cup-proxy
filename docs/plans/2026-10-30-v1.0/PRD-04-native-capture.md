@@ -17,8 +17,9 @@ every seal. The file is the buffer: under load we read later, we never drop.
 - **2 (lead).** Most harnesses write one file per subagent or per thread. `**` patterns find a new
   subagent folder at any depth, and no slot or file cap leaves one out. Harnesses that keep subagent
   links in SQLite get a copy during the run, not only at the seal.
-- **1.** The session files are the harness's own log of its calls. The pad check "wire calls match
-  the harness's own log" (PRD-12) reads them from the record.
+- **1.** The session files are the harness's own log of its calls. PRD-12's optional local log check
+  ("wire calls match the harness's own log") reads them from the record; the proxy record stays the
+  proof (ledger T4).
 - **3.** One low-priority thread, a stated CPU duty cycle (the walk uses at most 2% of one core), no
   handle held between passes, and reads only as much as the pipeline has room for. Nothing here can
   slow a relay.

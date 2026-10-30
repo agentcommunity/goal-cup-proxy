@@ -371,7 +371,7 @@ participant who sets it only keeps more on their own disk; that is harmless.
 | Crash between index line and upload | Nothing special: lines at or before the durable point survive recovery by construction (PRD-01 section 1) |
 | Null mode | Keeps sending what is on disk with the `fdatasync` rule of section 3; heartbeat `failed` |
 | Laptop sleep | Sockets die; the next call fails and backs off at most 2 minutes. Timers run on boot time, so on waking the 5-minute round and the heartbeat are already due and go at once |
-| Machine reboot, or both processes killed | Nothing runs until the participant acts. `goalcup continue` closes the dead entry (PRD-02 9.4) and its recorder's uploader sends the old entry first, then the new one. `goalcup upload` does the same by hand |
+| Machine reboot, or both processes killed | Nothing runs until the participant acts. If the harness still runs, `goalcup recover` restarts only the recorder on the same port with the same CA, and its uploader goes on from the server's position (PRD-02 8.1, ledger R3b). Otherwise `goalcup continue` closes the dead entry (PRD-02 9.4) and its recorder's uploader sends the old entry first, then the new one. `goalcup upload` does the same by hand |
 | `upload.json` lost or corrupt | It is a cache. The server's position is the truth; it is checked against the local index as in section 3 |
 | Server lost bytes the client pruned | `stuck`: said plainly, never "fixed" by sending around the hole. Organizers decide (Risks) |
 

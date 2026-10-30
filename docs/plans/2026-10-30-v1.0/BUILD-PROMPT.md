@@ -148,9 +148,10 @@ and report commits and replan notes skip review.
   gateway `full` row (PRD-16 sections 6 and 7). Watchers fix failures and rerun; stop after three failed fixes
   on one cause and write it down. Watchers may run as up to three workflows of 2 agents beside the real-runs
   lane, so six can work at once.
-- **Every real run** is judged by PRD-12's C1 to C6 and nothing looser: wire calls match the harness's own log
-  (per 10 minutes; Hermes per call or, in its totals form, per session after the seal, PRD-00 done item 1; the
-  dodger case by PRD-12 section 2); every subagent recorded; no silent loss (every loss is a gap with start
+- **Every real run** is judged by PRD-12's C1 to C6 and nothing looser. The proxy record is the proof (ledger
+  T4): no unexplained gap and the history check finds no missed call (the dodger case by PRD-12 section 2); the
+  harness's own session files are an optional extra check where it keeps them, and no outside API (no provider
+  usage lookup) is called to verify; every subagent recorded; no silent loss (every loss is a gap with start
   and end); no secret in local parts, server copy, logs, the pad's output or the pushed repository; record and
   server copy whole, with parts kept (`GOALCUP_KEEP_PARTS=1`); usage stats (model, tokens and status per call
   and per subagent) present; the counts on screen, in `status.json` and on the server equal the verifier's

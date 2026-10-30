@@ -75,7 +75,7 @@ every automated check passed while 37.5% of calls went unrecorded.
 
 | Layer | Proves | Runs where | Cost |
 |---|---|---|---|
-| **Real runs (PRD-12 pad)** | All seven points on real harnesses, keys and the staging Worker: wire against the harness's own log, every subagent, no secret, server copy whole, counts the participant saw | Pad boxes; the owner's Mac after the build | Keys, minutes, money |
+| **Real runs (PRD-12 pad)** | All seven points on real harnesses, keys and the staging Worker: the proxy record as the proof (no unexplained gap, the history check; the harness's own log only as an optional extra, ledger T4), every subagent, no secret, server copy whole, counts the participant saw | Pad boxes; the owner's Mac after the build | Keys, minutes, money |
 | **`gate full`** | One short end-to-end run of the real binary through every part, the real Worker under `wrangler dev`, the shipped binary built and checked for hook text | Build box at phase 2 and 3 exits, before the owner's merge, before the tag | About 15 minutes |
 | **`gate fast`** | Format, masking, never-stop, upload contract, connectors, participant words, code rules | Build box before every merge into integration; CI on every push | Under 5 minutes |
 

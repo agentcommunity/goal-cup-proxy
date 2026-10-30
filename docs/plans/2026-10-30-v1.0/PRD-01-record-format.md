@@ -130,7 +130,8 @@ PRD-01 fixes only that rule; the owners fix the content:
 | `status.json`, `counts.jsonl`, `cursors.json` | entry folder | PRD-02 |
 | `upload.json`, `upload.lock` | entry folder | PRD-06 |
 | `goalcup.log` | entry folder | PRD-10 |
-| `run-ca.pem` (certificate only; the key is never on disk), `bundle.pem` | entry folder | PRD-03 (code), written by PRD-02's watchdog |
+| `run-ca.pem` (certificate only), `bundle.pem` | entry folder | PRD-03 (code), written by PRD-02's watchdog |
+| `rec/run-ca.key` (the run CA key, 0600, from the mint to the seal, for `goalcup recover`; ledger R3b; never uploaded) | entry folder | PRD-02 |
 | `server.json` | run folder `$GOALCUP_HOME/runs/<run_id>/` | PRD-10 |
 
 ## 2. Framing

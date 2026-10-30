@@ -4,18 +4,23 @@ Id: PRD-08. Version: goalcup 1.0. Status: plan for the build. Date: 30 October 2
 Revision 2, 30 October 2026: acts on every PRD-08 item of the consistency check and reviews A and B, and
 follows PRD-00 and PRD-01 revision 2 (section "Review answers" at the end). Base: main at 4b226de2.
 Revision 3, 30 October 2026: alignment fixes against the ledger (section "Alignment answers" at the end).
+Revision 4, 30 October 2026: carries ledger R3a, R3b and T4: the history check (section 3.2), the
+checks against the harness's own log made optional, and the null mode and `goalcup recover` gaps.
 Index: [PRD-00](PRD-00-index.md). Format: [PRD-01](PRD-01-record-format.md).
 
 ## Goal
 
 One small `goalcup-verify` that reads GCR1, proves a record is whole, and fails loudly on every loss
 that run 1 hid. Its JSON report (seam S6) is what the pad (PRD-12), the watchers (PRD-16) and organizers read.
+The proxy record is the proof (ledger T4): every check reads the record, the server copy and files the
+pad hands it. No command opens a network connection or calls an outside API.
 
 ## Points served
 
 5 (the server copy is proven whole and rebuilt by ID and time), 3 (no silent loss: a loss without a
-GAP is a failure), 1 and 2 (wire calls and subagents checked against the harness's own log), 4 (the
-secret scan), 6 (the counts the participant saw equal the verifier's recount).
+GAP is a failure), 1 and 2 (the history check finds a missed model call from the record alone; where
+the harness keeps session files, wire calls and subagents are also checked against its own log), 4
+(the secret scan), 6 (the counts the participant saw equal the verifier's recount).
 
 ## Owner decisions it carries out
 
@@ -29,10 +34,22 @@ secret scan), 6 (the counts the participant saw equal the verifier's recount).
 - L6: signing, receipts, acks, baseline and seal manifests, termination proof are cut (PRD-00 question 3).
 - R8 and section 7: record raw, interpret later. Everything here runs after the run, or beside it in a
   watcher, in a sandbox box (ledger B1, section 1 "Where it runs"), never in the recorder (AGENTS.md, D3).
-- T4: wire calls match the harness's own log, every subagent recorded, no secret, server copy whole.
-  This PRD supplies those four; usage stats present is PRD-09's (PRD-12 C5).
-- T8 and done item 1: Hermes passes "wire calls match" per call when its `state.db` rows carry usable
-  times, else by a per-session comparison after the seal (PRD-00 question 7, default; section 3.1).
+- R3a: a crash loop runs null mode (pass-through) and retries for ever. The next normal boot writes
+  one `recorder_down` gap with cause `null_mode` for the whole span (PRD-02 section 8 step 9). The
+  verifier names it, however long; it is never a `fail` (section 3, inv6).
+- R3b: `goalcup recover` restarts only the recorder after the watchdog died; its boot writes one
+  `recorder_down` gap with cause `watchdog_lost`. Named the same way. The run CA key kept in
+  `rec/run-ca.key` during the run goes in the pad's `--known` file, so the scan proves it never
+  reaches the record or the server copy.
+- T4: the proxy record is the proof. This PRD supplies no unexplained gap (integrity and honesty
+  checks), every subagent recorded, no secret, server copy whole, and the history check (section
+  3.2), all offline. Usage stats present is PRD-09's (PRD-12 C5). The checks against the harness's
+  own log (`wire_keeps_up`, `threads_match`, the manifest part of `subagents_present`) are an
+  optional extra: they run only where the harness keeps session files, and their `skip` is never a
+  failure (section 3.1). No provider usage lookup or other outside API is called.
+- T8 and done item 1: Hermes passes on the history check (it resends the conversation to its
+  model). Its optional log check runs per call when its `state.db` rows carry usable times, else by a
+  per-session comparison after the seal (PRD-00 question 7, default; section 3.1).
 
 ## Today
 
@@ -81,17 +98,20 @@ Where it runs (ledger B1): every `goalcup-verify` command runs in a box, never o
 harness. `check --server`, `usage` and `secrets --known` run in the run's pad box (before it is
 removed) or a fresh check box, on the fetched folder the conductor copies in. The known-values file
 copied there holds only values that entered that run's box (harness key, gateway key, push token,
-planted values, canary), 0600, deleted after the scan. The conductor runs only `fetch-run`, sandbox
+planted values, canary, and the run CA private key from `rec/run-ca.key`, ledger R3b), 0600, deleted
+after the scan. The conductor runs only `fetch-run`, sandbox
 control and git.
 
 The judge view (`goalcup-verify judge`) is not in this build (PRD-00 "Not in this build", review B N2).
 Its one fact judges need now, the evidence label, is a key in S6 (section 5).
 
-Inputs `check` takes so it can compare the record with the harness's own log:
+Inputs `check` takes:
 
-- The record itself, always. Native session files are in it (PRD-04), so the harness's own log is
-  read from the record, not from the disk. That makes the check work on the server copy.
-- `--harness-files <manifest.json>` (pad only): the pad lists files on disk under the connector's
+- The record itself, always, and nothing else is needed. The history check (section 3.2) reads only
+  the recorded requests and responses. Native session files, where the harness keeps them, are in
+  the record too (PRD-04), so the optional comparison with the harness's own log is read from the
+  record, not from the disk. That makes every check work on the server copy.
+- `--harness-files <manifest.json>` (pad only, optional): the pad lists files on disk under the connector's
   native roots, as `[{"path": "<source>:<relative path>", "size": n}]`. The check then also proves
   that every file on disk has a stream. The verifier never walks a home folder itself.
 - `--known <file>` (pad only, 0600): real and planted secret values, one per line, for the scan.
@@ -133,11 +153,11 @@ the names other PRDs already read:
 
 | Invariant | Id | Notes |
 |---|---|---|
-| 1 to 9 | `inv1` to `inv9` | inv4 counts from `meta.from` and exempts `conn` streams; inv6 is boot order (one `recorder_down` per boot after 0); inv7 is "every COUNT equals a recount" |
+| 1 to 9 | `inv1` to `inv9` | inv4 counts from `meta.from` and exempts `conn` streams; inv6 is boot order (one `recorder_down` per boot after 0); inv7 is "every COUNT equals a recount". A `recorder_down` gap with cause `null_mode` (one gap for a whole crash-loop span, ledger R3a) or `watchdog_lost` (a boot started by `goalcup recover`, R3b) is a named loss of any length, never `fail`; the text output prints its cause and length |
 | 10 | `streams_closed` | In an unsealed or live entry, open streams are listed and the result is `named`, not `fail` |
 | 11 | `seen_matches_written` | A stream with an unknown-loss GAP is `named` with the hole's size, not checked |
 | 12 | `gap_has_end` | A GAP with start equal to end and `lost` 0 or 1 is run 1's shape: `fail` |
-| 13 | `recorder_alive` | COUNT at most 180 s apart within a boot, after taking off `suspend` time. With `--live`, also: the last COUNT is under 180 s old by the wall clock now, minus any sleep the record shows |
+| 13 | `recorder_alive` | COUNT at most 180 s apart within a boot, after taking off `suspend` time. With `--live`, also: the last COUNT is under 180 s old by the wall clock now, minus any sleep the record shows. A stale COUNT while the entry's `status.json` says `mode: "null"` is `named` "null mode since T" (R3a: the next normal boot writes the gap); any other stale COUNT is `fail`, the alarm that the recorder and its watchdog are both gone (the way back is `goalcup recover`, R3b) |
 | 14 | `inv14` | Native resume has no hole across boots |
 
 Also exit 2: a torn tail (a record cut inside its length) at the end of a sealed entry; two streams of
@@ -149,8 +169,9 @@ never written by 1.0) and any unknown number show as `other(n)` with `warn` (`ga
 
 | Id | Rule | Pass | Run 1's shape fails because |
 |---|---|---|---|
-| `wire_keeps_up` | Harness calls (native leg, U1 rows with times) against wire calls whose outcome is not an error, cumulative over time. Fail when, at any moment T, harness calls up to T exceed wire calls up to T plus 2 minutes by more than max(3, 2%), and the excess is not inside a named GAP, off span, a named tunnel (GAP 1 for `hello_too_big`, 6, 7, 13 or 14) to the harness's model host, or a `conn` GAP (for example 11) on a decrypted connection to it. A harness call is covered when its time lies from the GAP's `start_wall` to its `end_wall` plus the 2-minute lag. A GAP that fails `gap_has_end` covers nothing. Also fail when the harness's last call is more than 10 minutes after the wire's last call with no such cover (`wire_ended_before_native`). Wire above harness is normal (retries, warm-ups) and only reported. `skip` when U1 has no per-call times for this connector (section 3.1) | Never harness above wire, unexplained | Wire stops 15:43:13Z; 473 harness calls follow to 16:54Z, 71 minutes, no cover |
-| `threads_match` | Per thread (U1 thread ids: Codex `thread-id` header and `client_metadata`, Claude Code subagent files, and so on): harness calls not above non-error wire calls, by the same tolerance. A thread with harness calls and no wire call fails, unless covered as above. A wire-only thread is reported. For a harness whose log has totals only, the totals form of section 3.1 | Every thread matches or is explained | Root thread 358 wire against 591; 15 threads have harness calls and no wire call |
+| `history_complete` | The history check, offline on the record (section 3.2). Every earlier assistant answer found inside a later request must exist as a recorded response. A missing one is a finding with its thread. `named` when a named GAP, off span or named tunnel covers the time it was made; `skip`, with why, where requests carry only a previous-response id or after context compaction | No answer in a resent conversation that was never recorded as its own response | The synthetic record drops one root-thread call in the middle with no GAP while later requests resend its answer (section "Automated tests"). A wire that stops for good, as run 1's did, leaves no later request to show it: `wire_keeps_up` and the integrity checks catch that |
+| `wire_keeps_up` | Optional (section 3.1): runs only where the harness keeps session files. Harness calls (native leg, U1 rows with times) against wire calls whose outcome is not an error, cumulative over time. Fail when, at any moment T, harness calls up to T exceed wire calls up to T plus 2 minutes by more than max(3, 2%), and the excess is not inside a named GAP, off span, a named tunnel (GAP 1 for `hello_too_big`, 6, 7, 13 or 14) to the harness's model host, or a `conn` GAP (for example 11) on a decrypted connection to it. A harness call is covered when its time lies from the GAP's `start_wall` to its `end_wall` plus the 2-minute lag. A GAP that fails `gap_has_end` covers nothing. Also fail when the harness's last call is more than 10 minutes after the wire's last call with no such cover (`wire_ended_before_native`). Wire above harness is normal (retries, warm-ups) and only reported. `skip` when U1 has no per-call times for this connector (section 3.1) | Never harness above wire, unexplained | Wire stops 15:43:13Z; 473 harness calls follow to 16:54Z, 71 minutes, no cover |
+| `threads_match` | Optional, as `wire_keeps_up`. Per thread (U1 thread ids: Codex `thread-id` header and `client_metadata`, Claude Code subagent files, and so on): harness calls not above non-error wire calls, by the same tolerance. A thread with harness calls and no wire call fails, unless covered as above. A wire-only thread is reported. For a harness whose log has totals only, the totals form of section 3.1 | Every thread matches or is explained | Root thread 358 wire against 591; 15 threads have harness calls and no wire call |
 | `subagents_present` | Every child a parent names (U1 `children`: Codex `receiver_thread_ids`, `crates/goalcup-verifier/src/capture_analysis/native/codex.rs:418-427`; Claude Code `subagents/agent-*.jsonl`; Hermes `sessions.parent_session_id`) has a native stream or wire calls, or sits inside a named gap. With `--harness-files`: every append file on disk has a `native` stream whose last END `seen` equals its size, or a named GAP; every database or snapshot file has a `snapshot` stream (sizes not compared: a database keeps growing) | Every subagent has a leg | 11 children have neither leg; 11 rollout files have no native stream |
 | `listed_hosts_decrypted` | Every `conn` to a host on a list (`listed` not null) is `decrypt`; or a `sign_in` tunnel (no loss, `pass`); or a tunnel whose GAP names its reason (1 `memory_guard` for `hello_too_big`, 6, 7, 13, 14: `named`, PRD-00 ruling, PRD-01 section 4). A decrypted `conn` with a `conn` GAP after a parser fault (4, 11 or 1) is `named`. A listed tunnel with no GAP is `fail`. Two `warn` facts: a `long_tunnel` note on an unlisted host (a possible model host to add), and `refusal_after_trust`: a host and ClientHello `fingerprint` pair that completed a decrypted connection earlier in the entry and later got a `tls_refused` tunnel (review A finding 1: the harness itself may be tunnelled by a learned refusal). A `tls_refused` GAP with tail `{"alert": false}` is skipped by `refusal_after_trust`: nothing was learned from it (PRD-03 section 1) | No listed host relayed blind | Passes (no model host was tunnelled in run 1) |
 | `conn_bytes` | Per decrypted `conn`, each direction: `plain_up` or `plain_down` (PRD-01 END tail) against what its streams account for: request and response heads (the OPEN `headers` size, approximate), HTTP body bytes on the wire (END tail `wire`), WebSocket message bytes, and any `conn` GAP's `lost - 1`. `warn` when more than 10% and more than 1 MiB is unaccounted. `fail` when more than 50% and more than 1 MiB is unaccounted and no `conn` GAP covers the connection (review A finding 2: with PRD-03's `conn` GAP after a parser fault, unaccounted bytes on that scale can only be a silent loss) | Bytes add up within the stated slack | Not applicable to run 1 (v5 had no such tails); it guards 1.0's reused-connection fault |
@@ -159,7 +180,13 @@ never written by 1.0) and any unknown number show as `other(n)` with `warn` (`ga
 A note on inflate: WebSocket messages are recorded inflated, so a deflate connection can account for
 more bytes than went over it. That only makes `conn_bytes` quieter; it never fails a good run.
 
-#### 3.1 Which harnesses have a per-call log
+#### 3.1 Which harnesses have a per-call log (the optional checks)
+
+`wire_keeps_up` and `threads_match` compare the wire with the harness's own log. Ledger T4 makes
+them an optional extra check: they run only where the harness keeps local session files (native
+streams in the record) and U1 can read them. Everywhere else they are `skip` "no session files",
+and that `skip` is never a failure: the history check (section 3.2) and the integrity checks carry
+the proof. The manifest part of `subagents_present` (`--harness-files`) is optional the same way.
 
 U1 (PRD-09) says per connector what its native leg can give: per-call rows with times, per-session
 totals, or nothing (`readable: false`). This crate does not guess.
@@ -179,8 +206,55 @@ whose wire thread comes from PRD-09's join (Claude Code, Hermes), `threads_match
 | None (`readable: false`), or an unreadable database copy (review B A7) | every other harness until a pad sample | `skip` "the harness's own log is not read" | `skip` with the same words |
 
 `skip` is never `pass`. If U1 reads zero harness calls while the wire has calls, both checks are
-`skip` with "could not read the harness's own log". The pad maps a `skip` here to INCONCLUSIVE
-(PRD-12 C1).
+`skip` with "could not read the harness's own log". A `skip` here never makes the pad's C1
+INCONCLUSIVE on its own: C1 rests on `history_complete` (PRD-12 interfaces row below).
+
+#### 3.2 The history check (`history_complete`)
+
+Most harnesses resend the whole conversation with every model call: Chat Completions `messages`,
+Anthropic Messages `messages`, Gemini `contents`, and Responses `input` when the request carries no
+previous-response id. So every answer the model gave earlier shows up again inside later requests.
+If an answer is in a later request but was never recorded as a response, the call that produced it
+was missed. This needs only the record: no session file, no network, no provider lookup.
+
+How it works, in the same one streaming pass (`src/history.rs`):
+
+1. **Answers recorded.** For every recorded model response (U1 pairs request and reply, PRD-09),
+   take its answer keys: each tool-call id (`toolu_…`, `call_…`, Responses `call_id`) and the
+   SHA-256 of its text, whitespace-trimmed and collapsed. For a streamed response the text is the
+   joined `delta`, `text` deltas (the same joiner as the secret scan). Keys go in one set for the
+   whole input; a few bytes per answer.
+2. **Answers resent.** For every decoded model request, list its earlier assistant turns (role
+   `assistant`, Gemini `model`, Responses `message` and `function_call` items) with the same keys.
+   Reasoning items and turns with no id and no text are not checked.
+3. **Threads.** A request joins the open chain whose last list it extends (its earlier turns start
+   with that list); else it starts a new chain. U1's thread id, where the wire carries one, names the
+   chain in the report. Only the turns new since the previous request of the chain are kept, so
+   memory grows with answers, not with history length.
+4. **Verdict per new turn**, after the pass, against the whole set (so an answer copied from another
+   thread or an earlier entry of the run still matches):
+   - found: fine;
+   - missing, with a tool-call id: a missed call. `named` when a named GAP, off span (including
+     `null_mode` and `watchdog_lost`) or named tunnel to that model host overlaps the time between
+     the chain's previous request and this one; else `fail`;
+   - missing, text only: `warn` `history_text_unmatched` (a harness may trim or rewrite answer text);
+     PRD-16 may make it `fail` once R2 and R6 show the text rule holds;
+   - missing in a chain's first request: `warn` `history_unanchored` (from before the record, a
+     resumed session, or a summary), never `fail`.
+5. **Skips, always said.** A request that carries only a previous-response id (`previous_response_id`
+   with no resent turns) adds nothing; a chain made only of such requests is `skip` "history held by
+   the provider". Context compaction: when a request with the same U1 thread id no longer extends its
+   chain, the rest of that thread is `skip` "history rewritten at T (compaction)". A request whose
+   body is holed or not decoded is skipped and counted. If no chain could be checked, the check is
+   `skip` with the reason (also for the dodger case: nothing to its model host was decrypted).
+
+Each finding names the thread (U1 thread id or chain number), the request's `sid` and wall time, and
+the missing turn's position and kind (tool call or text), never its bytes. Facts: answers checked,
+missing by kind, requests skipped by reason, threads compacted.
+
+Run 1's shape is not this check's to catch: when the wire stops for good, no later request resends
+the lost answers. The check catches a call dropped in the middle while later calls are recorded,
+for every harness that resends history, whether or not it keeps session files.
 
 **Reports that never fail on their own.**
 
@@ -242,7 +316,10 @@ these keys; unknown keys are ignored by readers.
              "lost_bytes":0,"lost_unknown":0,"after_stop_bytes":0,"mask_failclosed_bytes":0,
              "off_ms":0,"tunnels":0,"native_files":0,"threads":0},
    "provider_errors":{"wire":{"rate_limit_exceeded":97},"native":{}},
-   "threads":[{"thread":"…","parent":"…","harness":591,"wire_ok":358,"wire_err":40,"result":"fail"}]}],
+   "history":{"checked":1204,"missing_call":1,"missing_text":0,"unanchored":0,
+              "skipped":{"previous_response_id":0,"compacted":0,"undecoded":0}},
+   "threads":[{"thread":"…","parent":"…","harness":591,"wire_ok":358,"wire_err":40,"result":"fail",
+               "history":"fail"}]}],
  "server":{"chunks":20,"whole":true,"equals_local":null,"db_match":false}}
 ```
 
@@ -258,11 +335,12 @@ CHEAT-CHECKLIST cite them (PRD-15 rewrites that text) and the pad prints them:
 - **`label`** in S6: `wire_and_native`, `wire_only`, `native_only` or `none`, from written model
   requests and native streams with bytes. `wire_undecoded` goes: whether PRD-09 could read a body is
   `harness_log` and the U1 facts, not the label. The label is a hint for judges, not a judgement.
-- **One coverage line** in the text output, for example: "The harness's own log: 1,261 calls by 43
-  threads. Recorded: 914 requests, 97 refused by the provider. Harness calls with no recording: 473,
-  from 15:43 to 16:54 (71 min). Recording off: 0 times, 0 s." The seconds are the `off_ms` total.
-  When no harness reader exists for the
-  connector: "The harness's own log is not read for this harness", never "everything recorded".
+- **One coverage line** in the text output, for example: "Recorded: 914 requests, 97 refused by the
+  provider. History check: 1,204 answers checked in 43 threads, 1 missed call. The harness's own
+  log: 1,261 calls; harness calls with no recording: 473, from 15:43 to 16:54 (71 min). Recording
+  off: 0 times, 0 s." The seconds are the `off_ms` total. When no harness reader exists for the
+  connector: "The harness's own log is not read for this harness (optional)"; when the history
+  check is skipped, its reason. Never "everything recorded".
 
 ### 6. What of `crates/goalcup-verifier` stays and goes
 
@@ -300,7 +378,8 @@ Create (all new, in the PRD-00 tree):
   `fetch.json`), `src/integrity.rs` (the 14 invariants, boots, torn tail), `src/honesty.rs`
   (`listed_hosts_decrypted`, `conn_bytes`, `mask_failclosed`), `src/legs.rs` (`wire_keeps_up`,
   `threads_match` with its totals form, `subagents_present`, `provider_errors`, `timeline`, `label`),
-  `src/server.rs`, `src/secrets.rs`, `src/report.rs` (S6, text and the coverage line).
+  `src/history.rs` (`history_complete`, section 3.2), `src/server.rs`, `src/secrets.rs`,
+  `src/report.rs` (S6, text and the coverage line).
 - `crates/goalcup-verify/tests/check_*.rs`, `tests/server_*.rs`, `tests/secrets_*.rs`,
   `tests/common/` (record builders over `goalcup_format::PartWriter` with `window_log` 20, the run 1
   shape builder that PRD-09 and PRD-12 K2 also use).
@@ -317,20 +396,20 @@ Must not touch: `crates/goalcup-verify/src/usage/`, `tests/usage_*.rs` and `test
 | PRD | What crosses | Direction |
 |---|---|---|
 | PRD-01 | F1: `read` over part files and `rec.gcr.zst` with an open end, `dump`, record types, the link check, `read_index` for `--live`. Invariants 1 to 14; GAP reasons 1 to 15 (8 and 9 reserved, shown as `other(n)`); the `conn` GAP rules; END tails `seen`, `up`, `down`, `plain_up`, `plain_down`, `wire`, `unsent`; COUNT keys incl. `hosts`, `tunnel_hosts`, `mask_failclosed_bytes`; `suspend` events; `start` keys `hosts` (with kinds), `connector`, `keep` | Used here |
-| PRD-02 | GAP tail keys `guard`, `limit`, `cause`, `prev`, `exits`, `last`, `conns`, `hosts`; exit codes 70, 73, 74, 75 as `recorder_down` causes (shown in the text output); COUNT every 60 s. No test hook is used here | Used here |
+| PRD-02 | GAP tail keys `guard`, `limit`, `cause`, `prev`, `exits`, `last`, `conns`, `hosts`; exit codes 70, 73, 74, 75 as `recorder_down` causes (shown in the text output); causes `null_mode` (section 8 step 9, ledger R3a) and `watchdog_lost` (`goalcup recover`, section 8.1, R3b); `status.json` `mode: "null"` for `--live`; `rec/run-ca.key` (its value goes in the pad's `--known` file); COUNT every 60 s. No test hook is used here | Used here |
 | PRD-03 | `conn` meta `listed`, `kind`, `mode`, `reason` (incl. `hello_too_big`), `fingerprint`; the `conn` GAP after a parser fault; notes `long_tunnel`, `parse_stopped`; the `tls_refused` GAP tail `{"alert": false}`. Every named tunnel on a listed host (GAP 1 for `hello_too_big`, 6, 7, 13, 14) and every `conn` GAP after a parser fault (for example 11) is `named`; `sign_in` is `pass` | Used here |
 | PRD-04 | Native meta `path`, `gen`, `from`, `fid`; snapshot meta `set`, `form`, `harness_exited`; END `source_changed` with no GAP allowed; GAP tail `unread_at_least`; one path and `gen` per boot; periodic database copies (the last whole `set` is the one U1 reads) | Used here |
 | PRD-05 | S12: `src/mask/shapes.tsv` (kind, guard, regex), read with `include_str!` and compiled without the guard; rule kinds in `mask_rules`; only `fail_closed` spans may exceed 16 KiB | Used here |
 | PRD-06 | `upload.json` `keep`; `GOALCUP_KEEP_PARTS=1` for `server_equals_local`; the `recording` rule from counts, which `server_counts_match` recomputes | Used here |
 | PRD-07 | S13: `<outdir>/<entry>/rec.gcr.zst` and `fetch.json` (chunk list with keys and SHA-256, and the entry row: `model_requests`, `upload_offset`, `final_seq`, final head, the last heartbeat's `recording`, sealed time), each chunk's compressed size (`bytes`) and the last heartbeat's `counts` | Used here |
-| PRD-09 | U1, owned by PRD-09 and used as is: `usage::Calls::new(&Start)`, `push(&Record)`, `finish() -> CallTable` with rows (leg, entry, boot, sid or path, thread, parent, wall times, kind, outcome incl. `RateLimited`, `Cancelled`, `whole`, model) plus `threads`, `readable`, `children`; `native_form`, per-session `api_call_count`, and per thread `native_only`, `native_until`, `readable`, `reason`. Also `usage::run(args) -> ExitCode` | Used here |
+| PRD-09 | U1, owned by PRD-09 and used as is: `usage::Calls::new(&Start)`, `push(&Record)`, `finish() -> CallTable` with rows (leg, entry, boot, sid or path, thread, parent, wall times, kind, outcome incl. `RateLimited`, `Cancelled`, `whole`, model) plus `threads`, `readable`, `children`; `native_form`, per-session `api_call_count`, and per thread `native_only`, `native_until`, `readable`, `reason`. Also `usage::run(args) -> ExitCode`. The history check uses U1's request and reply pairing and wire thread ids; it reads the turn lists itself (`src/history.rs`), so U1 needs no change | Used here |
 | PRD-10 | The `goalcup-verify check` line goes to `goalcup.log` only, when local part files are whole; otherwise it names the server copy. The participant's counts are the ones `counts_match_seal` recounts | Used there |
 | PRD-11 | Connector name and the `start` event `hosts` decide the harness reader and `listed_hosts_decrypted` | Used here |
-| PRD-12 | S6; the `--harness-files` manifest and `--known` file the pad writes and copies into the box where the checks run (section 1 "Where it runs"). C1 = `wire_keeps_up` + `threads_match`; C2 = `subagents_present`; C3 = `secrets`; C4 = integrity checks and `server_*`. Dodger case: exit 1, from the named `pinned` tunnels (`wire_keeps_up` is `named` where it runs, `skip` where U1 has no per-call times). K2 uses this crate's run 1 shape builder | Used there |
+| PRD-12 | S6; the optional `--harness-files` manifest and the `--known` file (with the run CA key, R3b) the pad writes and copies into the box where the checks run (section 1 "Where it runs"). C1 = `history_complete`, plus `wire_keeps_up` and `threads_match` as an optional extra where the harness keeps session files (ledger T4; their `skip` is never INCONCLUSIVE; C1 is INCONCLUSIVE only when `history_complete` and both optional checks are `skip`); C2 = `subagents_present`; C3 = `secrets`; C4 = integrity checks and `server_*`. Dodger case: exit 1, from the named `pinned` tunnels (`history_complete` is `skip` "nothing decrypted", `wire_keeps_up` is `named` where it runs, `skip` where U1 has no per-call times). K2 uses this crate's run 1 shape builder | Used there |
 | PRD-13 | Deletes `crates/goalcup-verifier/` after this PRD's tests pass. Size numbers that replaced `research-measure.py` are S6 `bytes` | Done there |
-| PRD-14 | `cargo nextest` covers `crates/goalcup-verify` in `gate fast`; the release ships `goalcup-verify`. Test list: the six files under Acceptance (no `judge_view.rs`) | Used there |
+| PRD-14 | `cargo nextest` covers `crates/goalcup-verify` in `gate fast`; the release ships `goalcup-verify`. Test list: the seven files under Acceptance (no `judge_view.rs`) | Used there |
 | PRD-15 | RULES "What a label is worth" and the CHEAT-CHECKLIST cross-leg text rewritten for S6 `label` and the coverage line; the judge view is "after the merge" | Written there |
-| PRD-16 | Watchers run `check --live` every 5 minutes (hourly for a week-long entry) in the pad box via `sandbox exec` under `nice -n 19`, and `check --server` after each run in the run's pad box or a fresh check box (ledger B1); a `fail` goes in the night log. Tolerances as stated here until PRD-16 changes them with evidence | Used there |
+| PRD-16 | The `history_text_unmatched` default (`warn`) may become `fail` after R2 and R6. Watchers run `check --live` every 5 minutes (hourly for a week-long entry) in the pad box via `sandbox exec` under `nice -n 19`, and `check --server` after each run in the run's pad box or a fresh check box (ledger B1); a `fail` goes in the night log. Tolerances as stated here until PRD-16 changes them with evidence | Used there |
 | PRD-17 | H10 and K15 of PRD-17 write a part file through the real pipeline; their test also runs `goalcup-verify check` on it and asserts exit 0. No other lessons test writes one | Used there |
 
 ## What is cut
@@ -342,9 +421,11 @@ Must not touch: `crates/goalcup-verify/src/usage/`, `tests/usage_*.rs` and `test
 | The research report NDJSON format (`docs/research/m2-report-format.md` is PRD-15's to retire) | in the above | `m2_research_report.rs`, byte goldens in `tests/fixtures/m2-report-bytes/` |
 | Not built in 1.0: the judge view, the run 1 converter, the silent-drop hook proof | 0 | none written |
 
-New code: about 1,430 src lines (input 150, integrity 380, honesty 150, legs 300, server 130, secrets
-230 with raw inputs, report and main 100) and about 1,100 test lines. PRD-00 budgets 1,500; the judge view's 150 is
-out, the totals form, `conn_bytes` fail rule and `fetch.json` reading are in.
+New code: about 1,600 src lines (input 150, integrity 380, honesty 150, legs 300, history 170,
+server 130, secrets 230 with raw inputs, report and main 100) and about 1,250 test lines. PRD-00
+budgets 1,500; the judge view's 150 is out, the totals form, `conn_bytes` fail rule and `fetch.json`
+reading are in, and ledger T4's history check adds about 170 (over budget by about 100; the replan
+agent may weigh it, B2a).
 
 ## Acceptance
 
@@ -352,13 +433,13 @@ out, the totals form, `conn_bytes` fail rule and `fetch.json` reading are in.
 
 | # | Proof | Pass |
 |---|---|---|
-| R1 | **Run 1's shape fails, on the synthetic record and on 1.0 itself.** (a) `check_run1_shape.rs`'s record written as a part folder and as a fake fetched copy (PRD-12 K2). (b) A1, the 2-hour Codex run on 1.0 (PRD-16), compared with run 1's table | (a) Exit 2; exactly `gap_has_end`, `streams_closed`, `wire_keeps_up`, `threads_match`, `subagents_present` and `server_counts_match` fail; `provider_errors.wire` reads the planted count once. (b) Exit 0 or 1, never 2; no 10-minute bucket with harness calls and 0 wire calls unless covered by a named GAP; `provider_errors.wire` equals, within one per call, the failed calls in Codex's own rollouts (U1 native errors, listed apart) |
-| R2 | **A clean run passes.** Claude Code, `direct`, `full` (PRD-12) | Exit 0, or exit 1 where the only `named` result is an `after_stop` GAP. Every other check `pass` or `skip`. `threads_match` covers the main thread and every subagent. `server_equals_local` passes. `secrets` finds 0 known values |
-| R3 | **A killed recorder is named, not failed.** Codex kill test (PRD-01 acceptance 3, PRD-02 R1) | Exit 1. Two `recorder_down` gaps. Every harness call missing from the wire falls inside them, so `wire_keeps_up` and `threads_match` are `named`. No `fail` |
-| R4 | **The dodger case is honest.** Codex with its model host marked `pinned` on the pad | Exit 1, never 0 or 2. Every connection to that host is a tunnel with GAP `pinned`; `listed_hosts_decrypted` is `named`; `wire_keeps_up` is `named` by them; the label is `native_only` |
-| R5 | **Hermes passes, per call or by totals.** Hermes, DeepSeek key, one delegated child (PRD-12 core row) | `harness_log` is `per_call` or `totals`, as PRD-09 reads it. With `per_call`, `wire_keeps_up` and `threads_match` pass as for Codex. With `totals`, `wire_keeps_up` is `skip` "no per-call times" and `threads_match` passes in the totals form (per session, or per entry when wire calls carry no session id). Either way `subagents_present` finds the child from `parent_session_id` |
-| R6 | **Load.** PRD-16 A1 (Codex, 2 hours) and A2 (Claude Code, up to 20 subagents, 60 minutes, one recorder kill), as PRD-16 runs them under the 10 USD cap (PRD-03 acceptance 10) | `threads_match` passes or is `named` for every thread (A2's kill window is named by its `recorder_down` gap); `provider_errors` shows any 429s. Time for `check` is logged as a measure, never a pass line (PRD-00: no speed number fails a gate) |
-| R7 | **Secrets.** The pad's planted `.env` and prompt (PRD-05 A1), all three cases | 0 known values in local part files and server copy; every planted shape has a MASK |
+| R1 | **Run 1's shape fails, on the synthetic record and on 1.0 itself.** (a) `check_run1_shape.rs`'s record written as a part folder and as a fake fetched copy (PRD-12 K2). (b) A1, the 2-hour Codex run on 1.0 (PRD-16), compared with run 1's table | (a) Exit 2; exactly `gap_has_end`, `streams_closed`, `history_complete` (the mid-run drop), `wire_keeps_up`, `threads_match`, `subagents_present` and `server_counts_match` fail; `provider_errors.wire` reads the planted count once. (b) Exit 0 or 1, never 2; `history_complete` `pass` or `named`; no 10-minute bucket with harness calls and 0 wire calls unless covered by a named GAP; `provider_errors.wire` equals, within one per call, the failed calls in Codex's own rollouts (U1 native errors, listed apart) |
+| R2 | **A clean run passes.** Claude Code, `direct`, `full` (PRD-12) | Exit 0, or exit 1 where the only `named` result is an `after_stop` GAP. Every other check `pass` or `skip`. `history_complete` is `pass` with no `history_text_unmatched` warn, and checks the main thread and every subagent. `threads_match` covers the main thread and every subagent. `server_equals_local` passes. `secrets` finds 0 known values |
+| R3 | **A killed recorder is named, not failed.** Codex kill test (PRD-01 acceptance 3, PRD-02 R1) | Exit 1. Two `recorder_down` gaps. Every harness call missing from the wire falls inside them, so `wire_keeps_up` and `threads_match` are `named`, and `history_complete` is `pass` or `named` by them. No `fail`. The same holds for PRD-02's crash-loop and `goalcup recover` cases: one `null_mode` or `watchdog_lost` gap, `named` |
+| R4 | **The dodger case is honest.** Codex with its model host marked `pinned` on the pad | Exit 1, never 0 or 2. Every connection to that host is a tunnel with GAP `pinned`; `listed_hosts_decrypted` is `named`; `wire_keeps_up` is `named` by them; `history_complete` is `skip` "nothing decrypted to the model host"; the label is `native_only` |
+| R5 | **Hermes passes on the history check; its log check runs per call or by totals.** Hermes, DeepSeek key, one delegated child (PRD-12 core row) | `history_complete` passes (Hermes resends the conversation to DeepSeek); this is the proof. The optional log check: `harness_log` is `per_call` or `totals`, as PRD-09 reads it. With `per_call`, `wire_keeps_up` and `threads_match` pass as for Codex. With `totals`, `wire_keeps_up` is `skip` "no per-call times" and `threads_match` passes in the totals form (per session, or per entry when wire calls carry no session id). Either way `subagents_present` finds the child from `parent_session_id` |
+| R6 | **Load.** PRD-16 A1 (Codex, 2 hours) and A2 (Claude Code, up to 20 subagents, 60 minutes, one recorder kill), as PRD-16 runs them under the 10 USD cap (PRD-03 acceptance 10) | `history_complete` and `threads_match` pass or are `named` for every thread (A2's kill window is named by its `recorder_down` gap); `provider_errors` shows any 429s. Time for `check` is logged as a measure, never a pass line (PRD-00: no speed number fails a gate) |
+| R7 | **Secrets.** The pad's planted `.env` and prompt (PRD-05 A1), all three cases | 0 known values in local part files and server copy, the run CA key included (R3b); every planted shape has a MASK |
 
 The run 1 converter is not built, so run 1's own server copy is not re-checked (PRD-00 "Not in this
 build"). Run 1's numbers stay in the run report.
@@ -371,13 +452,26 @@ build"). Run 1's numbers stay in the run report.
 - `check_run1_shape.rs`: a small record shaped like run 1 (root and four Codex-shaped threads, wire
   stops at minute 49 while rollouts grow to minute 120, six rate-limit errors sent both as an `error`
   event and a `response.failed`, three GAPs with start equal to end and unknown loss, two streams with
-  no END in a sealed entry, one child with neither leg). Pass: exactly those checks fail, exit 2,
+  no END in a sealed entry, one child with neither leg, and one root call at minute 20 dropped with
+  no GAP while later requests resend its tool-call answer). Pass: exactly those checks fail, exit 2,
   `provider_errors` reads 6. The same record with the loss removed exits 0, so the checks do not fire
   on a clean run. It runs against PRD-09's real U1 sink once that lands (a stub before).
 - `check_named.rs`: the clean record with one `recorder_down` gap that covers the missing calls: exit 1,
   results `named`. Also: a listed tunnel with each GAP 6, 7, 13, 14, and a `hello_too_big` tunnel with
   GAP 1, is `named`; with no GAP, `fail`; an `after_stop` GAP is `named`; a Hermes-shaped totals record
-  passes `threads_match`; a `tls_refused` GAP with `{"alert": false}` raises no `refusal_after_trust`.
+  passes `threads_match`; a `tls_refused` GAP with `{"alert": false}` raises no `refusal_after_trust`;
+  a `recorder_down` gap with cause `null_mode` over 10 minutes and one with cause `watchdog_lost`
+  over 2 hours are each `named`, never `fail`; with `--live` and a fake `status.json` `mode: "null"`,
+  a stale COUNT is `named`, and without it `fail`.
+- `check_history.rs`: one small record per request shape (Chat, Anthropic Messages, Responses with
+  resent `input`, Gemini). A clean chain passes. One call dropped with no GAP while a later request
+  resends its tool-call answer: `fail` naming the thread and `sid`; the same drop inside a
+  `recorder_down` gap: `named`. A text-only answer missing: `warn` `history_text_unmatched`. A chain
+  whose first request holds an unknown answer: `warn` `history_unanchored`. Requests with only
+  `previous_response_id`: `skip` "history held by the provider". A request with the same thread id
+  whose history no longer extends its chain: `skip` "compaction" from there on, earlier turns still
+  checked. An answer copied from another thread matches. No network call is made (the test runs with
+  no network).
 - `check_conn_bytes.rs`: a decrypted connection whose second request is missing with a `conn` GAP is
   `named`; the same with no `conn` GAP is `fail`; normal framing overhead stays `pass`.
 - `server_compare.rs`: a fetched copy equal to the local part files passes; one flipped byte, a missing
@@ -396,14 +490,23 @@ build"). Run 1's numbers stay in the run report.
   `docs/plans/2026-10-30-audit/D-harnesses.md:276-278`). Guard: the rule only fires on harness above
   wire; the tolerance is max(3, 2%); R2 and R6 must pass on real runs before the pad trusts it.
 - **Only Codex, Claude Code and Hermes have readers in 1.0.** Hermes is per call when `state.db` rows
-  carry usable times, else the totals form. Every other harness gets `skip` on the leg checks until a
-  pad sample adds a reader. Then a silent loss is caught
-  only by the integrity checks, `conn_bytes` and `recorder_alive`, and the text output says the log
-  was not read. The totals form cannot say when a loss happened, only that one did.
+  carry usable times, else the totals form. Every other harness gets `skip` on the optional leg
+  checks until a pad sample adds a reader. Then a silent loss is caught by the history check, the
+  integrity checks, `conn_bytes` and `recorder_alive`, and the text output says the log was not
+  read. The totals form cannot say when a loss happened, only that one did.
+- **The history check cannot see a wire that stops for good,** nor the last call of a thread: no
+  later request resends those answers. `recorder_alive`, `streams_closed` and, where session files
+  exist, `wire_keeps_up` cover that. It is also blind where the provider holds the history
+  (previous-response id) and after compaction, and says `skip` there.
+- **The history check may misread a harness that rewrites answers.** A harness that trims answer
+  text, drops tool calls it judged failed, or injects its own assistant turns would look like a
+  missed call. Guard: only a missing tool-call id can `fail`; text-only misses are `warn` until R2
+  and R6 show the text rule holds; a chain's first request is never `fail`.
 - **Hermes wire calls may carry no session id.** Then the totals form compares per entry, and a lost
   child is visible only if the sum falls short.
-- **A loss before a stream opens is invisible.** If the proxy drops a whole connection without a
-  `conn` record, only the harness's log can show it. For a harness with no session files, nothing can.
+- **A loss before a stream opens is hard to see.** If the proxy drops a whole connection without a
+  `conn` record, only the harness's log or the history check can show it. For a harness with no
+  session files that does not resend history, nothing can.
 - **`conn_bytes` slack is a guess.** Head sizes are approximate and HTTP/2 framing is not in the
   stream bytes. The `fail` line (50% and 1 MiB) is loose on purpose; the `warn` line is tight. Three
   pad runs measure the real overhead before PRD-16 tightens either.
@@ -426,6 +529,7 @@ build"). Run 1's numbers stay in the run report.
 | Default | Value | Who may change it |
 |---|---|---|
 | Harness above wire tolerance | max(3 calls, 2%), with a 2-minute lag | PRD-16 after R2 and R6 |
+| History check, text-only answer missing | `warn` `history_text_unmatched` (a missing tool-call id is `fail`) | PRD-16 after R2 and R6 |
 | Wire ends before native | 10 minutes | PRD-16 |
 | COUNT silence | 180 s, after sleep | PRD-01 and PRD-02 if COUNT cadence changes |
 | `conn_bytes` | `warn` at 10% and 1 MiB; `fail` at 50% and 1 MiB with no `conn` GAP | PRD-16 after three pad runs |
@@ -446,7 +550,9 @@ Order of work (starts at H+0 from fixtures, review B O5):
 3. `honesty.rs` (`listed_hosts_decrypted`, `conn_bytes`, `mask_failclosed`).
 4. `legs.rs` against a stub `CallTable`; switch to PRD-09's sink when U1 lands (H+4). Build
    `check_run1_shape.rs` with Codex-shaped bodies so PRD-09's real reader runs on it. The totals form
-   when PRD-09's Hermes reader exists (second slice).
+   when PRD-09's Hermes reader exists (second slice). Then `history.rs` with `check_history.rs`, on
+   U1's pairing (stub before it lands). It needs no session files, so it is the C1 proof for every
+   harness that resends history.
 5. `server.rs` as soon as PRD-07 publishes S13 (`fetch.json`); then `secrets.rs` (second slice, with
    S12 by H+3).
 
@@ -472,7 +578,12 @@ How a watcher proves it in a real run, all in a box (section 1 "Where it runs"):
 `goalcup-verify check --json` on the entry and `goalcup-verify check --server <fetched> --local <entry>
 --known <keys>` in the run's pad box or a fresh check box; the pad table reads `result` and the mapped
 checks. During a long run, `check --live` every 5 minutes in the pad box via `sandbox exec` under
-`nice -n 19`: a `fail` on `wire_keeps_up` or `recorder_alive` is the alarm run 1 never raised.
+`nice -n 19`: a `fail` on `history_complete`, `wire_keeps_up` or `recorder_alive` is the alarm run 1
+never raised.
+
+Traps for the history check: never call a provider to look up usage or history (ledger T4); match
+against every response in the input, not only the same thread; keep only new turns per chain, never
+whole histories; never print turn text, only hash prefixes and positions.
 
 ## Asks still open
 
@@ -546,3 +657,17 @@ PRD-10, PRD-16 and the old verifier code.
 | G3-08i | Applied. Checked in code: `lib.rs:34-35` and `:39-53`, `create_output_file` at `goalcup-verify.rs:264-294` (section 1 and section 6) |
 | G3-X36 | Applied. PRD-10 row: the check line goes to `goalcup.log` only |
 | G3-X33 | Applied. PRD-17 row: only H10 and K15 write a part file and run `check` on it, asserting exit 0 |
+
+R3a, R3b, T4 carried in. T4: new check `history_complete` (section 3.2, `src/history.rs`,
+`check_history.rs`), offline on the record: every earlier assistant answer resent in a later request
+must exist as a recorded response; a missing tool-call answer is a finding with its thread (`fail`,
+or `named` under a gap), a text-only one `warn`; `skip`, said, for previous-response-id requests and
+after compaction. `wire_keeps_up`, `threads_match` and the `--harness-files` manifest are now an
+optional extra that runs only where the harness keeps session files; their `skip` is never a
+failure, and PRD-12 C1 rests on `history_complete`. "No outside API" stated in Goal and Owner
+decisions. R1 to R6, S6 (`history` keys), coverage line, Risks, defaults, builder notes and the
+PRD-09, PRD-12, PRD-14 (seven test files) and PRD-16 rows follow. R3a and R3b: `recorder_down` gaps
+with cause `null_mode` or `watchdog_lost` are named of any length (inv6); `--live` `recorder_alive`
+is `named` in null mode, `fail` otherwise (the `goalcup recover` alarm); the run CA key from
+`rec/run-ca.key` joins the `--known` file and R7; a `check_named.rs` case. Estimate up to about 1,600
+src lines.

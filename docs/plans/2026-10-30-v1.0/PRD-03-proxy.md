@@ -157,7 +157,7 @@ Rules that hold everywhere:
    goes on. The workspace keeps `panic = "unwind"` (PRD-14).
 5. **No proxy credential.** `HTTPS_PROXY` is `http://127.0.0.1:<port>` (PRD-00 S8, PRD-11). The
    credential guarded the listener against other local users (`connect.rs:30-40`), but it gives nothing a
-   local attacker can use (the CA key never leaves memory) and it cost a run secret the masker had to hunt
+   local attacker can use (the CA key sits only in memory and in one 0600 file in a 0700 folder, ledger R3b) and it cost a run secret the masker had to hunt
    in every encoding (D60, `docs/DECISIONS.md:510-526`) plus a `407` for any client that drops proxy
    userinfo. Cut everywhere.
 6. **Relay threads: 2 by default** (PRD-00 ruling; PRD-02 section 1 does its memory and CPU math on it).
@@ -235,8 +235,10 @@ Copy `proxy/tls.rs:100-215` and `crates/goalcup-cli/src/ca_bundle.rs` (207 lines
    (OS roots plus the run CA, run CA first, `ca_bundle.rs` logic) as 0600 files in
    `$GOALCUP_HOME/runs/<run>/<entry>/`. `RunCa::export()` gives the certificate and key as PEM for the
    first control line (PRD-00 S8, fd 4); `RunCa::import(pem)` rebuilds it in each recorder boot. The key
-   is never written to disk, logged or put in argv. PRD-02 turns core dumps off before it reads that line
-   (PRD-00 rules of the shape), so the key cannot reach a core file.
+   has exactly one file, PRD-02's `rec/run-ca.key` (0600, created new, removed at the seal), so `goalcup
+   recover` can reload the same CA after the watchdog died (ledger R3b). It is never logged or put in
+   argv. PRD-02 turns core dumps off before it reads that line (PRD-00 rules of the shape), so the key
+   cannot reach a core file.
 2. **Name constraints from the list.** Permitted subtrees come from `HostList::ca_subtrees()`: the
    wildcard-free suffix of each entry (`openai.azure.com` for `*.openai.azure.com`, `amazonaws.com` for
    `bedrock-runtime.*.amazonaws.com`), so a leaked key still cannot sign for an unrelated name. Keep
@@ -663,7 +665,7 @@ Automated tests that guard them (fake upstream, `Recorder::for_tests`):
 | A connection that stops parsing loses the rest of its requests | Long-lived pool connections may carry many later calls | Named and counted (5a); status says "losing" from the `parse_stopped` note; acceptance 1, 2 and 10 require zero such GAPs on listed hosts |
 | Per-host flag noise | A big `git push` or an upload to an unlisted host gives one note | One line per host per boot, worded "if it is a model service" (PRD-10) |
 | Wider decryption records the agent's own calls to listed hosts | A test suite calling `api.openai.com` with the bundle shows up as model requests; Amp's `/api/internal` (e-mail, secret fingerprints, `connectors/amp-cli/harness.toml:105-109`) is recorded | Masking still applies (point 4). PRD-09 tells calls apart by headers and thread hints. PRD-12's wire-against-log check allows extra wire calls and reports them |
-| Name constraints use wide suffixes for cloud patterns | `amazonaws.com` as a permitted subtree weakens the leaked-key guard for AWS names | The key never leaves memory or the control socket; only processes we launch trust the CA |
+| Name constraints use wide suffixes for cloud patterns | `amazonaws.com` as a permitted subtree weakens the leaked-key guard for AWS names | The key lives only in memory, the control socket and one 0600 file in a 0700 folder until the seal (`rec/run-ca.key`, ledger R3b); only processes we launch trust the CA |
 | CA handed over the control line | A bug in the hand-off makes every restart refuse all hosts | Acceptance 8 and `proxy_restart.rs` prove it |
 | Decoder guard drops a body | When a body's window does not fit `Recorder::room()`, that coded body is a GAP, not a record | Stated guard with a name; decoder windows sit inside PRD-02's 512 MiB guard through `reserve`; acceptance 10 requires zero such GAPs |
 | Upstream connect retry | A listed host outage holds the harness's CONNECT up to 25 s instead of failing fast | Accepted: one slow answer beats a failed call (PRD-17 C6). Unlisted targets are not retried. Overridable default |
@@ -747,8 +749,8 @@ Traps from the audit and the old code:
 How a watcher proves it in a real run: after each pad run, `goalcup-verify dump <entry> | jq` for
 `k=="open" and skind=="conn"`; every listed host must show `mode: "decrypt"` except the cases in
 acceptance 6 and 7; count `gap` records by reason (any proxy reason on a listed host outside those cases
-is a failure); grep for `parse_stopped` (zero expected); compare wire POSTs plus `ws_up` text messages
-with the harness's own log (PRD-12); read each `long_tunnel` host by eye.
+is a failure); grep for `parse_stopped` (zero expected); where the harness keeps a log, compare wire POSTs
+plus `ws_up` text messages with it (PRD-12's optional local log check; the record is the proof, ledger T4); read each `long_tunnel` host by eye.
 
 ## Review answers
 

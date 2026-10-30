@@ -12,9 +12,10 @@ Nothing reaches `main`, a tag or production without the owner.
 
 ## Points served
 
-All seven, as the gate that decides whether the build serves them. 1 and 2: the pad and the acceptance
-runs compare the wire and the session files with the harness's own log. 3: the kill and fault runs and
-the load runs. 4: secret scans of every record, server copy, log and pushed repository. 5: server copy
+All seven, as the gate that decides whether the build serves them. 1 and 2: the proxy record is the
+proof (ledger T4): no unexplained gap, the history check, every subagent recorded; the harness's own
+local log is an optional extra check where it keeps one. 3: the kill and fault runs, `goalcup recover`
+after a watchdog kill, and the load runs. 4: secret scans of every record, server copy, log and pushed repository. 5: server copy
 checks on staging. 6: counts the participant saw against the verifier's recount. 7: 15 harnesses run the
 way people run them, gateways included.
 
@@ -51,6 +52,14 @@ way people run them, gateways included.
   credentials on the conductor only (PRD-00 defaults).
 - The long run uses run 1's Codex prompt, so the two runs compare; without it, a load comparison
   (PRD-00 owner question 6, old 16).
+- **The proxy record is the proof** (ledger T4). Every check here reads the record, `status.json` and
+  the staging server copy. A comparison with the harness's own local log is an optional extra, as
+  PRD-12 section 8 runs it: `skip` where the harness keeps none, never a block to a PASS then. **No
+  outside API is called to verify**: no provider usage or billing lookup in any check.
+- A crashed recorder restarts at once; only a crash loop goes to pass-through, retried never more than
+  5 minutes apart (ledger R3a). When the watchdog itself dies, `goalcup recover` restarts only the
+  recorder on the same port with the same run certificate, and the harness never restarts (ledger R3b).
+  A2 proves both under load (section 7, X4).
 
 ## Today
 
@@ -208,7 +217,7 @@ boxes. Precondition: PRD-05's core-slice masker (option b, the left guard, `boun
 commit under test, checked in the `start` event, whose `mask_rules` names the shared kinds and not only
 `fail_closed` (the S2 stub). No real key enters a pad box before that (ledger M1, point 4). Then one short
 real run after each later core feature lands (each core feature of PRD-00's second and third slices:
-native capture, uploader, watchdog restart and null mode, refusal learning, the gateway and dodger cases,
+native capture, uploader, watchdog restart and null mode, `goalcup recover`, refusal learning, the gateway and dodger cases,
 Hermes `state.db`, HTTP/2, and exact-value masking only if the owner said yes, PRD-00 owner question 3).
 If the concept fails here, no lane adds a new feature until it is fixed (BUILD-PROMPT section 5).
 
@@ -279,7 +288,7 @@ and `rust-toolchain.toml`.
 | Phase | Runs | Parallel | Est. time |
 |---|---|---|---|
 | 4. Core set | Claude Code, Codex, Hermes: `direct`, `gateway` and `dodger`, all `full`, the 20-minute payments prompt (ledger T5, PRD-00 done item 1): 9 rows. The kill rows `--kill-recorder 8,10` on all three `direct` `full` (PRD-12 P10). The fault rows once each (PRD-12 P11) | 6 boxes; per key, section 9 | about 2 h with fix loops |
-| 5. The rest | The other 12 harnesses, each case that applies; no key means "not verified: no key" with no run (Amp, Factory Droid, OpenRouter cases). All rows run `full`. Kilo's `gateway` row is A4. As each harness's first `full` sample lands, a PRD-09 builder writes its log reader from that sample (PRD-09), then the row is rerun once. A harness with no reader by the end of phase 5 is "not verified: no log reader" | 6 boxes, from when phase 4's first wave is done and keys are free | about 2.5 h |
+| 5. The rest | The other 12 harnesses, each case that applies; no key means "not verified: no key" with no run (Amp, Factory Droid, OpenRouter cases). All rows run `full`. Kilo's `gateway` row is A4. As each harness's first `full` sample lands, a PRD-09 builder may write its log reader from that sample (PRD-09) for the optional local log check. A harness with no reader is judged from the record (ledger T4); a missing reader is never a "not verified" reason | 6 boxes, from when phase 4's first wave is done and keys are free | about 2.5 h |
 | 6. Acceptance | A1, A2, A3 (section 7) | Starts when the core set is green; shares the box limit with phase 5 | about 2.5 h, A1 is the longest |
 
 Keys and rate limits: run 1 hit 2M tokens a minute on one OpenAI key with about 20 subagents (run report,
@@ -312,7 +321,7 @@ what a participant may do (`AGENTS.md:83-84`); goalcup itself never does it.
 
 | Id | Harness, case | Prompt | Length | Why |
 |---|---|---|---|---|
-| A2 | Claude Code, `direct`, Claude key | The pad's `full` prompt, with "use up to 20 subagents in parallel" in plain words | 60 minutes; one `kill -9` of the recorder at minute 30 | Hours-scale many-subagent load and a restart under load, before the 2-hour run (review A). Starts first |
+| A2 | Claude Code, `direct`, Claude key | The pad's `full` prompt, with "use up to 20 subagents in parallel" in plain words | 60 minutes; one `kill -9` of the recorder at minute 30 (`--kill-recorder 30`); the fault `kill-watchdog-recover@45` (PRD-12 section 3.1): the watchdog killed at minute 45, the recorder at minute 46, `goalcup recover` at minute 47 | Hours-scale many-subagent load, an eager restart under load (ledger R3a) and a recover after the watchdog died (ledger R3b), before the 2-hour run (review A). Starts first |
 | A1 | Codex, `direct`, OpenAI key alone, the same cheapest model and low reasoning setting as run 1, Codex at the pad's pinned version | **Run 1's prompt, word for word**, typed as one first message, if the owner put it in a file (PRD-00 owner question 6, old 16); else the pad's `full` prompt and the comparison is by load | 2 hours from the paste; "keep going" after 3 idle minutes | The same run as run 1, so every number compares. Starts when A2's first 30 minutes show no `fail` in `check --live` and no `memory_guard` gap, or when A2 ends |
 | A3 | Hermes, `gateway` (Vercel AI Gateway, its built-in `ai-gateway` provider, PRD-12 section 2), chat TUI | The pad's `full` prompt asking for many subagents | 30 minutes | The owner's gateway question at length: one host list, same proxy, no gateway code. Runs beside A1 (a different key) |
 | A4 | Kilo CLI, `gateway` (Vercel AI Gateway as an OpenAI-compatible provider) | The pad's `full` prompt | 20 minutes: Kilo's `gateway` `full` row of phase 5 | The owner's own example, "AI Gateway under Kilo". Not a release blocker; checked with C1 to C6 and N3 only |
@@ -321,14 +330,14 @@ Pass lines beyond C1 to C6 (A1 to A3):
 
 | # | Check | Pass |
 |---|---|---|
-| X1 | Wire against the harness, by time | PRD-08 `wire_keeps_up` and `threads_match` pass or are `named`. A1, A2: every 10-minute bucket of PRD-08's `timeline` has wire requests within PRD-08's tolerance (max(3 calls, 2%), 2-minute lag) of the harness's own calls; no bucket has 0 wire calls while the harness made calls, unless a named GAP covers it. A3 (Hermes): per call when its `state.db` rows carry usable times, else the totals form, per session after the seal (PRD-08 section 3.1, PRD-00 done item 1 and owner question 7). A1 also sits next to run 1's table (run report, section 4) |
-| X2 | Subagents | Every subagent file on disk has a native stream, and every thread has wire calls. A3 (Hermes): every subagent session in `state.db` has a native stream, and wire calls match by PRD-08's form for Hermes (per call, or totals per session or per entry when wire calls carry no session id); a per-thread wire count is not required in the totals form. A1: at least 20 subagents spawned (run 1: 42); A2: at least 15, with 10 or more running at once. Fewer spawned is INCONCLUSIVE for load, never PASS |
+| X1 | No missed call, by time | From the record (ledger T4): no unexplained gap, and the history check `pass` or `skip` (PRD-12 section 8), with no orphan outside a named GAP in any 10-minute bucket of PRD-08's `timeline`. Optional extra, where the harness keeps a local log (PRD-12's local log check): PRD-08 `wire_keeps_up` and `threads_match` pass or are `named`; A1, A2: each bucket within PRD-08's tolerance (max(3 calls, 2%), 2-minute lag) of the harness's own calls; A3 (Hermes): per call when its `state.db` rows carry usable times, else the totals form (PRD-08 section 3.1, PRD-00 owner question 7). With no local log it is `skip` and X1 rests on the record. A1 also sits next to run 1's table (run report, section 4) |
+| X2 | Subagents | From the record (PRD-12 C2): every thread in usage `threads` (PRD-09's thread hints, the history check's chains, native streams where read) has wire calls or a native stream. Optional extra, with a local log: every subagent file on disk has a native stream; A3 (Hermes): every subagent session in `state.db` has a native stream, matched by PRD-08's form for Hermes. A1: at least 20 subagent threads in the record (run 1: 42); A2: at least 15, with 10 or more running at once. Fewer spawned is INCONCLUSIVE for load, never PASS |
 | X3 | No loss under normal load | Zero `memory_guard` gaps in A1, A2 and A3. One is a FAIL even though it is named: run 1's load is the normal load. Its guard name, limit and the peak `held_peak` (COUNT and `status.json`, PRD-01, PRD-02) go to PRD-02. The 200-stream `by_hand_load` result (PRD-02 R8) is reported next to A1 and A2; its `memory_guard` gaps are a night-log line, not a FAIL |
-| X4 | Restart under load | A2: exactly one `recorder_down` gap, start before end, under 5 s (PRD-02 defaults: 2 s is the Codex pad bound, 5 s is this run under A2's load); the harness's own log shows no failed call it did not retry in that window; `goalcup status` showed the off time; links verify across both boots |
+| X4 | Restart and recover under load | A2, from the record and `status.jsonl`: exactly two `recorder_down` gaps, each start before end. The first, at minute 30, under 5 s (PRD-02 defaults: 2 s is the Codex pad bound, 5 s is this run under A2's load), and no `null_mode` gap in the run (ledger R3a: two kills 15 minutes apart are no crash loop). The second runs from the recorder kill at minute 46 to the recovered boot's first record, with cause `watchdog_lost`, and passes PRD-12's `kill-watchdog-recover` lines: the same harness pid and the same `port` before and after (the harness never restarts), every later `conn` to a listed host `decrypt` (same run certificate), written model requests after the recover above 0 (ledger R3b). The history check finds no orphan outside the two gaps; `goalcup status` showed both off times; links verify across all three boots. If Claude Code lost its terminal with the watchdog, X4 is INCONCLUSIVE as PRD-12 rules. Optional extra: the harness's own log shows no failed call it did not retry outside the gaps |
 | X5 | Upload keeps up | PRD-06 U2: at every minute t of the watcher's log, `entries.upload_offset` is at or past the `durable_raw` the log shows at t minus 6 minutes, except while `upload.json` shows a network or server error; no wait over 120 s; after the seal, done within 2 minutes |
 | X6 | Server copy | `fetch-run` from staging on the conductor (read only, S13); then in the run's pad box, on the fetched copy: the joined `rec.gcr.zst` equals the concatenated local parts (same SHA-256); `goalcup-verify check --server --local` has no `fail`; `fetch.json`'s `model_requests` equals the written count; the heartbeat rows of `fetch.json` `heartbeats` (PRD-07 section 7; no hand-written database query) say `failed` only while recording was off (PRD-06 section 6: `mode` null, or the writer idle over 60 s while records wait) and `gaps` from the next heartbeat after a good boot |
-| X7 | Secrets | `goalcup-verify secrets` in the run's pad box, on the fetched copy, with the per-run known-values file: 0 hits in local parts, server copy, logs and the pushed repository. The night log is scanned by N6 |
-| X8 | Usage | `goalcup-verify usage` in the run's box, on the fetched server copy: every `ok` call has a model; tokens are present or the call is counted in `tokens.calls_without_usage` with its status (refused calls have no usage by nature); one row per subagent; `unattributed` 0 with PRD-09's meaning. A1: totals against run 1's (Codex's own record: 117.4M input, 410.6k output) as a ratio per hour |
+| X7 | Secrets | `goalcup-verify secrets` in the run's pad box, on the fetched copy, with the per-run known-values file, which holds the run certificate key (`known-box`, ledger R3b): 0 hits in local parts, server copy, logs and the pushed repository. The night log is scanned by N6 |
+| X8 | Usage | `goalcup-verify usage` in the run's box, on the fetched server copy: every `ok` call has a model; tokens are present or the call is counted in `tokens.calls_without_usage` with its status (refused calls have no usage by nature); one row per subagent; `unattributed` 0 with PRD-09's meaning. Usage comes from the record only; no provider usage lookup (ledger T4). A1, informative only: totals against run 1's report (Codex's own record: 117.4M input, 410.6k output) as a ratio per hour |
 | X9 | Size and memory | A1: raw and compressed bytes per hour, framing share under 2% (PRD-01 acceptance 4), against run 1's 405 MB uploaded in 49 recorded minutes; recorder RSS minus `held_bytes` under 260 MiB (PRD-06 U7a's line) and no step of about 140 MiB at the 60-minute rotation (PRD-06 U7b) |
 | X10 | Counts on screen | The end screen's number equals the verifier's recount and `fetch.json`. No "recording works" line with any gap |
 
@@ -373,7 +382,7 @@ spend instead.
 
 Expected model spend is about 200 USD, at most about 300: phase 1a and selftest about 35; phase 4 up to
 180 with fault rows and reruns; phase 5 about 25 runs on DeepSeek at 1 to 2 USD each; acceptance up to 30.
-The ledger is an estimate; the provider dashboards are the truth (PRD-12 section 7). Agent tokens of the
+The ledger is an estimate from the record; no check reads a provider usage or billing page (ledger T4). The owner's own dashboards stay the owner's check of real spend (PRD-12 section 7). Agent tokens of the
 build itself are not in these lines; the workflow's token budget applies if the owner set one, and the
 report states tokens used.
 
@@ -401,7 +410,7 @@ with a top line in `NIGHT-LOG.md`. Only these; BUILD-PROMPT section 7 lists the 
 | W1 | A real secret (a provider key, the GitHub token or a push token, the approval key, a Cloudflare or database credential) found in any record, server copy, log, night log, pushed repository or commit | Only the owner can rotate it. All runs stop (S6) |
 | W2 | Anything touched production: a request from a box or agent to the production Worker or bucket, a production deploy, a production secret change | Participants could be affected. All runs stop |
 | W3 | The shared website database looks hurt: staging Worker database errors (5xx from the database, not 4xx from the Worker's own rules) more than 20 times in 10 minutes | The website shares it |
-| W4 | Spend out of control: a run past 1.5 times its 10 USD cap, a provider dashboard that keeps rising with no run going, or a sandbox that will not stop | Money keeps leaving |
+| W4 | Spend out of control: a run past 1.5 times its 10 USD cap by the pad's ledger, or a sandbox that will not stop. Agents read no provider dashboard (ledger T4) | Money keeps leaving |
 | W5 | A key the core set needs is missing or refused by its provider (401 or 403 on the first run) | The owner can fix it in minutes; otherwise the core set cannot pass |
 | W6 | A locked ledger item cannot hold (including PRD-17's deletion gate not green by H+10, S7), a hard rule seems wrong (from a replan or a watcher), or Vercel Sandboxes are down for 30 minutes (S8) | Only the owner can change it |
 | W7 | The core set still FAIL after the fix loops (S1 on a core row) | The release blocker is known; the owner may want to look before the report |
@@ -542,7 +551,7 @@ No tests go here; the tests of the old crates go with PRD-13.
 |---|---|---|
 | N1 | **The core set is green on one commit.** Phase 4 | 9 PASS rows (3 harnesses x 3 cases: `direct`, `gateway` and `dodger`, all `full`, PRD-12 section 9) from a trusted pad on the same integration commit, every check (PRD-00 done item 1). Hermes passes C1 by the totals form. Dodger rows: verifier exit 1 from `listed_hosts_decrypted: named`, `wire_keeps_up` `named` (or `skip` "no per-call times" for Hermes), the end screen says "not recorded" (PRD-12 section 2). The Codex kill row PASS (done item 2) |
 | N2 | **The long runs pass.** Phase 6 | A1, A2 and A3 pass C1 to C6 and X1 to X10; A1's table sits next to run 1's in `ACCEPTANCE.md` |
-| N3 | **One system for gateways.** The gateway rows of N1, A3 and A4 | `ai-gateway.vercel.sh` is `decrypt`, `listed: shared`, `kind: gateway` in every `conn`; no connector or core line names a gateway; wire matches the harness within tolerance |
+| N3 | **One system for gateways.** The gateway rows of N1, A3 and A4 | `ai-gateway.vercel.sh` is `decrypt`, `listed: shared`, `kind: gateway` in every `conn`; no connector or core line names a gateway; C1 passes from the record (no unexplained gap, the history check). Optional extra where a local log is read: wire matches the harness within tolerance |
 | N4 | **Every merge is accounted for.** At report time | Each commit on integration that changes a path outside `docs/plans/` is a merge commit with a `merge` line, its `gate fast: PASS` line, at least two reviewer lines (three for core) and a green CI run; a lock refresh caused only by a reviewed `Cargo.toml` change says so |
 | N5 | **The release check accepts the verified commit and refuses another.** PRD-14 G6, by a watcher | `scripts/pad/table --release-check <N1 commit>` exits 0; against a scratch commit that changes one line under `crates/` it exits 1. Nothing is tagged during the build; `release.sh tag` runs only at the owner's release |
 | N6 | **Nothing leaked.** After phase 6 | `goalcup-verify secrets` with the build's known values, run in one check box from the build snapshot, `--non-persistent`, holding the full known-values file for the scan only and removed right after (a `decision` line: the one step where all keys meet a box): 0 hits over every kept record, server copy, `pad-out/`, `NIGHT-LOG.md`, the lane logs, `MORNING.md`, `ACCEPTANCE.md`, every `gc-pad-*` repository and the integration branch history |
@@ -573,7 +582,9 @@ check), PRD-08's check tests, and CI on every integration push.
 | A2's 10 USD cap ends it before 15 subagents run | X2 INCONCLUSIVE, not PASS; the report asks for a higher cap and a rerun |
 | The per-run spend check reads the open entry and misses the last frame | It errs low by at most one frame; the rate lines err high; between checks a run can overshoot by up to 5 minutes of spend (PRD-12 risk row); the after-run ledger is the record |
 | DeepSeek at 6 boxes at once gets 429s anyway | The 5% rule in section 6 drops it to 2; `provider_errors` is in every row |
-| The kill in A2 coincides with a burst and costs more than the gap shows | X4 checks the harness's own log for failed calls in that window; PRD-02 owns the watchdog |
+| The kill in A2 coincides with a burst and costs more than the gap shows | X4 runs the history check around both gaps; the harness's own log is an optional extra; PRD-02 owns the watchdog |
+| Claude Code loses its terminal when the watchdog dies in A2 | X4 is INCONCLUSIVE as PRD-12's `kill-watchdog-recover` row rules, and the watcher follows PRD-10 acceptance 11; the minute-30 restart lines still count |
+| The run certificate key sits on disk during the run (ledger R3b) | Accepted by the owner. X7 and N6 scan for it; PRD-02 removes it at the seal |
 | Sleep, network change and hours of many subagents are untested | PRD-12 P11 runs `freeze` and `route-drop` on Codex in phase 4; A2 runs 60 minutes of up to 20 subagents before A1 |
 | Linux only | The owner's Mac run (section 14 step 6); macOS-only paths run in PRD-14's release workflow on each target |
 | The night log grows a secret by quoting an error | Section 12 rule; N6 scans it and the lane logs |
@@ -589,7 +600,7 @@ check), PRD-08's check tests, and CI on every integration push.
 | Build spend report lines | 200 and 400 USD model, 75 and 150 USD sandboxes; no cap (ledger T6) | Owner |
 | Per run cap | 10 USD (ledger T6, locked), checked every 5 minutes on every pad row and A1 to A3 | Owner (ledger) |
 | A1, A2, A3, A4 length | 2 h, 60 min, 30 min, 20 min | Owner |
-| Kill in A2 | one, at minute 30 | PRD-02 |
+| Kill in A2 | recorder at minute 30; `kill-watchdog-recover@45` | PRD-02 |
 | Idle before "keep going" | 3 minutes | Owner |
 | Runs at once per key | 2 for Claude, OpenAI and gateway; A1 holds OpenAI alone; up to 6 for DeepSeek until 429s pass 5% | PRD-16 |
 | Phase-miss reordering | after 2 hours late | Owner |
@@ -710,7 +721,7 @@ fix lists differ, the answer says which text was taken and why.
 | L6-05 | Applied, merged with G3-X1. Conductor row: `fetch-run` and read-only queries only, never `goalcup-verify`; pad box row holds the fetched copy and the per-run known-values file; X6, X7, X8, N6 and the watcher proof run in a box |
 | F1 | Applied, merged with P00-8 and G3-X6. Section 5 "Cut target H+10", S7, W6, defaults and interfaces: owner called under W6, the cut lands in the same build once the gate is green, before `REPORT_AT`, else `MORNING.md` line 1 says "Not ready" |
 | L5-03 | Applied with G3-X13. Phase 4 and N1: all nine core rows `full` |
-| L5-04 | Applied. Phase 5 row: a PRD-09 reader from each harness's first `full` sample, one rerun, else "not verified: no log reader" |
+| L5-04 | Applied. Phase 5 row: a PRD-09 reader from each harness's first `full` sample, one rerun, else "not verified: no log reader". Superseded on 30 Oct by ledger T4: a reader is optional and its absence is no tier reason |
 | L6-01 | Applied, merged with G3-X2. Lanes paragraph: all lanes in parallel, this table replaces BUILD-PROMPT section 4's (R3-10), the ledger wins over both |
 | L6-02 | Applied, merged with G2-04 and G3-X3 (Replan row and "Files it owns") |
 | L6-03 | Applied, merged with G3-X5. Merge rule item 4: every finding fixed before the merge, a decline needs the raising reviewer's acceptance, the never-declined list includes the seven points and locked ledger items |
@@ -797,3 +808,11 @@ fix lists differ, the answer says which text was taken and why.
 | X9 cited PRD-06 U7, now split into U7a and U7b | X9 and interfaces PRD-06 cite both |
 | Section 14 step 3 reran only the core `direct` rows on a moved `main` | All nine core rows and the Codex kill row, as the release check needs |
 | Section 6 listed fewer paths than the release check compares | The list now matches PRD-12 section 9 |
+
+**R3a, R3b, T4 carried in.** A2 adds PRD-12's fault `kill-watchdog-recover@45` after the minute-30
+recorder kill; X4 now expects two `recorder_down` gaps, no `null_mode` gap (R3a), the same harness pid,
+port and run certificate after `goalcup recover` (R3b); X7 scans for the run certificate key. The proxy
+record is the proof (T4): X1, X2 and N3 pass on the record (no unexplained gap, the history check, every
+subagent recorded) and the harness's local log comparisons are optional extras; X8 states usage comes
+from the record only and the run 1 ratio is informative; section 9 and W4 read no provider dashboard,
+so no check calls an outside API. Points served, owner decisions, phase 1a, risks and defaults follow.

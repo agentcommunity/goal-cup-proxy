@@ -35,7 +35,7 @@ All seven. This file maps each point to the PRD that leads it (section "The seve
 
 ## Owner decisions it carries out
 
-- The whole ledger: L1 to L7 (fresh core, one process, all cuts, no backward compatibility), R1 to R8
+- The whole ledger: L1 to L7 (fresh core, one process, all cuts, no backward compatibility), R1 to R8 with R3a and R3b
   (record everything, never block, never stop for good, no silent loss, no caps, written counts),
   H1 to H10 (one system for every harness), F1, F2, M1, U1, S1 to S3, T1 to T9, B1 to B8.
 - The owner's answers relayed on 30 Oct: "1 core OK" (the core set Claude Code, Codex and Hermes blocks
@@ -172,8 +172,9 @@ Rules of the shape:
 - **The watchdog** is the `goalcup start` or `continue` process itself (PRD-10 hands over to
   `watchdog::run`). It binds `127.0.0.1:<port>` once and passes the socket to each recorder boot, so a
   restart never closes the port: new connections wait in the kernel's backlog for a moment instead of
-  being refused. It mints the run CA once per entry and hands the key to each boot on the control line
-  (seam S8), so a restarted recorder serves the same CA the harness already trusts. It runs the
+  being refused. It mints the run CA once per entry, keeps its key in one 0600 file, `rec/run-ca.key`,
+  from the mint to the seal (ledger R3b), and hands the key to each boot on the control line (seam S8),
+  so a restarted recorder serves the same CA the harness already trusts. It runs the
   connector's helper stops before the harness starts and before the native finish, ends the harness
   at the deadline and on `goalcup seal`, and records nothing itself (PRD-02).
   Why this fits ledger R3: the watchdog is the `goalcup start` process the participant already runs.
@@ -184,13 +185,19 @@ Rules of the shape:
   owner's confirmation (owner question 9).
 - **No proxy credential.** `HTTPS_PROXY=http://127.0.0.1:<port>` (PRD-03 rule 5). The credential, its
   control-line field and its mask rule are gone.
-- **Null mode** is the one place where recording is off while the harness runs: after 3 fast recorder
-  exits the watchdog starts a relay-only recorder, says so in `status.json`, and retries a normal boot
-  on a timer that starts at 5 minutes and never passes 10 minutes (each failed try doubles the wait up
-  to that ceiling), because the recorder never stops for good (ledger R3). Null mode is not a failure
-  budget: it only spaces out boots that crash at once, so a crash loop does not reset the harness's
-  connections every few seconds (point 3), and the 10-minute ceiling keeps the restart fast. The next
-  normal boot's `recorder_down` gap covers the span (PRD-02 section 8).
+- **A crashed recorder is restarted at once** (ledger R3a), with no pause and no restart cap.
+- **Null mode** is the one place where recording is off while the harness runs: only a crash loop (3
+  crashes within 10 minutes, each within 60 s of its start) makes the watchdog start a relay-only
+  recorder. It says so in `status.json` and retries a normal boot after 30 s, then 1, 2 and 5 minutes,
+  never more than 5 minutes apart, and never stops trying (ledger R3, R3a). The count resets as soon as
+  a recorder stays up 60 s, so a crash at hour 5 and one at hour 140 never add up. Null mode is not a
+  failure budget: it only spaces out boots that crash at once, so a crash loop does not reset the
+  harness's connections every few seconds (point 3). The next normal boot's `recorder_down` gap covers
+  the span (PRD-02 section 8).
+- **`goalcup recover`** is the way back when the watchdog itself died (ledger R3b). It reopens the same
+  port with the same run CA (the key from `rec/run-ca.key`), starts only the recorder and writes a
+  `recorder_down` gap for the time it was down. The harness never restarts. `goalcup continue` is for an
+  entry whose harness is gone (PRD-02 sections 8.1 and 9.4).
 - **Every timer uses boot time** (`Recorder::now()`, which counts a suspend), checked on a 1 s tick:
   deadline, restart pauses, null-mode retries, upload backoff.
 - **No IPC for bytes, no producers, no epochs, no failure budget, no shared 8 MiB queue.** That
@@ -479,8 +486,9 @@ the `start` event carries each host's kind and `pinned` flag, so PRD-09 reads ki
   previous boot ended (`{"code":n}`, `{"signal":n}` or null). The boot number comes from the last part
   file, not from this line. Null mode is the `--null` argument.
 - The watchdog mints the CA once per entry with PRD-03's `proxy::ca::RunCa::mint` and writes
-  `run-ca.pem` and `bundle.pem` to the entry folder before the harness starts. The key never touches
-  disk. Lines back: `ready`, `sealed`.
+  `run-ca.pem` and `bundle.pem` to the entry folder before the harness starts. The key has one file,
+  `rec/run-ca.key` (0600, created new, removed at the seal), so `goalcup recover` can reload the same
+  CA (ledger R3b); never argv, env or a log line. Lines back: `ready`, `sealed`.
 - The watchdog owns: raising the open-file limit (PRD-02 section 10; PRD-03 uses `fds::may_accept()`
   and keeps an `EMFILE` retry only as a fallback), `plan.before` before the harness starts, ending the
   harness at the deadline and on seal (SIGTERM to the harness tree, SIGKILL after 10 s), `plan.after`
@@ -594,7 +602,7 @@ Gate to leave: `cargo build` and `cargo test -p goalcup-format` green in a build
 | Slice | What | Gate |
 |---|---|---|
 | **Core slice** (blocks 1a) | Format codec and `PartWriter`; pipeline handle, one mask worker, writer, counts, `status.json`; proxy CONNECT, CA, HTTP/1.1, decoding, WebSocket, tunnels; masking copy with option b and the left guard; native append rows with `**`; launch plans for Claude Code and Codex; `start`, `status`, `seal` with `GOALCUP_SERVER=off`; `goalcup-verify check` (invariants, gaps have an end, counts recount) and `usage` for Codex and Claude Code; `pad-run --where here` | Each PRD's own tests green |
-| **1a. Early real test** | A watcher runs short real runs in pad boxes: Claude Code and Codex, direct key, smoke prompt, one subagent, `--server off`. Check decode, counts against the harness's own log, no secret. Then one short real run after each later core feature lands | Pass, or a night-log line naming the failing PRD. If the concept fails here, no new feature is added until it is fixed |
+| **1a. Early real test** | A watcher runs short real runs in pad boxes: Claude Code and Codex, direct key, smoke prompt, one subagent, `--server off`. Check decode, no unexplained gap and the history check from the record (ledger T4), counts against the verifier's recount, no secret. Then one short real run after each later core feature lands | Pass, or a night-log line naming the failing PRD. If the concept fails here, no new feature is added until it is fixed |
 | **Second slice** | Watchdog restart with CA hand-over and null mode; uploader; Worker changes; fetch-run; first staging deploy (after PRD-07's heartbeat step and PRD-06 merge); server checks; secret scan; Hermes connector and `state.db` reading; exact-value masking only if the owner said yes (owner question 3; default not built); gateway and dodger cases; the pad in sandboxes; refusal learning (PRD-03) | Each PRD's own tests green; one short real run per feature |
 | **Third slice** | HTTP/2 (HEADERS, CONTINUATION, DATA, END_STREAM, RST_STREAM, GOAWAY; anything else stops parsing for that connection with GAP `h2_unsupported` while it keeps relaying unparsed, PRD-03 5a); the other 12 connectors; PRD-10's `continue`, `time-left`, `setup`, `--prompt` composition, sleep lock; the usage organizer job and its bucket; PRD-15's docs | Each PRD's own tests green |
 
@@ -649,12 +657,15 @@ main, or are cut:
 ## Definition of done
 
 1. **The pad passes on Claude Code, Codex and Hermes** in all three cases (direct key, gateway and
-   dodger, all `full`), with `GOALCUP_KEEP_PARTS=1`, on every check: wire calls match the
-   harness's own log, every subagent recorded, no secret anywhere in the record, the logs or the server
-   copy, the server copy equal to the kept local part files byte for byte, usage stats present, and the
-   counts shown to the participant equal the verifier's recount.
-   - For a harness whose own log has no per-call times (Hermes keeps per-session totals in `state.db`,
-     PRD-09), "wire calls match" compares per session after the seal: wire model requests per session
+   dodger, all `full`), with `GOALCUP_KEEP_PARTS=1`, on every check, read from the proxy record (ledger
+   T4): no unexplained gap and the history check finds no missed call, every subagent recorded, no
+   secret anywhere in the record, the logs or the server copy, the server copy equal to the kept
+   local part files byte for byte, usage stats present, and the counts shown to the participant equal
+   the verifier's recount.
+   - The harness's own session files are an optional extra check (PRD-12's local log check), never
+     required. No outside API is called to verify (no provider usage lookup).
+   - In that optional check, for a harness whose own log has no per-call times (Hermes keeps
+     per-session totals in `state.db`, PRD-09), "wire calls match" compares per session after the seal: wire model requests per session
      against the session's own count. If `state.db` message rows carry times, the per-call join is
      used instead (owner question 7).
    - The dodger case is simulated: the pad passes a copy of the host list with the harness's model host
@@ -664,7 +675,8 @@ main, or are cut:
      whole, and the start line and end screen say "not recorded", never "recording works". PRD-12 sets
      the verifier exit code that goes with it.
 2. **The kill test passes:** the recorder killed twice mid-run on a Codex run; the harness finishes its
-   turn with no participant action and its own log shows no failed call it did not retry (PRD-02 R1);
+   turn with no participant action, and the history check finds no missed call outside the two gaps
+   (PRD-02 R1);
    two `recorder_down` gaps each under PRD-02's bound (2 s), links whole across three boots. After each
    kill, `status.json`, the end screen and the next heartbeat show the off time, and the gaps' total
    equals it (ledger R6).
@@ -930,7 +942,8 @@ Dodger: <one sentence: tunnel, named gap, session files, honest label>.
 
 ## Decisions agents took (you may reverse)
 <one line per `decision`, `amendment` and `check changed` log line, with a link>
-Standing readings from the plan: null-mode retry starts at 5 min and never passes 10 min (ledger R3);
+Standing readings from the plan: a crashed recorder restarts at once; null-mode retry after 30 s, 1, 2,
+then every 5 min, never ending (ledger R3a); `goalcup recover` when the watchdog died (ledger R3b);
 the watchdog is the start process with launcher duties (owner question 9).
 
 ## Owner questions (PRD-00, twelve) and the default used
@@ -1155,7 +1168,7 @@ why. Fixes for other files are made by those files' owners; this list covers onl
 | L5-02/L6-09 | Applied, merged with P00-1. Spend default and owner question 8: no whole-build cap, report lines at 200 and 400 USD model and 75 and 150 USD sandboxes, `smoke` 2 USD is an estimate |
 | L6-05 | Applied, merged with G3-X1. "Where the build runs": the conductor runs `fetch-run`, read-only queries and the R2 put only; every `goalcup-verify` command runs in a box. Ownership row `scripts/usage-job.sh` split the same way. The PRD-16 N6 part (a check box holding the full known-values file) is PRD-16's; PRD-00's Keys default still says no key enters a build box, so N6 must hold to that or be raised as a `decision` line |
 | F1 | Applied, merged with P00-8 and G3-X6. Phase 3: target H+10; if not green by then the owner is called under W6, the lessons lane keeps working, and the cut lands as soon as the gate is green, before `REPORT_AT`. Ownership "Deleted" row, PRD-13 status and R3-8 follow |
-| F6/L2-06 | Applied. Null mode retries after 5 minutes, doubling, never past 10 minutes (rules of the shape; morning report standing line) |
+| F6/L2-06 | Applied. Null mode retries after 5 minutes, doubling, never past 10 minutes (rules of the shape; morning report standing line). Superseded on 30 Oct by ledger R3a: 30 s, 1, 2, then every 5 minutes |
 | L3-3 | Applied as done item 9 (merged with P00-9 item 9), not as "2a", so done item numbers stay stable. The PRD-12 part is PRD-12's |
 | L4-3 | Applied. Owner question 10, default `[A-Za-z0-9_]` (the ledger's word boundary) |
 | L4-4 | Applied. Owner question 11, default no. Checked: ledger M1 drops the Codex rate-limit rules only; an exemption from the name rule is more than that |
@@ -1182,7 +1195,7 @@ why. Fixes for other files are made by those files' owners; this list covers onl
 | G2-06 | Applied. Phase 0 step 5: placeholder `mod.rs` for every other folder, the one ownership exception; PRD-05 and PRD-11 publish their S2 and S3 stubs by H+1 |
 | G2-07 | Applied, merged with G3-X41. S3 block now has `load`, `plan` and the full `LaunchPlan` field list; PRD-11 section 5 wins on detail |
 | G2-08 | Applied. Seam S17 (`StartFacts`) added; S8's first line cites it |
-| G2-16 | Partly. The wait never grows past a ceiling and null mode is named "not a failure budget", as asked. The 30 s then 60 s timer is rejected for group 1's F6 timer (5 minutes, doubling to 10): a failed normal boot resets every harness connection, so a 60 s retry would reset them once a minute while a lasting cause such as a full disk holds, which slows the harness (ledger R2, point 3). The SIGKILL exemption is PRD-02's to weigh; PRD-00 does not rule on it |
+| G2-16 | Partly. The wait never grows past a ceiling and null mode is named "not a failure budget", as asked. The 30 s then 60 s timer is rejected for group 1's F6 timer (5 minutes, doubling to 10): a failed normal boot resets every harness connection, so a 60 s retry would reset them once a minute while a lasting cause such as a full disk holds, which slows the harness (ledger R2, point 3). Superseded on 30 Oct by ledger R3a, which the owner locked: 30 s, 1, 2, then every 5 minutes. The SIGKILL exemption is PRD-02's to weigh; PRD-00 does not rule on it |
 | G2-17 | Applied (see F5/L2-19) |
 | G2-18 | Applied (see L4-1), with the 32-value limit's guard named in the PRD-05 and PRD-11 ruling |
 | G2-19 | Applied. Owner question 12 and consistency item 86; Cargo.toml ownership line cites it |

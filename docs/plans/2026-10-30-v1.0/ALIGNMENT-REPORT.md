@@ -16,6 +16,8 @@ the owner's yes (the watchdog's jobs, one test-only build feature, two Claude Co
 the two worth answering before the paste are 1 (exact-value masking, which changes what the second slice
 builds) and 2 (the left guard).
 
+Updated 30 Oct: ledger R3a, R3b and T4 added and carried into PRD-02, 08, 10, 12, 16.
+
 ## 1. Ledger coverage
 
 Verdicts: **covered** (built as the ledger says), **covered, reading** (built on a reading that waits for the
@@ -32,7 +34,9 @@ owner, with a safe default), **partly**, **missing**. Section names are the PRD 
 | L7 no backward compatibility | covered | PRD-01 "What is cut" (no v5 reader); PRD-07 s6 (1.0.0 floor); PRD-08 s6; PRD-16 s14 |
 | R1 record everything to model hosts | covered | PRD-03 s1 to s9; PRD-04 s2 to s7. Accepted gaps named, not recorded: loopback local model servers (`local_model` note, PRD-01 s11) and session files of a harness started as another harness's subagent (PRD-11 s8). Question 8 |
 | R2 never block or slow | covered | PRD-02 s7; PRD-03 s1 (relay first); PRD-06 s1 (plain threads off the relay) |
-| R3 recorder never stops for good | covered, reading | PRD-02 s8, s9 (same port, restart pause 0 to 5 s, `recorder_down` gap, no restart cap); PRD-00 "Architecture". Reading: the watchdog is the start process with launcher jobs (PRD-00 question 9; question 3 below). Null mode after 3 fast exits retries at 5 minutes, doubling to a 10-minute ceiling (PRD-02 s8 step 9), ruled in the pass as "fast" without resetting harness connections every minute |
+| R3 recorder never stops for good | covered, reading | PRD-02 s8, s9 (same port, restart at once, `recorder_down` gap, no restart cap); PRD-00 "Architecture". Reading: the watchdog is the start process with launcher jobs (PRD-00 question 9; question 3 below) |
+| R3a eager crash-loop retry, never ending | covered | PRD-02 s8 steps 8 and 9 (restart at once; null mode only after 3 crashes in 10 minutes, each within 60 s of its start; retries after 30 s, 1, 2, then every 5 minutes, never ending; count resets after 60 s up); PRD-00 "Architecture"; PRD-15 D75; PRD-16 header |
+| R3b `goalcup recover` when the watchdog died | covered | PRD-02 s8.1, s9.1 and R9 (same port, same CA from `rec/run-ca.key`, 0600, removed at the seal; harness never restarts); PRD-10 `goalcup recover` and the both-dead status lines; PRD-12 `kill-watchdog-recover` fault; PRD-16 A2; PRD-00, PRD-01, PRD-03, PRD-15 and PRD-17 key-file text |
 | R4 no silent loss | covered | PRD-01 s7, s13 (invariant 12); PRD-03 s9, s11; PRD-04 s4, s8; PRD-08 s3 |
 | R5 no caps of our own | covered | PRD-02 s3 (memory guards write a gap); PRD-07 s5 (413 and per-run limit deleted); PRD-13 group B; no whole-build spend cap (PRD-16 s9) |
 | R6 written counts | covered | PRD-01 s9; PRD-02 s6; PRD-06 s6; PRD-07 s4; PRD-10 s4, s5 |
@@ -58,7 +62,7 @@ owner, with a safe default), **partly**, **missing**. Section names are the PRD 
 | T1 15 harnesses | covered | PRD-11 s6, s7; PRD-12 s6 |
 | T2 keys | covered | PRD-12 s7; PRD-11 s7; BUILD-PROMPT s3 |
 | T3 tiers | covered | PRD-12 s9, s13 |
-| T4 test pad, three cases, one table | covered | PRD-12 s1, s2, s8 (C1 to C6), s9, s11 |
+| T4 test pad, three cases, one table | covered | PRD-12 s1, s2, s8 (C1 to C6), s9, s11; the proxy record is the proof: no unexplained gap and the history check (PRD-08 s3.2), local session files only an optional extra, no outside API or provider usage lookup (PRD-00 done items 1 and 2, PRD-02, PRD-09, PRD-16, BUILD-PROMPT) |
 | T5 20-minute payments workload | covered | PRD-12 s5; BUILD-PROMPT s5 |
 | T6 10 USD per run | covered | PRD-12 s7 (checked every 5 minutes, seal at 10 USD); PRD-16 s9; PRD-00 "Not in this build" |
 | T7 vendor docs first | covered | PRD-11 "Builder notes"; BUILD-PROMPT s4 step 2 |

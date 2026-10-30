@@ -257,7 +257,9 @@ places hold a wire call that no thread claims, so neither is ever hidden:
 
 **Per-call native readers in 1.0: Codex, Claude Code and Hermes only.** Every other harness has
 `readable: false` with the reason `no_reader`, so PRD-08 skips `wire_keeps_up` and `threads_match`
-(never passes them) and PRD-12 C1 is INCONCLUSIVE: "not verified: no log reader" (review B A8). Their
+(never passes them). That is only the optional local log check: PRD-12 C1 rests on the record (no
+unexplained gap and the history check, PRD-08 section 3.2), so a missing reader is never a reason for
+"not verified" (ledger T4). Their
 wire calls still get full per-call stats, under `wire_only`, and the path-only rows above still give a
 thread list (who spawned whom) where the path says so.
 
@@ -279,8 +281,9 @@ periodic copies and one at each seal, each a `set`. The reader tries the newest 
 back one set at a time until one opens after the WAL repair. The summary names the set it used, its
 time and `harness_exited`. Native calls after that copy's time are not known, so the join compares
 only up to it (`native_until` in the summary); wire calls after it are not counted against the
-harness. If no set opens, `readable: false` with the reason `snapshot_unreadable`, PRD-08 skips, and
-PRD-12 C1 is INCONCLUSIVE, never PASS or FAIL (review B A7). The wire record stands either way.
+harness. If no set opens, `readable: false` with the reason `snapshot_unreadable`, PRD-08 skips the
+optional local log check, and PRD-12 C1 is judged from the record alone (ledger T4). The wire record
+stands either way.
 
 ### 6. The join: wire calls against the harness's own log
 
@@ -720,8 +723,8 @@ New asks:
 1. **PRD-12 and PRD-16**: C5 and X8 read `unattributed` 0 with this PRD's meaning (section 5): only
    a Codex-style call that lost its hint. Claude Code side calls and Hermes compression calls are
    `wire_only`, reported, not failed.
-2. **PRD-12**: every Hermes row needs the second slice's `sqlite.rs`; until it lands, Hermes C1 is
-   INCONCLUSIVE "no log reader", not FAIL.
+2. **PRD-12**: Hermes's local log check needs the second slice's `sqlite.rs`; until it lands, that
+   check is `skip` and Hermes C1 is judged from the record (ledger T4), never FAIL for the missing reader.
 3. **PRD-08**: U1 now carries per-thread `native_only`, `native_until` and `readable` with `reason`,
    plus `native_form` and per-thread `native_total` (section "Interfaces"); `threads_match` for a
    harness whose thread comes from the join reads `native_only` per thread. PRD-08 section 3.1
@@ -756,8 +759,8 @@ this PRD. "Accepted" means the change is in the body above.
 | CC 110: host kind source | Accepted. Kinds come from `conn` meta or the `start` event, never an embedded `model-hosts.toml`; `other` added (section 7, PRD-11 row) |
 | CC 111: `LUNA` | Accepted. One line in section 8 |
 | B verdict 3, B R1: Hermes cannot pass C1 | Accepted with PRD-00's default (question 19), and narrowed: Hermes's own storage doc lists `messages.timestamp` and `sessions.api_call_count` (checked on the vendor's v0.22.5 doc, unmeasured), so the per-call join is the plan and the per-session count the fallback (sections 4 to 6, proof 3) |
-| B A7: unreadable snapshot | Accepted. Newest readable set used; none readable gives `readable: false`, `snapshot_unreadable`, PRD-08 skip, C1 INCONCLUSIVE (section 5) |
-| B A8: native readers for other harnesses | Accepted. In 1.0 only Codex, Claude Code and Hermes; others `readable: false`, `no_reader`, C1 INCONCLUSIVE "not verified: no log reader" (section 5) |
+| B A7: unreadable snapshot | Accepted. Newest readable set used; none readable gives `readable: false`, `snapshot_unreadable`, PRD-08 skip, C1 INCONCLUSIVE (section 5). Superseded by ledger T4: C1 is judged from the record |
+| B A8: native readers for other harnesses | Accepted. In 1.0 only Codex, Claude Code and Hermes; others `readable: false`, `no_reader`, C1 INCONCLUSIVE "not verified: no log reader" (section 5). Superseded by ledger T4: the local log check is `skip` and C1 is judged from the record |
 | B N1: run 1 converter | Accepted (PRD-00 ruling). Section 8 is now the target shape; proof 6 is A1; `usage_run1.rs` keeps the synthetic shape |
 | B N3: job, bucket, CSV, text, rollup | Partly, as PRD-00 ruled: `usage --json` in the core slice; job, bucket, `run.json`, CSV and `--text` in the third slice, not after merge, because the owner asked for stats in this build |
 | B N4: live pricing | Accepted (cut by PRD-00). No `--live` mode here: an open entry is read to its last whole frame. The ledger line comes from the summary after the run |

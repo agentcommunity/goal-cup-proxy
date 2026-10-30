@@ -1,12 +1,13 @@
 # PRD-02: Recorder core (one process pipeline, guards, writer, watchdog)
 
-Id: PRD-02. Version: goalcup 1.0. Revision 3, 30 October 2026 (revision 2 earlier the same day,
-revision 1: 29 October). Base: main at 4b226de2. Index: [PRD-00](PRD-00-index.md) revision 4. Format:
+Id: PRD-02. Version: goalcup 1.0. Revision 4, 30 October 2026 (revisions 2 and 3 earlier the same
+day, revision 1: 29 October). Base: main at 4b226de2. Index: [PRD-00](PRD-00-index.md) revision 4. Format:
 [PRD-01](PRD-01-record-format.md) (binding).
 
 Revision 2 brought this PRD into line with PRD-00 and PRD-01 revision 2 and answered the three reviews
 of 30 October (section "Review answers", now history). Revision 3 is the alignment pass against the
 ledger (OWNER-DECISIONS.md); section "Alignment answers" at the end lists each fix and what was done.
+Revision 4 carries the new ledger items R3a, R3b and T4 (last row of "Alignment answers").
 
 ## Goal
 
@@ -33,6 +34,17 @@ uploader sends from), 6 (written counts and off time in `status.json`).
 - The recorder never stops for good (ledger R3): it restarts on the same port fast, writes a gap for
   the dead time and marks the failure. A tiny watchdog is allowed (R3); in 1.0 it is the `goalcup
   start` or `continue` process, with the jobs in section 8 (PRD-00 owner question 9).
+- Crash-loop retry is eager and never ends (ledger R3a). A crashed recorder is restarted at once.
+  Only a crash loop (3 crashes within 10 minutes, each within 60 s of its start) switches to null
+  mode (pass-through), which retries a normal boot after 30 s, 1, 2 and 5 minutes, never more than
+  5 minutes apart. The count resets as soon as a recorder stays up 60 s (section 8 step 9).
+- `goalcup recover` restarts only the recorder when the watchdog itself died (ledger R3b). A new
+  watchdog reopens the same port with the same run CA, starts the recorder and writes a gap for the
+  time it was down. It never touches the harness. The run CA key is kept in a 0600 file,
+  `rec/run-ca.key`, from the mint to the seal (section 8.1).
+- The proxy record is the proof (ledger T4). Every real-run proof below reads the record and the
+  server copy; none calls an outside API. The pad's history check must find no missed call outside a
+  gap.
 - Check open file handles first (macOS default 256 per process) and raise the limit.
 - Disk full: no special handling (ledger L6; D65 is gone). A write error ends the recorder like any
   crash; after three fast exits null mode keeps the harness working, unrecorded, and status says why.
@@ -80,7 +92,7 @@ files; Codex up to 97. Recorded payload was about 0.25 MB/s on average, with bur
 flowchart LR
   subgraph W[goalcup watchdog: the start or continue process]
     LS[listen socket 127.0.0.1:port]
-    CA[run CA, minted once per entry]
+    CA[run CA, minted once per entry, key in rec/run-ca.key until the seal]
     SH[terminal shield, helpers, harness spawn and end, restart loop]
   end
   H[harness] -- HTTPS_PROXY --> LS
@@ -367,7 +379,7 @@ wait (PRD-06 section 6 computes it from `Durable` age and these atomics, not onl
 5. Recording work runs at low priority; relays at normal priority.
 6. A crash of the recorder resets the harness's open connections once; new connections wait in the
    kernel backlog for the restart (section 9). A crash loop falls back to null mode so the harness
-   keeps working.
+   keeps working, and null mode retries every 5 minutes at most, for ever (ledger R3a).
 
 ### 8. The watchdog (seam S8, owned here)
 
@@ -383,21 +395,26 @@ same port fast"). All recording stays in the one recorder process (L5). This rea
 
 1. **Make the process safe and raise limits.** `PR_SET_DUMPABLE` 0 (Linux) at once: the watchdog
    holds the CA key and the exact mask values. Raise its own soft `RLIMIT_NOFILE` (section 10).
-2. **Bind** `127.0.0.1:<port>` with `socket2`, backlog 4,096 (the kernel clamps it to `somaxconn`),
-   `FD_CLOEXEC` set. On `continue`, first try the previous entry's `status.json` `port`, so a helper
+2. **Bind** `127.0.0.1:<port>` with `socket2`, `SO_REUSEADDR` (so `goalcup recover` can reopen a
+   port whose closed connections sit in TIME_WAIT, section 8.1), backlog 4,096 (the kernel clamps it
+   to `somaxconn`), `FD_CLOEXEC` set. On `continue`, first try the previous entry's `status.json` `port`, so a helper
    left from the previous entry reaches a live proxy (it then meets the new CA, a `tls_refused` GAP,
    not a silent miss); if taken, bind port 0. Make one `socketpair` for control lines. Keep both open
    for the whole run. Write `rec/watchdog.pid`.
 3. **Mint the run CA** once per entry with PRD-03's `proxy::ca::RunCa::mint(&plan.hosts)` and write
-   `run-ca.pem` (certificate only) and `bundle.pem` (OS roots plus the run CA) as 0600 files. The key
-   never touches disk. Call `plan.finish_env(port, run_ca, bundle)`.
+   `run-ca.pem` (certificate only) and `bundle.pem` (OS roots plus the run CA) as 0600 files. Write
+   the key once to `rec/run-ca.key` (PEM, created with `O_EXCL`, mode 0600, in the 0700 `rec/`
+   folder, then `fsync`), only so `goalcup recover` can reuse it (section 8.1, ledger R3b). The seal
+   removes it (section 11 step 6). It is never in argv, env, a log line, a record or an upload.
+   Call `plan.finish_env(port, run_ca, bundle)`.
 4. **Start the recorder**: the same `goalcup` binary with a hidden subcommand (PRD-10's `main.rs`
    dispatches it to `pipeline::run_recorder`). In `pre_exec`: `setsid()` (terminal signals and a
    closed window never reach it), `dup2` the listener to fd 3 and the control socket to fd 4, clear
    `FD_CLOEXEC` on those two only, `RLIMIT_CORE` 0, and the soft open-file limit to the hard limit
    (section 10). The harness never inherits fd 3 or fd 4. The first control line is below.
 5. **Wait for `ready`** (proxy accepting, part file opened) for at most 10 s on the first boot only.
-   If the first boot fails, refuse to launch the harness (nothing to break yet); PRD-10 words it. A
+   If the first boot fails, remove `rec/run-ca.key` and refuse to launch the harness (nothing to
+   break yet); PRD-10 words it. A
    recorder that cannot build its `Masker` from built-in shapes exits 78 before `ready`; the watchdog
    passes 78 to PRD-10, which shows PRD-05's fixed text.
 6. **Run `plan.before`** (stop the connector's background helpers: OpenCode server, Hermes gateway,
@@ -412,19 +429,23 @@ same port fast"). All recording stays in the one recorder process (L5). This rea
    so the harness keeps its own), and send `launch` to the recorder.
 8. **Restart loop.** When the recorder exits without having sealed, start the next one at once,
    with how the previous one ended. The port never closes because the watchdog holds the listener;
-   connections made meanwhile wait in the backlog. Pause between restarts: 0, 0.1, 0.5, 1, 2, then
-   5 s, reset after 10 minutes alive. There is no restart cap. If a `seal` line was sent and not
+   connections made meanwhile wait in the backlog. There is no pause before a restart (ledger R3a:
+   restarted at once) and no restart cap; a fast crash loop is step 9's, not a pause's. If a `seal` line was sent and not
    answered with `sealed`, the watchdog sends it again to the new boot after `ready`.
-9. **Null mode.** After 3 exits within 10 minutes, each less than 60 s after its start, the next
-   recorder starts with `--null` and `null_since` on its first line: the proxy relays exactly as
-   normal, every S1 call is a no-op, the writer does not run, the uploader still sends what is on
-   disk, and the null recorder writes `status.json` with `mode: "null"`. After 5 minutes the watchdog
-   tries a normal boot again: it sends the null recorder a `restart` control line (it exits 0 without
-   sealing, which resets its connections once), then starts a normal one. Each failed try doubles the
-   wait, up to 10 minutes; the wait never passes that ceiling. Null mode is not a failure budget: it
-   only spaces out boots that crash at once, so a crash loop does not reset the harness's connections
-   every few seconds (point 3), and the ceiling keeps the restart fast (ledger R3). Every fast exit
-   counts toward the 3, a SIGKILL included: an OOM-kill loop is exactly the loop null mode spaces out,
+9. **Null mode (pass-through, ledger R3a).** A crash loop is 3 exits within 10 minutes, each less
+   than 60 s after its start. The count resets as soon as a recorder stays up 60 s, so a crash at
+   hour 5 and one at hour 140 never add up. On a crash loop the next recorder starts with `--null`
+   and `null_since` on its first line: the proxy relays exactly as normal, every S1 call is a no-op,
+   the writer does not run, the uploader still sends what is on disk, and the null recorder writes
+   `status.json` with `mode: "null"`. The watchdog then tries a normal boot after 30 s, 1 minute,
+   2 minutes, then every 5 minutes, never more than 5 minutes apart, and never stops trying: it sends
+   the null recorder a `restart` control line (it exits 0 without sealing, which resets its
+   connections once), then starts a normal one. A normal boot that again exits within 60 s goes
+   straight back to null mode and the next wait; one that stays up 60 s resets the count and the
+   waits. The waits run on boot time and are one small pure function (`next_wait`), unit-tested.
+   Null mode is not a failure budget: it only spaces out boots that crash at once, so a crash loop
+   does not reset the harness's connections every few seconds (point 3), and the 5 minute ceiling
+   keeps the restart fast (ledger R3, R3a). Every fast exit counts toward the 3, a SIGKILL included: an OOM-kill loop is exactly the loop null mode spaces out,
    and a null recorder holds no records, so memory comes back. The next normal boot's `recorder_down`
    gap covers the whole span, tail `{"cause":"null_mode","exits":n,"last":{...}}`. A seal while in
    null mode: section 11.
@@ -461,8 +482,52 @@ are never logged.
 
 Losing the control socket never stops recording (section 9.1, the watchdog row).
 
-Size target: the watchdog about 450 src lines, of which about 266 are the copied shield, modes and
-`wait_resuming`.
+Size target: the watchdog about 530 src lines, of which about 266 are the copied shield, modes and
+`wait_resuming`, and about 80 are `goalcup recover` (section 8.1).
+
+#### 8.1 `goalcup recover` after the watchdog died (ledger R3b)
+
+The watchdog can die (`kill -9`, a crash, a closed terminal that takes it along). The recorder then
+serves on alone (section 9.1), but with no restart loop: its next crash would leave the port dead
+while the harness still runs. `goalcup recover` puts a watchdog back without touching the harness.
+PRD-10 owns the command: it builds `LaunchPlan` and `StartFacts` as for `continue`, but for this
+entry (same connector; the exact mask values read again from the participant's environment and
+harness config; deadline and port from `status.json`; harness pid and start time from its `harness`
+block), and calls `watchdog::recover(entry_dir, plan, facts) -> ExitCode` (seam S8 gains this one
+function). An email that tells the participant to run it is a later server-side follow-up, not
+built here.
+
+1. **Refuse** (PRD-10 words each) when the watchdog in `rec/watchdog.pid` lives (pid plus start
+   time), when `status.json` says `sealed` or `sealing`, when the harness is gone (`goalcup continue`
+   or `goalcup upload` is the way then), or when `rec/run-ca.key` is missing.
+2. **Detach.** Fork a watchdog in its own session (`setsid`), stdio to `/dev/null`, lines to
+   `goalcup.log`. It takes step 1 of section 8 (`PR_SET_DUMPABLE` 0, the open-file raise),
+   `RLIMIT_CORE` 0, and writes `rec/watchdog.pid`. The `goalcup recover` process waits for its
+   `ready` report on a pipe, prints one line and exits.
+3. **Load the same CA.** Read `run-ca.pem` and `rec/run-ca.key` and import them with PRD-03's
+   `RunCa::import`. Nothing is minted, `bundle.pem` is not rewritten, so the harness still trusts
+   every certificate the proxy serves.
+4. **Replace a live orphan.** If a recorder still holds `rec/lock` (pid plus start time from
+   `status.json`), send it SIGKILL: the crash path R1 proves, with no new signal handling. Poll
+   `rec/lock` every 10 ms for up to 10 s until it is free.
+5. **Reopen the port** from `status.json` at once, as in section 8 step 2, with a new control
+   socket. If another program took the port, exit with that reason: the harness cannot be moved to
+   another port, so `goalcup continue` with a harness restart is the way back.
+6. **Start the recorder** as in section 8 steps 4 and 5, with `prev` `{"cause":"watchdog_lost"}`
+   on the first line. Its boot recovery (9.2 step 4) writes one `recorder_down` gap from the last
+   point it keeps (the last LINK named by an index line, never before the last durable point) to the
+   new boot's first record, tail `{"cause":"watchdog_lost","prev":{...}}`.
+7. **Then it is a watchdog** with steps 8 to 11 of section 8 (the restart loop and null mode, the
+   control lines, the deadline, `goalcup seal` by SIGUSR1, the server `stop`, the seal and the upload
+   wrap-up), except that it **never touches the harness**: no spawn, no signal, no terminal shield,
+   no `plan.before` or `plan.after`. It watches the harness pid every second (pid plus start time)
+   and on its exit sends `exit` and `seal` (`harness_exit`). At the deadline, on `goalcup seal` and
+   on a server `stop` it sends `seal` and leaves the harness running.
+
+The harness sees what it sees after a recorder crash: one reset per open connection, and new
+connections refused for the few milliseconds between the orphan's exit and the new bind (none when
+the orphan was already dead). A harness that lost its terminal with the watchdog (section 9.1) does
+not get it back: recover never touches it.
 
 ### 9. Crash and restart
 
@@ -471,10 +536,10 @@ Size target: the watchdog about 450 src lines, of which about 266 are the copied
 | What dies | Harness's open connections | New connections | Recording | How it ends |
 |---|---|---|---|---|
 | The recorder (crash, OOM kill, `kill -9`, exit 70, 74 or 75) | Reset once; the harness retries (Codex: `stream_max_retries` 5 and `request_max_retries` 4 by default; Claude Code's retry watchdog; others unverified, `docs/plans/2026-10-30-audit/F-week-long-risks.md:597-607`) | Wait in the kernel backlog, then are served by the next boot | One `recorder_down` gap from the last LINK named by an index line (the point recovery truncates to, PRD-01 section 12 step 1; after a plain process kill at most about 1 s before the kill) to the next boot's first record | Automatic |
-| Recorder crash loop | As above, each time | Served by the null recorder | Off, shown in status with its start time | Automatic retry of normal mode |
-| The watchdog only | Unaffected: the recorder holds the listener and serves on | Served | Goes on. A non-TUI harness is unaffected; a TUI harness likely loses its terminal (the shell takes the foreground back), so it may stop or exit | The recorder sees EOF on fd 4, then watches the harness pid every second (pid plus start time, against reuse) and runs its own deadline timer. When the harness is gone, or at the deadline, it seals with reason `harness_exit` (exit null) or `deadline`. Nobody ends the harness or runs `plan.after` then |
-| The watchdog, then later the recorder | Refused once the recorder is gone: nobody holds the port | Refused | Off; nothing sends a heartbeat; `goalcup status` says off (PRD-10 both-dead line) | `goalcup continue` closes it `recovered` (9.4) |
-| Both (power loss, laptop crash, `kill -9` of both) | Refused: nobody holds the port | Refused | Off until the participant acts | `goalcup continue` closes the dead entry (9.4) and starts a new one. The harness must be restarted too |
+| Recorder crash loop | As above, each time | Served by the null recorder | Off, shown in status with its start time | Automatic retry of normal mode after 30 s, 1, 2, then every 5 minutes, never ending (R3a) |
+| The watchdog only | Unaffected: the recorder holds the listener and serves on | Served | Goes on. A non-TUI harness is unaffected; a TUI harness likely loses its terminal (the shell takes the foreground back), so it may stop or exit | The recorder sees EOF on fd 4, then watches the harness pid every second (pid plus start time, against reuse) and runs its own deadline timer. When the harness is gone, or at the deadline, it seals with reason `harness_exit` (exit null) or `deadline`. Nobody ends the harness or runs `plan.after` then. `goalcup recover` replaces this recorder and puts a watchdog back (8.1) |
+| The watchdog, then later the recorder | Refused once the recorder is gone: nobody holds the port | Refused | Off; nothing sends a heartbeat; `goalcup status` says off (PRD-10 both-dead line) | `goalcup recover` reopens the port with the same CA, the harness untouched, and a `recorder_down` gap covers the time (8.1). Once the harness is gone, `goalcup continue` closes it `recovered` (9.4) |
+| Both (power loss, laptop crash, `kill -9` of both) | Refused: nobody holds the port | Refused | Off until the participant acts | If the harness still runs, `goalcup recover` (8.1). Otherwise `goalcup continue` closes the dead entry (9.4) and starts a new one, and the harness is restarted too |
 
 The recorder never asks the harness to wait and never sets a base URL. The only harness-visible
 effect of a recorder crash is one connection reset per open connection, the same as a network blip.
@@ -543,7 +608,8 @@ new request on a new stream.
    (as in 9.2 step 4), `GAP {sid 0, recorder_down, start = last LINK, end = now, tail
    {"cause":"abandoned"}}`, a `seal` event with reason `recovered`, `harness: "unknown"` and the entry
    totals (`entry_totals`), a LINK, the frame end and an `R` index line (PRD-01 section 12). Nothing
-   is appended after it. Then write the sealed `status.json` (section 6).
+   is appended after it. Then write the sealed `status.json` (section 6) and remove
+   `rec/run-ca.key`.
 3. Leave the part files for the uploader (PRD-06 uploads and commits the dead entry before the new
    one).
 
@@ -631,7 +697,8 @@ recorder with the `restart` line (section 8 step 9).
    `git --no-optional-locks status --porcelain -z` (it never takes the workspace's index lock), each
    `git` call with a 10 s budget, null on failure, boots and
    totals), LINK, frame end, `E` line, `fdatasync`, durable point.
-6. Send `sealed`, write `status.json` with `mode: "sealed"`, and hand over with
+6. Remove `rec/run-ca.key` and `fsync` `rec/` (ledger R3b: the key lives only until the seal). Send
+   `sealed`, write `status.json` with `mode: "sealed"`, and hand over with
    `UploadHandle::finish(wrap_up, seal_facts)` (seam S18), `seal_facts` holding `reason`,
    `workspace_head` and `totals`. Bytes relayed after the seal's LINK cannot be recorded; their count
    and hosts go to `goalcup.log` and to the sealed `status.json` (`after_seal {bytes, hosts}`, kept
@@ -746,11 +813,13 @@ Create:
   (`StreamHandle`, the gap rule), `guard.rs`, `mask_worker.rs`, `writer.rs`, `counts.rs`, `clock.rs`,
   `status.rs`, `cursors.rs`, `seal.rs`, `boot.rs`, `dead.rs` (`close_dead_entry`), `fds.rs`,
   `secure.rs` (core dumps, `oom_score_adj`, panic hook).
-- `crates/goalcup/src/watchdog/`: `mod.rs` (`run`, the restart loop, null mode, control lines),
-  `shield.rs` (copied), `spawn.rs` (recorder and harness spawn, limits, helpers, ending the tree).
+- `crates/goalcup/src/watchdog/`: `mod.rs` (`run`, the restart loop, null mode with `next_wait`,
+  control lines), `shield.rs` (copied), `spawn.rs` (recorder and harness spawn, limits, helpers,
+  ending the tree), `recover.rs` (`recover`, section 8.1).
 - `crates/goalcup/tests/pipeline_*.rs`, `tests/watchdog_*.rs`.
 - Local files in the entry folder: `rec/lock`, `rec/watchdog.pid`, `status.json`, `counts.jsonl`,
-  `cursors.json`; written by the watchdog with PRD-03's code: `run-ca.pem`, `bundle.pem`.
+  `cursors.json`; written by the watchdog with PRD-03's code: `run-ca.pem`, `bundle.pem`, and
+  `rec/run-ca.key` (0600, removed at the seal, ledger R3b).
 
 Must not touch: `src/proxy/` (PRD-03), `src/native/` (PRD-04), `src/mask/` (PRD-05), `src/upload/`
 (PRD-06), `src/connector/` (PRD-11), `src/cli/` and `src/main.rs` (PRD-10), `tests/common/`
@@ -761,19 +830,19 @@ Must not touch: `src/proxy/` (PRD-03), `src/native/` (PRD-04), `src/mask/` (PRD-
 
 | PRD | What crosses | Direction |
 |---|---|---|
-| PRD-00 | S1, S4, S8 and S17 as written in PRD-00 revision 4 (rulings R3-1 to R3-3), plus `Recorder::real_for_tests` and `fds::raise` (night-log lines) | Both |
+| PRD-00 | S1, S4, S8 and S17 as written in PRD-00 revision 4 (rulings R3-1 to R3-3), plus `Recorder::real_for_tests` and `fds::raise` (night-log lines); S8 gains `watchdog::recover(entry_dir, plan, facts) -> ExitCode` and the key file `rec/run-ca.key` (ask 11) | Both |
 | PRD-01 | `PartWriter::{open(dir, PartOptions), recover, write, link, rotate_if_due, seal}`, `Record`, `StreamKind`, `GapReason`, `EndReason`, `IndexLine` (F1); GAP reasons 1, 2, 10, 12, 15; seal reasons incl. `recovered`, `server_stop`; notes `fd_limit`, `writer_slow`; the `clock` and `suspend` events; COUNT keys | Used here |
-| PRD-03 | S1; `proxy::serve(listener, ProxyCtx { recorder, hosts, ca, extra_roots }) -> ProxyHandle`; `pipeline::fds::may_accept()`; `Recorder::room` and `Recorder::reserve` for every decoder window; `ProxyHandle::quiet_since()` for the seal's grace; a `parse_stopped` note when a connection stops parsing (status `losing`); `proxy::ca::RunCa::{mint, write_files, export, import}` called by the watchdog (mint) and the recorder (import). PRD-03 must: relay first, then offer the same `Bytes`; decode before the offer; never hold a lock across an S1 call; never deduplicate losses; keep a panic inside one connection's task; not raise the open-file limit itself; run 2 relay threads | Both |
+| PRD-03 | S1; `proxy::serve(listener, ProxyCtx { recorder, hosts, ca, extra_roots }) -> ProxyHandle`; `pipeline::fds::may_accept()`; `Recorder::room` and `Recorder::reserve` for every decoder window; `ProxyHandle::quiet_since()` for the seal's grace; a `parse_stopped` note when a connection stops parsing (status `losing`); `proxy::ca::RunCa::{mint, write_files, export, import}` called by the watchdog (mint, and `import` from `rec/run-ca.key` in `goalcup recover`) and the recorder (import). PRD-03 must: relay first, then offer the same `Bytes`; decode before the offer; never hold a lock across an S1 call; never deduplicate losses; keep a panic inside one connection's task; not raise the open-file limit itself; run 2 relay threads | Both |
 | PRD-04 | S1 with `kind = native` or `snapshot`, `from` = cursor; `room()` (already leaves a quarter of the soft guard free); `native_cursors()` with `gen`, `fid`, offset, snapshot size and `mtime_ns`; `low_priority()`; `native::start(rec, sources) -> NativeReader` at boot step 5; `NativeReader::finish(self, harness_exited) -> NativeFinish` at seal step 4, after the watchdog ran `plan.after`, plus the seal reason for the time guard (ask 10); `NativeFinish.cut_files` and `cut_bytes` for the sealed `status.json` | Both |
 | PRD-05 | S2: `Masker::new(rules, values) -> Result`, `Masker::stream(kind)`, `mask_meta`, `mask_rules`, `value_counts`; `StreamMasker::{push, boundary, gap, finish}` returning `Masked {bytes, spans}`. Must be `Send`, keep length, never return an error after `new`. The S2 stub stars every byte until the core-slice masker lands; a `MaskError` on a built-in shape is exit 78 | Used here |
-| PRD-06 | S4: `Counts`, `Durable` (with the counters at the durable LINK) on a `watch` channel, read by `borrow()` from plain threads; `status.json`, from which with `Durable` age and the live atomics PRD-06 computes the heartbeat's `failed`; `pipeline::entry_totals`; `upload::spawn(ctx) -> UploadHandle` after boot recovery and in null mode (S18); the seal hands over with `UploadHandle::finish(wrap_up, seal_facts)` (S18); S10 `ServerWord` read by the recorder and forwarded to the watchdog as the `server` line; `close_dead_entry` for `goalcup upload` | Both |
-| PRD-08 | Gap tail keys written here: `guard`, `limit`, `cause`, `prev`, `exits`, `last`, `conns`, `hosts`. Exit codes 70, 73, 74 and 75 (cause `writer_stalled`), and the causes `null_mode` and `abandoned`, as `recorder_down` causes | Used there |
-| PRD-10 | `watchdog::run(plan, facts) -> ExitCode` for `start` and `continue`; the hidden recorder subcommand dispatched to `pipeline::run_recorder`; `pipeline::close_dead_entry(dir) -> Result<Closed, StillRecording>`; `status.json` (section 6, S4); `goalcup seal` sends SIGUSR1 to the pid in `rec/watchdog.pid`, or SIGTERM to the recorder's pid in `status.json` when no watchdog lives. PRD-10 drops its own helper stop (start step 7) and harness end; the sleep lock stays PRD-10's, held in the watchdog process. PRD-10 shows: exit 78's text, `sealing`, `after_seal` in the `after_stop` line, `req_whole` beside `model_requests`, the `fd_limit` line, the both-dead line | Used there |
+| PRD-06 | S4: `Counts`, `Durable` (with the counters at the durable LINK) on a `watch` channel, read by `borrow()` from plain threads; `status.json`, from which with `Durable` age and the live atomics PRD-06 computes the heartbeat's `failed`; `pipeline::entry_totals`; `upload::spawn(ctx) -> UploadHandle` after boot recovery and in null mode (S18); the seal hands over with `UploadHandle::finish(wrap_up, seal_facts)` (S18); S10 `ServerWord` read by the recorder and forwarded to the watchdog as the `server` line; `close_dead_entry` for `goalcup upload`. The uploader never reads or sends `rec/run-ca.key` | Both |
+| PRD-08 | Gap tail keys written here: `guard`, `limit`, `cause`, `prev`, `exits`, `last`, `conns`, `hosts`. Exit codes 70, 73, 74 and 75 (cause `writer_stalled`), and the causes `null_mode`, `abandoned` and `watchdog_lost` (section 8.1), as `recorder_down` causes | Used there |
+| PRD-10 | `watchdog::run(plan, facts) -> ExitCode` for `start` and `continue`; the hidden recorder subcommand dispatched to `pipeline::run_recorder`; `pipeline::close_dead_entry(dir) -> Result<Closed, StillRecording>`; `status.json` (section 6, S4); `goalcup seal` sends SIGUSR1 to the pid in `rec/watchdog.pid`, or SIGTERM to the recorder's pid in `status.json` when no watchdog lives. PRD-10 drops its own helper stop (start step 7) and harness end; the sleep lock stays PRD-10's, held in the watchdog process. PRD-10 shows: exit 78's text, `sealing`, `after_seal` in the `after_stop` line, `req_whole` beside `model_requests`, the `fd_limit` line, the both-dead line. PRD-10 adds `goalcup recover`, which builds the plan and facts for the live entry and calls `watchdog::recover` (section 8.1, ask 12) | Used there |
 | PRD-11 | S3 `LaunchPlan` (`program`, `argv`, `env`, `home`, `before`, `after`, `hosts`, `native`, `mask_rules`, `secret_values`, `notes`), `finish_env(port, run_ca, bundle)`; `HostList`, `NativeSources` and `MaskRule` serialize with serde (S17) | Used here |
-| PRD-12 | Pad cases: the kill case on all three core harnesses (`--kill-recorder`), the low file limit, the watchdog kill, continue after both die | Used there |
+| PRD-12 | Pad cases: the kill case on all three core harnesses (`--kill-recorder`), the low file limit, the watchdog kill, the watchdog kill then `goalcup recover` (R9), continue after both die. The pad's history check (ledger T4) runs on every one of them | Used there |
 | PRD-13 | The deletions in section 13 | Done there |
 | PRD-14 | The `test-hooks` feature in this scaffold; hooks `GOALCUP_TEST_WRITER_STALL`, `GOALCUP_TEST_GUARD_MB`, `GOALCUP_TEST_CRASH_AT_BOOT`, `GOALCUP_TEST_ROTATE_MB` (owner PRD-02, sets `PartOptions.rotate_at`), all pending owner question 12; `Recorder::for_tests` (calls before masking) and `Recorder::real_for_tests(dir, masker)` (the real mask worker and writer in a temp entry folder, for `common::recorder::real(dir)`). No silent-drop hook (cut, PRD-00) | Both |
-| PRD-15 | A DECISIONS entry: one process, one guard, restart by watchdog, null mode, no core dumps | Written there |
+| PRD-15 | A DECISIONS entry: one process, one guard, restart by watchdog, the eager crash-loop retry (R3a), `goalcup recover` and the key file (R3b), no core dumps. The security page says the run CA key sits in a 0600 file during an entry | Written there |
 | PRD-16 | Kill test R1 (2 s on the Codex pad run); X4's 5 s under A2 load is a different run; X3 reads `held_peak`; the breaker uses `pipeline_guard.rs`, `pipeline_stall.rs` and `by_hand_load` at 40 and 200 streams | Used there |
 | PRD-17 | Cases P1, P3 to P8, P15, R1, R2, R4, C11, C12 (listener is loopback only); H10 and K15 run through `real_for_tests`, because `for_tests` shows bytes before masking | Used here |
 
@@ -789,19 +858,23 @@ Must not touch: `src/proxy/` (PRD-03), `src/native/` (PRD-04), `src/mask/` (PRD-
 | `crates/goalcup-platform/src/handle_budget.rs` | 79 | its unit tests |
 | `crates/goalcup-protocol/src/capture.rs` queue, producer and frame types | most of 847 | `goalcup-protocol/tests/fixtures/m2-ingest/` |
 
-PRD-13 deletes; this PRD only makes them dead. New code here: about 1,350 src lines (pipeline about
-900 with one mask worker, watchdog about 450) and about 1,500 test lines (PRD-14's table).
+PRD-13 deletes; this PRD only makes them dead. New code here: about 1,430 src lines (pipeline about
+900 with one mask worker, watchdog about 530 with `recover`) and about 1,600 test lines (PRD-14's
+table).
 
 ## Acceptance
 
 ### Real-run proofs (on the pad, PRD-12, Vercel Sandbox (Linux), `GOALCUP_KEEP_PARTS=1`)
 
 No real-run proof here needs a `test-hooks` build (review B T2). R2 and R6 keep their numbers so
-other PRDs' references hold; they are automated tests now.
+other PRDs' references hold; they are automated tests now. The proxy record is the proof (ledger
+T4): every pass line is read from the entry, `goalcup-verify` and the server copy, never from an
+outside API. On every real run here the pad's history check (PRD-12) finds no missed call outside a
+`recorder_down` gap.
 
 | # | Proof | Pass |
 |---|---|---|
-| R1 | **Kill test** (PRD-00 done item 2, PRD-01 acceptance 3). A Codex direct-key pad run (`full` prompt). `kill -9` the recorder twice, 2 minutes apart, while a response streams (no test hooks). The first kill comes after the first heartbeat row. PRD-12 runs the same `--kill-recorder` case on Claude Code and Hermes | The harness finishes its turn with no participant action and its own log shows no failed call it did not retry. The entry decodes; exactly two `recorder_down` gaps, start before end, each under 2 s long; links verify across three boots; `goalcup.log` shows the next boot's `ready` within 1 s of each kill, and the next boot's first `conn` OPEN comes after its `recorder_down` gap end (`goalcup-verify dump`); written model requests after the second kill are above zero; every new `conn` to a listed host after a restart is `decrypt` (same CA); the server copy equals local |
+| R1 | **Kill test** (PRD-00 done item 2, PRD-01 acceptance 3). A Codex direct-key pad run (`full` prompt). `kill -9` the recorder twice, 2 minutes apart, while a response streams (no test hooks). The first kill comes after the first heartbeat row. PRD-12 runs the same `--kill-recorder` case on Claude Code and Hermes | The harness finishes its turn with no participant action (optional extra, where it keeps a log: no failed call it did not retry, ledger T4). The entry decodes; exactly two `recorder_down` gaps, start before end, each under 2 s long; links verify across three boots; `goalcup.log` shows the next boot's `ready` within 1 s of each kill, and the next boot's first `conn` OPEN comes after its `recorder_down` gap end (`goalcup-verify dump`); written model requests after the second kill are above zero; every new `conn` to a listed host after a restart is `decrypt` (same CA); the history check finds no missed call outside the two gaps; the server copy equals local |
 | R2 | **Stalled writer**: now `pipeline_stall.rs` (below) | |
 | R3 | **Counts are written counts.** A Claude Code run with one subagent, then `goalcup-verify check` | The seal's `model_requests` equals the verifier's recount; a watcher reading `status.json` every second never saw a model request count above the verifier's recount at that second; the end screen's numbers equal the seal's totals |
 | R4 | **Low file limit.** `ulimit -Sn 256` in the sandbox shell, then a Codex run whose prompt asks for 20 subagents | `start` event shows the raised `fd_limit`; `/proc/<pid>/limits` shows the hard limit (or 10,240 on macOS) for the recorder and at least `min(4096, hard)` for the harness; no EMFILE in the logs; no refused connection |
@@ -809,6 +882,7 @@ other PRDs' references hold; they are automated tests now.
 | R6 | **Null mode**: now `watchdog_null.rs` (below). PRD-10 acceptance 2 and PRD-06 U6 may still use the hook on a real run | |
 | R7 | **Continue after both die.** `kill -9` watchdog and recorder together, then `goalcup continue` | The old entry ends with `seal` reason `recovered` and an `abandoned` gap and is uploaded; per native path, the new entry's first `from` equals the old entry's last written offset (checked from both `goalcup-verify dump` outputs); the new entry got the same port |
 | R8 | **Writer throughput, measured.** `by_hand_load` (below), both sizes, on a 4 vCPU Vercel Sandbox (Linux) | Reported, never a pass line (PRD-00: no speed number fails a gate): mask and writer MB/s, `held_peak`, the `memory_guard` gap count and S1 call time for 40 and for 200 streams. At or above 50 MB/s sustained through mask and writer, nothing changes. Below it, the night log names the slow stage: the mask worker gets the pool (section 4), or PRD-06 lowers the zstd level only; the 2^27 window and long matching stay (ledger F2, locked) |
+| R9 | **Recover after watchdog death** (ledger R3b). A Codex direct-key pad run (`full` prompt). `kill -9` the watchdog while a response streams, wait 30 s, run `goalcup recover`. Then again with `kill -9` of the watchdog and the recorder together, the harness left running | The harness pid never changes and the harness finishes its turn with no participant action beyond `goalcup recover`; its own log shows no failed call it did not retry. `goalcup recover` returns within 15 s and the port is unchanged. The entry decodes with exactly one `recorder_down` gap per recover, cause `watchdog_lost`, start before end, starting no earlier than the last durable point before the kill; links verify across the boots; every new `conn` to a listed host after recover is `decrypt` (same CA, no `tls_refused`); the seal is reason `harness_exit`; `rec/run-ca.key` was mode 0600 during the run and is gone after the seal; the history check finds no missed call outside the gaps; the server copy equals local |
 
 ### Automated tests that guard them
 
@@ -837,10 +911,21 @@ seeing the call return (PRD-14 section 4).
   restart is served; boot numbers are contiguous; `prev_boot` names the signal; cursors resume; a
   decrypted connection after the restart verifies against the same `run-ca.pem`.
 - `watchdog_null.rs` (was R6): `GOALCUP_TEST_CRASH_AT_BOOT=4` and a forced first kill. Connections are
-  answered throughout; `status.json` shows `null` with a start time; the next normal boot writes one
-  `recorder_down` gap with cause `null_mode` covering the span; the retry uses the `restart` line,
-  never SIGTERM. A harness exit during null mode gives a sealed entry with one `null_mode` gap that
-  verifies.
+  answered throughout; `status.json` shows `null` with a start time; the first retry comes 30 s
+  after null mode starts; the next normal boot writes one `recorder_down` gap with cause `null_mode`
+  covering the span; the retry uses the `restart` line, never SIGTERM. A harness exit during null
+  mode gives a sealed entry with one `null_mode` gap that verifies. A unit test of `next_wait` on
+  boot-time stamps: waits 30, 60, 120, 300, 300 s and never more; three exits under 60 s within
+  10 minutes switch; an exit after 60 s up resets the count and the waits; exits at hour 5 and hour
+  140 never add up; the first two fast exits restart with no pause.
+- `watchdog_recover.rs`: the real binary, a fake upstream and a fake harness that keeps calling.
+  `kill -9` the watchdog, call `goalcup recover`: the orphaned recorder is replaced, the port is
+  unchanged and bound to `127.0.0.1` only, a decrypted connection after recover verifies against the
+  same `run-ca.pem`, one `recorder_down` gap with cause `watchdog_lost`, and the fake harness gets no
+  signal. The same with the recorder killed too. `rec/run-ca.key` is 0600 while the entry lives and
+  gone after the seal and after `close_dead_entry`. Recover refuses while the watchdog lives, on a
+  sealed entry, with the harness gone and with the key file missing; a port held by another program
+  gives the port refusal. The key's PEM appears in no part file, index, `goalcup.log` or upload.
 - `watchdog_end.rs`: a fake harness that forks a child and a detached grandchild; at the deadline and
   on SIGUSR1 all three get SIGTERM then SIGKILL; the watchdog and the recorder are never signalled;
   `plan.before` runs before the spawn and `plan.after` before the native finish.
@@ -877,7 +962,7 @@ RSS, the `memory_guard` gap count and S1 call time at the 99.9th percentile.
 - **Connection resets on a crash and on planned replacements.** A harness without retries shows the
   agent an error. Hermes and most of the 15 are unmeasured (`F-week-long-risks.md:607`); the kill
   case on all three core harnesses measures it. A null-mode retry resets open connections once per
-  try (at most about six tries an hour, every 10 minutes at the ceiling).
+  try (at most 12 tries an hour, every 5 minutes at the ceiling, ledger R3a).
 - **The stall exit on a slow but live disk.** A disk that hangs 60 s and then recovers costs one reset
   per open connection and a `recorder_down` gap with cause `writer_stalled`.
 - **Backlog limits.** macOS `kern.ipc.somaxconn` is 128 by default and Linux `somaxconn` is 4,096
@@ -886,8 +971,21 @@ RSS, the `memory_guard` gap count and S1 call time at the 99.9th percentile.
 - **Null mode records nothing.** A bug that crashes every boot turns a run into off time. It is
   shown, timed and retried, never silent, but it is still loss.
 - **The watchdog is the single point of failure for the port only together with the recorder.** If
-  both die the harness's calls are refused until the participant restarts. If only the watchdog
-  dies, nobody ends the harness at the deadline or runs `plan.after`.
+  both die the harness's calls are refused until the participant runs `goalcup recover` (8.1). If
+  only the watchdog dies, the next recorder crash leaves the port dead and nobody ends the harness at
+  the deadline or runs `plan.after`, until `goalcup recover`; even then the harness is never ended
+  (R3b: recover never touches it). Nothing prompts the participant yet: the server-side email is a
+  later follow-up.
+- **The run CA key is on disk during an entry** (R3b, accepted by the owner). A same-user process can
+  read `rec/run-ca.key` and serve certificates the harness trusts; a participant who meddles with it
+  breaks the rules anyway. It is 0600 in a 0700 folder, never uploaded, and removed at the seal. A
+  power loss leaves it until `continue`, `seal` or `upload` closes the entry with `close_dead_entry`.
+- **Recover reads the exact mask values again** from the participant's environment. If one is gone
+  (a key unset in that shell), the new boot masks with the built-in shapes and the values it still
+  finds; PRD-10 compares the count with the last `start` event's `mask_values` and says so in one
+  line.
+- **Recover replaces a live orphan** with SIGKILL: one reset per open connection and a few
+  milliseconds of refused connections, the same cost as R1's kill.
 - **Watchdog death under a TUI harness.** The shell takes the terminal's foreground back, so a TUI
   harness likely stops or exits. Recording goes on and the recorder seals when the harness exits; R5
   records what the harness did.
@@ -907,8 +1005,10 @@ RSS, the `memory_guard` gap count and S1 call time at the 99.9th percentile.
 - **Two writers on one entry** are prevented by `flock`, which does not work on some network
   filesystems. The entry folder is under `$GOALCUP_HOME`, local by default.
 - **Port reuse on `continue`** helps a leftover helper reach a live proxy, but the new entry mints a
-  new CA, so that helper's decrypted calls fail TLS (a `tls_refused` GAP). Keeping one CA per run
-  would need its key on disk; not done.
+  new CA, so that helper's decrypted calls fail TLS (a `tls_refused` GAP). The key file of R3b keeps
+  one CA for the life of an entry, which is what `goalcup recover` needs; it is removed at the seal,
+  so `continue` (which restarts the harness on the new `bundle.pem`) still mints a new CA. Carrying
+  the key across entries is not built: less code, and only a leftover helper pays, with a named gap.
 
 ## Overridable defaults
 
@@ -921,8 +1021,9 @@ RSS, the `memory_guard` gap count and S1 call time at the 99.9th percentile.
 | Relay worker threads | 2 | PRD-03 |
 | Background priority | nice 10 (Linux); none on macOS in 1.0 | PRD-02 |
 | `oom_score_adj` of the recorder | 500 (Linux) | PRD-02 |
-| Restart pauses | 0, 0.1, 0.5, 1, 2, 5 s; reset after 10 min alive | PRD-02 |
-| Null mode | after 3 exits in 10 min each under 60 s (SIGKILL included); retry by the `restart` line after 5 min, doubling to 10 min, never more | PRD-02 |
+| Restart pause | none: restarted at once | Nobody (ledger R3a, locked) |
+| Null mode | after 3 exits in 10 min each under 60 s (SIGKILL included); the count resets after 60 s up; retry by the `restart` line after 30 s, 1, 2, then every 5 min, never more apart, never stopping | Nobody (ledger R3a, locked) |
+| `goalcup recover` | orphan SIGKILL, then `rec/lock` polled every 10 ms for up to 10 s; ready wait 10 s | PRD-02 |
 | First boot ready wait | 10 s | PRD-10 |
 | Harness end | SIGTERM to the tree, SIGKILL after 10 s; only at the deadline (incl. a server `stop` for the deadline) and on `goalcup seal` | PRD-02 (PRD-00 owner question 2, old 11) |
 | Grace after a harness exit | until 5 s with no relayed byte, at most 30 s | PRD-02 |
@@ -952,12 +1053,14 @@ Order of work, by PRD-00's slices:
    with S2, `counts.rs`, `status.rs`, `cursors.rs`. A minimal watchdog: bind, mint the CA, the first
    control line, spawn one recorder, `ready`, spawn the harness, shield, `exit` and `seal` lines,
    `seal.rs` on a harness exit.
-3. **Second slice.** `boot.rs` with recovery, the restart loop, null mode, `dead.rs`, `fds.rs` and the
-   split file limits, `plan.before` and `plan.after`, ending the harness tree with the subreaper, the
-   deadline, `goalcup seal`, the server `stop`, port reuse. Then R1 on the pad.
+3. **Second slice.** `boot.rs` with recovery, the restart loop, null mode with `next_wait`,
+   `dead.rs`, `fds.rs` and the split file limits, `plan.before` and `plan.after`, ending the harness
+   tree with the subreaper, the deadline, `goalcup seal`, the server `stop`, port reuse, the key file
+   and `recover.rs`. Then R1 and R9 on the pad.
 4. Measure R8 once the masker is real; build the pool only if it says so.
 
-After each item above that changes recording (mask worker, seal, restart, null mode, native resume),
+After each item above that changes recording (mask worker, seal, restart, null mode, recover, native
+resume),
 one short real `smoke` run in a sandbox (PRD-16 watchers, ledger B3).
 
 Traps from the audit:
@@ -980,13 +1083,19 @@ Traps from the audit:
 - No deadline on `Instant` or a tokio sleep: they stop during suspend.
 - The recorder must start the proxy before recovery: a slow recovery must not hold the harness.
 - Recovery reads the boot number from the last PART, never from a counter in the watchdog.
-- The CA key and the exact mask values travel only on the first control line: never in argv, env, a
-  file, a log line or a record.
+- The exact mask values travel only on the first control line: never in argv, env, a file, a log
+  line or a record. The CA key also travels on that line and has exactly one file, `rec/run-ca.key`
+  (0600, `O_EXCL`, removed at the seal, ledger R3b); never argv, env, a log line, a record or an
+  upload.
+- Bind with `SO_REUSEADDR`, or `goalcup recover` cannot reopen a port with connections in TIME_WAIT.
+- `goalcup recover` never spawns, signals or shields the harness, and never runs `plan.before` or
+  `plan.after`.
 
 How a watcher proves it in a real run: during any pad run, read `status.json` once a second and check
 that `written.model_requests` never goes down and never exceeds the verifier's later recount at that
-time. Once per build run R1 on Codex (and PRD-12's kill case on Claude Code and Hermes), then
-`goalcup-verify check` on the entry and on the server copy.
+time. Once per build run R1 and R9 on Codex (and PRD-12's kill case on Claude Code and Hermes), then
+`goalcup-verify check` on the entry and on the server copy, and the pad's history check (ledger T4).
+No provider usage lookup is ever part of the proof.
 
 ## Asks of other PRDs
 
@@ -1019,6 +1128,16 @@ first line, `src/watchdog/` folder, S1 shape, null mode in the rules, `mask_fail
 10. **PRD-04 and PRD-00 S8:** `NativeReader::finish` takes the seal reason (or whether its time guard
     applies), so the 180 s guard runs only at `deadline`, `server_stop` and `signal`; `NativeFinish`
     gains `cut_bytes` beside `cut_files`.
+11. **PRD-00 S8, PRD-01 file table, PRD-03 and PRD-05 text** (ledger R3b): "the key never touches
+    disk" and "the CA key never leaves memory" become "the key is in `rec/run-ca.key` (0600) from the
+    mint to the seal". S8 gains `watchdog::recover(entry_dir, plan, facts) -> ExitCode`; the null
+    mode line cites R3a's waits. PRD-08 lists the `recorder_down` cause `watchdog_lost`.
+12. **PRD-10** (ledger R3b): add `goalcup recover` (section 8.1): refusals and the port line worded,
+    the plan and facts built for the live entry, the `mask_values` count compared. `goalcup status`
+    and the both-dead line say "run `goalcup recover`" when the watchdog is gone and the harness
+    still runs.
+13. **PRD-12** (ledgers R3b, T4): R9 as a pad case (`--kill-watchdog --recover`), and the history
+    check on every kill and recover case.
 
 ## Review answers
 
@@ -1157,3 +1276,9 @@ to another file are made by that file's owner.
 | G3-X20 | Applied (see P02-2). The example adds `req_whole`, `req_holes`, `lost_unknown`, `off_ms`, `mask_failclosed_bytes` and `tunnel_hosts`, marked abridged |
 | G3-X32 | Applied. `Recorder::real_for_tests(dir, masker)` under `test-hooks`: the real mask worker and writer in a temp entry folder, for PRD-14's `common::recorder::real(dir)`; PRD-17 H10 and K15 run through it |
 | G3-X56 | Applied. R1: the first kill comes after the first heartbeat row |
+
+### Ledger update (revision 4)
+
+| Id | Answer |
+|---|---|
+| R3a, R3b, T4 carried in | Applied. R3a: section 8 step 8 restarts at once (the 0 to 5 s pauses and the 10 minute reset are gone); step 9 null mode retries after 30 s, 1, 2, then every 5 minutes, never stopping, and the count resets after 60 s up; defaults locked; risks say 12 tries an hour; `next_wait` unit test. This supersedes F6/L2-06 and the G2-16 rejection of a short timer. R3b: section 8 step 3 writes `rec/run-ca.key` (0600, `O_EXCL`), removed at the seal (section 11 step 6, 9.4 step 2, a refused first boot); new section 8.1 `goalcup recover` (same port, same CA, SIGKILL of a live orphan, one `recorder_down` gap with cause `watchdog_lost`, never touches the harness); 9.1 rows; the "one CA per run, not done" risk replaced; new risks; interfaces, asks 11 to 13, files, size; acceptance R9 and `watchdog_recover.rs`. T4: the proof is the proxy record and no outside API, stated in owner decisions and the acceptance header; R1, R9 and the watcher paragraph run the pad's history check |
