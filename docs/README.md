@@ -19,7 +19,6 @@ You run one agent for 168 hours.
 You run the event, the server and the test runs.
 
 - [OPERATING](OPERATING.md): the runbook. Deploy, test runs, the matrix, edge cases by hand, bad days, finding codes.
-- [SERVER-DESIGN](SERVER-DESIGN.md): how the upload server is built, and why.
 - [UPLOAD-API](UPLOAD-API.md): the exact wire contract between `goalcup` and the server.
 - [server/worker README](../server/worker/README.md): the Worker's code, tests, local use and runbook.
 - [packaging README](../packaging/README.md): release tarballs and `install.sh`.
@@ -42,7 +41,7 @@ You add a coding-agent harness as a connector.
 
 - [adding-a-capture-harness skill](../skills/adding-a-capture-harness/SKILL.md): where to start.
 - [HARNESS-ONBOARDING](HARNESS-ONBOARDING.md): the one procedure, with commands, expected output and stop rules.
-- [CONNECTOR-SCHEMA](CONNECTOR-SCHEMA.md): what a chat connector writes, then every `harness.toml` field.
+- [CONNECTOR-SCHEMA](CONNECTOR-SCHEMA.md): every connector key and the host list rules.
 - [Harness facts sheets](harnesses/README.md): one page per harness, and the rules for writing one.
 - [writing-a-decoder](../skills/adding-a-capture-harness/writing-a-decoder.md): a separate verifier change, not part of a connector.
 - [CONTRIBUTING](../CONTRIBUTING.md): how to send a change, and what a maintainer asks for.

@@ -1294,3 +1294,58 @@ to another file are made by that file's owner.
   `pipeline_restart.rs` or `watchdog_restart.rs`), post its `file::test` name in the lessons log
   so the lane adds it to L-FW2. This asks for a name, not for a new test hook: "No silent-drop hook"
   (PRD-00 cut) holds, and no cap or disk-full handling comes back (ledger L6).
+
+### 2026-10-30, replan after PRD-05 phase 0 slice (merge 82484521)
+
+- **S2 is on integration as the stub.** PRD-02 can now type `StartFacts.mask_rules` as
+  `Vec<String>` (from `Masker::mask_rules()`) and `StartFacts.values` as `Vec<mask::SecretValue>`
+  (S17: serde both ways, `Debug` prints the source only, bytes zeroed on drop), and add
+  `Recorder::real_for_tests(dir, masker)`. Tests that need clear bytes use
+  `Masker::passthrough_for_tests()` (feature `test-hooks`). `start.mask_values` is
+  `masker.value_counts()` serialized: `workspace`, `env`, `harness`, `skipped` (PRD-01 section 8).
+- **Pass a typed slice to `Masker::new`** (`&plan.mask_rules`), never a bare `&[]`: the stub is
+  generic over the rule type until S3 lands, and the call must compile after PRD-05 switches it to
+  `&[connector::MaskRule]` (PRD-05 note).
+- **Never read meta back after `mask_meta`** (PRD-05 review A1). The stub stars every string leaf,
+  header names, method, host and a native stream's `path` (the stream ID) included, and writes no
+  `meta.masked`. Take what the pipeline needs (the native `path` for its stream map, the host for
+  COUNT) before the call. The rule holds after the core slice too: a path or host holding a secret
+  shape is still masked. PRD-02 does not add `meta.masked` itself; PRD-05 owns it.
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-10 slice 1 (merge d55030ee)
+
+- **S8 spawn names are on integration:** the watchdog spawns `goalcup recorder` and `goalcup recorder
+  --null` from `goalcup::cli::RECORDER_SUBCOMMAND` and `goalcup::cli::NULL_FLAG`, never from string
+  literals. `main.rs` dispatches the hidden command to the scaffold's `pipeline::run_recorder(null) ->
+  ExitCode`; keep that signature.
+- **S11 is on integration** (`goalcup::cli::log::{line, Fact, Host}`). Use `Fact::Io(kind)` for a write
+  error before exit 74 (EIO, ENOSPC, EMFILE), `Fact::Exit` for a child's exit, `Fact::Path` only for
+  paths goalcup built, and `Fact::Word` for causes. The panic hook writes file, line and fixed text; the
+  panic payload never goes into a `Fact`. `line` never creates a folder: create the entry folder
+  before the first boot line, or that line is lost.
+- `cli::home()` returns `Result<PathBuf, &'static str>` and refuses with no absolute home; code that
+  needs the home takes it from the start facts or that call, never from the raw variable.
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-04 core slice part 1 (merge 403d9165)
+
+- **`NativeReader::finish` takes the guard.** Ask 10 and PRD-04's ask 1 agree; PRD-00's ruling row
+  "PRD-02 and PRD-04" omits the argument. PRD-04's next slice builds
+  `finish(self, harness_exited: bool, guard: Option<Duration>) -> NativeFinish`; the seal passes
+  `Some(180 s)` for `deadline`, `server_stop` and `signal` and `None` for `harness_exit` and
+  `seal_command` (section 11). PRD-02's seal calls that shape.
+- `native::fsx` uses `pipeline::cursors::Fid` as its file identity, so a change to `Fid` touches the
+  native reader too.
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-11 slice 2 (merge b9fa50f8)
+
+- **S3 is on integration; `watchdog::run` builds against it now.** Keep `plan.lock` alive for the
+  whole watchdog run and drop it last (`LaunchPlan` is not `Clone`; it owns the lock). Run each
+  `before` and `after` entry as `plan.program` followed by the entry's arguments. Call
+  `finish_env(port, run_ca, bundle)` after the CA files exist; it also fills the connector's `ca_env`
+  variables. `hosts`, `native`, `mask_rules` and `notes` are `Serialize` for the start facts. A plan
+  with `refusal` set never reaches the watchdog (PRD-10 stops first).
+- Until PRD-11's hosts slice merges, `hosts.decide` answers `NotListed` for every name and
+  `ca_subtrees` is empty: a watchdog test that needs a decrypted request waits for that merge.

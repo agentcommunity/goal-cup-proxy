@@ -1316,3 +1316,115 @@ taken; "rejected" says why. Fixes for other files are made by those files' owner
 |---|---|
 | B3, B9, B10, B11 carried in | **B9:** the pad is now the simple rig. One command, `scripts/pad/pad <settings file>`; the long flag list is gone, replaced by one small settings file (harness, key name, case, mode, and optional prompt, minutes, steps; an unknown key is a usage error) and a table mapping the flags other PRDs name to settings (section 1). Every step has a built-in wait and a limit, and a timed-out step never stops the rig (section 1a). The rig prints one plain table, one line per step and the result, also kept as `table.txt`. The server allowlist became "staging and loopback only, no setting", so production cannot be chosen. Section 12 keeps `selftest` (K2, run 1's shape, first) and adds the first-output read: a reviewer who did not write the pad checks the first `selftest`, `micro` and `cycle` outputs against the record by hand before `pad_trusted_at` is set; P1 and a risk row follow. **B3:** three modes, `micro`, `cycle` and `full` (section 1a), with the `cycle` steps listed (setup, start, wait-calls, look, kill-recorder, wait-recovery, keep-going where the harness file says so, seal, wait-upload, fetch, check, cleanup) and the ladder's rungs as settings changes (local first, then upload, subagents, recorder crash, watchdog kill and recover, keep going, gateway, dodger, HTTP/2). New `micro` prompt with no subagent; `cycle` uses the payments prompt sealed at 8 minutes. Only `full` rows give a tier. New section 3.2: cleanup after every run (box, keys, test repo deleted with `GH_TOKEN`, local files trimmed, kept only for a watcher's FAIL). New P14 (the rig walks by itself) and P15 (cycle runs per pad); P2, P9, P11, P13, section 11 and section 13 now use settings files. **B10:** `test_pad.py` shrinks from about 270 to about 90 lines: it keeps the key, `exec` filter and pane tests (point 4) and the crash and recover fixtures (never-stop rules); the mapping tests go (`selftest`'s controls prove the mapping), as do the queue, spend, INCONCLUSIVE, table and release-check tests, left to real runs and the first-output read. **B11:** no total sandbox cap of our own (it wins over PRD-00 R3-9's 6 in all); the per-key queue stays, because rate limits make rows INCONCLUSIVE; offline controls never queue; P5 and the PRD-16 interface row follow. Total new lines about 1,400 (was 1,500) |
 | B3, B11 sweep (30 Oct) | Applied. P11's fault rows run in phase 4 beside the `full` wave, as PRD-16 section 6 says (full runs at the end). The watcher count is one per named cause with no cap of our own. The hand-made pad box of builder note 2 is removed after its run |
+
+## Amendments
+
+### 2026-10-30, replan after PRD-12 slice 2 (merge c7649890)
+
+- **Where the slices landed.** Merge c7649890 (titled "slice 1") carries both slices: the branch head
+  was 62bd0ed3, the slice 2 review fixes included. The later "slice 2 merge" logged as 15a6963b is the
+  PRD-07 replan commit; the branch was already in (PRD-16 note).
+- **Three review nits to apply in the next slice, all cuts** (reviewer B, third round):
+  - B3-1: `PLANTED` in `check.py` becomes `(("openai_key",), ("github_token",), ("google_key",
+    "generic_secret_assignment"), ("jwt",), ("private_key",), ("url_password",))`, and the comment says
+    only that the Google line is masked under the shell rule, row 11, which wins over `google_key`, row
+    13. By PRD-05 section 10, `openai_key` (row 1) and `github_token` (rows 3 and 4) win their overlap
+    with row 11, so the shell rule alternative on those two is dead and would hide a broken OpenAI or
+    GitHub shape rule behind an unrelated MASK.
+  - B3-2: in `secrets()`, test `masks is None` first ("no MASK counts by rule in
+    verify/secrets.json"), then the exercise test without the `(masks or {})` guard. Same result, the
+    right why line: until PRD-08 adds `masks`, the cause is the seam, not "secret exercise not done",
+    which would send a watcher to rerun the agent.
+  - B3-3: one spelling per limit. `step_check` uses the `limit` it is passed (plus 120, as before)
+    instead of recomputing `runner_limits(...)["verify"]`, and `step_cleanup` drops the two parameters
+    it ignores.
+- **C3 cannot pass yet.** Until PRD-08's `secrets --json` reports MASK spans by rule kind under
+  `masks` (PRD-08 note), C3 is INCONCLUSIVE on every run, so P2's "C3 PASS" waits on PRD-08's secrets
+  slice and on the masker (PRD-05), as well as on a `goalcup` build on integration. Neither is merged.
+- **C1 with a history `skip`.** `check.py` lets a history `skip` pass C1, as section 8, K11 (c) and
+  ledger T4 say. PRD-08's interfaces row line "C1 is INCONCLUSIVE only when `history_complete` and both
+  optional checks are `skip`" is the stale one (PRD-08 note); the mapping stays here.
+- **C3 depends on PRD-05's row order.** `PLANTED` holds today's S12 kind names and relies on rows 1, 3
+  and 4 winning over row 11, and row 11 over row 13. A rename or reorder in PRD-05 is posted as a seam
+  line and followed here (PRD-05 note).
+- **Size, `wc -l` on integration at c7649890:** `pad` 419 (row 320), `pad-run` 373 (row 330),
+  `check.py` 352 (row 320), `test_pad.py` 214 (row 90), `table` 84 (row 150), `image` 54 (row 60),
+  `sbx.mjs` 133 (not in the files table; it is the sandbox lifecycle of section 3.2, so it counts
+  against the pad's total), `pad.toml` 17, harness files 92, prompts and settings 34; 1,771 under
+  `scripts/pad/` against "about 1,400". Still to land at their rows: `selftest` 100, `exec/` 70, the
+  other 13 harness files (about 195) and the skill (100), plus the staging, approval, fetch, copy-in,
+  spend, fault, keep-going, `pre`, ledger, queue and release-check steps in `pad`, `pad-run` and
+  `table`. Before each later slice adds lines, cut what serves no point (the three nits above first);
+  `test_pad.py` adds no mapping test (those are `selftest`'s controls, ledger B10), only point 4 and
+  never-stop cases.
+- **Python.** `pad` and `pad-run` need 3.11 (`tomllib`; the pad image installs `python3.11`);
+  `check.py` and `table` run on 3.9. `test_pad.py` runs under 3.11 (PRD-14 note).
+
+### 2026-10-30, replan after PRD-05 phase 0 slice (merge 82484521)
+
+- **S12 row order confirmed** on integration: counting data lines from 0, `openai_key` 1,
+  `github_token` 3 and 4, `jwt` 7, `private_key` 8, `generic_secret_assignment` 10 and 11,
+  `url_password` 12, `google_key` 13, as C3 reads them.
+- **A pad run on a stub build is not evidence.** With the S2 stub every MASK is `fail_closed`, so C3
+  fails on every planted value. PRD-05 builder note 1 keeps real keys out of pad boxes until
+  `start.mask_rules` has more than one entry (PRD-16 checks it); the stub's list is
+  `["fail_closed"]`.
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-12 slice 3 (merge 9e259b4d)
+
+- **Gate.** `gate fast: PASS in 82s` on 9e259b4d. The gate does not run `test_pad.py` yet (PRD-14 note),
+  so the 17 pad tests were green only in the fixer's build box at 9e9e384a.
+- **B3-1 to B3-3 are in:** `PLANTED` with the shell rule only on the Google line, `masks is None` tested
+  first in `secrets()`, `step_check` uses the `limit` it is passed, `step_cleanup` takes no unused
+  parameters.
+- **Four post-merge review nits (reviewer B) for the next slice, three of them cuts:**
+  - B1: one helper, `env_without(hide=NEVER_IN_BOX)`, replaces the three copies of the env filter in
+    `sbx()`, `box()` and `step_fetch()` (which passes `set(NEVER_IN_BOX) - set(FETCH)`). `box()` always
+    passes `env=env_without()`; the `None if argv` branch goes, so `check.py` in a here run no longer
+    gets the organizer's whole environment.
+  - B2: delete `test_local_server_in_a_sandbox_is_refused`. It guards a refusal a later slice removes
+    and none of the ledger B10 subjects. The other two `HereAndFetch` tests stay (point 4).
+  - B3: `release_check` reads `sha + ":" + ROWS_REL`, not `"HEAD:" + ROWS_REL`, so its result depends on
+    its argument alone. Until it lands, `--release-check <commit>` is right only from a checkout whose
+    HEAD is `<commit>` (PRD-14 and PRD-16 notes).
+  - B4: the size, below.
+- **Fetch-run cleanup leans on PRD-07's folder name.** After a timeout `step_fetch` removes
+  `.fetch-run.*` next to the fetched entry, because a killed `sh` skips its EXIT trap and leaves
+  `pg_service.conf`, which holds the database connection (point 4). A rename of that work folder in
+  `scripts/fetch-run.sh` is a seam line and is followed here the same day (PRD-07 note).
+- **Size, `wc -l` at 9e259b4d, fixtures left out:** `pad` 500 (row 320), `pad-run` 411 (330),
+  `check.py` 358 (320), `table` 192 (150), `test_pad.py` 287 (90), `image` 54 (60), `sbx.mjs` 133 (no
+  row), `pad.toml` 17, prompts 16, runs 16, harness files 92 (3 of 16), `image.id` 1. In all 2,077
+  under `scripts/pad/`, 306 more than at c7649890 (1,771), against PRD-00's "about 1,350 to 1,450 with
+  its tests": 43% over the top of the row. Still to land at their rows: `selftest` 100, `exec/` 70 and
+  13 harness files (about 195), which alone make about 2,440, before the spend, fault, keep-going,
+  `pre`, ledger and queue steps.
+- **Replan decision on the size (PRD-00 size rule, more than 10% over).** The lines past the row serve
+  point 4 (the env filters, the approval key and member id read in the process from named env vars, the
+  conductor's scan for its own secrets, fetch credentials kept out of the box, the work folder cleanup),
+  point 5 (wait-upload on S9, fetch-run and the copy-in, `check --server`, `secrets` and `usage` on the
+  fetched copy) and point 3 (a limit on every step; a timed-out step never stops the rig). This is not
+  a raise of the row. Before the next slice adds a line to `pad`, `pad-run`, `check.py`, `table` or
+  `test_pad.py`, it applies B1 and B2, and reviewer B names which `test_pad.py` tests fall outside the
+  ledger B10 subjects (point 4, never-stop, PRD-12 acceptance) so they go; each later slice reports per
+  file against the rows above. Whether the row itself rises stays the open owner question logged at
+  12:53Z; no new one.
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-11 slice 2 (merge b9fa50f8)
+
+- A pad row run on an integration build between b9fa50f8 and PRD-11's hosts and launch merges is not
+  evidence: `decide` tunnels every host (zero decrypted requests), no hint or `local_model` note, no
+  home lock, no version, and `update_off` is not written. The 1a micro rungs wait for those two merges
+  plus S8 `watchdog::run` and PRD-10's `start`.
+
+### 2026-10-30, replan after PRD-14 slice 1 (merge 22fe5926)
+
+- **`gate fast` now runs the pad's tests:** `python3.11 -m unittest discover -s scripts/pad -p
+  'test_*.py'` (17 tests on 22fe5926), with python3.11 installed in a build box when no Python 3.11 or
+  later is found. The earlier "the gate does not run `test_pad.py`" notes are closed. Any pad test
+  that fails now blocks every lane's merge, so a pad slice runs `gate fast` before it asks for a merge.
+- `release.sh` and `packaging/README.md` now name `scripts/pad/table --release-check <commit>` as the
+  check after `gate full`; `tag` does not run it yet (PRD-14's next release slice). PRD-12's nit B3
+  still decides whether that call is right from any checkout.
