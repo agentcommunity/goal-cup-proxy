@@ -30,8 +30,9 @@ const BATCH: usize = 64 << 10;
 
 #[derive(clap::Args)]
 pub struct Args {
-    /// Part files are records; a folder holding an entry has its record decoded and its other
-    /// files read raw; other folders are walked; any other file, and `-` (stdin), is raw bytes.
+    /// Part files are records; a folder holding an entry has its record decoded and its files
+    /// other than `rec/` read raw; other folders are walked; any other file, and `-` (stdin), is
+    /// raw bytes.
     #[arg(required = true)]
     paths: Vec<PathBuf>,
     /// Known secret values, one per line.
@@ -78,7 +79,7 @@ struct Stream {
     data: Tail,
     deltas: Tail,
     line: Vec<u8>,
-    masks: HashMap<u64, (u64, u64)>,
+    masks: BTreeMap<u64, (u64, u64)>,
 }
 
 impl Rules {
@@ -176,7 +177,7 @@ fn parse(b: &[u8]) -> Value {
 }
 
 /// The open streams by boot and sid.
-type Open = HashMap<(u64, u64), Stream>;
+type Open = BTreeMap<(u64, u64), Stream>;
 
 /// The open stream `sid` of boot `b`, named `<entry>/<boot>.<sid>`.
 fn stream<'a>(open: &'a mut Open, name: &str, b: u64, sid: u64) -> &'a mut Stream {
@@ -384,33 +385,41 @@ impl Scan {
 
     /// Scans one path: whether a record was decoded in it, and whether it was read whole. `-` is
     /// stdin; a part file is a record; a folder holding an entry has its record decoded, then is
-    /// walked with its part files skipped; any other folder is walked; anything else is raw.
-    /// In a walk, a path that cannot be read, and a symlink to a folder, leave the input partial;
-    /// what is neither file nor folder is skipped. Only a top-level path is an error.
-    fn path(&mut self, r: &Rules, p: &Path, top: bool, in_entry: bool) -> io::Result<(bool, bool)> {
+    /// walked without its part files and `rec/`, the recorder's own state that is never
+    /// uploaded (index files, the run CA key); a `rec` folder given is its record only; any
+    /// other folder is walked; anything else is raw. In a walk, a path that cannot be read, and
+    /// a symlink to a folder, leave the input partial; what is neither file nor folder is
+    /// skipped. Only a top-level path is an error.
+    fn path(&mut self, r: &Rules, p: &Path, top: bool) -> io::Result<(bool, bool)> {
         let n = p.file_name().unwrap_or_default().to_string_lossy();
         let part = n == input::FETCHED || n.starts_with("rec-") && n.ends_with(".gcr.zst");
         let mut raw: Box<dyn Read> = if p.as_os_str() == "-" {
             Box::new(io::stdin().lock())
         } else if p.is_dir() {
-            let e = if in_entry { None } else { input::entry_at(p) };
+            let e = input::entry_at(p);
             let mut whole = e
                 .as_ref()
                 .is_none_or(|e| self.record(r, e).unwrap_or(false));
             let mut rec = e.is_some();
+            let skip = |q: &Path| {
+                e.as_ref().is_some_and(|e| {
+                    e.dir != p || q == e.dir.join("rec") || e.files.iter().any(|f| f.0 == q)
+                })
+            };
             let mut all = std::fs::read_dir(p)?.collect::<io::Result<Vec<_>>>()?;
+            all.retain(|d| !skip(&d.path()));
             all.sort_by_key(std::fs::DirEntry::file_name);
             for d in all {
                 let link = d.file_type().is_ok_and(|t| t.is_symlink()) && d.path().is_dir();
                 let one = match link {
                     true => Ok((false, false)),
-                    false => self.path(r, &d.path(), false, in_entry || e.is_some()),
+                    false => self.path(r, &d.path(), false),
                 };
                 let (got, w) = one.unwrap_or((false, false));
                 (rec, whole) = (rec || got, whole && w);
             }
             return Ok((rec, whole));
-        } else if part && in_entry || !top && !p.metadata()?.is_file() {
+        } else if !top && !p.metadata()?.is_file() {
             return Ok((false, true));
         } else if part {
             let dir = p.parent().unwrap_or(p).to_path_buf();
@@ -481,7 +490,7 @@ pub fn run(a: &Args) -> Result<ExitCode, String> {
     let (mut s, mut inputs) = (Scan::default(), vec![]);
     for p in &a.paths {
         let (rec, whole) = s
-            .path(&r, p, true, false)
+            .path(&r, p, true)
             .map_err(|e| format!("{}: {e}", p.display()))?;
         let how = if rec { "record" } else { "raw" };
         let read = if whole { "whole" } else { "partial" };

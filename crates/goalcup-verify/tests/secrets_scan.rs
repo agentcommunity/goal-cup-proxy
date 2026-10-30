@@ -135,10 +135,12 @@ fn secrets_known_value_found_in_a_raw_file_and_on_stdin() {
         assert_eq!((code, hits), (2, Some(1)));
         assert_eq!(v["inputs"][0]["as"], "raw");
     }
-    // A run folder: the entry's record, its loose files and the run's are all read; a symlink
-    // loop leaves the input partial and the walk goes on.
+    // A run folder: the entry's record, its loose files and the run's are all read, not the
+    // recorder's own `rec/` (the run CA key); a symlink loop leaves the input partial.
     let e = entry("run", false, &[b"clean".to_vec()], &[]);
     let run = e.parent().unwrap();
+    std::fs::write(e.join("rec/run-ca.key"), &k).unwrap();
+    assert_eq!(scan(&[&e.join("rec")], b"").0, 0);
     std::fs::write(e.join("goalcup.log"), &k).unwrap();
     std::fs::write(run.join("notes.txt"), &k).unwrap();
     std::os::unix::fs::symlink(".", run.join("self")).unwrap();
