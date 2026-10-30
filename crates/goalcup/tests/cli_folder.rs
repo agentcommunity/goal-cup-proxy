@@ -5,7 +5,7 @@
 
 mod common;
 
-use std::os::unix::fs::{PermissionsExt as _, symlink};
+use std::os::unix::fs::symlink;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
@@ -201,17 +201,11 @@ fn unclear_token_or_ignore_or_listing_is_refused() {
         assert!(check(&[token[0], (".env.local", env)]).is_err(), "{env:?}");
     }
 
-    // A folder that cannot be listed does not pass as empty.
+    // A folder that cannot be listed does not pass as empty. A file stands in for it: a build box
+    // user can list a folder of any mode, and listing a file always fails.
     let s = Setup::new(&token);
-    let mode =
-        |m| std::fs::set_permissions(&s.project, std::fs::Permissions::from_mode(m)).unwrap();
-    mode(0o311);
-    let unlisted = std::fs::read_dir(&s.project).is_err();
-    let got = folder::check(&s.project, &s.gc, true, None);
-    mode(0o755);
-    if unlisted {
-        assert!(got.is_err(), "{got:?}");
-    }
+    let got = folder::check(&s.project.join(".env.local"), &s.gc, false, None);
+    assert!(got.is_err(), "{got:?}");
 }
 
 /// A `GOALCUP_HOME` spelled with `..` is compared where it leads: here, an unrelated folder.
