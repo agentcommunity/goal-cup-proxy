@@ -1561,3 +1561,28 @@ taken; "rejected" says why. Fixes for other files are made by those files' owner
 - PRD-11's facts sheets are rewritten from the pad's rows in PRD-11's last slice, so each row's
   record and `row.json` are what that slice reads. No change to the row shape is asked.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-08 slice 3 (merge 7a995b6e)
+
+- **`secrets` output as merged** (PRD-08 note): always JSON on stdout, no `--json` flag. Keys:
+  `verifier`, `result`, `exit`, `known_values`, `inputs` (`[{path, as, read}]`), `known_hits`
+  (`[{form, in, sha12, n}]`), `shape_hits` and `glued_shape` (`[{kind, in, sha12, n}]`), `masks`
+  (`{kind: span count}`), `mask_bytes` (`{fail_closed: bytes}`) and `big_masks` (`[{kind, in,
+  len}]`). Exit 2 on a fail, 1 when an input was read only in part, 0 otherwise; 3 with no report when
+  a path given or the known file cannot be read. `check --known` adds a `secrets` check per entry,
+  which `check.py` already reads for C3.
+- **Changes for the pad's next touch** (both cuts or one-word changes):
+  - `check.py` `SECRET_HITS` adds `"big_masks"`: a non-`fail_closed` MASK span over 16 KiB makes the
+    scan `fail` by itself, and `hits()` would read it as 0. `"hits"` is not a key PRD-08 writes and
+    can go. `glued_shape` is a `warn` and stays out. The "Not fixed yet" comment above it is now
+    fixed; the `exits.json` fallback stays for exit 3.
+  - `pad-run`'s verify step drops `raw` (`goalcup.log`, `upload.json`) from the `secrets` argv:
+    `secrets <entry>` reads every file of the entry except `rec/` itself, so naming them again
+    doubles their `n`. The copied `status.json` is another path and stays.
+  - Section 8's command list reads `goalcup-verify secrets --known <known> <fetched entry>
+    status.json` for the same reason.
+- **C3 is no longer held by PRD-08.** `verify/secrets.json` now carries `masks`, so `masks()` returns
+  a map. Since the local entry and the fetched copy go into one report, their span counts are summed;
+  C3 tests only for a non-zero count per planted kind, so the sum changes nothing. C3 still needs
+  PRD-05's masker writing MASK records and a `goalcup` build on integration before it can PASS.
+- No locked ledger item is touched and no owner question comes from this slice.

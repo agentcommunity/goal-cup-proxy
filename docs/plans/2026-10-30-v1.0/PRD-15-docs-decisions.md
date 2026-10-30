@@ -1239,3 +1239,14 @@ against `folder.rs` and fixes the guide, without quoting message wording the cod
   from `connectors/tiers.toml` (PRD-12). The five per-harness sheets stay in the old shape until
   PRD-11's last slice; a PRD-15 page that quotes a sheet quotes nothing that slice will rewrite.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-08 slice 3 (merge 7a995b6e)
+
+- **For `docs/RECORD-FORMAT.md`** (PRD-08 note): `--known` is now read (its line at :335 says it is
+  not). With it, `check` adds a `secrets` check (`inv` null) to every entry, result `pass`, `warn` or
+  `fail`, with facts `known_hits`, `shape_hits`, `glued_shape`, `masks`, `mask_bytes` and
+  `big_masks`. The `secrets` subcommand writes one JSON report on stdout (keys and exit rules in the
+  PRD-08 note) and has no `--json` flag. Document both in PRD-15's next slice, by names, not by
+  copying the PRD text. The participant guide's line on what can still be recorded keeps "the scan
+  flags a key glued to a word" (`glued_shape`, a `warn`).
+- No locked ledger item is touched and no owner question comes from this slice.
