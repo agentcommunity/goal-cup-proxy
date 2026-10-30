@@ -376,8 +376,8 @@ mod tests {
             "x-client-secret",
             "x-db-password",
             "x-acme-session",
-            "x-codex-turn-state",
-            "x-codex-installation-id",
+            "x-tool-turn-state",
+            "x-tool-installation-id",
             "x-ratelimit-remaining-tokens",
         ];
         let clear = [
@@ -393,7 +393,7 @@ mod tests {
         let out = run(
             meta,
             &["x-acme-"],
-            &["x-codex-turn-state", "x-codex-installation-id"],
+            &["x-tool-turn-state", "x-tool-installation-id"],
             &identity,
         );
         for name in starred {
