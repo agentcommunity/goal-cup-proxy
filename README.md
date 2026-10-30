@@ -16,8 +16,7 @@ Agents working in this repository: read [AGENTS.md](AGENTS.md) first.
 ## Quick start for participants
 
 The full walk-through, with every message you will see, is the
-[participant's guide](docs/PARTICIPANT-GUIDE.md). The contract is [RULES](docs/RULES.md). You can
-also hand the setup to your own agent with the [goal-cup-setup skill](skills/goal-cup-setup/SKILL.md).
+[participant's guide](docs/PARTICIPANT-GUIDE.md). The contract is [RULES](docs/RULES.md).
 
 1. **Install** the latest release (macOS or Linux; on Windows, inside WSL2):
 
@@ -177,7 +176,7 @@ Worker). The details and the glossary (run, part, segment, chain file, seal, rec
 |---|---|
 | macOS, Apple silicon | Measured. Use the arm64 build of `goalcup` and of the harness. |
 | macOS, Intel | Builds. No run measured. |
-| Linux, arm64 | Docker gates and logged-in Codex and Hermes staging practices passed. Longer runs pending ([measurements](TODO.md#wp0-measure)). |
+| Linux, arm64 | Docker gates and logged-in Codex and Hermes staging practices passed. Longer runs pending ([measurements](docs/research/results/2026-10-22-local-test-day.md)). |
 | Linux, x86_64 | Reservation tests and a no-login harness smoke pass on a hosted runner. Full suites not measured. |
 | Windows | Use WSL2 (below). Real-machine validation is pending. Native Windows is planned. |
 
@@ -205,9 +204,8 @@ facts sheet. No `.rs` file and no test of your own. Start with the
 2. **Fill the facts sheet**: copy `skills/adding-a-capture-harness/templates/harness-facts.md` to
    `docs/harnesses/<id>.md`.
 3. **Copy the template**: `skills/adding-a-capture-harness/templates/connector-harness.toml` to
-   `connectors/<id>/harness.toml`. Fill the one-screen field table in
-   [What a chat connector writes](docs/CONNECTOR-SCHEMA.md#what-a-chat-connector-writes). The
-   closest example is [connectors/codex-cli](connectors/codex-cli/harness.toml).
+   `connectors/<id>/harness.toml`. (This step is 0.7 text, being rewritten; the 1.0 keys are in
+   [CONNECTOR-SCHEMA](docs/CONNECTOR-SCHEMA.md).) The closest example is [connectors/codex-cli](connectors/codex-cli/harness.toml).
 4. **Pin and regenerate**: `sh scripts/pin-manifests.sh`, then the two golden commands in
    [Test a connector](docs/HARNESS-ONBOARDING.md#test-a-connector).
 5. **Check**: `sh scripts/check-connector.sh <id>`, then `sh scripts/gate.sh fast`.
@@ -303,7 +301,7 @@ Every doc, grouped by who reads it: [docs/README.md](docs/README.md). The key on
 | A participant | [PARTICIPANT-GUIDE](docs/PARTICIPANT-GUIDE.md), [HARNESS-SETUP](docs/HARNESS-SETUP.md), [RULES](docs/RULES.md), [SECURITY](SECURITY.md) |
 | A harness builder | [skill](skills/adding-a-capture-harness/SKILL.md), [HARNESS-ONBOARDING](docs/HARNESS-ONBOARDING.md), [CONNECTOR-SCHEMA](docs/CONNECTOR-SCHEMA.md), [facts sheets](docs/harnesses/README.md) |
 | A developer | [AGENTS](AGENTS.md), [ARCHITECTURE](docs/ARCHITECTURE.md), [DECISIONS](docs/DECISIONS.md), [CONTRACTS](docs/CONTRACTS.md), [TODO](TODO.md) |
-| An organizer | [OPERATING](docs/OPERATING.md), [UPLOAD-API](docs/UPLOAD-API.md), [SERVER-DESIGN](docs/SERVER-DESIGN.md), [server/worker](server/worker/README.md) |
+| An organizer | [OPERATING](docs/OPERATING.md), [UPLOAD-API](docs/UPLOAD-API.md), [server/worker](server/worker/README.md) |
 | A researcher | [RESEARCH-TARGET](docs/RESEARCH-TARGET.md), [CHEAT-CHECKLIST](docs/CHEAT-CHECKLIST.md), [coverage matrix](docs/research/coverage-matrix.md) |
 
 ## Support, security and license

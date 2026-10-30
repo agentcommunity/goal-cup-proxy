@@ -812,3 +812,83 @@ PRD-01, PRD-05, PRD-08, PRD-12, PRD-16 and the old code.
 | G3-09p | Applied. `codex.rs:163-166` (checked in the code) |
 | G3-09q | Applied. `usage::Calls::new()`; the sink reads the `start` EVENT from the pushed records; no `Start` type in F1 |
 | B10 sweep (30 Oct) | Applied. One test file, `usage_run1.rs` (about 200 lines), as PRD-14 section 3 says; it gains the point 4 cases (no body text in output, VR2 panic). Shapes, joins, SQLite repair and output are proved by PRD-12 C5 on real runs and the watcher's count; `usage_shapes.rs`, `usage_join.rs`, `usage_sqlite.rs` and `usage_out.rs` are cut. Builder note 1 logs the fixture numbers once instead of pinning them |
+
+## Amendments
+
+### 2026-10-30, replan after PRD-07 slice 3 (merge 323b1a0f)
+
+- **`delete-test-runs.sh` now cleans the usage buckets** against S7's final shape, before the job
+  exists. It empties `usage/test/` in `goalcup-usage` and `usage/test-staging/` in
+  `goalcup-usage-staging`, and with `--older-than` keeps only keys of the form
+  `usage/{event}/{run}/...` whose `{run}` is a deleted test run. So the job must:
+  - write every object under `usage/{event}/{run}/` exactly as S7 says (`{entry}.json`,
+    `{entry}.calls.jsonl`, `run.json`), with `{event}` the run's own event id (`test` or
+    `test-staging` for organizer test runs, the Worker's `TEST_EVENT_ID` values) and `{run}` the run id
+    as the database holds it;
+  - write a production run only to `goalcup-usage` and a staging run only to `goalcup-usage-staging`.
+    The script looks for `usage/test/` in the first and `usage/test-staging/` in the second only, so a
+    production test run's usage in the staging bucket would never be cleaned. With
+    `GOALCUP_USAGE_BUCKET` defaulting to the staging bucket in the build, the job reads staging runs
+    only.
+  A slice that changes the S7 layout posts a seam line and asks PRD-07 to change the script in the same
+  merge.
+- **A usage bucket the cleanup token cannot reach is skipped**, not an error (`403`, or `404` for a
+  missing bucket). The owner's token for the script needs read and write on each usage bucket that
+  exists; PRD-15 writes that into OPERATING with the usage job section.
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-08 slice 1 (merge d10feef7)
+
+- **The placeholder is on integration:** `crates/goalcup-verify/src/usage/mod.rs` (12 lines),
+  `pub fn run(args: Vec<std::ffi::OsString>) -> std::process::ExitCode`, `args` being those after the
+  word `usage`; `lib.rs` has `pub mod usage`. PRD-09's first merge replaces the file whole (not a
+  text merge) and keeps that signature. `main.rs` dispatches `usage` through clap with its help flag
+  off, so `usage --help` reaches PRD-09's code.
+- **Dependencies are declared once** in PRD-08's `crates/goalcup-verify/Cargo.toml`: `goalcup-format`,
+  `zstd`, `serde`, `serde_json`, `sha2`, `clap`, `regex`, `base64` and `rusqlite` 0.41 with
+  `bundled`. PRD-09 adds none without a seam line to PRD-08, which owns the file.
+- PRD-08's next slice builds `legs.rs` and `history.rs` on U1 (stub first, judge 12:19Z); U1 stays as
+  PRD-09 publishes it.
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-09 slice 1 (merge f5a529c8)
+
+- **U1 as merged, the shape later slices keep.** `crates/goalcup-verify/src/usage/mod.rs` replaces
+  PRD-08's placeholder; `usage::run(args: Vec<OsString>) -> ExitCode` keeps its signature (the stub
+  says the reader is not built and exits 3). `Calls::new()` takes no argument: the sink reads the
+  `start` EVENT from the pushed records. `CallRow` has the section 6 fields plus `host`,
+  `host_kind`, `shape`, `via`, `detail`, `effort`, `extra` (a map of unknown integer usage members)
+  and `tokens: Tokens` (each count `Option`, never 0 for "not said"); `usage_from` is
+  `Option<Leg>`. `CallTable.children` is `Option<map>`: `None` means parentage was not read, and
+  PRD-08's `subagents_present` skips on it (it no longer follows from `Reason::NoReader`).
+  `CallRow::new(leg, entry, boot, kind)`, `Thread::new(id)` and `CallTable::default()` are the only
+  ways to build these; callers set fields or use struct update from them, never a full struct
+  literal, so a field added later breaks no caller. Wall times are nanoseconds since the Unix epoch,
+  as LINK `wall_ns`.
+- **Nit B10 is taken in the core slice (replan decision).** `Thread` and `CallTable` each hold one
+  fact in two fields (`readable: bool` and `reason: Option<Reason>`, "None exactly when readable is
+  true"). The core slice drops both `readable` fields, keeps `reason` (`None` means readable) and
+  adds `pub fn readable(&self) -> bool { self.reason.is_none() }` to each. S7's JSON still writes
+  both `readable` and `reason` from that one field, so PRD-12 and the job see no change. Nothing on
+  integration reads U1 yet, so this is a few lines smaller at no cost now. The slice posts it as a
+  seam line to PRD-08. If PRD-08's `legs.rs` or `history.rs` reaches integration first and reads the
+  field, the fields stay as merged and B10 is closed as declined: no cross-lane churn for a nit.
+  `Thread::new` stays written by hand either way (a derived default would mean readable).
+- **Fixtures: section 9's list is the whole copy.** `tests/usage_fixtures/` holds the Codex
+  WebSocket run, the Claude Code wire excerpt and the four `m2-native` excerpts, each folder with a
+  `provenance.json`, sha256 checked against the old crate. The Claude Code wire excerpt was turned
+  into the Codex fixture's line format and keeps no request-id header (the source had none); the
+  `m2-native` provenance comes from the old `m2_native_observations.rs` doc comment (the old folder
+  had no provenance file). The `connectors` fixtures named in the "Today" fate table and in PRD-13's
+  move table are not copied: they are the old decoders' expected-count snapshots (ledger B10, no
+  golden snapshots of internal shapes) and only point at the `m2-native` files already copied.
+  PRD-13 deletes them with the old crate.
+- **Size, `wc -l` at f5a529c8:** `usage/mod.rs` 304 (89 of them doc comments) against its own
+  estimate of 250, with `run`, the `Calls` sink, the join, totals and output still to come. The extra
+  lines are the final U1 types the estimate did not size (the seven `CallRow` fields above, `Tokens`,
+  `HostKind`, `Shape`, `Via`, `Join`, the constructors). The row (about 1,470 src) stands: the core
+  slice reports each file against section 2's estimates, keeps the type docs to one line where one
+  line says it, and names the point any line past 1,617 (110% of the row) serves in a decision line.
+  Tests: no `usage_run1.rs` yet (the 200-line test row is untouched; the stub's checks ride on
+  PRD-08's tests). Fixtures are 555 lines of data, outside both rows.
+- No locked ledger item is touched and no owner question comes from this slice.

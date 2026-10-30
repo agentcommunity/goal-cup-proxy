@@ -1,0 +1,24 @@
+{
+ "purpose": "PRD-09 usage reader fixture: a real Claude Code 2.1.283 headless run, Anthropic Messages over HTTP with SSE replies carrying token usage",
+ "files": {
+  "claude-code-2.1.283-e01.jsonl": {
+   "sha256": "cabb3f1eae0c372fce531bfc4c60afc99b0a8d7bd950f621bdc19d96593f895b",
+   "bytes": 18433,
+   "lines": 4,
+   "copied_from": {
+    "path": "crates/goalcup-verifier/tests/fixtures/m2-anthropic/claude-code-2.1.283-e01.jsonl",
+    "commit": "15a6963b57f1cb341b4efcaf10aa92d6dc633c31",
+    "sha256": "4fbfb96a7d3b8750e1c033cbe14d392a993cadb48660ce9fa243950214035b5f",
+    "bytes": 26062,
+    "provenance_sha256": "5473fdb7f44cd31563c0238424a6749e987b9ade144ac65f965ce5b9ffb43488"
+   },
+   "conversion": "In a build box, each stream's v5 segments were joined in source order into one line (keys stream, source, exchange, method or status, content_type, label, first and last wall, text). That is a subset of the m2-openai line keys: no message_index, retained_segments or mono_ns. Masks kept as recorded; ids, offsets, audits and end records (all complete) dropped; the source had no request-id header.",
+   "checked_in_box": "every line parses as JSON; both replies hold message_start and message_delta usage. Exchange 1: input 10, cache creation 7637, cache read 13689, output 356, output_tokens_details.thinking_tokens 182. Exchange 2: input 8, cache creation 511, cache read 21326, output 61, output_tokens_details.thinking_tokens 55. The thinking count is the reasoning token number the reader should take where given."
+  }
+ },
+ "secret_scan": {
+  "how": "the pattern scan named in ../m2-openai/provenance.json, in a build box on the committed branch",
+  "result": {"claude-code-2.1.283-e01.jsonl": 0},
+  "follow_up": "rerun goalcup-verify secrets (PRD-08) over this folder when it lands"
+ }
+}
