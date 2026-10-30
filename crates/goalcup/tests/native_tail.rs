@@ -423,7 +423,10 @@ fn torn_then_last(c: &Calls, size: u64, gap: GapReason, end: EndReason) {
     let e = ends(c);
     assert_eq!(
         e,
-        [(o[0].0, EndReason::SourceChanged, 10, None), (o[1].0, end, size, None)]
+        [
+            (o[0].0, EndReason::SourceChanged, 10, None),
+            (o[1].0, end, size, None)
+        ]
     );
 }
 
