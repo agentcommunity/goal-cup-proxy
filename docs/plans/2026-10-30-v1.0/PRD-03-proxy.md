@@ -848,3 +848,22 @@ Revision 3 against OWNER-DECISIONS.md (the ledger wins). Fix ids are from the al
   a filter by path, method or Host on a decrypted host fails a lessons test, which blocks PRD-13's cut
   (PRD-17 gate check 2). `proxy::serve` and `common::upstream` keep their PRD-00 "Seams" shapes so
   those tests can be written against them.
+
+### 2026-10-30, replan after PRD-10 slice 1 (merge d55030ee)
+
+- **S11 is on integration** (`goalcup::cli::log::{line, Fact, Host}`). A host enters the log only as
+  `Fact::Host(Host::checked(s)?)` where `s` is the connection authority the proxy already parsed or a
+  host from the host list; a request path, query, header value or other traffic text is never a
+  `Fact::Host` or `Fact::Path`. When `Host::checked` returns `None`, log a fixed `Fact::Word` in its
+  place, never the text. Accept and socket errors (EMFILE included) go in as `Fact::Io(kind)`, counts as
+  `Fact::N`. After S3 lands, PRD-10 adds `From<connector::hosts::Host>` for hosts from the list.
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-11 slice 2 (merge b9fa50f8)
+
+- **S3 is on integration.** `HostList::decide(&self, &str) -> Decision` (`Listed { source, kind,
+  pinned }`, `Never`, `NotListed`) and `HostList::ca_subtrees() -> Vec<String>` have their final
+  signatures, so slice 2 (serve, hosts, tunnel, pump, http1) builds against them now. Both are stubs
+  until PRD-11's hosts slice: every name is `NotListed` and there are no subtrees. A proxy test that
+  needs a `Listed` or `Never` answer waits for that merge; nothing in `src/proxy/` copies the
+  matching meanwhile.

@@ -1,0 +1,32 @@
+# The shared secret shapes (seam S12), one line per literal, in priority order.
+#
+# Format: kind, a tab, guard, a tab, the regex. guard is 1 when the left guard applies (a match
+# right after a letter, digit or _ is dropped unless that byte ends an escape; PRD-05 section 4),
+# else 0. Lines starting with # are comments; blank lines are skipped. No regex holds a tab.
+#
+# The span is group 1 when the regex has a capture group, else the whole match.
+#
+# Read with include_str! by src/mask/rules.rs and by crates/goalcup-verify, which ignores the
+# guard column. The line order is the rule order: the JSON literal (line 10, counting data
+# lines from 0) and the shell literal (line 11) must not move. Add a literal only at the end.
+
+anthropic_key	1	sk-ant-[A-Za-z0-9_\-]{20,}
+openai_key	1	sk-(?:proj-)?[A-Za-z0-9_\-]{20,}
+masked_key	0	(?i)sk-[A-Za-z0-9-]{1,8}(?:\.{3}|…|\\u2026|\*{3,64})[A-Za-z0-9]{3,4}
+github_token	1	github_pat_[A-Za-z0-9_]{22,}
+github_token	1	gh[pousr]_[A-Za-z0-9]{20,}
+aws_access_key	1	AKIA[0-9A-Z]{16}
+bearer	0	(?i)bearer\s+[A-Za-z0-9._\-]{16,}
+jwt	1	eyJ[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}
+private_key	0	-----BEGIN [A-Z ]*PRIVATE KEY-----(?:(?-u:[\x00-\xFF]){0,15872}?-----END [A-Z ]*PRIVATE KEY-----|(?-u:[\x00-\xFF]){0,15872})
+slack_token	1	xox[baprs]-[A-Za-z0-9\-]{10,}
+generic_secret_assignment	0	(?i)\\{0,7}"[A-Za-z0-9_\-]{0,1000}(?:api[_-]?key|secret|token|password)(?:[_\-][A-Za-z0-9_\-]{0,999})?\\{0,7}"\s*:\s*\\{0,7}"((?:[^"\\]|\\{1,7}[^"\\]){16,})\\{0,7}"
+generic_secret_assignment	0	(?i)(?:api[_-]?key|secret|token|password)(?:\s*[=:]\s*(?:\\{0,7}['"])?[A-Za-z0-9_\-]{16,}|=(?:%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){15,}|[A-Za-z0-9_.~+/=\-]{1}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){14,}|[A-Za-z0-9_.~+/=\-]{2}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){13,}|[A-Za-z0-9_.~+/=\-]{3}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){12,}|[A-Za-z0-9_.~+/=\-]{4}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){11,}|[A-Za-z0-9_.~+/=\-]{5}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){10,}|[A-Za-z0-9_.~+/=\-]{6}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){9,}|[A-Za-z0-9_.~+/=\-]{7}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){8,}|[A-Za-z0-9_.~+/=\-]{8}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){7,}|[A-Za-z0-9_.~+/=\-]{9}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){6,}|[A-Za-z0-9_.~+/=\-]{10}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){5,}|[A-Za-z0-9_.~+/=\-]{11}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){4,}|[A-Za-z0-9_.~+/=\-]{12}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){3,}|[A-Za-z0-9_.~+/=\-]{13}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){2,}|[A-Za-z0-9_.~+/=\-]{14}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){1,}|[A-Za-z0-9_.~+/=\-]{15,}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2})*|[0-9]\.[A-Za-z0-9_.~+/=\-]{14,}))
+url_password	0	(?:\\{0,3}/){2}[^\s/?#@:"'<>\\]{0,256}:([^\s/?#@"'<>\\]{1,1024})@
+google_key	1	AIza[A-Za-z0-9_\-]{30,}
+huggingface_token	1	hf_[A-Za-z0-9]{20,}
+npm_token	1	npm_[A-Za-z0-9]{20,}
+xai_key	1	xai-[A-Za-z0-9]{20,}
+stripe_key	1	[sr]k_live_[A-Za-z0-9]{16,}
+gitlab_token	1	glpat-[A-Za-z0-9_\-]{20,}
+digitalocean_token	1	dop_v1_[a-f0-9]{32,}

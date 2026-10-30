@@ -817,3 +817,36 @@ Slice 1 merged builder steps 1, 2 and 4. What the merge changed for the slices s
   3,440 (3.4% over); tests 5,258 (`test/*.ts` plus helpers) against about 4,950 (6.2% over).
   `delete-test-runs.sh` (122) is counted in neither row.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-07 slice 4 (merge c4ada44a)
+
+- **The three open nits are closed** (slice 4, the last PRD-07 touch in this build). RA-N2: the README
+  "Clean up test runs" item and the skip line now say a skipped usage bucket's test objects stay until
+  a run without `--older-than` with a token that reaches it. B2-N1: the dead `rm -f "$tmp/page.json"`
+  is gone. B2-N2: the usage skip rule is plain `403` or `404`; the R2 error-code join, its per-error
+  `isinstance` guard and the `code 10006` case arm are gone. Proof: 12 stubbed cases in a build box
+  (lane log 12:39Z), `npm test` 253 pass in a box (12:41Z), gate fast PASS in 97s. `dash -n` and
+  `shellcheck` were skipped (not in the box); `check-links.py` was skipped (box Python 3.9).
+- **Left open, optional, no further PRD-07 slice for them** (review A-N1, B-N1, B-N2):
+  - The script header (lines 14-15), which `--help` prints, still says only that a skipped usage
+    bucket is "skipped with one line"; it does not carry the RA-N2 caveat. The skip line and the README
+    carry it, so nothing is wrong at the moment it matters. Whoever next edits the script adds "its
+    test objects stay until a run without --older-than" there.
+  - The Python page parse (lines 43-49) could be one `try` that sets one yes/no flag, about 2 lines
+    shorter, same behavior. Taste only.
+- **Size on integration** (`wc -l` at c4ada44a): src 3,557 against about 3,440 (3.4% over), tests
+  5,258 (`test/*.ts` plus helpers) against about 4,950 (6.2% over), both unchanged.
+  `delete-test-runs.sh` 121 (was 122), counted in neither row.
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-12 slice 3 (merge 9e259b4d)
+
+- **The pad calls `scripts/fetch-run.sh`** as `sh scripts/fetch-run.sh --bucket goalcup-traces-staging
+  <entry> <outdir>`, with `DATABASE_URL` and the read-only `CLOUDFLARE_*` in its environment only,
+  never in argv.
+- **Keep the work folder's name.** The script makes `mktemp -d "$out/.fetch-run.XXXXXX"` and writes
+  `pg_service.conf` (the database connection) there. When the pad's step limit kills `sh`, the EXIT
+  trap does not run, so the pad removes `<outdir>/.fetch-run.*` itself. A change to that name or place
+  is a seam line in the same commit, so PRD-12 follows it; otherwise a timed-out fetch leaves a
+  credential file on the conductor (point 4).
+- No locked ledger item is touched and no owner question comes from this slice.

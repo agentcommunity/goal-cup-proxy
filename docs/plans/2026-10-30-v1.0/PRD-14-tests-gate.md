@@ -761,3 +761,85 @@ PRDs they touch and the code. Where two fixes disagree, the ledger and the later
   `python3.11` (`sudo dnf install -y -q python3.11`) when it is missing. The pad lane ran it green in
   build boxes (12 tests at 62bd0ed3). `check.py` and `table` stay 3.9-clean.
 - `gate fast` passed on the merge: 76 s at c7649890.
+
+### 2026-10-30, replan after PRD-05 phase 0 slice (merge 82484521)
+
+- **The release smoke cannot see `test-hooks` yet** (PRD-05 review A3). At 82484521 no
+  `GOALCUP_TEST_` text is in `crates/goalcup/src`; the only `test-hooks` item is
+  `Masker::passthrough_for_tests()`, which carries no such text. A release build with the feature on
+  would pass the grep today. It is caught once PRD-02's first `GOALCUP_TEST_` read is merged, since
+  every build with the feature then carries that text. Nothing outside tests calls the passthrough.
+  The release smoke checks this before trusting a clean grep: at least one `GOALCUP_TEST_` string in
+  a `--features test-hooks` build. List `Masker::passthrough_for_tests` beside
+  `Recorder::for_tests` as a test-only item.
+- **Mask tests so far:** 367 lines (179 inline in `src/mask/mod.rs`, 188 in `tests/mask_rules.rs`)
+  of PRD-05's 2,000. PRD-05's core slice cuts about 105 of them (PRD-05 note).
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-12 slice 3 (merge 9e259b4d)
+
+- **`test_pad.py` is still not in `gate fast`.** At 9e259b4d `scripts/gate.sh` runs only
+  `scripts/test_install.py`; `gate fast: PASS in 82s` there did not run the 17 pad tests. The earlier
+  note stands: add `discover -s scripts/pad` under python3.11.
+- **`table --release-check <commit>` reads `HEAD`'s rows today** (PRD-12 nit B3). Until PRD-12's next
+  slice reads `<sha>:pad-rows.jsonl`, `release.sh tag` runs it from a checkout at `<commit>`, or it
+  judges another commit's rows. No change to the release steps once B3 lands.
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-11 slice 2 (merge b9fa50f8)
+
+- **Test budget:** the replan decision sets PRD-11's connector tests ceiling to 620 (row 400; PRD-11
+  note), with `connector_hosts.rs` at 90 because the N1 to N6 host cases live only in PRD-17's
+  `lessons_hosts.rs`.
+- `rule_code.rs`: `src/connector/builtin.rs` stays its one allowed file. It remains the hand-written
+  list (no `build.rs`); if PRD-11's third slice uses a macro with `concat!`, the ids are still string
+  literals in that file only.
+
+### 2026-10-30, replan after PRD-14 slice 1 (merge 22fe5926)
+
+- **Done in slice 1** (builder notes steps 2, 4 and 5): `tests/common/` with `mod`, `ports`, `fds`,
+  `home`, `pki` and `records` real; `upstream.rs` and `worker.rs` typed with `start()` still `todo!`;
+  `recorder.rs` with `data_of` and `gaps` only. `rule_code.rs` rule 1. `ci.yml` runs `gate fast`;
+  `linux-x86_64.yml`, `linux-check.sh` and `test_linux_check.py` are deleted. `gate fast` now runs
+  `test_install.py` and `test_fetch_run.py` (44 tests) and `discover -s scripts/pad` on python3.11
+  (17 tests), so the earlier notes on `test_fetch_run.py` and `test_pad.py` are closed.
+  `gate fast: PASS in 87s` on 22fe5926.
+- **Rule 1 is wider than section 6 says** (review A2): it also bans each flat connector's `program`
+  (`claude`, `codex`, `hermes`, `kilo` today), read at test time, matched case-insensitively as whole
+  tokens (`_`, `-`, `.` and spaces are boundaries). Every flat `connectors/*.toml` other than
+  `model-hosts.toml` and `tiers.toml` must hold a line that starts exactly `program = "`, or the test
+  panics (PRD-11 note). A literal that hits a short program name used as an ordinary word (for example
+  `amp` in `&amp;`) goes into `ALLOWED` with its file, text and reason.
+- **`tests/common` is compiled through `rule_code.rs`** (`#[allow(unused)] mod common;`, review A1), so
+  every merge compiles and lints it. Every other test binary declares it the same way, or
+  `clippy -D warnings` fails on the helpers that binary does not call (PRD-16 note).
+- **Slice 2, by H+3:** `upstream.rs` first (TLS with a chosen ALPN, HTTP/1.1 with chunked, SSE and
+  codings, WebSocket with permessage-deflate), because PRD-17's `lessons_decode` and `lessons_http1`
+  wait on it; then `worker.rs`; then `recorder::real` once PRD-02's `Recorder::real_for_tests` is on
+  integration. HTTP/2 in slice 3, as planned.
+- **Review nit B8 (reviewer B), for the slice that makes `tag` run the release check (section 9):**
+  `scripts/release.sh` writes the same next-step sentence three times (lines 74, 106 and 111). Set it
+  once, `next="run sh scripts/gate.sh full, then scripts/pad/table --release-check <commit>, on that
+  origin/main commit before sh scripts/release.sh tag $new"`, and use `"$next"` in the echo, the pull
+  request body and the final echo; that slice then changes one line, and the script gets shorter.
+  Review nits A4, A5, B2 and B5 were declined as nits by the fixer; reviewer A found the declines
+  sound.
+- **CI on integration never finishes yet, so G4 is not measured.** `ci.yml` has
+  `group: ci-${{ github.ref }}` with `cancel-in-progress: true`, and each merge is followed within
+  about two minutes by a docs-only replan push. Run 41060500797 (22fe5926) was cancelled at 1m35s by
+  the push of c6f5deee at 13:07Z, and that run by 8fa991c9's at 13:08Z. Section 9's "an independent
+  record of every merge" does not hold at this push rate, and PRD-16's phase 3 exit needs "CI green".
+  Next CI edit (one line, this lane): `cancel-in-progress: ${{ github.event_name == 'pull_request' }}`,
+  so every push to integration and main runs to the end and only superseded pull request runs are
+  cancelled. Until it lands, a watcher reads G4 only from a run that shows `completed success`, never
+  from a cancelled one.
+- **Size against section 3** (`wc -l` at 22fe5926): `tests/common/` 740 of 1,480 (`mod` 60, `ports`
+  33, `fds` 27, `home` 171, `pki` 115, `upstream` 126, `worker` 107, `recorder` 29, `records` 72);
+  `rule_code.rs` 213 of 80; `e2e_run.rs` not started (140). In all 953 of the PRD-14 test row of 1,700.
+  `rule_code.rs` is 166% over its line: the lexer for raw, byte and char literals and nested comments
+  is the guard itself (the char-literal desync reviewer B found hid a host literal), so the extra lines
+  serve point 7. The PRD-14 row is not raised: slice 2 keeps `upstream.rs` and `worker.rs` at or under
+  700 and 250, and the whole of `tests/common/`, `rule_code.rs` and `e2e_run.rs` within 1,870 (the
+  row plus 10%); `home.rs` (171 of 120) is cut first if it is not. Scripts: `gate.sh` 121 (section 8
+  says about 75), `ci.yml` 57 (about 50), `release.sh` 111; 384 lines deleted.
+- No locked ledger item is touched and no owner question comes from this slice.
