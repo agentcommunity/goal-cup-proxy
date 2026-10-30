@@ -323,9 +323,10 @@ class CaseRows(unittest.TestCase):
 
     WIRE = {"k": "call", "host": check.GATEWAY, "host_kind": "gateway"}
 
-    def row(self, case, calls=(), variant=(), code=0, gaps=None, **more):
+    def row(self, case, calls=(), variant=(), code=0, gaps=None, results=None, **more):
         entry = {"entry": "e1", "counts": dict({"model_requests": 5, "gaps": gaps or {}, "hosts": {check.GATEWAY: 5, "api.openai.com": 5}}, **more),
-                 "checks": [{"id": i, "result": "pass"} for i in ("gap_has_end", "history_complete", "listed_hosts_decrypted")]}
+                 "checks": [{"id": i, "result": (results or {}).get(i, "pass")}
+                            for i in ("gap_has_end", "history_complete", "listed_hosts_decrypted", "wire_keeps_up")]}
         return evaluate({"meta.json": {"connector": "codex-cli", "case": case, "variant": list(variant), "server": "off",
                                        "keep": True, "commits_since_start": 1, "entry": "e1", "model_host": "api.openai.com"},
                          "verify/check-local.json": {"exit": code, "entries": [entry]},
@@ -350,7 +351,8 @@ class CaseRows(unittest.TestCase):
     def test_dodger_names_only_the_pinned_loss(self):  # section 2: its exit 1 comes from the pinned tunnels alone
         pinned = {"api.openai.com": {"conns": 2, "listed": "pinned"}}
         def c1(gaps, tunnels=pinned):
-            return self.row("dodger", code=1, gaps=gaps, tunnel_hosts=tunnels, hosts={check.GATEWAY: 5})["checks"]["C1"]
+            return self.row("dodger", code=1, gaps=gaps, tunnel_hosts=tunnels, hosts={check.GATEWAY: 5},
+                            results=dict(listed_hosts_decrypted="named", wire_keeps_up="skip", history_complete="skip"))["checks"]["C1"]
         self.assertEqual(c1({"pinned": 2}), "PASS")
         self.assertEqual(c1({"pinned": 2, "dropped": 1, "tls_refused": 1}), "FAIL")
         self.assertEqual(c1({"pinned": 2}, dict(pinned, **{"chatgpt.com": {"conns": 1, "listed": "tls_refused"}})), "FAIL")
