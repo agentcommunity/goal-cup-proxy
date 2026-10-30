@@ -26,10 +26,13 @@ fn sealed() -> Status {
     )
 }
 
+/// A macOS-like log path with a space: every printed path is quoted (section 12).
+const LOG: &str = "/home/x/Application Support/goalcup.log";
+
 /// The end screen of `sealed()` with `p` laid over it.
 fn show(p: Value) -> String {
     let st = patch(&sealed(), p);
-    screen(&st, None, RUN, Path::new("/home/x/goalcup.log"), NOW).expect("sealed")
+    screen(&st, None, RUN, Path::new(LOG), NOW).expect("sealed")
 }
 
 /// Rule 1: the "nothing was lost" claim with no loss, and never with any one, whose line takes its
@@ -99,7 +102,7 @@ fn counts_and_hosts_are_the_fixtures() {
 }
 
 /// The after-seal line only when bytes came after the seal, the cut-file line with cut files, the
-/// recovered line only for a recovered seal.
+/// recovered line only for a recovered seal; the screen ends with the quoted log path.
 #[test]
 fn rule_lines_follow_their_facts() {
     let after = text::after_seal("your agent", 2_000_000, &["api.example.com".into()]);
@@ -116,6 +119,8 @@ fn rule_lines_follow_their_facts() {
     for (p, line, shown) in cases {
         assert_eq!(show(p.clone()).contains(line.as_str()), shown, "{p}");
     }
+    let out = show(json!({}));
+    assert!(out.trim_end().ends_with(&format!("\"{LOG}\"")), "{out}");
 }
 
 #[test]

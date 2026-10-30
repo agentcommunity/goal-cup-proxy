@@ -18,13 +18,13 @@ use std::time::SystemTime;
 
 use serde::{Deserialize, Serialize};
 
-use super::{Server, awake, folder, isolated_home, read_json, record_hosts, say, setup_json, text};
+use super::{Server, awake, fail, folder, isolated_home, read_json, record_hosts, setup_json, text};
 use crate::connector::launch::{fill, make_dir, resolve_program};
-use crate::connector::{self, Connector, Decision, Env, Form, HostList, Refusal, SettingRow};
+use crate::connector::{self, Connector, Decision, Env, Form, HostList, Refusal};
 use crate::connector::{Source, builtin};
 use crate::upload::client::ServerClient;
 
-/// `$GOALCUP_HOME/setup.json`: the saved harness and the rows written, by file and key.
+/// `$GOALCUP_HOME/setup.json`: the saved harness and the rows written: file, key and value.
 #[derive(Serialize, Deserialize)]
 struct Saved {
     v: u32,
@@ -39,6 +39,7 @@ struct Saved {
 struct Row {
     file: PathBuf,
     key: String,
+    value: String,
 }
 
 pub fn run(harness: Option<&str>, yes: bool, record_host: Option<&str>) -> ExitCode {
@@ -92,73 +93,61 @@ pub fn run(harness: Option<&str>, yes: bool, record_host: Option<&str>) -> ExitC
 }
 
 /// `--yes`: `plan` takes the home's lock, makes the home, probes the version and writes
-/// `update_off`; then the `no_prompts` rows and `setup.json`. `Ok(Some(step))` is a refusal to
-/// show after the machine lines; `Err` a home another run holds, where nothing was written.
+/// `update_off`; then every `update_off` and `no_prompts` row is written (a row already holding
+/// its value is left as it is), and `setup.json` saves those written. `Ok(Some(step))` is a
+/// refusal to show after the machine lines; `Err` a home another run holds, where nothing was
+/// written.
 fn write_home(
     c: &Connector,
     home: &Path,
     server: &Server,
     vars: BTreeMap<String, String>,
 ) -> Result<Option<String>, String> {
-    let server_host = match server {
-        Server::Url(u) => u
-            .split("://")
-            .nth(1)
-            .and_then(|r| r.split(['/', ':']).next()),
-        Server::Off => None,
-    };
+    let iso = isolated_home(home, &c.id);
     let env = Env {
         vars,
-        workspace: std::env::current_dir().unwrap_or_default(),
+        // Setup has no project folder: a `{workspace}` row then reads in the isolated home, which
+        // holds none of the participant's files, never in the folder setup runs from.
+        workspace: iso.clone(),
         resume: false,
         run_start: SystemTime::now(),
         goalcup_home: home.to_owned(),
-        server_host: server_host.unwrap_or_default().to_owned(),
+        server_host: server.host().unwrap_or_default().to_owned(),
     };
-    let plan = connector::plan(c, &env, &isolated_home(home, &c.id));
+    let plan = connector::plan(c, &env, &iso);
     if let Some(r @ Refusal::HomeLocked { .. }) = &plan.refusal {
         return Err(text::refusal(r));
     }
-    let off: Vec<String> = plan
-        .log
-        .iter()
-        .filter_map(|l| Some(l.strip_prefix("update_off not written: ")?.to_owned()))
-        .collect();
-    let prompts = connector::write_settings(&plan.home, &c.no_prompts);
-    let prompts: Vec<String> = prompts.into_iter().map(|s| s.reason).collect();
     let version = plan.harness_version.as_deref().map(|v| {
         let number = |t: &&str| t.starts_with(|c: char| c.is_ascii_digit());
         v.split_whitespace().find(number).unwrap_or(v)
     });
     put(&text::harness_found(&c.name, version, &plan.program));
-    for reason in off.iter().chain(&prompts) {
-        put(&text::not_set(reason));
+    let (mut update_off, mut no_prompts) = (Vec::new(), Vec::new());
+    for (rows, saved) in [(&c.update_off, &mut update_off), (&c.no_prompts, &mut no_prompts)] {
+        for row in rows {
+            let file = PathBuf::from(fill(&row.file, &plan.home, Path::new("")));
+            if !connector::write_settings(&plan.home, std::slice::from_ref(row)).is_empty() {
+                put(&text::not_set(&file, &row.key));
+                continue;
+            }
+            let (key, value) = (row.key.clone(), row.value.clone());
+            saved.push(Row { file, key, value });
+        }
     }
+    let (update, prompts) = (!update_off.is_empty(), !no_prompts.is_empty());
     let saved = Saved {
         v: 1,
         harness: c.id.clone(),
-        update_off: written(&plan.home, &c.update_off, &off),
-        no_prompts: written(&plan.home, &c.no_prompts, &prompts),
+        update_off,
+        no_prompts,
     };
     let file = setup_json(home);
     if save(&file, &saved).is_err() {
         return Ok(Some(text::not_written(&file)));
     }
-    put(&text::settings_set(&c.name, &plan.home));
+    put(&text::settings_set(&c.name, &plan.home, update, prompts));
     Ok(plan.refusal.as_ref().map(text::refusal))
-}
-
-/// The rows no skipped reason (`<file>: <key>: <why>`) names, by their file in `home`.
-fn written(home: &Path, rows: &[SettingRow], skipped: &[String]) -> Vec<Row> {
-    let row = |r: &SettingRow| Row {
-        file: PathBuf::from(fill(&r.file, home, Path::new(""))),
-        key: r.key.clone(),
-    };
-    let named = |w: &Row| {
-        let head = format!("{}: {}: ", w.file.display(), w.key);
-        skipped.iter().any(|s| s.starts_with(&head))
-    };
-    rows.iter().map(row).filter(|w| !named(w)).collect()
 }
 
 /// `setup.json` written beside itself (0600), then renamed over.
@@ -185,7 +174,7 @@ fn machine(home: &Path, server: &Server, vars: &BTreeMap<String, String>) {
             .map(|e| text::server_unreachable(&e.to_string())),
     };
     let lines = [
-        awake::missing().map(text::no_sleep_lock),
+        awake::missing(vars).map(text::no_sleep_lock),
         health,
         (!resolve_program("git", vars).is_absolute()).then(|| text::NO_GIT.to_owned()),
         folder::wsl(home, text::GOALCUP_FOLDER),
@@ -209,7 +198,7 @@ fn installed(vars: &BTreeMap<String, String>) -> Vec<&'static str> {
 fn add_host(home: &Path, name: &str) -> ExitCode {
     let hosts = HostList::from_file(builtin::HOSTS.as_bytes(), "connectors/model-hosts.toml");
     // Fails closed: a built-in list that does not parse lets no host in.
-    let never = |n: &str| !hosts.as_ref().is_ok_and(|l| l.decide(n) != Decision::Never);
+    let never = |n: &str| hosts.as_ref().ok().is_none_or(|l| l.decide(n) == Decision::Never);
     let host = match connector::hosts::check(name, Source::Participant) {
         Ok(host) if never(&host.name) => return fail(&text::host_refused(text::NEVER_HOST)),
         Ok(host) => host.name,
@@ -237,9 +226,4 @@ fn add_host(home: &Path, name: &str) -> ExitCode {
 /// One line on stdout; a closed stdout is not worth a panic.
 fn put(line: &str) {
     let _ = writeln!(std::io::stdout(), "{line}");
-}
-
-fn fail(line: &str) -> ExitCode {
-    say(line);
-    ExitCode::from(1)
 }

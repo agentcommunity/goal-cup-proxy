@@ -32,7 +32,7 @@ pub fn check(
         Ok(at) => at.starts_with(&real).then(|| text::prompt_inside(p)),
         Err(_) => Some(text::prompt_missing(p)),
     });
-    let problems: Vec<String> = [
+    let mut problems: Vec<String> = [
         (!extra.is_empty()).then(|| text::folder_extra(&extra)),
         (!open.is_empty()).then(|| text::env_not_ignored(&open)),
         git.map(text::inside_git),
@@ -40,17 +40,19 @@ pub fn check(
         no_token.then(|| text::TOKEN_LINE.to_owned()),
         prompt,
         wsl(&real, "It"),
+        wsl(home, text::GOALCUP_FOLDER),
     ]
     .into_iter()
     .flatten()
     .collect();
+    // On WSL1 both folders give the same line.
+    problems.dedup();
     if !problems.is_empty() {
         return Err(problems);
     }
     let synced = synced(&real).then(|| text::synced_folder(project));
     let network = [real.as_path(), home].into_iter().filter_map(|dir| {
-        let at = dir.ancestors().find(|a| a.exists()).unwrap_or(dir);
-        let kind = fs_type(at).and_then(|(magic, name)| network_fs(magic, &name));
+        let kind = fs_type(dir).and_then(|(magic, name)| network_fs(magic, &name));
         kind.map(|kind| text::network_folder(dir, kind))
     });
     Ok(synced.into_iter().chain(network).collect())
@@ -66,9 +68,11 @@ pub fn network_fs(magic: u64, name: &str) -> Option<&'static str> {
     }
 }
 
-/// The `statfs` type of `path`: the Linux magic number, or the macOS type name.
+/// The `statfs` type of `path`'s nearest existing ancestor: the Linux magic number, or the macOS
+/// type name.
 fn fs_type(path: &Path) -> Option<(u64, String)> {
-    let c = CString::new(path.as_os_str().as_bytes()).ok()?;
+    let at = path.ancestors().find(|a| a.exists()).unwrap_or(path);
+    let c = CString::new(at.as_os_str().as_bytes()).ok()?;
     let mut st = std::mem::MaybeUninit::<libc::statfs>::uninit();
     // SAFETY: `c` is NUL-terminated and `st` is a writable statfs for the call.
     if unsafe { libc::statfs(c.as_ptr(), st.as_mut_ptr()) } != 0 {
@@ -90,38 +94,34 @@ fn fs_type(path: &Path) -> Option<(u64, String)> {
 }
 
 /// `Some(1)` on WSL1, `Some(2)` on WSL2, None elsewhere, from the kernel release as 0.7 read it
-/// (`goalcup-platform/src/machine.rs`): both say `-microsoft`, WSL2 `microsoft-standard` or
-/// `wsl2`, WSL1 is the fixed `4.4.0-<build>-Microsoft`.
+/// (`goalcup-platform/src/machine.rs`): both say `-microsoft` (WSL2 kernels may say only `wsl2`),
+/// and WSL1 is the fixed `4.4.0-<build>-Microsoft`, a release no WSL2 kernel has.
 pub fn wsl_version() -> Option<u8> {
     let release = fs::read_to_string("/proc/sys/kernel/osrelease").unwrap_or_default();
     let release = release.trim().to_ascii_lowercase();
     if !release.contains("-microsoft") && !release.contains("wsl2") {
         return None;
     }
-    let two = release.contains("wsl2") || release.contains("microsoft-standard");
-    Some(if two || !release.starts_with("4.4.") {
-        2
-    } else {
-        1
-    })
+    Some(if release.starts_with("4.4.") { 1 } else { 2 })
 }
 
 /// Section 3 step 2, one check for `start` (a problem) and `setup` (a warning), from 0.7's
-/// `folder_gate.rs`: WSL1, or WSL2 with `dir` on a Windows drive, told by its `statfs` type (9p,
-/// SMB, NTFS), never by a path prefix, since a drive can be mounted anywhere. `what` names `dir`.
+/// `folder_gate.rs`: WSL1, or WSL2 with `dir` on a Windows drive, told as 0.7 told it
+/// (`machine.rs`): the type name in `/proc/self/mountinfo` of the longest mount point holding
+/// `dir`, never a path prefix, since a drive can be mounted anywhere. `what` names `dir`.
 pub fn wsl(dir: &Path, what: &str) -> Option<String> {
     if wsl_version()? == 1 {
         return Some(text::wsl(what, None));
     }
-    let at = dir.ancestors().find(|a| a.exists()).unwrap_or(dir);
-    let drive = match fs_type(at)?.0 {
-        0x0102_1997 => "9p",
-        0xFF53_4D42 => "cifs",
-        0xFE53_4D42 => "smb3",
-        0x5346_544E => "ntfs",
-        _ => return None,
-    };
-    Some(text::wsl(what, Some(drive)))
+    let (dir, info) = (resolved(dir), fs::read_to_string("/proc/self/mountinfo").ok()?);
+    let mounts = info.lines().filter_map(|l| {
+        let (left, right) = l.split_once(" - ")?;
+        let point = left.split(' ').nth(4)?.replace("\\040", " ");
+        Some((point, right.split(' ').next()?))
+    });
+    let (_, kind) = mounts.filter(|(p, _)| dir.starts_with(p)).max_by_key(|(p, _)| p.len())?;
+    let windows = "9p drvfs virtiofs cifs smb3 smbfs ntfs ntfs3 fuse.ntfs-3g";
+    windows.split(' ').any(|w| w == kind).then(|| text::wsl(what, Some(kind)))
 }
 
 /// The key files (`.env`, `.env.*`) and every entry besides them, `.gitignore` and `.DS_Store`,

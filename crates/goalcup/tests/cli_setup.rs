@@ -99,7 +99,7 @@ fn no_terminal_asks_nothing_opens_nothing_writes_nothing() {
     let fake = Fake::new(&c.program);
     let before = snapshot(home.home());
     let (out, all) = setup(&home, &fake.path(), &["--harness", &c.id]);
-    assert!(matches!(out.status.code(), Some(0 | 1)), "{all}");
+    assert_eq!(out.status.code(), Some(0), "{all}");
     assert_eq!(snapshot(home.home()), before, "{all}");
     assert!(fake.argv().is_empty(), "the harness ran: {:?}", fake.argv());
     assert!(!all.contains("goalcup mcp"), "{all}");
@@ -133,10 +133,26 @@ fn yes_writes_the_settings_only_into_the_isolated_home() {
         assert_eq!(got.as_deref(), Some(row.value.as_str()), "{}", row.key);
     }
 
-    let stdout = lossy(&out.stdout);
-    let quoted = stdout.split('"').skip(1).step_by(2);
-    let folders: Vec<&str> = quoted.filter(|p| Path::new(p).is_dir()).collect();
-    assert_eq!(folders.last().map(PathBuf::from), Some(iso), "{stdout}");
+    let last_folder = |out: &Output| {
+        let stdout = lossy(&out.stdout);
+        let quoted = stdout.split('"').skip(1).step_by(2);
+        quoted.filter(|p| Path::new(p).is_dir()).last().map(PathBuf::from)
+    };
+    assert_eq!(last_folder(&out), Some(iso.clone()), "{all}");
+
+    // Point 6: with no row writable, setup.json names none and the home is still printed last.
+    let files: Vec<PathBuf> = (c.update_off.iter().chain(&c.no_prompts))
+        .map(|r| PathBuf::from(r.file.replace("{home}", &iso.to_string_lossy())))
+        .collect();
+    files.iter().for_each(|f| fs::write(f, "[").unwrap());
+    let (out, all) = setup(&home, &fake.path(), &["--harness", &c.id, "--yes"]);
+    assert_eq!(out.status.code(), Some(0), "{all}");
+    let saved = fs::read(setup_json(&home.goalcup_home())).unwrap();
+    let saved: Value = serde_json::from_slice(&saved).expect("setup.json parses");
+    assert_eq!(saved["update_off"], Value::Array(vec![]), "{saved}");
+    assert_eq!(saved["no_prompts"], Value::Array(vec![]), "{saved}");
+    assert!(files.iter().all(|f| fs::read(f).unwrap() == b"["), "a row was written");
+    assert_eq!(last_folder(&out), Some(iso), "{all}");
 }
 
 #[test]

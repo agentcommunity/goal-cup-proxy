@@ -203,15 +203,23 @@ pub fn refusal(r: &Refusal) -> String {
     }
 }
 
-/// What `setup --yes` set and where; a row it could not write has its own line before this.
-pub fn settings_set(name: &str, home: &Path) -> String {
+/// What `setup --yes` wrote into the isolated `home`: an `update_off` row (`update`), a
+/// `no_prompts` row (`prompts`), or neither. A row not written has its own line before this.
+pub fn settings_set(name: &str, home: &Path, update: bool, prompts: bool) -> String {
     let home = home.display();
-    format!("goalcup turned off {name}'s auto-update and its approval prompts in \"{home}\".")
+    let what = match (update, prompts) {
+        (true, true) => "auto-update and its approval prompts",
+        (true, false) => "auto-update",
+        (false, true) => "approval prompts",
+        (false, false) => return format!("goalcup set nothing in {name}'s home \"{home}\"."),
+    };
+    format!("goalcup turned off {name}'s {what} in \"{home}\".")
 }
 
-/// A setting row not written; `reason` names the file and key, never a value.
-pub fn not_set(reason: &str) -> String {
-    format!("goalcup could not set {reason}. Set it there yourself if you want it.")
+/// A setting row not written: its file and key, never a value.
+pub fn not_set(file: &Path, key: &str) -> String {
+    let file = file.display();
+    format!("goalcup could not set {key} in \"{file}\". Set it there yourself if you want it.")
 }
 
 pub fn not_written(path: &Path) -> String {

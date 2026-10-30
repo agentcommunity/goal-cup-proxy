@@ -14,6 +14,7 @@ use std::env;
 use std::fs;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
+use std::process::ExitCode;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::de::DeserializeOwned;
@@ -84,23 +85,41 @@ fn parse_server(raw: Option<&str>) -> Result<Server, &'static str> {
     if raw == "off" {
         return Ok(Server::Off);
     }
-    let (rest, https) = match (raw.strip_prefix("https://"), raw.strip_prefix("http://")) {
-        (Some(r), _) => (r, true),
-        (None, Some(r)) => (r, false),
-        _ => return Err(text::BAD_SERVER),
+    let Some((authority, https)) = authority(raw) else {
+        return Err(text::BAD_SERVER);
     };
-    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
     if authority.is_empty() || authority.contains('@') || raw.contains(char::is_whitespace) {
         return Err(text::BAD_SERVER);
     }
-    let host = match authority.strip_prefix('[') {
-        Some(v6) => v6.split(']').next().unwrap_or(""),
-        None => authority.split(':').next().unwrap_or(""),
-    };
-    if !https && !matches!(host, "127.0.0.1" | "::1" | "localhost") {
+    let server = Server::Url(raw.trim_end_matches('/').to_owned());
+    if !https && !matches!(server.host(), Some("127.0.0.1" | "::1" | "localhost")) {
         return Err(text::BAD_SERVER);
     }
-    Ok(Server::Url(raw.trim_end_matches('/').to_owned()))
+    Ok(server)
+}
+
+/// The authority of an `https://` or `http://` address, and whether it is `https`.
+fn authority(url: &str) -> Option<(&str, bool)> {
+    let (rest, https) = match (url.strip_prefix("https://"), url.strip_prefix("http://")) {
+        (Some(r), _) => (r, true),
+        (None, Some(r)) => (r, false),
+        _ => return None,
+    };
+    Some((rest.split(['/', '?', '#']).next().unwrap_or(""), https))
+}
+
+impl Server {
+    /// The host of `Url`, an IPv6 address without its brackets: `never` in every plan (S3).
+    pub fn host(&self) -> Option<&str> {
+        let Server::Url(url) = self else {
+            return None;
+        };
+        let authority = authority(url)?.0;
+        Some(match authority.strip_prefix('[') {
+            Some(v6) => v6.split(']').next().unwrap_or(""),
+            None => authority.split(':').next().unwrap_or(""),
+        })
+    }
 }
 
 /// `$GOALCUP_HOME/runs/<run>/`.
@@ -156,6 +175,12 @@ pub fn upload_json(entry_dir: &Path) -> PathBuf {
 /// One line `goalcup: <text>` on stderr. A closed stderr is not worth a panic.
 pub fn say(text: &str) {
     let _ = writeln!(std::io::stderr(), "goalcup: {text}");
+}
+
+/// [`say`], then exit code 1.
+pub fn fail(text: &str) -> ExitCode {
+    say(text);
+    ExitCode::from(1)
 }
 
 /// `runs/<run>/server.json` (section 2), written by `start`. It never holds the credential, so
@@ -435,5 +460,8 @@ mod tests {
         ] {
             assert!(parse_server(Some(bad)).is_err(), "{bad}");
         }
+        // goalcup's own server is the plan's `never` host, IPv6 included.
+        let v6 = parse_server(Some("http://[::1]:8787/")).unwrap();
+        assert_eq!(v6.host(), Some("::1"));
     }
 }
