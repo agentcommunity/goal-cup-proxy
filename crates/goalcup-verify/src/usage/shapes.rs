@@ -141,6 +141,9 @@ pub fn server(v: &Value) -> Server {
     }
 }
 
+/// The five numbers of one usage object and its `extra` members.
+type Usage = (Tokens, BTreeMap<String, u64>);
+
 /// How a reply ended, by its own events. The first one decides.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum End {
@@ -292,7 +295,7 @@ impl Reply {
         id: &str,
         usage: &str,
         finish: &str,
-        read: fn(&Map<String, Value>) -> (Tokens, BTreeMap<String, u64>),
+        read: fn(&Map<String, Value>) -> Usage,
     ) {
         if let Some(e) = v.get("error").filter(|e| e.is_object()) {
             return self.failed(None, Some(e));
@@ -311,7 +314,7 @@ impl Reply {
         }
     }
 
-    fn chat(u: &Map<String, Value>) -> (Tokens, BTreeMap<String, u64>) {
+    fn chat(u: &Map<String, Value>) -> Usage {
         let cached = num(u, "prompt_tokens_details.cached_tokens")
             .or_else(|| num(u, "prompt_cache_hit_tokens"));
         let t = Tokens {
@@ -332,7 +335,7 @@ impl Reply {
         (t, extra(u, &used))
     }
 
-    fn gemini(u: &Map<String, Value>) -> (Tokens, BTreeMap<String, u64>) {
+    fn gemini(u: &Map<String, Value>) -> Usage {
         let cached = num(u, "cachedContentTokenCount");
         let (cand, thoughts) = (num(u, "candidatesTokenCount"), num(u, "thoughtsTokenCount"));
         let output = match (cand, thoughts) {
@@ -383,7 +386,7 @@ impl Reply {
     }
 }
 
-fn responses_usage(u: &Map<String, Value>) -> (Tokens, BTreeMap<String, u64>) {
+fn responses_usage(u: &Map<String, Value>) -> Usage {
     let cached = num(u, "input_tokens_details.cached_tokens");
     let t = Tokens {
         input: less(num(u, "input_tokens"), cached),
@@ -402,7 +405,7 @@ fn responses_usage(u: &Map<String, Value>) -> (Tokens, BTreeMap<String, u64>) {
 }
 
 /// Anthropic; `output_tokens_details.thinking_tokens` is taken as `reasoning` where given.
-fn anthropic_usage(u: &Map<String, Value>) -> (Tokens, BTreeMap<String, u64>) {
+fn anthropic_usage(u: &Map<String, Value>) -> Usage {
     let t = Tokens {
         input: num(u, "input_tokens"),
         cached: num(u, "cache_read_input_tokens"),
