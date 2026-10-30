@@ -366,10 +366,11 @@ struct Boot {
     seq: u64,
     /// The boot's last COUNT event JSON.
     count: Option<Value>,
-    /// Every `recorder_down` span of the boot.
+    /// Its own `recorder_down` spans: those before its first COUNT (boot 0's start gap).
     #[serde(default)]
     spans: u64,
-    /// The lengths in ms of its `recorder_down` gaps after that COUNT (a recovery frame's gap).
+    /// The lengths in ms of its `recorder_down` gaps after that COUNT (a recovery frame's gap),
+    /// or of all of them while it has none.
     #[serde(default)]
     down_ms: Vec<u64>,
 }
@@ -378,11 +379,20 @@ impl Boot {
     fn boot(&self) -> Option<u64> {
         self.count.as_ref()?["boot"].as_u64()
     }
+
+    /// Every `recorder_down` span of the boot: its own, plus its recovery frames' gaps, which
+    /// follow its last COUNT.
+    fn all_spans(&self) -> u64 {
+        match self.count {
+            Some(_) => self.spans.saturating_add(self.down_ms.len() as u64),
+            None => self.spans,
+        }
+    }
 }
 
 /// `counts.jsonl` (PRD-02 section 5 step 3), local only, one compact line per LINK:
 /// `{"seq":<link seq>,"count":<the COUNT event JSON at that LINK>,"spans":<n>}`, where `spans`
-/// is the boot's `recorder_down` spans so far ([`Counter::off_spans`]). A later boot takes a dead
+/// is the boot's own `recorder_down` spans so far ([`Counter::off_spans`]). A later boot takes a dead
 /// boot's COUNT from it without decoding part files, and [`entry_totals`] takes a boot's totals
 /// from it once the boot's part files are pruned after upload (ledger U1).
 pub struct CountsLog {
@@ -416,7 +426,7 @@ impl CountsLog {
     }
 
     /// Appends one line at a LINK: this boot's COUNT event JSON at the LINK with that `seq`, and
-    /// the boot's `recorder_down` spans so far.
+    /// the boot's own `recorder_down` spans so far.
     pub fn append(&mut self, seq: u64, count: &Value, spans: u64) -> io::Result<()> {
         let line = serde_json::json!({ "seq": seq, "count": count, "spans": spans }).to_string();
         let mut f = std::fs::OpenOptions::new()
@@ -443,7 +453,7 @@ impl CountsLog {
 
     /// At boot, after recovery and before this boot's first LINK (PRD-02 section 9.2): rewrites
     /// the file to one line per earlier boot as [`entry_totals`] reads it (its last COUNT on
-    /// disk, all its `recorder_down` spans and the lengths of those after that COUNT), drops
+    /// disk, its own `recorder_down` spans and the lengths of those after that COUNT), drops
     /// lines of boots that left nothing durable, and returns the entry totals over those boots.
     /// Every line comes from what is on disk, so a crash at any point of a recovery is repaired
     /// by the next boot's call: only a live recorder prunes part files, after this call.
@@ -498,7 +508,7 @@ pub fn entry_totals(entry_dir: &Path) -> EntryTotals {
 }
 
 /// Every boot of the entry. A boot with part files on disk is read from them; its earlier part
-/// files may be pruned, so its spans are the larger of what they hold and its `counts.jsonl`
+/// files may be pruned, so its own spans are the larger of what they hold and its `counts.jsonl`
 /// line (boot 0's own start gap sits in its first part file). A boot before the first one on disk
 /// (all its part files pruned) is its line. A line of a later boot left nothing durable (its part
 /// file was deleted by recovery) and is not read; with no part file on disk, no line is.
@@ -528,7 +538,9 @@ fn boots(entry_dir: &Path) -> BTreeMap<u64, Boot> {
                 } => {
                     let b = boots.entry(boot).or_default();
                     b.down_ms.push(off_ms(r));
-                    b.spans += 1;
+                    if b.count.is_none() {
+                        b.spans += 1;
+                    }
                 }
                 _ => {}
             }
@@ -562,7 +574,7 @@ fn totals(boots: &BTreeMap<u64, Boot>) -> EntryTotals {
         (c.gaps, c.lost_unknown) = (c.gaps.saturating_add(n), c.lost_unknown.saturating_add(n));
         c.off_ms = b.down_ms.iter().fold(c.off_ms, |a, ms| a.saturating_add(*ms));
         t.counts.add(&c);
-        t.off_spans = t.off_spans.saturating_add(b.spans);
+        t.off_spans = t.off_spans.saturating_add(b.all_spans());
     }
     t
 }
