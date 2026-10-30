@@ -78,7 +78,11 @@ impl Flags {
     pub fn watch(&self, host: &str, opened: Mono) -> Watch {
         let mut hosts = self.hosts.lock().unwrap_or_else(|e| e.into_inner());
         hosts.entry(host.to_owned()).or_default().conns += 1;
-        Watch { host: host.to_owned(), opened, secs: VecDeque::new() }
+        Watch {
+            host: host.to_owned(),
+            opened,
+            secs: VecDeque::new(),
+        }
     }
 
     /// `n` bytes went `dir` on the watched tunnel at `now` (rule 9: `Recorder::now()`, read on
@@ -156,7 +160,13 @@ pub async fn run(
         .then(|| Mutex::new(flags.watch(&c.host, opened)));
     let tap = |dir, t, n| {
         if let Some(w) = &watch {
-            flags.observe(rec, &mut w.lock().unwrap_or_else(|e| e.into_inner()), t, dir, n);
+            flags.observe(
+                rec,
+                &mut w.lock().unwrap_or_else(|e| e.into_inner()),
+                t,
+                dir,
+                n,
+            );
         }
     };
     let prefixes = (client_prefix, upstream_prefix);
@@ -176,6 +186,10 @@ pub async fn run(
             .then(|| json!({"guard": "client_hello", "limit": CLIENT_HELLO_GUARD}));
         conn.gap(reason, opened, Some(up + down), tail);
     }
-    let reason = if p.upstream_failed { EndReason::Interrupted } else { EndReason::Complete };
+    let reason = if p.upstream_failed {
+        EndReason::Interrupted
+    } else {
+        EndReason::Complete
+    };
     conn.end(rec.now(), reason, Some(json!({"up": up, "down": down})));
 }

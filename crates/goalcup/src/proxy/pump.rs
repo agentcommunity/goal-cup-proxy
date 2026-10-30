@@ -54,9 +54,11 @@ struct Pump<'a> {
     tap: Option<Tap<'a>>,
     /// Plaintext bytes moved, by [`Dir`]; kept outside the legs, which may be cut.
     moved: [AtomicU64; 2],
-    /// The parser; the 5a fault (reason, time, panic); plaintext bytes relayed after it.
-    shared: Mutex<(Option<Box<dyn Parser>>, Option<(GapReason, Mono, bool)>, u64)>,
+    shared: Mutex<Shared>,
 }
+
+/// The parser; the 5a fault (reason, time, panic); plaintext bytes relayed after it.
+type Shared = (Option<Box<dyn Parser>>, Option<(GapReason, Mono, bool)>, u64);
 
 impl Pump<'_> {
     /// The parser sees the chunk under a lock that is never held across an await.
@@ -152,8 +154,16 @@ where
 {
     let shared = Mutex::new((parser, None, 0));
     let moved = Default::default();
-    let pump = Pump { rec, conn: conn.sid(), quiet, tap, moved, shared };
-    let ((mut cr, mut cw), (mut ur, mut uw)) = (tokio::io::split(client), tokio::io::split(upstream));
+    let pump = Pump {
+        rec,
+        conn: conn.sid(),
+        quiet,
+        tap,
+        moved,
+        shared,
+    };
+    let ((mut cr, mut cw), (mut ur, mut uw)) =
+        (tokio::io::split(client), tokio::io::split(upstream));
     let (lu, ld) = {
         let a = pump.leg(Dir::Up, to_up, &mut cr, &mut uw);
         let b = pump.leg(Dir::Down, to_client, &mut ur, &mut cw);
@@ -177,7 +187,12 @@ where
         let _ = catch_unwind(AssertUnwindSafe(|| p.end(t, reason, unsent_up)));
     }
     if let Some((reason, at, panic)) = fault {
-        conn.gap(reason, at, Some(after), panic.then(|| json!({"panic": true})));
+        conn.gap(
+            reason,
+            at,
+            Some(after),
+            panic.then(|| json!({"panic": true})),
+        );
     }
     Pumped {
         client: cr.unsplit(cw),
