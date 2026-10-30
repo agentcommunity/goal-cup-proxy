@@ -1490,3 +1490,11 @@ taken; "rejected" says why. Fixes for other files are made by those files' owner
 - K2 still waits on the run 1 shape builder (PRD-08's legs slice). U1's stub is on integration, so
   that slice need not wait for PRD-09.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-09 slice 2 (merge dab0ce1f)
+
+- **`goalcup-verify usage` still exits 3** at dab0ce1f: the wire leg is read inside U1, but `run`, the
+  native leg and S7 output come in PRD-09's next slices. Until they land, a pad run's spend check and
+  C5 record `usage` as not read (the row says so); exit 3 is never priced as 0 USD or read as 0
+  tokens. U1's `readable()` is a method now (PRD-09 B10); C1 reads it through PRD-08 as before.
+- No locked ledger item is touched and no owner question comes from this slice.

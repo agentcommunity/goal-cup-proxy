@@ -908,3 +908,10 @@ PRDs they touch and the code. Where two fixes disagree, the ledger and the later
 - The `opens`, `ends` and `events` helpers over `Calls` (slice 3) also replace `lost` in
   `native_tail.rs` and `events` in `native_walk.rs`; PRD-04 deletes its copies after that merge.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-09 slice 2 (merge dab0ce1f)
+
+- **`usage_run1.rs` is 299 lines** (6 cases) against section 3's 200. The PRD-09 replan note sets its
+  ceiling to 380 with the native-only and VR2 panic cases still to come; the end-of-build report nets
+  it against the test total (at most about 14,200).
+- No locked ledger item is touched and no owner question comes from this slice.

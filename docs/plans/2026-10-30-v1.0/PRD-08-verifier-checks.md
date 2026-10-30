@@ -880,3 +880,16 @@ log; the pad lane follows.
   `docs/RECORD-FORMAT.md` follows in PRD-15's next slice (PRD-15 note).
 - Acceptance lists as known, if still open at the end: the A9/B3 `main.rs` nit and the PRD-01 ask.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-09 slice 2 (merge dab0ce1f)
+
+- **`readable()` is a method on integration** (PRD-09 B10 done): `legs.rs` and `history.rs` read
+  `table.readable()` and `thread.readable()`; no `readable` field exists. Nothing in PRD-08 read the
+  field, so nothing changes on this side.
+- **What U1 gives now:** wire rows for every call (kinds `Warmup` and `Interrupt` are rows, not
+  calls; a rate limit sent as `error` plus `response.failed` is one row; a call cut by a restart or a
+  GAP has `whole: false`), but `reason` is still `NoReader`, no threads and `children: None` until
+  PRD-09's native slice. So on integration the rules already written hold: `harness_log` gives
+  `none`, `subagents_present` (C2) is `skip`, and no check reads a wire-only table as a failure.
+  `usage::run` still exits 3.
+- No locked ledger item is touched and no owner question comes from this slice.
