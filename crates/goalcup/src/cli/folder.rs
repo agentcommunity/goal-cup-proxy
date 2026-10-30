@@ -113,14 +113,9 @@ fn entries(project: &Path) -> (Vec<String>, Vec<String>) {
 /// Exactly one line `GH_TOKEN=<value>`, the value visible ASCII with no quotes (so no CR): the
 /// push block's `sed -n s/^GH_TOKEN=//p` then prints one plain value. It is never kept or shown.
 fn token(env_local: String) -> bool {
-    let mut values = env_local
-        .split('\n')
-        .filter_map(|l| l.strip_prefix("GH_TOKEN="));
-    let plain = |b: u8| b.is_ascii_graphic() && !b"\"'".contains(&b);
-    let one = values
-        .next()
-        .filter(|v| !v.is_empty() && v.bytes().all(plain));
-    one.is_some() && values.next().is_none()
+    let plain = |v: &str| !v.is_empty() && v.bytes().all(|b| b.is_ascii_graphic() && !b"\"'".contains(&b));
+    let mut values = env_local.split('\n').filter_map(|l| l.strip_prefix("GH_TOKEN="));
+    values.next().is_some_and(plain) && values.next().is_none()
 }
 
 /// One equals, is inside or holds the other, or both sit in one folder.
@@ -131,12 +126,8 @@ fn tangled(a: &Path, b: &Path) -> bool {
 /// `path` with its nearest existing ancestor resolved (links followed) and the rest appended,
 /// `..` folded: the rest does not exist, so goalcup would make it as plain folders.
 fn resolved(path: &Path) -> PathBuf {
-    for at in path.ancestors() {
-        if let Ok(real) = fs::canonicalize(at) {
-            return lexical(&real.join(path.strip_prefix(at).unwrap_or(Path::new(""))));
-        }
-    }
-    lexical(path)
+    let real = path.ancestors().find_map(|at| Some(fs::canonicalize(at).ok()?.join(path.strip_prefix(at).ok()?)));
+    lexical(&real.unwrap_or_else(|| path.to_owned()))
 }
 
 /// `path` with each `..` taking off the part before it, as written (no link is followed).
@@ -155,12 +146,14 @@ fn lexical(path: &Path) -> PathBuf {
 
 /// Whether the root `.gitignore` text ignores the root file `name`: the last match wins, `!`
 /// re-includes, a trailing `/` matches folders only, a leading `/` or `**/` anchors, and any other
-/// `/` names a path below the root. Kept short, so it errs to "not ignored" (a refusal): a class
-/// `[..]` or a `\` after the first byte is not read, so such a line never ignores, and such a `!`
-/// line always re-includes.
+/// `/` names a path below the root. As in git, a leading BOM is skipped and each line loses one
+/// CR, then its trailing spaces (a tab stays). Kept short, so it errs to "not ignored" (a refusal):
+/// a class `[..]` or a `\` after the first byte is not read, so such a line never ignores, and
+/// such a `!` line always re-includes.
 fn ignored(ignore: &str, name: &str) -> bool {
     let mut verdict = false;
-    for line in ignore.lines().map(str::trim_end) {
+    let ignore = ignore.strip_prefix('\u{feff}').unwrap_or(ignore).split('\n');
+    for line in ignore.map(|l| l.strip_suffix('\r').unwrap_or(l).trim_end_matches(' ')) {
         if line.is_empty() || line.starts_with('#') || line.ends_with('/') {
             continue;
         }
@@ -191,14 +184,7 @@ fn glob(pat: &[u8], text: &[u8]) -> bool {
 
 /// A folder a sync client uploads, by name on the resolved path (a warning, so loose is fine).
 fn synced(real: &Path) -> bool {
+    let names = "Dropbox|OneDrive|Google Drive|iCloud|/Mobile Documents/|/Library/CloudStorage/";
     let all = real.to_string_lossy();
-    let names = [
-        "Dropbox",
-        "OneDrive",
-        "Google Drive",
-        "iCloud",
-        "/Mobile Documents/",
-        "/Library/CloudStorage/",
-    ];
-    names.iter().any(|n| all.contains(n))
+    names.split('|').any(|n| all.contains(n))
 }

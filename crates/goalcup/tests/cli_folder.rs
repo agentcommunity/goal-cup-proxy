@@ -135,6 +135,10 @@ fn project_folder_and_goalcup_home_never_hold_each_other() {
         assert!(stderr(&out).contains(text::NOTHING_CREATED));
     }
     assert!(!s.project.join("gc").exists());
+
+    // A home spelled with `..` is compared where it leads: an unrelated folder, then the project.
+    assert!(folder::check(&s.project, &s.project.join("../../b/gc"), false, None).is_ok());
+    assert!(folder::check(&s.project, &s.project.join("x/../gc"), false, None).is_err());
 }
 
 /// L-SC2, the folder part.
@@ -196,6 +200,12 @@ fn unclear_token_or_ignore_or_listing_is_refused() {
         let got = check(&[(".gitignore", ignore.as_str()), token[1]]);
         assert!(got.is_err(), "{negation}: {got:?}");
     }
+    // As git: only trailing spaces and one CR leave a line (a tab or form feed stays, so git
+    // tracks .env.local), and a leading UTF-8 BOM is skipped.
+    for (ignore, ok) in [(".env*\t\n", false), (".env*\x0c\n", false), ("\u{feff}.env* \r\n", true)] {
+        let got = check(&[(".gitignore", ignore), token[1]]);
+        assert_eq!(got.is_ok(), ok, "{ignore:?}: {got:?}");
+    }
     // Two GH_TOKEN lines, or a Windows line ending: the push block would not read one value.
     for env in ["GH_TOKEN=x\nGH_TOKEN=y\n", "GH_TOKEN=x\r\n"] {
         assert!(check(&[token[0], (".env.local", env)]).is_err(), "{env:?}");
@@ -206,14 +216,4 @@ fn unclear_token_or_ignore_or_listing_is_refused() {
     let s = Setup::new(&token);
     let got = folder::check(&s.project.join(".env.local"), &s.gc, false, None);
     assert!(got.is_err(), "{got:?}");
-}
-
-/// A `GOALCUP_HOME` spelled with `..` is compared where it leads: here, an unrelated folder.
-#[test]
-fn goalcup_home_with_dot_dot_is_compared_where_it_leads() {
-    let s = Setup::new(&[(".gitignore", ".env*\n")]);
-    let away = s.project.join("../../b/gc");
-    assert!(folder::check(&s.project, &away, false, None).is_ok());
-    let inside = s.project.join("x/../gc");
-    assert!(folder::check(&s.project, &inside, false, None).is_err());
 }
