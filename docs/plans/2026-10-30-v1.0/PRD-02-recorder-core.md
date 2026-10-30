@@ -1327,3 +1327,25 @@ to another file are made by that file's owner.
 - `cli::home()` returns `Result<PathBuf, &'static str>` and refuses with no absolute home; code that
   needs the home takes it from the start facts or that call, never from the raw variable.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-04 core slice part 1 (merge 403d9165)
+
+- **`NativeReader::finish` takes the guard.** Ask 10 and PRD-04's ask 1 agree; PRD-00's ruling row
+  "PRD-02 and PRD-04" omits the argument. PRD-04's next slice builds
+  `finish(self, harness_exited: bool, guard: Option<Duration>) -> NativeFinish`; the seal passes
+  `Some(180 s)` for `deadline`, `server_stop` and `signal` and `None` for `harness_exit` and
+  `seal_command` (section 11). PRD-02's seal calls that shape.
+- `native::fsx` uses `pipeline::cursors::Fid` as its file identity, so a change to `Fid` touches the
+  native reader too.
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-11 slice 2 (merge b9fa50f8)
+
+- **S3 is on integration; `watchdog::run` builds against it now.** Keep `plan.lock` alive for the
+  whole watchdog run and drop it last (`LaunchPlan` is not `Clone`; it owns the lock). Run each
+  `before` and `after` entry as `plan.program` followed by the entry's arguments. Call
+  `finish_env(port, run_ca, bundle)` after the CA files exist; it also fills the connector's `ca_env`
+  variables. `hosts`, `native`, `mask_rules` and `notes` are `Serialize` for the start facts. A plan
+  with `refusal` set never reaches the watchdog (PRD-10 stops first).
+- Until PRD-11's hosts slice merges, `hosts.decide` answers `NotListed` for every name and
+  `ca_subtrees` is empty: a watchdog test that needs a decrypted request waits for that merge.

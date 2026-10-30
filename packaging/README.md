@@ -79,9 +79,9 @@ commands. The release workflow fetches its target graph, then builds with `--off
    sets the version, updates `Cargo.lock`, checks it, commits, pushes the branch and opens a pull
    request. If `origin/main` already has that version, `prepare` says so and does nothing. Merge a
    version PR through the repository ruleset.
-2. Fetch the merged `origin/main` and run `sh scripts/gate.sh full` and the separate
-   `sh scripts/linux-check.sh` on that exact versioned commit. Run them sequentially; the Linux
-   check needs Docker with privileged-container support. The tag command does not run either check.
+2. Fetch the merged `origin/main` and run `sh scripts/gate.sh full`, then the pad's release check
+   `scripts/pad/table --release-check <commit>`, on that exact versioned commit. The tag command
+   does not run either check.
 3. Run `sh scripts/release.sh tag <x.y.z>`. It fetches, checks that `origin/main` has the version in
    `Cargo.toml`, tags that commit (never a local branch) and pushes only the tag.
 4. The tag starts the workflow. It refuses a tag that differs from `Cargo.toml`, builds the four
