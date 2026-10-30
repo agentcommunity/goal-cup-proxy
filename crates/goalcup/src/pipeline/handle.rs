@@ -1,16 +1,17 @@
-//! `StreamHandle` (seam S1): one stream's calls. The handle owns the stream's offset and its
-//! guard gap (PRD-02 section 3), so the gap rule needs no shared map.
+//! `StreamHandle` (seam S1): one stream's calls. The handle owns the stream's offset and runs the
+//! gap rule (PRD-02 section 3); an open guard gap is also kept in the recorder's `open_gaps`, so
+//! the seal can close one whose handle is never called again.
 
 #[cfg(feature = "test-hooks")]
 use super::Call;
-use super::guard;
 use super::item::{Item, Ws};
-use super::{Mono, Recorder, Sid};
+use super::{GuardGap, Mono, Recorder, Sid, fds, guard};
 use bytes::Bytes;
 use goalcup_format::{EndReason, GapReason, StreamKind};
-use serde_json::{Value, json};
+use serde_json::Value;
 use std::ops::BitOr;
-use std::sync::atomic::Ordering;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 /// The largest DATA piece (PRD-01 section 3): bigger offers are split, with no copy.
 const MAX_PIECE: usize = 256 << 10;
@@ -51,19 +52,12 @@ pub struct StreamHandle {
     sid: Sid,
     /// `conn`, `http_req`, `http_resp`, `ws_up` or `ws_down`: stopped by the seal's wire stop.
     wire: bool,
+    /// A `conn` stream: counted open for `fds::may_accept` until it ends.
+    conn: bool,
     off: u64,
-    /// The guard gap open on this stream, if any.
-    gap: Option<GuardGap>,
+    /// The guard gap open on this stream, if any; also in the recorder's `open_gaps`.
+    gap: Option<Arc<GuardGap>>,
     ended: bool,
-}
-
-/// Bytes the guard dropped on one stream since its last admitted piece.
-struct GuardGap {
-    /// The first dropped piece's time.
-    start: Mono,
-    /// The offset of its first byte.
-    off: u64,
-    lost: u64,
 }
 
 impl StreamHandle {
@@ -76,10 +70,15 @@ impl StreamHandle {
                 | StreamKind::WsUp
                 | StreamKind::WsDown
         );
+        let conn = kind == StreamKind::Conn;
+        if conn {
+            fds::conn_opened();
+        }
         StreamHandle {
             rec,
             sid,
             wire,
+            conn,
             off: from,
             gap: None,
             ended: false,
@@ -92,9 +91,12 @@ impl StreamHandle {
 
     /// After the seal's stop a call on this stream only counts (PRD-02 section 11 step 2).
     pub(super) fn stopped(&self) -> bool {
-        let i = &self.rec.inner;
-        i.all_stopped.load(Ordering::Acquire)
-            || (self.wire && i.wire_stopped.load(Ordering::Acquire))
+        self.all_stopped() || (self.wire && self.rec.inner.wire_stopped.load(Ordering::Acquire))
+    }
+
+    /// The seal stopped everything and closes what is still open itself.
+    fn all_stopped(&self) -> bool {
+        self.rec.inner.all_stopped.load(Ordering::Acquire)
     }
 
     /// One piece; moves the offset by its length, written or dropped.
@@ -112,16 +114,22 @@ impl StreamHandle {
         self.offer(t, Some(Ws { opcode, fin }), bytes);
     }
 
-    /// The caller's own loss, reported when it ends: `off` is the handle's offset, the end is now.
-    /// `Some(n)` moves the offset by `n`; `None` means unknown and leaves it. An open guard gap
-    /// is sent first.
+    /// The caller's own loss, reported when it ends: `off` is the handle's offset, the end is now
+    /// (at least 1 ns after `start`, PRD-01 invariant 12). `Some(n)` moves the offset by `n`;
+    /// `None` means unknown and leaves it. An open guard gap is sent first. Loss that began
+    /// before the seal's wire stop is still sent after it, until the seal's full stop; after
+    /// that its bytes go to the `after_stop` count.
     pub fn gap(&mut self, reason: GapReason, start: Mono, lost: Option<u64>, tail: Option<Value>) {
-        let end = self.rec.now();
+        let end = self.rec.now().max(Mono(start.ns() + 1));
         collect!(
             self.rec,
             Call::Gap(self.sid, reason, start, end, self.off, lost, tail.clone())
         );
-        if !self.stopped() {
+        if self.all_stopped() {
+            let i = &self.rec.inner;
+            i.after_stop_bytes
+                .fetch_add(lost.unwrap_or(0), Ordering::Relaxed);
+        } else {
             self.close_gap(end);
             self.rec.send(Item::Gap {
                 sid: self.sid,
@@ -140,23 +148,24 @@ impl StreamHandle {
         self.finish(t, reason, tail);
     }
 
+    /// Sends the open guard gap, then END. After the wire stop the guard gap is still sent and
+    /// END is left to the seal (`END cut_at_seal`); after the full stop the seal closes both.
     fn finish(&mut self, t: Mono, reason: EndReason, tail: Option<Value>) {
         self.ended = true;
+        if self.conn {
+            fds::conn_closed();
+        }
         collect!(
             self.rec,
             Call::End(self.sid, t, reason, self.off, tail.clone())
         );
-        if self.stopped() {
-            // The seal writes what is still open on this stream; only the live count goes.
-            if self.gap.take().is_some() {
-                self.rec
-                    .inner
-                    .streams_in_gap
-                    .fetch_sub(1, Ordering::Relaxed);
-            }
+        if self.all_stopped() {
             return;
         }
         self.close_gap(t);
+        if self.stopped() {
+            return;
+        }
         self.rec.send(Item::End {
             sid: self.sid,
             t,
@@ -167,13 +176,13 @@ impl StreamHandle {
     }
 
     /// Splits an offer into pieces of at most 256 KiB (a WebSocket message keeps its opcode on
-    /// every piece and `fin` on the last) and runs each through the guard.
+    /// every piece and `fin` on the last) and runs each through the guard. After a stop the bytes
+    /// only count: they are in no record, so the offset stays where the record ends.
     fn offer(&mut self, t: Mono, ws: Option<Ws>, bytes: Bytes) {
         if self.stopped() {
-            let n = bytes.len() as u64;
             let i = &self.rec.inner;
-            i.after_stop_bytes.fetch_add(n, Ordering::Relaxed);
-            self.off += n;
+            i.after_stop_bytes
+                .fetch_add(bytes.len() as u64, Ordering::Relaxed);
             return;
         }
         if bytes.is_empty() {
@@ -197,14 +206,19 @@ impl StreamHandle {
         }
     }
 
-    /// The gap rule (PRD-02 section 3) for one piece of at most 256 KiB.
+    /// The gap rule (PRD-02 section 3) for one piece of at most 256 KiB. Native and snapshot
+    /// pieces are always admitted (they read at most `room()`, and the file keeps what is not
+    /// read), and so is an empty piece, which holds nothing.
     fn piece(&mut self, t: Mono, ws: Option<Ws>, bytes: Bytes) {
         let n = bytes.len() as u64;
-        let i = &self.rec.inner;
-        let held = i.held.load(Ordering::Relaxed);
-        if guard::admits(held, n, self.gap.is_some(), i.guard) {
+        let rec = &self.rec;
+        let (soft, in_gap) = (rec.inner.guard, self.gap.is_some());
+        let always = !self.wire || n == 0;
+        let admitted = rec.inner.tx.is_none()
+            || rec.hold(n, |held| always || guard::admits(held, n, in_gap, soft));
+        if admitted {
             self.close_gap(t);
-            self.rec.send(Item::Data {
+            self.rec.push(Item::Data {
                 sid: self.sid,
                 t,
                 off: self.off,
@@ -212,42 +226,30 @@ impl StreamHandle {
                 bytes,
             });
         } else {
-            match &mut self.gap {
-                Some(gap) => gap.lost += n,
+            match &self.gap {
+                Some(gap) => {
+                    gap.lost.fetch_add(n, Ordering::Relaxed);
+                }
                 None => {
-                    self.gap = Some(GuardGap {
+                    let gap = Arc::new(GuardGap {
                         start: t,
                         off: self.off,
-                        lost: n,
+                        lost: AtomicU64::new(n),
                     });
-                    i.streams_in_gap.fetch_add(1, Ordering::Relaxed);
+                    rec.gap_opened(self.sid, gap.clone());
+                    self.gap = Some(gap);
                 }
             }
-            i.dropped_bytes.fetch_add(n, Ordering::Relaxed);
+            rec.inner.dropped_bytes.fetch_add(n, Ordering::Relaxed);
         }
         self.off += n;
     }
 
-    /// Sends the open guard gap, if any, ending at `end` (at least 1 ns after its start, PRD-01
-    /// invariant 12).
+    /// Sends the open guard gap, if the seal has not taken it, ending at `end`.
     fn close_gap(&mut self, end: Mono) {
-        let Some(gap) = self.gap.take() else {
-            return;
-        };
-        let limit = self.rec.inner.guard;
-        self.rec.send(Item::Gap {
-            sid: self.sid,
-            reason: GapReason::MemoryGuard,
-            start: gap.start,
-            end: end.max(Mono(gap.start.ns() + 1)),
-            off: gap.off,
-            lost: Some(gap.lost),
-            tail: Some(json!({"guard": "held_bytes", "limit": limit})),
-        });
-        self.rec
-            .inner
-            .streams_in_gap
-            .fetch_sub(1, Ordering::Relaxed);
+        if self.gap.take().is_some() {
+            self.rec.close_gap(self.sid, end);
+        }
     }
 }
 
@@ -263,6 +265,7 @@ impl Drop for StreamHandle {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
     use std::collections::BTreeMap;
     use std::sync::mpsc::Receiver;
 
@@ -338,7 +341,7 @@ mod tests {
         let mut handles: Vec<StreamHandle> = (0..40)
             .map(|_| open(&rec, StreamKind::HttpReq, 0))
             .collect();
-        let mut offered = vec![0u64; handles.len()];
+        let mut offered = vec![64 * PIECE as u64; handles.len()];
 
         // Nobody drains: every offer still returns.
         std::thread::scope(|s| {
@@ -352,9 +355,6 @@ mod tests {
                 });
             }
         });
-        for n in offered.iter_mut() {
-            *n += 64 * PIECE as u64;
-        }
         let live = rec.live();
         assert!(live.losing.dropped_bytes > 0);
         assert!(live.losing.streams_in_gap > 0);
@@ -501,5 +501,72 @@ mod tests {
         assert!(items.iter().all(|i| sid_of(i) == native.sid()));
         assert!(matches!(items.as_slice(), [Item::Data { bytes, .. }] if bytes.len() == 300));
         assert_eq!(rec.after_stop(), (500, vec!["example.com".to_string()]));
+    }
+
+    #[test]
+    fn native_and_empty_pieces_never_drop() {
+        let (rec, rx) = Recorder::pipeline(MIB);
+        let full = rec.reserve(MIB);
+        let mut native = open(&rec, StreamKind::Native, 0);
+        let mut up = open(&rec, StreamKind::WsUp, 0);
+        native.data(rec.now(), Bytes::from(vec![b'n'; 1000]));
+        up.ws(rec.now(), 0x1, true, Bytes::new());
+        drop(full);
+        let items = drain(&rec, &rx);
+        assert!(items.iter().all(|i| !matches!(i, Item::Gap { .. })));
+        assert_eq!(rec.live().losing.dropped_bytes, 0);
+        let data = |sid| {
+            items
+                .iter()
+                .filter(|i| sid_of(i) == sid && matches!(i, Item::Data { .. }))
+                .count()
+        };
+        assert_eq!((data(native.sid()), data(up.sid())), (1, 1));
+    }
+
+    /// Loss from before the seal's wire stop still gets its GAP: a guard gap closed by its
+    /// handle after the stop, a caller's gap reported after it, and a guard gap whose handle is
+    /// never called again, which the seal closes.
+    #[test]
+    fn loss_before_the_wire_stop_keeps_its_gap() {
+        let (rec, rx) = Recorder::pipeline(MIB);
+        let full = rec.reserve(MIB);
+        let mut a = open(&rec, StreamKind::HttpResp, 0);
+        let mut b = open(&rec, StreamKind::Conn, 0);
+        let mut c = open(&rec, StreamKind::HttpResp, 0);
+        a.data(rec.now(), Bytes::from(vec![b'a'; 1000]));
+        c.data(rec.now(), Bytes::from(vec![b'c'; 400]));
+        let start = rec.now();
+        rec.stop_wire();
+
+        a.data(rec.now(), Bytes::from(vec![b'a'; 50]));
+        b.gap(GapReason::DecodeFailed, start, Some(500), None);
+        a.end(rec.now(), EndReason::Complete, None);
+        drop(b);
+        rec.stop_all();
+        rec.close_open_gaps(rec.now());
+        drop((c, full));
+        let items = drain(&rec, &rx);
+
+        let gaps: Vec<(Sid, u64, Option<u64>)> = items
+            .iter()
+            .filter_map(|i| match i {
+                Item::Gap {
+                    sid, off, lost, start, end, ..
+                } => {
+                    assert!(start < end);
+                    Some((*sid, *off, *lost))
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(gaps.len(), 3, "{items:?}");
+        for want in [(1, 0, Some(1000)), (2, 0, Some(500)), (3, 0, Some(400))] {
+            assert!(gaps.contains(&want), "{want:?} in {gaps:?}");
+        }
+        // The seal writes `END cut_at_seal` for streams still open; nothing else was sent.
+        assert!(items.iter().all(|i| matches!(i, Item::Open { .. } | Item::Gap { .. })));
+        assert_eq!(rec.after_stop().0, 50);
+        assert_eq!(rec.live().losing.streams_in_gap, 0);
     }
 }

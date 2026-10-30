@@ -11,10 +11,9 @@ use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};
 pub enum Target {
     /// The soft limit to the hard limit.
     Recorder,
-    /// `max(current soft, 4096)`, at most the hard limit (and `OPEN_MAX` on macOS).
+    /// The harness and the watchdog: `max(current soft, 4096)`, at most the hard limit (and
+    /// `OPEN_MAX` on macOS).
     Harness,
-    /// As the harness.
-    Watchdog,
 }
 
 /// macOS `setrlimit` refuses `RLIM_INFINITY` for `RLIMIT_NOFILE` and asks for
@@ -29,8 +28,8 @@ const FLOOR: u64 = 4_096;
 const FIXED: u64 = 64;
 
 /// Raises this process's soft open-file limit for `target` and returns the soft limit in force
-/// after the call (0 if it cannot be read). Never lowers it. `Recorder` also keeps the result as
-/// the limit [`may_accept`] checks.
+/// after the call (0 if it cannot be read). Never lowers it. The recorder's raise runs in its
+/// `pre_exec`, so [`may_accept`] reads the limit itself.
 pub fn raise(target: Target) -> u64 {
     let Some((soft, hard)) = get() else {
         return 0;
@@ -45,49 +44,37 @@ pub fn raise(target: Target) -> u64 {
                 }
             }
         }
-        Target::Harness | Target::Watchdog => {
+        Target::Harness => {
             let want = soft.max(FLOOR).min(cap);
             if want > soft {
                 set(want, hard);
             }
         }
     }
-    let now = get().map_or(soft, |(s, _)| s);
-    if target == Target::Recorder {
-        RESERVE.limit.store(now, Ordering::Relaxed);
-    }
-    now
+    get().map_or(soft, |(s, _)| s)
 }
 
-/// True while `2 x open connections + 64` is under the recorder's limit (the one `raise(Recorder)`
-/// set, else the soft limit read once). PRD-03 asks before each `accept`; while false it waits
+/// True while `2 x open connections + 64` is under the recorder's soft limit (read once). Open
+/// connections are the `conn` streams not yet ended, counted by `StreamHandle`. PRD-03 asks before each `accept`; while false it waits
 /// 10 ms and asks again. Turning false after being true starts one episode for [`take_note`].
 pub fn may_accept() -> bool {
     RESERVE.may_accept()
 }
 
-/// Counts one open connection until the returned slot is dropped.
-pub fn conn_opened() -> ConnSlot {
-    RESERVE.opened()
+/// A `conn` stream opened.
+pub(crate) fn conn_opened() {
+    RESERVE.open.fetch_add(1, Ordering::Relaxed);
+}
+
+/// A `conn` stream ended.
+pub(crate) fn conn_closed() {
+    RESERVE.closed();
 }
 
 /// `(limit, open connections)` once per episode in which [`may_accept`] said no, for the one
 /// `note` `fd_limit` event. The episode ends when `may_accept` is true again.
 pub fn take_note() -> Option<(u64, u64)> {
     RESERVE.take_note()
-}
-
-/// One open connection, counted until it is dropped.
-#[must_use]
-#[derive(Debug)]
-pub struct ConnSlot {
-    reserve: &'static Reserve,
-}
-
-impl Drop for ConnSlot {
-    fn drop(&mut self) {
-        self.reserve.open.fetch_sub(1, Ordering::Relaxed);
-    }
 }
 
 static RESERVE: Reserve = Reserve::new();
@@ -99,7 +86,7 @@ const NOTED: u8 = 2;
 /// The limit, the open connections and the episode state. Atomics only, no lock.
 #[derive(Debug)]
 struct Reserve {
-    /// 0 until set by `raise(Recorder)` or read once.
+    /// 0 until read once.
     limit: AtomicU64,
     open: AtomicU64,
     episode: AtomicU8,
@@ -150,9 +137,10 @@ impl Reserve {
             .map(|_| (self.limit(), self.open.load(Ordering::Relaxed)))
     }
 
-    fn opened(&'static self) -> ConnSlot {
-        self.open.fetch_add(1, Ordering::Relaxed);
-        ConnSlot { reserve: self }
+    fn closed(&self) {
+        let _ = self
+            .open
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |n| Some(n.saturating_sub(1)));
     }
 }
 
@@ -204,13 +192,10 @@ mod tests {
 
         assert!(set(low, hard));
         assert_eq!(raise(Target::Harness), low.max(FLOOR).min(cap));
-        assert!(set(low, hard));
-        assert_eq!(raise(Target::Watchdog), low.max(FLOOR).min(cap));
 
         assert!(set(low, hard));
         let got = raise(Target::Recorder);
         assert!(got == cap || got == FLOOR.min(cap), "{got} {cap}");
-        assert_eq!(RESERVE.limit.load(Ordering::Relaxed), got);
     }
 
     #[test]
@@ -218,25 +203,24 @@ mod tests {
         static R: Reserve = Reserve::new();
         R.limit.store(100, Ordering::Relaxed);
         // 2 x 17 + 64 = 98 < 100; 2 x 18 + 64 = 100 is not.
-        let mut slots: Vec<ConnSlot> = (0..17).map(|_| R.opened()).collect();
+        R.open.store(17, Ordering::Relaxed);
         assert!(R.may_accept());
         assert_eq!(R.take_note(), None);
 
-        slots.push(R.opened());
+        R.open.store(18, Ordering::Relaxed);
         assert!(!R.may_accept());
         assert_eq!(R.take_note(), Some((100, 18)));
         assert!(!R.may_accept());
         assert_eq!(R.take_note(), None);
 
-        drop(slots.pop());
+        R.closed();
         assert!(R.may_accept());
         assert_eq!(R.take_note(), None);
 
-        slots.push(R.opened());
+        R.open.store(18, Ordering::Relaxed);
         assert!(!R.may_accept());
         assert_eq!(R.take_note(), Some((100, 18)));
-        drop(slots);
+        R.closed();
         assert!(R.may_accept());
-        assert_eq!(R.open.load(Ordering::Relaxed), 0);
     }
 }

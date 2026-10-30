@@ -1,6 +1,6 @@
 //! PRD-02 section 9.2 step 1 (point 4): a recorder boot turns core dumps off and its panic hook
-//! never prints the panic's message. The test runs itself again as a child that hardens, panics
-//! with a marker, and reports its limits; the parent checks the child.
+//! never prints or logs the panic's message. The test runs itself again as a child that hardens,
+//! panics with a marker, and reports its limits; the parent checks the child and `goalcup.log`.
 
 use goalcup::pipeline::secure;
 use std::process::Command;
@@ -12,9 +12,9 @@ const MARKER: &str = "panic-payload-marker-5c1e";
 #[cfg(target_os = "linux")]
 const Z: libc::c_ulong = 0;
 
-fn child() -> ! {
+fn child(entry_dir: &std::ffi::OsStr) -> ! {
     secure::harden();
-    secure::panic_hook();
+    secure::panic_hook(std::path::Path::new(entry_dir));
     let mut lim = libc::rlimit {
         rlim_cur: 1,
         rlim_max: 1,
@@ -34,13 +34,14 @@ fn child() -> ! {
 
 #[test]
 fn boot_hardening_and_panic_hook() {
-    if std::env::var_os(CHILD).is_some() {
-        child();
+    if let Some(dir) = std::env::var_os(CHILD) {
+        child(&dir);
     }
+    let entry = tempfile::tempdir().unwrap();
     let exe = std::env::current_exe().expect("own test binary");
     let out = Command::new(exe)
         .args(["boot_hardening_and_panic_hook", "--exact", "--nocapture"])
-        .env(CHILD, "1")
+        .env(CHILD, entry.path())
         .output()
         .expect("child runs");
     let stdout = String::from_utf8_lossy(&out.stdout);
@@ -57,4 +58,7 @@ fn boot_hardening_and_panic_hook() {
     assert!(at.starts_with(|c: char| c.is_ascii_digit()), "no line");
     assert!(!stdout.contains(MARKER));
     assert!(!stderr.contains(MARKER));
+    let log = std::fs::read_to_string(entry.path().join("goalcup.log")).expect("goalcup.log");
+    assert!(log.contains("pipeline_secure.rs"), "{log}");
+    assert!(!log.contains(MARKER));
 }

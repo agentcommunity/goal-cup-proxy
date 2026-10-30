@@ -38,9 +38,9 @@ pub use handle::{OpenFlags, StreamHandle};
 pub use status::{Live, Status};
 
 use item::Item;
-use serde_json::Value;
+use serde_json::{Value, json};
 use status::{Losing, Off};
-use std::io::Write;
+use std::collections::HashMap;
 use std::process::ExitCode;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, mpsc};
@@ -53,7 +53,7 @@ pub type Sid = u64;
 pub const SOFT_GUARD: u64 = 512 << 20;
 
 /// The exit code when a pipeline thread is gone (PRD-02 section 2 rule 1).
-const EXIT_PIPELINE_GONE: i32 = 70;
+pub(crate) const EXIT_PIPELINE_GONE: i32 = 70;
 
 /// The recorder handle (seam S1). Cheap to clone.
 #[derive(Clone)]
@@ -67,13 +67,22 @@ struct Inner {
     tx: Option<mpsc::Sender<Item>>,
     /// The soft guard in bytes.
     guard: u64,
-    /// Bytes offered and not yet written, plus reservations.
+    /// Bytes offered and not yet written, plus reservations: what the guard checks.
     held: AtomicU64,
     held_peak: AtomicU64,
+    /// Bytes of items offered and not yet written, reservations left out: records wait while
+    /// this is above 0.
+    queued: AtomicU64,
+    /// Awake time (`clock::awake_ns`) when `queued` last left 0.
+    wait_since_ns: AtomicU64,
     /// Bytes the guard dropped this boot.
     dropped_bytes: AtomicU64,
     streams_in_gap: AtomicU64,
-    /// Boot time of the writer's last write.
+    /// The guard gap open on each stream that is in one (PRD-02 section 3), so the seal can close
+    /// a gap whose handle is never called again. Touched only when an episode opens or closes.
+    open_gaps: Mutex<HashMap<Sid, Arc<GuardGap>>>,
+    /// Awake time of the writer's last write. The awake clock stops during sleep, so a suspend
+    /// is never a stall.
     writer_last_ns: AtomicU64,
     boot: AtomicU64,
     /// Entry totals at the last LINK, set by the writer.
@@ -102,9 +111,12 @@ impl Inner {
             guard,
             held: AtomicU64::new(0),
             held_peak: AtomicU64::new(0),
+            queued: AtomicU64::new(0),
+            wait_since_ns: AtomicU64::new(0),
             dropped_bytes: AtomicU64::new(0),
             streams_in_gap: AtomicU64::new(0),
-            writer_last_ns: AtomicU64::new(Mono::now().ns()),
+            open_gaps: Mutex::new(HashMap::new()),
+            writer_last_ns: AtomicU64::new(clock::awake_ns()),
             boot: AtomicU64::new(0),
             counts: Mutex::new(Counts::default()),
             off: Mutex::new(Off::default()),
@@ -197,9 +209,10 @@ impl Recorder {
         limit.saturating_sub(self.inner.held.load(Ordering::Relaxed))
     }
 
-    /// Counts `n` in `held` until the returned `Reserved` drops (a decoder window, PRD-03).
+    /// Counts `n` in `held` until the returned `Reserved` drops (a decoder window, PRD-03). A
+    /// reservation is never a record waiting, so it never counts toward the stall exit.
     pub fn reserve(&self, n: u64) -> Reserved {
-        self.add_held(n);
+        self.hold(n, |_| true);
         Reserved {
             rec: self.clone(),
             n,
@@ -226,18 +239,20 @@ impl Recorder {
     /// never parses `status.json` for them.
     pub fn live(&self) -> Live {
         let i = &self.inner;
-        let held = i.held.load(Ordering::Relaxed);
-        let writer_idle_ms = if held > 0 {
-            self.now()
-                .ns()
-                .saturating_sub(i.writer_last_ns.load(Ordering::Relaxed))
-                / 1_000_000
+        // Idle from the later of the last write and the moment records began to wait.
+        let writer_idle_ms = if i.queued.load(Ordering::Relaxed) > 0 {
+            let since = i
+                .writer_last_ns
+                .load(Ordering::Relaxed)
+                .max(i.wait_since_ns.load(Ordering::Relaxed));
+            clock::awake_ns().saturating_sub(since) / 1_000_000
         } else {
             0
         };
         Live {
             boot: i.boot.load(Ordering::Relaxed),
-            held_bytes: held,
+            held_bytes: i.held.load(Ordering::Relaxed),
+            held_peak: i.held_peak.load(Ordering::Relaxed),
             writer_idle_ms,
             losing: Losing {
                 streams_in_gap: i.streams_in_gap.load(Ordering::Relaxed),
@@ -252,22 +267,92 @@ impl Recorder {
         self.inner.durable.subscribe()
     }
 
-    fn add_held(&self, n: u64) {
-        let now = self.inner.held.fetch_add(n, Ordering::Relaxed) + n;
-        self.inner.held_peak.fetch_max(now, Ordering::Relaxed);
+    /// Counts `n` more in `held` when `admit` agrees with the bytes held now, in one atomic
+    /// step, so callers offering at once never overshoot the guard. True if counted.
+    fn hold(&self, n: u64, admit: impl Fn(u64) -> bool) -> bool {
+        let i = &self.inner;
+        match i.held.try_update(Ordering::Relaxed, Ordering::Relaxed, |h| {
+            admit(h).then_some(h.saturating_add(n))
+        }) {
+            Ok(h) => {
+                i.held_peak.fetch_max(h.saturating_add(n), Ordering::Relaxed);
+                true
+            }
+            Err(_) => false,
+        }
     }
 
-    /// The one send: counts the item in `held`, then hands it on. No lock is held here. A gone
-    /// receiver means a pipeline thread died: exit 70 so the watchdog restarts the recorder.
+    /// Counts the item in `held`, then hands it on. A recorder that sends nothing (`for_tests`,
+    /// the scaffold) counts nothing.
     fn send(&self, item: Item) {
-        let Some(tx) = &self.inner.tx else {
+        if self.inner.tx.is_none() {
+            return;
+        }
+        self.hold(item.held(), |_| true);
+        self.push(item);
+    }
+
+    /// Hands on an item already counted in `held`, and counts it in `queued`. No lock is held
+    /// here. A gone receiver means a pipeline thread died: exit 70 so the watchdog restarts the
+    /// recorder.
+    fn push(&self, item: Item) {
+        let i = &self.inner;
+        let Some(tx) = &i.tx else {
             return;
         };
-        self.add_held(item.held());
+        if i.queued.fetch_add(item.held(), Ordering::Relaxed) == 0 {
+            i.wait_since_ns.store(clock::awake_ns(), Ordering::Relaxed);
+        }
         if tx.send(item).is_err() {
             pipeline_gone();
         }
     }
+
+    /// Opens a guard gap on stream `sid` (the first dropped piece of an episode).
+    pub(crate) fn gap_opened(&self, sid: Sid, gap: Arc<GuardGap>) {
+        lock(&self.inner.open_gaps).insert(sid, gap);
+        self.inner.streams_in_gap.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Sends the guard gap open on `sid`, if one is still open, ending at `end` (at least 1 ns
+    /// after its start, PRD-01 invariant 12). Whoever takes it from the map sends it: the handle
+    /// or the seal, never both.
+    pub(crate) fn close_gap(&self, sid: Sid, end: Mono) {
+        let gap = lock(&self.inner.open_gaps).remove(&sid);
+        if let Some(gap) = gap {
+            self.send_gap(sid, &gap, end);
+        }
+    }
+
+    fn send_gap(&self, sid: Sid, gap: &GuardGap, end: Mono) {
+        self.send(Item::Gap {
+            sid,
+            reason: GapReason::MemoryGuard,
+            start: gap.start,
+            end: end.max(Mono(gap.start.ns() + 1)),
+            off: gap.off,
+            lost: Some(gap.lost.load(Ordering::Relaxed)),
+            tail: Some(json!({"guard": "held_bytes", "limit": self.inner.guard})),
+        });
+        self.inner.streams_in_gap.fetch_sub(1, Ordering::Relaxed);
+    }
+}
+
+/// Bytes the guard dropped on one stream since its last admitted piece. Shared by the handle
+/// and `open_gaps`; only the handle adds to `lost`.
+pub(crate) struct GuardGap {
+    /// The first dropped piece's time.
+    pub(crate) start: Mono,
+    /// The offset of its first byte.
+    pub(crate) off: u64,
+    pub(crate) lost: AtomicU64,
+}
+
+/// `a -= n`, never below 0: the one rule for taking bytes off a counter.
+fn sub(a: &AtomicU64, n: u64) {
+    let _ = a.try_update(Ordering::Relaxed, Ordering::Relaxed, |v| {
+        Some(v.saturating_sub(n))
+    });
 }
 
 /// The front's API for the mask worker, the writer, the status thread and the seal. Their
@@ -283,27 +368,20 @@ impl Recorder {
         (rec, rx)
     }
 
-    /// The writer handed records worth `n` held bytes to the compressor.
+    /// The writer handed records worth `n` held bytes to the compressor. `release(0)` marks
+    /// progress with nothing written, for work such as a long recount at boot, so it is not a
+    /// stall.
     pub(crate) fn release(&self, n: u64) {
-        let _ = self
-            .inner
-            .held
-            .try_update(Ordering::Relaxed, Ordering::Relaxed, |h| {
-                Some(h.saturating_sub(n))
-            });
+        sub(&self.inner.held, n);
+        sub(&self.inner.queued, n);
         self.inner
             .writer_last_ns
-            .store(self.now().ns(), Ordering::Relaxed);
+            .store(clock::awake_ns(), Ordering::Relaxed);
     }
 
     /// The soft guard in bytes (`status.json` `guard`).
     pub(crate) fn guard(&self) -> u64 {
         self.inner.guard
-    }
-
-    /// The most bytes ever held at once this boot (`status.json` and COUNT `held_peak`).
-    pub(crate) fn held_peak(&self) -> u64 {
-        self.inner.held_peak.load(Ordering::Relaxed)
     }
 
     pub(crate) fn set_counts(&self, counts: Counts) {
@@ -337,7 +415,18 @@ impl Recorder {
         self.inner.all_stopped.store(true, Ordering::Release);
     }
 
-    /// Bytes offered after a stop, and the hosts of `conn` streams opened after it.
+    /// After `stop_all`, the seal's GAP ending at `end` for every guard gap still open (PRD-02
+    /// section 11 step 5). The channel is alive until the seal, so these reach the writer.
+    pub(crate) fn close_open_gaps(&self, end: Mono) {
+        let gaps: Vec<_> = lock(&self.inner.open_gaps).drain().collect();
+        for (sid, gap) in gaps {
+            self.send_gap(sid, &gap, end);
+        }
+    }
+
+    /// Bytes offered after a stop, and the hosts of `conn` streams opened after it. The hosts are
+    /// raw OPEN meta: the seal runs each through the masker (`mask_meta`) before it reaches
+    /// `status.json` or `goalcup.log`, so a host holding a secret shape never reaches disk.
     pub(crate) fn after_stop(&self) -> (u64, Vec<String>) {
         (
             self.inner.after_stop_bytes.load(Ordering::Relaxed),
@@ -346,17 +435,10 @@ impl Recorder {
     }
 }
 
-/// A pipeline thread is gone. The first caller writes one fixed line and exits 70; a caller that
-/// comes later returns, since the process is already ending.
+/// A pipeline thread is gone: one fixed line and exit 70 (a later caller returns, since the
+/// process is already ending).
 fn pipeline_gone() {
-    static EXITING: AtomicBool = AtomicBool::new(false);
-    if EXITING.swap(true, Ordering::SeqCst) {
-        return;
-    }
-    let _ = std::io::stderr()
-        .lock()
-        .write_all(b"goalcup: recorder pipeline stopped; restarting\n");
-    std::process::exit(EXIT_PIPELINE_GONE);
+    secure::exit(EXIT_PIPELINE_GONE, "pipeline_gone");
 }
 
 /// `n` bytes counted in `held` until dropped.
@@ -368,7 +450,7 @@ pub struct Reserved {
 
 impl Drop for Reserved {
     fn drop(&mut self) {
-        self.rec.inner.held.fetch_sub(self.n, Ordering::Relaxed);
+        sub(&self.rec.inner.held, self.n);
     }
 }
 
@@ -390,4 +472,41 @@ pub fn low_priority() {
 pub fn run_recorder(null: bool) -> ExitCode {
     let _ = null;
     ExitCode::SUCCESS
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const MIN: u64 = 61_000_000_000;
+
+    /// Point 3: a quiet minute, a reservation alone or the first record after a pause is never a
+    /// stall; a record left waiting for 60 s with no write is.
+    #[test]
+    fn the_stall_exit_needs_a_record_waiting_with_no_write() {
+        let (rec, rx) = Recorder::pipeline(SOFT_GUARD);
+        let i = &rec.inner;
+        let ago = || clock::awake_ns().saturating_sub(MIN);
+        let stalled = || status::stalled(&rec.live(), SOFT_GUARD);
+        i.writer_last_ns.store(ago(), Ordering::Relaxed);
+
+        let window = rec.reserve(16 << 20);
+        assert_eq!(rec.live().writer_idle_ms, 0);
+        assert!(!stalled());
+
+        rec.event(json!({"ev": "note"}));
+        assert!(rec.live().writer_idle_ms < 60_000);
+        assert!(!stalled());
+
+        // The record still waits a minute later, with no write since.
+        i.wait_since_ns.store(ago(), Ordering::Relaxed);
+        assert!(stalled());
+
+        for item in rx.try_iter() {
+            rec.release(item.held());
+        }
+        drop(window);
+        assert_eq!(rec.live().held_bytes, 0);
+        assert!(!stalled());
+    }
 }

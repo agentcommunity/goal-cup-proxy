@@ -1,8 +1,8 @@
 //! `status.json` (seam S4, PRD-02 section 6). Only the recorder writes it, each second, by atomic
 //! rename; `goalcup status`, the end screen (PRD-10) and the uploader (PRD-06) read it.
 
-use super::Recorder;
 use super::counts::{Counts, EntryTotals};
+use super::{EXIT_PIPELINE_GONE, Recorder, clock, secure};
 use crate::watchdog::{Exit, SealReason};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -14,12 +14,15 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread::JoinHandle;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
 /// The schema version.
 pub const STATUS_V: u32 = 1;
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+/// The stall exit's code (PRD-02 section 3); the next boot names the span `writer_stalled`.
+const EXIT_WRITER_STALLED: i32 = 75;
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Status {
     pub v: u32,
     /// Wall time of this write, RFC 3339 UTC.
@@ -62,9 +65,10 @@ pub struct Status {
     pub after_seal: Option<AfterSeal>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Mode {
+    #[default]
     Recording,
     /// Some stream is in a gap, or a `parse_stopped` connection's closing GAP is not yet written.
     Losing,
@@ -107,9 +111,12 @@ impl Written {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Live {
     pub boot: u64,
-    /// Bytes offered and not yet written, plus reservations. Records wait while this is not 0.
+    /// Bytes offered and not yet written, plus reservations.
     pub held_bytes: u64,
-    /// Boot time since the writer last wrote.
+    /// The most bytes held at once this boot.
+    pub held_peak: u64,
+    /// While records wait: awake time since the later of the writer's last write and the moment
+    /// records began to wait. 0 while none wait; a reservation is never a record waiting.
     pub writer_idle_ms: u64,
     pub losing: Losing,
     /// Entry totals over boots, the open null span included.
@@ -183,22 +190,16 @@ impl Status {
     }
 }
 
-/// Writes `bytes` to `path` by atomic rename: the parent folder is created 0700 when missing, a
-/// temp file in the same folder is created new with mode 0600, written, synced when `sync`, and
-/// renamed over `path`; then the folder is synced when `sync`. `counts.jsonl`, `cursors.json` and
-/// `status.json` all use it.
+/// Writes `bytes` to `path` (a file in the entry folder) by atomic rename: the folder is created
+/// 0700 when missing, a temp file in it is created new with mode 0600, written, synced when
+/// `sync`, and renamed over `path`; then the folder is synced when `sync`. `counts.jsonl`,
+/// `cursors.json` and `status.json` all use it.
 pub(crate) fn write_private(path: &Path, bytes: &[u8], sync: bool) -> io::Result<()> {
     static N: AtomicU64 = AtomicU64::new(0);
-    let dir = match path.parent() {
-        Some(d) if !d.as_os_str().is_empty() => d,
-        _ => Path::new("."),
+    let (Some(dir), Some(name)) = (path.parent(), path.file_name()) else {
+        return Err(io::Error::new(io::ErrorKind::InvalidInput, "no file name"));
     };
-    if !dir.exists() {
-        DirBuilder::new().recursive(true).mode(0o700).create(dir)?;
-    }
-    let name = path
-        .file_name()
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "no file name"))?;
+    DirBuilder::new().recursive(true).mode(0o700).create(dir)?;
     let tmp = dir.join(format!(
         ".{}.{}.{}.tmp",
         name.to_string_lossy(),
@@ -236,7 +237,7 @@ pub fn mode(live: &Live, null: bool, sealed: bool) -> Mode {
         Mode::Sealed
     } else if null {
         Mode::Null
-    } else if live.held_bytes > 0 && live.writer_idle_ms >= 10_000 {
+    } else if live.writer_idle_ms >= 10_000 {
         Mode::WriterSlow
     } else if live.losing.streams_in_gap > 0 {
         Mode::Losing
@@ -245,39 +246,26 @@ pub fn mode(live: &Live, null: bool, sealed: bool) -> Mode {
     }
 }
 
-/// The stall exit (PRD-02 section 3): records wait and nothing was written for 60 s of boot time,
-/// or held bytes reached twice the soft guard.
+/// The stall exit (PRD-02 section 3): records wait and nothing was written for 60 s of awake time
+/// (a suspend is not a stall), or held bytes reached twice the soft guard.
 pub fn stalled(live: &Live, guard: u64) -> bool {
-    (live.held_bytes > 0 && live.writer_idle_ms >= 60_000)
-        || live.held_bytes >= guard.saturating_mul(2)
+    live.writer_idle_ms >= 60_000 || live.held_bytes >= guard.saturating_mul(2)
 }
 
-/// The facts `status.json` carries that the live atomics do not. Cheap to clone; every setter
-/// takes the lock for a plain store and no lock is held across I/O.
+/// The facts `status.json` carries that the live atomics do not, as a `Status` the status thread
+/// copies and overlays with the live fields. Cheap to clone; every call takes the lock for plain
+/// stores and no lock is held across I/O.
 #[derive(Clone, Default)]
 pub struct Board(Arc<Mutex<Facts>>);
 
 #[derive(Default)]
 struct Facts {
-    pid: u32,
-    start_id: u64,
-    port: u16,
-    deadline: Option<String>,
-    harness: Option<HarnessStatus>,
+    status: Status,
     /// The first note of each `what`, with its number.
     first_notes: Vec<(u64, Value)>,
     /// The last 20 notes, with their numbers.
     last_notes: VecDeque<(u64, Value)>,
     notes_seen: u64,
-    last_request_at: Option<String>,
-    last_native_at: Option<String>,
-    null_since: Option<String>,
-    sealing: Option<String>,
-    after_seal: Option<AfterSeal>,
-    seal: Option<SealStatus>,
-    totals: Option<EntryTotals>,
-    cut_files: Option<CutFiles>,
-    outlived: Option<Outlived>,
     stop: bool,
 }
 
@@ -289,26 +277,11 @@ impl Board {
         self.0.lock().unwrap_or_else(|e| e.into_inner())
     }
 
-    /// The recorder's pid, its OS start time and the listen port.
-    pub fn process(&self, pid: u32, start_id: u64, port: u16) {
-        let mut f = self.facts();
-        (f.pid, f.start_id, f.port) = (pid, start_id, port);
-    }
-
-    pub fn deadline(&self, deadline: Option<String>) {
-        self.facts().deadline = deadline;
-    }
-
-    /// The harness as the watchdog launched it.
-    pub fn launch(&self, harness: HarnessStatus) {
-        self.facts().harness = Some(harness);
-    }
-
-    /// How the harness ended.
-    pub fn exit(&self, exit: Exit) {
-        if let Some(h) = &mut self.facts().harness {
-            h.exit = Some(exit);
-        }
+    /// Sets facts the live atomics do not hold: `pid`, `start_id`, `port`, `deadline`, `harness`,
+    /// `last_request_at`, `last_native_at`, `sealing`, `after_seal`, `cut_files`, `outlived`.
+    /// The live fields are overwritten at each write.
+    pub fn set(&self, f: impl FnOnce(&mut Status)) {
+        f(&mut self.facts().status);
     }
 
     /// A `note` event as written.
@@ -326,43 +299,16 @@ impl Board {
         }
     }
 
-    /// Wall time (RFC 3339 UTC) of the last written model request.
-    pub fn request_at(&self, at: String) {
-        self.facts().last_request_at = Some(at);
-    }
-
-    /// Wall time (RFC 3339 UTC) of the last written native DATA.
-    pub fn native_at(&self, at: String) {
-        self.facts().last_native_at = Some(at);
-    }
-
-    /// Set while a null recorder runs: when it started, RFC 3339 UTC.
-    pub fn null_since(&self, since: Option<String>) {
-        self.facts().null_since = since;
-    }
-
-    /// `reading session files` while the seal reads them with no time guard; None otherwise.
-    pub fn sealing(&self, sealing: Option<String>) {
-        self.facts().sealing = sealing;
-    }
-
-    pub fn after_seal(&self, after: AfterSeal) {
-        self.facts().after_seal = Some(after);
-    }
-
     /// The seal: from now on `mode` is sealed and `written` and `off` are the seal's totals.
-    pub fn sealed(
-        &self,
-        seal: SealStatus,
-        totals: EntryTotals,
-        cut_files: Option<CutFiles>,
-        outlived: Option<Outlived>,
-    ) {
-        let mut f = self.facts();
-        f.seal = Some(seal);
-        f.totals = Some(totals);
-        f.cut_files = cut_files;
-        f.outlived = outlived;
+    pub fn sealed(&self, seal: SealStatus, totals: &EntryTotals) {
+        let s = &mut self.facts().status;
+        s.seal = Some(seal);
+        s.written = Written::new(totals.counts.clone());
+        s.off = Off {
+            spans: totals.off_spans,
+            ms: totals.counts.off_ms,
+            since: None,
+        };
     }
 
     /// Stops the status thread after its current write.
@@ -374,8 +320,9 @@ impl Board {
         self.facts().stop
     }
 
-    /// The status from the live atomics, this entry's written counts, the durable point and these
-    /// facts. In `mode: sealed`, `written` and `off` are the seal's totals.
+    /// These facts with the live atomics, this entry's written counts and the durable point over
+    /// them. In `mode: sealed`, `written` and `off` stay the seal's totals. `held_peak` is the
+    /// larger of the live peak and the written one, so a stuck writer never freezes it.
     pub fn status(
         &self,
         live: &Live,
@@ -384,69 +331,43 @@ impl Board {
         guard: u64,
     ) -> Status {
         let f = self.facts();
-        let sealed = f.seal.is_some();
-        let (counts, off) = match (&f.totals, sealed) {
-            (Some(t), true) => (
-                t.counts.clone(),
-                Off {
-                    spans: t.off_spans,
-                    ms: t.counts.off_ms,
-                    since: None,
-                },
-            ),
-            _ => (
-                counts,
-                Off {
-                    since: live.off.since.clone().or_else(|| f.null_since.clone()),
-                    ..live.off.clone()
-                },
-            ),
-        };
+        let mut s = f.status.clone();
+        let sealed = s.seal.is_some();
+        if !sealed {
+            s.written = Written::new(counts);
+            s.off = live.off.clone();
+        }
         let first: Vec<u64> = f.first_notes.iter().map(|(n, _)| *n).collect();
-        let notes = f
+        s.notes = f
             .first_notes
             .iter()
             .chain(f.last_notes.iter().filter(|(n, _)| !first.contains(n)))
             .map(|(_, v)| v.clone())
             .collect();
-        Status {
-            v: STATUS_V,
-            updated: rfc3339_now(),
-            pid: f.pid,
-            start_id: f.start_id,
-            boot: live.boot,
-            port: f.port,
-            mode: mode(live, f.null_since.is_some(), sealed),
-            harness: f.harness.clone(),
-            held_peak: counts.held_peak,
-            written: Written::new(counts),
-            last_request_at: f.last_request_at.clone(),
-            last_native_at: f.last_native_at.clone(),
-            losing: live.losing,
-            off,
-            notes,
-            held_bytes: live.held_bytes,
-            guard,
-            writer_idle_ms: live.writer_idle_ms,
-            durable,
-            deadline: f.deadline.clone(),
-            sealing: f.sealing.clone(),
-            seal: f.seal.clone(),
-            cut_files: f.cut_files,
-            outlived: f.outlived.clone(),
-            after_seal: f.after_seal.clone(),
-        }
+        s.v = STATUS_V;
+        s.updated = goalcup_format::dump::wall(clock::wall_ns() / 1_000_000_000 * 1_000_000_000);
+        s.boot = live.boot;
+        s.mode = mode(live, live.off.since.is_some(), sealed);
+        s.losing = live.losing;
+        s.held_bytes = live.held_bytes;
+        s.held_peak = live.held_peak.max(s.written.counts.held_peak);
+        s.guard = guard;
+        s.writer_idle_ms = live.writer_idle_ms;
+        s.durable = durable;
+        s
     }
 }
 
 /// The status thread (PRD-02 sections 3 and 5 step 5): every second it writes `status.json` from
 /// the live atomics, the written counts, the durable point and `board`, and checks the stall
-/// exit. A stall writes one fixed line to stderr and ends the process with 75; the next boot names
-/// the span `writer_stalled`. It runs until [`Board::stop`].
+/// exit. A stall writes one fixed line and ends the process with 75; the next boot names the span
+/// `writer_stalled`. A panic in this thread ends the process with 70, since the stall exit would
+/// go unchecked. It runs until [`Board::stop`].
 pub fn spawn(rec: Recorder, entry_dir: PathBuf, board: Board, guard: u64) -> JoinHandle<()> {
     std::thread::Builder::new()
         .name("goalcup-status".into())
         .spawn(move || {
+            let _exit = ExitOnPanic;
             let durable = rec.durable();
             while !board.stopped() {
                 let live = rec.live();
@@ -463,9 +384,7 @@ pub fn spawn(rec: Recorder, entry_dir: PathBuf, board: Board, guard: u64) -> Joi
                     .status(&live, rec.counts(), d, guard)
                     .write(&entry_dir);
                 if stalled(&live, guard) {
-                    let _ = io::stderr()
-                        .write_all(b"goalcup recorder: the writer stalled; exiting to restart\n");
-                    std::process::exit(75);
+                    secure::exit(EXIT_WRITER_STALLED, "writer_stalled");
                 }
                 std::thread::sleep(Duration::from_secs(1));
             }
@@ -473,33 +392,15 @@ pub fn spawn(rec: Recorder, entry_dir: PathBuf, board: Board, guard: u64) -> Joi
         .expect("the status thread starts")
 }
 
-/// Wall time now, RFC 3339 UTC, whole seconds.
-pub(crate) fn rfc3339_now() -> String {
-    let s = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |d| d.as_secs());
-    rfc3339(s)
-}
+/// Ends the process with 70 when the thread holding it unwinds from a panic.
+struct ExitOnPanic;
 
-/// Unix seconds as RFC 3339 UTC (`2026-11-07T10:00:01Z`), by the days-to-civil rule.
-pub(crate) fn rfc3339(unix_s: u64) -> String {
-    let days = (unix_s / 86_400) as i64;
-    let rem = unix_s % 86_400;
-    let z = days + 719_468;
-    let era = z.div_euclid(146_097);
-    let doe = z - era * 146_097;
-    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = doy - (153 * mp + 2) / 5 + 1;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 };
-    let y = yoe + era * 400 + i64::from(m <= 2);
-    format!(
-        "{y:04}-{m:02}-{d:02}T{:02}:{:02}:{:02}Z",
-        rem / 3_600,
-        rem % 3_600 / 60,
-        rem % 60
-    )
+impl Drop for ExitOnPanic {
+    fn drop(&mut self) {
+        if std::thread::panicking() {
+            secure::exit(EXIT_PIPELINE_GONE, "status_thread_gone");
+        }
+    }
 }
 
 #[cfg(test)]
@@ -516,7 +417,6 @@ mod tests {
         };
         assert!(!stalled(&live(1, 59_999), guard));
         assert!(stalled(&live(1, 60_000), guard));
-        assert!(!stalled(&live(0, 600_000), guard));
         assert!(!stalled(&live(2 * guard - 1, 0), guard));
         assert!(stalled(&live(2 * guard, 0), guard));
     }

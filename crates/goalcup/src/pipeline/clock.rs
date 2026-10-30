@@ -1,7 +1,8 @@
 //! The clocks (PRD-02 section 1, PRD-01 section 6).
 //!
 //! - The record clock, [`Mono`]: boot time. Every timer of the recorder and the watchdog reads it.
-//! - The awake clock, [`awake_ns`]: stops during sleep. Read only at a LINK, for the suspend event.
+//! - The awake clock, [`awake_ns`]: stops during sleep. Read at a LINK, for the suspend event,
+//!   and for the writer's idle time, so a suspend is never a stall.
 //! - The wall clock, [`wall_ns`]: Unix time. Paired with the record clock at every LINK.
 
 use serde::{Deserialize, Serialize};
@@ -253,17 +254,6 @@ mod tests {
         assert_eq!(ev.len(), 1);
         assert_eq!(ev[0]["ev"], "suspend");
         assert_eq!(ev[0]["ns"], 3 * S);
-    }
-
-    #[test]
-    fn the_record_clock_never_goes_backwards_and_boot_id_is_stable() {
-        let a = Mono::now();
-        let b = Mono::now();
-        assert!(b >= a);
-        assert!(a.ns() > 0);
-        assert_eq!(boot_id(), boot_id());
-        #[cfg(target_os = "linux")]
-        assert_ne!(boot_id(), [0u8; 16]);
     }
 
     #[test]

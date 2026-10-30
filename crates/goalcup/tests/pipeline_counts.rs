@@ -2,7 +2,8 @@
 //!
 //! Boot 0 is written with `PartWriter` and left with an open frame, as a killed recorder leaves
 //! it; recovery takes its COUNT from `counts.jsonl` and writes a `recorder_down` gap; boot 1 adds
-//! one more request. The entry totals must be boot 0 plus boot 1 plus that one off span.
+//! one more request. The entry totals must be boot 0 plus boot 1 plus that one off span, and
+//! must stay so once boot 0's part file is pruned after upload (ledger U1).
 
 use goalcup::pipeline::counts::{Counter, CountsLog, count_at};
 use goalcup::pipeline::{Counts, OpenFlags, entry_totals};
@@ -10,7 +11,7 @@ use goalcup_format::{
     EndReason, GapReason, Now, PartOptions, PartWriter, Record, Recover, StreamKind,
 };
 use serde_json::json;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 const ENTRY: &str = "e0123456789abcdef";
 const BOOT_ID: [u8; 16] = [7; 16];
@@ -33,10 +34,12 @@ impl Clock {
     }
 }
 
-/// Writes a record, then counts it, as the writer does.
+/// Writes a record, then counts it, as the writer does: the host is the one the mask worker
+/// took before masking the OPEN meta.
 fn put(w: &mut PartWriter, c: &mut Counter, r: Record, flags: OpenFlags) {
     w.write(&r).unwrap();
-    c.written(&r, flags);
+    let host = matches!(r, Record::Open { skind: StreamKind::Conn, .. }).then_some(HOST);
+    c.written(&r, flags, host);
 }
 
 fn open(t: u64, sid: u64, skind: StreamKind, conn: u64, meta: serde_json::Value) -> Record {
@@ -108,6 +111,20 @@ fn count_and_link(
     log.append(line.seq, &ev).unwrap();
     w.sync().unwrap();
     c.counts()
+}
+
+/// The first part file and its index.
+fn first_part(rec: &Path) -> (PathBuf, PathBuf) {
+    let part = goalcup_format::read::part_files(rec).unwrap()[0].clone();
+    let name = part.file_name().unwrap().to_str().unwrap();
+    let idx = part.with_file_name(format!("{}.idx", name.trim_end_matches(".gcr.zst")));
+    (part, idx)
+}
+
+/// The `seq` of the last index line in the first part file.
+fn last_seq(rec: &Path) -> u64 {
+    let idx = first_part(rec).1;
+    goalcup_format::read::read_index(&idx).unwrap().last().unwrap().seq
 }
 
 fn conn(w: &mut PartWriter, c: &mut Counter, k: &mut Clock) {
@@ -234,6 +251,7 @@ fn entry_totals_are_each_boot_plus_off_spans() {
 
     let b0 = boot0(&rec, entry_dir, &mut k, opts);
     let link_at = k.0;
+    let kept = last_seq(&rec);
 
     // A live entry with an unclosed tail reads up to where the reader stops.
     let live = entry_totals(entry_dir);
@@ -264,6 +282,8 @@ fn entry_totals_are_each_boot_plus_off_spans() {
     };
     let mut w = PartWriter::recover(&rec, opts, rc).unwrap().writer.unwrap();
     assert_eq!(w.boot(), 1);
+    let frame_count: serde_json::Value = serde_json::from_slice(&at(kept)).unwrap();
+    log.recovered(0, Some((kept, &frame_count)), 5000).unwrap();
 
     let mut c = Counter::new(&[]);
     conn(&mut w, &mut c, &mut k);
@@ -291,4 +311,12 @@ fn entry_totals_are_each_boot_plus_off_spans() {
     assert_eq!(got.counts.mask_failclosed_bytes, 7);
     assert_eq!(got.counts.gaps, 2);
     assert_eq!(got.counts.lost_bytes, 10);
+
+    // Boot 0's part file is pruned after upload: the totals and the off span stand.
+    let (part, idx) = first_part(&rec);
+    std::fs::remove_file(idx).unwrap();
+    std::fs::remove_file(part).unwrap();
+    let pruned = entry_totals(entry_dir);
+    assert_eq!(pruned.counts, want);
+    assert_eq!(pruned.off_spans, 1);
 }
