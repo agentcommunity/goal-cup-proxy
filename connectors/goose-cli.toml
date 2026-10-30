@@ -1,0 +1,19 @@
+# Goose 1.57.0, checked against goose-docs.ai (guides: environment-variables, goose-cli-commands, config-files,
+# sessions; getting-started/providers) and the 1.57.0 release binary run in a build box. GOOSE_PATH_ROOT moves
+# config/, data/ and state/ under {home} and nothing else (box test), so other tools keep their XDG folders.
+# `session --resume` takes the most recently used session; GOOSE_MODE defaults to auto, so no approval setting.
+id = "goose-cli"
+name = "Goose"
+program = "goose"
+args = ["session"]
+resume = ["--resume"]
+home = { GOOSE_PATH_ROOT = "{home}" }
+ca_env = ["GOOSE_CA_CERT_PATH"]
+host_hints = [
+  { file = "{home}/config/custom_providers/*.json", key = "base_url" },
+  { file = "{home}/config/config.yaml", key = "*_HOST" },
+]
+hint_env = ["OPENAI_HOST", "ANTHROPIC_HOST"]
+secret_files = ["{home}/config/secrets.yaml"]
+native = [{ name = "sessions", root = "{home}/data/sessions", pattern = "sessions.db*", form = "final" }]
+first_screen = "If Goose asks about usage data or a provider, answer now, before you type your prompt."

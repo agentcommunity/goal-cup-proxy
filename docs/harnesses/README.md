@@ -22,19 +22,18 @@ is verified, and on which version, is written by the test pad to `connectors/tie
 | 3 | Hermes 0.22.5 | `hermes-cli` | Chat Completions from its gateway process | `state.db`; delegation logs under `cache/delegation/live/` | Its `copilot-acp` child is wire only; goalcup stops the gateway for its own home before and after the run |
 | 4 | OpenCode 1.19.5 and 2.2.2 | `opencode-cli`, `opencode2-cli` | HTTPS to the chosen provider, or OpenCode's gateway on `opencode.ai` | One `opencode.db`; subagents are child sessions in it | `opencode.ai` serves both the gateway and the console page where a participant copies a key; OpenCode 2 is started `--standalone`, so it does not attach to a shared background server |
 | 5 | OpenClaw 2026.10.9 | `openclaw-cli` | Chat Completions through provider plugins | `agents/<agent>/agent/openclaw-agent.sqlite`, `state/openclaw.sqlite` | Subagents not recorded on the wire when they run in a Gateway started outside goalcup: goalcup starts no Gateway and stops none, because `openclaw gateway stop` stops the account's own service. Its own proxy setting is refused at start; a hand-written JSON5 `openclaw.json` does not parse as JSON, so its proxy setting is not checked |
-| 6 | Amp 0.0.1793275344 | pending | One WebSocket to `ampcode.com`; Amp's servers call the model | No transcript; a metadata log per thread | Provider calls are made on Amp's servers |
+| 6 | Amp 0.0.1793275344 | `amp-cli` | One WebSocket to `ampcode.com`; Amp's servers call the model | No transcript; a metadata log per thread | Provider calls are made on Amp's servers |
 | 7 | GitHub Copilot CLI 1.0.105 | `copilot-cli` | HTTPS to `*.githubcopilot.com`, or a provider key | `session-state/<id>/events.jsonl`, `session-store.db` | Sign-in and the token exchange use `github.com` and `api.github.com`, which carry far more than sign-in; goalcup passes them through as tunnels and does not read them. `/delegate` runs a cloud agent |
 | 8 | Gemini CLI 0.66.0 | `gemini-cli` | HTTPS to `generativelanguage.googleapis.com`; Code Assist on Google sign-in | `.gemini/tmp/<project>/chats/session-*.jsonl` | `cloudcode-pa.googleapis.com` carries both Code Assist model calls and sign-in calls; remote A2A subagents run elsewhere |
-| 9 | Goose 1.57.0 | pending | HTTPS to the provider | `sessions.db`; subagents are rows in it | None found |
+| 9 | Goose 1.57.0 | `goose-cli` | HTTPS to the provider | `data/sessions/sessions.db`; subagents are rows in it | Asks about usage data and a provider on a first start in a new home |
 | 10 | Kilo CLI 7.8.25 | `kilo-cli` | HTTPS to the provider, Kilo's gateway or Vercel AI Gateway | `kilo.db`; subagents are child sessions | None found |
 | 11 | Qwen Code 0.26.4 | `qwen-cli` | Chat Completions to the provider | `projects/<p>/chats/<id>.jsonl`; subagents under `projects/<p>/subagents/` | Its built-in `claude-code` and `codex` subagents are wire only; a settings `proxy` is refused at start |
-| 12 | Crush 0.99.0 | pending | Chat Completions to the provider | `<workspace>/.crush/crush.db`; subagents are child rows | None found |
-| 13 | Factory Droid 0.251.0 | pending | A provider key to its base URL; Factory's backend for sign-in and sync | `~/.factory/sessions/<slug>/<uuid>.jsonl` | A separately started `droid daemon` or desktop app keeps its own environment |
-| 14 | Kimi Code 2.4.0 | pending | HTTPS to `api.kimi.com`, or a provider in `config.toml` | `sessions/<workspace>/<session>/agents/*/wire.jsonl` | None found |
-| 15 | Cline CLI 3.0.74 | pending | HTTPS to the provider, or Cline's own provider | `data/sessions/<id>/`, index `data/db/sessions.db` | A hub daemon already running may hold another environment |
+| 12 | Crush 0.99.0 | `crush-cli` | Chat Completions to the provider | `<workspace>/.crush/crush.db`; subagents are child rows | None found |
+| 13 | Factory Droid 0.251.0 | `droid-cli` | A provider key to its base URL; Factory's backend for sign-in and sync | `~/.factory/sessions/<slug>/<uuid>.jsonl` | A separately started `droid daemon` or desktop app keeps its own environment, and `droid daemon` has no stop command, so goalcup cannot stop it |
+| 14 | Kimi Code 2.4.1 | `kimi-code-cli` | HTTPS to `api.kimi.com`, or a provider in `config.toml` | `sessions/<workspace>/<session>/agents/*/wire.jsonl`; index `session_index.jsonl` | None found |
+| 15 | Cline CLI 3.0.74 | `cline-cli` | HTTPS to the provider, or Cline's own provider | `data/sessions/<id>/`, index `data/db/sessions.db` | A hub daemon already running may hold another environment. No continue form: `goalcup continue` starts a new Cline session |
 
-"Pending" connectors land in the next connector slice. The per-harness sheets below are still in the
-old shape; they are rewritten from what the test pad shows, after it runs.
+The per-harness sheets below are still in the old shape; they are rewritten from what the test pad shows, after it runs.
 
 The sheets so far: [codex-cli](codex-cli.md) (the worked example), [claude-code-cli](claude-code-cli.md),
 [hermes-cli](hermes-cli.md), [kilo-cli](kilo-cli.md) and [amp-cli](amp-cli.md).

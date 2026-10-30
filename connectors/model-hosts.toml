@@ -26,7 +26,7 @@ vendor = [
 ]
 never = [
   "auth.openai.com", "platform.claude.com", "claude.ai", "authapi.ampcode.com", "oauth2.googleapis.com",
-  "auth.kimi.com", "chat.qwen.ai", "portal.nousresearch.com", "api.workos.com", "auth.x.ai", "accounts.x.ai",
-  "accounts.google.com",
+  "auth.kimi.com", "auth.kimi.ai", "chat.qwen.ai", "portal.nousresearch.com", "api.workos.com", "auth.x.ai",
+  "accounts.x.ai", "accounts.google.com",
 ]
 pinned = []
