@@ -113,7 +113,8 @@ pub fn wsl(dir: &Path, what: &str) -> Option<String> {
     if wsl_version()? == 1 {
         return Some(text::wsl(what, None));
     }
-    let (dir, info) = (resolved(dir), fs::read_to_string("/proc/self/mountinfo").ok()?);
+    let info = fs::read_to_string("/proc/self/mountinfo").ok()?;
+    let dir = resolved(dir);
     let mounts = info.lines().filter_map(|l| {
         let (left, right) = l.split_once(" - ")?;
         let point = left.split(' ').nth(4)?.replace("\\040", " ");
