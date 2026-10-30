@@ -1212,3 +1212,11 @@ PRD-01, PRD-02, PRD-04, PRD-05 and PRD-11 as they now stand, and the code. No lo
 - PRD-17 SC6 is named: `crates/goalcup/tests/cli_finish.rs` `unsealed_status_never_reads_as_finished`.
   SC1 stays pending until `cli_folder.rs`.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-15 slice 6 (merge 9e89a22d)
+
+- `docs/CONNECTOR-SCHEMA.md` states the `continue` rule (the two file flags match the run's first
+  entry) marked **(next slice, ruled in PRD-10)**. The slice that merges `continue` says in its merge
+  note whether that rule holds as written, so PRD-15 drops the mark or corrects the line. No code
+  change is asked of PRD-10.
+- No locked ledger item is touched and no owner question comes from this slice.

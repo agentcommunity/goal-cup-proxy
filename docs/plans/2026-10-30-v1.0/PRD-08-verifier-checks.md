@@ -811,3 +811,13 @@ log; the pad lane follows.
   rule (`readable` false gives `none`) is unchanged. If `legs.rs` or `history.rs` merges first and
   reads the field, the field stays and PRD-09 drops B10; PRD-08 changes nothing either way.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-15 slice 6 (merge 9e89a22d)
+
+- `docs/RECORD-FORMAT.md` now documents the `check --json` report from `report.rs` as merged: the
+  top-level and entry keys, the check ids with their `inv` numbers, the exit codes, and the ten ids
+  that are always `skip` "not built in this slice" (plus `server`, `harness_log`, `provider_errors`,
+  `history` and `threads` not filled). A later PRD-08 slice that adds or renames a key or check id,
+  changes an exit rule, or builds a skipped check names each change in its merge note, so PRD-15's
+  next slice updates the page (PRD-15 note). No code change is asked of PRD-08.
+- No locked ledger item is touched and no owner question comes from this slice.

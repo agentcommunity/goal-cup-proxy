@@ -1398,3 +1398,29 @@ kept and now cites BUILD-PROMPT section 5, since B3 no longer carries it.
   PRD-08 reads the field first (PRD-09 note). Acceptance lists it as known if it is still open at the
   end.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-15 slice 6 (merge 9e89a22d)
+
+- `gate fast: PASS in 86s` on 9e89a22d. Docs only: `docs/ARCHITECTURE.md`, `docs/CONNECTOR-SCHEMA.md`,
+  `docs/HARNESS-ONBOARDING.md`, `docs/RECORD-FORMAT.md` (+69, -19), all PRD-15 owned. Box runs before
+  the merge (lane 14:35Z to 14:48Z): `goalcup-verify dump` on the `zstd -dc` copy of the worked example
+  equals the committed dump; `check --json` top-level and entry key sets, check ids, `inv` numbers and
+  the skip list equal the page; em dash grep clean with a control hit; stale-term grep clean on the
+  merged pages (old hits remain in ARCHITECTURE and HARNESS-ONBOARDING from integration, for their
+  rewrites); link check: no new break (`docs/CONTRACTS.md` to `#pin-evolution` was already known).
+  The reader's counts equal the dump per kind (box at 010c69cb); the fixer's box at 9e094019 did not
+  rerun the reader.
+- **Size report, PRD-15.** PRD-15 merged no code, and PRD-00 "Size budget" has no docs row, so
+  `wc -l` of PRD-15 code is 0 and there is no row to count against. Against PRD-15's own docs table:
+  `docs/RECORD-FORMAT.md` is 374 lines against about 280 (134%, the builder's decision line names the
+  record tables, worked example, reader and S6 key tables), `docs/CONNECTOR-SCHEMA.md` 115 against
+  about 90 (128%, the key table and the **(next slice)** marks).
+- **Trailers:** all 11 commits in f5a529c8..9e89a22d carry both lines, the lane merge commits
+  included.
+- **Open nit** B-N4 (the reader intro's bare `zstd` pointer) goes to PRD-15's next slice that touches
+  RECORD-FORMAT (PRD-15 note). Acceptance lists it as known if it is still open at the end. A10 and
+  B12 are closed.
+- **Doc follows code:** the `check --json` section and the `continue` mark depend on later PRD-08 and
+  PRD-10 merges naming their changes (PRD-08 and PRD-10 notes). Acceptance checks the page against a
+  final `check --json` run, not against this slice's skip list.
+- No locked ledger item is touched and no owner question comes from this slice.
