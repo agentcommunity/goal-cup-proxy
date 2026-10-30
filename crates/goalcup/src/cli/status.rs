@@ -294,6 +294,7 @@ pub fn run(part: Option<String>, json: bool) -> ExitCode {
             return ExitCode::from(3);
         };
         let run: Option<Value> = read_json(&super::server_json(&found.run_dir));
+        // A raw passthrough: unknown keys of `upload.json` stay.
         let upload: Option<Value> = read_json(&dir.join(up::FILE));
         let all = serde_json::json!({ "status": status, "upload": upload, "run": run });
         println!("{all}");

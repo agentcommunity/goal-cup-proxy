@@ -6,7 +6,7 @@ use std::path::Path;
 use std::process::ExitCode;
 
 use super::{RunMode, ServerJson, fail, find, home, read_json, text, unix_of};
-use crate::upload::state::{self, UploadJson};
+use crate::upload::state::{self as up, UploadJson};
 
 /// Set in the harness's environment by `start`: the part's `upload.json`.
 pub const FILE_ENV: &str = "GOALCUP_TIME_LEFT_FILE";
@@ -55,7 +55,7 @@ fn in_terminal(now: u64) -> Result<String, String> {
         .and_then(|n| n.to_str());
     let found = name.and_then(|n| find(&home, Some(n))).ok_or_else(no_run)?;
     let practice = practice(found.server.as_ref());
-    line(state::read(&found.entry_dir()).as_ref(), practice, now)
+    line(up::read(&found.entry_dir()).as_ref(), practice, now)
 }
 
 fn practice(run: Option<&ServerJson>) -> bool {
