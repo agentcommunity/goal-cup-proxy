@@ -1102,3 +1102,33 @@ open; both go in the next PRD-15 slice that touches these files, not a separate 
   `skills/` map row). PRD-15's rewrites of these pages drop the links. The merge note of the slice
   that removes the last one says so, so PRD-10's delete can follow.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-15 slice 6 (merge 9e89a22d)
+
+Slice 6 closed A10 (the `continue` file-flag rule in `docs/CONNECTOR-SCHEMA.md`, marked
+**(next slice, ruled in PRD-10)** until `continue` merges) and B12 (the two bare CONNECTOR-SCHEMA
+links). It added the `check --json` report section to `docs/RECORD-FORMAT.md` from the merged S6 code
+(`crates/goalcup-verify/src/report.rs`), closed the slice 2 nits A-N5 and B5, and named
+`goalcup-verify dump` (on the `zstd -dc` copy) as the worked example's maker.
+
+- **Open nit B-N4, the reader intro.** `docs/RECORD-FORMAT.md` lines 263-265 end "and a total (see
+  the `zstd` note above)"; the pointer no longer says why the note matters. The next slice that
+  touches the page (the usage section, or the PRD-02 numbers) changes it, with no new line, to "and a
+  total, a lower bound on a live entry (see the `zstd` note above)", or drops the parenthetical.
+  Not a separate merge request.
+- **The `check --json` section follows the code.** It lists ten check ids as always `skip` "not built
+  in this slice" and `server`, `harness_log`, `provider_errors`, `history` and `threads` as not
+  filled. Each later PRD-08 slice that builds one of them names it in its merge note (PRD-08 note),
+  and the next PRD-15 slice moves it out of the skip list or fills its row, rechecked in a box against
+  `check --json` output as slice 6 was (key sets, check ids, `inv` numbers, skip list). If a check is
+  not built in this build, its line stays; it is true of the code.
+- **The `continue` mark** goes when PRD-10 merges `continue` (PRD-10 note); until then it stays.
+- **Size:** the page is 374 lines against the docs table's "about 280" (134%). The builder's decision
+  line (14:36Z) names what the lines serve: the PRD-01 record tables, the worked example, the 51-line
+  reader and the S6 key tables. The usage section adds to it; that slice states its own count and
+  cuts repetition before adding. Docs have no PRD-00 size row, so this is not a ledger L2 ceiling.
+- Review items A5, A6 and N3 were declined by the fixer (14:48Z) and stay closed.
+- **Still waiting, unchanged:** the usage section (PRD-09 core), the AGENTS.md map, ARCHITECTURE and
+  RECORD-FORMAT numbers (PRD-02 core merge), the HARNESS-ONBOARDING pointer (PRD-12's skill rewrite),
+  and the third slice.
+- No locked ledger item is touched and no owner question comes from this slice.
