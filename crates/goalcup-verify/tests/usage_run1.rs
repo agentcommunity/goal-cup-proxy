@@ -25,11 +25,11 @@ fn five(t: &Tokens) -> Five {
 }
 
 /// A Responses usage object and the five numbers the reader must give for it.
-fn usage(input: u64, cached: u64, output: u64, reasoning: u64) -> (Value, Five) {
-    let v = json!({"input_tokens": input, "input_tokens_details": {"cached_tokens": cached},
-        "output_tokens": output, "output_tokens_details": {"reasoning_tokens": reasoning},
-        "total_tokens": input + output});
-    (v, [Some(input - cached), Some(cached), None, Some(output), Some(reasoning)])
+fn usage(i: u64, c: u64, o: u64, r: u64) -> (Value, Five) {
+    let v = json!({"input_tokens": i, "input_tokens_details": {"cached_tokens": c},
+        "output_tokens": o, "output_tokens_details": {"reasoning_tokens": r},
+        "total_tokens": i + o});
+    (v, [Some(i - c), Some(c), None, Some(o), Some(r)])
 }
 
 /// A request for model `fake-<k>`, following reply `r_<prev>`.
@@ -109,8 +109,10 @@ fn run1(name: &str) -> (Vec<Record>, BTreeMap<&'static str, Five>) {
         [create("ws-e", Some("ws-b")), [created("ws-e"), ev("completed", "ws-e", &ue)]]
     ]);
     // Anthropic usage is cumulative: the largest value wins, never a sum.
-    let au = |o: u64| json!({"input_tokens": 300, "cache_read_input_tokens": 40,
-        "cache_creation_input_tokens": 20, "output_tokens": o});
+    let au = |o: u64| {
+        json!({"input_tokens": 300, "cache_read_input_tokens": 40,
+        "cache_creation_input_tokens": 20, "output_tokens": o})
+    };
     let claude = sse(&[
         json!({"type": "message_start",
             "message": {"id": "msg_fake_1", "model": "fake-claude-dated", "usage": au(1)}}),
@@ -160,7 +162,9 @@ fn run1(name: &str) -> (Vec<Record>, BTreeMap<&'static str, Five>) {
         post(&mut e, s);
     }
     let planted = [("fake-ws-a", ta), ("fake-ws-b", tb), ("fake-ws-e", te)];
-    let planted = planted.into_iter().chain([("fake-http-a", th), ("fake-claude", tc)]);
+    let planted = planted
+        .into_iter()
+        .chain([("fake-http-a", th), ("fake-claude", tc)]);
     (read_records(&e.seal().join("rec")), planted.collect())
 }
 
@@ -172,8 +176,8 @@ fn table(recs: &[Record]) -> CallTable {
 
 /// The one row whose request named model `m`.
 fn row<'a>(t: &'a CallTable, m: &str) -> &'a CallRow {
-    let rows = t.rows.iter().filter(|r| r.model_requested.as_deref() == Some(m));
-    let rows: Vec<_> = rows.collect();
+    let named = |r: &&CallRow| r.model_requested.as_deref() == Some(m);
+    let rows: Vec<_> = t.rows.iter().filter(named).collect();
     assert_eq!(rows.len(), 1, "{m}: {rows:?}");
     rows[0]
 }
@@ -204,10 +208,12 @@ fn each_rate_limited_call_is_one_row() {
     for m in ["fake-ws-r1", "fake-ws-r2"] {
         assert_eq!(limited(row(&t, m)).and_then(|l| l.1), Some(RL), "{m}");
     }
-    assert_eq!(limited(row(&t, "fake-http-429")).and_then(|l| l.0), Some(429));
+    let http = limited(row(&t, "fake-http-429"));
+    assert_eq!(http.and_then(|l| l.0), Some(429));
     assert_eq!(t.rows.iter().filter(|r| r.outcome.is_error()).count(), 3);
     let after = row(&t, "fake-ws-e");
-    assert_eq!((&after.outcome, five(&after.tokens)), (&Outcome::Ok, planted["fake-ws-e"]));
+    assert_eq!(after.outcome, Outcome::Ok);
+    assert_eq!(five(&after.tokens), planted["fake-ws-e"]);
 }
 
 #[test]
@@ -216,7 +222,8 @@ fn tokens_and_outcomes_follow_the_shape() {
     let t = table(&recs);
     for m in ["fake-ws-a", "fake-http-a", "fake-claude"] {
         let r = row(&t, m);
-        assert_eq!((&r.outcome, five(&r.tokens)), (&Outcome::Ok, planted[m]), "{m}");
+        assert_eq!(r.outcome, Outcome::Ok, "{m}");
+        assert_eq!(five(&r.tokens), planted[m], "{m}");
     }
     let cut = row(&t, "fake-http-cut");
     assert_eq!((&cut.outcome, cut.whole), (&Outcome::Unknown, false));
