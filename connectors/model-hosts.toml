@@ -8,7 +8,7 @@ provider = [
   "*.maas.aliyuncs.com",
   "api.mistral.ai", "api.x.ai",
   "api.z.ai", "open.bigmodel.cn", "api.groq.com", "api.together.ai", "us-api.together.ai",
-  "api.together.xyz", # unverified
+  "api.together.xyz", # still BASE_URL in together-python src/together/constants.py
   "api.fireworks.ai", "api.cerebras.ai", "inference-api.nousresearch.com",
   "bedrock-runtime.*.amazonaws.com", "bedrock-runtime-fips.*.amazonaws.com", "bedrock-mantle.*.api.aws",
   "aiplatform.googleapis.com", "*-aiplatform.googleapis.com",

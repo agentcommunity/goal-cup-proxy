@@ -7,7 +7,11 @@ resume = ["resume", "--last"]
 home = { CODEX_HOME = "{home}", CODEX_SQLITE_HOME = "{home}" }
 ca_env = ["CODEX_CA_CERTIFICATE"]
 refuse_if_set = [{ file = "{home}/.env", keys = ["HTTPS_PROXY", "https_proxy", "ALL_PROXY", "all_proxy", "NO_PROXY", "no_proxy", "SSL_CERT_FILE", "NODE_EXTRA_CA_CERTS"] }]
-host_hints = [{ file = "{home}/config.toml", key = "model_providers.*.base_url" }, { file = "{home}/config.toml", key = "openai_base_url" }]
+host_hints = [
+  { file = "{home}/config.toml", key = "model_providers.*.base_url" },
+  { file = "{home}/config.toml", key = "openai_base_url" },
+  { file = "{home}/.env", key = "OPENAI_BASE_URL" },
+]
 hint_env = ["OPENAI_BASE_URL"]
 secret_files = ["{home}/auth.json", "{home}/.env"]
 native = [

@@ -11,8 +11,15 @@ refuse_if_set = [
   { file = "{workspace}/.claude/settings.json", keys = ["env.HTTPS_PROXY", "env.https_proxy", "env.NO_PROXY", "env.no_proxy", "env.CLAUDE_CODE_CERT_STORE", "env.NODE_EXTRA_CA_CERTS"] },
   { file = "{workspace}/.claude/settings.local.json", keys = ["env.HTTPS_PROXY", "env.https_proxy", "env.NO_PROXY", "env.no_proxy", "env.CLAUDE_CODE_CERT_STORE", "env.NODE_EXTRA_CA_CERTS"] },
 ]
-host_hints = [{ file = "{home}/settings.json", key = "env.ANTHROPIC_BASE_URL" }]
-hint_env = ["ANTHROPIC_BASE_URL"]
+host_hints = [
+  { file = "{home}/settings.json", key = "env.ANTHROPIC_*BASE_URL" },
+  { file = "{workspace}/.claude/settings.json", key = "env.ANTHROPIC_*BASE_URL" },
+  { file = "{workspace}/.claude/settings.local.json", key = "env.ANTHROPIC_*BASE_URL" },
+]
+hint_env = [
+  "ANTHROPIC_BASE_URL", "ANTHROPIC_BEDROCK_BASE_URL", "ANTHROPIC_BEDROCK_MANTLE_BASE_URL",
+  "ANTHROPIC_VERTEX_BASE_URL", "ANTHROPIC_FOUNDRY_BASE_URL", "ANTHROPIC_AWS_BASE_URL",
+]
 secret_files = ["{home}/.credentials.json"]
 native = [
   { name = "tool-results", root = "{home}/projects", pattern = "**/tool-results/*", form = "snapshot", warn_missing = false },
