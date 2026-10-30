@@ -194,6 +194,8 @@ pub struct Outcome {
     pub data_bytes: u64,
     pub links: u64,
     pub pruned: bool,
+    /// The legs: harness_log, provider errors, thread rows and the coverage text.
+    pub legs: crate::legs::Out,
 }
 
 /// Checks one entry. `now_ns` is set for `--live`; `want` names the link seqs whose hashes
@@ -232,7 +234,9 @@ pub fn check(e: &Entry, now_ns: Option<u64>, want: &HashSet<u64>) -> Outcome {
         }
     }
     p.finish(meter.open_frame.get(), now_ns, e);
-    let h = std::mem::take(&mut p.h).finish();
+    let mut h = std::mem::take(&mut p.h).finish();
+    let mut legs = std::mem::take(&mut p.l).finish();
+    h.append(&mut legs.checks);
     p.checks.extend(h);
     Outcome {
         sealed: p.seal.is_some(),
@@ -248,6 +252,7 @@ pub fn check(e: &Entry, now_ns: Option<u64>, want: &HashSet<u64>) -> Outcome {
         links: p.links,
         pruned: p.pruned,
         checks: p.checks,
+        legs,
     }
 }
 
@@ -255,6 +260,7 @@ pub fn check(e: &Entry, now_ns: Option<u64>, want: &HashSet<u64>) -> Outcome {
 struct Pass {
     checks: Vec<Check>,
     h: Honesty,
+    l: crate::legs::Legs,
     entry: Option<String>,
     start: Option<Map<String, Value>>,
     mask_rules: Vec<String>,
@@ -372,6 +378,7 @@ impl Pass {
             _ => Map::new(),
         };
         self.h.item(it, at, &ev);
+        self.l.item(it);
         let ev_name = ev
             .get("ev")
             .and_then(Value::as_str)
