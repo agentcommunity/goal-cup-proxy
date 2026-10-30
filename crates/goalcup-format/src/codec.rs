@@ -5,7 +5,7 @@
 //! order) and read back as absolute times. PART, LINK and GAP carry their time in full and set the
 //! running time (a GAP's time is its `end_mono`); MASK carries none and leaves it alone.
 
-use crate::{GapReason, MAX_BODY, MAGIC, StreamKind, VERSION, EndReason, invalid, kind};
+use crate::{EndReason, GapReason, MAGIC, MAX_BODY, StreamKind, VERSION, invalid, kind};
 use std::io;
 
 /// One record. JSON bodies (`meta`, `json`, `tail`) are the compact UTF-8 bytes as written; an
@@ -26,9 +26,28 @@ pub enum Record {
         /// The hash of the last LINK before this part file (32 zero bytes for an entry's first).
         prev: [u8; 32],
     },
-    Open { sid: u64, t: u64, skind: StreamKind, conn: u64, req: u64, meta: Vec<u8> },
-    Data { sid: u64, t: u64, off: u64, flags: u8, bytes: Vec<u8> },
-    End { sid: u64, t: u64, reason: EndReason, seen: u64, tail: Vec<u8> },
+    Open {
+        sid: u64,
+        t: u64,
+        skind: StreamKind,
+        conn: u64,
+        req: u64,
+        meta: Vec<u8>,
+    },
+    Data {
+        sid: u64,
+        t: u64,
+        off: u64,
+        flags: u8,
+        bytes: Vec<u8>,
+    },
+    End {
+        sid: u64,
+        t: u64,
+        reason: EndReason,
+        seen: u64,
+        tail: Vec<u8>,
+    },
     /// `lost` is bytes lost plus one: 0 unknown, 1 none.
     Gap {
         sid: u64,
@@ -41,11 +60,27 @@ pub enum Record {
         lost: u64,
         tail: Vec<u8>,
     },
-    Mask { sid: u64, off: u64, len: u64, rule: u64 },
-    Event { t: u64, json: Vec<u8> },
-    Link { seq: u64, wall_ns: u64, mono_ns: u64, hash: [u8; 32] },
+    Mask {
+        sid: u64,
+        off: u64,
+        len: u64,
+        rule: u64,
+    },
+    Event {
+        t: u64,
+        json: Vec<u8>,
+    },
+    Link {
+        seq: u64,
+        wall_ns: u64,
+        mono_ns: u64,
+        hash: [u8; 32],
+    },
     /// A kind this build does not know, kept so a reader can skip it by its length.
-    Unknown { kind: u8, body: Vec<u8> },
+    Unknown {
+        kind: u8,
+        body: Vec<u8>,
+    },
 }
 
 impl Record {
@@ -100,7 +135,14 @@ impl Codec {
                 b.extend_from_slice(prev);
                 self.t = *mono_ns;
             }
-            Record::Open { sid, t, skind, conn, req, meta } => {
+            Record::Open {
+                sid,
+                t,
+                skind,
+                conn,
+                req,
+                meta,
+            } => {
                 put_varint(&mut b, *sid);
                 self.put_dt(&mut b, *t)?;
                 b.push(skind.to_u8());
@@ -108,14 +150,26 @@ impl Codec {
                 put_varint(&mut b, *req);
                 b.extend_from_slice(meta);
             }
-            Record::Data { sid, t, off, flags, bytes } => {
+            Record::Data {
+                sid,
+                t,
+                off,
+                flags,
+                bytes,
+            } => {
                 put_varint(&mut b, *sid);
                 self.put_dt(&mut b, *t)?;
                 put_varint(&mut b, *off);
                 b.push(*flags);
                 b.extend_from_slice(bytes);
             }
-            Record::End { sid, t, reason, seen, tail } => {
+            Record::End {
+                sid,
+                t,
+                reason,
+                seen,
+                tail,
+            } => {
                 put_varint(&mut b, *sid);
                 self.put_dt(&mut b, *t)?;
                 b.push(reason.to_u8());
@@ -141,7 +195,12 @@ impl Codec {
                 b.extend_from_slice(tail);
                 self.t = *end_mono;
             }
-            Record::Mask { sid, off, len, rule } => {
+            Record::Mask {
+                sid,
+                off,
+                len,
+                rule,
+            } => {
                 for v in [*sid, *off, *len, *rule] {
                     put_varint(&mut b, v);
                 }
@@ -150,7 +209,12 @@ impl Codec {
                 self.put_dt(&mut b, *t)?;
                 b.extend_from_slice(json);
             }
-            Record::Link { seq, wall_ns, mono_ns, hash } => {
+            Record::Link {
+                seq,
+                wall_ns,
+                mono_ns,
+                hash,
+            } => {
                 for v in [*seq, *wall_ns, *mono_ns] {
                     put_varint(&mut b, v);
                 }
@@ -164,7 +228,10 @@ impl Codec {
             return Err(invalid("record kind 0 is never valid"));
         }
         if b.len() as u64 > MAX_BODY {
-            return Err(invalid(format!("record body of {} bytes is over 16 MiB", b.len())));
+            return Err(invalid(format!(
+                "record body of {} bytes is over 16 MiB",
+                b.len()
+            )));
         }
         out.push(k);
         put_varint(out, b.len() as u64);
@@ -192,39 +259,84 @@ impl Codec {
                 let prev = c.take(32)?.try_into().expect("32 bytes");
                 c.done()?;
                 self.t = mono_ns;
-                Record::Part { entry, boot, part, raw_offset, wall_ns, mono_ns, boot_id, next_link, prev }
+                Record::Part {
+                    entry,
+                    boot,
+                    part,
+                    raw_offset,
+                    wall_ns,
+                    mono_ns,
+                    boot_id,
+                    next_link,
+                    prev,
+                }
             }
             kind::OPEN => {
                 let sid = c.var()?;
                 let t = self.dt(&mut c)?;
                 let skind = StreamKind::from_u8(c.u8()?);
                 let (conn, req) = (c.var()?, c.var()?);
-                Record::Open { sid, t, skind, conn, req, meta: c.rest() }
+                Record::Open {
+                    sid,
+                    t,
+                    skind,
+                    conn,
+                    req,
+                    meta: c.rest(),
+                }
             }
             kind::DATA => {
                 let sid = c.var()?;
                 let t = self.dt(&mut c)?;
                 let off = c.var()?;
                 let flags = c.u8()?;
-                Record::Data { sid, t, off, flags, bytes: c.rest() }
+                Record::Data {
+                    sid,
+                    t,
+                    off,
+                    flags,
+                    bytes: c.rest(),
+                }
             }
             kind::END => {
                 let sid = c.var()?;
                 let t = self.dt(&mut c)?;
                 let reason = EndReason::from_u8(c.u8()?);
                 let seen = c.var()?;
-                Record::End { sid, t, reason, seen, tail: c.rest() }
+                Record::End {
+                    sid,
+                    t,
+                    reason,
+                    seen,
+                    tail: c.rest(),
+                }
             }
             kind::GAP => {
                 let sid = c.var()?;
                 let reason = GapReason::from_u8(c.u8()?);
-                let (start_wall, end_wall, start_mono, end_mono) = (c.var()?, c.var()?, c.var()?, c.var()?);
+                let (start_wall, end_wall, start_mono, end_mono) =
+                    (c.var()?, c.var()?, c.var()?, c.var()?);
                 let (off, lost) = (c.var()?, c.var()?);
                 self.t = end_mono;
-                Record::Gap { sid, reason, start_wall, end_wall, start_mono, end_mono, off, lost, tail: c.rest() }
+                Record::Gap {
+                    sid,
+                    reason,
+                    start_wall,
+                    end_wall,
+                    start_mono,
+                    end_mono,
+                    off,
+                    lost,
+                    tail: c.rest(),
+                }
             }
             kind::MASK => {
-                let r = Record::Mask { sid: c.var()?, off: c.var()?, len: c.var()?, rule: c.var()? };
+                let r = Record::Mask {
+                    sid: c.var()?,
+                    off: c.var()?,
+                    len: c.var()?,
+                    rule: c.var()?,
+                };
                 c.done()?;
                 r
             }
@@ -237,16 +349,25 @@ impl Codec {
                 let hash = c.take(32)?.try_into().expect("32 bytes");
                 c.done()?;
                 self.t = mono_ns;
-                Record::Link { seq, wall_ns, mono_ns, hash }
+                Record::Link {
+                    seq,
+                    wall_ns,
+                    mono_ns,
+                    hash,
+                }
             }
             0 => return Err(invalid("record kind 0 is never valid")),
-            k => Record::Unknown { kind: k, body: body.to_vec() },
+            k => Record::Unknown {
+                kind: k,
+                body: body.to_vec(),
+            },
         };
         Ok(r)
     }
 
     fn put_dt(&mut self, b: &mut Vec<u8>, t: u64) -> io::Result<()> {
-        let dt = i64::try_from(i128::from(t) - i128::from(self.t)).map_err(|_| invalid("time step out of range"))?;
+        let dt = i64::try_from(i128::from(t) - i128::from(self.t))
+            .map_err(|_| invalid("time step out of range"))?;
         put_varint(b, zigzag(dt));
         self.t = t;
         Ok(())
@@ -315,6 +436,10 @@ impl<'a> Cur<'a> {
         std::mem::take(&mut self.0).to_vec()
     }
     fn done(&self) -> io::Result<()> {
-        if self.0.is_empty() { Ok(()) } else { Err(invalid("record body too long for its kind")) }
+        if self.0.is_empty() {
+            Ok(())
+        } else {
+            Err(invalid("record body too long for its kind"))
+        }
     }
 }

@@ -5,7 +5,9 @@
 //! the recovery frame's COUNT equals a recount of its boot.
 
 use goalcup_format::read::{Item, open_dir, part_files, read_all, read_index};
-use goalcup_format::{GapReason, IndexKind, Now, PartOptions, PartWriter, Record, Recover, StreamKind};
+use goalcup_format::{
+    GapReason, IndexKind, Now, PartOptions, PartWriter, Record, Recover, StreamKind,
+};
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -18,7 +20,10 @@ struct Clock(u64);
 impl Clock {
     fn now(&mut self) -> Now {
         self.0 += 1_000_000;
-        Now { wall_ns: 1_794_009_600_000_000_000 + self.0, mono_ns: 7_000_000_000 + self.0 }
+        Now {
+            wall_ns: 1_794_009_600_000_000_000 + self.0,
+            mono_ns: 7_000_000_000 + self.0,
+        }
     }
 }
 
@@ -34,19 +39,49 @@ fn dir(name: &str) -> PathBuf {
 fn work(w: &mut PartWriter, c: &mut Clock, n: u64, counts: &mut HashMap<u64, Vec<u8>>) {
     let boot = w.boot();
     let ev = format!(r#"{{"ev":"start","resume":{}}}"#, boot > 0);
-    w.write(&Record::Event { t: c.now().mono_ns, json: ev.into_bytes() }).unwrap();
+    w.write(&Record::Event {
+        t: c.now().mono_ns,
+        json: ev.into_bytes(),
+    })
+    .unwrap();
     for i in 0..n {
         let sid = 1 + i;
-        let open = Record::Open { sid, t: c.now().mono_ns, skind: StreamKind::HttpReq, conn: 0, req: 0, meta: b"{}".to_vec() };
+        let open = Record::Open {
+            sid,
+            t: c.now().mono_ns,
+            skind: StreamKind::HttpReq,
+            conn: 0,
+            req: 0,
+            meta: b"{}".to_vec(),
+        };
         w.write(&open).unwrap();
-        let body = format!(r#"{{"model":"m1","input":"{}"}}"#, "hello world ".repeat(200 + i as usize * 37));
+        let body = format!(
+            r#"{{"model":"m1","input":"{}"}}"#,
+            "hello world ".repeat(200 + i as usize * 37)
+        );
         let len = body.len() as u64;
-        w.write(&Record::Data { sid, t: c.now().mono_ns, off: 0, flags: 0, bytes: body.into_bytes() }).unwrap();
-        let end = Record::End { sid, t: c.now().mono_ns, reason: goalcup_format::EndReason::Complete, seen: len, tail: vec![] };
+        w.write(&Record::Data {
+            sid,
+            t: c.now().mono_ns,
+            off: 0,
+            flags: 0,
+            bytes: body.into_bytes(),
+        })
+        .unwrap();
+        let end = Record::End {
+            sid,
+            t: c.now().mono_ns,
+            reason: goalcup_format::EndReason::Complete,
+            seen: len,
+            tail: vec![],
+        };
         w.write(&end).unwrap();
         if i % 4 == 3 {
             let seq = w.link(c.now()).unwrap().seq;
-            counts.insert(seq, format!(r#"{{"ev":"count","boot":{boot},"http_req":{}}}"#, i + 1).into_bytes());
+            counts.insert(
+                seq,
+                format!(r#"{{"ev":"count","boot":{boot},"http_req":{}}}"#, i + 1).into_bytes(),
+            );
         }
     }
     w.sync().unwrap();
@@ -79,11 +114,16 @@ fn read_entry(d: &Path) -> Vec<Item> {
     let mut rd = open_dir(d).unwrap();
     let items: Vec<Item> = rd.by_ref().collect::<Result<_, _>>().unwrap();
     assert_eq!(rd.tail(), Default::default());
-    let seqs: Vec<u64> = items.iter().filter_map(|i| matches!(i.rec, Record::Link { .. }).then_some(i)).map(|i| {
-        assert_eq!(i.link_ok, Some(true));
-        let Record::Link { seq, .. } = i.rec else { unreachable!() };
-        seq
-    }).collect();
+    let seqs: Vec<u64> = items
+        .iter()
+        .filter_map(|i| match i.rec {
+            Record::Link { seq, .. } => {
+                assert_eq!(i.link_ok, Some(true));
+                Some(seq)
+            }
+            _ => None,
+        })
+        .collect();
     assert_eq!(seqs, (0..seqs.len() as u64).collect::<Vec<_>>());
     for p in part_files(d).unwrap() {
         let (alone, tail) = read_all(fs::File::open(&p).unwrap()).unwrap();
@@ -94,11 +134,30 @@ fn read_entry(d: &Path) -> Vec<Item> {
 }
 
 fn boots(items: &[Item]) -> Vec<u64> {
-    items.iter().filter_map(|i| if let Record::Part { boot, .. } = i.rec { Some(boot) } else { None }).collect()
+    items
+        .iter()
+        .filter_map(|i| {
+            if let Record::Part { boot, .. } = i.rec {
+                Some(boot)
+            } else {
+                None
+            }
+        })
+        .collect()
 }
 
 fn down_gaps(items: &[Item]) -> Vec<usize> {
-    (0..items.len()).filter(|&i| matches!(items[i].rec, Record::Gap { reason: GapReason::RecorderDown, .. })).collect()
+    (0..items.len())
+        .filter(|&i| {
+            matches!(
+                items[i].rec,
+                Record::Gap {
+                    reason: GapReason::RecorderDown,
+                    ..
+                }
+            )
+        })
+        .collect()
 }
 
 #[test]
@@ -110,7 +169,13 @@ fn a_part_file_cut_at_any_byte_recovers_to_its_last_index_line() {
     work(&mut w, &mut c, 22, &mut counts);
     kill(w);
     let part = part_files(&src).unwrap().remove(0);
-    let idx = part.with_file_name(part.file_name().unwrap().to_str().unwrap().replace(".gcr.zst", ".idx"));
+    let idx = part.with_file_name(
+        part.file_name()
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .replace(".gcr.zst", ".idx"),
+    );
     let lines = read_index(&idx).unwrap();
     assert_eq!(lines.len(), 5);
     let full = fs::read(&part).unwrap();
@@ -141,14 +206,37 @@ fn a_part_file_cut_at_any_byte_recovers_to_its_last_index_line() {
         assert_eq!(gaps.len(), 1, "cut at {cut}");
         let g = gaps[0];
         // COUNT, GAP, LINK: the recovery frame, right after the kept LINK.
-        let Record::Link { seq, mono_ns, .. } = items[g - 2].rec else { panic!("no kept LINK before the frame") };
+        let Record::Link { seq, mono_ns, .. } = items[g - 2].rec else {
+            panic!("no kept LINK before the frame")
+        };
         assert_eq!(seq, kept.seq);
-        let Record::Gap { start_mono, end_mono, lost, .. } = items[g].rec else { unreachable!() };
+        let Record::Gap {
+            start_mono,
+            end_mono,
+            lost,
+            ..
+        } = items[g].rec
+        else {
+            unreachable!()
+        };
         assert_eq!((start_mono, lost), (mono_ns, 0));
         assert!(end_mono > start_mono);
-        let Record::Event { json, .. } = &items[g - 1].rec else { panic!("no COUNT in the recovery frame") };
+        let Record::Event { json, .. } = &items[g - 1].rec else {
+            panic!("no COUNT in the recovery frame")
+        };
         let count: serde_json::Value = serde_json::from_slice(json).unwrap();
-        let recount = items[..g - 1].iter().filter(|i| matches!(i.rec, Record::Open { skind: StreamKind::HttpReq, .. })).count();
+        let recount = items[..g - 1]
+            .iter()
+            .filter(|i| {
+                matches!(
+                    i.rec,
+                    Record::Open {
+                        skind: StreamKind::HttpReq,
+                        ..
+                    }
+                )
+            })
+            .count();
         assert_eq!(count["http_req"], recount as u64);
         assert!(matches!(items[g + 1].rec, Record::Link { .. }));
     }
@@ -178,9 +266,19 @@ fn a_boot_with_no_index_line_is_deleted_and_an_r_closed_part_file_takes_a_second
     w.seal(c.now()).unwrap();
 
     let first = part_files(&d).unwrap().remove(0);
-    let idx = first.with_file_name(first.file_name().unwrap().to_str().unwrap().replace(".gcr.zst", ".idx"));
+    let idx = first.with_file_name(
+        first
+            .file_name()
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .replace(".gcr.zst", ".idx"),
+    );
     let kinds: Vec<IndexKind> = read_index(&idx).unwrap().iter().map(|l| l.kind).collect();
-    assert_eq!(kinds, [IndexKind::L, IndexKind::L, IndexKind::R, IndexKind::R]);
+    assert_eq!(
+        kinds,
+        [IndexKind::L, IndexKind::L, IndexKind::R, IndexKind::R]
+    );
 
     let items = read_entry(&d);
     assert_eq!(boots(&items), [0, 1]);
@@ -189,9 +287,16 @@ fn a_boot_with_no_index_line_is_deleted_and_an_r_closed_part_file_takes_a_second
     // The second frame holds only the GAP and a LINK: boot 0's COUNT is already in the first.
     assert!(matches!(items[gaps[1] - 1].rec, Record::Link { .. }));
     assert!(matches!(items[gaps[1] + 1].rec, Record::Link { .. }));
-    let Record::Gap { end_mono, .. } = items[gaps[0]].rec else { unreachable!() };
-    let Record::Gap { start_mono, .. } = items[gaps[1]].rec else { unreachable!() };
-    assert_eq!(start_mono, end_mono, "the second gap starts where the first ended, at its LINK");
+    let Record::Gap { end_mono, .. } = items[gaps[0]].rec else {
+        unreachable!()
+    };
+    let Record::Gap { start_mono, .. } = items[gaps[1]].rec else {
+        unreachable!()
+    };
+    assert_eq!(
+        start_mono, end_mono,
+        "the second gap starts where the first ended, at its LINK"
+    );
 }
 
 #[test]
@@ -218,12 +323,27 @@ fn an_entry_with_no_index_line_starts_boot_0_with_a_gap() {
     let r = PartWriter::recover(&d, PartOptions::default(), rc).unwrap();
     let mut w = r.writer.unwrap();
     assert_eq!(w.boot(), 0);
-    w.write(&Record::Event { t: c.now().mono_ns, json: br#"{"ev":"start"}"#.to_vec() }).unwrap();
+    w.write(&Record::Event {
+        t: c.now().mono_ns,
+        json: br#"{"ev":"start"}"#.to_vec(),
+    })
+    .unwrap();
     let g = r.gap_after_start.unwrap();
-    let Record::Gap { start_mono, end_mono, ref tail, .. } = g else { panic!("not a gap") };
+    let Record::Gap {
+        start_mono,
+        end_mono,
+        ref tail,
+        ..
+    } = g
+    else {
+        panic!("not a gap")
+    };
     assert_eq!(start_mono, started.mono_ns);
     assert!(end_mono > start_mono);
-    assert_eq!(serde_json::from_slice::<serde_json::Value>(tail).unwrap()["exits"], 1);
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(tail).unwrap()["exits"],
+        1
+    );
     w.write(&g).unwrap();
     w.seal(c.now()).unwrap();
 

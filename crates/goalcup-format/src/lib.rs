@@ -206,7 +206,10 @@ pub const NOTES: &[&str] = &[
 
 /// The facts of the notes other PRDs read (section 11, PRD-00 R3-4), besides `what`.
 pub const NOTE_FACTS: &[(&str, &[&str])] = &[
-    ("long_tunnel", &["host", "why", "conns", "up", "down", "secs"]),
+    (
+        "long_tunnel",
+        &["host", "why", "conns", "up", "down", "secs"],
+    ),
     ("parse_stopped", &["conn", "reason"]),
     ("connect_refused", &["host", "status"]),
     ("outlived", &["count", "programs"]),
@@ -262,7 +265,14 @@ impl fmt::Display for IndexLine {
             IndexKind::E => 'E',
             IndexKind::R => 'R',
         };
-        write!(f, "{k} {} {} {} {}", self.seq, self.raw_end, self.c_end, hex(&self.hash))
+        write!(
+            f,
+            "{k} {} {} {} {}",
+            self.seq,
+            self.raw_end,
+            self.c_end,
+            hex(&self.hash)
+        )
     }
 }
 
@@ -277,13 +287,23 @@ impl IndexLine {
             Some("R") => IndexKind::R,
             _ => return Err(bad()),
         };
-        let mut num = || it.next().and_then(|s| s.parse::<u64>().ok()).ok_or_else(bad);
+        let mut num = || {
+            it.next()
+                .and_then(|s| s.parse::<u64>().ok())
+                .ok_or_else(bad)
+        };
         let (seq, raw_end, c_end) = (num()?, num()?, num()?);
         let hash = it.next().and_then(unhex32).ok_or_else(bad)?;
         if it.next().is_some() {
             return Err(bad());
         }
-        Ok(Self { kind, seq, raw_end, c_end, hash })
+        Ok(Self {
+            kind,
+            seq,
+            raw_end,
+            c_end,
+            hash,
+        })
     }
 }
 
@@ -303,7 +323,11 @@ pub fn hex(b: &[u8]) -> String {
 }
 
 fn unhex32(s: &str) -> Option<[u8; 32]> {
-    if s.len() != 64 || !s.bytes().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()) {
+    if s.len() != 64
+        || !s
+            .bytes()
+            .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
+    {
         return None;
     }
     let mut out = [0u8; 32];

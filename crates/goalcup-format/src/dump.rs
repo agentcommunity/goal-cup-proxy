@@ -23,7 +23,16 @@ impl Dumper {
             m.insert(k.into(), v);
         };
         match &it.rec {
-            Record::Part { entry, boot, part, raw_offset, wall_ns, mono_ns, next_link, .. } => {
+            Record::Part {
+                entry,
+                boot,
+                part,
+                raw_offset,
+                wall_ns,
+                mono_ns,
+                next_link,
+                ..
+            } => {
                 put("k", "part".into());
                 put("entry", entry.as_str().into());
                 put("boot", (*boot).into());
@@ -33,7 +42,14 @@ impl Dumper {
                 put("mono", (*mono_ns).into());
                 put("next_link", (*next_link).into());
             }
-            Record::Open { sid, t, skind, conn, req, meta } => {
+            Record::Open {
+                sid,
+                t,
+                skind,
+                conn,
+                req,
+                meta,
+            } => {
                 put("k", "open".into());
                 put("sid", (*sid).into());
                 put("t", (*t).into());
@@ -46,7 +62,13 @@ impl Dumper {
                 }
                 put("meta", json_or_text(meta));
             }
-            Record::Data { sid, t, off, flags, bytes } => {
+            Record::Data {
+                sid,
+                t,
+                off,
+                flags,
+                bytes,
+            } => {
                 put("k", "data".into());
                 put("sid", (*sid).into());
                 put("t", (*t).into());
@@ -62,7 +84,13 @@ impl Dumper {
                     Err(_) => put("hex", hex(bytes).into()),
                 }
             }
-            Record::End { sid, t, reason, seen, tail } => {
+            Record::End {
+                sid,
+                t,
+                reason,
+                seen,
+                tail,
+            } => {
                 put("k", "end".into());
                 put("sid", (*sid).into());
                 put("t", (*t).into());
@@ -72,7 +100,17 @@ impl Dumper {
                     put("tail", json_or_text(tail));
                 }
             }
-            Record::Gap { sid, reason, start_wall, end_wall, start_mono, end_mono, off, lost, tail } => {
+            Record::Gap {
+                sid,
+                reason,
+                start_wall,
+                end_wall,
+                start_mono,
+                end_mono,
+                off,
+                lost,
+                tail,
+            } => {
                 put("k", "gap".into());
                 put("sid", (*sid).into());
                 put("reason", reason.name().into());
@@ -86,13 +124,23 @@ impl Dumper {
                     put("tail", json_or_text(tail));
                 }
             }
-            Record::Mask { sid, off, len, rule } => {
+            Record::Mask {
+                sid,
+                off,
+                len,
+                rule,
+            } => {
                 put("k", "mask".into());
                 put("sid", (*sid).into());
                 put("off", (*off).into());
                 put("len", (*len).into());
-                let name = usize::try_from(*rule).ok().and_then(|i| self.mask_rules.get(i));
-                put("rule", name.map_or_else(|| (*rule).into(), |n| n.as_str().into()));
+                let name = usize::try_from(*rule)
+                    .ok()
+                    .and_then(|i| self.mask_rules.get(i));
+                put(
+                    "rule",
+                    name.map_or_else(|| (*rule).into(), |n| n.as_str().into()),
+                );
             }
             Record::Event { t, json } => {
                 put("k", "event".into());
@@ -102,7 +150,10 @@ impl Dumper {
                         if ev.get("ev").and_then(Value::as_str) == Some("start")
                             && let Some(Value::Array(r)) = ev.get("mask_rules")
                         {
-                            self.mask_rules = r.iter().map(|v| v.as_str().unwrap_or_default().to_string()).collect();
+                            self.mask_rules = r
+                                .iter()
+                                .map(|v| v.as_str().unwrap_or_default().to_string())
+                                .collect();
                         }
                         for (k, v) in ev {
                             if !matches!(k.as_str(), "o" | "k" | "t") {
@@ -113,7 +164,12 @@ impl Dumper {
                     other => put("json", other),
                 }
             }
-            Record::Link { seq, wall_ns, mono_ns, hash } => {
+            Record::Link {
+                seq,
+                wall_ns,
+                mono_ns,
+                hash,
+            } => {
                 put("k", "link".into());
                 put("seq", (*seq).into());
                 put("wall", wall(*wall_ns).into());
@@ -143,7 +199,11 @@ pub fn dump<R: Read, W: Write>(r: R, out: &mut W) -> io::Result<()> {
     }
     let tail = rd.tail();
     if tail.open_frame || tail.truncated.is_some() {
-        writeln!(out, "{}", json!({"k": "tail", "open_frame": tail.open_frame, "truncated_at": tail.truncated}))?;
+        writeln!(
+            out,
+            "{}",
+            json!({"k": "tail", "open_frame": tail.open_frame, "truncated_at": tail.truncated})
+        )?;
     }
     Ok(())
 }
@@ -174,5 +234,10 @@ pub fn wall(ns: u64) -> String {
         f if f % 1_000 == 0 => format!(".{:06}", f / 1_000),
         f => format!(".{f:09}"),
     };
-    format!("{y:04}-{m:02}-{d:02}T{:02}:{:02}:{:02}{frac}Z", s / 3600, s / 60 % 60, s % 60)
+    format!(
+        "{y:04}-{m:02}-{d:02}T{:02}:{:02}:{:02}{frac}Z",
+        s / 3600,
+        s / 60 % 60,
+        s % 60
+    )
 }

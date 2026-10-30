@@ -28,19 +28,70 @@ const MS: u64 = 1_000_000;
 fn body() -> Vec<Record> {
     let b = |s: &str| s.as_bytes().to_vec();
     vec![
-        Record::Event { t: MONO, json: b(START) },
-        Record::Open { sid: 1, t: MONO + MS, skind: StreamKind::Conn, conn: 0, req: 0, meta: b(CONN) },
-        Record::Open { sid: 2, t: MONO + 3 * MS, skind: StreamKind::HttpReq, conn: 1, req: 0, meta: b(REQ) },
-        Record::Data { sid: 2, t: MONO + 4 * MS, off: 0, flags: 0, bytes: b(r#"{"model":"m1","input":"hi"}"#) },
-        Record::End { sid: 2, t: MONO + 4 * MS, reason: EndReason::Complete, seen: 27, tail: vec![] },
-        Record::Open { sid: 3, t: MONO + 304 * MS, skind: StreamKind::HttpResp, conn: 1, req: 2, meta: b(RESP) },
-        Record::Data { sid: 3, t: MONO + 309 * MS, off: 0, flags: 0, bytes: b("data: {\"type\":\"response.completed\"}\n\n") },
-        Record::End { sid: 3, t: MONO + 310 * MS, reason: EndReason::Complete, seen: 37, tail: b(r#"{"wire":41}"#) },
+        Record::Event {
+            t: MONO,
+            json: b(START),
+        },
+        Record::Open {
+            sid: 1,
+            t: MONO + MS,
+            skind: StreamKind::Conn,
+            conn: 0,
+            req: 0,
+            meta: b(CONN),
+        },
+        Record::Open {
+            sid: 2,
+            t: MONO + 3 * MS,
+            skind: StreamKind::HttpReq,
+            conn: 1,
+            req: 0,
+            meta: b(REQ),
+        },
+        Record::Data {
+            sid: 2,
+            t: MONO + 4 * MS,
+            off: 0,
+            flags: 0,
+            bytes: b(r#"{"model":"m1","input":"hi"}"#),
+        },
+        Record::End {
+            sid: 2,
+            t: MONO + 4 * MS,
+            reason: EndReason::Complete,
+            seen: 27,
+            tail: vec![],
+        },
+        Record::Open {
+            sid: 3,
+            t: MONO + 304 * MS,
+            skind: StreamKind::HttpResp,
+            conn: 1,
+            req: 2,
+            meta: b(RESP),
+        },
+        Record::Data {
+            sid: 3,
+            t: MONO + 309 * MS,
+            off: 0,
+            flags: 0,
+            bytes: b("data: {\"type\":\"response.completed\"}\n\n"),
+        },
+        Record::End {
+            sid: 3,
+            t: MONO + 310 * MS,
+            reason: EndReason::Complete,
+            seen: 37,
+            tail: b(r#"{"wire":41}"#),
+        },
     ]
 }
 
 fn link_now() -> Now {
-    Now { wall_ns: WALL + 310 * MS, mono_ns: MONO + 310 * MS }
+    Now {
+        wall_ns: WALL + 310 * MS,
+        mono_ns: MONO + 310 * MS,
+    }
 }
 
 fn records() -> Vec<Record> {
@@ -58,7 +109,12 @@ fn records() -> Vec<Record> {
     let mut v = vec![part];
     v.extend(body());
     let hash = unhex(LINK_HASH);
-    v.push(Record::Link { seq: 0, wall_ns: link_now().wall_ns, mono_ns: link_now().mono_ns, hash });
+    v.push(Record::Link {
+        seq: 0,
+        wall_ns: link_now().wall_ns,
+        mono_ns: link_now().mono_ns,
+        hash,
+    });
     v
 }
 
@@ -97,12 +153,25 @@ fn part_writer_writes_the_worked_example_at_window_27() {
     let _ = std::fs::remove_dir_all(&dir);
     let opts = PartOptions::default();
     assert_eq!(opts.window_log, 27);
-    let mut w = PartWriter::open(&dir, opts, ENTRY, [0x11; 16], Now { wall_ns: WALL, mono_ns: MONO }).unwrap();
+    let mut w = PartWriter::open(
+        &dir,
+        opts,
+        ENTRY,
+        [0x11; 16],
+        Now {
+            wall_ns: WALL,
+            mono_ns: MONO,
+        },
+    )
+    .unwrap();
     for r in body() {
         w.write(&r).unwrap();
     }
     let line = w.link(link_now()).unwrap();
-    assert_eq!((line.seq, line.raw_end, hex(&line.hash)), (0, 998, LINK_HASH.to_string()));
+    assert_eq!(
+        (line.seq, line.raw_end, hex(&line.hash)),
+        (0, 998, LINK_HASH.to_string())
+    );
 
     // The part file at the flush point is an open frame that decodes to the worked example.
     let mut rd = open_dir(&dir).unwrap();
@@ -112,7 +181,12 @@ fn part_writer_writes_the_worked_example_at_window_27() {
     let back: Vec<Record> = items.into_iter().map(|i| i.rec).collect();
     assert_eq!(back, records());
 
-    let d = w.seal(Now { wall_ns: WALL + 311 * MS, mono_ns: MONO + 311 * MS }).unwrap();
+    let d = w
+        .seal(Now {
+            wall_ns: WALL + 311 * MS,
+            mono_ns: MONO + 311 * MS,
+        })
+        .unwrap();
     assert_eq!(d.line.seq, 1);
     let mut z = Vec::new();
     for p in goalcup_format::read::part_files(&dir).unwrap() {
@@ -126,6 +200,9 @@ fn part_writer_writes_the_worked_example_at_window_27() {
 fn dump_matches_the_committed_lines() {
     let mut d = Dumper::default();
     let got: Vec<serde_json::Value> = Reader::new(GCR).map(|i| d.line(&i.unwrap())).collect();
-    let want: Vec<serde_json::Value> = DUMP.lines().map(|l| serde_json::from_str(l).unwrap()).collect();
+    let want: Vec<serde_json::Value> = DUMP
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
     assert_eq!(got, want);
 }

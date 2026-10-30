@@ -9,7 +9,10 @@
 use crate::codec::{Codec, Record};
 use crate::link::{Chain, ZERO};
 use crate::read::{self, part_files, read_index};
-use crate::{GapReason, IndexKind, IndexLine, LEVEL, WINDOW_LOG, ZSTD_END_BLOCK, hex, index_name, invalid, part_name};
+use crate::{
+    GapReason, IndexKind, IndexLine, LEVEL, WINDOW_LOG, ZSTD_END_BLOCK, hex, index_name, invalid,
+    part_name,
+};
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
@@ -30,7 +33,11 @@ pub struct PartOptions {
 
 impl Default for PartOptions {
     fn default() -> Self {
-        Self { window_log: WINDOW_LOG, rotate_at: 512 << 20, rotate_after_ns: 3600 * 1_000_000_000 }
+        Self {
+            window_log: WINDOW_LOG,
+            rotate_at: 512 << 20,
+            rotate_after_ns: 3600 * 1_000_000_000,
+        }
     }
 }
 
@@ -105,7 +112,13 @@ pub struct PartWriter {
 
 impl PartWriter {
     /// Starts a new entry in `dir` (boot 0, part file 0 at raw offset 0) and writes its PART.
-    pub fn open(dir: &Path, opts: PartOptions, entry: &str, boot_id: [u8; 16], now: Now) -> io::Result<Self> {
+    pub fn open(
+        dir: &Path,
+        opts: PartOptions,
+        entry: &str,
+        boot_id: [u8; 16],
+        now: Now,
+    ) -> io::Result<Self> {
         fs::create_dir_all(dir)?;
         let mut w = Self::empty(dir, opts, entry, boot_id);
         w.start_part(now, ZERO)?;
@@ -159,7 +172,10 @@ impl PartWriter {
     /// Writes one record. PART and LINK are the writer's own and are refused here.
     pub fn write(&mut self, r: &Record) -> io::Result<()> {
         if matches!(r, Record::Part { .. } | Record::Link { .. }) {
-            return Err(io::Error::new(io::ErrorKind::InvalidInput, "PART and LINK are written by the writer"));
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "PART and LINK are written by the writer",
+            ));
         }
         self.put(r)
     }
@@ -183,13 +199,24 @@ impl PartWriter {
         let enc = self.enc.as_mut().ok_or_else(closed)?;
         enc.flush()?;
         let c_end = enc.get_ref().n;
-        self.line(IndexLine { kind: IndexKind::L, seq, raw_end: self.raw, c_end, hash })
+        self.line(IndexLine {
+            kind: IndexKind::L,
+            seq,
+            raw_end: self.raw,
+            c_end,
+            hash,
+        })
     }
 
     fn put_link(&mut self, now: Now) -> io::Result<(u64, [u8; 32])> {
         let seq = self.seq;
         self.buf.clear();
-        let r = Record::Link { seq, wall_ns: now.wall_ns, mono_ns: now.mono_ns, hash: [0; 32] };
+        let r = Record::Link {
+            seq,
+            wall_ns: now.wall_ns,
+            mono_ns: now.mono_ns,
+            hash: [0; 32],
+        };
         self.codec.encode(&r, &mut self.buf)?;
         let n = self.buf.len() - 32;
         let hash = self.chain.link(&self.buf[..n]);
@@ -203,9 +230,16 @@ impl PartWriter {
 
     fn line(&mut self, line: IndexLine) -> io::Result<IndexLine> {
         let text = format!("{line}\n");
-        self.idx.as_mut().ok_or_else(closed)?.write_all(text.as_bytes())?;
+        self.idx
+            .as_mut()
+            .ok_or_else(closed)?
+            .write_all(text.as_bytes())?;
         self.idx_len += text.len() as u64;
-        self.last = Some(Durable { part: part_name(self.part_start), index_len: self.idx_len, line });
+        self.last = Some(Durable {
+            part: part_name(self.part_start),
+            index_len: self.idx_len,
+            line,
+        });
         Ok(line)
     }
 
@@ -224,7 +258,8 @@ impl PartWriter {
     /// and holds a link. Returns the closed part file's durable point.
     pub fn rotate_if_due(&mut self, now: Now) -> io::Result<Option<Durable>> {
         let full = self.raw - self.part_start >= self.opts.rotate_at;
-        let old = now.mono_ns.saturating_sub(self.part_mono) >= self.opts.rotate_after_ns && self.links_in_part > 0;
+        let old = now.mono_ns.saturating_sub(self.part_mono) >= self.opts.rotate_after_ns
+            && self.links_in_part > 0;
         if !(full || old) {
             return Ok(None);
         }
@@ -245,7 +280,13 @@ impl PartWriter {
     fn close(&mut self, now: Now, kind: IndexKind) -> io::Result<Durable> {
         let (seq, hash) = self.put_link(now)?;
         let out = self.enc.take().ok_or_else(closed)?.finish()?;
-        let line = IndexLine { kind, seq, raw_end: self.raw, c_end: out.n, hash };
+        let line = IndexLine {
+            kind,
+            seq,
+            raw_end: self.raw,
+            c_end: out.n,
+            hash,
+        };
         self.line(line)?;
         out.f.sync_data()?;
         self.idx.take().ok_or_else(closed)?.sync_data()?;
@@ -255,7 +296,12 @@ impl PartWriter {
     /// Opens the part file at the current raw offset and writes its PART.
     fn start_part(&mut self, now: Now, prev: [u8; 32]) -> io::Result<()> {
         let dir = self.dir.clone();
-        let create = |name: String| OpenOptions::new().write(true).create_new(true).open(dir.join(name));
+        let create = |name: String| {
+            OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(dir.join(name))
+        };
         let f = create(part_name(self.raw))?;
         self.idx = Some(create(index_name(self.raw))?);
         self.idx_len = 0;
@@ -323,11 +369,21 @@ impl PartWriter {
                 let wall = dead_mtime
                     .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
                     .map_or(rc.now.wall_ns, |d| d.as_nanos() as u64);
-                Now { wall_ns: wall, mono_ns: rc.now.mono_ns.saturating_sub(rc.now.wall_ns.saturating_sub(wall)) }
+                Now {
+                    wall_ns: wall,
+                    mono_ns: rc
+                        .now
+                        .mono_ns
+                        .saturating_sub(rc.now.wall_ns.saturating_sub(wall)),
+                }
             });
             let tail = serde_json::json!({"cause": rc.cause, "exits": rc.exits});
             let writer = Self::open(dir, opts, rc.entry, rc.boot_id, rc.now)?;
-            return Ok(Recovered { writer: Some(writer), gap_after_start: Some(gap(start, rc.now, tail)), line: None });
+            return Ok(Recovered {
+                writer: Some(writer),
+                gap_after_start: Some(gap(start, rc.now, tail)),
+                line: None,
+            });
         };
 
         let line = *lines.last().expect("not empty");
@@ -341,12 +397,30 @@ impl PartWriter {
         for it in read::decode((&f).take(line.c_end))? {
             match it?.rec {
                 p @ Record::Part { .. } => part = Some(p),
-                Record::Link { seq, wall_ns, mono_ns, hash } => link = Some((seq, Now { wall_ns, mono_ns }, hash)),
+                Record::Link {
+                    seq,
+                    wall_ns,
+                    mono_ns,
+                    hash,
+                } => link = Some((seq, Now { wall_ns, mono_ns }, hash)),
                 _ => {}
             }
         }
-        let (Some(Record::Part { entry, boot, part, raw_offset, boot_id, .. }), Some((seq, at, hash))) = (part, link) else {
-            return Err(invalid("part file has no PART or no LINK before its last index line"));
+        let (
+            Some(Record::Part {
+                entry,
+                boot,
+                part,
+                raw_offset,
+                boot_id,
+                ..
+            }),
+            Some((seq, at, hash)),
+        ) = (part, link)
+        else {
+            return Err(invalid(
+                "part file has no PART or no LINK before its last index line",
+            ));
         };
         if seq != line.seq || hash != line.hash {
             return Err(invalid("the last LINK does not match the last index line"));
@@ -374,8 +448,13 @@ impl PartWriter {
         w.idx = Some(OpenOptions::new().append(true).open(idx_path(&path))?);
         w.idx_len = fs::metadata(idx_path(&path))?.len();
         w.enc = Some(new_encoder(Out { f, n }, opts.window_log)?);
-        if line.kind != IndexKind::R && let Some(count) = (rc.count_at)(line.seq) {
-            w.write(&Record::Event { t: at.mono_ns, json: count })?;
+        if line.kind != IndexKind::R
+            && let Some(count) = (rc.count_at)(line.seq)
+        {
+            w.write(&Record::Event {
+                t: at.mono_ns,
+                json: count,
+            })?;
         }
         let mut tail = serde_json::json!({"cause": rc.cause});
         if boot_id != rc.boot_id {
@@ -383,9 +462,16 @@ impl PartWriter {
         }
         w.write(&gap(at, rc.now, tail))?;
         if let Some(seal) = rc.seal {
-            w.write(&Record::Event { t: rc.now.mono_ns, json: seal })?;
+            w.write(&Record::Event {
+                t: rc.now.mono_ns,
+                json: seal,
+            })?;
             let d = w.close(rc.now, IndexKind::R)?;
-            return Ok(Recovered { writer: None, gap_after_start: None, line: Some(d.line) });
+            return Ok(Recovered {
+                writer: None,
+                gap_after_start: None,
+                line: Some(d.line),
+            });
         }
         let d = w.close(rc.now, IndexKind::R)?;
 
@@ -393,7 +479,11 @@ impl PartWriter {
         w.boot += 1;
         w.part += 1;
         w.start_part(rc.now, d.line.hash)?;
-        Ok(Recovered { writer: Some(w), gap_after_start: None, line: Some(d.line) })
+        Ok(Recovered {
+            writer: Some(w),
+            gap_after_start: None,
+            line: Some(d.line),
+        })
     }
 }
 
@@ -451,7 +541,10 @@ fn closed() -> io::Error {
 }
 
 fn file_name(p: &Path) -> String {
-    p.file_name().and_then(|n| n.to_str()).unwrap_or_default().to_string()
+    p.file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or_default()
+        .to_string()
 }
 
 fn idx_path(part: &Path) -> PathBuf {
@@ -472,6 +565,11 @@ fn cut(p: &Path, len: u64) -> io::Result<()> {
 /// Truncates an index file to its first `n` lines.
 fn keep_lines(p: &Path, n: usize) -> io::Result<()> {
     let text = fs::read(p)?;
-    let end = text.iter().enumerate().filter(|(_, b)| **b == b'\n').nth(n - 1).map_or(text.len(), |(i, _)| i + 1);
+    let end = text
+        .iter()
+        .enumerate()
+        .filter(|(_, b)| **b == b'\n')
+        .nth(n - 1)
+        .map_or(text.len(), |(i, _)| i + 1);
     cut(p, end as u64)
 }

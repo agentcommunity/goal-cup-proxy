@@ -46,5 +46,10 @@ fn hand_closed_frame_then_a_new_frame_decode_as_one_stream() {
 
     let raw = zstd::stream::decode_all(&z[..]).unwrap();
     let want = [&a[..], &b[..], &a[..], &c[..]].concat();
-    assert!(raw == want, "decoded {} bytes, want {}", raw.len(), want.len());
+    assert!(
+        raw == want,
+        "decoded {} bytes, want {}",
+        raw.len(),
+        want.len()
+    );
 }

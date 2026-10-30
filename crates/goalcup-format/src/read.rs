@@ -68,7 +68,10 @@ impl<R: Read> Read for Zst<R> {
 
 /// Reads a compressed record stream.
 pub fn decode<R: Read>(r: R) -> io::Result<Reader<Zst<R>>> {
-    let mut rd = Reader::new(Zst { d: zstd::stream::read::Decoder::new(r)?, open: false });
+    let mut rd = Reader::new(Zst {
+        d: zstd::stream::read::Decoder::new(r)?,
+        open: false,
+    });
     rd.is_open = |z| z.open;
     Ok(rd)
 }
@@ -77,7 +80,11 @@ pub fn decode<R: Read>(r: R) -> io::Result<Reader<Zst<R>>> {
 pub fn part_files(dir: &Path) -> io::Result<Vec<PathBuf>> {
     let mut v: Vec<PathBuf> = std::fs::read_dir(dir)?
         .filter_map(|e| e.ok().map(|e| e.path()))
-        .filter(|p| p.file_name().and_then(|n| n.to_str()).is_some_and(|n| n.starts_with("rec-") && n.ends_with(".gcr.zst")))
+        .filter(|p| {
+            p.file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n.starts_with("rec-") && n.ends_with(".gcr.zst"))
+        })
         .collect();
     v.sort();
     Ok(v)
@@ -107,12 +114,24 @@ pub fn read_index(path: &Path) -> io::Result<Vec<IndexLine>> {
 impl<R: Read> Reader<R> {
     /// Reads raw (already decompressed) records.
     pub fn new(r: R) -> Self {
-        Self { r: BufReader::with_capacity(1 << 16, r), codec: Codec::default(), chain: None, off: 0, buf: Vec::new(), tail: Tail::default(), done: false, is_open: |_| false }
+        Self {
+            r: BufReader::with_capacity(1 << 16, r),
+            codec: Codec::default(),
+            chain: None,
+            off: 0,
+            buf: Vec::new(),
+            tail: Tail::default(),
+            done: false,
+            is_open: |_| false,
+        }
     }
 
     /// How the stream ended; final once [`Reader::next`] has returned `None`.
     pub fn tail(&self) -> Tail {
-        Tail { open_frame: (self.is_open)(self.r.get_ref()), ..self.tail }
+        Tail {
+            open_frame: (self.is_open)(self.r.get_ref()),
+            ..self.tail
+        }
     }
 
     pub fn get_ref(&self) -> &R {
@@ -142,7 +161,10 @@ impl<R: Read> Reader<R> {
             }
         };
         if len > MAX_BODY {
-            return Err(invalid(format!("record of {len} bytes at raw offset {} is over 16 MiB", self.off)));
+            return Err(invalid(format!(
+                "record of {len} bytes at raw offset {} is over 16 MiB",
+                self.off
+            )));
         }
         let head = self.buf.len();
         if !self.fill(len as usize)? {
@@ -151,7 +173,9 @@ impl<R: Read> Reader<R> {
         let rec = self.codec.decode(k, &self.buf[head..])?;
         if self.chain.is_none() {
             let prev = match &rec {
-                Record::Part { raw_offset, prev, .. } => {
+                Record::Part {
+                    raw_offset, prev, ..
+                } => {
                     self.off = *raw_offset;
                     *prev
                 }
@@ -163,7 +187,9 @@ impl<R: Read> Reader<R> {
         let chain = self.chain.as_mut().expect("set above");
         let link_ok = if k == kind::LINK {
             let n = self.buf.len() - 32;
-            let Record::Link { hash, .. } = &rec else { unreachable!() };
+            let Record::Link { hash, .. } = &rec else {
+                unreachable!()
+            };
             Some(chain.link(&self.buf[..n]) == *hash)
         } else {
             chain.feed(&self.buf);

@@ -53,7 +53,13 @@ fn random(r: &mut Rng) -> Record {
             req: r.num(),
             meta: r.bytes(300),
         },
-        2 => Record::Data { sid: r.num(), t, off: r.num(), flags: r.next() as u8, bytes: r.bytes(3000) },
+        2 => Record::Data {
+            sid: r.num(),
+            t,
+            off: r.num(),
+            flags: r.next() as u8,
+            bytes: r.bytes(3000),
+        },
         3 => Record::End {
             sid: r.num(),
             t,
@@ -72,10 +78,26 @@ fn random(r: &mut Rng) -> Record {
             lost: r.num(),
             tail: r.bytes(50),
         },
-        5 => Record::Mask { sid: r.num(), off: r.num(), len: r.num(), rule: r.num() },
-        6 => Record::Event { t, json: r.bytes(300) },
-        7 => Record::Link { seq: r.num(), wall_ns: r.num(), mono_ns: t, hash: r.arr() },
-        _ => Record::Unknown { kind: 9 + r.below(247) as u8, body: r.bytes(100) },
+        5 => Record::Mask {
+            sid: r.num(),
+            off: r.num(),
+            len: r.num(),
+            rule: r.num(),
+        },
+        6 => Record::Event {
+            t,
+            json: r.bytes(300),
+        },
+        7 => Record::Link {
+            seq: r.num(),
+            wall_ns: r.num(),
+            mono_ns: t,
+            hash: r.arr(),
+        },
+        _ => Record::Unknown {
+            kind: 9 + r.below(247) as u8,
+            body: r.bytes(100),
+        },
     }
 }
 
@@ -106,9 +128,18 @@ fn random_records_of_every_kind_round_trip() {
 #[test]
 fn unknown_kinds_are_skipped_by_their_length() {
     let recs = [
-        Record::Event { t: 10, json: b"{}".to_vec() },
-        Record::Unknown { kind: 0x42, body: vec![0xff; 1000] },
-        Record::Event { t: 25, json: b"{\"ev\":\"x\"}".to_vec() },
+        Record::Event {
+            t: 10,
+            json: b"{}".to_vec(),
+        },
+        Record::Unknown {
+            kind: 0x42,
+            body: vec![0xff; 1000],
+        },
+        Record::Event {
+            t: 25,
+            json: b"{\"ev\":\"x\"}".to_vec(),
+        },
     ];
     assert_eq!(decode(&encode(&recs)), recs);
 }
@@ -121,15 +152,30 @@ fn a_body_over_16_mib_is_refused() {
     assert_eq!(r.len(), 1);
     assert!(r[0].is_err());
     let mut c = Codec::default();
-    let big = Record::Data { sid: 1, t: 0, off: 0, flags: 0, bytes: vec![0; 16 << 20] };
+    let big = Record::Data {
+        sid: 1,
+        t: 0,
+        off: 0,
+        flags: 0,
+        bytes: vec![0; 16 << 20],
+    };
     assert!(c.encode(&big, &mut Vec::new()).is_err());
 }
 
 #[test]
 fn a_record_cut_at_the_end_is_reported_not_read() {
     let recs = [
-        Record::Event { t: 10, json: b"{\"ev\":\"a\"}".to_vec() },
-        Record::Data { sid: 1, t: 20, off: 0, flags: 0, bytes: vec![b'x'; 300] },
+        Record::Event {
+            t: 10,
+            json: b"{\"ev\":\"a\"}".to_vec(),
+        },
+        Record::Data {
+            sid: 1,
+            t: 20,
+            off: 0,
+            flags: 0,
+            bytes: vec![b'x'; 300],
+        },
     ];
     let raw = encode(&recs);
     let first = encode(&recs[..1]).len();
@@ -144,9 +190,20 @@ fn a_record_cut_at_the_end_is_reported_not_read() {
 #[test]
 fn mask_carries_no_time() {
     let with = [
-        Record::Event { t: 100, json: b"{}".to_vec() },
-        Record::Mask { sid: 1, off: 0, len: 4, rule: 0 },
-        Record::Event { t: 150, json: b"{}".to_vec() },
+        Record::Event {
+            t: 100,
+            json: b"{}".to_vec(),
+        },
+        Record::Mask {
+            sid: 1,
+            off: 0,
+            len: 4,
+            rule: 0,
+        },
+        Record::Event {
+            t: 150,
+            json: b"{}".to_vec(),
+        },
     ];
     assert_eq!(decode(&encode(&with)), with);
     // The second event's `dt` is 50, from the record before the MASK.
