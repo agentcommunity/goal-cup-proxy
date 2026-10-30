@@ -67,11 +67,13 @@ fn notes(calls: &Calls, what: &str) -> Vec<Value> {
 
 /// The stream ID opened for path ID `id`.
 fn sid(c: &Calls, id: &str) -> Option<u64> {
-    opens(c).into_iter().find_map(|(s, _, m)| (m["path"] == id).then_some(s))
+    let mut o = opens(c).into_iter();
+    o.find_map(|(s, _, m)| (m["path"] == id).then_some(s))
 }
 
 fn end_of(c: &Calls, sid: u64) -> Option<EndReason> {
-    ends(c).into_iter().find_map(|(s, r, _)| (s == sid).then_some(r))
+    let mut e = ends(c).into_iter();
+    e.find_map(|(s, r, _)| (s == sid).then_some(r))
 }
 
 #[test]
@@ -171,18 +173,19 @@ fn a_row_that_finds_nothing_is_named_once_five_minutes_after_the_first_request()
         ("c", root, "*", false),
     ];
     let (rec, calls) = Recorder::for_tests(0);
+    let missing = || notes(&calls, "native_missing");
     let after = Duration::from_secs(300);
     let mut m = Missing::new(&sources(&rows));
     m.took("b");
     m.check(&rec, 0, after, Mono(1));
     m.check(&rec, 0, after, Mono(1 << 50));
-    assert!(notes(&calls, "native_missing").is_empty(), "no model request, no note");
+    assert!(missing().is_empty(), "no model request, no note");
     let t0 = 1 << 51;
     m.check(&rec, 2, after, Mono(t0));
     m.check(&rec, 5, after, Mono(t0 + 299_999_999_999));
-    assert!(notes(&calls, "native_missing").is_empty(), "named before the delay");
+    assert!(missing().is_empty(), "named before the delay");
     m.check(&rec, 5, after, Mono(t0 + 300_000_000_000));
     m.check(&rec, 9, after, Mono(t0 + 900_000_000_000));
-    let named: Vec<_> = notes(&calls, "native_missing").iter().map(|n| n["row"].clone()).collect();
+    let named: Vec<_> = missing().iter().map(|n| n["row"].clone()).collect();
     assert_eq!(named, [Value::from("a")]);
 }

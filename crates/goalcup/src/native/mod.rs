@@ -170,7 +170,8 @@ impl Reader {
             if left(&self.rec).is_some_and(|l| l.is_zero()) {
                 break true;
             }
-            match self.tail.read(&self.rec, SLICE, elapsed(seen, self.rec.now())) {
+            let settle = elapsed(seen, self.rec.now());
+            match self.tail.read(&self.rec, SLICE, settle) {
                 Stop::Done => break false,
                 Stop::Slice => {}
                 Stop::Room => {

@@ -233,7 +233,8 @@ fn no_native_source_file_names_a_harness_or_holds_an_exclusion_list() {
         let words: Vec<&str> = text.split(|c: char| !c.is_ascii_alphanumeric()).collect();
         for (id, _) in CONNECTORS {
             let harness = id.split(['-', '_', ' ']).next().unwrap().to_lowercase();
-            assert!(!words.contains(&harness.as_str()), "{name} names `{harness}`");
+            let found = words.contains(&harness.as_str());
+            assert!(!found, "{name} names `{harness}`");
         }
         let code = text.lines().filter(|l| !l.trim_start().starts_with("//"));
         let mut code: String = code.map(|l| format!("{l}\n")).collect();
