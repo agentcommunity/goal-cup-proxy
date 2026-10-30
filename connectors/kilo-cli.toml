@@ -1,0 +1,25 @@
+# Kilo CLI 7.8.25, checked against kilo.ai CLI docs, Vercel's AI Gateway Kilo guide and the 7.8.25 package.
+# Kilo reads .jsonc files as JSON with comments (seam: docs/harnesses/kilo-cli.md).
+id = "kilo-cli"
+name = "Kilo CLI"
+program = "kilo"
+resume = ["--continue"]
+home = { XDG_CONFIG_HOME = "{home}/.config", XDG_DATA_HOME = "{home}/.local/share", XDG_STATE_HOME = "{home}/.local/state", XDG_CACHE_HOME = "{home}/.cache" }
+env = { KILO_DISABLE_AUTOUPDATE = "1" }
+host_hints = [
+  { file = "{home}/.config/kilo/*.json", key = "provider.*.options.baseURL" },
+  { file = "{home}/.config/kilo/*.jsonc", key = "provider.*.options.baseURL" },
+  { file = "{workspace}/kilo.json*", key = "provider.*.options.baseURL" },
+  { file = "{workspace}/opencode.json*", key = "provider.*.options.baseURL" },
+  { file = "{workspace}/.kilo/kilo.json*", key = "provider.*.options.baseURL" },
+  { file = "{workspace}/.kilo/opencode.json*", key = "provider.*.options.baseURL" },
+  { file = "{workspace}/.kilocode/kilo.json*", key = "provider.*.options.baseURL" },
+  { file = "{workspace}/.kilocode/opencode.json*", key = "provider.*.options.baseURL" },
+]
+secret_files = [
+  "{home}/.local/share/kilo/auth.json", "{home}/.config/kilo/config.json", "{home}/.config/kilo/kilo.json",
+  "{home}/.config/kilo/kilo.jsonc", "{home}/.config/kilo/opencode.json", "{home}/.config/kilo/opencode.jsonc",
+]
+native = [{ name = "db", root = "{home}/.local/share/kilo", pattern = "kilo*.db*", form = "final" }]
+# opencode.json is merged after kilo.json and kilo.jsonc, so this setting wins over Kilo's own global writes.
+no_prompts = [{ file = "{home}/.config/kilo/opencode.json", key = "permission", value = "allow" }]
