@@ -29,7 +29,8 @@ def load(name, file):
 pad, check, padrun = load("pad", "pad"), load("padcheck", "check.py"), load("padrun", "pad-run")
 
 SENTINEL = "sk-ant-PADSENTINEL-9f3c1e"
-PADCFG = {"keys": {"claude": "CLAUDE_API_KEY", "gateway": "AI_GATEWAY_API_KEY", "cf": "CLOUDFLARE_API_TOKEN"}}
+PADCFG = {"keys": {"claude": "CLAUDE_API_KEY", "gateway": "AI_GATEWAY_API_KEY", "cf": "CLOUDFLARE_API_TOKEN"},
+          "approval": {"key": "GOALCUP_TEST_APPROVAL_KEY", "member": "GOALCUP_TEST_MEMBER_ID"}}
 BASE = {"harness": "claude-code-cli", "key": "claude", "mode": "cycle"}
 
 
@@ -84,7 +85,12 @@ class Walk(unittest.TestCase):
     HARNESS = {"version": "1.2.3", "version_cmd": "x --version", "keep_going": True}
 
     def fake_call(self, argv, timeout=None, env=None):
-        if argv[0] != "node":  # check.py runs for real on the run folder
+        if argv[0] == "sh":  # fetch-run: no organizer secret but its own reaches it
+            self.assertFalse({"GH_TOKEN", *PADCFG["approval"].values()} & set(env))
+            os.makedirs(os.path.join(argv[-1], argv[-2]))
+            with open(os.path.join(argv[-1], argv[-2], "fetch.json"), "w") as f:
+                f.write("{}")
+        elif argv[0] != "node":  # check.py runs for real on the run folder
             return self.real_call(argv, timeout, env)
         self.calls.append(list(argv))
         if argv[2] in self.hang:
@@ -94,12 +100,15 @@ class Walk(unittest.TestCase):
                 with open(os.path.join(d, "meta-box.json"), "w") as f:
                     f.write("{}")
                 t.add(os.path.join(d, "meta-box.json"), "meta-box.json")
-        out = 'PADSTEP {"result": "skip", "saw": "no goalcup build"}\n' if argv[2] == "exec" else ""
-        return subprocess.CompletedProcess(argv, 0, out, "")
+        if argv[2] == "exec":  # pad-run answers by step, as the fake box is told; by default as with no build
+            with open(argv[argv.index("--script") + 1]) as f:
+                step = f.read().split()[-1]
+            out = "PADSTEP " + json.dumps(self.answers.get(step, {"result": "skip", "saw": "no goalcup build"}))
+        return subprocess.CompletedProcess(argv, 0, out if argv[2] == "exec" else "", "")
 
-    def walk(self, hang=(), **settings):
-        self.calls, self.hang, self.real_call = [], hang, pad.call
-        env = {"CLAUDE_API_KEY": SENTINEL, "AI_GATEWAY_API_KEY": SENTINEL + "gw"}
+    def walk(self, hang=(), answers=None, extra_env=None, **settings):
+        self.calls, self.hang, self.real_call, self.answers = [], hang, pad.call, answers or {}
+        env = {"CLAUDE_API_KEY": SENTINEL, "AI_GATEWAY_API_KEY": SENTINEL + "gw", **(extra_env or {})}
         with tempfile.TemporaryDirectory() as out, mock.patch.dict(os.environ, env), \
                 mock.patch.object(pad, "call", self.fake_call):
             pad.run_all(pad.load_settings(dict(BASE, **settings), PADCFG), PADCFG, self.HARNESS, out)
@@ -121,6 +130,21 @@ class Walk(unittest.TestCase):
         name = calls[0][calls[0].index("--name") + 1]
         self.assertIn(["rm", name], calls)
         self.assertIn(["list", "--prefix", "pad-"], calls)
+
+    def test_staging_approval_values_reach_only_the_request(self):  # rung 2; the scan in walk covers argv and files
+        ok, entry = {"result": "ok", "saw": ""}, "e" + "0" * 16
+        resp = mock.MagicMock(status=200)
+        resp.__enter__.return_value = resp
+        with mock.patch.object(pad.urllib.request, "urlopen", return_value=resp) as urlopen:
+            calls = self.walk(mode="micro", server="staging", answers={
+                "setup": ok, "start": dict(ok, code="BCDF-GHJK"), "paste": ok, "wait-upload": dict(ok, entry=entry)},
+                extra_env={"GOALCUP_TEST_APPROVAL_KEY": SENTINEL + "ap", "GOALCUP_TEST_MEMBER_ID": "PADSENTINEL-m1",
+                           "GH_TOKEN": SENTINEL + "gh"})
+        req = urlopen.call_args.args[0]
+        self.assertEqual(req.get_header("Authorization"), "Bearer " + SENTINEL + "ap")
+        self.assertEqual(json.loads(req.data)["member_id"], "PADSENTINEL-m1")
+        self.assertIn(["push-dir", calls[0][calls[0].index("--name") + 1], "~/run/fetched/" + entry],
+                      [c[:2] + c[-1:] for c in calls])  # fetched, then copied in
 
 
 class BoxHalf(unittest.TestCase):
