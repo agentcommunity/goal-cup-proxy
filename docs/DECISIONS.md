@@ -35,8 +35,6 @@ The owner's decisions for goalcup 1.0. Each points to the entry that carries it.
 - Usage stats are worked out after upload (D83).
 
 **PRD-00 owner questions** ([the list](plans/2026-10-30-v1.0/PRD-00-index.md#owner-questions)).
-None was answered when these entries were written, so each default below holds until the owner
-answers:
 
 - goalcup ends the harness only at the deadline, on `goalcup seal` and on the server's `stop`,
   with no termination proof (D85) (default, PRD-00 question 2).
@@ -66,7 +64,7 @@ Update this table in the same PR as any entry it lists.
 | D1 | partly superseded | D81 (the "hosts the connector declares" clause: one host list for every harness); the no-base-URL rule stands |
 | D2 | partly superseded | D76 (session files are not compared byte for byte with the disk) |
 | D3 | partly superseded | D75 (the daemon is now the recorder inside the one goalcup process; record raw, interpret later stands), D84 (signing) |
-| D4 | superseded | D75 |
+| D4 | partly superseded | D75 (the run-scoped daemon, its start on `control.json`, the registry lock race and the residual held in a daemon's memory: one goalcup process records each entry); the one-workspace, one-entry paragraph stands, with `goalcup continue` closing a dead entry before the next part takes over the workspace |
 | D5 | current | |
 | D7 | superseded | D37, D57 |
 | D9 | partly superseded | D78 (every loss is a gap with a start, an end, a reason and the lost bytes when known), D76 (a gap is a GCR1 record, not a chained one) |
@@ -105,7 +103,7 @@ Update this table in the same PR as any entry it lists.
 | D58 | superseded | D75 |
 | D59 | current | |
 | D60 | partly superseded | D80 (a masked byte is `*`, same length, with a MASK record, not `<redacted:run_secret>`), D75 (the hand-off to the daemon) |
-| D61 | partly superseded | D62 (model traffic for listed providers only), D71 (the home's `.env` is not hashed), D72 (Hermes 0.22: a trust entry for the model URL; the session file is optional), D74 (the token sentence) |
+| D61 | partly superseded | D62 (model traffic for listed providers only), D71 (the home's `.env` is not hashed), D72 (Hermes 0.22: a trust entry for the model URL; the session file is optional), D74 (the token sentence), and in part PRD-00 question 2 as a default until the owner answers (the harness gets the participant's whole environment minus proxy and CA variables, which touches the forwards-no-key clause) |
 | D62 | partly superseded | D74 (a missing value may fall back to the connector's hosts; `env` is no longer a deny word; one indirection through `via`), D81 (one host list for every harness) |
 | D63 | superseded | D84 (signing and receipts are removed) |
 | D64 | partly superseded | D78 (its disk-watch clause, changed by D65 before: a full disk gets no special handling), D76 (its backoff clause) |
@@ -115,7 +113,7 @@ Update this table in the same PR as any entry it lists.
 | D68 | superseded | D84 (the connector contract freeze is removed) |
 | D69 | partly superseded | D71 (the clone, the practice folder, the five login variables and the push check are gone; no keys held, the four-step setup and no GitHub in setup stand), D84 (`goalcup login` in setup) |
 | D70 | partly superseded | D84 (pins and `--dev` are removed; the Worker refuses clients below `MIN_COMPETITION_VERSION` in every mode) |
-| D71 | partly superseded | D84 (the `--dev` clause), D75 (the daemon restart in the run secrets clause), D76 (the v5 `seal.json` field) |
+| D71 | partly superseded | D84 (the `--dev` clause; the 0.6.1 clause that keeps the hidden `goalcup git-credential` and the `github.json` loader; the clause that reads and ignores an old `prep.json` holding `work_root`), D75 (the daemon restart in the run secrets clause), D76 (the v5 `seal.json` field) |
 | D72 | partly superseded | D73 (`goalcup continue` resumes Hermes once model calls are recorded; setup removes the stale CA file) |
 | D73 | partly superseded | D75, D84 (the sentence on the daemon and the control API) |
 | D74 | partly superseded | D81 (the host rule and the tunnel list), D79 (the tunnel list's row cap) |
