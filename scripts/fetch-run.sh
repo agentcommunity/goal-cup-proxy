@@ -47,10 +47,13 @@
 #                  PERSIST_DIR): the index from the object state/runs/<run>.json, each object with
 #                  `npx wrangler r2 object get <bucket>/<key> --local --persist-to PERSIST_DIR --file <dest>`
 #                  run in server/worker (npm ci there first). It takes a run id, not an entry id. The
-#                  local store keeps only an entry's last heartbeat, so "heartbeats" holds that one row.
+#                  bucket defaults to goalcup-traces-staging: `wrangler dev` keeps its local R2 under
+#                  wrangler.toml's preview_bucket_name (checked with wrangler 4.149.0). The local store
+#                  keeps only an entry's last heartbeat, so "heartbeats" holds that one row.
 #                  Fallback, should a wrangler version stop reading the local store this way: mirror
 #                  the objects per key into a directory and pass --index and --store.
-# --bucket B is the R2 bucket (default goalcup-traces; staging is goalcup-traces-staging).
+# --bucket B is the R2 bucket (default goalcup-traces, or goalcup-traces-staging with --local; staging
+# is goalcup-traces-staging).
 # Credentials are read from the environment only. They are never printed (tracing is switched off
 # first, so `sh -x` shows none) or passed on a command line, and the script only ever reads (a SELECT,
 # and GET requests). The database connection reaches psql through a private service file; the R2
@@ -60,14 +63,14 @@ set -eu
 set +x
 umask 077
 
-bucket=goalcup-traces index= store= persist=
+bucket= index= store= persist=
 while [ $# -gt 0 ]; do
   case $1 in
     --bucket) bucket=${2:?--bucket needs a bucket name}; shift ;;
     --index) index=${2:?--index needs a file}; shift ;;
     --store) store=${2:?--store needs a directory}; shift ;;
     --local) persist=${2:?--local needs the wrangler persist directory}; shift ;;
-    -h | --help) sed -n '2,57p' "$0"; exit 0 ;;
+    -h | --help) sed -n '2,60p' "$0"; exit 0 ;;
     -*) echo "fetch-run: unknown option $1" >&2; exit 2 ;;
     *) break ;;
   esac
@@ -83,6 +86,9 @@ case $id in
   e[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]) ;;
   *) echo "fetch-run: $id is not a run id or an entry id (r or e, then 16 lowercase hex digits)" >&2; exit 2 ;;
 esac
+if [ -z "$bucket" ]; then
+  if [ -n "$persist" ]; then bucket=goalcup-traces-staging; else bucket=goalcup-traces; fi
+fi
 case $bucket in
   '' | *[!A-Za-z0-9._-]*) echo "fetch-run: bad bucket name" >&2; exit 2 ;;
 esac
