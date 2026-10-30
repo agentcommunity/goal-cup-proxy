@@ -163,8 +163,9 @@ impl Reader {
         let began = self.rec.now();
         let left = |rec: &Recorder| guard.map(|g| g.saturating_sub(elapsed(began, rec.now())));
         self.pass(true);
-        // Step 2, each snapshot as it is: a copy torn after this pass is not started again (its
-        // state is newer than `seen`), so `close` names its loss instead of copying it at once.
+        // Step 2, each snapshot as it is: a copy torn by the state this pass saw copies that state
+        // once; one torn by a newer state is not started again (its settle clock is past `seen`),
+        // so `close` names its loss instead of copying it at once.
         let seen = self.rec.now();
         let cut = loop {
             if left(&self.rec).is_some_and(|l| l.is_zero()) {

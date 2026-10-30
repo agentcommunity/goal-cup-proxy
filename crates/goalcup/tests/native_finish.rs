@@ -1,7 +1,8 @@
 //! PRD-04 acceptance `native_finish.rs` (points 1, 3 and 6): the running reader reads what a
-//! harness writes, the seal reads every file whole with no byte cap, a `final` row is copied at the
-//! seal and not during the run (until database sets land), a seal whose time guard runs out names
-//! each unread file's exact loss, and a row that finds nothing is named once.
+//! harness writes, the seal reads every file whole with no byte cap (a snapshot rewritten under a
+//! copy in progress too), a `final` row is copied at the seal and not during the run (until
+//! database sets land), a seal whose time guard runs out names each unread file's exact loss, and a
+//! row that finds nothing is named once.
 
 mod common;
 
@@ -138,6 +139,41 @@ fn a_final_row_is_copied_at_the_seal_and_not_while_it_changes_during_the_run() {
     assert_eq!(data_of(&calls, o[0].0), b"onetwothr");
     assert_eq!(end_of(&calls, o[0].0), Some(EndReason::Complete));
     assert!(gaps(&calls).is_empty() && notes(&calls, "native_missing").is_empty());
+}
+
+#[test]
+fn finish_with_no_guard_reads_whole_a_snapshot_rewritten_under_a_copy_in_progress() {
+    let dir = tempfile::tempdir().unwrap();
+    let (rec, calls) = Recorder::for_tests(1);
+    let mut rows = sources(&[("t", dir.path(), "*.db", true)]);
+    rows.0[0].form = Form::Snapshot;
+    let db = dir.path().join("x.db");
+    fs::write(&db, vec![b'a'; 4 << 20]).unwrap();
+    let reader = native::start(rec, rows);
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while sid(&calls, "t:x.db").is_none_or(|s| data_of(&calls, s).is_empty()) {
+        assert!(Instant::now() < deadline, "the copy never began");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    calls.set_room(0);
+    // The same file, rewritten whole while its copy waits for room, then seen by a run pass.
+    let stable: Vec<u8> = (0..1000u32).map(|i| (i % 251) as u8).collect();
+    fs::write(&db, &stable).unwrap();
+    std::thread::sleep(Duration::from_millis(2500));
+    let c = calls.clone();
+    let room = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(500));
+        c.set_room(1 << 30);
+    });
+    let done = common::within(common::HANG, move || reader.finish(true, None));
+    room.join().unwrap();
+    let o = opens(&calls);
+    assert_eq!(o.len(), 2, "one torn copy, then one copy of the state the seal saw");
+    assert_eq!(end_of(&calls, o[0].0), Some(EndReason::SourceChanged));
+    assert_eq!(data_of(&calls, o[1].0), stable);
+    assert_eq!(end_of(&calls, o[1].0), Some(EndReason::Complete));
+    assert!(gaps(&calls).is_empty());
+    assert_eq!((done.cut_files, done.cut_bytes), (0, 0));
 }
 
 #[test]

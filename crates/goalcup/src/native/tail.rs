@@ -161,18 +161,15 @@ impl Tail {
     pub fn read(&mut self, rec: &Recorder, slice: u64, settle: Duration) -> Stop {
         let now = rec.now().ns();
         let settle = u64::try_from(settle.as_nanos()).unwrap_or(u64::MAX);
-        let mut due: Vec<String> = self
-            .files
-            .iter()
-            .filter(|(_, e)| match e.snap {
-                false => e.h.is_some() && e.stat.size > e.off,
-                true => {
-                    let settled = now.saturating_sub(e.seen_at.ns()) >= settle;
-                    e.copy.is_some() || (settled && e.done != Some(e.stat))
-                }
-            })
-            .map(|(id, _)| id.clone())
-            .collect();
+        let is_due = |e: &Entry| match e.snap {
+            false => e.h.is_some() && e.stat.size > e.off,
+            true => {
+                let settled = now.saturating_sub(e.seen_at.ns()) >= settle;
+                e.copy.is_some() || (settled && e.done != Some(e.stat))
+            }
+        };
+        let due = self.files.iter().filter(|(_, e)| is_due(e));
+        let mut due: Vec<String> = due.map(|(id, _)| id.clone()).collect();
         let after = self
             .last
             .as_ref()
@@ -186,7 +183,12 @@ impl Tail {
             let Some(e) = self.files.get_mut(&id) else {
                 continue;
             };
-            let got = read_one(rec, &id, e, &mut left);
+            let copying = e.copy.is_some();
+            let mut got = read_one(rec, &id, e, &mut left);
+            // A copy torn by a state already seen and settled: that state is copied now, once.
+            if copying && matches!(got, Ok(None)) && e.copy.is_none() && is_due(e) {
+                got = read_one(rec, &id, e, &mut left);
+            }
             if let Err(err) = &got {
                 let errno = err.raw_os_error().unwrap_or(0);
                 let what = "native_unreadable";
@@ -273,7 +275,10 @@ fn read_one(rec: &Recorder, id: &str, e: &mut Entry, left: &mut u64) -> io::Resu
         let whole = e.off == c.size && a.as_ref().ok() == Some(&c);
         if whole {
             e.done = Some(c);
-        } else if let Ok(a) = a {
+        } else if let Ok(a) = a
+            && a != e.stat
+        {
+            // Only a state not seen before restarts the settle clock: the one seen keeps its own.
             (e.stat, e.seen_at) = (a, rec.now());
         }
         let reason = if whole { Complete } else { SourceChanged };
