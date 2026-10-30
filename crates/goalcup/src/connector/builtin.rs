@@ -1,6 +1,6 @@
-//! The connectors built into the binary, one line per `connectors/<id>.toml` file. The one source
-//! file that names connector files (PRD-14 `rule_code.rs` allows it); `tests/connector_builtin.rs`
-//! fails when a file is missing here or its `id` differs from the listed one.
+//! Built-in connectors, one line per `connectors/<id>.toml`: the one source file that names them
+//! (PRD-14 `rule_code.rs`); `tests/connector_builtin.rs` fails when a file is missing or misnamed.
+#[rustfmt::skip] // one line per connector; rustfmt would spread the arm over six
 macro_rules! entry {
     ($id:literal) => { ($id, include_str!(concat!("../../../../connectors/", $id, ".toml"))) };
 }
