@@ -94,7 +94,11 @@ impl Reader {
                 continue;
             };
             let (name, root) = (s.name.clone(), s.root.clone());
-            rows.push(Row { name, root, pattern });
+            rows.push(Row {
+                name,
+                root,
+                pattern,
+            });
             snap.push(s.form != Form::Append);
         }
         let secs = since.duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs());
@@ -146,11 +150,13 @@ impl Reader {
             }
             let id = pattern::path_id(&row.name, &f.rel);
             let snap = self.snap[f.row];
-            self.tail.settle(&self.rec, id, &row.root, &f.rel, f.stat, snap);
+            self.tail
+                .settle(&self.rec, id, &row.root, &f.rel, f.stat, snap);
         }
         self.tail.sweep(&self.rec, &walked.unlisted);
         let requests = self.rec.counts().model_requests();
-        self.missing.check(&self.rec, requests, MISSING_AFTER, self.rec.now());
+        self.missing
+            .check(&self.rec, requests, MISSING_AFTER, self.rec.now());
     }
 
     /// Section 8 steps 1, 2, 4 and 5. `harness_exited` is for step 3, the seal's database copies
@@ -166,7 +172,10 @@ impl Reader {
             match self.tail.read(&self.rec, SLICE, Duration::ZERO) {
                 Stop::Done => break false,
                 Stop::Slice => {}
-                Stop::Room => std::thread::sleep(left(&self.rec).map_or(ROOM_WAIT, |l| l.min(ROOM_WAIT))),
+                Stop::Room => {
+                    let wait = left(&self.rec).map_or(ROOM_WAIT, |l| l.min(ROOM_WAIT));
+                    std::thread::sleep(wait);
+                }
             }
         };
         let c = self.tail.close(&self.rec, cut);
@@ -210,7 +219,10 @@ impl Missing {
     pub fn new(sources: &NativeSources) -> Missing {
         let warn = sources.0.iter().filter(|s| s.warn_missing);
         let waiting = warn.map(|s| s.name.clone()).collect();
-        Missing { waiting, first: None }
+        Missing {
+            waiting,
+            first: None,
+        }
     }
 
     /// A file of row `name` was taken: the row is never named.
@@ -223,7 +235,9 @@ impl Missing {
             self.first.get_or_insert(now);
         }
         if self.first.is_some_and(|f| elapsed(f, now) >= after) {
-            self.waiting.drain(..).for_each(|w| rec.event(missing_note(&w)));
+            self.waiting
+                .drain(..)
+                .for_each(|w| rec.event(missing_note(&w)));
         }
     }
 }

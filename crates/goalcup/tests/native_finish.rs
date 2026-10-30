@@ -29,7 +29,11 @@ fn sources(rows: &[(&str, &Path, &str, bool)]) -> NativeSources {
 }
 
 fn append(p: &Path, b: &[u8]) {
-    let mut f = OpenOptions::new().create(true).append(true).open(p).unwrap();
+    let mut f = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(p)
+        .unwrap();
     f.write_all(b).unwrap();
 }
 
@@ -106,7 +110,9 @@ fn a_guard_that_runs_out_names_each_unread_file_exactly() {
         fs::write(dir.path().join(name), vec![b'x'; n as usize]).unwrap();
     }
     let reader = native::start(rec, sources(&[("t", dir.path(), "*.jsonl", true)]));
-    let done = common::within(common::HANG, move || reader.finish(false, Some(Duration::ZERO)));
+    let done = common::within(common::HANG, move || {
+        reader.finish(false, Some(Duration::ZERO))
+    });
     let mut lost_sum = 0;
     for (name, n) in sizes {
         let s = sid(&calls, &format!("t:{name}")).unwrap();
@@ -122,7 +128,11 @@ fn a_guard_that_runs_out_names_each_unread_file_exactly() {
 #[test]
 fn a_row_that_finds_nothing_is_named_once_five_minutes_after_the_first_request() {
     let root = Path::new("/nonexistent");
-    let rows = [("a", root, "*", true), ("b", root, "*", true), ("c", root, "*", false)];
+    let rows = [
+        ("a", root, "*", true),
+        ("b", root, "*", true),
+        ("c", root, "*", false),
+    ];
     let (rec, calls) = Recorder::for_tests(0);
     let after = Duration::from_secs(300);
     let mut m = Missing::new(&sources(&rows));
