@@ -8,12 +8,13 @@
 //! made; [`Step`] says which GAP a body gets. Framing that cannot be followed stops parsing for
 //! the connection (5a): a bad start line or field, a bad chunk size (more than 16 significant
 //! digits included), a conflicting `Content-Length`, framing field lines kept past the head guard
-//! that grow past [`FIELD_MAX`] in all (no valid head has that much), a `101` that is not a WebSocket
-//! this parser can follow, a 2xx to an inner `CONNECT`. Every open stream then gets its GAP and
-//! ends `decode_error`, and the [`Stop`] counts the relayed bytes recorded in no stream; the relay
-//! writes the `parse_stopped` note and the `conn` GAP. Bytes held unrecorded at the close (a head
-//! cut short) are a [`Stop`] too, marked `at_close`: the relay writes only the GAP. A start line past the head guard keeps its first 64 KiB (method
-//! and path, or version and status) under GAP `http_head`; a request then has no `ver`.
+//! that grow past [`FIELD_MAX`] in all (no valid head has that much), a `101` that is not a
+//! WebSocket this parser can follow, a 2xx to an inner `CONNECT`. Every open stream then gets its
+//! GAP and ends `decode_error`, and the [`Stop`] counts the relayed bytes recorded in no stream;
+//! the relay writes the `parse_stopped` note and the `conn` GAP. Bytes held unrecorded at the close
+//! (a head cut short) are a [`Stop`] too, marked `at_close`: the relay writes only the GAP. A start
+//! line past the head guard keeps its first 64 KiB (method and path, or version and status) under
+//! GAP `http_head`; a request then has no `ver`.
 //!
 //! After a WebSocket upgrade request, client bytes are only copied (the `upgrade_copy` guard, then
 //! 5a) until the answer: a `101` with the right `Sec-WebSocket-Accept` hands both directions to
@@ -757,8 +758,9 @@ impl Fields {
         if self.chunked() == Some(true) {
             te.pop();
         }
-        let te = te.iter().map(String::as_str);
-        parse_codings(&self.values("content-encoding").chain(te).collect::<Vec<_>>())
+        let mut all: Vec<&str> = self.values("content-encoding").collect();
+        all.extend(te.iter().map(String::as_str));
+        parse_codings(&all)
     }
 
     fn websocket(&self) -> bool {

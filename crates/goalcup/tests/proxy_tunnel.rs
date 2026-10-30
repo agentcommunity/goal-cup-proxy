@@ -421,7 +421,10 @@ async fn a_parse_fault_keeps_relaying_and_counts_what_follows() {
             assert_eq!((*got, got_tail), (Some(lost), &tail));
             for note in stopped {
                 let conn = Some(*sid);
-                assert_eq!((note["conn"].as_u64(), &note["reason"]), (conn, &json!("decode_failed")));
+                assert_eq!(
+                    (note["conn"].as_u64(), &note["reason"]),
+                    (conn, &json!("decode_failed"))
+                );
             }
         }
     })
