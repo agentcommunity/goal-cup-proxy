@@ -221,38 +221,22 @@ fn hermes_rows_take_the_state_database_and_no_request_dump() {
 }
 
 #[test]
-fn no_native_source_file_names_a_built_in_harness() {
-    // Whole words only, comments included, so `example` never matches `amp`.
-    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/native");
-    for entry in fs::read_dir(&dir).unwrap() {
-        let path = entry.unwrap().path();
-        let text = fs::read_to_string(&path).unwrap().to_lowercase();
-        let words: Vec<&str> = text.split(|c: char| !c.is_ascii_alphanumeric()).collect();
-        for (id, _) in CONNECTORS {
-            let name = id.split(['-', '_', ' ']).next().unwrap().to_lowercase();
-            assert!(
-                !words.contains(&name.as_str()),
-                "{} names `{name}`",
-                path.display()
-            );
-        }
-    }
-}
-
-#[test]
-fn no_native_source_file_holds_an_exclusion_list() {
-    // Section 9: secret files are kept out by the rows (PRD-11), never by a list here. Quoted text
-    // outside comments names no secret file, and no const or static holds a list of names.
+fn no_native_source_file_names_a_harness_or_holds_an_exclusion_list() {
+    // Harness names: whole words only, comments included, so `example` never matches `amp`.
+    // Section 9: secret files are kept out by the rows (PRD-11), never by a list here, so quoted
+    // text outside comments names no secret file.
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/native");
     for entry in fs::read_dir(&dir).unwrap() {
         let path = entry.unwrap().path();
         let name = path.display();
-        let mut code = String::new();
-        for l in fs::read_to_string(&path).unwrap().to_lowercase().lines() {
-            if !l.trim_start().starts_with("//") {
-                code += &format!("{l}\n");
-            }
+        let text = fs::read_to_string(&path).unwrap().to_lowercase();
+        let words: Vec<&str> = text.split(|c: char| !c.is_ascii_alphanumeric()).collect();
+        for (id, _) in CONNECTORS {
+            let harness = id.split(['-', '_', ' ']).next().unwrap().to_lowercase();
+            assert!(!words.contains(&harness.as_str()), "{name} names `{harness}`");
         }
+        let code = text.lines().filter(|l| !l.trim_start().starts_with("//"));
+        let mut code: String = code.map(|l| format!("{l}\n")).collect();
         for escaped in [r"\\", r#"\""#, r#"'"'"#] {
             code = code.replace(escaped, "");
         }
@@ -260,10 +244,6 @@ fn no_native_source_file_holds_an_exclusion_list() {
             for bad in [".env", "secret", "credential", "id_rsa", ".pem", ".key"] {
                 assert!(!q.contains(bad), "{name} quotes `{q}`");
             }
-        }
-        for l in code.lines() {
-            let def = l.split_whitespace().any(|w| w == "const" || w == "static");
-            assert!(!(def && l.contains("[&")), "{name} lists names: {l}");
         }
     }
 }

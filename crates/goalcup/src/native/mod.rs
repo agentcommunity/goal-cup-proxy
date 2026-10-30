@@ -72,12 +72,11 @@ impl NativeReader {
 struct Reader {
     rec: Recorder,
     rows: Vec<Row>,
-    /// Per row: read as a snapshot (`final` rows are read as single snapshot files until
-    /// `snapshot.rs` copies database sets).
-    snap: Vec<bool>,
+    /// Per row. Until `snapshot.rs` copies database sets, a `final` row is read as single snapshot
+    /// files at the seal only: no copy during the run (section 6 step 1 has no interval yet).
+    forms: Vec<Form>,
     walker: Walker,
     tail: Tail,
-    since: i64,
     missing: Missing,
 }
 
@@ -85,7 +84,7 @@ impl Reader {
     fn new(rec: Recorder, sources: &NativeSources) -> Reader {
         let since = sources.0.iter().map(|s| s.since).min();
         let since = since.unwrap_or(UNIX_EPOCH);
-        let (mut rows, mut snap, mut missing) = (Vec::new(), Vec::new(), Missing::new(sources));
+        let (mut rows, mut forms, mut missing) = (Vec::new(), Vec::new(), Missing::new(sources));
         for s in &sources.0 {
             // PRD-11's loader refuses a bad pattern; a row that still fails is named at once.
             let Ok(pattern) = pattern::parse(&s.pattern) else {
@@ -99,17 +98,15 @@ impl Reader {
                 root,
                 pattern,
             });
-            snap.push(s.form != Form::Append);
+            forms.push(s.form);
         }
-        let secs = since.duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs());
         Reader {
             tail: Tail::new(since, rec.native_cursors()),
-            since: i64::try_from(secs).unwrap_or(i64::MAX),
             missing,
             walker: Walker::default(),
             rec,
             rows,
-            snap,
+            forms,
         }
     }
 
@@ -118,38 +115,39 @@ impl Reader {
     fn run(mut self, rx: &Receiver<Finish>) -> NativeFinish {
         loop {
             let began = self.rec.now();
-            self.pass();
+            self.pass(false);
             let next = PASS.max(elapsed(began, self.rec.now()) * 50);
-            let left = |rec: &Recorder| next.saturating_sub(elapsed(began, rec.now()));
             loop {
                 let wait = match self.tail.read(&self.rec, SLICE, SETTLE) {
-                    Stop::Done => break,
+                    Stop::Done => Duration::MAX,
                     Stop::Slice => Duration::ZERO,
                     Stop::Room => ROOM_WAIT,
                 };
-                if left(&self.rec).is_zero() {
-                    break;
-                }
-                if let Some(f) = wait_for(rx, wait.min(left(&self.rec))) {
+                let left = next.saturating_sub(elapsed(began, self.rec.now()));
+                if let Some(f) = wait_for(rx, wait.min(left)) {
                     return self.finish(f);
                 }
-            }
-            if let Some(f) = wait_for(rx, left(&self.rec)) {
-                return self.finish(f);
+                if left <= wait {
+                    break;
+                }
             }
         }
     }
 
-    /// One full pass: walk, settle each file under its path ID, sweep the gone.
-    fn pass(&mut self) {
+    /// One full pass: walk, settle each file under its path ID, sweep the gone. `final` rows are
+    /// settled only when `sealing`.
+    fn pass(&mut self, sealing: bool) {
         let walked = self.walker.pass(&self.rec, &self.rows);
         for f in walked.found {
-            let row = &self.rows[f.row];
-            if tail::taken(&f.stat, self.since) {
+            let (row, form) = (&self.rows[f.row], self.forms[f.row]);
+            if self.tail.taken(&f.stat) {
                 self.missing.took(&row.name);
             }
+            if form == Form::Final && !sealing {
+                continue;
+            }
             let id = pattern::path_id(&row.name, &f.rel);
-            let snap = self.snap[f.row];
+            let snap = form != Form::Append;
             self.tail
                 .settle(&self.rec, id, &row.root, &f.rel, f.stat, snap);
         }
@@ -164,12 +162,15 @@ impl Reader {
     fn finish(mut self, (_harness_exited, guard): Finish) -> NativeFinish {
         let began = self.rec.now();
         let left = |rec: &Recorder| guard.map(|g| g.saturating_sub(elapsed(began, rec.now())));
-        self.pass();
+        self.pass(true);
+        // Step 2, each snapshot as it is: a copy torn after this pass is not started again (its
+        // state is newer than `seen`), so `close` names its loss instead of copying it at once.
+        let seen = self.rec.now();
         let cut = loop {
             if left(&self.rec).is_some_and(|l| l.is_zero()) {
                 break true;
             }
-            match self.tail.read(&self.rec, SLICE, Duration::ZERO) {
+            match self.tail.read(&self.rec, SLICE, elapsed(seen, self.rec.now())) {
                 Stop::Done => break false,
                 Stop::Slice => {}
                 Stop::Room => {

@@ -1,6 +1,7 @@
 //! PRD-04 acceptance `native_finish.rs` (points 1, 3 and 6): the running reader reads what a
-//! harness writes, the seal reads every file whole with no byte cap, a seal whose time guard runs
-//! out names each unread file's exact loss, and a row that finds nothing is named once.
+//! harness writes, the seal reads every file whole with no byte cap, a `final` row is copied at the
+//! seal and not during the run (until database sets land), a seal whose time guard runs out names
+//! each unread file's exact loss, and a row that finds nothing is named once.
 
 mod common;
 
@@ -12,7 +13,7 @@ use std::time::{Duration, Instant, SystemTime};
 use common::recorder::{data_of, gaps};
 use goalcup::connector::{Form, NativeSource, NativeSources};
 use goalcup::native::{self, Missing};
-use goalcup::pipeline::{Call, Calls, EndReason, GapReason, Mono, Recorder};
+use goalcup::pipeline::{Call, Calls, EndReason, GapReason, Mono, Recorder, StreamKind};
 use serde_json::Value;
 
 fn sources(rows: &[(&str, &Path, &str, bool)]) -> NativeSources {
@@ -29,35 +30,48 @@ fn sources(rows: &[(&str, &Path, &str, bool)]) -> NativeSources {
 }
 
 fn append(p: &Path, b: &[u8]) {
-    let mut f = OpenOptions::new()
+    OpenOptions::new()
         .create(true)
         .append(true)
         .open(p)
+        .unwrap()
+        .write_all(b)
         .unwrap();
-    f.write_all(b).unwrap();
+}
+
+// `opens`, `ends` and `notes` have the shapes of `native_tail.rs` and `native_safety.rs`, to move
+// to `common::recorder` as they are.
+fn opens(c: &Calls) -> Vec<(u64, StreamKind, Value)> {
+    let f = |c: Call| match c {
+        Call::Open(sid, kind, .., meta) => Some((sid, kind, meta)),
+        _ => None,
+    };
+    c.all().into_iter().filter_map(f).collect()
+}
+
+fn ends(c: &Calls) -> Vec<(u64, EndReason, u64)> {
+    let f = |c: Call| match c {
+        Call::End(sid, _, r, seen, _) => Some((sid, r, seen)),
+        _ => None,
+    };
+    c.all().into_iter().filter_map(f).collect()
+}
+
+fn notes(calls: &Calls, what: &str) -> Vec<Value> {
+    let f = |c: Call| match c {
+        Call::Event(v) if v["what"] == what => Some(v),
+        _ => None,
+    };
+    calls.all().into_iter().filter_map(f).collect()
 }
 
 /// The stream ID opened for path ID `id`.
 fn sid(c: &Calls, id: &str) -> Option<u64> {
-    c.all().into_iter().find_map(|c| match c {
-        Call::Open(sid, .., meta) if meta["path"] == id => Some(sid),
-        _ => None,
-    })
+    opens(c).into_iter().find_map(|(s, _, m)| (m["path"] == id).then_some(s))
 }
 
 fn end_of(c: &Calls, sid: u64) -> Option<EndReason> {
-    c.all().into_iter().find_map(|c| match c {
-        Call::End(s, _, r, ..) if s == sid => Some(r),
-        _ => None,
-    })
-}
-
-fn notes(c: &Calls) -> Vec<Value> {
-    let f = |c: Call| match c {
-        Call::Event(ev) if ev["what"] == "native_missing" => Some(ev),
-        _ => None,
-    };
-    c.all().into_iter().filter_map(f).collect()
+    ends(c).into_iter().find_map(|(s, r, _)| (s == sid).then_some(r))
 }
 
 #[test]
@@ -102,6 +116,29 @@ fn finish_with_no_guard_reads_past_one_slice_and_a_file_written_just_before() {
 }
 
 #[test]
+fn a_final_row_is_copied_at_the_seal_and_not_while_it_changes_during_the_run() {
+    let dir = tempfile::tempdir().unwrap();
+    let (rec, calls) = Recorder::for_tests(1 << 30);
+    let mut rows = sources(&[("t", dir.path(), "*.db", true)]);
+    rows.0[0].form = Form::Final;
+    let db = dir.path().join("x.db");
+    append(&db, b"one");
+    let reader = native::start(rec, rows);
+    for b in [b"two", b"thr"] {
+        std::thread::sleep(Duration::from_millis(1300));
+        append(&db, b);
+    }
+    std::thread::sleep(Duration::from_millis(1300));
+    assert!(opens(&calls).is_empty(), "copied during the run");
+    reader.finish(true, None);
+    let o = opens(&calls);
+    assert_eq!((o.len(), o[0].1), (1, StreamKind::Snapshot));
+    assert_eq!(data_of(&calls, o[0].0), b"onetwothr");
+    assert_eq!(end_of(&calls, o[0].0), Some(EndReason::Complete));
+    assert!(gaps(&calls).is_empty() && notes(&calls, "native_missing").is_empty());
+}
+
+#[test]
 fn a_guard_that_runs_out_names_each_unread_file_exactly() {
     let dir = tempfile::tempdir().unwrap();
     let (rec, calls) = Recorder::for_tests(0);
@@ -139,13 +176,13 @@ fn a_row_that_finds_nothing_is_named_once_five_minutes_after_the_first_request()
     m.took("b");
     m.check(&rec, 0, after, Mono(1));
     m.check(&rec, 0, after, Mono(1 << 50));
-    assert!(notes(&calls).is_empty(), "no model request, no note");
+    assert!(notes(&calls, "native_missing").is_empty(), "no model request, no note");
     let t0 = 1 << 51;
     m.check(&rec, 2, after, Mono(t0));
     m.check(&rec, 5, after, Mono(t0 + 299_999_999_999));
-    assert!(notes(&calls).is_empty(), "named before the delay");
+    assert!(notes(&calls, "native_missing").is_empty(), "named before the delay");
     m.check(&rec, 5, after, Mono(t0 + 300_000_000_000));
     m.check(&rec, 9, after, Mono(t0 + 900_000_000_000));
-    let named: Vec<_> = notes(&calls).iter().map(|n| n["row"].clone()).collect();
+    let named: Vec<_> = notes(&calls, "native_missing").iter().map(|n| n["row"].clone()).collect();
     assert_eq!(named, [Value::from("a")]);
 }

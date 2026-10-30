@@ -84,7 +84,7 @@ impl Tail {
     ) {
         let now = rec.now();
         let Some(e) = self.files.get_mut(&id) else {
-            if !taken(&stat, self.since) {
+            if !self.taken(&stat) {
                 return;
             }
             let (generation, off) = match self.cursors.native.get(&id) {
@@ -130,6 +130,11 @@ impl Tail {
             }
             e.stat = stat;
         }
+    }
+
+    /// The run-start rule (section 2, D57): max(mtime, ctime) in whole seconds at or after `since`.
+    pub fn taken(&self, stat: &Stat) -> bool {
+        stat.mtime_ns.max(stat.ctime_ns).div_euclid(1_000_000_000) >= self.since
     }
 
     /// Paths not settled since the last sweep are gone: GAP if unread, END `source_changed`. A gone
@@ -346,11 +351,6 @@ fn want(e: &Entry) -> u64 {
 pub(crate) fn fid_hex(fid: Fid) -> String {
     let birth = fid.birth_ns.map(|b| format!(".{b:x}")).unwrap_or_default();
     format!("{:x}.{:x}{birth}", fid.dev, fid.ino)
-}
-
-/// The run-start rule (section 2, D57): max(mtime, ctime) in whole seconds at or after `since`.
-pub(crate) fn taken(stat: &Stat, since_secs: i64) -> bool {
-    stat.mtime_ns.max(stat.ctime_ns).div_euclid(1_000_000_000) >= since_secs
 }
 
 /// Opens `root/rel` with no symlink followed: the root, each folder, then the file with `fid`.
