@@ -558,10 +558,9 @@ qualification.
 
 A harness joins by being merged and shipped in a release (D70). Releases continue during the cup,
 so there is no cutoff: a merged connector ships in the next point release. A connector runs without
-`--dev` only when a release pins it. Before that it runs only with `--dev`, which never competes
-([CONNECTOR-SCHEMA](CONNECTOR-SCHEMA.md)). A player has to install the
-release that carries the connector before they start a run. Point releases keep
-`CONTROL_API_VERSION`, so a running run is never broken by an update. To get yours in:
+`--dev` only when a release pins it. Before that it runs only with `--dev`, which never competes.
+A player has to install the release that carries the connector before they start a run. Point
+releases keep `CONTROL_API_VERSION`, so a running run is never broken by an update. To get yours in:
 
 1. Do the [first try](#test-a-connector): one `--dev --practice` run by you, sealed and uploaded.
    Verify the sealed trace with `goalcup-verify --capture-integrity <trace>`. Send that integrity
