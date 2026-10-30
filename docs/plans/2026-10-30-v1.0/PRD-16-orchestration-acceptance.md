@@ -1304,3 +1304,23 @@ kept and now cites BUILD-PROMPT section 5, since B3 no longer carries it.
 - **Open nit** B8 (`release.sh` next-step text written three times) goes to PRD-14's release slice
   (PRD-14 note); acceptance lists it as known if it is still open at the end.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-15 slice 5 (merge ea0a0fec)
+
+- `gate fast: PASS in 83s` on ea0a0fec. Docs only: `README.md`, `docs/ARCHITECTURE.md`,
+  `docs/CONNECTOR-SCHEMA.md`, `docs/HARNESS-ONBOARDING.md`, `docs/README.md` (+117, -1005). Box link
+  check at c24908e4: no broken link from CONNECTOR-SCHEMA; 39 known others, of which one is new to
+  this slice (`docs/CONTRACTS.md:615` to `#pin-evolution`, left for the CONTRACTS move). Lane box
+  runs: em dash grep clean, stale-term grep clean on the page, key set equal both ways with the
+  schema (22 keys with `mask`).
+- **Size report, PRD-15.** PRD-15 merged no code, and PRD-00 "Size budget" has no docs row, so there
+  is nothing to count against a row. Against PRD-15's own docs table ("CONNECTOR-SCHEMA 1,002 to 90"):
+  the page is 113 lines (126%), the extra being the key table, the mask grammar and the eight
+  **(next slice)** marks, which go when PRD-11's next slice merges.
+- **Trailers.** Lane merge commit 16b62b8c ("Merge remote-tracking branch
+  'origin/v1.0/prd-15-docs-connector-schema'") carries neither trailer line; the other six commits in
+  3d56fffc..ea0a0fec carry both. It is pushed and is not rewritten; the end-of-build report lists it.
+  Lane mergers write the two lines on merge commits too.
+- **Open nits** A10 (`continue` file-flag rule) and B12 (two links to a page without the fact) go to
+  PRD-15's next slice (PRD-15 note); acceptance lists them as known if they are still open at the end.
+- No locked ledger item is touched and no owner question comes from this slice.
