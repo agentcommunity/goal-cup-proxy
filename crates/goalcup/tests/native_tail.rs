@@ -190,6 +190,10 @@ fn a_file_unreadable_to_the_seal_gives_one_open_one_gap_and_one_end() {
     let mut t = T::new(UNIX_EPOCH);
     append(&t.p("a"), b"0123456789");
     fs::set_permissions(t.p("a"), fs::Permissions::from_mode(0o000)).unwrap();
+    if File::open(t.p("a")).is_ok() {
+        eprintln!("skipped: this user reads a mode 000 file (root or CAP_DAC_OVERRIDE)");
+        return;
+    }
     t.walk(&["a"], false);
     t.read(Duration::ZERO);
     t.read(Duration::ZERO);

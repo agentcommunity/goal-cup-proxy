@@ -157,7 +157,10 @@ impl Tail {
             })
             .map(|(id, _)| id.clone())
             .collect();
-        let after = self.last.as_ref().map(|l| due.partition_point(|id| id <= l));
+        let after = self
+            .last
+            .as_ref()
+            .map(|l| due.partition_point(|id| id <= l));
         due.rotate_left(after.unwrap_or(0));
         let mut left = slice;
         for id in due {
