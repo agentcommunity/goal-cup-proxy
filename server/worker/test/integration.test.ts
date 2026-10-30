@@ -8,11 +8,9 @@ import { readFileSync, readdirSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { join } from "node:path";
 import { after, before, describe, mock, test } from "node:test";
-import { Signer } from "../src/sign.ts";
-import type { Ack, StartReceipt } from "../src/sign.ts";
-import { APPROVAL_KEY, Client, GENESIS, credentialFor, makeChunk, openBody, sha256, verifyAck, verifyReceipt } from "./helpers/client.ts";
+import { APPROVAL_KEY, Client, GENESIS, credentialFor, makeChunk, openBody, sha256 } from "./helpers/client.ts";
 import { lifecycle } from "./helpers/rig.ts";
-import { TEST_SEED, startWorker, type RunningWorker } from "./helpers/worker.ts";
+import { startWorker, type RunningWorker } from "./helpers/worker.ts";
 
 // Run credentials, minted through the device flow in each describe's `before`.
 let ALICE = "";
@@ -22,8 +20,6 @@ let DAVE = "";
 const ID_RUN = /^r[0-9a-f]{16}$/;
 const ID_ENTRY = /^e[0-9a-f]{16}$/;
 const TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/;
-
-const publicKey = (await Signer.fromSeedHex(TEST_SEED)).publicKeyHex;
 
 /**
  * What miniflare has persisted in R2: key and sha256 of each committed object. (Reads the
@@ -66,7 +62,7 @@ describe("upload API against wrangler dev", { concurrency: false }, () => {
   before(async () => {
     worker = await startWorker({ EVENT_ID: "practice", TEST_APPROVAL_KEY: APPROVAL_KEY });
     api = new Client(worker.url);
-    [ALICE, BOB, CAROL] = [await credentialFor(api, "alice"), await credentialFor(api, "bob"), await credentialFor(api, "carol")];
+    [ALICE, BOB] = [await credentialFor(api, "alice"), await credentialFor(api, "bob")];
   });
   after(async () => {
     await worker?.stop();
@@ -75,7 +71,6 @@ describe("upload API against wrangler dev", { concurrency: false }, () => {
   // State carried from test to test (alice's run).
   let runId = "";
   let entryId = "";
-  let receipt: StartReceipt;
 
   describe("authentication and routing", () => {
     test("no token and wrong token are 401", async () => {
@@ -101,6 +96,8 @@ describe("upload API against wrangler dev", { concurrency: false }, () => {
       assertError(await api.call("POST", "/v1/runs", { token: ALICE, json: missing }), 400, "malformed");
       assertError(await api.call("POST", "/v1/runs", { token: ALICE, body: new TextEncoder().encode("{not json") }), 400, "malformed");
       assertError(await api.call("POST", "/v1/runs", { token: ALICE, json: [] }), 400, "malformed");
+      // The version under its old name only: refused, the old name is gone.
+      assertError(await api.call("POST", "/v1/runs", { token: ALICE, json: openBody({ proxy_version: undefined, tracer_version: "1.0.0" }) }), 400, "malformed");
     });
 
     test("201 with server-minted ids and times", async () => {
@@ -141,62 +138,27 @@ describe("upload API against wrangler dev", { concurrency: false }, () => {
       assert.equal(r.status, 201);
       assert.notEqual(r.body.run_id, runId);
       assertError(await api.call("GET", `/v1/runs/${runId}`, { token: BOB }), 404, "not_found");
-      assertError(await api.call("POST", `/v1/runs/${runId}/abandon`, { token: BOB, json: { reason: "x" } }), 404, "not_found");
       assertError(await api.call("PUT", `/v1/runs/${runId}/chunks/0`, { token: BOB, body: new Uint8Array([1]), headers: makeChunk(entryId, 0, 1, GENESIS, "x").headers }), 404, "not_found");
     });
   });
 
-  describe("start receipt", () => {
-    test("200 with a signed receipt in the verifier's format", async () => {
-      const r = await api.call("POST", `/v1/runs/${runId}/receipt`, { token: ALICE, json: { entry_id: entryId, chain_head: "b".repeat(64) } });
-      assert.equal(r.status, 200, JSON.stringify(r.body));
-      assert.deepEqual(Object.keys(r.body), ["start_receipt"]);
-      receipt = r.body.start_receipt;
-      assert.deepEqual(Object.keys(receipt), ["claims", "public_key", "signature"]);
-      assert.deepEqual(Object.keys(receipt.claims), [
-        "entry_id", "connector_id", "workspace", "session_id", "started_at", "deadline_at",
-        "manifest_sha256", "chain_head", "connector_dir_sha256",
-      ]);
-      const pos = await api.call("GET", `/v1/runs/${runId}`, { token: ALICE });
-      assert.equal(receipt.claims.entry_id, entryId);
-      assert.equal(receipt.claims.started_at, pos.body.official_start);
-      assert.equal(receipt.claims.deadline_at, pos.body.deadline_at);
-      assert.equal(receipt.claims.chain_head, "b".repeat(64));
-      assert.equal(receipt.claims.workspace, openBody().workspace);
-      assert.equal(receipt.claims.session_id, openBody().session_id);
-      assert.equal(receipt.claims.connector_dir_sha256, openBody().connector_sha256); // one digest, in both places
-      assert.equal(receipt.public_key, publicKey);
-      assert.equal(await verifyReceipt(receipt, publicKey), true);
-    });
-
-    test("a repeat with the same chain_head returns the stored receipt; another chain_head is 409", async () => {
-      const again = await api.call("POST", `/v1/runs/${runId}/receipt`, { token: ALICE, json: { entry_id: entryId, chain_head: "b".repeat(64) } });
-      assert.equal(again.status, 200);
-      assert.deepEqual(again.body.start_receipt, receipt);
-      assertError(await api.call("POST", `/v1/runs/${runId}/receipt`, { token: ALICE, json: { entry_id: entryId, chain_head: "d".repeat(64) } }), 409, "conflict");
-    });
-
-    test("wrong entry is 404, malformed fields are 400", async () => {
-      assertError(await api.call("POST", `/v1/runs/${runId}/receipt`, { token: ALICE, json: { entry_id: "e" + "1".repeat(16), chain_head: "b".repeat(64) } }), 404, "not_found");
-      assertError(await api.call("POST", `/v1/runs/${runId}/receipt`, { token: ALICE, json: { entry_id: entryId, chain_head: "xyz" } }), 400, "malformed");
-      assertError(await api.call("POST", `/v1/runs/${runId}/receipt`, { token: ALICE, json: { entry_id: "nope", chain_head: "b".repeat(64) } }), 400, "malformed");
-    });
-
-    test("once a receipt exists, repeating the open call is still 200 with the same run", async () => {
-      const r = await api.call("POST", "/v1/runs", { token: ALICE, json: openBody() });
-      assert.equal(r.status, 200, JSON.stringify(r.body));
-      assert.equal(r.body.run_id, runId);
+  describe("routes gone since 0.7", () => {
+    test("receipt and abandon are 404", async () => {
+      for (const route of ["receipt", "abandon"]) {
+        const r = await api.call("POST", `/v1/runs/${runId}/${route}`, { token: ALICE, json: { entry_id: entryId, chain_head: "b".repeat(64), reason: "x" } });
+        assertError(r, 404, "not_found");
+      }
     });
   });
 
   describe("position", () => {
-    test("a fresh run: offset 0, next_seq 0, genesis head, no ack", async () => {
+    test("a fresh run: offset 0, next_seq 0, genesis head, not sealed", async () => {
       const r = await api.call("GET", `/v1/runs/${runId}`, { token: ALICE });
       assert.equal(r.status, 200);
       assert.deepEqual(r.body, {
         run_id: runId, entry_id: entryId, segment: 0, status: "open",
         official_start: r.body.official_start, deadline_at: r.body.deadline_at, ends_at: r.body.deadline_at,
-        offset: 0, next_seq: 0, head: GENESIS, last_ack: null, stop: false, final: null, sealed: false,
+        offset: 0, next_seq: 0, head: GENESIS, stop: false, final: null, sealed: false,
       });
     });
   });
@@ -231,7 +193,8 @@ describe("upload API against wrangler dev", { concurrency: false }, () => {
   describe("chunks", () => {
     const chunk1 = () => makeChunk(entryId, 0, 5, GENESIS, "one");
     let c1: ReturnType<typeof chunk1>;
-    let ack1: Ack;
+    // The first chunk's answer, which every later retry of that chunk must repeat.
+    let answer1: Record<string, unknown>;
 
     const put = (c: { body: Uint8Array; headers: Record<string, string> }, offset: number, token = ALICE) =>
       api.call("PUT", `/v1/runs/${runId}/chunks/${offset}`, { token, body: c.body, headers: c.headers });
@@ -268,18 +231,14 @@ describe("upload API against wrangler dev", { concurrency: false }, () => {
       assert.deepEqual((await position()).offset, 0);
     });
 
-    test("first chunk: 200 with a signed ack and the new position", async () => {
+    test("first chunk: 200 with the new position and sealed, and no ack", async () => {
       c1 = chunk1();
       const r = await put(c1, 0);
       assert.equal(r.status, 200, JSON.stringify(r.body));
+      assert.deepEqual(Object.keys(r.body).sort(), ["head", "next_seq", "offset", "received_at", "sealed"]);
+      answer1 = r.body;
       assert.equal(r.body.sealed, false);
-      ack1 = r.body.ack;
-      assert.deepEqual(Object.keys(ack1), ["entry_id", "seq", "hash", "acked_at", "server_signature"]);
-      assert.equal(ack1.entry_id, entryId);
-      assert.equal(ack1.seq, c1.lastSeq);
-      assert.equal(ack1.hash, c1.head);
-      assert.match(ack1.acked_at, TIME);
-      assert.equal(await verifyAck(ack1, publicKey), true);
+      assert.match(r.body.received_at, TIME);
       assert.equal(r.body.offset, c1.length);
       assert.equal(r.body.next_seq, c1.lastSeq + 1);
       assert.equal(r.body.head, c1.head);
@@ -287,17 +246,18 @@ describe("upload API against wrangler dev", { concurrency: false }, () => {
       assert.equal(p.offset, c1.length);
       assert.equal(p.next_seq, 5);
       assert.equal(p.head, c1.head);
-      assert.deepEqual(p.last_ack, ack1);
+      assert.equal(p.sealed, false);
+      assert.ok(!("last_ack" in p), JSON.stringify(p));
     });
 
-    test("a retry of the same chunk is 200 with the very same stored ack", async () => {
-      await new Promise((r) => setTimeout(r, 1100)); // a re-signed ack would carry a later acked_at
-      const r = await put(c1, 0);
+    test("a retry of the same chunk is 200 with the very same stored answer, body unread", async () => {
+      await new Promise((r) => setTimeout(r, 1100)); // a fresh answer would carry a later received_at
+      // Other bytes under the same headers: had the body been read, its hash would not match (422).
+      const other = Buffer.from(c1.body);
+      other[other.length - 1] = other[other.length - 1]! ^ 0xff;
+      const r = await put({ body: other, headers: c1.headers }, 0);
       assert.equal(r.status, 200, JSON.stringify(r.body));
-      assert.deepEqual(r.body.ack, ack1);
-      assert.equal(r.body.offset, c1.length);
-      assert.equal(r.body.next_seq, 5);
-      assert.equal(r.body.head, c1.head);
+      assert.deepEqual(r.body, answer1);
       assert.equal((await position()).offset, c1.length);
     });
 
@@ -333,7 +293,6 @@ describe("upload API against wrangler dev", { concurrency: false }, () => {
       assert.equal(p.offset, c1.length);
       assert.equal(p.next_seq, 5);
       assert.equal(p.head, c1.head);
-      assert.deepEqual(p.last_ack, ack1);
       // A shorter body than Content-Length cannot happen over HTTP, but a *different* body of a
       // different size with the old hash is a mismatch too.
       assertError(await put({ body: Buffer.concat([good.body, Buffer.from([0])]), headers: good.headers }, c1.length), 422, "digest_mismatch");
@@ -344,19 +303,18 @@ describe("upload API against wrangler dev", { concurrency: false }, () => {
       assert.equal(ok.body.next_seq, 8);
       p = await position();
       assert.equal(p.head, good.head);
-      assert.equal(await verifyAck(ok.body.ack, publicKey), true);
       // The stored object is exactly the verified body, once.
       const goodKey = `traces/practice/${runId}/${entryId}/${String(c1.length).padStart(16, "0")}-${good.headers["goalcup-sha256"]}.zst`;
       assert.deepEqual(traceKeys().filter((o) => o.key === goodKey).map((o) => o.sha256), [good.headers["goalcup-sha256"]]);
     });
 
-    test("two identical uploads at once: both 200 with one ack, and the run advanced once", async () => {
+    test("two identical uploads at once: both 200 with one answer, and the run advanced once", async () => {
       const before = await position();
       const next = makeChunk(entryId, before.next_seq, 4, before.head, "three");
       const [a, b] = await Promise.all([put(next, before.offset), put(next, before.offset)]);
       assert.equal(a.status, 200, JSON.stringify(a.body));
       assert.equal(b.status, 200, JSON.stringify(b.body));
-      assert.deepEqual(a.body.ack, b.body.ack);
+      assert.deepEqual(a.body, b.body);
       const p = await position();
       assert.equal(p.offset, before.offset + next.length);
       assert.equal(p.next_seq, before.next_seq + 4);
@@ -365,12 +323,7 @@ describe("upload API against wrangler dev", { concurrency: false }, () => {
     test("an old chunk can still be retried after the run moved on", async () => {
       const r = await put(c1, 0);
       assert.equal(r.status, 200);
-      assert.deepEqual(r.body.ack, ack1);
-    });
-
-    test("abandon is refused once a chunk is stored", async () => {
-      assertError(await api.call("POST", `/v1/runs/${runId}/abandon`, { token: ALICE, json: { reason: "too late" } }), 409, "conflict");
-      assert.equal((await position()).status, "open");
+      assert.deepEqual(r.body, answer1);
     });
   });
 
@@ -397,30 +350,6 @@ describe("upload API against wrangler dev", { concurrency: false }, () => {
       assert.equal(r.body.next_seq, 2001);
       const p = await api.call("GET", `/v1/runs/${bobRun.run_id}`, { token: BOB });
       assert.equal(p.body.offset, 100_000_000);
-    });
-  });
-
-  describe("abandon", () => {
-    test("before any chunk: 200, repeatable, then the run is closed and the account is free again", async () => {
-      const open = await api.call("POST", "/v1/runs", { token: CAROL, json: openBody({ session_id: "carols-session" }) });
-      assert.equal(open.status, 201);
-      const id = open.body.run_id;
-      assertError(await api.call("POST", `/v1/runs/${id}/abandon`, { token: CAROL, json: { reason: "x".repeat(501) } }), 400, "malformed");
-      assertError(await api.call("POST", `/v1/runs/${id}/abandon`, { token: CAROL, json: {} }), 400, "malformed");
-      const r = await api.call("POST", `/v1/runs/${id}/abandon`, { token: CAROL, json: { reason: "the daemon refused to start" } });
-      assert.equal(r.status, 200, JSON.stringify(r.body));
-      assert.deepEqual(r.body, { status: "abandoned" });
-      assert.equal((await api.call("POST", `/v1/runs/${id}/abandon`, { token: CAROL, json: { reason: "again" } })).status, 200);
-      assert.equal((await api.call("GET", `/v1/runs/${id}`, { token: CAROL })).body.status, "abandoned");
-
-      const c = makeChunk(open.body.entry_id, 1, 2, GENESIS, "late");
-      assertError(await api.call("PUT", `/v1/runs/${id}/chunks/0`, { token: CAROL, body: c.body, headers: c.headers }), 410, "closed");
-      assertError(await api.call("POST", `/v1/runs/${id}/receipt`, { token: CAROL, json: { entry_id: open.body.entry_id, chain_head: "b".repeat(64) } }), 410, "closed");
-
-      // The credential stays with the run it opened; a new approval opens the next one.
-      const next = await api.call("POST", "/v1/runs", { token: await credentialFor(api, "carol"), json: openBody({ session_id: "carols-session" }) });
-      assert.equal(next.status, 201, JSON.stringify(next.body));
-      assert.notEqual(next.body.run_id, id);
     });
   });
 
@@ -504,7 +433,7 @@ describe("maintenance switch", () => {
     const api = new Client(worker.url);
     const c = makeChunk("e" + "1".repeat(16), 1, 1, GENESIS, "m");
     const calls = [
-      api.call("POST", "/v1/device", { json: { purpose: "run", mode: "practice", connector_id: "x", tracer_version: "1" } }),
+      api.call("POST", "/v1/device", { json: { purpose: "run", mode: "practice", connector_id: "x", proxy_version: "1" } }),
       api.call("POST", "/v1/device/token", { json: { device_code: "a".repeat(64) } }),
       api.call("POST", "/v1/runs", { token: ALICE, json: openBody() }),
       api.call("POST", "/v1/runs", { json: openBody() }),
@@ -757,8 +686,6 @@ describe("heartbeat counts", () => {
   type Stored = {
     last_vitals?: unknown;
     flag_reason?: string | null;
-    disk_paused_at?: string | null;
-    disk_notice_at?: string | null;
     entries: { last_heartbeat: { recording: string | null; vitals?: unknown } | null }[];
   };
   const counts = { v: 1, boot: 2, mode: null, off_ms: 2300, off_spans: 1, off_since: "2026-11-06T09:00:30Z", gaps: 3, lost_bytes: 1500000, lost_unknown: 0, waiting_bytes: 1048576 };
@@ -802,17 +729,5 @@ describe("heartbeat counts", () => {
     } finally {
       log.mock.restore();
     }
-  });
-
-  lifecycle("counts with an agent_paused key start no pause", async (r) => {
-    const token = await r.cred("alice");
-    const run = await r.start(token, "s1");
-    r.after(60);
-    const res = await r.beat(token, run.run_id, run.entry_id, { counts: { agent_paused: "disk", mode: "recording" }, vitals: { agent_paused: "disk" }, agent_paused: "disk" });
-    assert.equal(res.status, 200, JSON.stringify(res.body));
-    const s = r.storedRun(run.run_id) as unknown as Stored;
-    assert.deepEqual(s.last_vitals, { counts: { agent_paused: "disk", mode: "recording" } });
-    assert.equal(s.disk_paused_at ?? null, null);
-    assert.equal(s.disk_notice_at ?? null, null);
   });
 });

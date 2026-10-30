@@ -240,7 +240,7 @@ const chunk = (first: number, last: number, prev: string, head: string, offset: 
   stored_bytes,
   chunk: {
     entry_id: entry, offset, length: 10, sha256: "1".repeat(64), first_seq: first, last_seq: last, prev, head, r2_key: "k",
-    received_at: "2026-11-06T09:30:00Z", ack: { entry_id: entry, seq: last, hash: head, acked_at: "t", server_signature: "s" },
+    received_at: "2026-11-06T09:30:00Z",
   },
 });
 const seal = (entry = E1, sealed_at = START, h = "1") => ({
@@ -285,7 +285,6 @@ test("closeRun: sealed when over with the current entry sealed, incomplete after
   assert.equal((await db.getRun("m1", R1, null))?.run.status, "incomplete");
   assert.equal(await db.recordHeartbeat(hb(5, "5".repeat(64), true)), "closed");
   assert.equal(await db.commitChunk(chunk(0, 1, G, "1".repeat(64), 0)), "closed");
-  assert.deepEqual(await db.storeReceipt("m1", R1, E1, "b".repeat(64), { claims: { chain_head: "b".repeat(64) } } as never), { kind: "closed" });
   assert.equal(await db.closeRun("m1", R1, "2026-12-20T00:00:00Z"), "incomplete"); // stays
 
   const sealedFirst = await mk();
@@ -320,11 +319,12 @@ test("heartbeat vitals are stored as given, and a repeat of the committed final 
   const db = LocalDb.create(asR2(bucket));
   await db.openRun(openArgs(1, "s1", START, DEADLINE, await credential(db)));
   const stored = () => JSON.parse(bucket.map.get(`state/runs/${R1}.json`)!.text) as {
-    last_vitals: unknown; disk_paused_at: string | null; entries: { heartbeat_count: number; last_heartbeat: { vitals: unknown } }[];
+    last_vitals: unknown; disk_notice_at?: string | null; entries: { heartbeat_count: number; last_heartbeat: { vitals: unknown } }[];
   };
   const vitals = { counts: { off_ms: 0, agent_paused: "disk", mode: "recording" } };
   assert.equal(await db.recordHeartbeat({ ...hb(0, G, false), vitals }), "recorded");
-  assert.deepEqual([stored().entries[0]!.last_heartbeat.vitals, stored().last_vitals, stored().disk_paused_at], [vitals, vitals, null]);
+  // Stored as given; an agent_paused inside the counts starts no disk pause (no disk_full email is owed).
+  assert.deepEqual([stored().entries[0]!.last_heartbeat.vitals, stored().last_vitals, stored().disk_notice_at ?? null], [vitals, vitals, null]);
   assert.equal(await db.recordHeartbeat({ ...hb(0, G, true), vitals: { counts_dropped: 4000 } }), "final_committed");
   assert.deepEqual(stored().last_vitals, { counts_dropped: 4000 });
   const rows = stored().entries[0]!.heartbeat_count;
@@ -419,24 +419,13 @@ test("continue: the same call again is existing, a stale previous is a conflict,
   assert.equal((await db.continueRun(contArgs(id("e", 5), E2, "s3", DEADLINE))).kind, "existing");
 });
 
-test("continue is closed to a replaced run and to an abandoned one", async () => {
+test("continue is closed to a replaced run", async () => {
   const db = LocalDb.create(asR2(new FakeBucket()));
   const [c1, c2] = [await credential(db), await credential(db)];
   await db.openRun(openArgs(1, "s1", START, DEADLINE, c1));
   await db.openRun(openArgs(2, "s2", "2026-11-06T09:30:00Z", "2026-11-13T09:30:00Z", c2)); // replaces run 1 then
   assert.deepEqual(await db.continueRun(contArgs(id("e", 5), E1, "s5", "2026-11-06T09:30:00Z")), { kind: "closed" });
   assert.equal((await db.continueRun(contArgs(id("e", 5), id("e", 2), "s5", "2026-11-06T09:31:00Z", { run_id: id("r", 2) }))).kind, "created");
-  const c3 = await credential(db, "m1", "practice");
-  await db.openRun(openArgs(3, "s3", START, "2026-11-06T09:10:00Z", c3, { mode: "practice" }));
-  assert.equal(await db.abandonRun("m1", id("r", 3), "why", START), "abandoned");
-  assert.deepEqual(await db.continueRun(contArgs(id("e", 6), id("e", 3), "s6", START, { run_id: id("r", 3) })), { kind: "closed" });
-});
-
-test("abandon is refused once any entry holds a chunk", async () => {
-  const db = await mk();
-  assert.equal(await db.continueRun(contArgs(id("e", 2), E1, "s2", START)).then((r) => r.kind), "created");
-  assert.equal(await db.commitChunk(chunk(0, 1, G, "1".repeat(64), 0, id("e", 2))), "committed");
-  assert.equal(await db.abandonRun("m1", R1, "why", START), "has_chunks");
 });
 
 // ---- the device flow and the run credential --------------------------------------------------
@@ -557,7 +546,7 @@ test("heartbeat signals: the first gaps or failed flags the run, model_requests 
   assert.deepEqual([run.flagged_at, run.flag_reason, run.last_model_request_at], ["2026-11-06T09:20:00Z", "failed", "2026-11-06T09:20:00Z"]);
 });
 
-test("runsForTick: open runs and recently ended ones, with the run's own facts; not abandoned or long closed", async () => {
+test("runsForTick: open runs and recently ended ones, with the run's own facts; not long closed", async () => {
   const db = LocalDb.create(asR2(new FakeBucket()));
   const [c1, c2, c3] = [await credential(db, "m1"), await credential(db, "m2"), await credential(db, "m3", "practice")];
   await db.openRun(openArgs(1, "s1", START, DEADLINE, c1));
@@ -571,8 +560,6 @@ test("runsForTick: open runs and recently ended ones, with the run's own facts; 
   assert.equal(await db.closeRun("m3", id("r", 3), "2026-11-07T10:00:00Z"), "incomplete");
   assert.deepEqual(await ids("2026-11-08T09:10:00Z"), [id("r", 1), id("r", 2), id("r", 3)]); // 48 h after the practice run ended
   assert.deepEqual(await ids("2026-11-08T09:10:01Z"), [id("r", 1), id("r", 2)]);
-  assert.deepEqual(await db.abandonRun("m1", id("r", 1), "gone", START), "abandoned");
-  assert.deepEqual(await ids(START), [id("r", 2), id("r", 3)]);
 });
 
 test("queueNotices writes a notice once per run, kind and key, and counts what it wrote", async () => {

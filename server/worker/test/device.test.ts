@@ -36,15 +36,10 @@ describe("device flow against wrangler dev", { concurrency: false }, () => {
   };
   const poll = (device_code: string) => api.call("POST", "/v1/device/token", { json: { device_code } });
 
-  test("proxy_version or tracer_version names Goal Cup Proxy's version; two that differ are 400", async () => {
-    for (const over of [{ tracer_version: undefined, proxy_version: "1.0.0" }, { proxy_version: undefined, tracer_version: "1.0.1" }, { proxy_version: "1.0.0", tracer_version: "1.0.0" }]) {
-      const d = await api.call("POST", "/v1/device", { json: deviceBody(over) });
-      assert.equal(d.status, 200, JSON.stringify(d.body));
-      deviceCodes.push(d.body.device_code);
-    }
-    assertError(await api.call("POST", "/v1/device", { json: deviceBody({ proxy_version: "1.0.0", tracer_version: "1.0.1" }) }), 400, "malformed");
+  test("proxy_version names Goal Cup Proxy's version; tracer_version alone is 400", async () => {
+    assertError(await api.call("POST", "/v1/device", { json: deviceBody({ proxy_version: undefined, tracer_version: "1.0.0" }) }), 400, "malformed");
     assertError(await api.call("POST", "/v1/device", { json: deviceBody({ proxy_version: undefined }) }), 400, "malformed");
-    assertError(await api.call("POST", "/v1/device", { json: deviceBody({ tracer_version: undefined, proxy_version: "x".repeat(65) }) }), 400, "malformed");
+    assertError(await api.call("POST", "/v1/device", { json: deviceBody({ proxy_version: "x".repeat(65) }) }), 400, "malformed");
   });
 
   test("pending, approve, pickup once, then 410", async () => {
@@ -171,11 +166,6 @@ describe("device flow against wrangler dev", { concurrency: false }, () => {
     const other = await api.call("POST", "/v1/runs", { token, json: openBody({ session_id: "different" }) });
     assertError(other, 409, "conflict");
     assert.match(other.body.message, /goalcup continue/);
-
-    // After the receipt, still the same run.
-    const r = await api.call("POST", `/v1/runs/${first.body.run_id}/receipt`, { token, json: { entry_id: first.body.entry_id, chain_head: "b".repeat(64) } });
-    assert.equal(r.status, 200);
-    sameRun((await api.call("POST", "/v1/runs", { token, json: openBody({ session_id: "same" }) })).body);
   });
 
   test("a member's second credential opens a second run, which replaces the first", async () => {
@@ -279,7 +269,6 @@ describe("the minimum goalcup version (D70)", () => {
       for (const mode of ["competition", "practice", "test"]) {
         assertError(await api.call("POST", "/v1/device", { json: deviceBody({ mode, proxy_version: "0.6.1" }) }), 403, "forbidden");
       }
-      assertError(await api.call("POST", "/v1/device", { json: deviceBody({ proxy_version: undefined, tracer_version: "0.6.9-dev" }) }), 403, "forbidden");
       assertError(await api.call("POST", "/v1/device", { json: deviceBody({ proxy_version: "latest" }) }), 403, "forbidden"); // unknown while a minimum is set
       // At the minimum, with a suffix, or newer: fine.
       for (const over of [{ proxy_version: "0.7.0" }, { proxy_version: "0.7.0-dev" }, { proxy_version: "1.2.0" }, { proxy_version: "1.0.0", mode: "practice" }]) {

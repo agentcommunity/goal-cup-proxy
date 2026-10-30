@@ -1,10 +1,8 @@
-// A tiny HTTP client for the contract, and helpers to build chunks and check signatures.
+// A tiny HTTP client for the contract, and helpers to build chunks.
 
 import { createHash } from "node:crypto";
 import { request as httpRequest } from "node:http";
 import { zstdCompressSync } from "node:zlib";
-import { ackSigningBytes, receiptSigningBytes, type Ack, type StartReceipt } from "../../src/sign.ts";
-import { fromHex } from "../../src/util.ts";
 
 export const GENESIS = "0".repeat(64);
 export const sha256 = (b: Uint8Array | string) => createHash("sha256").update(b).digest("hex");
@@ -147,11 +145,3 @@ export function makeChunk(entryId: string, firstSeq: number, count: number, prev
     },
   };
 }
-
-async function verify(publicKeyHex: string, signatureHex: string, bytes: Uint8Array): Promise<boolean> {
-  const key = await crypto.subtle.importKey("raw", fromHex(publicKeyHex) as BufferSource, { name: "Ed25519" }, false, ["verify"]);
-  return crypto.subtle.verify({ name: "Ed25519" }, key, fromHex(signatureHex) as BufferSource, bytes as BufferSource);
-}
-
-export const verifyReceipt = (r: StartReceipt, publicKeyHex: string) => verify(publicKeyHex, r.signature, receiptSigningBytes(r.claims));
-export const verifyAck = (a: Ack, publicKeyHex: string) => verify(publicKeyHex, a.server_signature, ackSigningBytes(a));
