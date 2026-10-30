@@ -1207,3 +1207,20 @@ against `folder.rs` and fixes the guide, without quoting message wording the cod
   (PRD-10 note), so that wording waits for the start slice.
 - WSL1 or a Windows drive under WSL2 is not checked yet (PRD-10 note); the guide's advice stays.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-10 slice 4 (merge a5d7ddc3)
+
+- **`skills/goal-cup-setup/` is deleted.** The only link left is `docs/archive/PARTICIPANT-GUIDE-0.6.md:13`,
+  which this PRD keeps as history (the PRD-10 note after PRD-15 slice 7); `check-links.py` now counts it as broken
+  (39 to 40 in the slice's box), and no CI step runs that script. The fixer's 16:18Z line on it needs
+  no owner answer.
+- **The guide's sleep row does not quote the CLI.** `docs/PARTICIPANT-GUIDE.md` line 324 reads
+  `this computer may go to sleep (…)`; `text::no_sleep_lock` prints "This computer may sleep during
+  the run (no sleep lock: <why>). Keep it on mains power ...", with `<why>` one of "caffeinate is
+  missing", "set Windows sleep to Never" or "no systemd-inhibit with a running systemd". The next
+  PRD-15 touch of the message table quotes the start of the printed line.
+- **`README.md` line 237** says `goalcup setup --harness claude-code-cli` signs in to the harness. On
+  integration, setup without `--yes` asks, opens and writes nothing (the interactive setup is
+  PRD-10's next setup slice). The line stays; if that slice has not merged by PRD-15's last pass,
+  the line says what setup does then.
+- No locked ledger item is touched and no owner question comes from this slice.
