@@ -8,7 +8,7 @@ mod common;
 use std::path::Path;
 use std::process::{Command, Output};
 
-use cli_common::{ENTRY, RUN, T0, status};
+use cli_common::{ENTRY, RUN, T0, live, status};
 use common::home::TempHome;
 use goalcup::cli::status::{Ctx, State, block, decide, problems};
 use goalcup::cli::{self, ConnectorSource, EntryFacts, RunMode, ServerJson, text};
@@ -16,19 +16,6 @@ use goalcup::pipeline::counts::TunnelHost;
 use goalcup::pipeline::status::{AfterSeal, HarnessStatus, Losing, Mode};
 use goalcup::watchdog::Exit;
 use serde_json::{Value, json};
-
-/// Liveness and now (`T0 + age`); the run is open for a day.
-fn live(recorder: bool, watchdog: bool, harness: bool, age: u64) -> Ctx<'static> {
-    Ctx {
-        name: "Agent",
-        run: RUN,
-        recorder,
-        watchdog,
-        harness,
-        deadline: Some(T0 + 86_400),
-        now: T0 + age,
-    }
-}
 
 fn cx(harness: bool, now: u64) -> Ctx<'static> {
     live(true, true, harness, now - T0)

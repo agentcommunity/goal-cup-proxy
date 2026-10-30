@@ -23,10 +23,12 @@ pub struct Entry {
 
 /// A resolved input: where the record came from (S6 `input`: `local`, `server` or `live`) and
 /// its entries in order.
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct Input {
     pub kind: &'static str,
     pub entries: Vec<Entry>,
+    /// `--server` was given: a copy must then have its `fetch.json` (S13).
+    pub server: bool,
 }
 
 /// Resolves a path. The error is a plain line for exit 3: the path is missing, holds no record, or
@@ -84,7 +86,11 @@ pub fn resolve(path: &Path, live: bool, server: bool) -> Result<Input, String> {
         (false, true) => "server",
         (false, false) => "local",
     };
-    Ok(Input { kind, entries })
+    Ok(Input {
+        kind,
+        entries,
+        server,
+    })
 }
 
 /// The entry at `dir`: a fetched entry, an entry with `rec/`, or a `rec` folder itself.
