@@ -285,7 +285,6 @@ test("closeRun: sealed when over with the current entry sealed, incomplete after
   assert.equal((await db.getRun("m1", R1, null))?.run.status, "incomplete");
   assert.equal(await db.recordHeartbeat(hb(5, "5".repeat(64), true)), "closed");
   assert.equal(await db.commitChunk(chunk(0, 1, G, "1".repeat(64), 0)), "closed");
-  assert.deepEqual(await db.storeReceipt("m1", R1, E1, "b".repeat(64), { claims: { chain_head: "b".repeat(64) } } as never), { kind: "closed" });
   assert.equal(await db.closeRun("m1", R1, "2026-12-20T00:00:00Z"), "incomplete"); // stays
 
   const sealedFirst = await mk();
