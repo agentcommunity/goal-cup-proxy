@@ -1347,3 +1347,30 @@ kept and now cites BUILD-PROMPT section 5, since B3 no longer carries it.
 - **Open nit** B13 (test builder duplicate write path) goes to PRD-08's next slice (PRD-08 note);
   acceptance lists it as known if it is still open at the end.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-10 slice 2 (merge 56495dd6)
+
+- `gate fast: PASS in 88s` on 56495dd6 (98 tests run in the nextest summary). Box runs before the
+  merge: the builder ran fmt, clippy `-D warnings` and goalcup nextest (41/41) plus gate fast. The
+  fixer ran goalcup nextest (69/69), and reviewer A re-checked on a local merge with 77e01fbb (fmt,
+  workspace clippy, 69/69, doctests). The macOS liveness path has not been compiled in any box
+  (skipped, no macOS box). Ten paths changed, all owned by PRD-10, with no `Cargo.toml` change.
+- **Size report, PRD-10** (`wc -l` at 56495dd6, row "CLI (PRD-10)", about 2,900 src and 1,200 tests).
+  Src is 1,959, 68% of the row with 6 of 18 files written: `text.rs` 613, `cli/mod.rs` 462,
+  `status.rs` 341, `log.rs` 202, `main.rs` 197, `finish.rs` 144. The same six files have own
+  estimates of 1,270, so they run at 154%, and the CLI projects to about 3,680 (127%). The replan
+  decision (PRD-10 note) keeps the row, makes later slices build at their estimates, cuts B1, B3 and
+  B4 first, and needs a decision line for any merge past 3,190. Tests are 965, 80% of the row with
+  5 of the planned files (`cli_status.rs` 404, `cli_finish.rs` 274, `cli_log.rs` 136,
+  `cli_commands.rs` 128, `tests/cli_common/mod.rs` 23). `cli_folder.rs`, `cli_start.rs`,
+  `cli_continue.rs` and the setup tests are still to come, so the tests row will likely pass 1,200.
+  They reuse `tests/cli_common/` and PRD-14's `common::home` and `common::worker`. The
+  end-of-build report counts it against the Rust test total (a total past about 14,200 is an owner
+  question then).
+- **Trailers:** all 10 commits in 77e01fbb..56495dd6 carry both lines.
+- **Ownership:** the integrator accepts `crates/goalcup/tests/cli_common/` as PRD-10's (PRD-00 note).
+- **Open nits** B1 to B4 go to PRD-10's next slice (PRD-10 note). Acceptance lists them as known if
+  they are still open at the end. The vendor problem row, end-screen rule 7's end time, the native
+  rows line and the upload lines are not built yet. Acceptance does not count the section 4 problem
+  table or the end screen as complete until they are built or a replan line rules them out.
+- No locked ledger item is touched and no owner question comes from this slice.

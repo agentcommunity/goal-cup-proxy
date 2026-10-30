@@ -900,3 +900,13 @@ Names for `LESSONS.md` (the lessons lane writes them; judge 13:06Z):
   slice names it. L-VR2: the panic hook is built (file and line, exit 3), its test comes with the
   server slice (PRD-08 note). Both stay `(name pending)`.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-10 slice 2 (merge 56495dd6)
+
+- **L-SC6 is named:** `crates/goalcup/tests/cli_finish.rs` `unsealed_status_never_reads_as_finished`.
+  A `status.json` with no seal never yields the end screen's finished block, and status never
+  prints the sealed state line. The lessons lane replaces its `(name pending)`.
+- L-SC1 stays pending. `cli/folder.rs` and `cli_folder.rs` need neither S3 nor S8, so they may come
+  in PRD-10's next slice, ahead of `start` (PRD-10 note). The check on the relative `GOALCUP_HOME`
+  input from the slice 1 note still applies.
+- No locked ledger item is touched and no owner question comes from this slice.

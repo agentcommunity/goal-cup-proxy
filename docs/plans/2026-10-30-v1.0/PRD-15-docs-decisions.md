@@ -1093,3 +1093,12 @@ open; both go in the next PRD-15 slice that touches these files, not a separate 
   `goalcup_format::dump::Dumper` and its output on the worked example equals the committed file as
   JSON (judge 12:35Z box).
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-10 slice 2 (merge 56495dd6)
+
+- `skills/goal-cup/SKILL.md` has no MCP paragraph now. PRD-10 deletes `skills/goal-cup-setup/` only
+  after nothing links it, because CI runs check-links. Integration links it from four places:
+  `README.md:20`, `docs/PARTICIPANT-GUIDE.md:9`, `docs/README.md:14` and `AGENTS.md:40` (the
+  `skills/` map row). PRD-15's rewrites of these pages drop the links. The merge note of the slice
+  that removes the last one says so, so PRD-10's delete can follow.
+- No locked ledger item is touched and no owner question comes from this slice.
