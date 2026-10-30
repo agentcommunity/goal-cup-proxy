@@ -187,7 +187,10 @@ pub fn no_harness(installed: &[&str]) -> String {
 pub fn refusal(r: &Refusal) -> String {
     match r {
         Refusal::HomeLocked { home } => {
-            format!("a run uses \"{}\" now. Run this again once it has ended.", home.display())
+            format!(
+                "a run uses \"{}\" now. Run this again once it has ended.",
+                home.display()
+            )
         }
         Refusal::SettingSet { file, key } => format!(
             "\"{}\" sets {key}, which routes around the recorder. Remove it, then run this again.",
@@ -251,7 +254,9 @@ pub const NO_GIT: &str = "git is not installed. Your agent needs it to push its 
 
 /// PRD-05 section 12, the default text; `db` names a harness whose database is read whole.
 pub fn masking(db: Option<&str>) -> String {
-    let (and, db) = db.map_or(("and ", String::new()), |n| ("", format!(", and {n}'s database")));
+    let (and, db) = db.map_or(("and ", String::new()), |n| {
+        ("", format!(", and {n}'s database"))
+    });
     format!(
         "Goal Cup Proxy hides known secret shapes in memory, before anything is saved: API keys with a \
          known prefix, login headers, cookies, passwords in URLs, private keys, login tokens, values \
@@ -478,16 +483,14 @@ pub fn state_line(state: &State, run: &str) -> String {
             "Recording is not answering since {}. Your agent is not slowed.",
             t(since)
         ),
-        State::Losing { streams, bytes } => format!(
-            "Recording is losing data now: {} a gap ({} so far). Your agent is not slowed. \
-             The end screen will say how much.",
-            plural(
-                streams,
-                "connection or file has",
-                "connections or files have"
-            ),
-            size_words(bytes)
-        ),
+        State::Losing { streams, bytes } => {
+            let n = plural(streams, "connection or file has", "connections or files have");
+            format!(
+                "Recording is losing data now: {n} a gap ({} so far). Your agent is not slowed. \
+                 The end screen will say how much.",
+                size_words(bytes)
+            )
+        }
         State::WriterSlow { secs } => {
             format!("Recording is behind: nothing written for {secs} s. Your agent is not slowed.")
         }
@@ -518,10 +521,8 @@ pub fn harness_line(name: &str, alive: bool, exit: Option<Exit>, started: bool) 
 
 /// `Written so far:`, with the hosts by count and the whole count when some have holes.
 pub fn written_line(requests: u64, hosts: &[(&str, u64)], whole: u64, holes: u64) -> String {
-    let mut line = format!(
-        "Written so far: {}",
-        plural(requests, "model request", "model requests")
-    );
+    let n = plural(requests, "model request", "model requests");
+    let mut line = format!("Written so far: {n}");
     if !hosts.is_empty() {
         line += &format!(" ({})", host_list(hosts));
     }
@@ -720,7 +721,8 @@ pub fn requests_written(n: u64, hosts: &[(&str, u64)]) -> String {
 
 /// Rule 3: whole beside the request count when some have holes, and the bytes not recorded.
 pub fn whole_and_lost(whole: u64, holes: u64, lost: u64) -> String {
-    let holes = (holes > 0).then(|| format!("{whole} of them written whole, {holes} with missing parts."));
+    let holes =
+        (holes > 0).then(|| format!("{whole} of them written whole, {holes} with missing parts."));
     let lost = (lost > 0).then(|| format!("{} was not recorded.", size_words(lost)));
     let parts: Vec<String> = holes.into_iter().chain(lost).collect();
     parts.join(" ")

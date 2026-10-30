@@ -101,7 +101,10 @@ fn write_home(
     vars: BTreeMap<String, String>,
 ) -> Result<Option<String>, String> {
     let server_host = match server {
-        Server::Url(u) => u.split("://").nth(1).and_then(|r| r.split(['/', ':']).next()),
+        Server::Url(u) => u
+            .split("://")
+            .nth(1)
+            .and_then(|r| r.split(['/', ':']).next()),
         Server::Off => None,
     };
     let env = Env {
@@ -116,7 +119,9 @@ fn write_home(
     if let Some(r @ Refusal::HomeLocked { .. }) = &plan.refusal {
         return Err(text::refusal(r));
     }
-    let off: Vec<String> = plan.log.iter()
+    let off: Vec<String> = plan
+        .log
+        .iter()
         .filter_map(|l| Some(l.strip_prefix("update_off not written: ")?.to_owned()))
         .collect();
     let prompts = connector::write_settings(&plan.home, &c.no_prompts);
@@ -160,7 +165,11 @@ fn written(home: &Path, rows: &[SettingRow], skipped: &[String]) -> Vec<Row> {
 fn save(file: &Path, saved: &Saved) -> std::io::Result<()> {
     let tmp = file.with_extension("json.tmp");
     let _ = fs::remove_file(&tmp);
-    let mut f = fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(&tmp)?;
+    let mut f = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&tmp)?;
     f.write_all(&serde_json::to_vec_pretty(saved)?)?;
     fs::rename(&tmp, file)
 }
@@ -190,7 +199,7 @@ fn machine(home: &Path, server: &Server, vars: &BTreeMap<String, String>) {
 fn installed(vars: &BTreeMap<String, String>) -> Vec<&'static str> {
     let on_path = |c: Connector| resolve_program(&c.program, vars).is_absolute();
     let ids = builtin::CONNECTORS.iter().map(|(id, _)| *id);
-    ids.filter(|id| connector::load(id, None).is_ok_and(&on_path))
+    ids.filter(|id| connector::load(id, None).is_ok_and(on_path))
         .collect()
 }
 
@@ -210,7 +219,11 @@ fn add_host(home: &Path, name: &str) -> ExitCode {
     let old = fs::read_to_string(&file).unwrap_or_default();
     if !old.lines().any(|l| l.trim() == host) {
         make_dir(home);
-        let gap = if old.is_empty() || old.ends_with('\n') { "" } else { "\n" };
+        let gap = if old.is_empty() || old.ends_with('\n') {
+            ""
+        } else {
+            "\n"
+        };
         let mut options = fs::OpenOptions::new();
         let opened = options.append(true).create(true).mode(0o600).open(&file);
         if opened.and_then(|mut f| writeln!(f, "{gap}{host}")).is_err() {

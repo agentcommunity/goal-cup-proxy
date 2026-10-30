@@ -99,7 +99,11 @@ pub fn wsl_version() -> Option<u8> {
         return None;
     }
     let two = release.contains("wsl2") || release.contains("microsoft-standard");
-    Some(if two || !release.starts_with("4.4.") { 2 } else { 1 })
+    Some(if two || !release.starts_with("4.4.") {
+        2
+    } else {
+        1
+    })
 }
 
 /// Section 3 step 2, one check for `start` (a problem) and `setup` (a warning), from 0.7's

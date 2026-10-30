@@ -22,7 +22,7 @@ use serde_json::Value;
 fn connector() -> Connector {
     let parsed = |c: &Connector| {
         let rows = c.update_off.iter().chain(&c.no_prompts);
-        rows.map(|r| &r.file).all(|f| f.ends_with(".json") || f.ends_with(".toml"))
+        rows.all(|r| r.file.ends_with(".json") || r.file.ends_with(".toml"))
     };
     builtin::CONNECTORS
         .iter()
@@ -39,8 +39,8 @@ impl Fake {
         let dir = tempfile::tempdir().unwrap();
         let bin = dir.path().join("bin");
         fs::create_dir(&bin).unwrap();
-        let log = dir.path().join("argv.log");
-        let script = format!("#!/bin/sh\necho \"$*\" >> '{}'\necho 'fake 9.9.9'\n", log.display());
+        let log = dir.path().join("argv.log").display().to_string();
+        let script = format!("#!/bin/sh\necho \"$*\" >> '{log}'\necho 'fake 9.9.9'\n");
         fs::write(bin.join(program), script).unwrap();
         fs::set_permissions(bin.join(program), fs::Permissions::from_mode(0o755)).unwrap();
         Fake(dir)
@@ -58,7 +58,9 @@ impl Fake {
 
 fn setup(home: &TempHome, path: &str, args: &[&str]) -> (Output, String) {
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_goalcup"));
-    home.apply(&mut cmd).env("GOALCUP_SERVER", "off").env("PATH", path);
+    home.apply(&mut cmd)
+        .env("GOALCUP_SERVER", "off")
+        .env("PATH", path);
     let out = cmd.arg("setup").args(args).current_dir(home.home());
     let out = out.stdin(Stdio::null()).output().expect("goalcup runs");
     let all = format!("{}{}", lossy(&out.stdout), lossy(&out.stderr));
@@ -70,20 +72,14 @@ fn lossy(bytes: &[u8]) -> String {
 }
 
 /// Every path under `dir`: a file's bytes, or None for a folder.
-fn tree(dir: &Path, out: &mut BTreeMap<PathBuf, Option<Vec<u8>>>) {
-    for path in fs::read_dir(dir).unwrap().map(|e| e.unwrap().path()) {
-        if path.is_dir() {
-            out.insert(path.clone(), None);
-            tree(&path, out);
-        } else {
-            out.insert(path.clone(), Some(fs::read(&path).unwrap()));
-        }
-    }
-}
-
 fn snapshot(dir: &Path) -> BTreeMap<PathBuf, Option<Vec<u8>>> {
     let mut out = BTreeMap::new();
-    tree(dir, &mut out);
+    for path in fs::read_dir(dir).unwrap().map(|e| e.unwrap().path()) {
+        if path.is_dir() {
+            out.extend(snapshot(&path));
+        }
+        out.insert(path.clone(), fs::read(&path).ok());
+    }
     out
 }
 
@@ -117,7 +113,8 @@ fn yes_writes_the_settings_only_into_the_isolated_home() {
     let before = snapshot(home.home());
     let (out, all) = setup(&home, &fake.path(), &["--harness", &c.id, "--yes"]);
     assert_eq!(out.status.code(), Some(0), "{all}");
-    assert!(!all.contains(text::PROBLEM) && !all.contains("goalcup mcp"), "{all}");
+    assert!(!all.contains(text::PROBLEM), "{all}");
+    assert!(!all.contains("goalcup mcp"), "{all}");
     assert_eq!(fake.argv(), ["--version"]);
 
     let iso = isolated_home(&home.goalcup_home(), &c.id);
@@ -133,7 +130,7 @@ fn yes_writes_the_settings_only_into_the_isolated_home() {
         let doc = parse(&file);
         let got = row.key.split('.').try_fold(&doc, |v, k| v.get(k));
         let got = got.map(|v| v.as_str().map_or_else(|| v.to_string(), str::to_owned));
-        assert_eq!(got.as_deref(), Some(row.value.as_str()), "{} {}", file.display(), row.key);
+        assert_eq!(got.as_deref(), Some(row.value.as_str()), "{}", row.key);
     }
 
     let stdout = lossy(&out.stdout);
@@ -160,8 +157,9 @@ fn record_host_refuses_an_address_this_computer_and_a_never_host() {
     let home = TempHome::new();
     let list = HostList::from_file(builtin::HOSTS.as_bytes(), "hosts").unwrap();
     let raw: toml::Table = builtin::HOSTS.parse().unwrap();
-    let names = raw["never"].as_array().unwrap().iter().filter_map(|v| v.as_str());
-    let never = names
+    let names = raw["never"].as_array().unwrap();
+    let never = (names.iter())
+        .filter_map(|v| v.as_str())
         .filter(|n| !n.contains('*'))
         .find(|n| list.decide(n) == Decision::Never)
         .expect("a never host in the built-in list");
@@ -173,7 +171,8 @@ fn record_host_refuses_an_address_this_computer_and_a_never_host() {
         assert!(!file.exists(), "{bad}");
     }
     for _ in 0..2 {
-        let (out, all) = setup(&home, "/usr/bin:/bin", &["--record-host", "llm.example.com"]);
+        let args = ["--record-host", "llm.example.com"];
+        let (out, all) = setup(&home, "/usr/bin:/bin", &args);
         assert_eq!(out.status.code(), Some(0), "{all}");
         let text = fs::read_to_string(&file).unwrap();
         assert_eq!(text.lines().filter(|l| *l == "llm.example.com").count(), 1);
