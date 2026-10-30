@@ -1132,3 +1132,78 @@ links). It added the `check --json` report section to `docs/RECORD-FORMAT.md` fr
   RECORD-FORMAT numbers (PRD-02 core merge), the HARNESS-ONBOARDING pointer (PRD-12's skill rewrite),
   and the third slice.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-15 slice 7 (merge 938f6733)
+
+Slice 7 dropped the four live links to `skills/goal-cup-setup/` (`README.md`, `docs/PARTICIPANT-GUIDE.md`,
+`docs/README.md`, the `skills/` row of the `AGENTS.md` map). The cross-lane ask in the PRD-10 slice 2
+note is closed; PRD-10's delete of the skill can follow (PRD-10 note).
+
+- **One link stays, as history (A-N1).** `docs/archive/PARTICIPANT-GUIDE-0.6.md:13` still links
+  `../../skills/goal-cup-setup/SKILL.md` and breaks when PRD-10 deletes the skill. It is not edited:
+  the archive is history. PRD-15's last `check-links.py` run (before PRD-14 deletes the script) names
+  it in its filter list next to `docs/CONTRACTS.md` to `#pin-evolution`, and acceptance lists both as
+  known broken links in history docs.
+- **Correction to the PRD-10 slice 2 note.** Its premise "because CI runs check-links" is not true of
+  integration: neither `scripts/gate.sh` nor `.github/workflows/ci.yml` runs `scripts/check-links.py`
+  (PRD-14 took it out of the gate in phase 0). Only PRD-15's own runs look at links. Nothing waits on
+  link checks in CI.
+- **The `AGENTS.md` map row** now reads "`goal-cup` (copied into the harness home) and
+  `adding-a-capture-harness` (contributors)". The map rewrite (after the PRD-02 core merge) keeps it
+  true of PRD-12's skill rewrite.
+- **Still waiting, unchanged:** the usage section (PRD-09 core), the AGENTS.md map, ARCHITECTURE and
+  RECORD-FORMAT numbers (PRD-02 core merge), the HARNESS-ONBOARDING pointer (PRD-12's skill rewrite),
+  the `continue` mark (PRD-10 `continue`), the CONNECTOR-SCHEMA (next slice) marks, nit B-N4, and the
+  third slice.
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-08 slice 2 (merge 669f5d92)
+
+- For `docs/RECORD-FORMAT.md` (the `check --json` section), from PRD-08's merge note. Under
+  `--server`, the three ids `server_chunks_whole`, `server_equals_local` and `server_counts_match`
+  are built and no longer "not built in this slice". The top-level `server` object
+  `{chunks, whole, equals_local, db_match}` is filled. New exit rules: a missing `fetch.json` under
+  `--server` gives all three `fail`; `final` null gives `server_chunks_whole` `named` (exit 1); a
+  `--local` path that never held a record exits 3; a seal with no `reason` or `totals` is reported,
+  never exit 3. The seven local ids stay `skip` "not built in this slice" until their slices.
+  PRD-15's next slice updates the page; no code change is asked of PRD-08.
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-11 slice 3 (merge c14d63b8)
+
+- PRD-11's merge c14d63b8 makes real every rule `docs/CONNECTOR-SCHEMA.md` marks **(next slice)**:
+  the version probe (first non-empty line of `program --version`, 5 s, a prefix the line must
+  contain), `refuse_if_set` (`false` is a value; null, `""`, `[]` and `{}` are unset),
+  `host_hints` and `hint_env` (https URLs only, userinfo dropped, a loopback value is a
+  `local_model` note), a pattern ending in `**` refused by PRD-04's `pattern::parse`, the settings
+  files (every `.json` and `.jsonc` read with comments and trailing commas; booleans written typed;
+  dotenv not writable), host decisions and the full host check. Also state: a `file` template's last
+  component is a pattern, and every file that fits is read. Drop the marks and check each rule against
+  merged `hosts.rs`, `hints.rs`, `launch.rs` and `mod.rs` (PRD-11 note lists the facts).
+
+### 2026-10-30, replan after PRD-10 slice 3 (merge f66ce4a5)
+
+`goalcup start` now runs the folder checks of PRD-10 section 3 step 2 (`crates/goalcup/src/cli/folder.rs`,
+messages in `cli/text.rs`). `docs/PARTICIPANT-GUIDE.md` (section 3 step 3 and the appendix "if
+`goalcup start` stops") differs from the merged code here; the next PRD-15 slice checks each line
+against `folder.rs` and fixes the guide, without quoting message wording the code may change:
+- A synced folder is a **warning**, not a stop (PRD-10 section 3); the appendix lists it among the
+  rows that stop the start. It is found by name on the resolved path (Dropbox, OneDrive, Google
+  Drive, iCloud, `Mobile Documents`, `Library/CloudStorage`), so a Desktop or Documents folder that
+  iCloud syncs without one of those names in its path gets no warning. The advice "do not use Desktop,
+  Documents" stays true as advice.
+- A folder on NFS or SMB (the project or `GOALCUP_HOME`) is a warning; the guide does not say so.
+- Not in the appendix yet: inside a Git work tree; the project and goalcup's own folder hold each
+  other or sit side by side (fix: another folder, or `GOALCUP_HOME` elsewhere); the `--prompt` file
+  inside the project folder or missing.
+- The token line is checked in `.env.local` only, and refuses two `GH_TOKEN` lines or a CRLF ending
+  there; the guide's "any second `GH_TOKEN` line in any `.env` file" says more than the check.
+- The missing-`.gitignore` case: the code asks for the line `.env*`; it does not print the two lines
+  `.env` and `.env.*` the guide names.
+- "The folder is checked once more right after you approve": not built and not in section 3. PRD-10's
+  start slice says in its merge note whether it adds it; until then the sentence is not true.
+- "Every row but the outage row ... says Nothing was created": true for the folder refusal. A refusal
+  from the connector plan (home in use, harness version) may come after the isolated home was made
+  (PRD-10 note), so that wording waits for the start slice.
+- WSL1 or a Windows drive under WSL2 is not checked yet (PRD-10 note); the guide's advice stays.
+- No locked ledger item is touched and no owner question comes from this slice.

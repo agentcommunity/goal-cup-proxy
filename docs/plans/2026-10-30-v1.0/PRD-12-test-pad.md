@@ -1447,3 +1447,54 @@ taken; "rejected" says why. Fixes for other files are made by those files' owner
   durable yet exits 1 with `inv1` `skip`; a part file that cannot be opened exits 3.
 - Selftest's K2 still waits on PRD-08's run 1 shape builder (next slice, with U1).
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-14 slice 2 (merge 04886295)
+
+- `scripts/release.sh tag` now runs `python3 scripts/pad/table --release-check <sha>` from a detached
+  worktree at origin/main's sha, so nit B3 no longer makes the tag judge another commit's rows. B3 is
+  still worth taking (a run by hand from any checkout), but the release no longer waits on it. `table`
+  must stay 3.9-clean, since `release.sh` calls `python3`.
+- `CODEOWNERS` now names `/scripts/pad/` (`@nembal`).
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-06 slice 1 (merge e6bd8a50)
+
+- `upload.json` (S9) is on integration, but no sender is yet. Until PRD-06's send and beat slices
+  merge, a pad run with a server ends with `upload.json` at `state: waiting` and `final: none`, so
+  `wait-upload` times out. Rows that need the server copy (C4's server checks, U3, U5, U8) are then
+  "not run: sender not merged", not FAIL. `server = "off"` runs are not affected. The `watch/upload.jsonl`
+  reader can be built against the S9 type now (`goalcup::upload::state`).
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-08 slice 2 (merge 669f5d92)
+
+`check --server <fetched> [--local <entry dir>]` now gives real server results (PRD-08 note). What
+`check.py` reads for C4, C6 and K6, as merged:
+
+- The three ids `server_chunks_whole`, `server_equals_local` and `server_counts_match` per entry, and
+  the top-level `server` object `{chunks, whole, equals_local, db_match}`. `equals_local` and
+  `db_match` are true only when every entry passes, false on any `fail`, else null. `whole` is true
+  only when every entry passes.
+- Under `--server`, a folder with no `fetch.json` gives all three `fail`. A bare `rec.gcr.zst`
+  checked without `--server` skips them, so C4 always passes `--server` on a fetched copy.
+- `fetch.json` `missing.why` set gives `server_chunks_whole` `fail` with `first.o` =
+  `missing.offset`. `final` null alone gives `server_chunks_whole` `named` (exit 1) and
+  `server_counts_match` `skip` "not sealed". C4 reads the open end as INCONCLUSIVE, not FAIL.
+- `server_equals_local` is `skip` when the `--local` entry's first part is pruned or its `rec/` is
+  empty. A `--local` path that never held a record exits 3, which is the box's mistake, not the
+  run's.
+- K6's three tampers map as follows. A flipped byte fails `server_equals_local`; L-FW9 proves it.
+  A removed middle chunk fails `server_chunks_whole` on the offset or seq break. `model_requests`
+  plus one fails `server_counts_match`; the check reads `model_requests` as the seal's `http_post`
+  plus `ws_up_msgs`.
+- K2 still waits on the run 1 shape builder (PRD-08's legs slice). U1's stub is on integration, so
+  that slice need not wait for PRD-09.
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-09 slice 2 (merge dab0ce1f)
+
+- **`goalcup-verify usage` still exits 3** at dab0ce1f: the wire leg is read inside U1, but `run`, the
+  native leg and S7 output come in PRD-09's next slices. Until they land, a pad run's spend check and
+  C5 record `usage` as not read (the row says so); exit 3 is never priced as 0 USD or read as 0
+  tokens. U1's `readable()` is a method now (PRD-09 B10); C1 reads it through PRD-08 as before.
+- No locked ledger item is touched and no owner question comes from this slice.

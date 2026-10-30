@@ -1251,3 +1251,51 @@ here; the other files carry their own part.
   and `mod.rs`. A rule the slice rules differently from the page is a PRD-15 fix, not a PRD-11 one.
 - The launch slice's `.profile` (PRD-17 P11) is not on the page; PRD-15's ARCHITECTURE rewrite states
   it from merged `launch.rs`.
+
+### 2026-10-30, replan after PRD-11 slice 3 (merge c14d63b8)
+
+- **S3 is real on integration.** `hosts::check` (the full PRD-17 2.7 rules), `HostList::decide`,
+  `ca_subtrees`, the `record-hosts.txt` read, `hints` (JSON read as JSONC for every `.json` and
+  `.jsonc` file, TOML, block YAML, dotenv), `refuse_if_set`, `HomeLock` (`try_lock` on
+  `<home>.goalcup.lock`), the version probe (5 s, never logged) and `write_settings` (typed booleans,
+  JSON, TOML and YAML only; dotenv and other formats come back skipped as "format not writable"). A run
+  on this build tunnels only what the lists say. Facts the merge settled that the sections above leave
+  open:
+  - A `file` template's last component is a PRD-04 pattern (`pattern::parse`): `host_hints` and
+    `refuse_if_set` read every regular file that fits; a folder that fits is skipped.
+  - `plan` writes `update_off` at every start while the home lock is free, and logs a row not
+    written ("update_off not written: ..."); `no_prompts` is written only by `goalcup setup`.
+  - A JSON or TOML settings file that needs a change is rewritten without its comments (it is in the
+    isolated home); a file already holding the value is not rewritten.
+  - `Skipped.local` is true for loopback, unspecified, mapped loopback, private and link-local
+    addresses and the `localhost` forms, so a hint at a LAN model server gives a `local_model` note.
+    A numeric spelling such as `127.1` or `0x7f.1` is refused with `local` false: the hint is a
+    plain skip, not a `local_model` note. Known; nothing is decrypted either way.
+  - N6 asks the system resolver once per hint name with `to_socket_addrs` during `plan`, with no
+    wait of our own: a dead resolver delays the start by the system's timeout per hint name. Known
+    (point 3); the third slice bounds it only if it fits the ceiling below.
+- **S3 additions** `LaunchPlan.unread: Vec<PathBuf>` and `LaunchPlan.log: Vec<String>` (PRD-00
+  note). Consumer: PRD-10's slice that wires `connector::plan` into `start`.
+- **Open nits closed:** B7 (the loader calls `native::pattern::parse`; `pattern_ok` and the test glob
+  are gone), F5b, F1b with its refused case, B12, B13, and F3's lock test. Review rounds A and B on
+  slice 3 closed with no open finding; B-N-SIZE went to this replan.
+- **Size (ledger L2), `wc -l` at c14d63b8.** src 1,646 against the 1,510 ceiling (109%): `schema.rs`
+  423/425, `mod.rs` 301/285, `hosts.rs` 301/290, `hints.rs` 303/220, `launch.rs` 291/250,
+  `builtin.rs` 27/40. Tests 721 against 620 (116%, past the 10%): `connector_builtin.rs` 155/165,
+  `connector_hints.rs` 196/110, `connector_hosts.rs` 105/90, `connector_launch.rs` 223/210,
+  `connector_no_model_address.rs` 42/45. **Decision:** the area's final ceiling is 1,700 src and 760
+  tests by `wc -l` at the end of the third slice; per-file ceilings are today's counts, except
+  `launch.rs` and `mod.rs`, which share the 54 src lines left for the `.profile` writer (P11) and
+  its call in `plan`, and `connector_launch.rs`, which gets the 39 test lines for its one case. The
+  extra lines serve point 1 and point 7 (YAML lists and block scalars, JSONC for every JSON file, the
+  `never` hosts in the list before any hint, typed booleans in three formats, so the harness runs as
+  configured and every model host it names is recorded), point 4 (no value in any skip, log line or
+  refusal) and point 6 (`unread` and `log`, so the participant is told which file was not read).
+  Each `connector_hints.rs` case is an acceptance case (one per format, link and size guards,
+  `local_model`, refusal, `false` and empty). The third slice cuts before it adds: first any
+  repeated per-format setup in `connector_hints.rs`; nothing in the third slice's connector files
+  counts here. Past 1,700 or 760 needs another decision line.
+- **Third slice, unchanged in scope:** the `.profile` writer (P11) for Amp and Droid, and the
+  remaining connector files of section 6 (four of 16 are on integration: `claude-code-cli`,
+  `codex-cli`, `hermes-cli`, `kilo-cli`). Each new file is checked by `rule_code` (PRD-14 note).
+- No locked ledger item is touched and no owner question comes from this slice.
