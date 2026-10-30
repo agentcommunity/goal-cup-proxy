@@ -2,12 +2,12 @@
 //! that died, ran in null mode or lost its watchdog leaves one `recorder_down` gap, and the
 //! entry exits 1 with no `fail`; so does an `after_stop` GAP and an unsealed entry. With
 //! `--live`, a stale COUNT is named in null mode and a failure otherwise. PRD-17 VR4: an
-//! `interrupted` END is no loss.
+//! `interrupted` END is no loss. Counts follow the recorder's rules where a loss is named.
 
 mod common;
 
 use common::*;
-use goalcup_format::{EndReason, StreamKind};
+use goalcup_format::{EndReason, FLAG_FIN, GapReason, StreamKind};
 use serde_json::{Value, json};
 use std::fs;
 use std::path::Path;
@@ -124,4 +124,41 @@ fn live_stale_count_fails_without_null_mode() {
     let (code, v) = check(&d, &["--live"]);
     assert_eq!(result(&v, "recorder_alive"), "fail");
     assert_eq!(code, 2);
+}
+
+/// Point 6: the counts the participant sees equal the recount where PRD-02's counter decides the
+/// rule. A listed tunnel is `listed` only once its GAP is written (a COUNT while it is open says
+/// null); snapshot bytes are native bytes; a WebSocket message after a GAP and a ping has holes.
+#[test]
+fn counts_equal_the_recorder_rules_for_tunnels_snapshots_and_ws_gaps() {
+    let mut e = Entry::new("count-rules");
+    e.standard();
+    let meta = json!({"host": "pinned.example.test", "port": 443, "mode": "tunnel",
+        "listed": "shared", "kind": "provider", "reason": "pinned", "alpn": null, "tls": null,
+        "fingerprint": "0123456789abcdef"});
+    let tunnel = e.open(StreamKind::Conn, 0, 0, meta);
+    e.count();
+    e.gap(tunnel, GapReason::Pinned, 1_000, 0, 0, Value::Null);
+    e.end(tunnel, EndReason::Complete, 0, json!({"up": 512, "down": 2048}));
+    let meta = json!({"path": "fake:state.db", "gen": 0, "from": 0});
+    let snap = e.open(StreamKind::Snapshot, 0, 0, meta);
+    e.data(snap, 0, 0, b"fake database bytes");
+    e.end(snap, EndReason::Complete, 19, Value::Null);
+    let c = e.conn();
+    let head = json!({"method": "GET", "path": "/v1/responses", "ver": "1.1",
+        "headers": [["upgrade", "websocket"]], "masked": [], "coding": null});
+    let q = e.open(StreamKind::HttpReq, c, 0, head);
+    e.end(q, EndReason::Complete, 0, Value::Null);
+    let up = e.open(StreamKind::WsUp, c, q, json!({"deflate": false}));
+    e.gap(up, GapReason::MemoryGuard, 10, 0, 9, json!({"guard": "held_bytes"}));
+    e.data(up, 8, 0x90 | FLAG_FIN, b"p");
+    e.data(up, 9, 0x10 | FLAG_FIN, br#"{"input":"hi"}"#);
+    e.end(up, EndReason::Complete, 23, Value::Null);
+    e.end(c, EndReason::Complete, 0, json!({"up": 64, "down": 32}));
+    let (code, v) = check(&e.seal(), &[]);
+    no_fail(&v);
+    assert_eq!(result(&v, "inv7"), "pass");
+    assert_eq!(result(&v, "counts_match_seal"), "pass");
+    assert_eq!(v["entries"][0]["counts"]["req_holes"], 1);
+    assert_eq!(code, 1);
 }

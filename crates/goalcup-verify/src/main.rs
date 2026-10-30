@@ -39,6 +39,15 @@ enum Cmd {
         /// The input is a server copy.
         #[arg(long)]
         server: bool,
+        /// The local entry to compare the server copy with (not read yet).
+        #[arg(long, value_name = "ENTRY_DIR")]
+        local: Option<PathBuf>,
+        /// Known secret values, one per line (not read yet).
+        #[arg(long, value_name = "FILE")]
+        known: Option<PathBuf>,
+        /// The pad's list of harness files on disk (not read yet).
+        #[arg(long, value_name = "MANIFEST")]
+        harness_files: Option<PathBuf>,
     },
     /// One JSON line per record. Payload is printed only with --text.
     Dump {
@@ -54,6 +63,7 @@ enum Cmd {
         text: bool,
     },
     /// The usage reader.
+    #[command(disable_help_flag = true)]
     Usage {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<OsString>,
@@ -74,9 +84,6 @@ fn main() -> ExitCode {
 
 fn run() -> ExitCode {
     let argv: Vec<OsString> = std::env::args_os().collect();
-    if argv.get(1).is_some_and(|a| a == "usage") {
-        return usage::run(argv[2..].to_vec());
-    }
     // `parse()` would exit 2 on a usage error, and 2 means a failed record. `try_parse` hands the
     // error back so it leaves under 3; `--help` and `--version` come back as errors too, print to
     // stdout and exit 0, which `use_stderr()` tells apart.
@@ -89,11 +96,14 @@ fn run() -> ExitCode {
         }
     };
     match args.cmd {
+        // `--local`, `--known` and `--harness-files` are taken now and read by the checks that
+        // need them, which are `skip` until a later slice builds them.
         Cmd::Check {
             path,
             json,
             live,
             server,
+            ..
         } => check(&path, json, live, server),
         Cmd::Dump {
             path,
@@ -117,7 +127,7 @@ fn check(path: &std::path::Path, json: bool, live: bool, server: bool) -> ExitCo
         let d = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH);
         d.map_or(0, |d| u64::try_from(d.as_nanos()).unwrap_or(u64::MAX))
     });
-    let r = report::build(&input, server, now);
+    let r = report::build(&input, now);
     eprint!("{}", r.text);
     if json {
         let _ = writeln!(std::io::stdout(), "{}", r.json);

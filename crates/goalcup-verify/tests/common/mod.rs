@@ -106,6 +106,8 @@ pub struct Tally {
     part_mono: u64,
     n: BTreeMap<&'static str, u64>,
     hosts: BTreeMap<String, u64>,
+    /// host: {conns, up, down, listed}; `listed` is set by a GAP on that tunnel.
+    tunnel_hosts: BTreeMap<String, Value>,
     streams: HashMap<u64, Stream>,
     open: u64,
 }
@@ -152,6 +154,12 @@ impl Tally {
                         s.tunnel = m["mode"] == "tunnel";
                         self.add("conns", 1);
                         self.add("tunnels", u64::from(s.tunnel));
+                        if s.tunnel {
+                            let t = self.tunnel_hosts.entry(s.host.clone()).or_insert_with(
+                                || json!({"conns": 0, "up": 0, "down": 0, "listed": null}),
+                            );
+                            t["conns"] = json!(t["conns"].as_u64().unwrap() + 1);
+                        }
                     }
                     StreamKind::HttpReq => {
                         s.post = m["method"] == "POST";
@@ -170,19 +178,15 @@ impl Tally {
                 let s = self.streams.get(sid).cloned().unwrap_or_default();
                 let len = bytes.len() as u64;
                 match s.skind {
-                    Some(StreamKind::Native) => self.add("native_bytes", len),
-                    Some(
-                        StreamKind::HttpReq
-                        | StreamKind::HttpResp
-                        | StreamKind::WsUp
-                        | StreamKind::WsDown,
-                    ) => self.add("wire_bytes", len),
-                    _ => {}
+                    Some(StreamKind::Native | StreamKind::Snapshot) => self.add("native_bytes", len),
+                    _ => self.add("wire_bytes", len),
                 }
                 let msg = flags & FLAG_FIN != 0 && matches!(flags >> 4, 1 | 2);
                 if msg && s.skind == Some(StreamKind::WsUp) && s.decrypt {
                     self.add("ws_up_msgs", 1);
                     self.model_request(s.host, !s.gapped);
+                    // Only a text or binary message end clears the gap before it.
+                    self.streams.get_mut(sid).unwrap().gapped = false;
                 } else if msg && s.skind == Some(StreamKind::WsDown) {
                     self.add("ws_down_msgs", 1);
                 }
@@ -197,6 +201,11 @@ impl Tally {
                 }
                 if s.tunnel {
                     let t: Value = serde_json::from_slice(tail).unwrap_or(Value::Null);
+                    let h = &mut self.tunnel_hosts.get_mut(&s.host).unwrap();
+                    for k in ["up", "down"] {
+                        let n = t[k].as_u64().unwrap_or(0);
+                        h[k] = json!(h[k].as_u64().unwrap() + n);
+                    }
                     self.add("tunnel_up", t["up"].as_u64().unwrap_or(0));
                     self.add("tunnel_down", t["down"].as_u64().unwrap_or(0));
                 }
@@ -220,6 +229,9 @@ impl Tally {
                 }
                 if let Some(s) = self.streams.get_mut(sid) {
                     s.gapped = true;
+                    if s.tunnel {
+                        self.tunnel_hosts.get_mut(&s.host).unwrap()["listed"] = reason.name().into();
+                    }
                 }
             }
             Record::Mask { len, rule, .. } if *rule == 2 => self.add("mask_failclosed_bytes", *len),
@@ -237,7 +249,7 @@ impl Tally {
             v.insert(k.into(), self.n.get(k).copied().unwrap_or(0).into());
         }
         v.insert("hosts".into(), json!(self.hosts));
-        v.insert("tunnel_hosts".into(), json!({}));
+        v.insert("tunnel_hosts".into(), json!(self.tunnel_hosts));
         v.insert("open_streams".into(), self.open.into());
         v.insert("held_bytes".into(), 0.into());
         v.insert("held_peak".into(), 0.into());
@@ -245,11 +257,13 @@ impl Tally {
     }
 }
 
-/// The entry total (section 9): each boot's last COUNT summed, then every recovery frame's
-/// `recorder_down` gap added to `gaps`, `lost_unknown` and `off_ms`.
+/// The entry total (section 9): each boot's last COUNT summed (a tunnel host's `listed` kept from
+/// the last boot that names it), then every recovery frame's `recorder_down` gap added to
+/// `gaps`, `lost_unknown` and `off_ms`.
 pub fn totals(boots: &[Value], down_ms: &[u64]) -> Value {
     let mut t = Map::new();
     let mut hosts: BTreeMap<String, u64> = BTreeMap::new();
+    let mut tunnels: BTreeMap<String, Value> = BTreeMap::new();
     for k in COUNTERS {
         t.insert(
             k.into(),
@@ -264,6 +278,17 @@ pub fn totals(boots: &[Value], down_ms: &[u64]) -> Value {
         for (h, n) in b["hosts"].as_object().unwrap() {
             *hosts.entry(h.clone()).or_default() += n.as_u64().unwrap();
         }
+        for (h, x) in b["tunnel_hosts"].as_object().unwrap() {
+            let t = tunnels.entry(h.clone()).or_insert_with(
+                || json!({"conns": 0, "up": 0, "down": 0, "listed": null}),
+            );
+            for k in ["conns", "up", "down"] {
+                t[k] = json!(t[k].as_u64().unwrap() + x[k].as_u64().unwrap());
+            }
+            if !x["listed"].is_null() {
+                t["listed"] = x["listed"].clone();
+            }
+        }
     }
     let add = |t: &mut Map<String, Value>, k: &str, v: u64| {
         let n = t[k].as_u64().unwrap() + v;
@@ -273,7 +298,7 @@ pub fn totals(boots: &[Value], down_ms: &[u64]) -> Value {
     add(&mut t, "lost_unknown", down_ms.len() as u64);
     add(&mut t, "off_ms", down_ms.iter().sum());
     t.insert("hosts".into(), json!(hosts));
-    t.insert("tunnel_hosts".into(), json!({}));
+    t.insert("tunnel_hosts".into(), json!(tunnels));
     t.insert("held_peak".into(), 0.into());
     Value::Object(t)
 }

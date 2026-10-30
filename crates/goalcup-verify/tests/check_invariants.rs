@@ -1,7 +1,7 @@
 //! `goalcup-verify check` on PRD-01's 14 invariants (PRD-08 section 3, "Integrity"): a clean
-//! entry passes, as part files and as a fetched copy; one mutation per invariant, plus wrong seal
-//! totals, a torn tail and a repeated native `path` and `gen`, fails its own check with exit 2;
-//! an unknown record kind and GAP reason 8 only warn. PRD-17 VR3: no mutation exits 3.
+//! entry passes, as part files and as a fetched copy; one mutation per invariant, plus wrong or
+//! missing COUNT and seal keys, a torn tail and a repeated native `path` and `gen`, fails its own
+//! check with exit 2 (PRD-17 VR3: never 3); an unknown record kind and GAP reason 8 only warn.
 
 mod common;
 
@@ -113,6 +113,14 @@ fn m_count_off_by_one(name: &str) -> PathBuf {
     })
 }
 
+fn m_count_key_missing(name: &str) -> PathBuf {
+    mutate(&clean(name), None, |r| {
+        edit_event(r, "count", 0, |v| {
+            v.as_object_mut().unwrap().remove("http_post");
+        })
+    })
+}
+
 fn m_record_after_seal(name: &str) -> PathBuf {
     mutate(&clean(name), None, |r| {
         let json = br#"{"ev":"note","what":"outlived","count":1,"programs":["fake"]}"#.to_vec();
@@ -173,6 +181,15 @@ fn m_count_silence(name: &str) -> PathBuf {
     e.seal()
 }
 
+/// A COUNT more than 180 s late, written by recovery at the dead boot's last kept LINK.
+fn m_count_silence_then_crash(name: &str) -> PathBuf {
+    let mut e = Entry::new(name);
+    e.standard();
+    e.idle(200_000);
+    e.crash("killed", 1_000);
+    e.seal()
+}
+
 fn m_native_resume_hole(name: &str) -> PathBuf {
     let mut e = Entry::new(name);
     e.standard();
@@ -185,6 +202,14 @@ fn m_seal_totals_wrong(name: &str) -> PathBuf {
     let mut e = Entry::new(name);
     e.standard();
     e.seal_with(|t| bump(t, "http_post", 1))
+}
+
+fn m_seal_totals_key_missing(name: &str) -> PathBuf {
+    let mut e = Entry::new(name);
+    e.standard();
+    e.seal_with(|t| {
+        t.as_object_mut().unwrap().remove("hosts");
+    })
 }
 
 fn m_torn_tail(name: &str) -> PathBuf {
@@ -210,7 +235,7 @@ fn m_gap_reason_8(name: &str) -> PathBuf {
 
 type Build = fn(&str) -> PathBuf;
 
-/// Every mutation that must fail its check: (check id, builder).
+/// PRD-17 VR3: every mutation fails its own check with exit 2, never 3. (check id, builder).
 const FAILS: &[(&str, Build)] = &[
     ("inv1", m_no_part_first),
     ("inv2", m_link_seq_hole),
@@ -220,52 +245,28 @@ const FAILS: &[(&str, Build)] = &[
     ("inv5", m_mask_over_text),
     ("inv6", m_boot_without_gap),
     ("inv7", m_count_off_by_one),
+    ("inv7", m_count_key_missing),
     ("inv8", m_record_after_seal),
     ("inv9", m_resp_names_missing_req),
     ("streams_closed", m_stream_without_end),
     ("seen_matches_written", m_seen_off),
     ("gap_has_end", m_gap_without_extent),
     ("recorder_alive", m_count_silence),
+    ("recorder_alive", m_count_silence_then_crash),
     ("inv14", m_native_resume_hole),
     ("counts_match_seal", m_seal_totals_wrong),
+    ("counts_match_seal", m_seal_totals_key_missing),
     ("torn_tail", m_torn_tail),
     ("native_path_gen", m_native_path_gen_twice),
 ];
 
-fn assert_fails(id: &str, build: Build, name: &str) {
-    let (code, v) = check(&build(name), &[]);
-    assert_eq!(result(&v, id), "fail", "{name}: {id}");
-    assert_eq!(code, 2, "{name}");
-}
-
-macro_rules! fails {
-    ($($name:ident: $id:literal, $build:ident;)*) => {$(
-        #[test]
-        fn $name() {
-            assert_fails($id, $build, stringify!($name));
-        }
-    )*};
-}
-
-fails! {
-    inv1_no_part_first: "inv1", m_no_part_first;
-    inv2_link_seq_hole: "inv2", m_link_seq_hole;
-    inv2_link_wrong_hash: "inv2", m_link_wrong_hash;
-    inv3_data_before_open: "inv3", m_data_before_open;
-    inv4_unexplained_offset_hole: "inv4", m_offset_hole;
-    inv5_mask_over_text: "inv5", m_mask_over_text;
-    inv6_boot_without_recorder_down: "inv6", m_boot_without_gap;
-    inv7_count_off_by_one: "inv7", m_count_off_by_one;
-    inv8_record_after_seal_link: "inv8", m_record_after_seal;
-    inv9_resp_names_missing_req: "inv9", m_resp_names_missing_req;
-    inv10_sealed_stream_without_end: "streams_closed", m_stream_without_end;
-    inv11_seen_does_not_add_up: "seen_matches_written", m_seen_off;
-    inv12_gap_start_equals_end: "gap_has_end", m_gap_without_extent;
-    inv13_counts_200s_apart: "recorder_alive", m_count_silence;
-    inv14_native_resume_hole: "inv14", m_native_resume_hole;
-    seal_totals_wrong: "counts_match_seal", m_seal_totals_wrong;
-    torn_tail_on_sealed_entry: "torn_tail", m_torn_tail;
-    native_path_and_gen_twice_in_one_boot: "native_path_gen", m_native_path_gen_twice;
+#[test]
+fn vr3_every_mutation_fails_its_check_with_exit_2() {
+    for (i, (id, build)) in FAILS.iter().enumerate() {
+        let (code, v) = check(&build(&format!("vr3-{i}")), &[]);
+        assert_eq!(result(&v, id), "fail", "mutation {i} ({id})");
+        assert_eq!(code, 2, "mutation {i} ({id})");
+    }
 }
 
 #[test]
@@ -335,22 +336,6 @@ fn gap_reason_8_warns_and_does_not_crash() {
     // A GAP is a named loss: exit 1, from `gaps_named`, never a crash.
     assert_eq!(result(&v, "gaps_named"), "named");
     assert_eq!(code, 1, "{:?}", ids_with(&v, "fail"));
-}
-
-/// PRD-17 VR3: a broken record is a finding, never "no usable report". Every mutation exits 1
-/// or 2 and names its check. (An unknown record kind is not a loss and exits 0.)
-#[test]
-fn every_mutation_exits_1_or_2_never_3() {
-    let all = FAILS
-        .iter()
-        .copied()
-        .chain([("gap_reason_unknown", m_gap_reason_8 as Build)]);
-    for (i, (id, build)) in all.enumerate() {
-        let (code, v) = check(&build(&format!("vr3-{i}")), &[]);
-        assert!(code == 1 || code == 2, "mutation {i} ({id}) exited {code}");
-        let r = result(&v, id);
-        assert!(r != "pass" && r != "skip", "mutation {i} ({id}) gave {r}");
-    }
 }
 
 #[test]

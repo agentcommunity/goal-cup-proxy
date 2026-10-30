@@ -1,7 +1,7 @@
 //! The `check --json` report (seam S6, PRD-08 section 4), its exit code, and the text form with
 //! the coverage line (section 5). `why` is one plain line; no record byte is ever printed here.
 
-use crate::input::{Input, Kind};
+use crate::input::Input;
 use crate::integrity::{self, Check, Outcome, Res};
 use serde_json::{Map, Value, json};
 use std::path::Path;
@@ -31,7 +31,8 @@ pub struct Report {
 }
 
 /// Checks every entry of the input. `now_ns` is set for `--live`.
-pub fn build(input: &Input, server: bool, now_ns: Option<u64>) -> Report {
+pub fn build(input: &Input, now_ns: Option<u64>) -> Report {
+    let server = input.kind == "server";
     let (mut exit, mut text, mut entries) = (0u8, String::new(), Vec::new());
     let mut run = Value::Null;
     for e in &input.entries {
@@ -40,7 +41,7 @@ pub fn build(input: &Input, server: bool, now_ns: Option<u64>) -> Report {
         let later = LATER.iter().chain(if server { LATER_SERVER } else { &[] });
         checks.extend(later.map(|id| Check::new(id, None, Res::Skip, NOT_BUILT)));
         let worst = checks.iter().map(|c| c.result).max().unwrap_or(Res::Pass);
-        let partial = !o.sealed || input.kind == Kind::Live || o.pruned;
+        let partial = !o.sealed || input.kind == "live" || o.pruned;
         exit = exit.max(match worst {
             Res::Fail => 2,
             Res::Named => 1,
@@ -54,7 +55,7 @@ pub fn build(input: &Input, server: bool, now_ns: Option<u64>) -> Report {
         entries.push(entry(name, &o, &checks));
     }
     let result = ["pass", "named", "fail"][usize::from(exit)];
-    let json = json!({"verifier": env!("CARGO_PKG_VERSION"), "input": input.kind.name(), "run": run,
+    let json = json!({"verifier": env!("CARGO_PKG_VERSION"), "input": input.kind, "run": run,
         "result": result, "exit": exit, "entries": entries, "server": null});
     Report { json, exit, text }
 }

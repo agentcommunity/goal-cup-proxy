@@ -13,24 +13,6 @@ use std::rc::Rc;
 /// The fetched server copy of one entry (seam S13).
 pub const FETCHED: &str = "rec.gcr.zst";
 
-/// Where the record came from: the participant's disk, the server copy, or a live entry.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Kind {
-    Local,
-    Server,
-    Live,
-}
-
-impl Kind {
-    pub fn name(self) -> &'static str {
-        match self {
-            Kind::Local => "local",
-            Kind::Server => "server",
-            Kind::Live => "live",
-        }
-    }
-}
-
 /// One entry: its folder and its compressed files in order, each with a byte limit (`--live`).
 #[derive(Clone, Debug)]
 pub struct Entry {
@@ -39,14 +21,16 @@ pub struct Entry {
     pub files: Vec<(PathBuf, Option<u64>)>,
 }
 
-/// A resolved input: its kind and its entries in order.
+/// A resolved input: where the record came from (S6 `input`: `local`, `server` or `live`) and
+/// its entries in order.
 #[derive(Debug)]
 pub struct Input {
-    pub kind: Kind,
+    pub kind: &'static str,
     pub entries: Vec<Entry>,
 }
 
-/// Resolves a path. The error is a plain line for exit 3: the path is missing or holds no record.
+/// Resolves a path. The error is a plain line for exit 3: the path is missing, holds no record, or
+/// a part file cannot be opened.
 pub fn resolve(path: &Path, live: bool, server: bool) -> Result<Input, String> {
     if !path.exists() {
         return Err(format!("{} does not exist", path.display()));
@@ -82,6 +66,9 @@ pub fn resolve(path: &Path, live: bool, server: bool) -> Result<Input, String> {
     if entries.is_empty() {
         return Err(format!("no record found in {}", path.display()));
     }
+    for (p, _) in entries.iter().flat_map(|e| &e.files) {
+        File::open(p).map_err(|e| format!("{}: {e}", p.display()))?;
+    }
     let fetched = entries
         .iter()
         .any(|e| e.files.iter().any(|(p, _)| p.ends_with(FETCHED)));
@@ -93,9 +80,9 @@ pub fn resolve(path: &Path, live: bool, server: bool) -> Result<Input, String> {
         }
     }
     let kind = match (live, server || fetched) {
-        (true, _) => Kind::Live,
-        (false, true) => Kind::Server,
-        (false, false) => Kind::Local,
+        (true, _) => "live",
+        (false, true) => "server",
+        (false, false) => "local",
     };
     Ok(Input { kind, entries })
 }
