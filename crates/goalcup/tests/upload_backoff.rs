@@ -118,7 +118,11 @@ fn a_worker_failing_every_other_put_never_waits_above_4_s() {
     let mut w = PartWriter::open(&rec, opts, ENTRY, BOOT_ID, at(0)).unwrap();
     for n in 1..=24u64 {
         let json = format!(r#"{{"n":"{}"}}"#, hex(&n.to_le_bytes()).repeat(400)).into_bytes();
-        w.write(&Record::Event { t: at(n).mono_ns, json }).unwrap();
+        w.write(&Record::Event {
+            t: at(n).mono_ns,
+            json,
+        })
+        .unwrap();
         w.link(at(n)).unwrap();
         w.rotate_if_due(at(n)).unwrap();
     }
@@ -129,14 +133,26 @@ fn a_worker_failing_every_other_put_never_waits_above_4_s() {
     let fake = FakeWorker::start();
     for _ in 0..parts.len() {
         let busy = (503, json!({"error": "unavailable"}));
-        fake.inject(Route::Chunk, Inject { answer: Some(busy), ..Inject::default() });
+        fake.inject(
+            Route::Chunk,
+            Inject {
+                answer: Some(busy),
+                ..Inject::default()
+            },
+        );
         fake.inject(Route::Chunk, Inject::default());
     }
     let client = ServerClient::new(&fake.url(), Some(Token::new(CREDENTIAL)));
-    let p = Policy { spread_first: false, ..Policy::default() };
+    let p = Policy {
+        spread_first: false,
+        ..Policy::default()
+    };
     let mut s = Sender::new(&p, client, RUN_ID, ENTRY, dir.path());
     let j = Mutex::new(UploadJson::new(RUN_ID.into(), ENTRY.into()));
-    let (b, t) = (Bound::Durable(d), std::cell::Cell::new(1_000_000_000_000u64));
+    let (b, t) = (
+        Bound::Durable(d),
+        std::cell::Cell::new(1_000_000_000_000u64),
+    );
     for _ in 0..100 {
         while s.tick(&|| Mono(t.get()), &b, false, &j) == Step::Again {}
         if j.lock().unwrap().state == State::CaughtUp {

@@ -15,8 +15,10 @@ use goalcup::upload::client::{RunPosition, ServerClient, Token};
 use goalcup::upload::policy::{Class, Policy};
 use goalcup::upload::send::{Sender, Step};
 use goalcup::upload::state::{Final, State, UploadJson};
-use goalcup_format::read::read_index;
-use goalcup_format::{Durable, IndexLine, PartOptions, PartWriter, Record, hex, index_name, part_name};
+use goalcup_format::read::{part_files, read_index};
+use goalcup_format::{
+    Durable, IndexLine, PartOptions, PartWriter, Record, hex, index_name, part_name,
+};
 use serde_json::json;
 use std::cell::Cell;
 use std::path::PathBuf;
@@ -35,34 +37,49 @@ struct Rig {
     t: Cell<u64>,
 }
 
-/// An entry of `links` flushes of about 6 KiB that do not compress, rotating at `rotate_at`.
+/// An entry of `links` flushes of 6,400 raw bytes, rotating at `rotate_at` raw bytes.
 fn rig(rotate_at: u64, links: u64) -> (Rig, PartWriter, Durable) {
     let dir = tempfile::tempdir().unwrap();
     let rec = dir.path().join("rec");
     fs::create_dir(&rec).unwrap();
-    let opts = PartOptions { window_log: 20, rotate_at, rotate_after_ns: u64::MAX };
+    let opts = PartOptions {
+        window_log: 20,
+        rotate_at,
+        rotate_after_ns: u64::MAX,
+    };
     let mut w = PartWriter::open(&rec, opts, ENTRY, BOOT_ID, at(0)).unwrap();
     for n in 1..=links {
-        let mut x = n.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1;
-        let mut noise = Vec::new();
-        for _ in 0..384 {
-            x ^= x << 13;
-            x ^= x >> 7;
-            x ^= x << 17;
-            noise.extend(x.to_le_bytes());
-        }
-        let json = format!(r#"{{"ev":"x","n":"{}"}}"#, hex(&noise)).into_bytes();
-        w.write(&Record::Event { t: at(n).mono_ns, json }).unwrap();
+        let json = format!(r#"{{"n":"{}"}}"#, hex(&n.to_le_bytes()).repeat(400)).into_bytes();
+        w.write(&Record::Event {
+            t: at(n).mono_ns,
+            json,
+        })
+        .unwrap();
         w.link(at(n)).unwrap();
         w.rotate_if_due(at(n)).unwrap();
     }
     let d = w.sync().unwrap().unwrap();
     let fake = FakeWorker::start();
     let client = ServerClient::new(&fake.url(), Some(Token::new(CREDENTIAL)));
-    let p = Policy { spread_first: false, ..Policy::default() };
+    let p = Policy {
+        spread_first: false,
+        ..Policy::default()
+    };
     let s = Sender::new(&p, client.clone(), RUN_ID, ENTRY, dir.path());
     let j = Mutex::new(UploadJson::new(RUN_ID.into(), ENTRY.into()));
-    (Rig { _dir: dir, rec, fake, client, s, j, t: Cell::new(1000 * S) }, w, d)
+    (
+        Rig {
+            _dir: dir,
+            rec,
+            fake,
+            client,
+            s,
+            j,
+            t: Cell::new(1000 * S),
+        },
+        w,
+        d,
+    )
 }
 
 impl Rig {
@@ -77,7 +94,8 @@ impl Rig {
             if self.j().state == State::CaughtUp {
                 return;
             }
-            self.t.set(self.s.backoff.next_try.map_or(self.t.get() + S, |m| m.0));
+            let (now, next) = (self.t.get(), self.s.backoff.next_try);
+            self.t.set(next.filter(|m| m.0 > now).map_or(now + S, |m| m.0));
         }
         panic!("never caught up: {:?}", self.j());
     }
@@ -89,10 +107,8 @@ impl Rig {
     }
     /// Every part file on disk, joined.
     fn cat(&self) -> Vec<u8> {
-        let mut names: Vec<_> = fs::read_dir(&self.rec).unwrap().map(|e| e.unwrap().path())
-            .filter(|p| p.extension().is_some_and(|x| x == "zst")).collect();
-        names.sort();
-        names.iter().flat_map(|p| fs::read(p).unwrap()).collect()
+        let parts = part_files(&self.rec).unwrap();
+        parts.iter().flat_map(|p| fs::read(p).unwrap()).collect()
     }
     /// The stored chunks: every offset once, and the stream equal to `want`.
     fn stored_once(&self, want: &[u8]) {
@@ -104,19 +120,21 @@ impl Rig {
     }
 }
 
-fn pos(offset: u64, next_seq: u64, head: &str) -> RunPosition {
-    RunPosition { offset, next_seq, head: head.into(), sealed: false, stop: false, committed: None }
-}
-
 fn answer(status: u16, body: serde_json::Value) -> Inject {
-    Inject { answer: Some((status, body)), ..Inject::default() }
+    Inject {
+        answer: Some((status, body)),
+        ..Inject::default()
+    }
 }
 
 #[test]
 fn a_committed_chunk_whose_answer_is_lost_is_not_stored_twice() {
     let (mut r, w, _) = rig(48 << 10, 30);
     let d = w.seal(at(31)).unwrap();
-    let lost = Inject { drop_after_commit: true, ..Inject::default() };
+    let lost = Inject {
+        drop_after_commit: true,
+        ..Inject::default()
+    };
     for i in [lost.clone(), Inject::default(), lost] {
         r.fake.inject(Route::Chunk, i);
     }
@@ -124,7 +142,10 @@ fn a_committed_chunk_whose_answer_is_lost_is_not_stored_twice() {
     r.stored_once(&r.cat());
     assert!(r.fake.chunks().len() >= 3, "the test needs several chunks");
     let j = r.j();
-    assert_eq!(j.confirmed.map(|c| (c.raw, c.seq)), Some((d.line.raw_end, d.line.seq)));
+    assert_eq!(
+        j.confirmed.map(|c| (c.raw, c.seq)),
+        Some((d.line.raw_end, d.line.seq))
+    );
     assert_eq!(j.sent.chunks, r.fake.chunks().len() as u64);
 }
 
@@ -135,16 +156,29 @@ fn a_409_moves_only_to_a_position_a_local_line_confirms() {
     assert_eq!(r.tick(&b), Step::Again, "the position read");
     // Another uploader stores the first two links meanwhile.
     let l = r.lines(0)[1];
-    let early = Bound::Durable(Durable { part: part_name(0), index_len: 0, line: l });
-    let Cut::Chunk(c) = chunk::cut(&r.rec, &pos(0, 0, &"0".repeat(64)), &early, None).unwrap() else {
+    let early = Bound::Durable(Durable {
+        part: part_name(0),
+        index_len: 0,
+        line: l,
+    });
+    let zero: RunPosition = serde_json::from_value(json!({"offset": 0, "next_seq": 0,
+        "head": "0".repeat(64)})).unwrap();
+    let Cut::Chunk(c) = chunk::cut(&r.rec, &zero, &early, None).unwrap()
+    else {
         panic!("no first chunk");
     };
     let h = chunk::headers(ENTRY, &c, chunk::sha256(&c).unwrap());
-    r.client.put_chunk(RUN_ID, &h, chunk::body(&c).unwrap(), c.c_end - c.c_start).unwrap();
-    r.fake.inject(Route::Chunk, answer(409, json!({"error": "conflict"})));
+    r.client
+        .put_chunk(RUN_ID, &h, chunk::body(&c).unwrap(), c.c_end - c.c_start)
+        .unwrap();
+    r.fake
+        .inject(Route::Chunk, answer(409, json!({"error": "conflict"})));
     assert_eq!(r.tick(&b), Step::Again, "the 409");
     assert_eq!(r.tick(&b), Step::Again, "the re-read");
-    assert_eq!(r.j().confirmed.map(|c| (c.raw, c.seq)), Some((l.raw_end, l.seq)));
+    assert_eq!(
+        r.j().confirmed.map(|c| (c.raw, c.seq)),
+        Some((l.raw_end, l.seq))
+    );
     r.finish(&b);
     r.stored_once(&r.cat());
 
@@ -152,7 +186,8 @@ fn a_409_moves_only_to_a_position_a_local_line_confirms() {
     let (mut r, _w, d) = rig(u64::MAX, 6);
     let (b, l) = (Bound::Durable(d), r.lines(0)[2]);
     assert_eq!(r.tick(&b), Step::Again);
-    r.fake.inject(Route::Chunk, answer(409, json!({"error": "conflict"})));
+    r.fake
+        .inject(Route::Chunk, answer(409, json!({"error": "conflict"})));
     let odd = json!({"offset": l.raw_end - 1, "next_seq": l.seq + 1, "head": hex(&l.hash)});
     r.fake.inject(Route::Position, answer(200, odd));
     while r.tick(&b) == Step::Again {}
@@ -169,7 +204,10 @@ fn an_offset_in_a_pruned_range_is_stuck_and_sends_nothing() {
     for _ in 0..2 {
         while r.tick(&b) == Step::Again {}
         let j = r.j();
-        assert_eq!((j.state, j.last_error.map(|e| e.class)), (State::Stuck, Some(Class::Stuck)));
+        assert_eq!(
+            (j.state, j.last_error.map(|e| e.class)),
+            (State::Stuck, Some(Class::Stuck))
+        );
         assert_eq!(r.tick(&b), Step::Idle, "no re-read before stuck_reread");
         r.t.set(r.t.get() + 121 * S);
     }
@@ -183,7 +221,12 @@ fn with_no_live_writer_nothing_past_the_file_is_sent() {
     let lines = r.lines(0);
     let (last, prev) = (lines[5], lines[4]);
     let part = r.rec.join(part_name(0));
-    fs::OpenOptions::new().write(true).open(&part).unwrap().set_len(last.c_end - 1).unwrap();
+    fs::OpenOptions::new()
+        .write(true)
+        .open(&part)
+        .unwrap()
+        .set_len(last.c_end - 1)
+        .unwrap();
     r.finish(&Bound::OnDisk);
     let file = fs::read(&part).unwrap();
     r.stored_once(&file[..prev.c_end as usize]);
@@ -194,7 +237,8 @@ fn a_409_with_no_forward_move_backs_off() {
     let (mut r, _w, d) = rig(u64::MAX, 6);
     let b = Bound::Durable(d);
     assert_eq!(r.tick(&b), Step::Again);
-    r.fake.inject(Route::Chunk, answer(409, json!({"error": "conflict"})));
+    r.fake
+        .inject(Route::Chunk, answer(409, json!({"error": "conflict"})));
     assert_eq!(r.tick(&b), Step::Again, "the 409");
     assert_eq!(r.tick(&b), Step::Idle, "the re-read found no move");
     let j = r.j();
@@ -212,7 +256,13 @@ fn awaiting_final_waits_for_the_final_then_retries_at_once() {
     let b = Bound::Durable(d);
     assert_eq!(r.tick(&b), Step::Again);
     let busy = answer(503, json!({"error": "awaiting_final"}));
-    r.fake.inject(Route::Chunk, Inject { retry_after: Some(60), ..busy });
+    r.fake.inject(
+        Route::Chunk,
+        Inject {
+            retry_after: Some(60),
+            ..busy
+        },
+    );
     assert_eq!(r.tick(&b), Step::Idle);
     r.t.set(r.t.get() + 600 * S);
     assert_eq!(r.tick(&b), Step::Idle, "not retried while no final is sent");
