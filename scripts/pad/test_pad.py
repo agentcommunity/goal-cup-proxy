@@ -323,7 +323,7 @@ class CaseRows(unittest.TestCase):
     WIRE = {"k": "call", "host": check.GATEWAY, "host_kind": "gateway"}
 
     def row(self, case, calls=(), variant=(), code=0, gaps=None, **more):
-        entry = {"entry": "e1", "counts": dict({"model_requests": 5, "gaps": gaps or {}, "hosts": {check.GATEWAY: 5}}, **more),
+        entry = {"entry": "e1", "counts": dict({"model_requests": 5, "gaps": gaps or {}, "hosts": {check.GATEWAY: 5, "api.openai.com": 5}}, **more),
                  "checks": [{"id": i, "result": "pass"} for i in ("gap_has_end", "history_complete", "listed_hosts_decrypted")]}
         return evaluate({"meta.json": {"connector": "codex-cli", "case": case, "variant": list(variant), "server": "off",
                                        "keep": True, "commits_since_start": 1, "entry": "e1", "model_host": "api.openai.com"},
@@ -345,7 +345,7 @@ class CaseRows(unittest.TestCase):
 
     def test_dodger_without_a_local_log_passes_c2(self):
         tunnels = {"api.openai.com": {"conns": 2, "listed": "pinned"}}
-        row = self.row("dodger", code=1, tunnel_hosts=tunnels)
+        row = self.row("dodger", code=1, tunnel_hosts=tunnels, hosts={check.GATEWAY: 5})
         self.assertEqual(row["checks"]["C2"], "PASS", row["why"])
 
 
