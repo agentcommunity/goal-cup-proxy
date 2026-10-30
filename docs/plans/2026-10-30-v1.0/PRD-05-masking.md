@@ -812,3 +812,15 @@ against OWNER-DECISIONS.md. The ledger wins; no locked item is changed and no sc
 
 One effect for PRD-12 to check: in the default build the pad's planted no-shape value is not masked, so
 A1 reports it as a stated loss instead of failing on it.
+
+## Amendments
+
+### 2026-10-30, replan after PRD-12 slice 2 (merge c7649890)
+
+- **The pad's C3 reads this PRD's kind names and row order.** `scripts/pad/check.py` counts a MASK
+  for each planted value of PRD-12 section 5 by its S12 kind: `openai_key` (row 1), `github_token`
+  (rows 3 and 4), `google_key` (row 13) or the shell rule `generic_secret_assignment` (row 11) for the
+  Google line, `jwt`, `private_key`, `url_password`. It relies on rows 1, 3 and 4 winning their
+  overlap with row 11 and row 11 winning over row 13, as section 10 orders them. A renamed kind or a
+  reordered row is posted as a seam line in the night log in the same merge request, so the pad lane
+  follows; otherwise a pad row shows a false C3 FAIL.
