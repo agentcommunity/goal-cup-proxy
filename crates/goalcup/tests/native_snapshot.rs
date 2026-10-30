@@ -5,31 +5,21 @@
 
 mod common;
 
-use std::fs::{self, OpenOptions};
-use std::io::Write;
+use std::fs;
 use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use common::recorder::{data_of, ends, events, gaps, opens};
+use common::recorder::{append, data_of, end_of, gap_rows, gaps, notes, opens};
 use goalcup::connector::{Form, NativeSource, NativeSources};
 use goalcup::native;
 use goalcup::native::fsx::Dir;
 use goalcup::native::snapshot::{Interval, Sets};
 use goalcup::native::tail::{Stop, Tail};
-use goalcup::pipeline::{Call, Calls, Cursors, EndReason, GapReason, Recorder};
-use serde_json::Value;
+use goalcup::pipeline::{Calls, Cursors, EndReason, GapReason, Recorder};
+use serde_json::{Value, json};
 
 const MS: Duration = Duration::from_millis(1);
-
-fn append(p: &Path, b: &[u8]) {
-    let mut f = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(p)
-        .unwrap();
-    f.write_all(b).unwrap();
-}
 
 /// One walk of every file in `dir`, handed to `sets` as the reader's pass does for row `t`, with
 /// the run start `since`.
@@ -55,19 +45,6 @@ fn copies(c: &Calls) -> Vec<(Value, Vec<(u64, Value)>)> {
         }
     }
     out
-}
-
-fn end_of(c: &Calls, sid: u64) -> Option<EndReason> {
-    ends(c)
-        .into_iter()
-        .find_map(|(s, r, ..)| (s == sid).then_some(r))
-}
-
-fn notes(c: &Calls, what: &str) -> Vec<Value> {
-    events(c)
-        .into_iter()
-        .filter(|v| v["what"] == what)
-        .collect()
 }
 
 /// Every stream of `copy` ended `reason` holding as many bytes as its meta `size`.
@@ -222,7 +199,7 @@ fn a_seal_copy_says_whether_the_harness_still_ran_and_is_counted() {
 }
 
 #[test]
-fn a_seal_cut_by_its_guard_cuts_every_file_of_the_set_and_keeps_the_periodic_copy_whole() {
+fn a_seal_cut_part_way_cuts_every_file_of_the_set_and_keeps_the_periodic_copy_whole() {
     let dir = tempfile::tempdir().unwrap();
     let (d, wal) = (dir.path(), dir.path().join("x.db-wal"));
     fs::write(d.join("x.db"), vec![b'm'; 5000]).unwrap();
@@ -233,27 +210,71 @@ fn a_seal_cut_by_its_guard_cuts_every_file_of_the_set_and_keeps_the_periodic_cop
     sets.read(&rec, u64::MAX);
     append(&wal, b"more");
     walk(&mut sets, d, UNIX_EPOCH);
-    calls.set_room(0);
     sets.seal(true);
-    assert!(matches!(sets.read(&rec, u64::MAX), Stop::Room));
-    // The guard runs out here: `finish` closes what the seal could not copy.
+    // The seal copy reads x.db whole and 100 bytes of the wal; then its guard runs out.
+    assert!(matches!(sets.read(&rec, 5100), Stop::Slice));
     let closed = sets.close(&rec);
     let c = copies(&calls);
     assert_eq!(c.len(), 2);
     whole(&calls, &c[0].1, EndReason::Complete);
-    let mut lost_sum = 0;
-    for (sid, meta) in &c[1].1 {
-        let lost = gaps(&calls).into_iter().find_map(|g| match g {
-            Call::Gap(s, GapReason::CutAtSeal, _, _, 0, Some(l), _) if s == *sid => Some(l),
-            _ => None,
-        });
-        assert_eq!(lost.map(Value::from), Some(meta["size"].clone()), "{meta}");
-        assert_eq!(end_of(&calls, *sid), Some(EndReason::CutAtSeal));
-        lost_sum += lost.unwrap();
+    // Every file ends cut_at_seal, but only the wal has unread bytes: one GAP, its exact loss.
+    let cut = |(sid, _): &(u64, Value)| end_of(&calls, *sid) == Some(EndReason::CutAtSeal);
+    assert!(c[1].1.iter().all(cut));
+    let wal_sid = c[1].1.iter().find(|(_, m)| m["path"] == "t:x.db-wal");
+    let gap = (wal_sid.unwrap().0, GapReason::CutAtSeal, Some(204), None);
+    assert_eq!(gap_rows(&calls), [gap]);
+    assert_eq!((closed.cut_files, closed.cut_bytes, closed.streams), (1, 204, 2));
+}
+
+/// A set of x.db and x.db-wal, 10 bytes each, whose copy has begun, with `damage` done to the wal
+/// before the copy reads it. With `retry`, an append first moves the copy and `damage` comes as
+/// its retry begins.
+fn damaged(retry: bool, damage: impl Fn(&Path)) -> Calls {
+    let dir = tempfile::tempdir().unwrap();
+    let (d, wal) = (dir.path(), dir.path().join("x.db-wal"));
+    fs::write(d.join("x.db"), b"0123456789").unwrap();
+    fs::write(&wal, b"0123456789").unwrap();
+    let (rec, calls) = Recorder::for_tests(0);
+    let mut sets = Sets::new(Interval::default());
+    walk(&mut sets, d, UNIX_EPOCH);
+    sets.read(&rec, u64::MAX);
+    calls.set_room(1 << 30);
+    if retry {
+        append(&wal, b"more");
+        // The first copy reads its 20 bytes; the slice ends as its retry begins.
+        sets.read(&rec, 20);
     }
-    assert_eq!(gaps(&calls).len(), 2);
-    assert_eq!(
-        (closed.cut_files, closed.cut_bytes, closed.streams),
-        (2, lost_sum, 2)
-    );
+    damage(&wal);
+    sets.read(&rec, u64::MAX);
+    calls
+}
+
+#[test]
+fn a_set_file_lost_during_a_copy_is_named_by_a_gap_and_the_copy_still_ends() {
+    let unread = |n: u64| Some(json!({"unread_at_least": n}));
+    let wal_of = |c: &[(u64, Value)]| c.iter().find(|(_, m)| m["path"] == "t:x.db-wal").map(|f| f.0);
+    // Gone before the first copy reads it: exact loss, and the retry holds the main file only.
+    let calls = damaged(false, |w| fs::remove_file(w).unwrap());
+    let c = copies(&calls);
+    assert_eq!((c.len(), c[1].1.len()), (2, 1));
+    let gap = (wal_of(&c[0].1).unwrap(), GapReason::SourceChanged, Some(10), unread(10));
+    assert_eq!(gap_rows(&calls), [gap]);
+    whole(&calls, &c[1].1, EndReason::Complete);
+    // Shrunk to 4 bytes: a lower bound, and the retry holds the 4 bytes that are there.
+    let calls = damaged(false, |w| {
+        fs::OpenOptions::new().write(true).open(w).unwrap().set_len(4).unwrap();
+    });
+    let c = copies(&calls);
+    let gap = (wal_of(&c[0].1).unwrap(), GapReason::SourceChanged, None, unread(6));
+    assert_eq!((c.len(), gap_rows(&calls)), (2, vec![gap]));
+    whole(&calls, &c[1].1, EndReason::Complete);
+    // Gone as the retry begins: the retry ends complete, names its loss and the path.
+    let calls = damaged(true, |w| fs::remove_file(w).unwrap());
+    let c = copies(&calls);
+    let gap = (wal_of(&c[1].1).unwrap(), GapReason::SourceChanged, Some(14), unread(14));
+    assert_eq!(gap_rows(&calls), [gap]);
+    for (sid, _) in &c[1].1 {
+        assert_eq!(end_of(&calls, *sid), Some(EndReason::Complete));
+    }
+    assert_eq!(notes(&calls, "snapshot_unstable")[0]["path"], "t:x.db-wal");
 }

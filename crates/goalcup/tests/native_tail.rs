@@ -9,10 +9,10 @@ use std::io::Write;
 use std::path::Path;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use common::recorder::{data_of, ends, events, gaps, opens, pick};
+use common::recorder::{append, data_of, ends, events, gap_rows, gaps, opens};
 use goalcup::native::fsx::{Dir, Kind, Stat};
 use goalcup::native::tail::{Stop, Tail};
-use goalcup::pipeline::{Call, Calls, Cursors, EndReason, GapReason, Recorder, StreamKind};
+use goalcup::pipeline::{Calls, Cursors, EndReason, GapReason, Recorder, StreamKind};
 use serde_json::{Value, json};
 
 struct T {
@@ -64,16 +64,6 @@ impl T {
 
 fn stat(dir: &Path, name: &str) -> std::io::Result<Stat> {
     Dir::open_root(dir)?.stat_at(OsStr::new(name))
-}
-
-fn append(p: &Path, b: &[u8]) {
-    OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(p)
-        .unwrap()
-        .write_all(b)
-        .unwrap();
 }
 
 #[test]
@@ -138,10 +128,7 @@ fn a_vanished_file_with_unread_bytes_gives_a_gap_then_an_end() {
     let c = &t.calls;
     let sid = opens(c)[0].0;
     let tail = Some(json!({"unread_at_least": 10}));
-    let lost = pick(c, |g| match g {
-        Call::Gap(sid, r, .., lost, t) => Some((sid, r, lost, t)),
-        _ => None,
-    });
+    let lost = gap_rows(c);
     assert_eq!(lost, [(sid, GapReason::SourceChanged, None, tail)]);
     assert_eq!(ends(c), [(sid, EndReason::SourceChanged, 0, None)]);
 }
@@ -199,10 +186,7 @@ fn unreadable_to_the_seal(snapshot: bool) {
     let snap = kind == StreamKind::Snapshot;
     assert_eq!((opens(c).len(), snap), (1, snapshot));
     let tail = Some(json!({"unread_at_least": 10}));
-    let lost = pick(c, |g| match g {
-        Call::Gap(sid, r, .., lost, t) => Some((sid, r, lost, t)),
-        _ => None,
-    });
+    let lost = gap_rows(c);
     assert_eq!(lost, [(sid, GapReason::SourceChanged, Some(10), tail)]);
     assert_eq!(ends(c), [(sid, EndReason::SourceChanged, 10, None)]);
 }
@@ -222,10 +206,7 @@ fn a_shrink_still_past_the_offset_is_a_truncation_with_a_gap() {
     let gens: Vec<Value> = o.iter().map(|o| o.2["gen"].clone()).collect();
     assert_eq!(gens, [0, 1]);
     let tail = Some(json!({"unread_at_least": 70}));
-    let lost = pick(c, |g| match g {
-        Call::Gap(sid, r, .., lost, t) => Some((sid, r, lost, t)),
-        _ => None,
-    });
+    let lost = gap_rows(c);
     assert_eq!(lost, [(o[0].0, GapReason::SourceChanged, None, tail)]);
     assert_eq!(ends(c), [(o[0].0, EndReason::SourceChanged, 30, None)]);
     assert_eq!(data_of(c, o[1].0), [7u8; 50]);
@@ -320,10 +301,7 @@ fn close_with_the_guard_out_cuts_with_the_exact_loss() {
         (3, 2, 30)
     );
     let c = &calls;
-    let cut = pick(c, |g| match g {
-        Call::Gap(_, r, .., lost, _) => Some((r, lost)),
-        _ => None,
-    });
+    let cut: Vec<_> = gap_rows(c).into_iter().map(|g| (g.1, g.2)).collect();
     assert_eq!(
         cut,
         [
@@ -357,10 +335,7 @@ fn close_with_the_guard_out_cuts_a_snapshot_not_copied_yet() {
     let c = &calls;
     let o = opens(c);
     assert_eq!((o.len(), o[0].1), (1, StreamKind::Snapshot));
-    let lost = pick(c, |g| match g {
-        Call::Gap(sid, r, .., lost, t) => Some((sid, r, lost, t)),
-        _ => None,
-    });
+    let lost = gap_rows(c);
     assert_eq!(lost, [(o[0].0, GapReason::CutAtSeal, Some(7), None)]);
     assert_eq!(ends(c), [(o[0].0, EndReason::CutAtSeal, 7, None)]);
 }
@@ -386,10 +361,7 @@ fn a_snapshot_gone_with_bytes_unread_gives_its_gap_and_end() {
         assert_eq!((o.len(), o[0].1), (1, StreamKind::Snapshot));
         let tail = Some(json!({"unread_at_least": 100 - read}));
         let gap = (o[0].0, GapReason::SourceChanged, Some(100 - read), tail);
-        let lost = pick(c, |g| match g {
-            Call::Gap(sid, r, .., lost, t) => Some((sid, r, lost, t)),
-            _ => None,
-        });
+        let lost = gap_rows(c);
         assert_eq!(lost, [gap]);
         // END `seen` is the offset: the bytes read plus the exact GAP.
         assert_eq!(ends(c), [(o[0].0, EndReason::SourceChanged, 100, None)]);
@@ -415,10 +387,7 @@ fn torn_then_last(c: &Calls, size: u64, gap: GapReason, end: EndReason) {
     assert_eq!(o[1].2["size"], size);
     assert_eq!(data_of(c, o[0].0), [7; 10]);
     let tail = (gap == GapReason::SourceChanged).then(|| json!({"unread_at_least": size}));
-    let lost = pick(c, |g| match g {
-        Call::Gap(sid, r, .., lost, t) => Some((sid, r, lost, t)),
-        _ => None,
-    });
+    let lost = gap_rows(c);
     assert_eq!(lost, [(o[1].0, gap, Some(size), tail)]);
     let e = ends(c);
     assert_eq!(

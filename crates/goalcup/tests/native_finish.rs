@@ -5,12 +5,11 @@
 
 mod common;
 
-use std::fs::{self, OpenOptions};
-use std::io::Write;
+use std::fs;
 use std::path::Path;
 use std::time::{Duration, Instant, SystemTime};
 
-use common::recorder::{data_of, ends, events, gaps, opens};
+use common::recorder::{append, data_of, end_of, gaps, notes, opens};
 use goalcup::connector::{Form, NativeSource, NativeSources};
 use goalcup::native::{self, Missing};
 use goalcup::pipeline::{Call, Calls, EndReason, GapReason, Mono, Recorder};
@@ -29,32 +28,10 @@ fn sources(rows: &[(&str, &Path, &str, bool)]) -> NativeSources {
     NativeSources(rows.iter().map(row).collect())
 }
 
-fn append(p: &Path, b: &[u8]) {
-    OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(p)
-        .unwrap()
-        .write_all(b)
-        .unwrap();
-}
-
-fn notes(calls: &Calls, what: &str) -> Vec<Value> {
-    events(calls)
-        .into_iter()
-        .filter(|v| v["what"] == what)
-        .collect()
-}
-
 /// The stream ID opened for path ID `id`.
 fn sid(c: &Calls, id: &str) -> Option<u64> {
     let mut o = opens(c).into_iter();
     o.find_map(|(s, _, m)| (m["path"] == id).then_some(s))
-}
-
-fn end_of(c: &Calls, sid: u64) -> Option<EndReason> {
-    let mut e = ends(c).into_iter();
-    e.find_map(|(s, r, ..)| (s == sid).then_some(r))
 }
 
 #[test]
@@ -138,17 +115,17 @@ fn a_guard_that_runs_out_names_each_unread_file_exactly() {
     let dir = tempfile::tempdir().unwrap();
     let (rec, calls) = Recorder::for_tests(0);
     let sizes = [
-        ("a.jsonl", 10u64),
-        ("b.jsonl", 70_000),
-        ("c.jsonl", 1),
-        ("d.db", 9),
+        ("t", "a.jsonl", 10u64),
+        ("t", "b.jsonl", 70_000),
+        ("t", "c.jsonl", 1),
+        ("d", "d.db", 9),
     ];
-    for (name, n) in sizes {
+    for (_, name, n) in sizes {
         fs::write(dir.path().join(name), vec![b'x'; n as usize]).unwrap();
     }
     let mut rows = sources(&[
         ("t", dir.path(), "*.jsonl", true),
-        ("t", dir.path(), "*.db", true),
+        ("d", dir.path(), "*.db", true),
     ]);
     rows.0[1].form = Form::Final;
     let reader = native::start(rec, rows);
@@ -156,8 +133,8 @@ fn a_guard_that_runs_out_names_each_unread_file_exactly() {
         reader.finish(false, Some(Duration::ZERO))
     });
     let mut lost_sum = 0;
-    for (name, n) in sizes {
-        let s = sid(&calls, &format!("t:{name}")).unwrap();
+    for (row, name, n) in sizes {
+        let s = sid(&calls, &format!("{row}:{name}")).unwrap();
         let cut = |c: &Call| matches!(c, Call::Gap(g, GapReason::CutAtSeal, _, _, _, Some(l), _) if *g == s && *l == n);
         assert_eq!(gaps(&calls).iter().filter(|c| cut(c)).count(), 1, "{name}");
         assert_eq!(end_of(&calls, s), Some(EndReason::CutAtSeal));

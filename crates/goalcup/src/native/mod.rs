@@ -40,7 +40,10 @@ pub struct NativeReader {
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct NativeFinish {
+    /// Append streams open at the seal, ended in `close`.
     pub streams: u64,
+    /// Streams the seal opened for `final` database sets. A `snapshot` row's seal copy is counted
+    /// in neither field.
     pub snapshots: u64,
     pub cut_files: u64,
     pub cut_bytes: u64,
