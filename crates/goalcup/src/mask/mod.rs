@@ -160,7 +160,7 @@ impl Masker {
     /// Masks a metadata value in place, same length. Never fails. The stub stars every string
     /// leaf; object keys, numbers, bools and null stay.
     pub fn mask_meta(&self, meta: &mut Value) {
-        if self.is_clear() {
+        if self.policy.is_clear() {
             return;
         }
         let mut stack: Vec<&mut Value> = vec![meta];
@@ -183,10 +183,12 @@ impl Masker {
     pub fn value_counts(&self) -> ValueCounts {
         self.policy.counts
     }
+}
 
+impl Policy {
     #[cfg(any(test, feature = "test-hooks"))]
     fn is_clear(&self) -> bool {
-        self.policy.clear
+        self.clear
     }
 
     #[cfg(not(any(test, feature = "test-hooks")))]
@@ -205,8 +207,7 @@ impl StreamMasker {
     /// Masks the next piece. The stub returns `bytes.len()` stars as one `fail_closed` span.
     #[must_use]
     pub fn push(&mut self, bytes: &[u8]) -> Masked {
-        #[cfg(any(test, feature = "test-hooks"))]
-        if self.policy.clear {
+        if self.policy.is_clear() {
             return Masked {
                 bytes: bytes.to_vec(),
                 spans: Vec::new(),
@@ -357,7 +358,11 @@ mod tests {
             assert!(masked.bytes().all(|c| c == b'*'));
         }
         let text = serde_json::to_string(&meta)?;
-        assert!(a.iter().filter(|s| !s.is_empty()).all(|s| !text.contains(s.as_str())));
+        assert!(
+            a.iter()
+                .filter(|s| !s.is_empty())
+                .all(|s| !text.contains(s.as_str()))
+        );
         let keys = |v: &Value| v.as_object().map(|o| o.keys().cloned().collect::<Vec<_>>());
         assert_eq!(keys(&before), keys(&meta));
         assert_eq!(meta.get("port"), before.get("port"));
@@ -393,7 +398,10 @@ mod tests {
             ],
         )?;
         let counts = m.value_counts();
-        assert_eq!((counts.workspace, counts.env, counts.harness, counts.skipped), (1, 2, 0, 0));
+        assert_eq!(
+            (counts.workspace, counts.env, counts.harness, counts.skipped),
+            (1, 2, 0, 0)
+        );
         Ok(())
     }
 
