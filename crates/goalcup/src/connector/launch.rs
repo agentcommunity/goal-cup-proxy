@@ -248,7 +248,7 @@ const PROFILE_HEADER: &str = "# Written by goalcup: the PATH handed to the harne
 
 /// `<dir>/.profile` putting the handed `path` back, which a login shell's `/etc/profile` resets
 /// (PRD-17 P11). Only a `.profile` goalcup wrote is replaced; a link or any other file is kept,
-/// which returns `AlreadyExists` so the participant is told.
+/// which returns `AlreadyExists` so the participant is told. Any other open error is returned.
 pub(crate) fn write_profile(dir: &Path, path: &str) -> std::io::Result<()> {
     let file = dir.join(".profile");
     let kept = || Err(std::io::ErrorKind::AlreadyExists.into());
@@ -263,6 +263,7 @@ pub(crate) fn write_profile(dir: &Path, path: &str) -> std::io::Result<()> {
             }
         }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) if std::fs::symlink_metadata(&file).is_ok_and(|m| m.is_file()) => return Err(e),
         _ => return kept(),
     }
     let quoted = path.replace('\'', r"'\''");
