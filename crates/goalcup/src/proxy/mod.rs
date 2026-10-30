@@ -7,4 +7,7 @@
 //! named GAP.
 
 pub mod ca;
+pub mod connect;
+pub mod decode;
 pub mod tls;
+pub mod ws;
