@@ -21,6 +21,8 @@ if sys.version_info < (3, 11) and __name__ == "__main__":  # the node22 image an
 import tomllib  # noqa: E402
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)
+import check as pc  # noqa: E402  S7 models are read through check.py's SEAM only
 REPO = os.path.dirname(os.path.dirname(HERE))
 SBX = os.path.join(HERE, "sbx.mjs")
 # The only servers (ledger B4; scripts/matrix.sh:253-258): the one staging Worker and loopback, fixed
@@ -46,6 +48,11 @@ KEYS = {"harness", "key", "case", "mode", "server", "prompt", "minutes", "steps"
 FAULTS = {"kill-recorder": 0, "kill-watchdog": 3, "kill-watchdog-recover": 2, "kill-both": 0, "freeze": 10,
           "cut-worker": 10, "route-drop": 1, "fd-limit": 0}  # kind: minutes it lasts by default (section 3.1)
 SPAN = {"freeze", "cut-worker", "route-drop"}  # the faults that take +<minutes>
+# pad-run's box steps in this slice; the other faults, exec and pre come in a later slice
+BOX_STEPS = {"start", "wait-calls", "look", "seal", "wait-upload", "kill-recorder", "wait-recovery",
+             "kill-watchdog-recover", "keep-going"}
+PRICED = tuple(k for k in pc.S7_TOKENS if k != "reasoning")  # PRD-09 section 4; output holds reasoning, never added again
+LEDGER = threading.Lock()  # spend lines: runs and the spend check write in parallel
 NAME = re.compile(r"[a-z0-9][a-z0-9_-]*")
 FMT = "%-17s %-7s %-6s %s"
 STOP = threading.Event()  # set by SIGINT or SIGTERM: every run goes straight to cleanup
@@ -65,9 +72,25 @@ def said(what, r):
     return what + (": " + tail[-1][:160] if r.returncode and tail else "")
 
 
+def env_without(hide=NEVER_IN_BOX):
+    """The conductor's environment less `hide`: every child the pad starts gets this, never the whole (section 7)."""
+    return {k: v for k, v in os.environ.items() if k not in hide}
+
+
 def call(argv, timeout=None, env=None):
     """The one place the pad runs a command."""
     return subprocess.run(argv, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=timeout, env=env)
+
+
+def now():
+    return datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds")
+
+
+def append(path, doc):
+    """One sorted JSON line, appended (watch/spend.jsonl, pad-out/spend.jsonl): names and numbers only."""
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with LEDGER, open(path, "a") as f:
+        f.write(json.dumps(doc, sort_keys=True) + "\n")
 
 
 def check_key_file(path, repo=REPO):
@@ -171,21 +194,46 @@ def load_settings(raw, pad):
     return s
 
 
-def step_limit(s, kind):
+def step_limit(s, step):
     """Seconds; the one owner of every step limit (pad-run's own come from it through runner_limits). wait-upload:
-    10 min, or 5 after the last fault ends (minutes from the paste, so a wait from the seal never falls short)."""
+    10 min, or 5 after the last fault ends (minutes from the paste, so a wait from the seal never falls short). A timed
+    `kind@m` is bounded from the step's start: m minutes, then pad-run's own limit for the kind, plus 2 minutes."""
+    kind, _, at = step.split(" ")[0].partition("@")
+    if at:  # kind@m, kind@m+n or kill-both@m+upload
+        return int(at.split("+")[0]) * 60 + runner_limits(s).get(kind, 300) + 120
     if kind == "wait-upload":
         ends = [m + (int(rest.split("+")[1]) if f in SPAN and "+" in rest else FAULTS[f])
                 for _, m, r in s["plan"] for f, _, rest in [r.partition("@")] if f in FAULTS]
         return 60 * max(LIMITS[kind], 5 + max(ends, default=0))
-    return LIMITS.get(kind, 5) * 60 + (s["minutes"] * 60 if kind in ("seal", "check") else 0)
+    return LIMITS.get(kind, 5) * 60 + (s["minutes"] * 60 if kind in ("seal", "check", "keep-going") else 0)
 
 
 def runner_limits(s):
     """Seconds per pad-run step, the ones pad-run reads from settings.json: paste has start's, verify works to the
-    check step's limit, and wipe to a third of cleanup's (the box's rm and list take the other thirds)."""
-    got = {k: step_limit(s, k) for k in ("setup", "start", "wait-calls", "look", "seal", "wait-upload")}
-    return dict(got, paste=got["start"], verify=step_limit(s, "check"), wipe=step_limit(s, "cleanup") // 3)
+    check step's limit, wipe to a third of cleanup's (the box's rm and list take the other thirds), and wait-recovery
+    to 30 s under its step's limit (pad-run starts later, so its own FAIL line comes before the step times out). The
+    two faults count from minute m; keep-going and the detached watch from their start."""
+    got = {k: step_limit(s, k) for k in ("setup", "start", "wait-calls", "look", "seal", "wait-upload", "wait-recovery")}
+    run = int(math.ceil(s["minutes"] * 60))
+    got["wait-recovery"] -= 30  # pad-run writes its own FAIL line before the step's limit here runs out
+    return dict(got, paste=got["start"], verify=step_limit(s, "check"), wipe=step_limit(s, "cleanup") // 3, spend=120,
+                **{"kill-recorder": 120, "kill-watchdog-recover": 240, "keep-going": run, "seal-now": 120, "watch": run + 1800})
+
+
+def price(models, rates, key):
+    """Section 7: check.py's `models` ([{model, tokens}], int or null counts) at pad.toml's [rates] in USD per million
+    -> (USD, sorted models with no rate line). Those are priced at the highest rate listed for `key`, or the highest
+    overall when the key has no line. A rate line with no cache_write prices cache writes at its input rate."""
+    def rate(r, k):
+        return float(r.get(k, r.get("input", 0)) if k == "cache_write" else r.get(k, 0))
+    pool = [r for r in rates.values() if r.get("key") == key] or list(rates.values())
+    high = {k: max([rate(r, k) for r in pool] or [0]) for k in PRICED}
+    usd, unpriced = 0.0, set()
+    for m in models:
+        r, tok = rates.get(m.get("model")), m.get("tokens") or {}
+        unpriced |= {str(m.get("model"))} if r is None else set()
+        usd += sum((tok.get(k) or 0) * (rate(r, k) if r else high[k]) for k in PRICED) / 1e6
+    return usd, sorted(unpriced)
 
 
 def approve(server, code):
@@ -228,7 +276,11 @@ class Run:
         self.name, self.lines, self.meta, self.row = "pad-" + secrets.token_hex(3), [], {}, None
         self.tmp = tempfile.mkdtemp(prefix="pad-")  # box scripts; never in the run folder
         self.box_dir = None  # pad-run's run folder: here, or staged and pushed to the box's ~/run
-        self.t0 = time.time()
+        self.t0, self.out_root, self.over_cap, self.spender = time.time(), out_root, False, None
+        self.usd, self.high, self.models = None, [], []  # the run's priced usage, set by the check step
+        self.usd_live = None  # the last estimate the spend check read: the ledger's fallback for a run left unpriced
+        self.spent = threading.Event()  # set when the seal step ends: the spend check stops
+        self.price_key = s["gateway_key"] if case == "gateway" else s["key"]
         stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
         self.dir = os.path.join(out_root, s["harness"], case, stamp + "-" + self.name)
         os.makedirs(self.dir)
@@ -240,8 +292,7 @@ class Run:
 
     def sbx(self, verb, *args, limit=None):
         self.log("sbx %s %s" % (verb, self.name))
-        env = {k: v for k, v in os.environ.items() if k not in NEVER_IN_BOX}
-        return call(["node", SBX, verb] + list(args), timeout=limit, env=env)
+        return call(["node", SBX, verb] + list(args), timeout=limit, env=env_without())
 
     def line(self, step, result, saw):
         at = int(time.time() - self.t0) // 60
@@ -254,20 +305,35 @@ class Run:
                     self.line(step, "skip", "interrupted" if STOP.is_set() else "setup failed")
                     continue
                 kind = step.split("@")[0].split(" ")[0]
-                limit = step_limit(self.s, kind)
+                own = getattr(self, "step_" + kind.replace("-", "_"), None)
                 try:
-                    self.line(step, *getattr(self, "step_" + kind.replace("-", "_"), self.step_box)(step, limit))
+                    limit = step_limit(self.s, step)
+                    self.line(step, *(own(step, limit) if own else self.step_box(step, limit) if kind in BOX_STEPS
+                                      else ("skip", NEEDS_LATER)))
                 except Exception as e:  # a rig error writes its line and the walk goes on
                     late = isinstance(e, subprocess.TimeoutExpired)
                     why = "no answer in %d min" % (limit // 60) if late else str(e) if isinstance(e, Refused) else type(e).__name__
                     self.setup_failed = kind == "setup"  # a failed setup skips every later step
                     self.line(step, "FAIL" if self.setup_failed else "timeout" if late else "error", why)
+                if kind == "seal":
+                    self.end_spend()
         finally:
+            self.end_spend()
             try:
                 self.line("cleanup", *self.step_cleanup())
             except Exception as e:
                 self.line("cleanup", "error", "%s; box %s may be left" % (type(e).__name__, self.name))
             shutil.rmtree(self.tmp, ignore_errors=True)
+            try:  # section 7, the ledger: one line per run, also an interrupted or unpriced one (usd null, usd_live its
+                # last live estimate, so the scribe's 200 and 400 USD notices still count a run that spent)
+                append(os.path.join(self.out_root, "spend.jsonl"), {
+                    "at": now(), "connector": self.s["harness"], "case": self.case, "mode": self.s["mode"], "key": self.price_key,
+                    "run": self.meta.get("run"), "entry": self.meta.get("entry"), "usd": self.usd, "usd_live": self.usd_live,
+                    "over_cap": self.over_cap,
+                    "models": {m["model"]: m["tokens"] for m in self.models}, "priced_high": self.high,
+                    "box_minutes": round((time.time() - self.t0) / 60, 1) if self.tried else 0})
+            except OSError as e:
+                self.line("cleanup", "error", "spend ledger not written: %s" % type(e).__name__)
         return self.finish()
 
     def step_setup(self, step, limit):
@@ -283,8 +349,8 @@ class Run:
                 with open(os.path.expanduser("~/.pad-keys/" + name), "rb") as a, \
                         os.fdopen(os.open(os.path.join(stage, "keys", name), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "wb") as b:
                     shutil.copyfileobj(a, b)
-        cpath = s.get("connector") or os.path.join(REPO, "connectors", s["harness"], "harness.toml")
-        cap = read_toml(cpath).get("capture", {}) if os.path.isfile(cpath) else {}
+        cpath = s.get("connector") or os.path.join(REPO, "connectors", s["harness"] + ".toml")  # PRD-11's flat file
+        con = read_toml(cpath) if os.path.isfile(cpath) else {}
         shutil.copy(os.path.join(HERE, "prompts", s["prompt"] + ".txt") if s["prompt"] in ("micro", "smoke", "full")
                     else s["prompt"], os.path.join(stage, "prompt-source.txt"))
         for k in ("connector", "hosts"):  # S16 files, passed to goalcup start from the run folder
@@ -294,8 +360,8 @@ class Run:
             json.dump(dict({k: v for k, v in s.items() if k != "plan"}, harness_id=s["harness"], harness=self.harness,
                            session=self.name, limits=runner_limits(s), server_url=SERVERS.get(s["server"]),
                            case=self.case, version=s.get("version") or self.harness["version"], key_files=names,
-                           route_key=names[-1] if names else None, home_env=cap.get("home", {}).get("env"),
-                           native=[{k: r.get(k) for k in ("name", "root", "pattern")} for r in cap.get("native", [])],
+                           route_key=names[-1] if names else None, home_vars=con.get("home") or {},
+                           native=[{k: r.get(k) for k in ("name", "root", "pattern")} for r in con.get("native", [])],
                            **{k: k + ".toml" for k in ("connector", "hosts") if s.get(k)}), f)
         if s["where"] == "sandbox":
             if not os.path.isfile(os.path.join(HERE, "image.id")):
@@ -330,32 +396,70 @@ class Run:
         """One pad-run step (in the box, or a subprocess here) -> (result, saw, its last `tag` line's dict). The
         entry and run ids it names go into meta."""
         if argv is None and self.s["where"] == "sandbox":
-            with open(os.path.join(self.tmp, "step.sh"), "w") as f:
+            fd, script = tempfile.mkstemp(suffix=".sh", dir=self.tmp)  # its own file: the spend check runs beside a step
+            with os.fdopen(fd, "w") as f:
                 f.write("exec python3.11 ~/pad/pad-run ~/run %s\n" % step)
-            r = self.sbx("exec", self.name, "--script", os.path.join(self.tmp, "step.sh"), limit=limit)
+            r = self.sbx("exec", self.name, "--script", script, limit=limit)
         else:
-            env = None if argv else {k: v for k, v in os.environ.items() if k not in NEVER_IN_BOX}  # here is the box
             r = call(argv or [sys.executable, os.path.join(HERE, "pad-run"), self.box_dir] + step.split(), timeout=limit,
-                     env=env)
+                     env=env_without())  # here is the box, and check.py needs no organizer secret either
         got = [ln[len(tag) + 1:] for ln in (r.stdout or "").splitlines() if ln.startswith(tag + " ")]
         d = json.loads(got[-1]) if got else {"result": "error", "saw": said("%s: no %s line" % (step, tag), r)}
         self.meta.update({k: d[k] for k in ("entry", "run") if d.get(k)})
         return d.get("result", "error"), d.get("saw", ""), d
 
     def step_box(self, step, limit):
-        if step.split("@")[0].split(" ")[0] not in ("start", "wait-calls", "look", "seal", "wait-upload"):
-            return "skip", NEEDS_LATER
         if self.no_build:
             return "skip", NO_BUILD
+        if step == "start" and not self.spender:  # ledger T6: the cap holds from the moment the prompt may be typed,
+            # whatever start returns or raises; pad-run's spend answers skip "not started" until the paste
+            self.spender = threading.Thread(target=self.spend, daemon=True)
+            self.spender.start()
         result, saw, d = self.box(step, limit + 120)  # pad-run works to `limit`
-        if step != "start" or result != "ok" or self.s["server"] == "off":  # off: start pasted too
-            return result, saw
-        self.log("approve " + self.name)  # section 3, 0:03; the device code stays out of the log and the table
-        got = approve(self.s["server"], d.get("code"))
-        if got != "approved":
-            return "INCONCLUSIVE", got
-        result, saw, _ = self.box("paste", limit + 120)
-        return ("ok", "approved, prompt pasted") if result == "ok" else (result, saw)
+        if step == "start" and result == "ok" and self.s["server"] != "off":  # off: start pasted too
+            self.log("approve " + self.name)  # section 3, 0:03; the device code stays out of the log and the table
+            got = approve(self.s["server"], d.get("code"))
+            if got != "approved":
+                return "INCONCLUSIVE", got
+            result, saw, _ = self.box("paste", limit + 120)
+            saw = "approved, prompt pasted" if result == "ok" else saw
+        return result, saw
+
+    def spend(self):
+        """Section 7 (ledger T6): every spend_every_min, pad-run's usage on the open entry, priced here, one line in
+        watch/spend.jsonl (usd null and a calls.log line when usage was not read); at cap_usd a seal-now in the box, tried
+        again at each later check until it seals. Never a check failure."""
+        every, cap = 60 * float(self.pad.get("spend_every_min", 5)), float(self.pad.get("cap_usd", 10))
+        while not (self.spent.wait(every) or STOP.is_set()):
+            try:
+                result, saw, d = self.box("spend", runner_limits(self.s)["spend"] + 120)
+            except Exception as e:
+                result, saw, d = "error", type(e).__name__, {}
+            # pad-run normalized the S7 models already (pad-run spend): read its own PADSTEP key, never the seam's
+            read, seal_now = d.get("read") is True, None
+            models = [m for m in d.get("models") or [] if isinstance(m, dict) and isinstance(m.get("model"), str)]
+            usd, high = price(models, self.pad.get("rates") or {}, self.price_key) if read else (None, [])
+            if not read:
+                self.log("spend not read: %s %s" % (result, saw))
+            else:
+                self.usd_live = round(usd, 2)
+            if read and usd >= cap:  # seal-now, then again at every later check until it is sealed
+                self.over_cap = True
+                try:
+                    seal_now, told, _ = self.box("seal-now", runner_limits(self.s)["seal-now"] + 120)
+                except Exception as e:
+                    seal_now, told = "error", type(e).__name__
+                self.log("spend %.2f USD reached the %g USD cap: seal-now %s %s: %s" % (usd, cap, self.name, seal_now, told))
+            append(os.path.join(self.dir, "watch", "spend.jsonl"), {
+                "at": now(), "read": read, "usage_exit": d.get("exit"), "usd": None if usd is None else round(usd, 2),
+                "priced_high": high, "models": {m["model"]: m.get("tokens") for m in models}, "seal_now": seal_now})
+            if seal_now == "ok":
+                return
+
+    def end_spend(self):
+        self.spent.set()
+        if self.spender:
+            self.spender.join(runner_limits(self.s)["spend"] + 240)
 
     def step_fetch(self, step, limit):
         """Section 3, 0:27: fetch-run here (it reads DATABASE_URL and the read-only CLOUDFLARE_* itself, never in
@@ -366,10 +470,10 @@ class Run:
         if not re.fullmatch(r"e[0-9a-f]{16}", entry):
             return "FAIL", "server copy not fetched: no entry id"
         self.log("fetch-run " + entry)
-        got, hide = os.path.join(self.dir, "fetched", entry), set(NEVER_IN_BOX) - set(FETCH)
+        got = os.path.join(self.dir, "fetched", entry)
         try:
             r = call(["sh", os.path.join(REPO, "scripts", "fetch-run.sh"), "--bucket", STAGING_BUCKET, entry,
-                      os.path.dirname(got)], timeout=limit, env={k: v for k, v in os.environ.items() if k not in hide})
+                      os.path.dirname(got)], timeout=limit, env=env_without(set(NEVER_IN_BOX) - set(FETCH)))
         finally:  # a timeout kills sh before its EXIT trap: its work folder (pg_service.conf) goes here
             for left in glob.glob(os.path.join(os.path.dirname(got), ".fetch-run.*")):
                 shutil.rmtree(left, ignore_errors=True)
@@ -396,9 +500,15 @@ class Run:
         with open(os.path.join(self.dir, "meta-box.json")) as f:
             self.meta.update(json.load(f))  # pad-run's keys, merged whole; pad's own keys below win
         s, at = self.s, datetime.datetime.fromtimestamp(self.t0, datetime.timezone.utc).isoformat(timespec="seconds")
+        use = pc.load(self.dir, "verify/usage/%s.json" % self.meta.get("entry"))  # priced as the spend check does
+        if isinstance(pc.dig(use, "s7_models"), list):  # as the live check: no models read is never priced as 0 USD
+            self.models = pc.models(use)
+            usd, self.high = price(self.models, self.pad.get("rates") or {}, self.price_key)
+            self.usd = round(usd, 2)
         with open(os.path.join(self.dir, "meta.json"), "w") as f:
-            json.dump(dict(self.meta, connector=s["harness"], case=self.case, mode=s["mode"], prompt=s["prompt"],
-                           variant=self.variant(), where=s["where"], server=s["server"], keep=s["keep"], minutes=s["minutes"],
+            json.dump(dict(self.meta, spend_usd_est=self.usd, priced_high=self.high, over_cap=self.over_cap, connector=s["harness"],
+                           case=self.case, mode=s["mode"], prompt=s["prompt"], variant=self.variant(), where=s["where"],
+                           server=s["server"], keep=s["keep"], minutes=s["minutes"],
                            started=at, push="not tested", pad_trusted_at=None, steps=[list(ln) for ln in self.lines]),
                       f, indent=1, sort_keys=True)
         self.scan_out()

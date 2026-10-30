@@ -778,3 +778,14 @@ ledger wins over every row here.
   and `mtime_ns` (PRD-02 note). Until PRD-02 adds it, `native_resume.rs` keeps the size and
   `mtime_ns` check only and acceptance lists the gap as known.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-14 slice 3 (merge 00fac28d)
+
+- **The `Calls` helpers are on integration** in `tests/common/recorder.rs`: `opens(c) -> Vec<(Sid,
+  StreamKind, Value)>`, `ends(c) -> Vec<(Sid, EndReason, u64, Option<Value>)>` (the END tail is the
+  fourth field), `events(c) -> Vec<Value>`, `gaps(c) -> Vec<Call>`, `data_of(c, sid)` and a generic
+  `pick(c, f)`. PRD-04's next slice deletes the private `opens`, `ends` and `lost` in `native_tail.rs`
+  and `events` in `native_walk.rs` and calls `common::recorder`; `lost`'s shape is one `pick` over
+  `Call::Gap` at the call site. The lines saved count against PRD-04's 1,600 test ceiling.
+- `native_walk` joins PRD-14's `heavy` group in PRD-14's next touch of `.config/nextest.toml`.
+- No locked ledger item is touched and no owner question comes from this slice.
