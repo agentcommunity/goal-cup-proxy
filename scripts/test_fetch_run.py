@@ -14,6 +14,7 @@ import hashlib
 import json
 import os
 import random
+import re
 import subprocess
 import tempfile
 import unittest
@@ -296,7 +297,7 @@ class FetchRunTest(unittest.TestCase):
         self.assertTrue(sql.lstrip().upper().startswith("BEGIN READ ONLY"), sql)
         self.assertTrue(sql.rstrip().upper().endswith("ROLLBACK;"), sql)
         for word in ("INSERT", "UPDATE", "DELETE", "DROP", "ALTER", "TRUNCATE", "COMMIT", "GRANT"):
-            self.assertNotIn(word, sql.upper(), word)
+            self.assertIsNone(re.search(rf"\b{word}\b", sql.upper()), word)
         self.assertNotIn(RUN, sql, "the id is a psql variable, never spliced into the SQL")
         args = (self.root / "fake.psql.args").read_text()
         self.assertIn(f"id={RUN}", args)
