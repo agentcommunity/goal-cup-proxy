@@ -12,15 +12,21 @@ use std::fs::File;
 use std::io::{self, Read};
 
 /// The three checks, in report order.
-pub const IDS: [&str; 3] = ["server_chunks_whole", "server_equals_local", "server_counts_match"];
+pub const IDS: [&str; 3] = [
+    "server_chunks_whole",
+    "server_equals_local",
+    "server_counts_match",
+];
 
-/// `<entry>/fetch.json`, or the result all three checks take without it: fetch-run always writes
-/// it beside the copy (S13), so a copy without one has no chunk list to judge it whole by.
+/// `<entry>/fetch.json`, or the result all three checks take without it. fetch-run always writes
+/// it beside the copy (S13): under `--server` (`asked`) a copy without one has no chunk list to
+/// prove it whole, and fails; a bare `rec.gcr.zst` checked without `--server` skips.
 pub type Fetched = Result<Value, (Res, String)>;
 
-pub fn read(e: &Entry) -> Fetched {
+pub fn read(e: &Entry, asked: bool) -> Fetched {
+    let gone = if asked { Res::Fail } else { Res::Skip };
     let b = std::fs::read(e.dir.join("fetch.json"));
-    let b = b.map_err(|_| (Res::Fail, "no fetch.json beside the copy".to_string()))?;
+    let b = b.map_err(|_| (gone, "no fetch.json beside the copy".to_string()))?;
     serde_json::from_slice(&b).map_err(|x| (Res::Fail, format!("fetch.json is not JSON: {x}")))
 }
 
@@ -42,8 +48,9 @@ pub fn checks(e: &Entry, f: &Fetched, o: &Outcome, local: Option<&Input>) -> Vec
     };
     let mut whole = Check::new("server_chunks_whole", None, Res::Pass, "");
     // fetch-run stops the copy before a bad or missing object or a chain break, and names it.
-    let (cut, at) = (&f["missing"]["why"], f["missing"]["offset"].as_u64().unwrap_or(0));
-    let cut = cut.as_str().map(|w| (format!("the copy stops at byte {at}: {w}"), at));
+    let at = f["missing"]["offset"].as_u64().unwrap_or(0);
+    let cut = f["missing"]["why"].as_str();
+    let cut = cut.map(|w| (format!("the copy stops at byte {at}: {w}"), at));
     if let Some((why, at)) = cut.or_else(|| broken(e, f, o)) {
         (whole.result, whole.why) = (Res::Fail, why);
         whole.first = Some(json!({"o": at, "sid": 0, "wall": null}));
@@ -111,7 +118,8 @@ fn equal(e: &Entry, o: &Outcome, local: Option<&Input>) -> Check {
     let Some((l, rec)) = found.find(ours) else {
         // A `--local` folder whose part files were all pruned resolves to no entry (main.rs).
         let gone = local.is_some_and(|i| i.entries.is_empty());
-        return c(Res::Skip, if gone { pruned } else { "no --local entry with this entry id" });
+        let why = if gone { pruned } else { "no --local entry with this entry id" };
+        return c(Res::Skip, why);
     };
     if !matches!(rec, Record::Part { raw_offset: 0, .. }) {
         return c(Res::Skip, pruned);

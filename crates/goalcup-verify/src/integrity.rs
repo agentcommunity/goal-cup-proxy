@@ -64,7 +64,9 @@ const COUNTERS: &str = "http_req http_post ws_up_msgs ws_down_msgs req_whole req
 
 /// Adds each `v` to its `x` without overflow: a crafted record must not panic or wrap (L-VR3).
 fn sat<const N: usize>(x: [&mut u64; N], v: [u64; N]) {
-    x.into_iter().zip(v).for_each(|(x, v)| *x = x.saturating_add(v));
+    x.into_iter()
+        .zip(v)
+        .for_each(|(x, v)| *x = x.saturating_add(v));
 }
 
 /// A recount of COUNT keys, plus what S6 shows beside them.
@@ -102,7 +104,8 @@ impl Recount {
             let x = self.by_reason.entry(r.clone()).or_default();
             sat([&mut x.0, &mut x.1, &mut x.2], [*n, *b, *u]);
         }
-        sat([&mut self.after_stop, &mut self.off_spans], [o.after_stop, o.off_spans]);
+        sat([&mut self.after_stop], [o.after_stop]);
+        sat([&mut self.off_spans], [o.off_spans]);
     }
     /// The COUNT keys as JSON, to compare with a COUNT event or the seal's `totals`.
     fn json(&self) -> Map<String, Value> {
@@ -514,8 +517,9 @@ impl Pass {
                 } else {
                     self.cur.add("lost_bytes", lost_b);
                 }
+                let u = u64::from(*lost == 0);
                 let r = self.cur.by_reason.entry(name.clone()).or_default();
-                sat([&mut r.0, &mut r.1, &mut r.2], [1, lost_b, u64::from(*lost == 0)]);
+                sat([&mut r.0, &mut r.1, &mut r.2], [1, lost_b, u]);
                 if *reason == GapReason::AfterStop {
                     sat([&mut self.cur.after_stop], [lost_b]);
                 }

@@ -169,7 +169,8 @@ fn fw3_pruned_entry_is_named_and_server_copy_stands_in() {
     e.count();
     let d = e.seal();
     let out = fetch(&d, "pruned", |_, _| {});
-    let (parts, local) = (part_files(&d.join("rec")).unwrap(), ["--server", "--local", d.to_str().unwrap()]);
+    let parts = part_files(&d.join("rec")).unwrap();
+    let local = ["--server", "--local", d.to_str().unwrap()];
     for (n, gone) in [&parts[..1], &parts[1..]].into_iter().enumerate() {
         gone.iter().for_each(|p| fs::remove_file(p).unwrap());
         if n == 0 {
@@ -178,7 +179,7 @@ fn fw3_pruned_entry_is_named_and_server_copy_stands_in() {
             assert_eq!(ids_with(&v, "named"), ["parts_pruned"]);
         }
         let (code, v) = check(&out, &local);
-        assert_eq!((code, result(&v, "server_chunks_whole")), (0, "pass"), "{n}");
-        assert_eq!(result(&v, "server_equals_local"), "skip", "{n}");
+        let r = (result(&v, "server_chunks_whole"), result(&v, "server_equals_local"));
+        assert_eq!((code, r), (0, ("pass", "skip")), "{n}");
     }
 }

@@ -33,7 +33,7 @@ pub fn build(input: &Input, now_ns: Option<u64>, local: Option<&Input>) -> Repor
     let (mut exit, mut text, mut entries) = (0u8, String::new(), Vec::new());
     let (mut run, mut all) = (Value::Null, Vec::new());
     for e in &input.entries {
-        let f = is_server.then(|| server::read(e));
+        let f = is_server.then(|| server::read(e, input.server));
         let want = f.as_ref().map(server::wanted).unwrap_or_default();
         let mut o = integrity::check(e, now_ns, &want);
         let mut checks = std::mem::take(&mut o.checks);
