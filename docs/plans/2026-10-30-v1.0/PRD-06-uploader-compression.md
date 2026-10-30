@@ -815,3 +815,16 @@ PRD-12 and PRD-17.
   client works before and after step 3.
 - **`upload_worker.rs` under `fetch-run.sh --local` sees one heartbeat row per entry** (the local
   store keeps `last_vitals` only). U6's check of every heartbeat row reads a staging fetch.
+
+### 2026-10-30, replan after PRD-10 slice 1 (merge d55030ee)
+
+- **S11 is on integration** (`goalcup::cli::log::{line, Fact, Host}`). Upload errors go in as
+  `Fact::Io(kind)` for I/O, `Fact::N` for an HTTP status or a byte count (the after-seal count
+  included), and `Fact::Word` for a server word from S10's fixed set; never a response body, a server
+  message text, the address with a query, or the credential. The server host, when logged, is
+  `Fact::Host(Host::checked(..))` of the parsed `GOALCUP_SERVER` authority. `line` never creates a
+  folder, so log against an entry folder that exists.
+- `cli::server()` returns `Result<Server, &'static str>` with `Server::Url` (no trailing `/`) or
+  `Server::Off`; it refuses a user part in the address and `http://` off loopback. The uploader takes
+  the base address from it and adds no check of its own.
+- No locked ledger item is touched and no owner question comes from this slice.
