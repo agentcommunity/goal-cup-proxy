@@ -1220,3 +1220,36 @@ PRD-01, PRD-02, PRD-04, PRD-05 and PRD-11 as they now stand, and the code. No lo
   note whether that rule holds as written, so PRD-15 drops the mark or corrects the line. No code
   change is asked of PRD-10.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-15 slice 7 (merge 938f6733)
+
+- **The delete of `skills/goal-cup-setup/` can go in any PRD-10 slice now.** `README.md`,
+  `docs/PARTICIPANT-GUIDE.md`, `docs/README.md` and `AGENTS.md` no longer link it. It does not have
+  to wait for the third slice: the 12:16Z planner line held it there only for these links. Before the
+  delete, the slice runs `git grep -n goal-cup-setup -- ':!docs/plans/'` in its box; the only hit
+  outside the skill itself should be `docs/archive/PARTICIPANT-GUIDE-0.6.md:13`.
+- **That archive link is PRD-15's and stays** (history; PRD-15 note). PRD-10 does not edit it, and
+  the delete does not wait on it.
+- **Correction:** CI does not run `check-links.py` on integration (neither `gate.sh` nor `ci.yml`), so
+  a broken link fails no check. The 12:56Z line's "(check-links runs in CI)" was not true.
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-06 slice 1 (merge e6bd8a50)
+
+- **S9 is on integration:** `goalcup::upload::state::{read, UploadJson, State, Final, FileWord, FILE}`.
+  `read(entry_dir) -> Option<UploadJson>` returns None for a missing or corrupt file, accepts unknown
+  keys, and gives every key a default. Status, the end screen and `time-left` take this type, not a
+  loose `Value`. `state` is one of `local`, `sending`, `caught_up`, `waiting`, `refused`, `stuck`,
+  `done` or `closed`. `final` is `none`, `sent` or `sealed`. `server_word.asked_at` is an RFC 3339
+  string (parse it with `cli::unix_of`).
+- **Until PRD-06's sender slice merges,** an entry with a server shows `state: waiting` and
+  `last_error {class: internal}` with the text that the sender is not in this build yet. Its
+  `server_word` stays null, so `time-left` gives its null answer. That is the honest state, not a
+  PRD-10 bug. Test the upload lines from fixture files, as planned.
+- **`upload::client::ServerClient` is on integration** for device flow, open and continue:
+  `ServerClient::new(base, Option<Token>)`, `Token::new(..)`,
+  `json::<T, B>(method, path, Option<&B>) -> Result<T, ServerError>` and `ServerError::retry_after()`.
+  Take the base from `cli::server()` only. A JSON call ends in about 30 s, and in the worst case about
+  60 s on a peer that trickles bytes, until PRD-06 takes BR2-r1. The device-flow poll measures its
+  expiry on its own clock and does not count calls.
+- No locked ledger item is touched and no owner question comes from this slice.

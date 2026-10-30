@@ -16,8 +16,7 @@ Agents working in this repository: read [AGENTS.md](AGENTS.md) first.
 ## Quick start for participants
 
 The full walk-through, with every message you will see, is the
-[participant's guide](docs/PARTICIPANT-GUIDE.md). The contract is [RULES](docs/RULES.md). You can
-also hand the setup to your own agent with the [goal-cup-setup skill](skills/goal-cup-setup/SKILL.md).
+[participant's guide](docs/PARTICIPANT-GUIDE.md). The contract is [RULES](docs/RULES.md).
 
 1. **Install** the latest release (macOS or Linux; on Windows, inside WSL2):
 

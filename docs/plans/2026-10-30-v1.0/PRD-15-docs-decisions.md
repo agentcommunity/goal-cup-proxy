@@ -1132,3 +1132,39 @@ links). It added the `check --json` report section to `docs/RECORD-FORMAT.md` fr
   RECORD-FORMAT numbers (PRD-02 core merge), the HARNESS-ONBOARDING pointer (PRD-12's skill rewrite),
   and the third slice.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-15 slice 7 (merge 938f6733)
+
+Slice 7 dropped the four live links to `skills/goal-cup-setup/` (`README.md`, `docs/PARTICIPANT-GUIDE.md`,
+`docs/README.md`, the `skills/` row of the `AGENTS.md` map). The cross-lane ask in the PRD-10 slice 2
+note is closed; PRD-10's delete of the skill can follow (PRD-10 note).
+
+- **One link stays, as history (A-N1).** `docs/archive/PARTICIPANT-GUIDE-0.6.md:13` still links
+  `../../skills/goal-cup-setup/SKILL.md` and breaks when PRD-10 deletes the skill. It is not edited:
+  the archive is history. PRD-15's last `check-links.py` run (before PRD-14 deletes the script) names
+  it in its filter list next to `docs/CONTRACTS.md` to `#pin-evolution`, and acceptance lists both as
+  known broken links in history docs.
+- **Correction to the PRD-10 slice 2 note.** Its premise "because CI runs check-links" is not true of
+  integration: neither `scripts/gate.sh` nor `.github/workflows/ci.yml` runs `scripts/check-links.py`
+  (PRD-14 took it out of the gate in phase 0). Only PRD-15's own runs look at links. Nothing waits on
+  link checks in CI.
+- **The `AGENTS.md` map row** now reads "`goal-cup` (copied into the harness home) and
+  `adding-a-capture-harness` (contributors)". The map rewrite (after the PRD-02 core merge) keeps it
+  true of PRD-12's skill rewrite.
+- **Still waiting, unchanged:** the usage section (PRD-09 core), the AGENTS.md map, ARCHITECTURE and
+  RECORD-FORMAT numbers (PRD-02 core merge), the HARNESS-ONBOARDING pointer (PRD-12's skill rewrite),
+  the `continue` mark (PRD-10 `continue`), the CONNECTOR-SCHEMA (next slice) marks, nit B-N4, and the
+  third slice.
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-08 slice 2 (merge 669f5d92)
+
+- For `docs/RECORD-FORMAT.md` (the `check --json` section), from PRD-08's merge note. Under
+  `--server`, the three ids `server_chunks_whole`, `server_equals_local` and `server_counts_match`
+  are built and no longer "not built in this slice". The top-level `server` object
+  `{chunks, whole, equals_local, db_match}` is filled. New exit rules: a missing `fetch.json` under
+  `--server` gives all three `fail`; `final` null gives `server_chunks_whole` `named` (exit 1); a
+  `--local` path that never held a record exits 3; a seal with no `reason` or `totals` is reported,
+  never exit 3. The seven local ids stay `skip` "not built in this slice" until their slices.
+  PRD-15's next slice updates the page; no code change is asked of PRD-08.
+- No locked ledger item is touched and no owner question comes from this slice.

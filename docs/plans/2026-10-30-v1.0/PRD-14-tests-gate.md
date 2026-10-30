@@ -853,3 +853,48 @@ PRDs they touch and the code. Where two fixes disagree, the ledger and the later
 - The crate declares no test hook and reads no `GOALCUP_TEST_*` variable; PRD-14's grep of the shipped
   binary needs no exception for it.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-14 slice 2 (merge 04886295)
+
+- **Done in slice 2:** `upstream.rs` real for TLS with a chosen ALPN or plain TCP, HTTP/1.1 (whole,
+  chunked, SSE, codings), WebSocket with permessage-deflate, held handshakes and answers and close
+  after N bytes; a connection whose TLS chose `h2` panics its task with a clear line until slice 3.
+  `worker.rs` real for the S5 routes with its own position, the S5 `counts` bound (0 to 2^53-1, as
+  the real Worker's `isFlatCounts`; a bad `counts` is dropped with `200`) and injected answers that
+  carry status and body. `ci.yml`, `CODEOWNERS` (section 10 paths) and `release.sh tag` (section 9,
+  nit B8 taken) are in. `gate fast: PASS in 122s` on the lane branch before the merge. A
+  `ci.yml` YAML parse ran in a box once (reviewer A, 14:56Z); `shellcheck` was skipped (not
+  installable in the box).
+- **CI rule changed from the slice 1 note** (review A1 and F1): the push group is per sha, not
+  `ci-${{ github.ref }}`: `group: ci-${{ github.event_name == 'pull_request' && github.ref ||
+  github.sha }}` with `cancel-in-progress` true only for pull requests. A fixed group with
+  `cancel-in-progress: false` still lets a third push cancel the second's pending run, which this
+  avoids. Section 9's "`cancel-in-progress` keeps only the newest" now holds for pull requests only;
+  every push to integration and main runs to the end. Run 41078054029 (04886295) is the first run
+  under the new rule (in progress at 15:10Z). The earlier runs on 9e89a22d and 48d0aeb7 were still
+  cancelled under the old rule. G4 is read from completed runs from 04886295 on.
+- **`release.sh tag` runs the release check from a worktree at origin/main's sha**, so PRD-12's nit
+  B3 (`table` reading `HEAD`'s rows) no longer affects the tag (PRD-12 note). It runs `python3`;
+  `table` stays 3.9-clean.
+- **Still open from sections 9 and 10:** `.github/PULL_REQUEST_TEMPLATE.md` (the `row.json` line for a
+  connector; it already asks for the `gate fast` line and names no `pin-manifests.sh`), packaging,
+  `smoke-release.sh`, `install.sh`, `test_install.py`, `third-party-licenses.py` and `release.yml`
+  (after PRD-10's `status --json`), the `check-links.py` delete (phase 3). `test_codeowners.py` is
+  already gone from integration.
+- **Slice 3 adds to `recorder.rs`:** `real(dir)` once `Recorder::real_for_tests` is on integration,
+  and the `opens`, `ends` and `events` helpers over `Calls` PRD-04 asked for at 14:31Z (native,
+  proxy and pipeline tests each carry a copy today). Their owners delete the copies when the helpers
+  land (PRD-04 note), so the Rust test total falls.
+- **Size against section 3** (`wc -l` at 04886295): `tests/common/` 1,444 of 1,480 (`mod` 61,
+  `ports` 33, `fds` 27, `home` 171, `pki` 115, `upstream` 602 of 700, `worker` 334 of 250,
+  `recorder` 29, `records` 72); `rule_code.rs` 213; `e2e_run.rs` not started. In all 1,657 of 1,700.
+  `worker.rs` broke the slice 1 note's 250 by 84 (134%): the review fixes added the S5 `counts` bound
+  (G3-X22) and injected answers with status and body and closing live connections on drop (PRD-06's
+  backoff and drop-after-commit cases). **Decision:** those lines serve point 5 (upload) and point 3
+  (never-stop rules), so `worker.rs` keeps them; the ceiling for the whole of `tests/common/`,
+  `rule_code.rs` and `e2e_run.rs` stays 1,870. Slice 3 has 213 lines left for HTTP/2 (at most 98,
+  to 700), `recorder.rs` (`real` and the three helpers) and `e2e_run.rs` (140): it cuts `home.rs`
+  to 120 first, and a result past 1,870 needs a decision line in the night log naming the point.
+- **Housekeeping:** the stray branch `v1.0/prd-14-tests-lane-merge-wip` (same sha as the lane merge
+  8a7f5c05) is still on origin; the remote refused its delete. The integrator removes it at the end.
+- No locked ledger item is touched and no owner question comes from this slice.
