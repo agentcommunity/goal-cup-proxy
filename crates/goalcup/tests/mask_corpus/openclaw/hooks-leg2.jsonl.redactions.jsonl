@@ -1,0 +1,5 @@
+{"kind": "email", "start": 157186, "end": 157202, "sha256_8": "7fe0ab24"}
+{"kind": "email", "start": 157204, "end": 157220, "sha256_8": "7fe0ab24"}
+{"kind": "email", "start": 158586, "end": 158602, "sha256_8": "7fe0ab24"}
+{"kind": "email", "start": 158604, "end": 158620, "sha256_8": "7fe0ab24"}
+{"kind": "gateway_token", "occurrences": 9, "note": "spike-local loopback shared secret, appeared in plugin.loaded env.argv"}
