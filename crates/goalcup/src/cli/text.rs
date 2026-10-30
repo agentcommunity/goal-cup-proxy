@@ -56,6 +56,86 @@ path. Set HOME, or GOALCUP_HOME, to a folder outside your project.";
 pub const NO_CWD: &str = "goalcup cannot tell where to keep your runs: GOALCUP_HOME is not a full \
 path and the current folder cannot be read. Set GOALCUP_HOME to a full path outside your project.";
 
+// The folder checks of `goalcup start` (section 3 step 2). Every path is quoted.
+
+/// The lead line of the one folder refusal; a line per problem follows, then [`NOTHING_CREATED`].
+pub const FOLDER_REFUSED: &str = "this folder cannot hold a run yet. Fix each of these, then run \
+the command again:";
+
+/// The last line of a refusal that came before anything was made.
+pub const NOTHING_CREATED: &str = "Nothing was created.";
+
+/// Stands for a folder entry whose name could not be read.
+pub const UNREADABLE_ENTRY: &str = "an entry that could not be read";
+
+fn quoted(names: &[String]) -> String {
+    let names: Vec<String> = names.iter().map(|n| format!("\"{n}\"")).collect();
+    names.join(", ")
+}
+
+pub fn folder_extra(names: &[String]) -> String {
+    format!(
+        "It holds {}. Start in a new folder that holds only .gitignore, .DS_Store and .env files.",
+        quoted(names)
+    )
+}
+
+pub fn env_not_ignored(names: &[String]) -> String {
+    format!(
+        ".gitignore does not cover {}, so a push could publish it. Add the line .env* to \
+         .gitignore.",
+        quoted(names)
+    )
+}
+
+pub fn inside_git(work_tree: &Path) -> String {
+    format!(
+        "It is inside the Git work tree \"{}\". Start in a folder outside any Git repository.",
+        work_tree.display()
+    )
+}
+
+/// PRD-17 SC1: the agent must never see the record.
+pub fn beside_goalcup(own: &Path) -> String {
+    format!(
+        "It and goalcup's folder \"{}\" hold each other or sit side by side. Start in a folder \
+         elsewhere, or set GOALCUP_HOME to a folder away from it.",
+        own.display()
+    )
+}
+
+/// The line the push block reads; the value is never shown.
+pub const TOKEN_LINE: &str = "\".env.local\" has no plain GH_TOKEN=<your token> line (no quotes, \
+no export, no spaces). Add one: the push block reads it.";
+
+pub fn prompt_inside(file: &Path) -> String {
+    format!(
+        "The prompt file \"{}\" is inside the project folder. Move it out of the folder.",
+        file.display()
+    )
+}
+
+pub fn prompt_missing(file: &Path) -> String {
+    format!("The prompt file \"{}\" does not exist.", file.display())
+}
+
+pub fn synced_folder(project: &Path) -> String {
+    format!(
+        "\"{}\" looks like a synced folder: a sync client may upload .env.local and your token. \
+         A folder that is not synced is safer.",
+        project.display()
+    )
+}
+
+/// The entry lock is an `flock`, which NFS and SMB may not keep.
+pub fn network_folder(dir: &Path, kind: &str) -> String {
+    format!(
+        "\"{}\" is on {kind}, where file locks may not hold. A folder on this computer's own \
+         disk is safer.",
+        dir.display()
+    )
+}
+
 /// A command whose body is not in this build yet.
 pub fn not_built(command: &str) -> String {
     format!("{command} is not built yet")
@@ -453,23 +533,27 @@ pub fn unknown_note(what: &str) -> String {
 
 /// Section 5 rule 6: bytes after the seal's last link.
 pub fn after_seal(name: &str, bytes: u64, hosts: &[String]) -> String {
-    let hosts = if hosts.is_empty() {
+    format!(
+        "Programs {name} started sent {} after this part ended{}; that was not recorded.",
+        size_words(bytes),
+        listed(hosts)
+    )
+}
+
+/// ` (a, b)`, or nothing for an empty list.
+fn listed(items: &[String]) -> String {
+    if items.is_empty() {
         String::new()
     } else {
-        format!(" ({})", hosts.join(", "))
-    };
-    format!(
-        "Programs {name} started sent {} after this part ended{hosts}; that was not recorded.",
-        size_words(bytes)
-    )
+        format!(" ({})", items.join(", "))
+    }
 }
 
 /// The harness exited and the run is still open.
 pub fn agent_exited(name: &str, exit: Exit, until: &str, run: &str) -> String {
     format!(
-        "{name} has exited ({}). The run is still open until {until}. To go on, run: goalcup \
-         continue {run}",
-        exit_words(exit)
+        "{} The run is still open until {until}. To go on, run: goalcup continue {run}",
+        has_exited(name, exit)
     )
 }
 
@@ -593,14 +677,10 @@ pub fn cut_files(files: u64, bytes: u64) -> String {
 
 /// Rule 6, outlived processes.
 pub fn outlived(name: &str, count: u64, programs: &[String]) -> String {
-    let list = if programs.is_empty() {
-        String::new()
-    } else {
-        format!(" ({})", programs.join(", "))
-    };
     format!(
-        "{} {name} started were still running at the end{list}. goalcup did not stop them.",
-        plural(count, "program", "programs")
+        "{} {name} started were still running at the end{}. goalcup did not stop them.",
+        plural(count, "program", "programs"),
+        listed(programs)
     )
 }
 
