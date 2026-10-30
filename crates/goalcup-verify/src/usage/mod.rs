@@ -1,17 +1,13 @@
 //! Seam U1 (PRD-09): the usage call table, one row per model call, and the `usage` subcommand.
 //!
-//! [`Calls`] takes every record of an entry in order ([`Calls::push`]) and [`Calls::finish`] gives
-//! the [`CallTable`]. The sink reads PART, LINK and the `start` EVENT from the pushed records; it
-//! takes no argument of its own. The wire leg is read (`wire.rs`); the native leg is not yet, so
-//! the table keeps [`Reason::NoReader`], no threads and children not read.
-//!
-//! Build a [`CallRow`], [`Thread`] or [`CallTable`] with [`CallRow::new`], [`Thread::new`] or
-//! [`CallTable::default`], then set fields (or use struct update from one of them); never with a
-//! full struct literal, so a field added later breaks no caller.
-//!
-//! Wall times are nanoseconds since the Unix epoch, as the LINK `wall_ns` of `goalcup_format`. A
-//! token count of `None` means the source did not say; it is never 0 for that (PRD-09 section 4).
+//! [`Calls`] takes every record of an entry in order and gives the [`CallTable`]: the wire leg
+//! (`wire.rs`), the native leg (`native.rs`, by the connector's reader in `hints.rs`) and the join.
+//! Build rows, threads and tables from [`CallRow::new`], [`Thread::new`] or
+//! [`CallTable::default`], never a full struct literal, so a field added later breaks no caller.
+//! Wall times are ns since the Unix epoch (LINK `wall_ns`); a token count of `None` means not said.
 
+mod hints;
+mod native;
 mod shapes;
 mod sse;
 mod wire;
@@ -23,31 +19,26 @@ use std::process::ExitCode;
 use goalcup_format::Record;
 use serde_json::Value;
 
-/// Which log a row comes from; also which leg a call's tokens came from (`usage_from`).
+/// Which log a row comes from, the wire or the harness's own session log; also `usage_from`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Leg {
-    /// The recorded wire: a request and its reply.
     #[default]
     Wire,
-    /// The harness's own session log, read back out of the record.
     Native,
 }
 
-/// What a row is (PRD-09 section 3). Only `Call` is a model call.
+/// What a row is (section 3): a model `Call`, a `Warmup` (`generate: false`), an `Interrupt`, or
+/// `Other` POST to a listed host.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Kind {
     #[default]
     Call,
-    /// `response.create` with `generate: false`.
     Warmup,
-    /// `response.interrupt`.
     Interrupt,
-    /// Any other POST to a listed host.
     Other,
 }
 
-/// How a call ended, one per call (PRD-09 section 3). `status` is the HTTP status where there is
-/// one; `code` is the safe error code token, never text from the run.
+/// How a call ended (PRD-09 section 3); `code` is a safe error code token, never run text.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub enum Outcome {
     Ok,
@@ -86,13 +77,12 @@ pub enum Join {
     Unattributed,
 }
 
-/// The host's kind: the `conn` meta `kind`, else the `start` event's `hosts` (PRD-09 section 7).
+/// The `conn` meta `kind`, else the `start` hosts' (section 7); `Other` for participant and config.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum HostKind {
     Provider,
     Gateway,
     Vendor,
-    /// Participant and config hosts.
     Other,
 }
 
@@ -112,14 +102,11 @@ pub enum Via {
     Ws,
 }
 
-/// What a connector's native leg can give (PRD-08 section 3.1).
+/// What the native leg gives: per-call rows with times, per-session totals, or none (PRD-08 3.1).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum NativeForm {
-    /// Per-call rows with times.
     PerCall,
-    /// Per-session totals only.
     Totals,
-    /// No native leg.
     None,
 }
 
@@ -134,24 +121,18 @@ pub enum Reason {
     NoNative,
 }
 
-/// The five token numbers of one call. `None` means not said, never 0.
+/// The five token numbers of one call, `None` meaning not said (never 0): input not read from a
+/// cache, `cached` input, `cache_write` input, `output` (reasoning included) and its `reasoning`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Tokens {
-    /// Input tokens not read from a cache.
     pub input: Option<u64>,
-    /// Input tokens read from a cache.
     pub cached: Option<u64>,
-    /// Input tokens written to a cache.
     pub cache_write: Option<u64>,
-    /// Output tokens, reasoning included.
     pub output: Option<u64>,
-    /// The reasoning part of `output`.
     pub reasoning: Option<u64>,
 }
 
-/// One row: a wire call, warm-up, interrupt or other request, or a native call. The wire fields
-/// (`sid`, `msg`, `host`, `host_kind`, `shape`, `via`) are `None` on native rows, `path` on wire
-/// rows.
+/// One wire request (call, warm-up, interrupt, other) or native call; wire-only fields are `None`.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct CallRow {
     pub leg: Leg,
@@ -187,14 +168,13 @@ pub struct CallRow {
     pub tokens: Tokens,
     /// Other numeric usage members whose name ends in `tokens`, `Tokens` or `TokenCount`.
     pub extra: BTreeMap<String, u64>,
-    /// Which leg `tokens` came from; never both added.
+    /// The leg counted for this call, never both: a merged total sums rows where this is `Some`.
     pub usage_from: Option<Leg>,
     pub join: Option<Join>,
 }
 
 impl CallRow {
-    /// A row of boot `boot` with every optional field empty, `outcome` `Unknown` and `whole`
-    /// false. Boots count from 0, so `boot` is always given, never assumed.
+    /// A row with every optional field empty, `outcome` `Unknown`, `whole` false.
     pub fn new(leg: Leg, entry: impl Into<String>, boot: u64, kind: Kind) -> Self {
         Self {
             leg,
@@ -254,11 +234,8 @@ pub struct CallTable {
     pub rows: Vec<CallRow>,
     /// The threads read.
     pub threads: Vec<Thread>,
-    /// Parent thread id to the child threads it names; `None` when no source of parentage was
-    /// read. Whether it was read does not follow from `readable` or `reason`: a path-only harness
-    /// has `no_reader` yet gives who spawned whom, and an unreadable database gives nothing. A
-    /// check that needs it (`subagents_present`) skips on `None`, never passes, and runs on
-    /// whatever was read otherwise.
+    /// Parent thread id to its children; `None` when no parentage was read (independent of
+    /// `reason`), and then `subagents_present` skips.
     pub children: Option<BTreeMap<String, Vec<String>>>,
     /// Why the native leg is not readable; `None` means readable.
     pub reason: Option<Reason>,
@@ -268,8 +245,7 @@ pub struct CallTable {
 }
 
 impl Default for CallTable {
-    /// The empty table of an entry with no reader: not readable, [`Reason::NoReader`], children
-    /// not read.
+    /// The table of an entry with no reader: [`Reason::NoReader`], children not read.
     fn default() -> Self {
         Self {
             rows: Vec::new(),
@@ -300,10 +276,11 @@ fn host_kind(s: Option<&str>) -> Option<HostKind> {
     }
 }
 
-/// What the sink knows of the boot being read: entry, boot, wall base and the `start` hosts.
+/// What the sink knows of the boot being read: entry, boot, wall base and the `start` event.
 #[derive(Debug, Default)]
 struct Ctx {
     entry: String,
+    connector: Option<String>,
     boot: u64,
     /// (wall_ns, mono_ns) of the last PART or LINK of this boot.
     base: Option<(u64, u64)>,
@@ -318,8 +295,7 @@ impl Ctx {
         u64::try_from(i128::from(w) + i128::from(t) - i128::from(m)).ok()
     }
 
-    /// Whether the `start` hosts list `host` (`*.x` matches by suffix): `Some` with the kind they
-    /// give it when listed.
+    /// `Some(kind)` when the `start` hosts list `host` (`*.x` matches by suffix).
     fn listed(&self, host: &str) -> Option<Option<HostKind>> {
         let h = host.to_ascii_lowercase();
         let hit = |p: &str| match p.strip_prefix('*') {
@@ -330,6 +306,7 @@ impl Ctx {
     }
 
     fn start(&mut self, ev: &Value) {
+        self.connector = ev["connector"].as_str().map(str::to_string);
         let lists = ev
             .get("hosts")
             .and_then(Value::as_object)
@@ -346,12 +323,12 @@ impl Ctx {
     }
 }
 
-/// The U1 sink: push every record of an entry in order, then finish. No `Debug`: it holds body
-/// bytes, which no panic or log may print (PRD-17 VR2).
+/// The U1 sink. No `Debug`: it holds body bytes, which no panic or log may print (PRD-17 VR2).
 #[derive(Default)]
 pub struct Calls {
     ctx: Ctx,
     wire: wire::Wire,
+    native: native::Native,
 }
 
 impl Calls {
@@ -385,21 +362,109 @@ impl Calls {
                     self.ctx.start(&ev);
                 }
             }
-            _ => self.wire.push(&self.ctx, rec),
+            _ => {
+                self.wire.push(&self.ctx, rec);
+                self.native.push(&self.ctx, rec);
+            }
         }
     }
 
-    /// The table: wire rows in (boot, sid, msg) order; the native leg is not read yet.
+    /// The table: wire rows in (boot, sid, msg) order, then native rows in (path, time) order,
+    /// joined by reply id or by time (PRD-09 section 6).
     pub fn finish(self) -> CallTable {
+        let (mut rows, replies) = self.wire.finish(&self.ctx);
+        let ok = |r: &CallRow| r.kind == Kind::Call && r.outcome == Outcome::Ok;
+        let c = self.ctx.connector.as_deref();
+        if !hints::has_reader(c) {
+            for r in rows.iter_mut().filter(|r| r.kind == Kind::Call) {
+                r.join = Some(Join::WireOnly);
+            }
+            return CallTable {
+                rows,
+                ..CallTable::default()
+            };
+        }
+        let leg = self.native.finish(&self.ctx);
+        let mut nat: Vec<(CallRow, Option<String>)> = leg.rows.into_iter().zip(leg.ids).collect();
+        nat.sort_by(|a, b| (&a.0.path, a.0.wall_end).cmp(&(&b.0.path, b.0.wall_end)));
+        let (mut pair, mut taken) = (vec![None; nat.len()], vec![false; rows.len()]);
+        let (by_id, per_thread) = (hints::by_id(c), hints::wire_hint(c));
+        for (n, (_, id)) in nat.iter().enumerate() {
+            let free = |w: &usize| by_id && id.is_some() && !taken[*w] && ok(&rows[*w]);
+            if let Some(w) = (0..rows.len()).find(|w| free(w) && replies[*w] == *id) {
+                (taken[w], pair[n]) = (true, Some(w));
+            }
+        }
+        // Each native call, in time order, takes the earliest unmatched ok wire call that ends
+        // 120 s before to 5 s after it; of its own thread where the wire names threads.
+        let mut wires: Vec<usize> = (0..rows.len()).filter(|&w| ok(&rows[w])).collect();
+        wires.sort_by_key(|&w| rows[w].wall_end);
+        let mut order: Vec<usize> = (0..nat.len()).filter(|&n| pair[n].is_none()).collect();
+        order.sort_by_key(|&n| nat[n].0.wall_end);
+        let mut joined_by_time = 0;
+        for n in order {
+            let (nr, Some(t)) = (&nat[n].0, nat[n].0.wall_end) else {
+                continue;
+            };
+            let fits = |w: &&usize| {
+                let r = &rows[**w];
+                let near = r.wall_end.is_some_and(|e| {
+                    e.saturating_add(120_000_000_000) >= t && e <= t.saturating_add(5_000_000_000)
+                });
+                !taken[**w] && near && (!per_thread || r.thread.is_some() && r.thread == nr.thread)
+            };
+            if let Some(&w) = wires.iter().find(fits) {
+                (taken[w], pair[n]) = (true, Some(w));
+                joined_by_time += u64::from(by_id);
+            }
+        }
+        for (nr, w) in nat.iter_mut().map(|x| &mut x.0).zip(pair) {
+            let said = nr.tokens != Tokens::default();
+            let Some(w) = w else {
+                (nr.join, nr.usage_from) = (Some(Join::NativeOnly), said.then_some(Leg::Native));
+                continue;
+            };
+            let r = &mut rows[w];
+            r.thread = r.thread.take().or_else(|| nr.thread.clone());
+            r.parent = r.parent.take().or_else(|| nr.parent.clone());
+            if r.usage_from.is_none() && said {
+                (r.tokens, r.extra) = (nr.tokens, nr.extra.clone());
+                r.usage_from = Some(Leg::Native);
+            }
+            (r.join, nr.join) = (Some(Join::Matched), Some(Join::Matched));
+        }
+        for r in rows.iter_mut().filter(|r| r.kind == Kind::Call) {
+            let lost = (per_thread && ok(r) && r.thread.is_none()).then_some(Join::Unattributed);
+            r.join = r.join.or(lost).or(Some(Join::WireOnly));
+        }
+        let reason = (nat.is_empty() && rows.iter().any(ok)).then_some(Reason::NoNative);
+        let mut threads = leg.threads;
+        for id in rows.iter().filter_map(|r| r.thread.as_ref()) {
+            if !threads.iter().any(|t| &t.id == id) {
+                threads.push(Thread {
+                    reason,
+                    ..Thread::new(id.clone())
+                });
+            }
+        }
+        for t in &mut threads {
+            let mine = nat.iter().filter(|x| x.0.thread.as_ref() == Some(&t.id));
+            t.native_calls = mine.clone().count() as u64;
+            t.native_only = mine.filter(|x| x.0.join == Some(Join::NativeOnly)).count() as u64;
+        }
+        rows.extend(nat.into_iter().map(|x| x.0));
         CallTable {
-            rows: self.wire.finish(&self.ctx),
-            ..CallTable::default()
+            rows,
+            threads,
+            children: leg.children.filter(|_| leg.read),
+            reason,
+            native_form: reason.map_or(NativeForm::PerCall, |_| NativeForm::None),
+            joined_by_time,
         }
     }
 }
 
-/// Runs `goalcup-verify usage <args>` (PRD-09 section 7). Not built yet: says so and exits 3 (no
-/// usable report, PRD-08 exit codes).
+/// Runs `goalcup-verify usage <args>` (PRD-09 section 7); not built yet, so exits 3 (no report).
 pub fn run(args: Vec<OsString>) -> ExitCode {
     let _ = args;
     eprintln!("goalcup-verify: the usage reader is not built yet");
