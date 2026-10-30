@@ -351,8 +351,8 @@ fn native_only_counts_the_silent_window() {
 #[test]
 fn every_claude_code_subagent_transcript_counts() {
     let mut e = Entry::new("u-claude");
-    let files = ["S", "S/subagents/agent-a", "S/subagents/workflows/w/agent-b"];
-    for (k, f) in files.iter().enumerate() {
+    let files = "S S/subagents/agent-a S/subagents/workflows/w/agent-b";
+    for (k, f) in files.split(' ').enumerate() {
         let v = json!({"type": "assistant", "message": {"id": k.to_string(),
             "usage": {"input_tokens": 3}, "content": MARK}});
         let (path, body) = (format!("transcripts:p/{f}.jsonl"), format!("{v}\n"));
