@@ -425,7 +425,7 @@ lifecycle("the open keeps its IP and country; heartbeats and a continue keep the
   assert.deepEqual([stored().client_ip, stored().client_country], ["203.0.113.9", "DE"]);
 
   const beat = await r.beat(token, run.run_id, run.entry_id, {}, { "cf-connecting-ip": "203.0.113.50" });
-  assert.deepEqual(Object.keys(beat.body).sort(), ["deadline_at", "reason", "seconds_left", "stop"]);
+  assert.deepEqual(Object.keys(beat.body).sort(), ["deadline_at", "reason", "sealed", "seconds_left", "stop"]);
   assert.deepEqual([stored().client_ip, stored().last_client_ip, stored().last_client_country], ["203.0.113.9", "203.0.113.50", "DE"]);
   const hb = stored().entries[0]!.last_heartbeat;
   assert.deepEqual([hb.client_ip, hb.client_country], ["203.0.113.50", "DE"]);
