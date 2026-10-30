@@ -5,7 +5,7 @@
 
 use std::fmt::Write as _;
 use std::os::unix::ffi::OsStrExt;
-use std::path::{Component, Path};
+use std::path::{Component, Path, PathBuf};
 
 /// A pattern refused at load. PRD-11's connector test calls [`parse`] as PRD-04's pattern check.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -23,6 +23,13 @@ enum Part {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Pattern {
     parts: Vec<Part>,
+}
+
+/// One native row, resolved.
+pub struct Row {
+    pub name: String,
+    pub root: PathBuf,
+    pub pattern: Pattern,
 }
 
 /// Parses a row pattern, refusing an empty or absolute pattern, empty components, `.`, `..`,
@@ -105,10 +112,10 @@ impl Pattern {
 /// The first row, in order, whose root is a prefix of `abs` and whose pattern matches the rest;
 /// returns its index and the path relative to its root. Rows may overlap; the first wins, so the
 /// path ID is unique.
-pub fn first_match<'a>(rows: &[(&Path, &Pattern)], abs: &'a Path) -> Option<(usize, &'a Path)> {
-    rows.iter().enumerate().find_map(|(i, (root, pattern))| {
-        let rel = abs.strip_prefix(root).ok()?;
-        pattern.matches(rel).then_some((i, rel))
+pub fn first_match<'a>(rows: &[Row], abs: &'a Path) -> Option<(usize, &'a Path)> {
+    rows.iter().enumerate().find_map(|(i, row)| {
+        let rel = abs.strip_prefix(&row.root).ok()?;
+        row.pattern.matches(rel).then_some((i, rel))
     })
 }
 

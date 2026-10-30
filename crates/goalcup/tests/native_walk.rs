@@ -4,11 +4,12 @@
 use std::fs;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
-use std::time::Instant;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use goalcup::native::pattern::parse;
+use goalcup::native::pattern::{parse, path_id};
+use goalcup::native::tail::Tail;
 use goalcup::native::walk::{Found, Row, Walker};
-use goalcup::pipeline::{Call, Recorder};
+use goalcup::pipeline::{Call, Cursors, Recorder};
 use serde_json::Value;
 
 fn row(name: &str, root: &Path, pattern: &str) -> Row {
@@ -42,7 +43,7 @@ fn a_file_six_folders_deep_is_found() {
     fs::create_dir_all(&deep).unwrap();
     fs::write(deep.join("s.jsonl"), b"{}\n").unwrap();
     let (rec, _) = Recorder::for_tests(1 << 20);
-    let found = Walker::default().pass(&rec, &[row("t", t.path(), "**/*.jsonl")]);
+    let found = Walker::default().pass(&rec, &[row("t", t.path(), "**/*.jsonl")]).found;
     assert_eq!(rels(&found), [PathBuf::from("a/b/c/d/e/f/s.jsonl")]);
     assert_eq!(found[0].row, 0);
 }
@@ -54,10 +55,11 @@ fn a_root_made_after_the_first_pass_is_found() {
     let rows = [row("t", &root, "*.jsonl")];
     let (rec, calls) = Recorder::for_tests(1 << 20);
     let mut walker = Walker::default();
-    assert!(walker.pass(&rec, &rows).is_empty());
+    let first = walker.pass(&rec, &rows);
+    assert!(first.found.is_empty() && first.unlisted.is_empty());
     fs::create_dir(&root).unwrap();
     fs::write(root.join("s.jsonl"), b"{}\n").unwrap();
-    assert_eq!(rels(&walker.pass(&rec, &rows)), [PathBuf::from("s.jsonl")]);
+    assert_eq!(rels(&walker.pass(&rec, &rows).found), [PathBuf::from("s.jsonl")]);
     assert!(
         events(&calls).is_empty(),
         "a missing root is skipped silently"
@@ -76,7 +78,7 @@ fn twenty_thousand_files_in_four_thousand_folders_are_found_in_one_pass() {
     }
     let (rec, _) = Recorder::for_tests(1 << 20);
     let started = Instant::now();
-    let found = Walker::default().pass(&rec, &[row("t", t.path(), "**/*.jsonl")]);
+    let found = Walker::default().pass(&rec, &[row("t", t.path(), "**/*.jsonl")]).found;
     eprintln!("one pass over 20,000 files took {:?}", started.elapsed());
     assert_eq!(found.len(), 20_000);
 }
@@ -105,7 +107,7 @@ fn no_descriptor_stays_open_after_a_pass() {
     let mut walker = Walker::default();
     let before = open_fds();
     for _ in 0..20 {
-        assert_eq!(walker.pass(&rec, &rows).len(), 3);
+        assert_eq!(walker.pass(&rec, &rows).found.len(), 3);
     }
     assert_eq!(open_fds(), before);
 }
@@ -129,8 +131,8 @@ fn a_folder_on_another_device_is_not_entered_and_named_once() {
     let rows = [row("dev", Path::new("/dev"), "**/*")];
     let (rec, calls) = Recorder::for_tests(1 << 20);
     let mut walker = Walker::default();
-    let mut found = walker.pass(&rec, &rows);
-    found.extend(walker.pass(&rec, &rows));
+    let mut found = walker.pass(&rec, &rows).found;
+    found.extend(walker.pass(&rec, &rows).found);
     let notes: Vec<Value> = events(&calls)
         .into_iter()
         .filter(|e| e["what"] == "native_other_device")
@@ -140,8 +142,58 @@ fn a_folder_on_another_device_is_not_entered_and_named_once() {
             !found.iter().any(|f| f.rel.starts_with(other)),
             "{other} was entered"
         );
-        let named = notes.iter().filter(|n| n["path"] == other.as_str()).count();
+        let id = path_id("dev", Path::new(other));
+        let named = notes.iter().filter(|n| n["path"] == id.as_str()).count();
         assert_eq!(named, 1, "{other} must be named exactly once");
         assert!(notes.iter().all(|n| n["row"] == "dev"));
     }
+}
+
+#[test]
+fn old_files_are_skipped_and_the_new_one_found_among_five_thousand() {
+    let t = tempfile::tempdir().unwrap();
+    let mut last = 0;
+    for i in 0..5000 {
+        let dir = t.path().join(format!("p{}", i / 100));
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join(format!("{i}.jsonl")), b"old\n").unwrap();
+        let m = fs::metadata(dir.join(format!("{i}.jsonl"))).unwrap();
+        last = last.max(m.mtime().max(m.ctime()));
+    }
+    // The run starts on the next whole second after the last old change (section 2).
+    let since = UNIX_EPOCH + Duration::from_secs(last as u64 + 1);
+    while SystemTime::now() < since {
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    fs::write(t.path().join("p7/new.jsonl"), b"new\n").unwrap();
+    let rows = [row("t", t.path(), "**/*.jsonl")];
+    let (rec, calls) = Recorder::for_tests(1 << 30);
+    let mut tail = Tail::new(since, Cursors::default());
+    let walked = Walker::default().pass(&rec, &rows);
+    assert_eq!(walked.found.len(), 5001);
+    for f in walked.found {
+        let id = path_id("t", &f.rel);
+        tail.settle(&rec, id, t.path(), &f.rel, f.stat, false);
+    }
+    let opened: Vec<Value> = calls
+        .all()
+        .into_iter()
+        .filter_map(|c| match c {
+            Call::Open(.., meta) => Some(meta["path"].clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(opened, ["t:p7/new.jsonl"]);
+}
+
+#[test]
+fn a_root_that_cannot_be_opened_for_a_reason_other_than_gone_is_kept_unlisted() {
+    // A 300-byte name fails with ENAMETOOLONG for any user; a missing root is simply absent.
+    let t = tempfile::tempdir().unwrap();
+    let (long, missing) = (t.path().join("n".repeat(300)), t.path().join("later"));
+    let rows = [row("a", &long, "*.jsonl"), row("b", &missing, "*.jsonl")];
+    let (rec, _) = Recorder::for_tests(1 << 20);
+    let walked = Walker::default().pass(&rec, &rows);
+    assert!(walked.found.is_empty());
+    assert_eq!(walked.unlisted, [long]);
 }

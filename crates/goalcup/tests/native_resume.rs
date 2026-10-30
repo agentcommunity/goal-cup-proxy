@@ -2,19 +2,22 @@
 //! resume a file at its written offset, start a new generation when it changed, and keep an
 //! unchanged snapshot from being copied again.
 
+mod common;
+
 use std::ffi::OsStr;
 use std::fs;
 use std::path::Path;
 use std::time::{Duration, UNIX_EPOCH};
 
+use common::recorder::data_of;
 use goalcup::native::fsx::{Dir, Stat};
 use goalcup::native::tail::Tail;
 use goalcup::pipeline::cursors::{NativeCursor, SnapshotCursor};
 use goalcup::pipeline::{Call, Cursors, Recorder};
 use serde_json::Value;
 
-/// An OPEN's meta and `from`, with the DATA (offset, bytes) of its stream.
-type Opened = (Value, u64, Vec<(u64, Vec<u8>)>);
+/// An OPEN's meta and `from`, with the bytes of its stream.
+type Opened = (Value, u64, Vec<u8>);
 
 /// One boot: a Tail on `cursors`, one walk and one read of `name`.
 fn boot(dir: &Path, name: &str, cursors: Cursors, snapshot: bool) -> Vec<Opened> {
@@ -29,19 +32,11 @@ fn boot(dir: &Path, name: &str, cursors: Cursors, snapshot: bool) -> Vec<Opened>
         snapshot,
     );
     tail.read(&rec, 1 << 30, Duration::ZERO);
-    let c = calls.all();
-    let data = |sid: u64| {
-        let f = |c: &Call| match c {
-            Call::Data(s, _, off, b) if *s == sid => Some((*off, b.to_vec())),
-            _ => None,
-        };
-        c.iter().filter_map(f).collect()
-    };
-    let f = |c: &Call| match c {
-        Call::Open(sid, _, _, _, from, _, meta) => Some((meta.clone(), *from, data(*sid))),
+    let f = |c: Call| match c {
+        Call::Open(sid, _, _, _, from, _, meta) => Some((meta, from, data_of(&calls, sid))),
         _ => None,
     };
-    c.iter().filter_map(f).collect()
+    calls.all().into_iter().filter_map(f).collect()
 }
 
 fn stat(dir: &Path, name: &str) -> Stat {
@@ -75,7 +70,7 @@ fn the_same_file_resumes_its_generation_at_the_cursor() {
         (&o[0].0["gen"], &o[0].0["from"], o[0].1),
         (&Value::from(3), &Value::from(4), 4)
     );
-    assert_eq!(o[0].2, [(4, b"456789".to_vec())]);
+    assert_eq!(o[0].2, b"456789");
 }
 
 #[test]
@@ -88,7 +83,7 @@ fn a_changed_fid_or_a_shorter_file_starts_the_next_generation_from_zero() {
     for cursors in [cursor("row:a", 3, &other, 4), shorter] {
         let o = boot(dir.path(), "a", cursors, false);
         assert_eq!((&o[0].0["gen"], o[0].1), (&Value::from(4), 0));
-        assert_eq!(o[0].2, [(0, b"0123456789".to_vec())]);
+        assert_eq!(o[0].2, b"0123456789");
     }
 }
 
@@ -107,5 +102,5 @@ fn a_snapshot_equal_to_its_cursor_is_not_copied_again() {
     fs::write(dir.path().join("m.json"), b"{\"v\":1}").unwrap();
     let o = boot(dir.path(), "m.json", c, true);
     assert_eq!(o.len(), 1);
-    assert_eq!(o[0].2, [(0, b"{\"v\":1}".to_vec())]);
+    assert_eq!(o[0].2, b"{\"v\":1}");
 }

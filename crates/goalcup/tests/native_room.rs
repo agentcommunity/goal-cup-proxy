@@ -16,7 +16,7 @@ fn walk(rec: &Recorder, tail: &mut Tail, dir: &Path, names: &[&str]) {
         let st = root.stat_at(OsStr::new(name)).unwrap();
         tail.settle(rec, format!("row:{name}"), dir, Path::new(name), st, false);
     }
-    tail.sweep(rec);
+    tail.sweep(rec, &[]);
 }
 
 /// Every DATA piece of the stream for `id`, as (offset, length), and the bytes joined.

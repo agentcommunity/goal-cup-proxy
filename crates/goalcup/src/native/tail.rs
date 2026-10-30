@@ -2,7 +2,7 @@
 //! is held between calls: a read opens its file from the root, reads at most `room()`, closes it.
 //! Content is never parsed; the file is the buffer.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::BTreeMap;
 use std::fs::File;
 use std::io;
 use std::os::unix::fs::FileExt;
@@ -12,6 +12,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use bytes::Bytes;
 use serde_json::json;
 
+use super::Noted;
 use super::fsx::{Dir, Stat, file_stat};
 use crate::pipeline::cursors::{Cursors, Fid};
 use crate::pipeline::{EndReason, GapReason, Mono, OpenFlags, Recorder, StreamHandle, StreamKind};
@@ -37,7 +38,8 @@ struct Entry {
     root: PathBuf,
     rel: PathBuf,
     stat: Stat,
-    /// When the walk last saw it grow (append) or change (snapshot): GAP start, settle clock.
+    /// The last stat that showed unread bytes (append) or a change (snapshot): GAP start, settle
+    /// clock.
     seen_at: Mono,
     generation: u64,
     off: u64,
@@ -55,7 +57,7 @@ pub struct Tail {
     since: i64,
     cursors: Cursors,
     files: BTreeMap<String, Entry>,
-    noted: HashSet<(String, i32)>,
+    noted: Noted,
     last: Option<String>,
 }
 
@@ -114,30 +116,34 @@ impl Tail {
             if stat != e.stat {
                 (e.stat, e.seen_at) = (stat, now);
             }
-        } else if e.h.is_none() || stat.fid() != e.stat.fid() || stat.size < e.off {
+        } else if e.h.is_none() || stat.fid() != e.stat.fid() || stat.size < e.off.max(e.stat.size)
+        {
+            // A size only falls by truncation: bytes seen at or past the offset may be gone.
             if let Some(h) = e.h.take() {
                 end(rec, h, e, SourceChanged, false);
             }
             (e.generation, e.off, e.stat, e.seen_at) = (e.generation + 1, 0, stat, now);
             e.h = Some(open_native(rec, &id, e));
         } else {
-            if stat.size > e.stat.size {
+            if stat.size > e.off {
                 e.seen_at = now;
             }
             e.stat = stat;
         }
     }
 
-    /// Paths not settled since the last sweep are gone: GAP if unread, END `source_changed`.
-    pub fn sweep(&mut self, rec: &Recorder) {
+    /// Paths not settled since the last sweep are gone: GAP if unread, END `source_changed`. A path
+    /// under one of the walk's `unlisted` folders was not looked at, so it is left alone.
+    pub fn sweep(&mut self, rec: &Recorder, unlisted: &[PathBuf]) {
         self.files.retain(|_, e| {
-            if !std::mem::take(&mut e.live) {
-                if let Some(h) = e.h.take() {
-                    end(rec, h, e, SourceChanged, false);
-                }
-                return !e.snap;
+            let held = || unlisted.iter().any(|d| e.root.join(&e.rel).starts_with(d));
+            if std::mem::take(&mut e.live) || held() {
+                return true;
             }
-            true
+            if let Some(h) = e.h.take() {
+                end(rec, h, e, SourceChanged, false);
+            }
+            !e.snap
         });
     }
 
@@ -173,10 +179,9 @@ impl Tail {
             let got = read_one(rec, &id, e, &mut left);
             if let Err(err) = &got {
                 let errno = err.raw_os_error().unwrap_or(0);
-                if self.noted.insert((id.clone(), errno)) {
-                    let what = "native_unreadable";
-                    rec.event(json!({"ev": "note", "what": what, "path": id, "errno": errno}));
-                }
+                let what = "native_unreadable";
+                let ev = json!({"ev": "note", "what": what, "path": id, "errno": errno});
+                self.noted.once(rec, ev);
             }
             self.last = Some(id);
             if let Ok(Some(stop)) = got {
@@ -186,10 +191,16 @@ impl Tail {
         Stop::Done
     }
 
-    /// Ends every open stream (section 8 steps 4 and 5). `cut`: the seal's time guard ran out.
+    /// Ends every open stream (section 8 steps 4 and 5). `cut`: the seal's time guard ran out, and
+    /// a changed snapshot not copied yet is cut too, on a stream of its own.
     pub fn close(self, rec: &Recorder, cut: bool) -> Closed {
         let mut c = Closed::default();
-        for mut e in self.files.into_values() {
+        for (id, mut e) in self.files {
+            let uncopied = cut && e.snap && e.copy.is_none() && e.done != Some(e.stat);
+            if uncopied {
+                (e.copy, e.off) = (Some(e.stat), 0);
+                e.h = Some(open_snapshot(rec, &id, &e.stat));
+            }
             let Some(h) = e.h.take() else { continue };
             let reason = match want(&e) == e.off {
                 true => Complete,
@@ -220,11 +231,8 @@ fn read_one(rec: &Recorder, id: &str, e: &mut Entry, left: &mut u64) -> io::Resu
         f => f?,
     };
     if e.snap && e.copy.is_none() {
-        let st = e.stat;
-        let fid = fid_hex(st.fid());
-        let meta = json!({"path": id, "form": "snapshot", "size": st.size, "mtime_ns": st.mtime_ns, "fid": fid});
-        (e.copy, e.off) = (Some(st), 0);
-        e.h = Some(rec.open(StreamKind::Snapshot, 0, 0, 0, OpenFlags::NONE, meta));
+        (e.copy, e.off) = (Some(e.stat), 0);
+        e.h = Some(open_snapshot(rec, id, &e.stat));
     }
     let (to, Some(h)) = (want(e), e.h.as_mut()) else {
         return Ok(None);
@@ -236,7 +244,12 @@ fn read_one(rec: &Recorder, id: &str, e: &mut Entry, left: &mut u64) -> io::Resu
         }
         let mut buf = vec![0; n as usize];
         let t = rec.now();
-        let k = f.read_at(&mut buf, e.off)?;
+        let k = loop {
+            match f.read_at(&mut buf, e.off) {
+                Err(err) if err.kind() == io::ErrorKind::Interrupted => {}
+                k => break k?,
+            }
+        };
         buf.truncate(k);
         (e.off, *left) = (e.off + k as u64, *left - k as u64);
         if k > 0 {
@@ -283,13 +296,20 @@ fn open_native(rec: &Recorder, id: &str, e: &Entry) -> StreamHandle {
     rec.open(StreamKind::Native, 0, 0, e.off, OpenFlags::NONE, meta)
 }
 
+/// A snapshot copy's stream (section 4, snapshot form): the copy of `st`.
+fn open_snapshot(rec: &Recorder, id: &str, st: &Stat) -> StreamHandle {
+    let fid = fid_hex(st.fid());
+    let meta = json!({"path": id, "form": "snapshot", "size": st.size, "mtime_ns": st.mtime_ns, "fid": fid});
+    rec.open(StreamKind::Snapshot, 0, 0, 0, OpenFlags::NONE, meta)
+}
+
 /// The size a read goes to: the copy's for a snapshot copy, else the last seen.
 fn want(e: &Entry) -> u64 {
     e.copy.unwrap_or(e.stat).size
 }
 
 /// OPEN meta `fid`: device, inode and on macOS birth time, in hex.
-pub fn fid_hex(fid: Fid) -> String {
+pub(crate) fn fid_hex(fid: Fid) -> String {
     let birth = fid.birth_ns.map(|b| format!(".{b:x}")).unwrap_or_default();
     format!("{:x}.{:x}{birth}", fid.dev, fid.ino)
 }
