@@ -1,0 +1,21 @@
+{
+  "model": "example-coder-large",
+  "small_model": "example-coder-small",
+  "env": {
+    "ANTHROPIC_API_KEY": "{{anthropic}}",
+    "OPENAI_BASE_URL": "https://gateway.example.test/v1",
+    "GITHUB_TOKEN": "{{ghp}}"
+  },
+  "providers": {
+    "gateway": {
+      "baseURL": "https://gateway.example.test/v1",
+      "apiKey": "{{plain_key}}",
+      "models": ["example-coder-large"]
+    },
+    "openai": {
+      "base_url": "https://api.example.test/v1",
+      "api_key": "{{openai}}"
+    }
+  },
+  "permissions": {"allow": ["Bash(cargo test:*)"]}
+}
