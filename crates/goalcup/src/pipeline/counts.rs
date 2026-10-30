@@ -369,11 +369,11 @@ struct Boot {
     seq: u64,
     /// The boot's last COUNT event JSON.
     count: Option<Value>,
-    /// Its `recorder_down` spans on `sid 0`: boot 0's start gap and its recovery frames' gaps.
+    /// Its own `recorder_down` spans: those before its first COUNT (boot 0's start gap).
     #[serde(default)]
     spans: u64,
-    /// The lengths in ms of its `recorder_down` gaps after its last COUNT (a recovery frame's
-    /// gap), or of all of them while it has none: no COUNT covers them.
+    /// The lengths in ms of its `recorder_down` gaps after that COUNT (a recovery frame's gap),
+    /// or of all of them while it has none.
     #[serde(default)]
     down_ms: Vec<u64>,
     /// Scan only: the last LINK read before `count` was taken, so a line with a later `seq`
@@ -385,6 +385,15 @@ struct Boot {
 impl Boot {
     fn boot(&self) -> Option<u64> {
         self.count.as_ref()?["boot"].as_u64()
+    }
+
+    /// Every `recorder_down` span of the boot: its own, plus its recovery frames' gaps, which
+    /// follow its last COUNT.
+    fn all_spans(&self) -> u64 {
+        match self.count {
+            Some(_) => self.spans.saturating_add(self.down_ms.len() as u64),
+            None => self.spans,
+        }
     }
 }
 
@@ -439,7 +448,7 @@ impl CountsLog {
 
     /// At boot, after recovery and before this boot's first LINK (PRD-02 section 9.2): rewrites
     /// the file to one line per earlier boot as [`entry_totals`] reads it (its last COUNT on
-    /// disk, its `recorder_down` spans and the lengths of those after that COUNT), drops
+    /// disk, its own `recorder_down` spans and the lengths of those after that COUNT), drops
     /// lines of boots that left nothing durable, and returns the entry totals over those boots.
     /// Every line comes from what is on disk, so a crash at any point of a recovery is repaired
     /// by the next boot's call: only a live recorder prunes part files, after this call. It runs
@@ -625,7 +634,9 @@ fn scan(rec: &Path) -> (BTreeMap<u64, Boot>, Option<u64>, Option<u64>) {
                 } => {
                     let b = boots.entry(n).or_default();
                     b.down_ms.push(off_ms(r));
-                    b.spans += 1;
+                    if b.count.is_none() {
+                        b.spans += 1;
+                    }
                 }
                 _ => {}
             }
@@ -671,7 +682,7 @@ fn totals(boots: &BTreeMap<u64, Boot>) -> EntryTotals {
             .iter()
             .fold(c.off_ms, |a, ms| a.saturating_add(*ms));
         t.counts.add(&c);
-        t.off_spans = t.off_spans.saturating_add(b.spans);
+        t.off_spans = t.off_spans.saturating_add(b.all_spans());
     }
     t
 }
