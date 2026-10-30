@@ -308,10 +308,10 @@ impl ServerClient {
         body: impl Read,
         content_length: u64,
     ) -> Result<ChunkAnswer, ServerError> {
-        // ureq 2 drops the agent's stall timeouts on a request with its own deadline, so the
-        // whole-PUT bound is kept here, on boot time, between the body's reads and the answer's
-        // reads. Reading the status line and headers is bounded by the 60 s stall only.
-        let until = after(Mono::now(), PUT_TIMEOUT);
+        // No request timeout here: ureq 2 drops the agent's 60 s stall on a request with its own
+        // deadline. The whole-PUT bound is the TLS connection's (`Bounded`): every read and write,
+        // from the handshake to the answer's last byte, status line and headers included, fails
+        // once PUT_TIMEOUT has passed. A local `http://` Worker has no whole-PUT bound.
         let request = self
             .request("PUT", &format!("/v1/runs/{run}/chunks/{}", h.offset))
             .set("Accept", "application/json")
@@ -324,11 +324,8 @@ impl ServerClient {
             .set("Goalcup-Last-Seq", &h.last_seq.to_string())
             .set("Goalcup-Prev", &h.prev)
             .set("Goalcup-Head", &h.head);
-        match answer(request.send(Deadline { inner: body, until })) {
-            Ok(response) => parse(Deadline {
-                inner: response.into_reader(),
-                until,
-            }),
+        match answer(request.send(body)) {
+            Ok(response) => parse(response.into_reader()),
             Err(ServerError::Transport(why)) => self.after_broken_put(run, h, why),
             Err(e) => Err(e),
         }
@@ -371,24 +368,6 @@ impl ServerClient {
             Some(Token(secret)) => request.set("Authorization", &format!("Bearer {secret}")),
             None => request,
         }
-    }
-}
-
-/// A reader that fails once `until` (boot time) has passed.
-struct Deadline<R> {
-    inner: R,
-    until: Mono,
-}
-
-impl<R: Read> Read for Deadline<R> {
-    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        if Mono::now() >= self.until {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::TimedOut,
-                "the call ran past its time",
-            ));
-        }
-        self.inner.read(buf)
     }
 }
 
@@ -456,8 +435,13 @@ impl ureq::TlsConnector for RustlsConnector {
     fn connect(
         &self,
         dns_name: &str,
-        mut io: Box<dyn ureq::ReadWrite>,
+        io: Box<dyn ureq::ReadWrite>,
     ) -> Result<Box<dyn ureq::ReadWrite>, ureq::Error> {
+        // Each call has its own connection, so this bounds the whole call by the longest one.
+        let mut io = Bounded {
+            inner: io,
+            until: after(Mono::now(), PUT_TIMEOUT),
+        };
         let host = dns_name.trim_start_matches('[').trim_end_matches(']');
         let name = rustls::pki_types::ServerName::try_from(host.to_string()).map_err(|e| {
             std::io::Error::new(
@@ -472,11 +456,46 @@ impl ureq::TlsConnector for RustlsConnector {
     }
 }
 
-struct TlsStream(rustls::StreamOwned<rustls::ClientConnection, Box<dyn ureq::ReadWrite>>);
+struct TlsStream(rustls::StreamOwned<rustls::ClientConnection, Bounded>);
 
 impl ureq::ReadWrite for TlsStream {
     fn socket(&self) -> Option<&std::net::TcpStream> {
-        self.0.get_ref().socket()
+        self.0.get_ref().inner.socket()
+    }
+}
+
+/// A connection whose reads and writes fail once `until` (boot time) has passed.
+struct Bounded {
+    inner: Box<dyn ureq::ReadWrite>,
+    until: Mono,
+}
+
+impl Bounded {
+    fn check(&self) -> std::io::Result<()> {
+        if Mono::now() >= self.until {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                "the call ran past its time",
+            ));
+        }
+        Ok(())
+    }
+}
+
+impl Read for Bounded {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        self.check()?;
+        self.inner.read(buf)
+    }
+}
+
+impl std::io::Write for Bounded {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.check()?;
+        self.inner.write(buf)
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.inner.flush()
     }
 }
 
