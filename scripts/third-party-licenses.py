@@ -1,5 +1,5 @@
 """Print the third-party notices a binary release carries (NOTICE): every crates.io package the
-three shipped binaries link for one target, with its licence expression and the text of the
+two shipped binaries link for one target, with its licence expression and the text of the
 licence files it ships.
 
     python3 scripts/third-party-licenses.py --target aarch64-apple-darwin > THIRD-PARTY-LICENSES.md
@@ -21,7 +21,7 @@ import sys
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
-SHIPPED = {"goalcup-cli", "goalcup-daemon", "goalcup-verifier"}
+SHIPPED = {"goalcup", "goalcup-verify"}
 LICENCE_FILE_PREFIXES = ("license", "licence", "copying", "notice", "unlicense")
 # Permissive licences a release may carry (SPDX ids). MPL-2.0 is file-level copyleft and allowed.
 ALLOWED = {"MIT", "Apache-2.0", "BSD-2-Clause", "BSD-3-Clause", "ISC", "Unicode-3.0",
@@ -189,7 +189,7 @@ def refusals(packages: list) -> list:
 
 def render(packages: list, target: str) -> str:
     lines = [f"# Third-party licences ({target})\n",
-             "The goalcup, goalcup-daemon and goalcup-verify binaries link these crates.io "
+             "The goalcup and goalcup-verify binaries link these crates.io "
              f"packages ({len(packages)}), each under its own licence. Generated from Cargo.lock "
              "by scripts/third-party-licenses.py.\n"]
     for package in packages:
