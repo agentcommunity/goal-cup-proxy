@@ -1,6 +1,10 @@
 //! `StreamHandle` (seam S1): one stream's calls. The handle owns the stream's offset.
+// The scaffold's calls only reach the `test-hooks` collector until the core slice.
+#![cfg_attr(not(feature = "test-hooks"), allow(unused_variables))]
 
-use super::{Call, Mono, Recorder, Sid};
+#[cfg(feature = "test-hooks")]
+use super::Call;
+use super::{Mono, Recorder, Sid};
 use bytes::Bytes;
 use goalcup_format::{EndReason, GapReason};
 use serde_json::Value;
@@ -61,14 +65,14 @@ impl StreamHandle {
     /// One piece; moves the offset by its length, written or dropped.
     pub fn data(&mut self, t: Mono, bytes: Bytes) {
         let (sid, off, n) = (self.sid, self.off, bytes.len() as u64);
-        self.rec.record(|| Call::Data { sid, t, off, bytes });
+        collect!(self.rec, Call::Data { sid, t, off, bytes });
         self.off += n;
     }
 
     /// One WebSocket piece; `fin` marks a message end.
     pub fn ws(&mut self, t: Mono, opcode: u8, fin: bool, bytes: Bytes) {
         let (sid, off, n) = (self.sid, self.off, bytes.len() as u64);
-        self.rec.record(|| Call::Ws {
+        collect!(self.rec, Call::Ws {
             sid,
             t,
             off,
@@ -83,7 +87,7 @@ impl StreamHandle {
     /// `Some(n)` moves the offset by `n`; `None` means unknown and leaves it.
     pub fn gap(&mut self, reason: GapReason, start: Mono, lost: Option<u64>, tail: Option<Value>) {
         let (sid, off, end) = (self.sid, self.off, self.rec.now());
-        self.rec.record(|| Call::Gap {
+        collect!(self.rec, Call::Gap {
             sid,
             reason,
             start,
@@ -98,7 +102,7 @@ impl StreamHandle {
     pub fn end(mut self, t: Mono, reason: EndReason, tail: Option<Value>) {
         self.ended = true;
         let (sid, seen) = (self.sid, self.off);
-        self.rec.record(|| Call::End {
+        collect!(self.rec, Call::End {
             sid,
             t,
             reason,
@@ -114,7 +118,7 @@ impl Drop for StreamHandle {
             return;
         }
         let (sid, seen, t) = (self.sid, self.off, self.rec.now());
-        self.rec.record(|| Call::End {
+        collect!(self.rec, Call::End {
             sid,
             t,
             reason: EndReason::Interrupted,

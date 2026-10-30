@@ -21,14 +21,23 @@ pub enum Exit {
     Signal(i32),
 }
 
-/// How the previous boot ended, on the first line: `{"code":n}`, `{"signal":n}`, or
-/// `{"cause":"watchdog_lost"}` from `goalcup recover`. Null on boot 0.
+/// How the previous boot ended, on the first line: `{"code":n}`, `{"signal":n}`,
+/// `{"cause":"watchdog_lost"}` from `goalcup recover`, or after null mode
+/// `{"cause":"null_mode","exits":n,"last":{"code":n}}`. Null on boot 0. The next boot's
+/// `recorder_down` GAP tail is written from it (PRD-02 section 8 step 9, section 9.2 step 4).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(untagged)]
 pub enum Prev {
-    Code(i32),
-    Signal(i32),
-    Cause(String),
+    Exit(Exit),
+    Cause {
+        cause: String,
+        /// Null mode: the fast exits that started it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        exits: Option<u64>,
+        /// Null mode: how the last recorder before it ended.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        last: Option<Exit>,
+    },
 }
 
 /// The seal reasons (PRD-01 section 11).
@@ -58,6 +67,25 @@ impl fmt::Debug for CaPem {
     }
 }
 
+/// Where the connector came from (PRD-01 `start` key `connector_source`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConnectorSource {
+    Builtin,
+    File,
+}
+
+/// The connector in force, for the `start` keys `connector`, `connector_source` and
+/// `connector_sha256`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ConnectorRef {
+    /// The connector's id, or its file with `--connector`.
+    pub id: String,
+    pub source: ConnectorSource,
+    /// SHA-256 of the exact TOML bytes used, 64 hex.
+    pub sha256: String,
+}
+
 /// The harness as the watchdog launched it.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HarnessFacts {
@@ -82,6 +110,9 @@ pub struct StartFacts {
     pub run: String,
     /// `e` and 16 hex.
     pub entry: String,
+    /// The entry's segment number from the server's run approval: 0 for `start`, then 1, 2 for
+    /// each `continue`.
+    pub segment: u32,
     /// The entry folder, `$GOALCUP_HOME/runs/<run>/<entry>/`.
     pub entry_dir: PathBuf,
     /// Unix ms. Null with `GOALCUP_SERVER=off`.
@@ -90,13 +121,17 @@ pub struct StartFacts {
     pub server_time: Option<u64>,
     pub local_wall: u64,
     pub workspace: PathBuf,
-    /// The connector's id, or its file with `--connector`.
-    pub connector: String,
+    pub connector: ConnectorRef,
+    /// `LaunchPlan.harness_version`; null when it could not be read.
+    pub harness_version: Option<String>,
     /// `GOALCUP_KEEP_PARTS=1`.
     pub keep: bool,
-    /// The build that runs: version and commit.
-    pub build: String,
+    /// The 40-hex commit the binary was built from, or null. The version is the binary's own
+    /// `CARGO_PKG_VERSION`.
+    pub build: Option<String>,
     pub hosts: serde_json::Value,
+    /// SHA-256 of the host list file as read (the embedded list or a `--hosts` file), 64 hex.
+    pub hosts_sha256: String,
     pub native: serde_json::Value,
     pub mask_rules: serde_json::Value,
     /// The exact mask values. Never logged.

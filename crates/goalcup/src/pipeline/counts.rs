@@ -53,17 +53,14 @@ pub struct TunnelHost {
 }
 
 /// The durable point, published on a `watch` channel after each `fdatasync` (PRD-02 section 5
-/// step 4). The uploader sends up to it and never past it. `totals` are entry totals as they
-/// stood at this LINK, so a count that leaves the machine never runs ahead of the record.
+/// step 4). The uploader sends up to it and never past it, cutting chunks by index lines.
+/// `totals` are entry totals as they stood at this LINK, so a count that leaves the machine never
+/// runs ahead of the record.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Durable {
-    /// The part file's name; empty before the first durable point.
-    pub part: String,
-    pub c_end: u64,
-    pub raw_end: u64,
-    /// The LINK's `seq` and hash.
-    pub seq: u64,
-    pub hash: [u8; 32],
+    /// The part file, its index length and the index line, as `PartWriter::sync`, `rotate_if_due`
+    /// and `seal` return it. None before the first durable point.
+    pub point: Option<goalcup_format::Durable>,
     pub totals: Counts,
     /// When this point became durable, for its age.
     pub at: Mono,

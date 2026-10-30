@@ -5,6 +5,17 @@
 //! `status.json`) in their final shapes. The calls do nothing yet, except under `test-hooks`,
 //! where `Recorder::for_tests` collects them.
 
+/// Hands one S1 call, before masking, to the `for_tests` collector. Without `test-hooks` it
+/// compiles to nothing, so the shipped recorder carries no test path.
+macro_rules! collect {
+    ($rec:expr, $call:expr) => {
+        #[cfg(feature = "test-hooks")]
+        $rec.collect(|| $call);
+    };
+}
+
+#[cfg(feature = "test-hooks")]
+mod calls;
 pub mod clock;
 pub mod counts;
 pub mod cursors;
@@ -18,12 +29,13 @@ pub use cursors::Cursors;
 pub use goalcup_format::{EndReason, GapReason, StreamKind};
 pub use handle::{OpenFlags, StreamHandle};
 pub use status::Status;
+#[cfg(feature = "test-hooks")]
+pub use calls::{Call, Calls};
 
-use bytes::Bytes;
 use serde_json::Value;
 use std::process::ExitCode;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
 use tokio::sync::watch;
 
 /// A stream ID: from 1, never reused inside a boot; 0 means "no stream".
@@ -44,19 +56,21 @@ struct Inner {
     held: AtomicU64,
     durable: watch::Sender<Durable>,
     /// Set only by `for_tests`.
+    #[cfg(feature = "test-hooks")]
     calls: Option<Calls>,
 }
 
 impl Recorder {
     // The scaffold has no production constructor yet; `run_recorder` builds one in the core slice.
     #[cfg_attr(not(feature = "test-hooks"), allow(dead_code))]
-    fn new(calls: Option<Calls>) -> Recorder {
+    fn new(#[cfg(feature = "test-hooks")] calls: Option<Calls>) -> Recorder {
         let (durable, _) = watch::channel(Durable::default());
         Recorder {
             inner: Arc::new(Inner {
                 next_sid: AtomicU64::new(1),
                 held: AtomicU64::new(0),
                 durable,
+                #[cfg(feature = "test-hooks")]
                 calls,
             }),
         }
@@ -64,6 +78,8 @@ impl Recorder {
 
     /// Opens a stream. `from` is its first offset: 0 for wire streams, the resumed cursor for
     /// native. `meta` is masked on the mask worker, never on the caller.
+    // The scaffold's calls only reach the `test-hooks` collector until the core slice.
+    #[cfg_attr(not(feature = "test-hooks"), allow(unused_variables))]
     pub fn open(
         &self,
         kind: StreamKind,
@@ -74,31 +90,33 @@ impl Recorder {
         meta: Value,
     ) -> StreamHandle {
         let sid = self.inner.next_sid.fetch_add(1, Ordering::Relaxed);
-        self.record(|| Call::Open {
-            sid,
-            kind,
-            conn,
-            req,
-            from,
-            flags,
-            meta,
-        });
+        collect!(
+            self,
+            Call::Open {
+                sid,
+                kind,
+                conn,
+                req,
+                from,
+                flags,
+                meta,
+            }
+        );
         StreamHandle::new(self.clone(), sid, from)
     }
 
     /// A note or fact from another module; masked like OPEN meta.
+    #[cfg_attr(not(feature = "test-hooks"), allow(unused_variables))]
     pub fn event(&self, ev: Value) {
-        self.record(|| Call::Event(ev));
+        collect!(self, Call::Event(ev));
     }
 
     /// Bytes free under three quarters of the soft guard. Native reads at most this.
     pub fn room(&self) -> u64 {
-        let held = self.inner.held.load(Ordering::Relaxed);
-        let limit = match &self.inner.calls {
-            Some(calls) => calls.room.load(Ordering::Relaxed),
-            None => SOFT_GUARD / 4 * 3,
-        };
-        limit.saturating_sub(held)
+        let limit = SOFT_GUARD / 4 * 3;
+        #[cfg(feature = "test-hooks")]
+        let limit = self.test_room().unwrap_or(limit);
+        limit.saturating_sub(self.inner.held.load(Ordering::Relaxed))
     }
 
     /// Counts `n` in `held` until the returned `Reserved` drops (a decoder window, PRD-03).
@@ -129,21 +147,6 @@ impl Recorder {
     pub fn durable(&self) -> watch::Receiver<Durable> {
         self.inner.durable.subscribe()
     }
-
-    /// A recorder that collects every S1 call before masking, with `room()` set by the test
-    /// (PRD-14 `tests/common/recorder.rs`).
-    #[cfg(feature = "test-hooks")]
-    pub fn for_tests(room: u64) -> (Recorder, Calls) {
-        let calls = Calls::default();
-        calls.set_room(room);
-        (Recorder::new(Some(calls.clone())), calls)
-    }
-
-    fn record(&self, call: impl FnOnce() -> Call) {
-        if let Some(calls) = &self.inner.calls {
-            calls.push(call());
-        }
-    }
 }
 
 /// `n` bytes counted in `held` until dropped.
@@ -156,82 +159,6 @@ pub struct Reserved {
 impl Drop for Reserved {
     fn drop(&mut self) {
         self.rec.inner.held.fetch_sub(self.n, Ordering::Relaxed);
-    }
-}
-
-/// One S1 call as `Recorder::for_tests` saw it, before masking.
-#[derive(Clone, Debug, PartialEq)]
-pub enum Call {
-    Open {
-        sid: Sid,
-        kind: StreamKind,
-        conn: Sid,
-        req: Sid,
-        from: u64,
-        flags: OpenFlags,
-        meta: Value,
-    },
-    Data {
-        sid: Sid,
-        t: Mono,
-        off: u64,
-        bytes: Bytes,
-    },
-    Ws {
-        sid: Sid,
-        t: Mono,
-        off: u64,
-        opcode: u8,
-        fin: bool,
-        bytes: Bytes,
-    },
-    Gap {
-        sid: Sid,
-        reason: GapReason,
-        start: Mono,
-        end: Mono,
-        off: u64,
-        lost: Option<u64>,
-        tail: Option<Value>,
-    },
-    End {
-        sid: Sid,
-        t: Mono,
-        reason: EndReason,
-        seen: u64,
-        tail: Option<Value>,
-    },
-    Event(Value),
-}
-
-/// The calls collected by `Recorder::for_tests`, and its `room()`.
-#[derive(Clone, Default)]
-pub struct Calls {
-    log: Arc<Mutex<Vec<Call>>>,
-    room: Arc<AtomicU64>,
-}
-
-impl Calls {
-    /// Every call so far, in order, leaving none.
-    pub fn take(&self) -> Vec<Call> {
-        std::mem::take(&mut *self.log.lock().unwrap_or_else(|e| e.into_inner()))
-    }
-
-    /// Every call so far, in order.
-    pub fn all(&self) -> Vec<Call> {
-        self.log.lock().unwrap_or_else(|e| e.into_inner()).clone()
-    }
-
-    /// Sets the limit `room()` answers against (reservations are taken off it).
-    pub fn set_room(&self, n: u64) {
-        self.room.store(n, Ordering::Relaxed);
-    }
-
-    fn push(&self, call: Call) {
-        self.log
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .push(call);
     }
 }
 
