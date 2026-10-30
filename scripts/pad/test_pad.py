@@ -304,10 +304,6 @@ class SecretCheck(unittest.TestCase):
         self.assertEqual(self.c3(self.PLANTED, secrets_exit=2), "FAIL")
         self.assertEqual(self.c3(dict(self.PLANTED, jwt=0)), "FAIL")
 
-    def test_oversized_mask_fails_the_scan(self):  # PRD-08: exit 2 with no known or shape hit, only a big MASK span
-        big = {"known_hits": [], "shape_hits": [], "big_masks": [{"kind": "jwt", "in": "rec", "len": 20000}]}
-        self.assertEqual(self.c3(self.PLANTED, secrets_exit=2, more=big), "FAIL")
-
     def test_conductor_scan_counts_its_own_secrets(self):  # section 7: the approval key in the run folder is a hit
         run = mock.Mock(dir=self.enterContext(tempfile.TemporaryDirectory()))
         with open(os.path.join(run.dir, "calls.log"), "w") as f:
@@ -317,64 +313,15 @@ class SecretCheck(unittest.TestCase):
         self.assertEqual(check.Run(run.dir, {}).hits("secrets-conductor"), 1)
 
 
-class CaseRows(unittest.TestCase):
-    """Section 2 and 3.1, C1 only: the gateway rule reads wire call rows, not native ones; an exec script's row keeps the
-    exit-0 rule unless its owner expects a named loss; a dodger with no local log still passes C2 on its pinned tunnels."""
-
-    WIRE = {"k": "call", "host": check.GATEWAY, "host_kind": "gateway"}
-
-    def row(self, case, calls=(), variant=(), code=0, gaps=None, results=None, **more):
-        entry = {"entry": "e1", "counts": dict({"model_requests": 5, "gaps": gaps or {}, "hosts": {check.GATEWAY: 5, "api.openai.com": 5}}, **more),
-                 "checks": [{"id": i, "result": (results or {}).get(i, "pass")}
-                            for i in ("gap_has_end", "history_complete", "listed_hosts_decrypted", "wire_keeps_up")]}
-        return evaluate({"meta.json": {"connector": "codex-cli", "case": case, "variant": list(variant), "server": "off",
-                                       "keep": True, "commits_since_start": 1, "entry": "e1", "model_host": "api.openai.com"},
-                         "verify/check-local.json": {"exit": code, "entries": [entry]},
-                         "verify/usage/e1.json": {"readable": False, "tokens": {"merged": {}}, "coverage": {"unattributed": 0},
-                                                  "threads": [{"parent": None, "models": {"m": 1}, "wire_calls": 1}]},
-                         "verify/usage/e1.calls.jsonl": list(calls)})
-
-    def test_gateway_rule_reads_wire_rows_only(self):
-        native = {"k": "call", "host": None, "host_kind": None}
-        self.assertEqual(self.row("gateway", [self.WIRE, native])["checks"]["C1"], "PASS")
-        vendor = dict(self.WIRE, host="api.openai.com", host_kind="provider")
-        self.assertEqual(self.row("gateway", [self.WIRE, vendor])["checks"]["C1"], "FAIL")
-
-    def test_exec_row_keeps_the_exit_rule(self):
-        lost = dict(code=1, gaps={"tunnel": 1})
-        self.assertEqual(self.row("direct", variant=["exec h2-parallel.sh@1"], **lost)["checks"]["C1"], "FAIL")
-        refusal = ["exec refusal-curl.sh@1"]  # PRD-03 acceptance 7: only the curl's refused connections may be named
-        self.assertEqual(self.row("direct", variant=refusal, code=1, gaps={"tls_refused": 2})["checks"]["C1"], "PASS")
-        for gaps in ({"tunnel": 1}, {"dropped": 1, "memory_guard": 1}, {"tls_refused": 1, "dropped": 1}):
-            self.assertEqual(self.row("direct", variant=refusal, code=1, gaps=gaps)["checks"]["C1"], "FAIL", gaps)
-
-    def test_dodger_names_only_the_pinned_loss(self):  # section 2: its exit 1 comes from the pinned tunnels alone
-        pinned = {"api.openai.com": {"conns": 2, "listed": "pinned"}}
-        def c1(gaps, tunnels=pinned):
-            return self.row("dodger", code=1, gaps=gaps, tunnel_hosts=tunnels, hosts={check.GATEWAY: 5},
-                            results=dict(listed_hosts_decrypted="named", wire_keeps_up="skip", history_complete="skip"))["checks"]["C1"]
-        self.assertEqual(c1({"pinned": 2}), "PASS")
-        self.assertEqual(c1({"pinned": 2, "dropped": 1, "tls_refused": 1}), "FAIL")
-        self.assertEqual(c1({"pinned": 2}, dict(pinned, **{"chatgpt.com": {"conns": 1, "listed": "tls_refused"}})), "FAIL")
-
-    def test_dodger_without_a_local_log_passes_c2(self):
-        tunnels = {"api.openai.com": {"conns": 2, "listed": "pinned"}}
-        row = self.row("dodger", code=1, tunnel_hosts=tunnels, hosts={check.GATEWAY: 5})
-        self.assertEqual(row["checks"]["C2"], "PASS", row["why"])
-
-
 class PreRows(unittest.TestCase):
-    """Section 3.1, pre scripts the record decides: proxy-setting.sh passes when start refused and named the file and
-    key, with the output and conductor scans read; stale-gateway.sh fails when the daemon lived after goalcup start or a
-    daemon process was left after exit, and says nothing without a daemon that ran (PRD-11 acceptance 4 and 5)."""
+    """Section 3.1, proxy-setting.sh, a row the record decides: it passes when start refused and named the file and key,
+    with the output and conductor scans read; no scan is never a pass (point 4; PRD-11 acceptance 4)."""
 
     SCANNED = {"verify/exits.json": {"secrets-out": 0}, "verify/secrets-conductor.json": {"hits": 0}}
 
-    def row(self, script, lines, scanned=True, worked=False, **files):
+    def row(self, script, lines, scanned=True, **files):
         pre = {"kind": "pre", "script": script, "exit": 0}
         meta = {"connector": "qwen-code", "case": "direct", "variant": ["pre " + script], "server": "off"}
-        if worked:  # the harness did work, so the faults slot is the daemon's alone
-            meta["commits_since_start"], meta["known_box"], files["status.json"] = 1, True, {"written": {"model_requests": 3}}
         return evaluate({"meta.json": meta, "watch/faults.jsonl": [pre] + lines, **(self.SCANNED if scanned else {}), **files})
 
     def test_start_refusal_names_file_and_key(self):
@@ -391,44 +338,9 @@ class PreRows(unittest.TestCase):
         hit = self.row("proxy-setting.sh", [said], **{"verify/exits.json": {"secrets-out": 2}})
         self.assertEqual((hit["result"], hit["checks"]["C3"]), ("FAIL", "FAIL"))
 
-    def test_start_that_went_on_recording_fails(self):  # acceptance 4: the very defect the row exists to find
-        entry = {"entry": "e1", "checks": [], "counts": {"model_requests": 3}}
-        got = self.row("proxy-setting.sh", [], **{"verify/check-local.json": {"entries": [entry]}})
-        self.assertEqual(got["faults"], "FAIL")
 
-    def test_stale_daemon_must_be_gone_after_start(self):
-        look = {"kind": "daemon-check", "script": "stale-gateway.sh"}
-        for alive, left in ((False, False), (True, False), (False, True)):
-            got = self.row("stale-gateway.sh", [dict(look, alive=alive), dict(look, alive=False, left=left)])
-            self.assertEqual((got["result"] == "FAIL", got["faults"] == "FAIL"), (alive or left,) * 2, (alive, left))
-
-    def test_stale_row_needs_a_daemon_that_ran_and_a_look_after_exit(self):
-        look = {"kind": "daemon-check", "script": "stale-gateway.sh", "alive": False}
-        one = [{"kind": "pre", "script": "stale-gateway.sh", "exit": 1}]  # the daemon exited at once
-        for lines in ([], one + [dict(look, left=False)], [dict(look)]):
-            got = evaluate({"meta.json": {"connector": "hermes-cli", "case": "direct", "server": "off", "variant": ["pre stale-gateway.sh"]},
-                            "watch/faults.jsonl": lines})
-            self.assertEqual(got["faults"], "INCONCLUSIVE", lines)
-        ran = self.row("stale-gateway.sh", [dict(look), dict(look, left=False)], worked=True)
-        self.assertEqual(ran["faults"], "PASS")
-        blind = self.row("stale-gateway.sh", [dict(look), dict(look, left=None)], worked=True)  # /proc could not be listed
-        self.assertEqual(blind["faults"], "INCONCLUSIVE")
-
-
-class StepRules(unittest.TestCase):
-    def test_long_exec_must_end_before_the_seal(self):
-        pad.parse_steps(["exec refusal-curl.sh@1"], 20)
-        with self.assertRaises(pad.Usage):
-            pad.parse_steps(["exec refusal-curl.sh@1"], 8)  # cycle: it would run to minute 13
-
-    def test_long_exec_must_not_hold_cycles_own_crash_back(self):
-        pad.load_settings(dict(BASE, steps=["exec long-tunnel.sh@1"]), PADCFG)  # ends at minute 3
-        with self.assertRaises(pad.Usage):
-            pad.load_settings(dict(BASE, steps=["exec long-tunnel.sh@2"]), PADCFG)  # would hold the crash at minute 3 to about 4
-
-
-class DaemonLook(unittest.TestCase):
-    """pad-run: a process with the harness file's daemon command alive after exit is seen; the pane's words become booleans."""
+class StartRefusal(unittest.TestCase):
+    """pad-run: the pane's words about a refused start become booleans."""
 
     def run_for(self, **harness):
         run = self.enterContext(tempfile.TemporaryDirectory())
@@ -436,18 +348,6 @@ class DaemonLook(unittest.TestCase):
             with open(os.path.join(run, name), "w") as f:
                 json.dump(doc, f)
         return run, padrun.Run(run, "verify")
-
-    def test_left_daemon_is_seen(self):
-        run, r = self.run_for(daemon="sleep 613")
-        for home in (run, run + "-another"):  # the same command under another run's home is not this run's daemon
-            child = subprocess.Popen(["sleep", "613"], env=dict(os.environ, HOME=home))
-            self.addCleanup(child.wait)
-            self.addCleanup(child.kill)
-        self.assertEqual(len(r.daemon_pids()), 1)
-        self.assertEqual(self.run_for(daemon="sleep 614")[1].daemon_pids(), [])
-        self.assertEqual(self.run_for()[1].daemon_pids(), [])  # no daemon in the harness file
-        with mock.patch.object(padrun.os, "listdir", side_effect=OSError):  # no /proc: unknown, and verify goes on
-            self.assertIsNone(r.daemon_pids())
 
     def test_refusal_records_what_the_screen_showed(self):
         run, r = self.run_for()

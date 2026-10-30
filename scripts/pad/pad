@@ -121,14 +121,10 @@ def check_push_token(path, repo=REPO):
     return path
 
 
-LONG_EXEC = {"refusal-curl.sh": 12, "long-tunnel.sh": 2}  # minutes an exec script runs (11 min wait; 90 s stream); also pad-run's exec limit
+EXEC_LIMIT = 15 * 60  # seconds an exec script may run (the longest, refusal-curl.sh, waits 11 minutes); pad-run kills it then
 
 
-def script_name(raw):  # "exec refusal-curl.sh@1" -> "refusal-curl.sh"
-    return raw.split()[1].split("@")[0]
-
-
-def parse_steps(steps, minutes):
+def parse_steps(steps):
     out = []
     for raw in steps:
         if not isinstance(raw, str):
@@ -140,7 +136,7 @@ def parse_steps(steps, minutes):
                 raise Usage("step %r: no such suffix for %s" % (raw, kind))
             out.append(("timed", int(m.group(2)), raw))
         elif re.fullmatch(r"exec [A-Za-z0-9._-]+@\d+|pre [A-Za-z0-9._-]+", raw):  # section 3.1
-            if not os.path.isfile(os.path.join(HERE, "exec", script_name(raw))):
+            if not os.path.isfile(os.path.join(HERE, "exec", raw.split()[1].split("@")[0])):
                 raise Usage("step %r: no such script under scripts/pad/exec/" % raw)
             out.append(("timed", int(raw.rsplit("@", 1)[1]), raw) if raw.startswith("exec") else ("pre", 0, raw))
         elif raw == "keep-going":
@@ -149,14 +145,6 @@ def parse_steps(steps, minutes):
             out.append(("calls", int(raw.split()[1]), raw))
         else:
             raise Usage("unknown step %r" % raw)
-    timed = sorted({(m, raw) for kind, m, raw in out if kind == "timed"})
-    for i, (m, raw) in enumerate(timed):  # the walk runs steps one after another: an exec holds the later ones back
-        long = LONG_EXEC.get(script_name(raw), 0) if raw.startswith("exec ") else 0
-        if long and m + long > minutes:  # it would hold the seal back
-            raise Usage("step %r runs about %d minutes and would end after the seal at minute %g: use a longer mode" % (raw, long, minutes))
-        for n, other in timed[i + 1:]:
-            if n < m + long:
-                raise Usage("step %r runs about %d minutes and holds %r (minute %d) back: put it after minute %d" % (raw, long, other, n, m + long))
     return out
 
 
@@ -203,7 +191,7 @@ def load_settings(raw, pad):
     steps = s["steps"]
     if s["mode"] == "cycle":  # cycle owns its crash at 3; its stream wait and restart can run past 4:00
         steps = ["kill-recorder@3"] + [x for x in steps if x != "kill-recorder@3"]
-    s["plan"] = parse_steps(steps, s["minutes"])
+    s["plan"] = parse_steps(steps)
     if s["mode"] == "cycle":
         for _, m, r in s["plan"]:
             if r.startswith(("kill-watchdog", "kill-both@")) and (m <= 4 or "recover" in r):
@@ -230,7 +218,7 @@ def runner_limits(s):
     """Seconds per pad-run step, the ones pad-run reads from settings.json: paste has start's, verify works to the
     check step's limit, wipe to a third of cleanup's (the box's rm and list take the other thirds), and wait-recovery
     to 30 s under its step's limit (pad-run starts later, so its own FAIL line comes before the step times out). The
-    two faults and exec (the longest LONG_EXEC script plus 3 minutes) count from minute m; keep-going and the detached
+    two faults and exec (EXEC_LIMIT) count from minute m; keep-going and the detached
     watch from their start."""
     got = {k: step_limit(s, k) for k in ("setup", "pre", "start", "wait-calls", "look", "seal", "wait-upload",
                                          "wait-recovery")}
@@ -238,7 +226,7 @@ def runner_limits(s):
     got["wait-recovery"] -= 30
     return dict(got, paste=got["start"], verify=step_limit(s, "check"), wipe=step_limit(s, "cleanup") // 3, spend=120,
                 **{"kill-recorder": 120, "kill-watchdog-recover": 240, "keep-going": run, "seal-now": 120, "watch": run + 1800,
-                   "exec": (max(LONG_EXEC.values()) + 3) * 60})
+                   "exec": EXEC_LIMIT})
 
 
 def pin(data, host):

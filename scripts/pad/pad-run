@@ -445,7 +445,7 @@ class Run:
         time.sleep(max(0, self.st["pasted"] + m * 60 - time.time()))
 
     def pre(self, script):  # section 3.1: once, after setup and before start
-        return self.script("pre", script, {})
+        return self.script("pre", script, self.gc_env(True))
 
     def exec(self, script):  # section 3.1: at its minute, in the harness's proxy and CA environment, never its keys
         self.need(started=True)
@@ -461,7 +461,7 @@ class Run:
         reaches exec/<name>.txt; one faults.jsonl line. No key file path or key value is in its environment. A pre
         script runs in the participant's shell; an exec script with only the harness's names from exec_env."""
         shell = self.gc_env(True)
-        env = dict(shell if kind == "pre" else env, PAD_RUN=self.run, PAD_HOME=self.st.get("home") or "",
+        env = dict(env, PAD_RUN=self.run, PAD_HOME=self.st.get("home") or "",
                    PAD_MODEL_HOSTS=self.path("model-hosts.toml"), PAD_DAEMON=str(self.h.get("daemon") or ""), PAD_PROXY=PROXY_VALUE,
                    PAD_SHELL_ENV=quoted(shell), PAD_HOME_ENV=quoted(self.home_env()))
         p = subprocess.Popen(["bash", os.path.join(PAD, "exec", name)], cwd=self.project, env=env, stdin=subprocess.DEVNULL,
@@ -491,8 +491,7 @@ class Run:
         self.fault("kill-recorder", minute=m, pid=pid if ok else None, since_request_s=since)
         return (pid if ok else None), since
 
-    def kill_recorder(self, _):  # section 3.1; S4 has no open-stream count yet: wait up to 60 s for a request in the last 10 s
-        m = self.m
+    def kill_recorder(self, m):  # section 3.1; S4 has no open-stream count yet: wait up to 60 s for a request in the last 10 s
         self.need("goalcup", started=True)
         self.at(m)
         wait(lambda: (t := pc.when(pc.dig(self.status(), "s4_last"))) is not None and time.time() - t.timestamp() < 10, 60, 1)
@@ -520,8 +519,7 @@ class Run:
             pc.dig(st, "s4_pid"), time.time() - k["at"], (pc.dig(st, "s4_down_ms") or 0) - (k["off_ms"] or 0),
             pc.dig(st, "s4_requests"), k["requests"])
 
-    def kill_watchdog_recover(self, _):  # section 3.1, PRD-10 acceptance 11; the harness is never touched
-        m = self.m
+    def kill_watchdog_recover(self, m):  # section 3.1, PRD-10 acceptance 11; the harness is never touched
         self.need("goalcup", started=True, entry=True)
         self.at(m)
         wpid = read_pid(os.path.join(self.st["entry_dir"], "rec", "watchdog.pid"))
@@ -726,24 +724,24 @@ class Run:
 
     def daemon_check(self, end=False):
         """PRD-11 acceptance 5: goalcup start's `before` stops the stale daemon. One faults.jsonl line per look (after
-        start, and at verify with `left`: no such process may live after exit); check.py fails the row when either lived.
-        `alive` and `left` are null when /proc could not be read. Nothing when stale-gateway.sh left no pid."""
+        start: `alive`, the stale daemon itself; and at verify: `left`, any such process after exit); check.py fails the row
+        when either lived. The one field is null when /proc could not be read. Nothing when stale-gateway.sh left no pid."""
         pid = read_pid(self.path("exec", "stale-gateway.pid"))
         if pid is not None:
             pids = self.daemon_pids()
-            self.fault("daemon-check", script="stale-gateway.sh", alive=None if pids is None else pid in pids,
-                       **({"left": None if pids is None else bool(pids)} if end else {}))
+            got = None if pids is None else bool(pids) if end else pid in pids
+            self.fault("daemon-check", script="stale-gateway.sh", **{"left" if end else "alive": got})
 
     def stop_daemon(self):
-        """The cleanup after daemon_check: kills the daemon goalcup's start did not stop -> a line for the wipe step, or None."""
-        pid = read_pid(self.path("exec", "stale-gateway.pid"))
-        if pid is None or pid not in (self.daemon_pids() or []):
-            return None
-        try:
-            os.kill(pid, signal.SIGKILL)
-        except OSError:  # it left meanwhile
-            return None
-        return "daemon %d still alive, killed" % pid
+        """The cleanup after daemon_check: kills every daemon process (forks too) left -> a line for the wipe step, or None."""
+        left = 0
+        for pid in self.daemon_pids() or []:
+            try:
+                os.kill(pid, signal.SIGKILL)
+                left += 1
+            except OSError:  # it left meanwhile
+                pass
+        return "%d daemon process(es) still alive, killed" % left if left else None
 
     def wipe(self, _):
         if os.path.isdir(self.run):  # the watch ends before the run folder goes
@@ -784,7 +782,7 @@ def main(argv):
     run, extra = None, {}
     try:
         run = Run(argv[1], kind, m)
-        result, saw, *more = getattr(run, kind.replace("-", "_"))(arg)
+        result, saw, *more = getattr(run, kind.replace("-", "_"))(float(m) if kind in TIMED else arg)
         extra = more[0] if more else {}
     except Step as stop:
         result, saw = stop.args
