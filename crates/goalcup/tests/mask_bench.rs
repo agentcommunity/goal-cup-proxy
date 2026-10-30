@@ -60,7 +60,8 @@ fn by_hand_mask_bench() {
     match largest.and_then(|(_, p)| Some((std::fs::read(&p).ok()?, p))) {
         Some((bytes, p)) => println!(
             "mask_bench: {} ({} bytes) in 16 KiB pieces: {:.1} MB/s",
-            p.file_name().map_or_else(String::new, |n| n.to_string_lossy().into_owned()),
+            p.file_name()
+                .map_or_else(String::new, |n| n.to_string_lossy().into_owned()),
             bytes.len(),
             speed(&m, StreamKind::Native, &bytes, 16 * 1024)
         ),

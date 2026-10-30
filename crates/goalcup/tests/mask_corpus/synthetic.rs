@@ -100,11 +100,21 @@ pub fn planted_values() -> Vec<(&'static str, String)> {
     .concat();
     vec![
         ("openai", ["sk-", "proj-", &r.chars(ALNUM, 48)].concat()),
-        ("anthropic", ["sk-", "ant-", "api03-", &r.chars(ALNUM, 48)].concat()),
+        (
+            "anthropic",
+            ["sk-", "ant-", "api03-", &r.chars(ALNUM, 48)].concat(),
+        ),
         ("ghp", ["gh", "p_", &r.chars(ALNUM, 36)].concat()),
         (
             "github_pat",
-            ["github", "_pat_", &r.chars(ALNUM, 22), "_", &r.chars(ALNUM, 59)].concat(),
+            [
+                "github",
+                "_pat_",
+                &r.chars(ALNUM, 22),
+                "_",
+                &r.chars(ALNUM, 59),
+            ]
+            .concat(),
         ),
         ("akia", ["AK", "IA", &r.chars(UPPER, 16)].concat()),
         ("aws_secret", r.chars(B64, 40)),
@@ -117,7 +127,10 @@ pub fn planted_values() -> Vec<(&'static str, String)> {
         ("api_key", r.chars(ALNUM, 32)),
         ("token", r.chars(ALNUM, 32)),
         ("gateway", r.chars(ALNUM, 40)),
-        ("openrouter", ["sk-", "or-", "v1-", &r.chars(HEX, 64)].concat()),
+        (
+            "openrouter",
+            ["sk-", "or-", "v1-", &r.chars(HEX, 64)].concat(),
+        ),
         ("pem", pem),
         ("plain_key", r.chars(ALNUM, 32)),
     ]

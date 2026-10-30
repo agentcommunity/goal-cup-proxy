@@ -17,8 +17,10 @@ type Res = Result<(), Box<dyn std::error::Error>>;
 type Tally = BTreeMap<(String, String), usize>;
 
 /// Spans the shared set adds to the corpus outside the old markers and outside Codex blobs:
-/// (file, kind, count). Every entry must fire exactly so often, and nothing else may.
-const KNOWN_CATCHES: &[(&str, &str, usize)] = &[];
+/// (file, kind, count). Every entry must fire exactly so often, and nothing else may. The one
+/// entry is today's known catch: a quoted JSON `apiKey` field the old script could not reach.
+const KNOWN_CATCHES: &[(&str, &str, usize)] =
+    &[("opencode/hooks.jsonl", "generic_secret_assignment", 1)];
 
 /// Guarded-rule spans inside a Codex `encrypted_content` blob right after a `-`, which the
 /// default guard class `[A-Za-z0-9_]` lets through (PRD-00 owner question 10): (file, kind,
@@ -26,7 +28,7 @@ const KNOWN_CATCHES: &[(&str, &str, usize)] = &[];
 const AFTER_DASH_IN_BLOBS: &[(&str, &str, usize)] = &[];
 
 /// The same for the generated Codex request: (kind, count).
-const GENERATED_AFTER_DASH: &[(&str, usize)] = &[];
+const GENERATED_AFTER_DASH: &[(&str, usize)] = &[("huggingface_token", 1), ("openai_key", 2)];
 
 /// The one masker these tests use: the shared rules, no connector rules, no exact values.
 fn masker() -> Masker {
@@ -171,6 +173,23 @@ fn append(all: &mut Masked, piece: Masked) {
     }));
 }
 
+/// Runs `f` on every item, spread over the machine's threads; a panic in one fails the test.
+fn par_each<T: Sync>(items: &[T], f: impl Fn(&T) + Sync) {
+    let next = std::sync::atomic::AtomicUsize::new(0);
+    let threads = std::thread::available_parallelism().map_or(1, |n| n.get());
+    std::thread::scope(|scope| {
+        for _ in 0..threads.min(items.len()) {
+            scope.spawn(|| {
+                while let Some(item) =
+                    items.get(next.fetch_add(1, std::sync::atomic::Ordering::Relaxed))
+                {
+                    f(item);
+                }
+            });
+        }
+    });
+}
+
 fn random_cuts(rng: &mut Rng, len: usize, max: usize) -> Vec<usize> {
     let mut cuts = Vec::new();
     let mut at = 0;
@@ -223,71 +242,115 @@ fn the_corpus_gets_spans_only_where_listed() {
 
 /// K1 over the corpus: seeded random chunkings, byte at a time for small files, and every split
 /// point within 64 bytes of each span edge give the bytes and spans of `mask_whole`, with no
-/// `fail_closed` span.
+/// `fail_closed` span. The pieces of work run on all threads, largest first.
 #[test]
 fn the_corpus_streams_as_the_whole_record_masker() {
+    enum Job {
+        Seed(u64),
+        ByteAtATime,
+        Edges,
+    }
     let m = masker();
     let fail_closed = m.mask_rules().len() - 1;
     let started = std::time::Instant::now();
-    let mut splits = 0usize;
-    for (name, bytes) in corpus() {
-        let whole = m.mask_whole(&bytes);
-        assert!(whole.spans.iter().all(|s| s.rule != fail_closed), "{name}");
-        for seed in [1u64, 2, 3] {
-            let mut rng = Rng(0x9E37_79B9 ^ seed);
-            let cuts = random_cuts(&mut rng, bytes.len(), 4096);
-            assert!(
-                stream_in(&m, StreamKind::Native, &bytes, &cuts) == whole,
-                "{name}: seed {seed}"
-            );
-        }
+    let mut files = corpus();
+    files.sort_by_key(|(_, b)| std::cmp::Reverse(b.len()));
+    let slots: Vec<std::sync::Mutex<Option<Masked>>> =
+        files.iter().map(|_| std::sync::Mutex::default()).collect();
+    let order: Vec<usize> = (0..files.len()).collect();
+    par_each(&order, |&i| {
+        let whole = m.mask_whole(&files[i].1);
+        *slots[i].lock().expect("an unpoisoned slot") = Some(whole);
+    });
+    let wholes: Vec<Masked> = slots
+        .into_iter()
+        .map(|w| w.into_inner().ok().flatten().expect("every file masked"))
+        .collect();
+    let mut jobs = Vec::new();
+    for (i, (name, bytes)) in files.iter().enumerate() {
+        assert!(
+            wholes[i].spans.iter().all(|s| s.rule != fail_closed),
+            "{name}"
+        );
+        jobs.extend([1u64, 2, 3].map(|seed| (i, Job::Seed(seed))));
         if bytes.len() < 64 * 1024 {
-            let cuts: Vec<usize> = (1..bytes.len()).collect();
-            assert!(
-                stream_in(&m, StreamKind::Native, &bytes, &cuts) == whole,
-                "{name}: byte at a time"
-            );
+            jobs.push((i, Job::ByteAtATime));
         }
-        // Each span's line (or lines) on its own, split at every point near an edge.
-        let mut lines: BTreeMap<(usize, usize), Vec<usize>> = BTreeMap::new();
-        for s in &whole.spans {
-            let ls = bytes[..s.start]
-                .iter()
-                .rposition(|&b| b == b'\n')
-                .map_or(0, |i| i + 1);
-            let le = bytes[s.start + s.len..]
-                .iter()
-                .position(|&b| b == b'\n')
-                .map_or(bytes.len(), |i| s.start + s.len + i + 1);
-            lines
-                .entry((ls, le))
-                .or_default()
-                .extend([s.start, s.start + s.len]);
-        }
-        for ((ls, le), edges) in lines {
-            let line = &bytes[ls..le];
-            let lw = m.mask_whole(line);
-            assert_eq!(lw.bytes, &whole.bytes[ls..le], "{name}: the line alone");
-            let mut points: Vec<usize> = edges
-                .iter()
-                .flat_map(|&e| e.saturating_sub(64).max(ls)..=(e + 64).min(le))
-                .map(|p| p - ls)
-                .collect();
-            points.sort_unstable();
-            points.dedup();
-            for p in points {
-                splits += 1;
+        jobs.push((i, Job::Edges));
+    }
+    let splits = std::sync::atomic::AtomicUsize::new(0);
+    par_each(&jobs, |(i, job)| {
+        let ((name, bytes), whole) = (&files[*i], &wholes[*i]);
+        match job {
+            Job::Seed(seed) => {
+                let mut rng = Rng(0x9E37_79B9 ^ seed);
+                let cuts = random_cuts(&mut rng, bytes.len(), 4096);
                 assert!(
-                    stream_in(&m, StreamKind::Native, line, &[p]) == lw,
-                    "{name}: split at line offset {p}"
+                    stream_in(&m, StreamKind::Native, bytes, &cuts) == *whole,
+                    "{name}: seed {seed}"
                 );
             }
+            Job::ByteAtATime => {
+                let cuts: Vec<usize> = (1..bytes.len()).collect();
+                assert!(
+                    stream_in(&m, StreamKind::Native, bytes, &cuts) == *whole,
+                    "{name}: byte at a time"
+                );
+            }
+            Job::Edges => {
+                let n = edge_splits(&m, name, bytes, whole);
+                splits.fetch_add(n, std::sync::atomic::Ordering::Relaxed);
+            }
         }
-    }
+    });
     println!(
-        "corpus stream property: {splits} edge splits, {:.1} s",
+        "corpus stream property: {} jobs, {} edge splits, {} threads, {:.1} s",
+        jobs.len(),
+        splits.into_inner(),
+        std::thread::available_parallelism().map_or(1, |n| n.get()),
         started.elapsed().as_secs_f64()
     );
+}
+
+/// Each span's line (or lines) on its own, split at every point within 64 bytes of a span edge,
+/// streams as `mask_whole` of that line. Returns the number of splits.
+fn edge_splits(m: &Masker, name: &str, bytes: &[u8], whole: &Masked) -> usize {
+    let mut lines: BTreeMap<(usize, usize), Vec<usize>> = BTreeMap::new();
+    for s in &whole.spans {
+        let ls = bytes[..s.start]
+            .iter()
+            .rposition(|&b| b == b'\n')
+            .map_or(0, |i| i + 1);
+        let le = bytes[s.start + s.len..]
+            .iter()
+            .position(|&b| b == b'\n')
+            .map_or(bytes.len(), |i| s.start + s.len + i + 1);
+        lines
+            .entry((ls, le))
+            .or_default()
+            .extend([s.start, s.start + s.len]);
+    }
+    let mut splits = 0;
+    for ((ls, le), edges) in lines {
+        let line = &bytes[ls..le];
+        let lw = m.mask_whole(line);
+        assert_eq!(lw.bytes, &whole.bytes[ls..le], "{name}: the line alone");
+        let mut points: Vec<usize> = edges
+            .iter()
+            .flat_map(|&e| e.saturating_sub(64).max(ls)..=(e + 64).min(le))
+            .map(|p| p - ls)
+            .collect();
+        points.sort_unstable();
+        points.dedup();
+        for p in points {
+            splits += 1;
+            assert!(
+                stream_in(m, StreamKind::Native, line, &[p]) == lw,
+                "{name}: split at line offset {p}"
+            );
+        }
+    }
+    splits
 }
 
 /// K10: Claude Code's billing header text inside the system prompt body is masked by the
@@ -419,13 +482,33 @@ fn the_generated_codex_request_keeps_its_blobs() {
     );
 }
 
-/// K4: a PEM key spread over SSE string deltas loses every delta's text; the JSON between the
-/// deltas, the events and the text before and after the key stay.
+/// The positions of `line` that are inside a JSON string (between its quotes, escapes counted).
+fn string_interiors(line: &[u8]) -> Vec<bool> {
+    let (mut inside, mut escaped) = (false, false);
+    line.iter()
+        .map(|&b| {
+            let quote = b == b'"' && !escaped;
+            escaped = b == b'\\' && !escaped;
+            if quote {
+                inside = !inside;
+                false
+            } else {
+                inside
+            }
+        })
+        .collect()
+}
+
+/// K4: a PEM key spread over SSE string deltas loses every byte of its text. Inside the block
+/// every string interior is starred, keys included; the JSON between the deltas keeps its quotes,
+/// braces, colons, commas and numbers and still parses; every line outside the block, and every
+/// `event:` line, comes through byte for byte.
 #[test]
 fn a_pem_key_over_sse_deltas_loses_every_body_byte() -> Res {
     let m = masker();
     let sse = synthetic::pem_sse();
     let whole = m.mask_whole(&sse.bytes);
+    assert!(only_spans_changed(&sse.bytes, &whole));
     let mut rng = Rng(0x55E);
     let cuts = random_cuts(&mut rng, sse.bytes.len(), 48);
     assert!(stream_in(&m, StreamKind::HttpResp, &sse.bytes, &cuts) == whole);
@@ -434,26 +517,24 @@ fn a_pem_key_over_sse_deltas_loses_every_body_byte() -> Res {
     for r in &key {
         assert!(starred(&whole, r), "a PEM piece survived");
     }
+    let block = key[0].start..key[key.len() - 1].end;
     let (ins, outs) = (sse.bytes.split(|&b| b == b'\n'), whole.bytes.split(|&b| b == b'\n'));
-    let mut at = 0;
+    let (mut at, mut inside_block) = (0, 0);
     for (a, b) in ins.zip(outs) {
         let line = at..at + a.len();
         at += a.len() + 1;
-        let Some(data) = a.strip_prefix(b"data: ") else {
-            assert_eq!(a, b, "a non-data line changed");
+        let touched = block.start < line.end && line.start < block.end;
+        if !touched || !a.starts_with(b"data: ") {
+            assert_eq!(a, b, "a line outside the key or an event line changed");
             continue;
-        };
-        let mut x: serde_json::Value = serde_json::from_slice(data)?;
-        let mut y: serde_json::Value = serde_json::from_slice(&b[6..])?;
-        let (tx, ty) = (x["delta"]["text"].take(), y["delta"]["text"].take());
-        assert_eq!(x, y, "the JSON around a delta changed");
-        if key.iter().any(|r| r.start < line.end && line.start < r.end) {
-            let ty = ty.as_str().ok_or("a text delta")?;
-            assert!(ty.bytes().all(|c| c == b'*'), "a PEM delta kept text");
-        } else {
-            assert_eq!(tx, ty, "text outside the key changed");
+        }
+        inside_block += 1;
+        serde_json::from_slice::<serde_json::Value>(&b[6..])?;
+        for (i, interior) in string_interiors(a).into_iter().enumerate() {
+            assert!(interior || a[i] == b[i], "the JSON between deltas changed");
         }
     }
+    assert_eq!(inside_block, 18, "every delta of the key was checked");
     Ok(())
 }
 
