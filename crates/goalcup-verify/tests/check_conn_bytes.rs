@@ -100,5 +100,5 @@ fn a_ws_stream_gap_names_its_lost_bytes() {
     e.count();
     let (code, v) = check(&e.seal(), &[]);
     assert_eq!(result(&v, "conn_bytes"), "pass");
-    assert_eq!(code, 1);
+    assert_eq!(code, 1, "{:?}", ids_with(&v, "fail"));
 }
