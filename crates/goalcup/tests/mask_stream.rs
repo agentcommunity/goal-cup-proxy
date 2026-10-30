@@ -40,7 +40,19 @@ fn keys() -> Vec<(String, usize)> {
         (["github", "_pat_", &run(ALNUM, 30, 3)].concat(), 11),
         (["gh", "p_", &run(ALNUM, 30, 4)].concat(), 4),
         (["AK", "IA", &run(upper, 16, 5)].concat(), 4),
-        (["ey", "J", &run(ALNUM, 12, 6), ".", &run(ALNUM, 12, 7), ".", &run(ALNUM, 12, 8)].concat(), 3),
+        (
+            [
+                "ey",
+                "J",
+                &run(ALNUM, 12, 6),
+                ".",
+                &run(ALNUM, 12, 7),
+                ".",
+                &run(ALNUM, 12, 8),
+            ]
+            .concat(),
+            3,
+        ),
         (["xo", "xb-", &run(ALNUM, 20, 9)].concat(), 5),
         (["AI", "za", &run(ALNUM, 35, 10)].concat(), 4),
         (["h", "f_", &run(ALNUM, 30, 11)].concat(), 3),
@@ -48,7 +60,10 @@ fn keys() -> Vec<(String, usize)> {
         (["xa", "i-", &run(ALNUM, 30, 13)].concat(), 4),
         (["sk", "_live_", &run(ALNUM, 24, 14)].concat(), 8),
         (["gl", "pat-", &run(ALNUM, 24, 15)].concat(), 6),
-        (["do", "p_v1_", &run(b"0123456789abcdef", 40, 16)].concat(), 7),
+        (
+            ["do", "p_v1_", &run(b"0123456789abcdef", 40, 16)].concat(),
+            7,
+        ),
     ]
 }
 
@@ -80,9 +95,16 @@ fn planted() -> Vec<Vec<u8>> {
         let b = "\\".repeat(k);
         out.push(format!("{{{b}\"api_key{b}\": {b}\"{v}{b}\"}} {b}\"x\":1\n").into_bytes());
     }
-    out.push(format!("Authorization: Bearer {v}\nexport API_KEY={v}\ntoken = '{v}'\n").into_bytes());
-    out.push(format!("grant_type=refresh_token&refresh_token=1%2F%2F0g{v}&x=0.AX{v}\n").into_bytes());
-    out.push(format!("git remote -v\nhttps://u:{v}@h.example and {{\"u\":\"https:\\/\\/a:{v}@b\"}}\n").into_bytes());
+    out.push(
+        format!("Authorization: Bearer {v}\nexport API_KEY={v}\ntoken = '{v}'\n").into_bytes(),
+    );
+    out.push(
+        format!("grant_type=refresh_token&refresh_token=1%2F%2F0g{v}&x=0.AX{v}\n").into_bytes(),
+    );
+    out.push(
+        format!("git remote -v\nhttps://u:{v}@h.example and {{\"u\":\"https:\\/\\/a:{v}@b\"}}\n")
+            .into_bytes(),
+    );
     out.push(b"see sk-abcde...wxyz and sk-0\xe2\x80\xa6cdef and \"sk-ab\\u2026wxyz\"\n".to_vec());
     out.push(
         format!(
@@ -90,7 +112,12 @@ fn planted() -> Vec<Vec<u8>> {
         )
         .into_bytes(),
     );
-    out.push(format!("{{\"d\":\"-----BEGIN EC PRIVATE KEY-----\\n{v}\"}}\n{{\"d\":\"{v}\\n-----END\"}}\n").into_bytes());
+    out.push(
+        format!(
+            "{{\"d\":\"-----BEGIN EC PRIVATE KEY-----\\n{v}\"}}\n{{\"d\":\"{v}\\n-----END\"}}\n"
+        )
+        .into_bytes(),
+    );
     out.push(
         format!(
             "{{\"wsToken\":\"{v}\",\"x-codex-turn-state\": \"{v}\",\"safety_identifier\":17}}\nx-anthropic-billing-header: cc_version=2.1; {v}\n"
@@ -161,10 +188,19 @@ fn every_split_equals_the_whole_record_masker() -> Res {
     for input in planted() {
         let whole = m.mask_whole(&input);
         assert_eq!(whole.bytes.len(), input.len());
-        assert!(!whole.spans.is_empty(), "{:?}", String::from_utf8_lossy(&input));
+        assert!(
+            !whole.spans.is_empty(),
+            "{:?}",
+            String::from_utf8_lossy(&input)
+        );
         for split in 0..=input.len() {
             let got = stream_in(&m, &input, &[split]);
-            assert_eq!(got, whole, "split {split} of {:?}", String::from_utf8_lossy(&input));
+            assert_eq!(
+                got,
+                whole,
+                "split {split} of {:?}",
+                String::from_utf8_lossy(&input)
+            );
         }
         for max in [1, 3, 17, 64] {
             for _ in 0..5 {
@@ -185,7 +221,10 @@ fn never_less_past_the_hold() -> Res {
     let long = |unit: &str| unit.repeat(20 * 1024 / unit.len() + 1);
     let cases = [
         format!("{{\"api_key\":\"{}\"}}\n{gh}\n", long("a")),
-        format!("-----BEGIN RSA PRIVATE KEY-----\n{} {gh}\nok {gh}\n", long("MIIEowIB")),
+        format!(
+            "-----BEGIN RSA PRIVATE KEY-----\n{} {gh}\nok {gh}\n",
+            long("MIIEowIB")
+        ),
         format!("Authorization: Bearer {}\n{gh}\n", long("Ab9_")),
         format!("{{\"x\":\"{}\"}}\n{gh}\n", long("sk-")),
         format!("{}{gh}\n", long("\\")),
@@ -196,14 +235,21 @@ fn never_less_past_the_hold() -> Res {
         let input = input.as_bytes();
         let want = starred_set(&m.mask_whole(input));
         let max = rng.below(3000) + 1;
-        for cuts in [vec![16 * 1024], vec![1, 8, 64], random_cuts(&mut rng, input.len(), max)] {
+        for cuts in [
+            vec![16 * 1024],
+            vec![1, 8, 64],
+            random_cuts(&mut rng, input.len(), max),
+        ] {
             let got = stream_in(&m, input, &cuts);
             assert_eq!(got.bytes.len(), input.len());
             let have = starred_set(&got);
             let missing = want.iter().zip(&have).filter(|(w, h)| **w && !**h).count();
             assert_eq!(missing, 0, "{missing} whole-record bytes released raw");
             let tail = &got.bytes[got.bytes.len() - gh.len() - 1..got.bytes.len() - 1];
-            assert!(tail.iter().all(|&b| b == b'*'), "the key after the overflow is masked");
+            assert!(
+                tail.iter().all(|&b| b == b'*'),
+                "the key after the overflow is masked"
+            );
         }
     }
     Ok(())
@@ -223,12 +269,19 @@ fn a_gap_or_boundary_never_releases_a_secret_prefix_raw() -> Res {
             append(&mut out, s.gap());
             assert_eq!(out.bytes.len(), k);
             if k >= at + prefix {
-                assert!(out.bytes[at..k].iter().all(|&b| b == b'*'), "{key} cut at {k}");
+                assert!(
+                    out.bytes[at..k].iter().all(|&b| b == b'*'),
+                    "{key} cut at {k}"
+                );
             }
             let mut s = m.stream(StreamKind::WsUp);
             let mut out = s.push(&input.as_bytes()[..k]);
             append(&mut out, s.boundary());
-            assert_eq!(out, m.mask_whole(&input.as_bytes()[..k]), "{key} message cut at {k}");
+            assert_eq!(
+                out,
+                m.mask_whole(&input.as_bytes()[..k]),
+                "{key} message cut at {k}"
+            );
         }
     }
     Ok(())
@@ -250,10 +303,16 @@ fn a_fail_closed_window_ends_at_the_message() -> Res {
     let m = masker()?;
     let fail_closed = m.mask_rules().len() - 1;
     let mut s = m.stream(StreamKind::WsUp);
-    let first = format!(r#"{{"type":"response.create","input":"sk-{}"}}"#, "A9".repeat(10 * 1024));
+    let first = format!(
+        r#"{{"type":"response.create","input":"sk-{}"}}"#,
+        "A9".repeat(10 * 1024)
+    );
     let out = messages(&mut s, first.as_bytes());
     assert_eq!(out.bytes.len(), first.len());
-    assert!(out.spans.iter().any(|s| s.rule == fail_closed), "the overflow is fail_closed");
+    assert!(
+        out.spans.iter().any(|s| s.rule == fail_closed),
+        "the overflow is fail_closed"
+    );
     for i in 2..=11 {
         let plain = format!(r#"{{"type":"response.create","n":{i},"input":"hello there"}}"#);
         let out = messages(&mut s, plain.as_bytes());
@@ -340,7 +399,11 @@ fn a_long_codex_reasoning_item_streams_through_intact() -> Res {
     let whole = m.mask_whole(input);
     assert_eq!(whole.bytes, input);
     let mut rng = Rng(0xC0DE_C0DE);
-    for cuts in [vec![16 * 1024], vec![4096, 8192, 12288], random_cuts(&mut rng, input.len(), 3000)] {
+    for cuts in [
+        vec![16 * 1024],
+        vec![4096, 8192, 12288],
+        random_cuts(&mut rng, input.len(), 3000),
+    ] {
         let got = stream_in(&m, input, &cuts);
         assert!(got.spans.is_empty());
         assert!(got.bytes == input, "the record changed");

@@ -524,12 +524,8 @@ fn no_rule_span_holds_a_quote_or_splits_an_escape() -> Res {
         assert!(std::str::from_utf8(&out.bytes).is_ok(), "{input}");
         for s in out.spans.iter().filter(|s| s.rule != fail_closed) {
             let before = |at: usize| b[..at].iter().rev().take_while(|&&c| c == b'\\').count();
-            for at in s.start..s.start + s.len {
-                assert!(
-                    !(b[at] == b'"' && before(at) % 2 == 0),
-                    "{input}: a span holds a quote"
-                );
-            }
+            let quote = (s.start..s.start + s.len).any(|at| b[at] == b'"' && before(at) % 2 == 0);
+            assert!(!quote, "{input}: a span holds a quote");
             assert_eq!(
                 before(s.start) % 2,
                 0,
