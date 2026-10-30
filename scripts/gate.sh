@@ -92,9 +92,10 @@ step npm --prefix server/worker test
 step python3 -m unittest scripts/test_install.py
 
 if [ "$tier" = full ]; then
-    # Every other #[ignore] test (end to end, the real Worker). Early in the build there may be
-    # none, which nextest reports as a warning.
-    step cargo nextest run --locked --workspace --run-ignored only --no-tests=warn \
+    # Every other #[ignore] test (end to end, the real Worker). No --no-tests flag: nextest fails
+    # when none run, so a renamed, un-ignored or missing e2e_run.rs or upload_worker.rs cannot
+    # pass. Until the first of them merges (phase 2) the full tier fails here; phase 1 needs fast.
+    step cargo nextest run --locked --workspace --run-ignored only \
         -E 'not test(/^by_hand_/)'
     # The binaries the pad copies, built after the test builds and without dev-dependencies.
     step cargo build --release --locked -p goalcup -p goalcup-verify
