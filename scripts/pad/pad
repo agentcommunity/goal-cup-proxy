@@ -215,7 +215,7 @@ def runner_limits(s):
     two faults count from minute m; keep-going and the detached watch from their start."""
     got = {k: step_limit(s, k) for k in ("setup", "start", "wait-calls", "look", "seal", "wait-upload", "wait-recovery")}
     run = int(math.ceil(s["minutes"] * 60))
-    got["wait-recovery"] -= 30  # pad-run writes its own FAIL line before the step's limit here runs out
+    got["wait-recovery"] -= 30
     return dict(got, paste=got["start"], verify=step_limit(s, "check"), wipe=step_limit(s, "cleanup") // 3, spend=120,
                 **{"kill-recorder": 120, "kill-watchdog-recover": 240, "keep-going": run, "seal-now": 120, "watch": run + 1800})
 
