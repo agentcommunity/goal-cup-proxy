@@ -969,3 +969,19 @@ kept and now cites BUILD-PROMPT section 5, since B3 no longer carries it.
 - **Size report, PRD-17 phase 0 slice** (`wc -l` on integration at 1423f8f9): 0 lines of PRD-17 code
   against the shared lessons and test-support tests row of 3,000 (PRD-00 "Size budget"); none of that
   row is on integration yet. `LESSONS.md` 197 lines of docs, outside the budget.
+
+### 2026-10-30, replan after PRD-15 slice 1 (merge 98bbb7e9)
+
+- **Size report, PRD-15 slice 1** (wc -l on integration at 98bbb7e9). PRD-15 has no row in PRD-00
+  "Size budget"; docs are not counted there. `AGENTS.md` 111 (was 110). `docs/DECISIONS.md` 1,418 (was
+  1,162; plus 256 for the header line, "Owner decisions in force", D75 to D86 and the status rows).
+  `docs/research/results/2026-10-30-two-hour-run.md` 304 (new, a copy). Review B-1 names about 30 to 40
+  DECISIONS lines that can go in the after-merge rewrite. No code.
+- **The phase 3 order holds.** PRD-14 deletes `check-links.py` in the phase 3 merge only after
+  PRD-15's last link run. That run leaves out the run 1 report by name (its 21 evidence links dangle by
+  design, PRD-15 amendment) and runs on Python 3.10 or later in the box. Gate fast does not run
+  `check-links.py`, so those links block no merge.
+- **PRD-15's stale-term grep fails on `AGENTS.md` until PRD-15 slice 2 lands the map** (review B-4):
+  the map and "Read next" still name the old crates, pins, CONTRACTS, TERMINATION and CHEAT-CHECKLIST.
+  Read that check after slice 2, not before.
+- No locked ledger item is touched and no owner question comes from this slice.
