@@ -836,3 +836,98 @@ PRD-01, PRD-05, PRD-08, PRD-12, PRD-16 and the old code.
   missing bucket). The owner's token for the script needs read and write on each usage bucket that
   exists; PRD-15 writes that into OPERATING with the usage job section.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-08 slice 1 (merge d10feef7)
+
+- **The placeholder is on integration:** `crates/goalcup-verify/src/usage/mod.rs` (12 lines),
+  `pub fn run(args: Vec<std::ffi::OsString>) -> std::process::ExitCode`, `args` being those after the
+  word `usage`; `lib.rs` has `pub mod usage`. PRD-09's first merge replaces the file whole (not a
+  text merge) and keeps that signature. `main.rs` dispatches `usage` through clap with its help flag
+  off, so `usage --help` reaches PRD-09's code.
+- **Dependencies are declared once** in PRD-08's `crates/goalcup-verify/Cargo.toml`: `goalcup-format`,
+  `zstd`, `serde`, `serde_json`, `sha2`, `clap`, `regex`, `base64` and `rusqlite` 0.41 with
+  `bundled`. PRD-09 adds none without a seam line to PRD-08, which owns the file.
+- PRD-08's next slice builds `legs.rs` and `history.rs` on U1 (stub first, judge 12:19Z); U1 stays as
+  PRD-09 publishes it.
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-09 slice 1 (merge f5a529c8)
+
+- **U1 as merged, the shape later slices keep.** `crates/goalcup-verify/src/usage/mod.rs` replaces
+  PRD-08's placeholder; `usage::run(args: Vec<OsString>) -> ExitCode` keeps its signature (the stub
+  says the reader is not built and exits 3). `Calls::new()` takes no argument: the sink reads the
+  `start` EVENT from the pushed records. `CallRow` has the section 6 fields plus `host`,
+  `host_kind`, `shape`, `via`, `detail`, `effort`, `extra` (a map of unknown integer usage members)
+  and `tokens: Tokens` (each count `Option`, never 0 for "not said"); `usage_from` is
+  `Option<Leg>`. `CallTable.children` is `Option<map>`: `None` means parentage was not read, and
+  PRD-08's `subagents_present` skips on it (it no longer follows from `Reason::NoReader`).
+  `CallRow::new(leg, entry, boot, kind)`, `Thread::new(id)` and `CallTable::default()` are the only
+  ways to build these; callers set fields or use struct update from them, never a full struct
+  literal, so a field added later breaks no caller. Wall times are nanoseconds since the Unix epoch,
+  as LINK `wall_ns`.
+- **Nit B10 is taken in the core slice (replan decision).** `Thread` and `CallTable` each hold one
+  fact in two fields (`readable: bool` and `reason: Option<Reason>`, "None exactly when readable is
+  true"). The core slice drops both `readable` fields, keeps `reason` (`None` means readable) and
+  adds `pub fn readable(&self) -> bool { self.reason.is_none() }` to each. S7's JSON still writes
+  both `readable` and `reason` from that one field, so PRD-12 and the job see no change. Nothing on
+  integration reads U1 yet, so this is a few lines smaller at no cost now. The slice posts it as a
+  seam line to PRD-08. If PRD-08's `legs.rs` or `history.rs` reaches integration first and reads the
+  field, the fields stay as merged and B10 is closed as declined: no cross-lane churn for a nit.
+  `Thread::new` stays written by hand either way (a derived default would mean readable).
+- **Fixtures: section 9's list is the whole copy.** `tests/usage_fixtures/` holds the Codex
+  WebSocket run, the Claude Code wire excerpt and the four `m2-native` excerpts, each folder with a
+  `provenance.json`, sha256 checked against the old crate. The Claude Code wire excerpt was turned
+  into the Codex fixture's line format and keeps no request-id header (the source had none); the
+  `m2-native` provenance comes from the old `m2_native_observations.rs` doc comment (the old folder
+  had no provenance file). The `connectors` fixtures named in the "Today" fate table and in PRD-13's
+  move table are not copied: they are the old decoders' expected-count snapshots (ledger B10, no
+  golden snapshots of internal shapes) and only point at the `m2-native` files already copied.
+  PRD-13 deletes them with the old crate.
+- **Size, `wc -l` at f5a529c8:** `usage/mod.rs` 304 (89 of them doc comments) against its own
+  estimate of 250, with `run`, the `Calls` sink, the join, totals and output still to come. The extra
+  lines are the final U1 types the estimate did not size (the seven `CallRow` fields above, `Tokens`,
+  `HostKind`, `Shape`, `Via`, `Join`, the constructors). The row (about 1,470 src) stands: the core
+  slice reports each file against section 2's estimates, keeps the type docs to one line where one
+  line says it, and names the point any line past 1,617 (110% of the row) serves in a decision line.
+  Tests: no `usage_run1.rs` yet (the 200-line test row is untouched; the stub's checks ride on
+  PRD-08's tests). Fixtures are 555 lines of data, outside both rows.
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-09 slice 2 (merge dab0ce1f)
+
+- **On integration:** `shapes.rs`, `sse.rs`, `wire.rs` and the `Calls` sink in `mod.rs`. Every wire
+  call of an entry (HTTP and WebSocket, any host, shape picked by path suffix) is a `CallRow` with
+  model, effort, the five token numbers, `extra`, outcome, detail, `whole`, host, `host_kind` and
+  times, in (boot, sid, msg) order. `finish()` returns those rows with the rest of
+  `CallTable::default()`: `reason: Some(NoReader)`, no threads, `children: None`,
+  `native_form: None`. `usage::run` is still the stub (exit 3). Rules the next slices keep, as merged
+  (lane log 15:08Z to 15:36Z): warm-ups and interrupts are rows of their own kind, never calls; a rate
+  limit sent as both a stream `error` and a `response.failed` is one row; a WebSocket message still
+  open at a new boot's PART or at the end of the records is cut, so a crash-cut create is a call with
+  `whole: false`; a GAP marks a call not whole on half-open ranges, with a loss ending at a message
+  start counted (A8) and a `lost 1` GAP hitting only when its offset is inside the range (B9).
+- **B10 is done:** `Thread.readable` and `CallTable.readable` are gone; `readable()` methods read
+  `reason`. No other lane read the fields (PRD-08 note).
+- **Size decision** (review B11; `wc -l` at dab0ce1f, same as bce2f879; row 1,470 src and 200 tests).
+  Src 1,525, 104% of the row with 4 of 8 files written: `wire.rs` 601 (estimate 250), `shapes.rs` 456
+  (300), `mod.rs` 407 (250, of which 85 doc-comment lines), `sse.rs` 61 (40); these four are 182% of
+  their 840-line estimate. Tests 299 (`usage_run1.rs`, 6 cases), 150% of the row. Held to section 2's
+  estimates, the rest (`native.rs` 250, `sqlite.rs` 150, `hints.rs` 80, `out.rs` 150, the join,
+  totals and `run`) puts src near 2,300, so the 110% line (1,617) cannot hold. The extra lines serve
+  point 1 (every call counted once, cut and lost calls kept as not whole, the restart cut) and ledger
+  S2 (per-shape model and token tables for the five numbers), not features. This replan sets the
+  PRD-09 ceiling to **2,250 src and 380 tests**, with these limits for what is left: `native.rs` 250,
+  `sqlite.rs` 150, `hints.rs` 80, the join, totals and `run` at most 130 more in `mod.rs`, `out.rs`
+  120 for S7 (`{entry}.json`, `{entry}.calls.jsonl`, `run.json`). Cuts made first, before anything is
+  added: `mod.rs` type docs to one line where one line says it (section 2 rule, about 30 lines);
+  B12 below. In the third slice `usage table` (the CSV) and `--text` are built only if they fit
+  under 2,250, the CSV last: no PRD reads either (the per-thread rows are in the summary JSON and
+  `--text` waits on PRD-00 question 1); acceptance lists one not built as cut. Past 2,250 or 380 needs
+  a new `decision` line. The end-of-build report counts this against the Rust totals.
+- **Open nit B12, taken at the next touch of `usage_run1.rs`:** `a_create_cut_by_a_restart_is_a_call_not_whole`
+  builds its create with a hand `format!`; it uses `create("ws-x", None).to_string()` like the other
+  cases (same model name, same MARK, the 40-byte cut still lands inside the message), so the file has
+  one way to build a create.
+- **Declined, accepted by both reviewers:** A3 (pending creates are not dropped at a `ws_down` GAP;
+  `previous_response_id` bounds the shift) and the `End::Failed` arm merge (no line saved).
+- No locked ledger item is touched and no owner question comes from this slice.

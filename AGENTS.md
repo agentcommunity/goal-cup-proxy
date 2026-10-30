@@ -37,7 +37,7 @@ which wins over every PRD, then the [PRD index](docs/plans/2026-10-30-v1.0/PRD-0
 | `connectors/<id>/` | One harness = one `harness.toml` plus seed files. Data, not code. Pinned by digest. |
 | `server/worker` | The upload server: a Cloudflare Worker in TypeScript. |
 | `scripts/` | The gate, pins, connector check, link check, matrix, release and research tools. One line each, and which ones CI and the gate run: [`scripts/README.md`](scripts/README.md). |
-| `skills/` | Agent skills: `adding-a-capture-harness` (for contributors), `goal-cup-setup` (for participants), `goal-cup` (copied into the harness home). |
+| `skills/` | `goal-cup` (copied into the harness home) and `adding-a-capture-harness` (contributors). |
 | `docs/` | Docs by audience: [`docs/README.md`](docs/README.md). Finished work and old narratives: `docs/archive/`. |
 | `packaging/` | Release packaging and `install.sh`. |
 | `spikes/`, `harnesses/` | Old measurements (read-only fixtures) and local harness installs (git-ignored). |
