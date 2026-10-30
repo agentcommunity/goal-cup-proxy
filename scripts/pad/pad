@@ -167,8 +167,15 @@ def load_settings(raw, pad):
 
 
 def step_limit(s, kind):
-    """Seconds; the one owner of every step limit (pad-run reads them from settings.json)."""
+    """Seconds; the one owner of every step limit (pad-run's own come from it through runner_limits)."""
     return LIMITS.get(kind, 5) * 60 + (s["minutes"] * 60 if kind in ("seal", "check") else 0)
+
+
+def runner_limits(s):
+    """Seconds per pad-run step, the ones pad-run reads from settings.json: verify works to the check step's
+    limit, and wipe to a third of cleanup's (the box's rm and list take the other thirds)."""
+    got = {k: step_limit(s, k) for k in ("setup", "start", "wait-calls", "look", "seal")}
+    return dict(got, verify=step_limit(s, "check"), wipe=step_limit(s, "cleanup") // 3)
 
 
 def step_list(s, harness):
@@ -250,11 +257,11 @@ class Run:
         shutil.copy(os.path.join(HERE, "prompts", s["prompt"] + ".txt") if s["prompt"] in ("micro", "smoke", "full")
                     else s["prompt"], os.path.join(stage, "prompt-source.txt"))
         for k in ("connector", "hosts"):  # S16 files, passed to goalcup start from the run folder
-            shutil.copy(s[k], os.path.join(stage, k + ".toml")) if s.get(k) else None
-        limits = dict({k: step_limit(s, k) for k in LIMITS}, verify=step_limit(s, "check"), wipe=step_limit(s, "cleanup") // 3)
+            if s.get(k):
+                shutil.copy(s[k], os.path.join(stage, k + ".toml"))
         with open(os.path.join(stage, "settings.json"), "w") as f:  # pad-run's input: names, never a value
             json.dump(dict({k: v for k, v in s.items() if k != "plan"}, harness_id=s["harness"], harness=self.harness,
-                           session=self.name, limits=limits,
+                           session=self.name, limits=runner_limits(s),
                            case=self.case, version=s.get("version") or self.harness["version"], key_files=names,
                            route_key=names[-1] if names else None, home_env=cap.get("home", {}).get("env"),
                            native=[{k: r.get(k) for k in ("name", "root", "pattern")} for r in cap.get("native", [])],
@@ -308,7 +315,7 @@ class Run:
     def step_check(self, step, limit):
         """Section 8: pad-run verify (sized to the run, it always writes its tar), the tar copied out, meta.json,
         then check.py's PADCHECK line."""
-        self.box("verify", limit + 120)
+        self.box("verify", runner_limits(self.s)["verify"] + 120)
         tar = os.path.join(self.dir, "box.tar")
         if self.s["where"] == "here":
             shutil.copy(os.path.join(self.box_dir, "out.tar"), tar)
@@ -331,9 +338,9 @@ class Run:
 
     def step_cleanup(self, step, limit):
         """Section 3.2: pad-run wipe, box removed by name, then a list to confirm. Never changes a result."""
-        saw = []
+        saw, third = [], runner_limits(self.s)["wipe"]
         try:
-            result, wiped = self.box("wipe", limit / 3) if self.tried or self.s["where"] == "here" and self.box_dir else ("ok", "")
+            result, wiped = self.box("wipe", third) if self.tried or self.s["where"] == "here" and self.box_dir else ("ok", "")
             saw += [wiped if result == "ok" else "wipe %s: %s" % (result, wiped)] if wiped else []
         except Exception as e:
             saw.append("wipe %s" % type(e).__name__)
@@ -341,12 +348,12 @@ class Run:
             shutil.rmtree(self.box_dir or self.tmp, ignore_errors=True)
             return "ok", ", ".join(saw + ["no box"])
         try:
-            r = self.sbx("rm", self.name, limit=limit / 3)
+            r = self.sbx("rm", self.name, limit=third)
             saw.append("rm exit %d" % r.returncode if r.returncode else "box removed")
         except Exception as e:
             saw.append("rm %s" % type(e).__name__)
         try:
-            r = self.sbx("list", "--prefix", "pad-", limit=limit / 3)
+            r = self.sbx("list", "--prefix", "pad-", limit=third)
             live = [b.get("status") for b in (json.loads(x) for x in r.stdout.splitlines() if x.startswith("{"))
                     if b.get("name") == self.name] if r.returncode == 0 else ["unknown"]
             if all(st in ("stopped", "deleted", "failed") for st in live):

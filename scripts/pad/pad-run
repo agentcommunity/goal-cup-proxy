@@ -265,19 +265,23 @@ class Run:
         append(self.path("watch", "live.jsonl"), dict(facts, result=rep.get("result"), fail=fail))
         return "ok", ", ".join("%s %s" % kv for kv in facts.items())
 
+    def sealed(self):
+        return self.status().get("mode") == "sealed"
+
+    def dead(self):  # the harness pane is gone, or there never was one
+        return not shutil.which("tmux") or sh(["tmux", "list-panes", "-t", self.tmux, "-F", "#{pane_dead}"]).stdout.strip() != "0"
+
     def seal(self, _):
         self.need("goalcup", started=True)
-        dead = lambda: sh(["tmux", "list-panes", "-t", self.tmux, "-F", "#{pane_dead}"]).stdout.strip() != "0"  # noqa: E731
-        sealed = lambda: self.status().get("mode") == "sealed"  # noqa: E731
-        wait(lambda: sealed() or dead(), self.st["pasted"] + float(self.s["minutes"]) * 60 - time.time(), 5)
-        why = "at the harness's exit" if sealed() or dead() else "at %s min" % self.s["minutes"]
-        if not sealed():
+        wait(lambda: self.sealed() or self.dead(), self.st["pasted"] + float(self.s["minutes"]) * 60 - time.time(), 5)
+        why = "at the harness's exit" if self.sealed() or self.dead() else "at %s min" % self.s["minutes"]
+        if not self.sealed():
             sh([tool("goalcup"), "seal", "--yes"], env=self.env, cwd=self.project)
-        ok = wait(sealed, self.left() - 30, 5)
+        ok = wait(self.sealed, self.left() - 30, 5)
         found = re.findall(r"([\d,]+) model requests written", self.pane())
         self.st["end_screen_requests"] = int(found[-1].replace(",", "")) if found else None
         self.harness_files()
-        self.wipe_secrets(home=ok or dead())  # an unsealed entry may still be reading the home: wipe leaves it
+        self.wipe_secrets(home=ok or self.dead())  # an unsealed entry may still be reading the home: wipe leaves it
         return ("ok", "sealed %s, %s model requests written" % (why, (self.status().get("written") or {}).get("model_requests"))
                 ) if ok else ("timeout", "%s, not sealed within the step's limit after goalcup seal" % why)
 
@@ -297,7 +301,10 @@ class Run:
                 ("harness home", self.st.get("home"))] * home + [(k, self.path(k)) for k in ks]:
             if p and os.path.lexists(p):
                 found += [what] if not os.path.isdir(p) or os.listdir(p) else []
-                shutil.rmtree(p, ignore_errors=True) if os.path.isdir(p) and not os.path.islink(p) else os.remove(p)
+                if os.path.isdir(p) and not os.path.islink(p):
+                    shutil.rmtree(p, ignore_errors=True)
+                else:
+                    os.remove(p)
         return found
 
     def verify(self, _):
@@ -326,9 +333,10 @@ class Run:
         if result is None:  # last: every file the tar carries, which is all the conductor's files are built from
             exits["secrets-out"] = self.verify_cmd(["secrets", "--known", "known"] + [n for n in OUT if os.path.exists(self.path(n))],
                                                    "secrets-out.json")[0]
-            write(self.path("verify", "exits.json"), json.dumps(exits), 0o644)
             result = ("ok", "exits " + ", ".join("%s %s" % kv for kv in exits.items()))
-        self.wipe_secrets(known=True)  # the known files go after the scan
+        write(self.path("verify", "exits.json"), json.dumps(exits), 0o644)  # the exits of whatever ran
+        # The known files go after the scan; the home only once nothing reads it (else the wipe step takes it).
+        self.wipe_secrets(known=True, home=self.sealed() or self.dead())
         with tarfile.open(self.path("out.tar"), "w") as t:
             for name in OUT:
                 if os.path.exists(self.path(name)):
@@ -336,7 +344,8 @@ class Run:
         return result
 
     def wipe(self, _):
-        shutil.which("tmux") and sh(["tmux", "kill-session", "-t", self.tmux])
+        if shutil.which("tmux"):
+            sh(["tmux", "kill-session", "-t", self.tmux])
         found = self.wipe_secrets(known=True)
         return "ok", "found and wiped: " + ", ".join(found) if found else "nothing key-like left"
 

@@ -25,13 +25,16 @@ SEAM = {k: tuple(v.split(".")) for k, v in {
     "s4_off": "written.off_ms", "s4_seal": "seal.reason"}.items()}
 # Not fixed yet (asked of PRD-08 in the night log): the `secrets` JSON, and how a recorder_down gap's
 # cause and length appear. Read when present; else hits fall back to verify/exits.json (keyed by the
-# JSON file's stem; exit 0 is no hit, 1 or 2 a hit) and causes to counts.gaps keys ("null_mode",
+# JSON file's stem; PRD-08 section 2: 0 and 1 are no hit, 2 a hit, anything else no scan) and causes to counts.gaps keys ("null_mode",
 # "recorder_down:null_mode"). MASK spans by rule are read from the `masks` key of verify/secrets.json.
 SECRET_HITS = ("hits", "known_hits", "shape_hits")
-# Section 5's planted shaped values, each as the S12 rule kinds (PRD-05 shapes.tsv; today's names) whose
-# MASK covers it: the OpenAI, GitHub and Google keys (or the shell rule), the JWT, the PEM, the remote password.
-PLANTED = (("openai_key", "api_key"), ("github_token", "api_key"), ("google_key", "api_key"), ("jwt",),
-           ("private_key",), ("url_password",))
+# Section 5's planted shaped values, each as the S12 rule kinds (PRD-05 section 10, shapes.tsv) whose MASK
+# covers it: the OpenAI, GitHub and Google keys, the JWT, the PEM, the remote password. A `NAME_API_KEY=` or
+# `NAME_TOKEN=` line also matches the shell rule `generic_secret_assignment` (row 11), which wins an overlap
+# with a later row such as `google_key` (row 13), so it covers those three too. The first kind of each is
+# the value's own shape: a MASK of one of those shows the setup-check output reached the model.
+PLANTED = (("openai_key", "generic_secret_assignment"), ("github_token", "generic_secret_assignment"),
+           ("google_key", "generic_secret_assignment"), ("jwt",), ("private_key",), ("url_password",))
 INV6_GAPS = ("gaps", "recorder_down")  # inv6 facts: a list of {cause, start, end, ms}
 DOWN = ("recorder_down", "null_mode", "watchdog_lost")
 DOWN_ERR = re.compile(r"(?<!\d)5\d\d(?!\d)|overloaded|server_error|api_error|internal", re.I)  # S6 keys are
@@ -129,7 +132,7 @@ class Run:
         if isinstance(doc, dict) and any(k in doc for k in SECRET_HITS):
             return sum(count(doc.get(k)) for k in SECRET_HITS)
         code = self.exits.get(name)
-        return {0: 0, 1: 1, 2: 1}.get(code) if isinstance(code, int) else None
+        return {0: 0, 1: 0, 2: 1}.get(code) if isinstance(code, int) else None  # 1: incomplete, never a hit
 
     def masks(self):
         """MASK spans by rule kind from the record scan, or None when the report has none."""
@@ -230,10 +233,11 @@ def secrets(r):
     r.flag("secrets" in r.failed, "C3", "FAIL", "secrets fail in the verifier report: %s" % r.failed.get("secrets"))
     r.flag(r.meta.get("known_box") is not True, "C3", "INCONCLUSIVE", "the run certificate key is not in the known values")
     # Section 5: the setup-check script printed .env.local. Its unmasked no-shape value (plain hits) or a
-    # MASK in the record shows that output reached the model.
+    # MASK of a planted value's own shape shows that output reached the model. Never any MASK: the
+    # harness's auth header is masked on every call.
     masks = r.masks()
-    if not r.hits("secrets-plain") and not any((masks or {}).values()):
-        return r.mark("C3", "INCONCLUSIVE", "secret exercise not done: no plain-value hit and no MASK in the record")
+    if not r.hits("secrets-plain") and not any((masks or {}).get(kinds[0]) for kinds in PLANTED):
+        return r.mark("C3", "INCONCLUSIVE", "secret exercise not done: no plain-value hit and no MASK of a planted shape")
     if masks is None:
         return r.mark("C3", "INCONCLUSIVE", "no MASK counts by rule in verify/secrets.json")
     for kinds in PLANTED:
@@ -309,7 +313,6 @@ def facts(r):
             "subagents": sum(1 for t in threads if dig(t, "t_parent")), "gaps": r.gaps()[1], "off_ms": dig(e, "s6_off"),
             "provider_errors": dict(kn for en in r.entries for kn in items(dig(en, "s6_errors"))),
             "secret_hits": r.hits("secrets"), "masks": r.masks() or {}, "plain_hits": r.hits("secrets-plain"),
-            "output_scan": "box files; meta.json, calls.log, table.txt, row.json, report.txt are built from them",
             "screen_known": m.get("screen_known"), "canary": "not planted", "tokens": dig(u, "s7_tokens"),
             "models": [x.get("model") for x in dig(u, "s7_models") or [] if isinstance(x, dict)],
             "raw_bytes": size.get("raw"), "compressed_bytes": size.get("compressed"), "recorder_rss_peak_mb": None,

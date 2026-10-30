@@ -33,6 +33,16 @@ PADCFG = {"keys": {"claude": "CLAUDE_API_KEY", "gateway": "AI_GATEWAY_API_KEY", 
 BASE = {"harness": "claude-code-cli", "key": "claude", "mode": "cycle"}
 
 
+def evaluate(files):
+    """check.py's row for a run folder holding these JSON (or JSONL, for a name ending in l) files."""
+    with tempfile.TemporaryDirectory() as run:
+        for name, doc in files.items():
+            os.makedirs(os.path.dirname(os.path.join(run, name)), exist_ok=True)
+            with open(os.path.join(run, name), "w") as f:
+                f.write("\n".join(map(json.dumps, doc)) if name.endswith("l") else json.dumps(doc))
+        return check.evaluate(run)
+
+
 def key_file(folder, mode=0o600, value=SENTINEL):
     path = os.path.join(folder, "claude")
     with open(path, "w") as f:
@@ -160,12 +170,7 @@ class CrashRows(unittest.TestCase):
                                           "threads": [{"parent": None, "models": {"m": 3}, "wire_calls": 3},
                                                       {"parent": "t0", "models": {"m": 2}, "wire_calls": 2}]},
                  "watch/status.jsonl": samples, "watch/faults.jsonl": recover}
-        with tempfile.TemporaryDirectory() as run:
-            for name, doc in files.items():
-                os.makedirs(os.path.dirname(os.path.join(run, name)), exist_ok=True)
-                with open(os.path.join(run, name), "w") as f:
-                    f.write("\n".join(map(json.dumps, doc)) if name.endswith("l") else json.dumps(doc))
-            return check.evaluate(run)
+        return evaluate(files)
 
     def test_kill_recorder(self):
         gap = {"start": "2026-10-30T10:00:00Z", "end": "2026-10-30T10:00:01.2Z"}
@@ -178,6 +183,31 @@ class CrashRows(unittest.TestCase):
         for pid, port, fails in ((7, 5, False), (8, 5, True), (7, 6, True)):
             samples = [{"port": 5, "harness": {"pid": 7}}, {"port": port, "harness": {"pid": pid}}]
             self.assertEqual(self.row("kill-watchdog-recover", gap, samples)["result"] == "FAIL", fails, (pid, port))
+
+
+class SecretCheck(unittest.TestCase):
+    """C3 (point 4, section 5): a known-value hit fails; the planted shapes need a MASK each, the shell rule
+    standing for a NAME_API_KEY= line; the auth header's MASK alone is no secret exercise. Only C3 is asserted."""
+
+    PLANTED = {"openai_key": 1, "github_token": 1, "generic_secret_assignment": 1, "jwt": 1, "private_key": 1,
+               "url_password": 1, "auth": 8}
+
+    def c3(self, masks, secrets_exit=1, plain_exit=0):
+        return evaluate({"meta.json": {"connector": "codex-cli", "case": "direct", "known_box": True, "entry": "e1"},
+                         "verify/secrets.json": {"masks": masks},
+                         "verify/exits.json": {"secrets": secrets_exit, "secrets-out": 0, "secrets-plain": plain_exit}}
+                        )["checks"]["C3"]
+
+    def test_planted_values_masked_pass(self):  # exit 1 (unsealed, a named GAP) is never a hit
+        self.assertEqual(self.c3(self.PLANTED), "PASS")
+
+    def test_known_value_hit_fails(self):
+        self.assertEqual(self.c3(self.PLANTED, secrets_exit=2), "FAIL")
+        self.assertEqual(self.c3(dict(self.PLANTED, jwt=0)), "FAIL")
+
+    def test_exercise_not_done_is_inconclusive(self):
+        self.assertEqual(self.c3({"auth": 8}), "INCONCLUSIVE")
+        self.assertEqual(self.c3({"auth": 8}, plain_exit=2), "FAIL")  # the script ran, yet no planted shape is masked
 
 
 if __name__ == "__main__":
