@@ -315,7 +315,7 @@ impl PartWriter {
     }
 
     /// Crash recovery (section 12, steps 1 to 4): closes what the dead boot left and starts the
-    /// next boot, or, with `seal`, closes the entry.
+    /// next boot, or, with `seal`, closes the entry. An entry already sealed is left as it is.
     pub fn recover(dir: &Path, opts: PartOptions, rc: Recover<'_>) -> io::Result<Recovered> {
         let files = part_files(dir)?;
         // Step 1: after a reboot, drop index lines past the durable index length.
@@ -384,20 +384,27 @@ impl PartWriter {
         let f = OpenOptions::new().read(true).write(true).open(&path)?;
         f.set_len(line.c_end)?;
 
-        // The last PART and the last LINK before the kept line.
+        // The last PART and the last LINK before the kept line, and whether a seal precedes it.
         let mut part = None;
         let mut link = None;
+        let (mut seal_last, mut sealed) = (false, false);
         for it in read::decode((&f).take(line.c_end))? {
-            match it?.rec {
+            let rec = it?.rec;
+            let at_seal = matches!(&rec, Record::Event { json, .. } if is_seal(json));
+            match rec {
                 p @ Record::Part { .. } => part = Some(p),
                 Record::Link {
                     seq,
                     wall_ns,
                     mono_ns,
                     hash,
-                } => link = Some((seq, Now { wall_ns, mono_ns }, hash)),
+                } => {
+                    link = Some((seq, Now { wall_ns, mono_ns }, hash));
+                    sealed = seal_last;
+                }
                 _ => {}
             }
+            seal_last = at_seal;
         }
         let (
             Some(Record::Part {
@@ -417,6 +424,14 @@ impl PartWriter {
         };
         if seq != line.seq || hash != line.hash {
             return Err(invalid("the last LINK does not match the last index line"));
+        }
+        // An entry already sealed takes nothing more (invariant 8): the seal's line is reported.
+        if sealed {
+            return Ok(Recovered {
+                writer: None,
+                gap_after_start: None,
+                line: Some(line),
+            });
         }
 
         // Step 2: close an open frame with an empty last block.
@@ -503,7 +518,8 @@ pub struct Recover<'a> {
 /// What recovery did.
 pub struct Recovered {
     /// The next boot's writer, its PART written. The caller writes `start` (`resume: true`),
-    /// then `prev_boot`. None after a `recovered` seal in the recovery frame.
+    /// then `prev_boot`. None after a `recovered` seal in the recovery frame, and None with
+    /// nothing written when the entry was already sealed (`line` is then the seal's line).
     pub writer: Option<PartWriter>,
     /// For an entry that left no index line: boot 0's `recorder_down` GAP, to write right after
     /// its start event.
@@ -536,6 +552,11 @@ fn gap(start: Now, rc: &Recover<'_>, boot_id: [u8; 16]) -> Record {
         lost: 0,
         tail: serde_json::Value::Object(tail).to_string().into_bytes(),
     }
+}
+
+/// Whether an EVENT's JSON is the seal (`"ev":"seal"`).
+fn is_seal(json: &[u8]) -> bool {
+    serde_json::from_slice::<serde_json::Value>(json).is_ok_and(|v| v["ev"] == "seal")
 }
 
 fn closed() -> io::Error {

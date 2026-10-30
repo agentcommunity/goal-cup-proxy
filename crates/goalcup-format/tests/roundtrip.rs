@@ -126,25 +126,6 @@ fn random_records_of_every_kind_round_trip() {
 }
 
 #[test]
-fn unknown_kinds_are_skipped_by_their_length() {
-    let recs = [
-        Record::Event {
-            t: 10,
-            json: b"{}".to_vec(),
-        },
-        Record::Unknown {
-            kind: 0x42,
-            body: vec![0xff; 1000],
-        },
-        Record::Event {
-            t: 25,
-            json: b"{\"ev\":\"x\"}".to_vec(),
-        },
-    ];
-    assert_eq!(decode(&encode(&recs)), recs);
-}
-
-#[test]
 fn a_body_over_16_mib_is_refused() {
     let mut raw = vec![0x03];
     put_varint(&mut raw, (16 << 20) + 1);

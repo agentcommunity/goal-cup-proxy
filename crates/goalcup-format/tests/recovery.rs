@@ -2,7 +2,7 @@
 //! index line, is closed with `01 00 00` and a recovery frame, and the entry decodes as one stream
 //! with one `recorder_down` gap; every part file decodes alone. A boot that left no index line is
 //! deleted and its number reused; a part file already closed by `R` takes a second recovery frame;
-//! the recovery frame's COUNT equals a recount of its boot.
+//! the recovery frame's COUNT equals a recount of its boot; a sealed entry takes nothing more.
 
 use goalcup_format::read::{Item, decode, open_dir, part_files, read_index};
 use goalcup_format::{
@@ -87,6 +87,11 @@ fn work(w: &mut PartWriter, c: &mut Clock, n: u64, counts: &mut HashMap<u64, Vec
     w.sync().unwrap();
 }
 
+fn idx_of(part: &Path) -> PathBuf {
+    let name = part.file_name().unwrap().to_str().unwrap();
+    part.with_file_name(name.replace(".gcr.zst", ".idx"))
+}
+
 /// A recorder killed with `kill -9`: no destructor runs, nothing is finished.
 fn kill(w: PartWriter) {
     std::mem::forget(w);
@@ -149,12 +154,9 @@ fn read_entry(d: &Path) -> Vec<Item> {
 fn boots(items: &[Item]) -> Vec<u64> {
     items
         .iter()
-        .filter_map(|i| {
-            if let Record::Part { boot, .. } = i.rec {
-                Some(boot)
-            } else {
-                None
-            }
+        .filter_map(|i| match i.rec {
+            Record::Part { boot, .. } => Some(boot),
+            _ => None,
         })
         .collect()
 }
@@ -182,13 +184,7 @@ fn a_part_file_cut_at_any_byte_recovers_to_its_last_index_line() {
     work(&mut w, &mut c, 22, &mut counts);
     kill(w);
     let part = part_files(&src).unwrap().remove(0);
-    let idx = part.with_file_name(
-        part.file_name()
-            .unwrap()
-            .to_str()
-            .unwrap()
-            .replace(".gcr.zst", ".idx"),
-    );
+    let idx = idx_of(&part);
     let lines = read_index(&idx).unwrap();
     assert_eq!(lines.len(), 5);
     let full = fs::read(&part).unwrap();
@@ -279,14 +275,7 @@ fn a_boot_with_no_index_line_is_deleted_and_an_r_closed_part_file_takes_a_second
     w.seal(c.now()).unwrap();
 
     let first = part_files(&d).unwrap().remove(0);
-    let idx = first.with_file_name(
-        first
-            .file_name()
-            .unwrap()
-            .to_str()
-            .unwrap()
-            .replace(".gcr.zst", ".idx"),
-    );
+    let idx = idx_of(&first);
     let kinds: Vec<IndexKind> = read_index(&idx).unwrap().iter().map(|l| l.kind).collect();
     assert_eq!(
         kinds,
@@ -395,4 +384,37 @@ fn a_no_index_line_gap_has_an_extent_and_names_a_new_clock() {
     assert!(end_wall > start_wall);
     assert_eq!(tail_of(&g)["boot_id"], "aa".repeat(16));
     assert_eq!(tail_of(&g)["cause"]["signal"], 9);
+}
+
+#[test]
+fn a_sealed_entry_takes_nothing_more() {
+    let seal = br#"{"ev":"seal","reason":"recovered"}"#;
+    for by_recovery in [false, true] {
+        let d = dir(&format!("recovery-sealed-{by_recovery}"));
+        let mut c = Clock(0);
+        let mut counts = HashMap::new();
+        let mut w = PartWriter::open(&d, PartOptions::default(), ENTRY, BOOT_A, c.now()).unwrap();
+        work(&mut w, &mut c, 4, &mut counts);
+        let ev = Record::Event {
+            t: c.now().mono_ns,
+            json: seal.to_vec(),
+        };
+        let line = if by_recovery {
+            kill(w);
+            let count_at = |seq: u64| counts[&seq].clone();
+            let mut r = rc(c.now(), &count_at);
+            r.seal = Some(seal.to_vec());
+            PartWriter::recover(&d, PartOptions::default(), r).unwrap().line
+        } else {
+            w.write(&ev).unwrap();
+            Some(w.seal(c.now()).unwrap().line)
+        };
+        let part = part_files(&d).unwrap().remove(0);
+        let files = || (fs::read(&part).unwrap(), fs::read(idx_of(&part)).unwrap());
+        let before = files();
+        // Killed after the seal was synced, before `sealed` was sent: recovery adds nothing.
+        let r = recover(&d, &mut c, &counts);
+        assert!(r.writer.is_none() && r.gap_after_start.is_none());
+        assert_eq!((r.line, files()), (line, before));
+    }
 }

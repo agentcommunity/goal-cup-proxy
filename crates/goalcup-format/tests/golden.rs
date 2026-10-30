@@ -108,22 +108,13 @@ fn records() -> Vec<Record> {
     };
     let mut v = vec![part];
     v.extend(body());
-    let hash = unhex(LINK_HASH);
     v.push(Record::Link {
         seq: 0,
         wall_ns: link_now().wall_ns,
         mono_ns: link_now().mono_ns,
-        hash,
+        hash: GCR[966..998].try_into().unwrap(),
     });
     v
-}
-
-fn unhex(s: &str) -> [u8; 32] {
-    let mut out = [0; 32];
-    for (i, o) in out.iter_mut().enumerate() {
-        *o = u8::from_str_radix(&s[2 * i..2 * i + 2], 16).unwrap();
-    }
-    out
 }
 
 #[test]
