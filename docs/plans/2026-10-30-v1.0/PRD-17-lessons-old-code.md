@@ -887,3 +887,16 @@ old code. Each id with what was done here.
   signature, but as a stub (lowercase and label shape only). `lessons_hosts.rs` waits for PRD-11's hosts
   slice, which copies the full check (section 3); a lesson test against the stub would pass or fail for
   the wrong reason. `lessons_launch.rs` waits for the launch slice (lock, `.profile`) and S8.
+
+### 2026-10-30, replan after PRD-08 slice 1 (merge d10feef7)
+
+Names for `LESSONS.md` (the lessons lane writes them; judge 13:06Z):
+
+- L-VR3: `crates/goalcup-verify/tests/check_invariants.rs`
+  `vr3_every_mutation_fails_its_check_with_exit_2` (21 rows; each asserts its own check fails and exit
+  2). The 12:49Z name is superseded.
+- L-VR4: `crates/goalcup-verify/tests/check_named.rs` `clean_record_with_interrupted_end_exits_0`.
+- L-FW3: the local half (`parts_pruned` named, exit 1) is built but has no test yet; PRD-08's next
+  slice names it. L-VR2: the panic hook is built (file and line, exit 3), its test comes with the
+  server slice (PRD-08 note). Both stay `(name pending)`.
+- No locked ledger item is touched and no owner question comes from this slice.
