@@ -1374,3 +1374,27 @@ kept and now cites BUILD-PROMPT section 5, since B3 no longer carries it.
   rows line and the upload lines are not built yet. Acceptance does not count the section 4 problem
   table or the end screen as complete until they are built or a replan line rules them out.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-09 slice 1 (merge f5a529c8)
+
+- `gate fast: PASS in 143s` on f5a529c8 (98 tests run, 98 passed). Box runs before the merge: the
+  lane merger ran build, clippy `-D warnings`, fmt and 16/16 nextest; the fixer ran fmt, clippy
+  `-D warnings`, doc `-D warnings`, 16/16 nextest, the fixture sha256 check against the old crate and
+  a secret-pattern scan (0 hits) on ad1ce7e6; reviewer A's last re-check did not rerun the box (same
+  sha). Ten paths changed, all owned by PRD-09 (`src/usage/mod.rs` and `tests/usage_fixtures/**`),
+  with no `Cargo.toml` change.
+- **Size report, PRD-09** (`wc -l` at f5a529c8, row "Usage reader (PRD-09)", 1,470 src and 200 tests).
+  Src is 304, 21% of the row with 1 of 8 files written (`usage/mod.rs`, a stub: 89 doc-comment lines,
+  no reader logic). Its own estimate is 250 for the whole `mod.rs` with `run`, the sink, the join,
+  totals and output, so the file already runs at 122% of it on types alone; the final U1 types took
+  the extra (PRD-09 note). The row stands; the core slice reports per file and needs a decision line
+  past 1,617. Tests are 0 of 200 (`usage_run1.rs` is the core slice's). The fixtures are 555 lines of
+  data, counted in neither row.
+- **Trailers:** all 8 commits in ab939dd1..ad1ce7e6 carry both lines, and so does merge f5a529c8.
+- **Seams:** U1 is on integration with its final names, so PRD-08's `legs.rs` and `history.rs` and
+  its run 1 shape builder can build now (PRD-08 note). PRD-13's delete of the old verifier crate no
+  longer waits on PRD-09's fixtures; the old `connectors` fixtures are not copied (PRD-13 note).
+- **Open nit** B10 (one fact in `readable` plus `reason`) is taken in PRD-09's core slice unless
+  PRD-08 reads the field first (PRD-09 note). Acceptance lists it as known if it is still open at the
+  end.
+- No locked ledger item is touched and no owner question comes from this slice.
