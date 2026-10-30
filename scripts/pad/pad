@@ -329,7 +329,7 @@ class Run:
             return "%s: version not checked (no version or version_cmd in the harness file)" % self.s["harness"]
         script = os.path.join(self.tmp, "version.sh")
         with open(script, "w") as f:
-            f.write("#!/bin/bash\nv=$(%s 2>/dev/null | head -n 5)\necho \"PADVER=$v\"\n" % cmd)
+            f.write("#!/bin/bash\necho \"PADVER=$(%s 2>/dev/null | head -n 5 | tr '\\n' ' ')\"\n" % cmd)
         limit = max(1, deadline - time.time())
         if self.s["where"] == "here":
             r = call(["bash", script], timeout=limit)
@@ -372,13 +372,15 @@ class Run:
                 saw.append("rm %s" % type(e).__name__)
             try:
                 r = self.sbx("list", "--prefix", "pad-", limit=limit / 3)
-                left = r.returncode != 0 or self.box in r.stdout or self.name in r.stdout
-                saw.append("left: box %s" % self.name if left else "list shows none")
+                live = [b.get("status") for b in map(json.loads, [ln for ln in r.stdout.splitlines() if ln.startswith("{")])
+                        if b.get("name") in (self.box, self.name)] if r.returncode == 0 else ["unknown"]
+                gone = all(st in ("stopped", "deleted", "failed") for st in live)
+                saw.append("list shows no live box" if gone else "left: box %s %s" % (self.name, ",".join(map(str, live))))
             except Exception as e:
                 saw.append("list %s, box %s may be left" % (type(e).__name__, self.name))
         else:
             saw.append("no box")
-        self.line("cleanup", "ok" if saw[-1] in ("list shows none", "no box") else "left", ", ".join(saw))
+        self.line("cleanup", "ok" if saw[-1] in ("list shows no live box", "no box") else "left", ", ".join(saw))
 
     def finish(self):
         s = self.s
