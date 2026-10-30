@@ -6,9 +6,9 @@ mod cli_common;
 
 use std::path::{Path, PathBuf};
 
-use cli_common::{RUN, T0 as NOW, status};
+use cli_common::{RUN, T0 as NOW, live, status};
 use goalcup::cli::finish::{NotSealed, end_screen, screen};
-use goalcup::cli::status::{Ctx, State, block};
+use goalcup::cli::status::{State, block};
 use goalcup::cli::text;
 use goalcup::pipeline::counts::TunnelHost;
 use goalcup::pipeline::status::{AfterSeal, CutFiles, Mode, Off, SealStatus, Status};
@@ -38,10 +38,14 @@ fn sealed() -> Status {
     st
 }
 
+/// One kind of loss, made in a clean sealed part.
+type Lose = fn(&mut Status);
+
 fn show(st: &Status) -> String {
     screen(st, None, RUN, &PathBuf::from("/home/x/goalcup.log"), NOW).expect("sealed")
 }
 
+/// Rule 1, through `screen`: the "nothing was lost" claim with no loss, and never with any one.
 #[test]
 fn nothing_lost_only_without_any_loss() {
     let clean = sealed();
@@ -62,22 +66,22 @@ fn nothing_lost_only_without_any_loss() {
         show(&quiet).contains(text::NOTHING_LOST),
         "an unlisted tunnel is not a loss"
     );
-    let losses: Vec<fn(&mut Status)> = vec![
-        |s| s.written.counts.gaps = 1,
-        |s| {
+    let losses: Vec<(&str, Lose)> = vec![
+        ("gap", |s| s.written.counts.gaps = 1),
+        ("gap of unknown size", |s| {
             s.written.counts.gaps = 1;
             s.written.counts.lost_unknown = 1;
-        },
-        |s| s.written.counts.lost_bytes = 10,
-        |s| s.written.counts.req_holes = 1,
-        |s| {
+        }),
+        ("lost bytes", |s| s.written.counts.lost_bytes = 10),
+        ("req_holes", |s| s.written.counts.req_holes = 1),
+        ("off span", |s| {
             s.off = Off {
                 spans: 1,
                 ms: 150_000,
                 since: None,
             }
-        },
-        |s| {
+        }),
+        ("listed tunnel", |s| {
             s.written.counts.tunnel_hosts.insert(
                 "pinned.example.com".into(),
                 TunnelHost {
@@ -87,32 +91,31 @@ fn nothing_lost_only_without_any_loss() {
                     listed: Some("pinned".into()),
                 },
             );
-        },
-        |s| s.written.counts.mask_failclosed_bytes = 1,
-        |s| {
+        }),
+        ("fail-closed byte", |s| {
+            s.written.counts.mask_failclosed_bytes = 1
+        }),
+        ("cut file", |s| {
             s.cut_files = Some(CutFiles {
                 files: 1,
                 bytes: 10,
             })
-        },
-        |s| {
+        }),
+        ("after-seal bytes", |s| {
             s.after_seal = Some(AfterSeal {
                 bytes: 1,
                 hosts: Vec::new(),
             })
-        },
+        }),
     ];
-    // Each loss has its line (rule 1): one at least takes the place of "Nothing was lost.".
+    // Each loss has its line: one at least takes the place of the claim.
     let clean_lines = show(&clean).lines().count();
-    for (i, lose) in losses.iter().enumerate() {
+    for (kind, lose) in &losses {
         let mut st = clean.clone();
         lose(&mut st);
         let out = show(&st);
-        assert!(!out.contains(text::NOTHING_LOST), "loss {i}");
-        assert!(
-            out.lines().count() >= clean_lines,
-            "loss {i} has no line:\n{out}"
-        );
+        assert!(!out.contains(text::NOTHING_LOST), "{kind}");
+        assert!(out.lines().count() >= clean_lines, "{kind} has no line");
     }
 }
 
@@ -242,15 +245,7 @@ fn unsealed_status_never_reads_as_finished() {
             assert_eq!(screen(&st, None, RUN, &log, NOW), Err(NotSealed));
             std::fs::write(entry.join("status.json"), serde_json::to_vec(&st).unwrap()).unwrap();
             assert_eq!(end_screen(&entry), Err(NotSealed));
-            let cx = Ctx {
-                name: "Agent",
-                run: RUN,
-                recorder: true,
-                watchdog: true,
-                harness: true,
-                deadline: None,
-                now: NOW,
-            };
+            let cx = live(true, true, true, 0);
             for state in [State::Recording, State::Continue { since: NOW }] {
                 let shown = block(&st, &state, None, &cx, &[state.word()]);
                 assert!(!shown.contains(text::FINISHED) && !shown.contains(text::PART_RECORDED));

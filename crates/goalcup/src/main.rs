@@ -156,17 +156,17 @@ fn run(command: Command) -> ExitCode {
         Command::Start {
             practice,
             test,
+            repo,
+            prompt,
             connector,
             hosts,
             ..
-        } => {
-            // Refused before anything is read or created.
-            if (connector.is_some() || hosts.is_some()) && !practice && !test {
-                say(text::FILE_FLAGS_COMPETE);
-                return ExitCode::from(1);
-            }
-            not_built("start")
-        }
+        } => cli::start::run(
+            practice || test,
+            connector.is_some() || hosts.is_some(),
+            repo.is_some(),
+            prompt.as_deref(),
+        ),
         Command::Setup { .. } => not_built("setup"),
         Command::Continue { .. } => not_built("continue"),
         Command::Recover { .. } => not_built("recover"),

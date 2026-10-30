@@ -1,14 +1,20 @@
-//! PRD-04 acceptance `native_safety.rs`, the fsx cases (points 3 and 4): no symlink is followed,
-//! a FIFO is never read and never hangs the reader, a replaced file is refused, and no
-//! descriptor is kept. The walk-level cases join this file with `walk.rs`.
+//! PRD-04 acceptance `native_safety.rs` (points 3, 4 and 7): no symlink is followed, a FIFO is
+//! never read and never hangs the reader, a replaced file is refused, no descriptor is kept, the
+//! root never reaches a path, and `src/native/` names no harness.
 
 use std::ffi::{OsStr, OsString};
 use std::fs;
 use std::os::unix::fs::symlink;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::time::Duration;
 
+use goalcup::connector::{self, builtin::CONNECTORS};
 use goalcup::native::fsx::{Dir, Kind, file_stat};
+use goalcup::native::pattern::{parse, path_id};
+use goalcup::native::walk::{Row, Walker};
+use goalcup::pipeline::{Call, Calls, Recorder};
+use serde_json::Value;
 
 fn n(s: &str) -> &OsStr {
     OsStr::new(s)
@@ -120,4 +126,115 @@ fn no_descriptor_is_kept() {
         let _ = root.open_child(n("missing"));
     }
     assert_eq!(fds_under(&dir), before);
+}
+
+fn row(name: &str, root: &Path, pattern: &str) -> Row {
+    Row {
+        name: name.into(),
+        root: root.into(),
+        pattern: parse(pattern).unwrap(),
+    }
+}
+
+fn notes(calls: &Calls, what: &str) -> Vec<Value> {
+    let f = |c: Call| match c {
+        Call::Event(v) if v["what"] == what => Some(v),
+        _ => None,
+    };
+    calls.all().into_iter().filter_map(f).collect()
+}
+
+#[test]
+fn a_walk_follows_no_symlink_and_names_a_linked_file_once() {
+    let t = tempfile::tempdir().unwrap();
+    let (root, outside) = (t.path().join("root"), t.path().join("outside"));
+    fs::create_dir_all(outside.join("sub")).unwrap();
+    fs::create_dir(&root).unwrap();
+    fs::write(outside.join("a.jsonl"), b"x").unwrap();
+    fs::write(outside.join("sub").join("b.jsonl"), b"x").unwrap();
+    symlink(outside.join("a.jsonl"), root.join("link.jsonl")).unwrap();
+    symlink(outside.join("sub"), root.join("linked")).unwrap();
+
+    let rows = [row("r", &root, "**/*.jsonl")];
+    let (rec, calls) = Recorder::for_tests(1 << 20);
+    let mut walker = Walker::default();
+    assert!(walker.pass(&rec, &rows).found.is_empty());
+    assert!(walker.pass(&rec, &rows).found.is_empty());
+    let linked = notes(&calls, "native_symlink");
+    assert_eq!(linked.len(), 1, "one note per path: {linked:?}");
+    assert_eq!(linked[0]["path"], path_id("r", Path::new("link.jsonl")));
+}
+
+#[test]
+fn the_root_never_reaches_a_path() {
+    let t = tempfile::tempdir().unwrap();
+    let root = t.path().join("private-root-name");
+    fs::create_dir_all(root.join("x/y")).unwrap();
+    fs::write(root.join("x/y/s.jsonl"), b"x").unwrap();
+    symlink(root.join("x/y/s.jsonl"), root.join("x/l.jsonl")).unwrap();
+    let rows = [row("r", &root, "**/*.jsonl")];
+    let (rec, calls) = Recorder::for_tests(1 << 20);
+    let found = Walker::default().pass(&rec, &rows).found;
+    let mut ids: Vec<String> = found.iter().map(|f| path_id("r", &f.rel)).collect();
+    let linked = notes(&calls, "native_symlink");
+    ids.extend(linked.iter().map(|n| n["path"].to_string()));
+    let marker = t.path().to_string_lossy().into_owned();
+    assert!(
+        ids.iter()
+            .all(|id| !id.contains("private-root-name") && !id.contains(&marker)),
+        "{ids:?}"
+    );
+}
+
+#[test]
+fn hermes_rows_take_the_state_database_and_no_request_dump() {
+    let t = tempfile::tempdir().unwrap();
+    let home = t.path().join("home");
+    fs::create_dir_all(home.join("sessions")).unwrap();
+    fs::write(home.join("sessions/request_dump_x.json"), b"{}").unwrap();
+    fs::write(home.join("state.db"), b"SQLite format 3\0").unwrap();
+    let c = connector::load("hermes-cli", None).unwrap();
+    let home_s = home.to_str().unwrap();
+    let rows: Vec<Row> = c
+        .native
+        .iter()
+        .map(|n| {
+            row(
+                &n.name,
+                Path::new(&n.root.replace("{home}", home_s)),
+                &n.pattern,
+            )
+        })
+        .collect();
+    let (rec, _) = Recorder::for_tests(1 << 20);
+    let found = Walker::default().pass(&rec, &rows).found;
+    let names: Vec<PathBuf> = found
+        .iter()
+        .map(|f| rows[f.row].root.join(&f.rel))
+        .collect();
+    assert!(names.contains(&home.join("state.db")), "{names:?}");
+    assert!(
+        !names
+            .iter()
+            .any(|p| p.to_string_lossy().contains("request_dump"))
+    );
+}
+
+#[test]
+fn no_native_source_file_names_a_built_in_harness() {
+    // Whole words only, comments included, so `example` never matches `amp`.
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/native");
+    for entry in fs::read_dir(&dir).unwrap() {
+        let path = entry.unwrap().path();
+        let text = fs::read_to_string(&path).unwrap().to_lowercase();
+        let words: Vec<&str> = text.split(|c: char| !c.is_ascii_alphanumeric()).collect();
+        for (id, _) in CONNECTORS {
+            let name = id.split(['-', '_', ' ']).next().unwrap().to_lowercase();
+            assert!(
+                !words.contains(&name.as_str()),
+                "{} names `{name}`",
+                path.display()
+            );
+        }
+    }
 }
