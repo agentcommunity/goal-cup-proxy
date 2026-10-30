@@ -43,7 +43,10 @@ pub fn panic_hook(entry_dir: &Path) {
         let text = format!("goalcup: internal error at {file}:{line}\n");
         let _ = std::io::stderr().lock().write_all(text.as_bytes());
         if let Some(dir) = LOG_DIR.get() {
-            let facts = [("file", Fact::Path(file.into())), ("line", Fact::N(line.into()))];
+            let facts = [
+                ("file", Fact::Path(file.into())),
+                ("line", Fact::N(line.into())),
+            ];
             log::line(dir, "internal_error", &facts);
         }
     }));

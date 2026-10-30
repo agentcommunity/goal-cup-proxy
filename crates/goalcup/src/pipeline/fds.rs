@@ -140,7 +140,9 @@ impl Reserve {
     fn closed(&self) {
         let _ = self
             .open
-            .try_update(Ordering::Relaxed, Ordering::Relaxed, |n| Some(n.saturating_sub(1)));
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |n| {
+                Some(n.saturating_sub(1))
+            });
     }
 }
 

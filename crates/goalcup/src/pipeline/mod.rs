@@ -276,11 +276,14 @@ impl Recorder {
     /// step, so callers offering at once never overshoot the guard. True if counted.
     fn hold(&self, n: u64, admit: impl Fn(u64) -> bool) -> bool {
         let i = &self.inner;
-        match i.held.try_update(Ordering::Relaxed, Ordering::Relaxed, |h| {
-            admit(h).then_some(h.saturating_add(n))
-        }) {
+        match i
+            .held
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |h| {
+                admit(h).then_some(h.saturating_add(n))
+            }) {
             Ok(h) => {
-                i.held_peak.fetch_max(h.saturating_add(n), Ordering::Relaxed);
+                i.held_peak
+                    .fetch_max(h.saturating_add(n), Ordering::Relaxed);
                 true
             }
             Err(_) => false,

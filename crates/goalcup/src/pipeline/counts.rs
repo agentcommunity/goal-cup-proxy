@@ -415,7 +415,12 @@ impl CountsLog {
     /// of the boot) and None when an earlier frame already holds it, and a `recorder_down` gap of
     /// `down_ms`. Pins the boot's line to that COUNT, not to a later line whose index line the
     /// crash lost, adds `down_ms`, and compacts.
-    pub fn recovered(&mut self, boot: u64, count: Option<(u64, &Value)>, down_ms: u64) -> io::Result<()> {
+    pub fn recovered(
+        &mut self,
+        boot: u64,
+        count: Option<(u64, &Value)>,
+        down_ms: u64,
+    ) -> io::Result<()> {
         let mut v = match count {
             Some((seq, c)) => serde_json::json!({ "seq": seq, "count": c }),
             None => self

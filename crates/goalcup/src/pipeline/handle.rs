@@ -552,7 +552,12 @@ mod tests {
             .iter()
             .filter_map(|i| match i {
                 Item::Gap {
-                    sid, off, lost, start, end, ..
+                    sid,
+                    off,
+                    lost,
+                    start,
+                    end,
+                    ..
                 } => {
                     assert!(start < end);
                     Some((*sid, *off, *lost))
@@ -565,7 +570,11 @@ mod tests {
             assert!(gaps.contains(&want), "{want:?} in {gaps:?}");
         }
         // The seal writes `END cut_at_seal` for streams still open; nothing else was sent.
-        assert!(items.iter().all(|i| matches!(i, Item::Open { .. } | Item::Gap { .. })));
+        assert!(
+            items
+                .iter()
+                .all(|i| matches!(i, Item::Open { .. } | Item::Gap { .. }))
+        );
         assert_eq!(rec.after_stop().0, 50);
         assert_eq!(rec.live().losing.streams_in_gap, 0);
     }

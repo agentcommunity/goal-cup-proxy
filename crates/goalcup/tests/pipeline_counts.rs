@@ -38,7 +38,14 @@ impl Clock {
 /// took before masking the OPEN meta.
 fn put(w: &mut PartWriter, c: &mut Counter, r: Record, flags: OpenFlags) {
     w.write(&r).unwrap();
-    let host = matches!(r, Record::Open { skind: StreamKind::Conn, .. }).then_some(HOST);
+    let host = matches!(
+        r,
+        Record::Open {
+            skind: StreamKind::Conn,
+            ..
+        }
+    )
+    .then_some(HOST);
     c.written(&r, flags, host);
 }
 
@@ -124,7 +131,11 @@ fn first_part(rec: &Path) -> (PathBuf, PathBuf) {
 /// The `seq` of the last index line in the first part file.
 fn last_seq(rec: &Path) -> u64 {
     let idx = first_part(rec).1;
-    goalcup_format::read::read_index(&idx).unwrap().last().unwrap().seq
+    goalcup_format::read::read_index(&idx)
+        .unwrap()
+        .last()
+        .unwrap()
+        .seq
 }
 
 fn conn(w: &mut PartWriter, c: &mut Counter, k: &mut Clock) {
