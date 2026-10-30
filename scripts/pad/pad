@@ -9,7 +9,7 @@ NODE_PATH or beside itself), box steps through `pad-run`. The pad never reads a 
 `sbx.mjs put-env` the name of the variable that holds it; the approval key it reads only to send it. Exit: 0 every row PASS, 1 any FAIL, 3 any
 INCONCLUSIVE and no FAIL, 2 usage error. Needs Python 3.11 or later; an older python3 re-runs it.
 """
-import concurrent.futures, datetime, json, math, os, re, secrets, shutil, signal, stat  # noqa: E401
+import concurrent.futures, datetime, glob, json, math, os, re, secrets, shutil, signal, stat  # noqa: E401
 import subprocess, sys, tarfile, tempfile, threading, time, urllib.request  # noqa: E401
 
 if sys.version_info < (3, 11) and __name__ == "__main__":  # the node22 image and many Macs give 3.9
@@ -142,6 +142,8 @@ def load_settings(raw, pad):
         raise Usage("server is off, local or staging (there is no server address setting)")
     if s["where"] not in ("sandbox", "here"):
         raise Usage("where is sandbox or here")
+    if s["server"] == "local" and s["where"] == "sandbox":
+        raise Usage("local server in a sandbox comes in a later slice")
     for k in ("key", "gateway_key"):
         if not (s[k] == "none" and k == "key") and not NAME.fullmatch(s[k]):
             raise Usage("bad %s name" % k)
@@ -332,7 +334,9 @@ class Run:
                 f.write("exec python3.11 ~/pad/pad-run ~/run %s\n" % step)
             r = self.sbx("exec", self.name, "--script", os.path.join(self.tmp, "step.sh"), limit=limit)
         else:
-            r = call(argv or [sys.executable, os.path.join(HERE, "pad-run"), self.box_dir] + step.split(), timeout=limit)
+            env = None if argv else {k: v for k, v in os.environ.items() if k not in NEVER_IN_BOX}  # here is the box
+            r = call(argv or [sys.executable, os.path.join(HERE, "pad-run"), self.box_dir] + step.split(), timeout=limit,
+                     env=env)
         got = [ln[len(tag) + 1:] for ln in (r.stdout or "").splitlines() if ln.startswith(tag + " ")]
         d = json.loads(got[-1]) if got else {"result": "error", "saw": said("%s: no %s line" % (step, tag), r)}
         self.meta.update({k: d[k] for k in ("entry", "run") if d.get(k)})
@@ -346,8 +350,6 @@ class Run:
         result, saw, d = self.box(step, limit + 120)  # pad-run works to `limit`
         if step != "start" or result != "ok" or self.s["server"] == "off":  # off: start pasted too
             return result, saw
-        if self.s["server"] == "local" and self.s["where"] == "sandbox":  # the box's loopback is not this one
-            return "skip", "approval on a box's own loopback " + NEEDS_LATER
         self.log("approve " + self.name)  # section 3, 0:03; the device code stays out of the log and the table
         got = approve(self.s["server"], d.get("code"))
         if got != "approved":
@@ -365,8 +367,12 @@ class Run:
             return "FAIL", "server copy not fetched: no entry id"
         self.log("fetch-run " + entry)
         got, hide = os.path.join(self.dir, "fetched", entry), set(NEVER_IN_BOX) - set(FETCH)
-        r = call(["sh", os.path.join(REPO, "scripts", "fetch-run.sh"), "--bucket", STAGING_BUCKET, entry,
-                  os.path.dirname(got)], timeout=limit, env={k: v for k, v in os.environ.items() if k not in hide})
+        try:
+            r = call(["sh", os.path.join(REPO, "scripts", "fetch-run.sh"), "--bucket", STAGING_BUCKET, entry,
+                      os.path.dirname(got)], timeout=limit, env={k: v for k, v in os.environ.items() if k not in hide})
+        finally:  # a timeout kills sh before its EXIT trap: its work folder (pg_service.conf) goes here
+            for left in glob.glob(os.path.join(os.path.dirname(got), ".fetch-run.*")):
+                shutil.rmtree(left, ignore_errors=True)
         if r.returncode or not os.path.isfile(os.path.join(got, "fetch.json")):  # a partial entry exits 0
             return "FAIL", said("server copy not fetched", r)
         if self.s["where"] == "here":

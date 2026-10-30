@@ -9,6 +9,7 @@ import importlib.machinery
 import importlib.util
 import json
 import os
+import shutil
 import subprocess
 import tarfile
 import tempfile
@@ -142,6 +143,49 @@ class Walk(unittest.TestCase):
         req = urlopen.call_args.args[0]
         self.assertEqual(req.get_header("Authorization"), "Bearer " + SENTINEL + "ap")
         self.assertEqual(json.loads(req.data)["member_id"], "PADSENTINEL-m1")
+
+
+class HereAndFetch(unittest.TestCase):
+    """Section 7: here is the box, so no organizer secret reaches pad-run; a killed fetch-run leaves no work folder."""
+
+    SECRETS = {"GOALCUP_TEST_APPROVAL_KEY": SENTINEL + "ap", "GH_TOKEN": SENTINEL + "gh", "DATABASE_URL": SENTINEL + "db"}
+
+    def run_for(self, out, **settings):
+        s = pad.load_settings(dict(BASE, mode="micro", **settings), PADCFG)
+        r = pad.Run(s, "direct", PADCFG, Walk.HARNESS, out)
+        self.addCleanup(shutil.rmtree, r.tmp, True)
+        return r
+
+    def test_here_pad_run_gets_no_organizer_secret(self):
+        seen = []
+        def fake(argv, timeout=None, env=None):
+            seen.append(env)
+            return subprocess.CompletedProcess(argv, 0, 'PADSTEP {"result": "ok"}', "")
+        with tempfile.TemporaryDirectory() as out, mock.patch.dict(os.environ, self.SECRETS), \
+                mock.patch.object(pad, "call", fake):
+            r = self.run_for(out, where="here")
+            r.box_dir = out
+            r.box("setup", 10)
+        self.assertIsNotNone(seen[0])
+        self.assertFalse(set(pad.NEVER_IN_BOX) & set(seen[0]))
+
+    def test_killed_fetch_run_leaves_no_work_folder(self):
+        def fake(argv, timeout=None, env=None):
+            work = os.path.join(argv[-1], ".fetch-run.abc123")
+            os.makedirs(work)
+            with open(os.path.join(work, "pg_service.conf"), "w") as f:
+                f.write("password=" + SENTINEL)
+            raise subprocess.TimeoutExpired(argv, timeout)
+        with tempfile.TemporaryDirectory() as out, mock.patch.object(pad, "call", fake):
+            r = self.run_for(out, server="staging")
+            r.meta["entry"] = "e" + "0" * 16
+            with self.assertRaises(subprocess.TimeoutExpired):
+                r.step_fetch("fetch", 10)
+            self.assertEqual(os.listdir(os.path.join(r.dir, "fetched")), [])
+
+    def test_local_server_in_a_sandbox_is_refused(self):
+        with self.assertRaises(pad.Usage):
+            pad.load_settings(dict(BASE, server="local", where="sandbox"), PADCFG)
 
 
 class BoxHalf(unittest.TestCase):

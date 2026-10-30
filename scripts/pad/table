@@ -76,6 +76,7 @@ def tier_for(cid, rows):
     reasons += [(3, "no full %s row" % c) for c, r in got if not r]
     versions = {str(r.get("harness_version") or "") for _, r in got if r}  # section 9: verified "on that version"
     reasons += [(4, "case rows on different versions")] * (len(versions) > 1)
+    reasons += [(4, "no harness version on a case row")] * ("" in versions)  # P7: a named version
     if reasons:
         return ("not verified", "", min(reasons, key=lambda x: x[0])[1])
     return ("verified", versions.pop(), "")
@@ -141,7 +142,8 @@ def release_check(commit):
     for cid, case in [(cid, case) for cid in CORE for case in CASES]:
         need("%s %s full" % (cid, case), tier_row((cid,), case))
     need("codex-cli direct full kill-recorder", lambda r: r.get("connector") == "codex-cli"
-         and r.get("case") == "direct" and r.get("mode") == "full" and kills(r))
+         and r.get("case") == "direct" and r.get("mode") == "full" and kills(r)
+         and "connector copy" not in (r.get("variant") or []))  # section 9 means the shipped connector
     for s in ("h2-parallel.sh", "long-tunnel.sh"):  # the latest verdict for s, which must be PASS
         need("exec %s verdict PASS" % s, lambda r, s=s: g(r.get("exec"), s) is not None,
              ok=lambda r, s=s: r["exec"][s] == "PASS", say=lambda r, s=s: "verdict %s" % r["exec"][s])

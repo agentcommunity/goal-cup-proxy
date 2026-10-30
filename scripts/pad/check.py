@@ -347,7 +347,7 @@ def main(argv):
     lines = ["pad check %(connector)s %(case)s %(mode)s: result %(result)s, faults %(faults)s" % row,
              "checks: " + ", ".join("%s %s" % kv for kv in sorted(row["checks"].items()))]
     lines += ["why: " + w for w in row["why"]] + ["facts: " + json.dumps(row["facts"], sort_keys=True)]
-    lines += ["for the watcher: read goalcup.log and the panes for a failed call the harness did not retry"] * bool(row["variant"])
+    lines += ["for the watcher: read goalcup.log and the panes for a failed call the harness did not retry"] * bool(fault_kinds(row))
     for name, text in (("row.json", json.dumps(row, sort_keys=True, indent=1)), ("report.txt", "\n".join(lines))):
         with open(os.path.join(argv[1], name), "w") as f:
             f.write(text + "\n")
