@@ -23,7 +23,7 @@ use super::{setup_json, text};
 use crate::connector::launch::{fill, make_dir, resolve_program};
 use crate::connector::{self, Connector, Decision, Env, Form, HostList, Refusal, SettingRow};
 use crate::connector::{Source, builtin};
-use crate::upload::client::ServerClient;
+use crate::upload::client::{ServerClient, ServerError};
 
 /// `$GOALCUP_HOME/setup.json`: the saved harness and the rows written: file, key and value.
 #[derive(Serialize, Deserialize)]
@@ -145,6 +145,7 @@ fn write_home(
 fn write_rows(home: &Path, rows: &[SettingRow]) -> Vec<Row> {
     let mut written = Vec::new();
     for row in rows {
+        // Filled as connector::launch::write_settings fills it, until PRD-11 returns the file.
         let file = PathBuf::from(fill(&row.file, home, Path::new("")));
         if connector::write_settings(home, std::slice::from_ref(row)).is_empty() {
             let (key, value) = (row.key.clone(), row.value.clone());
@@ -177,7 +178,11 @@ fn machine(home: &Path, server: &Server, vars: &BTreeMap<String, String>) {
         Server::Url(base) => ServerClient::new(base, None)
             .json::<serde_json::Value, ()>("GET", "/v1/health", None)
             .err()
-            .map(|e| text::server_unreachable(&e.to_string())),
+            .map(|e| match e {
+                ServerError::Transport(why) | ServerError::Malformed(why) => why,
+                ServerError::Status { status, .. } => format!("HTTP {status}"),
+            })
+            .map(|why| text::server_unreachable(&why)),
     };
     let lines = [
         awake::missing(vars).map(text::no_sleep_lock),
