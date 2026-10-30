@@ -5,6 +5,7 @@ per_key = 2               # sandboxes at once per provider key
 per_key_deepseek = 6      # back to per_key once a row's 429 share passes 5%
 box_vcpus = 4
 box_extra_minutes = 30    # box timeout is the run's minutes plus this
+build = "pad-out/build"   # goalcup and goalcup-verify from the build box output, copied to ~/bin in the box
 
 # Key name in a settings file -> the conductor environment variable that holds it.
 # Names only, each a *_API_KEY: the pad never reads a value, sbx.mjs put-env reads it inside node.
