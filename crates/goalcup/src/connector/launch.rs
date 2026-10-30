@@ -253,7 +253,9 @@ pub(crate) fn write_profile(dir: &Path, path: &str) -> std::io::Result<()> {
     match opts().open(&file) {
         Ok(f) if f.metadata().is_ok_and(|m| m.is_file()) => {
             let mut head = String::new();
-            let _ = f.take(PROFILE_HEADER.len() as u64 + 1).read_to_string(&mut head);
+            let _ = f
+                .take(PROFILE_HEADER.len() as u64 + 1)
+                .read_to_string(&mut head);
             if head.strip_suffix('\n') != Some(PROFILE_HEADER) {
                 return Ok(());
             }

@@ -241,7 +241,11 @@ fn with_home_swapped_a_login_shell_finds_goalcup() {
         let mut sh = std::process::Command::new("sh");
         // PATH reset as Debian's /etc/profile does: only `.profile` can put the handed one back.
         sh.env_clear().envs(&plan.env).env("PATH", "/usr/bin:/bin");
-        let out = sh.args(["-lc", "command -v goalcup"]).output().unwrap().stdout;
+        let out = sh
+            .args(["-lc", "command -v goalcup"])
+            .output()
+            .unwrap()
+            .stdout;
         String::from_utf8(out).unwrap()
     };
     let want = format!("{}\n", fake.display());
