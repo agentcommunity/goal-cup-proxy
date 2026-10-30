@@ -1,27 +1,27 @@
 //! The uploader (PRD-06): sends every part file to the server in small chunks soon after it is
 //! written, tells the server the written counts in a heartbeat, and frees local disk once the
-//! server holds the bytes.
+//! server holds the bytes. It runs on two plain threads with a blocking client, never on the
+//! recorder's runtime, and never ends the process.
 //!
-//! It lives in the recorder process on two plain threads, `upload` and `beat`, with a blocking HTTP
-//! client, never on the recorder's async runtime, so a hung server never reaches a relay task. It
-//! never ends the process: recording never depends on it.
-//!
-//! This slice holds the seams only: [`ServerWord`] (S10), [`spawn`], [`UploadCtx`],
-//! [`UploadHandle::finish`] and [`SealFacts`] (S18), `upload.json` ([`state`], S9) and the timing
-//! rules ([`policy`]). The threads come in the next slices; until then [`spawn`] starts none and
-//! says so plainly in `upload.json`.
+//! Present: the seams ([`ServerWord`] S10, [`spawn`], [`UploadCtx`], [`SealFacts`] S18,
+//! `upload.json` S9), the timing rules ([`policy`]), the client, the chunk cut ([`chunk`]) and the
+//! heartbeat ([`beat`]). The threads come in slice 3; until then [`spawn`] starts none and says
+//! so plainly in `upload.json`.
 
+pub mod beat;
+pub mod chunk;
 pub mod client;
 pub mod policy;
 pub mod state;
 
 pub use policy::WrapUp;
 
+use crate::cli::{self, ServerJson};
 use crate::pipeline::{EntryTotals, Mono, Recorder};
 use crate::watchdog::SealReason;
 use serde::{Deserialize, Serialize};
 use state::{LastError, State, UploadJson};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::time::SystemTime;
 use tokio::sync::watch;
 
@@ -73,21 +73,23 @@ pub struct UploadHandle {
 pub fn spawn(ctx: UploadCtx) -> UploadHandle {
     let (word, _) = watch::channel(None);
     let mut json = UploadJson::new(ctx.run, ctx.entry);
-    match server_url(&ctx.run_dir) {
-        None => {
+    // Only a readable `server.json` that says off makes the run local; an unreadable one is not
+    // read as "no server".
+    match cli::read_json::<ServerJson>(&cli::server_json(&ctx.run_dir)) {
+        Some(ServerJson { server: None, .. }) => {
             json.state = State::Local;
             json.keep = true;
         }
-        Some(url) => {
-            json.server_url = Some(url);
+        server => {
+            json.server_url = server.and_then(|s| s.server);
+            let text = match json.server_url {
+                Some(_) => "the sender is not in this build yet; nothing is sent",
+                None => "server.json unreadable",
+            };
             json.keep = ctx.keep;
             json.state = State::Waiting;
-            json.last_error = Some(LastError::new(
-                SystemTime::now(),
-                policy::Class::Internal,
-                None,
-                "the sender is not in this build yet; nothing is sent",
-            ));
+            let class = policy::Class::Internal;
+            json.last_error = Some(LastError::new(SystemTime::now(), class, None, text));
         }
     }
     let _ = state::write(&ctx.entry_dir, &json);
@@ -106,9 +108,29 @@ impl UploadHandle {
     }
 }
 
-/// The run's server address from `run_dir/server.json` (PRD-10), or None for a local run.
-fn server_url(run_dir: &Path) -> Option<String> {
-    let raw = std::fs::read(crate::cli::server_json(run_dir)).ok()?;
-    let v: serde_json::Value = serde_json::from_slice(&raw).ok()?;
-    Some(v.get("server")?.as_str()?.to_owned())
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Point 6: a `server.json` that cannot be read never tells the participant the run is local.
+    #[test]
+    fn an_unreadable_server_json_is_not_local() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(cli::server_json(dir.path()), br#"{"server":"https://x"}"#).unwrap();
+        let ctx = UploadCtx {
+            home: dir.path().into(),
+            run_dir: dir.path().into(),
+            entry_dir: dir.path().into(),
+            run: "r".into(),
+            entry: "e".into(),
+            recorder: None,
+            keep: false,
+        };
+        spawn(ctx);
+        let j = state::read(dir.path()).unwrap();
+        // Valid JSON that is not a ServerJson: the unreadable branch, not the URL one.
+        assert_eq!(j.server_url, None);
+        assert_eq!((j.state, j.keep), (State::Waiting, false));
+        assert_eq!(j.last_error.unwrap().class, policy::Class::Internal);
+    }
 }
