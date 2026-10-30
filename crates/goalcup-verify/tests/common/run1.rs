@@ -49,7 +49,8 @@ fn post(e: &mut Entry, id: &str, k: u64, limited: bool) {
     let q = e.open(StreamKind::HttpReq, c, 0, head);
     e.data(q, 0, 0, req.as_bytes());
     e.end(q, done, req.len() as u64, Value::Null);
-    let head = json!({"status": 200, "ver": "1.1", "headers": [], "masked": [], "coding": null,
+    let ctype = [["content-type", "text/event-stream"]];
+    let head = json!({"status": 200, "ver": "1.1", "headers": ctype, "masked": [], "coding": null,
         "decoded": true});
     let p = e.open(StreamKind::HttpResp, c, q, head);
     e.data(p, 0, 0, body.as_bytes());
