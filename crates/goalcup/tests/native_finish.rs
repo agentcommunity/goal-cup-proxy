@@ -168,7 +168,7 @@ fn finish_with_no_guard_reads_whole_a_snapshot_rewritten_under_a_copy_in_progres
     let done = common::within(common::HANG, move || reader.finish(true, None));
     room.join().unwrap();
     let o = opens(&calls);
-    assert_eq!(o.len(), 2, "one torn copy, then one copy of the state the seal saw");
+    assert_eq!(o.len(), 2, "a torn copy, then one of the state seen");
     assert_eq!(end_of(&calls, o[0].0), Some(EndReason::SourceChanged));
     assert_eq!(data_of(&calls, o[1].0), stable);
     assert_eq!(end_of(&calls, o[1].0), Some(EndReason::Complete));
