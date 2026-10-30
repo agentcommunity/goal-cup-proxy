@@ -418,7 +418,8 @@ impl Calls {
             let (nr, Some(t)) = (&nat[n].0, nat[n].0.wall_end) else {
                 continue;
             };
-            let (lo, hi) = (t.saturating_sub(120_000_000_000), t.saturating_add(5_000_000_000));
+            let lo = t.saturating_sub(120_000_000_000);
+            let hi = t.saturating_add(5_000_000_000);
             let early = |&w: &usize| rows[w].wall_end.is_none_or(|e| e < lo);
             let near = |&&w: &&usize| rows[w].wall_end <= Some(hi);
             let free = |&&w: &&usize| {

@@ -351,14 +351,14 @@ fn native_only_counts_the_silent_window() {
 #[test]
 fn every_claude_code_subagent_transcript_counts() {
     let mut e = Entry::new("u-claude");
-    let files = ["S1", "S1/subagents/agent-a1", "S1/subagents/workflows/wf1/agent-a2"];
+    let files = ["S", "S/subagents/agent-a", "S/subagents/workflows/w/agent-b"];
     for (k, f) in files.iter().enumerate() {
         let v = json!({"type": "assistant", "message": {"id": k.to_string(),
             "usage": {"input_tokens": 3}, "content": MARK}});
         let (path, body) = (format!("transcripts:p/{f}.jsonl"), format!("{v}\n"));
         stream(&mut e, StreamKind::Native, &path, &body);
     }
-    let meta = "meta:p/S1/subagents/workflows/wf1/agent-a2.meta.json";
+    let meta = "meta:p/S/subagents/workflows/w/agent-b.meta.json";
     stream(&mut e, StreamKind::Snapshot, meta, r#"{"agentType":"x"}"#);
     let mut recs = read_records(&e.seal().join("rec"));
     let claude = |v: &mut Value| v["connector"] = "claude-code-cli".into();
@@ -367,8 +367,8 @@ fn every_claude_code_subagent_transcript_counts() {
     assert_eq!(t.rows.iter().filter(|r| r.thread.is_some()).count(), 3);
     let th = |id| t.threads.iter().find(|x| x.id == id).unwrap();
     let parent = |id| th(id).parent.as_deref();
-    assert_eq!([parent("a1"), parent("a2")], [Some("S1"); 2]);
-    assert_eq!(th("a2").label.as_deref(), Some("x"));
+    assert_eq!([parent("a"), parent("b")], [Some("S"); 2]);
+    assert_eq!(th("b").label.as_deref(), Some("x"));
     assert!(!format!("{t:?}").contains(MARK));
 }
 
