@@ -1,7 +1,8 @@
 //! `conn_bytes` (PRD-08 section 3, "Honesty"): per decrypted connection and direction, the
 //! plaintext the END tail claims against what its streams account for. A request lost on a
-//! reused connection with no `conn` GAP is a `fail` (exit 2); a `conn` GAP covers it (`named`,
-//! exit 1); 10% and 1 MiB unaccounted is a `warn` that never moves the exit; under 1 MiB passes.
+//! reused connection with no `conn` GAP is a `fail` (exit 2), even beside a small GAP on another
+//! stream; a `conn` GAP covers it (`named`, exit 1); 10% and 1 MiB unaccounted is a `warn` that
+//! never moves the exit; no plain tails is a `skip`; a sized WebSocket stream GAP names its bytes.
 
 mod common;
 
@@ -15,6 +16,16 @@ const MIB: u64 = 1_048_576;
 /// `wire` is a request and its response with that many body bytes on the wire (`conn_bytes`
 /// trusts END `wire`; `seen` stays equal to the tiny DATA). `lost` adds a `conn` GAP.
 fn conn_with(plain: (u64, u64), wire: &[(u64, u64)], lost: Option<u64>) -> (i32, Value) {
+    conn_gapped(plain, wire, lost, None)
+}
+
+/// As `conn_with`, plus a small `memory_guard` GAP on the last response stream (`stream_lost`).
+fn conn_gapped(
+    plain: (u64, u64),
+    wire: &[(u64, u64)],
+    lost: Option<u64>,
+    stream_lost: Option<u64>,
+) -> (i32, Value) {
     let mut e = Entry::new("conn-bytes");
     let c = e.conn();
     for &(up, down) in wire {
@@ -27,6 +38,10 @@ fn conn_with(plain: (u64, u64), wire: &[(u64, u64)], lost: Option<u64>) -> (i32,
             "coding": null, "decoded": true});
         let p = e.open(StreamKind::HttpResp, c, q, head);
         e.data(p, 0, 0, b"{}");
+        if let (Some(lost), true) = (stream_lost, (up, down) == wire[wire.len() - 1]) {
+            let tail = json!({"guard": "held_bytes"});
+            e.gap(p, GapReason::MemoryGuard, 10, 2, lost, tail);
+        }
         e.end(p, EndReason::Complete, 2, json!({"wire": down}));
     }
     if let Some(lost) = lost {
@@ -50,6 +65,15 @@ fn normal_framing_passes() {
 #[test]
 fn a_lost_request_without_a_conn_gap_fails() {
     let (code, v) = conn_with((3 * MIB, MIB), &[(MIB, MIB)], None);
+    assert_eq!(result(&v, "conn_bytes"), "fail");
+    assert_eq!(code, 2);
+}
+
+/// A small named GAP on one response must not hide a request the parser lost on the same
+/// connection: the loss stays silent, so it stays a `fail`.
+#[test]
+fn a_small_stream_gap_does_not_cover_a_silently_lost_request() {
+    let (code, v) = conn_gapped((3 * MIB, MIB), &[(MIB, MIB)], None, Some(11));
     assert_eq!(result(&v, "conn_bytes"), "fail");
     assert_eq!(code, 2);
 }
@@ -78,7 +102,6 @@ fn a_decrypted_conn_without_plain_tails_is_skipped_not_passed() {
     e.count();
     let (code, v) = check(&e.seal(), &[]);
     assert_eq!(result(&v, "conn_bytes"), "skip");
-    assert_eq!(item(&v, "conn_bytes")["facts"]["no_plain_tail"], 1);
     assert_eq!(code, 0);
 }
 

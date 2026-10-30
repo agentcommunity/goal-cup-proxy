@@ -250,13 +250,14 @@ impl Honesty {
     }
 
     fn gap(&mut self, sid: u64, reason: GapReason, lost: u64, tail: &Map<String, Value>, at: At) {
-        // A GAP on a stream of a connection is a named loss: a WebSocket stream has no END
-        // `wire`, so the bytes it lost count as accounted for.
+        // A GAP on a stream of a connection names only its own bytes, so it never waives the
+        // `conn_bytes` fail rule for other requests. A WebSocket stream has no END `wire`: the
+        // bytes it lost count as accounted for, and a loss of unknown size waives the rule.
         if let Some(&Sub { conn, dir, ws }) = self.subs.get(&sid) {
-            if let Some(c) = self.conns.get_mut(&conn) {
-                inc(&mut c.gaps, 1);
-                if ws {
-                    inc(&mut c.acc[dir], lost.saturating_sub(1));
+            if let (true, Some(c)) = (ws, self.conns.get_mut(&conn)) {
+                inc(&mut c.acc[dir], lost.saturating_sub(1));
+                if lost == 0 {
+                    inc(&mut c.gaps, 1);
                 }
             }
             return;
@@ -368,7 +369,11 @@ impl Honesty {
         }
         // Nothing judged, or a decrypted connection with no plain byte count, is no evidence.
         if n.checked == 0 || n.no_plain_tail > 0 {
-            bytes.raise(Res::Skip, "", None);
+            let why = match n.no_plain_tail {
+                0 => "no decrypted connection to judge".to_string(),
+                k => format!("{k} decrypted connections ended with no plain_up or plain_down"),
+            };
+            bytes.raise(Res::Skip, &why, None);
         }
         let refused: Vec<Value> = (self.refused.iter())
             .map(|(host, fingerprint)| json!({"host": host, "fingerprint": fingerprint}))
@@ -424,7 +429,7 @@ impl Honesty {
 /// Sets a check's facts, and its one plain line when it is not a pass.
 fn fill(c: &mut Check, why: String, facts: Value) {
     c.facts = facts.as_object().cloned().unwrap_or_default();
-    if c.result > Res::Pass {
+    if c.result > Res::Skip {
         c.why = why;
     }
 }
