@@ -1299,3 +1299,10 @@ here; the other files carry their own part.
   remaining connector files of section 6 (four of 16 are on integration: `claude-code-cli`,
   `codex-cli`, `hermes-cli`, `kilo-cli`). Each new file is checked by `rule_code` (PRD-14 note).
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-12 slice 4 (merge 69f355c6)
+
+- The pad now reads the flat `connectors/<id>.toml`: top-level `home` (it fills `{home}` only, for
+  the harness login in the box) and `native` rows `name`, `root` and `pattern`. A `home` value that
+  uses `{workspace}`, or a rename of those keys, is a seam line; the pad follows.
+- No locked ledger item is touched and no owner question comes from this slice.

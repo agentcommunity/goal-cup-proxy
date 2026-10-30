@@ -7,7 +7,7 @@ use std::process::ExitCode;
 
 use serde_json::Value;
 
-use super::{Found, ServerJson, find, home, read_json, say, text};
+use super::{Found, ServerJson, fail, find, home, read_json, say, text};
 use crate::pipeline::status::{Mode, Status};
 
 /// The recording state, one row of the section 4 table each. Times are seconds since 1970.
@@ -275,14 +275,11 @@ pub fn block(
 pub fn run(part: Option<String>, json: bool) -> ExitCode {
     let home = match home() {
         Ok(h) => h,
-        Err(t) => {
-            say(t);
-            return ExitCode::from(1);
-        }
+        Err(t) => return fail(t),
     };
     let Some(found) = find(&home, part.as_deref()) else {
-        say(&part.map_or_else(|| text::NO_RUN_YET.to_owned(), |p| text::no_such_part(&p)));
-        return ExitCode::from(1);
+        let line = part.map_or_else(|| text::NO_RUN_YET.to_owned(), |p| text::no_such_part(&p));
+        return fail(&line);
     };
     let dir = found.entry_dir();
     let path = super::status_json(&dir);

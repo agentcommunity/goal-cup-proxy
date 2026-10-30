@@ -1344,3 +1344,17 @@ PRD-01, PRD-02, PRD-04, PRD-05 and PRD-11 as they now stand, and the code. No lo
   these: a change to the exit codes, a message on stdout for "no run", or a renamed or moved `mode`
   needs `install.sh` and `test_install.py` changed in the same merge.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-12 slice 4 (merge 69f355c6)
+
+What the pad calls, as merged (PRD-12 note):
+
+- The T6 cap seal: `goalcup seal --yes` from the project folder with the run's environment; exit 0
+  is sealed. `kill-watchdog-recover`: `goalcup recover` under `env -i` (HOME, PATH, TERM and the
+  run's `GOALCUP_*` only) in its own tmux window, the exit code read; then plain `goalcup status` in
+  that clean environment, keeping lines that name `goalcup recover` or `goalcup continue`. The
+  `--yes` flag and those two command names in `status` are pad seams; a change is a seam line.
+- At 69f355c6 `seal` and `recover` exit 3 "not built" in `main.rs`, so the pad's cap cannot seal a
+  run and its recover row is not evidence until this PRD's slices for them merge. They gate the first
+  run with a real key (PRD-16 note).
+- No locked ledger item is touched and no owner question comes from this slice.
