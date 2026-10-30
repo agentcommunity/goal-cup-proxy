@@ -95,7 +95,8 @@ migration to the shared database.
 **Usage stats (third slice, not built yet).** An organizer job writes `usage/{event}/{run}/{entry}.json`
 to a bucket of its own, `goalcup-usage` (`goalcup-usage-staging` during the build), never the traces
 bucket: the job needs write access and R2 tokens scope only to whole buckets. The Worker neither binds
-nor serves it. The owner creates `goalcup-usage` with the production deploy.
+nor serves it. The owner creates `goalcup-usage` with the production deploy. Test runs' usage objects go
+with [Clean up test runs](#clean-up-test-runs).
 
 ## Run it locally
 
@@ -148,7 +149,7 @@ curl -s -XPOST localhost:8787/v1/device/token -H 'content-type: application/json
 | `sql/goal-cup-tracer-upload.sql` | Copy of the website's migration that `db-supabase.ts` calls. The website repo is the authority. |
 | `sql/pending/` | A migration written here first, until it is applied (with a README that says how to land it). Empty since 27 Oct 2026; `git show 32808ff8:server/worker/sql/pending/README.md` is the last such README |
 | `scripts/check-sql.sh` | Applies the mirror and the pending migration to a throwaway local Postgres and smoke-calls the new functions (needs a file in `sql/pending/`: exits 2 while it is empty) |
-| `scripts/delete-test-runs.sh` | Deletes all organizer test runs, rows and R2 objects ([OPERATING](../../docs/OPERATING.md#test-runs)) |
+| `scripts/delete-test-runs.sh` | Deletes all organizer test runs, rows and R2 objects in the traces and usage buckets ([OPERATING](../../docs/OPERATING.md#test-runs)) |
 | `test/` | `config`, `github`, `supabase` (RPC names, stubbed fetch), `local-db`, `ratelimit`, `mail`, `device-unit`; `integration`, `device`, `segments` (HTTP against `wrangler dev`); `lifecycle`, `notices`, `test-mode` (the Worker in this process on a clock the test moves) |
 
 ## Configuration
@@ -387,7 +388,11 @@ To remove an operator, delete the row with the same `member_id`.
 ### Clean up test runs
 
 `scripts/delete-test-runs.sh` deletes all organizer test runs, in the database and in R2
-(`goalcup-traces/traces/test/` and `goalcup-traces-staging/traces/test-staging/` only). It needs `psql`,
+(`goalcup-traces/traces/test/`, `goalcup-traces-staging/traces/test-staging/`, `goalcup-usage/usage/test/`
+and `goalcup-usage-staging/usage/test-staging/` only). It lists R2 first, so a failed listing changes
+nothing. The token needs R2 read and write on both traces buckets and on each usage bucket that exists.
+A usage bucket that is missing or not open to the token (`404` or `403`) is skipped with one line; its
+test objects stay until a run with a token that reaches it. It needs `psql`,
 `curl` and `python3`, and `DATABASE_URL`, `CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_API_TOKEN` in the
 environment. `DATABASE_URL` is the website database URL: set it from `DATABASE_URL_REMOTE`
 (`export DATABASE_URL="$DATABASE_URL_REMOTE"`). Run the script in `server/worker`.
@@ -396,7 +401,8 @@ environment. `DATABASE_URL` is the website database URL: set it from `DATABASE_U
 2. Read the list. If it is right, run `sh scripts/delete-test-runs.sh --yes`.
 3. To keep recent runs, add `--older-than '7 days'`. If the script reports objects not deleted, run it
    again without `--older-than`. That run deletes every test run. (With `--older-than`, a second run no longer
-   knows the keys, because the rows are gone.)
+   knows the runs, because the rows are gone.) A test run still uploading while the script runs can leave
+   objects behind; a run without `--older-than` removes them too.
 
 More on test runs: [OPERATING](../../docs/OPERATING.md#test-runs).
 
