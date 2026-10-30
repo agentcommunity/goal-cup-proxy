@@ -1,0 +1,30 @@
+# The one shared host list: hosts decrypted and recorded byte for byte for every harness. Everything else is a tunnel.
+# Patterns: exact name; "*.a.b" (one or more labels before a.b); one "*" inside one label.
+# Arrays: provider, gateway, vendor (the kind), never (sign-in hosts, never decrypted), pinned (empty at ship).
+provider = [
+  "api.anthropic.com", "api.openai.com", "chatgpt.com", "api.deepseek.com",
+  "generativelanguage.googleapis.com", "api.moonshot.ai", "api.moonshot.cn", "api.kimi.com",
+  "dashscope.aliyuncs.com", "dashscope-intl.aliyuncs.com", "cn-hongkong.dashscope.aliyuncs.com",
+  "*.maas.aliyuncs.com",
+  "api.mistral.ai", "api.x.ai",
+  "api.z.ai", "open.bigmodel.cn", "api.groq.com", "api.together.ai", "us-api.together.ai",
+  "api.together.xyz", # unverified
+  "api.fireworks.ai", "api.cerebras.ai", "inference-api.nousresearch.com",
+  "bedrock-runtime.*.amazonaws.com", "bedrock-runtime-fips.*.amazonaws.com", "bedrock-mantle.*.api.aws",
+  "aiplatform.googleapis.com", "*-aiplatform.googleapis.com",
+  "aiplatform.us.rep.googleapis.com", "aiplatform.eu.rep.googleapis.com",
+  "*.openai.azure.com", "*.services.ai.azure.com",
+]
+gateway = [
+  "ai-gateway.vercel.sh", "openrouter.ai", "eu.openrouter.ai", "gateway.ai.cloudflare.com",
+  "api.kilo.ai", "ai-gateway.kilo.ai", "api.cline.bot", "opencode.ai",
+]
+vendor = [
+  "ampcode.com", "api.factory.ai", "api.eu.factory.ai", "api.githubcopilot.com", "*.githubcopilot.com",
+  "cloudcode-pa.googleapis.com", "api2.cursor.sh", "api5.cursor.sh", "*.api5.cursor.sh",
+]
+never = [
+  "auth.openai.com", "platform.claude.com", "claude.ai", "authapi.ampcode.com", "oauth2.googleapis.com",
+  "auth.kimi.com", "chat.qwen.ai", "portal.nousresearch.com",
+]
+pinned = []
