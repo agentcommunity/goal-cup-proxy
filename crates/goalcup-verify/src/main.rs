@@ -104,7 +104,7 @@ fn run() -> ExitCode {
     match args.cmd {
         Cmd::Check(a) => check(&a),
         Cmd::Dump(d) => dump(&d.path, d.sid.as_deref(), d.kind.as_deref(), d.text),
-        Cmd::Secrets(a) => secrets::run(&a),
+        Cmd::Secrets(a) => secrets::run(&a).unwrap_or_else(|e| no_report(&e)),
         Cmd::Usage { args } => usage::run(args),
     }
 }

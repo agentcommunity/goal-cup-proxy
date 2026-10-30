@@ -5,8 +5,7 @@ mod common;
 use base64::{Engine, engine::general_purpose::STANDARD};
 use common::*;
 use goalcup_format::StreamKind::{HttpReq, HttpResp, Native};
-use goalcup_format::{EndReason, Record};
-use goalcup_verify::secrets::SHAPES;
+use goalcup_format::{EndReason, GapReason, Record};
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -53,11 +52,11 @@ fn scan(paths: &[&Path], stdin: &[u8]) -> (i32, Value) {
     (out.status.code().unwrap_or(-1), v)
 }
 
-/// The exit, the lengths of `known_hits`, `shape_hits`, `glued` and `big_masks`, the report.
-fn lens(name: &str, pieces: &[Vec<u8>], masks: &[[u64; 3]]) -> (i32, [usize; 4], Value) {
+/// The exit, the lengths of `known_hits`, `shape_hits`, `glued_shape` and `big_masks`, the report.
+fn lens(name: &str, pieces: &[Vec<u8>], masks: &[[u64; 3]]) -> (i32, [Option<usize>; 4], Value) {
     let (code, v) = scan(&[&entry(name, false, pieces, masks)], b"");
-    let lists = ["known_hits", "shape_hits", "glued", "big_masks"];
-    (code, lists.map(|l| v[l].as_array().map_or(9, Vec::len)), v)
+    let lists = ["known_hits", "shape_hits", "glued_shape", "big_masks"];
+    (code, lists.map(|l| v[l].as_array().map(Vec::len)), v)
 }
 
 /// One known hit of `form`, counted once, in the stream (or its joined deltas).
@@ -76,6 +75,12 @@ fn secrets_known_value_found_split_base64_percent_and_in_sse_deltas() {
     let k = known();
     let b64 = |pad: usize| STANDARD.encode([&b"ab"[..pad], k.as_bytes(), b"!"].concat());
     let d = |p: &str| format!("data: {}\n\n", json!({"type": "x.delta", "delta": p}));
+    let cc = |p: &str| {
+        format!(
+            "data: {}\n\n",
+            json!({"choices": [{"delta": {"content": p}}]})
+        )
+    };
     let (one, two) = k.as_bytes().split_at(9);
     found("split", false, &[one.to_vec(), two.to_vec()], "raw");
     for (pad, form) in ["base64_0", "base64_1", "base64_2"].into_iter().enumerate() {
@@ -85,6 +90,12 @@ fn secrets_known_value_found_split_base64_percent_and_in_sse_deltas() {
     found("percent", false, &[pct.into_bytes()], "percent");
     let (a, b, c) = (&k[..8], &k[8..20], &k[20..]);
     found("sse", true, &[d(a).into(), d(b).into(), d(c).into()], "raw");
+    found(
+        "chat",
+        true,
+        &[cc(a).into(), cc(b).into(), cc(c).into()],
+        "raw",
+    );
 }
 
 #[test]
@@ -92,19 +103,25 @@ fn secrets_masked_glued_spaced_and_big_spans() {
     let (n, shape) = (known().len() as u64, format!("sk-{}", "Ab1".repeat(8)));
     let stars = |n: u64| "*".repeat(n as usize).into_bytes();
     let (code, got, v) = lens("starred", &[b"k=".to_vec(), stars(n)], &[[2, n, 0]]);
-    assert_eq!((code, got, &v["masks"]), (0, [0; 4], &json!({"bearer": 1})));
+    assert_eq!(
+        (code, got, &v["masks"]),
+        (0, [Some(0); 4], &json!({"bearer": 1}))
+    );
     let (code, got, v) = lens("glued", &[format!("x{shape}").into()], &[]);
-    assert_eq!((code, got, &v["result"]), (0, [0, 0, 1, 0], &json!("warn")));
-    assert_eq!(v["glued"][0]["kind"], "openai_key");
+    assert_eq!(
+        (code, got, &v["result"]),
+        (0, [0, 0, 1, 0].map(Some), &json!("warn"))
+    );
+    assert_eq!(v["glued_shape"][0]["kind"], "openai_key");
     let (code, got, _) = lens("spaced", &[format!("x {shape}").into()], &[]);
-    assert_eq!((code, got), (2, [0, 1, 0, 0]));
+    assert_eq!((code, got), (2, [0, 1, 0, 0].map(Some)));
     let halves = [[0, 10240, 2], [10240, 10240, 2]];
     let (code, got, v) = lens("closed", &[stars(10240), stars(10240)], &halves);
-    assert_eq!((code, got), (0, [0; 4]));
+    assert_eq!((code, got), (0, [Some(0); 4]));
     assert_eq!(v["masks"], json!({"fail_closed": 1}));
     assert_eq!(v["mask_bytes"]["fail_closed"], 20480);
     let (code, got, v) = lens("big", &[stars(20480)], &[[0, 20480, 0]]);
-    assert_eq!((code, got), (2, [0, 0, 0, 1]));
+    assert_eq!((code, got), (2, [0, 0, 0, 1].map(Some)));
     assert_eq!(v["masks"], json!({"bearer": 1}));
 }
 
@@ -118,6 +135,21 @@ fn secrets_known_value_found_in_a_raw_file_and_on_stdin() {
         assert_eq!((code, hits), (2, Some(1)));
         assert_eq!(v["inputs"][0]["as"], "raw");
     }
+    // A run folder: the entry's record, its loose files and the run's are all read; a symlink
+    // loop leaves the input partial and the walk goes on.
+    let e = entry("run", false, &[b"clean".to_vec()], &[]);
+    let run = e.parent().unwrap();
+    std::fs::write(e.join("goalcup.log"), &k).unwrap();
+    std::fs::write(run.join("notes.txt"), &k).unwrap();
+    std::os::unix::fs::symlink(".", run.join("self")).unwrap();
+    let (code, v) = scan(&[run], b"");
+    let hits = v["known_hits"].as_array().map(Vec::len);
+    assert_eq!(
+        (code, hits, &v["inputs"][0]["as"]),
+        (2, Some(2), &json!("record")),
+        "{v}"
+    );
+    assert_eq!(v["inputs"][0]["read"], "partial");
 }
 
 #[test]
@@ -141,14 +173,23 @@ fn secrets_check_known_adds_the_secrets_check() {
 }
 
 #[test]
-fn secrets_shapes_tsv_parses_and_every_line_compiles() {
-    let lines = SHAPES
-        .lines()
-        .filter(|l| !l.is_empty() && !l.starts_with('#'));
-    for l in lines {
-        let f: Vec<&str> = l.split('\t').collect();
-        assert!(f.len() == 3 && ["0", "1"].contains(&f[1]), "{l}");
-        regex::bytes::Regex::new(f[2]).unwrap_or_else(|e| panic!("{}: {e}", f[0]));
+fn secrets_nothing_is_joined_across_a_gap() {
+    let (k, shape) = (known(), format!("sk-{}", "Ab1".repeat(8)));
+    let (a, b) = k.split_at(9);
+    for (one, two, want, shapes) in [(a, b, 0, 0), ("abc", shape.as_str(), 2, 1)] {
+        let mut e = Entry::new(&format!("gap-{want}"));
+        let (sid, at) = (e.open(HttpReq, 0, 0, json!({})), one.len() as u64);
+        e.data(sid, 0, 0, one.as_bytes());
+        e.gap(sid, GapReason::MemoryGuard, 0, at, 102, Value::Null);
+        e.data(sid, at + 101, 0, two.as_bytes());
+        e.end(
+            sid,
+            EndReason::Complete,
+            at + 101 + two.len() as u64,
+            Value::Null,
+        );
+        let (code, v) = scan(&[&e.seal()], b"");
+        let got = [&v["known_hits"], &v["shape_hits"]].map(|l| l.as_array().map(Vec::len));
+        assert_eq!((code, got), (want, [Some(0), Some(shapes)]), "{v}");
     }
-    assert!(SHAPES.lines().any(|l| l.starts_with("private_key\t")));
 }

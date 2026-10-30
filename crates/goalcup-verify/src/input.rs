@@ -94,7 +94,7 @@ pub fn resolve(path: &Path, live: bool, server: bool) -> Result<Input, String> {
 }
 
 /// The entry at `dir`: a fetched entry, an entry with `rec/`, or a `rec` folder itself.
-fn entry_at(dir: &Path) -> Option<Entry> {
+pub fn entry_at(dir: &Path) -> Option<Entry> {
     let one = |dir: &Path, files: Vec<PathBuf>| Entry {
         dir: dir.to_path_buf(),
         files: files.into_iter().map(|p| (p, None)).collect(),
