@@ -11,8 +11,9 @@ use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-/// Entry `d` as fetch-run lays it out: one chunk per index line, the entry row and the last
-/// heartbeat from the seal's totals; `f` then changes the copy or its fetch.json.
+/// Entry `d` as fetch-run lays it out (the keys the verifier reads): one chunk per index line,
+/// the entry row and the last heartbeat from the seal's totals; `f` then changes the copy or its
+/// fetch.json, and a null fetch.json is not written.
 fn fetch(d: &Path, name: &str, f: impl FnOnce(&Path, &mut Value)) -> PathBuf {
     let out = fetched(d, &tmp(name)).join(ENTRY);
     let (mut chunks, mut raw, mut prev) = (vec![], 0, "0".repeat(64));
@@ -23,7 +24,7 @@ fn fetch(d: &Path, name: &str, f: impl FnOnce(&Path, &mut Value)) -> PathBuf {
             chunks.push(
                 json!({"offset": raw, "length": l.raw_end - raw, "bytes": b.len(),
                 "sha256": hex(&Sha256::digest(b)), "first_seq": chunks.len(), "last_seq": l.seq,
-                "prev": prev, "head": hex(&l.hash), "r2_key": "k", "received_at": null}),
+                "prev": prev, "head": hex(&l.hash)}),
             );
             (raw, prev, c0) = (l.raw_end, hex(&l.hash), l.c_end as usize);
         }
@@ -33,14 +34,14 @@ fn fetch(d: &Path, name: &str, f: impl FnOnce(&Path, &mut Value)) -> PathBuf {
         seal = v.clone()
     });
     let t = &seal["totals"];
-    let n = t["http_post"].as_u64().unwrap() + t["ws_up_msgs"].as_u64().unwrap();
-    let hb = json!({"final": true, "recording": "ok", "model_requests": n, "counts": t});
-    let mut doc = json!({"v": 1, "run_id": RUN, "entry_id": ENTRY, "upload_offset": raw,
-        "next_seq": chunks.len(), "head": prev, "model_requests": n,
-        "final": {"seq": chunks.len() - 1, "head": prev, "at": null}, "complete": true,
-        "missing": null, "last_heartbeat": hb, "heartbeats": [hb], "chunks": chunks});
+    let n = t["http_post"].as_u64().unwrap_or(0) + t["ws_up_msgs"].as_u64().unwrap_or(0);
+    let hb = json!({"recording": "ok", "model_requests": n, "counts": t});
+    let mut doc = json!({"upload_offset": raw, "model_requests": n, "last_heartbeat": hb,
+        "final": {"seq": chunks.len() - 1, "head": prev}, "chunks": chunks});
     f(&out, &mut doc);
-    fs::write(out.join("fetch.json"), doc.to_string()).unwrap();
+    if !doc.is_null() {
+        fs::write(out.join("fetch.json"), doc.to_string()).unwrap();
+    }
     out
 }
 
@@ -66,7 +67,7 @@ fn bytes(out: &Path, f: impl FnOnce(&mut Vec<u8>)) {
 fn copy_equal_to_local_part_files_passes() {
     let (code, v) = server("equal", |_, _| {});
     assert_eq!(code, 0, "{:?}", ids_with(&v, "fail"));
-    for id in IDS.split(' ') {
+    for id in IDS {
         assert_eq!(result(&v, id), "pass", "{id}");
     }
     for k in ["whole", "equals_local", "db_match"] {
@@ -94,6 +95,51 @@ fn missing_middle_chunk_fails() {
 }
 
 #[test]
+fn copy_without_fetch_json_fails() {
+    let (code, v) = server("bare", |_, doc| *doc = Value::Null);
+    assert_eq!(code, 2);
+    for id in IDS {
+        assert_eq!(result(&v, id), "fail", "{id}");
+    }
+}
+
+/// fetch-run stopped the copy at a bad object: a break, not an open end, also with no final.
+#[test]
+fn copy_stopped_by_fetch_run_fails() {
+    let mut at = Value::Null;
+    let (code, v) = server("cut", |out, doc| {
+        let last = doc["chunks"].as_array_mut().unwrap().pop().unwrap();
+        let n = last["bytes"].as_u64().unwrap() as usize;
+        bytes(out, |b| b.truncate(b.len() - n));
+        at = last["offset"].clone();
+        doc["final"] = Value::Null;
+        doc["missing"] = json!({"why": "object_bad", "offset": at});
+    });
+    assert_eq!((code, result(&v, "server_chunks_whole")), (2, "fail"));
+    assert_eq!(item(&v, "server_chunks_whole")["first"]["o"], at);
+}
+
+/// L-VR2: a seal with no `reason` or no `totals` gets a report (`check` panics on no JSON).
+#[test]
+fn vr2_seal_without_reason_or_totals_is_reported() {
+    for k in ["reason", "totals"] {
+        let mut e = Entry::new(&format!("vr2-{k}"));
+        e.standard();
+        let d = mutate(&e.seal(), None, |r| {
+            edit_event(r, "seal", 0, |v| {
+                v.as_object_mut().unwrap().remove(k);
+            })
+        });
+        let local = ["--server", "--local", d.to_str().unwrap()];
+        let (code, v) = check(&fetch(&d, &format!("vr2-{k}-f"), |_, _| {}), &local);
+        assert!(code < 3, "{k}");
+        if k == "totals" {
+            assert_eq!((code, result(&v, "counts_match_seal")), (2, "fail"));
+        }
+    }
+}
+
+#[test]
 fn wrong_row_counts_fail_counts_match() {
     for at in ["/model_requests", "/last_heartbeat/counts/off_ms"] {
         let (code, v) = server("row", |_, doc| *doc.pointer_mut(at).unwrap() = 7.into());
@@ -110,7 +156,8 @@ fn open_end_is_named_and_counts_skip() {
     assert_eq!(result(&v, "server_counts_match"), "skip");
 }
 
-/// L-FW3: a pruned entry is named on its own, and the server copy stands in for it.
+/// L-FW3: a pruned entry is named on its own, and the server copy stands in for it: whole, with
+/// `server_equals_local` skipped, when the first or every local part file is pruned.
 #[test]
 fn fw3_pruned_entry_is_named_and_server_copy_stands_in() {
     let mut e = Entry::new("pruned");
@@ -122,10 +169,16 @@ fn fw3_pruned_entry_is_named_and_server_copy_stands_in() {
     e.count();
     let d = e.seal();
     let out = fetch(&d, "pruned", |_, _| {});
-    fs::remove_file(&part_files(&d.join("rec")).unwrap()[0]).unwrap();
-    let (code, v) = check(&d, &[]);
-    assert_eq!((code, ids_with(&v, "fail").len()), (1, 0));
-    assert_eq!(ids_with(&v, "named"), ["parts_pruned"]);
-    let (_, v) = check(&out, &["--server", "--local", d.to_str().unwrap()]);
-    assert_eq!(result(&v, "server_equals_local"), "skip");
+    let (parts, local) = (part_files(&d.join("rec")).unwrap(), ["--server", "--local", d.to_str().unwrap()]);
+    for (n, gone) in [&parts[..1], &parts[1..]].into_iter().enumerate() {
+        gone.iter().for_each(|p| fs::remove_file(p).unwrap());
+        if n == 0 {
+            let (code, v) = check(&d, &[]);
+            assert_eq!((code, ids_with(&v, "fail").len()), (1, 0));
+            assert_eq!(ids_with(&v, "named"), ["parts_pruned"]);
+        }
+        let (code, v) = check(&out, &local);
+        assert_eq!((code, result(&v, "server_chunks_whole")), (0, "pass"), "{n}");
+        assert_eq!(result(&v, "server_equals_local"), "skip", "{n}");
+    }
 }

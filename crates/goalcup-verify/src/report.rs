@@ -29,19 +29,17 @@ pub struct Report {
 /// Checks every entry of the input. `now_ns` is set for `--live`; `local` is `--local`, the
 /// local entries a server copy is compared with.
 pub fn build(input: &Input, now_ns: Option<u64>, local: Option<&Input>) -> Report {
-    let server = input.kind == "server";
+    let is_server = input.kind == "server";
     let (mut exit, mut text, mut entries) = (0u8, String::new(), Vec::new());
-    let (mut run, mut copies) = (Value::Null, Vec::new());
+    let (mut run, mut all) = (Value::Null, Vec::new());
     for e in &input.entries {
-        let f = server.then(|| server::read(e));
+        let f = is_server.then(|| server::read(e));
         let want = f.as_ref().map(server::wanted).unwrap_or_default();
         let mut o = integrity::check(e, now_ns, &want);
         let mut checks = std::mem::take(&mut o.checks);
         checks.extend(LATER.map(|id| Check::new(id, None, Res::Skip, NOT_BUILT)));
         if let Some(f) = &f {
-            let c = server::checks(e, f, &o, local);
-            checks.extend_from_slice(&c);
-            copies.extend(c);
+            checks.extend(server::checks(e, f, &o, local));
         }
         let worst = checks.iter().map(|c| c.result).max().unwrap_or(Res::Pass);
         let partial = !o.sealed || input.kind == "live" || o.pruned;
@@ -56,8 +54,9 @@ pub fn build(input: &Input, now_ns: Option<u64>, local: Option<&Input>) -> Repor
         let name = o.entry.clone().unwrap_or_else(|| folder(&e.dir));
         text += &self::text(&name, &o, &checks);
         entries.push(entry(name, &o, &checks));
+        all.extend(checks);
     }
-    let server = server.then(|| server::summary(&copies));
+    let server = is_server.then(|| server::summary(&all));
     let result = ["pass", "named", "fail"][usize::from(exit)];
     let json = json!({"verifier": env!("CARGO_PKG_VERSION"), "input": input.kind, "run": run,
         "result": result, "exit": exit, "entries": entries, "server": server});
@@ -73,7 +72,7 @@ fn folder(p: &Path) -> String {
 /// One S6 entry.
 fn entry(name: String, o: &Outcome, checks: &[Check]) -> Value {
     let c = &o.counts;
-    let requests = c.get("http_post") + c.get("ws_up_msgs");
+    let requests = c.get("http_post").saturating_add(c.get("ws_up_msgs"));
     let label = match (requests > 0, c.get("native_bytes") > 0) {
         (true, true) => "wire_and_native",
         (true, false) => "wire_only",
@@ -119,7 +118,7 @@ fn text(name: &str, o: &Outcome, checks: &[Check]) -> String {
     t += &format!(
         "Recorded: {} requests. Recording off: {} times, {} s. The harness's own log is not read \
          for this harness (optional). History check: skipped, {NOT_BUILT}.\n",
-        c.get("http_post") + c.get("ws_up_msgs"),
+        c.get("http_post").saturating_add(c.get("ws_up_msgs")),
         c.off_spans,
         c.get("off_ms") / 1000
     );

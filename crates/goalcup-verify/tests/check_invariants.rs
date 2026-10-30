@@ -89,6 +89,16 @@ fn m_mask_over_text(name: &str) -> PathBuf {
     })
 }
 
+/// L-VR2: a MASK at the top of u64 overflows no sum (a panic would be exit 3).
+fn m_mask_at_top(name: &str) -> PathBuf {
+    mutate(&clean(name), None, |r| {
+        let i = find(r, |x| matches!(x, Record::Mask { .. }));
+        if let Record::Mask { off, len, .. } = &mut r[i] {
+            (*off, *len) = (u64::MAX - 1, 2);
+        }
+    })
+}
+
 fn m_boot_without_gap(name: &str) -> PathBuf {
     let mut e = standard(name);
     e.crash("killed", 5_000);
@@ -217,6 +227,7 @@ const FAILS: &[(&str, Build)] = &[
     ("inv3", m_data_before_open),
     ("inv4", m_offset_hole),
     ("inv5", m_mask_over_text),
+    ("inv5", m_mask_at_top),
     ("inv6", m_boot_without_gap),
     ("inv7", m_count_off_by_one),
     ("inv7", m_count_key_missing),

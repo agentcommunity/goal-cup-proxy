@@ -23,7 +23,7 @@ pub struct Entry {
 
 /// A resolved input: where the record came from (S6 `input`: `local`, `server` or `live`) and
 /// its entries in order.
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct Input {
     pub kind: &'static str,
     pub entries: Vec<Entry>,
