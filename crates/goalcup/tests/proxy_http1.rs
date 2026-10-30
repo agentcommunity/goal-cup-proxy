@@ -278,8 +278,7 @@ fn a_window_over_room_is_not_decoded() {
     let calls = exchange(32 * 1024, &up, &down, 0);
     let [(resp, _, _)] = opens(&calls, StreamKind::HttpResp).try_into().unwrap();
     assert!(data_of(&calls, resp).is_empty());
-    let [Call::Gap(sid, reason, _, _, _, lost, Some(tail))] = one_gap(&calls)
-    else {
+    let [Call::Gap(sid, reason, _, _, _, lost, Some(tail))] = one_gap(&calls) else {
         panic!("one GAP with a tail");
     };
     assert_eq!((sid, reason, lost), (resp, GapReason::MemoryGuard, None));
@@ -304,8 +303,7 @@ fn a_head_past_64k_is_named_and_parsing_goes_on() {
     let (big, _, meta) = &reqs[0];
     let stored = meta["headers"].as_array().unwrap().len();
     assert!(stored > 0 && stored < 2000);
-    let [Call::Gap(sid, reason, _, _, _, lost, Some(tail))] = one_gap(&calls)
-    else {
+    let [Call::Gap(sid, reason, _, _, _, lost, Some(tail))] = one_gap(&calls) else {
         panic!("one GAP with a tail");
     };
     assert_eq!((sid, reason, lost), (*big, GapReason::MemoryGuard, None));
