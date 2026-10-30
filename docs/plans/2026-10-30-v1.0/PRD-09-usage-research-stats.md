@@ -1,8 +1,10 @@
 # PRD-09: Usage and research stats
 
-Id: PRD-09. Version: goalcup 1.0. Status: plan for the overnight build. Date: 30 October 2026.
+Id: PRD-09. Version: goalcup 1.0. Status: plan for the build, revision 2. Date: 30 October 2026.
 Base: main at 4b226de2. Index: [PRD-00](PRD-00-index.md). Format: [PRD-01](PRD-01-record-format.md)
 (section 15 is this PRD's contract). Checks that use it: [PRD-08](PRD-08-verifier-checks.md).
+Revision 2 follows PRD-00 and PRD-01 revision 2 and the three reviews (section "Review answers" at
+the end).
 
 ## Goal
 
@@ -17,7 +19,7 @@ that per subagent and per run, so research can compare models and agents across 
 - **1** (every model call): the harness's own log is read back out of the record and joined to the
   wire, call by call. This join is what PRD-08's `wire_keeps_up` and `threads_match` read.
 - **6** (tell the participant plainly): a short plain summary per run, ready for the participant if
-  the owner says yes (PRD-00 question 6).
+  the owner says yes (PRD-00 question 4).
 - **5** (rebuild the story by ID and time): every stat row points at an entry, a boot, a stream id
   and a wall time.
 
@@ -37,7 +39,13 @@ that per subagent and per run, so research can compare models and agents across 
 - Research value: as much as possible of what the agents did, every token any agent requested or
   produced (BRIEF3).
 - The server stores bytes and interprets nothing. Usage JSON goes to R2, no database change
-  (PRD-00 default "Usage reader", question 1; PRD-07 section 10).
+  (PRD-00 default "Usage reader", questions 1 and 7; PRD-07 section 10).
+- **Slices** (PRD-00 revision 2, "Build order"): `goalcup-verify usage <entry> --json` for Codex and
+  Claude Code is in the core slice; Hermes and its `state.db` in the second slice; the organizer job,
+  its bucket, the run rollup, the research CSV and the text summary in the third slice. The run 1
+  converter is cut (PRD-00 "Not in this build"; review B N1).
+- **Hermes and "wire calls match"** (PRD-00 done item 1, owner question 19): when `state.db` message
+  rows carry times, the per-call join is used; else a per-session comparison after the seal.
 
 ## Today
 
@@ -53,7 +61,7 @@ that per subagent and per run, so research can compare models and agents across 
 | Native: framework | `.../capture_analysis/native/mod.rs` | 617 | JSONL reassembly over v5 segments, caps (`MAX_OPEN_STREAMS`, 8 MiB shared buffer) |
 | Run stats | `.../capture_analysis/stats.rs` | 1,115 | The normalisation table `usage_of` `:381-473`; "largest snapshot per key" `:317-341`; one error per call `:749-779`; spawn detection `:781-811`; Codex children left out `:515-520` |
 | Token rules, written down | `docs/research/m2-report-format.md:221-238` | doc | One count per message id, response id or session; never sum cumulative usage; never add native and wire counts of the same call |
-| Hermes, OpenCode, Kilo, Goose, Crush, OpenClaw SQLite | none | 0 | No decoder. Hermes subagent links exist only in `state.db` (`docs/plans/2026-10-30-audit/D-harnesses.md:993`, `:1095`) |
+| Hermes, OpenCode, Kilo, Goose, Crush, OpenClaw SQLite | none | 0 | No decoder. Hermes subagent links exist only in `state.db` (`docs/plans/2026-10-30-audit/D-harnesses.md:993`, `:1095`). Hermes's own storage doc lists a `messages` table with `timestamp REAL NOT NULL` (Unix seconds), `role`, `finish_reason`, `token_count`, and `sessions` columns `parent_session_id`, `model`, `api_call_count`, `input_tokens`, `output_tokens`, `cache_read_tokens`, `cache_write_tokens`, `reasoning_tokens` ([session-storage.md at v0.22.5](https://raw.githubusercontent.com/NousResearch/hermes-agent/v0.22.5/website/docs/developer-guide/session-storage.md), fetched 30 Oct; the doc says the lists are abridged; unmeasured on a real 0.22.5 file) |
 
 All of `crates/goalcup-verifier/src/capture_analysis/` is 13,109 lines with inline tests (`wc -l`).
 Its decoder test files are about 11,000 lines (section 9).
@@ -79,11 +87,17 @@ record held about 97 rate-limit errors. This PRD replaces all of it with one rea
 | Option | Verdict | Why |
 |---|---|---|
 | Organizer job after upload | **Chosen** | Decoding needs the whole part with a 128 MiB window (PRD-01 section 15 point 9), so not in a Worker isolate (PRD-07 section 1). Reads the server copy, so the numbers are the server's, not a claim from the participant's machine. Rebuildable when the reader improves |
-| Scheduled job | **Same job, on a timer** | The job runs every hour during the event on the organizer machine and picks up newly sealed entries. A run that is still open is read only on demand (`--live`), because each read downloads the whole entry |
+| Scheduled job | **Same job, on a timer** (third slice) | The job runs every hour during the event on the organizer machine and picks up newly sealed entries. An entry that is still open is read on demand only, because each read downloads the whole entry |
 | Client at finish, as a hint | **Rejected** | The recorder never parses (`AGENTS.md:94-95`). It would ship decoders in the participant's binary and slow the seal. Its numbers could not be checked. The participant's finish line keeps written counts and off time only (PRD-10) |
 
-The same code runs locally on an entry folder: `goalcup-verify usage <entry dir>`. The pad (PRD-12)
-and the watchers (PRD-16) use that, with no R2.
+The same code runs locally on an entry folder or a fetched copy (S13 layout): `goalcup-verify usage
+<dir> --json --out <dir>`. That is the core-slice deliverable. The pad (PRD-12) and the watchers
+(PRD-16) use it, with no R2. An open entry needs no special mode: F1 `read` stops at the last whole
+frame, and the summary says `"sealed": false`.
+
+During the build the job runs on the conductor, which holds the read-only database and R2
+credentials (PRD-00 consistency item 19), against staging, and writes to `goalcup-usage-staging`.
+Never inside a sandbox. The production job is the owner's to start.
 
 ### 2. Shape of the reader
 
@@ -97,9 +111,9 @@ then a join. New module `crates/goalcup-verify/src/usage/`:
 | `shapes.rs` | One small function per API shape: model, usage, error code. The normalisation table | 300 |
 | `sse.rs` | A plain SSE line framer over decoded text (comments and keep-alives skipped) | 40 |
 | `native.rs` | Session-file readers: Codex rollout, Claude Code transcript and `.meta.json`; a generic "file is a thread" rule for path-based harnesses | 250 |
-| `sqlite.rs` | Rebuilds a final snapshot set (`x.db`, `-wal`, `-shm`), repairs WAL checksums, reads Hermes `state.db` | 150 |
+| `sqlite.rs` | Rebuilds a database copy by `set` (`x.db`, `-wal`, `-shm`), newest first, repairs WAL checksums, reads Hermes `state.db` (`sessions`, assistant `messages` rows) | 150 |
 | `hints.rs` | The per-harness table of where the thread hint lives (section 5), as one `match` on connector and row | 80 |
-| `out.rs` | Usage JSON (S7), calls JSONL, research CSV, plain text summary | 150 |
+| `out.rs` | Usage JSON (S7) and calls JSONL (core slice); research CSV, run rollup and plain text summary (third slice) | 150 |
 | **Total** | | **about 1,470** (PRD-00 budget 1,500) |
 
 Memory: per open stream a few words, plus one body at a time while it is parsed (Codex request
@@ -149,8 +163,9 @@ two lists are joined in section 6. The COUNT event's "model requests written" (`
 | `unknown` | No terminal event in the record and no named cause: the reply stream ends `interrupted`, or a GAP covers its end. `whole: false` says why |
 
 One status per call. A stream `error` event and a `response.failed` for the same call count once
-(the rule of `stats.rs:749-779`, now true by construction). Run 1's server copy must read 95 to 99
-`rate_limited` calls, not 0 and not about 196 (PRD-08 `provider_errors`).
+(the rule of `stats.rs:749-779`, now true by construction). Run 1 had 95 to 99 rate-limited calls,
+many sent as both events, and today's tools read 0 or about 196; `usage_run1.rs` plants that shape
+and must read each call once (PRD-08 `provider_errors`).
 
 Each row also carries **`whole`**: true when the request stream, the reply stream and, for
 WebSocket, the message ended `complete` with no GAP over them. A call can be `ok` and not whole (the
@@ -189,7 +204,7 @@ The normalisation table (copied from `stats.rs:381-473`, plus Gemini and gateway
 | Amp thread snapshot | `inputTokens` | `cacheReadInputTokens` | `cacheCreationInputTokens` | `outputTokens` | null | Largest per `messageId` (`thread.rs:349-369`). A snapshot with no id is not counted |
 | Codex `token_count` (native) | `last_token_usage.input_tokens` minus `cached_input_tokens` | `cached_input_tokens` | null | `output_tokens` | `reasoning_output_tokens` | One native call per event whose `total_token_usage` changed since the file's last event (a repeat with the same total is skipped and counted in `repeats_skipped`) |
 | Claude Code transcript (native) | `message.usage.input_tokens` | `cache_read_input_tokens` | `cache_creation_input_tokens` | `output_tokens` | null | One per `message.id`; Claude Code repeats the usage on every content-block line (`m2-report-format.md:236`); largest wins. Model `<synthetic>` or all-zero usage is not a call (`claude_code.rs:129-133`) |
-| Hermes `state.db` (native) | per session and model, from `session_model_usage` | same | same | same | same | Column names unverified on 0.22.5 (schema 32, `D-harnesses.md:964-968`); the builder reads them from the first pad sample. Per session totals only, no per call (`docs/harnesses/hermes-cli.md:62`) |
+| Hermes `state.db` (native) | per session: `sessions.input_tokens` | `cache_read_tokens` | `cache_write_tokens` | `output_tokens` | `reasoning_tokens` | Per-session totals, never per call: a Hermes native call (one `messages` row with `role` `assistant`, section 6) carries no usage, so its call takes the wire usage. Model per session from `sessions.model` (`session_model_usage` when a session used more than one; its columns are not in the doc). Whether `input_tokens` already includes cached tokens is unverified: the builder decides from the first pad sample by comparing with the wire sum of the same session. Column names from the vendor doc (section "Today"), unmeasured on 0.22.5 (schema 32, `D-harnesses.md:964-968`) |
 
 Other numeric usage members whose name ends in `tokens`, `Tokens` or `TokenCount` are kept per call
 under `extra` (for example `audio_tokens`). Everything else in a usage object (`cost`,
@@ -203,14 +218,22 @@ research.
 
 ### 5. Threads and subagents: where each hint lives
 
-The recorder adds no hint (PRD-01 section 5). This table is the reader's, in `hints.rs`. A harness
-not in it, or a call with no hint, goes to the thread `unattributed`, said plainly.
+The recorder adds no hint (PRD-01 section 5). This table is the reader's, in `hints.rs`. Two named
+places hold a wire call that no thread claims, so neither is ever hidden:
+
+- **`unattributed`**: an `ok` wire call of a harness that has a wire hint (Codex today) whose request
+  carries none. This should be 0; a count above 0 means the reader or the harness changed.
+  `coverage.unattributed` counts these, and PRD-12 C5 and PRD-16 X8 check it is 0.
+- **`wire_only`**: a wire call that the join (section 6) could not place, for a harness whose thread
+  comes from the join (Claude Code, Hermes) or that has no reader yet. Claude Code's small side calls
+  that no transcript names, refused retries and Hermes's compression calls land here.
+  `coverage.wire_only` counts them, with their hosts and models. Not a failure.
 
 | Harness | Wire thread hint | Native thread | Parent | Label | Status |
 |---|---|---|---|---|---|
 | Codex | WebSocket: the thread id inside `response.create` `client_metadata` (run 1 `measure.py:38`); HTTP: the `thread-id` request header, on all 243 POSTs of run 1 (`M-two-hour-run.md:946`) | Rollout file, `session_meta.payload.id` (`codex.rs:169-172`) | `payload.source.subagent.thread_spawn.parent_thread_id` (`codex.rs:123-128`) | `agent_path` and `depth` from the same `thread_spawn` (run 1 `final.py`) | Measured on run 1 |
 | Claude Code | None needed: the join (section 6) gives the thread | The transcript file: `projects/<p>/<session>.jsonl` main, `<session>/subagents/agent-<id>.jsonl` children (`O-harness-access.md:580-586`) | The session file the `subagents/` folder sits under | `agentType` from `agent-<id>.meta.json` (`M-two-hour-run.md:617`) | Measured on fixtures; pad confirms |
-| Hermes | Unverified: the pad looks for a session header or body field on the first run | `state.db` `sessions` row | `sessions.parent_session_id` (`D-harnesses.md:993`) | session title if present (unverified) | Unverified until the pad |
+| Hermes | None known; the join gives the thread (section 6). The pad looks for a session header or body field on the first run and, if found, adds it here | `state.db` `sessions` row; its assistant `messages` rows are the native calls | `sessions.parent_session_id` (`D-harnesses.md:993`) | `sessions.title` if set | Columns from the vendor doc; unmeasured until the pad (second slice) |
 | Amp | `params.parentToolUseId` on thread WebSocket snapshots (`thread.rs:11-14, 215-225`) | none local | the `Task` call it names | none | Measured on one capture |
 | Qwen Code | none known | `subagents/<sessionId>/agent-<id>.jsonl` (`O-harness-access.md:1673-1678`) | the session it sits under | `.meta.json` | Path only; usage not read in 1.0 |
 | Kimi Code | none known | `agents/agent-<n>/wire.jsonl` (`O-harness-access.md:354-356`) | `agents/main` | folder name | Path only |
@@ -218,47 +241,75 @@ not in it, or a call with no hint, goes to the thread `unattributed`, said plain
 | Goose, OpenCode, Kilo, Crush, OpenClaw | none known | child session rows in the final SQLite snapshot (`O-harness-access.md:854, 1413-1418, 1577-1582, 1760`) | parent column (names unverified) | none | Thread list only after a pad sample |
 | Copilot CLI, Factory Droid, Cline CLI | none known | layout unverified (`O-harness-access.md:1307-1314, 1848-1852, 400-420`) | unverified | none | `unattributed` until a pad sample |
 
+**Per-call native readers in 1.0: Codex, Claude Code and Hermes only.** Every other harness has
+`readable: false` with the reason `no_reader`, so PRD-08 skips `wire_keeps_up` and `threads_match`
+(never passes them) and PRD-12 C1 is INCONCLUSIVE: "not verified: no log reader" (review B A8). Their
+wire calls still get full per-call stats, under `wire_only`, and the path-only rows above still give a
+thread list (who spawned whom) where the path says so.
+
 Rule for adding a harness: a reader for a session format is written only from a real pad sample,
-never from a guess. Until then its wire calls still get full per-call stats, under `unattributed`
-threads, and `readable` says the harness log is not read (PRD-08 then skips `threads_match`, never
-passes it).
+never from a guess.
+
+**Database copies** (PRD-04 section 6). An entry may hold several copies of one database: hourly
+periodic copies and one at each seal, each a `set`. The reader tries the newest set first and goes
+back one set at a time until one opens after the WAL repair. The summary names the set it used, its
+time and `harness_exited`. Native calls after that copy's time are not known, so the join compares
+only up to it (`native_until` in the summary); wire calls after it are not counted against the
+harness. If no set opens, `readable: false` with the reason `snapshot_unreadable`, PRD-08 skips, and
+PRD-12 C1 is INCONCLUSIVE, never PASS or FAIL (review B A7). The wire record stands either way.
 
 ### 6. The join: wire calls against the harness's own log
 
 Per thread, two lists ordered by time: wire calls with status `ok`, and native calls. Times: wire
 calls use the reply's end (the time of its last DATA, mapped to wall time by the nearest LINK, PRD-01
-section 6); native calls use the record's own `timestamp` (Codex, Claude Code; same machine clock).
+section 6); native calls use the record's own time (Codex and Claude Code `timestamp`, Hermes
+`messages.timestamp`; same machine clock). For a harness with no wire hint (Hermes), the wire list
+is not split by thread first: the join runs over the whole entry, and a matched wire call takes the
+native call's thread.
 
 - **By id, where an id exists.** Claude Code: the native `requestId` equals the reply's `request-id`
   header (`M-two-hour-run.md:617-619`; header capture unverified until the pad). One to one.
 - **By order and time otherwise** (Codex has no call id: `TokenCountEvent` has only `info` and
-  `rate_limits`, `M-two-hour-run.md:616`). Each native call takes the earliest unmatched `ok` wire
-  call of the same thread whose end lies between 120 s before and 5 s after the native time.
+  `rate_limits`, `M-two-hour-run.md:616`; Hermes rows have none either). Each native call takes the
+  earliest unmatched `ok` wire call of the same thread (Hermes: of the entry, to a Chat or Messages
+  path) whose end lies between 120 s before and 5 s after the native time.
+- **Hermes rows.** A native call is one `messages` row with `role` `assistant` whose time lies inside
+  the entry, in a session that started at or after the entry's start (the database holds every
+  session of that home). A row soft-archived by compaction (`active` 0) still counts: the call
+  happened. Each session's own `api_call_count` is kept beside the row count; when they differ, the
+  summary says so and C1 uses the per-session fallback of PRD-00 done item 1 (wire calls joined to
+  that session against `api_call_count`). If the 0.22.5 file has no usable `timestamp`, the same
+  fallback applies to every session.
 - Results per call: `matched`, `native_only` (the harness made it, the wire has no `ok` copy),
   `wire_only` (on the wire with no harness entry: retries the provider refused, warm-ups excluded,
   auxiliary threads such as run 1's one wire-only thread `...e2e4df5cb6a3`).
+- What PRD-08 reads: per thread, native calls, `ok` wire calls and `native_only`, each with times.
+  For Hermes and Claude Code the per-thread wire count is the matched count by construction, so
+  `threads_match` there reduces to "`native_only` within tolerance", which is the question it asks.
 
 Wire above harness is normal (refused retries). Harness above wire is the run 1 shape. PRD-08 turns
 these counts into pass, named or fail; this PRD only counts and dates them.
 
 ### 7. Output and storage
 
-Per entry, the job writes to the R2 bucket `goalcup-usage` (PRD-07 section 10):
+`usage --json --out <dir>` writes the first two files below to a local folder (core slice). In the
+third slice the job puts all three into the R2 bucket `goalcup-usage` (`goalcup-usage-staging`
+during the build; PRD-07 section 10, PRD-00 S7):
 
 | Key | What | Size (est.) |
 |---|---|---|
 | `usage/{event}/{run}/{entry}.json` | Summary: reader version, connector and harness version, coverage, per thread, per model, totals (schema below) | 10 to 100 KB |
 | `usage/{event}/{run}/{entry}.calls.jsonl` | One line per row (calls, warm-ups, interrupts, others, native calls) | about 0.5 MB for 2 hours; about 30 MB for a busy week |
-| `usage/{event}/{run}/run.json` | The run rollup: entries merged, threads that span a `continue` merged by thread id | as the summary |
+| `usage/{event}/{run}/run.json` | The run rollup: entries merged, threads that span a `continue` merged by thread id (third slice) | as the summary |
 
 Summary schema (abridged; keys sorted, so the same input gives the same bytes):
 
 ```json
 {"v":1,"reader":"1.0.0","run":"r…","entry":"e…","connector":"codex-cli","harness_version":"…",
- "readable":true,
+ "sealed":true,"readable":true,"reason":null,"native_until":"…","db_set":null,
  "coverage":{"wire_calls":842,"native_calls":1125,"matched":788,"native_only":337,"wire_only":54,
              "unattributed":0,"by_10min":[["2026-10-29T14:50Z",131,134]]},
- "status":{"ok":0,"rate_limited":0,"error":0,"cancelled":0,"unknown":0,"not_whole":19},
+ "status":{"ok":0,"rate_limited":0,"error":0,"cancelled":0,"unknown":0,"not_whole":19,"fail_closed":0},
  "tokens":{"merged":{"input":0,"cached":0,"cache_write":null,"output":0,"reasoning":0},
            "wire":{...},"native":{...},"calls_without_usage":0},
  "models":[{"model":"LUNA","requested":["LUNA"],"calls":0,"threads":43,"tokens":{...}}],
@@ -276,27 +327,37 @@ Summary schema (abridged; keys sorted, so the same input gives the same bytes):
  "usage_from":"wire","input":0,"cached":0,"cache_write":null,"output":0,"reasoning":0}
 ```
 
-`host_kind` (`provider`, `gateway`, `vendor`) comes from the shared host list (PRD-11). Nothing in
+`reason` is null when `readable` is true, else `no_reader`, `snapshot_unreadable` or `no_native`
+(a reader found zero native calls while the wire had calls). `db_set` names the database copy used
+(section 5).
+
+`host_kind` (`provider`, `gateway`, `vendor`, or `other` for participant and config hosts) is read
+from the record: the `conn` stream's meta `kind`, else the `start` event's `hosts` list (PRD-01
+sections 4 and 11). The reader embeds no host list, so a `--hosts` run is read with its own kinds. A
+gateway call is read like any other: the path picks the shape, `host_kind` only labels it. Nothing in
 either file is text from the run: no prompt, message, tool name, path, URL or key. Thread ids, the
 Codex `agent_path` and Claude Code `agentType` labels (bounded to 128 printable bytes), model names,
 host names and error code tokens only.
 
-**The organizer research table.** `goalcup-verify usage table <folder of usage JSON>` writes one CSV
+**The organizer research table** (third slice). `goalcup-verify usage table <folder of usage JSON>` writes one CSV
 row per thread per run: `event, run, connector, harness_version, thread, parent, depth, label,
 models, effort, wire_calls, native_calls, matched, native_only, ok, rate_limited, error, cancelled,
 unknown, input, cached, cache_write, output, reasoning, first, last`. `--calls` writes one row per
 call instead. Organizers read it with any spreadsheet or notebook. No server table, no website
-change (PRD-00 question 1).
+change (PRD-00 question 1). Until it lands, the per-thread rows are in the summary JSON.
 
-**The participant summary.** `goalcup-verify usage --text` prints five plain lines. By default only
-organizers see it (PRD-00 question 6). If the owner says yes, organizers send it after the seal; the
-CLI never computes it.
+**The participant summary** (third slice). `goalcup-verify usage --text` prints five plain lines. By
+default only organizers see it (PRD-00 question 4). If the owner says yes, organizers send it after
+the seal; the CLI never computes it.
 
-### 8. Run 1, read the 1.0 way
+### 8. Run 1 as the target the reader must explain
 
-Input: run 1's server copy, rewritten to GCR1 by PRD-01's test converter (PRD-01 acceptance 4). It
-holds 32 of the 43 rollout files. Known numbers come from the run report and `final-reconcile.txt`;
-"computed" means the reader's first run fills it in.
+The run 1 converter is cut (PRD-00 "Not in this build", PRD-01 "What is cut"), so the reader never
+reads run 1's own bytes. Run 1's numbers below do three jobs instead: they set the shape of the
+synthetic `usage_run1.rs` test (built on PRD-08's `check_run1_shape.rs` builders), they show what
+the summary would have said, and they are the comparison for A1, the 2-hour Codex run on 1.0 with
+run 1's prompt (PRD-16 X8). Known numbers come from the run report and `final-reconcile.txt`. LUNA
+is the run report's stand-in for the model name (run report lines 5 and 129).
 
 **Coverage.**
 
@@ -327,11 +388,10 @@ Every thread used one model at one effort. The per-model view is one row: LUNA, 
 
 **Tokens.** Codex's own record, all 43 files: 117.4M input of which 116.1M cached, 410.6k output,
 152k reasoning (run report measure 10). In the reader's terms that is `input` 1.3M, `cached` 116.1M,
-`output` 410.6k, `reasoning` 152k. On the converted copy the merged total is lower by the 136 calls
-in the 11 missing files (computed). The wire-only total is the wire's own number (computed; today's
-two tools gave 44.5M and 67.5M of input for it, section "Today"). A 1.0 run with nothing lost would
-show the merged total equal to Codex's own total, because every successful call has a
-`token_count` and refused calls have no usage.
+`output` 410.6k, `reasoning` 152k. Today's two wire tools gave 44.5M and 67.5M of input for the
+wire leg alone (section "Today"); that disagreement is what one reader with one rule set ends. A 1.0
+run with nothing lost shows the merged total equal to Codex's own total, because every successful
+call has a `token_count` and refused calls have no usage. That is the A1 comparison.
 
 **Participant summary, run 1 as it was:**
 
@@ -379,12 +439,16 @@ Create:
 - `crates/goalcup-verify/tests/usage_shapes.rs`, `usage_join.rs`, `usage_sqlite.rs`,
   `usage_run1.rs`, `usage_out.rs`
 - `crates/goalcup-verify/tests/usage_fixtures/**` (ask 2 below)
-- `scripts/usage-job.sh` (ask 2 below): list sealed entries with no usage object or an older
-  `reader` version (read-only database query, as `fetch-run.sh` does), run `fetch-run.sh`, run
-  `goalcup-verify usage`, put the three objects into `goalcup-usage` with a write token scoped to that
-  bucket only, delete the fetched copy. About 60 lines.
+- `scripts/usage-job.sh` (third slice; ownership given by PRD-00): list sealed entries with no usage
+  object or an older `reader` version (read-only database query, as `fetch-run.sh` does), run
+  `fetch-run.sh`, run `goalcup-verify usage`, put the three objects into the usage bucket named by
+  `GOALCUP_USAGE_BUCKET` (default `goalcup-usage`; `goalcup-usage-staging` in the build) with a write
+  token scoped to that bucket only, delete the fetched copy. Runs on the conductor or the organizer
+  machine, never in a sandbox. About 60 lines.
 
 Change: none outside these. Delete: none (PRD-13 deletes the old crate and its decoder tests).
+Dependencies (`rusqlite` with `bundled`, `zstd`) are declared by PRD-08 in
+`crates/goalcup-verify/Cargo.toml` in phase 0 (PRD-00 "Smaller interface rulings").
 
 Must not touch: `crates/goalcup-verify/Cargo.toml` and `src/main.rs` (PRD-08), the rest of
 `crates/goalcup-verify/src/` (PRD-08), `crates/goalcup-format/` (PRD-01), `crates/goalcup/`
@@ -395,18 +459,18 @@ Must not touch: `crates/goalcup-verify/Cargo.toml` and `src/main.rs` (PRD-08), t
 
 | PRD | What crosses | Direction |
 |---|---|---|
-| PRD-01 | F1 `read` over parts and chunks; section 15 guarantees; `start` event keys `connector`, `harness_version`, `server_time`, `hosts`; the run 1 converter (acceptance 4) for proof 6 | Used here |
-| PRD-04 | Native `path` (`<row>:<relative path>`), `gen`; snapshot meta `form: final`, `harness_exited`, `size`, `mtime_ns`. WAL checksum repair before opening a snapshot is this PRD's job (PRD-04 section 6 item 6, `:285-287`) | Used here |
+| PRD-01 | F1 `read` over parts and chunks (stops at the last whole frame of an open part); section 15 guarantees; `start` event keys `connector`, `harness_version`, `server_time`, `hosts` with `kind`; `conn` meta `kind`; section 9's "model requests written is not a call count" | Used here |
+| PRD-04 | Native `path` (`<source>:<relative path>`), `gen`, `from`; snapshot meta `form: final`, `set`, `harness_exited`, `size`, `mtime_ns`; hourly periodic copies plus the seal copy. WAL checksum repair before opening a set, and `readable: false` for a set that will not open, are this PRD's job (PRD-04 section 6 item 6) | Used here |
 | PRD-05 | Masks are `*` of the same length, so JSON stays parseable; usage and rate-limit fields stay readable (`PRD-05:396`) | Used here |
-| PRD-07 | `goalcup-usage` bucket and its read and write tokens (section 9 and 10); `delete-test-runs.sh` empties `usage/test/`; fetch-run output layout (PRD-08's S10) | Used here |
-| PRD-08 | **Seam U1**, given here: `usage::Calls::new(&Start)`, `push(&Record)`, `finish() -> CallTable`. `CallRow { leg: Wire or Native, entry, boot, sid or path, msg, thread, parent, wall_start, wall_end, kind: Call, Warmup, Interrupt or Other, outcome: Ok, RateLimited{status, code}, Error{status, code}, Cancelled or Unknown, whole, model, join }`. `CallTable { rows, threads, readable, children: parent to named child threads }`. `Outcome::is_error()` is true for `RateLimited` and `Error`, which is PRD-08's "error". Also `usage::run(args) -> ExitCode` for the `usage` subcommand. Dependencies for `Cargo.toml`: `rusqlite` with the `bundled` feature, for SQLite snapshots | Both |
-| PRD-10 | Nothing in 1.0: the CLI shows written counts and off time only. If the owner answers question 6 with yes, PRD-10 may later print a link to the summary | none |
-| PRD-11 | `connectors/model-hosts.toml` gives each host a kind (`provider`, `gateway`, `vendor`); read at build time with `include_str!` for `host_kind`. Connector names and native row names, used by `hints.rs` | Used here (ask of PRD-11: a `kind` per host) |
-| PRD-12 | S7 and U1: the pad check "wire calls match the harness's own log" reads `coverage` (through PRD-08's `wire_keeps_up` and `threads_match`). The pad's three cases each get a usage summary in `PAD-RESULTS.md` | Used there |
+| PRD-07 | `goalcup-usage` and `goalcup-usage-staging` buckets and their read and write tokens (sections 9 and 10, third slice); `delete-test-runs.sh` empties `usage/test/`; fetched layout S13 (`rec.gcr.zst`, `fetch.json`) | Used here |
+| PRD-08 | **Seam U1**, given here: `usage::Calls::new(&Start)`, `push(&Record)`, `finish() -> CallTable`. `CallRow { leg: Wire or Native, entry, boot, sid or path, msg, thread, parent, wall_start, wall_end, kind: Call, Warmup, Interrupt or Other, outcome: Ok, RateLimited{status, code}, Error{status, code}, Cancelled or Unknown, whole, model, join }`. `CallTable { rows, threads, readable, children: parent to named child threads }`. `Outcome::is_error()` is true for `RateLimited` and `Error`, which is PRD-08's "error". `CallTable` also carries per thread `native_only` and `native_until`, and `readable` with its `reason`. Also `usage::run(args) -> ExitCode` for the `usage` subcommand. PRD-08 adopts this U1 as is (PRD-00 consistency item 85) and declares `rusqlite` (bundled) and `zstd` in phase 0 | Both |
+| PRD-10 | Nothing in 1.0: the CLI shows written counts and off time only. If the owner answers question 4 with yes, PRD-10 may later print a link to the summary | none |
+| PRD-11 | Host kinds reach this PRD through the record (`start` event, `conn` meta), never through an embedded `model-hosts.toml`. Connector names and native row names, used by `hints.rs` | Used here |
+| PRD-12 | S7 and U1: C1 reads `coverage` and `readable` (through PRD-08's `wire_keeps_up` and `threads_match`); C5 reads tokens, threads and `unattributed` (0 means only "no Codex-style call lost its hint"; `wire_only` is reported, not failed). The ledger line per run after the run comes from the summary totals. No `--live` mode and no pricing (cut by PRD-00). New readers only from pad samples | Used there |
 | PRD-13 | Deletes `crates/goalcup-verifier/` after the fixtures in section 9 are copied | Done there |
 | PRD-14 | `cargo test -p goalcup-verify` covers `tests/usage_*.rs` in `gate fast` | Used there |
-| PRD-15 | `docs/USAGE-STATS.md` (or a section of `docs/RECORD-FORMAT.md`): the schema, the token table of section 4, the hint table of section 5 | Written there |
-| PRD-16 | Watchers run `goalcup-verify usage <entry>` after each pad run and the 2-hour run; the morning hand-off includes the per-thread table | Used there |
+| PRD-15 | A section of `docs/RECORD-FORMAT.md` (PRD-15's choice): the schema, the token table of section 4, the hint table of section 5; the usage job in `docs/OPERATING.md`. The history docs this PRD cites (`docs/research/m2-report-format.md`, `docs/research/results/2026-10-vercel-gateway.md`) are kept in this build (PRD-00 item 102) | Written there |
+| PRD-16 | Watchers run `goalcup-verify usage <entry> --json` after each pad run and A1; X8 compares A1's totals with run 1's (section 8); the end-of-build hand-off includes the per-thread table | Used there |
 
 ## What is cut
 
@@ -424,26 +488,34 @@ Must not touch: `crates/goalcup-verify/Cargo.toml` and `src/main.rs` (PRD-08), t
 1. **Codex, direct key, prompt asks for subagents.** Pass: `readable: true`; every native call is
    `matched` to an `ok` wire call of the same thread (`native_only` 0); every rollout thread is in
    `threads` with its parent and `agent_path`; each thread's model equals its `turn_context` model;
-   for every matched call, wire `input`, `cached`, `output`, `reasoning` equal the native
-   `last_token_usage` values (report any mismatch with its call; pass needs 100%, or a written
-   explanation per mismatch in the night log); `unattributed` 0.
+   per thread, the wire sums of `input`, `cached`, `output`, `reasoning` over matched calls equal
+   the native `last_token_usage` sums over the same calls; per-call mismatches are listed, not
+   failed, because the time join may swap two close calls of one thread (review B T7);
+   `unattributed` 0.
 2. **Claude Code, direct key, one subagent.** Pass: every native `requestId` with non-zero usage is
    `matched` by `request-id` to one wire call with equal tokens; the subagent thread shows its
    `agentType` and the model it used; the main session and the subagent have separate rows.
-3. **Hermes, DeepSeek key, one delegated child.** Pass: the `state.db` snapshot opens after the WAL
-   repair; `threads` holds the main session and the child with its `parent_session_id`; per-session
-   model and tokens are listed; wire Chat calls show usage, or `null` (never 0) when the stream had no
-   usage chunk; the summary says which.
-4. **Gateway case.** One core harness through a gateway (for example Claude Code with
-   `ANTHROPIC_BASE_URL` to Vercel AI Gateway, as measured before in
+3. **Hermes, DeepSeek key, one delegated child** (second slice). Pass: the seal's `state.db` set
+   opens after the WAL repair; `threads` holds the main session and the child with its
+   `parent_session_id`; the assistant `messages` rows of each session are the native calls and each
+   is `matched` to one `ok` wire Chat call (`native_only` within PRD-08's tolerance), or, if the rows
+   carry no usable time, each session's `api_call_count` equals its joined wire calls (PRD-00 done item
+   1); per-session model and tokens are listed; wire Chat calls show usage, or `null` (never 0) when
+   the stream had no usage chunk; the summary says which. The first run also records, in the night
+   log, the real column names and whether `sessions.input_tokens` includes cached tokens.
+4. **Gateway case.** Each core harness through Vercel AI Gateway, the way PRD-12 sets it (for example
+   Claude Code with `ANTHROPIC_BASE_URL`, as measured before in
    `docs/research/results/2026-10-vercel-gateway.md:53`). Pass: calls read with `host_kind:
-   gateway`; `model_requested` and `model` both shown; tokens present; the same checks as proof 1 or 2.
+   gateway`; `model_requested` and `model` both shown; tokens present; the same checks as proof 1, 2
+   or 3. No code path differs from the direct case except the host and model names.
 5. **Dodger case.** Pass: no wire call is invented; native calls are listed; the summary says "not
    recorded on the wire" with the harness's count, never a total that looks whole.
-6. **Run 1, converted.** The section 8 numbers: 842 calls, 27 warm-ups, 37 interrupts, 95 to 99
-   `rate_limited`, 19 not whole, 1,125 native calls in 32 files, 28 threads with wire calls plus 1
-   wire-only, `unattributed` 0, `native_only` 337 within PRD-08's tolerance, every per-thread wire
-   count equal to the run report's per-thread table. Runs in under 5 minutes on the sandbox.
+6. **A1, the 2-hour Codex run on 1.0** (PRD-16; replaces the cut run 1 converter). Pass: the
+   reader finishes on the server copy in under 5 minutes on the sandbox; `native_only` within
+   PRD-08's tolerance outside named GAPs; every rollout thread present with parent and label;
+   `rate_limited` counted once per call; the merged token totals equal Codex's own rollout totals
+   (the watcher sums `last_token_usage` over every rollout file); the per-thread table is compared
+   with run 1's (section 8) in the hand-off.
 
 ### Automated tests (`tests/usage_*.rs`, about 600 lines)
 
@@ -452,13 +524,19 @@ Must not touch: `crates/goalcup-verify/Cargo.toml` and `src/main.rs` (PRD-08), t
   `finish_reason`s gives one usage; an Anthropic message with three content-block lines counts once;
   a `<synthetic>` line is no call; `cost` is never copied.
 - `usage_join.rs`: Codex order-and-time join with a retry the provider refused (wire above harness)
-  and a cut window (harness above wire); Claude Code id join; one `error` event plus one
-  `response.failed` is one `rate_limited` call.
+  and a cut window (harness above wire); Claude Code id join, with a side call no transcript names
+  landing in `wire_only`, not `unattributed`; Hermes entry-wide join of two parallel sessions; one
+  `error` event plus one `response.failed` is one `rate_limited` call.
 - `usage_sqlite.rs`: a WAL-mode database whose `-wal` frame has 20 bytes turned to `*` opens with all
-  frames after the repair, and loses those frames without it.
-- `usage_run1.rs`: PRD-08's run 1 shape builder (Codex WebSocket and HTTP calls, then silence while
-  rollouts go on): `native_only` counts the silent window exactly.
-- `usage_out.rs`: the summary JSON of a small fixed input is byte for byte pinned (keys sorted).
+  frames after the repair, and loses those frames without it; with two sets where the newer has a
+  starred page header, the older set is used and named, and with only the broken set `readable` is
+  false with `snapshot_unreadable`.
+- `usage_run1.rs`: PRD-08's run 1 shape builder (Codex WebSocket and HTTP calls, warm-ups,
+  interrupts, rate-limit errors sent both as `error` and `response.failed`, then silence while
+  rollouts go on): `native_only` counts the silent window exactly; warm-ups and interrupts are not
+  calls; each rate-limited call counts once.
+- `usage_out.rs`: facts, not bytes (review B T9): the same input gives the same bytes twice; keys are
+  sorted; totals equal the sum of the rows; no field holds text from a body.
 
 ## Risks and blind spots
 
@@ -476,8 +554,18 @@ Must not touch: `crates/goalcup-verify/Cargo.toml` and `src/main.rs` (PRD-08), t
   call.
 - **Usage is what the provider or gateway says.** A gateway may count with another tokenizer
   (OpenRouter says "the model's native tokenizer"). Not billing; no prices in 1.0 (D26).
-- **Hermes wire calls may stay `unattributed`** if no request carries a session id; per-subagent
-  numbers then come from `state.db` only, as totals, not per call.
+- **The Hermes join is entry-wide by time.** Up to 10 children run at once in one process (appendix
+  O, H3), so two sessions' calls can finish within seconds and swap. Per-session call counts and
+  totals stay right; a per-call pair can cross. If `messages.timestamp` turns out to be the time a
+  row was saved rather than the reply's end, the 5 s window may be too tight; the first pad run sets
+  it (overridable default). If the columns differ on 0.22.5, the per-session fallback applies.
+- **A database copy is up to an hour old during the run.** `native_until` says how far the native
+  leg reaches; a dead entry with no seal copy keeps only its last periodic copy (PRD-04 section 6
+  item 8).
+- **Fail-closed masking** (review A finding 3). A fail-closed span is cut at each WebSocket message
+  end (PRD-00 S2 `boundary()`), so at most one message's body is starred; that call's model and usage
+  may read `null`. The summary counts calls whose bodies hold a `fail_closed` mask, so a starred
+  stretch is visible, not a silent drop in tokens.
 - **SQLite after masking.** A mask inside a page that changes a structure byte (not a text value)
   could still make SQLite refuse the page. Then the snapshot is listed as unreadable and the wire
   stands. The WAL repair follows the documented checksum
@@ -488,25 +576,30 @@ Must not touch: `crates/goalcup-verify/Cargo.toml` and `src/main.rs` (PRD-08), t
   shown to organizers only by default.
 - **A week-long run makes a large calls file** (about 30 MB). Fine for R2 and a notebook; the
   summary stays small.
-- **The job needs production read access** (database read, R2 traces read) and an R2 write token on
-  `goalcup-usage`. Overnight agents have none (PRD-07 section 9): the job is proven on a local Worker
-  and run for real by the owner in the morning.
+- **The job needs read access** (database read, R2 traces read) and an R2 write token on the usage
+  bucket. During the build these are on the conductor only, for staging (PRD-00 consistency item
+  19); the job is proven there against `goalcup-usage-staging`, and the owner runs it on production.
+  A sandbox never holds them.
 
 ## Overridable defaults
 
 | Default | Value | Who may change it |
 |---|---|---|
-| Where it runs | Organizer job after upload; hourly on the organizer machine during the event | Owner |
-| Live entries | Read only on demand (`--live`) | Owner |
-| Who sees the summary | Organizers only (PRD-00 question 6) | Owner |
-| Join window | 120 s before to 5 s after the native time | PRD-09 after the first Codex pad run |
+| Where it runs | Organizer job after upload; hourly on the organizer machine during the event (PRD-00 question 7) | Owner |
+| Open entries | Read on demand, up to the last whole frame; `sealed: false` | Owner |
+| Who sees the summary | Organizers only (PRD-00 question 4) | Owner |
+| Join window | 120 s before to 5 s after the native time | PRD-09 after the first Codex pad run; Hermes after its first pad run |
+| Hermes "wire calls match" | Per-call join on `messages` rows; per-session fallback on `api_call_count` (PRD-00 question 19) | Owner |
+| Token equality in proof 1 | Per-thread sums equal; per-call mismatches reported only | PRD-09 |
 | Model name length kept | 128 bytes | PRD-09 |
-| Storage | Three objects per entry and run in `goalcup-usage` | Owner (question 1, a database table later) |
-| Native formats in 1.0 | Codex, Claude Code, Hermes; others from pad samples only | PRD-16 overnight |
+| Storage | Three objects per entry and run in `goalcup-usage` (`-staging` in the build) | Owner (question 1, a database table later) |
+| Native formats in 1.0 | Codex, Claude Code, Hermes; others from pad samples only | PRD-16 during the build |
 
 ## Builder notes
 
 Order of work:
+
+Core slice (start at H+0, review B O5):
 
 1. `shapes.rs` and `sse.rs` first, from the copied fixtures; they need no format crate. Pin each
    fixture's numbers in `usage_shapes.rs` (H+1.5).
@@ -515,9 +608,17 @@ Order of work:
 3. `native.rs` for Codex and Claude Code; `hints.rs`.
 4. The join and the U1 sink. **Publish U1 by H+4**: PRD-08's `wire_keeps_up` and `threads_match`
    wait on it. Stub first: a `CallTable` from wire rows only, native later.
-5. `out.rs`: summary, calls JSONL, `table`, `--text`.
-6. `sqlite.rs` (WAL repair, Hermes) as soon as the first Hermes pad run gives a `state.db`.
-7. `scripts/usage-job.sh`, proven against the local Worker.
+5. `out.rs`: summary and calls JSONL (`usage --json --out`).
+
+Second slice:
+
+6. `sqlite.rs` (WAL repair, newest readable set, Hermes `sessions` and `messages`). Write it from a
+   WAL database made in the test; confirm the column names on the first Hermes pad `state.db`.
+
+Third slice:
+
+7. `run.json`, `table`, `--text`; `scripts/usage-job.sh`, proven on the conductor against staging
+   and `goalcup-usage-staging`.
 8. Other harnesses' readers, only from their pad samples.
 
 Traps from the audit and the old code:
@@ -533,43 +634,71 @@ Traps from the audit and the old code:
 - Run 1's "1736 recorded" counted every WebSocket client message at selection
   (BRIEF2). This reader counts calls from written bytes only, which is the point.
 - Do not decide the shape by host. Path suffix and body decide; gateways reuse provider paths.
+  One reader for every connection: a direct key, Vercel AI Gateway, OpenRouter or Cloudflare AI
+  Gateway differ only in host, path prefix and model names. Never add a per-gateway branch; a new
+  gateway that reuses a known API shape needs no code.
 - Masked header values are `*` of the same length; never treat a `*` run as an id.
 
-How a watcher proves it in a real run: after each pad run, `goalcup-verify usage <entry dir>
---out <dir>` and `--text`; compare `coverage.native_calls` with a plain count of `token_count`
-lines (Codex) or distinct `requestId`s (Claude Code) on disk, and the per-thread table with the
-harness's own files. After the 2-hour run, put the per-thread table and the summary in the night log.
+How a watcher proves it in a real run: after each pad run, `goalcup-verify usage <entry dir> --json
+--out <dir>`; compare `coverage.native_calls` with a plain count of `token_count` lines whose total
+changed (Codex), distinct `requestId`s (Claude Code) or `sqlite3` counts of assistant `messages` rows
+per session (Hermes) on disk, and the per-thread rows with the harness's own files. After A1, put
+the per-thread table and the summary in the night log.
 
-## Asks of PRD-00 and PRD-01
+## Asks of PRD-00 and PRD-01 (status after their revision 2)
 
-PRD-00:
+| Ask | Status |
+|---|---|
+| PRD-00 1: S7 widened to three keys, U1 in the seams table | Done (PRD-00 seams S7 and U1) |
+| PRD-00 2: ownership of `usage_fixtures/` and `scripts/usage-job.sh`; who writes the usage docs | Done (PRD-00 ownership; PRD-15 writes a section of `docs/RECORD-FORMAT.md`) |
+| PRD-00 3: question on who sees the summary | Done (question 4, organizers only) |
+| PRD-00 4: size budget | Done (1,470 src, about 600 tests) |
+| PRD-00 5: name run 1 converted in done item 1 | Withdrawn: the converter is cut. Proof 6 is now A1 |
+| PRD-01 1: `set` on database copies | Done (PRD-01 section 4; PRD-04 writes it) |
+| PRD-01 2: WebSocket message end time is approximate | Done (PRD-01 section 15 item 4) |
+| PRD-01 3: "model requests written" is not a call count | Done (PRD-01 section 9) |
+| PRD-01 4: run 1 converter keeps native streams and opcodes | Withdrawn: the converter is cut |
 
-1. **Seams.** Widen S7 from one key to the three keys of section 7 (`{entry}.json`,
-   `{entry}.calls.jsonl`, `run.json`), stable by H+4. Add U1 (section "Interfaces", PRD-08 row) to
-   the seams table, owner PRD-09, used by 08 and 12, stable by H+4. U1 extends PRD-08's sketch with
-   `RateLimited`, `Cancelled` and `whole`.
-2. **Ownership.** Add to PRD-09: `crates/goalcup-verify/tests/usage_fixtures/**` (fixtures are not
-   covered by `tests/usage_*.rs`) and the new `scripts/usage-job.sh` (no owner in the map today).
-   Say who writes `docs/USAGE-STATS.md`: default PRD-15, from sections 4, 5 and 7 here.
-3. **Question 6** stays, with this PRD's default: the summary text exists, organizers only, and the
-   CLI never shows tokens. If the owner says yes, organizers send it; no client change.
-4. **Size budget.** Usage about 1,470 src and about 600 tests: inside the 1,500 estimate.
-5. **The core-set "done" item** should name proof 6 here (run 1 converted reads the known numbers):
-   it is the cheapest proof that the call count is real.
+New asks:
 
-PRD-01:
+1. **PRD-12 and PRD-16**: C5 and X8 read `unattributed` 0 with this PRD's meaning (section 5): only
+   a Codex-style call that lost its hint. Claude Code side calls and Hermes compression calls are
+   `wire_only`, reported, not failed.
+2. **PRD-12**: every Hermes row needs the second slice's `sqlite.rs`; until it lands, Hermes C1 is
+   INCONCLUSIVE "no log reader", not FAIL.
+3. **PRD-08**: U1 now carries per-thread `native_only`, `native_until` and `readable` with `reason`
+   (section "Interfaces"); `threads_match` for a harness whose thread comes from the join reads
+   `native_only` per thread.
 
-1. **Snapshot sets.** The three files of one SQLite copy (`x.db`, `-wal`, `-shm`) are separate
-   `snapshot` streams with no shared key. Add `set` to the snapshot meta (for example the main file's
-   `fid` and copy time) so the reader rebuilds files taken at the same moment. Without it the reader
-   pairs by path stem and nearest `mtime_ns`, which can mix copies after a re-read.
-2. **WebSocket message end time.** A DATA's time is when its first byte was read (section 3). For a
-   multi-piece message the end time is the last piece's start, close enough for the 120 s join;
-   say so in section 15 so nobody reads it as an exact end.
-3. **Naming.** Section 9 calls `http_post` + `ws_up_msgs` "model requests written". It includes
-   warm-ups, interrupts and non-model POSTs to listed hosts (run 1: 27 and 37 and the `/models`
-   calls). Keep the count, but say in section 9 that it is not a call count and that PRD-09's
-   `coverage.wire_calls` is, so PRD-10 and the heartbeat never call it "calls".
-4. **The run 1 converter** (acceptance 4) must carry native streams and WebSocket messages with
-   their opcodes, not only sizes, or proof 6 here cannot run. PRD-08 asks the same (its ask of
-   PRD-01 7).
+## Review answers
+
+Answers to the consistency check (CC) and reviews A and B of 30 Oct, for every item that concerns
+this PRD. "Accepted" means the change is in the body above.
+
+| Item | Answer |
+|---|---|
+| CC 1, B verdict 1: asks not absorbed | Accepted. PRD-00 and PRD-01 revision 2 took them; the "Asks" section now gives each one's status |
+| CC 7: U1 and S7 seams missing | Accepted, done in PRD-00. U1 grew three fields (Interfaces, PRD-08 row) |
+| CC 9: owners of `usage-job.sh` and `usage_fixtures/` | Accepted, done in PRD-00; the job is third slice |
+| CC 19: server access during the build | Accepted. Read-only database and R2 credentials on the conductor only; the job is proven there against staging and `goalcup-usage-staging` (sections 1 and 7, risks, files) |
+| CC 30, 62: `set` on database copies | Accepted, done in PRD-01 and PRD-04. The reader groups by `set`, newest readable first (section 5) |
+| CC 40: PRD-01 asks 3 and 4 | Ask 3 done in PRD-01 section 9. Ask 4 withdrawn: the converter is cut |
+| CC 83, B M4, B A9: `rusqlite` and `zstd` | Accepted. PRD-08 declares both in phase 0 (PRD-00 ruling); `sqlite.rs` itself waits for the second slice |
+| CC 84: rate-limit range | Accepted. 95 to 99 everywhere in this PRD (it already was) |
+| CC 85: U1 outcome enum | Accepted. PRD-09 owns U1; PRD-08 adopts it |
+| CC 102: cited history docs | Accepted. PRD-00 keeps them in this build; the PRD-15 row says so |
+| CC 110: host kind source | Accepted. Kinds come from `conn` meta or the `start` event, never an embedded `model-hosts.toml`; `other` added (section 7, PRD-11 row) |
+| CC 111: `LUNA` | Accepted. One line in section 8 |
+| B verdict 3, B R1: Hermes cannot pass C1 | Accepted with PRD-00's default (question 19), and narrowed: Hermes's own storage doc lists `messages.timestamp` and `sessions.api_call_count` (checked on the vendor's v0.22.5 doc, unmeasured), so the per-call join is the plan and the per-session count the fallback (sections 4 to 6, proof 3) |
+| B A7: unreadable snapshot | Accepted. Newest readable set used; none readable gives `readable: false`, `snapshot_unreadable`, PRD-08 skip, C1 INCONCLUSIVE (section 5) |
+| B A8: native readers for other harnesses | Accepted. In 1.0 only Codex, Claude Code and Hermes; others `readable: false`, `no_reader`, C1 INCONCLUSIVE "not verified: no log reader" (section 5) |
+| B N1: run 1 converter | Accepted (PRD-00 ruling). Section 8 is now the target shape; proof 6 is A1; `usage_run1.rs` keeps the synthetic shape |
+| B N3: job, bucket, CSV, text, rollup | Partly, as PRD-00 ruled: `usage --json` in the core slice; job, bucket, `run.json`, CSV and `--text` in the third slice, not after merge, because the owner asked for stats in this build |
+| B N4: live pricing | Accepted (cut by PRD-00). No `--live` mode here: an open entry is read to its last whole frame. The ledger line comes from the summary after the run |
+| B T7: per-call token equality | Accepted. Proof 1 passes on per-thread sums of matched calls; per-call mismatches are reported only |
+| B T9: byte-pinned summary | Accepted. `usage_out.rs` asserts facts and determinism, not bytes |
+| B O5: start at H+0 | Accepted. Builder notes |
+| Review A finding 3: fail-closed masking on a WebSocket direction | Accepted as it touches this PRD: `boundary()` bounds the damage to one message; the summary counts calls with `fail_closed` masks (`status.fail_closed`, risks) |
+| Review A finding 9: SQLite captured only at the seal | Fixed in PRD-04 (hourly copies). This PRD reads the newest readable copy and says how far it reaches (`native_until`) |
+| Claude Code side calls and `unattributed` 0 (found while checking PRD-12 C5 and PRD-16 X8 against this PRD) | New: `unattributed` now means only a hint-bearing harness's call with no hint; join-placed harnesses' leftovers are `wire_only` (section 5); asks of PRD-12, PRD-16 and PRD-08 added |
+| Owner's question on gateways ("one system, not a patchwork") | Confirmed in the design: one reader; the path picks the shape, the host only labels it; a builder trap forbids per-gateway branches (section 3, section 7, builder notes) |
