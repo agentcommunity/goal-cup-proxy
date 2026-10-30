@@ -376,9 +376,7 @@ pub fn spawn(rec: Recorder, entry_dir: PathBuf, board: Board) -> JoinHandle<()> 
                         raw_end: p.line.raw_end,
                     })
                     .unwrap_or_default();
-                let _ = board
-                    .status(&live, rec.counts(), d)
-                    .write(&entry_dir);
+                let _ = board.status(&live, rec.counts(), d).write(&entry_dir);
                 if stalled(&live) {
                     secure::exit(EXIT_WRITER_STALLED, "writer_stalled");
                 }

@@ -542,7 +542,10 @@ mod tests {
         let stalled = |at: u64| status::stalled(&rec.live_at(at));
         rec.inner.writer_last_ns.store(0, Ordering::Relaxed);
         let mut h = rec.open(StreamKind::HttpResp, 0, 0, 0, OpenFlags::NONE, json!({}));
-        h.data(rec.now(), bytes::Bytes::from_static(b"data: {\"delta\": \"partial\"}"));
+        h.data(
+            rec.now(),
+            bytes::Bytes::from_static(b"data: {\"delta\": \"partial\"}"),
+        );
         // The mask worker takes both items, forwards the OPEN and the clean head of the piece,
         // and holds the 11-byte tail; the writer writes what it was handed.
         let items: Vec<Item> = rx.try_iter().collect();

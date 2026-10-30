@@ -572,7 +572,10 @@ fn totals(boots: &BTreeMap<u64, Boot>) -> EntryTotals {
             .unwrap_or_default();
         let n = b.down_ms.len() as u64;
         (c.gaps, c.lost_unknown) = (c.gaps.saturating_add(n), c.lost_unknown.saturating_add(n));
-        c.off_ms = b.down_ms.iter().fold(c.off_ms, |a, ms| a.saturating_add(*ms));
+        c.off_ms = b
+            .down_ms
+            .iter()
+            .fold(c.off_ms, |a, ms| a.saturating_add(*ms));
         t.counts.add(&c);
         t.off_spans = t.off_spans.saturating_add(b.all_spans());
     }
