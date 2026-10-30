@@ -78,7 +78,8 @@ overridable), **open** (needs the owner).
 | # | Decision | Status |
 |---|---|---|
 | B1 | **Builds, compiles, tests and real runs happen in Vercel Sandboxes.** The cloud coding environment is for code, review and orchestration only. | locked |
-| B2 | **Several workflows run in parallel** in the same session (one per lane). Heavy subagent-driven development: plan, build, independent diff review, fix, merge. | locked |
+| B2 | **Several workflows run in parallel** in the same session (one per lane), to get past the per-workflow agent limit. Heavy subagent-driven development. Per PRD: a planner writes the task plan from the PRD and the code; builders work in parallel worktrees inside the PRD's owned files; **at least two independent reviewers** read each diff (one for correctness, the seven points and masking; one for code quality and less code); fix; merge. Separate cloud sessions are a fallback only. | locked |
+| B2a | **Replan after each PRD.** When a PRD merges, an improvement agent reads what was learned and updates the remaining PRDs and the build plan, so later work uses real findings. A change to a locked decision in this ledger still needs the owner. | locked |
 | B3 | **Short tests during the build:** prove recording works; one short real test after each new core feature, starting as soon as the core records end to end. **Mass testing of all harnesses comes at the end**, with watcher agents that fix and rerun (stop after three failed fixes on one cause). | locked |
 | B4 | **Staging only.** All runs go to the staging Worker, approved with the staging test approval key and the owner's member id. Never add an approval bypass to production. | locked |
 | B5 | Agents may **deploy the Worker to staging** on their own. Production deploy and the merge to main are the owner's. | locked |
