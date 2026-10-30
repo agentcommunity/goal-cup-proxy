@@ -55,6 +55,19 @@ for tool in zstd python3 git npm; do
     command -v "$tool" >/dev/null 2>&1 || missing="$missing $tool"
 done
 [ -d server/worker/node_modules ] || missing="$missing server/worker/node_modules(npm ci --prefix server/worker)"
+# The pad's tests need Python 3.11 or later (tomllib). The build box ships 3.9, so 3.11 is installed
+# there when no such Python is found.
+py311=
+for py in python3.11 python3; do
+    if command -v "$py" >/dev/null 2>&1 && "$py" -c 'import sys; sys.exit(sys.version_info < (3, 11))'; then
+        py311=$py
+        break
+    fi
+done
+if [ -z "$py311" ] && command -v dnf >/dev/null 2>&1 && sudo -n dnf install -y -q python3.11 >/dev/null 2>&1; then
+    py311=python3.11
+fi
+[ -n "$py311" ] || missing="$missing python3.11"
 if [ -n "$missing" ]; then
     echo "gate.sh: missing:$missing"
     fail
@@ -87,9 +100,10 @@ step cargo test --locked --workspace --doc
 step npm --prefix server/worker test
 # A named list, not `discover -s scripts`: old script tests name the old crates. A new script test
 # joins only if it guards one of the seven points, the format, masking or the never-stop rules.
-# test_fetch_run.py joins when PRD-07's rewrite merges (today it builds the old goalcup-verifier),
-# and `discover -s scripts/pad` after PRD-12's first test_pad.py merge.
-step python3 -m unittest scripts/test_install.py
+# test_fetch_run.py builds nothing (no database, R2, zstd or verifier). The pad's tests are the
+# rig selftest (ledger B9).
+step python3 -m unittest scripts/test_install.py scripts/test_fetch_run.py
+step "$py311" -m unittest discover -s scripts/pad -p 'test_*.py'
 
 if [ "$tier" = full ]; then
     # Every other #[ignore] test (end to end, the real Worker). No --no-tests flag: nextest fails

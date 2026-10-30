@@ -870,3 +870,20 @@ old code. Each id with what was done here.
   the old title at 5ec35393). Check 1 matches the new title. L-S2 (`integration.test.ts:278`), L-S3
   (`:542`) and L-S10 (`device.test.ts:150`, `lifecycle.test.ts:201`) keep their titles; only line
   numbers moved. The gate proved them on 2f4bc6a0: Worker `npm test` 253 pass, 0 fail.
+
+### 2026-10-30, replan after PRD-10 slice 1 (merge d55030ee)
+
+- **SC1 is load-bearing for a relative `GOALCUP_HOME`** (PRD-10 review A8). `cli::home()` makes a
+  relative `GOALCUP_HOME` absolute against the current folder, so `GOALCUP_HOME=gc` started in the
+  project folder becomes `<project>/gc`; only SC1's "a project folder that holds `$GOALCUP_HOME`"
+  refusal stops it. When PRD-10 names the SC1 case in `cli_folder.rs` (core slice), the lane checks
+  that a relative `GOALCUP_HOME` is one of its inputs before it marks L-SC1 green.
+- SC1 and SC6 stay `(name pending)`: slice 1 wrote neither `cli_folder.rs` nor `cli_finish.rs`.
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-11 slice 2 (merge b9fa50f8)
+
+- `connector::hosts::check(name, Source) -> Result<Host, Skipped>` is on integration with its final
+  signature, but as a stub (lowercase and label shape only). `lessons_hosts.rs` waits for PRD-11's hosts
+  slice, which copies the full check (section 3); a lesson test against the stub would pass or fail for
+  the wrong reason. `lessons_launch.rs` waits for the launch slice (lock, `.profile`) and S8.
