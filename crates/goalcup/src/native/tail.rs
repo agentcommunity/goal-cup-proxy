@@ -310,7 +310,7 @@ fn end(rec: &Recorder, mut h: StreamHandle, e: &Entry, reason: EndReason, exact:
     let n = want(e).saturating_sub(e.off);
     if n > 0 && reason == CutAtSeal {
         h.gap(GapReason::CutAtSeal, e.seen_at, Some(n), None);
-    } else if n > 0 && (exact || !e.snap) {
+    } else if n > 0 {
         let tail = Some(json!({"unread_at_least": n}));
         let lost = exact.then_some(n);
         h.gap(GapReason::SourceChanged, e.seen_at, lost, tail);
