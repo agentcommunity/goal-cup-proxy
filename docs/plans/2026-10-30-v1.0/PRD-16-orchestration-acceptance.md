@@ -1347,3 +1347,80 @@ kept and now cites BUILD-PROMPT section 5, since B3 no longer carries it.
 - **Open nit** B13 (test builder duplicate write path) goes to PRD-08's next slice (PRD-08 note);
   acceptance lists it as known if it is still open at the end.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-10 slice 2 (merge 56495dd6)
+
+- `gate fast: PASS in 88s` on 56495dd6 (98 tests run in the nextest summary). Box runs before the
+  merge: the builder ran fmt, clippy `-D warnings` and goalcup nextest (41/41) plus gate fast. The
+  fixer ran goalcup nextest (69/69), and reviewer A re-checked on a local merge with 77e01fbb (fmt,
+  workspace clippy, 69/69, doctests). The macOS liveness path has not been compiled in any box
+  (skipped, no macOS box). Ten paths changed, all owned by PRD-10, with no `Cargo.toml` change.
+- **Size report, PRD-10** (`wc -l` at 56495dd6, row "CLI (PRD-10)", about 2,900 src and 1,200 tests).
+  Src is 1,959, 68% of the row with 6 of 18 files written: `text.rs` 613, `cli/mod.rs` 462,
+  `status.rs` 341, `log.rs` 202, `main.rs` 197, `finish.rs` 144. The same six files have own
+  estimates of 1,270, so they run at 154%, and the CLI projects to about 3,680 (127%). The replan
+  decision (PRD-10 note) keeps the row, makes later slices build at their estimates, cuts B1, B3 and
+  B4 first, and needs a decision line for any merge past 3,190. Tests are 965, 80% of the row with
+  5 of the planned files (`cli_status.rs` 404, `cli_finish.rs` 274, `cli_log.rs` 136,
+  `cli_commands.rs` 128, `tests/cli_common/mod.rs` 23). `cli_folder.rs`, `cli_start.rs`,
+  `cli_continue.rs` and the setup tests are still to come, so the tests row will likely pass 1,200.
+  They reuse `tests/cli_common/` and PRD-14's `common::home` and `common::worker`. The
+  end-of-build report counts it against the Rust test total (a total past about 14,200 is an owner
+  question then).
+- **Trailers:** all 10 commits in 77e01fbb..56495dd6 carry both lines.
+- **Ownership:** the integrator accepts `crates/goalcup/tests/cli_common/` as PRD-10's (PRD-00 note).
+- **Open nits** B1 to B4 go to PRD-10's next slice (PRD-10 note). Acceptance lists them as known if
+  they are still open at the end. The vendor problem row, end-screen rule 7's end time, the native
+  rows line and the upload lines are not built yet. Acceptance does not count the section 4 problem
+  table or the end screen as complete until they are built or a replan line rules them out.
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-09 slice 1 (merge f5a529c8)
+
+- `gate fast: PASS in 143s` on f5a529c8 (98 tests run, 98 passed). Box runs before the merge: the
+  lane merger ran build, clippy `-D warnings`, fmt and 16/16 nextest; the fixer ran fmt, clippy
+  `-D warnings`, doc `-D warnings`, 16/16 nextest, the fixture sha256 check against the old crate and
+  a secret-pattern scan (0 hits) on ad1ce7e6; reviewer A's last re-check did not rerun the box (same
+  sha). Ten paths changed, all owned by PRD-09 (`src/usage/mod.rs` and `tests/usage_fixtures/**`),
+  with no `Cargo.toml` change.
+- **Size report, PRD-09** (`wc -l` at f5a529c8, row "Usage reader (PRD-09)", 1,470 src and 200 tests).
+  Src is 304, 21% of the row with 1 of 8 files written (`usage/mod.rs`, a stub: 89 doc-comment lines,
+  no reader logic). Its own estimate is 250 for the whole `mod.rs` with `run`, the sink, the join,
+  totals and output, so the file already runs at 122% of it on types alone; the final U1 types took
+  the extra (PRD-09 note). The row stands; the core slice reports per file and needs a decision line
+  past 1,617. Tests are 0 of 200 (`usage_run1.rs` is the core slice's). The fixtures are 555 lines of
+  data, counted in neither row.
+- **Trailers:** all 8 commits in ab939dd1..ad1ce7e6 carry both lines, and so does merge f5a529c8.
+- **Seams:** U1 is on integration with its final names, so PRD-08's `legs.rs` and `history.rs` and
+  its run 1 shape builder can build now (PRD-08 note). PRD-13's delete of the old verifier crate no
+  longer waits on PRD-09's fixtures; the old `connectors` fixtures are not copied (PRD-13 note).
+- **Open nit** B10 (one fact in `readable` plus `reason`) is taken in PRD-09's core slice unless
+  PRD-08 reads the field first (PRD-09 note). Acceptance lists it as known if it is still open at the
+  end.
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-15 slice 6 (merge 9e89a22d)
+
+- `gate fast: PASS in 86s` on 9e89a22d. Docs only: `docs/ARCHITECTURE.md`, `docs/CONNECTOR-SCHEMA.md`,
+  `docs/HARNESS-ONBOARDING.md`, `docs/RECORD-FORMAT.md` (+69, -19), all PRD-15 owned. Box runs before
+  the merge (lane 14:35Z to 14:48Z): `goalcup-verify dump` on the `zstd -dc` copy of the worked example
+  equals the committed dump; `check --json` top-level and entry key sets, check ids, `inv` numbers and
+  the skip list equal the page; em dash grep clean with a control hit; stale-term grep clean on the
+  merged pages (old hits remain in ARCHITECTURE and HARNESS-ONBOARDING from integration, for their
+  rewrites); link check: no new break (`docs/CONTRACTS.md` to `#pin-evolution` was already known).
+  The reader's counts equal the dump per kind (box at 010c69cb); the fixer's box at 9e094019 did not
+  rerun the reader.
+- **Size report, PRD-15.** PRD-15 merged no code, and PRD-00 "Size budget" has no docs row, so
+  `wc -l` of PRD-15 code is 0 and there is no row to count against. Against PRD-15's own docs table:
+  `docs/RECORD-FORMAT.md` is 374 lines against about 280 (134%, the builder's decision line names the
+  record tables, worked example, reader and S6 key tables), `docs/CONNECTOR-SCHEMA.md` 115 against
+  about 90 (128%, the key table and the **(next slice)** marks).
+- **Trailers:** all 11 commits in f5a529c8..9e89a22d carry both lines, the lane merge commits
+  included.
+- **Open nit** B-N4 (the reader intro's bare `zstd` pointer) goes to PRD-15's next slice that touches
+  RECORD-FORMAT (PRD-15 note). Acceptance lists it as known if it is still open at the end. A10 and
+  B12 are closed.
+- **Doc follows code:** the `check --json` section and the `continue` mark depend on later PRD-08 and
+  PRD-10 merges naming their changes (PRD-08 and PRD-10 notes). Acceptance checks the page against a
+  final `check --json` run, not against this slice's skip list.
+- No locked ledger item is touched and no owner question comes from this slice.
