@@ -1,10 +1,9 @@
 //! Seam U1 (PRD-09): the usage call table, one row per model call, and the `usage` subcommand.
 //!
-//! This is the phase 0 stub with the final type names, so PRD-08's `legs.rs` and `history.rs` build
-//! against them now. [`Calls`] takes every record of an entry in order ([`Calls::push`]) and
-//! [`Calls::finish`] gives the [`CallTable`]. The sink reads the `start` EVENT from the pushed
-//! records; it takes no argument of its own. Until the reader lands, the table is
-//! [`CallTable::default`]: not readable, [`Reason::NoReader`], no threads, children not read.
+//! [`Calls`] takes every record of an entry in order ([`Calls::push`]) and [`Calls::finish`] gives
+//! the [`CallTable`]. The sink reads PART, LINK and the `start` EVENT from the pushed records; it
+//! takes no argument of its own. The wire leg is read (`wire.rs`); the native leg is not yet, so
+//! the table keeps [`Reason::NoReader`], no threads and children not read.
 //!
 //! Build a [`CallRow`], [`Thread`] or [`CallTable`] with [`CallRow::new`], [`Thread::new`] or
 //! [`CallTable::default`], then set fields (or use struct update from one of them); never with a
@@ -13,11 +12,16 @@
 //! Wall times are nanoseconds since the Unix epoch, as the LINK `wall_ns` of `goalcup_format`. A
 //! token count of `None` means the source did not say; it is never 0 for that (PRD-09 section 4).
 
+mod shapes;
+mod sse;
+mod wire;
+
 use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::process::ExitCode;
 
 use goalcup_format::Record;
+use serde_json::Value;
 
 /// Which log a row comes from; also which leg a call's tokens came from (`usage_from`).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -218,12 +222,16 @@ pub struct Thread {
     pub native_only: u64,
     /// Native calls after this time (the database copy's time) are not known.
     pub native_until: Option<u64>,
-    pub readable: bool,
-    /// `None` exactly when `readable` is true.
+    /// Why the native leg is not readable; `None` means readable.
     pub reason: Option<Reason>,
 }
 
 impl Thread {
+    /// True when the native leg was read.
+    pub fn readable(&self) -> bool {
+        self.reason.is_none()
+    }
+
     /// A thread with nothing read: not readable, [`Reason::NoReader`].
     pub fn new(id: impl Into<String>) -> Self {
         Self {
@@ -235,7 +243,6 @@ impl Thread {
             native_total: None,
             native_only: 0,
             native_until: None,
-            readable: false,
             reason: Some(Reason::NoReader),
         }
     }
@@ -253,8 +260,7 @@ pub struct CallTable {
     /// check that needs it (`subagents_present`) skips on `None`, never passes, and runs on
     /// whatever was read otherwise.
     pub children: Option<BTreeMap<String, Vec<String>>>,
-    pub readable: bool,
-    /// `None` exactly when `readable` is true.
+    /// Why the native leg is not readable; `None` means readable.
     pub reason: Option<Reason>,
     pub native_form: NativeForm,
     /// Calls that fell back to the time join.
@@ -269,7 +275,6 @@ impl Default for CallTable {
             rows: Vec::new(),
             threads: Vec::new(),
             children: None,
-            readable: false,
             reason: Some(Reason::NoReader),
             native_form: NativeForm::None,
             joined_by_time: 0,
@@ -277,21 +282,113 @@ impl Default for CallTable {
     }
 }
 
+impl CallTable {
+    /// True when the native leg was read.
+    pub fn readable(&self) -> bool {
+        self.reason.is_none()
+    }
+}
+
+/// A host kind by its record name.
+fn host_kind(s: Option<&str>) -> Option<HostKind> {
+    match s? {
+        "provider" => Some(HostKind::Provider),
+        "gateway" => Some(HostKind::Gateway),
+        "vendor" => Some(HostKind::Vendor),
+        "other" => Some(HostKind::Other),
+        _ => None,
+    }
+}
+
+/// What the sink knows of the boot being read: entry, boot, wall base and the `start` hosts.
+#[derive(Debug, Default)]
+struct Ctx {
+    entry: String,
+    boot: u64,
+    /// (wall_ns, mono_ns) of the last PART or LINK of this boot.
+    base: Option<(u64, u64)>,
+    /// The `start` event's hosts and kinds, wildcards as given.
+    hosts: Vec<(String, Option<HostKind>)>,
+}
+
+impl Ctx {
+    /// A record time of this boot as wall ns, by the nearest PART or LINK before it.
+    fn wall(&self, t: u64) -> Option<u64> {
+        let (w, m) = self.base?;
+        u64::try_from(i128::from(w) + i128::from(t) - i128::from(m)).ok()
+    }
+
+    /// The kind the `start` hosts give `host` (`*.x` matches by suffix); `None` when not listed.
+    fn host_kind(&self, host: &str) -> Option<Option<HostKind>> {
+        let h = host.to_ascii_lowercase();
+        let hit = |p: &str| match p.strip_prefix('*') {
+            Some(end) => end.starts_with('.') && h.ends_with(end),
+            None => p == h,
+        };
+        self.hosts.iter().find(|(p, _)| hit(p)).map(|(_, k)| *k)
+    }
+
+    fn start(&mut self, ev: &Value) {
+        let lists = ev
+            .get("hosts")
+            .and_then(Value::as_object)
+            .into_iter()
+            .flatten();
+        self.hosts = lists
+            .filter_map(|(_, l)| l.as_array())
+            .flatten()
+            .filter_map(|e| {
+                let host = e.get("host")?.as_str()?.to_ascii_lowercase();
+                Some((host, host_kind(e.get("kind").and_then(Value::as_str))))
+            })
+            .collect();
+    }
+}
+
 /// The U1 sink: push every record of an entry in order, then finish.
 #[derive(Debug, Default)]
-pub struct Calls(());
+pub struct Calls {
+    ctx: Ctx,
+    wire: wire::Wire,
+}
 
 impl Calls {
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Takes one record. The stub reads nothing yet.
-    pub fn push(&mut self, _rec: &Record) {}
+    /// Takes one record.
+    pub fn push(&mut self, rec: &Record) {
+        match rec {
+            Record::Part {
+                entry,
+                boot,
+                wall_ns,
+                mono_ns,
+                ..
+            } => {
+                (self.ctx.entry, self.ctx.boot) = (entry.clone(), *boot);
+                self.ctx.base = Some((*wall_ns, *mono_ns));
+            }
+            Record::Link {
+                wall_ns, mono_ns, ..
+            } => self.ctx.base = Some((*wall_ns, *mono_ns)),
+            Record::Event { json, .. } => {
+                let ev = serde_json::from_slice::<Value>(json).unwrap_or(Value::Null);
+                if ev.get("ev").and_then(Value::as_str) == Some("start") {
+                    self.ctx.start(&ev);
+                }
+            }
+            _ => self.wire.push(&self.ctx, rec),
+        }
+    }
 
-    /// The table. The stub's is [`CallTable::default`].
+    /// The table: wire rows in (boot, sid, msg) order; the native leg is not read yet.
     pub fn finish(self) -> CallTable {
-        CallTable::default()
+        CallTable {
+            rows: self.wire.finish(),
+            ..CallTable::default()
+        }
     }
 }
 
