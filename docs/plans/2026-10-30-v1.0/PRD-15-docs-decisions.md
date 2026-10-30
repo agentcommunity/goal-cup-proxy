@@ -967,3 +967,20 @@ merge request:
   the merge. The last link check filters both by name with the run 1 report and says so in the
   night-log line.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-07 slice 3 (merge 323b1a0f)
+
+- **`docs/OPERATING.md` "Test runs" is out of date since 323b1a0f** (review RA-N1). Lines 135-138
+  still say the script "touches only `goalcup-traces/traces/test/` and
+  `goalcup-traces-staging/traces/test-staging/`" and ask for "R2 read and write". The script now also
+  empties `goalcup-usage/usage/test/` and `goalcup-usage-staging/usage/test-staging/`, lists R2 before
+  the database changes, and skips a usage bucket the token cannot reach with one line. An owner who
+  scopes the token from OPERATING alone leaves the test stats behind, which breaks PRD-07 section 10's
+  "leaves no orphan stats". The third-slice OPERATING rewrite (section 9, item 4 "Test runs and the
+  pad", and item 1 "Where things run") says, in plain words: the four bucket and prefix pairs; the
+  token needs R2 read and write on both traces buckets and on each usage bucket that exists; a usage
+  bucket skipped by a run with `--older-than` keeps its test objects until a run without
+  `--older-than` (PRD-07 note, RA-N2). Copy the facts from `server/worker/README.md` "Clean up test
+  runs" and the script header as merged, not from this note. If the rewrite is not reached in this
+  build, the two-line fix to lines 135-138 goes in alone; it is a PRD-15 file.
+- No locked ledger item is touched and no owner question comes from this slice.
