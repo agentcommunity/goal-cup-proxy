@@ -7,6 +7,7 @@
 mod common;
 
 use common::*;
+use goalcup_format::codec::Record;
 use goalcup_format::{EndReason, FLAG_FIN, GapReason, StreamKind};
 use serde_json::{Value, json};
 use std::fs;
@@ -215,4 +216,108 @@ fn counts_equal_the_recorder_rules_for_tunnels_snapshots_and_ws_gaps() {
     assert_eq!(result(&v, "counts_match_seal"), "pass");
     assert_eq!(v["entries"][0]["counts"]["req_holes"], 1);
     assert_eq!(code, 1);
+}
+
+/// A listed tunnel of 512 up and 2048 down bytes, then its GAP (`lost` = up + down + 1) if any.
+fn tunnel(e: &mut Entry, host: &str, reason: &str, gap: Option<(GapReason, Value)>) {
+    let meta = json!({"host": host, "port": 443, "mode": "tunnel", "listed": "shared",
+        "kind": "provider", "reason": reason, "alpn": null, "tls": null,
+        "fingerprint": "0123456789abcdef"});
+    let s = e.open(StreamKind::Conn, 0, 0, meta);
+    if let Some((cause, tail)) = gap {
+        e.gap(s, cause, 1_000, 0, 2_561, tail);
+    }
+    e.end(s, EndReason::Complete, 0, json!({"up": 512, "down": 2048}));
+}
+
+fn sealed(mut e: Entry) -> (i32, Value) {
+    e.count();
+    check(&e.seal(), &[])
+}
+
+#[test]
+fn listed_tunnels_with_a_named_reason_are_named_and_without_a_gap_fail() {
+    use GapReason::*;
+    let guard = json!({"guard": "client_hello", "limit": 65536});
+    for (reason, cause, tail) in [
+        ("pinned", Pinned, Value::Null),
+        ("tls_refused", TlsRefused, Value::Null),
+        ("upstream_untrusted", UpstreamUntrusted, Value::Null),
+        ("alpn_other", ProtocolOther, Value::Null),
+        ("hello_too_big", MemoryGuard, guard),
+    ] {
+        let mut e = Entry::new("listed-tunnel");
+        tunnel(&mut e, "t.example.test", reason, Some((cause, tail)));
+        let (code, v) = sealed(e);
+        assert_eq!(result(&v, "listed_hosts_decrypted"), "named", "{reason}");
+        assert_eq!(code, 1, "{reason}");
+    }
+    for (reason, res) in [("pinned", "fail"), ("sign_in", "pass")] {
+        let mut e = Entry::new("listed-tunnel-no-gap");
+        tunnel(&mut e, "t.example.test", reason, None);
+        let (code, v) = sealed(e);
+        assert_eq!(result(&v, "listed_hosts_decrypted"), res, "{reason}");
+        assert_eq!(code == 2, res == "fail", "{reason}");
+    }
+}
+
+#[test]
+fn decrypted_conn_with_a_parser_fault_gap_is_named() {
+    let mut e = Entry::new("conn-gap");
+    let c = e.conn();
+    e.gap(c, GapReason::DecodeFailed, 10, 0, 1_000_001, Value::Null);
+    let tail = json!({"up": 1_000_064, "down": 64, "plain_up": 1_000_000, "plain_down": 0});
+    e.end(c, EndReason::Complete, 0, tail);
+    let (code, v) = sealed(e);
+    assert_eq!(result(&v, "listed_hosts_decrypted"), "named");
+    assert_eq!(code, 1);
+}
+
+/// A refusal of a host and fingerprint that was trusted earlier is a hint, unless no alert came.
+#[test]
+fn refusal_after_trust_lists_a_learned_refusal_but_not_a_silent_one() {
+    for (alert, listed) in [(true, 1), (false, 0)] {
+        let mut e = Entry::new("refusal");
+        e.exchange(EndReason::Complete);
+        let gap = Some((GapReason::TlsRefused, json!({"alert": alert})));
+        tunnel(&mut e, HOST, "tls_refused", gap);
+        let (code, v) = sealed(e);
+        let facts = &item(&v, "listed_hosts_decrypted")["facts"]["refusal_after_trust"];
+        let n = facts.as_array().map_or(0, Vec::len);
+        assert_eq!(n, listed, "alert {alert}");
+        assert_eq!(result(&v, "listed_hosts_decrypted"), "named");
+        assert_eq!(code, 1);
+    }
+}
+
+/// One request stream of `n` bytes, all `*` and all under one `fail_closed` MASK (rule 2).
+fn fail_closed_span(n: u64) -> (i32, Value) {
+    let mut e = Entry::new("fail-closed");
+    let c = e.conn();
+    let head = json!({"method": "GET", "path": "/v1/files", "ver": "1.1", "headers": [],
+        "masked": [], "coding": null});
+    let q = e.open(StreamKind::HttpReq, c, 0, head);
+    for off in (0..n).step_by(65_536) {
+        e.data(q, off, 0, &vec![b'*'; (n - off).min(65_536) as usize]);
+    }
+    e.put(Record::Mask {
+        sid: q,
+        off: 0,
+        len: n,
+        rule: 2,
+    });
+    e.end(q, EndReason::Complete, n, json!({"wire": n}));
+    let tail = json!({"up": n, "down": 0, "plain_up": n, "plain_down": 0});
+    e.end(c, EndReason::Complete, 0, tail);
+    sealed(e)
+}
+
+#[test]
+fn fail_closed_masking_over_1_mib_in_one_stream_warns() {
+    let (code, v) = fail_closed_span(1_048_577);
+    assert_eq!(result(&v, "mask_failclosed"), "warn");
+    assert_eq!(item(&v, "mask_failclosed")["facts"]["streams"], 1);
+    assert_ne!(code, 2);
+    let (_, v) = fail_closed_span(1_048_576);
+    assert_eq!(result(&v, "mask_failclosed"), "pass");
 }
