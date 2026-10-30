@@ -397,6 +397,7 @@ fn a_snapshot_gone_with_bytes_unread_gives_its_gap_and_end() {
         let tail = Some(json!({"unread_at_least": 100 - read}));
         let gap = (o[0].0, GapReason::SourceChanged, Some(100 - read), tail);
         assert_eq!(lost(c), [gap]);
-        assert_eq!(ends(c), [(o[0].0, EndReason::SourceChanged, read)]);
+        // END `seen` is the offset: the bytes read plus the exact GAP.
+        assert_eq!(ends(c), [(o[0].0, EndReason::SourceChanged, 100)]);
     }
 }
