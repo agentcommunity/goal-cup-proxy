@@ -93,7 +93,10 @@ fn recovered_seal_of_an_entry_with_no_index_line_is_named() {
     assert_eq!(code, 1);
     assert_eq!(result(&v, "inv6"), "named");
     assert_eq!(v["entries"][0]["seal_reason"], "recovered");
-    let gaps = item(&v, "inv6")["facts"]["gaps"].as_array().unwrap().clone();
+    let gaps = item(&v, "inv6")["facts"]["gaps"]
+        .as_array()
+        .unwrap()
+        .clone();
     assert_eq!(gaps.len(), 1, "{gaps:?}");
     assert_eq!(gaps[0]["cause"], "killed");
     assert!(gaps[0]["ms"].as_u64().unwrap() >= 30_000);

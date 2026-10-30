@@ -630,8 +630,7 @@ impl Entry {
         drop(self.w.take());
         self.idle(down_ms);
         let now = self.clock.now();
-        self.down_ms
-            .push((now.mono_ns - self.tally.part_mono) / MS);
+        self.down_ms.push((now.mono_ns - self.tally.part_mono) / MS);
         let seal = recovered_seal(&totals(&self.boots, &self.down_ms), self.boots.len());
         let (_, r) = self.recover(cause, Some(seal), None);
         assert!(r.writer.is_none());
@@ -661,17 +660,23 @@ impl Entry {
             e.w.as_mut().unwrap().write(&r).unwrap();
         };
         let t = e.clock.tick();
-        write(&mut e, Record::Event {
-            t,
-            json: start(true).to_string().into_bytes(),
-        });
+        write(
+            &mut e,
+            Record::Event {
+                t,
+                json: start(true).to_string().into_bytes(),
+            },
+        );
         write(&mut e, r.gap_after_start.unwrap());
         let t = e.clock.tick();
         let seal = recovered_seal(&totals(&[e.tally.count(t)], &[]), 1);
-        write(&mut e, Record::Event {
-            t,
-            json: seal.to_string().into_bytes(),
-        });
+        write(
+            &mut e,
+            Record::Event {
+                t,
+                json: seal.to_string().into_bytes(),
+            },
+        );
         e.clock.tick();
         e.w.take().unwrap().seal(e.clock.now()).unwrap();
         e.dir
