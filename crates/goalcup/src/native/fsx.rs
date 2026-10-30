@@ -109,11 +109,9 @@ impl Dir {
     /// `fstatat` with `AT_SYMLINK_NOFOLLOW`: a symlink is described, not followed. `.` describes
     /// this folder. A name that has vanished gives `io::ErrorKind::NotFound`.
     pub fn stat_at(&self, name: &OsStr) -> io::Result<Stat> {
-        let c = cname(name)?;
+        let (c, fd) = (cname(name)?, self.fd.as_raw_fd());
         // SAFETY: the parent descriptor is open, `c` is NUL terminated, `st` is a writable output.
-        stat_by(|st| unsafe {
-            libc::fstatat(self.fd.as_raw_fd(), c.as_ptr(), st, libc::AT_SYMLINK_NOFOLLOW)
-        })
+        stat_by(|st| unsafe { libc::fstatat(fd, c.as_ptr(), st, libc::AT_SYMLINK_NOFOLLOW) })
     }
 
     /// Opens a regular file whose `fid` must equal `expect`. When the file that was seen is no

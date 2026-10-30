@@ -12,7 +12,11 @@ use goalcup::pipeline::{Call, Recorder};
 use serde_json::Value;
 
 fn row(name: &str, root: &Path, pattern: &str) -> Row {
-    Row { name: name.into(), root: root.into(), pattern: parse(pattern).unwrap() }
+    Row {
+        name: name.into(),
+        root: root.into(),
+        pattern: parse(pattern).unwrap(),
+    }
 }
 
 fn rels(found: &[Found]) -> Vec<PathBuf> {
@@ -21,7 +25,14 @@ fn rels(found: &[Found]) -> Vec<PathBuf> {
 
 fn events(calls: &goalcup::pipeline::Calls) -> Vec<Value> {
     let all = calls.all().into_iter();
-    all.filter_map(|c| if let Call::Event(v) = c { Some(v) } else { None }).collect()
+    all.filter_map(|c| {
+        if let Call::Event(v) = c {
+            Some(v)
+        } else {
+            None
+        }
+    })
+    .collect()
 }
 
 #[test]
@@ -47,7 +58,10 @@ fn a_root_made_after_the_first_pass_is_found() {
     fs::create_dir(&root).unwrap();
     fs::write(root.join("s.jsonl"), b"{}\n").unwrap();
     assert_eq!(rels(&walker.pass(&rec, &rows)), [PathBuf::from("s.jsonl")]);
-    assert!(events(&calls).is_empty(), "a missing root is skipped silently");
+    assert!(
+        events(&calls).is_empty(),
+        "a missing root is skipped silently"
+    );
 }
 
 #[test]
@@ -68,7 +82,11 @@ fn twenty_thousand_files_in_four_thousand_folders_are_found_in_one_pass() {
 }
 
 fn open_fds() -> usize {
-    let dir = if cfg!(target_os = "linux") { "/proc/self/fd" } else { "/dev/fd" };
+    let dir = if cfg!(target_os = "linux") {
+        "/proc/self/fd"
+    } else {
+        "/dev/fd"
+    };
     fs::read_dir(dir).unwrap().count()
 }
 
@@ -79,7 +97,10 @@ fn no_descriptor_stays_open_after_a_pass() {
         fs::create_dir_all(t.path().join(d)).unwrap();
         fs::write(t.path().join(d).join("s.jsonl"), b"x").unwrap();
     }
-    let rows = [row("t", t.path(), "**/*.jsonl"), row("u", &t.path().join("a"), "*")];
+    let rows = [
+        row("t", t.path(), "**/*.jsonl"),
+        row("u", &t.path().join("a"), "*"),
+    ];
     let (rec, _) = Recorder::for_tests(1 << 20);
     let mut walker = Walker::default();
     let before = open_fds();
@@ -104,6 +125,7 @@ fn a_folder_on_another_device_is_not_entered_and_named_once() {
         eprintln!("no folder under /dev is on another device here; nothing to check");
         return;
     }
+    eprintln!("folders under /dev on another device: {others:?}");
     let rows = [row("dev", Path::new("/dev"), "**/*")];
     let (rec, calls) = Recorder::for_tests(1 << 20);
     let mut walker = Walker::default();
@@ -114,7 +136,10 @@ fn a_folder_on_another_device_is_not_entered_and_named_once() {
         .filter(|e| e["what"] == "native_other_device")
         .collect();
     for other in &others {
-        assert!(!found.iter().any(|f| f.rel.starts_with(other)), "{other} was entered");
+        assert!(
+            !found.iter().any(|f| f.rel.starts_with(other)),
+            "{other} was entered"
+        );
         let named = notes.iter().filter(|n| n["path"] == other.as_str()).count();
         assert_eq!(named, 1, "{other} must be named exactly once");
         assert!(notes.iter().all(|n| n["row"] == "dev"));

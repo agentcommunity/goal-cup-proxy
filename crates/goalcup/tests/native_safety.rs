@@ -129,12 +129,22 @@ fn no_descriptor_is_kept() {
 }
 
 fn row(name: &str, root: &Path, pattern: &str) -> Row {
-    Row { name: name.into(), root: root.into(), pattern: parse(pattern).unwrap() }
+    Row {
+        name: name.into(),
+        root: root.into(),
+        pattern: parse(pattern).unwrap(),
+    }
 }
 
 fn notes(calls: &Calls, what: &str) -> Vec<Value> {
     let all = calls.all().into_iter();
-    let events = all.filter_map(|c| if let Call::Event(v) = c { Some(v) } else { None });
+    let events = all.filter_map(|c| {
+        if let Call::Event(v) = c {
+            Some(v)
+        } else {
+            None
+        }
+    });
     events.filter(|e| e["what"] == what).collect()
 }
 
@@ -171,11 +181,22 @@ fn the_root_never_reaches_a_path() {
     let found = Walker::default().pass(&rec, &rows);
     assert_eq!(found.len(), 1);
     let mut ids: Vec<String> = found.iter().map(|f| path_id("r", &f.rel)).collect();
-    ids.extend(notes(&calls, "native_symlink").iter().map(|n| n["path"].to_string()));
-    assert!(found.iter().all(|f| f.rel.is_relative() && !f.rel.starts_with(&root)));
+    ids.extend(
+        notes(&calls, "native_symlink")
+            .iter()
+            .map(|n| n["path"].to_string()),
+    );
+    assert!(
+        found
+            .iter()
+            .all(|f| f.rel.is_relative() && !f.rel.starts_with(&root))
+    );
     assert_eq!(ids.len(), 2);
     let marker = t.path().to_string_lossy().into_owned();
-    assert!(ids.iter().all(|id| !id.contains("private-root-name") && !id.contains(&marker)));
+    assert!(
+        ids.iter()
+            .all(|id| !id.contains("private-root-name") && !id.contains(&marker))
+    );
 }
 
 #[test]
@@ -190,13 +211,26 @@ fn hermes_rows_take_the_state_database_and_no_request_dump() {
     let rows: Vec<Row> = c
         .native
         .iter()
-        .map(|n| row(&n.name, Path::new(&n.root.replace("{home}", home_s)), &n.pattern))
+        .map(|n| {
+            row(
+                &n.name,
+                Path::new(&n.root.replace("{home}", home_s)),
+                &n.pattern,
+            )
+        })
         .collect();
     let (rec, _) = Recorder::for_tests(1 << 20);
     let found = Walker::default().pass(&rec, &rows);
-    let names: Vec<PathBuf> = found.iter().map(|f| rows[f.row].root.join(&f.rel)).collect();
+    let names: Vec<PathBuf> = found
+        .iter()
+        .map(|f| rows[f.row].root.join(&f.rel))
+        .collect();
     assert!(names.contains(&home.join("state.db")), "{names:?}");
-    assert!(!names.iter().any(|p| p.to_string_lossy().contains("request_dump")));
+    assert!(
+        !names
+            .iter()
+            .any(|p| p.to_string_lossy().contains("request_dump"))
+    );
 }
 
 #[test]
