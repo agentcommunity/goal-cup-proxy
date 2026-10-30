@@ -52,15 +52,16 @@ pub trait Parser: Send {
     /// and ended `decode_error`. Later feeds are not made; `end` still is.
     fn feed(&mut self, dir: Dir, t: Mono, bytes: &[u8]) -> Result<(), Stop>;
     /// The connection closed. unsent_up: client bytes read but never forwarded (upstream had
-    /// closed). A `Stop` names bytes still held unrecorded at the close. `down_cut`: the
-    /// upstream closed TLS without close_notify, so only a body that ends at the server's close
-    /// is not known whole; framing shows whether anything else is.
+    /// closed); the parser takes off what it puts on an open stream's END tail and leaves the
+    /// rest. A `Stop` names bytes still held unrecorded at the close. `down_cut`: the upstream
+    /// closed TLS without close_notify, so only a body that ends at the server's close is not
+    /// known whole; framing shows whether anything else is.
     fn end(
         self: Box<Self>,
         t: Mono,
         reason: EndReason,
         down_cut: bool,
-        unsent_up: u64,
+        unsent_up: &mut u64,
     ) -> Option<Stop>;
     /// `feed` panicked: every open stream gets its GAP and ends `decode_error`; the `Stop` counts
     /// the bytes not recorded, the panicking chunk included.
@@ -74,6 +75,10 @@ pub struct Pumped<C, U> {
     pub plain_up: u64,
     pub plain_down: u64,
     pub unsent_up: u64,
+    /// Of `unsent_up`, the bytes no open `http_req` or `ws_up` END tail took: a request head
+    /// never forwarded, a pipelined request behind a body. Recorded nowhere yet: PRD-01 allows
+    /// `unsent` on no `conn` END (owner question, wire-proxy log 30 Oct).
+    pub unplaced_up: u64,
     /// `complete` when both sides closed cleanly, else `interrupted`.
     pub reason: EndReason,
     /// The upstream leg errored (reset, TLS error, read or write error), not a clean close.
@@ -254,11 +259,11 @@ where
     let down_cut = matches!(ld, Leg::Cut);
     let [up, down] = pump.moved.map(AtomicU64::into_inner);
     let Shared { parser, mut stop } = pump.shared.into_inner().unwrap_or_else(|e| e.into_inner());
+    let mut unplaced_up = unsent_up;
     if let Some(p) = parser {
         let t = rec.now();
-        let ended = catch_unwind(AssertUnwindSafe(move || {
-            p.end(t, reason, down_cut, unsent_up)
-        }));
+        let left = &mut unplaced_up;
+        let ended = catch_unwind(AssertUnwindSafe(move || p.end(t, reason, down_cut, left)));
         match ended {
             Ok(Some(late)) if stop.is_none() => {
                 if !late.at_close {
@@ -284,6 +289,7 @@ where
         plain_up: up,
         plain_down: down,
         unsent_up,
+        unplaced_up,
         reason,
         upstream_failed: matches!(lu, Leg::WriteErr) || matches!(ld, Leg::ReadErr),
     }

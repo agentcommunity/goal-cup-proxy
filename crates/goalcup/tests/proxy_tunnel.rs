@@ -352,7 +352,7 @@ impl Parser for Faulty {
             false => Ok(()),
         }
     }
-    fn end(self: Box<Self>, t: Mono, _: EndReason, _: bool, _: u64) -> Option<Stop> {
+    fn end(self: Box<Self>, t: Mono, _: EndReason, _: bool, _: &mut u64) -> Option<Stop> {
         (self.0 == Fails::AtClose).then_some(Stop {
             reason: GapReason::DecodeFailed,
             tail: None,
@@ -608,7 +608,7 @@ impl Parser for Copies {
         self.0.lock().unwrap()[usize::from(dir == Dir::Down)].extend_from_slice(bytes);
         Ok(())
     }
-    fn end(self: Box<Self>, _: Mono, _: EndReason, _: bool, _: u64) -> Option<Stop> {
+    fn end(self: Box<Self>, _: Mono, _: EndReason, _: bool, _: &mut u64) -> Option<Stop> {
         None
     }
     fn panicked(self: Box<Self>, t: Mono) -> Stop {
@@ -691,47 +691,72 @@ impl AsyncWrite for Stalls {
     }
 }
 
-/// PRD-03 section 5: the upstream resets while a request body is held mid-write by backpressure.
-/// The client bytes read and never forwarded go to the http_req END tail as `unsent`.
+/// PRD-03 section 5: the upstream resets while the client's chunk is held mid-write by
+/// backpressure after `took` bytes. Returns `(plain_up, unsent_up, unplaced_up)`, the http_req
+/// END tail `unsent` (`None` when no http_req opened) and the conn GAPs' `lost`.
+async fn reset_mid_upload(chunk: &[u8], took: usize) -> ((u64, u64, u64), Option<Value>, Vec<u64>) {
+    let (rec, calls) = Recorder::for_tests(1 << 30);
+    let (reset, left) = (oneshot::channel(), Arc::new(AtomicUsize::new(took)));
+    let upstream = tokio::io::join(ResetOn(reset.1), Stalls(left.clone()));
+    let (mut client, cp) = duplex(1 << 16);
+    let r = rec.clone();
+    let relay = tokio::spawn(async move {
+        let mut conn = r.open(StreamKind::Conn, 0, 0, 0, OpenFlags::NONE, json!({}));
+        let parser: Box<dyn Parser> = Box::new(Http1::new(&r, conn.sid()));
+        let (none, quiet) = ((Bytes::new(), Bytes::new()), AtomicU64::new(0));
+        let legs = (cp, upstream);
+        let p = pump::relay(&r, &mut conn, legs, none, Some(parser), &quiet, None).await;
+        conn.end(r.now(), p.reason, None);
+        assert_eq!(p.reason, EndReason::Interrupted);
+        (p.plain_up, p.unsent_up, p.unplaced_up)
+    });
+    client.write_all(chunk).await.unwrap();
+    while left.load(Ordering::SeqCst) > 0 {
+        tokio::task::yield_now().await;
+    }
+    reset.0.send(()).unwrap();
+    let counts = relay.await.unwrap();
+    let all = calls.all();
+    let req = all.iter().find_map(|c| match c {
+        Call::Open(sid, StreamKind::HttpReq, ..) => Some(*sid),
+        _ => None,
+    });
+    let unsent = all.iter().find_map(|c| match c {
+        Call::End(sid, _, reason, _, tail) if Some(*sid) == req => {
+            assert_eq!(*reason, EndReason::Interrupted);
+            Some(tail.as_ref().unwrap()["unsent"].clone())
+        }
+        _ => None,
+    });
+    let lost = gaps(&calls).into_iter().filter_map(|g| match g {
+        Call::Gap(_, _, _, _, _, lost, _) => lost,
+        _ => None,
+    });
+    (counts, unsent, lost.collect())
+}
+
+/// The client bytes read and never forwarded go to the http_req END tail as `unsent` as far as
+/// its `Content-Length` reaches; the rest (a head never forwarded, a pipelined request) is left
+/// in `unplaced_up` for the conn.
 #[tokio::test]
 async fn an_upstream_reset_mid_upload_counts_the_rest_of_the_chunk_unsent() {
     within_async(HANG, async {
-        let (rec, calls) = Recorder::for_tests(1 << 30);
         let mut post = b"POST /up HTTP/1.1\r\nHost: a.example\r\nContent-Length: 5000\r\n\r\n".to_vec();
         let head = post.len();
         post.extend([b'u'; 5000]);
-        let (reset, left) = (oneshot::channel(), Arc::new(AtomicUsize::new(head + 1000)));
-        let upstream = tokio::io::join(ResetOn(reset.1), Stalls(left.clone()));
-        let (mut client, cp) = duplex(1 << 16);
-        let r = rec.clone();
-        let relay = tokio::spawn(async move {
-            let mut conn = r.open(StreamKind::Conn, 0, 0, 0, OpenFlags::NONE, json!({}));
-            let parser: Box<dyn Parser> = Box::new(Http1::new(&r, conn.sid()));
-            let (none, quiet) = ((Bytes::new(), Bytes::new()), AtomicU64::new(0));
-            let legs = (cp, upstream);
-            let p = pump::relay(&r, &mut conn, legs, none, Some(parser), &quiet, None).await;
-            conn.end(r.now(), p.reason, None);
-            (p.plain_up, p.unsent_up, p.reason)
-        });
-        client.write_all(&post).await.unwrap();
-        while left.load(Ordering::SeqCst) > 0 {
-            tokio::task::yield_now().await;
-        }
-        reset.0.send(()).unwrap();
-        let (plain_up, unsent_up, reason) = relay.await.unwrap();
+        let all = post.len() as u64;
+        let (counts, unsent, lost) = reset_mid_upload(&post, head + 1000).await;
         let sent = head as u64 + 1000;
-        assert_eq!((plain_up, unsent_up, reason), (sent, 4000, EndReason::Interrupted));
-        let all = calls.all();
-        let req = all.iter().find_map(|c| match c {
-            Call::Open(sid, StreamKind::HttpReq, ..) => Some(*sid),
-            _ => None,
-        });
-        let end = all.iter().find_map(|c| match c {
-            Call::End(sid, _, reason, _, tail) if Some(*sid) == req => Some((*reason, tail)),
-            _ => None,
-        });
-        let (reason, tail) = end.expect("the http_req ended");
-        assert_eq!((reason, &tail.as_ref().unwrap()["unsent"]), (EndReason::Interrupted, &json!(4000)));
+        assert_eq!((counts, unsent, lost), ((sent, 4000, 0), Some(json!(4000)), vec![]));
+        // A head cut short: no request opened, its forwarded part is the conn GAP.
+        let (counts, unsent, lost) = reset_mid_upload(&post, 20).await;
+        assert_eq!((counts, unsent, lost), ((20, all - 20, all - 20), None, vec![20]));
+        // A pipelined request behind the body is not the first request's.
+        let next = b"GET /next HTTP/1.1\r\nHost: a.example\r\n\r\n";
+        post.extend(next);
+        let (counts, unsent, lost) = reset_mid_upload(&post, head + 1000).await;
+        let rest = 4000 + next.len() as u64;
+        assert_eq!((counts, unsent, lost), ((sent, rest, rest - 4000), Some(json!(4000)), vec![]));
     })
     .await;
 }

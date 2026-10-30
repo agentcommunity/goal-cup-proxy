@@ -399,13 +399,14 @@ impl Parser for Http1 {
     }
 
     /// End open streams (interrupted when inside a message, complete otherwise; decode_error
-    /// after a stop); unsent_up goes to the open http_req (or ws_up) END tail.
+    /// after a stop). unsent_up goes to the open ws_up, or to the open http_req END tail up to
+    /// what its `Content-Length` still lacks (a chunked body takes it all).
     fn end(
         mut self: Box<Self>,
         t: Mono,
         reason: EndReason,
         down_cut: bool,
-        unsent_up: u64,
+        unsent_up: &mut u64,
     ) -> Option<Stop> {
         let since = self.held(t).1;
         let mut late = None;
@@ -434,10 +435,16 @@ impl Parser for Http1 {
             };
         }
         if let Some(ws) = self.ws.take() {
-            ws.end(t, reason, unsent_up);
+            ws.end(t, reason, std::mem::take(unsent_up));
         }
         if let Some(body) = self.up.body.take() {
-            body.end(t, EndReason::Interrupted, unsent_up, None);
+            // Bytes past the length still owed are a later request's.
+            let own = match body.framing {
+                Framing::Length(left) => left.min(*unsent_up),
+                _ => *unsent_up,
+            };
+            *unsent_up -= own;
+            body.end(t, EndReason::Interrupted, own, None);
         }
         if let Some(body) = self.down.body.take() {
             // Only the server's close ends this body, and a cut close may come early.
@@ -457,7 +464,7 @@ impl Parser for Http1 {
 
     fn panicked(mut self: Box<Self>, t: Mono) -> Stop {
         let stop = self.stop(t, Fault::Panic);
-        let _ = self.end(t, EndReason::DecodeError, false, 0);
+        let _ = self.end(t, EndReason::DecodeError, false, &mut 0);
         stop
     }
 }
