@@ -1646,3 +1646,29 @@ kept and now cites BUILD-PROMPT section 5, since B3 no longer carries it.
 - **Acceptance lists as known,** if still open at the end: B12 (one way to build a create in
   `usage_run1.rs`), and `usage table` or `--text` if not built (cut, PRD-09 note).
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-14 slice 3 (merge 00fac28d)
+
+- `gate fast: PASS in 101s` on 00fac28d (nextest 188 of 188, Worker 253, `test_install.py` 28,
+  pad 17). Twelve paths changed, all PRD-14 owned, no `Cargo.toml`. All 13 commits in
+  e82f03de..00fac28d carry both trailer lines. `gate full` was not run on the merge; it fails by
+  design at its new hooked-binary line until PRD-06 calls `Policy::from_env` (PRD-06, PRD-14 notes).
+- **Size report, PRD-14** (`wc -l` at 00fac28d, PRD-00 row "Lessons (PRD-17), test support,
+  `rule_code`, `e2e_run` (PRD-14)", 0 src and 3,000 tests, of which PRD-14's line is 1,700): PRD-14
+  tests are 1,736 (`tests/common/` 1,523, `rule_code.rs` 213, `e2e_run.rs` 0), 102% of its 1,700 and
+  within the 1,870 ceiling; `upstream.rs` 709 of 700 (decision line 16:08Z, point 1). Src 0. Scripts
+  and CI: `install.sh` 355 (was 394), `test_install.py` 314 (was 582), `release.yml` 132,
+  `gate.sh` 128, `release.sh` 121, `ci.yml` 60, `smoke-release.sh` 53, `package-release.sh` 40,
+  `third-party-licenses.py` 231.
+- **Release order:** `release.yml` now runs the workspace nextest on all four targets (macOS and Linux
+  arm64 included) before it builds, with a 60-minute job limit, and refuses a hooked debug binary
+  with no `GOALCUP_TEST_` text. So the release depends on PRD-06's `Policy::from_env` call as well as
+  `gate full` and the pad's release check; a watcher does not tag before that merge.
+- **Seams closed:** PRD-04's `Calls` helpers (PRD-04 deletes its copies next) and PRD-10's
+  `status --json` in `install.sh` (PRD-10 note keeps the shape). **Open:** `recorder::real` (PRD-02's
+  `Recorder::real_for_tests`), `native_walk` in the `heavy` group (next PRD-14 touch), `e2e_run.rs`
+  (phase 2), the `check-links.py` delete (phase 3).
+- **Acceptance lists as known,** if still open at the end: B12 (one "bytes left" closure in
+  `h2_stream`, PRD-14 note).
+- **Housekeeping for the end:** `v1.0/prd-14-tests-lane-merge-wip` is still to be removed from origin.
+- No locked ledger item is touched and no owner question comes from this slice.

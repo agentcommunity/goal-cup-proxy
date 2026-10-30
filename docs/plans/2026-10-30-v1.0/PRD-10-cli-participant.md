@@ -1333,3 +1333,14 @@ PRD-01, PRD-02, PRD-04, PRD-05 and PRD-11 as they now stand, and the code. No lo
   `cli_continue.rs` first trims `cli_status.rs` and `cli_finish.rs` (fixture building repeated across
   cases). A merge past 1,320 brings a replan `decision` line, as for src.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-14 slice 3 (merge 00fac28d)
+
+- **`install.sh` now reads `goalcup status --json`** (PRD-14 slice 3). The shape it relies on, as on
+  integration at 00fac28d: exit 0 with one JSON object whose top-level `status` object has a string
+  `mode`; `recording`, `losing`, `writer_slow` and `null` block the install, any other mode lets it
+  go on; exit 1 with nothing on stdout means no run on this computer (`say` writes to stderr); any
+  other result, or no answer in 10 s, is "unsure" and the install goes on with a warning. PRD-10 keeps
+  these: a change to the exit codes, a message on stdout for "no run", or a renamed or moved `mode`
+  needs `install.sh` and `test_install.py` changed in the same merge.
+- No locked ledger item is touched and no owner question comes from this slice.
