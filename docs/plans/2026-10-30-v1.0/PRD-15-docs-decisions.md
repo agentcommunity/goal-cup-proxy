@@ -1180,3 +1180,30 @@ note is closed; PRD-10's delete of the skill can follow (PRD-10 note).
   dotenv not writable), host decisions and the full host check. Also state: a `file` template's last
   component is a pattern, and every file that fits is read. Drop the marks and check each rule against
   merged `hosts.rs`, `hints.rs`, `launch.rs` and `mod.rs` (PRD-11 note lists the facts).
+
+### 2026-10-30, replan after PRD-10 slice 3 (merge f66ce4a5)
+
+`goalcup start` now runs the folder checks of PRD-10 section 3 step 2 (`crates/goalcup/src/cli/folder.rs`,
+messages in `cli/text.rs`). `docs/PARTICIPANT-GUIDE.md` (section 3 step 3 and the appendix "if
+`goalcup start` stops") differs from the merged code here; the next PRD-15 slice checks each line
+against `folder.rs` and fixes the guide, without quoting message wording the code may change:
+- A synced folder is a **warning**, not a stop (PRD-10 section 3); the appendix lists it among the
+  rows that stop the start. It is found by name on the resolved path (Dropbox, OneDrive, Google
+  Drive, iCloud, `Mobile Documents`, `Library/CloudStorage`), so a Desktop or Documents folder that
+  iCloud syncs without one of those names in its path gets no warning. The advice "do not use Desktop,
+  Documents" stays true as advice.
+- A folder on NFS or SMB (the project or `GOALCUP_HOME`) is a warning; the guide does not say so.
+- Not in the appendix yet: inside a Git work tree; the project and goalcup's own folder hold each
+  other or sit side by side (fix: another folder, or `GOALCUP_HOME` elsewhere); the `--prompt` file
+  inside the project folder or missing.
+- The token line is checked in `.env.local` only, and refuses two `GH_TOKEN` lines or a CRLF ending
+  there; the guide's "any second `GH_TOKEN` line in any `.env` file" says more than the check.
+- The missing-`.gitignore` case: the code asks for the line `.env*`; it does not print the two lines
+  `.env` and `.env.*` the guide names.
+- "The folder is checked once more right after you approve": not built and not in section 3. PRD-10's
+  start slice says in its merge note whether it adds it; until then the sentence is not true.
+- "Every row but the outage row ... says Nothing was created": true for the folder refusal. A refusal
+  from the connector plan (home in use, harness version) may come after the isolated home was made
+  (PRD-10 note), so that wording waits for the start slice.
+- WSL1 or a Windows drive under WSL2 is not checked yet (PRD-10 note); the guide's advice stays.
+- No locked ledger item is touched and no owner question comes from this slice.

@@ -1575,3 +1575,74 @@ kept and now cites BUILD-PROMPT section 5, since B3 no longer carries it.
   `local_model` notes, and the N6 lookup has no wait of its own (PRD-11 note).
 - **Trailers:** all 18 commits in 669f5d92..c14d63b8 carry both lines, the merge included.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-10 slice 3 (merge f66ce4a5)
+
+- `gate fast: PASS in 143s` on f66ce4a5 (nextest: 152 tests run, 152 passed, 0 skipped). Before the
+  merge the lane was green in boxes after each round: fmt, clippy `-D warnings`, nextest goalcup
+  73/73 at the lane merge, 75/75 after the A1 to A3 fixes, 74/74 at 91a7c294,
+  doctests passing; both reviewers found no blocker. Linux only: the macOS `statfs` branch is not
+  compiled. Ten paths changed, all PRD-10's, no `Cargo.toml`.
+- **Size report, PRD-10** (`wc -l` at f66ce4a5 against PRD-00's "CLI (PRD-10)" row, about 2,900 src
+  and 1,200 tests): src 2,298 in 8 files, 79% of the row with 9 files and most of `start.rs` still to
+  write; at the file table's estimates the CLI projects to at least 3,801 (131%), past the 3,190 line.
+  Tests 1,184, 99% of the row, with seven test files still to come. The PRD-10 note sets `folder.rs`
+  at up to 240, asks the next slice to give back lines from `text.rs` (704 against 420) and `mod.rs`
+  (464 against 130) first, and asks the slice that passes 3,190 src or 1,320 tests for its own
+  decision line. The end-of-build report counts the CLI against the Rust totals.
+- **Seam fixed for the start slice:** `connector::load`, then `folder::check`, then `connector::plan`
+  (the plan writes into the isolated home; PRD-10 and PRD-17 notes). SC2's folder case depends on it.
+- **Unblocked:** PRD-17 rows SC1 and SC2 (folder case) point at `cli_folder.rs`; PRD-15 can fix the
+  guide's start appendix against `folder.rs` (PRD-15 note). **Still waiting:** `start` and `seal`
+  with `GOALCUP_SERVER=off` on S8 `watchdog::run`; `continue` on `pipeline::close_dead_entry`;
+  `setup --yes` (S15) can now use PRD-11's real `write_settings` and version probe; the upload lines
+  and `time-left` can use S9's `upload::state::read`, with `server_word` null until PRD-06's sender.
+- **Acceptance list as known,** if still open at the end: the WSL1 or Windows-drive check (PRD-10
+  section 3 step 2) is not built.
+- **Trailers:** all 13 commits in bab29a0c..f66ce4a5 carry both lines, the merge included.
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-04 core slice part 2 (merge 01afcf22)
+
+- `gate fast: PASS in 124s` on 01afcf22 (nextest: 182 tests run, 182 passed, 0 skipped). Before the
+  merge the lane was green in boxes after each of four fix rounds: fmt, `clippy -D warnings`, native
+  tests 40, 41, then 43 of 43 at 84b86ab0. Linux only; no native test ran on macOS. Eleven paths
+  changed, all PRD-04's, no `Cargo.toml`. All 18 commits in e6dd0444..01afcf22 carry both trailer lines.
+- **Size report, PRD-04** (`wc -l` at 01afcf22, row "Native (PRD-04)" 780 src and 1,000 tests): src
+  909 (`tail.rs` 363, `fsx.rs` 213, `pattern.rs` 174, `walk.rs` 131, `mod.rs` 28), 117% of the row,
+  with `start`, the loop, `finish` and `snapshot.rs` still to come; tests 1,236 (`native_tail.rs` 469,
+  `native_safety.rs` 240, `native_walk.rs` 202, `native_pattern.rs` 132, `native_resume.rs` 106,
+  `native_room.rs` 87), 124% of the row, with `native_snapshot.rs` and `native_finish.rs` to come.
+  This replan's decision (PRD-04 note) names points 1 and 3 and sets the ceiling to 1,150 src and
+  1,600 tests. The end-of-build report counts it against the Rust totals (about 18,100 src, at most
+  about 14,200 tests); a total past them is the owner's question then.
+- **Build order unchanged.** PRD-04's last slice (`start`, loop, `finish(self, harness_exited,
+  guard)`, `native_missing`, `snapshot.rs`, `native_snapshot.rs`, `native_finish.rs`) is unblocked;
+  PRD-02's seal and boot wiring call it once it lands.
+- **Seams to close:** PRD-14 puts `native_walk` in the `heavy` group (PRD-14 note); PRD-02 adds
+  `fid` to `SnapshotCursor` (PRD-02 note).
+- **Acceptance lists as known,** if still open at the end: RB7 (dead guard in `tail.rs` `end()`), C2
+  (nested root on another device), RB3 (no-exclusion-list half unguarded), and the missing snapshot
+  `fid` on resume (PRD-04 note).
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-09 slice 2 (merge dab0ce1f)
+
+- `gate fast: PASS in 92s` on dab0ce1f (nextest: 188 tests run, 188 passed, 0 skipped; fmt and
+  `clippy -D warnings` green). Before the merge the lane was green in boxes after each of three fix
+  rounds (fmt, `clippy -D warnings`, `doc -D warnings`, nextest 22 of 22 at bce2f879, 31 of 31 on a
+  probe merge with integration). Five paths changed, all PRD-09's, no `Cargo.toml`. All 17 commits in
+  01afcf22..dab0ce1f carry both trailer lines.
+- **Size report, PRD-09** (`wc -l` at dab0ce1f, row "Usage reader (PRD-09)" 1,470 src and 200
+  tests): src 1,525 (`wire.rs` 601, `shapes.rs` 456, `mod.rs` 407, `sse.rs` 61), 104% of the row with
+  `native.rs`, `sqlite.rs`, `hints.rs`, `out.rs`, the join and `run` still to come; tests 299
+  (`usage_run1.rs`), 150% of the row. This replan's decision (PRD-09 note) names point 1 and ledger
+  S2 and sets the ceiling to 2,250 src and 380 tests, with `usage table` and `--text` built only if
+  they fit. The end-of-build report counts it against the Rust totals (about 18,100 src, at most
+  about 14,200 tests); a total past them is the owner's question then.
+- **Build order unchanged.** PRD-09's next slice (native readers, `sqlite.rs`, `hints.rs`, the join,
+  `out.rs` core part, `usage::run`) unblocks PRD-12 C5, the T6 spend check and the watchers'
+  `usage --json`; until then `usage` exits 3 and pad rows say usage was not read (PRD-12 note).
+- **Acceptance lists as known,** if still open at the end: B12 (one way to build a create in
+  `usage_run1.rs`), and `usage table` or `--text` if not built (cut, PRD-09 note).
+- No locked ledger item is touched and no owner question comes from this slice.
