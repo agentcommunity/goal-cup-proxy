@@ -52,6 +52,16 @@ pub struct TunnelHost {
     pub listed: Option<String>,
 }
 
+/// Entry totals (PRD-01 section 9, PRD-00 R3-2): the COUNT keys over every boot, plus
+/// `off_spans`, the number of `recorder_down` spans on `sid 0`. `off_spans` is never a COUNT key
+/// and is never written to a COUNT event; the heartbeat `off_spans` and the sealed `off.spans`
+/// take it from here, `off_ms` from `counts`.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct EntryTotals {
+    pub counts: Counts,
+    pub off_spans: u64,
+}
+
 /// The durable point, published on a `watch` channel after each `fdatasync` (PRD-02 section 5
 /// step 4). The uploader sends up to it and never past it, cutting chunks by index lines.
 /// `totals` are entry totals as they stood at this LINK, so a count that leaves the machine never
@@ -61,14 +71,14 @@ pub struct Durable {
     /// The part file, its index length and the index line, as `PartWriter::sync`, `rotate_if_due`
     /// and `seal` return it. None before the first durable point.
     pub point: Option<goalcup_format::Durable>,
-    pub totals: Counts,
+    pub totals: EntryTotals,
     /// When this point became durable, for its age.
     pub at: Mono,
 }
 
 /// Entry totals over every boot of the entry in `entry_dir` (PRD-01 section 9): one function for
 /// boot recovery, `close_dead_entry`, the null recorder and `goalcup upload`.
-pub fn entry_totals(entry_dir: &Path) -> Counts {
+pub fn entry_totals(entry_dir: &Path) -> EntryTotals {
     let _ = entry_dir;
-    Counts::default()
+    EntryTotals::default()
 }

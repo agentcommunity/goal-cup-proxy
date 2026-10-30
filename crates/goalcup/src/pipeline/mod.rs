@@ -1,7 +1,7 @@
 //! The recorder pipeline (PRD-02): one process carries every recorded byte from the proxy and the
 //! session-file reader through one memory guard and masking to the part files.
 //!
-//! Scaffold: seam S1 (`Recorder`, `StreamHandle`) and S4 (`Counts`, `Durable`, `entry_totals`,
+//! Scaffold: seam S1 (`Recorder`, `StreamHandle`) and S4 (`Counts`, `EntryTotals`, `Durable`, `entry_totals`,
 //! `status.json`) in their final shapes. The calls do nothing yet, except under `test-hooks`,
 //! where `Recorder::for_tests` collects them.
 
@@ -26,7 +26,7 @@ pub mod status;
 #[cfg(feature = "test-hooks")]
 pub use calls::{Call, Calls};
 pub use clock::Mono;
-pub use counts::{Counts, Durable, TunnelHost, entry_totals};
+pub use counts::{Counts, Durable, EntryTotals, TunnelHost, entry_totals};
 pub use cursors::Cursors;
 pub use goalcup_format::{EndReason, GapReason, StreamKind};
 pub use handle::{OpenFlags, StreamHandle};

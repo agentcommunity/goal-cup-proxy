@@ -5,6 +5,7 @@
 //! Scaffold: the control lines (S8) and the start facts (S17) in their final shapes. `run` and
 //! `recover` follow once seam S3's `LaunchPlan` is on integration.
 
+use crate::pipeline::status::Outlived;
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::path::PathBuf;
@@ -69,25 +70,6 @@ impl fmt::Debug for CaPem {
     }
 }
 
-/// Where the connector came from (PRD-01 `start` key `connector_source`).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ConnectorSource {
-    Builtin,
-    File,
-}
-
-/// The connector in force, for the `start` keys `connector`, `connector_source` and
-/// `connector_sha256`.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ConnectorRef {
-    /// The connector's id, or its file with `--connector`.
-    pub id: String,
-    pub source: ConnectorSource,
-    /// SHA-256 of the exact TOML bytes used, 64 hex.
-    pub sha256: String,
-}
-
 /// The harness as the watchdog launched it.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HarnessFacts {
@@ -103,9 +85,10 @@ pub struct HarnessFacts {
 /// Seam S17: the start facts, the body of the first control line. Every type serializes with
 /// serde. No `Debug`: it holds the CA key and the exact mask values.
 ///
-/// `hosts`, `native`, `mask_rules`, `values` and `notes` are JSON until the seam S3 types
-/// (`connector::HostList`, `NativeSources`, `MaskRule`, `LaunchPlan.notes`) and S2's
-/// `mask::SecretValue` are on integration; they then take those types, with the same names.
+/// `connector`, `hosts`, `native`, `mask_rules`, `values` and `notes` are JSON until the seam S3
+/// types (`connector::ConnectorRef`, `HostList`, `NativeSources`, `MaskRule`, `LaunchPlan.notes`)
+/// and S2's `mask::SecretValue` are on integration; they then take those types, with the same
+/// names.
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 pub struct StartFacts {
     /// `r` and 16 hex.
@@ -123,7 +106,9 @@ pub struct StartFacts {
     pub server_time: Option<u64>,
     pub local_wall: u64,
     pub workspace: PathBuf,
-    pub connector: ConnectorRef,
+    /// `LaunchPlan.connector` (S3 `connector::ConnectorRef`: id, name, sha256, source), for the
+    /// `start` keys `connector`, `connector_source` and `connector_sha256`.
+    pub connector: serde_json::Value,
     /// `LaunchPlan.harness_version`; null when it could not be read.
     pub harness_version: Option<String>,
     /// `GOALCUP_KEEP_PARTS=1`.
@@ -159,8 +144,13 @@ pub enum ToRecorder {
     Exit {
         exit: Option<Exit>,
     },
+    /// Seal now. `outlived`: the Linux children that started after the harness and are still
+    /// alive, listed by the watchdog (the subreaper) for the `outlived` note and the sealed
+    /// `status.json`; null elsewhere or when none. Absent on a resent seal, which still parses.
     Seal {
         reason: SealReason,
+        #[serde(default)]
+        outlived: Option<Outlived>,
     },
     /// Null recorder only: exit 0 without sealing.
     Restart,
@@ -215,5 +205,21 @@ mod tests {
         ] {
             assert!(serde_json::from_str::<Prev>(bad).is_err(), "{bad}");
         }
+    }
+
+    /// The `outlived` facts ride on the seal line; a seal line without them still parses.
+    #[test]
+    fn seal_line_outlived() {
+        let line = r#"{"line":"seal","reason":"harness_exit","outlived":{"count":2,"programs":["node","sh"]}}"#;
+        let ToRecorder::Seal { reason, outlived } = serde_json::from_str::<ToRecorder>(line).unwrap() else {
+            panic!("not a seal line");
+        };
+        assert_eq!(reason, SealReason::HarnessExit);
+        assert_eq!(outlived.unwrap().programs, ["node", "sh"]);
+        let resent = r#"{"line":"seal","reason":"recovered"}"#;
+        assert!(matches!(
+            serde_json::from_str::<ToRecorder>(resent).unwrap(),
+            ToRecorder::Seal { outlived: None, .. }
+        ));
     }
 }
