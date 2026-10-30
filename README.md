@@ -265,7 +265,7 @@ sh scripts/gate.sh full                # before a release
   (it lacks `nss-myhostname`): add `127.0.0.1 api.e00.localhost auth.e00.localhost` to its
   `/etc/hosts`. If `/tmp` is tmpfs or btrfs and your home is ext4 or XFS, run this first:
   `export TMPDIR="$HOME/.cache/goalcup-tmp"; mkdir -p "$TMPDIR"`. CI (`check`) is a small Linux
-  smoke, not the gate. More: [OPERATING](docs/OPERATING.md#building-and-verifying).
+  smoke, not the gate. More: [scripts](scripts/README.md).
 
 **The dependency rule.** The daemon never links the verifier, and the CLI never links the daemon.
 Tests check both. Other hard rules (never a base URL, no harness names in core code, pins
