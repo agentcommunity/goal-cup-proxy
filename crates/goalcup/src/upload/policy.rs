@@ -247,13 +247,13 @@ pub enum Class {
 }
 
 /// The class of an HTTP status. None for a success and for 409, which reads the position again.
-/// An answer that is neither the server's success nor its error (a portal's redirect) is
-/// `network`: the call did not reach the server.
+/// `refused` is only the server's own refusals (section 5). Any other answer (a portal's redirect,
+/// a middlebox's 403 or 408) is `network`: the call did not reach the server.
 pub fn class_of_status(status: u16) -> Option<Class> {
     match status {
         200..=299 | 409 => None,
         429 | 500..=599 => Some(Class::ServerBusy),
-        400..=499 => Some(Class::Refused),
+        400 | 401 | 404 | 410 | 413 | 422 => Some(Class::Refused),
         _ => Some(Class::Network),
     }
 }

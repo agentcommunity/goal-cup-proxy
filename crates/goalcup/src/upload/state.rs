@@ -3,6 +3,10 @@
 //!
 //! The file is a cache: the server's position is the truth (section 8), so a missing or corrupt file
 //! reads as None. Readers accept unknown keys. `text` never holds a header, a token or a body.
+//!
+//! [`write`] is safe from any thread: each call has its own temp file. The upload and beat threads
+//! each own some fields, so one in-memory [`UploadJson`] behind one lock feeds both, or one thread
+//! would write back the other's stale fields.
 
 use super::ServerWord;
 use super::policy::Class;
@@ -11,6 +15,7 @@ use serde::{Deserialize, Serialize};
 use std::io::{self, Write as _};
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 /// The file's name in the entry folder.
@@ -159,9 +164,11 @@ pub fn read(entry_dir: &Path) -> Option<UploadJson> {
 }
 
 /// Writes the file: a temp file in the same folder, created with mode 0600, then renamed over it.
+/// The temp name holds the pid and a per-call number, so two writers never share one.
 pub fn write(entry_dir: &Path, value: &UploadJson) -> io::Result<()> {
-    let tmp = entry_dir.join(format!(".{FILE}.{}.tmp", std::process::id()));
-    let _ = std::fs::remove_file(&tmp);
+    static CALLS: AtomicU64 = AtomicU64::new(0);
+    let n = CALLS.fetch_add(1, Ordering::Relaxed);
+    let tmp = entry_dir.join(format!(".{FILE}.{}.{n}.tmp", std::process::id()));
     let body = serde_json::to_vec(value).map_err(io::Error::other)?;
     let done = std::fs::OpenOptions::new()
         .write(true)
@@ -211,23 +218,7 @@ impl Writer {
 /// `2026-11-07T10:00:01Z`: UTC, whole seconds. A time before 1970 is written as 1970.
 fn rfc3339(t: SystemTime) -> String {
     let secs = t.duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs());
-    let (days, rem) = (secs / 86_400, secs % 86_400);
-    // Civil date from days since 1970-01-01 (Howard Hinnant's algorithm).
-    let z = days + 719_468;
-    let era = z / 146_097;
-    let doe = z % 146_097;
-    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let day = doy - (153 * mp + 2) / 5 + 1;
-    let month = if mp < 10 { mp + 3 } else { mp - 9 };
-    let year = yoe + era * 400 + u64::from(month <= 2);
-    format!(
-        "{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}Z",
-        rem / 3600,
-        rem % 3600 / 60,
-        rem % 60
-    )
+    goalcup_format::dump::wall(secs.saturating_mul(1_000_000_000))
 }
 
 #[cfg(test)]
@@ -263,9 +254,36 @@ mod tests {
             .mode();
         assert_eq!(mode & 0o777, 0o600);
         assert_eq!(read(dir.path()), Some(j));
-        assert_eq!(
-            rfc3339(UNIX_EPOCH + Duration::from_secs(1_794_045_601)),
-            "2026-11-07T10:00:01Z"
-        );
+    }
+
+    /// S9: two threads of one process writing the file never publish a torn one or lose a write.
+    #[test]
+    fn two_threads_writing_never_tear_the_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().to_path_buf();
+        write(&path, &UploadJson::new("r".into(), "e".into())).unwrap();
+        let writers: Vec<_> = (0..2)
+            .map(|t| {
+                let path = path.clone();
+                std::thread::spawn(move || {
+                    let mut j = UploadJson::new("r".repeat(4096), format!("e{t}"));
+                    for i in 0..2000 {
+                        j.failures = i;
+                        write(&path, &j).unwrap();
+                    }
+                })
+            })
+            .collect();
+        let mut reads = 0;
+        while writers.iter().any(|w| !w.is_finished()) {
+            assert!(read(&path).is_some(), "a torn or missing upload.json");
+            reads += 1;
+        }
+        for w in writers {
+            w.join().unwrap();
+        }
+        assert!(reads > 0);
+        let left: Vec<_> = std::fs::read_dir(&path).unwrap().collect();
+        assert_eq!(left.len(), 1, "a temp file was left behind");
     }
 }

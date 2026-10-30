@@ -4,8 +4,9 @@
 //!
 //! TLS is this crate's own rustls with the `ring` provider and the `webpki-roots` anchors,
 //! plugged into `ureq` through its connector hook: the workspace builds `ureq` without TLS.
-//! `http://` works too, for a local Worker under `wrangler dev` and the fake Worker; the token
-//! goes over plain `http://` only to this computer.
+//! `http://` works too, for a local Worker under `wrangler dev` and the fake Worker. The base
+//! address comes from `cli::server()`, which refuses `http://` off loopback and a user part; this
+//! client adds no check of its own.
 //!
 //! Every answer type ignores fields it does not know, so the same client reads a Worker that
 //! still sends `ack` and `last_ack` and one that no longer does.
@@ -213,9 +214,7 @@ impl std::fmt::Debug for ServerClient {
 
 impl ServerClient {
     /// A client for `base` (no trailing slash needed) that sends `token` on every call: `None`
-    /// for the device flow, the run credential after it. Over plain `http://` the token goes
-    /// only to this computer, so a mistyped server address never puts it on the wire in clear;
-    /// elsewhere it is left out and the server answers 401.
+    /// for the device flow, the run credential after it. `base` comes from `cli::server()`.
     pub fn new(base: &str, token: Option<Token>) -> ServerClient {
         let mut roots = rustls::RootCertStore::empty();
         roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
@@ -239,10 +238,9 @@ impl ServerClient {
         if let Ok(tls) = tls {
             agent = agent.tls_connector(Arc::new(RustlsConnector(tls)));
         }
-        let base = base.trim_end_matches('/').to_string();
         ServerClient {
-            token: token.filter(|_| token_may_go_to(&base)),
-            base,
+            base: base.trim_end_matches('/').to_string(),
+            token,
             agent: agent.build(),
         }
     }
@@ -300,8 +298,9 @@ impl ServerClient {
     /// refusal, with its status and `Retry-After`; the chunk's answer when the server holds the
     /// chunk; a 409 when the server stands elsewhere; a 503 `awaiting_final` when the run is over
     /// and no final heartbeat is committed. Only when the position shows the server waiting on
-    /// this very chunk is the error a `Transport`, so the caller can take a `Transport` from
-    /// here as a network failure.
+    /// this very chunk is the error a `Transport`. That is a network failure, or a 400 or 413
+    /// the server sent before the body (both only from a bug in this client), which the position
+    /// cannot tell apart.
     pub fn put_chunk(
         &self,
         run: &str,
@@ -349,7 +348,10 @@ impl ServerClient {
             message: format!("read from the position after the upload broke ({why})"),
             retry_after: None,
         };
-        if at.offset == h.offset + h.raw_len && at.head == h.head {
+        if at.offset == h.offset + h.raw_len
+            && at.head == h.head
+            && at.next_seq == h.last_seq + 1
+        {
             Ok(ChunkAnswer {
                 offset: at.offset,
                 next_seq: at.next_seq,
@@ -373,27 +375,6 @@ impl ServerClient {
             None => request,
         }
     }
-}
-
-/// Whether the token may go to `base`: over `https://`, or over `http://` to a loopback host.
-fn token_may_go_to(base: &str) -> bool {
-    let lower = base.to_ascii_lowercase();
-    if lower.starts_with("https://") {
-        return true;
-    }
-    let Some(rest) = lower.strip_prefix("http://") else {
-        return false;
-    };
-    let authority = rest.split('/').next().unwrap_or_default();
-    let authority = authority.rsplit('@').next().unwrap_or_default();
-    let host = match authority.strip_prefix('[') {
-        Some(v6) => v6.split(']').next().unwrap_or_default(),
-        None => authority.split(':').next().unwrap_or_default(),
-    };
-    host == "localhost"
-        || host
-            .parse::<std::net::IpAddr>()
-            .is_ok_and(|ip| ip.is_loopback())
 }
 
 /// A reader that fails once `until` (boot time) has passed.
@@ -604,27 +585,6 @@ mod tests {
             format!("{client:?}"),
         ] {
             assert!(!shown.contains(&secret));
-        }
-    }
-
-    /// Point 4: over plain http the token goes only to this computer.
-    #[test]
-    fn the_token_goes_over_http_only_to_this_computer() {
-        for base in [
-            "https://ingest.example.org",
-            "http://127.0.0.1:8787",
-            "http://localhost/",
-            "http://[::1]:9",
-        ] {
-            assert!(token_may_go_to(base), "{base}");
-        }
-        for base in [
-            "http://ingest.example.org",
-            "http://127.0.0.1.example.org",
-            "http://localhost.example.org:80",
-            "ftp://127.0.0.1",
-        ] {
-            assert!(!token_may_go_to(base), "{base}");
         }
     }
 

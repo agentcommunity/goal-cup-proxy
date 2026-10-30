@@ -27,7 +27,8 @@ use tokio::sync::watch;
 
 /// The last heartbeat answer (seam S10). The recorder forwards it to the watchdog as the `server`
 /// control line; the watchdog resets its deadline timer from `seconds_left` and seals with reason
-/// `server_stop` on `stop`.
+/// `server_stop` on `stop`. The beat publishes it with `send_replace`, which keeps the value while
+/// no receiver exists, so a subscriber that comes later still sees the last word.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ServerWord {
     pub stop: bool,
@@ -107,7 +108,7 @@ impl UploadHandle {
 
 /// The run's server address from `run_dir/server.json` (PRD-10), or None for a local run.
 fn server_url(run_dir: &Path) -> Option<String> {
-    let raw = std::fs::read(run_dir.join("server.json")).ok()?;
+    let raw = std::fs::read(crate::cli::server_json(run_dir)).ok()?;
     let v: serde_json::Value = serde_json::from_slice(&raw).ok()?;
     Some(v.get("server")?.as_str()?.to_owned())
 }
