@@ -9,6 +9,8 @@ import { SupabaseDb } from "../src/db-supabase.ts";
 import type { Env } from "../src/env.ts";
 import { ApiError } from "../src/errors.ts";
 import { REPO_URL, boolField, parseSafeUint, versionTriple } from "../src/util.ts";
+import { credentialFor, deviceBody, openBody } from "./helpers/client.ts";
+import { inProcess } from "./helpers/inproc.ts";
 
 const baseEnv = { EVENT_ID: "cup", PRACTICE_EVENT_ID: "practice", RECEIPT_SIGNING_KEY: "07".repeat(32), TRACES: {} } as unknown as Env;
 
@@ -264,6 +266,39 @@ test("Workers Logs keep the Worker's own console lines and no invocation logs, i
   const tables = wranglerTables();
   assert.equal(tables["observability.logs"]!.invocation_logs, "false");
   assert.equal(tables["env.staging.observability.logs"]!.invocation_logs, "false"); // pinned here, not left to inheritance
+});
+
+test("the minimum goalcup version is 1.0.0 in production and in staging", () => {
+  const tables = wranglerTables();
+  assert.equal(tables.vars!.MIN_COMPETITION_VERSION, "1.0.0");
+  assert.equal(tables["env.staging.vars"]!.MIN_COMPETITION_VERSION, "1.0.0"); // not inherited by an environment
+});
+
+test("MIN_COMPETITION_VERSION refuses a 0.7 device request and open in practice and test mode; continue is not refused", async () => {
+  const p = inProcess("2026-11-06T09:00:00Z", { MIN_COMPETITION_VERSION: "1.0.0", TEST_EVENT_ID: "test" });
+  try {
+    for (const mode of ["practice", "test"] as const) {
+      const device = await p.api.call("POST", "/v1/device", { json: deviceBody({ mode, proxy_version: "0.7.1" }) });
+      assert.equal(device.status, 403, JSON.stringify(device.body));
+      assert.equal(device.body.error, "forbidden");
+      const token = await credentialFor(p.api, `m-${mode}`, mode); // a 1.0.0 sign-in
+      const old = await p.api.call("POST", "/v1/runs", { token, json: openBody({ session_id: `s-${mode}`, proxy_version: "0.7.1" }) });
+      assert.equal(old.status, 403, JSON.stringify(old.body));
+      assert.equal(old.body.error, "forbidden");
+
+      // A run opened by 1.0.0 continues from any version: a run already open finishes on what it began with.
+      const opened = await p.api.call("POST", "/v1/runs", { token, json: openBody({ session_id: `s-${mode}` }) });
+      assert.equal(opened.status, 201, JSON.stringify(opened.body));
+      const { repo_url: _r, session_id: _s, proxy_version: _v, ...facts } = openBody();
+      const cont = await p.api.call("POST", `/v1/runs/${opened.body.run_id}/continue`, {
+        token,
+        json: { ...facts, previous_entry_id: opened.body.entry_id, session_id: `c-${mode}`, proxy_version: "0.7.1" },
+      });
+      assert.equal(cont.status, 201, JSON.stringify(cont.body));
+    }
+  } finally {
+    p.stop();
+  }
 });
 
 test("an empty minimum is no limit", () => {
