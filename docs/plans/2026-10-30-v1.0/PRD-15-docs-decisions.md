@@ -1082,3 +1082,14 @@ open; both go in the next PRD-15 slice that touches these files, not a separate 
   the AGENTS.md map, ARCHITECTURE and RECORD-FORMAT numbers (PRD-02 core merge), the
   HARNESS-ONBOARDING pointer (PRD-12's skill rewrite), and the third slice.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-08 slice 1 (merge d10feef7)
+
+- **RECORD-FORMAT's `check --json` section can start.** The S6 shape for the integrity ids is on
+  integration (`crates/goalcup-verify/src/report.rs`, field list in the PRD-08 note); the later ids
+  are in the report as `skip` "not built in this slice" and the page marks them so. `usage` waits for
+  PRD-09.
+- **The worked-example "made by" line** may name `goalcup-verify dump`: it uses
+  `goalcup_format::dump::Dumper` and its output on the worked example equals the committed file as
+  JSON (judge 12:35Z box).
+- No locked ledger item is touched and no owner question comes from this slice.
