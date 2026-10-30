@@ -1338,3 +1338,14 @@ to another file are made by that file's owner.
 - `native::fsx` uses `pipeline::cursors::Fid` as its file identity, so a change to `Fid` touches the
   native reader too.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-11 slice 2 (merge b9fa50f8)
+
+- **S3 is on integration; `watchdog::run` builds against it now.** Keep `plan.lock` alive for the
+  whole watchdog run and drop it last (`LaunchPlan` is not `Clone`; it owns the lock). Run each
+  `before` and `after` entry as `plan.program` followed by the entry's arguments. Call
+  `finish_env(port, run_ca, bundle)` after the CA files exist; it also fills the connector's `ca_env`
+  variables. `hosts`, `native`, `mask_rules` and `notes` are `Serialize` for the start facts. A plan
+  with `refusal` set never reaches the watchdog (PRD-10 stops first).
+- Until PRD-11's hosts slice merges, `hosts.decide` answers `NotListed` for every name and
+  `ca_subtrees` is empty: a watchdog test that needs a decrypted request waits for that merge.

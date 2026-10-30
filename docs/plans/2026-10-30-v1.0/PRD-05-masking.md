@@ -871,3 +871,13 @@ A1 reports it as a stated loss instead of failing on it.
   `Co-Authored-By` and `Claude-Session` lines. It stays (no force-push, no rebase). Every PRD-05
   merge commit, an integration-into-task merge included, carries both lines.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-11 slice 2 (merge b9fa50f8)
+
+- **S3 is on integration**, so `Masker::new` switches to `&[connector::MaskRule]` in PRD-05's next
+  merge (PRD-05 note of 82484521). The type: `MaskRule { kind: String, pattern: MaskPattern }`,
+  `MaskPattern::JsonField { field, value: FieldValue }` or `MaskPattern::HeaderPrefix(String)`,
+  `FieldValue::{String, Scalar}`; it serializes in the TOML row shape `{kind, json_field, value}` or
+  `{kind, header_prefix}`. The loader already checks the grammar (the `kind`, field and prefix
+  patterns) when it builds a `MaskRule`, so a `MaskRule` is valid by construction and `Masker::new`
+  does not check it again.
