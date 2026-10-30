@@ -761,3 +761,17 @@ PRDs they touch and the code. Where two fixes disagree, the ledger and the later
   `python3.11` (`sudo dnf install -y -q python3.11`) when it is missing. The pad lane ran it green in
   build boxes (12 tests at 62bd0ed3). `check.py` and `table` stay 3.9-clean.
 - `gate fast` passed on the merge: 76 s at c7649890.
+
+### 2026-10-30, replan after PRD-05 phase 0 slice (merge 82484521)
+
+- **The release smoke cannot see `test-hooks` yet** (PRD-05 review A3). At 82484521 no
+  `GOALCUP_TEST_` text is in `crates/goalcup/src`; the only `test-hooks` item is
+  `Masker::passthrough_for_tests()`, which carries no such text. A release build with the feature on
+  would pass the grep today. It is caught once PRD-02's first `GOALCUP_TEST_` read is merged, since
+  every build with the feature then carries that text. Nothing outside tests calls the passthrough.
+  The release smoke checks this before trusting a clean grep: at least one `GOALCUP_TEST_` string in
+  a `--features test-hooks` build. List `Masker::passthrough_for_tests` beside
+  `Recorder::for_tests` as a test-only item.
+- **Mask tests so far:** 367 lines (179 inline in `src/mask/mod.rs`, 188 in `tests/mask_rules.rs`)
+  of PRD-05's 2,000. PRD-05's core slice cuts about 105 of them (PRD-05 note).
+- No locked ledger item is touched and no owner question comes from this slice.

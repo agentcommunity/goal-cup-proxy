@@ -812,3 +812,27 @@ PRD-01, PRD-05, PRD-08, PRD-12, PRD-16 and the old code.
 | G3-09p | Applied. `codex.rs:163-166` (checked in the code) |
 | G3-09q | Applied. `usage::Calls::new()`; the sink reads the `start` EVENT from the pushed records; no `Start` type in F1 |
 | B10 sweep (30 Oct) | Applied. One test file, `usage_run1.rs` (about 200 lines), as PRD-14 section 3 says; it gains the point 4 cases (no body text in output, VR2 panic). Shapes, joins, SQLite repair and output are proved by PRD-12 C5 on real runs and the watcher's count; `usage_shapes.rs`, `usage_join.rs`, `usage_sqlite.rs` and `usage_out.rs` are cut. Builder note 1 logs the fixture numbers once instead of pinning them |
+
+## Amendments
+
+### 2026-10-30, replan after PRD-07 slice 3 (merge 323b1a0f)
+
+- **`delete-test-runs.sh` now cleans the usage buckets** against S7's final shape, before the job
+  exists. It empties `usage/test/` in `goalcup-usage` and `usage/test-staging/` in
+  `goalcup-usage-staging`, and with `--older-than` keeps only keys of the form
+  `usage/{event}/{run}/...` whose `{run}` is a deleted test run. So the job must:
+  - write every object under `usage/{event}/{run}/` exactly as S7 says (`{entry}.json`,
+    `{entry}.calls.jsonl`, `run.json`), with `{event}` the run's own event id (`test` or
+    `test-staging` for organizer test runs, the Worker's `TEST_EVENT_ID` values) and `{run}` the run id
+    as the database holds it;
+  - write a production run only to `goalcup-usage` and a staging run only to `goalcup-usage-staging`.
+    The script looks for `usage/test/` in the first and `usage/test-staging/` in the second only, so a
+    production test run's usage in the staging bucket would never be cleaned. With
+    `GOALCUP_USAGE_BUCKET` defaulting to the staging bucket in the build, the job reads staging runs
+    only.
+  A slice that changes the S7 layout posts a seam line and asks PRD-07 to change the script in the same
+  merge.
+- **A usage bucket the cleanup token cannot reach is skipped**, not an error (`403`, or `404` for a
+  missing bucket). The owner's token for the script needs read and write on each usage bucket that
+  exists; PRD-15 writes that into OPERATING with the usage job section.
+- No locked ledger item is touched and no owner question comes from this slice.

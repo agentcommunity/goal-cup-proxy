@@ -670,3 +670,15 @@ ledger wins over every row here.
 | P04-23 | Applied. 180 s is about 9 GB at PRD-05's 50 MB/s target, about 5 GB at 30 MB/s |
 | P04-24, L2-18 | Applied. The periodic interval is a cadence for upload and storage cost, not a cap; it never skips the seal copy and restarts at each boot |
 | X2-11 | Partly. Moving the review sections into a new `REVIEW-HISTORY.md` is not done here: this pass may edit only this file, and many writers of one new file would race. Instead "Review answers" now says it is history and that the body and these answers win. Every ruling still binding is in the body. The move may run once, after every PRD's alignment pass, by one agent |
+
+## Amendments
+
+### 2026-10-30, replan after PRD-05 phase 0 slice (merge 82484521)
+
+- **Native OPEN meta under the S2 stub.** The stub's `mask_meta` stars every string leaf, so a native
+  stream's `meta.path` (`<row name>:<path>`, the stream ID, point 5) is written as stars of the same
+  length until PRD-05's core slice merges. PRD-04 keeps its own clear path-to-stream map in memory and
+  never reads a path back from written meta (PRD-02 note). Native tests that assert a written path use
+  `Masker::passthrough_for_tests()` (feature `test-hooks`). An entry built on the stub cannot be
+  rebuilt by native path; that is the stub, not a defect.
+- No locked ledger item is touched and no owner question comes from this slice.
