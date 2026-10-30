@@ -17,8 +17,10 @@ import re
 import secrets
 import signal
 import stat
+import shutil
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 
@@ -220,7 +222,7 @@ class Run:
         self.box = None
         self.name = "pad-" + secrets.token_hex(3)
         self.lines = []
-        self.notes = []
+        self.tmp = tempfile.mkdtemp(prefix="pad-")  # box scripts; never in the run folder
         self.version = None
         self.setup_failed = False
         self.t0 = time.time()
@@ -275,6 +277,7 @@ class Run:
                 self.step_cleanup(LIMITS["cleanup"] * 60)
             except Exception as e:
                 self.line("cleanup", "error", "%s; box %s may be left" % (type(e).__name__, self.name))
+            shutil.rmtree(self.tmp, ignore_errors=True)
         return self.finish()
 
     def step_setup(self, limit):
@@ -324,7 +327,7 @@ class Run:
             cmd = "node -p \"require('$(npm root -g)/%s/package.json').version\"" % m.group(1)
         if not cmd or not want:
             return "%s: version not checked (no version or version_cmd in the harness file)" % self.s["harness"]
-        script = os.path.join(self.dir, "version.sh")
+        script = os.path.join(self.tmp, "version.sh")
         with open(script, "w") as f:
             f.write("#!/bin/bash\nv=$(%s 2>/dev/null | head -n 5)\necho \"PADVER=$v\"\n" % cmd)
         limit = max(1, deadline - time.time())
@@ -352,7 +355,7 @@ class Run:
         """Section 3.2: wipe check, box removed, then a list to confirm. Never changes a result."""
         saw = []
         if self.box:
-            script = os.path.join(self.dir, "cleanup.sh")
+            script = os.path.join(self.tmp, "cleanup.sh")
             with open(script, "w") as f:
                 f.write("#!/bin/bash\nif [ -n \"$(ls -A ~/.pad-keys 2>/dev/null)\" ]; then echo PADKEYS=left; fi\n"
                         "rm -rf ~/.pad-keys\n[ -e ~/.pad-keys ] && echo PADKEYS=stuck\nexit 0\n")
