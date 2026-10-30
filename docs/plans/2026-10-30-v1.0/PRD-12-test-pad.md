@@ -1428,3 +1428,22 @@ taken; "rejected" says why. Fixes for other files are made by those files' owner
 - `release.sh` and `packaging/README.md` now name `scripts/pad/table --release-check <commit>` as the
   check after `gate full`; `tag` does not run it yet (PRD-14's next release slice). PRD-12's nit B3
   still decides whether that call is right from any checkout.
+
+### 2026-10-30, replan after PRD-08 slice 1 (merge d10feef7)
+
+`goalcup-verify` is on integration with `check --json` (S6) for the integrity checks. What
+`check.py` reads, as merged (PRD-08 note):
+
+- A `recorder_down` gap's cause and length: the `inv6` check's `facts.gaps`, a list of `{cause,
+  start, end, ms}` (`start`, `end` UTC text). `counts.gaps` is a map from reason name to count.
+  `check.py`'s fallback to `counts.gaps` keys is only for older output.
+- `keep`: each S6 entry carries `keep` from the start event, so C4 can read it from the record
+  instead of the settings.
+- `--local`, `--known` and `--harness-files` are accepted and read nothing yet; the checks that need
+  them, and `history_complete`, `wire_keeps_up`, `threads_match`, `subagents_present` and the
+  `server_*` ids, are `skip` "not built in this slice", so C1 and C2 stay INCONCLUSIVE and C3 waits
+  on `secrets --json` `masks`.
+- `--live`: null mode is read from `status.json` `off.since` only; a live entry with nothing
+  durable yet exits 1 with `inv1` `skip`; a part file that cannot be opened exits 3.
+- Selftest's K2 still waits on PRD-08's run 1 shape builder (next slice, with U1).
+- No locked ledger item is touched and no owner question comes from this slice.
