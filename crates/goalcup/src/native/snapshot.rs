@@ -14,7 +14,7 @@ use serde_json::json;
 use super::fsx::{Kind, Stat};
 use super::tail::{self, Closed, Stop};
 use super::{Noted, elapsed, pattern};
-use crate::pipeline::{EndReason, GapReason, Mono, OpenFlags, Recorder, StreamHandle, StreamKind};
+use crate::pipeline::{EndReason, Mono, OpenFlags, Recorder, StreamHandle, StreamKind};
 use EndReason::{Complete, CutAtSeal, SourceChanged};
 
 /// A changed set is due `base` after its last copy (the first after the reader starts), or
@@ -37,6 +37,15 @@ struct Set {
     copied: Files,
     at: Mono,
     taken: bool,
+    /// None of its files was in the last walk, and no folder that held one could not be listed.
+    gone: bool,
+}
+
+impl Set {
+    /// Gone after a copy of its last state: the record holds it, so a seal copy has nothing to add.
+    fn held(&self) -> bool {
+        self.gone && self.files == self.copied
+    }
 }
 
 /// One file of a copy.
@@ -98,17 +107,22 @@ impl Sets {
     }
 
     /// Ends a walk: a set seen in it takes its files from it, so a file that appeared or vanished
-    /// is a change; a set not seen keeps its last files.
-    pub fn walked(&mut self) {
-        for s in self.sets.values_mut().filter(|s| !s.next.is_empty()) {
-            s.files = std::mem::take(&mut s.next);
+    /// is a change; a set not seen keeps its last files, and is gone unless one of the walk's
+    /// `unlisted` folders held a file of it.
+    pub fn walked(&mut self, unlisted: &[PathBuf]) {
+        for ((_, root, _), s) in &mut self.sets {
+            let held = |r: &PathBuf| unlisted.iter().any(|d| root.join(r).starts_with(d));
+            s.gone = s.next.is_empty() && !s.files.keys().any(held);
+            if !s.next.is_empty() {
+                s.files = std::mem::take(&mut s.next);
+            }
         }
     }
 
     /// Section 8 step 3: from now on `read` lets the copy in progress finish, then copies every
-    /// taken set once, changed or not.
+    /// taken set once, changed or not, except one gone whose last state is already copied.
     pub fn seal(&mut self, harness_exited: bool) {
-        let taken = self.sets.iter().filter(|(_, s)| s.taken);
+        let taken = self.sets.iter().filter(|(_, s)| s.taken && !s.held());
         self.seal = Some((taken.map(|(k, _)| k.clone()).collect(), harness_exited, 0));
     }
 
@@ -148,13 +162,12 @@ impl Sets {
             .unwrap_or_default();
         loop {
             if let Some(Copying { parts, began, .. }) = self.copy.take() {
-                for Part { st, off, mut h, .. } in parts {
+                for Part { st, off, h, .. } in parts {
                     let n = st.size.saturating_sub(off);
+                    let n = tail::end_stream(rec, h, began, n, CutAtSeal, true);
                     if n > 0 {
-                        h.gap(GapReason::CutAtSeal, began, Some(n), None);
                         (c.cut_files, c.cut_bytes) = (c.cut_files + 1, c.cut_bytes + n);
                     }
-                    h.end(rec.now(), CutAtSeal, None);
                 }
             }
             let Some(key) = todo.pop() else { break };
@@ -247,25 +260,16 @@ impl Sets {
         } else {
             SourceChanged
         };
-        for (mut p, now) in parts.into_iter().zip(&now) {
+        for (p, now) in parts.into_iter().zip(&now) {
             let path = pattern::path_id(&key.0, &p.rel);
             if retry && moved((&p, now)) && !p.unreadable {
                 rec.event(json!({"ev": "note", "what": "snapshot_unstable", "path": path}));
             }
+            let gone = now
+                .as_ref()
+                .is_err_and(|e| e.kind() == io::ErrorKind::NotFound);
             let n = p.st.size.saturating_sub(p.off);
-            if n > 0 {
-                let gone = now
-                    .as_ref()
-                    .is_err_and(|e| e.kind() == io::ErrorKind::NotFound);
-                let tail = json!({"unread_at_least": n});
-                p.h.gap(
-                    GapReason::SourceChanged,
-                    began,
-                    gone.then_some(n),
-                    Some(tail),
-                );
-            }
-            p.h.end(rec.now(), reason, None);
+            tail::end_stream(rec, p.h, began, n, reason, gone);
         }
         if any && !retry {
             self.sets.get_mut(&key)?.files = fresh;

@@ -164,7 +164,7 @@ impl Reader {
             self.tail
                 .settle(&self.rec, id, &row.root, &f.rel, f.stat, snap);
         }
-        self.sets.walked();
+        self.sets.walked(&walked.unlisted);
         self.tail.sweep(&self.rec, &walked.unlisted);
         let requests = self.rec.counts().model_requests();
         self.missing

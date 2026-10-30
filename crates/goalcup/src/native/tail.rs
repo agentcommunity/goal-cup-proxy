@@ -298,14 +298,27 @@ fn begin_copy(rec: &Recorder, id: &str, e: &mut Entry) {
 /// Ends a stream; seen bytes left unread get a GAP first, `exact` at the seal or for a gone
 /// snapshot, a lower bound when the file changed (sections 4 and 8). A torn snapshot copy never
 /// comes here (`end_torn`). Returns the unread.
-fn end(rec: &Recorder, mut h: StreamHandle, e: &Entry, reason: EndReason, exact: bool) -> u64 {
+fn end(rec: &Recorder, h: StreamHandle, e: &Entry, reason: EndReason, exact: bool) -> u64 {
     let n = want(e).saturating_sub(e.off);
+    end_stream(rec, h, e.seen_at, n, reason, exact)
+}
+
+/// The one rule that names a stream cut short (also for a database copy): `n` seen bytes unread
+/// since `since` get a GAP first, then the END. At the seal the loss is exact; else it is
+/// `source_changed` with `unread_at_least`, and `lost` exact only if `exact`. Returns `n`.
+pub(crate) fn end_stream(
+    rec: &Recorder,
+    mut h: StreamHandle,
+    since: Mono,
+    n: u64,
+    reason: EndReason,
+    exact: bool,
+) -> u64 {
     if n > 0 && reason == CutAtSeal {
-        h.gap(GapReason::CutAtSeal, e.seen_at, Some(n), None);
+        h.gap(GapReason::CutAtSeal, since, Some(n), None);
     } else if n > 0 {
         let tail = Some(json!({"unread_at_least": n}));
-        let lost = exact.then_some(n);
-        h.gap(GapReason::SourceChanged, e.seen_at, lost, tail);
+        h.gap(GapReason::SourceChanged, since, exact.then_some(n), tail);
     }
     h.end(rec.now(), reason, None);
     n

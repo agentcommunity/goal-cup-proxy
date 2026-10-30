@@ -4,22 +4,8 @@
 //! `real(dir)`, the pipeline with masking and the writer in a temp entry folder, comes once
 //! PRD-02's `Recorder::real_for_tests(dir, masker)` lands.
 
-use std::fs::OpenOptions;
-use std::io::Write;
-use std::path::Path;
-
-use goalcup::pipeline::{Call, Calls, EndReason, GapReason, Sid, StreamKind};
+use goalcup::pipeline::{Call, Calls, EndReason, Sid, StreamKind};
 use serde_json::Value;
-
-/// Appends `b` to the file at `p`, making it if it is not there.
-pub fn append(p: &Path, b: &[u8]) {
-    let mut f = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(p)
-        .unwrap();
-    f.write_all(b).unwrap();
-}
 
 /// What `f` picks from each call, in call order.
 pub fn pick<T>(c: &Calls, f: impl FnMut(Call) -> Option<T>) -> Vec<T> {
@@ -60,28 +46,6 @@ pub fn ends(c: &Calls) -> Vec<(Sid, EndReason, u64, Option<Value>)> {
 pub fn events(c: &Calls) -> Vec<Value> {
     pick(c, |call| match call {
         Call::Event(v) => Some(v),
-        _ => None,
-    })
-}
-
-/// The EVENTs whose `what` is `what`, in order.
-pub fn notes(c: &Calls, what: &str) -> Vec<Value> {
-    events(c)
-        .into_iter()
-        .filter(|v| v["what"] == what)
-        .collect()
-}
-
-/// How stream `sid` ended.
-pub fn end_of(c: &Calls, sid: Sid) -> Option<EndReason> {
-    let mut e = ends(c).into_iter();
-    e.find_map(|(s, r, ..)| (s == sid).then_some(r))
-}
-
-/// Each GAP as (sid, reason, lost, tail), in order.
-pub fn gap_rows(c: &Calls) -> Vec<(Sid, GapReason, Option<u64>, Option<Value>)> {
-    pick(c, |call| match call {
-        Call::Gap(sid, r, .., lost, t) => Some((sid, r, lost, t)),
         _ => None,
     })
 }

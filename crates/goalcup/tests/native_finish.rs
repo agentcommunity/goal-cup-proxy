@@ -4,15 +4,17 @@
 //! database set's too), and a row that finds nothing is named once.
 
 mod common;
+mod native_common;
 
 use std::fs;
 use std::path::Path;
 use std::time::{Duration, Instant, SystemTime};
 
-use common::recorder::{append, data_of, end_of, gaps, notes, opens};
+use common::recorder::{data_of, gaps, opens};
 use goalcup::connector::{Form, NativeSource, NativeSources};
 use goalcup::native::{self, Missing};
 use goalcup::pipeline::{Call, Calls, EndReason, GapReason, Mono, Recorder};
+use native_common::{append, end_of, notes};
 use serde_json::Value;
 
 fn sources(rows: &[(&str, &Path, &str, bool)]) -> NativeSources {

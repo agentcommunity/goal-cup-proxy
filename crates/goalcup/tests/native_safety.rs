@@ -3,6 +3,7 @@
 //! root never reaches a path, and `src/native/` names no harness and holds no exclusion list.
 
 mod common;
+mod native_common;
 
 use std::ffi::{OsStr, OsString};
 use std::fs;
@@ -11,12 +12,12 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::time::Duration;
 
-use common::recorder::notes;
 use goalcup::connector::{self, builtin::CONNECTORS};
 use goalcup::native::fsx::{Dir, Kind, file_stat};
 use goalcup::native::pattern::{parse, path_id};
 use goalcup::native::walk::{Row, Walker};
 use goalcup::pipeline::Recorder;
+use native_common::notes;
 
 fn n(s: &str) -> &OsStr {
     OsStr::new(s)

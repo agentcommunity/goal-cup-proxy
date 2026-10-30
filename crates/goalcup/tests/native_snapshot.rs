@@ -4,19 +4,21 @@
 //! harness still ran, and a seal cut by its guard cuts every file of the set.
 
 mod common;
+mod native_common;
 
 use std::fs;
 use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use common::recorder::{append, data_of, end_of, gap_rows, gaps, notes, opens};
+use common::recorder::{data_of, gaps, opens};
 use goalcup::connector::{Form, NativeSource, NativeSources};
 use goalcup::native;
 use goalcup::native::fsx::Dir;
 use goalcup::native::snapshot::{Interval, Sets};
 use goalcup::native::tail::{Stop, Tail};
 use goalcup::pipeline::{Calls, Cursors, EndReason, GapReason, Recorder};
+use native_common::{append, end_of, gap_rows, notes};
 use serde_json::{Value, json};
 
 const MS: Duration = Duration::from_millis(1);
@@ -32,7 +34,7 @@ fn walk(sets: &mut Sets, dir: &Path, since: SystemTime) {
         let st = root.stat_at(&name).unwrap();
         sets.see("t", dir, Path::new(&name), st, tail.taken(&st));
     }
-    sets.walked();
+    sets.walked(&[]);
 }
 
 /// Each copy as its `set` and its streams (sid, meta), in order of first OPEN.
@@ -304,4 +306,41 @@ fn a_set_file_lost_during_a_copy_is_named_by_a_gap_and_the_copy_still_ends() {
         assert_eq!(end_of(&calls, *sid), Some(EndReason::Complete));
     }
     assert_eq!(notes(&calls, "snapshot_unstable")[0]["path"], "t:x.db-wal");
+}
+
+#[test]
+fn a_set_gone_after_a_whole_copy_gets_no_seal_copy_unless_its_folder_could_not_be_listed() {
+    let dir = tempfile::tempdir().unwrap();
+    let d = dir.path();
+    for name in ["x.db", "x.db-wal"] {
+        fs::write(d.join(name), b"0123456789").unwrap();
+    }
+    let (rec, calls) = Recorder::for_tests(1 << 30);
+    let mut sets = Sets::new(Interval::default());
+    walk(&mut sets, d, UNIX_EPOCH);
+    sets.read(&rec, u64::MAX);
+    assert_eq!(copies(&calls).len(), 1);
+    // A walk that could not list the folder says nothing: the files are still there, so the seal
+    // copies them again.
+    sets.walked(&[d.to_path_buf()]);
+    sets.seal(true);
+    sets.read(&rec, u64::MAX);
+    assert_eq!(sets.close(&rec).streams, 2);
+    assert_eq!(copies(&calls).len(), 2);
+    // Gone after that copy: the record holds the set, so the seal opens nothing and names no loss.
+    let (rec, calls) = Recorder::for_tests(1 << 30);
+    let mut sets = Sets::new(Interval::default());
+    walk(&mut sets, d, UNIX_EPOCH);
+    sets.read(&rec, u64::MAX);
+    for name in ["x.db", "x.db-wal"] {
+        fs::remove_file(d.join(name)).unwrap();
+    }
+    walk(&mut sets, d, UNIX_EPOCH);
+    sets.seal(true);
+    sets.read(&rec, u64::MAX);
+    assert_eq!(sets.close(&rec).streams, 0);
+    let c = copies(&calls);
+    assert_eq!(c.len(), 1);
+    whole(&calls, &c[0].1, EndReason::Complete);
+    assert!(gaps(&calls).is_empty());
 }

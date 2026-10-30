@@ -2,6 +2,7 @@
 //! GAP, the run-start rule, snapshots and the seal's close, driven with real files.
 
 mod common;
+mod native_common;
 
 use std::ffi::OsStr;
 use std::fs::{self, File, OpenOptions};
@@ -9,10 +10,11 @@ use std::io::Write;
 use std::path::Path;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use common::recorder::{append, data_of, ends, events, gap_rows, gaps, opens};
+use common::recorder::{data_of, ends, events, gaps, opens};
 use goalcup::native::fsx::{Dir, Kind, Stat};
 use goalcup::native::tail::{Stop, Tail};
 use goalcup::pipeline::{Calls, Cursors, EndReason, GapReason, Recorder, StreamKind};
+use native_common::{append, gap_rows};
 use serde_json::{Value, json};
 
 struct T {
