@@ -79,10 +79,17 @@ fn end_of(calls: &Calls, sid: Sid) -> (EndReason, Value) {
         .all()
         .into_iter()
         .find_map(|c| match c {
-            Call::End(s, _, reason, _, tail) if s == sid => Some((reason, tail.unwrap_or_default())),
+            Call::End(s, _, reason, _, tail) if s == sid => {
+                Some((reason, tail.unwrap_or_default()))
+            }
             _ => None,
         })
         .expect("the stream ended")
+}
+
+/// The only GAP.
+fn one_gap(calls: &Calls) -> [Call; 1] {
+    gaps(calls).try_into().expect("one GAP")
 }
 
 fn chunked(body: &[u8]) -> Vec<u8> {
@@ -99,7 +106,9 @@ fn chunked(body: &[u8]) -> Vec<u8> {
 /// A `POST` with a small body, answered with `wire` under `coding`, chunked or by length.
 fn coded(coding: &str, wire: &[u8], chunk: bool) -> (Vec<u8>, Vec<u8>) {
     let up = b"POST /v1/messages HTTP/1.1\r\nHost: api.example.com\r\nContent-Length: 2\r\n\r\n{}";
-    let mut down = format!("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Encoding: {coding}\r\n");
+    let mut down = format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Encoding: {coding}\r\n"
+    );
     let body = if chunk {
         down += "Transfer-Encoding: chunked\r\n\r\n";
         chunked(wire)
@@ -133,12 +142,25 @@ fn each_coding_decodes_to_the_plaintext() {
         assert_eq!(req_meta["method"], "POST");
         let [(resp, paired, meta)] = opens(&calls, StreamKind::HttpResp).try_into().unwrap();
         assert_eq!(paired, req);
-        assert_eq!((&meta["coding"], &meta["decoded"]), (&json!([coding]), &json!(true)));
-        assert!(data_of(&calls, resp) == plain, "{coding} decodes to the plaintext");
+        assert_eq!(
+            (&meta["coding"], &meta["decoded"]),
+            (&json!([coding]), &json!(true))
+        );
+        assert!(
+            data_of(&calls, resp) == plain,
+            "{coding} decodes to the plaintext"
+        );
         // The END tail counts body bytes on the wire, chunk framing included.
-        let on_wire = if chunk { chunked(&wire).len() } else { wire.len() };
+        let on_wire = if chunk {
+            chunked(&wire).len()
+        } else {
+            wire.len()
+        };
         let (reason, tail) = end_of(&calls, resp);
-        assert_eq!((reason, &tail["wire"]), (EndReason::Complete, &json!(on_wire)));
+        assert_eq!(
+            (reason, &tail["wire"]),
+            (EndReason::Complete, &json!(on_wire))
+        );
     }
 }
 
@@ -147,19 +169,29 @@ fn an_unknown_coding_writes_no_body_byte() {
     let (up, down) = coded("gzip, foo", b"not decodable by us", true);
     let calls = exchange(ROOM, &up, &down, 0);
     let [(resp, _, meta)] = opens(&calls, StreamKind::HttpResp).try_into().unwrap();
-    assert_eq!((&meta["coding"], &meta["decoded"]), (&Value::Null, &json!(false)));
+    assert_eq!(
+        (&meta["coding"], &meta["decoded"]),
+        (&Value::Null, &json!(false))
+    );
     assert!(data_of(&calls, resp).is_empty());
-    let [Call::Gap(sid, reason, _, _, _, lost, tail)] = gaps(&calls).try_into().unwrap() else {
+    let [Call::Gap(sid, reason, _, _, _, lost, tail)] = one_gap(&calls) else {
         panic!("one GAP");
     };
-    assert_eq!((sid, reason, lost), (resp, GapReason::UnsupportedEncoding, None));
+    assert_eq!(
+        (sid, reason, lost),
+        (resp, GapReason::UnsupportedEncoding, None)
+    );
     assert_eq!(tail, Some(json!({"codings": ["gzip", "foo"], "wire": 19})));
 }
 
 #[test]
 fn chunked_trailers_reach_the_end_tail() {
     let body = b"5\r\nhello\r\n0\r\nX-Checksum: abc\r\nx-n:  1 \r\n\r\n";
-    let down = [&b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n"[..], body].concat();
+    let down = [
+        &b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n"[..],
+        body,
+    ]
+    .concat();
     let calls = exchange(ROOM, b"GET /t HTTP/1.1\r\n\r\n", &down, 1);
     let [(resp, _, _)] = opens(&calls, StreamKind::HttpResp).try_into().unwrap();
     assert_eq!(data_of(&calls, resp), b"hello");
@@ -179,10 +211,17 @@ fn pipelined_requests_pair_their_responses() {
     let resps = opens(&calls, StreamKind::HttpResp);
     let paths: Vec<_> = reqs.iter().map(|(_, _, m)| m["path"].clone()).collect();
     assert_eq!(paths, [json!("/a"), json!("/b"), json!("/c")]);
-    let pairs: Vec<_> = resps.iter().map(|(_, req, m)| (*req, m["status"].clone())).collect();
+    let pairs: Vec<_> = resps
+        .iter()
+        .map(|(_, req, m)| (*req, m["status"].clone()))
+        .collect();
     assert_eq!(
         pairs,
-        [(reqs[0].0, json!(200)), (reqs[1].0, json!(201)), (reqs[2].0, json!(204))]
+        [
+            (reqs[0].0, json!(200)),
+            (reqs[1].0, json!(201)),
+            (reqs[2].0, json!(204))
+        ]
     );
     assert_eq!(data_of(&calls, resps[1].0), b"BB");
     let notes: Vec<_> = calls
@@ -210,7 +249,10 @@ fn head_and_304_have_no_body() {
     assert_eq!(resps.len(), 3);
     for (sid, _, _) in &resps[..2] {
         assert!(data_of(&calls, *sid).is_empty());
-        assert_eq!(end_of(&calls, *sid), (EndReason::Complete, json!({"wire": 0})));
+        assert_eq!(
+            end_of(&calls, *sid),
+            (EndReason::Complete, json!({"wire": 0}))
+        );
     }
     assert_eq!(data_of(&calls, resps[2].0), b"ok");
     assert!(gaps(&calls).is_empty());
@@ -236,11 +278,15 @@ fn a_window_over_room_is_not_decoded() {
     let calls = exchange(32 * 1024, &up, &down, 0);
     let [(resp, _, _)] = opens(&calls, StreamKind::HttpResp).try_into().unwrap();
     assert!(data_of(&calls, resp).is_empty());
-    let [Call::Gap(sid, reason, _, _, _, lost, Some(tail))] = gaps(&calls).try_into().unwrap() else {
+    let [Call::Gap(sid, reason, _, _, _, lost, Some(tail))] = one_gap(&calls)
+    else {
         panic!("one GAP with a tail");
     };
     assert_eq!((sid, reason, lost), (resp, GapReason::MemoryGuard, None));
-    assert_eq!((&tail["guard"], &tail["wire"]), (&json!("decoder_window"), &json!(BR_FLUSHED.len())));
+    assert_eq!(
+        (&tail["guard"], &tail["wire"]),
+        (&json!("decoder_window"), &json!(BR_FLUSHED.len()))
+    );
     assert!(tail["limit"].as_u64().unwrap() <= 32 * 1024);
     assert_eq!(end_of(&calls, resp).0, EndReason::Complete);
 }
@@ -258,11 +304,15 @@ fn a_head_past_64k_is_named_and_parsing_goes_on() {
     let (big, _, meta) = &reqs[0];
     let stored = meta["headers"].as_array().unwrap().len();
     assert!(stored > 0 && stored < 2000);
-    let [Call::Gap(sid, reason, _, _, _, lost, Some(tail))] = gaps(&calls).try_into().unwrap() else {
+    let [Call::Gap(sid, reason, _, _, _, lost, Some(tail))] = one_gap(&calls)
+    else {
         panic!("one GAP with a tail");
     };
     assert_eq!((sid, reason, lost), (*big, GapReason::MemoryGuard, None));
-    assert_eq!((&tail["guard"], &tail["limit"]), (&json!("http_head"), &json!(65536)));
+    assert_eq!(
+        (&tail["guard"], &tail["limit"]),
+        (&json!("http_head"), &json!(65536))
+    );
     assert!(tail["head"].as_u64().unwrap() > 60_000);
     assert_eq!(data_of(&calls, *big), b"hello");
     assert_eq!(end_of(&calls, *big).0, EndReason::Complete);
@@ -294,7 +344,10 @@ fn deflate(c: &mut Compress, msg: &[u8]) -> Vec<u8> {
 
 #[test]
 fn a_101_hands_the_copied_frames_to_the_websocket_parser() {
-    let (mut cup, mut cdown) = (Compress::new(Compression::default(), false), Compress::new(Compression::default(), false));
+    let (mut cup, mut cdown) = (
+        Compress::new(Compression::default(), false),
+        Compress::new(Compression::default(), false),
+    );
     let key = Some([1, 2, 3, 4]);
     // The RFC 6455 section 1.3 example key and its accept value.
     let mut up = b"GET /v1/responses?session=s1 HTTP/1.1\r\nHost: api.example.com\r\nUpgrade: websocket\r\n\
@@ -311,7 +364,12 @@ fn a_101_hands_the_copied_frames_to_the_websocket_parser() {
     let mut p = Http1::new(&rec, CONN);
     feed(&mut p, Dir::Up, &up, 0);
     feed(&mut p, Dir::Down, &down, 1);
-    feed(&mut p, Dir::Up, &frame(true, &deflate(&mut cup, b"second up"), key), 1);
+    feed(
+        &mut p,
+        Dir::Up,
+        &frame(true, &deflate(&mut cup, b"second up"), key),
+        1,
+    );
     p.end(Mono::now(), EndReason::Complete, 0);
 
     assert!(gaps(&calls).is_empty());
@@ -320,7 +378,10 @@ fn a_101_hands_the_copied_frames_to_the_websocket_parser() {
     assert!(opens(&calls, StreamKind::HttpResp).is_empty());
     let [(ws_up, up_req, meta)] = opens(&calls, StreamKind::WsUp).try_into().unwrap();
     let [(ws_down, down_req, _)] = opens(&calls, StreamKind::WsDown).try_into().unwrap();
-    assert_eq!((up_req, down_req, &meta["deflate"]), (req, req, &json!(true)));
+    assert_eq!(
+        (up_req, down_req, &meta["deflate"]),
+        (req, req, &json!(true))
+    );
     let messages = |sid: Sid| -> Vec<Vec<u8>> {
         calls
             .all()
@@ -331,7 +392,10 @@ fn a_101_hands_the_copied_frames_to_the_websocket_parser() {
             })
             .collect()
     };
-    assert_eq!(messages(ws_up), [b"first up".to_vec(), b"second up".to_vec()]);
+    assert_eq!(
+        messages(ws_up),
+        [b"first up".to_vec(), b"second up".to_vec()]
+    );
     assert_eq!(messages(ws_down), [b"down one".to_vec()]);
 }
 
@@ -345,14 +409,17 @@ fn a_framing_fault_stops_parsing_for_the_connection() {
     assert_eq!(p.feed(Dir::Up, t, b"zz\r\n"), Err(GapReason::DecodeFailed));
     let [(req, _, _)] = opens(&calls, StreamKind::HttpReq).try_into().unwrap();
     assert_eq!(data_of(&calls, req), b"abc");
-    let [Call::Gap(sid, reason, ..)] = gaps(&calls).try_into().unwrap() else {
+    let [Call::Gap(sid, reason, ..)] = one_gap(&calls) else {
         panic!("one GAP");
     };
     assert_eq!((sid, reason), (req, GapReason::DecodeFailed));
     assert_eq!(end_of(&calls, req).0, EndReason::DecodeError);
     let later = b"GET /later HTTP/1.1\r\n\r\n";
     assert_eq!(p.feed(Dir::Up, t, later), Err(GapReason::DecodeFailed));
-    assert_eq!(p.feed(Dir::Down, t, b"HTTP/1.1 200 OK\r\n\r\n"), Err(GapReason::DecodeFailed));
+    assert_eq!(
+        p.feed(Dir::Down, t, b"HTTP/1.1 200 OK\r\n\r\n"),
+        Err(GapReason::DecodeFailed)
+    );
     p.end(t, EndReason::Complete, 0);
     assert_eq!(opens(&calls, StreamKind::HttpReq).len(), 1);
     assert_eq!(gaps(&calls).len(), 1);

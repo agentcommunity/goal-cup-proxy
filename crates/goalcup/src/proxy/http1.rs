@@ -117,7 +117,8 @@ impl Http1 {
         if let Some(reason) = self.stopped {
             return Err(reason);
         }
-        self.take(dir, t, bytes).map_err(|fault| self.stop(t, fault))
+        self.take(dir, t, bytes)
+            .map_err(|fault| self.stop(t, fault))
     }
 
     /// The connection closed: end open streams (interrupted when inside a message, complete
@@ -146,7 +147,11 @@ impl Http1 {
         }
         if let Some(body) = self.down.body.take() {
             let close = matches!(body.framing, Framing::Close);
-            let reason = if close { reason } else { EndReason::Interrupted };
+            let reason = if close {
+                reason
+            } else {
+                EndReason::Interrupted
+            };
             body.end(t, reason, 0, None);
         }
     }
@@ -187,7 +192,8 @@ impl Http1 {
                 copy.extend_from_slice(bytes);
                 return Ok(());
             }
-            if dir == Dir::Down && self.down.body.is_none() && self.queue.is_empty() && !self.orphan {
+            if dir == Dir::Down && self.down.body.is_none() && self.queue.is_empty() && !self.orphan
+            {
                 if self.early.len() + bytes.len() <= HEAD_LIMIT {
                     self.early.extend_from_slice(bytes);
                     return Ok(());
@@ -300,7 +306,8 @@ impl Http1 {
                 return Err(Fault::Framing);
             };
             let accepted = f.websocket()
-                && f.values("sec-websocket-accept").eq([accept_key(&key).as_str()]);
+                && f.values("sec-websocket-accept")
+                    .eq([accept_key(&key).as_str()]);
             if !accepted {
                 return Err(Fault::Framing);
             }
@@ -549,10 +556,7 @@ impl Head {
         if matches!(line[0], b' ' | b'\t') {
             return Err(Fault::Framing);
         }
-        let colon = line
-            .iter()
-            .position(|&b| b == b':')
-            .ok_or(Fault::Framing)?;
+        let colon = line.iter().position(|&b| b == b':').ok_or(Fault::Framing)?;
         let name = std::str::from_utf8(&line[..colon])
             .ok()
             .filter(|n| is_token(n))
@@ -634,7 +638,10 @@ impl Fields {
             .map(str::trim)
             .filter(|t| !t.is_empty())
             .collect();
-        if transfer.last().is_some_and(|t| t.eq_ignore_ascii_case("chunked")) {
+        if transfer
+            .last()
+            .is_some_and(|t| t.eq_ignore_ascii_case("chunked"))
+        {
             transfer.pop();
         }
         let all: Vec<&str> = self.values("content-encoding").chain(transfer).collect();
@@ -657,7 +664,8 @@ impl Fields {
 }
 
 fn length(digits: &str) -> Option<u64> {
-    let valid = !digits.is_empty() && digits.len() <= 19 && digits.bytes().all(|b| b.is_ascii_digit());
+    let valid =
+        !digits.is_empty() && digits.len() <= 19 && digits.bytes().all(|b| b.is_ascii_digit());
     valid.then(|| digits.parse().ok()).flatten()
 }
 
@@ -672,7 +680,15 @@ fn chunk_size(line: &[u8]) -> Option<u64> {
     if !valid {
         return None;
     }
-    u64::from_str_radix(if significant.is_empty() { "0" } else { significant }, 16).ok()
+    u64::from_str_radix(
+        if significant.is_empty() {
+            "0"
+        } else {
+            significant
+        },
+        16,
+    )
+    .ok()
 }
 
 /// How a body ends on the wire.
@@ -771,7 +787,9 @@ impl Body {
         let sink = &mut self.sink;
         let chunk = match &mut self.framing {
             Framing::Length(left) => {
-                let take = usize::try_from(*left).unwrap_or(usize::MAX).min(input.len());
+                let take = usize::try_from(*left)
+                    .unwrap_or(usize::MAX)
+                    .min(input.len());
                 sink.data(t, &input[..take]);
                 *left -= take as u64;
                 return Ok((take, *left == 0));
@@ -824,7 +842,8 @@ impl Body {
                     pos += n;
                     if done {
                         if let Some((at, n)) = head.over {
-                            let tail = json!({"guard": "http_head", "limit": HEAD_LIMIT, "head": n});
+                            let tail =
+                                json!({"guard": "http_head", "limit": HEAD_LIMIT, "head": n});
                             sink.h.gap(GapReason::MemoryGuard, at, None, Some(tail));
                         }
                         sink.trailers = std::mem::take(&mut head.fields);
@@ -837,7 +856,13 @@ impl Body {
     }
 
     /// Ends the stream: the decoder's GAP if it had one, then the 5a GAP if `stop` is set.
-    fn end(self, t: Mono, reason: EndReason, unsent: u64, stop: Option<(GapReason, Option<Value>)>) {
+    fn end(
+        self,
+        t: Mono,
+        reason: EndReason,
+        unsent: u64,
+        stop: Option<(GapReason, Option<Value>)>,
+    ) {
         let Sink {
             mut h,
             dec,
