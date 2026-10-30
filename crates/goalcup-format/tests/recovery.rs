@@ -149,7 +149,10 @@ fn read_entry(d: &Path) -> Vec<Item> {
         assert!(rd.by_ref().all(|i| i.unwrap().link_ok != Some(false)));
         let raw = zstd::stream::decode_all(fs::File::open(&p).unwrap()).unwrap();
         let t = rd.tail();
-        assert!(!t.open_frame && t.truncated.is_none(), "{p:?} decodes alone");
+        assert!(
+            !t.open_frame && t.truncated.is_none(),
+            "{p:?} decodes alone"
+        );
         assert_eq!(t.raw, raw.len() as u64, "{p:?}");
     }
     items
