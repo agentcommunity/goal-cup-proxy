@@ -11,7 +11,7 @@ import type { Ctx } from "./context.ts";
 import type { DevicePurpose, RunMode } from "./db.ts";
 import { ApiError, closed, json, malformed, notFound, unauthorized } from "./errors.ts";
 import { limitAddress, limitDeviceCode } from "./ratelimit.ts";
-import { readJson, requireCompetitionVersion } from "./runs.ts";
+import { readJson, requireMinimumVersion } from "./runs.ts";
 import { addSeconds, constantTimeEqual, formatTime, hexField, proxyVersionField, sha256Hex, strField, toHex } from "./util.ts";
 
 /** The letters of a user code: no vowels, so no word, and nothing that looks like another character. */
@@ -52,7 +52,7 @@ export async function createDevice(ctx: Ctx, request: Request): Promise<Response
   const mode = enumField<RunMode>(b, "mode", ["competition", "practice", "test"]);
   const connector_id = strField(b, "connector_id", 128);
   const tracer_version = proxyVersionField(b);
-  if (mode === "competition") requireCompetitionVersion(ctx, tracer_version);
+  requireMinimumVersion(ctx, tracer_version);
 
   let uri: URL;
   try {

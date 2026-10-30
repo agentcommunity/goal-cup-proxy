@@ -21,13 +21,9 @@ What we build toward, from [VISION.md](VISION.md). Every change is judged agains
 
 Less code is better. Cut before you add. Ready by Friday 6 November 2026.
 
-Read first: the [docs map](docs/README.md), which lists every doc by audience; the
-[event readiness plan](docs/plans/2026-10-20-event-readiness.md), which sets the work to
-6 Nov; and [local next steps](docs/research/LOCAL-NEXT-STEPS.md), what to measure next and in what
-order. Before planning capture work, also read the [research target](docs/RESEARCH-TARGET.md). Tool
-calls and results visible in agent context are sufficient; independent full tool-output/spill
-capture is not required. Preserve subagent conversations where exposed and state where coverage is
-unmeasured. These targets do not establish that current connectors capture every activity.
+Read first: [VISION.md](VISION.md), then [DECISIONS](docs/DECISIONS.md) from "Owner decisions in
+force". While the 1.0 build runs, also the [ledger](docs/plans/2026-10-30-v1.0/OWNER-DECISIONS.md),
+which wins over every PRD, then the [PRD index](docs/plans/2026-10-30-v1.0/PRD-00-index.md).
 
 ## Map
 
@@ -79,32 +75,37 @@ setup, project build and gate Cargo commands run with `--offline`.
 ## Hard rules
 
 - **Never set a model base URL on any harness.** The only wire path is the loopback recording
-  proxy, reached through the harness's process-scoped `HTTPS_PROXY` (D1, D36).
+  proxy, reached through the harness's process-scoped `HTTPS_PROXY` (D1, D81). The test pad
+  configures a harness the way a participant would (for example pointing it at DeepSeek or a gateway,
+  in goalcup's isolated home); goalcup's own launch code never does.
 - **Goal Cup Proxy records and never manages the agent.** No prompting, no auto "keep going", no
-  finish tool. The participant types the prompt and may type only "keep going". Two exceptions:
-  D65, on a nearly full disk Goal Cup Proxy freezes the agent and resumes it by itself; and D66,
-  the agent may ask `goalcup time-left` how much time is left (pull only, nothing is pushed).
+  finish tool. The participant types the prompt and may type only "keep going". One exception: D66,
+  the agent may ask `goalcup time-left` how much time is left (pull only, nothing is pushed). A full
+  disk gets no special handling: the recorder restarts, then runs in null mode, and the harness keeps
+  working (D78).
 - **No harness names in core code.** A harness is data (a connector) plus shared modules.
 - **Never write into `~/.claude`, `~/.codex`, `~/.hermes` or any app-wide config.** Goal Cup Proxy
   makes isolated homes. A test that launches a harness uses a private `HOME`.
-- **Connector edits regenerate the pins** with `sh scripts/pin-manifests.sh` in the same commit,
-  or every start refuses.
-- **Never commit** anything under `spikes/*/out/`, `harnesses/` or `target/`. A committed
-  fixture goes through `spikes/redact.py` and is reviewed by eye.
-- **Record raw, interpret later.** The daemon captures bytes. The verifier judges them. Do not
-  put rule logic in the daemon (D3).
+- **Never commit** anything under the repository root's `/pad-out/` or `/harnesses/`, under
+  `spikes/*/out/`, or any `target/`, a key, or a real run's record. A committed fixture is masked
+  and reviewed by eye.
+- **Record raw, interpret later.** The recorder captures bytes. The verifier and the usage reader
+  judge them. Do not put rule logic in the recorder (D3).
 
 ## Tests
 
 One test per behaviour you add or change. Test the promise, not the shape: no golden snapshots of
 internal structures, and no assertions on doc text or message wording unless the text is the
-contract. Never delete a test in the promises list ([P1 to P7](README.md#the-promises)).
+contract. Every behaviour that serves one of the seven points has a test, and that test is not
+deleted while the point stands, unless it is replaced in the same change by a test with the same
+name prefix that asserts the same promise.
 
 ## Done
 
 1. `sh scripts/gate.sh fast` passes. `full` too before a release.
-2. One reviewer reads the PR once.
-3. `README.md` or `TODO.md` is updated if behaviour changed.
+2. At least two independent reviewers read each diff during the 1.0 build (ledger B2); after it, one
+   reviewer reads the PR once.
+3. `README.md`, the participant guide or `TODO.md` is updated if behaviour changed.
 
 Rust edition 2024, stable toolchain (`rust-toolchain.toml`). Questions about rules or scope go to
 the maintainer, Balazs Nemethi, not to a guess.

@@ -828,3 +828,110 @@ this file's part of a shared fix is made here.
 | G3-15q | Applied. Checked: PRD-14 section 2 has the same-name-prefix clause |
 | Re-read (no id) | Fixed one clear break: D86, guide sections 3 and 4 and the Gemini cell said the auto-update switch is written only on "yes". PRD-00 question 2 (revision 4) and ledger H9 say `update_off` is always written; only the no-prompt values follow the question |
 | B3, B10 sweep (30 Oct) | Applied. The newcomer run's box is removed when it ends; the reference guard is a grep by hand at the cut, not a gate test (PRD-13 section 6) |
+
+## Amendments
+
+### 2026-10-30, replan after PRD-15 slice 1 (merge 98bbb7e9)
+
+Slice 1 merged builder step 1: the DECISIONS header line, "Owner decisions in force", D75 to D86 and
+the status rows; the AGENTS.md read-first paragraph, hard rules, Tests and Done; the run 1 report copy.
+What it changes for the slices still to come:
+
+- **The last link check leaves out the run 1 report by name** (reviews A1, B-3). The copy keeps 21
+  relative links into `2026-10-30-two-hour-run/`, which is not copied (section 3, "copied as is").
+  Acceptance filters to "Files it owns", and the report is in the Create list, so the check as written
+  lists them. Filter out `docs/research/results/2026-10-30-two-hour-run.md` by name, and the night-log
+  line "link check run" says it was left out and why. Do not edit the report. The stale-term grep
+  leaves it out the same way (it is history and names 0.7 terms on 7 lines). The em dash grep keeps it
+  (it has none). PRD-13's reference guard already skips `docs/research/**`.
+- **`scripts/check-links.py` needs Python 3.10 or later**, and the box snapshot's `python3` is 3.9.
+  Slice 1 ran it with `python3.11` in the box (lane log 10:46Z). The last run does the same.
+- **Slice 2 (the AGENTS.md map) drops every pin mention** (review A4): "Pinned by digest" in the
+  `connectors/<id>/` row (`AGENTS.md:37` on integration), "pins" in the `scripts/` row (`:39`) and
+  "connector pins" in the `goalcup-protocol` row (`:32`). Until the cut, the old crates still refuse an
+  unpinned `connectors/<id>/harness.toml` edit while the hard rules no longer say so; accepted for the
+  window.
+- **The Tests pointer comes back with the README section it points to** (review B-4): "Where they
+  are: [README](README.md#the-seven-points-and-their-tests)" (section 4) lands in the same merge that
+  gives README that section, since the anchor does not exist before it and the link check would flag
+  it. Likewise the read-first paragraph gains "then [ARCHITECTURE](docs/ARCHITECTURE.md)" in the merge
+  that rewrites ARCHITECTURE.
+- **Tests sentence wording** (review A5): the next AGENTS.md slice writes "that test is not deleted
+  while the point stands, unless it is replaced in the same change by a test with the same name prefix
+  that asserts the same promise". The "or" in section 4 reads as either/or. Same rule as ledger
+  section 7 ("a test stays if it proves one of them"); wording only.
+- **The never-commit line keeps `spikes/*/out/` while `spikes/` is on disk** (lane log 10:43Z);
+  section 4's text drops it. Nothing of PRD-15 goes into the phase 3 merge, so the first PRD-15 merge
+  after PRD-13 deletes `spikes/` drops that clause.
+- **Status-table marks for the read-through of section 6 item 4** (review A3), in a later slice that
+  touches DECISIONS, status-table cells only: D71's row also names D84 for its 0.6.1 compatibility
+  clause (the hidden git-credential helper and the `github.json` loader) and its `prep.json`
+  read-and-ignore clause. D4's row says "partly" for D75 unless its one-workspace, one-entry paragraph
+  is really gone in 1.0 (D75 does not restate it; check PRD-02 and PRD-10 first). D61's "forwards no
+  key" clause is touched by PRD-00 question 2's whole-environment default (review N15), which has no
+  entry among D75 to D86: its row reads "partly, PRD-00 question 2 (default)" until the owner answers,
+  and the item stays on the `TODO.md` open list.
+- **Left for the after-merge DECISIONS rewrite** (already on the TODO list; reviews A2, B-1): each
+  replacing entry's "This supersedes" line names every old entry whose row points to it (D3, D9, D37,
+  D40, D43, D45, D46, D52, D53 and D71 are not named today), and D75, D76, D80, D81 and D84 go back to
+  the one-to-eight-line prose of section 6, without the "This supersedes" paragraph that repeats the
+  status rows (about 30 to 40 lines).
+- **Drop one sentence at the first owner answer at the latest** (review B-2): "None was answered when
+  these entries were written, so each default below holds until the owner answers" in "Owner
+  decisions in force". The per-bullet "(default, PRD-00 question N)" markers already say it, and the
+  sentence turns false at the first answer. It is this build's own text, so dropping it edits no old
+  entry.
+
+### 2026-10-30, replan after PRD-15 slice 2 (merge 21c0fd75)
+
+Slice 2 merged `docs/RECORD-FORMAT.md` (324 lines, the reader 51 of them), the D4, D61 and D71
+status marks with the stale "None was answered" sentence dropped, and the AGENTS.md Tests "unless"
+wording. `gate fast` passed in 77 s. Two nits came after the merge; per the earlier ruling they go to
+the next slice that touches `docs/RECORD-FORMAT.md` (the one adding the `check --json` and usage
+JSON sections), not a separate merge request:
+
+- **Invariant 4 gets PRD-01's two missing clauses** (review A-N5). Today it reads "DATA offsets are
+  contiguous from `meta.from` (or 0), except where a GAP of that stream fills the hole". Add, from
+  PRD-01 section 13 invariant 4: a GAP with unknown loss (`lost` 0) must sit at the hole, and the
+  hole's size is then reported, not checked; `conn` streams have no DATA, and their GAPs (`off` 0)
+  are exempt. Without it a contributor who recounts from the page flags a valid unknown-loss hole as
+  a break. Doc accuracy only; the code and PRD-08's checks follow PRD-01 already.
+- **Two repeats go** (review B5): (a) in "The seal and events", the recovered-seal sentence (COUNT,
+  `recorder_down` GAP, seal, LINK, frame end, `R` line) becomes "a recovered seal is the `seal` event
+  inside the recovery frame (see Recovery)", so the Recovery bullet is the one source; (b) in "A
+  Python reader", "On a live entry its counts are a lower bound" becomes only "(see the `zstd` note
+  above)", since the note says it more exactly (the CLI "may" stop short, also on an entry not yet
+  recovered). About 3 lines saved.
+- **Size against PRD-15's own estimate** (review B5). Builder notes say "about 280" for the page; it
+  is 324 before the two last sections, so the finished page lands about 30% over. PRD-00 "Size
+  budget" has no docs row, so this is not a ledger L2 ceiling. If the page is still well past 280
+  after those sections, the builder writes a replan `decision` line naming what the extra lines serve
+  (the record tables PRD-01 requires, the worked example, the reader) rather than trimming required
+  content. The reader is 51 lines, under PRD-01's 60.
+- **What waits for PRD-02's merge** (builder decisions, lane log 11:48Z). The page leaves out the
+  numbers no merged code holds: the 256 KiB DATA piece, the 1 s link cadence, the 60 s COUNT and the
+  141 MiB compressor memory; `cursors.json` and `counts.jsonl` are named only as local recorder
+  files. The slice after the core merge (the one with the AGENTS.md map) adds these to the page from
+  `crates/goalcup` (never from a PRD draft) and rechecks the Recovery bullet against PRD-02's recovery code. GAP
+  reasons 8 and 9 stay "reserved, shown as `other(n)`" (PRD-00 line on reserved reasons; the format
+  crate has no names for them). The `PartOptions` field is `rotate_after_ns`, not PRD-01's
+  `rotate_after`; the page follows the code.
+- **The worked-example dump is cited as `crates/goalcup-format/src/dump.rs`** while `goalcup-verify`
+  is not on integration. When PRD-08 merges, the page's "made by" line names `goalcup-verify dump` if
+  the binary is what produced the committed `worked-example.dump.jsonl`; the file stays where it is.
+- **The `zstd` CLI stops short on a live open frame** (review A, lane log 11:56Z): the reader then
+  loses the last flush interval. The page already says so and sends live entries to
+  `goalcup-verify dump`. The guide (third slice) keeps that: a participant reading a live entry by
+  hand uses `dump`, not the CLI pipe.
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-07 slice 2 (merge 2f4bc6a0)
+
+- **`docs/SERVER-DESIGN.md` can move to `docs/archive/` now.** `server/worker/README.md` holds its
+  still-true facts on integration at 2f4bc6a0 (PRD-07 seam line 11:46Z, the log line the builder notes wait for). Links
+  to repoint in the same slice: `README.md:306`, `docs/ARCHITECTURE.md:68` and `:251`,
+  `docs/OPERATING.md:6`, `docs/README.md:22`. `docs/ARCHITECTURE.md:68` also says the upload server
+  "signs receipts and acknowledgements", false since 2f4bc6a0. The two `crates/goalcup-cli/src/upload/`
+  comments that cite SERVER-DESIGN go with the cut, not here.
+- **`docs/UPLOAD-API.md` line 15 is now true** (signing, `ack`, `last_ack`, receipt, abandon and the
+  alias are gone from the Worker); no doc edit follows from it.

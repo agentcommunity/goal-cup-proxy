@@ -1,0 +1,35 @@
+# Hermes Agent v0.22.5, checked against its CLI reference, configuration guide and v0.22.5 source.
+id = "hermes-cli"
+name = "Hermes"
+program = "hermes"
+args = ["chat"]
+resume = ["--continue"]
+home = { HERMES_HOME = "{home}" }
+before = [["gateway", "stop", "-y"]]
+after = [["gateway", "stop", "-y"]]
+host_hints = [
+  { file = "{home}/config.yaml", key = "model.base_url" },
+  { file = "{home}/config.yaml", key = "providers.*.base_url" },
+  { file = "{home}/config.yaml", key = "custom_providers.*.base_url" },
+  { file = "{home}/config.yaml", key = "delegation.base_url" },
+  { file = "{home}/config.yaml", key = "auxiliary.*.base_url" },
+  { file = "{home}/.env", key = "*_BASE_URL" },
+]
+hint_env = [
+  "OPENAI_BASE_URL", "OPENROUTER_BASE_URL", "CUSTOM_BASE_URL", "HERMES_CODEX_BASE_URL", "ANTHROPIC_BASE_URL",
+  "AI_GATEWAY_BASE_URL", "AZURE_FOUNDRY_BASE_URL", "BEDROCK_BASE_URL", "GEMINI_BASE_URL", "DEEPSEEK_BASE_URL",
+  "XAI_BASE_URL", "DASHSCOPE_BASE_URL", "ALIBABA_CODING_PLAN_BASE_URL", "KIMI_BASE_URL", "GLM_BASE_URL",
+  "MINIMAX_BASE_URL", "MINIMAX_CN_BASE_URL", "STEPFUN_BASE_URL", "ARCEE_BASE_URL", "GMI_BASE_URL",
+  "ACTUAL_BASE_URL", "NVIDIA_BASE_URL", "OPENCODE_ZEN_BASE_URL", "OPENCODE_GO_BASE_URL", "KILOCODE_BASE_URL",
+  "HF_BASE_URL", "XIAOMI_BASE_URL", "TOKENHUB_BASE_URL", "TOKENPLAN_BASE_URL", "OLLAMA_BASE_URL",
+  "LM_BASE_URL", "COPILOT_API_BASE_URL", "COPILOT_ACP_BASE_URL",
+]
+secret_files = ["{home}/.env", "{home}/auth.json", "{home}/.anthropic_oauth.json", "{home}/config.yaml"]
+native = [
+  { name = "state", root = "{home}", pattern = "state.db*", form = "final" },
+  { name = "delegation-manifest", root = "{home}/cache/delegation/live", pattern = "**/manifest.json", form = "snapshot", warn_missing = false },
+  { name = "delegation", root = "{home}/cache/delegation/live", pattern = "**/task-*.log", warn_missing = false },
+]
+first_screen = "If Hermes asks to run setup, do it now, before you type your prompt: answer Y and pick your provider and model. Hermes then closes; continue the run, then type your prompt."
+no_prompts = [{ file = "{home}/config.yaml", key = "approvals.mode", value = "off" }]
+update_off = [{ file = "{home}/config.yaml", key = "updates.check", value = "false" }]

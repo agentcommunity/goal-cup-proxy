@@ -671,3 +671,42 @@ with cause `null_mode` or `watchdog_lost` are named of any length (inv6); `--liv
 is `named` in null mode, `fail` otherwise (the `goalcup recover` alarm); the run CA key from
 `rec/run-ca.key` joins the `--known` file and R7; a `check_named.rs` case. Estimate up to about 1,600
 src lines.
+
+## Amendments
+
+### 2026-10-30, replan after PRD-17 phase 0 slice (merge 1423f8f9)
+
+- **Four cases the lessons gate waits on** (lessons log 10:45Z; `LESSONS.md` marks them `(name
+  pending)`). Name each in the night log when written; the lessons lane puts the name in
+  `LESSONS.md`. Each is a point 1, 3 or 4 case, so ledger B10 keeps it:
+  - PRD-17 FW3: a part folder whose first parts are gone exits 1 (only the server copy can be judged
+    whole), next to the `server_compare.rs` missing-middle case.
+  - PRD-17 VR2: a panic inside a check prints file and line, never record text (PRD-09 has the
+    `usage` half in `usage_run1.rs`).
+  - PRD-17 VR3 (`check_invariants.rs`): every mutation gives its id and exit 1 or 2, never 3.
+  - PRD-17 VR4 (`check_named.rs`): a clean record with an `interrupted` END exits 0.
+
+### 2026-10-30, replan after PRD-12 slice 2 (merge c7649890)
+
+`scripts/pad/check.py` is on integration, built to this PRD's published shapes. Four things it reads
+are not fixed here yet (pad lane log 11:44Z and 12:02Z). Post each answer as a seam line in the night
+log; the pad lane follows.
+
+- **`secrets --json` output.** C3 needs MASK spans counted by rule kind under a `masks` key, a map
+  from the S12 kind name (`openai_key`, `github_token`, `google_key`, `generic_secret_assignment`,
+  `jwt`, `private_key`, `url_password`, ...) to a span count. The Secrets paragraph already says "Spans are counted
+  by rule"; the key name is what is missing. Until it exists, every pad row is C3 INCONCLUSIVE "no MASK
+  counts by rule". `check.py` reads hit counts under `hits`, `known_hits` or `shape_hits` and falls
+  back to the exit code (0 and 1 no hit, 2 a hit, anything else no scan); name the one key.
+- **A `recorder_down` gap's cause and length in `check --json`.** The kill rows (PRD-12 section 3.1)
+  need each gap's cause (`recorder_down`, `null_mode`, `watchdog_lost`), start, end and length in ms.
+  `check.py` reads `facts.gaps` as a list of `{cause, start, end, ms}` when present, else `counts.gaps`
+  keys; publish which.
+- **`keep` from the start event.** C4 needs to know the parts were kept (`GOALCUP_KEEP_PARTS`, PRD-01
+  start event `keep`). S6 does not expose it; `check.py` reads it from the run's settings and says so
+  in the C4 line. A `keep` field in the S6 entry would let C4 read it from the record.
+- **The interfaces row for PRD-12 contradicts section 3.1.** The row says C1 is INCONCLUSIVE when
+  `history_complete` and both optional checks are `skip`; section 3.1 says a `skip` never makes C1
+  INCONCLUSIVE on its own, and PRD-12 section 8 (K11 (c), ledger T4: the history check is "skipped
+  where it does not" resend) lets a history `skip` pass C1. The pad follows PRD-12; read the row's
+  clause as superseded. Nothing in this crate depends on it: the C mapping lives in `check.py`.
