@@ -363,8 +363,9 @@ process, and writes what it did with the wall time to `watch/faults.jsonl`.
 
 `--exec <minute>:<script>` runs `scripts/pad/exec/<script>` in the box at that minute, in the
 harness's proxy and CA environment: the values of `HTTPS_PROXY`, `NO_PROXY` and the CA variables the
-launch plan set (PRD-11), read from `/proc/<harness pid>/environ` and filtered to those names only, never
-a key variable. Output goes to `exec/<script>.txt`. The scripts are the commands other PRDs' proofs need
+launch plan set (PRD-11), read from `/proc/<harness pid>/environ` and filtered to those names plus
+`HOME`, `PATH`, `GOALCUP_TIME_LEFT_FILE` and the connector's `home` names (Amendments), never a key
+variable. The script gets only those names, not the participant's shell. Output goes to `exec/<script>.txt`. The scripts are the commands other PRDs' proofs need
 but an agent may not run (review B W1, W2): `h2-parallel.sh` (PRD-03 acceptance 3), `refusal-curl.sh`
 (PRD-03 acceptance 7), `long-tunnel.sh` (PRD-03 acceptance 9), `time-left.sh` (PRD-10 acceptance 7).
 The owning PRD's pass line decides; the pad only runs them and keeps the output. The watcher who reads
@@ -1001,8 +1002,8 @@ the code it guards is deleted or made simpler.
   `gho_` or `ghp_` is refused; no key value appears in any argument the pad builds (a fake key and a
   recorded `subprocess` call list), including a `key_route = "env"` launch, whose value is only
   exported.
-- The `exec` environment filter keeps only proxy and CA names from a fake `environ` that also holds a
-  key.
+- The `exec` environment filter keeps only the proxy and CA names, `HOME`, `PATH`, the time-left file
+  and the connector's `home` names from a fake `environ` that also holds a key.
 - The pane replacement turns a known value in raw, base64 and percent form into `[known:<n>]`.
 - Crash rows: a kill fixture with one closed `recorder_down` gap per kill is PASS; a `null_mode` gap or
   a gap over 2 s is FAIL. A recover fixture with a changed harness pid or port is FAIL.
@@ -1550,3 +1551,16 @@ taken; "rejected" says why. Fixes for other files are made by those files' owner
   question; overage alone is reported, not held (integrator 11:20Z). The next slice applies B6-1
   first, and the six faults reuse `kill_rec`, `fault`, `at` and `recover` instead of new helpers.
 - No locked ledger item is touched and no owner question comes from this slice.
+- **The `exec` environment (review B2-F1, B2-F2):** `exec_env` now keeps, from
+  `/proc/<harness pid>/environ`, the proxy and CA names, `HOME`, `PATH`, `GOALCUP_TIME_LEFT_FILE` and
+  the connector's `home` names; no key name passes. PRD-10 acceptance 7 needs `goalcup time-left` run
+  with the harness's HOME and environment, and `curl` in the other scripts needs its `PATH`. An exec
+  script gets only those names: the pad's `GOALCUP_HOME`, `GOALCUP_SERVER`, `GOALCUP_NO_BROWSER` and
+  `TERM` stay out, so `time-left.sh`'s harness leg cannot answer through PRD-10's newest-run fallback.
+  The participant leg still comes from `PAD_SHELL_ENV`; pre scripts keep the participant's shell.
+- **Gateway rows (review F9):** the vendor-host clause of section 2 is read from S7's call rows only
+  (a row there has kind `provider`, not `gateway`). `counts.hosts` holds requests, not calls (PRD-01
+  section 9), so a model list or telemetry request to the vendor's host is not a FAIL.
+- **Size, `wc -l` after these fixes:** `pad` 642 (row 320), `pad-run` 724 (330), `check.py` 515
+  (320), `test_pad.py` 316 (90), `table` 192 (150), `exec/` 89 (70); all of `scripts/pad/` 2,827
+  against PRD-00's "about 1,350 to 1,450". The overage is reported for the replan, not held.

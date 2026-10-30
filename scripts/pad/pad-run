@@ -443,9 +443,9 @@ class Run:
 
     def script(self, kind, name, env, **kw):
         """bash exec/<name> in the project, its process group killed at the step's limit; only the replaced output
-        reaches exec/<name>.txt; one faults.jsonl line. No key file path or key value is in its environment. An exec
-        script runs with the harness's names from exec_env over the participant's shell (PAD_SHELL_ENV)."""
-        env = dict(self.gc_env(True), **env, PAD_RUN=self.run, PAD_PROJECT=self.project, PAD_HOME=self.st.get("home") or "",
+        reaches exec/<name>.txt; one faults.jsonl line. No key file path or key value is in its environment. A pre
+        script runs in the participant's shell; an exec script with only the harness's names from exec_env."""
+        env = dict(self.gc_env(True) if kind == "pre" else env, PAD_RUN=self.run, PAD_PROJECT=self.project, PAD_HOME=self.st.get("home") or "",
                    PAD_MODEL_HOSTS=self.path("model-hosts.toml"), PAD_DAEMON=str(self.h.get("daemon") or ""),
                    PAD_SHELL_ENV=quoted(self.gc_env(True)), PAD_HOME_ENV=quoted(self.home_env()))
         p = subprocess.Popen(["bash", os.path.join(PAD, "exec", name)], cwd=self.project, env=env, stdin=subprocess.DEVNULL,

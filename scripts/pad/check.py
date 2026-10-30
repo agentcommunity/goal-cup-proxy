@@ -133,7 +133,7 @@ class Run:
     def mark(self, check, result, why):
         self.v[check] = max(self.v[check], result, key=ORDER.get)
         line = "%s %s: %s" % (check, result, why)
-        if line not in self.why:  # one fact can be asked for twice (counts.hosts in the dodger rows): one line
+        if line not in self.why:  # one fact can be asked for twice (history_complete in the dodger rows): one line
             self.why.append(line)
 
     def flag(self, cond, check, result, why):
@@ -259,9 +259,8 @@ def case(r):
         got = r.check("listed_hosts_decrypted")
         r.flag(need("listed_hosts_decrypted", got) and got != "pass", "C1", "FAIL", "listed_hosts_decrypted %s" % got)
         r.flag(need("counts.hosts", hs) and not hs.get(GATEWAY), "C1", "FAIL", GATEWAY + " not decrypted in counts.hosts")
-        r.flag(need("counts.hosts", hs) and own and hs.get(own), "C1", "FAIL", "model calls decrypted to the vendor's host " + str(own))
         bad = sorted({str(dig(c, "c_host")) for c in (r.calls if need("usage call rows", r.calls) else [])
-                      if dig(c, "c_kind") != "gateway" or own and dig(c, "c_host") == own})
+                      if dig(c, "c_kind") != "gateway"})  # a row to the vendor's host is kind provider
         r.flag(bad, "C1", "FAIL", "model calls not through the gateway: " + ", ".join(bad))
     if kind != "dodger":
         return
@@ -270,21 +269,20 @@ def case(r):
     for cid, ok in (("listed_hosts_decrypted", ("named",)), ("history_complete", ("skip",)), ("wire_keeps_up", ("named", "skip"))):
         got = r.check(cid)
         r.flag(need(cid, got) and got not in ok, "C1", "FAIL", "%s %s, the dodger expects %s" % (cid, got, " or ".join(ok)))
-    pin = own
-    if not pin:
+    if not own:
         return r.mark("C1", "INCONCLUSIVE", "meta.json names no model_host")
     th = r.hosts("s6_tunnel_hosts")
-    r.flag(need("counts.tunnel_hosts", th) and not th.get(pin), "C1", "FAIL", "no tunnel to the pinned host " + pin)
+    r.flag(need("counts.tunnel_hosts", th) and not th.get(own), "C1", "FAIL", "no tunnel to the pinned host " + own)
     why = sorted({str(v.get("listed")) for e in r.entries for h, v in items(dig(e, "s6_tunnel_hosts"))
-                  if h == pin and isinstance(v, dict)} - {"pinned"})  # section 2: every tunnel there has GAP `pinned`
-    r.flag(why, "C1", "FAIL", "tunnels to the pinned host %s carry GAP %s, not pinned" % (pin, ", ".join(why)))
-    r.flag(need("counts.hosts", hs) and hs.get(pin), "C1", "FAIL", "the pinned host %s was decrypted" % pin)
+                  if h == own and isinstance(v, dict)} - {"pinned"})  # section 2: every tunnel there has GAP `pinned`
+    r.flag(why, "C1", "FAIL", "tunnels to the pinned host %s carry GAP %s, not pinned" % (own, ", ".join(why)))
+    r.flag(need("counts.hosts", hs) and hs.get(own), "C1", "FAIL", "the pinned host %s was decrypted" % own)
     if r.usage and r.calls is None:
         for c in ("C2", "C5"):
             r.mark(c, "INCONCLUSIVE", "usage call rows not in the report")
-    mine = [c for c in r.calls or [] if dig(c, "c_host") == pin]
-    r.flag(any(dig(c, "c_thread") for c in mine), "C2", "FAIL", "a thread claimed from the pinned host " + pin)
-    r.flag(any(c.get(k) for c in mine for k in S7_TOKENS), "C5", "FAIL", "wire tokens claimed for the pinned host " + pin)
+    mine = [c for c in r.calls or [] if dig(c, "c_host") == own]
+    r.flag(any(dig(c, "c_thread") for c in mine), "C2", "FAIL", "a thread claimed from the pinned host " + own)
+    r.flag(any(c.get(k) for c in mine for k in S7_TOKENS), "C5", "FAIL", "wire tokens claimed for the pinned host " + own)
 
 def usage_checks(r, few):
     """C2 (every subagent recorded) and C5 (usage stats present), both from the S7 summary."""
