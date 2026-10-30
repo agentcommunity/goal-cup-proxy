@@ -13,11 +13,11 @@ PAD = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, PAD)
 import check as pc  # noqa: E402  S6, S7 and S9 keys are read through check.py's SEAM only
 NO_BUILD = "no goalcup build"
-STEPS = ("setup", "start", "paste", "wait-calls", "look", "wait-recovery", "keep-going", "seal", "wait-upload", "verify", "wipe",
-         "spend", "seal-now", "watch")  # the last three run beside the others, so they never write state.json
+BESIDE = ("spend", "seal-now", "watch")  # these run beside the other steps, so they never write state.json
+STEPS = ("setup", "start", "paste", "wait-calls", "look", "wait-recovery", "keep-going", "seal", "wait-upload", "verify",
+         "wipe") + BESIDE
 TIMED = ("kill-recorder", "kill-watchdog-recover")  # section 3.1, at <minute> after the paste
 USAGE = "usage: pad-run <run dir> " + "|".join([s + " N" * (s == "wait-calls") for s in STEPS] + [t + "@M" for t in TIMED])
-TOKENS = ("input", "cached", "cache_write", "output", "reasoning")  # S7 models[].tokens, all spend reads
 EVERY = {"status": 10, "procs": 30, "pane": 60, "live": 300}  # section 4: the watch's seconds per kind of line
 OUT = ("verify", "watch", "status.json", "harness-files.json", "meta-box.json")  # what out.tar carries
 
@@ -127,10 +127,9 @@ def wait(ok, limit, every):
 
 
 class Run:
-    def __init__(self, run, step="wipe"):
+    def __init__(self, run, kind="wipe", m=""):
         self.run, self.s, self.st = run, loads(path=os.path.join(run, "settings.json")), loads(path=os.path.join(run, "state.json"))
-        kind, _, m = step.partition("@")
-        self.quiet = kind in STEPS[-3:]  # reads the entry without the run-ca key append, writes no state.json
+        self.quiet = kind in BESIDE  # reads the entry without the run-ca key append, writes no state.json
         self.h, self.project = self.s.get("harness", {}), os.path.join(run, "project")  # wipe needs no settings
         self.env = dict(os.environ, GOALCUP_HOME=os.path.join(run, "home"))
         self.sec = self.h.get("gateway" if self.s.get("case") == "gateway" else "direct", {})
@@ -325,31 +324,30 @@ class Run:
     def wait_calls(self, n):
         self.need("goalcup", started=True)
         while True:  # every 5 s until pad's limit; the watch writes status.jsonl
-            if (got := (self.status().get("written") or {}).get("model_requests", 0)) >= int(n):
+            if (got := pc.dig(self.status(), "s4_requests") or 0) >= int(n):
                 return "ok", "%d model calls written" % got
             if self.left() < 5:
                 raise Step("timeout", "the harness did no work")
             time.sleep(5)
 
     def wait_upload(self, _):
-        """Section 1a: upload.json (S9) every 5 s, each read a line of watch/upload.jsonl, until final is sealed."""
+        """Section 1a: upload.json (S9) every 5 s until final is sealed (the watch writes watch/upload.jsonl)."""
         if self.s["server"] == "off":
             raise Step("skip", "server off")
         self.need("goalcup", started=True)
         while True:
             e = self.entry()
             up = loads(path=os.path.join(e, "upload.json")) if e else {}
-            append(self.path("watch", "upload.jsonl"), {"upload": up})  # raw: S9 keys are read through SEAM only
             if pc.dig(up, "s9_final") == "sealed":
                 return "ok", "final: sealed"
             if self.left() < 5:
                 raise Step("timeout", "final %s, state %s" % (pc.dig(up, "s9_final"), pc.dig(up, "s9_state")))
             time.sleep(5)
 
-    def verify_cmd(self, argv, out=None):
-        """One goalcup-verify command inside the step's limit: (exit or "timeout", parsed stdout)."""
+    def verify_cmd(self, argv, out=None, limit=None):
+        """One goalcup-verify command inside `limit` seconds, else the step's: (exit or "timeout", parsed stdout)."""
         try:
-            r = sh(["nice", "-n", "19", tool("goalcup-verify")] + argv, timeout=max(1, self.left()), cwd=self.run)
+            r = sh(["nice", "-n", "19", tool("goalcup-verify")] + argv, timeout=max(1, limit or self.left()), cwd=self.run)
         except subprocess.TimeoutExpired:
             return "timeout", {}
         if out:
@@ -361,9 +359,9 @@ class Run:
         self.need("goalcup-verify", started=True, entry=True)
         return "ok", self.look_line()
 
-    def look_line(self):  # the look step's and the watch's
-        rep = self.verify_cmd(["check", "--live", "--json", "--known", "known", self.st["entry_dir"]])[1]
-        use = self.verify_cmd(["usage", self.st["entry_dir"], "--json"])[1]
+    def look_line(self, limit=None):  # the look step's and the watch's
+        rep = self.verify_cmd(["check", "--live", "--json", "--known", "known", self.st["entry_dir"]], limit=limit)[1]
+        use = self.verify_cmd(["usage", self.st["entry_dir"], "--json"], limit=limit)[1]
         entries = [x for x in pc.dig(rep, "s6_entries") or [] if isinstance(x, dict)]
         checks = [c for x in entries for c in pc.dig(x, "s6_checks") or [] if isinstance(c, dict)]
         facts = {"calls": sum(pc.count(pc.dig(x, "s6_requests")) for x in entries), "threads": len(pc.dig(use, "s7_threads") or []),
@@ -374,7 +372,7 @@ class Run:
         return ", ".join("%s %s" % kv for kv in facts.items())
 
     def sealed(self):
-        return self.status().get("mode") == "sealed"
+        return pc.dig(self.status(), "s4_mode") == "sealed"
 
     def dead(self):  # the harness pane is gone, or there never was one
         return not shutil.which("tmux") or sh(["tmux", "list-panes", "-t", self.tmux, "-F", "#{pane_dead}"]).stdout.strip() != "0"
@@ -382,7 +380,8 @@ class Run:
     def seal(self, _):
         self.need("goalcup", started=True)
         wait(lambda: self.sealed() or self.dead(), self.st["pasted"] + float(self.s["minutes"]) * 60 - time.time(), 5)
-        why = "at the harness's exit" if self.sealed() or self.dead() else "at %s min" % self.s["minutes"]
+        capped = any(f.get("kind") == "seal-now" and f.get("exit") == 0 for f in pc.load(self.run, "watch/faults.jsonl", 1))
+        why = "at the spend cap" if capped else "at the harness's exit" if self.sealed() or self.dead() else "at %s min" % self.s["minutes"]
         if not self.sealed() and any(str(x).startswith("kill-watchdog-recover@") for x in self.s.get("steps") or []):
             self.exit_harness()  # section 3.1: that row ends by the harness's exit, never goalcup seal
         elif not self.sealed():
@@ -392,38 +391,44 @@ class Run:
         self.st["end_screen_requests"] = int(found[-1].replace(",", "")) if found else None
         self.harness_files()
         self.wipe_secrets(home=ok or self.dead())  # an unsealed entry may still be reading the home: wipe leaves it
-        return ("ok", "sealed %s, %s model requests written" % (why, (self.status().get("written") or {}).get("model_requests"))
+        return ("ok", "sealed %s, %s model requests written" % (why, pc.dig(self.status(), "s4_requests"))
                 ) if ok else ("timeout", "%s, not sealed within the step's limit after goalcup seal" % why)
 
     def exit_harness(self):  # the harness file's exit_keys (printf format); after 30 s SIGTERM to harness.pid if it lives
         if not self.dead():
             sh(["tmux", "send-keys", "-t", self.tmux, "-l", str(self.h.get("exit_keys", "")).encode().decode("unicode_escape")])
             self.fault("exit-keys")
-        pid = pc.dig(self.status(), "s4_harness_pid")
-        if not wait(lambda: not alive(pid), 30, 2):
-            os.kill(pid, signal.SIGTERM)
-            self.fault("sigterm", pid=pid)
+        pid = pc.dig(self.status(), "s4_harness_pid")  # S4 gives the harness no start id: a reused pid is not ruled out
+        if type(pid) is int and not wait(lambda: not alive(pid), 30, 2):
+            try:
+                os.kill(pid, signal.SIGTERM)
+                self.fault("sigterm", pid=pid)
+            except OSError:  # it exited after the wait
+                pass
 
     def at(self, m):  # sleep until minute m after the paste
         time.sleep(max(0, self.st["pasted"] + m * 60 - time.time()))
 
-    def kill_rec(self, m, stream_open=None):
-        """kill9 of the recorder in status.json; saves what wait-recovery compares against."""
+    def kill_rec(self, m):
+        """kill9 of the recorder in status.json; saves what wait-recovery compares against -> (pid or None, seconds
+        since the last written request or None)."""
         st = self.status()
-        pid, off = st.get("pid"), st.get("off") or {}
+        pid, last = pc.dig(st, "s4_pid"), when(pc.dig(st, "s4_last"))
+        since = round(time.time() - last, 1) if last else None
         if ok := kill9(pid):
-            self.st["kill"] = dict(pid=pid, at=time.time(), requests=pc.dig(st, "s4_requests"), off_spans=off.get("spans"),
-                                   off_ms=off.get("ms"))
-        self.fault("kill-recorder", minute=m, pid=pid if ok else None, stream_open=stream_open)
-        return ok and pid
+            self.st["kill"] = dict(pid=pid, at=time.time(), requests=pc.dig(st, "s4_requests"), off_spans=pc.dig(st, "s4_spans"),
+                                   off_ms=pc.dig(st, "s4_down_ms"))
+        self.fault("kill-recorder", minute=m, pid=pid if ok else None, since_request_s=since)
+        return (pid if ok else None), since
 
-    def kill_recorder(self, m):  # section 3.1; S4 has no open-stream count yet: a request written in the last 10 s
+    def kill_recorder(self, m):  # section 3.1; S4 has no open-stream count yet: wait up to 60 s for a request in the last 10 s
         self.need("goalcup", started=True)
         self.at(m)
-        busy = wait(lambda: time.time() - when(self.status().get("last_request_at")) < 10, 60, 1)
-        if not (pid := self.kill_rec(m, busy)):
+        wait(lambda: time.time() - when(pc.dig(self.status(), "s4_last")) < 10, 60, 1)
+        pid, since = self.kill_rec(m)
+        if not pid:
             raise Step("FAIL", "no live goalcup recorder pid in status.json")
-        return "ok", "recorder %d killed %s" % (pid, "on an open stream" if busy else "anyway: no request in 10 s within 60 s")
+        return "ok", "recorder %d killed %s" % (pid, "no request written yet" if since is None else "%g s after a written request" % since)
 
     def wait_recovery(self, _):
         if not (k := self.st.get("kill")):
@@ -431,33 +436,41 @@ class Run:
 
         def missing():
             st = self.status()
-            off, n = st.get("off") or {}, pc.dig(st, "s4_requests")
-            return [w for w, bad in (("a new recorder pid", st.get("pid") in (None, k["pid"])),
-                                     ("mode recording", st.get("mode") != "recording"),
-                                     ("one closed recorder_down gap", (off.get("spans") or 0) <= (k["off_spans"] or 0) or off.get("since")),
+            n = pc.dig(st, "s4_requests")
+            return [w for w, bad in (("a new recorder pid", pc.dig(st, "s4_pid") in (None, k["pid"])),
+                                     ("mode recording", pc.dig(st, "s4_mode") != "recording"),
+                                     ("one closed recorder_down gap", (pc.dig(st, "s4_spans") or 0) != (k["off_spans"] or 0) + 1
+                                      or pc.dig(st, "s4_since")),
                                      ("a new model request", type(n) is not int or n <= (k["requests"] or 0))) if bad]
         if not wait(lambda: not missing(), self.left(), 2):
             raise Step("FAIL", "did not stand back up: missing " + ", ".join(missing()))
         st = self.status()
-        return "ok", "recorder %s up in %.1f s, one recorder_down gap %s ms, calls %s > %s" % (st.get("pid"), time.time() - k["at"],
-                     (st["off"].get("ms") or 0) - (k["off_ms"] or 0), pc.dig(st, "s4_requests"), k["requests"])
+        return "ok", "recorder %s up in %.1f s, one recorder_down gap %s ms, calls %s > %s" % (
+            pc.dig(st, "s4_pid"), time.time() - k["at"], (pc.dig(st, "s4_down_ms") or 0) - (k["off_ms"] or 0),
+            pc.dig(st, "s4_requests"), k["requests"])
 
     def kill_watchdog_recover(self, m):  # section 3.1, PRD-10 acceptance 11; the harness is never touched
         self.need("goalcup", started=True, entry=True)
         self.at(m)
         wpid = read_pid(os.path.join(self.st["entry_dir"], "rec", "watchdog.pid"))
         self.fault("kill-watchdog", minute=m, pid=wpid if kill9(wpid) else None)
-        exits = [self.recover()]
-        self.at(m + 1)
-        self.kill_rec(m + 1)
-        said, end = [], time.time() + 10
-        while time.time() < end:  # plain status in the clean env, every 2 s for 10 s
-            out = sh([tool("goalcup"), "status"], env=self.gc_env(True), timeout=10).stdout
-            said += [ln for ln in out.splitlines() if re.search(r"goalcup (recover|continue)", ln) and ln not in said]
-            time.sleep(2)
-        self.fault("status", minute=m + 1, said="\n".join(said))
-        self.at(m + 2)
-        return "ok", "recover exits %s and %s" % (exits[0], self.recover())
+        first = self.recover()
+        try:
+            self.at(m + 1)
+            self.kill_rec(m + 1)
+            said, end = [], time.time() + 10
+            while time.time() < end:  # plain status in the clean env, every 2 s for 10 s
+                try:
+                    out = sh([tool("goalcup"), "status"], env=self.gc_env(True), timeout=10).stdout
+                except subprocess.TimeoutExpired:
+                    out = ""
+                said += [ln for ln in out.splitlines() if re.search(r"goalcup (recover|continue)", ln) and ln not in said]
+                time.sleep(2)
+            self.fault("status", minute=m + 1, said="\n".join(said))
+        finally:  # the second recover always runs, so the recorder never stays down
+            self.at(m + 2)
+            second = self.recover()
+        return "ok", "recover exits %s and %s" % (first, second)
 
     def recover(self):  # in tmux window <session>:recover, under env -i: HOME, PATH, TERM and the run's GOALCUP_* only
         n = self.st["recovers"] = self.st.get("recovers", 0) + 1
@@ -466,10 +479,11 @@ class Run:
         sh(["tmux", "new-window", "-d", "-t", self.tmux, "-n", "recover",
             "%s >%s 2>&1; echo $? >%s" % (shlex.join(argv), shlex.quote(out), shlex.quote(code))])
         got = wait(lambda: os.path.exists(code) and re.fullmatch(r"\d+\n", open(code).read()), 60, 1)
-        self.fault("recover", exit=got and int(got.group()), said=open(out).read() if os.path.exists(out) else "")
+        got = got and int(got.group())
+        self.fault("recover", exit=got, said=open(out).read() if os.path.exists(out) else "")
         if os.path.exists(out):  # only the replaced form stays
             os.remove(out)
-        return got and int(got.group())
+        return got
 
     def keep_going(self, _):  # section 1a: once, as a participant may (AGENTS.md), after pane and requests idle keep_going minutes
         self.need("goalcup", started=True)
@@ -489,18 +503,21 @@ class Run:
             time.sleep(10)
         raise Step("skip", "agent still working")
 
-    def spend(self, _):  # section 7, for pad's 5-minute check: model names and int token counts only
+    def spend(self, _):  # section 7, for pad's 5-minute check: model names and int token counts, usage's exit, read or not
         self.need("goalcup-verify", started=True, entry=True)
-        use = loads(sh(["nice", "-n", "19", tool("goalcup-verify"), "usage", self.st["entry_dir"], "--json"],
-                       timeout=max(1, self.left())).stdout)
-        models = [{"model": replace_known(x["model"], self.known() or [])[0], "tokens": {k: v if type(v := (
-            x.get("tokens") if isinstance(x.get("tokens"), dict) else {}).get(k)) is int else None for k in TOKENS}}
-            for x in pc.dig(use, "s7_models") or [] if isinstance(x, dict) and isinstance(x.get("model"), str)]
-        return "ok", "%d models" % len(models), {"models": models}
+        r = sh(["nice", "-n", "19", tool("goalcup-verify"), "usage", self.st["entry_dir"], "--json"], timeout=max(1, self.left()))
+        use = loads(r.stdout)
+        read = isinstance(pc.dig(use, "s7_models"), list)
+        models = [dict(x, model=replace_known(x["model"], self.known() or [])[0]) for x in pc.models(use)]
+        return ("ok" if read else "skip"), ("%d models" % len(models) if read else "spend not read: usage exit %d" % r.returncode
+                                           ), {"models": models, "exit": r.returncode, "read": read}
 
     def seal_now(self, _):
         self.need("goalcup", started=True)
+        if self.sealed():
+            return "ok", "already sealed"
         r = sh([tool("goalcup"), "seal", "--yes"], env=self.env, cwd=self.project, timeout=max(1, self.left()))
+        self.fault("seal-now", exit=r.returncode)  # the seal step names the cap from this line
         return ("ok", "sealed at the spend cap") if r.returncode == 0 else ("FAIL", "goalcup seal exit %d" % r.returncode)
 
     def watch(self, _):
@@ -508,17 +525,25 @@ class Run:
         the seal (and final upload) after one last pane, or the box's end. Panes only while the known file lives."""
         write(self.path("watch.pid"), str(os.getpid()), 0o644)
         self.st.update(panes=0, screen_known=0)  # the watch's own pane-w<n> files and count, in watch.json
-        stop, due, last, live = self.st["pasted"] + float(self.s["minutes"]) * 60 + 1800, {"live": time.time() + 300}, False, None
-        while not (last or os.path.exists(self.path("watch.stop")) or time.time() > stop):
+        try:
+            return self.watch_loop()
+        finally:
+            if os.getpgrp() == os.getpid():  # started in its own session: the live thread's goalcup-verify goes with it
+                signal.signal(signal.SIGTERM, signal.SIG_IGN)
+                os.killpg(0, signal.SIGTERM)
+
+    def watch_loop(self):  # until the step's end, pad's runner_limits "watch"
+        due, last, live = {"live": time.time() + 300}, False, None
+        while not (last or os.path.exists(self.path("watch.stop")) or self.left() < 0):
             st, now, e = self.status(), time.time(), self.st.get("entry_dir") or self.run
             up = loads(path=os.path.join(e, "upload.json"))
-            last = st.get("mode") == "sealed" and (self.s.get("server") == "off" or pc.dig(up, "s9_final") == "sealed")
+            last = pc.dig(st, "s4_mode") == "sealed" and (self.s.get("server") == "off" or pc.dig(up, "s9_final") == "sealed")
             go = [w for w in EVERY if now >= due.get(w, 0)]
             due.update((w, now + EVERY[w]) for w in go)
             if "status" in go or last:
                 append(self.path("watch", "status.jsonl"), {"status": st})
             if "procs" in go:
-                pids = (("watchdog", read_pid(os.path.join(e, "rec", "watchdog.pid"))), ("recorder", st.get("pid")),
+                pids = (("watchdog", read_pid(os.path.join(e, "rec", "watchdog.pid"))), ("recorder", pc.dig(st, "s4_pid")),
                         ("harness", pc.dig(st, "s4_harness_pid")))
                 append(self.path("watch", "procs.jsonl"), {"procs": [proc(r, p) for r, p in pids if type(p) is int]})
             if "pane" in go or last:
@@ -529,8 +554,8 @@ class Run:
                 if self.s.get("server") != "off":
                     append(self.path("watch", "upload.jsonl"), {"upload": up})
             if "live" in go and tool("goalcup-verify") and self.st.get("entry_dir") and not (live and live.is_alive()):
-                self.end = now + float((self.s.get("limits") or {}).get("look", 60))  # beside the loop, so no status line waits
-                (live := threading.Thread(target=self.look_line, daemon=True)).start()
+                look = float((self.s.get("limits") or {}).get("look", 60))  # beside the loop, so no status line waits
+                (live := threading.Thread(target=self.look_line, args=(look,), daemon=True)).start()
             time.sleep(1)
         return "ok", "stopped"
 
@@ -559,8 +584,7 @@ class Run:
     def verify(self, _):
         """Section 8 (the server's copy is the conductor's fetched/<entry>/, S13; the git scan needs a push token, none yet),
         each inside the step's limit (a timeout is an exit "timeout"); then meta-box.json, scan and tar, whatever happened."""
-        write(self.path("watch.stop"), "")  # the watch's last line first, so the tar holds a whole watch/
-        wait(lambda: not alive(read_pid(self.path("watch.pid"))), 15, 1)
+        self.stop_watch()  # the watch's last line first, so the tar holds a whole watch/
         e, exits, result, note = self.entry(), {}, None, ""
         self.st["screen_known"] = self.st.get("screen_known", 0) + (loads(path=self.path("watch", "watch.json")).get("screen_known") or 0)
         try:
@@ -599,9 +623,13 @@ class Run:
                     t.add(self.path(name), name)
         return result
 
+    def stop_watch(self):  # watch.stop, then up to 30 s for the watch to exit
+        write(self.path("watch.stop"), "")
+        wait(lambda: not alive(read_pid(self.path("watch.pid"))), 30, 1)
+
     def wipe(self, _):
-        if os.path.isdir(self.run):  # the watch's stop
-            write(self.path("watch.stop"), "")
+        if os.path.isdir(self.run):  # the watch ends before the run folder goes
+            self.stop_watch()
         if shutil.which("tmux"):
             sh(["tmux", "kill-session", "-t", self.tmux])
         found = self.wipe_secrets(known=True)
@@ -617,7 +645,7 @@ def main(argv):
     os.umask(0o077)
     run, extra = None, {}
     try:
-        run = Run(argv[1], argv[2])
+        run = Run(argv[1], kind, m)
         result, saw, *more = getattr(run, kind.replace("-", "_"))(float(m) if timed else argv[3] if len(argv) == 4 else None)
         extra = more[0] if more else {}
     except Step as stop:

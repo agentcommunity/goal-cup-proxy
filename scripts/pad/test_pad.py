@@ -109,7 +109,9 @@ class Walk(unittest.TestCase):
         env = {"CLAUDE_API_KEY": SENTINEL, "AI_GATEWAY_API_KEY": SENTINEL + "gw", **(extra_env or {})}
         with tempfile.TemporaryDirectory() as out, mock.patch.dict(os.environ, env), \
                 mock.patch.object(pad, "call", self.fake_call):
-            pad.run_all(pad.load_settings(dict(BASE, **settings), PADCFG), PADCFG, self.HARNESS, out)
+            runs = pad.run_all(pad.load_settings(dict(BASE, **settings), PADCFG), PADCFG, self.HARNESS, out)
+            with open(os.path.join(out, "spend.jsonl")) as f:  # section 7: one ledger line per run, however it ended
+                self.assertEqual(len(f.readlines()), len(runs))
             for root, _, files in os.walk(out):
                 for name in files:
                     with open(os.path.join(root, name), "rb") as f:
@@ -128,6 +130,9 @@ class Walk(unittest.TestCase):
         name = calls[0][calls[0].index("--name") + 1]
         self.assertIn(["rm", name], calls)
         self.assertIn(["list", "--prefix", "pad-"], calls)
+
+    def test_spans_and_upload_suffix_still_end_with_a_table(self):  # section 1a: no step stops the rig
+        self.walk(steps=["cut-worker@1+10", "kill-both@5+upload"])
 
     def test_staging_approval_values_reach_only_the_request(self):  # rung 2; the scan in walk covers argv and files
         ok = {"result": "ok", "saw": ""}
@@ -217,9 +222,12 @@ class CrashRows(unittest.TestCase):
     """Section 3.1, ledger R3a and R3b: one closed recorder_down gap per kill under 2 s, no null_mode gap; the
     recover row keeps the harness pid and port. Only result values are asserted."""
 
-    def row(self, kind, gap, samples=(), fired=True, steps=()):
+    UP = ({"written": {"model_requests": 2}}, {"written": {"model_requests": 5}})  # status samples before and after
+
+    def row(self, kind, gap, samples=UP, steps=(["wait-recovery", "ok", "3:10", ""],)):
         said = [{"kind": k, "exit": 0, "said": w} for k, w in zip(("recover", "recover", "status"),
                                                                    check.RECOVER + (check.STATUS_RECOVER,))]
+        kills = [{"kind": k, "pid": 9, "at": "2026-10-30T10:02:00+00:00"} for k in ("kill-watchdog", "kill-recorder")]
         files = {"meta.json": {"connector": "codex-cli", "case": "direct", "variant": [kind + "@3"], "server": "off",
                                "keep": True, "commits_since_start": 1, "entry": "e1", "steps": list(steps)},
                  "verify/check-local.json": {"exit": 1, "entries": [{"entry": "e1", "seal_reason": "harness_exit",
@@ -229,7 +237,8 @@ class CrashRows(unittest.TestCase):
                  "verify/usage/e1.json": {"tokens": {"merged": {"input": 9, "output": 9}}, "coverage": {"unattributed": 0},
                                           "threads": [{"parent": None, "models": {"m": 3}, "wire_calls": 3},
                                                       {"parent": "t0", "models": {"m": 2}, "wire_calls": 2}]},
-                 "watch/status.jsonl": samples, "watch/faults.jsonl": said + [{"kind": "kill-recorder", "pid": 9}] * fired}
+                 "watch/status.jsonl": [{"at": "2026-10-30T10:0%d:00+00:00" % (4 * i), "status": x} for i, x in enumerate(samples)],
+                 "watch/faults.jsonl": said + kills}
         return evaluate(files)
 
     def test_kill_recorder(self):
@@ -237,9 +246,9 @@ class CrashRows(unittest.TestCase):
         good = self.row("kill-recorder", gap)
         self.assertEqual((good["result"] != "FAIL", good["faults"]), (True, "PASS"))
         down = [["wait-recovery", "timeout", "4:10", ""]]  # did not stand back up
-        for bad in ({"gap": dict(gap, cause="null_mode")}, {"gap": dict(gap, end="2026-10-30T10:00:02.5Z")}, {"steps": down}):
+        for bad in ({"gap": dict(gap, cause="null_mode")}, {"gap": dict(gap, end="2026-10-30T10:00:02.5Z")}, {"steps": down},
+                    {"samples": self.UP[:1] * 2}):  # no model request written after the kill
             self.assertEqual(self.row("kill-recorder", **dict({"gap": gap}, **bad))["result"], "FAIL", bad)
-        self.assertNotEqual(self.row("kill-recorder", gap, fired=False)["faults"], "PASS")  # the kill never fired
 
     def test_recover_keeps_harness_pid_and_port(self):
         gap = {"cause": "watchdog_lost", "start": "2026-10-30T10:01:00Z", "end": "2026-10-30T10:02:00Z"}
@@ -249,8 +258,7 @@ class CrashRows(unittest.TestCase):
 
 
 class SecretCheck(unittest.TestCase):
-    """C3 (point 4, section 5): a known-value hit fails; the planted shapes need a MASK each, the shell rule
-    standing for a NAME_API_KEY= line; the auth header's MASK alone is no secret exercise. Only C3 is asserted."""
+    """C3 (point 4, section 5): a known-value hit fails, and so does a planted shape with no MASK. Only C3 is asserted."""
 
     PLANTED = {"openai_key": 1, "github_token": 1, "generic_secret_assignment": 1, "jwt": 1, "private_key": 1,
                "url_password": 1, "auth": 8}
@@ -260,9 +268,6 @@ class SecretCheck(unittest.TestCase):
                          "verify/secrets.json": {"masks": masks}, "verify/secrets-conductor.json": {"hits": 0},
                          "verify/exits.json": {"secrets": secrets_exit, "secrets-out": 0, "secrets-plain": plain_exit}}
                         )["checks"]["C3"]
-
-    def test_planted_values_masked_pass(self):  # exit 1 (unsealed, a named GAP) is never a hit
-        self.assertEqual(self.c3(self.PLANTED), "PASS")
 
     def test_known_value_hit_fails(self):
         self.assertEqual(self.c3(self.PLANTED, secrets_exit=2), "FAIL")
@@ -275,10 +280,6 @@ class SecretCheck(unittest.TestCase):
         with mock.patch.dict(os.environ, {"GOALCUP_TEST_APPROVAL_KEY": SENTINEL + "ap"}):
             pad.Run.scan_out(run)
         self.assertEqual(check.Run(run.dir, {}).hits("secrets-conductor"), 1)
-
-    def test_exercise_not_done_is_inconclusive(self):
-        self.assertEqual(self.c3({"auth": 8}), "INCONCLUSIVE")
-        self.assertEqual(self.c3({"auth": 8}, plain_exit=2), "FAIL")  # the script ran, yet no planted shape is masked
 
 
 if __name__ == "__main__":

@@ -18,7 +18,7 @@ gemini = "GEMINI_API_KEY"
 gateway = "AI_GATEWAY_API_KEY"
 
 # USD per million tokens (section 7), copied from each vendor's pricing page on 30 Oct 2026 (the commit cites them),
-# tiers taken: DeepSeek peak, Anthropic 1 h cache writes, Haiku over 100k, OpenAI short context (up to 272K).
+# tiers taken: DeepSeek peak, Anthropic 1 h cache writes, the small Anthropic model over 100k, OpenAI short context (up to 272K).
 # A model with no line is priced at the highest rate of its key. AI Gateway charges the provider's list price.
 [rates]
 "claude-opus-5-5" = { key = "claude", input = 4, cached = 0.2, cache_write = 8, output = 20 }

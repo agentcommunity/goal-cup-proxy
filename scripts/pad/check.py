@@ -23,7 +23,9 @@ SEAM = {k: tuple(v.split(".")) for k, v in {
     "s7_threads": "threads", "t_parent": "parent", "t_models": "models", "t_wire": "wire_calls",
     "t_native": "native_calls", "s13_requests": "model_requests", "s13_final": "final", "s13_complete": "complete",
     "s4_mode": "mode", "s4_port": "port", "s4_harness_pid": "harness.pid", "s4_requests": "written.model_requests",
-    "s4_off": "written.off_ms", "s4_seal": "seal.reason", "s9_final": "final", "s9_keep": "keep", "s9_state": "state"}.items()}
+    "s4_off": "written.off_ms", "s4_seal": "seal.reason", "s4_pid": "pid", "s4_spans": "off.spans", "s4_down_ms": "off.ms",
+    "s4_since": "off.since", "s4_last": "last_request_at", "s9_final": "final", "s9_keep": "keep", "s9_state": "state"}.items()}
+S7_TOKENS = ("input", "cached", "cache_write", "output", "reasoning")  # S7 models[].tokens keys
 # Not fixed yet (asked of PRD-08 in the night log): the `secrets` JSON, and how a recorder_down gap's
 # cause and length appear. Read when present; else hits fall back to verify/exits.json (keyed by the
 # JSON file's stem; PRD-08 section 2: 0 and 1 are no hit, 2 a hit, anything else no scan) and causes to counts.gaps keys ("null_mode",
@@ -59,13 +61,15 @@ def items(d):
     return [(str(k), v) for k, v in d.items()] if isinstance(d, dict) else []
 
 def load(folder, rel, lines=False):
-    """A JSON file, or the dicts of a JSONL file (a watch line may wrap its file as {"at", "status"} or "upload")."""
+    """A JSON file, or the dicts of a JSONL file (a watch line may wrap its file as {"at", "status"} or "upload": then
+    the file's dict, with the line's time as pad_at)."""
     try:
         with open(os.path.join(folder, rel)) as f:
             got = [json.loads(ln) for ln in f if re.match(r"\s*\{.*\}\s*$", ln)] if lines else json.load(f)  # no torn line
     except (OSError, ValueError):
         return [] if lines else None
-    return [next((v[k] for k in ("status", "upload") if isinstance(v.get(k), dict)), v) for v in got] if lines else got
+    return [dict(v[k], pad_at=v.get("at")) if k else v for v in got
+            for k in [next((k for k in ("status", "upload") if isinstance(v.get(k), dict)), None)]] if lines else got
 
 def when(s):
     try:
@@ -78,6 +82,15 @@ def count(v):
     if isinstance(v, (bool, int)):
         return int(v)
     return len(v) if isinstance(v, list) else sum(count(n) for _, n in items(v))
+
+def models(doc):
+    """S7 `models` as [{model, tokens}], each token count an int or null: what the spend check and the ledger price."""
+    got, out = dig(doc, "s7_models"), []
+    for x in got if isinstance(got, list) else []:
+        tok = x.get("tokens") if isinstance(x, dict) and isinstance(x.get("tokens"), dict) else {}
+        if isinstance(x, dict) and isinstance(x.get("model"), str):
+            out.append({"model": x["model"], "tokens": {k: tok[k] if type(tok.get(k)) is int else None for k in S7_TOKENS}})
+    return out
 
 def worst(entries, cid):
     """The worst result of one S6 check id across the entries, as the check's dict; {} when absent."""
@@ -275,8 +288,23 @@ def faults(r):
     fired = [f for f in r.faults if f.get("kind") == "kill-recorder" and f.get("pid") is not None]
     r.flag(len(fired) < kinds.count("kill-recorder"), "faults", "INCONCLUSIVE",
            "fault did not fire: %d of %d kills" % (len(fired), kinds.count("kill-recorder")))
-    r.flag(any(isinstance(s, list) and s[:2] in (["wait-recovery", "FAIL"], ["wait-recovery", "timeout"])
-               for s in r.meta.get("steps") or []), "faults", "FAIL", "did not stand back up (wait-recovery)")
+    # The record's evidence around each kill: a status sample before and after it (the watch ran), and after a
+    # recorder kill, written model requests up by at least 1 (section 1a).
+    reqs = [(when(s.get("pad_at")), dig(s, "s4_requests")) for s in r.samples]
+    reqs = [(t, n) for t, n in reqs if t and isinstance(n, int)]
+    times = [t for t in (when(s.get("pad_at")) for s in r.samples) if t]
+    for f in [f for f in r.faults if f.get("kind") in ("kill-recorder", "kill-watchdog") and f.get("pid") is not None]:
+        k = when(f.get("at"))
+        if not (k and any(t < k for t in times) and any(t > k for t in times)):
+            r.mark("faults", "INCONCLUSIVE", "no status sample on both sides of the %s at %s" % (f["kind"], f.get("at")))
+        elif f["kind"] == "kill-recorder" and "kill-recorder" in kinds:
+            old, new = [n for t, n in reqs if t < k], [n for t, n in reqs if t > k]
+            r.flag(old and new and max(new) <= max(old), "faults", "FAIL",
+                   "no model request written after the kill at %s (status samples)" % f.get("at"))
+    rec = [s[1] for s in r.meta.get("steps") or [] if isinstance(s, list) and s[:1] == ["wait-recovery"]]
+    r.flag(any(x in ("FAIL", "timeout") for x in rec), "faults", "FAIL", "did not stand back up (wait-recovery)")
+    r.flag(fired and "kill-recorder" in kinds and (not rec or set(rec) - {"ok", "FAIL", "timeout"}), "faults",
+           "INCONCLUSIVE", "recovery not observed: wait-recovery %s" % (", ".join(map(str, rec)) or "not run"))
     gaps, counts = r.gaps()
     other = sorted(k for k, n in counts.items() if n and k.split(":")[0] not in DOWN + ("after_stop",))  # R2: seal
     r.flag(other, "faults", "FAIL", "named loss other than the expected gaps: %s" % ", ".join(other))  # C1, C2
@@ -298,6 +326,9 @@ def faults(r):
     r.flag(dig(r.local, "s6_exit") != 1, "faults", "FAIL", "verifier exit %s, a kill row expects 1" % dig(r.local, "s6_exit"))
 
 def recover(r, gaps):
+    for kind in ("kill-watchdog", "kill-recorder"):  # PRD-10 acceptance 11 needs both kills
+        if not any(f.get("kind") == kind and f.get("pid") is not None for f in r.faults):
+            return r.mark("faults", "INCONCLUSIVE", "fault did not fire: %s" % kind)
     if any("goalcup continue" in str(f.get("said")) for f in r.faults):
         return r.mark("faults", "INCONCLUSIVE", "harness lost its terminal")
     r.flag(not any(f.get("kind") == "status" and STATUS_RECOVER in str(f.get("said")) for f in r.faults), "faults",

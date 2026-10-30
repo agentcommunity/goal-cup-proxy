@@ -21,6 +21,8 @@ if sys.version_info < (3, 11) and __name__ == "__main__":  # the node22 image an
 import tomllib  # noqa: E402
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)
+import check as pc  # noqa: E402  S7 models are read through check.py's SEAM only
 REPO = os.path.dirname(os.path.dirname(HERE))
 SBX = os.path.join(HERE, "sbx.mjs")
 # The only servers (ledger B4; scripts/matrix.sh:253-258): the one staging Worker and loopback, fixed
@@ -49,7 +51,7 @@ SPAN = {"freeze", "cut-worker", "route-drop"}  # the faults that take +<minutes>
 # pad-run's box steps in this slice; the other faults, exec and pre come in a later slice
 BOX_STEPS = {"start", "wait-calls", "look", "seal", "wait-upload", "kill-recorder", "wait-recovery",
              "kill-watchdog-recover", "keep-going"}
-PRICED = ("input", "cached", "cache_write", "output")  # PRD-09 section 4; output holds reasoning, never added again
+PRICED = tuple(k for k in pc.S7_TOKENS if k != "reasoning")  # PRD-09 section 4; output holds reasoning, never added again
 LEDGER = threading.Lock()  # spend lines: runs and the spend check write in parallel
 NAME = re.compile(r"[a-z0-9][a-z0-9_-]*")
 FMT = "%-17s %-7s %-6s %s"
@@ -197,8 +199,8 @@ def step_limit(s, step):
     10 min, or 5 after the last fault ends (minutes from the paste, so a wait from the seal never falls short). A timed
     `kind@m` is bounded from the step's start: m minutes, then pad-run's own limit for the kind, plus 2 minutes."""
     kind, _, at = step.split(" ")[0].partition("@")
-    if at:
-        return int(at) * 60 + runner_limits(s).get(kind, 300) + 120
+    if at:  # kind@m, kind@m+n or kill-both@m+upload
+        return int(at.split("+")[0]) * 60 + runner_limits(s).get(kind, 300) + 120
     if kind == "wait-upload":
         ends = [m + (int(rest.split("+")[1]) if f in SPAN and "+" in rest else FAULTS[f])
                 for _, m, r in s["plan"] for f, _, rest in [r.partition("@")] if f in FAULTS]
@@ -217,10 +219,11 @@ def runner_limits(s):
 
 
 def price(models, rates, key):
-    """Section 7: usage `models` ([{model, tokens}]) at pad.toml's [rates] in USD per million -> (USD, sorted models
-    with no rate line). Those are priced at the highest rate listed for `key`, or the highest overall when the key has
-    no line. A rate line with no cache_write prices cache writes at its input rate."""
-    rate = lambda r, k: float(r.get(k, r.get("input", 0)) if k == "cache_write" else r.get(k, 0))  # noqa: E731
+    """Section 7: check.py's `models` ([{model, tokens}], int or null counts) at pad.toml's [rates] in USD per million
+    -> (USD, sorted models with no rate line). Those are priced at the highest rate listed for `key`, or the highest
+    overall when the key has no line. A rate line with no cache_write prices cache writes at its input rate."""
+    def rate(r, k):
+        return float(r.get(k, r.get("input", 0)) if k == "cache_write" else r.get(k, 0))
     pool = [r for r in rates.values() if r.get("key") == key] or list(rates.values())
     high = {k: max([rate(r, k) for r in pool] or [0]) for k in PRICED}
     usd, unpriced = 0.0, set()
@@ -272,6 +275,7 @@ class Run:
         self.tmp = tempfile.mkdtemp(prefix="pad-")  # box scripts; never in the run folder
         self.box_dir = None  # pad-run's run folder: here, or staged and pushed to the box's ~/run
         self.t0, self.out_root, self.over_cap, self.spender = time.time(), out_root, False, None
+        self.usd, self.high, self.models = None, [], []  # the run's priced usage, set by the check step
         self.spent = threading.Event()  # set when the seal step ends: the spend check stops
         self.price_key = s["gateway_key"] if case == "gateway" else s["key"]
         stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
@@ -298,9 +302,11 @@ class Run:
                     self.line(step, "skip", "interrupted" if STOP.is_set() else "setup failed")
                     continue
                 kind = step.split("@")[0].split(" ")[0]
-                limit = step_limit(self.s, step)
+                own = getattr(self, "step_" + kind.replace("-", "_"), None)
                 try:
-                    self.line(step, *getattr(self, "step_" + kind.replace("-", "_"), self.step_box)(step, limit))
+                    limit = step_limit(self.s, step)
+                    self.line(step, *(own(step, limit) if own else self.step_box(step, limit) if kind in BOX_STEPS
+                                      else ("skip", NEEDS_LATER)))
                 except Exception as e:  # a rig error writes its line and the walk goes on
                     late = isinstance(e, subprocess.TimeoutExpired)
                     why = "no answer in %d min" % (limit // 60) if late else str(e) if isinstance(e, Refused) else type(e).__name__
@@ -315,6 +321,14 @@ class Run:
             except Exception as e:
                 self.line("cleanup", "error", "%s; box %s may be left" % (type(e).__name__, self.name))
             shutil.rmtree(self.tmp, ignore_errors=True)
+            try:  # section 7, the ledger: one line per run, also an interrupted or unpriced one (usd null)
+                append(os.path.join(self.out_root, "spend.jsonl"), {
+                    "at": now(), "connector": self.s["harness"], "case": self.case, "mode": self.s["mode"], "key": self.price_key,
+                    "run": self.meta.get("run"), "entry": self.meta.get("entry"), "usd": self.usd, "over_cap": self.over_cap,
+                    "models": {m["model"]: m["tokens"] for m in self.models}, "priced_high": self.high,
+                    "box_minutes": round((time.time() - self.t0) / 60, 1) if self.tried else 0})
+            except OSError as e:
+                self.line("cleanup", "error", "spend ledger not written: %s" % type(e).__name__)
         return self.finish()
 
     def step_setup(self, step, limit):
@@ -390,8 +404,6 @@ class Run:
         return d.get("result", "error"), d.get("saw", ""), d
 
     def step_box(self, step, limit):
-        if step.split("@")[0].split(" ")[0] not in BOX_STEPS:
-            return "skip", NEEDS_LATER
         if self.no_build:
             return "skip", NO_BUILD
         result, saw, d = self.box(step, limit + 120)  # pad-run works to `limit`
@@ -409,24 +421,29 @@ class Run:
 
     def spend(self):
         """Section 7 (ledger T6): every spend_every_min, pad-run's usage on the open entry, priced here, one line in
-        watch/spend.jsonl; at cap_usd one seal-now in the box, and the check ends. Never a check failure."""
+        watch/spend.jsonl (usd null and a calls.log line when usage was not read); at cap_usd a seal-now in the box, tried
+        again at each later check until it seals. Never a check failure."""
         every, cap = 60 * float(self.pad.get("spend_every_min", 5)), float(self.pad.get("cap_usd", 10))
         while not (self.spent.wait(every) or STOP.is_set()):
             try:
                 result, saw, d = self.box("spend", runner_limits(self.s)["spend"] + 120)
             except Exception as e:
-                result, saw = "error", type(e).__name__
-            if result != "ok":
-                self.log("spend %s: %s" % (result, saw))
-                continue
-            models = [m for m in d.get("models") or [] if isinstance(m, dict)]
-            usd, high = price(models, self.pad.get("rates") or {}, self.price_key)
-            append(os.path.join(self.dir, "watch", "spend.jsonl"), {"at": now(), "usd": round(usd, 2), "priced_high": high,
-                   "models": {str(m.get("model")): m.get("tokens") for m in models}, "sealed": usd >= cap})
-            if usd >= cap:
+                result, saw, d = "error", type(e).__name__, {}
+            read, models, sealed = result == "ok" and d.get("read") is True, pc.models(d), None
+            usd, high = price(models, self.pad.get("rates") or {}, self.price_key) if read else (None, [])
+            if not read:
+                self.log("spend not read: %s %s, usage exit %s" % (result, saw, d.get("exit")))
+            elif usd >= cap:  # seal-now, then again at every later check until it is sealed
                 self.over_cap = True
-                self.log("spend %.2f USD reached the %g USD cap: seal-now %s" % (usd, cap, self.name))
-                self.box("seal-now", runner_limits(self.s)["seal-now"] + 120)
+                try:
+                    sealed, told, _ = self.box("seal-now", runner_limits(self.s)["seal-now"] + 120)
+                except Exception as e:
+                    sealed, told = "error", type(e).__name__
+                self.log("spend %.2f USD reached the %g USD cap: seal-now %s %s: %s" % (usd, cap, self.name, sealed, told))
+            append(os.path.join(self.dir, "watch", "spend.jsonl"), {
+                "at": now(), "read": read, "usage_exit": d.get("exit"), "usd": None if usd is None else round(usd, 2),
+                "priced_high": high, "models": {m["model"]: m["tokens"] for m in models}, "seal_now": sealed})
+            if sealed == "ok":
                 return
 
     def end_spend(self):
@@ -473,16 +490,13 @@ class Run:
         with open(os.path.join(self.dir, "meta-box.json")) as f:
             self.meta.update(json.load(f))  # pad-run's keys, merged whole; pad's own keys below win
         s, at = self.s, datetime.datetime.fromtimestamp(self.t0, datetime.timezone.utc).isoformat(timespec="seconds")
-        models = None  # S7 models[].tokens of the entry's usage summary, priced as the spend check does
-        try:
-            with open(os.path.join(self.dir, "verify", "usage", "%s.json" % self.meta.get("entry"))) as f:
-                models = [m for m in json.load(f).get("models") or [] if isinstance(m, dict)]
-        except (OSError, ValueError, AttributeError):
-            pass
-        usd, high = price(models or [], self.pad.get("rates") or {}, self.price_key)
-        usd = None if models is None else round(usd, 2)
+        use = pc.load(self.dir, "verify/usage/%s.json" % self.meta.get("entry"))  # priced as the spend check does
+        if isinstance(use, dict):
+            self.models = pc.models(use)
+            usd, self.high = price(self.models, self.pad.get("rates") or {}, self.price_key)
+            self.usd = round(usd, 2)
         with open(os.path.join(self.dir, "meta.json"), "w") as f:
-            json.dump(dict(self.meta, spend_usd_est=usd, priced_high=high, over_cap=self.over_cap, connector=s["harness"],
+            json.dump(dict(self.meta, spend_usd_est=self.usd, priced_high=self.high, over_cap=self.over_cap, connector=s["harness"],
                            case=self.case, mode=s["mode"], prompt=s["prompt"], variant=self.variant(), where=s["where"],
                            server=s["server"], keep=s["keep"], minutes=s["minutes"],
                            started=at, push="not tested", pad_trusted_at=None, steps=[list(ln) for ln in self.lines]),
@@ -490,11 +504,6 @@ class Run:
         self.scan_out()
         result, saw, _ = self.box(step, 300, "PADCHECK", [sys.executable, os.path.join(HERE, "check.py"), self.dir])
         self.row = result if result in ("PASS", "FAIL", "INCONCLUSIVE") else None
-        append(os.path.join(self.out_root, "spend.jsonl"), {  # section 7, the ledger: one line per run
-            "at": now(), "connector": s["harness"], "case": self.case, "mode": s["mode"], "key": self.price_key,
-            "run": self.meta.get("run"), "entry": self.meta.get("entry"), "usd": usd, "over_cap": self.over_cap,
-            "models": {str(m.get("model")): m.get("tokens") for m in models or []}, "priced_high": high,
-            "box_minutes": round((time.time() - self.t0) / 60, 1) if self.tried else 0})
         return result, saw
 
     def scan_out(self):
