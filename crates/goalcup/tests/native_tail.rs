@@ -423,7 +423,10 @@ fn torn_then_last(c: &Calls, size: u64, gap: GapReason, end: EndReason) {
     let tail = (gap == GapReason::SourceChanged).then(|| json!({"unread_at_least": size}));
     assert_eq!(lost(c), [(o[1].0, gap, Some(size), tail)]);
     let e = ends(c);
-    assert_eq!(e, [(o[0].0, EndReason::SourceChanged, 10), (o[1].0, end, size)]);
+    assert_eq!(
+        e,
+        [(o[0].0, EndReason::SourceChanged, 10), (o[1].0, end, size)]
+    );
 }
 
 #[test]
