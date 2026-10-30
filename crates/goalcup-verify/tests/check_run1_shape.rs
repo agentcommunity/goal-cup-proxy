@@ -72,6 +72,10 @@ fn export(from: &Path, to: &Path) {
 #[test]
 fn run1_shape_fails_exactly_its_checks_and_reads_six_wire_errors() {
     let d = run1("r1-lossy", Shape::Lossy);
+    if let Ok(out) = env::var("GOALCUP_FIXTURES_OUT") {
+        export(&d, &Path::new(&out).join("k2-part"));
+        export(&fetch(&d), &Path::new(&out).join("k2-fetched"));
+    }
     let (code, v) = check(&d, &[]);
     assert_eq!(code, 2);
     assert_eq!(sorted(ids_with(&v, "fail")), sorted(FAILS));
@@ -79,10 +83,6 @@ fn run1_shape_fails_exactly_its_checks_and_reads_six_wire_errors() {
         .as_object()
         .unwrap();
     assert_eq!(wire.values().map(|n| n.as_u64().unwrap()).sum::<u64>(), 6);
-    if let Ok(out) = env::var("GOALCUP_FIXTURES_OUT") {
-        export(&d, &Path::new(&out).join("k2-part"));
-        export(&fetch(&d), &Path::new(&out).join("k2-fetched"));
-    }
 }
 
 #[test]
