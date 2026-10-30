@@ -1068,3 +1068,10 @@ PRD-01, PRD-02, PRD-04, PRD-05 and PRD-11 as they now stand, and the code. No lo
   - PRD-17 SC1 (`cli_folder.rs`): a project folder inside `$GOALCUP_HOME`, or one that holds it,
     also through a symlink, is refused (checked on the spelled and the resolved path).
   - PRD-17 SC6 (`cli_finish.rs`): a `status.json` with no seal never prints the finished line.
+
+### 2026-10-30, replan after PRD-05 phase 0 slice (merge 82484521)
+
+- **S2 is on integration as the stub.** Where PRD-10 builds a masker (`Masker::new`), it passes a
+  typed slice (`&plan.mask_rules`), never a bare `&[]`: the stub is generic over the rule type until
+  S3 lands, and PRD-05 switches it to `&[connector::MaskRule]` then (PRD-05 note).
+- No locked ledger item is touched and no owner question comes from this slice.

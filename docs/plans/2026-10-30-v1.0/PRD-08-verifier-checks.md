@@ -710,3 +710,19 @@ log; the pad lane follows.
   INCONCLUSIVE on its own, and PRD-12 section 8 (K11 (c), ledger T4: the history check is "skipped
   where it does not" resend) lets a history `skip` pass C1. The pad follows PRD-12; read the row's
   clause as superseded. Nothing in this crate depends on it: the C mapping lives in `check.py`.
+
+### 2026-10-30, replan after PRD-05 phase 0 slice (merge 82484521)
+
+- **S12 is on integration** at `crates/goalcup/src/mask/shapes.tsv`, in the shape PRD-08 reads:
+  `#` lines are comments, blank lines are skipped, data lines are `kind`, tab, `guard`, tab, regex,
+  20 data lines, no tab inside a regex. Two rules from the file's header bind the reader: the span is
+  group 1 when the regex has a capture group (`url_password`), else the whole match; and
+  `private_key` uses `(?-u:[\x00-\xFF])`, which only `regex::bytes` accepts, so the scan compiles
+  with `regex::bytes`. PRD-05's box check found the 19 old regexes equal to `redact.rs`.
+- **Entries built on the S2 stub** (PRD-05 review A1). Until PRD-05's core slice merges, every MASK is
+  `fail_closed`, `start.mask_rules` is `["fail_closed"]`, `mask_meta` stars every meta string
+  (header names, method, host, native `path`) and no `meta.masked` is written. A check that needs
+  `meta.masked` or a native `path` fails on such an entry; the failure is the stub, not a recorder
+  defect. Check-test fixtures are hand-written records or built with `Masker::passthrough_for_tests()`,
+  never with the stub.
+- No locked ledger item is touched and no owner question comes from this slice.

@@ -1294,3 +1294,21 @@ to another file are made by that file's owner.
   `pipeline_restart.rs` or `watchdog_restart.rs`), post its `file::test` name in the lessons log
   so the lane adds it to L-FW2. This asks for a name, not for a new test hook: "No silent-drop hook"
   (PRD-00 cut) holds, and no cap or disk-full handling comes back (ledger L6).
+
+### 2026-10-30, replan after PRD-05 phase 0 slice (merge 82484521)
+
+- **S2 is on integration as the stub.** PRD-02 can now type `StartFacts.mask_rules` as
+  `Vec<String>` (from `Masker::mask_rules()`) and `StartFacts.values` as `Vec<mask::SecretValue>`
+  (S17: serde both ways, `Debug` prints the source only, bytes zeroed on drop), and add
+  `Recorder::real_for_tests(dir, masker)`. Tests that need clear bytes use
+  `Masker::passthrough_for_tests()` (feature `test-hooks`). `start.mask_values` is
+  `masker.value_counts()` serialized: `workspace`, `env`, `harness`, `skipped` (PRD-01 section 8).
+- **Pass a typed slice to `Masker::new`** (`&plan.mask_rules`), never a bare `&[]`: the stub is
+  generic over the rule type until S3 lands, and the call must compile after PRD-05 switches it to
+  `&[connector::MaskRule]` (PRD-05 note).
+- **Never read meta back after `mask_meta`** (PRD-05 review A1). The stub stars every string leaf,
+  header names, method, host and a native stream's `path` (the stream ID) included, and writes no
+  `meta.masked`. Take what the pipeline needs (the native `path` for its stream map, the host for
+  COUNT) before the call. The rule holds after the core slice too: a path or host holding a secret
+  shape is still masked. PRD-02 does not add `meta.masked` itself; PRD-05 owns it.
+- No locked ledger item is touched and no owner question comes from this slice.
