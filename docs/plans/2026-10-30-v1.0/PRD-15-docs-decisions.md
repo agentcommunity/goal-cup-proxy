@@ -1026,3 +1026,28 @@ links and dropped the signing claim from ARCHITECTURE section 10 (fix bdcea297, 
   line 394) or the script's skip line, not from the script header. The header (lines 14-15) does not
   yet say that a skipped usage bucket keeps its test objects until a run without `--older-than`
   (PRD-07 note, review A-N1). The usage skip rule is now plain `403` or `404`.
+
+### 2026-10-30, replan after PRD-11 slice 2 (merge b9fa50f8)
+
+- **`docs/CONNECTOR-SCHEMA.md`** can be written from `crates/goalcup/src/connector/schema.rs` after
+  PRD-11's next merge, which changes three rules: `no_prompts` and `update_off` files under `{home}`
+  only (F1b); a `.jsonc` file read as JSON with comments; `"true"` and `"false"` written as booleans.
+  Also from the PRD-11 note of b9fa50f8: a pattern ending in `**` is refused (PRD-04's check); a load
+  error names the file and the line or key, never a value; built-in connectors are one TOML file plus
+  one line in `builtin.rs`.
+
+### 2026-10-30, replan after PRD-14 slice 1 (merge 22fe5926)
+
+- **Docs still name deleted scripts.** PRD-14 deleted `scripts/linux-check.sh`,
+  `scripts/test_linux_check.py` and `.github/workflows/linux-x86_64.yml` (and earlier
+  `check-version.py`, `ci-scope.py` and their tests). On integration at 22fe5926 these still name
+  them: `README.md:292` and `:294` (the release steps: now `gate full`, then
+  `scripts/pad/table --release-check <commit>`, then `release.sh tag`), `docs/OPERATING.md:50`, `:145`,
+  `:534` and `:540-541` (CI is one job that runs `gate fast`; there is no scope step and no Linux
+  check), `scripts/README.md:6`, `:14`, `:15`, `:17`, `:61`, `:62` and `:68`, and
+  `docs/research/LOCAL-NEXT-STEPS.md:27`, `:31` and `:172`. `packaging/README.md` was fixed in the
+  slice. `docs/CONNECTOR-SCHEMA.md` and the skill template name the platform `linux-x86_64`, not the
+  workflow; they are not stale for this reason.
+- `README.md` "The gate": the first measured `gate fast` with the script steps is 87 s on 22fe5926 in
+  a build box. CI has not yet finished a run on integration (PRD-14 note), so there is no CI time to
+  quote.

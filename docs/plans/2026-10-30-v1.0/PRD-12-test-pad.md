@@ -1411,3 +1411,20 @@ taken; "rejected" says why. Fixes for other files are made by those files' owner
   file against the rows above. Whether the row itself rises stays the open owner question logged at
   12:53Z; no new one.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-11 slice 2 (merge b9fa50f8)
+
+- A pad row run on an integration build between b9fa50f8 and PRD-11's hosts and launch merges is not
+  evidence: `decide` tunnels every host (zero decrypted requests), no hint or `local_model` note, no
+  home lock, no version, and `update_off` is not written. The 1a micro rungs wait for those two merges
+  plus S8 `watchdog::run` and PRD-10's `start`.
+
+### 2026-10-30, replan after PRD-14 slice 1 (merge 22fe5926)
+
+- **`gate fast` now runs the pad's tests:** `python3.11 -m unittest discover -s scripts/pad -p
+  'test_*.py'` (17 tests on 22fe5926), with python3.11 installed in a build box when no Python 3.11 or
+  later is found. The earlier "the gate does not run `test_pad.py`" notes are closed. Any pad test
+  that fails now blocks every lane's merge, so a pad slice runs `gate fast` before it asks for a merge.
+- `release.sh` and `packaging/README.md` now name `scripts/pad/table --release-check <commit>` as the
+  check after `gate full`; `tag` does not run it yet (PRD-14's next release slice). PRD-12's nit B3
+  still decides whether that call is right from any checkout.

@@ -880,3 +880,10 @@ old code. Each id with what was done here.
   that a relative `GOALCUP_HOME` is one of its inputs before it marks L-SC1 green.
 - SC1 and SC6 stay `(name pending)`: slice 1 wrote neither `cli_folder.rs` nor `cli_finish.rs`.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-11 slice 2 (merge b9fa50f8)
+
+- `connector::hosts::check(name, Source) -> Result<Host, Skipped>` is on integration with its final
+  signature, but as a stub (lowercase and label shape only). `lessons_hosts.rs` waits for PRD-11's hosts
+  slice, which copies the full check (section 3); a lesson test against the stub would pass or fail for
+  the wrong reason. `lessons_launch.rs` waits for the launch slice (lock, `.profile`) and S8.

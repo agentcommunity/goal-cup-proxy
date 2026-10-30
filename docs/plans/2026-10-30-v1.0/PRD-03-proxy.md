@@ -858,3 +858,12 @@ Revision 3 against OWNER-DECISIONS.md (the ledger wins). Fix ids are from the al
   place, never the text. Accept and socket errors (EMFILE included) go in as `Fact::Io(kind)`, counts as
   `Fact::N`. After S3 lands, PRD-10 adds `From<connector::hosts::Host>` for hosts from the list.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-11 slice 2 (merge b9fa50f8)
+
+- **S3 is on integration.** `HostList::decide(&self, &str) -> Decision` (`Listed { source, kind,
+  pinned }`, `Never`, `NotListed`) and `HostList::ca_subtrees() -> Vec<String>` have their final
+  signatures, so slice 2 (serve, hosts, tunnel, pump, http1) builds against them now. Both are stubs
+  until PRD-11's hosts slice: every name is `NotListed` and there are no subtrees. A proxy test that
+  needs a `Listed` or `Never` answer waits for that merge; nothing in `src/proxy/` copies the
+  matching meanwhile.

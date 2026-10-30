@@ -720,3 +720,13 @@ ledger wins over every row here.
   new files; passing the 10% line needs a replan `decision` line that names the point the extra lines
   serve (PRD-00 "Size budget").
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-11 slice 2 (merge b9fa50f8)
+
+- **S3 is on integration.** `connector::NativeSources(Vec<NativeSource>)` with
+  `NativeSource { name, root: PathBuf, pattern: String, form, since, warn_missing }` and
+  `Form::{Append, Snapshot, Final}`, in connector file order. The next PRD-04 slice (`start`,
+  `finish`, walk, tail, snapshot) is unblocked; `start` parses each `pattern` with `pattern::parse`.
+- **Correction to the 403d9165 note:** at b9fa50f8 neither PRD-11's loader nor `connector_builtin.rs`
+  calls `native::pattern::parse`; the loader's own check still accepts a trailing `**`. PRD-11's next
+  slice switches both to `native::pattern` (PRD-11 note). No shipped row has that shape.

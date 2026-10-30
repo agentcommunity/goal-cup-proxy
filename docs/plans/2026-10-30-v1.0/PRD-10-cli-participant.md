@@ -1123,3 +1123,15 @@ PRD-01, PRD-02, PRD-04, PRD-05 and PRD-11 as they now stand, and the code. No lo
 - PRD-17 SC1 and SC6 names are still pending: `cli_folder.rs` and `cli_finish.rs` come with the core
   slice.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-11 slice 2 (merge b9fa50f8)
+
+- **S3 is on integration.** `connector::hosts::Host { name, kind, pinned }` is there, so
+  `From<connector::hosts::Host>` for `cli::log::Host` can land. `hosts::check` is a stub (label shape
+  only) until PRD-11's hosts slice; `Host::checked` keeps its IP, `localhost` and port forms until then.
+- **Refusals to word** (file, key, home, program and the wanted prefix only, never a value):
+  `Refusal::SettingSet { file, key }`, `HomeLocked { home }`, `VersionMismatch { program, want }`.
+- `goalcup setup` calls `connector::write_settings(home, &c.no_prompts)` and
+  `write_settings(home, &c.update_off)`. It writes nothing until PRD-11's launch slice, so a setup test
+  that reads the written file waits for that merge. After that merge both lists name `{home}` files
+  only (PRD-11 note, F1b). `start` with `GOALCUP_SERVER=off` still needs S8 `watchdog::run`.
