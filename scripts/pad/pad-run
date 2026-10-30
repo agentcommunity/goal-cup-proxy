@@ -302,7 +302,7 @@ class Run:
         return result
 
     def wipe(self, _):
-        sh(["tmux", "kill-session", "-t", "pad"])
+        shutil.which("tmux") and sh(["tmux", "kill-session", "-t", "pad"])
         found = self.wipe_secrets(known=True)
         return "ok", "found and wiped: " + ", ".join(found) if found else "nothing key-like left"
 
