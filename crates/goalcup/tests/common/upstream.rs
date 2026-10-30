@@ -1,7 +1,7 @@
 //! The fake upstream (PRD-14 section 5): TLS with a chosen ALPN or plain TCP, HTTP/1.1 (whole,
 //! chunked, SSE, a content coding), HTTP/2 over the `h2` crate when TLS chose `h2`, and WebSocket
-//! with permessage-deflate, from a script. It records what it receives as it arrives, so a test
-//! can read it while a connection is open.
+//! with permessage-deflate, from a script. It records what it receives as it arrives (over HTTP/2,
+//! a request once its body ends), so a test can read it while a connection is open.
 //!
 //! One tokio runtime on its own thread serves a held port; dropping the [`Upstream`] stops it on
 //! that thread, so a `#[tokio::test]` may drop it.
@@ -196,8 +196,12 @@ impl Upstream {
 
 impl Drop for Upstream {
     fn drop(&mut self) {
-        let _ = self.stop.take().map(|stop| stop.send(()));
-        let _ = self.thread.take().map(JoinHandle::join);
+        if let Some(stop) = self.stop.take() {
+            let _ = stop.send(());
+        }
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
     }
 }
 
@@ -458,6 +462,7 @@ impl Conn {
         }
         head += "\r\n";
         self.send(head.as_bytes()).await?;
+
         let mut compress = DeflateEncoder::new(Vec::new(), Compression::default());
         let mut closed = false;
         for msg in messages {
@@ -474,6 +479,7 @@ impl Conn {
             self.send(&frame).await?;
             closed |= opcode == 8;
         }
+
         // The client's frames: masked, maybe compressed and fragmented. `fill` has already
         // recorded their raw bytes; only a Close is looked at.
         loop {
@@ -610,11 +616,15 @@ async fn h2_stream(
             let Some(cap) = std::future::poll_fn(|cx| send.poll_capacity(cx)).await else {
                 return Ok(());
             };
-            let n = cap?.min(rest.len()).min(room as usize);
+            let want = cap?.min(rest.len()) as u64;
+            // Claimed before it goes, so streams that overlap send `close_after` bytes in all.
+            let share = |w: u64| limit.map_or(want, |l| want.min(l.saturating_sub(w)));
+            let w = written.update(SeqCst, SeqCst, |w| w + share(w));
+            let n = share(w) as usize;
             let end = i + 1 == pieces.len() && n == rest.len();
             send.send_data(bytes::Bytes::copy_from_slice(&rest[..n]), end)?;
             rest = &rest[n..];
-            if limit.is_some_and(|l| written.fetch_add(n as u64, SeqCst) + n as u64 >= l) {
+            if limit.is_some_and(|l| w + n as u64 >= l) {
                 cut.1.notify_one();
                 // Held open until the connection goes, so no reset comes before the GOAWAY.
                 let _ = std::future::poll_fn(|cx| send.poll_reset(cx)).await;

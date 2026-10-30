@@ -14,7 +14,7 @@ pub fn pick<T>(c: &Calls, f: impl FnMut(Call) -> Option<T>) -> Vec<T> {
 
 /// The bytes of every DATA call for `sid`, joined in call order.
 pub fn data_of(c: &Calls, sid: Sid) -> Vec<u8> {
-    let pieces = pick(c, |c| match c {
+    let pieces = pick(c, |call| match call {
         Call::Data(s, .., bytes) if s == sid => Some(bytes.to_vec()),
         _ => None,
     });
@@ -23,12 +23,12 @@ pub fn data_of(c: &Calls, sid: Sid) -> Vec<u8> {
 
 /// Every GAP call, in order.
 pub fn gaps(c: &Calls) -> Vec<Call> {
-    pick(c, |c| matches!(c, Call::Gap(..)).then_some(c))
+    pick(c, |call| matches!(call, Call::Gap(..)).then_some(call))
 }
 
 /// Each OPEN as (sid, kind, meta), in order.
 pub fn opens(c: &Calls) -> Vec<(Sid, StreamKind, Value)> {
-    pick(c, |c| match c {
+    pick(c, |call| match call {
         Call::Open(sid, kind, .., meta) => Some((sid, kind, meta)),
         _ => None,
     })
@@ -36,7 +36,7 @@ pub fn opens(c: &Calls) -> Vec<(Sid, StreamKind, Value)> {
 
 /// Each END as (sid, reason, seen, tail), in order.
 pub fn ends(c: &Calls) -> Vec<(Sid, EndReason, u64, Option<Value>)> {
-    pick(c, |c| match c {
+    pick(c, |call| match call {
         Call::End(sid, _, r, seen, tail) => Some((sid, r, seen, tail)),
         _ => None,
     })
@@ -44,7 +44,7 @@ pub fn ends(c: &Calls) -> Vec<(Sid, EndReason, u64, Option<Value>)> {
 
 /// Each EVENT, in order.
 pub fn events(c: &Calls) -> Vec<Value> {
-    pick(c, |c| match c {
+    pick(c, |call| match call {
         Call::Event(v) => Some(v),
         _ => None,
     })

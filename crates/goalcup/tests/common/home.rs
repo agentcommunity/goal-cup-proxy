@@ -57,6 +57,7 @@ pub fn guard() -> RealHomeGuard {
 }
 
 pub struct RealHomeGuard(String);
+
 impl Drop for RealHomeGuard {
     fn drop(&mut self) {
         // A test that already failed keeps its own message.
