@@ -893,3 +893,71 @@ log; the pad lane follows.
   `none`, `subagents_present` (C2) is `skip`, and no check reads a wire-only table as a failure.
   `usage::run` still exits 3.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-08 slice 3 (merge 7a995b6e)
+
+- **Built and checked.** `secrets <path>... [--known <file>]` (new `src/secrets.rs`) and `check
+  --known <file>`, which adds one `secrets` check (`inv` null) to every entry. Gate on 7a995b6e:
+  `gate fast: PASS in 105s`, nextest 218 of 218 (goalcup-verify 36 of 36 in the lane's box runs).
+  Six paths changed, all owned here, no `Cargo.toml`. The A9/B3 cut is done: `main.rs` is 200 with the
+  `secrets` arm in it.
+- **Section 3 "Secrets", as merged** (S12; the fixer's 16:27Z line asked the replan for this wording,
+  it is no ledger item, so no W6 line follows):
+  - **Deltas:** the joined text is the string values of `delta`, `text` and `partial_json` anywhere,
+    and of `content`, `reasoning_content`, `thinking` and `arguments` inside a `delta` object (Chat
+    Completions `choices[].delta` and its `tool_calls[].function.arguments`, Anthropic thinking).
+    Gemini's `parts[].text` is covered by `text`. This replaces the bullet's three-key list.
+  - **One joiner.** It is `secrets::delta_text(&Value, &mut String)`, public. Section 3.2 step 1's
+    "the same joiner as the secret scan" means `history.rs` calls it; it never keeps a copy.
+  - **Tails** are cut at any GAP of the stream (a GAP on sid 0 cuts all) and at a DATA offset jump, so
+    nothing is joined across a hole (test `secrets_nothing_is_joined_across_a_gap`). Bytes are
+    scanned per 64 KiB batch with the 4 KiB tail kept, and at END, GAP, jump and the end of the
+    record (fixer's probe: 100,000 SSE pieces, 4.4 MB, `secrets` 174 ms).
+  - **Inputs.** A part file is a record. A folder holding an entry has its record decoded and every
+    other file read raw, except its `rec/` (the recorder's state, the run CA key among it), which is
+    never read; a part folder of another name has its other files read raw. Other folders are walked.
+    Any other file, and `-` (stdin), is raw bytes. An unreadable file inside a walk, or a folder
+    symlink, leaves that input `partial` (exit 1). A path given on the command line that cannot be
+    read, or an unreadable `--known` file, is exit 3 with no report. The section's "about 30 lines"
+    for raw inputs is superseded by the size line below.
+  - **The report** (stdout, always JSON; there is no `--json` flag): `verifier`, `result` (`pass`,
+    `warn`, `fail`), `exit`, `known_values`, `inputs` (`[{path, as: record|raw, read:
+    whole|partial}]`), `known_hits` (`[{form, in, sha12, n}]`), `shape_hits` and `glued_shape`
+    (`[{kind, in, sha12, n}]`), `masks` (`{kind: span count}`, kinds named from the start event's
+    `mask_rules`, `other(n)` when unnamed), `mask_bytes` (`{fail_closed: bytes}`) and `big_masks`
+    (`[{kind, in, len}]`, a non-`fail_closed` span over 16 KiB, a `fail` by itself). Exit 2 on any
+    known hit, unglued shape hit or big mask; else 1 when an input was read only in part; else 0
+    (`warn` keeps 0). The `secrets` check of `check --known` has the same result rule and the same
+    keys as facts.
+  - A glued hit whose bytes just before it are an escape the masker's guard still masks (backslash,
+    `\u`, `\x`, percent or ANSI escape, PRD-05 section 4) is not `glued_shape`. That list mirrors
+    PRD-05's guard: a change there is a seam line and the same change in `secrets.rs` `ESCAPE`.
+- **Size decision** (`wc -l` at 7a995b6e). Src without PRD-09's `usage/` is 2,235: `integrity.rs`
+  982, `secrets.rs` 509, `server.rs` 201, `main.rs` 200, `input.rs` 198, `report.rs` 133, `lib.rs`
+  12. That is seven of ten files, 160% of the PRD-00 row (1,400) and 91% of the 2,450 ceiling. Tests
+  are 1,826: `tests/common/` 877, `check_invariants.rs` 329, `check_named.rs` 218, `secrets_scan.rs`
+  214, `server_compare.rs` 188; 166% of the row (1,100) and 1,826 of the 1,830 ceiling. Past per-file
+  ceilings: `secrets.rs` 509 of 160, `secrets_scan.rs` 214 of 30, `lib.rs` 12 of 11, `input.rs` 198 of
+  150. With `honesty.rs` 140, `legs.rs` 240 and `history.rs` 155 the crate projects to about 2,770
+  src; with `check_run1_shape.rs` 80 and `check_history.rs` 80, to about 1,986 tests. **Decision:**
+  `secrets.rs` is capped at 509 (as merged) and `secrets_*.rs` at 215. The extra lines serve point 4
+  (every known form, Chat Completions deltas joined, every loose file of an entry scanned, MASK spans
+  merged and named by rule) and point 3 (no false hit across a GAP, no false C3 fail from the run CA
+  key, a 100,000-piece stream in well under a second). The tests are point 4 and this PRD's
+  acceptance (ledger B10). The crate ceilings become **2,730 src and 1,990 tests**: the src figure
+  assumes the PRD-01 ask (about 40 lines of `input.rs`) is cut, which is now due before `legs.rs`
+  merges; if PRD-01 declines it, a decision line nets the 40 elsewhere. Per-file ceilings for what is
+  left stay: `honesty.rs` 140, `legs.rs` 240, `history.rs` 155, `check_run1_shape.rs` 80,
+  `check_history.rs` 80. No further line in `secrets.rs`: a later secrets fix nets to zero there. A
+  slice past these numbers needs another decision line. PRD-16's end-of-build report nets this
+  against the Rust totals; only a test total past about 14,200 becomes an owner question.
+- **Seam for PRD-12** (fixer 16:40Z): `secrets <entry>` reads the entry's `goalcup.log` and
+  `upload.json` itself, so naming them again doubles their `n`. PRD-12 drops them from its argv
+  (PRD-12 note).
+- **Acceptance lists as known,** if still open at the end: review A5 nits 2 (`first: null`) and 3
+  (`check --known` decodes the record a second time, besides the integrity pass); review items A7,
+  A8 and F11, logged and not fixed (judge 16:32Z); a file passed both inside a walked folder and on
+  its own counts its `n` twice under one key; the PRD-01 ask while open.
+- **Later slices, unchanged:** honesty, legs, history and the run 1 shape builder, in PRD-16's order.
+  `docs/RECORD-FORMAT.md` follows the new keys in PRD-15's next slice (PRD-15 note).
+- No locked ledger item is touched and no owner question comes from this slice.

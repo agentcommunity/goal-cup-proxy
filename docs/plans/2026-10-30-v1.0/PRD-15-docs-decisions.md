@@ -1224,3 +1224,29 @@ against `folder.rs` and fixes the guide, without quoting message wording the cod
   PRD-10's next setup slice). The line stays; if that slice has not merged by PRD-15's last pass,
   the line says what setup does then.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-11 slice 4, part 1 (merge a96d9f71)
+
+- **`docs/CONNECTOR-SCHEMA.md` line 24 is now wrong.** The `version` key is no longer text the line
+  must contain: a word of the first non-empty line of `program --version`, with a leading `v`
+  stripped, must start with it (`mod.rs` `plan`, `held`). The next PRD-15 touch rewrites that cell
+  from merged `mod.rs`.
+- **`.profile` is merged** (`launch.rs` `write_profile`, called from `mod.rs` `plan`): written only
+  where `home` sets `HOME`, replaced only when goalcup wrote it, otherwise kept with a log row.
+  CONNECTOR-SCHEMA's `home` row or the ARCHITECTURE rewrite states it (earlier note).
+- **`docs/harnesses/README.md` holds the one 15-row harness table** (PRD-11 owned). PRD-15 pages
+  that list harnesses (README, guide, HARNESS-ONBOARDING) link to it and copy no rows; tiers come
+  from `connectors/tiers.toml` (PRD-12). The five per-harness sheets stay in the old shape until
+  PRD-11's last slice; a PRD-15 page that quotes a sheet quotes nothing that slice will rewrite.
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-08 slice 3 (merge 7a995b6e)
+
+- **For `docs/RECORD-FORMAT.md`** (PRD-08 note): `--known` is now read (its line at :335 says it is
+  not). With it, `check` adds a `secrets` check (`inv` null) to every entry, result `pass`, `warn` or
+  `fail`, with facts `known_hits`, `shape_hits`, `glued_shape`, `masks`, `mask_bytes` and
+  `big_masks`. The `secrets` subcommand writes one JSON report on stdout (keys and exit rules in the
+  PRD-08 note) and has no `--json` flag. Document both in PRD-15's next slice, by names, not by
+  copying the PRD text. The participant guide's line on what can still be recorded keeps "the scan
+  flags a key glued to a word" (`glued_shape`, a `warn`).
+- No locked ledger item is touched and no owner question comes from this slice.
