@@ -1018,3 +1018,11 @@ links and dropped the signing claim from ARCHITECTURE section 10 (fix bdcea297, 
   RECORD-FORMAT numbers (PRD-02 core merge), CONNECTOR-SCHEMA (PRD-11 schema), and the third slice.
   The two `crates/goalcup-cli/src/upload/` comments that cite SERVER-DESIGN go with the cut (PRD-13).
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-07 slice 4 (merge c4ada44a)
+
+- **For the RA-N1 fix to `docs/OPERATING.md` "Test runs"** (lines 135-138, still unchanged at
+  c4ada44a): copy the usage-bucket caveat from `server/worker/README.md` "Clean up test runs" (around
+  line 394) or the script's skip line, not from the script header. The header (lines 14-15) does not
+  yet say that a skipped usage bucket keeps its test objects until a run without `--older-than`
+  (PRD-07 note, review A-N1). The usage skip rule is now plain `403` or `404`.

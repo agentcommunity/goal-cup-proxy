@@ -1142,3 +1142,19 @@ kept and now cites BUILD-PROMPT section 5, since B3 no longer carries it.
   line says the server signs receipts or acknowledgements (lines 31, 276 and 277 today). If the
   third slice is not reached, the end-of-build report lists `SECURITY.md:69` as a known false line.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-07 slice 4 (merge c4ada44a)
+
+- **PRD-07 is complete on integration.** Every builder step (4dcc1e7b, 2f4bc6a0, 323b1a0f) and the
+  nit cleanup (c4ada44a) are merged. Two optional nits stay open with no slice planned: the script's
+  `--help` header lacks the RA-N2 caveat, and a 2-line simplification of its Python parse (PRD-07
+  note). Acceptance lists them as known, not as failures.
+- **Size report, PRD-07** (`wc -l` on integration at c4ada44a), row "Worker (PRD-07)": src
+  (`server/worker/src`, all files) 3,557 against about 3,440, 3.4% over; tests (`server/worker/test`
+  `*.ts` plus helpers) 5,258 against about 4,950, 6.2% over. Both unchanged by this slice and within
+  the 10% the row allows without a replan decision. Outside the row:
+  `server/worker/scripts/delete-test-runs.sh` 121 (was 122).
+- **Checks skipped in boxes, for acceptance to state as skipped:** `shellcheck` and `dash -n` (not in
+  the box image) and `check-links.py` (box Python 3.9 lacks the 3.10 syntax it uses). The script's
+  stubbed cases are not in the gate.
+- No locked ledger item is touched and no owner question comes from this slice.
