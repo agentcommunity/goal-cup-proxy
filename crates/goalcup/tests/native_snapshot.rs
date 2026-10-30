@@ -223,7 +223,10 @@ fn a_seal_cut_part_way_cuts_every_file_of_the_set_and_keeps_the_periodic_copy_wh
     let wal_sid = c[1].1.iter().find(|(_, m)| m["path"] == "t:x.db-wal");
     let gap = (wal_sid.unwrap().0, GapReason::CutAtSeal, Some(204), None);
     assert_eq!(gap_rows(&calls), [gap]);
-    assert_eq!((closed.cut_files, closed.cut_bytes, closed.streams), (1, 204, 2));
+    assert_eq!(
+        (closed.cut_files, closed.cut_bytes, closed.streams),
+        (1, 204, 2)
+    );
 }
 
 /// A set of x.db and x.db-wal, 10 bytes each, whose copy has begun, with `damage` done to the wal
@@ -252,26 +255,50 @@ fn damaged(retry: bool, damage: impl Fn(&Path)) -> Calls {
 #[test]
 fn a_set_file_lost_during_a_copy_is_named_by_a_gap_and_the_copy_still_ends() {
     let unread = |n: u64| Some(json!({"unread_at_least": n}));
-    let wal_of = |c: &[(u64, Value)]| c.iter().find(|(_, m)| m["path"] == "t:x.db-wal").map(|f| f.0);
+    let wal_of = |c: &[(u64, Value)]| {
+        c.iter()
+            .find(|(_, m)| m["path"] == "t:x.db-wal")
+            .map(|f| f.0)
+    };
     // Gone before the first copy reads it: exact loss, and the retry holds the main file only.
     let calls = damaged(false, |w| fs::remove_file(w).unwrap());
     let c = copies(&calls);
     assert_eq!((c.len(), c[1].1.len()), (2, 1));
-    let gap = (wal_of(&c[0].1).unwrap(), GapReason::SourceChanged, Some(10), unread(10));
+    let gap = (
+        wal_of(&c[0].1).unwrap(),
+        GapReason::SourceChanged,
+        Some(10),
+        unread(10),
+    );
     assert_eq!(gap_rows(&calls), [gap]);
     whole(&calls, &c[1].1, EndReason::Complete);
     // Shrunk to 4 bytes: a lower bound, and the retry holds the 4 bytes that are there.
     let calls = damaged(false, |w| {
-        fs::OpenOptions::new().write(true).open(w).unwrap().set_len(4).unwrap();
+        fs::OpenOptions::new()
+            .write(true)
+            .open(w)
+            .unwrap()
+            .set_len(4)
+            .unwrap();
     });
     let c = copies(&calls);
-    let gap = (wal_of(&c[0].1).unwrap(), GapReason::SourceChanged, None, unread(6));
+    let gap = (
+        wal_of(&c[0].1).unwrap(),
+        GapReason::SourceChanged,
+        None,
+        unread(6),
+    );
     assert_eq!((c.len(), gap_rows(&calls)), (2, vec![gap]));
     whole(&calls, &c[1].1, EndReason::Complete);
     // Gone as the retry begins: the retry ends complete, names its loss and the path.
     let calls = damaged(true, |w| fs::remove_file(w).unwrap());
     let c = copies(&calls);
-    let gap = (wal_of(&c[1].1).unwrap(), GapReason::SourceChanged, Some(14), unread(14));
+    let gap = (
+        wal_of(&c[1].1).unwrap(),
+        GapReason::SourceChanged,
+        Some(14),
+        unread(14),
+    );
     assert_eq!(gap_rows(&calls), [gap]);
     for (sid, _) in &c[1].1 {
         assert_eq!(end_of(&calls, *sid), Some(EndReason::Complete));

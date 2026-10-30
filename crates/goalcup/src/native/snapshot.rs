@@ -234,14 +234,19 @@ impl Sets {
             .iter()
             .map(|p| tail::stat_rel(&key.1, &p.rel))
             .collect();
-        let moved = |(p, now): (&Part, &io::Result<Stat>)| p.moved || now.as_ref().ok() != Some(&p.st);
+        let moved =
+            |(p, now): (&Part, &io::Result<Stat>)| p.moved || now.as_ref().ok() != Some(&p.st);
         let any = parts.iter().zip(&now).any(moved);
         let fresh = parts.iter().zip(&now).filter_map(|(p, st)| {
             let st = *st.as_ref().ok()?;
             (st.kind == Kind::File).then(|| (p.rel.clone(), st))
         });
         let fresh: Files = fresh.collect();
-        let reason = if retry || !any { Complete } else { SourceChanged };
+        let reason = if retry || !any {
+            Complete
+        } else {
+            SourceChanged
+        };
         for (mut p, now) in parts.into_iter().zip(&now) {
             let path = pattern::path_id(&key.0, &p.rel);
             if retry && moved((&p, now)) && !p.unreadable {
@@ -249,9 +254,16 @@ impl Sets {
             }
             let n = p.st.size.saturating_sub(p.off);
             if n > 0 {
-                let gone = now.as_ref().is_err_and(|e| e.kind() == io::ErrorKind::NotFound);
+                let gone = now
+                    .as_ref()
+                    .is_err_and(|e| e.kind() == io::ErrorKind::NotFound);
                 let tail = json!({"unread_at_least": n});
-                p.h.gap(GapReason::SourceChanged, began, gone.then_some(n), Some(tail));
+                p.h.gap(
+                    GapReason::SourceChanged,
+                    began,
+                    gone.then_some(n),
+                    Some(tail),
+                );
             }
             p.h.end(rec.now(), reason, None);
         }
