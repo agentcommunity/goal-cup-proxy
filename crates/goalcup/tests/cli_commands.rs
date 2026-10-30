@@ -96,7 +96,10 @@ fn cut_commands_and_unknown_flags_exit_1_never_2() {
 fn version_is_1_0_0() {
     let out = Homes::new().run(&["--version"]);
     assert_eq!(out.status.code(), Some(0));
-    assert_eq!(String::from_utf8(out.stdout).unwrap().trim(), "goalcup 1.0.0");
+    assert_eq!(
+        String::from_utf8(out.stdout).unwrap().trim(),
+        "goalcup 1.0.0"
+    );
 }
 
 #[test]
