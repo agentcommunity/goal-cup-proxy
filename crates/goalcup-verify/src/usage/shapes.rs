@@ -11,9 +11,8 @@ use serde_json::{Map, Value};
 
 use super::{Shape, Tokens};
 
-/// The shape a request path picks by its suffix, any query removed; never by host.
-pub fn shape_of(path: &str) -> Option<Shape> {
-    let p = path.split('?').next().unwrap_or("");
+/// The shape a request path (query removed) picks by its suffix; never by host.
+pub fn shape_of(p: &str) -> Option<Shape> {
     [
         ("/responses", Shape::Responses),
         ("/messages", Shape::Anthropic),
@@ -56,12 +55,12 @@ pub struct Request {
     pub effort: Option<String>,
 }
 
-/// Reads a request body (`None` when it did not parse); Gemini names its model in the path.
+/// Reads a request body (`None` when it did not parse); Gemini names its model in the path
+/// (query removed).
 pub fn request(shape: Shape, path: &str, body: Option<&Value>) -> Request {
     let model = match shape {
         Shape::Gemini => {
-            let p = path.split('?').next().unwrap_or("");
-            let m = p.rsplit_once("models/").map(|(_, m)| m);
+            let m = path.rsplit_once("models/").map(|(_, m)| m);
             let m = m.and_then(|m| m.split(':').next()).map(Value::from);
             model_name(m.as_ref())
         }
@@ -86,7 +85,8 @@ pub enum Client {
     Other,
 }
 
-/// Reads a client message; a cut one that no longer parses is read by its leading `type`.
+/// Reads a client message; a cut one that no longer parses is read by its leading `type`. A cut
+/// warm-up whose `generate: false` was lost therefore reads as a create: a call, never whole.
 pub fn client(bytes: &[u8]) -> (Client, Option<Value>) {
     let v = serde_json::from_slice::<Value>(bytes).ok();
     let ty = match &v {
@@ -169,11 +169,6 @@ pub struct Reply {
 }
 
 impl Reply {
-    /// Chat's `[DONE]`.
-    pub fn done(&mut self) {
-        self.finish(End::Ok);
-    }
-
     /// A whole non-SSE body: one object, or a JSON array of chunks. Bad JSON gives nothing.
     pub fn body(&mut self, shape: Shape, bytes: &[u8]) {
         match serde_json::from_slice::<Value>(bytes) {
@@ -203,7 +198,8 @@ impl Reply {
         }
     }
 
-    fn finish(&mut self, e: End) {
+    /// Ends the reply, unless an earlier event ended it.
+    pub fn finish(&mut self, e: End) {
         self.end.get_or_insert(e);
     }
 

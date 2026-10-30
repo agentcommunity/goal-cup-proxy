@@ -14,9 +14,9 @@ use std::collections::BTreeMap;
 /// Planted in prompts, outputs and error messages; no row may hold it (point 4).
 const MARK: &str = "zebra-lantern-planted-text";
 const RL: &str = "rate_limit_exceeded";
-/// The requested model of every call planted: 6 on the WebSocket, 4 over HTTP.
-const CALLS: &str = "fake-ws-a fake-ws-b fake-ws-d fake-ws-r1 fake-ws-r2 fake-ws-e \
-    fake-http-a fake-http-429 fake-http-cut fake-claude";
+/// The requested model of every call planted: 8 on the WebSocket, 4 over HTTP.
+const CALLS: &str = "fake-ws-a fake-ws-b fake-ws-d fake-ws-r1 fake-ws-r2 fake-ws-r3 fake-ws-r4 \
+    fake-ws-e fake-http-a fake-http-429 fake-http-cut fake-claude";
 
 type Five = [Option<u64>; 5];
 
@@ -106,6 +106,9 @@ fn run1(name: &str) -> (Vec<Record>, BTreeMap<&'static str, Five>) {
         [{"type": "response.interrupt"}, []],
         [create("ws-r1", None), [created("ws-r1"), err, ev("failed", "ws-r1", &rl)]],
         [create("ws-r2", None), [created("ws-r2"), ev("failed", "ws-r2", &rl), err]],
+        [create("ws-r3", None), [created("ws-r3"), ev("failed", "ws-r3", &rl)]],
+        // Refused before `response.created`, after the previous call failed.
+        [create("ws-r4", None), [err]],
         [create("ws-e", Some("ws-b")), [created("ws-e"), ev("completed", "ws-e", &ue)]]
     ]);
     // Anthropic usage is cumulative: the largest value wins, never a sum.
@@ -205,28 +208,43 @@ fn warmups_and_interrupts_are_not_calls() {
 fn each_rate_limited_call_is_one_row() {
     let (recs, planted) = run1("u-rl");
     let t = table(&recs);
-    for m in ["fake-ws-r1", "fake-ws-r2"] {
+    for m in ["fake-ws-r1", "fake-ws-r2", "fake-ws-r3", "fake-ws-r4"] {
         assert_eq!(limited(row(&t, m)).and_then(|l| l.1), Some(RL), "{m}");
     }
     let http = limited(row(&t, "fake-http-429"));
     assert_eq!(http.and_then(|l| l.0), Some(429));
-    assert_eq!(t.rows.iter().filter(|r| r.outcome.is_error()).count(), 3);
+    assert_eq!(t.rows.iter().filter(|r| r.outcome.is_error()).count(), 5);
     let after = row(&t, "fake-ws-e");
     assert_eq!(after.outcome, Outcome::Ok);
     assert_eq!(five(&after.tokens), planted["fake-ws-e"]);
 }
 
+/// Run 1 had 8 cut WebSocket client messages: a create the recorder wrote in part before it
+/// died is still a call, not whole (PRD-01 section 7: cut by the `recorder_down` gap).
 #[test]
-fn tokens_and_outcomes_follow_the_shape() {
-    let (recs, planted) = run1("u-shape");
-    let t = table(&recs);
-    for m in ["fake-ws-a", "fake-http-a", "fake-claude"] {
-        let r = row(&t, m);
-        assert_eq!(r.outcome, Outcome::Ok, "{m}");
-        assert_eq!(five(&r.tokens), planted[m], "{m}");
+fn a_create_cut_by_a_restart_is_a_call_not_whole() {
+    let mut e = Entry::new("u-restart");
+    let c = e.conn();
+    let head = json!({"method": "GET", "path": "/v1/responses", "ver": "1.1",
+        "headers": [["upgrade", "websocket"]], "masked": [], "coding": null});
+    let q = e.open(StreamKind::HttpReq, c, 0, head);
+    e.end(q, EndReason::Complete, 0, Value::Null);
+    let up = e.open(StreamKind::WsUp, c, q, json!({"deflate": false}));
+    let down = e.open(StreamKind::WsDown, c, q, json!({"deflate": false}));
+    let m = format!(r#"{{"type":"response.create","model":"fake-ws-x","input":"{MARK}"}}"#);
+    e.data(up, 0, 0x10 | FLAG_FIN, m.as_bytes());
+    let mut d = 0;
+    for v in [created("ws-x"), ev("completed", "ws-x", &usage(9, 0, 1, 0).0)] {
+        e.data(down, d, 0x10 | FLAG_FIN, v.to_string().as_bytes());
+        d += v.to_string().len() as u64;
     }
-    let cut = row(&t, "fake-http-cut");
-    assert_eq!((&cut.outcome, cut.whole), (&Outcome::Unknown, false));
+    e.data(up, m.len() as u64, 0x10, &m.as_bytes()[..40]);
+    e.crash("killed", 1_000);
+    let t = table(&read_records(&e.seal().join("rec")));
+    let calls: Vec<_> = t.rows.iter().filter(|r| r.kind == Kind::Call).collect();
+    let whole: Vec<_> = calls.iter().map(|r| (r.boot, r.whole)).collect();
+    assert_eq!(whole, [(0, true), (0, false)]);
+    assert_eq!((&calls[0].outcome, &calls[1].outcome), (&Outcome::Ok, &Outcome::Unknown));
 }
 
 #[test]

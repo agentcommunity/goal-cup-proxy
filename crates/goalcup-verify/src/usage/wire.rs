@@ -6,7 +6,12 @@
 //! its connection, and `previous_response_id` wins over order when both carry it.
 //! Attaching rule (run 1 sent many rate limits as both a stream `error` and a `response.failed`):
 //! a terminal or `error` goes to the open call; once that call has failed, the other kind still
-//! goes to it when the ids agree, and anything else starts the next waiting create.
+//! goes to it when the ids agree, and anything else starts the next waiting create. An id-less
+//! `error` after a failure goes to the next waiting create instead when that create was sent after
+//! the failure.
+//!
+//! A WebSocket message still open when its boot ends (a PART of a new boot, or the end of the
+//! records) is read as cut (PRD-01 section 7).
 
 use std::collections::{HashMap, VecDeque};
 
@@ -19,8 +24,9 @@ use super::{CallRow, Ctx, HostKind, Kind, Leg, Outcome, Shape, Via, host_kind};
 
 type Key = (u64, u64);
 
-/// The wire state of one entry: open streams, open WebSockets and the rows so far.
-#[derive(Debug, Default)]
+/// The wire state of one entry: open streams, open WebSockets and the rows so far. No `Debug`:
+/// it holds body bytes, which no panic or log may print.
+#[derive(Default)]
 pub struct Wire {
     rows: Vec<Row>,
     conns: HashMap<Key, Conn>,
@@ -32,20 +38,20 @@ pub struct Wire {
     gaps: Vec<Gap>,
 }
 
-#[derive(Debug, Default)]
+#[derive(Default)]
 struct Row {
     row: CallRow,
-    shape: Option<Shape>,
     reply: Reply,
     conn: u64,
-    /// The `http_resp` sid, 0 when none.
-    resp: u64,
     status: Option<u16>,
     t0: u64,
     t1: Option<u64>,
+    /// The time of the first terminal or `error` message (WebSocket).
+    end_t: Option<u64>,
     req_ok: bool,
     resp_ok: bool,
-    /// (sid, first offset, last offset) of the request message and the reply messages.
+    /// (sid, first offset, one past the last) of the request and the reply; a whole HTTP stream
+    /// is (sid, 0, `u64::MAX`).
     up: Option<(u64, u64, u64)>,
     down: Option<(u64, u64, u64)>,
     down_bad: bool,
@@ -54,41 +60,38 @@ struct Row {
     cancelled: bool,
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 struct Conn {
     host: Option<String>,
     kind: Option<HostKind>,
     listed: bool,
 }
 
-#[derive(Debug)]
 struct Req {
     row: usize,
     path: String,
     body: Buf,
 }
 
-#[derive(Debug)]
 struct Resp {
     row: usize,
-    sse: Option<(Sse, u64)>,
+    sse: Option<Sse>,
     body: Buf,
 }
 
-#[derive(Debug)]
 struct Ws {
     sock: Key,
     up: bool,
     msgs: u64,
+    /// The open message's bytes; `next` runs on across messages.
     buf: Buf,
+    /// The open message's first offset and time.
     start: Option<(u64, u64)>,
     last_t: u64,
     op: u8,
-    next: u64,
 }
 
 /// One WebSocket message: stream, number, sid and offsets, FIN and no hole, first and last time.
-#[derive(Debug)]
 struct Msg {
     k: Key,
     n: u64,
@@ -100,14 +103,13 @@ struct Msg {
     bytes: Vec<u8>,
 }
 
-#[derive(Debug, Default)]
+#[derive(Default)]
 struct Sock {
     conn: u64,
     pending: VecDeque<(usize, Option<String>)>,
     cur: Option<usize>,
 }
 
-#[derive(Debug)]
 struct Gap {
     boot: u64,
     sid: u64,
@@ -117,22 +119,28 @@ struct Gap {
     wall: (u64, u64),
 }
 
-/// A body buffered by offset; a hole stops it.
-#[derive(Debug, Default)]
+/// A body buffered by offset; `next` is one past the last byte seen, and a hole stops it.
+#[derive(Default)]
 struct Buf {
     bytes: Vec<u8>,
+    next: u64,
     hole: bool,
 }
 
 impl Buf {
+    /// Moves past `len` bytes at `off`; false, and a hole, when they do not follow on.
+    fn step(&mut self, off: u64, len: usize) -> bool {
+        let on = off == self.next;
+        self.hole |= !on;
+        self.next = off.saturating_add(len as u64);
+        on
+    }
+
     fn push(&mut self, off: u64, b: &[u8]) {
-        let len = self.bytes.len() as u64;
-        if self.hole || off > len {
-            self.hole = true;
-            return;
+        self.step(off, b.len());
+        if !self.hole {
+            self.bytes.extend_from_slice(b);
         }
-        let skip = usize::try_from(len - off).unwrap_or(usize::MAX);
-        self.bytes.extend_from_slice(b.get(skip..).unwrap_or(&[]));
     }
 }
 
@@ -190,7 +198,7 @@ impl Wire {
         match sk {
             StreamKind::Conn => {
                 let host = s("host").map(str::to_string);
-                let found = host.as_deref().and_then(|h| ctx.host_kind(h));
+                let found = host.as_deref().and_then(|h| ctx.listed(h));
                 let kind = host_kind(s("kind")).or(found.flatten());
                 let listed = !m.get("listed").is_none_or(Value::is_null)
                     || s("kind").is_some()
@@ -198,18 +206,19 @@ impl Wire {
                 self.conns.insert(k, Conn { host, kind, listed });
             }
             StreamKind::HttpReq if s("method") == Some("POST") => {
-                let path = s("path").unwrap_or("").to_string();
+                let path = s("path").unwrap_or("").split('?').next().unwrap_or("");
                 let c = self.conns.get(&(k.0, conn)).cloned().unwrap_or_default();
-                let shape = shapes::shape_of(&path);
+                let shape = shapes::shape_of(path);
                 let kind = match shape {
                     Some(_) => Kind::Call,
                     None if c.listed => Kind::Other,
                     None => return,
                 };
                 let i = self.row(ctx, (k.1, None), (conn, &c), kind, Via::Http, t);
-                self.rows[i].shape = shape;
+                let r = &mut self.rows[i];
+                (r.row.shape, r.up) = (shape, Some((k.1, 0, u64::MAX)));
                 self.calls.insert(k, i);
-                let body = Buf::default();
+                let (path, body) = (path.to_string(), Buf::default());
                 self.reqs.insert(k, Req { row: i, path, body });
             }
             StreamKind::HttpResp => {
@@ -217,7 +226,7 @@ impl Wire {
                     return;
                 };
                 let r = &mut self.rows[i];
-                r.resp = k.1;
+                r.down = Some((k.1, 0, u64::MAX));
                 (r.t1, r.row.wall_end) = (Some(t), ctx.wall(t));
                 r.status = m
                     .get("status")
@@ -236,7 +245,7 @@ impl Wire {
                                     .starts_with("text/event-stream")
                         })
                     });
-                let sse = sse.then(|| (Sse::default(), 0));
+                let sse = sse.then(Sse::default);
                 self.resps.insert(
                     k,
                     Resp {
@@ -258,7 +267,6 @@ impl Wire {
                     start: None,
                     last_t: t,
                     op: 0,
-                    next: 0,
                 };
                 self.ws.insert(k, w);
             }
@@ -301,26 +309,24 @@ impl Wire {
             row.t1 = Some(t);
             row.row.wall_end = ctx.wall(t);
             match &mut r.sse {
-                Some((sse, next)) => {
-                    if off != *next {
+                Some(sse) => {
+                    if !r.body.step(off, bytes.len()) {
                         sse.reset();
                     }
-                    *next = off.saturating_add(bytes.len() as u64);
-                    if let Some(shape) = row.shape {
+                    if let Some(shape) = row.row.shape {
                         sse.feed(bytes, &mut |p| sse_event(&mut row.reply, shape, p));
                     }
                 }
                 None => r.body.push(off, bytes),
             }
         } else if let Some(w) = self.ws.get_mut(&k) {
-            if w.start.is_some() && off != w.next {
-                w.buf.hole = true;
+            if w.start.is_none() {
+                // A message starts where its first byte is; a hole before it is not its own.
+                (w.start, w.buf.next) = (Some((off, t)), off);
             }
-            let start = *w.start.get_or_insert((off, t));
-            w.buf.push(off - start.0.min(off), bytes);
+            w.buf.push(off, bytes);
             w.op = flags >> 4;
             w.last_t = t;
-            w.next = off.saturating_add(bytes.len() as u64);
             if flags & FLAG_FIN != 0 {
                 self.message(ctx, k, true);
             }
@@ -332,18 +338,30 @@ impl Wire {
             self.req_done(r, complete);
         } else if let Some(r) = self.resps.remove(&k) {
             self.resp_done(r, complete);
-        } else if self.ws.contains_key(&k) {
-            if self.ws.get(&k).is_some_and(|w| w.start.is_some()) {
-                self.message(ctx, k, false);
-            }
+        } else {
+            self.message(ctx, k, false);
             self.ws.remove(&k);
+        }
+    }
+
+    /// Every WebSocket message still open is cut: its boot ended (a PART of a new boot, or the
+    /// end of the records). `ctx` is still the dead boot's.
+    pub fn cut(&mut self, ctx: &Ctx) {
+        let mut open: Vec<(u64, Key)> = self
+            .ws
+            .iter()
+            .filter_map(|(k, w)| Some((w.start?.1, *k)))
+            .collect();
+        open.sort_unstable();
+        for (_, k) in open {
+            self.message(ctx, k, false);
         }
     }
 
     fn req_done(&mut self, r: Req, complete: bool) {
         let row = &mut self.rows[r.row];
         row.req_ok = complete && !r.body.hole;
-        if let Some(shape) = row.shape {
+        if let Some(shape) = row.row.shape {
             let v = serde_json::from_slice::<Value>(&r.body.bytes).ok();
             let q = shapes::request(shape, &r.path, v.as_ref());
             (row.row.model_requested, row.row.effort) = (q.model, q.effort);
@@ -353,30 +371,32 @@ impl Wire {
     fn resp_done(&mut self, mut r: Resp, complete: bool) {
         let row = &mut self.rows[r.row];
         row.resp_ok = complete && !r.body.hole;
-        if let Some(shape) = row.shape {
+        if let Some(shape) = row.row.shape {
             match &mut r.sse {
-                Some((sse, _)) => sse.finish(&mut |p| sse_event(&mut row.reply, shape, p)),
+                Some(sse) => sse.finish(&mut |p| sse_event(&mut row.reply, shape, p)),
                 None => row.reply.body(shape, &r.body.bytes),
             }
         }
     }
 
-    /// One whole (or cut, `fin` false) WebSocket message of stream `k`.
+    /// The open WebSocket message of stream `k`, whole or cut (`fin` false); none open, nothing.
     fn message(&mut self, ctx: &Ctx, k: Key, fin: bool) {
         let Some(w) = self.ws.get_mut(&k) else {
             return;
         };
-        let (start, t0) = w.start.take().unwrap_or((w.next, w.last_t));
-        let buf = std::mem::take(&mut w.buf);
+        let Some((start, t0)) = w.start.take() else {
+            return;
+        };
+        let hole = std::mem::take(&mut w.buf.hole);
         let m = Msg {
             k,
             n: w.msgs,
             sock: w.sock,
-            range: (k.1, start, w.next),
-            whole: fin && !buf.hole,
+            range: (k.1, start, w.buf.next),
+            whole: fin && !hole,
             t0,
             t1: w.last_t,
-            bytes: buf.bytes,
+            bytes: std::mem::take(&mut w.buf.bytes),
         };
         w.msgs += 1;
         match (w.op, w.up) {
@@ -388,24 +408,21 @@ impl Wire {
 
     fn client_msg(&mut self, ctx: &Ctx, m: Msg) {
         let (msg, v) = shapes::client(&m.bytes);
-        let Some(conn) = self.socks.get(&m.sock).map(|s| s.conn) else {
-            return;
-        };
-        let c = self.conns.get(&(m.k.0, conn)).cloned().unwrap_or_default();
         let kind = match msg {
             Client::Create { warmup: true, .. } => Kind::Warmup,
             Client::Create { .. } => Kind::Call,
             Client::Interrupt => Kind::Interrupt,
             Client::Other => return,
         };
+        // The open of a ws stream made its socket, so the entry is always there.
+        let conn = self.socks.entry(m.sock).or_default().conn;
+        let c = self.conns.get(&(m.k.0, conn)).cloned().unwrap_or_default();
         let i = self.row(ctx, (m.k.1, Some(m.n)), (conn, &c), kind, Via::Ws, m.t0);
-        let r = &mut self.rows[i];
+        let (rows, s) = (&mut self.rows, self.socks.entry(m.sock).or_default());
+        let r = &mut rows[i];
         (r.up, r.req_ok) = (Some(m.range), m.whole);
-        let Some(s) = self.socks.get_mut(&m.sock) else {
-            return;
-        };
         if let Client::Create { prev, .. } = msg {
-            r.shape = Some(Shape::Responses);
+            r.row.shape = Some(Shape::Responses);
             let q = shapes::request(Shape::Responses, "", v.as_ref());
             (r.row.model_requested, r.row.effort) = (q.model, q.effort);
             s.pending.push_back((i, prev));
@@ -413,10 +430,10 @@ impl Wire {
         }
         let open = s
             .cur
-            .filter(|&c| !self.rows[c].seen_terminal && !self.rows[c].seen_error);
+            .filter(|&c| !rows[c].seen_terminal && !rows[c].seen_error);
         if let Some(c) = open.or_else(|| s.pending.front().map(|p| p.0)) {
-            let r = &mut self.rows[c];
-            r.cancelled |= r.reply.end.is_none() && !r.seen_terminal && !r.seen_error;
+            let r = &mut rows[c];
+            r.cancelled |= r.reply.end.is_none();
         }
     }
 
@@ -445,7 +462,9 @@ impl Wire {
                     let ids = id.is_none() || r.reply.id.is_none() || r.reply.id.as_ref() == id;
                     let failed = matches!(r.reply.end, Some(End::Failed { .. }));
                     let unseen = if err { !r.seen_error } else { !r.seen_terminal };
-                    ids && (open(c) || (failed && unseen))
+                    // An id-less error belongs to a create sent after this call failed.
+                    let newer = err && s.pending.iter().any(|q| Some(rows[q.0].t0) > r.end_t);
+                    ids && (open(c) || (failed && unseen && !newer))
                 };
                 match s.cur.filter(|&c| fits(c)) {
                     Some(c) => Some(c),
@@ -464,6 +483,9 @@ impl Wire {
             Server::Error => r.seen_error = true,
             _ => {}
         }
+        if r.seen_terminal || r.seen_error {
+            r.end_t.get_or_insert(m.t0);
+        }
         r.reply.event(Shape::Responses, &v);
         r.down_bad |= !m.whole;
         r.down = Some(match r.down {
@@ -476,8 +498,10 @@ impl Wire {
         }
     }
 
-    /// The rows in a stable order (boot, sid, msg), outcomes and `whole` decided.
-    pub fn finish(mut self) -> Vec<CallRow> {
+    /// The rows in a stable order (boot, sid, msg), outcomes and `whole` decided; `ctx` is the
+    /// last boot's.
+    pub fn finish(mut self, ctx: &Ctx) -> Vec<CallRow> {
+        self.cut(ctx);
         for (_, r) in std::mem::take(&mut self.reqs) {
             self.req_done(r, false);
         }
@@ -493,7 +517,7 @@ impl Wire {
 
 fn sse_event(reply: &mut Reply, shape: Shape, p: &[u8]) {
     if p.trim_ascii() == b"[DONE]" {
-        reply.done();
+        reply.finish(End::Ok);
     } else if let Ok(v) = serde_json::from_slice::<Value>(p) {
         reply.event(shape, &v);
     }
@@ -546,11 +570,12 @@ fn decide(mut r: Row, gaps: &[Gap]) -> CallRow {
     row.extra = std::mem::take(&mut r.reply.extra);
     let said = [t.input, t.cached, t.cache_write, t.output, t.reasoning];
     row.usage_from = said.iter().any(Option::is_some).then_some(Leg::Wire);
-    let (b, t1, via, sid) = (row.boot, r.t1.unwrap_or(u64::MAX), row.via, row.sid);
+    let (b, t1) = (row.boot, r.t1.unwrap_or(u64::MAX));
     let wall = (row.wall_start, row.wall_end.unwrap_or(u64::MAX));
+    // Half-open ranges: the loss [off, off + lost - 1) against [lo, hi); unknown loss runs on.
     let hit = |g: &Gap, range: Option<(u64, u64, u64)>| match range {
         Some((sid, lo, hi)) => {
-            g.sid == sid && g.off <= hi && (g.lost == 0 || g.off.saturating_add(g.lost - 1) >= lo)
+            g.sid == sid && g.off < hi && (g.lost == 0 || g.off.saturating_add(g.lost - 1) > lo)
         }
         None => false,
     };
@@ -558,8 +583,6 @@ fn decide(mut r: Row, gaps: &[Gap]) -> CallRow {
         let mine = g.boot == b
             && (hit(g, r.up)
                 || hit(g, r.down)
-                || (via == Some(Via::Http)
-                    && (sid == Some(g.sid) || (r.resp != 0 && g.sid == r.resp)))
                 || (r.conn != 0 && g.sid == r.conn && g.mono.0 <= t1 && g.mono.1 >= r.t0));
         let all = g.sid == 0
             && wall
@@ -571,7 +594,7 @@ fn decide(mut r: Row, gaps: &[Gap]) -> CallRow {
         && r.req_ok
         && match row.via {
             Some(Via::Ws) if row.kind == Kind::Interrupt => true,
-            Some(Via::Ws) => r.seen_terminal && !r.down_bad,
+            Some(Via::Ws) => (r.seen_terminal || r.seen_error) && !r.down_bad,
             _ => r.resp_ok,
         };
     r.row

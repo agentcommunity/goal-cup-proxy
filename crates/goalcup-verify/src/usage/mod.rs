@@ -318,8 +318,9 @@ impl Ctx {
         u64::try_from(i128::from(w) + i128::from(t) - i128::from(m)).ok()
     }
 
-    /// The kind the `start` hosts give `host` (`*.x` matches by suffix); `None` when not listed.
-    fn host_kind(&self, host: &str) -> Option<Option<HostKind>> {
+    /// Whether the `start` hosts list `host` (`*.x` matches by suffix): `Some` with the kind they
+    /// give it when listed.
+    fn listed(&self, host: &str) -> Option<Option<HostKind>> {
         let h = host.to_ascii_lowercase();
         let hit = |p: &str| match p.strip_prefix('*') {
             Some(end) => end.starts_with('.') && h.ends_with(end),
@@ -345,8 +346,9 @@ impl Ctx {
     }
 }
 
-/// The U1 sink: push every record of an entry in order, then finish.
-#[derive(Debug, Default)]
+/// The U1 sink: push every record of an entry in order, then finish. No `Debug`: it holds body
+/// bytes, which no panic or log may print (PRD-17 VR2).
+#[derive(Default)]
 pub struct Calls {
     ctx: Ctx,
     wire: wire::Wire,
@@ -367,6 +369,10 @@ impl Calls {
                 mono_ns,
                 ..
             } => {
+                if *boot != self.ctx.boot {
+                    // The dead boot's open messages are cut by its gap (PRD-01 section 7).
+                    self.wire.cut(&self.ctx);
+                }
                 (self.ctx.entry, self.ctx.boot) = (entry.clone(), *boot);
                 self.ctx.base = Some((*wall_ns, *mono_ns));
             }
@@ -386,7 +392,7 @@ impl Calls {
     /// The table: wire rows in (boot, sid, msg) order; the native leg is not read yet.
     pub fn finish(self) -> CallTable {
         CallTable {
-            rows: self.wire.finish(),
+            rows: self.wire.finish(&self.ctx),
             ..CallTable::default()
         }
     }

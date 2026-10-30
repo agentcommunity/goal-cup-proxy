@@ -2,7 +2,8 @@
 //! event's joined `data:` payload out at a blank line. Comments, keep-alives, `event:` and `id:`
 //! lines are skipped. A stray CR before LF is dropped.
 
-#[derive(Debug, Default)]
+/// No `Debug`: it holds body bytes.
+#[derive(Default)]
 pub struct Sse {
     line: Vec<u8>,
     data: Vec<u8>,
