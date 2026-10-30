@@ -147,6 +147,8 @@ pub struct Counter {
     /// The rule numbers of the start event's `mask_rules` that name `fail_closed`.
     fail_closed: Vec<u64>,
     counts: Counts,
+    /// `recorder_down` spans this boot wrote (its own start gap), for `counts.jsonl`.
+    spans: u64,
     open: HashMap<u64, Open>,
 }
 
@@ -160,6 +162,7 @@ impl Counter {
                 .map(|(i, _)| i)
                 .collect(),
             counts: Counts::default(),
+            spans: 0,
             open: HashMap::new(),
         }
     }
@@ -270,6 +273,7 @@ impl Counter {
                 }
                 if *sid == 0 && *reason == GapReason::RecorderDown {
                     c.off_ms += off_ms(r);
+                    self.spans += 1;
                 }
                 if let Some(o) = self.open.get_mut(sid) {
                     o.gap = true;
@@ -291,6 +295,12 @@ impl Counter {
     /// This boot's counts so far.
     pub fn counts(&self) -> Counts {
         self.counts.clone()
+    }
+
+    /// The `recorder_down` spans written in this boot so far: what [`CountsLog::append`] takes,
+    /// never a COUNT key.
+    pub fn off_spans(&self) -> u64 {
+        self.spans
     }
 
     /// Streams opened and not yet ended in this boot.
@@ -349,14 +359,35 @@ fn off_ms(r: &Record) -> u64 {
     ns / 1_000_000
 }
 
-/// `counts.jsonl` (PRD-02 section 5 step 3), local only: one compact line per LINK,
-/// `{"seq":<link seq>,"count":<the COUNT event JSON at that LINK>}`. A later boot takes a dead
-/// boot's COUNT from it without decoding part files. A recovered boot's line is pinned to the
-/// COUNT its recovery frame holds and carries `"down_ms":[..]`, the lengths of its recovery
-/// frames' `recorder_down` gaps, so its totals stand when its part files are pruned.
+/// One boot as `counts.jsonl` keeps it, and as [`entry_totals`] reads it from the part files.
+#[derive(Default, Serialize, Deserialize)]
+struct Boot {
+    /// The LINK of the line: the COUNT's LINK when appended, the boot's last LINK when synced.
+    seq: u64,
+    /// The boot's last COUNT event JSON.
+    count: Option<Value>,
+    /// Every `recorder_down` span of the boot.
+    #[serde(default)]
+    spans: u64,
+    /// The lengths in ms of its `recorder_down` gaps after that COUNT (a recovery frame's gap).
+    #[serde(default)]
+    down_ms: Vec<u64>,
+}
+
+impl Boot {
+    fn boot(&self) -> Option<u64> {
+        self.count.as_ref()?["boot"].as_u64()
+    }
+}
+
+/// `counts.jsonl` (PRD-02 section 5 step 3), local only, one compact line per LINK:
+/// `{"seq":<link seq>,"count":<the COUNT event JSON at that LINK>,"spans":<n>}`, where `spans`
+/// is the boot's `recorder_down` spans so far ([`Counter::off_spans`]). A later boot takes a dead
+/// boot's COUNT from it without decoding part files, and [`entry_totals`] takes a boot's totals
+/// from it once the boot's part files are pruned after upload (ledger U1).
 pub struct CountsLog {
     path: PathBuf,
-    /// The last (or pinned) line of each boot, by boot.
+    /// The last line of each boot, by boot.
     by_boot: BTreeMap<u64, String>,
 }
 
@@ -375,9 +406,8 @@ impl CountsLog {
             path,
             by_boot: BTreeMap::new(),
         };
-        for (line, v) in lines(&text) {
-            let boot = v["count"]["boot"].as_u64().unwrap_or(0);
-            log.by_boot.insert(boot, line.to_string());
+        for (line, b) in lines(&text) {
+            log.by_boot.insert(b.boot().unwrap_or(0), line.to_string());
         }
         if !text.is_empty() && !text.ends_with(b"\n") {
             log.compact()?;
@@ -385,9 +415,10 @@ impl CountsLog {
         Ok(log)
     }
 
-    /// Appends one line at a LINK: this boot's COUNT event JSON at the LINK with that `seq`.
-    pub fn append(&mut self, seq: u64, count: &Value) -> io::Result<()> {
-        let line = serde_json::json!({ "seq": seq, "count": count }).to_string();
+    /// Appends one line at a LINK: this boot's COUNT event JSON at the LINK with that `seq`, and
+    /// the boot's `recorder_down` spans so far.
+    pub fn append(&mut self, seq: u64, count: &Value, spans: u64) -> io::Result<()> {
+        let line = serde_json::json!({ "seq": seq, "count": count, "spans": spans }).to_string();
         let mut f = std::fs::OpenOptions::new()
             .append(true)
             .create(true)
@@ -410,46 +441,34 @@ impl CountsLog {
         write_private(&self.path, out.as_bytes(), true)
     }
 
-    /// A recovery frame for dead boot `boot` is durable (PRD-02 section 9.2 step 4), with
-    /// `count` = `(seq, COUNT JSON)` when the frame holds that boot's COUNT (the first recovery
-    /// of the boot) and None when an earlier frame already holds it, and a `recorder_down` gap of
-    /// `down_ms`. Pins the boot's line to that COUNT, not to a later line whose index line the
-    /// crash lost, adds `down_ms`, and compacts.
-    pub fn recovered(
-        &mut self,
-        boot: u64,
-        count: Option<(u64, &Value)>,
-        down_ms: u64,
-    ) -> io::Result<()> {
-        let mut v = match count {
-            Some((seq, c)) => serde_json::json!({ "seq": seq, "count": c }),
-            None => self
-                .by_boot
-                .get(&boot)
-                .and_then(|l| serde_json::from_str(l).ok())
-                .unwrap_or_else(|| serde_json::json!({ "seq": 0, "count": { "boot": boot } })),
-        };
-        match v["down_ms"].as_array_mut() {
-            Some(list) => list.push(down_ms.into()),
-            None => v["down_ms"] = serde_json::json!([down_ms]),
-        }
-        self.by_boot.insert(boot, v.to_string());
-        self.compact()
+    /// At boot, after recovery and before this boot's first LINK (PRD-02 section 9.2): rewrites
+    /// the file to one line per earlier boot as [`entry_totals`] reads it (its last COUNT on
+    /// disk, all its `recorder_down` spans and the lengths of those after that COUNT), drops
+    /// lines of boots that left nothing durable, and returns the entry totals over those boots.
+    /// Every line comes from what is on disk, so a crash at any point of a recovery is repaired
+    /// by the next boot's call: only a live recorder prunes part files, after this call.
+    pub fn sync(&mut self, entry_dir: &Path) -> io::Result<EntryTotals> {
+        let boots = boots(entry_dir);
+        self.by_boot = boots
+            .iter()
+            .filter(|(_, b)| b.count.is_some())
+            .filter_map(|(n, b)| Some((*n, serde_json::to_string(b).ok()?)))
+            .collect();
+        self.compact()?;
+        Ok(totals(&boots))
     }
 }
 
 /// The whole, parseable lines of a `counts.jsonl` text. A last line without a newline is torn and
 /// skipped; so is any line that does not parse.
-fn lines(text: &[u8]) -> impl Iterator<Item = (&str, Value)> {
+fn lines(text: &[u8]) -> impl Iterator<Item = (&str, Boot)> {
     let whole = text
         .iter()
         .rposition(|&b| b == b'\n')
         .map_or(&text[..0], |i| &text[..i]);
     whole.split(|&b| b == b'\n').filter_map(|l| {
         let s = std::str::from_utf8(l).ok()?;
-        let v: Value = serde_json::from_str(s).ok()?;
-        v.get("seq")?.as_u64()?;
-        Some((s, v))
+        Some((s, serde_json::from_str(s).ok()?))
     })
 }
 
@@ -458,9 +477,9 @@ fn lines(text: &[u8]) -> impl Iterator<Item = (&str, Value)> {
 pub fn count_at(entry_dir: &Path, seq: u64) -> Option<Vec<u8>> {
     let text = std::fs::read(entry_dir.join(CountsLog::NAME)).ok()?;
     lines(&text)
-        .filter(|(_, v)| v["seq"].as_u64() == Some(seq))
+        .filter(|(_, b)| b.seq == seq)
         .last()
-        .and_then(|(_, v)| serde_json::to_vec(&v["count"]).ok())
+        .and_then(|(_, b)| serde_json::to_vec(&b.count?).ok())
 }
 
 /// Entry totals over every boot of the entry in `entry_dir` (PRD-01 section 9): one function for
@@ -469,38 +488,37 @@ pub fn count_at(entry_dir: &Path, seq: u64) -> Option<Vec<u8>> {
 /// Per boot (the PART before it) the last COUNT event, summed with [`Counts::add`]; then every
 /// `sid 0` `recorder_down` GAP adds one off span, and, when no later COUNT of its boot covers it
 /// (a recovery frame's GAP follows that frame's COUNT), 1 to `gaps` and `lost_unknown` and its
-/// length to `off_ms`. A boot whose part files were pruned takes its `counts.jsonl` line: its
-/// COUNT, and one off span per `down_ms` entry. Reads up to where the reader stops (a torn or
-/// unclosed tail of a live entry), never panics and never fails: no part file gives the default.
+/// length to `off_ms`. Reads up to where the reader stops (a torn or unclosed tail of a live
+/// entry), never panics and never fails: no part file gives the default.
 ///
-/// It decodes every part file left on disk: the writer calls it once at boot and adds this
-/// boot's counter after, never at each durable point.
+/// It decodes every part file left on disk: the writer calls it once at boot (through
+/// [`CountsLog::sync`]) and adds this boot's counter after, never at each durable point.
 pub fn entry_totals(entry_dir: &Path) -> EntryTotals {
-    #[derive(Default)]
-    struct Boot {
-        last: Option<Counts>,
-        /// `recorder_down` lengths in ms after the last COUNT.
-        down: Vec<u64>,
-        /// Every `recorder_down` span of the boot.
-        spans: u64,
-    }
+    totals(&boots(entry_dir))
+}
+
+/// Every boot of the entry. A boot with part files on disk is read from them; its earlier part
+/// files may be pruned, so its spans are the larger of what they hold and its `counts.jsonl`
+/// line (boot 0's own start gap sits in its first part file). A boot before the first one on disk
+/// (all its part files pruned) is its line. A line of a later boot left nothing durable (its part
+/// file was deleted by recovery) and is not read; with no part file on disk, no line is.
+fn boots(entry_dir: &Path) -> BTreeMap<u64, Boot> {
     let mut boots: BTreeMap<u64, Boot> = BTreeMap::new();
     if let Ok(reader) = goalcup_format::read::open_dir(&entry_dir.join("rec")) {
-        let mut boot = None;
+        let mut boot = 0;
         for item in reader {
             let Ok(item) = item else { break };
             match &item.rec {
-                Record::Part { boot: b, .. } => boot = Some(*b),
+                Record::Part { boot: b, .. } => boot = *b,
+                Record::Link { seq, .. } => boots.entry(boot).or_default().seq = *seq,
                 Record::Event { json, .. } => {
                     let Ok(v) = serde_json::from_slice::<Value>(json) else {
                         continue;
                     };
-                    if v["ev"] == "count"
-                        && let Some(b) = boot
-                    {
-                        let e = boots.entry(b).or_default();
-                        e.last = Some(serde_json::from_value(v).unwrap_or_default());
-                        e.down.clear();
+                    if v["ev"] == "count" {
+                        let e = boots.entry(boot).or_default();
+                        e.count = Some(v);
+                        e.down_ms.clear();
                     }
                 }
                 r @ Record::Gap {
@@ -508,37 +526,43 @@ pub fn entry_totals(entry_dir: &Path) -> EntryTotals {
                     reason: GapReason::RecorderDown,
                     ..
                 } => {
-                    let b = boots.entry(boot.unwrap_or(0)).or_default();
-                    b.down.push(off_ms(r));
+                    let b = boots.entry(boot).or_default();
+                    b.down_ms.push(off_ms(r));
                     b.spans += 1;
                 }
                 _ => {}
             }
         }
     }
-    // Boots before the first part file left on disk (pruned after upload): their line.
-    let first = boots.keys().next().copied().unwrap_or(u64::MAX);
+    let first = boots.keys().next().copied().unwrap_or(0);
     if let Ok(text) = std::fs::read(entry_dir.join(CountsLog::NAME)) {
-        for (_, v) in lines(&text) {
-            if let Some(b) = v["count"]["boot"].as_u64().filter(|b| *b < first) {
-                let down: Vec<u64> = v["down_ms"]
-                    .as_array()
-                    .map(|l| l.iter().filter_map(Value::as_u64).collect())
-                    .unwrap_or_default();
-                let spans = down.len() as u64;
-                let last = serde_json::from_value(v["count"].clone()).ok();
-                boots.insert(b, Boot { last, down, spans });
+        for (_, line) in lines(&text) {
+            let Some(n) = line.boot() else { continue };
+            match boots.get_mut(&n) {
+                Some(b) => b.spans = b.spans.max(line.spans),
+                None if n < first => {
+                    boots.insert(n, line);
+                }
+                None => {}
             }
         }
     }
+    boots
+}
+
+fn totals(boots: &BTreeMap<u64, Boot>) -> EntryTotals {
     let mut t = EntryTotals::default();
     for b in boots.values() {
-        let mut c = b.last.clone().unwrap_or_default();
-        let n = b.down.len() as u64;
+        let mut c: Counts = b
+            .count
+            .as_ref()
+            .and_then(|v| serde_json::from_value(v.clone()).ok())
+            .unwrap_or_default();
+        let n = b.down_ms.len() as u64;
         (c.gaps, c.lost_unknown) = (c.gaps.saturating_add(n), c.lost_unknown.saturating_add(n));
-        c.off_ms = b.down.iter().fold(c.off_ms, |a, ms| a.saturating_add(*ms));
+        c.off_ms = b.down_ms.iter().fold(c.off_ms, |a, ms| a.saturating_add(*ms));
         t.counts.add(&c);
-        t.off_spans += b.spans;
+        t.off_spans = t.off_spans.saturating_add(b.spans);
     }
     t
 }

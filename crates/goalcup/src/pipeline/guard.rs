@@ -1,7 +1,7 @@
 //! The soft memory guard (PRD-02 section 3): its size, and the one admission rule.
 
-/// The soft guard's ceiling.
-const CEILING: u64 = 512 << 20;
+/// The soft guard's ceiling, and its size when memory cannot be read.
+pub(crate) const CEILING: u64 = 512 << 20;
 /// Its floor, on a machine with little memory.
 const FLOOR: u64 = 128 << 20;
 

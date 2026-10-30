@@ -115,6 +115,8 @@ pub struct Live {
     pub held_bytes: u64,
     /// The most bytes held at once this boot.
     pub held_peak: u64,
+    /// The soft guard in bytes.
+    pub guard: u64,
     /// While records wait: awake time since the later of the writer's last write and the moment
     /// records began to wait. 0 while none wait; a reservation is never a record waiting.
     pub writer_idle_ms: u64,
@@ -232,10 +234,10 @@ pub(crate) fn write_private(path: &Path, bytes: &[u8], sync: bool) -> io::Result
 
 /// The mode `status.json` shows: sealed, then null, then `writer_slow` (records wait and nothing
 /// was written for 10 s), then `losing` (some stream in a gap), then recording.
-pub fn mode(live: &Live, null: bool, sealed: bool) -> Mode {
+pub fn mode(live: &Live, sealed: bool) -> Mode {
     if sealed {
         Mode::Sealed
-    } else if null {
+    } else if live.off.since.is_some() {
         Mode::Null
     } else if live.writer_idle_ms >= 10_000 {
         Mode::WriterSlow
@@ -248,8 +250,8 @@ pub fn mode(live: &Live, null: bool, sealed: bool) -> Mode {
 
 /// The stall exit (PRD-02 section 3): records wait and nothing was written for 60 s of awake time
 /// (a suspend is not a stall), or held bytes reached twice the soft guard.
-pub fn stalled(live: &Live, guard: u64) -> bool {
-    live.writer_idle_ms >= 60_000 || live.held_bytes >= guard.saturating_mul(2)
+pub fn stalled(live: &Live) -> bool {
+    live.writer_idle_ms >= 60_000 || live.held_bytes >= live.guard.saturating_mul(2)
 }
 
 /// The facts `status.json` carries that the live atomics do not, as a `Status` the status thread
@@ -323,13 +325,7 @@ impl Board {
     /// These facts with the live atomics, this entry's written counts and the durable point over
     /// them. In `mode: sealed`, `written` and `off` stay the seal's totals. `held_peak` is the
     /// larger of the live peak and the written one, so a stuck writer never freezes it.
-    pub fn status(
-        &self,
-        live: &Live,
-        counts: Counts,
-        durable: DurableStatus,
-        guard: u64,
-    ) -> Status {
+    pub fn status(&self, live: &Live, counts: Counts, durable: DurableStatus) -> Status {
         let f = self.facts();
         let mut s = f.status.clone();
         let sealed = s.seal.is_some();
@@ -347,11 +343,11 @@ impl Board {
         s.v = STATUS_V;
         s.updated = goalcup_format::dump::wall(clock::wall_ns() / 1_000_000_000 * 1_000_000_000);
         s.boot = live.boot;
-        s.mode = mode(live, live.off.since.is_some(), sealed);
+        s.mode = mode(live, sealed);
         s.losing = live.losing;
         s.held_bytes = live.held_bytes;
         s.held_peak = live.held_peak.max(s.written.counts.held_peak);
-        s.guard = guard;
+        s.guard = live.guard;
         s.writer_idle_ms = live.writer_idle_ms;
         s.durable = durable;
         s
@@ -363,7 +359,7 @@ impl Board {
 /// exit. A stall writes one fixed line and ends the process with 75; the next boot names the span
 /// `writer_stalled`. A panic in this thread ends the process with 70, since the stall exit would
 /// go unchecked. It runs until [`Board::stop`].
-pub fn spawn(rec: Recorder, entry_dir: PathBuf, board: Board, guard: u64) -> JoinHandle<()> {
+pub fn spawn(rec: Recorder, entry_dir: PathBuf, board: Board) -> JoinHandle<()> {
     std::thread::Builder::new()
         .name("goalcup-status".into())
         .spawn(move || {
@@ -381,9 +377,9 @@ pub fn spawn(rec: Recorder, entry_dir: PathBuf, board: Board, guard: u64) -> Joi
                     })
                     .unwrap_or_default();
                 let _ = board
-                    .status(&live, rec.counts(), d, guard)
+                    .status(&live, rec.counts(), d)
                     .write(&entry_dir);
-                if stalled(&live, guard) {
+                if stalled(&live) {
                     secure::exit(EXIT_WRITER_STALLED, "writer_stalled");
                 }
                 std::thread::sleep(Duration::from_secs(1));
@@ -412,12 +408,13 @@ mod tests {
         let guard = 512 << 20;
         let live = |held_bytes, writer_idle_ms| Live {
             held_bytes,
+            guard,
             writer_idle_ms,
             ..Live::default()
         };
-        assert!(!stalled(&live(1, 59_999), guard));
-        assert!(stalled(&live(1, 60_000), guard));
-        assert!(!stalled(&live(2 * guard - 1, 0), guard));
-        assert!(stalled(&live(2 * guard, 0), guard));
+        assert!(!stalled(&live(1, 59_999)));
+        assert!(stalled(&live(1, 60_000)));
+        assert!(!stalled(&live(2 * guard - 1, 0)));
+        assert!(stalled(&live(2 * guard, 0)));
     }
 }

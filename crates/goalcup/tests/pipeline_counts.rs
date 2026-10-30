@@ -115,7 +115,7 @@ fn count_and_link(
     .unwrap();
     k.tick();
     let line = w.link(k.now()).unwrap();
-    log.append(line.seq, &ev).unwrap();
+    log.append(line.seq, &ev, c.off_spans()).unwrap();
     w.sync().unwrap();
     c.counts()
 }
@@ -293,17 +293,19 @@ fn entry_totals_are_each_boot_plus_off_spans() {
     };
     let mut w = PartWriter::recover(&rec, opts, rc).unwrap().writer.unwrap();
     assert_eq!(w.boot(), 1);
-    let frame_count: serde_json::Value = serde_json::from_slice(&at(kept)).unwrap();
-    log.recovered(0, Some((kept, &frame_count)), 5000).unwrap();
+    // The recovery frame is on disk: the next boot syncs counts.jsonl from it.
+    let before = log.sync(entry_dir).unwrap();
+    assert_eq!(before.off_spans, 1);
+    assert_eq!(before.counts.off_ms, 5000);
 
     let mut c = Counter::new(&[]);
     conn(&mut w, &mut c, &mut k);
     post(&mut w, &mut c, &mut k, 2);
     let b1 = count_and_link(&mut w, &c, &mut k, &mut log, 1);
     log.compact().unwrap();
-    // Compacted: one line per earlier boot plus this boot's latest, each still found by seq.
-    assert!(count_at(entry_dir, 0).is_some());
-    assert!(count_at(entry_dir, 2).is_some());
+    // Compacted: one line per earlier boot plus this boot's latest.
+    assert!(count_at(entry_dir, kept + 1).is_some());
+    assert!(count_at(entry_dir, kept + 2).is_some());
 
     let mut want = b0.clone();
     want.add(&b1);
@@ -330,4 +332,90 @@ fn entry_totals_are_each_boot_plus_off_spans() {
     let pruned = entry_totals(entry_dir);
     assert_eq!(pruned.counts, want);
     assert_eq!(pruned.off_spans, 1);
+}
+
+/// Boot 0 of an entry that left no index line starts with its own `recorder_down` gap (PRD-01
+/// section 12). Its off span stands once that first part file is pruned, while boot 0 is live
+/// and after it dies and is recovered by a boot whose sync runs only after a crash.
+#[test]
+fn boot_zero_start_gap_keeps_its_off_span_once_pruned() {
+    let dir = tempfile::tempdir().unwrap();
+    let entry_dir = dir.path();
+    let rec = entry_dir.join("rec");
+    std::fs::create_dir_all(&rec).unwrap();
+    let opts = PartOptions {
+        window_log: 20,
+        rotate_after_ns: 60 * SEC,
+        ..PartOptions::default()
+    };
+    let mut k = Clock(1000 * SEC);
+    let none = |_: u64| Vec::new();
+    let dead = Now {
+        wall_ns: k.now().wall_ns - 5 * SEC,
+        mono_ns: k.0 - 5 * SEC,
+    };
+    let rc = Recover {
+        entry: ENTRY,
+        boot_id: BOOT_ID,
+        now: k.now(),
+        durable: None,
+        count_at: &none,
+        tail: serde_json::Map::new(),
+        dead_start: Some((dead, BOOT_ID)),
+        seal: None,
+    };
+    let r = PartWriter::recover(&rec, opts, rc).unwrap();
+    let mut w = r.writer.unwrap();
+    let mut c = Counter::new(&[]);
+    let mut log = CountsLog::open(entry_dir).unwrap();
+    put(&mut w, &mut c, r.gap_after_start.unwrap(), OpenFlags::NONE);
+    post(&mut w, &mut c, &mut k, 1);
+    count_and_link(&mut w, &c, &mut k, &mut log, 0);
+    k.0 += 61 * SEC;
+    assert!(w.rotate_if_due(k.now()).unwrap().is_some());
+    post(&mut w, &mut c, &mut k, 2);
+    count_and_link(&mut w, &c, &mut k, &mut log, 0);
+    let live = entry_totals(entry_dir);
+    assert_eq!((live.off_spans, live.counts.gaps), (1, 1));
+
+    // Part 0 is uploaded and pruned while boot 0 is live.
+    let (part, idx) = first_part(&rec);
+    std::fs::remove_file(idx).unwrap();
+    std::fs::remove_file(part).unwrap();
+    assert_eq!(entry_totals(entry_dir), live);
+
+    // Boot 0 dies. Boot 1 recovers it and dies before its sync; the sync of a later boot reads
+    // what is on disk, so boot 0's line holds both spans.
+    std::mem::forget(w);
+    k.0 += 5 * SEC;
+    let at = |seq| count_at(entry_dir, seq).unwrap();
+    let rc = Recover {
+        entry: ENTRY,
+        boot_id: BOOT_ID,
+        now: k.now(),
+        durable: None,
+        count_at: &at,
+        tail: serde_json::Map::new(),
+        dead_start: None,
+        seal: None,
+    };
+    let mut w = PartWriter::recover(&rec, opts, rc).unwrap().writer.unwrap();
+    let mut log = CountsLog::open(entry_dir).unwrap();
+    let synced = log.sync(entry_dir).unwrap();
+    assert_eq!(synced.off_spans, 2);
+    assert_eq!(synced.counts.gaps, 2);
+    assert_eq!(synced.counts.off_ms, 10_000);
+
+    // Boot 1 writes; boot 0's last part file is pruned: its line keeps its totals.
+    let mut c = Counter::new(&[]);
+    post(&mut w, &mut c, &mut k, 1);
+    let b1 = count_and_link(&mut w, &c, &mut k, &mut log, 1);
+    let (part, idx) = first_part(&rec);
+    std::fs::remove_file(idx).unwrap();
+    std::fs::remove_file(part).unwrap();
+    let mut want = synced.counts.clone();
+    want.add(&b1);
+    let pruned = entry_totals(entry_dir);
+    assert_eq!(pruned.counts, want);
+    assert_eq!(pruned.off_spans, 2);
 }

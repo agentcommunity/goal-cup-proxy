@@ -49,9 +49,6 @@ use tokio::sync::watch;
 /// A stream ID: from 1, never reused inside a boot; 0 means "no stream".
 pub type Sid = u64;
 
-/// The soft guard's default: 512 MiB (or one eighth of RAM if smaller, floor 128 MiB).
-pub const SOFT_GUARD: u64 = 512 << 20;
-
 /// The exit code when a pipeline thread is gone (PRD-02 section 2 rule 1).
 pub(crate) const EXIT_PIPELINE_GONE: i32 = 70;
 
@@ -70,10 +67,11 @@ struct Inner {
     /// Bytes offered and not yet written, plus reservations: what the guard checks.
     held: AtomicU64,
     held_peak: AtomicU64,
-    /// Bytes of items offered and not yet written, reservations left out: records wait while
-    /// this is above 0.
+    /// Held bytes of items in the item channel or the writer's channel, waiting for the writer:
+    /// records wait while this is above 0. Left out: reservations, and bytes the mask worker
+    /// holds back for a match that may go on (PRD-05), since no write is due for them.
     queued: AtomicU64,
-    /// Awake time (`clock::awake_ns`) when `queued` last left 0.
+    /// Awake time (`clock::awake_ns`) when `queued` last left 0, stamped before it leaves 0.
     wait_since_ns: AtomicU64,
     /// Bytes the guard dropped this boot.
     dropped_bytes: AtomicU64,
@@ -144,7 +142,7 @@ impl Recorder {
         let inner = Inner {
             #[cfg(feature = "test-hooks")]
             calls,
-            ..Inner::new(SOFT_GUARD, None)
+            ..Inner::new(guard::CEILING, None)
         };
         Recorder {
             inner: Arc::new(inner),
@@ -168,7 +166,7 @@ impl Recorder {
             Call::Open(sid, kind, conn, req, from, flags, meta.clone())
         );
         let handle = StreamHandle::new(self.clone(), sid, kind, from);
-        if handle.stopped() {
+        if !handle.opened() {
             if kind == StreamKind::Conn
                 && let Some(host) = meta.get("host").and_then(Value::as_str)
             {
@@ -245,7 +243,7 @@ impl Recorder {
     fn live_at(&self, now: u64) -> Live {
         let i = &self.inner;
         // Idle from the later of the last write and the moment records began to wait.
-        let writer_idle_ms = if i.queued.load(Ordering::Relaxed) > 0 {
+        let writer_idle_ms = if i.queued.load(Ordering::Acquire) > 0 {
             let since = i
                 .writer_last_ns
                 .load(Ordering::Relaxed)
@@ -258,6 +256,7 @@ impl Recorder {
             boot: i.boot.load(Ordering::Relaxed),
             held_bytes: i.held.load(Ordering::Relaxed),
             held_peak: i.held_peak.load(Ordering::Relaxed),
+            guard: i.guard,
             writer_idle_ms,
             losing: Losing {
                 streams_in_gap: i.streams_in_gap.load(Ordering::Relaxed),
@@ -304,16 +303,24 @@ impl Recorder {
     /// here. A gone receiver means a pipeline thread died: exit 70 so the watchdog restarts the
     /// recorder.
     fn push(&self, item: Item) {
-        let i = &self.inner;
-        let Some(tx) = &i.tx else {
+        let Some(tx) = &self.inner.tx else {
             return;
         };
-        if i.queued.fetch_add(item.held(), Ordering::Relaxed) == 0 {
-            i.wait_since_ns.store(clock::awake_ns(), Ordering::Relaxed);
-        }
+        self.queue(item.held());
         if tx.send(item).is_err() {
             pipeline_gone();
         }
+    }
+
+    /// `n` more held bytes wait for the writer. The wait stamp is stored before `queued` leaves
+    /// 0, so the status thread never sees records waiting with an old stamp (a false stall). Two
+    /// callers may both stamp; that only moves the stall clock a little later.
+    fn queue(&self, n: u64) {
+        let i = &self.inner;
+        if i.queued.load(Ordering::Acquire) == 0 {
+            i.wait_since_ns.store(clock::awake_ns(), Ordering::Release);
+        }
+        i.queued.fetch_add(n, Ordering::Release);
     }
 
     /// Opens a guard gap on stream `sid` (the first dropped piece of an episode).
@@ -342,7 +349,7 @@ impl Recorder {
             lost: Some(gap.lost.load(Ordering::Relaxed)),
             tail: Some(json!({"guard": "held_bytes", "limit": self.inner.guard})),
         });
-        self.inner.streams_in_gap.fetch_sub(1, Ordering::Relaxed);
+        sub(&self.inner.streams_in_gap, 1);
     }
 }
 
@@ -356,9 +363,9 @@ pub(crate) struct GuardGap {
     pub(crate) lost: AtomicU64,
 }
 
-/// `a -= n`, never below 0: the one rule for taking bytes off a counter.
-fn sub(a: &AtomicU64, n: u64) {
-    let _ = a.try_update(Ordering::Relaxed, Ordering::Relaxed, |v| {
+/// `a -= n`, never below 0: the one rule for taking off a counter.
+pub(crate) fn sub(a: &AtomicU64, n: u64) {
+    let _ = a.try_update(Ordering::Release, Ordering::Relaxed, |v| {
         Some(v.saturating_sub(n))
     });
 }
@@ -376,20 +383,31 @@ impl Recorder {
         (rec, rx)
     }
 
-    /// The writer handed records worth `n` held bytes to the compressor. `release(0)` marks
-    /// progress with nothing written, for work such as a long recount at boot, so it is not a
-    /// stall.
-    pub(crate) fn release(&self, n: u64) {
-        sub(&self.inner.held, n);
+    /// The mask worker took an item worth `n` held bytes off the item channel. From here its
+    /// bytes count in `held` only, until [`Recorder::forwarded`]: bytes it holds back for a match
+    /// that may go on wait for more input, not for the writer, so a quiet stream never looks
+    /// like a stall.
+    pub(crate) fn taken(&self, n: u64) {
         sub(&self.inner.queued, n);
-        self.inner
-            .writer_last_ns
-            .store(clock::awake_ns(), Ordering::Relaxed);
     }
 
-    /// The soft guard in bytes (`status.json` `guard`).
-    pub(crate) fn guard(&self) -> u64 {
-        self.inner.guard
+    /// The mask worker handed records worth `n` held bytes to the writer's channel. Everything
+    /// it takes is forwarded or released, so `queued` returns to exactly 0 when the writer has
+    /// written all it was handed.
+    pub(crate) fn forwarded(&self, n: u64) {
+        self.queue(n);
+    }
+
+    /// The writer handed records worth `n` held bytes to the compressor; the mask worker
+    /// releases what it drops (an item after the seal). `release(0)` marks progress with
+    /// nothing written, for work such as a long recount at boot, so it is not a stall. The
+    /// write stamp is stored before `queued` goes down.
+    pub(crate) fn release(&self, n: u64) {
+        self.inner
+            .writer_last_ns
+            .store(clock::awake_ns(), Ordering::Release);
+        sub(&self.inner.held, n);
+        sub(&self.inner.queued, n);
     }
 
     pub(crate) fn set_counts(&self, counts: Counts) {
@@ -492,8 +510,8 @@ mod tests {
     /// stall; a record left waiting for 60 s with no write is.
     #[test]
     fn the_stall_exit_needs_a_record_waiting_with_no_write() {
-        let (rec, rx) = Recorder::pipeline(SOFT_GUARD);
-        let stalled = |at: u64| status::stalled(&rec.live_at(at), SOFT_GUARD);
+        let (rec, rx) = Recorder::pipeline(guard::CEILING);
+        let stalled = |at: u64| status::stalled(&rec.live_at(at));
         // The last write was long ago.
         rec.inner.writer_last_ns.store(0, Ordering::Relaxed);
 
@@ -512,6 +530,35 @@ mod tests {
             rec.release(item.held());
         }
         drop(window);
+        assert_eq!(rec.live().held_bytes, 0);
+        assert!(!stalled(clock::awake_ns() + MIN));
+    }
+
+    /// Point 3: bytes the mask worker holds back for a match that may go on wait for more input,
+    /// not for the writer, so a quiet minute with a candidate held is not a stall.
+    #[test]
+    fn a_candidate_held_by_the_mask_worker_is_not_a_stall() {
+        let (rec, rx) = Recorder::pipeline(1 << 20);
+        let stalled = |at: u64| status::stalled(&rec.live_at(at));
+        rec.inner.writer_last_ns.store(0, Ordering::Relaxed);
+        let mut h = rec.open(StreamKind::HttpResp, 0, 0, 0, OpenFlags::NONE, json!({}));
+        h.data(rec.now(), bytes::Bytes::from_static(b"data: {\"delta\": \"partial\"}"));
+        // The mask worker takes both items, forwards the OPEN and the clean head of the piece,
+        // and holds the 11-byte tail; the writer writes what it was handed.
+        let items: Vec<Item> = rx.try_iter().collect();
+        for item in &items {
+            rec.taken(item.held());
+        }
+        let forwarded = items.iter().map(Item::held).sum::<u64>() - 11;
+        rec.forwarded(forwarded);
+        rec.release(forwarded);
+        let now = clock::awake_ns();
+        assert_eq!(rec.live_at(now).held_bytes, 11);
+        assert!(!stalled(now + MIN));
+        // The held tail goes on to the writer and waits there: that is a stall again.
+        rec.forwarded(11);
+        assert!(stalled(clock::awake_ns() + MIN));
+        rec.release(11);
         assert_eq!(rec.live().held_bytes, 0);
         assert!(!stalled(clock::awake_ns() + MIN));
     }

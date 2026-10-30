@@ -62,12 +62,18 @@ pub(crate) enum Item {
     },
 }
 
+/// What a DATA piece of `len` bytes counts in `held`: its length, and 1 for an empty message end,
+/// so every item waiting counts in `queued`.
+pub(crate) fn data_held(len: usize) -> u64 {
+    (len as u64).max(1)
+}
+
 impl Item {
     /// What this item counts in `held` from the offer until the writer hands its record to the
     /// compressor. The mask worker releases exactly this per item.
     pub(crate) fn held(&self) -> u64 {
         match self {
-            Item::Data { bytes, .. } => bytes.len() as u64,
+            Item::Data { bytes, .. } => data_held(bytes.len()),
             _ => CONTROL_HELD,
         }
     }
