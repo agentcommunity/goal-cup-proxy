@@ -21,7 +21,9 @@
 //! [`WsConn`], the copy first; any other final answer replays the copy here. Server bytes that
 //! overtake the feed of the request they answer wait, at most a head's worth, for it; past that,
 //! or at the close, they are a response to no request (`req` 0), and so are later server bytes
-//! until a request waits again.
+//! until a request waits again. So a response that overtakes its request's feed in that window
+//! answers none, and each later response on the connection pairs with the request before its
+//! own; the bytes are all recorded, only the `req` link is off.
 
 use crate::pipeline::{
     EndReason, GapReason, Mono, OpenFlags, Recorder, Sid, StreamHandle, StreamKind,
@@ -183,14 +185,15 @@ impl Http1 {
             return Ok(());
         };
         let fed = ws.feed(dir, t, bytes);
-        self.kept += match fed {
+        let took = match fed {
             Ok(()) => bytes.len(),
             // The bad frame's header bytes from earlier chunks were counted kept then.
             Err(ws::Stopped(n, back)) => {
                 self.kept = self.kept.saturating_sub(back as u64);
                 n
             }
-        } as u64;
+        };
+        self.kept += took as u64;
         fed.map_err(|_| Fault::Framing)
     }
 

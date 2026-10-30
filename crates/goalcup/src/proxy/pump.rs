@@ -1,6 +1,8 @@
 //! The relay pump (PRD-03 section 1 rules 1, 4 and 8, section 5a, section 10). Each direction
 //! reads a chunk, writes it to the other side, and only then hands the same bytes to the
-//! connection's parser, inside `catch_unwind`. No deadline, idle timeout or cap.
+//! connection's parser, inside `catch_unwind`. No deadline, idle timeout or cap. When one leg's
+//! error ends the relay, the part of a chunk the other side's writer already took is recorded
+//! too: it may have reached the peer.
 
 use crate::pipeline::{EndReason, GapReason, Mono, Recorder, Sid, StreamHandle};
 use crate::proxy::ws::Dir;
@@ -83,7 +85,7 @@ pub type Tap<'a> = &'a (dyn Fn(Dir, Mono, u64) + Sync);
 
 /// How one direction ended. `Cut`: a TLS peer closed without close_notify, passed on as a clean
 /// close (rule 8), though only close_notify proves a close-delimited body whole. `WriteErr`
-/// carries the chunk read and not forwarded.
+/// carries the bytes of the chunk read and not taken by the writer.
 #[derive(Clone, Copy)]
 enum Leg {
     Eof,
@@ -99,6 +101,8 @@ struct Pump<'a> {
     tap: Option<Tap<'a>>,
     /// Plaintext bytes moved, by [`Dir`]; kept outside the legs, which may be cut.
     moved: [AtomicU64; 2],
+    /// By [`Dir`]: the chunk being written and how much of it the writer took.
+    inflight: [Mutex<(Bytes, usize)>; 2],
     shared: Mutex<Shared>,
 }
 
@@ -142,6 +146,22 @@ impl Pump<'_> {
         parse_stopped(self.rec, self.conn, reason);
     }
 
+    /// The written part of `dir`'s chunk in flight is moved: counted, shown to `tap`, parsed.
+    fn settle(&self, dir: Dir) {
+        let slot = &self.inflight[dir as usize];
+        let (chunk, n) = std::mem::take(&mut *slot.lock().unwrap_or_else(|e| e.into_inner()));
+        if n == 0 {
+            return;
+        }
+        let t = self.rec.now();
+        self.quiet.fetch_max(t.ns(), Relaxed);
+        self.moved[dir as usize].fetch_add(n as u64, Relaxed);
+        if let Some(tap) = self.tap {
+            tap(dir, t, n as u64);
+        }
+        self.feed(dir, t, &chunk[..n]);
+    }
+
     async fn leg<R, W>(&self, dir: Dir, prefix: Bytes, from: &mut R, to: &mut W) -> Leg
     where
         R: AsyncRead + Unpin,
@@ -161,17 +181,20 @@ impl Pump<'_> {
                     Err(_) => return Leg::ReadErr,
                 },
             };
-            let n = chunk.len() as u64;
-            if to.write_all(&chunk).await.is_err() || to.flush().await.is_err() {
-                return Leg::WriteErr(n);
+            let slot = &self.inflight[dir as usize];
+            *slot.lock().unwrap_or_else(|e| e.into_inner()) = (chunk.clone(), 0);
+            let mut off = 0;
+            while off < chunk.len() {
+                match to.write(&chunk[off..]).await {
+                    Ok(k) if k > 0 => off += k,
+                    _ => return Leg::WriteErr((chunk.len() - off) as u64),
+                }
+                slot.lock().unwrap_or_else(|e| e.into_inner()).1 = off;
             }
-            let t = self.rec.now();
-            self.quiet.fetch_max(t.ns(), Relaxed);
-            self.moved[dir as usize].fetch_add(n, Relaxed);
-            if let Some(tap) = self.tap {
-                tap(dir, t, n);
+            if to.flush().await.is_err() {
+                return Leg::WriteErr(0);
             }
-            self.feed(dir, t, &chunk);
+            self.settle(dir);
         }
         let _ = to.shutdown().await;
         end
@@ -196,13 +219,14 @@ where
     U: AsyncRead + AsyncWrite + Unpin + Send,
 {
     let shared = Mutex::new(Shared { parser, stop: None });
-    let moved = Default::default();
+    let (moved, inflight) = Default::default();
     let pump = Pump {
         rec,
         conn: conn.sid(),
         quiet,
         tap,
         moved,
+        inflight,
         shared,
     };
     let ((mut cr, mut cw), (mut ur, mut uw)) =
@@ -217,6 +241,9 @@ where
             y = &mut b => (if matches!(y, Leg::Eof | Leg::Cut) { a.await } else { Leg::Eof }, y),
         }
     };
+    // A leg that errored, or was dropped mid-write, leaves the part its writer took.
+    pump.settle(Dir::Up);
+    pump.settle(Dir::Down);
     let unsent_up = if let Leg::WriteErr(n) = lu { n } else { 0 };
     let reason = match (lu, ld) {
         (Leg::Eof | Leg::Cut, Leg::Eof | Leg::Cut) => EndReason::Complete,

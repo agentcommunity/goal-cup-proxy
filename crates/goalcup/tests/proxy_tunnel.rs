@@ -19,11 +19,11 @@ use std::future::Future;
 use std::os::fd::AsFd;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::task::{Context, Poll};
 use std::time::Duration;
-use tokio::io::{AsyncRead, AsyncReadExt as _, AsyncWrite, AsyncWriteExt as _, DuplexStream};
-use tokio::io::{ReadBuf, duplex};
+use tokio::io::{AsyncRead, AsyncReadExt as _, AsyncWriteExt as _, DuplexStream};
+use tokio::io::{Join, ReadBuf, ReadHalf, WriteHalf, duplex};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::task::JoinHandle;
 
@@ -501,9 +501,9 @@ async fn quiet_moves_with_relayed_bytes_not_with_an_idle_connection() {
     .await;
 }
 
-/// A proxy-side leg whose clean read EOF comes out as `UnexpectedEof` when `.1`: a TLS peer gone
-/// without close_notify, as tokio-rustls reports it.
-struct Cuts(DuplexStream, bool);
+/// A proxy-side read half whose clean EOF comes out as `UnexpectedEof` when `.1`: a TLS peer
+/// gone without close_notify, as tokio-rustls reports it.
+struct Cuts(ReadHalf<DuplexStream>, bool);
 
 impl AsyncRead for Cuts {
     fn poll_read(
@@ -520,20 +520,9 @@ impl AsyncRead for Cuts {
     }
 }
 
-impl AsyncWrite for Cuts {
-    fn poll_write(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        buf: &[u8],
-    ) -> Poll<std::io::Result<usize>> {
-        Pin::new(&mut self.0).poll_write(cx, buf)
-    }
-    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
-        Pin::new(&mut self.0).poll_flush(cx)
-    }
-    fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
-        Pin::new(&mut self.0).poll_shutdown(cx)
-    }
+fn cuts(side: DuplexStream, cut: bool) -> Join<Cuts, WriteHalf<DuplexStream>> {
+    let (r, w) = tokio::io::split(side);
+    tokio::io::join(Cuts(r, cut), w)
 }
 
 /// Relays `up`, then `down`, through [`Http1`]; the upstream closes, then the client, and the
@@ -541,7 +530,7 @@ impl AsyncWrite for Cuts {
 async fn cut_close(up: &[u8], down: &[u8], cut: Dir) -> (Vec<(StreamKind, EndReason)>, Vec<Call>) {
     let (rec, calls) = Recorder::for_tests(1 << 30);
     let ((mut client, cp), (mut upstream, up_)) = (duplex(1 << 16), duplex(1 << 16));
-    let legs = (Cuts(cp, cut == Dir::Up), Cuts(up_, cut == Dir::Down));
+    let legs = (cuts(cp, cut == Dir::Up), cuts(up_, cut == Dir::Down));
     let r = rec.clone();
     let relay = tokio::spawn(async move {
         let mut conn = r.open(StreamKind::Conn, 0, 0, 0, OpenFlags::NONE, json!({}));
@@ -587,20 +576,6 @@ fn by_kind(mut ends: Vec<(StreamKind, EndReason)>) -> Vec<(StreamKind, EndReason
     ends
 }
 
-/// A WebSocket frame of under 126 bytes.
-fn ws_frame(opcode: u8, payload: &[u8], mask: Option<[u8; 4]>) -> Vec<u8> {
-    let mut out = vec![
-        0x80 | opcode,
-        payload.len() as u8 | (u8::from(mask.is_some()) << 7),
-    ];
-    let key = mask.unwrap_or_default();
-    if mask.is_some() {
-        out.extend_from_slice(&key);
-    }
-    out.extend(payload.iter().enumerate().map(|(i, b)| b ^ key[i & 3]));
-    out
-}
-
 #[tokio::test]
 async fn only_an_upstream_cut_leaves_a_close_delimited_reply_unproven() {
     within_async(HANG, async {
@@ -619,21 +594,75 @@ async fn only_an_upstream_cut_leaves_a_close_delimited_reply_unproven() {
             b"GET /ws HTTP/1.1\r\nHost: a.example\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\
             Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n"
                 .to_vec();
-        let close = 1000u16.to_be_bytes();
-        up.extend(ws_frame(1, b"hi", Some([1, 2, 3, 4])));
-        up.extend(ws_frame(8, &close, Some([5, 6, 7, 8])));
+        // Text "hi", then Close 1000, masked with a zero key.
+        up.extend(b"\x81\x82\0\0\0\0hi\x88\x82\0\0\0\0\x03\xe8");
         let mut down =
             b"HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\
             Sec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=\r\n\r\n"
                 .to_vec();
-        down.extend(ws_frame(1, b"yo", None));
-        down.extend(ws_frame(8, &close, None));
+        down.extend(b"\x81\x02yo\x88\x02\x03\xe8");
         for cut in [Dir::Up, Dir::Down] {
             let (ends, gaps) = cut_close(&up, &down, cut).await;
             let whole = [HttpReq, WsUp, WsDown, Conn].map(|k| (k, Complete));
             assert_eq!(ends, by_kind(whole.to_vec()));
             assert!(gaps.is_empty());
         }
+    })
+    .await;
+}
+
+/// A parser that keeps a copy of every byte fed: up, down.
+#[derive(Default)]
+struct Copies(Arc<Mutex<[Vec<u8>; 2]>>);
+
+impl Parser for Copies {
+    fn feed(&mut self, dir: Dir, _: Mono, bytes: &[u8]) -> Result<(), Stop> {
+        self.0.lock().unwrap()[usize::from(dir == Dir::Down)].extend_from_slice(bytes);
+        Ok(())
+    }
+    fn end(self: Box<Self>, _: Mono, _: EndReason, _: bool, _: u64) -> Option<Stop> {
+        None
+    }
+    fn panicked(self: Box<Self>, t: Mono) -> Stop {
+        Stop::panic(0, t)
+    }
+}
+
+/// Point 1: one leg's error ends the relay while the other leg is mid-write. The part of the
+/// chunk its writer took reached the peer, so it is counted and parsed; the rest is not.
+#[tokio::test]
+async fn a_chunk_cut_mid_write_by_the_other_legs_error_is_recorded_as_far_as_it_went() {
+    within_async(HANG, async {
+        let (rec, calls) = Recorder::for_tests(1 << 30);
+        // The client side takes 1 KiB unread, so an 8 KiB reply stops mid-write.
+        let ((mut client, cp), (mut upstream, up)) = (duplex(1024), duplex(1 << 16));
+        let parser = Copies::default();
+        let copies = parser.0.clone();
+        let r = rec.clone();
+        let relay = tokio::spawn(async move {
+            let mut conn = r.open(StreamKind::Conn, 0, 0, 0, OpenFlags::NONE, json!({}));
+            let (none, quiet) = ((Bytes::new(), Bytes::new()), AtomicU64::new(0));
+            let parser: Box<dyn Parser> = Box::new(parser);
+            let p = pump::relay(&r, &mut conn, (cp, up), none, Some(parser), &quiet, None).await;
+            conn.end(r.now(), p.reason, None);
+            (p.plain_up, p.unsent_up, p.plain_down, p.reason)
+        });
+        upstream.write_all(&[7; 8192]).await.unwrap();
+        let mut first = [0; 1];
+        client.read_exact(&mut first).await.unwrap();
+        // The upstream goes away, and the client's next byte cannot reach it.
+        drop(upstream);
+        client.write_all(b"x").await.unwrap();
+        let (plain_up, unsent_up, plain_down, reason) = relay.await.unwrap();
+        let mut rest = Vec::new();
+        client.read_to_end(&mut rest).await.unwrap();
+        let got = 1 + rest.len();
+        assert!(got < 8192, "the reply was cut mid-write");
+        assert_eq!((plain_up, unsent_up, plain_down), (0, 1, got as u64));
+        let copies = copies.lock().unwrap();
+        assert_eq!((copies[0].len(), &copies[1]), (0, &vec![7; got]));
+        assert_eq!(reason, EndReason::Interrupted);
+        assert!(gaps(&calls).is_empty());
     })
     .await;
 }
