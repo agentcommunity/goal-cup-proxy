@@ -234,17 +234,17 @@ fn a_create_cut_by_a_restart_is_a_call_not_whole() {
     let m = format!(r#"{{"type":"response.create","model":"fake-ws-x","input":"{MARK}"}}"#);
     e.data(up, 0, 0x10 | FLAG_FIN, m.as_bytes());
     let mut d = 0;
-    for v in [created("ws-x"), ev("completed", "ws-x", &usage(9, 0, 1, 0).0)] {
-        e.data(down, d, 0x10 | FLAG_FIN, v.to_string().as_bytes());
-        d += v.to_string().len() as u64;
+    let done = ev("completed", "ws-x", &usage(9, 0, 1, 0).0);
+    for v in [created("ws-x"), done].map(|v| v.to_string()) {
+        e.data(down, d, 0x10 | FLAG_FIN, v.as_bytes());
+        d += v.len() as u64;
     }
     e.data(up, m.len() as u64, 0x10, &m.as_bytes()[..40]);
     e.crash("killed", 1_000);
     let t = table(&read_records(&e.seal().join("rec")));
     let calls: Vec<_> = t.rows.iter().filter(|r| r.kind == Kind::Call).collect();
-    let whole: Vec<_> = calls.iter().map(|r| (r.boot, r.whole)).collect();
-    assert_eq!(whole, [(0, true), (0, false)]);
-    assert_eq!((&calls[0].outcome, &calls[1].outcome), (&Outcome::Ok, &Outcome::Unknown));
+    let got: Vec<_> = calls.iter().map(|r| (r.boot, r.whole, &r.outcome)).collect();
+    assert_eq!(got, [(0, true, &Outcome::Ok), (0, false, &Outcome::Unknown)]);
 }
 
 #[test]
