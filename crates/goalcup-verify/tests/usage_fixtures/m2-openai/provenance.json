@@ -1,0 +1,77 @@
+{
+ "purpose": "PRD-09 usage reader fixture: a real Codex CLI run over one WebSocket to chatgpt.com /backend-api/codex/responses (OpenAI Responses events with token usage)",
+ "files": {
+  "codex-0.153.0-ws-run.jsonl": {
+   "sha256": "e47820691f28e95ba72f49bd6a90ceb774d9abeb63919b7cf240d37b63febb9a",
+   "bytes": 267812,
+   "lines": 456,
+   "copied_from": {
+    "path": "crates/goalcup-verifier/tests/fixtures/m2-openai/codex-0.153.0-ws-run.jsonl",
+    "commit": "15a6963b57f1cb341b4efcaf10aa92d6dc633c31",
+    "sha256": "e47820691f28e95ba72f49bd6a90ceb774d9abeb63919b7cf240d37b63febb9a",
+    "bytes": 267812
+   },
+   "copy": "byte for byte (sha256 equal to the source)",
+   "line_format": "one JSON object per openai-responses stream in Open order: stream (Open-order number), source, exchange, message_index (WebSocket only), method/status/content_type when recorded, label, retained_segments, first/last (wall, mono_ns of the first segment's first and last segment's last observation), text (the retained bytes, sanitized, as UTF-8). Host chatgpt.com and path /backend-api/codex/responses are common to every stream and not repeated. Every WebSocket message had exactly one retained segment; the two upgrade-exchange bodies were empty (no segment).",
+   "streams": {
+    "wire_request": 1,
+    "wire_response": 1,
+    "ws_client": 6,
+    "ws_server": 448
+   }
+  }
+ },
+ "old_provenance": {
+  "path": "crates/goalcup-verifier/tests/fixtures/m2-openai/provenance.json",
+  "commit": "15a6963b57f1cb341b4efcaf10aa92d6dc633c31",
+  "sha256": "8aec2e6d541a7c04eaab294a454a61c4b1608c0718025ed8e001c668ad8ca227",
+  "facts_copied": {
+   "kind": "m2-t20-sanitized-openai-responses-fixture",
+   "ruling": "R12: derived read-only from a raw E01 chain, sanitized, scanned, eye-reviewed; unobserved variants stay synthetic-only",
+   "source": {
+    "run": "codex-20260928T032110Z (E01 codex_live_smoke PASS row, docs/qualification/m2-early-live-capture.md §7.2)",
+    "chain": "m2-e01-live worktree: spikes/m2-first-release/out/early/live/codex-20260928T032110Z/trace/chain.jsonl (git-ignored, read-only lease)",
+    "chain_sha256": "8344bcb765127762a764259872a3c400f417921d2ada94308aaf0d427475c330",
+    "chain_bytes": 2184731,
+    "chain_records": 1426,
+    "harness": "Codex CLI 0.153.0 (codex exec --json), native binary sha256 a29d9e86eef88cbbd69f97ce8c590b1d0a287c8f77424f5eef226b883d7eaa22, ChatGPT subscription auth",
+    "model": "gpt-5.6-luna, model_reasoning_effort low",
+    "capture_rule": "chatgpt.com:/backend-api/codex/responses:exact:openai-responses",
+    "provider_format": "OpenAI Responses over one WebSocket (GET upgrade, 101, permessage-deflate inflated by the T11 relay): each client text message is one response.create (message 0 is a warm-up with generate:false; later ones chain with previous_response_id and carry only new input items); the server answers each with a stream of event messages ending in response.completed. Codex also sends the vendor events codex.rate_limits, codex.response.metadata and responsesapi.websocket_timing."
+   },
+   "sanitization": [
+    "provider IDs (response, item, call, turn IDs and cache keys, including usage.attribution item keys) -> consistent placeholders <prefix>_phNNN (32 distinct), so previous_response_id chains and call_id pairs are preserved",
+    "client_metadata (installation, window, session and thread IDs, turn metadata) dropped",
+    "safety_identifier, reasoning encrypted_content, delta obfuscation padding, access_programs values -> fixed placeholders",
+    "tool schemas in tools/additional_tools -> type, name and '<omitted: N chars>' descriptions",
+    "developer and user context texts (base instructions, skills/apps/plugins/permissions instructions, plugin recommendations, environment context) -> '<omitted: context text, N chars>'; the E01 goal text (public, §4.1) is kept",
+    "codex.rate_limits, codex.response.metadata, responsesapi.websocket_timing -> their type member only (account plan, rate limits, headers, telemetry dropped)",
+    "recorder producer and connection IDs are not written; the test supplies documented placeholder IDs",
+    "kept unchanged: model, message and tool structure, statuses, provider timestamps, token usage, tool inputs and outputs, assistant texts, and the shared run path /Users/Shared/goalcup-m2-e01/<run> inside tool inputs (not personal data, as E01 judged for its committed excerpts)"
+   ],
+   "checks": {
+    "derive_py_scan": "0 problems: none of the 476 replaced or dropped values (IDs, identifiers, tokens, telemetry values, long context tokens) occurs in the fixture; 0 '@', 0 UUID-shaped strings, 0 secret shapes (sk-, Bearer, JWT, refresh_token, proxy credential), 0 long mixed tokens other than the run name, 0 /Users paths other than the shared run path",
+    "redact_py": "spikes/redact.py: 0 redactions, output byte-identical",
+    "eye_review": "T20 worker read every distinct record shape, every request and response.created/completed object, all 4 tool inputs and outputs, all assistant texts and the text reconstructed from all 377 deltas",
+    "decode_equivalence": "the decoder over the raw chain and over this fixture gives the same per-kind counts: model 12, model_request 6, model_response 13, outcome 6, tool_call 4, tool_result 4, usage 6, unknown 18 (69 observations, not incomplete)"
+   },
+   "unobserved_synthetic_only": [
+    "function_call / function_call_output items",
+    "the Codex HTTP POST + SSE fallback",
+    "response.failed, response.incomplete, error events and HTTP JSON error bodies",
+    "gaps, interrupted or decode-error ends, redacted records, over-budget records"
+   ]
+  }
+ },
+ "not_copied": "derive.py (the old derivation script); the old provenance's checks name it and the old decoder",
+ "secret_scan": {
+  "command": "grep -o -i -E '(^|[^a-z0-9_])(sk-|sk-ant-|sk-proj-|ghp_|gho_|github_pat_|xox[abposr]-|akia[0-9a-z]{12})|bearer +[a-z0-9._~+/=-]{8,}|eyj[a-z0-9_-]{8,}\\.|-----begin|(key|token|secret|authorization|password)[\"' :=_a-z-]{0,12}[a-z0-9+/=_-]{40,}' FILE | wc -l",
+  "covers": "sk-, sk-ant-, sk-proj-, ghp_, gho_, github_pat_, xox?-, AKIA keys, Bearer followed by a non-mask value, eyJ JWT starts, -----BEGIN blocks, 40+ character hex or base64 runs next to key, token, secret, authorization or password names; case-insensitive, so it over-matches rather than under-matches",
+  "where": "a build box (box.mjs) on the committed branch, not on the conductor",
+  "result": {
+   "codex-0.153.0-ws-run.jsonl": 0
+  },
+  "result_text": "0 hits in every file",
+  "follow_up": "goalcup-verify secrets (PRD-08) does not exist yet; rerun the PRD-08 secret scan over this folder when it lands"
+ }
+}
