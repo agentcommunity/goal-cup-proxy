@@ -1,17 +1,22 @@
 # PRD-12: The test pad and the real-run loop
 
-Id: PRD-12. Version: goalcup 1.0. Revision 4, 30 October 2026 (ledger items R3a, R3b and T4;
-revision 3: the alignment pass against the ledger; revision 2 and revision 1: earlier the same day). Base: main at 4b226de2. Index: [PRD-00](PRD-00-index.md)
+Id: PRD-12. Version: goalcup 1.0. Revision 5, 30 October 2026 (ledger items B3, B9, B10 and B11;
+revision 4: R3a, R3b and T4; revision 3: the alignment pass against the ledger; revision 2 and revision 1:
+earlier the same day). Base: main at 4b226de2. Index: [PRD-00](PRD-00-index.md)
 (revision 4). Format: [PRD-01](PRD-01-record-format.md).
 Ledger: [OWNER-DECISIONS.md](OWNER-DECISIONS.md) wins where it differs.
 
-Revision 3 applies the alignment fix lists; revision 4 carries in ledger items R3a, R3b and T4.
+Revision 3 applies the alignment fix lists; revision 4 carries in ledger items R3a, R3b and T4; revision 5
+carries in B3, B9, B10 and B11 (the simple rig, its three modes, cleanup, fewer tests, more parallel runs).
 "Alignment answers", the last section, says what was done with each. Revision 2's answers to the three earlier reviews are kept as history above it.
 
 ## Goal
 
-One command takes a connector and a key, runs real work in a Vercel Sandbox (or on a Mac by hand), and
-prints one pass or fail row per harness and case. It is also how a contributor adds a harness.
+A small test rig an agent can use without driving it (ledger B9). One command and one small settings file
+(harness, key name, case, mode, prompt, steps). The rig walks every step by itself with built-in waits
+(start, wait for calls, check the data, crash, wait for recovery, keep going, seal, fetch, check, clean
+up), in a Vercel Sandbox (or on a Mac by hand), and prints one plain table. Three modes climb the test
+ladder: `micro`, `cycle` and `full` (ledger B3). It is also how a contributor adds a harness.
 
 ## Points served
 

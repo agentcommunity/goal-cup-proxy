@@ -6,9 +6,10 @@ Id: PRD-14. Version: goalcup 1.0. Status: plan for the build, revision 2 (after 
 
 ## Goal
 
-Real runs on the pad prove the seven points; a small set of automated tests guards the three things a
-real run cannot pin down on every change: the record format, masking, and the never-stop rules. One
-gate script, two tiers, the same command in a build box and in CI.
+Real runs through the rig (PRD-12, ledger B9) prove the seven points, climbing the ladder of ledger B3.
+A small set of automated tests guards only the seven points, the record format, masking and the
+never-stop rules (ledger B10), where a real run cannot show the failure on every change. One gate script,
+two tiers, the same command in a build box and in CI.
 
 ## Points served
 
@@ -17,17 +18,26 @@ Point 3 also directly: the gate stops tests that pin caps, latches or failure bu
 
 ## Owner decisions it carries out
 
-- "Less about building tests, more about real runs" (relayed request; BRIEF3 "test pad"). The pad is the
-  main proof. Automated tests guard the format, masking and the never-stop rules.
+- Ledger B10 (locked): do not overbuild tests. The rig's real runs are the main proof. Automated tests
+  guard only the seven points, the format, masking and the never-stop rules. No test pins internal shapes
+  or wording. A test that takes longer to change than the code it guards is deleted or simplified. Section
+  3 and "What is cut" list what this removed.
+- Ledger B9 (locked): one small test rig for agents, which is the pad (PRD-12). The gate never drives a
+  harness; the rig does. The rig's selftest (fails on run 1's known bugs) is the one rig test in the gate.
+- Ledger B3 (locked): the test ladder (micro tests, cycle runs, full runs) is the real-run layer of
+  section 1. The gate is not a rung; it runs on every merge beside the ladder.
+- Ledger B11 (locked): every gate run is in a Vercel Sandbox, many at once, one per merge request; this
+  session only drives agents.
 - No backward compatibility, old crates deleted in the same build (BRIEF3, 29 Oct night): every test of
   the old crates goes with them. Lessons that matter come back as PRD-17 acceptance cases.
 - No caps of our own: no test may assert a cap, a latch or a failure budget. Tests assert "past N,
   everything is recorded or a gap is written, and the relay goes on".
-- AGENTS.md change 1 (PRD-00): "Every behaviour that serves one of the seven points has a test, and that
-  test is not deleted while the point stands." Section 2 names those tests.
-- One system for every harness, no patchwork (owner's gateway question). A gateway is one more host on
-  the shared list. A code rule test (section 6) fails if a harness name or a model or gateway host name
-  appears in recorder source, so no per-harness or per-gateway patch can slip in.
+- AGENTS.md for 1.0 (ledger section 7): a test stays if it proves one of the seven points. Section 2
+  names those tests; any other test may be cut.
+- One system for every harness, no patchwork (owner's gateway question; AGENTS.md hard rule "no harness
+  names in core code"). A gateway is one more host on the shared list. One code rule (section 6) fails if
+  a harness name or a model or gateway host name appears in recorder source, so no per-harness or
+  per-gateway patch can slip in.
 - Builds, tests and the gate run in Vercel Sandbox build boxes as `ubuntu` (ledger B1, PRD-00 "Where
   the build runs"). The conductor never compiles. The gate keeps its root refusal.
 - Every PRD-14 change, the first gate change included, is a merge request on its own `v1.0/prd-14-*`
@@ -75,13 +85,17 @@ every automated check passed while 37.5% of calls went unrecorded.
 
 | Layer | Proves | Runs where | Cost |
 |---|---|---|---|
-| **Real runs (PRD-12 pad)** | All seven points on real harnesses, keys and the staging Worker: the proxy record as the proof (no unexplained gap, the history check; the harness's own log only as an optional extra, ledger T4), every subagent, no secret, server copy whole, counts the participant saw | Pad boxes; the owner's Mac after the build | Keys, minutes, money |
+| **Real runs (PRD-12 rig, the main proof)** | All seven points on real harnesses, keys and the staging Worker: the proxy record as the proof (no unexplained gap, the history check; the harness's own log only as an optional extra, ledger T4), every subagent, no secret, server copy whole, counts the participant saw. Run as the ladder of ledger B3: micro tests (one harness, one key, local capture first, then one layer at a time), cycle runs per pad (a few minutes), then 20-minute full runs for every pad in parallel | Pad sandboxes, many at once (ledger B11); the owner's Mac after the build | Keys, minutes, money |
 | **`gate full`** | One short end-to-end run of the real binary through every part, the real Worker under `wrangler dev`, the shipped binary built and checked for hook text | Build box at phase 2 and 3 exits, before the owner's merge, before the tag | About 15 minutes |
-| **`gate fast`** | Format, masking, never-stop, upload contract, connectors, participant words, code rules | Build box before every merge into integration; CI on every push | Under 5 minutes |
+| **`gate fast`** | The section 2 guards: format, masking, never-stop, and the few seven-point behaviours a real run cannot hit every time | Build box before every merge into integration, one sandbox per merge request; CI on every push | Under 5 minutes |
 
-Rule: an automated test is written only where a real run cannot show the failure every time. A real run
-cannot plant every secret shape split at every byte, cannot kill the recorder at every point, and cannot
-fill a guard on demand. It can show everything else, so the rest is left to the pad.
+Rule (ledger B10): an automated test is written only where a real run cannot show the failure every time,
+and only for the seven points, the format, masking or the never-stop rules. A real run cannot plant every
+secret shape split at every byte, cannot kill the recorder at every point, and cannot fill a guard on
+demand. It can show everything else, so the rest is left to the rig. A test asserts a promise (a call is
+recorded or a gap is written, no secret, bytes equal), never an internal shape, a field order or a
+sentence of wording. A test that takes longer to change than the code it guards is deleted or simplified
+in the same merge request; reviewer B (code quality and less code, ledger B2) checks this on every diff.
 
 ### 2. The seven-point guard list
 
@@ -96,17 +110,20 @@ prefix that asserts the same promise.
 | 3 Never block | PRD-02 R1 kill test (plain `kill -9`, no hooks) | `pipeline_guard.rs` (every S1 call returns while the writer is held; every drop is a GAP), `pipeline_stall.rs` (real binary, 90 s stall, every client exchange completes), `pipeline_no_latch.rs` (1,000 guard episodes, recording resumes each time), `watchdog_restart.rs` (`kill -9`, same port, connection served), `watchdog_null.rs` (crash loop, connections answered) | PRD-02 |
 | 4 No secrets | PRD-12 C3 | `mask_stream.rs` (every split point), `mask_rules.rs` (`url_password`, left guard), `secrets_scan.rs` | PRD-05, PRD-08 |
 | 5 Upload everything | PRD-12 C4 | `upload_chunks.rs` (concatenated chunks equal the parts), `server_compare.rs`, Worker `test/integration.test.ts`; full: `upload_worker.rs` | PRD-06, PRD-08, PRD-07 |
-| 6 Tell plainly | PRD-12 C6 | `pipeline_guard.rs` (COUNT equals a recount of what was written), `check_invariants.rs` invariant 7 (the verifier's recount), `cli_finish.rs` ("Nothing was lost" only with zero gaps and zero off time), `upload_beat.rs` (`failed` while recording is off) | PRD-02, PRD-08, PRD-10, PRD-06 |
-| 7 Real harnesses | PRD-12 table, tiers | `connector_builtin.rs`, `connector_launch.rs`, `rule_code.rs` (section 6), `scripts/test_install.py` | PRD-11, PRD-14 |
-| Usage stats (ledger S2) | PRD-12 C5 | `usage_run1.rs`, `usage_join.rs` | PRD-09 |
+| 6 Tell plainly | PRD-12 C6 | `pipeline_guard.rs` (COUNT equals a recount of what was written), `check_invariants.rs` invariant 7 (the verifier's recount), `cli_finish.rs` (the "nothing was lost" claim appears only with zero gaps and zero off time; it checks the claim is there or not, never the sentence), `upload_beat.rs` (`failed` while recording is off) | PRD-02, PRD-08, PRD-10, PRD-06 |
+| 7 Real harnesses | PRD-12 table, tiers | `connector_builtin.rs`, `connector_launch.rs`, `rule_code.rs` (section 6), `scripts/test_install.py` (the install never breaks a running recording; no profile or app-wide file written) | PRD-11, PRD-14 |
+| Usage stats (ledger S2) | PRD-12 C5 (the main proof) | `usage_run1.rs` only (run 1's record in, model, tokens and status per call and per subagent out). No test pins the output layout | PRD-09 |
 | Format (base of 1, 5, 6) | PRD-01 acceptance on the pad | `golden.rs`, `recovery.rs`, `check_invariants.rs` | PRD-01, PRD-08 |
 | All together | PRD-00 done items 1 and 2 | full: `e2e_run.rs` (section 7) | PRD-14 |
 
 ### 3. Test budget
 
-No test pins a cap, a byte-for-byte golden of internal facts, or a shape nobody relies on. One file per
-module; cases named for the promise they keep. This table is the one source (PRD-00 size table, PRD-13
-copies it). Numbers come from each PRD where it states one.
+No test pins a cap, a byte-for-byte golden of internal facts, an internal shape or a sentence of wording
+(ledger B10). The on-disk record format (PRD-01) and the upload contract (`docs/UPLOAD-API.md`) are
+promises, not internal shapes, so their goldens stay. One file per module; cases named for the promise
+they keep. This table is the one source (PRD-00 size table, PRD-13 copies it). Numbers come from each PRD
+where it states one, and each is a ceiling, not a target: a builder who can guard the promise in fewer
+lines writes fewer.
 
 | PRD | Test files (from its Acceptance) | Lines (est.) |
 |---|---|---:|
@@ -117,12 +134,12 @@ copies it). Numbers come from each PRD where it states one.
 | PRD-05 masking | 6 `mask_*` plus the copied corpus (data) | 2,000 (PRD-05) |
 | PRD-06 upload | `upload_*` plus `upload_worker` (full) | 1,000 (estimate here) |
 | PRD-08 verifier | `check_invariants`, `check_named`, `check_conn_bytes`, `check_run1_shape`, `server_compare`, `secrets_scan` (no `judge_view`, deferred) | 1,100 (PRD-08) |
-| PRD-09 usage | 5 `usage_*` | 600 (PRD-09) |
+| PRD-09 usage | `usage_run1` only (B10: usage stats are proved by PRD-12 C5 on real runs; `usage_out` and other layout tests cut) | 200 (cut here from PRD-09's 600) |
 | PRD-10 CLI | `cli_*` | 1,200 (PRD-10) |
 | PRD-11 connectors | 4 `connector_*` | 400 (estimate here) |
 | PRD-17 lessons | `lessons_*` | 1,300 (PRD-17) |
-| PRD-14 | `tests/common/` (1,480), `rule_code.rs` (220), `e2e_run.rs` (150) | 1,850 |
-| **Rust total** | | **about 15,000**, against 142,413 today (PRD-00 and PRD-13 measure) |
+| PRD-14 | `tests/common/` (1,480), `rule_code.rs` (80, rule 1 only), `e2e_run.rs` (140) | 1,700 |
+| **Rust total** | | **at most about 14,200** (the rows sum to 14,200; 14,750 before the B10 cuts), against 142,413 today (PRD-00 and PRD-13 measure) |
 
 A builder who goes over its line says why in the night log (PRD-00 size rule). Masking and the proxy are
 the largest shares: point 4 is the one point a real run can only sample, and the masking corpus is copied
@@ -130,12 +147,12 @@ as data, not as test code (PRD-05).
 
 ### 4. Test rules (flakes do not come back)
 
-Every closed flake in `J-tests-gate.md:479-499` had one of four causes. Each becomes a rule; the first is
-checked by `rule_code.rs`.
+Every closed flake in `J-tests-gate.md:479-499` had one of four causes. Each becomes a rule that reviewers
+check on the diff; none is a test of its own (ledger B10).
 
 | Cause in the old suite | Rule in 1.0 |
 |---|---|
-| Shared OS resources between parallel test processes: bind port 0, drop it, reuse the number (the open flake, about 12 sites) | Ports only from `tests/common/ports.rs`: `held()` keeps a listening socket for the test's life; `refusing()` keeps a socket bound but not listening, so a connect is refused and no other process can take the port. No `bind("127.0.0.1:0")` anywhere else in tests (rule check). `wrangler dev` cannot take a held socket: its starter retries on "address in use" up to 3 times with a new port |
+| Shared OS resources between parallel test processes: bind port 0, drop it, reuse the number (the open flake, about 12 sites) | Ports only from `tests/common/ports.rs`: `held()` keeps a listening socket for the test's life; `refusing()` keeps a socket bound but not listening, so a connect is refused and no other process can take the port. No `bind("127.0.0.1:0")` anywhere else in tests (reviewers check; no rule test, B10). `wrangler dev` cannot take a held socket: its starter retries on "address in use" up to 3 times with a new port |
 | Whole-second or wall clocks compared with exact stamps | Compare monotonic times from the record (PRD-01 section 6), never wall seconds. A test that needs wall time reads it from a LINK |
 | Fixed time limits on a loaded machine (about 30 `elapsed() <` checks) | No upper bound on elapsed time below 5 s, and a bound only guards a hang (`within(30 s)`). "Never waits" is shown by holding the other side forever and seeing the call return, not by a stopwatch. Speed is measured in `by_hand_*` tests and real runs (PRD-02 R8, PRD-05 A5), never as a pass line |
 | Order of concurrent events assumed | Wait on an event (a channel, a file, a record), never on a sleep |
@@ -222,9 +239,11 @@ A hook outside this table is added here first (a night-log note to PRD-14). A ho
 removed. There is no silent-drop hook (cut, PRD-00). The release smoke (section 9) and the last step of
 `gate full` fail if the shipped `goalcup` binary contains the text `GOALCUP_TEST_`.
 
-### 6. The code rule test (`crates/goalcup/tests/rule_code.rs`, about 220 lines)
+### 6. The code rule test (`crates/goalcup/tests/rule_code.rs`, about 80 lines)
 
-Copied and cut from `crates/goalcup-protocol/tests/it/no_family_literals.rs` (378). Four rules:
+Copied and cut from `crates/goalcup-protocol/tests/it/no_family_literals.rs` (378). One rule, because it
+guards point 7 and an AGENTS.md hard rule ("no harness names in core code"). Rules 2 to 4 of revision 2
+are cut (ledger B10; see "What is cut"):
 
 1. **One system.** No string literal in `crates/goalcup/src/**` or `crates/goalcup-format/src/**` contains a connector id (the file names
    of `connectors/*.toml`, leaving out `model-hosts.toml` and `tiers.toml`, as whole tokens) or a host
@@ -234,27 +253,23 @@ Copied and cut from `crates/goalcup-protocol/tests/it/no_family_literals.rs` (37
    with a reason, and fails on a stale entry. It starts with one file: `src/connector/builtin.rs`, the
    one `include_str!` list that embeds the connector files by id (PRD-11). `crates/goalcup-verify` is
    not scanned: its usage reader interprets per harness after the run, which is allowed.
-2. **Ports.** No `bind("127.0.0.1:0")` or `bind("[::1]:0")` in any `crates/*/tests/**` file except
-   `tests/common/ports.rs`.
-3. **No return.** PRD-13's no-return patterns (section 6 of PRD-13, as data in this file) match nothing
-   under `crates/goalcup*/src/`: the daemon and its IPC, our own caps, disk handling, signing, pins and
-   deny lists, termination proof, research decoders, `pause_at(`, `_FOR_TEST`. The two feature patterns
-   are scanned over `crates/goalcup*/` (src, tests and `Cargo.toml`): `test-support` anywhere, and a
-   `test-hooks` feature declared in any `Cargo.toml` other than `crates/goalcup/Cargo.toml`. The
-   `test-hooks` feature in `crates/goalcup` itself is allowed (PRD-00 ruling on consistency item 86).
-   Provenance comments `v0.7.0:` are skipped. PRD-13 changes the list with a night-log note.
-   **Worker half:** in `server/worker/src/**` and `server/worker/wrangler.toml` (not `sql/`, `test/`,
-   `README.md` or `scripts/check-sql.sh`), `receipt`, `agent_paused`, `RECEIPT_SIGNING_KEY` and
-   `RUN_MAX_COMPRESSED_BYTES` match nothing, and `server/worker/src/sign.ts` does not exist. This half
-   joins the gate in the PRD-14 edit right after PRD-07's cut merges (PRD-07 writes a night-log note).
-4. **After the cut.** Once `crates/goalcup-daemon/` is gone, PRD-13's reference guard (its `git grep`
-   for the old crate names, with its exclusions) prints nothing. Before the cut this rule checks instead
-   that the five old crates are in the workspace `exclude` list, so it is never a skip.
 
-### 7. The one end-to-end test (`crates/goalcup/tests/e2e_run.rs`, full tier, about 150 lines)
+Cut from revision 2, each with its reason (ledger B10):
+
+- **Ports rule.** Test hygiene, not a point; section 4 keeps it as a review rule.
+- **No-return word list** (PRD-13's patterns and the Worker half). It pins words, not behaviour: our own
+  caps are guarded by the never-stop tests (`pipeline_no_latch`, `native_walk`, `native_finish`), not by
+  a grep, and a word list costs more to keep in step than the code it scans. PRD-13 and PRD-07 run their
+  greps once at their cut merges and put the output in the night log; the shipped-binary hook grep stays
+  (section 8).
+- **After-the-cut reference guard.** A one-time cleanup check, not a point; PRD-13 runs it once at the
+  phase 3 merge.
+
+### 7. The one end-to-end test (`crates/goalcup/tests/e2e_run.rs`, full tier, about 140 lines)
 
 Replaces `m2_synthetic_vertical.rs` (881) and `m2_cli_lifecycle.rs` (1,944). Small on purpose (review B
-N12): it proves the parts join; each part's depth is in its own tests and on the pad. One run of the real
+N12, ledger B10): it proves the parts join without a key; each part's depth is in its own tests, and the
+real proof is the rig's micro tests and cycle runs (ledger B3). One run of the real
 `goalcup` binary (watchdog, recorder, proxy, native reader, masker, writer, uploader) in about a minute:
 
 - `goalcup start --test --connector tests/data/connectors/fake.toml --hosts tests/data/connectors/fake-hosts.toml`
@@ -273,9 +288,10 @@ response the test received is byte for byte what the upstream sent (PRD-03); eve
 message is in DATA or inside a GAP (PRD-02); the session file has a native stream whose bytes equal the
 file (PRD-04); zero known-value hits and the planted value has a MASK (PRD-05); the concatenated chunks the
 fake Worker holds equal the local parts (PRD-06); `status.json` `written` equals the verifier's recount and
-off time equals the one `recorder_down` gap (PRD-02, PRD-08); the gateway host and the provider host have
-the same `conn` shape (`decrypt`, `listed: shared`) (PRD-03, PRD-11). Verifier exit 1 with only `named`
-results (the gap is planned).
+off time equals the one `recorder_down` gap (PRD-02, PRD-08); the gateway call is recorded like the
+provider call (its response bytes are in DATA) (PRD-03, PRD-11). Verifier exit 1 with only `named`
+results (the gap is planned). Cut from revision 2: the check that both hosts have the same `conn` fields
+(`decrypt`, `listed: shared`); it pinned an internal shape, and the rig's gateway case proves the promise.
 
 What it no longer does (each lives elsewhere): HTTP/2 (`proxy_h2.rs`), 300 session files
 (`native_walk.rs`), an upstream outage (`proxy_connect.rs`), a writer stall (`pipeline_stall.rs`), a
@@ -303,7 +319,7 @@ builds on the conductor, even while sandboxes are down (ledger B1, PRD-16 S8).
 | `cargo nextest run --locked --workspace` | yes | yes | every guard in section 2 |
 | `cargo test --locked --workspace --doc` | yes | yes | nextest skips doctests; one line |
 | `npm --prefix server/worker test` | yes | yes | the Worker changes in the same build (PRD-07); a wire change without it is run 1's risk again |
-| `python3 -m unittest` on the kept script tests, and `discover -s scripts/pad` | yes | yes | `test_gate.py`, `test_install.py`, `test_release.py`, `test_codeowners.py`, `test_third_party_licenses.py`, `test_fetch_run.py` (PRD-07), `scripts/pad/test_pad.py` (PRD-12). A named list, not `discover -s scripts`: until the cut, 13 old script tests name old crates or `cargo` and would fail with the old crates out of the workspace. The list holds only script tests that exist on integration: `discover -s scripts/pad` joins it in the PRD-14 edit right after PRD-12's first `test_pad.py` merge (PRD-12 writes a night-log note), and a new script test is added the same way |
+| `python3 -m unittest` on the kept script tests, and `discover -s scripts/pad` | yes | yes | `test_install.py` (point 7, hard rule), `test_fetch_run.py` (PRD-07, point 5), `scripts/pad/test_pad.py` (PRD-12, the rig selftest of ledger B9). A named list, not `discover -s scripts`: until the cut, 13 old script tests name old crates or `cargo` and would fail with the old crates out of the workspace. The list holds only script tests that exist on integration: `discover -s scripts/pad` joins it in the PRD-14 edit right after PRD-12's first `test_pad.py` merge (PRD-12 writes a night-log note), and a new script test is added the same way, only if it guards a point, the format, masking or never-stop |
 | `cargo nextest run --locked --workspace --run-ignored only -E 'not test(/^by_hand_/)'` | | yes | `e2e_run`, `upload_worker` (real Worker), other slow cases |
 | `cargo build --release --locked -p goalcup -p goalcup-verify` | | yes | the binaries the pad copies, built without dev-dependencies |
 | `grep -ac GOALCUP_TEST_ target/release/goalcup` is 0 | | yes | section 4 "Hooks reach any binary built with dev-dependencies" |
@@ -385,16 +401,15 @@ downloaded.
 
 - `.github/CODEOWNERS`: rewritten to the new owned paths: `/connectors/`, `/crates/goalcup/src/mask/`,
   `/crates/goalcup/src/connector/`, `/crates/goalcup-format/`, `/scripts/pad/`,
-  `/skills/adding-a-capture-harness/`. `scripts/test_codeowners.py` stays and keeps it honest. It lands
-  once those paths exist on integration (second slice).
+  `/skills/adding-a-capture-harness/`. It lands once those paths exist on integration (second slice).
+  `scripts/test_codeowners.py` is deleted (B10: not a point); reviewers check the paths.
 - `.github/PULL_REQUEST_TEMPLATE.md`: the checklist asks for the `gate fast` PASS line, and for a connector,
   the pad's `row.json` (PRD-12 contributor path). The `pin-manifests.sh` and `check-connector.sh` lines go.
 - `.github/dependabot.yml`: kept; weekly update pull requests run the gate through CI.
 
 **When PRD-14's edits land** (review B M5, PRD-00 phase 3): every edit here lands as soon as it is green,
 working with the old crates still on disk and out of the workspace. The phase 3 merge needs nothing from
-this PRD except deleting `check-links.py` and its test after PRD-15's last run. Rule 4 of `rule_code.rs`
-switches itself on when the old crates are gone.
+this PRD except deleting `check-links.py` and its test after PRD-15's last run.
 
 ## Files it owns
 
@@ -404,12 +419,12 @@ Create: `crates/goalcup/tests/common/**` (section 5), `crates/goalcup/tests/rule
 Change: `scripts/gate.sh` (113 to about 75), `.config/nextest.toml` (61 to about 25),
 `.github/workflows/ci.yml` (93 to about 50), `.github/workflows/release.yml` (120 to about 120),
 `scripts/package-release.sh`, `scripts/smoke-release.sh`, `packaging/install.sh` (394 to about 300),
-`packaging/README.md`, `scripts/release.sh`, `scripts/third-party-licenses.py`, `scripts/test_gate.py`
-(226 to about 110), `scripts/test_install.py`, `scripts/test_release.py`, `.github/CODEOWNERS`,
-`.github/PULL_REQUEST_TEMPLATE.md`.
+`packaging/README.md`, `scripts/release.sh`, `scripts/third-party-licenses.py`, `scripts/test_install.py`,
+`.github/CODEOWNERS`, `.github/PULL_REQUEST_TEMPLATE.md`.
 
 Delete: in phase 0, `scripts/check-version.py`, `scripts/test_check_version.py`, `scripts/ci-scope.py`,
-`scripts/test_ci_scope.py`; with `ci.yml`, `.github/workflows/linux-x86_64.yml`, `scripts/linux-check.sh`,
+`scripts/test_ci_scope.py`, and (ledger B10) `scripts/test_gate.py`, `scripts/test_release.py`,
+`scripts/test_codeowners.py`, `scripts/test_third_party_licenses.py`; with `ci.yml`, `.github/workflows/linux-x86_64.yml`, `scripts/linux-check.sh`,
 `scripts/test_linux_check.py`; in the phase 3 merge, after PRD-15's last run, `scripts/check-links.py` and
 `scripts/test_check_links.py`.
 
@@ -431,11 +446,11 @@ Must not touch: any test file another PRD names (`pipeline_*`, `watchdog_*`, `pr
 | PRD-05 | `mask_bench.rs` holds one `#[ignore]` test, `by_hand_mask_bench`, in no gate tier; run once by hand in a release build, report only | Used there |
 | PRD-06 | `common::worker` (S5); `upload_worker.rs` per PRD-06 Amendments (full tier: real client against `wrangler dev`, `fetch-run.sh --local`, equal bytes) | Both |
 | PRD-07 | Gate runs `npm test` (fast and full) and `test_fetch_run.py` (fast). `check-sql.sh` is not a gate step in this build | Used here |
-| PRD-08, PRD-09 | `cargo nextest` covers `crates/goalcup-verify` in the fast tier; the six PRD-08 files of section 3 and PRD-09's `usage_*`; their own `tests/common/` record builders stay in that crate; that crate has no `test-hooks` | Used here |
+| PRD-08, PRD-09 | `cargo nextest` covers `crates/goalcup-verify` in the fast tier; the six PRD-08 files of section 3 and PRD-09's `usage_run1` only (B10 cut, section 3; a note to PRD-09 through the replan agent, ledger B2a); their own `tests/common/` record builders stay in that crate; that crate has no `test-hooks` | Used here |
 | PRD-10 | `install.sh` reads `status --json` `status.mode`; `cli_*.rs` use `common::worker` and `common::home`; `start --connector --hosts` (S16) loads `e2e_run`'s fake connector | Both |
 | PRD-11 | `model-hosts.toml` and the connector file names are read by `rule_code.rs`; `src/connector/builtin.rs` is its one allowed file; connectors are embedded, so packaging ships none | Used here |
-| PRD-12 | Shared build lock `target/.build-lock` inside a box; `test_pad.py` in the fast tier; `scripts/pad/table --release-check <commit>` for `release.sh tag`, leaving out `connectors/tiers.toml`; the pad uses no hook build | Both |
-| PRD-13 | Deletes the old crates, their tests and the cut scripts. Its reference and no-return guards live in `rule_code.rs` rules 3 and 4; it does not edit `gate.sh` | Done there |
+| PRD-12 | The rig (ledger B9) is the main proof and the ladder (ledger B3) runs there, never in the gate; shared build lock `target/.build-lock` inside a box; `test_pad.py` (the rig selftest) in the fast tier; `scripts/pad/table --release-check <commit>` for `release.sh tag`, leaving out `connectors/tiers.toml`; the pad uses no hook build | Both |
+| PRD-13 | Deletes the old crates, their tests and the cut scripts. Its reference and no-return greps are no longer in `rule_code.rs` (B10 cut, section 6): PRD-13 runs them once at its cut merge and logs the output (a note to PRD-13 through the replan agent, ledger B2a); it does not edit `gate.sh` | Done there |
 | PRD-15 | README "The gate" (two tiers, prerequisites, measured times, the guard list of section 2 as the promise list), AGENTS.md lines 68-77 and 105, `docs/OPERATING.md` "CI" (line 530), `scripts/README.md`; runs `check-links.py` on its final docs before PRD-14 deletes it | Written there |
 | PRD-16 | Workspace `Cargo.toml` (old crates in `exclude`, profile changes, the version comment); `gate fast` at every merge in a build box as `ubuntu`; G1, G3, G4 in its schedule; G2, G5, G6, G7 are release steps after the merge | Used there |
 | PRD-17 | `lessons_*.rs` run in the fast tier, `lessons_launch` in the `heavy` group; `common::recorder::real(dir)` for H10 and K15; deleting old crates waits for them | Both |
