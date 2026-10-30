@@ -45,8 +45,7 @@ pub fn check(
     .into_iter()
     .flatten()
     .collect();
-    // On WSL1 both folders give the same line.
-    problems.dedup();
+    problems.dedup(); // On WSL1 both folders give the same line.
     if !problems.is_empty() {
         return Err(problems);
     }
@@ -105,10 +104,9 @@ pub fn wsl_version() -> Option<u8> {
     Some(if release.starts_with("4.4.") { 1 } else { 2 })
 }
 
-/// Section 3 step 2, one check for `start` (a problem) and `setup` (a warning), from 0.7's
-/// `folder_gate.rs`: WSL1, or WSL2 with `dir` on a Windows drive, told as 0.7 told it
-/// (`machine.rs`): the type name in `/proc/self/mountinfo` of the longest mount point holding
-/// `dir`, never a path prefix, since a drive can be mounted anywhere. `what` names `dir`.
+/// Section 3 step 2 for `start` (a problem) and `setup` (a warning), as 0.7's `folder_gate.rs` and
+/// `machine.rs`: WSL1, or WSL2 with `dir` on a Windows drive by the type of the longest mount point
+/// in `/proc/self/mountinfo` holding `dir`, never a path prefix. `what` names `dir`.
 pub fn wsl(dir: &Path, what: &str) -> Option<String> {
     if wsl_version()? == 1 {
         return Some(text::wsl(what, None));
@@ -122,9 +120,11 @@ pub fn wsl(dir: &Path, what: &str) -> Option<String> {
     });
     let mounts = mounts.filter(|(p, _)| dir.starts_with(p));
     let (_, kind) = mounts.max_by_key(|(p, _)| p.len())?;
-    let windows = "9p drvfs virtiofs cifs smb3 smbfs ntfs ntfs3 fuse.ntfs-3g";
-    let windows = windows.split(' ').any(|w| w == kind);
-    windows.then(|| text::wsl(what, Some(kind)))
+    matches!(
+        kind,
+        "9p" | "drvfs" | "virtiofs" | "cifs" | "smb3" | "smbfs" | "ntfs" | "ntfs3" | "fuse.ntfs-3g"
+    )
+    .then(|| text::wsl(what, Some(kind)))
 }
 
 /// The key files (`.env`, `.env.*`) and every entry besides them, `.gitignore` and `.DS_Store`,
@@ -160,9 +160,8 @@ fn token(env_local: String) -> bool {
             && v.bytes()
                 .all(|b| b.is_ascii_graphic() && !b"\"'".contains(&b))
     };
-    let mut values = env_local
-        .split('\n')
-        .filter_map(|l| l.strip_prefix("GH_TOKEN="));
+    let lines = env_local.split('\n');
+    let mut values = lines.filter_map(|l| l.strip_prefix("GH_TOKEN="));
     values.next().is_some_and(plain) && values.next().is_none()
 }
 
@@ -202,10 +201,8 @@ fn lexical(path: &Path) -> PathBuf {
 /// such a `!` line always re-includes.
 fn ignored(ignore: &str, name: &str) -> bool {
     let mut verdict = false;
-    let ignore = ignore
-        .strip_prefix('\u{feff}')
-        .unwrap_or(ignore)
-        .split('\n');
+    let ignore = ignore.strip_prefix('\u{feff}').unwrap_or(ignore);
+    let ignore = ignore.split('\n');
     for line in ignore.map(|l| l.strip_suffix('\r').unwrap_or(l).trim_end_matches(' ')) {
         if line.is_empty() || line.starts_with('#') || line.ends_with('/') {
             continue;

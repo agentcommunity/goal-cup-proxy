@@ -427,13 +427,13 @@ fn num(u: &Map<String, Value>, path: &str) -> Option<u64> {
     }
 }
 
-fn less(total: Option<u64>, part: Option<u64>) -> Option<u64> {
+pub fn less(total: Option<u64>, part: Option<u64>) -> Option<u64> {
     total.map(|t| t.saturating_sub(part.unwrap_or(0)))
 }
 
 /// Other integer members named `…tokens`, `…Tokens` or `…TokenCount`, at the top or one object
 /// down (as `a.b`). `cost`, credits, plan and rate limits never match.
-fn extra(u: &Map<String, Value>, used: &[&str]) -> BTreeMap<String, u64> {
+pub fn extra(u: &Map<String, Value>, used: &[&str]) -> BTreeMap<String, u64> {
     let tokenish = |k: &str| {
         safe(k) && (k.ends_with("tokens") || k.ends_with("Tokens") || k.ends_with("TokenCount"))
     };

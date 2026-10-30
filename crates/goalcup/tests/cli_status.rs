@@ -94,7 +94,7 @@ fn one_problem_line_per_cause() {
         let lines = problems(&st, &state, &cx);
         let marked = lines.iter().filter(|l| l.starts_with(text::PROBLEM));
         assert_eq!(marked.count(), want, "{lines:#?}");
-        let shown = block(&st, &state, None, &cx, &[state.word()]);
+        let shown = block(&st, &state, None, None, &cx, &[state.word()]);
         assert_eq!(shown.matches(text::PROBLEM).count(), want, "{shown}");
     }
 }

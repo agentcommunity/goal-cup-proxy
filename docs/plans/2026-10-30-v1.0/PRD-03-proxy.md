@@ -920,3 +920,22 @@ Revision 3 against OWNER-DECISIONS.md (the ledger wins). Fix ids are from the al
   Under merge rule 1 that one edit is the seam change the PRD-16 note after PRD-17 phase 0 allows.
   `proxy_restart.rs` does the same in the merge that brings it.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-08 slice 4 (merge 1fdaf2c3): what `conn_bytes` now demands of the proxy
+
+PRD-08's `conn_bytes` is built (PRD-08 note). It judges only what the record shows, so the proxy's
+slice that writes decrypted connections must meet four points or the check is blind or fails a good
+run:
+
+- **Every decrypted `conn` END carries `plain_up` and `plain_down`.** One decrypted connection with
+  no tail turns the whole run's `conn_bytes` into `skip`, which hides a real loss.
+- **Every HTTP stream END carries `wire`** (the body bytes on the wire; the verifier falls back to
+  `seen` if absent). Heads are counted from the OPEN `headers`.
+- **A parser fault on a reused decrypted connection writes a `conn` GAP** (PRD-01 section 4, `lost`
+  = unparsed bytes + 1). A GAP on an HTTP request or response stream does not cover the other
+  requests: an unparsed request with no `conn` GAP leaves its bytes unaccounted and `conn_bytes`
+  fails (exit 2) above 1 MiB and 50% of the direction.
+- **A WebSocket stream GAP carries its real `lost`** (+1 by invariant 11). `lost` 0 (size unknown)
+  waives the check for the whole connection, so use it only when the size is unknown.
+
+No locked ledger item is touched and no owner question comes from this note.
