@@ -325,7 +325,13 @@ impl Board {
     /// them. In `mode: sealed`, `written` and `off` stay the seal's totals. `held_peak` is the
     /// larger of the boot's live peak `held_peak` and the written one, so a stuck writer never
     /// freezes it.
-    pub fn status(&self, live: &Live, held_peak: u64, counts: Counts, durable: DurableStatus) -> Status {
+    pub fn status(
+        &self,
+        live: &Live,
+        held_peak: u64,
+        counts: Counts,
+        durable: DurableStatus,
+    ) -> Status {
         let f = self.facts();
         let mut s = f.status.clone();
         let sealed = s.seal.is_some();
