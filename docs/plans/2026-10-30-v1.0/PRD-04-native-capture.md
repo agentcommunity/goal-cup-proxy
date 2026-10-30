@@ -854,3 +854,18 @@ ledger wins over every row here.
   slice does not close them. Still known from earlier notes: C2 (nested root on another device) and
   the missing `fid` in `SnapshotCursor` on resume (PRD-02 note).
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, fix round on the database set slice (4f218cbc)
+
+- **Slice per reader** (review A9): the loop gives `tail.read` and `sets.read` a 64 MiB slice each,
+  so one pass reads at most 128 MiB. The slice is fairness, not a cap, and nothing is lost; section 5
+  reads as a 64 MiB slice per reader.
+- **Test helpers** (review A7): `tests/common/` stays PRD-14's. The four helpers PRD-04 added there
+  (`append`, `notes`, `end_of`, `gap_rows`) now live in `tests/native_common/mod.rs`, read under the
+  `tests/native_*` row as PRD-10 reads `cli_common/`. Moving them into `common::recorder` is a request
+  to PRD-14, not done here.
+- **Gone sets** (review A8): a set none of whose files was in the last walk, with no `unlisted`
+  folder holding one, and whose last state a copy already took, gets no seal copy. A gone set never
+  copied still gets one, and its GAP names the real loss.
+- **Short streams** (review B8): `tail::end_stream` is the one place that names a stream cut short,
+  for a file and for a database copy.
