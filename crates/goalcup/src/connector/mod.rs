@@ -110,7 +110,7 @@ pub struct LaunchPlan {
     pub argv: Vec<String>,
     /// The complete harness environment, minus the port and the CA paths (`finish_env`).
     pub env: BTreeMap<String, String>,
-    /// The isolated home, created.
+    /// The isolated home, created unless `refusal` is a held lock.
     pub home: PathBuf,
     /// Held as long as the plan lives.
     pub lock: HomeLock,
@@ -130,6 +130,12 @@ pub struct LaunchPlan {
     pub secret_values: Vec<(String, Vec<u8>)>,
     /// `local_model` notes, written once per entry after `start`.
     pub notes: Vec<serde_json::Value>,
+    /// Hint and refusal files there but not read (linked, over 1 MiB, unreadable, unparsable):
+    /// PRD-10 shows one start line for each (section 2) and logs it.
+    pub unread: Vec<PathBuf>,
+    /// Log lines: a hint skipped (file or variable, key, reason), a `never` host left out, a
+    /// setting row not written. They name files, keys and hosts, never a value.
+    pub log: Vec<String>,
     /// A `refuse_if_set` hit or a held lock: file and key, never the value.
     pub refusal: Option<Refusal>,
 }
@@ -232,34 +238,39 @@ pub fn plan(connector: &Connector, env: &Env, home: &Path) -> LaunchPlan {
         }),
         _ => None,
     };
-
-    // The participant list (`record-hosts.txt`) is read by the hosts slice.
+    // `never` first, so `decide` is the one never test for participant and config hosts.
     let mut hosts = connector.hosts.clone();
-    let (config, notes) = hints::collect(connector, env, home);
-    hosts.add_config(config);
     hosts.add_never(&env.server_host);
-    for own in hosts::OWN_SERVER {
-        hosts.add_never(own);
-    }
+    let mut reader = hints::Reader {
+        env,
+        home,
+        unread: Vec::new(),
+        log: hosts.add_participant(&env.goalcup_home),
+    };
+    let (config, notes) = reader.collect(connector, &hosts);
+    hosts.add_config(config);
+    let refusal = lock_refusal
+        .or(version_refusal)
+        .or_else(|| reader.refusal(connector));
+    let (unread, mut log) = (reader.unread, reader.log);
 
+    let rows = connector.native.iter();
     let native = NativeSources(
-        connector
-            .native
-            .iter()
-            .map(|row| NativeSource {
-                name: row.name.clone(),
-                root: PathBuf::from(fill(&row.root)),
-                pattern: row.pattern.clone(),
-                form: row.form,
-                since: env.run_start,
-                warn_missing: row.warn_missing,
-            })
-            .collect(),
+        rows.map(|row| NativeSource {
+            name: row.name.clone(),
+            root: PathBuf::from(fill(&row.root)),
+            pattern: row.pattern.clone(),
+            form: row.form,
+            since: env.run_start,
+            warn_missing: row.warn_missing,
+        })
+        .collect(),
     );
 
-    // A row that cannot be written is a log line in the launch slice, never a refusal.
+    // A row not written is a log line, never a refusal (section 5).
     if free {
-        let _ = write_settings(home, &connector.update_off);
+        let skipped = write_settings(home, &connector.update_off).into_iter();
+        log.extend(skipped.map(|s| format!("update_off not written: {}", s.reason)));
     }
 
     LaunchPlan {
@@ -283,8 +294,8 @@ pub fn plan(connector: &Connector, env: &Env, home: &Path) -> LaunchPlan {
         mask_rules: connector.mask.clone(),
         secret_values: Vec::new(),
         notes,
-        refusal: lock_refusal
-            .or(version_refusal)
-            .or_else(|| hints::refusal(connector, env, home)),
+        unread,
+        log,
+        refusal,
     }
 }

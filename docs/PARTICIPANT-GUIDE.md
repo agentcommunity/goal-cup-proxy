@@ -5,10 +5,6 @@ You give one coding agent one prompt, then leave it alone for 168 hours. Goal Cu
 to the end of your run. The rules are in [RULES.md](RULES.md). The long version of this guide, from
 before 0.7, is in [the archive](archive/PARTICIPANT-GUIDE-0.6.md).
 
-You can hand the setup to your own agent: tell it "set me up for Goal Cup" and point it at the
-[goal-cup-setup skill](../skills/goal-cup-setup/SKILL.md). It does what a command can do and stops
-at each step that needs you.
-
 ## What you need
 
 - A Mac or a Linux machine. On Windows, use WSL2 (Ubuntu inside Windows) and do everything inside it.

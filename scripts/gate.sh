@@ -7,8 +7,9 @@
 #   fast  fmt, clippy, every test of the workspace (nextest), doctests, the Worker's tests and
 #         the kept script tests.
 #   full  fast's steps, then every #[ignore] test except by_hand_* (run once by hand, never in a
-#         tier), the release build of the two shipped binaries without dev-dependencies, and a
-#         check that no GOALCUP_TEST_ hook reached the shipped goalcup.
+#         tier), the release build of the two shipped binaries without dev-dependencies, a
+#         check that no GOALCUP_TEST_ hook reached the shipped goalcup, and that the hooked
+#         target/debug/goalcup does hold them (else that check proves nothing).
 #
 # The workspace holds only the new crates; the old ones are in its `exclude` list and never
 # built here. No step is skipped and nothing falls back: a skip is a hidden pass. Every step
@@ -116,6 +117,12 @@ if [ "$tier" = full ]; then
     hooks=$(grep -ac GOALCUP_TEST_ target/release/goalcup || true)
     echo "+ GOALCUP_TEST_ in target/release/goalcup: $hooks"
     [ "$hooks" = 0 ] || fail
+    # The nextest steps built target/debug/goalcup with dev-dependencies, so it holds the hook
+    # text once a hook is reachable from main. Without it the clean count above proves nothing
+    # (PRD-05 amendment). The seam: PRD-06's uploader must call Policy::from_env.
+    hooked=$(grep -ac GOALCUP_TEST_ target/debug/goalcup || true)
+    echo "+ GOALCUP_TEST_ in target/debug/goalcup: $hooked"
+    [ "${hooked:-0}" -gt 0 ] || { echo "gate.sh: target/debug/goalcup has no GOALCUP_TEST_ text, so the release grep proves nothing; waits on a hook reachable from main (PRD-06 calls Policy::from_env)"; fail; }
 fi
 
 echo "gate $tier: PASS in $(($(date +%s) - start))s"

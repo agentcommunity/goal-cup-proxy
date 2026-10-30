@@ -1447,3 +1447,106 @@ taken; "rejected" says why. Fixes for other files are made by those files' owner
   durable yet exits 1 with `inv1` `skip`; a part file that cannot be opened exits 3.
 - Selftest's K2 still waits on PRD-08's run 1 shape builder (next slice, with U1).
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-14 slice 2 (merge 04886295)
+
+- `scripts/release.sh tag` now runs `python3 scripts/pad/table --release-check <sha>` from a detached
+  worktree at origin/main's sha, so nit B3 no longer makes the tag judge another commit's rows. B3 is
+  still worth taking (a run by hand from any checkout), but the release no longer waits on it. `table`
+  must stay 3.9-clean, since `release.sh` calls `python3`.
+- `CODEOWNERS` now names `/scripts/pad/` (`@nembal`).
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-06 slice 1 (merge e6bd8a50)
+
+- `upload.json` (S9) is on integration, but no sender is yet. Until PRD-06's send and beat slices
+  merge, a pad run with a server ends with `upload.json` at `state: waiting` and `final: none`, so
+  `wait-upload` times out. Rows that need the server copy (C4's server checks, U3, U5, U8) are then
+  "not run: sender not merged", not FAIL. `server = "off"` runs are not affected. The `watch/upload.jsonl`
+  reader can be built against the S9 type now (`goalcup::upload::state`).
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-08 slice 2 (merge 669f5d92)
+
+`check --server <fetched> [--local <entry dir>]` now gives real server results (PRD-08 note). What
+`check.py` reads for C4, C6 and K6, as merged:
+
+- The three ids `server_chunks_whole`, `server_equals_local` and `server_counts_match` per entry, and
+  the top-level `server` object `{chunks, whole, equals_local, db_match}`. `equals_local` and
+  `db_match` are true only when every entry passes, false on any `fail`, else null. `whole` is true
+  only when every entry passes.
+- Under `--server`, a folder with no `fetch.json` gives all three `fail`. A bare `rec.gcr.zst`
+  checked without `--server` skips them, so C4 always passes `--server` on a fetched copy.
+- `fetch.json` `missing.why` set gives `server_chunks_whole` `fail` with `first.o` =
+  `missing.offset`. `final` null alone gives `server_chunks_whole` `named` (exit 1) and
+  `server_counts_match` `skip` "not sealed". C4 reads the open end as INCONCLUSIVE, not FAIL.
+- `server_equals_local` is `skip` when the `--local` entry's first part is pruned or its `rec/` is
+  empty. A `--local` path that never held a record exits 3, which is the box's mistake, not the
+  run's.
+- K6's three tampers map as follows. A flipped byte fails `server_equals_local`; L-FW9 proves it.
+  A removed middle chunk fails `server_chunks_whole` on the offset or seq break. `model_requests`
+  plus one fails `server_counts_match`; the check reads `model_requests` as the seal's `http_post`
+  plus `ws_up_msgs`.
+- K2 still waits on the run 1 shape builder (PRD-08's legs slice). U1's stub is on integration, so
+  that slice need not wait for PRD-09.
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-09 slice 2 (merge dab0ce1f)
+
+- **`goalcup-verify usage` still exits 3** at dab0ce1f: the wire leg is read inside U1, but `run`, the
+  native leg and S7 output come in PRD-09's next slices. Until they land, a pad run's spend check and
+  C5 record `usage` as not read (the row says so); exit 3 is never priced as 0 USD or read as 0
+  tokens. U1's `readable()` is a method now (PRD-09 B10); C1 reads it through PRD-08 as before.
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-12 slice 4 (merge 69f355c6)
+
+- **Gate.** `gate fast: PASS in 137s` on 69f355c6 (nextest 188 of 188, 16 pad tests). Branch head
+  e598500c; all 10 non-merge commits in 00fac28d..69f355c6 carry both trailer lines. There was no real
+  key run: the proof is fake-binary probes in build boxes.
+- **Built:** `kill-recorder@m`, `wait-recovery`, `kill-watchdog-recover@m`, `keep-going`, the
+  detached watch of section 4, the 5-minute spend check with `[rates]` in `pad.toml` and the seal at
+  `cap_usd`, the `pad-out/spend.jsonl` ledger, and PRD-11's flat `connectors/<id>.toml` (top-level
+  `home`, with `{home}` filled, and `native`). The other six faults (`kill-watchdog`, `kill-both`,
+  `freeze`, `cut-worker`, `route-drop`, `fd-limit`), `exec` and `pre` still answer skip.
+- **B1 to B3 of the slice 3 note are in.** The 13:25Z question on `test_pad.py`'s B10 ground is closed
+  by the review rounds: the C3 mapping tests are gone. `test_known_value_hit_fails`,
+  `test_conductor_scan_counts_its_own_secrets` and `test_create_timeout_still_removes_the_box` stay
+  (point 4; the last one guards a box left holding keys).
+- **One review nit for the next slice, a cut:** B6-1, drop the inline comment on
+  `got["wait-recovery"] -= 30` in `runner_limits`; the docstring stays the one explanation.
+- **Open-stream sign.** S4 has no open-stream count. `kill-recorder` waits up to 60 s for
+  `last_request_at` within the last 10 s, then kills anyway, and its line says "N s after a written
+  request" or "no request written yet", not section 3's "on an open stream". If PRD-02 adds a count to
+  S4 (PRD-02 note), the pad reads it through `SEAM` in place of the sign.
+- **wait-recovery** reads S4 `pid` (a new one), `mode` `recording`, `off.spans` (`recorder_down`
+  spans on sid 0: one more than at the kill), `off.since` null, and `written.model_requests` past its
+  value at the kill. It ends 30 s before its step's limit, so its own FAIL line is written before the
+  step times out (B5-1).
+- **A seal at the cap before a fault** makes each fault window holding it INCONCLUSIVE, never FAIL
+  (review A-N3, A-N6); the record-only checks still run.
+- **The cap cannot seal a run yet.** On integration `goalcup seal` and `goalcup recover` exit 3 "not
+  built" (PRD-10 note). `seal-now` then writes a FAIL line and is tried again at each later check. So
+  no run with a real key starts before PRD-10's `seal` merges (ledger T6), besides PRD-05's masker
+  (PRD-16 note), and a `kill-watchdog-recover` row is not evidence before `recover` merges.
+- **Spend ledger.** One line per run in `pad-out/spend.jsonl`: `at`, `connector`, `case`, `mode`,
+  `key`, `run`, `entry`, `usd` (priced at the check step, null when usage was not read), `usd_live`
+  (the last live estimate, null if never read), `over_cap`, `models`, `priced_high`, `box_minutes`.
+  The scribe sums `usd`, else `usd_live`. A model with no rate line is priced at its key's highest
+  listed rate. The rates were copied on 30 Oct (the commit cites the pages); `gemini-4-argon` doubles
+  from 1 Dec, after the 6 November date, so no change is due in the build.
+- **Pricing** reads S7 `models[].tokens` `input`, `cached`, `cache_write` and `output`; `reasoning`
+  is never added, because `output` holds it (PRD-09 section 4). Until PRD-09's `usage` stops exiting
+  3, every spend line has `usd` null and the run says usage was not read.
+- **Size, `wc -l` at 69f355c6:** `pad` 610 (row 320), `pad-run` 658 (330), `check.py` 429 (320),
+  `table` 192 (150), `test_pad.py` 308 (90), `image` 54 (60), `sbx.mjs` 133 (no row), `pad.toml` 31,
+  prompts 16, runs 16, harness files 92, `image.id` 1. In all 2,540 under `scripts/pad/`, 463 more
+  than at 9e259b4d (2,077), 75% over the top of PRD-00's "about 1,350 to 1,450". Still to land:
+  `selftest` 100, `exec/` 70, 13 harness files (about 195), the skill 100, the six faults, `pre` and
+  the queue. The slice 3 size decision stands. The lines added here serve point 3 (each fault step
+  has its own limit, wait-recovery ends before its step, the spend check never fails a row and starts
+  when start is tried) and point 4 (the watch keeps only the replaced pane, `recover` runs under
+  `env -i`, the ledger holds names and numbers only). Whether the row rises stays the 12:53Z owner
+  question; overage alone is reported, not held (integrator 11:20Z). The next slice applies B6-1
+  first, and the six faults reuse `kill_rec`, `fault`, `at` and `recover` instead of new helpers.
+- No locked ledger item is touched and no owner question comes from this slice.

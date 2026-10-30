@@ -892,3 +892,50 @@ PRD-01, PRD-05, PRD-08, PRD-12, PRD-16 and the old code.
   Tests: no `usage_run1.rs` yet (the 200-line test row is untouched; the stub's checks ride on
   PRD-08's tests). Fixtures are 555 lines of data, outside both rows.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-09 slice 2 (merge dab0ce1f)
+
+- **On integration:** `shapes.rs`, `sse.rs`, `wire.rs` and the `Calls` sink in `mod.rs`. Every wire
+  call of an entry (HTTP and WebSocket, any host, shape picked by path suffix) is a `CallRow` with
+  model, effort, the five token numbers, `extra`, outcome, detail, `whole`, host, `host_kind` and
+  times, in (boot, sid, msg) order. `finish()` returns those rows with the rest of
+  `CallTable::default()`: `reason: Some(NoReader)`, no threads, `children: None`,
+  `native_form: None`. `usage::run` is still the stub (exit 3). Rules the next slices keep, as merged
+  (lane log 15:08Z to 15:36Z): warm-ups and interrupts are rows of their own kind, never calls; a rate
+  limit sent as both a stream `error` and a `response.failed` is one row; a WebSocket message still
+  open at a new boot's PART or at the end of the records is cut, so a crash-cut create is a call with
+  `whole: false`; a GAP marks a call not whole on half-open ranges, with a loss ending at a message
+  start counted (A8) and a `lost 1` GAP hitting only when its offset is inside the range (B9).
+- **B10 is done:** `Thread.readable` and `CallTable.readable` are gone; `readable()` methods read
+  `reason`. No other lane read the fields (PRD-08 note).
+- **Size decision** (review B11; `wc -l` at dab0ce1f, same as bce2f879; row 1,470 src and 200 tests).
+  Src 1,525, 104% of the row with 4 of 8 files written: `wire.rs` 601 (estimate 250), `shapes.rs` 456
+  (300), `mod.rs` 407 (250, of which 85 doc-comment lines), `sse.rs` 61 (40); these four are 182% of
+  their 840-line estimate. Tests 299 (`usage_run1.rs`, 6 cases), 150% of the row. Held to section 2's
+  estimates, the rest (`native.rs` 250, `sqlite.rs` 150, `hints.rs` 80, `out.rs` 150, the join,
+  totals and `run`) puts src near 2,300, so the 110% line (1,617) cannot hold. The extra lines serve
+  point 1 (every call counted once, cut and lost calls kept as not whole, the restart cut) and ledger
+  S2 (per-shape model and token tables for the five numbers), not features. This replan sets the
+  PRD-09 ceiling to **2,250 src and 380 tests**, with these limits for what is left: `native.rs` 250,
+  `sqlite.rs` 150, `hints.rs` 80, the join, totals and `run` at most 130 more in `mod.rs`, `out.rs`
+  120 for S7 (`{entry}.json`, `{entry}.calls.jsonl`, `run.json`). Cuts made first, before anything is
+  added: `mod.rs` type docs to one line where one line says it (section 2 rule, about 30 lines);
+  B12 below. In the third slice `usage table` (the CSV) and `--text` are built only if they fit
+  under 2,250, the CSV last: no PRD reads either (the per-thread rows are in the summary JSON and
+  `--text` waits on PRD-00 question 1); acceptance lists one not built as cut. Past 2,250 or 380 needs
+  a new `decision` line. The end-of-build report counts this against the Rust totals.
+- **Open nit B12, taken at the next touch of `usage_run1.rs`:** `a_create_cut_by_a_restart_is_a_call_not_whole`
+  builds its create with a hand `format!`; it uses `create("ws-x", None).to_string()` like the other
+  cases (same model name, same MARK, the 40-byte cut still lands inside the message), so the file has
+  one way to build a create.
+- **Declined, accepted by both reviewers:** A3 (pending creates are not dropped at a `ws_down` GAP;
+  `previous_response_id` bounds the shift) and the `End::Failed` arm merge (no line saved).
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-12 slice 4 (merge 69f355c6)
+
+- The pad's spend check, as merged, runs `nice -n 19 goalcup-verify usage <entry> --json` on the open
+  entry every 5 minutes and prices `models[]` `model` and `tokens` `input`, `cached`,
+  `cache_write` and `output` (`reasoning` inside `output`, never added again). A rename of those
+  keys is a seam line, since the T6 cap reads them; exit 3 stays "not read", never 0 USD.
+- No locked ledger item is touched and no owner question comes from this slice.
