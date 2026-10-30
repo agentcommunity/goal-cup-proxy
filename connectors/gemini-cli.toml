@@ -1,0 +1,19 @@
+# Gemini CLI 0.66.0, checked against geminicli.com docs (reference/configuration, cli/session-management) and
+# the 0.66.0 package. GEMINI_CLI_HOME stands in for the home folder, so its files sit under {home}/.gemini.
+id = "gemini-cli"
+name = "Gemini CLI"
+program = "gemini"
+resume = ["--resume", "latest"]
+home = { GEMINI_CLI_HOME = "{home}" }
+host_hints = [
+  { file = "{home}/.gemini/.env", key = "GOOGLE_GEMINI_BASE_URL" },
+  { file = "{home}/.gemini/.env", key = "CODE_ASSIST_ENDPOINT" },
+  { file = "{workspace}/.gemini/.env", key = "GOOGLE_GEMINI_BASE_URL" },
+  { file = "{workspace}/.gemini/.env", key = "CODE_ASSIST_ENDPOINT" },
+  { file = "{workspace}/.env", key = "GOOGLE_GEMINI_BASE_URL" },
+  { file = "{workspace}/.env", key = "CODE_ASSIST_ENDPOINT" },
+]
+hint_env = ["GOOGLE_GEMINI_BASE_URL", "CODE_ASSIST_ENDPOINT"]
+secret_files = ["{home}/.gemini/.env", "{home}/.gemini/oauth_creds.json"]
+native = [{ name = "chats", root = "{home}/.gemini/tmp", pattern = "**/chats/**/*.jsonl" }]
+update_off = [{ file = "{home}/.gemini/settings.json", key = "general.enableAutoUpdate", value = "false" }]

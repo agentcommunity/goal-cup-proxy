@@ -226,16 +226,49 @@ fn write_row(file: &Path, key: &str, value: &str) -> Result<(), &'static str> {
             }
         }
     };
+    replace(file, out.as_bytes()).map_err(|_| "cannot write it")
+}
+
+/// Writes `bytes` beside `file` (0600, never through a link) and renames it over `file`.
+fn replace(file: &Path, bytes: &[u8]) -> std::io::Result<()> {
     let parent = file.parent().unwrap_or(Path::new("."));
     make_dir(parent);
     let tmp = parent.join(format!(".{}.goalcup-tmp", std::process::id()));
     let written = opts().create(true).truncate(true).open(&tmp);
-    let written = written.and_then(|mut f| f.write_all(out.as_bytes()));
-    if written.and_then(|()| std::fs::rename(&tmp, file)).is_err() {
+    let written = written.and_then(|mut f| f.write_all(bytes));
+    let done = written.and_then(|()| std::fs::rename(&tmp, file));
+    if done.is_err() {
         let _ = std::fs::remove_file(&tmp);
-        return Err("cannot write it");
     }
-    Ok(())
+    done
+}
+
+/// The first line of every `.profile` goalcup writes.
+const PROFILE_HEADER: &str = "# Written by goalcup: the PATH handed to the harness.";
+
+/// `<dir>/.profile` putting the handed `path` back, which a login shell's `/etc/profile` resets
+/// (PRD-17 P11). Only a `.profile` goalcup wrote is replaced; a link or any other file is kept,
+/// which returns `AlreadyExists` so the participant is told. Any other open error is returned.
+pub(crate) fn write_profile(dir: &Path, path: &str) -> std::io::Result<()> {
+    let file = dir.join(".profile");
+    let kept = || Err(std::io::ErrorKind::AlreadyExists.into());
+    match opts().open(&file) {
+        Ok(f) if f.metadata().is_ok_and(|m| m.is_file()) => {
+            let mut head = String::new();
+            let _ = f
+                .take(PROFILE_HEADER.len() as u64 + 1)
+                .read_to_string(&mut head);
+            if head.strip_suffix('\n') != Some(PROFILE_HEADER) {
+                return kept();
+            }
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) if std::fs::symlink_metadata(&file).is_ok_and(|m| m.is_file()) => return Err(e),
+        _ => return kept(),
+    }
+    let quoted = path.replace('\'', r"'\''");
+    let body = format!("{PROFILE_HEADER}\nexport PATH='{quoted}'\n");
+    replace(&file, body.as_bytes())
 }
 
 /// `doc` with the dotted path `parts` set to `leaf`, every other key kept; `None` when it holds
