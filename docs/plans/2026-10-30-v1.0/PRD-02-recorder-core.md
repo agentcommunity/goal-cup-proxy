@@ -1365,3 +1365,40 @@ to another file are made by that file's owner.
   frame, including the boot-0 head gap and a second recovery frame (fixes N1 and N2). A change to how
   `recover` writes the seal or the gap after `start` is likewise a seam line naming PRD-08.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-10 slice 2 (merge 56495dd6)
+
+- **S8 pid file, as PRD-10 reads it:** `rec/watchdog.pid` is one line `<pid> <start_id>`. It has
+  exactly two decimal fields separated by whitespace, and nothing else. A missing or odd file reads as
+  "no watchdog". `start_id` has the same meaning as `status.json` `start_id`. Write every start id
+  (the watchdog's, the recorder's in `status.json`, `HarnessFacts::start_id`) with
+  `goalcup::cli::proc_start_id(pid)`, never a second reader of `/proc`. Status, `recover` and
+  `seal` all use the liveness test `cli::alive(pid, start_id)`, which is `kill(pid, 0)` plus a
+  matching start id with no program-file check. This fits `PR_SET_DUMPABLE` 0 (PRD-10 note).
+- **What status reads from S4 today:** `mode`, `updated` (status shows the stale line when a
+  both-dead `status.json` is more than 2 minutes old, so keep writing it each second while live),
+  `pid`, `start_id`, `harness`, `written`, `losing`, `off`, `notes`, `after_seal`.
+- **Two end-screen facts have no key** (PRD-10 note, A5): the record's end time and the final native
+  rows count. If PRD-02 adds them to `status.json`, write a seam line naming PRD-10. A renamed or
+  removed S4 key breaks `cli_status.rs` and `cli_finish.rs`, which build `status.json` through its
+  JSON form in `tests/cli_common/`.
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-03 core slice 1 (merge 0e411074)
+
+- **`reserve` as PRD-03 uses it.** Brotli reserves each allocation its decoder makes, and zstd its
+  frame window plus 512 KiB, so a flushed `br` body holds 4 to 16 MiB of `held` from its first push
+  until it ends. A brotli body already decoding keeps reserving past `room()`; only a body with no
+  piece out yet is refused. `held` can so sit above three quarters of soft from reservations
+  alone, and the next DATA pieces then meet the soft guard sooner. That is the
+  design (one counter), not a defect.
+- **A transient outside `held`:** a refused brotli body's window (up to 16 MiB) is allocated and
+  freed at once on its worker thread. PRD-03 relies on the margin between `room()` and soft (a
+  quarter of soft) to hold it; that is true while soft is at least 64 MiB times the worker threads
+  (the 128 MiB floor holds 2 threads, the 512 MiB default holds 8). R8's `by_hand_load` reports RSS
+  next to `held_peak`, so a gap between them shows here first. No change asked.
+- **Capacity under the default soft guard** (wire-proxy owner question 14:47Z): about 23 open
+  flushed `br` bodies at WBITS 24, about 45 zstd bodies at the 8 MiB window, about 95 `br` bodies at
+  WBITS 22; run 1 had about 40. The soft default is this PRD's number, not a locked item, so no W6.
+  If PRD-16 X3 fails on a `decoder_window` GAP, the fix is the soft default, never a proxy cap.
+- No locked ledger item is touched.

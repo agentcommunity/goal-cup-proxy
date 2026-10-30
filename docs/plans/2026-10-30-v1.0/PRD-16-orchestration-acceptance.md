@@ -1347,3 +1347,146 @@ kept and now cites BUILD-PROMPT section 5, since B3 no longer carries it.
 - **Open nit** B13 (test builder duplicate write path) goes to PRD-08's next slice (PRD-08 note);
   acceptance lists it as known if it is still open at the end.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-10 slice 2 (merge 56495dd6)
+
+- `gate fast: PASS in 88s` on 56495dd6 (98 tests run in the nextest summary). Box runs before the
+  merge: the builder ran fmt, clippy `-D warnings` and goalcup nextest (41/41) plus gate fast. The
+  fixer ran goalcup nextest (69/69), and reviewer A re-checked on a local merge with 77e01fbb (fmt,
+  workspace clippy, 69/69, doctests). The macOS liveness path has not been compiled in any box
+  (skipped, no macOS box). Ten paths changed, all owned by PRD-10, with no `Cargo.toml` change.
+- **Size report, PRD-10** (`wc -l` at 56495dd6, row "CLI (PRD-10)", about 2,900 src and 1,200 tests).
+  Src is 1,959, 68% of the row with 6 of 18 files written: `text.rs` 613, `cli/mod.rs` 462,
+  `status.rs` 341, `log.rs` 202, `main.rs` 197, `finish.rs` 144. The same six files have own
+  estimates of 1,270, so they run at 154%, and the CLI projects to about 3,680 (127%). The replan
+  decision (PRD-10 note) keeps the row, makes later slices build at their estimates, cuts B1, B3 and
+  B4 first, and needs a decision line for any merge past 3,190. Tests are 965, 80% of the row with
+  5 of the planned files (`cli_status.rs` 404, `cli_finish.rs` 274, `cli_log.rs` 136,
+  `cli_commands.rs` 128, `tests/cli_common/mod.rs` 23). `cli_folder.rs`, `cli_start.rs`,
+  `cli_continue.rs` and the setup tests are still to come, so the tests row will likely pass 1,200.
+  They reuse `tests/cli_common/` and PRD-14's `common::home` and `common::worker`. The
+  end-of-build report counts it against the Rust test total (a total past about 14,200 is an owner
+  question then).
+- **Trailers:** all 10 commits in 77e01fbb..56495dd6 carry both lines.
+- **Ownership:** the integrator accepts `crates/goalcup/tests/cli_common/` as PRD-10's (PRD-00 note).
+- **Open nits** B1 to B4 go to PRD-10's next slice (PRD-10 note). Acceptance lists them as known if
+  they are still open at the end. The vendor problem row, end-screen rule 7's end time, the native
+  rows line and the upload lines are not built yet. Acceptance does not count the section 4 problem
+  table or the end screen as complete until they are built or a replan line rules them out.
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-09 slice 1 (merge f5a529c8)
+
+- `gate fast: PASS in 143s` on f5a529c8 (98 tests run, 98 passed). Box runs before the merge: the
+  lane merger ran build, clippy `-D warnings`, fmt and 16/16 nextest; the fixer ran fmt, clippy
+  `-D warnings`, doc `-D warnings`, 16/16 nextest, the fixture sha256 check against the old crate and
+  a secret-pattern scan (0 hits) on ad1ce7e6; reviewer A's last re-check did not rerun the box (same
+  sha). Ten paths changed, all owned by PRD-09 (`src/usage/mod.rs` and `tests/usage_fixtures/**`),
+  with no `Cargo.toml` change.
+- **Size report, PRD-09** (`wc -l` at f5a529c8, row "Usage reader (PRD-09)", 1,470 src and 200 tests).
+  Src is 304, 21% of the row with 1 of 8 files written (`usage/mod.rs`, a stub: 89 doc-comment lines,
+  no reader logic). Its own estimate is 250 for the whole `mod.rs` with `run`, the sink, the join,
+  totals and output, so the file already runs at 122% of it on types alone; the final U1 types took
+  the extra (PRD-09 note). The row stands; the core slice reports per file and needs a decision line
+  past 1,617. Tests are 0 of 200 (`usage_run1.rs` is the core slice's). The fixtures are 555 lines of
+  data, counted in neither row.
+- **Trailers:** all 8 commits in ab939dd1..ad1ce7e6 carry both lines, and so does merge f5a529c8.
+- **Seams:** U1 is on integration with its final names, so PRD-08's `legs.rs` and `history.rs` and
+  its run 1 shape builder can build now (PRD-08 note). PRD-13's delete of the old verifier crate no
+  longer waits on PRD-09's fixtures; the old `connectors` fixtures are not copied (PRD-13 note).
+- **Open nit** B10 (one fact in `readable` plus `reason`) is taken in PRD-09's core slice unless
+  PRD-08 reads the field first (PRD-09 note). Acceptance lists it as known if it is still open at the
+  end.
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-15 slice 6 (merge 9e89a22d)
+
+- `gate fast: PASS in 86s` on 9e89a22d. Docs only: `docs/ARCHITECTURE.md`, `docs/CONNECTOR-SCHEMA.md`,
+  `docs/HARNESS-ONBOARDING.md`, `docs/RECORD-FORMAT.md` (+69, -19), all PRD-15 owned. Box runs before
+  the merge (lane 14:35Z to 14:48Z): `goalcup-verify dump` on the `zstd -dc` copy of the worked example
+  equals the committed dump; `check --json` top-level and entry key sets, check ids, `inv` numbers and
+  the skip list equal the page; em dash grep clean with a control hit; stale-term grep clean on the
+  merged pages (old hits remain in ARCHITECTURE and HARNESS-ONBOARDING from integration, for their
+  rewrites); link check: no new break (`docs/CONTRACTS.md` to `#pin-evolution` was already known).
+  The reader's counts equal the dump per kind (box at 010c69cb); the fixer's box at 9e094019 did not
+  rerun the reader.
+- **Size report, PRD-15.** PRD-15 merged no code, and PRD-00 "Size budget" has no docs row, so
+  `wc -l` of PRD-15 code is 0 and there is no row to count against. Against PRD-15's own docs table:
+  `docs/RECORD-FORMAT.md` is 374 lines against about 280 (134%, the builder's decision line names the
+  record tables, worked example, reader and S6 key tables), `docs/CONNECTOR-SCHEMA.md` 115 against
+  about 90 (128%, the key table and the **(next slice)** marks).
+- **Trailers:** all 11 commits in f5a529c8..9e89a22d carry both lines, the lane merge commits
+  included.
+- **Open nit** B-N4 (the reader intro's bare `zstd` pointer) goes to PRD-15's next slice that touches
+  RECORD-FORMAT (PRD-15 note). Acceptance lists it as known if it is still open at the end. A10 and
+  B12 are closed.
+- **Doc follows code:** the `check --json` section and the `continue` mark depend on later PRD-08 and
+  PRD-10 merges naming their changes (PRD-08 and PRD-10 notes). Acceptance checks the page against a
+  final `check --json` run, not against this slice's skip list.
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-15 slice 7 (merge 938f6733)
+
+- `gate fast: PASS in 86s` on the lane branch at the merged head (gate log 15:09Z). Four paths changed,
+  all PRD-15 owned (`AGENTS.md`, `README.md`, `docs/PARTICIPANT-GUIDE.md`, `docs/README.md`; +2, -8),
+  no `Cargo.toml` change. Builder box (15:01Z): no `goal-cup-setup` link outside plans, archive and
+  the skill; no U+2014 in the four files (control hit seen); `check-links.py` 39 broken at base and
+  head, the same set, none from the four files.
+- **Size report, PRD-15.** PRD-15 merged no code: `wc -l` of PRD-15 code is 0, and PRD-00 "Size
+  budget" has no docs row to count it against. The slice made the docs 6 lines shorter.
+- **Trailers:** all 3 commits in 04886295..938f6733 carry both lines.
+- **Unblocked:** PRD-10's delete of `skills/goal-cup-setup/` (PRD-10 note). Link checks are not in
+  the gate or CI on integration, so a broken link gates nothing; PRD-15's last `check-links.py` run is
+  the only one, before PRD-14 deletes the script in the phase 3 merge.
+- **Acceptance lists as known** the two broken links left in history docs on purpose:
+  `docs/archive/PARTICIPANT-GUIDE-0.6.md:13` (the deleted skill, review A-N1) and `docs/CONTRACTS.md`
+  to `#pin-evolution` (moves to the archive in PRD-15's third slice).
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-14 slice 2 (merge 04886295)
+
+- `gate fast: PASS in 122s` on the lane branch at the merged head (gate log 15:06Z). Six paths
+  changed, all PRD-14 owned (`CODEOWNERS`, `ci.yml`, `tests/common/{mod,upstream,worker}.rs`,
+  `release.sh`), no `Cargo.toml` change. `shellcheck` was skipped (not installable in the box).
+- **Size report, PRD-14** (`wc -l` at 04886295, PRD-00 row "Lessons (PRD-17), test support,
+  `rule_code`, `e2e_run` (PRD-14)", 0 src and 3,000 tests, of which PRD-14's line is 1,700):
+  PRD-14 tests are 1,657 (`tests/common/` 1,444, `rule_code.rs` 213, `e2e_run.rs` 0), 97% of its
+  1,700 with HTTP/2, `recorder::real` and `e2e_run.rs` still to come; the slice 3 projection is about
+  1,870, the line plus 10% (PRD-14 note, with the decision on `worker.rs` at 334 of 250). Src 0.
+  Scripts and CI: `release.sh` 121, `ci.yml` 60, `gate.sh` 121, `CODEOWNERS` 19 (was 57).
+- **CI as the independent record:** from 04886295 each push to integration has its own group and runs
+  to the end (PRD-14 note). Phase 3's "CI green" is read from a completed run on the phase 3 head,
+  never from a cancelled one; runs before 04886295 may show `cancelled` and prove nothing.
+- **Trailers:** all 14 commits in 900a24d7..04886295 carry both lines.
+- **Seams:** `common::upstream` (HTTP/1.1, WebSocket) unblocks PRD-17's `lessons_decode` now (PRD-03
+  leaf modules in 0e411074) and `lessons_http1` once `proxy::serve` lands; `common::worker` unblocks PRD-06's failing-PUT backoff case;
+  PRD-04's `Calls` helpers and `recorder::real` go to PRD-14 slice 3 (PRD-04, PRD-06, PRD-17 notes).
+  Release order needs nothing new: `release.sh tag` runs the pad's release check itself (PRD-12 note).
+- **Housekeeping for the end:** remove `v1.0/prd-14-tests-lane-merge-wip` from origin.
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-03 core slice 1 (merge 0e411074)
+
+- `gate fast: PASS in 88s` on merge 0e411074 (gate log
+  `/root/gc-night/gate-logs/v1.0_prd-03-proxy-1511.log`). Last fixer box at the merged head
+  92c47bf6: fmt, workspace clippy `-D warnings`, goalcup doc `-D warnings`, goalcup nextest 31/31
+  green. Paths are all PRD-03 owned (`crates/goalcup/src/proxy/`, `tests/proxy_*.rs`,
+  `tests/proxy_fixtures/`); no `Cargo.toml` change.
+- **Size report, PRD-03** (`wc -l` at 0e411074, row "Proxy (PRD-03)": 4,250 src, 2,000 tests). Src
+  2,873: `decode.rs` 810, `ws.rs` 735, `connect.rs` 673, `ca.rs` 439, `tls.rs` 203, `mod.rs` 13;
+  68% of the row after one of three slices, +19% on these files' own 2,410 estimate. Tests 1,029
+  (`proxy_ws.rs` 427, `proxy_connect.rs` 244, `proxy_tls.rs` 180, `proxy_decode.rs` 178), 51% of
+  the row for 4 of 7 files. With the remaining files at their 1,990 estimate the row would end near
+  4,860 (+14%). Replan decision (wire-proxy log): the `decode.rs` and `ws.rs` extra serve points 3
+  and 1 and is accepted; the remaining six files get at most 1,802 src lines so the row ends within
+  10%; the four remaining test files share 971 (PRD-03 note).
+- **Trailers:** all 15 non-merge commits in 938f6733..0e411074 carry both lines.
+- **X3 and the decoder windows.** A `decoder_window` GAP in A1 to A3 is an X3 FAIL as written. Under
+  the default soft guard `room()` fits about 23 open flushed `br` bodies if Anthropic sends WBITS 24
+  windows (unverified, PRD-03 Risks), under run 1's about 40; A2 (20 subagents) is where it would
+  show. Its report line goes to PRD-02 (soft default), never to a proxy cap (PRD-02 note).
+- **Unblocked:** PRD-03 slice 2 (`serve`, `hosts`, `pump`, `tunnel`, `http1`) on the merged leaf
+  modules and S3; PRD-17's `lessons_decode.rs` (all but D7) and `lessons_tls.rs` T1, T2, T4, T5 now
+  (PRD-17 note).
+- No locked ledger item is touched and no owner question comes from this slice (the 14:47Z one
+  needs no W6, PRD-02 note).

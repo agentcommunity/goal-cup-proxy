@@ -791,3 +791,33 @@ log; the pad lane follows.
   known if it is still open at the end.
 - **The interfaces row clause on C1** is still the stale one (PRD-12 note); the pad follows PRD-12.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-09 slice 1 (merge f5a529c8)
+
+- **U1 is on integration as a compiling stub with its final names** (PRD-09 note). `legs.rs` and
+  `history.rs` build against it now; the stub's table is `CallTable::default()`: no rows, not
+  readable, `Reason::NoReader`, `children: None`. Read as merged:
+  - `usage::Calls::new()` takes no argument (the interfaces row's `Calls::new(&Start)` is stale;
+    PRD-09's U1 wins, item 85). Push every record in order, then `finish()`.
+  - Build `CallRow`, `Thread` and `CallTable` only with `CallRow::new(leg, entry, boot, kind)`,
+    `Thread::new(id)` and `CallTable::default()` plus field sets or struct update, including in
+    `tests/common/` (the run 1 shape builder); never a full struct literal.
+  - `children: None` means parentage was not read: `subagents_present` (C2) is `skip` on it, never
+    `pass`; on `Some` it runs on what was read. This replaces the judge-usage 14:36Z rule keyed on
+    `NoReader`.
+  - `usage_from` is `Option<Leg>`; `Outcome::is_error()` is PRD-08's "error" as before.
+- **`readable` becomes a method in PRD-09's core slice** (nit B10, PRD-09 note): read
+  `table.readable()` and `thread.readable()` once that slice is on integration; the `harness_log`
+  rule (`readable` false gives `none`) is unchanged. If `legs.rs` or `history.rs` merges first and
+  reads the field, the field stays and PRD-09 drops B10; PRD-08 changes nothing either way.
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-15 slice 6 (merge 9e89a22d)
+
+- `docs/RECORD-FORMAT.md` now documents the `check --json` report from `report.rs` as merged: the
+  top-level and entry keys, the check ids with their `inv` numbers, the exit codes, and the ten ids
+  that are always `skip` "not built in this slice" (plus `server`, `harness_log`, `provider_errors`,
+  `history` and `threads` not filled). A later PRD-08 slice that adds or renames a key or check id,
+  changes an exit rule, or builds a skipped check names each change in its merge note, so PRD-15's
+  next slice updates the page (PRD-15 note). No code change is asked of PRD-08.
+- No locked ledger item is touched and no owner question comes from this slice.

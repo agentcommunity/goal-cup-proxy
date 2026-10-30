@@ -730,3 +730,10 @@ ledger wins over every row here.
 - **Correction to the 403d9165 note:** at b9fa50f8 neither PRD-11's loader nor `connector_builtin.rs`
   calls `native::pattern::parse`; the loader's own check still accepts a trailing `**`. PRD-11's next
   slice switches both to `native::pattern` (PRD-11 note). No shipped row has that shape.
+
+### 2026-10-30, replan after PRD-14 slice 2 (merge 04886295)
+
+- PRD-04's ask (14:31Z) for `opens`, `ends` and `events` helpers over `Calls` in
+  `tests/common/recorder.rs` is taken into PRD-14 slice 3 (PRD-14 note). Until it lands, native tests
+  keep their private copy; the slice that follows its merge deletes the copy and calls `common::recorder`.
+- No locked ledger item is touched and no owner question comes from this slice.

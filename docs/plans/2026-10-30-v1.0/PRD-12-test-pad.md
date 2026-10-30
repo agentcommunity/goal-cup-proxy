@@ -1447,3 +1447,12 @@ taken; "rejected" says why. Fixes for other files are made by those files' owner
   durable yet exits 1 with `inv1` `skip`; a part file that cannot be opened exits 3.
 - Selftest's K2 still waits on PRD-08's run 1 shape builder (next slice, with U1).
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-14 slice 2 (merge 04886295)
+
+- `scripts/release.sh tag` now runs `python3 scripts/pad/table --release-check <sha>` from a detached
+  worktree at origin/main's sha, so nit B3 no longer makes the tag judge another commit's rows. B3 is
+  still worth taking (a run by hand from any checkout), but the release no longer waits on it. `table`
+  must stay 3.9-clean, since `release.sh` calls `python3`.
+- `CODEOWNERS` now names `/scripts/pad/` (`@nembal`).
+- No locked ledger item is touched and no owner question comes from this slice.
