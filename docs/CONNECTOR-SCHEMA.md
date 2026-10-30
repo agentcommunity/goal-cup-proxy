@@ -97,9 +97,9 @@ shared name may hold `*` anywhere in any label, so the pattern forms are not che
 `goalcup start` and `goalcup continue` take `--connector <file.toml>` and `--hosts <file.toml>`, with
 the same parser and checks; the `start` event gives `connector_source = "file"`. Both flags are for
 practice and test runs only: without `--practice` or `--test`, the start refuses before anything is
-read. `continue` has no `--practice` or `--test`: its two flags must give the same files the run's
-first part used, if it used any, and a changed file is refused. **(next slice: `goalcup continue` is
-not built yet, so nothing is read)**
+read. `continue` has no `--practice` or `--test`: its two flags must name the same files, unchanged,
+as the run's first entry (none if it used none). **(next slice, ruled in PRD-10, not PRD-11: `goalcup
+continue` is not built yet, so nothing is read)**
 
 ## Example
 

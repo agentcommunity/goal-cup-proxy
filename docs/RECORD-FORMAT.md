@@ -206,8 +206,9 @@ event inside the recovery frame (see Recovery). Nothing follows the seal's LINK.
   past `cursors.json`); delete a part file with no index line left; cut the last part file at its
   last line's `c_end`. If that line is `L`, close the frame by hand with the 3 bytes `01 00 00`
   (`ZSTD_END_BLOCK`, an empty last raw block). Then add a recovery frame: the dead boot's COUNT
-  (unless an earlier recovery frame holds it), a `recorder_down` GAP, a LINK and an `R` line. The
-  next boot starts a new part file. An entry already sealed is left as it is.
+  (unless an earlier recovery frame holds it), a `recorder_down` GAP, the `seal` event when the dead
+  entry is being closed (`recovered`), a LINK and an `R` line. Without a seal the next boot starts a
+  new part file. An entry already sealed is left as it is.
 
 ## Invariants
 
@@ -234,10 +235,11 @@ event inside the recovery frame (see Recovery). Nothing follows the seal's LINK.
 ## The worked example
 
 `crates/goalcup-format/tests/data/worked-example.gcr` is one HTTP/1.1 POST with a streamed reply
-and a link: 998 raw bytes, 10 records. `crates/goalcup-format/tests/golden.rs` checks it. Its dump
-(`worked-example.dump.jsonl`, made by `goalcup-verify dump --text`, which uses
-`goalcup_format::dump::Dumper`) is below. Its `conn` meta has no `kind`: the example predates that
-key and is kept as is, which also shows that readers ignore a missing optional key.
+and a link: 998 raw bytes, 10 records. `crates/goalcup-format/tests/golden.rs` checks it. The file
+is raw and `goalcup-verify` reads only zstd input, so its dump (`worked-example.dump.jsonl`, below)
+is `goalcup-verify dump --text` on a zstd copy (`zstd -c worked-example.gcr > rec-0.gcr.zst`). Its
+`conn` meta has no `kind`: the example predates that key and is kept as is, which also shows that
+readers ignore a missing optional key.
 
 ```json
 {"o":0,"k":"part","entry":"e0123456789abcdef","boot":0,"part":0,"raw_offset":0,"wall":"2026-11-07T00:00:00Z","mono":5000000000,"next_link":0}
@@ -326,9 +328,10 @@ On the worked example (`python3 read.py < worked-example.gcr`, already raw) it p
 ## The `goalcup-verify check --json` report
 
 `goalcup-verify check <path> --json` prints one JSON object on standard output (seam S6, PRD-08
-section 4) and its text form on standard error: per entry, `why` for each named or failed check,
-then one coverage line. `<path>` is an entry folder, a `rec` folder, a fetched entry folder
-(`rec.gcr.zst`), a run folder or fetched outdir whose subfolders are entries, or one part file.
+section 4) and its text form on standard error: per entry, a `goalcup-verify: entry <name>` line,
+`why` for each named or failed check, a line if the entry is not sealed, then one coverage line.
+`<path>` is an entry folder, a `rec` folder, a fetched entry folder (`rec.gcr.zst`), a run folder or
+fetched outdir whose subfolders are entries, or one part file.
 `--live` reads an entry still recording up to its last index line; `--server` marks a server copy (a
 fetched `rec.gcr.zst` is one anyway); `--live` wins over both. `--local`, `--known` and
 `--harness-files` are taken but not read yet. The code is `crates/goalcup-verify/src/report.rs`.
@@ -337,23 +340,26 @@ Readers ignore keys they do not know.
 Exit code and `result`: 0 `pass` (whole); 1 `named` (honest but incomplete: every loss is named, or
 the entry is unsealed, live or has pruned part files); 2 `fail` (a broken invariant or a silent
 loss); 3 no usable report and no JSON (the input cannot be read, a wrong command line, an internal
-error). For a run folder, the worst entry decides.
+error). A `warn` (an unknown record kind or GAP reason) or a `skip` leaves the exit alone. For a run
+folder, the worst entry decides.
 
-| Key | Holds |
+| Top-level key | Holds |
 |---|---|
 | `verifier`, `input` | The verifier's version; `local`, `server` or `live` |
 | `run`, `result`, `exit` | The run id from the first `start` event (or null); as above |
-| `entries` | One object per entry, below, in order of first wall time |
 | `server` | null: the server copy checks are not filled yet |
+| `entries` | One object per entry, in order of first wall time, with the keys below |
+
+| Entry key | Holds |
+|---|---|
 | `entry`, `sealed`, `seal_reason`, `boots` | The PART's entry id (else the folder name); whether a `seal` event was read, and its `reason`; boots read |
 | `connector`, `keep` | From the `start` event, or null |
 | `label` | The evidence label, below |
 | `bytes` | `raw` (decompressed), `compressed` (bytes of the files read) and `framing` (raw minus DATA payload) |
 | `links` | LINK records read |
-| `checks` | Per check: `id`; `inv` (the invariant number, or null); `result` (`pass`, `skip`, `warn`, `named` or `fail`); `why` (one plain line, empty on a pass); `first` (`o`, `sid` and `wall` of the first finding, or null); `facts` (an object) |
+| `checks` | Per check: `id`; `inv` (the invariant number, or null); `result` (`pass`, `skip`, `warn`, `named` or `fail`); `why` (one plain line, empty on a pass); `first` (`o`, `sid` and `wall` of the first finding at the worst level reached, or null); `facts` (an object) |
 | `counts` | Recounted from the records: `model_requests` (model requests written, `http_post` plus `ws_up_msgs`), `req_whole`, `req_holes`, `gaps` (a count per reason name seen), `lost_bytes`, `lost_unknown`, `after_stop_bytes`, `mask_failclosed_bytes`, `off_ms`, `tunnels`, `native_files`, and `threads` (null) |
-| `harness_log`, `provider_errors`, `history` | null: not filled yet |
-| `threads` | An empty list: not filled yet |
+| `harness_log`, `provider_errors`, `history`, `threads` | Not filled yet: the first three null, `threads` an empty list |
 
 **Check ids.** `inv1` to `inv9` and `inv14` check the invariant of that number; `streams_closed`,
 `seen_matches_written`, `gap_has_end` and `recorder_alive` check invariants 10 to 13. With `inv`
@@ -361,8 +367,7 @@ null: `torn_tail`, `native_path_gen`, `counts_match_seal`, `gaps_named`, `record
 `parts_pruned`, `record_kind_unknown` and `gap_reason_unknown`. Present today but always `skip`
 with `why` "not built in this slice": `listed_hosts_decrypted`, `conn_bytes`, `mask_failclosed`,
 `history_complete`, `wire_keeps_up`, `threads_match`, `subagents_present`, and for a server copy
-`server_chunks_whole`, `server_equals_local` and `server_counts_match`. A `fail` sets exit 2 and a
-`named` exit 1; a `warn` (an unknown record kind or GAP reason) or a `skip` leaves the exit alone.
+`server_chunks_whole`, `server_equals_local` and `server_counts_match`.
 
 **The label** is a hint for judges, not a judgement. It says which evidence the record holds:
 `wire_and_native` when model requests were written and a `native` or `snapshot` stream holds
