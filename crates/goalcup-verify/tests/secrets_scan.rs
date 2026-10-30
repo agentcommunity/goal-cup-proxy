@@ -164,7 +164,11 @@ fn secrets_known_value_found_in_a_raw_file_and_on_stdin() {
     std::fs::write(loose.join("harness.log"), &k).unwrap();
     let (code, v) = scan(&[&loose], b"");
     let hits = v["known_hits"].as_array().map(Vec::len);
-    assert_eq!((code, hits, &v["inputs"][0]["as"]), (2, Some(1), &json!("record")), "{v}");
+    assert_eq!(
+        (code, hits, &v["inputs"][0]["as"]),
+        (2, Some(1), &json!("record")),
+        "{v}"
+    );
 }
 
 #[test]
