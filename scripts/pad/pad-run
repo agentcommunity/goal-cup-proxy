@@ -294,7 +294,7 @@ class Run:
             self.st["commits_since_start"] = int(r.stdout) if r.returncode == 0 else None
         self.wipe_secrets(known=True)  # the known files go after the scan; keys were wiped at the seal
         keys = ("harness_version", "run", "entry", "screen_known", "end_screen_requests", "commits_since_start", "plain_planted")
-        write(self.path("meta-box.json"), json.dumps({k: self.st.get(k) for k in keys}), 0o644)
+        write(self.path("meta-box.json"), json.dumps({k: self.st.get(k, 0 if k == "screen_known" else None) for k in keys}), 0o644)
         with tarfile.open(self.path("out.tar"), "w") as t:
             for name in ("verify", "watch", "status.json", "harness-files.json", "meta-box.json"):
                 if os.path.exists(self.path(name)):
