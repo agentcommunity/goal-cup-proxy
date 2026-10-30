@@ -167,7 +167,11 @@ fn run(command: Command) -> ExitCode {
             repo.is_some(),
             prompt.as_deref(),
         ),
-        Command::Setup { .. } => not_built("setup"),
+        Command::Setup {
+            harness,
+            yes,
+            record_host,
+        } => cli::setup::run(harness.as_deref(), yes, record_host.as_deref()),
         Command::Continue { .. } => not_built("continue"),
         Command::Recover { .. } => not_built("recover"),
         Command::Status { part, json } => cli::status::run(part, json),
