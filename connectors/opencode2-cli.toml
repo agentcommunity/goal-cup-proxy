@@ -1,0 +1,20 @@
+# OpenCode 2.2.2 (npm @opencode/cli), checked against opencode.ai/v2/docs (cli, config, providers) and the 2.2.2 package.
+# --standalone runs a private server instead of the shared background service, which keeps its own environment.
+id = "opencode2-cli"
+name = "OpenCode"
+program = "opencode"
+version = "2."
+args = ["--standalone"]
+resume = ["--continue"]
+home = { XDG_CONFIG_HOME = "{home}/.config", XDG_DATA_HOME = "{home}/.local/share", XDG_STATE_HOME = "{home}/.local/state", XDG_CACHE_HOME = "{home}/.cache" }
+env = { OPENCODE_DISABLE_AUTOUPDATE = "1" }
+host_hints = [
+  { file = "{home}/.config/opencode/*.json", key = "providers.*.settings.baseURL" },
+  { file = "{home}/.config/opencode/*.jsonc", key = "providers.*.settings.baseURL" },
+  { file = "{workspace}/opencode.json*", key = "providers.*.settings.baseURL" },
+]
+secret_files = [
+  "{home}/.local/share/opencode/auth.json", "{home}/.config/opencode/opencode.json",
+  "{home}/.config/opencode/opencode.jsonc",
+]
+native = [{ name = "db", root = "{home}/.local/share/opencode", pattern = "opencode*.db*", form = "final" }]
