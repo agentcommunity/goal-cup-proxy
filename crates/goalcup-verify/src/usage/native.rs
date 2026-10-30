@@ -195,9 +195,11 @@ impl Native {
             kids.entry(session).or_default().insert(id);
         }
         // A thread only a spawn or a meta snapshot names still gets its entry and parent.
-        for (p, c) in kids.iter().flat_map(|(p, cs)| cs.iter().map(move |c| (p, c))) {
-            let t = threads.entry(c.clone()).or_insert_with(|| read(c));
-            t.parent.get_or_insert_with(|| p.clone());
+        for (p, cs) in &kids {
+            for c in cs {
+                let t = threads.entry(c.clone()).or_insert_with(|| read(c));
+                t.parent.get_or_insert_with(|| p.clone());
+            }
         }
         // A model of `<synthetic>` or an all-zero usage is not a call.
         let claude = self.msgs.into_values().filter_map(|(r, c, rid)| {
@@ -276,15 +278,16 @@ impl File {
         row: impl FnOnce() -> CallRow,
     ) -> Option<CallRow> {
         let p = &v["payload"];
-        let copied = self.meta.as_ref().is_some_and(|m| m.parent.is_some() && at < m.at);
+        let child = self.meta.as_ref().filter(|m| m.parent.is_some());
+        let copied = child.is_some_and(|m| at < m.at);
         match (v["type"].as_str()?, p["type"].as_str()) {
             ("session_meta", _) if self.meta.is_none() => {
                 let s = |k: &str| id_at(p, &format!("/source/subagent/thread_spawn/{k}"));
-                let depth = p.pointer("/source/subagent/thread_spawn/depth");
+                let d = p.pointer("/source/subagent/thread_spawn/depth");
                 self.meta = Some(Meta {
                     id: id_at(p, "/id"),
                     parent: s("parent_thread_id"),
-                    depth: depth.and_then(Value::as_u64).and_then(|d| d.try_into().ok()),
+                    depth: d.and_then(|d| d.as_u64()?.try_into().ok()),
                     label: s("agent_path"),
                     at,
                 });
@@ -389,7 +392,8 @@ fn id_at(v: &Value, ptr: &str) -> Option<String> {
 /// agent, a child of the session; any other file is a thread of its own, named by its stem
 /// before the first dot (a main transcript `<p>/<session>.jsonl`, depth 0, or a set-aside copy).
 fn claude_thread(path: &str) -> (Option<String>, Option<String>, Option<u32>) {
-    let parts: Vec<&str> = path.split_once(':').map_or(path, |p| p.1).split('/').collect();
+    let rel = path.split_once(':').map_or(path, |p| p.1);
+    let parts: Vec<&str> = rel.split('/').collect();
     let (dirs, file) = parts.split_at(parts.len() - 1);
     let stem = file[0].split('.').next().unwrap_or_default();
     let session = dirs.windows(2).find(|w| w[1] == "subagents").map(|w| w[0]);

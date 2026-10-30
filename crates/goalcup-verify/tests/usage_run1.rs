@@ -1,6 +1,7 @@
 //! PRD-09's usage test (ledger B10): a run 1 shaped entry, scaled down (PRD-09 section 8), read
-//! through seam U1 only: wire cases and, under `codex-cli`, the native leg and join. Every
-//! value is an obvious fake; the panic case and the output files come with `usage::run`.
+//! through seam U1 only: wire cases and, under `codex-cli` and `claude-code-cli`, the native leg
+//! and join. Every value is an obvious fake; the panic case and the output files come with
+//! `usage::run`.
 
 mod common;
 
@@ -207,7 +208,8 @@ fn rollout(e: &mut Entry, id: &str, parent: Option<&str>, at: &[&str]) {
             "last_token_usage": {"input_tokens": 9, "output_tokens": 2, "total_tokens": 11}}}});
         f += &format!("{v}\n");
     }
-    stream(e, StreamKind::Native, &format!("sessions:2026/11/07/rollout-{id}.jsonl"), &f);
+    let path = format!("sessions:2026/11/07/rollout-{id}.jsonl");
+    stream(e, StreamKind::Native, &path, &f);
 }
 
 /// One stream of `skind` holding `body` as the file at `path`, ended complete.
@@ -327,13 +329,6 @@ fn totals_equal_the_planted_sum_and_repeat() {
 }
 
 #[test]
-fn no_row_holds_text_from_a_body() {
-    let t = table(&run1("u-mark").0);
-    assert!(!t.rows.is_empty());
-    assert!(!format!("{t:?}").contains(MARK), "a row holds body text");
-}
-
-#[test]
 fn native_only_counts_the_silent_window() {
     let mut recs = run1("u-native").0;
     let codex = |v: &mut Value| v["connector"] = "codex-cli".into();
@@ -347,7 +342,8 @@ fn native_only_counts_the_silent_window() {
     let ok = ["fake-ws-a", "fake-ws-b", "fake-ws-e", "fake-http-a"];
     assert_eq!(joined(&t, Join::Matched), ok);
     assert_eq!(joined(&t, Join::Unattributed), ["fake-claude"]);
-    assert!(!format!("{t:?}").contains(MARK), "a row or thread holds session file text");
+    // Point 4: no wire or native row, and no thread, holds text from a body or a session file.
+    assert!(!format!("{t:?}").contains(MARK));
 }
 
 /// Point 2: a Claude Code subagent counts wherever its transcript sits under its session's
@@ -355,22 +351,25 @@ fn native_only_counts_the_silent_window() {
 #[test]
 fn every_claude_code_subagent_transcript_counts() {
     let mut e = Entry::new("u-claude");
-    let files = [("s", "S1"), ("a", "S1/subagents/agent-a1")];
-    for (k, f) in files.into_iter().chain([("w", "S1/subagents/workflows/wf1/agent-a2")]) {
-        let v = json!({"type": "assistant", "timestamp": "2026-11-07T00:00:01Z", "message":
-            {"id": k, "model": "fake-claude", "usage": {"input_tokens": 3}, "content": MARK}});
-        stream(&mut e, StreamKind::Native, &format!("transcripts:p/{f}.jsonl"), &format!("{v}\n"));
+    let files = ["S1", "S1/subagents/agent-a1", "S1/subagents/workflows/wf1/agent-a2"];
+    for (k, f) in files.iter().enumerate() {
+        let v = json!({"type": "assistant", "message": {"id": k.to_string(),
+            "usage": {"input_tokens": 3}, "content": MARK}});
+        let (path, body) = (format!("transcripts:p/{f}.jsonl"), format!("{v}\n"));
+        stream(&mut e, StreamKind::Native, &path, &body);
     }
     let meta = "meta:p/S1/subagents/workflows/wf1/agent-a2.meta.json";
-    stream(&mut e, StreamKind::Snapshot, meta, r#"{"agentType":"fake-type"}"#);
+    stream(&mut e, StreamKind::Snapshot, meta, r#"{"agentType":"x"}"#);
     let mut recs = read_records(&e.seal().join("rec"));
-    edit_event(&mut recs, "start", 0, |v| v["connector"] = "claude-code-cli".into());
+    let claude = |v: &mut Value| v["connector"] = "claude-code-cli".into();
+    edit_event(&mut recs, "start", 0, claude);
     let t = table(&recs);
     assert_eq!(t.rows.iter().filter(|r| r.thread.is_some()).count(), 3);
     let th = |id| t.threads.iter().find(|x| x.id == id).unwrap();
-    assert_eq!([&th("a1").parent, &th("a2").parent], [&Some("S1".to_string()); 2]);
-    assert_eq!(th("a2").label.as_deref(), Some("fake-type"));
-    assert!(!format!("{t:?}").contains(MARK), "a row or thread holds transcript text");
+    let parent = |id| th(id).parent.as_deref();
+    assert_eq!([parent("a1"), parent("a2")], [Some("S1"); 2]);
+    assert_eq!(th("a2").label.as_deref(), Some("x"));
+    assert!(!format!("{t:?}").contains(MARK));
 }
 
 fn joined(t: &CallTable, j: Join) -> Vec<&str> {

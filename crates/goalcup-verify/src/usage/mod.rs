@@ -418,10 +418,11 @@ impl Calls {
             let (nr, Some(t)) = (&nat[n].0, nat[n].0.wall_end) else {
                 continue;
             };
-            let early = |&w: &usize| rows[w].wall_end.is_none_or(|e| e.saturating_add(120_000_000_000) < t);
-            let near = |&&w: &&usize| rows[w].wall_end <= Some(t.saturating_add(5_000_000_000));
+            let (lo, hi) = (t.saturating_sub(120_000_000_000), t.saturating_add(5_000_000_000));
+            let early = |&w: &usize| rows[w].wall_end.is_none_or(|e| e < lo);
+            let near = |&&w: &&usize| rows[w].wall_end <= Some(hi);
             let free = |&&w: &&usize| {
-                !taken[w] && (!per_thread || rows[w].thread.is_some() && rows[w].thread == nr.thread)
+                !taken[w] && (!per_thread || nr.thread.is_some() && rows[w].thread == nr.thread)
             };
             let from = wires.partition_point(early);
             if let Some(&w) = wires[from..].iter().take_while(near).find(free) {
@@ -451,9 +452,11 @@ impl Calls {
         let reason = (nat.is_empty() && rows.iter().any(ok)).then_some(Reason::NoNative);
         let mut threads = leg.threads;
         let mut per: HashMap<&str, (u64, u64)> = HashMap::new();
-        for (id, join) in nat.iter().filter_map(|x| Some((x.0.thread.as_deref()?, x.0.join))) {
-            let e = per.entry(id).or_default();
-            (e.0, e.1) = (e.0 + 1, e.1 + u64::from(join == Some(Join::NativeOnly)));
+        for x in &nat {
+            if let Some(id) = x.0.thread.as_deref() {
+                let e = per.entry(id).or_default();
+                (e.0, e.1) = (e.0 + 1, e.1 + u64::from(x.0.join == Some(Join::NativeOnly)));
+            }
         }
         for t in &mut threads {
             (t.native_calls, t.native_only) = per.get(t.id.as_str()).copied().unwrap_or_default();
