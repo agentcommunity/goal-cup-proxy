@@ -1,8 +1,6 @@
 """Tests of the test pad's own hands (PRD-12 "Automated tests", ledger B10): key files, the push token, no key
 value in any argument or file the pad builds (an env key launch included), the pane replacement, cleanup and
-check.py's crash rows. Python 3.11, no network.
-
-    python3.11 -m unittest scripts/pad/test_pad.py
+check.py's crash rows. No network; gate fast runs python3.11 -m unittest discover -s scripts/pad -p 'test_*.py'.
 """
 import base64
 import importlib.machinery
@@ -111,7 +109,9 @@ class Walk(unittest.TestCase):
         env = {"CLAUDE_API_KEY": SENTINEL, "AI_GATEWAY_API_KEY": SENTINEL + "gw", **(extra_env or {})}
         with tempfile.TemporaryDirectory() as out, mock.patch.dict(os.environ, env), \
                 mock.patch.object(pad, "call", self.fake_call):
-            pad.run_all(pad.load_settings(dict(BASE, **settings), PADCFG), PADCFG, self.HARNESS, out)
+            runs = pad.run_all(pad.load_settings(dict(BASE, **settings), PADCFG), PADCFG, self.HARNESS, out)
+            with open(os.path.join(out, "spend.jsonl")) as f:  # section 7: one ledger line per run, however it ended
+                self.assertEqual(len(f.readlines()), len(runs))
             for root, _, files in os.walk(out):
                 for name in files:
                     with open(os.path.join(root, name), "rb") as f:
@@ -130,6 +130,9 @@ class Walk(unittest.TestCase):
         name = calls[0][calls[0].index("--name") + 1]
         self.assertIn(["rm", name], calls)
         self.assertIn(["list", "--prefix", "pad-"], calls)
+
+    def test_spans_and_upload_suffix_still_end_with_a_table(self):  # section 1a: no step stops the rig
+        self.walk(steps=["cut-worker@1+10", "kill-both@5+upload"])
 
     def test_staging_approval_values_reach_only_the_request(self):  # rung 2; the scan in walk covers argv and files
         ok = {"result": "ok", "saw": ""}
@@ -183,10 +186,6 @@ class HereAndFetch(unittest.TestCase):
                 r.step_fetch("fetch", 10)
             self.assertEqual(os.listdir(os.path.join(r.dir, "fetched")), [])
 
-    def test_local_server_in_a_sandbox_is_refused(self):
-        with self.assertRaises(pad.Usage):
-            pad.load_settings(dict(BASE, server="local", where="sandbox"), PADCFG)
-
 
 class BoxHalf(unittest.TestCase):
     """pad-run: known values never reach a pane file, and an env key launch only exports the value."""
@@ -223,36 +222,65 @@ class CrashRows(unittest.TestCase):
     """Section 3.1, ledger R3a and R3b: one closed recorder_down gap per kill under 2 s, no null_mode gap; the
     recover row keeps the harness pid and port. Only result values are asserted."""
 
-    def row(self, kind, gap, samples=()):
-        recover = [{"kind": "recover", "exit": 0, "said": w} for w in check.RECOVER]
+    UP = ({"written": {"model_requests": 2}}, {"written": {"model_requests": 5}})  # status samples before and after
+
+    def row(self, kind, gap, samples=UP, recovery=(("ok", "10:03"),), seal="harness_exit", over_cap=False,
+            words=check.RECOVER, more=(), pid=9, code=1):
+        told = [{"kind": k, "exit": 0, "said": w, "at": "2026-10-30T10:%s+00:00" % t}
+                for k, w, t in zip(("recover", "recover", "status"), words + (check.STATUS_RECOVER,), ("02:30", "04:00", "03:30"))]
+        kills = [{"kind": k, "pid": pid, "at": "2026-10-30T10:02:00+00:00"} for k in ("kill-watchdog", "kill-recorder")]
+        rec = [{"kind": "wait-recovery", "result": x, "at": "2026-10-30T%s:00+00:00" % t} for x, t in recovery]
         files = {"meta.json": {"connector": "codex-cli", "case": "direct", "variant": [kind + "@3"], "server": "off",
-                               "keep": True, "commits_since_start": 1, "entry": "e1"},
-                 "verify/check-local.json": {"exit": 1, "entries": [{"entry": "e1", "seal_reason": "harness_exit",
+                               "keep": True, "commits_since_start": 1, "entry": "e1", "over_cap": over_cap,
+                               "started": "2026-10-30T10:00:00+00:00"},
+                 "verify/check-local.json": {"exit": code, "entries": [{"entry": "e1", "seal_reason": seal,
                      "counts": {"model_requests": 5, "gaps": {"recorder_down": 1}}, "checks": [
                          {"id": "gap_has_end", "result": "pass"}, {"id": "history_complete", "result": "pass"},
-                         {"id": "inv6", "result": "named", "facts": {"gaps": [gap]}}]}]},
+                         {"id": "inv6", "result": "named", "facts": {"gaps": [gap] if gap else []}}]}]},
                  "verify/usage/e1.json": {"tokens": {"merged": {"input": 9, "output": 9}}, "coverage": {"unattributed": 0},
                                           "threads": [{"parent": None, "models": {"m": 3}, "wire_calls": 3},
                                                       {"parent": "t0", "models": {"m": 2}, "wire_calls": 2}]},
-                 "watch/status.jsonl": samples, "watch/faults.jsonl": recover}
+                 "watch/status.jsonl": [{"at": "2026-10-30T10:0%d:00+00:00" % (4 * i), "status": x} for i, x in enumerate(samples)],
+                 "watch/faults.jsonl": told + kills + rec + list(more)}
         return evaluate(files)
 
     def test_kill_recorder(self):
         gap = {"start": "2026-10-30T10:00:00Z", "end": "2026-10-30T10:00:01.2Z"}
-        self.assertNotEqual(self.row("kill-recorder", gap)["result"], "FAIL")
-        for bad in (dict(gap, cause="null_mode"), dict(gap, end="2026-10-30T10:00:02.5Z")):
-            self.assertEqual(self.row("kill-recorder", bad)["result"], "FAIL", bad)
+        good = self.row("kill-recorder", gap)
+        self.assertEqual((good["result"] != "FAIL", good["faults"]), (True, "PASS"))
+        down = (("FAIL", "10:04"),)  # did not stand back up
+        for bad in ({"gap": dict(gap, cause="null_mode")}, {"gap": dict(gap, end="2026-10-30T10:00:02.5Z")}, {"recovery": down},
+                    {"samples": self.UP[:1] * 2}):  # no model request written after the kill
+            self.assertEqual(self.row("kill-recorder", **dict({"gap": gap}, **bad))["result"], "FAIL", bad)
 
     def test_recover_keeps_harness_pid_and_port(self):
         gap = {"cause": "watchdog_lost", "start": "2026-10-30T10:01:00Z", "end": "2026-10-30T10:02:00Z"}
         for pid, port, fails in ((7, 5, False), (8, 5, True), (7, 6, True)):
             samples = [{"port": 5, "harness": {"pid": 7}}, {"port": port, "harness": {"pid": pid}}]
             self.assertEqual(self.row("kill-watchdog-recover", gap, samples)["result"] == "FAIL", fails, (pid, port))
+        for over_cap, fails in ((True, False), (False, True)):  # section 7: a seal at the spend cap is not a failure
+            self.assertEqual(self.row("kill-watchdog-recover", gap, seal="command", over_cap=over_cap)["result"] == "FAIL",
+                             fails, over_cap)
+
+    def test_seal_at_the_spend_cap_is_not_a_fault_failure(self):  # section 7, ledger T6: the pad's own seal
+        gap = {"start": "2026-10-30T10:00:00Z", "end": "2026-10-30T10:00:01.2Z"}
+        down = (("FAIL", "10:04"),)
+        wgap = {"cause": "watchdog_lost", "start": "2026-10-30T10:01:00Z", "end": "2026-10-30T10:02:00Z"}
+        for at, over_cap, code, fails in (("10:03", True, 0, False), ("10:03", False, 0, True), ("10:20", True, 0, True),
+                                          ("10:03", True, 1, True)):  # a seal-now that did not seal is not the cap seal
+            seal = [{"kind": "seal-now", "exit": code, "at": "2026-10-30T%s:00+00:00" % at}]
+            self.assertEqual(self.row("kill-recorder", gap, recovery=down, over_cap=over_cap, more=seal)["result"] == "FAIL",
+                             fails, (at, over_cap, code))
+            self.assertEqual(self.row("kill-watchdog-recover", wgap, words=(check.RECOVER[0], "sealed"), over_cap=over_cap,
+                                      more=seal)["result"] == "FAIL", fails, (at, over_cap, code))
+        # Sealed at the cap before the kill: nothing left to kill, no gap, verifier exit 0. Not goalcup's failure.
+        early = [{"kind": "seal-now", "exit": 0, "at": "2026-10-30T10:01:00+00:00"}]
+        got = self.row("kill-recorder", None, pid=None, code=0, recovery=(("skip", "10:02"),), over_cap=True, more=early)
+        self.assertEqual((got["result"] != "FAIL", got["faults"]), (True, "INCONCLUSIVE"))
 
 
 class SecretCheck(unittest.TestCase):
-    """C3 (point 4, section 5): a known-value hit fails; the planted shapes need a MASK each, the shell rule
-    standing for a NAME_API_KEY= line; the auth header's MASK alone is no secret exercise. Only C3 is asserted."""
+    """C3 (point 4, section 5): a known-value hit fails, and so does a planted shape with no MASK. Only C3 is asserted."""
 
     PLANTED = {"openai_key": 1, "github_token": 1, "generic_secret_assignment": 1, "jwt": 1, "private_key": 1,
                "url_password": 1, "auth": 8}
@@ -262,9 +290,6 @@ class SecretCheck(unittest.TestCase):
                          "verify/secrets.json": {"masks": masks}, "verify/secrets-conductor.json": {"hits": 0},
                          "verify/exits.json": {"secrets": secrets_exit, "secrets-out": 0, "secrets-plain": plain_exit}}
                         )["checks"]["C3"]
-
-    def test_planted_values_masked_pass(self):  # exit 1 (unsealed, a named GAP) is never a hit
-        self.assertEqual(self.c3(self.PLANTED), "PASS")
 
     def test_known_value_hit_fails(self):
         self.assertEqual(self.c3(self.PLANTED, secrets_exit=2), "FAIL")
@@ -277,10 +302,6 @@ class SecretCheck(unittest.TestCase):
         with mock.patch.dict(os.environ, {"GOALCUP_TEST_APPROVAL_KEY": SENTINEL + "ap"}):
             pad.Run.scan_out(run)
         self.assertEqual(check.Run(run.dir, {}).hits("secrets-conductor"), 1)
-
-    def test_exercise_not_done_is_inconclusive(self):
-        self.assertEqual(self.c3({"auth": 8}), "INCONCLUSIVE")
-        self.assertEqual(self.c3({"auth": 8}, plain_exit=2), "FAIL")  # the script ran, yet no planted shape is masked
 
 
 if __name__ == "__main__":

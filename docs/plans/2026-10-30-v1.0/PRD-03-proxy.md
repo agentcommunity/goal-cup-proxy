@@ -909,3 +909,14 @@ Revision 3 against OWNER-DECISIONS.md (the ledger wins). Fix ids are from the al
   `BodyDecoder`, `Step`, `parse_codings`, `WsConn`, `PrefixedIo`. Slice 2 builds `serve`, `hosts`,
   `pump`, `tunnel` and `http1` on them; `http1` feeds `BodyDecoder` and records what each `Step` says.
 - No locked ledger item is touched. No new owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-14 slice 4 (merge ec0d79d8)
+
+- **`proxy_connect` joins PRD-14's `heavy` group in the PRD-03 merge that brings its 2,000
+  concurrent connections case,** not before: `proxy_connect.rs` is on integration with ClientHello
+  parses only, which need no group. That merge carries one edit to `.config/nextest.toml`: add
+  `proxy_connect` to the alternation of the existing override, which reads
+  `filter = 'binary(/^native_walk$/)'` at ec0d79d8 (so `binary(/^(native_walk|proxy_connect)$/)`).
+  Under merge rule 1 that one edit is the seam change the PRD-16 note after PRD-17 phase 0 allows.
+  `proxy_restart.rs` does the same in the merge that brings it.
+- No locked ledger item is touched and no owner question comes from this slice.

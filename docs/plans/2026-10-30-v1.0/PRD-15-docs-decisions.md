@@ -1207,3 +1207,35 @@ against `folder.rs` and fixes the guide, without quoting message wording the cod
   (PRD-10 note), so that wording waits for the start slice.
 - WSL1 or a Windows drive under WSL2 is not checked yet (PRD-10 note); the guide's advice stays.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-10 slice 4 (merge a5d7ddc3)
+
+- **`skills/goal-cup-setup/` is deleted.** The only link left is `docs/archive/PARTICIPANT-GUIDE-0.6.md:13`,
+  which this PRD keeps as history (the PRD-10 note after PRD-15 slice 7); `check-links.py` now counts it as broken
+  (39 to 40 in the slice's box), and no CI step runs that script. The fixer's 16:18Z line on it needs
+  no owner answer.
+- **The guide's sleep row does not quote the CLI.** `docs/PARTICIPANT-GUIDE.md` line 324 reads
+  `this computer may go to sleep (…)`; `text::no_sleep_lock` prints "This computer may sleep during
+  the run (no sleep lock: <why>). Keep it on mains power ...", with `<why>` one of "caffeinate is
+  missing", "set Windows sleep to Never" or "no systemd-inhibit with a running systemd". The next
+  PRD-15 touch of the message table quotes the start of the printed line.
+- **`README.md` line 237** says `goalcup setup --harness claude-code-cli` signs in to the harness. On
+  integration, setup without `--yes` asks, opens and writes nothing (the interactive setup is
+  PRD-10's next setup slice). The line stays; if that slice has not merged by PRD-15's last pass,
+  the line says what setup does then.
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-11 slice 4, part 1 (merge a96d9f71)
+
+- **`docs/CONNECTOR-SCHEMA.md` line 24 is now wrong.** The `version` key is no longer text the line
+  must contain: a word of the first non-empty line of `program --version`, with a leading `v`
+  stripped, must start with it (`mod.rs` `plan`, `held`). The next PRD-15 touch rewrites that cell
+  from merged `mod.rs`.
+- **`.profile` is merged** (`launch.rs` `write_profile`, called from `mod.rs` `plan`): written only
+  where `home` sets `HOME`, replaced only when goalcup wrote it, otherwise kept with a log row.
+  CONNECTOR-SCHEMA's `home` row or the ARCHITECTURE rewrite states it (earlier note).
+- **`docs/harnesses/README.md` holds the one 15-row harness table** (PRD-11 owned). PRD-15 pages
+  that list harnesses (README, guide, HARNESS-ONBOARDING) link to it and copy no rows; tiers come
+  from `connectors/tiers.toml` (PRD-12). The five per-harness sheets stay in the old shape until
+  PRD-11's last slice; a PRD-15 page that quotes a sheet quotes nothing that slice will rewrite.
+- No locked ledger item is touched and no owner question comes from this slice.

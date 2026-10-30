@@ -4,39 +4,22 @@
 #   curl -fsSL https://github.com/agentcommunity/goal-cup-proxy/releases/latest/download/install.sh | sh
 #
 # It picks the build for this machine (macOS or Linux, arm64 or x86_64; WSL2 is Linux), checks the
-# download against the SHA256SUMS file of the same release, and installs into ~/.local:
-#
-#   ~/.local/bin/goalcup  goalcup-daemon  goalcup-verify
-#   ~/.local/share/goalcup/connectors/   (goalcup finds it as <exe dir>/../share/goalcup/connectors)
-#
-# A download by curl is not quarantined by macOS, so the unsigned binaries run. The script writes
-# nothing outside the prefix: it does not edit a shell profile and never touches ~/.claude,
-# ~/.codex or any other harness configuration. Run it again to upgrade.
-#
-# Options (as arguments after `sh -s --`, or as environment variables):
+# download against the SHA256SUMS file of the same release, and installs goalcup and goalcup-verify
+# into ~/.local/bin. It writes nothing outside the prefix: no shell profile (when the folder is not
+# on PATH it prints one line for the participant to run), nothing of any harness. Run it again to
+# upgrade. Options (after `sh -s --`, or as environment variables):
 #   --version <x.y.z>   GOALCUP_VERSION   install that release instead of the latest
 #   --prefix <dir>      GOALCUP_PREFIX    install under <dir> instead of ~/.local
-#   --force             GOALCUP_FORCE=1   install even if a Goal Cup run is recording (see below)
-# For tests: GOALCUP_RELEASE_BASE is a URL (https:// or file://) that holds SHA256SUMS and the
-# tarballs; it replaces the GitHub release URL.
+#   --force             GOALCUP_FORCE=1   install even if a Goal Cup run is recording
+# For tests, GOALCUP_RELEASE_BASE (https:// or file://) replaces the GitHub release URL.
 #
-# A new goalcup cannot talk to the daemon of another release, so the script never replaces goalcup
-# while a run is recording. The new release is already downloaded and checked when the guard runs,
-# but nothing in the prefix has been touched. The guard asks the goalcup it would replace
-# (<prefix>/bin/goalcup, else the one on PATH) for `goalcup status --json`, and stops with
-# INSTALL_BLOCKED when the signed status says health "online" and the capture run is starting,
-# running or exited (an exited run that is not sealed can still be continued). A sealed run, a
-# machine with no run on record, a machine where no daemon answers (nothing is recording) and a
-# first install do not block. If the answer cannot be read (an old goalcup without --json, another
-# error, output it cannot parse, no answer within 10 s) it prints INSTALL_UNSURE and goes on.
-# --force or GOALCUP_FORCE=1 skips all of this. Two limits:
-# `goalcup status` may spend up to 3 s sending leftover uploads before it answers, and it looks
-# only at the newest run on record on this computer.
+# Run guard (INSTALL_BLOCKED, INSTALL_UNSURE): see packaging/README.md.
 #
 # The whole script is one function called on the last line, so a download cut short runs nothing.
 set -eu
 
 repo="agentcommunity/goal-cup-proxy"
+binaries="goalcup goalcup-verify"
 
 say() { printf '%s\n' "$*"; }
 die() {
@@ -101,12 +84,39 @@ sha256() {
     fi
 }
 
+# status_mode <file>: the `mode` of the top-level `status` object of `goalcup status --json`, as a
+# bare word (a JSON string loses its quotes, a JSON null stays null), or nothing. The participant
+# may have no jq or python3, so awk walks the JSON. The `run` object also has a `mode` key and
+# may come first, so a plain grep for "mode" could read the wrong one.
+status_mode() {
+    LC_ALL=C awk '
+    { s = s $0 }
+    END {
+        n = split(s, ch, ""); d = 0; instr = 0; want = 0; top = ""; last = ""; word = ""
+        for (i = 1; i <= n; i++) {
+            c = ch[i]
+            if (instr) {
+                if (c == "\\") { i++; tok = tok "?" }
+                else if (c == "\"") { instr = 0; last = tok; if (want) { print tok; exit } }
+                else tok = tok c
+            } else if (want) {
+                if (c ~ /[a-z_]/) word = word c
+                else if (c == "\"" && word == "") { instr = 1; tok = "" }
+                else if (word != "" || (c != " " && c != "\t")) { if (word != "") print word; exit }
+            } else if (c == "\"") { instr = 1; tok = "" }
+            else if (c == "{" || c == "[") d++
+            else if (c == "}" || c == "]") d--
+            else if (c == ":") {
+                if (d == 1) top = last
+                if (d == 2 && top == "status" && last == "mode") want = 1
+            }
+        }
+        if (want && word != "") print word
+    }' "$1"
+}
+
 # Ask the goalcup that would be replaced whether a run is recording; stop if one is. Called before
-# anything in the prefix is touched. The JSON is read with sh tools only (the player may have no
-# jq or python3): `goalcup status --json` pretty-prints one key per line, so the output is joined
-# into one line and sed pulls out the two values by key. That is safe here because the keys are
-# unique and a quote inside a JSON string is escaped, so a string value cannot hold a bare
-# "health": or "run": key. The run state is the "run" key of the "capture" object of the payload.
+# anything in the prefix is touched.
 guard_recording_run() {
     [ "$force" != 1 ] || return 0
     existing="$prefix/bin/goalcup"
@@ -119,14 +129,13 @@ guard_recording_run() {
     esac
 
     status_out="$work/status.out"
-    status_err="$work/status.err"
     status_rc="$work/status.rc"
     status_pid="$work/status.pid"
     # macOS has no `timeout`: run it in the background and kill it after 10 s. The helper writes
     # the exit status to a file when goalcup ends, so no job-control behaviour of the shell is
     # needed. Its own output goes nowhere, so nothing it starts can hold this script's pipes.
     (
-        "$existing" status --json >"$status_out" 2>"$status_err" </dev/null &
+        "$existing" status --json >"$status_out" 2>/dev/null </dev/null &
         child=$!
         printf '%s\n' "$child" >"$status_pid"
         code=0
@@ -134,10 +143,8 @@ guard_recording_run() {
         printf '%s\n' "$code" >"$status_rc.tmp" && mv "$status_rc.tmp" "$status_rc"
     ) >/dev/null 2>&1 &
     started=$(date +%s)
-    timed_out=0
     while [ ! -f "$status_rc" ]; do
         if [ $(($(date +%s) - started)) -gt 10 ]; then
-            timed_out=1
             if [ -f "$status_pid" ]; then
                 kill -9 "$(cat "$status_pid")" 2>/dev/null || true
             fi
@@ -146,73 +153,39 @@ guard_recording_run() {
         sleep 0.1 2>/dev/null || sleep 1
     done
 
+    # A killed status leaves no exit code yet, or 137: both read as unsure.
     verdict=unsure
-    if [ "$timed_out" = 0 ]; then
-        rc=$(cat "$status_rc" 2>/dev/null || true)
-        if [ "$rc" = 0 ]; then
-            flat=$(tr -d '\r\n' <"$status_out")
-            health=$(printf '%s' "$flat" |
-                sed -n 's/.*"health"[[:space:]]*:[[:space:]]*"\([a-z_]*\)".*/\1/p' | head -n 1)
-            run=$(printf '%s' "$flat" |
-                sed -n 's/.*"capture"[[:space:]]*:[[:space:]]*{//p' |
-                sed -n 's/.*"run"[[:space:]]*:[[:space:]]*"\([a-z_]*\)".*/\1/p' | head -n 1)
-            case $health in
-            online)
-                case $run in
-                starting | running | exited) verdict=blocked ;;
-                sealed) verdict=clear ;;
-                esac
-                ;;
-            ?*) verdict=clear ;; # sealed, sealing_recovery_needed, unknown: not recording
-            esac
-        elif [ -n "$rc" ] && [ ! -s "$status_out" ]; then
-            # `goalcup status` prints one `goalcup: <reason>` line on stderr, exit 1, and nothing
-            # on stdout. Three reasons mean nothing is recording: no run on record; no control.json
-            # (ControlError text of config.rs, "no daemon is running: there is no ..."); a
-            # control.json whose daemon is gone (ControlError::Unreachable, "the daemon is not
-            # reachable: ..."), kept to a refused connection: a timed-out read could be a live
-            # daemon that is busy, which stays unsure. The daemon exits about 30 s after the last
-            # seal, and `status` starts one only for a computer that has a daemon.toml. The
-            # wording is the same in the latest release and in this tree.
-            if grep -q 'no run has been started from this machine' "$status_err" ||
-                grep -q 'no daemon is running: there is no ' "$status_err" ||
-                { grep -q 'the daemon is not reachable: ' "$status_err" &&
-                    grep -q 'Connection Failed' "$status_err"; }; then
-                verdict=clear
-            fi
-        fi
+    rc=$(cat "$status_rc" 2>/dev/null || true)
+    if [ "$rc" = 0 ]; then
+        case $(status_mode "$status_out") in
+        recording | losing | writer_slow | null) verdict=blocked ;;
+        ?*) verdict=clear ;;
+        esac
+    elif [ "$rc" = 1 ] && [ ! -s "$status_out" ]; then
+        verdict=clear # no run on this computer yet
     fi
 
     case $verdict in
     blocked)
-        printf '%s\n' "A Goal Cup run is recording on this computer. Update after it ends, or run the installer again with: curl -fsSL https://github.com/agentcommunity/goal-cup-proxy/releases/latest/download/install.sh | sh -s -- --force" >&2
+        printf '%s\n' "INSTALL_BLOCKED: A Goal Cup run is recording on this computer. Update after it ends, or run the installer again with: curl -fsSL https://github.com/agentcommunity/goal-cup-proxy/releases/latest/download/install.sh | sh -s -- --force" >&2
         exit 1
         ;;
     unsure)
-        printf '%s\n' "Could not tell whether a Goal Cup run is recording. If one is, stop this update and run it after the run ends." >&2
+        printf '%s\n' "INSTALL_UNSURE: Could not tell whether a Goal Cup run is recording. If one is, stop this update and run it after the run ends." >&2
         ;;
     esac
 }
 
-# Restore one promoted destination. The staging files themselves record which renames
-# completed, including when a signal arrives between a rename and the next shell command.
+# Restore one promoted binary. The staging files themselves record which renames completed,
+# including when a signal arrives between a rename and the next shell command.
 restore() {
     destination=$1
     slot=$2
-    kind=$3
     if [ -e "$slot/old" ] || [ -L "$slot/old" ]; then
-        if [ "$kind" = file ]; then
-            rm -f "$destination" || return 1
-        else
-            rm -rf "$destination" || return 1
-        fi
+        rm -f "$destination" || return 1
         mv "$slot/old" "$destination" || return 1
     elif [ ! -e "$slot/new" ]; then
-        if [ "$kind" = file ]; then
-            rm -f "$destination" || return 1
-        else
-            rm -rf "$destination" || return 1
-        fi
+        rm -f "$destination" || return 1
     fi
 }
 
@@ -223,21 +196,37 @@ cleanup() {
     set +e
     rollback_failed=0
     if [ "$promoting" = 1 ] && [ "$committed" = 0 ]; then
-        for binary in goalcup-verify goalcup-daemon goalcup; do
-            restore "$prefix/bin/$binary" "$bin_stage/$binary" file || rollback_failed=1
+        for binary in $binaries; do
+            restore "$prefix/bin/$binary" "$bin_stage/$binary" || rollback_failed=1
         done
-        restore "$prefix/share/goalcup" "$share_stage" directory || rollback_failed=1
     fi
     if [ "$rollback_failed" = 1 ]; then
-        printf 'goalcup install: rollback could not finish; recoverable files remain in %s and %s\n' \
-            "$bin_stage" "$share_stage" >&2
+        printf 'goalcup install: rollback could not finish; recoverable files remain in %s\n' \
+            "$bin_stage" >&2
         cleanup_status=1
     else
         [ -z "$bin_stage" ] || rm -rf "$bin_stage"
-        [ -z "$share_stage" ] || rm -rf "$share_stage"
     fi
     rm -rf "$work"
     exit "$cleanup_status"
+}
+
+# The one line that puts the bin folder on PATH now and appends the same export to the profile
+# of the participant's shell. Nothing here runs it.
+path_line() {
+    dir="$prefix/bin"
+    case $dir in
+    *[\"\'\`\\\$]*) return 1 ;; # a folder name this line cannot quote
+    "${HOME:-/nonexistent}"/*) dir="\$HOME${dir#"$HOME"}" ;;
+    esac
+    case ${SHELL:-} in
+    */zsh) profile="~/.zshrc" ;;
+    # Terminal on macOS starts bash as a login shell, which reads ~/.bash_profile, not ~/.bashrc.
+    */bash) [ "$(uname -s)" = Darwin ] && profile="~/.bash_profile" || profile="~/.bashrc" ;;
+    *) profile="~/.profile" ;;
+    esac
+    export_line="export PATH=\"$dir:\$PATH\""
+    say "  $export_line && echo '$export_line' >> $profile"
 }
 
 main() {
@@ -246,20 +235,12 @@ main() {
     force="${GOALCUP_FORCE:-}"
     while [ $# -gt 0 ]; do
         case "$1" in
-        --version)
-            [ $# -ge 2 ] || die "--version needs a value"
-            version=$2
+        --version | --prefix)
+            [ $# -ge 2 ] || die "$1 needs a value"
+            if [ "$1" = --version ]; then version=$2; else prefix=$2; fi
             shift 2
             ;;
-        --prefix)
-            [ $# -ge 2 ] || die "--prefix needs a value"
-            prefix=$2
-            shift 2
-            ;;
-        --force)
-            force=1
-            shift
-            ;;
+        --force) force=1 && shift ;;
         *) die "unknown option '$1' (known: --version <x.y.z>, --prefix <dir>, --force)" ;;
         esac
     done
@@ -281,7 +262,6 @@ main() {
 
     work=$(mktemp -d)
     bin_stage=""
-    share_stage=""
     promoting=0
     committed=0
     trap 'cleanup $?' EXIT
@@ -303,13 +283,12 @@ main() {
 
     tar -xzf "$work/$file" -C "$work" || die "could not unpack $file"
     root="$work/$name"
-    [ -x "$root/bin/goalcup" ] && [ -d "$root/share/goalcup/connectors" ] ||
-        die "$file does not hold bin/goalcup and share/goalcup/connectors; nothing was installed"
 
-    # Run each new binary where it was unpacked, before anything in the prefix is touched. A
-    # build this machine cannot run (a glibc older than the one it was built against, a 32-bit
-    # userland) must leave an existing install as it was, and must not report success.
-    for binary in goalcup goalcup-daemon goalcup-verify; do
+    for binary in $binaries; do
+        [ -f "$root/bin/$binary" ] || die "$file does not hold bin/$binary; nothing was installed"
+        # Run each new binary where it was unpacked, before anything in the prefix is touched. A
+        # build this machine cannot run (a glibc older than the one it was built against, a
+        # 32-bit userland) must leave an existing install as it was, and must not report success.
         if ! out=$("$root/bin/$binary" --version 2>&1); then
             hint=""
             if [ "$(uname -s)" = Linux ]; then
@@ -317,46 +296,32 @@ main() {
             fi
             die "$binary from $file does not run on this machine$hint. Its output: $out. Nothing was installed."
         fi
-    done
-
-    # Refuse conflicting user paths before creating anything in the prefix. In particular,
-    # mv to a directory would put a binary inside it and falsely report a successful install.
-    for binary in goalcup goalcup-daemon goalcup-verify; do
+        # Refuse a conflicting user path before creating anything in the prefix: mv to a
+        # directory would put the binary inside it and falsely report a successful install.
         destination="$prefix/bin/$binary"
         if [ -d "$destination" ] || { [ -e "$destination" ] && [ ! -f "$destination" ]; }; then
             die "$destination is not a regular file; nothing was installed"
         fi
     done
-    share="$prefix/share/goalcup"
-    if { [ -e "$share" ] || [ -L "$share" ]; } && [ ! -d "$share" ]; then
-        die "$share is not a directory; nothing was installed"
-    fi
 
     # Last check before the first change: never replace goalcup while a run is recording.
     guard_recording_run
 
-    mkdir -p "$prefix/bin" "$prefix/share"
-    # Stage every artifact before changing any installed file. Separate private directories
-    # keep each promotion on the destination filesystem, even when bin and share differ.
+    mkdir -p "$prefix/bin"
+    # Stage both binaries beside their destinations before changing any installed file, so each
+    # promotion is a rename on one filesystem.
     bin_stage=$(mktemp -d "$prefix/bin/.goalcup-install.XXXXXX")
-    share_stage=$(mktemp -d "$prefix/share/.goalcup-install.XXXXXX")
-    cp -R "$root/share/goalcup" "$share_stage/new"
-    cp "$root/LICENSE" "$root/NOTICE" "$root/THIRD-PARTY-LICENSES.md" "$share_stage/new/"
-    for binary in goalcup goalcup-daemon goalcup-verify; do
+    for binary in $binaries; do
         mkdir "$bin_stage/$binary"
         cp "$root/bin/$binary" "$bin_stage/$binary/new"
         chmod 755 "$bin_stage/$binary/new"
     done
 
-    # Retain the old files until all promotions and the final executable check succeed.
-    # EXIT and handled signals restore them on failure. These individual renames are not a
-    # crash-atomic transaction: SIGKILL or power loss can require manual recovery.
+    # Retain the old files until both promotions and the final executable check succeed. EXIT
+    # and handled signals restore them on failure. These renames are not a crash-atomic
+    # transaction: SIGKILL or power loss can require manual recovery.
     promoting=1
-    if [ -e "$share" ] || [ -L "$share" ]; then
-        mv "$share" "$share_stage/old"
-    fi
-    mv "$share_stage/new" "$share"
-    for binary in goalcup goalcup-daemon goalcup-verify; do
+    for binary in $binaries; do
         if [ -e "$prefix/bin/$binary" ] || [ -L "$prefix/bin/$binary" ]; then
             mv "$prefix/bin/$binary" "$bin_stage/$binary/old"
         fi
@@ -373,18 +338,14 @@ main() {
     say "Installed $installed_version in $where."
     found=$(command -v goalcup 2>/dev/null || true)
     if [ -n "$found" ] && [ "$found" != "$prefix/bin/goalcup" ]; then
-        say ""
-        say "Note: your PATH finds $found first, not the one just installed. Remove it or put"
-        say "$prefix/bin before it on PATH."
+        say "Note: your PATH finds $found first, not the one just installed."
     fi
     case ":${PATH:-}:" in
     *":$prefix/bin:"*) ;;
     *)
         say ""
-        # The folder as the guide spells it (~/.local/bin); the export line keeps the full path.
-        say "$where is not on your PATH. Add it for this shell with:"
-        say "  export PATH=\"$prefix/bin:\$PATH\""
-        say "and put the same line in your shell profile (~/.zshrc or ~/.bashrc) to keep it."
+        say "$where is not on your PATH. To add it now and for new shells, run:"
+        path_line || say "  (add $prefix/bin to PATH in your shell profile)"
         ;;
     esac
     say ""

@@ -778,3 +778,25 @@ ledger wins over every row here.
   and `mtime_ns` (PRD-02 note). Until PRD-02 adds it, `native_resume.rs` keeps the size and
   `mtime_ns` check only and acceptance lists the gap as known.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-14 slice 3 (merge 00fac28d)
+
+- **The `Calls` helpers are on integration** in `tests/common/recorder.rs`: `opens(c) -> Vec<(Sid,
+  StreamKind, Value)>`, `ends(c) -> Vec<(Sid, EndReason, u64, Option<Value>)>` (the END tail is the
+  fourth field), `events(c) -> Vec<Value>`, `gaps(c) -> Vec<Call>`, `data_of(c, sid)` and a generic
+  `pick(c, f)`. PRD-04's next slice deletes the private `opens`, `ends` and `lost` in `native_tail.rs`
+  and `events` in `native_walk.rs` and calls `common::recorder`; `lost`'s shape is one `pick` over
+  `Call::Gap` at the call site. The lines saved count against PRD-04's 1,600 test ceiling.
+- `native_walk` joins PRD-14's `heavy` group in PRD-14's next touch of `.config/nextest.toml`.
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-14 slice 4 (merge ec0d79d8)
+
+- **`native_walk` is in PRD-14's `heavy` group** (`.config/nextest.toml` at ec0d79d8): its 7 tests
+  run one at a time, after the parallel binaries. The seam named in the core slice part 2 and PRD-14
+  slice 3 notes is closed. `gate fast` on the merge ran all 7 and passed.
+- The flake the PRD-10 slice 4 note lists (`old_files_are_skipped_and_the_new_one_found_among_five_thousand`
+  failed 1 of 4 runs in a box, while it still ran beside other binaries) now runs alone. If it fails
+  again under `heavy`, the cause is in the test or in `src/native/`, not load from other binaries;
+  PRD-04 owns that fix, and acceptance lists it as known if it is still open at the end.
+- No locked ledger item is touched and no owner question comes from this slice.

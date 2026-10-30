@@ -979,3 +979,13 @@ Names for `LESSONS.md` (the lessons lane writes them; judge 14:56Z, 15:13Z):
   home, its lock file and the `update_off` rows; without that order this case would fail.
 - PRD-10's SC row in this PRD's acceptance table (P14, S7, HF4, HF6 still to come) is unchanged.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-11 slice 4, part 1 (merge a96d9f71)
+
+- **P11's A guard is on integration:** `connector_launch.rs`
+  `with_home_swapped_a_login_shell_finds_goalcup` (PATH reset to `/usr/bin:/bin` inside `sh -lc`,
+  then `command -v goalcup` finds it; goalcup's own `.profile` is replaced, any other is kept). It
+  passed in the merge's gate box, so the P11 row can turn green with commit a96d9f71. The R guard
+  (PRD-10 acceptance 7) only has a real target once a connector sets `HOME` (Amp, Droid, PRD-11
+  slice 5).
+- No locked ledger item is touched and no owner question comes from this slice.
