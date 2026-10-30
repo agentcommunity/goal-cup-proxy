@@ -1,9 +1,5 @@
-//! When the uploader sends and how a failure waits (PRD-06 sections 4, 5 and 9).
-//!
-//! Pure rules: every function takes `now` (boot time, `Recorder::now()`) and never reads a clock
-//! itself, so a wall clock set back or forward never moves a timer, and a suspend counts. These are
-//! waits with retries, never limits: no answer ends a run's upload. Only `goalcup upload` by hand
-//! gives up ([`ends_manual_upload`]). HTTP timeouts belong to the client, not here.
+//! When the uploader sends and how a failure waits (PRD-06 sections 4, 5 and 9). Pure rules on
+//! boot time: every function takes `now` and reads no clock. Waits with retries, never limits.
 
 use crate::pipeline::Mono;
 use serde::{Deserialize, Serialize};
@@ -13,24 +9,23 @@ use std::time::Duration;
 /// The uploader's timings.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Policy {
-    /// A round every this long, counted from the start of the last round.
+    /// A round every this long, from the start of the last one.
     pub round: Duration,
-    /// A round at once when this many compressed bytes wait past the server's offset.
+    /// A round at once when this many compressed bytes wait.
     pub trigger_bytes: u64,
     /// The first wait after a failure; it doubles per failure in a row.
     pub backoff_base: Duration,
     /// No wait is longer, `Retry-After` included.
     pub backoff_cap: Duration,
-    /// A heartbeat every this long (and at once when the recording state changes).
+    /// A heartbeat every this long, and at once on a recording state change.
     pub beat: Duration,
-    /// A `stuck` entry reads the server's position again this often.
+    /// A `stuck` entry reads the position again this often.
     pub stuck_reread: Duration,
-    /// `refused` is said once after this many refusals in a row.
+    /// `refused` is said after this many refusals in a row.
     pub refused_after: u32,
-    /// How long the recorder keeps sending after the seal.
+    /// How long sending goes on after the seal.
     pub wrap_up: Duration,
-    /// Whether the first interval after the opening send is a random share of `round`, so runs
-    /// started together do not send together.
+    /// The first interval is a random share of the period, so runs started together spread.
     pub spread_first: bool,
 }
 
@@ -54,46 +49,38 @@ impl Default for Policy {
 }
 
 impl Policy {
-    /// The policy of this build. A `test-hooks` build reads `GOALCUP_TEST_UPLOAD_POLICY`:
-    /// `round_ms,trigger_bytes,backoff_ms,beat_ms`, where the cap is 60 times the backoff base,
-    /// as 120 s is to 2 s, and the first interval is not spread. A malformed value is ignored.
+    /// The default; a `test-hooks` build reads `GOALCUP_TEST_UPLOAD_POLICY` as
+    /// `round_ms,trigger_bytes,backoff_ms,beat_ms` (cap 60 times the base, no spread).
     pub fn from_env() -> Policy {
         #[cfg(feature = "test-hooks")]
-        if let Some(p) = test_policy() {
-            return p;
+        if let Some([round, trigger, backoff, beat]) = std::env::var("GOALCUP_TEST_UPLOAD_POLICY")
+            .ok()
+            .and_then(|s| {
+                s.split(',')
+                    .map(|v| v.trim().parse().ok())
+                    .collect::<Option<Vec<u64>>>()
+            })
+            .and_then(|n| <[u64; 4]>::try_from(n).ok())
+        {
+            let ms = Duration::from_millis;
+            return Policy {
+                round: ms(round),
+                trigger_bytes: trigger,
+                backoff_base: ms(backoff),
+                backoff_cap: ms(backoff.saturating_mul(60)),
+                beat: ms(beat),
+                spread_first: false,
+                ..Policy::default()
+            };
         }
         Policy::default()
     }
 }
 
-#[cfg(feature = "test-hooks")]
-fn test_policy() -> Option<Policy> {
-    let spec = std::env::var("GOALCUP_TEST_UPLOAD_POLICY").ok()?;
-    let n: Vec<u64> = spec
-        .split(',')
-        .map(|v| v.trim().parse().ok())
-        .collect::<Option<_>>()?;
-    let [round, trigger, backoff, beat] = n[..] else {
-        return None;
-    };
-    let ms = Duration::from_millis;
-    Some(Policy {
-        round: ms(round),
-        trigger_bytes: trigger,
-        backoff_base: ms(backoff),
-        backoff_cap: ms(backoff.saturating_mul(60)),
-        beat: ms(beat),
-        spread_first: false,
-        ..Policy::default()
-    })
-}
-
-/// `now` plus `d`, on boot time.
+/// `now` plus `d`.
 pub fn after(now: Mono, d: Duration) -> Mono {
-    Mono(
-        now.0
-            .saturating_add(u64::try_from(d.as_nanos()).unwrap_or(u64::MAX)),
-    )
+    let n = d.as_nanos().try_into().unwrap_or(u64::MAX);
+    Mono(now.0.saturating_add(n))
 }
 
 /// The wait after `failures` failures in a row:
@@ -105,7 +92,7 @@ pub fn backoff(p: &Policy, failures: u32, retry_after: Option<Duration>, jitter:
     nominal.mul_f64(jitter.clamp(JITTER.0, JITTER.1)).max(asked)
 }
 
-/// A uniform draw in `[0, 1)` from std's random hasher keys, fresh on every call (no rand crate).
+/// A uniform draw in `[0, 1)` from std's random hasher keys (no rand crate).
 fn draw() -> f64 {
     let mut h = std::collections::hash_map::RandomState::new().build_hasher();
     h.write_u8(0);
@@ -142,8 +129,7 @@ impl Backoff {
         wait
     }
 
-    /// The server's offset moved forward, or the entry is caught up: back to no failures, so a
-    /// flaky network that still makes progress never escalates (run 1's lag bug).
+    /// Progress resets the failures, so a flaky network that still moves never escalates.
     pub fn progress(&mut self) {
         self.failures = 0;
         self.next_try = None;
@@ -154,8 +140,7 @@ impl Backoff {
     }
 }
 
-/// A repeating timer on boot time: due at once at first, then the first interval is a random
-/// share of `period` (when spread), then every `period` from the last start.
+/// A repeating timer: due at once, then a first interval (spread when asked), then every period.
 #[derive(Clone, Copy, Debug)]
 pub struct Timer {
     period: Duration,
@@ -187,7 +172,7 @@ impl Timer {
     }
 }
 
-/// When a round is due: the timer of section 4, or at once when the size trigger is reached.
+/// When a round is due: its timer, or at once at the size trigger.
 #[derive(Clone, Copy, Debug)]
 pub struct Cadence {
     timer: Timer,
@@ -199,14 +184,12 @@ impl Cadence {
         Cadence {
             timer: Timer {
                 period: p.round,
-                spread_first: p.spread_first,
-                next: None,
+                ..Timer::beat(p)
             },
             trigger_bytes: p.trigger_bytes,
         }
     }
 
-    /// Whether a round is due. A round with nothing waiting sends nothing.
     pub fn due(&self, now: Mono, waiting_bytes: u64) -> bool {
         waiting_bytes >= self.trigger_bytes || self.timer.due(now)
     }
@@ -217,7 +200,7 @@ impl Cadence {
     }
 }
 
-/// The wrap-up after the seal: sending goes on until `until`, on boot time.
+/// The wrap-up after the seal: sending goes on until `until`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct WrapUp {
     pub until: Mono,
@@ -246,9 +229,8 @@ pub enum Class {
     Internal,
 }
 
-/// The class of an HTTP status. None for a success and for 409, which reads the position again.
-/// `refused` is only the server's own refusals (section 5). Any other answer (a portal's redirect,
-/// a middlebox's 403 or 408) is `network`: the call did not reach the server.
+/// The class of an HTTP status; None for a success and for 409 (read the position again). Only
+/// the server's own refusals are `refused`; any other answer (a portal, a middlebox) is `network`.
 pub fn class_of_status(status: u16) -> Option<Class> {
     match status {
         200..=299 | 409 => None,
@@ -258,7 +240,7 @@ pub fn class_of_status(status: u16) -> Option<Class> {
     }
 }
 
-/// Whether `goalcup upload`, with a person waiting, gives up on this status and says why.
+/// Whether `goalcup upload`, with a person waiting, gives up on this status.
 pub fn ends_manual_upload(status: u16) -> bool {
     matches!(status, 401 | 404 | 410)
 }
