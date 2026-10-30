@@ -198,10 +198,9 @@ event inside the recovery frame (see Recovery). Nothing follows the seal's LINK.
   the file start, to a later index line. It usually spans many flushes and never two part files. It
   is not decodable alone; decode a whole part file from its start.
 - A live entry's last part file ends inside an open frame. `goalcup-verify dump` (the Rust decoder)
-  gives every record up to the last flush and reports the open end. That is expected. The `zstd`
-  command line tool may stop short of the last flush on such a file, or on an entry not yet
-  recovered after a crash, so counts made through it are then a lower bound. For a live entry, use
-  `goalcup-verify dump`.
+  gives every record up to the last flush and reports the open end; use it for a live entry. The
+  `zstd` command line tool may stop short of the last flush on such a file, or on an entry not yet
+  recovered after a crash, so counts made through it are then a lower bound.
 - **Recovery** after a crash: drop index lines past the part file's length (and, after a reboot,
   past `cursors.json`); delete a part file with no index line left; cut the last part file at its
   last line's `c_end`. If that line is `L`, close the frame by hand with the 3 bytes `01 00 00`
@@ -261,8 +260,8 @@ The LINK hash is SHA-256 of `GCR1-LINK`, 32 zero bytes and raw bytes 0 to 965:
 ## A Python reader
 
 This reader needs only the Python standard library (3.9 or later). It reads the decompressed stream
-from standard input and prints each record kind with its count and a total (see the `zstd` note
-above):
+from standard input and prints each record kind with its count and a total, a lower bound on a live
+entry (see the `zstd` note above):
 
 ```
 cat rec-*.gcr.zst | zstd -dc --long=27 | python3 read.py
@@ -328,33 +327,30 @@ On the worked example (`python3 read.py < worked-example.gcr`, already raw) it p
 ## The `goalcup-verify check --json` report
 
 `goalcup-verify check <path> --json` prints one JSON object on standard output (seam S6, PRD-08
-section 4) and its text form on standard error: per entry, a `goalcup-verify: entry <name>` line,
-`why` for each named or failed check, a line if the entry is not sealed, then one coverage line.
-`<path>` is an entry folder, a `rec` folder, a fetched entry folder (`rec.gcr.zst`), a run folder or
-fetched outdir whose subfolders are entries, or one part file.
-`--live` reads an entry still recording up to its last index line; `--server` marks a server copy (a
-fetched `rec.gcr.zst` is one anyway); `--live` wins over both. `--local`, `--known` and
-`--harness-files` are taken but not read yet. The code is `crates/goalcup-verify/src/report.rs`.
-Readers ignore keys they do not know.
+section 4, code in `crates/goalcup-verify/src/report.rs` and `server.rs`) and its text form on
+standard error (per entry, a header, whether it is sealed, each named or failed check's `why` and a
+coverage line). `<path>` is an entry, `rec`, fetched entry (`rec.gcr.zst`) or run folder, a fetched
+outdir, or one part file. `--live` reads an entry still recording up to its last index line;
+`--server` marks a server copy (a fetched `rec.gcr.zst` is one anyway); `--live` wins over both. `--local ENTRY_DIR` is the local
+entry a server copy is compared with. `--known` and `--harness-files` are taken but not read yet.
 
 Exit code and `result`: 0 `pass` (whole); 1 `named` (honest but incomplete: every loss is named, or
 the entry is unsealed, live or has pruned part files); 2 `fail` (a broken invariant or a silent
-loss); 3 no usable report and no JSON (the input cannot be read, a wrong command line, an internal
-error). A `warn` (an unknown record kind or GAP reason) or a `skip` leaves the exit alone. For a run
-folder, the worst entry decides.
+loss); 3 no usable report and no JSON (the input or `--local` cannot be read, a wrong command line,
+an internal error). A `warn` (an unknown record kind or GAP reason) or a `skip` leaves the exit
+alone. For a run folder, the worst entry decides. Readers ignore keys they do not know.
 
 | Top-level key | Holds |
 |---|---|
 | `verifier`, `input` | The verifier's version; `local`, `server` or `live` |
 | `run`, `result`, `exit` | The run id from the first `start` event (or null); as above |
-| `server` | null: the server copy checks are not filled yet |
+| `server` | For a server input: `chunks` (summed over every `fetch.json`), `whole` (true when every `server_chunks_whole` passes), `equals_local` and `db_match` (true when every entry passes `server_equals_local` or `server_counts_match` respectively, false on a `fail`, else null). Null for a local or live input |
 | `entries` | One object per entry, in order of first wall time, with the keys below |
 
 | Entry key | Holds |
 |---|---|
 | `entry`, `sealed`, `seal_reason`, `boots` | The PART's entry id (else the folder name); whether a `seal` event was read, and its `reason`; boots read |
-| `connector`, `keep` | From the `start` event, or null |
-| `label` | The evidence label, below |
+| `connector`, `keep`, `label` | The first two from the `start` event, or null; the evidence label, below |
 | `bytes` | `raw` (decompressed), `compressed` (bytes of the files read) and `framing` (raw minus DATA payload) |
 | `links` | LINK records read |
 | `checks` | Per check: `id`; `inv` (the invariant number, or null); `result` (`pass`, `skip`, `warn`, `named` or `fail`); `why` (one plain line, empty on a pass); `first` (`o`, `sid` and `wall` of the first finding at the worst level reached, or null); `facts` (an object) |
@@ -364,10 +360,18 @@ folder, the worst entry decides.
 **Check ids.** `inv1` to `inv9` and `inv14` check the invariant of that number; `streams_closed`,
 `seen_matches_written`, `gap_has_end` and `recorder_alive` check invariants 10 to 13. With `inv`
 null: `torn_tail`, `native_path_gen`, `counts_match_seal`, `gaps_named`, `record_decode`,
-`parts_pruned`, `record_kind_unknown` and `gap_reason_unknown`. Present today but always `skip`
-with `why` "not built in this slice": `listed_hosts_decrypted`, `conn_bytes`, `mask_failclosed`,
-`history_complete`, `wire_keeps_up`, `threads_match`, `subagents_present`, and for a server copy
-`server_chunks_whole`, `server_equals_local` and `server_counts_match`.
+`parts_pruned`, `record_kind_unknown` and `gap_reason_unknown`. Always `skip` with "not built in
+this slice": `listed_hosts_decrypted`, `conn_bytes`, `mask_failclosed`, `history_complete`,
+`wire_keeps_up`, `threads_match` and `subagents_present`. For a server input, three more read
+`fetch.json`, the chunk list beside the copy (S13, `scripts/fetch-run.sh`), and without it fail
+under `--server`, else skip:
+
+- `server_chunks_whole`: the chunks run on and match their SHA-256 and the record's heads; `named`
+  for an open end, no final heartbeat.
+- `server_equals_local`: the bytes both hold equal the `--local` part files, so a copy shorter or
+  longer than them can pass; whether the copy is whole is `server_chunks_whole`. Skips without
+  them or if pruned.
+- `server_counts_match`: the server's row and heartbeat against the seal's totals; skips if not sealed.
 
 **The label** is a hint for judges, not a judgement. It says which evidence the record holds:
 `wire_and_native` when model requests were written and a `native` or `snapshot` stream holds
