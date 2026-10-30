@@ -399,9 +399,9 @@ impl Boot {
 
 /// `counts.jsonl` (PRD-02 section 5 step 3), local only, one compact line per LINK:
 /// `{"seq":<link seq>,"count":<the COUNT event JSON at that LINK>,"spans":<n>}`, where `spans`
-/// is the boot's own `recorder_down` spans so far ([`Counter::off_spans`]). A later boot takes a dead
-/// boot's COUNT from it without decoding part files, and [`entry_totals`] takes a boot's totals
-/// from it once the boot's part files are pruned after upload (ledger U1).
+/// is the boot's own `recorder_down` spans so far ([`Counter::off_spans`]). A later boot takes
+/// a dead boot's COUNT from it without decoding part files, and [`entry_totals`] takes a boot's
+/// totals from it once the boot's part files are pruned after upload (ledger U1).
 pub struct CountsLog {
     path: PathBuf,
     /// The last line of each boot, by boot.
@@ -549,12 +549,15 @@ fn boots(entry_dir: &Path) -> BTreeMap<u64, Boot> {
     for (n, line) in latest {
         match boots.get_mut(&n) {
             Some(b) => {
-                b.spans = b.spans.max(line.spans);
                 let recovered = b.count.is_some() && !b.down_ms.is_empty();
+                let (seq, spans) = (b.seq.max(line.seq), b.spans.max(line.spans));
                 if !recovered && b.count_after.is_none_or(|s| line.seq > s) {
-                    // Its only `recorder_down` gap is its start gap, which the line counts.
-                    (b.seq, b.count) = (b.seq.max(line.seq), line.count);
-                    b.down_ms.clear();
+                    // The line whole: a synced line keeps the recovery gaps a partial read
+                    // stopped before, and an appended one has none (its start gap is in
+                    // `spans`).
+                    *b = Boot { seq, spans, ..line };
+                } else {
+                    b.spans = spans;
                 }
             }
             None if n < first || stopped.is_some_and(|s| n >= s) => {
@@ -663,6 +666,7 @@ fn last_line(part: &Path) -> io::Result<Option<IndexLine>> {
         Err(e) => gone(e),
     }
 }
+
 fn totals(boots: &BTreeMap<u64, Boot>) -> EntryTotals {
     let mut t = EntryTotals::default();
     for b in boots.values() {

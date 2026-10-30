@@ -120,11 +120,16 @@ fn count_and_link(
     c.counts()
 }
 
+/// A part file's index.
+fn idx_of(part: &Path) -> PathBuf {
+    let name = part.file_name().unwrap().to_str().unwrap();
+    part.with_file_name(format!("{}.idx", name.trim_end_matches(".gcr.zst")))
+}
+
 /// The first part file and its index.
 fn first_part(rec: &Path) -> (PathBuf, PathBuf) {
     let part = goalcup_format::read::part_files(rec).unwrap()[0].clone();
-    let name = part.file_name().unwrap().to_str().unwrap();
-    let idx = part.with_file_name(format!("{}.idx", name.trim_end_matches(".gcr.zst")));
+    let idx = idx_of(&part);
     (part, idx)
 }
 
@@ -529,11 +534,65 @@ fn a_failed_read_keeps_the_latest_line_of_its_boot() {
     assert_eq!(latest.model_requests(), 3);
     assert_eq!(entry_totals(entry_dir).counts, latest);
 
-    let parts = goalcup_format::read::part_files(&rec).unwrap();
-    let name = parts[1].file_name().unwrap().to_str().unwrap();
-    let idx = parts[1].with_file_name(format!("{}.idx", name.trim_end_matches(".gcr.zst")));
+    let idx = idx_of(&goalcup_format::read::part_files(&rec).unwrap()[1]);
     std::fs::write(&idx, b"not an index line\n").unwrap();
     assert_eq!(entry_totals(entry_dir).counts, latest);
     assert_eq!(log.sync(entry_dir).unwrap().counts, latest);
     assert_eq!(entry_totals(entry_dir).counts, latest);
+}
+
+/// A read that fails inside a boot already recovered and synced, before its recovery frame,
+/// keeps that boot's recovery gap from its line, and the sync keeps it there for when the boot's
+/// part files are pruned after upload (point 6).
+#[test]
+fn a_failed_read_keeps_a_recovered_boot_gap() {
+    let dir = tempfile::tempdir().unwrap();
+    let entry_dir = dir.path();
+    let rec = entry_dir.join("rec");
+    let opts = PartOptions {
+        window_log: 20,
+        rotate_after_ns: 60 * SEC,
+        ..PartOptions::default()
+    };
+    let mut k = Clock(1000 * SEC);
+    let mut c = Counter::new(&[]);
+    let mut log = CountsLog::open(entry_dir);
+    let mut w = PartWriter::open(&rec, opts, ENTRY, BOOT_ID, k.now()).unwrap();
+    conn(&mut w, &mut c, &mut k);
+    post(&mut w, &mut c, &mut k, 2);
+    count_and_link(&mut w, &c, &mut k, &mut log, 0);
+    k.0 += 61 * SEC;
+    assert!(w.rotate_if_due(k.now()).unwrap().is_some());
+    post(&mut w, &mut c, &mut k, 3);
+    link_and_line(&mut w, &c, &mut k, &mut log);
+    std::mem::forget(w);
+    let boot0_parts = goalcup_format::read::part_files(&rec).unwrap();
+    assert_eq!(boot0_parts.len(), 2);
+
+    k.0 += 5 * SEC;
+    let mut w = recover(&rec, entry_dir, opts, k.now(), serde_json::Map::new());
+    let mut log = CountsLog::open(entry_dir);
+    let synced = log.sync(entry_dir).unwrap();
+    assert_eq!((synced.counts.gaps, synced.off_spans), (1, 1));
+    let mut c = Counter::new(&[]);
+    post(&mut w, &mut c, &mut k, 1);
+    count_and_link(&mut w, &c, &mut k, &mut log, 1);
+    let whole = entry_totals(entry_dir);
+    assert_eq!((whole.counts.gaps, whole.off_spans), (1, 1));
+    assert_eq!(whole.counts.off_ms, synced.counts.off_ms);
+
+    // The index of boot 0's second part file cannot be read.
+    let idx = idx_of(&boot0_parts[1]);
+    let good = std::fs::read(&idx).unwrap();
+    std::fs::write(&idx, b"not an index line\n").unwrap();
+    assert_eq!(entry_totals(entry_dir), whole);
+    assert_eq!(log.sync(entry_dir).unwrap(), whole);
+
+    // Readable again, then uploaded and pruned: the line holds what the part files held.
+    std::fs::write(&idx, good).unwrap();
+    for part in &boot0_parts {
+        std::fs::remove_file(idx_of(part)).unwrap();
+        std::fs::remove_file(part).unwrap();
+    }
+    assert_eq!(entry_totals(entry_dir), whole);
 }

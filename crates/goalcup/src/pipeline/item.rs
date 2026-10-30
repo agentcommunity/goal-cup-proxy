@@ -62,10 +62,14 @@ pub(crate) enum Item {
     },
 }
 
-/// What a DATA piece of `len` bytes counts in `held`: its length, and 1 for an empty message end,
-/// so every item waiting counts in `queued`.
+/// What every DATA piece counts in `held` beyond its bytes: its queue slot and its `Bytes`
+/// allocation, so many small pieces fill memory in `held` as they do in the process, and an
+/// empty message end still counts in `queued`.
+pub(crate) const DATA_ITEM_HELD: u64 = 128;
+
+/// What a DATA piece of `len` bytes counts in `held`.
 pub(crate) fn data_held(len: usize) -> u64 {
-    (len as u64).max(1)
+    (len as u64).saturating_add(DATA_ITEM_HELD)
 }
 
 impl Item {

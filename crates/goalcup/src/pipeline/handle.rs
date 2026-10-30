@@ -139,9 +139,7 @@ impl StreamHandle {
             Call::Gap(self.sid, reason, start, end, self.off, lost, tail.clone())
         );
         if self.all_stopped() || !self.opened {
-            let i = &self.rec.inner;
-            i.after_stop_bytes
-                .fetch_add(lost.unwrap_or(0), Ordering::Relaxed);
+            self.rec.count_after_stop(lost.unwrap_or(0));
         } else {
             self.close_gap(end);
             self.rec.send(Item::Gap {
@@ -199,7 +197,7 @@ impl StreamHandle {
         let rec = &self.rec;
         let n = bytes.len() as u64;
         if self.stopped() {
-            rec.inner.after_stop_bytes.fetch_add(n, Ordering::Relaxed);
+            rec.count_after_stop(n);
             return;
         }
         if n == 0 && !ws.is_some_and(|w| w.fin) {
@@ -207,7 +205,9 @@ impl StreamHandle {
             return;
         }
         let (soft, in_gap, always) = (rec.inner.guard, self.gap.is_some(), !self.wire || n == 0);
-        let held = item::data_held(bytes.len());
+        // What the pieces below count in `held` together, so the hold and their `Item::held` match.
+        let pieces = bytes.len().div_ceil(MAX_PIECE).max(1) as u64;
+        let held = n + pieces * item::DATA_ITEM_HELD;
         let admitted = rec.inner.tx.is_none()
             || rec.hold(held, |h| always || guard::admits(h, held, in_gap, soft));
         if !admitted {
@@ -498,6 +498,27 @@ mod tests {
         assert!(items.iter().all(|i| sid_of(i) == native.sid()));
         assert!(matches!(items.as_slice(), [Item::Data { bytes, .. }] if bytes.len() == 300));
         assert_eq!(rec.after_stop(), (500, vec!["example.com".to_string()]));
+    }
+
+    /// Section 3: the guard weighs what a piece costs in memory, its queue slot and allocation
+    /// as well as its bytes, so a stream of tiny pieces reaches the guard (and its GAP) long
+    /// before its bytes alone would.
+    #[test]
+    fn tiny_pieces_reach_the_guard_by_their_cost() {
+        let (rec, rx) = Recorder::pipeline(MIB);
+        let mut h = open(&rec, StreamKind::WsDown, 0);
+        let mut admitted = 0;
+        while rec.live().losing.dropped_bytes == 0 {
+            h.ws(rec.now(), 0x1, true, Bytes::from_static(b"x"));
+            admitted += 1;
+            assert!(admitted <= MIB, "the guard never dropped");
+        }
+        assert!(admitted < MIB / 64);
+        drop(h);
+        let items = drain(&rec, &rx);
+        let stream: Vec<&Item> = items.iter().collect();
+        assert_eq!(check_stream(&stream, 0), admitted);
+        assert_eq!(rec.live().held_bytes, 0);
     }
 
     #[test]

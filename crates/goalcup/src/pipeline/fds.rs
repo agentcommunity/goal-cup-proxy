@@ -55,8 +55,9 @@ pub fn raise(target: Target) -> u64 {
 }
 
 /// True while `2 x open connections + 64` is under the recorder's soft limit (read once). Open
-/// connections are the `conn` streams not yet ended, counted by `StreamHandle`. PRD-03 asks before each `accept`; while false it waits
-/// 10 ms and asks again. Turning false after being true starts one episode for [`take_note`].
+/// connections are the `conn` streams not yet ended, counted by `StreamHandle`. PRD-03 asks
+/// before each `accept`; while false it waits 10 ms and asks again. Turning false after being
+/// true starts one episode for [`take_note`].
 pub fn may_accept() -> bool {
     RESERVE.may_accept()
 }

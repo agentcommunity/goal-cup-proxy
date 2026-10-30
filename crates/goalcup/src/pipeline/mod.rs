@@ -340,7 +340,7 @@ impl Recorder {
         let mut open = lock(&i.open_gaps);
         if i.all_stopped.load(Ordering::Acquire) {
             drop(open);
-            i.after_stop_bytes.fetch_add(n, Ordering::Relaxed);
+            self.count_after_stop(n);
             return false;
         }
         match gap {
@@ -439,9 +439,13 @@ impl Recorder {
     /// the `after_stop` count, so no byte is lost without a count.
     pub(crate) fn dropped(&self, n: u64, lost: u64) {
         sub(&self.inner.held, n);
-        self.inner
-            .after_stop_bytes
-            .fetch_add(lost, Ordering::Relaxed);
+        self.count_after_stop(lost);
+    }
+
+    /// Every byte that reaches no record after a stop lands in the `after_stop` count, so none
+    /// is lost without a count.
+    pub(crate) fn count_after_stop(&self, n: u64) {
+        self.inner.after_stop_bytes.fetch_add(n, Ordering::Relaxed);
     }
 
     /// The writer handed records worth `n` held bytes to the compressor. Only the writer calls
