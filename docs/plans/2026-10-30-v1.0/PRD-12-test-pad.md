@@ -1550,3 +1550,14 @@ taken; "rejected" says why. Fixes for other files are made by those files' owner
   question; overage alone is reported, not held (integrator 11:20Z). The next slice applies B6-1
   first, and the six faults reuse `kill_rec`, `fault`, `at` and `recover` instead of new helpers.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-11 slice 4, part 1 (merge a96d9f71)
+
+- Ten of 16 connector files are on integration; new: `copilot-cli`, `gemini-cli`, `openclaw-cli`,
+  `opencode-cli`, `opencode2-cli`, `qwen-cli`. For the login in the box: `GEMINI_CLI_HOME` stands
+  for the home folder, so Gemini's files sit under `{home}/.gemini`; `QWEN_HOME` is the `.qwen`
+  folder itself; `OPENCLAW_HOME` holds `.openclaw`. The two OpenCode connectors run the same
+  `opencode` program and are told apart only by `version`, so the box installs the matching major.
+- PRD-11's facts sheets are rewritten from the pad's rows in PRD-11's last slice, so each row's
+  record and `row.json` are what that slice reads. No change to the row shape is asked.
+- No locked ledger item is touched and no owner question comes from this slice.

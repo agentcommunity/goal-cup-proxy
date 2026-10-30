@@ -1748,3 +1748,24 @@ kept and now cites BUILD-PROMPT section 5, since B3 no longer carries it.
 - **Housekeeping for the end:** besides `v1.0/prd-14-tests-lane-merge-wip`, the merged PRD-14 task
   branches (`v1.0/prd-14-tests-*`) are still on origin.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-11 slice 4, part 1 (merge a96d9f71)
+
+- `gate fast: PASS in 96s` on the merge (nextest 189 of 189). Eleven paths changed, all PRD-11
+  owned, no `Cargo.toml`. All 13 non-merge commits in ec0d79d8..a96d9f71^2 carry both trailer
+  lines. Review rounds A and B closed with no open finding. `gate full` was not run.
+- **Size report, PRD-11** (`wc -l` at a96d9f71, PRD-00 row "Connector code (PRD-11)" 800 src and
+  400 tests): src 1,689 (211% of the row; 1,689 of the 1,700 ceiling set by the replan after slice
+  3), tests 759 (190% of the row; 759 of the 760 ceiling). The PRD-11 note keeps both ceilings and
+  allows one exception: review B9's `write_settings` change may pass 1,700 only by the lines PRD-10
+  drops from `cli/setup.rs` in the same merge.
+- **Build order, PRD-11:** slice 5 (amp, droid, goose, crush, kimi-code, cline with their six
+  `entry!` lines; Amp and Droid are the first users of the `.profile` writer) can start now. The
+  facts sheets were not rewritten in this part; all 15 move to PRD-11's last slice, which therefore
+  waits for PRD-12's pad rows as well as the tier refresh. Ten of 16 connector files are on
+  integration, so the pad can run rows for `copilot-cli`, `gemini-cli`, `openclaw-cli`,
+  `opencode-cli`, `opencode2-cli` and `qwen-cli` where it has their logins.
+- **Acceptance lists as known,** if still open at the end: a hand-written JSON5 `openclaw.json` is
+  unread, so its proxy keys are not checked (named in `unread`); a `--version` line whose number is
+  wrapped in punctuation refuses the start.
+- No locked ledger item is touched and no owner question comes from this slice.
