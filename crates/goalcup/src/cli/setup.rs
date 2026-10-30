@@ -145,6 +145,7 @@ fn write_home(
 fn write_rows(home: &Path, rows: &[SettingRow]) -> Vec<Row> {
     let mut written = Vec::new();
     for row in rows {
+        // Filled as connector::launch::write_settings fills it, until PRD-11 returns the file.
         let file = PathBuf::from(fill(&row.file, home, Path::new("")));
         if connector::write_settings(home, std::slice::from_ref(row)).is_empty() {
             let (key, value) = (row.key.clone(), row.value.clone());
