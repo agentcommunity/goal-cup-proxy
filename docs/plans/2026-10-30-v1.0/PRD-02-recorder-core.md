@@ -1383,3 +1383,22 @@ to another file are made by that file's owner.
   removed S4 key breaks `cli_status.rs` and `cli_finish.rs`, which build `status.json` through its
   JSON form in `tests/cli_common/`.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-03 core slice 1 (merge 0e411074)
+
+- **`reserve` as PRD-03 uses it.** Brotli reserves each allocation its decoder makes, and zstd its
+  frame window plus 512 KiB, so a flushed `br` body holds 4 to 16 MiB of `held` from its first push
+  until it ends. A brotli body already decoding keeps reserving past `room()`; only a body with no
+  piece out yet is refused. `held` can so sit above three quarters of soft from reservations
+  alone, and the next DATA pieces then meet the soft guard sooner. That is the
+  design (one counter), not a defect.
+- **A transient outside `held`:** a refused brotli body's window (up to 16 MiB) is allocated and
+  freed at once on its worker thread. PRD-03 relies on the margin between `room()` and soft (a
+  quarter of soft) to hold it; that is true while soft is at least 64 MiB times the worker threads
+  (the 128 MiB floor holds 2 threads, the 512 MiB default holds 8). R8's `by_hand_load` reports RSS
+  next to `held_peak`, so a gap between them shows here first. No change asked.
+- **Capacity under the default soft guard** (wire-proxy owner question 14:47Z): about 23 open
+  flushed `br` bodies at WBITS 24, about 45 zstd bodies at the 8 MiB window, about 95 `br` bodies at
+  WBITS 22; run 1 had about 40. The soft default is this PRD's number, not a locked item, so no W6.
+  If PRD-16 X3 fails on a `decoder_window` GAP, the fix is the soft default, never a proxy cap.
+- No locked ledger item is touched.

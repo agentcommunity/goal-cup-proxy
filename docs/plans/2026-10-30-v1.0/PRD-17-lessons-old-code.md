@@ -922,3 +922,17 @@ Names for `LESSONS.md` (the lessons lane writes them; judge 13:06Z):
 - `common::recorder::real` (H10, K15) is not on integration; it comes in PRD-14 slice 3 after PRD-02's
   `Recorder::real_for_tests`.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-03 core slice 1 (merge 0e411074)
+
+- **`lessons_decode.rs` need not wait for `http1`.** `proxy::decode::{parse_codings, BodyDecoder,
+  Step}` is on integration and driven alone over `Recorder::for_tests(room)`, as PRD-03's
+  `tests/proxy_decode.rs` does. D1, D2, D3, D4 and D6 can be written against it now; D7's bomb test
+  checks a `memory_guard` GAP in the record, so it waits for `http1` (PRD-03 slice 2). Reuse
+  `tests/proxy_fixtures/anthropic-sse.br` and `sse-flushed.br` rather than adding copies, and do not
+  repeat PRD-03's cases (each coding decodes, an unknown coding writes no body byte, a window over
+  `room()` is not decoded).
+- **`lessons_tls.rs` T1, T2, T4 and T5** can use `proxy::ca::RunCa` (`mint`, `leaf`, `write_files`,
+  `export`, `import`) and `proxy::ca::certificates` now. T3 and every `lessons_connect` row drive
+  `proxy::serve`, which comes in PRD-03 slice 2.
+- No locked ledger item is touched and no owner question comes from this slice.

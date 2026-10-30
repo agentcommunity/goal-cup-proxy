@@ -1464,3 +1464,29 @@ kept and now cites BUILD-PROMPT section 5, since B3 no longer carries it.
   Release order needs nothing new: `release.sh tag` runs the pad's release check itself (PRD-12 note).
 - **Housekeeping for the end:** remove `v1.0/prd-14-tests-lane-merge-wip` from origin.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-03 core slice 1 (merge 0e411074)
+
+- `gate fast: PASS in 88s` on merge 0e411074 (gate log
+  `/root/gc-night/gate-logs/v1.0_prd-03-proxy-1511.log`). Last fixer box at the merged head
+  92c47bf6: fmt, workspace clippy `-D warnings`, goalcup doc `-D warnings`, goalcup nextest 31/31
+  green. Paths are all PRD-03 owned (`crates/goalcup/src/proxy/`, `tests/proxy_*.rs`,
+  `tests/proxy_fixtures/`); no `Cargo.toml` change.
+- **Size report, PRD-03** (`wc -l` at 0e411074, row "Proxy (PRD-03)": 4,250 src, 2,000 tests). Src
+  2,873: `decode.rs` 810, `ws.rs` 735, `connect.rs` 673, `ca.rs` 439, `tls.rs` 203, `mod.rs` 13;
+  68% of the row after one of three slices, +19% on these files' own 2,410 estimate. Tests 1,029
+  (`proxy_ws.rs` 427, `proxy_connect.rs` 244, `proxy_tls.rs` 180, `proxy_decode.rs` 178), 51% of
+  the row for 4 of 7 files. With the remaining files at their 1,990 estimate the row would end near
+  4,860 (+14%). Replan decision (wire-proxy log): the `decode.rs` and `ws.rs` extra serve points 3
+  and 1 and is accepted; the remaining six files get at most 1,802 src lines so the row ends within
+  10%; the four remaining test files share 971 (PRD-03 note).
+- **Trailers:** all 15 non-merge commits in 938f6733..0e411074 carry both lines.
+- **X3 and the decoder windows.** A `decoder_window` GAP in A1 to A3 is an X3 FAIL as written. Under
+  the default soft guard `room()` fits about 23 open flushed `br` bodies if Anthropic sends WBITS 24
+  windows (unverified, PRD-03 Risks), under run 1's about 40; A2 (20 subagents) is where it would
+  show. Its report line goes to PRD-02 (soft default), never to a proxy cap (PRD-02 note).
+- **Unblocked:** PRD-03 slice 2 (`serve`, `hosts`, `pump`, `tunnel`, `http1`) on the merged leaf
+  modules and S3; PRD-17's `lessons_decode.rs` (all but D7) and `lessons_tls.rs` T1, T2, T4, T5 now
+  (PRD-17 note).
+- No locked ledger item is touched and no owner question comes from this slice (the 14:47Z one
+  needs no W6, PRD-02 note).
