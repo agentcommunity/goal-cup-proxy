@@ -22,7 +22,8 @@
 //! Inflation is raw DEFLATE with the fixed 15-bit window (`flate2` on `miniz_oxide`), which decodes
 //! any smaller negotiated window. Memory per direction: the 32 KiB piece being filled, a 32 KiB
 //! inflate output buffer, the inflater's 32 KiB window, the current frame header, and the held
-//! control messages, each counted in PRD-02's guard (`Recorder::reserve`) until it is written.
+//! control messages. Only the held messages are counted in PRD-02's guard (`Recorder::reserve`),
+//! each until it is written.
 
 use crate::pipeline::{
     EndReason, GapReason, Mono, OpenFlags, Recorder, Reserved, Sid, StreamHandle, StreamKind,

@@ -96,51 +96,6 @@ fn raw_deflate(data: &[u8]) -> Vec<u8> {
     e.finish().unwrap()
 }
 
-/// A brotli stream with window `1 << 22` (4 MiB) holding `data` in stored meta-blocks
-/// (RFC 7932 sections 9.1 and 9.2).
-fn br_4mib(data: &[u8]) -> Vec<u8> {
-    let mut w = Bits::default();
-    w.put(1, 1);
-    w.put(5, 3); // WBITS = 17 + 5
-    for block in data.chunks(1 << 16) {
-        w.put(0, 1); // ISLAST
-        w.put(0, 2); // MNIBBLES: 4
-        w.put(block.len() as u64 - 1, 16);
-        w.put(1, 1); // ISUNCOMPRESSED
-        w.align();
-        w.out.extend_from_slice(block);
-    }
-    w.put(1, 1); // ISLAST
-    w.put(1, 1); // ISLASTEMPTY
-    w.align();
-    w.out
-}
-
-#[derive(Default)]
-struct Bits {
-    out: Vec<u8>,
-    acc: u64,
-    n: u32,
-}
-
-impl Bits {
-    fn put(&mut self, v: u64, bits: u32) {
-        self.acc |= v << self.n;
-        self.n += bits;
-        while self.n >= 8 {
-            self.out.push(self.acc as u8);
-            self.acc >>= 8;
-            self.n -= 8;
-        }
-    }
-
-    fn align(&mut self) {
-        if self.n > 0 {
-            self.put(0, 8 - self.n);
-        }
-    }
-}
-
 #[test]
 fn each_coding_decodes_to_the_plaintext() {
     let plain = text();
@@ -153,8 +108,8 @@ fn each_coding_decodes_to_the_plaintext() {
     assert_plain(&["deflate"], &zlib(&text), &text);
     assert_plain(&["deflate"], &raw_deflate(&text), &text);
     assert_plain(&["zstd"], &zstd::encode_all(&text[..], 3).unwrap(), &text);
-    // Applied gzip first, then br: undone br first, then gzip.
-    assert_plain(&["gzip, br"], &br_4mib(&gzip(&text)), &text);
+    // Applied br first, then gzip: undone gzip first, then br.
+    assert_plain(&["br, gzip"], &gzip(BR_FLUSHED), &plain);
     assert_plain(&[], &text, &text);
 }
 
@@ -183,10 +138,8 @@ fn refused(step: Step) -> u64 {
 
 #[test]
 fn a_window_over_room_is_not_decoded() {
-    let plain = text();
-    let wire = br_4mib(&plain);
     let room = 32 * 1024;
-    let (rec, step, pieces) = decode(&["br"], &wire, room);
+    let (rec, step, pieces) = decode(&["br"], BR_FLUSHED, room);
     assert!(refused(step) <= room);
     assert!(pieces.is_empty());
     assert_eq!(rec.room(), room);
@@ -194,23 +147,10 @@ fn a_window_over_room_is_not_decoded() {
     // `br, gzip`: the gzip stage holds its 32 KiB when the brotli window is refused, and the
     // limit is the room at that moment.
     let room = 80 * 1024;
-    let (rec, step, pieces) = decode(&["br, gzip"], &gzip(&wire), room);
+    let (rec, step, pieces) = decode(&["br, gzip"], &gzip(BR_FLUSHED), room);
     assert!(refused(step) <= room - 32 * 1024);
     assert!(pieces.is_empty());
     assert_eq!(rec.room(), room);
-
-    let (rec, _calls) = Recorder::for_tests(LARGE_ROOM);
-    let mut pieces = Vec::new();
-    let mut out = |b: Bytes| pieces.push(b);
-    let mut dec = BodyDecoder::new(parse_codings(&["br"]).unwrap(), &rec);
-    assert_eq!(dec.push(&wire, &mut out), Step::Ok);
-    assert!(
-        LARGE_ROOM - rec.room() >= 1 << 22,
-        "the whole window is counted"
-    );
-    assert_eq!(dec.finish(), Step::Ok);
-    assert!(pieces.concat() == plain);
-    assert_eq!(rec.room(), LARGE_ROOM);
 }
 
 /// The SSE shape: a flushed brotli stream holds its whole window from its first meta-block, so

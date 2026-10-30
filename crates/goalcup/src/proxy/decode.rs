@@ -8,9 +8,10 @@
 //!
 //! There is no budget of our own. Deflate expands by at most about 1032 to 1, so the work per
 //! push stays bounded by its input (PRD-17 D7), and PRD-02's memory guard decides about the
-//! decoded bytes. A decoder's memory is counted in that guard through `Recorder::reserve`: the
-//! 32 KiB window of gzip and deflate, the window of each zstd frame, and every allocation the
-//! brotli decoder makes.
+//! decoded bytes. A decoder's own memory is counted in that guard through `Recorder::reserve`:
+//! the 32 KiB window of gzip and deflate, the window of each zstd frame plus
+//! `ZSTD_STREAM_OVERHEAD`, and every allocation the brotli decoder makes. Each stage's 32 KiB
+//! output buffer is not counted.
 
 use crate::pipeline::{Recorder, Reserved};
 use brotli_decompressor::{
@@ -26,6 +27,11 @@ const DEFLATE_WINDOW: u64 = 32 * 1024;
 /// The largest zstd window accepted, as a power of two: 8 MiB, the most an HTTP `zstd` content
 /// coding may use (RFC 9659 section 3). A larger frame is a decode failure.
 const ZSTD_WINDOW_LOG_MAX: u32 = 23;
+/// What a zstd stream decoder holds beyond its window, counted with its first frame: the
+/// decompression context, the 128 KiB streaming input buffer and the output buffer's block slack,
+/// about 3 x `ZSTD_BLOCKSIZE_MAX` (128 KiB) plus the context, rounded up. Counted, not measured:
+/// libzstd allocates in C, past any Rust allocator.
+const ZSTD_STREAM_OVERHEAD: u64 = 512 * 1024;
 /// The longest zstd frame header prefix that holds the window: magic, descriptor, dictionary ID
 /// and frame content size.
 const ZSTD_HEAD_MAX: usize = 17;
@@ -546,13 +552,14 @@ struct Brotli {
 /// holds its full window, up to 16 MiB, from the first push. Untouched calloc pages that look
 /// small in RSS are still this memory once the allocator hands out reused heap.
 ///
-/// While `strict` (no piece of the body went out yet), an allocation larger than `room()` sets
-/// `over` to that room. The decoder cannot be refused memory without failing, so the allocation
-/// is made; [`Brotli::feed`] then answers `Halt::Window` before any output goes out, and the
-/// state, with its memory, is dropped at once.
+/// An allocation larger than `room()` sets `over` to that room and is still made: the crate's
+/// Huffman table sites use an empty slice unchecked, so refusing memory could panic. If no piece
+/// of the body went out yet, [`Brotli::feed`] then answers `Halt::Window` and the state, with its
+/// memory, is dropped at once. A refused body is so over the guard for a moment by up to its
+/// declared window, and refusals on several worker threads stack: the transient is bounded by
+/// worker threads x 16 MiB, which PRD-02's margin between `room()` and its soft guard holds.
 struct BrotliHeap {
     rec: Recorder,
-    strict: bool,
     over: Option<u64>,
 }
 
@@ -589,7 +596,7 @@ impl<T: Clone + Default> Allocator<T> for BrotliHeap {
     fn alloc_cell(&mut self, len: usize) -> BrotliCells<T> {
         let bytes = (len * std::mem::size_of::<T>()) as u64;
         let room = self.rec.room();
-        if self.strict && room < bytes {
+        if room < bytes {
             self.over.get_or_insert(room);
         }
         BrotliCells {
@@ -605,7 +612,6 @@ impl Brotli {
     fn new(rec: &Recorder) -> Brotli {
         let heap = || BrotliHeap {
             rec: rec.clone(),
-            strict: true,
             over: None,
         };
         Brotli {
@@ -615,15 +621,10 @@ impl Brotli {
         }
     }
 
-    /// Sets each heap's `strict`; answers the room an allocation did not fit while strict.
-    fn heaps(&mut self, strict: bool) -> Option<u64> {
-        let s = &mut self.state;
-        [&mut s.alloc_u8, &mut s.alloc_u32, &mut s.alloc_hc]
-            .into_iter()
-            .fold(None, |over, heap| {
-                heap.strict = strict;
-                over.or(heap.over)
-            })
+    /// The room an allocation did not fit, if one did not.
+    fn over(&self) -> Option<u64> {
+        let s = &self.state;
+        s.alloc_u8.over.or(s.alloc_u32.over).or(s.alloc_hc.over)
     }
 
     fn feed(&mut self, input: &[u8], g: &mut Guard, emit: &mut Emit<'_>) -> Result<(), Halt> {
@@ -632,7 +633,6 @@ impl Brotli {
         }
         let (mut available_in, mut input_offset) = (input.len(), 0);
         loop {
-            self.heaps(!g.emitted);
             let (mut available_out, mut output_offset, mut total_out) = (self.out.len(), 0, 0);
             let result = BrotliDecompressStream(
                 &mut available_in,
@@ -644,8 +644,10 @@ impl Brotli {
                 &mut total_out,
                 &mut self.state,
             );
-            // Set only while no piece went out: refused before this call's output is emitted.
-            if let Some(room) = self.heaps(!g.emitted) {
+            // Refused only while no piece went out, before this call's output is emitted.
+            if !g.emitted
+                && let Some(room) = self.over()
+            {
                 return Err(Halt::Window(room));
             }
             // Emitted before the result is looked at: output decoded before corruption is kept.
@@ -671,8 +673,8 @@ impl Brotli {
 
 /// HTTP `zstd` (RFC 8878 frames, RFC 9659 window limit), one frame or several in a row. The body
 /// is complete when its last frame is. Each frame's window is read from its header before the
-/// decoder sees it, and counted whole: libzstd allocates its window buffer at the frame's window
-/// size when the frame starts, whatever the output so far. An RSS reading that looks smaller only
+/// decoder sees it, and counted whole with [`ZSTD_STREAM_OVERHEAD`]: libzstd allocates its window
+/// buffer at the frame's window size when the frame starts, whatever the output so far. An RSS reading that looks smaller only
 /// shows pages not yet touched; do not trim this count from it (nor brotli's, [`BrotliHeap`]).
 struct Zstd {
     /// Built at the first frame, once its window is counted.
@@ -681,7 +683,8 @@ struct Zstd {
     head: Vec<u8>,
     at_frame_start: bool,
     frame_done: bool,
-    /// The largest window counted so far; the decoder keeps its buffer between frames.
+    /// The largest window counted so far, with the overhead; the decoder keeps its buffers
+    /// between frames.
     counted: u64,
     out: Vec<u8>,
 }
@@ -710,10 +713,10 @@ impl Zstd {
             self.head.extend_from_slice(&input[..take]);
             input = &input[take..];
             if let Some(window) = zstd_window(&self.head)? {
-                let window = window.min(1 << ZSTD_WINDOW_LOG_MAX);
-                if window > self.counted {
-                    g.admit(window - self.counted)?;
-                    self.counted = window;
+                let need = window.min(1 << ZSTD_WINDOW_LOG_MAX) + ZSTD_STREAM_OVERHEAD;
+                if need > self.counted {
+                    g.admit(need - self.counted)?;
+                    self.counted = need;
                 }
                 self.at_frame_start = false;
                 let head = std::mem::take(&mut self.head);
