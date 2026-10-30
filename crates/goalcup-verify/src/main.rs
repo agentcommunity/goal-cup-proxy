@@ -15,7 +15,11 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 #[derive(Parser)]
-#[command(name = "goalcup-verify", version, about = "Proves a goalcup record whole and names every loss.")]
+#[command(
+    name = "goalcup-verify",
+    version,
+    about = "Proves a goalcup record whole and names every loss."
+)]
 struct Args {
     #[command(subcommand)]
     cmd: Cmd,
@@ -59,9 +63,10 @@ enum Cmd {
 fn main() -> ExitCode {
     // A panic prints where it happened, never its message: that could hold record text.
     std::panic::set_hook(Box::new(|info| {
-        let at = info
-            .location()
-            .map_or_else(|| "an unknown place".into(), |l| format!("{}:{}", l.file(), l.line()));
+        let at = info.location().map_or_else(
+            || "an unknown place".into(),
+            |l| format!("{}:{}", l.file(), l.line()),
+        );
         eprintln!("goalcup-verify: internal error at {at}");
     }));
     std::panic::catch_unwind(run).unwrap_or(ExitCode::from(3))
@@ -84,8 +89,18 @@ fn run() -> ExitCode {
         }
     };
     match args.cmd {
-        Cmd::Check { path, json, live, server } => check(&path, json, live, server),
-        Cmd::Dump { path, sid, kind, text } => dump(&path, sid.as_deref(), kind.as_deref(), text),
+        Cmd::Check {
+            path,
+            json,
+            live,
+            server,
+        } => check(&path, json, live, server),
+        Cmd::Dump {
+            path,
+            sid,
+            kind,
+            text,
+        } => dump(&path, sid.as_deref(), kind.as_deref(), text),
         Cmd::Usage { args } => usage::run(args),
     }
 }
@@ -112,7 +127,11 @@ fn check(path: &std::path::Path, json: bool, live: bool, server: bool) -> ExitCo
 
 fn dump(path: &std::path::Path, sid: Option<&str>, kind: Option<&str>, text: bool) -> ExitCode {
     let pick = match sid.map(|s| match s.split_once('.') {
-        Some((b, n)) => b.parse::<u64>().ok().zip(n.parse::<u64>().ok()).map(|(b, n)| (Some(b), n)),
+        Some((b, n)) => b
+            .parse::<u64>()
+            .ok()
+            .zip(n.parse::<u64>().ok())
+            .map(|(b, n)| (Some(b), n)),
         None => s.parse::<u64>().ok().map(|n| (None, n)),
     }) {
         Some(None) => {

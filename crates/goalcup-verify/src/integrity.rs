@@ -121,8 +121,10 @@ impl Recount {
         self.c.get(k).copied().unwrap_or(0)
     }
     fn merge(&mut self, o: &Recount) {
-        o.c.iter().for_each(|(k, v)| self.add(*k, *v));
-        o.hosts.iter().for_each(|(k, v)| *self.hosts.entry(k.clone()).or_default() += v);
+        o.c.iter().for_each(|(k, v)| self.add(k, *v));
+        o.hosts
+            .iter()
+            .for_each(|(k, v)| *self.hosts.entry(k.clone()).or_default() += v);
         for (h, (n, up, down, l)) in &o.tunnel {
             let t = self.tunnel.entry(h.clone()).or_default();
             (t.0, t.1, t.2, t.3) = (t.0 + n, t.1 + up, t.2 + down, l.clone());
@@ -144,7 +146,12 @@ impl Recount {
         let th: Map<String, Value> = self
             .tunnel
             .iter()
-            .map(|(h, (n, u, d, l))| (h.clone(), json!({"conns": n, "up": u, "down": d, "listed": l})))
+            .map(|(h, (n, u, d, l))| {
+                (
+                    h.clone(),
+                    json!({"conns": n, "up": u, "down": d, "listed": l}),
+                )
+            })
             .collect();
         m.insert("tunnel_hosts".into(), th.into());
         m
@@ -159,14 +166,18 @@ fn differ(written: &Value, mine: &Recount) -> Vec<String> {
         return vec!["(not an object)".into()];
     };
     w.iter()
-        .filter_map(|(k, v)| mine.get(k).filter(|m| *m != v).map(|m| format!("{k} {v} against {m}")))
+        .filter_map(|(k, v)| {
+            mine.get(k)
+                .filter(|m| *m != v)
+                .map(|m| format!("{k} {v} against {m}"))
+        })
         .collect()
 }
 
 /// Per open stream: a few words.
+#[derive(Default)]
 struct St {
-    kind: StreamKind,
-    conn: u64,
+    kind: Option<StreamKind>,
     from: u64,
     /// The end of written bytes or of a known gap.
     next: u64,
@@ -209,8 +220,14 @@ pub struct Outcome {
 
 /// Checks one entry. `now_ns` is set for `--live`.
 pub fn check(e: &Entry, now_ns: Option<u64>) -> Outcome {
-    let checks = IDS.iter().map(|(id, inv)| Check::new(id, *inv, Res::Pass, "")).collect();
-    let mut p = Pass { checks, ..Default::default() };
+    let checks = IDS
+        .iter()
+        .map(|(id, inv)| Check::new(id, *inv, Res::Pass, ""))
+        .collect();
+    let mut p = Pass {
+        checks,
+        ..Default::default()
+    };
     let (mut err, mut truncated, mut meter) = (None, None, Default::default());
     match input::open(e) {
         Ok((mut rd, m)) => {
@@ -226,17 +243,28 @@ pub fn check(e: &Entry, now_ns: Option<u64>) -> Outcome {
     }
     let at = At(p.end_off, 0, p.wall_of(p.t));
     if let Some(why) = err {
-        p.fail("record_decode", &format!("the record stops decoding: {why}"), at);
+        p.fail(
+            "record_decode",
+            &format!("the record stops decoding: {why}"),
+            at,
+        );
     } else if let Some(o) = truncated {
         if p.seal.is_some() {
-            p.fail("torn_tail", "a sealed entry ends inside a record", At(o, 0, at.2));
+            p.fail(
+                "torn_tail",
+                "a sealed entry ends inside a record",
+                At(o, 0, at.2),
+            );
         } else {
             p.fact("torn_tail", "open_end", o.into());
         }
     }
     let meter: std::rc::Rc<input::Meter> = meter;
     p.finish(meter.open_frame.get(), now_ns, e);
-    let seal_reason = p.seal.as_ref().and_then(|s| s.get("reason")?.as_str().map(String::from));
+    let seal_reason = p
+        .seal
+        .as_ref()
+        .and_then(|s| s.get("reason")?.as_str().map(String::from));
     Outcome {
         sealed: p.seal.is_some(),
         seal_reason,
@@ -268,6 +296,8 @@ struct Pass {
     part: u64,
     boots: u64,
     pruned: bool,
+    /// The first boot of a pruned entry: streams and counts began in part files that are gone.
+    partial: bool,
     next_seq: u64,
     last_hash: [u8; 32],
     last_link: Option<(u64, u64)>,
@@ -300,7 +330,10 @@ struct Pass {
 
 impl Pass {
     fn idx(&self, id: &str) -> usize {
-        self.checks.iter().position(|c| c.id == id).expect("a known check id")
+        self.checks
+            .iter()
+            .position(|c| c.id == id)
+            .expect("a known check id")
     }
 
     /// Raises a check to `res` when that is worse; the first finding at the worst level is kept.
@@ -315,6 +348,10 @@ impl Pass {
     }
 
     fn fail(&mut self, id: &str, why: &str, at: At) {
+        let gone = matches!(id, "inv3" | "inv7" | "inv9") && self.partial;
+        if gone || (id == "counts_match_seal" && self.pruned) {
+            return;
+        }
         self.set(id, Res::Fail, why, Some(at));
     }
 
@@ -330,12 +367,15 @@ impl Pass {
     }
 
     fn wall_of(&self, t: u64) -> u64 {
-        (i128::from(self.part_wall) + i128::from(t) - i128::from(self.part_mono)).clamp(0, u64::MAX.into()) as u64
+        (i128::from(self.part_wall) + i128::from(t) - i128::from(self.part_mono))
+            .clamp(0, u64::MAX.into()) as u64
     }
 
     fn item(&mut self, it: &Item) {
         let (sid, t) = match &it.rec {
-            Record::Open { sid, t, .. } | Record::Data { sid, t, .. } | Record::End { sid, t, .. } => (*sid, *t),
+            Record::Open { sid, t, .. }
+            | Record::Data { sid, t, .. }
+            | Record::End { sid, t, .. } => (*sid, *t),
             Record::Gap { sid, end_mono, .. } => (*sid, *end_mono),
             Record::Mask { sid, .. } => (*sid, self.t),
             Record::Event { t, .. } => (0, *t),
@@ -345,13 +385,26 @@ impl Pass {
         self.t = t;
         self.end_off = it.off;
         let at = At(it.off, sid, self.wall_of(t));
-        let is_down = matches!(it.rec, Record::Gap { sid: 0, reason: GapReason::RecorderDown, .. });
+        let is_down = matches!(
+            it.rec,
+            Record::Gap {
+                sid: 0,
+                reason: GapReason::RecorderDown,
+                ..
+            }
+        );
         let is_link = matches!(it.rec, Record::Link { .. });
         let ev = match &it.rec {
-            Record::Event { json, .. } => serde_json::from_slice::<Map<String, Value>>(json).unwrap_or_default(),
+            Record::Event { json, .. } => {
+                serde_json::from_slice::<Map<String, Value>>(json).unwrap_or_default()
+            }
             _ => Map::new(),
         };
-        let ev_name = ev.get("ev").and_then(Value::as_str).unwrap_or("").to_string();
+        let ev_name = ev
+            .get("ev")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string();
         if self.seal.is_some() {
             if is_link && !self.seal_link {
                 self.seal_link = true;
@@ -366,24 +419,46 @@ impl Pass {
         }
         // A recorder_down gap sits in a recovery frame: only links, more such gaps, the seal or
         // the next boot's PART follow it.
-        let recovery = is_link || is_down || ev_name == "seal" || matches!(it.rec, Record::Part { .. });
+        let recovery =
+            is_link || is_down || ev_name == "seal" || matches!(it.rec, Record::Part { .. });
         if self.pending_down > 0 && !recovery {
-            self.fail("inv6", "a recorder_down gap sits inside a boot, not before the next one", at);
+            self.fail("inv6", "a recorder_down gap inside a boot", at);
             self.pending_down = 0;
         }
-        if !is_link && let Some((a, gap)) = self.tentative.take() && !is_down {
+        if !is_link
+            && let Some((a, gap)) = self.tentative.take()
+            && !is_down
+        {
             self.fail("recorder_alive", &format!("no COUNT for {} s within a boot", gap / 1_000_000_000), a);
         }
-        if !matches!(it.rec, Record::Part { .. } | Record::Link { .. }) && !matches!(ev_name.as_str(), "start" | "prev_boot") && !is_down {
+        if !matches!(it.rec, Record::Part { .. } | Record::Link { .. })
+            && !matches!(ev_name.as_str(), "start" | "prev_boot")
+            && !is_down
+        {
             self.boot_head = false;
         }
         match &it.rec {
-            Record::Part { entry, boot, part, raw_offset, wall_ns, mono_ns, next_link, prev, .. } => {
+            Record::Part {
+                entry,
+                boot,
+                part,
+                raw_offset,
+                wall_ns,
+                mono_ns,
+                next_link,
+                prev,
+                ..
+            } => {
                 match self.boot {
                     None => {
-                        self.pruned = *raw_offset != 0;
+                        (self.pruned, self.partial) = (*raw_offset != 0, *raw_offset != 0);
                         if self.pruned {
-                            self.set("parts_pruned", Res::Named, "local part files were pruned; check the server copy", Some(at));
+                            self.set(
+                                "parts_pruned",
+                                Res::Named,
+                                "local part files were pruned; check the server copy",
+                                Some(at),
+                            );
                         } else if *part != 0 || *boot != 0 || *prev != [0; 32] {
                             self.fail("inv1", "the first PART is not part 0 of boot 0", at);
                         }
@@ -394,8 +469,11 @@ impl Pass {
                         self.boot_head = true;
                     }
                     Some(b) => {
-                        if Some(entry) != self.entry.as_ref() || *raw_offset != it.off || *part != self.part + 1 {
-                            self.fail("inv1", "a PART does not continue the entry, its offset or its part number", at);
+                        if Some(entry) != self.entry.as_ref()
+                            || *raw_offset != it.off
+                            || *part != self.part + 1
+                        {
+                            self.fail("inv1", "a PART breaks the entry, offset or part order", at);
                         }
                         if *boot < b || *boot > b + 1 {
                             self.fail("inv1", "boot numbers have a hole or go back", at);
@@ -408,10 +486,10 @@ impl Pass {
                                 self.fail("inv6", &format!("boot {boot} has no recorder_down gap before it"), at);
                             }
                             self.end_boot();
-                            self.boots += 1;
+                            (self.boots, self.partial) = (self.boots + 1, false);
                             self.boot_head = true;
                         } else if self.pending_down > 0 {
-                            self.fail("inv6", "a recorder_down gap is not followed by a new boot", at);
+                            self.fail("inv6", "a recorder_down gap and no new boot", at);
                         }
                     }
                 }
@@ -424,15 +502,48 @@ impl Pass {
                     self.last_count_wall = *wall_ns;
                 }
             }
-            Record::Open { sid, skind, conn, req, meta, .. } => self.open(*sid, *skind, *conn, *req, meta, at),
-            Record::Data { sid, off, flags, bytes, .. } => self.data(*sid, *off, *flags, bytes, at),
-            Record::End { sid, reason, seen, tail, .. } => self.end(*sid, *reason, *seen, tail, at),
-            Record::Gap { sid, reason, start_wall, end_wall, start_mono, end_mono, off, lost, tail } => {
+            Record::Open {
+                sid,
+                skind,
+                conn,
+                req,
+                meta,
+                ..
+            } => self.open(*sid, *skind, *conn, *req, meta, at),
+            Record::Data {
+                sid,
+                off,
+                flags,
+                bytes,
+                ..
+            } => self.data(*sid, *off, *flags, bytes, at),
+            Record::End {
+                sid,
+                reason,
+                seen,
+                tail,
+                ..
+            } => self.end(*sid, *reason, *seen, tail, at),
+            Record::Gap {
+                sid,
+                reason,
+                start_wall,
+                end_wall,
+                start_mono,
+                end_mono,
+                off,
+                lost,
+                tail,
+            } => {
                 let tail: Map<String, Value> = serde_json::from_slice(tail).unwrap_or_default();
                 let other_clock = tail.contains_key("boot_id");
-                let (s, e) = if other_clock { (*start_wall, *end_wall) } else { (*start_mono, *end_mono) };
+                let (s, e) = if other_clock {
+                    (*start_wall, *end_wall)
+                } else {
+                    (*start_mono, *end_mono)
+                };
                 if (e <= s && *lost <= 1) || end_wall < start_wall {
-                    self.fail("gap_has_end", "a GAP has no extent: its start equals its end and its loss is unknown or none", at);
+                    self.fail("gap_has_end", "a GAP with no extent (run 1's shape)", at);
                 }
                 let name = reason.name();
                 if let GapReason::Other(_) = reason {
@@ -459,13 +570,18 @@ impl Pass {
                 }
                 if *sid == 0 {
                     if is_down {
-                        self.down_after = (self.down_after.0 + 1, self.down_after.1 + e.saturating_sub(s) / 1_000_000);
+                        self.down_after = (
+                            self.down_after.0 + 1,
+                            self.down_after.1 + e.saturating_sub(s) / 1_000_000,
+                        );
                         if self.boot_head && self.boot == Some(0) && !self.boot0_gap {
                             self.boot0_gap = true;
                         } else {
-                            let anchored = self.last_link.is_some_and(|(w, m)| *start_wall == w || *start_mono == m);
+                            let anchored = self
+                                .last_link
+                                .is_some_and(|(w, m)| *start_wall == w || *start_mono == m);
                             if !anchored {
-                                self.fail("inv6", "a recorder_down gap does not start at the last link", at);
+                                self.fail("inv6", "a recorder_down gap not at the last link", at);
                             }
                             self.pending_down += 1;
                         }
@@ -474,20 +590,34 @@ impl Pass {
                     self.gap(*sid, *off, *lost, at);
                 }
             }
-            Record::Mask { sid, off, len, rule } => {
+            Record::Mask {
+                sid,
+                off,
+                len,
+                rule,
+            } => {
                 let Some(st) = self.streams.get(sid) else {
-                    return self.fail("inv3", "a MASK names a stream that is not open in this boot", at);
+                    return self.fail("inv3", "a MASK of a stream not open", at);
                 };
                 let end = off + len;
                 if !st.stars.iter().any(|(a, b)| a <= off && end <= *b) {
                     self.fail("inv5", "a MASK covers bytes that are not written as *", at);
                 }
-                if usize::try_from(*rule).ok().and_then(|i| self.mask_rules.get(i)).is_some_and(|r| r == "fail_closed") {
+                if usize::try_from(*rule)
+                    .ok()
+                    .and_then(|i| self.mask_rules.get(i))
+                    .is_some_and(|r| r == "fail_closed")
+                {
                     self.cur.add("mask_failclosed_bytes", *len);
                 }
             }
             Record::Event { .. } => self.event(&ev_name, ev, at),
-            Record::Link { seq, wall_ns, mono_ns, hash } => {
+            Record::Link {
+                seq,
+                wall_ns,
+                mono_ns,
+                hash,
+            } => {
                 self.links += 1;
                 if it.link_ok == Some(false) {
                     self.fail("inv2", "a link hash does not recompute", at);
@@ -503,7 +633,7 @@ impl Pass {
                 }
             }
             Record::Unknown { .. } => {
-                self.set("record_kind_unknown", Res::Warn, "records of a kind this build does not know were skipped", Some(at));
+                self.set("record_kind_unknown", Res::Warn, "records of an unknown kind were skipped", Some(at));
                 self.bump("record_kind_unknown", "records", 1);
             }
         }
@@ -517,22 +647,7 @@ impl Pass {
         let s = |k: &str| meta.get(k).and_then(Value::as_str).map(String::from);
         let from = meta.get("from").and_then(Value::as_u64).unwrap_or(0);
         let parent = self.streams.get(&conn).and_then(|c| c.host.clone());
-        let mut st = St {
-            kind,
-            conn,
-            from,
-            next: from,
-            unknown: None,
-            hole: 0,
-            holed: false,
-            gapped: false,
-            msg_gap: false,
-            post: false,
-            host: None,
-            tunnel: None,
-            native: None,
-            stars: Vec::new(),
-        };
+        let mut st = St { kind: Some(kind), from, next: from, ..Default::default() };
         match kind {
             StreamKind::Conn => {
                 self.cur.add("conns", 1);
@@ -541,7 +656,9 @@ impl Pass {
                     self.cur.add("tunnels", 1);
                     let listed = match meta.get("listed") {
                         Some(Value::Null) | None => None,
-                        _ => s("reason").and_then(|r| tunnel_gap(&r)).map(GapReason::name),
+                        _ => s("reason")
+                            .and_then(|r| tunnel_gap(&r))
+                            .map(GapReason::name),
                     };
                     let t = self.cur.tunnel.entry(host.clone()).or_default();
                     (t.0, t.3) = (t.0 + 1, listed.clone());
@@ -558,21 +675,24 @@ impl Pass {
             }
             StreamKind::HttpResp => {
                 if req != 0 && self.reqs.get(&req) != Some(&conn) {
-                    self.fail("inv9", "an http_resp names a request that is not an http_req on its connection", at);
+                    self.fail("inv9", "a response names no request on its connection", at);
                 }
             }
             StreamKind::WsUp | StreamKind::WsDown => st.host = parent,
             StreamKind::Native => {
                 self.cur.add("native_files", 1);
-                let key = (s("path").unwrap_or_default(), meta.get("gen").and_then(Value::as_u64).unwrap_or(0));
+                let key = (
+                    s("path").unwrap_or_default(),
+                    meta.get("gen").and_then(Value::as_u64).unwrap_or(0),
+                );
                 if !self.natives_boot.insert(key.clone()) {
-                    self.fail("native_path_gen", "two native streams of one boot have the same path and gen", at);
+                    self.fail("native_path_gen", "two native streams of one boot share path and gen", at);
                 }
                 if let Some((end, unknown)) = self.natives.get(&key)
                     && from > *end
                     && !unknown
                 {
-                    self.fail("inv14", "a native stream resumes past the end of the earlier one: a hole", at);
+                    self.fail("inv14", "a native stream resumes past the earlier end", at);
                 }
                 st.native = Some(key);
             }
@@ -586,9 +706,9 @@ impl Pass {
         let len = bytes.len() as u64;
         self.data_bytes += len;
         let Some(st) = self.streams.get_mut(&sid) else {
-            return self.fail("inv3", "a DATA names a stream that is not open in this boot", at);
+            return self.fail("inv3", "a DATA of a stream not open", at);
         };
-        let mut bad = st.kind == StreamKind::Conn;
+        let mut bad = st.kind == Some(StreamKind::Conn);
         match st.unknown.take() {
             Some(u) if off >= u => st.hole += off - u,
             Some(_) => bad = true,
@@ -597,7 +717,10 @@ impl Pass {
         st.next = off + len;
         let mut i = 0;
         while let Some(a) = bytes[i..].iter().position(|&b| b == b'*').map(|a| a + i) {
-            let b = bytes[a..].iter().position(|&b| b != b'*').map_or(bytes.len(), |b| a + b);
+            let b = bytes[a..]
+                .iter()
+                .position(|&b| b != b'*')
+                .map_or(bytes.len(), |b| a + b);
             let (s, e) = (off + a as u64, off + b as u64);
             match st.stars.last_mut() {
                 Some(last) if last.1 == s => last.1 = e,
@@ -605,7 +728,7 @@ impl Pass {
             }
             i = b;
         }
-        let (kind, host, msg_gap) = (st.kind, st.host.clone(), st.msg_gap);
+        let (kind, host, msg_gap) = (st.kind.unwrap_or(StreamKind::Other(0)), st.host.clone(), st.msg_gap);
         let fin = flags & FLAG_FIN != 0;
         if fin {
             st.msg_gap = false;
@@ -613,7 +736,9 @@ impl Pass {
         let msg = fin && matches!(flags >> 4, 1 | 2);
         match kind {
             StreamKind::Native => self.cur.add("native_bytes", len),
-            StreamKind::HttpReq | StreamKind::HttpResp | StreamKind::WsUp | StreamKind::WsDown => self.cur.add("wire_bytes", len),
+            StreamKind::HttpReq | StreamKind::HttpResp | StreamKind::WsUp | StreamKind::WsDown => {
+                self.cur.add("wire_bytes", len)
+            }
             _ => {}
         }
         if msg && kind == StreamKind::WsDown {
@@ -624,7 +749,7 @@ impl Pass {
             self.request(host, !msg_gap);
         }
         if bad {
-            self.fail("inv4", "DATA offsets are not contiguous and no GAP fills the hole", at);
+            self.fail("inv4", "a DATA hole that no GAP fills", at);
         }
     }
 
@@ -633,25 +758,26 @@ impl Pass {
         if let Some(h) = host {
             *self.cur.hosts.entry(h).or_default() += 1;
         }
-        self.cur.add(if whole { "req_whole" } else { "req_holes" }, 1);
+        self.cur
+            .add(if whole { "req_whole" } else { "req_holes" }, 1);
     }
 
     fn end(&mut self, sid: u64, reason: EndReason, seen: u64, tail: &[u8], at: At) {
         let Some(mut st) = self.streams.remove(&sid) else {
-            return self.fail("inv3", "an END names a stream that is not open in this boot", at);
+            return self.fail("inv3", "an END of a stream not open", at);
         };
         let tail: Map<String, Value> = serde_json::from_slice(tail).unwrap_or_default();
         if let Some(u) = st.unknown.take() {
             st.hole += seen.saturating_sub(u);
             st.next = seen;
         }
-        if st.kind != StreamKind::Conn {
+        if st.kind != Some(StreamKind::Conn) {
             if st.holed {
-                self.set("seen_matches_written", Res::Named, "a stream with an unknown-loss GAP: its hole is reported, not checked", Some(at));
+                self.set("seen_matches_written", Res::Named, "unknown-loss holes are reported, not checked", Some(at));
                 self.bump("seen_matches_written", "holes", 1);
                 self.bump("seen_matches_written", "hole_bytes", st.hole);
             } else if seen != st.next || seen < st.from {
-                self.fail("seen_matches_written", "an END's seen does not equal the end of the written bytes and known gaps", at);
+                self.fail("seen_matches_written", "an END's seen differs from what was written", at);
             }
         }
         if let Some((host, _)) = &st.tunnel {
@@ -673,10 +799,10 @@ impl Pass {
 
     fn gap(&mut self, sid: u64, off: u64, lost: u64, at: At) {
         let Some(st) = self.streams.get_mut(&sid) else {
-            return self.fail("inv3", "a GAP names a stream that is not open in this boot", at);
+            return self.fail("inv3", "a GAP of a stream not open", at);
         };
         (st.gapped, st.msg_gap) = (true, true);
-        if st.kind == StreamKind::Conn {
+        if st.kind == Some(StreamKind::Conn) {
             return;
         }
         let bad = st.unknown.is_none() && off != st.next;
@@ -687,7 +813,7 @@ impl Pass {
             st.next = off + lost - 1;
         }
         if bad {
-            self.fail("inv4", "a GAP does not start at the end of its stream's written bytes", at);
+            self.fail("inv4", "a GAP not at the end of the written bytes", at);
         }
     }
 
@@ -695,7 +821,10 @@ impl Pass {
         match ev {
             "start" => {
                 if let Some(Value::Array(r)) = m.get("mask_rules") {
-                    self.mask_rules = r.iter().map(|v| v.as_str().unwrap_or_default().to_string()).collect();
+                    self.mask_rules = r
+                        .iter()
+                        .map(|v| v.as_str().unwrap_or_default().to_string())
+                        .collect();
                 }
                 self.start.get_or_insert(m);
             }
@@ -705,7 +834,10 @@ impl Pass {
                 if !d.is_empty() {
                     self.fail("inv7", &format!("a COUNT does not equal the recount: {}", d.join(", ")), at);
                 }
-                let gap = self.t.saturating_sub(self.cadence_t).saturating_sub(self.suspend);
+                let gap = self
+                    .t
+                    .saturating_sub(self.cadence_t)
+                    .saturating_sub(self.suspend);
                 if gap > CADENCE_NS {
                     self.tentative = Some((at, gap));
                 }
@@ -718,11 +850,13 @@ impl Pass {
                 total.merge(&self.boot_total());
                 let d = differ(m.get("totals").unwrap_or(&Value::Null), &total);
                 if !d.is_empty() {
-                    self.fail("counts_match_seal", &format!("the seal's totals differ from the recount: {}", d.join(", ")), at);
+                    self.fail("counts_match_seal", &format!(
+                            "the seal's totals differ from the recount: {}", d.join(", ")
+                        ), at);
                 }
                 let recovered = m.get("reason").and_then(Value::as_str) == Some("recovered");
                 if recovered && self.pending_down != 1 {
-                    self.fail("inv6", "a recovered seal is not preceded by exactly one recorder_down gap", at);
+                    self.fail("inv6", "a recovered seal without exactly one recorder_down gap", at);
                 }
                 if self.pending_down == 0 && !self.streams.is_empty() {
                     self.fail("streams_closed", &format!("{} streams have no END at the seal", self.streams.len()), at);
@@ -753,15 +887,20 @@ impl Pass {
             self.fail("recorder_alive", &format!("no COUNT for {} s within a boot", gap / 1_000_000_000), a);
         }
         if let Some(t) = self.regular_link_t.take() {
-            let gap = t.saturating_sub(self.cadence_t).saturating_sub(self.suspend);
+            let gap = t
+                .saturating_sub(self.cadence_t)
+                .saturating_sub(self.suspend);
             if gap > CADENCE_NS {
                 let at = At(self.end_off, 0, self.wall_of(t));
-                self.fail("recorder_alive", &format!("no COUNT for {} s before the boot's last link", gap / 1_000_000_000), at);
+                self.fail("recorder_alive", &format!(
+                        "no COUNT for {} s before the boot's last link", gap / 1_000_000_000
+                    ), at);
             }
         }
         for st in self.streams.values() {
             if let Some(k) = &st.native {
-                self.natives.insert(k.clone(), (st.next, st.holed || st.unknown.is_some()));
+                self.natives
+                    .insert(k.clone(), (st.next, st.holed || st.unknown.is_some()));
             }
         }
         let bt = self.boot_total();
@@ -771,7 +910,8 @@ impl Pass {
         self.used.clear();
         self.reqs.clear();
         self.natives_boot.clear();
-        (self.cur, self.at_count, self.down_after, self.suspend) = (Recount::default(), None, (0, 0), 0);
+        (self.cur, self.at_count, self.down_after, self.suspend) =
+            (Recount::default(), None, (0, 0), 0);
     }
 
     fn finish(&mut self, open_frame: bool, now_ns: Option<u64>, e: &Entry) {
@@ -788,10 +928,18 @@ impl Pass {
         self.end_boot();
         if sealed && (!self.seal_link || open_frame) {
             let at = At(self.end_off, 0, self.wall_of(self.t));
-            self.fail("inv8", "the seal is not followed by its link and a frame end", at);
+            self.fail("inv8", "the seal lacks its link or frame end", at);
+        }
+        if !sealed {
+            self.set("counts_match_seal", Res::Skip, "not sealed", None);
+        } else if self.pruned {
+            self.set("counts_match_seal", Res::Skip, "local part files were pruned", None);
         }
         if !sealed && !open.is_empty() {
-            let why = format!("the entry is not sealed: {} streams are still open", open.len());
+            let why = format!(
+                "the entry is not sealed: {} streams are still open",
+                open.len()
+            );
             self.set("streams_closed", Res::Named, &why, None);
             self.fact("streams_closed", "open", open.into());
         }
@@ -803,12 +951,18 @@ impl Pass {
                 .ok()
                 .and_then(|b| serde_json::from_slice(&b).ok())
                 .unwrap_or_default();
-            let since = status.get("off").and_then(|o| o.get("since")).or_else(|| status.get("null_since"));
+            let since = status
+                .get("off")
+                .and_then(|o| o.get("since"))
+                .or_else(|| status.get("null_since"));
             if status.get("mode").and_then(Value::as_str) == Some("null") {
                 let since = since.and_then(Value::as_str).unwrap_or("an unknown time");
                 self.set("recorder_alive", Res::Named, &format!("null mode since {since}"), None);
             } else {
-                let why = format!("no COUNT for {} s: the recorder and its watchdog may both be gone", (now - last_count) / 1_000_000_000);
+                let why = format!(
+                    "no COUNT for {} s: the recorder and its watchdog may both be gone",
+                    (now - last_count) / 1_000_000_000
+                );
                 self.set("recorder_alive", Res::Fail, &why, None);
             }
         }
@@ -817,7 +971,13 @@ impl Pass {
             let causes: Vec<String> = self
                 .down_gaps
                 .iter()
-                .map(|g| format!("{} {} s", g["cause"].as_str().unwrap_or("unknown"), g["ms"].as_u64().unwrap_or(0) / 1000))
+                .map(|g| {
+                    format!(
+                        "{} {} s",
+                        g["cause"].as_str().unwrap_or("unknown"),
+                        g["ms"].as_u64().unwrap_or(0) / 1000
+                    )
+                })
                 .collect();
             self.set("inv6", Res::Named, &format!("recording was off {n} times: {}", causes.join(", ")), None);
         }
@@ -827,7 +987,12 @@ impl Pass {
             .all
             .by_reason
             .iter()
-            .map(|(r, (n, b, u))| (r.clone(), json!({"count": n, "lost_bytes": b, "lost_unknown": u})))
+            .map(|(r, (n, b, u))| {
+                (
+                    r.clone(),
+                    json!({"count": n, "lost_bytes": b, "lost_unknown": u}),
+                )
+            })
             .collect();
         let total = self.all.get("gaps");
         if total > 0 {

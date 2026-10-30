@@ -16,7 +16,11 @@ const LATER: &[&str] = &[
     "threads_match",
     "subagents_present",
 ];
-const LATER_SERVER: &[&str] = &["server_chunks_whole", "server_equals_local", "server_counts_match"];
+const LATER_SERVER: &[&str] = &[
+    "server_chunks_whole",
+    "server_equals_local",
+    "server_counts_match",
+];
 const NOT_BUILT: &str = "not built in this slice";
 
 /// The report as JSON, the exit code, and the text for stderr.
@@ -34,7 +38,7 @@ pub fn build(input: &Input, server: bool, now_ns: Option<u64>) -> Report {
         let o = integrity::check(e, now_ns);
         let mut checks = o.checks.clone();
         let later = LATER.iter().chain(if server { LATER_SERVER } else { &[] });
-        checks.extend(later.map(|id| Check::new(*id, None, Res::Skip, NOT_BUILT)));
+        checks.extend(later.map(|id| Check::new(id, None, Res::Skip, NOT_BUILT)));
         let worst = checks.iter().map(|c| c.result).max().unwrap_or(Res::Pass);
         let partial = !o.sealed || input.kind == Kind::Live || o.pruned;
         exit = exit.max(match worst {
@@ -56,7 +60,9 @@ pub fn build(input: &Input, server: bool, now_ns: Option<u64>) -> Report {
 }
 
 fn folder(p: &Path) -> String {
-    p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()
+    p.file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default()
 }
 
 /// One S6 entry.
@@ -69,7 +75,11 @@ fn entry(name: String, o: &Outcome, checks: &[Check]) -> Value {
         (false, true) => "native_only",
         (false, false) => "none",
     };
-    let gaps: Map<String, Value> = c.by_reason.iter().map(|(r, (n, _, _))| (r.clone(), (*n).into())).collect();
+    let gaps: Map<String, Value> = c
+        .by_reason
+        .iter()
+        .map(|(r, (n, _, _))| (r.clone(), (*n).into()))
+        .collect();
     let counts = json!({"model_requests": requests, "req_whole": c.get("req_whole"),
         "req_holes": c.get("req_holes"), "gaps": gaps, "lost_bytes": c.get("lost_bytes"),
         "lost_unknown": c.get("lost_unknown"), "after_stop_bytes": c.after_stop,
@@ -77,8 +87,10 @@ fn entry(name: String, o: &Outcome, checks: &[Check]) -> Value {
         "tunnels": c.get("tunnels"), "native_files": c.get("native_files"), "threads": null});
     let checks: Vec<Value> = checks
         .iter()
-        .map(|k| json!({"id": k.id, "inv": k.inv, "result": k.result.name(), "why": k.why,
-            "first": k.first, "facts": k.facts}))
+        .map(|k| {
+            json!({"id": k.id, "inv": k.inv, "result": k.result.name(), "why": k.why,
+            "first": k.first, "facts": k.facts})
+        })
         .collect();
     let s = |k: &str| o.start.get(k).cloned().unwrap_or(Value::Null);
     json!({"entry": name, "sealed": o.sealed, "seal_reason": o.seal_reason, "boots": o.boots,
