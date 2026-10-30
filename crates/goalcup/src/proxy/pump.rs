@@ -5,7 +5,7 @@
 use crate::pipeline::{EndReason, GapReason, Mono, Recorder, Sid, StreamHandle};
 use crate::proxy::ws::Dir;
 use bytes::Bytes;
-use serde_json::json;
+use serde_json::{Value, json};
 use std::io;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::pin::Pin;
@@ -14,30 +14,61 @@ use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
 use tokio::io::{AsyncRead, AsyncReadExt as _, AsyncWrite, AsyncWriteExt as _, ReadBuf};
 
+/// Parsing stopped for the connection (5a): the `conn` GAP's reason and tail, and the relayed
+/// plaintext bytes the parser took but recorded in no stream (the rest of the faulting chunk, an
+/// upgrade copy, server bytes waiting for their request, a head cut short), the first of them no
+/// earlier than `since`. The pump adds every byte relayed after it.
+#[derive(Debug, PartialEq)]
+pub struct Stop {
+    pub reason: GapReason,
+    pub tail: Option<Value>,
+    pub held: u64,
+    pub since: Mono,
+}
+
+impl Stop {
+    /// A parser panic (rule 4).
+    pub fn panic(held: u64, since: Mono) -> Stop {
+        let tail = Some(json!({"panic": true}));
+        let reason = GapReason::DecodeFailed;
+        Stop {
+            reason,
+            tail,
+            held,
+            since,
+        }
+    }
+}
+
 /// A passive parser of one connection's plaintext (HTTP/1.1, HTTP/2).
 pub trait Parser: Send {
     /// Relayed bytes of one direction, called only after they were written to the other side.
-    /// Err(reason): parsing stopped for the connection (5a); the parser already gave its open
-    /// stream its own GAP and ended it; later feeds are not made.
-    fn feed(&mut self, dir: Dir, t: Mono, bytes: &[u8]) -> Result<(), GapReason>;
+    /// Err: parsing stopped for the connection (5a); every open stream already has its own GAP
+    /// and ended `decode_error`. Later feeds are not made; `end` still is.
+    fn feed(&mut self, dir: Dir, t: Mono, bytes: &[u8]) -> Result<(), Stop>;
     /// The connection closed. unsent_up: client bytes read but never forwarded (upstream had
-    /// closed).
-    fn end(self: Box<Self>, t: Mono, reason: EndReason, unsent_up: u64);
+    /// closed). A `Stop` names bytes still held unrecorded at the close.
+    fn end(self: Box<Self>, t: Mono, reason: EndReason, unsent_up: u64) -> Option<Stop>;
+    /// `feed` panicked: every open stream gets its GAP and ends `decode_error`; the `Stop` counts
+    /// the bytes not recorded, the panicking chunk included.
+    fn panicked(self: Box<Self>, t: Mono) -> Stop;
 }
 
-/// What [`run`] hands back: both streams, so the caller can reset the harness leg (rule 8).
+/// What [`relay`] hands back: both streams, so the caller can reset the harness leg (rule 8).
 pub struct Pumped<C, U> {
     pub client: C,
     pub upstream: U,
     pub plain_up: u64,
     pub plain_down: u64,
     pub unsent_up: u64,
-    /// The upstream leg errored (reset, TLS error, read or write error), not a clean EOF.
+    /// `complete` when both sides closed cleanly, else `interrupted`.
+    pub reason: EndReason,
+    /// The upstream leg errored (reset, TLS error, read or write error), not a clean close.
     pub upstream_failed: bool,
 }
 
 /// Called after each chunk moved: its direction, time and length.
-pub(crate) type Tap<'a> = &'a (dyn Fn(Dir, Mono, u64) + Sync);
+pub type Tap<'a> = &'a (dyn Fn(Dir, Mono, u64) + Sync);
 
 /// How one direction ended. `WriteErr` carries the chunk read and not forwarded.
 #[derive(Clone, Copy)]
@@ -57,37 +88,44 @@ struct Pump<'a> {
     shared: Mutex<Shared>,
 }
 
-/// The parser; the 5a fault (reason, time, panic); plaintext bytes relayed after it.
-type Shared = (
-    Option<Box<dyn Parser>>,
-    Option<(GapReason, Mono, bool)>,
-    u64,
-);
+/// The parser and, once parsing stopped, its [`Stop`] with every byte relayed since added.
+struct Shared {
+    parser: Option<Box<dyn Parser>>,
+    stop: Option<Stop>,
+}
+
+fn parse_stopped(rec: &Recorder, conn: Sid, reason: GapReason) {
+    rec.event(
+        json!({"ev": "note", "what": "parse_stopped", "conn": conn, "reason": reason.name()}),
+    );
+}
 
 impl Pump<'_> {
     /// The parser sees the chunk under a lock that is never held across an await.
     fn feed(&self, dir: Dir, t: Mono, bytes: &[u8]) {
         let mut s = self.shared.lock().unwrap_or_else(|e| e.into_inner());
-        let (parser, fault, after) = &mut *s;
-        if fault.is_some() {
-            *after += bytes.len() as u64;
+        if let Some(stop) = &mut s.stop {
+            stop.held += bytes.len() as u64;
             return;
         }
-        let Some(p) = parser.as_mut() else { return };
-        let (reason, panic) = match catch_unwind(AssertUnwindSafe(|| p.feed(dir, t, bytes))) {
+        let Some(p) = s.parser.as_mut() else { return };
+        let stop = match catch_unwind(AssertUnwindSafe(|| p.feed(dir, t, bytes))) {
             Ok(Ok(())) => return,
-            Ok(Err(reason)) => (reason, false),
+            Ok(Err(stop)) => stop,
             Err(_) => {
-                // Dropped: its open streams end interrupted.
-                *parser = None;
-                (GapReason::DecodeFailed, true)
+                let p = s.parser.take();
+                let ended = p.map(|p| catch_unwind(AssertUnwindSafe(move || p.panicked(t))));
+                // A second panic drops the parser: its open streams end interrupted.
+                match ended {
+                    Some(Ok(stop)) => stop,
+                    _ => Stop::panic(bytes.len() as u64, t),
+                }
             }
         };
-        *fault = Some((reason, t, panic));
+        let reason = stop.reason;
+        s.stop = Some(stop);
         drop(s);
-        let what = "parse_stopped";
-        let ev = json!({"ev": "note", "what": what, "conn": self.conn, "reason": reason.name()});
-        self.rec.event(ev);
+        parse_stopped(self.rec, self.conn, reason);
     }
 
     async fn leg<R, W>(&self, dir: Dir, prefix: Bytes, from: &mut R, to: &mut W) -> Leg
@@ -100,10 +138,9 @@ impl Pump<'_> {
             let chunk = match prefix.take().filter(|p| !p.is_empty()) {
                 Some(p) => p,
                 None => match from.read(&mut buf).await {
-                    Ok(0) => {
-                        let _ = to.shutdown().await;
-                        return Leg::Eof;
-                    }
+                    Ok(0) => break,
+                    // A TLS peer that closes without close_notify closed all the same (rule 8).
+                    Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => break,
                     Ok(n) => Bytes::copy_from_slice(&buf[..n]),
                     Err(_) => return Leg::ReadErr,
                 },
@@ -120,30 +157,16 @@ impl Pump<'_> {
             }
             self.feed(dir, t, &chunk);
         }
+        let _ = to.shutdown().await;
+        Leg::Eof
     }
 }
 
-/// Relays both ways until both sides closed or one leg errored. A clean EOF is passed on as a
-/// shutdown of the other side's write half. `quiet` takes `rec.now()` of every chunk moved.
-pub async fn run<C, U>(
-    rec: &Recorder,
-    conn: &mut StreamHandle,
-    client: C,
-    upstream: U,
-    parser: Option<Box<dyn Parser>>,
-    quiet: &AtomicU64,
-) -> Pumped<C, U>
-where
-    C: AsyncRead + AsyncWrite + Unpin + Send,
-    U: AsyncRead + AsyncWrite + Unpin + Send,
-{
-    let none = (Bytes::new(), Bytes::new());
-    relay(rec, conn, (client, upstream), none, parser, quiet, None).await
-}
-
-/// [`run`], first replaying the prefixes (to upstream, to the client) as relayed chunks, and
-/// showing every chunk moved to `tap`.
-pub(crate) async fn relay<C, U>(
+/// Relays both ways until both sides closed or one leg errored, first replaying the prefixes (to
+/// upstream, to the client) as relayed chunks; every chunk moved is shown to `tap`. A clean EOF is
+/// passed on as a shutdown of the other side's write half. `quiet` takes `rec.now()` of every
+/// chunk moved. When parsing stopped, `conn` gets the 5a GAP after the parser ended.
+pub async fn relay<C, U>(
     rec: &Recorder,
     conn: &mut StreamHandle,
     (client, upstream): (C, U),
@@ -156,7 +179,7 @@ where
     C: AsyncRead + AsyncWrite + Unpin + Send,
     U: AsyncRead + AsyncWrite + Unpin + Send,
 {
-    let shared = Mutex::new((parser, None, 0));
+    let shared = Mutex::new(Shared { parser, stop: None });
     let moved = Default::default();
     let pump = Pump {
         rec,
@@ -184,19 +207,26 @@ where
         _ => EndReason::Interrupted,
     };
     let [up, down] = pump.moved.map(AtomicU64::into_inner);
-    let (parser, fault, after) = pump.shared.into_inner().unwrap_or_else(|e| e.into_inner());
+    let Shared { parser, mut stop } = pump.shared.into_inner().unwrap_or_else(|e| e.into_inner());
     if let Some(p) = parser {
         let t = rec.now();
-        // A panic here drops the parser: its open streams end interrupted, nothing more relays.
-        let _ = catch_unwind(AssertUnwindSafe(|| p.end(t, reason, unsent_up)));
+        let ended = catch_unwind(AssertUnwindSafe(move || p.end(t, reason, unsent_up)));
+        match ended {
+            Ok(Some(late)) if stop.is_none() => {
+                parse_stopped(rec, conn.sid(), late.reason);
+                stop = Some(late);
+            }
+            // The parser is dropped: its open streams end interrupted, and what it held is unknown.
+            Err(_) if stop.is_none() => {
+                parse_stopped(rec, conn.sid(), GapReason::DecodeFailed);
+                let tail = Some(json!({"panic": true}));
+                conn.gap(GapReason::DecodeFailed, t, None, tail);
+            }
+            _ => {}
+        }
     }
-    if let Some((reason, at, panic)) = fault {
-        conn.gap(
-            reason,
-            at,
-            Some(after),
-            panic.then(|| json!({"panic": true})),
-        );
+    if let Some(s) = stop {
+        conn.gap(s.reason, s.since, Some(s.held), s.tail);
     }
     Pumped {
         client: cr.unsplit(cw),
@@ -204,12 +234,13 @@ where
         plain_up: up,
         plain_down: down,
         unsent_up,
+        reason,
         upstream_failed: matches!(lu, Leg::WriteErr(_)) || matches!(ld, Leg::ReadErr),
     }
 }
 
 /// Counts the bytes read from and written to `T`: the TCP wire under TLS, for the `conn` END
-/// tail `up` and `down` of a decrypted connection.
+/// tail `up` and `down` of a decrypted connection. Wired by `serve` (the next slice).
 pub struct Counted<T> {
     pub inner: T,
     /// Bytes read, bytes written.

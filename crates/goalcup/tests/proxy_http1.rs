@@ -4,7 +4,8 @@
 //! and `304` have no body, a request target's query and fragment never reach the meta, a body
 //! whose window does not fit `room()` is not decoded, a head past 64 KiB is named and parsing goes
 //! on, a `101` hands the connection to the WebSocket parser, and a framing fault stops parsing
-//! (5a). The relay side of 5a (the `conn` GAP, the `parse_stopped` note) is tested through serve.
+//! (5a) and counts what it could not record, at a fault and at the close. The relay side of 5a
+//! (the `conn` GAP, the `parse_stopped` note) is in `proxy_tunnel.rs`.
 
 mod common;
 
@@ -13,6 +14,7 @@ use flate2::write::{GzEncoder, ZlibEncoder};
 use flate2::{Compress, Compression, FlushCompress};
 use goalcup::pipeline::{Call, Calls, EndReason, GapReason, Mono, Recorder, Sid, StreamKind};
 use goalcup::proxy::http1::Http1;
+use goalcup::proxy::pump::{Parser, Stop};
 use goalcup::proxy::ws::Dir;
 use serde_json::{Value, json};
 use std::io::Write;
@@ -55,7 +57,8 @@ fn exchange(room: u64, up: &[u8], down: &[u8], step: usize) -> Calls {
     let mut p = Http1::new(&rec, CONN);
     feed(&mut p, Dir::Up, up, step);
     feed(&mut p, Dir::Down, down, step);
-    p.end(Mono::now(), EndReason::Complete, 0);
+    let late = Box::new(p).end(Mono::now(), EndReason::Complete, 0);
+    assert_eq!(late, None, "nothing held at the close");
     calls
 }
 
@@ -368,7 +371,7 @@ fn a_101_hands_the_copied_frames_to_the_websocket_parser() {
         &frame(true, &deflate(&mut cup, b"second up"), key),
         1,
     );
-    p.end(Mono::now(), EndReason::Complete, 0);
+    assert_eq!(Box::new(p).end(Mono::now(), EndReason::Complete, 0), None);
 
     assert!(gaps(&calls).is_empty());
     let [(req, _, _)] = opens(&calls, StreamKind::HttpReq).try_into().unwrap();
@@ -404,7 +407,8 @@ fn a_framing_fault_stops_parsing_for_the_connection() {
     let t = Mono::now();
     let head = b"POST /x HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n3\r\nabc\r\n";
     p.feed(Dir::Up, t, head).expect("a valid prefix parses");
-    assert_eq!(p.feed(Dir::Up, t, b"zz\r\n"), Err(GapReason::DecodeFailed));
+    let stop = p.feed(Dir::Up, t, b"zz\r\n").unwrap_err();
+    assert_eq!((stop.reason, stop.held), (GapReason::DecodeFailed, 4));
     let [(req, _, _)] = opens(&calls, StreamKind::HttpReq).try_into().unwrap();
     assert_eq!(data_of(&calls, req), b"abc");
     let [Call::Gap(sid, reason, ..)] = one_gap(&calls) else {
@@ -413,12 +417,154 @@ fn a_framing_fault_stops_parsing_for_the_connection() {
     assert_eq!((sid, reason), (req, GapReason::DecodeFailed));
     assert_eq!(end_of(&calls, req).0, EndReason::DecodeError);
     let later = b"GET /later HTTP/1.1\r\n\r\n";
-    assert_eq!(p.feed(Dir::Up, t, later), Err(GapReason::DecodeFailed));
     assert_eq!(
-        p.feed(Dir::Down, t, b"HTTP/1.1 200 OK\r\n\r\n"),
-        Err(GapReason::DecodeFailed)
+        p.feed(Dir::Up, t, later).unwrap_err().held,
+        later.len() as u64
     );
-    p.end(t, EndReason::Complete, 0);
+    assert_eq!(Box::new(p).end(t, EndReason::Complete, 0), None);
     assert_eq!(opens(&calls, StreamKind::HttpReq).len(), 1);
     assert_eq!(gaps(&calls).len(), 1);
+}
+
+/// 5a counts the rest of the faulting chunk: a bad head followed, in the same chunk, by a whole
+/// request is held whole.
+#[test]
+fn a_fault_counts_the_rest_of_its_chunk() {
+    let (rec, calls) = Recorder::for_tests(ROOM);
+    let mut p = Http1::new(&rec, CONN);
+    let t = Mono::now();
+    p.feed(Dir::Up, t, b"GET /a HTTP/1.1\r\n\r\n").unwrap();
+    let mut chunk = b"BAD\r\n\r\nPOST /c HTTP/1.1\r\nContent-Length: 8000\r\n\r\n".to_vec();
+    chunk.extend_from_slice(&[b'x'; 8000]);
+    let stop = p.feed(Dir::Up, t, &chunk).unwrap_err();
+    assert_eq!(
+        (stop.reason, stop.held),
+        (GapReason::DecodeFailed, chunk.len() as u64)
+    );
+    assert_eq!(opens(&calls, StreamKind::HttpReq).len(), 1);
+}
+
+/// 5a under the `upgrade_copy` guard: the GAP names the guard, and the copy, relayed but never
+/// recorded, counts as held from the upgrade request on.
+#[test]
+fn the_upgrade_copy_guard_counts_the_copy() {
+    let (rec, calls) = Recorder::for_tests(ROOM);
+    let mut p = Http1::new(&rec, CONN);
+    let t0 = Mono::now();
+    let up = b"GET /ws HTTP/1.1\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\
+        Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n";
+    p.feed(Dir::Up, t0, up).unwrap();
+    let piece = [7u8; 16 * 1024];
+    let stop = (0..65)
+        .find_map(|_| p.feed(Dir::Up, Mono::now(), &piece).err())
+        .expect("the guard stops parsing");
+    let tail = json!({"guard": "upgrade_copy", "limit": 1 << 20});
+    assert_eq!(
+        stop,
+        Stop {
+            reason: GapReason::MemoryGuard,
+            tail: Some(tail),
+            held: 65 * 16 * 1024,
+            since: t0
+        }
+    );
+    let [(req, _, _)] = opens(&calls, StreamKind::HttpReq).try_into().unwrap();
+    assert_eq!(end_of(&calls, req).0, EndReason::Complete);
+}
+
+/// Bytes the close leaves unrecorded are a stop at the close: heads cut short on both sides, and
+/// the copy of an upgrade that was never answered.
+#[test]
+fn bytes_held_at_the_close_are_named() {
+    let (rec, calls) = Recorder::for_tests(ROOM);
+    let mut p = Http1::new(&rec, CONN);
+    let t = Mono::now();
+    p.feed(Dir::Up, t, b"GET /a HTTP/1.1\r\n\r\n").unwrap();
+    p.feed(
+        Dir::Down,
+        t,
+        b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n",
+    )
+    .unwrap();
+    let (resp, req) = (
+        &b"HTTP/1.1 200 OK\r\nContent-Type: te"[..],
+        &b"POST /v1/m HTTP/1.1\r\nCont"[..],
+    );
+    p.feed(Dir::Down, t, resp).unwrap();
+    p.feed(Dir::Up, t, req).unwrap();
+    let late = Box::new(p)
+        .end(Mono::now(), EndReason::Complete, 0)
+        .expect("a stop");
+    let held = (resp.len() + req.len()) as u64;
+    assert_eq!(
+        (late.reason, late.held, late.since),
+        (GapReason::DecodeFailed, held, t)
+    );
+    assert_eq!(opens(&calls, StreamKind::HttpReq).len(), 1);
+
+    let (rec, _calls) = Recorder::for_tests(ROOM);
+    let mut p = Http1::new(&rec, CONN);
+    let up = b"GET /ws HTTP/1.1\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\
+        Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n";
+    p.feed(Dir::Up, t, up).unwrap();
+    p.feed(Dir::Up, Mono::now(), &[0x81; 790]).unwrap();
+    let late = Box::new(p)
+        .end(Mono::now(), EndReason::Complete, 0)
+        .expect("a stop");
+    assert_eq!((late.held, late.since), (790, t));
+}
+
+/// A panic (rule 4): the open stream gets its own GAP with the panic tail and ends decode_error.
+#[test]
+fn a_panic_gives_the_open_stream_its_gap() {
+    let (rec, calls) = Recorder::for_tests(ROOM);
+    let mut p = Http1::new(&rec, CONN);
+    let t = Mono::now();
+    p.feed(
+        Dir::Up,
+        t,
+        b"POST /x HTTP/1.1\r\nContent-Length: 10\r\n\r\nabc",
+    )
+    .unwrap();
+    let stop = Box::new(p).panicked(t);
+    assert_eq!((stop.reason, stop.held), (GapReason::DecodeFailed, 0));
+    let [(req, _, _)] = opens(&calls, StreamKind::HttpReq).try_into().unwrap();
+    let [Call::Gap(sid, GapReason::DecodeFailed, _, _, _, _, tail)] = one_gap(&calls) else {
+        panic!("one GAP decode_failed");
+    };
+    assert_eq!((sid, tail), (req, Some(json!({"panic": true}))));
+    assert_eq!(end_of(&calls, req).0, EndReason::DecodeError);
+}
+
+/// Past the head guard, a long start line keeps its method and path (GAP `http_head`), a chunk
+/// extension of any length is skipped, and a framing field that keeps growing stops parsing.
+#[test]
+fn long_lines_past_the_guard() {
+    let mut up = format!("GET /long?q={} HTTP/1.1\r\n\r\n", "a".repeat(100_000)).into_bytes();
+    up.extend_from_slice(b"POST /next HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n");
+    up.extend_from_slice(format!("2;ext={}\r\nok\r\n0\r\n\r\n", "e".repeat(10_000)).as_bytes());
+    let calls = exchange(ROOM, &up, b"", 0);
+    let reqs = opens(&calls, StreamKind::HttpReq);
+    let meta = |i: usize| (reqs[i].2["path"].clone(), reqs[i].2["ver"].clone());
+    assert_eq!(meta(0), (json!("/long"), Value::Null));
+    assert_eq!(meta(1), (json!("/next"), json!("1.1")));
+    assert_eq!(data_of(&calls, reqs[1].0), b"ok");
+    let [Call::Gap(sid, GapReason::MemoryGuard, _, _, _, _, Some(tail))] = one_gap(&calls) else {
+        panic!("one GAP memory_guard");
+    };
+    assert_eq!((sid, &tail["guard"]), (reqs[0].0, &json!("http_head")));
+
+    let (rec, _calls) = Recorder::for_tests(ROOM);
+    let mut p = Http1::new(&rec, CONN);
+    let mut head = b"GET / HTTP/1.1\r\n".to_vec();
+    for i in 0..80 {
+        head.extend(format!("x-pad-{i:02}: {}\r\n", "p".repeat(900)).bytes());
+    }
+    head.extend_from_slice(b"Upgrade: ");
+    p.feed(Dir::Up, Mono::now(), &head).unwrap();
+    let grow = |p: &mut Http1| p.feed(Dir::Up, Mono::now(), &[b'w'; 1024]);
+    let stop = (0..8)
+        .find_map(|_| grow(&mut p).err())
+        .expect("parsing stops");
+    assert_eq!(stop.reason, GapReason::DecodeFailed);
 }

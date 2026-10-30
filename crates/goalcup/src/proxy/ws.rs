@@ -201,6 +201,15 @@ impl WsConn {
         Ok(())
     }
 
+    /// Parsing stopped for the connection elsewhere (a parser panic): both streams get GAP
+    /// `decode_failed` and end `decode_error` at `end`.
+    pub fn stop(&mut self, t: Mono) {
+        if !std::mem::replace(&mut self.stopped, true) {
+            self.up.stop(t, true);
+            self.down.stop(t, true);
+        }
+    }
+
     /// Ends both streams. `reason` is the connection's; a direction that ends inside a frame or a
     /// message ends `interrupted` instead of `complete`, and after a stop both end `decode_error`.
     /// `unsent_up`: client bytes never forwarded because the upstream had closed.

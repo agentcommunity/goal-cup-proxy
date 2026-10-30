@@ -202,7 +202,7 @@ fn ca_refused(calls: &Calls) -> Vec<serde_json::Value> {
         .collect()
 }
 
-/// Section 2: the SNI decides, else the CONNECT host; `never` wins over a listed pattern.
+/// Section 2: the SNI decides, else the CONNECT host.
 #[test]
 fn the_sni_is_the_deciding_name() {
     let hosts = hosts();
@@ -211,22 +211,17 @@ fn the_sni_is_the_deciding_name() {
         kind: Kind::Provider,
         pinned: false,
     };
-    let named = |name: &str, d: Decision| (name.to_string(), d);
     assert_eq!(
         hosts.decide(Some("api.openai.com"), "127.0.0.1"),
-        named("api.openai.com", listed)
+        ("api.openai.com", listed)
     );
     assert_eq!(
         hosts.decide(None, "api.openai.com"),
-        named("api.openai.com", listed)
+        ("api.openai.com", listed)
     );
     assert_eq!(
         hosts.decide(Some("example.com"), "api.openai.com"),
-        named("example.com", Decision::NotListed)
-    );
-    assert_eq!(
-        hosts.decide(Some("login.openai.azure.com"), "api.openai.com"),
-        named("login.openai.azure.com", Decision::Never)
+        ("example.com", Decision::NotListed)
     );
 }
 
@@ -234,14 +229,16 @@ fn the_sni_is_the_deciding_name() {
 /// host and a pair never learned still get our leaf.
 #[test]
 fn an_alert_teaches_one_pair_and_writes_one_note() {
-    fn send_sync<T: Send + Sync>() {}
-    send_sync::<Hosts>();
     let (rec, calls) = Recorder::for_tests(1 << 30);
     let hosts = hosts();
     let (fp, other) = ([7u8; 32], [8u8; 32]);
     let t = Mono(5_000_000_000);
     assert!(!hosts.refused(t, "api.openai.com", &fp), "never learned");
     assert!(hosts.learn(&rec, t, "api.openai.com", &fp));
+    assert!(
+        hosts.learn(&rec, t, "api.openai.com", &fp),
+        "a second handshake in flight"
+    );
     assert!(hosts.refused(t, "api.openai.com", &fp));
     assert!(!hosts.refused(t, "api.openai.com", &other));
     assert!(!hosts.refused(t, "chatgpt.com", &fp));

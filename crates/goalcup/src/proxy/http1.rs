@@ -5,11 +5,15 @@
 //! A `1xx` head is a note. Headers go raw into the meta; PRD-02 masks them.
 //!
 //! Bodies are de-chunked and decoded through [`BodyDecoder`], each decoded piece written as it is
-//! made; [`Step`] says which GAP a body gets. Framing that cannot be followed (a bad start line or
-//! field, a bad chunk size, a conflicting `Content-Length`, a `101` that is not a WebSocket this
-//! parser can follow, a 2xx to an inner `CONNECT`) stops parsing for the connection (5a): every
-//! open stream gets GAP `decode_failed` and ends `decode_error`, and every later call answers the
-//! same `Err`; the relay writes the `parse_stopped` note and the `conn` GAP.
+//! made; [`Step`] says which GAP a body gets. Framing that cannot be followed stops parsing for
+//! the connection (5a): a bad start line or field, a bad chunk size (more than 16 significant
+//! digits included), a conflicting `Content-Length`, a framing field line kept past the head guard
+//! that grows past [`FIELD_MAX`] (no valid value is that long), a `101` that is not a WebSocket
+//! this parser can follow, a 2xx to an inner `CONNECT`. Every open stream then gets its GAP and
+//! ends `decode_error`, and the [`Stop`] counts the relayed bytes recorded in no stream; the relay
+//! writes the `parse_stopped` note and the `conn` GAP. Bytes held unrecorded at the close (a head
+//! cut short) are a [`Stop`] too. A start line past the head guard keeps its first 64 KiB (method
+//! and path, or version and status) under GAP `http_head`; a request then has no `ver`.
 //!
 //! After a WebSocket upgrade request, client bytes are only copied (the `upgrade_copy` guard, then
 //! 5a) until the answer: a `101` with the right `Sec-WebSocket-Accept` hands both directions to
@@ -21,6 +25,7 @@ use crate::pipeline::{
     EndReason, GapReason, Mono, OpenFlags, Recorder, Sid, StreamHandle, StreamKind,
 };
 use crate::proxy::decode::{BodyDecoder, Coding, Step, Unsupported, parse_codings};
+use crate::proxy::pump::{Parser, Stop};
 use crate::proxy::ws::{self, Dir, WsConn};
 use serde_json::{Value, json};
 use std::collections::VecDeque;
@@ -29,8 +34,8 @@ use std::collections::VecDeque;
 const HEAD_LIMIT: usize = 64 * 1024;
 /// The `upgrade_copy` guard: client bytes copied while an upgrade waits for its answer.
 const COPY_LIMIT: usize = 1 << 20;
-/// The longest chunk-size line, extensions included (RFC 9112 section 7.1).
-const CHUNK_LINE_MAX: usize = 4 * 1024;
+/// Past the head guard, a framing field line longer than this cannot be followed (5a).
+const FIELD_MAX: usize = 4 * 1024;
 /// Past the head guard, a field line whose name has not ended within this many bytes is not a
 /// field framing needs, so the rest of it is skipped unread.
 const NAME_MAX: usize = 64;
@@ -54,6 +59,21 @@ enum Fault {
     Framing,
     /// The `upgrade_copy` guard.
     Copy,
+    /// A parser panic (rule 4).
+    Panic,
+}
+
+impl Fault {
+    fn gap(self) -> (GapReason, Option<Value>) {
+        match self {
+            Fault::Framing => (GapReason::DecodeFailed, None),
+            Fault::Copy => (
+                GapReason::MemoryGuard,
+                Some(json!({"guard": "upgrade_copy", "limit": COPY_LIMIT})),
+            ),
+            Fault::Panic => (GapReason::DecodeFailed, Some(json!({"panic": true}))),
+        }
+    }
 }
 
 /// One decrypted HTTP/1.1 connection: both directions' parsers and the open streams.
@@ -64,14 +84,19 @@ pub struct Http1 {
     down: Side,
     /// Requests whose final response has not started, in order.
     queue: VecDeque<Asked>,
-    /// Client bytes after a WebSocket upgrade request, held until its answer.
-    copy: Option<Vec<u8>>,
-    /// Server bytes that came before the request they answer.
-    early: Vec<u8>,
+    /// Client bytes after a WebSocket upgrade request, held until its answer, and the request's
+    /// time.
+    copy: Option<(Mono, Vec<u8>)>,
+    /// Server bytes that came before the request they answer, and when the first came.
+    early: (Mono, Vec<u8>),
     /// The response being parsed answers no request.
     orphan: bool,
     ws: Option<WsConn>,
     stopped: Option<GapReason>,
+    /// Bytes fed, and those a stream or note accounts for: heads, bodies on the wire, WebSocket
+    /// bytes (5a counts the difference).
+    seen: u64,
+    kept: u64,
 }
 
 /// One direction: the head being read, or the body of the open stream.
@@ -103,88 +128,61 @@ impl Http1 {
             down: side(),
             queue: VecDeque::new(),
             copy: None,
-            early: Vec::new(),
+            early: (Mono::default(), Vec::new()),
             orphan: false,
             ws: None,
             stopped: None,
+            seen: 0,
+            kept: 0,
         }
     }
 
-    /// Relayed bytes of one direction in any split, after they were forwarded. Err(reason): parsing
-    /// stopped for the connection (5a): the open stream already has its own GAP (decode_failed or
-    /// memory_guard) and ended decode_error; every later call returns the same Err.
-    pub fn feed(&mut self, dir: Dir, t: Mono, bytes: &[u8]) -> Result<(), GapReason> {
-        if let Some(reason) = self.stopped {
-            return Err(reason);
-        }
-        self.take(dir, t, bytes)
-            .map_err(|fault| self.stop(t, fault))
-    }
-
-    /// The connection closed: end open streams (interrupted when inside a message, complete
-    /// otherwise; decode_error after a stop), unsent_up goes to the open http_req (or ws_up) END tail.
-    pub fn end(mut self, t: Mono, reason: EndReason, unsent_up: u64) {
-        if self.stopped.is_none() && self.ws.is_none() {
-            // An upgrade never answered: its copy is HTTP after all. Server bytes still waiting
-            // for a request answer none.
-            let copy = self.copy.take().unwrap_or_default();
-            let mut fed = self.take(Dir::Up, t, &copy);
-            if fed.is_ok() && !self.early.is_empty() {
-                self.orphan = true;
-                let early = std::mem::take(&mut self.early);
-                fed = self.take(Dir::Down, t, &early);
-            }
-            if let Err(fault) = fed {
-                self.stop(t, fault);
-            }
-        }
-        if let Some(ws) = self.ws.take() {
-            ws.end(t, reason, unsent_up);
-            return;
-        }
-        if let Some(body) = self.up.body.take() {
-            body.end(t, EndReason::Interrupted, unsent_up, None);
-        }
-        if let Some(body) = self.down.body.take() {
-            let close = matches!(body.framing, Framing::Close);
-            let reason = if close {
-                reason
-            } else {
-                EndReason::Interrupted
-            };
-            body.end(t, reason, 0, None);
-        }
+    /// The bytes fed and recorded in no stream (blank lines before a start line aside), and the
+    /// earliest time one of those still held was taken, else `t`.
+    fn held(&self, t: Mono) -> (u64, Mono) {
+        let blank = self.up.head.blank + self.down.head.blank;
+        let early = (!self.early.1.is_empty()).then_some(self.early.0);
+        let copy = self.copy.as_ref().map(|c| c.0);
+        let at = [self.up.head.at, self.down.head.at, early, copy];
+        let since = at.into_iter().flatten().fold(t, Mono::min);
+        (self.seen.saturating_sub(self.kept + blank), since)
     }
 
     /// 5a: every open stream gets the GAP and ends `decode_error`; nothing parses after this.
-    fn stop(&mut self, t: Mono, fault: Fault) -> GapReason {
-        let (reason, tail) = match fault {
-            Fault::Framing => (GapReason::DecodeFailed, None),
-            Fault::Copy => (
-                GapReason::MemoryGuard,
-                Some(json!({"guard": "upgrade_copy", "limit": COPY_LIMIT})),
-            ),
-        };
+    fn stop(&mut self, t: Mono, fault: Fault) -> Stop {
+        let (reason, tail) = fault.gap();
         for body in [self.up.body.take(), self.down.body.take()]
             .into_iter()
             .flatten()
         {
             body.end(t, EndReason::DecodeError, 0, Some((reason, tail.clone())));
         }
+        if let Some(ws) = &mut self.ws {
+            ws.stop(t);
+        }
+        let (held, since) = self.held(t);
         self.copy = None;
-        self.early = Vec::new();
+        self.early.1 = Vec::new();
         self.queue.clear();
         self.stopped = Some(reason);
-        reason
+        Stop {
+            reason,
+            tail,
+            held,
+            since,
+        }
     }
 
     fn take(&mut self, dir: Dir, t: Mono, mut bytes: &[u8]) -> Result<(), Fault> {
         while !bytes.is_empty() {
             if let Some(ws) = &mut self.ws {
-                return ws.feed(dir, t, bytes).map_err(|_| Fault::Framing);
+                // On a stop the WebSocket parser wrote its GAPs; the whole chunk counts as held.
+                ws.feed(dir, t, bytes).map_err(|_| Fault::Framing)?;
+                self.kept += bytes.len() as u64;
+                return Ok(());
             }
             if dir == Dir::Up
-                && let Some(copy) = &mut self.copy
+                && let Some((_, copy)) = &mut self.copy
             {
                 if copy.len() + bytes.len() > COPY_LIMIT {
                     return Err(Fault::Copy);
@@ -194,13 +192,17 @@ impl Http1 {
             }
             if dir == Dir::Down && self.down.body.is_none() && self.queue.is_empty() && !self.orphan
             {
-                if self.early.len() + bytes.len() <= HEAD_LIMIT {
-                    self.early.extend_from_slice(bytes);
+                let early = &mut self.early;
+                if early.1.len() + bytes.len() <= HEAD_LIMIT {
+                    if early.1.is_empty() {
+                        early.0 = t;
+                    }
+                    early.1.extend_from_slice(bytes);
                     return Ok(());
                 }
                 // A head's worth and still no request: these bytes answer none.
                 self.orphan = true;
-                let mut all = std::mem::take(&mut self.early);
+                let mut all = std::mem::take(&mut early.1);
                 all.extend_from_slice(bytes);
                 return self.take(dir, t, &all);
             }
@@ -209,8 +211,10 @@ impl Http1 {
                 Dir::Down => &mut self.down,
             };
             let n = if let Some(body) = &mut side.body {
-                let (n, done) = body.advance(t, bytes)?;
-                body.raw += n as u64;
+                let before = body.raw;
+                let step = body.advance(t, bytes);
+                self.kept += body.raw - before;
+                let (n, done) = step?;
                 if done && let Some(body) = side.body.take() {
                     body.end(t, EndReason::Complete, 0, None);
                 }
@@ -232,10 +236,10 @@ impl Http1 {
     }
 
     fn request(&mut self, t: Mono, head: Head) -> Result<(), Fault> {
-        let (method, target, http11) = request_line(&head.start).ok_or(Fault::Framing)?;
+        let (method, target, ver) = request_line(&head.start, head.cut).ok_or(Fault::Framing)?;
         let f = &head.frame;
         let framing = match f.chunked() {
-            Some(true) => Some(Framing::Chunked(Chunk::Size(Vec::new()))),
+            Some(true) => Some(Framing::Chunked(Chunk::Size(SizeLine::default()))),
             // Another final transfer coding cannot frame a request (RFC 9112 section 6.3).
             Some(false) => return Err(Fault::Framing),
             None => f.length()?.filter(|&n| n > 0).map(Framing::Length),
@@ -244,7 +248,7 @@ impl Http1 {
         let ws = match keys.as_slice() {
             [key]
                 if method == "GET"
-                    && http11
+                    && ver == Some("1.1")
                     && framing.is_none()
                     && f.websocket()
                     && f.values("sec-websocket-version").eq(["13"]) =>
@@ -257,7 +261,7 @@ impl Http1 {
         let meta = json!({
             "method": method,
             "path": safe_path(target),
-            "ver": "1.1",
+            "ver": ver,
             "headers": pairs(&head.fields),
             "coding": coding_meta(&codings),
         });
@@ -269,8 +273,9 @@ impl Http1 {
         let h = self
             .rec
             .open(StreamKind::HttpReq, self.conn, 0, 0, flags, meta);
+        self.kept += head.size;
         if ws.is_some() {
-            self.copy = Some(Vec::new());
+            self.copy = Some((t, Vec::new()));
         }
         self.queue.push_back(Asked {
             sid: h.sid(),
@@ -279,15 +284,15 @@ impl Http1 {
             ws,
         });
         self.up.body = Body::open(h, framing, codings, &head, t, &self.rec);
-        if !self.early.is_empty() {
-            let early = std::mem::take(&mut self.early);
+        if !self.early.1.is_empty() {
+            let early = std::mem::take(&mut self.early.1);
             self.take(Dir::Down, t, &early)?;
         }
         Ok(())
     }
 
     fn response(&mut self, t: Mono, head: Head) -> Result<(), Fault> {
-        let status = status_line(&head.start).ok_or(Fault::Framing)?;
+        let (status, ver) = status_line(&head.start).ok_or(Fault::Framing)?;
         let f = &head.frame;
         if (100..200).contains(&status) {
             self.rec.event(json!({
@@ -297,6 +302,7 @@ impl Http1 {
                 "status": status,
                 "headers": pairs(&head.fields),
             }));
+            self.kept += head.size;
             if status != 101 {
                 return Ok(());
             }
@@ -315,10 +321,12 @@ impl Http1 {
             let deflate = ws::negotiate(offered.as_deref(), extensions.as_deref())
                 .map_err(|_| Fault::Framing)?;
             let mut conn = WsConn::open(&self.rec, self.conn, asked.sid, deflate);
-            let copy = self.copy.take().unwrap_or_default();
+            let copy = self.copy.take().map(|c| c.1).unwrap_or_default();
             let fed = conn.feed(Dir::Up, t, &copy);
             self.ws = Some(conn);
-            return fed.map_err(|_| Fault::Framing);
+            fed.map_err(|_| Fault::Framing)?;
+            self.kept += copy.len() as u64;
+            return Ok(());
         }
         let asked = self.queue.pop_front().unwrap_or_default();
         self.orphan = false;
@@ -329,7 +337,7 @@ impl Http1 {
             return Err(Fault::Framing);
         } else {
             match (f.chunked(), f.length()?) {
-                (Some(true), _) => Some(Framing::Chunked(Chunk::Size(Vec::new()))),
+                (Some(true), _) => Some(Framing::Chunked(Chunk::Size(SizeLine::default()))),
                 (Some(false), _) | (None, None) => Some(Framing::Close),
                 (None, Some(0)) => None,
                 (None, Some(n)) => Some(Framing::Length(n)),
@@ -338,7 +346,7 @@ impl Http1 {
         let codings = f.codings();
         let meta = json!({
             "status": status,
-            "ver": "1.1",
+            "ver": ver,
             "headers": pairs(&head.fields),
             "coding": coding_meta(&codings),
             "decoded": codings.is_ok(),
@@ -351,14 +359,90 @@ impl Http1 {
             OpenFlags::DECRYPTED,
             meta,
         );
+        self.kept += head.size;
         self.down.body = Body::open(h, framing, codings, &head, t, &self.rec);
         if asked.ws.is_some()
-            && let Some(copy) = self.copy.take()
+            && let Some((_, copy)) = self.copy.take()
         {
             // The upgrade was refused: the copied client bytes are HTTP.
             self.take(Dir::Up, t, &copy)?;
         }
         Ok(())
+    }
+}
+
+impl Parser for Http1 {
+    /// Relayed bytes of one direction in any split, after they were forwarded. A call after a
+    /// stop answers the stop's reason and counts its bytes as held.
+    fn feed(&mut self, dir: Dir, t: Mono, bytes: &[u8]) -> Result<(), Stop> {
+        if let Some(reason) = self.stopped {
+            let held = bytes.len() as u64;
+            let (tail, since) = (None, t);
+            return Err(Stop {
+                reason,
+                tail,
+                held,
+                since,
+            });
+        }
+        self.seen += bytes.len() as u64;
+        self.take(dir, t, bytes)
+            .map_err(|fault| self.stop(t, fault))
+    }
+
+    /// End open streams (interrupted when inside a message, complete otherwise; decode_error
+    /// after a stop); unsent_up goes to the open http_req (or ws_up) END tail.
+    fn end(mut self: Box<Self>, t: Mono, reason: EndReason, unsent_up: u64) -> Option<Stop> {
+        let since = self.held(t).1;
+        let mut late = None;
+        if self.stopped.is_none() && self.ws.is_none() {
+            // An upgrade never answered: its copy is HTTP after all. Server bytes still waiting
+            // for a request answer none.
+            let copy = self.copy.take().map(|c| c.1).unwrap_or_default();
+            let mut fed = self.take(Dir::Up, t, &copy);
+            if fed.is_ok() && !self.early.1.is_empty() {
+                self.orphan = true;
+                let early = std::mem::take(&mut self.early.1);
+                fed = self.take(Dir::Down, t, &early);
+            }
+            late = match fed {
+                Err(fault) => Some(self.stop(t, fault)),
+                // A head the close cut short: relayed, and recorded in no stream.
+                Ok(()) => Some(self.held(t))
+                    .filter(|h| h.0 > 0)
+                    .map(|(held, _)| Stop {
+                        reason: GapReason::DecodeFailed,
+                        tail: None,
+                        held,
+                        since,
+                    }),
+            };
+        }
+        if let Some(ws) = self.ws.take() {
+            ws.end(t, reason, unsent_up);
+        }
+        if let Some(body) = self.up.body.take() {
+            body.end(t, EndReason::Interrupted, unsent_up, None);
+        }
+        if let Some(body) = self.down.body.take() {
+            let close = matches!(body.framing, Framing::Close);
+            let reason = if close {
+                reason
+            } else {
+                EndReason::Interrupted
+            };
+            body.end(t, reason, 0, None);
+        }
+        late.map(|s| Stop {
+            since: s.since.min(since),
+            ..s
+        })
+    }
+
+    fn panicked(mut self: Box<Self>, t: Mono) -> Stop {
+        let stop = self.stop(t, Fault::Panic);
+        let _ = self.end(t, EndReason::DecodeError, 0);
+        stop
     }
 }
 
@@ -412,29 +496,38 @@ fn is_token(s: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || b"!#$%&'*+-.^_`|~".contains(&b))
 }
 
-fn is_http1(version: &str) -> bool {
-    version == "HTTP/1.1" || version == "HTTP/1.0"
+/// The meta `ver` of an HTTP/1 version.
+fn version(v: &str) -> Option<&'static str> {
+    match v {
+        "HTTP/1.1" => Some("1.1"),
+        "HTTP/1.0" => Some("1.0"),
+        _ => None,
+    }
 }
 
-/// Method, target, and whether the version is 1.1.
-fn request_line(line: &[u8]) -> Option<(&str, &str, bool)> {
+/// Method, target and `ver`. A line `cut` at the head guard has lost its version (`None`).
+fn request_line(line: &[u8], cut: bool) -> Option<(&str, &str, Option<&'static str>)> {
     let line = std::str::from_utf8(line).ok()?;
     let mut parts = line.split(' ');
-    let (method, target, version) = (parts.next()?, parts.next()?, parts.next()?);
-    let valid = parts.next().is_none()
+    let (method, target) = (parts.next()?, parts.next()?);
+    let ver = if cut {
+        None
+    } else {
+        Some(version(parts.next()?)?)
+    };
+    let valid = (cut || parts.next().is_none())
         && is_token(method)
         && !target.is_empty()
-        && target.bytes().all(|b| b.is_ascii_graphic())
-        && is_http1(version);
-    valid.then_some((method, target, version == "HTTP/1.1"))
+        && target.bytes().all(|b| b.is_ascii_graphic());
+    valid.then_some((method, target, ver))
 }
 
-fn status_line(line: &[u8]) -> Option<u16> {
+fn status_line(line: &[u8]) -> Option<(u16, &'static str)> {
     let line = std::str::from_utf8(line).ok()?;
     let mut parts = line.splitn(3, ' ');
-    let (version, code) = (parts.next()?, parts.next()?);
-    let valid = is_http1(version) && code.len() == 3 && code.bytes().all(|b| b.is_ascii_digit());
-    valid.then(|| code.parse().ok()).flatten()
+    let (ver, code) = (version(parts.next()?)?, parts.next()?);
+    let valid = code.len() == 3 && code.bytes().all(|b| b.is_ascii_digit());
+    Some((code.parse().ok().filter(|_| valid)?, ver))
 }
 
 fn trim_ows(value: &[u8]) -> &[u8] {
@@ -461,6 +554,8 @@ struct Head {
     /// The start line is still to come (never, for trailers).
     want_start: bool,
     start: Vec<u8>,
+    /// The start line passed the guard and keeps only its first [`HEAD_LIMIT`] bytes.
+    cut: bool,
     line: Vec<u8>,
     /// The rest of the current line is not kept.
     skip: bool,
@@ -470,6 +565,11 @@ struct Head {
     stored: usize,
     /// Once past the `http_head` guard: when, and the bytes not stored.
     over: Option<(Mono, u64)>,
+    /// Bytes taken, the blank lines before the start line among them, and when the first byte
+    /// after those came.
+    size: u64,
+    blank: u64,
+    at: Option<Mono>,
 }
 
 impl Head {
@@ -490,11 +590,13 @@ impl Head {
                 None => (rest, false),
             };
             pos += piece.len();
+            self.size += piece.len() as u64;
+            self.at.get_or_insert(t);
             if self.skip {
                 self.not_stored(t, piece.len());
             } else {
                 self.line.extend_from_slice(piece);
-                if !ends && self.stored + self.line.len() > HEAD_LIMIT {
+                if self.stored + self.line.len() > HEAD_LIMIT && (!ends || self.want_start) {
                     self.past_guard(t)?;
                 }
             }
@@ -510,11 +612,15 @@ impl Head {
         over.1 += n as u64;
     }
 
-    /// A line still open has passed the guard: keep it only while it can be a framing field.
+    /// A line has passed the guard. A start line keeps its first [`HEAD_LIMIT`] bytes; a field
+    /// line is kept only while it can be a framing field, at most [`FIELD_MAX`] bytes.
     fn past_guard(&mut self, t: Mono) -> Result<(), Fault> {
         if self.want_start {
-            // A start line past 64 KiB cannot be parsed (a garbage head, 5a).
-            return Err(Fault::Framing);
+            let rest = self.line.len().saturating_sub(HEAD_LIMIT);
+            self.line.truncate(HEAD_LIMIT);
+            self.not_stored(t, rest);
+            (self.skip, self.cut) = (true, true);
+            return Ok(());
         }
         let framing = match self.line.iter().position(|&b| b == b':') {
             Some(colon) => {
@@ -523,6 +629,9 @@ impl Head {
             }
             None => self.line.len() <= NAME_MAX,
         };
+        if framing && self.line.len() > FIELD_MAX {
+            return Err(Fault::Framing);
+        }
         if !framing {
             self.skip = true;
             let n = std::mem::take(&mut self.line).len();
@@ -533,20 +642,22 @@ impl Head {
 
     /// One complete line: `Ok(true)` at the empty line that ends the head.
     fn finish_line(&mut self, t: Mono) -> Result<bool, Fault> {
-        if std::mem::take(&mut self.skip) {
-            return Ok(false);
-        }
+        let skipped = std::mem::take(&mut self.skip);
         let raw = std::mem::take(&mut self.line);
-        let line = strip_eol(&raw);
         if self.want_start {
-            if raw.len() > HEAD_LIMIT {
-                return Err(Fault::Framing);
-            }
-            if !line.is_empty() {
+            // A cut line was stored without its end.
+            let line = if skipped { &raw[..] } else { strip_eol(&raw) };
+            if line.is_empty() {
+                (self.blank, self.at) = (self.size, None);
+            } else {
                 self.want_start = false;
                 self.stored += raw.len();
                 self.start = line.to_vec();
             }
+            return Ok(false);
+        }
+        let line = strip_eol(&raw);
+        if skipped {
             return Ok(false);
         }
         if line.is_empty() {
@@ -669,26 +780,44 @@ fn length(digits: &str) -> Option<u64> {
     valid.then(|| digits.parse().ok()).flatten()
 }
 
-/// `chunk-size [ BWS ; chunk-ext ]`: hexadecimal, at most 16 significant digits.
-fn chunk_size(line: &[u8]) -> Option<u64> {
-    let size = trim_ows(line.split(|&b| b == b';').next()?);
-    let digits = std::str::from_utf8(size).ok()?;
-    let significant = digits.trim_start_matches('0');
-    let valid = !digits.is_empty()
-        && significant.len() <= 16
-        && digits.bytes().all(|b| b.is_ascii_hexdigit());
-    if !valid {
-        return None;
+/// A chunk-size line, read without a buffer: `chunk-size [ BWS ; chunk-ext ]` and its line end
+/// (RFC 9112 section 7.1). Extensions are never recorded, so their bytes are only skipped.
+#[derive(Default)]
+struct SizeLine {
+    size: u64,
+    /// Significant hex digits so far: past 16 the size fits no `u64` (5a).
+    digits: u8,
+    any: bool,
+    /// The size ended (whitespace seen); `ext` once `;` was.
+    after: bool,
+    ext: bool,
+    /// The line's bytes (END tail `wire`).
+    bytes: u64,
+}
+
+impl SizeLine {
+    /// Takes a piece that ends at the line's LF or before it: the size once the line ended.
+    fn push(&mut self, piece: &[u8]) -> Result<Option<u64>, Fault> {
+        self.bytes += piece.len() as u64;
+        for &b in piece {
+            match b {
+                b'\n' if self.any => return Ok(Some(self.size)),
+                _ if self.ext && b != b'\n' => {}
+                b';' => self.ext = true,
+                b' ' | b'\t' | b'\r' => self.after = self.any,
+                _ if b.is_ascii_hexdigit() && !self.after => {
+                    let v = u64::from((b as char).to_digit(16).unwrap_or(0));
+                    self.digits += u8::from(self.digits > 0 || v > 0);
+                    if self.digits > 16 {
+                        return Err(Fault::Framing);
+                    }
+                    (self.size, self.any) = ((self.size << 4) | v, true);
+                }
+                _ => return Err(Fault::Framing),
+            }
+        }
+        Ok(None)
     }
-    u64::from_str_radix(
-        if significant.is_empty() {
-            "0"
-        } else {
-            significant
-        },
-        16,
-    )
-    .ok()
 }
 
 /// How a body ends on the wire.
@@ -700,8 +829,7 @@ enum Framing {
 }
 
 enum Chunk {
-    /// The chunk-size line read so far.
-    Size(Vec<u8>),
+    Size(SizeLine),
     Data(u64),
     /// The line end after a chunk's data; `true` once its CR was seen.
     DataEnd(bool),
@@ -744,6 +872,14 @@ impl Sink {
     }
 }
 
+/// The `http_head` GAP, when a head or a trailer section passed the guard.
+fn head_gap(h: &mut StreamHandle, head: &Head) {
+    if let Some((at, n)) = head.over {
+        let tail = json!({"guard": "http_head", "limit": HEAD_LIMIT, "head": n});
+        h.gap(GapReason::MemoryGuard, at, None, Some(tail));
+    }
+}
+
 impl Body {
     /// Writes the `http_head` GAP when the head passed the guard; a message without a body ends
     /// at once and gives `None`.
@@ -755,10 +891,7 @@ impl Body {
         t: Mono,
         rec: &Recorder,
     ) -> Option<Body> {
-        if let Some((at, n)) = head.over {
-            let tail = json!({"guard": "http_head", "limit": HEAD_LIMIT, "head": n});
-            h.gap(GapReason::MemoryGuard, at, None, Some(tail));
-        }
+        head_gap(&mut h, head);
         let Some(framing) = framing else {
             h.end(t, EndReason::Complete, Some(json!({"wire": 0})));
             return None;
@@ -782,20 +915,23 @@ impl Body {
         })
     }
 
-    /// Consumes what `input` holds of this body: `(consumed, done)`.
+    /// Consumes what `input` holds of this body: `(consumed, done)`. `raw` grows by each piece
+    /// taken whole (a chunk-size line once it ended), also when a later piece faults.
     fn advance(&mut self, t: Mono, input: &[u8]) -> Result<(usize, bool), Fault> {
-        let sink = &mut self.sink;
-        let chunk = match &mut self.framing {
+        let Body { framing, sink, raw } = self;
+        let chunk = match framing {
             Framing::Length(left) => {
                 let take = usize::try_from(*left)
                     .unwrap_or(usize::MAX)
                     .min(input.len());
                 sink.data(t, &input[..take]);
                 *left -= take as u64;
+                *raw += take as u64;
                 return Ok((take, *left == 0));
             }
             Framing::Close => {
                 sink.data(t, input);
+                *raw += input.len() as u64;
                 return Ok((input.len(), false));
             }
             Framing::Chunked(chunk) => chunk,
@@ -808,12 +944,8 @@ impl Body {
                     let nl = rest.iter().position(|&b| b == b'\n');
                     let piece = &rest[..nl.map_or(rest.len(), |i| i + 1)];
                     pos += piece.len();
-                    line.extend_from_slice(piece);
-                    if line.len() > CHUNK_LINE_MAX + 2 {
-                        return Err(Fault::Framing);
-                    }
-                    if nl.is_some() {
-                        let size = chunk_size(strip_eol(line)).ok_or(Fault::Framing)?;
+                    if let Some(size) = line.push(piece)? {
+                        *raw += line.bytes;
                         *chunk = match size {
                             0 => Chunk::Trailer(Box::new(Head::new(false))),
                             n => Chunk::Data(n),
@@ -825,6 +957,7 @@ impl Body {
                     sink.data(t, &rest[..take]);
                     pos += take;
                     *left -= take as u64;
+                    *raw += take as u64;
                     if *left == 0 {
                         *chunk = Chunk::DataEnd(false);
                     }
@@ -833,19 +966,17 @@ impl Body {
                     pos += 1;
                     match (rest[0], *cr) {
                         (b'\r', false) => *cr = true,
-                        (b'\n', _) => *chunk = Chunk::Size(Vec::new()),
+                        (b'\n', _) => *chunk = Chunk::Size(SizeLine::default()),
                         _ => return Err(Fault::Framing),
                     }
+                    *raw += 1;
                 }
                 Chunk::Trailer(head) => {
                     let (n, done) = head.push(t, rest)?;
                     pos += n;
+                    *raw += n as u64;
                     if done {
-                        if let Some((at, n)) = head.over {
-                            let tail =
-                                json!({"guard": "http_head", "limit": HEAD_LIMIT, "head": n});
-                            sink.h.gap(GapReason::MemoryGuard, at, None, Some(tail));
-                        }
+                        head_gap(&mut sink.h, head);
                         sink.trailers = std::mem::take(&mut head.fields);
                         return Ok((pos, true));
                     }

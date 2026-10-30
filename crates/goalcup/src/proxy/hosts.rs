@@ -44,9 +44,9 @@ impl Hosts {
 
     /// The deciding name and its answer: the SNI when there is one, else the CONNECT host. A
     /// listed SNI behind any CONNECT host is decrypted; an unlisted SNI behind a listed one is not.
-    pub fn decide(&self, sni: Option<&str>, connect_host: &str) -> (String, Decision) {
+    pub fn decide<'a>(&self, sni: Option<&'a str>, connect_host: &'a str) -> (&'a str, Decision) {
         let name = sni.filter(|s| !s.is_empty()).unwrap_or(connect_host);
-        (name.to_owned(), self.list.decide(name))
+        (name, self.list.decide(name))
     }
 
     /// True while (host, fingerprint) is a learned refusal younger than [`REFUSAL_EXPIRY`] at
@@ -73,8 +73,9 @@ impl Hosts {
     }
 
     /// An explicit certificate alert on our leaf (`tls::Refusal::Alert`). A trusted pair is never
-    /// learned: no note, false. Otherwise the pair is recorded at `now`, one `ca_refused` note is
-    /// written (host and fingerprint prefix) and the answer is true. Expired entries go meanwhile.
+    /// learned: no note, false. Otherwise the answer is true and, unless the pair is already a fresh
+    /// refusal (two handshakes in flight), it is recorded at `now` with one `ca_refused` note (host
+    /// and fingerprint prefix). Expired entries go meanwhile.
     pub fn learn(&self, rec: &Recorder, now: Mono, host: &str, fp: &[u8; 32]) -> bool {
         let key = pair(host, fp);
         {
@@ -83,6 +84,9 @@ impl Hosts {
                 return false;
             }
             tables.refused.retain(|_, at| fresh(*at, now));
+            if tables.refused.contains_key(&key) {
+                return true;
+            }
             tables.refused.insert(key, now);
         }
         rec.event(json!({

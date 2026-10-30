@@ -1,15 +1,16 @@
 //! Tunnels (PRD-03 section 9): every connection that is not decrypted is a `conn` stream with
 //! `mode: "tunnel"` and a reason, opened when the tunnel starts and ended at close with its byte
 //! counts. A tunnel to a listed host is a named loss. Tunnels to unlisted hosts feed the
-//! per-host `long_tunnel` flag. Bytes pass through [`pump::run`] with no parser.
+//! per-host `long_tunnel` flag. Bytes pass through [`pump::relay`] with no parser.
 
 use crate::connector::hosts::{Kind, Source};
-use crate::pipeline::{EndReason, Mono, OpenFlags, Recorder, StreamKind};
+use crate::pipeline::{Mono, OpenFlags, Recorder, StreamKind};
 use crate::proxy::connect::{self, CLIENT_HELLO_GUARD};
 use crate::proxy::pump;
 use crate::proxy::ws::Dir;
 use bytes::Bytes;
-use serde_json::{Value, json};
+use serde::Serialize;
+use serde_json::json;
 use std::collections::{HashMap, VecDeque};
 use std::sync::Mutex;
 use std::sync::atomic::AtomicU64;
@@ -33,23 +34,23 @@ pub struct TunnelConn {
     pub listed: Option<(Source, Kind)>,
     /// The first 16 hex digits of the ClientHello fingerprint, when one was read.
     pub fingerprint: Option<String>,
+    /// Bytes already read: from the client (replayed upstream first), from upstream.
+    pub client_prefix: Bytes,
+    pub upstream_prefix: Bytes,
 }
 
 /// The `conn` OPEN meta (PRD-01 section 4), for both modes.
-#[allow(clippy::too_many_arguments)]
-pub fn conn_meta(
-    host: &str,
-    port: u16,
-    mode: &str,
-    listed: Option<(Source, Kind)>,
-    reason: Option<&str>,
-    alpn: Option<&str>,
-    tls: Option<&str>,
-    fingerprint: Option<&str>,
-) -> Value {
-    json!({"host": host, "port": port, "mode": mode, "listed": listed.map(|l| l.0),
-        "kind": listed.map(|l| l.1), "reason": reason, "alpn": alpn, "tls": tls,
-        "fingerprint": fingerprint})
+#[derive(Serialize)]
+pub struct ConnMeta<'a> {
+    pub host: &'a str,
+    pub port: u16,
+    pub mode: &'a str,
+    pub listed: Option<Source>,
+    pub kind: Option<Kind>,
+    pub reason: Option<&'a str>,
+    pub alpn: Option<&'a str>,
+    pub tls: Option<&'a str>,
+    pub fingerprint: Option<&'a str>,
 }
 
 /// The per-host `long_tunnel` flag, per boot, shared by every tunnel.
@@ -130,31 +131,29 @@ impl Flags {
     }
 }
 
-/// Relays one tunnel to its end: the prefixes are replayed first (`client_prefix` upstream,
-/// `upstream_prefix` to the client); an upstream failure reaches the client as a reset (rule 8).
-/// The END tail counts the TCP bytes each way, prefixes included.
-#[allow(clippy::too_many_arguments)]
+/// Relays one tunnel to its end, the prefixes first; an upstream failure reaches the client as a
+/// reset (rule 8). The END tail counts the TCP bytes each way, prefixes included.
 pub async fn run(
     rec: &Recorder,
     flags: &Flags,
     quiet: &AtomicU64,
     c: TunnelConn,
     client: TcpStream,
-    client_prefix: Bytes,
     upstream: TcpStream,
-    upstream_prefix: Bytes,
 ) {
     let opened = rec.now();
-    let meta = conn_meta(
-        &c.host,
-        c.port,
-        "tunnel",
-        c.listed,
-        Some(c.reason),
-        None,
-        None,
-        c.fingerprint.as_deref(),
-    );
+    let meta = ConnMeta {
+        host: &c.host,
+        port: c.port,
+        mode: "tunnel",
+        listed: c.listed.map(|l| l.0),
+        kind: c.listed.map(|l| l.1),
+        reason: Some(c.reason),
+        alpn: None,
+        tls: None,
+        fingerprint: c.fingerprint.as_deref(),
+    };
+    let meta = serde_json::to_value(meta).unwrap_or_default();
     let mut conn = rec.open(StreamKind::Conn, 0, 0, 0, OpenFlags::TUNNEL, meta);
     let watch = (c.listed.is_none() && c.reason != "sign_in")
         .then(|| Mutex::new(flags.watch(&c.host, opened)));
@@ -169,7 +168,7 @@ pub async fn run(
             );
         }
     };
-    let prefixes = (client_prefix, upstream_prefix);
+    let prefixes = (c.client_prefix, c.upstream_prefix);
     let legs = (client, upstream);
     let p = pump::relay(rec, &mut conn, legs, prefixes, None, quiet, Some(&tap)).await;
     let (up, down) = (p.plain_up, p.plain_down);
@@ -186,10 +185,5 @@ pub async fn run(
             .then(|| json!({"guard": "client_hello", "limit": CLIENT_HELLO_GUARD}));
         conn.gap(reason, opened, Some(up + down), tail);
     }
-    let reason = if p.upstream_failed {
-        EndReason::Interrupted
-    } else {
-        EndReason::Complete
-    };
-    conn.end(rec.now(), reason, Some(json!({"up": up, "down": down})));
+    conn.end(rec.now(), p.reason, Some(json!({"up": up, "down": down})));
 }
