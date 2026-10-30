@@ -1,0 +1,9 @@
+# Codex through Vercel AI Gateway, as https://vercel.com/docs/ai-gateway/coding-agents/openai-codex writes it.
+model_provider = "vercel"
+model = "openai/gpt-6-astra"
+
+[model_providers.vercel]
+name = "Vercel AI Gateway"
+base_url = "https://ai-gateway.vercel.sh/codex/v1"
+env_key = "AI_GATEWAY_API_KEY"
+wire_api = "responses"
