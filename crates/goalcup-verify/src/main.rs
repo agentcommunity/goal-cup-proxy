@@ -1,13 +1,12 @@
-//! `goalcup-verify`: `check`, `dump` and `usage` (PRD-08 section 1).
-//!
-//! Exit codes: 0 whole; 1 honest but incomplete (every loss named, or unsealed, live or pruned);
-//! 2 a failure; 3 no usable report (the input cannot be read, the command line is wrong, or an
-//! internal error). `--help` and `--version` exit 0.
+//! `goalcup-verify`: `check`, `dump`, `secrets` and `usage` (PRD-08 section 1). Exit codes: 0
+//! whole; 1 honest but incomplete (every loss named, or unsealed, live or pruned); 2 a failure;
+//! 3 no usable report (the input cannot be read, the command line is wrong, or an internal
+//! error). `--help` and `--version` exit 0.
 
 use clap::{Parser, Subcommand};
 use goalcup_format::Record;
 use goalcup_format::dump::Dumper;
-use goalcup_verify::{input, report, usage};
+use goalcup_verify::{input, report, secrets, usage};
 use serde_json::{Value, json};
 use std::ffi::OsString;
 use std::io::Write;
@@ -31,6 +30,8 @@ enum Cmd {
     Check(CheckArgs),
     /// One JSON line per record. Payload is printed only with --text.
     Dump(DumpArgs),
+    /// The secret scan: known values and secret shapes, in records and in raw files.
+    Secrets(secrets::Args),
     /// The usage reader.
     #[command(disable_help_flag = true)]
     Usage {
@@ -68,7 +69,7 @@ struct CheckArgs {
     /// The local entry to compare the server copy with.
     #[arg(long, value_name = "ENTRY_DIR")]
     local: Option<PathBuf>,
-    /// Known secret values, one per line (not read yet).
+    /// Known secret values, one per line: adds the `secrets` check to every entry.
     #[arg(long, value_name = "FILE")]
     known: Option<PathBuf>,
     /// The pad's list of harness files on disk (not read yet).
@@ -89,11 +90,10 @@ fn main() -> ExitCode {
 }
 
 fn run() -> ExitCode {
-    let argv: Vec<OsString> = std::env::args_os().collect();
     // `parse()` would exit 2 on a usage error, and 2 means a failed record. `try_parse` hands the
     // error back so it leaves under 3; `--help` and `--version` come back as errors too, print to
     // stdout and exit 0, which `use_stderr()` tells apart.
-    let args = match Args::try_parse_from(&argv) {
+    let args = match Args::try_parse_from(std::env::args_os()) {
         Ok(a) => a,
         Err(e) => {
             let usage_error = e.use_stderr();
@@ -104,6 +104,7 @@ fn run() -> ExitCode {
     match args.cmd {
         Cmd::Check(a) => check(&a),
         Cmd::Dump(d) => dump(&d.path, d.sid.as_deref(), d.kind.as_deref(), d.text),
+        Cmd::Secrets(a) => secrets::run(&a).unwrap_or_else(|e| no_report(&e)),
         Cmd::Usage { args } => usage::run(args),
     }
 }
@@ -122,15 +123,15 @@ fn check(a: &CheckArgs) -> ExitCode {
         let all_pruned = rec.is_ok_and(|p| p.is_empty()).then(input::Input::default);
         input::resolve(l, false, false).or_else(|e| all_pruned.ok_or(e))
     });
-    let (input, local) = match (input::resolve(&a.path, a.live, a.server), local.transpose()) {
-        (Ok(i), Ok(l)) => (i, l),
-        (Err(e), _) | (_, Err(e)) => return no_report(&e),
+    let known = a.known.as_deref().map(secrets::Rules::new).transpose();
+    let found = input::resolve(&a.path, a.live, a.server);
+    let (input, l, k) = match (found, local.transpose(), known) {
+        (Ok(i), Ok(l), Ok(k)) => (i, l, k),
+        (Err(e), _, _) | (_, Err(e), _) | (_, _, Err(e)) => return no_report(&e),
     };
-    let now = a.live.then(|| {
-        let d = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH);
-        d.map_or(0, |d| u64::try_from(d.as_nanos()).unwrap_or(u64::MAX))
-    });
-    let r = report::build(&input, now, local.as_ref());
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH);
+    let now = now.map_or(0, |d| u64::try_from(d.as_nanos()).unwrap_or(u64::MAX));
+    let r = report::build(&input, a.live.then_some(now), l.as_ref(), k.as_ref());
     eprint!("{}", r.text);
     if a.json {
         let _ = writeln!(std::io::stdout(), "{}", r.json);
@@ -140,17 +141,10 @@ fn check(a: &CheckArgs) -> ExitCode {
 
 fn dump(path: &std::path::Path, sid: Option<&str>, kind: Option<&str>, text: bool) -> ExitCode {
     let pick = match sid.map(|s| match s.split_once('.') {
-        Some((b, n)) => b
-            .parse::<u64>()
-            .ok()
-            .zip(n.parse::<u64>().ok())
-            .map(|(b, n)| (Some(b), n)),
-        None => s.parse::<u64>().ok().map(|n| (None, n)),
+        Some((b, n)) => Some((Some(b.parse::<u64>().ok()?), n.parse::<u64>().ok()?)),
+        None => Some((None, s.parse::<u64>().ok()?)),
     }) {
-        Some(None) => {
-            eprintln!("goalcup-verify: --sid takes N or BOOT.N");
-            return ExitCode::from(3);
-        }
+        Some(None) => return no_report(&"--sid takes N or BOOT.N"),
         p => p.flatten(),
     };
     let input = match input::resolve(path, false, false) {
