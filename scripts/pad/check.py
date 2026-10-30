@@ -115,8 +115,9 @@ class Run:
         name = "%s.json" % entry if "%s.json" % entry in names else names[0] if len(names) == 1 else None
         got = load(usage, name) if name else None
         self.usage = got if isinstance(got, dict) else None
-        calls = name and os.path.join(usage, name[:-5] + ".calls.jsonl")
-        self.calls = [c for c in load(usage, calls, 1) if dig(c, "c_row") == "call"] if calls and os.path.isfile(calls) else None
+        calls = name and name[:-5] + ".calls.jsonl"
+        self.calls = ([c for c in load(usage, calls, 1) if dig(c, "c_row") == "call"]
+                      if calls and os.path.isfile(os.path.join(usage, calls)) else None)
         self.server, self.status = load(folder, "verify/check-server.json"), load(folder, "status.json")
         self.fetch = load(folder, "fetched/%s/fetch.json" % entry) if entry else None
         self.samples, self.faults = load(folder, "watch/status.jsonl", 1), load(folder, "watch/faults.jsonl", 1)
@@ -131,7 +132,9 @@ class Run:
 
     def mark(self, check, result, why):
         self.v[check] = max(self.v[check], result, key=ORDER.get)
-        self.why += ["%s %s: %s" % (check, result, why)] * ("%s %s: %s" % (check, result, why) not in self.why)
+        line = "%s %s: %s" % (check, result, why)
+        if line not in self.why:  # one fact can be asked for twice (counts.hosts in the dodger rows): one line
+            self.why.append(line)
 
     def flag(self, cond, check, result, why):
         if cond:
@@ -143,11 +146,11 @@ class Run:
         return None if c.get("result") == "skip" and "not built" in str(c.get("why")) else c.get("result")
 
     def hosts(self, name):
-        """S6 counts.hosts or tunnel_hosts ({conns, up, down, listed} or a count) as {host: (conns, listed)}; None: absent."""
+        """S6 counts.hosts (a count) or tunnel_hosts ({conns, up, down, listed}) as {host: count}; None: absent."""
         got, out = [dig(e, name) for e in self.entries if isinstance(dig(e, name), dict)], {}
         for h, v in (kv for d in got for kv in items(d)):
             n = v.get("conns") if isinstance(v, dict) else v
-            out[h] = (out.get(h, (0,))[0] + (n if type(n) is int else 0), v.get("listed") if isinstance(v, dict) else "")
+            out[h] = out.get(h, 0) + (n if type(n) is int else 0)
         return out if got else None
 
     def gaps(self):
@@ -184,28 +187,29 @@ def cause(r):
 
 def judge(r):
     seen = dig(r.status, "s4_requests") if r.reqs is None else r.reqs  # None: no count in the folder
-    pin = r.meta.get("pinned_host") if r.meta.get("case") == "dodger" else None  # meta.json, written by pad
-    reqs = (seen or 0) + (r.hosts("s6_tunnel_hosts") or {}).get(pin, (0,))[0]  # section 2: its calls are `pinned` tunnels
+    pin = r.meta.get("model_host") if r.meta.get("case") == "dodger" else None  # meta.json, written by pad
+    tunnels = (r.hosts("s6_tunnel_hosts") or {}).get(pin, 0)  # section 2: a dodger's calls ride `pinned` tunnels
     secrets(r)  # C3 first: a hit is a FAIL whatever else happened
-    work = (reqs or r.native or dig(r.usage, "s7_native")) and (r.meta.get("commits_since_start") or 0) >= 1
+    work = (seen or tunnels or r.native or dig(r.usage, "s7_native")) and (r.meta.get("commits_since_start") or 0) >= 1
     stop = cause(r) or (None if work else "the harness did no work (commits since start %s, model requests %s)"
                         % (r.meta.get("commits_since_start"), seen))
     if stop:
         for c in ("C1", "C2", "C4", "C5", "C6", "faults"):
             r.mark(c, "INCONCLUSIVE", stop)
         return
-    local(r, reqs)
-    usage_checks(r, reqs)
+    few = (seen or 0) + tunnels < 2  # pinned tunnels stand in for the calls they carry, at least one each
+    local(r, few)
+    usage_checks(r, few)
     c6(r)
     faults(r)
 
-def local(r, reqs):
+def local(r, few):
     """C1 (no missed call) and C4 (record whole, server copy whole and readable)."""
     if not r.entries:
         for c in ("C1", "C4"):
             r.mark(c, "INCONCLUSIVE", "no local verifier report")
         return
-    r.flag(reqs < 2, "C1", "INCONCLUSIVE", "the record holds fewer than 2 model calls")
+    r.flag(few, "C1", "INCONCLUSIVE", "the record holds fewer than 2 model calls and pinned tunnels")
     for cid in ("gap_has_end", "history_complete"):
         r.flag(not r.check(cid), "C1", "INCONCLUSIVE", "%s not in the report" % cid)
     for cid in sorted(i for i in r.failed if i in C1_IDS or i.startswith("inv")):
@@ -243,19 +247,20 @@ def local(r, reqs):
 def case(r):
     """Section 2's rows beyond the six checks, from S6 counts.hosts and tunnel_hosts and S7's call rows. A fact not in
     the report is INCONCLUSIVE, never PASS or FAIL. Gateway and direct exit 0 is local()'s rule."""
-    kind, code, pin, hs = r.meta.get("case"), dig(r.local, "s6_exit"), r.meta.get("pinned_host"), r.hosts("s6_hosts")
+    kind, code, own, hs = r.meta.get("case"), dig(r.local, "s6_exit"), r.meta.get("model_host"), r.hosts("s6_hosts")
 
     def need(fact, got):
         r.flag(got is None, "C1", "INCONCLUSIVE", "%s not in the report" % fact)
         return got is not None
     if kind == "direct" and hs is not None:
-        r.flag(not any(n and lst is not None for n, lst in hs.values()), "C1", "FAIL", "no decrypted model host in counts.hosts")
+        r.flag(not (hs.get(own) if own else sum(hs.values())), "C1", "FAIL",
+               "%s not decrypted in counts.hosts" % (own or "no model host"))
     if kind == "gateway":
         got = r.check("listed_hosts_decrypted")
         r.flag(need("listed_hosts_decrypted", got) and got != "pass", "C1", "FAIL", "listed_hosts_decrypted %s" % got)
-        r.flag(need("counts.hosts", hs) and not hs.get(GATEWAY, (0,))[0], "C1", "FAIL", GATEWAY + " not decrypted in counts.hosts")
-        own = r.meta.get("model_host")  # the vendor's own host, compared only where meta.json names it
-        bad = sorted({str(dig(c, "c_host")) for c in r.calls or []
+        r.flag(need("counts.hosts", hs) and not hs.get(GATEWAY), "C1", "FAIL", GATEWAY + " not decrypted in counts.hosts")
+        r.flag(need("counts.hosts", hs) and own and hs.get(own), "C1", "FAIL", "model calls decrypted to the vendor's host " + str(own))
+        bad = sorted({str(dig(c, "c_host")) for c in (r.calls if need("usage call rows", r.calls) else [])
                       if dig(c, "c_kind") != "gateway" or own and dig(c, "c_host") == own})
         r.flag(bad, "C1", "FAIL", "model calls not through the gateway: " + ", ".join(bad))
     if kind != "dodger":
@@ -265,18 +270,23 @@ def case(r):
     for cid, ok in (("listed_hosts_decrypted", ("named",)), ("history_complete", ("skip",)), ("wire_keeps_up", ("named", "skip"))):
         got = r.check(cid)
         r.flag(need(cid, got) and got not in ok, "C1", "FAIL", "%s %s, the dodger expects %s" % (cid, got, " or ".join(ok)))
+    pin = own
     if not pin:
-        return r.mark("C1", "INCONCLUSIVE", "meta.json names no pinned_host")
+        return r.mark("C1", "INCONCLUSIVE", "meta.json names no model_host")
     th = r.hosts("s6_tunnel_hosts")
-    r.flag(need("counts.tunnel_hosts", th) and not th.get(pin, (0,))[0], "C1", "FAIL", "no tunnel to the pinned host " + pin)
-    r.flag(need("counts.hosts", hs) and hs.get(pin, (0,))[0], "C1", "FAIL", "the pinned host %s was decrypted" % pin)
-    for c in ("C2", "C5") * bool(r.usage and r.calls is None):
-        r.mark(c, "INCONCLUSIVE", "usage call rows not in the report")
+    r.flag(need("counts.tunnel_hosts", th) and not th.get(pin), "C1", "FAIL", "no tunnel to the pinned host " + pin)
+    why = sorted({str(v.get("listed")) for e in r.entries for h, v in items(dig(e, "s6_tunnel_hosts"))
+                  if h == pin and isinstance(v, dict)} - {"pinned"})  # section 2: every tunnel there has GAP `pinned`
+    r.flag(why, "C1", "FAIL", "tunnels to the pinned host %s carry GAP %s, not pinned" % (pin, ", ".join(why)))
+    r.flag(need("counts.hosts", hs) and hs.get(pin), "C1", "FAIL", "the pinned host %s was decrypted" % pin)
+    if r.usage and r.calls is None:
+        for c in ("C2", "C5"):
+            r.mark(c, "INCONCLUSIVE", "usage call rows not in the report")
     mine = [c for c in r.calls or [] if dig(c, "c_host") == pin]
     r.flag(any(dig(c, "c_thread") for c in mine), "C2", "FAIL", "a thread claimed from the pinned host " + pin)
     r.flag(any(c.get(k) for c in mine for k in S7_TOKENS), "C5", "FAIL", "wire tokens claimed for the pinned host " + pin)
 
-def usage_checks(r, reqs):
+def usage_checks(r, few):
     """C2 (every subagent recorded) and C5 (usage stats present), both from the S7 summary."""
     if not r.usage:
         for c in ("C2", "C5"):
@@ -289,8 +299,8 @@ def usage_checks(r, reqs):
     sub = r.check("subagents_present")
     r.flag(dig(r.usage, "s7_readable") is True and sub not in ("pass", "named"), "C2", "FAIL" if sub else "INCONCLUSIVE",
            "subagents_present %s" % (sub or "not in the report"))
-    if reqs < 2:
-        return r.mark("C5", "INCONCLUSIVE", "the record holds fewer than 2 model calls")
+    if few:
+        return r.mark("C5", "INCONCLUSIVE", "the record holds fewer than 2 model calls and pinned tunnels")
     tok = dict(items(dig(r.usage, "s7_tokens")))
     native = r.meta.get("case") != "dodger" or dig(r.usage, "s7_readable") is True  # a dodger's tokens are native only
     r.flag(native and (tok.get("input") or 0) + (tok.get("output") or 0) <= 0, "C5", "FAIL", "merged input plus output tokens are 0")
@@ -455,26 +465,18 @@ def watcher(r):
            for f in r.faults if f.get("kind") in WATCHER and f.get("exit") != 0]
     if r.meta.get("case") != "dodger":
         return out
-    pin, watch = r.meta.get("pinned_host"), os.path.join(r.folder, "watch")
-    panes = [n for n in (os.listdir(watch) if os.path.isdir(watch) else []) if re.fullmatch(r"pane-\D*\d+\.txt", n)]
-    last, text = max(panes, key=lambda n: int(re.sub(r"\D", "", n)), default=None), ""
-    try:
-        with open(os.path.join(watch, last)) as f:
-            text = f.read()
-    except (OSError, TypeError):
-        pass
-    seen = bool(pin) and "Not recorded" in text and pin in text
     return out + ["the start event's hosts_sha256 must equal meta.json's %s" % r.meta.get("hosts_sha256"),
                   "the launch block must show: Host list from a file: <path> (not verified).",
-                  "the end screen names %s under 'Not recorded': %s" % (pin, "on %s" % last if seen else "not seen on the saved screen")]
+                  "the end screen must name %s under 'Not recorded'" % r.meta.get("model_host")]
 
 def verdict(folder, script):
     """Section 3.1: the first word of the watcher's exec/<script>.verdict when PASS or FAIL, else pending."""
     try:
         with open(os.path.join(folder, "exec", script + ".verdict")) as f:
-            return next((w for w in f.read().split()[:1] if w in ("PASS", "FAIL")), "pending")
+            words = f.read().split()
     except OSError:
         return "pending"
+    return words[0] if words and words[0] in ("PASS", "FAIL") else "pending"
 
 def evaluate(folder, notes=None):
     meta = load(folder, "meta.json")
@@ -482,7 +484,8 @@ def evaluate(folder, notes=None):
         return None
     r = Run(folder, meta)
     judge(r)
-    notes is None or notes.extend(watcher(r))
+    if notes is not None:
+        notes.extend(watcher(r))
     fault = r.v["faults"] if set(fault_kinds(meta)) - set(WATCHER) else None
     scripts = [w[1].split("@")[0] for w in (str(v).split() for v in meta.get("variant") or []) if w[:1] == ["exec"] and w[1:]]
     got = [r.v[c] for c in CHECKS] + [fault] * bool(fault)

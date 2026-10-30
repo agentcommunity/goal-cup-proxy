@@ -387,7 +387,7 @@ class Run:
                            case=self.case, version=s.get("version") or self.harness["version"], key_files=names,
                            route_key=names[-1] if names else None, home_vars=con.get("home") or {},
                            native=[{k: r.get(k) for k in ("name", "root", "pattern")} for r in con.get("native", [])],
-                           ca_env=con.get("ca_env") or [], model_hosts="model-hosts.toml",
+                           ca_env=con.get("ca_env") or [],
                            **{k: k + ".toml" for k, v in (("connector", s.get("connector")), ("hosts", hosts)) if v}), f)
         if s["where"] == "sandbox":
             if not os.path.isfile(os.path.join(HERE, "image.id")):
@@ -536,7 +536,7 @@ class Run:
                            case=self.case, mode=s["mode"], prompt=s["prompt"], variant=self.variant(), where=s["where"],
                            server=s["server"], keep=s["keep"], minutes=s["minutes"],
                            started=at, push="not tested", pad_trusted_at=None, steps=[list(ln) for ln in self.lines],
-                           hosts_sha256=self.hosts_sha, pinned_host=self.harness["model_host"] if self.case == "dodger" else None),
+                           hosts_sha256=self.hosts_sha, model_host=self.harness.get("model_host")),
                       f, indent=1, sort_keys=True)
         self.scan_out()
         result, saw, _ = self.box(step, 300, "PADCHECK", [sys.executable, os.path.join(HERE, "check.py"), self.dir])
@@ -605,9 +605,10 @@ class Run:
         return result, table
 
 
-def run_all(s, pad, harness, out_root, skip=()):
+def run_all(s, pad, harness, out_root):
     cases = ["direct", "gateway", "dodger"] if s["case"] == "all" else [s["case"]]
-    runs = [Run(s, c, pad, harness, out_root) for c in cases if c not in skip]
+    # section 2: a harness with no documented gateway route gets n/a, never a made-up config
+    runs = [Run(s, c, pad, harness, out_root) for c in cases if c != "gateway" or "gateway" in harness]
     with concurrent.futures.ThreadPoolExecutor() as ex:  # waits stay signal-interruptible on POSIX, so STOP is still set
         return list(ex.map(Run.walk, runs))
 
@@ -629,12 +630,11 @@ def main(argv):
         return 2
     for sig in (signal.SIGINT, signal.SIGTERM):
         signal.signal(sig, lambda *_: STOP.set())
-    na = ("gateway",) * ("gateway" not in harness)  # section 2: no documented route is n/a, never a made-up config
-    results = run_all(s, pad, harness, os.path.join(REPO, "pad-out"), na)
+    results = run_all(s, pad, harness, os.path.join(REPO, "pad-out"))
     sys.stdout.write("".join(table for _, table in results))
-    if na and s["case"] in ("gateway", "all"):
+    if "gateway" not in harness and s["case"] in ("gateway", "all"):
         print("gateway n/a: %s has no documented gateway route" % s["harness"])
-    got = [r for r, _ in results]
+    got = [r for r, _ in results] or ["INCONCLUSIVE"]  # no row at all (gateway n/a) is never "every row PASS"
     return 1 if "FAIL" in got else 3 if "INCONCLUSIVE" in got else 0
 
 

@@ -24,6 +24,9 @@ EVERY = {"status": 10, "procs": 30, "pane": 60, "live": 300}  # section 4: the w
 OUT = ("verify", "watch", "exec", "status.json", "harness-files.json", "meta-box.json")  # what out.tar carries
 PROXY_CA = tuple(n for p in ("HTTPS", "HTTP", "ALL", "NO") for n in (p + "_PROXY", p.lower() + "_proxy")) + (
     "SSL_CERT_FILE", "SSL_CERT_DIR", "NODE_EXTRA_CA_CERTS", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE")
+HARNESS_ENV = ("HOME", "PATH", "GOALCUP_TIME_LEFT_FILE")  # not keys: what `sh -lc 'goalcup time-left'` needs
+# ~/bin (pad puts the goalcup build there) and the image's harness folders (/etc/profile.d/pad.sh, a login file)
+BOX_BIN = ("~/bin", "~/.npm-global/bin", "~/.local/bin")
 
 
 class Step(Exception):  # a step's end: args are (result, saw)
@@ -47,10 +50,16 @@ def replace_known(text, values):
     return text, count
 
 
-def exec_env(environ, ca_names=()):
-    """Section 3.1: from /proc/<pid>/environ bytes, only the proxy and CA names (and settings' ca_env), never a key."""
+def exec_env(environ, names=()):
+    """Section 3.1: from /proc/<pid>/environ bytes, only the proxy and CA names, HOME, PATH and the time-left file
+    (PRD-10 acceptance 7), and `names` (settings' ca_env and the connector's home names); never a key."""
     pairs = (item.decode(errors="replace").partition("=") for item in environ.split(b"\0"))
-    return {k: v for k, eq, v in pairs if eq and k in PROXY_CA + tuple(ca_names)}
+    return {k: v for k, eq, v in pairs if eq and k in PROXY_CA + HARNESS_ENV + tuple(names)}
+
+
+def quoted(env):
+    """NAME=value words, shell-quoted, for a script to take with `eval "set -- $VAR"`."""
+    return " ".join(shlex.quote("%s=%s" % kv) for kv in env.items())
 
 
 def sh(argv, timeout=120, stdin=subprocess.DEVNULL, **kw):
@@ -197,9 +206,11 @@ class Run:
             raise Step("skip", "no entry")
 
     def gc_env(self, clean=False):
-        """The run's GOALCUP_* values; clean: with only HOME, PATH and TERM beside them (no proxy or CA variable)."""
+        """The run's GOALCUP_* values; clean: with only HOME, PATH (BOX_BIN first) and TERM beside them (no proxy or
+        CA variable): the participant's shell."""
         s, e = self.s, os.environ
-        base = dict(HOME=e.get("HOME", ""), PATH=e.get("PATH", ""), TERM=e.get("TERM") or "xterm") if clean else {}
+        path = os.pathsep.join([os.path.expanduser(d) for d in BOX_BIN] + [e.get("PATH", "")])
+        base = dict(HOME=e.get("HOME", ""), PATH=path, TERM=e.get("TERM") or "xterm") if clean else {}
         return dict(base, GOALCUP_HOME=self.env["GOALCUP_HOME"], GOALCUP_SERVER="off" if s.get("server") == "off" else
                     str(s.get("server_url")), GOALCUP_NO_BROWSER="1", **{"GOALCUP_KEEP_PARTS": "1"} if s.get("keep") else {})
 
@@ -231,8 +242,7 @@ class Run:
         self.st.update(key_route=route, key_env=get("key_env"), key_path=key)
         if route == "login":
             with open(key) as f:  # the key goes to stdin, never an argument
-                home_vars = {k: v.replace("{home}", home) for k, v in (s.get("home_vars") or {}).items()}  # PRD-11 `home`
-                r = sh(shlex.split(get("login")), stdin=f, env=dict(self.env, **home_vars or {"HOME": home}))
+                r = sh(shlex.split(get("login")), stdin=f, env=dict(self.env, **self.home_env()))
             if r.returncode:
                 raise Step("FAIL", "harness login exit %d" % r.returncode)
         elif route == "file":
@@ -242,6 +252,11 @@ class Run:
             if not (route == "env" and name == s["route_key"]):
                 os.remove(os.path.join(self.keys, name))
         return "ok", saw + ", goalcup setup, key route %s" % route
+
+    def home_env(self):
+        """PRD-11 `home`: the connector's home mapping with {home} filled, else HOME (the login and the pre scripts)."""
+        home = self.st.get("home") or ""
+        return {k: v.replace("{home}", home) for k, v in (self.s.get("home_vars") or {}).items()} or {"HOME": home}
 
     def plant(self):
         """Section 5: one fake value per PRD-05 section 10 shape, the no-shape value, the remote password."""
@@ -423,15 +438,16 @@ class Run:
         if not alive(pid := pc.dig(self.status(), "s4_harness_pid")):
             raise Step("skip", "no harness process")
         with open("/proc/%d/environ" % pid, "rb") as f:  # filtered by name before anything holds it
-            env = exec_env(f.read(), self.s.get("ca_env") or ())
+            env = exec_env(f.read(), list(self.s.get("ca_env") or ()) + list(self.s.get("home_vars") or {}))
         return self.script("exec", script, env, minute=self.m)
 
     def script(self, kind, name, env, **kw):
         """bash exec/<name> in the project, its process group killed at the step's limit; only the replaced output
-        reaches exec/<name>.txt; one faults.jsonl line. No key file path or key value is in its environment."""
-        env = dict(env, **self.gc_env(True), PAD_RUN=self.run, PAD_PROJECT=self.project, PAD_HOME=self.st.get("home") or "",
-                   PAD_MODEL_HOSTS=self.path(self.s.get("model_hosts") or "model-hosts.toml"),
-                   PAD_DAEMON=str(self.h.get("daemon") or ""))
+        reaches exec/<name>.txt; one faults.jsonl line. No key file path or key value is in its environment. An exec
+        script runs with the harness's names from exec_env over the participant's shell (PAD_SHELL_ENV)."""
+        env = dict(self.gc_env(True), **env, PAD_RUN=self.run, PAD_PROJECT=self.project, PAD_HOME=self.st.get("home") or "",
+                   PAD_MODEL_HOSTS=self.path("model-hosts.toml"), PAD_DAEMON=str(self.h.get("daemon") or ""),
+                   PAD_SHELL_ENV=quoted(self.gc_env(True)), PAD_HOME_ENV=quoted(self.home_env()))
         p = subprocess.Popen(["bash", os.path.join(PAD, "exec", name)], cwd=self.project, env=env, stdin=subprocess.DEVNULL,
                              stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, errors="replace", start_new_session=True)
         try:

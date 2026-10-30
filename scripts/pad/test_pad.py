@@ -217,12 +217,12 @@ class BoxHalf(unittest.TestCase):
             self.assertNotIn("PADSENTINEL", f.read())
         self.assertFalse([a for argv in argvs for a in argv if "PADSENTINEL" in a])
 
-    def test_exec_env_keeps_only_proxy_and_ca(self):  # section 3.1: /proc/<pid>/environ holds the harness's keys
+    def test_exec_env_keeps_no_key(self):  # section 3.1: /proc/<pid>/environ holds the harness's keys
         environ = b"\0".join([b"HTTPS_PROXY=http://127.0.0.1:4100", b"SSL_CERT_FILE=/run/ca.pem", b"PAD_CA=/run/ca2.pem",
                               b"OPENAI_API_KEY=" + SENTINEL.encode(), b"GOALCUP_TEST_APPROVAL_KEY=gca-PADSENTINEL-2",
-                              b"PATH=/usr/bin", b""])
-        got = padrun.exec_env(environ, ["PAD_CA"])
-        self.assertEqual(set(got), {"HTTPS_PROXY", "SSL_CERT_FILE", "PAD_CA"})
+                              b"PATH=/usr/bin", b"HOME=/iso", b"GOALCUP_TIME_LEFT_FILE=/e/upload.json", b"LANG=C", b""])
+        got = padrun.exec_env(environ, ["PAD_CA"])  # PRD-10 acceptance 7 adds HOME, PATH and the time-left file
+        self.assertEqual(set(got), {"HTTPS_PROXY", "SSL_CERT_FILE", "PAD_CA", "PATH", "HOME", "GOALCUP_TIME_LEFT_FILE"})
         self.assertNotIn("PADSENTINEL", json.dumps(got))
 
 
