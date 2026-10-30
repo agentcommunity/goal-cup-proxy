@@ -646,6 +646,8 @@ def main(argv):
     except Exception as e:  # never the message, which could quote a value: only the kind
         result, saw = "FAIL", "%s in %s" % (type(e).__name__, argv[2])
     if run and os.path.isdir(run.run) and not run.quiet:
+        if kind == "wait-recovery":  # its end on the box clock, beside the kill and seal-now lines check.py reads
+            run.fault(kind, result=result)
         write(run.path("state.json"), json.dumps(run.st))
     ids = dict({k: run.st.get(k) for k in ("entry", "run")}, code=getattr(run, "code", None)) if run else {}  # code: start's only
     print("PADSTEP " + json.dumps(dict({k: v for k, v in ids.items() if v}, result=result, saw=saw, **extra)))

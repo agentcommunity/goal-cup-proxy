@@ -120,8 +120,8 @@ class Run:
         self.failed = {c.get("id"): c.get("why") for e in self.entries for c in dig(e, "s6_checks") or []
                        if isinstance(c, dict) and c.get("result") == "fail" and isinstance(c.get("id"), str)}
         self.v = dict.fromkeys(CHECKS + ("faults",), "PASS")
-        seals = [when(f.get("at")) for f in self.faults if f.get("kind") == "seal-now"]  # section 7: the pad's own seal
-        self.cap_at = min([t for t in seals if t], default=None) if meta.get("over_cap") is True else None
+        seals = [when(f.get("at")) for f in self.faults if f.get("kind") == "seal-now" and f.get("exit") == 0]  # section 7,
+        self.cap_at = min([t for t in seals if t], default=None) if meta.get("over_cap") is True else None  # as pad-run
         got = [dig(e, "s6_requests") for e in self.entries if isinstance(dig(e, "s6_requests"), int)]
         self.reqs, self.native = sum(got) if got else None, sum(count(dig(e, "s6_native")) for e in self.entries)
 
@@ -292,11 +292,6 @@ def fail(r, cond, start, end, why):
     if cond:
         r.mark("faults", *(("INCONCLUSIVE", "sealed at the spend cap: " + why) if capped(r, start, end) else ("FAIL", why)))
 
-def step_end(r, row):
-    """The latest a meta.json step row can have ended: the conductor's start plus its H:MM, plus the minute it floors."""
-    t0, m = when(r.meta.get("started")), re.fullmatch(r"(\d+):(\d\d)", str(row[2]) if len(row) > 2 else "")
-    return t0 + datetime.timedelta(minutes=int(m.group(1)) * 60 + int(m.group(2)) + 1) if t0 and m else None
-
 def fired(r, *kinds):
     """The fault lines of a kill of one of these kinds that fired (a pid was hit)."""
     return [f for f in r.faults if f.get("kind") in kinds and f.get("pid") is not None]
@@ -309,30 +304,32 @@ def faults(r):
     if not set(kinds) & set(BUILT_FAULTS):
         return
     kills = fired(r, "kill-recorder")
-    r.flag(len(kills) < kinds.count("kill-recorder"), "faults", "INCONCLUSIVE",
-           "fault did not fire: %d of %d kills" % (len(kills), kinds.count("kill-recorder")))
+    missed = [when(f.get("at")) for f in r.faults if f.get("kind") == "kill-recorder" and f.get("pid") is None]
+    short = "fault did not fire: %d of %d kills" % (len(kills), kinds.count("kill-recorder"))
+    if r.cap_at and any(t and t + SEAL_SLACK >= r.cap_at for t in missed):  # section 7: the pad's seal left nothing to kill
+        short = "sealed at the spend cap: " + short
+    r.flag(len(kills) < kinds.count("kill-recorder"), "faults", "INCONCLUSIVE", short)
     # The record's evidence around each kill: a status sample before and after it (the watch ran), and after a
     # recorder kill, written model requests up by at least 1 (section 1a).
     pairs = [(t, n) for t, n in ((when(s.get("pad_at")), dig(s, "s4_requests")) for s in r.samples) if t]
     times, reqs = [t for t, _ in pairs], [(t, n) for t, n in pairs if isinstance(n, int)]
-    rec = [(s[1], step_end(r, s)) for s in r.meta.get("steps") or [] if isinstance(s, list) and s[:1] == ["wait-recovery"]]
+    rec = [(f.get("result"), when(f.get("at"))) for f in r.faults if f.get("kind") == "wait-recovery"]
     killed = [t for t in (when(f.get("at")) for f in kills) if t]
     # Each kill's window runs to the end of the wait-recovery after it (open when unknown); a wait-recovery's from
     # the last kill before it. A record-only check (gaps, null_mode) is judged whatever the pad did after.
-    after = lambda k: next((e for _, e in rec if e is None or e >= k), None)  # noqa: E731
     for f in fired(r, "kill-recorder", "kill-watchdog"):
         k = when(f.get("at"))
         if not (k and any(t < k for t in times) and any(t > k for t in times)):
             r.mark("faults", "INCONCLUSIVE", "no status sample on both sides of the %s at %s" % (f["kind"], f.get("at")))
         elif f["kind"] == "kill-recorder" and "kill-recorder" in kinds:
             old, new = [n for t, n in reqs if t < k], [n for t, n in reqs if t > k]
-            fail(r, old and new and max(new) <= max(old), k, after(k),
+            fail(r, old and new and max(new) <= max(old), k, next((e for _, e in rec if e is None or e >= k), None),
                  "no model request written after the kill at %s (status samples)" % f.get("at"))
     for got, end in rec:
-        fail(r, got in ("FAIL", "timeout"), max([k for k in killed if end is None or k <= end], default=None), end,
+        fail(r, got == "FAIL", max([k for k in killed if end is None or k <= end], default=None), end,
              "did not stand back up (wait-recovery)")
     res = [x for x, _ in rec]
-    r.flag(kills and "kill-recorder" in kinds and (not res or set(res) - {"ok", "FAIL", "timeout"}), "faults",
+    r.flag(kills and "kill-recorder" in kinds and (not res or set(res) - {"ok", "FAIL"}), "faults",
            "INCONCLUSIVE", "recovery not observed: wait-recovery %s" % (", ".join(map(str, res)) or "not run"))
     gaps, counts = r.gaps()
     other = sorted(k for k, n in counts.items() if n and k.split(":")[0] not in DOWN + ("after_stop",))  # R2: seal
@@ -352,7 +349,7 @@ def faults(r):
     for a, b, ms in span:
         ms = ms if isinstance(ms, (int, float)) else (b - a).total_seconds() * 1000 if a and b else None
         r.flag(ms is None or ms >= 2000, "faults", "FAIL", "a recorder_down gap of %s ms, not under 2 s" % ms)
-    r.flag(dig(r.local, "s6_exit") != 1, "faults", "FAIL", "verifier exit %s, a kill row expects 1" % dig(r.local, "s6_exit"))
+    r.flag(kills and dig(r.local, "s6_exit") != 1, "faults", "FAIL", "verifier exit %s, a kill row expects 1" % dig(r.local, "s6_exit"))
 
 def recover(r, gaps):
     for kind in ("kill-watchdog", "kill-recorder"):  # PRD-10 acceptance 11 needs both kills

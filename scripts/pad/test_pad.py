@@ -224,31 +224,32 @@ class CrashRows(unittest.TestCase):
 
     UP = ({"written": {"model_requests": 2}}, {"written": {"model_requests": 5}})  # status samples before and after
 
-    def row(self, kind, gap, samples=UP, steps=(["wait-recovery", "ok", "3:10", ""],), seal="harness_exit", over_cap=False,
-            said=check.RECOVER, more=()):
-        said = [{"kind": k, "exit": 0, "said": w} for k, w in zip(("recover", "recover", "status"),
-                                                                   said + (check.STATUS_RECOVER,))]
-        kills = [{"kind": k, "pid": 9, "at": "2026-10-30T10:02:00+00:00"} for k in ("kill-watchdog", "kill-recorder")]
+    def row(self, kind, gap, samples=UP, recovery=(("ok", "10:03"),), seal="harness_exit", over_cap=False,
+            words=check.RECOVER, more=(), pid=9, code=1):
+        told = [{"kind": k, "exit": 0, "said": w, "at": "2026-10-30T10:%s+00:00" % t}
+                for k, w, t in zip(("recover", "recover", "status"), words + (check.STATUS_RECOVER,), ("02:30", "04:00", "03:30"))]
+        kills = [{"kind": k, "pid": pid, "at": "2026-10-30T10:02:00+00:00"} for k in ("kill-watchdog", "kill-recorder")]
+        rec = [{"kind": "wait-recovery", "result": x, "at": "2026-10-30T%s:00+00:00" % t} for x, t in recovery]
         files = {"meta.json": {"connector": "codex-cli", "case": "direct", "variant": [kind + "@3"], "server": "off",
-                               "keep": True, "commits_since_start": 1, "entry": "e1", "steps": list(steps), "over_cap": over_cap,
+                               "keep": True, "commits_since_start": 1, "entry": "e1", "over_cap": over_cap,
                                "started": "2026-10-30T10:00:00+00:00"},
-                 "verify/check-local.json": {"exit": 1, "entries": [{"entry": "e1", "seal_reason": seal,
+                 "verify/check-local.json": {"exit": code, "entries": [{"entry": "e1", "seal_reason": seal,
                      "counts": {"model_requests": 5, "gaps": {"recorder_down": 1}}, "checks": [
                          {"id": "gap_has_end", "result": "pass"}, {"id": "history_complete", "result": "pass"},
-                         {"id": "inv6", "result": "named", "facts": {"gaps": [gap]}}]}]},
+                         {"id": "inv6", "result": "named", "facts": {"gaps": [gap] if gap else []}}]}]},
                  "verify/usage/e1.json": {"tokens": {"merged": {"input": 9, "output": 9}}, "coverage": {"unattributed": 0},
                                           "threads": [{"parent": None, "models": {"m": 3}, "wire_calls": 3},
                                                       {"parent": "t0", "models": {"m": 2}, "wire_calls": 2}]},
                  "watch/status.jsonl": [{"at": "2026-10-30T10:0%d:00+00:00" % (4 * i), "status": x} for i, x in enumerate(samples)],
-                 "watch/faults.jsonl": said + kills + list(more)}
+                 "watch/faults.jsonl": told + kills + rec + list(more)}
         return evaluate(files)
 
     def test_kill_recorder(self):
         gap = {"start": "2026-10-30T10:00:00Z", "end": "2026-10-30T10:00:01.2Z"}
         good = self.row("kill-recorder", gap)
         self.assertEqual((good["result"] != "FAIL", good["faults"]), (True, "PASS"))
-        down = [["wait-recovery", "timeout", "4:10", ""]]  # did not stand back up
-        for bad in ({"gap": dict(gap, cause="null_mode")}, {"gap": dict(gap, end="2026-10-30T10:00:02.5Z")}, {"steps": down},
+        down = (("FAIL", "10:04"),)  # did not stand back up
+        for bad in ({"gap": dict(gap, cause="null_mode")}, {"gap": dict(gap, end="2026-10-30T10:00:02.5Z")}, {"recovery": down},
                     {"samples": self.UP[:1] * 2}):  # no model request written after the kill
             self.assertEqual(self.row("kill-recorder", **dict({"gap": gap}, **bad))["result"], "FAIL", bad)
 
@@ -263,14 +264,19 @@ class CrashRows(unittest.TestCase):
 
     def test_seal_at_the_spend_cap_is_not_a_fault_failure(self):  # section 7, ledger T6: the pad's own seal
         gap = {"start": "2026-10-30T10:00:00Z", "end": "2026-10-30T10:00:01.2Z"}
-        down = [["wait-recovery", "timeout", "0:04", ""]]  # ended by 10:05
-        for at, over_cap, fails in (("10:03", True, False), ("10:03", False, True), ("10:20", True, True)):
-            seal = [{"kind": "seal-now", "exit": 0, "at": "2026-10-30T%s:00+00:00" % at}]
-            self.assertEqual(self.row("kill-recorder", gap, steps=down, over_cap=over_cap, more=seal)["result"] == "FAIL",
-                             fails, (at, over_cap))
-            wgap = {"cause": "watchdog_lost", "start": "2026-10-30T10:01:00Z", "end": "2026-10-30T10:02:00Z"}
-            self.assertEqual(self.row("kill-watchdog-recover", wgap, said=(check.RECOVER[0], "sealed"), over_cap=over_cap,
-                                      more=seal)["result"] == "FAIL", over_cap is False, (at, over_cap))
+        down = (("FAIL", "10:04"),)
+        wgap = {"cause": "watchdog_lost", "start": "2026-10-30T10:01:00Z", "end": "2026-10-30T10:02:00Z"}
+        for at, over_cap, code, fails in (("10:03", True, 0, False), ("10:03", False, 0, True), ("10:20", True, 0, True),
+                                          ("10:03", True, 1, True)):  # a seal-now that did not seal is not the cap seal
+            seal = [{"kind": "seal-now", "exit": code, "at": "2026-10-30T%s:00+00:00" % at}]
+            self.assertEqual(self.row("kill-recorder", gap, recovery=down, over_cap=over_cap, more=seal)["result"] == "FAIL",
+                             fails, (at, over_cap, code))
+            self.assertEqual(self.row("kill-watchdog-recover", wgap, words=(check.RECOVER[0], "sealed"), over_cap=over_cap,
+                                      more=seal)["result"] == "FAIL", fails, (at, over_cap, code))
+        # Sealed at the cap before the kill: nothing left to kill, no gap, verifier exit 0. Not goalcup's failure.
+        early = [{"kind": "seal-now", "exit": 0, "at": "2026-10-30T10:01:00+00:00"}]
+        got = self.row("kill-recorder", None, pid=None, code=0, recovery=(("skip", "10:02"),), over_cap=True, more=early)
+        self.assertEqual((got["result"] != "FAIL", got["faults"]), (True, "INCONCLUSIVE"))
 
 
 class SecretCheck(unittest.TestCase):
