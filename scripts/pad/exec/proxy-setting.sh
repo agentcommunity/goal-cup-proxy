@@ -5,7 +5,14 @@ set -eu
 python3 - "$PAD_HOME/settings.json" <<'PY'
 import json, os, sys
 p = sys.argv[1]
-s = dict(json.load(open(p)) if os.path.exists(p) and os.path.getsize(p) else {}, proxy="http://127.0.0.1:9")
-json.dump(s, open(p, "w"), indent=2)
-print("wrote proxy into %s, kept %d other keys" % (p, len(s) - 1))
+if os.path.exists(p) and os.path.getsize(p):
+    with open(p) as f:
+        s = json.load(f)
+else:
+    s = {}
+n = len(s) - ("proxy" in s)
+s["proxy"] = "http://127.0.0.1:9"
+with open(p, "w") as f:
+    json.dump(s, f, indent=2)
+print("wrote proxy into %s, kept %d other keys" % (p, n))
 PY

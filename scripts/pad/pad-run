@@ -66,9 +66,9 @@ def sh(argv, timeout=120, stdin=subprocess.DEVNULL, **kw):
     return subprocess.run(argv, capture_output=True, text=True, timeout=timeout, stdin=stdin, **kw)
 
 
-def tool(name):  # ~/bin first (pad puts the build there), then PATH
-    mine = os.path.expanduser("~/bin/" + name)
-    return mine if os.access(mine, os.X_OK) else shutil.which(name)
+def tool(name):  # BOX_BIN first (pad puts the build in ~/bin), then PATH
+    mine = [os.path.expanduser("%s/%s" % (d, name)) for d in BOX_BIN]
+    return next((p for p in mine if os.access(p, os.X_OK)), None) or shutil.which(name)
 
 
 def write(path, text, mode=0o600):
@@ -147,8 +147,8 @@ class Run:
         self.sec = self.h.get("gateway" if self.s.get("case") == "gateway" else "direct", {})
         self.keys, self.tmux = self.path("keys"), self.s.get("session") or "pad"  # copies only, never ~/.pad-keys
         lim = float((self.s.get("limits") or {}).get(kind, 300))  # pad's limit for this step; a timed one's runs from its minute
-        self.m = float(m) if m else None
-        self.end = max(time.time(), self.st.get("pasted", 0) + self.m * 60 if m else 0) + lim
+        self.m = float(m) if m else None  # a timed step's minute after the paste (kill-*, exec)
+        self.end = max(time.time(), self.st.get("pasted", 0) + (self.m or 0) * 60) + lim
 
     def path(self, *p):
         return os.path.join(self.run, *p)
@@ -432,7 +432,7 @@ class Run:
     def pre(self, script):  # section 3.1: once, after setup and before start
         return self.script("pre", script, {})
 
-    def exec(self, script):  # section 3.1: at minute m, in the harness's proxy and CA environment, never its keys
+    def exec(self, script):  # section 3.1: at its minute, in the harness's proxy and CA environment, never its keys
         self.need(started=True)
         self.at(self.m)
         if not alive(pid := pc.dig(self.status(), "s4_harness_pid")):
@@ -445,9 +445,10 @@ class Run:
         """bash exec/<name> in the project, its process group killed at the step's limit; only the replaced output
         reaches exec/<name>.txt; one faults.jsonl line. No key file path or key value is in its environment. A pre
         script runs in the participant's shell; an exec script with only the harness's names from exec_env."""
-        env = dict(self.gc_env(True) if kind == "pre" else env, PAD_RUN=self.run, PAD_PROJECT=self.project, PAD_HOME=self.st.get("home") or "",
+        shell = self.gc_env(True)
+        env = dict(shell if kind == "pre" else env, PAD_RUN=self.run, PAD_HOME=self.st.get("home") or "",
                    PAD_MODEL_HOSTS=self.path("model-hosts.toml"), PAD_DAEMON=str(self.h.get("daemon") or ""),
-                   PAD_SHELL_ENV=quoted(self.gc_env(True)), PAD_HOME_ENV=quoted(self.home_env()))
+                   PAD_SHELL_ENV=quoted(shell), PAD_HOME_ENV=quoted(self.home_env()))
         p = subprocess.Popen(["bash", os.path.join(PAD, "exec", name)], cwd=self.project, env=env, stdin=subprocess.DEVNULL,
                              stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, errors="replace", start_new_session=True)
         try:
@@ -474,7 +475,8 @@ class Run:
         self.fault("kill-recorder", minute=m, pid=pid if ok else None, since_request_s=since)
         return (pid if ok else None), since
 
-    def kill_recorder(self, m):  # section 3.1; S4 has no open-stream count yet: wait up to 60 s for a request in the last 10 s
+    def kill_recorder(self, _):  # section 3.1; S4 has no open-stream count yet: wait up to 60 s for a request in the last 10 s
+        m = self.m
         self.need("goalcup", started=True)
         self.at(m)
         wait(lambda: (t := pc.when(pc.dig(self.status(), "s4_last"))) is not None and time.time() - t.timestamp() < 10, 60, 1)
@@ -502,7 +504,8 @@ class Run:
             pc.dig(st, "s4_pid"), time.time() - k["at"], (pc.dig(st, "s4_down_ms") or 0) - (k["off_ms"] or 0),
             pc.dig(st, "s4_requests"), k["requests"])
 
-    def kill_watchdog_recover(self, m):  # section 3.1, PRD-10 acceptance 11; the harness is never touched
+    def kill_watchdog_recover(self, _):  # section 3.1, PRD-10 acceptance 11; the harness is never touched
+        m = self.m
         self.need("goalcup", started=True, entry=True)
         self.at(m)
         wpid = read_pid(os.path.join(self.st["entry_dir"], "rec", "watchdog.pid"))
@@ -643,13 +646,12 @@ class Run:
         try:
             self.need("goalcup-verify", entry=True)
             shutil.copy(os.path.join(e, "status.json"), self.path("status.json"))
-            raw = [p for p in (os.path.join(e, "goalcup.log"), os.path.join(e, "upload.json")) if os.path.exists(p)]
             f, on = os.path.join("fetched", self.st["entry"]), self.s["server"] != "off"
             got = on and os.path.isfile(self.path(f, "rec.gcr.zst"))
             note = "; no fetched copy" if on and not got else ""
             for name, argv in [("check-local", ["check", "--json", "--known", "known", "--harness-files", "harness-files.json", e])] + [
                     ("check-server", ["check", "--json", "--server", f, "--local", e, "--known", "known"])] * got + [
-                    ("secrets", ["secrets", "--known", "known", e] + [f] * got + ["status.json"] + raw),
+                    ("secrets", ["secrets", "--known", "known", e] + [f] * got + ["status.json"]),
                     ("secrets-plain", ["secrets", "--known", "known-plain", e] + [f] * got)] + [  # C5 is the server copy's
                     ("usage", ["usage", f if got else e, "--json", "--out", os.path.join("verify", "usage")])] * (got or not on):
                 exits[name] = self.verify_cmd(argv, None if name == "usage" else name + ".json")[0]
@@ -680,32 +682,53 @@ class Run:
         write(self.path("watch.stop"), "")
         wait(lambda: not alive(read_pid(self.path("watch.pid"))), 30, 1)
 
+    def stop_daemon(self):
+        """The daemon stale-gateway.sh left (its pid is in exec/): killed here if goalcup's start did not stop it, only
+        when its command line names the harness file's `daemon` program -> a line for the wipe step, or None."""
+        pid, want = read_pid(self.path("exec", "stale-gateway.pid")), str(self.h.get("daemon") or "").split()[:1]
+        if pid is None or not alive(pid):
+            return None if pid is None else "daemon %d gone" % pid
+        try:
+            with open("/proc/%d/cmdline" % pid, "rb") as f:
+                ours = bool(want) and want[0].encode() in f.read()
+            return "daemon %d still alive, killed" % pid if ours and os.kill(pid, signal.SIGKILL) is None else "daemon %d alive, not ours to kill" % pid
+        except OSError:
+            return "daemon %d gone" % pid
+
     def wipe(self, _):
         if os.path.isdir(self.run):  # the watch ends before the run folder goes
             self.stop_watch()
+        left = self.stop_daemon()
         if shutil.which("tmux"):
             sh(["tmux", "kill-session", "-t", self.tmux])
         found = self.wipe_secrets(known=True)
-        return "ok", "found and wiped: " + ", ".join(found) if found else "nothing key-like left"
+        return "ok", "; ".join([("found and wiped: " + ", ".join(found)) if found else "nothing key-like left"] + ([left] if left else []))
+
+
+def parse(words):
+    """-> (step, argument, minute) or None. A timed step is `kill-recorder@M`; `pre SCRIPT`, `exec SCRIPT@M` and
+    `wait-calls N` take a word; every other step stands alone. The minute is a string; the argument may be None."""
+    kind, at, m = (words[0] if words else "").partition("@")
+    arg = words[1] if len(words) == 2 else None
+    if kind == "exec" and arg:
+        arg, at, m = arg.partition("@")
+    script, minute = arg and re.fullmatch(r"[A-Za-z0-9._-]+", arg), re.fullmatch(r"\d+(\.\d+)?", m)
+    ok = (kind in TIMED and len(words) == 1 and minute or kind == "exec" and script and at and minute
+          or kind == "pre" and script and not at or kind in STEPS and not at and len(words) == 1 + (kind == "wait-calls"))
+    return (kind, arg, m) if ok else None
 
 
 def main(argv):
-    kind, at, m = argv[2].partition("@") if len(argv) in (3, 4) else ("", "", "")
-    arg = argv[3] if len(argv) == 4 else None
-    if kind in ("pre", "exec") and arg and not at:  # pre <script>, exec <script>@<m>
-        arg, at, m = arg.partition("@")
-        ok = re.fullmatch(r"[A-Za-z0-9._-]+", arg) and (re.fullmatch(r"\d+(\.\d+)?", m) if kind == "exec" else not at)
-    else:
-        ok = kind in TIMED and len(argv) == 3 and re.fullmatch(r"\d+(\.\d+)?", m) or (
-            kind in STEPS and not at and len(argv) == 3 + (kind == "wait-calls"))
-    if not ok:
+    got = parse(argv[2:])
+    if not got:
         print(USAGE, file=sys.stderr)
         return 2
+    kind, arg, m = got
     os.umask(0o077)
     run, extra = None, {}
     try:
         run = Run(argv[1], kind, m)
-        result, saw, *more = getattr(run, kind.replace("-", "_"))(float(m) if kind in TIMED else arg)
+        result, saw, *more = getattr(run, kind.replace("-", "_"))(arg)
         extra = more[0] if more else {}
     except Step as stop:
         result, saw = stop.args

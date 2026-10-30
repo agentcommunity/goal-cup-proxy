@@ -121,6 +121,9 @@ def check_push_token(path, repo=REPO):
     return path
 
 
+LONG_EXEC = {"refusal-curl.sh": 12, "long-tunnel.sh": 2}  # minutes an exec script runs (11 min wait; 90 s stream)
+
+
 def parse_steps(steps):
     out = []
     for raw in steps:
@@ -142,6 +145,12 @@ def parse_steps(steps):
             out.append(("calls", int(raw.split()[1]), raw))
         else:
             raise Usage("unknown step %r" % raw)
+    timed = sorted((m, raw) for kind, m, raw in out if kind == "timed")
+    for i, (m, raw) in enumerate(timed):  # the walk runs steps one after another: an exec holds the later ones back
+        long = LONG_EXEC.get(raw.split()[1].split("@")[0], 0) if raw.startswith("exec ") else 0
+        for n, other in timed[i + 1:]:
+            if n < m + long:
+                raise Usage("step %r runs about %d minutes and holds %r (minute %d) back: put it after minute %d" % (raw, long, other, n, m + long))
     return out
 
 
@@ -373,7 +382,8 @@ class Run:
         if s.get("connector"):  # S16 files, passed to goalcup start from the run folder
             shutil.copy(s["connector"], os.path.join(stage, "connector.toml"))
         shared = os.path.join(REPO, "connectors", "model-hosts.toml")
-        shutil.copy(shared, os.path.join(stage, "model-hosts.toml"))  # the pre scripts' own copy (section 3.1)
+        if any(kind == "pre" for kind, _, _ in s["plan"]):
+            shutil.copy(shared, os.path.join(stage, "model-hosts.toml"))  # the pre scripts' own copy (section 3.1)
         hosts = s.get("hosts") or self.case == "dodger" and shared
         if hosts:  # section 2: a dodger pins the model host in its copy, never in the checkout
             with open(hosts, "rb") as f:
@@ -605,10 +615,15 @@ class Run:
         return result, table
 
 
-def run_all(s, pad, harness, out_root):
+def case_list(s, harness):
+    """-> (cases to run, gateway n/a). Section 2: a harness with no documented gateway route gets n/a, never a made-up config."""
     cases = ["direct", "gateway", "dodger"] if s["case"] == "all" else [s["case"]]
-    # section 2: a harness with no documented gateway route gets n/a, never a made-up config
-    runs = [Run(s, c, pad, harness, out_root) for c in cases if c != "gateway" or "gateway" in harness]
+    na = "gateway" in cases and "gateway" not in harness
+    return [c for c in cases if not (na and c == "gateway")], na
+
+
+def run_all(s, pad, harness, out_root):
+    runs = [Run(s, c, pad, harness, out_root) for c in case_list(s, harness)[0]]
     with concurrent.futures.ThreadPoolExecutor() as ex:  # waits stay signal-interruptible on POSIX, so STOP is still set
         return list(ex.map(Run.walk, runs))
 
@@ -632,7 +647,7 @@ def main(argv):
         signal.signal(sig, lambda *_: STOP.set())
     results = run_all(s, pad, harness, os.path.join(REPO, "pad-out"))
     sys.stdout.write("".join(table for _, table in results))
-    if "gateway" not in harness and s["case"] in ("gateway", "all"):
+    if case_list(s, harness)[1]:
         print("gateway n/a: %s has no documented gateway route" % s["harness"])
     got = [r for r, _ in results] or ["INCONCLUSIVE"]  # no row at all (gateway n/a) is never "every row PASS"
     return 1 if "FAIL" in got else 3 if "INCONCLUSIVE" in got else 0

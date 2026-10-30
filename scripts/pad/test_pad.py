@@ -293,15 +293,19 @@ class SecretCheck(unittest.TestCase):
     PLANTED = {"openai_key": 1, "github_token": 1, "generic_secret_assignment": 1, "jwt": 1, "private_key": 1,
                "url_password": 1, "auth": 8}
 
-    def c3(self, masks, secrets_exit=1, plain_exit=0):
+    def c3(self, masks, secrets_exit=1, plain_exit=0, more=None):
         return evaluate({"meta.json": {"connector": "codex-cli", "case": "direct", "known_box": True, "entry": "e1"},
-                         "verify/secrets.json": {"masks": masks}, "verify/secrets-conductor.json": {"hits": 0},
+                         "verify/secrets.json": dict(more or {}, masks=masks), "verify/secrets-conductor.json": {"hits": 0},
                          "verify/exits.json": {"secrets": secrets_exit, "secrets-out": 0, "secrets-plain": plain_exit}}
                         )["checks"]["C3"]
 
     def test_known_value_hit_fails(self):
         self.assertEqual(self.c3(self.PLANTED, secrets_exit=2), "FAIL")
         self.assertEqual(self.c3(dict(self.PLANTED, jwt=0)), "FAIL")
+
+    def test_oversized_mask_fails_the_scan(self):  # PRD-08: exit 2 with no known or shape hit, only a big MASK span
+        big = {"known_hits": [], "shape_hits": [], "big_masks": [{"kind": "jwt", "in": "rec", "len": 20000}]}
+        self.assertEqual(self.c3(self.PLANTED, secrets_exit=2, more=big), "FAIL")
 
     def test_conductor_scan_counts_its_own_secrets(self):  # section 7: the approval key in the run folder is a hit
         run = mock.Mock(dir=self.enterContext(tempfile.TemporaryDirectory()))
@@ -310,6 +314,39 @@ class SecretCheck(unittest.TestCase):
         with mock.patch.dict(os.environ, {"GOALCUP_TEST_APPROVAL_KEY": SENTINEL + "ap"}):
             pad.Run.scan_out(run)
         self.assertEqual(check.Run(run.dir, {}).hits("secrets-conductor"), 1)
+
+
+class CaseRows(unittest.TestCase):
+    """Section 2 and 3.1, C1 only: the gateway rule reads wire call rows, not native ones; an exec script's row keeps the
+    exit-0 rule unless its owner expects a named loss; a dodger with no local log still passes C2 on its pinned tunnels."""
+
+    WIRE = {"k": "call", "host": check.GATEWAY, "host_kind": "gateway"}
+
+    def row(self, case, calls=(), variant=(), code=0, gaps=None, **more):
+        entry = {"entry": "e1", "counts": dict({"model_requests": 5, "gaps": gaps or {}, "hosts": {check.GATEWAY: 5}}, **more),
+                 "checks": [{"id": i, "result": "pass"} for i in ("gap_has_end", "history_complete", "listed_hosts_decrypted")]}
+        return evaluate({"meta.json": {"connector": "codex-cli", "case": case, "variant": list(variant), "server": "off",
+                                       "keep": True, "commits_since_start": 1, "entry": "e1", "model_host": "api.openai.com"},
+                         "verify/check-local.json": {"exit": code, "entries": [entry]},
+                         "verify/usage/e1.json": {"readable": False, "tokens": {"merged": {}}, "coverage": {"unattributed": 0},
+                                                  "threads": [{"parent": None, "models": {"m": 1}, "wire_calls": 1}]},
+                         "verify/usage/e1.calls.jsonl": list(calls)})
+
+    def test_gateway_rule_reads_wire_rows_only(self):
+        native = {"k": "call", "host": None, "host_kind": None}
+        self.assertEqual(self.row("gateway", [self.WIRE, native])["checks"]["C1"], "PASS")
+        vendor = dict(self.WIRE, host="api.openai.com", host_kind="provider")
+        self.assertEqual(self.row("gateway", [self.WIRE, vendor])["checks"]["C1"], "FAIL")
+
+    def test_exec_row_keeps_the_exit_rule(self):
+        lost = dict(code=1, gaps={"tunnel": 1})
+        self.assertEqual(self.row("direct", variant=["exec h2-parallel.sh@1"], **lost)["checks"]["C1"], "FAIL")
+        self.assertEqual(self.row("direct", variant=["exec refusal-curl.sh@1"], **lost)["checks"]["C1"], "PASS")
+
+    def test_dodger_without_a_local_log_passes_c2(self):
+        tunnels = {"api.openai.com": {"conns": 2, "listed": "pinned"}}
+        row = self.row("dodger", code=1, tunnel_hosts=tunnels)
+        self.assertEqual(row["checks"]["C2"], "PASS", row["why"])
 
 
 if __name__ == "__main__":
