@@ -1402,3 +1402,23 @@ to another file are made by that file's owner.
   WBITS 22; run 1 had about 40. The soft default is this PRD's number, not a locked item, so no W6.
   If PRD-16 X3 fails on a `decoder_window` GAP, the fix is the soft default, never a proxy cap.
 - No locked ledger item is touched.
+
+### 2026-10-30, replan after PRD-06 slice 1 (merge e6bd8a50)
+
+- **S18 and S10 are on integration** with these shapes, so the second slice's `server` line and the
+  seal hand-over can build now. `upload::spawn(UploadCtx) -> UploadHandle`, with
+  `UploadCtx { home, run_dir, entry_dir, run, entry, recorder: Option<Recorder>, keep }` (`recorder` is
+  None in null mode; `keep` comes from the start facts). `UploadHandle::server_word()` returns a
+  `tokio::sync::watch::Receiver<Option<ServerWord>>`, with
+  `ServerWord { stop, reason: Option<String>, seconds_left: Option<u64>, asked_at: Mono }`.
+  `UploadHandle::finish(self, upload::WrapUp, SealFacts { reason: watchdog::SealReason,
+  workspace_head: Option<String>, totals: pipeline::EntryTotals })`.
+- **This slice starts no uploader thread.** The receiver stays None and `finish` returns at once. So
+  until PRD-06's beat and send slices merge, no test can see a server `stop` or deadline come through
+  the uploader, and no test can time a wrap-up. A test of the `server` line before then sends the
+  line to the watchdog directly.
+- **A heartbeat call can take about 60 s** on a peer that trickles bytes (PRD-06 note, BR2-r1) until
+  PRD-06 takes the fix. The deadline counts from `asked_at`, which is taken before the call, so a slow
+  answer never stretches it. The watchdog reckons `seconds_left` from `asked_at` and not from when the
+  word arrived.
+- No locked ledger item is touched and no owner question comes from this slice.
