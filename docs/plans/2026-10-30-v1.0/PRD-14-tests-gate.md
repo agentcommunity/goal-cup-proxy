@@ -843,3 +843,13 @@ PRDs they touch and the code. Where two fixes disagree, the ledger and the later
   row plus 10%); `home.rs` (171 of 120) is cut first if it is not. Scripts: `gate.sh` 121 (section 8
   says about 75), `ci.yml` 57 (about 50), `release.sh` 111; 384 lines deleted.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-08 slice 1 (merge d10feef7)
+
+- `crates/goalcup-verify` is a workspace member (94d204f1) and in `gate fast`: 16 of the 83 tests on
+  d10feef7 are its own (`check_invariants.rs`, `check_named.rs`). `gate fast: PASS in 119s` against
+  83 to 87 s on the merges before; the extra is the first compile of the crate, `rusqlite` with
+  `bundled` (SQLite's C) included. Still under the 3-minute target; G1 measures it warm.
+- The crate declares no test hook and reads no `GOALCUP_TEST_*` variable; PRD-14's grep of the shipped
+  binary needs no exception for it.
+- No locked ledger item is touched and no owner question comes from this slice.

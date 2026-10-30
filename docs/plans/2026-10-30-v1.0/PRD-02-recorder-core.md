@@ -1349,3 +1349,19 @@ to another file are made by that file's owner.
   with `refusal` set never reaches the watchdog (PRD-10 stops first).
 - Until PRD-11's hosts slice merges, `hosts.decide` answers `NotListed` for every name and
   `ca_subtrees` is empty: a watchdog test that needs a decrypted request waits for that merge.
+
+### 2026-10-30, replan after PRD-08 slice 1 (merge d10feef7)
+
+- **`pipeline/counts.rs` has a second reader.** PRD-08's `integrity.rs` recounts every COUNT key
+  from the record to the rules of format-core 12:37Z (`native_bytes` is DATA bytes of native and
+  snapshot streams, `wire_bytes` every other DATA; `tunnel_hosts` listed is `null` until a GAP is
+  written on that tunnel conn, then that GAP's reason name; a GAP on `ws_up` makes the next text or
+  binary message end holed; `off_ms` only from sid 0 `recorder_down`, floored to ms) and the
+  `hosts` rule of format-core 13:19Z. `inv7` and `counts_match_seal` fail when a known key is
+  missing or differs, and ignore keys they do not know. So: a new COUNT key is safe; a renamed or
+  removed key, or a changed counting rule, is a seam line naming PRD-08 and the same change in
+  `crates/goalcup-verify/src/integrity.rs` in one merge window, or every real entry fails `inv7`.
+- **Recovered seals.** The verifier counts a recovered seal's `recorder_down` gap in its own recovery
+  frame, including the boot-0 head gap and a second recovery frame (fixes N1 and N2). A change to how
+  `recover` writes the seal or the gap after `start` is likewise a seam line naming PRD-08.
+- No locked ledger item is touched and no owner question comes from this slice.

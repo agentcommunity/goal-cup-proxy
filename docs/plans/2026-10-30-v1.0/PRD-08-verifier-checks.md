@@ -726,3 +726,68 @@ log; the pad lane follows.
   defect. Check-test fixtures are hand-written records or built with `Masker::passthrough_for_tests()`,
   never with the stub.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-08 slice 1 (merge d10feef7)
+
+- **Size decision.** `wc -l` at d10feef7: src 1,635 (`integrity.rs` 1,089, `main.rs` 209,
+  `input.rs` 192, `report.rs` 122, `usage/mod.rs` 12 (PRD-09's placeholder), `lib.rs` 11), 117%
+  of the 1,400 row with four of the ten source files written; tests 1,471 (`tests/common/mod.rs` 907,
+  `check_invariants.rs` 346, `check_named.rs` 218), 134% of the 1,100 row with three of the seven
+  files. This PRD estimated 630 for the files written (input 150, integrity 380, report and main 100);
+  they came to 1,623. The fixer's line (judge 13:09Z) names points 5 and 6: all 19 COUNT counters plus
+  `hosts` and `tunnel_hosts` are recounted to PRD-02's `pipeline/counts.rs` rules, and the seal
+  totals per recovery frame, so the counts the participant saw are proven. **Decision:** the crate's
+  ceiling is 2,400 src and 1,700 tests by `wc -l` at the end of the last PRD-08 slice (`usage/` is
+  PRD-09's row once PRD-09 replaces the placeholder). The extra lines serve points 5 and 6 as above and
+  point 3 (every `recorder_down` cause, null mode and recovery frame is `named`, never a crash or a
+  false `fail`). Per-file ceilings: `integrity.rs` 1,000, `input.rs` 150, `main.rs` 200,
+  `report.rs` 150, `lib.rs` 11, `honesty.rs` 150, `legs.rs` 260, `history.rs` 170, `server.rs`
+  130, `secrets.rs` 175; tests `tests/common/` 900 including the run 1 shape builder,
+  `check_invariants.rs` 330, `check_named.rs` 220, `check_run1_shape.rs` 80, `check_history.rs`
+  80, `server_*.rs` 60, `secrets_*.rs` 30. Cut first: B13 (below, about 20 test lines); the PRD-01
+  ask (below, about 40 lines of `input.rs`); `integrity.rs` down to 1,000 in the slice that next
+  touches it by folding the per-check call sites rustfmt spread (judge 13:09Z) into `Pass::set` and
+  `Pass::fail`, never by dropping a check. Reviewer B checks each merge against these numbers; past
+  them needs another decision line. The Rust test total stays at most about 14,200 (PRD-14 section 3,
+  raised only by the owner): PRD-16's end-of-build report nets this area's extra against the others,
+  and only a total past 14,200 becomes an owner question.
+- **S6 as merged** (answers to PRD-12's asks; judge 12:19Z, 12:35Z, 13:06Z). The `inv6` check's
+  `facts.gaps` is a list of `{cause, start, end, ms}`, one per `recorder_down` gap, `start` and
+  `end` as UTC text. Each entry carries `keep` from the start event. `counts.gaps` maps GAP reason
+  name to count; `gaps_named` facts are keyed by reason name with `{count, lost_bytes,
+  lost_unknown}`; `streams_closed` facts `open` lists `"boot.sid"`; `counts_match_seal` is
+  `skip` when unsealed or pruned. Every later check id is already in the report as `skip` "not built
+  in this slice" (seven local ids, plus the three `server_*` ids under `--server`); `history`,
+  `harness_log` and `provider_errors` are `null` and `threads` is `[]` until legs and history land.
+  `secrets --json` and its `masks` key still come with the secrets slice.
+- **Options as merged:** `check <path> --json --live --server --local <entry dir> --known <file>
+  --harness-files <manifest>`; the last three are accepted and read nothing until their slices.
+  `--live` reads null mode from `status.json` `off.since` only; a live entry with nothing durable
+  yet is `inv1` `skip` and exit 1; a part file that cannot be opened is exit 3.
+- **Pruned entry (L-FW3, local half).** Built: a folder whose first parts are gone exits 1 with
+  `parts_pruned` named (`inv3`, `inv7` and `inv9` do not fail in the first boot read;
+  `counts_match_seal` is `skip`). No test names it yet. The next slice adds one to `check_named.rs`
+  and posts its name in the night log; the server half stays in `server_compare.rs`.
+- **Panic output (L-VR2).** `main.rs` installs a panic hook that prints file and line only and exits 3.
+  No test yet; it stays with the server slice as planned. This crate has no test hook (ledger L6), so
+  the case needs an input that makes a check panic; if the builder finds none, it says so in the night
+  log and the lessons lane records the case as a review check of the hook.
+- **PRD-17 names** (judge 13:06Z): L-VR3 is `check_invariants.rs`
+  `vr3_every_mutation_fails_its_check_with_exit_2` (a 21-row table; each row asserts its own check
+  fails and exit 2, stricter than "1 or 2, never 3"); L-VR4 is `check_named.rs`
+  `clean_record_with_interrupted_end_exits_0`. The 12:49Z name `every_mutation_exits_1_or_2_never_3`
+  is superseded.
+- **The COUNT recount and PRD-02's `pipeline/counts.rs` move together.** `inv7` and
+  `counts_match_seal` compare every key the recount knows and ignore gauges and unknown keys; a COUNT
+  or seal totals that leaves a known key out fails. A change to a counting rule in either file is a seam
+  line and the same rule in the other file in one merge window (PRD-02 note).
+- **Ask of PRD-01 (optional):** let `read::Reader` or its `Tail` report the raw bytes decoded and
+  whether input ended inside an open frame, so `input.rs` drops its `Raw` and `Meter` copy (about
+  40 lines). Until then the copy stays.
+- **Open nit B13** (`tests/common/mod.rs`, `Entry::recovered_before_first_link`: the local `write`
+  closure copies `Entry::put`, `at` is split into `at` and `bare` only to skip tallying a dead
+  `start`, and two `Record::Event` literals are hand-written; reviewer B's shorter form keeps `put`
+  the only tally-and-write path, about 20 lines) goes to this PRD's next slice. Acceptance lists it as
+  known if it is still open at the end.
+- **The interfaces row clause on C1** is still the stale one (PRD-12 note); the pad follows PRD-12.
+- No locked ledger item is touched and no owner question comes from this slice.
