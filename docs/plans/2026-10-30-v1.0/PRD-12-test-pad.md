@@ -1465,3 +1465,28 @@ taken; "rejected" says why. Fixes for other files are made by those files' owner
   "not run: sender not merged", not FAIL. `server = "off"` runs are not affected. The `watch/upload.jsonl`
   reader can be built against the S9 type now (`goalcup::upload::state`).
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-08 slice 2 (merge 669f5d92)
+
+`check --server <fetched> [--local <entry dir>]` now gives real server results (PRD-08 note). What
+`check.py` reads for C4, C6 and K6, as merged:
+
+- The three ids `server_chunks_whole`, `server_equals_local` and `server_counts_match` per entry, and
+  the top-level `server` object `{chunks, whole, equals_local, db_match}`. `equals_local` and
+  `db_match` are true only when every entry passes, false on any `fail`, else null. `whole` is true
+  only when every entry passes.
+- Under `--server`, a folder with no `fetch.json` gives all three `fail`. A bare `rec.gcr.zst`
+  checked without `--server` skips them, so C4 always passes `--server` on a fetched copy.
+- `fetch.json` `missing.why` set gives `server_chunks_whole` `fail` with `first.o` =
+  `missing.offset`. `final` null alone gives `server_chunks_whole` `named` (exit 1) and
+  `server_counts_match` `skip` "not sealed". C4 reads the open end as INCONCLUSIVE, not FAIL.
+- `server_equals_local` is `skip` when the `--local` entry's first part is pruned or its `rec/` is
+  empty. A `--local` path that never held a record exits 3, which is the box's mistake, not the
+  run's.
+- K6's three tampers map as follows. A flipped byte fails `server_equals_local`; L-FW9 proves it.
+  A removed middle chunk fails `server_chunks_whole` on the offset or seq break. `model_requests`
+  plus one fails `server_counts_match`; the check reads `model_requests` as the seal's `http_post`
+  plus `ws_up_msgs`.
+- K2 still waits on the run 1 shape builder (PRD-08's legs slice). U1's stub is on integration, so
+  that slice need not wait for PRD-09.
+- No locked ledger item is touched and no owner question comes from this slice.

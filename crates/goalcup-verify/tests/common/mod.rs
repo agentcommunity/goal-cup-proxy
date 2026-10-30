@@ -332,19 +332,12 @@ impl Entry {
 
     /// The same, with wall time starting at `wall0` (a `--live` test passes a time an hour ago).
     pub fn at(name: &str, wall0: u64) -> Self {
-        let mut e = Self::bare(name, wall0);
-        e.event(start(false));
-        e
-    }
-
-    /// The PART alone.
-    fn bare(name: &str, wall0: u64) -> Self {
         let root = tmp(name);
         let dir = root.join(ENTRY);
         let rec = dir.join("rec");
         let clock = Clock { wall0, ns: 0 };
         let w = PartWriter::open(&rec, opts(), ENTRY, BOOT_ID, clock.now()).unwrap();
-        Self {
+        let mut e = Self {
             root,
             dir,
             rec,
@@ -355,7 +348,9 @@ impl Entry {
             down_ms: vec![],
             sid: 0,
             counts_at: HashMap::new(),
-        }
+        };
+        e.event(start(false));
+        e
     }
 
     /// Writes one record, after tallying it.
@@ -641,42 +636,17 @@ impl Entry {
     /// index line, is closed (PRD-01 section 12): recovery starts boot 0 afresh, and the caller
     /// writes `start`, the `recorder_down` gap and the `recovered` seal. Returns the entry folder.
     pub fn recovered_before_first_link(name: &str, cause: &str, down_ms: u64) -> PathBuf {
-        let mut e = Self::bare(name, WALL0);
-        let started = e.clock.now();
-        let t = e.clock.tick();
-        let w = e.w.as_mut().unwrap();
-        w.write(&Record::Event {
-            t,
-            json: start(false).to_string().into_bytes(),
-        })
-        .unwrap();
+        let mut e = Self::new(name);
+        let started = Clock { ns: 0, ..e.clock }.now();
         drop(e.w.take());
         e.idle(down_ms);
         let (now, r) = e.recover(cause, None, Some(started));
         e.w = r.writer;
         e.tally = Tally::new(0, now.mono_ns);
-        let write = |e: &mut Self, r: Record| {
-            e.tally.observe(&r);
-            e.w.as_mut().unwrap().write(&r).unwrap();
-        };
-        let t = e.clock.tick();
-        write(
-            &mut e,
-            Record::Event {
-                t,
-                json: start(true).to_string().into_bytes(),
-            },
-        );
-        write(&mut e, r.gap_after_start.unwrap());
-        let t = e.clock.tick();
-        let seal = recovered_seal(&totals(&[e.tally.count(t)], &[]), 1);
-        write(
-            &mut e,
-            Record::Event {
-                t,
-                json: seal.to_string().into_bytes(),
-            },
-        );
+        e.event(start(true));
+        e.put(r.gap_after_start.unwrap());
+        let last = e.tally.count(e.clock.now().mono_ns);
+        e.event(recovered_seal(&totals(&[last], &[]), 1));
         e.clock.tick();
         e.w.take().unwrap().seal(e.clock.now()).unwrap();
         e.dir
