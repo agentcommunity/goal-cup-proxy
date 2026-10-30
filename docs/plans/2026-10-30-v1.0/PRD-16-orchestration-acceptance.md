@@ -1018,3 +1018,20 @@ kept and now cites BUILD-PROMPT section 5, since B3 no longer carries it.
 - **Build snapshot Python 3.9 holds for the reader** (box runs 11:49Z, 12:02Z). `check-links.py`
   still needs 3.10 or later via `uv` in the box (earlier note).
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-17 upkeep slice 2 (merge ae970618)
+
+- **Phase 2 check 1 reads exact titles for file-level Worker guards** (PRD-17 note): a bare file name
+  alone would pass after the guarded case left the file. The check matches the night-log title of
+  L-S1, L-S2, L-S3 and L-S10 in the named file under `server/worker/test/`.
+- **A lane merger that finds nothing new to join pushes nothing** (lessons log 11:58Z): no empty
+  merge commit; the merge request goes on from the lane head as it is.
+- **Box-only held, with one lapse logged** (lessons log 11:57Z): a docs structure script was once
+  started on the conductor machine, its output discarded; the recorded proof is the box run. No
+  rule change; scripts that check docs run in a box too.
+- **Docs-only slices still pass the gate in about 60 s** (`gate fast: PASS in 59s` on ae970618).
+- **Size report, PRD-17 upkeep slice 2** (`wc -l` on integration at ae970618): 0 lines of PRD-17
+  code against the shared lessons and test-support tests row of 3,000 (PRD-00 "Size budget").
+  `LESSONS.md` 203 lines of docs (was 197), outside the budget; 6 rows green, 6 rows still
+  `(name pending)`.
+- No locked ledger item is touched and no owner question comes from this slice.

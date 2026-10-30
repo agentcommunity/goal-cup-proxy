@@ -841,3 +841,24 @@ old code. Each id with what was done here.
   `tests/lessons_*.rs`, no `tests/lessons_fixtures/`) against the shared 3,000-line tests row.
   `LESSONS.md` stays 197 lines of docs (6 rows changed), outside the row.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-17 upkeep slice 2 (merge ae970618)
+
+- **The next `LESSONS.md` edit trims the legend** (review B-4, nit). Cut the clause "the line above
+  says where Rust and Worker test files live" from "One name form", and the example "such as
+  `recovery.rs` in `crates/goalcup-format/tests/`" from "Guard codes"; the `recovery.rs (PRD-01)`
+  example in "One name form" already shows both. Nothing else in the legend changes.
+- **L-S1's Worker case has a new title on the PRD-07 lane** (upload-server log 11:47Z): "a retry of
+  the same chunk is 200 with the very same stored answer, body unread" (`integration.test.ts`, step 3
+  removes `ack`). The L-S1 cell needs no edit, since it names the file only. The L-S2, L-S3 and L-S10
+  titles are unchanged on `v1.0/prd-07-worker`.
+- **Phase 2 check 1 also reads the titles for file-level Worker entries.** A bare file name passes
+  check 1 even if the guarded case left the file. For L-S1, L-S2, L-S3 and L-S10 the lane confirms,
+  at the gate, that each title last written in the night log is still a test title in that file
+  (exact string match), and logs a renamed title as a renamed guard. The `green` mark at `b474329d`
+  stands until then; the gate box re-proves the Worker tests on the gate commit.
+- **Size report** (`wc -l` on integration at ae970618): merged PRD-17 code is still 0 lines (no
+  `tests/lessons_*.rs`, no `tests/lessons_fixtures/`) against the shared 3,000-line tests row.
+  `LESSONS.md` is 203 lines of docs, outside the row; 6 rows green (L-FW2, L-FW5, L-FW8 at
+  `f5b0a6a2`; L-S2, L-S3, L-S10 at `b474329d`), 6 rows still `(name pending)`.
+- No locked ledger item is touched and no owner question comes from this slice.

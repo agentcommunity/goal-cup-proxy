@@ -753,3 +753,11 @@ Slice 1 merged builder steps 1, 2 and 4. What the merge changed for the slices s
   (12.5% over). Step 3 removes `sign.ts` (116), the receipt, abandon and alias code, `sign.test.ts`
   (68) and `signing.json` (26); report again after it. The conductor's 11:20Z decision makes overage
   alone a nit; the replan reports the counts.
+
+### 2026-10-30, replan after PRD-17 upkeep slice 2 (merge ae970618)
+
+- **Five Worker cases guard lessons** (`LESSONS.md` L-S1, L-S2, L-S3, L-S10): the chunk retry, the
+  `Goalcup-Sha256` mismatch and the past-deadline 503 in `integration.test.ts`, the repeat open in
+  `device.test.ts` and in `lifecycle.test.ts`. A slice that renames one writes the new title in the
+  lessons log, as the 11:47Z seam line did for the chunk retry; a slice that removes one names the
+  case that now carries the lesson. No other step changes.
