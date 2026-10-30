@@ -1,0 +1,18 @@
+# OpenClaw 2026.10.9 (Node 24.22.1+), checked against docs.openclaw.ai (help/environment, cli, cli/tui,
+# cli/gateway/service, cli/approvals, security/network-proxy) and the 2026.10.9 package.
+id = "openclaw-cli"
+name = "OpenClaw"
+program = "openclaw"
+args = ["chat"]
+home = { OPENCLAW_HOME = "{home}" }
+env = { OPENCLAW_NO_AUTO_UPDATE = "1" }
+unset = ["OPENCLAW_PROXY_URL"]
+refuse_if_set = [
+  { file = "{home}/.openclaw/openclaw.json", keys = ["proxy.proxyUrl"] },
+  { file = "{home}/.openclaw/.env", keys = ["OPENCLAW_PROXY_URL"] },
+]
+secret_files = ["{home}/.openclaw/.env", "{home}/.openclaw/openclaw.json"]
+native = [
+  { name = "agents", root = "{home}/.openclaw/agents", pattern = "*/agent/openclaw-agent.sqlite*", form = "final" },
+  { name = "state", root = "{home}/.openclaw/state", pattern = "openclaw.sqlite*", form = "final" },
+]
