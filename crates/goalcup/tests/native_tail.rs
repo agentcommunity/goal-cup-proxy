@@ -195,7 +195,8 @@ fn a_file_unreadable_to_the_seal_gives_one_open_one_gap_and_one_end() {
     };
     for _ in 0..2 {
         let (root, rel) = (t.dir.path(), Path::new(&name));
-        t.tail.settle(&t.rec, "row:long".into(), root, rel, st, false);
+        t.tail
+            .settle(&t.rec, "row:long".into(), root, rel, st, false);
         t.tail.sweep(&t.rec, &[]);
         t.read(Duration::ZERO);
     }

@@ -117,7 +117,10 @@ impl Pass<'_> {
 
     /// Keeps a folder or name the pass could not read, unless it is gone or no longer a folder.
     fn failed(&mut self, e: &io::Error, abs: &Path) {
-        let gone = matches!(e.raw_os_error(), Some(libc::ENOENT | libc::ENOTDIR | libc::ELOOP));
+        let gone = matches!(
+            e.raw_os_error(),
+            Some(libc::ENOENT | libc::ENOTDIR | libc::ELOOP)
+        );
         if !gone {
             self.out.unlisted.push(abs.to_path_buf());
         }

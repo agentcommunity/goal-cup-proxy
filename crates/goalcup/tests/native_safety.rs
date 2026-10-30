@@ -234,7 +234,11 @@ fn no_native_source_file_names_a_built_in_harness() {
         let words: Vec<&str> = text.split(|c: char| !c.is_ascii_alphanumeric()).collect();
         for (id, _) in CONNECTORS {
             let name = id.split(['-', '_', ' ']).next().unwrap().to_lowercase();
-            assert!(!words.contains(&name.as_str()), "{} names `{name}`", path.display());
+            assert!(
+                !words.contains(&name.as_str()),
+                "{} names `{name}`",
+                path.display()
+            );
         }
     }
 }

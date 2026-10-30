@@ -43,7 +43,9 @@ fn a_file_six_folders_deep_is_found() {
     fs::create_dir_all(&deep).unwrap();
     fs::write(deep.join("s.jsonl"), b"{}\n").unwrap();
     let (rec, _) = Recorder::for_tests(1 << 20);
-    let found = Walker::default().pass(&rec, &[row("t", t.path(), "**/*.jsonl")]).found;
+    let found = Walker::default()
+        .pass(&rec, &[row("t", t.path(), "**/*.jsonl")])
+        .found;
     assert_eq!(rels(&found), [PathBuf::from("a/b/c/d/e/f/s.jsonl")]);
     assert_eq!(found[0].row, 0);
 }
@@ -59,7 +61,10 @@ fn a_root_made_after_the_first_pass_is_found() {
     assert!(first.found.is_empty() && first.unlisted.is_empty());
     fs::create_dir(&root).unwrap();
     fs::write(root.join("s.jsonl"), b"{}\n").unwrap();
-    assert_eq!(rels(&walker.pass(&rec, &rows).found), [PathBuf::from("s.jsonl")]);
+    assert_eq!(
+        rels(&walker.pass(&rec, &rows).found),
+        [PathBuf::from("s.jsonl")]
+    );
     assert!(
         events(&calls).is_empty(),
         "a missing root is skipped silently"
@@ -78,7 +83,9 @@ fn twenty_thousand_files_in_four_thousand_folders_are_found_in_one_pass() {
     }
     let (rec, _) = Recorder::for_tests(1 << 20);
     let started = Instant::now();
-    let found = Walker::default().pass(&rec, &[row("t", t.path(), "**/*.jsonl")]).found;
+    let found = Walker::default()
+        .pass(&rec, &[row("t", t.path(), "**/*.jsonl")])
+        .found;
     eprintln!("one pass over 20,000 files took {:?}", started.elapsed());
     assert_eq!(found.len(), 20_000);
 }
