@@ -371,7 +371,10 @@ fn a_101_hands_the_copied_frames_to_the_websocket_parser() {
         &frame(true, &deflate(&mut cup, b"second up"), key),
         1,
     );
-    assert_eq!(Box::new(p).end(Mono::now(), EndReason::Complete, false, 0), None);
+    assert_eq!(
+        Box::new(p).end(Mono::now(), EndReason::Complete, false, 0),
+        None
+    );
 
     assert!(gaps(&calls).is_empty());
     let [(req, _, _)] = opens(&calls, StreamKind::HttpReq).try_into().unwrap();

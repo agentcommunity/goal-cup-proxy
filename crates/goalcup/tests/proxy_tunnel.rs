@@ -615,15 +615,17 @@ async fn only_an_upstream_cut_leaves_a_close_delimited_reply_unproven() {
             assert!(gaps.is_empty());
         }
         // A whole WebSocket session, a Close each way: whole whichever leg is cut.
-        let mut up = b"GET /ws HTTP/1.1\r\nHost: a.example\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\
+        let mut up =
+            b"GET /ws HTTP/1.1\r\nHost: a.example\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\
             Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n"
-            .to_vec();
+                .to_vec();
         let close = 1000u16.to_be_bytes();
         up.extend(ws_frame(1, b"hi", Some([1, 2, 3, 4])));
         up.extend(ws_frame(8, &close, Some([5, 6, 7, 8])));
-        let mut down = b"HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\
+        let mut down =
+            b"HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\
             Sec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=\r\n\r\n"
-            .to_vec();
+                .to_vec();
         down.extend(ws_frame(1, b"yo", None));
         down.extend(ws_frame(8, &close, None));
         for cut in [Dir::Up, Dir::Down] {
