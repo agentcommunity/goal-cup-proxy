@@ -74,7 +74,10 @@ fn json_held(v: &Value) -> u64 {
     64 + match v {
         Value::String(s) => s.len() as u64,
         Value::Array(a) => a.iter().map(json_held).sum(),
-        Value::Object(o) => o.iter().map(|(k, v)| 64 + k.len() as u64 + json_held(v)).sum(),
+        Value::Object(o) => o
+            .iter()
+            .map(|(k, v)| 64 + k.len() as u64 + json_held(v))
+            .sum(),
         _ => 0,
     }
 }
