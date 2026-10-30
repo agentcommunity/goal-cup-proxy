@@ -14,6 +14,10 @@ fn client_trusting(roots: Vec<CertificateDer<'static>>, alpn: &[&[u8]]) -> Arc<C
     for root in roots {
         store.add(root).unwrap();
     }
+    client_with(store, alpn)
+}
+
+fn client_with(store: RootCertStore, alpn: &[&[u8]]) -> Arc<ClientConfig> {
     let mut config =
         ClientConfig::builder_with_provider(Arc::new(rustls::crypto::ring::default_provider()))
             .with_safe_default_protocol_versions()
@@ -79,14 +83,19 @@ async fn an_imported_ca_signs_leaves_the_first_boots_run_ca_trusts() {
 fn the_alpn_offer_follows_prefer_h1() {
     let ca = RunCa::mint(&["openai.com".to_string()]).unwrap();
     let tls = Tls::new(&ca, Vec::new());
-    let cases: [(&[&str], Offer, Option<&[&str]>); 5] = [
+    type Case = (&'static [&'static str], Offer, Option<&'static [&'static str]>);
+    let cases: [Case; 5] = [
         (&["h2", "http/1.1"], Offer::Http1, Some(&["http/1.1"][..])),
         (&["http/1.1"], Offer::Http1, Some(&["http/1.1"][..])),
         (&["h2"], Offer::H2, Some(&["h2"][..])),
         (&[], Offer::None, Some(&[][..])),
         (&["spdy/3.1", "acme-tls/1"], Offer::Other, None),
     ];
-    let bytes = |list: &[&str]| list.iter().map(|p| p.as_bytes().to_vec()).collect::<Vec<_>>();
+    let bytes = |list: &[&str]| {
+        list.iter()
+            .map(|p| p.as_bytes().to_vec())
+            .collect::<Vec<_>>()
+    };
     for (client, offer, upstream) in cases {
         assert_eq!(upstream_offer(&bytes(client)), offer, "{client:?}");
         let offered = tls.client(offer).map(|c| c.alpn_protocols.clone());
@@ -95,26 +104,30 @@ fn the_alpn_offer_follows_prefer_h1() {
     }
 }
 
-/// A client that does not trust the run CA refuses our leaf with an alert, which is the one
-/// refusal learning may use.
+/// A client that trusts only the public roots (as a pinned or dodging client does) refuses our
+/// leaf with an alert, the one thing refusal learning may use.
 #[tokio::test]
 async fn an_untrusting_client_refuses_with_an_alert() {
     let ca = RunCa::mint(&["openai.com".to_string()]).unwrap();
-    let other = RunCa::mint(&["openai.com".to_string()]).unwrap();
     let tls = Tls::new(&ca, Vec::new());
     let acceptor = TlsAcceptor::from(tls.server(Some(b"http/1.1")));
-    let connector = TlsConnector::from(client_trusting(
-        vec![other.cert_der().clone()],
-        &[b"http/1.1"],
-    ));
+    let mut public = RootCertStore::empty();
+    public.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+    let connector = TlsConnector::from(client_with(public, &[b"http/1.1"]));
     let (client_io, server_io) = duplex(64 * 1024);
     let (server, client) = tokio::join!(
         acceptor.accept(server_io),
         connector.connect(name("api.openai.com"), client_io)
     );
     assert!(client.is_err());
-    let err = server.err().expect("the server handshake fails");
-    assert_eq!(classify_client_handshake(&err), Refusal::Alert("unknown_ca"));
+    let Err(err) = server else {
+        panic!("the server handshake succeeded")
+    };
+    assert_eq!(
+        classify_client_handshake(&err),
+        Refusal::Alert("unknown_ca"),
+        "{err:?}"
+    );
 }
 
 /// A client that goes away mid-handshake sent no alert: nothing to learn from.
@@ -134,10 +147,8 @@ async fn a_close_mid_handshake_is_no_alert() {
     let (mut client_io, server_io) = duplex(64 * 1024);
     client_io.write_all(&hello).await.unwrap();
     drop(client_io);
-    let err = acceptor
-        .accept(server_io)
-        .await
-        .err()
-        .expect("the server handshake fails");
-    assert_eq!(classify_client_handshake(&err), Refusal::NoAlert);
+    let Err(err) = acceptor.accept(server_io).await else {
+        panic!("the server handshake succeeded")
+    };
+    assert_eq!(classify_client_handshake(&err), Refusal::NoAlert, "{err:?}");
 }

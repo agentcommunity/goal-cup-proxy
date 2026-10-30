@@ -121,7 +121,11 @@ impl RunCa {
         let cert = params.self_signed(&key).map_err(|_| CaError::Generate)?;
         let cert_der = cert.der().clone();
         let cert_pem = pem_block(&cert_der);
-        Ok(Self::from_parts(Issuer::new(ca_params(), key), cert_der, cert_pem))
+        Ok(Self::from_parts(
+            Issuer::new(ca_params(), key),
+            cert_der,
+            cert_pem,
+        ))
     }
 
     /// The certificate and key as PEM, for the first control line. The caller never logs it.
@@ -148,7 +152,11 @@ impl RunCa {
         }
         let cert_der = CertificateDer::from(der);
         let cert_pem = pem_block(&cert_der);
-        Ok(Self::from_parts(Issuer::new(ca_params(), key), cert_der, cert_pem))
+        Ok(Self::from_parts(
+            Issuer::new(ca_params(), key),
+            cert_der,
+            cert_pem,
+        ))
     }
 
     fn from_parts(
