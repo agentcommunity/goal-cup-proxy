@@ -279,10 +279,14 @@ pub fn plan(connector: &Connector, env: &Env, home: &Path) -> LaunchPlan {
     }
     // Where `home` sets `HOME`, a login shell would lose the handed `PATH` (PRD-17 P11).
     let profile = connector.home.get("HOME").zip(harness_env.get("PATH"));
-    if let (true, Some((dir, path))) = (free, profile)
+    if free
+        && let Some((dir, path)) = profile
         && let Err(e) = launch::write_profile(Path::new(&fill(dir)), path)
     {
-        log.push(format!("could not write .profile: {}", e.kind()));
+        log.push(match e.kind() {
+            std::io::ErrorKind::AlreadyExists => "kept a .profile goalcup did not write".into(),
+            kind => format!("could not write .profile: {kind}"),
+        });
     }
 
     LaunchPlan {

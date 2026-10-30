@@ -175,8 +175,8 @@ fn a_held_home_refuses_and_the_version_probe_never_holds_the_start() {
     assert!(!second.lock.is_held() && !yaml.exists());
     drop((first, second));
     assert!(finished("hermes-cli", &e, d).lock.is_held());
-    let (version, refusal) = probe(d, "echo; echo '  fakeharness 2.1.0  '");
-    assert_eq!(version.as_deref(), Some("fakeharness 2.1.0"));
+    let (version, refusal) = probe(d, "echo; echo '  fakeharness v2.1.0  '");
+    assert_eq!(version.as_deref(), Some("fakeharness v2.1.0"));
     assert_eq!(refusal, None);
     for line in ["echo fakeharness 1.9.0", "echo fakeharness 1.2.0"] {
         let refusal = probe(d, line).1;

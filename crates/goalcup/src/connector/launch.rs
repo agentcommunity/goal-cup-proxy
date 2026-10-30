@@ -247,9 +247,11 @@ fn replace(file: &Path, bytes: &[u8]) -> std::io::Result<()> {
 const PROFILE_HEADER: &str = "# Written by goalcup: the PATH handed to the harness.";
 
 /// `<dir>/.profile` putting the handed `path` back, which a login shell's `/etc/profile` resets
-/// (PRD-17 P11). Only a `.profile` goalcup wrote is replaced; a link or any other file is kept.
+/// (PRD-17 P11). Only a `.profile` goalcup wrote is replaced; a link or any other file is kept,
+/// which returns `AlreadyExists` so the participant is told.
 pub(crate) fn write_profile(dir: &Path, path: &str) -> std::io::Result<()> {
     let file = dir.join(".profile");
+    let kept = || Err(std::io::ErrorKind::AlreadyExists.into());
     match opts().open(&file) {
         Ok(f) if f.metadata().is_ok_and(|m| m.is_file()) => {
             let mut head = String::new();
@@ -257,11 +259,11 @@ pub(crate) fn write_profile(dir: &Path, path: &str) -> std::io::Result<()> {
                 .take(PROFILE_HEADER.len() as u64 + 1)
                 .read_to_string(&mut head);
             if head.strip_suffix('\n') != Some(PROFILE_HEADER) {
-                return Ok(());
+                return kept();
             }
         }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-        _ => return Ok(()),
+        _ => return kept(),
     }
     let quoted = path.replace('\'', r"'\''");
     let body = format!("{PROFILE_HEADER}\nexport PATH='{quoted}'\n");

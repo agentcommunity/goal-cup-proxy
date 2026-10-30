@@ -1,15 +1,17 @@
 # OpenClaw 2026.10.9 (Node 24.22.1+), checked against docs.openclaw.ai (help/environment, cli, cli/tui,
-# cli/gateway/service, cli/approvals, security/network-proxy) and the 2026.10.9 package.
+# cli/gateway/service, cli/approvals, security/network-proxy) and the 2026.10.9 package. The path and profile
+# variables are unset so state stays under {home}; a workspace .env drops every OPENCLAW_* key.
 id = "openclaw-cli"
 name = "OpenClaw"
 program = "openclaw"
 args = ["chat"]
 home = { OPENCLAW_HOME = "{home}" }
 env = { OPENCLAW_NO_AUTO_UPDATE = "1" }
-unset = ["OPENCLAW_PROXY_URL"]
+unset = ["OPENCLAW_PROXY_URL", "OPENCLAW_STATE_DIR", "OPENCLAW_CONFIG_PATH", "OPENCLAW_PROFILE"]
 refuse_if_set = [
-  { file = "{home}/.openclaw/openclaw.json", keys = ["proxy.proxyUrl"] },
+  { file = "{home}/.openclaw/openclaw.json", keys = ["proxy.proxyUrl", "env.OPENCLAW_PROXY_URL"] },
   { file = "{home}/.openclaw/.env", keys = ["OPENCLAW_PROXY_URL"] },
+  { file = "{home}/.config/openclaw/gateway.env", keys = ["OPENCLAW_PROXY_URL"] },
 ]
 secret_files = ["{home}/.openclaw/.env", "{home}/.openclaw/openclaw.json"]
 native = [

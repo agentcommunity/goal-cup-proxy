@@ -1,10 +1,11 @@
 # Qwen Code 0.26.4, checked against the Qwen Code settings reference (qwenlm.github.io/qwen-code-docs) and the
-# 0.26.4 package. QWEN_HOME is the .qwen folder itself; sessions sit under it unless QWEN_RUNTIME_DIR is set.
+# 0.26.4 package. QWEN_HOME is the .qwen folder itself; sessions sit under it unless QWEN_RUNTIME_DIR is set,
+# so goalcup points it at {home} too (a .env file never overwrites a value the environment already has).
 id = "qwen-cli"
 name = "Qwen Code"
 program = "qwen"
 resume = ["--continue"]
-home = { QWEN_HOME = "{home}" }
+home = { QWEN_HOME = "{home}", QWEN_RUNTIME_DIR = "{home}" }
 refuse_if_set = [
   { file = "{home}/settings.json", keys = ["proxy"] },
   { file = "{workspace}/.qwen/settings.json", keys = ["proxy"] },
