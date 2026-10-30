@@ -117,7 +117,7 @@ test("no limiter on the Supabase backend refuses the call with 500 misconfigured
       await assert.rejects(limitAddress(env as unknown as Env, req("203.0.113.5"), "start"), (e) => e instanceof ApiError && e.status === 500 && e.code === "misconfigured");
     }
     // Through the Worker too: a deployed Worker without the binding never runs the device flow unlimited.
-    const env = { DB_BACKEND: "supabase", SUPABASE_URL: "https://example.supabase.co", SUPABASE_KEY: "k", EVENT_ID: "cup", PRACTICE_EVENT_ID: "practice", RECEIPT_SIGNING_KEY: "07".repeat(32), TRACES: {} } as unknown as Env;
+    const env = { DB_BACKEND: "supabase", SUPABASE_URL: "https://example.supabase.co", SUPABASE_KEY: "k", EVENT_ID: "cup", PRACTICE_EVENT_ID: "practice", TRACES: {} } as unknown as Env;
     for (const path of ["/v1/device", "/v1/device/token"]) {
       const res = await worker.fetch(new Request(`https://x${path}`, { method: "POST", headers: { "cf-connecting-ip": "198.51.100.7", "content-type": "application/json" }, body: "{}" }), env);
       assert.equal(res.status, 500);
@@ -148,7 +148,7 @@ test("a limit that is not a positive integer is misconfigured", async () => {
 
 test("POST /v1/device answers 429 before any database call when the limit is spent", async () => {
   const f = fakeNamespace();
-  const env = { DEVICE_LIMITER: f.binding, RATE_LIMIT_KEY, DEVICE_START_PER_MINUTE: "1", DB_BACKEND: "local", EVENT_ID: "cup", PRACTICE_EVENT_ID: "practice", RECEIPT_SIGNING_KEY: "07".repeat(32), TRACES: {} } as unknown as Env;
+  const env = { DEVICE_LIMITER: f.binding, RATE_LIMIT_KEY, DEVICE_START_PER_MINUTE: "1", DB_BACKEND: "local", EVENT_ID: "cup", PRACTICE_EVENT_ID: "practice", TRACES: {} } as unknown as Env;
   const call = () => worker.fetch(new Request("https://x/v1/device", { method: "POST", headers: { "cf-connecting-ip": "198.51.100.7", "content-type": "application/json" }, body: "{}" }), env);
   assert.equal((await call()).status, 400); // under the limit: the body is checked (and is malformed)
   const res = await call();
@@ -158,7 +158,7 @@ test("POST /v1/device answers 429 before any database call when the limit is spe
 
 test("POST /v1/device/token is limited per device code before the database is asked", async () => {
   const f = fakeNamespace();
-  const env = { DEVICE_LIMITER: f.binding, RATE_LIMIT_KEY, DEVICE_POLL_PER_MINUTE: "2", DB_BACKEND: "local", EVENT_ID: "cup", PRACTICE_EVENT_ID: "practice", RECEIPT_SIGNING_KEY: "07".repeat(32), TRACES: {} } as unknown as Env;
+  const env = { DEVICE_LIMITER: f.binding, RATE_LIMIT_KEY, DEVICE_POLL_PER_MINUTE: "2", DB_BACKEND: "local", EVENT_ID: "cup", PRACTICE_EVENT_ID: "practice", TRACES: {} } as unknown as Env;
   let dbCalls = 0;
   (env as unknown as { TRACES: unknown }).TRACES = {
     get: async () => (dbCalls++, null),

@@ -82,8 +82,6 @@ export interface Env {
   NOTICE_FROM?: string;
   NOTICE_RECIPIENT_OVERRIDE?: string;
 
-  /** Secret: Ed25519 seed, 64 hex characters. */
-  RECEIPT_SIGNING_KEY: string;
   /** Secrets for the Supabase backend. */
   SUPABASE_URL?: string;
   SUPABASE_KEY?: string;

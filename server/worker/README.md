@@ -1,15 +1,101 @@
 # Goal Cup upload Worker
 
-The server end of `goalcup`'s trace upload: a Cloudflare Worker (TypeScript, no framework). It checks
-a participant's run credential, streams zstd chunks of `chain.jsonl` into R2, records progress in
-Supabase (Postgres), and returns Ed25519-signed receipts and acknowledgements in the formats the Rust
-verifier checks.
+The server end of `goalcup`'s upload: a Cloudflare Worker (TypeScript, no framework). It checks a
+participant's run credential, streams the record's compressed chunks into R2, records progress in
+Supabase (Postgres), owns the run's clock, and seals an entry once it holds the whole chain. It keeps
+bytes; it does not judge them.
 
 - **Wire contract (the authority):** [docs/UPLOAD-API.md](../../docs/UPLOAD-API.md). Paths, headers,
-  status codes, error bodies and idempotency rules are implemented as written there.
-- **Design:** [docs/SERVER-DESIGN.md](../../docs/SERVER-DESIGN.md).
+  status codes, error bodies and idempotency rules are implemented as written there. This page does
+  not repeat them.
 - **Deploying, test runs, bad days:** [docs/OPERATING.md](../../docs/OPERATING.md). The short steps for
   operators are in the [Operator runbook](#operator-runbook) below.
+
+## How it is built
+
+The server must keep every byte a participant uploads (a bad hour for their network or for the server
+loses nothing), own the clock (it stamps the start, sets the deadline and says stop; the
+participant's clock cannot extend a run), and tell the participant when a run goes quiet, goes idle,
+has a recording problem or has ended. Recording never waits on the network.
+
+| Part | What it does |
+|---|---|
+| Worker `goalcup-ingest` | Every call under `/v1`. Holds no state. Streams chunks into R2. Runs a cron every 5 minutes. |
+| R2 | The chunks, one immutable object each. Private. |
+| Supabase (Postgres) | Runs, entries, chunk index, heartbeats, notices, device requests, credentials (hashes only). The Worker calls one SQL function per step. |
+| `DeviceLimiter` (Durable Object) | Counts device-flow calls per minute. |
+| Resend | Sends the run emails. |
+| GitHub API | Checks `repo_url` at open; reads the judged commit after the deadline. |
+| Website (another repo) | Owns the database schema and migrations, sign-up, terms, the approval page and the member's address. |
+
+**A byte store.** The Worker never decompresses, never parses a chunk and never holds a chunk body in
+memory: it checks the headers, pipes the body into R2 and lets R2 check the SHA-256. A chunk is a byte
+range of a compressed part file and continues its zstd frame, so it is not decodable alone, and a
+128 MB isolate could not hold the decoder's window anyway. Rule for every later change: no
+server-side reading runs in a Worker. Whether the bytes are a valid record is checked on the fetched
+copy, on an organizer machine (`scripts/fetch-run.sh`, then `goalcup-verify check --server`).
+
+**Storage.**
+
+- Key: `traces/{event}/{run_id}/{entry_id}/{offset:016}-{sha256}.zst`, offset being the raw stream
+  offset of the chunk's first byte. `Content-Type: application/zstd`.
+- Every put is create-only and R2 checks the SHA-256, so a key holds only those bytes. A chunk is at
+  most 32 MiB compressed; any JSON body at most 64 KiB.
+- There is no per-run size limit. The database counts `stored_bytes` and `chunk_count` per entry in the
+  step that commits a chunk, and the log line `large-run <run_id> stored=<bytes>` marks each 10 GiB a
+  run crosses.
+- The bucket lock (180 days) covers the competition prefix only (`traces/goalcup-cup-2026/`). Dry run,
+  practice and test prefixes are not locked. No lifecycle rule deletes objects.
+
+**The run.** Sign-in is the device flow; the server stores only SHA-256 hashes of the codes and the
+credential. A run credential is unbound until `POST /v1/runs` binds it to the run it opens, then
+reaches that run only; it lives one hour while unbound and until `deadline_at` plus 24 hours once
+bound. The open stamps `official_start` from the server's clock and sets `deadline_at`. One account
+has one main run: a new competition start replaces the old one. Practice and test runs replace
+nothing and are never replaced; test runs are left out of every public number. `goalcup continue` adds a segment (a new entry with its own chain,
+same deadline). How an entry is sealed: [The end of a run](#the-end-of-a-run-as-implemented).
+24 hours after the run's end the server closes it: `sealed` or `incomplete`, then `410`
+(`CLOSE_AFTER_SECONDS` changes this only in tests).
+
+**One database for staging and production.** `sql/goal-cup-tracer-upload.sql` is a copy of the
+website's migration; the website repo is the authority. Production and staging each have their own
+Supabase secret key and role, which may run only the `goal_cup_upload_*` functions; row-level
+security is on for every table. Both Workers write the same tables. Runs, run credentials and device
+requests carry a `staging` column, set by the database from the caller's role (a Worker cannot claim
+it), so **every organizer query filters `staging`**.
+
+**What the server stores about a person.** Hashes of the codes and credential, never the plain
+values. The machine facts sent at open (operating system, architecture, CPUs, memory, disk, WSL2,
+container, mains power; no host name, user name or serial number). The IP address and country of the
+open call and the latest pair from each `continue` and heartbeat. Each heartbeat's counts of what the
+client wrote and lost. None of this is in an answer, a key, a log or a public page. The Worker does
+not redact: goalcup masks secrets on the participant's machine before any byte reaches disk. Raw
+records are never public.
+
+**Read-only access for organizers.** The read-only database credential and an R2 token with Object
+Read only (R2 tokens scope to buckets, not prefixes) live on the organizer's machine, never in a
+build box, a log or a command line. Every organizer script opens `BEGIN READ ONLY` and ends
+`ROLLBACK`, as `scripts/fetch-run.sh` does. `scripts/delete-test-runs.sh` writes, so only the owner
+runs it.
+
+**Website database: nothing to migrate in 1.0.** The 1.0 Worker fits the tables as they are:
+
+| 1.0 | How it fits |
+|---|---|
+| No signed chunk answer | `{}` in `chunks.ack` (NOT NULL) and `entries.last_ack` |
+| No seal documents | the final head in both seal digest columns, null keys |
+| Heartbeat counts | `heartbeats.vitals` and `runs.last_vitals` hold `{"counts": ...}`; the column keeps its name. A `counts` that is not a flat object within 2 KiB is stored as `{"counts_dropped": <bytes>}` with the log line `counts-dropped <run_id>`, never refused |
+| No disk pause | `runs.disk_paused_at` and `disk_notice_at` stay null |
+| One connector digest | `connector_sha256` written into both digest columns |
+| 24-hour close, credential life | unchanged |
+
+Old SQL functions the 1.0 Worker no longer calls stay in the mirror, unused. Only the owner applies a
+migration to the shared database.
+
+**Usage stats (third slice, not built yet).** An organizer job writes `usage/{event}/{run}/{entry}.json`
+to a bucket of its own, `goalcup-usage` (`goalcup-usage-staging` during the build), never the traces
+bucket: the job needs write access and R2 tokens scope only to whole buckets. The Worker neither binds
+nor serves it. The owner creates `goalcup-usage` with the production deploy.
 
 ## Run it locally
 
@@ -50,12 +136,11 @@ curl -s -XPOST localhost:8787/v1/device/token -H 'content-type: application/json
 | `src/device.ts` | The device flow: start, poll, and the test-only approval |
 | `src/ratelimit.ts` | The `DeviceLimiter` Durable Object and the device-flow limits |
 | `src/auth.ts` | Bearer run credential to member, and the one run it may touch |
-| `src/runs.ts` | Open, continue, receipt, abandon, position, heartbeat, seal |
-| `src/chunks.ts` | The chunk upload: early refusals, retry rule, streaming to R2, atomic commit |
+| `src/runs.ts` | Open, continue, position, heartbeat, and the seal (`trySeal`) |
+| `src/chunks.ts` | The chunk upload: early refusals, retry rule, streaming to R2, atomic commit, the seal on the completing chunk |
 | `src/notices.ts` | The 5-minute cron: close runs, record the judged GitHub commit, queue the run emails |
 | `src/github.ts` | The GitHub API: the judged commit (last push before the deadline) and the headers every GitHub call carries |
 | `src/mail.ts` | Sends each queued notice once through Resend |
-| `src/sign.ts` | Ed25519 receipts and acknowledgements (byte-exact with the Rust formats) |
 | `src/db.ts` | The `Db` interface: one method per step, and the run-state rules (`endsAt`, `statusAt`) |
 | `src/db-supabase.ts` | Production: one Postgres function per step, through PostgREST RPC |
 | `src/db-local.ts` | `wrangler dev` and tests only: JSON state in the R2 bucket under `state/`, atomic by etag |
@@ -64,7 +149,7 @@ curl -s -XPOST localhost:8787/v1/device/token -H 'content-type: application/json
 | `sql/pending/` | A migration written here first, until it is applied (with a README that says how to land it). Empty since 27 Oct 2026; `git show 32808ff8:server/worker/sql/pending/README.md` is the last such README |
 | `scripts/check-sql.sh` | Applies the mirror and the pending migration to a throwaway local Postgres and smoke-calls the new functions (needs a file in `sql/pending/`: exits 2 while it is empty) |
 | `scripts/delete-test-runs.sh` | Deletes all organizer test runs, rows and R2 objects ([OPERATING](../../docs/OPERATING.md#test-runs)) |
-| `test/` | `sign.test.ts` (the signing vectors shared with the Rust crate), `config`, `github`, `supabase` (RPC names, stubbed fetch), `local-db`, `ratelimit`, `mail`, `device-unit`; `integration`, `device`, `segments` (HTTP against `wrangler dev`); `lifecycle`, `notices`, `test-mode` (the Worker in this process on a clock the test moves) |
+| `test/` | `config`, `github`, `supabase` (RPC names, stubbed fetch), `local-db`, `ratelimit`, `mail`, `device-unit`; `integration`, `device`, `segments` (HTTP against `wrangler dev`); `lifecycle`, `notices`, `test-mode` (the Worker in this process on a clock the test moves) |
 
 ## Configuration
 
@@ -77,7 +162,7 @@ Variables (in `wrangler.toml` `[vars]`, or `--var` / `.dev.vars` locally):
 | `TEST_EVENT_ID` | none | Event that organizer test runs (mode `test`) belong to. Unset: the server opens no test run (`403`). |
 | `RUN_HOURS` | `168` | A competition run's `deadline_at` = `official_start` + this many hours. |
 | `PRACTICE_RUN_MINUTES` | `10` | A practice run's length. |
-| `MIN_COMPETITION_VERSION` | empty (no minimum) | The oldest goalcup (`x.y.z`; the first three numbers of what it sends) that may sign in for, or start, a competition run. Older, or a version with no `x.y.z` while a minimum is set, is `403` with the update line. A value with no `x.y.z` in it is malformed (parsing is lenient: the first `x.y.z` counts) and makes those two calls `500 misconfigured`; heartbeats and everything else are untouched. For the cup: the cup's minimum release (the first one that carries this build's recording changes), set only once `releases/latest` serves it ([steps](#set-the-minimum-competition-version)). |
+| `MIN_COMPETITION_VERSION` | empty (no minimum) | The oldest goalcup (`x.y.z`; the first three numbers of what it sends) that may sign in for, or open, a run in any mode. Older, or a version with no `x.y.z` while a minimum is set, is `403` with the update line. A value with no `x.y.z` in it is malformed (parsing is lenient: the first `x.y.z` counts) and makes those two calls `500 misconfigured`; `continue`, heartbeats and everything else are untouched. `wrangler.toml` sets `1.0.0` in both blocks ([steps to raise it](#set-the-minimum-competition-version)). |
 | `DB_BACKEND` | `supabase` | `supabase` (production) or `local` (`wrangler dev` and tests only). Never set `local` in the deployed `wrangler.toml`. |
 | `APPROVAL_URL` | in `wrangler.toml` | The website page where a member approves a device request, without a query string. `verification_uri_complete` adds `?code=<user code>`. |
 | `STAGING` | off | `on` marks a staging deployment: the only place besides `DB_BACKEND=local` where `TEST_APPROVAL_KEY` may be set. Set only in `[env.staging.vars]`. |
@@ -92,7 +177,6 @@ Secrets (`wrangler secret put <NAME>`; locally in `.dev.vars`):
 
 | Name | Meaning |
 |---|---|
-| `RECEIPT_SIGNING_KEY` | The Ed25519 seed, 32 bytes as 64 hex characters, generated offline. Its public key is pinned in the verifier. |
 | `SUPABASE_URL`, `SUPABASE_KEY` | The project URL, and a Supabase secret API key whose role may only run `public.goal_cup_upload_*`. Not the community-wide service key. |
 | `RATE_LIMIT_KEY` | Random, at least 32 characters: the HMAC key of every rate-limit key. A deployment answers every device call `500 misconfigured` without it. |
 | `GITHUB_TOKEN` | Read-only token for public repositories. Required in production and staging: the cron reads each run's judged commit (repository, activity and possibly `commits/HEAD`), and the unauthenticated rate limit is shared by every Worker on Cloudflare's egress addresses. Without it the cron logs `WARNING: GITHUB_TOKEN is not set` and carries on. |
@@ -108,21 +192,19 @@ Without `routes = []`, a staging deploy would move `ingest.agentcommunity.org` t
 
 - **Before a chunk body is read:** the credential; the run exists and is the credential's own; the
   entry is one of the run's. A chunk the server already holds (same offset, `Goalcup-Length` and
-  `Goalcup-Head`) is answered `200` with the stored ack. Then: the run is not abandoned or closed, the
-  entry is not sealed, the end rules allow it (after `ends_at`: `503` until the entry's final
+  `Goalcup-Head`) is answered `200` from the stored row. Then: the run is not closed, the entry is
+  not sealed, the end rules allow it (after `ends_at`: `503` until the entry's final
   heartbeat, then nothing past the committed end), `Content-Length` is present and at most
   33,554,432, `Content-Type` and all seven `Goalcup-*` headers are well formed, and the maintenance
   switch is off.
 - **Then:** offset, `prev` and first sequence must continue exactly where the entry stands (`409`).
-- **No per-run size limit.** The run's `stored_bytes` grows with each chunk; a log line
-  `large-run <run_id> stored=<bytes>` marks each 10 GiB a run crosses.
 - **Storage:** the body is piped (never buffered) into R2 with a create-only put, and R2 checks the
   SHA-256 (`422 digest_mismatch`, nothing stored). If the name already exists, an earlier attempt stored
   it but its database step failed, and the upload continues from there.
-- **Then one atomic database step** advances offset, sequence and head, records the chunk and its
-  ack, and adds the chunk's compressed size and one chunk to the entry's `stored_bytes` and
-  `chunk_count`, only if they still match what was checked. A request that loses a race is answered from the
-  stored chunk if it was a retry, otherwise `409`.
+- **Then one atomic database step** advances offset, sequence and head, records the chunk, and adds
+  its compressed size and one chunk to the entry's `stored_bytes` and `chunk_count`, only if they
+  still match what was checked. A request that loses a race is answered from the stored chunk if it
+  was a retry, otherwise `409`. Then the seal is tried ([The end of a run](#the-end-of-a-run-as-implemented)).
 - **Not checked here, by design:** whether the bytes are a valid chain.
 
 ## Operator runbook
@@ -141,11 +223,11 @@ commit. It installs the pinned wrangler. Check that `npx wrangler --version` pri
 [Deploy checks](#deploy-checks) · [Maintenance](#maintenance-on-and-off) · [Rollback](#rollback) ·
 [Logs](#logs) · [Change a start window](#change-a-start-window) · [Add a test operator](#add-a-test-operator) ·
 [Clean up test runs](#clean-up-test-runs) · [Minimum competition version](#set-the-minimum-competition-version) ·
-[EVENT_ID switch](#event_id-switch-6-nov-2026)
+[EVENT_ID switch](#event_id-switch-6-nov-2026) · [Deploying 1.0](#deploying-10)
 
 ### Deploy checks
 
-Four rules apply to every `wrangler deploy` and every `wrangler rollback`, on production and on staging.
+These rules apply to every `wrangler deploy` and every `wrangler rollback`, on production and on staging.
 Each deploy step below repeats them in short form. The details are here.
 
 1. **Deploy from `main` only.** Run `git switch main && git pull --ff-only`. `git status` must show no
@@ -169,11 +251,10 @@ Each deploy step below repeats them in short form. The details are here.
    set ([Minimum competition version](#set-the-minimum-competition-version)), check after every
    production deploy that `npx wrangler versions view <version-id>` still shows
    `MIN_COMPETITION_VERSION` = the cup's minimum.
-5. **The Worker before the client.** Deploy the Worker from `main` before any client from `main` seals
-   a trace. A seal from the new client carries `tunnels_jsonl`, the sealed-connection list
-   ([CONTRACTS](../../docs/CONTRACTS.md), "Side artifacts"). A Worker that predates it ignores the
-   field, so the seal is accepted and that entry's list is not kept. The client is released after the
-   Worker is live, and `MIN_COMPETITION_VERSION` is set only after that release is published (below).
+5. **The Worker before the client, and never back to 0.7.** The 1.0 Worker goes live before any 1.0
+   client uploads to it, in the order of [Deploying 1.0](#deploying-10). Once 1.0 clients run, no
+   deploy or rollback may bring back a 0.7 Worker: it refuses their heartbeats and never seals their
+   entries. A bad 1.0 Worker is held with maintenance on and fixed forward.
 
 At the top level, `wrangler deploy` prints "Multiple environments are defined". That is expected for
 production. Go on.
@@ -244,15 +325,19 @@ Use rollback when a deploy is bad and you know the last good version.
    maintenance state check: a rollback to a version deployed without maintenance ends maintenance.
 
 A rollback restores the code and the variables of that version. It does not undo a database migration or
-change R2. To see which `EVENT_ID` a version carries, run `npx wrangler versions view <version-id>`. If you
+change R2. Never roll back to a version deployed before 1.0 ([Deploy checks](#deploy-checks), rule 5).
+To see which `EVENT_ID` a version carries, run `npx wrangler versions view <version-id>`. If you
 cannot find a good version, switch maintenance on and ask the owner.
 
 ### Logs
 
 - Workers Logs are on in `wrangler.toml` for production and for staging. They keep the Worker's own
   `console.error` lines: `misconfigured: ...`, `supabase <fn>: ...`, `tick <step> <run_id>: ...`,
-  `unhandled: ...` (a `500 internal`), `mail notice ...` and `r2-put-unrecognised-error`. Read them in the Cloudflare dashboard: Workers & Pages, the Worker, Observability (Logs).
-  Search for the text you need.
+  `unhandled: ...` (a `500 internal`), `mail notice ...`, `r2-put-unrecognised-error` and `seal-failed <run_id>: ...` (the client repeats its
+  final heartbeat, which tries the seal again), and the
+  warnings `large-run <run_id> stored=<bytes>` (each 10 GiB a run crosses) and `counts-dropped <run_id>`
+  (a heartbeat's `counts` had the wrong shape and was not kept). Read them in the Cloudflare dashboard:
+  Workers & Pages, the Worker, Observability (Logs). Search for the text you need.
 - Invocation logs are off on purpose (`invocation_logs = false`). An invocation log keeps request details,
   such as the `Authorization` header and the client address. The data policy does not allow that. Because of
   this, the logs show no status code per request: only the Worker's own lines. `test/config.test.ts` fails
@@ -317,10 +402,11 @@ More on test runs: [OPERATING](../../docs/OPERATING.md#test-runs).
 
 ### Set the minimum competition version
 
-`MIN_COMPETITION_VERSION` refuses a competition device request and a competition open from an older
-goalcup with `403` and an install line (D70). It ships empty. For the cup it is the cup's minimum:
-the first release that carries this build's recording changes. Every older goalcup cannot start a
-cup run. It must be live before 7 Nov 00:00 UTC.
+`MIN_COMPETITION_VERSION` refuses a device request and an open from an older goalcup, in every mode,
+with `403` and an install line (D70; `continue` is never refused). `wrangler.toml` sets `1.0.0` in
+both blocks: a 0.7 goalcup cannot work with the 1.0 Worker. Raise it when a later release must be the
+least any participant runs, for example the cup's minimum. It must be live before 7 Nov 00:00 UTC
+if the cup needs it.
 
 **Only after that release is published and GitHub's latest release serves it.** The refusal's install
 line installs `releases/latest`. Set the minimum before that and it installs an older goalcup, which
@@ -329,9 +415,9 @@ is refused again. Below, `<minimum>` is that release's number and `<older>` is t
 1. Check the release. Every line of
    `curl -fsSL https://github.com/agentcommunity/goal-cup-proxy/releases/latest/download/SHA256SUMS`
    names `goalcup-<minimum>-`. If not, stop and wait.
-2. On a branch, set `MIN_COMPETITION_VERSION = "<minimum>"` in `wrangler.toml` `[vars]` (production). To
-   try it on staging first, set it in `[env.staging.vars]` in the same PR. Open a PR and merge it to
-   main. Never set it in the dashboard: the next deploy wipes it ([Deploy checks](#deploy-checks), rule 4).
+2. On a branch, set `MIN_COMPETITION_VERSION = "<minimum>"` in both `[vars]` and `[env.staging.vars]`
+   of `wrangler.toml` (`test/config.test.ts` fails if they differ). Open a PR and merge it to main.
+   Never set it in the dashboard: the next deploy wipes it ([Deploy checks](#deploy-checks), rule 4).
 3. On main at that merge commit: `npm ci && npm test`.
 4. Deploy from main, with every [deploy check](#deploy-checks): `npx wrangler deployments list`
    (before), `SHA=$(git rev-parse --short HEAD)`, `npx wrangler deploy --tag "$SHA" --message "$SHA"`
@@ -381,44 +467,54 @@ the dry-run row, which closed 6 Nov 00:00 UTC.
    goal_cup_tracer.runs where mode = 'competition' and official_start >= '2026-11-07'` shows only
    `goalcup-cup-2026`, and the R2 prefix `traces/goalcup-cup-2026/` holds its chunks.
 
-## Before launch: what only real services can prove
+## Deploying 1.0
 
-Status on 26 Oct 2026: **both checks passed on staging** (Worker at main `d7762cab`, real R2 bucket
-`goalcup-traces-staging`, one open practice run). The lock case below is still open for production.
-Earlier status (16 Oct): neither check had a record. When you run one, write the date and the result
-here, in the same pull request.
+Once, in this order. The 1.0 Worker and a 0.7 goalcup do not work together, so the order matters.
 
-- 26 Oct, checksum: a chunk whose body did not match its `Goalcup-Sha256` got `422 digest_mismatch`,
-  and no object was stored under its key. The error-text match works against real R2.
-- 26 Oct, create-only: a decoy object was put at the exact key of the next valid chunk, then that
-  chunk was uploaded. The Worker answered 200 (as designed: an existing key is taken as an earlier
-  attempt), and R2 kept the decoy's bytes unchanged. The decoy was deleted afterwards. (A request
-  with Python's default User-Agent is refused by Cloudflare with `error code: 1010` before it reaches
-  the Worker; send a `goalcup/` User-Agent when testing by hand.)
+1. Until staging carries 1.0, builds test against a local Worker (`wrangler dev`, `DB_BACKEND=local`).
+2. Staging: `npx wrangler deploy --env staging` from the integration head, with `1.0.0` as the floor
+   in both blocks. Every later staging deploy is from the integration head too.
+3. Before production, the owner checks that no real run is open (inside `BEGIN READ ONLY`:
+   `SELECT count(*) FROM goal_cup_tracer.runs WHERE status='open' AND NOT staging AND mode <> 'test'`).
+   A 0.7 goalcup mid-run stops uploading after the deploy; it keeps its data. With 1.0 the unchanged
+   cron sends the `recording` email when a heartbeat says `failed`, and the idle emails count written
+   requests: the owner confirms that is wanted.
+4. Release `v1.0.0`, so `releases/latest` serves 1.0 and the floor's install line works.
+5. Production (owner): `npx wrangler deploy` from the same commit, with every
+   [deploy check](#deploy-checks). Only then delete the old signing secret:
+   `npx wrangler secret delete RECEIPT_SIGNING_KEY` (the 0.7 Worker refuses every call without it, so
+   never before). Create the `goalcup-usage` bucket.
+6. Smoke (owner): one practice run with the 1.0 goalcup on production, sealed, fetched with
+   `scripts/fetch-run.sh` and checked.
+7. The [EVENT_ID switch](#event_id-switch-6-nov-2026) stays a manual deploy on 6 Nov; it can be the
+   same deploy as step 5 if the timing fits.
 
-- **R2 checksum failure** (proven on staging, 26 Oct). The Worker maps a failed `sha256` put to
-  `422 digest_mismatch` by matching the error text (`10037`, "checksum", "did not match"). If R2 ever
-  changes that wording, uploads come back `502` and the Worker log has a line starting
-  `r2-put-unrecognised-error` with the new wording: add it to the pattern in `src/chunks.ts`. (A
-  recognised failure logs `r2-put-digest-mismatch`.)
-- **Create-only puts under the bucket lock** (still open). The refusal to overwrite is proven on
-  staging (26 Oct), which has no bucket lock. Only production can prove the lock case, and only on
-  the locked prefix `traces/goalcup-cup-2026/`, which holds data only after the EVENT_ID switch. Test
-  runs use `traces/test/`, which is never locked.
+There is no rollback to 0.7 after step 5. A bad 1.0 Worker is held with
+[maintenance](#maintenance-on-and-off) on (clients back off and keep everything) and fixed forward.
+
+## Checked on real R2 (staging, 26 Oct 2026)
+
+- **Checksum:** a chunk whose body did not match its `Goalcup-Sha256` got `422 digest_mismatch`, and
+  nothing was stored under its key. The Worker maps a failed `sha256` put by matching R2's error text
+  (`10037`, "checksum", "did not match"; logged as `r2-put-digest-mismatch`). If R2 changes that
+  wording, uploads come back `502` and the log has `r2-put-unrecognised-error` with the new wording:
+  add it to the pattern in `src/chunks.ts`.
+- **Create-only:** a decoy object put at the key of the next valid chunk stayed unchanged when that
+  chunk was uploaded (the Worker answered `200`: an existing key is taken as an earlier attempt). Only
+  production can prove this under the bucket lock, on `traces/goalcup-cup-2026/` after the EVENT_ID
+  switch; that case is still open.
+- A request with Python's default User-Agent is refused by Cloudflare (`error code: 1010`) before it
+  reaches the Worker; send a `goalcup/` User-Agent when testing by hand.
 
 ## Decisions where the contract is silent
 
-- The first record's `seq` is **0** (the baseline link of a v5 chain), so a fresh run reports
-  `next_seq: 0` and `head` = 64 zeros.
-- `GET /v1/runs/{id}` always answers, whatever the status. Receipts are still issued after
-  `deadline_at`.
-- A retried chunk's `200` body repeats what the original answered: that chunk's ack, the offset just
-  after it, `last_seq + 1`, and its head (not the run's current position).
+- `GET /v1/runs/{id}` always answers, whatever the status.
+- A retried chunk's `200` body repeats what the original answered: the offset just after it,
+  `last_seq + 1` and its head (not the run's current position), with `sealed` as the entry stands now.
 - `Content-Length` missing, malformed or zero is `400 malformed`. `Content-Type` other than
   `application/zstd` is `400`.
 - A wrong HTTP method on a known path is `405 method_not_allowed`. A malformed run id in a path is
   `404`; an unparseable chunk offset is `400`.
-- A repeated `abandon` of an abandoned run is `200`. Abandoning a sealed run is `410`.
 - A request lives 900 seconds from its creation in every state, so a device approval that is not
   picked up in time is lost.
 - Database or storage failures are `502 upstream_error`, and misconfiguration is `500 misconfigured`
@@ -432,7 +528,8 @@ here, in the same pull request.
 `scheduled` in `src/index.ts` runs `runTick` (`src/notices.ts`) every 5 minutes. Four steps, in this
 order, each in its own try/catch: `closeRuns`, `recordFinalCommits`, `queueNotices`, `sendNotices`
 (`src/mail.ts`). All take the time as a parameter. They read `Db.runsForTick(now)` (open runs, and runs
-that ended in the last 48 hours; never abandoned ones). The constants (20 minutes of silence, idle at 3
+that ended in the last 48 hours). Every notice is decided here, never in a request handler, and a
+staging Worker sends every email to its test inbox. The constants (20 minutes of silence, idle at 3
 and 6 hours, an hour to wait for the commit, 5 minutes before GitHub is asked, an hour of grace for a
 `404` or a failing activity API, 50 runs asked of GitHub per tick, 20 emails per tick) are in
 `notices.ts`, `github.ts` and `mail.ts` and have no variable. The rules are in
@@ -442,8 +539,7 @@ Cost: each step reads the run list with one call. `queueNotices` makes one call 
 however many runs there are. `closeRuns` makes one call per run due to close. `recordFinalCommits` asks
 GitHub about at most 50 runs (taking turns when more are due), each with 2 to 4 fetches (repository,
 activity, and the commit list and `commits/HEAD` only as a fallback; up to 8 for a run with more than
-100 activities), and makes 50 writes. That is a few
-hundred subrequests in a busy tick, so the cron
+100 activities), and makes 50 writes. That is a few hundred subrequests in a busy tick, so the cron
 needs the paid Workers plan (the free plan allows 50 per invocation). A failed step is logged
 (`tick <step> <run_id>: <message>` or `tick queueNotices: <message>`) and the next tick retries; a notice
 is stored once per run, kind and key, so a retry is safe.
@@ -454,17 +550,13 @@ rows are the objects under `state/notices/`. The tests call `worker.scheduled` o
 
 ## The end of a run, as implemented
 
-A run ends at `ends_at = min(deadline_at, replaced_at)`; every rule is per entry.
-([UPLOAD-API, "When a run ends"](../../docs/UPLOAD-API.md#when-a-run-ends).)
+The final heartbeat, `stop`, `503 awaiting_final` and the `409` and `410` rules are as
+[UPLOAD-API, "When a run ends"](../../docs/UPLOAD-API.md#when-a-run-ends) says; every rule is per entry.
 
-- `POST /v1/runs/{id}/heartbeat` stores the heartbeat and answers `stop` once `now >= ends_at`, with the
-  `reason`. `GET` reports the same `stop`, `ends_at` and the entry's `final`.
-- The final heartbeat commits `(seq, head, repo_head)` once per entry. The same `(seq, head)` again is
-  `200`. A different one is `409`. It is also `409` if the server already holds chain past that `seq`, or
-  holds that `seq` with another head. It is accepted until the run is abandoned or closed.
-- A chunk after `ends_at` while the entry has no final committed is `503 awaiting_final` with
-  `Retry-After: 60`. Once a final is committed, a chunk ending after the committed `seq`, or ending at it
-  with another head, is `410`. The same rule runs again inside the atomic commit.
-- A seal needs the committed end and the chain held up to it, both checked in the atomic seal step: no
-  final is `409` (`503` once the run is over), a chain not yet at the committed end is `409`.
+- There is no seal call. `trySeal` (`src/runs.ts`) seals an entry once its final heartbeat has
+  committed the end and the chain is held up to it, whichever comes second: the final heartbeat tries
+  with the head it committed, and the chunk path tries when the stored chunk ends at the committed
+  `(seq, head)`. The SQL seal step checks both facts again under a row lock, so two racing calls are
+  safe. Not yet held is `sealed: false`, never an error.
+- The end rules run again inside the atomic chunk commit.
 - To test a deadline in seconds, use the local-only `RUN_SECONDS` and `CLOSE_AFTER_SECONDS`.

@@ -308,6 +308,8 @@ class FetchRunTest(unittest.TestCase):
         self.assertTrue((self.root / "fake.psql.mode").exists(), "the service file is mode 600")
         self.assertFalse(list(self.out.glob(".fetch-run.*")), "and it is gone afterwards")
         self.assertTrue((self.out / ENTRY / "rec.gcr.zst").is_file())
+        self.run_script("--store", str(self.store), "--bucket", "goalcup-traces-staging", RUN, str(self.root / "s"), env=self.fakes())
+        self.assertIn("staging=true", (self.root / "fake.psql.args").read_text(), "the staging bucket reads only staging runs")
 
     def test_tracing_the_script_shows_no_secret(self) -> None:
         self.write_index(self.entry())

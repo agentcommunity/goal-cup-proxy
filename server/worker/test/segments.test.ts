@@ -41,7 +41,7 @@ describe("replace, practice and segments against wrangler dev", { concurrency: f
       token,
       json: {
         previous_entry_id: previous, connector_id: "codex-cli", connector_sha256: "a".repeat(64),
-        workspace: "/w/two", session_id: session, harness_version: "0.153.0", tracer_version: "0.1.0",
+        workspace: "/w/two", session_id: session, harness_version: "0.153.0", proxy_version: "0.1.0",
       },
     });
 
@@ -61,10 +61,10 @@ describe("replace, practice and segments against wrangler dev", { concurrency: f
     const wait = await put(a.run_id, c1, a2, a1.length);
     assertError(wait, 503, "awaiting_final");
     assert.equal(wait.headers.get("retry-after"), "60");
-    // ...but a chunk the server already holds is answered with its stored ack, whatever the run's state.
+    // ...but a chunk the server already holds is answered as the first time, whatever the run's state.
     const retry = await put(a.run_id, c1, a1, 0);
     assert.equal(retry.status, 200, JSON.stringify(retry.body));
-    assert.deepEqual(retry.body.ack, first.body.ack);
+    assert.deepEqual(retry.body, first.body);
 
     const f = await beat(a.run_id, c1, a.entry_id, a2.lastSeq, a2.head, true);
     assert.equal(f.status, 200, JSON.stringify(f.body));
@@ -97,7 +97,7 @@ describe("replace, practice and segments against wrangler dev", { concurrency: f
     // The older segment keeps uploading where it stood, by its entry id.
     const more = await put(run.run_id, token, e0b, e0a.length);
     assert.equal(more.status, 200, JSON.stringify(more.body));
-    assert.equal(more.body.ack.entry_id, run.entry_id);
+    assert.equal(more.body.offset, e0a.length + e0b.length); // segment 0's offset, not segment 1's
     assert.equal((await get(run.run_id, token, run.entry_id)).body.offset, e0a.length + e0b.length);
     assert.equal((await get(run.run_id, token)).body.offset, e1a.length);
     assert.equal((await get(run.run_id, token)).body.entry_id, e1);

@@ -1,4 +1,4 @@
-# Goal Cup upload Worker. Contract: docs/UPLOAD-API.md. Design: docs/SERVER-DESIGN.md.
+# Goal Cup upload Worker. Contract: docs/UPLOAD-API.md. How it is built and run: server/worker/README.md.
 #
 # Production: Worker goalcup-ingest on https://ingest.agentcommunity.org (deployed 2026-10-15),
 # bucket goalcup-traces. Staging: the [env.staging] block below. No `account_id` on purpose:
@@ -73,7 +73,6 @@ DEVICE_POLL_PER_MINUTE = "30"
 DEVICE_TOKEN_PER_MINUTE = "1200"
 
 # Secrets, set with `wrangler secret put` (never in this file):
-#   RECEIPT_SIGNING_KEY  Ed25519 seed, 64 hex characters, generated offline
 #   SUPABASE_URL         https://<project>.supabase.co
 #   SUPABASE_KEY         a Supabase secret API key whose role may only execute public.goal_cup_upload_*
 #   RESEND_API_KEY       optional: switches the run emails on (the website's Resend account)
@@ -81,6 +80,8 @@ DEVICE_TOKEN_PER_MINUTE = "1200"
 #   RATE_LIMIT_KEY       random, at least 32 characters: HMAC key of the rate-limit keys (src/ratelimit.ts)
 #   TEST_APPROVAL_KEY    never in production. Staging only (with STAGING = "on"): switches on
 #                        POST /v1/device/approve, which approves a device request as any member.
+# The owner deletes the old RECEIPT_SIGNING_KEY secret only after the 1.0 Worker is live in production
+# (README "Deploying 1.0"; the 0.7 Worker refuses every call without it).
 
 # The 5-minute cron (src/notices.ts): closes runs that are over, records the GitHub commit at each
 # deadline, queues the run emails into the outbox. Staging repeats it below.
