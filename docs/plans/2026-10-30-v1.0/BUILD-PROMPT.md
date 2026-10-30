@@ -133,6 +133,31 @@ and report commits and replan notes skip review.
 
 ## 5. Real tests: short early, massive at the end
 
+**Go wide.** Use all the parallelism we can afford (ledger B11). Every build, test and experiment runs in Vercel
+Sandboxes, many at once; this session only drives agents. Run several workflows at the same time, with many
+subagents for tasks, reviews, rig runs and fixes.
+
+**The rig first (ledger B9).** Early in the build, make the pad (PRD-12) a small rig an agent can use without
+driving it: one command, one small settings file (harness, key name, case, prompt, steps), built-in waits, and it
+walks every step by itself (start, wait for calls, check the data, crash, wait for recovery, keep going, seal,
+fetch, check, clean up), then prints one plain table. Keep it simple. Before you trust it: it must fail on run 1's
+known bugs (PRD-12 selftest), and a reviewer reads its first outputs by hand to check it tests the right thing.
+Every rig run cleans up its sandbox, test repo and local files.
+
+**The test ladder (ledger B3).** Climb one rung at a time; when a rung fails, fix it before the next.
+1. **Micro tests while building:** one harness, one key, a few calls, just to prove each piece is live. Local
+   capture first (`GOALCUP_SERVER=off`, nothing uploaded). Then add one layer at a time: upload to staging,
+   subagents asked for in the prompt, a recorder crash, a watchdog kill and `goalcup recover`, "keep going", the
+   gateway case, the dodger case, HTTP/2.
+2. **Cycle runs per pad,** a few minutes each, not 20: setup, data flows, look at the recorded data, crash
+   something, check it stands back up, "keep going" on a few harnesses where it makes sense, seal, check the
+   server copy, clean up. Run them for every harness and case as soon as its connector lands, many in parallel.
+3. **Full runs at the end:** the 20-minute runs below, for every pad, all in parallel, until they pass.
+
+**Do not overbuild tests (ledger B10).** The rig's real runs are the main proof. Automated tests guard only the
+seven points, the format, masking and the never-stop rules. No tests that pin internal shapes or wording. If a
+test takes longer to change than the code it guards, delete or simplify it.
+
 - **Early proof.** As soon as format, recorder core, proxy and masking record one request end to end, run a short
   real test (Claude Code and Codex, a smoke prompt, `GOALCUP_SERVER=off`) in pad boxes. Then one short real
   test after each new core feature (each core feature of PRD-00's second and third slices: native capture,
