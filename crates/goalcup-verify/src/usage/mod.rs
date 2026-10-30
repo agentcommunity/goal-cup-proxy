@@ -4,11 +4,11 @@
 //! against them now. [`Calls`] takes every record of an entry in order ([`Calls::push`]) and
 //! [`Calls::finish`] gives the [`CallTable`]. The sink reads the `start` EVENT from the pushed
 //! records; it takes no argument of its own. Until the reader lands, the table is
-//! [`CallTable::default`]: not readable, [`Reason::NoReader`], threads and children not known.
+//! [`CallTable::default`]: not readable, [`Reason::NoReader`], no threads, children not read.
 //!
 //! Build a [`CallRow`], [`Thread`] or [`CallTable`] with [`CallRow::new`], [`Thread::new`] or
-//! [`CallTable::default`], then set fields; never with a struct literal, so a field added later
-//! breaks no caller.
+//! [`CallTable::default`], then set fields (or use struct update from one of them); never with a
+//! full struct literal, so a field added later breaks no caller.
 //!
 //! Wall times are nanoseconds since the Unix epoch, as the LINK `wall_ns` of `goalcup_format`. A
 //! token count of `None` means the source did not say; it is never 0 for that (PRD-09 section 4).
@@ -20,17 +20,19 @@ use std::process::ExitCode;
 use goalcup_format::Record;
 
 /// Which log a row comes from; also which leg a call's tokens came from (`usage_from`).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Leg {
     /// The recorded wire: a request and its reply.
+    #[default]
     Wire,
     /// The harness's own session log, read back out of the record.
     Native,
 }
 
 /// What a row is (PRD-09 section 3). Only `Call` is a model call.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Kind {
+    #[default]
     Call,
     /// `response.create` with `generate: false`.
     Warmup,
@@ -42,7 +44,7 @@ pub enum Kind {
 
 /// How a call ended, one per call (PRD-09 section 3). `status` is the HTTP status where there is
 /// one; `code` is the safe error code token, never text from the run.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub enum Outcome {
     Ok,
     RateLimited {
@@ -56,6 +58,7 @@ pub enum Outcome {
     /// The client interrupted it.
     Cancelled,
     /// No terminal event in the record and no named cause.
+    #[default]
     Unknown,
 }
 
@@ -145,7 +148,7 @@ pub struct Tokens {
 /// One row: a wire call, warm-up, interrupt or other request, or a native call. The wire fields
 /// (`sid`, `msg`, `host`, `host_kind`, `shape`, `via`) are `None` on native rows, `path` on wire
 /// rows.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct CallRow {
     pub leg: Leg,
     /// The entry id, `e` and 16 hex.
@@ -186,34 +189,15 @@ pub struct CallRow {
 }
 
 impl CallRow {
-    /// A row with every optional field empty, `outcome` `Unknown` and `whole` false.
-    pub fn new(leg: Leg, entry: impl Into<String>, kind: Kind) -> Self {
+    /// A row of boot `boot` with every optional field empty, `outcome` `Unknown` and `whole`
+    /// false. Boots count from 0, so `boot` is always given, never assumed.
+    pub fn new(leg: Leg, entry: impl Into<String>, boot: u64, kind: Kind) -> Self {
         Self {
             leg,
             entry: entry.into(),
-            boot: 0,
-            sid: None,
-            path: None,
-            msg: None,
-            thread: None,
-            parent: None,
-            wall_start: None,
-            wall_end: None,
-            host: None,
-            host_kind: None,
-            shape: None,
-            via: None,
+            boot,
             kind,
-            outcome: Outcome::Unknown,
-            detail: None,
-            whole: false,
-            model: None,
-            model_requested: None,
-            effort: None,
-            tokens: Tokens::default(),
-            extra: BTreeMap::new(),
-            usage_from: None,
-            join: None,
+            ..Self::default()
         }
     }
 }
@@ -258,15 +242,17 @@ impl Thread {
 }
 
 /// The call table of one entry.
-///
-/// When `reason` is [`Reason::NoReader`], `threads` and `children` are not known, not empty:
-/// nothing read them. A check that needs them (`subagents_present`) skips, never passes.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CallTable {
     pub rows: Vec<CallRow>,
+    /// The threads read.
     pub threads: Vec<Thread>,
-    /// Parent thread id to the child threads it names.
-    pub children: BTreeMap<String, Vec<String>>,
+    /// Parent thread id to the child threads it names; `None` when no source of parentage was
+    /// read. Whether it was read does not follow from `readable` or `reason`: a path-only harness
+    /// has `no_reader` yet gives who spawned whom, and an unreadable database gives nothing. A
+    /// check that needs it (`subagents_present`) skips on `None`, never passes, and runs on
+    /// whatever was read otherwise.
+    pub children: Option<BTreeMap<String, Vec<String>>>,
     pub readable: bool,
     /// `None` exactly when `readable` is true.
     pub reason: Option<Reason>,
@@ -276,12 +262,13 @@ pub struct CallTable {
 }
 
 impl Default for CallTable {
-    /// The empty table of an entry with no reader: not readable, [`Reason::NoReader`].
+    /// The empty table of an entry with no reader: not readable, [`Reason::NoReader`], children
+    /// not read.
     fn default() -> Self {
         Self {
             rows: Vec::new(),
             threads: Vec::new(),
-            children: BTreeMap::new(),
+            children: None,
             readable: false,
             reason: Some(Reason::NoReader),
             native_form: NativeForm::None,
