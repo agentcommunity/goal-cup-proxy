@@ -80,7 +80,7 @@ class Settings(unittest.TestCase):
 class Walk(unittest.TestCase):
     """A sentinel key in the environment: no argument the pad builds, and no file it writes, holds it."""
 
-    HARNESS = {"version": "1.2.3", "version_cmd": "x --version", "keep_going": True}
+    HARNESS = {"version": "1.2.3", "version_cmd": "x --version", "keep_going": True, "gateway": {}}  # a gateway route
 
     def fake_call(self, argv, timeout=None, env=None):
         if argv[0] == "sh":  # fetch-run: no organizer secret but its own reaches it
