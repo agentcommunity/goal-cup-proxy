@@ -64,10 +64,7 @@ export async function requireRun(ctx: Ctx, member: string, runId: string, entryI
   return { run, entry: found.entry };
 }
 
-/**
- * 410 unless the run still takes uploads: it has not been over for the close time. (`abandoned` is
- * only on rows from before 1.0; nothing sets it now, and such a run takes nothing.)
- */
+/** 410 unless the run still takes uploads: it has not been over for the close time. */
 export function requireAccepting(ctx: Ctx, run: RunRow): void {
   if (run.status === "abandoned") throw closed("This run is abandoned.");
   if (isPastClose(run, ctx.now(), ctx.cfg.closeAfterSeconds)) throw closed("This run is closed.");

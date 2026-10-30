@@ -42,12 +42,10 @@ import { NOTICE_KINDS, NO_FINAL_DETAIL } from "./db.ts";
 import { ApiError } from "./errors.ts";
 import { RUN_ID, isEntryId, isHex64, isTime } from "./util.ts";
 
-// `abandoned` only on rows from before 1.0; nothing sets it now.
 const STATUS_WORDS = ["open", "sealed", "incomplete", "abandoned"] as const;
 
 // What a row coming back must look like. The SQL and this file are written apart, so a row is
-// checked field by field before anything trusts it, and only these fields are kept: a column the
-// SQL still sends and the Worker no longer uses is ignored.
+// checked field by field before anything trusts it.
 type Check = (v: unknown) => boolean;
 const isObject: Check = (v) => typeof v === "object" && v !== null && !Array.isArray(v);
 const text: Check = (v) => typeof v === "string";
@@ -194,11 +192,10 @@ export class SupabaseDb implements Db {
     throw new ApiError(502, "upstream_error", "The database answered with something unexpected.");
   }
 
-  /** The fields of `shape`, each in the right form, or a 502 that names the fields (never their values). */
+  /** A row that has every field of `shape` in the right form, or a 502 that names the fields (never their values). */
   #row<T>(fn: string, v: unknown, what: string, shape: Record<string, Check>): T {
-    const o = v as Record<string, unknown>;
-    const bad = isObject(v) ? Object.keys(shape).filter((k) => !shape[k]!(o[k])) : ["(not an object)"];
-    if (bad.length === 0) return Object.fromEntries(Object.keys(shape).map((k) => [k, o[k]])) as T;
+    const bad = isObject(v) ? Object.keys(shape).filter((k) => !shape[k]!((v as Record<string, unknown>)[k])) : ["(not an object)"];
+    if (bad.length === 0) return v as T;
     console.error(`supabase ${fn}: the ${what} has fields that do not look right: ${bad.join(", ")}`);
     throw new ApiError(502, "upstream_error", "The database answered with something unexpected.");
   }

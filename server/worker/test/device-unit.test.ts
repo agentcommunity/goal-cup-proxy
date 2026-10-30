@@ -46,13 +46,11 @@ test("a bound credential lasts until 24 hours after the deadline", () => {
 
 const isMalformed = (e: unknown) => e instanceof ApiError && e.status === 400 && e.code === "malformed";
 
-test("Goal Cup Proxy's version is proxy_version only; the old tracer_version name is refused", () => {
+test("Goal Cup Proxy's version is proxy_version, and it must be there", () => {
   assert.equal(proxyVersionField({ proxy_version: "1.0.0" }), "1.0.0");
   assert.equal(proxyVersionField({ proxy_version: "x".repeat(64) }), "x".repeat(64));
   for (const bad of [
     {},
-    { tracer_version: "1.0.0" },
-    { proxy_version: null, tracer_version: "1.0.0" },
     { proxy_version: "" },
     { proxy_version: "x".repeat(65) },
     { proxy_version: 7 },
@@ -72,7 +70,6 @@ test("POST /v1/device stores proxy_version as the device's tracer_version", asyn
     createDevice(ctx, new Request("https://w/v1/device", { method: "POST", body: JSON.stringify({ purpose: "run", mode: "practice", connector_id: "c", ...body }) }));
   assert.equal((await post({ proxy_version: "1.0.0" })).status, 200);
   assert.deepEqual(stored.map((d) => d.tracer_version), ["1.0.0"]);
-  await assert.rejects(post({ tracer_version: "1.0.0" }), isMalformed);
   await assert.rejects(post({}), isMalformed);
   assert.equal(stored.length, 1, "a refused body stores nothing");
 });

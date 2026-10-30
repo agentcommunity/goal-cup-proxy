@@ -22,13 +22,6 @@ export function toHex(bytes: Uint8Array): string {
   return out;
 }
 
-export function fromHex(hex: string): Uint8Array {
-  if (hex.length % 2 !== 0 || !/^[0-9a-fA-F]*$/.test(hex)) throw new Error("not hex");
-  const out = new Uint8Array(hex.length / 2);
-  for (let i = 0; i < out.length; i++) out[i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16);
-  return out;
-}
-
 export async function sha256Hex(data: string | Uint8Array): Promise<string> {
   const bytes = typeof data === "string" ? new TextEncoder().encode(data) : data;
   return toHex(new Uint8Array(await crypto.subtle.digest("SHA-256", bytes as BufferSource)));

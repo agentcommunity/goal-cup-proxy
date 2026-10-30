@@ -319,12 +319,11 @@ test("heartbeat vitals are stored as given, and a repeat of the committed final 
   const db = LocalDb.create(asR2(bucket));
   await db.openRun(openArgs(1, "s1", START, DEADLINE, await credential(db)));
   const stored = () => JSON.parse(bucket.map.get(`state/runs/${R1}.json`)!.text) as {
-    last_vitals: unknown; disk_notice_at?: string | null; entries: { heartbeat_count: number; last_heartbeat: { vitals: unknown } }[];
+    last_vitals: unknown; entries: { heartbeat_count: number; last_heartbeat: { vitals: unknown } }[];
   };
   const vitals = { counts: { off_ms: 0, agent_paused: "disk", mode: "recording" } };
   assert.equal(await db.recordHeartbeat({ ...hb(0, G, false), vitals }), "recorded");
-  // Stored as given; an agent_paused inside the counts starts no disk pause (no disk_full email is owed).
-  assert.deepEqual([stored().entries[0]!.last_heartbeat.vitals, stored().last_vitals, stored().disk_notice_at ?? null], [vitals, vitals, null]);
+  assert.deepEqual([stored().entries[0]!.last_heartbeat.vitals, stored().last_vitals], [vitals, vitals]);
   assert.equal(await db.recordHeartbeat({ ...hb(0, G, true), vitals: { counts_dropped: 4000 } }), "final_committed");
   assert.deepEqual(stored().last_vitals, { counts_dropped: 4000 });
   const rows = stored().entries[0]!.heartbeat_count;

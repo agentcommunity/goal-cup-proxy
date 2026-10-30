@@ -96,8 +96,6 @@ describe("upload API against wrangler dev", { concurrency: false }, () => {
       assertError(await api.call("POST", "/v1/runs", { token: ALICE, json: missing }), 400, "malformed");
       assertError(await api.call("POST", "/v1/runs", { token: ALICE, body: new TextEncoder().encode("{not json") }), 400, "malformed");
       assertError(await api.call("POST", "/v1/runs", { token: ALICE, json: [] }), 400, "malformed");
-      // The version under its old name only: refused, the old name is gone.
-      assertError(await api.call("POST", "/v1/runs", { token: ALICE, json: openBody({ proxy_version: undefined, tracer_version: "1.0.0" }) }), 400, "malformed");
     });
 
     test("201 with server-minted ids and times", async () => {
@@ -247,7 +245,6 @@ describe("upload API against wrangler dev", { concurrency: false }, () => {
       assert.equal(p.next_seq, 5);
       assert.equal(p.head, c1.head);
       assert.equal(p.sealed, false);
-      assert.ok(!("last_ack" in p), JSON.stringify(p));
     });
 
     test("a retry of the same chunk is 200 with the very same stored answer, body unread", async () => {

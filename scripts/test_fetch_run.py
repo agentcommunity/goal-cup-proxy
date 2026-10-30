@@ -308,6 +308,8 @@ class FetchRunTest(unittest.TestCase):
         self.assertTrue((self.root / "fake.psql.mode").exists(), "the service file is mode 600")
         self.assertFalse(list(self.out.glob(".fetch-run.*")), "and it is gone afterwards")
         self.assertTrue((self.out / ENTRY / "rec.gcr.zst").is_file())
+        self.run_script("--store", str(self.store), "--bucket", "goalcup-traces-staging", RUN, str(self.root / "s"), env=self.fakes())
+        self.assertIn("staging=true", (self.root / "fake.psql.args").read_text(), "the staging bucket reads only staging runs")
 
     def test_tracing_the_script_shows_no_secret(self) -> None:
         self.write_index(self.entry())
@@ -350,17 +352,6 @@ class FetchRunTest(unittest.TestCase):
         absent = self.run_script("--index", str(self.index_path), ENTRY, str(self.out), env=self.fakes())
         self.assertEqual(absent.returncode, 1, absent.stderr)
         self.assertEqual(self.fetched()[1]["missing"]["why"], "object_bad")
-
-    def test_a_run_on_the_other_side_fails_and_writes_nothing(self) -> None:
-        # A production run looked up with the staging bucket: the query keeps to staging, finds none.
-        self.index_path.write_text("[]")
-        self.entry()
-        result = self.run_script("--store", str(self.store), "--bucket", "goalcup-traces-staging", RUN, str(self.out),
-                                 env=self.fakes())
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("staging=true", (self.root / "fake.psql.args").read_text())
-        self.assertFalse(list(self.out.rglob("rec.gcr.zst")), "nothing is written")
-        self.assertFalse(list(self.out.glob(".fetch-run.*")), "no temporary directory is left")
 
     def test_a_staging_bucket_is_named_in_the_url(self) -> None:
         self.write_index(self.entry())

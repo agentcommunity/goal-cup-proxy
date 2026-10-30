@@ -43,7 +43,7 @@ export function isPastClose(run: { deadline_at: string; replaced_at: string | nu
 /**
  * What the run's status is at `now`. A run is `sealed` once it is over and its current entry is
  * sealed, and `incomplete` once it has been over for the close time with that entry unsealed.
- * `abandoned` and the words already written stay as they are.
+ * Words already written stay as they are.
  */
 export function statusAt(run: RunRow, now: Date, closeAfterSeconds: number = CLOSE_AFTER_SECONDS): RunStatus {
   if (run.status !== "open" || !isPastEnd(run, now)) return run.status;

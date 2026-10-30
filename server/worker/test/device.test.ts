@@ -36,8 +36,7 @@ describe("device flow against wrangler dev", { concurrency: false }, () => {
   };
   const poll = (device_code: string) => api.call("POST", "/v1/device/token", { json: { device_code } });
 
-  test("proxy_version names Goal Cup Proxy's version; tracer_version alone is 400", async () => {
-    assertError(await api.call("POST", "/v1/device", { json: deviceBody({ proxy_version: undefined, tracer_version: "1.0.0" }) }), 400, "malformed");
+  test("proxy_version names Goal Cup Proxy's version; without it, 400", async () => {
     assertError(await api.call("POST", "/v1/device", { json: deviceBody({ proxy_version: undefined }) }), 400, "malformed");
     assertError(await api.call("POST", "/v1/device", { json: deviceBody({ proxy_version: "x".repeat(65) }) }), 400, "malformed");
   });

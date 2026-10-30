@@ -471,7 +471,7 @@ describe("facts about the machine and the connection", () => {
     }
   });
 
-  test("open and continue take proxy_version, store it as tracer_version, and refuse the old name alone", async () => {
+  test("open and continue take proxy_version, store it as tracer_version, and refuse a body without it", async () => {
     const r = rig({}, T0);
     try {
       const versions = (run: string) => (r.storedRun(run).entries as { tracer_version: string }[]).map((e) => e.tracer_version);
@@ -482,9 +482,8 @@ describe("facts about the machine and the connection", () => {
       const c1 = await r.cont(alice, run.run_id, run.entry_id, "s-two", { proxy_version: "1.0.1" });
       assert.equal(c1.status, 201, JSON.stringify(c1.body));
       assert.deepEqual(versions(run.run_id), ["1.0.0", "1.0.1"]);
-      assertError(await r.cont(alice, run.run_id, c1.body.entry_id, "s-three", { proxy_version: undefined, tracer_version: "1.0.1" }), 400, "malformed");
+      assertError(await r.cont(alice, run.run_id, c1.body.entry_id, "s-three", { proxy_version: undefined }), 400, "malformed");
       assertError(await r.cont(alice, run.run_id, c1.body.entry_id, "s-three", { proxy_version: "x".repeat(65) }), 400, "malformed");
-      assertError(await r.open(await r.cred("bob"), "s4", { proxy_version: undefined, tracer_version: "1.0.0" }), 400, "malformed");
       assertError(await r.open(await r.cred("carol"), "s5", { proxy_version: undefined }), 400, "malformed");
     } finally {
       r.stop();

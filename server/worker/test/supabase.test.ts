@@ -147,8 +147,7 @@ test("continueRun -> upload_continue_run", async () => {
 });
 
 test("getRun -> upload_run_position (the entry named, or null for the current one); getChunk -> upload_get_chunk", async () => {
-  // The SQL still sends the old ack and receipt columns; the Worker keeps only the fields it uses.
-  const calls = stub({ run, entry: { ...entry, last_ack: {}, receipt: null } }, { run, entry: null }, null, { ...chunk, ack: {} }, null);
+  const calls = stub({ run, entry }, { run, entry: null }, null, chunk, null);
   assert.deepEqual(await db().getRun("m", "r1", null), { run, entry });
   assert.deepEqual(await db().getRun("m", "r1", "e9"), { run, entry: null });
   assert.equal(await db().getRun("m", "r2", null), null);

@@ -53,9 +53,9 @@ reaches that run only; it lives one hour while unbound and until `deadline_at` p
 bound. The open stamps `official_start` from the server's clock and sets `deadline_at`. One account
 has one main run: a new competition start replaces the old one. Practice and test runs replace
 nothing and are never replaced; test runs are left out of every public number. `goalcup continue` adds a segment (a new entry with its own chain,
-same deadline). The server seals an entry when its final heartbeat has committed the end and the
-chain up to that end is held, whichever comes second ([The end of a run](#the-end-of-a-run-as-implemented)).
-24 hours after the run's end the server closes it: `sealed` or `incomplete`, then `410`.
+same deadline). How an entry is sealed: [The end of a run](#the-end-of-a-run-as-implemented).
+24 hours after the run's end the server closes it: `sealed` or `incomplete`, then `410`
+(`CLOSE_AFTER_SECONDS` changes this only in tests).
 
 **One database for staging and production.** `sql/goal-cup-tracer-upload.sql` is a copy of the
 website's migration; the website repo is the authority. Production and staging each have their own
@@ -204,8 +204,7 @@ Without `routes = []`, a staging deploy would move `ingest.agentcommunity.org` t
 - **Then one atomic database step** advances offset, sequence and head, records the chunk, and adds
   its compressed size and one chunk to the entry's `stored_bytes` and `chunk_count`, only if they
   still match what was checked. A request that loses a race is answered from the stored chunk if it
-  was a retry, otherwise `409`. If the chunk ends at the entry's committed end, the entry is sealed
-  in the same call.
+  was a retry, otherwise `409`. Then the seal is tried ([The end of a run](#the-end-of-a-run-as-implemented)).
 - **Not checked here, by design:** whether the bytes are a valid chain.
 
 ## Operator runbook
@@ -551,24 +550,13 @@ rows are the objects under `state/notices/`. The tests call `worker.scheduled` o
 
 ## The end of a run, as implemented
 
-A run ends at `ends_at = min(deadline_at, replaced_at)`; every rule is per entry.
-([UPLOAD-API, "When a run ends"](../../docs/UPLOAD-API.md#when-a-run-ends).)
+The final heartbeat, `stop`, `503 awaiting_final` and the `409` and `410` rules are as
+[UPLOAD-API, "When a run ends"](../../docs/UPLOAD-API.md#when-a-run-ends) says; every rule is per entry.
 
-- `POST /v1/runs/{id}/heartbeat` stores the heartbeat and answers `stop` once `now >= ends_at`, with the
-  `reason`. `GET` reports the same `stop`, `ends_at` and the entry's `final`.
-- The final heartbeat commits `(seq, head, repo_head)` once per entry. The same `(seq, head)` again is
-  `200` and adds no row. A different one is `409`. It is also `409` if the server already holds chain
-  past that `seq`, or holds that `seq` with another head. It is accepted until the run is closed.
-- A chunk after `ends_at` while the entry has no final committed is `503 awaiting_final` with
-  `Retry-After: 60`. Once a final is committed, a chunk ending after the committed `seq`, or ending at it
-  with another head, is `410`. The same rule runs again inside the atomic commit.
-- There is no seal call. `trySeal` (`src/runs.ts`) seals the entry once the final is committed and the
-  chain is held up to it: the final heartbeat tries with the head it committed, and the chunk path
-  tries when the stored chunk ends at the committed `(seq, head)`. The SQL seal step checks both
-  facts again under a row lock, so two racing calls are safe. Not yet held is `sealed: false`, never
-  an error; the client repeats the final heartbeat until an answer says `sealed: true`.
-- Heartbeat `counts` are stored as given under `{"counts": ...}` ([How it is built](#how-it-is-built)).
-  The server interprets none of them.
-- 24 hours after `ends_at` the run closes (`CLOSE_AFTER_SECONDS` only in tests); a credential lives
-  until `deadline_at` plus 24 hours, so a late upload after that meets `401`.
+- There is no seal call. `trySeal` (`src/runs.ts`) seals an entry once its final heartbeat has
+  committed the end and the chain is held up to it, whichever comes second: the final heartbeat tries
+  with the head it committed, and the chunk path tries when the stored chunk ends at the committed
+  `(seq, head)`. The SQL seal step checks both facts again under a row lock, so two racing calls are
+  safe. Not yet held is `sealed: false`, never an error.
+- The end rules run again inside the atomic chunk commit.
 - To test a deadline in seconds, use the local-only `RUN_SECONDS` and `CLOSE_AFTER_SECONDS`.
