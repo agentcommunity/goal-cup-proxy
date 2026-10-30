@@ -315,7 +315,9 @@ pub fn unix_of(t: &str) -> Option<u64> {
     let b = t.as_bytes();
     let num = |at: usize, len: usize| -> Option<i64> {
         let s = t.get(at..at + len)?;
-        s.bytes().all(|b| b.is_ascii_digit()).then(|| s.parse().ok())?
+        s.bytes()
+            .all(|b| b.is_ascii_digit())
+            .then(|| s.parse().ok())?
     };
     let seps = [(4, b'-'), (7, b'-'), (10, b'T'), (13, b':'), (16, b':')];
     let frac = t.get(19..)?.strip_prefix('.').unwrap_or(t.get(19..)?);

@@ -109,7 +109,10 @@ fn nothing_lost_only_without_any_loss() {
         lose(&mut st);
         let out = show(&st);
         assert!(!out.contains(text::NOTHING_LOST), "loss {i}");
-        assert!(out.lines().count() >= clean_lines, "loss {i} has no line:\n{out}");
+        assert!(
+            out.lines().count() >= clean_lines,
+            "loss {i} has no line:\n{out}"
+        );
     }
 }
 

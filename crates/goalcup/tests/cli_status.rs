@@ -69,7 +69,10 @@ fn state_rows_in_table_order() {
         let got = state(Mode::Recording, &over);
         assert_eq!(got, State::Over { since: T0 });
         let line = text::state_line(&got, RUN);
-        assert!(line.starts_with(text::PROBLEM) && line.ends_with("goalcup seal"), "{line}");
+        assert!(
+            line.starts_with(text::PROBLEM) && line.ends_with("goalcup seal"),
+            "{line}"
+        );
         assert!(!line.contains("goalcup continue") && !line.contains("goalcup recover"));
     }
     let mut null = status(Mode::Null);
@@ -102,7 +105,11 @@ fn state_rows_in_table_order() {
     assert_eq!(on, State::Recording);
     assert!(!text::state_line(&on, RUN).starts_with(text::PROBLEM));
     // Point 6: a part whose recording is off or stuck is never called `recording`.
-    for s in [recover, State::Continue { since: T0 }, State::Over { since: T0 }] {
+    for s in [
+        recover,
+        State::Continue { since: T0 },
+        State::Over { since: T0 },
+    ] {
         assert_ne!(s.word(), on.word(), "{s:?}");
     }
     for s in [State::OffRestarting { since: T0 }, not_answering] {
@@ -307,7 +314,10 @@ impl Home {
 
     fn run(&self, args: &[&str]) -> Output {
         let mut cmd = Command::new(common::bin());
-        self.0.apply(&mut cmd).args(args).env("GOALCUP_SERVER", "off");
+        self.0
+            .apply(&mut cmd)
+            .args(args)
+            .env("GOALCUP_SERVER", "off");
         cmd.output().unwrap()
     }
 }

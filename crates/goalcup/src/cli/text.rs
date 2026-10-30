@@ -186,7 +186,9 @@ pub fn gap_words(name: &str) -> String {
         "protocol_other" => "a connection in a form goalcup does not read",
         "after_stop" => "sent after the agent ended",
         _ => {
-            let n = name.strip_prefix("other(").and_then(|n| n.strip_suffix(')'));
+            let n = name
+                .strip_prefix("other(")
+                .and_then(|n| n.strip_suffix(')'));
             return format!("other ({})", n.unwrap_or(name));
         }
     }
@@ -268,7 +270,11 @@ pub fn state_line(state: &State, run: &str) -> String {
         State::Losing { streams, bytes } => format!(
             "Recording is losing data now: {} a gap ({} so far). Your agent is not slowed. \
              The end screen will say how much.",
-            plural(streams, "connection or file has", "connections or files have"),
+            plural(
+                streams,
+                "connection or file has",
+                "connections or files have"
+            ),
             size_words(bytes)
         ),
         State::WriterSlow { secs } => {
