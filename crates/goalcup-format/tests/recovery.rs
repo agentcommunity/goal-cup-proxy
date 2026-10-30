@@ -131,7 +131,8 @@ fn tail_of(g: &Record) -> serde_json::Value {
 fn read_entry(d: &Path) -> Vec<Item> {
     let mut rd = open_dir(d).unwrap();
     let items: Vec<Item> = rd.by_ref().collect::<Result<_, _>>().unwrap();
-    assert_eq!(rd.tail(), Default::default());
+    assert!(!rd.tail().open_frame);
+    assert_eq!(rd.tail().truncated, None);
     let seqs: Vec<u64> = items
         .iter()
         .filter_map(|i| match i.rec {
@@ -146,7 +147,13 @@ fn read_entry(d: &Path) -> Vec<Item> {
     for p in part_files(d).unwrap() {
         let mut rd = decode(fs::File::open(&p).unwrap()).unwrap();
         assert!(rd.by_ref().all(|i| i.unwrap().link_ok != Some(false)));
-        assert_eq!(rd.tail(), Default::default(), "{p:?} decodes alone");
+        let raw = zstd::stream::decode_all(fs::File::open(&p).unwrap()).unwrap();
+        let t = rd.tail();
+        assert!(
+            !t.open_frame && t.truncated.is_none(),
+            "{p:?} decodes alone"
+        );
+        assert_eq!(t.raw, raw.len() as u64, "{p:?}");
     }
     items
 }

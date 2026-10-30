@@ -29,6 +29,10 @@ pub struct Tail {
     pub open_frame: bool,
     /// A record was cut at the end: the raw offset where it starts. It was not returned.
     pub truncated: Option<u64>,
+    /// The raw bytes the reader took from its input, counted from the first byte of the stream
+    /// rather than from the first PART's `raw_offset`. Final once [`Reader::next`] has returned
+    /// `None`; it includes the bytes of a record cut at the end ([`Tail::truncated`]).
+    pub raw: u64,
 }
 
 /// A streaming record reader over raw (decompressed) bytes. Raw offsets start at the first
@@ -205,6 +209,7 @@ impl<R: Read> Reader<R> {
             let take = avail.len().min(want - self.buf.len());
             self.buf.extend_from_slice(&avail[..take]);
             self.r.consume(take);
+            self.tail.raw += take as u64;
         }
         Ok(true)
     }

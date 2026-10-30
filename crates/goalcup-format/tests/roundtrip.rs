@@ -123,6 +123,7 @@ fn random_records_of_every_kind_round_trip() {
     let back: Vec<Record> = rd.by_ref().map(|i| i.unwrap().rec).collect();
     assert_eq!(back, recs);
     assert_eq!(rd.tail().truncated, None);
+    assert_eq!(rd.tail().raw, raw.len() as u64);
 }
 
 #[test]
@@ -174,6 +175,7 @@ fn a_record_cut_at_the_end_is_reported_not_read() {
         let got: Vec<Record> = rd.by_ref().map(|i| i.unwrap().rec).collect();
         assert_eq!(got, recs[..1], "cut at {cut}");
         assert_eq!(rd.tail().truncated, Some(first as u64), "cut at {cut}");
+        assert_eq!(rd.tail().raw, cut as u64, "cut at {cut}");
     }
 }
 
