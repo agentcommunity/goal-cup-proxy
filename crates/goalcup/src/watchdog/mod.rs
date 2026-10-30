@@ -192,7 +192,10 @@ mod tests {
         let cases = [
             (Prev::Exit(Exit::Code(75)), r#"{"code":75}"#),
             (Prev::Exit(Exit::Signal(9)), r#"{"signal":9}"#),
-            (Prev::Cause(Cause::WatchdogLost), r#"{"cause":"watchdog_lost"}"#),
+            (
+                Prev::Cause(Cause::WatchdogLost),
+                r#"{"cause":"watchdog_lost"}"#,
+            ),
             (
                 Prev::Cause(Cause::NullMode {
                     exits: 3,
