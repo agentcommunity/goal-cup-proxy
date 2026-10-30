@@ -11,7 +11,7 @@ mod common;
 
 use common::recorder::{data_of, gaps};
 use flate2::write::{GzEncoder, ZlibEncoder};
-use flate2::{Compress, Compression, FlushCompress};
+use flate2::Compression;
 use goalcup::pipeline::{Call, Calls, EndReason, GapReason, Mono, Recorder, Sid, StreamKind};
 use goalcup::proxy::http1::Http1;
 use goalcup::proxy::pump::{Parser, Stop};
@@ -320,57 +320,26 @@ fn a_head_past_64k_is_named_and_parsing_goes_on() {
     assert_eq!(reqs[1].2["path"], "/next");
 }
 
-/// One text frame, `rsv1` set when compressed, masked with `mask` (client frames).
-fn frame(rsv1: bool, payload: &[u8], mask: Option<[u8; 4]>) -> Vec<u8> {
-    let mut out = vec![0x81 | if rsv1 { 0x40 } else { 0 }, payload.len() as u8];
-    match mask {
-        Some(key) => {
-            out[1] |= 0x80;
-            out.extend_from_slice(&key);
-            out.extend(payload.iter().enumerate().map(|(i, b)| b ^ key[i & 3]));
-        }
-        None => out.extend_from_slice(payload),
-    }
-    out
-}
-
-/// Raw DEFLATE with a sync flush and the `00 00 ff ff` tail stripped (RFC 7692 section 7.2.1).
-fn deflate(c: &mut Compress, msg: &[u8]) -> Vec<u8> {
-    let mut out = Vec::with_capacity(msg.len() + 64);
-    c.compress_vec(msg, &mut out, FlushCompress::Sync).unwrap();
-    assert!(out.ends_with(&[0, 0, 0xff, 0xff]));
-    out.truncate(out.len() - 4);
-    out
-}
-
 #[test]
 fn a_101_hands_the_copied_frames_to_the_websocket_parser() {
-    let (mut cup, mut cdown) = (
-        Compress::new(Compression::default(), false),
-        Compress::new(Compression::default(), false),
-    );
-    let key = Some([1, 2, 3, 4]);
     // The RFC 6455 section 1.3 example key and its accept value.
     let mut up = b"GET /v1/responses?session=s1 HTTP/1.1\r\nHost: api.example.com\r\nUpgrade: websocket\r\n\
         Connection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\
         Sec-WebSocket-Extensions: permessage-deflate; client_max_window_bits\r\n\r\n"
         .to_vec();
-    up.extend(frame(true, &deflate(&mut cup, b"first up"), key));
+    // Text frames, uncompressed (RSV1 clear, allowed under permessage-deflate); client frames
+    // masked with a zero key.
+    up.extend(b"\x81\x88\0\0\0\0first up");
     let mut down = b"HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\
         Sec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=\r\nSec-WebSocket-Extensions: permessage-deflate\r\n\r\n"
         .to_vec();
-    down.extend(frame(true, &deflate(&mut cdown, b"down one"), None));
+    down.extend(b"\x81\x08down one");
 
     let (rec, calls) = Recorder::for_tests(ROOM);
     let mut p = Http1::new(&rec, CONN);
     feed(&mut p, Dir::Up, &up, 0);
     feed(&mut p, Dir::Down, &down, 1);
-    feed(
-        &mut p,
-        Dir::Up,
-        &frame(true, &deflate(&mut cup, b"second up"), key),
-        1,
-    );
+    feed(&mut p, Dir::Up, b"\x81\x89\0\0\0\0second up", 1);
     assert_eq!(
         Box::new(p).end(Mono::now(), EndReason::Complete, false, 0),
         None

@@ -22,9 +22,10 @@ use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::task::{Context, Poll};
 use std::time::Duration;
-use tokio::io::{AsyncRead, AsyncReadExt as _, AsyncWriteExt as _, DuplexStream};
+use tokio::io::{AsyncRead, AsyncReadExt as _, AsyncWrite, AsyncWriteExt as _, DuplexStream};
 use tokio::io::{Join, ReadBuf, ReadHalf, WriteHalf, duplex};
 use tokio::net::{TcpListener, TcpStream};
+use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 
 /// A connected loopback pair: (test side, proxy side).
@@ -287,35 +288,9 @@ async fn an_upstream_reset_reaches_the_client_as_a_reset_and_a_close_as_a_close(
     .await;
 }
 
-/// Peers (client, upstream test sides), feeds, feeds that found their chunk already waiting at
-/// the peer (a non-blocking peek).
-#[derive(Default)]
-struct AtPeer(
-    Arc<OnceLock<[std::net::TcpStream; 2]>>,
-    Arc<AtomicUsize>,
-    Arc<AtomicUsize>,
-);
-
-impl Parser for AtPeer {
-    fn feed(&mut self, dir: Dir, _: Mono, bytes: &[u8]) -> Result<(), Stop> {
-        let peer = &self.0.get().unwrap()[usize::from(dir == Dir::Up)];
-        let mut b = vec![0; bytes.len()];
-        if peer.peek(&mut b).is_ok_and(|n| b[..n] == *bytes) {
-            self.2.fetch_add(1, Ordering::SeqCst);
-        }
-        self.1.fetch_add(1, Ordering::SeqCst);
-        Ok(())
-    }
-    fn end(self: Box<Self>, _: Mono, _: EndReason, _: bool, _: u64) -> Option<Stop> {
-        None
-    }
-    fn panicked(self: Box<Self>, t: Mono) -> Stop {
-        Stop::panic(0, t)
-    }
-}
-
-async fn fed(n: &AtomicUsize, k: usize) {
-    while n.load(Ordering::SeqCst) < k {
+/// Waits until the parser was fed `k` bytes in all.
+async fn fed(copies: &Mutex<[Vec<u8>; 2]>, k: usize) {
+    while copies.lock().unwrap().iter().map(Vec::len).sum::<usize>() < k {
         tokio::time::sleep(Duration::from_millis(1)).await;
     }
 }
@@ -324,16 +299,16 @@ async fn fed(n: &AtomicUsize, k: usize) {
 async fn bytes_reach_the_peer_before_the_parser_and_sse_before_eof() {
     within_async(HANG, async {
         let (rec, _calls) = Recorder::for_tests(1 << 30);
-        let parser = AtPeer::default();
-        let (peers, feeds, ok) = (parser.0.clone(), parser.1.clone(), parser.2.clone());
+        let parser = Copies::default();
+        let (copies, peers, ok) = (parser.0.clone(), parser.1.clone(), parser.2.clone());
         let mut r = pumped(&rec, |_| Some(Box::new(parser)), Arc::default()).await;
         let dup =
             |s: &TcpStream| std::net::TcpStream::from(s.as_fd().try_clone_to_owned().unwrap());
         peers.set([dup(&r.client), dup(&r.upstream)]).unwrap();
         r.client.write_all(&[1; 100]).await.unwrap();
-        fed(&feeds, 1).await;
+        fed(&copies, 100).await;
         r.upstream.write_all(b"data: 1\n\n").await.unwrap();
-        fed(&feeds, 2).await;
+        fed(&copies, 109).await;
         let (mut sse, mut req) = ([0; 9], [0; 100]);
         r.client.read_exact(&mut sse).await.unwrap();
         r.upstream.read_exact(&mut req).await.unwrap();
@@ -611,12 +586,25 @@ async fn only_an_upstream_cut_leaves_a_close_delimited_reply_unproven() {
     .await;
 }
 
-/// A parser that keeps a copy of every byte fed: up, down.
+/// A parser that keeps a copy of every byte fed (up, down) and, once the peers (client, upstream
+/// test sides) are set, counts the feeds that found their chunk already waiting at the peer (a
+/// non-blocking peek).
 #[derive(Default)]
-struct Copies(Arc<Mutex<[Vec<u8>; 2]>>);
+struct Copies(
+    Arc<Mutex<[Vec<u8>; 2]>>,
+    Arc<OnceLock<[std::net::TcpStream; 2]>>,
+    Arc<AtomicUsize>,
+);
 
 impl Parser for Copies {
     fn feed(&mut self, dir: Dir, _: Mono, bytes: &[u8]) -> Result<(), Stop> {
+        if let Some(peers) = self.1.get() {
+            let mut b = vec![0; bytes.len()];
+            let peer = &peers[usize::from(dir == Dir::Up)];
+            if peer.peek(&mut b).is_ok_and(|n| b[..n] == *bytes) {
+                self.2.fetch_add(1, Ordering::SeqCst);
+            }
+        }
         self.0.lock().unwrap()[usize::from(dir == Dir::Down)].extend_from_slice(bytes);
         Ok(())
     }
@@ -663,6 +651,87 @@ async fn a_chunk_cut_mid_write_by_the_other_legs_error_is_recorded_as_far_as_it_
         assert_eq!((copies[0].len(), &copies[1]), (0, &vec![7; got]));
         assert_eq!(reason, EndReason::Interrupted);
         assert!(gaps(&calls).is_empty());
+    })
+    .await;
+}
+
+/// An upstream read half that waits until told, then fails with a reset.
+struct ResetOn(oneshot::Receiver<()>);
+
+impl AsyncRead for ResetOn {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        _: &mut ReadBuf<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        let reset = std::io::ErrorKind::ConnectionReset;
+        Pin::new(&mut self.0).poll(cx).map(|_| Err(reset.into()))
+    }
+}
+
+/// An upstream write half that takes this many more bytes, then stays pending, as a TCP peer
+/// that stopped reading does.
+struct Stalls(Arc<AtomicUsize>);
+
+impl AsyncWrite for Stalls {
+    fn poll_write(
+        self: Pin<&mut Self>,
+        _: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<std::io::Result<usize>> {
+        let n = buf.len().min(self.0.load(Ordering::SeqCst));
+        self.0.fetch_sub(n, Ordering::SeqCst);
+        if n == 0 { Poll::Pending } else { Poll::Ready(Ok(n)) }
+    }
+    fn poll_flush(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        Poll::Ready(Ok(()))
+    }
+    fn poll_shutdown(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        Poll::Ready(Ok(()))
+    }
+}
+
+/// PRD-03 section 5: the upstream resets while a request body is held mid-write by backpressure.
+/// The client bytes read and never forwarded go to the http_req END tail as `unsent`.
+#[tokio::test]
+async fn an_upstream_reset_mid_upload_counts_the_rest_of_the_chunk_unsent() {
+    within_async(HANG, async {
+        let (rec, calls) = Recorder::for_tests(1 << 30);
+        let mut post = b"POST /up HTTP/1.1\r\nHost: a.example\r\nContent-Length: 5000\r\n\r\n".to_vec();
+        let head = post.len();
+        post.extend([b'u'; 5000]);
+        let (reset, left) = (oneshot::channel(), Arc::new(AtomicUsize::new(head + 1000)));
+        let upstream = tokio::io::join(ResetOn(reset.1), Stalls(left.clone()));
+        let (mut client, cp) = duplex(1 << 16);
+        let r = rec.clone();
+        let relay = tokio::spawn(async move {
+            let mut conn = r.open(StreamKind::Conn, 0, 0, 0, OpenFlags::NONE, json!({}));
+            let parser: Box<dyn Parser> = Box::new(Http1::new(&r, conn.sid()));
+            let (none, quiet) = ((Bytes::new(), Bytes::new()), AtomicU64::new(0));
+            let legs = (cp, upstream);
+            let p = pump::relay(&r, &mut conn, legs, none, Some(parser), &quiet, None).await;
+            conn.end(r.now(), p.reason, None);
+            (p.plain_up, p.unsent_up, p.reason)
+        });
+        client.write_all(&post).await.unwrap();
+        while left.load(Ordering::SeqCst) > 0 {
+            tokio::task::yield_now().await;
+        }
+        reset.0.send(()).unwrap();
+        let (plain_up, unsent_up, reason) = relay.await.unwrap();
+        let sent = head as u64 + 1000;
+        assert_eq!((plain_up, unsent_up, reason), (sent, 4000, EndReason::Interrupted));
+        let all = calls.all();
+        let req = all.iter().find_map(|c| match c {
+            Call::Open(sid, StreamKind::HttpReq, ..) => Some(*sid),
+            _ => None,
+        });
+        let end = all.iter().find_map(|c| match c {
+            Call::End(sid, _, reason, _, tail) if Some(*sid) == req => Some((*reason, tail)),
+            _ => None,
+        });
+        let (reason, tail) = end.expect("the http_req ended");
+        assert_eq!((reason, &tail.as_ref().unwrap()["unsent"]), (EndReason::Interrupted, &json!(4000)));
     })
     .await;
 }

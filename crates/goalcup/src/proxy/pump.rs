@@ -84,14 +84,13 @@ pub struct Pumped<C, U> {
 pub type Tap<'a> = &'a (dyn Fn(Dir, Mono, u64) + Sync);
 
 /// How one direction ended. `Cut`: a TLS peer closed without close_notify, passed on as a clean
-/// close (rule 8), though only close_notify proves a close-delimited body whole. `WriteErr`
-/// carries the bytes of the chunk read and not taken by the writer.
+/// close (rule 8), though only close_notify proves a close-delimited body whole.
 #[derive(Clone, Copy)]
 enum Leg {
     Eof,
     Cut,
     ReadErr,
-    WriteErr(u64),
+    WriteErr,
 }
 
 struct Pump<'a> {
@@ -147,11 +146,13 @@ impl Pump<'_> {
     }
 
     /// The written part of `dir`'s chunk in flight is moved: counted, shown to `tap`, parsed.
-    fn settle(&self, dir: Dir) {
+    /// Returns the rest, read and never written.
+    fn settle(&self, dir: Dir) -> u64 {
         let slot = &self.inflight[dir as usize];
         let (chunk, n) = std::mem::take(&mut *slot.lock().unwrap_or_else(|e| e.into_inner()));
+        let rest = (chunk.len() - n) as u64;
         if n == 0 {
-            return;
+            return rest;
         }
         let t = self.rec.now();
         self.quiet.fetch_max(t.ns(), Relaxed);
@@ -160,6 +161,7 @@ impl Pump<'_> {
             tap(dir, t, n as u64);
         }
         self.feed(dir, t, &chunk[..n]);
+        rest
     }
 
     async fn leg<R, W>(&self, dir: Dir, prefix: Bytes, from: &mut R, to: &mut W) -> Leg
@@ -187,12 +189,12 @@ impl Pump<'_> {
             while off < chunk.len() {
                 match to.write(&chunk[off..]).await {
                     Ok(k) if k > 0 => off += k,
-                    _ => return Leg::WriteErr((chunk.len() - off) as u64),
+                    _ => return Leg::WriteErr,
                 }
                 slot.lock().unwrap_or_else(|e| e.into_inner()).1 = off;
             }
             if to.flush().await.is_err() {
-                return Leg::WriteErr(0);
+                return Leg::WriteErr;
             }
             self.settle(dir);
         }
@@ -241,10 +243,10 @@ where
             y = &mut b => (if matches!(y, Leg::Eof | Leg::Cut) { a.await } else { Leg::Eof }, y),
         }
     };
-    // A leg that errored, or was dropped mid-write, leaves the part its writer took.
-    pump.settle(Dir::Up);
+    // A leg that errored, or was dropped mid-write, leaves the part its writer took; the rest of
+    // a client chunk never reached the upstream.
+    let unsent_up = pump.settle(Dir::Up);
     pump.settle(Dir::Down);
-    let unsent_up = if let Leg::WriteErr(n) = lu { n } else { 0 };
     let reason = match (lu, ld) {
         (Leg::Eof | Leg::Cut, Leg::Eof | Leg::Cut) => EndReason::Complete,
         _ => EndReason::Interrupted,
@@ -283,7 +285,7 @@ where
         plain_down: down,
         unsent_up,
         reason,
-        upstream_failed: matches!(lu, Leg::WriteErr(_)) || matches!(ld, Leg::ReadErr),
+        upstream_failed: matches!(lu, Leg::WriteErr) || matches!(ld, Leg::ReadErr),
     }
 }
 
