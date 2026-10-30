@@ -11,11 +11,10 @@
 
 use clap::error::ErrorKind;
 use clap::{Parser, Subcommand};
-use std::io::Write;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use goalcup::cli::{NULL_FLAG, RECORDER_SUBCOMMAND, text};
+use goalcup::cli::{self, NULL_FLAG, RECORDER_SUBCOMMAND, say, text};
 
 /// Record one coding agent's run for the Goal Cup.
 #[derive(Parser)]
@@ -136,18 +135,19 @@ fn parse_error(e: clap::Error) -> ExitCode {
     match e.kind() {
         ErrorKind::DisplayHelp | ErrorKind::DisplayVersion => {
             let _ = e.print();
-            return ExitCode::SUCCESS;
+            ExitCode::SUCCESS
         }
         ErrorKind::DisplayHelpOnMissingArgumentOrSubcommand => {
             let _ = e.print();
-            return ExitCode::from(1);
+            ExitCode::from(1)
         }
-        _ => {}
+        _ => {
+            let text = e.to_string();
+            let first = text.lines().next().unwrap_or_default();
+            say(first.strip_prefix("error: ").unwrap_or(first));
+            ExitCode::from(1)
+        }
     }
-    let text = e.to_string();
-    let first = text.lines().next().unwrap_or_default();
-    say(first.strip_prefix("error: ").unwrap_or(first));
-    ExitCode::from(1)
 }
 
 fn run(command: Command) -> ExitCode {
@@ -170,7 +170,7 @@ fn run(command: Command) -> ExitCode {
         Command::Setup { .. } => not_built("setup"),
         Command::Continue { .. } => not_built("continue"),
         Command::Recover { .. } => not_built("recover"),
-        Command::Status { .. } => not_built("status"),
+        Command::Status { part, json } => cli::status::run(part, json),
         Command::Seal { .. } => not_built("seal"),
         Command::Upload { .. } => not_built("upload"),
         Command::TimeLeft => not_built("time-left"),
@@ -181,11 +181,6 @@ fn run(command: Command) -> ExitCode {
 fn not_built(command: &str) -> ExitCode {
     say(&text::not_built(command));
     ExitCode::from(3)
-}
-
-/// One line on stderr. A closed stderr is not worth a panic.
-fn say(text: &str) {
-    let _ = writeln!(std::io::stderr(), "goalcup: {text}");
 }
 
 #[cfg(test)]

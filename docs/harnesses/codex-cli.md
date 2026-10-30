@@ -6,8 +6,8 @@ Status: shipped connector
 
 Source words used in every cell: "measured" means Goal Cup ran it (macOS 26, arm64, Codex 0.153.0, 2026-09 and 2026-10 runs); "vendor docs" means a quote that Goal Cup's research file took from OpenAI's Codex documentation or source tree, not re-fetched for this sheet; "code" means the Goal Cup repository; "unknown" means nobody on our side has measured or read it. Linux was measured only on arm64 under Docker Desktop (Debian 13 container, Linux 7.0.12, 2026-10-13, Codex 0.153.0, no login, so no model reply); the Linux x86_64 binary was run with no login on a GitHub-hosted `ubuntu-24.04` runner (2026-10-13); a logged-in Linux run was not measured on either architecture. Windows was not measured. Cells for what is still unmeasured say "unknown" or "not measured".
 
-17 Oct update: macOS/Linux staging task, capture, seal and delivery practices passed
-([current WP0 measurements](../../TODO.md#wp0-measure)). Earlier pending rows below describe the
+17 Oct update: macOS/Linux staging task, capture, seal and delivery practices passed.
+Earlier pending rows below describe the
 older measurement checkpoint; longer/resume/platform gaps remain open.
 
 ## 18 Oct research checkpoint (Codex 0.156.1)
@@ -56,8 +56,7 @@ establish containment of every escaped descendant. Native decoder 0.153.0 produc
 (107 unknown); Responses decoder v2 produced 290 (87 unknown). Both decoder incomplete flags were
 false, while interpretation still retains those 194 unknown observations. Context-visible tool
 calls/results are available; independent full tool-output collection is outside this experiment.
-Native-child, endurance and other-platform coverage remain unmeasured by this repeat. See
-[the TODO list](../../TODO.md#research-recorder-validation).
+Native-child, endurance and other-platform coverage remain unmeasured by this repeat.
 
 ## 19 Oct focused native-child recording probe
 

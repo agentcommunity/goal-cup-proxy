@@ -1071,3 +1071,17 @@ lists disagreed, the ledger decided.
 | X2-11 | Partly: this pass edits only this file, so the move to `REVIEW-HISTORY.md` is left to the step that owns that file. Every ruling still binding is in the body, and a line above the review table says the body wins |
 | G3-X20 | Applied (see G2-27) |
 | G3-X33 | Applied: PRD-17 interface row |
+
+## Amendments
+
+### 2026-10-30, replan after PRD-08 slice 1 (merge d10feef7)
+
+- **Ask from PRD-08 (judge 13:06Z), optional.** `goalcup-verify` counts S6 `bytes.raw` and finds a
+  torn tail by wrapping the part files in its own `Raw` reader and `Meter` (`input.rs`, about 40
+  lines) beside `read::Reader`. If `read::Reader` or its `Tail` reported the raw bytes decoded and
+  whether input ended inside an open frame, PRD-08 would use `read::decode` and drop the copy. A
+  format-core slice may add it; nothing waits on it. It is a `goalcup-format` edit, so it is PRD-01's
+  to make, with a seam line naming the two new fields.
+- `goalcup-verify dump` uses `goalcup_format::dump::Dumper` unchanged; the worked example's dump
+  through it equals the committed file as JSON (judge 12:35Z box).
+- No locked ledger item is touched and no owner question comes from this slice.

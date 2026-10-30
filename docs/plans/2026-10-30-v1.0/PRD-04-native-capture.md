@@ -682,3 +682,51 @@ ledger wins over every row here.
   `Masker::passthrough_for_tests()` (feature `test-hooks`). An entry built on the stub cannot be
   rebuilt by native path; that is the stub, not a defect.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-04 core slice part 1 (merge 403d9165)
+
+- **On integration:** `src/native/fsx.rs` and `src/native/pattern.rs`; `mod.rs` only declares them.
+  `start`, `NativeReader::finish`, `walk.rs`, `tail.rs`, `snapshot.rs` and the loop are the next
+  slice, which waits for PRD-11's S3 stub (`connector::NativeSources` is still a placeholder).
+  `fsx.rs` takes `Fid` from `crate::pipeline::cursors` (PRD-02), so the cursor's `fid` and the
+  walk's are one type.
+- **`parse` is one refusal stricter than section 2** (review A7): it also refuses a trailing `**`
+  (`**` alone, or a pattern ending in `/**`), because `**` matches folders only and such a row could
+  never match a file. PRD-11's connector test calls `native::pattern::parse` as PRD-04's pattern
+  check, so this rule reaches connector rows too. No row in PRD-11 section 6 or in `connectors/*.toml`
+  at 403d9165 ends in `**`.
+- **The `finish` seam is still open** (builder log 12:28Z, ask 1 above). PRD-04 section 1 and PRD-02
+  ask 10 both pass the time guard into `finish`; PRD-00's ruling row "PRD-02 and PRD-04" omits it. The
+  next slice builds section 1's shape, `finish(self, harness_exited: bool, guard: Option<Duration>)`,
+  with `Some(180 s)` only for `deadline`, `server_stop` and `signal`, so PRD-02's seal has one shape to
+  call (PRD-00 and PRD-02 notes).
+- **Open nits for the next touch of these files** (acceptance lists any still open as known):
+  - A8: `open_file` returns a real errno when a regular file is replaced by a socket between
+    `stat_at` and `open_file` (ENXIO on Linux, EOPNOTSUPP on macOS), so `tail.rs` would write
+    `native_unreadable` where section 4 wants the next walk to settle it. The next slice maps both
+    errnos to `NotFound` beside ELOOP when it writes `tail.rs`.
+  - B8: the `!rel.as_os_str().is_empty() &&` guard in `Pattern::matches` is dead now that every
+    accepted pattern ends in a glob; drop it.
+  - B9: one `stat_by` helper for `stat_at` and `file_stat` (and one `openat` helper for `open_root`
+    and `open_child`), one `dev_t` explanation instead of two; about 12 lines, same behaviour.
+  - B10: `file_stat` has no caller in `src` yet; `tail.rs` will use it. Keep it, written through the
+    B9 helper.
+- **Size** (`wc -l` at 403d9165): src 401 (`fsx.rs` 226, `pattern.rs` 167, `mod.rs` 8) against the
+  row's 780; the two files carry 393 lines against their estimates of 220 (120 and 100). Tests 246
+  (`native_pattern.rs` 123, `native_safety.rs` 123), no inline test modules. That leaves 379 src
+  lines under the row (457 under its 10% line) for `mod.rs`, `walk.rs`, `tail.rs` and `snapshot.rs`,
+  whose estimates add to 560. Built to those estimates the area lands near 950, about 22% over the
+  row. The next slice therefore plans to the 379 lines left: B8 and B9 first, then less code in the
+  new files; passing the 10% line needs a replan `decision` line that names the point the extra lines
+  serve (PRD-00 "Size budget").
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-11 slice 2 (merge b9fa50f8)
+
+- **S3 is on integration.** `connector::NativeSources(Vec<NativeSource>)` with
+  `NativeSource { name, root: PathBuf, pattern: String, form, since, warn_missing }` and
+  `Form::{Append, Snapshot, Final}`, in connector file order. The next PRD-04 slice (`start`,
+  `finish`, walk, tail, snapshot) is unblocked; `start` parses each `pattern` with `pattern::parse`.
+- **Correction to the 403d9165 note:** at b9fa50f8 neither PRD-11's loader nor `connector_builtin.rs`
+  calls `native::pattern::parse`; the loader's own check still accepts a trailing `**`. PRD-11's next
+  slice switches both to `native::pattern` (PRD-11 note). No shipped row has that shape.

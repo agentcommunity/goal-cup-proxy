@@ -838,3 +838,15 @@ Slice 1 merged builder steps 1, 2 and 4. What the merge changed for the slices s
   5,258 (`test/*.ts` plus helpers) against about 4,950 (6.2% over), both unchanged.
   `delete-test-runs.sh` 121 (was 122), counted in neither row.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-12 slice 3 (merge 9e259b4d)
+
+- **The pad calls `scripts/fetch-run.sh`** as `sh scripts/fetch-run.sh --bucket goalcup-traces-staging
+  <entry> <outdir>`, with `DATABASE_URL` and the read-only `CLOUDFLARE_*` in its environment only,
+  never in argv.
+- **Keep the work folder's name.** The script makes `mktemp -d "$out/.fetch-run.XXXXXX"` and writes
+  `pg_service.conf` (the database connection) there. When the pad's step limit kills `sh`, the EXIT
+  trap does not run, so the pad removes `<outdir>/.fetch-run.*` itself. A change to that name or place
+  is a seam line in the same commit, so PRD-12 follows it; otherwise a timed-out fetch leaves a
+  credential file on the conductor (point 4).
+- No locked ledger item is touched and no owner question comes from this slice.

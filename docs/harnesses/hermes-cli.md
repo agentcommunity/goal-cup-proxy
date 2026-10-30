@@ -6,7 +6,7 @@ Status: shipped connector. Its native session snapshot is capture-only, so it su
 claim yet. The `openai-chat-completions` wire decoder has been measured on retrieved Hermes traffic;
 the historical reference row below remains explicitly not re-decoded.
 
-Source words used in every cell: "measured" means Goal Cup ran it (macOS 26, arm64, Hermes 0.19.0, CPython 3.13.13, 2026-09-03 spike and 2026-10-02 reference row); "source" means Goal Cup read the installed 0.19.0 package without running that path; "vendor docs" means a quote that Goal Cup's research file took from Nous Research's documentation, not re-fetched for this sheet; "code" means the Goal Cup repository; "unknown" means nobody on our side has measured or read it. The later 17 Oct macOS/Linux staging practices passed ([current WP0 measurements](../../TODO.md#wp0-measure)); that does not fill every platform/auth cell below. Windows and the longer/interruption test matrix remain pending.
+Source words used in every cell: "measured" means Goal Cup ran it (macOS 26, arm64, Hermes 0.19.0, CPython 3.13.13, 2026-09-03 spike and 2026-10-02 reference row); "source" means Goal Cup read the installed 0.19.0 package without running that path; "vendor docs" means a quote that Goal Cup's research file took from Nous Research's documentation, not re-fetched for this sheet; "code" means the Goal Cup repository; "unknown" means nobody on our side has measured or read it. The later 17 Oct macOS/Linux staging practices passed; that does not fill every platform/auth cell below. Windows and the longer/interruption test matrix remain pending.
 
 ## 1. Run one prompt, in chat mode first
 

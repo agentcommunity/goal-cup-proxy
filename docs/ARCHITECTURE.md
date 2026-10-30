@@ -115,7 +115,7 @@ decoder is added.
   across serialized runs. Other run homes are fresh, according to the connector. Every run home
   gets a `.profile` that exports the `PATH` the harness is handed, so a login shell whose
   `/etc/profile` resets `PATH` (Debian, Ubuntu) still finds the participant's tools and `goalcup`
-  ([CONNECTOR-SCHEMA](CONNECTOR-SCHEMA.md#capturehome-and-seeds)).
+  ([CONNECTOR-SCHEMA](CONNECTOR-SCHEMA.md)).
 - **Contract kit.** Synthetic cases under `crates/goalcup-cli/tests/fixtures/harness-kit/` test the
   shared modules with stand-ins. Every connector runs through the manifest-driven shared stand-in
   (the connector contract), so a new connector adds no case. A passing kit says "synthetic

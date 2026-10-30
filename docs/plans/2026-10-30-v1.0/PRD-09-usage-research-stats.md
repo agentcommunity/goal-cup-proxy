@@ -836,3 +836,17 @@ PRD-01, PRD-05, PRD-08, PRD-12, PRD-16 and the old code.
   missing bucket). The owner's token for the script needs read and write on each usage bucket that
   exists; PRD-15 writes that into OPERATING with the usage job section.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-08 slice 1 (merge d10feef7)
+
+- **The placeholder is on integration:** `crates/goalcup-verify/src/usage/mod.rs` (12 lines),
+  `pub fn run(args: Vec<std::ffi::OsString>) -> std::process::ExitCode`, `args` being those after the
+  word `usage`; `lib.rs` has `pub mod usage`. PRD-09's first merge replaces the file whole (not a
+  text merge) and keeps that signature. `main.rs` dispatches `usage` through clap with its help flag
+  off, so `usage --help` reaches PRD-09's code.
+- **Dependencies are declared once** in PRD-08's `crates/goalcup-verify/Cargo.toml`: `goalcup-format`,
+  `zstd`, `serde`, `serde_json`, `sha2`, `clap`, `regex`, `base64` and `rusqlite` 0.41 with
+  `bundled`. PRD-09 adds none without a seam line to PRD-08, which owns the file.
+- PRD-08's next slice builds `legs.rs` and `history.rs` on U1 (stub first, judge 12:19Z); U1 stays as
+  PRD-09 publishes it.
+- No locked ledger item is touched and no owner question comes from this slice.
