@@ -186,7 +186,7 @@ impl Tail {
             let copying = e.copy.is_some();
             let mut got = read_one(rec, &id, e, &mut left);
             // A copy torn by a state already seen and settled: that state is copied now, once.
-            if copying && matches!(got, Ok(None)) && e.copy.is_none() && is_due(e) {
+            if copying && e.copy.is_none() && is_due(e) {
                 got = read_one(rec, &id, e, &mut left);
             }
             if let Err(err) = &got {
