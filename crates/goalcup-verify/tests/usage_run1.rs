@@ -360,7 +360,8 @@ fn every_claude_code_subagent_transcript_counts() {
     }
     let meta = "meta:p/S/subagents/workflows/w/agent-b.meta.json";
     stream(&mut e, StreamKind::Snapshot, meta, r#"{"agentType":"x"}"#);
-    stream(&mut e, StreamKind::Snapshot, "meta:p/S/subagents/agent-c.meta.json", "{}");
+    let agent_c = "meta:p/S/subagents/agent-c.meta.json";
+    stream(&mut e, StreamKind::Snapshot, agent_c, "{}");
     let mut recs = read_records(&e.seal().join("rec"));
     let claude = |v: &mut Value| v["connector"] = "claude-code-cli".into();
     edit_event(&mut recs, "start", 0, claude);

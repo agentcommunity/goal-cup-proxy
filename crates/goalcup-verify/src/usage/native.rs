@@ -428,7 +428,12 @@ fn ts(s: &str) -> Option<u64> {
     let [y, m, d, h, mi, se] = f?[..] else {
         return None;
     };
-    let ok = (1970..=2200).contains(&y) && (1..=12).contains(&m) && (1..=31).contains(&d) && h < 24 && mi < 60 && se <= 60;
+    let ok = (1970..=2200).contains(&y)
+        && (1..=12).contains(&m)
+        && (1..=31).contains(&d)
+        && h < 24
+        && mi < 60
+        && se <= 60;
     let ns = num(frac).filter(|_| ok && frac.len() <= 9)? * 10i64.pow(9 - frac.len() as u32);
     // Days from civil (H. Hinnant): years start in March, eras of 400 years.
     let y = if m <= 2 { y - 1 } else { y };

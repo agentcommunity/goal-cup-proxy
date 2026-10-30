@@ -476,7 +476,8 @@ impl Calls {
             .filter_map(|t| Some((t.id.as_str(), t.parent.as_ref()?)))
             .collect();
         for r in rows.iter_mut().filter(|r| r.parent.is_none()) {
-            r.parent = r.thread.as_deref().and_then(|t| parents.get(t)).map(|p| (*p).clone());
+            let p = r.thread.as_deref().and_then(|t| parents.get(t));
+            r.parent = p.map(|p| (*p).clone());
         }
         rows.extend(nat.into_iter().map(|x| x.0));
         CallTable {
