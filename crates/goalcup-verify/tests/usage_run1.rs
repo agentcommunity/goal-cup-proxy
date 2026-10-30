@@ -69,7 +69,8 @@ fn socket(e: &mut Entry, path: &str) -> (u64, u64, u64) {
     let q = e.open(StreamKind::HttpReq, c, 0, head);
     e.end(q, EndReason::Complete, 0, Value::Null);
     let up = e.open(StreamKind::WsUp, c, q, json!({"deflate": false}));
-    (c, up, e.open(StreamKind::WsDown, c, q, json!({"deflate": false})))
+    let down = e.open(StreamKind::WsDown, c, q, json!({"deflate": false}));
+    (c, up, down)
 }
 
 /// One whole text message `v` on stream `sid` at `*at`, which moves past it.
@@ -245,8 +246,8 @@ fn a_create_cut_by_a_restart_is_a_call_not_whole() {
     }
     e.data(up, u, 0x10, &m.as_bytes()[..40]);
     e.crash("killed", 1_000);
-    let calls = whole(&e.seal());
-    assert_eq!(calls, [(0, true, Outcome::Ok), (0, false, Outcome::Unknown)]);
+    let want = [(0, true, Outcome::Ok), (0, false, Outcome::Unknown)];
+    assert_eq!(whole(&e.seal()), want);
 }
 
 /// A known loss ending where a reply message starts may hold its head (PRD-01 section 7: the
@@ -256,15 +257,16 @@ fn a_loss_ending_at_a_reply_message_marks_that_call_not_whole() {
     let mut e = Entry::new("u-loss");
     let (_, up, down) = socket(&mut e, "/v1/responses");
     let (mut u, mut d) = (0, 0);
+    let done = |k| ev("completed", k, &usage(9, 0, 1, 0).0);
     send(&mut e, up, &mut u, create("ws-y", None));
-    for v in [created("ws-y"), ev("completed", "ws-y", &usage(9, 0, 1, 0).0)] {
+    for v in [created("ws-y"), done("ws-y")] {
         send(&mut e, down, &mut d, v);
     }
     send(&mut e, up, &mut u, create("ws-z", None));
     let lost = created("ws-z").to_string().len() as u64;
     e.gap(down, GapReason::MemoryGuard, 0, d, lost + 1, Value::Null);
     d += lost;
-    send(&mut e, down, &mut d, ev("completed", "ws-z", &usage(9, 0, 1, 0).0));
+    send(&mut e, down, &mut d, done("ws-z"));
     let calls = whole(&e.seal());
     assert_eq!(calls, [(0, true, Outcome::Ok), (0, false, Outcome::Ok)]);
 }

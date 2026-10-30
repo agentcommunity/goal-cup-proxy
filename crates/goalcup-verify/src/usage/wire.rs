@@ -413,7 +413,8 @@ impl Wire {
             Client::Other => return,
         };
         let conn = self.socks.get(&m.sock).map_or(0, |s| s.conn);
-        let c = self.conns.get(&(ctx.boot, conn)).cloned().unwrap_or_default();
+        let k = (ctx.boot, conn);
+        let c = self.conns.get(&k).cloned().unwrap_or_default();
         let i = self.row(ctx, (m.range.0, Some(m.n)), (conn, &c), kind, Via::Ws, m.t0);
         let (rows, s) = (&mut self.rows, self.socks.entry(m.sock).or_default());
         let r = &mut rows[i];
