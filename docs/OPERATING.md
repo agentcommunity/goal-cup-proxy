@@ -3,7 +3,7 @@
 Part 1 is the runbook for organizers: where things run, how to deploy, test runs, the matrix, and what
 to do on a bad day. Part 2 is the reference for running the Goal Cup Proxy binaries (build, daemon, CLI exit
 codes, verifier, pins). The short path for a developer (build, gate, install, one capture) is in the
-[README](../README.md). The server's design is in [SERVER-DESIGN](SERVER-DESIGN.md) and its wire
+[README](../README.md). The server's design is in the [Worker README](../server/worker/README.md) and its wire
 contract in [UPLOAD-API](UPLOAD-API.md).
 
 Never write a secret, a key value or a key file path into a doc, an issue, a log or a chat. This page

@@ -967,3 +967,87 @@ merge request:
   the merge. The last link check filters both by name with the run 1 report and says so in the
   night-log line.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-07 slice 3 (merge 323b1a0f)
+
+- **`docs/OPERATING.md` "Test runs" is out of date since 323b1a0f** (review RA-N1). Lines 135-138
+  still say the script "touches only `goalcup-traces/traces/test/` and
+  `goalcup-traces-staging/traces/test-staging/`" and ask for "R2 read and write". The script now also
+  empties `goalcup-usage/usage/test/` and `goalcup-usage-staging/usage/test-staging/`, lists R2 before
+  the database changes, and skips a usage bucket the token cannot reach with one line. An owner who
+  scopes the token from OPERATING alone leaves the test stats behind, which breaks PRD-07 section 10's
+  "leaves no orphan stats". The third-slice OPERATING rewrite (section 9, item 4 "Test runs and the
+  pad", and item 1 "Where things run") says, in plain words: the four bucket and prefix pairs; the
+  token needs R2 read and write on both traces buckets and on each usage bucket that exists; a usage
+  bucket skipped by a run with `--older-than` keeps its test objects until a run without
+  `--older-than` (PRD-07 note, RA-N2). Copy the facts from `server/worker/README.md` "Clean up test
+  runs" and the script header as merged, not from this note. If the rewrite is not reached in this
+  build, the two-line fix to lines 135-138 goes in alone; it is a PRD-15 file.
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-15 slice 4 (merge 7be8bf98)
+
+Slice 4 moved `docs/SERVER-DESIGN.md` to `docs/archive/` byte for byte, repointed its five live
+links and dropped the signing claim from ARCHITECTURE section 10 (fix bdcea297, review B1).
+`gate fast` passed in 100 s. What follows goes to later slices, not a separate merge request:
+
+- **The ARCHITECTURE rewrite drops every server-signing claim** (review A-N3). Still on integration at
+  7be8bf98: `docs/ARCHITECTURE.md:31` ("server's signed receipt and acknowledgements"), the glossary
+  at `:276` ("the server's signed start receipt") and `:277` ("the server's signed note that it stored
+  the chain"); the `Signed` anchor at `:183` and `:303` describes the old verifier and goes with it.
+  `server/worker/README.md` says the server signs nothing. The section 10 rewrite (after the PRD-02
+  core merge) builds its terms list from merged code, so none of these survive; the reviewer of that
+  merge greps the new page for `signed receipt`, `signed note` and `acknowledg` and expects none
+  that claims the server signs.
+- **The same claim in the other third-slice pages.** `SECURITY.md:69` (the server "signs start
+  receipts and acknowledgements with an Ed25519 key") is false today; `README.md:130` and `:155`,
+  `AGENTS.md:52` and `README.md:171` (glossary words receipt, ack) and the receipt, ack and
+  `RECEIPT_SIGNING_KEY` lines in `docs/OPERATING.md` (107, 303 to 312, 333, 489, 675 to 692, 711,
+  751 to 777) describe the old client or server. The builder left them on purpose for the README,
+  SECURITY, AGENTS map and OPERATING rewrites. Each rewrite drops them, citing merged code; none is
+  fixed alone unless that rewrite is not reached in this build, in which case `SECURITY.md:69` gets a
+  one-line fix first because it is a false statement about the server today.
+- **Files moved into `docs/archive/` keep their old relative links** (reviews A-N1 and B2, skipped by
+  the fixer as plan text). `docs/archive/SERVER-DESIGN.md` has 8 broken relative links, 8 of the 40
+  the box link check listed at bdcea297. The last link check leaves moved archive files out by name,
+  as it does run 1's report, and says so in the night-log line. Later moves (CONTRACTS, TERMINATION,
+  HARNESS-SETUP, CHEAT-CHECKLIST) follow the same rule: move byte for byte, fix only the live links
+  into them.
+- **Still waiting, unchanged:** the HARNESS-ONBOARDING pointer (after PRD-12's skill rewrite), the
+  RECORD-FORMAT nits (check --json and usage slice), the AGENTS.md map, ARCHITECTURE and
+  RECORD-FORMAT numbers (PRD-02 core merge), CONNECTOR-SCHEMA (PRD-11 schema), and the third slice.
+  The two `crates/goalcup-cli/src/upload/` comments that cite SERVER-DESIGN go with the cut (PRD-13).
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-07 slice 4 (merge c4ada44a)
+
+- **For the RA-N1 fix to `docs/OPERATING.md` "Test runs"** (lines 135-138, still unchanged at
+  c4ada44a): copy the usage-bucket caveat from `server/worker/README.md` "Clean up test runs" (around
+  line 394) or the script's skip line, not from the script header. The header (lines 14-15) does not
+  yet say that a skipped usage bucket keeps its test objects until a run without `--older-than`
+  (PRD-07 note, review A-N1). The usage skip rule is now plain `403` or `404`.
+
+### 2026-10-30, replan after PRD-11 slice 2 (merge b9fa50f8)
+
+- **`docs/CONNECTOR-SCHEMA.md`** can be written from `crates/goalcup/src/connector/schema.rs` after
+  PRD-11's next merge, which changes three rules: `no_prompts` and `update_off` files under `{home}`
+  only (F1b); a `.jsonc` file read as JSON with comments; `"true"` and `"false"` written as booleans.
+  Also from the PRD-11 note of b9fa50f8: a pattern ending in `**` is refused (PRD-04's check); a load
+  error names the file and the line or key, never a value; built-in connectors are one TOML file plus
+  one line in `builtin.rs`.
+
+### 2026-10-30, replan after PRD-14 slice 1 (merge 22fe5926)
+
+- **Docs still name deleted scripts.** PRD-14 deleted `scripts/linux-check.sh`,
+  `scripts/test_linux_check.py` and `.github/workflows/linux-x86_64.yml` (and earlier
+  `check-version.py`, `ci-scope.py` and their tests). On integration at 22fe5926 these still name
+  them: `README.md:292` and `:294` (the release steps: now `gate full`, then
+  `scripts/pad/table --release-check <commit>`, then `release.sh tag`), `docs/OPERATING.md:50`, `:145`,
+  `:534` and `:540-541` (CI is one job that runs `gate fast`; there is no scope step and no Linux
+  check), `scripts/README.md:6`, `:14`, `:15`, `:17`, `:61`, `:62` and `:68`, and
+  `docs/research/LOCAL-NEXT-STEPS.md:27`, `:31` and `:172`. `packaging/README.md` was fixed in the
+  slice. `docs/CONNECTOR-SCHEMA.md` and the skill template name the platform `linux-x86_64`, not the
+  workflow; they are not stale for this reason.
+- `README.md` "The gate": the first measured `gate fast` with the script steps is 87 s on 22fe5926 in
+  a build box. CI has not yet finished a run on integration (PRD-14 note), so there is no CI time to
+  quote.

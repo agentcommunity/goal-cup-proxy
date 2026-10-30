@@ -65,7 +65,7 @@ TypeScript).
 | Recording proxy | Loopback CONNECT proxy. Relays bytes unchanged; tees decoded bodies as frames | [proxy/](../crates/goalcup-cli/src/proxy/mod.rs) |
 | Daemon | Control API on loopback; ingest; per-producer redaction; chain append; native-file capture; finish; termination | [runtime/capture/](../crates/goalcup-daemon/src/runtime/capture/mod.rs) |
 | Verifier | Integrity reader and research report. Six built-in decoders: native `codex-native` and `claude-code-native`; wire `openai-responses`, `anthropic-messages`, `openai-chat-completions`, and `amp-thread-jsonrpc` | [capture_analysis/](../crates/goalcup-verifier/src/capture_analysis/mod.rs) |
-| Upload server | Checks the run credential, stores chunks in R2, signs receipts and acknowledgements, sends the run emails | [server/worker](../server/worker/README.md), [UPLOAD-API](UPLOAD-API.md), [SERVER-DESIGN](SERVER-DESIGN.md) |
+| Upload server | Checks the run credential, stores chunks in R2, sends the run emails | [server/worker](../server/worker/README.md), [UPLOAD-API](UPLOAD-API.md) |
 
 The control API (version `CONTROL_API_VERSION`, now 12) requires its version on mutating requests.
 Create binds the connector-directory digest, may carry the server's entry id, and carries the
@@ -242,13 +242,12 @@ in the [checklist](CHEAT-CHECKLIST.md). The recording proxy also strips credenti
 `goalcup start` uploads the chain to the Worker in compressed chunks while the run records and
 keeps the server's acknowledgement of each in `acks.jsonl`. Recording never waits on the network,
 and no server error stops the run or ends its upload (D64).
-The server issues the entry id, the official start and the deadline, signs a start receipt (stored
-as `receipt.json`) and signs an acknowledgement per stored chunk. Parts the server acknowledged
+The server issues the entry id, the official start and the deadline. Parts the server acknowledged
 are pruned locally two hours later, or at once when the parts alone pass the 3 GiB reservation or
 the disk has under 5 GiB free beyond it (never the part being written or the one holding the last
 acknowledged record); the verifier then reports `chain_pruned_locally` (incomplete, verify the
 server copy). The deadline is 168 hours on the server's clock. At the deadline the CLI stops the
-agent and seals. Details: [UPLOAD-API](UPLOAD-API.md), [SERVER-DESIGN](SERVER-DESIGN.md).
+agent and seals. Details: [UPLOAD-API](UPLOAD-API.md), [server/worker](../server/worker/README.md).
 
 ## 11. Not here
 
