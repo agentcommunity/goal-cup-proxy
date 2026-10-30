@@ -1220,3 +1220,16 @@ PRD-01, PRD-02, PRD-04, PRD-05 and PRD-11 as they now stand, and the code. No lo
   note whether that rule holds as written, so PRD-15 drops the mark or corrects the line. No code
   change is asked of PRD-10.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-15 slice 7 (merge 938f6733)
+
+- **The delete of `skills/goal-cup-setup/` can go in any PRD-10 slice now.** `README.md`,
+  `docs/PARTICIPANT-GUIDE.md`, `docs/README.md` and `AGENTS.md` no longer link it. It does not have
+  to wait for the third slice: the 12:16Z planner line held it there only for these links. Before the
+  delete, the slice runs `git grep -n goal-cup-setup -- ':!docs/plans/'` in its box; the only hit
+  outside the skill itself should be `docs/archive/PARTICIPANT-GUIDE-0.6.md:13`.
+- **That archive link is PRD-15's and stays** (history; PRD-15 note). PRD-10 does not edit it, and
+  the delete does not wait on it.
+- **Correction:** CI does not run `check-links.py` on integration (neither `gate.sh` nor `ci.yml`), so
+  a broken link fails no check. The 12:56Z line's "(check-links runs in CI)" was not true.
+- No locked ledger item is touched and no owner question comes from this slice.

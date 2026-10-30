@@ -1424,3 +1424,21 @@ kept and now cites BUILD-PROMPT section 5, since B3 no longer carries it.
   PRD-10 merges naming their changes (PRD-08 and PRD-10 notes). Acceptance checks the page against a
   final `check --json` run, not against this slice's skip list.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-15 slice 7 (merge 938f6733)
+
+- `gate fast: PASS in 86s` on the lane branch at the merged head (gate log 15:09Z). Four paths changed,
+  all PRD-15 owned (`AGENTS.md`, `README.md`, `docs/PARTICIPANT-GUIDE.md`, `docs/README.md`; +2, -8),
+  no `Cargo.toml` change. Builder box (15:01Z): no `goal-cup-setup` link outside plans, archive and
+  the skill; no U+2014 in the four files (control hit seen); `check-links.py` 39 broken at base and
+  head, the same set, none from the four files.
+- **Size report, PRD-15.** PRD-15 merged no code: `wc -l` of PRD-15 code is 0, and PRD-00 "Size
+  budget" has no docs row to count it against. The slice made the docs 6 lines shorter.
+- **Trailers:** all 3 commits in 04886295..938f6733 carry both lines.
+- **Unblocked:** PRD-10's delete of `skills/goal-cup-setup/` (PRD-10 note). Link checks are not in
+  the gate or CI on integration, so a broken link gates nothing; PRD-15's last `check-links.py` run is
+  the only one, before PRD-14 deletes the script in the phase 3 merge.
+- **Acceptance lists as known** the two broken links left in history docs on purpose:
+  `docs/archive/PARTICIPANT-GUIDE-0.6.md:13` (the deleted skill, review A-N1) and `docs/CONTRACTS.md`
+  to `#pin-evolution` (moves to the archive in PRD-15's third slice).
+- No locked ledger item is touched and no owner question comes from this slice.
