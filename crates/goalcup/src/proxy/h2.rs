@@ -15,8 +15,9 @@
 //!
 //! Server frames from a `HEADERS` for a client stream whose request is not parsed yet wait,
 //! unparsed, until it is, so the response names its request; as in HTTP/1.1 they wait at most a
-//! head's worth. Past that, or at the close, they are parsed on, and that response answers no
-//! request (`req` 0). `DATA` or a header block for a stream already ended (frames in flight
+//! head's worth. Past that, or at the close, they are parsed on, and a response whose request
+//! is still not parsed answers none (`req` 0): its request may yet be an extended `CONNECT`, so
+//! it records no `DATA` and gets GAP `h2_unsupported` counting it, as a tunnel side. `DATA` or a header block for a stream already ended (frames in flight
 //! after `RST_STREAM`) is recorded in no stream: it counts as held, and the close names it in
 //! the `conn` GAP.
 //!
@@ -112,7 +113,8 @@ pub struct H2 {
     /// Server bytes from a `HEADERS` whose request is not parsed yet, and when they came.
     wait: Vec<u8>,
     wait_at: Mono,
-    /// The waiting bytes passed a head's worth, or the connection closed: no `HEADERS` waits.
+    /// The waiting bytes passed a head's worth, or the connection closed: a `HEADERS` read now
+    /// opens its stream, answering no request, instead of waiting.
     orphan: bool,
     /// When the first frame for an ended stream came (its bytes are held).
     late: Option<Mono>,
@@ -161,11 +163,24 @@ struct Stream {
     halves: [Half; 2],
 }
 
+impl Stream {
+    /// A stream whose request is not parsed yet: its response half waits.
+    fn new() -> Stream {
+        let halves = [Half::Done, Half::Waiting];
+        Stream {
+            req: 0,
+            tunnel: false,
+            halves,
+        }
+    }
+}
+
 enum Half {
     Waiting,
     Open(Box<Body>),
-    /// An extended `CONNECT` side: its handle, the `DATA` bytes not recorded, its open time.
-    Raw(StreamHandle, u64, Mono),
+    /// An extended `CONNECT` side, or a response to no parsed request (`true`): its handle, the
+    /// `DATA` bytes not recorded, its open time.
+    Raw(StreamHandle, u64, Mono, bool),
     Done,
 }
 
@@ -179,8 +194,9 @@ impl Half {
     ) {
         match self {
             Half::Open(body) => (*body).end(t, reason, stop, extra),
-            Half::Raw(mut h, n, at) => {
-                h.gap(GapReason::H2Unsupported, at, Some(n), None);
+            Half::Raw(mut h, n, at, orphan) => {
+                let why = orphan.then(|| json!({"request": "not_parsed"}));
+                h.gap(GapReason::H2Unsupported, at, Some(n), why);
                 if let Some((gap, tail)) = stop {
                     h.gap(gap, t, None, tail);
                     reason = EndReason::DecodeError;
@@ -295,9 +311,13 @@ impl H2 {
                     let id = sid(&h);
                     // A response before its request: wait for it (client streams are odd).
                     let early = h[3] == HEADERS && id % 2 == 1 && id > self.last_req;
-                    if dir == Dir::Down && early && !self.orphan {
-                        (self.wait, self.wait_at) = ([&h[..], bytes].concat(), side.hdr_at);
-                        return Ok(());
+                    if dir == Dir::Down && early && !self.streams.contains_key(&id) {
+                        if !self.orphan {
+                            (self.wait, self.wait_at) = ([&h[..], bytes].concat(), side.hdr_at);
+                            return Ok(());
+                        }
+                        // Waited long enough: the stream opens now, answering no request.
+                        self.streams.insert(id, Stream::new());
                     }
                     self.open_frame(d, &h)?;
                     self.settle(dir, t)?;
@@ -475,7 +495,7 @@ impl H2 {
                     body.unsent += piece.len() as u64;
                 }
             }
-            Some(Half::Raw(_, n, _)) => *n += piece.len() as u64,
+            Some(Half::Raw(_, n, ..)) => *n += piece.len() as u64,
             // Recorded in no stream: held, so the close's `conn` GAP counts it.
             _ => {
                 self.late.get_or_insert(t);
@@ -496,15 +516,16 @@ impl H2 {
         // not stored; those the parser reads are kept for it, as HTTP/1.1 keeps its framing.
         let decoded = hpack.decode_with_cb(&b.bytes, |n, v| {
             let size = n.len() + v.len();
-            if over == 0 && stored + size <= HEAD_LIMIT {
+            let keep = over == 0 && stored + size <= HEAD_LIMIT;
+            if READ.iter().any(|r| r.as_bytes() == &n[..]) {
+                kept_past += if keep { 0 } else { size };
+                read.push((lossy(&n), lossy(&v)));
+            }
+            if keep {
                 stored += size;
                 fields.push((lossy(&n), lossy(&v)));
-                return;
-            }
-            over += size as u64;
-            if READ.iter().any(|r| r.as_bytes() == &n[..]) {
-                kept_past += size;
-                read.push((lossy(&n), lossy(&v)));
+            } else {
+                over += size as u64;
             }
         });
         decoded.map_err(|e| match e {
@@ -515,26 +536,11 @@ impl H2 {
         if kept_past > FIELD_MAX {
             return Err(Fault::Frame);
         }
-        let named = fields.iter().filter(|f| READ.contains(&f.0.as_str()));
-        read.splice(0..0, named.cloned());
         let head = Head::past_guard_at((over > 0).then_some((b.at, over)));
         let d = dir as usize;
         if dir == Dir::Up && b.id > self.last_req {
             self.last_req = b.id;
-            let s = self.streams.entry(b.id).or_insert_with(|| Stream {
-                req: 0,
-                tunnel: false,
-                halves: [Half::Done, Half::Waiting],
-            });
-            s.halves[0] = Half::Waiting;
-        }
-        // A response the request of which never came within a head's worth: it answers none.
-        if dir == Dir::Down && self.orphan && b.id % 2 == 1 && b.id > self.last_req {
-            self.streams.entry(b.id).or_insert_with(|| Stream {
-                req: 0,
-                tunnel: false,
-                halves: [Half::Done, Half::Waiting],
-            });
+            self.streams.entry(b.id).or_insert_with(Stream::new).halves[0] = Half::Waiting;
         }
         let Some(s) = self.streams.get_mut(&b.id) else {
             // Frames in flight after the stream ended: recorded in no stream.
@@ -549,7 +555,7 @@ impl H2 {
             }
             Half::Waiting => self.response(t, b.id, fields, &read, &head),
             // Trailers on an extended `CONNECT` side: counted in its `h2_unsupported` GAP.
-            Half::Raw(_, n, _) => *n += b.raw,
+            Half::Raw(_, n, ..) => *n += b.raw,
             // A header block after that side ended: recorded in no stream, as a late frame.
             Half::Done => {
                 self.late.get_or_insert(b.at);
@@ -618,7 +624,8 @@ impl H2 {
         let Some(s) = self.streams.get(&id) else {
             return;
         };
-        let (req, tunnel) = (s.req, s.tunnel);
+        // A request not parsed yet may be an extended `CONNECT`: no `DATA` is recorded.
+        let (req, tunnel) = (s.req, s.tunnel || s.req == 0);
         let codings = codings(read);
         let meta = json!({
             "status": status,
@@ -632,7 +639,10 @@ impl H2 {
         let h = self
             .rec
             .open(StreamKind::HttpResp, self.conn, req, 0, flags, meta);
-        let half = self.half(h, tunnel, codings, head, 0, t);
+        let mut half = self.half(h, tunnel, codings, head, 0, t);
+        if let Half::Raw(.., orphan) = &mut half {
+            *orphan = req == 0;
+        }
         if let Some(s) = self.streams.get_mut(&id) {
             s.halves[1] = half;
         }
@@ -649,7 +659,7 @@ impl H2 {
     ) -> Half {
         if tunnel {
             head_gap(&mut h, head);
-            return Half::Raw(h, 0, t);
+            return Half::Raw(h, 0, t, false);
         }
         let framing = Some(Framing::Close);
         let body = Body::open(h, framing, codings, head, unsent, t, &self.rec);

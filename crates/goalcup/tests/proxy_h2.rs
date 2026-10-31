@@ -572,7 +572,8 @@ fn fields_the_parser_reads_are_kept_past_the_guard() {
 }
 
 /// A server HEADERS for a stream the client never opens waits at most a head's worth: the
-/// frames after it are parsed, its response answers no request, and nothing is held.
+/// frames after it are parsed, its response answers no request and records no `DATA` (its
+/// request may be an extended CONNECT), its GAP counts them, and nothing is held.
 #[test]
 fn a_response_to_no_request_waits_only_a_head() {
     let big = vec![b'z'; 70_000];
@@ -595,5 +596,54 @@ fn a_response_to_no_request_waits_only_a_head() {
     assert_eq!(end_of(&calls, one.0).0, EndReason::Complete);
     let three = on(&resps, 3);
     assert_eq!(three.1, 0);
-    assert!(data_of(&calls, three.0) == big);
+    assert!(data_of(&calls, three.0).is_empty());
+    let want = [(GapReason::H2Unsupported, Some(big.len() as u64))];
+    assert_eq!(gaps_on(&calls, three.0), want);
+}
+
+/// Section 6 and point 4: a WebSocket's server frames that pass the wait before the client's
+/// extended CONNECT is parsed are counted in a GAP, never recorded as `DATA`.
+#[test]
+fn an_extended_connect_parsed_after_the_wait_records_no_data() {
+    let ws = vec![0xc1; 70_000];
+    let connect = format!(":method=CONNECT :protocol=websocket {API} :path=/ws");
+    let steps = [
+        down(&[ok(1, ""), body(1, false, &ws)]),
+        up(&[head(1, 0, &connect)]),
+        down(&[body(1, true, &[0xc1; 10])]),
+    ];
+    let (calls, stop) = run(&steps);
+    assert_eq!(stop, None);
+    let [(resp, ..)] = opens(&calls, StreamKind::HttpResp).try_into().unwrap();
+    assert!(data_of(&calls, resp).is_empty());
+    let want = [(GapReason::H2Unsupported, Some(ws.len() as u64 + 10))];
+    assert_eq!(gaps_on(&calls, resp), want);
+    let [(req, ..)] = opens(&calls, StreamKind::HttpReq).try_into().unwrap();
+    assert!(data_of(&calls, req).is_empty());
+}
+
+/// A server HEADERS whose frame header comes in the replayed bytes and whose block ends in a
+/// later read still opens its response, before its request: named in its GAP, nothing held.
+#[test]
+fn a_header_block_split_across_the_replay_opens_its_response() {
+    let (rec, calls) = Recorder::for_tests(ROOM);
+    let mut p = H2::new(&rec, CONN);
+    let five = ok(5, "");
+    let (first, rest) = five.split_at(12);
+    let (_, opening) = down(&[ok(3, "")]);
+    let (_, client) = up(&[req(3, "GET", "/a"), req(5, "GET", "/b")]);
+    for (dir, bytes) in [
+        (Dir::Down, opening),
+        (Dir::Down, [body(3, false, &[b'z'; 70_000]), first.to_vec()].concat()),
+        (Dir::Down, [rest.to_vec(), body(5, true, b"five")].concat()),
+        (Dir::Up, client),
+    ] {
+        p.feed(dir, Mono::now(), &bytes).expect("no stop");
+    }
+    let late = Box::new(p).end(Mono::now(), EndReason::Complete, false, &[]);
+    assert_eq!(late, None);
+    on(&opens(&calls, StreamKind::HttpReq), 5);
+    let five = on(&opens(&calls, StreamKind::HttpResp), 5).0;
+    assert_eq!(gaps_on(&calls, five), [(GapReason::H2Unsupported, Some(4))]);
+    assert_eq!(end_of(&calls, five).0, EndReason::Complete);
 }
