@@ -1378,3 +1378,20 @@ Slice 10 brought `docs/RECORD-FORMAT.md` to PRD-08 slice 4 (the three honesty ch
   amp, codex and hermes sheets are gone with the rewrite.
 - `docs/PARTICIPANT-GUIDE.md` links the README for the list and never copies the tier column
   (section 4 of the guide); nothing else changes here. No locked ledger item is touched.
+
+### 2026-10-31, replan after PRD-12 slice 6 (merge 645f3219)
+
+- **The two skill files are gone.** `skills/adding-a-capture-harness/writing-a-decoder.md` and
+  `templates/connector-harness.toml` were deleted by PRD-12 slice 6; the skill now has `SKILL.md`,
+  `templates/pad-harness.toml` and `templates/harness-facts.md`. These docs still link or name them and
+  must be repointed in this PRD's pass (a link to a missing file is a `check-links.py` failure): `README.md`
+  (step 3, line about 206, copy the template: point at PRD-11's example connector, as the PRD-12 text
+  says), `docs/HARNESS-ONBOARDING.md` (the decoder link near line 17, the template links near lines 30 and
+  298), and `docs/README.md` (the `writing-a-decoder` line near 45: drop it, decoders are cut). The
+  archive copy `docs/archive/CONTRACTS.md` and the older plan files are history; leave them, or let the
+  purge's link pass drop the link text.
+- **The "HARNESS-ONBOARDING pointer" item that waited on PRD-12's skill rewrite can start now.** The
+  shortened page links `skills/adding-a-capture-harness/SKILL.md` for the steps (the five steps are in the
+  skill: facts sheet, connector file, pad file, pad run on staging, pull request with `row.json`) and
+  `docs/CONNECTOR-SCHEMA.md` for the keys; it does not copy them.
+- No locked ledger item is touched and no owner question comes from this slice.

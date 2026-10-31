@@ -1772,3 +1772,61 @@ taken; "rejected" says why. Fixes for other files are made by those files' owner
   value in the default build, and it is masked in 11 forms; a pad value that is not a shape and not
   `GH_TOKEN` has no MASK by design.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-31, replan after PRD-12 slice 6 (merge 645f3219)
+
+- **What landed:** the six remaining faults with their section 3.1 expectations (`kill-watchdog`,
+  `kill-both`, `freeze`, `cut-worker`, `route-drop`, `fd-limit`), `selftest`, pad files for eight
+  connectors (`amp-cli`, `copilot-cli`, `gemini-cli`, `kilo-cli`, `openclaw-cli`, `opencode-cli`,
+  `opencode2-cli`, `qwen-cli`) with their direct and gateway settings snippets, runs A1 to A4, and the
+  skill rewrite (`SKILL.md`, `pad-harness.toml`, `harness-facts.md`; `writing-a-decoder.md` and
+  `connector-harness.toml` are deleted). Pad files now exist for 11 of the 16 connectors. Box proof was
+  22 then 29 unit tests plus fake-binary probes; no fault expectation and no new harness file has run
+  against a live harness (the file headers say which keys were read from docs only). Two review rounds
+  closed everything but the three nits below.
+- **Three nits to apply in the next slice, all small:**
+  - A3-1 (`selftest`, `compare()`): raise `NotRun` for K11b only when `bad` is empty, as in
+    `if hist["orphans_in_gaps"] is None: if not bad: raise NotRun(...)`. As built, a K11b whose C1 comes
+    out FAIL, or whose orphan count is wrong, is reported "not run" and the exit is 3 instead of 1. Exit 3
+    still means "not trusted", so nothing passes falsely, but a real difference is hidden.
+  - R1 (`pad-run`, `verify()`): the comment line before `if old :=` carries two comments joined on one
+    190-character line. Put the new sentence on its own line above the `if` and leave the old comment on
+    the line.
+  - R2 (size, below): reported, no cut proposed. The `KillBothVerify` test is about 35 lines of fixture
+    setup and asserts results (which entry is compared, scanned and priced), not wording.
+- **Decisions in the code that the next reader needs:**
+  - `cut-worker` does not build the stand-in listener. Loopback refuses at once, nothing listens on 443,
+    and a listener cannot take over a name the resolver ignores. If `getent hosts` does not change, the row
+    says "not run: cut did not take". That row is not a pass for PRD-06 U3 or U5; PRD-16 P11 counts it as
+    not run.
+  - `kill-both` checks the old entry only; the entry `goalcup continue` started is fetched and compared
+    separately (the review fix for F5). `route-drop` may name `decode_failed` (a body cut part way) and no
+    other gap. `freeze` reads the first heartbeat and the catch-up from the one-minute `upload.jsonl`
+    samples, so the catch-up has a minute of slack.
+  - `fd-limit@0` reads the recorder's and the harness's soft and hard limits from `/proc` in the box. It
+    does not read the start event's `fd_limit`, so PRD-08 has nothing to add for it.
+  - `selftest` exit codes: 0 all controls as wanted, 1 a control differs, 3 not trusted (a control was not
+    run, fixtures or ids missing). Nothing outside exit 0 counts as "the pad works".
+- **Still to land (slice 7, in this order):** (1) pad files for the five connectors without one:
+  `cline-cli` (with its `daemon` value, and a data dir for the stale hub that differs from the run's),
+  `crush-cli`, `droid-cli`, `goose-cli`, `kimi-code-cli`; `droid-cli` ends as "not run: no key" (the
+  slice 5 note stands); (2) the per-key queue of section 7 (`grep -i queue scripts/pad/pad` finds none;
+  two boxes per provider key, six for DeepSeek until a row's 429 share passes 5%); (3) the K2, K7, K11
+  fixtures under `scripts/pad/fixtures/` (the slice 5 note says how; `selftest` has never run a control
+  on a real fixture, so every claim about its checks is from fake-binary probes); (4) the three nits
+  above. Gateway DeepSeek rows have no `[rates]` line for `deepseek/deepseek-v4.1-flash`, so they price
+  at the highest rate of the key, which can raise `over_cap` early; add the line only if a gateway row
+  is planned.
+- **Size, `wc -l` at 645f3219** (per file against the PRD-12 "Files it owns" row): `pad-run` 993 (330),
+  `check.py` 743 (320), `pad` 664 (320), `test_pad.py` 488 (90), `table` 193 (150), `selftest` 182 (100),
+  `sbx.mjs` 133 (no row), `exec/` 96 (70), `image` 54 (60). Since 9e71bde0: `pad` +10, `pad-run` +192,
+  `check.py` +160, `test_pad.py` +122, `selftest` +182 (new), `table` +1. Code files together are 3,546
+  (2,909 at 9e71bde0), plus 440 lines of harness files and snippets, 176 of skill and templates, and 79 of
+  prompts, runs and `image.id`; all of `scripts/pad/` is 4,096 against PRD-00's "about 1,350 to 1,450". The
+  slice 5 projection was about 3,440 before the faults and the queue; the queue and five harness files are
+  still to come. The lines past the rows serve point 1 (a fault row is judged from the record alone and a
+  loss other than the named one fails), point 3 (the kill rows and the freeze must show the harness was
+  never held up) and point 7 (eight more harnesses). This is not a raise of the row; whether the row
+  rises stays the owner question already logged. Slice 7 states its per-file lines again and cuts before
+  it adds.
+- No locked ledger item is touched and no owner question comes from this slice.

@@ -2195,3 +2195,28 @@ kept and now cites BUILD-PROMPT section 5, since B3 no longer carries it.
   the `Walk::absorbs` cut, the bench comment residue) and the question 3 shortfalls (32-value build 3.1 s
   and 1.4 MB/s, `env` and `harness` values counted `skipped`) if the owner answers question 3 no.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-31, replan after PRD-12 slice 6 (merge 645f3219)
+
+- **Gate:** `gate fast` passed in 98 s on the merge. It does not run the old `goalcup-protocol` tests or
+  `scripts/test_check_connector.py`, and both read the deleted `connector-harness.toml` (PRD-13 and PRD-15
+  notes). A full run before PRD-13 lands will fail those two; that is the known deletion, not a
+  regression.
+- **Size report, PRD-12** (`wc -l` at 645f3219, PRD-00 row "the pad, about 1,350 to 1,450 with its tests"):
+  `scripts/pad/` is 4,096 lines; 3,546 in code files and tests (`pad-run` 993 of 330, `check.py` 743 of
+  320, `pad` 664 of 320, `test_pad.py` 488 of 90, `table` 193 of 150, `selftest` 182 of 100, `sbx.mjs`
+  133, `exec/` 96 of 70, `image` 54 of 60), 440 in harness files and snippets (11 connectors), 176 in the
+  skill and templates, 79 in prompts, runs and `image.id`. The slice 7 work (five harness files, the
+  queue, fixtures) comes on top. The decision line of the PRD-12 note names points 1, 3 and 7. The
+  end-of-build report lists PRD-12 at its final size against its row; whether the row rises stays the
+  owner question already logged.
+- **Pad rows now possible by file:** the six faults of P11 have their expectations and code, so
+  phase 4 can schedule them once a `goalcup` build with PRD-02 core, PRD-03 serve and PRD-10 `start` is on
+  integration. Pad files cover 11 of 16 connectors; the other five (`cline-cli`, `crush-cli`, `droid-cli`,
+  `goose-cli`, `kimi-code-cli`) are PRD-12 slice 7 and must precede any tier refresh row for them. A
+  `cut-worker` row can end "not run: cut did not take"; count it as not run for PRD-06 U3 and U5, not as
+  a pass, and list it with the open acceptance lines if the resolver ignores `/etc/hosts` in the build.
+- **`selftest` has never run a control on a real fixture.** The K2 builder is on integration, but the
+  fixtures are not committed and K7 and K11 wait on PRD-08 slice 6 and PRD-09. P1 ("the rig is trusted")
+  stays open until slice 7 commits the fixtures and `selftest` exits 0 in a build box.
+- No locked ledger item is touched and no owner question comes from this slice.

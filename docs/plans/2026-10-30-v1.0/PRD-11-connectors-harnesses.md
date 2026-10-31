@@ -1464,3 +1464,18 @@ is left is data and docs only. Four items, in order:
   numbers as in the slice 5 note). The PRD-00 table row still says 800 and 400; the ceilings above are
   the ledger numbers, see the PRD-16 note.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-31, replan after PRD-12 slice 6 (merge 645f3219)
+
+- **OpenCode 2 gaps found while writing its pad file** (box, 31 Oct, `@opencode/cli@2.2.2`): `connectors/opencode2-cli.toml`
+  has no `no_prompts` row (OpenCode 1 has `permission = "allow"`), and no `before` or `after` for the
+  background service. Its docs list an `--auto` switch; whether that or a config key stops approval
+  prompts is for the connector's next slice to read from `opencode.ai/v2/docs` first, and cite it. With
+  `args = ["--standalone"]` the run uses a private server, so no `before` is needed for the run itself;
+  the stale shared service is the pad's `stale-gateway.sh` case (acceptance 5), whose `daemon` value the
+  pad file carries (`opencode serve --service`). `opencode service start` detaches and exits at once, so
+  a `before` that starts it would prove nothing. Without a prompt switch a pad row on OpenCode 2 can stop
+  on an approval question and read `INCONCLUSIVE`; that is the connector's gap, not the pad's.
+- The OpenCode 2 and OpenCode 1 pad files share the program name `opencode`; the OpenCode 2 `version_cmd`
+  switches the link (`~/.local/bin/opencode`) to the 2.2.2 prefix. PRD-11 `version` matching is unchanged.
+- No locked ledger item is touched and no owner question comes from this slice.
