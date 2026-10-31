@@ -990,7 +990,9 @@ pub const SEAL_INSIDE: &str = "goalcup seal runs outside your agent. Run it in a
 
 /// The part has a seal already.
 pub fn seal_already(run: &str) -> String {
-    format!("This part has already ended, so there is nothing to seal. To go on, run: goalcup continue {run}")
+    format!(
+        "This part has already ended, so there is nothing to seal. To go on, run: goalcup continue {run}"
+    )
 }
 
 /// Neither the watchdog nor the recorder lives, and the part has no seal.
@@ -1006,7 +1008,8 @@ pub const SEAL_NOT_CONFIRMED: &str = "Nothing was changed. The part is still rec
 
 pub const SEAL_NEEDS_TERMINAL: &str = "goalcup seal needs a terminal to ask first. To end the part without asking, run: goalcup seal --yes";
 
-pub const SEAL_WAIT: &str = "Ending the part and finishing its record files. This can take a minute.";
+pub const SEAL_WAIT: &str =
+    "Ending the part and finishing its record files. This can take a minute.";
 
 pub const SEAL_STILL: &str = "Still finishing the record files.";
 

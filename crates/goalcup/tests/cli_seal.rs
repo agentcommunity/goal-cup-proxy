@@ -84,7 +84,11 @@ impl World {
     fn seals(&self) -> String {
         let (from, to) = (self.scratch.path().join("sealed.json"), self.status());
         let tmp = format!("{}.tmp", to.display());
-        format!("cp {} {tmp}; mv {tmp} {}; exit 0", from.display(), to.display())
+        format!(
+            "cp {} {tmp}; mv {tmp} {}; exit 0",
+            from.display(),
+            to.display()
+        )
     }
 
     /// An action that only notes the signal in the `hit` file.
@@ -108,14 +112,21 @@ impl World {
     fn watchdog(&self, w: &Stand) {
         let rec = self.dir().join("rec");
         std::fs::create_dir_all(&rec).unwrap();
-        std::fs::write(rec.join("watchdog.pid"), format!("{} {}\n", w.0.id(), w.start_id()))
-            .unwrap();
+        std::fs::write(
+            rec.join("watchdog.pid"),
+            format!("{} {}\n", w.0.id(), w.start_id()),
+        )
+        .unwrap();
     }
 
     fn goalcup(&self, args: &[&str], harness: bool) -> Output {
         let mut cmd = Command::new(common::bin());
-        self.home.apply(&mut cmd).args(args).env("GOALCUP_SERVER", "off");
-        cmd.env_remove("GOALCUP_TIME_LEFT_FILE").stdin(Stdio::null());
+        self.home
+            .apply(&mut cmd)
+            .args(args)
+            .env("GOALCUP_SERVER", "off");
+        cmd.env_remove("GOALCUP_TIME_LEFT_FILE")
+            .stdin(Stdio::null());
         if harness {
             cmd.env("GOALCUP_TIME_LEFT_FILE", "/nowhere/upload.json");
         }
@@ -123,8 +134,7 @@ impl World {
     }
 
     fn sealed(&self) -> bool {
-        std::fs::read_to_string(self.status())
-            .is_ok_and(|s| s.contains("\"mode\":\"sealed\""))
+        std::fs::read_to_string(self.status()).is_ok_and(|s| s.contains("\"mode\":\"sealed\""))
     }
 }
 
@@ -142,7 +152,12 @@ fn signal_goes_to_the_watchdog_and_not_the_recorder() {
     let wd = stand_in(w.scratch.path(), "wd", "USR1", &w.seals());
     w.watchdog(&wd);
     let out = w.goalcup(&["seal", "--yes"], false);
-    assert_eq!(out.status.code(), Some(0), "{}", String::from_utf8_lossy(&out.stderr));
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     assert!(w.sealed() && !w.hit());
     assert!(!out.stdout.is_empty(), "the end screen is printed");
 }
@@ -153,7 +168,12 @@ fn without_a_watchdog_the_recorder_gets_sigterm() {
     let rec = stand_in(w.scratch.path(), "rec", "TERM", &w.seals());
     w.recorder(&rec);
     let out = w.goalcup(&["seal", "--yes"], false);
-    assert_eq!(out.status.code(), Some(0), "{}", String::from_utf8_lossy(&out.stderr));
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     assert!(w.sealed());
 }
 
