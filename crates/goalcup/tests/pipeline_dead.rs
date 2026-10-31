@@ -264,7 +264,8 @@ fn a_pruned_boot_with_counts_behind_seals_the_bytes_written() {
     unsafe { std::env::set_var("GOALCUP_TEST_ROTATE_MB", "1") };
     let live = entry_dir();
     let rec = real(live.path());
-    let mut req = rec.open(StreamKind::HttpReq, 0, 0, 0, OpenFlags::POST, json!({}));
+    let flags = OpenFlags::POST | OpenFlags::DECRYPTED;
+    let mut req = rec.open(StreamKind::HttpReq, 0, 0, 0, flags, json!({}));
     req.data(rec.now(), Bytes::from_static(BODY));
     // Bytes that do not compress, so the part files reach the rotation size.
     let mut x: u64 = 0x9e37_79b9_7f4a_7c15;
@@ -299,9 +300,16 @@ fn a_pruned_boot_with_counts_behind_seals_the_bytes_written() {
     let oldest = goalcup_format::read::part_files(&rec_dir).unwrap()[0].clone();
     let name = oldest.file_name().unwrap().to_str().unwrap().to_string();
     let idx = oldest.with_file_name(format!("{}.idx", name.trim_end_matches(".gcr.zst")));
-    let oldest_end = goalcup_format::read::read_index(&idx).unwrap().last().unwrap().seq;
+    let oldest_end = goalcup_format::read::read_index(&idx)
+        .unwrap()
+        .last()
+        .unwrap()
+        .seq;
     let kept: Value = serde_json::from_slice(&line).unwrap();
-    assert!(kept["seq"].as_u64().unwrap() >= oldest_end, "a prune syncs first");
+    assert!(
+        kept["seq"].as_u64().unwrap() >= oldest_end,
+        "a prune syncs first"
+    );
     std::fs::remove_file(&oldest).unwrap();
     std::fs::remove_file(&idx).unwrap();
     std::fs::write(dead.join("counts.jsonl"), [line.as_slice(), b"\n"].concat()).unwrap();
