@@ -401,7 +401,7 @@ its meta):
 
 - `wire_keeps_up`: a model call the harness's own log shows that never reached the wire (a lost
   model call), or a harness that kept calling over 10 minutes after the wire's last call. It
-  compares call times, so it is always `skip` ("no per-call times") when `harness_log` is `totals`;
+  compares call times, so it is `skip` ("no per-call times") when `harness_log` is `totals`;
   only `threads_match` compares then.
 - `threads_match`: a thread with more calls in the harness log than ok calls on the wire (wire
   calls above the harness count are no finding; a log that gives only a total per session is
