@@ -273,6 +273,13 @@ fn a_boot_on_a_sealed_entry_keeps_after_seal_current() {
     let mut req = rec.open(StreamKind::HttpReq, 0, 0, 0, REQ, json!({}));
     req.data(rec.now(), Bytes::from_static(b"before the seal"));
     let sealed = seal(&rec, first.path());
+    // A sealed entry has its `status.json`; the first pipeline's status thread writes it.
+    let written = first.path().join("status.json");
+    common::within(common::HANG, move || {
+        while !written.exists() {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+    });
     // The second boot runs on a copy, out of reach of the first pipeline's status thread.
     let dir = common::recorder::entry_dir();
     copy_all(first.path(), dir.path());
@@ -285,7 +292,7 @@ fn a_boot_on_a_sealed_entry_keeps_after_seal_current() {
     conn.data(rec.now(), Bytes::from_static(b"tls"));
     // A connection that carried nothing is not named.
     let quiet = json!({"host": "quiet.example.com"});
-    let mut idle = rec.open(StreamKind::Conn, 0, 0, 0, OpenFlags::NONE, quiet);
+    let idle = rec.open(StreamKind::Conn, 0, 0, 0, OpenFlags::NONE, quiet);
     idle.end(rec.now(), EndReason::Complete, None);
     let path = dir.path().join("status.json");
     let after = common::within(common::HANG, move || {
