@@ -70,7 +70,7 @@ lessons lane (PRD-17); read by the deletion gate (PRD-17 Acceptance, checks 1 to
 | L-D4 | 2.4 | A: lessons_decode::raw_and_zlib_deflate_split_after_byte_one | PRD-17 | open | - |
 | L-D5 | 2.4 | A: proxy_http1.rs (PRD-03) | PRD-03 | green | 7e620577 |
 | L-D6 | 2.4 | A: lessons_decode::corrupt_tail_keeps_the_prefix (decoder layer only; the GAP and END records are shown once `proxy::serve` lands, see the note below the table) | PRD-17 | open | - |
-| L-D7 | 2.4 | A: lessons_decode::bomb_relays_on_in_bounded_pieces | PRD-17 | green | 7e620577 |
+| L-D7 | 2.4 | A: lessons_decode::bomb_relays_on_in_bounded_pieces | PRD-17 | open | - |
 | L-D8 | 2.4 | A: lessons_decode.rs | PRD-17 | open | - |
 | L-W1 | 2.5 | A: proxy_ws.rs (PRD-03); R: RR1 | PRD-03 | green | 7e620577 |
 | L-W2 | 2.5 | A: lessons_ws::negotiation_accepts_only_rfc7692; A: lessons_ws::unknown_extension_relays_inside_a_named_loss | PRD-17 | open | - |
