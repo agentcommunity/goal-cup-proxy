@@ -497,7 +497,7 @@ class Run:
         argv), then the copy in to the box's ~/run/fetched/<entry>/, where pad-run verify reads it."""
         if self.s["server"] != "staging":
             return "skip", NEEDS_LATER
-        entries = [str(self.meta.get("entry"))] + [self.meta["new_entry"]] * ("new_entry" in self.meta)  # kill-both: both
+        entries = [str(self.meta.get("entry"))] + [self.meta[k] for k in ("new_entry",) if k in self.meta]  # kill-both: both
         for entry in entries:
             if not re.fullmatch(r"e[0-9a-f]{16}", entry):
                 return "FAIL", "server copy not fetched: no entry id"
