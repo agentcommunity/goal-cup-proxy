@@ -427,8 +427,10 @@ pub fn run_with(mut plan: LaunchPlan, mut facts: StartFacts, recorder_exe: &Path
     for h in [ending, after].into_iter().flatten() {
         let _ = h.join();
     }
-    if let Some(shield) = shield.as_mut() {
-        shield.harness_exited();
+    if let Some(shield) = shield.as_mut()
+        && !shield.harness_exited()
+    {
+        line(&dir, "shield_undrained", &[]);
     }
     drop(plan);
     match exit.flatten() {
