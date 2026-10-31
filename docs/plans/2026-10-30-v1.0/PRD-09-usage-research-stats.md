@@ -996,3 +996,30 @@ PRD-01, PRD-05, PRD-08, PRD-12, PRD-16 and the old code.
   writes S7 from `Thread`/`CallTable` as merged, and the pad's spend keys stay as the PRD-12 note
   names them.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-31, replan after the PRD-09 slice 4 review (`out.rs` and `usage`)
+
+- **Fixed in this slice:** `calls.jsonl` no longer carries `path` (a session path can name the
+  participant's folders; section 7 keeps paths out of both files, and the test now plants MARK in a
+  Codex session path to guard it). `detail` is the row's own `detail` once, not status and code twice.
+  A decode error partway through an entry gives the summary with `read_error` true and a line on
+  stderr, never a clean-looking partial count; a torn tail is still not an error. A run folder
+  goes on past an entry it cannot read, and exit 3 means no entry gave output. Output files are named
+  `<name>.json` and `<name>.calls.jsonl` whole, so a folder name with a dot is not cut. Thread rows
+  carry `models` (model to call count) and `effort`, which the third-slice CSV and the PRD-16
+  hand-off table read. `coverage` shows `repeats_skipped` and `copied_skipped`. `harness_version`,
+  `connector` and `run` get the same printable 128-byte bound as other labels.
+- **Cut from the S7 summary, as a decision:** `coverage.by_10min`, `status.fail_closed` and
+  `threads[].source`. Nothing reads them today (the pad's spend check reads `models` and `tokens`);
+  a lane that needs one adds it with its reader.
+- **Seam line to PRD-08:** `CallTable` has five more public U1 fields (`run`, `entry`, `connector`,
+  `harness_version`, `sealed`), filled from the `start` event and the last PART; the table built
+  from `CallTable::default()` is unchanged for existing callers.
+- **Covered by inspection, not by a test:** "a panic inside `usage` prints no record text". The
+  hook is PRD-08's (`main.rs` prints only file and line and turns the panic into exit 3); no test in
+  `crates/goalcup-verify/tests` covers it, and this PRD adds none (ledger B10).
+- **Size decision:** the slice 4 limits (`out.rs` 120, `mod.rs` at most 40 more, tests 400) were
+  missed: `out.rs` carries the per-thread rows (models, effort) that the schema and ledger S2 ask
+  for, `mod.rs` the entry reader that must go on past a bad entry and mark a stopped read, and
+  `usage_run1.rs` one more point-3 case. **Decision: the ceilings become 2,540 src and 490 tests**;
+  `sqlite.rs` stays at 150 and the CSV and `--text` stay last and only if they fit.
