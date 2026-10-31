@@ -16,9 +16,9 @@ use common::upstream::{Answer, Body, Script, Upstream, WsMsg};
 use common::{HANG, within_async};
 use flate2::{Compress, Compression, FlushCompress, Status};
 use goalcup::pipeline::{Call, Calls, EndReason, GapReason, Mono, Recorder, Sid, StreamKind};
+use goalcup::proxy::ca::RunCa;
 use goalcup::proxy::http1::Http1;
 use goalcup::proxy::pump::{Parser, Stop};
-use goalcup::proxy::ca::RunCa;
 use goalcup::proxy::ws::{Deflate, Dir, WsConn, negotiate};
 use goalcup::proxy::{ProxyCtx, ProxyHandle, serve};
 use goalcup_format::{FLAG_FIN, Record};
@@ -227,7 +227,9 @@ const GOOD: &str = "s3pPLMBiTxaQ9kYGzzhZRbK+xOo=";
 
 /// A `101` head, with an extension answer when given.
 fn head101(ext: Option<&str>, accept: &str) -> Vec<u8> {
-    let ext = ext.map_or(String::new(), |e| format!("Sec-WebSocket-Extensions: {e}\r\n"));
+    let ext = ext.map_or(String::new(), |e| {
+        format!("Sec-WebSocket-Extensions: {e}\r\n")
+    });
     format!(
         "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\
          Sec-WebSocket-Accept: {accept}\r\n{ext}\r\n"
@@ -236,7 +238,11 @@ fn head101(ext: Option<&str>, accept: &str) -> Vec<u8> {
 }
 
 fn upgrade_req(path: &str, offer: bool) -> Vec<u8> {
-    let ext = if offer { "Sec-WebSocket-Extensions: permessage-deflate\r\n" } else { "" };
+    let ext = if offer {
+        "Sec-WebSocket-Extensions: permessage-deflate\r\n"
+    } else {
+        ""
+    };
     format!(
         "GET {path} HTTP/1.1\r\nHost: api.openai.com\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\
          Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n{ext}\r\n"
@@ -264,21 +270,36 @@ fn wire(up: SocketAddr, pki: &TestPki, recorder: Recorder) -> Wire {
     socket2::SockRef::from(&listener).listen(4096).unwrap();
     let ca = RunCa::mint(&["openai.com".to_string()]).unwrap();
     let hosts = goalcup::connector::HostList::from_file(HOSTS.as_bytes(), "hosts.toml").unwrap();
-    let ctx = ProxyCtx { recorder, hosts, ca: ca.clone() };
-    Wire { _dir: dir, _h: serve(listener, ctx), addr, ca }
+    let ctx = ProxyCtx {
+        recorder,
+        hosts,
+        ca: ca.clone(),
+    };
+    Wire {
+        _dir: dir,
+        _h: serve(listener, ctx),
+        addr,
+        ca,
+    }
 }
 
 /// A client through a decrypted CONNECT that writes `first` at once.
 async fn client(w: &Wire, first: &[u8]) -> tokio_rustls::client::TlsStream<tokio::net::TcpStream> {
     let s = through(w.addr, "api.openai.com:443").await;
     let name = ServerName::try_from("api.openai.com").unwrap();
-    let mut t = trusting_run_ca(&w.ca, &[HTTP11]).connect(name, s).await.unwrap();
+    let mut t = trusting_run_ca(&w.ca, &[HTTP11])
+        .connect(name, s)
+        .await
+        .unwrap();
     t.write_all(first).await.unwrap();
     t
 }
 
 /// Reads until `done` says the bytes so far are enough.
-async fn read_to<S: tokio::io::AsyncRead + Unpin>(t: &mut S, done: impl Fn(&[u8]) -> bool) -> Vec<u8> {
+async fn read_to<S: tokio::io::AsyncRead + Unpin>(
+    t: &mut S,
+    done: impl Fn(&[u8]) -> bool,
+) -> Vec<u8> {
     within_async(HANG, async {
         let mut got = Vec::new();
         while !done(&got) {
@@ -314,7 +335,9 @@ fn raw_peer(pki: &TestPki, replies: Vec<Vec<u8>>) -> (SocketAddr, Seen) {
             let (acceptor, kept) = (acceptor.clone(), kept.clone());
             let reply = replies[at.min(replies.len() - 1)].clone();
             tokio::spawn(async move {
-                let Ok(mut t) = acceptor.accept(s).await else { return };
+                let Ok(mut t) = acceptor.accept(s).await else {
+                    return;
+                };
                 let mut head = Vec::new();
                 while !head.ends_with(b"\r\n\r\n") {
                     let mut b = [0u8; 1];
@@ -346,7 +369,12 @@ fn raw(replies: Vec<Vec<u8>>) -> Raw {
     let pki = TestPki::new("lessons ws");
     let (addr, seen) = raw_peer(&pki, replies.clone());
     let (rec, calls) = Recorder::for_tests(ROOM);
-    Raw { w: wire(addr, &pki, rec), calls, seen, replies }
+    Raw {
+        w: wire(addr, &pki, rec),
+        calls,
+        seen,
+        replies,
+    }
 }
 
 impl Raw {
@@ -359,7 +387,13 @@ impl Raw {
         let mut t = client(&self.w, &first).await;
         assert_eq!(&read_to(&mut t, |g| g.len() >= reply.len()).await, reply);
         within_async(HANG, async {
-            while self.seen.lock().unwrap().get(i).is_none_or(|s| s.len() < up.len()) {
+            while self
+                .seen
+                .lock()
+                .unwrap()
+                .get(i)
+                .is_none_or(|s| s.len() < up.len())
+            {
                 tokio::time::sleep(Duration::from_millis(20)).await;
             }
         })
@@ -371,14 +405,21 @@ impl Raw {
 
     fn no_ws_stream(&self) {
         let kinds = opens(&self.calls);
-        assert!(kinds.iter().all(|(_, k, _)| !matches!(k, StreamKind::WsUp | StreamKind::WsDown)));
+        assert!(
+            kinds
+                .iter()
+                .all(|(_, k, _)| !matches!(k, StreamKind::WsUp | StreamKind::WsDown))
+        );
     }
 }
 
 /// An upstream that upgrades every request and sends `messages`.
 fn ws_upstream(messages: Vec<WsMsg>) -> Upstream {
     let mut script = Script::ok(b"").with_tls(&["api.openai.com"], &[HTTP11]);
-    script.answers = vec![Answer::Ws { deflate: false, messages }];
+    script.answers = vec![Answer::Ws {
+        deflate: false,
+        messages,
+    }];
     Upstream::start(script)
 }
 
@@ -388,7 +429,9 @@ async fn unknown_extension_through_serve() {
     let down = [text(Dir::Down, "down one"), text(Dir::Down, "down two")].concat();
     let up = text(Dir::Up, "up one");
     let answers = ["x-unknown-extension", "permessage-deflate; x_unknown=1"];
-    let r = raw(answers.map(|a| [head101(Some(a), GOOD), down.clone()].concat()).to_vec());
+    let r = raw(answers
+        .map(|a| [head101(Some(a), GOOD), down.clone()].concat())
+        .to_vec());
     for i in 0..answers.len() {
         let conn = r.session(i, &up, true).await;
         let named = gap_reasons(&r.calls, conn);
@@ -400,8 +443,16 @@ async fn unknown_extension_through_serve() {
 /// L-W7, serve half: a violation mid-stream gives the 5a GAP on the WebSocket stream and every
 /// byte is still relayed, each way.
 async fn violations_through_serve() {
-    let down = [text(Dir::Down, "first"), raw_frame(0xa1, b"x", None, None), text(Dir::Down, "last")];
-    let up = [text(Dir::Up, "first"), frame(true, false, 0x1, b"x", None), text(Dir::Up, "last")];
+    let down = [
+        text(Dir::Down, "first"),
+        raw_frame(0xa1, b"x", None, None),
+        text(Dir::Down, "last"),
+    ];
+    let up = [
+        text(Dir::Up, "first"),
+        frame(true, false, 0x1, b"x", None),
+        text(Dir::Up, "last"),
+    ];
     let r = raw(vec![[head101(None, GOOD), down.concat()].concat()]);
     r.session(0, &up.concat(), false).await;
     for dir in [Dir::Up, Dir::Down] {
@@ -420,7 +471,10 @@ async fn upgrade_101_and_first_frame_in_one_write() {
     let reply = [head101(None, GOOD), text(Dir::Down, "first message")].concat();
     let r = raw(vec![reply]);
     r.session(0, &text(Dir::Up, "hello up"), false).await;
-    assert_eq!(texts(&r.calls, stream(&r.calls, Dir::Down)), ["first message"]);
+    assert_eq!(
+        texts(&r.calls, stream(&r.calls, Dir::Down)),
+        ["first message"]
+    );
     assert_eq!(texts(&r.calls, stream(&r.calls, Dir::Up)), ["hello up"]);
     assert!(gaps(&r.calls).is_empty());
 }
@@ -445,7 +499,11 @@ async fn rejected_upgrade_stays_http() {
     conns(&calls, 1).await;
     let kinds: Vec<_> = opens(&calls).into_iter().map(|o| o.1).collect();
     assert!(kinds.contains(&StreamKind::HttpReq) && kinds.contains(&StreamKind::HttpResp));
-    assert!(!kinds.iter().any(|k| matches!(k, StreamKind::WsUp | StreamKind::WsDown)));
+    assert!(
+        !kinds
+            .iter()
+            .any(|k| matches!(k, StreamKind::WsUp | StreamKind::WsDown))
+    );
     assert!(gaps(&calls).is_empty());
 }
 
@@ -453,7 +511,11 @@ async fn rejected_upgrade_stays_http() {
 async fn bad_accept_is_a_named_loss_not_a_websocket() {
     // W10: a 101 whose accept value does not match the key is relayed; parsing stops with one
     // named loss on the conn stream and no WebSocket stream opens.
-    let reply = [head101(None, "AAAAAAAAAAAAAAAAAAAAAAAAAAA="), text(Dir::Down, "x")].concat();
+    let reply = [
+        head101(None, "AAAAAAAAAAAAAAAAAAAAAAAAAAA="),
+        text(Dir::Down, "x"),
+    ]
+    .concat();
     let r = raw(vec![reply]);
     let conn = r.session(0, &text(Dir::Up, "y"), false).await;
     let named = gap_reasons(&r.calls, conn);
@@ -474,7 +536,10 @@ async fn an_upgrade_on_any_path_is_recorded() {
     }
     conns(&calls, paths.len()).await;
     for kind in [StreamKind::WsUp, StreamKind::WsDown] {
-        assert_eq!(opens(&calls).iter().filter(|o| o.1 == kind).count(), paths.len());
+        assert_eq!(
+            opens(&calls).iter().filter(|o| o.1 == kind).count(),
+            paths.len()
+        );
     }
 }
 
@@ -482,7 +547,10 @@ async fn an_upgrade_on_any_path_is_recorded() {
 async fn fail_closed_ends_at_message_end() {
     // K15: message 1 holds an undecided 20 KiB candidate; no mask span leaves that message and
     // the next messages are whole and parse.
-    let first = format!(r#"{{"type":"response.create","input":"sk-{}"}}"#, "A9".repeat(10 * 1024));
+    let first = format!(
+        r#"{{"type":"response.create","input":"sk-{}"}}"#,
+        "A9".repeat(10 * 1024)
+    );
     let plain: Vec<String> = (2..=3)
         .map(|i| format!(r#"{{"type":"response.create","n":{i},"input":"hello there"}}"#))
         .collect();
@@ -497,8 +565,17 @@ async fn fail_closed_ends_at_message_end() {
     let recs = within_async(HANG, async {
         loop {
             let recs = records(entry.path());
-            let open = recs.iter().filter(|r| matches!(r, Record::Open { .. })).count();
-            if open > 0 && open == recs.iter().filter(|r| matches!(r, Record::End { .. })).count() {
+            let open = recs
+                .iter()
+                .filter(|r| matches!(r, Record::Open { .. }))
+                .count();
+            if open > 0
+                && open
+                    == recs
+                        .iter()
+                        .filter(|r| matches!(r, Record::End { .. }))
+                        .count()
+            {
                 return recs;
             }
             tokio::time::sleep(Duration::from_millis(50)).await;
@@ -508,28 +585,52 @@ async fn fail_closed_ends_at_message_end() {
     let sid = recs
         .iter()
         .find_map(|r| match r {
-            Record::Open { sid, skind: StreamKind::WsDown, .. } => Some(*sid),
+            Record::Open {
+                sid,
+                skind: StreamKind::WsDown,
+                ..
+            } => Some(*sid),
             _ => None,
         })
         .expect("a ws_down stream");
     let (mut bytes, mut fins) = (Vec::new(), Vec::new());
     for r in &recs {
         match r {
-            Record::Data { sid: s, flags, bytes: b, .. } if *s == sid => {
+            Record::Data {
+                sid: s,
+                flags,
+                bytes: b,
+                ..
+            } if *s == sid => {
                 bytes.extend_from_slice(b);
                 if flags & FLAG_FIN != 0 {
                     fins.push(bytes.len());
                 }
             }
-            Record::Mask { sid: s, off, len, .. } if *s == sid => {
-                assert!(off + len <= first.len() as u64, "a mask span crosses a message end");
+            Record::Mask {
+                sid: s, off, len, ..
+            } if *s == sid => {
+                assert!(
+                    off + len <= first.len() as u64,
+                    "a mask span crosses a message end"
+                );
             }
             _ => {}
         }
     }
     let at = first.len();
-    assert_eq!(fins, [at, at + plain[0].len(), at + plain[0].len() + plain[1].len()]);
-    assert!(recs.iter().any(|r| matches!(r, Record::Mask { sid: s, .. } if *s == sid)));
+    assert_eq!(
+        fins,
+        [
+            at,
+            at + plain[0].len(),
+            at + plain[0].len() + plain[1].len()
+        ]
+    );
+    assert!(
+        recs.iter()
+            .any(|r| matches!(r, Record::Mask { sid: s, .. } if *s == sid))
+    );
     assert_eq!(&bytes[at..], plain.concat().as_bytes());
     serde_json::from_slice::<serde_json::Value>(&bytes[at..at + plain[0].len()]).unwrap();
 }
