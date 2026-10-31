@@ -2133,3 +2133,22 @@ kept and now cites BUILD-PROMPT section 5, since B3 no longer carries it.
   slice 7 before phase 4's first X1 reads. `wire_keeps_up`, `threads_match` and `subagents_present` are
   on integration, and the K2 fixtures follow in slice 6 (PRD-08 and PRD-12 notes).
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-31, replan after PRD-15 slice 10 (merge 524c6745)
+
+- **Size report, PRD-15 slice 10.** PRD-15 writes docs, so PRD-00 "Size budget" has no row for it; the
+  comparison is against the PRD-15 section 10 estimates (`wc -l` at 524c6745): RECORD-FORMAT 502 of 280
+  (179%; the slice 9 ceiling of 430 was passed, and the PRD-15 note now sets **540** with the reason),
+  OPERATING 235 of 280, CONNECTOR-SCHEMA 115 of 90, `scripts/README.md` 39. No Rust or script line
+  count moved: the slice changed `docs/OPERATING.md` and `docs/RECORD-FORMAT.md` only. The Rust and
+  Worker rows in the "Rows over their size line" list above are unchanged by this slice.
+- **Build order, PRD-15:** the next RECORD-FORMAT edit follows PRD-08 slice 5 (`legs.rs`, merged at
+  bfd244e3, not yet in the page) and PRD-08 slice 6 (`history.rs`) if that has merged by then. Slice 10
+  was written against slice 4 and is stale on the legs checks (PRD-15 note). The remaining docs slices
+  still wait for PRD-02 core, PRD-10 `start` and `continue`, and PRD-12's skill rewrite, as listed.
+- **Seams:** none new. The `check --json` keys `harness_log`, `provider_errors`, `threads` and
+  `counts.threads` are written by `legs.rs` and `report.rs` now (PRD-08 slice 5); `history` stays null
+  until the history check is built.
+- **Acceptance lists as known,** if still open at the end: the three nits A9, A10 and A11 (PRD-15 note)
+  if the next RECORD-FORMAT edit does not take them, and the 540-line page ceiling as a recorded overage.
+- No locked ledger item is touched and no owner question comes from this slice.
