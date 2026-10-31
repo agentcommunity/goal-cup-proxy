@@ -48,13 +48,18 @@ fn post(e: &mut Entry, id: &str, k: u64, limited: bool, seen: &[u64]) {
     let end = if limited {
         vec![err, ev("failed", rl)]
     } else {
-        vec![json!({"type": "response.output_item.done", "item": call(k)}), ev("completed", used)]
+        vec![
+            json!({"type": "response.output_item.done", "item": call(k)}),
+            ev("completed", used),
+        ]
     };
     let sse = |v: Value| format!("event: {}\ndata: {v}\n\n", v["type"].as_str().unwrap());
     let all = [vec![ev("created", Value::Null)], end].concat();
     let body: String = all.into_iter().map(sse).collect();
-    let done = |j: u64| json!({"type": "function_call_output", "call_id": format!("call_{j}"),
-        "output": "fake"});
+    let done = |j: u64| {
+        json!({"type": "function_call_output", "call_id": format!("call_{j}"),
+        "output": "fake"})
+    };
     let mut input: Vec<Value> = seen.iter().flat_map(|&j| [call(j), done(j)]).collect();
     input.push(json!({"type": "message", "role": "user",
         "content": [{"type": "input_text", "text": TURN}]}));

@@ -30,8 +30,8 @@ fn sorted(ids: impl IntoIterator<Item = impl ToString>) -> Vec<String> {
     ids
 }
 
-/// The entry as fetch-run lays it out, one chunk per index line. Unless `honest`, it claims one
-/// model request more than the seal's totals say.
+/// The entry as fetch-run lays it out, one chunk per index line. Unless `honest` (a record without
+/// losses), it claims one model request more than the seal's totals say.
 fn fetch(d: &Path, honest: bool) -> PathBuf {
     let out = fetched(d, &tmp("r1-fetched")).join(ENTRY);
     let (mut chunks, mut raw, mut prev) = (vec![], 0, "0".repeat(64));
@@ -53,7 +53,8 @@ fn fetch(d: &Path, honest: bool) -> PathBuf {
     });
     let t = &seal["totals"];
     let n = t["http_post"].as_u64().unwrap() + t["ws_up_msgs"].as_u64().unwrap();
-    let hb = json!({"recording": "gaps", "model_requests": n, "counts": t});
+    let recording = if honest { "ok" } else { "gaps" };
+    let hb = json!({"recording": recording, "model_requests": n, "counts": t});
     let asked = n + u64::from(!honest);
     let doc = json!({"upload_offset": raw, "model_requests": asked, "last_heartbeat": hb,
         "final": {"seq": chunks[chunks.len() - 1]["last_seq"], "head": prev}, "chunks": chunks});
