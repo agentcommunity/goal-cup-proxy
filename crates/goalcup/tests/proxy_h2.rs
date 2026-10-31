@@ -675,7 +675,10 @@ fn a_client_settings_inside_the_server_settings_keeps_extended_connect() {
     let steps = [
         (Dir::Down, first.to_vec()),
         up(&[]),
-        (Dir::Down, [rest, &ok(1, "")[..], &body(1, false, &ws)[..]].concat()),
+        (
+            Dir::Down,
+            [rest, &ok(1, "")[..], &body(1, false, &ws)[..]].concat(),
+        ),
         (Dir::Up, head(1, 0, &connect)),
         (Dir::Down, body(1, true, &[0xc1; 10])),
     ];
