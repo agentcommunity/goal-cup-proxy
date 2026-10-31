@@ -1478,3 +1478,20 @@ to another file are made by that file's owner.
   asserts `form: "final"` or `set` waits for that slice; one that asserts the bytes are in the record
   after the seal can run now.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-31, replan after PRD-04 second slice (merge 7e8ed89b)
+
+- **The native seam is complete on the PRD-04 side.** `NativeReader::finish(self, harness_exited, guard)`
+  now acts on `harness_exited` (step 3: a `final` row's database sets are copied whole at the seal,
+  `harness_exited` in OPEN meta, `final_snapshot_live` when it is false, and a guard that runs out cuts
+  a set for every file of it). Wire the real `harness_exited` from the watchdog's seal reason; passing a
+  constant `false` writes a `final_snapshot_live` note for every database at every seal (points 1, 3
+  and 6). Still nothing in `src/pipeline/` or `src/watchdog/` calls `native::start` or `finish`.
+- **`pipeline_seal.rs` (R3-3) may now assert** `form: "final"`, `set` and `harness_exited` for a database
+  row, and that a `final` set and a growing session file are both in the record after the seal. The
+  part 3 note's "waits for that slice" no longer applies.
+- **Still open for your next touch of `pipeline/mod.rs`:** `Recorder::counts()` (at least
+  `model_requests`, or `native_missing` never fires), `native_cursors()` returns `Cursors::default()`,
+  and `SnapshotCursor` gains `fid` (PRD-04 resumes a database set by `size` and `mtime_ns` only, so a
+  replaced file with the same stat is copied again, which loses nothing).
+- No locked ledger item is touched and no owner question comes from this slice.

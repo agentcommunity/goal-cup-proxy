@@ -1668,3 +1668,14 @@ taken; "rejected" says why. Fixes for other files are made by those files' owner
   applies A-1 first, and each later slice reports per file. Whether the row itself rises stays the
   12:53Z owner question; no new one.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-31, replan after PRD-04 second slice (merge 7e8ed89b)
+
+- **Native database rows can be checked now** (once PRD-02 wires `native::start`): a `final` row's
+  streams are `snapshot` OPENs with `form: "final"`, one `set` id across the files of a database, and
+  `harness_exited` on a seal copy. `final_snapshot_live` means the harness still ran at the seal (its
+  absence on a clean exit is the pass); `snapshot_unstable` and `native_unreadable` name a file that
+  changed or could not be read, so a pad check treats them as a fact to show, not a fail. A lost set
+  file is a GAP, not a missing stream. Keep the checks on the point (every subagent and database
+  recorded), not on PRD-04's counts or wording.
+- No locked ledger item is touched and no owner question comes from this slice.

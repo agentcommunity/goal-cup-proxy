@@ -1964,3 +1964,32 @@ kept and now cites BUILD-PROMPT section 5, since B3 no longer carries it.
   a real-key row, so none is evidence before PRD-10's `seal` and `recover` merge and the first `micro`
   row is read by hand (P1, ledger T6).
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-31, replan after PRD-04 second slice (merge 7e8ed89b)
+
+- `gate fast: PASS in 117s` on 7e8ed89b. Box runs before the merge, last at 0b8fd577: fmt, `clippy -D
+  warnings`, native 55 of 55 three times, goalcup 175 of 175; the earlier rounds closed A1 to A9 and B1
+  to B9 (B5, B6 and B9 declined as observations or taste, accepted), and the last re-check left only
+  nit A10 (a PRD-00 ownership note, now written). Linux only; no native test ran on macOS. Ten paths
+  changed, all PRD-04's (`src/native/`, `tests/native_*`, `tests/native_common/`, its PRD note); no
+  `Cargo.toml`. All 7 non-merge commits carry both trailer lines. `gate full` was not run.
+- **Size report, PRD-04** (`wc -l` at 7e8ed89b, PRD-00 row "Native (PRD-04)" 780 src and 1,000 tests):
+  src 1,488 (`tail.rs` 410, `snapshot.rs` 289, `mod.rs` 271, `fsx.rs` 213, `pattern.rs` 174, `walk.rs`
+  131), 191% of the row and 228 over the 1,260 ceiling of the part 3 note; tests 1,768 (`native_tail.rs`
+  441, `native_snapshot.rs` 346, `native_safety.rs` 245, `native_walk.rs` 194, `native_finish.rs` 173,
+  `native_pattern.rs` 132, `native_resume.rs` 106, `native_room.rs` 87, `native_common/mod.rs` 44),
+  177% of the row and 168 over the 1,600 ceiling. The PRD-04 note's decision names points 1 and 3 and
+  sets the ceilings to 1,500 src and 1,780 tests. PRD-04 is 720 src and 780 tests over its row; with
+  PRD-11 (900 and 360 over, ceilings 1,700 and 760) and PRD-12 over its row, the end-of-build report
+  must show the Rust totals (about 18,100 src, at most about 14,200 tests) against the sum of the
+  ceilings. A total past them is the owner's question then.
+- **Build order:** PRD-04 has no slice left. Its seam is waiting on PRD-02: wire `native::start` (boot
+  step 5) and `finish` with the real `harness_exited` (seal step 4), fill `Recorder::counts()` and add
+  `fid` to `SnapshotCursor`. Until that merges no real run reads a session file or copies a database,
+  so no pad row that checks native streams or sets (PRD-12) is evidence yet, and PRD-02's `pipeline_seal.rs`
+  can add the `form: "final"` and `set` assertions now.
+- **Acceptance lists as known,** if still open at the end: C2 (nested root on another device), the
+  missing snapshot `fid` on resume, and review nits N1, N2, N3 and N5. Closed: the part 3 line about
+  `final` rows copied only at the seal. PRD-04 acceptance 1 (every subagent and database recorded) is
+  proven in tests but not yet in any real run.
+- No locked ledger item is touched and no owner question comes from this slice.
