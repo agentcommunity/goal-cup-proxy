@@ -234,6 +234,19 @@ pub fn read_json<T: DeserializeOwned>(path: &Path) -> Option<T> {
     serde_json::from_slice(&fs::read(path).ok()?).ok()
 }
 
+/// The harness id saved in `setup.json`; None when there is none.
+pub fn saved_harness(home: &Path) -> Option<String> {
+    let v = read_json::<serde_json::Value>(&setup_json(home))?;
+    Some(v.get("harness")?.as_str()?.to_owned())
+}
+
+/// This process's environment, the values that are valid text.
+pub fn env_vars() -> std::collections::BTreeMap<String, String> {
+    std::env::vars_os()
+        .filter_map(|(k, v)| Some((k.into_string().ok()?, v.into_string().ok()?)))
+        .collect()
+}
+
 /// A run and one of its parts, as `goalcup status [PART]` picks them.
 #[derive(Clone, Debug)]
 pub struct Found {

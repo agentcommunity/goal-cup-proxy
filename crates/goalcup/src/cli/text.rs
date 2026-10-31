@@ -1163,15 +1163,16 @@ pub const NEEDS_REPO: &str =
 
 pub const NO_HARNESS_SAVED: &str = "no harness picked. Run: goalcup setup --harness <id>";
 
-pub const MASK_REFUSED: &str = "goalcup could not set up masking, so nothing was started. Write to goalcup@agentcommunity.org.";
+pub fn mask_refused() -> String {
+    format!("goalcup could not set up masking, so nothing was started. Write to {SUPPORT_ADDRESS}.")
+}
 
-pub fn run_kind(mode: RunMode) -> String {
+pub fn run_kind(mode: RunMode) -> &'static str {
     match mode {
         RunMode::Practice => "Practice run.",
         RunMode::Test => "Organizer test run.",
         RunMode::Competition => "Your run.",
     }
-    .to_owned()
 }
 
 pub fn upload_to(host: Option<&str>) -> String {
@@ -1234,8 +1235,8 @@ pub fn upload_outcome(out: &Outcome, entry: &str, run: &str) -> String {
             "This run's server file or credential is missing, so nothing can be sent. Your record \
              is kept on this computer. {write}"
         ),
-        Outcome::Refused(s) => {
-            format!("Upload: the server refuses this run ({s}). Nothing more is sent. {write}")
+        Outcome::Refused(_) => {
+            format!("Upload: the server refuses this run. Nothing more is sent. {write}")
         }
         Outcome::Closed { upload_by } => format!(
             "Upload: the server closed this run (it took uploads until {upload_by}). What was \

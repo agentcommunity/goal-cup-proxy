@@ -49,12 +49,6 @@ pub struct Ready {
     pub _lock: Option<awake::SleepLock>,
 }
 
-/// The saved harness id in `setup.json`.
-#[derive(serde::Deserialize)]
-struct Saved {
-    harness: String,
-}
-
 /// Until `watchdog::run` is on integration the command stops after the checks that need no server:
 /// the folder, the connector and its plan, the mask values. No approval is asked and no run is
 /// opened, so nothing says recording began when nothing records. [`prepare`] is the rest.
@@ -73,14 +67,7 @@ pub fn run(a: &Args) -> ExitCode {
         Ok(s) => s,
         Err(e) => return fail(e),
     };
-    let vars = std::env::vars_os()
-        .map(|(k, v)| {
-            (
-                k.to_string_lossy().into_owned(),
-                v.to_string_lossy().into_owned(),
-            )
-        })
-        .collect();
+    let vars = super::env_vars();
     let ctx = Ctx {
         home,
         project,
@@ -124,7 +111,7 @@ fn check(a: &Args, c: &Ctx) -> Result<Checked, Stop> {
         _ => return Err(stop(text::NEEDS_REPO.to_owned())),
     };
     // Step 1: load the connector. `load` only reads, so a refused start has still created nothing.
-    let saved = super::read_json::<Saved>(&super::setup_json(&c.home)).map(|s| s.harness);
+    let saved = super::saved_harness(&c.home);
     let id = match (a.connector, a.harness.map(str::to_owned).or(saved)) {
         // `load` takes a file when the argument holds a `/` or ends `.toml`.
         (Some(p), _) => Some(match p.to_string_lossy() {
@@ -180,7 +167,7 @@ fn check(a: &Args, c: &Ctx) -> Result<Checked, Stop> {
     // Step 6, before the approval, so a mask refusal never spends one.
     let values = workspace_values(&c.project);
     if Masker::new(&plan.mask_rules, values.clone()).is_err() {
-        return Err(stop(text::MASK_REFUSED.to_owned()));
+        return Err(stop(text::mask_refused()));
     }
     Ok(Checked {
         mode,
@@ -245,7 +232,7 @@ pub fn prepare(a: &Args, c: &Ctx, out: &mut dyn std::io::Write) -> Result<Ready,
         let left_ms = m.ns().saturating_sub(Mono::now().ns()) / 1_000_000;
         local_wall.saturating_add(left_ms)
     });
-    let mut lines = vec![text::run_kind(mode)];
+    let mut lines = vec![text::run_kind(mode).to_owned()];
     lines.extend(connector.first_screen.clone());
     lines.extend(first_message(a, c, prompt.as_deref(), &opened.run)?);
     lines.extend(deadline.map(|ms| text::ends_line(ms / 1000, super::now())));
@@ -334,7 +321,7 @@ fn first_message(a: &Args, c: &Ctx, prompt: Option<&str>, run: &str) -> Result<V
 }
 
 /// One row of `tiers.toml`; the file also holds a reason, which is not shown.
-#[derive(serde::Deserialize, Default, Clone)]
+#[derive(serde::Deserialize, Default)]
 struct Row {
     tier: String,
     version: String,
@@ -342,8 +329,8 @@ struct Row {
 
 /// Section 6: the tier line of the connector, from `tiers.toml`.
 fn tier_line(name: &str, probed: Option<&str>, id: &str) -> String {
-    let rows: BTreeMap<String, Row> = toml::from_str(TIERS).unwrap_or_default();
-    let row = rows.get(id).cloned().unwrap_or_default();
+    let mut rows: BTreeMap<String, Row> = toml::from_str(TIERS).unwrap_or_default();
+    let row = rows.remove(id).unwrap_or_default();
     let number = |t: &&str| t.starts_with(|c: char| c.is_ascii_digit());
     let version = probed.and_then(|v| v.split_whitespace().find(number));
     text::tier_line(name, version, &row.tier, &row.version)
