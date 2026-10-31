@@ -66,6 +66,23 @@ pub const IDS: &str = "inv1 inv2 inv3 inv4 inv5 inv6 inv7 inv8 inv9 streams_clos
     seen_matches_written gap_has_end recorder_alive inv14 torn_tail native_path_gen \
     counts_match_seal gaps_named record_decode parts_pruned record_kind_unknown gap_reason_unknown";
 
+/// Whether a GAP covers a stretch of time: it is not run 1's shape (`gap_has_end`). A GAP in the
+/// recorder's own clock is judged on record time, one carrying `boot_id` (another clock) on wall
+/// time.
+pub(crate) fn has_extent(
+    tail: &Map<String, Value>,
+    w: (u64, u64),
+    m: (u64, u64),
+    lost: u64,
+) -> bool {
+    let (s, e) = clock(tail, w, m);
+    !((e <= s && lost <= 1) || w.1 < w.0)
+}
+
+fn clock(tail: &Map<String, Value>, w: (u64, u64), m: (u64, u64)) -> (u64, u64) {
+    if tail.contains_key("boot_id") { w } else { m }
+}
+
 /// COUNT counters (PRD-01 section 9). Gauges (`open_streams`, `held_bytes`, `held_peak`, `up_ms`)
 /// are not recounted.
 const COUNTERS: &str = "http_req http_post ws_up_msgs ws_down_msgs req_whole req_holes conns \
@@ -194,6 +211,8 @@ pub struct Outcome {
     pub data_bytes: u64,
     pub links: u64,
     pub pruned: bool,
+    /// The legs: harness_log, provider errors, thread rows and the coverage text.
+    pub legs: crate::legs::Out,
 }
 
 /// Checks one entry. `now_ns` is set for `--live`; `want` names the link seqs whose hashes
@@ -232,8 +251,10 @@ pub fn check(e: &Entry, now_ns: Option<u64>, want: &HashSet<u64>) -> Outcome {
         }
     }
     p.finish(meter.open_frame.get(), now_ns, e);
-    let h = std::mem::take(&mut p.h).finish();
-    p.checks.extend(h);
+    let covers = std::mem::take(&mut p.h.covers);
+    let (legs_checks, legs) = crate::legs::judge(&p.l.finish(), &covers);
+    p.checks.extend(std::mem::take(&mut p.h).finish());
+    p.checks.extend(legs_checks);
     Outcome {
         sealed: p.seal.is_some(),
         seal: p.seal.take(),
@@ -248,6 +269,7 @@ pub fn check(e: &Entry, now_ns: Option<u64>, want: &HashSet<u64>) -> Outcome {
         links: p.links,
         pruned: p.pruned,
         checks: p.checks,
+        legs,
     }
 }
 
@@ -255,6 +277,7 @@ pub fn check(e: &Entry, now_ns: Option<u64>, want: &HashSet<u64>) -> Outcome {
 struct Pass {
     checks: Vec<Check>,
     h: Honesty,
+    l: crate::usage::Calls,
     entry: Option<String>,
     start: Option<Map<String, Value>>,
     mask_rules: Vec<String>,
@@ -372,6 +395,7 @@ impl Pass {
             _ => Map::new(),
         };
         self.h.item(it, at, &ev);
+        self.l.push(&it.rec);
         let ev_name = ev
             .get("ev")
             .and_then(Value::as_str)
@@ -504,13 +528,8 @@ impl Pass {
                 tail,
             } => {
                 let tail: Map<String, Value> = serde_json::from_slice(tail).unwrap_or_default();
-                let other_clock = tail.contains_key("boot_id");
-                let (s, e) = if other_clock {
-                    (*start_wall, *end_wall)
-                } else {
-                    (*start_mono, *end_mono)
-                };
-                if (e <= s && *lost <= 1) || end_wall < start_wall {
+                let (w, m) = ((*start_wall, *end_wall), (*start_mono, *end_mono));
+                if !has_extent(&tail, w, m, *lost) {
                     self.fail("gap_has_end", "a GAP with no extent (run 1's shape)", at);
                 }
                 let name = reason.name();
@@ -532,6 +551,7 @@ impl Pass {
                     sat([&mut self.cur.after_stop], [lost_b]);
                 }
                 if is_down {
+                    let (s, e) = clock(&tail, w, m);
                     let ms = e.saturating_sub(s) / 1_000_000;
                     self.cur.add("off_ms", ms);
                     self.cur.off_spans += 1;
