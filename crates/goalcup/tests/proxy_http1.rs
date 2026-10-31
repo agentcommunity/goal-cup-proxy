@@ -57,7 +57,7 @@ fn exchange(room: u64, up: &[u8], down: &[u8], step: usize) -> Calls {
     let mut p = Http1::new(&rec, CONN);
     feed(&mut p, Dir::Up, up, step);
     feed(&mut p, Dir::Down, down, step);
-    let late = Box::new(p).end(Mono::now(), EndReason::Complete, false, &mut 0);
+    let late = Box::new(p).end(Mono::now(), EndReason::Complete, false, &[]);
     assert_eq!(late, None, "nothing held at the close");
     calls
 }
@@ -340,8 +340,10 @@ fn a_101_hands_the_copied_frames_to_the_websocket_parser() {
     feed(&mut p, Dir::Up, &up, 0);
     feed(&mut p, Dir::Down, &down, 1);
     feed(&mut p, Dir::Up, b"\x81\x89\0\0\0\0second up", 1);
+    // A frame read and never forwarded is recorded, and counted unsent.
+    let unsent = b"\x81\x88\0\0\0\0third up";
     assert_eq!(
-        Box::new(p).end(Mono::now(), EndReason::Complete, false, &mut 0),
+        Box::new(p).end(Mono::now(), EndReason::Complete, false, unsent),
         None
     );
 
@@ -367,8 +369,9 @@ fn a_101_hands_the_copied_frames_to_the_websocket_parser() {
     };
     assert_eq!(
         messages(ws_up),
-        [b"first up".to_vec(), b"second up".to_vec()]
+        [b"first up", b"second up", b"third up"].map(|m| m.to_vec())
     );
+    assert_eq!(end_of(&calls, ws_up).1["unsent"], unsent.len());
     assert_eq!(messages(ws_down), [b"down one".to_vec()]);
 }
 
@@ -388,7 +391,7 @@ fn a_framing_fault_stops_parsing_for_the_connection() {
     };
     assert_eq!((sid, reason), (req, GapReason::DecodeFailed));
     assert_eq!(end_of(&calls, req).0, EndReason::DecodeError);
-    assert_eq!(Box::new(p).end(t, EndReason::Complete, false, &mut 0), None);
+    assert_eq!(Box::new(p).end(t, EndReason::Complete, false, &[]), None);
     assert_eq!(opens(&calls, StreamKind::HttpReq).len(), 1);
     assert_eq!(gaps(&calls).len(), 1);
 }
@@ -422,6 +425,28 @@ fn the_upgrade_copy_guard_counts_the_copy() {
     assert_eq!(end_of(&calls, req).0, EndReason::Complete);
 }
 
+/// Client bytes never forwarded behind an unanswered upgrade are copied like the rest and taken
+/// as HTTP at the close; only the request they make counts them unsent.
+#[test]
+fn unsent_bytes_in_an_upgrade_copy_count_on_their_own_request() {
+    let (rec, calls) = Recorder::for_tests(ROOM);
+    let mut p = Http1::new(&rec, CONN);
+    let up = b"GET /ws HTTP/1.1\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\
+        Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n";
+    feed(&mut p, Dir::Up, up, 0);
+    feed(&mut p, Dir::Up, b"GET /a HTTP/1.1\r\n\r\n", 0);
+    let unsent = b"GET /b HTTP/1.1\r\n\r\n";
+    let late = Box::new(p).end(Mono::now(), EndReason::Interrupted, false, unsent);
+    assert_eq!(late, None);
+    let mut got = Vec::new();
+    for (req, _, _) in opens(&calls, StreamKind::HttpReq) {
+        let (reason, tail) = end_of(&calls, req);
+        got.push((reason, tail["unsent"].as_u64()));
+    }
+    let n = Some(unsent.len() as u64);
+    assert_eq!(got, [None, None, n].map(|u| (EndReason::Complete, u)));
+}
+
 /// Bytes the close leaves unrecorded are a stop at the close: heads cut short on both sides, and
 /// the copy of an upgrade that was never answered. A close inside a chunk-size line holds none.
 #[test]
@@ -443,7 +468,7 @@ fn bytes_held_at_the_close_are_named() {
     p.feed(Dir::Down, t, resp).unwrap();
     p.feed(Dir::Up, t, req).unwrap();
     let late = Box::new(p)
-        .end(Mono::now(), EndReason::Complete, false, &mut 0)
+        .end(Mono::now(), EndReason::Complete, false, &[])
         .expect("a stop");
     let held = (resp.len() + req.len()) as u64;
     assert_eq!(
@@ -459,7 +484,7 @@ fn bytes_held_at_the_close_are_named() {
     p.feed(Dir::Up, t, up).unwrap();
     p.feed(Dir::Up, Mono::now(), &[0x81; 790]).unwrap();
     let late = Box::new(p)
-        .end(Mono::now(), EndReason::Complete, false, &mut 0)
+        .end(Mono::now(), EndReason::Complete, false, &[])
         .expect("a stop");
     assert_eq!((late.held, late.since), (790, t));
 
@@ -469,7 +494,7 @@ fn bytes_held_at_the_close_are_named() {
     let down = b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhello\r\n1";
     p.feed(Dir::Down, t, down).unwrap();
     assert_eq!(
-        Box::new(p).end(t, EndReason::Interrupted, false, &mut 0),
+        Box::new(p).end(t, EndReason::Interrupted, false, &[]),
         None
     );
 }

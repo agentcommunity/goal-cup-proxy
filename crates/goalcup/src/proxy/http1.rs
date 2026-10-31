@@ -14,7 +14,9 @@
 //! the relay writes the `parse_stopped` note and the `conn` GAP. Bytes held unrecorded at the close
 //! (a head cut short) are a [`Stop`] too, marked `at_close`: the relay writes only the GAP. A start
 //! line past the head guard keeps its first 64 KiB (method and path, or version and status) under
-//! GAP `http_head`; a request then has no `ver`.
+//! GAP `http_head`; a request then has no `ver`. Client bytes read and never forwarded (the
+//! upstream had gone) are taken at the close like the rest, and each stream they reach counts
+//! its share, head included, as END tail `unsent`.
 //!
 //! After a WebSocket upgrade request, client bytes are only copied (the `upgrade_copy` guard, then
 //! 5a) until the answer: a `101` with the right `Sec-WebSocket-Accept` hands both directions to
@@ -101,6 +103,12 @@ pub struct Http1 {
     /// bytes (5a counts the difference).
     seen: u64,
     kept: u64,
+    /// Client bytes being taken were never forwarded (fed at the close); each stream counts its
+    /// share as END tail `unsent`: the head being read, the copy's last bytes, the WebSocket's.
+    unsent: bool,
+    head_unsent: u64,
+    copy_unsent: u64,
+    ws_unsent: u64,
 }
 
 /// One direction: the head being read, or the body of the open stream.
@@ -138,6 +146,10 @@ impl Http1 {
             stopped: false,
             seen: 0,
             kept: 0,
+            unsent: false,
+            head_unsent: 0,
+            copy_unsent: 0,
+            ws_unsent: 0,
         }
     }
 
@@ -159,7 +171,7 @@ impl Http1 {
             .into_iter()
             .flatten()
         {
-            body.end(t, EndReason::DecodeError, 0, Some((reason, tail.clone())));
+            body.end(t, EndReason::DecodeError, Some((reason, tail.clone())));
         }
         if let Some(ws) = &mut self.ws {
             ws.stop(t, tail.clone());
@@ -194,10 +206,27 @@ impl Http1 {
             }
         };
         self.kept += took as u64;
+        if dir == Dir::Up && self.unsent {
+            self.ws_unsent += took as u64;
+        }
         fed.map_err(|_| Fault::Framing)
     }
 
+    /// Takes the client bytes copied since an upgrade request; the last `copy_unsent` of them
+    /// were never forwarded.
+    fn replay(&mut self, t: Mono) -> Result<(), Fault> {
+        let copy = self.copy.take().map(|c| c.1).unwrap_or_default();
+        let sent = copy.len() - std::mem::take(&mut self.copy_unsent) as usize;
+        let unsent = std::mem::replace(&mut self.unsent, false);
+        let fed = self.take(Dir::Up, t, &copy[..sent]);
+        self.unsent = true;
+        let fed = fed.and_then(|()| self.take(Dir::Up, t, &copy[sent..]));
+        self.unsent = unsent;
+        fed
+    }
+
     fn take(&mut self, dir: Dir, t: Mono, mut bytes: &[u8]) -> Result<(), Fault> {
+        let unsent = self.unsent && dir == Dir::Up;
         while !bytes.is_empty() {
             if self.ws.is_some() {
                 return self.ws_feed(dir, t, bytes);
@@ -209,6 +238,9 @@ impl Http1 {
                     return Err(Fault::Copy);
                 }
                 copy.extend_from_slice(bytes);
+                if unsent {
+                    self.copy_unsent += bytes.len() as u64;
+                }
                 return Ok(());
             }
             if dir == Dir::Down && self.down.body.is_none() && self.queue.is_empty() && !self.orphan
@@ -235,13 +267,19 @@ impl Http1 {
                 let before = body.raw;
                 let step = body.advance(t, bytes);
                 self.kept += body.raw - before;
+                if unsent {
+                    body.unsent += body.raw - before;
+                }
                 let (n, done) = step?;
                 if done && let Some(body) = side.body.take() {
-                    body.end(t, EndReason::Complete, 0, None);
+                    body.end(t, EndReason::Complete, None);
                 }
                 n
             } else {
                 let (n, done) = side.head.push(t, bytes)?;
+                if unsent {
+                    self.head_unsent += n as u64;
+                }
                 if done {
                     let head = std::mem::replace(&mut side.head, Head::new(true));
                     match dir {
@@ -304,7 +342,8 @@ impl Http1 {
             connect: method == "CONNECT",
             ws,
         });
-        self.up.body = Body::open(h, framing, codings, &head, t, &self.rec);
+        let unsent = std::mem::take(&mut self.head_unsent);
+        self.up.body = Body::open(h, framing, codings, (&head, unsent), t, &self.rec);
         if !self.early.1.is_empty() {
             let early = std::mem::take(&mut self.early.1);
             self.take(Dir::Down, t, &early)?;
@@ -342,8 +381,7 @@ impl Http1 {
             let deflate = ws::negotiate(offered.as_deref(), extensions.as_deref())
                 .map_err(|_| Fault::Framing)?;
             self.ws = Some(WsConn::open(&self.rec, self.conn, asked.sid, deflate));
-            let copy = self.copy.take().map(|c| c.1).unwrap_or_default();
-            return self.ws_feed(Dir::Up, t, &copy);
+            return self.replay(t);
         }
         // A response to no request: later server bytes answer none either until a request waits.
         let asked = self.queue.pop_front();
@@ -379,12 +417,10 @@ impl Http1 {
             meta,
         );
         self.kept += head.size;
-        self.down.body = Body::open(h, framing, codings, &head, t, &self.rec);
-        if asked.ws.is_some()
-            && let Some((_, copy)) = self.copy.take()
-        {
+        self.down.body = Body::open(h, framing, codings, (&head, 0), t, &self.rec);
+        if asked.ws.is_some() {
             // The upgrade was refused: the copied client bytes are HTTP.
-            self.take(Dir::Up, t, &copy)?;
+            self.replay(t)?;
         }
         Ok(())
     }
@@ -398,31 +434,35 @@ impl Parser for Http1 {
             .map_err(|fault| self.stop(t, fault))
     }
 
-    /// End open streams (interrupted when inside a message, complete otherwise; decode_error
-    /// after a stop). unsent_up goes to the open ws_up, or to the open http_req END tail up to
-    /// what its `Content-Length` still lacks (a chunked body takes it all).
+    /// Takes the client bytes never forwarded, then ends open streams (interrupted when inside
+    /// a message, complete otherwise; decode_error after a stop).
     fn end(
         mut self: Box<Self>,
         t: Mono,
         reason: EndReason,
         down_cut: bool,
-        unsent_up: &mut u64,
+        unsent: &[u8],
     ) -> Option<Stop> {
         let since = self.held(t).1;
         let mut late = None;
-        if !self.stopped && self.ws.is_none() {
+        if !self.stopped {
+            self.seen += unsent.len() as u64;
+            self.unsent = true;
+            let mut fed = self.take(Dir::Up, t, unsent);
+            self.unsent = false;
             // An upgrade never answered: its copy is HTTP after all. Server bytes still waiting
             // for a request answer none.
-            let copy = self.copy.take().map(|c| c.1).unwrap_or_default();
-            let mut fed = self.take(Dir::Up, t, &copy);
-            if fed.is_ok() && !self.early.1.is_empty() {
+            if fed.is_ok() && self.ws.is_none() {
+                fed = self.replay(t);
+            }
+            if fed.is_ok() && self.ws.is_none() && !self.early.1.is_empty() {
                 self.orphan = true;
                 let early = std::mem::take(&mut self.early.1);
                 fed = self.take(Dir::Down, t, &early);
             }
             late = match fed {
                 Err(fault) => Some(self.stop(t, fault)),
-                // A head the close cut short: relayed, and recorded in no stream.
+                // A head the close cut short: recorded in no stream.
                 Ok(()) => Some(self.held(t))
                     .filter(|h| h.0 > 0)
                     .map(|(held, _)| Stop {
@@ -435,16 +475,10 @@ impl Parser for Http1 {
             };
         }
         if let Some(ws) = self.ws.take() {
-            ws.end(t, reason, std::mem::take(unsent_up));
+            ws.end(t, reason, self.ws_unsent);
         }
         if let Some(body) = self.up.body.take() {
-            // Bytes past the length still owed are a later request's.
-            let own = match body.framing {
-                Framing::Length(left) => left.min(*unsent_up),
-                _ => *unsent_up,
-            };
-            *unsent_up -= own;
-            body.end(t, EndReason::Interrupted, own, None);
+            body.end(t, EndReason::Interrupted, None);
         }
         if let Some(body) = self.down.body.take() {
             // Only the server's close ends this body, and a cut close may come early.
@@ -454,7 +488,7 @@ impl Parser for Http1 {
             } else {
                 EndReason::Interrupted
             };
-            body.end(t, reason, 0, None);
+            body.end(t, reason, None);
         }
         late.map(|s| Stop {
             since: s.since.min(since),
@@ -464,7 +498,7 @@ impl Parser for Http1 {
 
     fn panicked(mut self: Box<Self>, t: Mono) -> Stop {
         let stop = self.stop(t, Fault::Panic);
-        let _ = self.end(t, EndReason::DecodeError, false, &mut 0);
+        let _ = self.end(t, EndReason::DecodeError, false, &[]);
         stop
     }
 }
@@ -864,6 +898,9 @@ struct Body {
     sink: Sink,
     /// Body bytes on the wire, chunk framing included (END tail `wire`).
     raw: u64,
+    /// Of the message's bytes on the wire, head included, those never forwarded (END tail
+    /// `unsent`).
+    unsent: u64,
 }
 
 /// Where a body's bytes go.
@@ -904,18 +941,22 @@ fn head_gap(h: &mut StreamHandle, head: &Head) {
 
 impl Body {
     /// Writes the `http_head` GAP when the head passed the guard; a message without a body ends
-    /// at once and gives `None`.
+    /// at once and gives `None`. `unsent`: the head's bytes never forwarded.
     fn open(
         mut h: StreamHandle,
         framing: Option<Framing>,
         codings: Result<Vec<Coding>, Unsupported>,
-        head: &Head,
+        (head, unsent): (&Head, u64),
         t: Mono,
         rec: &Recorder,
     ) -> Option<Body> {
         head_gap(&mut h, head);
         let Some(framing) = framing else {
-            h.end(t, EndReason::Complete, Some(json!({"wire": 0})));
+            let mut tail = json!({"wire": 0});
+            if unsent > 0 {
+                tail["unsent"] = json!(unsent);
+            }
+            h.end(t, EndReason::Complete, Some(tail));
             return None;
         };
         let dec = match codings {
@@ -934,13 +975,16 @@ impl Body {
             framing,
             sink,
             raw: 0,
+            unsent,
         })
     }
 
     /// Consumes what `input` holds of this body: `(consumed, done)`. `raw` grows by each piece
     /// taken, also when a later piece faults.
     fn advance(&mut self, t: Mono, input: &[u8]) -> Result<(usize, bool), Fault> {
-        let Body { framing, sink, raw } = self;
+        let Body {
+            framing, sink, raw, ..
+        } = self;
         let chunk = match framing {
             Framing::Length(left) => {
                 let take = usize::try_from(*left)
@@ -1010,13 +1054,7 @@ impl Body {
     }
 
     /// Ends the stream: the decoder's GAP if it had one, then the 5a GAP if `stop` is set.
-    fn end(
-        self,
-        t: Mono,
-        reason: EndReason,
-        unsent: u64,
-        stop: Option<(GapReason, Option<Value>)>,
-    ) {
+    fn end(self, t: Mono, reason: EndReason, stop: Option<(GapReason, Option<Value>)>) {
         let Sink {
             mut h,
             dec,
@@ -1057,8 +1095,8 @@ impl Body {
         if !trailers.is_empty() {
             tail["trailers"] = pairs(&trailers);
         }
-        if unsent > 0 {
-            tail["unsent"] = json!(unsent);
+        if self.unsent > 0 {
+            tail["unsent"] = json!(self.unsent);
         }
         h.end(t, reason, Some(tail));
     }

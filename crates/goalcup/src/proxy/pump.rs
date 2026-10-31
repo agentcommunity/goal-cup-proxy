@@ -2,7 +2,8 @@
 //! reads a chunk, writes it to the other side, and only then hands the same bytes to the
 //! connection's parser, inside `catch_unwind`. No deadline, idle timeout or cap. When one leg's
 //! error ends the relay, the part of a chunk the other side's writer already took is recorded
-//! too: it may have reached the peer.
+//! too: it may have reached the peer. The rest of a client chunk, never written, goes to the
+//! parser at the close to be recorded as `unsent`.
 
 use crate::pipeline::{EndReason, GapReason, Mono, Recorder, Sid, StreamHandle};
 use crate::proxy::ws::Dir;
@@ -51,17 +52,18 @@ pub trait Parser: Send {
     /// Err: parsing stopped for the connection (5a); every open stream already has its own GAP
     /// and ended `decode_error`. Later feeds are not made; `end` still is.
     fn feed(&mut self, dir: Dir, t: Mono, bytes: &[u8]) -> Result<(), Stop>;
-    /// The connection closed. unsent_up: client bytes read but never forwarded (upstream had
-    /// closed); the parser takes off what it puts on an open stream's END tail and leaves the
-    /// rest. A `Stop` names bytes still held unrecorded at the close. `down_cut`: the upstream
-    /// closed TLS without close_notify, so only a body that ends at the server's close is not
-    /// known whole; framing shows whether anything else is.
+    /// The connection closed. `unsent`: client bytes read but never forwarded (the upstream had
+    /// closed or failed), empty after a stop; the parser records them as if fed, and each stream
+    /// they reach gets its share as END tail `unsent`. A `Stop` names bytes still held
+    /// unrecorded at the close. `down_cut`: the upstream closed TLS without close_notify, so only
+    /// a body that ends at the server's close is not known whole; framing shows whether anything
+    /// else is.
     fn end(
         self: Box<Self>,
         t: Mono,
         reason: EndReason,
         down_cut: bool,
-        unsent_up: &mut u64,
+        unsent: &[u8],
     ) -> Option<Stop>;
     /// `feed` panicked: every open stream gets its GAP and ends `decode_error`; the `Stop` counts
     /// the bytes not recorded, the panicking chunk included.
@@ -74,11 +76,6 @@ pub struct Pumped<C, U> {
     pub upstream: U,
     pub plain_up: u64,
     pub plain_down: u64,
-    pub unsent_up: u64,
-    /// Of `unsent_up`, the bytes no open `http_req` or `ws_up` END tail took: a request head
-    /// never forwarded, a pipelined request behind a body. Recorded nowhere yet: PRD-01 allows
-    /// `unsent` on no `conn` END (owner question, wire-proxy log 30 Oct).
-    pub unplaced_up: u64,
     /// `complete` when both sides closed cleanly, else `interrupted`.
     pub reason: EndReason,
     /// The upstream leg errored (reset, TLS error, read or write error), not a clean close.
@@ -152,10 +149,10 @@ impl Pump<'_> {
 
     /// The written part of `dir`'s chunk in flight is moved: counted, shown to `tap`, parsed.
     /// Returns the rest, read and never written.
-    fn settle(&self, dir: Dir) -> u64 {
+    fn settle(&self, dir: Dir) -> Bytes {
         let slot = &self.inflight[dir as usize];
         let (chunk, n) = std::mem::take(&mut *slot.lock().unwrap_or_else(|e| e.into_inner()));
-        let rest = (chunk.len() - n) as u64;
+        let rest = chunk.slice(n..);
         if n == 0 {
             return rest;
         }
@@ -250,7 +247,7 @@ where
     };
     // A leg that errored, or was dropped mid-write, leaves the part its writer took; the rest of
     // a client chunk never reached the upstream.
-    let unsent_up = pump.settle(Dir::Up);
+    let rest = pump.settle(Dir::Up);
     pump.settle(Dir::Down);
     let reason = match (lu, ld) {
         (Leg::Eof | Leg::Cut, Leg::Eof | Leg::Cut) => EndReason::Complete,
@@ -259,11 +256,17 @@ where
     let down_cut = matches!(ld, Leg::Cut);
     let [up, down] = pump.moved.map(AtomicU64::into_inner);
     let Shared { parser, mut stop } = pump.shared.into_inner().unwrap_or_else(|e| e.into_inner());
-    let mut unplaced_up = unsent_up;
+    // Never relayed, so not moved or tapped; after a stop the conn GAP counts them.
+    let unsent = match &mut stop {
+        Some(s) => {
+            s.held += rest.len() as u64;
+            Bytes::new()
+        }
+        None => rest,
+    };
     if let Some(p) = parser {
         let t = rec.now();
-        let left = &mut unplaced_up;
-        let ended = catch_unwind(AssertUnwindSafe(move || p.end(t, reason, down_cut, left)));
+        let ended = catch_unwind(AssertUnwindSafe(|| p.end(t, reason, down_cut, &unsent)));
         match ended {
             Ok(Some(late)) if stop.is_none() => {
                 if !late.at_close {
@@ -288,8 +291,6 @@ where
         upstream: ur.unsplit(uw),
         plain_up: up,
         plain_down: down,
-        unsent_up,
-        unplaced_up,
         reason,
         upstream_failed: matches!(lu, Leg::WriteErr) || matches!(ld, Leg::ReadErr),
     }
