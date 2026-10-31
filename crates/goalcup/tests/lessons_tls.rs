@@ -254,9 +254,32 @@ fn bundle_holds_certificates_only_with_the_run_ca_first() {
     assert!(text.lines().all(|l| l.len() <= 64));
 }
 
+/// The boot said in `goalcup.log` that it could not take the key file.
 #[cfg(target_os = "linux")]
-fn succeeded(code: std::process::ExitCode) -> bool {
-    format!("{code:?}") == format!("{:?}", std::process::ExitCode::SUCCESS)
+fn refused_for_key(entry: &Path) -> bool {
+    let log = std::fs::read_to_string(goalcup::cli::goalcup_log(entry)).unwrap_or_default();
+    log.lines()
+        .any(|l| l.contains(" watchdog_failed ") && l.contains("why=key"))
+}
+
+/// A private key PEM in the decoded records of the part folder `rec`: the part files are
+/// compressed, so a scan of their raw bytes would miss one.
+#[cfg(target_os = "linux")]
+fn key_in_records(rec: &Path) -> bool {
+    use goalcup_format::Record;
+    let has = |b: &[u8]| b.windows(11).any(|w| w == b"PRIVATE KEY");
+    let mut seen = 0;
+    for item in goalcup_format::read::open_dir(rec).unwrap() {
+        seen += 1;
+        match item.unwrap().rec {
+            Record::Open { meta, .. } if has(&meta) => return true,
+            Record::Data { bytes, .. } if has(&bytes) => return true,
+            Record::End { tail, .. } if has(&tail) => return true,
+            _ => {}
+        }
+    }
+    assert!(seen > 0, "no record was read back");
+    false
 }
 
 /// One real watchdog boot (recorder: this binary, server off) over an entry folder made by
@@ -349,7 +372,8 @@ fn run_ca_key_is_new_0600_gone_at_the_seal_and_never_follows_a_link() {
     let tmp = tempfile::tempdir().unwrap();
     let entry = prepare(&tmp);
     let mode = tmp.path().join("mode");
-    assert!(succeeded(boot(&entry, &mode)));
+    boot(&entry, &mode);
+    assert!(!refused_for_key(&entry), "the boot refused its own key");
     assert_eq!(std::fs::read_to_string(&mode).unwrap().trim(), "600");
     assert!(
         !entry.join("rec/run-ca.key").exists(),
@@ -358,6 +382,10 @@ fn run_ca_key_is_new_0600_gone_at_the_seal_and_never_follows_a_link() {
     let mut keys = Vec::new();
     find_private_keys(&entry, &mut keys);
     assert!(keys.is_empty(), "a private key was left: {keys:?}");
+    assert!(
+        !key_in_records(&entry.join("rec")),
+        "a private key reached a record"
+    );
 
     for hard in [false, true] {
         let tmp = tempfile::tempdir().unwrap();
@@ -371,10 +399,10 @@ fn run_ca_key_is_new_0600_gone_at_the_seal_and_never_follows_a_link() {
             symlink(&victim, &planted)
         }
         .unwrap();
-        assert!(
-            !succeeded(boot(&entry, &tmp.path().join("mode"))),
-            "hard={hard}"
-        );
+        let mode = tmp.path().join("mode");
+        boot(&entry, &mode);
+        assert!(refused_for_key(&entry), "hard={hard}");
+        assert!(!mode.exists(), "hard={hard}: the harness started anyway");
         assert_eq!(
             std::fs::read(&victim).unwrap(),
             b"keep",

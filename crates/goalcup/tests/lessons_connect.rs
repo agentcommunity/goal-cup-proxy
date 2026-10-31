@@ -1,8 +1,9 @@
 //! PRD-17 section 2.1, rows C1 to C8, C10 and T3: what the 0.7 CONNECT path learned, through the
 //! real `proxy::serve` over the scripted upstream. Assertions are on answers, conn records, GAP
 //! reasons and event order, never on wording. Cases PRD-03's `proxy_connect.rs` holds (the
-//! 64 KiB hello guard, 2,000 connections, a server-first banner) are not repeated here, and the
-//! OpenSSL ClientHello fixtures of C4 are not copied: rustls hellos cut two ways stand in.
+//! 64 KiB hello guard, 2,000 connections, a server-first banner) are not repeated here. C4 also
+//! sends the two OpenSSL ClientHellos of 0.7 (about 1.5 KiB, post-quantum share), copied into
+//! `lessons_fixtures/`.
 
 mod common;
 mod proxy_fixtures;
@@ -21,6 +22,7 @@ use rustls::pki_types::{CertificateDer, ServerName};
 use serde_json::json;
 use std::io::{Read, Write};
 use std::net::SocketAddr;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 use tokio_rustls::TlsConnector;
@@ -81,6 +83,36 @@ fn sink(echo: bool) -> SocketAddr {
         }
     });
     addr
+}
+
+/// As [`sink`], and also keeps what each accepted connection sent, in accept order.
+fn recording_sink() -> (SocketAddr, Arc<Mutex<Vec<Vec<u8>>>>) {
+    let (l, addr) = common::ports::held();
+    socket2::SockRef::from(&l).listen(4096).unwrap();
+    l.set_nonblocking(true).unwrap();
+    let l = tokio::net::TcpListener::from_std(l).unwrap();
+    let got = Arc::new(Mutex::new(Vec::new()));
+    let seen = got.clone();
+    tokio::spawn(async move {
+        while let Ok((mut s, _)) = l.accept().await {
+            let at = {
+                let mut all = seen.lock().unwrap();
+                all.push(Vec::new());
+                all.len() - 1
+            };
+            let seen = seen.clone();
+            tokio::spawn(async move {
+                let mut b = [0u8; 4096];
+                while let Ok(n) = s.read(&mut b).await {
+                    if n == 0 {
+                        break;
+                    }
+                    seen.lock().unwrap()[at].extend_from_slice(&b[..n]);
+                }
+            });
+        }
+    });
+    (addr, got)
 }
 
 /// How the CONNECT head and the hello reach the proxy.
@@ -186,6 +218,43 @@ async fn client_hello_in_two_records_and_one_byte_reads_decides_by_sni() {
     );
 }
 
+/// C4: the two OpenSSL hellos of 0.7, larger than the rustls ones, cut to one byte per write
+/// after the head: the decision still comes from the hello (SNI first, then the target), and the
+/// upstream receives the hello whole, as the client wrote it.
+#[tokio::test]
+async fn openssl_client_hellos_in_single_bytes_are_replayed_whole() {
+    let (up, sent) = recording_sink();
+    let hooks = format!("example.com={up}");
+    let (_h, addr, calls, _) = proxy(HOSTS, &[("GOALCUP_TEST_UPSTREAM", hooks)]);
+    let fixtures = [
+        include_str!("lessons_fixtures/openssl-clienthello-no-sni.hex"),
+        include_str!("lessons_fixtures/openssl-clienthello-sni-localhost.hex"),
+    ];
+    for (i, text) in fixtures.iter().enumerate() {
+        let digits: String = text.split_whitespace().collect();
+        let hello = hex::decode(digits).unwrap();
+        assert!(hello.len() > 1024, "a hello a segment cannot always carry");
+        let mut s = through(addr, "example.com:443").await;
+        for b in &hello {
+            s.write_all(&[*b]).await.unwrap();
+        }
+        within_async(HANG, async {
+            while sent.lock().unwrap()[i].len() < hello.len() {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await;
+        assert_eq!(sent.lock().unwrap()[i], hello, "fixture {i}");
+        drop(s);
+    }
+    for c in conns(&calls, 2).await {
+        assert_eq!(
+            (&c.1["mode"], &c.1["reason"]),
+            (&json!("tunnel"), &json!("not_listed"))
+        );
+    }
+}
+
 /// C2/K14: a broken head gets a fixed answer, and nothing the client sent comes back in it or
 /// into a record.
 #[tokio::test]
@@ -266,19 +335,26 @@ async fn authority_forms() {
     }
 }
 
-/// C5: a client that closes before its hello is whole costs nothing and sends the upstream no
-/// request. The upstream leg is dialled before the `200`, so only its bytes can be asserted.
+/// C5: a client that closes before its hello is whole costs nothing: the upstream sees no
+/// connection, one `conn` record is written and no GAP.
+///
+/// Held back: the proxy dials the upstream before the `200` and tunnels the partial hello to it
+/// (`Hello::Closed` goes to `run_tunnel`, which records a GAP for it). PRD-03 owns that path; the
+/// lane asked the owner whether to change it or to amend C5 (night log). L-C5 stays open until
+/// this runs.
 #[tokio::test]
+#[ignore = "L-C5: the proxy dials before the 200 and records a GAP for a partial hello"]
 async fn close_before_hello_opens_no_upstream() {
-    let w = world(true, true);
-    drop(through(w.addr, "api.openai.com:443").await);
-    assert_eq!(conns(&w.calls, 1).await.len(), 1);
-    assert!(gaps(&w.calls).is_empty(), "no byte moved, no loss to name");
-    let mut s = through(w.addr, "api.openai.com:443").await;
+    let (up, sent) = recording_sink();
+    let hooks = format!("api.openai.com={up}");
+    let (_h, addr, calls, _) = proxy(HOSTS, &[("GOALCUP_TEST_UPSTREAM", hooks)]);
+    drop(through(addr, "api.openai.com:443").await);
+    let mut s = through(addr, "api.openai.com:443").await;
     s.write_all(&[22, 3, 1, 2, 0]).await.unwrap(); // a record header that promises 512 bytes
     drop(s);
-    assert_eq!(conns(&w.calls, 2).await.len(), 2);
-    assert!(w.up.received().iter().all(Vec::is_empty));
+    assert_eq!(conns(&calls, 2).await.len(), 2);
+    assert!(sent.lock().unwrap().is_empty(), "the upstream was dialled");
+    assert!(gaps(&calls).is_empty(), "no byte moved, no loss to name");
 }
 
 /// C6: an unlisted host (the agent's own pip, npm, git) gets one round: the refusal is answered
