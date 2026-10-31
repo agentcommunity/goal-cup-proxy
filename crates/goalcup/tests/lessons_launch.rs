@@ -101,10 +101,17 @@ fn launch_helper() {
             say(&format!("resumed {}", describe(status)));
         }
         "ctrl_c" => {
-            let child = start(
-                "while read k v; do case $k in SigIgn:) echo ign=$v;; esac; done < /proc/$$/status; \
-                 echo up; exec sleep 120",
-            );
+            // No shell in between: a shell may ignore the terminal's signals for its own reasons.
+            let argv = vec!["120".to_string()];
+            let child =
+                spawn::harness(Path::new("/bin/sleep"), &argv, &harness_env(), None).expect("start");
+            let status = std::fs::read_to_string(format!("/proc/{}/status", child.id()))
+                .expect("harness status");
+            let mask = status
+                .lines()
+                .find_map(|line| line.strip_prefix("SigIgn:"))
+                .expect("SigIgn line");
+            say(&format!("ign={}", mask.trim()));
             let mut shield = Shield::take().expect("shield");
             say("shielded");
             let status = wait_resuming(child.id()).expect("wait");
@@ -302,9 +309,7 @@ fn ctrl_c_reaches_the_harness_and_the_watchdog_lives() {
     let helper = run_helper("ctrl_c", &pty);
     let master = pty.master.as_raw_fd();
     let mut seen = Vec::new();
-    let read = pump(master, &mut seen, |t| {
-        t.contains("shielded") && t.contains("up")
-    });
+    let read = pump(master, &mut seen, |t| t.contains("shielded"));
     assert_eq!(read, Read::Matched, "{}", String::from_utf8_lossy(&seen));
     type_on(master, &[0x03]);
     let text = finish(helper, pty);
