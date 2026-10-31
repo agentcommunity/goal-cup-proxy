@@ -205,7 +205,14 @@ pub fn run1(name: &str, shape: Shape) -> PathBuf {
         r.end(&mut e);
     }
     if shape == Vendor {
-        tunnel(&mut e, "telemetry.example.test", "shared", "vendor", 6_900_000, true);
+        tunnel(
+            &mut e,
+            "telemetry.example.test",
+            "shared",
+            "vendor",
+            6_900_000,
+            true,
+        );
     }
     let dir = e.seal();
     let edit = |v: &mut Value| {

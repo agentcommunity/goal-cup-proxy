@@ -154,7 +154,11 @@ fn a_pinned_model_host_exits_1_with_the_log_check_named() {
     // The shared list's host, and the same host as the participant's own (kind `other`).
     for (name, shape) in [("r4-dodger", Shape::Dodger), ("r4-own", Shape::DodgerOwn)] {
         let (code, v) = check(&run1(name, shape), &[]);
-        assert_eq!((code, ids_with(&v, "fail")), (1, Vec::<String>::new()), "{name}");
+        assert_eq!(
+            (code, ids_with(&v, "fail")),
+            (1, Vec::<String>::new()),
+            "{name}"
+        );
         assert_eq!(result(&v, "listed_hosts_decrypted"), "named", "{name}");
         assert_eq!(result(&v, "wire_keeps_up"), "named", "{name}");
     }
