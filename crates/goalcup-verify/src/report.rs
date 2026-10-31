@@ -9,12 +9,7 @@ use serde_json::{Map, Value, json};
 use std::path::Path;
 
 /// Checks a later slice builds: in the report as `skip`, so readers see every id now.
-const LATER: [&str; 4] = [
-    "history_complete",
-    "wire_keeps_up",
-    "threads_match",
-    "subagents_present",
-];
+const LATER: [&str; 1] = ["history_complete"];
 const NOT_BUILT: &str = "not built in this slice";
 
 /// The report as JSON, the exit code, and the text for stderr.
@@ -92,7 +87,8 @@ fn entry(name: String, o: &Outcome, checks: &[Check]) -> Value {
         "req_holes": c.get("req_holes"), "gaps": gaps, "lost_bytes": c.get("lost_bytes"),
         "lost_unknown": c.get("lost_unknown"), "after_stop_bytes": c.after_stop,
         "mask_failclosed_bytes": c.get("mask_failclosed_bytes"), "off_ms": c.get("off_ms"),
-        "tunnels": c.get("tunnels"), "native_files": c.get("native_files"), "threads": null});
+        "tunnels": c.get("tunnels"), "native_files": c.get("native_files"),
+        "threads": o.legs.n_threads});
     let checks: Vec<Value> = checks
         .iter()
         .map(|k| {
@@ -103,10 +99,10 @@ fn entry(name: String, o: &Outcome, checks: &[Check]) -> Value {
     let s = |k: &str| o.start.get(k).cloned().unwrap_or(Value::Null);
     let reason = o.seal.as_ref().map(|s| &s["reason"]);
     json!({"entry": name, "sealed": o.sealed, "seal_reason": reason, "boots": o.boots,
-        "connector": s("connector"), "keep": s("keep"), "label": label, "harness_log": null,
-        "provider_errors": null,
+        "connector": s("connector"), "keep": s("keep"), "label": label, "harness_log": o.legs.harness_log,
+        "provider_errors": o.legs.provider_errors,
         "bytes": {"raw": o.raw, "compressed": o.compressed, "framing": o.raw.saturating_sub(o.data_bytes)},
-        "links": o.links, "checks": checks, "counts": counts, "history": null, "threads": []})
+        "links": o.links, "checks": checks, "counts": counts, "history": null, "threads": o.legs.threads})
 }
 
 /// The text form of one entry: `why` per failed or named check, then the coverage line.
@@ -120,9 +116,8 @@ fn text(name: &str, o: &Outcome, checks: &[Check]) -> String {
         t += "  The entry is not sealed.\n";
     }
     t += &format!(
-        "Recorded: {} requests. Recording off: {} times, {} s. The harness's own log is not read \
-         for this harness (optional). History check: skipped, {NOT_BUILT}.\n",
-        c.get("http_post").saturating_add(c.get("ws_up_msgs")),
+        "{} Recording off: {} times, {} s.\n",
+        o.legs.coverage,
         c.off_spans,
         c.get("off_ms") / 1000
     );
