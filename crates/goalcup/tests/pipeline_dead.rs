@@ -322,8 +322,9 @@ fn a_pruned_boot_with_counts_behind_seals_the_bytes_written() {
     let (_, seal) = down_and_seal(&dead);
     assert_eq!(seal["totals"]["wire_bytes"], json!(total));
     assert_eq!(seal["totals"]["http_req"], json!(1));
-    assert_eq!(seal["totals"]["http_post"], json!(1), "a POST ended after the line");
-    assert_eq!(seal["totals"]["ws_up_msgs"], json!(10), "messages after the line");
+    // A POST and WebSocket messages ended after the kept line, their OPENs pruned.
+    assert_eq!(seal["totals"]["http_post"], json!(1));
+    assert_eq!(seal["totals"]["ws_up_msgs"], json!(10));
     assert_eq!(seal["totals"]["req_whole"], json!(11));
     assert_eq!(facts.totals.counts.wire_bytes, total);
     let totals = entry_totals(&dead);
