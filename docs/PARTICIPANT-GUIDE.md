@@ -5,6 +5,10 @@ You give one coding agent one prompt, then leave it alone for 168 hours. Goal Cu
 record. This page takes you from install to the end of your run. The rules are in
 [RULES.md](RULES.md), and what the record holds is in [RECORD-FORMAT.md](RECORD-FORMAT.md).
 
+> **Build state.** On this branch `start`, `continue`, `recover`, `seal` and `upload` print "not built
+> yet", so sections 5 to 8 describe the 1.0 release and cannot be followed yet. This note goes in the
+> final pass, once the recorder run and `start` have merged.
+
 ## What goalcup does for you
 
 - It writes down your agent's model requests and session files for the whole run, subagents too,

@@ -26,6 +26,12 @@ The build uses each default below until the owner answers.
   website database. Default: shared; no migrations, read-only use.
 - O2, Copilot CLI and a subscription. Default: try the key; "not verified" if it fails.
 
+## Still to decide
+
+- Judging and result dates.
+- Event capacity limits.
+- Final judging rubric, shortlist threshold and appeal process.
+
 ## Known issues
 
 - Only Linux x86_64 is built and tested in this build. macOS (arm64 and x86_64) and Linux arm64 are

@@ -14,6 +14,10 @@ Agents working in this repository: read [AGENTS.md](AGENTS.md) first.
 
 ## Quick start for participants
 
+> **Build state.** On this branch `goalcup start`, `continue`, `recover`, `seal` and `upload` print
+> "not built yet": the recorder run and the `start` command (PRD-02, PRD-10) have not merged. This page
+> describes the 1.0 release, and this note goes in the final pass.
+
 The full walk-through, with every message you will see, is the
 [participant's guide](docs/PARTICIPANT-GUIDE.md). The contract is [RULES](docs/RULES.md).
 The harnesses goalcup records are listed in [docs/harnesses/README.md](docs/harnesses/README.md).
@@ -49,7 +53,7 @@ The harnesses goalcup records are listed in [docs/harnesses/README.md](docs/harn
 **During the run.**
 
 - The server is the clock. The run ends 168 hours after the server's official start.
-- Check on it from a second terminal with `goalcup status`. Its `Next:` line says what to do.
+- Check on it from a second terminal with `goalcup status`.
 - Your agent may run `goalcup time-left` to ask how much time is left. goalcup never sends anything
   to the agent: no reminders, no "keep going", no restarts.
 - If the agent stops early (a crash, a reboot, a closed window), run `goalcup continue`.
@@ -77,7 +81,7 @@ command could not do its job.
 | `goalcup start [--harness <ID>] [--practice \| --test] [--repo <OWNER/NAME>] [--prompt <FILE>] [--connector <FILE>] [--hosts <FILE>]` | Start a run: open your harness in the current folder and record it. A real run needs `--repo`. `--test` is for organizers. `--connector` and `--hosts` load a file and are for practice and test runs. |
 | `goalcup continue [<RUN>] [--connector <FILE>] [--hosts <FILE>]` | Start your agent again in the same run, after it stopped early. |
 | `goalcup recover [<RUN>]` | Restart recording when `status` says recording stopped and your agent still runs. |
-| `goalcup status [<PART>] [--json]` | Show how the run is doing, its parts and a `Next:` line. |
+| `goalcup status [<PART>] [--json]` | Show how the run is doing, and its parts. |
 | `goalcup seal [<PART>] [--yes]` | End a part now: stop recording, finish its record files and upload them. |
 | `goalcup upload [<PART>]` | Send what is not uploaded yet. Safe to repeat. |
 | `goalcup time-left` | Show how much time the run has left. The agent may run it too. |

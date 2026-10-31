@@ -156,7 +156,7 @@ server copy with the participant's own entry, and `--known <file>` (one secret v
 secrets check. `dump` prints one JSON line per record. `usage` is the next section. The report and its exit codes are in
 [RECORD-FORMAT](RECORD-FORMAT.md#the-goalcup-verify-check---json-report).
 
-## The usage job
+## The usage command
 
 `goalcup-verify usage` lists the model requests of a fetched run with the model, thread and tokens of
 each. It reads the folder offline: no credential, no network, nothing written to the folder it reads.
@@ -177,20 +177,11 @@ entry that cannot be read gets one line on standard error naming its folder, and
 decoding stops part way through an entry, its summary still comes out with `read_error` true and a line
 on standard error: the counts are of what was read.
 
-Read the summary this way (all keys are in
-[RECORD-FORMAT](RECORD-FORMAT.md#the-goalcup-verify-usage-files)):
-
-- `tokens.merged` is the sum over every request counted once; a request seen on the wire and in the
-  harness's session file is not counted twice. `coverage` says how many matched and how many each side
-  saw alone.
-- **`null` means not said, never zero.** A token key the provider did not report is `null` on its row,
-  and a sum is `null` when no row said it. `tokens.calls_without_usage` counts the requests that gave
-  no token numbers at all.
-- `readable` false with `reason` `no_reader` means this connector has no session reader: the file holds
-  the wire requests only, and the harness's own counts are absent, not zero.
-- `threads` lists the root agent and its subagents where the harness names them; `status` counts
-  requests by `ok`, `rate_limited`, `error`, `cancelled` and `unknown`.
-- Neither file holds body text or a session file path.
+**`null` means not said, never zero.** A token key the provider did not report is `null`, and a sum
+is `null` when no row said it. Every key, the merged count and the coverage line are in
+[RECORD-FORMAT](RECORD-FORMAT.md#the-goalcup-verify-usage-files). Neither file holds body text or a
+session file path. The step that puts these files in R2 comes with the usage job script (PRD-09); until
+it merges, run the commands above by hand.
 
 ## Runs whose recording is off
 
