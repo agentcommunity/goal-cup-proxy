@@ -44,6 +44,7 @@ struct Fixture {
     _tmp: tempfile::TempDir,
     /// Marker files.
     d: PathBuf,
+    home: PathBuf,
     entry_dir: PathBuf,
 }
 
@@ -67,6 +68,7 @@ impl Fixture {
         Fixture {
             _tmp: tmp,
             d,
+            home,
             entry_dir,
         }
     }
@@ -128,7 +130,7 @@ impl Fixture {
             server_time: None,
             local_wall: 0,
             workspace: self.d.clone(),
-            home: plan.home.clone(),
+            home: self.home.clone(),
             connector: plan.connector.clone(),
             harness_version: None,
             keep: true,

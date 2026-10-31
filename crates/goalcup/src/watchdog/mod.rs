@@ -125,7 +125,8 @@ pub struct StartFacts {
     pub server_time: Option<u64>,
     pub local_wall: u64,
     pub workspace: PathBuf,
-    /// The harness's isolated home, `LaunchPlan.home`, for `upload::UploadCtx`.
+    /// `$GOALCUP_HOME`, for `upload::UploadCtx.home` (the queue of older entries). Not the
+    /// harness's isolated home.
     pub home: PathBuf,
     /// `LaunchPlan.connector` (S3 `connector::ConnectorRef`: id, name, sha256, source), for the
     /// `start` keys `connector`, `connector_source` and `connector_sha256`.
@@ -682,7 +683,7 @@ mod tests {
                 server_time: Some(u64::MAX),
                 local_wall: u64::MAX,
                 workspace: env.workspace.clone(),
-                home: plan.home.clone(),
+                home: env.goalcup_home.clone(),
                 connector: plan.connector.clone(),
                 harness_version: Some("1.2.3 (fake)".into()),
                 keep: true,
