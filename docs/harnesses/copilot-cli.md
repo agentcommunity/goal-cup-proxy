@@ -60,6 +60,7 @@ All from the [config directory reference](https://docs.github.com/en/copilot/ref
 
 - Auto-update is on by default (`autoUpdate`, [docs](https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-config-dir-reference)). `COPILOT_AUTO_UPDATE=false` turns it off; that name is read in the package loader and is not on the docs pages read. The connector sets it.
 - Unknown: the CA layer, subagent file layout, a BYOK start with no GitHub login and no `gh` (issue 5256 describes a busy loop on Windows).
+- Unknown: whether the CA layer holds with a DeepSeek key on the `anthropic` provider type.
 
 ## Run without permission prompts
 
@@ -67,4 +68,4 @@ All from the [config directory reference](https://docs.github.com/en/copilot/ref
 
 ## Pad result
 
-Not yet run on the pad. Expected: likely verified if the CA layer holds with the DeepSeek key on the `anthropic` type. [`connectors/tiers.toml`](../../connectors/tiers.toml) is the record.
+Not yet run on the pad. The tier and the runs are in [`connectors/tiers.toml`](../../connectors/tiers.toml).

@@ -69,4 +69,4 @@ The connector sets the four XDG variables under the isolated home and leaves `HO
 
 ## Pad result
 
-Not yet run on the pad. Tier: not verified: not yet run on the pad. [`connectors/tiers.toml`](../../connectors/tiers.toml) is the record.
+Not yet run on the pad. The tier and the runs are in [`connectors/tiers.toml`](../../connectors/tiers.toml).

@@ -62,6 +62,7 @@ The connector sets `CLINE_DIR` to the isolated home and `CLINE_DATA_DIR` to `dat
 
 - Unknown: the file format of a session folder, whether subagents write their own folder, whether the Bun binary trusts the run CA through `NODE_EXTRA_CA_CERTS` on a real run, Windows paths.
 - No `no_prompts` row: the docs name no settings key for approval and `--auto-approve` defaults to true.
+- Unknown: whether a run shows `HTTPS_PROXY` and the run CA honoured and no hub started.
 
 ## Run without permission prompts
 
@@ -69,4 +70,4 @@ None needed: auto-approve defaults to `true` for the CLI (`--auto-approve`, [doc
 
 ## Pad result
 
-Not yet run on the pad. Tier: not verified until the first row shows `HTTPS_PROXY` and the run CA honoured and no hub started. [`connectors/tiers.toml`](../../connectors/tiers.toml) is the record.
+Not yet run on the pad. The tier and the runs are in [`connectors/tiers.toml`](../../connectors/tiers.toml).

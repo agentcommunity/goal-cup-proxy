@@ -40,7 +40,7 @@ The connector sets `CODEX_HOME` and `CODEX_SQLITE_HOME` to the isolated home. Ro
 
 ## 5. Auth
 
-- ChatGPT sign-in: `auth.json` has `auth_mode` `chatgpt` (measured). API key: `printenv OPENAI_API_KEY | codex login --with-api-key` stores it in `auth.json`; `CODEX_API_KEY` works for `exec` only (source). goalcup removes `OPENAI_API_KEY` from the child environment, so a key set only in the shell does not reach a run.
+- ChatGPT sign-in: `auth.json` has `auth_mode` `chatgpt` (measured). API key: `printenv OPENAI_API_KEY | codex login --with-api-key` stores it in `auth.json`; `CODEX_API_KEY` works for `exec` only (source). `OPENAI_API_KEY` in the shell passes through to Codex unchanged; goalcup never reads it.
 - Does the harness have a variable that moves its config and login? Yes, `CODEX_HOME`; the connector sets it. The connector lists `auth.json` and `.env` as secret files. Copying `auth.json` to a second home and refreshing there invalidated the first token (measured), so one isolated home is shared by all runs.
 - Credentials are in `auth.json` on macOS (measured); Linux and Windows: unknown. Token-count events carry the account's plan type and credit balance; the connector's `mask` rules cover the installation id, the safety identifier and the turn-state value.
 
@@ -80,4 +80,4 @@ Codex asks for approval whenever its sandbox blocks a command, and a run allows 
 
 ## Pad result
 
-Not yet run on the pad. Tier: not verified: not yet run on the pad. [`connectors/tiers.toml`](../../connectors/tiers.toml) is the record.
+Not yet run on the pad. The tier and the runs are in [`connectors/tiers.toml`](../../connectors/tiers.toml).

@@ -75,4 +75,4 @@ Claude Code asks before it runs a command or writes outside its rules, and a run
 
 ## Pad result
 
-Not yet run on the pad. Tier: not verified: not yet run on the pad. [`connectors/tiers.toml`](../../connectors/tiers.toml) is the record.
+Not yet run on the pad. The tier and the runs are in [`connectors/tiers.toml`](../../connectors/tiers.toml).

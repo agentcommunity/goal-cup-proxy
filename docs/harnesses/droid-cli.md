@@ -65,6 +65,7 @@ Source words: "docs" is [docs.factory.com](https://docs.factory.com/cli/configur
 ## 9. Quirks and open questions
 
 - Unknown: subagent file layout, the Windows session paths, whether `--resume --last` is valid, and whether a second Droid already running holds the daemon for the whole account.
+- No Factory account was available this cycle, so no run exists.
 
 ## Run without permission prompts
 
@@ -72,4 +73,4 @@ Source words: "docs" is [docs.factory.com](https://docs.factory.com/cli/configur
 
 ## Pad result
 
-Not yet run on the pad. Tier: not verified: no key (no Factory account this cycle). [`connectors/tiers.toml`](../../connectors/tiers.toml) is the record.
+Not yet run on the pad. The tier and the runs are in [`connectors/tiers.toml`](../../connectors/tiers.toml).

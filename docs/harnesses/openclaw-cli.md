@@ -68,4 +68,4 @@ No-approval host exec is the default (`tools.exec.mode` unset; docs say `full`).
 
 ## Pad result
 
-Not yet run on the pad. Expected tier: not verified: subagents need the Gateway, which goalcup does not start. [`connectors/tiers.toml`](../../connectors/tiers.toml) is the record.
+Not yet run on the pad. The tier and the runs are in [`connectors/tiers.toml`](../../connectors/tiers.toml).

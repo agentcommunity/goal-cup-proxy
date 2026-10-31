@@ -63,6 +63,7 @@ Source words: "docs" is [moonshotai.github.io/kimi-code](https://moonshotai.gith
 
 - The managed Kimi service and a custom provider are different hosts; a run on a DeepSeek provider never calls `api.kimi.com` for models.
 - Unknown: quitting, exit codes, whether `--continue` finds the session after a home switch, Windows paths.
+- Unknown: whether `NODE_EXTRA_CA_CERTS` is honoured; the first run settles it.
 
 ## Run without permission prompts
 
@@ -70,4 +71,4 @@ None set. `--yolo` ("ask when needed") and `--auto` ("never ask") are launch fla
 
 ## Pad result
 
-Not yet run on the pad. [`connectors/tiers.toml`](../../connectors/tiers.toml) is the record; the `NODE_EXTRA_CA_CERTS` row above is what the first run settles.
+Not yet run on the pad. The tier and the runs are in [`connectors/tiers.toml`](../../connectors/tiers.toml).

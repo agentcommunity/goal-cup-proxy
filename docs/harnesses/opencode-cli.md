@@ -62,6 +62,7 @@ Both connectors set the four XDG folders under the isolated home and read `openc
 
 - Auto-update: 1.x never installs by itself since 1.19.0 and only notifies; `OPENCODE_DISABLE_AUTOUPDATE=1` ([docs](https://opencode.ai/docs/cli/)), which both connectors set. 2.x has an `update` setting, `"disable"`, `"notify"` (default) or `"auto"`, read from the global config only ([docs](https://opencode.ai/v2/docs/config)). Whether 2.x also reads the environment switch: source only.
 - Unknown: whether `--continue` picks the right session after a home switch on 2.x.
+- Unknown: whether `--standalone` and the version rule hold on a real 2.x binary.
 
 ## Run without permission prompts
 
@@ -69,4 +70,4 @@ Both connectors set the four XDG folders under the isolated home and read `openc
 
 ## Pad result
 
-Not yet run on the pad. Expected: 1.x likely verified, 2.x not verified until `--standalone` and the version rule are seen on a real binary. [`connectors/tiers.toml`](../../connectors/tiers.toml) is the record.
+Not yet run on the pad. The tier and the runs are in [`connectors/tiers.toml`](../../connectors/tiers.toml).

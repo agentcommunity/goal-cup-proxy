@@ -67,4 +67,4 @@ None needed: `GOOSE_MODE` defaults to `auto`, which runs tools without asking (d
 
 ## Pad result
 
-Not yet run on the pad. Expected: likely verified with a DeepSeek custom provider. [`connectors/tiers.toml`](../../connectors/tiers.toml) is the record.
+Not yet run on the pad. The tier and the runs are in [`connectors/tiers.toml`](../../connectors/tiers.toml).

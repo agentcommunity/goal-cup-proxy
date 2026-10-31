@@ -69,4 +69,4 @@ The connector sets both variables to the isolated home, so `settings.json`, `.en
 
 ## Pad result
 
-Not yet run on the pad. Expected: likely verified with a DeepSeek key through the native preset. [`connectors/tiers.toml`](../../connectors/tiers.toml) is the record.
+Not yet run on the pad. The tier and the runs are in [`connectors/tiers.toml`](../../connectors/tiers.toml).

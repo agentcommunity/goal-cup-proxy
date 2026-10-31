@@ -68,4 +68,4 @@ Crush asks before tool calls; `--yolo` skips every prompt, and `permissions allo
 
 ## Pad result
 
-Not yet run on the pad. Expected: likely verified with a DeepSeek key. [`connectors/tiers.toml`](../../connectors/tiers.toml) is the record.
+Not yet run on the pad. The tier and the runs are in [`connectors/tiers.toml`](../../connectors/tiers.toml).
