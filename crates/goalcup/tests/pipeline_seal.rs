@@ -301,7 +301,11 @@ fn a_boot_on_a_sealed_entry_keeps_after_seal_current() {
         }
     });
     assert_eq!(after["hosts"], json!(["late.example.com:443"]));
-    assert_eq!(records(dir.path()), sealed, "nothing recorded after the seal");
+    assert_eq!(
+        records(dir.path()),
+        sealed,
+        "nothing recorded after the seal"
+    );
 }
 
 /// Copies the entry folder `from` into `to`, files and `rec/`, but no temp file of a write
