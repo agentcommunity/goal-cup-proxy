@@ -48,9 +48,8 @@ KEYS = {"harness", "key", "case", "mode", "server", "prompt", "minutes", "steps"
 FAULTS = {"kill-recorder": 0, "kill-watchdog": 3, "kill-watchdog-recover": 2, "kill-both": 0, "freeze": 10,
           "cut-worker": 10, "route-drop": 1, "fd-limit": 0}  # kind: minutes it lasts by default (section 3.1)
 SPAN = {"freeze", "cut-worker", "route-drop"}  # the faults that take +<minutes>
-# pad-run's box steps in this slice; the other faults come in a later slice
-BOX_STEPS = {"pre", "start", "wait-calls", "look", "seal", "wait-upload", "kill-recorder", "wait-recovery",
-             "kill-watchdog-recover", "keep-going", "exec"}
+# pad-run's box steps: the faults of section 3.1, the watcher steps, and the mode's own
+BOX_STEPS = {"pre", "start", "wait-calls", "look", "seal", "wait-upload", "wait-recovery", "keep-going", "exec"} | set(FAULTS)
 PRICED = tuple(k for k in pc.S7_TOKENS if k != "reasoning")  # PRD-09 section 4; output holds reasoning, never added again
 LEDGER = threading.Lock()  # spend lines: runs and the spend check write in parallel
 NAME = re.compile(r"[a-z0-9][a-z0-9_-]*")
@@ -218,15 +217,17 @@ def runner_limits(s):
     """Seconds per pad-run step, the ones pad-run reads from settings.json: paste has start's, verify works to the
     check step's limit, wipe to a third of cleanup's (the box's rm and list take the other thirds), and wait-recovery
     to 30 s under its step's limit (pad-run starts later, so its own FAIL line comes before the step times out). The
-    two faults and exec (EXEC_LIMIT) count from minute m; keep-going and the detached
+    faults and exec (EXEC_LIMIT) count from minute m; keep-going and the detached
     watch from their start."""
     got = {k: step_limit(s, k) for k in ("setup", "pre", "start", "wait-calls", "look", "seal", "wait-upload",
                                          "wait-recovery")}
     run = int(math.ceil(s["minutes"] * 60))
     got["wait-recovery"] -= 30
+    lasts = lambda k: 60 * max([int(r.partition("+")[2] or FAULTS[k]) for _, _, r in s["plan"] if r.startswith(k + "@")]  # noqa: E731
+                               + [FAULTS[k]]) + 120  # the longest +n of the kind, then 2 minutes
     return dict(got, paste=got["start"], verify=step_limit(s, "check"), wipe=step_limit(s, "cleanup") // 3, spend=120,
-                **{"kill-recorder": 120, "kill-watchdog-recover": 240, "keep-going": run, "seal-now": 120, "watch": run + 1800,
-                   "exec": EXEC_LIMIT})
+                **{"kill-recorder": 120, "kill-watchdog-recover": 240, "kill-watchdog": 330, "kill-both": 300, "fd-limit": 60,
+                   "keep-going": run, "seal-now": 120, "watch": run + 1800, "exec": EXEC_LIMIT}, **{k: lasts(k) for k in SPAN})
 
 
 def pin(data, host):
@@ -632,6 +633,9 @@ def main(argv):
         pad = read_toml(os.path.join(HERE, "pad.toml"))
         s = load_settings(read_toml(argv[1]), pad)
         harness = read_toml(os.path.join(HERE, "harnesses", s["harness"] + ".toml"))  # a missing one is an OSError
+        if harness.get("key_kind") == "none":  # Amp, Droid: no key to give it, so nothing to run (no box, no case)
+            print("%s: not verified: no key" % s["harness"])
+            return 0
         if not (harness.get("version") and harness.get("version_cmd")):
             raise Usage("scripts/pad/harnesses/%s.toml needs version and version_cmd" % s["harness"])
         if s["case"] in ("dodger", "all") and not re.fullmatch(r"[a-z0-9][a-z0-9.-]*", str(harness.get("model_host"))):
