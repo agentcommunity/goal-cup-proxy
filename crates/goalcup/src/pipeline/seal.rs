@@ -5,7 +5,7 @@
 //! that writes nothing for 60 s is the stall exit).
 
 use super::item::{Item, Mark, SealEnd, Sealed};
-use super::status::{AfterSeal, Board, CutFiles, Outlived};
+use super::status::{self, AfterSeal, Board, CutFiles, Outlived};
 use super::{Mono, Recorder};
 use crate::cli::log::{self, Fact};
 use crate::mask::Masker;
@@ -146,10 +146,10 @@ impl Sealer {
         let rec_dir = entry_dir.join("rec");
         let _ = std::fs::remove_file(rec_dir.join("run-ca.key"));
         let _ = File::open(&rec_dir).and_then(|d| d.sync_all());
-        on_durable();
         if after_bytes > 0 {
             log::line(&entry_dir, "after_stop", &[("bytes", Fact::N(after_bytes))]);
         }
+        // The sealed `status.json` is on disk before `sealed`, so the end screen reads it whole.
         if let Some(b) = &board {
             b.set(|s| {
                 let (files, bytes) = (fin.cut_files, fin.cut_bytes);
@@ -157,9 +157,11 @@ impl Sealer {
                 s.outlived = ask.outlived.clone();
                 s.after_seal = Some(AfterSeal::default());
             });
-            if let Some(m) = masker {
-                after_seal(rec.clone(), b.clone(), m, after_bytes, hosts);
-            }
+            status::write(&rec, &entry_dir, b);
+        }
+        on_durable();
+        if let (Some(b), Some(m)) = (&board, masker) {
+            after_seal(rec.clone(), b.clone(), m, after_bytes, hosts);
         }
         let facts = SealFacts {
             reason,
