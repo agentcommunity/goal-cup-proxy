@@ -102,8 +102,11 @@ fn three_problems_one_refusal() {
 fn project_folder_and_goalcup_home_never_hold_each_other() {
     let s = Setup::new(&[(".gitignore", ".env*\n")]);
     let practice = ["start", "--practice"];
-    // The same folder with a home elsewhere passes the checks and reaches the stub (exit 3).
-    assert_eq!(s.start(&s.gc, &practice).status.code(), Some(3));
+    // The same folder with a home elsewhere passes the checks and reaches the connector step,
+    // which stops (no harness saved) before anything is created.
+    let out = s.start(&s.gc, &practice);
+    assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
+    assert!(!stderr(&out).contains(text::FOLDER_REFUSED));
 
     // The project holds the home: a relative GOALCUP_HOME taken against the project folder.
     let out = s.start(Path::new("gc"), &practice);
