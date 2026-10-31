@@ -45,7 +45,10 @@ pub enum Outcome {
 /// Sends the entry in `entry_dir` of the run in `run_dir`. Says `StillRecording` at once while a
 /// recorder holds `rec/lock`, checked before `upload.lock` and on every 1 s tick spent waiting for
 /// another uploader to let `upload.lock` go. An entry is sealed when `status.json` says `sealed`
-/// with its seal, or `upload.json` says the server sealed it; any other is `NotClosed`.
+/// with its seal, or `upload.json` says the server sealed it; any other is `NotClosed`. A sealed
+/// entry with nothing left on disk to check against (every part pruned and `upload.json` lost) is
+/// decided by the server: `AlreadyThere` when it holds the entry sealed, `Stuck` otherwise, so a
+/// sealed entry is never handed to `pipeline::close_dead_entry`.
 pub fn run(entry_dir: &Path, run_dir: &Path, ids: (&str, &str), keep: bool) -> Outcome {
     let _held = loop {
         if recording(entry_dir) {
@@ -72,9 +75,10 @@ pub fn run(entry_dir: &Path, run_dir: &Path, ids: (&str, &str), keep: bool) -> O
     // Every part pruned: the confirmed end of an entry the server sealed stands for the seal LINK.
     let kept = old.confirmed.clone().filter(|_| stored);
     let end = link.map(|l| (l.raw_end, l.seq, hex(&l.hash)));
-    let Some(end) = end.or(kept.map(|c| (c.raw, c.seq, c.hash))) else {
+    let end = end.or(kept.map(|c| (c.raw, c.seq, c.hash)));
+    if end.is_none() && seal.is_none() {
         return Outcome::NotClosed;
-    };
+    }
     let keep = keep || old.keep;
     let (json, client) = connect(run_dir, entry_dir, ids, keep, old);
     let Some(client) = client else {
@@ -86,10 +90,11 @@ pub fn run(entry_dir: &Path, run_dir: &Path, ids: (&str, &str), keep: bool) -> O
     let (j, file) = (Mutex::new(json), Mutex::new(Writer::new(entry_dir.into())));
     let out = match position(&client, entry_dir, ids, &j) {
         Err(o) => o,
-        Ok(p) if p.sealed && p.offset == end.0 => already(&p, end, entry_dir, (&j, &file)),
-        Ok(_) => match link {
-            Some(point) => send(entry_dir, client, ids, &point, seal, (&j, &file)),
-            None => Outcome::Stuck,
+        Ok(p) => match (end, link) {
+            (None, _) if p.sealed => Outcome::AlreadyThere,
+            (Some(e), _) if p.sealed && p.offset == e.0 => already(&p, e, entry_dir, (&j, &file)),
+            (Some(_), Some(point)) => send(entry_dir, client, ids, &point, seal, (&j, &file)),
+            _ => Outcome::Stuck,
         },
     };
     let _ = lock(&file).put(Mono::now(), &lock(&j).clone(), true);

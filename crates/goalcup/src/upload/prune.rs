@@ -1,7 +1,9 @@
 //! Prune (PRD-06 section 7): frees local disk once the server holds the bytes. A part file and its
 //! `.idx` go only when the part is closed, the confirmed offset is at or past its end, every older
 //! part is already gone and `keep` is false. Nothing else is deleted: `counts.jsonl` stays, because
-//! `pipeline::entry_totals` reads a pruned boot from it. No timer and no disk-pressure branch.
+//! `pipeline::entry_totals` reads a pruned boot from it, and it is synced before any delete, since
+//! once a boot's parts are gone its lines are the only copy of that boot's counts. No timer and no
+//! disk-pressure branch.
 
 use super::chunk::{index, parts};
 use super::send::lock;
@@ -16,9 +18,9 @@ use std::sync::Mutex;
 /// A part is closed when a later part has an index line (PRD-01 section 1: the last part with an
 /// index line always stays for crash recovery); it then ends where the next part file starts, so
 /// a part left without its `.idx` still goes. The last part with an index line goes only once the
-/// server sealed the entry (`final` is `sealed`), at its last line. `upload.json`, with
-/// `confirmed`, is written and synced with its folder before any delete; when that fails nothing
-/// is deleted. Each part file goes first and its `.idx` second: a crash between the two leaves an
+/// server sealed the entry (`final` is `sealed`), at its last line. `counts.jsonl` is synced, then
+/// `upload.json`, with `confirmed`, is written and synced with its folder, before any delete; when
+/// either fails nothing is deleted (a missing `counts.jsonl` has nothing to sync). Each part file goes first and its `.idx` second: a crash between the two leaves an
 /// `.idx` with no part, which nothing reads and nothing removes later. Only deletes that worked
 /// are added to `pruned`, which is written again after them; a failed delete is tried again on a
 /// later call. Never panics.
@@ -52,6 +54,9 @@ pub fn prune(entry_dir: &Path, j: &Mutex<UploadJson>, file: &Mutex<Writer>) {
     if gone.is_empty() {
         return;
     }
+    if sync_counts(entry_dir).is_err() {
+        return;
+    }
     let mut file = lock(file);
     if file.put_synced(Mono::now(), &lock(j).clone()).is_err() {
         return;
@@ -72,4 +77,14 @@ pub fn prune(entry_dir: &Path, j: &Mutex<UploadJson>, file: &Mutex<Writer>) {
         j.clone()
     };
     let _ = file.put(Mono::now(), &value, true);
+}
+
+/// Syncs the data of `counts.jsonl`, whose appends are not synced one by one, so the lines of the
+/// boots whose parts are about to go reach the disk before the deletes do. A missing file is fine.
+fn sync_counts(entry_dir: &Path) -> std::io::Result<()> {
+    match fs::File::open(entry_dir.join("counts.jsonl")) {
+        Ok(f) => f.sync_data(),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(e),
+    }
 }

@@ -232,4 +232,8 @@ fn an_entry_already_on_the_server_is_pruned_without_upload_json() {
     assert_eq!(j.final_, Final::Sealed);
     assert!(j.pruned.parts > 0 && j.confirmed.is_some());
     assert_eq!(upload(dir.path(), &entry, false), Outcome::AlreadyThere);
+    // Every part pruned and `upload.json` lost again: the server's sealed position decides.
+    fs::remove_file(entry.join(state::FILE)).unwrap();
+    assert_eq!(upload(dir.path(), &entry, false), Outcome::AlreadyThere);
+    assert_eq!(fake.chunks().len(), chunks, "no PUT");
 }
