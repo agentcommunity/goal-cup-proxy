@@ -1298,3 +1298,17 @@ gate and release code; rewrote `scripts/README.md` (39 lines) for the PRD-13 pre
   (PRD-12's skill rewrite; `skills/adding-a-capture-harness/writing-a-decoder.md` is still there), the
   guide, RULES, SECURITY, TODO and the DECISIONS entries, and the third slice with the newcomer run.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-31, replan after PRD-08 slice 5 (merge bfd244e3)
+
+- **`docs/RECORD-FORMAT.md` line 365 is stale.** It says `history_complete`, `wire_keeps_up`,
+  `threads_match` and `subagents_present` are always `skip` ("not built in this slice"). On integration
+  the last three are real (`legs.rs`); only `history_complete` is still `skip` until PRD-08 slice 6.
+  Fix it in the next RECORD-FORMAT touch, line-neutral (the page ceiling is 430 lines): name the three
+  with one sentence each (a lost model call on the wire, a thread whose calls differ from the harness
+  log, a subagent with no wire calls or native stream), that they are `named` when a recorder-down GAP
+  or a provider or gateway conn GAP covers the loss, `skip` with a reason where the harness log is not
+  read, and the new report keys `harness_log` (`none`, `totals`, `per_call`), `provider_errors` and
+  `threads`. Read `legs.rs` and `report.rs`; do not copy PRD-08 text. When slice 6 merges, drop the
+  remaining `skip` sentence.
+- No locked ledger item is touched and no owner question comes from this slice.

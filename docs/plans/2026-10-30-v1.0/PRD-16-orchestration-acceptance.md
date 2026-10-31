@@ -2110,3 +2110,26 @@ kept and now cites BUILD-PROMPT section 5, since B3 no longer carries it.
   PRD-06 note (panic to `internal`, prune, manual, the null thread). The `upload_worker.rs` full-tier
   run waits for it.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-31, replan after PRD-08 slice 5 (merge bfd244e3)
+
+- **Size report, PRD-08 slice 5** (`wc -l` at bfd244e3, row "Verifier (PRD-08)", 1,400 src and 1,100
+  tests, without PRD-09's `usage/` and `usage_run1.rs`): src 3,241, 231% of the row (`integrity.rs`
+  1,011, `secrets.rs` 509, `honesty.rs` 498, `legs.rs` 477, `server.rs` 201, `main.rs` 200, `input.rs`
+  198, `report.rs` 133, `lib.rs` 14); tests 2,627, 239% of the row (`common/mod.rs` 879,
+  `check_named.rs` 341, `check_invariants.rs` 329, `run1.rs` 232, `secrets_scan.rs` 214,
+  `server_compare.rs` 188, `check_run1_shape.rs` 165, `check_legs.rs` 145, `check_conn_bytes.rs` 134).
+  PRD-08's decision line (PRD-08 note, points 1, 2 and 3) sets the ceilings to **3,460 src and 2,750
+  tests**, to cover `history.rs`, `check_history.rs`, `timeline` and the manifest part.
+- **Rows over their size line, updated for the end-of-build report:** connector (1,510 src and 620
+  tests against 800 and 400), usage (2,550 and 520 against 1,470 and 200), upload (2,500 and 1,900
+  against 940 and 1,000), verifier (3,460 and 2,750 against 1,400 and 1,100). Sum of the PRD-00 src rows
+  is already 18,420; the four rows above add about 5,400 src if they end at their ceilings. The Rust
+  total of about 18,100 src (at most about 14,200 tests) is therefore at real risk of being passed unless
+  the unbuilt rows (proxy, masking, CLI, pipeline) come in well under theirs. Check the total at the
+  next replan after PRD-03 or PRD-05 merges and write it as a `decision` or `owner question` line then;
+  this note does not decide it. Only a total past those figures becomes the owner's question.
+- **X1 reads `timeline`**, which is PRD-08 slice 7; the pad cannot read it before that merges. Order
+  slice 7 before phase 4's first X1 reads. `wire_keeps_up`, `threads_match` and `subagents_present` are
+  on integration, and the K2 fixtures follow in slice 6 (PRD-08 and PRD-12 notes).
+- No locked ledger item is touched and no owner question comes from this slice.

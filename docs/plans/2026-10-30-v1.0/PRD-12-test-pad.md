@@ -1716,3 +1716,33 @@ taken; "rejected" says why. Fixes for other files are made by those files' owner
 - **Keep the checks on the point** (every call and subagent counted once, readable from the record
   alone), not on PRD-09's counts or wording.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-31, replan after PRD-08 slice 5 (merge bfd244e3)
+
+- **The K2 builder is on integration, the fixtures are not committed.** `check_run1_shape.rs` writes
+  `k2-part` (the Lossy run 1 shape, a sealed entry folder) and `k2-fetched` (the same entry laid out as
+  `fetch-run` lays it out, with `fetch.json` claiming one model request more than the seal, so
+  `server_counts_match` fails) when `GOALCUP_FIXTURES_OUT` is set. Make them in a build box, never on
+  the conductor: a job script that runs `GOALCUP_FIXTURES_OUT=$HOME/fx cargo nextest run -p
+  goalcup-verify --test check_run1_shape run1_shape_fails` and `box.mjs run ... --out $HOME/fx:<local
+  dir>`; then commit the two folders under `scripts/pad/fixtures/` (this PRD's path). All values are
+  fake, so they hold no secret.
+- **What K2 must see.** Local `k2-part`: exit 2, and the `fail` ids are exactly `gap_has_end`,
+  `streams_closed`, `wire_keeps_up`, `threads_match`, `subagents_present`; `history_complete` joins
+  that set when PRD-08 slice 6 merges, and PRD-08 re-exports then. Write the selftest as "these five
+  are `fail`", not as an exact set, until the re-export is committed. `k2-fetched` with `--server
+  --local k2-part` adds `server_counts_match`. The provider error counts on the shape are six wire
+  errors (`provider_errors.wire` sums to 6).
+- **The Clean pair is not exported yet** (the pad lane asked for it, 00:00Z). PRD-08 slice 6 adds
+  `k7-part` and `k7-fetched` from `Shape::Clean` with an honest `fetch.json`. K6, K9 and K10 stay
+  waiting on it; K11 waits on the same slice for the history fixtures.
+- **Ids the pad reads are real now:** `subagents_present` (C2), `wire_keeps_up`, `threads_match`,
+  `harness_log` (`none`, `totals` or `per_call`), `provider_errors` and the per-thread rows. The
+  earlier selftest run that saw C2 and the local-log ids absent in the verifier is out of date; rerun
+  it. `history_complete` is still `skip` until slice 6; keep C1's INCONCLUSIVE rule as stated.
+- **Cover rule, for the dodger and gateway rows:** a loss of model calls is `named` only when a
+  `recorder_down` GAP or a conn GAP of a provider or gateway host of the shared list covers it. A
+  vendor-host tunnel or a participant-named model host covers nothing, so a run whose wire stopped
+  early while the harness went on is `fail`. A pinned model host stays `named` (exit 1), as the dodger
+  case needs.
+- No locked ledger item is touched and no owner question comes from this slice.
