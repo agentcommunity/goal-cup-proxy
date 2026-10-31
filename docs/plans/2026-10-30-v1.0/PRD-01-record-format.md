@@ -1090,7 +1090,9 @@ lists disagreed, the ledger decided.
 
 - `read::Tail` now carries both values PRD-08 asked for: `raw: u64` (decompressed bytes the
   `Reader` took, from the first byte of the stream, including a record cut at the end; after an
-  error, only up to the bad record) and `open_frame: bool` (the zstd stream ended inside an open
+  error, through the part of the bad record already read, see the field's doc comment) and `open_frame: bool` (the zstd stream ended inside an open
   frame). Seam line for PRD-08: `goalcup-verify` may read `bytes.raw` and the torn tail from
   `Reader::tail()` and drop its own `Raw` reader and `Meter` in `input.rs`; that removal is PRD-08's
-  edit. Nothing else in the format changes.
+  edit. Nothing else in the format changes. On a clean end `raw` equals the old `Meter` count;
+  after an error it is smaller, since `Meter` also counted the read-ahead zstd handed the 64 KiB
+  buffer, so `bytes.raw` on a `record_decode` failure changes value when PRD-08 switches.

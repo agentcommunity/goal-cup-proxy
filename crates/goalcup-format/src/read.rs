@@ -32,7 +32,9 @@ pub struct Tail {
     /// The raw bytes the reader took from its input, counted from the first byte of the stream
     /// rather than from the first PART's `raw_offset`. Final once [`Reader::next`] has returned
     /// `None`; it includes the bytes of a record cut at the end ([`Tail::truncated`]). After an
-    /// error it counts only the bytes read up to the bad record, not the whole input.
+    /// error it counts the bytes taken through the part of the bad record already read (its head,
+    /// and its body when the body failed to decode), not the whole input; the error message gives
+    /// the bad record's raw offset.
     pub raw: u64,
 }
 

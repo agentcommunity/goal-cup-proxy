@@ -122,6 +122,7 @@ fn random_records_of_every_kind_round_trip() {
     let mut rd = Reader::new(&raw[..]);
     let back: Vec<Record> = rd.by_ref().map(|i| i.unwrap().rec).collect();
     assert_eq!(back, recs);
+    assert_eq!(rd.tail().truncated, None);
     assert_eq!(rd.tail().raw, raw.len() as u64);
 }
 
@@ -129,9 +130,23 @@ fn random_records_of_every_kind_round_trip() {
 fn a_body_over_16_mib_is_refused() {
     let mut raw = vec![0x03];
     put_varint(&mut raw, (16 << 20) + 1);
-    let r: Vec<_> = Reader::new(&raw[..]).collect();
+    let mut rd = Reader::new(&raw[..]);
+    let r: Vec<_> = rd.by_ref().collect();
     assert_eq!(r.len(), 1);
     assert!(r[0].is_err());
+    // After the error, raw counts the bad record's head and nothing past it.
+    assert_eq!(rd.tail().raw, raw.len() as u64);
+    // A kind-0 record after a good one: raw stops after the kind byte.
+    let mut raw = encode(&[Record::Event {
+        t: 1,
+        json: b"{}".to_vec(),
+    }]);
+    let good = raw.len() as u64;
+    raw.extend([0, 5, 1, 2, 3, 4, 5]);
+    let mut rd = Reader::new(&raw[..]);
+    let r: Vec<_> = rd.by_ref().collect();
+    assert_eq!((r.len(), r[1].is_err()), (2, true));
+    assert_eq!(rd.tail().raw, good + 1);
     let mut c = Codec::default();
     let big = Record::Data {
         sid: 1,
