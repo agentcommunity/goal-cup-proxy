@@ -110,7 +110,7 @@ def queue_slot(name, pad, out_root, who):
                 except (PermissionError, ValueError):
                     held.append(f)
             down = os.path.isfile(os.path.join(out_root, "queue.json")) and name in read_json(os.path.join(out_root, "queue.json")).get("downgraded", [])
-            if len(held) < (pad["per_key_deepseek"] if name == "deepseek" and not down else pad["per_key"]):
+            if len(held) < (pad.get("per_key_deepseek", 6) if name == "deepseek" and not down else pad.get("per_key", 2)):
                 slot = os.path.join(d, "%d-%s.slot" % (os.getpid(), secrets.token_hex(3)))
                 with open(slot, "w") as f:
                     json.dump({"pid": os.getpid(), "start": now(), "run": who}, f)
