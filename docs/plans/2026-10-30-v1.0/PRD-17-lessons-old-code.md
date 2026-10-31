@@ -1072,3 +1072,9 @@ Names for `LESSONS.md` (the lessons lane writes them; judge 14:56Z, 15:13Z):
   connect rounds; the log half of C2 is K14's (`pipeline_secure.rs`, PRD-12 C3). Both left as written.
 - **T4:** the key test now decodes the records and looks for a key PEM there; a raw scan misses compressed parts.
 - **Budget after this fix:** wc -l of the eight lessons_ files is 3439; the fix added the C4 fixtures case and the recording sink.
+
+### 2026-10-31, replan after PRD-17 slice 4 (merge 2f771304)
+
+- **On integration now:** `lessons_connect.rs` (510 lines: C1 to C8, C10, T3 through `proxy::serve`), the C4 OpenSSL hello fixtures, the T4 key half and the D6 GAP and END records (in `lessons_decode.rs` and `lessons_tls.rs`), and the `LESSONS.md` upkeep. C5 is amended to PRD-03 section 1 (the upstream is dialled before the 200; one `conn` record, one named GAP); no PRD-03 change follows from it.
+- **Budget, past the ledger line:** `wc -l` of the eight `lessons_*.rs` files is 3,462 (connect 510, decode 477, hosts 181, http1 667, launch 408, pipeline 104, tls 412, ws 703) against the 3,000 shared with PRD-14 (+15%, over the 10% that needs a replan decision). The excess serves the points: C1 to C8 and T3 go through the real `serve`, D6 shows GAP and END, T4 shows the key never lands on disk. Decision: accepted for the files already merged, no cut known. The remaining files may add at most about 150 lines (the K15 serve half, the open rows), and PRD-14 shrinks its own tests to match; a total past about 14,200 Rust test lines is still the owner question, not this file.
+- **Still open:** K15 (`common::upstream`), the serve halves of `lessons_http1` (L-H2 relay) and `lessons_ws`, R6, SC3, and the rows that need an h2 client (they wait for `h2.rs`). The C7 120 s case is held back with `ignore` and runs only in the full tier. Rows stay `open` until a box run on the integration head. No locked ledger item is touched.

@@ -2412,3 +2412,8 @@ kept and now cites BUILD-PROMPT section 5, since B3 no longer carries it.
 
 - **PRD-03 code is complete** (slices 1 to 4). The only open item is pad acceptance 3, a watcher run in a pad box (PRD-12). Treat it as a Phase 1 pad row, not a build task.
 - **Size report, PRD-03** (`wc -l` on integration): src 5,961 against the 4,250 row (+40%; 4,400 replanned, +35%); tests 3,942 against 2,000 (about twice). Carry to the end-of-build report with the PRD-10 and PRD-12 overages. No locked ledger item is touched.
+
+### 2026-10-31, replan after PRD-17 slice 4 (merge 2f771304)
+
+- **Size report, PRD-17** (`wc -l` on integration): `crates/goalcup/tests/lessons_*.rs` 3,462 lines (eight files) against the PRD-00 row of 3,000 shared with PRD-14 (+15%). PRD-17 has no src. Carry to the end-of-build report with the other overages; PRD-14 must cut its own share to keep the Rust test total near 14,200.
+- **Gate effect:** none on order. The deletion gate (check 1) still needs K15, the serve halves of http1 and ws, and one box run of the full tier (C7 120 s) on the integration head. No seam change. No locked ledger item is touched.

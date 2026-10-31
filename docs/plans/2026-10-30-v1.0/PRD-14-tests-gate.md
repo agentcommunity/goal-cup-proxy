@@ -1070,3 +1070,8 @@ PRDs they touch and the code. Where two fixes disagree, the ledger and the later
 `crates/goalcup/tests/upload_common/` (shared part-folder and fake Worker builder) is PRD-06's under the
 `upload_` prefix. Do not move it; PRD-17 may fold it into `tests/common/` later. No locked ledger item is
 touched.
+
+### 2026-10-31, from the PRD-17 slice 4 review
+
+- **Test budget:** PRD-17 lessons tests are 3,462 lines, not 2,711, so PRD-14 has no part of the shared 3,000 row left. Its own guard tests must be cut or folded to hold the total near 14,200, and shared helpers go in `tests/common/` so PRD-17 can delete its private copies.
+- **Full tier:** `lessons_connect::idle_tunnel_survives_120s` is `ignore`d and must run in the gate full tier on the integration head. No locked ledger item is touched.
