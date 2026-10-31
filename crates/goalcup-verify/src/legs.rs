@@ -35,6 +35,10 @@ pub struct Out {
     pub refused: u64,
     /// The harness-log sentence of the coverage line; it never claims everything was recorded.
     pub coverage: String,
+    /// The covers, and the timed calls the two checks count (native?, error?, wall) for the
+    /// report's timeline.
+    pub covers: Vec<Cover>,
+    pub timed: Vec<(bool, bool, u64)>,
 }
 
 /// What the harness's own log gave, as the report's `harness_log`.
@@ -133,6 +137,10 @@ pub fn judge(t: &CallTable, covers: &[Cover]) -> (Vec<Check>, Out) {
         threads,
         refused,
         coverage: line,
+        covers: covers.to_vec(),
+        timed: (x.calls().filter(|r| r.leg == Leg::Wire || x.known(r)))
+            .filter_map(|r| Some((r.leg == Leg::Native, r.outcome.is_error(), at(r)?)))
+            .collect(),
     };
     (vec![keeps, matched, subagents(&x)], out)
 }
@@ -474,4 +482,59 @@ fn errors(t: &CallTable) -> Value {
         *n = n.saturating_add(1);
     }
     json!({"wire": wire, "native": native})
+}
+
+/// Reads the manifest, `[{"path": "<source>:<path>", "size": n}]`, as (path, size) pairs. The
+/// error is a plain line for exit 3.
+pub fn read_manifest(p: &std::path::Path) -> Result<Vec<(String, u64)>, String> {
+    let bad =
+        || "--harness-files: expected [{\"path\": \"<source>:<path>\", \"size\": n}]".to_string();
+    let v: Value = std::fs::read(p)
+        .map_err(|e| format!("{}: {e}", p.display()))
+        .and_then(|b| serde_json::from_slice(&b).map_err(|_| bad()))?;
+    let each = v.as_array().ok_or_else(bad)?.iter();
+    let pair = |f: &Value| Some((f["path"].as_str()?.to_string(), f["size"].as_u64()?));
+    each.map(|f| pair(f).ok_or_else(bad)).collect()
+}
+
+/// The record's native and snapshot streams, by the path their OPEN meta names.
+#[derive(Default)]
+pub struct Streams {
+    /// A native file's last END `seen`.
+    pub native: HashMap<String, u64>,
+    pub snapshots: HashSet<String>,
+    /// Native files with a GAP on their stream.
+    pub gapped: HashSet<String>,
+}
+
+/// The manifest part of `subagents_present`: every file on disk has a native stream whose last
+/// END `seen` equals its size, or a snapshot stream (a database keeps growing, so its size is
+/// not compared). A file with neither is `named` by a GAP on its stream or by a recorder-down
+/// cover, else `fail`. Never lowers the check's result; the first finding names a path only.
+pub fn manifest(c: &mut Check, files: &[(String, u64)], s: &Streams, covers: &[Cover]) {
+    let down = covers.iter().any(|c| c.down);
+    let ok = |(p, n): &&(String, u64)| s.snapshots.contains(p) || s.native.get(p) == Some(n);
+    let lost: Vec<(&String, bool)> = (files.iter().filter(|f| !ok(f)))
+        .map(|(p, _)| (p, down || s.gapped.contains(p)))
+        .collect();
+    let res = match lost.iter().any(|l| !l.1) {
+        _ if lost.is_empty() => Res::Pass,
+        true => Res::Fail,
+        false => Res::Named,
+    };
+    c.facts.insert("files".into(), files.len().into());
+    c.facts
+        .insert("files_without_stream".into(), lost.len().into());
+    if res == Res::Pass && c.result == Res::Skip {
+        c.result = Res::Pass;
+    }
+    let Some((f, _)) = lost.iter().find(|l| (res == Res::Fail) != l.1) else {
+        return;
+    };
+    if res > c.result {
+        let why = "harness files have no stream of their size";
+        c.why = format!("{} of {} {why}; first: {f}", lost.len(), files.len());
+        c.first = Some(json!({"o": null, "sid": null, "wall": null, "thread": null, "file": f}));
+        c.result = res;
+    }
 }

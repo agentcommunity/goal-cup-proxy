@@ -2,12 +2,173 @@
 //! the coverage line (section 5). `why` is one plain line; no record byte is ever printed here.
 
 use crate::history;
-use crate::input::Input;
-use crate::integrity::{self, Check, Outcome, Recount, Res};
+use crate::input::{self, Entry, Input};
+use crate::integrity::{self, Check, Outcome, Recount, Res, has_extent};
+use crate::legs::{self, Streams};
 use crate::secrets::{self, Rules};
 use crate::server;
+use goalcup_format::dump::wall;
+use goalcup_format::{GapReason, Record, StreamKind};
 use serde_json::{Map, Value, json};
+use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
+
+/// A timeline bucket, ns. A caller of [`Seen::new`] may ask for another.
+pub const BUCKET: u64 = 600_000_000_000;
+
+/// One timeline row: harness calls, wire calls, wire errors, native bytes, gaps, off ms.
+type Row = [u64; 6];
+
+/// A second read of one entry's record for what the integrity pass does not keep: native
+/// bytes and GAPs by time, the off spans, and the streams by file path. Rows are sparse, keyed
+/// by bucket index from the entry's first wall time; an off span is clamped to the entry's own
+/// first and last record time, so a forged span cannot add buckets past them.
+#[derive(Default)]
+struct Seen {
+    bucket: u64,
+    first: Option<u64>,
+    last: u64,
+    /// The current PART's wall and record clock, and the boot it belongs to.
+    base: (u64, u64),
+    boot: Option<u64>,
+    /// Open native and snapshot streams: path and whether native.
+    open: HashMap<u64, (String, bool)>,
+    rows: BTreeMap<u64, Row>,
+    off: Vec<(u64, u64)>,
+    streams: Streams,
+}
+
+impl Seen {
+    fn new(e: &Entry, bucket: u64) -> Self {
+        let mut s = Seen {
+            bucket: bucket.max(1),
+            ..Default::default()
+        };
+        if let Ok((rd, _)) = input::open(e) {
+            rd.flatten().for_each(|it| s.item(&it.rec));
+        }
+        s
+    }
+
+    fn row(&mut self, w: u64) -> Option<&mut Row> {
+        let i = w.saturating_sub(self.first?) / self.bucket;
+        Some(self.rows.entry(i).or_default())
+    }
+
+    fn item(&mut self, r: &Record) {
+        let (pw, pm) = self.base;
+        let at = |t: u64| {
+            (i128::from(pw) + i128::from(t) - i128::from(pm)).clamp(0, u64::MAX.into()) as u64
+        };
+        let w = match r {
+            Record::Part { wall_ns, .. } | Record::Link { wall_ns, .. } => *wall_ns,
+            Record::Open { t, .. }
+            | Record::Data { t, .. }
+            | Record::End { t, .. }
+            | Record::Event { t, .. } => at(*t),
+            _ => 0,
+        };
+        self.last = self.last.max(w);
+        match r {
+            Record::Part {
+                boot,
+                wall_ns,
+                mono_ns,
+                ..
+            } => {
+                if self.boot.replace(*boot) != Some(*boot) {
+                    self.open.clear();
+                }
+                self.base = (*wall_ns, *mono_ns);
+                self.first.get_or_insert(*wall_ns);
+            }
+            Record::Open {
+                sid, skind, meta, ..
+            } if matches!(skind, StreamKind::Native | StreamKind::Snapshot) => {
+                let m: Value = serde_json::from_slice(meta).unwrap_or_default();
+                let path = m["path"].as_str().unwrap_or_default().to_string();
+                self.open.insert(*sid, (path, *skind == StreamKind::Native));
+            }
+            Record::Data { sid, bytes, .. } if self.open.contains_key(sid) => {
+                if let Some(x) = self.row(w) {
+                    x[3] = x[3].saturating_add(bytes.len() as u64);
+                }
+            }
+            Record::End { sid, seen, .. } => {
+                if let Some((p, native)) = self.open.remove(sid) {
+                    if native {
+                        self.streams.native.insert(p, *seen);
+                    } else {
+                        self.streams.snapshots.insert(p);
+                    }
+                }
+            }
+            Record::Gap {
+                sid,
+                reason,
+                start_wall,
+                end_wall,
+                start_mono,
+                end_mono,
+                lost,
+                tail,
+                ..
+            } => {
+                if let Some(x) = self.row(*start_wall) {
+                    x[4] = x[4].saturating_add(1);
+                }
+                if let Some((p, _)) = self.open.get(sid) {
+                    self.streams.gapped.insert(p.clone());
+                }
+                let tail = serde_json::from_slice(tail).unwrap_or_default();
+                let (wl, mo) = ((*start_wall, *end_wall), (*start_mono, *end_mono));
+                if *sid == 0
+                    && *reason == GapReason::RecorderDown
+                    && has_extent(&tail, wl, mo, *lost)
+                {
+                    self.off.push(wl);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Adds the calls and spreads each off span over the buckets it overlaps.
+    fn finish(&mut self, calls: &[(bool, bool, u64)]) {
+        for &(native, err, t) in calls {
+            if let Some(x) = self.row(t) {
+                let k = usize::from(!native);
+                x[k] = x[k].saturating_add(1);
+                x[2] = x[2].saturating_add(u64::from(err && !native));
+            }
+        }
+        let Some(first) = self.first else { return };
+        for (s, e) in std::mem::take(&mut self.off) {
+            let (s, e) = (s.max(first), e.min(self.last));
+            if e <= s {
+                continue;
+            }
+            for i in (s - first) / self.bucket..=(e - 1 - first) / self.bucket {
+                let lo = first + i * self.bucket;
+                let ns = e.min(lo.saturating_add(self.bucket)) - s.max(lo);
+                let x = self.rows.entry(i).or_default();
+                x[5] = x[5].saturating_add(ns / 1_000_000);
+            }
+        }
+    }
+
+    /// The report's `timeline`: the buckets with anything in them.
+    fn timeline(&self) -> Value {
+        let first = self.first.unwrap_or(0);
+        let rows = self.rows.iter().filter(|(_, r)| r.iter().any(|&n| n > 0));
+        rows.map(|(&i, r)| {
+            let start = first.saturating_add(i.saturating_mul(self.bucket));
+            json!({"bucket": i, "start": wall(start), "harness_calls": r[0], "wire_calls": r[1],
+                "wire_errors": r[2], "native_bytes": r[3], "gaps": r[4], "off_ms": r[5]})
+        })
+        .collect()
+    }
+}
 
 /// The report as JSON, the exit code, and the text for stderr.
 pub struct Report {
@@ -23,6 +184,7 @@ pub fn build(
     now_ns: Option<u64>,
     local: Option<&Input>,
     known: Option<&Rules>,
+    files: Option<&[(String, u64)]>,
 ) -> Report {
     let is_server = input.kind == "server";
     let (mut exit, mut text, mut entries) = (0u8, String::new(), Vec::new());
@@ -36,6 +198,14 @@ pub fn build(
             checks.extend(server::checks(e, f, &o, local));
         }
         checks.extend(known.map(|k| secrets::check(k, e)));
+        let mut seen = Seen::new(e, BUCKET);
+        seen.finish(&o.legs.timed);
+        if let (Some(f), Some(c)) = (
+            files,
+            checks.iter_mut().find(|c| c.id == "subagents_present"),
+        ) {
+            legs::manifest(c, f, &seen.streams, &o.legs.covers);
+        }
         let worst = checks.iter().map(|c| c.result).max().unwrap_or(Res::Pass);
         let partial = !o.sealed || input.kind == "live" || o.pruned;
         exit = exit.max(match worst {
@@ -48,7 +218,9 @@ pub fn build(
         }
         let name = o.entry.clone().unwrap_or_else(|| folder(&e.dir));
         text += &self::text(&name, &o, &checks);
-        entries.push(entry(name, &o, &checks));
+        let mut en = entry(name, &o, &checks);
+        en["timeline"] = seen.timeline();
+        entries.push(en);
         all.extend(checks);
     }
     let server = is_server.then(|| server::summary(&all));
