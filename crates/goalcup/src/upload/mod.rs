@@ -323,7 +323,7 @@ pub fn guard(
 
 /// [`guard`], with the log line's `what` and the `upload.json` to mark (None: none).
 fn guarded(
-    what: &str,
+    what: &'static str,
     entry_dir: &Path,
     j: Option<&Mutex<UploadJson>>,
     p: &Policy,
