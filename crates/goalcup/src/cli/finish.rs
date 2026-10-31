@@ -188,8 +188,9 @@ pub fn closing(
     let support = text::SUPPORT_ADDRESS;
     // The recorder can die between writing `status.json` and sending `ready`: not started, no
     // harness, never sealed.
-    let st: Option<Status> = super::read_json(&super::status_json(entry_dir));
-    let never_ran = not_started && st.as_ref().is_some_and(|s| s.harness.is_none());
+    let never_ran = not_started
+        && super::read_json::<Status>(&super::status_json(entry_dir))
+            .is_some_and(|s| s.harness.is_none());
     if super::status_json(entry_dir).exists() && !never_ran {
         return format!(
             "goalcup could not read the final counts of this part. Run goalcup status, or write \

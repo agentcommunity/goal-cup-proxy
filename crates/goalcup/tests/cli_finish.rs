@@ -298,8 +298,10 @@ fn a_recorder_that_died_before_ready_reads_as_not_started() {
         ),
     );
     let shown = goalcup::cli::finish::closing(&entry, "Agent", RUN, false, true);
-    assert!(shown.contains("Agent was not started"), "{shown}");
-    assert!(!shown.contains("final counts"), "{shown}");
     let other = goalcup::cli::finish::closing(&entry, "Agent", RUN, false, false);
-    assert!(other.contains("final counts"), "{other}");
+    assert_ne!(shown, other);
+    // The same text as when no status.json exists at all: the part was never started.
+    std::fs::remove_file(entry.join("status.json")).unwrap();
+    let none = goalcup::cli::finish::closing(&entry, "Agent", RUN, false, false);
+    assert_eq!(shown, none);
 }
