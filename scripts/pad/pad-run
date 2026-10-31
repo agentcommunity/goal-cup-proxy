@@ -1,20 +1,33 @@
 #!/usr/bin/env python3.11
-"""The test pad, box half (PRD-12 sections 3 to 6 and 8), `mode = "micro"` with `server = "off"` or "staging":
-    pad-run <run dir> <step>      (pad writes settings.json; the steps are STEPS, wait-calls takes N)
+"""The test pad, box half (PRD-12 sections 1a, 3 to 8), modes micro and cycle:
+    pad-run <run dir> <step>      (pad writes settings.json; the steps are STEPS, TIMED@<minute>, wait-calls N,
+                                   pre <script> and exec <script>@<minute>, the scripts in exec/ beside this file)
 Each step ends with one line `PADSTEP {"result":..,"saw":..}` and exits 0, also on a failure; 2 is a
 usage error. Known values (keys, plants, the remote password) never leave the box: panes are replaced
 before a file gets them and the scans run here. No key or planted value is ever printed, logged or an
 argument. Python 3.11 standard library only.
 """
-import base64, datetime, glob, json, os, re, secrets, shlex, shutil, subprocess, sys, tarfile, time, urllib.parse  # noqa: E401
+import base64, datetime, glob, json, os, re, secrets, shlex, shutil, signal, subprocess, sys, tarfile, threading, time  # noqa: E401
+import urllib.parse
 
 PAD = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, PAD)
 import check as pc  # noqa: E402  S6, S7 and S9 keys are read through check.py's SEAM only
 NO_BUILD = "no goalcup build"
-STEPS = ("setup", "start", "paste", "wait-calls", "look", "seal", "wait-upload", "verify", "wipe")
-USAGE = "usage: pad-run <run dir> " + "|".join(s + " N" * (s == "wait-calls") for s in STEPS)
-OUT = ("verify", "watch", "status.json", "harness-files.json", "meta-box.json")  # what out.tar carries
+BESIDE = ("spend", "seal-now", "watch")  # these run beside the other steps, so they never write state.json
+STEPS = ("setup", "start", "paste", "wait-calls", "look", "wait-recovery", "keep-going", "seal", "wait-upload", "verify",
+         "wipe") + BESIDE
+TIMED = tuple(pc.FAULTS)  # section 3.1, at <minute> after the paste; pc.SPAN ones take +<minutes>, kill-both +upload
+USAGE = "usage: pad-run <run dir> " + "|".join([s + " N" * (s == "wait-calls") for s in STEPS] + [t + "@M" for t in TIMED]
+                                                + ["pre SCRIPT", "exec SCRIPT@M"])
+PROXY_VALUE = "127.0.0.1:9"  # the proxy setting exec/proxy-setting.sh writes (PAD_PROXY); start must not print it
+EVERY = {"status": 10, "procs": 30, "pane": 60, "live": 300}  # section 4: the watch's seconds per kind of line
+OUT = ("verify", "watch", "exec", "status.json", "harness-files.json", "meta-box.json")  # what out.tar carries
+PROXY_CA = tuple(n for p in ("HTTPS", "HTTP", "ALL", "NO") for n in (p + "_PROXY", p.lower() + "_proxy")) + (
+    "SSL_CERT_FILE", "SSL_CERT_DIR", "NODE_EXTRA_CA_CERTS", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE")
+HARNESS_ENV = ("HOME", "PATH", "GOALCUP_TIME_LEFT_FILE")  # not keys: what `sh -lc 'goalcup time-left'` needs
+# ~/bin (pad puts the goalcup build there) and the image's harness folders (/etc/profile.d/pad.sh, a login file)
+BOX_BIN = ("~/bin", "~/.npm-global/bin", "~/.local/bin")
 
 
 class Step(Exception):  # a step's end: args are (result, saw)
@@ -38,13 +51,25 @@ def replace_known(text, values):
     return text, count
 
 
+def exec_env(environ, names=()):
+    """Section 3.1: from /proc/<pid>/environ bytes, only the proxy and CA names, HOME, PATH and the time-left file
+    (PRD-10 acceptance 7), and `names` (settings' ca_env and the connector's home names); never a key."""
+    pairs = (item.decode(errors="replace").partition("=") for item in environ.split(b"\0"))
+    return {k: v for k, eq, v in pairs if eq and k in PROXY_CA + HARNESS_ENV + tuple(names)}
+
+
+def quoted(env):
+    """NAME=value words, shell-quoted, for a script to take with `eval "set -- $VAR"`."""
+    return " ".join(shlex.quote("%s=%s" % kv) for kv in env.items())
+
+
 def sh(argv, timeout=120, stdin=subprocess.DEVNULL, **kw):
     return subprocess.run(argv, capture_output=True, text=True, timeout=timeout, stdin=stdin, **kw)
 
 
-def tool(name):  # ~/bin first (pad puts the build there), then PATH
-    mine = os.path.expanduser("~/bin/" + name)
-    return mine if os.access(mine, os.X_OK) else shutil.which(name)
+def tool(name):  # BOX_BIN first (pad puts the build in ~/bin), then PATH
+    mine = [os.path.expanduser("%s/%s" % (d, name)) for d in BOX_BIN]
+    return next((p for p in mine if os.access(p, os.X_OK)), None) or shutil.which(name)
 
 
 def write(path, text, mode=0o600):
@@ -68,6 +93,41 @@ def loads(text=None, path=None):
     return got if isinstance(got, dict) else {}
 
 
+def alive(pid):  # a live, not zombie, process
+    try:
+        return isinstance(pid, int) and open("/proc/%d/stat" % pid).read().rsplit(")", 1)[1].split()[0] != "Z"
+    except (OSError, IndexError):
+        return False
+
+
+def kill9(pid):  # SIGKILL, only of a live process whose command line names goalcup: never another process
+    try:
+        ok = type(pid) is int and pid > 1 and b"goalcup" in open("/proc/%d/cmdline" % pid, "rb").read()
+    except OSError:
+        return False
+    return ok and os.kill(pid, signal.SIGKILL) is None
+
+
+def read_pid(path):  # the first number in a pid file
+    try:
+        return int(re.match(r"\s*(\d+)", open(path).read()).group(1))
+    except (OSError, AttributeError):
+        return None
+
+
+def proc(role, pid):
+    """Section 4's procs line for one process; a field /proc does not give (a non-dumpable fd folder) is null."""
+    def get(f):
+        try:
+            return f()
+        except (OSError, LookupError, ValueError):
+            return None
+    st = get(lambda: dict(ln.split(":", 1) for ln in open("/proc/%d/status" % pid))) or {}
+    stat = get(lambda: open("/proc/%d/stat" % pid).read().rsplit(")", 1)[1].split()) or []
+    return {"role": role, "pid": pid, "rss_kb": get(lambda: int(st["VmRSS"].split()[0])), "threads": get(lambda: int(st["Threads"])),
+            "cpu_ticks": get(lambda: int(stat[11]) + int(stat[12])), "fds": get(lambda: len(os.listdir("/proc/%d/fd" % pid)))}
+
+
 def wait(ok, limit, every):
     """ok()'s first true value within `limit` seconds, else its last value."""
     end = time.time() + limit
@@ -80,13 +140,17 @@ def wait(ok, limit, every):
 
 
 class Run:
-    def __init__(self, run, step="wipe"):
+    def __init__(self, run, kind="wipe", m="", span=None):
         self.run, self.s, self.st = run, loads(path=os.path.join(run, "settings.json")), loads(path=os.path.join(run, "state.json"))
+        self.quiet = kind in BESIDE  # reads the entry without the run-ca key append, writes no state.json
         self.h, self.project = self.s.get("harness", {}), os.path.join(run, "project")  # wipe needs no settings
         self.env = dict(os.environ, GOALCUP_HOME=os.path.join(run, "home"))
         self.sec = self.h.get("gateway" if self.s.get("case") == "gateway" else "direct", {})
-        self.keys, self.tmux = self.path("keys"), self.s.get("session") or "pad"  # copies only, never ~/.pad-keys
-        self.end = time.time() + float((self.s.get("limits") or {}).get(step, 300))  # pad's limit for this step
+        self.keys, self.session = self.path("keys"), self.s.get("session") or "pad"  # copies only, never ~/.pad-keys
+        self.tmux = self.st.get("pane") or self.session  # the pane to read and type into: after kill-both, pad:cont
+        lim = float((self.s.get("limits") or {}).get(kind, 300))  # pad's limit for this step; a timed one's runs from its minute
+        self.m, self.span = float(m) if m else None, span  # a timed step's minute after the paste, and its +n (main)
+        self.end = max(time.time(), self.st.get("pasted", 0) + (self.m or 0) * 60) + lim
 
     def path(self, *p):
         return os.path.join(self.run, *p)
@@ -94,16 +158,30 @@ class Run:
     def left(self):
         return self.end - time.time()
 
-    def pane(self, keep=True):
-        """Section 4: the screen. Only its replaced form reaches a file (watch/pane-<n>.txt)."""
+    def known(self):
+        """The known values, or None once the known file is gone (point 4: then no pane file is written)."""
+        try:
+            got = open(self.path("known")).read().splitlines()
+        except OSError:
+            return None
+        return got + (open(self.path("known-plain")).read().splitlines() if os.path.exists(self.path("known-plain")) else [])
+
+    def pane(self, keep=True, tag=""):
+        """Section 4: the screen. Only its replaced form reaches a file (watch/pane-<tag><n>.txt)."""
         text = sh(["tmux", "capture-pane", "-p", "-J", "-t", self.tmux]).stdout
-        if keep:
-            values = [v for k in ("known", "known-plain") if os.path.exists(self.path(k)) for v in open(self.path(k)).read().splitlines()]
+        values = self.known() if keep else None
+        if values is not None:
             safe, hits = replace_known(text, values)
             n = self.st["panes"] = self.st.get("panes", 0) + 1
             self.st["screen_known"] = self.st.get("screen_known", 0) + hits
-            write(self.path("watch", "pane-%d.txt" % n), safe, 0o644)
+            write(self.path("watch", "pane-%s%d.txt" % (tag, n)), safe, 0o644)
         return text
+
+    def fault(self, kind, **kw):
+        """One watch/faults.jsonl line per action; what goalcup said is replaced and cut to 2,000 characters."""
+        if "said" in kw:
+            kw["said"] = replace_known(kw["said"], self.known() or [])[0][:2000]
+        append(self.path("watch", "faults.jsonl"), dict(kind=kind, **kw))
 
     def entry(self):
         """The newest entry folder under GOALCUP_HOME (PRD-10: runs/<run>/<entry>/status.json)."""
@@ -112,7 +190,7 @@ class Run:
             e = os.path.dirname(found[-1])
             self.st.update(entry_dir=e, entry=os.path.basename(e), run=os.path.basename(os.path.dirname(e)))
             key = os.path.join(e, "rec", "run-ca.key")  # section 3, 0:04 (ledger R3b): the run certificate key
-            if not self.st.get("known_box") and os.path.isfile(key):  # joins the known values while it lives
+            if not (self.quiet or self.st.get("known_box")) and os.path.isfile(key):  # joins the known values while it lives
                 with open(key) as f, open(self.path("known"), "a") as known:  # PEM body lines, as the planted PEM
                     known.write("".join(ln for ln in f if ln.strip() and not ln.startswith("-----")))
                 self.st["known_box"] = True
@@ -121,6 +199,9 @@ class Run:
     def status(self):
         return loads(path=os.path.join(self.entry() or self.run, "status.json"))
 
+    def has(self, *kinds):  # the settings' steps hold one of these faults
+        return any(str(x).startswith(tuple(k + "@" for k in kinds)) for x in self.s.get("steps") or [])
+
     def need(self, *names, started=False, entry=False):
         if not all(tool(n) for n in names):
             raise Step("skip", NO_BUILD)
@@ -128,6 +209,15 @@ class Run:
             raise Step("skip", "not started")
         if entry and not self.entry():
             raise Step("skip", "no entry")
+
+    def gc_env(self, clean=False):
+        """The run's GOALCUP_* values; clean: with only HOME, PATH (BOX_BIN first) and TERM beside them (no proxy or
+        CA variable): the participant's shell."""
+        s, e = self.s, os.environ
+        path = os.pathsep.join([os.path.expanduser(d) for d in BOX_BIN] + [e.get("PATH", "")])
+        base = dict(HOME=e.get("HOME", ""), PATH=path, TERM=e.get("TERM") or "xterm") if clean else {}
+        return dict(base, GOALCUP_HOME=self.env["GOALCUP_HOME"], GOALCUP_SERVER="off" if s.get("server") == "off" else
+                    str(s.get("server_url")), GOALCUP_NO_BROWSER="1", **{"GOALCUP_KEEP_PARTS": "1"} if s.get("keep") else {})
 
     def setup(self, _):
         h, s, sec = self.h, self.s, self.sec
@@ -157,7 +247,7 @@ class Run:
         self.st.update(key_route=route, key_env=get("key_env"), key_path=key)
         if route == "login":
             with open(key) as f:  # the key goes to stdin, never an argument
-                r = sh(shlex.split(get("login")), stdin=f, env=dict(self.env, **{s["home_env"] or "HOME": home}))
+                r = sh(shlex.split(get("login")), stdin=f, env=dict(self.env, **self.home_env()))
             if r.returncode:
                 raise Step("FAIL", "harness login exit %d" % r.returncode)
         elif route == "file":
@@ -167,6 +257,11 @@ class Run:
             if not (route == "env" and name == s["route_key"]):
                 os.remove(os.path.join(self.keys, name))
         return "ok", saw + ", goalcup setup, key route %s" % route
+
+    def home_env(self):
+        """PRD-11 `home`: the connector's home mapping with {home} filled, else HOME (the login and the pre scripts)."""
+        home = self.st.get("home") or ""
+        return {k: v.replace("{home}", home) for k, v in (self.s.get("home_vars") or {}).items()} or {"HOME": home}
 
     def plant(self):
         """Section 5: one fake value per PRD-05 section 10 shape, the no-shape value, the remote password."""
@@ -194,13 +289,16 @@ class Run:
         s = self.s  # section 3, 0:02; with a server, a device code the conductor approves, then paste (PRD-10 section 3)
         self.need("goalcup")
         server = "off" if s["server"] == "off" else s["server_url"]  # no --repo: push not tested
-        lines = ["cd " + shlex.quote(self.project), "export GOALCUP_HOME=%s GOALCUP_SERVER=%s GOALCUP_NO_BROWSER=1"
-                 % (shlex.quote(self.env["GOALCUP_HOME"]), shlex.quote(server))] + ["export GOALCUP_KEEP_PARTS=1"] * bool(s["keep"])
+        lines = ["cd " + shlex.quote(self.project), "export " + " ".join("%s=%s" % (k, shlex.quote(v)) for k, v in self.gc_env().items())]
         lines += ["export %s=%s" % (k, shlex.quote(str(v))) for k, v in self.sec.get("env", {}).items()]
+        lines += ["ulimit -Sn 256"] * self.has("fd-limit")  # section 3.1 fd-limit@0: the launch shell's soft limit
         if self.st.get("key_route") == "env":  # the value is never in argv: the launch shell reads the file
-            lines += ['export %s="$(cat %s)"' % (self.st["key_env"], shlex.quote(self.st["key_path"])), "rm -f " + shlex.quote(self.st["key_path"])]
+            lines += ['export %s="$(cat %s)"' % (self.st["key_env"], shlex.quote(self.st["key_path"]))]
+            lines += ["rm -f " + shlex.quote(self.st["key_path"])] * (not self.has("kill-both"))  # goalcup continue relaunches the harness
+            # from this shell's lines (kill_both), so a kill-both row keeps the 0600 copy; the seal's wipe removes keys/
         argv = [tool("goalcup"), "start", "--test", "--harness", s["harness_id"], "--prompt", self.path("prompt.txt")]
-        argv += [a for k in ("connector", "hosts") if s.get(k) for a in ("--" + k, self.path(s[k]))]
+        hosts = s.get("hosts") or os.path.exists(self.path("hosts.toml")) and "hosts.toml"  # a pre script may write it
+        argv += [a for k, v in (("connector", s.get("connector")), ("hosts", hosts)) if v for a in ("--" + k, self.path(v))]
         write(self.path("launch.sh"), "\n".join(lines + [shlex.join(argv)]) + "\n", 0o700)
         t = self.tmux  # one session per run, so runs on one machine never meet
         for argv in (["new-session", "-d", "-s", t, "-x", "200", "-y", "50"], ["set-option", "-w", "-t", t, "remain-on-exit", "on"],
@@ -208,6 +306,7 @@ class Run:
             sh(["tmux"] + argv)
         if server == "off":  # no approval: paste now
             self.until("Recording in chat mode", "no 'Recording in chat mode'")
+            self.daemon_check()
             return self.type_prompt()
         self.code = self.until(r"shows the code ([A-Z0-9]{4}-[A-Z0-9]{4})\.", "no device code").group(1)  # out once
         self.pane()
@@ -217,13 +316,26 @@ class Run:
         """The first match of `pattern` on the screen within the step's limit; else the step ends INCONCLUSIVE."""
         got = wait(lambda: re.search(pattern, self.pane(False)), self.left(), 3)
         if not got:
+            self.refusal()
             self.pane()
             raise Step("INCONCLUSIVE", "harness did not start: " + why)
         return got
 
+    def refusal(self):
+        """A goalcup start that ended before recording began (the pane is dead): one faults.jsonl line with its exit,
+        whether the screen named settings.json and proxy, and whether it printed the pad's proxy value (PRD-11 acceptance
+        4 wants the first two and not the third). Booleans only."""
+        dead = sh(["tmux", "display-message", "-p", "-t", self.tmux, "#{pane_dead} #{pane_dead_status}"]).stdout.split()
+        if dead[:1] == ["1"]:
+            text = self.pane(False)
+            self.fault("start-refused", exit=int(dead[1]) if dead[1:] and dead[1].isdigit() else None,
+                       named_file="settings.json" in text, named_key=bool(re.search(r"\bproxy\b", text)),
+                       value_shown=bool(re.search(re.escape(PROXY_VALUE) + r"(?!\d)", text)))
+
     def paste(self, _):
         self.need("goalcup")
         self.until("Recording in chat mode", "no 'Recording in chat mode' after the approval")
+        self.daemon_check()
         return self.type_prompt()
 
     def type_prompt(self):  # section 3, 0:04: the ready text, pre keys, the paste, the submit delay and Enter
@@ -246,49 +358,60 @@ class Run:
         sh(["tmux", "send-keys", "-t", t, "Enter"])
         self.st["pasted"] = time.time()
         self.pane()
+        write(self.path("state.json"), json.dumps(self.st))  # the watch reads `pasted` from it
+        subprocess.Popen([sys.executable, os.path.abspath(__file__), self.run, "watch"], start_new_session=True,
+                         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         return "ok", "recording, %s pasted%s" % ("first message" if first else "prompt", "" if bracketed else ", lines joined")
 
     def wait_calls(self, n):
         self.need("goalcup", started=True)
-        while True:  # every 5 s until pad's limit
-            status = self.status()
-            append(self.path("watch", "status.jsonl"), {"status": status})
-            if (got := (status.get("written") or {}).get("model_requests", 0)) >= int(n):
+        while True:  # every 5 s until pad's limit; the watch writes status.jsonl
+            if (got := pc.dig(self.status(), "s4_requests") or 0) >= int(n):
                 return "ok", "%d model calls written" % got
             if self.left() < 5:
                 raise Step("timeout", "the harness did no work")
             time.sleep(5)
 
     def wait_upload(self, _):
-        """Section 1a: upload.json (S9) every 5 s, each read a line of watch/upload.jsonl, until final is sealed."""
+        """Section 1a: upload.json (S9) every 5 s until final is sealed (the watch writes watch/upload.jsonl)."""
         if self.s["server"] == "off":
             raise Step("skip", "server off")
         self.need("goalcup", started=True)
         while True:
             e = self.entry()
             up = loads(path=os.path.join(e, "upload.json")) if e else {}
-            append(self.path("watch", "upload.jsonl"), {"upload": up})  # raw: S9 keys are read through SEAM only
             if pc.dig(up, "s9_final") == "sealed":
                 return "ok", "final: sealed"
             if self.left() < 5:
                 raise Step("timeout", "final %s, state %s" % (pc.dig(up, "s9_final"), pc.dig(up, "s9_state")))
             time.sleep(5)
 
-    def verify_cmd(self, argv, out=None):
-        """One goalcup-verify command inside the step's limit: (exit or "timeout", parsed stdout)."""
+    def verify_cmd(self, argv, out=None, limit=None):
+        """One goalcup-verify command inside `limit` seconds, else the step's: (exit or "timeout", parsed stdout)."""
         try:
-            r = sh(["nice", "-n", "19", tool("goalcup-verify")] + argv, timeout=max(1, self.left()), cwd=self.run)
+            r = sh(["nice", "-n", "19", tool("goalcup-verify")] + argv, timeout=max(1, limit or self.left()), cwd=self.run)
         except subprocess.TimeoutExpired:
             return "timeout", {}
         if out:
             write(self.path("verify", out), r.stdout, 0o644)
         return r.returncode, loads(r.stdout)
 
+    def dump_lines(self, e, kind):
+        """The JSON lines of `goalcup-verify dump --kind <kind> <entry>` (gap and link lines hold no payload)."""
+        try:
+            r = sh(["nice", "-n", "19", tool("goalcup-verify"), "dump", "--kind", kind, e], timeout=max(1, self.left()), cwd=self.run)
+        except subprocess.TimeoutExpired:
+            return []
+        return [d for d in map(loads, r.stdout.splitlines()) if d.get("k") == kind]
+
     def look(self, _):
         """Section 4: the live line; a failed check, the `secrets` one included, is written for "first seen at T"."""
         self.need("goalcup-verify", started=True, entry=True)
-        rep = self.verify_cmd(["check", "--live", "--json", "--known", "known", self.st["entry_dir"]])[1]
-        use = self.verify_cmd(["usage", self.st["entry_dir"], "--json"])[1]
+        return "ok", self.look_line()
+
+    def look_line(self, limit=None):  # the look step's and the watch's
+        rep = self.verify_cmd(["check", "--live", "--json", "--known", "known", self.st["entry_dir"]], limit=limit)[1]
+        use = self.verify_cmd(["usage", self.st["entry_dir"], "--json"], limit=limit)[1]
         entries = [x for x in pc.dig(rep, "s6_entries") or [] if isinstance(x, dict)]
         checks = [c for x in entries for c in pc.dig(x, "s6_checks") or [] if isinstance(c, dict)]
         facts = {"calls": sum(pc.count(pc.dig(x, "s6_requests")) for x in entries), "threads": len(pc.dig(use, "s7_threads") or []),
@@ -296,10 +419,10 @@ class Run:
                  "secrets": pc.worst(entries, "secrets").get("result") or "not run"}
         fail = sorted({c["id"] for c in checks if c.get("result") == "fail" and isinstance(c.get("id"), str)})
         append(self.path("watch", "live.jsonl"), dict(facts, result=rep.get("result"), fail=fail))
-        return "ok", ", ".join("%s %s" % kv for kv in facts.items())
+        return ", ".join("%s %s" % kv for kv in facts.items())
 
     def sealed(self):
-        return self.status().get("mode") == "sealed"
+        return pc.dig(self.status(), "s4_mode") == "sealed"
 
     def dead(self):  # the harness pane is gone, or there never was one
         return not shutil.which("tmux") or sh(["tmux", "list-panes", "-t", self.tmux, "-F", "#{pane_dead}"]).stdout.strip() != "0"
@@ -307,22 +430,378 @@ class Run:
     def seal(self, _):
         self.need("goalcup", started=True)
         wait(lambda: self.sealed() or self.dead(), self.st["pasted"] + float(self.s["minutes"]) * 60 - time.time(), 5)
-        why = "at the harness's exit" if self.sealed() or self.dead() else "at %s min" % self.s["minutes"]
-        if not self.sealed():
+        capped = any(f.get("kind") == "seal-now" and f.get("exit") == 0 for f in pc.load(self.run, "watch/faults.jsonl", 1))
+        why = "at the spend cap" if capped else "at the harness's exit" if self.sealed() or self.dead() else "at %s min" % self.s["minutes"]
+        if not self.sealed() and self.has("kill-watchdog", "kill-watchdog-recover"):
+            self.exit_harness()  # section 3.1: those rows end by the harness's exit, never goalcup seal
+        elif not self.sealed():
             sh([tool("goalcup"), "seal", "--yes"], env=self.env, cwd=self.project)
         ok = wait(self.sealed, self.left() - 30, 5)
         found = re.findall(r"([\d,]+) model requests written", self.pane())
         self.st["end_screen_requests"] = int(found[-1].replace(",", "")) if found else None
         self.harness_files()
         self.wipe_secrets(home=ok or self.dead())  # an unsealed entry may still be reading the home: wipe leaves it
-        return ("ok", "sealed %s, %s model requests written" % (why, (self.status().get("written") or {}).get("model_requests"))
+        return ("ok", "sealed %s, %s model requests written" % (why, pc.dig(self.status(), "s4_requests"))
                 ) if ok else ("timeout", "%s, not sealed within the step's limit after goalcup seal" % why)
+
+    def exit_harness(self):  # the harness file's exit_keys (printf format); after 30 s SIGTERM to harness.pid if it lives
+        if not self.dead():
+            sh(["tmux", "send-keys", "-t", self.tmux, "-l", str(self.h.get("exit_keys", "")).encode().decode("unicode_escape")])
+            self.fault("exit-keys")
+        pid = pc.dig(self.status(), "s4_harness_pid")  # S4 gives the harness no start id: a reused pid is not ruled out
+        if type(pid) is int and not wait(lambda: not alive(pid), 30, 2):
+            try:
+                os.kill(pid, signal.SIGTERM)
+                self.fault("sigterm", pid=pid)
+            except OSError:  # it exited after the wait
+                pass
+
+    def at(self, m):  # sleep until minute m after the paste
+        time.sleep(max(0, self.st["pasted"] + m * 60 - time.time()))
+
+    def pre(self, script):  # section 3.1: once, after setup and before start
+        return self.script("pre", script, self.gc_env(True))
+
+    def exec(self, script):  # section 3.1: at its minute, in the harness's proxy and CA environment, never its keys
+        self.need(started=True)
+        self.at(self.m)
+        if not alive(pid := pc.dig(self.status(), "s4_harness_pid")):
+            raise Step("skip", "no harness process")
+        with open("/proc/%d/environ" % pid, "rb") as f:  # filtered by name before anything holds it
+            env = exec_env(f.read(), list(self.s.get("ca_env") or ()) + list(self.s.get("home_vars") or {}))
+        return self.script("exec", script, env, minute=self.m)
+
+    def script(self, kind, name, env, **kw):
+        """bash exec/<name> in the project, its process group killed at the step's limit; only the replaced output
+        reaches exec/<name>.txt; one faults.jsonl line. No key file path or key value is in its environment. A pre
+        script runs in the participant's shell; an exec script with only the harness's names from exec_env."""
+        shell = self.gc_env(True)
+        env = dict(env, PAD_RUN=self.run, PAD_HOME=self.st.get("home") or "",
+                   PAD_MODEL_HOSTS=self.path("model-hosts.toml"), PAD_DAEMON=str(self.h.get("daemon") or ""), PAD_PROXY=PROXY_VALUE,
+                   PAD_SHELL_ENV=quoted(shell), PAD_HOME_ENV=quoted(self.home_env()))
+        p = subprocess.Popen(["bash", os.path.join(PAD, "exec", name)], cwd=self.project, env=env, stdin=subprocess.DEVNULL,
+                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, errors="replace", start_new_session=True)
+        try:
+            out, code = p.communicate(timeout=max(1, self.left()))[0], p.returncode
+        except subprocess.TimeoutExpired:
+            os.killpg(p.pid, signal.SIGKILL)
+            out, code = p.communicate()[0], None
+        values = self.known()
+        if values is not None:
+            write(self.path("exec", name + ".txt"), replace_known(out, values)[0], 0o644)
+        self.fault(kind, script=name, **kw, exit=code, withheld=values is None)
+        if code is None:
+            raise Step("timeout", "%s %s killed at the step's limit" % (kind, name))
+        return ("ok", "%s %s exit 0" % (kind, name)) if code == 0 else ("FAIL", "%s %s exit %d" % (kind, name, code))
+
+    def kill_rec(self, m):
+        """kill9 of the recorder in status.json; saves what wait-recovery compares against -> (pid or None, seconds
+        since the last written request or None)."""
+        st = self.status()
+        pid, last = pc.dig(st, "s4_pid"), pc.when(pc.dig(st, "s4_last"))
+        since = round(time.time() - last.timestamp(), 1) if last else None
+        if ok := kill9(pid):
+            self.st["kill"] = dict(pid=pid, at=time.time(), requests=pc.dig(st, "s4_requests"), off_spans=pc.dig(st, "s4_spans"),
+                                   off_ms=pc.dig(st, "s4_down_ms"))
+        self.fault("kill-recorder", minute=m, pid=pid if ok else None, since_request_s=since)
+        return (pid if ok else None), since
+
+    def kill_recorder(self, m):  # section 3.1; S4 has no open-stream count yet: wait up to 60 s for a request in the last 10 s
+        self.need("goalcup", started=True)
+        self.at(m)
+        wait(lambda: (t := pc.when(pc.dig(self.status(), "s4_last"))) is not None and time.time() - t.timestamp() < 10, 60, 1)
+        pid, since = self.kill_rec(m)
+        if not pid:
+            raise Step("FAIL", "no live goalcup recorder pid in status.json")
+        return "ok", "recorder %d killed %s" % (pid, "no request written yet" if since is None else "%g s after a written request" % since)
+
+    def wait_recovery(self, _):
+        if not (k := self.st.get("kill")):
+            raise Step("skip", "no recorder kill")
+
+        def missing():
+            st = self.status()
+            n = pc.dig(st, "s4_requests")
+            return [w for w, bad in (("a new recorder pid", pc.dig(st, "s4_pid") in (None, k["pid"])),
+                                     ("mode recording", pc.dig(st, "s4_mode") != "recording"),
+                                     ("one closed recorder_down gap", (pc.dig(st, "s4_spans") or 0) != (k["off_spans"] or 0) + 1
+                                      or pc.dig(st, "s4_since")),
+                                     ("a new model request", type(n) is not int or n <= (k["requests"] or 0))) if bad]
+        if not wait(lambda: not missing(), self.left(), 2):
+            raise Step("FAIL", "did not stand back up: missing " + ", ".join(missing()))
+        st = self.status()
+        return "ok", "recorder %s up in %.1f s, one recorder_down gap %s ms, calls %s > %s" % (
+            pc.dig(st, "s4_pid"), time.time() - k["at"], (pc.dig(st, "s4_down_ms") or 0) - (k["off_ms"] or 0),
+            pc.dig(st, "s4_requests"), k["requests"])
+
+    def kill_wd(self, m):  # kill9 of the pid in rec/watchdog.pid, at minute m -> the pid, or a FAIL when none was hit
+        self.need("goalcup", started=True, entry=True)
+        self.at(m)
+        pid = read_pid(os.path.join(self.st["entry_dir"], "rec", "watchdog.pid"))
+        self.fault("kill-watchdog", minute=m, pid=pid if kill9(pid) else None)
+        return pid
+
+    def kill_watchdog(self, m):  # section 3.1, PRD-02 R5: at m+3 the harness ends; the recorder seals itself, no goalcup seal
+        self.kill_wd(m)
+        self.at(m + 3)
+        pid = pc.dig(self.status(), "s4_harness_pid")
+        self.exit_harness()
+        gone = wait(lambda: not alive(pid), 60, 1)
+        self.fault("harness-exit", pid=pid, seen=bool(gone))  # check.py: the seal within 35 s of this line
+        return ("ok", "watchdog killed, harness ended at +%g min" % (m + 3)) if gone else ("FAIL", "the harness did not exit")
+
+    def kill_both(self, m):  # section 3.1, PRD-02 R7, PRD-06 U8: both die, the harness is ended, then continue (or upload)
+        self.need("goalcup", started=True, entry=True)
+        self.at(m)
+        e, st = self.st["entry_dir"], self.status()
+        hit = [(p, kill9(p)) for p in (read_pid(os.path.join(e, "rec", "watchdog.pid")), pc.dig(st, "s4_pid"))]  # together
+        self.fault("kill-both", minute=m, watchdog=hit[0][0] if hit[0][1] else None, pid=hit[1][0] if hit[1][1] else None)
+        if not all(ok for _, ok in hit):
+            raise Step("FAIL", "no live goalcup watchdog and recorder pids")
+        self.st["old"] = {k: self.st[k] for k in ("entry", "run")}  # the row is this entry's; verify and the ids follow it
+        pid = pc.dig(st, "s4_harness_pid")
+        self.exit_harness()
+        wait(lambda: not alive(pid), 30, 1)
+        cmd = "upload" if self.span == "upload" else "continue"
+        head = open(self.path("launch.sh")).read().splitlines()[:-1]  # the launch shell's cd and exports, not goalcup start
+        write(self.path("cont.sh"), "\n".join(head + [shlex.join([tool("goalcup"), cmd])]) + "\n", 0o700)
+        sh(["tmux", "new-window", "-d", "-t", self.session, "-n", "cont", "bash " + shlex.quote(self.path("cont.sh"))])
+        sh(["tmux", "set-option", "-w", "-t", self.session + ":cont", "remain-on-exit", "on"])
+        self.st["pane"] = self.session + ":cont"  # state.json: the panes and the watch follow that window
+        new = wait(lambda: cmd == "upload" or self.entry() != e, 90, 2)
+        self.fault(cmd, new_entry=bool(new))
+        return "ok", "goalcup %s in pad:cont%s" % (cmd, "" if new else ", no new entry in 90 s")
+
+    def tree(self, roots):
+        """The pids of `roots` and every descendant, from /proc; never this process or its parents, tmux or pad-run."""
+        kids, parent, up = {}, {}, set()
+        for d in (int(x) for x in os.listdir("/proc") if x.isdigit()):
+            try:
+                parent[d] = int(open("/proc/%d/stat" % d).read().rsplit(")", 1)[1].split()[1])
+                kids.setdefault(parent[d], []).append(d)
+            except (OSError, IndexError, ValueError):
+                pass
+        me = os.getpid()
+        while me > 1 and me not in up:
+            up.add(me)
+            me = parent.get(me, 0)
+        todo, got = [p for p in roots if type(p) is int], set()
+        while todo:
+            if (p := todo.pop()) not in got:
+                got.add(p)
+                todo += kids.get(p, [])
+
+        def mine(p):  # tmux, pad-run, or the shell running this step
+            try:
+                return p in up or b"pad-run" in open("/proc/%d/cmdline" % p, "rb").read() or open("/proc/%d/comm" % p).read().startswith("tmux")
+            except OSError:
+                return True  # gone
+        return sorted(p for p in got if not mine(p))
+
+    def hold(self, minutes, do, undo, backstop):
+        """do(); wait `minutes` (unless do() returned False); undo() in a finally. A detached shell runs `backstop` once more
+        30 s after the end, so a killed pad-run (SIGKILL included) or a dropped control channel never leaves the fault on."""
+        subprocess.Popen(["sh", "-c", "sleep %d; %s" % (minutes * 60 + 30, backstop)], start_new_session=True,
+                         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        for sig in (signal.SIGTERM, signal.SIGHUP):
+            signal.signal(sig, lambda *_: sys.exit(1))  # runs the finally
+        try:
+            if do() is not False:
+                time.sleep(minutes * 60)
+        finally:
+            undo()
+
+    def freeze(self, m):  # section 3.1: SIGSTOP of watchdog, recorder, harness and its children for n minutes (default 10)
+        self.need("goalcup", started=True, entry=True)
+        self.at(m)
+        st = self.status()
+        pids = self.tree([read_pid(os.path.join(self.st["entry_dir"], "rec", "watchdog.pid")), pc.dig(st, "s4_pid"),
+                          pc.dig(st, "s4_harness_pid")])
+        if not pids:
+            raise Step("FAIL", "no goalcup process to freeze")
+        n = int(self.span or 10)
+
+        def send(sig):  # -> how many processes took the signal
+            sent = 0
+            for p in pids:
+                try:
+                    os.kill(p, sig)
+                    sent += 1
+                except OSError:  # it left meanwhile
+                    pass
+            return sent
+        stopped = []
+
+        def stop():  # the line says how many were stopped; none stopped is no freeze (check.py: not run)
+            stopped.append(send(signal.SIGSTOP))
+            self.fault("freeze", minute=m, minutes=n, pids=stopped[0])
+            return stopped[0] > 0
+        self.hold(n, stop, lambda: (send(signal.SIGCONT), self.fault("thaw")), "kill -CONT %s 2>/dev/null" % " ".join(map(str, pids)))
+        return ("ok", "%d processes stopped %d min" % (stopped[0], n)) if stopped and stopped[0] else ("skip", "not run: no process was stopped")
+
+    def cut_worker(self, m):  # section 3.1, PRD-06 U3 and U5: one /etc/hosts line, so each lookup of the Worker is refused
+        self.need("goalcup", started=True)
+        if self.s["server"] == "off":
+            raise Step("skip", "server off")
+        host, n, took = urllib.parse.urlparse(str(self.s.get("server_url"))).hostname, int(self.span or 10), []
+        look = lambda: sh(["getent", "hosts", host]).stdout.split()[:1]  # noqa: E731  the first address, or nothing
+        self.at(m)
+
+        def cut():
+            before = look()
+            sh(["sudo", "-n", "sh", "-c", "echo %s >> /etc/hosts" % shlex.quote("127.0.0.1 %s # pad-cut" % host)])
+            during = look()  # a stand-in listener is not built: nothing listens on 443 here, so loopback refuses at once
+            took.append(during == ["127.0.0.1"] != before)
+            self.fault("cut-worker", minute=m, minutes=n, host=host, before=before, during=during, took=took[0])
+            return took[0]
+        self.hold(n, cut, lambda: (sh(["sudo", "-n", "sed", "-i", "/# pad-cut$/d", "/etc/hosts"]),
+                                   self.fault("cut-lifted", host=host, after=look())),
+                  "sudo -n sed -i '/# pad-cut$/d' /etc/hosts")
+        return ("ok", "%s resolved to 127.0.0.1 for %d min" % (host, n)) if took and took[0] else ("skip", "not run: cut did not take")
+
+    def route_drop(self, m):  # section 3.1: the default route gone for n minutes (default 1)
+        self.need("goalcup", started=True)
+        routes = [ln.split() for ln in sh(["ip", "route", "show", "default"]).stdout.splitlines() if ln.strip()]
+        if not routes:
+            raise Step("skip", "not run: no default route")
+        n, add = int(self.span or 1), [["sudo", "-n", "ip", "route", "add"] + r for r in routes]
+        self.at(m)  # the conductor's calls failing meanwhile never stop its walk (pad); the backstop restores it
+        took = []
+
+        def drop():  # the line comes after the del and says whether it took: the del exited 0 and no default route is left
+            took.append(sh(["sudo", "-n", "ip", "route", "del", "default"]).returncode == 0
+                        and not sh(["ip", "route", "show", "default"]).stdout.strip())
+            self.fault("route-drop", minute=m, minutes=n, routes=len(routes), took=took[0])
+            return took[0]
+        self.hold(n, drop, lambda: ([sh(a) for a in add], self.fault("route-back", default=bool(sh(["ip", "route", "show", "default"]).stdout.strip()))),
+                  "; ".join(shlex.join(a) + " 2>/dev/null" for a in add))
+        return ("ok", "default route gone %d min" % n) if took and took[0] else ("skip", "not run: drop did not take")
+
+    def fd_limit(self, m):  # section 3.1: `ulimit -Sn 256` went into the launch line (start); read what the processes got
+        self.need("goalcup", started=True)
+        got, st = {}, self.status()
+        for role, name in (("recorder", "s4_pid"), ("harness", "s4_harness_pid")):
+            try:  # [soft, hard]
+                found = re.search(r"Max open files\s+(\d+)\s+(\d+)", open("/proc/%d/limits" % pc.dig(st, name)).read())
+            except (OSError, TypeError):
+                found = None
+            got[role] = found and [int(found[1]), int(found[2])]
+        self.fault("fd-limit", minute=m, **got)
+        return "ok", "soft limits: recorder %s, harness %s" % tuple(x and x[0] for x in got.values())
+
+    def kill_watchdog_recover(self, m):  # section 3.1, PRD-10 acceptance 11; the harness is never touched
+        self.kill_wd(m)
+        first = self.recover()
+        try:
+            self.at(m + 1)
+            self.kill_rec(m + 1)
+            said, end = [], time.time() + 10
+            while time.time() < end:  # plain status in the clean env, every 2 s for 10 s
+                try:
+                    out = sh([tool("goalcup"), "status"], env=self.gc_env(True), timeout=10).stdout
+                except subprocess.TimeoutExpired:
+                    out = ""
+                said += [ln for ln in out.splitlines() if re.search(r"goalcup (recover|continue)", ln) and ln not in said]
+                time.sleep(2)
+            self.fault("status", minute=m + 1, said="\n".join(said))
+        finally:  # the second recover always runs, so the recorder never stays down
+            self.at(m + 2)
+            second = self.recover()
+        return "ok", "recover exits %s and %s" % (first, second)
+
+    def recover(self):  # in tmux window <session>:recover, under env -i: HOME, PATH, TERM and the run's GOALCUP_* only
+        n = self.st["recovers"] = self.st.get("recovers", 0) + 1
+        out, code = self.path("recover-%d.txt" % n), self.path("recover-%d.exit" % n)
+        argv = ["env", "-i"] + ["%s=%s" % kv for kv in self.gc_env(True).items()] + [tool("goalcup"), "recover"]
+        sh(["tmux", "new-window", "-d", "-t", self.session, "-n", "recover",
+            "%s >%s 2>&1; echo $? >%s" % (shlex.join(argv), shlex.quote(out), shlex.quote(code))])
+        got = wait(lambda: os.path.exists(code) and re.fullmatch(r"\d+\n", open(code).read()), 60, 1)
+        got = got and int(got.group())
+        self.fault("recover", exit=got, said=open(out).read() if os.path.exists(out) else "")
+        if os.path.exists(out):  # only the replaced form stays
+            os.remove(out)
+        return got
+
+    def keep_going(self, _):  # section 1a: once, as a participant may (AGENTS.md), after pane and requests idle keep_going minutes
+        self.need("goalcup", started=True)
+        idle, last, since = float(self.s.get("keep_going", 1)) * 60, None, time.time()
+        while time.time() < self.st["pasted"] + float(self.s["minutes"]) * 60:
+            if self.dead():
+                raise Step("skip", "harness exited")
+            if (now := (self.pane(False), pc.dig(self.status(), "s4_requests"))) != last:
+                last, since = now, time.time()
+            elif time.time() - since >= idle:
+                sh(["tmux", "send-keys", "-t", self.tmux, "-l", "keep going"])
+                time.sleep(float(self.h.get("submit_delay", 2)))
+                sh(["tmux", "send-keys", "-t", self.tmux, "Enter"])
+                self.pane()
+                self.fault("keep-going")
+                return "ok", "typed keep going after %g min idle" % (idle / 60)
+            time.sleep(10)
+        raise Step("skip", "agent still working")
+
+    def spend(self, _):  # section 7, for pad's 5-minute check: model names and int token counts, usage's exit, read or not
+        self.need("goalcup-verify", started=True, entry=True)
+        r = sh(["nice", "-n", "19", tool("goalcup-verify"), "usage", self.st["entry_dir"], "--json"], timeout=max(1, self.left()))
+        use = loads(r.stdout)
+        read = isinstance(pc.dig(use, "s7_models"), list)
+        models = [dict(x, model=replace_known(x["model"], self.known() or [])[0]) for x in pc.models(use)]
+        return ("ok" if read else "skip"), ("%d models" % len(models) if read else "usage exit %d, no models read" % r.returncode
+                                           ), {"models": models, "exit": r.returncode, "read": read}
+
+    def seal_now(self, _):
+        self.need("goalcup", started=True)
+        if self.sealed():
+            return "ok", "already sealed"
+        r = sh([tool("goalcup"), "seal", "--yes"], env=self.env, cwd=self.project, timeout=max(1, self.left()))
+        self.fault("seal-now", exit=r.returncode)  # the seal step names the cap from this line
+        return ("ok", "sealed at the spend cap") if r.returncode == 0 else ("FAIL", "goalcup seal exit %d" % r.returncode)
+
+    def watch(self, _):
+        """Section 4, started by type_prompt: status 10 s, procs 30 s, pane and upload 1 min, live 5 min, until watch.stop,
+        the seal (and final upload) after one last pane, or the box's end. Panes only while the known file lives."""
+        write(self.path("watch.pid"), str(os.getpid()), 0o644)
+        self.st.update(panes=0, screen_known=0)  # the watch's own pane-w<n> files and count, in watch.json
+        try:
+            return self.watch_loop()
+        finally:
+            if os.getpgrp() == os.getpid():  # started in its own session: the live thread's goalcup-verify goes with it
+                signal.signal(signal.SIGTERM, signal.SIG_IGN)
+                os.killpg(0, signal.SIGTERM)
+
+    def watch_loop(self):  # until the step's end, pad's runner_limits "watch"
+        due, last, live = {"live": time.time() + 300}, False, None
+        while not (last or os.path.exists(self.path("watch.stop")) or self.left() < 0):
+            st, now, e = self.status(), time.time(), self.st.get("entry_dir") or self.run
+            up = loads(path=os.path.join(e, "upload.json"))
+            last = pc.dig(st, "s4_mode") == "sealed" and (self.s.get("server") == "off" or pc.dig(up, "s9_final") == "sealed")
+            go = [w for w in EVERY if now >= due.get(w, 0)]
+            due.update((w, now + EVERY[w]) for w in go)
+            if "status" in go or last:
+                append(self.path("watch", "status.jsonl"), {"status": st})
+            if "procs" in go:
+                pids = (("watchdog", read_pid(os.path.join(e, "rec", "watchdog.pid"))), ("recorder", pc.dig(st, "s4_pid")),
+                        ("harness", pc.dig(st, "s4_harness_pid")))
+                append(self.path("watch", "procs.jsonl"), {"procs": [proc(r, p) for r, p in pids if type(p) is int]})
+            if "pane" in go or last:
+                if self.known() is None:  # point 4: the known values are wiped, so no more panes
+                    return "ok", "known values gone"
+                self.tmux = loads(path=self.path("state.json")).get("pane") or self.tmux  # kill-both moves it to pad:cont
+                self.pane(tag="w")
+                write(self.path("watch", "watch.json"), json.dumps({k: self.st[k] for k in ("panes", "screen_known")}), 0o644)
+                if self.s.get("server") != "off":
+                    append(self.path("watch", "upload.jsonl"), {"upload": up})
+            if "live" in go and tool("goalcup-verify") and self.st.get("entry_dir") and not (live and live.is_alive()):
+                look = float((self.s.get("limits") or {}).get("look", 60))  # beside the loop, so no status line waits
+                (live := threading.Thread(target=self.look_line, args=(look,), daemon=True)).start()
+            time.sleep(1)
+        return "ok", "stopped"
 
     def harness_files(self):
         """Files under the connector's native roots changed since the start, as [{path, size}] (PRD-08 section 1)."""
         out, since = [], self.st.get("pasted", 0) - 120
         for row in self.s.get("native") or []:
-            root = row["root"].replace("{config_home}", self.st.get("home") or "/nonexistent")
+            root = row["root"].replace("{home}", self.st.get("home") or "/nonexistent").replace("{workspace}", self.project)
             for p in glob.glob(os.path.join(root, row.get("pattern", "**")), recursive=True):
                 if os.path.isfile(p) and os.path.getmtime(p) >= since:
                     out.append({"path": "%s:%s" % (row["name"], os.path.relpath(p, root)), "size": os.path.getsize(p)})
@@ -343,19 +822,37 @@ class Run:
     def verify(self, _):
         """Section 8 (the server's copy is the conductor's fetched/<entry>/, S13; the git scan needs a push token, none yet),
         each inside the step's limit (a timeout is an exit "timeout"); then meta-box.json, scan and tar, whatever happened."""
-        e, exits, result, note = self.entry(), {}, None, ""
+        self.stop_watch()  # the watch's last line first, so the tar holds a whole watch/
+        e, exits, result, note, new = self.entry(), {}, None, "", None
+        if old := self.st.get("old"):  # entry() is not called again below: it would put the newest entry back  # kill-both: the row is the old entry's, and the entry goalcup continue started is checked too
+            new = (self.st["entry"], e) if self.st.get("entry") != old["entry"] else None
+            self.st.update(old)
+            e = os.path.join(self.env["GOALCUP_HOME"], "runs", old["run"], old["entry"])
+        self.st["screen_known"] = self.st.get("screen_known", 0) + (loads(path=self.path("watch", "watch.json")).get("screen_known") or 0)
         try:
-            self.need("goalcup-verify", entry=True)
+            self.daemon_check(True)  # inside the try: meta-box.json, the out scan and the tar follow whatever happens
+            self.need("goalcup-verify")
+            if not e:
+                raise Step("skip", "no entry")
             shutil.copy(os.path.join(e, "status.json"), self.path("status.json"))
-            raw = [p for p in (os.path.join(e, "goalcup.log"), os.path.join(e, "upload.json")) if os.path.exists(p)]
-            f, on = os.path.join("fetched", self.st["entry"]), self.s["server"] != "off"
+            on = self.s["server"] != "off"
+            f = os.path.join("fetched", self.st["entry"])
             got = on and os.path.isfile(self.path(f, "rec.gcr.zst"))
             note = "; no fetched copy" if on and not got else ""
-            for name, argv in [("check-local", ["check", "--json", "--known", "known", "--harness-files", "harness-files.json", e])] + [
-                    ("check-server", ["check", "--json", "--server", f, "--local", e, "--known", "known"])] * got + [
-                    ("secrets", ["secrets", "--known", "known", e] + [f] * got + ["status.json"] + raw),
-                    ("secrets-plain", ["secrets", "--known", "known-plain", e] + [f] * got)] + [  # C5 is the server copy's
-                    ("usage", ["usage", f if got else e, "--json", "--out", os.path.join("verify", "usage")])] * (got or not on):
+            cmds, more = pc.verify_cmds(e, f if got else None, True), []
+            if new:  # the entry goalcup continue started: the same check (and server compare), and its paths in both scans
+                fn = os.path.join("fetched", new[0])
+                more = [new[1]] + [fn] * (on and os.path.isfile(self.path(fn, "rec.gcr.zst")))
+                cmds += [(n + "-new", a) for n, a in pc.verify_cmds(new[1], fn if len(more) > 1 else None) if n.startswith("check")]
+            if self.has("route-drop"):  # check.py: when decode_failed gaps started
+                write(self.path("verify", "gaps.json"), json.dumps(self.dump_lines(e, "gap")), 0o644)
+            if self.has("kill-watchdog"):  # check.py: the seal's time is the record's last LINK (nothing follows the seal's)
+                write(self.path("verify", "seal.json"), json.dumps(([{}] + self.dump_lines(e, "link"))[-1]), 0o644)
+            for name, argv in cmds + [("secrets-plain", ["secrets", "--known", "known-plain", e] + [f] * got)]:
+                if name == "usage" and on and not got:  # C5 is the server copy's
+                    continue
+                if name.startswith("secrets"):
+                    argv = argv + more + ["status.json"] * (name == "secrets")
                 exits[name] = self.verify_cmd(argv, None if name == "usage" else name + ".json")[0]
         except Step as stop:
             result = stop.args
@@ -367,9 +864,10 @@ class Run:
         keys = ("harness_version", "run", "entry", "screen_known", "end_screen_requests", "commits_since_start", "plain_planted",
                 "known_box")
         write(self.path("meta-box.json"), json.dumps({k: self.st.get(k, 0 if k == "screen_known" else None) for k in keys}), 0o644)
-        if result is None:  # last: every file the tar carries, which is all the conductor's files are built from
+        if tool("goalcup-verify"):  # last, whatever happened above (it needs no entry): every file the tar carries
             exits["secrets-out"] = self.verify_cmd(["secrets", "--known", "known"] + [n for n in OUT if os.path.exists(self.path(n))],
                                                    "secrets-out.json")[0]
+        if result is None:
             result = ("ok", "exits " + ", ".join("%s %s" % kv for kv in exits.items()) + note)
         write(self.path("verify", "exits.json"), json.dumps(exits), 0o644)  # the exits of whatever ran
         # The known files go after the scan; the home only once nothing reads it (else the wipe step takes it).
@@ -380,30 +878,114 @@ class Run:
                     t.add(self.path(name), name)
         return result
 
+    def stop_watch(self):  # watch.stop, then up to 30 s for the watch to exit
+        write(self.path("watch.stop"), "")
+        wait(lambda: not alive(read_pid(self.path("watch.pid"))), 30, 1)
+
+    def daemon_pids(self):
+        """The live pids, not ours, whose command line holds the harness file's `daemon` command and whose environment
+        holds this run's home (the connector's home mapping): the stale daemon, one it forked, or one goalcup started.
+        None when /proc cannot be listed (unknown); another run's or the participant's own daemon is never matched."""
+        want, home = str(self.h.get("daemon") or "").strip(), ["%s=%s" % kv for kv in self.home_env().items()]
+        if not want or not self.st.get("home"):
+            return []
+        try:
+            names = [int(d) for d in os.listdir("/proc") if d.isdigit() and int(d) != os.getpid()]
+        except OSError:
+            return None
+        out = []
+        for pid in names:
+            try:
+                with open("/proc/%d/cmdline" % pid, "rb") as f:
+                    line = f.read().replace(b"\0", b" ").decode(errors="replace")
+                with open("/proc/%d/environ" % pid, "rb") as f:
+                    env = f.read().decode(errors="replace").split("\0")
+            except OSError:
+                continue
+            if want in line and all(h in env for h in home) and alive(pid):
+                out.append(pid)
+        return out
+
+    def daemon_check(self, end=False):
+        """PRD-11 acceptance 5: goalcup start's `before` stops the stale daemon. One faults.jsonl line per look (after
+        start: `alive`, the stale daemon itself; and at verify: `left`, any such process after exit); check.py fails the row
+        when either lived. The one field is null when /proc could not be read. Nothing when stale-gateway.sh left no pid."""
+        pid = read_pid(self.path("exec", "stale-gateway.pid"))
+        if pid is not None:
+            pids = self.daemon_pids()
+            got = None if pids is None else bool(pids) if end else pid in pids
+            self.fault("daemon-check", script="stale-gateway.sh", **{"left" if end else "alive": got})
+
+    def stop_daemon(self):
+        """The cleanup after daemon_check: kills every daemon process (forks too) left -> a line for the wipe step, or None."""
+        left = 0
+        for pid in self.daemon_pids() or []:
+            try:
+                os.kill(pid, signal.SIGKILL)
+                left += 1
+            except OSError:  # it left meanwhile
+                pass
+        return "%d daemon process(es) still alive, killed" % left if left else None
+
     def wipe(self, _):
+        if os.path.isdir(self.run):  # the watch ends before the run folder goes
+            self.stop_watch()
+        left = self.stop_daemon()
         if shutil.which("tmux"):
-            sh(["tmux", "kill-session", "-t", self.tmux])
+            sh(["tmux", "kill-session", "-t", self.session])
         found = self.wipe_secrets(known=True)
-        return "ok", "found and wiped: " + ", ".join(found) if found else "nothing key-like left"
+        return "ok", "; ".join([("found and wiped: " + ", ".join(found)) if found else "nothing key-like left"] + ([left] if left else []))
+
+
+def parse(words):
+    """-> (step, argument, minute) or None. A timed step is `kill-recorder@M`, with `+N` minutes on pc.SPAN kinds and `+upload`
+    on kill-both (then the argument is the suffix); `pre SCRIPT`, `exec SCRIPT@M` and
+    `wait-calls N` take a word; every other step stands alone. The minute is a string; the argument may be None."""
+    kind, at, m = (words[0] if words else "").partition("@")
+    arg = words[1] if len(words) == 2 else None
+    if kind == "exec" and arg:
+        arg, at, m = arg.partition("@")
+    if kind in TIMED:  # pad checked the suffix (parse_steps) before it wrote settings.json
+        m, _, arg = m.partition("+")
+        arg = arg or None
+    script, minute = arg and re.fullmatch(r"[A-Za-z0-9._-]+", arg), re.fullmatch(r"\d+(\.\d+)?", m)
+    if kind in TIMED:
+        ok = len(words) == 1 and minute
+    elif kind == "exec":
+        ok = script and at and minute
+    elif kind == "pre":
+        ok = script and not at
+    else:
+        ok = kind in STEPS and not at and len(words) == 1 + (kind == "wait-calls")
+    return (kind, arg, m) if ok else None
 
 
 def main(argv):
-    if len(argv) not in (3, 4) or argv[2] not in STEPS or (argv[2] == "wait-calls") != (len(argv) == 4):
+    got = parse(argv[2:])
+    if not got:
         print(USAGE, file=sys.stderr)
         return 2
+    kind, arg, m = got
     os.umask(0o077)
-    run = None
+    run, extra = None, {}
     try:
-        run = Run(argv[1], argv[2])
-        result, saw = getattr(run, argv[2].replace("-", "_"))(argv[3] if len(argv) == 4 else None)
+        run = Run(argv[1], kind, m, arg if kind in TIMED else None)
+        result, saw, *more = getattr(run, kind.replace("-", "_"))(float(m) if kind in TIMED else arg)
+        extra = more[0] if more else {}
     except Step as stop:
         result, saw = stop.args
     except Exception as e:  # never the message, which could quote a value: only the kind
         result, saw = "FAIL", "%s in %s" % (type(e).__name__, argv[2])
-    if run and os.path.isdir(run.run):
+    if run and os.path.isdir(run.run) and not run.quiet:
+        if kind == "wait-recovery":  # its end on the box clock, beside the kill and seal-now lines check.py reads
+            run.fault(kind, result=result)
         write(run.path("state.json"), json.dumps(run.st))
     ids = dict({k: run.st.get(k) for k in ("entry", "run")}, code=getattr(run, "code", None)) if run else {}  # code: start's only
-    print("PADSTEP " + json.dumps(dict({k: v for k, v in ids.items() if v}, result=result, saw=saw)))
+    old = run.st.get("old") or {} if run else {}  # after kill-both the row is the old entry's; the conductor fetches both
+    if old and run.st.get("entry") not in (None, old.get("entry")):
+        ids["new_entry"] = run.st["entry"]
+    ids.update(old)
+    print("PADSTEP " + json.dumps(dict({k: v for k, v in ids.items() if v}, result=result, saw=saw, **extra)))
     return 0
 
 

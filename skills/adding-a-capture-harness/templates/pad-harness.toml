@@ -1,0 +1,36 @@
+# scripts/pad/harnesses/<connector id>.toml: what only the test pad needs for one harness (PRD-12 section 6).
+# Test data, never connector data; goalcup never reads it. Name the file after the connector id.
+# Start from claude-code-cli.toml, codex-cli.toml or hermes-cli.toml. Launch facts (proxy and CA variables,
+# permission prompts, auto-update switches, session files) belong in connectors/<id>.toml.
+#
+# First, as a comment: every vendor page you read for this file, with the date. A key route or a first-run
+# dialog read from docs and not run against the live harness is said so here.
+version = ""                  # the pinned version; the run refuses an installed version that differs
+version_cmd = ""              # prints that version; it must print this file's version and no other
+install = ""                  # installs exactly that version as a non-root user, e.g. "npm i -g <package>@<version>"
+                              # (one line; single quotes around the value when it holds double quotes)
+key_kind = ""                 # which pad key the harness takes: claude, openai, deepseek or gemini
+key_route = ""                # how the key reaches the harness, as its docs say: "login", "file" or "env"
+login = ""                    # "login": a command that reads the key on stdin, run with the isolated home; never an argument
+key_file = ""                 # "file": a path in the isolated home, e.g. "{home}/.env"; written 0600
+key_line = ""                 # "file": the line written there, e.g. "DEEPSEEK_API_KEY={key}"
+key_env = ""                  # "env": the variable the launch shell exports from the key file, e.g. "DEEPSEEK_API_KEY"
+model_host = ""               # host of the harness's model calls; only the dodger case uses it
+ready_text = ""               # text on screen when the harness takes input; empty: wait 30 s
+pre_keys = ""                 # printf format typed once before the prompt, for a first-run dialog, e.g. '\r'
+exit_keys = '/exit\r'         # printf format that ends the harness
+daemon = ""                   # command stale-gateway.sh starts as a left-over background service, e.g. "hermes gateway run"; omit if none
+submit_delay = 2              # seconds between the paste and Enter
+subagent_word = "subagent"    # the prompt's word for a subagent, as this harness calls it
+keep_going = true             # cycle mode types "keep going" for this harness
+
+[direct]                      # the case a participant runs: the vendor's own host
+files = { }                   # provider and model config copied into the isolated home: { "<path in home>" = "direct/<id>-config.<ext>" }
+env = { }                     # non-secret values exported in the launch shell, as a participant does
+
+[gateway]                     # leave this table out when the vendor documents no AI Gateway route: the case is then n/a
+files = { }                   # same, from gateway/<id>-config.<ext>
+env = { }                     # non-secret values only
+key_route = "file"            # the same three routes for the gateway key (key name: gateway)
+key_file = "{home}/.env"
+key_line = "AI_GATEWAY_API_KEY={key}"

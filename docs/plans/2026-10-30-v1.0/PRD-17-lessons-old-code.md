@@ -936,3 +936,72 @@ Names for `LESSONS.md` (the lessons lane writes them; judge 13:06Z):
   `export`, `import`) and `proxy::ca::certificates` now. T3 and every `lessons_connect` row drive
   `proxy::serve`, which comes in PRD-03 slice 2.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-08 slice 2 (merge 669f5d92)
+
+Names for `LESSONS.md` (the lessons lane writes them; judge 14:56Z, 15:13Z):
+
+- L-FW3 (local and server halves, plus a wrong `--local` path exiting 3):
+  `crates/goalcup-verify/tests/server_compare.rs`
+  `fw3_pruned_entry_is_named_and_server_copy_stands_in`. This replaces the `(name pending)`.
+- L-FW9: `crates/goalcup-verify/tests/server_compare.rs` `fw9_one_flipped_byte_fails_the_copy`.
+- L-VR2: `crates/goalcup-verify/tests/server_compare.rs`
+  `vr2_seal_without_reason_or_totals_is_reported`, plus the `("inv5", m_mask_at_top)` row of
+  `check_invariants.rs` `vr3_every_mutation_fails_its_check_with_exit_2`. Both inputs exited 3 before
+  the fix. The panic hook itself (file and line, exit 3) is recorded as a review check, because no
+  test input reaches it.
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-11 slice 3 (merge c14d63b8)
+
+- **`hosts::check` is the full rule set on integration**, so `lessons_hosts.rs` and the lessons
+  fixtures can land against it. Facts the guards meet: N2 forms (`0.0.0.0`, `::`, mapped loopback)
+  come back `Skipped { local: true }`, as do private and link-local addresses; N3 numeric spellings
+  (`127.1`, `0x7f.1`) are refused with `local` false (PRD-11 note, known), so N3's guard asserts the
+  refusal only. N6 uses `hosts::resolves_only_here(&[IpAddr])` (public), so the stub-resolver guard
+  calls it directly. N1's userinfo and backslash handling is `hints::authority` (crate-private);
+  its guard goes through `plan` with a hint file, as `connector_hints.rs` does. HF1 to HF8 rows whose
+  guard is `connector_launch.rs` (lock, version probe, typed settings, never a link) are on
+  integration at c14d63b8 and can turn green after a box run on the integration head.
+
+### 2026-10-30, replan after PRD-10 slice 3 (merge f66ce4a5)
+
+- **SC1 is named and green:** `crates/goalcup/tests/cli_folder.rs`
+  `project_folder_and_goalcup_home_never_hold_each_other`. It refuses a project inside
+  `$GOALCUP_HOME` and one that holds it, also through a link and with `..` in the spelled path; its
+  inputs include the relative `GOALCUP_HOME=gc` of the A8 note, so the check the lane was asked to
+  make is in the case. The "side by side" part of the rule has no input of its own in the case. Row 2.16 SC1 can point at it.
+- **SC2's folder case is named and green:** `cli_folder.rs::refused_start_creates_nothing` (the
+  refusal ends "Nothing was created.", the project's listing of names, sizes and times is unchanged,
+  and neither `GOALCUP_HOME` nor its parent exists). SC2's other cases (Ctrl-C, a denial, an expired code, an absent
+  server) wait for PRD-10's `approve.rs`. For the start slice the PRD-10 note fixes the order
+  `connector::load`, `folder::check`, then `connector::plan`, because `plan` creates the isolated
+  home, its lock file and the `update_off` rows; without that order this case would fail.
+- PRD-10's SC row in this PRD's acceptance table (P14, S7, HF4, HF6 still to come) is unchanged.
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-11 slice 4, part 1 (merge a96d9f71)
+
+- **P11's A guard is on integration:** `connector_launch.rs`
+  `with_home_swapped_a_login_shell_finds_goalcup` (PATH reset to `/usr/bin:/bin` inside `sh -lc`,
+  then `command -v goalcup` finds it; goalcup's own `.profile` is replaced, any other is kept). It
+  passed in the merge's gate box, so the P11 row can turn green with commit a96d9f71. The R guard
+  (PRD-10 acceptance 7) only has a real target once a connector sets `HOME` (Amp, Droid, PRD-11
+  slice 5).
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-31, replan after PRD-05 core slice (merge 2c95e8f1)
+
+- **`StreamMasker::boundary()` is on integration**, so the PRD-05 precondition of `lessons_ws.rs` (K15)
+  is met; it still waits for PRD-03 and `common::upstream`. The PRD-05 guard for K15 is
+  `mask_stream::a_fail_closed_window_ends_at_the_message`.
+- **Guard names that moved.** The Codex `rate_limits` case (row of `redact` 110-113) is not in
+  `mask_rules.rs`: it is `mask_stream::an_email_and_a_codex_rate_limit_object_stream_through` (it needs the
+  Codex connector rules, which `mask_rules.rs` does not load). Candidates for the planted-value
+  and every-split rows are `mask_corpus::every_shaped_planted_value_is_masked` and
+  `mask_stream::every_split_equals_the_whole_record_masker`; the left-guard cases are
+  `mask_rules::the_left_guard_keeps_escapes_and_drops_glue`; `url_password` is
+  `mask_rules::url_password_cases` and `long_url_credentials_stay_masked`. Turn the PRD-05-guarded rows
+  green with the `file::test` form against these names, after a build box proves them on the integration
+  head; a row whose old case has no named test in `mask_*` is checked by the lane before it is flipped.
+- No locked ledger item is touched and no owner question comes from this slice.

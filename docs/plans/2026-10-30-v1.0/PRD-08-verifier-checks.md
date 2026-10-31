@@ -821,3 +821,315 @@ log; the pad lane follows.
   changes an exit rule, or builds a skipped check names each change in its merge note, so PRD-15's
   next slice updates the page (PRD-15 note). No code change is asked of PRD-08.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-08 slice 2 (merge 669f5d92)
+
+- **Built and checked.** `check --server <fetched> [--local <entry dir>]` gives real
+  `server_chunks_whole`, `server_equals_local` and `server_counts_match` results and the S6 top-level
+  `server` object `{chunks, whole, equals_local, db_match}` from PRD-07's S13 layout. Gate on
+  669f5d92: `gate fast: PASS in 89s`, nextest 136 of 136 (goalcup-verify 25 of 25). Nine paths
+  changed, all owned here. The slice 1 debts are paid except `main.rs`: `integrity.rs` 982 of
+  1,000, B13 done in `tests/common/` (877 of 900), `check_invariants.rs` 329 of 330.
+- **Rules as merged (S6; PRD-12, PRD-15 and PRD-07 notes).** Under `--server`, a copy with no
+  `fetch.json` gives all three server checks `fail`; a bare `rec.gcr.zst` checked without
+  `--server` still skips them. `fetch.json` `missing.why` set gives `server_chunks_whole` `fail` with
+  `first.o` = `missing.offset`, also when `final` is null. `final` null alone gives
+  `server_chunks_whole` `named` (open end, exit 1, never `fail`) and `server_counts_match` `skip`
+  "not sealed", as PRD-07 asked. A seal with no `reason` or no `totals` is reported, never exit 3.
+  Record sums and offsets saturate. `server_equals_local` is `skip` when the `--local` entry's first
+  part is pruned or its `rec/` is empty; a `--local` folder that never held a record is exit 3.
+  Top-level `equals_local` and `db_match` are true only when every entry passes, false on any `fail`,
+  else null; `whole` is true only when every entry passes.
+- **Lesson names** (judge 14:56Z, 15:13Z, PRD-17 note): L-FW3 (both halves, plus the wrong-path case)
+  is `tests/server_compare.rs` `fw3_pruned_entry_is_named_and_server_copy_stands_in`; the
+  `check_named.rs` test the slice 1 note planned for the local half is not needed. L-FW9 is
+  `server_compare.rs` `fw9_one_flipped_byte_fails_the_copy`. **L-VR2 is settled** by
+  `server_compare.rs` `vr2_seal_without_reason_or_totals_is_reported` and the `("inv5",
+  m_mask_at_top)` row of `check_invariants.rs` `vr3_every_mutation_fails_its_check_with_exit_2`;
+  both exited 3 before the fix. The panic hook in `main.rs` stays as a review check for inputs no
+  test reaches.
+- **Size decision** (`wc -l` at 669f5d92). Src without PRD-09's `usage/` is 1,724: `integrity.rs` 982,
+  `server.rs` 201, `main.rs` 206, `input.rs` 198, `report.rs` 126, `lib.rs` 11. That is six of ten
+  files, 72% of the 2,400 crate ceiling and 123% of the PRD-00 row (1,400). Past their per-file
+  ceilings: `server.rs` (201 of 130), `input.rs` (198 of 150, the PRD-01 ask is still open) and
+  `main.rs` (206 of 200, review nits A9 and B3 still open). Tests are 1,612: `tests/common/` 877,
+  `check_invariants.rs` 329, `check_named.rs` 218 and `server_compare.rs` 188 (60 was set). With the
+  four unwritten files at their ceilings (honesty 150, legs 260, history 170, secrets 175) and
+  `report.rs` at 150, src comes to about 2,503. With `check_run1_shape.rs`, `check_history.rs` and
+  `secrets_*.rs` at theirs, tests come to about 1,802. **Decision:** `server.rs` is capped at 201 (as
+  merged) and `server_*.rs` at 190. The extra lines serve point 5: the server copy is whole, equal
+  to the local bytes and matches its row, checked by entry id. They also serve point 3: review fixes
+  A1 to A4, F2 and F4 replaced exit-3 crashes and false passes on odd seals and odd `fetch.json` with
+  named results. The tests are lessons acceptance cases L-FW3, L-FW9 and L-VR2 (ledger B10 allows
+  these). The crate ceilings become **2,450 src and 1,830 tests**. Per-file ceilings for what is
+  left: `main.rs` 200, `honesty.rs` 140, `legs.rs` 240, `history.rs` 155, `secrets.rs` 160 and
+  `report.rs` 150; tests keep their slice 1 numbers. **Cut first:** slice 3 touches `main.rs` for
+  `secrets`, and before it adds anything it brings `main.rs` back to 200 with the A9/B3 cut: dump's
+  `--sid` arm becomes `Some(None) => return no_report(&"--sid takes N or BOOT.N")`, and `check()`
+  shares one `now` binding. Same exit 3, same stderr prefix. The PRD-01 ask (about 40 lines of
+  `input.rs`) is the next cut. A slice that would pass these numbers needs another decision line.
+  PRD-16's end-of-build report nets this against the Rust totals, and only a test total past about
+  14,200 becomes an owner question.
+- **U1 is no reason to wait.** The slice 2 scope said `legs.rs` and `history.rs` wait for PRD-09's U1.
+  U1's stub, with its final names, has been on integration since f5a529c8 (`usage/mod.rs`, 304 lines
+  at 669f5d92; PRD-09 slice 1 note above). Those files can start against it now, in the order PRD-16
+  sets. Only `readable()` as a method waits for PRD-09's core slice; the rule in that note covers
+  either merge order.
+- **For PRD-15:** this slice builds the three `server_*` ids (no longer "not built in this slice"
+  under `--server`), adds the top-level `server` object and changes the exit rules above.
+  `docs/RECORD-FORMAT.md` follows in PRD-15's next slice (PRD-15 note).
+- Acceptance lists as known, if still open at the end: the A9/B3 `main.rs` nit and the PRD-01 ask.
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-09 slice 2 (merge dab0ce1f)
+
+- **`readable()` is a method on integration** (PRD-09 B10 done): `legs.rs` and `history.rs` read
+  `table.readable()` and `thread.readable()`; no `readable` field exists. Nothing in PRD-08 read the
+  field, so nothing changes on this side.
+- **What U1 gives now:** wire rows for every call (kinds `Warmup` and `Interrupt` are rows, not
+  calls; a rate limit sent as `error` plus `response.failed` is one row; a call cut by a restart or a
+  GAP has `whole: false`), but `reason` is still `NoReader`, no threads and `children: None` until
+  PRD-09's native slice. So on integration the rules already written hold: `harness_log` gives
+  `none`, `subagents_present` (C2) is `skip`, and no check reads a wire-only table as a failure.
+  `usage::run` still exits 3.
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-08 slice 3 (merge 7a995b6e)
+
+- **Built and checked.** `secrets <path>... [--known <file>]` (new `src/secrets.rs`) and `check
+  --known <file>`, which adds one `secrets` check (`inv` null) to every entry. Gate on 7a995b6e:
+  `gate fast: PASS in 105s`, nextest 218 of 218 (goalcup-verify 36 of 36 in the lane's box runs).
+  Six paths changed, all owned here, no `Cargo.toml`. The A9/B3 cut is done: `main.rs` is 200 with the
+  `secrets` arm in it.
+- **Section 3 "Secrets", as merged** (S12; the fixer's 16:27Z line asked the replan for this wording,
+  it is no ledger item, so no W6 line follows):
+  - **Deltas:** the joined text is the string values of `delta`, `text` and `partial_json` anywhere,
+    and of `content`, `reasoning_content`, `thinking` and `arguments` inside a `delta` object (Chat
+    Completions `choices[].delta` and its `tool_calls[].function.arguments`, Anthropic thinking).
+    Gemini's `parts[].text` is covered by `text`. This replaces the bullet's three-key list.
+  - **One joiner.** It is `secrets::delta_text(&Value, &mut String)`, public. Section 3.2 step 1's
+    "the same joiner as the secret scan" means `history.rs` calls it; it never keeps a copy.
+  - **Tails** are cut at any GAP of the stream (a GAP on sid 0 cuts all) and at a DATA offset jump, so
+    nothing is joined across a hole (test `secrets_nothing_is_joined_across_a_gap`). Bytes are
+    scanned per 64 KiB batch with the 4 KiB tail kept, and at END, GAP, jump and the end of the
+    record (fixer's probe: 100,000 SSE pieces, 4.4 MB, `secrets` 174 ms).
+  - **Inputs.** A part file is a record. A folder holding an entry has its record decoded and every
+    other file read raw, except its `rec/` (the recorder's state, the run CA key among it), which is
+    never read; a part folder of another name has its other files read raw. Other folders are walked.
+    Any other file, and `-` (stdin), is raw bytes. An unreadable file inside a walk, or a folder
+    symlink, leaves that input `partial` (exit 1). A path given on the command line that cannot be
+    read, or an unreadable `--known` file, is exit 3 with no report. The section's "about 30 lines"
+    for raw inputs is superseded by the size line below.
+  - **The report** (stdout, always JSON; there is no `--json` flag): `verifier`, `result` (`pass`,
+    `warn`, `fail`), `exit`, `known_values`, `inputs` (`[{path, as: record|raw, read:
+    whole|partial}]`), `known_hits` (`[{form, in, sha12, n}]`), `shape_hits` and `glued_shape`
+    (`[{kind, in, sha12, n}]`), `masks` (`{kind: span count}`, kinds named from the start event's
+    `mask_rules`, `other(n)` when unnamed), `mask_bytes` (`{fail_closed: bytes}`) and `big_masks`
+    (`[{kind, in, len}]`, a non-`fail_closed` span over 16 KiB, a `fail` by itself). Exit 2 on any
+    known hit, unglued shape hit or big mask; else 1 when an input was read only in part; else 0
+    (`warn` keeps 0). The `secrets` check of `check --known` has the same result rule and the same
+    keys as facts.
+  - A glued hit whose bytes just before it are an escape the masker's guard still masks (backslash,
+    `\u`, `\x`, percent or ANSI escape, PRD-05 section 4) is not `glued_shape`. That list mirrors
+    PRD-05's guard: a change there is a seam line and the same change in `secrets.rs` `ESCAPE`.
+- **Size decision** (`wc -l` at 7a995b6e). Src without PRD-09's `usage/` is 2,235: `integrity.rs`
+  982, `secrets.rs` 509, `server.rs` 201, `main.rs` 200, `input.rs` 198, `report.rs` 133, `lib.rs`
+  12. That is seven of ten files, 160% of the PRD-00 row (1,400) and 91% of the 2,450 ceiling. Tests
+  are 1,826: `tests/common/` 877, `check_invariants.rs` 329, `check_named.rs` 218, `secrets_scan.rs`
+  214, `server_compare.rs` 188; 166% of the row (1,100) and 1,826 of the 1,830 ceiling. Past per-file
+  ceilings: `secrets.rs` 509 of 160, `secrets_scan.rs` 214 of 30, `lib.rs` 12 of 11, `input.rs` 198 of
+  150. With `honesty.rs` 140, `legs.rs` 240 and `history.rs` 155 the crate projects to about 2,770
+  src; with `check_run1_shape.rs` 80 and `check_history.rs` 80, to about 1,986 tests. **Decision:**
+  `secrets.rs` is capped at 509 (as merged) and `secrets_*.rs` at 215. The extra lines serve point 4
+  (every known form, Chat Completions deltas joined, every loose file of an entry scanned, MASK spans
+  merged and named by rule) and point 3 (no false hit across a GAP, no false C3 fail from the run CA
+  key, a 100,000-piece stream in well under a second). The tests are point 4 and this PRD's
+  acceptance (ledger B10). The crate ceilings become **2,730 src and 1,990 tests**: the src figure
+  assumes the PRD-01 ask (about 40 lines of `input.rs`) is cut, which is now due before `legs.rs`
+  merges; if PRD-01 declines it, a decision line nets the 40 elsewhere. Per-file ceilings for what is
+  left stay: `honesty.rs` 140, `legs.rs` 240, `history.rs` 155, `check_run1_shape.rs` 80,
+  `check_history.rs` 80. No further line in `secrets.rs`: a later secrets fix nets to zero there. A
+  slice past these numbers needs another decision line. PRD-16's end-of-build report nets this
+  against the Rust totals; only a test total past about 14,200 becomes an owner question.
+- **Seam for PRD-12** (fixer 16:40Z): `secrets <entry>` reads the entry's `goalcup.log` and
+  `upload.json` itself, so naming them again doubles their `n`. PRD-12 drops them from its argv
+  (PRD-12 note).
+- **Acceptance lists as known,** if still open at the end: review A5 nits 2 (`first: null`) and 3
+  (`check --known` decodes the record a second time, besides the integrity pass); review items A7,
+  A8 and F11, logged and not fixed (judge 16:32Z); a file passed both inside a walked folder and on
+  its own counts its `n` twice under one key; the PRD-01 ask while open.
+- **Later slices, unchanged:** honesty, legs, history and the run 1 shape builder, in PRD-16's order.
+  `docs/RECORD-FORMAT.md` follows the new keys in PRD-15's next slice (PRD-15 note).
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-09 slice 3 (merge 1a2c3537)
+
+- **U1 now has native rows, threads and parents** (PRD-09 note). `legs.rs` and `history.rs` read
+  them as merged: `CallTable.children` is `Some` once a native leg was read (`subagents_present`
+  skips only on `None`); `Thread.readable()` is true only for a thread that owns a read session
+  file, with one exception: a thread that only the wire names is listed with the table's own
+  `reason`, so it is readable with `native_calls` 0. A check that asks whether a thread has native
+  rows reads `native_calls`, never `readable()` alone. This changes no result today (wire-only
+  threads are reported, not failed), and PRD-09 documents it in the next slice.
+- A call joined by time has `join` `Matched` as one joined by id; `legs.rs` does not tell them apart
+  (the count `joined_by_time` is in the summary only).
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-08 slice 4 (merge 1fdaf2c3)
+
+- **Built:** `honesty.rs` with `listed_hosts_decrypted`, `conn_bytes` and `mask_failclosed`, fed one
+  record at a time from integrity's single pass (`Pass::item` and `Pass::mask`); `report.rs` `LATER`
+  now holds four ids: `history_complete`, `wire_keeps_up`, `threads_match`, `subagents_present`.
+  A record of a stream never seen open is ignored by honesty (integrity reports it); state is
+  dropped at END and at a new boot.
+- **`conn_bytes` as merged** (PRD-03 and PRD-12 notes read it):
+  - A decrypted connection is judged at its END, per direction, from the END tail `plain_up` and
+    `plain_down` against what its streams account for: head sizes (approximate), END `wire` of each
+    HTTP stream (`seen` when `wire` is absent), WebSocket DATA bytes, and a `conn` GAP's `lost - 1`.
+    `fail` above 1 MiB and above 50% unaccounted with no GAP on the connection; `warn` above 1 MiB
+    and above 10%.
+  - **A stream GAP names only its own bytes.** An HTTP stream GAP adds nothing and never waives the
+    fail rule for another request on the same connection (review A8). A WebSocket stream GAP adds
+    `lost - 1` to what is accounted for; one of unknown size (`lost` 0) waives the rule for the
+    connection. Only a `conn` GAP waives it otherwise.
+  - A decrypted connection that ends with no `plain_up` or `plain_down` makes the whole check
+    `skip` (facts `no_plain_tail`), as does a run with no decrypted connection ("no decrypted
+    connection to judge"). A missing tail never reads as a pass.
+- **`mask_failclosed`:** `warn` once a stream passes 1 MiB of `fail_closed` MASK bytes, counted per
+  stream; never `fail`, so the exit stays 0. Facts `streams` and `bytes`.
+- **`listed_hosts_decrypted`:** a listed tunnel is judged at its END: a sign-in is no loss, a GAP of
+  its own reason is `named`, none is `fail`. A conn GAP on a decrypted listed connection is
+  `named`. `warn` for a refusal after trust (unless its GAP tail says `alert: false`) and for a long
+  tunnel to an unlisted host. The facts key `refusal_after_trust` is read by PRD-12, so it is a
+  named seam key and the tests may assert it. `streams` is not read by anything outside the crate.
+- **Size decision** (`wc -l` at 1fdaf2c3). Src without PRD-09's `usage/` is 2,678, 191% of the
+  PRD-00 row (1,400) and 98% of the 2,730 ceiling: `integrity.rs` 991, `secrets.rs` 509, `honesty.rs`
+  435, `server.rs` 201, `main.rs` 200, `input.rs` 198, `report.rs` 130, `lib.rs` 14. Tests (without
+  PRD-09's `usage_run1.rs`) are 2,083, 189% of the row (1,100) and 93 over the 1,990 ceiling:
+  `tests/common/` 877, `check_named.rs` 341, `check_invariants.rs` 329, `secrets_scan.rs` 214,
+  `check_conn_bytes.rs` 134, `server_compare.rs` 188. `honesty.rs` is 435 against its 140 ceiling.
+  **Decision:** `honesty.rs` is capped at 435, `check_conn_bytes.rs` at 134 and `check_named.rs`
+  at 341 (as merged). The extra lines serve point 1 (a request lost on a reused connection must not
+  pass: `conn_bytes` fails it, and a stream GAP cannot hide another stream's loss; a record that
+  claims too little or too much must not panic, L-VR3), point 2 (a listed tunnel with no named GAP is
+  a blind spot) and point 4 (fail-closed masking is counted and warned). The tests are the PRD-08
+  acceptance cases (ledger B10). The crate ceilings become **3,040 src and 2,245 tests**: the src
+  figure is 2,678 plus `legs.rs` 240 and `history.rs` 155 minus the PRD-01 cut of about 40 lines of
+  `input.rs` (still due before `legs.rs`; if PRD-01 declines it, a decision line nets the 40
+  elsewhere); the test figure is 2,083 plus `check_run1_shape.rs` 80 and `check_history.rs` 80. The
+  per-file ceilings for `legs.rs` 240, `history.rs` 155, `check_run1_shape.rs` 80 and
+  `check_history.rs` 80 stay. `integrity.rs` is 991 of 1,000: a hook for `legs.rs` or `history.rs`
+  must fit in 9 lines or net against the file. A slice past these numbers needs another decision
+  line. PRD-16's end-of-build report nets this against the Rust totals; only a total past about
+  18,100 src or 14,200 tests becomes an owner question.
+- **Review nits, disposition.** Fixed or accepted: A8 and its fix, B-R2, B-R3. Still open, taken up
+  at the next touch of the file and listed as known if open at the end:
+  - A9: in `check_conn_bytes.rs` the case `a_small_stream_gap_does_not_cover_a_silently_lost_request`
+    ends the GAPped response with `seen` 2 while the loss runs to offset 12 (invariant 11), so the
+    case fails `seen_matches_written` as well as `conn_bytes`. Fix: end that response with `seen`
+    `2 + lost - 1`, and assert the failing ids are exactly `["conn_bytes"]`.
+  - B-R6: reword the doc comment on `Conn.gaps` to say it counts conn GAPs and WebSocket stream GAPs
+    of unknown size.
+  - B-R7: `conn_gapped` picks the GAPped response by value; use `enumerate` and the last index. The
+    `facts.streams` assert in `check_named.rs` pins a name only this crate reads; assert the result
+    and exit code. `facts.refusal_after_trust` stays (PRD-12 reads it).
+  - B-R1: OPEN meta, END tail and GAP tail are parsed twice (integrity and honesty). Declined for
+    now (a two-file refactor for about 20 lines); it is the first cut if the crate nears its ceiling.
+- **Build order, unchanged:** `legs.rs` (`wire_keeps_up`, `threads_match`, `subagents_present`),
+  then `history.rs`, then the run 1 shape builder, in PRD-16's order. The PRD-01 `input.rs` cut comes
+  before `legs.rs`. `docs/RECORD-FORMAT.md` and the check list in PRD-15's text follow the three new
+  ids in PRD-15's next slice.
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-31, replan after PRD-09 slice 4 (merge c262ef5a)
+
+- **`usage::run(args) -> ExitCode` is real** (`usage/out.rs`, `usage/mod.rs`); the `usage` arm in
+  `main.rs` calls it and the exit-3 stub is gone. Exit 3 now means no entry gave output; a decode
+  error partway gives the summary with `read_error` true and exit 0. No `main.rs` change is asked.
+- **U1 grew by five public fields on `CallTable`:** `run`, `entry`, `connector`, `harness_version`,
+  `sealed`, filled from the `start` event and the last PART. A table built with
+  `CallTable::default()` plus field sets or struct update is unchanged, so `legs.rs` and `history.rs`
+  need nothing; build tables the way the section "stub" rule says. No change to `CallRow` or `Thread`
+  construction.
+- **Thread readability, as merged:** a thread's `readable` is set from what the record or the native
+  file proves; a thread seen only by a spawn is not marked readable. `subagents_present` keeps the
+  rule in the earlier PRD-09 note (wire-only threads are not "present natively").
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-31, replan after PRD-08 slice 5 (merge bfd244e3)
+
+- **On integration:** `legs.rs` (`wire_keeps_up`, `threads_match` per call and totals, `subagents_present`
+  from the record, `provider_errors`, `harness_log`, per-thread rows, the legs part of the coverage
+  line), fed from integrity's one pass through `usage::Calls`; the run 1 shape builder
+  (`tests/common/run1.rs`, `Shape::{Lossy, Vendor, Clean, Killed, Dodger, DodgerOwn}`) and
+  `check_run1_shape.rs`. Left: `history.rs` with `check_history.rs` (slice 6); `timeline`, the
+  `--harness-files` manifest part of `subagents_present` and the nits (slice 7).
+- **Seams as built.** Covers: honesty collects them (`legs::Cover`: a `recorder_down` GAP, or a conn GAP
+  of a connection to a provider or gateway host of the shared list). A GAP of a connection to a vendor
+  host, or to a host only the participant or the config named, covers nothing, so run 1's shape stays
+  `fail`. `recorder_down` alone removes both legs of a subagent. S6 `threads` rows are `{thread, parent,
+  harness, wire_ok, wire_err, result, history: null}`; the entry-level totals row has `thread` null;
+  `history` is filled by slice 6. `harness_log` is the string `none`, `totals` or `per_call`.
+  `counts.threads` is the row count. `wire_keeps_up` hands its uncovered native times sorted to the
+  sweep (the bug the shape builder found; do not drop the sort).
+- **Slice 6 (`history.rs`, `check_history.rs`) adds to the shape tests.** `history_complete` joins
+  `FAILS` in `check_run1_shape.rs` (a comment there says so) and the `history` field of the threads
+  rows; `Clean`, `Killed` and the dodger shapes must keep it `pass` or `skip`. The case needs bodies
+  whose later requests resend earlier answers; extend `run1.rs` `post` only as far as that needs.
+- **Export for PRD-12, finish it in slice 6.** `GOALCUP_FIXTURES_OUT` is read by the Lossy test only and
+  writes `k2-part` and `k2-fetched`. The pad lane also needs the Clean pair (`k7-part`, `k7-fetched`,
+  for K6, K9, K10 in the selftest). `fetch()` makes `model_requests` one too high on purpose, so the
+  Clean export needs an honest `fetch.json`: give `fetch` a flag, do not copy the lying one. Also
+  write the K2 pair again after `history_complete` joins, since the failing set grows by one. The
+  command is in the PRD-12 note. Ceilings: `check_run1_shape.rs` stays inside the decision below.
+- **Size decision** (`wc -l` at bfd244e3, without PRD-09's `usage/` and `usage_run1.rs`). Src 3,241,
+  231% of the PRD-00 row (1,400): `integrity.rs` 1,011, `secrets.rs` 509, `honesty.rs` 498, `legs.rs`
+  477, `server.rs` 201, `main.rs` 200, `input.rs` 198, `report.rs` 133, `lib.rs` 14. Tests 2,627,
+  239% of the row (1,100): `common/mod.rs` 879, `check_named.rs` 341, `check_invariants.rs` 329,
+  `common/run1.rs` 232, `secrets_scan.rs` 214, `server_compare.rs` 188, `check_run1_shape.rs` 165,
+  `check_legs.rs` 145, `check_conn_bytes.rs` 134. Against the slice 4 ceilings (3,040 src, 2,245
+  tests, which counted `legs.rs` 240 and `history.rs` 155) the crate is 201 over on src before
+  `history.rs`, and 382 over on tests before `check_history.rs`. `legs.rs` is 477 against 240,
+  `honesty.rs` 498 against 435, `integrity.rs` 1,011 against 1,000, `run1.rs` 232 against 110.
+  **Decision:** the lines serve point 1 (a loss of model calls on the wire, or a subagent with no leg,
+  must not pass: the three leg checks, the covers, the totals form for Hermes), point 2 (every thread
+  has a row and a verdict, `subagents_present` against the record's children), point 3 (a named loss
+  is not a failure; a sweep over the rollout times that cannot stall a check) and the run 1 shape that
+  PRD-12 K2 and PRD-16 N1 need (the shape builder is required by PRD-12, so it counts). The tests are
+  PRD-08 acceptance cases (ledger B10). New ceilings: **3,460 src and 2,750 tests**. The src figure is
+  3,241 plus `history.rs` 155, `timeline` and the manifest part about 60, a 9-line hook, minus the
+  PRD-01 `input.rs` cut of about 40 (still not made: `input.rs` is 198, unchanged); tests are 2,627
+  plus `check_history.rs` 80 and about 40 for slice 7. Per-file ceilings now: `legs.rs` 540,
+  `honesty.rs` 498, `integrity.rs` 1,011 (a hook for `history.rs` nets against the file, so it ends at
+  1,011 or less), `history.rs` 155, `check_history.rs` 80, `check_run1_shape.rs` 165, `check_legs.rs`
+  145, `common/run1.rs` 232. A slice past these needs another decision line. If the `input.rs` cut is
+  declined by PRD-01's owner, a decision line nets the 40 elsewhere; B-R1 (the doubled OPEN meta, END
+  tail and GAP tail parse, about 20 lines) is the first cut if the crate nears the new ceiling.
+- **Review nits, disposition.** New and taken up at the next touch of the file, else listed as known:
+  - B-N4 (`honesty.rs`, `Honesty::open`): compute `listed` once as `s("listed").is_some() ||
+    on.is_some()`, use it for `model` and for `Conn.listed`, and rename the local `kind` that shadows
+    the `StreamKind` parameter. About 3 lines fewer, same behaviour. The `on_list` triple becomes a
+    small private struct only if the code is touched again.
+  - B-N5 (`tests/common/run1.rs`): re-wrap the doc comment on `fn tunnel` to rustfmt width (comment
+    only).
+  - Carried unchanged: A9, B-R6, B-R7 (and the `facts.streams` assert in `check_named.rs`), B-R1.
+- **Build order:** slice 6 is `history.rs` with `check_history.rs`, the Clean export and the K2 re-export
+  (above). Slice 7 is `timeline`, the manifest part of `subagents_present`, and the open nits. PRD-16 X1
+  reads `timeline`; until slice 7 merges the pad and PRD-16 cannot use it.
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-31, replan after PRD-05 core slice (merge 2c95e8f1)
+
+- **The stub caveat ends.** Entries built on the core slice have real MASK spans, `start.mask_rules`
+  longer than `["fail_closed"]`, the real `mask_meta` and a `meta.masked` list on objects with headers.
+  Checks and the secrets scan may read all four. S12 and the kind names are unchanged, so `shapes.tsv`
+  readers and the `masks` map need nothing. `fail_closed` is the last entry of `mask_rules` and counts in
+  `mask_bytes`.
+- **Seam from the PRD-05 fix round (review A-2), rare in real traffic:** section 3's escape alignment can
+  start a guarded-rule MASK on the escaping backslash (raw `x\sk-...`), so the byte before a MASK start is
+  not always the byte before the shape match. The `glued_shape` test reads the bytes before the regex
+  match and skips one escaping backslash; with that rule the escape list of the earlier note stands.
+- **PEM over SSE:** inside a PEM block every JSON string interior is starred, keys included; lines outside
+  the block are unchanged. A scan test that parses the masked line sees valid JSON with all-star strings
+  between the markers.
+- No locked ledger item is touched and no owner question comes from this slice.

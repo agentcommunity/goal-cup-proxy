@@ -2,7 +2,7 @@
 """The pad's table (PRD-12 section 9).
 
 With no row.json under pad-out/, write the seed connectors/tiers.toml; with rows, also pad-rows.jsonl and
-PAD-RESULTS.md. `--release-check <commit>` reads only the committed pad-rows.jsonl: exit 0 when the release
+PAD-RESULTS.md. `--release-check <commit>` reads only pad-rows.jsonl as committed at <commit>: exit 0 when the release
 rows hold, 1 naming each missing or differing item, 2 on a usage error. Python 3.9: no tomllib.
 """
 import json, re, subprocess, sys
@@ -64,7 +64,8 @@ def tier_for(cid, rows):
     if said:
         return ("not supported", "", said[0])
     if not any(r.get("connector") == cid for r in rows):
-        return ("not verified", "", "not yet run on the pad")
+        nokey = 'key_kind = "none"' in harness_lines(cid)  # PRD-12 section 6: no key, so the pad runs nothing
+        return ("not verified", "", "no key" if nokey else "not yet run on the pad")
     got = [(c, latest(rows, tier_row((cid,), c))) for c in CASES if c != "gateway" or has_gateway(cid, rows)]
     reasons = [(1, "pad not trusted") for _, r in got if r and not r.get("pad_trusted_at")]
     for _, r in got:
@@ -125,9 +126,9 @@ def release_check(commit):
     if not sha:
         print("table: --release-check: %s is not a commit" % commit, file=sys.stderr)
         return 2
-    shown, rows, items, used = git("show", "HEAD:" + ROWS_REL), [], [], []
+    shown, rows, items, used = git("show", sha + ":" + ROWS_REL), [], [], []
     if shown.returncode:
-        return print("no committed %s at HEAD" % ROWS_REL) or 1
+        return print("no committed %s at %s" % (ROWS_REL, commit)) or 1
     try:
         rows = [r for r in map(json.loads, shown.stdout.splitlines()) if isinstance(r, dict)]
     except ValueError:

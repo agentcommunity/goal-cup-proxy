@@ -8,10 +8,14 @@ install = "npm i -g @openai/codex@0.165.0"
 key_kind = "openai"
 key_route = "login"
 login = "codex login --with-api-key"
+# Pad data for the dodger copy only (section 2): an API-key login calls https://api.openai.com/v1.
+model_host = "api.openai.com"
 exit_keys = '/quit\r'
-submit_delay = 2
 subagent_word = "sub-agent"
 keep_going = true
+
+[direct]
+files = { "config.toml" = "direct/codex-config.toml" }
 
 [gateway]
 files = { "config.toml" = "gateway/codex-config.toml" }

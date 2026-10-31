@@ -1253,3 +1253,212 @@ PRD-01, PRD-02, PRD-04, PRD-05 and PRD-11 as they now stand, and the code. No lo
   60 s on a peer that trickles bytes, until PRD-06 takes BR2-r1. The device-flow poll measures its
   expiry on its own clock and does not count calls.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-11 slice 3 (merge c14d63b8)
+
+- **S3 is real.** In the slice that wires `connector::plan` into `start`: one start line per
+  `plan.unread` entry ("goalcup could not read <file>; a model service named there may not be
+  recorded."), every `plan.log` line through `cli::log`, and `refusal` worded as before. A second
+  `start` on a home whose lock is held gets `Refusal::HomeLocked` (HF4,
+  `cli_commands.rs::second_start_on_one_home_refuses` can land). The version probe is real, so
+  `VersionMismatch` can now come back.
+- **`hosts::check` is the full rule set.** `setup --record-host` calls it and refuses on `Err` with
+  `Skipped.reason`, which never repeats the input (one entry point, PRD-17 N1 to N6).
+  `cli::log::Host::checked` stays the log's syntax check and keeps its IP, `localhost` and port forms,
+  since the log names local connections the proxy saw; the slice 2 note's "until then" is read that
+  way.
+- **`write_settings` writes.** It returns `Vec<Skipped>` whose reason names the file and key; setup
+  shows or logs each, never a refusal. `plan` already writes `update_off` at every start, so setup's
+  own `update_off` write only matters for the harness session setup opens. Rows into a dotenv or other
+  file come back "format not writable". The setup test that reads the written file can land.
+
+### 2026-10-30, replan after PRD-10 slice 3 (merge f66ce4a5)
+
+- **Built:** `cli/folder.rs` (`folder::check(project, home, needs_token, prompt)` returns
+  `Err(problems)` or `Ok(warnings)`, reading only) and `cli/start.rs`, which `main.rs` now calls:
+  the file-flag refusal, `home()`, the folder checks with one refusal ending "Nothing was created.",
+  the warnings, then the `not_built("start")` stub (exit 3). Checks built: extra entries, an `.env`
+  file `.gitignore` does not cover, inside a Git work tree, SC1, the `GH_TOKEN` line with `--repo`,
+  the `--prompt` file inside the folder or missing; warnings for a synced folder (by name on the
+  resolved path) and NFS or SMB (by `statfs`, on the project and on `GOALCUP_HOME`). The review
+  fixes made the token guards fail closed: a `!` line the short `.gitignore` reader cannot read
+  re-includes, a leading BOM is skipped and only trailing spaces and one CR leave a line (as git),
+  two `GH_TOKEN` lines or a CRLF line refuse, and a folder that cannot be listed is not empty.
+- **Not built:** step 2's WSL1 or Windows-drive check (lane log 14:49Z). It goes in `folder.rs` in the
+  slice that wires the rest of `start` or in the setup slice, whichever comes first, as one check
+  both call. The macOS `statfs` branch (`f_fstypename`) has not been compiled in a box, like the
+  macOS liveness path; the first macOS build checks it.
+- **Order for the start slice: `load`, then `folder::check`, then `plan`.** Section 3 puts
+  `connector::plan` in step 1, before the folder checks. On integration `plan` is not read-only: it
+  takes `<home>.goalcup.lock` (created), makes the isolated home and its folders, runs the harness's
+  `--version` probe and writes the `update_off` rows (PRD-11 slice 3). Called before step 2, a folder
+  refusal would no longer be "Nothing was created." and `refused_start_creates_nothing` would fail.
+  `connector::load` reads only, so a bad connector or hosts file still refuses first. A refusal from
+  `plan` (`HomeLocked`, `VersionMismatch`, a `refuse_if_set` hit) then comes after the folder checks;
+  its last line must be true: no run was opened, but the isolated home, its lock file and the
+  `update_off` rows may now exist (setup makes the same home), so it does not say "Nothing was
+  created." unless the slice shows nothing was.
+- **The guide says the folder is checked again right after the approval** (`docs/PARTICIPANT-GUIDE.md`
+  appendix: "if it changed meanwhile ... the start stops there, before the run is opened"). Section 3
+  does not ask for it. The start slice either calls `folder::check` a second time after the approval
+  (one call, no new check) or says in its merge note that it does not, so PRD-15 drops the sentence.
+- **Nits closed:** B1 and B2 (`finish.rs` 144 to 142, `live()` in `tests/cli_common/`), B3
+  (`listed` helper, `agent_exited` on `has_exited`). **B4 closed as not possible:** libc 0.2.189
+  declares `tzset` only for Windows (checked in a box, confirmed by reviewer B), so `local_offset`
+  keeps its own `extern "C"` block. N7 (`folder.rs` past its estimate) is answered under size below.
+- **PRD-17 SC1 and SC2's folder case are named:** `tests/cli_folder.rs`
+  `project_folder_and_goalcup_home_never_hold_each_other` (its inputs include a relative
+  `GOALCUP_HOME=gc`, review A8) and `refused_start_creates_nothing`. SC2's other cases (Ctrl-C, a
+  denial, an expired code, an absent server) come with `approve.rs`.
+- **Size** (`wc -l` at f66ce4a5, PRD-00 row "about 2,900" src, 1,200 tests; the 3,190 line from the
+  slice 2 note): src 2,298 (`text.rs` 704 against 420, `mod.rs` 464 against 130, `status.rs` 341
+  against 260, `log.rs` 202 against 140 with `skill.rs`, `folder.rs` 201 against 170, `main.rs` 197
+  against 160, `finish.rs` 142 against 160, `start.rs` 47 of its 340). Not yet written, at the table's
+  estimates: 1,503 lines (the rest of `start.rs` 293, `approve.rs` 280, `setup.rs` 270, `continue_run.rs`
+  150, `awake.rs` 150, `push.rs` 110, `seal.rs` and `upload.rs` 90, `recover.rs` 80, `time_left.rs`
+  80), plus the messages each adds to `text.rs`. That projects to at least 3,801, 131% of the row and
+  611 past the 3,190 line; 892 lines are left under it. **Decision:** `folder.rs` may hold up to 240
+  with the WSL check; its 31 lines past the estimate serve point 4 (the token guards that fail
+  closed) and SC1 (point 1: the agent never sees the record). The row is not raised here. The next
+  PRD-10 slice first gives back lines from `text.rs` and `mod.rs`, the two files furthest past their
+  estimates, before it adds code; each later file stays at or under its estimate. The slice whose
+  merge takes the src total past 3,190 brings its own replan `decision` line naming the point each
+  extra part serves (ledger L2).
+- **Tests are at the row:** 1,184 of 1,200 (`cli_status.rs` 391, `cli_finish.rs` 269,
+  `cli_folder.rs` 223, `cli_log.rs` 136, `cli_commands.rs` 128, `cli_common/` 37). Seven test files of
+  the test list are still to come (`cli_push`, `cli_setup`, `cli_continue`, `cli_recover`,
+  `cli_time_left`, `cli_start`, and HF4 and P14 in `cli_commands`), with 136 lines left under the
+  10% line (1,320). Each new case covers only a case in this PRD's test list or a PRD-17 row (ledger
+  B10), shares fixtures through `cli_common/`, and the slice that adds `cli_setup.rs` or
+  `cli_continue.rs` first trims `cli_status.rs` and `cli_finish.rs` (fixture building repeated across
+  cases). A merge past 1,320 brings a replan `decision` line, as for src.
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-14 slice 3 (merge 00fac28d)
+
+- **`install.sh` now reads `goalcup status --json`** (PRD-14 slice 3). The shape it relies on, as on
+  integration at 00fac28d: exit 0 with one JSON object whose top-level `status` object has a string
+  `mode`; `recording`, `losing`, `writer_slow` and `null` block the install, any other mode lets it
+  go on; exit 1 with nothing on stdout means no run on this computer (`say` writes to stderr); any
+  other result, or no answer in 10 s, is "unsure" and the install goes on with a warning. PRD-10 keeps
+  these: a change to the exit codes, a message on stdout for "no run", or a renamed or moved `mode`
+  needs `install.sh` and `test_install.py` changed in the same merge.
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-12 slice 4 (merge 69f355c6)
+
+What the pad calls, as merged (PRD-12 note):
+
+- The T6 cap seal: `goalcup seal --yes` from the project folder with the run's environment; exit 0
+  is sealed. `kill-watchdog-recover`: `goalcup recover` under `env -i` (HOME, PATH, TERM and the
+  run's `GOALCUP_*` only) in its own tmux window, the exit code read; then plain `goalcup status` in
+  that clean environment, keeping lines that name `goalcup recover` or `goalcup continue`. The
+  `--yes` flag and those two command names in `status` are pad seams; a change is a seam line.
+- At 69f355c6 `seal` and `recover` exit 3 "not built" in `main.rs`, so the pad's cap cannot seal a
+  run and its recover row is not evidence until this PRD's slices for them merge. They gate the first
+  run with a real key (PRD-16 note).
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-10 slice 4 (merge a5d7ddc3)
+
+- **Built:** S15 `goalcup setup --harness <id> --yes` (`plan` in `$GOALCUP_HOME/homes/<id>`, the
+  `update_off` and `no_prompts` rows written by setup itself, the isolated home printed quoted as the
+  last folder path on stdout, which is what `scripts/pad/pad-run` takes); `setup.json` (`v`,
+  `harness`, and the rows written as file, key and value); `setup` without `--yes` asks, opens and
+  writes nothing, with or without a terminal; `setup --record-host` through `hosts::check`, written to
+  `$GOALCUP_HOME/record-hosts.txt`; the sleep-lock probe `awake::missing` (the lock itself comes with
+  `start`, in `awake.rs`); the WSL1 or Windows-drive check in `folder.rs`, called by setup and by
+  `start` (on the project and on `GOALCUP_HOME`); the test trim of `cli_status.rs` and
+  `cli_finish.rs`; the delete of `skills/goal-cup-setup/`.
+- **Never run:** the WSL check (no WSL box) and the macOS branches (`caffeinate`, `f_fstypename`);
+  the first WSL and macOS runs check them. Listed as known in PRD-16 if still so at the end.
+- **S8 `watchdog::run` is still on no branch** (no `pub fn run` under `src/watchdog` on
+  `v1.0/integration` or `v1.0/prd-02-core` at this replan). The next PRD-10 slice is the one slice 4
+  named: `time-left` and the upload lines in `status` and on the end screen (S9), then the
+  interactive setup (builder-notes step 4). The tier line still lands with the start launch block.
+- **Open nits for the next PRD-10 touch,** none a behaviour change:
+  - A2-n1: `folder.rs` is 243, three past the 240 the slice 3 note allowed. In `wsl()`, fold the two
+    `let windows` lines and the `.any` into one `matches!` on `kind`; that brings it to 240.
+  - A2-n2: `text::server_unreachable` wraps a client error that has its own wording, so the reason
+    reads twice. Pass the inner cause only (point 6, said plainly). No test for it (ledger B10).
+  - B9: `setup.rs` works out each row's file with the same `fill(&row.file, home, Path::new(""))`
+    call as `connector::launch::write_settings`. Until PRD-11 returns the filled file with each row
+    (PRD-11 note), put a one-line comment at that call naming `write_settings`, so the two stay in
+    step.
+- **The `goal-cup-setup` dead link** in `docs/archive/PARTICIPANT-GUIDE-0.6.md:13` is not an owner
+  question: the slice 7 note already rules that PRD-15 keeps it as history. Nothing is asked of
+  PRD-10.
+- **Size** (`wc -l` at a5d7ddc3, PRD-00 row "about 2,900" src, 1,200 tests, the 3,190 line):
+  src 2,722 (`cli/*.rs` 2,521 plus `main.rs` 201): `text.rs` 827 against 420, `mod.rs` 467 against
+  130, `status.rs` 338 against 260, `folder.rs` 243 against 170 (240 allowed), `setup.rs` 236 against
+  270, `log.rs` 202 against 140 with `skill.rs`, `main.rs` 201 against 160, `finish.rs` 142 against 160,
+  `start.rs` 42 of its 340, `awake.rs` 24 of its 150. 468 lines are left under 3,190. The give-back the
+  slice 3 note asked first did not happen in full: `text.rs` gave back 18 lines and then grew by 141,
+  and `mod.rs` grew by 3. Still to write at the table's estimates: 1,248 lines (the rest of `start.rs`
+  298, `approve.rs` 280, `continue_run.rs` 150, the lock in `awake.rs` 126, `push.rs` 110, `seal.rs` and
+  `upload.rs` 90, `recover.rs` 80, `time_left.rs` 80, the interactive part of `setup.rs` 34), plus
+  the messages each adds to `text.rs`. That projects to about 3,970, 137% of the row. **Decision:**
+  the row is not raised here, and the slice whose merge takes the src total past 3,190 brings its
+  own replan `decision` line naming the point each extra part serves (ledger L2), as before. To make
+  the give-back checkable, each later PRD-10 slice states `text.rs` and `mod.rs` line counts before
+  and after in its merge note; `mod.rs` does not grow past 467, and `text.rs` grows only by the new
+  command's own messages. Reviewers found no cut larger than a few lines that keeps behaviour, so the
+  end-of-build report counts the CLI against the row.
+- **Tests:** 1,180 of 1,200 (`cli_status.rs` 391 to 247, `cli_finish.rs` 269 to 164, `cli_common/` 37
+  to 84; `cli_folder.rs` 223, `cli_setup.rs` 198 against about 150, `cli_log.rs` 136,
+  `cli_commands.rs` 128). 140 lines are left under 1,320 for `cli_push`, `cli_continue`,
+  `cli_recover`, `cli_time_left`, `cli_start`, and HF4 and P14 in `cli_commands`. Each new case is
+  one of this PRD's test list or a PRD-17 row and builds through `cli_common/`; a merge past 1,320
+  brings a replan `decision` line.
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-11 slice 4, part 1 (merge a96d9f71)
+
+- **`LaunchPlan.log` can now hold two `.profile` rows:** "kept a .profile goalcup did not write" and
+  "could not write .profile: <kind>". They mean `goalcup time-left` may not be found from a login
+  shell in that harness; the slice that wires `plan` into `start` shows them with the other `log`
+  rows (point 6). No shape change.
+- **Acceptance 7 (P11's real-run proof) applies where the connector's `home` sets `HOME`:** today
+  none of the ten connectors on integration; Amp and Droid in PRD-11 slice 5. For the others the
+  login shell reads the participant's own `HOME` and `.profile`.
+- **Two connectors share `program = "opencode"`** (`opencode-cli` with `version = "1."`,
+  `opencode2-cli` with `"2."`). A `VersionMismatch` for `opencode` should name the other id, found
+  by the same `program` in `connector::builtin::CONNECTORS`, so the participant is told which
+  `--harness` to use. No seam change.
+- **B9 is still open:** PRD-11 did not change `write_settings` in this slice; keep the `fill` copy
+  in `cli/setup.rs` until PRD-11's merge that does, and drop it in that same merge (PRD-11 note).
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-31, replan after PRD-11 slice 5 (merge 7a647ba4)
+
+- **`continue` with an empty `resume`:** Cline's connector has no resume arguments (no continue form
+  in 3.0.74). Section 3.1 step 3 then opens a new session whatever the written counts say, and `continue`
+  prints one plain line before the start screen: `<Harness> cannot pick up its last session, so this part
+  starts a new one. Your earlier parts stay recorded.` (point 6). This is the rule in the connector data,
+  not a harness name in the CLI. The `resume_failed` rule does not apply to it. No shape change.
+- **Acceptance 7 (P11 real-run proof):** the earlier note named Amp and Droid. Only Amp sets `HOME`
+  (Droid sets `FACTORY_HOME_OVERRIDE`), and Amp has no key this cycle, so the unit test of the writer stays
+  the proof; do not wait for a real-run row.
+- **B9 is still open:** PRD-11's slice 5 did not change `write_settings`; the rule of the earlier note holds.
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-31, replan after PRD-06 slice 3 (merge a76bd11d)
+
+- **`upload.json` as the sender now writes it (S9, PRD-06 note):** `state` can be `sending`,
+  `caught_up`, `waiting`, `stuck` or `refused`; `final` goes `none`, `sent`, `sealed` and never back;
+  `next_try` is empty while the entry waits on the final heartbeat, so a status line must not print a
+  next-try time then; `stuck` and `refused` carry `last_error`, and `last_error` clears only on progress
+  or caught up. `confirmed` is set only from a chunk the server stored or a position a local index line
+  matches.
+- **Still open for you:** the upload dispatch waits for `upload::manual::run`, which is PRD-06 slice 4
+  (`Beat::final_beat` and `point_on_disk` for it are on integration now).
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-31, replan after PRD-05 core slice (merge 2c95e8f1)
+
+- **Values for the masker.** `Masker::new(&plan.mask_rules, values)` is final. Where PRD-10 supplies
+  values, it calls `mask::workspace_values(project)` and nothing else: `env` and `harness` values are
+  counted in `skipped` and never used until the owner says yes to question 3, so reading them would only
+  hold secret bytes in memory for no use. `MaskError` text is fixed (no byte, no value, no length) and may
+  be printed as is.
+- No locked ledger item is touched and no owner question comes from this slice.

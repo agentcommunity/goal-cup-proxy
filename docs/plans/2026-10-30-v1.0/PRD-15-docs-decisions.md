@@ -1156,3 +1156,243 @@ note is closed; PRD-10's delete of the skill can follow (PRD-10 note).
   the `continue` mark (PRD-10 `continue`), the CONNECTOR-SCHEMA (next slice) marks, nit B-N4, and the
   third slice.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-08 slice 2 (merge 669f5d92)
+
+- For `docs/RECORD-FORMAT.md` (the `check --json` section), from PRD-08's merge note. Under
+  `--server`, the three ids `server_chunks_whole`, `server_equals_local` and `server_counts_match`
+  are built and no longer "not built in this slice". The top-level `server` object
+  `{chunks, whole, equals_local, db_match}` is filled. New exit rules: a missing `fetch.json` under
+  `--server` gives all three `fail`; `final` null gives `server_chunks_whole` `named` (exit 1); a
+  `--local` path that never held a record exits 3; a seal with no `reason` or `totals` is reported,
+  never exit 3. The seven local ids stay `skip` "not built in this slice" until their slices.
+  PRD-15's next slice updates the page; no code change is asked of PRD-08.
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-11 slice 3 (merge c14d63b8)
+
+- PRD-11's merge c14d63b8 makes real every rule `docs/CONNECTOR-SCHEMA.md` marks **(next slice)**:
+  the version probe (first non-empty line of `program --version`, 5 s, a prefix the line must
+  contain), `refuse_if_set` (`false` is a value; null, `""`, `[]` and `{}` are unset),
+  `host_hints` and `hint_env` (https URLs only, userinfo dropped, a loopback value is a
+  `local_model` note), a pattern ending in `**` refused by PRD-04's `pattern::parse`, the settings
+  files (every `.json` and `.jsonc` read with comments and trailing commas; booleans written typed;
+  dotenv not writable), host decisions and the full host check. Also state: a `file` template's last
+  component is a pattern, and every file that fits is read. Drop the marks and check each rule against
+  merged `hosts.rs`, `hints.rs`, `launch.rs` and `mod.rs` (PRD-11 note lists the facts).
+
+### 2026-10-30, replan after PRD-10 slice 3 (merge f66ce4a5)
+
+`goalcup start` now runs the folder checks of PRD-10 section 3 step 2 (`crates/goalcup/src/cli/folder.rs`,
+messages in `cli/text.rs`). `docs/PARTICIPANT-GUIDE.md` (section 3 step 3 and the appendix "if
+`goalcup start` stops") differs from the merged code here; the next PRD-15 slice checks each line
+against `folder.rs` and fixes the guide, without quoting message wording the code may change:
+- A synced folder is a **warning**, not a stop (PRD-10 section 3); the appendix lists it among the
+  rows that stop the start. It is found by name on the resolved path (Dropbox, OneDrive, Google
+  Drive, iCloud, `Mobile Documents`, `Library/CloudStorage`), so a Desktop or Documents folder that
+  iCloud syncs without one of those names in its path gets no warning. The advice "do not use Desktop,
+  Documents" stays true as advice.
+- A folder on NFS or SMB (the project or `GOALCUP_HOME`) is a warning; the guide does not say so.
+- Not in the appendix yet: inside a Git work tree; the project and goalcup's own folder hold each
+  other or sit side by side (fix: another folder, or `GOALCUP_HOME` elsewhere); the `--prompt` file
+  inside the project folder or missing.
+- The token line is checked in `.env.local` only, and refuses two `GH_TOKEN` lines or a CRLF ending
+  there; the guide's "any second `GH_TOKEN` line in any `.env` file" says more than the check.
+- The missing-`.gitignore` case: the code asks for the line `.env*`; it does not print the two lines
+  `.env` and `.env.*` the guide names.
+- "The folder is checked once more right after you approve": not built and not in section 3. PRD-10's
+  start slice says in its merge note whether it adds it; until then the sentence is not true.
+- "Every row but the outage row ... says Nothing was created": true for the folder refusal. A refusal
+  from the connector plan (home in use, harness version) may come after the isolated home was made
+  (PRD-10 note), so that wording waits for the start slice.
+- WSL1 or a Windows drive under WSL2 is not checked yet (PRD-10 note); the guide's advice stays.
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-10 slice 4 (merge a5d7ddc3)
+
+- **`skills/goal-cup-setup/` is deleted.** The only link left is `docs/archive/PARTICIPANT-GUIDE-0.6.md:13`,
+  which this PRD keeps as history (the PRD-10 note after PRD-15 slice 7); `check-links.py` now counts it as broken
+  (39 to 40 in the slice's box), and no CI step runs that script. The fixer's 16:18Z line on it needs
+  no owner answer.
+- **The guide's sleep row does not quote the CLI.** `docs/PARTICIPANT-GUIDE.md` line 324 reads
+  `this computer may go to sleep (…)`; `text::no_sleep_lock` prints "This computer may sleep during
+  the run (no sleep lock: <why>). Keep it on mains power ...", with `<why>` one of "caffeinate is
+  missing", "set Windows sleep to Never" or "no systemd-inhibit with a running systemd". The next
+  PRD-15 touch of the message table quotes the start of the printed line.
+- **`README.md` line 237** says `goalcup setup --harness claude-code-cli` signs in to the harness. On
+  integration, setup without `--yes` asks, opens and writes nothing (the interactive setup is
+  PRD-10's next setup slice). The line stays; if that slice has not merged by PRD-15's last pass,
+  the line says what setup does then.
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-11 slice 4, part 1 (merge a96d9f71)
+
+- **`docs/CONNECTOR-SCHEMA.md` line 24 is now wrong.** The `version` key is no longer text the line
+  must contain: a word of the first non-empty line of `program --version`, with a leading `v`
+  stripped, must start with it (`mod.rs` `plan`, `held`). The next PRD-15 touch rewrites that cell
+  from merged `mod.rs`.
+- **`.profile` is merged** (`launch.rs` `write_profile`, called from `mod.rs` `plan`): written only
+  where `home` sets `HOME`, replaced only when goalcup wrote it, otherwise kept with a log row.
+  CONNECTOR-SCHEMA's `home` row or the ARCHITECTURE rewrite states it (earlier note).
+- **`docs/harnesses/README.md` holds the one 15-row harness table** (PRD-11 owned). PRD-15 pages
+  that list harnesses (README, guide, HARNESS-ONBOARDING) link to it and copy no rows; tiers come
+  from `connectors/tiers.toml` (PRD-12). The five per-harness sheets stay in the old shape until
+  PRD-11's last slice; a PRD-15 page that quotes a sheet quotes nothing that slice will rewrite.
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-08 slice 3 (merge 7a995b6e)
+
+- **For `docs/RECORD-FORMAT.md`** (PRD-08 note): `--known` is now read (its line at :335 says it is
+  not). With it, `check` adds a `secrets` check (`inv` null) to every entry, result `pass`, `warn` or
+  `fail`, with facts `known_hits`, `shape_hits`, `glued_shape`, `masks`, `mask_bytes` and
+  `big_masks`. The `secrets` subcommand writes one JSON report on stdout (keys and exit rules in the
+  PRD-08 note) and has no `--json` flag. Document both in PRD-15's next slice, by names, not by
+  copying the PRD text. The participant guide's line on what can still be recorded keeps "the scan
+  flags a key glued to a word" (`glued_shape`, a `warn`).
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-31, replan after PRD-15 slice 9 (merge d56216f4)
+
+Slice 9 brought `docs/RECORD-FORMAT.md` to PRD-08 slice 3 and `docs/CONNECTOR-SCHEMA.md` to PRD-11 slice
+4; rewrote `docs/OPERATING.md` (863 to 233 lines, under the 280 estimate) from the merged Worker, pad,
+gate and release code; rewrote `scripts/README.md` (39 lines) for the PRD-13 pre-cut; and moved
+`docs/CONTRACTS.md` and `docs/TERMINATION.md` to `docs/archive/` with no edit (100% renames).
+
+- **Next RECORD-FORMAT slice (A2-N1).** PRD-08 slice 4 (1fdaf2c3) is on integration and builds
+  `listed_hosts_decrypted`, `conn_bytes` and `mask_failclosed` (`honesty.rs`). `docs/RECORD-FORMAT.md`
+  lines 365-366 still say those three are "Always `skip` with not built in this slice". The next slice
+  describes the three honesty checks by id and cuts that skip list to the four ids `report.rs` still
+  holds as LATER (`history_complete`, `wire_keeps_up`, `threads_match`, `subagents_present`). Re-read
+  `report.rs` first: PRD-08's remaining slices may shorten it again.
+- **OPERATING nit B-R1.** The last sentence of the recording-off section ("A query that lists such
+  runs across the event is not in this build.", `docs/OPERATING.md:169`) is build-state text in a
+  current doc (rule 7). Delete it in the next slice that touches OPERATING; the sentence before it
+  already points at `heartbeats` in `fetch.json`.
+- **RECORD-FORMAT size (B-R2), decision.** 419 lines against the 280 estimate (150%). What the extra
+  lines serve: the `check --json` report section with every check id and its facts (point 5: the
+  server rebuilds the story and an organizer reads this report), the `secrets` check and subcommand
+  (point 4), and the S6 key sets the Worker and the verifier both read. All three are reference tables a
+  reader looks up by id; none repeats PRD text. No behaviour-keeping cut was found in review. The
+  ceiling for this page is 430 lines. The A2-N1 edit should come out line-neutral or shorter (it
+  replaces a 3-line skip list with a shorter one and adds a short honesty paragraph); if it needs more
+  than 430 in total, cut the per-check fact lists to the ids and point at `report.rs`.
+- **Two build-progress marks stay until `continue` merges (B-R3).** `docs/CONNECTOR-SCHEMA.md` line 9
+  (the intro: `start` and `continue` not built) and the bold mark near line 100 ("next slice, ruled in
+  PRD-10: `continue` is not built yet"). `start` is still `not_built` on integration (`cli/start.rs`
+  prints it) and `continue`, `recover`, `seal`, `upload` are `not_built` in `main.rs`. Delete both marks
+  in the final link and wording pass, when PRD-10 has merged `start` and `continue`. They wait in the
+  same slice as the usage section.
+- **Usage section is unblocked on the code side.** PRD-09 slice 4 (`out.rs`, `usage::run`, c262ef5a) is
+  on integration. The OPERATING usage job (left out of the slice 9 rewrite) and the S7 summary and
+  calls files can be written from the merged code in the next slice, after PRD-09's own replan note.
+  Rule: read `usage/out.rs` for the file names and the CLI flags; do not copy PRD-09 text.
+- **Known broken links for the filter list** (history docs, not edited): `OPERATING.md#the-matrix` in
+  `docs/LOCAL-RESEARCH-HANDOFF.md:135`, `docs/research/LOCAL-CAMPAIGN.md` and `LOCAL-TEST-DAY.md`;
+  `docs/CONTRACTS.md` to `#pin-evolution` (now `docs/archive/CONTRACTS.md:615`); and
+  `../../skills/goal-cup-setup/SKILL.md` in `docs/archive/PARTICIPANT-GUIDE-0.6.md:13`. Links to the
+  moved files from `docs/CHEAT-CHECKLIST.md:91,:305` (moves unedited) and `docs/DECISIONS.md:206,:235`
+  (D22 and D35: a path-only fix is the one allowed edit to the append-only file, done in the DECISIONS
+  slice) are also known. Acceptance lists these as known broken links in history docs.
+- **Still waiting, unchanged:** the AGENTS.md map and README rewrite (PRD-02 recorder `run`, PRD-10
+  `start`), ARCHITECTURE and RECORD-FORMAT numbers (PRD-02 core), the HARNESS-ONBOARDING pointer
+  (PRD-12's skill rewrite; `skills/adding-a-capture-harness/writing-a-decoder.md` is still there), the
+  guide, RULES, SECURITY, TODO and the DECISIONS entries, and the third slice with the newcomer run.
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-31, replan after PRD-08 slice 5 (merge bfd244e3)
+
+- **`docs/RECORD-FORMAT.md` line 365 is stale.** It says `history_complete`, `wire_keeps_up`,
+  `threads_match` and `subagents_present` are always `skip` ("not built in this slice"). On integration
+  the last three are real (`legs.rs`); only `history_complete` is still `skip` until PRD-08 slice 6.
+  Fix it in the next RECORD-FORMAT touch, line-neutral (the page ceiling is 430 lines): name the three
+  with one sentence each (a lost model call on the wire, a thread whose calls differ from the harness
+  log, a subagent with no wire calls or native stream), that they are `named` when a recorder-down GAP
+  or a provider or gateway conn GAP covers the loss, `skip` with a reason where the harness log is not
+  read, and the new report keys `harness_log` (`none`, `totals`, `per_call`), `provider_errors` and
+  `threads`. Read `legs.rs` and `report.rs`; do not copy PRD-08 text. When slice 6 merges, drop the
+  remaining `skip` sentence.
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-31, replan after PRD-15 slice 10 (merge 524c6745)
+
+Slice 10 brought `docs/RECORD-FORMAT.md` to PRD-08 slice 4 (the three honesty checks) and PRD-09 slice 4
+(the usage JSON section), deleted the build-state sentence in `docs/OPERATING.md` (B-R1), added the one
+`goalcup-verify usage --out` line, and rechecked OPERATING against the code merged since slice 9.
+
+- **RECORD-FORMAT is stale again, by one merge.** PRD-08 slice 5 (bfd244e3) merged just before slice 10
+  and was not read by it. On integration `legs.rs` now builds `wire_keeps_up`, `threads_match` and
+  `subagents_present`, and `report.rs` skips only `history_complete`. The page still says (lines
+  363-366) that those three are always `skip`, and (line 359) that `harness_log`, `provider_errors`
+  and `history` are null with `threads` an empty list "no check fills them", and (line 358) that
+  `counts.threads` is null. The code now writes `harness_log` and `provider_errors` from the legs,
+  `threads` as a list, `counts.threads` as its length, and leaves `history` null. The next RECORD-FORMAT
+  slice describes the three legs checks by id, fills those rows from `legs.rs` and `report.rs` (read
+  them first; do not copy PRD-08 text), and cuts the skip list to `history_complete` alone. If PRD-08
+  slice 6 (`history.rs`) has merged by then, that check and the `history` key are written in the same
+  edit and the skip list is gone. The text form's coverage line (`report.rs`, "Recorded: ...") is
+  part of the same read.
+- **Three nits for that same edit (A9, A10, A11).**
+  - A9, the `listed_hosts_decrypted` bullet: the `warn` for a `tls_refused` connection applies only to a
+    connection to a listed host (`honesty.rs` computes `after_trust` inside `if c.listed`), and
+    "finished" means the earlier connection ended `complete`. Wording: "A `tls_refused` connection to
+    a listed host whose host and fingerprint earlier ended a decrypted connection `complete` is
+    `warn`, unless ...".
+  - A10, the closing sentence of the usage section: strings that leave the record are not only
+    "reason tokens". `effort` (`safe_code` of `reasoning.effort`, or of Codex `turn_context` `effort`)
+    and `extra` member names (provider usage keys that pass `safe`) are also safe tokens of at most 64
+    bytes from `[A-Za-z0-9_.-]`. Write "safe tokens (reason, effort and usage member names)".
+  - A11 and R1, wrapping: the exit-code paragraph (lines 340-341, 143 and 135 columns), the line that
+    holds the `warn` clause and "Facts: `listed_conns`, ..." of the honesty bullet and the `conn_bytes`
+    bullet are past the page's wrap of about 100 columns. Re-wrap them; table rows may stay long.
+- **RECORD-FORMAT size (B-R2), decision.** `wc -l` at 524c6745 is 502, against the 280 estimate (179%)
+  and against the 430 ceiling the slice 9 note set: slice 10 passed that ceiling by 72 lines without a
+  decision line. What the lines serve: the usage section is about 75 lines with its token and hint tables
+  (point 5: the S7 summary and calls files are what a judge and the server read, and PRD-09 section 7
+  asks for them in this page), and the honesty paragraph is 18 (point 5, an organizer reads
+  `listed_hosts_decrypted` and `conn_bytes` results). A concrete cut that keeps the S7 contract was
+  not found in review B. The ceiling for this page is now **540 lines**, which covers the legs
+  checks and `history_complete`. The edit above should come out near 520: cut each check's fact
+  list to the ids it already names in `report.rs` and `honesty.rs` where the list only repeats a
+  `facts` key, as the slice 9 note allowed. Past 540, the reviewer raises it as a finding.
+- **Doc sizes at 524c6745** (`wc -l`, estimates from section 10 and the files table): RECORD-FORMAT 502 of
+  280, OPERATING 235 of 280, CONNECTOR-SCHEMA 115 of 90 (128%), `scripts/README.md` 39. The other pages
+  are not at their final form yet and are not counted. PRD-00 has no size row for docs; the figures are
+  recorded here and in the PRD-16 note.
+- **OPERATING recheck is closed.** Review B found the recheck sound: the page links RECORD-FORMAT for
+  `usage --out` and carries no duplicate exit text. OPERATING needs nothing until PRD-10's `start` and
+  `continue` and PRD-02's recorder `run` merge.
+- **Still waiting, unchanged:** the AGENTS.md map and README rewrite (PRD-02 recorder `run`, PRD-10
+  `start`), the ARCHITECTURE and RECORD-FORMAT numbers (PRD-02 core steps after step 1), the two
+  build-progress marks in CONNECTOR-SCHEMA (B-R3, wait for `continue`), the HARNESS-ONBOARDING pointer
+  (PRD-12's skill rewrite), the guide, RULES, SECURITY, TODO and the DECISIONS entries, and the third
+  slice with the newcomer run. CONNECTOR-SCHEMA is at PRD-11 slice 4; recheck its connector list
+  against slice 5 (7a647ba4: amp, cline, crush, droid, goose, kimi) when the next slice touches it.
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-31, replan after PRD-11 slice 6 (merge 211ade46)
+
+- The 15 harness sheets and `docs/harnesses/README.md` are rewritten on integration and have no link
+  into a purged path except one: `docs/harnesses/README.md:52` links `../research/coverage-matrix.md`.
+  PRD-11's refresh touch drops it (PRD-11 note). If that touch has not landed when the purge runs, the
+  purge's `check-links.py` pass removes the sentence. The three `TERMINATION.md` links in the old
+  amp, codex and hermes sheets are gone with the rewrite.
+- `docs/PARTICIPANT-GUIDE.md` links the README for the list and never copies the tier column
+  (section 4 of the guide); nothing else changes here. No locked ledger item is touched.
+
+### 2026-10-31, replan after PRD-12 slice 6 (merge 645f3219)
+
+- **The two skill files are gone.** `skills/adding-a-capture-harness/writing-a-decoder.md` and
+  `templates/connector-harness.toml` were deleted by PRD-12 slice 6; the skill now has `SKILL.md`,
+  `templates/pad-harness.toml` and `templates/harness-facts.md`. These docs still link or name them and
+  must be repointed in this PRD's pass (a link to a missing file is a `check-links.py` failure): `README.md`
+  (step 3, line about 206, copy the template: say to copy a neighbour such as `connectors/hermes-cli.toml`,
+  as the skill now does), `docs/HARNESS-ONBOARDING.md` (the decoder link near line 17, the template links near lines 30 and
+  298), and `docs/README.md` (the `writing-a-decoder` line near 45: drop it, decoders are cut). The
+  archive copy `docs/archive/CONTRACTS.md` and the older plan files are history; leave them, or let the
+  purge's link pass drop the link text.
+- **The "HARNESS-ONBOARDING pointer" item that waited on PRD-12's skill rewrite can start now.** The
+  shortened page links `skills/adding-a-capture-harness/SKILL.md` for the steps (its "five steps": docs and
+  facts sheet with `connectors/<id>.toml`, the pad file, a `micro`-based run, an optional native sample, the
+  pull request with `row.json`) and
+  `docs/CONNECTOR-SCHEMA.md` for the keys; it does not copy them.
+- No locked ledger item is touched and no owner question comes from this slice.

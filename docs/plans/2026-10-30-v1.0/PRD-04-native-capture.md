@@ -737,3 +737,196 @@ ledger wins over every row here.
   `tests/common/recorder.rs` is taken into PRD-14 slice 3 (PRD-14 note). Until it lands, native tests
   keep their private copy; the slice that follows its merge deletes the copy and calls `common::recorder`.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-04 core slice part 2 (merge 01afcf22)
+
+- **On integration:** `walk.rs` (`Walker::pass(rec, rows) -> Walked`, `Row`, `Found`) and `tail.rs`
+  (`Tail::new(since, cursors)`, `settle`, `sweep(rec, unlisted)`, `read(rec, slice, settle) -> Stop`,
+  `close(self, rec, cut) -> Closed`). Nits A8, B8, B9 and B10 from the part 1 note are closed (ENXIO
+  and EOPNOTSUPP map to `NotFound`; one `stat_by` helper; the dead `is_empty` guard is gone).
+  `tail.rs` already copies a single snapshot file whole, tears it on a change and gives the exact or
+  cut GAP for its last state (review A-R1, A-R2). The next slice (`start`, the loop and duty cycle,
+  `NativeReader::finish(self, harness_exited, guard)`, `native_missing`, `snapshot.rs`) builds on these
+  APIs; `snapshot.rs` keeps only what `tail.rs` does not do: grouping a database and its `-wal` and
+  `-shm` into one `set`, the periodic interval, the one retry with `snapshot_unstable`, and the live
+  seal mark.
+- **Size decision** (review RB8; `wc -l` at 01afcf22, PRD-00 row 780 src and 1,000 tests): src 909
+  (`tail.rs` 363, `fsx.rs` 213, `pattern.rs` 174, `walk.rs` 131, `mod.rs` 28), 117% of the row;
+  tests 1,236 (`native_tail.rs` 469, `native_safety.rs` 240, `native_walk.rs` 202,
+  `native_pattern.rs` 132, `native_resume.rs` 106, `native_room.rs` 87), 124% of the row. The extra
+  lines serve point 1 and point 3, not features: a truncation still past the offset gives a GAP, a
+  folder the walk could not list is not taken as gone, a snapshot gone or cut with bytes unread gives
+  its exact GAP, and a snapshot torn during a copy names its last state lost (review A-R1, A-R2, C1).
+  This replan sets the PRD-04 ceiling to **1,150 src and 1,600 tests** (370 and 600 over the row):
+  `mod.rs` grows by about 120 and `snapshot.rs` stays at or under 110; `native_snapshot.rs` and
+  `native_finish.rs` come within the test ceiling. Cuts the next slice makes first: RB7 below, and the
+  private `opens`, `ends` and `lost` helpers in `native_tail.rs` once PRD-14's `common::recorder`
+  helpers land (PRD-14 note). Past 1,150 or 1,600 needs a new `decision` line. The end-of-build report
+  counts this against the Rust totals.
+- **Open nit for the next touch of `tail.rs`** (acceptance lists it as known if still open):
+  - RB7: in `end()` the guard `(exact || !e.snap)` in `else if n > 0 && (exact || !e.snap)` is always
+    true (settle passes only append entries, sweep passes `exact = e.snap`, close passes `true`).
+    The line becomes `else if n > 0 {`; same behaviour, one dead path less.
+- **Stated limits** (fixer decisions 15:03Z; acceptance lists them as known unless closed):
+  - C2: a nested root on another device that holds a file first-matching the outer row is taken by
+    no row; `native_other_device` names the outer row.
+  - RB3: `native_safety.rs` guards only the "no harness name" half of the acceptance row; the "no
+    exclusion list in `src/native/`" half is unguarded. The next slice either adds a small check or
+    acceptance lists it as unguarded.
+- **Seams still open:** `native_walk` is not yet in the nextest `heavy` group (PRD-14 note, `.config`
+  is PRD-14's); `SnapshotCursor` has no `fid`, so resume skips a snapshot replaced with the same size
+  and `mtime_ns` (PRD-02 note). Until PRD-02 adds it, `native_resume.rs` keeps the size and
+  `mtime_ns` check only and acceptance lists the gap as known.
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-14 slice 3 (merge 00fac28d)
+
+- **The `Calls` helpers are on integration** in `tests/common/recorder.rs`: `opens(c) -> Vec<(Sid,
+  StreamKind, Value)>`, `ends(c) -> Vec<(Sid, EndReason, u64, Option<Value>)>` (the END tail is the
+  fourth field), `events(c) -> Vec<Value>`, `gaps(c) -> Vec<Call>`, `data_of(c, sid)` and a generic
+  `pick(c, f)`. PRD-04's next slice deletes the private `opens`, `ends` and `lost` in `native_tail.rs`
+  and `events` in `native_walk.rs` and calls `common::recorder`; `lost`'s shape is one `pick` over
+  `Call::Gap` at the call site. The lines saved count against PRD-04's 1,600 test ceiling.
+- `native_walk` joins PRD-14's `heavy` group in PRD-14's next touch of `.config/nextest.toml`.
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-14 slice 4 (merge ec0d79d8)
+
+- **`native_walk` is in PRD-14's `heavy` group** (`.config/nextest.toml` at ec0d79d8): its 7 tests
+  run one at a time, after the parallel binaries. The seam named in the core slice part 2 and PRD-14
+  slice 3 notes is closed. `gate fast` on the merge ran all 7 and passed.
+- The flake the PRD-10 slice 4 note lists (`old_files_are_skipped_and_the_new_one_found_among_five_thousand`
+  failed 1 of 4 runs in a box, while it still ran beside other binaries) now runs alone. If it fails
+  again under `heavy`, the cause is in the test or in `src/native/`, not load from other binaries;
+  PRD-04 owns that fix, and acceptance lists it as known if it is still open at the end.
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-04 core slice part 3 (merge a302d688)
+
+- **On integration:** `native::start(rec, sources) -> NativeReader` and
+  `NativeReader::finish(self, harness_exited, guard: Option<Duration>) -> NativeFinish { streams,
+  snapshots, cut_files, cut_bytes, took_ms }`, the loop (a walk every max(1 s, 50 times the walk),
+  64 MiB slices between walks, a 100 ms wait when room is short), finish steps 1, 2, 4 and 5, and
+  `native_missing` through the public `Missing` clock. Nits RB7 and RB3 from the part 2 note are
+  closed: `end()` lost its dead guard, and `native_safety.rs` now refuses quoted secret-file names in
+  `src/native/` (the no-exclusion-list half). The `native_walk` run-start flake named in the PRD-14
+  slice 4 note is fixed in the test (3ede1ec3: it waits past the kernel's coarse file clock); close it.
+- **Interim behaviour until `snapshot.rs` lands** (the next slice removes each one):
+  - A `final` row is not copied during the run at all: it is walked and counted for
+    `native_missing`, then copied once at the seal as single files with OPEN meta `form: "snapshot"`,
+    no `set` and no `harness_exited`. A dead entry therefore holds no database copy, and
+    `NativeFinish.snapshots` is always 0. `finish` ignores `harness_exited`.
+  - The next slice restores section 6 in full: `-wal`, `-shm` and `-journal` grouped into one `set`,
+    periodic copies, `form: "final"` with `set` and `harness_exited`, one retry with
+    `snapshot_unstable`, `final_snapshot_live`, and `snapshots` counted. It hooks step 3 into
+    `Reader::finish` between step 2 and `close`, so a guard that runs out cuts a set for every file
+    of it (section 8 step 5).
+- **Behaviour the slice chose, kept** (point 3, no silent loss): a reader thread that fails to spawn
+  writes `native_missing` for every row, not only `warn_missing` rows; a row whose pattern fails
+  `pattern::parse` is named at once; a `NativeReader` dropped without `finish` is finished with a zero
+  guard, so every unread file gets its `cut_at_seal` GAP. At finish, a snapshot torn by the state the
+  seal pass saw is copied again once; one torn by a newer state is not restarted and `close` names its
+  loss, so an unguarded finish cannot loop on a file that never stops changing.
+- **Real runs cannot write `native_missing` yet:** `Missing::check` takes
+  `rec.counts().model_requests()`, and `Recorder::counts()` returns `Counts::default()` at a302d688,
+  so the count stays 0 and the five-minute clock never starts. `native_finish.rs` passes counts by
+  hand, so the tests do not show it. The fix is PRD-02's (PRD-02 note); nothing changes here.
+- **Size decision** (`wc -l` at a302d688; ceiling set by the part 2 note: 1,150 src, 1,600 tests):
+  src 1,144 (`tail.rs` 368, `mod.rs` 258, `fsx.rs` 213, `pattern.rs` 174, `walk.rs` 131), 6 lines
+  under the ceiling, with `snapshot.rs` (estimate 110) and the step 3 hookup still to come; `mod.rs`
+  is 258 against the part 2 note's "grows by about 120" (builder decision 15:59Z names points 3 and 6:
+  spawn failure names every row, a dropped reader closes with GAPs, `Missing`). Tests 1,474
+  (`native_tail.rs` 469, `native_safety.rs` 250, `native_finish.rs` 227, `native_walk.rs` 203,
+  `native_pattern.rs` 132, `native_resume.rs` 106, `native_room.rs` 87), 126 under 1,600.
+  This replan sets the PRD-04 src ceiling to **1,260** (1,144 plus `snapshot.rs` at or under 110 and
+  about 6 lines of hookup); the extra lines serve point 1 (every database set copied whole with its
+  `-wal` at each seal, and periodic copies that keep a dead entry's sessions) and point 3 (one retry,
+  a live copy said plainly, never a skipped seal copy). The test ceiling stays **1,600**. Cuts the
+  next slice makes first: the lines the interim `final` skip in `Reader::pass` and the single-file
+  `final` path no longer need, and the private test helpers still kept despite the PRD-14 slice 3
+  note (`opens`, `ends`, `lost` in `native_tail.rs`; `opens`, `ends`, `notes` in `native_finish.rs`;
+  `notes` in `native_safety.rs`; `events` in `native_walk.rs`), replaced by `common::recorder`
+  (`opens`, `ends` with the tail as fourth field, `events`, `pick`), so `native_snapshot.rs` fits.
+  Past 1,260 src or 1,600 tests needs a new `decision` line. The end-of-build report counts it
+  against the Rust totals.
+- **Stated limits from review** (fixer 16:11Z, accepted by reviewer A 16:31Z): N1, N2, N3 and N5 were
+  declined as nits and stay as they are; acceptance lists them as known by those names if the last
+  slice does not close them. Still known from earlier notes: C2 (nested root on another device) and
+  the missing `fid` in `SnapshotCursor` on resume (PRD-02 note).
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, fix round on the database set slice (4f218cbc)
+
+- **Slice per reader** (review A9): the loop gives `tail.read` and `sets.read` a 64 MiB slice each,
+  so one pass reads at most 128 MiB. The slice is fairness, not a cap, and nothing is lost; section 5
+  reads as a 64 MiB slice per reader.
+- **Test helpers** (review A7): `tests/common/` stays PRD-14's. The four helpers PRD-04 added there
+  (`append`, `notes`, `end_of`, `gap_rows`) now live in `tests/native_common/mod.rs`, read under the
+  `tests/native_*` row as PRD-10 reads `cli_common/`. Moving them into `common::recorder` is a request
+  to PRD-14, not done here.
+- **Gone sets** (review A8): a set none of whose files was in the last walk, with no `unlisted`
+  folder holding one, and whose last state a copy already took, gets no seal copy. A gone set never
+  copied still gets one, and its GAP names the real loss.
+- **Short streams** (review B8): `tail::end_stream` is the one place that names a stream cut short,
+  for a file and for a database copy.
+
+### 2026-10-31, replan after PRD-04 second slice (merge 7e8ed89b)
+
+- **PRD-04 code is complete on integration:** `snapshot.rs` (database sets, section 6) and the finish
+  step 3 hookup (section 8). The interim behaviour of the part 3 note is gone: a `final` row is copied
+  during the run and at each seal as one `set` per database (`-wal`, `-shm`, `-journal` beside it),
+  OPEN meta `form: "final"` with `set`, `fid` and `harness_exited`; one retry with
+  `snapshot_unstable`; `final_snapshot_live` when the harness still ran; `NativeFinish.snapshots`
+  counts sets; `finish` honours `harness_exited`. Notes in use: `native_unreadable` (`path`, `errno`),
+  `snapshot_unstable`, `final_snapshot_live`, `native_missing`; the `cut_at_seal` GAP.
+- **Lost set files** (reviews A1, A2, B2, A8): a set file that vanishes or is unreadable mid-copy ends
+  its stream with a GAP naming the bytes not read (exact when the file is gone), never short and
+  unnamed; a whole set gone after a whole copy is reported lost at the seal; a gone set whose last
+  state a copy already took gets no seal copy; a gone set never copied still gets one.
+- **Test helpers:** the private helpers of the part 3 note are replaced by `common::recorder` (`opens`,
+  `ends`, `events`, `pick`) as asked; `lost` is a pick over `Call::Gap` at each call site. The four
+  PRD-04 helpers stay in `tests/native_common/` (fix-round note, review A7, nit A10: PRD-00 note).
+- **Size decision** (`wc -l` at 7e8ed89b; PRD-00 row 780 src and 1,000 tests; ceilings of the part 3
+  note 1,260 and 1,600). Src 1,488: `tail.rs` 410, `snapshot.rs` 289, `mod.rs` 271, `fsx.rs` 213,
+  `pattern.rs` 174, `walk.rs` 131; 191% of the row, 228 over the 1,260 ceiling (`snapshot.rs` is 289
+  against its estimate of 110, `tail.rs` +42 for the shared `end_stream`). Tests 1,768: `native_tail.rs`
+  441, `native_snapshot.rs` 346, `native_safety.rs` 245, `native_walk.rs` 194, `native_finish.rs` 173,
+  `native_pattern.rs` 132, `native_resume.rs` 106, `native_room.rs` 87, `native_common/mod.rs` 44; 177%
+  of the row, 168 over the 1,600 ceiling. The extra lines serve point 1 (every database set copied whole
+  with its `-wal` and `-shm`, one set id across its files, periodic copies that keep a dead entry's
+  sessions) and point 3 (a file lost mid-copy named by a GAP, `native_unreadable` and
+  `snapshot_unstable` said plainly, a live copy said plainly, no skipped seal copy). This replan sets
+  the PRD-04 ceilings to **1,500 src and 1,780 tests**. PRD-04 has no further slice planned; a change
+  past either ceiling needs a new `decision` line. The end-of-build report counts it against the Rust
+  totals. Cuts left for a later touch, not required: the `native_tail.rs` cases that only restate
+  `native_safety.rs` ones.
+- **Still open, and not PRD-04's to close:** `native::start` and `NativeReader::finish` have no caller
+  (PRD-02 wires boot step 5 and seal step 4; PRD-02 note); `Recorder::counts()` still returns
+  `Counts::default()`, so `native_missing` never fires in a real run; `SnapshotCursor` has no `fid` on
+  resume. Acceptance lists as known, if still open at the end: C2 (nested root on another device), the
+  missing snapshot `fid` on resume, and review nits N1, N2, N3 and N5. The part 3 line about `final` rows
+  copied only at the seal is closed.
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-31, replan after PRD-02 core step 1 (merge 2fd96576)
+
+- **`SnapshotCursor.fid` is a joint change, still open.** PRD-02's merge left `SnapshotCursor` as `size`
+  and `mtime_ns` (its doc comment says so), because adding `fid` in `cursors.rs` breaks the literals in
+  `tests/native_resume.rs` and the `Tail::new` comparison, which are this PRD's paths. When PRD-02's
+  next slice adds `fid: Fid`, this lane compares it in `Tail::new` and fixes its literals in the same
+  merge window (PRD-02 note, same date). Each lane edits only its own paths. Until then a snapshot
+  replaced by a file of the same size and `mtime_ns` is skipped on resume, as the known-gap line says.
+- **`Recorder::counts()` is filled** (counts at the last LINK) and `Recorder::live()` is filled, so
+  `native_missing` can start from `rec.counts().model_requests()`. In a real run both stay `Default`
+  until PRD-02's `boot.rs` lands; a test that needs a non-zero `model_requests` builds it through the
+  recorder's own write path, not a literal.
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-31, replan after PRD-05 core slice (merge 2c95e8f1)
+
+- **The real `mask_meta` is on integration**, so the stub note on native OPEN meta no longer holds. It
+  scrubs the `path` string with the whole-record rules, stars a credential query value and a userinfo
+  before the last `@`, and leaves `method`, `status`, `host`, `port` and `alpn` clear. Keep reading the
+  path for the stream map before `mask_meta` runs, not after. An entry built on a stub-era build still
+  cannot be used as evidence.
+- No locked ledger item is touched and no owner question comes from this slice.

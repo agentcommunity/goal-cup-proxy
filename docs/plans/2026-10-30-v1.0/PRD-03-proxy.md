@@ -909,3 +909,46 @@ Revision 3 against OWNER-DECISIONS.md (the ledger wins). Fix ids are from the al
   `BodyDecoder`, `Step`, `parse_codings`, `WsConn`, `PrefixedIo`. Slice 2 builds `serve`, `hosts`,
   `pump`, `tunnel` and `http1` on them; `http1` feeds `BodyDecoder` and records what each `Step` says.
 - No locked ledger item is touched. No new owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-14 slice 4 (merge ec0d79d8)
+
+- **`proxy_connect` joins PRD-14's `heavy` group in the PRD-03 merge that brings its 2,000
+  concurrent connections case,** not before: `proxy_connect.rs` is on integration with ClientHello
+  parses only, which need no group. That merge carries one edit to `.config/nextest.toml`: add
+  `proxy_connect` to the alternation of the existing override, which reads
+  `filter = 'binary(/^native_walk$/)'` at ec0d79d8 (so `binary(/^(native_walk|proxy_connect)$/)`).
+  Under merge rule 1 that one edit is the seam change the PRD-16 note after PRD-17 phase 0 allows.
+  `proxy_restart.rs` does the same in the merge that brings it.
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-08 slice 4 (merge 1fdaf2c3): what `conn_bytes` now demands of the proxy
+
+PRD-08's `conn_bytes` is built (PRD-08 note). It judges only what the record shows, so the proxy's
+slice that writes decrypted connections must meet four points or the check is blind or fails a good
+run:
+
+- **Every decrypted `conn` END carries `plain_up` and `plain_down`.** One decrypted connection with
+  no tail turns the whole run's `conn_bytes` into `skip`, which hides a real loss.
+- **Every HTTP stream END carries `wire`** (the body bytes on the wire; the verifier falls back to
+  `seen` if absent). Heads are counted from the OPEN `headers`.
+- **A parser fault on a reused decrypted connection writes a `conn` GAP** (PRD-01 section 4, `lost`
+  = unparsed bytes + 1). A GAP on an HTTP request or response stream does not cover the other
+  requests: an unparsed request with no `conn` GAP leaves its bytes unaccounted and `conn_bytes`
+  fails (exit 2) above 1 MiB and 50% of the direction.
+- **A WebSocket stream GAP carries its real `lost`** (+1 by invariant 11). `lost` 0 (size unknown)
+  waives the check for the whole connection, so use it only when the size is unknown.
+
+No locked ledger item is touched and no owner question comes from this note.
+
+### 2026-10-30, replan after PRD-12 slice 5 (merge 9e71bde0): the pad's scripts for acceptance 3, 7 and 9
+
+- `scripts/pad/exec/` holds the watcher commands: `h2-parallel.sh` (acceptance 3: four `--http2-prior-knowledge`
+  requests in parallel to `api.openai.com`, curl 8.10.0 or later), `refusal-curl.sh` (acceptance 7:
+  a client trusting only the system CAs, two calls, a 660 s sleep, a third call) and `long-tunnel.sh`
+  (acceptance 9: 90 s on `stream.wikimedia.org`, a non-model host). The record decides the pass, not
+  the script's exit.
+- **What the pad reads from the record for acceptance 7:** the only loss a `refusal-curl.sh` row may
+  name is `tls_refused`, and the verifier exit may be 1 for it alone; anything else named fails the
+  row. A `tls_refused` GAP with `{"alert": false}` stays the case PRD-08 skips for `refusal_after_trust`.
+  A dodger row expects `pinned` tunnels with no `tls_refused` of its own.
+- No locked ledger item is touched and no owner question comes from this slice.

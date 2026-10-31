@@ -1,10 +1,9 @@
 //! PRD-06 "Automated tests": the backoff waits, the 120 s cap, `Retry-After`, the reset on
 //! progress (run 1's lag bug) and the clock case. `policy.rs` takes `now` as an argument, so the
-//! clock case needs no test hook. The every-other-PUT case guards the sender's reset on
-//! progress, so it lands with `send.rs` on PRD-14's common fake Worker.
+//! clock case needs no test hook. The every-other-PUT case is in `upload_resume.rs`, with its rig.
 
 use goalcup::pipeline::Mono;
-use goalcup::upload::policy::{Backoff, Cadence, Policy, Timer, after, backoff, jitter};
+use goalcup::upload::policy::{Backoff, Policy, Timer, after, backoff, jitter};
 use std::time::Duration;
 
 const S: fn(u64) -> Duration = Duration::from_secs;
@@ -68,25 +67,23 @@ fn a_clock_jump_makes_the_round_and_the_beat_due_on_the_next_tick() {
             ..Policy::default()
         };
         let t0 = Mono(1_000_000_000_000);
-        let mut round = Cadence::new(&p);
-        let mut beat = Timer::beat(&p);
-        assert!(round.due(t0, 1));
+        let mut round = Timer::new(p.round, p.spread_first);
+        let mut beat = Timer::new(p.beat, p.spread_first);
+        assert!(round.due(t0));
         assert!(beat.due(t0));
         round.started(t0);
         beat.started(t0);
         // The second round and beat, a full interval after.
         let t1 = after(t0, S(300));
-        assert!(round.due(t1, 1));
+        assert!(round.due(t1));
         assert!(beat.due(t1));
         round.started(t1);
         beat.started(t1);
-        assert!(!round.due(after(t1, S(1)), 1));
+        assert!(!round.due(after(t1, S(1))));
         assert!(!beat.due(after(t1, S(1))));
-        // A size trigger is due at once.
-        assert!(round.due(after(t1, S(1)), p.trigger_bytes));
         // `now` moves 10 minutes ahead in one step (a laptop wakes).
         let woke = after(t1, S(600));
-        assert!(round.due(woke, 1));
+        assert!(round.due(woke));
         assert!(beat.due(woke));
         let mut b = Backoff::new(&p);
         b.fail(t1, Some(S(120)));

@@ -3,7 +3,7 @@
 # Arrays: provider, gateway, vendor (the kind), never (sign-in hosts, never decrypted), pinned (empty at ship).
 provider = [
   "api.anthropic.com", "api.openai.com", "chatgpt.com", "api.deepseek.com",
-  "generativelanguage.googleapis.com", "api.moonshot.ai", "api.moonshot.cn", "api.kimi.com",
+  "generativelanguage.googleapis.com", "api.moonshot.ai", "api.moonshot.cn", "api.kimi.com", "api.kimi.ai",
   "dashscope.aliyuncs.com", "dashscope-intl.aliyuncs.com", "cn-hongkong.dashscope.aliyuncs.com",
   "*.maas.aliyuncs.com",
   "api.mistral.ai", "api.x.ai",
@@ -17,7 +17,8 @@ provider = [
 ]
 gateway = [
   "ai-gateway.vercel.sh", "openrouter.ai", "eu.openrouter.ai", "gateway.ai.cloudflare.com",
-  "api.kilo.ai", "ai-gateway.kilo.ai", "api.cline.bot", "opencode.ai",
+  "api.kilo.ai", "ai-gateway.kilo.ai", "api.cline.bot", "opencode.ai", "hyper.charm.land",
+  "api.router.tetrate.ai", "router.huggingface.co",
 ]
 vendor = [
   "ampcode.com", "api.factory.ai", "api.eu.factory.ai", "api.githubcopilot.com", "*.githubcopilot.com",
@@ -25,6 +26,7 @@ vendor = [
 ]
 never = [
   "auth.openai.com", "platform.claude.com", "claude.ai", "authapi.ampcode.com", "oauth2.googleapis.com",
-  "auth.kimi.com", "chat.qwen.ai", "portal.nousresearch.com",
+  "auth.kimi.com", "auth.kimi.ai", "chat.qwen.ai", "portal.nousresearch.com", "api.workos.com", "auth.x.ai",
+  "accounts.x.ai", "accounts.google.com",
 ]
 pinned = []

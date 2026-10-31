@@ -1,0 +1,3 @@
+{
+  "agents": { "defaults": { "model": { "primary": "deepseek/deepseek-flash" } } }
+}

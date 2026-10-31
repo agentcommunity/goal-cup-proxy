@@ -1422,3 +1422,162 @@ to another file are made by that file's owner.
   answer never stretches it. The watchdog reckons `seconds_left` from `asked_at` and not from when the
   word arrived.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-04 core slice part 2 (merge 01afcf22)
+
+- **Seam ask from PRD-04 (log 14:31Z), still open at 01afcf22:** `pipeline::cursors::SnapshotCursor`
+  holds `size` and `mtime_ns` only. Section 9.3 and PRD-04 section 7 give every native file a `fid`,
+  so a snapshot replaced by a new file of the same size and `mtime_ns` is skipped on resume today
+  (point 1). PRD-02's next touch of `cursors.rs` adds `fid: Fid` to `SnapshotCursor` (the same `Fid`
+  `NativeCursor` and `native::fsx` use); PRD-04 then compares it in `Tail::new`. Old `cursors.json`
+  needs no reading path (no 0.7 compatibility). Acceptance lists the gap as known if it is still
+  open at the end.
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-12 slice 4 (merge 69f355c6)
+
+- The pad's fault rows read S4 `pid`, `mode`, `last_request_at`, `written.model_requests`,
+  `off.spans`, `off.ms` and `off.since`, and the first number of `rec/watchdog.pid` (S8). All match
+  `pipeline/status.rs` on integration. A rename is a seam line; the pad follows.
+- **An ask, not a requirement:** S4 has no count of streams open now, so the pad's `kill-recorder`
+  takes `last_request_at` within the last 10 s as the sign of an open stream (pad log 13:12Z). If this
+  PRD adds such a count to the live part of `status.json`, post it as an S4 seam line; nothing waits
+  on it.
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-06 slice 2 (merge a98f104c)
+
+- **S4 ask from PRD-06 (fixer seam line 16:21Z, A6):** `upload::beat::health` now reads the live
+  recorder through `Recorder::live()`, and decides `writer_slow`, `losing` and the heartbeat's
+  `failed` (records held and no write for 60 s) from it, plus `boot` and the off totals. At a98f104c
+  `Recorder::live()` fills `held_bytes` only; `writer_idle_ms`, `losing`, `off` and `boot` are
+  `Default`. Once PRD-06 slice 3 starts the beat thread, a live recorder whose writer stalls or whose
+  streams sit in a gap would beat `ok` to the server (points 5 and 6). PRD-02's next touch of
+  `pipeline/mod.rs` fills them from the same atomics the status thread writes to `status.json`
+  (section 3), so the two never disagree. `Recorder::counts()` also returns `Counts::default()`; the
+  beat takes entry totals instead, so that one is not on PRD-06's path. A rename is a seam line.
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-04 core slice part 3 (merge a302d688)
+
+- **The native seam is on integration with its final shape:** `native::start(rec, sources) ->
+  NativeReader` (boot step 5) and `NativeReader::finish(self, harness_exited: bool, guard:
+  Option<Duration>) -> NativeFinish { streams, snapshots, cut_files, cut_bytes, took_ms }` (seal
+  step 4, `Some(180 s)` only for `deadline`, `server_stop` and `signal`). Nothing in `src/pipeline/`
+  or `src/watchdog/` calls either yet; PRD-02's next touch of boot and seal wires both, and writes
+  `cut_files` and `cut_bytes` into sealed `status.json` (the `CutFiles` key is already there).
+  A reader dropped without `finish` closes every unread file with a `cut_at_seal` GAP, so a path that
+  must not seal (a restart that hands over) still calls `finish` or accepts those GAPs.
+- **Fill `Recorder::counts()`** (points 6 and 1): the native reader's `native_missing` clock starts at
+  the first model request it sees in `rec.counts().model_requests()`, and `counts()` returns
+  `Counts::default()` at a302d688, so a real run never writes the note and PRD-10's "has found no
+  <row> file" line never shows. Fill at least `model_requests` from the same atomics the status thread
+  writes to `status.json` (the PRD-06 slice 2 note asks the same for `live()`). A rename is a seam line.
+- **R3-3 `pipeline_seal.rs` case:** a `final` row is copied at the seal today, but as single files with
+  `form: "snapshot"` and no `set` until PRD-04's `snapshot.rs` lands (PRD-04 note). A seal test that
+  asserts `form: "final"` or `set` waits for that slice; one that asserts the bytes are in the record
+  after the seal can run now.
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-31, replan after PRD-04 second slice (merge 7e8ed89b)
+
+- **The native seam is complete on the PRD-04 side.** `NativeReader::finish(self, harness_exited, guard)`
+  now acts on `harness_exited` (step 3: a `final` row's database sets are copied whole at the seal,
+  `harness_exited` in OPEN meta, `final_snapshot_live` when it is false, and a guard that runs out cuts
+  a set for every file of it). Wire the real `harness_exited` from the watchdog's seal reason; passing a
+  constant `false` writes a `final_snapshot_live` note for every database at every seal (points 1, 3
+  and 6). Still nothing in `src/pipeline/` or `src/watchdog/` calls `native::start` or `finish`.
+- **`pipeline_seal.rs` (R3-3) may now assert** `form: "final"`, `set` and `harness_exited` for a database
+  row, and that a `final` set and a growing session file are both in the record after the seal. The
+  part 3 note's "waits for that slice" no longer applies.
+- **Still open for your next touch of `pipeline/mod.rs`:** `Recorder::counts()` (at least
+  `model_requests`, or `native_missing` never fires), `native_cursors()` returns `Cursors::default()`,
+  and `SnapshotCursor` gains `fid` (PRD-04 resumes a database set by `size` and `mtime_ns` only, so a
+  replaced file with the same stat is copied again, which loses nothing).
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-31, replan after PRD-02 core step 1 (merge 2fd96576)
+
+- **On integration:** the S1 front (`Recorder`, `StreamHandle`, held-bytes guard, gap rule), `secure.rs`,
+  `low_priority`, `Counter` and `entry_totals` over boots, `counts.jsonl`, `cursors.json`, `status.json`
+  with the stall exit, the clocks with `boot_id`, the open-file raise and `fds::may_accept`. Not yet:
+  `writer.rs`, `mask_worker.rs`, `seal.rs`, `boot.rs`, `dead.rs`, the real `run_recorder` and everything
+  under `watchdog/` but the scaffold.
+- **Asks closed.** `Recorder::live()` now fills `boot`, `held_bytes`, `writer_idle_ms`, `losing` and
+  `off` from the atomics (the PRD-06 slice 2 ask); `Recorder::counts()` returns the counts at the last
+  LINK (the PRD-04 `native_missing` ask). `Live` carries no `held_peak` or `guard`; `status.json` does.
+  Both reads stay `Default` in a real run until `boot.rs` calls `set_boot`, `set_off`, `set_counts` and
+  `set_cursors` (next slice), so wire them there; `native_cursors()` returns what `set_cursors` stored.
+- **Still open: `SnapshotCursor.fid`.** Dropped from this merge (review A6-1): a field added in
+  `cursors.rs` breaks `tests/native_resume.rs` and `Tail::new`, which PRD-04 owns. It lands as one
+  change in one trial merge: PRD-02 adds `fid: Fid` in its next touch of `cursors.rs`, and PRD-04's lane
+  compares it in `Tail::new` and fixes its `SnapshotCursor` literals in `tests/native_resume.rs` in the
+  same merge window. Each lane edits only its own paths; the first to start posts a seam line naming
+  the other. Acceptance lists the gap as known if it is still open at the end.
+- **The stall clock is awake time, not boot time.** Section 3 and the defaults row "Writer stall exit"
+  read "60 s of boot time with no write while records wait". As built, idle runs from the later of the
+  last write and the moment records began to wait, on the awake clock (`clock::awake_ns`), and counts
+  only items waiting for the writer, never reservations or bytes the mask worker holds back for a match.
+  A suspend is therefore never a stall (point 3). The 2 x soft mark is unchanged. This note is the
+  shape; the row is not rewritten. `writer_idle_ms`, which PRD-06's `failed` reads, is the same number.
+  The mask worker's contract in the next slice: `taken(n)` when it takes an item, `forwarded(n)` for
+  what it hands the writer, `dropped(n, lost)` for a drop; `release(n)` is the writer's alone.
+- **`pipeline_stall.rs`: the bound is the guard plus the control items admitted** (review BRK9-N2).
+  OPEN, END, GAP and EVENT are admitted without limit (section 3), so with the writer held and clients
+  that keep opening requests, `held_peak` passes 64 MiB plus 1 MiB. Box runs at a 64 MiB guard with a
+  30-header OPEN meta: 40 streams x 6 bursts gave 66.7 MiB, 200 streams plus 200 WebSockets gave
+  79.8 MiB. Only DATA is bounded by the guard (`admits`), and the stall mark stays reachable by control
+  items alone (the section 3 reason for it). The acceptance line reads: every `memory_guard` hole is a
+  GAP, no `recorder_down` gap, and `held_peak` at most the guard plus 1 MiB plus 48 KiB for each OPEN,
+  END and GAP the decoded record holds (the test counts them after the run; no cap enters the product).
+  The breaker's numbers give the cost: about 12 KiB per item in the 40-stream case and under 40 KiB per
+  stream in the 200-stream case, both with a 30-header OPEN meta, which is heavier than a real request.
+  X3 in PRD-16 reads the `memory_guard` gap count; a `held_peak` above the guard is a report line, not a
+  FAIL.
+- **Control-item weight (review BRK9-N1), accepted as a nit.** A control item costs about 140 bytes more
+  than `CONTROL_HELD` (256) plus `json_held` counts: the channel slot and `serde_json`'s map node,
+  which is sized for 11 entries. The 2 x soft stall mark so fires at about 1.3 x the memory the comment in
+  `item.rs` says it bounds, which is about RAM/3 instead of RAM/4 on a machine under 4 GiB. No point
+  breaks (`oom_score_adj` 500 is the backstop). The next touch of `item.rs` may raise `CONTROL_HELD` to
+  384 if it costs no test change; otherwise it rewords the comment to "about". Not a blocker.
+- **Comment fix (review B-6).** `open_gaps` in `pipeline/mod.rs` should read "Added to at each guard drop,
+  removed when the gap closes or the seal drains it". Comment only; the next touch of `mod.rs` does it.
+- **Decision, size** (the row is a ceiling, ledger L2). At 2fd96576 `wc -l` gives 3,283 src under
+  `pipeline/` (`counts.rs` 688, `handle.rs` 681, `mod.rs` 622, `status.rs` 424, `clock.rs` 273,
+  `fds.rs` 225, `item.rs` 98, `calls.rs` 79, `cursors.rs` 72, `secure.rs` 70, `guard.rs` 51) and 202 in
+  `watchdog/mod.rs`, so 3,485 against the row of 1,350 (258%); tests are 662 (`pipeline_counts.rs` 598,
+  `pipeline_secure.rs` 64) against 1,500. The unbuilt files (writer, mask worker, seal, boot, dead,
+  the watchdog's spawn, recover and the restart loop) project to about 2,200 more, so about 5,700 src.
+  The lines serve points 1 (every call recorded, counted at write), 3 (the guard, the gap rule, the
+  stall exit) and 6 (status and totals the participant sees). The ceiling for PRD-02 is set to **5,800
+  src** and **1,500 tests** (tests unchanged). A slice that would pass 5,800 needs another decision
+  line, and each remaining slice cuts first what serves no point (`counts.rs` and `handle.rs` are the
+  places the reviewers named). The end-of-build report nets this against the Rust totals.
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-31, replan after PRD-05 core slice (merge 2c95e8f1)
+
+- **S2 is the real masker now**, not the stub. `start.mask_rules` has the 18 shared kinds, the connector
+  kinds, `run_secret` and `fail_closed` (more than one entry), so the PRD-16 rung-1 stub check no longer
+  fires; entries built on a stub-era build stay not evidence. `Masker::new(&plan.mask_rules, values)`
+  returns `Result<Masker, MaskError>`: an error means a built-in shape or a connector rule did not
+  compile, and the recorder boot stops with a plain line (fixed text, no byte in it). `Span.rule`
+  indexes `mask_rules()`.
+- **Calls the pipeline makes** (PRD-05 note): one `StreamMasker` per stream from `masker.stream(kind)`;
+  `push` returns fewer or more bytes than were pushed (the released bytes are the record bytes, so
+  offsets follow the released length); `boundary()` at each WebSocket message end (K15, `fin`); `gap()`
+  before writing every GAP on that stream; `finish(self)` at the end of the stream. A stream holds at most
+  16 KiB undecided and stars (kind `fail_closed`) past that, never drops.
+- **R8, the mask pool.** One stream measured 10.4 MB/s (Codex request) and 12.6 MB/s (transcript) in a
+  release build, 16 KiB pieces, against the 50 MB/s target. The masker is `Send + Sync` and `Clone`
+  shares the policy, so the pool (one `StreamMasker` per stream, pinned to one worker at a time) is the
+  way to the target. Count the 16 KiB hold per stream in the pool's memory use.
+- **Values.** `mask::workspace_values(project)` returns the default build's exact values (the `GH_TOKEN`
+  value from the key files, usable only). `env` and `harness` values passed in are counted in
+  `start.mask_values.skipped` and never used until the owner's yes to question 3; PRD-02 need not
+  collect them. `Masker::new` took 3.1 s only with 32 values of 256 bytes, the question 3 case.
+- **`mask_meta` is real**: it keeps `method`, `status`, `host`, `port`, `alpn`, masks credential header
+  values and writes `meta.masked` for an object with `headers`. The rule "never read meta back after
+  `mask_meta`" stays (a native `path` with a shaped key or a credential query is starred); take the host,
+  the stream key and the native `path` before the call.
+- No locked ledger item is touched and no owner question comes from this slice.

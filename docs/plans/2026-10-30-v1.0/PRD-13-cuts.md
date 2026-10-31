@@ -757,3 +757,23 @@ PRD-14, PRD-15, PRD-16 and the code.
   crate: the five `tests/fixtures/connectors/*/*.json` files are the old decoders' expected-count
   snapshots (ledger B10) that only point at the `m2-native` files already copied (PRD-09 note).
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-31, note from the PRD-15 slice 9 replan (merge d56216f4)
+
+`scripts/README.md` (PRD-15, 39 lines) is written for the pre-cut tree: it names the scripts and
+`test_*.py` files that exist on integration today, keeping `test_install.py`, `test_fetch_run.py`,
+`test_check_links.py` and the pad tests, and leaves out the other eleven `test_*.py` files, which this PRD
+deletes. After the phase 3 deletes land (and PRD-14's `check-links.py` removal), PRD-15's last pass
+re-checks that every file the README names still exists. Do not edit the README in the cut commits.
+Nothing else in the cut list changes. No locked ledger item is touched.
+
+### 2026-10-31, replan after PRD-12 slice 6 (merge 645f3219)
+
+- PRD-12 slice 6 deleted `skills/adding-a-capture-harness/templates/connector-harness.toml`. Two tests
+  that read it are on this PRD's delete list and are now broken until they go:
+  `crates/goalcup-protocol/tests/it/connector_template.rs` (module `connector_template` in
+  `tests/it/main.rs`, which reads the template with `read_to_string` and panics) and the path list in
+  `scripts/test_check_connector.py` (line about 403, with `ci-scope.py`). Delete both in the first cut
+  commit that touches those crates and scripts; do not recreate the template to satisfy them. The fast
+  gate does not run them, so nothing else turns red before then.
+- No locked ledger item is touched.

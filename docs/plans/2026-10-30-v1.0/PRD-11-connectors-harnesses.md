@@ -1251,3 +1251,231 @@ here; the other files carry their own part.
   and `mod.rs`. A rule the slice rules differently from the page is a PRD-15 fix, not a PRD-11 one.
 - The launch slice's `.profile` (PRD-17 P11) is not on the page; PRD-15's ARCHITECTURE rewrite states
   it from merged `launch.rs`.
+
+### 2026-10-30, replan after PRD-11 slice 3 (merge c14d63b8)
+
+- **S3 is real on integration.** `hosts::check` (the full PRD-17 2.7 rules), `HostList::decide`,
+  `ca_subtrees`, the `record-hosts.txt` read, `hints` (JSON read as JSONC for every `.json` and
+  `.jsonc` file, TOML, block YAML, dotenv), `refuse_if_set`, `HomeLock` (`try_lock` on
+  `<home>.goalcup.lock`), the version probe (5 s, never logged) and `write_settings` (typed booleans,
+  JSON, TOML and YAML only; dotenv and other formats come back skipped as "format not writable"). A run
+  on this build tunnels only what the lists say. Facts the merge settled that the sections above leave
+  open:
+  - A `file` template's last component is a PRD-04 pattern (`pattern::parse`): `host_hints` and
+    `refuse_if_set` read every regular file that fits; a folder that fits is skipped.
+  - `plan` writes `update_off` at every start while the home lock is free, and logs a row not
+    written ("update_off not written: ..."); `no_prompts` is written only by `goalcup setup`.
+  - A JSON or TOML settings file that needs a change is rewritten without its comments (it is in the
+    isolated home); a file already holding the value is not rewritten.
+  - `Skipped.local` is true for loopback, unspecified, mapped loopback, private and link-local
+    addresses and the `localhost` forms, so a hint at a LAN model server gives a `local_model` note.
+    A numeric spelling such as `127.1` or `0x7f.1` is refused with `local` false: the hint is a
+    plain skip, not a `local_model` note. Known; nothing is decrypted either way.
+  - N6 asks the system resolver once per hint name with `to_socket_addrs` during `plan`, with no
+    wait of our own: a dead resolver delays the start by the system's timeout per hint name. Known
+    (point 3); the third slice bounds it only if it fits the ceiling below.
+- **S3 additions** `LaunchPlan.unread: Vec<PathBuf>` and `LaunchPlan.log: Vec<String>` (PRD-00
+  note). Consumer: PRD-10's slice that wires `connector::plan` into `start`.
+- **Open nits closed:** B7 (the loader calls `native::pattern::parse`; `pattern_ok` and the test glob
+  are gone), F5b, F1b with its refused case, B12, B13, and F3's lock test. Review rounds A and B on
+  slice 3 closed with no open finding; B-N-SIZE went to this replan.
+- **Size (ledger L2), `wc -l` at c14d63b8.** src 1,646 against the 1,510 ceiling (109%): `schema.rs`
+  423/425, `mod.rs` 301/285, `hosts.rs` 301/290, `hints.rs` 303/220, `launch.rs` 291/250,
+  `builtin.rs` 27/40. Tests 721 against 620 (116%, past the 10%): `connector_builtin.rs` 155/165,
+  `connector_hints.rs` 196/110, `connector_hosts.rs` 105/90, `connector_launch.rs` 223/210,
+  `connector_no_model_address.rs` 42/45. **Decision:** the area's final ceiling is 1,700 src and 760
+  tests by `wc -l` at the end of the third slice; per-file ceilings are today's counts, except
+  `launch.rs` and `mod.rs`, which share the 54 src lines left for the `.profile` writer (P11) and
+  its call in `plan`, and `connector_launch.rs`, which gets the 39 test lines for its one case. The
+  extra lines serve point 1 and point 7 (YAML lists and block scalars, JSONC for every JSON file, the
+  `never` hosts in the list before any hint, typed booleans in three formats, so the harness runs as
+  configured and every model host it names is recorded), point 4 (no value in any skip, log line or
+  refusal) and point 6 (`unread` and `log`, so the participant is told which file was not read).
+  Each `connector_hints.rs` case is an acceptance case (one per format, link and size guards,
+  `local_model`, refusal, `false` and empty). The third slice cuts before it adds: first any
+  repeated per-format setup in `connector_hints.rs`; nothing in the third slice's connector files
+  counts here. Past 1,700 or 760 needs another decision line.
+- **Third slice, unchanged in scope:** the `.profile` writer (P11) for Amp and Droid, and the
+  remaining connector files of section 6 (four of 16 are on integration: `claude-code-cli`,
+  `codex-cli`, `hermes-cli`, `kilo-cli`). Each new file is checked by `rule_code` (PRD-14 note).
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-12 slice 4 (merge 69f355c6)
+
+- The pad now reads the flat `connectors/<id>.toml`: top-level `home` (it fills `{home}` only, for
+  the harness login in the box) and `native` rows `name`, `root` and `pattern`. A `home` value that
+  uses `{workspace}`, or a rename of those keys, is a seam line; the pad follows.
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-10 slice 4 (merge a5d7ddc3)
+
+- **`setup` copies one call of `write_settings`** (review B9): to report and save the file a row
+  went to, `cli/setup.rs` fills each row's file with the same `fill(&row.file, home, Path::new(""))`
+  as `connector::launch::write_settings` and calls `write_settings` once per row. The cleaner cut is
+  PRD-11's, at its next touch of `launch.rs`: `write_settings` returns, for each row, the filled
+  file and whether it was written (or the row index with each `Skipped`). PRD-10 then drops its own
+  `fill` call in the same merge. Until then, a change to how `write_settings` fills a row's file is
+  a seam line, and PRD-10 follows in the same merge, or setup prints and saves a path that was never
+  written.
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-11 slice 4, part 1 (merge a96d9f71)
+
+- **On integration now:** ten connector files (`claude-code-cli`, `codex-cli`, `copilot-cli`,
+  `gemini-cli`, `hermes-cli`, `kilo-cli`, `openclaw-cli`, `opencode-cli`, `opencode2-cli`,
+  `qwen-cli`), `builtin.rs` in the one-line `entry!` form (21 lines at 10 ids; 27 at 16), the
+  `.profile` writer (PRD-17 P11) and the 15-row harness table in `docs/harnesses/README.md`, which
+  is the one harness table: other pages link to it and never copy it. Facts the merge settled:
+  - **Version check:** a word of the first non-empty line of `program --version`, a leading `v`
+    stripped, must start with `version` (`"2."` takes `v2.1.0`, never `1.12`). A version wrapped in
+    punctuation, such as `(2.1.0)`, is not a word start and refuses; OpenCode's two connectors are
+    told apart only by this rule, so the pad's first row of each is its proof on a real binary.
+  - **`.profile`:** written by `plan` at every start while the home lock is free, only where the
+    connector's `home` sets `HOME` and the harness environment has `PATH`, into the filled `HOME`
+    folder. Only a `.profile` that starts with goalcup's own header line is replaced (beside and
+    renamed over, never through a link); any other file is kept and `log` gets "kept a .profile
+    goalcup did not write"; another error gives "could not write .profile: <kind>". No connector on
+    integration sets `HOME`, so the first real use is Amp and Droid in slice 5.
+  - OpenClaw's `openclaw.json` is JSON5 when hand-written; one that does not parse as JSON is named
+    in `unread`, so its proxy keys are not checked and the participant is told (known, README row 5).
+- **Not done in this part, moved:** the new-shape facts sheets for `claude-code-cli`, `codex-cli`,
+  `hermes-cli` and `kilo-cli`. The README now says the sheets stay in the old shape and are rewritten
+  from what the pad shows. All 15 sheets (and the group-A sheets planned for slice 5) move to the
+  last slice, after the pad's rows, with the README tier refresh. Slice 5 keeps amp, droid, goose,
+  crush, kimi-code and cline with their six `entry!` lines.
+- **Still open from the PRD-10 note (review B9):** `write_settings` still returns only the skips, so
+  `cli/setup.rs` keeps its own `fill` copy and the seam line rule of that note holds.
+- **Size (ledger L2), `wc -l` at a96d9f71.** src 1,689 of the 1,700 ceiling: `schema.rs` 423,
+  `mod.rs` 317, `launch.rs` 324, `hints.rs` 303, `hosts.rs` 301, `builtin.rs` 21. Tests 759 of 760:
+  `connector_launch.rs` 261, `connector_hints.rs` 196, `connector_builtin.rs` 155,
+  `connector_hosts.rs` 105, `connector_no_model_address.rs` 42. Slice 5's six `entry!` lines bring
+  src to 1,695. **Decision:** the 1,700 and 760 ceilings stand. The B9 change is the one exception:
+  it may pass 1,700 by at most the lines PRD-10 drops from `cli/setup.rs` in the same merge, so the
+  crate total does not grow (point 6: setup reports the file that was really written). It adds no
+  test file case; its proof is PRD-10's existing setup test. Anything else past 1,700 or 760 needs
+  another decision line, and a new connector adds only data and its `entry!` line.
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-12 slice 5 (merge 9e71bde0): pad data and watcher scripts for your acceptance 3, 4 and 5
+
+- **Watcher scripts exist** under `scripts/pad/exec/`: `hint-local.sh` (acceptance 3, Codex: a
+  `[model_providers.x]` for `api.openai.com` and an unselected local one, and a hosts copy without
+  `api.openai.com`), `proxy-setting.sh` (acceptance 4: `proxy` in the harness's `settings.json`;
+  `goalcup start` must refuse and name file and key, and not print the value), `stale-gateway.sh`
+  (acceptance 5: the harness file's `daemon` command started under `env -i` with the connector's home
+  names, left running for `start`; the pad then looks twice that no such process lives).
+- **Pad data in the harness files, not connector data:** `model_host` (the dodger's pinned host) and
+  `daemon`. The facts sheet rewrite of PRD-11's last slice reads these from `scripts/pad/harnesses/`
+  and the rows' `row.json` (`exec`, `notes`); a connector with a daemon (Cline's hub, OpenCode 2's
+  service) needs its `daemon` value for acceptance 5 to be a real run.
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-31, replan after PRD-11 slice 5 (merge 7a647ba4)
+
+- **On integration now:** all 16 connector files (`amp-cli`, `cline-cli`, `crush-cli`, `droid-cli`,
+  `goose-cli`, `kimi-code-cli` added), 16 `entry!` lines, the sign-in and host rows, and README rows 6, 9
+  and 12 to 15. `gate fast: PASS in 131s` on 7a647ba4 (integrator 00:12Z). Box runs before the merge:
+  fmt, `clippy -D warnings`, 27 of 27 connector and `rule_code` tests. Not run: any real harness on these
+  six (that is the pad's job), `gate full`, macOS.
+- **Facts the slice settled, for the facts sheets:**
+  - Amp is the only connector that sets `HOME` (plus the four XDG folders). Droid uses
+    `FACTORY_HOME_OVERRIDE`, Goose `GOOSE_PATH_ROOT`, Kimi `KIMI_CODE_HOME`, Cline `CLINE_DIR` and
+    `CLINE_DATA_DIR`, Crush the four XDG folders. So the first real use of the `.profile` writer is Amp
+    alone, not "Amp and Droid" (the slice 4 note and the PRD-10 note said both). Amp has no key this cycle,
+    so no pad row proves P11 on a real binary; the unit test stays the proof and the facts sheet says so.
+  - Cline 3.0.74 has no continue form, so its connector has an empty `resume` and `goalcup continue`
+    starts a new Cline session (README row 15). Droid has no `daemon stop`, so it has no `before` or
+    `after` and the facts sheet names the daemon as a dodge. Cline's `hub stop` is scoped by
+    `CLINE_DATA_DIR`.
+  - Crush's database sits in the workspace (`{workspace}/.crush/crush.db`). Crush uses the closest
+    existing `.crush` between the working folder and the git root, so a run below a repository that
+    already has one writes there and the native root misses it (README row 12); the workspace file also
+    holds the participant's earlier Crush sessions for that folder.
+  - Amp's thread log folder (`.cache/amp/logs/threads`) is kept from a live run on an older version and
+    is not confirmable from the package; the pad's first Amp row is its proof.
+- **Last slice, data fix in `connectors/goose-cli.toml` (review nits A2-N1, A2-N2, no code):**
+  1. Add `GONDOLA_HOST` and `ATOMIC_CHAT_HOST` to `hint_env` and change the comment above it to "the
+     names those pages list on <date>"; it must not say "every".
+  2. Known item for the Goose sheet: a host variable without a scheme (`OLLAMA_HOST` defaults to
+     `localhost:11434`, `OPENAI_HOST` to `api.openai.com`) is skipped by `authority()` with
+     "not a URL, skipped" naming the variable, so a schemeless `OLLAMA_HOST` gives no `local_model` line
+     and a schemeless custom `OPENAI_HOST` stays a tunnel. Nothing is lost silently. Accepting a schemeless
+     hint is a `hints.rs` change and is not made (1,695 of 1,700).
+  3. **Decision:** `DATABRICKS_HOST` and `SNOWFLAKE_HOST` stay in `hint_env`. They are the providers' own
+     names, a Goose user on those providers needs them, secrets stay masked, and goalcup sets
+     `SSL_CERT_FILE` and `REQUESTS_CA_BUNDLE`. The Goose sheet says in the limits section that a
+     Databricks or Snowflake host exported in the shell is decrypted and recorded for the run whoever
+     uses it, including the agent's shell tools and their query traffic. Section 3's rule (hints are
+     named, never scanned) is unchanged.
+- **Size (ledger L2), `wc -l` at 7a647ba4.** src 1,695 of the 1,700 ceiling (`schema.rs` 423,
+  `launch.rs` 324, `mod.rs` 317, `hints.rs` 303, `hosts.rs` 301, `builtin.rs` 27). Tests 759 of 760
+  (`connector_launch.rs` 261, `connector_hints.rs` 196, `connector_builtin.rs` 155,
+  `connector_hosts.rs` 105, `connector_no_model_address.rs` 42). The B9 exception is still open and
+  unused. The last slice adds only data, sheets and the README tier refresh, no src line.
+- **Left for the last slice, in order:** the goose data fix above; the 15 or 16 new-shape facts sheets
+  and the tier refresh after the pad's rows (unchanged from the slice 4 note); drop the B9 `fill` copy
+  with PRD-10 if still open.
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-31, note from the PRD-15 slice 9 replan (merge d56216f4)
+
+`docs/TERMINATION.md` moved to `docs/archive/TERMINATION.md` (PRD-15, unedited). Three files PRD-15 does
+not own still link `../TERMINATION.md` and are now broken: `docs/harnesses/amp-cli.md:28`,
+`docs/harnesses/codex-cli.md:166` and `docs/harnesses/hermes-cli.md:86`. Termination proof is cut
+(ledger section 7), so drop each link or repoint it to `../archive/TERMINATION.md` in the next PRD-11
+touch of those files. The facts sheets pass is the natural place. No locked ledger item is touched.
+
+### 2026-10-31, replan after PRD-11 slice 6 (merge 211ade46)
+
+Slice 6 put the 15 new-shape facts sheets, the goose `hint_env` fix and the README sheet list on
+integration. No src line changed: `wc -l` at 211ade46 is src 1,695 and tests 759, same as slice 5. What
+is left is data and docs only. Four items, in order:
+
+1. **README tier refresh (acceptance 6), after the pad's P7.** `scripts/pad/table` writes
+   `connectors/tiers.toml` and `PAD-RESULTS.md` and no README line (PRD-12 note), so the refresh is a
+   hand copy by a PRD-11 lane once the table exists. Every Tier cell then reads exactly what
+   `tiers.toml` holds for that connector: "verified on <version>", "not verified: <reason>" or "not
+   supported". The reason goes back into the cell for every row, not only the rows that differ (Amp and
+   Droid "no key", OpenClaw "subagents need the Gateway", any C1 or C2 reason), because today's cells
+   hold only "not verified" and acceptance 6 needs the reason shown (review A3-N1). Both OpenCode
+   connectors keep a cell each in row 4. Fifteen rows; compare the cells with the file by eye, no test
+   (ledger B10).
+2. **Pad result lines.** Each sheet ends with "Not yet run on the pad". That is false after the pad
+   runs. The refresh rewrites the line in all 15 sheets to a sentence that cannot go stale ("The tier,
+   version and runs are in `connectors/tiers.toml` and `PAD-RESULTS.md`"), so the sheets are not
+   edited again per pad run.
+3. **README shape (reviews B3-1, B3-3, A3-N1), same touch.** Make each Connector cell a link to its
+   sheet (both OpenCode cells to `opencode-cli.md`; the "no `opencode2-cli.md`" note goes in row 4 or the
+   sentence above the table) and delete the "15 sheets, one per row" paragraph, which repeats the
+   column as a second list. Keep the "snapshot of `connectors/tiers.toml`" sentence once (it is said
+   twice now). The column stays: PRD-11 acceptance 6 and alignment row CC 98 call for it; it is a
+   snapshot taken at the refresh, and `tiers.toml` is the record. Do not add a generator for it.
+4. **Sheet repeats (review B3-2), cosmetic.** Amp's "no Amp key / no account this cycle" once, in
+   section 9; Droid's no-account fact once; Kimi's `NODE_EXTRA_CA_CERTS` question once, in section 9.
+   Do it in the same touch; skip it if it costs a second lane.
+
+- **README link into purged research.** `docs/harnesses/README.md:52` links
+  `../research/coverage-matrix.md`, which the after-merge purge deletes (only four files plus run 1's
+  report stay in `docs/research/`). Drop that sentence in the refresh touch (the matrix is research
+  evidence, not a capability fact). The other sheets have no link into `docs/research/` or
+  `TERMINATION.md` any more (checked at 211ade46: every relative link in `docs/harnesses/` resolves).
+- **B9** (drop the `fill` copy with PRD-10) stays open and unused; it needs PRD-10 files, not PRD-11's.
+- **Size (ledger L2), `wc -l` at 211ade46:** src 1,695 of the 1,700 ceiling, tests 759 of 760 (per-file
+  numbers as in the slice 5 note). The PRD-00 table row still says 800 and 400; the ceilings above are
+  the ledger numbers, see the PRD-16 note.
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-31, replan after PRD-12 slice 6 (merge 645f3219)
+
+- **OpenCode 2 gaps found while writing its pad file** (box, 31 Oct, `@opencode/cli@2.2.2`): `connectors/opencode2-cli.toml`
+  has no `no_prompts` row (OpenCode 1 has `permission = "allow"`), and no `before` or `after` for the
+  background service. Its docs list an `--auto` switch; whether that or a config key stops approval
+  prompts is for the connector's next slice to read from `opencode.ai/v2/docs` first, and cite it. With
+  `args = ["--standalone"]` the run uses a private server, so no `before` is needed for the run itself;
+  the stale shared service is the pad's `stale-gateway.sh` case (acceptance 5), whose `daemon` value the
+  pad file carries (`opencode serve --service`). `opencode service start` detaches and exits at once, so
+  a `before` that starts it would prove nothing. Without a prompt switch a pad row on OpenCode 2 can stop
+  on an approval question and read `INCONCLUSIVE`; that is the connector's gap, not the pad's.
+- The OpenCode 2 and OpenCode 1 pad files share the program name `opencode`; the OpenCode 2 `version_cmd`
+  switches the link (`~/.local/bin/opencode`) to the 2.2.2 prefix. PRD-11 `version` matching is unchanged.
+- No locked ledger item is touched and no owner question comes from this slice.

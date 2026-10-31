@@ -1465,3 +1465,368 @@ taken; "rejected" says why. Fixes for other files are made by those files' owner
   "not run: sender not merged", not FAIL. `server = "off"` runs are not affected. The `watch/upload.jsonl`
   reader can be built against the S9 type now (`goalcup::upload::state`).
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-08 slice 2 (merge 669f5d92)
+
+`check --server <fetched> [--local <entry dir>]` now gives real server results (PRD-08 note). What
+`check.py` reads for C4, C6 and K6, as merged:
+
+- The three ids `server_chunks_whole`, `server_equals_local` and `server_counts_match` per entry, and
+  the top-level `server` object `{chunks, whole, equals_local, db_match}`. `equals_local` and
+  `db_match` are true only when every entry passes, false on any `fail`, else null. `whole` is true
+  only when every entry passes.
+- Under `--server`, a folder with no `fetch.json` gives all three `fail`. A bare `rec.gcr.zst`
+  checked without `--server` skips them, so C4 always passes `--server` on a fetched copy.
+- `fetch.json` `missing.why` set gives `server_chunks_whole` `fail` with `first.o` =
+  `missing.offset`. `final` null alone gives `server_chunks_whole` `named` (exit 1) and
+  `server_counts_match` `skip` "not sealed". C4 reads the open end as INCONCLUSIVE, not FAIL.
+- `server_equals_local` is `skip` when the `--local` entry's first part is pruned or its `rec/` is
+  empty. A `--local` path that never held a record exits 3, which is the box's mistake, not the
+  run's.
+- K6's three tampers map as follows. A flipped byte fails `server_equals_local`; L-FW9 proves it.
+  A removed middle chunk fails `server_chunks_whole` on the offset or seq break. `model_requests`
+  plus one fails `server_counts_match`; the check reads `model_requests` as the seal's `http_post`
+  plus `ws_up_msgs`.
+- K2 still waits on the run 1 shape builder (PRD-08's legs slice). U1's stub is on integration, so
+  that slice need not wait for PRD-09.
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-09 slice 2 (merge dab0ce1f)
+
+- **`goalcup-verify usage` still exits 3** at dab0ce1f: the wire leg is read inside U1, but `run`, the
+  native leg and S7 output come in PRD-09's next slices. Until they land, a pad run's spend check and
+  C5 record `usage` as not read (the row says so); exit 3 is never priced as 0 USD or read as 0
+  tokens. U1's `readable()` is a method now (PRD-09 B10); C1 reads it through PRD-08 as before.
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-12 slice 4 (merge 69f355c6)
+
+- **Gate.** `gate fast: PASS in 137s` on 69f355c6 (nextest 188 of 188, 16 pad tests). Branch head
+  e598500c; all 10 non-merge commits in 00fac28d..69f355c6 carry both trailer lines. There was no real
+  key run: the proof is fake-binary probes in build boxes.
+- **Built:** `kill-recorder@m`, `wait-recovery`, `kill-watchdog-recover@m`, `keep-going`, the
+  detached watch of section 4, the 5-minute spend check with `[rates]` in `pad.toml` and the seal at
+  `cap_usd`, the `pad-out/spend.jsonl` ledger, and PRD-11's flat `connectors/<id>.toml` (top-level
+  `home`, with `{home}` filled, and `native`). The other six faults (`kill-watchdog`, `kill-both`,
+  `freeze`, `cut-worker`, `route-drop`, `fd-limit`), `exec` and `pre` still answer skip.
+- **B1 to B3 of the slice 3 note are in.** The 13:25Z question on `test_pad.py`'s B10 ground is closed
+  by the review rounds: the C3 mapping tests are gone. `test_known_value_hit_fails`,
+  `test_conductor_scan_counts_its_own_secrets` and `test_create_timeout_still_removes_the_box` stay
+  (point 4; the last one guards a box left holding keys).
+- **One review nit for the next slice, a cut:** B6-1, drop the inline comment on
+  `got["wait-recovery"] -= 30` in `runner_limits`; the docstring stays the one explanation.
+- **Open-stream sign.** S4 has no open-stream count. `kill-recorder` waits up to 60 s for
+  `last_request_at` within the last 10 s, then kills anyway, and its line says "N s after a written
+  request" or "no request written yet", not section 3's "on an open stream". If PRD-02 adds a count to
+  S4 (PRD-02 note), the pad reads it through `SEAM` in place of the sign.
+- **wait-recovery** reads S4 `pid` (a new one), `mode` `recording`, `off.spans` (`recorder_down`
+  spans on sid 0: one more than at the kill), `off.since` null, and `written.model_requests` past its
+  value at the kill. It ends 30 s before its step's limit, so its own FAIL line is written before the
+  step times out (B5-1).
+- **A seal at the cap before a fault** makes each fault window holding it INCONCLUSIVE, never FAIL
+  (review A-N3, A-N6); the record-only checks still run.
+- **The cap cannot seal a run yet.** On integration `goalcup seal` and `goalcup recover` exit 3 "not
+  built" (PRD-10 note). `seal-now` then writes a FAIL line and is tried again at each later check. So
+  no run with a real key starts before PRD-10's `seal` merges (ledger T6), besides PRD-05's masker
+  (PRD-16 note), and a `kill-watchdog-recover` row is not evidence before `recover` merges.
+- **Spend ledger.** One line per run in `pad-out/spend.jsonl`: `at`, `connector`, `case`, `mode`,
+  `key`, `run`, `entry`, `usd` (priced at the check step, null when usage was not read), `usd_live`
+  (the last live estimate, null if never read), `over_cap`, `models`, `priced_high`, `box_minutes`.
+  The scribe sums `usd`, else `usd_live`. A model with no rate line is priced at its key's highest
+  listed rate. The rates were copied on 30 Oct (the commit cites the pages); `gemini-4-argon` doubles
+  from 1 Dec, after the 6 November date, so no change is due in the build.
+- **Pricing** reads S7 `models[].tokens` `input`, `cached`, `cache_write` and `output`; `reasoning`
+  is never added, because `output` holds it (PRD-09 section 4). Until PRD-09's `usage` stops exiting
+  3, every spend line has `usd` null and the run says usage was not read.
+- **Size, `wc -l` at 69f355c6:** `pad` 610 (row 320), `pad-run` 658 (330), `check.py` 429 (320),
+  `table` 192 (150), `test_pad.py` 308 (90), `image` 54 (60), `sbx.mjs` 133 (no row), `pad.toml` 31,
+  prompts 16, runs 16, harness files 92, `image.id` 1. In all 2,540 under `scripts/pad/`, 463 more
+  than at 9e259b4d (2,077), 75% over the top of PRD-00's "about 1,350 to 1,450". Still to land:
+  `selftest` 100, `exec/` 70, 13 harness files (about 195), the skill 100, the six faults, `pre` and
+  the queue. The slice 3 size decision stands. The lines added here serve point 3 (each fault step
+  has its own limit, wait-recovery ends before its step, the spend check never fails a row and starts
+  when start is tried) and point 4 (the watch keeps only the replaced pane, `recover` runs under
+  `env -i`, the ledger holds names and numbers only). Whether the row rises stays the 12:53Z owner
+  question; overage alone is reported, not held (integrator 11:20Z). The next slice applies B6-1
+  first, and the six faults reuse `kill_rec`, `fault`, `at` and `recover` instead of new helpers.
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-11 slice 4, part 1 (merge a96d9f71)
+
+- Ten of 16 connector files are on integration; new: `copilot-cli`, `gemini-cli`, `openclaw-cli`,
+  `opencode-cli`, `opencode2-cli`, `qwen-cli`. For the login in the box: `GEMINI_CLI_HOME` stands
+  for the home folder, so Gemini's files sit under `{home}/.gemini`; `QWEN_HOME` is the `.qwen`
+  folder itself; `OPENCLAW_HOME` holds `.openclaw`. The two OpenCode connectors run the same
+  `opencode` program and are told apart only by `version`, so the box installs the matching major.
+- PRD-11's facts sheets are rewritten from the pad's rows in PRD-11's last slice, so each row's
+  record and `row.json` are what that slice reads. No change to the row shape is asked.
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-08 slice 3 (merge 7a995b6e)
+
+- **`secrets` output as merged** (PRD-08 note): always JSON on stdout, no `--json` flag. Keys:
+  `verifier`, `result`, `exit`, `known_values`, `inputs` (`[{path, as, read}]`), `known_hits`
+  (`[{form, in, sha12, n}]`), `shape_hits` and `glued_shape` (`[{kind, in, sha12, n}]`), `masks`
+  (`{kind: span count}`), `mask_bytes` (`{fail_closed: bytes}`) and `big_masks` (`[{kind, in,
+  len}]`). Exit 2 on a fail, 1 when an input was read only in part, 0 otherwise; 3 with no report when
+  a path given or the known file cannot be read. `check --known` adds a `secrets` check per entry,
+  which `check.py` already reads for C3.
+- **Changes for the pad's next touch** (both cuts or one-word changes):
+  - `check.py` `SECRET_HITS` adds `"big_masks"`: a non-`fail_closed` MASK span over 16 KiB makes the
+    scan `fail` by itself, and `hits()` would read it as 0. `"hits"` is not a key PRD-08 writes and
+    can go. `glued_shape` is a `warn` and stays out. The "Not fixed yet" comment above it is now
+    fixed; the `exits.json` fallback stays for exit 3.
+  - `pad-run`'s verify step drops `raw` (`goalcup.log`, `upload.json`) from the `secrets` argv:
+    `secrets <entry>` reads every file of the entry except `rec/` itself, so naming them again
+    doubles their `n`. The copied `status.json` is another path and stays.
+  - Section 8's command list reads `goalcup-verify secrets --known <known> <fetched entry>
+    status.json` for the same reason.
+- **C3 is no longer held by PRD-08.** `verify/secrets.json` now carries `masks`, so `masks()` returns
+  a map. Since the local entry and the fetched copy go into one report, their span counts are summed;
+  C3 tests only for a non-zero count per planted kind, so the sum changes nothing. C3 still needs
+  PRD-05's masker writing MASK records and a `goalcup` build on integration before it can PASS.
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-08 slice 4 (merge 1fdaf2c3): reading the three honesty checks
+
+- `listed_hosts_decrypted`, `conn_bytes` and `mask_failclosed` now report (PRD-08 note). C4's "no
+  `fail`" already covers a silent listed tunnel (`listed_hosts_decrypted` `fail`) and a silent loss
+  (`conn_bytes` `fail`, exit 2). C1 also reads `listed_hosts_decrypted`: `pass` in `direct` and
+  `gateway` rows, `named` only where the row expects it (dodger, fault rows). A `warn` is not a
+  FAIL; `facts.refusal_after_trust` is listed in the row.
+- **`conn_bytes` `skip` is not a FAIL but is not evidence.** In a `dodger` row it is `skip` "no
+  decrypted connection to judge", as expected. In a `direct` or `gateway` row a `skip` (facts
+  `no_plain_tail` above 0) means a decrypted connection ended with no `plain_up` or `plain_down`:
+  the row stays as it is and the night log gets one line naming PRD-03.
+- `mask_failclosed` is `warn` at most and keeps exit 0. The row prints `facts.streams` and
+  `facts.bytes` beside PRD-05 A1's `mask_failclosed_bytes`; neither lowers a PASS.
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-12 slice 5 (merge 9e71bde0)
+
+- **Gate.** `gate fast: PASS in 131s` on 9e71bde0. The gate now runs `test_pad.py` (`gate.sh` step on
+  python3.11), which the slice 3 note said it did not. The branch's box runs: 31 pad tests at f7d585fa,
+  20 at 96df4f07 after the cuts (C-1 to C-5 removed tests past the format and never-stop subjects).
+  All 16 non-merge commits in 5f30eef2..9e71bde0 carry both trailer lines. Sixteen paths changed, all
+  under `scripts/pad/`. There was no real-key run: the proof is fake-binary probes in boxes.
+- **Built (rungs 7 to 9):** the `gateway` case (a harness file with no `[gateway]` table gets `n/a`),
+  the `dodger` case (hosts copy with the harness's `model_host` pinned, passed to `goalcup start
+  --hosts`), the `exec` and `pre` steps, and the seven scripts under `scripts/pad/exec/`
+  (`h2-parallel`, `hint-local`, `long-tunnel`, `proxy-setting`, `refusal-curl`, `stale-gateway`,
+  `time-left`). Nit B6-1 is in. Still answering skip: `kill-watchdog`, `kill-both`, `freeze`,
+  `cut-worker`, `route-drop`, `fd-limit`.
+- **One review nit for the next slice, a cut (A-1):** `SecretCheck.c3` in `test_pad.py` still takes
+  `more=None` and merges it into `verify/secrets.json`; the only caller was the oversized-mask test
+  that C-1 deleted. Remove the parameter and write `{"masks": masks}`. `SECRET_HITS` in `check.py` keeps
+  `"hits"`: PRD-08 does not write it, but the conductor's own `verify/secrets-conductor.json` does.
+  The PRD-08 note's "`hits` can go" is withdrawn; `raw` is already out of the `secrets` argv.
+- **Section 3.1 and 3.1's test list, as built (the text above is not rewritten):**
+  - **Exec environment.** An `exec` script gets only the proxy and CA names, `HOME`, `PATH`,
+    `GOALCUP_TIME_LEFT_FILE` and the connector's home names (`exec_env`); a `pre` script keeps the
+    participant's shell. `pre` scripts read `PAD_HOME`, `PAD_RUN`, `PAD_PROXY`, `PAD_MODEL_HOSTS`,
+    `PAD_DAEMON`, `PAD_HOME_ENV` and `PAD_SHELL_ENV`, set by `pad-run`; no value of a key is among them.
+  - **Verdicts.** `row.json` gains a `notes` list (the watcher lines). A `pre` verdict (its exit) is
+    stored in `row.exec` beside the `exec` ones. A `proxy-setting.sh` row stays INCONCLUSIVE in the six
+    checks, because `start` refuses and no run is recorded; its answer is the `faults` row from the
+    `start-refused` line (exit not 0, file and key named, value not shown) and the pre exit.
+  - **Time limits.** A timed step inside a row with `refusal-curl.sh` (it sleeps 660 s: 12 minutes) or
+    `long-tunnel.sh` (90 s: 2 minutes) is refused at load, so the script cannot be cut off by its own
+    step's limit.
+  - **`stale-gateway.sh`** writes `exec/stale-gateway.pid`; wipe ends that daemon. `pad-run` looks for
+    the daemon twice, after `start` and after the harness exits, matched by the command and the run's
+    home from `/proc`. `alive` or `left` null is no look, and then the row is INCONCLUSIVE.
+  - **Gateway rule.** The vendor-host clause reads S7 call rows that carry a `host` and compares their
+    `host_kind` with `gateway`; a native row has no host and is not judged. The vendor's own host
+    appearing in a model call row is a C1 FAIL.
+  - **Allowed gaps.** `expected_gaps` is one helper: `after_stop`, `tls_refused` only for a row whose
+    variant holds `refusal-curl.sh`, `pinned` for a dodger, the `recorder_down` kinds for a fault row.
+    It also lets a dodger or fault row name `tls_refused` when a refusal-curl exec is in its variant.
+- **Harness file keys the remaining files need.** The three files on integration now carry
+  `model_host` (pad data, used only by the dodger copy; no connector reads it) and `daemon` (Hermes:
+  `hermes gateway run`). Each of the other 13 files adds `model_host`, and a `daemon` where PRD-11
+  names one (Cline's hub, OpenCode 2's service). Section 6's file example lacks `model_host`; the
+  three files on integration are the example.
+- **Read against the first real-run table, not proven:** `start-refused` `value_shown` and the two
+  `daemon-check` lines were not run against a live tmux and a real harness; the first-output read
+  (section 12) names them. `h2-parallel.sh` needs curl 8.10.0 or later in the box; the script prints
+  `curl --version` first and the exit shows an older curl.
+- **What is left to land:** `selftest` (waits on PRD-08's run 1 shape builder, in the PRD-08 slice 5
+  plan), the 13 harness files, the skill and templates, the six faults, and the per-key queue.
+- **Size, `wc -l` at 9e71bde0:** `pad` 654 (row 320), `pad-run` 801 (330), `check.py` 583 (320),
+  `table` 192 (150), `test_pad.py` 366 (90), `image` 54 (60), `sbx.mjs` 133 (no row), `exec/` 96 (70),
+  `pad.toml` 31, prompts and runs 32, harness files 98, `image.id` 1. In all 3,041 under
+  `scripts/pad/`, 501 more than at 69f355c6 (2,540), 110% over the top of PRD-00's "about 1,350 to
+  1,450" (code files alone, without the 3 harness files and data: 2,909). With `selftest` 100, 13
+  harness files 195 and the skill 100 the pad projects to about 3,440 before the six faults and the
+  queue. Reviewer B (C-7): no further cut that keeps behaviour is worth its own finding.
+- **Replan decision on the size (PRD-00 size rule).** The lines past the row since slice 4 serve point
+  1 (a model call through the gateway or a pinned tunnel is judged from the record, and a loss other
+  than the named one fails the row), point 3 (every watcher step has its own limit, a refused load
+  instead of a cut-off script, a timed-out step never stops the walk) and point 4 (the exec script
+  sees only harness names, `start-refused` never shows the proxy value, the stale daemon is ended at
+  wipe). The slice 3 and slice 4 decisions stand. This is not a raise of the row: the next slice
+  applies A-1 first, and each later slice reports per file. Whether the row itself rises stays the
+  12:53Z owner question; no new one.
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-31, replan after PRD-04 second slice (merge 7e8ed89b)
+
+- **Native database rows can be checked now** (once PRD-02 wires `native::start`): a `final` row's
+  streams are `snapshot` OPENs with `form: "final"`, one `set` id across the files of a database, and
+  `harness_exited` on a seal copy. `final_snapshot_live` means the harness still ran at the seal (its
+  absence on a clean exit is the pass); `snapshot_unstable` and `native_unreadable` name a file that
+  changed or could not be read, so a pad check treats them as a fact to show, not a fail. A lost set
+  file is a GAP, not a missing stream. Keep the checks on the point (every subagent and database
+  recorded), not on PRD-04's counts or wording.
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-31, replan after PRD-11 slice 5 (merge 7a647ba4)
+
+- **Six more connectors have pad rows to add:** `amp-cli`, `cline-cli`, `crush-cli`, `droid-cli`,
+  `goose-cli`, `kimi-code-cli`. Amp and Droid have no key this cycle: "not run: no key" as in Defaults.
+- **Harness-file data for the new rows:** Cline needs its `daemon` value (the `hub` process) for
+  acceptance 5 to be a real run. Droid has no `daemon stop`, so goalcup stops nothing: its acceptance 5 row
+  is a dodge, shown as `skip` with that reason, not a pass or a fail. Cline's `hub stop` is scoped to the
+  run's `CLINE_DATA_DIR`, so the watcher's stale hub must use a different data dir.
+- **Crush:** the pad workspace must not sit below a folder that already holds a `.crush`, or the database
+  lands there and the `final` stream is absent (a fact to show, not a fail; PRD-11 README row 12).
+- **Acceptance 3 stays on Codex.** Goose reads host variables and a `config.yaml` key, but a schemeless
+  value is skipped by design (PRD-11 note), so no Goose row asserts a hint from a bare `OLLAMA_HOST`.
+- **Acceptance 7 has no real row:** only Amp sets `HOME` and it has no key. The unit test is the proof.
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-31, replan after PRD-09 slice 4 (merge c262ef5a)
+
+- **`goalcup-verify usage` no longer exits 3** on a readable entry: `usage <entry> --json [--out dir]`
+  writes the S7 summary and `.calls.jsonl` (PRD-09 note). Exit 3 now means no entry gave output.
+  Two of the "before the first paid run" checks are therefore met for the spend side (the `seal` check
+  is separate and stays open).
+- **S7 key `read_error` (new, top level, boolean).** `true` means the read stopped at a decode error
+  and every count is partial (exit stays 0). The spend check (ledger T6) treats it as not read or as a
+  lower bound, never prices it as whole, and does not seal on it as if it were a full figure; C1, C2
+  and C5 report INCONCLUSIVE for that summary, never pass or fail partial thread and token counts. A
+  torn tail is not `read_error`. `scripts/pad/pad-run` and `scripts/pad/check.py` are this PRD's files.
+- **Keys the pad can rely on:** `models[].model` and `models[].tokens.{input,cached,cache_write,output}`
+  (spend), `threads[]` with `models` (model to call count) and `effort`, `coverage` with
+  `repeats_skipped` and `copied_skipped`, `harness_version` with its spaces. **Keys that do not
+  exist, so do not read them:** `coverage.by_10min`, `status.fail_closed`, `threads[].source`. A
+  thread is only as readable as the summary says (`readable`, `reason`); `calls_without_usage` is a
+  number with `calls_without_usage_by_status` beside it, and `tokens.merged` counts calls only, so the
+  warm-up usage on a `calls.jsonl` line is not in it.
+- **Keep the checks on the point** (every call and subagent counted once, readable from the record
+  alone), not on PRD-09's counts or wording.
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-31, replan after PRD-08 slice 5 (merge bfd244e3)
+
+- **The K2 builder is on integration, the fixtures are not committed.** `check_run1_shape.rs` writes
+  `k2-part` (the Lossy run 1 shape, a sealed entry folder) and `k2-fetched` (the same entry laid out as
+  `fetch-run` lays it out, with `fetch.json` claiming one model request more than the seal, so
+  `server_counts_match` fails) when `GOALCUP_FIXTURES_OUT` is set. Make them in a build box, never on
+  the conductor: a job script that runs `GOALCUP_FIXTURES_OUT=$HOME/fx cargo nextest run -p
+  goalcup-verify --test check_run1_shape run1_shape_fails` and `box.mjs run ... --out $HOME/fx:<local
+  dir>`; then commit the two folders under `scripts/pad/fixtures/` (this PRD's path). All values are
+  fake, so they hold no secret.
+- **What K2 must see.** Local `k2-part`: exit 2, and the `fail` ids are exactly `gap_has_end`,
+  `streams_closed`, `wire_keeps_up`, `threads_match`, `subagents_present`; `history_complete` joins
+  that set when PRD-08 slice 6 merges, and PRD-08 re-exports then. Write the selftest as "these five
+  are `fail`", not as an exact set, until the re-export is committed. `k2-fetched` with `--server
+  --local k2-part` adds `server_counts_match`. The provider error counts on the shape are six wire
+  errors (`provider_errors.wire` sums to 6).
+- **The Clean pair is not exported yet** (the pad lane asked for it, 00:00Z). PRD-08 slice 6 adds
+  `k7-part` and `k7-fetched` from `Shape::Clean` with an honest `fetch.json`. K6, K9 and K10 stay
+  waiting on it; K11 waits on the same slice for the history fixtures.
+- **Ids the pad reads are real now:** `subagents_present` (C2), `wire_keeps_up`, `threads_match`,
+  `harness_log` (`none`, `totals` or `per_call`), `provider_errors` and the per-thread rows. The
+  earlier selftest run that saw C2 and the local-log ids absent in the verifier is out of date; rerun
+  it. `history_complete` is still `skip` until slice 6; keep C1's INCONCLUSIVE rule as stated.
+- **Cover rule, for the dodger and gateway rows:** a loss of model calls is `named` only when a
+  `recorder_down` GAP or a conn GAP of a provider or gateway host of the shared list covers it. A
+  vendor-host tunnel or a participant-named model host covers nothing, so a run whose wire stopped
+  early while the harness went on is `fail`. A pinned model host stays `named` (exit 1), as the dodger
+  case needs.
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-31, replan after PRD-11 slice 6 (merge 211ade46)
+
+- **`table` does not touch `docs/harnesses/README.md` or the sheets** (PRD-11 owns both; PRD-00
+  ownership table). The README Tier column and the sheets' "Pad result" line are updated by one PRD-11
+  lane after P7, copied from `connectors/tiers.toml` with each row's reason (PRD-11 note, items 1 and 2).
+  Nothing for this PRD to build. The 15 sheets say "Not yet run on the pad" until that lane runs.
+- The reasons your `table` writes decide what the README shows: keep them one plain line each ("no
+  key", "subagents need the Gateway", "C1 history orphan"), as section 9 already says, so they fit a
+  table cell.
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-31, replan after PRD-05 core slice (merge 2c95e8f1)
+
+- **C3 can pass on a build that has the core slice**, once PRD-08's `masks` key is also there. The kind
+  names and the row order are unchanged from S12: `openai_key`, `github_token`, `google_key`, `jwt`,
+  `private_key`, `url_password` and the shell rule `generic_secret_assignment` are all in `mask_rules()`,
+  and `fail_closed` is last. Rows 1, 3 and 4 still win their overlap with row 11, and row 11 wins over row
+  13. A pad row built before 2c95e8f1 is a stub row and stays "not evidence".
+- **The left guard:** a guarded shape right after a letter, digit or `_` is not masked (a glued key); one
+  right after an escape (`\u`, `\x`, a backslash, percent) still is. A planted value in a pad row needs a
+  non-word byte before it, or C3 shows a false FAIL; check the section 5 rows against this.
+- **Exact-value planting stays out of scope.** Only `GH_TOKEN` from the workspace key files is an exact
+  value in the default build, and it is masked in 11 forms; a pad value that is not a shape and not
+  `GH_TOKEN` has no MASK by design.
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-31, replan after PRD-12 slice 6 (merge 645f3219)
+
+- **What landed:** the six remaining faults with their section 3.1 expectations (`kill-watchdog`,
+  `kill-both`, `freeze`, `cut-worker`, `route-drop`, `fd-limit`), `selftest`, pad files for eight
+  connectors (`amp-cli`, `copilot-cli`, `gemini-cli`, `kilo-cli`, `openclaw-cli`, `opencode-cli`,
+  `opencode2-cli`, `qwen-cli`) with their direct and gateway settings snippets, runs A1 to A4, and the
+  skill rewrite (`SKILL.md`, `pad-harness.toml`, `harness-facts.md`; `writing-a-decoder.md` and
+  `connector-harness.toml` are deleted). Pad files now exist for 11 of the 16 connectors. Box proof was
+  22 then 29 unit tests plus fake-binary probes; no fault expectation and no new harness file has run
+  against a live harness (the file headers say which keys were read from docs only). Two review rounds
+  closed everything but the three nits below.
+- **Three nits to apply in the next slice, all small:**
+  - A3-1 (`selftest`, `compare()`): raise `NotRun` for K11b only when `bad` is empty, as in
+    `if hist["orphans_in_gaps"] is None: if not bad: raise NotRun(...)`. As built, a K11b whose C1 comes
+    out FAIL, or whose orphan count is wrong, is reported "not run" and the exit is 3 instead of 1. Exit 3
+    still means "not trusted", so nothing passes falsely, but a real difference is hidden.
+  - R1 (`pad-run`, `verify()`): the comment line before `if old :=` carries two comments joined on one
+    190-character line. Put the new sentence on its own line above the `if` and leave the old comment on
+    the line.
+  - R2 (size, below): reported, no cut proposed. The `KillBothVerify` test is about 35 lines of fixture
+    setup and asserts results (which entry is compared, scanned and priced), not wording.
+- **Decisions in the code that the next reader needs:**
+  - `cut-worker` does not build the stand-in listener. Loopback refuses at once, nothing listens on 443,
+    and a listener cannot take over a name the resolver ignores. If `getent hosts` does not change, the row
+    says "not run: cut did not take". That row is not a pass for PRD-06 U3 or U5; PRD-16 P11 counts it as
+    not run.
+  - `kill-both` checks the old entry only; the entry `goalcup continue` started is fetched and compared
+    separately (the review fix for F5). `route-drop` may name `decode_failed` (a body cut part way) and no
+    other gap. `freeze` reads the first heartbeat and the catch-up from the one-minute `upload.jsonl`
+    samples, so the catch-up has a minute of slack.
+  - `fd-limit@0` reads the recorder's and the harness's soft and hard limits from `/proc` in the box. It
+    does not read the start event's `fd_limit`, so PRD-08 has nothing to add for it.
+  - `selftest` exit codes: 0 every control ran as wanted, 1 one differed, 3 none differed but one did not
+    run (fixtures or ids missing). Nothing outside exit 0 counts as "the pad works".
+- **Still to land (slice 7, in this order):** (1) pad files for the five connectors without one:
+  `cline-cli` (with its `daemon` value, and a data dir for the stale hub that differs from the run's),
+  `crush-cli`, `droid-cli`, `goose-cli`, `kimi-code-cli`; `droid-cli` ends as "not run: no key" (the
+  slice 5 note stands); (2) the per-key queue of section 7 (`grep -i queue scripts/pad/pad` finds none;
+  two boxes per provider key, six for DeepSeek until a row's 429 share passes 5%); (3) the K2, K7, K11
+  fixtures under `scripts/pad/fixtures/` (the slice 5 note says how; `selftest` has never run a control
+  on a real fixture, so every claim about its checks is from fake-binary probes); (4) the three nits
+  above. Gateway DeepSeek rows have no `[rates]` line for `deepseek/deepseek-v4.1-flash`, so they price
+  at the highest rate of the key, which can raise `over_cap` early; add the line only if a gateway row
+  is planned.
+- **Size, `wc -l` at 645f3219** (per file against the PRD-12 "Files it owns" row): `pad-run` 993 (330),
+  `check.py` 743 (320), `pad` 664 (320), `test_pad.py` 488 (90), `table` 193 (150), `selftest` 182 (100),
+  `sbx.mjs` 133 (no row), `exec/` 96 (70), `image` 54 (60). Since 9e71bde0: `pad` +10, `pad-run` +192,
+  `check.py` +160, `test_pad.py` +122, `selftest` +182 (new), `table` +1. Code files together are 3,546
+  (2,909 at 9e71bde0), plus 440 lines of harness files and snippets, 176 of skill and templates, and 79 of
+  prompts, runs and `image.id`; all of `scripts/pad/` is 4,096 against PRD-00's "about 1,350 to 1,450". The
+  slice 5 projection was about 3,440 before the faults and the queue; the queue and five harness files are
+  still to come. The lines past the rows serve point 1 (a fault row is judged from the record alone and a
+  loss other than the named one fails), point 3 (the kill rows and the freeze must show the harness was
+  never held up) and point 7 (eight more harnesses). This is not a raise of the row; whether the row
+  rises stays the owner question already logged. Slice 7 states its per-file lines again and cuts before
+  it adds.
+- No locked ledger item is touched and no owner question comes from this slice.
