@@ -148,7 +148,11 @@ pub fn judge(t: &CallTable, covers: &[Cover]) -> (Vec<Check>, Out) {
         timed: (x.calls().filter(|r| r.leg == Leg::Wire || x.known(r)))
             .filter_map(|r| {
                 let native = r.leg == Leg::Native;
-                Some(Timed { native, err: r.outcome.is_error(), wall: at(r)? })
+                Some(Timed {
+                    native,
+                    err: r.outcome.is_error(),
+                    wall: at(r)?,
+                })
             })
             .collect(),
     };
@@ -533,7 +537,10 @@ pub fn manifest(c: &mut Check, files: &[(String, u64)], s: &Streams, covers: &[C
         (_, Some(_)) => Res::Fail,
         _ => Res::Named,
     };
-    let named_by_down = lost.iter().filter(|l| l.1 && !s.gapped.contains(l.0)).count();
+    let named_by_down = lost
+        .iter()
+        .filter(|l| l.1 && !s.gapped.contains(l.0))
+        .count();
     c.facts.insert("files".into(), files.len().into());
     c.facts
         .insert("files_without_stream".into(), lost.len().into());

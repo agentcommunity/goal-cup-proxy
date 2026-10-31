@@ -69,7 +69,12 @@ pub const IDS: &str = "inv1 inv2 inv3 inv4 inv5 inv6 inv7 inv8 inv9 streams_clos
 /// Whether a GAP covers a stretch of time: it is not run 1's shape. A GAP in the recorder's own
 /// clock is judged on record time, one carrying `boot_id` (another clock) on wall time. Covers,
 /// off spans and gapped files use this, so a metadata GAP covers nothing.
-pub(crate) fn has_extent(tail: &Map<String, Value>, w: (u64, u64), m: (u64, u64), lost: u64) -> bool {
+pub(crate) fn has_extent(
+    tail: &Map<String, Value>,
+    w: (u64, u64),
+    m: (u64, u64),
+    lost: u64,
+) -> bool {
     let (s, e) = clock(tail, w, m);
     !((e <= s && lost <= 1) || w.1 < w.0)
 }
