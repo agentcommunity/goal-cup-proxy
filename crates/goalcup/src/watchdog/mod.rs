@@ -2,8 +2,11 @@
 //! the listen socket (fd 3 of the recorder) and one control socket (fd 4), restarts a dead
 //! recorder at once on the same port, and ends the harness at the deadline and on seal.
 //!
-//! Scaffold: the control lines (S8) and the start facts (S17) in their final shapes. `run` and
-//! `recover` follow once seam S3's `LaunchPlan` is on integration.
+//! Here: the control lines (S8) and the start facts (S17) in their final shapes, the terminal
+//! [`shield`] and what the watchdog binds and [`spawn`]s. `run` and `recover` come next.
+
+pub mod shield;
+pub mod spawn;
 
 use crate::pipeline::status::Outlived;
 use serde::{Deserialize, Serialize};
