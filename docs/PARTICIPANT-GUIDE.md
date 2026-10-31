@@ -5,9 +5,10 @@ You give one coding agent one prompt, then leave it alone for 168 hours. Goal Cu
 record. This page takes you from install to the end of your run. The rules are in
 [RULES.md](RULES.md), and what the record holds is in [RECORD-FORMAT.md](RECORD-FORMAT.md).
 
-> **Build state.** `seal`, `upload`, `status` and `time-left` are built. `continue` and `recover` print
-> "not built yet", and `start` stops before the launch until the watchdog lands, so sections 5 to 8
-> describe the 1.0 release and cannot be followed end to end yet. This note goes in the final pass.
+> **Build state.** `seal`, `upload`, `status` and `time-left` are built. `continue` and `recover`
+> print "not built yet". `start` runs its checks, then prints "start is not built yet"; no approval
+> is asked and no run is opened. Sections 5 to 8 describe the 1.0 release and cannot be followed end
+> to end yet. This note goes in the final pass.
 
 ## What goalcup does for you
 

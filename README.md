@@ -15,7 +15,7 @@ Agents working in this repository: read [AGENTS.md](AGENTS.md) first.
 ## Quick start for participants
 
 > **Build state.** On this branch `goalcup continue` and `goalcup recover` print "not built yet", and
-> `goalcup start` stops after its folder checks: the recorder run (PRD-02) has not merged. This page
+> `goalcup start` runs its checks and stops: the recorder run (PRD-02) has not merged. This page
 > describes the 1.0 release, and this note goes in the final pass.
 
 The full walk-through, with every message you will see, is the
