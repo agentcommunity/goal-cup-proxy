@@ -1831,3 +1831,12 @@ taken; "rejected" says why. Fixes for other files are made by those files' owner
   it adds.
 - No locked ledger item is touched and no owner question comes from this slice.
 - K2 also fails C5: the lost-subagent thread has no wire calls and no native stream, which C2 and C5 both test, so the row and `selftest` now agree on C1, C2, C4, C5 and C6. P1 reads the same set.
+
+### 2026-10-31, replan after slice 7 (merge 1dd5caaf)
+
+- **Landed:** the five harness files (cline-cli, crush-cli, droid-cli, goose-cli, kimi-code-cli), the per-key queue, the K2 fixtures, and the selftest and pad nits. All sixteen connectors now have a pad file.  stays "not run: no key". Several vendor docs hosts were unreachable, so the new files mark those keys unverified; a later slice or a real run confirms them.
+- **Still to land:** K7 and K11 fixtures (they wait on PRD-08 slice 6 and PRD-09, as the slice 5 note says). `selftest` exits 3 until they exist: K2 passes, the others are "not run". Exit 3 is not "the pad works".
+- **Queue has no automated test.** Section 10 leaves it to real runs; the first real batch is its test. Not a gap to fill with a unit test.
+- **Open nit (taste, not blocking):** in the walk finally of `scripts/pad/pad`, the downgrade call catches four exception types and repeats the deepseek name test already inside `downgrade_if_429`. If touched again, read row.json defensively once and catch `Exception` in that one place; a failed downgrade must never stop the pad.
+- **Size, `wc -l` at 1dd5caaf:** all of `scripts/pad/` outside fixtures is 4,303 lines (the reviewer counted 4,298) against the PRD-00 row of about 1,350 to 1,450; `pad` 736 (320), `pad-run` 993 (330), `check.py` 743 (320), `test_pad.py` 488 (90), `table` 193 (150), `selftest` 183 (100). Slice 7 added about 220 lines, most of it harness files and the queue. No further slice is planned to add code except the K7 and K11 fixtures, which are data. The overage stays the owner question already logged; no row is raised here.
+- No locked ledger item is touched and no owner question comes from this slice.
