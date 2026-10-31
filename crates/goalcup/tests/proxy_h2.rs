@@ -130,7 +130,7 @@ fn opens(calls: &Calls, kind: StreamKind) -> Vec<(Sid, Sid, Value)> {
 }
 
 fn end_of(calls: &Calls, sid: Sid) -> (EndReason, Value) {
-    let all = calls.all().into_iter();
+    let mut all = calls.all().into_iter();
     all.find_map(|c| match c {
         Call::End(s, _, reason, _, tail) if s == sid => Some((reason, tail.unwrap_or_default())),
         _ => None,
@@ -265,9 +265,9 @@ fn rst_stream_and_goaway_end_streams_interrupted() {
         (Dir::Up, frame(RST, 0, 1, &8u32.to_be_bytes())),
     ];
     let (calls, _) = run(&steps);
-    let [(req, ..)] = opens(&calls, StreamKind::HttpReq).try_into().unwrap();
+    let [(post, ..)] = opens(&calls, StreamKind::HttpReq).try_into().unwrap();
     let [(resp, ..)] = opens(&calls, StreamKind::HttpResp).try_into().unwrap();
-    for sid in [req, resp] {
+    for sid in [post, resp] {
         let (reason, tail) = end_of(&calls, sid);
         let want = (EndReason::Interrupted, &json!(8));
         assert_eq!((reason, &tail["h2_error"]), want);
