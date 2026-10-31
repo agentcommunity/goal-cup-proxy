@@ -824,7 +824,8 @@ class Run:
         each inside the step's limit (a timeout is an exit "timeout"); then meta-box.json, scan and tar, whatever happened."""
         self.stop_watch()  # the watch's last line first, so the tar holds a whole watch/
         e, exits, result, note, new = self.entry(), {}, None, "", None
-        if old := self.st.get("old"):  # entry() is not called again below: it would put the newest entry back  # kill-both: the row is the old entry's, and the entry goalcup continue started is checked too
+        # kill-both: the row is the old entry's, and the entry goalcup continue started is checked too
+        if old := self.st.get("old"):  # entry() is not called again below: it would put the newest entry back
             new = (self.st["entry"], e) if self.st.get("entry") != old["entry"] else None
             self.st.update(old)
             e = os.path.join(self.env["GOALCUP_HOME"], "runs", old["run"], old["entry"])
