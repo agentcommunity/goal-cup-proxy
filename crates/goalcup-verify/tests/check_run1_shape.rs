@@ -111,7 +111,10 @@ fn run1_shape_fails_exactly_its_checks_and_reads_six_wire_errors() {
 #[test]
 fn run1_shape_as_a_server_copy_fails_the_count_check_too() {
     let d = run1("r1-server", Shape::Lossy);
-    let (code, v) = check(&fetch(&d, false), &["--server", "--local", d.to_str().unwrap()]);
+    let (code, v) = check(
+        &fetch(&d, false),
+        &["--server", "--local", d.to_str().unwrap()],
+    );
     assert_eq!(code, 2);
     let want = sorted(FAILS.iter().chain(&["server_counts_match"]));
     assert_eq!(sorted(ids_with(&v, "fail")), want);
