@@ -1848,3 +1848,9 @@ taken; "rejected" says why. Fixes for other files are made by those files' owner
 - **Seam note for PRD-09.** The usage reader reports `readable: true` for a record with no native stream; it should report `no_native`. The pad works around it by also requiring native files or calls.
 - **K11 sweep.** In `selftest` the wire-only K11 rows exempt only C2, C4 and C5 from the none-wanted sweep; C3 and C6 must not FAIL.
 - **Still open, outside this PRD's files.** The K7 export has one chunk, so K6b cannot drop a middle one. The K11 records have no ok response with usage and no subagent, so K11 (d) cannot show all six PASS; `selftest` says so and exits 3. Both need PRD-08's export and history helpers (`crates/goalcup-verify/tests`) to write multi-chunk uploads, usage and a child thread, and the S13 final fields (`complete`, `missing`) so the fixtures are regenerated, not hand-edited.
+
+### 2026-10-31, fixer round on A11 and A12
+
+- **Off time is not explained by an orphan.** In a plain direct or gateway row, a covered history orphan (gaps outside the expected kinds, no more than `missing_call`) no longer excuses off time; a clean row that went down fails C1 whether or not a call was also lost. Off time passes only when `recorder_down` is an expected gap for the row. `selftest` K11b says so through an `expect_gaps` key in its meta.
+- **The orphan limit is a count bound.** It compares gaps with orphans, not gaps that hold an orphan, until PRD-09 reports orphans as `[{thread, sid, at, in_gap}]` (section 13 ask).
+- `orphans_in_gaps` is null when `history_complete` is missing or fails, 0 for pass, skip or warn.

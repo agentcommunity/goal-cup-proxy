@@ -83,7 +83,7 @@ CONTROLS = [
     ("K9", "k7-part", "k7-fetched", {"C6": "FAIL"}, {}, {"count": lambda n: n + 1}),
     ("K10", "k7-part", "k7-fetched", {"C5": "FAIL"}, {}, {"after": empty_usage}),
     ("K11a", "k11-a-part", None, {"C1": "FAIL"}, ids("fail", "history_complete"), {"orphans": 1, "wire_only": 1}),  # one orphan, not in a gap
-    ("K11b", "k11-b-part", None, {"C1": "PASS"}, ids("named", "history_complete"), {"orphans": 1, "in_gap": 1, "wire_only": 1}),  # the orphan sits in a recorded gap
+    ("K11b", "k11-b-part", None, {"C1": "PASS"}, ids("named", "history_complete"), {"orphans": 1, "in_gap": 1, "wire_only": 1, "expect_gaps": ["recorder_down"]}),  # the orphan sits in a recorded gap
     ("K11c", "k11-c-part", None, {"C1": "PASS"}, ids("skip", "history_complete"), {"wire_only": 1}),
     ("K11d", "k11-d-part", "k11-d-fetched", {"C1": "PASS"}, ids("skip", "threads_match", "wire_keeps_up"), {"wire_only": 1, "all_six": 1}),
 ]
@@ -120,7 +120,7 @@ def run_control(part, fetched, mods, tool):
                   "seal": {"reason": "harness_exit"}}
         json.dump(status, open(os.path.join(run, "status.json"), "w"))
         json.dump({"connector": "selftest", "case": "direct", "mode": "micro", "server": "staging" if fetched else "off",
-                   "keep": True, "run": "selftest", "entry": ENTRY, "commits_since_start": 1, "known_box": True, "variant": [],
+                   "keep": True, "run": "selftest", "expect_gaps": mods.get("expect_gaps", []), "entry": ENTRY, "commits_since_start": 1, "known_box": True, "variant": [],
                    "end_screen_requests": n}, open(os.path.join(run, "meta.json"), "w"))
         if mods.get("after"):
             mods["after"](run)

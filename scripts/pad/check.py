@@ -96,7 +96,7 @@ def expected_gaps(r):
     """The GAP kinds a row may name without it being a loss: the seal's after_stop (PRD-08 R2), a refused call for a
     script that expects one (PRD-03 acceptance 7), pinned for a dodger (section 2), FAULT_GAPS for a fault row."""
     return ({"after_stop"} | ({LOSS_GAP} if any(s in EXPECTS_LOSS for _, s in watchers(r.meta)) else set())
-            | ({"pinned"} if r.meta.get("case") == "dodger" else set()) | {g for k in fault_kinds(r.meta) for g in FAULT_GAPS.get(k, ())})
+            | ({"pinned"} if r.meta.get("case") == "dodger" else set()) | set(r.meta.get("expect_gaps") or ()) | {g for k in fault_kinds(r.meta) for g in FAULT_GAPS.get(k, ())})
 
 def dig(doc, name):
     for key in SEAM[name]:
@@ -316,9 +316,12 @@ def local(r, few):
     hist = dig(r.entry, "s6_history") or {}  # a gap over a named history orphan: C1's section 8 rule, not a fault row's
     unexpected = sum(n for k, n in r.gaps()[1].items() if n and k.split(":")[0] not in allowed)
     orphans = hist.get("missing_call") or 0
-    off = any(dig(e, "s6_off") for e in r.entries)  # off time is explained only by a covered orphan (K11 (b): recorder_down)
+    # Off time is explained only when its gap kind (recorder_down) is expected for the row. A covered orphan bounds the
+    # count of other gaps (a count, not a per-gap match, until PRD-09 reports orphans as [{thread, sid, at, in_gap}]) and
+    # never explains off time.
+    off = any(dig(e, "s6_off") for e in r.entries)
     covered = r.check("history_complete") == "named" and 0 < unexpected <= orphans
-    explained = code == 1 and named and (covered or named <= allowed and not off)
+    explained = code == 1 and named and (covered and not off or named <= allowed and (not off or "recorder_down" in allowed))
     r.flag(r.meta.get("case") in ("direct", "gateway") and set(fault_kinds(r.meta)) <= set(CLEAN) and not r.failed and code != 0 and not explained,
            "C1", "FAIL", "verifier exit %s, the %s case expects 0 or only the GAPs %s" % (
                code, r.meta.get("case"), ", ".join(sorted(allowed))))
@@ -686,7 +689,7 @@ def facts(r):
             "history": {"state": r.check("history_complete"), "answers": hist.get("checked"),
                         "orphans": hist.get("missing_call"),
                         "orphans_in_gaps": hist.get("missing_call") if r.check("history_complete") == "named" else
-                        None if r.check("history_complete") == "fail" else 0},
+                        None if r.check("history_complete") in (None, "fail") else 0},
             "threads": len(threads) if r.usage else dig(e, "s6_threads"), "native_files": dig(e, "s6_native"),
             "subagents": sum(1 for t in threads if dig(t, "t_parent")), "gaps": r.gaps()[1], "off_ms": dig(e, "s6_off"),
             "provider_errors": dict(kn for en in r.entries for kn in items(dig(en, "s6_errors"))),
