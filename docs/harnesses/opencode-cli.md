@@ -70,4 +70,4 @@ Both connectors set the four XDG folders under the isolated home and read `openc
 
 ## Pad result
 
-Not yet run on the pad. The tier and the runs are in [`connectors/tiers.toml`](../../connectors/tiers.toml).
+The tier, the tested version and the runs are in [`connectors/tiers.toml`](../../connectors/tiers.toml) and `PAD-RESULTS.md`; this sheet does not copy them.
