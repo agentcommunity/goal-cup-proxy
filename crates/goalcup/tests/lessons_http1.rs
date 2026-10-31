@@ -890,7 +890,7 @@ async fn every_request_on_a_decrypted_host_is_recorded() {
         ("POST", "/v1/chat/completions"),
         ("POST", "/claude-code/v1/messages"),
         ("POST", "/oauth/token"),
-        ("GET", "/odd//path;x=1?q=%zz&r=\u{e9}"),
+        ("GET", "/odd//path;x=1?q=%zz&r=%C3%A9"),
         ("DELETE", "/telemetry"),
     ];
     for (method, path) in sent {
