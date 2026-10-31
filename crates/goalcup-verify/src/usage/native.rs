@@ -301,7 +301,9 @@ impl File {
                 self.turn = (model_name(p.get("model")), safe_code(p.get("effort")))
             }
             ("event_msg", Some("token_count")) => {
-                let total = p.pointer("/info/total_token_usage/total_tokens")?.as_u64()?;
+                let total = p
+                    .pointer("/info/total_token_usage/total_tokens")?
+                    .as_u64()?;
                 let last = p.pointer("/info/last_token_usage")?.as_object()?;
                 // A repeat with the same or a smaller running total is no new call.
                 if Some(total) <= self.top {

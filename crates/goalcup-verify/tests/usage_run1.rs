@@ -345,7 +345,10 @@ fn native_leg_joins_codex_threads() {
     assert_eq!(joined(&t, Join::Matched), ok);
     assert_eq!(joined(&t, Join::Unattributed), ["fake-claude"]);
     // Point 4: no row, and no thread, holds text from a body or a session file (`path` is U1's).
-    let bare = t.rows.iter().map(|r| CallRow { path: None, ..r.clone() });
+    let bare = t.rows.iter().map(|r| CallRow {
+        path: None,
+        ..r.clone()
+    });
     assert!(!format!("{:?}", (bare.collect::<Vec<_>>(), &t.threads)).contains(MARK));
 }
 
@@ -421,9 +424,13 @@ fn run_usage(path: &Path) -> Ran {
     let out = tmp("u-out");
     let (p, o) = (path.to_str().unwrap(), out.to_str().unwrap());
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_goalcup-verify"));
-    let got = cmd.args(["usage", p, "--json", "--out", o]).output().unwrap();
+    let got = cmd
+        .args(["usage", p, "--json", "--out", o])
+        .output()
+        .unwrap();
     let text = |b: &[u8]| String::from_utf8_lossy(b).into_owned();
-    let file = |end: &str| fs::read_to_string(out.join(format!("{ENTRY}{end}"))).unwrap_or_default();
+    let file =
+        |end: &str| fs::read_to_string(out.join(format!("{ENTRY}{end}"))).unwrap_or_default();
     Ran {
         code: got.status.code(),
         stdout: text(&got.stdout),
@@ -449,7 +456,12 @@ fn usage_files_repeat_and_add_up() {
     let calls = CALLS.split_whitespace().count();
     assert_eq!(sum["coverage"]["wire_calls"], calls);
     // Which subagent used which model is in the summary's thread rows, not only in the calls file.
-    let kid = sum["threads"].as_array().unwrap().iter().find(|t| t["id"] == KID).unwrap();
+    let kid = sum["threads"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["id"] == KID)
+        .unwrap();
     assert_eq!(kid["models"]["fake-http-a-dated"], 1);
 }
 
@@ -458,16 +470,14 @@ fn usage_files_repeat_and_add_up() {
 #[test]
 fn a_corrupt_entry_is_marked_not_silent() {
     let dir = codex_entry("u-corrupt", false);
-    let last = part_files(&dir.join("rec")).unwrap().pop().unwrap();
-    let mut bytes = fs::read(&last).unwrap();
-    let mid = bytes.len() / 2;
-    bytes[mid..mid + 16].fill(0xA5);
-    fs::write(last, bytes).unwrap();
+    let first = part_files(&dir.join("rec")).unwrap().remove(0);
+    let mut bytes = fs::read(&first).unwrap();
+    let q = bytes.len() / 4;
+    bytes[q..3 * q].fill(0xA5);
+    fs::write(first, bytes).unwrap();
     let ran = run_usage(&dir);
     assert!(!ran.stderr.is_empty() && !ran.stderr.contains(MARK), "{ran:?}");
-    if ran.code == Some(0) {
-        assert_eq!(json(&ran.sum)["read_error"], true);
-    }
+    assert_eq!((ran.code, &json(&ran.sum)["read_error"]), (Some(0), &Value::Bool(true)));
 }
 
 /// Point 4 on every path: the whole entry, a torn copy of it (exit 0, not sealed), a missing path.
@@ -475,7 +485,9 @@ fn a_corrupt_entry_is_marked_not_silent() {
 fn no_record_text_in_any_output() {
     let check = |path: PathBuf, code: i32, sealed: bool| {
         let ran = run_usage(&path);
-        let text = [&ran.stdout, &ran.stderr, &ran.sum, &ran.calls].map(String::as_str).concat();
+        let text = [&ran.stdout, &ran.stderr, &ran.sum, &ran.calls]
+            .map(String::as_str)
+            .concat();
         assert_eq!(ran.code, Some(code), "{text}");
         assert!(!text.is_empty() && !text.contains(MARK));
         if code == 0 {

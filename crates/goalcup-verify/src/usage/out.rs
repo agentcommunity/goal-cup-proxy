@@ -82,12 +82,19 @@ pub(super) fn summary(t: &CallTable) -> Value {
         .collect();
     let threads: Vec<_> = (t.threads.iter())
         .map(|th| {
-            let mine: Vec<_> = rows().filter(|r| r.thread.as_deref() == Some(th.id.as_str())).collect();
-            let times = mine.iter().flat_map(|r| [r.wall_start, r.wall_end]).flatten();
+            let mine: Vec<_> = rows()
+                .filter(|r| r.thread.as_deref() == Some(th.id.as_str()))
+                .collect();
+            let times = mine
+                .iter()
+                .flat_map(|r| [r.wall_start, r.wall_end])
+                .flatten();
             let said = mine.iter().copied().filter(counted).filter(said);
             let own = || mine.iter().copied().filter(counted);
             let mut models: BTreeMap<&str, u64> = BTreeMap::new();
-            own().filter_map(|r| r.model.as_deref()).for_each(|m| *models.entry(m).or_default() += 1);
+            own()
+                .filter_map(|r| r.model.as_deref())
+                .for_each(|m| *models.entry(m).or_default() += 1);
             let wires = || mine.iter().copied().filter(wire);
             json!({"id": th.id, "parent": th.parent, "depth": th.depth, "label": th.label,
                 "wire_calls": wires().count(), "native_calls": th.native_calls,
