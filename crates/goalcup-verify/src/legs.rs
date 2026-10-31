@@ -287,10 +287,11 @@ fn wire_keeps_up(x: &Ctx) -> (Check, String) {
     }
     h.sort_unstable();
     w.sort_unstable();
-    let open: Vec<u64> = (x.calls())
+    let mut open: Vec<u64> = (x.calls())
         .filter(|r| r.leg == Leg::Native && x.known(r) && !x.covered(r))
         .filter_map(at)
         .collect();
+    open.sort_unstable();
     let (raw, adj) = (Sweep::new(&h, &w), Sweep::new(&open, &w));
     // The harness kept calling long after the wire's last call, whatever the wire's outcome.
     let ended = |l: Option<&u64>| {
