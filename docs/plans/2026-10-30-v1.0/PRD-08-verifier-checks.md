@@ -1152,8 +1152,8 @@ log; the pad lane follows.
   per response, not one per block or choice.
 - **Declined: reuse of `usage` framing (review B1).** `Buf` and `Sse` live in `src/usage/`, which PRD-09
   owns; making them `pub(crate)` is a seam request to PRD-09, not made here.
-- **Size decision** (`wc -l`). `history.rs` 593 against its 155 ceiling and `check_history.rs` about
-  470 against 80: the 155 and 80 figures were estimates made before the streaming pass, four request
+- **Size decision** (`wc -l`). `history.rs` 617 against its 155 ceiling and `check_history.rs` 507
+  against 80: the 155 and 80 figures were estimates made before the streaming pass, four request
   shapes, WebSocket messages and chain rules were fixed. The extra serves points 1 and 3 (a missed call
   is named, never silently passed). `check_run1_shape.rs` and `common/run1.rs` stay at their slice 5
   sizes, and the fixture export helper now lives once in `tests/common`. Anything past this needs a
