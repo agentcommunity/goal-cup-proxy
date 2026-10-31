@@ -1131,14 +1131,14 @@ pub fn seal_could_not() -> String {
 }
 
 // Interactive setup.
-pub fn question(name: &str) -> String {
+pub fn no_prompts_question(name: &str) -> String {
     format!(
         "{name} will run for days with nobody watching. goalcup can set it to never stop and ask \
          for approval (it can then change any file you can). Set this in goalcup's own {name} home?"
     )
 }
 
-pub fn advice(name: &str) -> String {
+pub fn no_prompts_left(name: &str) -> String {
     format!(
         "Left as it is: {name} will stop and ask for approval during the run. Turn approvals off in \
          goalcup's own {name} home yourself, or stay near it to answer."

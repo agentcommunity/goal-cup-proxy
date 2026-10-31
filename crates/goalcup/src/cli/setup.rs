@@ -135,10 +135,10 @@ fn write_home(
         open(&plan, &c.name);
     }
     let update_off = write_rows(&plan.home, &c.update_off);
-    let no_prompts = if !ask || confirm(&format!("{} [Y/n] ", text::question(&c.name))) {
+    let no_prompts = if !ask || confirm(&format!("{} [Y/n] ", text::no_prompts_question(&c.name))) {
         write_rows(&plan.home, &c.no_prompts)
     } else {
-        put(&text::advice(&c.name));
+        put(&text::no_prompts_left(&c.name));
         Vec::new()
     };
     let (update, prompts) = (!update_off.is_empty(), !no_prompts.is_empty());
