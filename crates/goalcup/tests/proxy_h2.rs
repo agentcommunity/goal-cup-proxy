@@ -512,6 +512,11 @@ fn h2_fields_past_64_kib_are_the_http_head_guard() {
     assert_eq!(end_of(&calls, req).0, EndReason::Complete);
 }
 
+/// The stream of `opens` on HTTP/2 stream `id`.
+fn on(opens: &[(Sid, Sid, Value)], id: u32) -> &(Sid, Sid, Value) {
+    opens.iter().find(|o| o.2["h2"] == json!(id)).expect("that stream")
+}
+
 /// A field `name` with a value of `n` bytes, literal without indexing.
 fn big_field(name: &str, n: usize) -> Vec<u8> {
     let start = [&[0, name.len() as u8][..], name.as_bytes()].concat();
@@ -553,11 +558,12 @@ fn fields_the_parser_reads_are_kept_past_the_guard() {
     let (calls, stop) = run(&steps);
     assert_eq!(stop, None);
     let resps = opens(&calls, StreamKind::HttpResp);
-    let gzip = resps.iter().find(|r| r.2["h2"] == json!(1)).expect("the response");
-    assert_eq!((&gzip.2["coding"], &gzip.2["decoded"]), (&json!(["gzip"]), &json!(true)));
+    let gzip = on(&resps, 1);
+    let coding = (&gzip.2["coding"], &gzip.2["decoded"]);
+    assert_eq!(coding, (&json!(["gzip"]), &json!(true)));
     assert!(data_of(&calls, gzip.0) == plain);
     let reqs = opens(&calls, StreamKind::HttpReq);
-    let ws = reqs.iter().find(|r| r.2["h2"] == json!(3)).expect("the CONNECT").0;
+    let ws = on(&reqs, 3).0;
     assert!(data_of(&calls, ws).is_empty());
     let gaps = gaps_on(&calls, ws);
     assert!(gaps.contains(&(GapReason::H2Unsupported, Some(7))));
@@ -582,11 +588,11 @@ fn a_response_to_no_request_waits_only_a_head() {
     assert_eq!(stop, None);
     let [(req, ..)] = opens(&calls, StreamKind::HttpReq).try_into().unwrap();
     let resps = opens(&calls, StreamKind::HttpResp);
-    let one = resps.iter().find(|r| r.2["h2"] == json!(1)).expect("stream 1's response");
+    let one = on(&resps, 1);
     assert_eq!(one.1, req);
     assert_eq!(data_of(&calls, one.0), b"after");
     assert_eq!(end_of(&calls, one.0).0, EndReason::Complete);
-    let three = resps.iter().find(|r| r.2["h2"] == json!(3)).expect("stream 3's response");
+    let three = on(&resps, 3);
     assert_eq!(three.1, 0);
     assert!(data_of(&calls, three.0) == big);
 }
