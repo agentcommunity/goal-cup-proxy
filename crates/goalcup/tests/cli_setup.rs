@@ -2,12 +2,14 @@
 //! no question, no open and no write; `--yes` writes only into the isolated home and prints it as
 //! the last folder path; no `goalcup mcp` text and no `PROBLEM:` line; `--record-host` refuses an
 //! IP, a loopback name and a `never` host. Facts only: exit codes, trees, parsed settings files.
-//! The case "an n answer writes `update_off` only" waits for the interactive setup slice.
+//! With a terminal (a pty): Enter takes the saved harness, an `n` answer still writes `update_off`.
 
 mod common;
 
 use std::collections::BTreeMap;
 use std::fs;
+use std::io::{Read, Write};
+use std::os::fd::{FromRawFd, OwnedFd};
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
@@ -65,6 +67,30 @@ fn setup(home: &TempHome, path: &str, args: &[&str]) -> (Output, String) {
     let out = out.stdin(Stdio::null()).output().expect("goalcup runs");
     let all = format!("{}{}", lossy(&out.stdout), lossy(&out.stderr));
     (out, all)
+}
+
+/// Like `setup`, but stdin and stdout are a pty holding `typed`; gives the exit code and output.
+fn setup_tty(home: &TempHome, path: &str, args: &[&str], typed: &str) -> (Option<i32>, String) {
+    let (mut master, mut slave) = (0, 0);
+    let null = std::ptr::null_mut();
+    let rc = unsafe { libc::openpty(&mut master, &mut slave, null, null, null) };
+    assert_eq!(rc, 0, "no pty here");
+    let (master, slave) = unsafe { (OwnedFd::from_raw_fd(master), OwnedFd::from_raw_fd(slave)) };
+    let mut input = std::fs::File::from(master.try_clone().unwrap());
+    input.write_all(typed.as_bytes()).unwrap();
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_goalcup"));
+    home.apply(&mut cmd)
+        .env("GOALCUP_SERVER", "off")
+        .env("PATH", path);
+    cmd.arg("setup").args(args).current_dir(home.home());
+    cmd.stdin(slave.try_clone().unwrap()).stdout(slave.try_clone().unwrap());
+    let code = cmd.stderr(slave).status().expect("goalcup runs").code();
+    drop(cmd);
+    let mut out = String::new();
+    let mut bytes = Vec::new();
+    let _ = std::fs::File::from(master).read_to_end(&mut bytes);
+    out.push_str(&lossy(&bytes));
+    (code, out)
 }
 
 fn lossy(bytes: &[u8]) -> String {
@@ -195,4 +221,58 @@ fn record_host_refuses_an_address_this_computer_and_a_never_host() {
         let text = fs::read_to_string(&file).unwrap();
         assert_eq!(text.lines().filter(|l| *l == "llm.example.com").count(), 1);
     }
+}
+
+/// Nothing new outside the isolated home, `setup.json` and the home's lock (never `~/.claude`).
+fn only_ours(home: &TempHome, c: &Connector, before: &BTreeMap<PathBuf, Option<Vec<u8>>>) {
+    let iso = isolated_home(&home.goalcup_home(), &c.id);
+    let lock = PathBuf::from(format!("{}.goalcup.lock", iso.display()));
+    for (path, now) in snapshot(home.home()) {
+        let ours = path.starts_with(&iso) || iso.starts_with(&path) || path == lock;
+        let ours = ours || path == setup_json(&home.goalcup_home());
+        assert!(before.get(&path) == Some(&now) || ours, "wrote {}", path.display());
+    }
+}
+
+#[test]
+fn a_terminal_takes_the_saved_harness_on_enter_and_opens_it_once() {
+    let _guard = guard();
+    let (home, c) = (TempHome::new(), connector());
+    let fake = Fake::new(&c.program);
+    let (out, all) = setup(&home, &fake.path(), &["--harness", &c.id, "--yes"]);
+    assert_eq!(out.status.code(), Some(0), "{all}");
+    let (before, probed) = (snapshot(home.home()), fake.argv().len());
+    let (code, all) = setup_tty(&home, &fake.path(), &[], "\n\n\n");
+    assert_eq!(code, Some(0), "{all}");
+    assert_eq!(fake.argv().len(), probed + 2, "{all}");
+    assert!(all.contains("Ready."), "{all}");
+    only_ours(&home, &c, &before);
+}
+
+#[test]
+fn answering_n_still_writes_update_off_and_leaves_no_prompts() {
+    let _guard = guard();
+    let (home, c) = (TempHome::new(), connector());
+    let fake = Fake::new(&c.program);
+    let before = snapshot(home.home());
+    let (code, all) = setup_tty(&home, &fake.path(), &["--harness", &c.id], "\nn\n");
+    assert_eq!(code, Some(0), "{all}");
+    only_ours(&home, &c, &before);
+    let iso = isolated_home(&home.goalcup_home(), &c.id);
+    let value = |row: &connector::SettingRow| {
+        let file = PathBuf::from(row.file.replace("{home}", &iso.to_string_lossy()));
+        let doc = file.exists().then(|| parse(&file))?;
+        let got = row.key.split('.').try_fold(&doc, |v, k| v.get(k))?;
+        Some(got.as_str().map_or_else(|| got.to_string(), str::to_owned))
+    };
+    for row in &c.update_off {
+        assert_eq!(value(row).as_deref(), Some(row.value.as_str()), "{}", row.key);
+    }
+    for row in &c.no_prompts {
+        assert_ne!(value(row).as_deref(), Some(row.value.as_str()), "{}", row.key);
+    }
+    let saved = fs::read(setup_json(&home.goalcup_home())).unwrap();
+    let saved: Value = serde_json::from_slice(&saved).unwrap();
+    assert_eq!(saved["no_prompts"], Value::Array(vec![]), "{saved}");
+    assert_ne!(saved["update_off"], Value::Array(vec![]), "{saved}");
 }
