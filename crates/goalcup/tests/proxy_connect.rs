@@ -214,14 +214,22 @@ async fn ask(proxy: SocketAddr, head: &str) -> (TcpStream, u16) {
     let mut got = Vec::new();
     while !got.ends_with(b"\r\n\r\n") {
         let mut b = [0u8; 1];
-        assert_eq!(s.read(&mut b).await.unwrap(), 1, "the proxy closed mid-answer");
+        assert_eq!(
+            s.read(&mut b).await.unwrap(),
+            1,
+            "the proxy closed mid-answer"
+        );
         got.push(b[0]);
     }
     (s, String::from_utf8_lossy(&got[9..12]).parse().unwrap())
 }
 
 async fn connect(proxy: SocketAddr, target: &str) -> (TcpStream, u16) {
-    ask(proxy, &format!("CONNECT {target} HTTP/1.1\r\nHost: {target}\r\n\r\n")).await
+    ask(
+        proxy,
+        &format!("CONNECT {target} HTTP/1.1\r\nHost: {target}\r\n\r\n"),
+    )
+    .await
 }
 
 /// A loopback upstream that writes `banner` to each connection, then echoes it.
@@ -301,11 +309,16 @@ async fn a_server_first_protocol_tunnels_with_no_wait() {
     assert_eq!(status, 200);
     let mut banner = [0u8; 11];
     let read = tokio::time::timeout(Duration::from_secs(10), s.read_exact(&mut banner));
-    read.await.expect("the banner came before the client spoke").unwrap();
+    read.await
+        .expect("the banner came before the client spoke")
+        .unwrap();
     assert_eq!(&banner, b"220 ready\r\n");
     drop(s);
     let got = conns(&calls, 1).await;
-    assert_eq!((got[0].1["mode"].clone(), got[0].1["reason"].clone()), (json!("tunnel"), json!("not_tls")));
+    assert_eq!(
+        (got[0].1["mode"].clone(), got[0].1["reason"].clone()),
+        (json!("tunnel"), json!("not_tls"))
+    );
 }
 
 /// Rule 3: a non-CONNECT request gets `405` and, for two tries within a minute, one note.
@@ -319,7 +332,10 @@ async fn a_non_connect_request_gets_405_and_one_note() {
     let notes: Vec<_> = (events(&calls).into_iter())
         .filter(|v| v["what"] == "connect_refused")
         .collect();
-    assert_eq!(notes, [json!({"ev": "note", "what": "connect_refused", "status": 405, "host": "example.com"})]);
+    assert_eq!(
+        notes,
+        [json!({"ev": "note", "what": "connect_refused", "status": 405, "host": "example.com"})]
+    );
     assert!(opens(&calls).is_empty(), "a refusal opens no stream");
 }
 
@@ -352,8 +368,10 @@ async fn a_client_hello_past_64_kib_tunnels_with_its_guard_gap() {
     let lost = tail["up"].as_u64().unwrap() + tail["down"].as_u64().unwrap();
     assert_eq!(lost, 2 * wire.len() as u64);
     let guard = json!({"guard": "client_hello", "limit": CLIENT_HELLO_GUARD});
-    assert!(matches!(&gaps(&calls)[..], [Call::Gap(s, GapReason::MemoryGuard, _, _, 0, Some(l), Some(t))]
-        if s == sid && *l == lost && *t == guard));
+    assert!(
+        matches!(&gaps(&calls)[..], [Call::Gap(s, GapReason::MemoryGuard, _, _, 0, Some(l), Some(t))]
+        if s == sid && *l == lost && *t == guard)
+    );
 }
 
 /// C10 and the decrypted HTTP/1.1 path: a listed SNI behind an IP-literal CONNECT is decrypted,
@@ -369,7 +387,9 @@ async fn a_listed_sni_behind_an_ip_literal_is_decrypted_and_recorded() {
     let tls = trusting_run_ca(&ca);
     let name = ServerName::try_from("api.openai.com").unwrap();
     let mut t = tls.connect(name, s).await.unwrap();
-    t.write_all(b"GET /v1/models HTTP/1.1\r\nHost: api.openai.com\r\n\r\n").await.unwrap();
+    t.write_all(b"GET /v1/models HTTP/1.1\r\nHost: api.openai.com\r\n\r\n")
+        .await
+        .unwrap();
     let mut got = Vec::new();
     while !got.ends_with(b"hi") {
         let mut b = [0u8; 256];
@@ -381,7 +401,10 @@ async fn a_listed_sni_behind_an_ip_literal_is_decrypted_and_recorded() {
     drop(t);
     let got = conns(&calls, 1).await;
     let (_, meta, tail) = &got[0];
-    assert_eq!((&meta["mode"], &meta["alpn"]), (&json!("decrypt"), &json!("http/1.1")));
+    assert_eq!(
+        (&meta["mode"], &meta["alpn"]),
+        (&json!("decrypt"), &json!("http/1.1"))
+    );
     let kinds: Vec<_> = opens(&calls).into_iter().map(|o| o.1).collect();
     assert!(kinds.contains(&StreamKind::HttpReq) && kinds.contains(&StreamKind::HttpResp));
     for key in ["up", "down", "plain_up", "plain_down"] {

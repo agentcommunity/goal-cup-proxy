@@ -256,17 +256,11 @@ async fn connection(b: Arc<Boot>, mut client: TcpStream) {
         }
         Hello::NotTls(bytes) if is_listed && looks_like_request(&bytes) => {
             // Plain HTTP to a listed host: decrypted with no TLS; the wire is the plaintext.
-            let (source, kind) = connect_listed.unzip();
+            let c = tc("", connect_listed, None, Bytes::new(), Bytes::new());
             let meta = ConnMeta {
-                host,
-                port,
                 mode: "decrypt",
-                listed: source,
-                kind,
                 reason: None,
-                alpn: None,
-                tls: None,
-                fingerprint: None,
+                ..meta(&c)
             };
             let (conn, p) = decrypt(&b, meta, (client, up), bytes, false).await;
             let (reason, pu, pd) = close(p, |c| c);
@@ -280,7 +274,8 @@ async fn connection(b: Arc<Boot>, mut client: TcpStream) {
     };
     let (name, decision) = b.hosts.decide(hello.sni.as_deref(), host);
     let name = name.to_owned();
-    let (fp, fp16) = (hello.fingerprint, Some(fingerprint_hex16(&hello.fingerprint)));
+    let fp = hello.fingerprint;
+    let fp16 = Some(fingerprint_hex16(&fp));
     let offer = tls::upstream_offer(&hello.alpn);
     let reason = match decision {
         Decision::Never => Some("sign_in"),
@@ -302,20 +297,14 @@ async fn connection(b: Arc<Boot>, mut client: TcpStream) {
         (Some(c), Ok(server_name)) => c.connect(server_name, up).await,
         _ => Err(io::Error::other("no upstream TLS for this name")),
     };
+    // An `h2`-only client whose upstream picked no ALPN is `alpn_other`: the legs would differ.
     let up_tls = match upstream_tls {
-        // An `h2`-only client whose upstream picked no ALPN: the legs would not agree.
-        Ok(t) if offer == Offer::H2 && t.get_ref().1.alpn_protocol().is_none() => {
-            Err(UpstreamFail::AlpnRejected)
-        }
-        Ok(t) => Ok(t),
-        Err(e) => Err(tls::classify_upstream_handshake(&e)),
-    };
-    let up_tls = match up_tls {
-        Ok(t) => t,
-        Err(fail) => {
+        Ok(t) if offer != Offer::H2 || t.get_ref().1.alpn_protocol().is_some() => t,
+        other => {
+            let fail = other.err().map(|e| tls::classify_upstream_handshake(&e));
             let reason = match fail {
-                UpstreamFail::AlpnRejected => "alpn_other",
-                UpstreamFail::Untrusted => "upstream_untrusted",
+                Some(UpstreamFail::Untrusted) => "upstream_untrusted",
+                _ => "alpn_other",
             };
             let c = tc(reason, dl, fp16, hello.bytes, Bytes::new());
             return fresh_tunnel(&b, c, client, target).await;
@@ -359,13 +348,9 @@ async fn connection(b: Arc<Boot>, mut client: TcpStream) {
         }
     };
     b.hosts.trust(&name, &fp);
-    let (source, kind) = dl.unzip();
+    let c = tc("", dl, fp16, Bytes::new(), Bytes::new());
     let meta = ConnMeta {
-        host,
-        port,
         mode: "decrypt",
-        listed: source,
-        kind,
         reason: None,
         alpn: chosen.as_deref().and_then(|a| std::str::from_utf8(a).ok()),
         tls: match client_tls.get_ref().1.protocol_version() {
@@ -373,7 +358,7 @@ async fn connection(b: Arc<Boot>, mut client: TcpStream) {
             Some(rustls::ProtocolVersion::TLSv1_2) => Some("1.2"),
             _ => None,
         },
-        fingerprint: fp16.as_deref(),
+        ..meta(&c)
     };
     let h2 = chosen.as_deref() == Some(b"h2");
     let (conn, p) = decrypt(&b, meta, (client_tls, up_tls), Bytes::new(), h2).await;
@@ -431,9 +416,10 @@ async fn fresh_tunnel(b: &Boot, c: TunnelConn, client: TcpStream, target: Option
     }
 }
 
-/// A tunnel `conn` whose bytes never passed: the GAP its reason names on a listed host, then END.
-fn lost_tunnel(rec: &Recorder, c: &TunnelConn, at: Mono, (up, down): (u64, u64), tail: Option<Value>) {
-    let meta = ConnMeta {
+/// The `conn` meta of a tunnel as `tunnel::run` writes it; a decrypted conn overrides mode,
+/// reason, ALPN and TLS version.
+fn meta(c: &TunnelConn) -> ConnMeta<'_> {
+    ConnMeta {
         host: &c.host,
         port: c.port,
         mode: "tunnel",
@@ -443,8 +429,18 @@ fn lost_tunnel(rec: &Recorder, c: &TunnelConn, at: Mono, (up, down): (u64, u64),
         alpn: None,
         tls: None,
         fingerprint: c.fingerprint.as_deref(),
-    };
-    let meta = serde_json::to_value(meta).unwrap_or_default();
+    }
+}
+
+/// A tunnel `conn` whose bytes never passed: the GAP its reason names on a listed host, then END.
+fn lost_tunnel(
+    rec: &Recorder,
+    c: &TunnelConn,
+    at: Mono,
+    (up, down): (u64, u64),
+    tail: Option<Value>,
+) {
+    let meta = serde_json::to_value(meta(c)).unwrap_or_default();
     let mut conn = rec.open(StreamKind::Conn, 0, 0, 0, OpenFlags::TUNNEL, meta);
     if c.listed.is_some()
         && let Some(reason) = goalcup_format::tunnel_gap(c.reason)

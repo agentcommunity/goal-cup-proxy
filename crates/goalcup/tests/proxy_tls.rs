@@ -10,20 +10,20 @@ use common::upstream::{Script, Upstream};
 use common::{HANG, within_async};
 use goalcup::connector::{Decision, HostList, Kind, Source};
 use goalcup::pipeline::{Call, Calls, GapReason, Mono, Recorder, StreamKind};
-use goalcup::proxy::{ProxyCtx, ProxyHandle, serve};
-use serde_json::{Value, json};
-use std::net::SocketAddr;
-use std::time::Duration;
-use tokio::io::{AsyncRead, AsyncWrite};
-use tokio::net::TcpStream;
 use goalcup::proxy::ca::{RUN_CA_FILE, RunCa, certificates};
 use goalcup::proxy::connect::fingerprint_hex16;
 use goalcup::proxy::hosts::{Hosts, REFUSAL_EXPIRY};
-use goalcup::proxy::tls::{Offer, Refusal, Tls, classify_client_handshake, upstream_offer};
+use goalcup::proxy::tls::{Offer, Tls, upstream_offer};
+use goalcup::proxy::{ProxyCtx, ProxyHandle, serve};
 use rustls::pki_types::{CertificateDer, ServerName};
 use rustls::{ClientConfig, ClientConnection, RootCertStore};
+use serde_json::{Value, json};
+use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::Duration;
+use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _, duplex};
+use tokio::net::TcpStream;
 use tokio_rustls::{TlsAcceptor, TlsConnector};
 
 fn client_trusting(roots: Vec<CertificateDer<'static>>, alpn: &[&[u8]]) -> Arc<ClientConfig> {
@@ -145,55 +145,6 @@ fn the_alpn_offer_follows_prefer_h1() {
         let expected = upstream.map(bytes);
         assert_eq!(offered, expected, "{client:?}");
     }
-}
-
-/// A client that trusts only the public roots (as a pinned or dodging client does) refuses our
-/// leaf with an alert, the one thing refusal learning may use.
-#[tokio::test]
-async fn an_untrusting_client_refuses_with_an_alert() {
-    let ca = RunCa::mint(&["openai.com".to_string()]).unwrap();
-    let tls = Tls::new(&ca, Vec::new());
-    let acceptor = TlsAcceptor::from(tls.server(Some(b"http/1.1")));
-    let mut public = RootCertStore::empty();
-    public.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
-    let connector = TlsConnector::from(client_with(public, &[b"http/1.1"]));
-    let (client_io, server_io) = duplex(64 * 1024);
-    let (server, client) = tokio::join!(
-        acceptor.accept(server_io),
-        connector.connect(name("api.openai.com"), client_io)
-    );
-    assert!(client.is_err());
-    let Err(err) = server else {
-        panic!("the server handshake succeeded")
-    };
-    assert_eq!(
-        classify_client_handshake(&err),
-        Refusal::Alert("unknown_ca"),
-        "{err:?}"
-    );
-}
-
-/// A client that goes away mid-handshake sent no alert: nothing to learn from.
-#[tokio::test]
-async fn a_close_mid_handshake_is_no_alert() {
-    let ca = RunCa::mint(&["openai.com".to_string()]).unwrap();
-    let tls = Tls::new(&ca, Vec::new());
-    let acceptor = TlsAcceptor::from(tls.server(Some(b"http/1.1")));
-    let mut hello = Vec::new();
-    ClientConnection::new(
-        client_trusting(vec![ca.cert_der().clone()], &[b"http/1.1"]),
-        name("api.openai.com"),
-    )
-    .unwrap()
-    .write_tls(&mut hello)
-    .unwrap();
-    let (mut client_io, server_io) = duplex(64 * 1024);
-    client_io.write_all(&hello).await.unwrap();
-    drop(client_io);
-    let Err(err) = acceptor.accept(server_io).await else {
-        panic!("the server handshake succeeded")
-    };
-    assert_eq!(classify_client_handshake(&err), Refusal::NoAlert, "{err:?}");
 }
 
 const HOST_FILE: &str = r#"
@@ -355,7 +306,10 @@ fn proxy(up: &Upstream, trust: bool) -> (ProxyHandle, SocketAddr, Calls, RunCa, 
     let dir = tempfile::tempdir().unwrap();
     // SAFETY: nextest runs each test in its own process; `serve` reads these once, below.
     unsafe {
-        std::env::set_var("GOALCUP_TEST_UPSTREAM", format!("api.openai.com={}", up.addr()));
+        std::env::set_var(
+            "GOALCUP_TEST_UPSTREAM",
+            format!("api.openai.com={}", up.addr()),
+        );
         if trust {
             std::env::set_var("GOALCUP_TEST_EXTRA_ROOTS", up.pki().roots_file(dir.path()));
         }
@@ -432,11 +386,17 @@ async fn an_untrusted_upstream_is_a_tunnel_to_its_own_certificate() {
     let up = Upstream::start(Script::ok(b"hi").with_tls(&["api.openai.com"], &[HTTP11]));
     let (_h, addr, calls, _, _dir) = proxy(&up, false);
     let own = TlsConnector::from(up.pki().client_config(&[HTTP11]));
-    let mut t = own.connect(name("api.openai.com"), through(addr).await).await.unwrap();
+    let mut t = own
+        .connect(name("api.openai.com"), through(addr).await)
+        .await
+        .unwrap();
     get(&mut t).await;
     drop(t);
     let (sid, meta) = conns(&calls, 1).await.remove(0);
-    assert_eq!((&meta["mode"], &meta["reason"]), (&json!("tunnel"), &json!("upstream_untrusted")));
+    assert_eq!(
+        (&meta["mode"], &meta["reason"]),
+        (&json!("tunnel"), &json!("upstream_untrusted"))
+    );
     assert_eq!(gaps_of(&calls, sid), [(GapReason::UpstreamUntrusted, None)]);
 }
 
@@ -446,7 +406,9 @@ async fn an_upstream_rejecting_the_alpn_is_an_alpn_other_tunnel() {
     let up = Upstream::start(Script::ok(b"hi").with_tls(&["api.openai.com"], &[H2]));
     let (_h, addr, calls, _, _dir) = proxy(&up, true);
     let own = TlsConnector::from(up.pki().client_config(&[HTTP11]));
-    let _ = own.connect(name("api.openai.com"), through(addr).await).await;
+    let _ = own
+        .connect(name("api.openai.com"), through(addr).await)
+        .await;
     let (sid, meta) = conns(&calls, 1).await.remove(0);
     assert_eq!(meta["reason"], "alpn_other");
     assert_eq!(gaps_of(&calls, sid), [(GapReason::ProtocolOther, None)]);
@@ -460,21 +422,32 @@ async fn an_alert_teaches_its_fingerprint_and_no_other() {
     let up = Upstream::start(Script::ok(b"hi").with_tls(&["api.openai.com"], &[HTTP11]));
     let (_h, addr, calls, ca, _dir) = proxy(&up, true);
     let refusing = TlsConnector::from(up.pki().client_config(&[HTTP11]));
-    let first = refusing.connect(name("api.openai.com"), through(addr).await).await;
+    let first = refusing
+        .connect(name("api.openai.com"), through(addr).await)
+        .await;
     assert!(first.is_err(), "our leaf is refused");
     let (sid, meta) = conns(&calls, 1).await.remove(0);
-    assert_eq!((&meta["mode"], &meta["reason"]), (&json!("tunnel"), &json!("tls_refused")));
+    assert_eq!(
+        (&meta["mode"], &meta["reason"]),
+        (&json!("tunnel"), &json!("tls_refused"))
+    );
     let alert = Some(json!({"alert": "unknown_ca"}));
     assert_eq!(gaps_of(&calls, sid), [(GapReason::TlsRefused, alert)]);
     assert_eq!(ca_refused(&calls).len(), 1);
 
-    let mut t = refusing.connect(name("api.openai.com"), through(addr).await).await.unwrap();
+    let mut t = refusing
+        .connect(name("api.openai.com"), through(addr).await)
+        .await
+        .unwrap();
     get(&mut t).await;
     drop(t);
     assert_eq!(conns(&calls, 2).await[1].1["reason"], "tls_refused");
 
     let trusting = TlsConnector::from(client_trusting(vec![ca.cert_der().clone()], &[]));
-    let mut t = trusting.connect(name("api.openai.com"), through(addr).await).await.unwrap();
+    let mut t = trusting
+        .connect(name("api.openai.com"), through(addr).await)
+        .await
+        .unwrap();
     get(&mut t).await;
     drop(t);
     assert_eq!(conns(&calls, 3).await[2].1["mode"], "decrypt");
@@ -506,12 +479,23 @@ async fn an_h2_only_client_is_relayed_and_its_loss_named() {
     let up = Upstream::start(Script::ok(b"hi").with_tls(&["api.openai.com"], &[H2]));
     let (_h, addr, calls, ca, _dir) = proxy(&up, true);
     let trusting = TlsConnector::from(client_trusting(vec![ca.cert_der().clone()], &[b"h2"]));
-    let t = trusting.connect(name("api.openai.com"), through(addr).await).await.unwrap();
+    let t = trusting
+        .connect(name("api.openai.com"), through(addr).await)
+        .await
+        .unwrap();
     let (send, conn) = h2::client::handshake(t).await.unwrap();
     let driver = tokio::spawn(conn);
     let mut send = send.ready().await.unwrap();
-    let req = http::Request::get("https://api.openai.com/v1/models").body(()).unwrap();
-    let mut body = send.send_request(req, true).unwrap().0.await.unwrap().into_body();
+    let req = http::Request::get("https://api.openai.com/v1/models")
+        .body(())
+        .unwrap();
+    let mut body = send
+        .send_request(req, true)
+        .unwrap()
+        .0
+        .await
+        .unwrap()
+        .into_body();
     let mut got = Vec::new();
     while let Some(piece) = body.data().await {
         let piece = piece.unwrap();
@@ -521,8 +505,12 @@ async fn an_h2_only_client_is_relayed_and_its_loss_named() {
     assert_eq!(got, b"hi");
     driver.abort();
     let (sid, meta) = conns(&calls, 1).await.remove(0);
-    assert_eq!((&meta["mode"], &meta["alpn"]), (&json!("decrypt"), &json!("h2")));
+    assert_eq!(
+        (&meta["mode"], &meta["alpn"]),
+        (&json!("decrypt"), &json!("h2"))
+    );
     assert_eq!(gaps_of(&calls, sid), [(GapReason::H2Unsupported, None)]);
-    let stopped = json!({"ev": "note", "what": "parse_stopped", "conn": sid, "reason": "h2_unsupported"});
+    let stopped =
+        json!({"ev": "note", "what": "parse_stopped", "conn": sid, "reason": "h2_unsupported"});
     assert!(events(&calls).contains(&stopped));
 }

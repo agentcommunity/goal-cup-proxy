@@ -47,7 +47,10 @@ async fn the_next_boot_serves_the_backlog_with_the_same_ca() {
     let dir = tempfile::tempdir().unwrap();
     // SAFETY: nextest runs each test in its own process; set before either `serve` reads them.
     unsafe {
-        std::env::set_var("GOALCUP_TEST_UPSTREAM", format!("api.openai.com={}", up.addr()));
+        std::env::set_var(
+            "GOALCUP_TEST_UPSTREAM",
+            format!("api.openai.com={}", up.addr()),
+        );
         std::env::set_var("GOALCUP_TEST_EXTRA_ROOTS", up.pki().roots_file(dir.path()));
     }
     let (listener, addr) = common::ports::held();
@@ -73,8 +76,13 @@ async fn the_next_boot_serves_the_backlog_with_the_same_ca() {
     config.alpn_protocols = vec![HTTP11.to_vec()];
     let name = ServerName::try_from("api.openai.com").unwrap();
     let connector = tokio_rustls::TlsConnector::from(Arc::new(config));
-    let mut t = connector.connect(name, queued).await.expect("the leaf verifies");
-    t.write_all(b"GET / HTTP/1.1\r\nHost: api.openai.com\r\n\r\n").await.unwrap();
+    let mut t = connector
+        .connect(name, queued)
+        .await
+        .expect("the leaf verifies");
+    t.write_all(b"GET / HTTP/1.1\r\nHost: api.openai.com\r\n\r\n")
+        .await
+        .unwrap();
     let mut got = Vec::new();
     while !got.ends_with(b"hi") {
         let mut b = [0u8; 256];
@@ -119,5 +127,9 @@ async fn quiet_since_moves_with_relayed_bytes_only() {
 
     let _idle = through(addr, &target.to_string()).await;
     tokio::time::sleep(Duration::from_millis(300)).await;
-    assert_eq!(h.quiet_since(), moved, "an open silent connection is not traffic");
+    assert_eq!(
+        h.quiet_since(),
+        moved,
+        "an open silent connection is not traffic"
+    );
 }
