@@ -1,0 +1,10 @@
+# Acceptance A2 (PRD-16 section 9): Claude Code, direct, Claude key, an hour of the many-subagents prompt, the recorder
+# killed at minute 30, then the watchdog killed at 45 and the recorder at 46, with `goalcup recover` at 47.
+# Run from the repository root: the prompt path is relative to it.
+harness = "claude-code-cli"
+key = "claude"
+case = "direct"
+mode = "full"
+minutes = 60
+steps = ["kill-recorder@30", "kill-watchdog-recover@45"]
+prompt = "scripts/pad/prompts/many-subagents.txt"
