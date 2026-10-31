@@ -399,7 +399,14 @@ fn a_gap_on_an_unrelated_stream_does_not_cover_a_dropped_call() {
             let head = json!({"status": 200, "ver": "1.1", "headers": [], "masked": [],
                 "coding": null, "decoded": true});
             let p = e.open(StreamKind::HttpResp, c, q, head);
-            e.gap(p, GapReason::MemoryGuard, 10, 0, 0, json!({"guard": "held_bytes"}));
+            e.gap(
+                p,
+                GapReason::MemoryGuard,
+                10,
+                0,
+                0,
+                json!({"guard": "held_bytes"}),
+            );
             e.end(p, done, 0, Value::Null);
             e.end(c, done, 0, json!({"up": 90, "down": 90}));
             e.idle(1_000);
