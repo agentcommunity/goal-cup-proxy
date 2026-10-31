@@ -2063,3 +2063,30 @@ kept and now cites BUILD-PROMPT section 5, since B3 no longer carries it.
   (PRD-14 took `check-links.py` out of the gate), so the final link pass is PRD-15's own run before
   PRD-14 deletes the script. The known broken-link filter list is in PRD-15's note.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-31, replan after PRD-09 slice 4 (merge c262ef5a)
+
+- **Gate and box runs:** box runs before the merge were fmt, clippy `-D warnings`, doc `-D warnings`
+  and nextest on the builder branch (39 of 39), the lane merge (51 of 51), the fixer round (52 of 52),
+  and the re-check at 63003771 (fmt, clippy, nextest 52 of 52), each re-read by a reviewer, the last
+  leaving no open fix or blocker. Review findings fixed: `path` kept out of `calls.jsonl`, `detail`
+  once, `read_error` instead of a silent partial read, per-thread `models` and `effort`,
+  `harness_version` with spaces, safe output file names. `gate full` was not run here.
+- **Size report, PRD-09** (`wc -l` at c262ef5a, row "Usage reader (PRD-09)", 1,470 src and 200
+  tests): src 2,396, 163% of the row and 94% of 2,550 (`mod.rs` 612, `wire.rs` 607, `shapes.rs` 456,
+  `native.rs` 447, `out.rs` 146, `hints.rs` 67, `sse.rs` 61); tests `usage_run1.rs` 503, 252% of the
+  row and 97% of 520. PRD-09's decision line (PRD-09 note) sets the ceilings to **2,550 src and 520
+  tests**, naming points 1, 2 and 6. `sqlite.rs` (150) is the last src that fits; the CSV, `--text`
+  and `run.json` are cut unless a reader needs them. The end-of-build report nets this against the
+  Rust totals (about 18,100 src, at most about 14,200 tests); only a total past those becomes the
+  owner's question.
+- **Build order, PRD-09:** slice 5 is `sqlite.rs` with its one case and the `summary()` grouping nit
+  (B2-1); slice 6 is `scripts/usage-job.sh` and whatever of the CSV, `--text` and `run.json` fits.
+  PRD-12's spend check and the watchers' `usage --json` are unblocked now (PRD-12 note: `read_error`
+  rule). `usage` no longer exits 3 on a readable entry, so the stale line in the slice 2 note ("until
+  then `usage` exits 3") is out of date.
+- **Seams:** the `read_error` rule is in the PRD-12 note; the five new `CallTable` fields are in the
+  PRD-08 note; PRD-15's usage section can now be written from `usage/out.rs` (PRD-15 note).
+- **Acceptance lists as known,** if still open at the end: the PRD-09 slice 4 nits B2-1, B2-2 and
+  B2-3 (PRD-09 note), and the cut of `usage table` or `--text` if not built.
+- No locked ledger item is touched and no owner question comes from this slice.

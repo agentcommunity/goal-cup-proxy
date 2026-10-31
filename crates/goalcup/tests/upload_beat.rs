@@ -1,19 +1,24 @@
 //! PRD-06 "Automated tests", `upload_beat.rs`: the flat `counts`, the recording state, the ordinary
-//! beat and the answer as `ServerWord`, against PRD-14's fake Worker. The final heartbeat order, its
-//! repeat until `sealed`, no ordinary beat after a final, and `503 awaiting_final` land with the
-//! sender (slice 3).
+//! beat, the answer as `ServerWord`, the final heartbeat, no ordinary beat after it, and `failed`
+//! from the on-disk point in null mode, against PRD-14's fake Worker. The order final, chunks,
+//! final until `sealed` and `503 awaiting_final` land with the thread wiring (slice 4).
 
 mod common;
 
+use common::records;
 use common::worker::{CREDENTIAL, FakeWorker, Inject, Route, SECONDS_LEFT};
 use goalcup::pipeline::status::{DurableStatus, Losing, Mode, Off, Written};
 use goalcup::pipeline::{Counts, Durable, EntryTotals, Live, Mono, Status};
-use goalcup::upload::ServerWord;
-use goalcup::upload::beat::{Beat, Health, counts, health, recording, request, take_answer};
+use goalcup::upload::beat::{
+    Beat, FinalFacts, Health, counts, health, recording, request, take_answer,
+};
+use goalcup::upload::chunk::last_on_disk;
 use goalcup::upload::client::{HeartbeatAnswer, Recording, ServerClient, Token};
 use goalcup::upload::policy::{Policy, after};
-use goalcup::upload::state::{self, UploadJson};
-use goalcup_format::{IndexKind, IndexLine};
+use goalcup::upload::state::{self, Final, UploadJson};
+use goalcup::upload::{SealFacts, ServerWord};
+use goalcup::watchdog::SealReason;
+use goalcup_format::{IndexKind, IndexLine, Record};
 use serde_json::{Value, json};
 use std::path::Path;
 use std::sync::Mutex;
@@ -372,4 +377,122 @@ fn clock_set_back_does_not_lengthen_a_segment() {
         back,
     );
     assert_eq!(deadline(second), deadline(first));
+}
+
+/// A rec folder in the rig's entry folder with one event; sealed (an `E` line) or left open.
+fn rec(r: &Rig, seal: bool) -> IndexLine {
+    let dir = r.dir.path().join("rec");
+    let ev = [Record::Event {
+        t: 1,
+        json: br#"{"ev":"x"}"#.to_vec(),
+    }];
+    let d = if seal {
+        records::sealed(&dir, &ev)
+    } else {
+        records::open(&dir, &ev)
+    };
+    assert_eq!(last_on_disk(&dir).unwrap(), Some(d.line));
+    d.line
+}
+
+/// Section 6: `final: true` at the seal LINK with `repo_head`; `final` goes to `sent`, then to
+/// `sealed` on an answer that says so, and never back. An answer that does not say sealed waits
+/// before the final goes again. No ordinary beat follows (PRD-17 S4).
+#[test]
+fn the_final_heartbeat_names_the_seal_and_ends_the_ordinary_beat() {
+    let mut r = rig();
+    let end = rec(&r, true);
+    assert_eq!(end.kind, IndexKind::E);
+    let seal = SealFacts {
+        reason: SealReason::HarnessExit,
+        workspace_head: Some("ab".repeat(20)),
+        totals: EntryTotals::default(),
+    };
+    let live = Live::default();
+    let f = FinalFacts {
+        point: &end,
+        seal: &seal,
+        live: &live,
+        waiting_bytes: 0,
+    };
+    assert!(r.beat.final_beat(Mono(S), &f, &r.json, &r.word).is_some());
+    let b = r.worker.heartbeats().remove(0);
+    assert_eq!(b["final"], true);
+    assert_eq!(b["seq"], end.seq);
+    assert_eq!(b["offset_local"], end.raw_end);
+    assert_eq!(b["head"], goalcup_format::hex(&end.hash));
+    assert_eq!(b["repo_head"], "ab".repeat(20));
+    assert_eq!(b["counts"]["mode"], "sealed");
+    assert_eq!(state::read(r.dir.path()).unwrap().final_, Final::Sent);
+
+    let sealed = json!({"stop": false, "seconds_left": 1, "reason": null, "sealed": true});
+    let inject = Inject {
+        answer: Some((200, sealed)),
+        ..Inject::default()
+    };
+    r.worker.inject(Route::Heartbeat, inject);
+    let next = r.beat.backoff.next_try.expect("a final not sealed waits");
+    assert!(next.0 > S);
+    r.beat.final_beat(next, &f, &r.json, &r.word).unwrap();
+    assert_eq!(r.json.lock().unwrap().final_, Final::Sealed);
+    assert!(r.beat.backoff.due(next));
+    r.beat
+        .final_beat(after(next, Duration::from_secs(1)), &f, &r.json, &r.word)
+        .unwrap();
+    assert_eq!(state::read(r.dir.path()).unwrap().final_, Final::Sealed);
+
+    let n = r.worker.heartbeats().len();
+    let (d, losing) = (point(9), Health(Mode::Losing, Live::default()));
+    assert!(
+        !r.beat
+            .tick(Mono(3600 * S), &d, &losing, 0, &r.json, &r.word)
+    );
+    assert_eq!(r.worker.heartbeats().len(), n);
+}
+
+/// U8: the final heartbeat of a dead entry (a recovered seal) says `gaps`, even with no gap
+/// counted: its abandoned span is off time.
+#[test]
+fn a_recovered_seal_says_gaps() {
+    let mut r = rig();
+    let end = rec(&r, true);
+    let seal = SealFacts {
+        reason: SealReason::Recovered,
+        workspace_head: None,
+        totals: EntryTotals::default(),
+    };
+    let live = Live::default();
+    let f = FinalFacts {
+        point: &end,
+        seal: &seal,
+        live: &live,
+        waiting_bytes: 0,
+    };
+    r.beat.final_beat(Mono(S), &f, &r.json, &r.word).unwrap();
+    assert_eq!(r.worker.heartbeats().remove(0)["recording"], "gaps");
+}
+
+/// Null mode (ledger R7): with no live writer the beat names the last whole index line on disk
+/// and says `failed`.
+#[test]
+fn null_mode_beats_failed_from_the_point_on_disk() {
+    let mut r = rig();
+    let line = rec(&r, false);
+    write_status(r.dir.path(), Mode::Null, 0);
+    let t = EntryTotals::default();
+    let h = health(None, r.dir.path(), &t);
+    let on_disk = goalcup_format::Durable {
+        part: String::new(),
+        index_len: 0,
+        line,
+    };
+    let d = Durable {
+        point: Some(on_disk),
+        totals: t,
+        at: Mono(0),
+    };
+    assert!(r.beat.tick(Mono(S), &d, &h, 0, &r.json, &r.word));
+    let b = r.worker.heartbeats().remove(0);
+    assert_eq!(b["recording"], "failed");
+    assert_eq!(b["seq"], line.seq);
 }
