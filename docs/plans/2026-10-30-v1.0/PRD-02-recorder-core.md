@@ -1610,3 +1610,12 @@ Two planning passes (`/root/gc-night/prd02/path-plan.md` and `audit-fix-plan.md`
   (section 3 top note, section 5 "at the seal it finishes what is open", the `mask_failed` sentence in section 6,
   the opening of section 7) and corrects `pipeline/mod.rs`'s "come next" comment. Docs and code must agree in
   that PR. No locked ledger item is touched.
+
+### 31 Oct, from the PRD-17 slice 2 review
+
+- **Shield race to fix in the writer or watchdog slice:** a late tty SIGINT (process-directed, still pending on
+  another thread) can arrive after `Shield::harness_exited` gives INT back to default and kills the watchdog
+  in wrap-up (2 of about 18 loaded box runs; the helper prints "watchdog alive", then dies of SIGINT). Point 3
+  and S8 need wrap-up to finish. Fix by keeping INT, QUIT and TSTP caught until wrap-up ends, as HUP is, or
+  drain `sigpending` before giving them back. Then remove the `ignore` on the ctrl-c case in
+  `lessons_launch.rs`. No locked ledger item is touched.

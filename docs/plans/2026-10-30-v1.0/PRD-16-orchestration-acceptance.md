@@ -2346,3 +2346,16 @@ kept and now cites BUILD-PROMPT section 5, since B3 no longer carries it.
   manual waiting behind a live `upload.lock`, seal detection by last line, `counts.jsonl` not synced before
   prune. Three nits remain (PRD-06 note). No locked ledger item is touched and no owner question comes
   from this slice.
+
+### 31 Oct, after PRD-17 slice 2 (merge 0b661e6e)
+
+- **Size report, PRD-17** (`wc -l` on integration at 0b661e6e): `lessons_hosts.rs` 184, `lessons_decode.rs` 388,
+  `lessons_tls.rs` 260, `lessons_http1.rs` 667, `lessons_ws.rs` 703, `lessons_launch.rs` 408, total 2,610 test
+  lines against the 3,000 shared by lessons and PRD-14 in PRD-00 "Size budget" (87%, PRD-14's share not yet
+  counted). PRD-17 merged no src. Remaining lessons files must stay near 300 lines or the shared row is over;
+  only a Rust test total past about 14,200 becomes the owner question.
+- **Gate effect:** L-P3 (ctrl-c) is held back with `ignore` until PRD-02 fixes the Shield race (PRD-02
+  note); the deletion gate does not count it green. Other pending rows are listed in the PRD-17 note.
+  PRD-14 is asked to put `lessons_launch` in the heavy nextest filter. No build-order, seam or phase-check
+  change. No locked ledger item is touched; the shield race was logged as an owner question for PRD-02's lane,
+  not a ledger change.
