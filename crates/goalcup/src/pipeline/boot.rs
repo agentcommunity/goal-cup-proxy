@@ -2,51 +2,38 @@
 //! recovery of the boot before, `counts.jsonl` and the live state set before the writer starts,
 //! then the mask worker and the writer, the `start` event and what follows it.
 
-use super::clock::{self, Mono, now_pair};
-use super::counts::{self, CountsLog};
+use super::clock::{self, Mono};
+use super::counts::CountsLog;
 use super::cursors::Cursors;
 use super::fds::{self, Target};
 use super::item::Item;
 use super::status::{Board, EXIT_WRITER_STALLED, Off};
 use super::writer::{EXIT_WRITE_ERROR, fail};
-use super::{EXIT_PIPELINE_GONE, Recorder, mask_worker, secure, writer};
+use super::{EXIT_PIPELINE_GONE, Recorder, dead, mask_worker, secure, writer};
 use crate::mask::Masker;
 use crate::watchdog::{Exit, HarnessFacts, Prev, StartFacts, Typed};
-use goalcup_format::{GapReason, PartWriter, Record, Recover};
+use goalcup_format::{GapReason, PartWriter, Record};
 use serde_json::{Map, Value, json};
-use std::fs::{File, OpenOptions};
+use std::fs::File;
 use std::io;
-use std::os::fd::AsRawFd;
-use std::os::unix::fs::OpenOptionsExt;
 use std::path::Path;
 use std::sync::mpsc;
 use std::time::Duration;
 
 /// The zstd window of a recorder's part files: 2^27 (ledger F2).
-const WINDOW_LOG: u32 = 27;
+pub(super) const WINDOW_LOG: u32 = 27;
 /// Another recorder still holds the entry after 10 s (PRD-02 section 9.2 step 2).
 const EXIT_LOCKED: i32 = 73;
 
 /// Takes `rec/lock` with `flock` for the life of the process, waiting up to 10 s of boot time for
 /// a dying boot to let it go; else exit 73, so two recorders never write one entry.
 pub(super) fn lock(entry_dir: &Path) -> File {
-    let f = OpenOptions::new()
-        .create(true)
-        .truncate(false)
-        .write(true)
-        .mode(0o600)
-        .open(entry_dir.join("rec").join("lock"));
     let t0 = Mono::now();
-    if let Ok(f) = f {
-        loop {
-            // SAFETY: `f` is an open file for the whole call; flock changes no memory.
-            if unsafe { libc::flock(f.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 {
-                return f;
-            }
-            if Mono::now().ns().saturating_sub(t0.ns()) >= 10_000_000_000 {
-                break;
-            }
-            std::thread::sleep(Duration::from_millis(100));
+    while let Ok(f) = dead::try_lock(entry_dir) {
+        match f {
+            Some(f) => return f,
+            None if Mono::now().ns().saturating_sub(t0.ns()) >= 10_000_000_000 => break,
+            None => std::thread::sleep(Duration::from_millis(100)),
         }
     }
     secure::die(EXIT_LOCKED, "entry_locked")
@@ -72,16 +59,13 @@ pub(super) fn open(
     harness: Option<&HarnessFacts>,
 ) -> io::Result<Option<Opened>> {
     let dir = entry_dir.join("rec");
-    let (opts, now, id) = (
-        writer::part_options(WINDOW_LOG),
-        now_pair(),
-        clock::boot_id(),
-    );
+    let rv = dead::Recovery::of(entry_dir);
     match goalcup_format::read::part_files(&dir) {
         Ok(files) if !files.is_empty() => {}
         Err(e) if e.kind() != io::ErrorKind::NotFound => return Err(e),
         _ => {
-            let part = PartWriter::open(&dir, opts, entry, id, now)?;
+            let part =
+                PartWriter::open(&dir, writer::part_options(WINDOW_LOG), entry, rv.id, rv.now)?;
             let (next_seq, gap) = (0, None);
             return Ok(Some(Opened {
                 part,
@@ -90,33 +74,9 @@ pub(super) fn open(
             }));
         }
     }
-    // `durable` cuts index lines a reboot may have lost: only under a new `boot_id`.
-    let cursors = Cursors::read(entry_dir);
-    let me = hex::encode(id);
-    let durable = (cursors.boot_id.as_ref())
-        .filter(|b| **b != me)
-        .and(cursors.durable.as_ref())
-        .map(|d| (d.part.as_str(), d.index_len));
-    // The dead boot's COUNT: its `counts.jsonl` line at that LINK, or a recount when the line is
-    // gone (a torn tail).
-    let count_at = |seq| {
-        counts::count_at(entry_dir, seq).unwrap_or_else(|| counts::recount_at(entry_dir, seq))
-    };
-    let lineless = !counts::has_index_line(&dir);
-    let r = PartWriter::recover(
-        &dir,
-        opts,
-        Recover {
-            entry,
-            boot_id: id,
-            now,
-            durable,
-            count_at: &count_at,
-            tail: down_tail(prev, lineless),
-            dead_start: harness.and_then(|h| harness_start(h, now)),
-            seal: None,
-        },
-    )?;
+    let tail = down_tail(prev, rv.lineless);
+    let dead_start = harness.and_then(|h| harness_start(h, rv.now));
+    let r = rv.recover(entry_dir, entry, tail, dead_start, None)?;
     Ok(r.writer.map(|part| Opened {
         part,
         next_seq: r.line.map_or(0, |l| l.seq + 1),
@@ -127,7 +87,7 @@ pub(super) fn open(
 /// The `recorder_down` tail: a cause the previous boot named itself (`watchdog_lost`,
 /// `null_mode` with its exits and last exit) as is, else `{"cause", "prev"}` from its exit; plus
 /// `exits` for an entry that left no index line.
-fn down_tail(prev: Option<Prev>, lineless: bool) -> Map<String, Value> {
+pub(super) fn down_tail(prev: Option<Prev>, lineless: bool) -> Map<String, Value> {
     let mut t = match prev {
         Some(Prev::Cause(c)) => match serde_json::to_value(c) {
             Ok(Value::Object(m)) => m,
@@ -301,6 +261,7 @@ pub(super) fn start_event(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::pipeline::clock::now_pair;
     use goalcup_format::{EndReason, StreamKind};
     use std::io::Write;
 
