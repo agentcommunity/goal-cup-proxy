@@ -25,7 +25,8 @@ SEAM = {k: tuple(v.split(".")) for k, v in {
     "s4_mode": "mode", "s4_port": "port", "s4_harness_pid": "harness.pid", "s4_requests": "written.model_requests",
     "s4_off": "written.off_ms", "s4_seal": "seal.reason", "s4_pid": "pid", "s4_spans": "off.spans", "s4_down_ms": "off.ms",
     "s4_since": "off.since", "s4_last": "last_request_at", "s9_final": "final", "s9_keep": "keep", "s9_state": "state",
-    "s6_hosts": "counts.hosts", "s6_tunnel_hosts": "counts.tunnel_hosts", "c_row": "k", "c_host": "host",
+    "s6_hosts": "counts.hosts", "s6_tunnel_hosts": "counts.tunnel_hosts", "s6_fd_limit": "fd_limit", "s4_updated": "updated",
+    "s9_beat_ok": "beat.last_ok", "s9_class": "last_error.class", "s9_pruned": "pruned.parts", "c_row": "k", "c_host": "host",
     "c_kind": "host_kind", "c_thread": "thread"}.items()}  # c_: one S7 calls.jsonl line
 S7_TOKENS = ("input", "cached", "cache_write", "output", "reasoning")  # S7 models[].tokens keys
 # PRD-08's `secrets` JSON (S12). A key below makes the scan fail by itself: a known value, an unglued shape, or a
@@ -37,12 +38,17 @@ SECRET_HITS = ("hits", "known_hits", "shape_hits", "big_masks")
 # Google line is masked under the shell rule, row 11, which wins over `google_key`, row 13.
 PLANTED = (("openai_key",), ("github_token",), ("google_key", "generic_secret_assignment"), ("jwt",), ("private_key",),
            ("url_password",))
-DOWN = ("recorder_down", "null_mode", "watchdog_lost")
+# Section 3.1: the GAP kinds (PRD-01 reasons, PRD-02 causes) a fault row may name without it being a loss. kill-recorder keeps
+# null_mode here so its own check can name it; route-drop: a body cut part way is `decode_failed` (PRD-03 5a); the
+# rest name none. A kind not listed here names nothing.
+FAULT_GAPS = {"kill-recorder": ("recorder_down", "null_mode"), "kill-watchdog-recover": ("recorder_down", "watchdog_lost"),
+              "kill-both": ("recorder_down", "abandoned"), "route-drop": ("decode_failed",)}
+CLEAN = ("kill-watchdog", "freeze", "cut-worker", "fd-limit")  # rows that expect no loss: "checks as a clean run"
+CRASH_SLACK = datetime.timedelta(seconds=5)  # PRD-02 9.1: a recorder_down gap starts at most about 1 s before a plain kill
 DOWN_ERR = re.compile(r"(?<!\d)5\d\d(?!\d)|overloaded|server_error|api_error|internal", re.I)  # S6 keys are
 REFUSED_ERR = re.compile(r"(?<!\d)40[13](?!\d)|auth|permission|api_key|quota|billing", re.I)  # kinds or codes
 RECOVER = ("nothing to recover", "Recording is on again")  # PRD-10 acceptance 11: first, second recover
 STATUS_RECOVER = "Run: goalcup recover"  # PRD-10 acceptance 11: the status line after the recorder kill
-BUILT_FAULTS = ("kill-recorder", "kill-watchdog-recover")
 C1_IDS = ("gap_has_end", "history_complete", "streams_closed", "seen_matches_written", "recorder_alive", "listed_hosts_decrypted")
 RANK = {"pass": 0, "warn": 1, "skip": 2, "named": 3, "fail": 4}
 ORDER = {"PASS": 0, "INCONCLUSIVE": 1, "FAIL": 2}
@@ -72,9 +78,9 @@ def watchers(meta):
 
 def expected_gaps(r):
     """The GAP kinds a row may name without it being a loss: the seal's after_stop (PRD-08 R2), a refused call for a
-    script that expects one (PRD-03 acceptance 7), pinned for a dodger (section 2), the recorder gaps of a fault row."""
+    script that expects one (PRD-03 acceptance 7), pinned for a dodger (section 2), FAULT_GAPS for a fault row."""
     return ({"after_stop"} | ({LOSS_GAP} if any(s in EXPECTS_LOSS for _, s in watchers(r.meta)) else set())
-            | ({"pinned"} if r.meta.get("case") == "dodger" else set()) | (set(DOWN) if fault_kinds(r.meta) else set()))
+            | ({"pinned"} if r.meta.get("case") == "dodger" else set()) | {g for k in fault_kinds(r.meta) for g in FAULT_GAPS.get(k, ())})
 
 def dig(doc, name):
     for key in SEAM[name]:
@@ -284,7 +290,7 @@ def local(r, few):
     code, named = dig(r.local, "s6_exit"), {k.split(":")[0] for k, n in r.gaps()[1].items() if n}
     allowed = expected_gaps(r)
     explained = code == 1 and named and named <= allowed and not any(dig(e, "s6_off") for e in r.entries)
-    r.flag(r.meta.get("case") in ("direct", "gateway") and not fault_kinds(r.meta) and not r.failed and code != 0 and not explained,
+    r.flag(r.meta.get("case") in ("direct", "gateway") and set(fault_kinds(r.meta)) <= set(CLEAN) and not r.failed and code != 0 and not explained,
            "C1", "FAIL", "verifier exit %s, the %s case expects 0 or only the GAPs %s" % (
                code, r.meta.get("case"), ", ".join(sorted(allowed))))
     own = sorted(i for i in r.failed if i != "secrets")  # `secrets` is C3's
@@ -400,7 +406,7 @@ def c6(r):
     r.flag(dig(st, "s4_mode") != "sealed", "C6", "FAIL", "status.json mode %s, not sealed" % dig(st, "s4_mode"))
     want = [("verifier model_requests", dig(r.entry, "s6_requests"), final),
             ("verifier off_ms", dig(r.entry, "s6_off"), dig(st, "s4_off")),
-            ("end screen requests", r.meta.get("end_screen_requests"), final)]
+            ("end screen requests", r.meta.get("end_screen_requests"), final)][:2 + ("kill-both" not in fault_kinds(r.meta))]  # kill-both: the screen is the new part's
     if isinstance(r.fetch, dict):
         want.append(("fetch.json model_requests", dig(r.fetch, "s13_requests"), final))
     for what, theirs, ours in want:
@@ -425,12 +431,17 @@ def fired(r, *kinds):
     return [f for f in r.faults if f.get("kind") in kinds and f.get("pid") is not None]
 
 def faults(r):
-    """Section 3.1, for the two faults built so far; any other kind makes the row INCONCLUSIVE."""
+    """Section 3.1: a named loss outside the kind's gaps (FAULT_GAPS) is a FAIL; then each kind's own expectations."""
     kinds = fault_kinds(r.meta)
-    for k in sorted(set(kinds) - set(BUILT_FAULTS)):
-        r.mark("faults", "INCONCLUSIVE", "expectations for %s not built yet" % k)
-    if not set(kinds) & set(BUILT_FAULTS):
-        return
+    other = sorted(k for k, n in r.gaps()[1].items() if n and k.split(":")[0] not in expected_gaps(r))
+    r.flag(other, "faults", "FAIL", "named loss other than the expected gaps: %s" % ", ".join(other))  # C1, C2
+    if {"kill-recorder", "kill-watchdog-recover"} & set(kinds):
+        recorder_kills(r, kinds)
+    for k in sorted(set(kinds) & set(KIND_CHECKS)):
+        KIND_CHECKS[k](r)
+
+def recorder_kills(r, kinds):
+    """kill-recorder (PRD-02 R1) and kill-watchdog-recover (PRD-10 acceptance 11)."""
     kills = fired(r, "kill-recorder")
     missed = [when(f.get("at")) for f in r.faults if f.get("kind") == "kill-recorder" and f.get("pid") is None]
     short = "fault did not fire: %d of %d kills" % (len(kills), kinds.count("kill-recorder"))
@@ -460,8 +471,6 @@ def faults(r):
     r.flag(kills and "kill-recorder" in kinds and (not res or set(res) - {"ok", "FAIL"}), "faults",
            "INCONCLUSIVE", "recovery not observed: wait-recovery %s" % (", ".join(map(str, res)) or "not run"))
     gaps, counts = r.gaps()
-    other = sorted(k for k, n in counts.items() if n and k.split(":")[0] not in expected_gaps(r))
-    r.flag(other, "faults", "FAIL", "named loss other than the expected gaps: %s" % ", ".join(other))  # C1, C2
     if gaps is None:
         return r.mark("faults", "INCONCLUSIVE", "recorder_down gaps not readable from inv6")
     span = [(when(g.get("start")), when(g.get("end")), g.get("ms")) for g in gaps]
@@ -497,10 +506,113 @@ def recover(r, gaps):
         r.flag(f.get("exit") != 0 or words not in str(f.get("said")), "faults", "FAIL",
                "recover at %s: exit %s, not the expected outcome" % (f.get("at"), f.get("exit")))
     r.flag(len(gaps) != 1, "faults", "FAIL", "%d recorder_down gaps, the recover row expects 1" % len(gaps))
+    sealed_as(r, "harness_exit", "deadline")
+
+def sealed_as(r, *want):
+    """The seal reason must be one of `want`: else a FAIL, or INCONCLUSIVE when the pad sealed the run at the spend cap."""
     seal = dig(r.entry, "s6_seal") or dig(r.status, "s4_seal")
-    if seal not in ("harness_exit", "deadline") and r.meta.get("over_cap") is True:  # section 7: pad sealed it
+    if seal not in want and r.meta.get("over_cap") is True:  # section 7: pad sealed it
         return r.mark("faults", "INCONCLUSIVE", "sealed at the spend cap (seal reason %s)" % seal)
-    r.flag(seal not in ("harness_exit", "deadline"), "faults", "FAIL", "seal reason %s" % seal)
+    r.flag(seal not in want, "faults", "FAIL", "seal reason %s, expected %s" % (seal, " or ".join(want)))
+
+def once(r, kind):
+    """The last faults.jsonl line of this kind and its time, or (None, None)."""
+    f = next((f for f in reversed(r.faults) if f.get("kind") == kind), None)
+    return f, f and when(f.get("at"))
+
+def watchdog_row(r):
+    """kill-watchdog (PRD-02 R5): seal reason harness_exit within 35 s of the harness's exit (status.json `updated`)."""
+    gone, t = once(r, "harness-exit")
+    if not fired(r, "kill-watchdog"):
+        return r.mark("faults", "INCONCLUSIVE", "fault did not fire: kill-watchdog")
+    if not (gone and gone.get("seen") and t):
+        return r.mark("faults", "INCONCLUSIVE", "the harness exit was not seen")
+    sealed_as(r, "harness_exit")
+    end = when(dig(r.status, "s4_updated"))
+    secs = (end - t).total_seconds() if end else None
+    r.flag(secs is None, "faults", "INCONCLUSIVE", "status.json has no seal time")
+    r.flag(secs and secs > 35, "faults", "FAIL", "sealed %d s after the harness exit, over 35 s" % (secs or 0))
+
+def both_row(r):
+    """kill-both (PRD-02 R7, PRD-06 U8): the old entry sealed `recovered` with an `abandoned` gap, no gap before the crash."""
+    f = next((f for f in fired(r, "kill-both") if f.get("watchdog") is not None), None)
+    if not f:
+        return r.mark("faults", "INCONCLUSIVE", "fault did not fire: kill-both")
+    sealed_as(r, "recovered")
+    gaps = r.gaps()[0]
+    if gaps is None:
+        return r.mark("faults", "INCONCLUSIVE", "recorder_down gaps not readable from inv6")
+    r.flag(not any(g.get("cause") == "abandoned" for g in gaps), "faults", "FAIL", "no abandoned gap")
+    k = when(f.get("at"))
+    r.flag(k and any((a := when(g.get("start"))) and a < k - CRASH_SLACK for g in gaps), "faults", "FAIL", "a gap starts before the crash window")
+
+def uploaded(r, t, beat_s):
+    """After t (the thaw or the lift), from watch/upload.jsonl (S9, a line a minute, so the catch-up has that minute of
+    slack): the first heartbeat within beat_s s and the server caught up within 3 minutes. Not read where server is off."""
+    if r.meta.get("server", "off") == "off":
+        return r.why.append("faults: server off, heartbeat and catch-up not read")
+    if not t:
+        return r.mark("faults", "INCONCLUSIVE", "the thaw or the lift was not recorded")
+    after = [(a, u) for a, u in ((when(u.get("pad_at")), u) for u in load(r.folder, "watch/upload.jsonl", 1)) if a and a > t]
+    beats = [b for b in (when(dig(u, "s9_beat_ok")) for _, u in after) if b and b > t]
+    first = (min(beats) - t).total_seconds() if beats else None
+    r.flag(first is None, "faults", "INCONCLUSIVE", "no heartbeat read after the lift")
+    r.flag(first and first > beat_s, "faults", "FAIL", "first heartbeat %d s after the lift, over %d s" % (first or 0, beat_s))
+    done = [a for a, u in after if dig(u, "s9_state") in ("caught_up", "done")]
+    seen = (max([a for a, _ in after]) - t).total_seconds() if after else 0
+    r.flag(not done and seen <= 240, "faults", "INCONCLUSIVE", "the samples end before the catch-up window closes")
+    r.flag(not done and seen > 240 or done and (min(done) - t).total_seconds() > 240, "faults", "FAIL",
+           "the server had not caught up within 3 minutes (the sample minute added)")
+
+def freeze_row(r):
+    """freeze (PRD-06 sleep stand-in): first heartbeat after SIGCONT within 10 s, the server caught up within 3 minutes."""
+    if not (once(r, "freeze")[0] and once(r, "thaw")[0]):
+        return r.mark("faults", "INCONCLUSIVE", "fault did not fire: freeze")
+    uploaded(r, once(r, "thaw")[1], 10)
+
+def cut_row(r):
+    """cut-worker (PRD-06 U3, U5): during the cut upload.json waits with class network and prunes nothing; after the
+    lift the first heartbeat within 2 minutes and the server caught up within 3."""
+    f, t0 = once(r, "cut-worker")
+    if not (f and f.get("took") and t0):
+        return r.mark("faults", "INCONCLUSIVE", "not run: cut did not take")
+    t1 = once(r, "cut-lifted")[1]
+    inside = [u for u in load(r.folder, "watch/upload.jsonl", 1) if (a := when(u.get("pad_at"))) and t0 < a and (not t1 or a < t1)]
+    if r.meta.get("server", "off") != "off":
+        r.flag(not inside, "faults", "INCONCLUSIVE", "no upload.json line during the cut")
+        r.flag(inside and not any(dig(u, "s9_state") == "waiting" and dig(u, "s9_class") == "network" for u in inside), "faults",
+               "FAIL", "upload.json never showed waiting with class network during the cut")
+        r.flag(len({dig(u, "s9_pruned") for u in inside} - {None}) > 1, "faults", "FAIL", "a part file was pruned during the cut")
+    uploaded(r, t1, 120)
+
+def route_row(r):
+    """route-drop: the harness goes on writing after the route is back, listed hosts stay decrypted, no refusal_after_trust."""
+    (gone, t0), (back, t1) = once(r, "route-drop"), once(r, "route-back")
+    if not (gone and back and t0 and t1):
+        return r.mark("faults", "INCONCLUSIVE", "fault did not fire: route-drop")
+    r.flag(back.get("default") is not True, "faults", "INCONCLUSIVE", "the default route was not back")
+    got = r.check("listed_hosts_decrypted")
+    r.flag(got != "pass", "faults", "FAIL" if got else "INCONCLUSIVE", "listed_hosts_decrypted %s" % (got or "not in the report"))
+    r.flag((worst(r.entries, "listed_hosts_decrypted").get("facts") or {}).get("refusal_after_trust"), "faults", "FAIL",
+           "refusal_after_trust is set")
+    reqs = [(when(s.get("pad_at")), dig(s, "s4_requests")) for s in r.samples if isinstance(dig(s, "s4_requests"), int)]
+    old, new = [n for t, n in reqs if t and t < t0], [n for t, n in reqs if t and t > t1]
+    fail(r, old and new and max(new) <= max(old), t0, None, "no model request written after the route came back")
+    r.flag(not (old and new), "faults", "INCONCLUSIVE", "no status sample on both sides of the drop")
+
+def fd_row(r):
+    """fd-limit (PRD-02 R4): the start event's fd_limit above 256 (S6, if PRD-08 writes it), else the soft limits pad-run
+    read from /proc: the recorder above 256, the harness at least min(4096, its hard limit)."""
+    f, start = once(r, "fd-limit")[0] or {}, dig(r.entry, "s6_fd_limit")
+    if isinstance(start, int):
+        return r.flag(start <= 256, "faults", "FAIL", "start event fd_limit %d, not raised" % start)
+    rec, har = f.get("recorder"), f.get("harness")
+    if not (rec and har):
+        return r.mark("faults", "INCONCLUSIVE", "fd_limit not readable")
+    r.flag(rec[0] <= 256 or har[0] < min(4096, har[1]), "faults", "FAIL", "soft limit not raised: recorder %s, harness %s" % (rec, har))
+
+KIND_CHECKS = {"kill-watchdog": watchdog_row, "kill-both": both_row, "freeze": freeze_row, "cut-worker": cut_row,
+               "route-drop": route_row, "fd-limit": fd_row}
 
 def facts(r):
     u, e, m = r.usage or {}, r.entry, r.meta

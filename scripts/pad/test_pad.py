@@ -133,7 +133,7 @@ class Walk(unittest.TestCase):
         self.assertIn(["list", "--prefix", "pad-"], calls)
 
     def test_spans_and_upload_suffix_still_end_with_a_table(self):  # section 1a: no step stops the rig
-        self.walk(steps=["cut-worker@1+10", "kill-both@5+upload"])
+        self.walk(steps=["cut-worker@1+10", "kill-both@5+upload", "freeze@2+3", "route-drop@4", "kill-watchdog@8", "fd-limit@0"])
 
     def test_staging_approval_values_reach_only_the_request(self):  # rung 2; the scan in walk covers argv and files
         ok = {"result": "ok", "saw": ""}
@@ -227,6 +227,25 @@ class BoxHalf(unittest.TestCase):
         self.assertNotIn("PADSENTINEL", json.dumps(got))
 
 
+class FaultRestore(unittest.TestCase):
+    """Point 3: a fault never outlives its step. hold() undoes in a finally, with a detached backstop for a killed pad-run,
+    and the frozen tree never holds pad-run, the shell running the step, or tmux."""
+
+    def test_hold_undoes_when_the_fault_fails(self):
+        undone = []
+        r = padrun.Run(self.enterContext(tempfile.TemporaryDirectory()), "freeze")
+        def boom():
+            raise OSError("no sudo")
+        with mock.patch.object(padrun.subprocess, "Popen") as backstop, mock.patch.object(padrun.signal, "signal"):
+            with self.assertRaises(OSError):
+                r.hold(1, boom, lambda: undone.append(1), "kill -CONT 1")
+        self.assertEqual((undone, backstop.call_args.kwargs["start_new_session"]), ([1], True))
+
+    def test_frozen_tree_leaves_this_process_and_its_parents(self):
+        got = padrun.Run(self.enterContext(tempfile.TemporaryDirectory()), "freeze").tree([os.getppid(), os.getpid()])
+        self.assertFalse({os.getpid(), os.getppid()} & set(got))
+
+
 class CrashRows(unittest.TestCase):
     """Section 3.1, ledger R3a and R3b: one closed recorder_down gap per kill under 2 s, no null_mode gap; the
     recover row keeps the harness pid and port. Only result values are asserted."""
@@ -294,9 +313,9 @@ class SecretCheck(unittest.TestCase):
     PLANTED = {"openai_key": 1, "github_token": 1, "generic_secret_assignment": 1, "jwt": 1, "private_key": 1,
                "url_password": 1, "auth": 8}
 
-    def c3(self, masks, secrets_exit=1, plain_exit=0, more=None):
+    def c3(self, masks, secrets_exit=1, plain_exit=0):
         return evaluate({"meta.json": {"connector": "codex-cli", "case": "direct", "known_box": True, "entry": "e1"},
-                         "verify/secrets.json": dict(more or {}, masks=masks), "verify/secrets-conductor.json": {"hits": 0},
+                         "verify/secrets.json": {"masks": masks}, "verify/secrets-conductor.json": {"hits": 0},
                          "verify/exits.json": {"secrets": secrets_exit, "secrets-out": 0, "secrets-plain": plain_exit}}
                         )["checks"]["C3"]
 
