@@ -50,7 +50,7 @@ The build uses each default below until the owner answers.
 - PRD-11 hand-off: repoint the harness facts sheets in `docs/harnesses/` from
   [HARNESS-SETUP](docs/HARNESS-SETUP.md) to the [participant's guide](docs/PARTICIPANT-GUIDE.md#3-set-up),
   then move HARNESS-SETUP to `docs/archive/`. Until then it is a temporary duplicate and still
-  describes `goalcup mcp` (removed, D84).
+  describes the removed MCP command (D84).
 
 ## After the merge to main
 

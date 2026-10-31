@@ -5,8 +5,7 @@ connector is its TOML file plus one `entry!("<id>")` line in `crates/goalcup/src
 one source file that names connector files; `tests/connector_builtin.rs` fails on a file missing from that
 list or an `id` that differs. Tiers live in [`connectors/tiers.toml`](../connectors/tiers.toml), not in a
 connector. Nothing is pinned. The `start` event names the connector (`connector`, `connector_source`,
-`connector_sha256`) and the host list's hash (`hosts_sha256`). `setup` is built; `start` stops after its
-folder checks and `continue` is not built, so a run applies these rules once `start` is built.
+`connector_sha256`) and the host list's hash (`hosts_sha256`). `setup` is built, and `start` loads the connector and the host list and runs the checks.
 
 ## The connector contract
 

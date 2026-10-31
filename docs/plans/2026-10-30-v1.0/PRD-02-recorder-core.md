@@ -1619,3 +1619,7 @@ Two planning passes (`/root/gc-night/prd02/path-plan.md` and `audit-fix-plan.md`
   and S8 need wrap-up to finish. Fix by keeping INT, QUIT and TSTP caught until wrap-up ends, as HUP is, or
   drain `sigpending` before giving them back. Then remove the `ignore` on the ctrl-c case in
   `lessons_launch.rs`. No locked ledger item is touched.
+
+### 2026-10-31, replan after PRD-03 slice 3 (merge c81e8e9b): serve is available
+
+`proxy::serve(listener: std::net::TcpListener, ctx: ProxyCtx { recorder, hosts, ca }) -> ProxyHandle` is on integration, a plain `fn` that owns its runtime, and `ProxyHandle::quiet_since() -> Mono` feeds the quiet-wire check. Slice A (`boot.rs`) may call it directly; do not wrap it in a thread or a channel. Until `h2.rs` lands an h2-only client is recorded with a named `h2_unsupported` GAP, not a tunnel. No locked ledger item is touched.
