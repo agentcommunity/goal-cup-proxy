@@ -1543,3 +1543,16 @@ What the pad calls, as merged (PRD-12 note):
 - Still gated, unchanged: hand-over and end screen, `continue`, recover and seal on a dead entry wait for
   `watchdog::run`, `watchdog::recover` and `pipeline::close_dead_entry` on integration.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-31, fix pass on the start hand-over slice
+
+- **Seam ask to PRD-02:** a ready hook in `watchdog::run` (called after the recorder's `ready`, before
+  the harness starts), so `start` can print the "Recording" line in order instead of from a polling
+  thread, and install its Ctrl-C handler at the same point.
+- **SIGTERM to `goalcup start` is not translated into a seal.** The watchdog process has no SIGTERM
+  handler in PRD-10 or PRD-02; `goalcup seal` closes the part and writes its own reason.
+- **Exit 78 is a masking refusal only with no `status.json`.** A harness that exits 78 leaves a
+  recorded part and goes through the end screen.
+- **Still open (slice 10):** `continue` (`close_dead_entry`), `recover` and `seal` on a dead entry
+  (acceptance 10 and 11) wait for `watchdog::recover` and `pipeline::close_dead_entry`. This slice
+  delivers the start hand-over and the end screen only; it does not close PRD-10.
