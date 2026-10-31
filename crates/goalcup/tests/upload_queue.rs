@@ -139,7 +139,10 @@ fn an_older_sealed_entry_goes_whole_and_sealed() {
     assert!(until(done), "the older entry is done");
     assert_eq!(fake.stream(OLD), all, "the server holds cat rec-*.gcr.zst");
     assert_eq!(state::read(&old).unwrap().final_, Final::Sealed);
-    assert!(until(|| fake.stream(ENTRY) == mine), "the live entry goes too");
+    assert!(
+        until(|| fake.stream(ENTRY) == mine),
+        "the live entry goes too"
+    );
 }
 
 #[test]
@@ -161,7 +164,10 @@ fn a_refused_older_entry_never_stops_the_live_entry() {
     let run_dir = run(home.path(), RUN_ID, &fake.url(), DEADLINE);
     let (_, mine) = entry(&run_dir, ENTRY, false);
     let _h = live(home.path(), &run_dir);
-    assert!(until(|| fake.stream(ENTRY) == mine), "the live entry is stored");
+    assert!(
+        until(|| fake.stream(ENTRY) == mine),
+        "the live entry is stored"
+    );
     let refused = || {
         let e = state::read(&old).and_then(|j| j.last_error);
         e.is_some_and(|e| e.status == Some(401))
@@ -174,7 +180,12 @@ fn a_refused_older_entry_never_stops_the_live_entry() {
 fn an_older_entry_past_upload_by_is_closed_and_not_sent() {
     let fake = FakeWorker::start();
     let home = tempfile::tempdir().unwrap();
-    let earlier = run(home.path(), "r00000000000000b2", &fake.url(), "2020-01-01T00:00:00Z");
+    let earlier = run(
+        home.path(),
+        "r00000000000000b2",
+        &fake.url(),
+        "2020-01-01T00:00:00Z",
+    );
     let (old, _) = entry(&earlier, OLD, true);
     let run_dir = run(home.path(), RUN_ID, &fake.url(), DEADLINE);
     let (_, mine) = entry(&run_dir, ENTRY, false);
@@ -183,7 +194,10 @@ fn an_older_entry_past_upload_by_is_closed_and_not_sent() {
     assert!(until(closed), "upload.json says closed");
     assert!(until(|| fake.stream(ENTRY) == mine));
     assert!(!touched(&fake), "nothing of it is sent");
-    assert!(part_files(&old.join("rec")).unwrap().len() > 1, "nothing pruned");
+    assert!(
+        part_files(&old.join("rec")).unwrap().len() > 1,
+        "nothing pruned"
+    );
 }
 
 #[test]

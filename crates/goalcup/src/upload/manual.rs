@@ -113,7 +113,9 @@ pub fn run(entry_dir: &Path, run_dir: &Path, ids: (&str, &str), keep: bool) -> O
 /// `status.json`'s seal, when it says `sealed`.
 fn status_seal(entry_dir: &Path) -> Option<SealStatus> {
     let status = cli::read_json::<Status>(&cli::status_json(entry_dir));
-    status.filter(|s| s.mode == Mode::Sealed).and_then(|s| s.seal)
+    status
+        .filter(|s| s.mode == Mode::Sealed)
+        .and_then(|s| s.seal)
 }
 
 /// The server holds a sealed entry ending at the seal LINK's offset: when its `next_seq - 1` and
@@ -250,7 +252,9 @@ impl Entry {
         }
         let refused = snap.last_error.filter(|e| e.class == Class::Refused);
         let status = refused.and_then(|e| e.status);
-        status.filter(|s| ends_manual_upload(*s)).map(|s| give_up(s, &self.j))
+        status
+            .filter(|s| ends_manual_upload(*s))
+            .map(|s| give_up(s, &self.j))
     }
 
     /// Writes `upload.json` now.
@@ -279,7 +283,10 @@ impl Queue {
     /// `upload.lock` go.
     pub fn serve(&mut self, home: &Path, live: &Path) {
         let now = Mono::now();
-        if self.listed.is_none_or(|t| policy::after(t, 60 * TICK) <= now) {
+        if self
+            .listed
+            .is_none_or(|t| policy::after(t, 60 * TICK) <= now)
+        {
             self.listed = Some(now);
             self.list(home, live);
         }
@@ -299,7 +306,7 @@ impl Queue {
     /// Adds the older entries not yet queued, oldest run first (by `server.json` time, else the
     /// folder's), each run's entries oldest first.
     fn list(&mut self, home: &Path, live: &Path) {
-        for run_dir in by_age(&home.join("runs"), 'r', |p| cli::server_json(p)) {
+        for run_dir in by_age(&home.join("runs"), 'r', cli::server_json) {
             for dir in by_age(&run_dir, 'e', Path::to_path_buf) {
                 let queued = self.entries.iter().any(|e| e.dir == dir);
                 if dir == live || queued || self.left.contains(&dir) {
@@ -324,7 +331,11 @@ fn by_age(dir: &Path, first: char, at: fn(&Path) -> PathBuf) -> Vec<PathBuf> {
         .flatten()
         .flatten()
         .map(|e| e.path())
-        .filter(|p| p.is_dir() && p.file_name().is_some_and(|n| n.to_string_lossy().starts_with(first)))
+        .filter(|p| {
+            p.is_dir()
+                && p.file_name()
+                    .is_some_and(|n| n.to_string_lossy().starts_with(first))
+        })
         .map(|p| (time(&at(&p)).or_else(|| time(&p)), p))
         .collect();
     found.sort();
