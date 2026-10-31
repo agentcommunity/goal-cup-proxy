@@ -33,8 +33,9 @@ pub struct Tail {
     /// rather than from the first PART's `raw_offset`. Final once [`Reader::next`] has returned
     /// `None`; it includes the bytes of a record cut at the end ([`Tail::truncated`]). After an
     /// error it counts the bytes taken through the part of the bad record already read (its head,
-    /// and its body when the body failed to decode), not the whole input; the error message gives
-    /// the bad record's raw offset.
+    /// and its body when the body failed to decode), not the whole input. Every error the reader
+    /// returns, a decode or input error included, ends with "at raw offset N", where N is the raw
+    /// offset of the bad record's first byte.
     pub raw: u64,
 }
 
@@ -141,14 +142,20 @@ impl<R: Read> Reader<R> {
         }
     }
 
+    /// Reads one record. Every error names the raw offset where the bad record starts.
     fn next_item(&mut self) -> io::Result<Option<Item>> {
+        self.read_item()
+            .map_err(|e| io::Error::new(e.kind(), format!("{e} at raw offset {}", self.off)))
+    }
+
+    fn read_item(&mut self) -> io::Result<Option<Item>> {
         self.buf.clear();
         if !self.fill(1)? {
             return Ok(None);
         }
         let k = self.buf[0];
         if k == 0 {
-            return Err(invalid(format!("record kind 0 at raw offset {}", self.off)));
+            return Err(invalid("record kind 0"));
         }
         let len = loop {
             if let Some((v, _)) = get_varint(&self.buf[1..])? {
@@ -159,10 +166,7 @@ impl<R: Read> Reader<R> {
             }
         };
         if len > MAX_BODY {
-            return Err(invalid(format!(
-                "record of {len} bytes at raw offset {} is over 16 MiB",
-                self.off
-            )));
+            return Err(invalid(format!("record of {len} bytes is over 16 MiB")));
         }
         let head = self.buf.len();
         if !self.fill(len as usize)? {
