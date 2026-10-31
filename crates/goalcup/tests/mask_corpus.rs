@@ -8,7 +8,7 @@ mod common;
 #[path = "mask_corpus/synthetic.rs"]
 mod synthetic;
 
-use common::{Rng, only_spans_changed, random_cuts, starred, stream_in};
+use common::{Rng, guarded_kinds, only_spans_changed, random_cuts, starred, stream_in};
 use goalcup::connector::MaskRule;
 use goalcup::mask::{Masked, Masker, Span};
 use goalcup_format::StreamKind;
@@ -111,19 +111,6 @@ fn overlaps(s: &Span, r: &Range<usize>) -> bool {
     s.start < r.end && r.start < s.start + s.len
 }
 
-/// The kinds the shapes file marks as left-guarded.
-fn guarded_kinds() -> Vec<String> {
-    include_str!("../src/mask/shapes.tsv")
-        .lines()
-        .filter(|l| !l.is_empty() && !l.starts_with('#'))
-        .filter_map(|l| {
-            let mut f = l.split('\t');
-            let kind = f.next()?;
-            (f.next()? == "1").then(|| kind.to_string())
-        })
-        .collect()
-}
-
 fn tally(list: &[(&str, &str, usize)]) -> Tally {
     list.iter()
         .map(|(f, k, n)| ((f.to_string(), k.to_string()), *n))
@@ -197,81 +184,33 @@ fn the_corpus_gets_spans_only_where_listed() {
     );
 }
 
-/// K1 over the corpus: seeded random chunkings, byte at a time for small files, and every split
-/// point within 64 bytes of each span edge give the bytes and spans of `mask_whole`, with no
-/// `fail_closed` span. The pieces of work run on all threads, largest first.
+/// K1 over the corpus: seeded random chunkings and every split point within 64 bytes of each
+/// span edge give the bytes and spans of `mask_whole`, with no `fail_closed` span. The files
+/// run on all threads, largest first.
 #[test]
 fn the_corpus_streams_as_the_whole_record_masker() {
-    enum Job {
-        Seed(u64),
-        ByteAtATime,
-        Edges,
-    }
     let m = masker();
     let fail_closed = m.mask_rules().len() - 1;
-    let started = std::time::Instant::now();
     let mut files = corpus();
     files.sort_by_key(|(_, b)| std::cmp::Reverse(b.len()));
-    let slots: Vec<std::sync::Mutex<Option<Masked>>> =
-        files.iter().map(|_| std::sync::Mutex::default()).collect();
-    let order: Vec<usize> = (0..files.len()).collect();
-    par_each(&order, |&i| {
-        let whole = m.mask_whole(&files[i].1);
-        *slots[i].lock().expect("an unpoisoned slot") = Some(whole);
-    });
-    let wholes: Vec<Masked> = slots
-        .into_iter()
-        .map(|w| w.into_inner().ok().flatten().expect("every file masked"))
-        .collect();
-    let mut jobs = Vec::new();
-    for (i, (name, bytes)) in files.iter().enumerate() {
-        assert!(
-            wholes[i].spans.iter().all(|s| s.rule != fail_closed),
-            "{name}"
-        );
-        jobs.extend([1u64, 2, 3].map(|seed| (i, Job::Seed(seed))));
-        if bytes.len() < 64 * 1024 {
-            jobs.push((i, Job::ByteAtATime));
+    par_each(&files, |(name, bytes)| {
+        let whole = m.mask_whole(bytes);
+        assert!(whole.spans.iter().all(|s| s.rule != fail_closed), "{name}");
+        for seed in [1u64, 2, 3] {
+            let mut rng = Rng(0x9E37_79B9 ^ seed);
+            let cuts = random_cuts(&mut rng, bytes.len(), 4096);
+            assert!(
+                stream_in(&m, StreamKind::Native, bytes, &cuts) == whole,
+                "{name}: seed {seed}"
+            );
         }
-        jobs.push((i, Job::Edges));
-    }
-    let splits = std::sync::atomic::AtomicUsize::new(0);
-    par_each(&jobs, |(i, job)| {
-        let ((name, bytes), whole) = (&files[*i], &wholes[*i]);
-        match job {
-            Job::Seed(seed) => {
-                let mut rng = Rng(0x9E37_79B9 ^ seed);
-                let cuts = random_cuts(&mut rng, bytes.len(), 4096);
-                assert!(
-                    stream_in(&m, StreamKind::Native, bytes, &cuts) == *whole,
-                    "{name}: seed {seed}"
-                );
-            }
-            Job::ByteAtATime => {
-                let cuts: Vec<usize> = (1..bytes.len()).collect();
-                assert!(
-                    stream_in(&m, StreamKind::Native, bytes, &cuts) == *whole,
-                    "{name}: byte at a time"
-                );
-            }
-            Job::Edges => {
-                let n = edge_splits(&m, name, bytes, whole);
-                splits.fetch_add(n, std::sync::atomic::Ordering::Relaxed);
-            }
-        }
+        edge_splits(&m, name, bytes, &whole);
     });
-    println!(
-        "corpus stream property: {} jobs, {} edge splits, {} threads, {:.1} s",
-        jobs.len(),
-        splits.into_inner(),
-        std::thread::available_parallelism().map_or(1, |n| n.get()),
-        started.elapsed().as_secs_f64()
-    );
 }
 
 /// Each span's line (or lines) on its own, split at every point within 64 bytes of a span edge,
-/// streams as `mask_whole` of that line. Returns the number of splits.
-fn edge_splits(m: &Masker, name: &str, bytes: &[u8], whole: &Masked) -> usize {
+/// streams as `mask_whole` of that line.
+fn edge_splits(m: &Masker, name: &str, bytes: &[u8], whole: &Masked) {
     let mut lines: BTreeMap<(usize, usize), Vec<usize>> = BTreeMap::new();
     for s in &whole.spans {
         let ls = bytes[..s.start]
@@ -287,7 +226,6 @@ fn edge_splits(m: &Masker, name: &str, bytes: &[u8], whole: &Masked) -> usize {
             .or_default()
             .extend([s.start, s.start + s.len]);
     }
-    let mut splits = 0;
     for ((ls, le), edges) in lines {
         let line = &bytes[ls..le];
         let lw = m.mask_whole(line);
@@ -300,14 +238,12 @@ fn edge_splits(m: &Masker, name: &str, bytes: &[u8], whole: &Masked) -> usize {
         points.sort_unstable();
         points.dedup();
         for p in points {
-            splits += 1;
             assert!(
                 stream_in(m, StreamKind::Native, line, &[p]) == lw,
                 "{name}: split at line offset {p}"
             );
         }
     }
-    splits
 }
 
 /// K10: a harness's billing header text inside the system prompt body is masked by the

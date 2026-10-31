@@ -1,6 +1,8 @@
 //! A5, by hand (PRD-05 section 11, PRD-14): masking speed and start-up cost, printed for the
-//! night log. One `#[ignore]` test in no gate tier, with no floor; it never fails. Run it in a
-//! release build:
+//! night log. One `#[ignore]` test in no gate tier, with no floor; it never fails. Every speed
+//! comes with the `fail_closed` bytes of the run and whether its output equals `mask_whole`: a
+//! stream that fails closed skips work, so its speed alone says nothing. Run it in a release
+//! build:
 //!
 //! `cargo test --release -p goalcup --test mask_bench -- --ignored --nocapture by_hand_mask_bench`
 
@@ -17,8 +19,9 @@ use std::hint::black_box;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
-/// MB/s of one stream fed `input` in `piece`-byte pieces, best of passes over at least a second.
-fn speed(m: &Masker, kind: StreamKind, input: &[u8], piece: usize) -> f64 {
+/// One stream fed `input` in `piece`-byte pieces: MB/s (best of passes over at least a
+/// second), then its `fail_closed` bytes and whether its output equals `mask_whole`, as a line.
+fn speed(m: &Masker, kind: StreamKind, input: &[u8], piece: usize) -> String {
     let mut best = Duration::MAX;
     let started = Instant::now();
     while started.elapsed() < Duration::from_secs(1) || best == Duration::MAX {
@@ -30,7 +33,22 @@ fn speed(m: &Masker, kind: StreamKind, input: &[u8], piece: usize) -> f64 {
         black_box(s.finish());
         best = best.min(t.elapsed());
     }
-    input.len() as f64 / 1e6 / best.as_secs_f64()
+    let cuts: Vec<usize> = (1..input.len().div_ceil(piece))
+        .map(|i| i * piece)
+        .collect();
+    let out = common::stream_in(m, kind, input, &cuts);
+    let fail_closed = m.mask_rules().len() - 1;
+    let starred: usize = out
+        .spans
+        .iter()
+        .filter(|s| s.rule == fail_closed)
+        .map(|s| s.len)
+        .sum();
+    format!(
+        "{:.1} MB/s, fail_closed {starred} bytes, equals mask_whole: {}",
+        input.len() as f64 / 1e6 / best.as_secs_f64(),
+        out == m.mask_whole(input)
+    )
 }
 
 /// A line of `/proc/self/status` in kB, when the file is there.
@@ -49,7 +67,7 @@ fn by_hand_mask_bench() {
     };
     let req = synthetic::codex_request();
     println!(
-        "mask_bench: generated Codex request {} bytes in 16 KiB pieces: {:.1} MB/s",
+        "mask_bench: generated Codex request {} bytes in 16 KiB pieces: {}",
         req.bytes.len(),
         speed(&m, StreamKind::HttpReq, &req.bytes, 16 * 1024)
     );
@@ -61,13 +79,14 @@ fn by_hand_mask_bench() {
             .filter_map(|e| Some((e.metadata().ok()?.len(), e.path())))
             .max()
     });
-    match largest.and_then(|(_, p)| Some((std::fs::read(&p).ok()?, p))) {
+    let transcript = largest.and_then(|(_, p)| Some((std::fs::read(&p).ok()?, p)));
+    match &transcript {
         Some((bytes, p)) => println!(
-            "mask_bench: {} ({} bytes) in 16 KiB pieces: {:.1} MB/s",
+            "mask_bench: {} ({} bytes) in 16 KiB pieces: {}",
             p.file_name()
                 .map_or_else(String::new, |n| n.to_string_lossy().into_owned()),
             bytes.len(),
-            speed(&m, StreamKind::Native, &bytes, 16 * 1024)
+            speed(&m, StreamKind::Native, bytes, 16 * 1024)
         ),
         None => println!("mask_bench: no transcript under {}", dir.display()),
     }
@@ -75,7 +94,12 @@ fn by_hand_mask_bench() {
     let mut rng = common::Rng(0xBE7C);
     let mut values = || -> Vec<SecretValue> {
         (0..32)
-            .map(|_| SecretValue::new(ValueSource::Env, rng.chars(common::ALNUM, 256).into_bytes()))
+            .map(|_| {
+                SecretValue::new(
+                    ValueSource::Workspace,
+                    rng.chars(common::ALNUM, 256).into_bytes(),
+                )
+            })
             .collect()
     };
     let rss_before = status_kb("VmRSS:");
@@ -96,7 +120,11 @@ fn by_hand_mask_bench() {
     );
     if let Some(m) = &built {
         let req_speed = speed(m, StreamKind::HttpReq, &req.bytes, 16 * 1024);
-        println!("mask_bench: generated request with those 32 values: {req_speed:.1} MB/s");
+        println!("mask_bench: generated request with those 32 values: {req_speed}");
+        if let Some((bytes, _)) = &transcript {
+            let native = speed(m, StreamKind::Native, bytes, 16 * 1024);
+            println!("mask_bench: the transcript with those 32 values: {native}");
+        }
     }
     println!(
         "mask_bench: RSS before {rss_before:?} kB, after {rss_after:?} kB, peak (VmHWM) {:?} kB",

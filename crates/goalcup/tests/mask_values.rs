@@ -7,7 +7,7 @@ mod common;
 
 use base64::Engine;
 use base64::engine::general_purpose::{STANDARD_NO_PAD, URL_SAFE_NO_PAD};
-use common::{starred, stream_in};
+use common::{ALNUM, Rng, starred, stream_in};
 use goalcup::mask::{Masker, SecretValue, ValueSource, workspace_values};
 use goalcup_format::StreamKind;
 use std::ops::Range;
@@ -135,5 +135,40 @@ fn workspace_values_reads_the_last_gh_token_of_the_first_key_file() -> Res {
         "a value under 20 bytes is not used"
     );
     assert!(workspace_values(&dir.path().join("missing")).is_empty());
+    Ok(())
+}
+
+/// Review X F2: 32 values (the guard; the 33rd is skipped) do not make a stream with many
+/// backslashes fail closed: every `\u` form starts on a backslash, and all forms of one start
+/// are one candidate. The stream equals `mask_whole`, and a planted escaped form is masked.
+#[test]
+fn thirty_two_values_stream_escaped_text_without_failing_closed() -> Res {
+    let mut rng = Rng(0xF2F2);
+    let values: Vec<String> = (0..33).map(|_| rng.chars(ALNUM, 24)).collect();
+    let m = Masker::new(
+        &[],
+        values
+            .iter()
+            .map(|v| SecretValue::new(ValueSource::Workspace, v.clone().into_bytes()))
+            .collect(),
+    )?;
+    let counts = m.value_counts();
+    assert_eq!((counts.workspace, counts.skipped), (32, 1));
+    let escaped: String = values[7].bytes().map(|b| format!("\\u00{b:02x}")).collect();
+    let mut input = String::new();
+    while input.len() < 64 * 1024 {
+        input.push_str(r#"{"text":"caf\u00e9 \"quoted\" \\ path\\to\nnext \t tab"}"#);
+        input.push('\n');
+    }
+    input.push_str(&format!("{{\"t\":\"{escaped}\"}}\n"));
+    let input = input.into_bytes();
+    let whole = m.mask_whole(&input);
+    let at = input.len() - escaped.len() - 3;
+    assert!(starred(&whole, at..at + escaped.len()));
+    let cuts: Vec<usize> = (1..input.len() / 1000).map(|i| i * 1000).collect();
+    let got = stream_in(&m, StreamKind::Native, &input, &cuts);
+    assert_eq!(got, whole);
+    let fail_closed = m.mask_rules().len() - 1;
+    assert!(got.spans.iter().all(|s| s.rule != fail_closed));
     Ok(())
 }

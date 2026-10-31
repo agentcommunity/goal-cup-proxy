@@ -90,6 +90,11 @@ pub(crate) struct Pattern {
     pub(crate) pem: bool,
     /// The left guard applies ([`glued`]).
     pub(crate) guard: bool,
+    /// For a guarded rule: the regex up to its first `{`, a necessary start of every match
+    /// (`sk-(?:proj-)?[A-Za-z0-9_\-]` for `openai_key`). [`candidates`] steps from a glued
+    /// match to the next start with it, not with the whole regex, whose greedy tail would scan
+    /// the same run again from every start inside it.
+    head: Option<Regex>,
 }
 
 impl std::fmt::Debug for Pattern {
@@ -112,12 +117,18 @@ impl Pattern {
     /// A shared literal, or `None` when its regex does not compile.
     pub(crate) fn shared(row: &Row) -> Option<Pattern> {
         let re = Regex::new(row.source).ok()?;
+        let head = row
+            .source
+            .split_once('{')
+            .filter(|_| row.guard)
+            .and_then(|(head, _)| Regex::new(head).ok());
         Some(Pattern {
             span_group: span_group_of(&re),
             soft: row.kind == SOFT_KIND,
             block: row.kind == BLOCK_KIND,
             pem: row.kind == BLOCK_KIND,
             guard: row.guard,
+            head,
             re,
         })
     }
@@ -131,6 +142,7 @@ impl Pattern {
             block: true,
             pem: false,
             guard: false,
+            head: None,
         }
     }
 }
@@ -159,6 +171,7 @@ pub(crate) fn connector(rule: &MaskRule) -> Option<Pattern> {
         block: false,
         pem: false,
         guard: false,
+        head: None,
         re,
     })
 }
@@ -273,7 +286,9 @@ pub(crate) struct Claim {
 ///
 /// The rules match on [`match_view`]`(bytes)`. A guarded match glued to the bytes before it is
 /// dropped and the search goes on from the byte after its start, so a match that starts inside
-/// it is still found, as the stream's recognizers find it.
+/// it is still found, as the stream's recognizers find it. The next start that is not glued is
+/// found with the rule's head ([`Pattern`]), so a long run of glued prefixes (`task-task-…`)
+/// costs one pass, not one pass per prefix.
 pub(crate) fn candidates<'a>(
     set: impl Iterator<Item = &'a Pattern>,
     bytes: &[u8],
@@ -304,17 +319,32 @@ pub(crate) fn candidates<'a>(
             continue;
         }
         if p.guard {
-            let mut at = 0;
-            while let Some(m) = p.re.find_at(bytes, at) {
+            let glued_at = |at: usize| {
                 let mut buf = [0u8; GUARD_BYTES];
-                let n = guard_context(before, &raw[..m.start()], &mut buf);
-                if glued(&buf[..n]) {
-                    at = m.start() + 1;
+                let n = guard_context(before, &raw[..at], &mut buf);
+                glued(&buf[..n])
+            };
+            let head = p.head.as_ref().unwrap_or(&p.re);
+            let mut next = p.re.find_at(bytes, 0);
+            while let Some(m) = next {
+                if !glued_at(m.start()) {
+                    let span = (m.start(), m.end());
+                    found_all.push(claim(priority, span, span, p));
+                    next = p.re.find_at(bytes, m.end().max(m.start() + 1));
                     continue;
                 }
-                let span = (m.start(), m.end());
-                found_all.push(claim(priority, span, span, p));
-                at = m.end().max(m.start() + 1);
+                // Every match starts at a head start, and those before `h` are glued, so the
+                // leftmost match from `h` is the next one to judge.
+                let mut from = m.start() + 1;
+                next = loop {
+                    let Some(h) = head.find_at(bytes, from) else {
+                        break None;
+                    };
+                    if !glued_at(h.start()) {
+                        break p.re.find_at(bytes, h.start());
+                    }
+                    from = h.start() + 1;
+                };
             }
             continue;
         }
@@ -524,28 +554,23 @@ fn char_at(bytes: &[u8], p: usize) -> Option<usize> {
         .then_some(width)
 }
 
+/// The valid UTF-8 character that `at` falls strictly inside, as `(start, end)`.
+fn char_around(bytes: &[u8], at: usize) -> Option<(usize, usize)> {
+    (at.saturating_sub(3)..at).find_map(|p| {
+        char_at(bytes, p)
+            .map(|width| (p, p + width))
+            .filter(|&(_, end)| end > at)
+    })
+}
+
 /// The end of the UTF-8 character that `end` falls inside, or `end` on a boundary.
 pub(crate) fn char_end(bytes: &[u8], end: usize) -> usize {
-    for p in end.saturating_sub(3)..end {
-        if let Some(width) = char_at(bytes, p)
-            && p + width > end
-        {
-            return p + width;
-        }
-    }
-    end
+    char_around(bytes, end).map_or(end, |(_, e)| e)
 }
 
 /// The start of the UTF-8 character that `start` falls inside, or `start` on a boundary.
 fn char_start(bytes: &[u8], start: usize) -> usize {
-    for p in start.saturating_sub(3)..start {
-        if let Some(width) = char_at(bytes, p)
-            && p + width > start
-        {
-            return p;
-        }
-    }
-    start
+    char_around(bytes, start).map_or(start, |(s, _)| s)
 }
 
 /// Resolve every rule's candidates into the claimed spans, in source order, never overlapping.
@@ -789,43 +814,64 @@ pub(crate) fn union(mut runs: Vec<Run>) -> Vec<Run> {
 mod tests {
     use super::*;
 
-    fn claim(priority: usize, start: usize, end: usize, block: bool) -> Claim {
-        Claim {
-            priority,
-            start,
-            end,
-            whole_start: start,
-            whole_end: end,
-            soft: false,
-            block,
-            bounded: false,
-        }
-    }
-
-    fn spans(claims: &[Claim]) -> Vec<(usize, usize, usize)> {
-        claims
-            .iter()
-            .map(|c| (c.start, c.end, c.priority))
-            .collect()
-    }
-
-    /// Two blocks and the one claim across both edges become one span; a claim inside a block
-    /// vanishes; a claim near no block is untouched; no block means plain first-wins.
+    /// The guarded search with its head finds exactly what the plain search finds (retry the
+    /// whole regex from the byte after every glued start), on text dense with glued prefixes.
     #[test]
-    fn a_block_absorbs_what_it_contains_and_what_crosses_it() {
-        let got = select(vec![
-            claim(7, 0, 10, true),
-            claim(7, 20, 30, true),
-            claim(9, 8, 22, false),
-            claim(3, 24, 26, false),
-            claim(3, 40, 50, false),
-            claim(7, 60, 70, true),
-            claim(3, 62, 65, false),
-        ]);
-        assert_eq!(spans(&got), vec![(0, 30, 7), (40, 50, 3), (60, 70, 7)]);
-        let got = select(vec![claim(7, 0, 10, true), claim(3, 10, 20, false)]);
-        assert_eq!(spans(&got), vec![(0, 10, 7), (10, 20, 3)]);
-        let got = select(vec![claim(3, 0, 10, false), claim(9, 5, 15, false)]);
-        assert_eq!(spans(&got), vec![(0, 10, 3)]);
+    fn the_head_search_finds_what_the_plain_search_finds() {
+        const PIECES: [&[u8]; 14] = [
+            b"task-",
+            b"sk-",
+            b"x",
+            b"-",
+            b"AIza",
+            b"eyJ",
+            b".",
+            b"\\n",
+            b"ghp_",
+            b"aB3",
+            b"_",
+            b"xox",
+            b"b-",
+            b"0123456789",
+        ];
+        let mut seed = 0x2545_F491_4F6C_DD1Du64;
+        let mut below = |n: usize| {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            (seed % n as u64) as usize
+        };
+        let guarded: Vec<Pattern> = rows()
+            .flatten()
+            .filter(|r| r.guard)
+            .filter_map(|r| Pattern::shared(&r))
+            .collect();
+        assert_eq!(guarded.len(), 14);
+        assert!(guarded.iter().all(|p| p.head.is_some()));
+        for _ in 0..3000 {
+            let text: Vec<u8> = (0..below(60))
+                .flat_map(|_| PIECES[below(PIECES.len())].iter().copied())
+                .collect();
+            let before: &[u8] = [&b""[..], b"a", b"-"][below(3)];
+            for p in &guarded {
+                let mut plain = Vec::new();
+                let mut at = 0;
+                while let Some(m) = p.re.find_at(&text, at) {
+                    let mut buf = [0u8; GUARD_BYTES];
+                    let n = guard_context(before, &text[..m.start()], &mut buf);
+                    if glued(&buf[..n]) {
+                        at = m.start() + 1;
+                    } else {
+                        plain.push((m.start(), m.end()));
+                        at = m.end().max(m.start() + 1);
+                    }
+                }
+                let found: Vec<(usize, usize)> = candidates(std::iter::once(p), &text, before)
+                    .iter()
+                    .map(|c| (c.start, c.end))
+                    .collect();
+                assert_eq!(found, plain, "{:?}", String::from_utf8_lossy(&text));
+            }
+        }
     }
 }

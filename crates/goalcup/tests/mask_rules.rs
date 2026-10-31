@@ -7,28 +7,17 @@
 #[path = "mask_corpus/common.rs"]
 mod common;
 
-use common::{ALNUM, keys, only_spans_changed, run, starred};
+use common::{ALNUM, Rng, keys, only_spans_changed, run, shape_rows, starred};
 use regex::bytes::RegexBuilder;
-
-const SHAPES: &str = include_str!("../src/mask/shapes.tsv");
 
 struct Shape {
     kind: String,
     guard: bool,
 }
 
-/// Every data row as its three raw fields, comments and blank lines skipped.
-fn rows() -> Vec<Vec<&'static str>> {
-    SHAPES
-        .lines()
-        .filter(|line| !line.is_empty() && !line.starts_with('#'))
-        .map(|line| line.split('\t').collect())
-        .collect()
-}
-
 /// Every row compiled with the builder settings `compile` in `goalcup-daemon` uses today.
 fn shapes() -> Vec<Shape> {
-    rows()
+    shape_rows()
         .into_iter()
         .map(|row| {
             assert_eq!(row.len(), 3, "a row is kind, guard, regex: {row:?}");
@@ -257,12 +246,10 @@ fn a_base64url_blob_with_key_prefixes_inside_is_left_alone() -> Res {
     let m = masker()?;
     let mut blob = String::new();
     let alphabet = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_";
-    let mut x: u64 = 0x5EED;
+    let mut rng = Rng(0x5EED);
     let planted = ["sk-", "hf_", "ghp_", "AIza", "eyJ"];
     while blob.len() < 20 * 1024 {
-        x ^= x << 13;
-        x ^= x >> 7;
-        x ^= x << 17;
+        let x = rng.next();
         match x % 97 {
             0 => blob.push_str("-9"),
             1 => blob.push_str(planted[(x / 97 % 5) as usize]),
@@ -428,5 +415,31 @@ fn a_connector_field_rule_masks_its_value() -> Res {
         String::from_utf8(out.bytes)?,
         format!(r#"{{"x-codex-turn-state": "{}"}}"#, "*".repeat(state.len()))
     );
+    Ok(())
+}
+
+/// Review X F1: a long run of glued prefixes (an agent writing kebab-case, or `…sk-…` runs) is
+/// one pass, whole and streamed in 16 KiB pieces, and nothing in it is masked. The time is
+/// printed, not asserted; the search it replaced took about 35 s for 256 KiB.
+#[test]
+fn a_long_run_of_glued_prefixes_is_one_pass() -> Res {
+    let m = masker()?;
+    for (unit, size) in [("task-", 1 << 20), ("Xsk-", 1 << 18), ("xAIza", 1 << 18)] {
+        let input = unit.repeat(size / unit.len()).into_bytes();
+        let started = std::time::Instant::now();
+        assert_eq!(m.mask_whole(&input).bytes, input, "{unit}");
+        let mut s = m.stream(goalcup_format::StreamKind::Native);
+        let mut back = Vec::with_capacity(input.len());
+        for piece in input.chunks(16 * 1024) {
+            back.extend(s.push(piece).bytes);
+        }
+        back.extend(s.finish().bytes);
+        assert_eq!(back, input, "{unit} streamed");
+        println!(
+            "{unit} x {}: {:.2} s whole and streamed",
+            input.len() / unit.len(),
+            started.elapsed().as_secs_f64()
+        );
+    }
     Ok(())
 }

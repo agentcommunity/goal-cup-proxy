@@ -73,7 +73,7 @@ pub enum ValueSource {
 }
 
 /// One exact secret value. It crosses the first control line (S17) and is never written,
-/// hashed or logged. `Debug` prints the source only; drop overwrites the bytes with zeros.
+/// hashed or logged. `Debug` prints the source only.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SecretValue {
     source: ValueSource,
@@ -102,12 +102,6 @@ impl std::fmt::Debug for SecretValue {
     }
 }
 
-impl Drop for SecretValue {
-    fn drop(&mut self) {
-        values::wipe(&mut self.bytes);
-    }
-}
-
 /// The masker of one recorder boot. `Send + Sync`; a clone shares the policy.
 #[derive(Debug, Clone)]
 pub struct Masker {
@@ -121,7 +115,9 @@ impl Masker {
     /// A built-in shape that differs from its recognizer or does not compile is
     /// `MaskError::Shape`; a connector rule whose regex does not compile, or whose kind is
     /// `run_secret` or `fail_closed`, is `MaskError::Rule`. A value that cannot be used is
-    /// skipped and counted in `skipped`, never an error.
+    /// skipped and counted in `skipped`, never an error. Until the owner's yes to question 3
+    /// builds the section 9 name gate, only `workspace` values are used; an `env` or `harness`
+    /// value is counted in `skipped`, so a model name or a base URL is never masked by value.
     pub fn new(rules: &[MaskRule], values: Vec<SecretValue>) -> Result<Masker, MaskError> {
         let policy = stream::Policy::new(rules, &values)?;
         let mut names = meta::Names::default();
@@ -175,9 +171,10 @@ impl Masker {
         if self.policy.is_clear() {
             return;
         }
+        // `mask_whole` keeps the length and stars whole characters; were the answer ever not
+        // UTF-8, the empty string's other length stars the value whole (`meta::scrub_in_place`).
         let scrub = |text: &str| -> String {
-            let masked = self.mask_whole(text.as_bytes());
-            String::from_utf8(masked.bytes).unwrap_or_else(|e| "*".repeat(e.into_bytes().len()))
+            String::from_utf8(self.mask_whole(text.as_bytes()).bytes).unwrap_or_default()
         };
         meta::mask_meta(meta, &self.meta_names, &scrub);
     }
@@ -273,13 +270,13 @@ mod tests {
             vec![
                 v,
                 SecretValue::new(ValueSource::Env, key.clone()),
-                SecretValue::new(ValueSource::Env, b"short".to_vec()),
+                SecretValue::new(ValueSource::Workspace, b"short".to_vec()),
             ],
         )?;
         let counts = m.value_counts();
         assert_eq!(
             (counts.workspace, counts.env, counts.harness, counts.skipped),
-            (1, 1, 0, 1)
+            (1, 0, 0, 2)
         );
         assert!(!format!("{m:?}").contains(std::str::from_utf8(&key)?));
         Ok(())

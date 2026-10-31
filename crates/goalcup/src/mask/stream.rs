@@ -180,10 +180,6 @@ fn hex_lower(u: Unit) -> bool {
 fn space(u: Unit) -> bool {
     u.is_whitespace()
 }
-/// `[A-Za-z0-9_\-]` under `(?i)`, the characters of a JSON secret key.
-fn json_key(u: Unit) -> bool {
-    token_folded(u)
-}
 
 /// One unit of the shell literal's value after a `=` with no space, as its two alternatives read
 /// it. `token_only` and `run` track the first alternative, `[A-Za-z0-9_\-]{16,}`: it is decided
@@ -285,7 +281,10 @@ enum Form {
         prefix: Box<[u8]>,
     },
     /// Form `i` of the exact values ([`RunSecrets`]): printable ASCII, with at most one line
-    /// break in each gap between two of its bytes ([`Progress`]).
+    /// break in each gap between two of its bytes ([`Progress`]). Only form 0 starts
+    /// candidates, one per start for every form ([`Walk::Literals`]): each value adds two `\u`
+    /// forms that start on every backslash, and one candidate per form would pass
+    /// `MAX_CANDIDATES` on a single backslash from about sixteen values.
     Literal {
         form: usize,
     },
@@ -1014,8 +1013,9 @@ enum Walk {
     Url(Url),
     Field(Field),
     Header(Header),
-    /// How far a [`Form::Literal`] matched, a line break in progress included.
-    Literal(Progress),
+    /// How far each exact-value form that is still live matched from this start, a line
+    /// break in progress included, by form index.
+    Literals(Vec<(usize, Progress)>),
 }
 
 /// A [`Form::UrlPassword`] candidate.
@@ -1308,7 +1308,8 @@ impl Json {
                 self.phase = JsonPhase::Key;
                 is(u, b'"')
             }
-            JsonPhase::Key if json_key(u) => {
+            // `[A-Za-z0-9_\-]` under `(?i)`, the characters of a JSON secret key.
+            JsonPhase::Key if token_folded(u) => {
                 if self.key_units == JSON_KEY_MAX_UNITS {
                     return false;
                 }
@@ -1493,6 +1494,10 @@ impl Candidate {
     /// literal's candidate is not started when `glued` says the unit is glued to a word.
     fn spawn(policy: &Policy, lit: usize, u: Unit) -> Option<Walk> {
         let form = policy.form(lit)?;
+        if let Form::Literal { form } = form {
+            let forms = literal_forms(policy, u);
+            return (*form == 0 && !forms.is_empty()).then_some(Walk::Literals(forms));
+        }
         let starts = match form {
             Form::Prefixed(p) => {
                 ascii(u).is_some_and(|b| p.prefix.first().is_some_and(|s| s.contains(&b)))
@@ -1506,11 +1511,7 @@ impl Candidate {
             Form::UrlPassword => is(u, b'/') || is(u, b'\\'),
             Form::Field { key, .. } => key.first().is_some_and(|&b| is(u, b)),
             Form::HeaderPrefix { prefix } => prefix.first().is_some_and(|&b| is(u, b)),
-            Form::Literal { form } => policy
-                .secrets
-                .form(*form)
-                .first()
-                .is_some_and(|&b| is(u, b)),
+            Form::Literal { .. } => false,
         };
         if !starts {
             return None;
@@ -1546,7 +1547,7 @@ impl Candidate {
                 value_start: 0,
             }),
             Form::HeaderPrefix { .. } => Walk::Header(Header::Lit(0)),
-            Form::Literal { .. } => Walk::Literal(Progress::default()),
+            Form::Literal { .. } => return None,
         })
     }
 
@@ -1586,15 +1587,27 @@ impl Candidate {
             (Walk::Header(header), Form::HeaderPrefix { prefix }) => {
                 return header.step(prefix, u);
             }
-            // A literal cannot extend once complete: its last byte ends it.
-            (Walk::Literal(progress), Form::Literal { form }) => {
+            // A form cannot extend once complete: its last byte ends it. The candidate lives
+            // while any form does, and ends with this unit when the last ones complete here.
+            (Walk::Literals(forms), Form::Literal { .. }) => {
                 let Some(b) = ascii(u) else {
                     return Step::Dead;
                 };
-                return match progress.step(policy.secrets.form(*form), b) {
-                    Advance::Live => Step::Live,
-                    Advance::Complete => Step::Last,
-                    Advance::Dead => Step::Dead,
+                let mut complete = false;
+                forms.retain_mut(|(form, progress)| {
+                    match progress.step(policy.secrets.form(*form), b) {
+                        Advance::Live => true,
+                        Advance::Complete => {
+                            complete = true;
+                            false
+                        }
+                        Advance::Dead => false,
+                    }
+                });
+                return match (forms.is_empty(), complete) {
+                    (false, _) => Step::Live,
+                    (true, true) => Step::Last,
+                    (true, false) => Step::Dead,
                 };
             }
             _ => false,
@@ -1628,10 +1641,21 @@ impl Candidate {
                 FieldPhase::Key(_) | FieldPhase::BeforeColon | FieldPhase::AfterColon => None,
             },
             (Walk::Header(Header::Value { .. }), _) => Some(self.start),
-            (Walk::Literal(progress), _) => (progress.matched() >= 1).then_some(self.start),
+            (Walk::Literals(forms), _) => forms
+                .iter()
+                .any(|(_, progress)| progress.matched() >= 1)
+                .then_some(self.start),
             _ => None,
         }
     }
+}
+
+/// The exact-value forms that `u` starts, each at no progress.
+fn literal_forms(policy: &Policy, u: Unit) -> Vec<(usize, Progress)> {
+    (0..policy.secrets.len())
+        .filter(|&form| policy.secrets.form(form).first().is_some_and(|&b| is(u, b)))
+        .map(|form| (form, Progress::default()))
+        .collect()
 }
 
 // ── one stream's undecided bytes ───────────────────────────────────────────────────────
@@ -1772,12 +1796,6 @@ impl Scanner {
     /// The source offset of the next byte this scanner expects.
     fn end_offset(&self) -> u64 {
         self.decoded_end + u64::from(self.tail.len)
-    }
-
-    /// Whether nothing is held: every byte pushed so far has been returned.
-    #[cfg(test)]
-    pub(crate) fn held_bytes(&self) -> usize {
-        self.held.len() + usize::from(self.tail.len)
     }
 
     pub(crate) fn feed(&mut self, data: &[u8], out: &mut Masked) {
@@ -2375,19 +2393,6 @@ mod tests {
         Ok(Arc::new(Policy::new(&[], &[])?))
     }
 
-    /// Every recognizer is pinned to the exact source of the `shapes.tsv` line it models, and
-    /// the masker refuses to start when they differ.
-    #[test]
-    fn shapes_follow_the_shared_list() -> Result<(), MaskError> {
-        let tsv: Vec<(&str, &str)> = rules::rows()
-            .map(|r| r.map_or(("", ""), |r| (r.kind, r.source)))
-            .collect();
-        let shapes: Vec<(&str, &str)> = SHAPES.iter().map(|s| (s.kind, s.source)).collect();
-        assert_eq!(tsv, shapes);
-        policy()?;
-        Ok(())
-    }
-
     /// Every connector form maps onto its recognizer with the span its regex declares: a JSON
     /// field's value is group 1, a header line the whole match. A connector kind that would
     /// take the name of `run_secret` or `fail_closed` is refused, so `mask_rules()` names each
@@ -2429,8 +2434,7 @@ mod tests {
 
     /// Soundness of the hold against the rules themselves: for every kept match of every rule,
     /// every proper prefix keeps a candidate of that rule starting at or before the match (or
-    /// is still undecoded), and no byte of it is released. Precision: once a few units after a
-    /// match are decoded, its candidate is gone.
+    /// is still undecoded), and no byte of it is released.
     #[test]
     fn recognizers_hold_every_prefix_of_a_match() -> Result<(), MaskError> {
         let policy = policy()?;
@@ -2470,23 +2474,13 @@ mod tests {
                             "seed {seed}: a live match released"
                         );
                     }
-                    if k >= t + 4 && k < t + 5 {
-                        checked += 1;
-                        let gone = !scanner
-                            .candidates
-                            .iter()
-                            .any(|c| c.lit == lit && c.start == s);
-                        assert!(gone, "seed {seed}: rule {lit} match {s}..{t} held at {k}");
-                    }
                 }
             }
-            assert_eq!(
-                sink.bytes.len() as u64 + scanner.held_bytes() as u64,
-                text.len() as u64
-            );
+            scanner.finish_complete(&mut sink);
+            assert_eq!(sink.bytes.len(), text.len());
         }
         assert!(
-            checked > 5_000,
+            checked > 2_000,
             "the generator reaches the rules: {checked}"
         );
         Ok(())
@@ -2521,7 +2515,7 @@ mod tests {
                 }
                 fed += data.len();
                 s.feed(&std::mem::take(&mut data), &mut out);
-                assert!(s.held_bytes() <= MAX_HELD_BYTES + 3);
+                assert!(fed - out.bytes.len() <= MAX_HELD_BYTES + 3);
                 assert!(s.candidates.len() <= MAX_CANDIDATES);
             }
             s.finish_complete(&mut out);

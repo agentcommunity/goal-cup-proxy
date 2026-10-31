@@ -21,7 +21,7 @@ const CREDENTIAL_SCHEMES: [&str; 2] = ["bearer", "basic"];
 /// masked: only a userinfo before its last `@` is.
 const AUTHORITY: &str = ":authority";
 
-/// Meta keys whose values are never masked.
+/// Keys of the meta object itself (not of an object under it) whose values are never masked.
 const CLEAR_KEYS: [&str; 5] = ["method", "status", "host", "port", "alpn"];
 
 /// The connector name rules: `header_prefix` values and `json_field` names, lower-cased.
@@ -59,20 +59,21 @@ impl Names {
 /// changed, in order, a name once per pair (two `cookie` headers list it twice). `masked` is
 /// PRD-01's OPEN meta field, so an object with only `trailers` gets none.
 pub(crate) fn mask_meta(meta: &mut Value, names: &Names, scrub: &dyn Fn(&str) -> String) {
-    walk(meta, names, scrub);
+    walk(meta, names, scrub, true);
 }
 
-/// Steps 1 to 5 over one value and everything under it.
-fn walk(meta: &mut Value, names: &Names, scrub: &dyn Fn(&str) -> String) {
-    let mut stack: Vec<&mut Value> = vec![meta];
-    while let Some(value) = stack.pop() {
+/// Steps 1 to 5 over one value and everything under it; `top` when it is the meta object
+/// itself, the only object whose [`CLEAR_KEYS`] stay clear.
+fn walk(meta: &mut Value, names: &Names, scrub: &dyn Fn(&str) -> String, top: bool) {
+    let mut stack: Vec<(&mut Value, bool)> = vec![(meta, top)];
+    while let Some((value, is_top)) = stack.pop() {
         let map = match value {
             Value::String(s) => {
                 scrub_in_place(s, scrub);
                 continue;
             }
             Value::Array(items) => {
-                stack.extend(items.iter_mut());
+                stack.extend(items.iter_mut().map(|item| (item, false)));
                 continue;
             }
             Value::Object(map) => map,
@@ -88,7 +89,9 @@ fn walk(meta: &mut Value, names: &Names, scrub: &dyn Fn(&str) -> String) {
         }
         if let Some(Value::String(path)) = map.get_mut("path") {
             scrub_in_place(path, scrub);
-            mask_bytes_of(path, mask_userinfo);
+            mask_bytes_of(path, |url| {
+                mask_userinfo_end(url);
+            });
         }
         let holds_headers = map.contains_key("headers");
         if holds_headers {
@@ -100,10 +103,10 @@ fn walk(meta: &mut Value, names: &Names, scrub: &dyn Fn(&str) -> String) {
                 "headers" | "trailers" => child.is_array(),
                 "path" => child.is_string(),
                 "masked" => holds_headers,
-                other => CLEAR_KEYS.contains(&other),
+                other => is_top && CLEAR_KEYS.contains(&other),
             };
             if !done {
-                stack.push(child);
+                stack.push((child, false));
             }
         }
     }
@@ -118,18 +121,18 @@ fn mask_pair(
     masked: &mut Vec<String>,
 ) {
     let Value::Array(items) = pair else {
-        return walk(pair, names, scrub);
+        return walk(pair, names, scrub, false);
     };
     let (name, value) = match items.as_mut_slice() {
         [Value::String(name), Value::String(value), rest @ ..] => {
             for extra in rest {
-                walk(extra, names, scrub);
+                walk(extra, names, scrub, false);
             }
             (name, value)
         }
         _ => {
             for item in items.iter_mut() {
-                walk(item, names, scrub);
+                walk(item, names, scrub, false);
             }
             return;
         }
@@ -215,11 +218,6 @@ fn scheme_credential(body: &[u8]) -> Option<usize> {
         .iter()
         .position(|&b| b != b' ' && b != b'\t')?;
     Some(scheme_end + gap)
-}
-
-/// Step 4: a URL's userinfo starred, nothing else.
-fn mask_userinfo(url: &mut [u8]) {
-    mask_userinfo_end(url);
 }
 
 /// Stars the userinfo (the authority up to its last `@`) and returns where the authority ends,
@@ -373,9 +371,6 @@ mod tests {
             "PROXY-AUTHORIZATION",
             "x-client-secret",
             "x-db-password",
-            "x-acme-session",
-            "x-tool-turn-state",
-            "x-tool-installation-id",
             "x-ratelimit-remaining-tokens",
         ];
         let clear = [
@@ -388,12 +383,7 @@ mod tests {
         let mut headers: Vec<(&str, &str)> = starred.iter().map(|n| (*n, "val-1234")).collect();
         headers.extend(clear.iter().map(|n| (*n, "val-1234")));
         let meta = head(&headers);
-        let out = run(
-            meta,
-            &["x-acme-"],
-            &["x-tool-turn-state", "x-tool-installation-id"],
-            &identity,
-        );
+        let out = run(meta, &[], &[], &identity);
         for name in starred {
             assert!(stars(value_of(&out, name)), "{name}");
         }
@@ -494,13 +484,16 @@ mod tests {
             "host": "QQQQ.example",
             "status": 200,
             "port": 443,
-            "note": {"QQQQ": ["see QQQQ here"]},
+            "note": {"QQQQ": ["see QQQQ here"], "status": "QQQQ"},
             "headers": [["x-QQQQ", "a QQQQ b"], ["x-plain", "ok"]],
         });
         let out = run(meta, &[], &[], &fake);
         assert_eq!(out["method"], "QQQQ");
         assert_eq!(out["host"], "QQQQ.example");
-        assert_eq!(out["note"], json!({"QQQQ": ["see **** here"]}));
+        assert_eq!(
+            out["note"],
+            json!({"QQQQ": ["see **** here"], "status": "****"})
+        );
         assert_eq!(value_of(&out, "x-QQQQ"), "a **** b");
         assert_eq!(out["masked"], json!(["x-QQQQ"]));
         let wrong_length = |s: &str| format!("{s}!");

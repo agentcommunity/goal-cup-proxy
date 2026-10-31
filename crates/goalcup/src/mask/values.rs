@@ -15,9 +15,11 @@
 //! `r` and `n`, at most one break per gap. An escaped break is not taken right before a
 //! backslash of the form itself, so every text matches a form in one way only.
 //!
-//! Values are read once, in memory only, and never written, hashed or logged. Every derived
-//! buffer is overwritten when it drops; the compiled regexes keep copies of their own, which is
-//! hygiene and not a boundary.
+//! Values are read once, in memory only, and never written, hashed or logged.
+//!
+//! Until the owner's yes to question 3 builds the section 9 name gate, only `workspace` values
+//! (the `GH_TOKEN` value) are used: a value from another source is left out and counted in
+//! `skipped`, as is every value past the first [`MAX_VALUES`].
 
 use super::{SecretValue, ValueCounts, ValueSource};
 use regex::bytes::Regex;
@@ -46,19 +48,17 @@ pub const MAX_WRAPPED_FORM_BYTES: usize = wrapped_len(MAX_FORM_BYTES);
 
 const _: () = assert!(MAX_WRAPPED_FORM_BYTES <= super::stream::MAX_HELD_BYTES);
 
+/// The most values used (PRD-05 section 9): a stated guard on start-up time and memory, not a
+/// cap of records. Each value adds up to eleven compiled forms.
+pub const MAX_VALUES: usize = 32;
+
 /// Whether `value` is one the masker uses: 20 to 256 bytes of printable ASCII without a space.
 pub fn is_usable(value: &[u8]) -> bool {
     (MIN_VALUE_BYTES..=MAX_VALUE_BYTES).contains(&value.len())
         && value.iter().all(|b| (0x21..=0x7e).contains(b))
 }
 
-/// Overwrite `bytes` with zeros so the stores are not removed as dead.
-pub fn wipe(bytes: &mut [u8]) {
-    bytes.fill(0);
-    std::hint::black_box(&*bytes);
-}
-
-/// Every form of `value`, distinct, each at least eight bytes. The caller wipes them.
+/// Every form of `value`, distinct, each at least eight bytes.
 pub fn encoded_forms(value: &[u8]) -> Vec<Vec<u8>> {
     const HEX_UPPER: &[u8; 16] = b"0123456789ABCDEF";
     const HEX_LOWER: &[u8; 16] = b"0123456789abcdef";
@@ -79,16 +79,10 @@ pub fn encoded_forms(value: &[u8]) -> Vec<Vec<u8>> {
             forms.push(base64_inside(value, alignment, url_safe));
         }
     }
+    forms.retain(|form| form.len() >= 8);
     forms.sort();
-    let mut unique: Vec<Vec<u8>> = Vec::with_capacity(forms.len());
-    for mut form in forms {
-        if form.len() < 8 || unique.last() == Some(&form) {
-            wipe(&mut form);
-        } else {
-            unique.push(form);
-        }
-    }
-    unique
+    forms.dedup();
+    forms
 }
 
 /// The base64 text `form` always produces inside a longer encoded stream at byte offset
@@ -121,11 +115,8 @@ pub fn base64_inside(form: &[u8], alignment: usize, url_safe: bool) -> Vec<u8> {
         };
         out.extend(sextets.iter().take(whole).map(|s| table[*s as usize]));
     }
-    wipe(&mut padded);
     let lead = (alignment * 8).div_ceil(6).min(out.len());
-    let kept = out[lead..].to_vec();
-    wipe(&mut out);
-    kept
+    out.split_off(lead)
 }
 
 /// How far a text has matched one form, a line break included. It holds counts, never a byte
@@ -208,8 +199,7 @@ impl Progress {
 }
 
 /// The regular expression of `form` with the breaks [`Progress`] takes. Every character that is
-/// not a letter or a digit is a hex escape. The text spells the form: wipe it once compiled, and
-/// never print it.
+/// not a letter or a digit is a hex escape. The text spells the form: never print it.
 pub fn wrapped_regex(form: &[u8]) -> String {
     const HEX: &[u8; 16] = b"0123456789ABCDEF";
     let mut re = String::with_capacity(form.len() * 24);
@@ -233,7 +223,7 @@ pub fn wrapped_regex(form: &[u8]) -> String {
 }
 
 /// The compiled forms of the exact values, shared by the whole-record matcher and the stream
-/// (kind `run_secret`). `Debug` prints a count; the forms are wiped when it drops.
+/// (kind `run_secret`). `Debug` prints a count.
 #[derive(Default)]
 pub(crate) struct RunSecrets {
     forms: Vec<(Vec<u8>, Regex)>,
@@ -245,35 +235,26 @@ impl std::fmt::Debug for RunSecrets {
     }
 }
 
-impl Drop for RunSecrets {
-    fn drop(&mut self) {
-        for (form, _) in &mut self.forms {
-            wipe(form);
-        }
-    }
-}
-
 impl RunSecrets {
     /// The forms of `values`, compiled, and the counts for the start event. A value that is not
-    /// usable, or one of whose forms does not compile, is left out and counted in `skipped`.
+    /// usable, one of whose forms does not compile, one that is not from the workspace (no name
+    /// gate yet, see the module text), and every value past [`MAX_VALUES`] is left out and
+    /// counted in `skipped`.
     pub(crate) fn new(values: &[SecretValue]) -> (RunSecrets, ValueCounts) {
         let mut counts = ValueCounts::default();
         let mut forms: Vec<(Vec<u8>, Regex)> = Vec::new();
         for value in values {
-            let compiled = is_usable(value.bytes())
-                .then(|| compile(value.bytes(), &forms))
-                .flatten();
+            let compiled = (value.source() == ValueSource::Workspace
+                && counts.workspace < MAX_VALUES as u32
+                && is_usable(value.bytes()))
+            .then(|| compile(value.bytes(), &forms))
+            .flatten();
             let Some(mut new) = compiled else {
                 counts.skipped = counts.skipped.saturating_add(1);
                 continue;
             };
             forms.append(&mut new);
-            let slot = match value.source() {
-                ValueSource::Workspace => &mut counts.workspace,
-                ValueSource::Env => &mut counts.env,
-                ValueSource::Harness => &mut counts.harness,
-            };
-            *slot = slot.saturating_add(1);
+            counts.workspace += 1;
         }
         (RunSecrets { forms }, counts)
     }
@@ -297,32 +278,11 @@ impl RunSecrets {
 /// The new forms of one value (those not already in `known`), compiled, or `None` when one
 /// does not compile.
 fn compile(value: &[u8], known: &[(Vec<u8>, Regex)]) -> Option<Vec<(Vec<u8>, Regex)>> {
-    let mut out: Vec<(Vec<u8>, Regex)> = Vec::new();
-    let mut failed = false;
-    for mut form in encoded_forms(value) {
-        let seen = known.iter().chain(out.iter()).any(|(k, _)| *k == form);
-        if seen || failed {
-            wipe(&mut form);
-            continue;
-        }
-        let source = wrapped_regex(&form);
-        let compiled = Regex::new(&source);
-        wipe(&mut source.into_bytes());
-        match compiled {
-            Ok(re) => out.push((form, re)),
-            Err(_) => {
-                wipe(&mut form);
-                failed = true;
-            }
-        }
-    }
-    if failed {
-        for (form, _) in &mut out {
-            wipe(form);
-        }
-        return None;
-    }
-    Some(out)
+    encoded_forms(value)
+        .into_iter()
+        .filter(|form| !known.iter().any(|(k, _)| k == form))
+        .map(|form| Regex::new(&wrapped_regex(&form)).ok().map(|re| (form, re)))
+        .collect()
 }
 
 /// The variable the participant keeps their GitHub token in.
@@ -348,29 +308,14 @@ pub fn workspace_values(project: &Path) -> Vec<SecretValue> {
         .collect();
     names.sort_by_key(|name| (name != TOKEN_FILE, name.clone()));
     let found = names.into_iter().find_map(|name| {
-        let mut text = std::fs::read_to_string(project.join(&name)).ok()?;
-        let value = token_in(&text);
-        wipe_string(&mut text);
-        value
+        let text = std::fs::read_to_string(project.join(&name)).ok()?;
+        token_in(&text)
     });
-    match found {
-        Some(mut value) if is_usable(value.as_bytes()) => {
-            let bytes = value.as_bytes().to_vec();
-            wipe_string(&mut value);
-            vec![SecretValue::new(ValueSource::Workspace, bytes)]
-        }
-        Some(mut value) => {
-            wipe_string(&mut value);
-            Vec::new()
-        }
-        None => Vec::new(),
-    }
-}
-
-/// Overwrite a string's bytes with zeros.
-fn wipe_string(text: &mut String) {
-    let mut bytes = std::mem::take(text).into_bytes();
-    wipe(&mut bytes);
+    found
+        .filter(|value| is_usable(value.as_bytes()))
+        .map(|value| SecretValue::new(ValueSource::Workspace, value.into_bytes()))
+        .into_iter()
+        .collect()
 }
 
 /// Whether `name` is one of the participant's key files: `.env`, or `.env.` and anything.
