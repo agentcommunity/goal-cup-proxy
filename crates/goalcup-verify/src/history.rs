@@ -8,7 +8,7 @@
 
 use crate::integrity::{At, Check, Res};
 use crate::legs::Cover;
-use crate::secrets::delta_text;
+use crate::secrets::answer_text;
 use crate::usage::{CallTable, Calls, Leg};
 use goalcup_format::dump::wall;
 use goalcup_format::{FLAG_FIN, Record, StreamKind};
@@ -79,11 +79,12 @@ fn keys_of(v: &Value, keys: &mut HashSet<Key>) {
     }
 }
 
-/// One response event: its answer keys, and its streamed text pieces joined into `acc` by the
-/// secret scan's joiner ([`delta_text`]); the scan and this check never keep two copies.
+/// One response event: its answer keys, and its streamed answer text joined into `acc` by the
+/// secret scan's joiner ([`answer_text`]); the scan and this check never keep two copies. The
+/// answer leaves out thinking, reasoning and tool arguments, which a resent turn does not carry.
 fn event(v: &Value, acc: &mut String, keys: &mut HashSet<Key>) {
     keys_of(v, keys);
-    delta_text(v, acc);
+    answer_text(v, acc);
 }
 
 /// The joined text of a whole response is one answer key.
@@ -158,6 +159,8 @@ pub struct Sink {
     calls: Calls,
     boot: u64,
     open: HashMap<(u64, u64), St>,
+    /// Every HTTP and WebSocket stream of the record, by boot and sid.
+    net: HashSet<(u64, u64)>,
     /// Candidate requests whose response is still to come.
     cand: HashSet<(u64, u64)>,
     by_last: HashMap<u64, Vec<usize>>,
@@ -215,7 +218,7 @@ impl Sink {
                 start_wall: a,
                 end_wall: b,
                 ..
-            } if *a > 0 && b >= a && self.open.contains_key(&(self.boot, *sid)) => {
+            } if *a > 0 && b >= a && self.net.contains(&(self.boot, *sid)) => {
                 self.h.gaps.push((*a, *b));
             }
             _ => {}
@@ -224,6 +227,13 @@ impl Sink {
 
     fn open(&mut self, sid: u64, skind: StreamKind, req: u64, meta: &[u8]) {
         let b = self.boot;
+        if matches!(
+            skind,
+            StreamKind::HttpReq | StreamKind::HttpResp | StreamKind::WsUp | StreamKind::WsDown
+        ) {
+            // Any GAP on these covers a missed call, also over a body the pass never opened.
+            self.net.insert((b, sid));
+        }
         let m: Value = serde_json::from_slice(meta).unwrap_or_default();
         let role = match skind {
             StreamKind::HttpReq if m["method"] == "POST" => Role::Req,

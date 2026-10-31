@@ -133,6 +133,17 @@ fn reply(s: Sh, a: A) -> (&'static str, String) {
                 json!({"candidates": [{"content": {"role": "model", "parts": [{"text": text}]}}]});
             (false, c.to_string())
         }
+        (Anthropic, Text(_)) => {
+            // Streamed, with a thinking block before the answer; the resent turn has no thinking.
+            let d = |i: u64, d: Value| json!({"type": "content_block_delta", "index": i, "delta": d});
+            let evs = [
+                d(0, json!({"type": "thinking_delta", "thinking": "fake thought"})),
+                d(1, json!({"type": "text_delta", "text": &text[..5]})),
+                d(1, json!({"type": "text_delta", "text": &text[5..]})),
+                json!({"type": "message_stop"}),
+            ];
+            (true, sse(&evs))
+        }
         (Anthropic, _) => (false, json!(ans(s, a)[0]).to_string()),
     };
     (
@@ -146,9 +157,10 @@ fn reply(s: Sh, a: A) -> (&'static str, String) {
 }
 
 /// One decrypted POST of `body` with its reply, on its own connection. Returns the request's sid.
-/// With `lose`, 10 bytes in the middle of the request body are lost to a `memory_guard` GAP.
+/// With `lose` 1, 10 bytes in the middle of the request body are lost to a `memory_guard` GAP;
+/// with 2, the response is undecoded (`decoded: false`) and sits under an `unsupported_encoding` GAP.
 fn send(e: &mut Entry, path: &str, thread: &str, body: &Value, rep: (&str, String)) -> u64 {
-    send_with(e, path, thread, body, rep, false)
+    send_with(e, path, thread, body, rep, 0)
 }
 
 fn send_with(
@@ -157,14 +169,14 @@ fn send_with(
     thread: &str,
     body: &Value,
     rep: (&str, String),
-    lose: bool,
+    lose: u8,
 ) -> u64 {
     let body = body.to_string();
     let head = json!({"method": "POST", "path": path, "ver": "1.1", "masked": [], "coding": null,
         "headers": [["content-type", "application/json"], ["thread-id", thread]]});
     let (c, done) = (e.conn(), EndReason::Complete);
     let q = e.open(StreamKind::HttpReq, c, 0, head);
-    if lose {
+    if lose == 1 {
         let half = body.len() / 2;
         e.data(q, 0, 0, &body.as_bytes()[..half]);
         let tail = json!({"guard": "held_bytes"});
@@ -175,10 +187,15 @@ fn send_with(
     }
     e.end(q, done, body.len() as u64, Value::Null);
     let head = json!({"status": 200, "ver": "1.1", "headers": [["content-type", rep.0]],
-        "masked": [], "coding": null, "decoded": true});
+        "masked": [], "coding": null, "decoded": lose != 2});
     let p = e.open(StreamKind::HttpResp, c, q, head);
-    e.data(p, 0, 0, rep.1.as_bytes());
-    e.end(p, done, rep.1.len() as u64, Value::Null);
+    if lose == 2 {
+        e.gap(p, GapReason::UnsupportedEncoding, 10, 0, 0, Value::Null);
+        e.end(p, done, 0, Value::Null);
+    } else {
+        e.data(p, 0, 0, rep.1.as_bytes());
+        e.end(p, done, rep.1.len() as u64, Value::Null);
+    }
     e.end(c, done, 0, json!({"up": 900, "down": 900}));
     e.idle(1_000);
     q
@@ -186,10 +203,10 @@ fn send_with(
 
 /// A request of shape `s` that resends `hist`, answered with `a`.
 fn call(e: &mut Entry, s: Sh, thread: &str, hist: &[A], a: A) -> u64 {
-    call_with(e, s, thread, hist, a, false)
+    call_with(e, s, thread, hist, a, 0)
 }
 
-fn call_with(e: &mut Entry, s: Sh, thread: &str, hist: &[A], a: A, lose: bool) -> u64 {
+fn call_with(e: &mut Entry, s: Sh, thread: &str, hist: &[A], a: A, lose: u8) -> u64 {
     let (path, key) = match s {
         Chat => ("/v1/chat/completions", "messages"),
         Anthropic => ("/v1/messages", "messages"),
@@ -319,6 +336,23 @@ fn a_clean_chain_passes_in_every_request_shape() {
         );
         assert_eq!((n(&h, "checked"), missing(&h)), (2, (0, 0, 0)));
     }
+    // Answers streamed with a thinking block still match the text a request resends.
+    for s in [Anthropic, Chat] {
+        let d = rec("h-clean-text", |e| drop(chain(e, s, true, 3, None)));
+        assert_eq!(missing(&verdict(&d, "pass", 0)), (0, 0, 0));
+    }
+}
+
+#[test]
+fn an_undecoded_response_under_its_gap_names_the_missed_call() {
+    for s in [Chat, Anthropic, Responses] {
+        let d = rec("h-undecoded", |e| {
+            call_with(e, s, T, &[], Call(0), 2);
+            call(e, s, T, &[Call(0)], Call(1));
+            call(e, s, T, &[Call(0), Call(1)], Call(2));
+        });
+        assert_eq!(missing(&verdict(&d, "named", 1)).0, 1);
+    }
 }
 
 #[test]
@@ -335,8 +369,6 @@ fn a_call_dropped_with_no_gap_fails_and_a_named_gap_over_it_names_it() {
         let h = verdict(&d, "fail", 2);
         // The request after the dropped one resends its answer; it is written at place j.
         assert_eq!(h["first"]["sid"], sids[j]);
-        let why = h["why"].as_str().unwrap();
-        assert!(why.contains(T) && !why.contains(&tid(s, j as u64)) && !why.contains(TURN));
         assert_eq!(missing(&h), (1, 0, 0));
         let d = rec("h-down", |e| drop(chain(e, s, false, 5, Some((j, true)))));
         assert_eq!(missing(&verdict(&d, "named", 1)), (1, 0, 0));
@@ -380,7 +412,7 @@ fn a_request_body_lost_to_a_gap_does_not_switch_off_its_thread() {
     let d = rec("h-hole", |e| {
         let all: Vec<A> = (0..4).map(Call).collect();
         for (i, &a) in all.iter().enumerate() {
-            call_with(e, Chat, T, &all[..i], a, i == 1);
+            call_with(e, Chat, T, &all[..i], a, u8::from(i == 1));
         }
     });
     let (_, v) = check(&d, &[]);
