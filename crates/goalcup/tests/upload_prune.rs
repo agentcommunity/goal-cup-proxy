@@ -12,10 +12,11 @@ use goalcup::cli;
 use goalcup::upload::chunk::{self, Bound, Cut};
 use goalcup::upload::client::RunPosition;
 use goalcup::upload::prune::prune;
-use goalcup::upload::state::{self, Confirmed, UploadJson, Writer};
+use goalcup::upload::state::{self, Confirmed, Final, UploadJson, Writer};
 use goalcup::upload::{UploadCtx, spawn};
 use goalcup_format::read::{part_files, read_index};
-use goalcup_format::{IndexLine, PartOptions, PartWriter, Record, hex};
+use goalcup_format::{IndexLine, PartOptions, PartWriter, Record, hex, part_name};
+use std::os::unix::fs::PermissionsExt;
 use serde_json::json;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -140,8 +141,9 @@ fn closed_parts_go_during_the_run_once_confirmed_and_the_open_part_stays() {
 }
 
 /// Every confirmed offset from 0 to the end, in order: the parts that go are exactly those whose
-/// end it covers, always a prefix, and `upload.json` on disk holds the confirmed offset and the
-/// parts and bytes pruned once each call returns. Only part and `.idx` files go.
+/// end it covers, always a prefix, and `upload.json` (mode 0600) on disk holds the confirmed offset
+/// and the parts and bytes pruned once each call returns. The last part, closed by the seal, stays
+/// until the server sealed the entry. Only part and `.idx` files go.
 #[test]
 fn only_confirmed_closed_parts_go_and_always_a_prefix() {
     let run = tempfile::tempdir().unwrap();
@@ -164,6 +166,7 @@ fn only_confirmed_closed_parts_go_and_always_a_prefix() {
         j.lock().unwrap().confirmed.as_mut().unwrap().raw = c;
         prune(&dir, &j, &file);
         let gone = parts.iter().take_while(|(_, l)| l.raw_end <= c).count();
+        let gone = gone.min(parts.len() - 1);
         let want: Vec<PathBuf> = parts[gone..].iter().map(|(p, _)| p.clone()).collect();
         assert_eq!(on_disk(&dir), want, "confirmed {c}");
         for (p, _) in &parts[gone..] {
@@ -178,7 +181,15 @@ fn only_confirmed_closed_parts_go_and_always_a_prefix() {
         }
         done = gone;
     }
+    assert_eq!(on_disk(&dir), vec![parts.last().unwrap().0.clone()]);
+    j.lock().unwrap().final_ = Final::Sealed;
+    prune(&dir, &j, &file);
     assert!(on_disk(&dir).is_empty());
+    let file = state::read(&dir).unwrap();
+    assert_eq!(file.pruned.parts, parts.len() as u64);
+    assert_eq!(file.pruned.bytes, sizes.iter().sum::<u64>());
+    let mode = fs::metadata(dir.join(state::FILE)).unwrap().permissions().mode();
+    assert_eq!(mode & 0o777, 0o600);
     assert!(KEPT.iter().all(|f| dir.join(f).exists()));
     assert!(dir.join(state::FILE).exists());
 }
@@ -215,4 +226,21 @@ fn a_part_without_its_index_still_goes_and_the_entry_is_not_stuck() {
     };
     let cut = chunk::cut(&dir.join("rec"), &pos, &Bound::OnDisk, Some(&c)).unwrap();
     assert!(matches!(cut, Cut::Chunk(_)), "{cut:?}");
+}
+
+/// PRD-01 section 1: the last part with an index line stays while the next part has none yet (a
+/// crash after a rotation or a recovery boot opened it), even when `confirmed` covers it, so a
+/// later recovery still finds the server's offset on disk.
+#[test]
+fn the_last_part_with_an_index_line_stays_while_a_newer_part_has_none() {
+    let run = tempfile::tempdir().unwrap();
+    let dir = run.path().join(ENTRY);
+    let parts = entry(&dir, false);
+    let (last, line) = parts.last().unwrap().clone();
+    let newer = dir.join("rec").join(part_name(line.raw_end));
+    fs::write(&newer, b"part bytes, no LINK yet").unwrap();
+    let j = json(line.raw_end, false);
+    prune(&dir, &j, &Mutex::new(Writer::new(dir.clone())));
+    assert_eq!(on_disk(&dir), vec![last.clone(), newer]);
+    assert!(idx(&last).exists());
 }

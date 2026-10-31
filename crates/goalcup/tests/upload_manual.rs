@@ -1,9 +1,10 @@
 //! PRD-06 "Automated tests", `upload_manual.rs` (section 9, `goalcup upload`): it gives up on 401,
 //! 404, 410 and `stuck` with that reason, and on a 401 past `upload_by` says the run is closed; it
 //! refuses while a recorder holds `rec/lock` and never holds `rec/lock` after it returns; the final
-//! heartbeat carries the counts of `counts.jsonl`; a sealed entry with bytes left ends sealed with
-//! the server holding `cat rec-*.gcr.zst` and the parts pruned; an entry the position already
-//! calls sealed is not sent again.
+//! heartbeat carries the counts of `counts.jsonl`; an entry with no seal in `status.json` is not
+//! sent as sealed; a sealed entry with bytes left ends sealed with the server holding
+//! `cat rec-*.gcr.zst` and the parts pruned; an entry the position already calls sealed is not
+//! sent again, and is pruned even with `upload.json` lost.
 
 mod common;
 
@@ -193,6 +194,42 @@ fn it_refuses_while_a_recorder_holds_rec_lock() {
     let (entry, _) = sealed(dir.path(), &fake, DEADLINE);
     let held = File::open(entry.join("rec/lock")).unwrap();
     held.try_lock().unwrap();
+    // A live recorder's upload thread holds `upload.lock` for its whole life.
+    let uploading = state::lock_upload(&entry).unwrap();
     assert_eq!(upload(dir.path(), &entry, false), Outcome::StillRecording);
+    drop(uploading);
     assert!(fake.chunks().is_empty() && fake.heartbeats().is_empty());
+}
+
+/// An entry `status.json` does not call sealed is never sealed on the server, even when its last
+/// line on disk is an `E` line (a rotation, or a recovery `R`, before a crash).
+#[test]
+fn an_entry_with_no_seal_is_not_sent_as_sealed() {
+    let fake = FakeWorker::start();
+    let dir = tempfile::tempdir().unwrap();
+    let (entry, _) = sealed(dir.path(), &fake, DEADLINE);
+    let status = serde_json::to_vec(&Status::default()).unwrap();
+    fs::write(cli::status_json(&entry), status).unwrap();
+    assert_eq!(upload(dir.path(), &entry, false), Outcome::NotClosed);
+    assert!(fake.chunks().is_empty() && fake.heartbeats().is_empty());
+}
+
+/// `upload.json` is a cache: with it lost, an entry the server holds sealed is confirmed from the
+/// position matched to the seal LINK and pruned, and a second run finds nothing left.
+#[test]
+fn an_entry_already_on_the_server_is_pruned_without_upload_json() {
+    let fake = FakeWorker::start();
+    let dir = tempfile::tempdir().unwrap();
+    let (entry, _) = sealed(dir.path(), &fake, DEADLINE);
+    assert_eq!(upload(dir.path(), &entry, true), Outcome::Done);
+    assert!(!part_files(&entry.join("rec")).unwrap().is_empty(), "kept");
+    fs::remove_file(entry.join(state::FILE)).unwrap();
+    let chunks = fake.chunks().len();
+    assert_eq!(upload(dir.path(), &entry, false), Outcome::AlreadyThere);
+    assert!(part_files(&entry.join("rec")).unwrap().is_empty(), "pruned");
+    assert_eq!(fake.chunks().len(), chunks, "no PUT");
+    let j = state::read(&entry).unwrap();
+    assert_eq!(j.final_, Final::Sealed);
+    assert!(j.pruned.parts > 0 && j.confirmed.is_some());
+    assert_eq!(upload(dir.path(), &entry, false), Outcome::AlreadyThere);
 }

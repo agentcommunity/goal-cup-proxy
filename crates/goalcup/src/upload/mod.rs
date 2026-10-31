@@ -97,9 +97,15 @@ pub struct UploadHandle {
     run: Option<Run>,
 }
 
-/// The shared state, and each thread with the sender `finish` wakes it by; true marks the upload
-/// thread.
-type Run = (Arc<Shared>, Vec<(bool, mpsc::Sender<()>, JoinHandle<()>)>);
+/// The shared state and its threads.
+type Run = (Arc<Shared>, Vec<Thread>);
+
+/// One thread, with the sender `finish` wakes it by.
+struct Thread {
+    upload: bool,
+    wake: mpsc::Sender<()>,
+    handle: JoinHandle<()>,
+}
 
 /// What `finish` hands both threads.
 type Wrap = (WrapUp, SealFacts);
@@ -157,12 +163,17 @@ pub fn spawn(ctx: UploadCtx) -> UploadHandle {
     }
 }
 
-/// `upload.json` for the entry, keeping what an earlier one confirmed, sent and pruned, and the
-/// client for its run's server. None when there is nothing to send with: the file, written here,
+/// `upload.json` for the entry, keeping what `old`, the earlier one, confirmed, sent and pruned,
+/// and the client for its run's server. None when there is nothing to send with: the file, written here,
 /// says why. Only a readable `server.json` that says off makes the run local; an unreadable one is
 /// not read as "no server". The tail window `upload_by` is the run deadline plus a day.
-fn connect(run_dir: &Path, entry_dir: &Path, ids: (&str, &str), keep: bool) -> Connected {
-    let old = state::read(entry_dir).unwrap_or_default();
+fn connect(
+    run_dir: &Path,
+    entry_dir: &Path,
+    ids: (&str, &str),
+    keep: bool,
+    old: UploadJson,
+) -> Connected {
     let mut json = UploadJson {
         keep,
         upload_by: old.upload_by,
@@ -200,7 +211,8 @@ type Connected = (UploadJson, Option<ServerClient>);
 /// The threads of [`spawn`]; None when none starts, `upload.json` says why.
 fn start(ctx: UploadCtx, word: Arc<watch::Sender<Option<ServerWord>>>) -> Option<Run> {
     let ids = (&*ctx.run, &*ctx.entry);
-    let (json, client) = connect(&ctx.run_dir, &ctx.entry_dir, ids, ctx.keep);
+    let old = state::read(&ctx.entry_dir).unwrap_or_default();
+    let (json, client) = connect(&ctx.run_dir, &ctx.entry_dir, ids, ctx.keep, old);
     let client = client?;
     let sh = Arc::new(Shared {
         p: Policy::from_env(),
@@ -214,9 +226,13 @@ fn start(ctx: UploadCtx, word: Arc<watch::Sender<Option<ServerWord>>>) -> Option
         wrap: Mutex::new(None),
         tried: AtomicBool::new(false),
     });
-    let up = launch(&sh, true, upload_thread).map(|(tx, h)| (true, tx, h));
-    let beat = launch(&sh, false, beat_thread).map(|(tx, h)| (false, tx, h));
-    let threads: Vec<_> = up.into_iter().chain(beat).collect();
+    let threads: Vec<_> = [(true, upload_thread as fn(&Shared, &Receiver<()>)), (false, beat_thread)]
+        .into_iter()
+        .filter_map(|(upload, body)| {
+            let (wake, handle) = launch(&sh, upload, body)?;
+            Some(Thread { upload, wake, handle })
+        })
+        .collect();
     sh.put(true);
     // With no thread, `finish` has nothing to wait for.
     (!threads.is_empty()).then_some((sh, threads))
@@ -231,11 +247,7 @@ fn launch(
 ) -> Option<(mpsc::Sender<()>, JoinHandle<()>)> {
     let (tx, rx) = mpsc::channel();
     let s = sh.clone();
-    let name = if round {
-        "goalcup-upload"
-    } else {
-        "goalcup-beat"
-    };
+    let name = ["goalcup-beat", "goalcup-upload"][usize::from(round)];
     let started = thread::Builder::new().name(name.into()).spawn(move || {
         pipeline::low_priority();
         let mut again = false;
@@ -439,21 +451,25 @@ impl UploadHandle {
             return;
         };
         *lock(&sh.wrap) = Some((wrap_up, seal));
-        for (_, tx, _) in &threads {
-            let _ = tx.send(());
+        for t in &threads {
+            let _ = t.wake.send(());
         }
         let done = |j: &UploadJson| j.final_ == Final::Sealed && j.state == State::Done;
         while !done(&lock(&sh.json))
             && !wrap_up.over(Mono::now())
-            && threads.iter().any(|t| t.0 && !t.2.is_finished())
+            && threads.iter().any(|t| t.upload && !t.handle.is_finished())
         {
             thread::sleep(TICK / 20);
         }
         // Dropping the senders stops the threads.
-        let joins: Vec<_> = threads.into_iter().map(|t| t.2).collect();
+        let joins: Vec<_> = threads.into_iter().map(|t| t.handle).collect();
         let until = policy::after(Mono::now(), 5 * TICK);
         while !joins.iter().all(JoinHandle::is_finished) && Mono::now() < until {
             thread::sleep(TICK / 100);
+        }
+        // The upload thread may have stopped before its tick that prunes the sealed last part.
+        if done(&lock(&sh.json)) {
+            prune::prune(&sh.dir, &sh.json, &sh.file);
         }
         sh.put(true);
     }

@@ -164,6 +164,12 @@ pub fn read(entry_dir: &Path) -> Option<UploadJson> {
 /// Writes the file: a temp file in the same folder, created with mode 0600, then renamed over it.
 /// The temp name holds the pid and a per-call number, so two writers never share one.
 pub fn write(entry_dir: &Path, value: &UploadJson) -> io::Result<()> {
+    write_with(entry_dir, value, false)
+}
+
+/// [`write`], and with `sync` the temp file's data is synced before the rename and the folder
+/// after it, so the new file outlives a power loss that keeps a later delete (section 7).
+fn write_with(entry_dir: &Path, value: &UploadJson, sync: bool) -> io::Result<()> {
     static CALLS: AtomicU64 = AtomicU64::new(0);
     let n = CALLS.fetch_add(1, Ordering::Relaxed);
     let tmp = entry_dir.join(format!(".{FILE}.{}.{n}.tmp", std::process::id()));
@@ -173,8 +179,15 @@ pub fn write(entry_dir: &Path, value: &UploadJson) -> io::Result<()> {
         .create_new(true)
         .mode(0o600)
         .open(&tmp)
-        .and_then(|mut f| f.write_all(&body))
+        .and_then(|mut f| {
+            f.write_all(&body)?;
+            if sync { f.sync_data() } else { Ok(()) }
+        })
         .and_then(|()| std::fs::rename(&tmp, entry_dir.join(FILE)));
+    let done = done.and_then(|()| match sync {
+        true => File::open(entry_dir)?.sync_all(),
+        false => Ok(()),
+    });
     if done.is_err() {
         let _ = std::fs::remove_file(&tmp);
     }
@@ -195,6 +208,14 @@ impl Writer {
             last: None,
             at: None,
         }
+    }
+
+    /// Writes `value` now and syncs it and the folder: the write that comes before a prune.
+    pub fn put_synced(&mut self, now: Mono, value: &UploadJson) -> io::Result<()> {
+        write_with(&self.dir, value, true)?;
+        self.last = Some(value.clone());
+        self.at = Some(now);
+        Ok(())
     }
 
     /// Writes `value` if it is due; true when the file was written.

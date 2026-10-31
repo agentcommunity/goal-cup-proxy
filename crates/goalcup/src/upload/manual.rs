@@ -6,13 +6,15 @@
 use super::beat::{Beat, FinalFacts, health};
 use super::chunk::Bound;
 use super::client::{RunPosition, ServerClient, ServerError};
-use super::policy::{Backoff, Class, Policy, class_of_status, ends_manual_upload};
-use super::send::{Sender, Step, lock, log_failure};
-use super::state::{self, Final, State, UploadJson, Writer};
+use super::policy::{Backoff, Class, Policy, ends_manual_upload};
+use super::send::{Sender, Step, lock, log_failure, words};
+use super::state::{self, Confirmed, Final, State, UploadJson, Writer};
 use super::{SealFacts, TICK, connect, final_due, prune::prune, seal_link};
 use crate::cli;
+use crate::pipeline::status::{Mode, SealStatus};
 use crate::pipeline::{self, Mono, Status};
 use crate::watchdog::SealReason;
+use goalcup_format::hex;
 use std::path::Path;
 use std::sync::Mutex;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -26,7 +28,7 @@ pub enum Outcome {
     AlreadyThere,
     /// A recorder holds `rec/lock`: the entry sends itself.
     StillRecording,
-    /// The entry has no seal; slice 6 closes a dead entry here through `close_dead_entry`.
+    /// The entry has no seal and no recorder: `pipeline::close_dead_entry` (PRD-02 9.4) closes it.
     NotClosed,
     /// The run has no server.
     Local,
@@ -40,10 +42,15 @@ pub enum Outcome {
     Stuck,
 }
 
-/// Sends the entry in `entry_dir` of the run in `run_dir`. Waits on the 1 s tick while another
-/// uploader holds `upload.lock`; probes `rec/lock` without waiting and lets it go at once.
+/// Sends the entry in `entry_dir` of the run in `run_dir`. Says `StillRecording` at once while a
+/// recorder holds `rec/lock`, checked before `upload.lock` and on every 1 s tick spent waiting for
+/// another uploader to let `upload.lock` go. An entry is sealed when `status.json` says `sealed`
+/// with its seal, or `upload.json` says the server sealed it; any other is `NotClosed`.
 pub fn run(entry_dir: &Path, run_dir: &Path, ids: (&str, &str), keep: bool) -> Outcome {
     let _held = loop {
+        if recording(entry_dir) {
+            return Outcome::StillRecording;
+        }
         match state::lock_upload(entry_dir) {
             Some(held) => break held,
             None => std::thread::sleep(TICK),
@@ -53,13 +60,21 @@ pub fn run(entry_dir: &Path, run_dir: &Path, ids: (&str, &str), keep: bool) -> O
         return Outcome::StillRecording;
     }
     let old = state::read(entry_dir).unwrap_or_default();
+    let status = cli::read_json::<Status>(&cli::status_json(entry_dir));
+    let seal = status.filter(|s| s.mode == Mode::Sealed).and_then(|s| s.seal);
+    let stored = old.final_ == Final::Sealed;
+    if seal.is_none() && !stored {
+        return Outcome::NotClosed;
+    }
     let link = seal_link(&entry_dir.join("rec"));
-    // Every part pruned: the confirmed end of an entry already sealed stands for the seal LINK.
-    let kept = old.confirmed.filter(|_| old.final_ == Final::Sealed);
-    let Some(end) = link.map(|l| l.raw_end).or(kept.map(|c| c.raw)) else {
+    // Every part pruned: the confirmed end of an entry the server sealed stands for the seal LINK.
+    let kept = old.confirmed.clone().filter(|_| stored);
+    let end = link.map(|l| (l.raw_end, l.seq, hex(&l.hash)));
+    let Some(end) = end.or(kept.map(|c| (c.raw, c.seq, c.hash))) else {
         return Outcome::NotClosed;
     };
-    let (json, client) = connect(run_dir, entry_dir, ids, keep || old.keep);
+    let keep = keep || old.keep;
+    let (json, client) = connect(run_dir, entry_dir, ids, keep, old);
     let Some(client) = client else {
         return match json.state {
             State::Local => Outcome::Local,
@@ -69,12 +84,9 @@ pub fn run(entry_dir: &Path, run_dir: &Path, ids: (&str, &str), keep: bool) -> O
     let (j, file) = (Mutex::new(json), Mutex::new(Writer::new(entry_dir.into())));
     let out = match position(&client, entry_dir, ids, &j) {
         Err(o) => o,
-        Ok(p) if p.sealed && p.offset == end => {
-            prune(entry_dir, &j, &file);
-            Outcome::AlreadyThere
-        }
+        Ok(p) if p.sealed && p.offset == end.0 => already(&p, end, entry_dir, (&j, &file)),
         Ok(_) => match link {
-            Some(point) => send(entry_dir, client, ids, &point, (&j, &file)),
+            Some(point) => send(entry_dir, client, ids, &point, seal, (&j, &file)),
             None => Outcome::Stuck,
         },
     };
@@ -82,10 +94,34 @@ pub fn run(entry_dir: &Path, run_dir: &Path, ids: (&str, &str), keep: bool) -> O
     out
 }
 
-/// Whether a recorder holds `rec/lock`; the probe's lock goes with the file.
+/// The server holds a sealed entry ending at the seal LINK's offset: when its `next_seq - 1` and
+/// `head` match that LINK too, the end is confirmed (section 7), written, and the entry pruned;
+/// otherwise the copies differ.
+fn already(
+    p: &RunPosition,
+    (raw, seq, hash): (u64, u64, String),
+    entry_dir: &Path,
+    (j, file): (&Mutex<UploadJson>, &Mutex<Writer>),
+) -> Outcome {
+    if p.next_seq.checked_sub(1) != Some(seq) || !p.head.eq_ignore_ascii_case(&hash) {
+        lock(j).state = State::Stuck;
+        return Outcome::Stuck;
+    }
+    {
+        let mut j = lock(j);
+        let at = state::rfc3339(SystemTime::now());
+        j.confirmed = Some(Confirmed { raw, seq, hash, at });
+        (j.final_, j.state) = (Final::Sealed, State::Done);
+    }
+    prune(entry_dir, j, file);
+    Outcome::AlreadyThere
+}
+
+/// Whether a recorder holds `rec/lock`. The probe takes a shared lock for a moment and lets it go
+/// with the file; a recorder starting in that moment waits for it (PRD-02 9.2 step 2).
 fn recording(entry_dir: &Path) -> bool {
     let f = std::fs::File::open(entry_dir.join("rec").join("lock"));
-    f.is_ok_and(|f| matches!(f.try_lock(), Err(std::fs::TryLockError::WouldBlock)))
+    f.is_ok_and(|f| matches!(f.try_lock_shared(), Err(std::fs::TryLockError::WouldBlock)))
 }
 
 /// The server's position, read again on the backoff until it answers or gives up.
@@ -104,30 +140,27 @@ fn position(
             }
             Err(e) => e,
         };
-        let (class, status) = match &e {
-            ServerError::Status { status, .. } => (class_of_status(*status), Some(*status)),
-            _ => (Some(Class::Network), None),
-        };
+        let (class, status, _) = words(&e);
         let wait = b.fail(Mono::now(), e.retry_after().map(Duration::from_secs));
-        let class = class.unwrap_or(Class::Network).word();
-        log_failure(entry_dir, "position", class, status, wait);
+        log_failure(entry_dir, "position", class.word(), status, wait);
         while !b.due(Mono::now()) {
             std::thread::sleep(TICK);
         }
     }
 }
 
-/// The wrap-up's order with the seal's facts from `status.json` and the totals from
+/// The wrap-up's order with the seal's facts from `status.json` (a seal not known there is
+/// `recovered`) and the totals from
 /// `pipeline::entry_totals` (`counts.jsonl` for pruned boots), then prune.
 fn send(
     entry_dir: &Path,
     client: ServerClient,
     (run, entry): (&str, &str),
     point: &goalcup_format::IndexLine,
+    seal: Option<SealStatus>,
     (j, file): (&Mutex<UploadJson>, &Mutex<Writer>),
 ) -> Outcome {
     let p = Policy::from_env();
-    let seal = cli::read_json::<Status>(&cli::status_json(entry_dir)).and_then(|s| s.seal);
     let totals = pipeline::entry_totals(entry_dir);
     let live = health(None, entry_dir, &totals).1;
     let seal = SealFacts {
