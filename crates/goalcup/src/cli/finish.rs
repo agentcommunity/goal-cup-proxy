@@ -154,3 +154,77 @@ pub fn screen(
     out += &format!("{}\n", text::details_at(log));
     Ok(out)
 }
+
+// What `start` prints once `watchdog::run` has returned (PRD-10 section 3 step 10).
+
+/// How long a sealed `status.json` is waited for after the watchdog returns, in 100 ms steps.
+const SEALED_WAIT: u32 = 30;
+
+/// The longest the front shows the wrap-up: the recorder's own bound is 60 minutes (PRD-06 section 9).
+const WRAP_UP_MAX: std::time::Duration = std::time::Duration::from_secs(61 * 60);
+
+/// What `start` prints when the watchdog has returned: the end screen of the sealed part, with a
+/// line first when the harness never started, or the start refusal when nothing was recorded at
+/// all. Only the details a participant can act on; no value and no byte of the record.
+pub fn closing(entry_dir: &Path, name: &str, run: &str) -> String {
+    for _ in 0..SEALED_WAIT {
+        if let Ok(screen) = end_screen(entry_dir) {
+            let st: Option<Status> = super::read_json(&super::status_json(entry_dir));
+            let gone = st.is_some_and(|s| s.harness.is_none());
+            let first = gone.then(|| format!("{name} did not start.\n\n"));
+            return format!("{}{screen}", first.unwrap_or_default());
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    let wrote = super::status_json(entry_dir).exists();
+    let log = text::details_at(&super::goalcup_log(entry_dir));
+    if wrote {
+        return format!("goalcup has not finished closing this part. Run goalcup status.\n{log}\n");
+    }
+    let support = text::SUPPORT_ADDRESS;
+    format!(
+        "Goal Cup could not start recording, so {name} was not started. Run the command again. \
+         If it fails again, write to {support} and name run {run}.\n{log}\n"
+    )
+}
+
+/// The upload progress after the end screen (PRD-06 section 9): while the recorder lives and the
+/// upload is going, one `Upload:` line whenever its state or the bytes waiting change, then the
+/// last word. Ctrl-C ends this wait only; the recorder finishes alone.
+pub fn wrap_up(entry_dir: &Path, say: &mut dyn FnMut(&str)) {
+    let recorder = |path: &Path| -> bool {
+        let st: Option<Status> = super::read_json(&super::status_json(path));
+        st.is_some_and(|s| super::alive(s.pid, s.start_id))
+    };
+    if !recorder(entry_dir) {
+        return;
+    }
+    let started = std::time::Instant::now();
+    let mut shown = None;
+    let mut last = None;
+    while recorder(entry_dir) && started.elapsed() < WRAP_UP_MAX {
+        if let Some(u) = up::read(entry_dir) {
+            let key = (u.state, u.waiting_bytes, u.final_);
+            if shown != Some(key) {
+                say(&text::upload_line(&u, super::now(), false));
+                shown = Some(key);
+            }
+            last = Some(u.state);
+            if matches!(
+                u.state,
+                up::State::Local
+                    | up::State::Done
+                    | up::State::Closed
+                    | up::State::Stuck
+                    | up::State::Refused
+            ) {
+                return;
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_secs(1));
+    }
+    // The wrap-up is over: nothing sends this part by itself now.
+    if let (Some(u), Some(_)) = (up::read(entry_dir), last) {
+        say(&text::upload_line(&u, super::now(), true));
+    }
+}
