@@ -1554,3 +1554,44 @@ to another file are made by that file's owner.
   line, and each remaining slice cuts first what serves no point (`counts.rs` and `handle.rs` are the
   places the reviewers named). The end-of-build report nets this against the Rust totals.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-31, replan after PRD-05 core slice (merge 2c95e8f1)
+
+- **S2 is the real masker now**, not the stub. `start.mask_rules` has the 18 shared kinds, the connector
+  kinds, `run_secret` and `fail_closed` (more than one entry), so the PRD-16 rung-1 stub check no longer
+  fires; entries built on a stub-era build stay not evidence. `Masker::new(&plan.mask_rules, values)`
+  returns `Result<Masker, MaskError>`: an error means a built-in shape or a connector rule did not
+  compile, and the recorder boot stops with a plain line (fixed text, no byte in it). `Span.rule`
+  indexes `mask_rules()`.
+- **Calls the pipeline makes** (PRD-05 note): one `StreamMasker` per stream from `masker.stream(kind)`;
+  `push` returns fewer or more bytes than were pushed (the released bytes are the record bytes, so
+  offsets follow the released length); `boundary()` at each WebSocket message end (K15, `fin`); `gap()`
+  before writing every GAP on that stream; `finish(self)` at the end of the stream. A stream holds at most
+  16 KiB undecided and stars (kind `fail_closed`) past that, never drops.
+- **R8, the mask pool.** One stream measured 10.4 MB/s (Codex request) and 12.6 MB/s (transcript) in a
+  release build, 16 KiB pieces, against the 50 MB/s target. The masker is `Send + Sync` and `Clone`
+  shares the policy, so the pool (one `StreamMasker` per stream, pinned to one worker at a time) is the
+  way to the target. Count the 16 KiB hold per stream in the pool's memory use.
+- **Values.** `mask::workspace_values(project)` returns the default build's exact values (the `GH_TOKEN`
+  value from the key files, usable only). `env` and `harness` values passed in are counted in
+  `start.mask_values.skipped` and never used until the owner's yes to question 3; PRD-02 need not
+  collect them. `Masker::new` took 3.1 s only with 32 values of 256 bytes, the question 3 case.
+- **`mask_meta` is real**: it keeps `method`, `status`, `host`, `port`, `alpn`, masks credential header
+  values and writes `meta.masked` for an object with `headers`. The rule "never read meta back after
+  `mask_meta`" stays (a native `path` with a shaped key or a credential query is starred); take the host,
+  the stream key and the native `path` before the call.
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-31, conductor decisions before PRD-02 slice A (planning pass, 08:40Z)
+
+Two planning passes (`/root/gc-night/prd02/path-plan.md` and `audit-fix-plan.md` in the conductor box) set the order: the slice under review (mask worker, writer, spawn, shield) merges first; then **slice A, one request end to end** (`boot.rs` boot 0 and boot recovery, `seal.rs` for `seal_command` and `harness_exit`, `watchdog::run` with the restart loop at once, `status.json` filled, `rec/watchdog.pid`, `rec/run-ca.key`); then slice B (null mode, the server word, the deadline, `dead.rs`, `recover`, SIGTERM); then slice C (`pipeline_stall.rs`, `by_hand_load`, `SnapshotCursor.fid` with PRD-04, the mask pool decision). Decisions (none touches a locked item; R3, R3a, R3b, R4 to R7, F2, M1, L5, B10 hold as written):
+
+- **Size.** Ceiling 6,000 src with the cuts the plan names in `counts.rs` and `handle.rs`; tests ceiling 2,300 (the restart, recover and end cases guard the never-stop rules, B10).
+- **Recover with a live recorder** follows PRD-10 section 3.2 and PRD-12's `kill-watchdog-recover` row: a live recorder holding `rec/lock` is never killed; `recover` says recording is on and exits 0. Section 8.1 step 4 is read this way.
+- **`watchdog::recover(entry_dir, facts) -> Result<Recovered, NotRecovered>`** (PRD-10 ask N9), not `-> ExitCode`; PRD-10 words every refusal.
+- **Seal drain** runs in channel order with no timer; the "5 s on a signal" default and PRD-00 S8's "drain 60 s" are read as no timer.
+- **`StartFacts` typed now** (`HostList`, `NativeSources`, `Vec<MaskRule>`, `Vec<SecretValue>`, `ConnectorRef`, plus `home: PathBuf`) in slice A, with a seam line; PRD-10's `start.rs` builds against the typed shape.
+- **`ToWatchdog::Server(upload::ServerWord)`** added in slice B.
+- **Tests folded:** `pipeline_native_room.rs`, `pipeline_panic.rs`, `pipeline_many_streams.rs` are not written; P5 to P7 are guarded by the folded case in `pipeline_guard.rs`, P11 by `watchdog_end.rs`, P14 by PRD-04's native room test.
+- **Mask pool:** decided in slice C after the R8 by-hand measure; not before.
+- Owner questions 2, 9 and 12 keep their defaults.

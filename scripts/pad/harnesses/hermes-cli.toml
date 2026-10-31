@@ -14,8 +14,6 @@ key_line = "DEEPSEEK_API_KEY={key}"
 model_host = "api.deepseek.com"
 exit_keys = '/exit\r'
 daemon = "hermes gateway run"
-submit_delay = 2
-subagent_word = "subagent"
 keep_going = true
 
 [direct]

@@ -952,3 +952,7 @@ No locked ledger item is touched and no owner question comes from this note.
   row. A `tls_refused` GAP with `{"alert": false}` stays the case PRD-08 skips for `refusal_after_trust`.
   A dodger row expects `pinned` tunnels with no `tls_refused` of its own.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-31, conductor seam decision: `serve` for PRD-02 slice A (08:40Z)
+
+PRD-02's next slice (`boot.rs`) calls `serve`, so **`serve` must be on integration before PRD-02 slice A merges**. Shape: `proxy::serve(listener: std::net::TcpListener, ctx: ProxyCtx { recorder, hosts, ca }) -> ProxyHandle` is a plain `fn` that builds and owns its 2-worker tokio runtime, spawns the accept loop and returns at once; `ProxyHandle::quiet_since() -> Mono`. `extra_roots` leaves the context: the test hook is read once inside `serve`. If slice 2's review runs long, land a compiling `serve` in a seam-only merge first (PRD-00: stubs first) so PRD-02 can build against it.

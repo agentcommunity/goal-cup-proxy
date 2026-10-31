@@ -1039,3 +1039,19 @@ PRDs they touch and the code. Where two fixes disagree, the ledger and the later
 - Test budget: PRD-04 tests are 1,768 against the 1,000 row (ceiling 1,780, PRD-04 note); the Rust
   test total of at most about 14,200 is tracked in PRD-16.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-31, replan after PRD-05 core slice (merge 2c95e8f1)
+
+- **Mask tests on integration (`wc -l` at 8e886901):** the six files of the table (`mask_rules`,
+  `mask_stream`, `mask_values`, `mask_meta`, `mask_corpus`, `mask_bench`) 1,712 lines, helpers in
+  `tests/mask_corpus/` 408, inline 662: 2,782 against the 2,000 line of the table (139%). The masking
+  lane's 01:01Z decision names points 3 and 4. The table row is not rewritten; the end-of-build report
+  counts 2,782.
+- **Gate time:** `gate fast` was 94 s on the merge of the core slice (78 s before). Mask tests run in the
+  default nextest tier.
+- **One timing assert in `gate fast`:** `mask_stream::runs_that_hold_candidates_stream_in_linear_time`
+  fails at 30 s (about 20 times the linear cost in a debug build). On a loaded box raise the bound; do not
+  delete the equality assert. `mask_bench` stays ignored and in no tier.
+- **`test-hooks`:** `Masker::passthrough_for_tests` is compiled under `feature = "test-hooks"` alone (the
+  clear-masker gate of the PRD-05 note is in).
+- No locked ledger item is touched and no owner question comes from this slice.

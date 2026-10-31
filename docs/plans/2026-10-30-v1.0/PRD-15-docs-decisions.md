@@ -1298,3 +1298,101 @@ gate and release code; rewrote `scripts/README.md` (39 lines) for the PRD-13 pre
   (PRD-12's skill rewrite; `skills/adding-a-capture-harness/writing-a-decoder.md` is still there), the
   guide, RULES, SECURITY, TODO and the DECISIONS entries, and the third slice with the newcomer run.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-31, replan after PRD-08 slice 5 (merge bfd244e3)
+
+- **`docs/RECORD-FORMAT.md` line 365 is stale.** It says `history_complete`, `wire_keeps_up`,
+  `threads_match` and `subagents_present` are always `skip` ("not built in this slice"). On integration
+  the last three are real (`legs.rs`); only `history_complete` is still `skip` until PRD-08 slice 6.
+  Fix it in the next RECORD-FORMAT touch, line-neutral (the page ceiling is 430 lines): name the three
+  with one sentence each (a lost model call on the wire, a thread whose calls differ from the harness
+  log, a subagent with no wire calls or native stream), that they are `named` when a recorder-down GAP
+  or a provider or gateway conn GAP covers the loss, `skip` with a reason where the harness log is not
+  read, and the new report keys `harness_log` (`none`, `totals`, `per_call`), `provider_errors` and
+  `threads`. Read `legs.rs` and `report.rs`; do not copy PRD-08 text. When slice 6 merges, drop the
+  remaining `skip` sentence.
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-31, replan after PRD-15 slice 10 (merge 524c6745)
+
+Slice 10 brought `docs/RECORD-FORMAT.md` to PRD-08 slice 4 (the three honesty checks) and PRD-09 slice 4
+(the usage JSON section), deleted the build-state sentence in `docs/OPERATING.md` (B-R1), added the one
+`goalcup-verify usage --out` line, and rechecked OPERATING against the code merged since slice 9.
+
+- **RECORD-FORMAT is stale again, by one merge.** PRD-08 slice 5 (bfd244e3) merged just before slice 10
+  and was not read by it. On integration `legs.rs` now builds `wire_keeps_up`, `threads_match` and
+  `subagents_present`, and `report.rs` skips only `history_complete`. The page still says (lines
+  363-366) that those three are always `skip`, and (line 359) that `harness_log`, `provider_errors`
+  and `history` are null with `threads` an empty list "no check fills them", and (line 358) that
+  `counts.threads` is null. The code now writes `harness_log` and `provider_errors` from the legs,
+  `threads` as a list, `counts.threads` as its length, and leaves `history` null. The next RECORD-FORMAT
+  slice describes the three legs checks by id, fills those rows from `legs.rs` and `report.rs` (read
+  them first; do not copy PRD-08 text), and cuts the skip list to `history_complete` alone. If PRD-08
+  slice 6 (`history.rs`) has merged by then, that check and the `history` key are written in the same
+  edit and the skip list is gone. The text form's coverage line (`report.rs`, "Recorded: ...") is
+  part of the same read.
+- **Three nits for that same edit (A9, A10, A11).**
+  - A9, the `listed_hosts_decrypted` bullet: the `warn` for a `tls_refused` connection applies only to a
+    connection to a listed host (`honesty.rs` computes `after_trust` inside `if c.listed`), and
+    "finished" means the earlier connection ended `complete`. Wording: "A `tls_refused` connection to
+    a listed host whose host and fingerprint earlier ended a decrypted connection `complete` is
+    `warn`, unless ...".
+  - A10, the closing sentence of the usage section: strings that leave the record are not only
+    "reason tokens". `effort` (`safe_code` of `reasoning.effort`, or of Codex `turn_context` `effort`)
+    and `extra` member names (provider usage keys that pass `safe`) are also safe tokens of at most 64
+    bytes from `[A-Za-z0-9_.-]`. Write "safe tokens (reason, effort and usage member names)".
+  - A11 and R1, wrapping: the exit-code paragraph (lines 340-341, 143 and 135 columns), the line that
+    holds the `warn` clause and "Facts: `listed_conns`, ..." of the honesty bullet and the `conn_bytes`
+    bullet are past the page's wrap of about 100 columns. Re-wrap them; table rows may stay long.
+- **RECORD-FORMAT size (B-R2), decision.** `wc -l` at 524c6745 is 502, against the 280 estimate (179%)
+  and against the 430 ceiling the slice 9 note set: slice 10 passed that ceiling by 72 lines without a
+  decision line. What the lines serve: the usage section is about 75 lines with its token and hint tables
+  (point 5: the S7 summary and calls files are what a judge and the server read, and PRD-09 section 7
+  asks for them in this page), and the honesty paragraph is 18 (point 5, an organizer reads
+  `listed_hosts_decrypted` and `conn_bytes` results). A concrete cut that keeps the S7 contract was
+  not found in review B. The ceiling for this page is now **540 lines**, which covers the legs
+  checks and `history_complete`. The edit above should come out near 520: cut each check's fact
+  list to the ids it already names in `report.rs` and `honesty.rs` where the list only repeats a
+  `facts` key, as the slice 9 note allowed. Past 540, the reviewer raises it as a finding.
+- **Doc sizes at 524c6745** (`wc -l`, estimates from section 10 and the files table): RECORD-FORMAT 502 of
+  280, OPERATING 235 of 280, CONNECTOR-SCHEMA 115 of 90 (128%), `scripts/README.md` 39. The other pages
+  are not at their final form yet and are not counted. PRD-00 has no size row for docs; the figures are
+  recorded here and in the PRD-16 note.
+- **OPERATING recheck is closed.** Review B found the recheck sound: the page links RECORD-FORMAT for
+  `usage --out` and carries no duplicate exit text. OPERATING needs nothing until PRD-10's `start` and
+  `continue` and PRD-02's recorder `run` merge.
+- **Still waiting, unchanged:** the AGENTS.md map and README rewrite (PRD-02 recorder `run`, PRD-10
+  `start`), the ARCHITECTURE and RECORD-FORMAT numbers (PRD-02 core steps after step 1), the two
+  build-progress marks in CONNECTOR-SCHEMA (B-R3, wait for `continue`), the HARNESS-ONBOARDING pointer
+  (PRD-12's skill rewrite), the guide, RULES, SECURITY, TODO and the DECISIONS entries, and the third
+  slice with the newcomer run. CONNECTOR-SCHEMA is at PRD-11 slice 4; recheck its connector list
+  against slice 5 (7a647ba4: amp, cline, crush, droid, goose, kimi) when the next slice touches it.
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-31, replan after PRD-11 slice 6 (merge 211ade46)
+
+- The 15 harness sheets and `docs/harnesses/README.md` are rewritten on integration and have no link
+  into a purged path except one: `docs/harnesses/README.md:52` links `../research/coverage-matrix.md`.
+  PRD-11's refresh touch drops it (PRD-11 note). If that touch has not landed when the purge runs, the
+  purge's `check-links.py` pass removes the sentence. The three `TERMINATION.md` links in the old
+  amp, codex and hermes sheets are gone with the rewrite.
+- `docs/PARTICIPANT-GUIDE.md` links the README for the list and never copies the tier column
+  (section 4 of the guide); nothing else changes here. No locked ledger item is touched.
+
+### 2026-10-31, replan after PRD-12 slice 6 (merge 645f3219)
+
+- **The two skill files are gone.** `skills/adding-a-capture-harness/writing-a-decoder.md` and
+  `templates/connector-harness.toml` were deleted by PRD-12 slice 6; the skill now has `SKILL.md`,
+  `templates/pad-harness.toml` and `templates/harness-facts.md`. These docs still link or name them and
+  must be repointed in this PRD's pass (a link to a missing file is a `check-links.py` failure): `README.md`
+  (step 3, line about 206, copy the template: say to copy a neighbour such as `connectors/hermes-cli.toml`,
+  as the skill now does), `docs/HARNESS-ONBOARDING.md` (the decoder link near line 17, the template links near lines 30 and
+  298), and `docs/README.md` (the `writing-a-decoder` line near 45: drop it, decoders are cut). The
+  archive copy `docs/archive/CONTRACTS.md` and the older plan files are history; leave them, or let the
+  purge's link pass drop the link text.
+- **The "HARNESS-ONBOARDING pointer" item that waited on PRD-12's skill rewrite can start now.** The
+  shortened page links `skills/adding-a-capture-harness/SKILL.md` for the steps (its "five steps": docs and
+  facts sheet with `connectors/<id>.toml`, the pad file, a `micro`-based run, an optional native sample, the
+  pull request with `row.json`) and
+  `docs/CONNECTOR-SCHEMA.md` for the keys; it does not copy them.
+- No locked ledger item is touched and no owner question comes from this slice.

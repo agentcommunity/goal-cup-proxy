@@ -7,7 +7,7 @@ Walks every step of the settings' mode with a limit per step, always cleans up, 
 table. Sandbox calls go through `node scripts/pad/sbx.mjs` (it finds @vercel/sandbox in PAD_NODE_MODULES,
 NODE_PATH or beside itself), box steps through `pad-run`. The pad never reads a model key value: it passes
 `sbx.mjs put-env` the name of the variable that holds it; the approval key it reads only to send it. Exit: 0 every row PASS, 1 any FAIL, 3 any
-INCONCLUSIVE and no FAIL, 2 usage error. Needs Python 3.11 or later; an older python3 re-runs it.
+INCONCLUSIVE and no FAIL (also a harness with no key: nothing was run), 2 usage error. Needs Python 3.11 or later; an older python3 re-runs it.
 """
 import concurrent.futures, datetime, glob, hashlib, json, math, os, re, secrets, shutil, signal, stat  # noqa: E401
 import subprocess, sys, tarfile, tempfile, threading, time, urllib.request  # noqa: E401
@@ -45,12 +45,9 @@ LIMITS = {"setup": 5, "pre": 3, "start": 3, "wait-calls": 4, "look": 1, "wait-re
           "seal": 5, "wait-upload": 10, "fetch": 5, "check": 10, "cleanup": 5}  # minutes; seal and check add the run's
 KEYS = {"harness", "key", "case", "mode", "server", "prompt", "minutes", "steps", "where",
         "gateway_key", "version", "build", "connector", "hosts", "keep", "keep_going"}
-FAULTS = {"kill-recorder": 0, "kill-watchdog": 3, "kill-watchdog-recover": 2, "kill-both": 0, "freeze": 10,
-          "cut-worker": 10, "route-drop": 1, "fd-limit": 0}  # kind: minutes it lasts by default (section 3.1)
-SPAN = {"freeze", "cut-worker", "route-drop"}  # the faults that take +<minutes>
-# pad-run's box steps in this slice; the other faults come in a later slice
-BOX_STEPS = {"pre", "start", "wait-calls", "look", "seal", "wait-upload", "kill-recorder", "wait-recovery",
-             "kill-watchdog-recover", "keep-going", "exec"}
+FAULTS, SPAN = pc.FAULTS, pc.SPAN  # section 3.1: kind to the minutes it lasts by default; the kinds that take +<minutes>
+# pad-run's box steps: the faults of section 3.1, the watcher steps, and the mode's own
+BOX_STEPS = {"pre", "start", "wait-calls", "look", "seal", "wait-upload", "wait-recovery", "keep-going", "exec"} | set(FAULTS)
 PRICED = tuple(k for k in pc.S7_TOKENS if k != "reasoning")  # PRD-09 section 4; output holds reasoning, never added again
 LEDGER = threading.Lock()  # spend lines: runs and the spend check write in parallel
 NAME = re.compile(r"[a-z0-9][a-z0-9_-]*")
@@ -199,6 +196,13 @@ def load_settings(raw, pad):
     return s
 
 
+def lasts(raw):
+    """Minutes the timed step `kind@m[+n]` lasts: its +n, else the kind's own (also for `kill-both@m+upload`)."""
+    kind, _, rest = raw.partition("@")
+    n = rest.partition("+")[2]
+    return int(n) if n.isdigit() else FAULTS[kind]
+
+
 def step_limit(s, step):
     """Seconds; the one owner of every step limit (pad-run's own come from it through runner_limits). wait-upload:
     10 min, or 5 after the last fault ends (minutes from the paste, so a wait from the seal never falls short). A timed
@@ -208,8 +212,7 @@ def step_limit(s, step):
     if at:  # kind@m, kind@m+n, kill-both@m+upload or exec <script>@m
         return int(at.split("+")[0]) * 60 + runner_limits(s).get(kind, 300) + 120
     if kind == "wait-upload":
-        ends = [m + (int(rest.split("+")[1]) if f in SPAN and "+" in rest else FAULTS[f])
-                for _, m, r in s["plan"] for f, _, rest in [r.partition("@")] if f in FAULTS]
+        ends = [m + lasts(r) for _, m, r in s["plan"] if r.partition("@")[0] in FAULTS]
         return 60 * max(LIMITS[kind], 5 + max(ends, default=0))
     return LIMITS.get(kind, 5) * 60 + (s["minutes"] * 60 if kind in ("seal", "check", "keep-going") else 0)
 
@@ -218,15 +221,17 @@ def runner_limits(s):
     """Seconds per pad-run step, the ones pad-run reads from settings.json: paste has start's, verify works to the
     check step's limit, wipe to a third of cleanup's (the box's rm and list take the other thirds), and wait-recovery
     to 30 s under its step's limit (pad-run starts later, so its own FAIL line comes before the step times out). The
-    two faults and exec (EXEC_LIMIT) count from minute m; keep-going and the detached
+    faults and exec (EXEC_LIMIT) count from minute m; keep-going and the detached
     watch from their start."""
     got = {k: step_limit(s, k) for k in ("setup", "pre", "start", "wait-calls", "look", "seal", "wait-upload",
                                          "wait-recovery")}
     run = int(math.ceil(s["minutes"] * 60))
     got["wait-recovery"] -= 30
+    longest = lambda k: 60 * max([lasts(r) for _, _, r in s["plan"] if r.startswith(k + "@")],  # noqa: E731
+                                 default=FAULTS[k]) + 120  # the longest +n of the kind, then 2 minutes
     return dict(got, paste=got["start"], verify=step_limit(s, "check"), wipe=step_limit(s, "cleanup") // 3, spend=120,
-                **{"kill-recorder": 120, "kill-watchdog-recover": 240, "keep-going": run, "seal-now": 120, "watch": run + 1800,
-                   "exec": EXEC_LIMIT})
+                **{"kill-recorder": 120, "kill-watchdog-recover": 240, "kill-watchdog": 330, "kill-both": 300, "fd-limit": 60,
+                   "keep-going": run, "seal-now": 120, "watch": run + 1800, "exec": EXEC_LIMIT}, **{k: longest(k) for k in SPAN})
 
 
 def pin(data, host):
@@ -437,7 +442,7 @@ class Run:
                      env=env_without())  # here is the box, and check.py needs no organizer secret either
         got = [ln[len(tag) + 1:] for ln in (r.stdout or "").splitlines() if ln.startswith(tag + " ")]
         d = json.loads(got[-1]) if got else {"result": "error", "saw": said("%s: no %s line" % (step, tag), r)}
-        self.meta.update({k: d[k] for k in ("entry", "run") if d.get(k)})
+        self.meta.update({k: d[k] for k in ("entry", "run", "new_entry") if d.get(k)})
         return d.get("result", "error"), d.get("saw", ""), d
 
     def step_box(self, step, limit):
@@ -498,24 +503,26 @@ class Run:
         argv), then the copy in to the box's ~/run/fetched/<entry>/, where pad-run verify reads it."""
         if self.s["server"] != "staging":
             return "skip", NEEDS_LATER
-        entry = str(self.meta.get("entry"))
-        if not re.fullmatch(r"e[0-9a-f]{16}", entry):
-            return "FAIL", "server copy not fetched: no entry id"
-        self.log("fetch-run " + entry)
-        got = os.path.join(self.dir, "fetched", entry)
-        try:
-            r = call(["sh", os.path.join(REPO, "scripts", "fetch-run.sh"), "--bucket", STAGING_BUCKET, entry,
-                      os.path.dirname(got)], timeout=limit, env=env_without(set(NEVER_IN_BOX) - set(FETCH)))
-        finally:  # a timeout kills sh before its EXIT trap: its work folder (pg_service.conf) goes here
-            for left in glob.glob(os.path.join(os.path.dirname(got), ".fetch-run.*")):
-                shutil.rmtree(left, ignore_errors=True)
-        if r.returncode or not os.path.isfile(os.path.join(got, "fetch.json")):  # a partial entry exits 0
-            return "FAIL", said("server copy not fetched", r)
-        if self.s["where"] == "here":
-            shutil.copytree(got, os.path.join(self.box_dir, "fetched", entry))
-        elif self.sbx("push-dir", self.name, got, "~/run/fetched/" + entry, limit=limit).returncode:
-            return "error", "fetched copy not copied in"
-        return "ok", "fetched " + entry
+        new = self.meta.get("new_entry")
+        entries = [str(self.meta.get("entry"))] + ([new] if new else [])  # kill-both: both
+        for entry in entries:
+            if not re.fullmatch(r"e[0-9a-f]{16}", entry):
+                return "FAIL", "server copy not fetched: no entry id"
+            self.log("fetch-run " + entry)
+            got = os.path.join(self.dir, "fetched", entry)
+            try:
+                r = call(["sh", os.path.join(REPO, "scripts", "fetch-run.sh"), "--bucket", STAGING_BUCKET, entry,
+                          os.path.dirname(got)], timeout=limit, env=env_without(set(NEVER_IN_BOX) - set(FETCH)))
+            finally:  # a timeout kills sh before its EXIT trap: its work folder (pg_service.conf) goes here
+                for left in glob.glob(os.path.join(os.path.dirname(got), ".fetch-run.*")):
+                    shutil.rmtree(left, ignore_errors=True)
+            if r.returncode or not os.path.isfile(os.path.join(got, "fetch.json")):  # a partial entry exits 0
+                return "FAIL", said("server copy not fetched", r)
+            if self.s["where"] == "here":
+                shutil.copytree(got, os.path.join(self.box_dir, "fetched", entry))
+            elif self.sbx("push-dir", self.name, got, "~/run/fetched/" + entry, limit=limit).returncode:
+                return "error", "fetched copy not copied in"
+        return "ok", "fetched " + " and ".join(entries)
 
     def step_check(self, step, limit):
         """Section 8: pad-run verify (sized to the run, it always writes its tar), the tar copied out, meta.json,
@@ -632,6 +639,9 @@ def main(argv):
         pad = read_toml(os.path.join(HERE, "pad.toml"))
         s = load_settings(read_toml(argv[1]), pad)
         harness = read_toml(os.path.join(HERE, "harnesses", s["harness"] + ".toml"))  # a missing one is an OSError
+        if harness.get("key_kind") == "none":  # Amp, Droid: no key to give it, so nothing to run (no box, no case)
+            print("%s: not verified: no key" % s["harness"])
+            return 3  # nothing proven: the INCONCLUSIVE exit, never "every row PASS"
         if not (harness.get("version") and harness.get("version_cmd")):
             raise Usage("scripts/pad/harnesses/%s.toml needs version and version_cmd" % s["harness"])
         if s["case"] in ("dodger", "all") and not re.fullmatch(r"[a-z0-9][a-z0-9.-]*", str(harness.get("model_host"))):
