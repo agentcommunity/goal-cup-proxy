@@ -2270,3 +2270,10 @@ kept and now cites BUILD-PROMPT section 5, since B3 no longer carries it.
   (2) Heading anchors into `PARTICIPANT-GUIDE.md` are not checked by `check-links.py`; grep them once
   (`LOCAL-RESEARCH-HANDOFF.md:97` has `#5-your-run`, the heading is `#6-your-run`).
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-31, replan after PRD-12 slice 7 (merge 1dd5caaf)
+
+- **Size report, PRD-12** (`wc -l` at 1dd5caaf, scripts row "pad about 1,350 to 1,450 with its tests"): `scripts/pad/` outside fixtures is 4,303 lines, about 300% of the row. Per-file figures are in the PRD-12 note. The lines serve points 1, 3 and 7 as the slice 6 note says. Whether the row rises stays the owner question already logged; only that answer, not this note, moves the row. The end-of-build report nets it against the Scripts line.
+- **Pad status for acceptance:** all sixteen harness files exist and the per-key queue is built. Only K2 has fixtures, so `selftest` ends at exit 3 until PRD-08 slice 6 and PRD-09 land and the K7 and K11 fixtures are added. Phase 2 exit must not read exit 3 as a pass. The queue is proven only by the first real batch (no unit test, by PRD-12 section 10).
+- **Keys unverified:** several vendor docs hosts were unreachable when the five new harness files were written; the rig-trust step re-checks those keys on the first real run of each harness.
+- No locked ledger item is touched and no owner question comes from this slice.

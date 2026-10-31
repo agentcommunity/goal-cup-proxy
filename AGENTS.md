@@ -1,11 +1,11 @@
 # Working in this repository
 
-This repository holds Goal Cup Proxy, a research recorder for running coding agents across harnesses and operating
-systems. It records declared model traffic and native session artifacts into a sealed hash chain,
-with offline verification and versioned research decoders. Goal Cup's one-prompt, 168-hour contest
-uses that evidence and adds server upload and event rules. Current support is macOS and Linux;
-Windows uses WSL2, with real-machine validation pending and native Windows planned.
-This file is the map for agents and people. Open work is in [`TODO.md`](TODO.md).
+This repository holds Goal Cup Proxy (`goalcup`), the recorder for Goal Cup runs. One process on the
+participant's machine records every model request a coding agent's harness makes, through a loopback
+proxy, plus the harness's own session files, and writes every loss as a gap with a start and an end.
+It uploads the record while the run goes on. `goalcup-verify` checks a record and reads usage from it
+later. Linux; macOS pending the owner's Mac run; Windows through WSL2. Open work is in
+[TODO.md](TODO.md).
 
 ## The seven points
 
@@ -21,56 +21,37 @@ What we build toward, from [VISION.md](VISION.md). Every change is judged agains
 
 Less code is better. Cut before you add. Ready by Friday 6 November 2026.
 
-Read first: [VISION.md](VISION.md), then [DECISIONS](docs/DECISIONS.md) from "Owner decisions in
-force". While the 1.0 build runs, also the [ledger](docs/plans/2026-10-30-v1.0/OWNER-DECISIONS.md),
-which wins over every PRD, then the [PRD index](docs/plans/2026-10-30-v1.0/PRD-00-index.md).
+Read first: [VISION.md](VISION.md), then [ARCHITECTURE](docs/ARCHITECTURE.md), then
+[DECISIONS](docs/DECISIONS.md) from "Owner decisions in force". While the 1.0 build runs, also the
+[ledger](docs/plans/2026-10-30-v1.0/OWNER-DECISIONS.md), which wins over every PRD, then the
+[PRD index](docs/plans/2026-10-30-v1.0/PRD-00-index.md).
 
 ## Map
 
 | Path | What it is |
 |---|---|
-| `crates/goalcup-protocol` | Every byte definition: chain, v5 records, control API types, harness schema (`harness.rs`), trust tables (`capture_policy.rs`), connector pins. No rule logic. |
-| `crates/goalcup-daemon` | `goalcup-daemon`: ingest, redaction, chain writer, native-file capture, finish, process termination. Small on purpose. |
-| `crates/goalcup-cli` | `goalcup` (eleven commands: `start`, `continue`, `status`, `time-left`, `mcp`, `entries`, `seal`, `doctor`, `login`, `setup` (alias `prep`), `upload`). Launches the harness, runs the recording proxy, uploads. |
-| `crates/goalcup-verifier` | `goalcup-verify` and the decoders. Every judgement about the bytes lives here. |
-| `crates/goalcup-platform` | Unix-only OS code shared by the others: disk reservation, capability-based file access, machine facts, sleep lock. |
-| `connectors/<id>/` | One harness = one `harness.toml` plus seed files. Data, not code. Pinned by digest. |
-| `server/worker` | The upload server: a Cloudflare Worker in TypeScript. |
-| `scripts/` | The gate, pins, connector check, link check, matrix, release and research tools. One line each, and which ones CI and the gate run: [`scripts/README.md`](scripts/README.md). |
+| `crates/goalcup-format` | The record format (GCR1): records, links, part writer, reader, dump. No async, no TLS. Spec: [RECORD-FORMAT](docs/RECORD-FORMAT.md). |
+| `crates/goalcup` | `goalcup`: the eight commands, the watchdog, the recorder process (proxy, session-file reader, masking, writer, uploader) and the connector loader. |
+| `crates/goalcup-verify` | `goalcup-verify`: `check`, `dump`, `secrets`, `usage`. Every judgement about the bytes lives here. |
+| `connectors/` | One `<id>.toml` per harness, `model-hosts.toml` (the one host list) and `tiers.toml` (written by the test pad). Data, compiled into the binary. |
+| `server/worker` | The upload server, a Cloudflare Worker. It stores bytes and interprets nothing. |
+| `scripts/` | The gate, release, `fetch-run.sh` and the test pad (`scripts/pad/`): [scripts/README.md](scripts/README.md). |
 | `skills/` | `goal-cup` (copied into the harness home) and `adding-a-capture-harness` (contributors). |
-| `docs/` | Docs by audience: the [README docs map](README.md#docs-map). Finished work and old narratives: `docs/archive/`. |
+| `docs/` | By reader: the [docs map](README.md#docs-map). Plans: `docs/plans/`. History: `docs/archive/`, `docs/research/`. |
 | `packaging/` | Release packaging and `install.sh`. |
-| `spikes/`, `harnesses/` | Old measurements (read-only fixtures) and local harness installs (git-ignored). |
 
-The dependency rule: the daemon never links the verifier, and the CLI never links the daemon.
-Both are checked by tests.
+The dependency rule: the recorder never links the verifier, and the verifier never links the
+recorder. They share only `goalcup-format`. No test guards this yet; the manifests are the only check.
 
-## Read next
-
-1. [`README.md`](README.md): build, install, run, the gate.
-2. [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md): how the parts fit, and the one glossary (run,
-   part, segment, chain file, seal, receipt, ack).
-3. [`docs/DECISIONS.md`](docs/DECISIONS.md): current rules and historical decisions. Code comments
-   cite them as `D<number>`; the status table at the top says which are current, superseded or
-   retired.
-4. [`docs/RULES.md`](docs/RULES.md): the participant contract.
-5. [`SECURITY.md`](SECURITY.md#what-a-check-does-not-prove): read before you trust a verifier Pass.
-   [`docs/archive/TERMINATION.md`](docs/archive/TERMINATION.md): what `Confirmed` does and does not claim.
-6. Adding a harness: [`skills/adding-a-capture-harness/SKILL.md`](skills/adding-a-capture-harness/SKILL.md),
-   then [`HARNESS-ONBOARDING`](docs/HARNESS-ONBOARDING.md).
-7. Wire contracts: [`docs/archive/CONTRACTS.md`](docs/archive/CONTRACTS.md), [`docs/CONNECTOR-SCHEMA.md`](docs/CONNECTOR-SCHEMA.md),
-   [`docs/UPLOAD-API.md`](docs/UPLOAD-API.md). Running it: [`docs/OPERATING.md`](docs/OPERATING.md).
+Core code is `crates/goalcup` and `crates/goalcup-format`. The usage reader in `crates/goalcup-verify`
+reads harness session formats after the run, chosen by connector id.
 
 ## The gate
 
-```
-sh scripts/gate.sh fast   # before every commit
-sh scripts/gate.sh full   # before a release
-```
-
-Setup and what each tier runs: [README](README.md#the-gate). CI (`check`) is a small Linux smoke,
-not the gate. After the one-time `cargo fetch --locked` and `cargo install cargo-nextest --locked`
-setup, project build and gate Cargo commands run with `--offline`.
+One script, two tiers: `sh scripts/gate.sh fast` before every merge (format, clippy, every test,
+the Worker and script tests) and `sh scripts/gate.sh full` at phase exits and before a release (also
+the ignored end-to-end tests and the release build). CI runs `fast` on every pull request. Run it as
+a normal user, not root. What each tier runs and what it needs: [README](README.md#the-gate).
 
 ## Hard rules
 
@@ -86,9 +67,9 @@ setup, project build and gate Cargo commands run with `--offline`.
 - **No harness names in core code.** A harness is data (a connector) plus shared modules.
 - **Never write into `~/.claude`, `~/.codex`, `~/.hermes` or any app-wide config.** Goal Cup Proxy
   makes isolated homes. A test that launches a harness uses a private `HOME`.
-- **Never commit** anything under the repository root's `/pad-out/` or `/harnesses/`, under
-  `spikes/*/out/`, or any `target/`, a key, or a real run's record. A committed fixture is masked
-  and reviewed by eye.
+- **Never commit** anything under the repository root's `/pad-out/` or `/harnesses/`, any `spikes/*/out/`
+  (until PRD-13 deletes `spikes/`), or any
+  `target/`, a key, or a real run's record. A committed fixture is masked and reviewed by eye.
 - **Record raw, interpret later.** The recorder captures bytes. The verifier and the usage reader
   judge them. Do not put rule logic in the recorder (D3).
 
@@ -97,8 +78,8 @@ setup, project build and gate Cargo commands run with `--offline`.
 One test per behaviour you add or change. Test the promise, not the shape: no golden snapshots of
 internal structures, and no assertions on doc text or message wording unless the text is the
 contract. Every behaviour that serves one of the seven points has a test, and that test is not
-deleted while the point stands, unless it is replaced in the same change by a test with the same
-name prefix that asserts the same promise.
+deleted while the point stands unless it is replaced in the same change by a test with the same name prefix
+that asserts the same promise. Where they are: [README](README.md#the-seven-points-and-their-tests).
 
 ## Done
 
