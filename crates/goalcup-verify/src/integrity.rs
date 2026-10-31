@@ -2,6 +2,7 @@
 //! one streaming pass per entry. State is a few words per open stream (dropped at END) and per
 //! boot. A finding is a code and counts, never a byte of the record.
 
+use crate::honesty::Honesty;
 use crate::input::{self, Entry};
 use goalcup_format::dump::wall;
 use goalcup_format::{EndReason, FLAG_FIN, GapReason, Item, Record, StreamKind};
@@ -47,6 +48,15 @@ impl Check {
             why: why.into(),
             first: None,
             facts: Map::new(),
+        }
+    }
+
+    /// Raises the check to `res` when that is worse; the first finding at the worst level is kept.
+    pub(crate) fn raise(&mut self, res: Res, why: &str, at: Option<At>) {
+        if res > self.result {
+            self.result = res;
+            self.why = why.into();
+            self.first = at.map(|At(o, sid, w)| json!({"o": o, "sid": sid, "wall": wall(w)}));
         }
     }
 }
@@ -165,7 +175,7 @@ struct St {
 
 /// Where a finding is: raw offset, stream, wall time.
 #[derive(Clone, Copy)]
-struct At(u64, u64, u64);
+pub(crate) struct At(pub(crate) u64, pub(crate) u64, pub(crate) u64);
 
 /// What one entry gave.
 pub struct Outcome {
@@ -222,6 +232,8 @@ pub fn check(e: &Entry, now_ns: Option<u64>, want: &HashSet<u64>) -> Outcome {
         }
     }
     p.finish(meter.open_frame.get(), now_ns, e);
+    let h = std::mem::take(&mut p.h).finish();
+    p.checks.extend(h);
     Outcome {
         sealed: p.seal.is_some(),
         seal: p.seal.take(),
@@ -242,6 +254,7 @@ pub fn check(e: &Entry, now_ns: Option<u64>, want: &HashSet<u64>) -> Outcome {
 #[derive(Default)]
 struct Pass {
     checks: Vec<Check>,
+    h: Honesty,
     entry: Option<String>,
     start: Option<Map<String, Value>>,
     mask_rules: Vec<String>,
@@ -297,15 +310,9 @@ impl Pass {
             .expect("a known check id")
     }
 
-    /// Raises a check to `res` when that is worse; the first finding at the worst level is kept.
     fn set(&mut self, id: &str, res: Res, why: &str, at: Option<At>) {
         let i = self.idx(id);
-        let c = &mut self.checks[i];
-        if res > c.result {
-            c.result = res;
-            c.why = why.into();
-            c.first = at.map(|At(o, sid, w)| json!({"o": o, "sid": sid, "wall": wall(w)}));
-        }
+        self.checks[i].raise(res, why, at);
     }
 
     fn fail(&mut self, id: &str, why: &str, at: At) {
@@ -364,6 +371,7 @@ impl Pass {
             }
             _ => Map::new(),
         };
+        self.h.item(it, at, &ev);
         let ev_name = ev
             .get("ev")
             .and_then(Value::as_str)
@@ -569,6 +577,7 @@ impl Pass {
                     .is_some_and(|r| r == "fail_closed")
                 {
                     self.cur.add("mask_failclosed_bytes", *len);
+                    self.h.mask(*sid, *len, at);
                 }
             }
             Record::Event { .. } => self.event(&ev_name, ev, at),

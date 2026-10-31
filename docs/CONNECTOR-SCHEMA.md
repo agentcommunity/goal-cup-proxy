@@ -1,13 +1,12 @@
 # Connector schema
 
-A harness is one data file, `connectors/<id>.toml`, and every harness goes through the same code. A
-new connector is its TOML file plus one line in `crates/goalcup/src/connector/builtin.rs`, the one
-source file that names connector files; `crates/goalcup/tests/connector_builtin.rs` fails when a file
-is missing from that list or its `id` differs. Tiers live in
-[`connectors/tiers.toml`](../connectors/tiers.toml), not in a connector. Nothing is pinned. The
-`start` event names the connector (`connector`, `connector_source`, `connector_sha256`) and the host
-list's hash (`hosts_sha256`). `goalcup start`, `setup` and `continue` are not built yet: the rules
-below are what the connector loader and launch plan do, and a run applies them once `start` is built.
+A harness is one data file, `connectors/<id>.toml`, and every harness goes through the same code. A new
+connector is its TOML file plus one `entry!("<id>")` line in `crates/goalcup/src/connector/builtin.rs`, the
+one source file that names connector files; `tests/connector_builtin.rs` fails on a file missing from that
+list or an `id` that differs. Tiers live in [`connectors/tiers.toml`](../connectors/tiers.toml), not in a
+connector. Nothing is pinned. The `start` event names the connector (`connector`, `connector_source`,
+`connector_sha256`) and the host list's hash (`hosts_sha256`). `setup` is built; `start` stops after its
+folder checks and `continue` is not built, so a run applies these rules once `start` is built.
 
 ## The connector contract
 
@@ -21,10 +20,10 @@ is the participant's project folder.
 | `id` | string `[a-z0-9-]{1,32}` | | The connector id: `goalcup start --harness <id>` |
 | `name` | string | | Shown to the participant |
 | `program` | string | | The executable, found on the participant's `PATH` |
-| `version` | string | none | Text the first non-empty line of `program --version` must contain, else the start refuses, naming the program. A version that cannot be read (no output, a failed exit, 5 s without an exit) refuses nothing |
+| `version` | string | none | A word of the first non-empty line of `program --version`, with a leading `v` stripped, must start with it, else the start refuses, naming the program. A version that cannot be read (no output, a failed exit, 5 s without an exit) refuses nothing |
 | `args` | string list | `[]` | Arguments for `goalcup start`. Template `{workspace}` only |
 | `resume` | string list | `[]` | Appended to `args` for `goalcup continue`. Template `{workspace}` only |
-| `home` | map, variable to template | empty | Variables pointed into the isolated home; each value starts with `{home}`. The folders are created with mode 0700 |
+| `home` | map, variable to template | empty | Variables pointed into the isolated home; each value starts with `{home}`. The folders are created with mode 0700. Where it sets `HOME`, goalcup also writes `$HOME/.profile`, putting the handed `PATH` back after a login shell resets it: replaced only when goalcup wrote it, else kept with a log line |
 | `env` | map, variable to string | empty | Fixed variables (auto-update switches, daemon modes), set last |
 | `ca_env` | string list | `[]` | The harness's own CA variables. Each is pointed at the run CA |
 | `unset` | string list | `[]` | Participant variables removed before launch, for those that beat `HTTPS_PROXY` |
@@ -95,21 +94,22 @@ host from the participant list or a hint is left out with a log line.
 ## Loading a file
 
 `goalcup start` and `goalcup continue` take `--connector <file.toml>` and `--hosts <file.toml>`, with
-the same parser and checks; the `start` event gives `connector_source = "file"`. Both flags are for
-practice and test runs only: without `--practice` or `--test`, the start refuses before anything is
-read. `continue` has no `--practice` or `--test`: its two flags must name the same files, unchanged,
-as the run's first entry (none if it used none). **(next slice, ruled in PRD-10, not PRD-11: `goalcup
-continue` is not built yet, so nothing is read)**
+the same parser and checks; the `start` event gives `connector_source = "file"`. Both are for practice
+and test runs only: without `--practice` or `--test`, the start refuses before anything is read.
+`continue` has no `--practice` or `--test`: its two flags must name the same files, unchanged, as the
+run's first entry (none if it used none). **(next slice, ruled in PRD-10: `continue` is not built yet)**
 
 ## Example
 
-An excerpt of [`connectors/claude-code-cli.toml`](../connectors/claude-code-cli.toml):
+An excerpt of [`connectors/copilot-cli.toml`](../connectors/copilot-cli.toml):
 
 ```toml
-id = "claude-code-cli"
-name = "Claude Code"
-program = "claude"
-home = { CLAUDE_CONFIG_DIR = "{home}" }
-native = [{ name = "transcripts", root = "{home}/projects", pattern = "**/*.jsonl" }]
-mask = [{ kind = "anthropic_billing_header", header_prefix = "x-anthropic-billing-" }]
+id = "copilot-cli"
+name = "GitHub Copilot CLI"
+program = "copilot"
+home = { COPILOT_HOME = "{home}" }
+env = { COPILOT_AUTO_UPDATE = "false" }
+host_hints = [{ file = "{home}/providers.json", key = "providers.*.baseUrl" }]
+native = [{ name = "store", root = "{home}", pattern = "session-store.db*", form = "final" }]
+no_prompts = [{ file = "{home}/settings.json", key = "defaultPermissionMode", value = "allow-all" }]
 ```

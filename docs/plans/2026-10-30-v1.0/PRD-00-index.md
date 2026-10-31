@@ -1286,3 +1286,15 @@ why. Fixes for other files are made by those files' owners; this list covers onl
 - **Size table, row "Connector code (PRD-11)":** a replan decision moves its ceiling to 1,700 src and
   760 tests (PRD-11 note names the points). That is 900 src and 360 tests over the row; PRD-16 tracks
   the Rust totals.
+
+### 2026-10-31, replan after PRD-04 second slice (merge 7e8ed89b)
+
+- **Ownership:** `crates/goalcup/tests/native_common/` (the native tests' shared `append`, `notes`,
+  `end_of` and `gap_rows` helpers) is PRD-04's, under its `tests/native_*.rs` row (review A10), the
+  same shape as `tests/cli_common/` above. A folder module does not build as its own test binary, and
+  `tests/common/` stays PRD-14's. Read the PRD-04 row as `tests/native_*`.
+- **Size table, row "Native (PRD-04)":** a replan decision sets its ceilings to 1,500 src and 1,780
+  tests (PRD-04 note names the points the lines serve). That is 720 src and 780 tests over the row;
+  the Rust totals of about 18,100 src and at most about 14,200 tests hold only if other rows come in
+  under them. PRD-16 tracks the totals.
+- No locked ledger item is touched and no owner question comes from this slice.

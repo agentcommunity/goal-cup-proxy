@@ -9,10 +9,7 @@ use serde_json::{Map, Value, json};
 use std::path::Path;
 
 /// Checks a later slice builds: in the report as `skip`, so readers see every id now.
-const LATER: [&str; 7] = [
-    "listed_hosts_decrypted",
-    "conn_bytes",
-    "mask_failclosed",
+const LATER: [&str; 4] = [
     "history_complete",
     "wire_keeps_up",
     "threads_match",
