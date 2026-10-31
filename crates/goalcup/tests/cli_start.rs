@@ -34,13 +34,22 @@ impl Fix {
              first_screen = \"Press Enter.\"\n{extra}"
         );
         std::fs::write(&connector, body).unwrap();
-        Fix { t, project, connector }
+        Fix {
+            t,
+            project,
+            connector,
+        }
+    }
+
+    /// Away from the project: the two never sit side by side.
+    fn gc(&self) -> PathBuf {
+        self.t.home().join("b/gc")
     }
 
     fn ctx(&self, server: Server) -> Ctx {
         let path = std::env::var("PATH").unwrap_or_default();
         Ctx {
-            home: self.t.goalcup_home(),
+            home: self.gc(),
             project: self.project.clone(),
             vars: [("PATH".to_owned(), path)].into(),
             server,
@@ -69,7 +78,8 @@ impl Fix {
 fn facts_hold_the_workspace_token_value_and_nothing_else_secret() {
     let fix = Fix::new("{home}/skills", "");
     let mut out = Vec::new();
-    let ready = prepare(&fix.args(), &fix.ctx(Server::Off), &mut out).unwrap_or_else(|s| panic!("{}", s.text));
+    let ready = prepare(&fix.args(), &fix.ctx(Server::Off), &mut out)
+        .unwrap_or_else(|s| panic!("{}", s.text));
     let facts = serde_json::to_value(&ready.facts).unwrap();
     let values = facts["values"].as_array().unwrap();
     assert_eq!(values.len(), 1);
@@ -85,7 +95,7 @@ fn facts_hold_the_workspace_token_value_and_nothing_else_secret() {
     assert!(ready.plan.env["GOALCUP_TIME_LEFT_FILE"].ends_with("upload.json"));
     // A null run has no credential on disk.
     let run = facts["run"].as_str().unwrap();
-    let run_dir = fix.t.goalcup_home().join("runs").join(run);
+    let run_dir = fix.gc().join("runs").join(run);
     assert!(!run_dir.join("credential").exists() && run_dir.join("server.json").is_file());
 }
 
@@ -93,23 +103,34 @@ fn facts_hold_the_workspace_token_value_and_nothing_else_secret() {
 fn a_plan_refusal_names_file_and_key_never_the_value_and_creates_no_run() {
     let extra = "[[refuse_if_set]]\nfile = \"{home}/settings.json\"\nkeys = [\"proxy\"]\n";
     let fix = Fix::new("{home}/skills", extra);
-    let iso = isolated_home(&fix.t.goalcup_home(), "tester");
+    let iso = isolated_home(&fix.gc(), "tester");
     std::fs::create_dir_all(&iso).unwrap();
-    std::fs::write(iso.join("settings.json"), json!({"proxy": "SECRETVALUE-xyz"}).to_string()).unwrap();
-    let stop = prepare(&fix.args(), &fix.ctx(Server::Off), &mut Vec::new()).err().unwrap();
+    std::fs::write(
+        iso.join("settings.json"),
+        json!({"proxy": "SECRETVALUE-xyz"}).to_string(),
+    )
+    .unwrap();
+    let stop = prepare(&fix.args(), &fix.ctx(Server::Off), &mut Vec::new())
+        .err()
+        .unwrap();
     assert_eq!(stop.code, 1);
     assert!(stop.text.contains("settings.json") && stop.text.contains("proxy"));
     assert!(!stop.text.contains("SECRETVALUE"));
-    assert!(!fix.t.goalcup_home().join("runs").exists());
+    assert!(!fix.gc().join("runs").exists());
 }
 
 #[test]
 fn the_skill_lands_in_the_harness_home_and_never_in_the_project() {
     let fix = Fix::new("{home}/skills", "");
     let before = fix.listing(&fix.project);
-    let ready = prepare(&fix.args(), &fix.ctx(Server::Off), &mut Vec::new()).unwrap_or_else(|s| panic!("{}", s.text));
+    let ready = prepare(&fix.args(), &fix.ctx(Server::Off), &mut Vec::new())
+        .unwrap_or_else(|s| panic!("{}", s.text));
     let skill = ready.plan.home.join("skills/goal-cup/SKILL.md");
-    assert!(std::fs::read_to_string(skill).unwrap().contains("/goal Cup"));
+    assert!(
+        std::fs::read_to_string(skill)
+            .unwrap()
+            .contains("/goal Cup")
+    );
     assert_eq!(fix.listing(&fix.project), before);
 }
 
@@ -118,10 +139,12 @@ fn every_folder_problem_is_listed_at_once_and_nothing_is_created() {
     let fix = Fix::new("{home}/skills", "");
     std::fs::write(fix.project.join("notes.txt"), "x").unwrap();
     std::fs::write(fix.project.join(".env"), "A=1\n").unwrap();
-    let stop = prepare(&fix.args(), &fix.ctx(Server::Off), &mut Vec::new()).err().unwrap();
+    let stop = prepare(&fix.args(), &fix.ctx(Server::Off), &mut Vec::new())
+        .err()
+        .unwrap();
     assert!(stop.text.contains("notes.txt") && stop.text.contains(".env"));
     assert!(stop.text.ends_with(text::NOTHING_CREATED));
-    assert!(!fix.t.goalcup_home().join("runs").exists());
+    assert!(!fix.gc().join("runs").exists());
 }
 
 #[test]
@@ -135,7 +158,9 @@ fn a_denied_approval_creates_no_run() {
             ..Inject::default()
         },
     );
-    let stop = prepare(&fix.args(), &fix.ctx(Server::Url(w.url())), &mut Vec::new()).err().unwrap();
+    let stop = prepare(&fix.args(), &fix.ctx(Server::Url(w.url())), &mut Vec::new())
+        .err()
+        .unwrap();
     assert_eq!(stop.code, 1);
-    assert!(!fix.t.goalcup_home().join("runs").exists());
+    assert!(!fix.gc().join("runs").exists());
 }

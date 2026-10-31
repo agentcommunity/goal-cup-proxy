@@ -38,7 +38,11 @@ pub fn install(
     match place(&dir) {
         Ok(()) => Some(dir.join(NAME)),
         Err(e) => {
-            line(entry_dir, "skill_not_installed", &[("io", Fact::Io(e.kind()))]);
+            line(
+                entry_dir,
+                "skill_not_installed",
+                &[("io", Fact::Io(e.kind()))],
+            );
             None
         }
     }
@@ -47,7 +51,8 @@ pub fn install(
 /// Written beside the target under a name of its own, then renamed into place, so the harness
 /// never sees half a skill. A link where the folder goes is removed, never followed.
 fn place(skills: &Path) -> std::io::Result<()> {
-    let private = |p: &Path, recursive: bool| DirBuilder::new().recursive(recursive).mode(0o700).create(p);
+    let private =
+        |p: &Path, recursive: bool| DirBuilder::new().recursive(recursive).mode(0o700).create(p);
     private(skills, true)?;
     let staging = skills.join(format!(".{NAME}-{}", std::process::id()));
     let _ = fs::remove_dir_all(&staging);

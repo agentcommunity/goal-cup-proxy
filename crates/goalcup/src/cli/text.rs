@@ -1153,7 +1153,8 @@ pub fn no_prompts_left(name: &str) -> String {
 }
 
 // start slice 7 messages
-pub const NEEDS_REPO: &str = "a real run needs --repo <owner>/<name>, its new, empty, public GitHub repository.";
+pub const NEEDS_REPO: &str =
+    "a real run needs --repo <owner>/<name>, its new, empty, public GitHub repository.";
 
 pub const NO_HARNESS_SAVED: &str = "no harness picked. Run: goalcup setup --harness <id>";
 

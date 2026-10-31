@@ -5,7 +5,6 @@
 //! code lives (P14): the only timers are `approve`'s. No token or credential is printed.
 
 use std::collections::BTreeMap;
-use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -167,7 +166,11 @@ pub fn prepare(a: &Args, c: &Ctx, out: &mut dyn std::io::Write) -> Result<Ready,
         goalcup_home: c.home.clone(),
         server_host: c.server.host().unwrap_or_default().to_owned(),
     };
-    let mut plan = connector::plan(&connector, &env, &super::isolated_home(&c.home, &connector.id));
+    let mut plan = connector::plan(
+        &connector,
+        &env,
+        &super::isolated_home(&c.home, &connector.id),
+    );
     if let Some(r) = &plan.refusal {
         return Err(stop(text::refusal(r)));
     }
@@ -181,7 +184,9 @@ pub fn prepare(a: &Args, c: &Ctx, out: &mut dyn std::io::Write) -> Result<Ready,
     let source = ConnectorSource {
         id: connector.id.clone(),
         name: name.clone(),
-        source: a.connector.map_or("builtin".to_owned(), |p| p.display().to_string()),
+        source: a
+            .connector
+            .map_or("builtin".to_owned(), |p| p.display().to_string()),
     };
     let ask = Ask {
         mode,
@@ -203,7 +208,12 @@ pub fn prepare(a: &Args, c: &Ctx, out: &mut dyn std::io::Write) -> Result<Ready,
     let _ = std::fs::create_dir_all(&entry_dir);
     // Steps 7 and 8: the sleep lock, then the skill.
     let (lock, sleep_warning) = awake::take(&c.vars);
-    skill::install(connector.skills_dir.as_deref(), &plan.home, &c.project, &entry_dir);
+    skill::install(
+        connector.skills_dir.as_deref(),
+        &plan.home,
+        &c.project,
+        &entry_dir,
+    );
     // Step 9: the launch block.
     let deadline = opened.deadline.map(|m| {
         let left_ms = m.ns().saturating_sub(Mono::now().ns()) / 1_000_000;
@@ -217,7 +227,11 @@ pub fn prepare(a: &Args, c: &Ctx, out: &mut dyn std::io::Write) -> Result<Ready,
         None => text::NO_END_TIME.to_owned(),
     });
     lines.push(text::upload_to(c.server.host()));
-    lines.push(tier_line(&name, plan.harness_version.as_deref(), &connector.id));
+    lines.push(tier_line(
+        &name,
+        plan.harness_version.as_deref(),
+        &connector.id,
+    ));
     for (what, file) in [("Connector", a.connector), ("Host list", a.hosts)] {
         lines.extend(file.map(|f| text::from_file(what, f)));
     }
@@ -272,10 +286,18 @@ fn first_message(a: &Args, c: &Ctx, prompt: Option<&str>, run: &str) -> Result<V
     let block = a.repo.map(|repo| {
         let token = c.project.join(".env.local");
         let url = format!("https://github.com/{repo}");
-        push::block(&url, "Goal Cup", text::SUPPORT_ADDRESS, ".env.local", &token)
+        push::block(
+            &url,
+            "Goal Cup",
+            text::SUPPORT_ADDRESS,
+            ".env.local",
+            &token,
+        )
     });
     let Some(prompt) = prompt else {
-        let Some(block) = block else { return Ok(vec![]) };
+        let Some(block) = block else {
+            return Ok(vec![]);
+        };
         push::clipboard::copy(&block.join("\n"), &c.vars);
         let mut lines = vec![text::PUSH_FRAME.to_owned()];
         lines.extend(block.iter().map(|l| format!("  {l}")));
@@ -283,7 +305,8 @@ fn first_message(a: &Args, c: &Ctx, prompt: Option<&str>, run: &str) -> Result<V
     };
     let dir = super::run_dir(&c.home, run);
     let file = dir.join("first-message.txt");
-    let message = push::write_first_message(&dir, block.as_deref(), prompt).map_err(|e| Stop { text: e, code: 3 })?;
+    let message = push::write_first_message(&dir, block.as_deref(), prompt)
+        .map_err(|e| Stop { text: e, code: 3 })?;
     Ok(vec![if push::clipboard::copy(&message, &c.vars) {
         text::first_message_ready(&file)
     } else {
@@ -316,6 +339,8 @@ fn wall_ms() -> u64 {
 
 /// The run's idempotency key for the open: not secret.
 fn session_id() -> String {
-    let t = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default();
+    let t = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default();
     format!("s{:x}{:x}", t.as_nanos(), std::process::id())
 }
