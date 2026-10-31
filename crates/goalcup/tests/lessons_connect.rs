@@ -356,7 +356,12 @@ async fn close_before_hello_is_one_named_loss() {
     assert!(got.iter().all(|c| c.1["mode"] == "tunnel"));
     assert_eq!(got[1].1["reason"], "not_tls");
     within_async(HANG, async {
-        while sent.lock().unwrap().get(1).is_none_or(|b| b.len() < partial.len()) {
+        while sent
+            .lock()
+            .unwrap()
+            .get(1)
+            .is_none_or(|b| b.len() < partial.len())
+        {
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
     })
