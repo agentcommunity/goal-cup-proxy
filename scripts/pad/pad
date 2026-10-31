@@ -9,7 +9,7 @@ NODE_PATH or beside itself), box steps through `pad-run`. The pad never reads a 
 `sbx.mjs put-env` the name of the variable that holds it; the approval key it reads only to send it. Exit: 0 every row PASS, 1 any FAIL, 3 any
 INCONCLUSIVE and no FAIL (also a harness with no key: nothing was run), 2 usage error. Needs Python 3.11 or later; an older python3 re-runs it.
 """
-import concurrent.futures, datetime, glob, hashlib, json, math, os, re, secrets, shutil, signal, stat  # noqa: E401
+import concurrent.futures, datetime, fcntl, glob, hashlib, json, math, os, re, secrets, shutil, signal, stat  # noqa: E401
 import subprocess, sys, tarfile, tempfile, threading, time, urllib.request  # noqa: E401
 
 if sys.version_info < (3, 11) and __name__ == "__main__":  # the node22 image and many Macs give 3.9
@@ -88,6 +88,59 @@ def append(path, doc):
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with LEDGER, open(path, "a") as f:
         f.write(json.dumps(doc, sort_keys=True) + "\n")
+
+
+def queue_slot(name, pad, out_root, who):
+    """Section 7, per key at once: pad-out/queue/<key name>/ holds one file per held slot (pid, start; the name only, never a value).
+    Waits (a line a minute) until fewer than per_key (per_key_deepseek until queue.json says a row passed 5% 429) are held,
+    reclaiming slots whose pid is dead. -> the slot file, or None when interrupted. No total cap (ledger B11)."""
+    d = os.path.join(out_root, "queue", name)
+    os.makedirs(d, exist_ok=True)
+    quiet = 0
+    while not STOP.is_set():
+        with open(os.path.join(d, ".lock"), "w") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            held = []
+            for f in sorted(x for x in os.listdir(d) if x.endswith(".slot")):
+                try:
+                    os.kill(int(f.split("-")[0]), 0)
+                    held.append(f)
+                except ProcessLookupError:
+                    os.unlink(os.path.join(d, f))
+                except (PermissionError, ValueError):
+                    held.append(f)
+            down = os.path.isfile(os.path.join(out_root, "queue.json")) and name in read_json(os.path.join(out_root, "queue.json")).get("downgraded", [])
+            if len(held) < (pad["per_key_deepseek"] if name == "deepseek" and not down else pad["per_key"]):
+                slot = os.path.join(d, "%d-%s.slot" % (os.getpid(), secrets.token_hex(3)))
+                with open(slot, "w") as f:
+                    json.dump({"pid": os.getpid(), "start": now(), "run": who}, f)
+                return slot
+        if quiet % 12 == 0:
+            print("queued: %s waits for a free %s slot (%d held)" % (who, name, len(held)), flush=True)
+        quiet += 1
+        STOP.wait(5)
+
+
+def read_json(path):
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return {}
+
+
+def downgrade_if_429(name, folder, out_root):
+    """After a deepseek row: a 429 share over 5% of its wire requests drops the key to per_key for every later pad process."""
+    facts = read_json(os.path.join(folder, "row.json")).get("facts") or {}
+    n = sum(v for k, v in (facts.get("provider_errors") or {}).items() if "429" in str(k) and isinstance(v, int))
+    if name == "deepseek" and n and n > 0.05 * (facts.get("wire_requests") or 0):
+        path = os.path.join(out_root, "queue.json")
+        with open(path + ".lock", "w") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            doc = read_json(path)
+            doc["downgraded"] = sorted(set(doc.get("downgraded", [])) | {name})
+            with open(path, "w") as f:
+                json.dump(doc, f)
 
 
 def check_key_file(path, repo=REPO):
@@ -325,8 +378,16 @@ class Run:
         at = int(time.time() - self.t0) // 60
         self.lines.append((step, result, "%d:%02d" % (at // 60, at % 60), saw))
 
+    def key_names(self):
+        s = self.s
+        return [] if s["key"] == "none" else [s["key"]] + [s["gateway_key"]] * (self.case == "gateway")
+
     def walk(self):
+        slots = []
         try:
+            for name in sorted(set(self.key_names())):  # in order, so two runs never wait on each other's second key
+                slots.append((name, queue_slot(name, self.pad, self.out_root, self.name)))
+            self.t0 = time.time()  # a queue wait is not the run's time
             for step in step_list(self.s, self.harness)[:-1]:
                 if STOP.is_set() or self.setup_failed:
                     self.line(step, "skip", "interrupted" if STOP.is_set() else "setup failed")
@@ -351,6 +412,13 @@ class Run:
             except Exception as e:
                 self.line("cleanup", "error", "%s; box %s may be left" % (type(e).__name__, self.name))
             shutil.rmtree(self.tmp, ignore_errors=True)
+            for name, slot in slots:
+                if slot:
+                    try:
+                        downgrade_if_429(name, self.dir, self.out_root)
+                        os.unlink(slot)
+                    except OSError:
+                        pass
             try:  # section 7, the ledger: one line per run, also an interrupted or unpriced one (usd null, usd_live its
                 # last live estimate, so the scribe's 200 and 400 USD notices still count a run that spent)
                 append(os.path.join(self.out_root, "spend.jsonl"), {
@@ -366,7 +434,7 @@ class Run:
     def step_setup(self, step, limit):
         s, deadline = self.s, time.time() + limit
         left = lambda: max(1, deadline - time.time())  # noqa: E731
-        names = [] if s["key"] == "none" else [s["key"]] + [s["gateway_key"]] * (self.case == "gateway")
+        names = self.key_names()
         stage = self.box_dir = tempfile.mkdtemp(prefix="pad-run-", dir=None if s["where"] == "here" else self.tmp)
         if s["where"] == "here":  # pad-run works on 0600 copies in the run folder; ~/.pad-keys stays whole
             for name in names + ["push"] * os.path.lexists(os.path.expanduser("~/.pad-keys/push")):
