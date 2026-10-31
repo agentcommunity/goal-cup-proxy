@@ -48,10 +48,11 @@ reads harness session formats after the run, chosen by connector id.
 
 ## The gate
 
-One script, two tiers: `sh scripts/gate.sh fast` before every merge (format, clippy, every test,
-the Worker and script tests) and `sh scripts/gate.sh full` at phase exits and before a release (also
-the ignored end-to-end tests and the release build). CI runs `fast` on every pull request. Run it as
-a normal user, not root. What each tier runs and what it needs: [README](README.md#the-gate).
+One script, two tiers: `sh scripts/gate.sh fast` before every merge (format, clippy, every test, the
+Worker and script tests) and `sh scripts/gate.sh full` at phase exits and before a release (also the
+ignored end-to-end tests and the release build). CI runs `fast` on every pull request to main and
+every push to main or `v1.0/integration`. Run it as a normal user, not root. What each tier runs
+and what it needs: [README](README.md#the-gate).
 
 ## Hard rules
 
@@ -67,9 +68,9 @@ a normal user, not root. What each tier runs and what it needs: [README](README.
 - **No harness names in core code.** A harness is data (a connector) plus shared modules.
 - **Never write into `~/.claude`, `~/.codex`, `~/.hermes` or any app-wide config.** Goal Cup Proxy
   makes isolated homes. A test that launches a harness uses a private `HOME`.
-- **Never commit** anything under the repository root's `/pad-out/` or `/harnesses/`, any `spikes/*/out/`
-  (until PRD-13 deletes `spikes/`), or any
-  `target/`, a key, or a real run's record. A committed fixture is masked and reviewed by eye.
+- **Never commit** anything under the repository root's `/pad-out/` or `/harnesses/`, any
+  `spikes/*/out/` (until PRD-13 deletes `spikes/`), or any `target/`, a key, or a real run's record.
+  A committed fixture is masked and reviewed by eye.
 - **Record raw, interpret later.** The recorder captures bytes. The verifier and the usage reader
   judge them. Do not put rule logic in the recorder (D3).
 
@@ -78,8 +79,9 @@ a normal user, not root. What each tier runs and what it needs: [README](README.
 One test per behaviour you add or change. Test the promise, not the shape: no golden snapshots of
 internal structures, and no assertions on doc text or message wording unless the text is the
 contract. Every behaviour that serves one of the seven points has a test, and that test is not
-deleted while the point stands unless it is replaced in the same change by a test with the same name prefix
-that asserts the same promise. Where they are: [README](README.md#the-seven-points-and-their-tests).
+deleted while the point stands unless it is replaced in the same change by a test with the same name
+prefix that asserts the same promise. Where they are:
+[README](README.md#the-seven-points-and-their-tests).
 
 ## Done
 
