@@ -153,10 +153,44 @@ index has a hole, and it never overwrites. Against a local `wrangler dev` use `-
 
 `check --server` reads the fetched folder; `--json` prints the report, `--local <entry dir>` compares the
 server copy with the participant's own entry, and `--known <file>` (one secret value per line) adds the
-secrets check. `dump` prints one JSON line per record. `usage --out <dir>` writes `<entry>.json` and
-`<entry>.calls.jsonl` there; the rest is in
-[RECORD-FORMAT](RECORD-FORMAT.md#the-goalcup-verify-usage-files). The report and its exit codes are in
+secrets check. `dump` prints one JSON line per record. `usage` is the next section. The report and its exit codes are in
 [RECORD-FORMAT](RECORD-FORMAT.md#the-goalcup-verify-check---json-report).
+
+## The usage job
+
+`goalcup-verify usage` lists the model requests of a fetched run with the model, thread and tokens of
+each. It reads the folder offline: no credential, no network, nothing written to the folder it reads.
+
+```sh
+goalcup-verify usage <outdir>/<entry> --out <usage dir>   # one entry; the summary and the calls file
+goalcup-verify usage <outdir>/<run folder> --out <usage dir>  # every entry in it
+goalcup-verify usage <outdir>/<entry>                     # the summary only, one JSON line on stdout
+```
+
+The path is an entry folder, a run folder or one part file. `--out <dir>` creates the folder and writes,
+per entry, `<name>.json` (the summary) and `<name>.calls.jsonl` (one line per request). `<name>` is the
+entry id when it is letters and digits, else the entry's folder name. `--json` prints the summary on
+standard output as well. Without `--out` the summary goes to standard output.
+
+Exit 0 when any entry gave output; 3 when none did, and for a wrong command line. In a run folder an
+entry that cannot be read gets one line on standard error naming its folder, and the rest go on. If
+decoding stops part way through an entry, its summary still comes out with `read_error` true and a line
+on standard error: the counts are of what was read.
+
+Read the summary this way (all keys are in
+[RECORD-FORMAT](RECORD-FORMAT.md#the-goalcup-verify-usage-files)):
+
+- `tokens.merged` is the sum over every request counted once; a request seen on the wire and in the
+  harness's session file is not counted twice. `coverage` says how many matched and how many each side
+  saw alone.
+- **`null` means not said, never zero.** A token key the provider did not report is `null` on its row,
+  and a sum is `null` when no row said it. `tokens.calls_without_usage` counts the requests that gave
+  no token numbers at all.
+- `readable` false with `reason` `no_reader` means this connector has no session reader: the file holds
+  the wire requests only, and the harness's own counts are absent, not zero.
+- `threads` lists the root agent and its subagents where the harness names them; `status` counts
+  requests by `ok`, `rate_limited`, `error`, `cancelled` and `unknown`.
+- Neither file holds body text or a session file path.
 
 ## Runs whose recording is off
 
