@@ -4,7 +4,7 @@
 //! `real(dir)` is the pipeline with the writer in a temp entry folder (PRD-02's
 //! `Recorder::real_for_tests`), and `settled` reads back what it made durable.
 
-use crate::{within, HANG};
+use super::{HANG, within};
 use goalcup::mask::Masker;
 use goalcup::pipeline::{Call, Calls, Counts, EndReason, Recorder, Sid, StreamKind};
 use goalcup_format::Record;
