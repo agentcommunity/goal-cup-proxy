@@ -308,6 +308,11 @@ fn watchdog_end_real_killed_recorder_restarts() {
             let s = status()?;
             (s["boot"] == 0 && s["pid"].as_u64()? > 0).then(|| s["pid"].as_u64())?
         });
+        // A boot that dies before its first LINK leaves its number to the next, so wait for one.
+        let counts = entry_dir.join("counts.jsonl");
+        until("a link", || {
+            std::fs::metadata(&counts).ok().filter(|m| m.len() > 0)
+        });
         // SAFETY: a signal to one pid, the recorder's.
         unsafe { libc::kill(first as libc::pid_t, libc::SIGKILL) };
         until("boot 1", || {
