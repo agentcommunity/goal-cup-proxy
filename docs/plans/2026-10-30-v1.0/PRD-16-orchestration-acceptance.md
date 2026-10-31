@@ -2277,3 +2277,18 @@ kept and now cites BUILD-PROMPT section 5, since B3 no longer carries it.
 - **Pad status for acceptance:** all sixteen harness files exist and the per-key queue is built. Only K2 has fixtures, so `selftest` ends at exit 3 until PRD-08 slice 6 and PRD-09 land and the K7 and K11 fixtures are added. Phase 2 exit must not read exit 3 as a pass. The queue is proven only by the first real batch (no unit test, by PRD-12 section 10).
 - **Keys unverified:** several vendor docs hosts were unreachable when the five new harness files were written; the rig-trust step re-checks those keys on the first real run of each harness.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-31, replan after PRD-10 slice 6 (merge 1c9afbed)
+
+- **Size report, PRD-10** (`wc -l` at 1c9afbed, row "CLI (PRD-10)", about 2,900 src and 1,200 tests): src
+  `crates/goalcup/src/cli/` 3,625 (125% of the row; `text.rs` 1,153, `mod.rs` 469, `approve.rs` 457,
+  `status.rs` 349, `setup.rs` 293, `folder.rs` 240, `log.rs` 202), tests `cli_*.rs` 2,038 (170% of the
+  row, of which `cli_common/mod.rs` 93). Decision: the lines serve points 3 (never block), 4 (no secrets)
+  and 6 (tell plainly) and 7 (harnesses as used); the next PRD-10 slice must cut `text.rs` first (PRD-10
+  note). The end-of-build report nets it against the Rust totals; only a total past about 18,100 src or
+  about 14,200 tests becomes the owner question.
+- **Build order:** PRD-10 now waits on three other lanes: PRD-02 slice A (typed `StartFacts`,
+  `watchdog::run`, `watchdog::recover`, `pipeline::close_dead_entry`) and PRD-06 slice 4
+  (`upload::manual::run`). Rung 1 needs `start` and `seal` merged; `seal` is, `start` is not.
+- Gate result as reported: box build, clippy and fmt green, 276 tests green at the fixer commit.
+- No locked ledger item is touched and no owner question comes from this slice.
