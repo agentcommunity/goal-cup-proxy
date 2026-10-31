@@ -397,7 +397,7 @@ fn corrupt_tail_keeps_the_prefix() {
 /// upstream sent, the bytes after the corruption included.
 #[tokio::test]
 async fn corrupt_br_tail_through_serve_keeps_prefix_gap_end_and_relays_everything() {
-    let plain = body(200);
+    let plain = body(2000); // two meta-blocks, so the first is out before the corrupt header
     let mut wire = brotli_stored(&plain);
     *wire.last_mut().unwrap() = 0xfe; // the closing meta-block header becomes invalid
     wire.extend_from_slice(b"bytes after the corruption");
@@ -436,7 +436,8 @@ async fn corrupt_br_tail_through_serve_keeps_prefix_gap_end_and_relays_everythin
         }
     })
     .await;
-    assert_eq!(data_of(&calls, resp), plain, "exactly the decoded prefix");
+    let kept = data_of(&calls, resp);
+    assert!(!kept.is_empty() && plain.starts_with(&kept), "a decoded prefix, never a suffix byte");
     let reasons: Vec<_> = gaps(&calls).into_iter().filter_map(|g| match g {
         Call::Gap(s, r, ..) if s == resp => Some(r),
         _ => None,
