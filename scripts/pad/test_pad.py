@@ -452,24 +452,16 @@ class StartRefusal(unittest.TestCase):
         run, r = self.run_for()
         self.assertNotEqual(os.path.dirname(os.path.realpath(r.project)), os.path.dirname(os.path.realpath(r.env["GOALCUP_HOME"])))
 
-    def test_own_goalcup_calls_never_default_to_production(self):  # ledger section 7: setup reads GOALCUP_SERVER, unset is production
-        for settings, want in (({"server": "off"}, "off"), ({"server": "on", "server_url": "http://srv.test"}, "http://srv.test")):
+    def test_own_goalcup_calls_never_default_to_production(self):  # ledger section 7: unset is production
+        for settings, want in (({"server": "off"}, "off"), ({"server": "on", "server_url": "http://srv.test"}, "http://srv.test"),
+                               ({"server": "on"}, "off")):
             run = self.enterContext(tempfile.TemporaryDirectory())
-            for name, doc in (("settings.json", dict(settings, harness_id="h", version="1.2.3", key_files=[],
-                                                     harness={"version_cmd": "v"})), ("state.json", {})):
+            for name, doc in (("settings.json", settings), ("state.json", {})):
                 with open(os.path.join(run, name), "w") as f:
                     json.dump(doc, f)
-            seen = []
-            def fake(argv, **kw):
-                seen.append(kw.get("env", {}).get("GOALCUP_SERVER")) if argv[1:2] == ["setup"] else None
-                return subprocess.CompletedProcess(argv, 1, "1.2.3", "")
             r = padrun.Run(run, "verify")
-            with mock.patch.object(padrun, "sh", fake), mock.patch.object(padrun, "tool", lambda n: "/bin/true"), \
-                    mock.patch.object(r, "plant", lambda: ([], "")), mock.patch.object(r, "path", lambda n: os.path.join(run, n)), \
-                    mock.patch.object(padrun, "write", lambda *a: None), mock.patch("builtins.open", mock.mock_open(read_data="x")):
-                with self.assertRaises(padrun.Step):
-                    r.setup(None)
-            self.assertEqual(seen, [want])
+            self.assertEqual(r.env["GOALCUP_SERVER"], want)
+            self.assertEqual(r.gc_env()["GOALCUP_SERVER"], want)
 
     def test_slow_seal_ends_the_step_not_the_rig(self):  # section 1a: no step stops the rig
         run = self.enterContext(tempfile.TemporaryDirectory())

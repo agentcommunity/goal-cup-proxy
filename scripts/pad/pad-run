@@ -144,7 +144,7 @@ class Run:
         self.run, self.s, self.st = run, loads(path=os.path.join(run, "settings.json")), loads(path=os.path.join(run, "state.json"))
         self.quiet = kind in BESIDE  # reads the entry without the run-ca key append, writes no state.json
         self.h, self.project = self.s.get("harness", {}), os.path.join(run, "project")  # wipe needs no settings
-        self.env = dict(os.environ, GOALCUP_SERVER="off" if self.s.get("server") == "off" else str(self.s.get("server_url")),
+        self.env = dict(os.environ, GOALCUP_SERVER=self.s["server_url"] if self.s.get("server") != "off" and self.s.get("server_url") else "off",  # never 'None'; never production
                         GOALCUP_HOME=os.path.join(run, "gc", "home"))  # never production; home not beside the project: start refuses siblings (PRD-10 section 3 step 2)
         self.sec = self.h.get("gateway" if self.s.get("case") == "gateway" else "direct", {})
         self.keys, self.session = self.path("keys"), self.s.get("session") or "pad"  # copies only, never ~/.pad-keys
@@ -451,12 +451,16 @@ class Run:
             self.exit_harness()  # section 3.1: those rows end by the harness's exit, never goalcup seal
         elif not self.sealed():
             try:  # the seal drain has no timer: a slow seal ends the step 'timeout', it does not stop the rig
-                out = sh([tool("goalcup"), "seal", "--yes"], env=self.env, cwd=self.project, timeout=max(1, self.left() - 30)).stdout
+                r = sh([tool("goalcup"), "seal", "--yes"], env=self.env, cwd=self.project, timeout=max(1, self.left() - 30))
+                out = r.stdout
+                if r.returncode:
+                    self.fault("seal", exit=r.returncode)
             except subprocess.TimeoutExpired:
-                pass
+                self.fault("seal", exit="timeout")
         ok = wait(self.sealed, self.left() - 30, 5)
-        found = re.findall(r"([\d,]+) model requests? written", out + "\n" + self.pane())
-        self.st["end_screen_requests"] = int(found[-1].replace(",", "")) if found else None
+        screen = out + "\n" + self.pane()
+        found = re.findall(r"([\d,]+) model requests? written", screen)
+        self.st["end_screen_requests"] = int(found[-1].replace(",", "")) if found else 0 if "No model request was written" in screen else None
         self.harness_files()
         self.wipe_secrets(home=ok or self.dead())  # an unsealed entry may still be reading the home: wipe leaves it
         return ("ok", "sealed %s, %s model requests written" % (why, pc.dig(self.status(), "s4_requests"))
@@ -771,7 +775,11 @@ class Run:
         self.need("goalcup", started=True)
         if self.sealed():
             return "ok", "already sealed"
-        r = sh([tool("goalcup"), "seal", "--yes"], env=self.env, cwd=self.project, timeout=max(1, self.left()))
+        try:
+            r = sh([tool("goalcup"), "seal", "--yes"], env=self.env, cwd=self.project, timeout=max(1, self.left()))
+        except subprocess.TimeoutExpired:
+            self.fault("seal-now", exit="timeout")
+            return "timeout", "goalcup seal did not finish within the step's limit"
         self.fault("seal-now", exit=r.returncode)  # the seal step names the cap from this line
         return ("ok", "sealed at the spend cap") if r.returncode == 0 else ("FAIL", "goalcup seal exit %d" % r.returncode)
 
