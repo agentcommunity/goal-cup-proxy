@@ -12,8 +12,8 @@ use goalcup::watchdog::spawn;
 use std::collections::BTreeMap;
 use std::net::{Ipv4Addr, TcpStream};
 use std::os::fd::AsRawFd;
-use std::os::unix::net::UnixStream;
 use std::os::unix::fs::PermissionsExt;
+use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::process::Child;
 

@@ -29,7 +29,9 @@ fn masker() -> Masker {
 fn holds(kind: StreamKind, piece: &[u8]) -> usize {
     let n = piece.len() - masker().stream(kind).push(piece).bytes.len();
     if n == 0 {
-        eprintln!("SKIPPED: the masker in force holds nothing, so the held-bytes branch is not run");
+        eprintln!(
+            "SKIPPED: the masker in force holds nothing, so the held-bytes branch is not run"
+        );
     }
     n
 }
@@ -257,11 +259,25 @@ fn held_bytes_stay_in_their_websocket_message() {
     settle(&rec, 1);
     let (data, gaps) = stream(&records(dir.path()), sid);
     assert!(gaps.is_empty());
-    let ops: Vec<(u8, bool)> = data.iter().map(|d| (d.2 >> 4, d.2 & FLAG_FIN != 0)).collect();
-    let k = ops.iter().position(|o| o.0 == 0x2).expect("the second message");
+    let ops: Vec<(u8, bool)> = data
+        .iter()
+        .map(|d| (d.2 >> 4, d.2 & FLAG_FIN != 0))
+        .collect();
+    let k = ops
+        .iter()
+        .position(|o| o.0 == 0x2)
+        .expect("the second message");
     assert!(ops[..k].iter().all(|o| o.0 == 0x1) && ops[k..].iter().all(|o| *o == (0x2, false)));
-    assert_eq!(ops[k - 1], (0x1, true), "fin on the first message's last DATA");
-    assert_eq!(data[k].0, one.len() as u64, "the first message holds all its bytes");
+    assert_eq!(
+        ops[k - 1],
+        (0x1, true),
+        "fin on the first message's last DATA"
+    );
+    assert_eq!(
+        data[k].0,
+        one.len() as u64,
+        "the first message holds all its bytes"
+    );
 }
 
 /// A masker panic on an OPEN meta, an END tail or an EVENT stars every string in it, keeps its
@@ -272,10 +288,21 @@ fn a_metadata_panic_stars_it_and_writes_a_mask_failed_gap() {
     let rec = Recorder::real_for_tests(dir.path(), Masker::passthrough_for_tests());
     let mark = String::from_utf8_lossy(PANIC_MARKER).into_owned();
     let flags = OpenFlags::POST | OpenFlags::DECRYPTED;
-    let mut h = rec.open(StreamKind::HttpReq, 0, 0, 0, flags, json!({"path": mark, "n": 7}));
+    let mut h = rec.open(
+        StreamKind::HttpReq,
+        0,
+        0,
+        0,
+        flags,
+        json!({"path": mark, "n": 7}),
+    );
     let sid = h.sid();
     h.data(rec.now(), Bytes::from_static(b"body"));
-    h.end(rec.now(), EndReason::Complete, Some(json!({"why": mark, "up": 5})));
+    h.end(
+        rec.now(),
+        EndReason::Complete,
+        Some(json!({"why": mark, "up": 5})),
+    );
     rec.event(json!({"ev": "note", "what": mark}));
     settle(&rec, 2);
     let recs = records(dir.path());
@@ -313,5 +340,8 @@ fn a_metadata_panic_stars_it_and_writes_a_mask_failed_gap() {
         }
     }
     assert_eq!(seen, 4, "the OPEN, the END, the EVENT and the EVENT's GAP");
-    assert!(!contains(&all_bytes(dir.path()), b"mask-worker-panic-marker"));
+    assert!(!contains(
+        &all_bytes(dir.path()),
+        b"mask-worker-panic-marker"
+    ));
 }
