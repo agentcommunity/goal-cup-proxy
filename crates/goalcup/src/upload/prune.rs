@@ -57,8 +57,9 @@ pub fn prune(entry_dir: &Path, j: &Mutex<UploadJson>, file: &Mutex<Writer>) {
     if sync_counts(entry_dir).is_err() {
         return;
     }
+    let snap = lock(j).clone();
     let mut file = lock(file);
-    if file.put_synced(Mono::now(), &lock(j).clone()).is_err() {
+    if file.put_synced(Mono::now(), &snap).is_err() {
         return;
     }
     let (mut count, mut bytes) = (0, 0);

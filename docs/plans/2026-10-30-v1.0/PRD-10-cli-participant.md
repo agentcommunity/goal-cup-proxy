@@ -1531,3 +1531,15 @@ What the pad calls, as merged (PRD-12 note):
   integration, so the hand-over, `continue`, recover and seal-on-a-dead-entry stay for the next slice. That
   slice must be net-negative in `text.rs` (fold sentence families) before it adds its lines.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-31, replan after PRD-10 slice 8 (merge 69f143a6)
+
+- Merged: the net cut in `text.rs` (1,250 to 1,174), the folded `upload_outcome` arm, and the review fixes that
+  restored the `Off:` status line, ASCII zone letters, tunnel hints and the run kind in the approval line.
+  No open defect. Nit B3 (`off_line` and `off_total` share most of their body; the two lines read differently
+  on purpose) is declined; fold only if a later slice touches both.
+- `cli/*.rs` is now 4,362 lines (`wc -l`, `main.rs` excluded; `text.rs` 1,174) against the row of about 2,900.
+  Overage accepted (B2): no cut keeps behaviour. The remaining slice must again be net-negative in `text.rs`.
+- Still gated, unchanged: hand-over and end screen, `continue`, recover and seal on a dead entry wait for
+  `watchdog::run`, `watchdog::recover` and `pipeline::close_dead_entry` on integration.
+- No locked ledger item is touched and no owner question comes from this slice.

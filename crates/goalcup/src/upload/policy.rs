@@ -141,8 +141,8 @@ impl Backoff {
 }
 
 /// A repeating timer: due at once, then a first interval (spread when asked), then every period.
-/// The beat's runs every `Policy::beat`; a round's every `Policy::round`, and its caller also starts
-/// a round at once when `trigger_bytes` wait.
+/// The beat's runs every `Policy::beat`; a round's every `Policy::round`, and its caller also
+/// starts a round at once when `trigger_bytes` wait.
 #[derive(Clone, Copy, Debug)]
 pub struct Timer {
     period: Duration,
