@@ -2,8 +2,9 @@
 //! `StreamMasker`, masks each item off the relay and hands the records to the writer.
 //!
 //! Held accounting (the contract of the replan after core step 1): `taken` once an item is
-//! masked (so an item the masker hangs on still waits, for the stall exit), `forwarded` for what goes to the writer, so taken = forwarded + held
-//! back. Bytes the masker holds back for a match stay held until it releases them; at END and
+//! masked (so an item the masker hangs on still waits, for the stall exit), and `forwarded`
+//! before it, for what goes to the writer, so taken = forwarded + held back and an item waits
+//! from before its first record is sent until the writer writes its last. Bytes the masker holds back for a match stay held until it releases them; at END and
 //! GAP nothing stays held back. A masker panic drops the piece and the held bytes behind one
 //! `mask_failed` GAP, and the stream goes on with a fresh masker. A panic on metadata stars every
 //! string left in it and writes a `mask_failed` GAP that loses no stream byte.
@@ -116,7 +117,11 @@ impl Worker {
         };
         // Events and `sid 0` GAPs go through stream 0, which never holds a byte back.
         let end = matches!(item, Item::End { .. });
-        self.stream(sid).owed += held;
+        let kind = match &item {
+            Item::Open { kind, .. } => *kind,
+            _ => StreamKind::Other(0),
+        };
+        stream(&mut self.streams, &self.masker, sid, kind).owed += held;
         match item {
             Item::Event { t, mut ev } => {
                 let name = ev.get("ev").cloned();
@@ -150,9 +155,7 @@ impl Worker {
                 let source = Source::of(kind, &meta);
                 let ok = host.as_mut().is_none_or(|h| self.mask(h)) & self.mask(&mut meta);
                 let host = host.and_then(|h| h.as_str().map(String::from));
-                let m = self.masker.stream(kind);
-                let s = self.stream(sid);
-                (s.kind, s.m) = (kind, m);
+                stream(&mut self.streams, &self.masker, sid, kind).kind = kind;
                 let r = Record::Open {
                     sid,
                     t: t.ns(),
@@ -230,10 +233,10 @@ impl Worker {
                 ));
             }
         }
-        // Counted as waiting until here, so a masker that hangs on an item trips the stall exit.
-        self.rec.taken(held);
-        if !self.outs.is_empty() {
-            self.forward(sid);
+        if self.outs.is_empty() {
+            self.rec.taken(held);
+        } else {
+            self.forward(sid, held);
         }
         if end {
             self.streams.remove(&sid);
@@ -244,7 +247,7 @@ impl Worker {
     /// records for what the masker released. `fin` goes on the last DATA of the message; an
     /// empty message gets one empty DATA with `fin`.
     fn data(&mut self, sid: Sid, t: Mono, off: u64, ws: Option<Ws>, bytes: &[u8]) {
-        let s = stream(&mut self.streams, &self.masker, sid);
+        let s = stream(&mut self.streams, &self.masker, sid, StreamKind::Other(0));
         if let Some(w) = ws {
             s.op = w.opcode;
         }
@@ -287,7 +290,7 @@ impl Worker {
     /// `mask_failed` GAP for what it held. Afterwards nothing is held back. Released bytes keep
     /// the opcode of the WebSocket message they belong to, without `fin`.
     fn release(&mut self, sid: Sid, t: Mono, f: impl FnOnce(&mut StreamMasker) -> Masked) {
-        let s = stream(&mut self.streams, &self.masker, sid);
+        let s = stream(&mut self.streams, &self.masker, sid, StreamKind::Other(0));
         match catch_unwind(AssertUnwindSafe(|| f(&mut s.m))) {
             Ok(m) => emit(s, sid, m, (s.op, false), t, &mut self.outs),
             Err(_) => failed(s, sid, t, &self.rec, &self.masker, &mut self.outs),
@@ -347,15 +350,21 @@ impl Worker {
     }
 
     fn stream(&mut self, sid: Sid) -> &mut Stream {
-        stream(&mut self.streams, &self.masker, sid)
+        stream(&mut self.streams, &self.masker, sid, StreamKind::Other(0))
     }
 
     /// Moves the stream's owed held bytes, all but those still held back, onto the last record of
-    /// this item, then sends them all.
-    fn forward(&mut self, sid: Sid) {
+    /// this item and counts them as waiting for the writer, then marks the item's `held` taken
+    /// (counted as waiting until here, so a masker that hangs on an item trips the stall exit)
+    /// and sends the records. The carry waits from before the first record is sent until the
+    /// writer releases it at the last, so a writer held while the worker waits between two
+    /// records is still a stall.
+    fn forward(&mut self, sid: Sid, held: u64) {
         let s = self.stream(sid);
-        let carry = s.owed - (s.inp - s.out).min(s.owed);
+        let carry = s.owed.saturating_sub(s.inp.saturating_sub(s.out));
         s.owed -= carry;
+        self.rec.forwarded(carry);
+        self.rec.taken(held);
         if let Some(o) = self.outs.last_mut() {
             o.held += carry;
         }
@@ -366,7 +375,6 @@ impl Worker {
     /// ends the process with 70.
     fn send(&mut self) {
         for o in self.outs.drain(..) {
-            self.rec.forwarded(o.held);
             if self.tx.send(o).is_err() {
                 super::pipeline_gone();
             }
@@ -374,12 +382,17 @@ impl Worker {
     }
 }
 
-/// The stream's state, made at its OPEN; a stream with no OPEN seen gets one too, so its bytes
-/// are still masked.
-fn stream<'a>(streams: &'a mut HashMap<Sid, Stream>, masker: &Masker, sid: Sid) -> &'a mut Stream {
+/// The stream's state, made at its first item (its OPEN, of `kind`); a stream with no OPEN seen
+/// gets one too, so its bytes are still masked.
+fn stream<'a>(
+    streams: &'a mut HashMap<Sid, Stream>,
+    masker: &Masker,
+    sid: Sid,
+    kind: StreamKind,
+) -> &'a mut Stream {
     streams.entry(sid).or_insert_with(|| Stream {
-        kind: StreamKind::Other(0),
-        m: masker.stream(StreamKind::Other(0)),
+        kind,
+        m: masker.stream(kind),
         out: 0,
         inp: 0,
         pieces: VecDeque::new(),
@@ -484,4 +497,41 @@ fn star(v: &mut Value) {
 
 fn json_bytes(v: &Value) -> Vec<u8> {
     serde_json::to_vec(v).unwrap_or_else(|_| b"{}".to_vec())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::pipeline::{OpenFlags, clock};
+    use std::time::Duration;
+
+    /// Point 3 (ledger R7): a writer held while the worker waits to send the second record of an
+    /// item (a DATA with two masked spans, a channel of one) is still seen as a stall.
+    #[test]
+    fn a_worker_waiting_between_records_still_shows_a_stall() {
+        let (rec, rx) = Recorder::pipeline(1 << 30);
+        let (tx, out) = mpsc::sync_channel(1);
+        spawn(rec.clone(), rx, Masker::new(&[], Vec::new()).unwrap(), tx);
+        let mut h = rec.open(StreamKind::HttpResp, 0, 0, 0, OpenFlags::NONE, json!({}));
+        let open = out.recv_timeout(Duration::from_secs(30)).unwrap();
+        rec.release(open.held);
+        let key = format!("Bearer sk-{}{}", "x".repeat(20), "7".repeat(20));
+        let body = format!("a {key} b {key} and plain words after the two keys.");
+        h.data(rec.now(), bytes::Bytes::from(body.into_bytes()));
+        // The DATA fills the channel and the worker waits on its first MASK; the writer is held.
+        for _ in 0..20 {
+            std::thread::sleep(Duration::from_millis(50));
+            let idle = rec.live_at(clock::awake_ns() + 61_000_000_000).writer_idle_ms;
+            assert!(idle > 0, "a held writer must show as idle");
+        }
+        h.end(rec.now(), EndReason::Complete, None);
+        let (mut masks, mut n) = (0, 0);
+        while rec.live().held_bytes > 0 && n < 100 {
+            let o = out.recv_timeout(Duration::from_secs(30)).unwrap();
+            masks += usize::from(matches!(o.rec, Record::Mask { .. }));
+            rec.release(o.held);
+            n += 1;
+        }
+        assert_eq!(masks, 2, "the piece had two masked spans");
+    }
 }

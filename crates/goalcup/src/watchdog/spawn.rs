@@ -46,7 +46,8 @@ pub fn bind_exact(port: u16) -> io::Result<TcpListener> {
     Ok(socket.into())
 }
 
-/// Starts `exe RECORDER_SUBCOMMAND [NULL_FLAG]`, stdin from `/dev/null`, in a session of its own
+/// Starts `exe RECORDER_SUBCOMMAND [NULL_FLAG]`, stdin, stdout and stderr on `/dev/null` (its
+/// lines go to `goalcup.log`, never onto a harness's screen), in a session of its own
 /// (terminal signals and a closed window never reach it), with `listener` on fd 3, `control` on
 /// fd 4, core dumps off and the soft open-file limit raised to the hard one.
 ///
@@ -60,7 +61,11 @@ pub fn recorder(
     control: &UnixStream,
 ) -> io::Result<Child> {
     let mut command = Command::new(exe);
-    command.arg(RECORDER_SUBCOMMAND).stdin(Stdio::null());
+    command
+        .arg(RECORDER_SUBCOMMAND)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
     if null {
         command.arg(NULL_FLAG);
     }

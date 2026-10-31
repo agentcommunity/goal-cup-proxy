@@ -63,10 +63,12 @@ fn probe(dir: &Path, fds: &[i32]) -> PathBuf {
     let out = dir.join("out");
     let fds: Vec<String> = fds.iter().map(i32::to_string).collect();
     let script = format!(
-        "#!/bin/sh\n{{\n\
+        "#!/bin/sh\n\
+         o1=$(/bin/readlink /proc/$$/fd/1); o2=$(/bin/readlink /proc/$$/fd/2)\n{{\n\
          echo \"nofile $(ulimit -Sn)\"\necho \"hard $(ulimit -Hn)\"\necho \"core $(ulimit -c)\"\n\
          for fd in {fds}; do [ -e /proc/$$/fd/$fd ] && echo \"open $fd\"; done\n\
          [ -e /proc/$$/fd/3 ] && echo \"fd3 $(/bin/readlink /proc/$$/fd/3)\"\n\
+         echo \"fd1 $o1\"\necho \"fd2 $o2\"\n\
          read -r stat < /proc/$$/stat; echo \"stat $stat\"\n\
          echo \"pid $$\"\necho \"cwd $(pwd -P)\"\n\
          for a in \"$@\"; do echo \"arg $a\"; done\n\
@@ -166,6 +168,8 @@ fn the_recorder_gets_the_hard_limit_no_core_its_fds_and_its_own_session() {
         assert_eq!(seen.one("core"), "0");
         assert_eq!(seen.all("open"), ["3", "4"]);
         assert_eq!(seen.one("fd3"), fd_link(listener.as_raw_fd()));
+        // Nothing the recorder says lands on a harness's screen.
+        assert_eq!((seen.one("fd1"), seen.one("fd2")), ("/dev/null", "/dev/null"));
         assert_eq!(seen.group_and_session(), (pid, pid), "its own session");
         let mut args = vec![RECORDER_SUBCOMMAND];
         if null {

@@ -378,7 +378,12 @@ impl Writer {
 
     /// `fdatasync`, the durable point and its files, then rotation when due. Called with no
     /// record written since the last LINK, so the cursors and totals are those of that LINK. The
-    /// rotation's LINK has its `counts.jsonl` line before it, whether or not it comes.
+    /// rotation's LINK has its `counts.jsonl` line before it, whether or not it comes: whether a
+    /// rotation is due is `PartWriter`'s own (part size and age, links in the part, all private
+    /// to PRD-01) and its LINK is written inside `rotate_if_due`, so the line cannot wait for the
+    /// answer. A line with no LINK after it is harmless: `count_at` takes the last line of a
+    /// `seq` and compaction keeps the latest per boot. A `PartWriter::rotation_due` seam would
+    /// let it go.
     fn sync(&mut self) {
         let d = self.w.sync().unwrap_or_else(|e| self.fail(&e));
         self.publish(d);
