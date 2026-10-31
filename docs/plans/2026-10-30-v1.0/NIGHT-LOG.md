@@ -2254,3 +2254,64 @@ Keys (checked 2026-10-30 at session start; names only, no values):
 07:58Z | integrator conductor resume | start | new conductor container after the 01:30Z pause; gc-night and worktrees were empty, tools restored from conductor/, lane logs before 01:30Z not recovered (branch heads and commits hold that state)
 07:58Z | integrator conductor resume | stop | build boxes blocked: network policy denies vercel.com and api.cloudflare.com (call line at top)
 08:00Z | core PRD-02 | decision | two planning agents (deep model, owner's 31 Oct instruction) audit prd-02-core at 5cfb640 and plan the path to rung 1; their plans feed the PRD-02 lane
+08:04Z | format-tests preparer PRD-01 | start | leftovers slice: merge integration, tail-raw-bytes, Raw/Meter cut
+08:04Z | judge prep PRD-08 | start | merging slice 6 branches
+08:05Z | docs planner PRD-15 | decision | slice 12 planned: guide, README, RULES+OPERATING usage, SECURITY+CONTRIBUTING+HARNESS-ONBOARDING; four disjoint tasks
+08:05Z | format-tests preparer PRD-01 | seam | read::Tail has raw (u64) and open_frame (bool); PRD-08 may drop its Raw/Meter in input.rs (PRD-08 edit)
+08:05Z | pad planner PRD-12 | decision | slice 7 planned: 5 harness files, per-key queue plus R1 nit, K2 fixtures plus A3-1 nit; K7/K11 fixtures wait on PRD-08 slice 6 and PRD-09
+08:05Z | pad queue-and-pad-nits PRD-12 | start | slice 7 queue and R1 nit
+08:05Z | upload reviewerA PRD-06 | start | review of prd-06-upload slice 4 begins
+08:05Z | wire reviewer PRD-03 | start | breaker review of prd-03-proxy slice 2
+08:06Z | docs readme PRD-15 | start | README rewrite slice 12
+08:06Z | docs guide PRD-15 | start | guide rewrite begun
+08:06Z | judge-usage reviewer-A PRD-09 | start | review of prd-09-usage slice 5 (Hermes state.db join) at 9480f0f0
+08:06Z | participant fixer PRD-11 | fix | A1 A2 B1 fixed, B2 declined, pushed
+08:07Z | format-tests preparer PRD-01 | stop | merged integration, box green (fmt, build, clippy -D warnings, 13 format + 63 verify tests), pushed e30f7bfa
+08:07Z | judge-usage reviewer-A PRD-09 | stop | box at 9480f0f0: fmt ok, clippy -D warnings ok, nextest 64/64, WAL-repair and resumed mutations both fail the Hermes case; no blocker, 1 fix, nits
+08:07Z | pad queue-and-pad-nits PRD-12 | stop | queue and R1 pushed, test_pad 29 ok in box
+08:07Z | participant merge-requester PRD-11 | decision | queued 080717-prd-11-connectors (docs/harnesses only)
+08:07Z | upload breaker PRD-06 | start | review slice 4 threads on origin/v1.0/prd-06-upload; null-mode stress at 40 and 200 subagents in a box
+08:08Z | format-tests reviewer-A PRD-01 | start | review of prd-01-format tail-raw slice, box test run
+08:08Z | format-tests reviewer-A PRD-01 | stop | box green (goalcup-format tests, fmt); no blocker, one doc fix on Tail::raw after an error
+08:08Z | format-tests breaker PRD-01 | start | breaker review of v1.0/prd-01-format (Tail::raw), box run of fmt, clippy, nextest and throwaway stress
+08:08Z | judge reviewer-A PRD-08 | start | review slice 6 history_complete on origin/v1.0/prd-08-verify
+08:08Z | pad k2-fixtures-selftest PRD-12 | start | worktree /root/gc-wt/pad-k2fx
+08:08Z | pad harness-files-c PRD-12 | fix | five harness files pushed; docs hosts mostly unreachable, keys marked unverified
+08:08Z | wire reviewer-A PRD-03 | start | independent review of v1.0/prd-03-proxy slice 2 (pump, tunnel, http1, hosts)
+08:09Z | integrator merger v1.0/prd-11-connectors | gate | gate fast: PASS in 97s on merge 1c719d16 (log /root/gc-night/gate-logs/v1.0_prd-11-connectors-0808.log)
+08:09Z | integrator merger v1.0/prd-11-connectors | merge | v1.0/prd-11-connectors into v1.0/integration as 1c719d16: PRD-11 slice 7: facts sheet repeats (amp, droid, kimi), README table links, pad result line in twelve sheets
+08:09Z | judge-usage fixer PRD-09 | fix | A5r-1..5 fixed or recorded, tests green, pushed
+08:09Z | judge-usage reviewerA PRD-09 | start | re-check slice 5 fixes at 2317d53a
+08:09Z | upload reviewerA PRD-06 | stop | slice 4 review done: no blocker; fmt, clippy (with and without test-hooks) and 42 upload tests pass in a box, 6 reruns of beat/null/resume pass
+08:10Z | docs readme PRD-15 | stop | README done and pushed; guide anchors pending from guide task
+08:10Z | judge-usage reviewerA PRD-09 | stop | re-check 2317d53a: box fmt/clippy -D warnings/nextest 64 of 64 green; 1 fix (resumed tokens undercount unmarked), 1 nit (no test on resumed values)
+08:10Z | judge reviewer-A PRD-08 | stop | slice 6 review done: 1 blocker (2nd call dropped reads as compaction, exit 0), 2 fix, nits; probes run in box, not pushed
+08:10Z | judge fixer PRD-08 | start | fixer on prd-08-verify (local branch v1.0/prd-08-verify-fixer)
+08:10Z | upload breaker PRD-06 | stop | slice 4 review done: 38 upload tests pass, null-mode stress 40/200 subagents with faults and restart all bytes sealed; live-mode relay stress skipped (no real recorder on branch); no blockers
+08:10Z | upload fixer PRD-06 | start | fixing review findings A1-F5 on v1.0/prd-06-upload
+08:11Z | docs guide PRD-15 | seam | guide written 479 lines, committed; box proof next
+08:11Z | wire reviewer-A PRD-03 | stop | review done: 0 blockers, 1 fix (client abort mid-stream writes a decode_failed conn GAP), nits; 51 proxy tests, clippy, fmt green in box
+08:12Z | docs guide PRD-15 | stop | guide pushed v1.0/prd-15-docs-guide; box greps clean, help/status match; 479 lines vs 450 ceiling
+08:12Z | docs security-contrib PRD-15 | start | branch v1.0/prd-15-docs-security-contrib from prd-15-docs
+08:12Z | format-tests breaker PRD-01 | stop | e30f7bfa: box fmt ok, clippy ok, nextest format+verify 77/77, throwaway stress (200 sids, 1.5 MB bursts, open frame, 37 cuts) green; one fix: Tail::raw doc says error count stops before the bad record, it includes its bytes read
+08:12Z | judge-usage fixer PRD-09 | fix | A5r2-1 resumed marker + native_partial, A5r2-2 asserts; box green, pushed
+08:12Z | judge-usage merge-requester PRD-09 | decision | queued 081259-prd-09-usage for v1.0/prd-09-usage slice 5
+08:12Z | pad k2-fixtures-selftest PRD-12 | stop | K2 fixtures committed, K2 ran as wanted, selftest exit 3, pushed
+08:12Z | wire reviewer PRD-03 | decision | breaker stress job in a box (throwaway test, not committed)
+08:13Z | docs rules-operating PRD-15 | stop | RULES 458 lines, OPERATING 269; box checks green; pushed v1.0/prd-15-docs-rules-operating
+08:13Z | format-tests fixer PRD-01 | start | fixing review findings A1 F1 N2
+08:13Z | integrator merger v1.0/prd-09-usage | gate | v1.0/prd-09-usage on 452a73f4: gate fast: FAIL (log /root/gc-night/gate-logs/v1.0_prd-09-usage-0813.log)
+08:13Z | pad merger PRD-12 | start | lane merge begins
+08:14Z | format-tests fixer PRD-01 | fix | Tail::raw error-path doc and amendment made exact, raw error test added; box fmt+clippy+13 tests green; pushed
+08:14Z | format-tests reviewer-A PRD-01 | decision | re-review of prd-01-format fix: one doc claim still inexact (error offset not in codec/varint errors); no box run
+08:15Z | format-tests fixer PRD-01 | start | fixing A3 A4 A5 B6 B7 on v1.0/prd-01-format
+08:16Z | core fixer PRD-02 | start | fixer worktree up, findings P-1 X-1 X-2 X-4 X-5 N-1
+08:16Z | upload fixer PRD-06 | fix | each uploader thread runs whole under guard and starts again after a panic; seal LINK from disk in both modes; finish ends when no upload thread runs
+08:16Z | upload fixer PRD-06 | decision | size: upload src 2537 lines past the 2500 ceiling, serves points 3 and 5; client.rs is the next cut; B2 and B6 declined, F4 skipped
+08:16Z | upload fixer PRD-06 | stop | box green (fmt, clippy, 45 upload tests), pushed v1.0/prd-06-upload
+08:25Z | integrator conductor | decision | network policy now full access (owner, 31 Oct); no restart needed; conductor clone unshallowed (shallow clone broke box bundles); new build snapshot snap_5V1QbpB1wApS4scewdsrqPk2moyd (Rust 1.99, nextest 0.9.150, Node 22, Python 3.9); test box built goalcup-format as vercel-sandbox, exit 0
+08:27Z | integrator conductor | start | lanes resumed: wire (PRD-03 slice 2 fresh review), upload (PRD-06 slice 4 fresh review), judge (PRD-08 slice 6 prepare and review), judge-usage (PRD-09 slice 5 review), participant (PRD-11 then PRD-10), pad (PRD-12 slice 7), format-tests (PRD-01 leftovers then PRD-14), docs (PRD-15 then PRD-17); core (PRD-02) waits for its two plans
+08:41Z | integrator conductor | amendment | conductor decisions before PRD-02 slice A in PRD-02, serve seam in PRD-03, start and recover seams in PRD-10
+08:50Z | integrator conductor PRD-02 | seam | PRD-02 writes GAP mask_failed with lost 1 and tail {"meta":...} and an empty DATA with fin for an empty WebSocket message; users PRD-01 (text), PRD-08 (inv4, inv12, recount, req_holes); notes in PRD-01 and PRD-08
+08:50Z | integrator conductor PRD-02 | size | audit projects PRD-02 at about 6,100 to 6,200 src and 3,300 to 3,400 tests after all slices; ceiling raised to 6,200 src and 3,400 tests with the audit's cuts 1, 3, 4 (handle.rs duplicate inline tests, mask_worker helpers, writer event path); points 1, 3, 4, 6
+08:51Z | integrator conductor PRD-02 | start | core lane resumes prd-02-core step 2 with the audit's findings (P-1 merge the real masker, X-1 stall window, X-2 recorder stdio, X-3 seam logged, X-4 sync line, X-5 guard test timing, nits) and its review contract; then slice A from the path plan
