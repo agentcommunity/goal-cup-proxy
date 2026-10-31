@@ -20,6 +20,23 @@ pub fn real(dir: &Path) -> Recorder {
     Recorder::real_for_tests(dir, masker)
 }
 
+/// A temp entry folder for `real`, kept after the test. The real pipeline's writer and status
+/// threads run for the life of the test process, and a folder removed under them is a write
+/// error that ends the whole shared process with 74 after the test passed.
+pub fn entry_dir() -> KeptDir {
+    let dir = tempfile::Builder::new().prefix("goalcup-entry-").tempdir();
+    KeptDir(dir.expect("a temp folder").keep())
+}
+
+/// A temp folder that is never removed.
+pub struct KeptDir(std::path::PathBuf);
+
+impl KeptDir {
+    pub fn path(&self) -> &Path {
+        &self.0
+    }
+}
+
 /// Waits (bounded by `HANG`, never a speed check) for a durable point whose counts satisfy `done`
 /// with nothing held, and returns that point's index line number.
 pub fn wait_settled(rec: &Recorder, done: impl Fn(&Counts) -> bool + Send + 'static) -> u64 {

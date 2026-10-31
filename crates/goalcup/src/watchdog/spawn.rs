@@ -1,6 +1,7 @@
-//! What the watchdog binds and starts (PRD-02 section 8 steps 2, 4 and 7, section 10): the listen
-//! socket, the recorder and the harness. The control pair is `UnixStream::pair()`, which opens
-//! both ends with `FD_CLOEXEC` (`SOCK_CLOEXEC` on Linux).
+//! What the watchdog binds, starts and ends (PRD-02 section 8 steps 2, 4, 6, 7, 10 and 11, section
+//! 10): the listen socket, the recorder, the harness, the helpers and the harness tree. The
+//! control pair is `UnixStream::pair()`, which opens both ends with `FD_CLOEXEC` (`SOCK_CLOEXEC`
+//! on Linux).
 //!
 //! Both sockets carry `FD_CLOEXEC`; only the recorder's `pre_exec` clears it, on fd 3 and fd 4, so
 //! the harness never inherits them (a harness holding the listener keeps the port alive after
@@ -8,6 +9,7 @@
 
 use crate::cli::{NULL_FLAG, RECORDER_SUBCOMMAND};
 use crate::pipeline::fds::{self, Target};
+use crate::pipeline::status::Outlived;
 use socket2::{Domain, Socket, Type};
 use std::collections::BTreeMap;
 use std::io;
@@ -160,4 +162,266 @@ pub fn subreaper() -> io::Result<()> {
         }
     }
     Ok(())
+}
+
+/// How long a helper (`plan.before`, `plan.after`) may run, and how long the harness tree has
+/// between SIGTERM and SIGKILL.
+pub const BUDGET_NS: u64 = 10_000_000_000;
+
+/// How often a wait looks again.
+pub const TICK: std::time::Duration = std::time::Duration::from_millis(100);
+
+/// Runs each entry as `program` followed by its arguments, with the harness's `env`, stdio on
+/// `/dev/null`, one after the other, each ended (SIGKILL) after `budget_ns` of boot time. A
+/// failure is logged with fixed words and the index, never an argument, and the next one runs.
+pub fn helpers(
+    program: &Path,
+    entries: &[Vec<String>],
+    env: &BTreeMap<String, String>,
+    budget_ns: u64,
+    entry_dir: &Path,
+    step: &'static str,
+) {
+    use crate::cli::log::{Fact, line};
+    use crate::pipeline::clock::Mono;
+    for (i, args) in entries.iter().enumerate() {
+        let index = ("index", Fact::N(i as u64));
+        let spawned = Command::new(program)
+            .args(args)
+            .env_clear()
+            .envs(env)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn();
+        let mut child = match spawned {
+            Ok(child) => child,
+            Err(e) => {
+                line(
+                    entry_dir,
+                    "helper_failed",
+                    &[
+                        ("step", Fact::Word(step)),
+                        index,
+                        ("io", Fact::Io(e.kind())),
+                    ],
+                );
+                continue;
+            }
+        };
+        let start = Mono::now();
+        let status = loop {
+            match child.try_wait() {
+                Ok(Some(status)) => break Some(status),
+                Ok(None) if Mono::now().0.saturating_sub(start.0) < budget_ns => {
+                    std::thread::sleep(std::time::Duration::from_millis(20));
+                }
+                _ => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    break None;
+                }
+            }
+        };
+        match status {
+            Some(s) if s.success() => {}
+            Some(s) => line(
+                entry_dir,
+                "helper_failed",
+                &[("step", Fact::Word(step)), index, ("exit", Fact::Exit(s))],
+            ),
+            None => line(
+                entry_dir,
+                "helper_failed",
+                &[
+                    ("step", Fact::Word(step)),
+                    index,
+                    ("why", Fact::Word("timeout")),
+                ],
+            ),
+        }
+    }
+}
+
+/// One process as the tree walk sees it.
+struct Proc {
+    pid: u32,
+    ppid: u32,
+    zombie: bool,
+}
+
+/// Every process: Linux `/proc/*/stat`, macOS `ps -A -o pid=,ppid=,stat=`.
+#[cfg(target_os = "linux")]
+fn procs() -> Vec<Proc> {
+    let mut out = Vec::new();
+    for entry in std::fs::read_dir("/proc").into_iter().flatten().flatten() {
+        let Some(pid) = entry.file_name().to_str().and_then(|n| n.parse().ok()) else {
+            continue;
+        };
+        let Ok(stat) = std::fs::read_to_string(entry.path().join("stat")) else {
+            continue;
+        };
+        // The name in brackets may hold spaces and `)`: fields after the last `)` start at 3.
+        let Some(rest) = stat.rfind(')').map(|i| &stat[i + 1..]) else {
+            continue;
+        };
+        let mut fields = rest.split_whitespace();
+        let zombie = fields.next() == Some("Z");
+        if let Some(ppid) = fields.next().and_then(|p| p.parse().ok()) {
+            out.push(Proc { pid, ppid, zombie });
+        }
+    }
+    out
+}
+
+#[cfg(not(target_os = "linux"))]
+fn procs() -> Vec<Proc> {
+    let Ok(out) = Command::new("ps")
+        .args(["-A", "-o", "pid=,ppid=,stat="])
+        .output()
+    else {
+        return Vec::new();
+    };
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .filter_map(|l| {
+            let mut f = l.split_whitespace();
+            Some(Proc {
+                pid: f.next()?.parse().ok()?,
+                ppid: f.next()?.parse().ok()?,
+                zombie: f.next().is_some_and(|s| s.starts_with('Z')),
+            })
+        })
+        .collect()
+}
+
+/// The harness tree: `harness` and its descendants by a parent walk, and on Linux the
+/// watchdog's own children (orphans the subreaper took in) that started no earlier than the
+/// harness. Never the watchdog, never a pid `spare` names (the recorder), never a zombie. Each
+/// with its start id, so a reused pid is never taken for it.
+fn tree(harness: (u32, u64), spare: &dyn Fn(u32) -> bool) -> Vec<(u32, u64)> {
+    let me = std::process::id();
+    let all = procs();
+    let mut found = vec![harness.0];
+    let mut i = 0;
+    while i < found.len() {
+        let parent = found[i];
+        for p in &all {
+            if p.ppid == parent && !found.contains(&p.pid) {
+                found.push(p.pid);
+            }
+        }
+        i += 1;
+    }
+    if cfg!(target_os = "linux") {
+        for p in all.iter().filter(|p| p.ppid == me) {
+            let late = crate::cli::proc_start_id(p.pid).is_some_and(|s| s >= harness.1);
+            if late && !found.contains(&p.pid) {
+                found.push(p.pid);
+            }
+        }
+    }
+    found
+        .into_iter()
+        .filter(|pid| *pid != me && !spare(*pid))
+        .filter(|pid| !all.iter().any(|p| p.pid == *pid && p.zombie))
+        .filter_map(|pid| {
+            let start = crate::cli::proc_start_id(pid)?;
+            (pid != harness.0 || start == harness.1).then_some((pid, start))
+        })
+        .collect()
+}
+
+/// Ends the harness tree ([`tree`]): SIGTERM to each, SIGKILL after 10 s of boot time to each
+/// still alive. Signals go to single pids only, never a group, so the watchdog's own process
+/// group is never signalled. The watchdog's own children among them, except the harness (its
+/// caller reaps that one), are reaped here.
+pub fn end_tree(harness: (u32, u64), spare: &dyn Fn(u32) -> bool) {
+    use crate::pipeline::clock::Mono;
+    let me = std::process::id();
+    let send = |procs: &[(u32, u64)], signal: libc::c_int| {
+        for (pid, _) in procs {
+            if let Ok(p) = libc::pid_t::try_from(*pid) {
+                // SAFETY: a single positive pid and a signal number; touches no memory.
+                unsafe { libc::kill(p, signal) };
+            }
+        }
+    };
+    let targets = tree(harness, spare);
+    send(&targets, libc::SIGTERM);
+    let start = Mono::now();
+    loop {
+        let all = procs();
+        let mut left = Vec::new();
+        for &(pid, start_id) in &targets {
+            let zombie = all.iter().any(|p| p.pid == pid && p.zombie);
+            if zombie && pid != harness.0 && all.iter().any(|p| p.pid == pid && p.ppid == me) {
+                let mut status = 0;
+                // SAFETY: reaps one child of ours by pid; writes one integer.
+                unsafe { libc::waitpid(pid as libc::pid_t, &mut status, libc::WNOHANG) };
+            } else if !zombie && crate::cli::alive(pid, start_id) {
+                left.push((pid, start_id));
+            }
+        }
+        if left.is_empty() {
+            return;
+        }
+        if Mono::now().0.saturating_sub(start.0) >= BUDGET_NS {
+            send(&left, libc::SIGKILL);
+            return;
+        }
+        std::thread::sleep(TICK);
+    }
+}
+
+/// The Linux children of the watchdog that started no earlier than the harness and are still
+/// alive at the seal, with their program names (`/proc/<pid>/comm`). None elsewhere or when
+/// there are none.
+pub fn outlived(harness_start: u64, spare: &dyn Fn(u32) -> bool) -> Option<Outlived> {
+    if !cfg!(target_os = "linux") {
+        return None;
+    }
+    let me = std::process::id();
+    let programs: Vec<String> = procs()
+        .into_iter()
+        .filter(|p| p.ppid == me && !p.zombie && !spare(p.pid))
+        .filter(|p| crate::cli::proc_start_id(p.pid).is_some_and(|s| s >= harness_start))
+        .map(|p| {
+            std::fs::read_to_string(format!("/proc/{}/comm", p.pid))
+                .map(|c| c.trim_end().to_string())
+                .unwrap_or_default()
+        })
+        .collect();
+    (!programs.is_empty()).then_some(Outlived {
+        count: programs.len() as u64,
+        programs,
+    })
+}
+
+/// One look at the harness: `waitpid(WNOHANG | WUNTRACED)`. A stopped harness is continued
+/// (`SIGCONT` to its group, the watchdog's own, as [`super::shield::wait_resuming`] does) and
+/// reads as running. This is the one signal the watchdog's own group gets, and an accepted
+/// exception to "never signalled": `SIGCONT` only resumes, and a job-control stop holds the
+/// harness's children too, which a `SIGCONT` to the pid alone would leave stopped. `Some` once it has exited; a lost child (`ECHILD`) reads as exited with no
+/// status.
+pub fn look(pid: u32) -> Option<Option<std::process::ExitStatus>> {
+    use std::os::unix::process::ExitStatusExt;
+    let p = libc::pid_t::try_from(pid).ok()?;
+    let mut status = 0;
+    // SAFETY: `waitpid` writes the one integer it is handed.
+    let reaped = unsafe { libc::waitpid(p, &mut status, libc::WNOHANG | libc::WUNTRACED) };
+    match reaped {
+        0 => None,
+        -1 if io::Error::last_os_error().kind() == io::ErrorKind::Interrupted => None,
+        -1 => Some(None),
+        _ if libc::WIFSTOPPED(status) => {
+            // SAFETY: integers only.
+            unsafe {
+                let group = libc::getpgid(p);
+                libc::kill(if group > 0 { -group } else { p }, libc::SIGCONT);
+            }
+            None
+        }
+        _ => Some(Some(std::process::ExitStatus::from_raw(status))),
+    }
 }
