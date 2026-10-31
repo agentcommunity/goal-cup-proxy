@@ -1040,3 +1040,18 @@ log; the pad lane follows.
   before `legs.rs`. `docs/RECORD-FORMAT.md` and the check list in PRD-15's text follow the three new
   ids in PRD-15's next slice.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-31, replan after PRD-09 slice 4 (merge c262ef5a)
+
+- **`usage::run(args) -> ExitCode` is real** (`usage/out.rs`, `usage/mod.rs`); the `usage` arm in
+  `main.rs` calls it and the exit-3 stub is gone. Exit 3 now means no entry gave output; a decode
+  error partway gives the summary with `read_error` true and exit 0. No `main.rs` change is asked.
+- **U1 grew by five public fields on `CallTable`:** `run`, `entry`, `connector`, `harness_version`,
+  `sealed`, filled from the `start` event and the last PART. A table built with
+  `CallTable::default()` plus field sets or struct update is unchanged, so `legs.rs` and `history.rs`
+  need nothing; build tables the way the section "stub" rule says. No change to `CallRow` or `Thread`
+  construction.
+- **Thread readability, as merged:** a thread's `readable` is set from what the record or the native
+  file proves; a thread seen only by a spawn is not marked readable. `subagents_present` keeps the
+  rule in the earlier PRD-09 note (wire-only threads are not "present natively").
+- No locked ledger item is touched and no owner question comes from this slice.
