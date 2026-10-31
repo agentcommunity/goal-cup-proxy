@@ -1084,3 +1084,40 @@ pub fn prompt_unreadable(file: &Path, why: &str) -> String {
 
 pub const PUSH_AGAIN: &str =
     "If you never sent your prompt, send it now. It starts with these lines.";
+
+/// `goalcup seal` run by the agent: the person ends the part, not the agent.
+pub const SEAL_INSIDE: &str = "goalcup seal runs outside your agent. Run it in another terminal.";
+
+/// The part has a seal already.
+pub fn seal_already(run: &str) -> String {
+    format!(
+        "This part has already ended, so there is nothing to seal. To go on, run: goalcup continue {run}"
+    )
+}
+
+/// Neither the watchdog nor the recorder lives, and the part has no seal.
+pub fn seal_not_running(run: &str) -> String {
+    format!("This part is not recording and has no seal yet. To go on, run: goalcup continue {run}")
+}
+
+pub fn seal_question(name: &str) -> String {
+    format!("Sure? This stops {name} and ends this part. [y/N] ")
+}
+
+pub const SEAL_NOT_CONFIRMED: &str = "Nothing was changed. The part is still recording.";
+
+pub const SEAL_NEEDS_TERMINAL: &str = "goalcup seal needs a terminal to ask first. To end the part without asking, run: goalcup seal --yes";
+
+pub const SEAL_WAIT: &str =
+    "Ending the part and finishing its record files. This can take a minute.";
+
+pub const SEAL_STILL: &str = "Still finishing the record files.";
+
+/// The line before the end screen when the seal ended a running harness.
+pub fn seal_stopped(name: &str) -> String {
+    format!("goalcup seal stopped {name}.")
+}
+
+pub fn seal_could_not() -> String {
+    format!("goalcup could not finish the part. Write to {SUPPORT_ADDRESS}.")
+}
