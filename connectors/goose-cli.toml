@@ -15,10 +15,11 @@ host_hints = [
   { file = "{home}/config/config.yaml", key = "*_ENDPOINT" },
   { file = "{home}/config/config.yaml", key = "ASTRON_BASE_URL" },
 ]
-# Every host variable the environment-variables and providers pages name; a missing name is one line here.
+# The host variables the environment-variables and providers pages list on 2026-10-31; a name they add later is one line here.
 hint_env = [
   "OPENAI_HOST", "ANTHROPIC_HOST", "GOOSE_PROVIDER__HOST", "LITELLM_HOST", "OPENROUTER_HOST", "XAI_HOST",
   "TETRATE_HOST", "DATABRICKS_HOST", "SNOWFLAKE_HOST", "VENICE_HOST", "AVIAN_HOST", "ROUTSTR_HOST", "OLLAMA_HOST",
+  "GONDOLA_HOST", "ATOMIC_CHAT_HOST",
   "AZURE_OPENAI_ENDPOINT", "AZURE_FOUNDRY_ENDPOINT", "TANZU_AI_ENDPOINT", "ASTRON_BASE_URL",
 ]
 secret_files = ["{home}/config/secrets.yaml"]
