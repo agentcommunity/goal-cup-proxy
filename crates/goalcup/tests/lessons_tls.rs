@@ -263,27 +263,65 @@ fn succeeded(code: std::process::ExitCode) -> bool {
 /// `prepare`; the harness copies the key file's mode to `mode` while it runs.
 #[cfg(target_os = "linux")]
 fn boot(entry: &Path, mode: &Path) -> std::process::ExitCode {
-    use goalcup::connector::{ConnectorRef, HomeLock, HostList, LaunchPlan, NativeSources, builtin};
+    use goalcup::connector::{
+        ConnectorRef, HomeLock, HostList, LaunchPlan, NativeSources, builtin,
+    };
     use goalcup::watchdog::{CaPem, StartFacts, run_with};
     let hosts = HostList::from_file(builtin::HOSTS.as_bytes(), "model-hosts.toml").unwrap();
     let key = entry.join("rec/run-ca.key");
     let script = format!("stat -c %a {} > {}", key.display(), mode.display());
-    let connector = ConnectorRef { id: "fake".into(), name: "Fake".into(), sha256: "0".repeat(64), source: Default::default() };
+    let connector = ConnectorRef {
+        id: "fake".into(),
+        name: "Fake".into(),
+        sha256: "0".repeat(64),
+        source: Default::default(),
+    };
     let facts = StartFacts {
-        run: "r0123456789abcdef".into(), entry: "e0123456789abcdef".into(), segment: 0,
-        entry_dir: entry.to_path_buf(), deadline: None, server_time: None, local_wall: 0,
-        workspace: entry.to_path_buf(), connector: serde_json::to_value(&connector).unwrap(),
-        harness_version: None, keep: true, build: None, hosts: serde_json::to_value(&hosts).unwrap(),
-        hosts_sha256: hosts.sha256().to_string(), native: serde_json::to_value(NativeSources::default()).unwrap(),
-        mask_rules: serde_json::json!([]), values: serde_json::json!([]),
-        ca: CaPem { cert: String::new(), key: String::new() }, prev: None, harness: None, null_since: None, notes: Vec::new(),
+        run: "r0123456789abcdef".into(),
+        entry: "e0123456789abcdef".into(),
+        segment: 0,
+        entry_dir: entry.to_path_buf(),
+        deadline: None,
+        server_time: None,
+        local_wall: 0,
+        workspace: entry.to_path_buf(),
+        connector: serde_json::to_value(&connector).unwrap(),
+        harness_version: None,
+        keep: true,
+        build: None,
+        hosts: serde_json::to_value(&hosts).unwrap(),
+        hosts_sha256: hosts.sha256().to_string(),
+        native: serde_json::to_value(NativeSources::default()).unwrap(),
+        mask_rules: serde_json::json!([]),
+        values: serde_json::json!([]),
+        ca: CaPem {
+            cert: String::new(),
+            key: String::new(),
+        },
+        prev: None,
+        harness: None,
+        null_since: None,
+        notes: Vec::new(),
     };
     let plan = LaunchPlan {
-        connector, harness_version: None, program: "/bin/sh".into(), argv: vec!["-c".into(), script],
-        env: [("PATH".to_string(), "/usr/bin:/bin".to_string())].into(), home: entry.join("home"),
-        lock: HomeLock::default(), before: vec![], after: vec![], ca_env: vec![], hosts,
-        native: NativeSources::default(), mask_rules: vec![], secret_values: vec![], notes: vec![],
-        unread: vec![], log: vec![], refusal: None,
+        connector,
+        harness_version: None,
+        program: "/bin/sh".into(),
+        argv: vec!["-c".into(), script],
+        env: [("PATH".to_string(), "/usr/bin:/bin".to_string())].into(),
+        home: entry.join("home"),
+        lock: HomeLock::default(),
+        before: vec![],
+        after: vec![],
+        ca_env: vec![],
+        hosts,
+        native: NativeSources::default(),
+        mask_rules: vec![],
+        secret_values: vec![],
+        notes: vec![],
+        unread: vec![],
+        log: vec![],
+        refusal: None,
     };
     // SAFETY: nextest runs each test in its own process, before any thread of it starts.
     unsafe { std::env::set_var("GOALCUP_SERVER", "off") };
@@ -313,7 +351,10 @@ fn run_ca_key_is_new_0600_gone_at_the_seal_and_never_follows_a_link() {
     let mode = tmp.path().join("mode");
     assert!(succeeded(boot(&entry, &mode)));
     assert_eq!(std::fs::read_to_string(&mode).unwrap().trim(), "600");
-    assert!(!entry.join("rec/run-ca.key").exists(), "the key outlived the seal");
+    assert!(
+        !entry.join("rec/run-ca.key").exists(),
+        "the key outlived the seal"
+    );
     let mut keys = Vec::new();
     find_private_keys(&entry, &mut keys);
     assert!(keys.is_empty(), "a private key was left: {keys:?}");
@@ -324,8 +365,20 @@ fn run_ca_key_is_new_0600_gone_at_the_seal_and_never_follows_a_link() {
         let victim = tmp.path().join("victim");
         std::fs::write(&victim, b"keep").unwrap();
         let planted = entry.join("rec/run-ca.key");
-        if hard { std::fs::hard_link(&victim, &planted) } else { symlink(&victim, &planted) }.unwrap();
-        assert!(!succeeded(boot(&entry, &tmp.path().join("mode"))), "hard={hard}");
-        assert_eq!(std::fs::read(&victim).unwrap(), b"keep", "hard={hard}: written through");
+        if hard {
+            std::fs::hard_link(&victim, &planted)
+        } else {
+            symlink(&victim, &planted)
+        }
+        .unwrap();
+        assert!(
+            !succeeded(boot(&entry, &tmp.path().join("mode"))),
+            "hard={hard}"
+        );
+        assert_eq!(
+            std::fs::read(&victim).unwrap(),
+            b"keep",
+            "hard={hard}: written through"
+        );
     }
 }

@@ -402,19 +402,38 @@ async fn corrupt_br_tail_through_serve_keeps_prefix_gap_end_and_relays_everythin
     *wire.last_mut().unwrap() = 0xfe; // the closing meta-block header becomes invalid
     wire.extend_from_slice(b"bytes after the corruption");
     let head = vec![("content-encoding".to_string(), "br".to_string())];
-    let answer = Answer::Http { status: 200, headers: head, body: Body::Whole(wire.clone()), coding: None };
-    let up = Upstream::start(Script { answers: vec![answer], ..Script::ok(b"") }.with_tls(&["api.openai.com"], &[common::pki::HTTP11]));
+    let answer = Answer::Http {
+        status: 200,
+        headers: head,
+        body: Body::Whole(wire.clone()),
+        coding: None,
+    };
+    let up = Upstream::start(
+        Script {
+            answers: vec![answer],
+            ..Script::ok(b"")
+        }
+        .with_tls(&["api.openai.com"], &[common::pki::HTTP11]),
+    );
     let dir = tempfile::tempdir().unwrap();
     let roots = up.pki().roots_file(dir.path()).display().to_string();
     let env = [
-        ("GOALCUP_TEST_UPSTREAM", format!("api.openai.com={}", up.addr())),
+        (
+            "GOALCUP_TEST_UPSTREAM",
+            format!("api.openai.com={}", up.addr()),
+        ),
         ("GOALCUP_TEST_EXTRA_ROOTS", roots),
     ];
     let (_h, addr, calls, ca) = proxy_fixtures::proxy(proxy_fixtures::HOSTS, &env);
     let name = rustls::pki_types::ServerName::try_from("api.openai.com").unwrap();
     let tcp = proxy_fixtures::through(addr, "api.openai.com:443").await;
-    let mut t = proxy_fixtures::trusting_run_ca(&ca, &[b"http/1.1"]).connect(name, tcp).await.unwrap();
-    t.write_all(b"GET /v1/models HTTP/1.1\r\nHost: api.openai.com\r\nAccept-Encoding: br\r\n\r\n").await.unwrap();
+    let mut t = proxy_fixtures::trusting_run_ca(&ca, &[b"http/1.1"])
+        .connect(name, tcp)
+        .await
+        .unwrap();
+    t.write_all(b"GET /v1/models HTTP/1.1\r\nHost: api.openai.com\r\nAccept-Encoding: br\r\n\r\n")
+        .await
+        .unwrap();
     let mut got = Vec::new();
     common::within_async(common::HANG, async {
         while !got.ends_with(&wire) {
@@ -426,7 +445,12 @@ async fn corrupt_br_tail_through_serve_keeps_prefix_gap_end_and_relays_everythin
     })
     .await;
 
-    let [(resp, ..)] = opens(&calls).into_iter().filter(|o| o.1 == StreamKind::HttpResp).collect::<Vec<_>>().try_into().unwrap();
+    let [(resp, ..)] = opens(&calls)
+        .into_iter()
+        .filter(|o| o.1 == StreamKind::HttpResp)
+        .collect::<Vec<_>>()
+        .try_into()
+        .unwrap();
     let ended = common::within_async(common::HANG, async {
         loop {
             if let Some(e) = ends(&calls).into_iter().find(|e| e.0 == resp) {
@@ -437,11 +461,17 @@ async fn corrupt_br_tail_through_serve_keeps_prefix_gap_end_and_relays_everythin
     })
     .await;
     let kept = data_of(&calls, resp);
-    assert!(!kept.is_empty() && plain.starts_with(&kept), "a decoded prefix, never a suffix byte");
-    let reasons: Vec<_> = gaps(&calls).into_iter().filter_map(|g| match g {
-        Call::Gap(s, r, ..) if s == resp => Some(r),
-        _ => None,
-    }).collect();
+    assert!(
+        !kept.is_empty() && plain.starts_with(&kept),
+        "a decoded prefix, never a suffix byte"
+    );
+    let reasons: Vec<_> = gaps(&calls)
+        .into_iter()
+        .filter_map(|g| match g {
+            Call::Gap(s, r, ..) if s == resp => Some(r),
+            _ => None,
+        })
+        .collect();
     assert_eq!(reasons, [GapReason::DecodeFailed]);
     assert_eq!(ended, EndReason::DecodeError);
 }
