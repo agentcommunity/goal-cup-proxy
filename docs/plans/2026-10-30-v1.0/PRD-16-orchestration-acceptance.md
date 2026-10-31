@@ -2379,3 +2379,8 @@ kept and now cites BUILD-PROMPT section 5, since B3 no longer carries it.
 - **Gate effect:** none on build order or seams. Deletion gate check 1 has had a dry run; its rows stay open
   until an integration-head box run, and the L-P3 ctrl-c case and the serve halves still block counting green.
   The slice title claimed a helper dedupe it only partly did; the merge record is not edited. No locked ledger item is touched.
+
+### 2026-10-31, replan after PRD-03 slice 3 (merge c81e8e9b)
+
+- **Size report, PRD-03** (`wc -l` on integration): `proxy/*.rs` 5,171 lines against the PRD-00 row of 4,250 (4,400 replanned), 122% and 118%. `h2.rs` is still to come and would bring src to about 6,970. Proxy tests about 3,250 against 2,000. The excess serves points 1, 2 and 3 (full wire record, no stall); the decision lines are recorded. The `h2.rs` slice must cut before adding and delete `H2Unparsed` and `stop_h2`. Total test lines are the owner question only past about 14,200; check at the next size report.
+- **Gate effect:** `serve` is on integration, so the build-order step "PRD-02 slice A (boot.rs)" and the PRD-17 serve halves are unblocked. `h2.rs` stays the last PRD-03 slice; acceptance rows that need h2 (3 and the h2 parts of PRD-12) wait on it. No seam or phase-check change. No locked ledger item is touched.

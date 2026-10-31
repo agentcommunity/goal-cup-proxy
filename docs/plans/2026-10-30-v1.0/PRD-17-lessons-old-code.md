@@ -1054,3 +1054,7 @@ Names for `LESSONS.md` (the lessons lane writes them; judge 14:56Z, 15:13Z):
 - **FW1 copy of the PRD-02 promise:** agreement with PRD-02 is not recorded. The owner of PRD-02 may move the case
   into `pipeline_guard.rs`; if so delete it here in the same PR and repoint the L-FW1 and L-R2 rows.
 - **Rows stay open** until a box run on the integration head. Nothing the plan owes changes; no locked ledger item is touched.
+
+### 2026-10-31, replan after PRD-03 slice 3 (merge c81e8e9b): serve halves unblocked
+
+`proxy::serve` and `ProxyHandle::quiet_since` are on integration, so the serve halves of the lessons tests can be written now. Cases that need an h2 client wait for `h2.rs`; until then an h2-only client yields a named `h2_unsupported` GAP, which a case must not assert as the final behaviour. Rows stay open until a box run on the integration head. No locked ledger item is touched.
