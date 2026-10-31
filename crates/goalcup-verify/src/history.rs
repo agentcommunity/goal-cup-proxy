@@ -8,12 +8,13 @@
 
 use crate::integrity::{At, Check, Res};
 use crate::legs::Cover;
+use crate::secrets::delta_text;
 use crate::usage::{CallTable, Calls, Leg};
 use goalcup_format::dump::wall;
 use goalcup_format::{FLAG_FIN, Record, StreamKind};
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
-use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 /// The first 16 bytes of a SHA-256.
 type Key = [u8; 16];
@@ -21,8 +22,6 @@ type Key = [u8; 16];
 type Id = (u64, u64, Option<u64>);
 /// One answer's keys: (key, whether it is a tool-call id).
 type Turn = Vec<(Key, bool)>;
-/// Streamed text so far: Anthropic blocks (1), Chat choices (2) and Gemini candidates (3).
-type Acc = BTreeMap<(u8, u64), String>;
 
 fn hash(b: &[u8]) -> Key {
     let mut k = [0; 16];
@@ -58,55 +57,41 @@ fn turn(m: &Map<String, Value>) -> Option<Turn> {
             }
         }
     }
-    let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
-    let t = (!text.is_empty()).then(|| vec![(hash(text.as_bytes()), false)]);
     if !ids.is_empty() {
         return Some(ids.iter().map(|i| (hash(i.as_bytes()), true)).collect());
     }
+    let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    let t = (!text.is_empty()).then(|| vec![(hash(text.as_bytes()), false)]);
     Some(fcs.into_iter().map(|k| (k, false)).collect::<Turn>())
         .filter(|f| !f.is_empty())
         .or(t)
 }
 
-fn sub<'a>(v: Option<&'a Value>, k: &str) -> Option<&'a str> {
-    v?.get(k)?.as_str()
-}
-
-/// Adds the answer keys of a response event, and its streamed text pieces to `acc`.
-fn walk(v: &Value, acc: &mut Acc, keys: &mut HashSet<Key>) {
+/// Adds the answer keys of every object in a response event or body.
+fn keys_of(v: &Value, keys: &mut HashSet<Key>) {
     match v {
         Value::Object(m) => {
             keys.extend(turn(m).into_iter().flatten().map(|k| k.0));
-            if m.get("type").and_then(Value::as_str) == Some("content_block_delta") {
-                let piece = sub(m.get("delta"), "text").unwrap_or("");
-                acc.entry((1, 0)).or_default().push_str(piece);
-            }
-            let list = |k: &str| m.get(k).and_then(Value::as_array).into_iter().flatten();
-            for (i, c) in list("choices").enumerate() {
-                let piece = sub(c.get("delta"), "content").unwrap_or("");
-                acc.entry((2, c["index"].as_u64().unwrap_or(i as u64)))
-                    .or_default()
-                    .push_str(piece);
-            }
-            for (i, c) in list("candidates").enumerate() {
-                let parts = c["content"]["parts"].as_array().into_iter().flatten();
-                let e = acc.entry((3, c["index"].as_u64().unwrap_or(i as u64)));
-                e.or_default()
-                    .extend(parts.filter_map(|p| p["text"].as_str()));
-            }
-            m.values().for_each(|c| walk(c, acc, keys));
+            m.values().for_each(|c| keys_of(c, keys));
         }
-        Value::Array(a) => a.iter().for_each(|c| walk(c, acc, keys)),
+        Value::Array(a) => a.iter().for_each(|c| keys_of(c, keys)),
         _ => {}
     }
 }
 
-fn texts(acc: &mut Acc, keys: &mut HashSet<Key>) {
-    for t in std::mem::take(acc).into_values() {
-        let t = t.split_whitespace().collect::<Vec<_>>().join(" ");
-        if !t.is_empty() {
-            keys.insert(hash(t.as_bytes()));
-        }
+/// One response event: its answer keys, and its streamed text pieces joined into `acc` by the
+/// secret scan's joiner ([`delta_text`]); the scan and this check never keep two copies.
+fn event(v: &Value, acc: &mut String, keys: &mut HashSet<Key>) {
+    keys_of(v, keys);
+    delta_text(v, acc);
+}
+
+/// The joined text of a whole response is one answer key.
+fn texts(acc: &mut String, keys: &mut HashSet<Key>) {
+    let t = std::mem::take(acc);
+    let t = t.split_whitespace().collect::<Vec<_>>().join(" ");
+    if !t.is_empty() {
+        keys.insert(hash(t.as_bytes()));
     }
 }
 
@@ -128,7 +113,7 @@ struct St {
     /// A body or message is being read (a request that looks like JSON; an open message).
     pend: bool,
     msgs: u64,
-    acc: Acc,
+    acc: String,
 }
 
 /// One model request: where it ended, its chain, and its turns new to that chain.
@@ -137,12 +122,16 @@ struct Rq {
     off: u64,
     chain: usize,
     first: bool,
+    /// How many empty chains there were when this request opened its chain with no earlier
+    /// match; [`judge`] may join it to the one of its own thread.
+    waiting: usize,
     turns: Vec<(usize, Turn)>,
 }
 
 struct Ch {
     /// The digests of the last request's turns.
     last: Vec<u64>,
+    /// Its first request resent no earlier answer.
     anchored: bool,
 }
 
@@ -150,12 +139,16 @@ struct Ch {
 #[derive(Default)]
 pub struct Hist {
     reqs: Vec<Rq>,
-    /// Per chain: whether its first request resent no earlier answer.
-    chains: Vec<bool>,
+    chains: Vec<Ch>,
+    /// The anchored (empty) chains, in the order they began.
+    zeros: Vec<usize>,
     answers: HashSet<Key>,
-    /// Requests skipped: previous-response id only (index 0) and undecoded (index 2); the
-    /// compacted turns are counted at judge.
-    skip: [u64; 3],
+    /// Wall spans of GAPs on model streams.
+    gaps: Vec<(u64, u64)>,
+    /// Requests skipped: previous-response id only, and undecoded. The compacted turns are
+    /// counted at judge.
+    prev_response: u64,
+    undecoded: u64,
     seen: u64,
 }
 
@@ -167,10 +160,7 @@ pub struct Sink {
     open: HashMap<(u64, u64), St>,
     /// Candidate requests whose response is still to come.
     cand: HashSet<(u64, u64)>,
-    chains: Vec<Ch>,
     by_last: HashMap<u64, Vec<usize>>,
-    /// Anchored chains still at length 0, oldest first.
-    zero: VecDeque<usize>,
     h: Hist,
 }
 
@@ -202,7 +192,7 @@ impl Sink {
                 // The dead boot's open requests and messages are cut.
                 let cut = std::mem::take(&mut self.open);
                 let up = |s: &&St| s.pend && matches!(s.role, Role::Req | Role::Up);
-                self.h.skip[2] += cut.values().filter(up).count() as u64;
+                self.h.undecoded += cut.values().filter(up).count() as u64;
                 self.boot = *boot;
             }
             Record::Open {
@@ -220,6 +210,14 @@ impl Sink {
                 ..
             } => self.data(*sid, off, (*o, *flags), bytes),
             Record::End { sid, .. } => self.end(*sid, off),
+            Record::Gap {
+                sid,
+                start_wall: a,
+                end_wall: b,
+                ..
+            } if *a > 0 && b >= a && self.open.contains_key(&(self.boot, *sid)) => {
+                self.h.gaps.push((*a, *b));
+            }
             _ => {}
         }
     }
@@ -259,7 +257,7 @@ impl Sink {
             hole: false,
             pend,
             msgs: 0,
-            acc: Acc::new(),
+            acc: String::new(),
         };
         self.open.insert((b, sid), st);
     }
@@ -294,7 +292,7 @@ impl Sink {
             Role::Resp(true) => {
                 st.buf.extend_from_slice(bytes);
                 let (acc, keys) = (&mut st.acc, &mut self.h.answers);
-                lines(&mut st.buf, &mut |v| walk(v, acc, keys));
+                lines(&mut st.buf, &mut |v| event(v, acc, keys));
             }
             Role::Resp(false) | Role::Up | Role::Down if !st.hole => {
                 st.buf.extend_from_slice(bytes)
@@ -329,33 +327,35 @@ impl Sink {
             Role::Resp(true) => {
                 st.buf.push(b'\n');
                 let (acc, keys) = (&mut st.acc, &mut self.h.answers);
-                lines(&mut st.buf, &mut |v| walk(v, acc, keys));
+                lines(&mut st.buf, &mut |v| event(v, acc, keys));
                 texts(&mut st.acc, keys);
             }
             Role::Resp(false) if !st.hole => self.reply(&st.buf),
-            Role::Up if st.pend => self.h.skip[2] += 1,
+            Role::Up if st.pend => self.h.undecoded += 1,
             _ => {}
         }
     }
 
     /// A whole response body or server message: its answers go in the one set.
     fn reply(&mut self, body: &[u8]) {
-        let (mut acc, keys) = (Acc::new(), &mut self.h.answers);
+        let (mut acc, keys) = (String::new(), &mut self.h.answers);
         match serde_json::from_slice::<Value>(body) {
-            Ok(Value::Array(a)) => a.iter().for_each(|v| walk(v, &mut acc, keys)),
-            Ok(v) => walk(&v, &mut acc, keys),
+            Ok(Value::Array(a)) => a.iter().for_each(|v| event(v, &mut acc, keys)),
+            Ok(v) => event(&v, &mut acc, keys),
             Err(_) => {}
         }
         texts(&mut acc, keys);
     }
 
-    /// A finished request body (`None`: it has a hole). True when it is a model request.
+    /// A finished request body (`None`: it has a hole). True when its reply is to be read: a
+    /// model request, or a body that looks like JSON but could not be decoded (the call is real
+    /// and its answer is still an answer).
     fn message(&mut self, id: Id, off: u64, body: Option<&Vec<u8>>) -> bool {
         let parsed = body.and_then(|b| serde_json::from_slice::<Value>(b).ok());
         let Some(Value::Object(m)) = parsed else {
             let looks = body.is_none_or(|b| b.trim_ascii_start().first() == Some(&b'{'));
-            self.h.skip[2] += u64::from(looks);
-            return false;
+            self.h.undecoded += u64::from(looks);
+            return looks;
         };
         let Some(items) = ["messages", "input", "contents"]
             .iter()
@@ -367,34 +367,39 @@ impl Sink {
         let ds: Vec<u64> = turns
             .iter()
             .map(|t| {
-                t.iter().fold(0, |d, k| {
-                    mix(
-                        d,
-                        u64::from_le_bytes(k.0[..8].try_into().unwrap_or_default()),
-                    )
-                })
+                (t.iter()).fold(0, |d, k| mix(d, u64::from_le_bytes(k.0[..8].try_into().unwrap_or_default())))
             })
             .collect();
         self.h.seen += 1;
         if ds.is_empty() && m.get("previous_response_id").is_some_and(|v| !v.is_null()) {
-            self.h.skip[0] += 1;
+            self.h.prev_response += 1;
             return true;
         }
-        let (c, k, first) = self.attach(&ds);
+        let (c, k, first, waiting) = self.attach(&ds);
         let turns = turns.into_iter().enumerate().skip(k).collect();
         self.h.reqs.push(Rq {
             id,
             off,
             chain: c,
             first,
+            waiting,
             turns,
         });
         true
     }
 
     /// The chain a request with these turn digests joins, how many of its turns that chain
-    /// already had, and whether the request opened the chain.
-    fn attach(&mut self, ds: &[u64]) -> (usize, usize, bool) {
+    /// already had, whether the request opened the chain, and (for a chain opened with turns
+    /// already resent) how many empty chains were waiting then.
+    ///
+    /// Worked example. Request 1 resends nothing: it opens chain 0 (empty, anchored). Request 2
+    /// resends [A1]: no chain's last list is a prefix of it, so it opens chain 1 and may join chain
+    /// 0. Which empty chain, if any, is decided in [`judge`], where the thread ids are known: the
+    /// one of its own thread. Request 3 resends [A1, A2]: chain 1's last list [A1] is a prefix, so
+    /// it joins chain 1 and only A2 is new. The prefix is matched by a rolling hash of the turn
+    /// digests, longest first, so a request may extend its chain by more than one answer (a
+    /// skipped request in between).
+    fn attach(&mut self, ds: &[u64]) -> (usize, usize, bool, usize) {
         let ph: Vec<u64> = std::iter::once(0)
             .chain(ds.iter().scan(0, |p, &d| {
                 *p = mix(*p, d);
@@ -405,45 +410,37 @@ impl Sink {
             let list = self.by_last.get(&ph[k])?;
             list.iter()
                 .rev()
-                .find(|&&c| self.chains[c].last == ds[..k])
+                .find(|&&c| self.h.chains[c].last == ds[..k])
                 .map(|&c| (c, k))
         });
-        let zero = (ds.len() == 1).then(|| self.zero.pop_front()).flatten();
-        let (c, k, first) = match (hit, zero) {
-            (Some((c, k)), z) => {
-                // The longest prefix wins; an unused empty chain stays available.
-                if let Some(z) = z {
-                    self.zero.push_front(z);
-                }
-                (c, k, false)
-            }
-            (None, Some(c)) => (c, 0, false),
-            (None, None) => {
+        let (c, k, first, waiting) = match hit {
+            Some((c, k)) => (c, k, false, 0),
+            None => {
                 let anchored = ds.is_empty();
-                self.chains.push(Ch {
+                let waiting = self.h.zeros.len();
+                self.h.chains.push(Ch {
                     last: Vec::new(),
                     anchored,
                 });
-                let c = self.chains.len() - 1;
+                let c = self.h.chains.len() - 1;
                 if anchored {
-                    self.zero.push_back(c);
+                    self.h.zeros.push(c);
                 }
-                (c, 0, true)
+                (c, 0, true, if anchored { 0 } else { waiting })
             }
         };
         if !ds.is_empty() {
             if k > 0 {
                 self.by_last.entry(ph[k]).or_default().retain(|&x| x != c);
             }
-            self.chains[c].last = ds.to_vec();
+            self.h.chains[c].last = ds.to_vec();
             self.by_last.entry(ph[ds.len()]).or_default().push(c);
         }
-        (c, k, first)
+        (c, k, first, waiting)
     }
 
     /// The call table and what the history pass kept.
-    pub fn finish(mut self) -> (CallTable, Hist) {
-        self.h.chains = self.chains.iter().map(|c| c.anchored).collect();
+    pub fn finish(self) -> (CallTable, Hist) {
         (self.calls.finish(), self.h)
     }
 }
@@ -455,30 +452,46 @@ pub fn judge(h: &Hist, t: &CallTable, covers: &[Cover]) -> Check {
         .filter_map(|r| Some(((r.boot, r.sid?, r.msg), (r.thread.as_deref(), r.wall_start))))
         .collect();
     let info = |r: &Rq| rows.get(&r.id).copied().unwrap_or_default();
-    let mut names = vec![String::new(); h.chains.len()];
+    // A chain that opened with turns already resent continues the empty chain of its own thread
+    // (the same id, or no id on both), the oldest one not yet continued; else it stays its own.
+    let n = h.chains.len();
+    let (mut home, mut free): (Vec<usize>, Vec<bool>) = ((0..n).collect(), vec![true; n]);
+    let mut thread: Vec<Option<&str>> = vec![None; n];
     for r in h.reqs.iter().filter(|r| r.first) {
+        thread[r.chain] = info(r).0;
+        let mine = |z: &&usize| free[**z] && thread[**z] == thread[r.chain];
+        if let Some(&z) = h.zeros[..r.waiting].iter().find(mine) {
+            (free[z], home[r.chain]) = (false, z);
+        }
+    }
+    let mut names = vec![String::new(); n];
+    for r in h.reqs.iter().filter(|r| r.first && home[r.chain] == r.chain) {
         let own = format!("chain-{}", r.chain + 1);
-        names[r.chain] = info(r).0.map_or(own, String::from);
+        names[r.chain] = thread[r.chain].map_or(own, String::from);
     }
     // A second chain of a thread that starts unanchored is rewritten history (compaction).
     let (mut seen, mut cut): (HashSet<&str>, HashMap<&str, usize>) = Default::default();
-    for (c, name) in names.iter().enumerate() {
-        if !seen.insert(name) && !h.chains[c] {
+    for (c, name) in names.iter().enumerate().filter(|(c, _)| home[*c] == *c) {
+        if !seen.insert(name) && !h.chains[c].anchored {
             cut.entry(name).or_insert(c);
         }
     }
     let mut chk = Check::new("history_complete", None, Res::Pass, "");
-    let (mut checked, mut comp, mut m) = (0u64, 0u64, [0u64; 3]);
+    let (mut checked, mut comp) = (0u64, 0u64);
+    let (mut missing_call, mut missing_text, mut unanchored) = (0u64, 0u64, 0u64);
     let mut th: BTreeMap<&str, (Res, u64)> = BTreeMap::new();
-    let mut last: HashMap<usize, Option<u64>> = HashMap::new();
+    let mut last: HashMap<usize, u64> = HashMap::new();
     for r in &h.reqs {
-        let (name, at) = (names[r.chain].as_str(), info(r).1);
-        let prev = last.insert(r.chain, at).flatten();
+        let c = home[r.chain];
+        let (name, at) = (names[c].as_str(), info(r).1);
+        let prev = last.get(&c).copied();
+        last.extend(at.map(|a| (c, a)));
         let e = th.entry(name).or_insert((Res::Pass, 0));
-        if cut.get(name).is_some_and(|&c| r.chain >= c) {
+        if cut.get(name).is_some_and(|&x| c >= x) {
             comp += r.turns.len() as u64;
             continue;
         }
+        let first = r.first && c == r.chain;
         for (pos, keys) in &r.turns {
             e.1 += 1;
             checked += 1;
@@ -489,22 +502,23 @@ pub fn judge(h: &Hist, t: &CallTable, covers: &[Cover]) -> Check {
             if miss.is_empty() {
                 continue;
             }
-            let (lo, hi) = (prev.unwrap_or(0), at.unwrap_or(u64::MAX));
-            let named = covers
-                .iter()
-                .any(|c| c.start_wall <= hi && c.end_wall >= lo);
-            let (res, i, what) = if r.first && !h.chains[r.chain] {
-                (Res::Warn, 2, "history from before the record")
+            // The time between the chain's previous request and this one (this one's own time
+            // when the chain has no earlier one with a time).
+            let (lo, hi) = (prev.or(at).unwrap_or(0), at.unwrap_or(u64::MAX));
+            let overlaps = |(a, b): (u64, u64)| a <= hi && b >= lo;
+            let named = (covers.iter().any(|c| overlaps((c.start_wall, c.end_wall))))
+                || h.gaps.iter().any(|&g| overlaps(g));
+            let (res, what) = if first && !h.chains[c].anchored {
+                unanchored += 1;
+                (Res::Warn, "history from before the record")
             } else if miss.contains(&true) {
-                (
-                    if named { Res::Named } else { Res::Fail },
-                    0,
-                    "never recorded as a response",
-                )
+                missing_call += 1;
+                let res = if named { Res::Named } else { Res::Fail };
+                (res, "never recorded as a response")
             } else {
-                (Res::Warn, 1, "text not found in any response")
+                missing_text += 1;
+                (Res::Warn, "text not found in any response")
             };
-            m[i] += 1;
             e.0 = e.0.max(res);
             let kind = if miss.contains(&true) {
                 "tool call"
@@ -530,7 +544,7 @@ pub fn judge(h: &Hist, t: &CallTable, covers: &[Cover]) -> Check {
         .map(|(k, v)| (k.to_string(), label(v).into()))
         .collect();
     let live = threads.values().filter(|v| *v != "skip").count();
-    let (prev, bad) = (h.skip[0], h.skip[2]);
+    let (prev, bad) = (h.prev_response, h.undecoded);
     let skipped = json!({"previous_response_id": prev, "compacted": comp, "undecoded": bad});
     let tail: Vec<String> = [
         (prev, "previous_response_id"),
@@ -556,10 +570,10 @@ pub fn judge(h: &Hist, t: &CallTable, covers: &[Cover]) -> Check {
             .map_or("an unknown time".into(), wall);
         let why = if h.seen == 0 && prev == 0 && bad == 0 {
             "nothing decrypted to the model host".into()
-        } else if h.chains.is_empty() && prev > 0 {
-            "history held by the provider".into()
         } else if comp > 0 {
             format!("history rewritten at {when} (compaction)")
+        } else if prev > 0 {
+            "history held by the provider".into()
         } else if bad > 0 {
             format!("{bad} request bodies could not be read")
         } else {
@@ -571,8 +585,9 @@ pub fn judge(h: &Hist, t: &CallTable, covers: &[Cover]) -> Check {
     } else {
         chk.why += &tail;
     }
-    let facts = json!({"checked": checked, "missing_call": m[0], "missing_text": m[1],
-        "unanchored": m[2], "skipped": skipped, "threads": threads, "chains": h.chains.len()});
+    let facts = json!({"checked": checked, "missing_call": missing_call,
+        "missing_text": missing_text, "unanchored": unanchored, "skipped": skipped,
+        "threads": threads, "chains": home.iter().enumerate().filter(|(i, c)| i == *c).count()});
     chk.facts = facts.as_object().cloned().unwrap_or_default();
     chk
 }

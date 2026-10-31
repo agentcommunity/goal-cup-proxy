@@ -1133,3 +1133,29 @@ log; the pad lane follows.
   the block are unchanged. A scan test that parses the masked line sees valid JSON with all-star strings
   between the markers.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-31, history check fixes after review (slice 6 fixer)
+
+- **Chain rule, as built (section 3.2 step 3).** A request that extends no chain's last list opens its
+  own chain and may continue an empty chain (one whose first request resent nothing), whatever its
+  length. The pass keeps only how many empty chains existed then; `judge` picks the oldest one not yet
+  continued whose U1 thread id is the same, or absent on both. No such chain: the request is its own
+  chain's first request (`history_unanchored`, never `fail`). A second call dropped with no GAP now
+  fails, and a one-shot request on another thread no longer takes a resumed session's chain.
+- **A request body lost to a GAP** is skipped and counted, but its whole reply still supplies answers
+  (a body that looks like JSON and cannot be decoded still gets its reply read). The next request
+  extends the chain over it by more than one answer. Stream GAPs on model streams count as named
+  covers beside the connection covers `honesty` gives; the window starts at the chain's last known
+  request time, else the request's own. The cover's host is not compared: `Cover` carries none, and
+  both rules lean towards `named` over `fail`.
+- **One joiner.** `history.rs` calls `secrets::delta_text` for streamed text; it keeps one joined text
+  per response, not one per block or choice.
+- **Declined: reuse of `usage` framing (review B1).** `Buf` and `Sse` live in `src/usage/`, which PRD-09
+  owns; making them `pub(crate)` is a seam request to PRD-09, not made here.
+- **Size decision** (`wc -l`). `history.rs` 593 against its 155 ceiling and `check_history.rs` about
+  470 against 80: the 155 and 80 figures were estimates made before the streaming pass, four request
+  shapes, WebSocket messages and chain rules were fixed. The extra serves points 1 and 3 (a missed call
+  is named, never silently passed). `check_run1_shape.rs` and `common/run1.rs` stay at their slice 5
+  sizes, and the fixture export helper now lives once in `tests/common`. Anything past this needs a
+  new decision line.
+- No locked ledger item is touched and no owner question comes from this slice.

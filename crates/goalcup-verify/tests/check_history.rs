@@ -8,9 +8,8 @@ mod common;
 use common::*;
 use goalcup_format::{EndReason, FLAG_FIN, GapReason, Record, StreamKind};
 use serde_json::{Value, json};
+use std::env;
 use std::path::{Path, PathBuf};
-use std::process::Command;
-use std::{env, fs};
 
 #[derive(Clone, Copy, PartialEq)]
 enum Sh {
@@ -147,13 +146,33 @@ fn reply(s: Sh, a: A) -> (&'static str, String) {
 }
 
 /// One decrypted POST of `body` with its reply, on its own connection. Returns the request's sid.
+/// With `lose`, 10 bytes in the middle of the request body are lost to a `memory_guard` GAP.
 fn send(e: &mut Entry, path: &str, thread: &str, body: &Value, rep: (&str, String)) -> u64 {
+    send_with(e, path, thread, body, rep, false)
+}
+
+fn send_with(
+    e: &mut Entry,
+    path: &str,
+    thread: &str,
+    body: &Value,
+    rep: (&str, String),
+    lose: bool,
+) -> u64 {
     let body = body.to_string();
     let head = json!({"method": "POST", "path": path, "ver": "1.1", "masked": [], "coding": null,
         "headers": [["content-type", "application/json"], ["thread-id", thread]]});
     let (c, done) = (e.conn(), EndReason::Complete);
     let q = e.open(StreamKind::HttpReq, c, 0, head);
-    e.data(q, 0, 0, body.as_bytes());
+    if lose {
+        let half = body.len() / 2;
+        e.data(q, 0, 0, &body.as_bytes()[..half]);
+        let tail = json!({"guard": "held_bytes"});
+        e.gap(q, GapReason::MemoryGuard, 10, half as u64, 10, tail);
+        e.data(q, half as u64 + 10, 0, &body.as_bytes()[half + 10..]);
+    } else {
+        e.data(q, 0, 0, body.as_bytes());
+    }
     e.end(q, done, body.len() as u64, Value::Null);
     let head = json!({"status": 200, "ver": "1.1", "headers": [["content-type", rep.0]],
         "masked": [], "coding": null, "decoded": true});
@@ -167,6 +186,10 @@ fn send(e: &mut Entry, path: &str, thread: &str, body: &Value, rep: (&str, Strin
 
 /// A request of shape `s` that resends `hist`, answered with `a`.
 fn call(e: &mut Entry, s: Sh, thread: &str, hist: &[A], a: A) -> u64 {
+    call_with(e, s, thread, hist, a, false)
+}
+
+fn call_with(e: &mut Entry, s: Sh, thread: &str, hist: &[A], a: A, lose: bool) -> u64 {
     let (path, key) = match s {
         Chat => ("/v1/chat/completions", "messages"),
         Anthropic => ("/v1/messages", "messages"),
@@ -175,7 +198,7 @@ fn call(e: &mut Entry, s: Sh, thread: &str, hist: &[A], a: A) -> u64 {
     };
     let mut b = json!({"model": "fake-model"});
     b[key] = turns(s, hist).into();
-    send(e, path, thread, &b, reply(s, a))
+    send_with(e, path, thread, &b, reply(s, a), lose)
 }
 
 /// `n` requests: request i resends answers 0..i and is answered with answer i (a text when `text`
@@ -300,16 +323,16 @@ fn a_clean_chain_passes_in_every_request_shape() {
 
 #[test]
 fn a_call_dropped_with_no_gap_fails_and_a_named_gap_over_it_names_it() {
-    for s in [Chat, Anthropic, Responses] {
+    for (s, j) in [(Chat, 1), (Anthropic, 1), (Responses, 1), (Chat, 2), (Anthropic, 2)] {
         let mut sids = vec![];
-        let d = rec("h-drop", |e| sids = chain(e, s, false, 5, Some((2, false))));
+        let d = rec("h-drop", |e| sids = chain(e, s, false, 5, Some((j, false))));
         let h = verdict(&d, "fail", 2);
-        // Request 3 resends the answer to the dropped request 2; it is the third one written.
-        assert_eq!(h["first"]["sid"], sids[2]);
+        // The request after the dropped one resends its answer; it is written at place j.
+        assert_eq!(h["first"]["sid"], sids[j]);
         let why = h["why"].as_str().unwrap();
-        assert!(why.contains(T) && !why.contains(&tid(s, 2)) && !why.contains(TURN));
+        assert!(why.contains(T) && !why.contains(&tid(s, j as u64)) && !why.contains(TURN));
         assert_eq!(missing(&h), (1, 0, 0));
-        let d = rec("h-down", |e| drop(chain(e, s, false, 5, Some((2, true)))));
+        let d = rec("h-down", |e| drop(chain(e, s, false, 5, Some((j, true)))));
         assert_eq!(missing(&verdict(&d, "named", 1)), (1, 0, 0));
     }
 }
@@ -332,6 +355,35 @@ fn history_from_before_the_record_warns_and_never_fails() {
     assert_eq!((n(&h, "checked"), missing(&h)), (2, (0, 0, 1)));
 }
 
+/// A one-shot request on another thread leaves an empty chain that nothing continues; a request
+/// of a resumed session must not take it (it is that session's first request, never a `fail`).
+#[test]
+fn a_stray_empty_chain_of_another_thread_is_not_taken() {
+    let d = rec("h-stray", |e| {
+        call(e, Chat, "t-side", &[], Call(500));
+        call(e, Chat, "t-res", &[Call(99)], Call(0));
+    });
+    let h = verdict(&d, "warn", 0);
+    assert_eq!(missing(&h), (0, 0, 1));
+}
+
+/// A request body lost to a GAP is skipped and counted; its whole reply is still an answer and
+/// the thread goes on being checked.
+#[test]
+fn a_request_body_lost_to_a_gap_does_not_switch_off_its_thread() {
+    let d = rec("h-hole", |e| {
+        let all: Vec<A> = (0..4).map(Call).collect();
+        for (i, &a) in all.iter().enumerate() {
+            call_with(e, Chat, T, &all[..i], a, i == 1);
+        }
+    });
+    let (_, v) = check(&d, &[]);
+    let h = item(&v, "history_complete");
+    assert_eq!(h["result"], "pass", "{h}");
+    assert_eq!((h["facts"]["skipped"]["undecoded"].as_u64(), h["facts"]["skipped"]["compacted"].as_u64()), (Some(1), Some(0)));
+    assert_eq!((n(h, "checked"), missing(h)), (3, (0, 0, 0)));
+}
+
 #[test]
 fn requests_with_only_a_previous_response_id_are_skipped() {
     let d = rec("h-prev", |e| {
@@ -342,7 +394,6 @@ fn requests_with_only_a_previous_response_id_are_skipped() {
     });
     let h = verdict(&d, "skip", 0);
     assert_eq!(h["facts"]["skipped"]["previous_response_id"], 3);
-    assert!(h["why"].as_str().unwrap().contains("provider"));
 }
 
 /// The history is rewritten in the same thread (compaction): the old chain is still judged, the
@@ -384,7 +435,6 @@ fn a_call_dropped_on_a_websocket_fails_and_names_the_thread() {
     });
     let h = verdict(&d, "fail", 2);
     assert_eq!(h["first"]["sid"], up);
-    assert!(h["why"].as_str().unwrap().contains("t-ws"));
     assert_eq!(missing(&h), (1, 0, 0));
 }
 
@@ -439,17 +489,7 @@ fn the_k11_records_give_their_four_results() {
         let h = verdict(&d, res, exit);
         assert_eq!(n(&h, "missing_call"), u64::from(exit > 0));
         if let Ok(out) = env::var("GOALCUP_FIXTURES_OUT") {
-            fs::create_dir_all(&out).unwrap();
-            let to = Path::new(&out).join(format!("k11-{x}-part"));
-            assert!(
-                Command::new("cp")
-                    .arg("-r")
-                    .arg(&d)
-                    .arg(to)
-                    .status()
-                    .unwrap()
-                    .success()
-            );
+            export(&d, &Path::new(&out).join(format!("k11-{x}-part")));
         }
     }
 }

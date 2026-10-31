@@ -62,20 +62,6 @@ fn fetch(d: &Path, honest: bool) -> PathBuf {
     out
 }
 
-/// Copies a folder: the K2 and K7 exports of PRD-12 (section 12). With `GOALCUP_FIXTURES_OUT`
-/// set, the run 1 test writes `k2-part`, `k2-fetched` (lying `fetch.json`), `k7-part` and
-/// `k7-fetched` (honest, from the Clean shape) there, to be committed under
-/// `scripts/pad/fixtures/`.
-fn export(from: &Path, to: &Path) {
-    fs::create_dir_all(to).unwrap();
-    for f in fs::read_dir(from).unwrap().map(|f| f.unwrap().path()) {
-        match f.is_dir() {
-            true => export(&f, &to.join(f.file_name().unwrap())),
-            false => drop(fs::copy(&f, to.join(f.file_name().unwrap())).unwrap()),
-        }
-    }
-}
-
 #[test]
 fn run1_shape_fails_exactly_its_checks_and_reads_six_wire_errors() {
     let (d, k7) = (
