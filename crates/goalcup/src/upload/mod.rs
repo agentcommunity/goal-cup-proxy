@@ -11,11 +11,12 @@
 //! mode (no live writer) they send what is on disk and beat `failed` (ledger R7).
 //! [`UploadHandle::finish`] runs the wrap-up: final heartbeat, then chunks, then the final again
 //! until sealed. The upload thread holds the entry's `upload.lock` while it sends and runs
-//! [`prune`] after each tick that moved `confirmed`, and once the entry is sealed. [`manual`] is
-//! `goalcup upload` for one sealed entry.
+//! [`prune`] after each tick that moved `confirmed`, and once the entry is sealed. After the live
+//! entry it serves the [`manual::Queue`] of older sealed entries (section 1), one round each per
+//! tick. [`manual`] is `goalcup upload` for one sealed entry.
 //!
-//! Still open: the queue of older entries (section 1), the dead-entry close in [`manual`]
-//! (`pipeline::close_dead_entry`, PRD-02 9.4) and the full-tier `upload_worker.rs`.
+//! Still open: the dead-entry close in [`manual`] (`pipeline::close_dead_entry`, PRD-02 9.4) and
+//! the half of the full-tier `upload_worker.rs` case 2 that waits on PRD-02's null-mode watchdog.
 
 pub mod beat;
 pub mod chunk;
@@ -116,6 +117,8 @@ const TICK: Duration = Duration::from_secs(1);
 /// What the two threads share.
 struct Shared {
     p: Policy,
+    /// `$GOALCUP_HOME`, for the queue of older entries.
+    home: PathBuf,
     client: ServerClient,
     ids: (String, String),
     dir: PathBuf,
@@ -164,9 +167,10 @@ pub fn spawn(ctx: UploadCtx) -> UploadHandle {
 }
 
 /// `upload.json` for the entry, keeping what `old`, the earlier one, confirmed, sent and pruned,
-/// and the client for its run's server. None when there is nothing to send with: the file, written here,
-/// says why. Only a readable `server.json` that says off makes the run local; an unreadable one is
-/// not read as "no server". The tail window `upload_by` is the run deadline plus a day.
+/// and the client for its run's server. None when there is nothing to send with: the file,
+/// written here, says why. Only a readable `server.json` that says off makes the run local; an
+/// unreadable one is not read as "no server". The tail window `upload_by` is the run deadline
+/// plus a day.
 fn connect(
     run_dir: &Path,
     entry_dir: &Path,
@@ -216,6 +220,7 @@ fn start(ctx: UploadCtx, word: Arc<watch::Sender<Option<ServerWord>>>) -> Option
     let client = client?;
     let sh = Arc::new(Shared {
         p: Policy::from_env(),
+        home: ctx.home,
         client,
         ids: (ctx.run, ctx.entry),
         dir: ctx.entry_dir.clone(),
@@ -321,9 +326,10 @@ pub fn guard(
 /// The upload thread: a round on each tick, bounded by the durable point (live) or by what is on
 /// disk (null mode). After the seal it waits for the first final heartbeat, then sends back to
 /// back. It sends nothing while another uploader holds `upload.lock`, and prunes after each tick
-/// that moved `confirmed`, and once the entry is sealed.
+/// that moved `confirmed`, and once the entry is sealed. Then each older entry gets one round.
 fn upload_thread(sh: &Shared, rx: &Receiver<()>) {
     let mut s = sh.build(Sender::new);
+    let mut queue = manual::Queue::default();
     let durable = sh.rec.as_ref().map(Recorder::durable);
     let (mut held, mut sealed) = (None, false);
     let raw = || lock(&sh.json).confirmed.as_ref().map(|c| c.raw);
@@ -344,6 +350,7 @@ fn upload_thread(sh: &Shared, rx: &Receiver<()>) {
             prune::prune(&sh.dir, &sh.json, &sh.file);
         }
         sh.put(false);
+        queue.serve(&sh.home, &sh.dir);
     }
 }
 
