@@ -134,9 +134,15 @@ fn launch_helper() {
             say_masks("held");
             say("shielded");
             let status = wait_resuming(child.id()).expect("wait");
+            say(&format!("harness {}", describe(status)));
+            // The terminal signals the whole foreground group in one pass, so the harness can be
+            // gone and reaped before the pass reaches this process. Wait for a line from the test,
+            // sent after it has read the line above, so a ^C still on its way is caught, not
+            // delivered to the default action the next line gives back.
+            let mut line = String::new();
+            let _ = std::io::stdin().read_line(&mut line);
             shield.harness_exited();
             say_masks("given");
-            say(&format!("harness {}", describe(status)));
             say("watchdog alive");
         }
         other => panic!("unknown role {other}"),
@@ -332,6 +338,9 @@ fn ctrl_c_reaches_the_harness_and_the_watchdog_lives() {
     let read = pump(master, &mut seen, |t| t.contains("shielded"));
     assert_eq!(read, Read::Matched, "{}", String::from_utf8_lossy(&seen));
     type_on(master, &[0x03]);
+    let read = pump(master, &mut seen, |t| t.contains("harness signal="));
+    assert_eq!(read, Read::Matched, "{}", String::from_utf8_lossy(&seen));
+    type_on(master, b"\n");
     let text = finish(helper, pty);
     let text = format!("{}{text}", String::from_utf8_lossy(&seen));
     assert!(
