@@ -2220,3 +2220,15 @@ kept and now cites BUILD-PROMPT section 5, since B3 no longer carries it.
   fixtures are not committed and K7 and K11 wait on PRD-08 slice 6 and PRD-09. P1 ("the rig is trusted")
   stays open until slice 7 commits the fixtures and `selftest` exits 0 in a build box.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-31, replan after PRD-11 slice 7 (merge 1c719d16)
+
+- **The end-of-build step added by the slice 6 note (README Tier column and Pad result lines) has landed.**
+  Remove it from the list. What stays is the final acceptance run's link check, which was not re-run after
+  the last push of that slice.
+- **Size report, PRD-11** (wc -l at 1c719d16, PRD-00 row "Connector code (PRD-11)", 800 src and 400 tests):
+  src 1,695 (schema.rs 423, launch.rs 324, mod.rs 317, hints.rs 303, hosts.rs 301, builtin.rs 27), tests
+  759. That is 895 and 359 over the row and 5 and 1 under the ledger L2 ceilings of 1,700 and 760. The slice
+  changed no code, so the figures equal the slice 6 note. Count the ceilings at the final check and list
+  the 895 and 359 beside the Rust total.
+- No locked ledger item is touched and no owner question comes from this slice.

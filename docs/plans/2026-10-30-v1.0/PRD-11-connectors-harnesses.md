@@ -1479,3 +1479,17 @@ is left is data and docs only. Four items, in order:
 - The OpenCode 2 and OpenCode 1 pad files share the program name `opencode`; the OpenCode 2 `version_cmd`
   switches the link (`~/.local/bin/opencode`) to the 2.2.2 prefix. PRD-11 `version` matching is unchanged.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-31, replan after slice 7 (merge 1c719d16)
+
+- **PRD-11 is finished.** Slice 7 changed docs/harnesses only (16 files, 39 insertions, 50 deletions): facts
+  sheets for amp, droid and kimi, the README tier table with links in place of the 15-sheet paragraph, and
+  the Pad result line (plain text path to PAD-RESULTS.md) in twelve sheets. The coverage-matrix link was
+  dropped from the README, as the 30 Oct note asked. No src or test line moved: wc -l at 1c719d16 is src
+  1,695 and tests 759, same as the slice 6 note.
+- **Not done, not this PRD's:** check-links was not re-run after the last push of the slice (plain code
+  text cannot break it, but the final acceptance link check must run). The Amp sheet says nothing was run
+  on 0.0.1793275344 and the pad has no Amp run; the profile writer is covered by its unit test only. Pad
+  files for cline, crush, droid, goose and kimi are PRD-12 slice 7 and the Pad result lines for them point at
+  a file that has no row until those runs happen.
+- No locked ledger item is touched and no owner question comes from this slice.
