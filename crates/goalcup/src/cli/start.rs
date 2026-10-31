@@ -114,7 +114,7 @@ fn hand_over(ready: Ready) -> ExitCode {
     } = ready;
     let (dir, name, run) = (
         facts.entry_dir.clone(),
-        facts.connector.name.clone(),
+        facts.connector["name"].as_str().unwrap_or_default().to_owned(),
         facts.run.clone(),
     );
     log::line(&dir, "start_handover", &[]);
@@ -328,16 +328,15 @@ pub fn prepare(a: &Args, c: &Ctx, out: &mut dyn std::io::Write) -> Result<Ready,
         server_time: None,
         local_wall,
         workspace: c.project.clone(),
-        home: c.home.clone(),
-        connector: plan.connector.clone(),
+        connector: json(&plan.connector),
         harness_version: plan.harness_version.clone(),
         keep: c.vars.get("GOALCUP_KEEP_PARTS").is_some_and(|v| v == "1"),
         build: None,
-        hosts: plan.hosts.clone(),
+        hosts: json(&plan.hosts),
         hosts_sha256: plan.hosts.sha256().to_owned(),
-        native: plan.native.clone(),
-        mask_rules: plan.mask_rules.clone(),
-        values,
+        native: json(&plan.native),
+        mask_rules: json(&plan.mask_rules),
+        values: json(&values),
         // The watchdog mints the run CA and fills this in.
         ca: CaPem {
             cert: String::new(),
@@ -353,6 +352,11 @@ pub fn prepare(a: &Args, c: &Ctx, out: &mut dyn std::io::Write) -> Result<Ready,
         facts,
         _lock: lock,
     })
+}
+
+/// The S17 fields carry the S2 and S3 types as their serde JSON.
+fn json<T: serde::Serialize>(v: &T) -> serde_json::Value {
+    serde_json::to_value(v).unwrap_or(serde_json::Value::Null)
 }
 
 /// Section 8: the push block and the prompt, written to `first-message.txt` and put on the
