@@ -476,8 +476,8 @@ fn a_corrupt_entry_is_marked_not_silent() {
     bytes[at..at + 16].fill(0xA5);
     fs::write(first, bytes).unwrap();
     let ran = run_usage(&dir);
-    assert!(!ran.stderr.is_empty() && !ran.stderr.contains(MARK), "{ran:?}");
-    assert_eq!((ran.code, &json(&ran.sum)["read_error"]), (Some(0), &Value::Bool(true)));
+    let ok = ran.code == Some(0) && json(&ran.sum)["read_error"] == true;
+    assert!(!ran.stderr.is_empty() && !ran.stderr.contains(MARK) && ok, "{ran:?}");
 }
 
 /// Point 4 on every path: the whole entry, a torn copy of it (exit 0, not sealed), a missing path.
