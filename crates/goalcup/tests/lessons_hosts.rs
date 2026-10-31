@@ -119,7 +119,9 @@ fn host_shape() {
     assert!(ok("a-b.c1.example.com"));
     // Uppercase is lowered, as the check defines it.
     assert_eq!(
-        hosts::check("API.Example.COM", Source::Shared).unwrap().name,
+        hosts::check("API.Example.COM", Source::Shared)
+            .unwrap()
+            .name,
         "api.example.com"
     );
     // Labels of 1 to 63.
@@ -172,7 +174,10 @@ fn a_name_resolving_only_here_is_skipped() {
     assert!(hosts::resolves_only_here(&ips(&["::ffff:127.0.0.1"])));
     assert!(!hosts::resolves_only_here(&ips(&["203.0.113.9"])));
     assert!(!hosts::resolves_only_here(&ips(&["::ffff:203.0.113.9"])));
-    assert!(!hosts::resolves_only_here(&ips(&["127.0.0.1", "203.0.113.9"])));
+    assert!(!hosts::resolves_only_here(&ips(&[
+        "127.0.0.1",
+        "203.0.113.9"
+    ])));
     assert!(!hosts::resolves_only_here(&[]));
     // A hint that points here is a note, never a host.
     let plan = hint("http://127.0.0.1:11434/v1");
