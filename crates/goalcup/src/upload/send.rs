@@ -296,15 +296,13 @@ impl Sender {
     fn caught_up(&mut self, j: &Mutex<UploadJson>) {
         (self.target, self.refusals) = (None, 0);
         self.backoff.progress();
-        {
-            let mut j = lock(j);
-            j.state = if j.final_ == Final::Sealed {
-                State::Done
-            } else {
-                State::CaughtUp
-            };
-            (j.failures, j.next_try, j.last_error) = (0, None, None);
-        }
+        let mut j = lock(j);
+        j.state = if j.final_ == Final::Sealed {
+            State::Done
+        } else {
+            State::CaughtUp
+        };
+        (j.failures, j.next_try, j.last_error) = (0, None, None);
     }
 
     /// A failed call at `now` (read after it): back off, say so in `upload.json` and one log line.
