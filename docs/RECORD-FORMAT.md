@@ -336,13 +336,14 @@ was recorded. `<path>` is an entry, `rec`, fetched entry (`rec.gcr.zst`) or run 
 outdir, or one part file. `--live` reads an entry still recording up to its last index line;
 `--server` marks a server copy (a fetched `rec.gcr.zst` is one anyway); `--live` wins over both.
 `--local ENTRY_DIR` is the local entry a server copy is compared with. `--known FILE` adds the
-`secrets` check (below). `--harness-files` is taken but not read yet.
+`secrets` check (below). `--harness-files` is accepted and ignored.
 
-Exit code and `result`: 0 `pass` (whole); 1 `named` (honest but incomplete: every loss is named, or
-the entry is unsealed, live or has pruned part files); 2 `fail` (a broken invariant, a silent loss,
-or with `--known` a `secrets` hit or big mask); 3 no usable report and no JSON (the input, `--local`
-or `--known` cannot be read, a wrong command line, an internal error). A `warn` or a `skip` leaves
-the exit alone. For a run folder, the worst entry decides. Readers ignore keys they do not know.
+Exit code and `result`: 0 `pass` (whole); 1 `named` (honest but incomplete: every loss is named,
+or the entry is unsealed, live or has pruned part files); 2 `fail` (a broken invariant, a silent
+loss, or with `--known` a `secrets` hit or big mask); 3 no usable report and no JSON (the input,
+`--local` or `--known` cannot be read, a wrong command line, an internal error). A `warn` or a
+`skip` leaves the exit alone. For a run folder, the worst entry decides. Readers ignore keys they
+do not know.
 
 | Top-level key | Holds |
 |---|---|
@@ -359,17 +360,16 @@ the exit alone. For a run folder, the worst entry decides. Readers ignore keys t
 | `links` | LINK records read |
 | `checks` | Per check: `id`; `inv` (the invariant number, or null); `result` (`pass`, `skip`, `warn`, `named` or `fail`); `why` (one plain line, empty on a pass); `first` (`o`, `sid` and `wall` of the first finding at the worst level reached, or null; for the legs checks `o` and `sid` are null, `wall` may be, and `first` adds `thread`); `facts` (an object) |
 | `counts` | Recounted from the records: `model_requests` (model requests written, `http_post` plus `ws_up_msgs`), `req_whole`, `req_holes`, `gaps` (a count per reason name seen), `lost_bytes`, `lost_unknown`, `after_stop_bytes`, `mask_failclosed_bytes`, `off_ms`, `tunnels`, `native_files`, and `threads` (the length of the `threads` list) |
-| `harness_log` | What the harness's own log gave: `none` (not read, or nothing found), `totals` (a total per session) or `per_call` (one record per call) |
+| `harness_log` | What the harness's own log gave, as the legs read it: `none` (not read, or nothing found), `totals` (a total per session) or `per_call` (one record per call) |
 | `provider_errors` | `{wire, native}`: for each leg, a count per error code the provider gave (else `http_<status>`, else `error`), one per failed call |
-| `threads` | One item per thread the legs checks compared, else an empty list: `thread` (null for the whole entry), `parent`, `harness` and `wire_ok` (calls), `wire_err`, `result`, `history` (null) |
-| `history` | Null, until `history_complete` is built |
+| `threads` | One item per thread the legs checks compared, else an empty list: `thread` (null for the whole entry), `parent`, `harness` and `wire_ok` (calls), `wire_err`, `result`, and `history`, that thread's verdict from `history_complete` (`pass`, `warn`, `named`, `fail` or `skip`; empty when the check named no such thread) |
+| `history` | The facts object of `history_complete`, below (null when the check is not in the list) |
 
 **Check ids.** `inv1` to `inv9` and `inv14` check the invariant of that number; `streams_closed`,
 `seen_matches_written`, `gap_has_end` and `recorder_alive` check invariants 10 to 13. With `inv`
 null: `torn_tail`, `native_path_gen`, `counts_match_seal`, `gaps_named`, `record_decode`,
 `parts_pruned`, `record_kind_unknown`, `gap_reason_unknown`, the three honesty checks and the three
-legs checks below. `history_complete` is always `skip` ("not built in this slice"). Last come the
-ones that depend on an option:
+legs checks and `history_complete` (both below). Last come the ones that depend on an option:
 
 - For a server input, three that read `fetch.json`, the chunk list beside the copy (S13,
   `scripts/fetch-run.sh`), and without it fail under `--server`, else skip.
@@ -387,17 +387,14 @@ its meta):
   when a GAP of the tunnel's own reason is on that connection, `fail` when none is; a `sign_in`
   tunnel is no loss. A GAP on a decrypted listed connection is `named`. A `tls_refused` connection
   to a listed host whose host and fingerprint earlier ended a decrypted connection `complete` is
-  `warn`, unless a GAP on it says `alert: false`; a `long_tunnel` note for an unlisted host is
-  `warn`. Facts: `listed_conns`, `decrypted`, `sign_in`, `tunnels_named` (per reason), `tunnels_unnamed`,
-  `conn_gaps`, `long_tunnel_unlisted`, `refusal_after_trust`.
+  `warn`, unless a GAP on that connection says `alert: false` (nothing was learned from the
+  refusal); a `long_tunnel` note for an unlisted host is `warn`.
 - `conn_bytes`: per decrypted connection and direction, the plain bytes in its END tail
-  (`plain_up`, `plain_down`) against what its streams account for. Over 1 MiB unaccounted is `warn`
-  when over a tenth of the plain bytes, `fail` when over half and the connection has no GAP; else
-  `skip` when nothing was judged or a connection ended without both counts (a `warn` or `fail` from
-  another connection stands). Facts: `checked`, `warn`, `fail`, `unaccounted_bytes`,
-  `no_plain_tail`.
-- `mask_failclosed`: `warn` for a stream with over 1 MiB of `fail_closed` MASK bytes. Facts:
-  `streams`, `bytes`.
+  (`plain_up`, `plain_down`) against what its streams account for. Over 1 MiB unaccounted is
+  `warn` when over a tenth of the plain bytes, `fail` when over half and the connection has no
+  GAP; else `skip` when nothing was judged or a connection ended without both counts (a `warn`
+  or `fail` from another connection stands).
+- `mask_failclosed`: `warn` for a stream with over 1 MiB of `fail_closed` MASK bytes.
 
 **Legs checks** (`legs.rs`): the recorded wire calls against the harness's own log, read from its
 `native_form`, threads and `children`; they name no harness.
@@ -405,13 +402,12 @@ its meta):
 - `wire_keeps_up`: a model call the harness's own log shows that never reached the wire (a lost
   model call), or a harness that kept calling over 10 minutes after the wire's last call. It
   compares call times, so it is always `skip` ("no per-call times") when `harness_log` is `totals`;
-  only `threads_match` compares then. Facts: `harness`, `wire_ok`, `excess`, `from`, `to`,
-  `wire_above`.
+  only `threads_match` compares then.
 - `threads_match`: a thread with more calls in the harness log than ok calls on the wire (wire
   calls above the harness count are no finding; a log that gives only a total per session is
-  compared by that total). Facts: `threads`, `bad`.
+  compared by that total).
 - `subagents_present`: a subagent the harness's parentage names that has no wire calls and no
-  native stream. Facts: `children`, `missing`.
+  native stream.
 
 A comparison allows the larger of 3 calls and 2% before it counts, with the wire given 2 minutes
 to catch up. A thread or entry with harness calls and no wire call, or a harness that kept calling
@@ -422,9 +418,15 @@ or a host the participant or config named) that has an extent and a reason other
 names it. The totals form has no times, so any such cover in the entry names the excess; likewise
 any recorder-down GAP in the entry names a missing subagent. Only a recorder-down GAP covers a
 subagent that has no leg at all: a conn GAP explains wire calls of its own connection, not a
-native stream. A check is `skip` with its reason in `why` where it cannot compare, such as when
-the harness's own log is not read or could not be read, it holds no calls or no per-call times,
-no call carries a thread id, or (for `subagents_present`) parentage was not read.
+native stream. A check is `skip`, with its reason in `why`, where it cannot compare: no harness
+log read, no calls or per-call times in it, no thread ids, or (`subagents_present`) no parentage.
+
+**History** (`history.rs`, `history_complete`): an earlier assistant answer that a later model
+request resends must exist as a recorded response, or the call that made it was missed. Requests
+are found by body, never by path or harness. A missing answer is `fail`, or `named` when a GAP
+overlaps the time since the thread's previous request; `warn` when it comes from before the record
+or only its text was not found. A `skip` says why in `why` (nothing decrypted, history held by the
+provider, compaction, unreadable bodies). Its facts are the report's top-level `history` object.
 
 **The label** is a hint for judges, not a judgement. It says which evidence the record holds:
 `wire_and_native` when model requests were written and a `native` or `snapshot` stream holds
@@ -535,4 +537,4 @@ per member over the lines of one `message.id`).
 Neither file holds body text or a session file path: only model names, thread ids and agent labels
 (printable ASCII, at most 128 bytes, never all `*`), host names, the run, entry and connector ids,
 the harness version line (printable ASCII, at most 128 bytes), safe tokens (reason, effort and usage
-member names: at most 64 bytes of `A-Za-z0-9_.-` per name part), times and numbers leave the record.
+member names: each at most 64 bytes of `A-Za-z0-9_.-`), times and numbers leave the record.
