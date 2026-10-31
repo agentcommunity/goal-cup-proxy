@@ -2427,3 +2427,23 @@ kept and now cites BUILD-PROMPT section 5, since B3 no longer carries it.
 - **Gate effect:** none on order. The remaining PRD-10 work (`continue`, `recover`, seal on a dead entry) still
   waits on `watchdog::recover` and `pipeline::close_dead_entry` reaching integration; `watchdog::run` is there.
   Acceptance 10 and 11 stay open until slice 10. No seam change. No locked ledger item is touched.
+
+### 2026-10-31, replan after PRD-15 slice 16 (merge c3227203)
+
+- **Size report, PRD-15** (`wc -l` on integration): the files it writes total 2,599 lines (RECORD-FORMAT 542,
+  PARTICIPANT-GUIDE 487, OPERATING 260, README 247, RULES 459, ARCHITECTURE 191, CONNECTOR-SCHEMA 114, AGENTS 95).
+  The PRD-00 "Size budget" table has no docs row, so nothing is over a ceiling. Carry to the end-of-build report.
+- **Gate effect:** none on order. The docs lane has no code; its open items (tier column, Pad results, writer marks)
+  wait on phase 5 and the PRD-02 writer. No seam change. No locked ledger item is touched.
+
+### 31 Oct, after PRD-10 slice 10 (merge b5cc8617)
+
+- **Size report, PRD-10** (`wc -l` on integration): `cli/*.rs` 4,710 lines (`text.rs` 1,174; `main.rs` 204 on
+  top) against the PRD-00 row of about 2,900 (about 1.6 times); a reviewer counted about 5,100 with `main.rs`
+  on the branch, so treat 4,710 plus 204 as the measured figure. `tests/cli_*.rs` 2,498 against 1,200 (about
+  2.1 times). The slice itself added about 20 net lines; the overage is older. No concrete behaviour-keeping
+  cut is known. Carry to the end-of-build report with the PRD-03, PRD-12 and PRD-17 overages.
+- **Gate effect:** none on order. Acceptance 10 and 11 stay open: `close_dead_entry` (PRD-06, `dead.rs`) and
+  `watchdog::recover` (PRD-02) are still not on integration after a 90-minute poll. Phase 3 close needs them;
+  the integrator should check that their lanes are scheduled, since PRD-10 slice 11 cannot start without them.
+  No seam change. No locked ledger item is touched.
