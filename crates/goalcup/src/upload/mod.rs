@@ -220,7 +220,15 @@ fn launch(
     let name = if round { UP } else { "goalcup-beat" };
     let started = thread::Builder::new().name(name.into()).spawn(move || {
         pipeline::low_priority();
-        guard(round, &s.dir, &s.json, &s.p, &rx, || body(&s, &rx));
+        let mut again = false;
+        guard(round, &s.dir, &s.json, &s.p, &rx, || {
+            // A beat body started again after `finish` (its last one panicked) never holds the
+            // wrap-up chunks back; the sender waits out `503 awaiting_final` anyway.
+            if !round && std::mem::replace(&mut again, true) && lock(&s.wrap).is_some() {
+                s.tried.store(true, SeqCst);
+            }
+            body(&s, &rx)
+        });
         // A beat thread that is gone never holds the wrap-up chunks back.
         s.tried.store(true, SeqCst);
     });
@@ -299,11 +307,6 @@ fn upload_thread(sh: &Shared, rx: &Receiver<()>) {
 /// again whenever its backoff is due while it is not committed or once the last chunk is stored,
 /// until sealed.
 fn beat_thread(sh: &Shared, rx: &Receiver<()>) {
-    // A beat body only starts after `finish` when the last one panicked; one that panics each time
-    // must not hold the wrap-up chunks back, and the sender waits out `503 awaiting_final` anyway.
-    if lock(&sh.wrap).is_some() {
-        sh.tried.store(true, SeqCst);
-    }
     let mut b = sh.build(Beat::new);
     let (durable, rec_dir) = (sh.rec.as_ref().map(Recorder::durable), sh.dir.join("rec"));
     let mut link = None::<IndexLine>;
