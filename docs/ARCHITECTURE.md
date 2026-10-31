@@ -31,10 +31,7 @@ checking code.
 
 ## 3. The one process
 
-The proxy, the native reader, the held-bytes guard, the mask worker, the writer and the uploader
-are merged, and so are the watchdog's spawn and shield helpers. The watchdog's `run` and `recover`
-are not yet (PRD-02 slice A and B); read the bullets below on restart, null mode and `recover` as
-the design they will meet, not as merged code.
+Pieces not merged yet are marked "Not built yet" in the bullets below.
 
 ```mermaid
 flowchart LR
@@ -76,16 +73,18 @@ The rules of the shape:
   one control line pass, and neither carries a recorded byte (D75).
 - **The watchdog** is the `goalcup start` or `continue` process. It binds the port once and hands
   the socket to each recorder boot, so a restart never closes the port. It mints the run CA, runs
-  the connector's helper stops, starts the harness, ends it at the deadline, on `goalcup seal` and
-  on the server's stop (D85), and restarts a dead recorder at once (D75). It never reads, masks, writes or uploads a recorded
-  byte. `goalcup recover` reopens the port and the CA when the watchdog itself died.
+  the connector's helper stops, starts the harness, ends it on `goalcup seal`, seals the part when it
+  exits, and starts a new recorder at once when one dies (D75). It never reads, masks, writes or
+  uploads a recorded byte. Not built yet: ending the harness at the deadline and on the server's
+  stop (D85); `goalcup recover`, which reopens the port and the CA when the watchdog itself died;
+  and closing the part of an entry whose watchdog and recorder both died.
 - **Null mode.** If the recorder crashes three times in ten minutes, each within a minute of its
   start, the watchdog runs a relay-only recorder, says so in `status.json`, and retries a normal
   boot after 30 seconds, then 1, 2 and 5 minutes, never more than 5 minutes apart. The crash count
-  resets once a recorder stays up 60 seconds. The harness
-  keeps its connections. The span is a `recorder_down` gap.
+  resets once a recorder stays up 60 seconds. The harness keeps its connections. The span is a
+  `recorder_down` gap. Not built yet.
 - **Boot-time timers.** Every timer counts boot time, which keeps running while the machine
-  sleeps, on a one-second tick: deadline, restart pauses, null-mode retries, upload backoff.
+  sleeps, on a short tick: deadline, restart pauses, null-mode retries, upload backoff.
 - **The memory guard is a guard, not a cap** (D79). Held bytes stay under a stated size (512 MiB,
   or an eighth of memory if that is smaller, at least 128 MiB). Past it, a gap is written and
   recording goes on. A write error ends the recorder and the watchdog starts another (D78).
@@ -144,8 +143,9 @@ shapes in `crates/goalcup/src/mask/shapes.tsv`, the connector's own rules, and t
 the run (the project's `GH_TOKEN` among them). The stream form keeps a small hold so a secret split
 over two chunks is still caught, and its output equals the whole-record result. When the masker
 cannot decide a piece it stars it (fail closed); if it fails outright the piece is dropped under a
-`mask_failed` gap (the mask worker does this). A MASK record names the rule and the span, never the value. The masker is pure:
-no threads, no clock, and no error text that formats a byte or a value (D80).
+`mask_failed` gap (the mask worker does this). A MASK record names the rule and the span, never the
+value. The masker is pure: no threads, no clock, and no error text that formats a byte or a value
+(D80).
 
 ## 7. The record and the upload
 

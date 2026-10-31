@@ -65,5 +65,6 @@ The build uses each default below until the owner answers.
 - The judge view (PRD-08).
 - PRD-14 G2 (sabotage) and G5 (the release workflow on four targets); PRD-12 P8 (contributor dry run).
 - `stopped-runs.sql`, the organizer query for stopped runs (PRD-07).
-- HTTP/2 PUSH_PROMISE, WebSocket over HTTP/2 (RFC 8441) and the gRPC branch (PRD-03).
+- Following HTTP/2 PUSH_PROMISE, WebSocket over HTTP/2 (RFC 8441) (PRD-03); today each is a GAP
+  (`h2_unsupported`), never silent. Compressed gRPC bodies are a GAP too (`unsupported_encoding`).
 - The mask worker pool, only if PRD-02's throughput test shows masking is the slow stage (PRD-02).
