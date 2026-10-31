@@ -2,7 +2,8 @@
 //! older sealed entries whole and sealed; an older entry the server refuses never stops the live
 //! entry's chunks; an older entry past `upload_by` is closed and nothing of it is sent; an older
 //! entry whose `upload.lock` another uploader holds is not sent while held; a live entry with no
-//! server still sends an older entry of a run that has one.
+//! server still sends an older entry of a run that has one; older entries on a server that never
+//! answers never hold the live entry's retry.
 
 mod common;
 mod upload_common;
@@ -176,4 +177,34 @@ fn a_local_live_entry_still_sends_an_older_one() {
     assert!(until(done), "the older entry is done");
     assert_eq!(fake.stream(OLD), all);
     assert!(fake.stream(ENTRY).is_empty(), "nothing of the local entry");
+}
+
+#[test]
+fn older_entries_on_a_silent_server_never_hold_the_live_entry() {
+    // Accepts every connection and never answers.
+    let silent = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", silent.local_addr().unwrap());
+    std::thread::spawn(move || {
+        let held: Vec<_> = silent.incoming().collect();
+        drop(held);
+    });
+    let fake = FakeWorker::start();
+    let answer = Some((503, json!({"error": "unavailable"})));
+    let inject = Inject {
+        answer,
+        ..Inject::default()
+    };
+    fake.inject(Route::Chunk, inject);
+    let home = tempfile::tempdir().unwrap();
+    let earlier = run(home.path(), "r00000000000000b2", &url, DEADLINE);
+    for id in ["e00000000000000c1", "e00000000000000c2", "e00000000000000c3"] {
+        entry(&earlier, id, true);
+    }
+    let run_dir = run(home.path(), RUN_ID, &fake.url(), DEADLINE);
+    let (_, mine) = entry(&run_dir, ENTRY, false);
+    let start = Instant::now();
+    let _h = live(home.path(), &run_dir);
+    assert!(until(|| fake.stream(ENTRY) == mine), "the live entry is stored");
+    // One older call alone may wait 30 s or more; the live retry is due within a few seconds.
+    assert!(start.elapsed() < Duration::from_secs(25), "{:?}", start.elapsed());
 }

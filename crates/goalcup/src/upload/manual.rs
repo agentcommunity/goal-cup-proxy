@@ -251,8 +251,11 @@ impl Entry {
             self.tried = true;
         }
         while self.s.tick(&Mono::now, &Bound::OnDisk, true, &self.j) == Step::Again && all {}
+        // A round of the queue that changed the state writes it at once: a recorder that exits
+        // while the queue thread is inside a later call never runs `drop`.
+        let before = snap;
         let snap = lock(&self.j).clone();
-        let _ = lock(&self.file).put(Mono::now(), &snap, false);
+        let _ = lock(&self.file).put(Mono::now(), &snap, !all && snap != before);
         if snap.final_ == Final::Sealed && snap.state == State::Done {
             prune(&self.dir, &self.j, &self.file);
             return Some(Outcome::Done);
@@ -345,11 +348,10 @@ impl Queue {
                     Ok(Older::Ready(e)) => self.entries.push(*e),
                     Ok(Older::Skip) => {}
                     Ok(Older::Leave) => self.left.push(ids),
+                    // `older` may have panicked before it took `upload.lock`, so the entry may be
+                    // another uploader's: only the log line, never its `upload.json`.
                     Err(_) => {
-                        let mut j = state::read(&dir)
-                            .unwrap_or_else(|| UploadJson::new(ids.0.clone(), ids.1.clone()));
-                        hurt(&mut j, &dir);
-                        let _ = state::write(&dir, &j);
+                        log_failure(&dir, "round", Class::Internal.word(), None, Duration::ZERO);
                         self.left.push(ids);
                     }
                 }
@@ -358,7 +360,7 @@ impl Queue {
     }
 }
 
-/// `upload.json` and one `goalcup.log` line say `internal` for an older entry whose round panicked.
+/// `upload.json` and one `goalcup.log` line say `internal` for a queued entry whose round panicked.
 fn hurt(j: &mut UploadJson, dir: &Path) {
     j.state = State::Waiting;
     j.last_error = internal("an internal error in the uploader");

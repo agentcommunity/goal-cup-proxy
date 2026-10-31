@@ -1144,3 +1144,29 @@ PRD-12 and PRD-17.
   `tests/upload_common/` 2,690, against the PRD-00 row of 940 and 1,000; these fixes add 74 src lines
   and cut 29 test lines (the part-folder builder is shared). The overage stands as reported at slice 5.
 - No locked ledger item is touched and no owner question comes from these fixes.
+
+### 2026-10-31, slice 6 re-review fixes
+
+- **The queue has its own thread.** `goalcup-queue` serves the older entries, so a slow server or one
+  that is gone (a retired Worker, a dead network) never holds the live entry's rounds or its
+  wrap-up; one older round may block for minutes on its calls, on that thread only. While the live
+  entry's wrap-up is not done the queue waits (section 1, live entry first). With no live client
+  only this thread starts. Its guard writes no `upload.json` of the live entry, so a panic there
+  never replaces the local or no-credential reason `connect` wrote; it logs one `queue` line.
+- **A queued entry's state is written after every round that changed it,** not only when it leaves
+  the queue: `finish` waits a few seconds for the threads, and a queue thread inside a call then
+  never drops its entries. What such an exit misses is that one call, which the server's position
+  covers.
+- **A listing that panics writes no `upload.json`.** `older` may panic before it holds that entry's
+  `upload.lock`, so only the log line is written; the entry is not taken again by this uploader.
+- **Open dependency on PRD-02 (not done).** The queue and `goalcup upload` read sealed from
+  `status.json` (`mode: sealed` with its seal, `written`, `off`). Nothing on this branch or on
+  integration at 630752f9 calls `pipeline::status::Board::sealed` yet, so a real recorder's
+  `status.json` never says sealed: until PRD-02 calls it with the seal, the queue skips every real
+  entry and `goalcup upload` answers `NotClosed` unless `upload.json` already says the server sealed
+  it. The tests cover the path with fixtures that write the sealed `status.json` PRD-02 will write.
+- **For the integrator:** the shared test builder lives in `tests/upload_common/mod.rs`, read as
+  PRD-06's under the `upload_` prefix; PRD-14 owns `tests/common/`. Confirm, or it moves into an
+  `upload_*.rs` module. The older `upload_*` binaries keep their own fixtures; moving them is a
+  separate clean-up. Size stays over the PRD-00 row as reported above; the replan carries it.
+- No locked ledger item is touched and no owner question comes from these fixes.
