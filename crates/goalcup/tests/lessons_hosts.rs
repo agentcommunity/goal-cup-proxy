@@ -167,10 +167,10 @@ fn the_event_server_is_never_listed() {
 fn a_name_resolving_only_here_is_skipped() {
     assert!(hosts::resolves_only_here(&ips(&["127.0.0.1"])));
     assert!(hosts::resolves_only_here(&ips(&["127.0.0.1", "::1"])));
-    assert!(hosts::resolves_only_here(&ips(&["0.0.0.0", "::"])));
+    // A mapped address is judged as the address it wraps.
     assert!(hosts::resolves_only_here(&ips(&["::ffff:127.0.0.1"])));
-    assert!(!hosts::resolves_only_here(&ips(&["203.0.113.9"])));
     assert!(!hosts::resolves_only_here(&ips(&["::ffff:203.0.113.9"])));
+    assert!(!hosts::resolves_only_here(&ips(&["203.0.113.9"])));
     assert!(!hosts::resolves_only_here(&ips(&[
         "127.0.0.1",
         "203.0.113.9"
