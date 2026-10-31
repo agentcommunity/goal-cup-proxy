@@ -118,7 +118,15 @@ fn secrets_masked_glued_spaced_and_big_spans() {
         assert_eq!((code, got), (0, [0, 0, 1, 0].map(Some)), "{glue}");
     }
     // Where the masker's left guard still masks, the key is a shape hit, not glued.
-    let before = [" ", "\\n", "%0A", "\u{1b}[0m", "\\u001B[1;31m", "\\x1B[0m", "\\u00e9"];
+    let before = [
+        " ",
+        "\\n",
+        "%0A",
+        "\u{1b}[0m",
+        "\\u001B[1;31m",
+        "\\x1B[0m",
+        "\\u00e9",
+    ];
     for b in before {
         let (code, got, _) = lens("spaced", &[format!("x{b}{shape}").into()], &[]);
         assert_eq!((code, got), (2, [0, 1, 0, 0].map(Some)), "{b:?}");
@@ -256,10 +264,20 @@ fn secrets_placeholders_are_no_hit_and_real_bodies_are() {
     // that one `private_key` hit stays a fail (strict on purpose), and only it.
     // (exit, private_key hits on the joined deltas, on the raw stream).
     let sse = |name: &str, a: String, b: String| {
-        let (code, v) = scan(&[&entry(name, true, &[delta(&a).into(), delta(&b).into()], &[])], b"");
+        let (code, v) = scan(
+            &[&entry(
+                name,
+                true,
+                &[delta(&a).into(), delta(&b).into()],
+                &[],
+            )],
+            b"",
+        );
         let hits = v["shape_hits"].as_array().unwrap();
         let on = |d: bool| {
-            let n = hits.iter().filter(|h| h["in"].as_str().unwrap().ends_with("/deltas") == d);
+            let n = hits
+                .iter()
+                .filter(|h| h["in"].as_str().unwrap().ends_with("/deltas") == d);
             n.count()
         };
         assert!(hits.iter().all(|h| h["kind"] == "private_key"), "{v}");

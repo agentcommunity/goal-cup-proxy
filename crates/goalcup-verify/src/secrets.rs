@@ -228,7 +228,9 @@ impl Tail {
 /// the text between the `-----BEGIN` line and `-----END`) is empty or only `*`, `[REDACTED]`,
 /// `[HIDDEN]`, `<redacted>` (any case), whitespace and `\n`. A body with any other text is a hit.
 fn placeholder(span: &[u8], kind: &str) -> bool {
-    let (mut s, find) = (span, |h: &[u8], n: &[u8]| h.windows(n.len()).position(|w| w == n));
+    let (mut s, find) = (span, |h: &[u8], n: &[u8]| {
+        h.windows(n.len()).position(|w| w == n)
+    });
     if kind == "private_key" {
         s = find(s, b"KEY-----").map_or(s, |i| &s[i + 8..]);
         s = find(s, b"-----END").map_or(s, |i| &s[..i]);
