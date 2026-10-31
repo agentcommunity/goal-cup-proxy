@@ -332,9 +332,15 @@ fn a_pruned_boot_with_counts_behind_seals_the_bytes_written() {
         .last()
         .unwrap()
         .seq;
-    for l in std::fs::read(dead.join("counts.jsonl")).unwrap().split(|&b| b == b'\n') {
+    for l in std::fs::read(dead.join("counts.jsonl"))
+        .unwrap()
+        .split(|&b| b == b'\n')
+    {
         if let Ok(v) = serde_json::from_slice::<Value>(l) {
-            assert!(v["seq"].as_u64().unwrap() <= last_seq, "a line with no LINK");
+            assert!(
+                v["seq"].as_u64().unwrap() <= last_seq,
+                "a line with no LINK"
+            );
         }
     }
     std::fs::remove_file(&oldest).unwrap();
