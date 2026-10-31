@@ -277,9 +277,10 @@ impl Beat {
     /// success is `internal`.
     fn log_failure(&self, e: &ServerError, wait: Duration) {
         let (class, status) = match e {
-            ServerError::Status { status, .. } => {
-                (class_of_status(*status).map_or("none", Class::word), Some(*status))
-            }
+            ServerError::Status { status, .. } => (
+                class_of_status(*status).map_or("none", Class::word),
+                Some(*status),
+            ),
             ServerError::Malformed(_) => (Class::Internal.word(), None),
             ServerError::Transport(_) => (Class::Network.word(), None),
         };

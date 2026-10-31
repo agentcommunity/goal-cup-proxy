@@ -192,7 +192,11 @@ fn a_409_re_read_no_local_line_holds_is_stuck() {
     for ahead in [false, true] {
         let (mut r, _w, d) = rig(u64::MAX, 6);
         let l = r.lines(0)[2];
-        let raw = if ahead { d.line.raw_end + 5000 } else { l.raw_end - 1 };
+        let raw = if ahead {
+            d.line.raw_end + 5000
+        } else {
+            l.raw_end - 1
+        };
         r.fake
             .inject(Route::Chunk, answer(409, json!({"error": "conflict"})));
         let odd = json!({"offset": raw, "next_seq": l.seq + 1, "head": hex(&l.hash)});
@@ -200,7 +204,11 @@ fn a_409_re_read_no_local_line_holds_is_stuck() {
         r.fake.inject(Route::Position, answer(200, odd));
         while r.tick(&Bound::Durable(d.clone())) == Step::Again {}
         let j = r.j();
-        assert_eq!((j.state, j.confirmed), (State::Stuck, None), "ahead {ahead}");
+        assert_eq!(
+            (j.state, j.confirmed),
+            (State::Stuck, None),
+            "ahead {ahead}"
+        );
         assert!(r.fake.chunks().is_empty());
     }
 }

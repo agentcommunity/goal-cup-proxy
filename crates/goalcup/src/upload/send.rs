@@ -166,7 +166,11 @@ impl Sender {
                     a.offset == c.raw_end && a.next_seq == c.last_seq + 1 && a.head == h.head;
                 if !ours && a.offset <= self.known {
                     // A 200 that stored nothing is never retried in a tight loop.
-                    let why = (Class::ServerBusy, Some(200), "the server did not store the chunk");
+                    let why = (
+                        Class::ServerBusy,
+                        Some(200),
+                        "the server did not store the chunk",
+                    );
                     return self.fail(now, "chunk", why, None, j);
                 }
                 let p = RunPosition {

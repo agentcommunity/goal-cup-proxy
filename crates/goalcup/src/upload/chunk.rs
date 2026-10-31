@@ -231,7 +231,11 @@ pub fn line_at(rec_dir: &Path, raw: u64) -> io::Result<Option<IndexLine>> {
 pub fn last_on_disk(rec_dir: &Path) -> io::Result<Option<IndexLine>> {
     for &p in parts(rec_dir)?.iter().rev() {
         let len = fs::metadata(rec_dir.join(part_name(p)))?.len();
-        if let Some(l) = index(rec_dir, p)?.into_iter().rev().find(|l| l.c_end <= len) {
+        if let Some(l) = index(rec_dir, p)?
+            .into_iter()
+            .rev()
+            .find(|l| l.c_end <= len)
+        {
             sync_pair(rec_dir, p)?;
             return Ok(Some(l));
         }
