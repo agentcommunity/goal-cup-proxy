@@ -1,0 +1,38 @@
+# Pad data for GitHub Copilot CLI (PRD-12 section 6): test data, never connector data; goalcup never reads it.
+# Vendor pages read 31 Oct 2026: https://github.com/github/copilot-cli/releases (1.0.105 is the latest stable),
+# https://docs.github.com/en/copilot/how-tos/copilot-cli/set-up-copilot-cli/install-copilot-cli (`npm install -g @github/copilot`),
+# https://docs.github.com/en/copilot/how-tos/copilot-cli/customize-copilot/use-byok-models (BYOK, COPILOT_OFFLINE),
+# https://github.com/deepseek-ai/awesome-deepseek-agent/blob/main/docs/copilot_cli.md (DeepSeek: anthropic type, the four
+# COPILOT_PROVIDER_* variables, the token limits for a model outside the built-in catalog; the openai type fails on
+# reasoning_content), https://api-docs.deepseek.com/quick_start/pricing (model id deepseek-flash, base URLs),
+# https://vercel.com/docs/ai-gateway/coding-agents/copilot (gateway: COPILOT_PROVIDER_BASE_URL, COPILOT_PROVIDER_API_KEY,
+# COPILOT_MODEL; Chat Completions), https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-command-reference
+# (/exit, /quit).
+# Read from the docs, not run against a live harness (no key enters a build box): both routes, the token limits (the guide
+# gives them for deepseek-v4-pro; deepseek-flash is unmeasured) and pre_keys. No page read describes the first-run folder
+# trust prompt; the Enter below takes its first (yes) choice if it appears and is a no-op on an empty prompt if it does not.
+version = "1.0.105"
+# `copilot --version` prints "GitHub Copilot CLI 1.0.105." with a full stop; the sed keeps pad-run's version match exact.
+version_cmd = 'copilot --version | sed "s/\.$//"'
+install = "npm i -g @github/copilot@1.0.105"
+key_kind = "deepseek"
+# The key reaches Copilot as COPILOT_PROVIDER_API_KEY in the launch shell, never in providers.json.
+key_route = "env"
+key_env = "COPILOT_PROVIDER_API_KEY"
+# Pad data for the dodger copy only (section 2): [direct] calls DeepSeek's Anthropic-format endpoint on this host.
+model_host = "api.deepseek.com"
+pre_keys = '\r'
+exit_keys = '/exit\r'
+submit_delay = 2
+subagent_word = "subagent"
+keep_going = true
+
+[direct]
+# No GitHub sign-in in the pad: COPILOT_OFFLINE stops its calls to GitHub, model calls still go to DeepSeek.
+env = { COPILOT_PROVIDER_TYPE = "anthropic", COPILOT_PROVIDER_BASE_URL = "https://api.deepseek.com/anthropic", COPILOT_MODEL = "deepseek-flash", COPILOT_PROVIDER_MAX_PROMPT_TOKENS = "840000", COPILOT_PROVIDER_MAX_OUTPUT_TOKENS = "128000", COPILOT_OFFLINE = "true" }
+
+[gateway]
+# Vercel AI Gateway as the page writes it; the key (AI_GATEWAY_API_KEY's value) takes the same COPILOT_PROVIDER_API_KEY route.
+env = { COPILOT_PROVIDER_BASE_URL = "https://ai-gateway.vercel.sh/coding-agent/v1", COPILOT_MODEL = "openai/gpt-6-astra", COPILOT_OFFLINE = "true" }
+key_route = "env"
+key_env = "COPILOT_PROVIDER_API_KEY"
