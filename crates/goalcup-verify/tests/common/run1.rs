@@ -35,8 +35,10 @@ pub const TURN: &str = "fake turn text";
 /// The body resends the thread's earlier calls `seen`, as Codex does. A rate-limited call sends
 /// its error as an `error` event and as a `response.failed`, as run 1's did, and has no answer.
 fn post(e: &mut Entry, id: &str, k: u64, limited: bool, seen: &[u64]) {
-    let call = |k: u64| json!({"type": "function_call", "call_id": format!("call_{k}"),
-        "name": "shell", "arguments": "{}"});
+    let call = |k: u64| {
+        json!({"type": "function_call", "call_id": format!("call_{k}"),
+        "name": "shell", "arguments": "{}"})
+    };
     let ev = |what: &str, x: Value| {
         let key = if what == "failed" { "error" } else { "usage" };
         json!({"type": format!("response.{what}"), "response": {"id": format!("r_{k}"),
