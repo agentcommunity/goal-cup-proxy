@@ -260,3 +260,21 @@ fn unsealed_status_never_reads_as_finished() {
     put(&entry, "status.json", &sealed());
     assert!(end_screen(&entry).unwrap().contains(text::PART_RECORDED));
 }
+
+/// What `start` prints when the watchdog returns: the real end screen of a sealed part, and for
+/// anything else no finished block and no count (point 6: never an invented number).
+#[test]
+fn closing_prints_the_sealed_counts_and_never_invents_any() {
+    let dir = tempfile::tempdir().unwrap();
+    let entry = part(dir.path());
+    std::fs::create_dir_all(&entry).unwrap();
+    let none = goalcup::cli::finish::closing(&entry, "Agent", RUN, false);
+    assert!(!none.contains(text::PART_RECORDED));
+    put(&entry, "status.json", &patch(&sealed(), json!({"mode": "recording", "seal": null})));
+    let open = goalcup::cli::finish::closing(&entry, "Agent", RUN, false);
+    assert!(!open.contains(text::PART_RECORDED) && !open.contains("905"));
+    assert_ne!(none, open);
+    put(&entry, "status.json", &sealed());
+    let done = goalcup::cli::finish::closing(&entry, "Agent", RUN, false);
+    assert!(done.contains(text::PART_RECORDED) && done.contains("905"));
+}

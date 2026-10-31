@@ -7,16 +7,18 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde_json::to_value;
 
 use super::approve::{self, Ask, Stop};
-use super::{ConnectorSource, RunMode, Server, awake, fail, folder, push, say, skill, text};
+use super::{
+    ConnectorSource, RunMode, Server, awake, fail, finish, folder, log, push, say, skill, text,
+};
 use crate::connector::{self, Connector, Env, LaunchPlan};
 use crate::mask::{Masker, SecretValue, workspace_values};
 use crate::pipeline::Mono;
-use crate::watchdog::{CaPem, StartFacts};
+use crate::watchdog::{self, CaPem, StartFacts};
 
 /// The tiers PRD-12 writes, read at build time.
 const TIERS: &str = include_str!("../../../../connectors/tiers.toml");
@@ -49,9 +51,9 @@ pub struct Ready {
     pub _lock: Option<awake::SleepLock>,
 }
 
-/// Until `watchdog::run` is on integration the command stops after the checks that need no server:
-/// the folder, the connector and its plan, the mask values. No approval is asked and no run is
-/// opened, so nothing says recording began when nothing records. [`prepare`] is the rest.
+/// `goalcup start`: the checks, the approval and the open run ([`prepare`]), then the hand-over to
+/// the watchdog, which is this process from here (PRD-02 section 8). The end screen follows the
+/// watchdog's return; the exit code is the harness's, passed through.
 pub fn run(a: &Args) -> ExitCode {
     if (a.connector.is_some() || a.hosts.is_some()) && !(a.practice || a.test) {
         return fail(text::FILE_FLAGS_COMPETE);
@@ -67,25 +69,79 @@ pub fn run(a: &Args) -> ExitCode {
         Ok(s) => s,
         Err(e) => return fail(e),
     };
-    let vars = super::env_vars();
     let ctx = Ctx {
         home,
         project,
-        vars,
+        vars: super::env_vars(),
         server,
     };
-    match check(a, &ctx) {
+    match prepare(a, &ctx, &mut std::io::stdout()) {
         Err(stop) => {
             say(&stop.text);
             ExitCode::from(stop.code)
         }
-        // `watchdog::run(plan, facts)` is not on integration yet; its call replaces this line,
-        // and the call is where `prepare` starts to run.
-        Ok(_) => {
-            say(&text::not_built("start"));
-            ExitCode::from(3)
-        }
+        Ok(ready) => hand_over(ready),
     }
+}
+
+extern "C" fn on_signal(sig: libc::c_int) {
+    if sig == libc::SIGTERM {
+        // The watchdog's `goalcup seal` signal: it ends the harness and seals.
+        // SAFETY: `kill` and `getpid` are async-signal-safe.
+        unsafe { libc::kill(libc::getpid(), libc::SIGUSR1) };
+    }
+    // A Ctrl-C reaches the harness through the terminal; this process stays for the end screen.
+}
+
+/// Hands the terminal to the watchdog and, when it returns, the end screen and the upload
+/// progress. The ready line and the signal handlers both wait for the recorder's `status.json`,
+/// the step right before it tells the watchdog `ready`. Until then a Ctrl-C or SIGTERM kills this
+/// process, which is the watchdog; a recorder it already started then runs on alone, and
+/// `goalcup status` shows it and `goalcup seal` closes it. The ready line is printed by a thread
+/// that polls, so the harness may open a few ms before it (seam question to PRD-02: a ready hook
+/// in `watchdog::run`, so the print can be ordered before the harness starts).
+fn hand_over(ready: Ready) -> ExitCode {
+    let Ready {
+        plan,
+        facts,
+        _lock: lock,
+    } = ready;
+    let (dir, name, run) = (
+        facts.entry_dir.clone(),
+        plan.connector.name.clone(),
+        facts.run.clone(),
+    );
+    log::line(&dir, "start_handover", &[]);
+    let line = text::recording_now(&name);
+    let status = super::status_json(&dir);
+    std::thread::spawn(move || {
+        while !status.exists() {
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        let handler = on_signal as *const () as libc::sighandler_t;
+        // SAFETY: `signal` with a handler that only makes async-signal-safe calls.
+        unsafe {
+            libc::signal(libc::SIGINT, handler);
+            libc::signal(libc::SIGTERM, handler);
+        }
+        println!("{line}");
+    });
+    let code = watchdog::run(plan, facts);
+    // SAFETY: back to the default action, so Ctrl-C ends only this wait for the upload.
+    unsafe {
+        libc::signal(libc::SIGINT, libc::SIG_DFL);
+        libc::signal(libc::SIGTERM, libc::SIG_DFL);
+    }
+    log::line(&dir, "start_returned", &[]);
+    let refused = code == ExitCode::from(watchdog::MASK_REFUSED);
+    print!("{}", finish::closing(&dir, &name, &run, refused));
+    if refused {
+        drop(lock);
+        return ExitCode::from(1);
+    }
+    finish::wrap_up(&dir, &mut |l| println!("{l}"));
+    drop(lock);
+    code
 }
 
 fn stop(text: String) -> Stop {
@@ -247,7 +303,6 @@ pub fn prepare(a: &Args, c: &Ctx, out: &mut dyn std::io::Write) -> Result<Ready,
     }
     lines.push(text::harness_home(&name, &plan.home));
     lines.extend(sleep_warning);
-    lines.push(text::recording_now(&name));
     let _ = writeln!(out, "{}", lines.join("\n"));
     plan.env.insert(
         "GOALCUP_TIME_LEFT_FILE".to_owned(),
@@ -262,7 +317,6 @@ pub fn prepare(a: &Args, c: &Ctx, out: &mut dyn std::io::Write) -> Result<Ready,
         server_time: None,
         local_wall,
         workspace: c.project.clone(),
-        // Each of these five becomes the typed field of the same name (S17) with one edit.
         connector: to_value(&plan.connector).unwrap_or_default(),
         harness_version: plan.harness_version.clone(),
         keep: c.vars.get("GOALCUP_KEEP_PARTS").is_some_and(|v| v == "1"),
