@@ -195,7 +195,10 @@ fn wrap_up(
     at_seal: u64,
 ) {
     if let Some(u) = uploader {
-        u.finish(WrapUp::starting(rec.now(), &Policy::default()), facts.clone());
+        u.finish(
+            WrapUp::starting(rec.now(), &Policy::default()),
+            facts.clone(),
+        );
     }
     let late = rec.after_stop().0.saturating_sub(at_seal);
     if late > 0 {
@@ -269,7 +272,9 @@ fn after_seal(
             std::thread::sleep(Duration::from_secs(1));
             let (bytes, conns) = rec.after_stop();
             // `seen` is sorted, as `after_stop` returns it.
-            let new = conns.into_iter().filter(|c| seen.binary_search(&c.0).is_err());
+            let new = conns
+                .into_iter()
+                .filter(|c| seen.binary_search(&c.0).is_err());
             let mut hosts = Value::from(new.filter_map(|c| c.1).collect::<Vec<_>>());
             let masked = catch_unwind(AssertUnwindSafe(|| masker.mask_meta(&mut hosts)));
             if masked.is_err() {

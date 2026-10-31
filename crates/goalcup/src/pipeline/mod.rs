@@ -39,9 +39,9 @@ pub use clock::Mono;
 pub use counts::{Counts, Durable, EntryTotals, TunnelHost, entry_totals};
 pub use cursors::Cursors;
 pub use goalcup_format::{EndReason, GapReason, StreamKind};
-pub use handle::{OpenFlags, StreamHandle};
 #[cfg(feature = "test-hooks")]
 pub use handle::SLOW_MARKER;
+pub use handle::{OpenFlags, StreamHandle};
 #[cfg(feature = "test-hooks")]
 pub use mask_worker::PANIC_MARKER;
 pub use status::{Live, Status};
