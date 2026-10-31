@@ -384,6 +384,8 @@ impl Http1 {
             }
         };
         let codings = f.codings();
+        // `decoded` is what the codings allow at open; a body the decoder guard later refuses
+        // says so in its `decoder_window` GAP (lost 0, tail `wire`), which overrides it.
         let meta = json!({
             "status": status,
             "ver": ver,
@@ -511,7 +513,7 @@ fn accept_key(key: &str) -> String {
     base64::engine::general_purpose::STANDARD.encode(hash.finalize())
 }
 
-/// A request target reduced to its path without query and fragment (0.7's `safe_target`).
+/// A request target reduced to its path without query and fragment.
 /// Origin form keeps `/p`, absolute form keeps the path after the authority; asterisk and
 /// authority forms have no path (null).
 fn safe_path(target: &str) -> Value {

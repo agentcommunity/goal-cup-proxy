@@ -471,10 +471,7 @@ fn bytes_held_at_the_close_are_named() {
         .end(Mono::now(), EndReason::Complete, false, &[])
         .expect("a stop");
     let held = (resp.len() + req.len()) as u64;
-    assert_eq!(
-        (late.reason, late.held, late.since, late.at_close),
-        (GapReason::DecodeFailed, held, t, true)
-    );
+    assert_eq!((late.reason, late.held), (GapReason::DecodeFailed, held));
     assert_eq!(opens(&calls, StreamKind::HttpReq).len(), 1);
 
     let (rec, _calls) = Recorder::for_tests(ROOM);
@@ -486,7 +483,7 @@ fn bytes_held_at_the_close_are_named() {
     let late = Box::new(p)
         .end(Mono::now(), EndReason::Complete, false, &[])
         .expect("a stop");
-    assert_eq!((late.held, late.since), (790, t));
+    assert_eq!(late.held, 790);
 
     let (rec, _calls) = Recorder::for_tests(ROOM);
     let mut p = Http1::new(&rec, CONN);

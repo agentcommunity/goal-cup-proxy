@@ -501,7 +501,9 @@ fn cuts(side: DuplexStream, cut: bool) -> Join<Cuts, WriteHalf<DuplexStream>> {
 }
 
 /// Relays `up`, then `down`, through [`Http1`]; the upstream closes, then the client, and the
-/// `cut` leg closes without close_notify. Each stream's kind and END reason, by kind, and the GAPs.
+/// `cut` leg closes without close_notify. A client's cut reaches the harness as a close; an
+/// upstream's does not, while the relay's caller still holds the client leg (rule 8). Each
+/// stream's kind and END reason, by kind, and the GAPs.
 async fn cut_close(up: &[u8], down: &[u8], cut: Dir) -> (Vec<(StreamKind, EndReason)>, Vec<Call>) {
     let (rec, calls) = Recorder::for_tests(1 << 30);
     let ((mut client, cp), (mut upstream, up_)) = (duplex(1 << 16), duplex(1 << 16));
@@ -513,25 +515,28 @@ async fn cut_close(up: &[u8], down: &[u8], cut: Dir) -> (Vec<(StreamKind, EndRea
         let (none, quiet) = ((Bytes::new(), Bytes::new()), AtomicU64::new(0));
         let p = pump::relay(&r, &mut conn, legs, none, Some(parser), &quiet, None).await;
         conn.end(r.now(), p.reason, None);
-        assert!(
-            !p.upstream_failed,
-            "a cut is a close, not a failure (rule 8)"
-        );
+        assert!(!p.upstream_failed, "a cut is not reset (rule 8)");
+        p.client
     });
     client.write_all(up).await.unwrap();
     let mut got = vec![0; up.len()];
     upstream.read_exact(&mut got).await.unwrap();
     upstream.write_all(down).await.unwrap();
     drop(upstream);
-    let mut seen = Vec::new();
-    client.read_to_end(&mut seen).await.unwrap();
-    assert_eq!(
-        (&got[..], &seen[..]),
-        (up, down),
-        "verbatim, and the close passed on"
-    );
-    drop(client);
-    relay.await.unwrap();
+    let mut seen = vec![0; down.len()];
+    client.read_exact(&mut seen).await.unwrap();
+    assert_eq!((&got[..], &seen[..]), (up, down), "verbatim");
+    let mut b = [0; 1];
+    if cut == Dir::Down {
+        let held = relay.await.unwrap();
+        let wait = tokio::time::timeout(Duration::from_millis(50), client.read(&mut b));
+        assert!(wait.await.is_err(), "no clean close for an upstream cut");
+        drop(held);
+    } else {
+        assert_eq!(client.read(&mut b).await.unwrap(), 0, "the close passed on");
+        drop(client);
+        relay.await.unwrap();
+    }
     let all = calls.all();
     let kind = |sid| {
         all.iter().find_map(|c| match c {
@@ -620,7 +625,8 @@ impl Parser for Copies {
 
 /// Point 1: one leg's error ends the relay while the other leg is mid-write. The part of the
 /// chunk its writer took reached the peer, so it is counted and parsed; the rest of a client
-/// chunk goes to the parser's `end` as never forwarded, the rest of a server chunk is a conn GAP.
+/// chunk goes to the parser's `end` as never forwarded, the rest of a server chunk is parsed
+/// too (model output we hold), and no GAP names a loss.
 #[tokio::test]
 async fn a_chunk_cut_mid_write_by_the_other_legs_error_is_recorded_as_far_as_it_went() {
     within_async(HANG, async {
@@ -651,17 +657,12 @@ async fn a_chunk_cut_mid_write_by_the_other_legs_error_is_recorded_as_far_as_it_
         assert!(got < 8192, "the reply was cut mid-write");
         assert_eq!((plain_up, plain_down), (0, got as u64));
         // Both rests, for a tunnel's GAP: the client's byte and the reply's.
-        assert_eq!(unwritten, 1 + 8192 - got as u64);
+        assert_eq!(unwritten, [1, 8192 - got as u64]);
         assert_eq!(*unsent.lock().unwrap(), b"x");
         let copies = copies.lock().unwrap();
-        assert_eq!((copies[0].len(), &copies[1]), (0, &vec![7; got]));
+        assert_eq!((copies[0].len(), &copies[1]), (0, &vec![7; 8192]));
         assert_eq!(reason, EndReason::Interrupted);
-        let lost = gaps(&calls).into_iter().map(|g| match g {
-            Call::Gap(_, reason, _, _, off, lost, _) => (reason, off, lost),
-            _ => unreachable!(),
-        });
-        let want = (GapReason::DecodeFailed, 0, Some(8192 - got as u64));
-        assert_eq!(lost.collect::<Vec<_>>(), [want]);
+        assert!(gaps(&calls).is_empty());
     })
     .await;
 }

@@ -4,7 +4,8 @@
 //! error ends the relay, the part of a chunk the other side's writer already took is recorded
 //! too: it may have reached the peer. The rest of a client chunk, never written, goes to the
 //! parser at the close to be recorded as `unsent`. The rest of a server chunk, read from the
-//! upstream and never written to the client, is a `conn` GAP.
+//! upstream and never written to the client (the client went away), is fed to the parser before
+//! the close: it is model output we hold, and its response ends `interrupted`.
 
 use crate::pipeline::{EndReason, GapReason, Mono, Recorder, Sid, StreamHandle};
 use crate::proxy::ws::Dir;
@@ -12,11 +13,9 @@ use bytes::Bytes;
 use serde_json::{Value, json};
 use std::io;
 use std::panic::{AssertUnwindSafe, catch_unwind};
-use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
-use std::sync::{Arc, Mutex};
-use std::task::{Context, Poll};
-use tokio::io::{AsyncRead, AsyncReadExt as _, AsyncWrite, AsyncWriteExt as _, ReadBuf};
+use std::sync::Mutex;
+use tokio::io::{AsyncRead, AsyncReadExt as _, AsyncWrite, AsyncWriteExt as _};
 
 /// Parsing stopped for the connection (5a): the `conn` GAP's reason and tail, and the relayed
 /// plaintext bytes the parser took but recorded in no stream (the rest of the faulting chunk, an
@@ -50,7 +49,8 @@ impl Stop {
 
 /// A passive parser of one connection's plaintext (HTTP/1.1, HTTP/2).
 pub trait Parser: Send {
-    /// Relayed bytes of one direction, called only after they were written to the other side.
+    /// Relayed bytes of one direction, called only after they were written to the other side;
+    /// at the close also the rest of a server chunk the client never took.
     /// Err: parsing stopped for the connection (5a); every open stream already has its own GAP
     /// and ended `decode_error`. Later feeds are not made; `end` still is.
     fn feed(&mut self, dir: Dir, t: Mono, bytes: &[u8]) -> Result<(), Stop>;
@@ -82,17 +82,18 @@ pub struct Pumped<C, U> {
     pub reason: EndReason,
     /// The upstream leg errored (reset, TLS error, read or write error), not a clean close.
     pub upstream_failed: bool,
-    /// Bytes read from one side and never written to the other, both ways: the chunk rests the
-    /// error cut.
-    /// With a parser they are recorded or in a `conn` GAP already; a tunnel's GAP adds them.
-    pub unwritten: u64,
+    /// Bytes read from one side and never written to the other, by [`Dir`]: the chunk rests the
+    /// error cut. With a parser they are recorded or in a `conn` GAP already; a tunnel counts them.
+    pub unwritten: [u64; 2],
 }
 
 /// Called after each chunk moved: its direction, time and length.
 pub type Tap<'a> = &'a (dyn Fn(Dir, Mono, u64) + Sync);
 
-/// How one direction ended. `Cut`: a TLS peer closed without close_notify, passed on as a clean
-/// close (rule 8), though only close_notify proves a close-delimited body whole.
+/// How one direction ended. `Cut`: a TLS peer closed without close_notify. A client's cut is
+/// passed on as a clean close. An upstream's cut ends the relay with no shutdown of the client
+/// leg, so the harness gets no close_notify either and sees a close-delimited body cut, as it
+/// would without us (rule 8); the caller drops that leg, a plain TCP close.
 #[derive(Clone, Copy)]
 enum Leg {
     Eof,
@@ -184,6 +185,9 @@ impl Pump<'_> {
                 None => match from.read(&mut buf).await {
                     Ok(0) => break,
                     Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => {
+                        if dir == Dir::Down {
+                            return Leg::Cut;
+                        }
                         end = Leg::Cut;
                         break;
                     }
@@ -248,13 +252,17 @@ where
         // An error on one leg ends the other: the connection is over.
         tokio::select! {
             x = &mut a => (x, if matches!(x, Leg::Eof | Leg::Cut) { b.await } else { Leg::Eof }),
-            y = &mut b => (if matches!(y, Leg::Eof | Leg::Cut) { a.await } else { Leg::Eof }, y),
+            y = &mut b => (if matches!(y, Leg::Eof) { a.await } else { Leg::Eof }, y),
         }
     };
     // A leg that errored, or was dropped mid-write, leaves the part its writer took; the rest of
     // a client chunk never reached the upstream, the rest of a server chunk never the client.
-    let (rest, cut) = (pump.settle(Dir::Up), pump.settle(Dir::Down).len() as u64);
-    let (cut_at, unwritten) = (rec.now(), rest.len() as u64 + cut);
+    let (rest, cut) = (pump.settle(Dir::Up), pump.settle(Dir::Down));
+    let unwritten = [rest.len() as u64, cut.len() as u64];
+    // Model output read from the upstream: parsed, never moved; after a stop `held` counts it.
+    if !cut.is_empty() {
+        pump.feed(Dir::Down, rec.now(), &cut);
+    }
     let reason = match (lu, ld) {
         (Leg::Eof | Leg::Cut, Leg::Eof | Leg::Cut) => EndReason::Complete,
         _ => EndReason::Interrupted,
@@ -262,7 +270,6 @@ where
     let down_cut = matches!(ld, Leg::Cut);
     let [up, down] = pump.moved.map(AtomicU64::into_inner);
     let Shared { parser, mut stop } = pump.shared.into_inner().unwrap_or_else(|e| e.into_inner());
-    let parsed = parser.is_some();
     // Never relayed, so not moved or tapped; after a stop the conn GAP counts them.
     let unsent = match &mut stop {
         Some(s) => {
@@ -283,19 +290,15 @@ where
             }
             // The parser is dropped: its open streams end interrupted, and what it held is unknown.
             Err(_) if stop.is_none() => {
-                parse_stopped(rec, conn.sid(), GapReason::DecodeFailed);
-                let tail = Some(json!({"panic": true}));
-                conn.gap(GapReason::DecodeFailed, t, None, tail);
+                let s = Stop::panic(0, t);
+                parse_stopped(rec, conn.sid(), s.reason);
+                conn.gap(s.reason, t, None, s.tail);
             }
             _ => {}
         }
     }
-    // The server bytes the client never got are in no stream: the conn GAP counts them. With no
-    // reason of their own in PRD-01, they take the one for bytes a connection did not record.
-    match stop {
-        Some(s) => conn.gap(s.reason, s.since, Some(s.held + cut), s.tail),
-        None if parsed && cut > 0 => conn.gap(GapReason::DecodeFailed, cut_at, Some(cut), None),
-        None => {}
+    if let Some(s) = stop {
+        conn.gap(s.reason, s.since, Some(s.held), s.tail);
     }
     Pumped {
         client: cr.unsplit(cw),
@@ -305,48 +308,5 @@ where
         reason,
         upstream_failed: matches!(lu, Leg::WriteErr) || matches!(ld, Leg::ReadErr),
         unwritten,
-    }
-}
-
-/// Counts the bytes read from and written to `T`: the TCP wire under TLS, for the `conn` END
-/// tail `up` and `down` of a decrypted connection. Wired by `serve` (the next slice).
-pub struct Counted<T> {
-    pub inner: T,
-    /// Bytes read, bytes written.
-    pub counts: Arc<[AtomicU64; 2]>,
-}
-
-impl<T: AsyncRead + Unpin> AsyncRead for Counted<T> {
-    fn poll_read(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        buf: &mut ReadBuf<'_>,
-    ) -> Poll<io::Result<()>> {
-        let before = buf.filled().len();
-        let r = Pin::new(&mut self.inner).poll_read(cx, buf);
-        self.counts[0].fetch_add((buf.filled().len() - before) as u64, Relaxed);
-        r
-    }
-}
-
-impl<T: AsyncWrite + Unpin> AsyncWrite for Counted<T> {
-    fn poll_write(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        buf: &[u8],
-    ) -> Poll<io::Result<usize>> {
-        let r = Pin::new(&mut self.inner).poll_write(cx, buf);
-        if let Poll::Ready(Ok(n)) = r {
-            self.counts[1].fetch_add(n as u64, Relaxed);
-        }
-        r
-    }
-
-    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        Pin::new(&mut self.inner).poll_flush(cx)
-    }
-
-    fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        Pin::new(&mut self.inner).poll_shutdown(cx)
     }
 }

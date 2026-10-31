@@ -171,7 +171,8 @@ pub async fn run(
     let prefixes = (c.client_prefix, c.upstream_prefix);
     let legs = (client, upstream);
     let p = pump::relay(rec, &mut conn, legs, prefixes, None, quiet, Some(&tap)).await;
-    let (up, down) = (p.plain_up, p.plain_down);
+    // Read from the TCP wire, so counted, though an error kept them from the other side.
+    let (up, down) = (p.plain_up + p.unwritten[0], p.plain_down + p.unwritten[1]);
     if p.upstream_failed {
         connect::reset(p.client);
     } else {
@@ -183,7 +184,7 @@ pub async fn run(
     {
         let tail = (c.reason == "hello_too_big")
             .then(|| json!({"guard": "client_hello", "limit": CLIENT_HELLO_GUARD}));
-        conn.gap(reason, opened, Some(up + down + p.unwritten), tail);
+        conn.gap(reason, opened, Some(up + down), tail);
     }
     conn.end(rec.now(), p.reason, Some(json!({"up": up, "down": down})));
 }
