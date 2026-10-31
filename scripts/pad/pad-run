@@ -265,7 +265,7 @@ class Run:
 
     def plant(self):
         """Section 5: one fake value per PRD-05 section 10 shape, the no-shape value, the remote password. Only
-        .env.local and .gitignore go in the folder here: goalcup start wants it empty (PRD-10 section 8); seed() does the git part."""
+        .env.local and .gitignore go in the folder here: goalcup start wants it empty (PRD-10 section 3 step 2); seed() does the git part."""
         an = lambda n: "".join(secrets.choice("ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789") for _ in range(n))  # noqa: E731
         b64 = lambda d: base64.urlsafe_b64encode(json.dumps(d).encode()).decode().rstrip("=")  # noqa: E731
         pem = [base64.b64encode(secrets.token_bytes(48)).decode() for _ in range(4)]  # known line by line
@@ -276,24 +276,26 @@ class Run:
                                                         'PAD_PEM="-----BEGIN PRIVATE KEY-----\n%s\n-----END PRIVATE KEY-----"' % "\n".join(pem)]
         write(os.path.join(self.project, ".env.local"), "\n".join(env) + "\n")
         write(os.path.join(self.project, ".gitignore"), ".env*\n", 0o644)
+        write(self.path("remote-pw"), password, 0o600)
         return list(shaped.values()) + pem + [password], plain
 
     def seed(self):
         """After `goalcup start` printed its ready line: the setup script, the repository, the planted remote (the password is
-        known[8], see plant). The harness has an isolated home, so the micro prompt's commit needs a local identity."""
+        in its own run file, see plant). The harness has an isolated home, so the micro prompt's commit needs a local identity."""
         if self.st.get("seeded"):
             return
-        self.st["seeded"] = True
         shutil.copy(os.path.join(PAD, "prompts", "pad-setup-check.sh"), self.project)
         git = ["git", "-C", self.project]
         for argv in (["init", "-q"], ["config", "user.name", "pad"], ["config", "user.email", "pad@example.invalid"],
                      ["add", ".gitignore", "pad-setup-check.sh"], ["commit", "-q", "-m", "pad start"]):
             if sh(git + argv).returncode:
                 raise Step("FAIL", "git %s failed" % argv[0])
-        password = open(self.path("known")).read().splitlines()[8]
+        with open(self.path("remote-pw")) as f:
+            password = f.read()
         with open(os.path.join(self.project, ".git", "config"), "a") as f:  # written, never an argument
             f.write('[remote "pad"]\n\turl = https://pad:%s@example.invalid/pad.git\n' % password)
         self.st["head"] = sh(git + ["rev-parse", "HEAD"]).stdout.strip()
+        self.st["seeded"] = True
 
     def start(self, _):
         s = self.s  # section 3, 0:02; with a server, a device code the conductor approves, then paste (PRD-10 section 3)
