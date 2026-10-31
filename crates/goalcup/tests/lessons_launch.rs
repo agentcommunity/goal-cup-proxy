@@ -345,7 +345,7 @@ fn ctrl_c_reaches_the_harness_and_the_watchdog_lives() {
     let masks = |stage: &str| -> (u64, u64) {
         let line = text
             .lines()
-            .find(|line| line.starts_with(stage))
+            .find(|line| line.contains(&format!("{stage} caught=")))
             .unwrap_or_else(|| panic!("no {stage} line:\n{text}"));
         let value = |key: &str| {
             let hex = line
@@ -363,14 +363,20 @@ fn ctrl_c_reaches_the_harness_and_the_watchdog_lives() {
         assert!(bit(caught, signal), "signal {signal} is not caught: {text}");
         assert!(!bit(ignored, signal), "signal {signal} is ignored: {text}");
     }
-    assert!(bit(ignored, libc::SIGTTOU), "SIGTTOU is not ignored: {text}");
+    assert!(
+        bit(ignored, libc::SIGTTOU),
+        "SIGTTOU is not ignored: {text}"
+    );
     let (caught, ignored) = masks("given");
     for signal in [libc::SIGINT, libc::SIGQUIT, libc::SIGTSTP] {
         assert!(!bit(caught, signal), "signal {signal} still caught: {text}");
         assert!(!bit(ignored, signal), "signal {signal} ignored: {text}");
     }
     assert!(bit(caught, libc::SIGHUP), "SIGHUP given back early: {text}");
-    assert!(bit(ignored, libc::SIGTTOU), "SIGTTOU given back early: {text}");
+    assert!(
+        bit(ignored, libc::SIGTTOU),
+        "SIGTTOU given back early: {text}"
+    );
     let mask = text
         .split("ign=")
         .nth(1)

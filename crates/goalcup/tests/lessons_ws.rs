@@ -9,9 +9,7 @@ mod common;
 
 use common::recorder::{end_reason, gap_reasons, opens, sid_of};
 use flate2::{Compress, Compression, FlushCompress, Status};
-use goalcup::pipeline::{
-    Call, Calls, EndReason, GapReason, Mono, Recorder, Sid, StreamKind,
-};
+use goalcup::pipeline::{Call, Calls, EndReason, GapReason, Mono, Recorder, Sid, StreamKind};
 use goalcup::proxy::http1::Http1;
 use goalcup::proxy::pump::{Parser, Stop};
 use goalcup::proxy::ws::{Deflate, Dir, WsConn, negotiate};
@@ -386,7 +384,7 @@ fn bfinal_ends_takeover_history() {
         ws.feed(Dir::Down, rec.now(), &text(Dir::Down, "plain"))
             .expect("goes on");
         ws.end(rec.now(), EndReason::Complete, 0);
-            let down = stream(&calls, Dir::Down);
+        let down = stream(&calls, Dir::Down);
         let got = texts(&calls, down);
         if bad_start {
             assert_eq!(got, ["plain"]);
@@ -455,7 +453,7 @@ fn one_byte_reads_decode_the_same() {
                 ws.feed(dir, rec.now(), chunk).expect("goes on");
             }
             ws.end(rec.now(), EndReason::Complete, 0);
-                    assert!(gap_reasons(&calls, stream(&calls, dir)).is_empty());
+            assert!(gap_reasons(&calls, stream(&calls, dir)).is_empty());
             messages(&calls, stream(&calls, dir))
         };
         let whole = run(wire.len());
@@ -548,7 +546,7 @@ fn violations_are_named_and_relaying_goes_on() {
             assert!(ws.feed(dir, rec.now(), chunk).is_ok(), "{name}");
         }
         ws.end(rec.now(), EndReason::Complete, 0);
-            let sid = stream(&calls, dir);
+        let sid = stream(&calls, dir);
         let got = texts(&calls, sid);
         assert_eq!(got.first().map(String::as_str), Some("first"), "{name}");
         assert_eq!(got.last().map(String::as_str), Some("last"), "{name}");
