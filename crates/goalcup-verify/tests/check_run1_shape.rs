@@ -4,7 +4,7 @@
 
 mod common;
 
-use common::run1::{Shape, run1};
+use common::run1::{IDS, Shape, TURN, run1};
 use common::*;
 use goalcup_format::read::{part_files, read_index};
 use goalcup_format::{EndReason, StreamKind, hex};
@@ -14,13 +14,14 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::{env, fs};
 
-/// What fails run 1's shape. `history_complete` joins it with PRD-08 slice 6.
-const FAILS: [&str; 5] = [
+/// What fails run 1's shape: the mid-run drop shows as `history_complete`.
+const FAILS: [&str; 6] = [
     "gap_has_end",
     "streams_closed",
     "wire_keeps_up",
     "threads_match",
     "subagents_present",
+    "history_complete",
 ];
 
 fn sorted(ids: impl IntoIterator<Item = impl ToString>) -> Vec<String> {
@@ -29,9 +30,9 @@ fn sorted(ids: impl IntoIterator<Item = impl ToString>) -> Vec<String> {
     ids
 }
 
-/// The entry as fetch-run lays it out, one chunk per index line, but claiming one model
-/// request more than the seal's totals say.
-fn fetch(d: &Path) -> PathBuf {
+/// The entry as fetch-run lays it out, one chunk per index line. Unless `honest` (a record without
+/// losses), it claims one model request more than the seal's totals say.
+fn fetch(d: &Path, honest: bool) -> PathBuf {
     let out = fetched(d, &tmp("r1-fetched")).join(ENTRY);
     let (mut chunks, mut raw, mut prev) = (vec![], 0, "0".repeat(64));
     for p in part_files(&d.join("rec")).unwrap() {
@@ -52,15 +53,18 @@ fn fetch(d: &Path) -> PathBuf {
     });
     let t = &seal["totals"];
     let n = t["http_post"].as_u64().unwrap() + t["ws_up_msgs"].as_u64().unwrap();
-    let hb = json!({"recording": "gaps", "model_requests": n, "counts": t});
-    let doc = json!({"upload_offset": raw, "model_requests": n + 1, "last_heartbeat": hb,
+    let recording = if honest { "ok" } else { "gaps" };
+    let hb = json!({"recording": recording, "model_requests": n, "counts": t});
+    let asked = n + u64::from(!honest);
+    let doc = json!({"upload_offset": raw, "model_requests": asked, "last_heartbeat": hb,
         "final": {"seq": chunks[chunks.len() - 1]["last_seq"], "head": prev}, "chunks": chunks});
     fs::write(out.join("fetch.json"), doc.to_string()).unwrap();
     out
 }
 
-/// Copies a folder: the K2 export of PRD-12 (section 12): with `GOALCUP_FIXTURES_OUT` set,
-/// the run 1 test writes `k2-part` and `k2-fetched` there, to be committed under
+/// Copies a folder: the K2 and K7 exports of PRD-12 (section 12). With `GOALCUP_FIXTURES_OUT`
+/// set, the run 1 test writes `k2-part`, `k2-fetched` (lying `fetch.json`), `k7-part` and
+/// `k7-fetched` (honest, from the Clean shape) there, to be committed under
 /// `scripts/pad/fixtures/`.
 fn export(from: &Path, to: &Path) {
     fs::create_dir_all(to).unwrap();
@@ -74,14 +78,34 @@ fn export(from: &Path, to: &Path) {
 
 #[test]
 fn run1_shape_fails_exactly_its_checks_and_reads_six_wire_errors() {
-    let d = run1("r1-lossy", Shape::Lossy);
+    let (d, k7) = (
+        run1("r1-lossy", Shape::Lossy),
+        run1("r1-pair", Shape::Clean),
+    );
+    let k7f = fetch(&k7, true);
     if let Ok(out) = env::var("GOALCUP_FIXTURES_OUT") {
-        export(&d, &Path::new(&out).join("k2-part"));
-        export(&fetch(&d), &Path::new(&out).join("k2-fetched"));
+        let out = Path::new(&out);
+        for (from, to) in [(&d, "k2-part"), (&fetch(&d, false), "k2-fetched")] {
+            export(from, &out.join(to));
+        }
+        export(&k7, &out.join("k7-part"));
+        export(&k7f, &out.join("k7-fetched"));
     }
+    let (code, v) = check(&k7f, &["--server", "--local", k7.to_str().unwrap()]);
+    assert_eq!((code, ids_with(&v, "fail")), (0, Vec::<String>::new()));
+    assert_eq!(result(&v, "server_counts_match"), "pass");
     let (code, v) = check(&d, &[]);
     assert_eq!(code, 2);
     assert_eq!(sorted(ids_with(&v, "fail")), sorted(FAILS));
+    // The root thread's row fails its history; a child's does not; no finding quotes a turn.
+    let hist = |t: &str| {
+        let rows = v["entries"][0]["threads"].as_array().unwrap();
+        rows.iter().find(|r| r["thread"] == t).unwrap()["history"].clone()
+    };
+    assert_eq!(hist(IDS[0]), "fail");
+    assert_ne!(hist(IDS[1]), "fail");
+    let why = item(&v, "history_complete")["why"].as_str().unwrap();
+    assert!(!why.contains(TURN));
     let wire = v["entries"][0]["provider_errors"]["wire"]
         .as_object()
         .unwrap();
@@ -91,7 +115,10 @@ fn run1_shape_fails_exactly_its_checks_and_reads_six_wire_errors() {
 #[test]
 fn run1_shape_as_a_server_copy_fails_the_count_check_too() {
     let d = run1("r1-server", Shape::Lossy);
-    let (code, v) = check(&fetch(&d), &["--server", "--local", d.to_str().unwrap()]);
+    let (code, v) = check(
+        &fetch(&d, false),
+        &["--server", "--local", d.to_str().unwrap()],
+    );
     assert_eq!(code, 2);
     let want = sorted(FAILS.iter().chain(&["server_counts_match"]));
     assert_eq!(sorted(ids_with(&v, "fail")), want);
@@ -139,6 +166,7 @@ fn the_coverage_line_counts_every_request_written() {
 fn the_same_record_without_its_losses_exits_0() {
     let (code, v) = check(&run1("r1-clean", Shape::Clean), &[]);
     assert_eq!((code, ids_with(&v, "fail")), (0, Vec::<String>::new()));
+    assert_eq!(result(&v, "history_complete"), "pass");
 }
 
 #[test]
@@ -147,6 +175,7 @@ fn a_killed_recorder_is_named_not_failed() {
     assert_eq!((code, ids_with(&v, "fail")), (1, Vec::<String>::new()));
     assert_eq!(result(&v, "wire_keeps_up"), "named");
     assert_eq!(result(&v, "threads_match"), "named");
+    assert_eq!(result(&v, "history_complete"), "named");
 }
 
 #[test]
@@ -161,5 +190,6 @@ fn a_pinned_model_host_exits_1_with_the_log_check_named() {
         );
         assert_eq!(result(&v, "listed_hosts_decrypted"), "named", "{name}");
         assert_eq!(result(&v, "wire_keeps_up"), "named", "{name}");
+        assert_eq!(result(&v, "history_complete"), "skip", "{name}");
     }
 }
