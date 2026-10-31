@@ -311,6 +311,8 @@ class CrashRows(unittest.TestCase):
                              fails, (at, over_cap, code))
             self.assertEqual(self.row("kill-watchdog-recover", wgap, words=(check.RECOVER[0], "sealed"), over_cap=over_cap,
                                       more=seal)["result"] == "FAIL", fails, (at, over_cap, code))
+        late = [{"kind": "seal-now", "exit": "timeout", "began": "2026-10-30T10:03:00+00:00", "at": "2026-10-30T10:40:00+00:00"}]
+        self.assertNotEqual(self.row("kill-recorder", gap, recovery=down, over_cap=True, more=late)["result"], "FAIL")  # a seal cut by the step limit still counts
         # Sealed at the cap before the kill: nothing left to kill, no gap, verifier exit 0. Not goalcup's failure.
         early = [{"kind": "seal-now", "exit": 0, "at": "2026-10-30T10:01:00+00:00"}]
         got = self.row("kill-recorder", None, pid=None, code=0, recovery=(("skip", "10:02"),), over_cap=True, more=early)

@@ -445,7 +445,7 @@ class Run:
         self.need("goalcup", started=True)
         wait(lambda: self.sealed() or self.dead(), self.st["pasted"] + float(self.s["minutes"]) * 60 - time.time(), 5)
         out = ""
-        capped = any(f.get("kind") == "seal-now" and f.get("exit") == 0 for f in pc.load(self.run, "watch/faults.jsonl", 1))
+        capped = any(f.get("kind") == "seal-now" and f.get("exit") in (0, "timeout") for f in pc.load(self.run, "watch/faults.jsonl", 1))
         why = "at the spend cap" if capped else "at the harness's exit" if self.sealed() or self.dead() else "at %s min" % self.s["minutes"]
         if not self.sealed() and self.has("kill-watchdog", "kill-watchdog-recover"):
             self.exit_harness()  # section 3.1: those rows end by the harness's exit, never goalcup seal
@@ -458,7 +458,13 @@ class Run:
             except subprocess.TimeoutExpired:
                 self.fault("seal", exit="timeout")
         ok = wait(self.sealed, self.left() - 30, 5)
-        screen = out + "\n" + self.pane()
+        values = self.known()
+        if out and values is not None:  # the number is read only from files in the output folder: keep the seal's own words, masked
+            n = self.st["panes"] = self.st.get("panes", 0) + 1
+            safe, hits = replace_known(out, values)
+            self.st["screen_known"] = self.st.get("screen_known", 0) + hits
+            write(self.path("watch", "pane-s%d.txt" % n), safe, 0o644)
+        screen = (out if values is not None else "") + "\n" + self.pane()
         found = re.findall(r"([\d,]+) model requests? written", screen)
         self.st["end_screen_requests"] = int(found[-1].replace(",", "")) if found else 0 if "No model request was written" in screen else None
         self.harness_files()
@@ -775,12 +781,13 @@ class Run:
         self.need("goalcup", started=True)
         if self.sealed():
             return "ok", "already sealed"
+        began = datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds")
         try:
             r = sh([tool("goalcup"), "seal", "--yes"], env=self.env, cwd=self.project, timeout=max(1, self.left()))
         except subprocess.TimeoutExpired:
-            self.fault("seal-now", exit="timeout")
+            self.fault("seal-now", exit="timeout", began=began)  # the line lands at the step's end; began is when the seal started
             return "timeout", "goalcup seal did not finish within the step's limit"
-        self.fault("seal-now", exit=r.returncode)  # the seal step names the cap from this line
+        self.fault("seal-now", exit=r.returncode, began=began)  # the seal step names the cap from this line
         return ("ok", "sealed at the spend cap") if r.returncode == 0 else ("FAIL", "goalcup seal exit %d" % r.returncode)
 
     def watch(self, _):
