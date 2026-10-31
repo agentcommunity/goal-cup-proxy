@@ -82,10 +82,10 @@ impl Tally {
                 }
                 let tail: Map<String, Value> = serde_json::from_slice(tail).unwrap_or_default();
                 let (wl, mo) = ((*start_wall, *end_wall), (*start_mono, *end_mono));
-                if !is_meta_gap(*reason, *lost, &tail) {
-                    if let Some((p, _)) = self.open.get(sid) {
-                        self.streams.gapped.insert(p.clone());
-                    }
+                if !is_meta_gap(*reason, *lost, &tail)
+                    && let Some((p, _)) = self.open.get(sid)
+                {
+                    self.streams.gapped.insert(p.clone());
                 }
                 if *sid == 0
                     && *reason == GapReason::RecorderDown
