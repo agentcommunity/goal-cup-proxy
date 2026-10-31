@@ -80,7 +80,10 @@ fn launch_helper() {
             // SAFETY: integers only.
             let (terminal, group, mine) =
                 unsafe { (libc::tcgetpgrp(0), libc::getpgid(pid), libc::getpgrp()) };
-            say(&format!("foreground={}", terminal == group && group == mine));
+            say(&format!(
+                "foreground={}",
+                terminal == group && group == mine
+            ));
             let status = wait_resuming(child.id()).expect("wait");
             say(&format!("exit {}", describe(status)));
         }
@@ -150,7 +153,12 @@ struct Helper {
 impl Drop for Helper {
     fn drop(&mut self) {
         // SAFETY: integers only; the helper is its own group leader.
-        unsafe { libc::kill(-libc::pid_t::try_from(self.child.id()).unwrap(), libc::SIGKILL) };
+        unsafe {
+            libc::kill(
+                -libc::pid_t::try_from(self.child.id()).unwrap(),
+                libc::SIGKILL,
+            )
+        };
         let _ = self.child.wait();
     }
 }
@@ -160,7 +168,13 @@ fn run_helper(role: &str, pty: &Pty) -> Helper {
     let stdio = || Stdio::from(pty.slave.try_clone().expect("dup slave"));
     let mut command = Command::new(exe);
     command
-        .args(["launch_helper", "--exact", "--nocapture", "--test-threads", "1"])
+        .args([
+            "launch_helper",
+            "--exact",
+            "--nocapture",
+            "--test-threads",
+            "1",
+        ])
         .env(ROLE, role)
         .stdin(stdio())
         .stdout(stdio())
@@ -230,7 +244,11 @@ fn pump(master: RawFd, out: &mut Vec<u8>, until: impl Fn(&str) -> bool) -> Read 
 fn type_on(master: RawFd, bytes: &[u8]) {
     // SAFETY: `bytes` is valid for its length.
     let n = unsafe { libc::write(master, bytes.as_ptr().cast(), bytes.len()) };
-    assert_eq!(n, isize::try_from(bytes.len()).unwrap(), "typed on the master");
+    assert_eq!(
+        n,
+        isize::try_from(bytes.len()).unwrap(),
+        "typed on the master"
+    );
 }
 
 /// Runs the helper to the end of its output and returns what it printed.
@@ -240,7 +258,11 @@ fn finish(mut helper: Helper, pty: Pty) -> String {
     let mut out = Vec::new();
     let read = pump(master.as_raw_fd(), &mut out, |_| false);
     let text = String::from_utf8_lossy(&out).into_owned();
-    assert_eq!(read, Read::Eof, "helper still running at the deadline:\n{text}");
+    assert_eq!(
+        read,
+        Read::Eof,
+        "helper still running at the deadline:\n{text}"
+    );
     let status = helper.child.wait().expect("wait helper");
     assert!(status.success(), "helper failed ({status}):\n{text}");
     text
@@ -280,12 +302,17 @@ fn ctrl_c_reaches_the_harness_and_the_watchdog_lives() {
     let helper = run_helper("ctrl_c", &pty);
     let master = pty.master.as_raw_fd();
     let mut seen = Vec::new();
-    let read = pump(master, &mut seen, |t| t.contains("shielded") && t.contains("up"));
+    let read = pump(master, &mut seen, |t| {
+        t.contains("shielded") && t.contains("up")
+    });
     assert_eq!(read, Read::Matched, "{}", String::from_utf8_lossy(&seen));
     type_on(master, &[0x03]);
     let text = finish(helper, pty);
     let text = format!("{}{text}", String::from_utf8_lossy(&seen));
-    assert!(text.contains(&format!("harness signal={}", libc::SIGINT)), "{text}");
+    assert!(
+        text.contains(&format!("harness signal={}", libc::SIGINT)),
+        "{text}"
+    );
     assert!(text.contains("watchdog alive"), "{text}");
     let mask = text
         .lines()
@@ -293,6 +320,10 @@ fn ctrl_c_reaches_the_harness_and_the_watchdog_lives() {
         .unwrap_or_else(|| panic!("harness printed no mask:\n{text}"));
     let ignored = u64::from_str_radix(mask.trim(), 16).expect("hex mask");
     for signal in [libc::SIGINT, libc::SIGQUIT, libc::SIGTSTP] {
-        assert_eq!(ignored >> (signal - 1) & 1, 0, "signal {signal} is ignored: {mask}\n{text}");
+        assert_eq!(
+            ignored >> (signal - 1) & 1,
+            0,
+            "signal {signal} is ignored: {mask}\n{text}"
+        );
     }
 }
