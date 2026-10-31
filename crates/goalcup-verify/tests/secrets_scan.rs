@@ -110,7 +110,7 @@ fn secrets_masked_glued_spaced_and_big_spans() {
     let (code, got, v) = lens("glued", &[format!("x{shape}").into()], &[]);
     assert_eq!(
         (code, got, &v["result"]),
-        (0, [0, 0, 1, 0].map(Some), &json!("warn"))
+        (0, [0, 0, 1, 0].map(Some), &json!("pass"))
     );
     assert_eq!(v["glued_shape"][0]["kind"], "openai_key");
     let (code, got, _) = lens("spaced", &[format!("x {shape}").into()], &[]);
@@ -210,5 +210,55 @@ fn secrets_nothing_is_joined_across_a_gap() {
         let (code, v) = scan(&[&e.seal()], b"");
         let got = [&v["known_hits"], &v["shape_hits"]].map(|l| l.as_array().map(Vec::len));
         assert_eq!((code, got), (want, [Some(0), Some(shapes)]), "{v}");
+    }
+}
+
+/// The shape hits of `pieces` as one stream, as (exit, kinds of `shape_hits`, `glued_shape` length).
+fn shapes(name: &str, sse: bool, pieces: &[String]) -> (i32, Vec<String>, usize) {
+    let pieces: Vec<Vec<u8>> = pieces.iter().map(|p| p.clone().into_bytes()).collect();
+    let (code, v) = scan(&[&entry(name, sse, &pieces, &[])], b"");
+    let kinds = v["shape_hits"].as_array().unwrap().iter();
+    let kinds = kinds.map(|h| h["kind"].as_str().unwrap().to_string());
+    (code, kinds.collect(), v["glued_shape"].as_array().unwrap().len())
+}
+
+#[test]
+fn secrets_placeholders_are_no_hit_and_real_bodies_are() {
+    let (head, tail) = ("-----BEGIN RSA PRIVATE KEY-----", "-----END RSA PRIVATE KEY-----");
+    let (real, pw) = ("MIIEowIBAAKCAQEAu1SU1LfVLPHCozMxH2Mo4lgOEePz", "Qm7xK2pL9vZt");
+    let delta = |p: &str| format!("data: {}\n\n", json!({"type": "x.delta", "delta": p}));
+    let pem = |body: &str, nl: &str| format!("{head}{nl}{body}{nl}{tail}");
+    let cases: Vec<(String, usize)> = vec![
+        ("https://user:[REDACTED]@host/".into(), 0),
+        ("https://user:****@host/ https://user:<redacted>@host/ :[HIDDEN]@".into(), 0),
+        (format!("https://user:{pw}@host/"), 1),
+        (pem("[REDACTED]", "\n"), 0),
+        (pem("[REDACTED]", "\\n"), 0),
+        (pem(real, "\n"), 1),
+        (pem(&format!("[REDACTED]{real}"), "\n"), 1),
+        (r#""password": "[REDACTED]******""#.into(), 0),
+        (format!(r#""password": "{real}""#), 1),
+    ];
+    for (i, (text, hits)) in cases.into_iter().enumerate() {
+        let (code, kinds, _) = shapes(&format!("ph{i}"), false, &[text]);
+        assert_eq!((code, kinds.len()), (2 * hits as i32, hits), "case {i}: {kinds:?}");
+    }
+    let split = [delta(&format!("{head}\n[RED")), delta(&format!("ACTED]\n{tail}"))];
+    assert_eq!(shapes("ph-sse", true, &split), (0, vec![], 0));
+    let (a, b) = real.split_at(20);
+    let split = [delta(&format!("{head}\n{a}")), delta(&format!("{b}\n{tail}"))];
+    assert_eq!(shapes("ph-sse-real", true, &split), (2, vec!["private_key".into()], 0));
+}
+
+#[test]
+fn secrets_glued_prose_passes_and_masked_positions_fail() {
+    let shape = format!("sk-{}", "Ab1".repeat(8));
+    for glue in ["very", "mailto:A"] {
+        let (code, kinds, glued) = shapes("glue", false, &[format!("{glue}{shape}-the-end")]);
+        assert_eq!((code, kinds.len(), glued), (0, 0, 1), "{glue}");
+    }
+    for before in [" ", "\\n", "%0A", "\u{1b}[0m", "\\u001B[1;31m", "\\x1B[0m", "\\u00e9"] {
+        let (code, kinds, glued) = shapes("masked", false, &[format!("x{before}{shape}")]);
+        assert_eq!((code, kinds, glued), (2, vec!["openai_key".to_string()], 0), "{before:?}");
     }
 }

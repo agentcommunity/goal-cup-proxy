@@ -22,9 +22,13 @@ use std::sync::LazyLock;
 const SHAPES: &str = include_str!("../../goalcup/src/mask/shapes.tsv");
 /// What ends just before a glued match when the masker's left guard still masks it (PRD-05
 /// section 4: a backslash, `\u`, `\x`, percent or ANSI escape): such a hit is no `glued_shape`.
+/// Same cases as the masker's `ends_an_escape`, hex digits and the ESC forms in either case.
+/// SEAM NOTE for PRD-05: exporting `glued` would let this copy go.
 static ESCAPE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?:\\+(?:[A-Za-z0-9]|u[0-9A-Fa-f]{4}|x[0-9A-Fa-f]{2})|%[0-9A-Fa-f]{2}|(?:\x1b|\\+(?:u001b|x1b|033|e))\[[0-9;]{0,16}[A-Za-z])$").expect("escape")
+    Regex::new(r"(?:\\+(?:[A-Za-z0-9]|u[0-9A-Fa-f]{4}|x[0-9A-Fa-f]{2})|%[0-9A-Fa-f]{2}|(?:\x1b|\\+(?:(?i:u001b|x1b)|033|e))\[[0-9;]{0,16}[A-Za-z])$").expect("escape")
 });
+/// The bytes before a match the left guard reads (the masker's `GUARD_BYTES`).
+const GUARD: usize = 24;
 /// The bytes a tail gathers before it is scanned again with the 4 KiB it keeps.
 const BATCH: usize = 64 << 10;
 
@@ -221,28 +225,53 @@ impl Tail {
     }
 }
 
+/// Whether a match is only a mask or a placeholder, not a secret. The secret part is group 1,
+/// or for `private_key` the text between the `-----BEGIN` line and `-----END` (or the end of the
+/// match), else the whole match. It is a placeholder when, after trimming, it is empty or made
+/// only of `*`, `[REDACTED]`, `[HIDDEN]` and `<redacted>` (ASCII case-insensitive) with
+/// whitespace, real newlines and the text `\n` between and around them. Nothing else counts
+/// (no `xxx`, `changeme`): a real-looking body with a placeholder word inside stays a hit.
+fn placeholder(span: &[u8], kind: &str) -> bool {
+    let find = |h: &[u8], n: &[u8]| h.windows(n.len()).position(|w| w == n);
+    let mut s = span;
+    if kind == "private_key" {
+        s = find(s, b"KEY-----").map_or(s, |i| &s[i + 8..]);
+        s = find(s, b"-----END").map_or(s, |i| &s[..i]);
+    }
+    loop {
+        s = s.trim_ascii_start();
+        let tok = |t: &&[u8]| s.len() >= t.len() && s[..t.len()].eq_ignore_ascii_case(t);
+        match [&b"[REDACTED]"[..], b"[HIDDEN]", b"<redacted>", b"\\n", b"*"]
+            .iter()
+            .find(tok)
+        {
+            Some(t) => s = &s[t.len()..],
+            None => return s.is_empty(),
+        }
+    }
+}
+
 impl Scan {
     /// Scans a tail's new bytes after the 4 KiB it keeps. A hit counts when it ends in the new
-    /// bytes and starts at or after the end of the last hit its matcher counted; a span of `*`
-    /// only is masked.
+    /// bytes and starts at or after the end of the last hit its matcher counted; a
+    /// [`placeholder`] is skipped.
     fn scan(&mut self, r: &Rules, t: &mut Tail) {
         if t.seen == t.buf.len() {
             return;
         }
-        let word = |c: &u8| *c == b'_' || c.is_ascii_alphanumeric();
         let base = t.end - t.buf.len() as u64;
         t.last.resize(r.rules.len(), 0);
         let buf = &t.buf;
         for (i, (kind, guard, re)) in r.rules.iter().enumerate() {
             for m in re.captures_iter(buf).filter_map(|c| c.get(1).or(c.get(0))) {
                 let (s, b) = (m.start(), m.as_bytes());
-                let masked = b.iter().all(|&c| c == b'*');
-                if m.end() <= t.seen || base + (s as u64) < t.last[i] || masked {
+                if m.end() <= t.seen || base + (s as u64) < t.last[i] || placeholder(b, kind) {
                     continue;
                 }
                 t.last[i] = base + m.end() as u64;
-                let before = &buf[s.saturating_sub(32)..s];
-                let glued = *guard && before.last().is_some_and(word) && !ESCAPE.is_match(before);
+                let before = &buf[s.saturating_sub(GUARD)..s];
+                let word = before.last().is_some_and(|&c| c == b'_' || c.is_ascii_alphanumeric());
+                let glued = *guard && word && !ESCAPE.is_match(before);
                 let (list, name) = match (kind.is_empty(), glued) {
                     (true, _) => (0, r.forms[b]),
                     (false, false) => (1, *kind),
@@ -471,11 +500,8 @@ impl Scan {
             lists[*list].push(json!({key: name, "in": at, "sha12": sha12, "n": n}));
         }
         let ([k, s, g], b) = (lists.each_ref().map(Vec::len), self.big.len());
-        let res = match (k + s + b, g) {
-            (1.., _) => Res::Fail,
-            (0, 1..) => Res::Warn,
-            _ => Res::Pass,
-        };
+        // A glued match is listed, never a fail: the masker leaves it alone too.
+        let res = if k + s + b > 0 { Res::Fail } else { Res::Pass };
         let why =
             format!("hits: {k} known, {s} shape, {g} glued_shape; {b} MASK spans over 16 KiB");
         let [k, s, g] = lists;
