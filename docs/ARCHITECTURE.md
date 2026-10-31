@@ -31,9 +31,9 @@ checking code.
 
 ## 3. The one process
 
-Target shape, owned by PRD-02: the mask worker, the writer and the watchdog's `run` and `recover`
-are not all on the integration branch yet. Read the bullets below on writing, restart, null mode
-and `recover` as the design they will meet, not as merged code.
+The mask worker and the writer are merged. The watchdog's `run` and `recover` are not yet (PRD-02
+slice A and B); read the bullets below on restart, null mode and `recover` as the design they will
+meet, not as merged code.
 
 ```mermaid
 flowchart LR
@@ -143,7 +143,7 @@ shapes in `crates/goalcup/src/mask/shapes.tsv`, the connector's own rules, and t
 the run (the project's `GH_TOKEN` among them). The stream form keeps a small hold so a secret split
 over two chunks is still caught, and its output equals the whole-record result. When the masker
 cannot decide a piece it stars it (fail closed); if it fails outright the piece is dropped under a
-`mask_failed` gap (the worker that does this is part of the PRD-02 target shape). A MASK record names the rule and the span, never the value. The masker is pure:
+`mask_failed` gap (the mask worker does this). A MASK record names the rule and the span, never the value. The masker is pure:
 no threads, no clock, and no error text that formats a byte or a value (D80).
 
 ## 7. The record and the upload
