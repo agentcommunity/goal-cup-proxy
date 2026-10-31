@@ -7,8 +7,6 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use super::approve::{self, Ask, Stop};
@@ -84,28 +82,22 @@ pub fn run(a: &Args) -> ExitCode {
     }
 }
 
-/// Set once the watchdog has its own signal handlers in (its `status.json` exists): from then a
-/// SIGTERM to this process is a seal request and a Ctrl-C leaves it running, so the end screen is
-/// never dropped. Before that the default action stays, so a stuck start can still be killed.
-static CAUGHT: AtomicBool = AtomicBool::new(false);
-
 extern "C" fn on_signal(sig: libc::c_int) {
-    // Only async-signal-safe calls.
-    // SAFETY: `signal`, `raise`, `kill` and `getpid` are async-signal-safe.
-    unsafe {
-        if !CAUGHT.load(Ordering::SeqCst) {
-            libc::signal(sig, libc::SIG_DFL);
-            libc::raise(sig);
-        } else if sig == libc::SIGTERM {
-            // The watchdog's `goalcup seal` signal: it ends the harness and seals.
-            libc::kill(libc::getpid(), libc::SIGUSR1);
-        }
+    if sig == libc::SIGTERM {
+        // The watchdog's `goalcup seal` signal: it ends the harness and seals.
+        // SAFETY: `kill` and `getpid` are async-signal-safe.
+        unsafe { libc::kill(libc::getpid(), libc::SIGUSR1) };
     }
+    // A Ctrl-C reaches the harness through the terminal; this process stays for the end screen.
 }
 
 /// Hands the terminal to the watchdog and, when it returns, the end screen and the upload
-/// progress. The ready line is printed once the recorder has written its `status.json`, the
-/// step right before it tells the watchdog `ready`.
+/// progress. The ready line and the signal handlers both wait for the recorder's `status.json`,
+/// the step right before it tells the watchdog `ready`. Until then a Ctrl-C or SIGTERM kills this
+/// process, which is the watchdog; a recorder it already started then runs on alone, and
+/// `goalcup status` shows it and `goalcup seal` closes it. The ready line is printed by a thread
+/// that polls, so the harness may open a few ms before it (seam question to PRD-02: a ready hook
+/// in `watchdog::run`, so the print can be ordered before the harness starts).
 fn hand_over(ready: Ready) -> ExitCode {
     let Ready {
         plan,
@@ -118,38 +110,33 @@ fn hand_over(ready: Ready) -> ExitCode {
         facts.run.clone(),
     );
     log::line(&dir, "start_handover", &[]);
-    let over = Arc::new(AtomicBool::new(false));
-    let mark = {
-        let (dir, over, line) = (dir.clone(), Arc::clone(&over), text::recording_now(&name));
-        std::thread::spawn(move || {
-            let status = super::status_json(&dir);
-            while !over.load(Ordering::SeqCst) {
-                if status.exists() {
-                    CAUGHT.store(true, Ordering::SeqCst);
-                    println!("{line}");
-                    return;
-                }
-                std::thread::sleep(Duration::from_millis(20));
-            }
-        })
-    };
-    let handler = on_signal as *const () as libc::sighandler_t;
-    // SAFETY: `signal` with a handler that only makes async-signal-safe calls.
-    unsafe {
-        libc::signal(libc::SIGINT, handler);
-        libc::signal(libc::SIGTERM, handler);
-    }
+    let line = text::recording_now(&name);
+    let status = super::status_json(&dir);
+    std::thread::spawn(move || {
+        while !status.exists() {
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        let handler = on_signal as *const () as libc::sighandler_t;
+        // SAFETY: `signal` with a handler that only makes async-signal-safe calls.
+        unsafe {
+            libc::signal(libc::SIGINT, handler);
+            libc::signal(libc::SIGTERM, handler);
+        }
+        println!("{line}");
+    });
     let code = watchdog::run(plan, facts);
-    over.store(true, Ordering::SeqCst);
-    let _ = mark.join();
     // SAFETY: back to the default action, so Ctrl-C ends only this wait for the upload.
     unsafe {
         libc::signal(libc::SIGINT, libc::SIG_DFL);
         libc::signal(libc::SIGTERM, libc::SIG_DFL);
     }
-    CAUGHT.store(false, Ordering::SeqCst);
     log::line(&dir, "start_returned", &[]);
-    print!("{}", finish::closing(&dir, &name, &run));
+    let refused = code == ExitCode::from(watchdog::MASK_REFUSED);
+    print!("{}", finish::closing(&dir, &name, &run, refused));
+    if refused {
+        drop(lock);
+        return ExitCode::from(1);
+    }
     finish::wrap_up(&dir, &mut |l| println!("{l}"));
     drop(lock);
     code
@@ -356,7 +343,7 @@ pub fn prepare(a: &Args, c: &Ctx, out: &mut dyn std::io::Write) -> Result<Ready,
 
 /// The S17 fields carry the S2 and S3 types as their serde JSON.
 fn json<T: serde::Serialize>(v: &T) -> serde_json::Value {
-    serde_json::to_value(v).unwrap_or(serde_json::Value::Null)
+    serde_json::to_value(v).expect("these types serialize")
 }
 
 /// Section 8: the push block and the prompt, written to `first-message.txt` and put on the

@@ -165,8 +165,12 @@ const WRAP_UP_MAX: std::time::Duration = std::time::Duration::from_secs(61 * 60)
 
 /// What `start` prints when the watchdog has returned: the end screen of the sealed part, with a
 /// line first when the harness never started, or the start refusal when nothing was recorded at
-/// all. Only the details a participant can act on; no value and no byte of the record.
-pub fn closing(entry_dir: &Path, name: &str, run: &str) -> String {
+/// all. `refused` is the watchdog's mask refusal, which has its own text. Only the details a
+/// participant can act on; no value and no byte of the record.
+pub fn closing(entry_dir: &Path, name: &str, run: &str, refused: bool) -> String {
+    if refused {
+        return format!("{}\n", text::mask_refused());
+    }
     for _ in 0..SEALED_WAIT {
         if let Ok(screen) = end_screen(entry_dir) {
             let st: Option<Status> = super::read_json(&super::status_json(entry_dir));
@@ -192,24 +196,22 @@ pub fn closing(entry_dir: &Path, name: &str, run: &str) -> String {
 /// upload is going, one `Upload:` line whenever its state or the bytes waiting change, then the
 /// last word. Ctrl-C ends this wait only; the recorder finishes alone.
 pub fn wrap_up(entry_dir: &Path, say: &mut dyn FnMut(&str)) {
-    let recorder = |path: &Path| -> bool {
-        let st: Option<Status> = super::read_json(&super::status_json(path));
+    let recorder = || -> bool {
+        let st: Option<Status> = super::read_json(&super::status_json(entry_dir));
         st.is_some_and(|s| super::alive(s.pid, s.start_id))
     };
-    if !recorder(entry_dir) {
+    if !recorder() {
         return;
     }
     let started = std::time::Instant::now();
     let mut shown = None;
-    let mut last = None;
-    while recorder(entry_dir) && started.elapsed() < WRAP_UP_MAX {
+    while recorder() && started.elapsed() < WRAP_UP_MAX {
         if let Some(u) = up::read(entry_dir) {
             let key = (u.state, u.waiting_bytes, u.final_);
             if shown != Some(key) {
                 say(&text::upload_line(&u, super::now(), false));
                 shown = Some(key);
             }
-            last = Some(u.state);
             if matches!(
                 u.state,
                 up::State::Local
@@ -224,7 +226,7 @@ pub fn wrap_up(entry_dir: &Path, say: &mut dyn FnMut(&str)) {
         std::thread::sleep(std::time::Duration::from_secs(1));
     }
     // The wrap-up is over: nothing sends this part by itself now.
-    if let (Some(u), Some(_)) = (up::read(entry_dir), last) {
+    if let Some(u) = up::read(entry_dir) {
         say(&text::upload_line(&u, super::now(), true));
     }
 }
