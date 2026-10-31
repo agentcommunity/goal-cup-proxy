@@ -17,15 +17,13 @@ pub const TEXT: &str = include_str!("../../../../skills/goal-cup/SKILL.md");
 /// The folder name under the skills folder.
 const NAME: &str = "goal-cup";
 
-/// Puts the skill at `<skills_dir>/goal-cup/SKILL.md`; returns where, or None when nothing was
-/// installed (and then a `goalcup.log` line in `entry_dir` says why).
-pub fn install(
-    skills_dir: Option<&str>,
-    home: &Path,
-    workspace: &Path,
-    entry_dir: &Path,
-) -> Option<PathBuf> {
-    let dir = PathBuf::from(fill(skills_dir?, home, workspace));
+/// Puts the skill at `<skills_dir>/goal-cup/SKILL.md`. When nothing is installed a `goalcup.log`
+/// line in `entry_dir` says why.
+pub fn install(skills_dir: Option<&str>, home: &Path, workspace: &Path, entry_dir: &Path) {
+    let Some(skills_dir) = skills_dir else {
+        return;
+    };
+    let dir = PathBuf::from(fill(skills_dir, home, workspace));
     let inside = dir.starts_with(home) && !dir.components().any(|c| c == Component::ParentDir);
     if !inside {
         line(
@@ -33,18 +31,14 @@ pub fn install(
             "skill_not_installed",
             &[("why", Fact::Word("outside_harness_home"))],
         );
-        return None;
+        return;
     }
-    match place(&dir) {
-        Ok(()) => Some(dir.join(NAME)),
-        Err(e) => {
-            line(
-                entry_dir,
-                "skill_not_installed",
-                &[("io", Fact::Io(e.kind()))],
-            );
-            None
-        }
+    if let Err(e) = place(&dir) {
+        line(
+            entry_dir,
+            "skill_not_installed",
+            &[("io", Fact::Io(e.kind()))],
+        );
     }
 }
 

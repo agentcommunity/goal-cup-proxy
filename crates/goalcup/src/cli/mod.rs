@@ -89,7 +89,9 @@ fn parse_server(raw: Option<&str>) -> Result<Server, &'static str> {
     if raw == "off" {
         return Ok(Server::Off);
     }
-    let (authority, https) = authority(raw).ok_or(text::BAD_SERVER)?;
+    let Some((authority, https)) = authority(raw) else {
+        return Err(text::BAD_SERVER);
+    };
     if authority.is_empty() || authority.contains('@') || raw.contains(char::is_whitespace) {
         return Err(text::BAD_SERVER);
     }

@@ -114,8 +114,8 @@ struct Checked {
     values: Vec<SecretValue>,
 }
 
-/// Steps 1 and 2 and the mask check of step 6 (section 3): the connector and its plan, then the
-/// folder, then masking, all before an approval is spent.
+/// Steps 1 and 2 and the mask check of step 6 (section 3): load the connector (read only), the
+/// folder, then the plan, then masking, all before an approval is spent.
 fn check(a: &Args, c: &Ctx) -> Result<Checked, Stop> {
     let mode = match (a.test, a.practice, a.repo) {
         (true, _, _) => RunMode::Test,
@@ -123,34 +123,20 @@ fn check(a: &Args, c: &Ctx) -> Result<Checked, Stop> {
         (_, _, Some(_)) => RunMode::Competition,
         _ => return Err(stop(text::NEEDS_REPO.to_owned())),
     };
-    // Step 1: the connector and its plan. A plan refusal names a file and a key, never a value.
+    // Step 1: load the connector. `load` only reads, so a refused start has still created nothing.
     let saved = super::read_json::<Saved>(&super::setup_json(&c.home)).map(|s| s.harness);
     let id = match (a.connector, a.harness.map(str::to_owned).or(saved)) {
         // `load` takes a file when the argument holds a `/` or ends `.toml`.
-        (Some(p), _) => match p.to_string_lossy() {
+        (Some(p), _) => Some(match p.to_string_lossy() {
             s if s.contains('/') || s.ends_with(".toml") => s.into_owned(),
             s => format!("./{s}"),
-        },
-        (None, Some(id)) => id,
-        (None, None) => return Err(stop(text::NO_HARNESS_SAVED.to_owned())),
+        }),
+        (None, id) => id,
     };
-    let connector = connector::load(&id, a.hosts).map_err(|e| stop(e.to_string()))?;
-    let env = Env {
-        vars: c.vars.clone(),
-        workspace: c.project.clone(),
-        resume: false,
-        run_start: SystemTime::now(),
-        goalcup_home: c.home.clone(),
-        server_host: c.server.host().unwrap_or_default().to_owned(),
+    let loaded = match id {
+        Some(id) => Some(connector::load(&id, a.hosts).map_err(|e| stop(e.to_string()))?),
+        None => None,
     };
-    let plan = connector::plan(
-        &connector,
-        &env,
-        &super::isolated_home(&c.home, &connector.id),
-    );
-    if let Some(r) = &plan.refusal {
-        return Err(stop(text::refusal(r)));
-    }
     // Step 2: the folder, every problem at once.
     let (prompt, bad_prompt) = match a.prompt.filter(|p| p.exists()).map(push::read_prompt) {
         Some(Ok(p)) => (Some(p), None),
@@ -169,6 +155,27 @@ fn check(a: &Args, c: &Ctx) -> Result<Checked, Stop> {
         let list: String = problems.iter().map(|p| format!("\n  {p}")).collect();
         let (head, none) = (text::FOLDER_REFUSED, text::NOTHING_CREATED);
         return Err(stop(format!("{head}{list}\n{none}")));
+    }
+    // Step 1, the rest: the plan writes the harness home, so it follows the folder checks. A plan
+    // refusal names a file and a key, never a value.
+    let Some(connector) = loaded else {
+        return Err(stop(text::NO_HARNESS_SAVED.to_owned()));
+    };
+    let env = Env {
+        vars: c.vars.clone(),
+        workspace: c.project.clone(),
+        resume: false,
+        run_start: SystemTime::now(),
+        goalcup_home: c.home.clone(),
+        server_host: c.server.host().unwrap_or_default().to_owned(),
+    };
+    let plan = connector::plan(
+        &connector,
+        &env,
+        &super::isolated_home(&c.home, &connector.id),
+    );
+    if let Some(r) = &plan.refusal {
+        return Err(stop(text::refusal(r)));
     }
     // Step 6, before the approval, so a mask refusal never spends one.
     let values = workspace_values(&c.project);
@@ -241,10 +248,7 @@ pub fn prepare(a: &Args, c: &Ctx, out: &mut dyn std::io::Write) -> Result<Ready,
     let mut lines = vec![text::run_kind(mode)];
     lines.extend(connector.first_screen.clone());
     lines.extend(first_message(a, c, prompt.as_deref(), &opened.run)?);
-    lines.push(match deadline {
-        Some(ms) => text::ends_line(ms / 1000, super::now()),
-        None => text::NO_END_TIME.to_owned(),
-    });
+    lines.extend(deadline.map(|ms| text::ends_line(ms / 1000, super::now())));
     lines.push(text::upload_to(c.server.host()));
     lines.push(tier_line(
         &name,
@@ -325,11 +329,8 @@ fn first_message(a: &Args, c: &Ctx, prompt: Option<&str>, run: &str) -> Result<V
     let file = dir.join("first-message.txt");
     let message = push::write_first_message(&dir, block.as_deref(), prompt)
         .map_err(|e| Stop { text: e, code: 3 })?;
-    Ok(vec![if push::clipboard::copy(&message, &c.vars) {
-        text::first_message_ready(&file)
-    } else {
-        text::first_message_file(&file)
-    }])
+    let copied = push::clipboard::copy(&message, &c.vars);
+    Ok(vec![text::first_message(&file, copied)])
 }
 
 /// One row of `tiers.toml`; the file also holds a reason, which is not shown.

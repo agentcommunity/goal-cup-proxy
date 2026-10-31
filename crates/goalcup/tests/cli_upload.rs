@@ -1,7 +1,7 @@
 //! `goalcup upload` (PRD-10 section 1, PRD-06 section 9) through the binary, against PRD-14's fake
 //! Worker and a sealed entry with bytes left: the tail is sent and the exit is 0; a server that
 //! refuses leaves a non-zero exit with every record file still on this computer and nothing
-//! sent; no run is the `no_run_yet` refusal; `GOALCUP_SERVER=off` sends nothing. Facts only.
+//! sent; no run is the `no_run_yet` refusal; the run's own server file decides, not `GOALCUP_SERVER`. Facts only.
 
 mod common;
 
@@ -134,12 +134,10 @@ fn no_run_exits_1_and_creates_nothing() {
 }
 
 #[test]
-fn server_off_sends_nothing() {
+fn the_runs_own_server_file_decides_not_the_environment() {
     let (home, fake) = (TempHome::new(), FakeWorker::start());
-    let (entry, _) = sealed(&home, &fake);
-    let before = part_files(&entry.join("rec")).unwrap().len();
+    let (_, all) = sealed(&home, &fake);
     let out = upload(&home, Some("off"));
     assert_eq!(out.status.code(), Some(0));
-    assert!(fake.chunks().is_empty() && fake.heartbeats().is_empty());
-    assert_eq!(part_files(&entry.join("rec")).unwrap().len(), before);
+    assert_eq!(fake.stream(ENTRY), all);
 }

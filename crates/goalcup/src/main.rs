@@ -50,7 +50,7 @@ enum Command {
         #[arg(long, value_name = "ID")]
         harness: Option<String>,
         /// A practice run: kept apart from the competition, no GitHub repository.
-        #[arg(long)]
+        #[arg(long, conflicts_with_all = ["test", "repo"])]
         practice: bool,
         /// An organizer test run. Not for participants.
         #[arg(long)]

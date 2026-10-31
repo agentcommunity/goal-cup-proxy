@@ -190,10 +190,12 @@ pub fn no_harness(installed: &[&str]) -> String {
 /// A launch plan refusal (PRD-11 section 5) as the step to fix. It names files and keys only.
 pub fn refusal(r: &Refusal) -> String {
     match r {
-        Refusal::HomeLocked { home } => format!(
-            "a run uses \"{}\" now. Run this again once it has ended.",
-            home.display()
-        ),
+        Refusal::HomeLocked { home } => {
+            format!(
+                "a run uses \"{}\" now. Run this again once it has ended.",
+                home.display()
+            )
+        }
         Refusal::SettingSet { file, key } => format!(
             "\"{}\" sets {key}, which routes around the recorder. Remove it, then run this again.",
             file.display()
@@ -257,7 +259,11 @@ pub fn no_sleep_lock(why: &str) -> String {
 pub const SERVER_OFF: &str = "Server check skipped: GOALCUP_SERVER=off, so nothing is uploaded.";
 
 pub fn server_unreachable(e: &ServerError) -> String {
-    format!("goalcup checked its server: {e}. A run needs it to start.")
+    let said = match e {
+        ServerError::Transport(cause) => format!("goalcup could not reach its server ({cause})."),
+        e => format!("goalcup checked its server: {e}."),
+    };
+    format!("{said} A run needs it to start.")
 }
 
 /// PRD-10 section 3 steps 3 to 5: the repository, the approval and the open run.
@@ -1062,11 +1068,15 @@ this computer, so there is no time left to show.";
 pub const PUSH_FRAME: &str = "Your first message must start with these lines. Without them your \
 agent cannot push, and you may not send them later.";
 
-pub fn first_message_ready(file: &Path) -> String {
+pub fn first_message(file: &Path, copied: bool) -> String {
+    let at = if copied {
+        format!("on your clipboard and in {}", file.display())
+    } else {
+        format!("in {}", file.display())
+    };
     format!(
-        "Your first message (the push block, then your prompt) is on your clipboard and in {}. \
-         Paste it once as your first message and press Enter.",
-        file.display()
+        "Your first message (the push block, then your prompt) is {at}. Paste it once as your \
+         first message and press Enter."
     )
 }
 
@@ -1157,26 +1167,20 @@ pub const MASK_REFUSED: &str = "goalcup could not set up masking, so nothing was
 
 pub fn run_kind(mode: RunMode) -> String {
     match mode {
-        RunMode::Practice => "Practice run: kept apart from the competition, no GitHub repository.",
+        RunMode::Practice => "Practice run.",
         RunMode::Test => "Organizer test run.",
         RunMode::Competition => "Your run.",
     }
     .to_owned()
 }
 
-pub fn first_message_file(file: &Path) -> String {
-    format!(
-        "Your first message (the push block, then your prompt) is in {}. Paste it once as your \
-         first message and press Enter.",
-        file.display()
-    )
-}
-
-pub const NO_END_TIME: &str = "This run has no end time: GOALCUP_SERVER=off.";
-
 pub fn upload_to(host: Option<&str>) -> String {
     host.map_or_else(
-        || "Upload: off (GOALCUP_SERVER=off). Record files stay on this computer.".to_owned(),
+        || {
+            "Upload: off (GOALCUP_SERVER=off), so this run has no end time and its record files \
+             stay on this computer."
+                .to_owned()
+        },
         |h| format!("Upload: to {h}, every 5 minutes."),
     )
 }

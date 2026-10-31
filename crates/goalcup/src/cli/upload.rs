@@ -5,7 +5,7 @@
 
 use std::process::ExitCode;
 
-use super::{Server, fail, find, home, run_dir, say, server, text};
+use super::{fail, find, home, run_dir, text};
 use crate::upload::manual::{Outcome, run as send};
 use crate::upload::state;
 
@@ -15,14 +15,6 @@ pub fn run(part: Option<String>) -> ExitCode {
         Ok(h) => h,
         Err(t) => return fail(t),
     };
-    match server() {
-        Ok(Server::Off) => {
-            say(text::SERVER_OFF);
-            return ExitCode::SUCCESS;
-        }
-        Ok(Server::Url(_)) => {}
-        Err(t) => return fail(t),
-    }
     let Some(found) = find(&home, part.as_deref()) else {
         let line = part.map_or_else(|| text::NO_RUN_YET.to_owned(), |p| text::no_such_part(&p));
         return fail(&line);
