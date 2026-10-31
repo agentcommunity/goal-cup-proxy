@@ -5,7 +5,7 @@ and K11 through the verifier and check.py and compares each row with what the co
 K8 are real runs, not here. Fixtures, under scripts/pad/fixtures/, each a synthetic folder without a secret:
   <name>-part/     an entry folder (rec/ and the native files)      <name>-fetched/  fetch-run's fetched/<entry>/
   k2-part, k2-fetched (PRD-08 check_run1_shape.rs, GOALCUP_FIXTURES_OUT); k7-part, k7-fetched, the clean pair
-  that K6, K9 and K10 tamper with; k11-a, k11-b, k11-c (part only), k11-d and k11-d-fetched (PRD-09 history).
+  that K6, K9 and K10 tamper with; k11-a-part, k11-b-part, k11-c-part, k11-d-part and k11-d-fetched (PRD-09 history).
 Regenerate (box job, then copy the folders): GOALCUP_FIXTURES_OUT=$HOME/fx cargo nextest run -p goalcup-verify
 --test check_run1_shape --test check_history. k11-d-fetched is the honest fetch of the k11-d record (the run 1 test's fetch
 helper, honest) and k7-fetched and k11-d-fetched also carry complete=true, missing=null, which the test helper does not write.
@@ -69,8 +69,8 @@ K2 = ("gap_has_end", "streams_closed", "server_counts_match", "wire_keeps_up", "
 ALLC = dict.fromkeys(("C1", "C2", "C4", "C5", "C6"), "PASS")
 # label, part, fetched, wanted checks, wanted finding ids, tampers (fetch edit, status count, after the verifier).
 # K2 wants C5 too: check.py's C5 repeats C2's thread-has-no-calls test, so the one lost subagent thread fails both (PRD-12 section 12, K2 row).
-# K11a-c want C5 FAIL: the wire-only K11 records carry no usage fields, so merged tokens are 0 (K11 asserts C1 and the history ids).
-# K11a wants C4 FAIL: a failed local check is filed under C4. K11b names recorder_down, so its meta carries a kill-recorder variant.
+# K11 ("wire_only"): the records are wire-only with no ok response, so they carry no usage and no subagent and C2 to C6 are not this control's
+# (the section 12 K11 row asks for C1 and the history result); only C1 and the history ids are asserted.
 # K6c wants C6 too: section 8's C6 compares fetch.json's model_requests, so a raised count fails C4 and C6.
 CONTROLS = [
     ("K2", "k2-part", "k2-fetched", {"C1": "FAIL", "C2": "FAIL", "C4": "FAIL", "C5": "FAIL", "C6": "FAIL"}, ids("fail", *K2),
@@ -82,11 +82,10 @@ CONTROLS = [
     ("K7", "k7-part", "k7-fetched", ALLC, {}, {}),
     ("K9", "k7-part", "k7-fetched", {"C6": "FAIL"}, {}, {"count": lambda n: n + 1}),
     ("K10", "k7-part", "k7-fetched", {"C5": "FAIL"}, {}, {"after": empty_usage}),
-    ("K11a", "k11-a-part", None, {"C1": "FAIL", "C4": "FAIL", "C5": "FAIL"}, ids("fail", "history_complete"), {"orphans": 1}),  # one orphan, not in a gap
-    ("K11b", "k11-b-part", None, {"C1": "PASS", "C5": "FAIL"}, ids("named", "history_complete"),
-     {"orphans": 1, "variant": ["kill-recorder@1"]}),  # the orphan sits in a gap (the verifier's `named` result; it reports no separate in-gap count); recorder_down is the fault row's own gap
-    ("K11c", "k11-c-part", None, {"C1": "PASS"}, ids("skip", "history_complete"), {}),
-    ("K11d", "k11-d-part", "k11-d-fetched", ALLC, ids("skip", "threads_match", "wire_keeps_up"), {}),
+    ("K11a", "k11-a-part", None, {"C1": "FAIL"}, ids("fail", "history_complete"), {"orphans": 1, "wire_only": 1}),  # one orphan, not in a gap
+    ("K11b", "k11-b-part", None, {"C1": "PASS"}, ids("named", "history_complete"), {"orphans": 1, "in_gap": 1, "wire_only": 1}),  # the orphan sits in a recorded gap
+    ("K11c", "k11-c-part", None, {"C1": "PASS"}, ids("skip", "history_complete"), {"wire_only": 1}),
+    ("K11d", "k11-d-part", "k11-d-fetched", {"C1": "PASS"}, ids("skip", "threads_match", "wire_keeps_up"), {"wire_only": 1, "all_six": 1}),
 ]
 
 
@@ -121,7 +120,7 @@ def run_control(part, fetched, mods, tool):
                   "seal": {"reason": "harness_exit"}}
         json.dump(status, open(os.path.join(run, "status.json"), "w"))
         json.dump({"connector": "selftest", "case": "direct", "mode": "micro", "server": "staging" if fetched else "off",
-                   "keep": True, "run": "selftest", "entry": ENTRY, "commits_since_start": 1, "known_box": True, "variant": mods.get("variant", []),
+                   "keep": True, "run": "selftest", "entry": ENTRY, "commits_since_start": 1, "known_box": True, "variant": [],
                    "end_screen_requests": n}, open(os.path.join(run, "meta.json"), "w"))
         if mods.get("after"):
             mods["after"](run)
@@ -134,7 +133,7 @@ def run_control(part, fetched, mods, tool):
 def compare(row, found, want, finds, mods):
     got = row["checks"]
     bad = ["%s %s, wanted %s" % (c, got[c], w) for c, w in want.items() if got[c] != w]
-    bad += ["%s FAIL, none wanted" % c for c in pc.CHECKS if c not in want and got[c] == "FAIL"]  # C3 too: never wanted
+    bad += ["%s FAIL, none wanted" % c for c in pc.CHECKS if c not in want and got[c] == "FAIL" and "wire_only" not in mods]  # C3 too: never wanted
     bad += ["%s %s, wanted %s" % (i, pc.worst(found, i).get("result"), w) for i, w in finds.items()
             if pc.worst(found, i).get("result") != w]
     hist = row["facts"]["history"]  # K11: the history check's own numbers
@@ -146,6 +145,8 @@ def compare(row, found, want, finds, mods):
                 raise NotRun("the history check reported no in-gap orphan count")
         elif hist["orphans_in_gaps"] != mods["in_gap"]:
             bad.append("history orphans in gaps %s, wanted %s" % (hist["orphans_in_gaps"], mods["in_gap"]))
+    if "all_six" in mods and not bad and any(got[c] != "PASS" for c in ALLC):  # K11d's other half needs usage and a subagent in the record
+        raise NotRun("the fixture has no ok response with usage and no subagent, so C2 and C5 cannot pass: the all-six half is not shown")
     return bad
 
 

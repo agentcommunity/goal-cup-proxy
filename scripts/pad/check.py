@@ -285,6 +285,11 @@ def stale(r):
     r.flag(pre_exit(r, STALE) != 0 or not seen, "faults", "INCONCLUSIVE",
            "the stale daemon did not run before start, or a look after start or after exit is missing or unreadable")
 
+def read(r):
+    """True where the harness's own log was read. A record with no ok wire call and no native call reports `readable` by
+    default, so the local log check also needs at least one native call."""
+    return dig(r.usage, "s7_readable") is True and (dig(r.usage, "s7_native") or 0) > 0
+
 def local(r, few):
     """C1 (no missed call) and C4 (record whole, server copy whole and readable)."""
     if not r.entries:
@@ -296,7 +301,7 @@ def local(r, few):
         r.flag(not r.check(cid), "C1", "INCONCLUSIVE", "%s not in the report" % cid)
     for cid in sorted(i for i in r.failed if i in C1_IDS or i.startswith("inv")):
         r.mark("C1", "FAIL", "%s fail: %s" % (cid, r.failed[cid]))
-    if dig(r.usage, "s7_readable") is True:  # the local log check counts only where that log was read
+    if read(r):  # the local log check counts only where that log was read
         tm, wk = r.check("threads_match"), r.check("wire_keeps_up")
         totals = dig(r.entry, "s6_log") == "totals" and wk == "skip"
         r.flag(tm not in ("pass", "named") or not (wk in ("pass", "named") or totals), "C1", "INCONCLUSIVE" if None in
@@ -307,11 +312,14 @@ def local(r, few):
     # expects a refused call, tls_refused GAPs (PRD-03 acceptance 7).
     code, named = dig(r.local, "s6_exit"), {k.split(":")[0] for k, n in r.gaps()[1].items() if n}
     allowed = expected_gaps(r)
-    explained = code == 1 and named and named <= allowed and not any(dig(e, "s6_off") for e in r.entries)
+    hist = dig(r.entry, "s6_history") or {}  # a gap over a named history orphan: C1's section 8 rule, not a fault row's
+    covered = r.check("history_complete") == "named" and 0 < sum(
+        n for k, n in r.gaps()[1].items() if n and k.split(":")[0] not in allowed) <= (hist.get("missing_call") or 0) + (hist.get("missing_text") or 0)
+    explained = code == 1 and named and (covered or named <= allowed and not any(dig(e, "s6_off") for e in r.entries))
     r.flag(r.meta.get("case") in ("direct", "gateway") and set(fault_kinds(r.meta)) <= set(CLEAN) and not r.failed and code != 0 and not explained,
            "C1", "FAIL", "verifier exit %s, the %s case expects 0 or only the GAPs %s" % (
                code, r.meta.get("case"), ", ".join(sorted(allowed))))
-    own = sorted(i for i in r.failed if i != "secrets")  # `secrets` is C3's
+    own = sorted(i for i in r.failed if i not in ("secrets", "history_complete"))  # `secrets` is C3's, `history_complete` C1's
     half = "local checks failed: %s" % ", ".join(own) if own else "no local check failed (keep from the settings)"
     r.flag(own, "C4", "FAIL", half)
     r.flag(r.meta.get("keep") is False, "C4", "FAIL", "parts pruned (keep false)")
@@ -388,7 +396,7 @@ def usage_checks(r, few):
     r.flag(any(not (dig(t, "t_wire") or dig(t, "t_native")) for t in threads), "C2", "FAIL",
            "a thread with no wire calls and no native stream")
     sub = r.check("subagents_present")
-    r.flag(dig(r.usage, "s7_readable") is True and sub not in ("pass", "named"), "C2", "FAIL" if sub else "INCONCLUSIVE",
+    r.flag(read(r) and sub not in ("pass", "named"), "C2", "FAIL" if sub else "INCONCLUSIVE",
            "subagents_present %s" % (sub or "not in the report"))
     if few:
         return r.mark("C5", "INCONCLUSIVE", "the record holds fewer than 2 model calls and pinned tunnels")
@@ -664,15 +672,18 @@ KIND_CHECKS = {"kill-watchdog": watchdog_row, "kill-both": both_row, "freeze": f
 
 def facts(r):
     u, e, m = r.usage or {}, r.entry, r.meta
-    read, hist, size = dig(u, "s7_readable") is True, dig(e, "s6_history") or {}, dig(e, "s6_bytes") or {}
+    hist, size = dig(e, "s6_history") or {}, dig(e, "s6_bytes") or {}
+    got = read(r)
     threads = [t for t in dig(u, "s7_threads") or [] if isinstance(t, dict)]
     rss = [p.get("rss_kb") for x in load(r.folder, "watch/procs.jsonl", 1) for p in x.get("procs") or []
            if isinstance(p, dict) and p.get("role") == "recorder" and isinstance(p.get("rss_kb"), (int, float))]
     alarm = [x.get("at") for x in load(r.folder, "watch/live.jsonl", 1) if x.get("result") == "fail" or x.get("fail")]
-    return {"wire_requests": dig(u, "s7_wire"), "harness_calls": dig(u, "s7_native") if read else None,
-            "harness_log": dig(e, "s6_log") if read else None, "local_log": "read" if read else "none",
+    return {"wire_requests": dig(u, "s7_wire"), "harness_calls": dig(u, "s7_native") if got else None,
+            "harness_log": dig(e, "s6_log") if got else None, "local_log": "read" if got else "none",
             "history": {"state": r.check("history_complete"), "answers": hist.get("checked"),
-                        "orphans": hist.get("missing_call"), "orphans_in_gaps": None},
+                        "orphans": hist.get("missing_call"),
+                        "orphans_in_gaps": hist.get("missing_call") if r.check("history_complete") == "named" else
+                        None if r.check("history_complete") == "fail" else 0},
             "threads": len(threads) if r.usage else dig(e, "s6_threads"), "native_files": dig(e, "s6_native"),
             "subagents": sum(1 for t in threads if dig(t, "t_parent")), "gaps": r.gaps()[1], "off_ms": dig(e, "s6_off"),
             "provider_errors": dict(kn for en in r.entries for kn in items(dig(en, "s6_errors"))),
