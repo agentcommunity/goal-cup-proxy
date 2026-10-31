@@ -17,11 +17,7 @@ key_file = "{home}/.env"
 key_line = "DEEPSEEK_API_KEY={key}"
 # Pad data for the dodger copy only (section 2): the DeepSeek entry calls https://api.deepseek.com.
 model_host = "api.deepseek.com"
-ready_text = ""
-pre_keys = ""
 exit_keys = '/quit\r'
-submit_delay = 2
-subagent_word = "subagent"
 keep_going = true
 
 [direct]

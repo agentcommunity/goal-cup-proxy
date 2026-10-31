@@ -17,8 +17,7 @@ NO_BUILD = "no goalcup build"
 BESIDE = ("spend", "seal-now", "watch")  # these run beside the other steps, so they never write state.json
 STEPS = ("setup", "start", "paste", "wait-calls", "look", "wait-recovery", "keep-going", "seal", "wait-upload", "verify",
          "wipe") + BESIDE
-TIMED = ("kill-recorder", "kill-watchdog-recover", "kill-watchdog", "kill-both", "freeze", "cut-worker", "route-drop",
-         "fd-limit")  # section 3.1, at <minute> after the paste; freeze, cut-worker and route-drop take +<minutes>
+TIMED = tuple(pc.FAULTS)  # section 3.1, at <minute> after the paste; pc.SPAN ones take +<minutes>, kill-both +upload
 USAGE = "usage: pad-run <run dir> " + "|".join([s + " N" * (s == "wait-calls") for s in STEPS] + [t + "@M" for t in TIMED]
                                                 + ["pre SCRIPT", "exec SCRIPT@M"])
 PROXY_VALUE = "127.0.0.1:9"  # the proxy setting exec/proxy-setting.sh writes (PAD_PROXY); start must not print it
@@ -294,7 +293,9 @@ class Run:
         lines += ["export %s=%s" % (k, shlex.quote(str(v))) for k, v in self.sec.get("env", {}).items()]
         lines += ["ulimit -Sn 256"] * self.has("fd-limit")  # section 3.1 fd-limit@0: the launch shell's soft limit
         if self.st.get("key_route") == "env":  # the value is never in argv: the launch shell reads the file
-            lines += ['export %s="$(cat %s)"' % (self.st["key_env"], shlex.quote(self.st["key_path"])), "rm -f " + shlex.quote(self.st["key_path"])]
+            lines += ['export %s="$(cat %s)"' % (self.st["key_env"], shlex.quote(self.st["key_path"]))]
+            lines += ["rm -f " + shlex.quote(self.st["key_path"])] * (not self.has("kill-both"))  # goalcup continue relaunches the harness
+            # from this shell's lines (kill_both), so a kill-both row keeps the 0600 copy; the seal's wipe removes keys/
         argv = [tool("goalcup"), "start", "--test", "--harness", s["harness_id"], "--prompt", self.path("prompt.txt")]
         hosts = s.get("hosts") or os.path.exists(self.path("hosts.toml")) and "hosts.toml"  # a pre script may write it
         argv += [a for k, v in (("connector", s.get("connector")), ("hosts", hosts)) if v for a in ("--" + k, self.path(v))]
@@ -394,6 +395,14 @@ class Run:
         if out:
             write(self.path("verify", out), r.stdout, 0o644)
         return r.returncode, loads(r.stdout)
+
+    def dump_lines(self, e, kind):
+        """The JSON lines of `goalcup-verify dump --kind <kind> <entry>` (gap and link lines hold no payload)."""
+        try:
+            r = sh(["nice", "-n", "19", tool("goalcup-verify"), "dump", "--kind", kind, e], timeout=max(1, self.left()), cwd=self.run)
+        except subprocess.TimeoutExpired:
+            return []
+        return [d for d in map(loads, r.stdout.splitlines()) if d]
 
     def look(self, _):
         """Section 4: the live line; a failed check, the `secrets` one included, is written for "first seen at T"."""
@@ -558,23 +567,24 @@ class Run:
         write(self.path("cont.sh"), "\n".join(head + [shlex.join([tool("goalcup"), cmd])]) + "\n", 0o700)
         sh(["tmux", "new-window", "-d", "-t", self.session, "-n", "cont", "bash " + shlex.quote(self.path("cont.sh"))])
         sh(["tmux", "set-option", "-w", "-t", self.session + ":cont", "remain-on-exit", "on"])
-        self.st["pane"] = self.session + ":cont"  # the watch and the panes follow that window
+        self.st["pane"] = self.session + ":cont"  # state.json: the panes and the watch follow that window
         new = wait(lambda: cmd == "upload" or self.entry() != e, 90, 2)
         self.fault(cmd, new_entry=bool(new))
         return "ok", "goalcup %s in pad:cont%s" % (cmd, "" if new else ", no new entry in 90 s")
 
     def tree(self, roots):
         """The pids of `roots` and every descendant, from /proc; never this process or its parents, tmux or pad-run."""
-        kids, up = {}, set()
+        kids, parent, up = {}, {}, set()
         for d in (int(x) for x in os.listdir("/proc") if x.isdigit()):
             try:
-                kids.setdefault(int(open("/proc/%d/stat" % d).read().rsplit(")", 1)[1].split()[1]), []).append(d)
+                parent[d] = int(open("/proc/%d/stat" % d).read().rsplit(")", 1)[1].split()[1])
+                kids.setdefault(parent[d], []).append(d)
             except (OSError, IndexError, ValueError):
                 pass
         me = os.getpid()
         while me > 1 and me not in up:
             up.add(me)
-            me = next((p for p, ks in kids.items() if me in ks), 0)
+            me = parent.get(me, 0)
         todo, got = [p for p in roots if type(p) is int], set()
         while todo:
             if (p := todo.pop()) not in got:
@@ -611,15 +621,23 @@ class Run:
             raise Step("FAIL", "no goalcup process to freeze")
         n = int(self.span or 10)
 
-        def send(sig):
+        def send(sig):  # -> how many processes took the signal
+            sent = 0
             for p in pids:
                 try:
                     os.kill(p, sig)
+                    sent += 1
                 except OSError:  # it left meanwhile
                     pass
-        self.hold(n, lambda: (self.fault("freeze", minute=m, minutes=n, pids=len(pids)), send(signal.SIGSTOP)),
-                  lambda: (send(signal.SIGCONT), self.fault("thaw")), "kill -CONT %s 2>/dev/null" % " ".join(map(str, pids)))
-        return "ok", "%d processes stopped %d min" % (len(pids), n)
+            return sent
+        stopped = []
+
+        def stop():  # the line says how many were stopped; none stopped is no freeze (check.py: not run)
+            stopped.append(send(signal.SIGSTOP))
+            self.fault("freeze", minute=m, minutes=n, pids=stopped[0])
+            return stopped[0] > 0
+        self.hold(n, stop, lambda: (send(signal.SIGCONT), self.fault("thaw")), "kill -CONT %s 2>/dev/null" % " ".join(map(str, pids)))
+        return ("ok", "%d processes stopped %d min" % (stopped[0], n)) if stopped and stopped[0] else ("skip", "not run: no process was stopped")
 
     def cut_worker(self, m):  # section 3.1, PRD-06 U3 and U5: one /etc/hosts line, so each lookup of the Worker is refused
         self.need("goalcup", started=True)
@@ -648,11 +666,16 @@ class Run:
             raise Step("skip", "not run: no default route")
         n, add = int(self.span or 1), [["sudo", "-n", "ip", "route", "add"] + r for r in routes]
         self.at(m)  # the conductor's calls failing meanwhile never stop its walk (pad); the backstop restores it
-        self.hold(n, lambda: (self.fault("route-drop", minute=m, minutes=n, routes=len(routes)),
-                              sh(["sudo", "-n", "ip", "route", "del", "default"])),
-                  lambda: ([sh(a) for a in add], self.fault("route-back", default=bool(sh(["ip", "route", "show", "default"]).stdout.strip()))),
+        took = []
+
+        def drop():  # the line comes after the del and says whether it took: the del exited 0 and no default route is left
+            took.append(sh(["sudo", "-n", "ip", "route", "del", "default"]).returncode == 0
+                        and not sh(["ip", "route", "show", "default"]).stdout.strip())
+            self.fault("route-drop", minute=m, minutes=n, routes=len(routes), took=took[0])
+            return took[0]
+        self.hold(n, drop, lambda: ([sh(a) for a in add], self.fault("route-back", default=bool(sh(["ip", "route", "show", "default"]).stdout.strip()))),
                   "; ".join(shlex.join(a) + " 2>/dev/null" for a in add))
-        return "ok", "default route gone %d min" % n
+        return ("ok", "default route gone %d min" % n) if took and took[0] else ("skip", "not run: drop did not take")
 
     def fd_limit(self, m):  # section 3.1: `ulimit -Sn 256` went into the launch line (start); read what the processes got
         self.need("goalcup", started=True)
@@ -763,6 +786,7 @@ class Run:
             if "pane" in go or last:
                 if self.known() is None:  # point 4: the known values are wiped, so no more panes
                     return "ok", "known values gone"
+                self.tmux = loads(path=self.path("state.json")).get("pane") or self.tmux  # kill-both moves it to pad:cont
                 self.pane(tag="w")
                 write(self.path("watch", "watch.json"), json.dumps({k: self.st[k] for k in ("panes", "screen_known")}), 0o644)
                 if self.s.get("server") != "off":
@@ -799,8 +823,9 @@ class Run:
         """Section 8 (the server's copy is the conductor's fetched/<entry>/, S13; the git scan needs a push token, none yet),
         each inside the step's limit (a timeout is an exit "timeout"); then meta-box.json, scan and tar, whatever happened."""
         self.stop_watch()  # the watch's last line first, so the tar holds a whole watch/
-        e, exits, result, note = self.entry(), {}, None, ""
-        if old := self.st.get("old"):  # kill-both: the checks run on the old entry only (the new one is not fetched)
+        e, exits, result, note, new = self.entry(), {}, None, "", None
+        if old := self.st.get("old"):  # kill-both: the row is the old entry's, and the entry goalcup continue started is checked too
+            new = (self.st["entry"], e) if self.st.get("entry") != old["entry"] else None
             self.st.update(old)
             e = os.path.join(self.env["GOALCUP_HOME"], "runs", old["run"], old["entry"])
         self.st["screen_known"] = self.st.get("screen_known", 0) + (loads(path=self.path("watch", "watch.json")).get("screen_known") or 0)
@@ -808,14 +833,25 @@ class Run:
             self.daemon_check(True)  # inside the try: meta-box.json, the out scan and the tar follow whatever happens
             self.need("goalcup-verify", entry=True)
             shutil.copy(os.path.join(e, "status.json"), self.path("status.json"))
-            f, on = os.path.join("fetched", self.st["entry"]), self.s["server"] != "off"
+            on = self.s["server"] != "off"
+            f = os.path.join("fetched", self.st["entry"])
             got = on and os.path.isfile(self.path(f, "rec.gcr.zst"))
             note = "; no fetched copy" if on and not got else ""
-            for name, argv in [("check-local", ["check", "--json", "--known", "known", "--harness-files", "harness-files.json", e])] + [
-                    ("check-server", ["check", "--json", "--server", f, "--local", e, "--known", "known"])] * got + [
-                    ("secrets", ["secrets", "--known", "known", e] + [f] * got + ["status.json"]),
-                    ("secrets-plain", ["secrets", "--known", "known-plain", e] + [f] * got)] + [  # C5 is the server copy's
-                    ("usage", ["usage", f if got else e, "--json", "--out", os.path.join("verify", "usage")])] * (got or not on):
+            cmds, more = pc.verify_cmds(e, f if got else None, True), []
+            if new:  # the entry goalcup continue started: the same check (and server compare), and its paths in both scans
+                fn = os.path.join("fetched", new[0])
+                more = [new[1]] + [fn] * (on and os.path.isfile(self.path(fn, "rec.gcr.zst")))
+                cmds += [(n + "-new", a) for n, a in pc.verify_cmds(new[1], fn if len(more) > 1 else None) if n.startswith("check")]
+            if self.has("route-drop"):  # check.py: when decode_failed gaps started
+                write(self.path("verify", "gaps.json"), json.dumps([{k: g.get(k) for k in ("reason", "start", "end")}
+                                                                    for g in self.dump_lines(e, "gap")]), 0o644)
+            if self.has("kill-watchdog"):  # check.py: the seal's time is the record's last LINK (nothing follows the seal's)
+                write(self.path("verify", "seal.json"), json.dumps(([{}] + self.dump_lines(e, "link"))[-1]), 0o644)
+            for name, argv in cmds + [("secrets-plain", ["secrets", "--known", "known-plain", e] + [f] * got)]:
+                if name == "usage" and on and not got:  # C5 is the server copy's
+                    continue
+                if name.startswith("secrets"):
+                    argv = argv + more + ["status.json"] * (name == "secrets")
                 exits[name] = self.verify_cmd(argv, None if name == "usage" else name + ".json")[0]
         except Step as stop:
             result = stop.args
@@ -901,20 +937,19 @@ class Run:
 
 
 def parse(words):
-    """-> (step, argument, minute) or None. A timed step is `kill-recorder@M`, with `+N` minutes on freeze, cut-worker and
-    route-drop and `+upload` on kill-both (then the argument is the suffix); `pre SCRIPT`, `exec SCRIPT@M` and
+    """-> (step, argument, minute) or None. A timed step is `kill-recorder@M`, with `+N` minutes on pc.SPAN kinds and `+upload`
+    on kill-both (then the argument is the suffix); `pre SCRIPT`, `exec SCRIPT@M` and
     `wait-calls N` take a word; every other step stands alone. The minute is a string; the argument may be None."""
     kind, at, m = (words[0] if words else "").partition("@")
-    arg, good = words[1] if len(words) == 2 else None, True
+    arg = words[1] if len(words) == 2 else None
     if kind == "exec" and arg:
         arg, at, m = arg.partition("@")
-    if kind in TIMED:
-        m, plus, arg = m.partition("+")
-        good = not plus or (arg.isdigit() and kind in ("freeze", "cut-worker", "route-drop")) or (arg == "upload" and kind == "kill-both")
+    if kind in TIMED:  # pad checked the suffix (parse_steps) before it wrote settings.json
+        m, _, arg = m.partition("+")
         arg = arg or None
     script, minute = arg and re.fullmatch(r"[A-Za-z0-9._-]+", arg), re.fullmatch(r"\d+(\.\d+)?", m)
     if kind in TIMED:
-        ok = len(words) == 1 and minute and good
+        ok = len(words) == 1 and minute
     elif kind == "exec":
         ok = script and at and minute
     elif kind == "pre":
@@ -946,7 +981,10 @@ def main(argv):
             run.fault(kind, result=result)
         write(run.path("state.json"), json.dumps(run.st))
     ids = dict({k: run.st.get(k) for k in ("entry", "run")}, code=getattr(run, "code", None)) if run else {}  # code: start's only
-    ids.update(run.st.get("old") or {} if run else {})  # after kill-both the row is the old entry's
+    old = run.st.get("old") or {} if run else {}  # after kill-both the row is the old entry's; the conductor fetches both
+    if old and run.st.get("entry") not in (None, old.get("entry")):
+        ids["new_entry"] = run.st["entry"]
+    ids.update(old)
     print("PADSTEP " + json.dumps(dict({k: v for k, v in ids.items() if v}, result=result, saw=saw, **extra)))
     return 0
 

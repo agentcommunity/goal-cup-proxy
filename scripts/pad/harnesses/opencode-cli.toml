@@ -18,11 +18,7 @@ key_file = "{home}/.local/share/opencode/auth.json"
 key_line = '{"deepseek": {"type": "api", "key": "{key}"}}'
 # Pad data for the dodger copy only (section 2): provider deepseek calls https://api.deepseek.com.
 model_host = "api.deepseek.com"
-ready_text = ""
-pre_keys = ""
 exit_keys = '/exit\r'
-submit_delay = 2
-subagent_word = "subagent"
 keep_going = true
 
 [direct]

@@ -6,6 +6,9 @@ K8 are real runs, not here. Fixtures, under scripts/pad/fixtures/, each a synthe
   <name>-part/     an entry folder (rec/ and the native files)      <name>-fetched/  fetch-run's fetched/<entry>/
   k2-part, k2-fetched (PRD-08 check_run1_shape.rs, GOALCUP_FIXTURES_OUT); k7-part, k7-fetched, the clean pair
   that K6, K9 and K10 tamper with; k11-a, k11-b, k11-c (part only), k11-d and k11-d-fetched (PRD-09 history).
+Not yet exercised: no writer of these fixtures is on the integration branch (PRD-08's tests do not write
+k2-part/k2-fetched through GOALCUP_FIXTURES_OUT, PRD-09 has not written the K11 folders), so every control is "not run",
+the exit is 3 and pad_trusted_at stays null. The CONTROLS expectations below have never met a fixture.
 A control whose fixtures are absent is "not run". Exit 0: every control ran as wanted; 1: one differed; 3: none
 differed but one did not run, so a missing fixture never reads as trusted. C3 is never wanted here: the setup
 script's planted values (K5) and the box's other scans are not part of an offline fold. Writes pad-out/selftest.json.
@@ -64,33 +67,30 @@ def ids(result, *names):
 
 K2 = ("gap_has_end", "streams_closed", "server_counts_match", "wire_keeps_up", "threads_match", "subagents_present")
 ALLC = dict.fromkeys(("C1", "C2", "C4", "C5", "C6"), "PASS")
-# label, part, fetched, wanted checks, wanted finding ids, tampers (fetch edit, status count, after the verifier)
+# label, part, fetched, wanted checks, wanted finding ids, tampers (fetch edit, status count, after the verifier).
+# K6c wants C6 too: section 8's C6 compares fetch.json's model_requests, so a raised count fails C4 and C6.
 CONTROLS = [
     ("K2", "k2-part", "k2-fetched", {"C1": "FAIL", "C2": "FAIL", "C4": "FAIL", "C6": "FAIL"}, ids("fail", *K2),
      {"count": lambda n: 1736}),  # the fake status.json: run 1's finish line
     ("K6a", "k7-part", "k7-fetched", {"C4": "FAIL"}, {}, {"edit": flip}),
     ("K6b", "k7-part", "k7-fetched", {"C4": "FAIL"}, {}, {"edit": fetch_edit(drop)}),
-    ("K6c", "k7-part", "k7-fetched", {"C4": "FAIL", "C6": "FAIL"}, {},  # C6 too: C6 reads fetch.json's count as well
+    ("K6c", "k7-part", "k7-fetched", {"C4": "FAIL", "C6": "FAIL"}, {},
      {"edit": fetch_edit(lambda d, f: d.update(model_requests=d["model_requests"] + 1))}),
     ("K7", "k7-part", "k7-fetched", ALLC, {}, {}),
     ("K9", "k7-part", "k7-fetched", {"C6": "FAIL"}, {}, {"count": lambda n: n + 1}),
     ("K10", "k7-part", "k7-fetched", {"C5": "FAIL"}, {}, {"after": empty_usage}),
-    ("K11a", "k11-a", None, {"C1": "FAIL"}, ids("fail", "history_complete"), {}),
-    ("K11b", "k11-b", None, {"C1": "PASS"}, {}, {}),
+    ("K11a", "k11-a", None, {"C1": "FAIL"}, ids("fail", "history_complete"), {"orphans": (1, 0)}),  # one orphan, not in a gap
+    ("K11b", "k11-b", None, {"C1": "PASS"}, {}, {"orphans": (0, 1)}),  # the orphan sits in a gap and is counted there
     ("K11c", "k11-c", None, {"C1": "PASS"}, ids("skip", "history_complete"), {}),
     ("K11d", "k11-d", "k11-d-fetched", ALLC, ids("skip", "threads_match", "wire_keeps_up"), {}),
 ]
 
 
 def verify(run, tool, fetched):
-    """The commands of `pad-run <dir> verify` (check-local, check-server, secrets, usage), spelled out: pad-run's own
+    """The commands of `pad-run <dir> verify` (check.py's verify_cmds, without the harness-files manifest): pad-run's own
     state (settings, a started harness, the watch) is more than an offline fold has."""
-    rel, out = os.path.join("fetched", ENTRY), {}
-    cmds = [("check-local", ["check", "--json", "--known", "known", ENTRY])]
-    cmds += [("check-server", ["check", "--json", "--server", rel, "--local", ENTRY, "--known", "known"])] * bool(fetched)
-    cmds += [("secrets", ["secrets", "--known", "known", ENTRY] + [rel] * bool(fetched)),
-             ("usage", ["usage", rel if fetched else ENTRY, "--json", "--out", "verify/usage"])]
-    for name, argv in cmds:
+    out = {}
+    for name, argv in pc.verify_cmds(ENTRY, os.path.join("fetched", ENTRY) if fetched else None):
         r = subprocess.run([tool] + argv, cwd=run, capture_output=True, text=True, timeout=900)
         out[name] = r.returncode
         if name != "usage":
@@ -127,12 +127,15 @@ def run_control(part, fetched, mods, tool):
         return pc.load(run, "row.json"), found
 
 
-def compare(row, found, want, finds):
+def compare(row, found, want, finds, orphans=None):
     got = row["checks"]
     bad = ["%s %s, wanted %s" % (c, got[c], w) for c, w in want.items() if got[c] != w]
     bad += ["%s FAIL, none wanted" % c for c in pc.CHECKS if c not in want and got[c] == "FAIL"]  # C3 too: never wanted
     bad += ["%s %s, wanted %s" % (i, pc.worst(found, i).get("result"), w) for i, w in finds.items()
             if pc.worst(found, i).get("result") != w]
+    n, g = (row["facts"]["history"][k] for k in ("orphans", "orphans_in_gaps"))  # K11: the history check's own numbers; the
+    if orphans and (n != orphans[0] or g not in (None, orphans[1])):  # in-gap number is None until PRD-08 or PRD-09 reports it
+        bad.append("history orphans %s and in gaps %s, wanted %s and %s" % (n, g, *orphans))
     return bad
 
 
@@ -149,7 +152,7 @@ def main():
             continue
         try:
             row, found = run_control(part, fetched, mods, tool)
-            bad = compare(row, found, want, finds)
+            bad = compare(row, found, want, finds, mods.get("orphans"))
             saw = ", ".join("%s %s" % kv for kv in sorted(row["checks"].items())) + "; failing ids: " + ", ".join(
                 sorted({e for e in (c.get("id") for x in found for c in pc.dig(x, "s6_checks") or [] if c.get("result") == "fail") if e}))
         except NotRun as x:

@@ -200,11 +200,13 @@ class BoxHalf(unittest.TestCase):
             self.assertNotIn(form, safe)
         self.assertIn("[known:2]", safe)
 
-    def test_env_key_launch_holds_no_value(self):
+    def launch(self, steps=()):
+        """launch.sh as start writes it for an env-route key, and the argv start passed to its fake tmux."""
         run = self.enterContext(tempfile.TemporaryDirectory())
         os.makedirs(os.path.join(run, "keys"))
         key = key_file(os.path.join(run, "keys"))
-        for name, doc in (("settings.json", {"server": "off", "harness_id": "claude-code-cli", "keep": True, "harness": {}}),
+        for name, doc in (("settings.json", {"server": "off", "harness_id": "claude-code-cli", "keep": True, "harness": {},
+                                             "steps": list(steps)}),
                           ("state.json", {"key_route": "env", "key_env": "ANTHROPIC_API_KEY", "key_path": key})):
             with open(os.path.join(run, name), "w") as f:
                 json.dump(doc, f)
@@ -215,8 +217,16 @@ class BoxHalf(unittest.TestCase):
             with self.assertRaises(padrun.Step):  # the fake tmux never shows "Recording": the step ends after the launch
                 padrun.Run(run, "start").start(None)
         with open(os.path.join(run, "launch.sh")) as f:
-            self.assertNotIn("PADSENTINEL", f.read())
+            text = f.read()
+        self.assertNotIn("PADSENTINEL", text)
         self.assertFalse([a for argv in argvs for a in argv if "PADSENTINEL" in a])
+        return text
+
+    def test_env_key_launch_holds_no_value(self):
+        self.assertIn("rm -f", self.launch())
+
+    def test_kill_both_keeps_the_env_key_copy_for_continue(self):  # cont.sh is launch.sh less its last line: the key must still be there
+        self.assertNotIn("rm -f", self.launch(["kill-both@5"]))
 
     def test_exec_env_keeps_no_key(self):  # section 3.1: /proc/<pid>/environ holds the harness's keys
         environ = b"\0".join([b"HTTPS_PROXY=http://127.0.0.1:4100", b"SSL_CERT_FILE=/run/ca.pem", b"PAD_CA=/run/ca2.pem",
@@ -305,6 +315,64 @@ class CrashRows(unittest.TestCase):
         early = [{"kind": "seal-now", "exit": 0, "at": "2026-10-30T10:01:00+00:00"}]
         got = self.row("kill-recorder", None, pid=None, code=0, recovery=(("skip", "10:02"),), over_cap=True, more=early)
         self.assertEqual((got["result"] != "FAIL", got["faults"]), (True, "INCONCLUSIVE"))
+
+
+class FaultRows(unittest.TestCase):
+    """The rows the record decides, one case each: a row passes only on evidence that the fault took and held (point 3)."""
+
+    SAMPLES = [{"at": "2026-10-30T10:%02d:00+00:00" % (i * 8), "status": {"written": {"model_requests": 2 + 3 * i}}} for i in (0, 1)]
+
+    def row(self, kinds, faults, gaps=(), counts=None, seal="harness_exit", **files):
+        kinds = [kinds] if isinstance(kinds, str) else kinds
+        entry = {"entry": "e1", "seal_reason": seal, "counts": {"model_requests": 5, "gaps": counts or {}}, "checks": [
+            {"id": "gap_has_end", "result": "pass"}, {"id": "history_complete", "result": "pass"},
+            {"id": "listed_hosts_decrypted", "result": "pass"}, {"id": "inv6", "result": "named", "facts": {"gaps": list(gaps)}}]}
+        use = {"tokens": {"merged": {"input": 9, "output": 9}}, "coverage": {"unattributed": 0},
+               "threads": [{"parent": None, "models": {"m": 3}, "wire_calls": 3}, {"parent": "t0", "models": {"m": 2}, "wire_calls": 2}]}
+        meta = {"connector": "codex-cli", "case": "direct", "variant": kinds, "server": "off", "keep": True,
+                "commits_since_start": 1, "entry": "e1", "started": "2026-10-30T10:00:00+00:00"}
+        lines = [dict(f, at="2026-10-30T10:%s+00:00" % f["at"]) for f in faults]
+        return evaluate({"meta.json": meta, "verify/check-local.json": {"exit": 1, "entries": [entry]},
+                         "verify/usage/e1.json": use, "watch/status.jsonl": self.SAMPLES, "watch/faults.jsonl": lines,
+                         **files})["faults"]
+
+    def test_a2_recorder_kill_then_recover_has_two_gaps(self):  # PRD-16 A2: kill-recorder@30 and kill-watchdog-recover@45
+        plain = {"start": "2026-10-30T10:00:30Z", "end": "2026-10-30T10:00:31Z"}
+        own = {"cause": "watchdog_lost", "start": "2026-10-30T10:02:00Z", "end": "2026-10-30T10:03:00Z"}
+        faults = [{"kind": k, "exit": 0, "said": w, "at": at} for k, w, at in (
+            ("recover", check.RECOVER[0], "02:30"), ("recover", check.RECOVER[1], "04:00"), ("status", check.STATUS_RECOVER, "03:30"))]
+        faults += [{"kind": k, "pid": 9, "at": t} for k, t in (("kill-recorder", "00:30"), ("kill-watchdog", "02:00"), ("kill-recorder", "02:00"))]
+        faults += [{"kind": "wait-recovery", "result": "ok", "at": "01:00"}]
+        both = ["kill-recorder@0", "kill-watchdog-recover@3"]
+        self.assertEqual(self.row(both, faults, [plain, own], counts={"recorder_down": 2}), "PASS")
+        self.assertEqual(self.row(both, faults, [dict(plain, cause="null_mode"), own], counts={"recorder_down": 2}), "FAIL")
+        self.assertEqual(self.row(both, faults, [own], counts={"recorder_down": 1}), "FAIL")  # the plain kill left no gap
+
+    def test_kill_both_abandoned_gap_may_start_a_minute_before_the_kill(self):  # it starts at the last LINK (PRD-01 section 10)
+        both = [{"kind": "kill-both", "pid": 3, "watchdog": 4, "at": "05:00"}]
+        for start, want in (("10:04:20", "PASS"), ("10:02:00", "FAIL")):
+            gap = {"cause": "abandoned", "start": "2026-10-30T%sZ" % start, "end": "2026-10-30T10:06:00Z"}
+            self.assertEqual(self.row("kill-both@5", both, [gap], counts={"recorder_down": 1}, seal="recovered"), want, start)
+
+    def test_kill_watchdog_seal_is_timed_from_the_record(self):  # not from status.json, which is rewritten until the box ends
+        faults = [{"kind": "kill-watchdog", "pid": 9, "at": "02:00"}, {"kind": "harness-exit", "seen": True, "at": "05:00"}]
+        for sealed, want in (("2026-10-30T10:05:20Z", "PASS"), ("2026-10-30T10:09:00Z", "FAIL")):
+            self.assertEqual(self.row("kill-watchdog@2", faults, **{"verify/seal.json": {"wall": sealed},
+                                                                     "status.json": {"updated": "2026-10-30T10:09:00Z"}}), want)
+        self.assertEqual(self.row("kill-watchdog@2", faults), "INCONCLUSIVE")  # no seal time read
+
+    def test_route_drop_needs_a_drop_that_took_and_names_loss_only_inside_it(self):
+        def drop(took):
+            return [{"kind": "route-drop", "took": took, "at": "03:00"}, {"kind": "route-back", "default": True, "at": "04:00"}]
+        decode = {"decode_failed": 1}
+        for start, want in (("10:03:30", "PASS"), ("10:12:00", "FAIL")):
+            lost = [{"reason": "decode_failed", "start": "2026-10-30T%sZ" % start, "end": "2026-10-30T%sZ" % start}]
+            self.assertEqual(self.row("route-drop@3", drop(True), counts=decode, **{"verify/gaps.json": lost}), want, start)
+        self.assertEqual(self.row("route-drop@3", drop(False)), "INCONCLUSIVE")
+
+    def test_freeze_that_stopped_nothing_is_not_a_pass(self):
+        for pids, want in ((3, "PASS"), (0, "INCONCLUSIVE")):
+            self.assertEqual(self.row("freeze@2", [{"kind": "freeze", "pids": pids, "at": "02:00"}, {"kind": "thaw", "at": "12:00"}]), want)
 
 
 class SecretCheck(unittest.TestCase):

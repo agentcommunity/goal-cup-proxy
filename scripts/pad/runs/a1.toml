@@ -1,7 +1,8 @@
 # Acceptance A1 (PRD-16 section 9): Codex, direct, OpenAI key alone, two hours of the payments prompt, "keep going" after
 # 3 idle minutes. The prompt is the pad's `full` one; run 1's prompt file replaces it only if the owner supplies one
 # (then: prompt = "<path to that file>"), and the comparison with run 1 is by load until then.
-# Run 1's cheapest model and low reasoning setting are Codex's own settings, not set by this file.
+# Run 1's cheapest model and low reasoning setting come from harnesses/direct/codex-config.toml (the cheapest OpenAI model in
+# pad.toml [rates], low effort). If run 1 used another model, change that file before this run so every number compares.
 harness = "codex-cli"
 key = "openai"
 case = "direct"

@@ -5,7 +5,7 @@
 # https://geminicli.com/docs/reference/configuration/ (model.name, security.auth.selectedType, GEMINI_CLI_TRUST_WORKSPACE),
 # https://geminicli.com/docs/cli/trusted-folders/ (the folder trust dialog and GEMINI_CLI_TRUST_WORKSPACE),
 # https://geminicli.com/docs/reference/keyboard-shortcuts/ (Ctrl+Y toggles YOLO), https://geminicli.com/docs/reference/commands/
-# (/quit), https://ai.google.dev/gemini-api/docs/models (gemini-4-argon), https://vercel.com/docs/ai-gateway/coding-agents
+# (/quit), https://ai.google.dev/gemini-api/docs/models, https://vercel.com/docs/ai-gateway/coding-agents
 # (no Gemini CLI page: no [gateway] table, so the gateway case is n/a).
 # Read from the docs, not run against a live harness (no key enters a build box): the key route, the trust bypass, Ctrl+Y.
 version = "0.66.0"
@@ -21,8 +21,6 @@ model_host = "generativelanguage.googleapis.com"
 # The tool-approval default is a per-session choice: Ctrl+Y turns YOLO on, as a participant would (keyboard-shortcuts page).
 pre_keys = '\031'
 exit_keys = '/quit\r'
-submit_delay = 2
-subagent_word = "subagent"
 keep_going = true
 
 [direct]

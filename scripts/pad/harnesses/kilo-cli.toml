@@ -18,8 +18,6 @@ key_env = "DEEPSEEK_API_KEY"
 # Pad data for the dodger copy only (section 2): provider deepseek calls https://api.deepseek.com.
 model_host = "api.deepseek.com"
 exit_keys = '/exit\r'
-submit_delay = 2
-subagent_word = "subagent"
 keep_going = true
 
 [direct]

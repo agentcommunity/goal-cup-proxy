@@ -23,8 +23,6 @@ key_env = "COPILOT_PROVIDER_API_KEY"
 model_host = "api.deepseek.com"
 pre_keys = '\r'
 exit_keys = '/exit\r'
-submit_delay = 2
-subagent_word = "subagent"
 keep_going = true
 
 [direct]

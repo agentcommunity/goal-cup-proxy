@@ -17,11 +17,7 @@ key_route = "login"
 login = "bash -lc 'openclaw plugins install @openclaw/deepseek-provider && umask 077 && mkdir -p \"$OPENCLAW_HOME/.openclaw\" && { printf DEEPSEEK_API_KEY=; cat; } > \"$OPENCLAW_HOME/.openclaw/.env\"'"
 # Pad data for the dodger copy only (section 2): provider deepseek calls https://api.deepseek.com.
 model_host = "api.deepseek.com"
-ready_text = ""
-pre_keys = ""
 exit_keys = '/exit\r'
-submit_delay = 2
-subagent_word = "subagent"
 keep_going = true
 # No daemon: PRD-11 names none for OpenClaw. Its subagents need a Gateway that 1.0 does not start (PRD-11 ledger OW-10).
 
