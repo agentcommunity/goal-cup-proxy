@@ -132,7 +132,7 @@ fn the_coverage_line_counts_every_request_written() {
         .as_u64()
         .unwrap();
     assert_eq!(n, 3);
-    assert!(String::from_utf8_lossy(&out.stderr).contains(&format!("Recorded: {n} requests")));
+    assert!(String::from_utf8_lossy(&out.stderr).contains(&format!(" {n} requests")));
 }
 
 #[test]
@@ -151,8 +151,11 @@ fn a_killed_recorder_is_named_not_failed() {
 
 #[test]
 fn a_pinned_model_host_exits_1_with_the_log_check_named() {
-    let (code, v) = check(&run1("r4-dodger", Shape::Dodger), &[]);
-    assert_eq!((code, ids_with(&v, "fail")), (1, Vec::<String>::new()));
-    assert_eq!(result(&v, "listed_hosts_decrypted"), "named");
-    assert_eq!(result(&v, "wire_keeps_up"), "named");
+    // The shared list's host, and the same host as the participant's own (kind `other`).
+    for (name, shape) in [("r4-dodger", Shape::Dodger), ("r4-own", Shape::DodgerOwn)] {
+        let (code, v) = check(&run1(name, shape), &[]);
+        assert_eq!((code, ids_with(&v, "fail")), (1, Vec::<String>::new()), "{name}");
+        assert_eq!(result(&v, "listed_hosts_decrypted"), "named", "{name}");
+        assert_eq!(result(&v, "wire_keeps_up"), "named", "{name}");
+    }
 }

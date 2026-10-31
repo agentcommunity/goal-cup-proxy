@@ -51,15 +51,21 @@ fn parent(read: bool, wire: u64) -> CallTable {
     t
 }
 
-/// One check's result; the cover is (from, to) in minutes after `T0`.
-fn go(t: &CallTable, cover: Option<(u64, u64)>, id: &str) -> &'static str {
+/// One check's result; the cover is (from, to) in minutes after `T0`, from a recorder-down
+/// GAP when `down` is set and from a conn GAP of a model host otherwise.
+fn go_by(t: &CallTable, cover: Option<(u64, u64)>, down: bool, id: &str) -> &'static str {
     let at = |m: u64| T0 + m * MIN;
     let c = cover.map(|(a, b)| Cover {
         start_wall: at(a),
         end_wall: at(b),
+        down,
     });
     let (checks, _) = judge(t, c.as_slice());
     checks.iter().find(|x| x.id == id).unwrap().result.name()
+}
+
+fn go(t: &CallTable, cover: Option<(u64, u64)>, id: &str) -> &'static str {
+    go_by(t, cover, true, id)
 }
 
 #[test]
@@ -91,6 +97,15 @@ fn legs_grade_the_excess_and_a_gap_names_it() {
     for (t, cover, id, want) in cases {
         assert_eq!(go(&t, cover, id), want, "{id}");
     }
+}
+
+#[test]
+fn a_conn_gap_does_not_name_a_subagent_with_neither_leg() {
+    // The child has no wire call and no native stream: a loss on one connection cannot explain
+    // it, only a recorder that was down can (point 2).
+    let t = parent(false, 0);
+    assert_eq!(go_by(&t, Some((0, 1)), false, K[2]), "fail");
+    assert_eq!(go_by(&t, Some((0, 1)), true, K[2]), "named");
 }
 
 #[test]

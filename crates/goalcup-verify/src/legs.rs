@@ -1,12 +1,10 @@
 //! Legs (PRD-08 section 3): `wire_keeps_up`, `threads_match` and `subagents_present` over U1's call
-//! table, the provider error counts and the legs part of the coverage line. [`Legs`] takes the
-//! records of integrity's one pass (one table row per call); [`judge`] is pure over the table and
-//! the covers, which honesty collects. It reads `native_form`, threads and `children`, and names
-//! no harness.
+//! table, the provider error counts and the legs part of the coverage line. Integrity's one pass
+//! feeds U1's `Calls` (one table row per call); [`judge`] is pure over the table and the covers,
+//! which honesty collects. It reads `native_form`, threads and `children`, and names no harness.
 
 use crate::integrity::{Check, Res};
-use crate::usage::{CallRow, CallTable, Calls, Kind, Leg, NativeForm, Outcome, Reason, Shape};
-use goalcup_format::Item;
+use crate::usage::{CallRow, CallTable, Kind, Leg, NativeForm, Outcome, Reason, Shape};
 use goalcup_format::dump::wall;
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
@@ -19,11 +17,14 @@ const NOT_READ: &str = "the harness's own log is not read";
 const UNREAD: &str = "could not read the harness's own log";
 
 /// Wall time (ns since the epoch) in which a loss is named: a recorder-down GAP, or a conn GAP
-/// of a connection to a model host (kind provider or gateway). Honesty collects them.
+/// of a connection to a model host (a listed host of kind provider or gateway, or one the
+/// participant or config named). Honesty collects them.
 #[derive(Clone, Copy, Debug)]
 pub struct Cover {
     pub start_wall: u64,
     pub end_wall: u64,
+    /// A recorder-down GAP: the only cause that removes both legs of a subagent.
+    pub down: bool,
 }
 
 pub struct Out {
@@ -32,25 +33,8 @@ pub struct Out {
     pub threads: Vec<Value>,
     /// Wire calls the provider refused.
     pub refused: u64,
-    /// The legs part of the coverage line; it never claims everything was recorded.
+    /// The harness-log sentence of the coverage line; it never claims everything was recorded.
     pub coverage: String,
-}
-
-/// The collector held by integrity's pass: feeds U1.
-#[derive(Default)]
-pub struct Legs {
-    calls: Calls,
-}
-
-impl Legs {
-    pub(crate) fn item(&mut self, it: &Item) {
-        self.calls.push(&it.rec);
-    }
-
-    /// The three checks and the rest, given the covers honesty gathered.
-    pub fn finish(self, covers: &[Cover]) -> (Vec<Check>, Out) {
-        judge(&self.calls.finish(), covers)
-    }
 }
 
 /// What the harness's own log gave, as the report's `harness_log`.
@@ -148,7 +132,7 @@ pub fn judge(t: &CallTable, covers: &[Cover]) -> (Vec<Check>, Out) {
         provider_errors: errors(t),
         threads,
         refused,
-        coverage: format!("History check: skipped, not built in this slice. {line}"),
+        coverage: line,
     };
     (vec![keeps, matched, subagents(&x)], out)
 }
@@ -451,8 +435,11 @@ fn subagents(x: &Ctx) -> Check {
         .copied()
         .filter(|k| !seen.contains(k.as_str()))
         .collect();
-    // A child never seen has no time, so any cover in the entry names it.
-    let res = grade(!gone.is_empty(), !gone.is_empty() && x.covers.is_empty());
+    // A child with neither leg has no time and no connection: only the recorder being down
+    // removes both legs, so only a recorder-down cover names it. A conn GAP explains wire calls
+    // of its own connection, not a native stream.
+    let down = x.covers.iter().any(|c| c.down);
+    let res = grade(!gone.is_empty(), !gone.is_empty() && !down);
     let first = gone.first().map(|k| k.as_str());
     let why = format!(
         "{} of {} subagents have no call on either leg; first: thread {}",

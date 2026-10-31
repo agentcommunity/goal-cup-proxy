@@ -15,6 +15,8 @@ pub enum Shape {
     Killed,
     /// Clean, but the model host is a pinned tunnel: no wire call at all.
     Dodger,
+    /// Dodger, with the host named by the participant (kind `other`), not the shared list.
+    DodgerOwn,
 }
 
 const IDS: [&str; 5] = [
@@ -60,10 +62,10 @@ fn post(e: &mut Entry, id: &str, k: u64, limited: bool) {
     e.end(c, done, 0, json!({"up": 900, "down": 900}));
 }
 
-/// A tunnel to a host of `kind`; only its GAP says it was there. It lasts `ms` and advances the
+/// A tunnel to a host of `kind` from the `listed` source; only its GAP says it was there. It lasts `ms` and advances the
 /// clock, unless `back` is set: then its GAP reaches back `ms` from now and nothing advances.
-fn tunnel(e: &mut Entry, host: &str, kind: &str, ms: u64, back: bool) {
-    let meta = json!({"host": host, "port": 443, "mode": "tunnel", "listed": "shared",
+fn tunnel(e: &mut Entry, host: &str, listed: &str, kind: &str, ms: u64, back: bool) {
+    let meta = json!({"host": host, "port": 443, "mode": "tunnel", "listed": listed,
         "kind": kind, "reason": "pinned", "alpn": null, "tls": null,
         "fingerprint": "0123456789abcdef"});
     let s = e.open(StreamKind::Conn, 0, 0, meta);
@@ -141,6 +143,7 @@ pub fn run1(name: &str, shape: Shape) -> PathBuf {
     use Shape::*;
     let mut e = Entry::new(name);
     let lossy = matches!(shape, Lossy | Vendor);
+    let dodger = matches!(shape, Dodger | DodgerOwn);
     let n = if lossy { 4 } else { 5 };
     let mut rolls: Vec<Roll> = IDS[..n].iter().map(Roll::new).collect();
     for r in &mut rolls {
@@ -157,14 +160,18 @@ pub fn run1(name: &str, shape: Shape) -> PathBuf {
     let mut t0 = 0;
     for m in 1..=120u64 {
         let down = shape == Killed && (60..70).contains(&m);
-        let on = !down && (m <= 49 || !lossy) && shape != Dodger;
+        let on = !down && (m <= 49 || !lossy) && !dodger;
         if m == 60 && shape == Killed {
             rolls.iter().for_each(|r| r.end(&mut e));
             t0 = e.clock.ns;
             e.crash("killed", 600_000);
             rolls.iter_mut().for_each(|r| r.open(&mut e));
-        } else if shape == Dodger {
-            tunnel(&mut e, HOST, "provider", 58_000, false);
+        } else if dodger {
+            let (listed, kind) = match shape {
+                DodgerOwn => ("participant", "other"),
+                _ => ("shared", "provider"),
+            };
+            tunnel(&mut e, HOST, listed, kind, 58_000, false);
         } else if !down {
             e.idle(59_000);
         }
@@ -198,12 +205,17 @@ pub fn run1(name: &str, shape: Shape) -> PathBuf {
         r.end(&mut e);
     }
     if shape == Vendor {
-        tunnel(&mut e, "telemetry.example.test", "vendor", 6_900_000, true);
+        tunnel(&mut e, "telemetry.example.test", "shared", "vendor", 6_900_000, true);
     }
     let dir = e.seal();
     let edit = |v: &mut Value| {
         v["connector"] = "codex-cli".into();
-        v["hosts"]["shared"][0]["pinned"] = (shape == Dodger).into();
+        v["hosts"]["shared"][0]["pinned"] = dodger.into();
+        if shape == DodgerOwn {
+            // The host moves from the shared list to the participant's own.
+            let own = json!([{"host": HOST, "kind": "other", "pinned": true}]);
+            v["hosts"] = json!({"shared": [], "participant": own});
+        }
     };
     mutate(&dir, None, |r| {
         for n in 0..=usize::from(shape == Killed) {

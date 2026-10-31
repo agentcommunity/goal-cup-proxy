@@ -19,7 +19,8 @@ struct Conn {
     fp: Option<String>,
     tunnel: bool,
     listed: bool,
-    /// A listed host of kind provider or gateway: a GAP on this connection covers harness calls.
+    /// A model host: listed with kind provider or gateway, or named by the participant or the
+    /// config. A GAP on this connection covers harness calls.
     model: bool,
     /// A tunnel to a host that earlier finished a decrypted connection with this fingerprint.
     after_trust: bool,
@@ -81,8 +82,9 @@ pub struct Honesty {
     subs: HashMap<u64, Sub>,
     /// Fail-closed MASK bytes per open stream.
     masks: HashMap<u64, u64>,
-    /// The `start` event's host list: exact names and `*.suffix` patterns, with their kinds.
-    on_list: Vec<(String, String)>,
+    /// The `start` event's host list: exact names and `*.suffix` patterns, with their kinds and
+    /// the source that listed them.
+    on_list: Vec<(String, String, String)>,
     /// Wall time in which a loss is named, for the legs checks.
     pub(crate) covers: Vec<Cover>,
     trusted: HashSet<(String, String)>,
@@ -176,6 +178,7 @@ impl Honesty {
                 .then_some(Cover {
                     start_wall: *start_wall,
                     end_wall: *end_wall,
+                    down: false,
                 });
                 self.gap(*sid, *reason, *lost, &tail, at, span);
             }
@@ -201,12 +204,15 @@ impl Honesty {
         } else if is("ev", "start")
             && let Some(Value::Object(by_source)) = e.get("hosts")
         {
-            let all = by_source.values().filter_map(Value::as_array).flatten();
-            let names = all.filter_map(|h| {
+            let all = by_source
+                .iter()
+                .filter_map(|(src, hs)| Some((src, hs.as_array()?)))
+                .flat_map(|(src, hs)| hs.iter().map(move |h| (src, h)));
+            let names = all.filter_map(|(src, h)| {
                 let kind = h.get("kind").and_then(Value::as_str);
-                Some((h.get("host")?.as_str()?, kind.unwrap_or_default()))
+                Some((h.get("host")?.as_str()?, kind.unwrap_or_default(), src))
             });
-            self.on_list = names.map(|(h, k)| (h.into(), k.into())).collect();
+            self.on_list = (names.map(|(h, k, s)| (h.into(), k.into(), s.clone()))).collect();
         }
     }
 
@@ -222,23 +228,29 @@ impl Honesty {
         }
     }
 
-    /// The kind the `start` event's host list gives `host` (empty when it says none), or `None`
-    /// when the list does not hold it.
-    fn on_list(&self, host: &str) -> Option<&str> {
-        let hit = |(p, _): &&(String, String)| {
+    /// The kind and source the `start` event's host list gives `host` (the kind is empty when it
+    /// says none), or `None` when the list does not hold it.
+    fn list_kind(&self, host: &str) -> Option<(&str, &str)> {
+        let hit = |(p, ..): &&(String, String, String)| {
             let suffix = p.strip_prefix('*');
             p == host || suffix.is_some_and(|s| host.len() > s.len() && host.ends_with(s))
         };
-        self.on_list.iter().find(hit).map(|(_, k)| k.as_str())
+        (self.on_list.iter().find(hit)).map(|(_, k, s)| (k.as_str(), s.as_str()))
     }
 
     fn open(&mut self, sid: u64, kind: StreamKind, conn: u64, m: &Map<String, Value>) {
         let s = |k: &str| m.get(k).and_then(Value::as_str);
         if kind == StreamKind::Conn {
             let host = s("host").unwrap_or_default();
-            let (on, listed) = (self.on_list(host), s("listed").is_some());
-            let kind = s("kind").or(on).unwrap_or_default();
-            let model = (listed || on.is_some()) && matches!(kind, "provider" | "gateway");
+            let (on, listed) = (self.list_kind(host), s("listed").is_some());
+            let (on_kind, on_src) = on.unwrap_or_default();
+            let kind = s("kind").unwrap_or(on_kind);
+            let src = s("listed").unwrap_or(on_src);
+            // A host the participant or the config listed is the harness's model host by their
+            // own word, whatever kind it carries (PRD-01 section 7: always `other`).
+            let model = (listed || on.is_some())
+                && (matches!(kind, "provider" | "gateway")
+                    || matches!(src, "participant" | "config"));
             let mut c = Conn {
                 host: host.into(),
                 reason: s("reason").unwrap_or("unknown").into(),
@@ -290,7 +302,7 @@ impl Honesty {
         span: Option<Cover>,
     ) {
         if sid == 0 && reason == GapReason::RecorderDown {
-            self.covers.extend(span);
+            self.covers.extend(span.map(|c| Cover { down: true, ..c }));
         }
         // A GAP on a stream of a connection names only its own bytes, so it never waives the
         // `conn_bytes` fail rule for other requests. A WebSocket stream has no END `wire`: the
@@ -312,7 +324,8 @@ impl Honesty {
         c.gap_named |= names_tunnel(&c.reason, reason);
         c.quiet |= tail.get("alert") == Some(&Value::Bool(false));
         // A conn GAP names the harness calls of a model host: a decrypted connection's, or a
-        // tunnel's own (PRD-08 section 3). Not a stream GAP, not a vendor's.
+        // tunnel's own (PRD-08 section 3). Not a stream GAP, not a vendor's. It names wire calls
+        // of that connection, never a subagent with no stream at all (`Cover::down`).
         if c.model
             && reason != GapReason::AfterStop
             && (!c.tunnel || names_tunnel(&c.reason, reason))

@@ -252,7 +252,7 @@ pub fn check(e: &Entry, now_ns: Option<u64>, want: &HashSet<u64>) -> Outcome {
     }
     p.finish(meter.open_frame.get(), now_ns, e);
     let covers = std::mem::take(&mut p.h.covers);
-    let (legs_checks, legs) = std::mem::take(&mut p.l).finish(&covers);
+    let (legs_checks, legs) = crate::legs::judge(&p.l.finish(), &covers);
     p.checks.extend(std::mem::take(&mut p.h).finish());
     p.checks.extend(legs_checks);
     Outcome {
@@ -277,7 +277,7 @@ pub fn check(e: &Entry, now_ns: Option<u64>, want: &HashSet<u64>) -> Outcome {
 struct Pass {
     checks: Vec<Check>,
     h: Honesty,
-    l: crate::legs::Legs,
+    l: crate::usage::Calls,
     entry: Option<String>,
     start: Option<Map<String, Value>>,
     mask_rules: Vec<String>,
@@ -395,7 +395,7 @@ impl Pass {
             _ => Map::new(),
         };
         self.h.item(it, at, &ev);
-        self.l.item(it);
+        self.l.push(&it.rec);
         let ev_name = ev
             .get("ev")
             .and_then(Value::as_str)

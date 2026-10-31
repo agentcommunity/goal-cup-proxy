@@ -121,7 +121,8 @@ fn text(name: &str, o: &Outcome, checks: &[Check]) -> String {
         t += "  The entry is not sealed.\n";
     }
     t += &format!(
-        "Recorded: {} requests, {} refused by the provider. {} Recording off: {} times, {} s.\n",
+        "Recorded: {} requests, {} refused by the provider. History check: skipped, {NOT_BUILT}. \
+         {} Recording off: {} times, {} s.\n",
         requests(c),
         o.legs.refused,
         o.legs.coverage,
