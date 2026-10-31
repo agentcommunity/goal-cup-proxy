@@ -2258,3 +2258,15 @@ kept and now cites BUILD-PROMPT section 5, since B3 no longer carries it.
 - Box results as reported: 45 of 45 upload tests, 38 upload binary tests three more times, null-mode
   stress with faults all sealed; clippy and fmt green at the fixer commit.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+
+### 2026-10-31, replan after PRD-15 slice 12 (merge 89549774)
+
+- **Docs are not code and have no budget row.** `wc -l` at 89549774 (information only, not counted against
+  the Rust totals): participant guide 483, RULES 457, RECORD-FORMAT 538, OPERATING 260, README 247. The
+  guide is 33 over its 450 slice ceiling, accepted (PRD-15 note).
+- **Final-pass additions for the link check:** (1) `HARNESS-SETUP.md` moves to `docs/archive/` only after
+  PRD-11's sheet refresh has repointed the seven sheets that link it; if it has not, the page stays and is listed as open.
+  (2) Heading anchors into `PARTICIPANT-GUIDE.md` are not checked by `check-links.py`; grep them once
+  (`LOCAL-RESEARCH-HANDOFF.md:97` has `#5-your-run`, the heading is `#6-your-run`).
+- No locked ledger item is touched and no owner question comes from this slice.
