@@ -432,6 +432,23 @@ impl Entry {
         });
     }
 
+    /// A metadata GAP as PRD-02's mask worker writes it: wall times 0, extent on mono only.
+    pub fn meta_gap(&mut self, sid: u64, tail: Value) {
+        self.clock.ns += MS;
+        let end = self.clock.now();
+        self.put(Record::Gap {
+            sid,
+            reason: GapReason::MaskFailed,
+            start_wall: 0,
+            end_wall: 0,
+            start_mono: end.mono_ns - 1,
+            end_mono: end.mono_ns,
+            off: 0,
+            lost: 1,
+            tail: tail.to_string().into_bytes(),
+        });
+    }
+
     pub fn conn(&mut self) -> u64 {
         let meta = json!({"host": HOST, "port": 443, "mode": "decrypt", "listed": "shared",
             "kind": "provider", "reason": null, "alpn": "http/1.1", "tls": "1.3",
