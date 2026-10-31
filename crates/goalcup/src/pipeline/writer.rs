@@ -5,23 +5,22 @@
 //! 60 s, then a LINK. Before each LINK the clock and suspend events, then this boot's COUNT JSON
 //! at that `seq` in `counts.jsonl`. `fdatasync` at most every 5 s, after a LINK, then the
 //! durable point, `counts.jsonl` compacted and `cursors.json`, then rotation when due. A write
-//! error logs its kind and exits 74; a panic exits 70.
-
-// `run_recorder` starts it in the next slice; until then only `Recorder::real_for_tests` does.
-#![cfg_attr(not(feature = "test-hooks"), allow(dead_code))]
+//! error logs its kind and exits 74; a panic exits 70. At the seal's final marker it writes the
+//! seal's records and its LINK (PRD-02 section 11 steps 5 and 6) and ends.
 
 use super::clock::{self, Drift, Mono, now_pair, wall_at};
 use super::counts::{self, Counter, CountsLog, EntryTotals};
 use super::cursors::{Cursors, DurablePos, NativeCursor, SnapshotCursor};
-use super::out::{Out, Source};
-use super::status::{Board, Off};
+use super::item::{CONTROL_HELD, SealEnd, Sealed};
+use super::out::{Out, Source, ToWriter};
+use super::status::{Board, Off, SealStatus};
 use super::{ExitOnPanic, OpenFlags, Recorder, Sid, low_priority, secure};
 use crate::cli::log::{self, Fact};
-use goalcup_format::{EndReason, FLAG_FIN, PartOptions, PartWriter, Record, StreamKind};
+use goalcup_format::{EndReason, FLAG_FIN, GapReason, PartOptions, PartWriter, Record, StreamKind};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::io;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::thread::JoinHandle;
@@ -73,8 +72,13 @@ pub(crate) fn part_options(window_log: u32) -> PartOptions {
     opts
 }
 
-/// Starts the writer. It runs until the channel from the mask worker closes.
-pub(crate) fn spawn(rec: Recorder, rx: mpsc::Receiver<Out>, start: WriterStart) -> JoinHandle<()> {
+/// Starts the writer. It runs until the seal's final marker or until the channel from the mask
+/// worker closes.
+pub(crate) fn spawn(
+    rec: Recorder,
+    rx: mpsc::Receiver<ToWriter>,
+    start: WriterStart,
+) -> JoinHandle<()> {
     std::thread::Builder::new()
         .name("goalcup-writer".into())
         .spawn(move || {
@@ -94,7 +98,16 @@ pub(crate) fn spawn(rec: Recorder, rx: mpsc::Receiver<Out>, start: WriterStart) 
                     }
                 }
                 match rx.recv_timeout(Duration::from_secs(1)) {
-                    Ok(out) => w.write(out),
+                    Ok(ToWriter::Rec(out)) => w.write(out),
+                    Ok(ToWriter::Mark(m)) => {
+                        w.rec.release(CONTROL_HELD);
+                        let Some(end) = m.last else {
+                            let _ = m.reply.send(None);
+                            continue;
+                        };
+                        let _ = m.reply.send(Some(w.seal(*end)));
+                        return;
+                    }
                     Err(RecvTimeoutError::Timeout) => {}
                     Err(RecvTimeoutError::Disconnected) => return,
                 }
@@ -125,7 +138,8 @@ struct Track {
 
 struct Writer {
     rec: Recorder,
-    w: PartWriter,
+    /// Taken by the seal.
+    w: Option<PartWriter>,
     dir: PathBuf,
     seq: u64,
     log: CountsLog,
@@ -154,7 +168,7 @@ impl Writer {
         rec.set_boot(boot);
         let cursors = rec.native_cursors();
         let mut w = Writer {
-            w: st.part,
+            w: Some(st.part),
             dir: st.entry_dir,
             seq: st.next_seq,
             log: st.log,
@@ -194,7 +208,7 @@ impl Writer {
             *start_wall = wall_at(Mono(*start_mono), now);
             *end_wall = wall_at(Mono(*end_mono), now);
         }
-        if let Err(e) = self.w.write(&r) {
+        if let Err(e) = self.part().write(&r) {
             self.fail(&e);
         }
         self.counter.written(&r, out.flags, out.host.as_deref());
@@ -301,7 +315,7 @@ impl Writer {
             t: t.ns(),
             json: serde_json::to_vec(v).unwrap_or_default(),
         };
-        if let Err(e) = self.w.write(&r) {
+        if let Err(e) = self.part().write(&r) {
             self.fail(&e);
         }
         self.dirty = true;
@@ -317,7 +331,7 @@ impl Writer {
             self.last_count = now;
             self.link();
         } else if (self.dirty && since(self.last_link) >= LINK_NS)
-            || self.w.raw_since_link() >= LINK_RAW
+            || self.part().raw_since_link() >= LINK_RAW
         {
             self.link();
         }
@@ -351,15 +365,27 @@ impl Writer {
         }
         let count = self.count();
         self.append(self.seq, &count);
-        match self.w.link(np) {
+        match self.part().link(np) {
             Ok(line) => self.seq = line.seq + 1,
             Err(e) => self.fail(&e),
         }
+        let t = self.totals(&count);
+        self.linked(t);
+        (self.dirty, self.unsynced, self.last_link) = (false, true, Mono(np.mono_ns));
+    }
+
+    /// The entry totals at a LINK whose COUNT is `count`.
+    fn totals(&self, count: &Value) -> EntryTotals {
         let mut c = self.counter.counts();
         c.held_peak = count["held_peak"].as_u64().unwrap_or_default();
         let mut t = self.base.clone();
         t.counts.add(&c);
         t.off_spans = t.off_spans.saturating_add(self.counter.off_spans());
+        t
+    }
+
+    /// `t` is the totals at the LINK just written: for `counts()`, `live()` and the durable point.
+    fn linked(&mut self, t: EntryTotals) {
         self.rec.set_off(Off {
             spans: t.off_spans,
             ms: t.counts.off_ms,
@@ -367,7 +393,62 @@ impl Writer {
         });
         self.rec.set_counts(t.counts.clone());
         self.at_link = t;
-        (self.dirty, self.unsynced, self.last_link) = (false, true, Mono(np.mono_ns));
+    }
+
+    /// The seal's records (PRD-02 section 11 steps 5 and 6; the mask worker wrote `END
+    /// cut_at_seal` for what was open just before): the `after_stop` GAP when bytes came after the
+    /// stop, COUNT, the seal event, then `PartWriter::seal` (LINK, frame end, `E` line, both
+    /// files synced). The durable point is published from that line, then `counts.jsonl`
+    /// compacted and `cursors.json` written, so neither runs ahead of the LINK.
+    fn seal(mut self, end: SealEnd) -> Sealed {
+        let now = self.rec.now();
+        if end.after_bytes > 0 {
+            let r = Record::Gap {
+                sid: 0,
+                reason: GapReason::AfterStop,
+                start_wall: 0,
+                end_wall: 0,
+                start_mono: end.stop.ns(),
+                end_mono: now.max(Mono(end.stop.ns() + 1)).ns(),
+                off: 0,
+                lost: end.after_bytes.saturating_add(1),
+                tail: serde_json::to_vec(&end.tail).unwrap_or_default(),
+            };
+            self.write(Out::new(r, 0));
+        }
+        let count = self.count();
+        self.event(now, &count);
+        let totals = self.totals(&count);
+        let mut ev = end.event;
+        ev["boots"] = (self.boot + 1).into();
+        ev["totals"] = serde_json::to_value(&totals.counts).unwrap_or_default();
+        self.event(now, &ev);
+        self.append(self.seq, &count);
+        let part = self.w.take().map(|w| w.seal(now_pair()));
+        let d = match part {
+            Some(Ok(d)) => d,
+            Some(Err(e)) => self.fail(&e),
+            None => self.fail(&io::Error::other("sealed twice")),
+        };
+        self.seq = d.line.seq + 1;
+        self.linked(totals.clone());
+        self.publish(Some(d));
+        let seal = SealStatus {
+            reason: end.reason,
+            workspace_head: end.workspace_head,
+        };
+        self.board.sealed(seal, &totals);
+        Sealed {
+            totals,
+            masker: end.masker,
+        }
+    }
+
+    fn part(&mut self) -> &mut PartWriter {
+        match &mut self.w {
+            Some(w) => w,
+            None => fail(&self.dir, &io::Error::other("write after the seal")),
+        }
     }
 
     fn append(&mut self, seq: u64, count: &Value) {
@@ -385,12 +466,12 @@ impl Writer {
     /// `seq` and compaction keeps the latest per boot. A `PartWriter::rotation_due` seam would
     /// let it go.
     fn sync(&mut self) {
-        let d = self.w.sync().unwrap_or_else(|e| self.fail(&e));
+        let d = self.part().sync().unwrap_or_else(|e| self.fail(&e));
         self.publish(d);
         let count = self.count();
         self.append(self.seq, &count);
         let np = now_pair();
-        match self.w.rotate_if_due(np) {
+        match self.part().rotate_if_due(np) {
             Ok(Some(d)) => {
                 self.seq = d.line.seq + 1;
                 self.publish(Some(d));
@@ -422,14 +503,18 @@ impl Writer {
         self.rec.set_cursors(self.cursors.clone());
     }
 
-    /// A write error: one `goalcup.log` line with its kind, then exit 74. The next boot's
-    /// `recorder_down` gap names the span.
     fn fail(&self, e: &io::Error) -> ! {
-        log::line(&self.dir, "write_error", &[("io", Fact::Io(e.kind()))]);
-        secure::exit(EXIT_WRITE_ERROR, "write_error");
-        // Another thread is already ending the process.
-        loop {
-            std::thread::park();
-        }
+        fail(&self.dir, e)
+    }
+}
+
+/// A write error: one `goalcup.log` line with its kind, then exit 74. The next boot's
+/// `recorder_down` gap names the span.
+fn fail(dir: &Path, e: &io::Error) -> ! {
+    log::line(dir, "write_error", &[("io", Fact::Io(e.kind()))]);
+    secure::exit(EXIT_WRITE_ERROR, "write_error");
+    // Another thread is already ending the process.
+    loop {
+        std::thread::park();
     }
 }

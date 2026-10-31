@@ -1,17 +1,20 @@
 //! The one message from a `StreamHandle` or `Recorder::event` to the mask worker (PRD-02
 //! sections 2 to 4). Times stay boot time; the writer maps them to wall time at write.
 
+use super::counts::EntryTotals;
 use super::{Mono, OpenFlags, Sid};
+use crate::mask::Masker;
+use crate::watchdog::SealReason;
 use bytes::Bytes;
 use goalcup_format::{EndReason, GapReason, StreamKind};
 use serde_json::Value;
+use std::sync::mpsc;
 
 /// What every item but DATA counts in `held` for its fixed fields; its JSON counts on top
 /// ([`json_held`]), so control items fill `held` about as they fill memory and the stall exit
-/// sees them. Each costs about 140 bytes more (its channel slot and `serde_json`'s map node,
-/// review BRK9-N1), so the 2 x soft mark fires at about 1.3 times the memory it names. Kept at
-/// 256 because `Live::held_bytes` in `status.rs` documents that figure.
-pub(crate) const CONTROL_HELD: u64 = 256;
+/// sees them: 256 for the item and about 140 for its channel slot and `serde_json`'s map node
+/// (review BRK9-N1), so the 2 x soft mark fires near the memory it names.
+pub(crate) const CONTROL_HELD: u64 = 384;
 
 /// The WebSocket facts of one DATA piece: the message's opcode on every piece, `fin` on its last.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -20,8 +23,6 @@ pub(crate) struct Ws {
     pub fin: bool,
 }
 
-// The mask worker reads every field; `run_recorder` starts it in the next slice.
-#[cfg_attr(not(feature = "test-hooks"), allow(dead_code))]
 #[derive(Debug)]
 pub(crate) enum Item {
     Open {
@@ -63,6 +64,42 @@ pub(crate) enum Item {
         t: Mono,
         ev: Value,
     },
+    /// A seal marker (PRD-02 section 11): it rides behind every item sent before it.
+    Mark(Mark),
+}
+
+/// A seal marker. The mask worker forwards it after the records of every item before it, and the
+/// writer answers on `reply` once it reaches it: the first marker (`last` None) once every wire
+/// record before the stop is written, the final one with the seal's totals once the seal's LINK
+/// is synced and published.
+#[derive(Debug)]
+pub(crate) struct Mark {
+    pub last: Option<Box<SealEnd>>,
+    pub reply: mpsc::Sender<Option<Sealed>>,
+}
+
+/// The final marker's facts (PRD-02 section 11 steps 5 and 6).
+#[derive(Debug)]
+pub(crate) struct SealEnd {
+    pub reason: SealReason,
+    pub workspace_head: Option<String>,
+    /// The seal event without `boots` and `totals`, which the writer adds.
+    pub event: Value,
+    /// The wire stop: the `after_stop` GAP's start.
+    pub stop: Mono,
+    /// Bytes offered after the stop, and the raw hosts of `conn` streams opened after it.
+    pub after_bytes: u64,
+    pub hosts: Vec<String>,
+    /// Set by the mask worker: the `after_stop` GAP tail with its hosts masked, and a masker for
+    /// the hosts `after_seal` names later.
+    pub tail: Option<Value>,
+    pub masker: Option<Masker>,
+}
+
+/// The writer's answer to the final marker.
+pub(crate) struct Sealed {
+    pub totals: EntryTotals,
+    pub masker: Option<Masker>,
 }
 
 /// What every DATA piece counts in `held` beyond its bytes: its queue slot and its `Bytes`
@@ -96,6 +133,7 @@ impl Item {
             Item::Gap { tail, .. } | Item::End { tail, .. } => {
                 CONTROL_HELD + tail.as_ref().map_or(0, json_held)
             }
+            Item::Mark(_) => CONTROL_HELD,
         }
     }
 }
