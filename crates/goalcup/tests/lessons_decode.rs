@@ -3,7 +3,8 @@
 //! hands out decoded pieces and answers a `Step`, and the caller writes GAP `decode_failed` for
 //! `Step::Fault`. So "the records" here are the pieces (the DATA prefix) and the step (the GAP).
 //! PRD-03's own cases (each coding decodes, an unknown coding, a window over the room) are in
-//! `proxy_decode.rs`; the bomb (D7) and the fake client (D8) wait for the HTTP/1 parser.
+//! `proxy_decode.rs`; the fake client (D8) waits for its own owner. The bomb (D7) is the last test here, through
+//! `proxy::serve`.
 //!
 //! D6's GAP and END records are asserted through `proxy::serve` in the last test. The coded
 //! bytes of D1 to D4 stay pieces-only here; LESSONS.md keeps L-D1 to L-D4 open for that half.
@@ -16,10 +17,10 @@ use common::recorder::{data_of, ends, gaps, opens};
 use common::upstream::{Answer, Body, Script, Upstream};
 use flate2::write::{DeflateEncoder, GzEncoder, ZlibEncoder};
 use flate2::{Compression, GzBuilder};
-use goalcup::pipeline::{Call, EndReason, GapReason, Recorder, StreamKind};
+use goalcup::pipeline::{Call, Calls, EndReason, GapReason, Recorder, Sid, StreamKind};
 use goalcup::proxy::decode::{BodyDecoder, Step, parse_codings};
+use goalcup_format::Record;
 use std::io::Write;
-use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 
 macro_rules! encoder {
     ($name:ident, $enc:ident) => {
@@ -392,16 +393,10 @@ fn corrupt_tail_keeps_the_prefix() {
     );
 }
 
-/// D6 through `proxy::serve`: a `br` reply whose tail is corrupt keeps the decoded prefix as DATA,
-/// then one GAP `decode_failed` and an END `decode_error`; the client still gets every byte the
-/// upstream sent, the bytes after the corruption included.
-#[tokio::test]
-async fn corrupt_br_tail_through_serve_keeps_prefix_gap_end_and_relays_everything() {
-    let plain = body(2000); // two meta-blocks, so the first is out before the corrupt header
-    let mut wire = brotli_stored(&plain);
-    *wire.last_mut().unwrap() = 0xfe; // the closing meta-block header becomes invalid
-    wire.extend_from_slice(b"bytes after the corruption");
-    let head = vec![("content-encoding".to_string(), "br".to_string())];
+/// A GET for `coding`-coded `wire` through the real `proxy::serve` recording into `recorder`;
+/// the client's bytes, read until the client holds all of `wire`.
+async fn serve_world(wire: Vec<u8>, coding: &str, recorder: Recorder) -> Vec<u8> {
+    let head = vec![("content-encoding".to_string(), coding.to_string())];
     let answer = Answer::Http {
         status: 200,
         headers: head,
@@ -415,35 +410,38 @@ async fn corrupt_br_tail_through_serve_keeps_prefix_gap_end_and_relays_everythin
         }
         .with_tls(&["api.openai.com"], &[common::pki::HTTP11]),
     );
-    let dir = tempfile::tempdir().unwrap();
-    let roots = up.pki().roots_file(dir.path()).display().to_string();
-    let env = [
-        (
-            "GOALCUP_TEST_UPSTREAM",
-            format!("api.openai.com={}", up.addr()),
-        ),
-        ("GOALCUP_TEST_EXTRA_ROOTS", roots),
-    ];
-    let (_h, addr, calls, ca) = proxy_fixtures::proxy(proxy_fixtures::HOSTS, &env);
-    let name = rustls::pki_types::ServerName::try_from("api.openai.com").unwrap();
-    let tcp = proxy_fixtures::through(addr, "api.openai.com:443").await;
-    let mut t = proxy_fixtures::trusting_run_ca(&ca, &[b"http/1.1"])
-        .connect(name, tcp)
-        .await
-        .unwrap();
-    t.write_all(b"GET /v1/models HTTP/1.1\r\nHost: api.openai.com\r\nAccept-Encoding: br\r\n\r\n")
-        .await
-        .unwrap();
-    let mut got = Vec::new();
+    let (_h, addr, ca) = proxy_fixtures::proxy_to(recorder, up.addr(), up.pki());
+    let req = format!(
+        "GET /v1/models HTTP/1.1\r\nHost: api.openai.com\r\nAccept-Encoding: {coding}\r\n\r\n"
+    );
+    let mut t = proxy_fixtures::tls_client(addr, &ca, &[b"http/1.1"], req.as_bytes()).await;
+    proxy_fixtures::read_to(&mut t, |got| got.ends_with(&wire)).await
+}
+
+/// The END reason of the response stream `resp`, waited for.
+async fn end_of(calls: &Calls, resp: Sid) -> EndReason {
     common::within_async(common::HANG, async {
-        while !got.ends_with(&wire) {
-            let mut b = [0u8; 4096];
-            let n = t.read(&mut b).await.unwrap();
-            assert!(n > 0, "the reply ended early");
-            got.extend_from_slice(&b[..n]);
+        loop {
+            if let Some(e) = ends(calls).into_iter().find(|e| e.0 == resp) {
+                return e.1;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
         }
     })
-    .await;
+    .await
+}
+
+/// D6 through `proxy::serve`: a `br` reply whose tail is corrupt keeps the decoded prefix as DATA,
+/// then one GAP `decode_failed` and an END `decode_error`; the client still gets every byte the
+/// upstream sent, the bytes after the corruption included.
+#[tokio::test]
+async fn corrupt_br_tail_through_serve_keeps_prefix_gap_end_and_relays_everything() {
+    let plain = body(2000); // two meta-blocks, so the first is out before the corrupt header
+    let mut wire = brotli_stored(&plain);
+    *wire.last_mut().unwrap() = 0xfe; // the closing meta-block header becomes invalid
+    wire.extend_from_slice(b"bytes after the corruption");
+    let (recorder, calls) = Recorder::for_tests(ROOM);
+    serve_world(wire, "br", recorder).await;
 
     let [(resp, ..)] = opens(&calls)
         .into_iter()
@@ -451,15 +449,7 @@ async fn corrupt_br_tail_through_serve_keeps_prefix_gap_end_and_relays_everythin
         .collect::<Vec<_>>()
         .try_into()
         .unwrap();
-    let ended = common::within_async(common::HANG, async {
-        loop {
-            if let Some(e) = ends(&calls).into_iter().find(|e| e.0 == resp) {
-                return e.1;
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-        }
-    })
-    .await;
+    let ended = end_of(&calls, resp).await;
     let kept = data_of(&calls, resp);
     assert!(
         !kept.is_empty() && plain.starts_with(&kept),
@@ -474,4 +464,84 @@ async fn corrupt_br_tail_through_serve_keeps_prefix_gap_end_and_relays_everythin
         .collect();
     assert_eq!(reasons, [GapReason::DecodeFailed]);
     assert_eq!(ended, EndReason::DecodeError);
+}
+
+/// D7 through `proxy::serve`, on the real pipeline with a soft guard of 1 MiB: a few hundred KiB
+/// of gzip that inflate to tens of MiB. The client gets the coded bytes unchanged; the record
+/// holds a decoded prefix in DATA pieces of at most 32 KiB and `memory_guard` GAPs, and the
+/// prefix plus what the GAPs say they lost is the whole decoded body; the END is written.
+#[tokio::test]
+async fn bomb_relays_on_in_bounded_pieces() {
+    const DECODED: usize = 48 << 20;
+    let mut z = GzEncoder::new(Vec::new(), Compression::best());
+    let zeros = vec![0u8; 1 << 20];
+    for _ in 0..DECODED >> 20 {
+        z.write_all(&zeros).unwrap();
+    }
+    let wire = z.finish().unwrap();
+    assert!(
+        wire.len() < 1 << 20,
+        "a bomb is small coded: {}",
+        wire.len()
+    );
+    let entry = common::recorder::entry_dir();
+    // SAFETY: nextest runs each test in its own process; this runs before the recorder reads it.
+    unsafe { std::env::set_var("GOALCUP_TEST_GUARD_MB", "1") };
+    let recorder = common::recorder::real(entry.path());
+    let got = serve_world(wire.clone(), "gzip", recorder).await;
+    assert!(
+        got.ends_with(&wire),
+        "the client gets the coded bytes unchanged and in full"
+    );
+
+    let resp = |recs: &[Record]| {
+        recs.iter().find_map(|r| match r {
+            Record::Open {
+                sid,
+                skind: StreamKind::HttpResp,
+                ..
+            } => Some(*sid),
+            _ => None,
+        })
+    };
+    let recs = proxy_fixtures::wait_records(entry.path(), |recs| {
+        resp(recs).is_some_and(|sid| {
+            recs.iter()
+                .any(|r| matches!(r, Record::End { sid: s, .. } if *s == sid))
+        })
+    })
+    .await;
+    let resp = resp(&recs).unwrap();
+    let (mut prefix, mut guards, mut lost) = (0usize, 0usize, 0usize);
+    let mut end = None;
+    for r in &recs {
+        match r {
+            Record::Data { sid, bytes, .. } if *sid == resp => {
+                assert!(bytes.len() <= PIECE, "a piece over the bound");
+                prefix += bytes.len();
+            }
+            Record::Gap {
+                sid,
+                reason,
+                lost: n,
+                ..
+            } if *sid == resp => {
+                assert_eq!(*reason, GapReason::MemoryGuard);
+                guards += 1;
+                lost += (*n).checked_sub(1).expect("the guard knows what it lost") as usize;
+            }
+            Record::End {
+                sid, reason, seen, ..
+            } if *sid == resp => end = Some((*reason, *seen)),
+            _ => {}
+        }
+    }
+    assert!(prefix > 0, "a decoded prefix is recorded");
+    assert!(guards > 0, "the guard dropped pieces and said so");
+    assert_eq!(
+        prefix + lost,
+        DECODED,
+        "the prefix and the GAPs are the whole body"
+    );
+    assert_eq!(end, Some((EndReason::Complete, DECODED as u64)));
 }
