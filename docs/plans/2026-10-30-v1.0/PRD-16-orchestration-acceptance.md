@@ -2310,3 +2310,8 @@ kept and now cites BUILD-PROMPT section 5, since B3 no longer carries it.
   and Pad result lines after phase 5. The three review nits are cosmetic and ride the next PRD-15 touch. Nothing
   here changes the build order, a seam or the phase 2 and 3 checks. No locked ledger item is touched and no owner
   question comes from this slice.
+
+### 31 Oct, after PRD-08 slice 7 (merge f72ab236)
+
+- **Size report, PRD-08** (`wc -l` on integration at f72ab236): src outside `usage/` is 4,177 lines (history 637, honesty 497, input 198, integrity 1,027, legs 550, lib 17, main 212, report 151, secrets 528, server 201, timeline 159) against the 1,400 row in PRD-00 "Size budget". `usage/` is PRD-09's and is 2,861. Verifier tests outside fixtures are about 4,500 lines (usage_run1 676, common 1,168) against the 1,100 row. Both are well over; the earlier PRD-08 size decision lines stand and this stays an owner-estimate matter. No new cut is asked.
+- Two PRD-02 record shapes are now accepted, so real entries pass inv3/inv4/inv12/inv7 and the recount. Two small nits (timeline `off_ms` rounding, two clones) wait for the next PRD-08 touch. Nothing here changes the build order, a seam or a phase check. No locked ledger item is touched and no owner question comes from this slice.

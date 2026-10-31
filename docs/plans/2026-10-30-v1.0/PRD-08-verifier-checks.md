@@ -1181,3 +1181,9 @@ PRD-02's mask worker writes two record shapes PRD-01's text does not list yet; t
   `Streams` now lives in `timeline.rs` beside the tally that fills it. The crate total outside
   `usage/` is about 4,160 src lines against the 1,400 row in PRD-00, an owner-estimate matter for
   the replan. Anything past these needs a new decision line.
+
+### 2026-10-31, replan after slice 7 (merge f72ab236)
+
+- Slice 7 accepts both PRD-02 record shapes (the mask_failed GAP with lost 1 and a meta tail; the empty DATA with fin). The PRD-01 text still needs the two shapes noted; that stays with PRD-01 and PRD-02.
+- Open nits, both inside PRD-08 and none moves a seam: (1) timeline `off_ms` floors each head, tail and 10-minute piece on its own, so the timeline sum can sit a few ms under `counts.off_ms` for real nanosecond walls. Fix: carry nanoseconds in the tally and divide once per row at output; also correct the module comment in `timeline.rs` lines 3-4 to say the head goes to bucket 0 and the tail to the last bucket. (2) `Out.covers` and `o.timeline` are cloned in `report.rs`; moving them removes two clones, optional.
+- Do these in the next PRD-08 touch only. A test should use non-ms-aligned span times. No locked ledger item is touched and no owner question comes from this slice.
