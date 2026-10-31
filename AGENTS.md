@@ -3,8 +3,8 @@
 This repository holds Goal Cup Proxy (`goalcup`), the recorder for Goal Cup runs. One process on the
 participant's machine records every model request a coding agent's harness makes, through a loopback
 proxy, plus the harness's own session files, and writes every loss as a gap with a start and an end.
-It uploads the record while the run goes on. `goalcup-verify` checks a record and reads usage from it
-later. Linux; macOS pending the owner's Mac run; Windows through WSL2. Open work is in
+It uploads the record while the run goes on. `goalcup-verify` checks a record and reads usage from
+it later. Linux; macOS pending the owner's Mac run; Windows through WSL2. Open work is in
 [TODO.md](TODO.md).
 
 ## The seven points
@@ -41,35 +41,37 @@ Read first: [VISION.md](VISION.md), then [ARCHITECTURE](docs/ARCHITECTURE.md), t
 | `packaging/` | Release packaging and `install.sh`. |
 
 The dependency rule: the recorder never links the verifier, and the verifier never links the
-recorder. They share only `goalcup-format`. No test guards this yet; the manifests are the only check.
+recorder. They share only `goalcup-format`. No test guards this yet; the manifests are the only
+check.
 
-Core code is `crates/goalcup` and `crates/goalcup-format`. The usage reader in `crates/goalcup-verify`
-reads harness session formats after the run, chosen by connector id.
+Core code is `crates/goalcup` and `crates/goalcup-format`. The usage reader in
+`crates/goalcup-verify` reads harness session formats after the run, chosen by connector id.
 
 ## The gate
 
-One script, two tiers: `sh scripts/gate.sh fast` before every merge (format, clippy, every test,
-the Worker and script tests) and `sh scripts/gate.sh full` at phase exits and before a release (also
-the ignored end-to-end tests and the release build). CI runs `fast` on every pull request to main and every push to main or `v1.0/integration`. Run it as
-a normal user, not root. What each tier runs and what it needs: [README](README.md#the-gate).
+One script, two tiers: `sh scripts/gate.sh fast` before every merge (format, clippy, every test, the
+Worker and script tests) and `sh scripts/gate.sh full` at phase exits and before a release (also the
+ignored end-to-end tests and the release build). CI runs `fast` on every pull request to main and
+every push to main or `v1.0/integration`. Run it as a normal user, not root. What each tier runs and
+what it needs: [README](README.md#the-gate).
 
 ## Hard rules
 
-- **Never set a model base URL on any harness.** The only wire path is the loopback recording
-  proxy, reached through the harness's process-scoped `HTTPS_PROXY` (D1, D81). The test pad
-  configures a harness the way a participant would (for example pointing it at DeepSeek or a gateway,
-  in goalcup's isolated home); goalcup's own launch code never does.
+- **Never set a model base URL on any harness.** The only wire path is the loopback recording proxy,
+  reached through the harness's process-scoped `HTTPS_PROXY` (D1, D81). The test pad configures a
+  harness the way a participant would (for example pointing it at DeepSeek or a gateway, in
+  goalcup's isolated home); goalcup's own launch code never does.
 - **Goal Cup Proxy records and never manages the agent.** No prompting, no auto "keep going", no
   finish tool. The participant types the prompt and may type only "keep going". One exception: D66,
   the agent may ask `goalcup time-left` how much time is left (pull only, nothing is pushed). A full
-  disk gets no special handling: the recorder restarts, then runs in null mode, and the harness keeps
-  working (D78).
+  disk gets no special handling: the recorder restarts, then runs in null mode, and the harness
+  keeps working (D78).
 - **No harness names in core code.** A harness is data (a connector) plus shared modules.
 - **Never write into `~/.claude`, `~/.codex`, `~/.hermes` or any app-wide config.** Goal Cup Proxy
   makes isolated homes. A test that launches a harness uses a private `HOME`.
-- **Never commit** anything under the repository root's `/pad-out/` or `/harnesses/`, any `spikes/*/out/`
-  (until PRD-13 deletes `spikes/`), or any
-  `target/`, a key, or a real run's record. A committed fixture is masked and reviewed by eye.
+- **Never commit** anything under the repository root's `/pad-out/` or `/harnesses/`, any
+  `spikes/*/out/` (until PRD-13 deletes `spikes/`), or any `target/`, a key, or a real run's record.
+  A committed fixture is masked and reviewed by eye.
 - **Record raw, interpret later.** The recorder captures bytes. The verifier and the usage reader
   judge them. Do not put rule logic in the recorder (D3).
 
@@ -78,8 +80,9 @@ a normal user, not root. What each tier runs and what it needs: [README](README.
 One test per behaviour you add or change. Test the promise, not the shape: no golden snapshots of
 internal structures, and no assertions on doc text or message wording unless the text is the
 contract. Every behaviour that serves one of the seven points has a test, and that test is not
-deleted while the point stands unless it is replaced in the same change by a test with the same name prefix
-that asserts the same promise. Where they are: [README](README.md#the-seven-points-and-their-tests).
+deleted while the point stands unless it is replaced in the same change by a test with the same name
+prefix that asserts the same promise. Where they are:
+[README](README.md#the-seven-points-and-their-tests).
 
 ## Done
 
