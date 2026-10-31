@@ -4,7 +4,7 @@ Connector id: `amp-cli` · Facts for version: `0.0.1793275344-g17bf52` · Writte
 Public disclosure: yes. Facts come from Amp's public docs, strings and help text of the shipped npm package, and live runs on macOS arm64 and Linux in October 2026. No keys, tokens, account names or personal paths are included.
 Status: shipped connector ([`connectors/amp-cli.toml`](../../connectors/amp-cli.toml))
 
-Source words: "docs" is [ampcode.com/docs](https://ampcode.com/docs/cli) as read on 2026-10-31; "help" is `amp --help` output; "live" is a logged-in run on `0.0.1791676897-g77c125` or `0.0.1792209635-g24a9fe`, older than the version above; "unknown" is not measured or read. No Amp key exists this cycle, so nothing here was run on `0.0.1793275344`.
+Source words: "docs" is [ampcode.com/docs](https://ampcode.com/docs/cli) as read on 2026-10-31; "help" is `amp --help` output; "live" is a logged-in run on `0.0.1791676897-g77c125` or `0.0.1792209635-g24a9fe`, older than the version above; "unknown" is not measured or read.
 
 ## 1. Run one prompt, in chat mode first
 
@@ -29,7 +29,7 @@ Source words: "docs" is [ampcode.com/docs](https://ampcode.com/docs/cli) as read
 | Logs | `$HOME/.cache/amp/logs/` (`cli.log`, `threads/T-<uuid>.log`) (live) | same | unknown |
 | Env vars that move these | `HOME`; `XDG_*` honoured when set (measured) | same | unknown |
 
-The connector is the only one that sets `HOME`, plus the four XDG folders, all under the isolated home. Because `HOME` moves, goalcup writes `$HOME/.profile` to put the handed `PATH` back after a login shell resets it. That writer is proven only by its unit test: there is no Amp key this cycle, so no pad row exercises it on a real binary.
+The connector is the only one that sets `HOME`, plus the four XDG folders, all under the isolated home. Because `HOME` moves, goalcup writes `$HOME/.profile` to put the handed `PATH` back after a login shell resets it. That writer is proven only by its unit test (section 9).
 
 ## 4. Session format and identity
 
@@ -66,7 +66,7 @@ The connector is the only one that sets `HOME`, plus the four XDG folders, all u
 
 - `AMP_SKIP_UPDATE_CHECK=1` (set by the connector) "overrides this setting and disables all update checks"; `amp.updates.mode` defaults to `"auto"` ([docs](https://ampcode.com/docs/cli/settings)).
 - Unknown: whether `amp last` resumes the same thread after a home switch, log rotation on a long run, and the Windows paths.
-- No Amp account was available this cycle, so no run exists.
+- No Amp account was available this cycle, so no run exists and nothing here was run on `0.0.1793275344`.
 
 ## Run without permission prompts
 
@@ -74,4 +74,4 @@ None needed: Amp runs tools without asking by default (strings in the binary; a 
 
 ## Pad result
 
-Not yet run on the pad. The tier and the runs are in [`connectors/tiers.toml`](../../connectors/tiers.toml).
+The tier, the tested version and the runs are in [`connectors/tiers.toml`](../../connectors/tiers.toml) and `PAD-RESULTS.md`; this sheet does not copy them.
