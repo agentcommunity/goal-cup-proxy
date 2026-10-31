@@ -511,3 +511,82 @@ fn h2_fields_past_64_kib_are_the_http_head_guard() {
     assert_eq!(data_of(&calls, req), b"{}");
     assert_eq!(end_of(&calls, req).0, EndReason::Complete);
 }
+
+/// A field `name` with a value of `n` bytes, literal without indexing.
+fn big_field(name: &str, n: usize) -> Vec<u8> {
+    let start = [&[0, name.len() as u8][..], name.as_bytes()].concat();
+    [start, int(0, 7, n), vec![b'a'; n]].concat()
+}
+
+/// Past the `http_head` guard the fields the parser reads still count: a `content-encoding`
+/// after a 70 KB field decodes the body, a `:protocol` after a 70 KB `:path` names a tunnel.
+#[test]
+fn fields_the_parser_reads_are_kept_past_the_guard() {
+    let plain = b"data: {\"text\":\"decoded\"}\n\n".repeat(20);
+    let mut gz = GzEncoder::new(Vec::new(), Compression::default());
+    gz.write_all(&plain).unwrap();
+    let gz = gz.finish().unwrap();
+    let resp = [
+        block(":status=200"),
+        big_field("x-big", 70_000),
+        block("content-encoding=gzip"),
+    ]
+    .concat();
+    let connect = [
+        block(&format!(":method=CONNECT {API}")),
+        big_field(":path", 70_000),
+        block(":protocol=websocket"),
+    ]
+    .concat();
+    let steps = [
+        up(&[
+            req(1, "GET", "/a"),
+            frame(HEADERS, END_HEADERS, 3, &connect),
+            body(3, true, &[0x82; 7]),
+        ]),
+        down(&[
+            frame(HEADERS, END_HEADERS, 1, &resp),
+            body(1, true, &gz),
+            head(3, END_STREAM, ":status=200"),
+        ]),
+    ];
+    let (calls, stop) = run(&steps);
+    assert_eq!(stop, None);
+    let resps = opens(&calls, StreamKind::HttpResp);
+    let gzip = resps.iter().find(|r| r.2["h2"] == json!(1)).expect("the response");
+    assert_eq!((&gzip.2["coding"], &gzip.2["decoded"]), (&json!(["gzip"]), &json!(true)));
+    assert!(data_of(&calls, gzip.0) == plain);
+    let reqs = opens(&calls, StreamKind::HttpReq);
+    let ws = reqs.iter().find(|r| r.2["h2"] == json!(3)).expect("the CONNECT").0;
+    assert!(data_of(&calls, ws).is_empty());
+    let gaps = gaps_on(&calls, ws);
+    assert!(gaps.contains(&(GapReason::H2Unsupported, Some(7))));
+    assert!(gaps.iter().any(|g| g.0 == GapReason::MemoryGuard));
+}
+
+/// A server HEADERS for a stream the client never opens waits at most a head's worth: the
+/// frames after it are parsed, its response answers no request, and nothing is held.
+#[test]
+fn a_response_to_no_request_waits_only_a_head() {
+    let big = vec![b'z'; 70_000];
+    let steps = [
+        up(&[req(1, "GET", "/a")]),
+        down(&[
+            ok(3, ""),
+            body(3, false, &big),
+            ok(1, ""),
+            body(1, true, b"after"),
+        ]),
+    ];
+    let (calls, stop) = run(&steps);
+    assert_eq!(stop, None);
+    let [(req, ..)] = opens(&calls, StreamKind::HttpReq).try_into().unwrap();
+    let resps = opens(&calls, StreamKind::HttpResp);
+    let one = resps.iter().find(|r| r.2["h2"] == json!(1)).expect("stream 1's response");
+    assert_eq!(one.1, req);
+    assert_eq!(data_of(&calls, one.0), b"after");
+    assert_eq!(end_of(&calls, one.0).0, EndReason::Complete);
+    let three = resps.iter().find(|r| r.2["h2"] == json!(3)).expect("stream 3's response");
+    assert_eq!(three.1, 0);
+    assert!(data_of(&calls, three.0) == big);
+}

@@ -10,12 +10,15 @@
 //! `RST_STREAM` and a server's `GOAWAY` end streams interrupted with `h2_error` (a client's
 //! `GOAWAY` names server streams, of which there are none). `PRIORITY`, `PING`, `SETTINGS`,
 //! `WINDOW_UPDATE` and unknown types are skipped by length. Decoded fields past 64 KiB are not
-//! stored and give GAP `memory_guard` `http_head`, as in HTTP/1.1; decoding goes on.
+//! stored and give GAP `memory_guard` `http_head`, as in HTTP/1.1; decoding goes on, and the
+//! fields the parser reads ([`READ`]) are still kept for it, at most [`FIELD_MAX`] bytes of them.
 //!
 //! Server frames from a `HEADERS` for a client stream whose request is not parsed yet wait,
-//! unparsed, until it is, so the response names its request. `DATA` or a header block for a
-//! stream already ended (frames in flight after `RST_STREAM`) is recorded in no stream: it counts
-//! as held, and the close names it in the `conn` GAP.
+//! unparsed, until it is, so the response names its request; as in HTTP/1.1 they wait at most a
+//! head's worth. Past that, or at the close, they are parsed on, and that response answers no
+//! request (`req` 0). `DATA` or a header block for a stream already ended (frames in flight
+//! after `RST_STREAM`) is recorded in no stream: it counts as held, and the close names it in
+//! the `conn` GAP.
 //!
 //! Not followed, never silent: an extended `CONNECT` stream (RFC 8441) records no `DATA` and each
 //! side gets GAP `h2_unsupported`; a `grpc-encoding` or `connect-content-encoding` other than
@@ -33,7 +36,7 @@ use crate::pipeline::{
 };
 use crate::proxy::decode::{Coding, Unsupported, parse_codings, unsupported};
 use crate::proxy::http1::{
-    Body, Framing, HEAD_LIMIT, Head, coding_meta, head_gap, pairs, safe_path,
+    Body, FIELD_MAX, Framing, HEAD_LIMIT, Head, coding_meta, head_gap, pairs, safe_path,
 };
 use crate::proxy::pump::{Parser, Stop};
 use crate::proxy::ws::Dir;
@@ -46,6 +49,15 @@ const PREFACE: &[u8; 24] = b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n";
 const BLOCK_MAX: usize = 16 << 20;
 /// The `hpack_table` guard.
 const TABLE_LIMIT: usize = 1 << 20;
+/// The fields the parser reads, kept for it past the `http_head` guard.
+const READ: [&str; 6] = [
+    ":method",
+    ":protocol",
+    ":status",
+    "content-encoding",
+    "grpc-encoding",
+    "connect-content-encoding",
+];
 
 const DATA: u8 = 0;
 const HEADERS: u8 = 1;
@@ -100,6 +112,8 @@ pub struct H2 {
     /// Server bytes from a `HEADERS` whose request is not parsed yet, and when they came.
     wait: Vec<u8>,
     wait_at: Mono,
+    /// The waiting bytes passed a head's worth, or the connection closed: no `HEADERS` waits.
+    orphan: bool,
     /// When the first frame for an ended stream came (its bytes are held).
     late: Option<Mono>,
 }
@@ -208,6 +222,7 @@ impl H2 {
             last_req: 0,
             wait: Vec::new(),
             wait_at: Mono::default(),
+            orphan: false,
             late: None,
         }
     }
@@ -251,7 +266,10 @@ impl H2 {
         let d = dir as usize;
         if dir == Dir::Down && !self.wait.is_empty() {
             self.wait.extend_from_slice(bytes);
-            return Ok(());
+            if self.wait.len() <= HEAD_LIMIT {
+                return Ok(());
+            }
+            return self.replay(t);
         }
         while !bytes.is_empty() {
             let side = &mut self.sides[d];
@@ -274,9 +292,10 @@ impl H2 {
                 bytes = &bytes[n..];
                 if side.hdr.len() == 9 {
                     let h = std::mem::take(&mut side.hdr);
-                    let id = u32::from_be_bytes([h[5], h[6], h[7], h[8]]) & 0x7fff_ffff;
+                    let id = sid(&h);
                     // A response before its request: wait for it (client streams are odd).
-                    if dir == Dir::Down && h[3] == HEADERS && id % 2 == 1 && id > self.last_req {
+                    let early = h[3] == HEADERS && id % 2 == 1 && id > self.last_req;
+                    if dir == Dir::Down && early && !self.orphan {
                         (self.wait, self.wait_at) = ([&h[..], bytes].concat(), side.hdr_at);
                         return Ok(());
                     }
@@ -321,19 +340,27 @@ impl H2 {
 
     /// Server frames that waited for a request now parsed go on.
     fn resume(&mut self, t: Mono) -> Result<(), Fault> {
-        let id = |w: &[u8]| u32::from_be_bytes([w[5], w[6], w[7], w[8]]) & 0x7fff_ffff;
-        if self.wait.is_empty() || id(&self.wait) > self.last_req {
+        if self.wait.is_empty() || sid(&self.wait) > self.last_req {
             return Ok(());
         }
         let wait = std::mem::take(&mut self.wait);
         self.take(Dir::Down, t, &wait)
     }
 
+    /// Server frames that waited a head's worth, or to the close: parsed on, no `HEADERS`
+    /// among them waits, and a response whose request is not parsed answers none.
+    fn replay(&mut self, t: Mono) -> Result<(), Fault> {
+        let wait = std::mem::take(&mut self.wait);
+        self.orphan = true;
+        let fed = self.take(Dir::Down, t, &wait);
+        self.orphan = false;
+        fed
+    }
+
     /// A whole frame header: the frame to read, or a stop.
     fn open_frame(&mut self, d: usize, h: &[u8]) -> Result<(), Fault> {
         let len = u32::from_be_bytes([0, h[0], h[1], h[2]]) as usize;
-        let (ty, flags) = (h[3], h[4]);
-        let id = u32::from_be_bytes([h[5], h[6], h[7], h[8]]) & 0x7fff_ffff;
+        let (ty, flags, id) = (h[3], h[4], sid(h));
         let side = &mut self.sides[d];
         // A header block admits only its own CONTINUATION frames (RFC 9113 section 6.10).
         if side.block.is_some() != (ty == CONTINUATION) {
@@ -461,35 +488,52 @@ impl H2 {
     /// A whole header block: opens that side of its stream, or is its trailers.
     /// The block's raw bytes count as kept unless it is for an ended stream.
     fn headers(&mut self, dir: Dir, t: Mono, b: Block) -> Result<(), Fault> {
-        let (mut fields, mut stored, mut over) = (Vec::new(), 0, 0);
+        let (mut fields, mut read, mut stored, mut over) = (Vec::new(), Vec::new(), 0, 0);
+        let mut kept_past = 0;
         let hpack = &mut self.sides[dir as usize].hpack;
         let lossy = |b: &[u8]| String::from_utf8_lossy(b).into_owned();
         // The `http_head` guard: fields past it are decoded, so the table stays in step, and
-        // not stored.
+        // not stored; those the parser reads are kept for it, as HTTP/1.1 keeps its framing.
         let decoded = hpack.decode_with_cb(&b.bytes, |n, v| {
             let size = n.len() + v.len();
             if over == 0 && stored + size <= HEAD_LIMIT {
                 stored += size;
                 fields.push((lossy(&n), lossy(&v)));
-            } else {
-                over += size as u64;
+                return;
+            }
+            over += size as u64;
+            if READ.iter().any(|r| r.as_bytes() == &n[..]) {
+                kept_past += size;
+                read.push((lossy(&n), lossy(&v)));
             }
         });
         decoded.map_err(|e| match e {
             DecoderError::InvalidMaxDynamicSize => Fault::Table,
             _ => Fault::Unsupported,
         })?;
+        // No valid head has that much of them (5a, as HTTP/1.1's framing fields).
+        if kept_past > FIELD_MAX {
+            return Err(Fault::Frame);
+        }
+        read.splice(0..0, fields.iter().filter(|f| READ.contains(&f.0.as_str())).cloned());
         let head = Head::past_guard_at((over > 0).then_some((b.at, over)));
         let d = dir as usize;
         if dir == Dir::Up && b.id > self.last_req {
             self.last_req = b.id;
-            let halves = [Half::Waiting, Half::Waiting];
-            let s = Stream {
+            let s = self.streams.entry(b.id).or_insert_with(|| Stream {
                 req: 0,
                 tunnel: false,
-                halves,
-            };
-            self.streams.insert(b.id, s);
+                halves: [Half::Done, Half::Waiting],
+            });
+            s.halves[0] = Half::Waiting;
+        }
+        // A response the request of which never came within a head's worth: it answers none.
+        if dir == Dir::Down && self.orphan && b.id % 2 == 1 && b.id > self.last_req {
+            self.streams.entry(b.id).or_insert_with(|| Stream {
+                req: 0,
+                tunnel: false,
+                halves: [Half::Done, Half::Waiting],
+            });
         }
         let Some(s) = self.streams.get_mut(&b.id) else {
             // Frames in flight after the stream ended: recorded in no stream.
@@ -500,10 +544,16 @@ impl H2 {
             Half::Open(body) => body.sink.set_trailers(fields, &head),
             Half::Waiting if dir == Dir::Up => {
                 let unsent = if self.unsent { b.raw } else { 0 };
-                self.request(t, b.id, fields, &head, unsent);
+                self.request(t, b.id, fields, &read, &head, unsent);
             }
-            Half::Waiting => self.response(t, b.id, fields, &head),
-            _ => {}
+            Half::Waiting => self.response(t, b.id, fields, &read, &head),
+            // Trailers on an extended `CONNECT` side: counted in its `h2_unsupported` GAP.
+            Half::Raw(_, n, _) => *n += b.raw,
+            // A header block after that side ended: recorded in no stream, as a late frame.
+            Half::Done => {
+                self.late.get_or_insert(b.at);
+                return Ok(());
+            }
         }
         self.kept += b.raw;
         if b.end {
@@ -512,15 +562,23 @@ impl H2 {
         Ok(())
     }
 
-    fn request(&mut self, t: Mono, id: u32, mut fields: Vec<Field>, head: &Head, unsent: u64) {
-        let method = field(&fields, ":method").unwrap_or_default().to_owned();
-        let tunnel = method == "CONNECT" && field(&fields, ":protocol").is_some();
+    fn request(
+        &mut self,
+        t: Mono,
+        id: u32,
+        mut fields: Vec<Field>,
+        read: &[Field],
+        head: &Head,
+        unsent: u64,
+    ) {
+        let method = field(read, ":method").unwrap_or_default().to_owned();
+        let tunnel = method == "CONNECT" && field(read, ":protocol").is_some();
         let path = field(&fields, ":path").map_or(Value::Null, safe_path);
         // Point 4: the query leaves the `:path` header too.
         for f in fields.iter_mut().filter(|f| f.0 == ":path") {
             f.1.truncate(f.1.find(['?', '#']).unwrap_or(f.1.len()));
         }
-        let codings = codings(&fields);
+        let codings = codings(read);
         let meta = json!({
             "method": method,
             "path": path,
@@ -544,8 +602,8 @@ impl H2 {
         }
     }
 
-    fn response(&mut self, t: Mono, id: u32, fields: Vec<Field>, head: &Head) {
-        let status = field(&fields, ":status").and_then(|s| s.parse::<u16>().ok());
+    fn response(&mut self, t: Mono, id: u32, fields: Vec<Field>, read: &[Field], head: &Head) {
+        let status = field(read, ":status").and_then(|s| s.parse::<u16>().ok());
         if let Some(status @ 100..200) = status {
             self.rec.event(json!({
                 "ev": "note",
@@ -560,7 +618,7 @@ impl H2 {
             return;
         };
         let (req, tunnel) = (s.req, s.tunnel);
-        let codings = codings(&fields);
+        let codings = codings(read);
         let meta = json!({
             "status": status,
             "ver": "2",
@@ -599,6 +657,11 @@ impl H2 {
 }
 
 type Field = (String, String);
+
+/// A frame header's 31-bit stream id.
+fn sid(h: &[u8]) -> u32 {
+    u32::from_be_bytes([h[5], h[6], h[7], h[8]]) & 0x7fff_ffff
+}
 
 fn field<'a>(fields: &'a [Field], name: &str) -> Option<&'a str> {
     fields.iter().find(|f| f.0 == name).map(|f| f.1.as_str())
@@ -647,6 +710,14 @@ impl Parser for H2 {
             self.seen += unsent.len() as u64;
             self.unsent = true;
             let fed = self.take(Dir::Up, t, unsent).and_then(|()| self.resume(t));
+            // Server frames still waiting for their request: parsed on, answering none.
+            let fed = fed.and_then(|()| {
+                if self.wait.is_empty() {
+                    Ok(())
+                } else {
+                    self.replay(t)
+                }
+            });
             late = match fed {
                 Err(fault) => Some(self.stop(t, fault)),
                 // A frame or header block the close cut short: recorded in no stream.

@@ -41,7 +41,7 @@ pub(crate) const HEAD_LIMIT: usize = 64 * 1024;
 /// The `upgrade_copy` guard: client bytes copied while an upgrade waits for its answer.
 const COPY_LIMIT: usize = 1 << 20;
 /// Past the head guard, framing field lines longer than this in all cannot be followed (5a).
-const FIELD_MAX: usize = 4 * 1024;
+pub(crate) const FIELD_MAX: usize = 4 * 1024;
 /// Past the head guard, a field line whose name has not ended within this many bytes is not a
 /// field framing needs, so the rest of it is skipped unread.
 const NAME_MAX: usize = 64;
