@@ -4,7 +4,7 @@ Connector id: `droid-cli` · Facts for version: `0.251.0` · Written by: Goal Cu
 Public disclosure: yes. Facts come from Factory's public docs and from strings in the shipped `0.251.0` binary. No keys, tokens, account names or personal paths are included.
 Status: shipped connector ([`connectors/droid-cli.toml`](../../connectors/droid-cli.toml))
 
-Source words: "docs" is [docs.factory.com](https://docs.factory.com/cli/configuration/settings) as read on 2026-10-31 (the older `docs.factory.ai` address redirects there); "binary" is a string or code check of the `0.251.0` executable; "unknown" is not read or measured. No Factory account exists this cycle, so Droid was never run through the proxy: everything about its behaviour is read, not measured.
+Source words: "docs" is [docs.factory.com](https://docs.factory.com/cli/configuration/settings) as read on 2026-10-31 (the older `docs.factory.ai` address redirects there); "binary" is a string or code check of the `0.251.0` executable; "unknown" is not read or measured.
 
 ## 1. Run one prompt, in chat mode first
 
@@ -65,7 +65,7 @@ Source words: "docs" is [docs.factory.com](https://docs.factory.com/cli/configur
 ## 9. Quirks and open questions
 
 - Unknown: subagent file layout, the Windows session paths, whether `--resume --last` is valid, and whether a second Droid already running holds the daemon for the whole account.
-- No Factory account was available this cycle, so no run exists.
+- No Factory account was available this cycle, so no run exists: Droid was never run through the proxy, and everything about its behaviour is read, not measured.
 
 ## Run without permission prompts
 
@@ -73,4 +73,4 @@ Source words: "docs" is [docs.factory.com](https://docs.factory.com/cli/configur
 
 ## Pad result
 
-Not yet run on the pad. The tier and the runs are in [`connectors/tiers.toml`](../../connectors/tiers.toml).
+The tier, the tested version and the runs are in [`connectors/tiers.toml`](../../connectors/tiers.toml) and `docs/plans/2026-10-30-v1.0/PAD-RESULTS.md`; this sheet does not copy them.
