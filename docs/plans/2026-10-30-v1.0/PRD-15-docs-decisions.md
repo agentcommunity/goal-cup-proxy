@@ -1396,3 +1396,33 @@ Slice 10 brought `docs/RECORD-FORMAT.md` to PRD-08 slice 4 (the three honesty ch
   pull request with `row.json`) and
   `docs/CONNECTOR-SCHEMA.md` for the keys; it does not copy them.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+
+### 2026-10-31, replan after PRD-15 slice 12 (merge 89549774)
+
+Slice 12 landed the guide, README, RULES with the OPERATING usage section, and SECURITY, CONTRIBUTING and
+the HARNESS-ONBOARDING pointer; `docs/README.md` is deleted and `CONTRACTS`, `TERMINATION`,
+`CHEAT-CHECKLIST` and `SERVER-DESIGN` are in `docs/archive/`.
+
+- **`HARNESS-SETUP.md` is the one page still to move, and the harness sheets block it.** Seven of the
+  sheets in `docs/harnesses/` link `../HARNESS-SETUP.md` (some with an anchor such as `#codex`). The
+  page also still describes `goalcup mcp` (lines 244, 280, 290, 315), removed by D84. The move to
+  `docs/archive/` waits for PRD-11's sheet refresh to repoint those links to the guide section 3 and the
+  connector TOML; then `git mv` it and let the link pass confirm nothing points at the old path. Do not
+  edit the page body; the archive copy is history. If the sheets are not repointed by the final pass, the
+  page stays and its first lines already say the guide is current.
+- **One stale anchor: `docs/LOCAL-RESEARCH-HANDOFF.md:97`** links `PARTICIPANT-GUIDE.md#5-your-run`; the
+  heading is `#6-your-run` (section 5 is "A practice run"). The text says "guide, section 5" in the same
+  line and in three places in `HARNESS-SETUP.md`; the next docs touch of LOCAL-RESEARCH-HANDOFF fixes the
+  anchor and number. The final `check-links.py` pass checks files only, not heading anchors, so grep
+  `PARTICIPANT-GUIDE.md#` against the guide's headings once at the end.
+- **Guide size (B7r).** `PARTICIPANT-GUIDE.md` is 483 lines against the 400 estimate and the 450 ceiling in
+  the slice plan. Accepted as is. When `HARNESS-SETUP.md` is archived, re-check the guide's "Your
+  harness" sections (section 4) for text copied from it and cut the copy, not the facts.
+- **Docs size report, slice 12** (`wc -l` at 89549774; PRD-00 "Size budget" has no docs row, so this is
+  listed beside the Rust totals for information only): PARTICIPANT-GUIDE 483, RULES 457, RECORD-FORMAT 538,
+  OPERATING 260, README 247, ARCHITECTURE 348, SECURITY 111, CONTRIBUTING 103, CONNECTOR-SCHEMA 115,
+  HARNESS-ONBOARDING 23, AGENTS 111, TODO 69. No ceiling is breached.
+- Still open for PRD-15, unchanged: the README tier column and Pad result lines after phase 5; the
+  RECORD-FORMAT catch-up from the slice 10 note (`legs.rs`, `report.rs`, `history.rs`).
+- No locked ledger item is touched and no owner question comes from this slice.

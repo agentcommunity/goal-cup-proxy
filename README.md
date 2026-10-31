@@ -1,11 +1,10 @@
 # Goal Cup Proxy
 
-Goal Cup Proxy (`goalcup`) records what a coding agent does during a run. It launches the agent's
-harness (Codex CLI, Claude Code, Hermes or Amp) in your terminal and records three things: the
-harness's model traffic, the harness's own session files, and the state of the run's Git
-repository. It seals them into one hash chain and uploads it to the Goal Cup server while the run
-goes on. Everything runs on the participant's own machine. Anyone can check a sealed trace offline with
-`goalcup-verify`.
+Goal Cup Proxy (`goalcup`) records what a coding agent does during a run. It starts your agent's
+harness in your terminal and writes down every model request the harness makes, through a proxy on
+your own computer, plus the harness's own session files. Every loss is written as a gap with a
+start and an end, never skipped. It uploads the record to the Goal Cup server while the run goes on.
+Everything runs on your machine, and anyone can check a record later with `goalcup-verify`.
 
 Its first use is the /goal Cup: one prompt, one agent, 168 hours. The organizer is
 [Agent Community](https://agentcommunity.org). Sign-up, the rules summary, the demo video and the
@@ -15,8 +14,13 @@ Agents working in this repository: read [AGENTS.md](AGENTS.md) first.
 
 ## Quick start for participants
 
+> **Build state.** On this branch `goalcup start`, `continue`, `recover`, `seal` and `upload` print
+> "not built yet": the recorder run and the `start` command (PRD-02, PRD-10) have not merged. This page
+> describes the 1.0 release, and this note goes in the final pass.
+
 The full walk-through, with every message you will see, is the
 [participant's guide](docs/PARTICIPANT-GUIDE.md). The contract is [RULES](docs/RULES.md).
+The harnesses goalcup records are listed in [docs/harnesses/README.md](docs/harnesses/README.md).
 
 1. **Install** the latest release (macOS or Linux; on Windows, inside WSL2):
 
@@ -27,90 +31,73 @@ The full walk-through, with every message you will see, is the
 
    It checks the download against the release's `SHA256SUMS` and installs into `~/.local/bin`
    and `~/.local/share/goalcup`, with no sudo. Run it again to upgrade, only with no run open.
-   If a start is refused right after an update, wait a minute (the old recorder exits when idle)
-   and start again.
    For one particular release, add `-s -- --version <x.y.z>` after `sh`.
-2. **Set up**: `goalcup setup`. Four steps: it connects this computer to your account, lists the
-   harnesses and lets you pick one, opens it once in its own isolated home so you sign in (or
-   paste your API key there) and set it never to stop for approval
-   ([set up your harness for a 168-hour run](docs/HARNESS-SETUP.md)), and checks this machine.
-   Run it until every step says `[ok]` or `[warn]`; a `[warn]` says what to watch and does not
-   hold a step back. It needs no GitHub and keeps no key.
-   <a id="the-access-token"></a>The harness's access token passes through the recording proxy's
-   memory on its way to the model service; it is forwarded unread and never written
-   ([`crates/goalcup-cli/src/proxy/http.rs`](crates/goalcup-cli/src/proxy/http.rs)). For Hermes, the
-   newest release from Hermes's own installer is fine with an API-key service such as DeepSeek;
-   see [Hermes setup](docs/HARNESS-SETUP.md#hermes) for the setups that need 0.19.0.
-3. **Practice** (optional): in an empty folder, `goalcup start --harness <id> --practice`. About
-   ten minutes, no GitHub, no token, never counts. Do as many as you like.
+2. **Set up**: `goalcup setup`. It asks which harness you use, opens it once in its own isolated
+   home so you can sign in and set it never to stop for approval, and checks this machine. Run it
+   until it says `Ready.` ([the guide, step 3](docs/PARTICIPANT-GUIDE.md#3-set-up)).
+3. **Practice** (optional): in an empty folder, `goalcup start --practice`. About ten minutes, no
+   GitHub, never counts. Do as many as you like
+   ([the guide, step 5](docs/PARTICIPANT-GUIDE.md#5-a-practice-run)).
 4. **Make the repository, the token and the folder**, in this order. Create a new, empty, public
    GitHub repository (no README, `.gitignore` or licence). Make a fine-grained token for that one
    repository: Contents read and write, expiry 30 days. Make a new folder holding `.env.local`
-   (exactly one line, `GH_TOKEN=<token>`) and a `.gitignore` with the line `.env*`. Details:
-   [the guide, section 5](docs/PARTICIPANT-GUIDE.md#5-your-run).
+   (exactly one line, `GH_TOKEN=<token>`) and a `.gitignore` with the line `.env*`. Write your
+   prompt in a file outside that folder, for example `prompt.txt`. Details:
+   [the guide, step 6](docs/PARTICIPANT-GUIDE.md#6-your-run).
 5. **Start** inside the start window, in that folder:
-   `goalcup start --harness <id> --repo <user>/<name>`. A dry run is open from 23 October, so you
-   can start a rehearsal now ([the dry run](docs/PARTICIPANT-GUIDE.md#the-dry-run-optional)).
-   `goalcup` checks the folder and the repository before it asks for the browser approval. The
-   harness opens in the folder, and your agent runs `git init` and pushes with the token. Its own
-   setup screens (sign-in, folder trust, model choice) come before your prompt, and answering them
-   is fine. Delete the token after your run. The token reaches that one repository, but your agent
-   runs as you: if you have an SSH key it can use, it can push to any repository that key
-   reaches. Give the key a passphrase or a per-use confirmation
-   ([details](docs/PARTICIPANT-GUIDE.md#5-your-run)).
-6. **Paste the block `goalcup` prints** (it starts with "Push to": the repository, the token file,
-   the git lines) at the very start of your first prompt. It is how the agent learns the
-   repository. Then **type your one prompt** and press Enter. After it, the only message you
-   may ever type is "keep going".
+   `goalcup start --repo <you>/<repo> --prompt prompt.txt`. goalcup checks the folder and the
+   repository before it asks for the browser approval. Your first message is the push lines and
+   your prompt in one block; paste it as the first thing you send. After it, the only message you
+   may ever type is "keep going". Delete the token after your run.
 
 **During the run.**
 
 - The server is the clock. The run ends 168 hours after the server's official start.
-- Check on it from a second terminal with `goalcup status`. Its `Next:` line, above the `Details:`
-  block, says what to do.
-- Your agent may run `goalcup time-left`, or call the `time_left` tool of `goalcup mcp` if you
-  added it to your harness, to ask how much time is left. Goal Cup Proxy never sends
-  anything to the agent: no reminders, no "keep going", no restarts.
-- If the agent stops early (a crash, a reboot, a closed window), run `goalcup continue`. Nobody
-  restarts it for you.
-- No server error stops a run. Recording goes on, and uploads are retried, with longer waits
-  between tries.
-- If the disk is nearly full (under 1 GiB free beyond the run's reservation), the agent is paused
-  until space returns, then resumes by itself. Free space outside your run's folders.
+- Check on it from a second terminal with `goalcup status`.
+- Your agent may run `goalcup time-left` to ask how much time is left. goalcup never sends anything
+  to the agent: no reminders, no "keep going", no restarts.
+- If the agent stops early (a crash, a reboot, a closed window), run `goalcup continue`.
+- No server error stops a run. Recording goes on, and uploads are retried with longer waits.
+- If the disk fills, goalcup cannot write. Your agent keeps working, `goalcup status` says recording
+  is off, and goalcup retries by itself. Free space and recording starts again. The time it was off
+  is a gap in the record.
 - Keep the machine on mains power, awake and online, and keep the terminal open.
 
-**The end.** At the deadline Goal Cup Proxy stops the agent, seals the record and uploads the
-rest. You do nothing. What is judged is the last push to your repository's default branch that
-GitHub received before the deadline, by GitHub's timestamp. Your agent must push its own work;
-Goal Cup Proxy never pushes. Then hand in your demo video and questionnaire on the event site
-within 24 hours. More: [the end](docs/PARTICIPANT-GUIDE.md#7-the-end).
+**The end.** At the deadline goalcup stops the agent, finishes the record and uploads the rest. The
+end screen says what was written and what was lost. What is judged is the last push to your
+repository's default branch that GitHub received before the deadline. Your agent must push its own
+work; goalcup never pushes. Then hand in your demo video and questionnaire on the event site
+within 24 hours ([the end](docs/PARTICIPANT-GUIDE.md#8-the-end)).
 
 ## Commands
 
-A **run** is your one 168-hour attempt. A **part** is one unbroken stretch of recording inside it;
-most runs have one, and `goalcup continue` starts the next. Every flag is in `goalcup <command> --help`. Exit codes: 0 done; 1 refused, and you can fix it;
-3 the command could not do its job.
+A **run** is your one 168-hour attempt. A **part** is one `start` or one `continue` inside it. Every
+flag is in `goalcup <command> --help`. Exit codes: 0 done; 1 refused, and you can fix it; 3 the
+command could not do its job.
 
 | Command | What it does |
 |---|---|
-| `goalcup setup [--harness <ID>] [--json] [--dev]` | Check the four readiness steps. Never starts a run. `goalcup prep` is its old name. |
-| `goalcup login [--server <URL>]` | Connect this computer to your Goal Cup account (once; `setup` does it for you). |
-| `goalcup start --harness <ID> [--practice \| --test] [--repo <OWNER/NAME>] [--dev]` | Start a run: open the harness in the current folder and record it. Run it in the project folder (empty but for `.env.local` and `.gitignore`). A real run needs its own new, empty, public GitHub repository, given as `--repo <user>/<name>`; `start` checks it before the approval. `--test` is for organizers; `--dev` is for trying an unpinned connector and never competes. |
-| `goalcup status [<part-id>] [--json]` | Show the run: recording state, time left, upload, problems, `Next:`. `--json` prints the signed status document, with this machine's `local` facts and a `problems` array (the `PROBLEM:` lines' sentences, left out when there are none) beside it. |
+| `goalcup setup [--harness <ID>] [--yes] [--record-host <HOST>]` | Pick your harness, sign in to it once, check this machine. `--yes` asks nothing and opens nothing. `--record-host` adds a model host goalcup records. |
+| `goalcup start [--harness <ID>] [--practice \| --test] [--repo <OWNER/NAME>] [--prompt <FILE>] [--connector <FILE>] [--hosts <FILE>]` | Start a run: open your harness in the current folder and record it. A real run needs `--repo`. `--test` is for organizers. `--connector` and `--hosts` load a file and are for practice and test runs. |
+| `goalcup continue [<RUN>] [--connector <FILE>] [--hosts <FILE>]` | Start your agent again in the same run, after it stopped early. |
+| `goalcup recover [<RUN>]` | Restart recording when `status` says recording stopped and your agent still runs. |
+| `goalcup status [<PART>] [--json]` | Show how the run is doing, and its parts. |
+| `goalcup seal [<PART>] [--yes]` | End a part now: stop recording, finish its record files and upload them. |
+| `goalcup upload [<PART>]` | Send what is not uploaded yet. Safe to repeat. |
 | `goalcup time-left` | Show how much time the run has left. The agent may run it too. |
-| `goalcup mcp` | Serve the time left as an MCP tool (`time_left`) for the agent. The harness starts it; add it as in [HARNESS-SETUP](docs/HARNESS-SETUP.md#add-the-goal-cup-time-left-tool). |
-| `goalcup continue [<run-id>]` | Start the agent again in the same run, on the same computer. |
-| `goalcup upload [<part-id>]` | Send what is not uploaded yet. Safe to repeat. |
-| `goalcup entries [--json]` | List the recorded parts of your runs on this computer. |
-| `goalcup seal [<part-id>] [--yes]` | Stop the agent now and seal this part. The run stays open. |
-| `goalcup doctor [--harness <ID> \| all] [--json]` | Check that this computer can record and each harness is installed. |
 
-`goalcup-verify --capture-integrity <trace>` checks a sealed trace (0 complete and valid,
-1 incomplete or not sealed, 2 invalid, 3 no usable report). Exit 0 says the record is consistent,
-not that the run was good. `goalcup-verify --research-json <trace> --output <new.ndjson>` writes a
-private research report. `goalcup-verify --stats <trace>… --output <new.json>` writes one run's
-numbers (tokens, models, tool calls and errors, subagents, "keep going") and no text, with the same
-exit codes. The report and its exit codes: [RECORD-FORMAT](docs/RECORD-FORMAT.md#the-goalcup-verify-check---json-report).
+`goalcup-verify` checks a record after the run. Every judgement about the bytes lives here.
+
+| Command | What it does |
+|---|---|
+| `goalcup-verify check <PATH> [--json] [--live] [--server] [--local <ENTRY_DIR>] [--known <FILE>]` | Prove an entry, a run or a fetched folder whole, and name every loss. `--json` prints the report ([RECORD-FORMAT](docs/RECORD-FORMAT.md)). |
+| `goalcup-verify dump <PATH> [--sid <ID>] [--kind <KIND>] [--text]` | One JSON line per record. Payload only with `--text`. |
+| `goalcup-verify secrets [--known <FILE>] <PATHS>...` | Scan records and raw files for known secret values and secret shapes. |
+| `goalcup-verify usage <PATH> [--json] [--out <OUT>]` | Read tokens, models and subagents from a record. |
+
+Exit codes of `goalcup-verify`: 0 whole; 1 honest but incomplete (every loss named, or not sealed);
+2 a failure; 3 no usable report (the input cannot be read or the command line is wrong). Exit 0
+says the record is consistent, not that the run was good.
 
 ## How it works
 
@@ -118,191 +105,135 @@ exit codes. The report and its exit codes: [RECORD-FORMAT](docs/RECORD-FORMAT.md
 participant types the prompt
         |
         v
-harness  --HTTPS_PROXY-->  recording proxy (in goalcup, loopback)  -->  model provider
-   |                              | decoded bodies
-   | session files                v
-   +---------------------->  goalcup-daemon: redact, append to the hash chain
-                                  | sealed at the end, with the Git commit and a
-                                  | digest of uncommitted changes
-                                  v
-                  goalcup start uploads chunks and heartbeats  -->  Goal Cup server
-                                                     (signs a start receipt and an ack per chunk)
+harness --HTTPS_PROXY--> proxy (loopback, in the recorder) --> listed model hosts
+   |                          |  other hosts: tunnel, one conn record
+   | session files            v
+   +---------------> held-bytes guard --> masker --> writer --> rec-*.gcr.zst part files
+                                                                     |
+                                                                     v
+                                       uploader: chunks, heartbeat  --> Goal Cup server (Worker)
 
-goalcup-verify reads a sealed trace offline: integrity check, research report and run stats.
+goalcup-verify reads the part files, or the server's copy, after the run.
 ```
 
-### How Goal Cup Proxy records
+- **One process.** `goalcup start` is the watchdog: it holds the proxy's port, starts the harness
+  and restarts the recorder at once if it dies. The recorder process does all the recording. No
+  recorded byte crosses a process boundary.
+- **Relay first, record second.** The proxy forwards bytes, then offers a copy. If a memory guard is
+  full, the copy is dropped and the loss is written as a gap. The harness is never slowed.
+- **Headers are recorded with credentials masked.** Secrets are masked before any byte reaches disk.
+- **One host list.** `connectors/model-hosts.toml` names the model hosts goalcup opens. Every other
+  connection passes through closed, noted only as host, port, bytes and times.
 
-1. **The chat file.** If the harness keeps its own conversation file, Goal Cup records it. It is a
-   backup of the wire record; a harness may have none.
-2. **Model traffic.** Goal Cup opens only the model service: the connector's default hosts, and the
-   one address the harness's own settings name. Every request under the address the settings name is
-   recorded, and the standard formats (`/chat/completions`, `/messages`, `/responses`) are decoded.
-3. **Everything else is sealed.** Any other connection passes through closed, noted only as host,
-   port, bytes each way, times and reason. Sign-in and token refresh are always sealed.
-4. **The label.** The verifier labels what each run holds. RULES says what each label is worth.
+A gateway is one more HTTPS address. If your harness uses Vercel AI Gateway, OpenRouter or
+Cloudflare AI Gateway, goalcup records it exactly like a direct key: same proxy, same record. A
+model host goalcup does not know is added once with `goalcup setup --record-host <host>`. Some
+harnesses talk only to their vendor (Amp, Copilot with GitHub's models): goalcup records what
+the harness sends to the vendor; the vendor's own model calls happen on its servers. A harness
+that ignores goalcup's proxy is "not supported": goalcup records its session files only, not its
+model calls, and says so.
 
-The rules are [D74](docs/DECISIONS.md#d74-the-model-host-is-the-connectors-default-or-the-one-address-the-harnesss-own-config-names);
-the labels are in [RULES](docs/RULES.md#what-a-label-is-worth).
-
-- **The wire leg.** The harness reaches its model through a local recording proxy, set by
-  `HTTPS_PROXY` for that one process only. Goal Cup Proxy never sets a model base URL. Bytes are
-  relayed unchanged; no header is recorded.
-- **The native leg.** The daemon reads the harness's session files from an isolated home, never
-  your own `~/.claude` or `~/.codex`.
-- **The chain.** Secrets are removed before anything is written. Any detected loss is a gap in
-  the chain, never an invented record. The chain catches a stray edit. Server acknowledgements,
-  signed with a key pinned in the verifier, catch a rewrite of what was uploaded
-  ([cheat checklist](docs/CHEAT-CHECKLIST.md)).
-- <a id="the-daemon"></a>**The daemon.** There is nothing to install. `goalcup start` starts
-  `goalcup-daemon` for the run. It exits 30 seconds after the last run is sealed, and logs to
-  `$GOALCUP_CONFIG_DIR/daemon.log`. It stores raw bytes; the verifier makes every judgement later.
-
-| Crate | Ships | What it holds |
-|---|---|---|
-| `goalcup-protocol` | library | Every byte definition: chain, records, control API, harness schema, connector pins. |
-| `goalcup-daemon` | `goalcup-daemon` | Ingest, redaction, chain writer, session-file capture, seal, process termination. |
-| `goalcup-cli` | `goalcup` | The eleven commands, the harness launch, the recording proxy, the upload. |
-| `goalcup-verifier` | `goalcup-verify` | The integrity reader and the decoders. Every judgement about the bytes. |
-| `goalcup-platform` | library | Unix OS code: disk reservation, safe file access, machine facts, sleep lock. |
-
-Also: `connectors/<id>/` (one harness as data), `server/worker` (the upload server, a Cloudflare
-Worker). The details and the glossary (run, part, segment, chain file, seal, receipt, ack):
-[ARCHITECTURE](docs/ARCHITECTURE.md).
+The record format is [RECORD-FORMAT](docs/RECORD-FORMAT.md). The parts, the terms and the data
+flow are [ARCHITECTURE](docs/ARCHITECTURE.md).
 
 ## Platforms
 
 | Platform | Status |
 |---|---|
-| macOS, Apple silicon | Measured. Use the arm64 build of `goalcup` and of the harness. |
-| macOS, Intel | Builds. No run measured. |
-| Linux, arm64 | Docker gates and logged-in Codex and Hermes staging practices passed. Longer runs pending ([measurements](docs/research/results/2026-10-22-local-test-day.md)). |
-| Linux, x86_64 | Reservation tests and a no-login harness smoke pass on a hosted runner. Full suites not measured. |
-| Windows | Use WSL2 (below). Real-machine validation is pending. Native Windows is planned. |
+| macOS | The owner's Mac run is pending. Until it passes, macOS is not confirmed. |
+| Linux x86_64 | Tested in sandboxes. |
+| Linux arm64 | Built, not yet tested. |
+| Windows | Use WSL2 (below). |
 
-The trace folder must be on APFS, ext4 or XFS: `goalcup setup` fails its step otherwise, and
-`start` and `continue` warn. On Linux, install the
-harness as a native binary first on `PATH` (not an npm wrapper). On a machine with no browser, set
-`GOALCUP_NO_BROWSER=1`: `login` and `start` print the approval address instead. Known issues:
-[TODO](TODO.md#known-issues).
+Known issues: [TODO](TODO.md#known-issues). On a machine with no browser, set `GOALCUP_NO_BROWSER=1`:
+the approval address is printed instead.
 
 <a id="windows-use-wsl2"></a>**Windows: use WSL2.** In PowerShell run `wsl --install -d Ubuntu`,
 then do everything inside Ubuntu as on Linux. Keep every folder a run uses on the Linux filesystem
-(`~/...`), never on `/mnt/c`. Goal Cup Proxy refuses WSL1 and Windows-drive folders. It cannot
-keep Windows awake, so set Windows sleep to Never for the run.
+(`~/...`), never on `/mnt/c`. goalcup cannot keep Windows awake, so set Windows sleep to Never for
+the run.
 
 ## Add a harness
 
-A harness is data, not code: one `connectors/<id>/harness.toml` (chat mode), a pin line and a
-facts sheet. No `.rs` file and no test of your own. Start with the
-[adding-a-capture-harness skill](skills/adding-a-capture-harness/SKILL.md), then follow
-[Add and test a connector](docs/HARNESS-ONBOARDING.md#quick-path). The short path:
-
-1. **Check it can be captured** ([check first](docs/HARNESS-ONBOARDING.md#row-0)). The two facts
-   that most often need a core change: the CA variable the harness reads, and how it keeps its
-   sign-in without an environment key.
-2. **Fill the facts sheet**: copy `skills/adding-a-capture-harness/templates/harness-facts.md` to
-   `docs/harnesses/<id>.md`.
-3. **Copy the template**: `skills/adding-a-capture-harness/templates/connector-harness.toml` to
-   `connectors/<id>/harness.toml`. (This step is 0.7 text, being rewritten; the 1.0 keys are in
-   [CONNECTOR-SCHEMA](docs/CONNECTOR-SCHEMA.md).) The closest example is [connectors/codex-cli](connectors/codex-cli/harness.toml).
-4. **Pin and regenerate**: `sh scripts/pin-manifests.sh`, then the two golden commands in
-   [Test a connector](docs/HARNESS-ONBOARDING.md#test-a-connector).
-5. **Check**: `sh scripts/check-connector.sh <id>`, then `sh scripts/gate.sh fast`.
-6. **Run it for real**: a local smoke run, then a practice run on the server
-   (`goalcup start --harness <id> --practice`), checked with `goalcup-verify --capture-integrity`.
-
-A harness can join the event at any time: releases continue during the cup, and a merged connector
-ships in the next one. A maintainer does a practice run of it first ([getting a harness into the event](docs/HARNESS-ONBOARDING.md#getting-a-harness-into-the-event)).
+A harness is data, not code, and the test pad is the one way to add it: follow the
+[adding-a-capture-harness skill](skills/adding-a-capture-harness/SKILL.md) or
+[CONTRIBUTING](CONTRIBUTING.md#adding-a-harness). The harnesses that exist are in
+[docs/harnesses/README.md](docs/harnesses/README.md).
 
 ## For developers
 
-<a id="build"></a>**Build from source.** You need Rust 1.99 (`rust-toolchain.toml` selects it;
-install [rustup](https://rustup.rs)), a C compiler (macOS: the Xcode command line tools; Debian or
-Ubuntu: `build-essential`), `python3`, and `shasum` or `sha256sum`. From the repository root:
+<a id="build"></a>You need Rust 1.99 (`rust-toolchain.toml` selects it; install [rustup](https://rustup.rs)), a C
+compiler (macOS: the Xcode command line tools; Debian or Ubuntu: `build-essential`) and `python3`.
 
 ```sh
-cargo fetch --locked             # once: download the dependencies
-cargo build --release --offline
+cargo fetch --locked
+cargo build --release --locked
 export PATH="$PWD/target/release:$PATH"
 ```
 
-A binary copied out of `target/release` needs `GOALCUP_CONNECTORS_DIR="<checkout>/connectors"`.
-
-**Try a local run without an account.** The harness must already be installed on this machine
-(`goalcup doctor --harness claude-code-cli` checks). Use a fresh config, so nothing is uploaded:
-
-```sh
-export GOALCUP_CONFIG_DIR="$(mktemp -d "$HOME/goalcup-local.XXXXXX")"
-goalcup setup --harness claude-code-cli   # sign in to the harness; the [todo] lines are fine locally
-cd "$(mktemp -d "$HOME/goalcup-run.XXXXXX")"   # outside any Git repository
-goalcup start --harness claude-code-cli   # type a prompt, then exit the harness to seal
-```
-
-Then run the `verify:` command it prints. Only one run per harness records at a time.
-
 ### The gate
 
-One script, two tiers. Its last line is `gate <tier>: PASS in <N>s` or `gate <tier>: FAIL`.
+One script, two tiers. Its last line is `gate <tier>: PASS in <N>s` or `gate <tier>: FAIL`. CI runs
+`sh scripts/gate.sh fast` on every pull request and every push to `main` and `v1.0/integration`.
 
 ```sh
 cargo install cargo-nextest --locked   # once per machine
-cargo fetch --locked                   # once per machine
-sh scripts/gate.sh fast                # every change, before it is committed
-sh scripts/gate.sh full                # before a release
+npm ci --prefix server/worker          # once per checkout (Node 22.18 or later)
+sh scripts/gate.sh fast                # every change, before it is merged
+sh scripts/gate.sh full                # phase exits, before a release
 ```
 
-- **fast:** the version check, `cargo build`, `cargo fmt --check`, `cargo clippy -D warnings`,
-  every test except the slow tier (under cargo-nextest), and the doctests. A few minutes warm.
-- **full:** fast, plus the slow tier, the CLI's ignored end-to-end tests, the Worker's tests
-  (Node 22.18+ and `npm ci` in `server/worker`), the scripts' unit tests and the link check. Run
-  it before every tag.
-- **Run the gate as a normal user, not root.** Some permission tests always fail as root, so the
-  gate stops at once when run as root. Set `GOALCUP_GATE_ALLOW_ROOT=1` to run it anyway, for
-  example in a throwaway container, and expect those tests to fail.
-- On Linux the gate also needs `nc`, procps `ps`, `*.localhost` on loopback, IPv6 on loopback and
-  `TMPDIR` on ext4 or XFS. A plain Debian or Ubuntu container does not resolve `*.localhost`
-  (it lacks `nss-myhostname`): add `127.0.0.1 api.e00.localhost auth.e00.localhost` to its
-  `/etc/hosts`. If `/tmp` is tmpfs or btrfs and your home is ext4 or XFS, run this first:
-  `export TMPDIR="$HOME/.cache/goalcup-tmp"; mkdir -p "$TMPDIR"`. CI (`check`) is a small Linux
-  smoke, not the gate. More: [scripts](scripts/README.md).
+- **fast:** `cargo fmt --check`, `cargo clippy -D warnings`, every Rust test under cargo-nextest, the
+  doctests, the Worker tests and the script tests.
+- **full:** fast, plus every ignored test (the end-to-end run), the release build, and a check that
+  no test hook text is in the shipped `goalcup`.
+- **Run it as a normal user, not root.** Some permission tests always fail as root, so the gate
+  stops at once. `GOALCUP_GATE_ALLOW_ROOT=1` overrides this, for a throwaway container.
+- It needs `cargo-nextest`, `zstd`, `python3`, `git`, `npm` and Python 3.11 or later for the pad
+  tests, and names every missing one before it starts. More: [scripts](scripts/README.md).
 
-**The dependency rule.** The daemon never links the verifier, and the CLI never links the daemon.
-Tests check both. Other hard rules (never a base URL, no harness names in core code, pins
-regenerated with every connector edit) are in [AGENTS.md](AGENTS.md#hard-rules).
+**The dependency rule.** The recorder never links the verifier, and the verifier never links the
+recorder. They share only `goalcup-format`. Other hard rules (no base URL set by goalcup, no
+harness names in core code, masking before disk) are in [AGENTS.md](AGENTS.md).
 
-### The promises
+### The seven points and their tests
 
-A test that guards one of these is never deleted. It may move tier.
+Each point has tests. A test that guards a point is never deleted while the point stands; it may
+move tier ([AGENTS.md](AGENTS.md#tests)). The test pad's six checks (C1 to C6, PAD-RESULTS) prove
+the same points on real harnesses.
 
-| | Promise | Where the tests are |
+| Point | Real-run proof | Guard tests in |
 |---|---|---|
-| P1 | No key fragment leaks | daemon redaction suites; cli connector contract and kit (no provider key reaches a harness, D61), Hermes offline key |
-| P2 | The chain catches a stray edit | protocol chain golden; verifier capture integrity, v5 corpus, containment |
-| P3 | Capture policy refuses endpoints, proxies, credentials and bad args | protocol harness schema and conformance; cli launch plan, dependency bans |
-| P4 | Connectors load and pins match | protocol connector pins and loader; cli shipped connectors |
-| P5 | The control API authenticates | daemon control API |
-| P6 | The recording proxy captures faithfully | cli TLS, HTTP and WebSocket relay; verifier decoders |
-| P7 | One end-to-end capture per harness, and termination | cli lifecycle suites and contract kit; daemon capture lifecycle and process kill |
+| 1 Every model request | Pad C1 | `crates/goalcup/tests` |
+| 2 Every subagent | Pad C2 | `crates/goalcup/tests` |
+| 3 Never block | Recorder kill test | not merged yet |
+| 4 No secrets | Pad C3 | `crates/goalcup/tests`, `crates/goalcup-verify/tests` |
+| 5 Upload everything | Pad C4 | `crates/goalcup/tests`, `crates/goalcup-verify/tests`, `server/worker/test` |
+| 6 Tell plainly | Pad C6 | `crates/goalcup/tests`, `crates/goalcup-verify/tests` |
+| 7 Real harnesses | Pad tiers | `crates/goalcup/tests`, `scripts` |
+| Usage | Pad C5 | `crates/goalcup-verify/tests` |
+| Format | Pad | `crates/goalcup-format/tests` |
+| All together | Done items 1 and 2 | not merged yet |
 
 ### Releasing
 
-The version is written only in the workspace `Cargo.toml` (`scripts/check-version.py` fails on
-any other copy). `sh scripts/release.sh prepare <x.y.z>` opens the version PR; after it merges, run
-the full gate and `sh scripts/linux-check.sh` on that commit, then `sh scripts/release.sh tag <x.y.z>`
-([details](packaging/README.md#cutting-a-release)). Release notes: [GitHub releases](https://github.com/agentcommunity/goal-cup-proxy/releases).
+The version is written only in the workspace `Cargo.toml`; the steps are in
+[packaging](packaging/README.md). Release notes: [GitHub releases](https://github.com/agentcommunity/goal-cup-proxy/releases).
 
 ## Docs map
 
-Every doc, grouped by who reads it: [docs/README.md](docs/README.md). The key ones:
+Every doc, grouped by who reads it.
 
 | You are | Start with |
 |---|---|
-| A participant | [PARTICIPANT-GUIDE](docs/PARTICIPANT-GUIDE.md), [HARNESS-SETUP](docs/HARNESS-SETUP.md), [RULES](docs/RULES.md), [SECURITY](SECURITY.md) |
-| A harness builder | [skill](skills/adding-a-capture-harness/SKILL.md), [HARNESS-ONBOARDING](docs/HARNESS-ONBOARDING.md), [CONNECTOR-SCHEMA](docs/CONNECTOR-SCHEMA.md), [facts sheets](docs/harnesses/README.md) |
-| A developer | [AGENTS](AGENTS.md), [ARCHITECTURE](docs/ARCHITECTURE.md), [DECISIONS](docs/DECISIONS.md), [archive/CONTRACTS](docs/archive/CONTRACTS.md), [TODO](TODO.md) |
-| An organizer | [OPERATING](docs/OPERATING.md), [UPLOAD-API](docs/UPLOAD-API.md), [server/worker](server/worker/README.md) |
-| A researcher | [RESEARCH-TARGET](docs/RESEARCH-TARGET.md), [CHEAT-CHECKLIST](docs/CHEAT-CHECKLIST.md), [coverage matrix](docs/research/coverage-matrix.md) |
+| A participant | [PARTICIPANT-GUIDE](docs/PARTICIPANT-GUIDE.md), [RULES](docs/RULES.md), [SECURITY](SECURITY.md), [harnesses](docs/harnesses/README.md) |
+| An organizer | [OPERATING](docs/OPERATING.md), [UPLOAD-API](docs/UPLOAD-API.md), [server/worker](server/worker/README.md), [packaging](packaging/README.md) |
+| A contributor | [AGENTS](AGENTS.md), [VISION](VISION.md), [CONTRIBUTING](CONTRIBUTING.md), [ARCHITECTURE](docs/ARCHITECTURE.md), [RECORD-FORMAT](docs/RECORD-FORMAT.md), [DECISIONS](docs/DECISIONS.md), [TODO](TODO.md) |
+| A harness builder | [skill](skills/adding-a-capture-harness/SKILL.md), [CONNECTOR-SCHEMA](docs/CONNECTOR-SCHEMA.md), [facts sheets](docs/harnesses/README.md), [scripts](scripts/README.md) |
+| Evidence | [the first two-hour run](docs/research/results/2026-10-30-two-hour-run.md) |
+
+Plans are in `docs/plans/`. Finished work and old narratives are in `docs/archive/` and
+`docs/research/`; do not plan from them.
 
 ## Support, security and license
 

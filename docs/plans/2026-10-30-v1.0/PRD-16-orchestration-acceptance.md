@@ -2232,3 +2232,41 @@ kept and now cites BUILD-PROMPT section 5, since B3 no longer carries it.
   changed no code, so the figures equal the slice 6 note. Count the ceilings at the final check and list
   the 895 and 359 beside the Rust total.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-31, replan after PRD-09 slice 5 (merge 52922c12)
+
+- **Size report, PRD-09** (`wc -l` at 52922c12, row "Usage reader (PRD-09)", 1,470 src and 200 tests):
+  src 2,861 (195% of the row, 112% of the 2,550 ceiling), tests `usage_run1.rs` 676 (338% of the row,
+  130% of the 520 ceiling). The overrun is the recorded slice 5 decision (`sqlite.rs` 393 against 150:
+  WAL needs real files, checksum repair, column probing). Nothing else is planned for usage src. The
+  end-of-build report nets this against the Rust totals; only a total past about 18,100 src or about
+  14,200 tests becomes the owner question.
+- **Build order:** PRD-09 slice 6 is the job script only; the CSV and `--text` are cut (PRD-09 note).
+  The PRD-09 acceptance list as known, if still open: the A5r-2 test nit and the `out.rs` taste nit.
+- Box results: fmt, clippy `-D warnings`, nextest 64 of 64 on the slice; `gate full` not run here.
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-31, replan after PRD-06 slice 4 (merge a3a39f45)
+
+- **Size report, PRD-06** (`wc -l` at a3a39f45, row "Upload (PRD-06)", 940 src and 1,000 tests): src
+  2,558 (272% of the row), tests `upload_*` 1,690 (169%). Decision recorded in the PRD-06 note: it serves
+  points 3 and 5; `prune.rs` and `manual.rs` are still to come. The end-of-build report nets this
+  against the Rust totals; only a total past about 18,100 src or about 14,200 tests becomes the owner
+  question.
+- **Build order:** PRD-06 slices remaining are prune and keep, then manual; a recorder caller of
+  `upload::spawn` is PRD-02 or PRD-10 work, and the live-mode upload case waits for it.
+- Box results as reported: 45 of 45 upload tests, 38 upload binary tests three more times, null-mode
+  stress with faults all sealed; clippy and fmt green at the fixer commit.
+- No locked ledger item is touched and no owner question comes from this slice.
+
+
+### 2026-10-31, replan after PRD-15 slice 12 (merge 89549774)
+
+- **Docs are not code and have no budget row.** `wc -l` at 89549774 (information only, not counted against
+  the Rust totals): participant guide 483, RULES 457, RECORD-FORMAT 538, OPERATING 260, README 247. The
+  guide is 33 over its 450 slice ceiling, accepted (PRD-15 note).
+- **Final-pass additions for the link check:** (1) `HARNESS-SETUP.md` moves to `docs/archive/` only after
+  PRD-11's sheet refresh has repointed the seven sheets that link it; if it has not, the page stays and is listed as open.
+  (2) Heading anchors into `PARTICIPANT-GUIDE.md` are not checked by `check-links.py`; grep them once
+  (`LOCAL-RESEARCH-HANDOFF.md:97` has `#5-your-run`, the heading is `#6-your-run`).
+- No locked ledger item is touched and no owner question comes from this slice.
