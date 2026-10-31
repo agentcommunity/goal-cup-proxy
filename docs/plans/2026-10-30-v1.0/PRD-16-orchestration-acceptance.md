@@ -2245,3 +2245,16 @@ kept and now cites BUILD-PROMPT section 5, since B3 no longer carries it.
   The PRD-09 acceptance list as known, if still open: the A5r-2 test nit and the `out.rs` taste nit.
 - Box results: fmt, clippy `-D warnings`, nextest 64 of 64 on the slice; `gate full` not run here.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-31, replan after PRD-06 slice 4 (merge a3a39f45)
+
+- **Size report, PRD-06** (`wc -l` at a3a39f45, row "Upload (PRD-06)", 940 src and 1,000 tests): src
+  2,558 (272% of the row), tests `upload_*` 1,690 (169%). Decision recorded in the PRD-06 note: it serves
+  points 3 and 5; `prune.rs` and `manual.rs` are still to come. The end-of-build report nets this
+  against the Rust totals; only a total past about 18,100 src or about 14,200 tests becomes the owner
+  question.
+- **Build order:** PRD-06 slices remaining are prune and keep, then manual; a recorder caller of
+  `upload::spawn` is PRD-02 or PRD-10 work, and the live-mode upload case waits for it.
+- Box results as reported: 45 of 45 upload tests, 38 upload binary tests three more times, null-mode
+  stress with faults all sealed; clippy and fmt green at the fixer commit.
+- No locked ledger item is touched and no owner question comes from this slice.

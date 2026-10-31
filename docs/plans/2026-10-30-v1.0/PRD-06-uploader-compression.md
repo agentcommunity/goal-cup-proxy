@@ -1048,3 +1048,20 @@ PRD-12 and PRD-17.
   counted), with `prune.rs` and `manual.rs` still to come. The extra lines serve point 3 and point 5:
   an uploader thread that cannot end for good, and a wrap-up that cannot stall on a dead thread.
   `client.rs` (644) is the first place the next slice looks for a cut.
+
+### 2026-10-31, replan after slice 4 (merge a3a39f45)
+
+- **Decision (size).** The upload module is 2,558 src lines (inline tests counted) and the `upload_*`
+  test binaries 1,690, against the PRD-00 row of 940 and 1,000. The lines serve point 3 (a thread that
+  cannot end for good, a wrap-up that cannot stall) and point 5 (resend of a failed first final, wait for
+  the seal LINK, upload.json). `prune.rs` and `manual.rs` are still to come. Cut first: inline tests in
+  `client.rs` (644) that repeat an `upload_*` case, then the `UP` name compare in `finish` (keep a
+  bool or handle field instead).
+- **Known narrow cases, left as built.** (a) A body that panicked before `finish` and is in backoff when
+  `finish` arrives sets `tried`, so wrap-up chunks may go before the first final; the server answers
+  `503 awaiting_final` and the sender waits, no bytes lost. (b) If the last whole line on disk after
+  `finish` is an L line, `link` stays None and the beat thread re-reads the index each tick; PRD-02
+  section 11 steps 5 and 6 (E line synced before `finish`) rule it out. The next slice that touches
+  `finish` logs one line when the filtered read finds nothing.
+- Live mode and the recorder coupling stay untested until PRD-02 lands a test recorder and a caller of
+  `upload::spawn`. No locked ledger item is touched.

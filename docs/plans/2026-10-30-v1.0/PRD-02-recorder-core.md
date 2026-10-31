@@ -1595,3 +1595,11 @@ Two planning passes (`/root/gc-night/prd02/path-plan.md` and `audit-fix-plan.md`
 - **Tests folded:** `pipeline_native_room.rs`, `pipeline_panic.rs`, `pipeline_many_streams.rs` are not written; P5 to P7 are guarded by the folded case in `pipeline_guard.rs`, P11 by `watchdog_end.rs`, P14 by PRD-04's native room test.
 - **Mask pool:** decided in slice C after the R8 by-hand measure; not before.
 - Owner questions 2, 9 and 12 keep their defaults.
+
+### 2026-10-31, note from the PRD-06 slice 4 replan
+
+- `upload::finish` relies on the seal order of section 11: the writer has synced the E (or R) line
+  before `finish` is called, and the wrap-up takes the seal LINK from the last non-L line on disk. If
+  that order slips, the final heartbeat never goes out and the wrap-up holds every chunk. `upload::spawn`
+  has no caller on integration yet; the PRD-02 caller slice should add one live-mode case with a test
+  recorder (finish after seal, final then chunks then final). No locked ledger item is touched.
