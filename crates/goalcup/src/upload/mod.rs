@@ -10,7 +10,8 @@
 //!
 //! Open for slice 4: the threads and their `catch_unwind` (with the panic case of
 //! `upload_resume.rs`); the call of `Policy::from_env` (gate full stays red until then); the order
-//! final heartbeat, chunks, final again until sealed; `upload.json` written at most once a second;
+//! final heartbeat, chunks, final again until sealed; `upload.json` written at most once a second
+//! (`state::Writer` in both `Sender::update` and `Beat::send`);
 //! null mode's thread that sends `failed` (ledger R7); prune and the older-entry queue.
 
 pub mod beat;

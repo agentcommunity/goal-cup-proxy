@@ -179,9 +179,9 @@ impl Beat {
         !self.finals && self.backoff.due(now) && (changed || self.timer.due(now))
     }
 
-    /// Sends the final heartbeat once: `final: true` at the seal LINK with the seal's
-    /// `workspace_head` and totals. From here on `tick` sends nothing. The caller repeats it when
-    /// `backoff.due`, until `upload.json` `final` says sealed or the wrap-up ends: an answer that
+    /// Sends one final heartbeat per call: `final: true` at the seal LINK with the seal's
+    /// `workspace_head` and totals. From the first call on `tick` sends nothing. The caller repeats
+    /// it when `backoff.due`, until `upload.json` `final` says sealed or the wrap-up ends: an answer that
     /// does not say sealed waits like a failure. A recovered seal says at least `gaps`: its
     /// abandoned span is off time (section 6).
     pub fn final_beat(

@@ -35,6 +35,8 @@ pub struct Sender {
     pub backoff: Backoff,
     /// The server's position; None until read, and after a failure or a 409.
     pos: Option<RunPosition>,
+    /// Whether a local line or the confirmed link matched `pos` when it was taken.
+    held: bool,
     /// The furthest offset the server has answered.
     known: u64,
     /// The raw end the open round runs to.
@@ -61,6 +63,7 @@ impl Sender {
             timer: Timer::new(p.round, p.spread_first),
             backoff: Backoff::new(p),
             pos: None,
+            held: false,
             known: 0,
             target: None,
             conflict: None,
@@ -94,11 +97,14 @@ impl Sender {
         let Some(pos) = self.pos.clone() else {
             return self.read_position(clock, j);
         };
-        let (end, waiting) = self.measure(bound, pos.offset);
+        let Some((end, waiting)) = self.measure(bound, pos.offset) else {
+            return self.fail(clock(), "chunk", UNREAD, None, j);
+        };
         self.update(j, |j| (j.durable_raw, j.waiting_bytes) = (end, waiting));
-        if end < pos.offset && !self.holds(&pos, j) {
-            // The server holds bytes the local copy does not: the copies disagree.
-            let reason = "the server's offset is not at a local index line";
+        if pos.offset > 0 && end <= pos.offset && !self.held {
+            // The server holds bytes the local copy does not, or a different chain of the same
+            // length: the copies disagree. A position below the end is checked by the cut.
+            let reason = "the server's position does not match a local index line";
             return self.stuck(now, reason, pos.offset, j);
         }
         if self.target.is_some_and(|t| pos.offset >= t) {
@@ -158,6 +164,9 @@ impl Sender {
             return self.fail(clock(), "chunk", UNREAD, None, j);
         };
         self.inflight = Some((c.raw_end, len));
+        // Read before the PUT leaves: a final committed while it is in flight is the race that
+        // `awaiting_final` waits on.
+        let final_before = lock(j).final_;
         let answer = self.client.put_chunk(&self.run, &h, body, len);
         let now = clock();
         match answer {
@@ -181,18 +190,25 @@ impl Sender {
                     stop: false,
                     committed: None,
                 };
-                self.took(p, ours, j);
+                // An answer that is not ours is confirmed only by a local line.
+                let confirm = ours || self.holds(&p, j);
+                self.took(p, confirm, j);
                 Step::Again
             }
             Err(ServerError::Status { status: 409, .. }) => {
                 (self.conflict, self.pos) = (Some(self.known), None);
                 Step::Again
             }
-            // No failure counted: the wait ends when the final heartbeat is committed. Once it
-            // is sent, the same answer is an ordinary busy server and backs off.
+            // No failure counted: the wait ends when the final heartbeat is committed. A PUT that
+            // left after the final was sent meets an ordinary busy server: it backs off, on the
+            // ordinary backoff, since that Retry-After is not waited out once the final is sent.
             Err(ServerError::Status {
                 status: 503, code, ..
-            }) if code == "awaiting_final" && lock(j).final_ == Final::None => {
+            }) if code == "awaiting_final" => {
+                if final_before != Final::None {
+                    let why = (Class::ServerBusy, Some(503), "the server is busy");
+                    return self.fail(now, "chunk", why, None, j);
+                }
                 self.awaiting_final = true;
                 let why = (
                     Class::ServerBusy,
@@ -237,6 +253,7 @@ impl Sender {
             self.refusals = 0;
         }
         self.known = self.known.max(p.offset);
+        self.held = confirm;
         let stored = self.inflight.take().filter(|i| moved && i.0 == p.offset);
         let at = rfc3339(SystemTime::now());
         let open = self.target.is_some_and(|t| p.offset < t);
@@ -325,18 +342,16 @@ impl Sender {
     }
 
     /// The bound's raw end and the waiting bytes, read again only when the bound or the offset
-    /// moved (always with no live writer).
-    fn measure(&mut self, bound: &Bound, offset: u64) -> (u64, u64) {
+    /// moved (always with no live writer); None when an index could not be read.
+    fn measure(&mut self, bound: &Bound, offset: u64) -> Option<(u64, u64)> {
         let key = match bound {
             Bound::Durable(d) => Some((d.line.raw_end, offset)),
             Bound::OnDisk => None,
         };
-        if (key.is_none() || key != self.measured.0)
-            && let Ok(m) = chunk::waiting(&self.rec, offset, bound)
-        {
-            self.measured = (key, m);
+        if key.is_none() || key != self.measured.0 {
+            self.measured = (key, chunk::waiting(&self.rec, offset, bound).ok()?);
         }
-        self.measured.1
+        Some(self.measured.1)
     }
 
     /// Changes `upload.json` and writes it when anything changed. Open for slice 4: at most once
@@ -384,7 +399,7 @@ fn words(e: &ServerError) -> Why<'static> {
 }
 
 /// `upload what=<what> class=<class> status=<n or -> wait_s=<n>`: fixed words and numbers only.
-pub fn log_failure(
+pub(super) fn log_failure(
     entry_dir: &Path,
     what: &'static str,
     class: &'static str,

@@ -24,7 +24,8 @@ use serde_json::json;
 use std::cell::Cell;
 use std::path::PathBuf;
 use std::sync::Mutex;
-use std::{fs, mem};
+use std::time::Duration;
+use std::{fs, mem, thread};
 
 const S: u64 = 1_000_000_000;
 
@@ -185,30 +186,29 @@ fn a_409_moves_only_to_a_position_a_local_line_confirms() {
     r.stored_once(&r.cat());
 }
 
-/// A re-read at an offset no local line holds is `stuck` and sends nothing: inside the local
-/// copy, and past its end (the server holds bytes the local copy does not).
+/// A re-read at a position no local line holds is `stuck` and sends nothing: inside the local
+/// copy, past its end (the server holds bytes the local copy does not), and at its end with
+/// another head or another sequence number (a different chain of the same length).
 #[test]
 fn a_409_re_read_no_local_line_holds_is_stuck() {
-    for ahead in [false, true] {
+    for case in 0..4 {
         let (mut r, _w, d) = rig(u64::MAX, 6);
-        let l = r.lines(0)[2];
-        let raw = if ahead {
-            d.line.raw_end + 5000
-        } else {
-            l.raw_end - 1
+        let (l, e) = (r.lines(0)[2], d.line);
+        let (raw, seq, head) = match case {
+            0 => (l.raw_end - 1, l.seq, hex(&l.hash)),
+            1 => (e.raw_end + 5000, l.seq, hex(&l.hash)),
+            2 => (e.raw_end, e.seq, "ab".repeat(32)),
+            _ => (e.raw_end, e.seq + 1, hex(&e.hash)),
         };
         r.fake
             .inject(Route::Chunk, answer(409, json!({"error": "conflict"})));
-        let odd = json!({"offset": raw, "next_seq": l.seq + 1, "head": hex(&l.hash)});
+        let odd = json!({"offset": raw, "next_seq": seq + 1, "head": head});
         r.fake.inject(Route::Position, Inject::default());
         r.fake.inject(Route::Position, answer(200, odd));
         while r.tick(&Bound::Durable(d.clone())) == Step::Again {}
         let j = r.j();
-        assert_eq!(
-            (j.state, j.confirmed),
-            (State::Stuck, None),
-            "ahead {ahead}"
-        );
+        assert_eq!((j.state, j.confirmed), (State::Stuck, None), "case {case}");
+        assert!(j.last_error.is_some(), "case {case}");
         assert!(r.fake.chunks().is_empty());
     }
 }
@@ -268,12 +268,36 @@ fn a_409_with_no_forward_move_backs_off() {
 
 #[test]
 fn awaiting_final_waits_for_the_final_then_retries_at_once() {
-    let (mut r, _w, d) = rig(u64::MAX, 6);
-    let b = Bound::Durable(d);
     let busy = Inject {
         retry_after: Some(60),
         ..answer(503, json!({"error": "awaiting_final"}))
     };
+    // The race: the final is sent while the PUT is in flight, and the answer comes after it.
+    let (mut r, _w, d) = rig(u64::MAX, 6);
+    let b = Bound::Durable(d);
+    r.fake.inject(
+        Route::Chunk,
+        Inject {
+            delay: Some(Duration::from_millis(800)),
+            ..busy.clone()
+        },
+    );
+    let (s, jm, t) = (&mut r.s, &r.j, &r.t);
+    thread::scope(|sc| {
+        sc.spawn(|| {
+            thread::sleep(Duration::from_millis(300));
+            jm.lock().unwrap().final_ = Final::Sent;
+        });
+        while s.tick(&|| Mono(t.get()), &b, false, jm) == Step::Again {}
+    });
+    assert_eq!((r.j().failures, r.s.backoff.next_try), (0, None));
+    assert_eq!(r.tick(&b), Step::Again, "retried at once, at the same clock");
+    assert_eq!(r.fake.chunks().len(), 1);
+    r.finish(&b);
+    r.stored_once(&r.cat());
+
+    let (mut r, _w, d) = rig(u64::MAX, 6);
+    let b = Bound::Durable(d);
     r.fake.inject(Route::Chunk, busy.clone());
     while r.tick(&b) == Step::Again {}
     r.t.set(r.t.get() + 600 * S);
@@ -282,11 +306,13 @@ fn awaiting_final_waits_for_the_final_then_retries_at_once() {
     let j = r.j();
     assert_eq!((j.state, j.failures, j.next_try), (State::Waiting, 0, None));
     r.j.lock().unwrap().final_ = Final::Sent;
-    // Once the final is sent the same answer is a busy server: retried at once, then it waits.
+    // Once the final is sent the same answer is a busy server: retried at once, then it waits on
+    // the ordinary backoff, not the 60 s Retry-After.
     r.fake.inject(Route::Chunk, busy);
     assert_eq!(r.tick(&b), Step::Idle);
     assert_eq!((r.j().failures, r.fake.chunks().len()), (1, 0));
-    assert!(r.s.backoff.next_try.is_some_and(|t| t.0 > r.t.get()));
+    let wait = r.s.backoff.next_try.map(|t| t.0.saturating_sub(r.t.get()));
+    assert!(wait.is_some_and(|w| w > 0 && w <= 4 * S), "{wait:?}");
     r.finish(&b);
     r.stored_once(&r.cat());
 }
