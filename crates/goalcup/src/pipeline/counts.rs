@@ -334,6 +334,12 @@ impl Counter {
         &self.open
     }
 
+    /// The rule numbers that name `fail_closed`, for [`CountsLog::append`], so a recount seeded
+    /// from a line after its boot's start event is pruned still counts `mask_failclosed_bytes`.
+    pub fn fail_closed(&self) -> &[u64] {
+        &self.fail_closed
+    }
+
     /// The COUNT event (PRD-01 section 9): every key, over the records written before it in this
     /// boot. `held_bytes` is the gauge now; `held_peak` the boot's peak, from the recorder.
     pub fn count_event(&self, boot: u64, up_ms: u64, held_bytes: u64, held_peak: u64) -> Value {
@@ -404,6 +410,10 @@ struct Boot {
     /// the stream. None in a line written from the part files.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     open: Option<HashMap<u64, Open>>,
+    /// The boot's `fail_closed` rule numbers ([`Counter::fail_closed`]), from its start event's
+    /// `mask_rules`, so a recount past a pruned start event still counts them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    fail_closed: Vec<u64>,
     /// Scan only: the last LINK read before `count` was taken, so a line with a later `seq`
     /// holds a later count.
     #[serde(skip)]
@@ -426,9 +436,10 @@ impl Boot {
 }
 
 /// `counts.jsonl` (PRD-02 section 5 step 3), local only, one compact line per LINK:
-/// `{"seq":<link seq>,"count":<the COUNT event JSON at that LINK>,"spans":<n>,"open":<table>}`,
-/// where `spans` is the boot's own `recorder_down` spans so far ([`Counter::off_spans`]) and
-/// `open` the writer's open-stream table ([`Counter::open_table`]). A later boot takes
+/// `{"seq":<link seq>,"count":<the COUNT event JSON at that LINK>,"spans":<n>,"open":<table>,
+/// "fail_closed":<rule numbers>}`, where `spans` is the boot's own `recorder_down` spans so far
+/// ([`Counter::off_spans`]), `open` the writer's open-stream table ([`Counter::open_table`]) and
+/// `fail_closed` its `fail_closed` rule numbers ([`Counter::fail_closed`]). A later boot takes
 /// a dead boot's COUNT from it without decoding part files, and [`entry_totals`] takes a boot's
 /// totals from it once the boot's part files are pruned after upload (ledger U1).
 pub struct CountsLog {
@@ -450,16 +461,19 @@ impl CountsLog {
     }
 
     /// Appends one line at a LINK: this boot's COUNT event JSON at the LINK with that `seq`, the
-    /// boot's own `recorder_down` spans so far and its open-stream table, when known.
+    /// boot's own `recorder_down` spans so far, its open-stream table, when known, and its
+    /// `fail_closed` rule numbers.
     pub fn append(
         &mut self,
         seq: u64,
         count: &Value,
         spans: u64,
         open: Option<&HashMap<u64, Open>>,
+        fail_closed: &[u64],
     ) -> io::Result<()> {
-        let line = serde_json::json!({ "seq": seq, "count": count, "spans": spans, "open": open })
-            .to_string();
+        let line = serde_json::json!({ "seq": seq, "count": count, "spans": spans, "open": open,
+            "fail_closed": fail_closed })
+        .to_string();
         let mut f = std::fs::OpenOptions::new()
             .append(true)
             .create(true)
@@ -582,7 +596,12 @@ fn boots(entry_dir: &Path) -> BTreeMap<u64, Boot> {
                 Entry::Occupied(e) if e.get().seq > line.seq => {}
                 Entry::Occupied(mut e) => {
                     let spans = e.get().spans.max(line.spans);
-                    *e.get_mut() = Boot { spans, ..line };
+                    let fail_closed = rules(&mut e.get_mut().fail_closed, line.fail_closed);
+                    *e.get_mut() = Boot {
+                        spans,
+                        fail_closed,
+                        ..line
+                    };
                 }
                 Entry::Vacant(e) => {
                     e.insert(line);
@@ -599,9 +618,16 @@ fn boots(entry_dir: &Path) -> BTreeMap<u64, Boot> {
                     // The line whole: a synced line keeps the recovery gaps a partial read
                     // stopped before, and an appended one has none (its start gap is in
                     // `spans`).
-                    *b = Boot { seq, spans, ..line };
+                    let fail_closed = rules(&mut b.fail_closed, line.fail_closed);
+                    *b = Boot {
+                        seq,
+                        spans,
+                        fail_closed,
+                        ..line
+                    };
                 } else {
                     b.spans = spans;
+                    b.fail_closed = rules(&mut b.fail_closed, line.fail_closed);
                 }
             }
             None if n < first || stopped.is_some_and(|s| n >= s) => {
@@ -611,6 +637,15 @@ fn boots(entry_dir: &Path) -> BTreeMap<u64, Boot> {
         }
     }
     boots
+}
+
+/// A boot's `fail_closed` rule numbers: `new` when it has them, else those already known.
+fn rules(known: &mut Vec<u64>, new: Vec<u64>) -> Vec<u64> {
+    if new.is_empty() {
+        std::mem::take(known)
+    } else {
+        new
+    }
 }
 
 /// Reads every part file of `rec` up to its last whole index line. Returns the boots read, the
@@ -633,6 +668,8 @@ fn scan(rec: &Path) -> (BTreeMap<u64, Boot>, Option<u64>, Option<u64>) {
                 let e = boots.entry(n).or_default();
                 (e.count, e.count_after) = (Some(v), link);
                 e.down_ms.clear();
+            } else if v["ev"] == "start" {
+                boots.entry(n).or_default().fail_closed = start_rules(&v);
             }
         }
         Record::Gap {
@@ -710,12 +747,20 @@ fn walk(rec: &Path, mut f: impl FnMut(u64, &Record)) -> (Option<u64>, Option<u64
 /// table, so a stream opened in a pruned part keeps its kind; a COUNT event leaves the table as
 /// it is. `up_ms` is at least the seed's own.
 pub fn recount_at(entry_dir: &Path, seq: u64) -> Vec<u8> {
+    recount(entry_dir, seq).0
+}
+
+/// [`recount_at`], with the `fail_closed` rule numbers its counter used.
+fn recount(entry_dir: &Path, seq: u64) -> (Vec<u8>, Vec<u64>) {
     let known = count_lines(entry_dir);
     // A line's count and open table into the counter; its `up_ms`.
     let seed = |c: &mut Counter, b: &Boot| {
         let v = b.count.clone().unwrap_or_default();
         if let Some(o) = &b.open {
             c.open.clone_from(o);
+        }
+        if !b.fail_closed.is_empty() {
+            c.fail_closed.clone_from(&b.fail_closed);
         }
         let up = v["up_ms"].as_u64().unwrap_or(0);
         c.counts = serde_json::from_value(v).unwrap_or_default();
@@ -750,9 +795,10 @@ pub fn recount_at(entry_dir: &Path, seq: u64) -> Vec<u8> {
             Record::Event { json, .. } => {
                 let v: Value = serde_json::from_slice(json).unwrap_or_default();
                 if v["ev"] == "start" {
-                    let rules: Vec<String> =
-                        serde_json::from_value(v["mask_rules"].clone()).unwrap_or_default();
-                    *c = Counter::new(&rules);
+                    *c = Counter {
+                        fail_closed: start_rules(&v),
+                        ..Counter::new(&[])
+                    };
                     *whole = true;
                 } else if v["ev"] == "count" && !*whole {
                     *up = v["up_ms"].as_u64().unwrap_or(0);
@@ -784,11 +830,30 @@ pub fn recount_at(entry_dir: &Path, seq: u64) -> Vec<u8> {
         c.written(r, flags, host.as_deref());
     });
     let Some((boot, c, t0, t, _, up)) = last else {
-        return Vec::new();
+        return (Vec::new(), Vec::new());
     };
     let up_ms = (t.saturating_sub(t0) / 1_000_000).max(up);
     let peak = c.counts.held_peak;
-    serde_json::to_vec(&c.count_event(boot, up_ms, 0, peak)).unwrap_or_default()
+    let count = serde_json::to_vec(&c.count_event(boot, up_ms, 0, peak)).unwrap_or_default();
+    (count, c.fail_closed)
+}
+
+/// The `fail_closed` rule numbers of a start event's `mask_rules`.
+fn start_rules(start: &Value) -> Vec<u64> {
+    let rules: Vec<String> =
+        serde_json::from_value(start["mask_rules"].clone()).unwrap_or_default();
+    Counter::new(&rules).fail_closed
+}
+
+/// The recount at `seq` ([`recount_at`]) as a `counts.jsonl` line, with the `fail_closed` rule
+/// numbers the recount used: what recovery appends when the line at the dead boot's last LINK is
+/// missing. Nothing is appended when the recount is empty.
+pub fn append_recount(entry_dir: &Path, seq: u64) -> io::Result<()> {
+    let (count, fail_closed) = recount(entry_dir, seq);
+    match serde_json::from_slice::<Value>(&count) {
+        Ok(c) => CountsLog::open(entry_dir).append(seq, &c, 0, None, &fail_closed),
+        Err(_) => Ok(()),
+    }
 }
 
 /// Whether a part file in `rec` has a whole index line: what recovery keeps.

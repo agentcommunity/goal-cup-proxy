@@ -152,9 +152,8 @@ fn close(
     // last LINK is missing, so the totals here and that COUNT are one figure.
     if let Some(k) = kept.as_ref().filter(|k| k.seal.is_none())
         && counts::count_at(dir, k.durable.seq).is_none()
-        && let Ok(c) = serde_json::from_slice::<Value>(&counts::recount_at(dir, k.durable.seq))
     {
-        CountsLog::open(dir).append(k.durable.seq, &c, 0, None)?;
+        counts::append_recount(dir, k.durable.seq)?;
     }
     let mut totals = counts::entry_totals(dir);
     let tail = tail(rv.lineless);

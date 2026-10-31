@@ -256,7 +256,9 @@ fn a_dead_entry_after_a_reboot_seals_the_files_totals() {
 /// Point 5 and a right count: a boot whose first part file is pruned after upload, with
 /// `counts.jsonl` behind its last LINK (the append after the last compaction lost to a power
 /// loss), seals the bytes it wrote. The recount starts from the line the prune left and adds the
-/// records after it, DATA on the stream opened in the pruned part included.
+/// records after it, DATA on the stream opened in the pruned part included, and a `fail_closed`
+/// MASK after the line though the start event that names the rule is pruned. No `counts.jsonl`
+/// line names a LINK that is not written, so a line never gives a LINK another LINK's count.
 #[test]
 fn a_pruned_boot_with_counts_behind_seals_the_bytes_written() {
     const MIB: usize = 1 << 20;
@@ -292,9 +294,18 @@ fn a_pruned_boot_with_counts_behind_seals_the_bytes_written() {
     let log = std::fs::read(live.path().join("counts.jsonl")).unwrap();
     let line = log.split(|&b| b == b'\n').next().unwrap().to_vec();
     send(&mut ws, 3);
+    // A message that fails closed: a 20 KiB key candidate the masker cannot decide.
+    let closed = format!(
+        r#"{{"type":"response.create","input":"sk-{}"}}"#,
+        "A9".repeat(10 * 1024)
+    );
+    ws.ws(rec.now(), 0x1, true, Bytes::from(closed.clone()));
+    sent += closed.len() as u64;
     req.end(rec.now(), EndReason::Complete, None);
-    wait_settled(&rec, |c| c.http_post == 1 && c.ws_up_msgs == 10);
+    wait_settled(&rec, |c| c.http_post == 1 && c.ws_up_msgs == 11);
     let total = sent;
+    let fail_closed = rec.durable().borrow().totals.counts.mask_failclosed_bytes;
+    assert!(fail_closed > 0, "the message failed closed");
 
     let dead = entry_dir().path().join("e00000000000000d2");
     copy(live.path(), &dead);
@@ -312,6 +323,20 @@ fn a_pruned_boot_with_counts_behind_seals_the_bytes_written() {
         kept["seq"].as_u64().unwrap() >= oldest_end,
         "a prune syncs first"
     );
+    // Every line's LINK is written (the copy was taken at rest, after the last sync).
+    let parts = goalcup_format::read::part_files(&rec_dir).unwrap();
+    let last = parts.last().unwrap().to_str().unwrap().to_string();
+    let last_idx = PathBuf::from(format!("{}.idx", last.trim_end_matches(".gcr.zst")));
+    let last_seq = goalcup_format::read::read_index(&last_idx)
+        .unwrap()
+        .last()
+        .unwrap()
+        .seq;
+    for l in std::fs::read(dead.join("counts.jsonl")).unwrap().split(|&b| b == b'\n') {
+        if let Ok(v) = serde_json::from_slice::<Value>(l) {
+            assert!(v["seq"].as_u64().unwrap() <= last_seq, "a line with no LINK");
+        }
+    }
     std::fs::remove_file(&oldest).unwrap();
     std::fs::remove_file(&idx).unwrap();
     std::fs::write(dead.join("counts.jsonl"), [line.as_slice(), b"\n"].concat()).unwrap();
@@ -324,11 +349,13 @@ fn a_pruned_boot_with_counts_behind_seals_the_bytes_written() {
     assert_eq!(seal["totals"]["http_req"], json!(1));
     // A POST and WebSocket messages ended after the kept line, their OPENs pruned.
     assert_eq!(seal["totals"]["http_post"], json!(1));
-    assert_eq!(seal["totals"]["ws_up_msgs"], json!(10));
-    assert_eq!(seal["totals"]["req_whole"], json!(11));
+    assert_eq!(seal["totals"]["ws_up_msgs"], json!(11));
+    assert_eq!(seal["totals"]["req_whole"], json!(12));
+    assert_eq!(seal["totals"]["mask_failclosed_bytes"], json!(fail_closed));
     assert_eq!(facts.totals.counts.wire_bytes, total);
     let totals = entry_totals(&dead);
     assert_eq!(facts.totals, totals);
     let st = Status::read(&dead).expect("status.json");
     assert_eq!(st.written.counts.wire_bytes, total);
+    assert_eq!(st.written.counts.mask_failclosed_bytes, fail_closed);
 }

@@ -115,8 +115,14 @@ fn count_and_link(
     .unwrap();
     k.tick();
     let line = w.link(k.now()).unwrap();
-    log.append(line.seq, &ev, c.off_spans(), Some(c.open_table()))
-        .unwrap();
+    log.append(
+        line.seq,
+        &ev,
+        c.off_spans(),
+        Some(c.open_table()),
+        c.fail_closed(),
+    )
+    .unwrap();
     w.sync().unwrap();
     c.counts()
 }
@@ -175,6 +181,7 @@ fn link_and_line(w: &mut PartWriter, c: &Counter, k: &mut Clock, log: &mut Count
         &c.count_event(w.boot(), 0, 0, 0),
         c.off_spans(),
         None,
+        c.fail_closed(),
     )
     .unwrap();
     w.sync().unwrap();
@@ -504,9 +511,9 @@ fn a_boot_not_read_from_part_files_is_its_latest_line() {
     let dir = tempfile::tempdir().unwrap();
     let mut log = CountsLog::open(dir.path());
     let one = json!({"ev": "count", "boot": 0, "http_post": 1});
-    log.append(5, &one, 0, None).unwrap();
+    log.append(5, &one, 0, None, &[]).unwrap();
     let five = json!({"ev": "count", "boot": 0, "http_post": 5});
-    log.append(6, &five, 0, None).unwrap();
+    log.append(6, &five, 0, None, &[]).unwrap();
     assert_eq!(entry_totals(dir.path()).counts.http_post, 5);
 }
 
