@@ -210,6 +210,9 @@ pub struct Thread {
     /// The harness's own per-session token totals where it keeps them (Hermes `sessions`); never
     /// on the call rows, which keep the wire usage.
     pub native_tokens: Tokens,
+    /// The session began before this entry: `native_tokens` are whole-session values spanning
+    /// earlier entries, kept for the run rollup and left out of this entry's `tokens.native`.
+    pub resumed: bool,
     /// Why the native leg is not readable; `None` means readable.
     pub reason: Option<Reason>,
 }
@@ -232,6 +235,7 @@ impl Thread {
             native_only: 0,
             native_until: None,
             native_tokens: Tokens::default(),
+            resumed: false,
             reason: Some(Reason::NoReader),
         }
     }

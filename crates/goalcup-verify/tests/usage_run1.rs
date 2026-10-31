@@ -649,9 +649,17 @@ fn hermes_database_copies_read_by_set() {
     assert_eq!(sum["tokens"]["native"]["input"], 107);
     // A `continue` entry: the session begun before this entry keeps its thread and its row; one
     // with no row inside the entry is an earlier entry's.
-    let (next, _) = hermes_entry("u-h4", &[(1, &db, &masked)], 1);
+    let (next, next_dir) = hermes_entry("u-h4", &[(1, &db, &masked)], 1);
     assert_eq!(who(&next)[1].as_deref(), Some("s-back"));
-    assert!(th(&next, "s-back").unwrap().readable() && th(&next, "s-old").is_none());
+    let back = th(&next, "s-back").unwrap();
+    assert!(back.readable() && th(&next, "s-old").is_none());
+    // Its totals span earlier entries: kept and marked, not compared and not summed here.
+    assert!(back.resumed && back.native_total.is_none() && back.native_tokens.input == Some(9));
+    let sum = json(&run_usage(&next_dir).sum);
+    assert_eq!(
+        (&sum["tokens"]["native"]["input"], &sum["tokens"]["native_partial"]),
+        (&json!(107), &json!(true))
+    );
     let (none, _) = hermes_entry("u-h3", &[(2, &bad, &[])], 0);
     let wire_only = none
         .rows

@@ -1083,11 +1083,13 @@ PRD-01, PRD-05, PRD-08, PRD-12, PRD-16 and the old code.
 
 ### 2026-10-31, replan after the PRD-09 slice 5 re-review (`sqlite.rs`)
 
-- **Resumed sessions carry no whole-session values (A5r-1).** In a `continue` entry a session that
+- **Resumed sessions are marked, not summed (A5r-1, A5r2-1).** In a `continue` entry a session that
   began before the entry keeps its rows, but its `api_call_count` and token totals span earlier
-  entries, so the thread row leaves `native_total` empty and `native_tokens` at default. Only a
-  session that started in the entry carries them. `tokens.native` then adds each token once across a
-  run, and a totals-form comparison never counts earlier calls against this entry's wire calls.
+  entries. The thread row keeps the token totals with `resumed: true`, leaves `native_total` empty,
+  and `tokens.native` leaves them out; the summary carries `tokens.native_partial: true`, so
+  `tokens.native` of that entry reads as a lower bound. The run rollup takes each session's whole
+  values from the last entry's copy. A totals-form comparison never counts earlier calls against
+  this entry's wire calls.
 - **A row after the copy's time marks the entry as totals (A5r-2).** An assistant row stamped later
   than the copy's mtime is in the copy but cannot be joined; it no longer leaves `native_calls`
   silently. The leg reads as totals.

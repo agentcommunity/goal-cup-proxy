@@ -196,10 +196,12 @@ fn read(
         }
         let th = Thread {
             parent: s.parent,
-            // A resumed session's totals span earlier entries: only a fresh one carries them.
+            // A resumed session's call total spans earlier entries, so it is not compared here;
+            // its tokens stay on the thread, marked resumed, and are not summed for this entry.
             native_total: s.calls.filter(|_| fresh),
             native_until: until,
-            native_tokens: if fresh { s.tokens } else { Tokens::default() },
+            native_tokens: s.tokens,
+            resumed: !fresh,
             reason: None,
             ..Thread::new(&id)
         };

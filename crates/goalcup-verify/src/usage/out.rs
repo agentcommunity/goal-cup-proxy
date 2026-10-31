@@ -102,7 +102,7 @@ pub(super) fn summary(t: &CallTable) -> Value {
             json!({"id": th.id, "parent": th.parent, "depth": th.depth, "label": th.label,
                 "wire_calls": wires().count(), "native_calls": th.native_calls,
                 "native_only": th.native_only, "native_total": th.native_total,
-                "native_until": th.native_until.map(wall), "native_tokens": sum([&th.native_tokens].into_iter()),
+                "native_until": th.native_until.map(wall), "native_tokens": sum([&th.native_tokens].into_iter()), "resumed": th.resumed,
                 "matched": rs.iter().filter(|r| twin(r)).count(),
                 "status": by_status(wires()), "tokens": total(said), "models": models,
                 "effort": own().filter_map(|r| r.effort.as_deref()).collect::<BTreeSet<_>>(),
@@ -121,7 +121,8 @@ pub(super) fn summary(t: &CallTable) -> Value {
             "joined_by_time": t.joined_by_time, "repeats_skipped": t.repeats_skipped,
             "copied_skipped": t.copied_skipped},
         "status": st, "models": models, "threads": threads,
-        "tokens": {"merged": total(rows().filter(counted).filter(has_usage)), "native": sum(native().map(|r| &r.tokens).chain(t.threads.iter().map(|x| &x.native_tokens))),
+        "tokens": {"merged": total(rows().filter(counted).filter(has_usage)), "native": sum(native().map(|r| &r.tokens).chain(t.threads.iter().filter(|x| !x.resumed).map(|x| &x.native_tokens))),
+            "native_partial": t.threads.iter().any(|x| x.resumed),
             "wire": total(rows().filter(counted).filter(|r| r.usage_from == Some(Leg::Wire))),
             "calls_without_usage": none.clone().count(),
             "calls_without_usage_by_status": by_status(none)}})
