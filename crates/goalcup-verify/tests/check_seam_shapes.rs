@@ -29,10 +29,27 @@ fn entry() -> Entry {
     e.gap(q, GapReason::MaskFailed, 0, 0, 1, json!({"meta": "open"}));
     let body = br#"{"model":"m1","input":"hi"}"#;
     e.data(q, 0, 0, body);
-    e.gap(q, GapReason::MaskFailed, 0, body.len() as u64, 1, json!({"meta": "tail"}));
-    e.end(q, EndReason::Complete, body.len() as u64, json!({"wire": body.len()}));
+    e.gap(
+        q,
+        GapReason::MaskFailed,
+        0,
+        body.len() as u64,
+        1,
+        json!({"meta": "tail"}),
+    );
+    e.end(
+        q,
+        EndReason::Complete,
+        body.len() as u64,
+        json!({"wire": body.len()}),
+    );
     e.gap(0, GapReason::MaskFailed, 0, 0, 1, json!({"meta": "event"}));
-    e.end(c, EndReason::Complete, 0, json!({"up": 9, "down": 9, "plain_up": 9, "plain_down": 9}));
+    e.end(
+        c,
+        EndReason::Complete,
+        0,
+        json!({"up": 9, "down": 9, "plain_up": 9, "plain_down": 9}),
+    );
     let c = e.conn();
     let head = json!({"method": "GET", "path": "/v1/responses", "ver": "1.1",
         "headers": [["upgrade", "websocket"]], "masked": [], "coding": null});
@@ -44,7 +61,12 @@ fn entry() -> Entry {
     e.data(down, 0, 0x10 | FLAG_FIN, b"");
     e.end(up, EndReason::Complete, 0, json!({"close_code": 1000}));
     e.end(down, EndReason::Complete, 0, json!({"close_code": 1000}));
-    e.end(c, EndReason::Complete, 0, json!({"up": 9, "down": 9, "plain_up": 9, "plain_down": 9}));
+    e.end(
+        c,
+        EndReason::Complete,
+        0,
+        json!({"up": 9, "down": 9, "plain_up": 9, "plain_down": 9}),
+    );
     e.count();
     e
 }
