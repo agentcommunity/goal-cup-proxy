@@ -378,7 +378,7 @@ type Why<'a> = (Class, Option<u16>, &'a str);
 const UNREAD: Why<'static> = (Class::Internal, None, "a part file could not be read");
 
 /// The class, status and fixed words of a failed call.
-fn words(e: &ServerError) -> Why<'static> {
+pub(super) fn words(e: &ServerError) -> Why<'static> {
     let (class, status) = match e {
         ServerError::Status { status, .. } => (
             class_of_status(*status).unwrap_or(Class::Network),
