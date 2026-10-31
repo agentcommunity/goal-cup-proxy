@@ -99,8 +99,8 @@ fn down_with(settings: &[u8], frames: &[Vec<u8>]) -> (Dir, Vec<u8>) {
 }
 
 /// `SETTINGS_ENABLE_CONNECT_PROTOCOL` with `value` (RFC 8441 section 3).
-fn enable_connect(value: u8) -> [u8; 6] {
-    [0, 8, 0, 0, 0, value]
+fn enable_connect(value: u8) -> Vec<u8> {
+    vec![0, 8, 0, 0, 0, value]
 }
 
 /// Feeds each step in irregular splits until a stop, then closes. The stop, if any, is returned.
@@ -616,7 +616,7 @@ fn a_response_to_no_request_waits_only_a_head() {
 #[test]
 fn an_orphan_response_is_recorded_unless_extended_connect_is_allowed() {
     let sse = vec![b'd'; 70_000];
-    for settings in [vec![], enable_connect(0).to_vec(), enable_connect(1).to_vec()] {
+    for settings in [vec![], enable_connect(0), enable_connect(1)] {
         let allowed = settings.last() == Some(&1);
         let steps = [
             down_with(&settings, &[ok(1, ""), body(1, false, &sse)]),
