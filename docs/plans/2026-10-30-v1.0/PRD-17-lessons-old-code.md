@@ -1019,3 +1019,24 @@ Names for `LESSONS.md` (the lessons lane writes them; judge 14:56Z, 15:13Z):
   (fold, about 6 lines); `leaf_aki_names_the_ca_key` repeats the AKI extract (a small `aki_of` helper, about
   10 lines); `mod enc` has three near-identical encode wrappers. Taste only.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-31, replan after PRD-17 slice 2 (merge 0b661e6e)
+
+- **On integration now:** `lessons_http1.rs` (667 lines) and `lessons_ws.rs` (703) at the parser layer (no
+  `proxy::serve`), `lessons_launch.rs` (408) P3 to P5 at the Shield and harness layer, and the `LESSONS.md`
+  upkeep (renamed guards L-R1 and L-H7 repointed). Lessons test lines total 2,610 (hosts 184, decode 388,
+  tls 260, http1 667, ws 703, launch 408) of the 3,000 shared with PRD-14.
+- **Budget warning:** only about 390 lines are left for `lessons_connect.rs`, the serve-halves of http1 and ws,
+  the D6 GAP and END records, the T4 key half and every later file, and PRD-14's own share is not counted
+  yet. The remaining files must reuse the existing private helpers and add near 300 lines at most; a case
+  that needs more is folded into a PRD-14 guard test or left as a named guard. A total past about 14,200 Rust
+  test lines is the owner question, not this file.
+- **Still waiting:** `lessons_connect.rs` and the serve halves (PRD-03 `serve`), K15 (`common::upstream`),
+  R6 (serve), the T4 key half (PRD-02 writer), SC3 (watchdog loop), and the open rows listed in the log of
+  10:15Z (FW1, C11, P14, HF4, VR1, D7).
+- **L-P3 ctrl-c case is held back with `ignore`.** Box runs fail it about 1 in 9: a pending process-directed
+  SIGINT is delivered after `Shield::harness_exited` restores the default and kills the watchdog in wrap-up.
+  This is a PRD-02 `shield.rs` defect (see its note). Remove the `ignore` in the PRD-02 fix PR; until then
+  L-P3 stays open in `LESSONS.md` and the deletion gate may not count it green.
+- Helpers `common/encode` and the recorder helpers stay private copies here until PRD-14 adds them; when it
+  does, delete the copies in the same PR. No locked ledger item is touched.
