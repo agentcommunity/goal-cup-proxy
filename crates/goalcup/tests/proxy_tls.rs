@@ -313,9 +313,11 @@ async fn an_upstream_tls_cut_reaches_the_harness_as_a_cut() {
     let relay = tokio::spawn(async move {
         let client = acceptor.accept(down_io).await.unwrap();
         let upstream = up.connect(name("api.openai.com"), up_io).await.unwrap();
-        let mut conn = rec.open(StreamKind::Conn, 0, 0, 0, OpenFlags::NONE, serde_json::json!({}));
-        let (none, quiet) = ((Bytes::new(), Bytes::new()), AtomicU64::new(0));
-        let p = pump::relay(&rec, &mut conn, (client, upstream), none, None, &quiet, None).await;
+        let (kind, flags) = (StreamKind::Conn, OpenFlags::NONE);
+        let mut conn = rec.open(kind, 0, 0, 0, flags, serde_json::json!({}));
+        let (legs, none) = ((client, upstream), (Bytes::new(), Bytes::new()));
+        let quiet = AtomicU64::new(0);
+        let p = pump::relay(&rec, &mut conn, legs, none, None, &quiet, None).await;
         conn.end(rec.now(), p.reason, None);
         assert!(!p.upstream_failed, "a cut is not a reset");
         drop(p.client);
@@ -329,7 +331,8 @@ async fn an_upstream_tls_cut_reaches_the_harness_as_a_cut() {
     let mut got = Vec::new();
     let err = harness.read_to_end(&mut got).await.unwrap_err();
     assert_eq!(got, reply, "verbatim");
-    assert_eq!(err.kind(), std::io::ErrorKind::UnexpectedEof, "no clean close");
+    let eof = std::io::ErrorKind::UnexpectedEof;
+    assert_eq!(err.kind(), eof, "no clean close");
     server.await.unwrap();
     relay.await.unwrap();
 }

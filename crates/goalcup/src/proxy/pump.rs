@@ -269,9 +269,15 @@ where
     if !cut.is_empty() {
         pump.feed(Dir::Down, rec.now(), &cut);
     }
-    let reason = match (lu, ld) {
-        (Leg::Eof | Leg::Cut, Leg::Eof | Leg::Cut) => EndReason::Complete,
+    // Streams still open at the close end on how the legs ended; an upstream cut leaves the
+    // client leg unfinished, which ends the connection, not a stream framing has shown whole.
+    let streams = match (lu, ld) {
+        (Leg::Eof | Leg::Cut | Leg::Dropped, Leg::Eof | Leg::Cut) => EndReason::Complete,
         _ => EndReason::Interrupted,
+    };
+    let reason = match lu {
+        Leg::Dropped => EndReason::Interrupted,
+        _ => streams,
     };
     let down_cut = matches!(ld, Leg::Cut);
     let [up, down] = pump.moved.map(AtomicU64::into_inner);
@@ -286,7 +292,7 @@ where
     };
     if let Some(p) = parser {
         let t = rec.now();
-        let ended = catch_unwind(AssertUnwindSafe(|| p.end(t, reason, down_cut, &unsent)));
+        let ended = catch_unwind(AssertUnwindSafe(|| p.end(t, streams, down_cut, &unsent)));
         match ended {
             Ok(Some(late)) if stop.is_none() => {
                 if !late.at_close {
