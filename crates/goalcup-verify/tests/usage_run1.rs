@@ -1,19 +1,22 @@
 //! PRD-09's usage test (ledger B10): a run 1 shaped entry, scaled down (PRD-09 section 8), read
-//! through seam U1 only. These are the wire cases; the `native_only` silent window, the panic
-//! that prints no record text (PRD-17 VR2) and the output files come with the native reader and
-//! `usage::run`. Every value is an obvious fake.
+//! through seam U1 only: wire cases and, under `codex-cli` and `claude-code-cli`, the native leg
+//! and join, and the files `usage` writes. Every value is an obvious fake; the panic hook is the
+//! binary's (PRD-08).
 
 mod common;
 
-use common::{Entry, read_records};
+use common::{ENTRY, Entry, edit_event, read_records, tmp, write_raw};
+use goalcup_format::read::part_files;
 use goalcup_format::{EndReason, FLAG_FIN, GapReason, Record, StreamKind};
-use goalcup_verify::usage::{CallRow, CallTable, Calls, Kind, Outcome, Tokens};
+use goalcup_verify::usage::{CallRow, CallTable, Calls, Join, Kind, Outcome, Tokens};
 use serde_json::{Value, json};
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, fs, path::Path, path::PathBuf, process::Command};
 
 /// Planted in prompts, outputs and error messages; no row may hold it (point 4).
 const MARK: &str = "zebra-lantern-planted-text";
 const RL: &str = "rate_limit_exceeded";
+const MAIN: &str = "fake-thread-main";
+const KID: &str = "fake-thread-kid";
 /// The requested model of every call planted: 8 on the WebSocket, 4 over HTTP.
 const CALLS: &str = "fake-ws-a fake-ws-b fake-ws-d fake-ws-r1 fake-ws-r2 fake-ws-r3 fake-ws-r4 \
     fake-ws-e fake-http-a fake-http-429 fake-http-cut fake-claude";
@@ -36,6 +39,7 @@ fn usage(i: u64, c: u64, o: u64, r: u64) -> (Value, Five) {
 fn create(k: &str, prev: Option<&str>) -> Value {
     json!({"type": "response.create", "model": format!("fake-{k}"), "reasoning": {"effort": "low"},
         "previous_response_id": prev.map(|p| format!("r_{p}")), "store": false, "stream": true,
+        "client_metadata": {"thread_id": MAIN},
         "input": [{"type": "message", "role": "user",
                    "content": [{"type": "input_text", "text": MARK}]}]})
 }
@@ -80,12 +84,14 @@ fn send(e: &mut Entry, sid: u64, at: &mut u64, v: impl ToString) {
     *at += v.len() as u64;
 }
 
-/// One POST on its own connection, from `[path, request, status, reply, ended complete]`; the
-/// reply body (SSE text, else JSON) comes in two pieces.
+/// One POST on its own connection, from `[path, request, status, reply, ended complete, thread
+/// header or null]`; the reply body (SSE text, else JSON) comes in two pieces.
 fn post(e: &mut Entry, s: &Value) {
     let (c, req) = (e.conn(), s[1].to_string());
+    let mut h = vec![json!(["content-type", "application/json"])];
+    h.extend(s[5].is_string().then(|| json!(["thread-id", s[5]])));
     let head = json!({"method": "POST", "path": s[0], "ver": "1.1", "masked": [], "coding": null,
-        "headers": [["content-type", "application/json"]]});
+        "headers": h});
     let q = e.open(StreamKind::HttpReq, c, 0, head);
     e.data(q, 0, 0, req.as_bytes());
     e.end(q, EndReason::Complete, req.len() as u64, Value::Null);
@@ -150,11 +156,11 @@ fn run1(name: &str) -> (Vec<Record>, BTreeMap<&'static str, Five>) {
     let ha = sse(&[created("http-a"), delta(), ev("completed", "http-a", &uh)]);
     let creq = json!({"model": "fake-claude", "messages": [{"role": "user", "content": MARK}]});
     let posts = json!([
-        ["/v1/responses", http("http-a"), 200, ha, true],
-        ["/v1/responses", http("http-429"), 429, {"error": rl}, true],
-        ["/v1/responses", http("http-cut"), 200, sse(&[created("http-cut"), delta()]), false],
-        ["/v1/messages?beta=true", creq, 200, claude, true],
-        ["/v1/fake-events", {"event": MARK}, 200, {"ok": true}, true]
+        ["/v1/responses", http("http-a"), 200, ha, true, KID],
+        ["/v1/responses", http("http-429"), 429, {"error": rl}, true, KID],
+        ["/v1/responses", http("http-cut"), 200, sse(&[created("http-cut"), delta()]), false, KID],
+        ["/v1/messages?beta=true", creq, 200, claude, true, null],
+        ["/v1/fake-events", {"event": MARK}, 200, {"ok": true}, true, null]
     ]);
 
     let mut e = Entry::new(name);
@@ -176,11 +182,44 @@ fn run1(name: &str) -> (Vec<Record>, BTreeMap<&'static str, Five>) {
     for s in posts.as_array().unwrap() {
         post(&mut e, s);
     }
+    // A native call per ok wire call of its thread, near it, and 2 in the silence after.
+    let main = ["00:00:01", "00:00:01", "00:00:01", "00:10:00", "00:10:00"];
+    rollout(&mut e, MAIN, None, &main);
+    rollout(&mut e, KID, Some(MAIN), &["00:00:01"]);
     let planted = [("fake-ws-a", ta), ("fake-ws-b", tb), ("fake-ws-e", te)];
     let planted = planted
         .into_iter()
         .chain([("fake-http-a", th), ("fake-claude", tc)]);
+    e.count();
     (read_records(&e.seal().join("rec")), planted.collect())
+}
+
+/// A Codex rollout of thread `id` (spawned by `parent`, with a label too long to keep), a
+/// message holding MARK, then a `token_count` at each time `at`.
+fn rollout(e: &mut Entry, id: &str, parent: Option<&str>, at: &[&str]) {
+    let p = MARK.repeat(6);
+    let src = json!({"thread_spawn": {"parent_thread_id": parent, "depth": 1, "agent_path": p}});
+    let meta = json!({"timestamp": "2026-11-07T00:00:00Z", "type": "session_meta", "payload":
+        {"id": id, "source": parent.map_or(json!("cli"), |_| json!({"subagent": src}))}});
+    let item = json!({"timestamp": "2026-11-07T00:00:00Z", "type": "response_item", "payload":
+        {"type": "message", "role": "assistant", "content": MARK}});
+    let mut f = format!("{meta}\n{item}\n");
+    for (n, t) in (1..).zip(at) {
+        let v = json!({"timestamp": format!("2026-11-07T{t}Z"), "type": "event_msg", "payload":
+            {"type": "token_count", "info": {"total_token_usage": {"total_tokens": 11 * n},
+            "last_token_usage": {"input_tokens": 9, "output_tokens": 2, "total_tokens": 11}}}});
+        f += &format!("{v}\n");
+    }
+    // The folder holds MARK too: a session path can name the participant's folders (point 4).
+    let path = format!("sessions:{MARK}/rollout-{id}.jsonl");
+    stream(e, StreamKind::Native, &path, &f);
+}
+
+/// One stream of `skind` holding `body` as the file at `path`, ended complete.
+fn stream(e: &mut Entry, skind: StreamKind, path: &str, body: &str) {
+    let s = e.open(skind, 0, 0, json!({"path": path, "gen": 0, "from": 0}));
+    e.data(s, 0, 0, body.as_bytes());
+    e.end(s, EndReason::Complete, body.len() as u64, Value::Null);
 }
 
 fn table(recs: &[Record]) -> CallTable {
@@ -285,15 +324,180 @@ fn totals_equal_the_planted_sum_and_repeat() {
     let sum = |fives: Vec<Five>| -> [u64; 5] {
         std::array::from_fn(|i| fives.iter().map(|f| f[i].unwrap_or(0)).sum())
     };
+    let said = |r: &CallRow| r.usage_from.map(|_| five(&r.tokens));
     let calls = t.rows.iter().filter(|r| r.kind == Kind::Call);
-    let got = sum(calls.map(|r| five(&r.tokens)).collect());
+    let got = sum(calls.filter_map(said).collect());
     assert_eq!(got, sum(planted.into_values().collect()));
     assert_eq!(table(&recs), t);
 }
 
 #[test]
-fn no_row_holds_text_from_a_body() {
-    let t = table(&run1("u-mark").0);
-    assert!(!t.rows.is_empty());
-    assert!(!format!("{t:?}").contains(MARK), "a row holds body text");
+fn native_leg_joins_codex_threads() {
+    let mut recs = run1("u-native").0;
+    edit_event(&mut recs, "start", 0, codex);
+    let t = table(&recs);
+    let th = |id| t.threads.iter().find(|x| x.id == id).unwrap();
+    assert_eq!([th(MAIN).native_only, th(KID).native_only], [2, 0]);
+    assert_eq!(th(KID).parent.as_deref(), Some(MAIN));
+    assert_eq!(t.children.as_ref().unwrap()[MAIN], [KID]);
+    // Under `codex-cli`, exactly the ok hinted wire calls join; an ok call with no hint shows.
+    let ok = ["fake-ws-a", "fake-ws-b", "fake-ws-e", "fake-http-a"];
+    assert_eq!(joined(&t, Join::Matched), ok);
+    assert_eq!(joined(&t, Join::Unattributed), ["fake-claude"]);
+    // Point 4: no row, and no thread, holds text from a body or a session file (`path` is U1's).
+    let bare = t.rows.iter().map(|r| CallRow {
+        path: None,
+        ..r.clone()
+    });
+    assert!(!format!("{:?}", (bare.collect::<Vec<_>>(), &t.threads)).contains(MARK));
+}
+
+/// Point 2: a Claude Code subagent counts wherever its transcript sits under its session's
+/// `subagents/` (a workflow agent too), with its `agentType` from the meta snapshot.
+#[test]
+fn every_claude_code_subagent_transcript_counts() {
+    let mut e = Entry::new("u-claude");
+    let files = "S S/subagents/agent-a S/subagents/workflows/w/agent-b";
+    for (k, f) in files.split(' ').enumerate() {
+        let at = ["2300-01-01T00:00:00Z", "2026-11-07T00:00:00Z"][k.min(1)];
+        let v = json!({"type": "assistant", "timestamp": at, "message": {"id": k.to_string(),
+            "usage": {"input_tokens": 3}, "content": MARK}});
+        let (path, body) = (format!("transcripts:p/{f}.jsonl"), format!("{v}\n"));
+        stream(&mut e, StreamKind::Native, &path, &body);
+    }
+    let meta = "meta:p/S/subagents/workflows/w/agent-b.meta.json";
+    stream(&mut e, StreamKind::Snapshot, meta, r#"{"agentType":"x"}"#);
+    let agent_c = "meta:p/S/subagents/agent-c.meta.json";
+    stream(&mut e, StreamKind::Snapshot, agent_c, "{}");
+    let mut recs = read_records(&e.seal().join("rec"));
+    let claude = |v: &mut Value| v["connector"] = "claude-code-cli".into();
+    edit_event(&mut recs, "start", 0, claude);
+    let t = table(&recs);
+    assert_eq!(t.rows.iter().filter(|r| r.thread.is_some()).count(), 3);
+    let th = |id| t.threads.iter().find(|x| x.id == id).unwrap();
+    let parent = |id| th(id).parent.as_deref();
+    assert_eq!([parent("a"), parent("b")], [Some("S"); 2]);
+    assert_eq!(th("b").label.as_deref(), Some("x"));
+    assert!(th("a").readable() && !th("c").readable());
+    assert!(!format!("{t:?}").contains(MARK));
+}
+
+fn joined(t: &CallTable, j: Join) -> Vec<&str> {
+    let rows = t.rows.iter().filter(|r| r.join == Some(j));
+    rows.flat_map(|r| r.model_requested.as_deref()).collect()
+}
+
+fn codex(v: &mut Value) {
+    v["connector"] = "codex-cli".into();
+}
+
+fn json(s: &str) -> Value {
+    serde_json::from_str(s).unwrap()
+}
+
+/// The Codex run 1 entry as a folder; `torn` loses its seal LINK and the end of its last frame.
+fn codex_entry(name: &str, torn: bool) -> PathBuf {
+    let (mut recs, dir) = (run1(name).0, tmp(name));
+    let rec = dir.join("rec");
+    fs::create_dir_all(&rec).unwrap();
+    edit_event(&mut recs, "start", 0, codex);
+    recs.truncate(recs.len() - usize::from(torn));
+    write_raw(&rec, &recs, None);
+    let last = part_files(&rec).unwrap().pop().unwrap();
+    let mut bytes = fs::read(&last).unwrap();
+    bytes.truncate(bytes.len() - 8 * usize::from(torn));
+    fs::write(last, bytes).unwrap();
+    dir
+}
+
+/// What `usage <path> --json --out <new folder>` gave: exit code, stdout, stderr, the two files.
+#[derive(Debug, PartialEq)]
+struct Ran {
+    code: Option<i32>,
+    stdout: String,
+    stderr: String,
+    sum: String,
+    calls: String,
+}
+
+fn run_usage(path: &Path) -> Ran {
+    let out = tmp("u-out");
+    let (p, o) = (path.to_str().unwrap(), out.to_str().unwrap());
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_goalcup-verify"));
+    let got = cmd
+        .args(["usage", p, "--json", "--out", o])
+        .output()
+        .unwrap();
+    let text = |b: &[u8]| String::from_utf8_lossy(b).into_owned();
+    let file =
+        |end: &str| fs::read_to_string(out.join(format!("{ENTRY}{end}"))).unwrap_or_default();
+    Ran {
+        code: got.status.code(),
+        stdout: text(&got.stdout),
+        stderr: text(&got.stderr),
+        sum: file(".json"),
+        calls: file(".calls.jsonl"),
+    }
+}
+
+#[test]
+fn usage_files_repeat_and_add_up() {
+    let dir = codex_entry("u-files", false);
+    let (a, b) = (run_usage(&dir), run_usage(&dir));
+    assert_eq!(a, b);
+    assert_eq!(a.code, Some(0));
+    let (sum, lines): (Value, Vec<Value>) = (json(&a.sum), a.calls.lines().map(json).collect());
+    let said = |l: &&Value| l["k"] == "call" && !l["usage_from"].is_null();
+    for k in ["input", "cached", "cache_write", "output", "reasoning"] {
+        let col = lines.iter().filter(said);
+        let got = col.filter_map(|l| l[k].as_u64()).reduce(|a, b| a + b);
+        assert_eq!(sum["tokens"]["merged"][k].as_u64(), got, "{k}");
+    }
+    let calls = CALLS.split_whitespace().count();
+    assert_eq!(sum["coverage"]["wire_calls"], calls);
+    // Which subagent used which model is in the summary's thread rows, not only in the calls file.
+    let kid = sum["threads"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["id"] == KID)
+        .unwrap();
+    assert_eq!(kid["models"]["fake-http-a-dated"], 1);
+}
+
+/// Point 3 in the reader: a decode error partway through an entry still gives the summary of what
+/// came, marked `read_error` with a line on stderr, never a clean-looking partial count.
+#[test]
+fn a_corrupt_entry_is_marked_not_silent() {
+    let dir = codex_entry("u-corrupt", false);
+    let first = part_files(&dir.join("rec")).unwrap().remove(0);
+    let mut bytes = fs::read(&first).unwrap();
+    let at = bytes.len() * 3 / 8;
+    bytes[at..at + 16].fill(0xA5);
+    fs::write(first, bytes).unwrap();
+    let ran = run_usage(&dir);
+    let ok = ran.code == Some(0) && json(&ran.sum)["read_error"] == true;
+    assert!(
+        !ran.stderr.is_empty() && !ran.stderr.contains(MARK) && ok,
+        "{ran:?}"
+    );
+}
+
+/// Point 4 on every path: the whole entry, a torn copy of it (exit 0, not sealed), a missing path.
+#[test]
+fn no_record_text_in_any_output() {
+    let check = |path: PathBuf, code: i32, sealed: bool| {
+        let ran = run_usage(&path);
+        let text = [&ran.stdout, &ran.stderr, &ran.sum, &ran.calls]
+            .map(String::as_str)
+            .concat();
+        assert_eq!(ran.code, Some(code), "{text}");
+        assert!(!text.is_empty() && !text.contains(MARK));
+        if code == 0 {
+            assert_eq!(json(&ran.sum)["sealed"], sealed);
+        }
+    };
+    check(codex_entry("u-whole", false), 0, true);
+    check(codex_entry("u-torn", true), 0, false);
+    check(tmp("u-none").join("absent"), 3, false);
 }

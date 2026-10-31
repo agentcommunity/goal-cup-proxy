@@ -1478,3 +1478,79 @@ to another file are made by that file's owner.
   asserts `form: "final"` or `set` waits for that slice; one that asserts the bytes are in the record
   after the seal can run now.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-31, replan after PRD-04 second slice (merge 7e8ed89b)
+
+- **The native seam is complete on the PRD-04 side.** `NativeReader::finish(self, harness_exited, guard)`
+  now acts on `harness_exited` (step 3: a `final` row's database sets are copied whole at the seal,
+  `harness_exited` in OPEN meta, `final_snapshot_live` when it is false, and a guard that runs out cuts
+  a set for every file of it). Wire the real `harness_exited` from the watchdog's seal reason; passing a
+  constant `false` writes a `final_snapshot_live` note for every database at every seal (points 1, 3
+  and 6). Still nothing in `src/pipeline/` or `src/watchdog/` calls `native::start` or `finish`.
+- **`pipeline_seal.rs` (R3-3) may now assert** `form: "final"`, `set` and `harness_exited` for a database
+  row, and that a `final` set and a growing session file are both in the record after the seal. The
+  part 3 note's "waits for that slice" no longer applies.
+- **Still open for your next touch of `pipeline/mod.rs`:** `Recorder::counts()` (at least
+  `model_requests`, or `native_missing` never fires), `native_cursors()` returns `Cursors::default()`,
+  and `SnapshotCursor` gains `fid` (PRD-04 resumes a database set by `size` and `mtime_ns` only, so a
+  replaced file with the same stat is copied again, which loses nothing).
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-31, replan after PRD-02 core step 1 (merge 2fd96576)
+
+- **On integration:** the S1 front (`Recorder`, `StreamHandle`, held-bytes guard, gap rule), `secure.rs`,
+  `low_priority`, `Counter` and `entry_totals` over boots, `counts.jsonl`, `cursors.json`, `status.json`
+  with the stall exit, the clocks with `boot_id`, the open-file raise and `fds::may_accept`. Not yet:
+  `writer.rs`, `mask_worker.rs`, `seal.rs`, `boot.rs`, `dead.rs`, the real `run_recorder` and everything
+  under `watchdog/` but the scaffold.
+- **Asks closed.** `Recorder::live()` now fills `boot`, `held_bytes`, `writer_idle_ms`, `losing` and
+  `off` from the atomics (the PRD-06 slice 2 ask); `Recorder::counts()` returns the counts at the last
+  LINK (the PRD-04 `native_missing` ask). `Live` carries no `held_peak` or `guard`; `status.json` does.
+  Both reads stay `Default` in a real run until `boot.rs` calls `set_boot`, `set_off`, `set_counts` and
+  `set_cursors` (next slice), so wire them there; `native_cursors()` returns what `set_cursors` stored.
+- **Still open: `SnapshotCursor.fid`.** Dropped from this merge (review A6-1): a field added in
+  `cursors.rs` breaks `tests/native_resume.rs` and `Tail::new`, which PRD-04 owns. It lands as one
+  change in one trial merge: PRD-02 adds `fid: Fid` in its next touch of `cursors.rs`, and PRD-04's lane
+  compares it in `Tail::new` and fixes its `SnapshotCursor` literals in `tests/native_resume.rs` in the
+  same merge window. Each lane edits only its own paths; the first to start posts a seam line naming
+  the other. Acceptance lists the gap as known if it is still open at the end.
+- **The stall clock is awake time, not boot time.** Section 3 and the defaults row "Writer stall exit"
+  read "60 s of boot time with no write while records wait". As built, idle runs from the later of the
+  last write and the moment records began to wait, on the awake clock (`clock::awake_ns`), and counts
+  only items waiting for the writer, never reservations or bytes the mask worker holds back for a match.
+  A suspend is therefore never a stall (point 3). The 2 x soft mark is unchanged. This note is the
+  shape; the row is not rewritten. `writer_idle_ms`, which PRD-06's `failed` reads, is the same number.
+  The mask worker's contract in the next slice: `taken(n)` when it takes an item, `forwarded(n)` for
+  what it hands the writer, `dropped(n, lost)` for a drop; `release(n)` is the writer's alone.
+- **`pipeline_stall.rs`: the bound is the guard plus the control items admitted** (review BRK9-N2).
+  OPEN, END, GAP and EVENT are admitted without limit (section 3), so with the writer held and clients
+  that keep opening requests, `held_peak` passes 64 MiB plus 1 MiB. Box runs at a 64 MiB guard with a
+  30-header OPEN meta: 40 streams x 6 bursts gave 66.7 MiB, 200 streams plus 200 WebSockets gave
+  79.8 MiB. Only DATA is bounded by the guard (`admits`), and the stall mark stays reachable by control
+  items alone (the section 3 reason for it). The acceptance line reads: every `memory_guard` hole is a
+  GAP, no `recorder_down` gap, and `held_peak` at most the guard plus 1 MiB plus 48 KiB for each OPEN,
+  END and GAP the decoded record holds (the test counts them after the run; no cap enters the product).
+  The breaker's numbers give the cost: about 12 KiB per item in the 40-stream case and under 40 KiB per
+  stream in the 200-stream case, both with a 30-header OPEN meta, which is heavier than a real request.
+  X3 in PRD-16 reads the `memory_guard` gap count; a `held_peak` above the guard is a report line, not a
+  FAIL.
+- **Control-item weight (review BRK9-N1), accepted as a nit.** A control item costs about 140 bytes more
+  than `CONTROL_HELD` (256) plus `json_held` counts: the channel slot and `serde_json`'s map node,
+  which is sized for 11 entries. The 2 x soft stall mark so fires at about 1.3 x the memory the comment in
+  `item.rs` says it bounds, which is about RAM/3 instead of RAM/4 on a machine under 4 GiB. No point
+  breaks (`oom_score_adj` 500 is the backstop). The next touch of `item.rs` may raise `CONTROL_HELD` to
+  384 if it costs no test change; otherwise it rewords the comment to "about". Not a blocker.
+- **Comment fix (review B-6).** `open_gaps` in `pipeline/mod.rs` should read "Added to at each guard drop,
+  removed when the gap closes or the seal drains it". Comment only; the next touch of `mod.rs` does it.
+- **Decision, size** (the row is a ceiling, ledger L2). At 2fd96576 `wc -l` gives 3,283 src under
+  `pipeline/` (`counts.rs` 688, `handle.rs` 681, `mod.rs` 622, `status.rs` 424, `clock.rs` 273,
+  `fds.rs` 225, `item.rs` 98, `calls.rs` 79, `cursors.rs` 72, `secure.rs` 70, `guard.rs` 51) and 202 in
+  `watchdog/mod.rs`, so 3,485 against the row of 1,350 (258%); tests are 662 (`pipeline_counts.rs` 598,
+  `pipeline_secure.rs` 64) against 1,500. The unbuilt files (writer, mask worker, seal, boot, dead,
+  the watchdog's spawn, recover and the restart loop) project to about 2,200 more, so about 5,700 src.
+  The lines serve points 1 (every call recorded, counted at write), 3 (the guard, the gap rule, the
+  stall exit) and 6 (status and totals the participant sees). The ceiling for PRD-02 is set to **5,800
+  src** and **1,500 tests** (tests unchanged). A slice that would pass 5,800 needs another decision
+  line, and each remaining slice cuts first what serves no point (`counts.rs` and `handle.rs` are the
+  places the reviewers named). The end-of-build report nets this against the Rust totals.
+- No locked ledger item is touched and no owner question comes from this slice.

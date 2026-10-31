@@ -1,15 +1,18 @@
 //! PRD-04 section 3 acceptance (points 2 and 3): one full walk finds every matching file, at any
 //! depth, under a root made late, at scale, keeps no descriptor and never crosses a device.
 
+mod common;
+
 use std::fs;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use common::recorder::{events, opens};
 use goalcup::native::pattern::{parse, path_id};
 use goalcup::native::tail::Tail;
 use goalcup::native::walk::{Found, Row, Walker};
-use goalcup::pipeline::{Call, Cursors, Recorder};
+use goalcup::pipeline::{Cursors, Recorder};
 use serde_json::Value;
 
 fn row(name: &str, root: &Path, pattern: &str) -> Row {
@@ -22,14 +25,6 @@ fn row(name: &str, root: &Path, pattern: &str) -> Row {
 
 fn rels(found: &[Found]) -> Vec<PathBuf> {
     found.iter().map(|f| f.rel.clone()).collect()
-}
-
-fn events(calls: &goalcup::pipeline::Calls) -> Vec<Value> {
-    let ev = |c: Call| match c {
-        Call::Event(v) => Some(v),
-        _ => None,
-    };
-    calls.all().into_iter().filter_map(ev).collect()
 }
 
 #[test]
@@ -179,13 +174,9 @@ fn old_files_are_skipped_and_the_new_one_found_among_five_thousand() {
         let id = path_id("t", &f.rel);
         tail.settle(&rec, id, t.path(), &f.rel, f.stat, false);
     }
-    let opened: Vec<Value> = calls
-        .all()
+    let opened: Vec<Value> = opens(&calls)
         .into_iter()
-        .filter_map(|c| match c {
-            Call::Open(.., meta) => Some(meta["path"].clone()),
-            _ => None,
-        })
+        .map(|o| o.2["path"].clone())
         .collect();
     assert_eq!(opened, ["t:p7/new.jsonl"]);
 }

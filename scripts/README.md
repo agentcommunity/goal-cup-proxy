@@ -1,79 +1,39 @@
 # Scripts
 
-One line per file: what it does, who runs it, and whether CI or the gate runs it. "Gate" is
-`sh scripts/gate.sh fast|full` ([README](../README.md#the-gate)). "CI" is `.github/workflows/ci.yml`
-on every pull request; "release CI" and "Linux CI" are `release.yml` and the manual
-`linux-x86_64.yml`. "By hand" means nothing runs it for you. The script's own header has the
-details and the options.
-
-## Checks and the gate
+What is here, who runs it, and whether the gate or CI runs it. "The gate" is
+`sh scripts/gate.sh fast|full` ([README](../README.md#the-gate)). CI is `.github/workflows/ci.yml`:
+one job, `check`, that runs `sh scripts/gate.sh fast` on every pull request into `main` and every
+push to `main` and `v1.0/integration`. "Release CI" is `.github/workflows/release.yml`, which runs
+on a tag. "By hand" means nothing runs it for you. The header of each script has its options.
 
 | Script | What it does | Who | Run by |
 |---|---|---|---|
-| `gate.sh` | The test gate: `fast` before every commit, `full` before a release. | developer | by hand |
-| `linux-check.sh` | The Linux half of the gate, in Docker (ext4 and XFS volumes inside). | developer, release | by hand before a release; Linux CI |
-| `check-version.py` | Fails when the version is written anywhere but the workspace `Cargo.toml`. | developer | gate (fast and full) |
-| `check-links.py` | Checks every relative Markdown link and `#anchor`. | everyone who edits docs | CI; gate (full) |
-| `ci-scope.py` | Decides whether a CI run needs the Rust smoke (prints `rust=true` or `rust=false`). | CI | CI |
-| `pin-manifests.sh` | Rewrites the connector directory pins. Run it after any edit under `connectors/`. | harness builder, developer | by hand; `check-connector.sh` |
-| `check-connector.sh` | Every local check for one connector: files, pins, schema, goldens, kit. | harness builder | by hand |
+| `gate.sh` | `fast`: format check, clippy, the Rust tests and doctests, the Worker tests, the script tests below. `full`: fast, then every `#[ignore]` test except `by_hand_*`, the release build and a check that no test hook is in it. | developer, build box | by hand; CI runs `fast` |
+| `fetch-run.sh` | Rebuilds a run's trace from the server's copy (checks each chunk's SHA-256) so `goalcup-verify` can judge it. Needs the organizer's read-only credentials. | organizer | by hand; the pad's `fetch` step |
+| `release.sh` | `prepare` opens the version pull request; `tag` runs the pad's release check, then tags what `main` holds. | maintainer | by hand |
+| `package-release.sh` | Packs one release tarball (`goalcup`, `goalcup-verify`, licences) for one target. | release | release CI |
+| `third-party-licenses.py` | Writes the third-party notices the tarball carries; stops on a licence not allowed. | release | `package-release.sh` |
+| `smoke-release.sh` | Smoke-tests one tarball with an empty environment: versions, the shipped reader on the worked example, no test hook. | release | release CI |
 
-## Real runs and measurements
+## The test pad (`scripts/pad/`)
 
-| Script | What it does | Who | Run by |
-|---|---|---|---|
-| `matrix.sh` | One practice run (an empty project folder, no repository), `--test --duration` test run (a repository it makes with the machine's GitHub login, and a project folder holding a `.gitignore` and a `.env.local` with that login's token) or `--refusals` check of one connector against one server, and one PASS/FAIL row. | organizer | by hand |
-| `linux-matrix.sh` | `matrix.sh` for a real harness on Linux, in Docker, against staging; `github` signs the container in to GitHub. | organizer | by hand |
-| `linux-harness-smoke.sh` | No-login smoke of the measured Linux Codex and Claude Code builds. | developer | Linux CI (`LINUX_CHECK_HARNESSES=1`) |
-| `campaign.py` | Runs many long test cells in parallel, with drills, and writes reports ([local campaign](../docs/research/LOCAL-CAMPAIGN.md)). | organizer | by hand |
-| `campaign.example.json` | An example campaign config for `campaign.py`. | organizer | `campaign.py` |
-| `kit_settle.py` | The cheapest-model rules for a test cell's harness home, and the check of the run's models. | organizer | `linux-matrix.sh`; `campaign.py` |
-| `t25-disk-full.sh` | Measures what a run does on a really full disk (needs `sudo` and a loop image). | developer | by hand |
-| `research-measure.py` | Sizes, counts, quiet gaps and compression of a trace's chain files; aggregates only. | researcher, organizer | by hand |
-| `research-sample.py` | One CSV row of soak measurements per interval (disk, chain, ACK lag, processes). | organizer | by hand; `campaign.py` |
-| `research-staging.py` | Read-only aggregates of one event's uploads: chunk sizes, ACK lag, heartbeat health. | organizer | by hand |
-| `research-staging.sql` | The query behind `research-staging.py`; also usable alone in `psql`. | organizer | `research-staging.py` |
-| `research-watch.py` | Seals one chosen entry after a time budget (a bounded research run). | researcher | by hand |
-| `research-replay.py` | Compares two traces you already have with one verifier ([replay comparison](../docs/research/replay-comparison.md)). | researcher | by hand |
-| `fetch-run.sh` | Rebuilds a run's trace from the server's copy so `goalcup-verify` can judge it. Organizer only. | organizer | by hand |
+The pad runs a real harness in a sandbox box against the staging Worker, a local one or none, and
+decides whether the record is right. It is also how a harness is added. Nobody but a maintainer
+or a harness builder runs it; neither the gate nor CI nor release CI does, and it needs the
+sandbox and model keys from the environment (names only in `pad.toml`).
 
-## Releases
-
-| Script | What it does | Who | Run by |
-|---|---|---|---|
-| `release.sh` | `prepare` opens the version PR; `tag` tags what it merged. | maintainer | by hand |
-| `package-release.sh` | Packages one release tarball for one target. | release | release CI |
-| `third-party-licenses.py` | Writes the third-party notices a tarball carries. | release | `package-release.sh` |
-| `smoke-release.sh` | Smoke-tests one release tarball. | release | release CI |
+- `pad <settings file>` (a file from `runs/`): walks the steps of one run, a limit on each, always cleans up, prints one table. Exit 0 every row PASS, 1 any FAIL, 3 any INCONCLUSIVE.
+- `pad-run <run dir> <step>`: the half that runs inside the box, one step at a time. It prints no key.
+- `check.py <run folder>`: reads the JSON a run left, maps it to checks C1 to C6, writes `row.json` and `report.txt`. It never runs `goalcup-verify`.
+- `table`: gathers the `row.json` files into `connectors/tiers.toml`, `pad-rows.jsonl` and `PAD-RESULTS.md`. `table --release-check <commit>` exits 0 only when the release rows hold for that commit; `release.sh tag` runs it first.
+- `sbx.mjs` is the one place that talks to the sandbox service; `pad.toml`, `harnesses/`, `prompts/`, `runs/` and `image` are its data.
 
 ## Tests of the scripts
 
-Every `test_*.py` file is a unit test of one script, with stubs and no network. The full gate runs
-all of them (`python3 -m unittest discover -s scripts`). CI also runs four of them on every pull
-request: `test_ci_scope.py`, `test_check_links.py`, `test_check_connector.py` and
-`test_codeowners.py`.
+Unit tests with stubs and no network. The gate runs the first three, so CI does too.
 
 | Test | Tests |
 |---|---|
-| `test_campaign.py` | `campaign.py` |
-| `test_check_connector.py` | `check-connector.sh` (also CI) |
-| `test_check_links.py` | `check-links.py` (also CI) |
-| `test_check_version.py` | `check-version.py` |
-| `test_ci_scope.py` | `ci-scope.py` (also CI) |
-| `test_codeowners.py` | Every path in `.github/CODEOWNERS` exists (also CI) |
-| `test_early_crosscheck.py` | The E02 cross-check in `spikes/m2-first-release/e02/` (F-16) |
+| `test_install.py` | `packaging/install.sh` (the install never breaks a running recording) |
 | `test_fetch_run.py` | `fetch-run.sh` |
-| `test_gate.py` | `gate.sh` |
-| `test_install.py` | `packaging/install.sh` |
-| `test_linux_check.py` | `linux-check.sh` |
-| `test_linux_matrix.py` | `linux-matrix.sh` |
-| `test_matrix.py` | `matrix.sh` |
-| `test_release.py` | `release.sh` |
-| `test_research_measure.py` | `research-measure.py` |
-| `test_research_replay.py` | `research-replay.py` |
-| `test_research_sample.py` | `research-sample.py` |
-| `test_research_staging.py` | `research-staging.py` |
-| `test_research_watch.py` | `research-watch.py` |
-| `test_third_party_licenses.py` | `third-party-licenses.py` |
-
-TODO (after the event): move the helpers `campaign.py`, `matrix.sh` and `linux-matrix.sh` repeat into a shared library, and split `campaign.py` and `matrix.sh` into smaller files.
+| `pad/test_pad.py` | The pad: key files, no key in any argument or file, pane replacement, cleanup, `check.py` crash rows (Python 3.11 or later) |

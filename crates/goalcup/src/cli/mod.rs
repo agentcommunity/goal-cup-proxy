@@ -9,6 +9,7 @@ pub mod setup;
 pub mod start;
 pub mod status;
 pub mod text;
+pub mod time_left;
 
 use std::env;
 use std::fs;
@@ -167,11 +168,6 @@ pub fn status_json(entry_dir: &Path) -> PathBuf {
     entry_dir.join("status.json")
 }
 
-/// `runs/<run>/<entry>/upload.json` (PRD-06, seam S9). Status passes it through, unread.
-pub fn upload_json(entry_dir: &Path) -> PathBuf {
-    entry_dir.join("upload.json")
-}
-
 /// One line `goalcup: <text>` on stderr. A closed stderr is not worth a panic.
 pub fn say(text: &str) {
     let _ = writeln!(std::io::stderr(), "goalcup: {text}");
@@ -275,12 +271,17 @@ fn dirs(dir: &Path, first: char, when: impl Fn(&Path) -> Option<SystemTime>) -> 
     found.into_iter().map(|(_, p)| p).collect()
 }
 
+/// The run folders, oldest first by `server.json` time, else the folder's.
+fn runs(home: &Path) -> Vec<PathBuf> {
+    let when = |p: &Path| mtime(&server_json(p)).or_else(|| mtime(p));
+    dirs(&home.join("runs"), 'r', when)
+}
+
 /// The run and part for `goalcup status [PART]`: no argument is the newest run (by `server.json`
 /// time, else the folder's) and its newest part; `r…` is that run; `e…` is that part in whichever
 /// run holds it. None when there is no such run or it has no part yet.
 pub fn find(home: &Path, arg: Option<&str>) -> Option<Found> {
-    let when = |p: &Path| mtime(&server_json(p)).or_else(|| mtime(p));
-    let runs = dirs(&home.join("runs"), 'r', when);
+    let runs = runs(home);
     let (run_dir, entry) = match arg {
         None => (runs.last()?.clone(), None),
         Some(a) if a.starts_with('r') => (runs.into_iter().find(|p| p.ends_with(a))?, None),
