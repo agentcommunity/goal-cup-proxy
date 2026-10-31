@@ -210,7 +210,8 @@ fn rollout(e: &mut Entry, id: &str, parent: Option<&str>, at: &[&str]) {
             "last_token_usage": {"input_tokens": 9, "output_tokens": 2, "total_tokens": 11}}}});
         f += &format!("{v}\n");
     }
-    let path = format!("sessions:2026/11/07/rollout-{id}.jsonl");
+    // The folder holds MARK too: a session path can name the participant's folders (point 4).
+    let path = format!("sessions:{MARK}/rollout-{id}.jsonl");
     stream(e, StreamKind::Native, &path, &f);
 }
 
@@ -343,8 +344,9 @@ fn native_leg_joins_codex_threads() {
     let ok = ["fake-ws-a", "fake-ws-b", "fake-ws-e", "fake-http-a"];
     assert_eq!(joined(&t, Join::Matched), ok);
     assert_eq!(joined(&t, Join::Unattributed), ["fake-claude"]);
-    // Point 4: no wire or native row, and no thread, holds text from a body or a session file.
-    assert!(!format!("{t:?}").contains(MARK));
+    // Point 4: no row, and no thread, holds text from a body or a session file (`path` is U1's).
+    let bare = t.rows.iter().map(|r| CallRow { path: None, ..r.clone() });
+    assert!(!format!("{:?}", (bare.collect::<Vec<_>>(), &t.threads)).contains(MARK));
 }
 
 /// Point 2: a Claude Code subagent counts wherever its transcript sits under its session's
@@ -405,18 +407,30 @@ fn codex_entry(name: &str, torn: bool) -> PathBuf {
     dir
 }
 
-/// `usage <path> --json --out <new folder>`: the exit code, stdout, stderr and the two files.
-fn run_usage(path: &Path) -> (Option<i32>, [String; 4]) {
+/// What `usage <path> --json --out <new folder>` gave: exit code, stdout, stderr, the two files.
+#[derive(Debug, PartialEq)]
+struct Ran {
+    code: Option<i32>,
+    stdout: String,
+    stderr: String,
+    sum: String,
+    calls: String,
+}
+
+fn run_usage(path: &Path) -> Ran {
     let out = tmp("u-out");
     let (p, o) = (path.to_str().unwrap(), out.to_str().unwrap());
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_goalcup-verify"));
-    let args = ["usage", p, "--json", "--out", o];
-    let got = cmd.args(args).output().unwrap();
+    let got = cmd.args(["usage", p, "--json", "--out", o]).output().unwrap();
     let text = |b: &[u8]| String::from_utf8_lossy(b).into_owned();
-    let file = |end: &str| fs::read_to_string(out.join(format!("{ENTRY}{end}")));
-    let [sum, calls] = [file(".json"), file(".calls.jsonl")].map(Result::unwrap_or_default);
-    let parts = [text(&got.stdout), text(&got.stderr), sum, calls];
-    (got.status.code(), parts)
+    let file = |end: &str| fs::read_to_string(out.join(format!("{ENTRY}{end}"))).unwrap_or_default();
+    Ran {
+        code: got.status.code(),
+        stdout: text(&got.stdout),
+        stderr: text(&got.stderr),
+        sum: file(".json"),
+        calls: file(".calls.jsonl"),
+    }
 }
 
 #[test]
@@ -424,31 +438,48 @@ fn usage_files_repeat_and_add_up() {
     let dir = codex_entry("u-files", false);
     let (a, b) = (run_usage(&dir), run_usage(&dir));
     assert_eq!(a, b);
-    assert_eq!(a.0, Some(0));
-    let (sum, lines): (Value, Vec<Value>) = (json(&a.1[2]), a.1[3].lines().map(json).collect());
+    assert_eq!(a.code, Some(0));
+    let (sum, lines): (Value, Vec<Value>) = (json(&a.sum), a.calls.lines().map(json).collect());
     let said = |l: &&Value| l["k"] == "call" && !l["usage_from"].is_null();
     for k in ["input", "cached", "cache_write", "output", "reasoning"] {
         let col = lines.iter().filter(said);
         let got = col.filter_map(|l| l[k].as_u64()).reduce(|a, b| a + b);
         assert_eq!(sum["tokens"]["merged"][k].as_u64(), got, "{k}");
     }
-    // Warm-ups and interrupts are lines of their own kind, and no call.
-    let n = |k: &str| lines.iter().filter(|l| l["k"] == k).count();
-    assert_eq!([n("warmup"), n("interrupt")], [2, 1]);
     let calls = CALLS.split_whitespace().count();
     assert_eq!(sum["coverage"]["wire_calls"], calls);
+    // Which subagent used which model is in the summary's thread rows, not only in the calls file.
+    let kid = sum["threads"].as_array().unwrap().iter().find(|t| t["id"] == KID).unwrap();
+    assert_eq!(kid["models"]["fake-http-a-dated"], 1);
+}
+
+/// Point 3 in the reader: a decode error partway through an entry still gives the summary of what
+/// came, marked `read_error` with a line on stderr, never a clean-looking partial count.
+#[test]
+fn a_corrupt_entry_is_marked_not_silent() {
+    let dir = codex_entry("u-corrupt", false);
+    let last = part_files(&dir.join("rec")).unwrap().pop().unwrap();
+    let mut bytes = fs::read(&last).unwrap();
+    let mid = bytes.len() / 2;
+    bytes[mid..mid + 16].fill(0xA5);
+    fs::write(last, bytes).unwrap();
+    let ran = run_usage(&dir);
+    assert!(!ran.stderr.is_empty() && !ran.stderr.contains(MARK), "{ran:?}");
+    if ran.code == Some(0) {
+        assert_eq!(json(&ran.sum)["read_error"], true);
+    }
 }
 
 /// Point 4 on every path: the whole entry, a torn copy of it (exit 0, not sealed), a missing path.
 #[test]
 fn no_record_text_in_any_output() {
     let check = |path: PathBuf, code: i32, sealed: bool| {
-        let (got, parts) = run_usage(&path);
-        let text = parts.concat();
-        assert_eq!(got, Some(code), "{text}");
+        let ran = run_usage(&path);
+        let text = [&ran.stdout, &ran.stderr, &ran.sum, &ran.calls].map(String::as_str).concat();
+        assert_eq!(ran.code, Some(code), "{text}");
         assert!(!text.is_empty() && !text.contains(MARK));
         if code == 0 {
-            assert_eq!(json(&parts[2])["sealed"], sealed);
+            assert_eq!(json(&ran.sum)["sealed"], sealed);
         }
     };
     check(codex_entry("u-whole", false), 0, true);

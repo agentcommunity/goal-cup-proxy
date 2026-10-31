@@ -9,8 +9,10 @@ use goalcup_format::dump::wall;
 use serde_json::{Value, json};
 
 const KEYS: [&str; 5] = ["input", "cached", "cache_write", "output", "reasoning"];
+const STATUS: [&str; 5] = ["ok", "rate_limited", "error", "cancelled", "unknown"];
 
-/// `NativeOnly` as `native_only`.
+/// `NativeOnly` as `native_only`. The S7 names come from the variants' `Debug` names, so renaming
+/// a variant renames an output key.
 fn snake(x: impl Debug) -> String {
     let mut s = String::new();
     for c in format!("{x:?}").chars() {
@@ -34,8 +36,7 @@ fn status(o: &Outcome) -> &'static str {
 
 /// The count of rows per status, every status present.
 fn by_status<'a>(rows: impl Iterator<Item = &'a CallRow>) -> BTreeMap<&'static str, u64> {
-    let all = ["ok", "rate_limited", "error", "cancelled", "unknown"];
-    let mut m: BTreeMap<_, u64> = all.into_iter().map(|k| (k, 0)).collect();
+    let mut m: BTreeMap<_, u64> = STATUS.into_iter().map(|k| (k, 0)).collect();
     rows.for_each(|r| *m.entry(status(&r.outcome)).or_default() += 1);
     m
 }
@@ -54,17 +55,6 @@ fn total<'a>(rows: impl Iterator<Item = &'a CallRow>) -> Value {
         }
     }
     KEYS.iter().zip(acc).map(|(k, v)| (*k, json!(v))).collect()
-}
-
-/// The structured status and code of a refusal or error, then the row's own token.
-fn detail(r: &CallRow) -> Option<String> {
-    let (s, c) = match &r.outcome {
-        Outcome::RateLimited { status, code } | Outcome::Error { status, code } => (*status, code),
-        _ => (None, &None),
-    };
-    let own = [s.map(|s| s.to_string()), c.clone(), r.detail.clone()];
-    let parts: Vec<_> = own.into_iter().flatten().collect();
-    (!parts.is_empty()).then(|| parts.join(" "))
 }
 
 pub(super) fn summary(t: &CallTable) -> Value {
@@ -92,15 +82,19 @@ pub(super) fn summary(t: &CallTable) -> Value {
         .collect();
     let threads: Vec<_> = (t.threads.iter())
         .map(|th| {
-            let mine = |r: &&CallRow| r.thread.as_deref() == Some(th.id.as_str());
-            let at = |r: &CallRow| [r.wall_start, r.wall_end];
-            let times = rows().filter(mine).flat_map(at).flatten();
+            let mine: Vec<_> = rows().filter(|r| r.thread.as_deref() == Some(th.id.as_str())).collect();
+            let times = mine.iter().flat_map(|r| [r.wall_start, r.wall_end]).flatten();
+            let said = mine.iter().copied().filter(counted).filter(said);
+            let own = || mine.iter().copied().filter(counted);
+            let mut models: BTreeMap<&str, u64> = BTreeMap::new();
+            own().filter_map(|r| r.model.as_deref()).for_each(|m| *models.entry(m).or_default() += 1);
+            let wires = || mine.iter().copied().filter(wire);
             json!({"id": th.id, "parent": th.parent, "depth": th.depth, "label": th.label,
-                "wire_calls": rows().filter(mine).filter(wire).count(),
-                "native_calls": th.native_calls, "native_only": th.native_only,
-                "native_total": th.native_total, "matched": rows().filter(mine).filter(twin).count(),
-                "status": by_status(rows().filter(mine).filter(wire)),
-                "tokens": total(rows().filter(mine).filter(counted).filter(said)),
+                "wire_calls": wires().count(), "native_calls": th.native_calls,
+                "native_only": th.native_only, "native_total": th.native_total,
+                "matched": mine.iter().filter(|r| twin(r)).count(),
+                "status": by_status(wires()), "tokens": total(said), "models": models,
+                "effort": own().filter_map(|r| r.effort.as_deref()).collect::<BTreeSet<_>>(),
                 "first": times.clone().min().map(wall), "last": times.max().map(wall),
                 "readable": th.readable(), "reason": th.reason.map(snake)})
         })
@@ -112,7 +106,8 @@ pub(super) fn summary(t: &CallTable) -> Value {
         "coverage": {"wire_calls": rows().filter(wire).count(), "native_calls": native().count(),
             "matched": n(Join::Matched), "native_only": n(Join::NativeOnly),
             "wire_only": n(Join::WireOnly), "unattributed": n(Join::Unattributed),
-            "joined_by_time": t.joined_by_time},
+            "joined_by_time": t.joined_by_time, "repeats_skipped": t.repeats_skipped,
+            "copied_skipped": t.copied_skipped},
         "status": st, "models": models, "threads": threads,
         "tokens": {"merged": total(rows().filter(counted).filter(said)), "native": total(native()),
             "wire": total(rows().filter(counted).filter(|r| r.usage_from == Some(Leg::Wire))),
@@ -121,22 +116,24 @@ pub(super) fn summary(t: &CallTable) -> Value {
 }
 
 pub(super) fn calls_jsonl(t: &CallTable) -> String {
-    let rows = t.rows.iter();
-    rows.map(|r| {
-        let k = r.tokens;
-        let mut v = json!({"k": snake(r.kind), "leg": snake(r.leg), "entry": r.entry, "boot": r.boot,
-            "sid": r.sid, "msg": r.msg, "path": r.path, "t0": r.wall_start.map(wall),
-            "t1": r.wall_end.map(wall), "host": r.host, "host_kind": r.host_kind.map(snake),
-            "shape": r.shape.map(snake), "via": r.via.map(snake), "model": r.model,
-            "model_requested": r.model_requested, "effort": r.effort, "status": status(&r.outcome),
-            "detail": detail(r), "whole": r.whole, "thread": r.thread, "parent": r.parent,
-            "join": r.join.map(snake), "usage_from": r.usage_from.map(snake),
-            "input": k.input, "cached": k.cached, "cache_write": k.cache_write,
-            "output": k.output, "reasoning": k.reasoning});
-        if !r.extra.is_empty() {
-            v["extra"] = json!(r.extra);
-        }
-        format!("{v}\n")
-    })
-    .collect()
+    t.rows
+        .iter()
+        .map(|r| {
+            let mut v = json!({"k": snake(r.kind), "leg": snake(r.leg), "entry": r.entry,
+                "boot": r.boot, "sid": r.sid, "msg": r.msg, "t0": r.wall_start.map(wall),
+                "t1": r.wall_end.map(wall), "host": r.host, "host_kind": r.host_kind.map(snake),
+                "shape": r.shape.map(snake), "via": r.via.map(snake), "model": r.model,
+                "model_requested": r.model_requested, "effort": r.effort,
+                "status": status(&r.outcome), "detail": r.detail, "whole": r.whole,
+                "thread": r.thread, "parent": r.parent, "join": r.join.map(snake),
+                "usage_from": r.usage_from.map(snake)});
+            for (k, n) in KEYS.iter().zip(five(&r.tokens)) {
+                v[*k] = json!(n);
+            }
+            if !r.extra.is_empty() {
+                v["extra"] = json!(r.extra);
+            }
+            format!("{v}\n")
+        })
+        .collect()
 }

@@ -15,7 +15,8 @@ mod wire;
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::ffi::OsString;
-use std::path::{Path, PathBuf};
+use std::io::Write;
+use std::path::PathBuf;
 use std::process::ExitCode;
 
 use clap::Parser;
@@ -250,7 +251,7 @@ pub struct CallTable {
     /// Child rollout lines skipped as copied parent records (timed before the child's own
     /// `session_meta`).
     pub copied_skipped: u64,
-    /// From the `start` event (the entry from the first PART) and whether a `seal` event was read.
+    /// From the `start` event, the entry of the last PART, and whether a `seal` event was read.
     pub run: Option<String>,
     pub entry: String,
     pub connector: Option<String>,
@@ -330,9 +331,9 @@ impl Ctx {
     }
 
     fn start(&mut self, ev: &Value) {
-        self.connector = ev["connector"].as_str().map(str::to_string);
-        self.run = ev["run"].as_str().map(str::to_string);
-        self.harness_version = ev["harness_version"].as_str().map(str::to_string);
+        let label = |k: &str| ev[k].as_str().and_then(hints::id);
+        (self.connector, self.run) = (label("connector"), label("run"));
+        self.harness_version = label("harness_version");
         let lists = ev
             .get("hosts")
             .and_then(Value::as_object)
@@ -401,14 +402,14 @@ impl Calls {
     /// joined by reply id or by time (PRD-09 section 6).
     pub fn finish(self) -> CallTable {
         let c = &self.ctx;
-        let id = (c.run.clone(), c.entry.clone(), c.connector.clone());
-        let (hv, sealed) = (c.harness_version.clone(), c.sealed);
-        let mut t = self.table();
-        (t.run, t.entry, t.connector, t.harness_version, t.sealed) = (id.0, id.1, id.2, hv, sealed);
-        t
-    }
-
-    fn table(self) -> CallTable {
+        let base = CallTable {
+            run: c.run.clone(),
+            entry: c.entry.clone(),
+            connector: c.connector.clone(),
+            harness_version: c.harness_version.clone(),
+            sealed: c.sealed,
+            ..CallTable::default()
+        };
         let (mut rows, replies) = self.wire.finish(&self.ctx);
         let ok = |r: &CallRow| r.kind == Kind::Call && r.outcome == Outcome::Ok;
         let c = self.ctx.connector.as_deref();
@@ -416,10 +417,7 @@ impl Calls {
             for r in rows.iter_mut().filter(|r| r.kind == Kind::Call) {
                 r.join = Some(Join::WireOnly);
             }
-            return CallTable {
-                rows,
-                ..CallTable::default()
-            };
+            return CallTable { rows, ..base };
         };
         let leg = self.native.finish();
         let mut nat = leg.rows;
@@ -521,7 +519,7 @@ impl Calls {
             joined_by_time,
             repeats_skipped: leg.repeats_skipped,
             copied_skipped: leg.copied_skipped,
-            ..CallTable::default()
+            ..base
         }
     }
 }
@@ -536,58 +534,75 @@ struct Args {
 }
 
 /// Runs `goalcup-verify usage <path> [--json] [--out <dir>]` (PRD-09 section 7): an entry, a run
-/// folder or a part file; `--out` writes `<entry>.json` and `<entry>.calls.jsonl`. Exit 3, with a
-/// line naming a path or a reason and never record text, when nothing was read; else 0.
+/// folder or a part file; `--out` writes `<entry>.json` and `<entry>.calls.jsonl`. An entry that
+/// cannot be read gets a line naming its folder, never record text, and the rest go on; exit 3
+/// only when no entry gave output, else 0. A decode error partway through an entry still gives a
+/// summary, with `read_error` true and a line on stderr, since what came before it is real.
 pub fn run(args: Vec<OsString>) -> ExitCode {
     let a = match Args::try_parse_from(std::iter::once("usage".into()).chain(args)) {
         Ok(a) => a,
         Err(e) => {
             let _ = e.print();
-            return ExitCode::from(3 * u8::from(e.use_stderr()));
+            return ExitCode::from(if e.use_stderr() { 3 } else { 0 });
         }
     };
-    if let Err(e) = read_all(&a) {
-        eprintln!("goalcup-verify: usage: {e}");
-        return ExitCode::from(3);
+    let entries = match crate::input::resolve(&a.path, false, false) {
+        Ok(i) => i.entries,
+        Err(e) => {
+            eprintln!("goalcup-verify: usage: {e}");
+            return ExitCode::from(3);
+        }
+    };
+    let mut done = 0;
+    for e in &entries {
+        match read_one(&a, e) {
+            Ok(()) => done += 1,
+            Err(x) => eprintln!("goalcup-verify: usage: {x}"),
+        }
     }
-    ExitCode::SUCCESS
+    ExitCode::from(if done == 0 { 3 } else { 0 })
 }
 
-fn read_all(a: &Args) -> Result<(), String> {
-    for e in &crate::input::resolve(&a.path, false, false)?.entries {
-        let (rd, _) = crate::input::open(e).map_err(|x| format!("{}: {x}", e.dir.display()))?;
-        let (mut calls, mut n) = (Calls::new(), 0);
-        // The first read error ends the entry: the tail of an open entry is torn, use what came.
-        for it in rd.map_while(Result::ok) {
-            calls.push(&it.rec);
-            n += 1;
+fn read_one(a: &Args, e: &crate::input::Entry) -> Result<(), String> {
+    let dir = e.dir.display();
+    let (rd, _) = crate::input::open(e).map_err(|x| format!("{dir}: {x}"))?;
+    let (mut calls, mut n, mut broke) = (Calls::new(), 0, false);
+    // A torn tail is not an error (`tail().truncated`): an `Err` is a decode failure, and the
+    // read stops there.
+    for it in rd {
+        let Ok(it) = it else {
+            broke = true;
+            break;
+        };
+        calls.push(&it.rec);
+        n += 1;
+    }
+    if n == 0 {
+        return Err(format!("no record could be read in {dir}"));
+    }
+    if broke {
+        eprintln!("goalcup-verify: usage: the read stopped early in {dir}; the counts are partial");
+    }
+    let t = calls.finish();
+    // The entry names the files, so only a plain id does; else the folder's name.
+    let name = match e.dir.file_name() {
+        Some(f) if t.entry.is_empty() || !t.entry.bytes().all(|b| b.is_ascii_alphanumeric()) => {
+            f.to_string_lossy().into_owned()
         }
-        let mut t = calls.finish();
-        if n == 0 {
-            return Err(format!("no record could be read in {}", e.dir.display()));
-        }
-        // The entry names the files, so only a plain id does; else the folder's name.
-        let name = e.dir.file_name().unwrap_or_default();
-        if t.entry.is_empty() || !t.entry.bytes().all(|b| b.is_ascii_alphanumeric()) {
-            t.entry = name.to_string_lossy().into();
-        }
-        let sum = out::summary(&t);
-        if a.json || a.out.is_none() {
-            println!("{sum}");
-        }
-        if let Some(d) = &a.out {
-            std::fs::create_dir_all(d).map_err(|x| format!("{}: {x}", d.display()))?;
-            let base = d.join(&t.entry);
-            put(&base.with_extension("json"), &format!("{sum}\n"))?;
-            put(&base.with_extension("calls.jsonl"), &out::calls_jsonl(&t))?;
-        }
+        _ => t.entry.clone(),
+    };
+    let mut sum = out::summary(&t);
+    sum["read_error"] = broke.into();
+    if a.json || a.out.is_none() {
+        let _ = writeln!(std::io::stdout(), "{sum}");
+    }
+    if let Some(d) = &a.out {
+        let put = |path: PathBuf, body: &str| {
+            std::fs::write(&path, body).map_err(|x| format!("{}: {x}", path.display()))
+        };
+        std::fs::create_dir_all(d).map_err(|x| format!("{}: {x}", d.display()))?;
+        put(d.join(format!("{name}.json")), &format!("{sum}\n"))?;
+        put(d.join(format!("{name}.calls.jsonl")), &out::calls_jsonl(&t))?;
     }
     Ok(())
-}
-
-/// Writes by a temp name, then renames, so a reader never sees half a file.
-fn put(to: &Path, body: &str) -> Result<(), String> {
-    let tmp = to.with_extension("tmp");
-    let done = std::fs::write(&tmp, body).and_then(|()| std::fs::rename(&tmp, to));
-    done.map_err(|x| format!("{}: {x}", to.display()))
 }
