@@ -1040,3 +1040,17 @@ Names for `LESSONS.md` (the lessons lane writes them; judge 14:56Z, 15:13Z):
   L-P3 stays open in `LESSONS.md` and the deletion gate may not count it green.
 - Helpers `common/encode` and the recorder helpers stay private copies here until PRD-14 adds them; when it
   does, delete the copies in the same PR. No locked ledger item is touched.
+
+### 2026-10-31, replan after PRD-17 slice 3 (merge 2ad2ed16)
+
+- **On integration now:** `lessons_pipeline.rs` (104 lines, the FW1 pipeline case plus the lost-count assert), the
+  gate check 1 dry run, the `LESSONS.md` upkeep (FW1 and R2 name the `lessons_pipeline` guard, W2 and W7 reopened
+  until the relay half has `proxy::serve`). The slice title overclaims: the helper dedupe is one fold in
+  `lessons_hosts.rs` plus the new test using `common::recorder`; the `mod enc` wrappers and `aki_of` nits stay open.
+- **Budget:** lessons test lines total 2,711 (decode 388, hosts 181, http1 667, launch 408, pipeline 104, tls 260,
+  ws 703) of the 3,000 shared with PRD-14, so about 290 lines remain for `lessons_connect.rs`, the serve halves,
+  the D6 GAP and END records and the T4 key half. Same rule as before: reuse the private helpers, fold or leave a
+  named guard when a case needs more.
+- **FW1 copy of the PRD-02 promise:** agreement with PRD-02 is not recorded. The owner of PRD-02 may move the case
+  into `pipeline_guard.rs`; if so delete it here in the same PR and repoint the L-FW1 and L-R2 rows.
+- **Rows stay open** until a box run on the integration head. Nothing the plan owes changes; no locked ledger item is touched.

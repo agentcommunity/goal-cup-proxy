@@ -2370,3 +2370,12 @@ kept and now cites BUILD-PROMPT section 5, since B3 no longer carries it.
   on `watchdog::run`, `watchdog::recover` and `pipeline::close_dead_entry` (PRD-02, PRD-06 slice 6). Total
   Rust size is the owner question only past about 14,200 test lines; the CLI overage alone is not one.
   No locked ledger item is touched.
+
+### 2026-10-31, replan after PRD-17 slice 3 (merge 2ad2ed16)
+
+- **Size report, PRD-17** (`wc -l` on integration at 2ad2ed16): `tests/lessons_*.rs` 2,711 lines against the
+  3,000 line row shared with PRD-14 (90%, about 290 left). PRD-17 has no src row (0). Over budget is the owner
+  question only past about 14,200 total test lines; not reached.
+- **Gate effect:** none on build order or seams. Deletion gate check 1 has had a dry run; its rows stay open
+  until an integration-head box run, and the L-P3 ctrl-c case and the serve halves still block counting green.
+  The slice title claimed a helper dedupe it only partly did; the merge record is not edited. No locked ledger item is touched.
