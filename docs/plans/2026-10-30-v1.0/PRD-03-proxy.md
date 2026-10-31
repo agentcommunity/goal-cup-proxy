@@ -939,3 +939,16 @@ run:
   waives the check for the whole connection, so use it only when the size is unknown.
 
 No locked ledger item is touched and no owner question comes from this note.
+
+### 2026-10-30, replan after PRD-12 slice 5 (merge 9e71bde0): the pad's scripts for acceptance 3, 7 and 9
+
+- `scripts/pad/exec/` holds the watcher commands: `h2-parallel.sh` (acceptance 3: four `--http2-prior-knowledge`
+  requests in parallel to `api.openai.com`, curl 8.10.0 or later), `refusal-curl.sh` (acceptance 7:
+  a client trusting only the system CAs, two calls, a 660 s sleep, a third call) and `long-tunnel.sh`
+  (acceptance 9: 90 s on `stream.wikimedia.org`, a non-model host). The record decides the pass, not
+  the script's exit.
+- **What the pad reads from the record for acceptance 7:** the only loss a `refusal-curl.sh` row may
+  name is `tls_refused`, and the verifier exit may be 1 for it alone; anything else named fails the
+  row. A `tls_refused` GAP with `{"alert": false}` stays the case PRD-08 skips for `refusal_after_trust`.
+  A dodger row expects `pinned` tunnels with no `tls_refused` of its own.
+- No locked ledger item is touched and no owner question comes from this slice.

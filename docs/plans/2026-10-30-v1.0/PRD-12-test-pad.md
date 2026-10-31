@@ -1601,3 +1601,70 @@ taken; "rejected" says why. Fixes for other files are made by those files' owner
 - `mask_failclosed` is `warn` at most and keeps exit 0. The row prints `facts.streams` and
   `facts.bytes` beside PRD-05 A1's `mask_failclosed_bytes`; neither lowers a PASS.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-12 slice 5 (merge 9e71bde0)
+
+- **Gate.** `gate fast: PASS in 131s` on 9e71bde0. The gate now runs `test_pad.py` (`gate.sh` step on
+  python3.11), which the slice 3 note said it did not. The branch's box runs: 31 pad tests at f7d585fa,
+  20 at 96df4f07 after the cuts (C-1 to C-5 removed tests past the format and never-stop subjects).
+  All 16 non-merge commits in 5f30eef2..9e71bde0 carry both trailer lines. Sixteen paths changed, all
+  under `scripts/pad/`. There was no real-key run: the proof is fake-binary probes in boxes.
+- **Built (rungs 7 to 9):** the `gateway` case (a harness file with no `[gateway]` table gets `n/a`),
+  the `dodger` case (hosts copy with the harness's `model_host` pinned, passed to `goalcup start
+  --hosts`), the `exec` and `pre` steps, and the seven scripts under `scripts/pad/exec/`
+  (`h2-parallel`, `hint-local`, `long-tunnel`, `proxy-setting`, `refusal-curl`, `stale-gateway`,
+  `time-left`). Nit B6-1 is in. Still answering skip: `kill-watchdog`, `kill-both`, `freeze`,
+  `cut-worker`, `route-drop`, `fd-limit`.
+- **One review nit for the next slice, a cut (A-1):** `SecretCheck.c3` in `test_pad.py` still takes
+  `more=None` and merges it into `verify/secrets.json`; the only caller was the oversized-mask test
+  that C-1 deleted. Remove the parameter and write `{"masks": masks}`. `SECRET_HITS` in `check.py` keeps
+  `"hits"`: PRD-08 does not write it, but the conductor's own `verify/secrets-conductor.json` does.
+  The PRD-08 note's "`hits` can go" is withdrawn; `raw` is already out of the `secrets` argv.
+- **Section 3.1 and 3.1's test list, as built (the text above is not rewritten):**
+  - **Exec environment.** An `exec` script gets only the proxy and CA names, `HOME`, `PATH`,
+    `GOALCUP_TIME_LEFT_FILE` and the connector's home names (`exec_env`); a `pre` script keeps the
+    participant's shell. `pre` scripts read `PAD_HOME`, `PAD_RUN`, `PAD_PROXY`, `PAD_MODEL_HOSTS`,
+    `PAD_DAEMON`, `PAD_HOME_ENV` and `PAD_SHELL_ENV`, set by `pad-run`; no value of a key is among them.
+  - **Verdicts.** `row.json` gains a `notes` list (the watcher lines). A `pre` verdict (its exit) is
+    stored in `row.exec` beside the `exec` ones. A `proxy-setting.sh` row stays INCONCLUSIVE in the six
+    checks, because `start` refuses and no run is recorded; its answer is the `faults` row from the
+    `start-refused` line (exit not 0, file and key named, value not shown) and the pre exit.
+  - **Time limits.** A timed step inside a row with `refusal-curl.sh` (it sleeps 660 s: 12 minutes) or
+    `long-tunnel.sh` (90 s: 2 minutes) is refused at load, so the script cannot be cut off by its own
+    step's limit.
+  - **`stale-gateway.sh`** writes `exec/stale-gateway.pid`; wipe ends that daemon. `pad-run` looks for
+    the daemon twice, after `start` and after the harness exits, matched by the command and the run's
+    home from `/proc`. `alive` or `left` null is no look, and then the row is INCONCLUSIVE.
+  - **Gateway rule.** The vendor-host clause reads S7 call rows that carry a `host` and compares their
+    `host_kind` with `gateway`; a native row has no host and is not judged. The vendor's own host
+    appearing in a model call row is a C1 FAIL.
+  - **Allowed gaps.** `expected_gaps` is one helper: `after_stop`, `tls_refused` only for a row whose
+    variant holds `refusal-curl.sh`, `pinned` for a dodger, the `recorder_down` kinds for a fault row.
+    It also lets a dodger or fault row name `tls_refused` when a refusal-curl exec is in its variant.
+- **Harness file keys the remaining files need.** The three files on integration now carry
+  `model_host` (pad data, used only by the dodger copy; no connector reads it) and `daemon` (Hermes:
+  `hermes gateway run`). Each of the other 13 files adds `model_host`, and a `daemon` where PRD-11
+  names one (Cline's hub, OpenCode 2's service). Section 6's file example lacks `model_host`; the
+  three files on integration are the example.
+- **Read against the first real-run table, not proven:** `start-refused` `value_shown` and the two
+  `daemon-check` lines were not run against a live tmux and a real harness; the first-output read
+  (section 12) names them. `h2-parallel.sh` needs curl 8.10.0 or later in the box; the script prints
+  `curl --version` first and the exit shows an older curl.
+- **What is left to land:** `selftest` (waits on PRD-08's run 1 shape builder, in the PRD-08 slice 5
+  plan), the 13 harness files, the skill and templates, the six faults, and the per-key queue.
+- **Size, `wc -l` at 9e71bde0:** `pad` 654 (row 320), `pad-run` 801 (330), `check.py` 583 (320),
+  `table` 192 (150), `test_pad.py` 366 (90), `image` 54 (60), `sbx.mjs` 133 (no row), `exec/` 96 (70),
+  `pad.toml` 31, prompts and runs 32, harness files 98, `image.id` 1. In all 3,041 under
+  `scripts/pad/`, 501 more than at 69f355c6 (2,540), 110% over the top of PRD-00's "about 1,350 to
+  1,450" (code files alone, without the 3 harness files and data: 2,909). With `selftest` 100, 13
+  harness files 195 and the skill 100 the pad projects to about 3,440 before the six faults and the
+  queue. Reviewer B (C-7): no further cut that keeps behaviour is worth its own finding.
+- **Replan decision on the size (PRD-00 size rule).** The lines past the row since slice 4 serve point
+  1 (a model call through the gateway or a pinned tunnel is judged from the record, and a loss other
+  than the named one fails the row), point 3 (every watcher step has its own limit, a refused load
+  instead of a cut-off script, a timed-out step never stops the walk) and point 4 (the exec script
+  sees only harness names, `start-refused` never shows the proxy value, the stale daemon is ended at
+  wipe). The slice 3 and slice 4 decisions stand. This is not a raise of the row: the next slice
+  applies A-1 first, and each later slice reports per file. Whether the row itself rises stays the
+  12:53Z owner question; no new one.
+- No locked ledger item is touched and no owner question comes from this slice.

@@ -2,6 +2,9 @@
 //! never read and never hangs the reader, a replaced file is refused, no descriptor is kept, the
 //! root never reaches a path, and `src/native/` names no harness and holds no exclusion list.
 
+mod common;
+mod native_common;
+
 use std::ffi::{OsStr, OsString};
 use std::fs;
 use std::os::unix::fs::symlink;
@@ -13,8 +16,8 @@ use goalcup::connector::{self, builtin::CONNECTORS};
 use goalcup::native::fsx::{Dir, Kind, file_stat};
 use goalcup::native::pattern::{parse, path_id};
 use goalcup::native::walk::{Row, Walker};
-use goalcup::pipeline::{Call, Calls, Recorder};
-use serde_json::Value;
+use goalcup::pipeline::Recorder;
+use native_common::notes;
 
 fn n(s: &str) -> &OsStr {
     OsStr::new(s)
@@ -134,14 +137,6 @@ fn row(name: &str, root: &Path, pattern: &str) -> Row {
         root: root.into(),
         pattern: parse(pattern).unwrap(),
     }
-}
-
-fn notes(calls: &Calls, what: &str) -> Vec<Value> {
-    let f = |c: Call| match c {
-        Call::Event(v) if v["what"] == what => Some(v),
-        _ => None,
-    };
-    calls.all().into_iter().filter_map(f).collect()
 }
 
 #[test]

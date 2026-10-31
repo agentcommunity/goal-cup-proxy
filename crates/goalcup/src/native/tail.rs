@@ -3,6 +3,7 @@
 //! Content is never parsed; the file is the buffer.
 
 use std::collections::BTreeMap;
+use std::ffi::OsStr;
 use std::fs::File;
 use std::io;
 use std::os::unix::fs::FileExt;
@@ -246,27 +247,8 @@ fn read_one(rec: &Recorder, id: &str, e: &mut Entry, left: &mut u64) -> io::Resu
     let (to, Some(h)) = (want(e), e.h.as_mut()) else {
         return Ok(None);
     };
-    while e.off < to {
-        let n = rec.room().min(256 << 10).min(to - e.off).min(*left);
-        if n == 0 {
-            return Ok(Some(stop(*left)));
-        }
-        let mut buf = vec![0; n as usize];
-        let t = rec.now();
-        let k = loop {
-            match f.read_at(&mut buf, e.off) {
-                Err(err) if err.kind() == io::ErrorKind::Interrupted => {}
-                k => break k?,
-            }
-        };
-        buf.truncate(k);
-        (e.off, *left) = (e.off + k as u64, *left - k as u64);
-        if k > 0 {
-            h.data(t, Bytes::from(buf));
-        }
-        if (k as u64) < n {
-            break;
-        }
+    if let Some(stop) = pump(rec, &f, h, &mut e.off, to, left)? {
+        return Ok(Some(stop));
     }
     if let Some(c) = e.copy.take()
         && let Some(h) = e.h.take()
@@ -316,14 +298,27 @@ fn begin_copy(rec: &Recorder, id: &str, e: &mut Entry) {
 /// Ends a stream; seen bytes left unread get a GAP first, `exact` at the seal or for a gone
 /// snapshot, a lower bound when the file changed (sections 4 and 8). A torn snapshot copy never
 /// comes here (`end_torn`). Returns the unread.
-fn end(rec: &Recorder, mut h: StreamHandle, e: &Entry, reason: EndReason, exact: bool) -> u64 {
+fn end(rec: &Recorder, h: StreamHandle, e: &Entry, reason: EndReason, exact: bool) -> u64 {
     let n = want(e).saturating_sub(e.off);
+    end_stream(rec, h, e.seen_at, n, reason, exact)
+}
+
+/// The one rule that names a stream cut short (also for a database copy): `n` seen bytes unread
+/// since `since` get a GAP first, then the END. At the seal the loss is exact; else it is
+/// `source_changed` with `unread_at_least`, and `lost` exact only if `exact`. Returns `n`.
+pub(crate) fn end_stream(
+    rec: &Recorder,
+    mut h: StreamHandle,
+    since: Mono,
+    n: u64,
+    reason: EndReason,
+    exact: bool,
+) -> u64 {
     if n > 0 && reason == CutAtSeal {
-        h.gap(GapReason::CutAtSeal, e.seen_at, Some(n), None);
+        h.gap(GapReason::CutAtSeal, since, Some(n), None);
     } else if n > 0 {
         let tail = Some(json!({"unread_at_least": n}));
-        let lost = exact.then_some(n);
-        h.gap(GapReason::SourceChanged, e.seen_at, lost, tail);
+        h.gap(GapReason::SourceChanged, since, exact.then_some(n), tail);
     }
     h.end(rec.now(), reason, None);
     n
@@ -358,11 +353,58 @@ pub(crate) fn fid_hex(fid: Fid) -> String {
     format!("{:x}.{:x}{birth}", fid.dev, fid.ino)
 }
 
-/// Opens `root/rel` with no symlink followed: the root, each folder, then the file with `fid`.
-pub(crate) fn open_rel(root: &Path, rel: &Path, fid: Fid) -> io::Result<File> {
+/// Reads `f` from `off` to `to` in pieces of at most `room()` and 256 KiB, each timed just before
+/// its read, until the file ends early. `Some` when the room or `left` ran out first.
+pub(crate) fn pump(
+    rec: &Recorder,
+    f: &File,
+    h: &mut StreamHandle,
+    off: &mut u64,
+    to: u64,
+    left: &mut u64,
+) -> io::Result<Option<Stop>> {
+    while *off < to {
+        let n = rec.room().min(256 << 10).min(to - *off).min(*left);
+        if n == 0 {
+            return Ok(Some(stop(*left)));
+        }
+        let mut buf = vec![0; n as usize];
+        let t = rec.now();
+        let k = loop {
+            match f.read_at(&mut buf, *off) {
+                Err(err) if err.kind() == io::ErrorKind::Interrupted => {}
+                k => break k?,
+            }
+        };
+        buf.truncate(k);
+        (*off, *left) = (*off + k as u64, *left - k as u64);
+        if k > 0 {
+            h.data(t, Bytes::from(buf));
+        }
+        if (k as u64) < n {
+            break;
+        }
+    }
+    Ok(None)
+}
+
+/// The folder of `root/rel`, opened with no symlink followed, and the file's name.
+fn parent<'a>(root: &Path, rel: &'a Path) -> io::Result<(Dir, &'a OsStr)> {
     let mut dir = Dir::open_root(root)?;
     for name in rel.parent().into_iter().flat_map(Path::iter) {
         dir = dir.open_child(name)?;
     }
-    dir.open_file(rel.file_name().ok_or(io::ErrorKind::NotFound)?, fid)
+    Ok((dir, rel.file_name().ok_or(io::ErrorKind::NotFound)?))
+}
+
+/// Opens `root/rel` with no symlink followed, the file only with `fid`.
+pub(crate) fn open_rel(root: &Path, rel: &Path, fid: Fid) -> io::Result<File> {
+    let (dir, name) = parent(root, rel)?;
+    dir.open_file(name, fid)
+}
+
+/// `root/rel` as it is now, with no symlink followed.
+pub(crate) fn stat_rel(root: &Path, rel: &Path) -> io::Result<Stat> {
+    let (dir, name) = parent(root, rel)?;
+    dir.stat_at(name)
 }

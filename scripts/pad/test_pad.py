@@ -80,7 +80,7 @@ class Settings(unittest.TestCase):
 class Walk(unittest.TestCase):
     """A sentinel key in the environment: no argument the pad builds, and no file it writes, holds it."""
 
-    HARNESS = {"version": "1.2.3", "version_cmd": "x --version", "keep_going": True}
+    HARNESS = {"version": "1.2.3", "version_cmd": "x --version", "keep_going": True, "gateway": {}}  # a gateway route
 
     def fake_call(self, argv, timeout=None, env=None):
         if argv[0] == "sh":  # fetch-run: no organizer secret but its own reaches it
@@ -109,7 +109,8 @@ class Walk(unittest.TestCase):
         env = {"CLAUDE_API_KEY": SENTINEL, "AI_GATEWAY_API_KEY": SENTINEL + "gw", **(extra_env or {})}
         with tempfile.TemporaryDirectory() as out, mock.patch.dict(os.environ, env), \
                 mock.patch.object(pad, "call", self.fake_call):
-            runs = pad.run_all(pad.load_settings(dict(BASE, **settings), PADCFG), PADCFG, self.HARNESS, out)
+            s = pad.load_settings(dict(BASE, **settings), PADCFG)
+            runs = pad.run_all(s, PADCFG, self.HARNESS, out, pad.case_list(s, self.HARNESS)[0])
             with open(os.path.join(out, "spend.jsonl")) as f:  # section 7: one ledger line per run, however it ended
                 self.assertEqual(len(f.readlines()), len(runs))
             for root, _, files in os.walk(out):
@@ -217,6 +218,14 @@ class BoxHalf(unittest.TestCase):
             self.assertNotIn("PADSENTINEL", f.read())
         self.assertFalse([a for argv in argvs for a in argv if "PADSENTINEL" in a])
 
+    def test_exec_env_keeps_no_key(self):  # section 3.1: /proc/<pid>/environ holds the harness's keys
+        environ = b"\0".join([b"HTTPS_PROXY=http://127.0.0.1:4100", b"SSL_CERT_FILE=/run/ca.pem", b"PAD_CA=/run/ca2.pem",
+                              b"OPENAI_API_KEY=" + SENTINEL.encode(), b"GOALCUP_TEST_APPROVAL_KEY=gca-PADSENTINEL-2",
+                              b"PATH=/usr/bin", b"HOME=/iso", b"GOALCUP_TIME_LEFT_FILE=/e/upload.json", b"LANG=C", b""])
+        got = padrun.exec_env(environ, ["PAD_CA"])  # PRD-10 acceptance 7 adds HOME, PATH and the time-left file
+        self.assertEqual(set(got), {"HTTPS_PROXY", "SSL_CERT_FILE", "PAD_CA", "PATH", "HOME", "GOALCUP_TIME_LEFT_FILE"})
+        self.assertNotIn("PADSENTINEL", json.dumps(got))
+
 
 class CrashRows(unittest.TestCase):
     """Section 3.1, ledger R3a and R3b: one closed recorder_down gap per kill under 2 s, no null_mode gap; the
@@ -285,9 +294,9 @@ class SecretCheck(unittest.TestCase):
     PLANTED = {"openai_key": 1, "github_token": 1, "generic_secret_assignment": 1, "jwt": 1, "private_key": 1,
                "url_password": 1, "auth": 8}
 
-    def c3(self, masks, secrets_exit=1, plain_exit=0):
+    def c3(self, masks, secrets_exit=1, plain_exit=0, more=None):
         return evaluate({"meta.json": {"connector": "codex-cli", "case": "direct", "known_box": True, "entry": "e1"},
-                         "verify/secrets.json": {"masks": masks}, "verify/secrets-conductor.json": {"hits": 0},
+                         "verify/secrets.json": dict(more or {}, masks=masks), "verify/secrets-conductor.json": {"hits": 0},
                          "verify/exits.json": {"secrets": secrets_exit, "secrets-out": 0, "secrets-plain": plain_exit}}
                         )["checks"]["C3"]
 
@@ -302,6 +311,55 @@ class SecretCheck(unittest.TestCase):
         with mock.patch.dict(os.environ, {"GOALCUP_TEST_APPROVAL_KEY": SENTINEL + "ap"}):
             pad.Run.scan_out(run)
         self.assertEqual(check.Run(run.dir, {}).hits("secrets-conductor"), 1)
+
+
+class PreRows(unittest.TestCase):
+    """Section 3.1, proxy-setting.sh, a row the record decides: it passes when start refused and named the file and key,
+    with the output and conductor scans read; no scan is never a pass (point 4; PRD-11 acceptance 4)."""
+
+    SCANNED = {"verify/exits.json": {"secrets-out": 0}, "verify/secrets-conductor.json": {"hits": 0}}
+
+    def row(self, script, lines, scanned=True, **files):
+        pre = {"kind": "pre", "script": script, "exit": 0}
+        meta = {"connector": "qwen-code", "case": "direct", "variant": ["pre " + script], "server": "off"}
+        return evaluate({"meta.json": meta, "watch/faults.jsonl": [pre] + lines, **(self.SCANNED if scanned else {}), **files})
+
+    def test_start_refusal_names_file_and_key(self):
+        said = {"kind": "start-refused", "exit": 1, "named_file": True, "named_key": True, "value_shown": False}
+        self.assertEqual(self.row("proxy-setting.sh", [said])["result"], "PASS")  # no run began: no run certificate key to miss
+        for bad in (dict(said, named_key=False), dict(said, exit=0), dict(said, value_shown=True)):
+            self.assertEqual(self.row("proxy-setting.sh", [bad])["result"], "FAIL", bad)
+        self.assertEqual(self.row("proxy-setting.sh", [])["result"], "INCONCLUSIVE")  # start never ended
+
+    def test_start_refusal_with_no_scan_is_not_a_pass(self):  # point 4: no scan of the box's output is no evidence
+        said = {"kind": "start-refused", "exit": 1, "named_file": True, "named_key": True, "value_shown": False}
+        got = self.row("proxy-setting.sh", [said], scanned=False)
+        self.assertEqual((got["result"], got["checks"]["C3"]), ("INCONCLUSIVE", "INCONCLUSIVE"))
+        hit = self.row("proxy-setting.sh", [said], **{"verify/exits.json": {"secrets-out": 2}})
+        self.assertEqual((hit["result"], hit["checks"]["C3"]), ("FAIL", "FAIL"))
+
+
+class StartRefusal(unittest.TestCase):
+    """pad-run: the pane's words about a refused start become booleans."""
+
+    def run_for(self, **harness):
+        run = self.enterContext(tempfile.TemporaryDirectory())
+        for name, doc in (("settings.json", {"harness": harness}), ("state.json", {"home": run})):
+            with open(os.path.join(run, name), "w") as f:
+                json.dump(doc, f)
+        return run, padrun.Run(run, "verify")
+
+    def test_refusal_records_what_the_screen_showed(self):
+        run, r = self.run_for()
+        seen = []
+        def fake(argv, **kw):
+            out = "1 1" if argv[1] == "display-message" else "settings.json has a proxy key: http://" + padrun.PROXY_VALUE
+            return subprocess.CompletedProcess(argv, 0, out, "")
+        with mock.patch.object(padrun, "sh", fake), mock.patch.object(r, "fault", lambda kind, **kw: seen.append((kind, kw))), \
+                mock.patch.object(r, "pane", lambda keep=True, tag="": fake(["tmux", "capture-pane"]).stdout):
+            r.refusal()
+        self.assertEqual({k: seen[0][1][k] for k in ("named_file", "named_key", "value_shown")},
+                         {"named_file": True, "named_key": True, "value_shown": True})
 
 
 if __name__ == "__main__":

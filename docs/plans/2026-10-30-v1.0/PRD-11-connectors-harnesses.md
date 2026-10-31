@@ -1355,3 +1355,17 @@ here; the other files carry their own part.
   test file case; its proof is PRD-10's existing setup test. Anything else past 1,700 or 760 needs
   another decision line, and a new connector adds only data and its `entry!` line.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-12 slice 5 (merge 9e71bde0): pad data and watcher scripts for your acceptance 3, 4 and 5
+
+- **Watcher scripts exist** under `scripts/pad/exec/`: `hint-local.sh` (acceptance 3, Codex: a
+  `[model_providers.x]` for `api.openai.com` and an unselected local one, and a hosts copy without
+  `api.openai.com`), `proxy-setting.sh` (acceptance 4: `proxy` in the harness's `settings.json`;
+  `goalcup start` must refuse and name file and key, and not print the value), `stale-gateway.sh`
+  (acceptance 5: the harness file's `daemon` command started under `env -i` with the connector's home
+  names, left running for `start`; the pad then looks twice that no such process lives).
+- **Pad data in the harness files, not connector data:** `model_host` (the dodger's pinned host) and
+  `daemon`. The facts sheet rewrite of PRD-11's last slice reads these from `scripts/pad/harnesses/`
+  and the rows' `row.json` (`exec`, `notes`); a connector with a daemon (Cline's hub, OpenCode 2's
+  service) needs its `daemon` value for acceptance 5 to be a real run.
+- No locked ledger item is touched and no owner question comes from this slice.
