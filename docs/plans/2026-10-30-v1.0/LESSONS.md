@@ -37,7 +37,7 @@ lessons lane (PRD-17); read by the deletion gate (PRD-17 Acceptance, checks 1 to
 | L-C4 | 2.1 | A: lessons_connect::client_hello_in_two_records_and_one_byte_reads_decides_by_sni | PRD-17 | open | - |
 | L-C5 | 2.1 | A: lessons_connect::close_before_hello_opens_no_upstream | PRD-17 | open | - |
 | L-C6 | 2.1 | A: lessons_connect::unlisted_refusal_is_one_round; A: lessons_connect::listed_refusal_is_retried; A: proxy_connect.rs (PRD-03, the reset rule); R: RR5 | PRD-17 | open | - |
-| L-C7 | 2.1 | R: RR1; A: lessons_connect::idle_tunnel_survives_120s (full tier) | PRD-17 | open | - |
+| L-C7 | 2.1 | R: RR1; A: lessons_connect::idle_tunnel_survives_120s (full tier, held back with `ignore`) | PRD-17 | open | - |
 | L-C8 | 2.1 | A: lessons_connect::one_bad_handshake_leaves_others_relaying | PRD-17 | open | - |
 | L-C9 | 2.1 | A: proxy_connect.rs (PRD-03) | PRD-03 | green | 7e620577 |
 | L-C10 | 2.1 | A: proxy_connect.rs (PRD-03); A: lessons_connect::listed_sni_to_a_local_fake_server_is_never_trusted | PRD-03, PRD-17 | open | - |
@@ -45,8 +45,8 @@ lessons lane (PRD-17); read by the deletion gate (PRD-17 Acceptance, checks 1 to
 | L-C12 | 2.1 | A: watchdog_restart.rs (PRD-02) | PRD-02 | open | - |
 | L-T1 | 2.2 | A: lessons_tls::leaf_aki_names_the_ca_key; R: RR3 | PRD-17 | green | 7e620577 |
 | L-T2 | 2.2 | A: lessons_tls::ca_constraints_validity_and_leaf_shape | PRD-17 | green | 7e620577 |
-| L-T3 | 2.2 | A: proxy_tls.rs (PRD-03); A: lessons_tls::untrusted_upstream_reaches_client_unchanged | PRD-03, PRD-17 | open | - |
-| L-T4 | 2.2 | A: lessons_tls::ca_files_are_new_0600_and_never_follow_a_link (run-ca.pem and bundle.pem only; the `rec/run-ca.key` case is pending until PRD-02's writer is on integration) | PRD-17 | open | - |
+| L-T3 | 2.2 | A: proxy_tls.rs (PRD-03); A: lessons_connect::untrusted_upstream_reaches_client_unchanged | PRD-03, PRD-17 | open | - |
+| L-T4 | 2.2 | A: lessons_tls::ca_files_are_new_0600_and_never_follow_a_link (run-ca.pem and bundle.pem); A: lessons_tls::run_ca_key_is_new_0600_gone_at_the_seal_and_never_follows_a_link (the `rec/run-ca.key` half) | PRD-17 | open | - |
 | L-T5 | 2.2 | A: lessons_tls::bundle_holds_certificates_only_with_the_run_ca_first; A: lessons_tls::ca_files_are_new_0600_and_never_follow_a_link; R: RR5 | PRD-17 | green | 7e620577 |
 | L-T6 | 2.2 | A: connector_launch.rs (PRD-11) | PRD-11 | green | 7e620577 |
 | L-T7 | 2.2 | A: proxy_tls.rs (PRD-03, ALPN mirror matrix) | PRD-03 | green | 7e620577 |
@@ -69,7 +69,7 @@ lessons lane (PRD-17); read by the deletion gate (PRD-17 Acceptance, checks 1 to
 | L-D3 | 2.4 | A: lessons_decode::gzip_two_members_and_a_bad_crc | PRD-17 | open | - |
 | L-D4 | 2.4 | A: lessons_decode::raw_and_zlib_deflate_split_after_byte_one | PRD-17 | open | - |
 | L-D5 | 2.4 | A: proxy_http1.rs (PRD-03) | PRD-03 | green | 7e620577 |
-| L-D6 | 2.4 | A: lessons_decode::corrupt_tail_keeps_the_prefix (decoder layer only; the GAP and END records are shown once `proxy::serve` lands, see the note below the table) | PRD-17 | open | - |
+| L-D6 | 2.4 | A: lessons_decode::corrupt_tail_keeps_the_prefix (decoder layer); A: lessons_decode::corrupt_br_tail_through_serve_keeps_prefix_gap_end_and_relays_everything (the GAP and END records) | PRD-17 | open | - |
 | L-D7 | 2.4 | A: lessons_decode::bomb_relays_on_in_bounded_pieces | PRD-17 | open | - |
 | L-D8 | 2.4 | A: lessons_decode.rs | PRD-17 | open | - |
 | L-W1 | 2.5 | A: proxy_ws.rs (PRD-03); R: RR1 | PRD-03 | green | 7e620577 |
@@ -187,15 +187,18 @@ lessons lane (PRD-17); read by the deletion gate (PRD-17 Acceptance, checks 1 to
 | L-SC7 | 2.16 | X: ledger L5, L6 (PRD-10 section 4) | PRD-10 | open | - |
 
 **Still waiting on `proxy::serve`.** `proxy::serve` is not on integration (only the branch
-`prd-03-proxy-serve` has it), so the record halves stay `open`: D1 to D4 and D6 (`lessons_decode.rs` drives
-`proxy::decode` alone and shows the decoded prefix and the `Step`, not the GAP `decode_failed` and END
-`decode_error` records; D8 is the whole-path case), D7, the relay halves of H2, W2 and W7 (`lessons_ws.rs` runs at the parser layer and shows no relayed byte and no conn GAP), H9 to H11, W9 to W11, the
-`lessons_connect.rs` C-rows (the file does not exist yet), K15 (whole path, with `lessons_ws.rs`), T3 and
-SC3. L-T4 waits for the `rec/run-ca.key` case: nothing in `crates/goalcup/src` writes that file, `proxy/ca.rs`
-only has a comment saying it is PRD-02's, and the question is logged for PRD-02. L-VR2 waits for PRD-09's
+`prd-03-proxy-serve` has it), so the record halves stay `open`: D1 to D4 (`lessons_decode.rs` drives
+`proxy::decode` alone and shows the decoded prefix and the `Step`; D6 now has its serve case; D8 is the whole-path case), D7, the relay halves of H2, W2 and W7 (`lessons_ws.rs` runs at the parser layer and shows no relayed byte and no conn GAP), H9 to H11, W9 to W11, K15 (whole path, with `lessons_ws.rs`) and
+SC3. The C-rows, T3, the T4 key half and D6 have their tests (slice 4) and stay `open` until a box run on the
+integration head. L-VR2 waits for PRD-09's
 named `usage` case. Rows whose named file is not on integration (`pipeline_stall.rs`, `pipeline_seal.rs`,
 `watchdog_restart.rs`, `watchdog_end.rs`, `proxy_restart.rs`, `cli_continue.rs`) stay `open`. L-P3 stays
 `open`: its test is held back with `ignore` until the PRD-02 shield fix is on integration.
+
+**Budget after slice 4.** Lessons test lines total 3,226 across the eight `lessons_*.rs` files
+(`lessons_connect.rs` 302), up from 2,711, so the slice spent 515 against the ~290 that were left of the 3,000
+shared with PRD-14: nothing is left and the slice is over. The serve halves of H2, W2, W7 and H9, W10, K15,
+the SC3 watchdog loop and the L-P3 `ignore` removal need an owner question on the budget before they are written.
 
 **Checked and left `open`.** FW1: `pipeline_guard.rs` never opens a stream while the guard is full, so it
 does not show "OPEN is always admitted"; `lessons_pipeline::open_and_end_survive_a_full_guard` covers it
