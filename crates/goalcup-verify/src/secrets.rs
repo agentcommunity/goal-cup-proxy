@@ -300,7 +300,7 @@ impl Scan {
         let (mut name, mut boot, mut whole) = (String::new(), 0, true);
         let mut kinds: Vec<String> = vec![];
         let mut open = Open::new();
-        for it in input::open(e)?.0 {
+        for it in input::open(e)? {
             let Ok(it) = it else {
                 whole = false;
                 break;
