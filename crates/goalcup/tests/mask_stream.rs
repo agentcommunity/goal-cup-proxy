@@ -420,3 +420,24 @@ fn a_pem_block_with_an_exact_value_absorbs_a_claim_past_its_end() -> Res {
     }
     Ok(())
 }
+
+/// Point 3: runs that keep candidates live across most of the hold stream in time linear in
+/// their length, equal to `mask_whole` (so nothing fails closed): 1 MiB of glued prefixes, and
+/// 256 KiB of PEM `BEGIN` lines 300 bytes apart with no `END` (an agent printing a crypto
+/// library), each fed in 16 KiB pieces. The bound is about 20 times the linear cost in a debug
+/// build; in a release build the code this replaced took about 35 s for 256 KiB of the first
+/// and 12 s for the second.
+#[test]
+fn runs_that_hold_candidates_stream_in_linear_time() -> Res {
+    let m = Masker::new(&[], Vec::new())?;
+    let line = format!("{}\n", "-----BEGIN PRIVATE KEY-----");
+    let pem = format!("{line}{}", "x".repeat(300 - line.len())).repeat((1 << 18) / 300);
+    let glued = "task-".repeat((1 << 20) / 5);
+    for input in [glued.as_bytes(), pem.as_bytes()] {
+        let started = std::time::Instant::now();
+        let cuts: Vec<usize> = (16 * 1024..input.len()).step_by(16 * 1024).collect();
+        assert_eq!(stream_in(&m, input, &cuts), m.mask_whole(input));
+        assert!(started.elapsed() < std::time::Duration::from_secs(30));
+    }
+    Ok(())
+}

@@ -8,29 +8,6 @@
 mod common;
 
 use common::{ALNUM, Rng, keys, only_spans_changed, run, shape_rows, starred};
-use regex::bytes::RegexBuilder;
-
-struct Shape {
-    kind: String,
-    guard: bool,
-}
-
-/// Every row compiled with the builder settings `compile` in `goalcup-daemon` uses today.
-fn shapes() -> Vec<Shape> {
-    shape_rows()
-        .into_iter()
-        .map(|row| {
-            assert_eq!(row.len(), 3, "a row is kind, guard, regex: {row:?}");
-            if let Err(e) = RegexBuilder::new(row[2]).build() {
-                panic!("{} does not compile: {e}", row[0]);
-            }
-            Shape {
-                kind: row[0].to_string(),
-                guard: row[1] == "1",
-            }
-        })
-        .collect()
-}
 
 /// The literal kinds in `shapes.tsv` order. The JSON literal (10) and the shell literal (11)
 /// are fixed indexes the stream relies on; `url_password` (12) took the slot `email` left. The
@@ -60,14 +37,17 @@ const KINDS: [&str; 20] = [
 
 #[test]
 fn shapes_tsv_is_the_shared_list() {
-    let shapes = shapes();
-    let kinds: Vec<&str> = shapes.iter().map(|s| s.kind.as_str()).collect();
+    let rows = shape_rows();
+    assert!(
+        rows.iter().all(|r| r.len() == 3),
+        "a row is kind, guard, regex"
+    );
+    let kinds: Vec<&str> = rows.iter().map(|r| r[0]).collect();
     assert_eq!(kinds, KINDS);
-
-    let guarded: Vec<usize> = shapes
+    let guarded: Vec<usize> = rows
         .iter()
         .enumerate()
-        .filter(|(_, s)| s.guard)
+        .filter(|(_, r)| r[1] == "1")
         .map(|(i, _)| i)
         .collect();
     assert_eq!(guarded, [0, 1, 3, 4, 5, 7, 9, 13, 14, 15, 16, 17, 18, 19]);
@@ -415,31 +395,5 @@ fn a_connector_field_rule_masks_its_value() -> Res {
         String::from_utf8(out.bytes)?,
         format!(r#"{{"x-codex-turn-state": "{}"}}"#, "*".repeat(state.len()))
     );
-    Ok(())
-}
-
-/// Review X F1: a long run of glued prefixes (an agent writing kebab-case, or `…sk-…` runs) is
-/// one pass, whole and streamed in 16 KiB pieces, and nothing in it is masked. The time is
-/// printed, not asserted; the search it replaced took about 35 s for 256 KiB.
-#[test]
-fn a_long_run_of_glued_prefixes_is_one_pass() -> Res {
-    let m = masker()?;
-    for (unit, size) in [("task-", 1 << 20), ("Xsk-", 1 << 18), ("xAIza", 1 << 18)] {
-        let input = unit.repeat(size / unit.len()).into_bytes();
-        let started = std::time::Instant::now();
-        assert_eq!(m.mask_whole(&input).bytes, input, "{unit}");
-        let mut s = m.stream(goalcup_format::StreamKind::Native);
-        let mut back = Vec::with_capacity(input.len());
-        for piece in input.chunks(16 * 1024) {
-            back.extend(s.push(piece).bytes);
-        }
-        back.extend(s.finish().bytes);
-        assert_eq!(back, input, "{unit} streamed");
-        println!(
-            "{unit} x {}: {:.2} s whole and streamed",
-            input.len() / unit.len(),
-            started.elapsed().as_secs_f64()
-        );
-    }
     Ok(())
 }

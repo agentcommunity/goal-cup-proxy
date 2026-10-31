@@ -138,7 +138,7 @@ fn workspace_values_reads_the_last_gh_token_of_the_first_key_file() -> Res {
     Ok(())
 }
 
-/// Review X F2: 32 values (the guard; the 33rd is skipped) do not make a stream with many
+/// 32 values (the guard; the 33rd is skipped) do not make a stream with many
 /// backslashes fail closed: every `\u` form starts on a backslash, and all forms of one start
 /// are one candidate. The stream equals `mask_whole`, and a planted escaped form is masked.
 #[test]

@@ -812,7 +812,29 @@ enum Pem {
         end: EndLine,
         /// Units of the END line in progress, from its first dash; zero when none is.
         since: u32,
+        /// Later `BEGIN`s whose bodies are in the same `end` and `since` state, so see every END
+        /// line this one sees: their start and how many fewer body bytes they have. When this
+        /// body passes its bound the first still in bound carries the candidate on.
+        later: Vec<(u64, u32)>,
     },
+}
+
+impl Walk {
+    /// When `other` is a later PEM body that can join this one ([`Pem::Body`]): its gap.
+    fn gap(&self, other: &Walk) -> Option<u32> {
+        match (self, other) {
+            (
+                Walk::Pem(Pem::Body { n, end, since, .. }),
+                Walk::Pem(Pem::Body {
+                    n: m,
+                    end: e,
+                    since: s,
+                    ..
+                }),
+            ) if end == e && since == s && m < n => Some(n - m),
+            _ => None,
+        }
+    }
 }
 
 /// The most bytes the shared `private_key` literal takes after its BEGIN line
@@ -1225,7 +1247,7 @@ impl Pem {
     /// [`PEM_BODY_MAX`] bytes, else those bytes and the rest of a character they cut (fewer at
     /// the end of the stream, which is decided there with every other held byte by the shared
     /// regexes). `len` is this unit's length in bytes.
-    fn step(&mut self, u: Unit, len: usize) -> Step {
+    fn step(&mut self, u: Unit, len: usize, start: &mut u64) -> Step {
         let next = match self {
             Pem::Begin(p) => {
                 if !b"-----BEGIN ".get(*p as usize).is_some_and(|&b| is(u, b)) {
@@ -1254,17 +1276,22 @@ impl Pem {
                         n: 0,
                         end: EndLine::Scan(0),
                         since: 0,
+                        later: Vec::new(),
                     }
                 } else {
                     Pem::Dashes(*n + 1)
                 }
             }
             // The body is any bytes; a completed END line finishes the lazy arm with this unit.
-            Pem::Body { n, end, since } => {
+            Pem::Body {
+                n,
+                end,
+                since,
+                later,
+            } => {
                 if end.step(u) {
                     return Step::Last;
                 }
-                let before = *n;
                 *n += len as u32;
                 *since = match end {
                     EndLine::Scan(d) => u32::from(*d),
@@ -1275,13 +1302,30 @@ impl Pem {
                 // at byte `n`; an END line is ASCII, so `since` is bytes too), or one that did is
                 // still open. A unit the bound cuts ends the block with it; otherwise the bounded
                 // arm ended before this unit.
-                return if *n <= PEM_BODY_MAX || (*since > 0 && *n - *since <= PEM_BODY_MAX) {
-                    Step::Live
-                } else if before < PEM_BODY_MAX {
+                let live = |n: u32| n <= PEM_BODY_MAX || (*since > 0 && n - *since <= PEM_BODY_MAX);
+                if live(*n) {
+                    return Step::Live;
+                }
+                let mut step = if *n - (len as u32) < PEM_BODY_MAX {
                     Step::Last
                 } else {
                     Step::Dead
                 };
+                // Past the bound, the first later body still in it carries the candidate on.
+                while !later.is_empty() {
+                    let (from, gap) = later.remove(0);
+                    let m = *n - gap;
+                    if live(m) {
+                        *n = m;
+                        *start = from;
+                        later.iter_mut().for_each(|l| l.1 -= gap);
+                        return Step::Live;
+                    }
+                    if m.saturating_sub(len as u32) < PEM_BODY_MAX {
+                        step = Step::Last;
+                    }
+                }
+                return step;
             }
         };
         *self = next;
@@ -1493,61 +1537,56 @@ impl Candidate {
     /// The candidate a unit starts for literal `lit`, before that unit is stepped. A guarded
     /// literal's candidate is not started when `glued` says the unit is glued to a word.
     fn spawn(policy: &Policy, lit: usize, u: Unit) -> Option<Walk> {
-        let form = policy.form(lit)?;
-        if let Form::Literal { form } = form {
-            let forms = literal_forms(policy, u);
-            return (*form == 0 && !forms.is_empty()).then_some(Walk::Literals(forms));
-        }
-        let starts = match form {
-            Form::Prefixed(p) => {
-                ascii(u).is_some_and(|b| p.prefix.first().is_some_and(|s| s.contains(&b)))
+        Some(match policy.form(lit)? {
+            Form::Prefixed(p)
+                if ascii(u).is_some_and(|b| p.prefix.first().is_some_and(|s| s.contains(&b))) =>
+            {
+                Walk::Prefixed { pos: 0, count: 0 }
             }
-            Form::MaskedKey => folded(u) == Some(b's'),
-            Form::Bearer => folded(u) == Some(b'b'),
-            Form::Jwt => is(u, b'e'),
-            Form::PrivateKey => is(u, b'-'),
-            Form::JsonAssignment => is(u, b'"') || is(u, b'\\'),
-            Form::ShellAssignment => matches!(folded(u), Some(b's' | b't' | b'p' | b'a')),
-            Form::UrlPassword => is(u, b'/') || is(u, b'\\'),
-            Form::Field { key, .. } => key.first().is_some_and(|&b| is(u, b)),
-            Form::HeaderPrefix { prefix } => prefix.first().is_some_and(|&b| is(u, b)),
-            Form::Literal { .. } => false,
-        };
-        if !starts {
-            return None;
-        }
-        Some(match form {
-            Form::Prefixed(_) => Walk::Prefixed { pos: 0, count: 0 },
-            Form::MaskedKey => Walk::Masked(MaskWalk::Prefix(0)),
-            Form::Bearer => Walk::Bearer {
+            Form::MaskedKey if folded(u) == Some(b's') => Walk::Masked(MaskWalk::Prefix(0)),
+            Form::Bearer if folded(u) == Some(b'b') => Walk::Bearer {
                 pos: 0,
                 spaced: false,
                 count: 0,
             },
-            Form::Jwt => Walk::Jwt {
+            Form::Jwt if is(u, b'e') => Walk::Jwt {
                 pos: 0,
                 seg: 0,
                 count: 0,
             },
-            Form::PrivateKey => Walk::Pem(Pem::Begin(0)),
-            Form::JsonAssignment => Walk::Json(Json {
+            Form::PrivateKey if is(u, b'-') => Walk::Pem(Pem::Begin(0)),
+            Form::JsonAssignment if is(u, b'"') || is(u, b'\\') => Walk::Json(Json {
                 phase: JsonPhase::Open,
                 key: Vec::new(),
                 key_units: 0,
                 value_start: 0,
                 n: 0,
             }),
-            Form::ShellAssignment => Walk::Shell(Shell::Word { which: 0, pos: 0 }),
-            Form::UrlPassword => Walk::Url(Url::Slashes {
+            Form::ShellAssignment if matches!(folded(u), Some(b's' | b't' | b'p' | b'a')) => {
+                Walk::Shell(Shell::Word { which: 0, pos: 0 })
+            }
+            Form::UrlPassword if is(u, b'/') || is(u, b'\\') => Walk::Url(Url::Slashes {
                 done: 0,
                 backslashes: 0,
             }),
-            Form::Field { .. } => Walk::Field(Field {
-                phase: FieldPhase::Key(0),
-                value_start: 0,
-            }),
-            Form::HeaderPrefix { .. } => Walk::Header(Header::Lit(0)),
-            Form::Literal { .. } => return None,
+            Form::Field { key, .. } if key.first().is_some_and(|&b| is(u, b)) => {
+                Walk::Field(Field {
+                    phase: FieldPhase::Key(0),
+                    value_start: 0,
+                })
+            }
+            Form::HeaderPrefix { prefix } if prefix.first().is_some_and(|&b| is(u, b)) => {
+                Walk::Header(Header::Lit(0))
+            }
+            // One candidate, on the first form's rule, follows every form that starts here.
+            Form::Literal { form: 0 } => {
+                let forms = literal_forms(policy, u);
+                if forms.is_empty() {
+                    return None;
+                }
+                Walk::Literals(forms)
+            }
+            _ => return None,
         })
     }
 
@@ -1577,7 +1616,7 @@ impl Candidate {
                 }
                 jwt_step(seg, count, u)
             }
-            (Walk::Pem(pem), _) => return pem.step(u, len),
+            (Walk::Pem(pem), _) => return pem.step(u, len, &mut self.start),
             (Walk::Json(json), _) => json.step(policy, u, off + len as u64),
             (Walk::Shell(shell), _) => shell.step(u),
             (Walk::Url(url), _) => return url.step(u, off + len as u64),
@@ -1660,17 +1699,30 @@ fn literal_forms(policy: &Policy, u: Unit) -> Vec<(usize, Progress)> {
 
 // ── one stream's undecided bytes ───────────────────────────────────────────────────────
 
-/// Candidates are in start order; keep the earliest of each equivalent state.
+/// Candidates are in start order; keep the earliest of each equivalent state. A PEM body that
+/// will see what an earlier one sees joins it ([`Pem::Body`]), so `BEGIN` lines 300 bytes apart
+/// are one candidate, not fifty stepped and compared on every unit.
 fn dedup(candidates: &mut Vec<Candidate>) {
     let mut i = 1;
     while i < candidates.len() {
-        let (earlier, rest) = candidates.split_at(i);
+        let (earlier, rest) = candidates.split_at_mut(i);
         let c = &rest[0];
-        if earlier.iter().any(|k| k.lit == c.lit && k.walk == c.walk) {
-            candidates.remove(i);
-        } else {
+        let Some(k) = earlier
+            .iter_mut()
+            .find(|k| k.lit == c.lit && (k.walk == c.walk || k.walk.gap(&c.walk).is_some()))
+        else {
             i += 1;
+            continue;
+        };
+        if let (Some(gap), Walk::Pem(Pem::Body { later: theirs, .. })) =
+            (k.walk.gap(&c.walk), &c.walk)
+            && let Walk::Pem(Pem::Body { later, .. }) = &mut k.walk
+        {
+            later.push((c.start, gap));
+            later.extend(theirs.iter().map(|&(start, g)| (start, gap + g)));
+            later.sort_unstable();
         }
+        candidates.remove(i);
     }
 }
 

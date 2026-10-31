@@ -91,6 +91,20 @@ fn by_hand_mask_bench() {
         None => println!("mask_bench: no transcript under {}", dir.display()),
     }
 
+    // `BEGIN` lines with no `END` keep a candidate live for most of the hold (review R3-F1).
+    for gap in [300, 512, 1024, 2048, 4096, 15_000] {
+        let line = format!("{}\n", "-----BEGIN PRIVATE KEY-----");
+        let mut text = String::new();
+        while text.len() < 1 << 20 {
+            text.push_str(&line);
+            text.push_str(&"x".repeat(gap - line.len()));
+        }
+        println!(
+            "mask_bench: 1 MiB of BEGIN lines {gap} B apart, no END, in 16 KiB pieces: {}",
+            speed(&m, StreamKind::Native, text.as_bytes(), 16 * 1024)
+        );
+    }
+
     let mut rng = common::Rng(0xBE7C);
     let mut values = || -> Vec<SecretValue> {
         (0..32)

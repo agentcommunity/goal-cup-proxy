@@ -171,10 +171,8 @@ impl Masker {
         if self.policy.is_clear() {
             return;
         }
-        // `mask_whole` keeps the length and stars whole characters; were the answer ever not
-        // UTF-8, the empty string's other length stars the value whole (`meta::scrub_in_place`).
         let scrub = |text: &str| -> String {
-            String::from_utf8(self.mask_whole(text.as_bytes()).bytes).unwrap_or_default()
+            String::from_utf8_lossy(&self.mask_whole(text.as_bytes()).bytes).into_owned()
         };
         meta::mask_meta(meta, &self.meta_names, &scrub);
     }

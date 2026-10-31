@@ -310,7 +310,7 @@ pub(crate) fn candidates<'a>(
     };
     for (priority, p) in set.enumerate() {
         if p.pem {
-            for ((from, to), (start, end), bounded) in pem_pieces(&p.re, bytes) {
+            for ((from, to), (start, end), bounded) in pem_pieces(bytes) {
                 found_all.push(Claim {
                     bounded,
                     ..claim(priority, (from, to), (start, end), p)
@@ -373,13 +373,13 @@ pub(crate) fn candidates<'a>(
     found_all
 }
 
-/// The `BEGIN` line of the `private_key` rule, alone, and its `END` line at the end of a match.
+/// The `BEGIN` and the `END` line of the `private_key` rule, each alone.
 fn pem_lines() -> Option<&'static (Regex, Regex)> {
     static LINES: OnceLock<Option<(Regex, Regex)>> = OnceLock::new();
     LINES
         .get_or_init(|| {
             let begin = Regex::new(r"-----BEGIN [A-Z ]*PRIVATE KEY-----").ok()?;
-            let end = Regex::new(r"-----END [A-Z ]*PRIVATE KEY-----\z").ok()?;
+            let end = Regex::new(r"-----END [A-Z ]*PRIVATE KEY-----").ok()?;
             Some((begin, end))
         })
         .as_ref()
@@ -394,24 +394,46 @@ pub(crate) fn first_begin(bytes: &[u8], from: usize, to: usize) -> Option<usize>
         .filter(|&at| at < to)
 }
 
-/// Every `private_key` match in `bytes` as `(start, end, bounded)`, left to right. A match
-/// without an `END` line (`bounded`) ends at the first later `BEGIN` inside it, and the search
-/// goes on from that `BEGIN`, so a real key late in a lone mention's window gets its own window.
-pub(crate) fn pem_matches(re: &Regex, bytes: &[u8]) -> Vec<(usize, usize, bool)> {
+/// Every `private_key` match in `bytes` as `(start, end, bounded)`, left to right, as the
+/// shared literal matches: a `BEGIN` line to the end of the first `END` line that starts within
+/// [`PEM_BODY_MAX`] bytes after it, else (`bounded`) those bytes. A bounded match ends at the
+/// first later `BEGIN` inside it, and the search goes on from that `BEGIN`, so a real key late
+/// in a lone mention's window gets its own window.
+///
+/// Each line is found once and the matches are derived from their places: the literal run
+/// from every `BEGIN` would scan a whole window per `BEGIN`.
+pub(crate) fn pem_matches(bytes: &[u8]) -> Vec<(usize, usize, bool)> {
+    let Some((begin, end)) = pem_lines() else {
+        return Vec::new();
+    };
+    // Every place a line starts, overlapping ones too, with its end.
+    let lines = |re: &Regex| {
+        let mut out: Vec<(usize, usize)> = Vec::new();
+        while let Some(m) = re.find_at(bytes, out.last().map_or(0, |l| l.0 + 1)) {
+            out.push((m.start(), m.end()));
+        }
+        out
+    };
+    let (begins, ends) = (lines(begin), lines(end));
     let mut out = Vec::new();
-    let mut at = 0;
-    while let Some(m) = re.find_at(bytes, at) {
-        let start = m.start();
-        let bounded = pem_lines().is_none_or(|lines| !lines.1.is_match(m.as_bytes()));
-        let (end, next) = match first_begin(bytes, start + 1, m.end()).filter(|_| bounded) {
-            Some(begin) => (begin, begin),
+    let mut i = 0;
+    while let Some(&(start, body)) = begins.get(i) {
+        let limit = body + PEM_BODY_MAX;
+        let first_end = ends.get(ends.partition_point(|e| e.0 < body));
+        let (end, bounded) = match first_end.filter(|e| e.0 <= limit) {
+            Some(&(_, end)) => (end, false),
+            None => (limit.min(bytes.len()), true),
+        };
+        let later = begins.get(i + 1).filter(|b| bounded && b.0 < end);
+        let (end, next) = match later {
+            Some(&(begin, _)) => (begin, begin),
             None => {
-                let end = char_end(bytes, m.end());
+                let end = char_end(bytes, end);
                 (end, end.max(start + 1))
             }
         };
         out.push((start, end, bounded));
-        at = next;
+        i += begins[i..].partition_point(|b| b.0 < next);
     }
     out
 }
@@ -474,9 +496,9 @@ type PemPiece = ((usize, usize), (usize, usize), bool);
 
 /// The claimed pieces of every `private_key` match in `bytes`, as `(piece, whole match,
 /// bounded)`, a bounded one cut once at [`PEM_SLICE`].
-pub(crate) fn pem_pieces(re: &Regex, bytes: &[u8]) -> Vec<PemPiece> {
+pub(crate) fn pem_pieces(bytes: &[u8]) -> Vec<PemPiece> {
     let mut out = Vec::new();
-    for (start, end, bounded) in pem_matches(re, bytes) {
+    for (start, end, bounded) in pem_matches(bytes) {
         let cut = bounded.then_some(start + PEM_SLICE);
         for piece in block_pieces(bytes, start, end, Quotes::START, cut) {
             out.push((piece, (start, end), bounded));
@@ -814,6 +836,71 @@ pub(crate) fn union(mut runs: Vec<Run>) -> Vec<Run> {
 mod tests {
     use super::*;
 
+    /// A seeded xorshift step: a number below `n`.
+    fn below(seed: &mut u64, n: usize) -> usize {
+        *seed ^= *seed << 13;
+        *seed ^= *seed >> 7;
+        *seed ^= *seed << 17;
+        (*seed % n as u64) as usize
+    }
+
+    /// The `private_key` matches found from the line places are the shared literal's own
+    /// (run from every `BEGIN`, a bounded match ending at a later `BEGIN` inside it), on text
+    /// dense with `BEGIN` and `END` lines, overlapping ones too, near the body bound.
+    #[test]
+    fn the_pem_lines_find_what_the_pem_literal_finds() {
+        const PIECES: [&[u8]; 7] = [
+            b"-----BEGIN PRIVATE KEY-----",
+            b"-----BEGIN EC PRIVATE KEY",
+            b"-----END PRIVATE KEY-----",
+            b"-----END RSA PRIVATE KEY",
+            b"-----",
+            b"\n",
+            b"\xc3\xa9",
+        ];
+        // The shared literal with its `END` line captured: no capture is a bounded match.
+        let end_line = "?-----END [A-Z ]*PRIVATE KEY-----|";
+        let Some(re) = rows()
+            .flatten()
+            .find(|r| r.kind == BLOCK_KIND && r.source.contains(end_line))
+            .and_then(|r| {
+                Regex::new(
+                    &r.source
+                        .replacen(end_line, "?(-----END [A-Z ]*PRIVATE KEY-----)|", 1),
+                )
+                .ok()
+            })
+        else {
+            panic!("the private_key literal does not compile");
+        };
+        let mut seed = 0x9E37_79B9_7F4A_7C15u64;
+        for _ in 0..400 {
+            let mut text = Vec::new();
+            for _ in 0..below(&mut seed, 40) {
+                match below(&mut seed, PIECES.len() + 1) {
+                    i if i < PIECES.len() => text.extend_from_slice(PIECES[i]),
+                    _ => text.resize(text.len() + below(&mut seed, 9000), b'x'),
+                }
+            }
+            let mut literal = Vec::new();
+            let mut at = 0;
+            while let Some(c) = re.captures_at(&text, at) {
+                let Some(m) = c.get(0) else { break };
+                let (start, bounded) = (m.start(), c.get(1).is_none());
+                let (end, next) = match first_begin(&text, start + 1, m.end()).filter(|_| bounded) {
+                    Some(begin) => (begin, begin),
+                    None => (
+                        char_end(&text, m.end()),
+                        char_end(&text, m.end()).max(start + 1),
+                    ),
+                };
+                literal.push((start, end, bounded));
+                at = next;
+            }
+            assert_eq!(pem_matches(&text), literal);
+        }
+    }
+
     /// The guarded search with its head finds exactly what the plain search finds (retry the
     /// whole regex from the byte after every glued start), on text dense with glued prefixes.
     #[test]
@@ -835,12 +922,7 @@ mod tests {
             b"0123456789",
         ];
         let mut seed = 0x2545_F491_4F6C_DD1Du64;
-        let mut below = |n: usize| {
-            seed ^= seed << 13;
-            seed ^= seed >> 7;
-            seed ^= seed << 17;
-            (seed % n as u64) as usize
-        };
+        let mut below = |n| below(&mut seed, n);
         let guarded: Vec<Pattern> = rows()
             .flatten()
             .filter(|r| r.guard)

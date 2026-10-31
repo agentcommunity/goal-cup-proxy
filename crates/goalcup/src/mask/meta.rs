@@ -165,12 +165,11 @@ fn scrub_in_place(s: &mut String, scrub: &dyn Fn(&str) -> String) {
     };
 }
 
-/// Runs a byte rule over `s`. Every rule stars whole ASCII-bounded runs, so the text stays UTF-8;
-/// if it did not, the value is starred whole.
+/// Runs a byte rule over `s`. Every rule stars whole ASCII-bounded runs, so the text stays UTF-8.
 fn mask_bytes_of(s: &mut String, rule: impl FnOnce(&mut [u8])) {
     let mut bytes = std::mem::take(s).into_bytes();
     rule(&mut bytes);
-    *s = String::from_utf8(bytes).unwrap_or_else(|e| "*".repeat(e.as_bytes().len()));
+    *s = String::from_utf8_lossy(&bytes).into_owned();
 }
 
 /// Step 3: the credential of a `Bearer` or `Basic` value, else each URL's userinfo and

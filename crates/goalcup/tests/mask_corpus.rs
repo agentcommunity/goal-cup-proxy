@@ -25,12 +25,9 @@ type Tally = BTreeMap<(String, String), usize>;
 const KNOWN_CATCHES: &[(&str, &str, usize)] =
     &[("opencode/hooks.jsonl", "generic_secret_assignment", 1)];
 
-/// Guarded-rule spans inside a Codex `encrypted_content` blob right after a `-`, which the
-/// default guard class `[A-Za-z0-9_]` lets through (PRD-00 owner question 10): (file, kind,
-/// count). Counted and named, not a fail (A2).
-const AFTER_DASH_IN_BLOBS: &[(&str, &str, usize)] = &[];
-
-/// The same for the generated Codex request: (kind, count).
+/// Guarded-rule spans inside the generated Codex request's blobs right after a `-`, which the
+/// default guard class `[A-Za-z0-9_]` lets through (PRD-00 owner question 10): (kind, count).
+/// Counted and named, not a fail (A2).
 const GENERATED_AFTER_DASH: &[(&str, usize)] = &[("huggingface_token", 1), ("openai_key", 2)];
 
 /// The one masker these tests use: the shared rules, no connector rules, no exact values.
@@ -141,14 +138,13 @@ fn par_each<T: Sync>(items: &[T], f: impl Fn(&T) + Sync) {
     });
 }
 
-/// Known catches and K5: over every capture, `mask_whole` adds spans only where the lists say;
-/// every Codex blob comes through byte for byte except guarded spans right after a `-`.
+/// Known catches and K5: over every capture, `mask_whole` adds spans only where the list says;
+/// every Codex blob comes through byte for byte.
 #[test]
 fn the_corpus_gets_spans_only_where_listed() {
     let m = masker();
     let names = m.mask_rules();
-    let guarded = guarded_kinds();
-    let (mut outside, mut in_blobs) = (Tally::new(), Tally::new());
+    let mut outside = Tally::new();
     let mut blob_count = 0;
     for (name, bytes) in corpus() {
         let whole = m.mask_whole(&bytes);
@@ -157,13 +153,11 @@ fn the_corpus_gets_spans_only_where_listed() {
         blob_count += blobs.len();
         for s in &whole.spans {
             let kind = names[s.rule].clone();
-            if blobs.iter().any(|b| overlaps(s, b)) {
-                assert!(
-                    guarded.contains(&kind) && s.start > 0 && bytes[s.start - 1] == b'-',
-                    "{name}: a {kind} span inside a Codex blob not right after a '-'"
-                );
-                *in_blobs.entry((name.clone(), kind)).or_default() += 1;
-            } else if !marks.iter().any(|r| overlaps(s, r)) {
+            assert!(
+                !blobs.iter().any(|b| overlaps(s, b)),
+                "{name}: a {kind} span inside a Codex blob"
+            );
+            if !marks.iter().any(|r| overlaps(s, r)) {
                 *outside.entry((name.clone(), kind)).or_default() += 1;
             }
         }
@@ -177,16 +171,11 @@ fn the_corpus_gets_spans_only_where_listed() {
         "spans outside the listed catches; the corpus now gives:\n{}",
         listing(&outside)
     );
-    assert!(
-        in_blobs == tally(AFTER_DASH_IN_BLOBS),
-        "guarded spans after a '-' inside Codex blobs; the corpus now gives:\n{}",
-        listing(&in_blobs)
-    );
 }
 
-/// K1 over the corpus: seeded random chunkings and every split point within 64 bytes of each
-/// span edge give the bytes and spans of `mask_whole`, with no `fail_closed` span. The files
-/// run on all threads, largest first.
+/// K1 over the corpus: seeded random chunkings, every split point within 64 bytes of each span
+/// edge and, for files up to 16 KiB, one byte at a time give the bytes and spans of
+/// `mask_whole`, with no `fail_closed` span. The files run on all threads, largest first.
 #[test]
 fn the_corpus_streams_as_the_whole_record_masker() {
     let m = masker();
@@ -202,6 +191,13 @@ fn the_corpus_streams_as_the_whole_record_masker() {
             assert!(
                 stream_in(&m, StreamKind::Native, bytes, &cuts) == whole,
                 "{name}: seed {seed}"
+            );
+        }
+        if bytes.len() <= 16 * 1024 {
+            let cuts: Vec<usize> = (1..bytes.len()).collect();
+            assert!(
+                stream_in(&m, StreamKind::Native, bytes, &cuts) == whole,
+                "{name}: one byte at a time"
             );
         }
         edge_splits(&m, name, bytes, &whole);
