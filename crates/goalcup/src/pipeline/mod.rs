@@ -992,7 +992,7 @@ impl Run {
             });
             let (h, ws) = (self.harness.as_ref(), Some(workspace));
             let prev = self.prev.unwrap_or(none);
-            let facts = dead::seal_null(dir, reason, h, self.exit, server_reason, prev, ws)
+            let facts = dead::seal_null(dir, reason, h, self.exit, server_reason.clone(), prev, ws)
                 .unwrap_or_else(|e| writer::fail(dir, &e));
             self.board.sealed(dead::seal_status(&facts), &facts.totals);
             status::write(&self.rec, dir, &self.board);
