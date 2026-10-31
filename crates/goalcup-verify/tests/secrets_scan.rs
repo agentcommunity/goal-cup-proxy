@@ -258,9 +258,12 @@ fn secrets_placeholders_are_no_hit_and_real_bodies_are() {
     let sse = |name: &str, a: String, b: String| {
         let (code, v) = scan(&[&entry(name, true, &[delta(&a).into(), delta(&b).into()], &[])], b"");
         let hits = v["shape_hits"].as_array().unwrap();
-        let on = |d: bool| hits.iter().filter(|h| h["in"].as_str().unwrap().ends_with("/deltas") == d);
+        let on = |d: bool| {
+            let n = hits.iter().filter(|h| h["in"].as_str().unwrap().ends_with("/deltas") == d);
+            n.count()
+        };
         assert!(hits.iter().all(|h| h["kind"] == "private_key"), "{v}");
-        (code, on(true).count(), on(false).count())
+        (code, on(true), on(false))
     };
     let (a, b) = (format!("{head}\n[RED"), format!("ACTED]\n{tail}"));
     assert_eq!(sse("ph-sse", a, b), (2, 0, 1));
