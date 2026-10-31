@@ -3,7 +3,8 @@
 //! connection's parser, inside `catch_unwind`. No deadline, idle timeout or cap. When one leg's
 //! error ends the relay, the part of a chunk the other side's writer already took is recorded
 //! too: it may have reached the peer. The rest of a client chunk, never written, goes to the
-//! parser at the close to be recorded as `unsent`.
+//! parser at the close to be recorded as `unsent`. The rest of a server chunk, read from the
+//! upstream and never written to the client, is a `conn` GAP.
 
 use crate::pipeline::{EndReason, GapReason, Mono, Recorder, Sid, StreamHandle};
 use crate::proxy::ws::Dir;
@@ -20,8 +21,9 @@ use tokio::io::{AsyncRead, AsyncReadExt as _, AsyncWrite, AsyncWriteExt as _, Re
 /// Parsing stopped for the connection (5a): the `conn` GAP's reason and tail, and the relayed
 /// plaintext bytes the parser took but recorded in no stream (the rest of the faulting chunk, an
 /// upgrade copy, server bytes waiting for their request, a head cut short), the first of them no
-/// earlier than `since`. The pump adds every byte relayed after it. `at_close`: bytes only held
-/// at the close (a head cut short); parsing never stopped, so the GAP comes without the note.
+/// earlier than `since`. The pump adds every byte relayed after it and the chunk rests the close
+/// left unwritten. `at_close`: bytes only held at the close (a head cut short); parsing never
+/// stopped, so the GAP comes without the note.
 #[derive(Debug, PartialEq)]
 pub struct Stop {
     pub reason: GapReason,
@@ -80,6 +82,10 @@ pub struct Pumped<C, U> {
     pub reason: EndReason,
     /// The upstream leg errored (reset, TLS error, read or write error), not a clean close.
     pub upstream_failed: bool,
+    /// Bytes read from one side and never written to the other, both ways: the chunk rests the
+    /// error cut.
+    /// With a parser they are recorded or in a `conn` GAP already; a tunnel's GAP adds them.
+    pub unwritten: u64,
 }
 
 /// Called after each chunk moved: its direction, time and length.
@@ -246,9 +252,9 @@ where
         }
     };
     // A leg that errored, or was dropped mid-write, leaves the part its writer took; the rest of
-    // a client chunk never reached the upstream.
-    let rest = pump.settle(Dir::Up);
-    pump.settle(Dir::Down);
+    // a client chunk never reached the upstream, the rest of a server chunk never the client.
+    let (rest, cut) = (pump.settle(Dir::Up), pump.settle(Dir::Down).len() as u64);
+    let (cut_at, unwritten) = (rec.now(), rest.len() as u64 + cut);
     let reason = match (lu, ld) {
         (Leg::Eof | Leg::Cut, Leg::Eof | Leg::Cut) => EndReason::Complete,
         _ => EndReason::Interrupted,
@@ -256,6 +262,7 @@ where
     let down_cut = matches!(ld, Leg::Cut);
     let [up, down] = pump.moved.map(AtomicU64::into_inner);
     let Shared { parser, mut stop } = pump.shared.into_inner().unwrap_or_else(|e| e.into_inner());
+    let parsed = parser.is_some();
     // Never relayed, so not moved or tapped; after a stop the conn GAP counts them.
     let unsent = match &mut stop {
         Some(s) => {
@@ -283,8 +290,12 @@ where
             _ => {}
         }
     }
-    if let Some(s) = stop {
-        conn.gap(s.reason, s.since, Some(s.held), s.tail);
+    // The server bytes the client never got are in no stream: the conn GAP counts them. With no
+    // reason of their own in PRD-01, they take the one for bytes a connection did not record.
+    match stop {
+        Some(s) => conn.gap(s.reason, s.since, Some(s.held + cut), s.tail),
+        None if parsed && cut > 0 => conn.gap(GapReason::DecodeFailed, cut_at, Some(cut), None),
+        None => {}
     }
     Pumped {
         client: cr.unsplit(cw),
@@ -293,6 +304,7 @@ where
         plain_down: down,
         reason,
         upstream_failed: matches!(lu, Leg::WriteErr) || matches!(ld, Leg::ReadErr),
+        unwritten,
     }
 }
 

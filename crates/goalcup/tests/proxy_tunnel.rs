@@ -619,8 +619,8 @@ impl Parser for Copies {
 }
 
 /// Point 1: one leg's error ends the relay while the other leg is mid-write. The part of the
-/// chunk its writer took reached the peer, so it is counted and parsed; the rest goes to the
-/// parser's `end` as never forwarded.
+/// chunk its writer took reached the peer, so it is counted and parsed; the rest of a client
+/// chunk goes to the parser's `end` as never forwarded, the rest of a server chunk is a conn GAP.
 #[tokio::test]
 async fn a_chunk_cut_mid_write_by_the_other_legs_error_is_recorded_as_far_as_it_went() {
     within_async(HANG, async {
@@ -636,7 +636,7 @@ async fn a_chunk_cut_mid_write_by_the_other_legs_error_is_recorded_as_far_as_it_
             let parser: Box<dyn Parser> = Box::new(parser);
             let p = pump::relay(&r, &mut conn, (cp, up), none, Some(parser), &quiet, None).await;
             conn.end(r.now(), p.reason, None);
-            (p.plain_up, p.plain_down, p.reason)
+            (p.plain_up, p.plain_down, p.reason, p.unwritten)
         });
         upstream.write_all(&[7; 8192]).await.unwrap();
         let mut first = [0; 1];
@@ -644,17 +644,24 @@ async fn a_chunk_cut_mid_write_by_the_other_legs_error_is_recorded_as_far_as_it_
         // The upstream goes away, and the client's next byte cannot reach it.
         drop(upstream);
         client.write_all(b"x").await.unwrap();
-        let (plain_up, plain_down, reason) = relay.await.unwrap();
+        let (plain_up, plain_down, reason, unwritten) = relay.await.unwrap();
         let mut rest = Vec::new();
         client.read_to_end(&mut rest).await.unwrap();
         let got = 1 + rest.len();
         assert!(got < 8192, "the reply was cut mid-write");
         assert_eq!((plain_up, plain_down), (0, got as u64));
+        // Both rests, for a tunnel's GAP: the client's byte and the reply's.
+        assert_eq!(unwritten, 1 + 8192 - got as u64);
         assert_eq!(*unsent.lock().unwrap(), b"x");
         let copies = copies.lock().unwrap();
         assert_eq!((copies[0].len(), &copies[1]), (0, &vec![7; got]));
         assert_eq!(reason, EndReason::Interrupted);
-        assert!(gaps(&calls).is_empty());
+        let lost = gaps(&calls).into_iter().map(|g| match g {
+            Call::Gap(_, reason, _, _, off, lost, _) => (reason, off, lost),
+            _ => unreachable!(),
+        });
+        let want = (GapReason::DecodeFailed, 0, Some(8192 - got as u64));
+        assert_eq!(lost.collect::<Vec<_>>(), [want], "the reply's rest is a named loss");
     })
     .await;
 }
@@ -700,11 +707,11 @@ impl AsyncWrite for Stalls {
 }
 
 /// What [`reset_mid_upload`] saw: plaintext bytes forwarded up, each http_req's END reason and
-/// tail `unsent`, and the conn GAPs' `lost`.
+/// tail `wire` and `unsent`, and the conn GAPs' `lost`.
 #[derive(Debug, PartialEq)]
 struct Upload {
     plain_up: u64,
-    reqs: Vec<(EndReason, Option<u64>)>,
+    reqs: Vec<(EndReason, u64, Option<u64>)>,
     lost: Vec<u64>,
 }
 
@@ -743,7 +750,8 @@ async fn reset_mid_upload(chunk: &[u8], took: usize) -> Upload {
     let reqs = reqs.iter().filter_map(|req| {
         all.iter().find_map(|c| match c {
             Call::End(sid, _, reason, _, tail) if sid == req => {
-                Some((*reason, tail.as_ref().unwrap()["unsent"].as_u64()))
+                let tail = tail.as_ref().unwrap();
+                Some((*reason, tail["wire"].as_u64().unwrap(), tail["unsent"].as_u64()))
             }
             _ => None,
         })
@@ -778,15 +786,18 @@ async fn an_upstream_reset_mid_upload_counts_the_rest_of_the_chunk_unsent() {
             reqs,
             lost: vec![],
         };
-        assert_eq!(up, want(sent, vec![(Complete, Some(4000))]));
+        assert_eq!(up, want(sent, vec![(Complete, 5000, Some(4000))]));
         // A head cut short: the request opens from its never forwarded rest.
         let up = reset_mid_upload(&post, 20).await;
-        assert_eq!(up, want(20, vec![(Complete, Some(all - 20))]));
+        assert_eq!(up, want(20, vec![(Complete, 5000, Some(all - 20))]));
         // A pipelined request behind the body is its own.
         let next = b"GET /next HTTP/1.1\r\nHost: a.example\r\n\r\n";
         post.extend(next);
         let up = reset_mid_upload(&post, head + 1000).await;
-        let reqs = vec![(Complete, Some(4000)), (Complete, Some(next.len() as u64))];
+        let reqs = vec![
+            (Complete, 5000, Some(4000)),
+            (Complete, 0, Some(next.len() as u64)),
+        ];
         assert_eq!(up, want(sent, reqs));
     })
     .await;

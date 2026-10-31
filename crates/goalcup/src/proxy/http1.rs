@@ -104,10 +104,9 @@ pub struct Http1 {
     seen: u64,
     kept: u64,
     /// Client bytes being taken were never forwarded (fed at the close); each stream counts its
-    /// share as END tail `unsent`: the head being read, the copy's last bytes, the WebSocket's.
+    /// share as END tail `unsent`: the head being read, a body, the WebSocket's.
     unsent: bool,
     head_unsent: u64,
-    copy_unsent: u64,
     ws_unsent: u64,
 }
 
@@ -148,7 +147,6 @@ impl Http1 {
             kept: 0,
             unsent: false,
             head_unsent: 0,
-            copy_unsent: 0,
             ws_unsent: 0,
         }
     }
@@ -212,19 +210,6 @@ impl Http1 {
         fed.map_err(|_| Fault::Framing)
     }
 
-    /// Takes the client bytes copied since an upgrade request; the last `copy_unsent` of them
-    /// were never forwarded.
-    fn replay(&mut self, t: Mono) -> Result<(), Fault> {
-        let copy = self.copy.take().map(|c| c.1).unwrap_or_default();
-        let sent = copy.len() - std::mem::take(&mut self.copy_unsent) as usize;
-        let unsent = std::mem::replace(&mut self.unsent, false);
-        let fed = self.take(Dir::Up, t, &copy[..sent]);
-        self.unsent = true;
-        let fed = fed.and_then(|()| self.take(Dir::Up, t, &copy[sent..]));
-        self.unsent = unsent;
-        fed
-    }
-
     fn take(&mut self, dir: Dir, t: Mono, mut bytes: &[u8]) -> Result<(), Fault> {
         let unsent = self.unsent && dir == Dir::Up;
         while !bytes.is_empty() {
@@ -238,9 +223,6 @@ impl Http1 {
                     return Err(Fault::Copy);
                 }
                 copy.extend_from_slice(bytes);
-                if unsent {
-                    self.copy_unsent += bytes.len() as u64;
-                }
                 return Ok(());
             }
             if dir == Dir::Down && self.down.body.is_none() && self.queue.is_empty() && !self.orphan
@@ -343,7 +325,7 @@ impl Http1 {
             ws,
         });
         let unsent = std::mem::take(&mut self.head_unsent);
-        self.up.body = Body::open(h, framing, codings, (&head, unsent), t, &self.rec);
+        self.up.body = Body::open(h, framing, codings, &head, unsent, t, &self.rec);
         if !self.early.1.is_empty() {
             let early = std::mem::take(&mut self.early.1);
             self.take(Dir::Down, t, &early)?;
@@ -381,7 +363,8 @@ impl Http1 {
             let deflate = ws::negotiate(offered.as_deref(), extensions.as_deref())
                 .map_err(|_| Fault::Framing)?;
             self.ws = Some(WsConn::open(&self.rec, self.conn, asked.sid, deflate));
-            return self.replay(t);
+            let copy = self.copy.take().map(|c| c.1).unwrap_or_default();
+            return self.ws_feed(Dir::Up, t, &copy);
         }
         // A response to no request: later server bytes answer none either until a request waits.
         let asked = self.queue.pop_front();
@@ -417,10 +400,12 @@ impl Http1 {
             meta,
         );
         self.kept += head.size;
-        self.down.body = Body::open(h, framing, codings, (&head, 0), t, &self.rec);
-        if asked.ws.is_some() {
-            // The upgrade was refused: the copied client bytes are HTTP.
-            self.replay(t)?;
+        self.down.body = Body::open(h, framing, codings, &head, 0, t, &self.rec);
+        // The upgrade was refused: the copied client bytes are HTTP.
+        if asked.ws.is_some()
+            && let Some((_, copy)) = self.copy.take()
+        {
+            self.take(Dir::Up, t, &copy)?;
         }
         Ok(())
     }
@@ -447,14 +432,13 @@ impl Parser for Http1 {
         let mut late = None;
         if !self.stopped {
             self.seen += unsent.len() as u64;
+            // An upgrade never answered: its copy is HTTP after all, and came before the bytes
+            // never forwarded. Server bytes still waiting for a request answer none.
+            let copy = self.copy.take().map(|c| c.1).unwrap_or_default();
+            let mut fed = self.take(Dir::Up, t, &copy);
             self.unsent = true;
-            let mut fed = self.take(Dir::Up, t, unsent);
+            fed = fed.and_then(|()| self.take(Dir::Up, t, unsent));
             self.unsent = false;
-            // An upgrade never answered: its copy is HTTP after all. Server bytes still waiting
-            // for a request answer none.
-            if fed.is_ok() && self.ws.is_none() {
-                fed = self.replay(t);
-            }
             if fed.is_ok() && self.ws.is_none() && !self.early.1.is_empty() {
                 self.orphan = true;
                 let early = std::mem::take(&mut self.early.1);
@@ -946,7 +930,8 @@ impl Body {
         mut h: StreamHandle,
         framing: Option<Framing>,
         codings: Result<Vec<Coding>, Unsupported>,
-        (head, unsent): (&Head, u64),
+        head: &Head,
+        unsent: u64,
         t: Mono,
         rec: &Recorder,
     ) -> Option<Body> {

@@ -183,7 +183,7 @@ pub async fn run(
     {
         let tail = (c.reason == "hello_too_big")
             .then(|| json!({"guard": "client_hello", "limit": CLIENT_HELLO_GUARD}));
-        conn.gap(reason, opened, Some(up + down), tail);
+        conn.gap(reason, opened, Some(up + down + p.unwritten), tail);
     }
     conn.end(rec.now(), p.reason, Some(json!({"up": up, "down": down})));
 }
