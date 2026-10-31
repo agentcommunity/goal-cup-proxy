@@ -113,7 +113,7 @@ lessons lane (PRD-17); read by the deletion gate (PRD-17 Acceptance, checks 1 to
 | L-N9 | 2.7 | X: ledger H2, PRD-03 rule 2 | none | open | - |
 | L-P1 | 2.8 | A: watchdog_end::watchdog_end_real_killed_recorder_restarts (PRD-02, the kill and the one `recorder_down` GAP); A: watchdog_restart.rs (PRD-02, the unchanged port and a connection served during the restart; file not on integration yet); R: RR4 | PRD-02 | open | - |
 | L-P2 | 2.8 | A: proxy_restart::the_next_boot_serves_the_backlog_with_the_same_ca (PRD-03); A: watchdog_restart.rs (PRD-02, a decrypted connection after a real kill verifies against `run-ca.pem`; file not on integration yet); R: RR4 | PRD-02, PRD-03 | open | - |
-| L-P3 | 2.8 | A: lessons_launch::ctrl_c_reaches_the_harness_and_the_watchdog_lives (pty); A: watchdog_shield::a_pending_key_does_not_end_the_wrap_up (PRD-02); A: watchdog_shield::a_key_after_harness_exited_gets_the_default_action (PRD-02) | PRD-17, PRD-02 | open | - |
+| L-P3 | 2.8 | A: lessons_launch::ctrl_c_reaches_the_harness_and_the_watchdog_lives (pty); A: watchdog_shield::a_pending_key_does_not_end_the_wrap_up (PRD-02); A: watchdog_shield::a_key_after_harness_exited_gets_the_default_action (PRD-02) | PRD-17, PRD-02 | green | c39737d9 |
 | L-P4 | 2.8 | A: lessons_launch::a_tui_child_reads_the_terminal | PRD-17 | green | 0fa43715 |
 | L-P5 | 2.8 | A: lessons_launch::modes_restored_after_a_raw_exit | PRD-17 | green | 0fa43715 |
 | L-P6 | 2.8 | A: watchdog_rlimit.rs (PRD-02); R: PRD-02 R4; R: RR6 | PRD-02 | green | 7e620577 |
@@ -154,7 +154,7 @@ lessons lane (PRD-17); read by the deletion gate (PRD-17 Acceptance, checks 1 to
 | L-R8 | 2.11 | A: mask_meta.rs (PRD-05); R: RR1 | PRD-05, PRD-09 | green | 7e620577 |
 | L-HF1 | 2.12 | R: PRD-11 acceptance 5; R: RR3 | PRD-11 | open | - |
 | L-HF2 | 2.12 | R: RR6 | PRD-11 | open | - |
-| L-HF3 | 2.12 | D: connectors/hermes-cli.toml before, after; A: watchdog_end::watchdog_end_stub_helpers_run_in_order (PRD-02) | PRD-11, PRD-02 | green | 633a4226 |
+| L-HF3 | 2.12 | D: connectors/hermes-cli.toml before, after; A: watchdog_end::watchdog_end_stub_helpers_run_in_order (PRD-02) | PRD-11, PRD-02 | open | - |
 | L-HF4 | 2.12 | A: cli_commands::second_start_on_one_home_refuses (PRD-10) | PRD-10 | open | - |
 | L-HF5 | 2.12 | A: connector_launch::codex_gets_no_dash_c_override (PRD-11); D: connectors/codex-cli.toml args | PRD-11 | green | f5a200ae |
 | L-HF6 | 2.12 | A: cli_continue.rs (PRD-10); D: docs/plans/2026-10-30-v1.0/PRD-10-cli-participant.md section 3.1 step 3 | PRD-10 | open | - |
@@ -194,9 +194,13 @@ dev-dependency on the verifier and the scaffold is PRD-02's, so the binary is re
 run of the integration head (below) and carry no `R:` entry and no pending name. Rows still `open` for a test that is
 not shown: C7 (full tier test held back with `ignore`, plus RR1), D1 and D2 (`R:`), VR2 waits for PRD-09's named `usage` case, and the rows whose named file is not on integration
 (`pipeline_stall.rs`, `watchdog_restart.rs`, `cli_continue.rs`) and the rows owned by other PRDs whose binaries were not
-run here are untouched. L-P3 now names the `watchdog_shield` cases
-beside its pty test; the shield fix is on integration and the `ignore` is removed by a separate lessons_launch task,
-so L-P3 stays `open` until a box run shows that test. L-R6 passes its file (`proxy_connect.rs`) but is left `open`:
+run here are untouched. L-P3 names the `watchdog_shield` cases
+beside its pty test; the shield fix is on integration and the `ignore` on the pty test is removed on this branch, so
+L-P3 is `green` on the box run below, which shows that test passing. L-HF3 is back to `open`: its guard
+(`watchdog_end_stub_helpers_run_in_order`) uses helpers that always succeed, so no test shows that a failing helper is
+logged as `helper_failed` and the run goes on and seals; PRD-02 is asked for a `watchdog_end` case with a helper that
+exits non-zero, and the row is repointed to it. L-P7 checks that the harness, its child and the detached grandchild are
+gone and that the recorder was never signalled; it does not check the TERM then KILL order. L-R6 passes its file (`proxy_connect.rs`) but is left `open`:
 no test there shows a `conn` record written by `proxy::serve`.
 
 **Budget after slice 5.** `wc -l` of the eight `lessons_*.rs` files totals 4,324 (connect 510, decode 554,
@@ -207,13 +211,12 @@ paid for most of what the tighter cases added. That is 862 more than the 3,462 a
 The 14,200 owner-question line is a total over the whole build; the tree still holds the 0.7 crates' tests, so
 a build-wide Rust test line count cannot be read off it yet and is not reported here.
 
-**Checked and left `open`.** FW1: `pipeline_guard.rs` opens every stream before the guard fills, so no PRD-02 test
-shows "OPEN is always admitted"; `lessons_pipeline::open_and_end_survive_a_full_guard` is the only case for it and
-stays (it is not a deletion candidate while PRD-02 has no such case; if the PRD-02 owner adds one, the lessons copy
-can go in the same PR). Still missing from the tree: `pipeline_stall.rs` (R2), `watchdog_restart.rs` (C12 asserting
+**Checked and left `open`.** Still missing from the tree: `pipeline_stall.rs` (R2), `watchdog_restart.rs` (C12 asserting
 `127.0.0.1`, P1 unchanged port, P2 decrypted connection after a kill), `cli_continue.rs` (HF6, SC4). C11 now has
 its 2,000-connection case (`proxy_connect::two_thousand_concurrent_connects_are_all_served`). P15 names its
-`after_stop` half only; no test asserts the 60 s drain and 180 s native bound. R4 and R6 need a real run (R4 is
+`after_stop` half only; no test asserts the 60 s drain and 180 s native bound. L-FW1 is green, and `lessons_pipeline::open_and_end_survive_a_full_guard` stays beside the PRD-02 guard because
+`pipeline_guard.rs` opens every stream before the guard fills, so only the lessons copy shows "OPEN is always admitted".
+R4 and R6 need a real run (R4 is
 `R:` only; R6 needs a `conn` record, which only `proxy::serve` writes). P14 and HF4 name tests
 (`no timer under 15 min`, `cli_commands::second_start_on_one_home_refuses`) that are not in `cli_commands.rs`. VR1 shows
 the exit 2 for a torn tail but not the allocation bound. Rows with an `R:` guard stay `open` until the real run is
@@ -227,10 +230,9 @@ exists, except seven names, all of them tests PRD-02, PRD-10 or the lessons lane
 `cli_commands::second_start_on_one_home_refuses` (L-HF4). Those rows stay `open`. `mask::meta::tests` is a module
 prefix. No renamed guard was found beyond the ones repointed in this edit.
 
-Last box run, on the integration head 633a4226 plus this file: `cargo nextest run -p goalcup` for the `lessons_*`,
-`proxy_*`, `pipeline_*`, `watchdog_*` and `mask_meta` binaries, 183 tests run, 183 passed, 2 skipped (the two
-`ignore` tests `lessons_connect::idle_tunnel_survives_120s` and
-`lessons_launch::ctrl_c_reaches_the_harness_and_the_watchdog_lives`). The pty cases of `lessons_launch` ran in the box.
+Last box run, on code head c39737d9 (this branch before this docs-only edit): `cargo nextest run -p goalcup` for the `lessons_*`, `proxy_*`, `pipeline_*`, `watchdog_*` and `mask_meta` binaries, 184 tests run, 184 passed, 1 skipped. The only `ignore` test left is
+`lessons_connect::idle_tunnel_survives_120s`; `lessons_launch::ctrl_c_reaches_the_harness_and_the_watchdog_lives` runs
+and passes. The pty cases of `lessons_launch` ran in the box.
 The `mask_rules`, `mask_stream`, `mask_corpus`, `native_*`, `upload_*`, `cli_*`, `connector_*` and Worker/verifier
 binaries were not run in this job, so rows that name them keep their status.
 
