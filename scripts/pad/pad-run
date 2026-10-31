@@ -352,10 +352,10 @@ class Run:
 
     def type_prompt(self):  # section 3, 0:04: the ready text, pre keys, the paste, the submit delay and Enter
         h, t = self.h, self.tmux
-        self.seed()
         ready = h.get("ready_text")
         if not (ready and wait(lambda: ready in self.pane(False), 30, 2)):
             time.sleep(0 if ready else 30)
+        self.seed()  # after the harness's ready text: the harness reads git state while it starts
         if h.get("pre_keys"):
             sh(["tmux", "send-keys", "-t", t, "-l", h["pre_keys"].encode().decode("unicode_escape")])
             time.sleep(2)
@@ -821,7 +821,7 @@ class Run:
         write(self.path("harness-files.json"), json.dumps(out), 0o644)
 
     def wipe_secrets(self, known=False, home=True):
-        found, ks = [], ("known", "known-plain", "paste.txt") if known else ()
+        found, ks = [], ("known", "known-plain", "paste.txt", "remote-pw") if known else ()
         for what, p in [("keys", self.keys), (".env.local", os.path.join(self.project, ".env.local"))] + [
                 ("harness home", self.st.get("home"))] * home + [(k, self.path(k)) for k in ks]:
             if p and os.path.lexists(p):

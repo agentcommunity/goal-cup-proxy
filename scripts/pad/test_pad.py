@@ -448,9 +448,8 @@ class StartRefusal(unittest.TestCase):
         self.assertEqual({k: seen[0][1][k] for k in ("named_file", "named_key", "value_shown")},
                          {"named_file": True, "named_key": True, "value_shown": True})
 
-    def test_start_rule_project_holds_two_files_and_home_is_apart(self):  # PRD-10 section 3 step 2
+    def test_home_is_not_beside_project(self):  # PRD-10 section 3 step 2
         run, r = self.run_for()
-        r.plant()
         self.assertNotEqual(os.path.dirname(os.path.realpath(r.project)), os.path.dirname(os.path.realpath(r.env["GOALCUP_HOME"])))
 
 
