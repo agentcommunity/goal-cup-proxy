@@ -293,6 +293,6 @@ fn ctrl_c_reaches_the_harness_and_the_watchdog_lives() {
         .unwrap_or_else(|| panic!("harness printed no mask:\n{text}"));
     let ignored = u64::from_str_radix(mask.trim(), 16).expect("hex mask");
     for signal in [libc::SIGINT, libc::SIGQUIT, libc::SIGTSTP] {
-        assert_eq!(ignored >> (signal - 1) & 1, 0, "signal {signal} is ignored: {mask}");
+        assert_eq!(ignored >> (signal - 1) & 1, 0, "signal {signal} is ignored: {mask}\n{text}");
     }
 }
