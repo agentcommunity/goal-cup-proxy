@@ -21,6 +21,8 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+pub mod run1;
+
 pub const ENTRY: &str = "e0123456789abcdef";
 pub const RUN: &str = "r0123456789abcdef";
 pub const HOST: &str = "model.example.test";
