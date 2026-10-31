@@ -1440,3 +1440,16 @@ the HARNESS-ONBOARDING pointer; `docs/README.md` is deleted and `CONTRACTS`, `TE
   not a blocker. If trimmed: fold sections 9 and 10 into one "See also" line and drop the "No proxy credential"
   and "Boot-time timers" bullets (watchdog detail, already in D85 and the code).
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 31 Oct, after slice 14 (catch-up edits, merge c7c83b35)
+
+- Slice 14 merged the RECORD-FORMAT legs and history checks, the ARCHITECTURE writer marks (section 5 and 7), the
+  AGENTS CI wording and the LOCAL-RESEARCH-HANDOFF anchor. That closes the "still open" RECORD-FORMAT catch-up from
+  the slice 10 and slice 12 notes and the slice 13 note above. Still open: the README tier column and Pad result
+  lines after phase 5, and removing the "writer: PRD-02 target shape" marks when the PRD-02 writer merges.
+- Three nits remain, all cosmetic (A5, B1, B4): the AGENTS.md CI sentence is one line of about 130 characters
+  against the file's 100-column wrap, and one ARCHITECTURE line (the mask worker sentence) is over-long. Fix the
+  AGENTS.md wrap in the next PRD-15 touch of that file; the ARCHITECTURE line may stay. No separate merge request.
+- Size (wc -l at c7c83b35): AGENTS 92, ARCHITECTURE 190, RECORD-FORMAT 545, LOCAL-RESEARCH-HANDOFF 306. No ceiling
+  moves.
+- No locked ledger item is touched and no owner question comes from this slice.

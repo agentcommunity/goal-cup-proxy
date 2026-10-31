@@ -2300,3 +2300,13 @@ kept and now cites BUILD-PROMPT section 5, since B3 no longer carries it.
   PRD-15 note.
 - Remaining docs work: the PRD-15 note (section 5, 7 markers; CI wording) and the PRD-02 writer slice removing
   the target-shape notes. No locked ledger item is touched and no owner question comes from this slice.
+
+### 31 Oct, after PRD-15 slice 14 (merge c7c83b35)
+
+- **Size report, PRD-15** (wc -l on integration at c7c83b35): PRD-00 "Size budget" has no docs row, so there is no
+  budget to compare; PRD-15 merged no Rust, so no Rust row moves. AGENTS 92 (estimate about 95), ARCHITECTURE 190
+  (about 160, accepted), RECORD-FORMAT 545, LOCAL-RESEARCH-HANDOFF 306.
+- Docs work left for the plan: the PRD-02 writer slice removing the target-shape marks, and the README tier column
+  and Pad result lines after phase 5. The three review nits are cosmetic and ride the next PRD-15 touch. Nothing
+  here changes the build order, a seam or the phase 2 and 3 checks. No locked ledger item is touched and no owner
+  question comes from this slice.
