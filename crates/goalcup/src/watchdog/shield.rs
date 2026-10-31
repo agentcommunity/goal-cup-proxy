@@ -72,13 +72,39 @@ impl Shield {
     /// The harness has exited: [`GIVEN_BACK`] are what they were before. `SIGHUP` and `SIGTTOU`
     /// stay held until the shield drops, so a window closed after the harness exited does not cut
     /// the seal or the upload short.
+    ///
+    /// A key typed while the harness ran went to the whole group, so the same signal can still be
+    /// pending here, not yet taken by any thread. Given back first, it would reach the default
+    /// action and end the wrap-up. So this thread blocks them, takes every pending one while the
+    /// handler is still in place, and only then gives them back and unblocks. A key typed after
+    /// this returns gets the default action, as it would without a watchdog.
     pub fn harness_exited(&mut self) {
         let (back, kept): (Vec<_>, Vec<_>) = self
             .saved
             .drain(..)
             .partition(|(signal, _)| GIVEN_BACK.contains(signal));
         self.saved = kept;
-        restore(&back);
+        // SAFETY: zeroed locals filled by `sigemptyset` and `pthread_sigmask`; `sigtimedwait` with
+        // a zero timeout only takes a pending signal or returns at once. A thread that takes one
+        // first does so under the kernel's signal lock, with the handler still installed.
+        unsafe {
+            let mut set: libc::sigset_t = std::mem::zeroed();
+            libc::sigemptyset(&mut set);
+            for signal in GIVEN_BACK {
+                libc::sigaddset(&mut set, signal);
+            }
+            let mut old: libc::sigset_t = std::mem::zeroed();
+            let blocked = libc::pthread_sigmask(libc::SIG_BLOCK, &set, &mut old) == 0;
+            let zero = libc::timespec { tv_sec: 0, tv_nsec: 0 };
+            while blocked
+                && (libc::sigtimedwait(&set, std::ptr::null_mut(), &zero) > 0
+                    || std::io::Error::last_os_error().kind() == std::io::ErrorKind::Interrupted)
+            {}
+            restore(&back);
+            if blocked {
+                libc::pthread_sigmask(libc::SIG_SETMASK, &old, std::ptr::null_mut());
+            }
+        }
     }
 }
 
