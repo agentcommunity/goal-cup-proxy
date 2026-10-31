@@ -327,19 +327,22 @@ On the worked example (`python3 read.py < worked-example.gcr`, already raw) it p
 ## The `goalcup-verify check --json` report
 
 `goalcup-verify check <path> --json` prints one JSON object on standard output (code in
-`crates/goalcup-verify/src/report.rs` and `server.rs`) and its text form on
-standard error (per entry, a header, whether it is sealed, each named or failed check's `why` and a
-coverage line). `<path>` is an entry, `rec`, fetched entry (`rec.gcr.zst`) or run folder, a fetched
+`crates/goalcup-verify/src/report.rs` and `server.rs`) and its text form on standard error (per
+entry, a header, whether it is sealed, each named or failed check's `why` and a coverage line). The
+coverage line reads `Recorded: N requests, M refused by the provider.`, the history sentence, the
+harness-log sentence (the calls its log holds and how many have no recording, or that the log is
+not read or was not compared) and `Recording off: N times, S s.`; it never claims that everything
+was recorded. `<path>` is an entry, `rec`, fetched entry (`rec.gcr.zst`) or run folder, a fetched
 outdir, or one part file. `--live` reads an entry still recording up to its last index line;
 `--server` marks a server copy (a fetched `rec.gcr.zst` is one anyway); `--live` wins over both.
 `--local ENTRY_DIR` is the local entry a server copy is compared with. `--known FILE` adds the
 `secrets` check (below). `--harness-files` is taken but not read yet.
 
 Exit code and `result`: 0 `pass` (whole); 1 `named` (honest but incomplete: every loss is named, or
-the entry is unsealed, live or has pruned part files); 2 `fail` (a broken invariant, a silent
-loss, or with `--known` a `secrets` hit or big mask); 3 no usable report and no JSON (the input, `--local` or `--known` cannot be read, a wrong
-command line, an internal error). A `warn` or a `skip` leaves the exit alone. For a run folder, the worst entry decides. Readers ignore
-keys they do not know.
+the entry is unsealed, live or has pruned part files); 2 `fail` (a broken invariant, a silent loss,
+or with `--known` a `secrets` hit or big mask); 3 no usable report and no JSON (the input, `--local`
+or `--known` cannot be read, a wrong command line, an internal error). A `warn` or a `skip` leaves
+the exit alone. For a run folder, the worst entry decides. Readers ignore keys they do not know.
 
 | Top-level key | Holds |
 |---|---|
@@ -355,15 +358,18 @@ keys they do not know.
 | `bytes` | `raw` (decompressed), `compressed` (bytes of the files read) and `framing` (raw minus DATA payload) |
 | `links` | LINK records read |
 | `checks` | Per check: `id`; `inv` (the invariant number, or null); `result` (`pass`, `skip`, `warn`, `named` or `fail`); `why` (one plain line, empty on a pass); `first` (`o`, `sid` and `wall` of the first finding at the worst level reached, or null); `facts` (an object) |
-| `counts` | Recounted from the records: `model_requests` (model requests written, `http_post` plus `ws_up_msgs`), `req_whole`, `req_holes`, `gaps` (a count per reason name seen), `lost_bytes`, `lost_unknown`, `after_stop_bytes`, `mask_failclosed_bytes`, `off_ms`, `tunnels`, `native_files`, and `threads` (null) |
-| `harness_log`, `provider_errors`, `history`, `threads` | The first three are null and `threads` is an empty list; no check fills them |
+| `counts` | Recounted from the records: `model_requests` (model requests written, `http_post` plus `ws_up_msgs`), `req_whole`, `req_holes`, `gaps` (a count per reason name seen), `lost_bytes`, `lost_unknown`, `after_stop_bytes`, `mask_failclosed_bytes`, `off_ms`, `tunnels`, `native_files`, and `threads` (the length of the `threads` list) |
+| `harness_log` | What the harness's own log gave: `none` (not read, or nothing found), `totals` (a total per session) or `per_call` (one record per call) |
+| `provider_errors` | `{wire, native}`: for each leg, a count per error code the provider gave (else `http_<status>`, else `error`), one per failed call |
+| `threads` | One item per thread the legs checks compared, else an empty list: `thread` (null for the whole entry), `parent`, `harness` and `wire_ok` (calls), `wire_err`, `result`, `history` (null) |
+| `history` | Null, until `history_complete` is built |
 
 **Check ids.** `inv1` to `inv9` and `inv14` check the invariant of that number; `streams_closed`,
 `seen_matches_written`, `gap_has_end` and `recorder_alive` check invariants 10 to 13. With `inv`
 null: `torn_tail`, `native_path_gen`, `counts_match_seal`, `gaps_named`, `record_decode`,
-`parts_pruned`, `record_kind_unknown`, `gap_reason_unknown` and the three honesty checks below.
-`history_complete`, `wire_keeps_up`, `threads_match` and `subagents_present` are always `skip`
-("not built in this slice"). Last come the ones that depend on an option:
+`parts_pruned`, `record_kind_unknown`, `gap_reason_unknown`, the three honesty checks and the three
+legs checks below. `history_complete` is always `skip` ("not built in this slice"). Last come the
+ones that depend on an option:
 
 - For a server input, three that read `fetch.json`, the chunk list beside the copy (S13,
   `scripts/fetch-run.sh`), and without it fail under `--server`, else skip.
@@ -379,16 +385,35 @@ null: `torn_tail`, `native_path_gen`, `counts_match_seal`, `gaps_named`, `record
 - `listed_hosts_decrypted`: a listed host should be read, not tunnelled. A tunnel to one is `named`
   when a GAP of the tunnel's own reason is on that connection, `fail` when none is; a `sign_in`
   tunnel is no loss. A GAP on a decrypted listed connection is `named`. A `tls_refused` connection
-  from a host and fingerprint that earlier finished a decrypted connection is `warn`, unless its GAP
-  says `alert: false`; a `long_tunnel` note for an unlisted host is `warn`. Facts: `listed_conns`, `decrypted`, `sign_in`, `tunnels_named` (per reason),
-  `tunnels_unnamed`, `conn_gaps`, `long_tunnel_unlisted`, `refusal_after_trust`.
-- `conn_bytes`: per decrypted connection and direction, the plain bytes in its END tail (`plain_up`,
-  `plain_down`) against what its streams account for. Over 1 MiB unaccounted is `warn` when over a
-  tenth of the plain bytes, `fail` when over half and the connection has no GAP; else `skip` when nothing
-  was judged or a connection ended without both counts (a `warn` or `fail` from another
-  connection stands). Facts: `checked`, `warn`, `fail`, `unaccounted_bytes`,
+  to a listed host whose host and fingerprint earlier ended a decrypted connection `complete` is
+  `warn`, unless its GAP says `alert: false`; a `long_tunnel` note for an unlisted host is `warn`.
+  Facts: `listed_conns`, `decrypted`, `sign_in`, `tunnels_named` (per reason), `tunnels_unnamed`,
+  `conn_gaps`, `long_tunnel_unlisted`, `refusal_after_trust`.
+- `conn_bytes`: per decrypted connection and direction, the plain bytes in its END tail
+  (`plain_up`, `plain_down`) against what its streams account for. Over 1 MiB unaccounted is `warn`
+  when over a tenth of the plain bytes, `fail` when over half and the connection has no GAP; else
+  `skip` when nothing was judged or a connection ended without both counts (a `warn` or `fail` from
+  another connection stands). Facts: `checked`, `warn`, `fail`, `unaccounted_bytes`,
   `no_plain_tail`.
 - `mask_failclosed`: `warn` for a stream with over 1 MiB of `fail_closed` MASK bytes. Facts: `streams`, `bytes`.
+
+**Legs checks** (`legs.rs`): the recorded wire calls against the harness's own log, read from its
+`native_form`, threads and `children`; they name no harness.
+
+- `wire_keeps_up`: a model call the harness's own log shows that never reached the wire (a lost
+  model call). Facts: `harness`, `wire_ok`, `excess`, `from`, `to`, `wire_above`.
+- `threads_match`: a thread whose calls differ from the harness log (a log that gives only a total
+  per session is compared by that total). Facts: `threads`, `bad`.
+- `subagents_present`: a subagent the harness's parentage names that has no wire calls and no
+  native stream. Facts: `children`, `missing`.
+
+A comparison allows the larger of 3 calls and 2% before it counts. A finding is `named` when a
+recorder-down GAP, or a conn GAP of a connection to a model host (a listed provider or gateway, or a
+host the participant or config named), covers the loss, from its start to two minutes after its end;
+`fail` when nothing names it. Only a recorder-down GAP covers a subagent that has no leg at all: a
+conn GAP explains wire calls of its own connection, not a native stream. A check is `skip` with its
+reason where it cannot compare: "the harness's own log is not read" or "could not read the
+harness's own log", and for `subagents_present` "parentage was not read".
 
 **The label** is a hint for judges, not a judgement. It says which evidence the record holds:
 `wire_and_native` when model requests were written and a `native` or `snapshot` stream holds
@@ -498,5 +523,5 @@ per member over the lines of one `message.id`).
 
 Neither file holds body text or a session file path: only model names, thread ids and agent labels
 (printable ASCII, at most 128 bytes, never all `*`), host names, the run, entry and connector ids,
-the harness version line (printable ASCII, at most 128 bytes), safe reason tokens, times and numbers
-leave the record.
+the harness version line (printable ASCII, at most 128 bytes), safe tokens (reason, effort and usage
+member names: at most 64 bytes from `A-Za-z0-9_.-`), times and numbers leave the record.
