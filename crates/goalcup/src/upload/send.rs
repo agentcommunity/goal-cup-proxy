@@ -103,7 +103,10 @@ impl Sender {
         let Some((end, waiting)) = self.measure(bound, pos.offset) else {
             return self.fail(clock(), "chunk", UNREAD, None, j);
         };
-        self.update(j, |j| (j.durable_raw, j.waiting_bytes) = (end, waiting));
+        {
+            let mut j = lock(j);
+            (j.durable_raw, j.waiting_bytes) = (end, waiting);
+        }
         if pos.offset > 0 && end <= pos.offset && !self.held {
             // The server holds bytes the local copy does not, or a different chain of the same
             // length: the copies disagree. A position below the end is checked by the cut.
@@ -123,7 +126,7 @@ impl Sender {
             }
             self.timer.started(now);
             self.target = Some(end);
-            self.update(j, |j| j.state = State::Sending);
+            lock(j).state = State::Sending;
         }
         let confirmed = lock(j).confirmed.clone();
         match chunk::cut(&self.rec, &pos, bound, confirmed.as_ref()) {
@@ -260,7 +263,8 @@ impl Sender {
         let stored = self.inflight.take().filter(|i| moved && i.0 == p.offset);
         let at = rfc3339(SystemTime::now());
         let open = self.target.is_some_and(|t| p.offset < t);
-        self.update(j, |j| {
+        {
+            let mut j = lock(j);
             if p.sealed {
                 j.final_ = Final::Sealed;
             }
@@ -284,7 +288,7 @@ impl Sender {
                     j.state = State::Sending;
                 }
             }
-        });
+        }
         self.pos = Some(p);
     }
 
@@ -292,14 +296,15 @@ impl Sender {
     fn caught_up(&mut self, j: &Mutex<UploadJson>) {
         (self.target, self.refusals) = (None, 0);
         self.backoff.progress();
-        self.update(j, |j| {
+        {
+            let mut j = lock(j);
             j.state = if j.final_ == Final::Sealed {
                 State::Done
             } else {
                 State::CaughtUp
             };
             (j.failures, j.next_try, j.last_error) = (0, None, None);
-        });
+        }
     }
 
     /// A failed call at `now` (read after it): back off, say so in `upload.json` and one log line.
@@ -335,11 +340,12 @@ impl Sender {
         wait: Option<Duration>,
     ) {
         let (class, status, text) = why;
-        self.update(j, |j| {
+        {
+            let mut j = lock(j);
             j.state = state;
             j.last_error = Some(LastError::new(SystemTime::now(), class, status, text));
             (j.failures, j.next_try) = (self.backoff.failures, wait.and_then(wall_after));
-        });
+        }
         let wait = wait.unwrap_or_default();
         log_failure(&self.entry_dir, what, class.word(), status, wait);
     }
@@ -356,11 +362,6 @@ impl Sender {
             self.measured_at = key;
         }
         Some(self.measured)
-    }
-
-    /// Changes the shared `upload.json`; the threads write the file on their tick.
-    fn update(&self, j: &Mutex<UploadJson>, f: impl FnOnce(&mut UploadJson)) {
-        f(&mut lock(j));
     }
 }
 

@@ -91,7 +91,4 @@ fn null_mode_sends_up_to_the_last_whole_line_and_beats_failed() {
         Some(json!("failed"))
     );
     assert_eq!(raw(), Some(whole.raw_end));
-    // Section 9: the tail window is the deadline plus a day.
-    let by = state::read(&entry).unwrap().upload_by;
-    assert_eq!(by.as_deref(), Some("2026-11-08T10:00:00Z"));
 }
