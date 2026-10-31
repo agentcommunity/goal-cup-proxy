@@ -1,12 +1,12 @@
 //! The sender of one entry (PRD-06 sections 3, 4, 5, 8 and 11): rounds of chunks from the server's
 //! position, the backoff that resets on progress (run 1's lag bug), the 409 re-read, `stuck`,
 //! `refused`, `503 awaiting_final` and the confirmed rule. One [`Sender::tick`] makes at most one
-//! HTTP call; the upload thread (slice 4) calls it on its 1 s tick and at once on [`Step::Again`].
+//! HTTP call; the upload thread calls it on its 1 s tick and at once on [`Step::Again`].
 
 use super::chunk::{self, Bound, Chunk, Cut};
 use super::client::{RunPosition, ServerClient, ServerError};
 use super::policy::{Backoff, Class, Policy, Timer, after, class_of_status};
-use super::state::{self, Confirmed, Final, LastError, State, UploadJson, rfc3339};
+use super::state::{Confirmed, Final, LastError, State, UploadJson, rfc3339};
 use crate::cli::log::{Fact, line};
 use crate::pipeline::Mono;
 use goalcup_format::hex;
@@ -47,8 +47,10 @@ pub struct Sender {
     inflight: Option<(u64, u64)>,
     refusals: u32,
     awaiting_final: bool,
-    /// `(durable raw end, offset)` of the last measure, and its `(raw end, waiting bytes)`.
-    measured: (Option<(u64, u64)>, (u64, u64)),
+    /// `(durable raw end, offset)` of the last measure; None with no live writer.
+    measured_at: Option<(u64, u64)>,
+    /// The last measure's `(raw end, waiting bytes)`.
+    measured: (u64, u64),
 }
 
 impl Sender {
@@ -70,7 +72,8 @@ impl Sender {
             inflight: None,
             refusals: 0,
             awaiting_final: false,
-            measured: (None, (0, 0)),
+            measured_at: None,
+            measured: (0, 0),
         }
     }
 
@@ -348,26 +351,22 @@ impl Sender {
             Bound::Durable(d) => Some((d.line.raw_end, offset)),
             Bound::OnDisk => None,
         };
-        if key.is_none() || key != self.measured.0 {
-            self.measured = (key, chunk::waiting(&self.rec, offset, bound).ok()?);
+        if key.is_none() || key != self.measured_at {
+            self.measured = chunk::waiting(&self.rec, offset, bound).ok()?;
+            self.measured_at = key;
         }
-        Some(self.measured.1)
+        Some(self.measured)
     }
 
-    /// Changes `upload.json` and writes it when anything changed. Open for slice 4: at most once
-    /// a second (section 11, `state::Writer`); a round now writes it a few times per chunk.
+    /// Changes the shared `upload.json`; the threads write the file on their tick.
     fn update(&self, j: &Mutex<UploadJson>, f: impl FnOnce(&mut UploadJson)) {
-        let mut j = lock(j);
-        let before = j.clone();
-        f(&mut j);
-        if *j != before {
-            let _ = state::write(&self.entry_dir, &j);
-        }
+        f(&mut lock(j));
     }
 }
 
-pub(super) fn lock(j: &Mutex<UploadJson>) -> std::sync::MutexGuard<'_, UploadJson> {
-    j.lock().unwrap_or_else(|e| e.into_inner())
+/// Locks `m`; a lock a panic left behind is taken as it is (the panic is the guard's).
+pub(super) fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(|e| e.into_inner())
 }
 
 fn wall_after(wait: Duration) -> Option<String> {
