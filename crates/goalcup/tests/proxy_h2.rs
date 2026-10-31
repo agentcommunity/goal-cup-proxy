@@ -20,7 +20,6 @@ use std::io::Write;
 const CONN: Sid = 2000;
 const ROOM: u64 = 1 << 30;
 const PREFACE: &[u8] = b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n";
-// Frame types and flags (RFC 9113 section 6).
 const DATA: u8 = 0;
 const HEADERS: u8 = 1;
 const PRIORITY: u8 = 2;
@@ -171,7 +170,8 @@ fn a_get_and_its_response_with_data() {
     let [(resp, paired, meta)] = opens(&calls, StreamKind::HttpResp).try_into().unwrap();
     assert_eq!((paired, &meta["h2"]), (req, &json!(1)));
     let want = ":status=200 content-type=text/plain";
-    assert_eq!((&meta["ver"], &meta["headers"]), (&json!("2"), &pairs(want)));
+    assert_eq!(meta["ver"], "2");
+    assert_eq!(meta["headers"], pairs(want));
     assert_eq!(data_of(&calls, resp), b"hello world");
     let (reason, tail) = end_of(&calls, resp);
     assert_eq!((reason, &tail["wire"]), (EndReason::Complete, &json!(11)));
@@ -273,20 +273,15 @@ fn rst_stream_and_goaway_end_streams_interrupted() {
         assert_eq!((reason, &tail["h2_error"]), want);
     }
 
-    let away = [0, 0, 0, 1, 0, 0, 0, 0];
+    let (away, cut) = ([0, 0, 0, 1, 0, 0, 0, 0], body(3, false, b"cut"));
     let steps = [
-        up(&[
-            req(1, "GET", "/a"),
-            req(3, "POST", "/v1/m"),
-            body(3, false, b"cut"),
-        ]),
+        up(&[req(1, "GET", "/a"), req(3, "POST", "/"), cut]),
         down(&[ok(1, ""), frame(GOAWAY, 0, 0, &away), body(1, true, b"ok")]),
     ];
     let (calls, stop) = run(&steps);
-    assert_eq!(stop, None);
     let reqs = opens(&calls, StreamKind::HttpReq);
     let [(resp, paired, _)] = opens(&calls, StreamKind::HttpResp).try_into().unwrap();
-    assert_eq!((reqs.len(), paired), (2, reqs[0].0));
+    assert_eq!((stop, reqs.len(), paired), (None, 2, reqs[0].0));
     assert_eq!(data_of(&calls, resp), b"ok");
     let reasons = [resp, reqs[0].0, reqs[1].0].map(|s| end_of(&calls, s).0);
     let (done, cut) = (EndReason::Complete, EndReason::Interrupted);
@@ -328,6 +323,7 @@ fn body_codings() {
 #[test]
 fn an_extended_connect_stream_is_named_and_others_go_on() {
     let connect = format!(":method=CONNECT :protocol=websocket {API} :path=/ws");
+    let whole = body(3, true, b"whole");
     let steps = [
         up(&[
             head(1, 0, &connect),
@@ -335,7 +331,7 @@ fn an_extended_connect_stream_is_named_and_others_go_on() {
             req(3, "GET", "/b"),
             body(1, true, &[0x82; 5]),
         ]),
-        down(&[ok(1, ""), ok(3, ""), body(3, true, b"whole"), body(1, true, b"")]),
+        down(&[head(1, END_STREAM, ":status=200"), ok(3, ""), whole]),
     ];
     let (calls, stop) = run(&steps);
     assert_eq!(stop, None);
