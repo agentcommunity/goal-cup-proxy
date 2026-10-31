@@ -103,8 +103,8 @@ fn launch_helper() {
         "ctrl_c" => {
             // No shell in between: a shell may ignore the terminal's signals for its own reasons.
             let argv = vec!["120".to_string()];
-            let child =
-                spawn::harness(Path::new("/bin/sleep"), &argv, &harness_env(), None).expect("start");
+            let child = spawn::harness(Path::new("/bin/sleep"), &argv, &harness_env(), None)
+                .expect("start");
             let status = std::fs::read_to_string(format!("/proc/{}/status", child.id()))
                 .expect("harness status");
             let mask = status
