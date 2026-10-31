@@ -505,7 +505,8 @@ fn h2_fields_past_64_kib_are_the_http_head_guard() {
     let (calls, stop) = run(&steps);
     assert_eq!(stop, None);
     let [(req, _, meta)] = opens(&calls, StreamKind::HttpReq).try_into().unwrap();
-    assert_eq!(meta["headers"], pairs(&format!(":method=POST {API} :path=/v1/m")));
+    let want = format!(":method=POST {API} :path=/v1/m");
+    assert_eq!(meta["headers"], pairs(&want));
     assert_eq!(gaps_on(&calls, req), [(GapReason::MemoryGuard, None)]);
     assert_eq!(data_of(&calls, req), b"{}");
     assert_eq!(end_of(&calls, req).0, EndReason::Complete);
