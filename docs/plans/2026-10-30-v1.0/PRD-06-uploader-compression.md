@@ -1113,3 +1113,99 @@ PRD-12 and PRD-17.
   call, and must not grow `client.rs`. The overage serves points 3 and 5 (see the slice 5 note). Net
   against the Rust totals at the end-of-build report; the old `goalcup-cli/src/upload` goes with PRD-13.
 - No locked ledger item is touched.
+
+### 2026-10-31, slice 6 review fixes (older-entry queue)
+
+- **No decode in the recorder.** The queue takes an older entry's final-heartbeat totals from its
+  `status.json` (`written` and `off`), which PRD-02 is to set together with the seal (not yet called:
+  see the open dependency in the re-review fixes below), so they are the seal's totals; no part file
+  is decoded in the recorder (the queue thread included). An entry the
+  queue takes is always sealed in `status.json`, or its `upload.json` says the server sealed it and no
+  final goes. `goalcup upload`, a process of its own, keeps `pipeline::entry_totals`.
+- **A refused entry stays queued.** 401, 404 and 410 from an older entry keep it in the queue on its
+  backoff, as section 1 says; `goalcup upload` still gives up on them. An entry leaves the queue when
+  it is done, closed, `stuck`, has nothing to send with, has every part pruned while `upload.json` is
+  not `done` (`goalcup upload` settles that one with the server's position), or its round panicked.
+  The next recorder or `goalcup upload` takes the unfinished ones.
+- **One panic, one entry.** Each older entry's listing and round run under their own `catch_unwind`;
+  a panic writes `internal` into that entry's `upload.json` and one log line, and never reaches the
+  live entry, its backoff or the other queued entries.
+- **The queue runs without a live client.** A live entry that is local or has no credential still
+  starts the queue's own thread (`goalcup-queue`, see the re-review fixes below; this line first
+  said the upload thread); `finish` does not wait for it.
+- **Descriptors.** The sender, the beat and `upload.json`'s writer hold none between calls, and each
+  call opens and closes its own connection. The 4 per entry the review saw were the fake Worker's,
+  which keeps a handle on every connection it accepts. (This line first said a queued entry holds its
+  `upload.lock` between rounds; since the second re-review it holds it for one round only, so a
+  queued entry holds no descriptor between rounds.)
+- **Also:** an entry writes `upload.json` once more when it leaves the queue (no state lost to the
+  1 s write limit); the live entry is skipped by its `(run, entry)` ids, not by path; entries are
+  ordered by their `status.json` time; done and closed entries are not read again.
+- **Size:** src 3,190 (`src/upload/*.rs`, inline tests counted), `upload_*` tests and
+  `tests/upload_common/` 2,690, against the PRD-00 row of 940 and 1,000; these fixes add 74 src lines
+  and cut 29 test lines (the part-folder builder is shared). The overage stands as reported at slice 5.
+- No locked ledger item is touched and no owner question comes from these fixes.
+
+### 2026-10-31, slice 6 re-review fixes
+
+- **The queue has its own thread.** `goalcup-queue` serves the older entries, so a slow server or one
+  that is gone (a retired Worker, a dead network) never holds the live entry's rounds or its
+  wrap-up; one older round may block for minutes on its calls, on that thread only. While the live
+  entry's wrap-up is not done the queue waits (section 1, live entry first). With no live client
+  only this thread starts. Its guard writes no `upload.json` of the live entry, so a panic there
+  never replaces the local or no-credential reason `connect` wrote; it logs one `queue` line.
+- **A queued entry's state is written after every round that changed it,** not only when it leaves
+  the queue: `finish` waits a few seconds for the threads, and a queue thread inside a call then
+  never drops its entries. What such an exit misses is that one call, which the server's position
+  covers.
+- **A listing that panics writes no `upload.json`.** `older` may panic before it holds that entry's
+  `upload.lock`, so only the log line is written; the entry is not taken again by this uploader.
+- **Open dependency on PRD-02 (not done).** The queue and `goalcup upload` read sealed from
+  `status.json` (`mode: sealed` with its seal, `written`, `off`). Nothing on this branch or on
+  integration at 630752f9 calls `pipeline::status::Board::sealed` yet, so a real recorder's
+  `status.json` never says sealed: until PRD-02 calls it with the seal, the queue skips every real
+  entry and `goalcup upload` answers `NotClosed` unless `upload.json` already says the server sealed
+  it. The tests cover the path with fixtures that write the sealed `status.json` PRD-02 will write.
+- **For the integrator:** the shared test builder lives in `tests/upload_common/mod.rs`, read as
+  PRD-06's under the `upload_` prefix; PRD-14 owns `tests/common/`. Confirm, or it moves into an
+  `upload_*.rs` module. The older `upload_*` binaries keep their own fixtures; moving them is a
+  separate clean-up. Size stays over the PRD-00 row as reported above; the replan carries it.
+- No locked ledger item is touched and no owner question comes from these fixes.
+
+### 2026-10-31, slice 6 second re-review fixes
+
+- **`upload.lock` for one round only.** The queue took an older entry's `upload.lock` when it listed
+  it and kept it while the entry stayed queued, so a refused entry, or any entry behind a server that
+  never answers, kept `goalcup upload` for that entry waiting with no word until the recorder exited.
+  A queue round now takes the lock, skips the entry when another uploader or a recorder holds it,
+  and lets it go after the round, with `upload.json` holding the round's state. `goalcup upload`
+  waits at most one round and then answers (`Refused` at once for a refused entry, section 9 step 3).
+  An entry whose `upload.json` another uploader wrote between rounds leaves the queue without
+  writing and is listed afresh at the next listing. An entry writes `upload.json` when dropped only
+  while it holds the lock. Test: `upload_queue.rs`, `goalcup upload` answers `Refused(404)` for an
+  older entry the queue holds refused while the recorder runs.
+- **For the integrator: a change to the PRD-00 ruling "two plain threads".** The uploader now runs
+  three plain threads: `upload`, `beat` and `goalcup-queue` (PRD-00 interface rulings, PRD-02 and
+  PRD-06 row, and the architecture diagram both say two). The intent of the ruling and of L5 holds:
+  all three are in the recorder process, use the blocking client and never touch the async runtime.
+  Section 1's "Two plain threads" and "Each round serves the live entry first, then one round for
+  each older entry" read with this change: older entries are served on their own thread, which pauses only while
+  the live entry's wrap-up is in progress and otherwise runs alongside the live entry. The replan records it in PRD-00.
+- The open dependency on PRD-02 (`Board::sealed`), the `tests/upload_common/` ownership question and
+  the size overage stand as written above. No locked ledger item is touched and no owner question
+  comes from these fixes.
+
+### 2026-10-31, replan after slice 6 (merge 114202ae)
+
+- Two review nits (A13, A14, D1 of the re-review) are fixed in the slice 6 notes above: the long line
+  is rewrapped and says the queue thread, and the thread sentence is one plain statement.
+- **Size at merge** (`wc -l` on integration): `src/upload/*.rs` 3,283 against the PRD-00 row of 940;
+  `tests/upload_*.rs` 2,765 against 1,000. Over the replan ceilings of 2,500 and 1,900 as well. No
+  behaviour-keeping cut is known; the overage serves points 3 and 5. Slice 7 must not grow `client.rs`
+  or the queue.
+- **Slice 7 carries the dead-entry close** (PRD-02 `close_dead_entry` in `manual::run`), because
+  `dead.rs` is not on integration. It also needs PRD-02 to call `Board::sealed` with the seal; until
+  then the queue skips every real entry (open dependency above).
+- The queue costs one lock, one `recording()` check and one `upload.json` read per queued entry per
+  tick (up to 200 entries), on `goalcup-queue` only. Accepted; no cut keeps the behaviour.
+- No locked ledger item is touched.

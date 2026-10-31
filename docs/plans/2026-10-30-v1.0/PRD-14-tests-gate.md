@@ -1064,3 +1064,9 @@ PRDs they touch and the code. Where two fixes disagree, the ledger and the later
   for everything else in the shared row, so PRD-14 tests should be few and push shared helpers into
   `tests/common/` (`encode` for gzip, zlib and raw deflate; recorder `sid_of`, `end_reason`, `gap_reasons`),
   after which PRD-17 deletes its private copies. No locked ledger item is touched.
+
+### 2026-10-31, replan after PRD-06 slice 6 (merge 114202ae)
+
+`crates/goalcup/tests/upload_common/` (shared part-folder and fake Worker builder) is PRD-06's under the
+`upload_` prefix. Do not move it; PRD-17 may fold it into `tests/common/` later. No locked ledger item is
+touched.

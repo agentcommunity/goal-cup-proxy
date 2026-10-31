@@ -1623,3 +1623,11 @@ Two planning passes (`/root/gc-night/prd02/path-plan.md` and `audit-fix-plan.md`
 ### 2026-10-31, replan after PRD-03 slice 3 (merge c81e8e9b): serve is available
 
 `proxy::serve(listener: std::net::TcpListener, ctx: ProxyCtx { recorder, hosts, ca }) -> ProxyHandle` is on integration, a plain `fn` that owns its runtime, and `ProxyHandle::quiet_since() -> Mono` feeds the quiet-wire check. Slice A (`boot.rs`) may call it directly; do not wrap it in a thread or a channel. Until `h2.rs` lands an h2-only client is recorded with a named `h2_unsupported` GAP, not a tunnel. No locked ledger item is touched.
+
+### 2026-10-31, replan after PRD-06 slice 6 (merge 114202ae): call `Board::sealed`
+
+The uploader's older-entry queue and `goalcup upload` read sealed from `status.json` (`mode: sealed`
+with the seal, `written`, `off`). Nothing calls `pipeline::status::Board::sealed` yet, so a real
+recorder's `status.json` never says sealed and the queue skips every real entry. PRD-02 must call it
+with the seal when it seals an entry. The dead-entry close (`close_dead_entry` in `manual::run`) moves
+to PRD-06 slice 7 once `dead.rs` is on integration. No locked ledger item is touched.
