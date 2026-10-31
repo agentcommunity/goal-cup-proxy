@@ -178,7 +178,7 @@ fn machine(home: &Path, server: &Server, vars: &BTreeMap<String, String>) {
         Server::Url(base) => ServerClient::new(base, None)
             .json::<serde_json::Value, ()>("GET", "/v1/health", None)
             .err()
-            .map(|e| text::server_unreachable(&e.to_string())),
+            .map(|e| text::server_unreachable(&e)),
     };
     let lines = [
         awake::missing(vars).map(text::no_sleep_lock),

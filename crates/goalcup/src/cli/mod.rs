@@ -1,6 +1,6 @@
-//! The participant commands (PRD-10): environment, home, the run and entry paths (section 2;
-//! `GOALCUP_HOME` only, no 0.7 compatibility), pid liveness and the run and part lookup (section 4).
+//! The participant commands (PRD-10): environment, home, the run and entry paths (section 2), pid liveness and the run and part lookup (section 4).
 
+pub mod approve;
 pub mod awake;
 pub mod finish;
 pub mod folder;

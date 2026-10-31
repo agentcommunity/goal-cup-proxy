@@ -7,6 +7,7 @@ use std::path::Path;
 use super::RunMode;
 use super::status::State;
 use crate::connector::Refusal;
+use crate::upload::client::ServerError;
 use crate::upload::policy::Class;
 use crate::upload::state::{Final, State as Upload, UploadJson};
 use crate::watchdog::Exit;
@@ -256,8 +257,78 @@ pub fn no_sleep_lock(why: &str) -> String {
 
 pub const SERVER_OFF: &str = "Server check skipped: GOALCUP_SERVER=off, so nothing is uploaded.";
 
-pub fn server_unreachable(why: &str) -> String {
-    format!("goalcup checked its server: {why}. A run needs it to start.")
+pub fn server_unreachable(e: &ServerError) -> String {
+    let said = match e {
+        ServerError::Transport(cause) => format!("goalcup could not reach its server ({cause})."),
+        e => format!("goalcup checked its server: {e}."),
+    };
+    format!("{said} A run needs it to start.")
+}
+
+/// PRD-10 section 3 steps 3 to 5: the repository, the approval and the open run.
+pub fn approval_intro(mode: RunMode, name: &str) -> String {
+    let what = match mode {
+        RunMode::Practice => "this practice run",
+        RunMode::Test => "this organizer test run",
+        RunMode::Competition => "your run",
+    };
+    format!(
+        "Approve {what} of {name} in your browser. Every run asks for its own approval; that is normal."
+    )
+}
+
+pub fn approval_address(opened: bool, address: &str) -> String {
+    let how = if opened {
+        "Your browser opened the approval page. If not, open"
+    } else {
+        "Open"
+    };
+    format!("{how} this address: {address}")
+}
+
+pub fn approval_waiting(minutes: u64) -> String {
+    format!("Waiting for your approval (the code expires in {minutes} min; Ctrl-C cancels).")
+}
+
+pub const APPROVED: &str = "Approved.";
+pub const WHY_DENIED: &str = "it was denied in the browser";
+pub const WHY_EXPIRED: &str = "the code expired";
+pub const WHY_INTERRUPTED: &str = "you pressed Ctrl-C";
+
+pub fn approval_stopped(why: &str) -> String {
+    format!(
+        "The approval did not finish: {why}. {NOTHING_CREATED} Run the command again to start over."
+    )
+}
+
+pub fn approval_refused(said: &str) -> String {
+    format!("The server refused the approval request: {said}. {NOTHING_CREATED}")
+}
+
+pub fn open_refused(said: &str) -> String {
+    format!("The server did not open the run: {said}. {NOTHING_CREATED} Run the command again.")
+}
+
+pub fn bad_answer() -> String {
+    format!(
+        "The server's answer was not one goalcup accepts. {NOTHING_CREATED} Run the command again; if it keeps happening, write to {SUPPORT_ADDRESS}."
+    )
+}
+
+pub fn repo_name(given: &str) -> String {
+    format!("\"{given}\" is not a repository name. Give it as <owner>/<name>. {NOTHING_CREATED}")
+}
+
+pub fn repo_missing(repo: &str) -> String {
+    format!(
+        "GitHub does not show {repo}: it does not exist yet, or it is private. Create it as a public repository, then run the command again. {NOTHING_CREATED}"
+    )
+}
+
+pub fn repo_not_empty(repo: &str) -> String {
+    format!(
+        "{repo} already has commits. A run needs a new, empty, public repository: no README, .gitignore or license. {NOTHING_CREATED}"
+    )
 }
 
 pub const NO_GIT: &str = "git is not installed. Your agent needs it to push its repository.";
