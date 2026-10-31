@@ -140,7 +140,7 @@ mod linux {
             .unwrap();
         let mut lines = BufReader::new(owner.stdout.take().unwrap()).lines();
         let pid = lines
-            .find_map(|l| l.ok()?.strip_prefix("PID ")?.trim().parse::<u32>().ok())
+            .find_map(|l| l.ok()?.split_once("PID ")?.1.trim().parse::<u32>().ok())
             .expect("the owner reports the inhibitor pid");
         assert!(alive(pid));
         owner.kill().unwrap();
