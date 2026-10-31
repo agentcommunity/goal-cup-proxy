@@ -955,3 +955,19 @@ PRD-12 and PRD-17.
   `upload_*` file goes); a slice 3 or 4 test file over 200 lines needs a reason in its decision line.
 - No locked ledger item is touched and no owner question comes from this slice. Ledger L2 is "cut
   before you add", not a number; the overshoot goes into the end-of-build size report.
+
+### 2026-10-31, replan after PRD-02 core step 1 (merge 2fd96576)
+
+- **The slice 2 S4 ask is met.** `Recorder::live()` fills `boot`, `held_bytes`, `writer_idle_ms`,
+  `losing` and `off` from the same atomics the status thread writes (PRD-02 note, same date), so
+  `beat::health` can decide `writer_slow`, `losing` and `failed` from a live recorder. `Live` has no
+  `held_peak` or `guard`; `status.json` has both. A real recorder fills `boot` and `off` only once
+  PRD-02's `boot.rs` merges, so a beat test before then builds `Live` by hand.
+- **`writer_idle_ms` is on the awake clock** and counts only records waiting for the writer, so a
+  laptop suspend never reads as 60 s of silence and never beats `failed`. Your own timers stay on boot
+  time (`Recorder::now()`); do not compare the two clocks.
+- **`pipeline::entry_totals(entry_dir) -> EntryTotals` is on integration** (also `Durable.totals`,
+  the totals at the durable LINK). It reads each boot's part files up to the last whole index line and
+  falls back to `counts.jsonl` for boots whose parts are pruned, spans included. Pruning must keep
+  `counts.jsonl`; deleting it makes pruned boots read as zero.
+- No locked ledger item is touched and no owner question comes from this slice.

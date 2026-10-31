@@ -907,3 +907,17 @@ ledger wins over every row here.
   missing snapshot `fid` on resume, and review nits N1, N2, N3 and N5. The part 3 line about `final` rows
   copied only at the seal is closed.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-31, replan after PRD-02 core step 1 (merge 2fd96576)
+
+- **`SnapshotCursor.fid` is a joint change, still open.** PRD-02's merge left `SnapshotCursor` as `size`
+  and `mtime_ns` (its doc comment says so), because adding `fid` in `cursors.rs` breaks the literals in
+  `tests/native_resume.rs` and the `Tail::new` comparison, which are this PRD's paths. When PRD-02's
+  next slice adds `fid: Fid`, this lane compares it in `Tail::new` and fixes its literals in the same
+  merge window (PRD-02 note, same date). Each lane edits only its own paths. Until then a snapshot
+  replaced by a file of the same size and `mtime_ns` is skipped on resume, as the known-gap line says.
+- **`Recorder::counts()` is filled** (counts at the last LINK) and `Recorder::live()` is filled, so
+  `native_missing` can start from `rec.counts().model_requests()`. In a real run both stay `Default`
+  until PRD-02's `boot.rs` lands; a test that needs a non-zero `model_requests` builds it through the
+  recorder's own write path, not a literal.
+- No locked ledger item is touched and no owner question comes from this slice.

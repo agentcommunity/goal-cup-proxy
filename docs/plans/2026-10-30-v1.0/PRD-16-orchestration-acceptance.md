@@ -1993,3 +1993,35 @@ kept and now cites BUILD-PROMPT section 5, since B3 no longer carries it.
   `final` rows copied only at the seal. PRD-04 acceptance 1 (every subagent and database recorded) is
   proven in tests but not yet in any real run.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-31, replan after PRD-02 core step 1 (merge 2fd96576)
+
+- `gate fast: PASS in 125s` on 2fd96576 (integrator 00:07Z). Box runs before the merge, last at
+  c1e65da6: fmt, `clippy -D warnings`, `nextest` 251 of 251 for the workspace, goalcup 201 of 201 and
+  five reruns of the guard, gap, counts and seal tests; the breaker's stress at 40 and 200 streams,
+  1.5 MB bodies, a held writer, 200 WebSockets and a seal under load found no lost byte without a GAP,
+  no wait and no latch. The last round left only nits: B-3, B-4, B-5 and BRK8-N1 were declined and the
+  declines accepted. Twelve paths changed under `crates/goalcup/src/pipeline/` and `tests/pipeline_*`, all
+  PRD-02 owned, no `Cargo.toml`. All 27 non-merge commits carry both trailer lines. Linux only; no
+  macOS run of the clock or open-file code. `gate full` was not run.
+- **Size report, PRD-02** (`wc -l` at 2fd96576, row "Pipeline and watchdog (PRD-02)", 1,350 src and
+  1,500 tests): src 3,485 (`pipeline/` 3,283 and `watchdog/mod.rs` 202), 258% of the row; tests 662
+  (`pipeline_counts.rs` 598, `pipeline_secure.rs` 64), 44% of the row. The files still to build project
+  to about 5,700 src. PRD-02's note (decision line, points 1, 3 and 6) sets the ceilings to **5,800
+  src** and 1,500 tests. That is 4,450 src over the row. Added to PRD-04 (720 and 780 over), PRD-11
+  (710 and 220 over), PRD-08 (1,640 and 1,145 over) and the pad, the ceilings of those four rows
+  alone are about 7,500 src over their rows, against the Rust target of about 18,100 src, so the
+  end-of-build report must show the measured total against the sum of the ceilings. Reviewer B holds each remaining PRD-02 slice to the 5,800. A total past the targets after
+  the cuts is the owner's question then, not before.
+- **Acceptance, X3 and the breaker.** `held_peak` can pass the soft guard by the control items admitted
+  (OPEN, END, GAP, EVENT are never refused, PRD-02 section 3): X3 reads the `memory_guard` gap count, and
+  the peak goes in the report. The breaker's check "`held_peak` under guard plus 1 MiB" reads "plus
+  48 KiB per OPEN, END and GAP in the record" (PRD-02 note). `pipeline_stall.rs` was not part of this step and is not yet
+  built.
+- **Build order, PRD-02:** the rest is `writer.rs`, `mask_worker.rs`, then `boot.rs` with `native::start`
+  and the `SnapshotCursor.fid` change with PRD-04, `seal.rs` with `native::finish(harness_exited, guard)`,
+  `dead.rs`, then the watchdog. No pad row is evidence for a recorder that writes until the writer and
+  boot land; PRD-12's `micro` rung waits on them.
+- **Acceptance lists as known,** if still open at the end: `SnapshotCursor.fid` (PRD-02 note), the
+  control-item weight nit (BRK9-N1) and the `open_gaps` comment (B-6) if the next touch did not fix them.
+- No locked ledger item is touched and no owner question comes from this slice.
