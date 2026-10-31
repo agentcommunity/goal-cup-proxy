@@ -120,7 +120,7 @@ def run_control(part, fetched, mods, tool):
                   "seal": {"reason": "harness_exit"}}
         json.dump(status, open(os.path.join(run, "status.json"), "w"))
         json.dump({"connector": "selftest", "case": "direct", "mode": "micro", "server": "staging" if fetched else "off",
-                   "keep": True, "run": "selftest", "expect_gaps": mods.get("expect_gaps", []), "entry": ENTRY, "commits_since_start": 1, "known_box": True, "variant": [],
+                   "keep": True, "run": "selftest", "expect_gaps": mods.get("expect_gaps", []), "entry": ENTRY, "commits_since_start": 1, "known_box": True,
                    "end_screen_requests": n}, open(os.path.join(run, "meta.json"), "w"))
         if mods.get("after"):
             mods["after"](run)

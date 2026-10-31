@@ -94,7 +94,8 @@ def watchers(meta):
 
 def expected_gaps(r):
     """The GAP kinds a row may name without it being a loss: the seal's after_stop (PRD-08 R2), a refused call for a
-    script that expects one (PRD-03 acceptance 7), pinned for a dodger (section 2), FAULT_GAPS for a fault row."""
+    script that expects one (PRD-03 acceptance 7), pinned for a dodger (section 2), FAULT_GAPS for a fault row. The meta key
+    expect_gaps is selftest-only."""
     return ({"after_stop"} | ({LOSS_GAP} if any(s in EXPECTS_LOSS for _, s in watchers(r.meta)) else set())
             | ({"pinned"} if r.meta.get("case") == "dodger" else set()) | set(r.meta.get("expect_gaps") or ()) | {g for k in fault_kinds(r.meta) for g in FAULT_GAPS.get(k, ())})
 
@@ -312,7 +313,7 @@ def local(r, few):
     # after_stop GAP (PRD-08 R2: a harness still sending after the seal at `minutes`) and, for a row whose script
     # expects a refused call, tls_refused GAPs (PRD-03 acceptance 7).
     code, named = dig(r.local, "s6_exit"), {k.split(":")[0] for k, n in r.gaps()[1].items() if n}
-    allowed = expected_gaps(r)
+    allowed = expected_gaps(r)  # meta key expect_gaps is selftest-only (see expected_gaps)
     hist = dig(r.entry, "s6_history") or {}  # a gap over a named history orphan: C1's section 8 rule, not a fault row's
     unexpected = sum(n for k, n in r.gaps()[1].items() if n and k.split(":")[0] not in allowed)
     orphans = hist.get("missing_call") or 0
@@ -321,7 +322,7 @@ def local(r, few):
     # never explains off time.
     off = any(dig(e, "s6_off") for e in r.entries)
     covered = r.check("history_complete") == "named" and 0 < unexpected <= orphans
-    explained = code == 1 and named and (covered and not off or named <= allowed and (not off or "recorder_down" in allowed))
+    explained = code == 1 and named and (not off or "recorder_down" in allowed) and (covered or named <= allowed)
     r.flag(r.meta.get("case") in ("direct", "gateway") and set(fault_kinds(r.meta)) <= set(CLEAN) and not r.failed and code != 0 and not explained,
            "C1", "FAIL", "verifier exit %s, the %s case expects 0 or only the GAPs %s" % (
                code, r.meta.get("case"), ", ".join(sorted(allowed))))
@@ -679,6 +680,7 @@ KIND_CHECKS = {"kill-watchdog": watchdog_row, "kill-both": both_row, "freeze": f
 def facts(r):
     u, e, m = r.usage or {}, r.entry, r.meta
     hist, size = dig(e, "s6_history") or {}, dig(e, "s6_bytes") or {}
+    hstate = r.check("history_complete")
     got = read(r)
     threads = [t for t in dig(u, "s7_threads") or [] if isinstance(t, dict)]
     rss = [p.get("rss_kb") for x in load(r.folder, "watch/procs.jsonl", 1) for p in x.get("procs") or []
@@ -686,10 +688,10 @@ def facts(r):
     alarm = [x.get("at") for x in load(r.folder, "watch/live.jsonl", 1) if x.get("result") == "fail" or x.get("fail")]
     return {"wire_requests": dig(u, "s7_wire"), "harness_calls": dig(u, "s7_native") if got else None,
             "harness_log": dig(e, "s6_log") if got else None, "local_log": "read" if got else "none",
-            "history": {"state": r.check("history_complete"), "answers": hist.get("checked"),
+            "history": {"state": hstate, "answers": hist.get("checked"),
                         "orphans": hist.get("missing_call"),
-                        "orphans_in_gaps": hist.get("missing_call") if r.check("history_complete") == "named" else
-                        None if r.check("history_complete") in (None, "fail") else 0},
+                        "orphans_in_gaps": hist.get("missing_call") if hstate == "named" else
+                        None if hstate in (None, "fail") else 0},
             "threads": len(threads) if r.usage else dig(e, "s6_threads"), "native_files": dig(e, "s6_native"),
             "subagents": sum(1 for t in threads if dig(t, "t_parent")), "gaps": r.gaps()[1], "off_ms": dig(e, "s6_off"),
             "provider_errors": dict(kn for en in r.entries for kn in items(dig(en, "s6_errors"))),
