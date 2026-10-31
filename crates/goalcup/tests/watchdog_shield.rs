@@ -54,8 +54,10 @@ fn late_key(signal: libc::c_int, spare: bool) -> i32 {
         return 2;
     };
     if spare {
-        std::thread::spawn(|| loop {
-            std::thread::park();
+        std::thread::spawn(|| {
+            loop {
+                std::thread::park();
+            }
         });
     }
     mask(libc::SIG_BLOCK, signal);
