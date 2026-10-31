@@ -30,7 +30,7 @@ use crate::watchdog::SealReason;
 use beat::{Beat, FinalFacts, health, recording};
 use chunk::{Bound, last_on_disk};
 use client::{ServerClient, Token};
-use goalcup_format::IndexLine;
+use goalcup_format::{IndexKind, IndexLine};
 use policy::{Backoff, Class, Policy};
 use send::{Sender, Step, lock};
 use serde::{Deserialize, Serialize};
@@ -240,7 +240,8 @@ fn next(rx: &Receiver<()>) -> bool {
 /// anywhere in it never ends the process or the thread and is never raised again: a backoff fails,
 /// one `goalcup.log` line says class `internal`, and for the upload thread (`round`) `upload.json`
 /// says `waiting` with that class. Once the backoff is due `body` starts again and builds its
-/// sender or beat anew, so no half-changed state is kept.
+/// sender or beat anew, so no half-changed state is kept. A body that ran a minute or more before
+/// it panicked starts the backoff over, so a rare panic never raises the wait for the whole run.
 pub fn guard(
     round: bool,
     entry_dir: &Path,
@@ -250,7 +251,14 @@ pub fn guard(
     mut body: impl FnMut(),
 ) {
     let mut backoff = Backoff::new(p);
-    while catch_unwind(AssertUnwindSafe(&mut body)).is_err() {
+    loop {
+        let began = Mono::now();
+        if catch_unwind(AssertUnwindSafe(&mut body)).is_ok() {
+            return;
+        }
+        if policy::after(began, 60 * TICK) <= Mono::now() {
+            backoff.progress();
+        }
         let wait = backoff.fail(Mono::now(), None);
         if round {
             let mut j = lock(j);
@@ -291,6 +299,11 @@ fn upload_thread(sh: &Shared, rx: &Receiver<()>) {
 /// again whenever its backoff is due while it is not committed or once the last chunk is stored,
 /// until sealed.
 fn beat_thread(sh: &Shared, rx: &Receiver<()>) {
+    // A beat body only starts after `finish` when the last one panicked; one that panics each time
+    // must not hold the wrap-up chunks back, and the sender waits out `503 awaiting_final` anyway.
+    if lock(&sh.wrap).is_some() {
+        sh.tried.store(true, SeqCst);
+    }
     let mut b = sh.build(Beat::new);
     let (durable, rec_dir) = (sh.rec.as_ref().map(Recorder::durable), sh.dir.join("rec"));
     let mut link = None::<IndexLine>;
@@ -339,8 +352,11 @@ fn beat_thread(sh: &Shared, rx: &Receiver<()>) {
             }
             (Some((_, seal)), ..) => {
                 // After `finish` the writer has sealed and synced, so the last line on disk is the
-                // seal LINK in both modes; read once.
-                link = link.or_else(|| last_on_disk(&rec_dir).ok().flatten());
+                // seal LINK in both modes (the last E or R line, never an L point); read once.
+                link = link.or_else(|| {
+                    let l = last_on_disk(&rec_dir).ok().flatten();
+                    l.filter(|l| l.kind != IndexKind::L)
+                });
                 if let Some(point) = &link {
                     let stored = raw.is_some_and(|raw| raw >= point.raw_end);
                     // A final not committed goes again on its backoff: past the run end the server
@@ -376,6 +392,8 @@ impl UploadHandle {
     /// sealed (section 6), until `upload.json` says `done`, `wrap_up` is over or no upload thread
     /// runs. Both threads then stop at their next tick, waited for a few seconds at most (a thread
     /// inside a call ends alone), and `upload.json` is written a last time with what they did.
+    /// If only the beat thread started, no chunk can go, so this does not wait and the final
+    /// heartbeat may not go out; the bytes stay on disk for a later upload.
     pub fn finish(self, wrap_up: WrapUp, seal: SealFacts) {
         let Some((sh, threads)) = self.run else {
             return;
