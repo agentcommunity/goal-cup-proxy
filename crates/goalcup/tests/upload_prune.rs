@@ -48,9 +48,16 @@ fn entry(entry: &Path, sealed: bool) -> Vec<(PathBuf, IndexLine)> {
             })
             .collect();
         let json = format!(r#"{{"ev":"x","n":"{}"}}"#, hex(&noise)).into_bytes();
-        w.write(&Record::Event { t: at(n).mono_ns, json }).unwrap();
+        w.write(&Record::Event {
+            t: at(n).mono_ns,
+            json,
+        })
+        .unwrap();
         w.link(at(n)).unwrap();
-        w.rotate_if_due(at(n)).unwrap();
+        // Not after the last LINK, so the last part holds index lines.
+        if n < 12 {
+            w.rotate_if_due(at(n)).unwrap();
+        }
     }
     if sealed {
         w.seal(at(13)).unwrap();
@@ -77,8 +84,17 @@ fn on_disk(entry: &Path) -> Vec<PathBuf> {
 }
 
 fn json(confirmed: u64, keep: bool) -> Mutex<UploadJson> {
-    let c = Confirmed { raw: confirmed, seq: 0, hash: String::new(), at: String::new() };
-    Mutex::new(UploadJson { keep, confirmed: Some(c), ..UploadJson::default() })
+    let c = Confirmed {
+        raw: confirmed,
+        seq: 0,
+        hash: String::new(),
+        at: String::new(),
+    };
+    Mutex::new(UploadJson {
+        keep,
+        confirmed: Some(c),
+        ..UploadJson::default()
+    })
 }
 
 #[test]
@@ -111,7 +127,11 @@ fn closed_parts_go_during_the_run_once_confirmed_and_the_open_part_stays() {
         std::thread::sleep(Duration::from_millis(50));
     }
     assert_eq!(fake.stream(ENTRY), all, "every byte reached the server");
-    assert_eq!(on_disk(&dir), vec![open.0.clone()], "only the open part stays");
+    assert_eq!(
+        on_disk(&dir),
+        vec![open.0.clone()],
+        "only the open part stays"
+    );
     assert!(idx(&open.0).exists());
     let j = state::read(&dir).unwrap();
     assert_eq!(j.confirmed.map(|c| c.raw), Some(open.1.raw_end));
@@ -127,13 +147,16 @@ fn only_confirmed_closed_parts_go_and_always_a_prefix() {
     let run = tempfile::tempdir().unwrap();
     let dir = run.path().join(ENTRY);
     let parts = entry(&dir, true);
-    let sizes: Vec<u64> = parts.iter().map(|(p, _)| fs::metadata(p).unwrap().len()).collect();
+    let sizes: Vec<u64> = parts
+        .iter()
+        .map(|(p, _)| fs::metadata(p).unwrap().len())
+        .collect();
     let file = Mutex::new(Writer::new(dir.clone()));
     // Nothing confirmed, or `keep`: nothing goes.
     prune(&dir, &Mutex::new(UploadJson::default()), &file);
     prune(&dir, &json(u64::MAX, true), &file);
     assert_eq!(on_disk(&dir).len(), parts.len());
-    let j = json(0, false);
+    let (j, mut done) = (json(0, false), 0);
     let mut stops: Vec<u64> = parts.iter().map(|(_, l)| l.raw_end).collect();
     stops.extend(stops.clone().iter().map(|e| e - 1));
     stops.sort();
@@ -146,10 +169,14 @@ fn only_confirmed_closed_parts_go_and_always_a_prefix() {
         for (p, _) in &parts[gone..] {
             assert!(idx(p).exists());
         }
-        let file = state::read(&dir).unwrap();
-        assert_eq!(file.confirmed.map(|c| c.raw), Some(c));
-        assert_eq!(file.pruned.parts, gone as u64);
-        assert_eq!(file.pruned.bytes, sizes[..gone].iter().sum::<u64>());
+        // A call that deletes writes `upload.json` first; one that deletes nothing writes none.
+        if gone > done {
+            let file = state::read(&dir).unwrap();
+            assert_eq!(file.confirmed.map(|c| c.raw), Some(c));
+            assert_eq!(file.pruned.parts, gone as u64);
+            assert_eq!(file.pruned.bytes, sizes[..gone].iter().sum::<u64>());
+        }
+        done = gone;
     }
     assert!(on_disk(&dir).is_empty());
     assert!(KEPT.iter().all(|f| dir.join(f).exists()));
@@ -165,8 +192,16 @@ fn a_part_without_its_index_still_goes_and_the_entry_is_not_stuck() {
     let parts = entry(&dir, true);
     let (part, line) = parts[1].clone();
     fs::remove_file(idx(&part)).unwrap();
-    let c = Confirmed { raw: line.raw_end, seq: line.seq, hash: hex(&line.hash), at: String::new() };
-    let j = Mutex::new(UploadJson { confirmed: Some(c.clone()), ..UploadJson::default() });
+    let c = Confirmed {
+        raw: line.raw_end,
+        seq: line.seq,
+        hash: hex(&line.hash),
+        at: String::new(),
+    };
+    let j = Mutex::new(UploadJson {
+        confirmed: Some(c.clone()),
+        ..UploadJson::default()
+    });
     prune(&dir, &j, &Mutex::new(Writer::new(dir.clone())));
     assert!(!part.exists() && !parts[0].0.exists());
     assert_eq!(on_disk(&dir).len(), parts.len() - 2);

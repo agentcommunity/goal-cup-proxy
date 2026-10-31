@@ -46,9 +46,16 @@ fn sealed(run: &Path, fake: &FakeWorker, deadline: &str) -> (PathBuf, Vec<u8>) {
             })
             .collect();
         let json = format!(r#"{{"ev":"x","n":"{}"}}"#, hex(&noise)).into_bytes();
-        w.write(&Record::Event { t: at(n).mono_ns, json }).unwrap();
+        w.write(&Record::Event {
+            t: at(n).mono_ns,
+            json,
+        })
+        .unwrap();
         w.link(at(n)).unwrap();
-        w.rotate_if_due(at(n)).unwrap();
+        // Not after the last LINK, so the last part holds index lines.
+        if n < 6 {
+            w.rotate_if_due(at(n)).unwrap();
+        }
     }
     w.seal(at(7)).unwrap();
     // The boot's totals as `counts.jsonl` keeps them; the part files hold no COUNT event.
@@ -63,14 +70,22 @@ fn sealed(run: &Path, fake: &FakeWorker, deadline: &str) -> (PathBuf, Vec<u8>) {
         seal: Some(seal),
         ..Status::default()
     };
-    fs::write(cli::status_json(&entry), serde_json::to_vec(&status).unwrap()).unwrap();
+    fs::write(
+        cli::status_json(&entry),
+        serde_json::to_vec(&status).unwrap(),
+    )
+    .unwrap();
     File::create(rec.join("lock")).unwrap();
     let server = json!({"v": 1, "server": fake.url(), "run": RUN_ID, "mode": "test",
         "deadline": deadline, "repo": null, "hosts_file": null, "entries": [],
         "connector": {"id": "c", "name": "c", "source": "builtin"}});
     fs::write(cli::server_json(run), server.to_string()).unwrap();
     fs::write(cli::credential(run), CREDENTIAL).unwrap();
-    let all = part_files(&rec).unwrap().iter().flat_map(|p| fs::read(p).unwrap()).collect();
+    let all = part_files(&rec)
+        .unwrap()
+        .iter()
+        .flat_map(|p| fs::read(p).unwrap())
+        .collect();
     (entry, all)
 }
 
@@ -92,7 +107,11 @@ fn a_sealed_entry_goes_whole_is_pruned_and_is_not_sent_again() {
     let (entry, all) = sealed(dir.path(), &fake, DEADLINE);
     assert!(part_files(&entry.join("rec")).unwrap().len() >= 3);
     assert_eq!(upload(dir.path(), &entry, false), Outcome::Done);
-    assert_eq!(fake.stream(ENTRY), all, "the server holds cat rec-*.gcr.zst");
+    assert_eq!(
+        fake.stream(ENTRY),
+        all,
+        "the server holds cat rec-*.gcr.zst"
+    );
     assert_eq!(state::read(&entry).unwrap().final_, Final::Sealed);
     assert!(part_files(&entry.join("rec")).unwrap().is_empty(), "pruned");
     assert!(entry.join("counts.jsonl").exists());
@@ -102,7 +121,10 @@ fn a_sealed_entry_goes_whole_is_pruned_and_is_not_sent_again() {
     assert_eq!(last["counts"]["http_post"], 42, "counts from counts.jsonl");
     assert_eq!(last["model_requests"], 42);
     // `rec/lock` is free once it returns.
-    File::open(entry.join("rec/lock")).unwrap().try_lock().unwrap();
+    File::open(entry.join("rec/lock"))
+        .unwrap()
+        .try_lock()
+        .unwrap();
 
     let (chunks, heartbeats) = (fake.chunks().len(), beats.len());
     assert_eq!(upload(dir.path(), &entry, false), Outcome::AlreadyThere);
@@ -128,10 +150,19 @@ fn it_gives_up_on_401_404_410_and_says_a_closed_run_after_upload_by() {
         let dir = tempfile::tempdir().unwrap();
         let (entry, _) = sealed(dir.path(), &fake, deadline);
         let answer = Some((status, json!({"error": "refused"})));
-        fake.inject(Route::Position, Inject { answer, ..Inject::default() });
+        fake.inject(
+            Route::Position,
+            Inject {
+                answer,
+                ..Inject::default()
+            },
+        );
         assert_eq!(upload(dir.path(), &entry, false), want);
         assert!(fake.chunks().is_empty());
-        assert!(part_files(&entry.join("rec")).unwrap().len() > 1, "nothing pruned");
+        assert!(
+            part_files(&entry.join("rec")).unwrap().len() > 1,
+            "nothing pruned"
+        );
     }
 }
 
@@ -143,7 +174,13 @@ fn it_gives_up_when_the_copies_disagree() {
     let far = json!({"offset": 1u64 << 40, "next_seq": 9, "head": "ab".repeat(32)});
     for _ in 0..2 {
         let answer = Some((200, far.clone()));
-        fake.inject(Route::Position, Inject { answer, ..Inject::default() });
+        fake.inject(
+            Route::Position,
+            Inject {
+                answer,
+                ..Inject::default()
+            },
+        );
     }
     assert_eq!(upload(dir.path(), &entry, false), Outcome::Stuck);
     assert!(fake.chunks().is_empty());

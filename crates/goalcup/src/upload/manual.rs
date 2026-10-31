@@ -165,7 +165,10 @@ fn send(
             return Outcome::Stuck;
         }
         let refused = snap.last_error.filter(|e| e.class == Class::Refused);
-        if let Some(status) = refused.and_then(|e| e.status).filter(|s| ends_manual_upload(*s)) {
+        if let Some(status) = refused
+            .and_then(|e| e.status)
+            .filter(|s| ends_manual_upload(*s))
+        {
             return give_up(status, j);
         }
         std::thread::sleep(TICK);
@@ -175,7 +178,9 @@ fn send(
 /// `Refused`, or `Closed` for a 401 once `upload_by` has passed (`upload.json` then says `closed`).
 fn give_up(status: u16, j: &Mutex<UploadJson>) -> Outcome {
     let mut j = lock(j);
-    let now = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs());
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs());
     let by = j.upload_by.clone();
     match by {
         Some(by) if status == 401 && cli::unix_of(&by).is_some_and(|t| t <= now) => {

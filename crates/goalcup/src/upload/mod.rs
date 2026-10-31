@@ -231,7 +231,11 @@ fn launch(
 ) -> Option<(mpsc::Sender<()>, JoinHandle<()>)> {
     let (tx, rx) = mpsc::channel();
     let s = sh.clone();
-    let name = if round { "goalcup-upload" } else { "goalcup-beat" };
+    let name = if round {
+        "goalcup-upload"
+    } else {
+        "goalcup-beat"
+    };
     let started = thread::Builder::new().name(name.into()).spawn(move || {
         pipeline::low_priority();
         let mut again = false;

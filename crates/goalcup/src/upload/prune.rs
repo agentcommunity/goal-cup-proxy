@@ -29,7 +29,10 @@ pub fn prune(entry_dir: &Path, j: &Mutex<UploadJson>, file: &Mutex<Writer>) {
     };
     let first = |p: &PathBuf| {
         let name = p.file_name()?.to_str()?;
-        name.strip_prefix("rec-")?.strip_suffix(".gcr.zst")?.parse::<u64>().ok()
+        name.strip_prefix("rec-")?
+            .strip_suffix(".gcr.zst")?
+            .parse::<u64>()
+            .ok()
     };
     let parts: Vec<(u64, PathBuf)> = part_files(&rec)
         .unwrap_or_default()

@@ -231,7 +231,10 @@ pub struct UploadLock {
 pub fn lock_upload(entry_dir: &Path) -> Option<UploadLock> {
     let mut o = std::fs::OpenOptions::new();
     o.read(true).write(true).create(true).mode(0o600);
-    let Ok(f) = o.custom_flags(libc::O_NOFOLLOW).open(entry_dir.join("upload.lock")) else {
+    let Ok(f) = o
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(entry_dir.join("upload.lock"))
+    else {
         return Some(UploadLock { _file: None });
     };
     match f.try_lock() {
