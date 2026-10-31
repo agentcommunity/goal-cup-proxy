@@ -13,8 +13,8 @@ use bytes::Bytes;
 use serde_json::{Value, json};
 use std::io;
 use std::panic::{AssertUnwindSafe, catch_unwind};
-use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
 use tokio::io::{AsyncRead, AsyncReadExt as _, AsyncWrite, AsyncWriteExt as _};
 
 /// Parsing stopped for the connection (5a): the `conn` GAP's reason and tail, and the relayed
