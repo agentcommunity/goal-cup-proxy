@@ -1,8 +1,21 @@
 //! PRD-03 acceptance cases for the run CA and the TLS configs (section 4). PRD-17's
 //! `lessons_tls` holds the AKI, constraint, file-mode and bundle cases; they are not repeated here.
+//! The last cases drive the real `proxy::serve` against the fake upstream.
 
+mod common;
+
+use common::pki::{H2, HTTP11};
+use common::recorder::{ends, events, gaps, opens};
+use common::upstream::{Script, Upstream};
+use common::{HANG, within_async};
 use goalcup::connector::{Decision, HostList, Kind, Source};
-use goalcup::pipeline::{Call, Calls, Mono, Recorder};
+use goalcup::pipeline::{Call, Calls, GapReason, Mono, Recorder, StreamKind};
+use goalcup::proxy::{ProxyCtx, ProxyHandle, serve};
+use serde_json::{Value, json};
+use std::net::SocketAddr;
+use std::time::Duration;
+use tokio::io::{AsyncRead, AsyncWrite};
+use tokio::net::TcpStream;
 use goalcup::proxy::ca::{RUN_CA_FILE, RunCa, certificates};
 use goalcup::proxy::connect::fingerprint_hex16;
 use goalcup::proxy::hosts::{Hosts, REFUSAL_EXPIRY};
@@ -335,4 +348,181 @@ async fn an_upstream_tls_cut_reaches_the_harness_as_a_cut() {
     assert_eq!(err.kind(), eof, "no clean close");
     server.await.unwrap();
     relay.await.unwrap();
+}
+
+/// The real `serve` with `api.openai.com` sent to `up`, trusting its test CA when `trust`.
+fn proxy(up: &Upstream, trust: bool) -> (ProxyHandle, SocketAddr, Calls, RunCa, tempfile::TempDir) {
+    let dir = tempfile::tempdir().unwrap();
+    // SAFETY: nextest runs each test in its own process; `serve` reads these once, below.
+    unsafe {
+        std::env::set_var("GOALCUP_TEST_UPSTREAM", format!("api.openai.com={}", up.addr()));
+        if trust {
+            std::env::set_var("GOALCUP_TEST_EXTRA_ROOTS", up.pki().roots_file(dir.path()));
+        }
+    }
+    let (listener, addr) = common::ports::held();
+    let (recorder, calls) = Recorder::for_tests(1 << 30);
+    let ca = RunCa::mint(&["openai.com".to_string()]).unwrap();
+    let hosts = HostList::from_file(HOST_FILE.as_bytes(), "hosts.toml").unwrap();
+    let ctx = ProxyCtx {
+        recorder,
+        hosts,
+        ca: ca.clone(),
+    };
+    (serve(listener, ctx), addr, calls, ca, dir)
+}
+
+/// A CONNECT to `api.openai.com:443` answered `200`.
+async fn through(proxy: SocketAddr) -> TcpStream {
+    let mut s = TcpStream::connect(proxy).await.unwrap();
+    s.write_all(b"CONNECT api.openai.com:443 HTTP/1.1\r\nHost: api.openai.com\r\n\r\n")
+        .await
+        .unwrap();
+    let mut head = [0u8; 39];
+    s.read_exact(&mut head).await.unwrap();
+    assert_eq!(&head, b"HTTP/1.1 200 Connection established\r\n\r\n");
+    s
+}
+
+/// One request; reads until the fake upstream's `hi`.
+async fn get<S: AsyncRead + AsyncWrite + Unpin>(t: &mut S) {
+    t.write_all(b"GET /v1/models HTTP/1.1\r\nHost: api.openai.com\r\n\r\n")
+        .await
+        .unwrap();
+    let mut got = Vec::new();
+    while !got.ends_with(b"hi") {
+        let mut b = [0u8; 256];
+        let n = t.read(&mut b).await.unwrap();
+        assert!(n > 0, "the response ended early");
+        got.extend_from_slice(&b[..n]);
+    }
+}
+
+/// Waits for `n` conn ENDs; gives (sid, OPEN meta) per ended conn in open order.
+async fn conns(calls: &Calls, n: usize) -> Vec<(u64, Value)> {
+    within_async(HANG, async {
+        loop {
+            let ended: Vec<_> = ends(calls).into_iter().map(|e| e.0).collect();
+            let got: Vec<_> = (opens(calls).into_iter())
+                .filter(|o| o.1 == StreamKind::Conn && ended.contains(&o.0))
+                .map(|o| (o.0, o.2))
+                .collect();
+            if got.len() >= n {
+                return got;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+}
+
+fn gaps_of(calls: &Calls, sid: u64) -> Vec<(GapReason, Option<Value>)> {
+    (gaps(calls).into_iter())
+        .filter_map(|g| match g {
+            Call::Gap(s, reason, .., tail) if s == sid => Some((reason, tail)),
+            _ => None,
+        })
+        .collect()
+}
+
+/// GAP 13: an upstream certificate our roots refuse is a tunnel, and the harness meets the
+/// upstream's own certificate (trust is never lowered).
+#[tokio::test]
+async fn an_untrusted_upstream_is_a_tunnel_to_its_own_certificate() {
+    let up = Upstream::start(Script::ok(b"hi").with_tls(&["api.openai.com"], &[HTTP11]));
+    let (_h, addr, calls, _, _dir) = proxy(&up, false);
+    let own = TlsConnector::from(up.pki().client_config(&[HTTP11]));
+    let mut t = own.connect(name("api.openai.com"), through(addr).await).await.unwrap();
+    get(&mut t).await;
+    drop(t);
+    let (sid, meta) = conns(&calls, 1).await.remove(0);
+    assert_eq!((&meta["mode"], &meta["reason"]), (&json!("tunnel"), &json!("upstream_untrusted")));
+    assert_eq!(gaps_of(&calls, sid), [(GapReason::UpstreamUntrusted, None)]);
+}
+
+/// GAP 14: an upstream that rejects the offered ALPN is an `alpn_other` tunnel.
+#[tokio::test]
+async fn an_upstream_rejecting_the_alpn_is_an_alpn_other_tunnel() {
+    let up = Upstream::start(Script::ok(b"hi").with_tls(&["api.openai.com"], &[H2]));
+    let (_h, addr, calls, _, _dir) = proxy(&up, true);
+    let own = TlsConnector::from(up.pki().client_config(&[HTTP11]));
+    let _ = own.connect(name("api.openai.com"), through(addr).await).await;
+    let (sid, meta) = conns(&calls, 1).await.remove(0);
+    assert_eq!(meta["reason"], "alpn_other");
+    assert_eq!(gaps_of(&calls, sid), [(GapReason::ProtocolOther, None)]);
+}
+
+/// Refusal learning through `serve`: an `unknown_ca` alert writes one note and a `tls_refused`
+/// GAP naming it; the same fingerprint then tunnels to the real upstream; another fingerprint
+/// is still decrypted.
+#[tokio::test]
+async fn an_alert_teaches_its_fingerprint_and_no_other() {
+    let up = Upstream::start(Script::ok(b"hi").with_tls(&["api.openai.com"], &[HTTP11]));
+    let (_h, addr, calls, ca, _dir) = proxy(&up, true);
+    let refusing = TlsConnector::from(up.pki().client_config(&[HTTP11]));
+    let first = refusing.connect(name("api.openai.com"), through(addr).await).await;
+    assert!(first.is_err(), "our leaf is refused");
+    let (sid, meta) = conns(&calls, 1).await.remove(0);
+    assert_eq!((&meta["mode"], &meta["reason"]), (&json!("tunnel"), &json!("tls_refused")));
+    let alert = Some(json!({"alert": "unknown_ca"}));
+    assert_eq!(gaps_of(&calls, sid), [(GapReason::TlsRefused, alert)]);
+    assert_eq!(ca_refused(&calls).len(), 1);
+
+    let mut t = refusing.connect(name("api.openai.com"), through(addr).await).await.unwrap();
+    get(&mut t).await;
+    drop(t);
+    assert_eq!(conns(&calls, 2).await[1].1["reason"], "tls_refused");
+
+    let trusting = TlsConnector::from(client_trusting(vec![ca.cert_der().clone()], &[]));
+    let mut t = trusting.connect(name("api.openai.com"), through(addr).await).await.unwrap();
+    get(&mut t).await;
+    drop(t);
+    assert_eq!(conns(&calls, 3).await[2].1["mode"], "decrypt");
+    assert_eq!(ca_refused(&calls).len(), 1);
+}
+
+/// A plain close mid-handshake: GAP `tls_refused` with `{"alert": false}`, nothing learned.
+#[tokio::test]
+async fn a_close_mid_handshake_teaches_nothing() {
+    let up = Upstream::start(Script::ok(b"hi").with_tls(&["api.openai.com"], &[HTTP11]));
+    let (_h, addr, calls, ca, _dir) = proxy(&up, true);
+    let mut hello = Vec::new();
+    let config = client_trusting(vec![ca.cert_der().clone()], &[b"http/1.1"]);
+    let mut tls = ClientConnection::new(config, name("api.openai.com")).unwrap();
+    tls.write_tls(&mut hello).unwrap();
+    let mut s = through(addr).await;
+    s.write_all(&hello).await.unwrap();
+    drop(s);
+    let (sid, _) = conns(&calls, 1).await.remove(0);
+    let alert = Some(json!({"alert": false}));
+    assert_eq!(gaps_of(&calls, sid), [(GapReason::TlsRefused, alert)]);
+    assert!(ca_refused(&calls).is_empty());
+}
+
+/// An `h2`-only client until the HTTP/2 parser lands: decrypted with `alpn` `h2`, every byte
+/// relayed, and the loss named (5a `h2_unsupported`), never silent.
+#[tokio::test]
+async fn an_h2_only_client_is_relayed_and_its_loss_named() {
+    let up = Upstream::start(Script::ok(b"hi").with_tls(&["api.openai.com"], &[H2]));
+    let (_h, addr, calls, ca, _dir) = proxy(&up, true);
+    let trusting = TlsConnector::from(client_trusting(vec![ca.cert_der().clone()], &[b"h2"]));
+    let t = trusting.connect(name("api.openai.com"), through(addr).await).await.unwrap();
+    let (send, conn) = h2::client::handshake(t).await.unwrap();
+    let driver = tokio::spawn(conn);
+    let mut send = send.ready().await.unwrap();
+    let req = http::Request::get("https://api.openai.com/v1/models").body(()).unwrap();
+    let mut body = send.send_request(req, true).unwrap().0.await.unwrap().into_body();
+    let mut got = Vec::new();
+    while let Some(piece) = body.data().await {
+        let piece = piece.unwrap();
+        let _ = body.flow_control().release_capacity(piece.len());
+        got.extend_from_slice(&piece);
+    }
+    assert_eq!(got, b"hi");
+    driver.abort();
+    let (sid, meta) = conns(&calls, 1).await.remove(0);
+    assert_eq!((&meta["mode"], &meta["alpn"]), (&json!("decrypt"), &json!("h2")));
+    assert_eq!(gaps_of(&calls, sid), [(GapReason::H2Unsupported, None)]);
+    let stopped = json!({"ev": "note", "what": "parse_stopped", "conn": sid, "reason": "h2_unsupported"});
+    assert!(events(&calls).contains(&stopped));
 }
