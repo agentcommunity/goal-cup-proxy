@@ -85,8 +85,7 @@ pub struct SealFacts {
 /// The running uploader. Dropping it without `finish` stops both threads at their next tick.
 pub struct UploadHandle {
     word: watch::Receiver<Option<ServerWord>>,
-    /// Held while the handle lives, so the channel stays open also when no thread runs: then no
-    /// word ever comes, and `changed()` waits instead of failing at once.
+    /// Keeps the channel open while the handle lives, also when no thread runs.
     _open: Arc<watch::Sender<Option<ServerWord>>>,
     /// None when no thread runs (a local run, or nothing to send with).
     run: Option<Run>,
@@ -111,15 +110,13 @@ struct Shared {
     json: Mutex<UploadJson>,
     file: Mutex<state::Writer>,
     word: Arc<watch::Sender<Option<ServerWord>>>,
-    /// The first final heartbeat returned, answered or failed, or the beat thread is gone:
-    /// wrap-up chunks may go.
+    /// The first final heartbeat returned, or the beat thread is gone: wrap-up chunks may go.
     tried: AtomicBool,
 }
 
 impl Shared {
-    /// Writes `upload.json` at most once a second unless `force` (section 11). The copy is taken
-    /// under the file lock, so a later change is never overwritten by an earlier one, and the
-    /// shared state is never locked across the disk write.
+    /// Writes `upload.json` at most once a second unless `force` (section 11), from a copy taken
+    /// under the file lock; the shared state is not held across the disk write.
     fn put(&self, force: bool) {
         let mut file = lock(&self.file);
         let j = lock(&self.json).clone();
@@ -197,7 +194,8 @@ fn start(ctx: UploadCtx, word: Arc<watch::Sender<Option<ServerWord>>>) -> Option
         tried: AtomicBool::new(false),
     });
     let up = launch(&sh, "goalcup-upload", upload_thread);
-    let threads: Vec<_> = up.into_iter().chain(launch(&sh, "goalcup-beat", beat_thread)).collect();
+    let beat = launch(&sh, "goalcup-beat", beat_thread);
+    let threads: Vec<_> = up.into_iter().chain(beat).collect();
     sh.put(true);
     // With no thread, `finish` has nothing to wait for.
     (!threads.is_empty()).then_some((sh, threads))
@@ -297,7 +295,8 @@ fn beat_thread(sh: &Shared, rx: Receiver<Wrap>) {
         let now = Mono::now();
         let (waiting, raw, final_) = {
             let j = lock(&sh.json);
-            (j.waiting_bytes, j.confirmed.as_ref().map(|c| c.raw), j.final_)
+            let raw = j.confirmed.as_ref().map(|c| c.raw);
+            (j.waiting_bytes, raw, j.final_)
         };
         let mut backoff = b.backoff;
         let one = || match (&fin, &sh.rec, &durable) {
@@ -330,8 +329,7 @@ fn beat_thread(sh: &Shared, rx: Receiver<Wrap>) {
             }
             (Some((_, seal)), ..) => {
                 // The seal LINK, the last `E` or `R` line, read once. A live `L` point is not the
-                // seal yet: no final goes before the writer publishes it, since the server takes
-                // nothing past a committed final.
+                // seal yet: the server takes nothing past a committed final.
                 link = link.or_else(|| match &durable {
                     Some(d) => d.borrow().point.as_ref().map(|p| p.line),
                     None => last_on_disk(&rec_dir).ok().flatten(),

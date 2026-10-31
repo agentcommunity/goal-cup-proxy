@@ -23,8 +23,8 @@ use goalcup_format::read::part_files;
 use goalcup_format::{IndexKind, IndexLine, Record};
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
-use std::thread::JoinHandle;
 use std::sync::Mutex;
+use std::thread::JoinHandle;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::watch;
 
