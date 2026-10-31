@@ -271,7 +271,9 @@ impl Scan {
                 }
                 t.last[i] = base + m.end() as u64;
                 let before = &buf[s.saturating_sub(GUARD)..s];
-                let word = before.last().is_some_and(|&c| c == b'_' || c.is_ascii_alphanumeric());
+                let word = before
+                    .last()
+                    .is_some_and(|&c| c == b'_' || c.is_ascii_alphanumeric());
                 let glued = *guard && word && !ESCAPE.is_match(before);
                 let (list, name) = match (kind.is_empty(), glued) {
                     (true, _) => (0, r.forms[b]),

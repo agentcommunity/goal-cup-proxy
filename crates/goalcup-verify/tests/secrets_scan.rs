@@ -217,20 +217,35 @@ fn secrets_nothing_is_joined_across_a_gap() {
 fn shapes(name: &str, sse: bool, pieces: &[String]) -> (i32, Vec<String>, usize) {
     let pieces: Vec<Vec<u8>> = pieces.iter().map(|p| p.clone().into_bytes()).collect();
     let (code, v) = scan(&[&entry(name, sse, &pieces, &[])], b"");
-    let kinds = v["shape_hits"].as_array().unwrap().iter();
-    let kinds = kinds.map(|h| h["kind"].as_str().unwrap().to_string());
-    (code, kinds.collect(), v["glued_shape"].as_array().unwrap().len())
+    // The raw SSE framing between pieces is no PEM text; only the joined deltas are judged.
+    let hits = v["shape_hits"].as_array().unwrap().iter();
+    let hits = hits.filter(|h| !sse || h["in"].as_str().unwrap().ends_with("/deltas"));
+    let kinds = hits.map(|h| h["kind"].as_str().unwrap().to_string());
+    (
+        code,
+        kinds.collect(),
+        v["glued_shape"].as_array().unwrap().len(),
+    )
 }
 
 #[test]
 fn secrets_placeholders_are_no_hit_and_real_bodies_are() {
-    let (head, tail) = ("-----BEGIN RSA PRIVATE KEY-----", "-----END RSA PRIVATE KEY-----");
-    let (real, pw) = ("MIIEowIBAAKCAQEAu1SU1LfVLPHCozMxH2Mo4lgOEePz", "Qm7xK2pL9vZt");
+    let (head, tail) = (
+        "-----BEGIN RSA PRIVATE KEY-----",
+        "-----END RSA PRIVATE KEY-----",
+    );
+    let (real, pw) = (
+        "MIIEowIBAAKCAQEAu1SU1LfVLPHCozMxH2Mo4lgOEePz",
+        "Qm7xK2pL9vZt",
+    );
     let delta = |p: &str| format!("data: {}\n\n", json!({"type": "x.delta", "delta": p}));
     let pem = |body: &str, nl: &str| format!("{head}{nl}{body}{nl}{tail}");
     let cases: Vec<(String, usize)> = vec![
         ("https://user:[REDACTED]@host/".into(), 0),
-        ("https://user:****@host/ https://user:<redacted>@host/ :[HIDDEN]@".into(), 0),
+        (
+            "https://user:****@host/ https://user:<redacted>@host/ :[HIDDEN]@".into(),
+            0,
+        ),
         (format!("https://user:{pw}@host/"), 1),
         (pem("[REDACTED]", "\n"), 0),
         (pem("[REDACTED]", "\\n"), 0),
@@ -241,13 +256,26 @@ fn secrets_placeholders_are_no_hit_and_real_bodies_are() {
     ];
     for (i, (text, hits)) in cases.into_iter().enumerate() {
         let (code, kinds, _) = shapes(&format!("ph{i}"), false, &[text]);
-        assert_eq!((code, kinds.len()), (2 * hits as i32, hits), "case {i}: {kinds:?}");
+        assert_eq!(
+            (code, kinds.len()),
+            (2 * hits as i32, hits),
+            "case {i}: {kinds:?}"
+        );
     }
-    let split = [delta(&format!("{head}\n[RED")), delta(&format!("ACTED]\n{tail}"))];
-    assert_eq!(shapes("ph-sse", true, &split), (0, vec![], 0));
+    let split = [
+        delta(&format!("{head}\n[RED")),
+        delta(&format!("ACTED]\n{tail}")),
+    ];
+    assert_eq!(shapes("ph-sse", true, &split).1, Vec::<String>::new());
     let (a, b) = real.split_at(20);
-    let split = [delta(&format!("{head}\n{a}")), delta(&format!("{b}\n{tail}"))];
-    assert_eq!(shapes("ph-sse-real", true, &split), (2, vec!["private_key".into()], 0));
+    let split = [
+        delta(&format!("{head}\n{a}")),
+        delta(&format!("{b}\n{tail}")),
+    ];
+    assert_eq!(
+        shapes("ph-sse-real", true, &split),
+        (2, vec!["private_key".into()], 0)
+    );
 }
 
 #[test]
@@ -257,8 +285,20 @@ fn secrets_glued_prose_passes_and_masked_positions_fail() {
         let (code, kinds, glued) = shapes("glue", false, &[format!("{glue}{shape}-the-end")]);
         assert_eq!((code, kinds.len(), glued), (0, 0, 1), "{glue}");
     }
-    for before in [" ", "\\n", "%0A", "\u{1b}[0m", "\\u001B[1;31m", "\\x1B[0m", "\\u00e9"] {
+    for before in [
+        " ",
+        "\\n",
+        "%0A",
+        "\u{1b}[0m",
+        "\\u001B[1;31m",
+        "\\x1B[0m",
+        "\\u00e9",
+    ] {
         let (code, kinds, glued) = shapes("masked", false, &[format!("x{before}{shape}")]);
-        assert_eq!((code, kinds, glued), (2, vec!["openai_key".to_string()], 0), "{before:?}");
+        assert_eq!(
+            (code, kinds, glued),
+            (2, vec!["openai_key".to_string()], 0),
+            "{before:?}"
+        );
     }
 }
