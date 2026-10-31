@@ -243,6 +243,7 @@ fn placeholder(span: &[u8], kind: &str) -> bool {
         let tok = |t: &&[u8]| s.len() >= t.len() && s[..t.len()].eq_ignore_ascii_case(t);
         match [&b"[REDACTED]"[..], b"[HIDDEN]", b"<redacted>", b"\\n", b"*"]
             .iter()
+            .copied()
             .find(tok)
         {
             Some(t) => s = &s[t.len()..],
