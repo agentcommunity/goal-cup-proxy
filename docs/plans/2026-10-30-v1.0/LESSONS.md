@@ -186,21 +186,22 @@ lessons lane (PRD-17); read by the deletion gate (PRD-17 Acceptance, checks 1 to
 | L-SC6 | 2.16 | A: cli_finish::unsealed_status_never_reads_as_finished (PRD-10) | PRD-10 | green | f5a200ae |
 | L-SC7 | 2.16 | X: ledger L5, L6 (PRD-10 section 4) | PRD-10 | open | - |
 
-**Rows that still wait.** `proxy::serve` is on integration (`crates/goalcup/src/proxy/mod.rs`) and this
-slice's tests drive it through `tests/proxy_fixtures`. The rows below are `open` because nobody has written
-their serve cases yet, not because `serve` is missing: D1 to D4 (`lessons_decode.rs` drives `proxy::decode`
-alone and shows the decoded prefix and the `Step`; D6 has its serve case; D8 is the whole-path case), D7, the
-relay halves of H2, W2 and W7 (`lessons_ws.rs` runs at the parser layer and shows no relayed byte and no conn
-GAP), H9 to H11, W9 to W11, K15 (whole path, with `lessons_ws.rs`) and SC3. The C-rows, T3, the T4 key half and
-D6 have their tests (slice 4) and stay `open` until a box run on the integration head. L-VR2 waits for PRD-09's
-named `usage` case. Rows whose named file is not on integration (`pipeline_stall.rs`, `pipeline_seal.rs`,
-`watchdog_restart.rs`, `watchdog_end.rs`, `proxy_restart.rs`, `cli_continue.rs`) stay `open`. L-P3 stays
-`open`: its test is held back with `ignore` until the PRD-02 shield fix is on integration.
+**Rows that still wait.** The serve halves now have tests: H2, H9 to H11, W2, W7, W9 to W11, K15, D7 and SC3
+(`lessons_http1.rs`, `lessons_ws.rs`, `lessons_decode.rs`, `lessons_launch.rs`; the guard names are in the
+table). They stay `open` because the run that showed them passing (below) was on the merged task branches,
+not on the integration head; a row turns `green` only after a box run on the integration head. D1 to D4 still
+test `proxy::decode` alone (the decoded prefix and the `Step`); D6 has its serve case; D8 is the whole-path
+case. The C-rows, T3, the T4 key half and D6 have their tests (slice 4) and stay `open` for the same reason.
+L-VR2 waits for PRD-09's named `usage` case. Rows whose named file is not on integration
+(`pipeline_stall.rs`, `watchdog_restart.rs`, `cli_continue.rs`) stay `open`. L-P3 stays `open`: its test is held
+back with `ignore` until the PRD-02 shield fix is on integration.
 
-**Budget after slice 4.** `wc -l` of the eight `lessons_*.rs` files totals 3439 (`lessons_connect.rs` 487),
-up from 2,711, so the slice spent 728 against the ~290 that were left of the 3,000
-shared with PRD-14: nothing is left and the slice is over. The serve halves of H2, W2, W7 and H9, W10, K15,
-the SC3 watchdog loop and the L-P3 `ignore` removal need an owner question on the budget before they are written.
+**Budget after slice 5.** `wc -l` of the eight `lessons_*.rs` files totals 4,314 (connect 510, decode 538,
+hosts 181, http1 928, launch 507, pipeline 104, tls 412, ws 1,134), measured in a box on the merged task
+branches. That is 852 more than the 3,462 after slice 4 (ws +431, http1 +261, launch +99, decode +61) against
+the 450 to 550 expected, and 1,314 over the 3,000 shared with PRD-14. This is an overrun and is not hidden.
+The 14,200 owner-question line is a total over the whole build; the tree still holds the 0.7 crates' tests, so
+a build-wide Rust test line count cannot be read off it yet and is not reported here.
 
 **Checked and left `open`.** FW1: `pipeline_guard.rs` never opens a stream while the guard is full, so it
 does not show "OPEN is always admitted"; `lessons_pipeline::open_and_end_survive_a_full_guard` covers it
@@ -209,9 +210,14 @@ also names `pipeline_stall.rs`). C11 names a 2,000-connection case
 that is not in `proxy_connect.rs`. R6 needs a `conn` record, which only `proxy::serve` writes. P14 and HF4
 name tests (`no timer under 15 min`, `cli_commands::second_start_on_one_home_refuses`) that are not in
 `cli_commands.rs`. VR1 shows the exit 2 for a torn tail but not the allocation bound. Rows with an `R:` guard
-stay `open` until the real run is shown. Gate check 1 dry run (nextest list, 0fa43715 plus this lane): no
-renamed guard was found; every row listed above that fails the list check is a named pending case or a file
-that does not exist yet.
+stay `open` until the real run is shown. Gate check 1 list check (box, `cargo nextest list --workspace` on
+the merged slice 5 branches; the file and `D:` checks by path): the 91 distinct `file::test` names resolve except those below (`mask::meta::tests` is a module
+prefix and was checked by hand), and every `D:` file exists. Not found: `lessons_connect::idle_tunnel_survives_120s` (L-C7) and
+`lessons_launch::ctrl_c_reaches_the_harness_and_the_watchdog_lives` (L-P3), which exist in the files but are
+held back with `ignore` and so are not in the default list (the box run reported them as the 2 skipped);
+`cli_commands::second_start_on_one_home_refuses` (L-HF4, not in `cli_commands.rs`); and the files
+`watchdog_restart.rs` (L-C12, L-P1, L-P2), `pipeline_stall.rs` (L-R2) and `cli_continue.rs` (L-HF6, L-SC4),
+which are not on the tree. No renamed guard was found. Box run of all eight `lessons_*` files: 63 tests run, 63 passed, 2 skipped (the two `ignore` tests above).
 
 ## Real-run rows
 
