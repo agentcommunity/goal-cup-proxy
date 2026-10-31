@@ -2090,3 +2090,23 @@ kept and now cites BUILD-PROMPT section 5, since B3 no longer carries it.
 - **Acceptance lists as known,** if still open at the end: the PRD-09 slice 4 nits B2-1, B2-2 and
   B2-3 (PRD-09 note), and the cut of `usage table` or `--text` if not built.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-31, replan after PRD-06 slice 3 (merge a76bd11d)
+
+- **Size report, PRD-06 slice 3** (`wc -l` at a76bd11d, row "Upload (PRD-06)", 940 src and 1,000
+  tests): src 2,253 (client 644, send 417, beat 289, chunk 273, state 255, policy 232, mod 143), of
+  which 176 inline tests; 2,077 without them, 221% of the row (240% with them). Tests 1,449
+  (`upload_chunks` 516, `upload_beat` 498, `upload_resume` 343, `upload_backoff` 92) plus 176 inline,
+  1,625, 163% of the row. 7 of 9 src files written; `prune.rs` and `manual.rs` remain. PRD-06's
+  decision line (PRD-06 note, points 3, 5 and 6) sets the ceilings to **2,500 src and 1,900 tests**.
+- **Rows over their size line, tracked for the end-of-build report:** connector (ceilings 1,510 src and
+  620 tests against 800 and 400), usage (2,550 and 520 against 1,470 and 200), upload (2,500 and 1,900
+  against 940 and 1,000). Only a Rust total past about 18,100 src or about 14,200 tests becomes the
+  owner's question; the other rows' final counts decide it.
+- **`gate full` stays red** until PRD-06 slice 4 calls `Policy::from_env()` from the threads (PRD-14
+  slice 3 note; still uncalled at a76bd11d). No release is cut before it; phase 2 and 3 runs are not
+  affected.
+- **Slice 4 of PRD-06 is the last PRD-06 slice** and carries the open acceptance cases listed in the
+  PRD-06 note (panic to `internal`, prune, manual, the null thread). The `upload_worker.rs` full-tier
+  run waits for it.
+- No locked ledger item is touched and no owner question comes from this slice.

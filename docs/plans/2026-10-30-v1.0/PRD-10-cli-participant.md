@@ -1441,3 +1441,15 @@ What the pad calls, as merged (PRD-12 note):
   the proof; do not wait for a real-run row.
 - **B9 is still open:** PRD-11's slice 5 did not change `write_settings`; the rule of the earlier note holds.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-31, replan after PRD-06 slice 3 (merge a76bd11d)
+
+- **`upload.json` as the sender now writes it (S9, PRD-06 note):** `state` can be `sending`,
+  `caught_up`, `waiting`, `stuck` or `refused`; `final` goes `none`, `sent`, `sealed` and never back;
+  `next_try` is empty while the entry waits on the final heartbeat, so a status line must not print a
+  next-try time then; `stuck` and `refused` carry `last_error`, and `last_error` clears only on progress
+  or caught up. `confirmed` is set only from a chunk the server stored or a position a local index line
+  matches.
+- **Still open for you:** the upload dispatch waits for `upload::manual::run`, which is PRD-06 slice 4
+  (`Beat::final_beat` and `point_on_disk` for it are on integration now).
+- No locked ledger item is touched and no owner question comes from this slice.

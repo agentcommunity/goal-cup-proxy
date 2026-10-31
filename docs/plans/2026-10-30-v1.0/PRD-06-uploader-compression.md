@@ -971,3 +971,60 @@ PRD-12 and PRD-17.
   falls back to `counts.jsonl` for boots whose parts are pruned, spans included. Pruning must keep
   `counts.jsonl`; deleting it makes pruned boots read as zero.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-31, replan after PRD-06 slice 3 (merge a76bd11d)
+
+- **On integration:** `send.rs` (rounds, retries, position read, 409 re-read, the confirmed rule,
+  `awaiting_final`, `stuck`, `refused`), the final-heartbeat side of `beat.rs` (`Beat::final_beat`,
+  `final_due`, `point_on_disk`), BK1 closed (`io.left()?` at the top of the handshake loop), and
+  `tests/upload_resume.rs`. Still no thread: slice 4 builds them.
+- **Behaviour the review rounds settled; slice 4 builds on it and does not undo it.** A server offset
+  past the local bound that no local line or confirmed link holds is `stuck`, never `caught_up`. A
+  position at the local end whose head or sequence number matches no local line is `stuck`, checked
+  once per position. An index that cannot be measured says `internal`, not `caught_up`. Only progress
+  (the server's offset moves, or caught up) resets the failure count and the refusal count, so a row of
+  413 or 422 reaches `refused`. After the final is sent, a `503 awaiting_final` and a `200` that stores
+  nothing are ordinary failures on the ordinary backoff, not the `Retry-After`; a final heartbeat
+  answered without `sealed` waits on the beat's backoff before it goes again. `next_try` stays empty
+  while the entry waits on the final.
+- **Slice 4 list** (the header doc of `upload/mod.rs` is the source): the threads and their
+  `catch_unwind`; the call of `Policy::from_env()` (`gate full` stays red until then, PRD-14 slice 3
+  note); the order final heartbeat, chunks, final again until `sealed`, using `final_due`;
+  `Sender::tick` on the 1 s tick and at once on `Step::Again`; `upload.json` written at most once a
+  second through `state::Writer` from both `Sender::update` and `Beat::send`; the null-mode thread that
+  beats `failed` from `point_on_disk` (ledger R7); `prune.rs` (BK2's delete order) and the older-entry
+  queue; `manual.rs`.
+- **Nits to slice 4** (it touches `beat.rs`, `send.rs` and `upload_beat.rs`): N1, one doc line in
+  `Beat::final_beat` is 103 characters; reflow to 100 or fewer (rustfmt leaves comments alone). N2,
+  take a small helper for the repeated `SealFacts`, `Live::default()` and `FinalFacts` block in
+  `upload_beat.rs` only if it nets fewer lines. N3, replace `Sender::measured:
+  (Option<(u64, u64)>, (u64, u64))` with two plain fields. The `awaiting_final` race case in
+  `upload_resume.rs` uses real sleeps (final at 300 ms, answer at 800 ms); keep it. If it ever fails
+  on a loaded box, widen the gap; add no hook (ledger L6).
+- **Acceptance still open after this slice:** the panic-to-`internal` case (needs slice 4's
+  `catch_unwind`), `upload_prune.rs`, `upload_manual.rs`, and the thread half of `upload_null.rs`
+  (the on-disk point itself is covered by `null_mode_beats_failed_from_the_point_on_disk` in
+  `upload_beat.rs`). `upload_null.rs` adds no `fdatasync` counting hook: ledger L6 cut test seams and
+  owner question 12 on `test-hooks` is pending; the case checks that the bytes sent stop at the last
+  whole index line. `upload_worker.rs` (full tier) waits for the threads.
+- **Size** (`wc -l` at a76bd11d, row "Upload (PRD-06)", 940 src and 1,000 tests). Src files total
+  2,253: `client.rs` 644, `send.rs` 417, `beat.rs` 289, `chunk.rs` 273, `state.rs` 255, `policy.rs`
+  232, `mod.rs` 143. Of those, 176 are inline `#[cfg(test)]` (client 115, state 35, mod 26); without
+  them 2,077, 221% of the row (2,253 is 240%) with 7 of 9 files written (was 1,548 at a98f104c; the
+  slice added `send.rs` 417 against an estimate of 180, net 39 lines to `beat.rs` and 64 to
+  `chunk.rs`). Tests: `upload_chunks.rs` 516, `upload_beat.rs` 498, `upload_resume.rs` 343,
+  `upload_backoff.rs` 92, 1,449, plus the 176 inline lines, 1,625 (163% of 1,000).
+- **Decision (size).** The extra lines serve point 5 (upload everything: resume from the server's
+  position by ID, the confirmed rule, `stuck` versus `caught_up`, no loss and no duplicate across a lost
+  answer, backoff that resets on progress, run 1's lag bug), point 3 (never block or slow the harness:
+  bounded calls, BK1, every failure ends in a state and a wait, never a stop) and point 6 (`upload.json`
+  states and fixed log words that PRD-10 prints plainly). Nothing in the slice serves none of them; the
+  reviewers found no cut that keeps behaviour. **The ceilings are now 2,500 src and 1,900 tests, both
+  counting inline tests.** That is the slice 3 total plus `prune.rs` 50, `manual.rs` 90 and about 100
+  for the thread wiring in `mod.rs`, and the tests for the four open acceptance cases above. Slice 4
+  cuts before it adds: the inline tests in `client.rs`, `state.rs` and `mod.rs` that guard none of ledger
+  B10's list or repeat an `upload_*` case go first, then the N2 and N3 lines. A slice 4 test file over
+  200 lines needs a reason in its decision line, and the merge needs its own decision line if the
+  module passes the new ceilings.
+- No locked ledger item is touched and no owner question comes from this slice. Ledger L2 is "cut
+  before you add", not a number; the overshoot goes into the end-of-build size report.
