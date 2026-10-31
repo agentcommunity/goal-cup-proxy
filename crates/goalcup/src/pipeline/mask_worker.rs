@@ -96,15 +96,33 @@ impl Worker {
     fn item(&mut self, item: Item) {
         let held = item.held();
         self.rec.taken(held);
+        let sid = match &item {
+            Item::Event { .. } => 0,
+            Item::Open { sid, .. }
+            | Item::Data { sid, .. }
+            | Item::Gap { sid, .. }
+            | Item::End { sid, .. } => *sid,
+        };
+        // Events and `sid 0` GAPs go through stream 0, which never holds a byte back.
+        let end = matches!(item, Item::End { .. });
+        self.stream(sid).owed += held;
         match item {
+            Item::Event { t, mut ev } => {
+                let note = ev.get("ev").and_then(Value::as_str) == Some("note");
+                mask_value(&self.masker, &mut ev);
+                let json = json_bytes(&ev);
+                let mut o = Out::new(Record::Event { t: t.ns(), json }, 0);
+                o.note = note;
+                self.outs.push(o);
+            }
             Item::Open {
-                sid,
                 t,
                 kind,
                 conn,
                 req,
                 flags,
                 mut meta,
+                ..
             } => {
                 let host = (kind == StreamKind::Conn)
                     .then(|| meta.get("host").and_then(Value::as_str))
@@ -117,69 +135,34 @@ impl Worker {
                 let source = Source::of(kind, &meta);
                 mask_value(&self.masker, &mut meta);
                 let m = self.masker.stream(kind);
-                self.streams.insert(sid, fresh(kind, m));
-                let mut o = Out::new(
-                    Record::Open {
-                        sid,
-                        t: t.ns(),
-                        skind: kind,
-                        conn,
-                        req,
-                        meta: json_bytes(&meta),
-                    },
-                    0,
-                );
+                let s = self.stream(sid);
+                (s.kind, s.m) = (kind, m);
+                let (t, skind, meta) = (t.ns(), kind, json_bytes(&meta));
+                let r = Record::Open { sid, t, skind, conn, req, meta };
+                let mut o = Out::new(r, 0);
                 (o.flags, o.host, o.source) = (flags, host, source);
                 self.outs.push(o);
-                self.stream(sid).owed += held;
-                self.forward(sid);
             }
-            Item::Data {
-                sid,
-                t,
-                off,
-                ws,
-                bytes,
-            } => self.data(sid, t, off, ws, &bytes, held),
-            Item::Gap {
-                sid,
-                reason,
-                start,
-                end,
-                off,
-                lost,
-                tail,
-            } => {
-                self.stream(sid).owed += held;
+            Item::Data { t, off, ws, bytes, .. } => self.data(sid, t, off, ws, &bytes),
+            Item::Gap { reason, start, end, off, lost, tail, .. } => {
                 self.release(sid, start, |m| m.gap());
-                let tail = self.tail(tail);
-                self.outs.push(Out::new(
-                    Record::Gap {
-                        sid,
-                        reason,
-                        start_wall: 0,
-                        end_wall: 0,
-                        start_mono: start.ns(),
-                        end_mono: end.ns(),
-                        off,
-                        lost: lost.map_or(0, |n| n.saturating_add(1)),
-                        tail,
-                    },
-                    0,
-                ));
+                let r = Record::Gap {
+                    sid,
+                    reason,
+                    start_wall: 0,
+                    end_wall: 0,
+                    start_mono: start.ns(),
+                    end_mono: end.ns(),
+                    off,
+                    lost: lost.map_or(0, |n| n.saturating_add(1)),
+                    tail: self.tail(tail),
+                };
+                self.outs.push(Out::new(r, 0));
                 let s = self.stream(sid);
                 (s.out, s.inp) = (off + lost.unwrap_or(0), off + lost.unwrap_or(0));
                 s.pieces.clear();
-                self.forward(sid);
             }
-            Item::End {
-                sid,
-                t,
-                reason,
-                seen,
-                tail,
-            } => {
-                self.stream(sid).owed += held;
+            Item::End { t, reason, seen, tail, .. } => {
                 let kind = self.stream(sid).kind;
                 let next = self.masker.stream(kind);
                 self.release(sid, t, move |m| {
@@ -190,48 +173,28 @@ impl Worker {
                     join(&mut out, std::mem::replace(m, next).finish());
                     out
                 });
-                let tail = self.tail(tail);
-                self.outs.push(Out::new(
-                    Record::End {
-                        sid,
-                        t: t.ns(),
-                        reason,
-                        seen,
-                        tail,
-                    },
-                    0,
-                ));
-                self.forward(sid);
-                self.streams.remove(&sid);
+                let (t, tail) = (t.ns(), self.tail(tail));
+                self.outs.push(Out::new(Record::End { sid, t, reason, seen, tail }, 0));
             }
-            Item::Event { t, mut ev } => {
-                let note = ev.get("ev").and_then(Value::as_str) == Some("note");
-                mask_value(&self.masker, &mut ev);
-                let mut o = Out::new(
-                    Record::Event {
-                        t: t.ns(),
-                        json: json_bytes(&ev),
-                    },
-                    held,
-                );
-                o.note = note;
-                self.outs.push(o);
-                self.send();
-            }
+        }
+        if !self.outs.is_empty() {
+            self.forward(sid);
+        }
+        if end {
+            self.streams.remove(&sid);
         }
     }
 
     /// One DATA piece: push, and on a WebSocket message end `boundary()`, then DATA and MASK
     /// records for what the masker released. `fin` goes on the last DATA of the message; an
     /// empty message gets one empty DATA with `fin`.
-    fn data(&mut self, sid: Sid, t: Mono, off: u64, ws: Option<Ws>, bytes: &[u8], held: u64) {
+    fn data(&mut self, sid: Sid, t: Mono, off: u64, ws: Option<Ws>, bytes: &[u8]) {
         let s = stream(&mut self.streams, &self.masker, sid);
         if s.inp == s.out {
             // Nothing held back: start where this piece starts (after a GAP moved the offset).
             (s.out, s.inp) = (off, off);
             s.pieces.clear();
         }
-        s.owed += held;
         s.pieces.push_back((s.inp + bytes.len() as u64, t));
         s.inp += bytes.len() as u64;
         let fin = ws.is_some_and(|w| w.fin);
@@ -259,9 +222,6 @@ impl Worker {
                 }
             }
             Err(_) => failed(s, sid, t, &self.rec, &self.masker, &mut self.outs),
-        }
-        if !self.outs.is_empty() {
-            self.forward(sid);
         }
     }
 
@@ -315,22 +275,17 @@ impl Worker {
     }
 }
 
-/// The stream's state; a stream with no OPEN seen gets one, so its bytes are still masked.
+/// The stream's state, made at its OPEN; a stream with no OPEN seen gets one too, so its bytes
+/// are still masked.
 fn stream<'a>(streams: &'a mut HashMap<Sid, Stream>, masker: &Masker, sid: Sid) -> &'a mut Stream {
-    streams
-        .entry(sid)
-        .or_insert_with(|| fresh(StreamKind::Other(0), masker.stream(StreamKind::Other(0))))
-}
-
-fn fresh(kind: StreamKind, m: StreamMasker) -> Stream {
-    Stream {
-        kind,
-        m,
+    streams.entry(sid).or_insert_with(|| Stream {
+        kind: StreamKind::Other(0),
+        m: masker.stream(StreamKind::Other(0)),
         out: 0,
         inp: 0,
         pieces: VecDeque::new(),
         owed: 0,
-    }
+    })
 }
 
 /// DATA records of at most 256 KiB for `m`, each followed by one MASK per span it touches, from
