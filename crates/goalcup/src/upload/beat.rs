@@ -1,20 +1,18 @@
 //! The heartbeat (PRD-06 section 6): the flat `counts`, the recording state, the answer as
-//! [`ServerWord`] and `upload.json` `server_word`, the ordinary beat, the final heartbeat, and the
-//! on-disk point a beat names when no live writer publishes one.
+//! [`ServerWord`] and `upload.json` `server_word`, the ordinary beat and the final heartbeat. The
+//! point a beat names when no live writer publishes one is [`super::chunk::last_on_disk`].
 
 use super::SealFacts;
 use super::ServerWord;
 use super::client::{HeartbeatAnswer, HeartbeatRequest, Recording, ServerClient, ServerError};
 use super::policy::{Backoff, Class, Policy, Timer, class_of_status};
+use super::send::{lock, log_failure};
 use super::state::{self, FileWord, Final, UploadJson};
-use crate::cli::log::{Fact, line};
 use crate::pipeline::status::Mode;
 use crate::pipeline::{Durable, EntryTotals, Live, Mono, Status};
+use crate::watchdog::SealReason;
 use goalcup_format::IndexLine;
-use goalcup_format::read::{part_files, read_index};
 use serde_json::{Map, Value, json};
-use std::fs::{self, File};
-use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{Duration, SystemTime};
@@ -44,30 +42,6 @@ pub fn health(live: Option<&Live>, entry_dir: &Path, t: &EntryTotals) -> Health 
     (l.boot, l.held_bytes, l.writer_idle_ms) = (s.boot, s.held_bytes, s.writer_idle_ms);
     (l.losing, l.off) = (s.losing, s.off);
     Health(s.mode, l)
-}
-
-/// The point a beat names when no live writer publishes one (null mode, `goalcup upload`, a dead
-/// entry): the last whole index line of the last part file whose `c_end` is within that file, its
-/// part and index synced (section 3). A part with no `.idx` has no lines.
-pub fn point_on_disk(rec_dir: &Path) -> io::Result<Option<IndexLine>> {
-    for part in part_files(rec_dir)?.iter().rev() {
-        let name = part
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or_default();
-        let idx = part.with_file_name(name.replace(".gcr.zst", ".idx"));
-        let lines = match read_index(&idx) {
-            Err(e) if e.kind() == io::ErrorKind::NotFound => continue,
-            r => r?,
-        };
-        let len = fs::metadata(part)?.len();
-        if let Some(l) = lines.iter().rev().find(|l| l.c_end <= len) {
-            File::open(part)?.sync_data()?;
-            File::open(&idx)?.sync_data()?;
-            return Ok(Some(*l));
-        }
-    }
-    Ok(None)
 }
 
 /// The heartbeat's `counts`: one flat object, every whole-number COUNT counter as entry totals
@@ -205,14 +179,11 @@ impl Beat {
         !self.finals && self.backoff.due(now) && (changed || self.timer.due(now))
     }
 
-    /// Whether the final heartbeat may go (again): only its backoff waits. The caller repeats it
-    /// until `upload.json` `final` says sealed or the wrap-up ends.
-    pub fn final_due(&self, now: Mono) -> bool {
-        self.backoff.due(now)
-    }
-
     /// Sends the final heartbeat once: `final: true` at the seal LINK with the seal's
-    /// `workspace_head` and totals. From here on `tick` sends nothing.
+    /// `workspace_head` and totals. From here on `tick` sends nothing. The caller repeats it when
+    /// `backoff.due`, until `upload.json` `final` says sealed or the wrap-up ends: an answer that
+    /// does not say sealed waits like a failure. A recovered seal says at least `gaps`: its
+    /// abandoned span is off time (section 6).
     pub fn final_beat(
         &mut self,
         now: Mono,
@@ -224,7 +195,11 @@ impl Beat {
         let (h, t) = (Health(Mode::Sealed, f.live.clone()), &f.seal.totals);
         let c = counts(&h, t, f.waiting_bytes);
         let head = f.seal.workspace_head.clone();
-        let req = request(&self.entry, f.point, t, recording(&h, t), c, true, head);
+        let mut rec = recording(&h, t);
+        if f.seal.reason == SealReason::Recovered && rec == Recording::Ok {
+            rec = Recording::Gaps;
+        }
+        let req = request(&self.entry, f.point, t, rec, c, true, head);
         self.send(now, &req, j, word)
     }
 
@@ -268,14 +243,18 @@ impl Beat {
     ) -> Option<ServerWord> {
         let wall = SystemTime::now();
         let answer = self.client.heartbeat(&self.run, req);
-        let mut j = j.lock().unwrap_or_else(|e| e.into_inner());
+        let mut j = lock(j);
         let out = match answer {
             Ok(a) => {
                 let w = take_answer(&mut j, &a, req.recording, now, wall);
                 if req.is_final && j.final_ == Final::None {
                     j.final_ = Final::Sent;
                 }
-                self.backoff.progress();
+                if req.is_final && !a.sealed {
+                    self.backoff.fail(now, None);
+                } else {
+                    self.backoff.progress();
+                }
                 self.timer.started(now);
                 self.last = Some(req.recording);
                 word.send_replace(Some(w.clone()));
@@ -294,23 +273,16 @@ impl Beat {
         out
     }
 
-    /// `upload what=beat class=<class> status=<n or -> wait_s=<n>`: fixed words and numbers only.
-    /// A 409 has no class (section 5) and logs `none`; an unreadable success is `internal`.
+    /// `upload what=beat ...`. A 409 has no class (section 5) and logs `none`; an unreadable
+    /// success is `internal`.
     fn log_failure(&self, e: &ServerError, wait: Duration) {
         let (class, status) = match e {
-            ServerError::Status { status, .. } => (
-                class_of_status(*status).map_or("none", Class::word),
-                Fact::N((*status).into()),
-            ),
-            ServerError::Malformed(_) => (Class::Internal.word(), Fact::Word("-")),
-            ServerError::Transport(_) => (Class::Network.word(), Fact::Word("-")),
+            ServerError::Status { status, .. } => {
+                (class_of_status(*status).map_or("none", Class::word), Some(*status))
+            }
+            ServerError::Malformed(_) => (Class::Internal.word(), None),
+            ServerError::Transport(_) => (Class::Network.word(), None),
         };
-        let facts = [
-            ("what", Fact::Word("beat")),
-            ("class", Fact::Word(class)),
-            ("status", status),
-            ("wait_s", Fact::N(wait.as_secs())),
-        ];
-        line(&self.entry_dir, "upload", &facts);
+        log_failure(&self.entry_dir, "beat", class, status, wait);
     }
 }

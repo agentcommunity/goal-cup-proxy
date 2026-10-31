@@ -71,8 +71,9 @@ impl Sender {
         }
     }
 
-    /// One step. `bound` is `Durable` only while the live writer has a point, else `OnDisk`;
-    /// `wrap_up` runs rounds back to back (section 4). The clock is read again after a call.
+    /// One step. `bound` is `OnDisk` only when there is no live writer; a live writer with no
+    /// durable point yet sends nothing (section 3). `wrap_up` runs rounds back to back (section 4).
+    /// The clock is read again after a call.
     pub fn tick(
         &mut self,
         clock: &dyn Fn() -> Mono,
@@ -95,6 +96,11 @@ impl Sender {
         };
         let (end, waiting) = self.measure(bound, pos.offset);
         self.update(j, |j| (j.durable_raw, j.waiting_bytes) = (end, waiting));
+        if end < pos.offset && !self.holds(&pos, j) {
+            // The server holds bytes the local copy does not: the copies disagree.
+            let reason = "the server's offset is not at a local index line";
+            return self.stuck(now, reason, pos.offset, j);
+        }
         if self.target.is_some_and(|t| pos.offset >= t) {
             self.caught_up(j);
         }
@@ -117,16 +123,31 @@ impl Sender {
                 self.caught_up(j);
                 Step::Idle
             }
-            Ok(Cut::Stuck { reason, offset }) => {
-                // Nothing is sent across it; the round stays open for the re-read.
-                self.pos = None;
-                self.backoff.next_try = Some(after(now, self.p.stuck_reread));
-                let why = (Class::Stuck, None, &*format!("{reason} (offset {offset})"));
-                self.say(j, "chunk", State::Stuck, why, self.p.stuck_reread);
-                Step::Idle
-            }
+            Ok(Cut::Stuck { reason, offset }) => self.stuck(now, reason, offset, j),
             Err(_) => self.fail(clock(), "chunk", UNREAD, None, j),
         }
+    }
+
+    /// Nothing is sent across a disagreement; the round stays open for the re-read.
+    fn stuck(&mut self, now: Mono, reason: &str, offset: u64, j: &Mutex<UploadJson>) -> Step {
+        self.pos = None;
+        self.backoff.next_try = Some(after(now, self.p.stuck_reread));
+        let why = (Class::Stuck, None, &*format!("{reason} (offset {offset})"));
+        self.say(j, "chunk", State::Stuck, why, Some(self.p.stuck_reread));
+        Step::Idle
+    }
+
+    /// Whether a local index line, or the confirmed link, matches the whole position.
+    fn holds(&self, p: &RunPosition, j: &Mutex<UploadJson>) -> bool {
+        let link = p.next_seq.checked_sub(1);
+        let kept = lock(j)
+            .confirmed
+            .as_ref()
+            .is_some_and(|c| c.raw == p.offset && Some(c.seq) == link && c.hash == p.head);
+        kept || chunk::line_at(&self.rec, p.offset)
+            .ok()
+            .flatten()
+            .is_some_and(|l| Some(l.seq) == link && hex(&l.hash) == p.head)
     }
 
     fn put(&mut self, c: &Chunk, clock: &dyn Fn() -> Mono, j: &Mutex<UploadJson>) -> Step {
@@ -143,12 +164,16 @@ impl Sender {
             Ok(a) => {
                 let ours =
                     a.offset == c.raw_end && a.next_seq == c.last_seq + 1 && a.head == h.head;
-                let (offset, next_seq, head, sealed) = (a.offset, a.next_seq, a.head, a.sealed);
+                if !ours && a.offset <= self.known {
+                    // A 200 that stored nothing is never retried in a tight loop.
+                    let why = (Class::ServerBusy, Some(200), "the server did not store the chunk");
+                    return self.fail(now, "chunk", why, None, j);
+                }
                 let p = RunPosition {
-                    offset,
-                    next_seq,
-                    head,
-                    sealed,
+                    offset: a.offset,
+                    next_seq: a.next_seq,
+                    head: a.head,
+                    sealed: a.sealed,
                     stop: false,
                     committed: None,
                 };
@@ -159,17 +184,18 @@ impl Sender {
                 (self.conflict, self.pos) = (Some(self.known), None);
                 Step::Again
             }
+            // No failure counted: the wait ends when the final heartbeat is committed. Once it
+            // is sent, the same answer is an ordinary busy server and backs off.
             Err(ServerError::Status {
                 status: 503, code, ..
-            }) if code == "awaiting_final" => {
-                // No failure counted: the wait ends when the final heartbeat is committed.
+            }) if code == "awaiting_final" && lock(j).final_ == Final::None => {
                 self.awaiting_final = true;
                 let why = (
                     Class::ServerBusy,
                     Some(503),
                     "the server waits for the final heartbeat",
                 );
-                self.say(j, "chunk", State::Waiting, why, Duration::ZERO);
+                self.say(j, "chunk", State::Waiting, why, None);
                 Step::Idle
             }
             Err(e) => self.fail(now, "chunk", words(&e), e.retry_after(), j),
@@ -193,15 +219,8 @@ impl Sender {
                 j,
             );
         }
-        // Confirmed only when a local link, or the confirmed one, matches the whole position.
-        let link = p.next_seq.checked_sub(1);
-        let line = chunk::line_at(&self.rec, p.offset).ok().flatten();
-        let local = line.is_some_and(|l| Some(l.seq) == link && hex(&l.hash) == p.head);
-        let kept = lock(j)
-            .confirmed
-            .as_ref()
-            .is_some_and(|c| c.raw == p.offset && Some(c.seq) == link && c.hash == p.head);
-        self.took(p, local || kept, j);
+        let confirm = self.holds(&p, j);
+        self.took(p, confirm, j);
         Step::Again
     }
 
@@ -234,11 +253,12 @@ impl Sender {
                 (j.sent.chunks, j.sent.bytes) = (j.sent.chunks + 1, j.sent.bytes + bytes);
             }
             (j.last_ok, j.failures) = (Some(at), self.backoff.failures);
+            // A re-read that did not move keeps `stuck`, `refused` or `waiting` as it was.
             if moved {
                 (j.last_error, j.next_try) = (None, None);
-            }
-            if open {
-                j.state = State::Sending;
+                if open {
+                    j.state = State::Sending;
+                }
             }
         });
         self.pos = Some(p);
@@ -271,30 +291,33 @@ impl Sender {
         let refused = why.0 == Class::Refused;
         self.refusals = if refused { self.refusals + 1 } else { 0 };
         let wait = self.backoff.fail(now, retry_after.map(Duration::from_secs));
-        let state = match self.refusals >= self.p.refused_after {
-            true => State::Refused,
-            false => State::Waiting,
+        let state = if self.refusals >= self.p.refused_after {
+            State::Refused
+        } else {
+            State::Waiting
         };
-        self.say(j, what, state, why, wait);
+        self.say(j, what, state, why, Some(wait));
         Step::Idle
     }
 
-    /// Why nothing moved: `state`, `last_error` in fixed words, `next_try`, and one log line.
+    /// Why nothing moved: `state`, `last_error` in fixed words, `next_try` (none while nothing is
+    /// timed), and one log line.
     fn say(
         &self,
         j: &Mutex<UploadJson>,
         what: &'static str,
         state: State,
         why: Why<'_>,
-        wait: Duration,
+        wait: Option<Duration>,
     ) {
         let (class, status, text) = why;
         self.update(j, |j| {
             j.state = state;
             j.last_error = Some(LastError::new(SystemTime::now(), class, status, text));
-            (j.failures, j.next_try) = (self.backoff.failures, wall_after(wait));
+            (j.failures, j.next_try) = (self.backoff.failures, wait.and_then(wall_after));
         });
-        log_failure(&self.entry_dir, what, class, status, wait);
+        let wait = wait.unwrap_or_default();
+        log_failure(&self.entry_dir, what, class.word(), status, wait);
     }
 
     /// The bound's raw end and the waiting bytes, read again only when the bound or the offset
@@ -312,7 +335,8 @@ impl Sender {
         self.measured.1
     }
 
-    /// Changes `upload.json` and writes it when anything changed (slice 4: `state::Writer`).
+    /// Changes `upload.json` and writes it when anything changed. Open for slice 4: at most once
+    /// a second (section 11, `state::Writer`); a round now writes it a few times per chunk.
     fn update(&self, j: &Mutex<UploadJson>, f: impl FnOnce(&mut UploadJson)) {
         let mut j = lock(j);
         let before = j.clone();
@@ -323,7 +347,7 @@ impl Sender {
     }
 }
 
-fn lock(j: &Mutex<UploadJson>) -> std::sync::MutexGuard<'_, UploadJson> {
+pub(super) fn lock(j: &Mutex<UploadJson>) -> std::sync::MutexGuard<'_, UploadJson> {
     j.lock().unwrap_or_else(|e| e.into_inner())
 }
 
@@ -356,18 +380,17 @@ fn words(e: &ServerError) -> Why<'static> {
 }
 
 /// `upload what=<what> class=<class> status=<n or -> wait_s=<n>`: fixed words and numbers only.
-/// Slice 4 has the beat call this one and drops its own copy.
 pub fn log_failure(
     entry_dir: &Path,
     what: &'static str,
-    class: Class,
+    class: &'static str,
     status: Option<u16>,
     wait: Duration,
 ) {
     let status = status.map_or(Fact::Word("-"), |s| Fact::N(s.into()));
     let facts = [
         ("what", Fact::Word(what)),
-        ("class", Fact::Word(class.word())),
+        ("class", Fact::Word(class)),
         ("status", status),
         ("wait_s", Fact::N(wait.as_secs())),
     ];

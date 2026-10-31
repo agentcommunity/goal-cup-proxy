@@ -10,8 +10,9 @@ use common::worker::{CREDENTIAL, FakeWorker, Inject, Route, SECONDS_LEFT};
 use goalcup::pipeline::status::{DurableStatus, Losing, Mode, Off, Written};
 use goalcup::pipeline::{Counts, Durable, EntryTotals, Live, Mono, Status};
 use goalcup::upload::beat::{
-    Beat, FinalFacts, Health, counts, health, point_on_disk, recording, request, take_answer,
+    Beat, FinalFacts, Health, counts, health, recording, request, take_answer,
 };
+use goalcup::upload::chunk::last_on_disk;
 use goalcup::upload::client::{HeartbeatAnswer, Recording, ServerClient, Token};
 use goalcup::upload::policy::{Policy, after};
 use goalcup::upload::state::{self, Final, UploadJson};
@@ -390,12 +391,13 @@ fn rec(r: &Rig, seal: bool) -> IndexLine {
     } else {
         records::open(&dir, &ev)
     };
-    assert_eq!(point_on_disk(&dir).unwrap(), Some(d.line));
+    assert_eq!(last_on_disk(&dir).unwrap(), Some(d.line));
     d.line
 }
 
 /// Section 6: `final: true` at the seal LINK with `repo_head`; `final` goes to `sent`, then to
-/// `sealed` on an answer that says so, and never back. No ordinary beat follows (PRD-17 S4).
+/// `sealed` on an answer that says so, and never back. An answer that does not say sealed waits
+/// before the final goes again. No ordinary beat follows (PRD-17 S4).
 #[test]
 fn the_final_heartbeat_names_the_seal_and_ends_the_ordinary_beat() {
     let mut r = rig();
@@ -429,13 +431,13 @@ fn the_final_heartbeat_names_the_seal_and_ends_the_ordinary_beat() {
         ..Inject::default()
     };
     r.worker.inject(Route::Heartbeat, inject);
-    assert!(r.beat.final_due(Mono(2 * S)));
-    r.beat
-        .final_beat(Mono(2 * S), &f, &r.json, &r.word)
-        .unwrap();
+    let next = r.beat.backoff.next_try.expect("a final not sealed waits");
+    assert!(next.0 > S);
+    r.beat.final_beat(next, &f, &r.json, &r.word).unwrap();
     assert_eq!(r.json.lock().unwrap().final_, Final::Sealed);
+    assert!(r.beat.backoff.due(next));
     r.beat
-        .final_beat(Mono(3 * S), &f, &r.json, &r.word)
+        .final_beat(after(next, Duration::from_secs(1)), &f, &r.json, &r.word)
         .unwrap();
     assert_eq!(state::read(r.dir.path()).unwrap().final_, Final::Sealed);
 
@@ -446,6 +448,28 @@ fn the_final_heartbeat_names_the_seal_and_ends_the_ordinary_beat() {
             .tick(Mono(3600 * S), &d, &losing, 0, &r.json, &r.word)
     );
     assert_eq!(r.worker.heartbeats().len(), n);
+}
+
+/// U8: the final heartbeat of a dead entry (a recovered seal) says `gaps`, even with no gap
+/// counted: its abandoned span is off time.
+#[test]
+fn a_recovered_seal_says_gaps() {
+    let mut r = rig();
+    let end = rec(&r, true);
+    let seal = SealFacts {
+        reason: SealReason::Recovered,
+        workspace_head: None,
+        totals: EntryTotals::default(),
+    };
+    let live = Live::default();
+    let f = FinalFacts {
+        point: &end,
+        seal: &seal,
+        live: &live,
+        waiting_bytes: 0,
+    };
+    r.beat.final_beat(Mono(S), &f, &r.json, &r.word).unwrap();
+    assert_eq!(r.worker.heartbeats().remove(0)["recording"], "gaps");
 }
 
 /// Null mode (ledger R7): with no live writer the beat names the last whole index line on disk

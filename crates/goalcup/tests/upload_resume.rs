@@ -1,9 +1,10 @@
 //! PRD-06 "Automated tests", `upload_resume.rs` (lessons L-S1, L-S5), against PRD-14's fake Worker
 //! and real `PartWriter` output: a committed chunk whose answer is lost is not stored twice; a 409
-//! re-reads and moves only to a position a local index line confirms; an offset in a pruned range
-//! is `stuck`; with no live writer nothing past the file is sent; a 409 with no move backs off;
-//! `503 awaiting_final` waits for the final and is then retried at once. The panic case needs
-//! `catch_unwind` in the thread wiring and lands with it (slice 4).
+//! re-reads and moves only to a position a local index line confirms, and any other position is
+//! `stuck`; an offset in a pruned range is `stuck`; with no live writer nothing past the file is
+//! sent; a 409 with no move backs off; `503 awaiting_final` waits for the final and is then
+//! retried at once; a Worker failing every other PUT never makes a wait above 4 s. The panic case
+//! needs `catch_unwind` in the thread wiring and lands with it (slice 4).
 
 mod common;
 
@@ -182,19 +183,26 @@ fn a_409_moves_only_to_a_position_a_local_line_confirms() {
     );
     r.finish(&b);
     r.stored_once(&r.cat());
+}
 
-    // A re-read at an offset no local line holds is `stuck`, and nothing is sent.
-    let (mut r, _w, d) = rig(u64::MAX, 6);
-    let (b, l) = (Bound::Durable(d), r.lines(0)[2]);
-    assert_eq!(r.tick(&b), Step::Again);
-    r.fake
-        .inject(Route::Chunk, answer(409, json!({"error": "conflict"})));
-    let odd = json!({"offset": l.raw_end - 1, "next_seq": l.seq + 1, "head": hex(&l.hash)});
-    r.fake.inject(Route::Position, answer(200, odd));
-    while r.tick(&b) == Step::Again {}
-    let j = r.j();
-    assert_eq!((j.state, j.confirmed), (State::Stuck, None));
-    assert!(r.fake.chunks().is_empty());
+/// A re-read at an offset no local line holds is `stuck` and sends nothing: inside the local
+/// copy, and past its end (the server holds bytes the local copy does not).
+#[test]
+fn a_409_re_read_no_local_line_holds_is_stuck() {
+    for ahead in [false, true] {
+        let (mut r, _w, d) = rig(u64::MAX, 6);
+        let l = r.lines(0)[2];
+        let raw = if ahead { d.line.raw_end + 5000 } else { l.raw_end - 1 };
+        r.fake
+            .inject(Route::Chunk, answer(409, json!({"error": "conflict"})));
+        let odd = json!({"offset": raw, "next_seq": l.seq + 1, "head": hex(&l.hash)});
+        r.fake.inject(Route::Position, Inject::default());
+        r.fake.inject(Route::Position, answer(200, odd));
+        while r.tick(&Bound::Durable(d.clone())) == Step::Again {}
+        let j = r.j();
+        assert_eq!((j.state, j.confirmed), (State::Stuck, None), "ahead {ahead}");
+        assert!(r.fake.chunks().is_empty());
+    }
 }
 
 #[test]
@@ -218,6 +226,7 @@ fn an_offset_in_a_pruned_range_is_stuck_and_sends_nothing() {
 #[test]
 fn with_no_live_writer_nothing_past_the_file_is_sent() {
     let (mut r, w, _) = rig(u64::MAX, 6);
+    // The writer is gone without its drop, as after a crash: nothing closes the part.
     mem::forget(w);
     let lines = r.lines(0);
     let (last, prev) = (lines[5], lines[4]);
@@ -237,11 +246,9 @@ fn with_no_live_writer_nothing_past_the_file_is_sent() {
 fn a_409_with_no_forward_move_backs_off() {
     let (mut r, _w, d) = rig(u64::MAX, 6);
     let b = Bound::Durable(d);
-    assert_eq!(r.tick(&b), Step::Again);
     r.fake
         .inject(Route::Chunk, answer(409, json!({"error": "conflict"})));
-    assert_eq!(r.tick(&b), Step::Again, "the 409");
-    assert_eq!(r.tick(&b), Step::Idle, "the re-read found no move");
+    while r.tick(&b) == Step::Again {}
     let j = r.j();
     assert_eq!((j.state, j.failures), (State::Waiting, 1));
     assert!(r.s.backoff.next_try.is_some_and(|t| t.0 > r.t.get()));
@@ -255,21 +262,48 @@ fn a_409_with_no_forward_move_backs_off() {
 fn awaiting_final_waits_for_the_final_then_retries_at_once() {
     let (mut r, _w, d) = rig(u64::MAX, 6);
     let b = Bound::Durable(d);
-    assert_eq!(r.tick(&b), Step::Again);
-    let busy = answer(503, json!({"error": "awaiting_final"}));
-    r.fake.inject(
-        Route::Chunk,
-        Inject {
-            retry_after: Some(60),
-            ..busy
-        },
-    );
-    assert_eq!(r.tick(&b), Step::Idle);
+    let busy = Inject {
+        retry_after: Some(60),
+        ..answer(503, json!({"error": "awaiting_final"}))
+    };
+    r.fake.inject(Route::Chunk, busy.clone());
+    while r.tick(&b) == Step::Again {}
     r.t.set(r.t.get() + 600 * S);
     assert_eq!(r.tick(&b), Step::Idle, "not retried while no final is sent");
     assert!(r.fake.chunks().is_empty());
-    assert_eq!((r.j().state, r.j().failures), (State::Waiting, 0));
+    let j = r.j();
+    assert_eq!((j.state, j.failures, j.next_try), (State::Waiting, 0, None));
     r.j.lock().unwrap().final_ = Final::Sent;
-    assert_eq!(r.tick(&b), Step::Again, "retried on the same tick");
-    assert_eq!(r.fake.chunks().len(), 1);
+    // Once the final is sent the same answer is a busy server: retried at once, then it waits.
+    r.fake.inject(Route::Chunk, busy);
+    assert_eq!(r.tick(&b), Step::Idle);
+    assert_eq!((r.j().failures, r.fake.chunks().len()), (1, 0));
+    assert!(r.s.backoff.next_try.is_some_and(|t| t.0 > r.t.get()));
+    r.finish(&b);
+    r.stored_once(&r.cat());
+}
+
+/// Run 1's lag bug: a Worker that fails every other PUT never makes a wait above 4 s, because
+/// each stored chunk resets the failures, and every chunk ends stored.
+#[test]
+fn a_worker_failing_every_other_put_never_waits_above_4_s() {
+    let (mut r, w, _) = rig(8 << 10, 24);
+    let b = Bound::Durable(w.seal(at(25)).unwrap());
+    let parts = part_files(&r.rec).unwrap().len();
+    assert!(parts >= 4, "the test needs several chunks");
+    for _ in 0..parts {
+        r.fake
+            .inject(Route::Chunk, answer(503, json!({"error": "unavailable"})));
+        r.fake.inject(Route::Chunk, Inject::default());
+    }
+    for _ in 0..100 {
+        while r.tick(&b) == Step::Again {}
+        if r.j().state == State::CaughtUp {
+            break;
+        }
+        let next = r.s.backoff.next_try.expect("a wait after a failure").0;
+        assert!(next - r.t.get() <= 4 * S, "a wait above 4 s");
+        r.t.set(next);
+    }
+    r.stored_once(&r.cat());
 }
