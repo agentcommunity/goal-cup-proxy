@@ -106,8 +106,10 @@ pub fn begin(home: &Path, server: &Server, ask: &Ask, out: &mut dyn Write) -> Re
     });
     // The participant has approved: a blip, a GitHub outage (502) or a 429 is waited out, with the
     // same `session_id`, so the open is idempotent and the approval is not spent for nothing.
+    // A Ctrl-C that lands once the server has opened the run is ignored: the run exists, so it is
+    // written and `start` handles the stop with the run on disk.
     let opened = send(&client, "/v1/runs", &body, true);
-    if interrupted() {
+    if opened.is_err() && interrupted() {
         return Err(stopped(text::WHY_INTERRUPTED));
     }
     let open: Open = opened.map_err(|e| server_stop(&e, text::open_refused))?;
@@ -324,7 +326,9 @@ fn approve(base: &str, ask: &Ask, out: &mut dyn Write) -> Result<String, Stop> {
             Ok(_) => return Err(broke(text::bad_answer())),
             Err(ServerError::Status { status: 403, .. }) => return Err(stopped(text::WHY_DENIED)),
             Err(ServerError::Status { status: 410, .. }) => return Err(stopped(text::WHY_EXPIRED)),
-            Err(ServerError::Status { status: 429, .. }) => every += SLOW_DOWN,
+            Err(ServerError::Status { status: 429, .. }) => {
+                every = (every + SLOW_DOWN).min(INTERVAL.1)
+            }
             // The server may be away for a moment: keep asking until the code runs out.
             Err(ServerError::Transport(_)) => {}
             Err(ServerError::Status { status, .. }) if status >= 500 => {}

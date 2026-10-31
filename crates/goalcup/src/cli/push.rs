@@ -61,7 +61,7 @@ pub fn write_first_message(
         None => prompt.to_string(),
     };
     let file = dir.join("first-message.txt");
-    let fail = |e: std::io::Error| text::prompt_unreadable(&file, &e.to_string());
+    let fail = |_: std::io::Error| text::not_written(&file);
     let mut out = std::fs::OpenOptions::new()
         .write(true)
         .create(true)

@@ -31,7 +31,8 @@ pub fn run(trial: bool, file_flags: bool, repo: bool, prompt: Option<&Path>) -> 
         }
     };
     // The prompt is read now, so a missing or non-UTF-8 file is found before anything is created.
-    if let Some(Err(e)) = prompt.map(push::read_prompt) {
+    // A missing file is already named by the folder check; this finds one that exists but cannot be read.
+    if let Some(Err(e)) = prompt.filter(|p| p.exists()).map(push::read_prompt) {
         problems.push(e);
     }
     if !problems.is_empty() {
