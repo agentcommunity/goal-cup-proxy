@@ -1,0 +1,35 @@
+# Pad data for OpenClaw (PRD-12 section 6): test data, never connector data; goalcup never reads it.
+# Vendor pages read 31 Oct 2026: https://docs.openclaw.ai/install/installer (install-cli.sh: user prefix, pinned Node 24.22.1,
+# --version), https://docs.openclaw.ai/install (openclaw --version), https://docs.openclaw.ai/providers/deepseek (plugin
+# @openclaw/deepseek-provider, DEEPSEEK_API_KEY, model ref deepseek/deepseek-flash), https://docs.openclaw.ai/cli/tui
+# (openclaw chat is the embedded TUI), https://docs.openclaw.ai/web/tui (/exit),
+# https://vercel.com/docs/ai-gateway/coding-agents/openclaw (provider vercel-ai-gateway, ${AI_GATEWAY_API_KEY}).
+# Measured in a build box 31 Oct 2026: the install line prints 2026.10.9, and `plugins install` works with OPENCLAW_HOME set.
+# Read from docs, not run against a live harness: the key route, the model ref, the TUI's first screens, subagents.
+version = "2026.10.9"
+version_cmd = "openclaw --version"
+# install-cli.sh brings its own Node 24 under the prefix (the image has Node 22); the symlink puts the wrapper on the image PATH.
+install = 'curl -fsSL https://openclaw.ai/install-cli.sh | bash -s -- --prefix "$HOME/.local/openclaw" --version 2026.10.9 --no-onboard && mkdir -p "$HOME/.local/bin" && ln -sfn "$HOME/.local/openclaw/bin/openclaw" "$HOME/.local/bin/openclaw"'
+key_kind = "deepseek"
+# The DeepSeek provider is a plugin that lives under OPENCLAW_HOME, so it is installed in the run's isolated home. The
+# key arrives on stdin and goes to .openclaw/.env (0600), as the docs allow; never an argument.
+key_route = "login"
+login = "bash -lc 'openclaw plugins install @openclaw/deepseek-provider && umask 077 && mkdir -p \"$OPENCLAW_HOME/.openclaw\" && { printf DEEPSEEK_API_KEY=; cat; } > \"$OPENCLAW_HOME/.openclaw/.env\"'"
+# Pad data for the dodger copy only (section 2): provider deepseek calls https://api.deepseek.com.
+model_host = "api.deepseek.com"
+ready_text = ""
+pre_keys = ""
+exit_keys = '/exit\r'
+submit_delay = 2
+subagent_word = "subagent"
+keep_going = true
+# No daemon: PRD-11 names none for OpenClaw. Its subagents need a Gateway that 1.0 does not start (PRD-11 ledger OW-10).
+
+[direct]
+files = { ".openclaw/openclaw.json" = "direct/openclaw-cli-config.json" }
+
+[gateway]
+files = { ".openclaw/openclaw.json" = "gateway/openclaw-cli-config.json" }
+key_route = "file"
+key_file = "{home}/.openclaw/.env"
+key_line = "AI_GATEWAY_API_KEY={key}"

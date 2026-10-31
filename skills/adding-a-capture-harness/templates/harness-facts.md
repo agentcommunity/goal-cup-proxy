@@ -51,9 +51,8 @@ to the harness's roots (`NODE_EXTRA_CA_CERTS`: mode `extend`) or replaces them (
 the harness saves the model service the participant picks: the config file (relative to its
 config home) and the key that holds the service's URL, with a source or a measurement, and
 whether a switch inside a session (a `/model` command) rewrites it. That is
-`capture.model_host_from` (D62), and no provider list is needed. Only for a harness that can
-reach one fixed service: its host, and whether the shared provider table
-(`crates/goalcup-protocol/providers.toml`) has it. Say yes or no: is the harness Node (npm package,
+the connector's `host_hints` row, and no provider list is needed. Only for a harness that can
+reach one fixed service: its host, and whether `connectors/model-hosts.toml` lists it. Say yes or no: is the harness Node (npm package,
 `node` script or Node/Bun binary)? Say yes or no: does it honour `HTTPS_PROXY` on its own, and if
 not, which variable turns that on (Node: `NODE_USE_ENV_PROXY=1`)? Without it the run records no
 model traffic. Telemetry and update hosts; SSE / WebSocket? Any base-URL override variables (Goal
@@ -72,3 +71,17 @@ The setting in the harness's own config that stops its permission prompts, the f
 lives in, and the values that mean so (source or measurement). It becomes
 `[[participant.no_prompts]]` and the harness's section in docs/HARNESS-SETUP.md. Goal Cup
 recommends it and never sets it (D67). "None needed" is a fact too: say how you know.
+
+## Pad result
+From the test pad's `row.json` and `report.txt` for this connector and version, not from memory.
+Run: `scripts/pad/pad` with your settings file, `mode`, `case` and `where`; the date and the commit.
+| Check | Result | Note |
+|---|---|---|
+| C1 no missed call | | |
+| C2 every subagent recorded | | |
+| C3 no secret | | |
+| C4 record whole, server copy whole and readable (or "server off") | | |
+| C5 usage stats present | | |
+| C6 counts the participant saw | | |
+| Local log check | | `local_log: none` is a fact, not a failure |
+Tier from the full run on staging: <tier, or "not run">. Anything the pad cannot reach, and why.

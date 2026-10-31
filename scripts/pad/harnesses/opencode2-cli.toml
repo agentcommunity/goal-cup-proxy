@@ -1,0 +1,36 @@
+# Pad data for OpenCode 2 (PRD-12 section 6): test data, never connector data; goalcup never reads it.
+# Vendor pages read 31 Oct 2026: https://opencode.ai/v2/docs (npm install -g @opencode/cli), https://opencode.ai/v2/docs/config
+# (providers.<id>.settings.apiKey with {env:NAME}, model as provider/model, update), https://opencode.ai/v2/docs/providers
+# (settings.baseURL, models with modelID), https://opencode.ai/v2/docs/cli (--standalone, `opencode service start`),
+# https://vercel.com/docs/ai-gateway/coding-agents/opencode (provider vercel).
+# Measured in a build box 31 Oct 2026: @opencode/cli@2.2.2 installs under its own prefix and prints "opencode v2.2.2";
+# `opencode service start` detaches a server that runs as `opencode.exe serve --service`.
+# Read from docs, not run against a live harness: the config keys below, the model ids, the TUI, /exit.
+#
+# Same program name as OpenCode 1: see opencode-cli.toml for the version link that version_cmd sets.
+version = "2.2.2"
+version_cmd = 'if [ -x "$HOME/.opencode/2.2.2/bin/opencode" ]; then mkdir -p "$HOME/.local/bin" && ln -sfn "$HOME/.opencode/2.2.2/bin/opencode" "$HOME/.local/bin/opencode"; fi; opencode --version'
+install = 'npm i -g --prefix "$HOME/.opencode/2.2.2" @opencode/cli@2.2.2 && mkdir -p "$HOME/.local/bin" && ln -sfn "$HOME/.opencode/2.2.2/bin/opencode" "$HOME/.local/bin/opencode"'
+key_kind = "deepseek"
+# The config names the variable ({env:...}); the launch shell exports it from the key file, never echoed.
+key_route = "env"
+key_env = "DEEPSEEK_API_KEY"
+# Pad data for the dodger copy only (section 2): provider deepseek calls https://api.deepseek.com.
+model_host = "api.deepseek.com"
+ready_text = ""
+pre_keys = ""
+exit_keys = '/exit\r'
+# The shared background service stale-gateway.sh leaves running (PRD-11 acceptance 5), in the foreground so the script
+# can see it live; `opencode service start` detaches and exits at once.
+daemon = "opencode serve --service"
+submit_delay = 2
+subagent_word = "subagent"
+keep_going = true
+
+[direct]
+files = { ".config/opencode/opencode.json" = "direct/opencode2-cli-config.json" }
+
+[gateway]
+files = { ".config/opencode/opencode.json" = "gateway/opencode2-cli-config.json" }
+key_route = "env"
+key_env = "AI_GATEWAY_API_KEY"
