@@ -867,3 +867,88 @@ Revision 3 against OWNER-DECISIONS.md (the ledger wins). Fix ids are from the al
   until PRD-11's hosts slice: every name is `NotListed` and there are no subtrees. A proxy test that
   needs a `Listed` or `Never` answer waits for that merge; nothing in `src/proxy/` copies the
   matching meanwhile.
+
+### 2026-10-30, replan after core slice 1 (merge 0e411074)
+
+- **Section 7 as built.** Brotli is counted per allocation, not as `1 << WBITS` read from the header:
+  brotli-decompressor 5.0.3 allocates the whole declared window at the first meta-block, so a flushed
+  (SSE) body counts its full window from the first push (about 4.24 MB at WBITS 22, 16.8 MB at 24). A
+  body is refused only before its first piece went out; a body already decoding is never refused. A
+  refused body's allocation is made and dropped at once, a transient of up to 16 MiB per worker
+  thread outside `held` (`BrotliHeap` doc). Zstd counts its frame window plus 512 KiB
+  (`ZSTD_STREAM_OVERHEAD`). Section 7's "40 bodies is 160 MiB" holds at WBITS 22; at WBITS 24
+  `room()` at the default soft guard (384 MiB, less what is held) fits about 23 open bodies, under
+  run 1's about 40. The window Anthropic sends stays the Risks row's pad check. Wire-proxy's 14:47Z
+  owner question (acceptance 10 holds for about 40 concurrent coded bodies, not 200) touches no
+  locked item: R5 holds, the lever is PRD-02's soft default, measured by PRD-16 X3 and PRD-02 R8.
+  The proxy adds no cap and no uncounted decoder for it.
+- **Slice 2 carries three nits from the last review** (owned files): delete the last block of
+  `a_flushed_brotli_body_counts_its_whole_window` in `tests/proxy_decode.rs` (room `1 << 20`), which
+  repeats the first block of `a_window_over_room_is_not_decoded`, and drop "and refuses a body whose
+  window does not fit" from its doc (B14, R2); rewrap the `Zstd` struct doc in `decode.rs` (lines
+  674 to 678, one line at 127 columns) to the file's 100 (B15). The `BrotliHeap` doc's claim that
+  PRD-02's margin holds the refusal transient is true only when the soft guard is at least
+  64 MiB times the worker threads (the margin is a quarter of soft); say that bound instead.
+- **R1 is declined for 1.0:** single-segment zstd frames are over-counted by up to about 384 KiB per
+  body. It only makes the guard more cautious, touches no record byte, and would add lines to the
+  file most over its estimate. Reopen only if A1 to A3 show a `decoder_window` GAP on a zstd body.
+  A17 (refuse brotli allocations) stays skipped: the crate's Huffman table sites use an empty
+  slice unchecked and could panic.
+- **Size (decision line 15:16Z in the wire-proxy log).** Slice 1 is 2,873 src lines against its
+  files' 2,410 estimate (+19%): `decode.rs` 810 against 540, `ws.rs` 735 against 600, `ca.rs` 439
+  against 400, `connect.rs` 673 against 650, `tls.rs` 203 against 220, `mod.rs` 13. The extra in
+  `decode.rs` serves point 3 (decoder memory counted as allocated, so the guard writes a GAP where
+  the process once grew unseen: the breaker measured 3.2 GB allocated against 384 MiB counted) and in
+  `ws.rs` point 1 (every control frame recorded, the data message kept whole); both accepted. The
+  4,250 row stays the ceiling: `mod.rs`, `hosts.rs`, `pump.rs`, `tunnel.rs`, `http1.rs` and `h2.rs`
+  get at most 1,802 lines together (4,250 plus 10%, less 2,873), against their 1,990 estimate. The
+  builder cuts what serves no point first; past 1,802 needs its own decision line naming the point.
+  Tests: 1,029 lines in 4 of the 7 planned files against the 2,000 row; `proxy_http1.rs`,
+  `proxy_h2.rs`, `proxy_tunnel.rs` and `proxy_restart.rs` share the 971 left (fixtures not counted).
+- **On integration now:** `proxy::{ca, tls, connect, decode, ws}` with `RunCa`, `Tls`,
+  `BodyDecoder`, `Step`, `parse_codings`, `WsConn`, `PrefixedIo`. Slice 2 builds `serve`, `hosts`,
+  `pump`, `tunnel` and `http1` on them; `http1` feeds `BodyDecoder` and records what each `Step` says.
+- No locked ledger item is touched. No new owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-14 slice 4 (merge ec0d79d8)
+
+- **`proxy_connect` joins PRD-14's `heavy` group in the PRD-03 merge that brings its 2,000
+  concurrent connections case,** not before: `proxy_connect.rs` is on integration with ClientHello
+  parses only, which need no group. That merge carries one edit to `.config/nextest.toml`: add
+  `proxy_connect` to the alternation of the existing override, which reads
+  `filter = 'binary(/^native_walk$/)'` at ec0d79d8 (so `binary(/^(native_walk|proxy_connect)$/)`).
+  Under merge rule 1 that one edit is the seam change the PRD-16 note after PRD-17 phase 0 allows.
+  `proxy_restart.rs` does the same in the merge that brings it.
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-08 slice 4 (merge 1fdaf2c3): what `conn_bytes` now demands of the proxy
+
+PRD-08's `conn_bytes` is built (PRD-08 note). It judges only what the record shows, so the proxy's
+slice that writes decrypted connections must meet four points or the check is blind or fails a good
+run:
+
+- **Every decrypted `conn` END carries `plain_up` and `plain_down`.** One decrypted connection with
+  no tail turns the whole run's `conn_bytes` into `skip`, which hides a real loss.
+- **Every HTTP stream END carries `wire`** (the body bytes on the wire; the verifier falls back to
+  `seen` if absent). Heads are counted from the OPEN `headers`.
+- **A parser fault on a reused decrypted connection writes a `conn` GAP** (PRD-01 section 4, `lost`
+  = unparsed bytes + 1). A GAP on an HTTP request or response stream does not cover the other
+  requests: an unparsed request with no `conn` GAP leaves its bytes unaccounted and `conn_bytes`
+  fails (exit 2) above 1 MiB and 50% of the direction.
+- **A WebSocket stream GAP carries its real `lost`** (+1 by invariant 11). `lost` 0 (size unknown)
+  waives the check for the whole connection, so use it only when the size is unknown.
+
+No locked ledger item is touched and no owner question comes from this note.
+
+### 2026-10-30, replan after PRD-12 slice 5 (merge 9e71bde0): the pad's scripts for acceptance 3, 7 and 9
+
+- `scripts/pad/exec/` holds the watcher commands: `h2-parallel.sh` (acceptance 3: four `--http2-prior-knowledge`
+  requests in parallel to `api.openai.com`, curl 8.10.0 or later), `refusal-curl.sh` (acceptance 7:
+  a client trusting only the system CAs, two calls, a 660 s sleep, a third call) and `long-tunnel.sh`
+  (acceptance 9: 90 s on `stream.wikimedia.org`, a non-model host). The record decides the pass, not
+  the script's exit.
+- **What the pad reads from the record for acceptance 7:** the only loss a `refusal-curl.sh` row may
+  name is `tls_refused`, and the verifier exit may be 1 for it alone; anything else named fails the
+  row. A `tls_refused` GAP with `{"alert": false}` stays the case PRD-08 skips for `refusal_after_trust`.
+  A dodger row expects `pinned` tunnels with no `tls_refused` of its own.
+- No locked ledger item is touched and no owner question comes from this slice.

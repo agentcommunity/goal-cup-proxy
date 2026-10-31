@@ -8,12 +8,12 @@ install = "npm i -g @anthropic-ai/claude-code@2.1.312"
 key_kind = "claude"
 key_route = "env"
 key_env = "ANTHROPIC_API_KEY"
+# Pad data for the dodger copy only (section 2): the host of the direct case's model calls (ANTHROPIC_API_KEY).
+model_host = "api.anthropic.com"
 # Down, Enter: "Yes, I trust this folder" (measured on 2.1.283, docs/harnesses/claude-code-cli.md section 10).
 # The once-only "use this API key?" question and any first-run screen are unmeasured on 2.1.312.
 pre_keys = '\033[B\r'
 exit_keys = '/exit\r'
-submit_delay = 2
-subagent_word = "subagent"
 keep_going = true
 
 [gateway]

@@ -203,7 +203,7 @@ chained record is the start.
 
 A connector declares how its harness is ended: `process_group` or `native_pid` (the npm wrapper of
 Codex hides the native binary), plus a grace. Seal-time termination follows it. See D30 and
-[TERMINATION](TERMINATION.md).
+[TERMINATION](archive/TERMINATION.md).
 
 ## D23. Harness tiers.
 
@@ -232,7 +232,7 @@ must be stripped before anything is published (open: [TODO](../TODO.md#known-iss
 `Confirmed` means: a process-table sweep after signalling found no member of the owned set alive,
 confirmed by a second sweep. The owned set is the root and what the daemon could reach by walking
 its descendants. A process that left the walk before the first snapshot is outside it. The limit is
-stated, not hidden. Full contract and per-platform windows: [TERMINATION](TERMINATION.md).
+stated, not hidden. Full contract and per-platform windows: [TERMINATION](archive/TERMINATION.md).
 
 ## D36. Two-tier redaction on the wire leg, and a harness-agnostic recorder.
 

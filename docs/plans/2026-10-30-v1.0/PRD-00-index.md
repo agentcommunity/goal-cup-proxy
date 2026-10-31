@@ -1267,3 +1267,43 @@ why. Fixes for other files are made by those files' owners; this list covers onl
   620 tests (PRD-11 note names the points the lines serve). That is 710 src and 220 tests over the
   row; the Rust totals of about 18,100 src and at most about 14,200 tests hold only if other rows come
   in under them. PRD-16 tracks the totals.
+
+### 2026-10-30, replan after PRD-10 slice 2 (merge 56495dd6)
+
+- **Ownership:** `crates/goalcup/tests/cli_common/` (the CLI tests' shared `status.json` builder) is
+  PRD-10's, under its `tests/cli_*.rs` row (reviews A10 and B2). A folder module does not build as its
+  own test binary, and `tests/common/` stays PRD-14's. Read the PRD-10 row as `tests/cli_*`.
+
+### 2026-10-30, replan after PRD-11 slice 3 (merge c14d63b8)
+
+- **S3 additions to the final shape:** `LaunchPlan.unread: Vec<PathBuf>` (hint and refusal files
+  there but not read: linked, over 1 MiB, unreadable or unparsable) and `LaunchPlan.log: Vec<String>`
+  (fixed-text lines naming files, keys and hosts, never a value: a hint skipped, a `never` host left
+  out, an `update_off` row not written, a bad `record-hosts.txt` line). PRD-10 prints one start line
+  per `unread` entry ("goalcup could not read <file>; a model service named there may not be
+  recorded.", PRD-11 section 2) and writes each `log` line through `cli::log`. Users: PRD-10, PRD-12.
+  `write_settings` and `hosts::check` keep the signatures above.
+- **Size table, row "Connector code (PRD-11)":** a replan decision moves its ceiling to 1,700 src and
+  760 tests (PRD-11 note names the points). That is 900 src and 360 tests over the row; PRD-16 tracks
+  the Rust totals.
+
+### 2026-10-31, replan after PRD-04 second slice (merge 7e8ed89b)
+
+- **Ownership:** `crates/goalcup/tests/native_common/` (the native tests' shared `append`, `notes`,
+  `end_of` and `gap_rows` helpers) is PRD-04's, under its `tests/native_*.rs` row (review A10), the
+  same shape as `tests/cli_common/` above. A folder module does not build as its own test binary, and
+  `tests/common/` stays PRD-14's. Read the PRD-04 row as `tests/native_*`.
+- **Size table, row "Native (PRD-04)":** a replan decision sets its ceilings to 1,500 src and 1,780
+  tests (PRD-04 note names the points the lines serve). That is 720 src and 780 tests over the row;
+  the Rust totals of about 18,100 src and at most about 14,200 tests hold only if other rows come in
+  under them. PRD-16 tracks the totals.
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-31, replan after PRD-06 slice 3 (merge a76bd11d)
+
+- **Size table, row "Upload (PRD-06)":** a replan decision sets its ceilings to 2,500 src and 1,900
+  tests, inline tests counted (PRD-06 note names points 3, 5 and 6). That is 1,560 src and 900 tests
+  over the row (at a76bd11d: 2,253 src and 1,625 tests with 7 of 9 files written). The Rust totals of
+  about 18,100 src and at most about 14,200 tests hold only if other rows come in under them. PRD-16
+  tracks the three rows that went over (connector, usage, upload).
+- No locked ledger item is touched and no owner question comes from this slice.

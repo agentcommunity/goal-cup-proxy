@@ -11,14 +11,13 @@ You run one agent for 168 hours.
 - [PARTICIPANT-GUIDE](PARTICIPANT-GUIDE.md): one page: install, setup, the repository, token and project folder, start, status, continue, the end. The long 0.6 guide is in `archive/`.
 - [HARNESS-SETUP](HARNESS-SETUP.md): the harness settings for a 168-hour run (permission prompts, commits, step limits, sign-in, subagents, `PATH`, first-run screens), per harness.
 - [RULES](RULES.md): the contract. What a run may and may not do, and what Goal Cup Proxy touches.
-- [goal-cup-setup skill](../skills/goal-cup-setup/SKILL.md): hand the setup to your own agent.
 - [SECURITY](../SECURITY.md): what the tool does on your machine, and how to report a problem.
 
 ## Organizer
 
 You run the event, the server and the test runs.
 
-- [OPERATING](OPERATING.md): the runbook. Deploy, test runs, the matrix, edge cases by hand, bad days, finding codes.
+- [OPERATING](OPERATING.md): the runbook. Where things run, dates, deploy, test runs, fetch and check a run, bad days, release.
 - [UPLOAD-API](UPLOAD-API.md): the exact wire contract between `goalcup` and the server.
 - [server/worker README](../server/worker/README.md): the Worker's code, tests, local use and runbook.
 - [packaging README](../packaging/README.md): release tarballs and `install.sh`.
@@ -54,8 +53,8 @@ You change the Rust code, the Worker or the scripts.
 - [README](../README.md): build, install, run one capture, the gate.
 - [ARCHITECTURE](ARCHITECTURE.md): how the parts fit, the glossary, and where each guarantee is tested.
 - [DECISIONS](DECISIONS.md): the rules code cites as `D<number>`, with a status table at the top.
-- [CONTRACTS](CONTRACTS.md): byte and format rules for v5 capture, the local finish and the control API.
-- [TERMINATION](TERMINATION.md): what `Confirmed` termination does and does not claim.
+- [CONTRACTS](archive/CONTRACTS.md): byte and format rules for v5 capture, the local finish and the control API.
+- [TERMINATION](archive/TERMINATION.md): what `Confirmed` termination does and does not claim.
 - [CHEAT-CHECKLIST](CHEAT-CHECKLIST.md): read before you trust a verifier Pass.
 - [TODO](../TODO.md): open work and known issues.
 - [Simplification plan](research/SIMPLIFICATION-2026-10-21.md): what to simplify before and after the event.

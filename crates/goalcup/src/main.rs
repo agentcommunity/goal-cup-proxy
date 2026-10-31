@@ -156,24 +156,28 @@ fn run(command: Command) -> ExitCode {
         Command::Start {
             practice,
             test,
+            repo,
+            prompt,
             connector,
             hosts,
             ..
-        } => {
-            // Refused before anything is read or created.
-            if (connector.is_some() || hosts.is_some()) && !practice && !test {
-                say(text::FILE_FLAGS_COMPETE);
-                return ExitCode::from(1);
-            }
-            not_built("start")
-        }
-        Command::Setup { .. } => not_built("setup"),
+        } => cli::start::run(
+            practice || test,
+            connector.is_some() || hosts.is_some(),
+            repo.is_some(),
+            prompt.as_deref(),
+        ),
+        Command::Setup {
+            harness,
+            yes,
+            record_host,
+        } => cli::setup::run(harness.as_deref(), yes, record_host.as_deref()),
         Command::Continue { .. } => not_built("continue"),
         Command::Recover { .. } => not_built("recover"),
         Command::Status { part, json } => cli::status::run(part, json),
         Command::Seal { .. } => not_built("seal"),
         Command::Upload { .. } => not_built("upload"),
-        Command::TimeLeft => not_built("time-left"),
+        Command::TimeLeft => cli::time_left::run(),
     }
 }
 

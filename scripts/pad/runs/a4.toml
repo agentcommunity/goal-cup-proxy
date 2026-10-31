@@ -1,0 +1,8 @@
+# Acceptance A4 (PRD-16 section 9): Kilo through Vercel AI Gateway as an OpenAI-compatible provider, the owner's own
+# example, twenty minutes of the pad's `full` prompt. Not a release blocker. `key` names the harness's own key; the
+# gateway case uses the gateway key.
+harness = "kilo-cli"
+key = "deepseek"
+case = "gateway"
+mode = "full"
+minutes = 20

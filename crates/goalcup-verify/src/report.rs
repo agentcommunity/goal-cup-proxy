@@ -2,25 +2,14 @@
 //! the coverage line (section 5). `why` is one plain line; no record byte is ever printed here.
 
 use crate::input::Input;
-use crate::integrity::{self, Check, Outcome, Res};
+use crate::integrity::{self, Check, Outcome, Recount, Res};
+use crate::secrets::{self, Rules};
+use crate::server;
 use serde_json::{Map, Value, json};
 use std::path::Path;
 
 /// Checks a later slice builds: in the report as `skip`, so readers see every id now.
-const LATER: &[&str] = &[
-    "listed_hosts_decrypted",
-    "conn_bytes",
-    "mask_failclosed",
-    "history_complete",
-    "wire_keeps_up",
-    "threads_match",
-    "subagents_present",
-];
-const LATER_SERVER: &[&str] = &[
-    "server_chunks_whole",
-    "server_equals_local",
-    "server_counts_match",
-];
+const HISTORY_ID: &str = "history_complete";
 const NOT_BUILT: &str = "not built in this slice";
 
 /// The report as JSON, the exit code, and the text for stderr.
@@ -30,16 +19,27 @@ pub struct Report {
     pub text: String,
 }
 
-/// Checks every entry of the input. `now_ns` is set for `--live`.
-pub fn build(input: &Input, now_ns: Option<u64>) -> Report {
-    let server = input.kind == "server";
+/// Checks every entry of the input. `now_ns` is set for `--live`; `local` is `--local`, the
+/// local entries a server copy is compared with; `known` (`--known`) adds the `secrets` check.
+pub fn build(
+    input: &Input,
+    now_ns: Option<u64>,
+    local: Option<&Input>,
+    known: Option<&Rules>,
+) -> Report {
+    let is_server = input.kind == "server";
     let (mut exit, mut text, mut entries) = (0u8, String::new(), Vec::new());
-    let mut run = Value::Null;
+    let (mut run, mut all) = (Value::Null, Vec::new());
     for e in &input.entries {
-        let mut o = integrity::check(e, now_ns);
+        let f = is_server.then(|| server::read(e, input.server));
+        let want = f.as_ref().map(server::wanted).unwrap_or_default();
+        let mut o = integrity::check(e, now_ns, &want);
         let mut checks = std::mem::take(&mut o.checks);
-        let later = LATER.iter().chain(if server { LATER_SERVER } else { &[] });
-        checks.extend(later.map(|id| Check::new(id, None, Res::Skip, NOT_BUILT)));
+        checks.push(Check::new(HISTORY_ID, None, Res::Skip, NOT_BUILT));
+        if let Some(f) = &f {
+            checks.extend(server::checks(e, f, &o, local));
+        }
+        checks.extend(known.map(|k| secrets::check(k, e)));
         let worst = checks.iter().map(|c| c.result).max().unwrap_or(Res::Pass);
         let partial = !o.sealed || input.kind == "live" || o.pruned;
         exit = exit.max(match worst {
@@ -53,10 +53,12 @@ pub fn build(input: &Input, now_ns: Option<u64>) -> Report {
         let name = o.entry.clone().unwrap_or_else(|| folder(&e.dir));
         text += &self::text(&name, &o, &checks);
         entries.push(entry(name, &o, &checks));
+        all.extend(checks);
     }
+    let server = is_server.then(|| server::summary(&all));
     let result = ["pass", "named", "fail"][usize::from(exit)];
     let json = json!({"verifier": env!("CARGO_PKG_VERSION"), "input": input.kind, "run": run,
-        "result": result, "exit": exit, "entries": entries, "server": null});
+        "result": result, "exit": exit, "entries": entries, "server": server});
     Report { json, exit, text }
 }
 
@@ -66,10 +68,15 @@ fn folder(p: &Path) -> String {
         .unwrap_or_default()
 }
 
+/// Model requests written (PRD-01 section 9): what the participant, status and heartbeat show.
+fn requests(c: &Recount) -> u64 {
+    c.get("http_post").saturating_add(c.get("ws_up_msgs"))
+}
+
 /// One S6 entry.
 fn entry(name: String, o: &Outcome, checks: &[Check]) -> Value {
     let c = &o.counts;
-    let requests = c.get("http_post") + c.get("ws_up_msgs");
+    let requests = requests(c);
     let label = match (requests > 0, c.get("native_bytes") > 0) {
         (true, true) => "wire_and_native",
         (true, false) => "wire_only",
@@ -85,7 +92,8 @@ fn entry(name: String, o: &Outcome, checks: &[Check]) -> Value {
         "req_holes": c.get("req_holes"), "gaps": gaps, "lost_bytes": c.get("lost_bytes"),
         "lost_unknown": c.get("lost_unknown"), "after_stop_bytes": c.after_stop,
         "mask_failclosed_bytes": c.get("mask_failclosed_bytes"), "off_ms": c.get("off_ms"),
-        "tunnels": c.get("tunnels"), "native_files": c.get("native_files"), "threads": null});
+        "tunnels": c.get("tunnels"), "native_files": c.get("native_files"),
+        "threads": o.legs.threads.len()});
     let checks: Vec<Value> = checks
         .iter()
         .map(|k| {
@@ -94,11 +102,12 @@ fn entry(name: String, o: &Outcome, checks: &[Check]) -> Value {
         })
         .collect();
     let s = |k: &str| o.start.get(k).cloned().unwrap_or(Value::Null);
-    json!({"entry": name, "sealed": o.sealed, "seal_reason": o.seal_reason, "boots": o.boots,
-        "connector": s("connector"), "keep": s("keep"), "label": label, "harness_log": null,
-        "provider_errors": null,
+    let reason = o.seal.as_ref().map(|s| &s["reason"]);
+    json!({"entry": name, "sealed": o.sealed, "seal_reason": reason, "boots": o.boots,
+        "connector": s("connector"), "keep": s("keep"), "label": label, "harness_log": o.legs.harness_log,
+        "provider_errors": o.legs.provider_errors,
         "bytes": {"raw": o.raw, "compressed": o.compressed, "framing": o.raw.saturating_sub(o.data_bytes)},
-        "links": o.links, "checks": checks, "counts": counts, "history": null, "threads": []})
+        "links": o.links, "checks": checks, "counts": counts, "history": null, "threads": o.legs.threads})
 }
 
 /// The text form of one entry: `why` per failed or named check, then the coverage line.
@@ -112,9 +121,11 @@ fn text(name: &str, o: &Outcome, checks: &[Check]) -> String {
         t += "  The entry is not sealed.\n";
     }
     t += &format!(
-        "Recorded: {} requests. Recording off: {} times, {} s. The harness's own log is not read \
-         for this harness (optional). History check: skipped, {NOT_BUILT}.\n",
-        c.get("http_post") + c.get("ws_up_msgs"),
+        "Recorded: {} requests, {} refused by the provider. History check: skipped, {NOT_BUILT}. \
+         {} Recording off: {} times, {} s.\n",
+        requests(c),
+        o.legs.refused,
+        o.legs.coverage,
         c.off_spans,
         c.get("off_ms") / 1000
     );

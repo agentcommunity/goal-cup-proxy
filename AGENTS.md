@@ -37,7 +37,7 @@ which wins over every PRD, then the [PRD index](docs/plans/2026-10-30-v1.0/PRD-0
 | `connectors/<id>/` | One harness = one `harness.toml` plus seed files. Data, not code. Pinned by digest. |
 | `server/worker` | The upload server: a Cloudflare Worker in TypeScript. |
 | `scripts/` | The gate, pins, connector check, link check, matrix, release and research tools. One line each, and which ones CI and the gate run: [`scripts/README.md`](scripts/README.md). |
-| `skills/` | Agent skills: `adding-a-capture-harness` (for contributors), `goal-cup-setup` (for participants), `goal-cup` (copied into the harness home). |
+| `skills/` | `goal-cup` (copied into the harness home) and `adding-a-capture-harness` (contributors). |
 | `docs/` | Docs by audience: [`docs/README.md`](docs/README.md). Finished work and old narratives: `docs/archive/`. |
 | `packaging/` | Release packaging and `install.sh`. |
 | `spikes/`, `harnesses/` | Old measurements (read-only fixtures) and local harness installs (git-ignored). |
@@ -55,10 +55,10 @@ Both are checked by tests.
    retired.
 4. [`docs/RULES.md`](docs/RULES.md): the participant contract.
 5. [`docs/CHEAT-CHECKLIST.md`](docs/CHEAT-CHECKLIST.md): read before you trust a verifier Pass.
-   [`docs/TERMINATION.md`](docs/TERMINATION.md): what `Confirmed` does and does not claim.
+   [`docs/archive/TERMINATION.md`](docs/archive/TERMINATION.md): what `Confirmed` does and does not claim.
 6. Adding a harness: [`skills/adding-a-capture-harness/SKILL.md`](skills/adding-a-capture-harness/SKILL.md),
    then [`Add and test a connector`](docs/HARNESS-ONBOARDING.md#quick-path).
-7. Wire contracts: [`docs/CONTRACTS.md`](docs/CONTRACTS.md), [`docs/CONNECTOR-SCHEMA.md`](docs/CONNECTOR-SCHEMA.md),
+7. Wire contracts: [`docs/archive/CONTRACTS.md`](docs/archive/CONTRACTS.md), [`docs/CONNECTOR-SCHEMA.md`](docs/CONNECTOR-SCHEMA.md),
    [`docs/UPLOAD-API.md`](docs/UPLOAD-API.md). Running it: [`docs/OPERATING.md`](docs/OPERATING.md).
 
 ## The gate

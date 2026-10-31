@@ -1,0 +1,21 @@
+# Kimi Code 2.4.1, checked against moonshotai.github.io/kimi-code (configuration/env-vars, data-locations,
+# config-files, reference/kimi-command) and the 2.4.1 package run in a build box. KIMI_CODE_HOME moves the whole
+# data root, so HOME stays the participant's. The session index sits beside sessions/, not inside it.
+# Provider keys and base URLs are read from config.toml only; the shell keys are not read (env-vars page).
+id = "kimi-code-cli"
+name = "Kimi Code"
+program = "kimi"
+resume = ["--continue"]
+home = { KIMI_CODE_HOME = "{home}" }
+env = { KIMI_CODE_NO_AUTO_UPDATE = "1" }
+host_hints = [
+  { file = "{home}/config.toml", key = "providers.*.base_url" },
+  { file = "{home}/config.toml", key = "providers.*.env.*_BASE_URL" },
+]
+hint_env = ["KIMI_MODEL_BASE_URL", "KIMI_CODE_BASE_URL"]
+secret_files = ["{home}/config.toml", "{home}/credentials/*.json", "{home}/credentials/mcp/*.json"]
+native = [
+  { name = "index", root = "{home}", pattern = "session_index.jsonl" },
+  { name = "wire", root = "{home}/sessions", pattern = "**/wire.jsonl" },
+]
+first_screen = "If Kimi Code asks you to sign in, do it now, before you type your prompt."

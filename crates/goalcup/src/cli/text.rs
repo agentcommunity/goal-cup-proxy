@@ -1,13 +1,14 @@
-//! Every message the participant sees (PRD-10 section 13), as plain functions of facts.
-//!
-//! The three contract words are kept byte for byte, because the pad and scripts read them:
-//! [`READY_MARK`], [`PROBLEM`] and the `shows the code <code>.` ending of [`approval_code`].
-//! No harness name is written here: it comes from the connector, as `name`.
+//! Every message the participant sees (PRD-10 section 13), as plain functions of facts; a harness
+//! name comes from the connector, as `name`. The contract words the pad and scripts read stay byte
+//! for byte: [`READY_MARK`], [`PROBLEM`] and the `shows the code <code>.` of [`approval_code`].
 
 use std::path::Path;
 
 use super::RunMode;
 use super::status::State;
+use crate::connector::Refusal;
+use crate::upload::policy::Class;
+use crate::upload::state::{Final, State as Upload, UploadJson};
 use crate::watchdog::Exit;
 
 /// The start of the line that says the harness is being recorded.
@@ -56,10 +57,235 @@ path. Set HOME, or GOALCUP_HOME, to a folder outside your project.";
 pub const NO_CWD: &str = "goalcup cannot tell where to keep your runs: GOALCUP_HOME is not a full \
 path and the current folder cannot be read. Set GOALCUP_HOME to a full path outside your project.";
 
-/// A command whose body is not in this build yet.
+// The folder checks of `goalcup start` (section 3 step 2). Every path is quoted.
+
+/// The lead line of the one folder refusal; a line per problem follows, then [`NOTHING_CREATED`].
+pub const FOLDER_REFUSED: &str = "this folder cannot hold a run yet. Fix each of these, then run \
+the command again:";
+
+/// The last line of a refusal that came before anything was made.
+pub const NOTHING_CREATED: &str = "Nothing was created.";
+
+/// `start` cannot read the current folder: it was deleted or moved away.
+pub const PROJECT_GONE: &str = "the project folder is gone: the folder this was run in cannot be \
+read any more. Change to your project folder and run the command again.";
+
+/// Stands for a folder entry whose name could not be read.
+pub const UNREADABLE_ENTRY: &str = "an entry that could not be read";
+
+/// Stands for the entries of a folder that could not be listed.
+pub const UNLISTED_FOLDER: &str = "entries that could not be listed";
+
+/// Names in quotes; the two stand-ins above are not names and stay bare.
+fn quoted(names: &[String]) -> String {
+    let quote = |n: &String| match n.as_str() {
+        UNREADABLE_ENTRY | UNLISTED_FOLDER => n.clone(),
+        _ => format!("\"{n}\""),
+    };
+    names.iter().map(quote).collect::<Vec<_>>().join(", ")
+}
+
+pub fn folder_extra(names: &[String]) -> String {
+    format!(
+        "It holds {}. Start in a new folder that holds only .gitignore, .DS_Store and .env files.",
+        quoted(names)
+    )
+}
+
+pub fn env_not_ignored(names: &[String]) -> String {
+    format!(
+        ".gitignore does not cover {}, so a push could publish it. Add the line .env* to \
+         .gitignore.",
+        quoted(names)
+    )
+}
+
+pub fn inside_git(work_tree: &Path) -> String {
+    format!(
+        "It is inside the Git work tree \"{}\". Start in a folder outside any Git repository.",
+        work_tree.display()
+    )
+}
+
+/// PRD-17 SC1: the agent must never see the record.
+pub fn beside_goalcup(own: &Path) -> String {
+    format!(
+        "It and goalcup's folder \"{}\" hold each other or sit side by side. Start in a folder \
+         elsewhere, or set GOALCUP_HOME to a folder away from it.",
+        own.display()
+    )
+}
+
+/// The line the push block reads; the value is never shown.
+pub const TOKEN_LINE: &str = "\".env.local\" needs exactly one plain GH_TOKEN=<your token> line \
+(no quotes, no export, no spaces, no Windows CRLF line ending). Fix it: the push block reads it.";
+
+pub fn prompt_inside(file: &Path) -> String {
+    format!(
+        "The prompt file \"{}\" is inside the project folder. Move it out of the folder.",
+        file.display()
+    )
+}
+
+pub fn prompt_missing(file: &Path) -> String {
+    format!("The prompt file \"{}\" does not exist.", file.display())
+}
+
+pub fn synced_folder(project: &Path) -> String {
+    format!(
+        "\"{}\" looks like a synced folder: a sync client may upload .env.local and your token. \
+         A folder that is not synced is safer.",
+        project.display()
+    )
+}
+
+/// The entry lock is an `flock`, which NFS and SMB may not keep.
+pub fn network_folder(dir: &Path, kind: &str) -> String {
+    format!(
+        "\"{}\" is on {kind}, where file locks may not hold. A folder on this computer's own \
+         disk is safer.",
+        dir.display()
+    )
+}
+
 pub fn not_built(command: &str) -> String {
     format!("{command} is not built yet")
 }
+
+/// WSL1 (`drive` None), or `what` on a Windows drive of type `drive` (section 3 step 2).
+pub fn wsl(what: &str, drive: Option<&str>) -> String {
+    match drive {
+        None => "This is WSL1, which cannot run goalcup. Convert it to WSL2 (wsl --set-version \
+                 <distro> 2) and run goalcup there."
+            .to_owned(),
+        Some(fs) => format!(
+            "{what} is on a Windows drive ({fs}), which WSL2 reads slowly and without file modes. \
+             Use a folder in the Linux home (under ~)."
+        ),
+    }
+}
+
+// Setup (section 7). No line here names a folder or starts with `PROBLEM:` (section 9).
+pub const GOALCUP_FOLDER: &str = "goalcup's folder (GOALCUP_HOME)";
+
+/// `<harness> <version> (<path>)`; no version before the `--version` probe has run.
+pub fn harness_found(name: &str, version: Option<&str>, program: &Path) -> String {
+    let version = version.map(|v| format!(" {v}")).unwrap_or_default();
+    format!("{name}{version} (\"{}\")", program.display())
+}
+
+pub fn not_installed(name: &str) -> String {
+    format!("{name} is not installed. Install it, then run goalcup setup again.")
+}
+
+/// No `--harness` and none saved; `installed` holds the built-in ids found on `PATH`.
+pub fn no_harness(installed: &[&str]) -> String {
+    let found = installed.join(", ");
+    let found = if found.is_empty() { "none" } else { &found };
+    format!("no harness picked (installed: {found}). Run: goalcup setup --harness <id>")
+}
+
+/// A launch plan refusal (PRD-11 section 5) as the step to fix. It names files and keys only.
+pub fn refusal(r: &Refusal) -> String {
+    match r {
+        Refusal::HomeLocked { home } => {
+            format!(
+                "a run uses \"{}\" now. Run this again once it has ended.",
+                home.display()
+            )
+        }
+        Refusal::SettingSet { file, key } => format!(
+            "\"{}\" sets {key}, which routes around the recorder. Remove it, then run this again.",
+            file.display()
+        ),
+        Refusal::VersionMismatch { program, want } => format!(
+            "{program} --version does not show {want}, the version goalcup works with. Install \
+             that one, then run this again."
+        ),
+    }
+}
+
+/// What `setup --yes` wrote into the isolated `home`: an `update_off` row (`update`), a
+/// `no_prompts` row (`prompts`), or neither. A row not written has its own line before this.
+pub fn settings_set(name: &str, home: &Path, update: bool, prompts: bool) -> String {
+    let home = home.display();
+    let what = match (update, prompts) {
+        (true, true) => "auto-update and its approval prompts",
+        (true, false) => "auto-update",
+        (false, true) => "approval prompts",
+        (false, false) => return format!("goalcup set nothing in {name}'s home \"{home}\"."),
+    };
+    format!("goalcup turned off {name}'s {what} in \"{home}\".")
+}
+
+/// A setting row not written: its file and key, never a value.
+pub fn not_set(file: &Path, key: &str) -> String {
+    let file = file.display();
+    format!("goalcup could not set {key} in \"{file}\". Set it there yourself if you want it.")
+}
+
+pub fn not_written(path: &Path) -> String {
+    let path = path.display();
+    format!("goalcup could not write \"{path}\". Check that folder, then run this again.")
+}
+
+/// Section 6; the participant edits `file` to remove a host.
+pub fn host_added(host: &str, file: &Path) -> String {
+    format!(
+        "goalcup will record {host} from the next part (during a run: goalcup seal, then goalcup \
+         continue). Your harness must trust goalcup's certificate for it, which goalcup sets up. \
+         Your hosts are in \"{}\".",
+        file.display()
+    )
+}
+
+/// `reason` is PRD-11's, which never repeats the name given.
+pub fn host_refused(reason: &str) -> String {
+    format!("goalcup cannot record that host: {reason}.")
+}
+
+pub const NEVER_HOST: &str = "a sign-in host, which goalcup never decrypts";
+
+/// Section 9: a warning, never a `PROBLEM:` line.
+pub fn no_sleep_lock(why: &str) -> String {
+    format!(
+        "This computer may sleep during the run (no sleep lock: {why}). Keep it on mains power \
+         with the lid open."
+    )
+}
+
+pub const SERVER_OFF: &str = "Server check skipped: GOALCUP_SERVER=off, so nothing is uploaded.";
+
+pub fn server_unreachable(why: &str) -> String {
+    format!("goalcup checked its server: {why}. A run needs it to start.")
+}
+
+pub const NO_GIT: &str = "git is not installed. Your agent needs it to push its repository.";
+
+/// PRD-05 section 12, the default text; `db` names a harness whose database is read whole.
+pub fn masking(db: Option<&str>) -> String {
+    let (and, db) = db.map_or(("and ", String::new()), |n| {
+        ("", format!(", and {n}'s database"))
+    });
+    format!(
+        "Goal Cup Proxy hides known secret shapes in memory, before anything is saved: API keys with a \
+         known prefix, login headers, cookies, passwords in URLs, private keys, login tokens, values \
+         named like `api_key`, `secret`, `token` or `password`, and your project's GitHub token. A \
+         hidden value is replaced by stars of the same length. It cannot catch every secret. These \
+         can still be recorded: a key the model repeats back in its reply, a key written right \
+         after a letter, a digit or `_`, a short password, {and}a value with no known shape (for \
+         example a line of `cat .env` whose name is not one of those){db}. Your email address and \
+         your plan and credit balance are recorded. Raw records stay private and are cleaned \
+         before research use. Use keys you can revoke, and rotate every key after the run."
+    )
+}
+
+/// Section 7 step 5: the last lines of a setup that exits 0.
+pub const READY: &str = "Ready.
+  Practice (10 minutes, no GitHub):
+    d=$(mktemp -d) && cd \"$d\" && goalcup start --practice
+  Your run, inside the start window, from your empty project folder, with the prompt saved outside it:
+    goalcup start --repo <you>/<repo> --prompt ~/goal-prompt.txt";
 
 // Times and sizes, as the participant reads them.
 
@@ -267,16 +493,18 @@ pub fn state_line(state: &State, run: &str) -> String {
             "Recording is not answering since {}. Your agent is not slowed.",
             t(since)
         ),
-        State::Losing { streams, bytes } => format!(
-            "Recording is losing data now: {} a gap ({} so far). Your agent is not slowed. \
-             The end screen will say how much.",
-            plural(
+        State::Losing { streams, bytes } => {
+            let n = plural(
                 streams,
                 "connection or file has",
-                "connections or files have"
-            ),
-            size_words(bytes)
-        ),
+                "connections or files have",
+            );
+            format!(
+                "Recording is losing data now: {n} a gap ({} so far). Your agent is not slowed. \
+                 The end screen will say how much.",
+                size_words(bytes)
+            )
+        }
         State::WriterSlow { secs } => {
             format!("Recording is behind: nothing written for {secs} s. Your agent is not slowed.")
         }
@@ -307,10 +535,8 @@ pub fn harness_line(name: &str, alive: bool, exit: Option<Exit>, started: bool) 
 
 /// `Written so far:`, with the hosts by count and the whole count when some have holes.
 pub fn written_line(requests: u64, hosts: &[(&str, u64)], whole: u64, holes: u64) -> String {
-    let mut line = format!(
-        "Written so far: {}",
-        plural(requests, "model request", "model requests")
-    );
+    let n = plural(requests, "model request", "model requests");
+    let mut line = format!("Written so far: {n}");
     if !hosts.is_empty() {
         line += &format!(" ({})", host_list(hosts));
     }
@@ -349,11 +575,7 @@ pub fn parts_line(words: &[&str]) -> String {
 
 /// `Problems: none.`, or the heading over one line per cause.
 pub fn problems_head(n: usize) -> String {
-    if n == 0 {
-        "Problems: none.".to_owned()
-    } else {
-        "Problems:".to_owned()
-    }
+    format!("Problems:{}", if n == 0 { " none." } else { "" })
 }
 
 /// Harness running, no request for 10 minutes, session files newer.
@@ -389,10 +611,10 @@ pub fn native_other_device(path: &str, name: &str) -> String {
 
 /// Note `long_tunnel`: `minutes` streamed (`why: stream`), or `up` bytes sent (`why: upload`).
 pub fn long_tunnel(host: &str, minutes: Option<u64>, up: u64) -> String {
-    let what = match minutes {
-        Some(m) => format!("streamed data for {}", plural(m, "minute", "minutes")),
-        None => format!("received {} from your agent", size_words(up)),
-    };
+    let what = minutes.map_or_else(
+        || format!("received {} from your agent", size_words(up)),
+        |m| format!("streamed data for {}", plural(m, "minute", "minutes")),
+    );
     format!(
         "{PROBLEM} {host} {what} and was not recorded. If it is a model service, run: goalcup \
          setup --record-host {host}. goalcup records it from the next part: to start one now, run \
@@ -453,23 +675,26 @@ pub fn unknown_note(what: &str) -> String {
 
 /// Section 5 rule 6: bytes after the seal's last link.
 pub fn after_seal(name: &str, bytes: u64, hosts: &[String]) -> String {
-    let hosts = if hosts.is_empty() {
-        String::new()
-    } else {
-        format!(" ({})", hosts.join(", "))
-    };
     format!(
-        "Programs {name} started sent {} after this part ended{hosts}; that was not recorded.",
-        size_words(bytes)
+        "Programs {name} started sent {} after this part ended{}; that was not recorded.",
+        size_words(bytes),
+        listed(hosts)
     )
+}
+
+/// ` (a, b)`, or nothing for an empty list.
+fn listed(items: &[String]) -> String {
+    match items {
+        [] => String::new(),
+        _ => format!(" ({})", items.join(", ")),
+    }
 }
 
 /// The harness exited and the run is still open.
 pub fn agent_exited(name: &str, exit: Exit, until: &str, run: &str) -> String {
     format!(
-        "{name} has exited ({}). The run is still open until {until}. To go on, run: goalcup \
-         continue {run}",
-        exit_words(exit)
+        "{} The run is still open until {until}. To go on, run: goalcup continue {run}",
+        has_exited(name, exit)
     )
 }
 
@@ -510,15 +735,10 @@ pub fn requests_written(n: u64, hosts: &[(&str, u64)]) -> String {
 
 /// Rule 3: whole beside the request count when some have holes, and the bytes not recorded.
 pub fn whole_and_lost(whole: u64, holes: u64, lost: u64) -> String {
-    let mut parts = Vec::new();
-    if holes > 0 {
-        parts.push(format!(
-            "{whole} of them written whole, {holes} with missing parts."
-        ));
-    }
-    if lost > 0 {
-        parts.push(format!("{} was not recorded.", size_words(lost)));
-    }
+    let holes =
+        (holes > 0).then(|| format!("{whole} of them written whole, {holes} with missing parts."));
+    let lost = (lost > 0).then(|| format!("{} was not recorded.", size_words(lost)));
+    let parts: Vec<String> = holes.into_iter().chain(lost).collect();
     parts.join(" ")
 }
 
@@ -593,14 +813,10 @@ pub fn cut_files(files: u64, bytes: u64) -> String {
 
 /// Rule 6, outlived processes.
 pub fn outlived(name: &str, count: u64, programs: &[String]) -> String {
-    let list = if programs.is_empty() {
-        String::new()
-    } else {
-        format!(" ({})", programs.join(", "))
-    };
     format!(
-        "{} {name} started were still running at the end{list}. goalcup did not stop them.",
-        plural(count, "program", "programs")
+        "{} {name} started were still running at the end{}. goalcup did not stop them.",
+        plural(count, "program", "programs"),
+        listed(programs)
     )
 }
 
@@ -611,3 +827,160 @@ killed).";
 pub fn details_at(log: &Path) -> String {
     format!("Details for support are in \"{}\"", log.display())
 }
+
+// Upload (PRD-06 section 10): bytes only, never a count of requests or calls.
+
+/// `last_error.class` in plain words; its `text` is never shown.
+fn class_words(class: Class) -> &'static str {
+    match class {
+        Class::Network => "no network",
+        Class::ServerBusy => "the server is busy",
+        Class::Refused => "the server refused it",
+        Class::Stuck => "the copies differ",
+        Class::Internal => "a fault in goalcup",
+    }
+}
+
+/// The `Upload:` line of `upload.json` at `now`. Once nothing will send the part by itself (`end`:
+/// the end screen, or a part with no recorder and no watchdog), bytes still waiting, or an end the
+/// server has not heard, name `goalcup upload` and `upload_by`; after `upload_by` they cannot be
+/// sent (section 5 rule 8).
+pub fn upload_line(u: &UploadJson, now: u64, end: bool) -> String {
+    let t = |s: Option<&String>| s.map(String::as_str).and_then(super::unix_of);
+    let by_at = t(u.upload_by.as_ref());
+    let by = by_at.map(local_clock);
+    let (err, waiting) = (u.last_error.as_ref(), size_words(u.waiting_bytes));
+    let raw = u.confirmed.as_ref().map_or(0, |c| c.raw);
+    let goes = matches!(
+        u.state,
+        Upload::Sending | Upload::CaughtUp | Upload::Waiting
+    );
+    let left = u.waiting_bytes > 0 && (goes || u.state == Upload::Refused);
+    let closed = || {
+        let on = by.as_ref().map(|b| format!(" on {b}")).unwrap_or_default();
+        format!(
+            "Upload: the server closed this run{on}. {waiting} stays on this computer and cannot \
+             be sent."
+        )
+    };
+    if left && by_at.is_some_and(|b| now >= b) {
+        return closed();
+    }
+    // Everything is up, but the server has not heard that the part ended.
+    let end_unsent =
+        u.state == Upload::Waiting && u.final_ == Final::None && by_at.is_none_or(|b| now < b);
+    if end && goes && (u.waiting_bytes > 0 || end_unsent) {
+        let before = by
+            .as_ref()
+            .map(|b| format!(" before {b}"))
+            .unwrap_or_default();
+        if u.waiting_bytes == 0 {
+            return format!(
+                "Upload: the server holds everything but has not heard that this part ended. Run \
+                 goalcup upload{before}, when you are online."
+            );
+        }
+        return format!(
+            "Upload: {waiting} still waits on this computer. Run goalcup upload{before}, when you \
+             are online. Nothing is lost yet."
+        );
+    }
+    match u.state {
+        Upload::Local => "Upload: none. This run stays on this computer.".to_owned(),
+        Upload::Sending | Upload::CaughtUp => {
+            let at = t(u.confirmed.as_ref().map(|c| &c.at)).or(t(u.last_ok.as_ref()));
+            let Some(at) = at else {
+                return "Upload: sending; the server holds nothing of this part yet.".to_owned();
+            };
+            let ago = match now.saturating_sub(at) {
+                s @ 0..60 => format!("{s} s"),
+                s @ 60..3600 => format!("{} min", s / 60),
+                s => span_words(s * 1000),
+            };
+            let at = local_time(at, false);
+            format!("Upload: the server holds everything up to {at} ({ago} ago).")
+        }
+        Upload::Waiting => {
+            let since = t(u.last_ok.as_ref()).or(t(err.map(|e| &e.at)));
+            let since = since.map(|s| format!(" since {}", local_time(s, false)));
+            let why = err.map(|e| format!(" ({})", class_words(e.class)));
+            let rest = (u.waiting_bytes > 0)
+                .then(|| format!(" {waiting} waits here and goes up by itself."));
+            format!(
+                "Upload: not reaching the server{}{}.{} Nothing is lost.",
+                since.as_deref().unwrap_or(" yet"),
+                why.unwrap_or_default(),
+                rest.unwrap_or_default()
+            )
+        }
+        Upload::Refused => {
+            let status = err.and_then(|e| e.status).map(|s| format!(" ({s})"));
+            let status = status.unwrap_or_default();
+            // With no recorder (`end`) nothing keeps trying.
+            let tail = if end {
+                format!("Nothing more is sent. Write to {SUPPORT_ADDRESS}.")
+            } else {
+                format!("It keeps trying. If this lasts, write to {SUPPORT_ADDRESS}.")
+            };
+            format!("Upload: the server refuses this run{status}. {tail}")
+        }
+        Upload::Stuck => format!(
+            "Upload: stopped. The server's copy and this computer's copy differ at byte {raw}. \
+             Nothing more is sent. Write to {SUPPORT_ADDRESS}."
+        ),
+        Upload::Done if u.keep => {
+            "Upload: done. Every record file is kept on this computer (GOALCUP_KEEP_PARTS)."
+                .to_owned()
+        }
+        Upload::Done => {
+            let n = u.pruned.parts;
+            let removed = (n > 0).then(|| {
+                let files = plural(n, "record file", "record files");
+                format!(" Removed here: {files} the server holds.")
+            });
+            let whole = size_words(raw);
+            format!(
+                "Upload: done. The server holds your whole record ({whole}).{}",
+                removed.unwrap_or_default()
+            )
+        }
+        Upload::Closed => closed(),
+    }
+}
+
+// Time left (section 10, D66): the agent may run it too.
+
+fn advice(practice: bool) -> &'static str {
+    if practice {
+        "This is a practice run: it needs no repository, so there is nothing to push."
+    } else {
+        "Push your work often; work not pushed when the run stops is lost."
+    }
+}
+
+/// The run stops at `stop` (seconds since 1970), as the server last said.
+pub fn time_left(stop: u64, now: u64, practice: bool) -> String {
+    // Not `end_words` alone: at 0 it prints the clock with no "left".
+    if stop.saturating_sub(now) >= 60 {
+        format!(
+            "The run stops on {}. {}",
+            end_words(stop, now),
+            advice(practice)
+        )
+    } else {
+        format!("Less than a minute left. {}", advice(practice))
+    }
+}
+
+/// The server said the run's time is up.
+pub const TIME_IS_UP: &str = "Time is up.";
+
+pub fn time_left_unknown(practice: bool) -> String {
+    format!(
+        "{} The time left is unknown right now: goalcup has no fresh word from the server.",
+        advice(practice)
+    )
+}
+
+pub const NO_OPEN_RUN_TIME_LEFT: &str = "Run goalcup status to see your runs. No run is open on \
+this computer, so there is no time left to show.";

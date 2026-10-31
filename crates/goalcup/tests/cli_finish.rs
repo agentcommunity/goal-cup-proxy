@@ -4,208 +4,220 @@
 
 mod cli_common;
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
-use cli_common::{RUN, T0 as NOW, status};
+use cli_common::{RUN, T0 as NOW, live, part, patch, put, upload, with};
 use goalcup::cli::finish::{NotSealed, end_screen, screen};
-use goalcup::cli::status::{Ctx, State, block};
-use goalcup::cli::text;
-use goalcup::pipeline::counts::TunnelHost;
-use goalcup::pipeline::status::{AfterSeal, CutFiles, Mode, Off, SealStatus, Status};
-use goalcup::watchdog::SealReason;
+use goalcup::cli::status::{State, block};
+use goalcup::cli::{proc_start_id, text, unix_of};
+use goalcup::pipeline::status::{Mode, Status};
 use goalcup_format::GapReason;
+use serde_json::{Map, Value, json};
 
-/// A sealed part that wrote 905 requests and 43 session files and lost nothing.
+/// A sealed part that wrote 905 requests to two hosts and 43 session files, and lost nothing.
 fn sealed() -> Status {
-    let mut st = status(Mode::Sealed);
-    let c = &mut st.written.counts;
-    c.http_post = 905;
-    c.req_whole = 905;
-    c.native_files = 43;
-    c.native_bytes = 48_200_000;
-    c.hosts = [
-        ("api.example.com".to_owned(), 812),
-        ("chat.example.com".to_owned(), 93),
-    ]
-    .into();
-    st.written.model_requests = st.written.counts.model_requests();
-    st.seal = Some(SealStatus {
-        reason: SealReason::HarnessExit,
-        workspace_head: None,
-    });
-    st.cut_files = Some(CutFiles::default());
-    st.after_seal = Some(AfterSeal::default());
-    st
+    with(
+        Mode::Sealed,
+        json!({"written": {"model_requests": 905, "http_post": 905, "req_whole": 905,
+                "native_files": 43, "native_bytes": 48_200_000,
+                "hosts": {"api.example.com": 812, "chat.example.com": 93}},
+            "seal": {"reason": "harness_exit"}, "cut_files": {"files": 0, "bytes": 0},
+            "after_seal": {"bytes": 0, "hosts": []}}),
+    )
 }
 
-fn show(st: &Status) -> String {
-    screen(st, None, RUN, &PathBuf::from("/home/x/goalcup.log"), NOW).expect("sealed")
+/// A macOS-like log path with a space: every printed path is quoted (section 12).
+const LOG: &str = "/home/x/Application Support/goalcup.log";
+
+/// The end screen of `sealed()` with `p` laid over it.
+fn show(p: Value) -> String {
+    let st = patch(&sealed(), p);
+    screen(&st, None, None, RUN, Path::new(LOG), NOW).expect("sealed")
 }
 
+/// Rule 1: the "nothing was lost" claim with no loss, and never with any one, whose line takes its
+/// place. An unlisted tunnel is not a loss.
 #[test]
 fn nothing_lost_only_without_any_loss() {
-    let clean = sealed();
-    assert!(show(&clean).contains(text::NOTHING_LOST));
-    let unlisted = TunnelHost {
-        conns: 2,
-        up: 5,
-        down: 9,
-        listed: None,
+    let tunnel = |listed: Value| {
+        json!({"written": {"tunnel_hosts": {"t.example.org":
+            {"conns": 2, "up": 5, "down": 9, "listed": listed}}}})
     };
-    let mut quiet = clean.clone();
-    quiet
-        .written
-        .counts
-        .tunnel_hosts
-        .insert("registry.example.org".into(), unlisted);
-    assert!(
-        show(&quiet).contains(text::NOTHING_LOST),
-        "an unlisted tunnel is not a loss"
-    );
-    let losses: Vec<fn(&mut Status)> = vec![
-        |s| s.written.counts.gaps = 1,
-        |s| {
-            s.written.counts.gaps = 1;
-            s.written.counts.lost_unknown = 1;
-        },
-        |s| s.written.counts.lost_bytes = 10,
-        |s| s.written.counts.req_holes = 1,
-        |s| {
-            s.off = Off {
-                spans: 1,
-                ms: 150_000,
-                since: None,
-            }
-        },
-        |s| {
-            s.written.counts.tunnel_hosts.insert(
-                "pinned.example.com".into(),
-                TunnelHost {
-                    conns: 1,
-                    up: 1,
-                    down: 1,
-                    listed: Some("pinned".into()),
-                },
-            );
-        },
-        |s| s.written.counts.mask_failclosed_bytes = 1,
-        |s| {
-            s.cut_files = Some(CutFiles {
-                files: 1,
-                bytes: 10,
-            })
-        },
-        |s| {
-            s.after_seal = Some(AfterSeal {
-                bytes: 1,
-                hosts: Vec::new(),
-            })
-        },
+    let clean_lines = show(json!({})).lines().count();
+    #[rustfmt::skip]
+    let cases = [
+        ("no loss", json!({}), false),
+        ("unlisted tunnel", tunnel(Value::Null), false),
+        ("listed tunnel", tunnel(json!("pinned")), true),
+        ("gap", json!({"written": {"gaps": 1}}), true),
+        ("gap of unknown size", json!({"written": {"gaps": 1, "lost_unknown": 1}}), true),
+        ("lost bytes", json!({"written": {"lost_bytes": 10}}), true),
+        ("req_holes", json!({"written": {"req_holes": 1}}), true),
+        ("off span", json!({"off": {"spans": 1, "ms": 150_000}}), true),
+        ("fail-closed byte", json!({"written": {"mask_failclosed_bytes": 1}}), true),
+        ("cut file", json!({"cut_files": {"files": 1, "bytes": 10}}), true),
+        ("after-seal bytes", json!({"after_seal": {"bytes": 1}}), true),
     ];
-    // Each loss has its line (rule 1): one at least takes the place of "Nothing was lost.".
-    let clean_lines = show(&clean).lines().count();
-    for (i, lose) in losses.iter().enumerate() {
-        let mut st = clean.clone();
-        lose(&mut st);
-        let out = show(&st);
-        assert!(!out.contains(text::NOTHING_LOST), "loss {i}");
-        assert!(
-            out.lines().count() >= clean_lines,
-            "loss {i} has no line:\n{out}"
-        );
+    for (kind, p, lost) in cases {
+        let out = show(p);
+        assert_eq!(out.contains(text::NOTHING_LOST), !lost, "{kind}");
+        assert!(out.lines().count() >= clean_lines, "{kind} has no line");
     }
 }
 
+/// The printed counts and hosts are the fixture's, tunnels largest first with a listed host on its
+/// own line; `req_whole` is shown only when `req_holes` is above 0.
 #[test]
 fn counts_and_hosts_are_the_fixtures() {
-    let mut st = sealed();
-    let out = show(&st);
+    let out = show(json!({}));
     let hosts = [("api.example.com", 812), ("chat.example.com", 93)];
     assert!(out.contains(&text::requests_written(905, &hosts)), "{out}");
     assert!(out.contains(&text::session_files(43, 48_200_000)));
-    assert!(!out.contains("896"), "req_whole only with holes");
-    st.written.counts.req_whole = 896;
-    st.written.counts.req_holes = 9;
-    st.written.counts.lost_bytes = 1_500_000;
-    st.off = Off {
-        spans: 2,
-        ms: 150_000,
-        since: None,
-    };
-    let out = show(&st);
-    assert!(
-        out.contains(&text::whole_and_lost(896, 9, 1_500_000)),
-        "{out}"
-    );
+    let whole = json!({"written": {"req_whole": 896}});
+    assert!(!show(whole).contains("896"), "req_whole only with holes");
+    let holes = json!({"written": {"req_whole": 896, "req_holes": 9, "lost_bytes": 1_500_000,
+        "model_requests": 0}, "off": {"spans": 2, "ms": 150_000}});
+    let out = show(holes);
+    let shown = text::whole_and_lost(896, 9, 1_500_000);
+    assert!(out.contains(&shown), "{out}");
     assert!(out.contains(&text::off_total(2, 150_000)));
-    st.written.model_requests = 0;
-    assert!(show(&st).contains(&text::no_request_written("your agent")));
-}
-
-#[test]
-fn tunnels_largest_first_and_listed_alone() {
-    let mut st = sealed();
-    for (i, host) in ["a", "b", "c", "d", "e", "f", "g"].iter().enumerate() {
-        let t = TunnelHost {
-            conns: 1,
-            up: 1000 * (i as u64 + 1),
-            down: 0,
-            listed: None,
-        };
-        st.written
-            .counts
-            .tunnel_hosts
-            .insert(format!("{host}.example.org"), t);
-    }
-    let pinned = TunnelHost {
-        conns: 4,
-        up: 1,
-        down: 2,
-        listed: Some("pinned".into()),
-    };
-    st.written
-        .counts
-        .tunnel_hosts
-        .insert("z.example.com".into(), pinned);
-    let out = show(&st);
-    let top: Vec<(String, u64, u64)> = ["g", "f", "e", "d", "c"]
-        .iter()
-        .zip([7000, 6000, 5000, 4000, 3000])
-        .map(|(h, b)| (format!("{h}.example.org"), 1, b))
+    assert!(out.contains(&text::no_request_written("your agent")));
+    let host = |c: char| format!("{c}.example.org");
+    let mut tunnels: Map<String, Value> = ('a'..='g')
+        .zip(1u64..)
+        .map(|(c, i)| (host(c), json!({"conns": 1, "up": 1000 * i, "down": 0})))
         .collect();
-    let top: Vec<(&str, u64, u64)> = top.iter().map(|(h, c, b)| (h.as_str(), *c, *b)).collect();
+    let pinned = json!({"conns": 4, "up": 1, "down": 2, "listed": "pinned"});
+    tunnels.insert("z.example.com".into(), pinned);
+    let out = show(json!({"written": {"tunnel_hosts": tunnels}}));
+    let top: Vec<String> = ('c'..='g').rev().map(host).collect();
+    let top: Vec<(&str, u64, u64)> = top
+        .iter()
+        .zip((3..=7).rev())
+        .map(|(h, i)| (h.as_str(), 1, 1000 * i))
+        .collect();
     assert!(out.contains(&text::tunnels_unlisted(&top, 2)), "{out}");
-    assert!(
-        out.contains(&text::tunnel_listed("z.example.com", "pinned", 4, 3)),
-        "{out}"
-    );
+    let listed = text::tunnel_listed("z.example.com", "pinned", 4, 3);
+    assert!(out.contains(&listed), "{out}");
 }
 
+/// The after-seal line only when bytes came after the seal, the cut-file line with cut files, the
+/// recovered line only for a recovered seal; the screen ends with the quoted log path.
 #[test]
 fn rule_lines_follow_their_facts() {
-    let mut st = sealed();
     let after = text::after_seal("your agent", 2_000_000, &["api.example.com".into()]);
-    st.after_seal = Some(AfterSeal {
-        bytes: 0,
-        hosts: vec!["api.example.com".into()],
-    });
-    assert!(!show(&st).contains(&after));
-    st.after_seal.as_mut().unwrap().bytes = 2_000_000;
-    assert!(show(&st).contains(&after));
-    st.cut_files = Some(CutFiles {
-        files: 3,
-        bytes: 2_000_000,
-    });
-    assert!(show(&st).contains(&text::cut_files(3, 2_000_000)));
-    assert!(!show(&st).contains(text::RECOVERED));
-    st.seal.as_mut().unwrap().reason = SealReason::Recovered;
-    assert!(show(&st).contains(text::RECOVERED));
-    let log = Path::new("/home/x/Application Support/goalcup.log");
-    assert!(
-        screen(&st, None, RUN, log, NOW)
-            .unwrap()
-            .contains(&text::details_at(log))
-    );
+    let seal_after = |b: u64| json!({"after_seal": {"bytes": b, "hosts": ["api.example.com"]}});
+    let (cut, recovered) = (text::cut_files(3, 2_000_000), text::RECOVERED.to_owned());
+    #[rustfmt::skip]
+    let cases = [
+        (seal_after(0), &after, false),
+        (seal_after(2_000_000), &after, true),
+        (json!({"cut_files": {"files": 3, "bytes": 2_000_000}}), &cut, true),
+        (json!({}), &recovered, false),
+        (json!({"seal": {"reason": "recovered"}}), &recovered, true),
+    ];
+    for (p, line, shown) in cases {
+        assert_eq!(show(p.clone()).contains(line.as_str()), shown, "{p}");
+    }
+    let out = show(json!({}));
+    assert!(out.trim_end().ends_with(&format!("\"{LOG}\"")), "{out}");
+}
+
+/// Rule 8, from `upload.json` files: bytes still waiting once nothing sends them by itself name
+/// `goalcup upload` and `upload_by`; not when the upload is done, stuck or refused, nor after
+/// `upload_by`, nor in status while the recorder still sends.
+#[test]
+fn bytes_left_at_the_end_name_goalcup_upload_and_upload_by() {
+    let dir = tempfile::tempdir().unwrap();
+    let entry = part(dir.path());
+    put(&entry, "status.json", &sealed());
+    let (by, past) = ("2099-11-08T10:00:00Z", "2020-11-08T10:00:00Z");
+    let left = |state: &str, by: &str| json!({"state": state, "waiting_bytes": 120_000_000, "upload_by": by});
+    let done = json!({"state": "done", "upload_by": by, "confirmed": {"raw": 95_000_000}});
+    let cases = [
+        (left("waiting", by), true),
+        (done, false),
+        (left("stuck", by), false),
+        (left("refused", by), false),
+        (left("waiting", past), false),
+    ];
+    for (p, named) in cases {
+        put(&entry, "upload.json", &upload(p.clone()));
+        assert_eq!(
+            end_screen(&entry).unwrap().contains("goalcup upload"),
+            named,
+            "{p}"
+        );
+    }
+    let clock = text::local_clock(unix_of(by).unwrap());
+    put(&entry, "upload.json", &upload(left("sending", by)));
+    assert!(end_screen(&entry).unwrap().contains(&clock));
+}
+
+/// The status block names `goalcup upload` only when nothing sends the part by itself: no
+/// recorder and, unless sealed, no watchdog; and not in Recover, where `goalcup recover` is the
+/// command and `goalcup upload` would seal the part.
+#[test]
+fn status_names_goalcup_upload_only_when_nothing_sends_by_itself() {
+    let by = "2099-11-08T10:00:00Z";
+    let u = upload(json!({"state": "waiting", "waiting_bytes": 120_000_000, "upload_by": by}));
+    for recorder in [true, false] {
+        let cx = live(recorder, false, false, 0);
+        let shown = block(
+            &sealed(),
+            &State::Sealed { at: NOW },
+            None,
+            Some(&u),
+            &cx,
+            &[],
+        );
+        assert_eq!(shown.contains("goalcup upload"), !recorder, "{shown}");
+    }
+    // A part that is not sealed, with no recorder and no watchdog, sends nothing by itself.
+    let st = with(Mode::Recording, json!({}));
+    let state = State::Continue { since: NOW };
+    for (recorder, watchdog) in [(true, false), (false, true), (false, false)] {
+        let cx = live(recorder, watchdog, true, 0);
+        let shown = block(&st, &state, None, Some(&u), &cx, &[]);
+        assert_eq!(
+            shown.contains("goalcup upload"),
+            !recorder && !watchdog,
+            "{shown}"
+        );
+    }
+    // Recover: the harness lives and recover restarts the recorder; upload would close that path.
+    let cx = live(false, false, true, 0);
+    let state = State::Recover { since: NOW };
+    let shown = block(&st, &state, None, Some(&u), &cx, &[]);
+    assert!(!shown.contains("goalcup upload"), "{shown}");
+}
+
+/// The end screen comes first while a live recorder still sends the wrap-up.
+#[test]
+fn end_screen_with_a_live_recorder_does_not_name_goalcup_upload() {
+    let by = "2099-11-08T10:00:00Z";
+    let u = upload(json!({"state": "waiting", "waiting_bytes": 120_000_000, "upload_by": by}));
+    let me = std::process::id();
+    let sid = proc_start_id(me).unwrap();
+    let st = patch(&sealed(), json!({"pid": me, "start_id": sid}));
+    let shown = screen(&st, None, Some(&u), RUN, Path::new(LOG), NOW).unwrap();
+    assert!(!shown.contains("goalcup upload"), "{shown}");
+}
+
+/// At the end with no recorder, a refused part says nothing keeps trying, and a part whose bytes
+/// are all up but whose end the server has not heard still names `goalcup upload`; once the
+/// server has the end, it does not.
+#[test]
+fn refused_and_unsent_end_at_the_end() {
+    let (by, now) = ("2099-11-08T10:00:00Z", NOW);
+    let line = |p: Value, end: bool| text::upload_line(&upload(p), now, end);
+    let refused = json!({"state": "refused", "upload_by": by});
+    assert!(line(refused.clone(), false).contains("keeps trying"));
+    assert!(!line(refused, true).contains("keeps trying"));
+    let all_up = |end: &str| json!({"state": "waiting", "upload_by": by, "final": end});
+    assert!(line(all_up("none"), true).contains("goalcup upload"));
+    assert!(!line(all_up("none"), false).contains("goalcup upload"));
+    assert!(!line(all_up("sealed"), true).contains("goalcup upload"));
 }
 
 #[test]
@@ -221,54 +233,30 @@ fn every_gap_reason_has_words() {
     }
 }
 
-/// PRD-17 SC6: a `status.json` with no seal never prints the finished line or block.
+/// PRD-17 SC6: a `status.json` with no seal never prints the finished line or block: an open
+/// mode with or without seal facts, or sealed mode without them.
 #[test]
 fn unsealed_status_never_reads_as_finished() {
     let dir = tempfile::tempdir().unwrap();
-    let entry = dir.path().join(RUN).join("e0123456789abcdef");
-    std::fs::create_dir_all(&entry).unwrap();
+    let entry = part(dir.path());
+    let mut cases = vec![json!({"seal": null})];
     for mode in [Mode::Recording, Mode::Losing, Mode::WriterSlow, Mode::Null] {
-        for seal in [
-            None,
-            Some(SealStatus {
-                reason: SealReason::HarnessExit,
-                workspace_head: None,
-            }),
-        ] {
-            let mut st = sealed();
-            st.mode = mode;
-            st.seal = seal;
-            let log = PathBuf::from("/l");
-            assert_eq!(screen(&st, None, RUN, &log, NOW), Err(NotSealed));
-            std::fs::write(entry.join("status.json"), serde_json::to_vec(&st).unwrap()).unwrap();
-            assert_eq!(end_screen(&entry), Err(NotSealed));
-            let cx = Ctx {
-                name: "Agent",
-                run: RUN,
-                recorder: true,
-                watchdog: true,
-                harness: true,
-                deadline: None,
-                now: NOW,
-            };
-            for state in [State::Recording, State::Continue { since: NOW }] {
-                let shown = block(&st, &state, None, &cx, &[state.word()]);
-                assert!(!shown.contains(text::FINISHED) && !shown.contains(text::PART_RECORDED));
-            }
+        cases.extend([json!({"mode": mode}), json!({"mode": mode, "seal": null})]);
+    }
+    let cx = live(true, true, true, 0);
+    for p in cases {
+        let st = patch(&sealed(), p.clone());
+        let log = Path::new("/l");
+        let got = screen(&st, None, None, RUN, log, NOW);
+        assert_eq!(got, Err(NotSealed), "{p}");
+        put(&entry, "status.json", &st);
+        assert_eq!(end_screen(&entry), Err(NotSealed), "{p}");
+        for state in [State::Recording, State::Continue { since: NOW }] {
+            let shown = block(&st, &state, None, None, &cx, &[state.word()]);
+            let finished = shown.contains(text::FINISHED) || shown.contains(text::PART_RECORDED);
+            assert!(!finished, "{p}");
         }
     }
-    let mut st = sealed();
-    st.seal = None;
-    std::fs::write(entry.join("status.json"), serde_json::to_vec(&st).unwrap()).unwrap();
-    assert_eq!(
-        end_screen(&entry),
-        Err(NotSealed),
-        "sealed mode with no seal facts"
-    );
-    std::fs::write(
-        entry.join("status.json"),
-        serde_json::to_vec(&sealed()).unwrap(),
-    )
-    .unwrap();
+    put(&entry, "status.json", &sealed());
     assert!(end_screen(&entry).unwrap().contains(text::PART_RECORDED));
 }

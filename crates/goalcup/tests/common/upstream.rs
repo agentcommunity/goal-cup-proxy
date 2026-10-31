@@ -1,13 +1,25 @@
 //! The fake upstream (PRD-14 section 5): TLS with a chosen ALPN or plain TCP, HTTP/1.1 (whole,
-//! chunked, SSE, a content coding), HTTP/2 over the `h2` crate, and WebSocket with
-//! permessage-deflate, from a script. It records every byte it received.
+//! chunked, SSE, a content coding), HTTP/2 over the `h2` crate when TLS chose `h2`, and WebSocket
+//! with permessage-deflate, from a script. It records what it receives as it arrives (over HTTP/2,
+//! a request once its body ends), so a test can read it while a connection is open.
 //!
-//! Stub: the types are final so tests can be written against them; `start` is filled in
-//! PRD-14 slice 2.
+//! One tokio runtime on its own thread serves a held port; dropping the [`Upstream`] stops it on
+//! that thread, so a `#[tokio::test]` may drop it.
 
+use super::pki::{self, TestPki};
+use super::ports;
+use base64::Engine as _;
+use flate2::{Compression, write::DeflateEncoder};
+use sha1::{Digest, Sha1};
+use std::io::{self, Read as _, Write as _};
 use std::net::SocketAddr;
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering::SeqCst};
+use std::sync::{Arc, Mutex, MutexGuard};
+use std::task::Poll;
+use std::thread::JoinHandle;
 use std::time::Duration;
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use tokio::sync::{Notify, oneshot};
 
 /// TLS or not, and the ALPN protocols offered (`pki::HTTP11`, `pki::H2`).
 #[derive(Clone, Debug)]
@@ -25,13 +37,18 @@ pub enum Tls {
 pub enum Body {
     /// With `Content-Length`.
     Whole(Vec<u8>),
-    /// `Transfer-Encoding: chunked`, one chunk per piece.
+    /// `Transfer-Encoding: chunked`, one chunk per piece (an empty piece is skipped, since an
+    /// empty chunk ends the body).
     Chunked(Vec<Vec<u8>>),
     /// `text/event-stream`, each piece flushed on its own (chunked on HTTP/1.1).
     Sse(Vec<Vec<u8>>),
 }
 
-/// A `Content-Encoding` the body is compressed with before sending.
+/// A `Content-Encoding` the body is compressed with before sending. The whole body (every piece
+/// joined) is compressed once, and for `Chunked` and `Sse` the compressed bytes are split again
+/// over at most the same number of pieces (fewer when the coded body is short). `Deflate` is the
+/// zlib format (RFC 9110 section 8.4.1.2); `Br` is a valid brotli stream of uncompressed
+/// meta-blocks, since no brotli encoder is a dependency.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Coding {
     Gzip,
@@ -58,11 +75,14 @@ pub enum Answer {
         body: Body,
         coding: Option<Coding>,
     },
-    /// `101`, then these messages, compressed with permessage-deflate when `deflate`.
+    /// `101`, then these messages, compressed with permessage-deflate when `deflate` and the
+    /// client offered it (context takeover kept both ways). The upstream then reads the client's
+    /// frames until the client closes, and answers a client Close with a Close. Over HTTP/2: 501.
     Ws { deflate: bool, messages: Vec<WsMsg> },
 }
 
-/// The upstream's script: one answer per request, in order (the last repeats).
+/// The upstream's script: one answer per request, in order across every connection (the last
+/// repeats).
 #[derive(Clone, Debug)]
 pub struct Script {
     pub tls: Tls,
@@ -71,7 +91,10 @@ pub struct Script {
     pub hold_handshake: Option<Duration>,
     /// Hold each answer this long after its request arrived.
     pub hold_answer: Option<Duration>,
-    /// Close the connection once this many answer bytes are sent.
+    /// Close the connection once this many answer bytes are sent on it, counting from its first
+    /// answer byte (on HTTP/2, DATA the flow-control windows let out, then a GOAWAY). The close is
+    /// clean (a FIN, and over TLS a `close_notify`), not a reset, so a test of an upstream dying
+    /// mid-body relies on the cut `Content-Length` or chunked framing (or the HTTP/2 stream's end).
     pub close_after: Option<u64>,
 }
 
@@ -91,36 +114,596 @@ impl Script {
             close_after: None,
         }
     }
-}
 
-/// What one connection sent the upstream, as raw bytes after TLS.
-#[derive(Clone, Debug, Default)]
-pub struct Received {
-    pub conn: u64,
-    pub bytes: Vec<u8>,
+    /// The same script over TLS: a leaf from the upstream's test CA ([`Upstream::pki`]) for
+    /// `names`, offering `alpn` in order.
+    pub fn with_tls(mut self, names: &[&str], alpn: &[&[u8]]) -> Script {
+        self.tls = Tls::On {
+            names: names.iter().map(|n| n.to_string()).collect(),
+            alpn: alpn.iter().map(|p| p.to_vec()).collect(),
+        };
+        self
+    }
 }
 
 /// A running fake upstream on a held loopback port; it stops when dropped.
 pub struct Upstream {
     addr: SocketAddr,
-    received: Arc<Mutex<Vec<Received>>>,
+    received: Arc<Mutex<Vec<Vec<u8>>>>,
+    pki: TestPki,
+    stop: Option<oneshot::Sender<()>>,
+    thread: Option<JoinHandle<()>>,
 }
 
 impl Upstream {
     /// Starts serving `script` on a held port (`ports::held`).
-    pub fn start(_script: Script) -> Upstream {
-        todo!("PRD-14 slice 2: the fake upstream")
+    pub fn start(script: Script) -> Upstream {
+        assert!(
+            !script.answers.is_empty(),
+            "an upstream script needs an answer"
+        );
+        let (listener, addr) = ports::held();
+        listener
+            .set_nonblocking(true)
+            .expect("a non-blocking listener");
+        let pki = TestPki::new("goalcup test upstream CA");
+        let tls = match &script.tls {
+            Tls::Off => None,
+            Tls::On { names, alpn } => {
+                let names: Vec<&str> = names.iter().map(String::as_str).collect();
+                let alpn: Vec<&[u8]> = alpn.iter().map(Vec::as_slice).collect();
+                let config = pki.server_config(&names, &alpn);
+                Some(tokio_rustls::TlsAcceptor::from(config))
+            }
+        };
+        let received = Arc::new(Mutex::new(Vec::new()));
+        let shared = Arc::new(Shared {
+            script,
+            tls,
+            received: received.clone(),
+            next: AtomicUsize::new(0),
+        });
+        let (stop, stopped) = oneshot::channel();
+        let thread = std::thread::Builder::new()
+            .name("fake-upstream".into())
+            .spawn(move || serve(listener, shared, stopped))
+            .expect("start the upstream thread");
+        Upstream {
+            addr,
+            received,
+            pki,
+            stop: Some(stop),
+            thread: Some(thread),
+        }
     }
 
     pub fn addr(&self) -> SocketAddr {
         self.addr
     }
 
-    /// Every connection so far, in accept order.
-    pub fn received(&self) -> Vec<Received> {
-        self.received
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .clone()
+    /// The test CA behind the TLS leaf: trust `pki().root()` (or `client_config`, or
+    /// `roots_file` for `GOALCUP_TEST_EXTRA_ROOTS`) to reach this upstream over TLS.
+    pub fn pki(&self) -> &TestPki {
+        &self.pki
     }
+
+    /// What each connection so far sent the upstream, as raw bytes after TLS, in accept order.
+    /// Over HTTP/2, per request: its (pseudo-)headers as `name: value` lines, a blank line, a body.
+    pub fn received(&self) -> Vec<Vec<u8>> {
+        lock(&self.received).clone()
+    }
+}
+
+impl Drop for Upstream {
+    fn drop(&mut self) {
+        if let Some(stop) = self.stop.take() {
+            let _ = stop.send(());
+        }
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
+}
+
+struct Shared {
+    script: Script,
+    tls: Option<tokio_rustls::TlsAcceptor>,
+    received: Arc<Mutex<Vec<Vec<u8>>>>,
+    next: AtomicUsize,
+}
+
+impl Shared {
+    /// The answer to a request that has fully arrived, after `hold_answer`.
+    async fn next_answer(&self) -> &Answer {
+        let i = self.next.fetch_add(1, SeqCst);
+        if let Some(hold) = self.script.hold_answer {
+            tokio::time::sleep(hold).await;
+        }
+        &self.script.answers[i.min(self.script.answers.len() - 1)]
+    }
+}
+
+fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// The runtime lives and dies on this thread, never inside the caller's async context.
+fn serve(listener: std::net::TcpListener, shared: Arc<Shared>, stopped: oneshot::Receiver<()>) {
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
+        .expect("the upstream runtime");
+    rt.block_on(async move {
+        let listener = tokio::net::TcpListener::from_std(listener).expect("a tokio listener");
+        let accept = async {
+            loop {
+                let Ok((tcp, _)) = listener.accept().await else {
+                    // A lasting error such as EMFILE must not spin a core.
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                    continue;
+                };
+                let conn = {
+                    let mut received = lock(&shared.received);
+                    received.push(Vec::new());
+                    received.len() - 1
+                };
+                tokio::spawn(connection(shared.clone(), tcp, conn));
+            }
+        };
+        tokio::select! {
+            _ = accept => {}
+            _ = stopped => {}
+        }
+    });
+    rt.shutdown_background();
+}
+
+trait Io: AsyncRead + AsyncWrite + Unpin + Send {}
+impl<T: AsyncRead + AsyncWrite + Unpin + Send> Io for T {}
+
+async fn connection(shared: Arc<Shared>, tcp: tokio::net::TcpStream, conn: usize) {
+    if let Some(hold) = shared.script.hold_handshake {
+        tokio::time::sleep(hold).await;
+    }
+    let io: Box<dyn Io> = match &shared.tls {
+        None => Box::new(tcp),
+        Some(acceptor) => {
+            let Ok(tls) = acceptor.accept(tcp).await else {
+                return;
+            };
+            if tls.get_ref().1.alpn_protocol() == Some(pki::H2) {
+                let _ = http2(shared.clone(), tls, conn).await;
+                return;
+            }
+            Box::new(tls)
+        }
+    };
+    let mut c = Conn {
+        io,
+        buf: Vec::new(),
+        shared,
+        conn,
+        written: 0,
+    };
+    let _ = c.http1().await;
+    let _ = c.io.shutdown().await;
+}
+
+/// The request head, with header names in lower case.
+struct Request(Vec<(String, String)>);
+
+impl Request {
+    fn parse(head: &[u8]) -> Request {
+        let text = String::from_utf8_lossy(head);
+        let headers = text
+            .split("\r\n")
+            .skip(1)
+            .filter_map(|line| line.split_once(':'))
+            .map(|(k, v)| (k.trim().to_ascii_lowercase(), v.trim().to_string()))
+            .collect();
+        Request(headers)
+    }
+
+    fn header(&self, name: &str) -> Option<&str> {
+        self.0
+            .iter()
+            .find(|(k, _)| k == name)
+            .map(|(_, v)| v.as_str())
+    }
+
+    fn has(&self, name: &str, token: &str) -> bool {
+        self.header(name)
+            .is_some_and(|v| v.to_ascii_lowercase().contains(token))
+    }
+}
+
+struct Conn {
+    io: Box<dyn Io>,
+    buf: Vec<u8>,
+    shared: Arc<Shared>,
+    conn: usize,
+    written: u64,
+}
+
+impl Conn {
+    /// Reads what is there, records it, and fails at the end of the stream.
+    async fn fill(&mut self) -> io::Result<()> {
+        let mut tmp = [0u8; 16 * 1024];
+        let n = self.io.read(&mut tmp).await?;
+        if n == 0 {
+            return Err(io::ErrorKind::UnexpectedEof.into());
+        }
+        lock(&self.shared.received)[self.conn].extend_from_slice(&tmp[..n]);
+        self.buf.extend_from_slice(&tmp[..n]);
+        Ok(())
+    }
+
+    async fn take(&mut self, n: usize) -> io::Result<Vec<u8>> {
+        while self.buf.len() < n {
+            self.fill().await?;
+        }
+        Ok(self.buf.drain(..n).collect())
+    }
+
+    /// Everything up to and including `end`.
+    async fn until(&mut self, end: &[u8]) -> io::Result<Vec<u8>> {
+        loop {
+            if let Some(i) = self.buf.windows(end.len()).position(|w| w == end) {
+                return Ok(self.buf.drain(..i + end.len()).collect());
+            }
+            self.fill().await?;
+        }
+    }
+
+    /// Writes answer bytes and closes the connection once `close_after` of them are out.
+    async fn send(&mut self, bytes: &[u8]) -> io::Result<()> {
+        let limit = self.shared.script.close_after;
+        let room = limit.map_or(u64::MAX, |n| n.saturating_sub(self.written));
+        let n = (bytes.len() as u64).min(room) as usize;
+        self.io.write_all(&bytes[..n]).await?;
+        self.io.flush().await?;
+        self.written += n as u64;
+        if limit.is_some_and(|limit| self.written >= limit) {
+            self.io.shutdown().await?;
+            return Err(io::Error::other("closed after the scripted byte count"));
+        }
+        Ok(())
+    }
+
+    async fn http1(&mut self) -> io::Result<()> {
+        loop {
+            let req = Request::parse(&self.until(b"\r\n\r\n").await?);
+            if let Some(len) = req.header("content-length") {
+                self.take(len.parse().unwrap_or(0)).await?;
+            } else if req.has("transfer-encoding", "chunked") {
+                self.skip_chunked().await?;
+            }
+            let shared = self.shared.clone();
+            match shared.next_answer().await {
+                Answer::Http {
+                    status,
+                    headers,
+                    body,
+                    coding,
+                } => self.answer(*status, headers, body, *coding).await?,
+                Answer::Ws { deflate, messages } => {
+                    return self.websocket(&req, *deflate, messages).await;
+                }
+            }
+            if req.has("connection", "close") {
+                return Ok(());
+            }
+        }
+    }
+
+    async fn skip_chunked(&mut self) -> io::Result<()> {
+        loop {
+            let line = self.until(b"\r\n").await?;
+            let text = String::from_utf8_lossy(&line);
+            let size = text.split(';').next().unwrap_or("").trim();
+            let size = usize::from_str_radix(size, 16).unwrap_or(0);
+            if size == 0 {
+                while self.until(b"\r\n").await?.len() > 2 {}
+                return Ok(());
+            }
+            self.take(size + 2).await?;
+        }
+    }
+
+    async fn answer(
+        &mut self,
+        status: u16,
+        headers: &[(String, String)],
+        body: &Body,
+        coding: Option<Coding>,
+    ) -> io::Result<()> {
+        let pieces = coded(body, coding);
+        let reason = if status == 200 { "OK" } else { "Answer" };
+        let mut head = format!("HTTP/1.1 {status} {reason}\r\n");
+        for (k, v) in head_fields(headers, body, coding) {
+            head += &format!("{k}: {v}\r\n");
+        }
+        if let Body::Whole(_) = body {
+            let len: usize = pieces.iter().map(Vec::len).sum();
+            head += &format!("content-length: {len}\r\n\r\n");
+            let mut out = head.into_bytes();
+            out.extend(pieces.concat());
+            return self.send(&out).await;
+        }
+        head += "transfer-encoding: chunked\r\n\r\n";
+        self.send(head.as_bytes()).await?;
+        for piece in pieces.iter().filter(|p| !p.is_empty()) {
+            let mut chunk = format!("{:x}\r\n", piece.len()).into_bytes();
+            chunk.extend_from_slice(piece);
+            chunk.extend_from_slice(b"\r\n");
+            self.send(&chunk).await?;
+        }
+        self.send(b"0\r\n\r\n").await
+    }
+
+    async fn websocket(
+        &mut self,
+        req: &Request,
+        deflate: bool,
+        messages: &[WsMsg],
+    ) -> io::Result<()> {
+        const GUID: &str = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
+        let key = req.header("sec-websocket-key").unwrap_or("");
+        let accept = base64::engine::general_purpose::STANDARD
+            .encode(&Sha1::digest(format!("{key}{GUID}").as_bytes())[..]);
+        let deflate = deflate && req.has("sec-websocket-extensions", "permessage-deflate");
+        let mut head = format!(
+            "HTTP/1.1 101 Switching Protocols\r\nupgrade: websocket\r\nconnection: Upgrade\r\n\
+             sec-websocket-accept: {accept}\r\n"
+        );
+        if deflate {
+            head += "sec-websocket-extensions: permessage-deflate\r\n";
+        }
+        head += "\r\n";
+        self.send(head.as_bytes()).await?;
+
+        let mut compress = DeflateEncoder::new(Vec::new(), Compression::default());
+        let mut closed = false;
+        for msg in messages {
+            let (opcode, payload) = match msg {
+                WsMsg::Text(t) => (1, t.as_bytes().to_vec()),
+                WsMsg::Binary(b) => (2, b.clone()),
+                WsMsg::Close(code) => (8, code.to_be_bytes().to_vec()),
+            };
+            let frame = if deflate && opcode != 8 {
+                ws_frame(opcode, true, &deflate_message(&mut compress, &payload))
+            } else {
+                ws_frame(opcode, false, &payload)
+            };
+            self.send(&frame).await?;
+            closed |= opcode == 8;
+        }
+
+        // The client's frames: masked, maybe compressed and fragmented. `fill` has already
+        // recorded their raw bytes; only a Close is looked at.
+        loop {
+            let h = self.take(2).await?;
+            let len = match h[1] & 0x7f {
+                126 => u16::from_be_bytes(self.take(2).await?.try_into().expect("2 bytes")) as u64,
+                127 => u64::from_be_bytes(self.take(8).await?.try_into().expect("8 bytes")),
+                n => n as u64,
+            };
+            let mask = if h[1] & 0x80 != 0 {
+                self.take(4).await?
+            } else {
+                vec![0; 4]
+            };
+            let mut payload = self.take(len as usize).await?;
+            if h[0] & 0x0f == 8 {
+                if !closed {
+                    for (i, b) in payload.iter_mut().enumerate() {
+                        *b ^= mask[i % 4];
+                    }
+                    payload.truncate(2);
+                    self.send(&ws_frame(8, false, &payload)).await?;
+                }
+                return Ok(());
+            }
+        }
+    }
+}
+
+/// The answer's headers, then its `Content-Encoding`, and for SSE a `Content-Type` if it has none.
+fn head_fields(h: &[(String, String)], body: &Body, c: Option<Coding>) -> Vec<(String, String)> {
+    let mut all = h.to_vec();
+    if let Some(c) = c {
+        // The Debug names are the tokens in lower case: gzip, deflate, br, zstd.
+        let token = format!("{c:?}").to_lowercase();
+        all.push(("content-encoding".into(), token));
+    }
+    let typed = h.iter().any(|(k, _)| k.to_lowercase() == "content-type");
+    if matches!(body, Body::Sse(_)) && !typed {
+        all.push(("content-type".into(), "text/event-stream".into()));
+    }
+    all
+}
+
+/// The body's pieces, compressed with `coding` and split again as [`Coding`] says.
+fn coded(body: &Body, coding: Option<Coding>) -> Vec<Vec<u8>> {
+    let pieces = match body {
+        Body::Whole(b) => vec![b.clone()],
+        Body::Chunked(p) | Body::Sse(p) => p.clone(),
+    };
+    let Some(c) = coding else { return pieces };
+    let coded = encode(c, &pieces.concat());
+    let size = coded.len().div_ceil(pieces.len().max(1)).max(1);
+    coded.chunks(size).map(<[u8]>::to_vec).collect()
+}
+
+/// One HTTP/2 connection; `cut` counts its answer DATA bytes and signals the `close_after` close.
+async fn http2(shared: Arc<Shared>, io: impl Io, conn: usize) -> Result<(), h2::Error> {
+    let mut h2 = h2::server::handshake(io).await?;
+    let cut = Arc::new((AtomicU64::new(0), Notify::new()));
+    loop {
+        tokio::select! {
+            biased;
+            next = h2.accept() => match next {
+                Some(Ok((req, respond))) => {
+                    _ = tokio::spawn(h2_stream(shared.clone(), conn, cut.clone(), req, respond))
+                }
+                _ => return Ok(()),
+            },
+            // One more turn writes the counted DATA, then a GOAWAY, then the connection shuts its
+            // stream down (a `close_notify` and a FIN).
+            _ = cut.1.notified() => {
+                let _ = std::future::poll_fn(|cx| Poll::Ready(h2.poll_closed(cx))).await;
+                h2.abrupt_shutdown(h2::Reason::NO_ERROR)
+            }
+        }
+    }
+}
+
+async fn h2_stream(
+    shared: Arc<Shared>,
+    conn: usize,
+    cut: Arc<(AtomicU64, Notify)>,
+    req: http::Request<h2::RecvStream>,
+    mut respond: h2::server::SendResponse<bytes::Bytes>,
+) -> Result<(), h2::Error> {
+    const NONE: &Body = &Body::Whole(Vec::new());
+    const HOP: &str = "connection keep-alive proxy-connection te transfer-encoding upgrade";
+    let (head, mut body) = req.into_parts();
+    let (m, u) = (&head.method, &head.uri);
+    let s = u.scheme_str().unwrap_or("");
+    let a = u.authority().map_or("", |a| a.as_str());
+    let p = u.path_and_query().map_or("", |p| p.as_str());
+    let mut text = format!(":method: {m}\n:scheme: {s}\n:authority: {a}\n:path: {p}\n");
+    for (k, v) in &head.headers {
+        text += &format!("{k}: {}\n", String::from_utf8_lossy(v.as_bytes()));
+    }
+    let mut text = format!("{text}\n").into_bytes();
+    while let Some(data) = body.data().await {
+        let data = data?;
+        let _ = body.flow_control().release_capacity(data.len());
+        text.extend_from_slice(&data);
+    }
+    // One block per request, so streams that overlap on a connection do not interleave.
+    lock(&shared.received)[conn].extend(text);
+    let (status, headers, body, coding) = match shared.next_answer().await {
+        Answer::Http {
+            status,
+            headers,
+            body,
+            coding,
+        } => (*status, &headers[..], body, *coding),
+        // WebSocket over HTTP/2 (RFC 8441 extended CONNECT) is needed by no PRD.
+        Answer::Ws { .. } => (501, &[][..], NONE, None),
+    };
+    let hop = |k: &str| HOP.split(' ').any(|h| k.eq_ignore_ascii_case(h));
+    let mut resp = http::Response::builder().status(status);
+    for (k, v) in head_fields(headers, body, coding) {
+        if !hop(&k) {
+            resp = resp.header(k, v);
+        }
+    }
+    let mut pieces = coded(body, coding);
+    pieces.retain(|p| !p.is_empty());
+    let head = resp.body(()).expect("a response head");
+    let mut send = respond.send_response(head, pieces.is_empty())?;
+    let (written, limit) = (&cut.0, shared.script.close_after);
+    // Bytes left before the cut once `w` are sent; with no limit, all of them.
+    let left = |w: u64| limit.map_or(u64::MAX, |l| l.saturating_sub(w));
+    for (i, piece) in pieces.iter().enumerate() {
+        let mut rest = &piece[..];
+        while !rest.is_empty() {
+            // Only what the windows let out now, so a counted byte is not left queued at the cut.
+            send.reserve_capacity(rest.len().min(left(written.load(SeqCst)) as usize));
+            let Some(cap) = std::future::poll_fn(|cx| send.poll_capacity(cx)).await else {
+                return Ok(());
+            };
+            let want = cap?.min(rest.len()) as u64;
+            // Claimed before it goes, so streams that overlap send `close_after` bytes in all.
+            let w = written.update(SeqCst, SeqCst, |w| w + want.min(left(w)));
+            let n = want.min(left(w)) as usize;
+            let end = i + 1 == pieces.len() && n == rest.len();
+            send.send_data(bytes::Bytes::copy_from_slice(&rest[..n]), end)?;
+            rest = &rest[n..];
+            if limit.is_some_and(|l| w + n as u64 >= l) {
+                cut.1.notify_one();
+                // Held open until the connection goes, so no reset comes before the GOAWAY.
+                let _ = std::future::poll_fn(|cx| send.poll_reset(cx)).await;
+                return Ok(());
+            }
+        }
+        // The flush between pieces: the connection task writes this DATA frame first.
+        tokio::task::yield_now().await;
+    }
+    Ok(())
+}
+
+fn encode(coding: Coding, body: &[u8]) -> Vec<u8> {
+    let mut out = Vec::new();
+    let level = Compression::default();
+    let read = match coding {
+        Coding::Gzip => flate2::read::GzEncoder::new(body, level).read_to_end(&mut out),
+        Coding::Deflate => flate2::read::ZlibEncoder::new(body, level).read_to_end(&mut out),
+        Coding::Zstd => return zstd::stream::encode_all(body, 0).expect("zstd"),
+        Coding::Br => return brotli_stored(body),
+    };
+    read.expect("compress a body");
+    out
+}
+
+/// A brotli stream (RFC 7932 section 9.2) of uncompressed meta-blocks: WBITS 16 (one 0 bit); per
+/// block of at most 64 KiB, ISLAST 0, MNIBBLES 4, MLEN - 1 in 16 bits, ISUNCOMPRESSED 1, zero bits
+/// to the byte boundary and the bytes; then ISLAST 1 and ISLASTEMPTY 1.
+fn brotli_stored(body: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(body.len() + body.len() / 65536 * 4 + 8);
+    let (mut acc, mut n) = (0u32, 0u32);
+    let mut put = |out: &mut Vec<u8>, v: u32, bits: u32, align: bool| {
+        acc |= v << n;
+        n += bits;
+        while n >= 8 || (align && n > 0) {
+            out.push(acc as u8);
+            acc >>= 8;
+            n = n.saturating_sub(8);
+        }
+    };
+    put(&mut out, 0, 1, false);
+    for block in body.chunks(1 << 16) {
+        put(&mut out, 0, 3, false);
+        put(&mut out, block.len() as u32 - 1, 16, false);
+        put(&mut out, 1, 1, true);
+        out.extend_from_slice(block);
+    }
+    put(&mut out, 0b11, 2, true);
+    out
+}
+
+/// One unmasked frame from the server, FIN set.
+fn ws_frame(opcode: u8, rsv1: bool, payload: &[u8]) -> Vec<u8> {
+    let mut f = vec![0x80 | if rsv1 { 0x40 } else { 0 } | opcode];
+    match payload.len() {
+        n if n < 126 => f.push(n as u8),
+        n if n <= 0xffff => {
+            f.push(126);
+            f.extend((n as u16).to_be_bytes());
+        }
+        n => {
+            f.push(127);
+            f.extend((n as u64).to_be_bytes());
+        }
+    }
+    f.extend_from_slice(payload);
+    f
+}
+
+/// permessage-deflate (RFC 7692): raw deflate on the one stream of this direction (context
+/// takeover), a sync flush (`flush`), and the `00 00 ff ff` tail stripped.
+fn deflate_message(enc: &mut DeflateEncoder<Vec<u8>>, data: &[u8]) -> Vec<u8> {
+    enc.write_all(data).expect("deflate a message");
+    enc.flush().expect("sync flush a message");
+    let mut out = std::mem::take(enc.get_mut());
+    assert!(
+        out.ends_with(&[0, 0, 0xff, 0xff]),
+        "a sync flush ends in 00 00 ff ff"
+    );
+    out.truncate(out.len() - 4);
+    out
 }

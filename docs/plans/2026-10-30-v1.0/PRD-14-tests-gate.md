@@ -853,3 +853,205 @@ PRDs they touch and the code. Where two fixes disagree, the ledger and the later
 - The crate declares no test hook and reads no `GOALCUP_TEST_*` variable; PRD-14's grep of the shipped
   binary needs no exception for it.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-14 slice 2 (merge 04886295)
+
+- **Done in slice 2:** `upstream.rs` real for TLS with a chosen ALPN or plain TCP, HTTP/1.1 (whole,
+  chunked, SSE, codings), WebSocket with permessage-deflate, held handshakes and answers and close
+  after N bytes; a connection whose TLS chose `h2` panics its task with a clear line until slice 3.
+  `worker.rs` real for the S5 routes with its own position, the S5 `counts` bound (0 to 2^53-1, as
+  the real Worker's `isFlatCounts`; a bad `counts` is dropped with `200`) and injected answers that
+  carry status and body. `ci.yml`, `CODEOWNERS` (section 10 paths) and `release.sh tag` (section 9,
+  nit B8 taken) are in. `gate fast: PASS in 122s` on the lane branch before the merge. A
+  `ci.yml` YAML parse ran in a box once (reviewer A, 14:56Z); `shellcheck` was skipped (not
+  installable in the box).
+- **CI rule changed from the slice 1 note** (review A1 and F1): the push group is per sha, not
+  `ci-${{ github.ref }}`: `group: ci-${{ github.event_name == 'pull_request' && github.ref ||
+  github.sha }}` with `cancel-in-progress` true only for pull requests. A fixed group with
+  `cancel-in-progress: false` still lets a third push cancel the second's pending run, which this
+  avoids. Section 9's "`cancel-in-progress` keeps only the newest" now holds for pull requests only;
+  every push to integration and main runs to the end. Run 41078054029 (04886295) is the first run
+  under the new rule (in progress at 15:10Z). The earlier runs on 9e89a22d and 48d0aeb7 were still
+  cancelled under the old rule. G4 is read from completed runs from 04886295 on.
+- **`release.sh tag` runs the release check from a worktree at origin/main's sha**, so PRD-12's nit
+  B3 (`table` reading `HEAD`'s rows) no longer affects the tag (PRD-12 note). It runs `python3`;
+  `table` stays 3.9-clean.
+- **Still open from sections 9 and 10:** `.github/PULL_REQUEST_TEMPLATE.md` (the `row.json` line for a
+  connector; it already asks for the `gate fast` line and names no `pin-manifests.sh`), packaging,
+  `smoke-release.sh`, `install.sh`, `test_install.py`, `third-party-licenses.py` and `release.yml`
+  (after PRD-10's `status --json`), the `check-links.py` delete (phase 3). `test_codeowners.py` is
+  already gone from integration.
+- **Slice 3 adds to `recorder.rs`:** `real(dir)` once `Recorder::real_for_tests` is on integration,
+  and the `opens`, `ends` and `events` helpers over `Calls` PRD-04 asked for at 14:31Z (native,
+  proxy and pipeline tests each carry a copy today). Their owners delete the copies when the helpers
+  land (PRD-04 note), so the Rust test total falls.
+- **Size against section 3** (`wc -l` at 04886295): `tests/common/` 1,444 of 1,480 (`mod` 61,
+  `ports` 33, `fds` 27, `home` 171, `pki` 115, `upstream` 602 of 700, `worker` 334 of 250,
+  `recorder` 29, `records` 72); `rule_code.rs` 213; `e2e_run.rs` not started. In all 1,657 of 1,700.
+  `worker.rs` broke the slice 1 note's 250 by 84 (134%): the review fixes added the S5 `counts` bound
+  (G3-X22) and injected answers with status and body and closing live connections on drop (PRD-06's
+  backoff and drop-after-commit cases). **Decision:** those lines serve point 5 (upload) and point 3
+  (never-stop rules), so `worker.rs` keeps them; the ceiling for the whole of `tests/common/`,
+  `rule_code.rs` and `e2e_run.rs` stays 1,870. Slice 3 has 213 lines left for HTTP/2 (at most 98,
+  to 700), `recorder.rs` (`real` and the three helpers) and `e2e_run.rs` (140): it cuts `home.rs`
+  to 120 first, and a result past 1,870 needs a decision line in the night log naming the point.
+- **Housekeeping:** the stray branch `v1.0/prd-14-tests-lane-merge-wip` (same sha as the lane merge
+  8a7f5c05) is still on origin; the remote refused its delete. The integrator removes it at the end.
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-04 core slice part 2 (merge 01afcf22)
+
+- **`native_walk` binary is on integration and not yet in the `heavy` group.** `.config/nextest.toml`
+  names it in the comment but has no `[[profile.default.overrides]]` entry for it, so the 20,000 and
+  5,000 file cases run in parallel with the rest (gate fast passed anyway: 182 of 182 at 01afcf22).
+  PRD-14's next slice adds `binary(/^native_walk$/)` to the heavy override (PRD-04 ask 14:31Z).
+- The `opens`, `ends` and `events` helpers over `Calls` (slice 3) also replace `lost` in
+  `native_tail.rs` and `events` in `native_walk.rs`; PRD-04 deletes its copies after that merge.
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-09 slice 2 (merge dab0ce1f)
+
+- **`usage_run1.rs` is 299 lines** (6 cases) against section 3's 200. The PRD-09 replan note sets its
+  ceiling to 380 with the native-only and VR2 panic cases still to come; the end-of-build report nets
+  it against the test total (at most about 14,200).
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-14 slice 3 (merge 00fac28d)
+
+- **Done in slice 3:** HTTP/2 in `upstream.rs` (h2 crate; `close_after` counts DATA bytes actually
+  sent, claimed from the connection count before each send, so overlapping streams cut exactly);
+  `opens`, `ends` and `events` in `recorder.rs` over one `pick` helper; `home.rs` cut to 121;
+  `install.sh` run guard over `goalcup status --json` `.status.mode` (an awk walk, since `run` also
+  has a `mode` key); `test_install.py` rewritten (28 tests in the gate); `package-release.sh`,
+  `smoke-release.sh`, `third-party-licenses.py` and `release.yml` for the two binaries; `gate full`
+  and `release.yml` both refuse a hooked `target/debug/goalcup` with no `GOALCUP_TEST_` text.
+  `gate fast: PASS in 101s` on 00fac28d (nextest 188 of 188).
+- **`gate full` and every release run are red until a `GOALCUP_TEST_` read is reachable from the
+  `goalcup` binary** (review A2, kept on purpose). On integration `Policy::from_env` is the only
+  reader and nothing calls it, also on `v1.0/prd-06-upload` at this replan; PRD-06's next slice wires
+  it (PRD-06 note). This is the known seam, not a regression; a watcher reads `gate full` only after
+  that merge.
+- **Heavy group, next touch of `.config/nextest.toml`:** `native_walk` is on integration since
+  01afcf22, so the review's A10 is unblocked: add `binary(/^native_walk$/)` to a `heavy` override
+  now. `proxy_connect` joins in the merge that brings its 2,000-connection case (PRD-03).
+- **Review nit B12 for the next touch of `upstream.rs`:** `h2_stream` computes "bytes left before the
+  cut" twice (`room` and the `share` closure). Define it once before the loop,
+  `let left = |w: u64| limit.map_or(u64::MAX, |l| l.saturating_sub(w));`, and use it for
+  `reserve_capacity`, the `written.update` claim and `n`. Same lines, same behaviour, one definition.
+- **Still open:** `recorder::real(dir)` (waits on PRD-02's `Recorder::real_for_tests`, on no branch
+  at this replan), `e2e_run.rs` with `fake.toml` and `fake-hosts.toml` (phase 2), the
+  `check-links.py` and `test_check_links.py` delete (phase 3), `.github/PULL_REQUEST_TEMPLATE.md`'s
+  `row.json` line.
+- **Size against section 3** (`wc -l` at 00fac28d): `tests/common/` 1,523 (`mod` 61, `ports` 33,
+  `fds` 27, `home` 121, `pki` 115, `upstream` 709, `worker` 334, `recorder` 51, `records` 72),
+  `rule_code.rs` 213, `e2e_run.rs` 0: 1,736 of the 1,700 line, inside the 1,870 ceiling the slice 2
+  note set. `recorder::real` and `e2e_run.rs` share the 134 lines left; `e2e_run.rs` drops cases
+  that serve no point before it passes that. The fixer's 16:08Z decision line names point 1 for
+  `upstream.rs` at 709 of 700. Scripts: `install.sh` 355 (section says about 300), `gate.sh` 128
+  (about 75), `release.yml` 132 (about 120), `test_install.py` 314 (was 582), `smoke-release.sh` 53,
+  `package-release.sh` 40, `third-party-licenses.py` 231.
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-14 slice 4 (merge ec0d79d8)
+
+- **Done in slice 4:** `native_walk` is in a `heavy` override in `.config/nextest.toml`
+  (`filter = 'binary(/^native_walk$/)'`, the group's only binary today; its 7 tests run one at a
+  time), which closes the PRD-04 ask and review A10. `gate.sh` went from 128 to 105 lines by comments
+  only: with comment lines stripped its code equals the code at 722b846b, so no step changed (review
+  B1). Nit B12 is done: one `left` closure in `h2_stream`, `upstream.rs` stays 709. `gate fast: PASS
+  in 134s` on ec0d79d8 (nextest 188 of 188). `gate full` was not run; it stays red at the
+  hooked-binary line until PRD-06 calls `Policy::from_env` (slice 3 note).
+- **Next touch of `scripts/gate.sh`** (reviews A1, A2, A4, B1, B2; nits, no behaviour change):
+  - Put back one header line: "Every step prints its time; the last line is `gate <tier>: PASS in
+    <N>s` or `gate <tier>: FAIL`." CI and the night-log watchers read that format (A1).
+  - On the full tier's ignored-tests step, say again that it fails until the first `#[ignore]` test
+    (`e2e_run.rs` or `upload_worker.rs`) merges in phase 2, and that phase 1 needs only `fast` (A2).
+    Without it a watcher reads that failure as a regression.
+  - Next to the named script-test list, restore the admission rule as one clause: a new script test
+    joins only if it guards one of the seven points, the format, masking or the never-stop rules
+    (section 8, ledger B10, risk row "Named script-test list goes stale") (A4, B2).
+  - Pay for those lines with B1's cuts: `[ -z "$missing" ] || { echo "gate.sh: missing:$missing";
+    fail; }` for the four-line `if` (-3); define `fail()` before the root check and end that block
+    with `fail` (-1); drop the comment above the root check that repeats its echo (-1). That lands
+    near 103 lines. Section 8's "about 75" cannot be reached without dropping what section 8 itself
+    requires (the build lock, the python3.11 probe, the two hook greps), so the overage stands and
+    needs no further cut.
+- **Next touch of `.config/nextest.toml`** (review A3): the comment says each binary joins "in the
+  merge that brings it" and lists `proxy_connect` as still to come, but `proxy_connect.rs` is on
+  integration and stays out of `heavy` on purpose (its cases today are ClientHello parses). Word it
+  "joins in the merge that brings its heavy case". The rule stands: `proxy_connect` joins with
+  PRD-03's 2,000-connection case (PRD-03 note), `lessons_launch` with PRD-17's `lessons_launch.rs`,
+  `watchdog_*`, `e2e_*`, `pipeline_restart`, `pipeline_stall`, `pipeline_many_streams` and
+  `proxy_restart` with their binaries. Each adds its name to the one override's alternation,
+  `binary(/^(native_walk|...)$/)`, not a second override block.
+- **Still open:** `recorder::real(dir)` (waits on PRD-02's `Recorder::real_for_tests`, on no branch
+  at this replan), `e2e_run.rs` with `fake.toml` and `fake-hosts.toml` (phase 2), the
+  `check-links.py` and `test_check_links.py` delete (phase 3). `.github/PULL_REQUEST_TEMPLATE.md`
+  already has the `row.json` line, so that item from the slice 3 note is closed.
+- **Size against section 3** (`wc -l` at ec0d79d8): unchanged at 1,736 (`tests/common/` 1,523,
+  `rule_code.rs` 213, `e2e_run.rs` 0) of the 1,700 line, inside the 1,870 ceiling; 134 lines left for
+  `recorder::real` and `e2e_run.rs`. Scripts: `gate.sh` 105 (about 75, see above), `.config/nextest.toml`
+  21, the rest as in the slice 3 note.
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-30, replan after PRD-14 slice 5 (merge b3747b6a)
+
+- **Done in slice 5:** the slice 4 note's queued nits. `scripts/gate.sh` has the header line on the
+  output format (A1), the full tier's note that its ignored-tests step fails until the first
+  `#[ignore]` test merges in phase 2 (A2) and the admission rule beside the named script-test list
+  (A4, B2), paid for by B1's three cuts: 105 to 103 lines, and B1 is the only code change (`fail()`
+  defined before the root check, the one-line `missing` test). `.config/nextest.toml` now says a
+  binary joins the one override's alternation "in the merge that brings its heavy case" and names
+  `proxy_connect` with PRD-03's 2,000 connections (A3); `native_walk` is still the group's only
+  binary. `packaging/README.md` "Cutting a release" now says `release.sh tag` runs
+  `scripts/pad/table --release-check` on `origin/main`'s commit in a temporary worktree and refuses
+  the tag when it fails, and points to PRD-12 section 9 for what that check needs instead of restating
+  it (review B-F1); step 2 keeps `gate.sh full` as the one check the tag command does not run.
+  `release.sh`'s `next=` hint no longer tells the user to run the release check by hand.
+- **Next touch of `scripts/gate.sh`** (review B-N4, nit, no line cost): move `trap fail INT TERM HUP`
+  from after the lock to just after `fail()`'s definition. Today a watcher that kills the gate during
+  the prerequisite checks, or while it waits for the build lock (which can last minutes), gets no
+  `gate <tier>: FAIL` line, so the new header's "the last line is PASS or FAIL" is not true for that
+  window. It is safe there: before the lock no EXIT trap is set, so `fail`'s exit removes nothing that
+  is not the gate's, and a signal between `mkdir "$lock"` and the EXIT trap leaves a lock with a dead
+  or missing pid, which the next run takes over. `trap 'rm -rf "$lock"' EXIT` stays where it is.
+- **Still open, unchanged:** `recorder::real(dir)` (PRD-02's `Recorder::real_for_tests` is on no
+  branch at this replan; the only hit is the doc mention in `tests/common/recorder.rs`), `e2e_run.rs`
+  with `fake.toml` and `fake-hosts.toml` (phase 2: `goalcup start` still prints `not_built` after the
+  folder checks, integration has no writer and no `GOALCUP_TEST_ROTATE_MB` hook), the
+  `check-links.py` and `test_check_links.py` delete (phase 3). No new heavy-group binary is on
+  integration and `proxy_connect` has no 2,000-connection case yet. `gate full` stays red at the
+  hooked-binary line: `Policy::from_env` (`crates/goalcup/src/upload/policy.rs`) still has no caller.
+- **Size against section 3** (`wc -l` at b3747b6a): tests unchanged at 1,736 (`tests/common/` 1,523
+  with `upstream.rs` 709, `rule_code.rs` 213, `e2e_run.rs` 0) of the 1,700 line, inside the 1,870
+  ceiling; 134 lines left for `recorder::real` and `e2e_run.rs`. Scripts: `gate.sh` 103 (section 8
+  says about 75; the slice 4 note lets the overage stand), `.config/nextest.toml` 21,
+  `packaging/README.md` 104 (was 103), `release.sh` 121, the rest as in the slice 3 note.
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-31, replan after PRD-04 second slice (merge 7e8ed89b)
+
+- PRD-04 now uses `common::recorder` (`opens`, `ends`, `events`, `pick`) in all its tests and has no
+  private copy of them. Four helpers it still holds in `tests/native_common/mod.rs` (`append`,
+  `notes`, `end_of`, `gap_rows`) are a request to you, not an order: move them into `common::recorder`
+  only if a second suite needs them, and then delete the PRD-04 copy in the same slice. `tests/common/`
+  stays yours; `tests/native_common/` is PRD-04's (PRD-00 note).
+- Test budget: PRD-04 tests are 1,768 against the 1,000 row (ceiling 1,780, PRD-04 note); the Rust
+  test total of at most about 14,200 is tracked in PRD-16.
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-31, replan after PRD-05 core slice (merge 2c95e8f1)
+
+- **Mask tests on integration (`wc -l` at 8e886901):** the six files of the table (`mask_rules`,
+  `mask_stream`, `mask_values`, `mask_meta`, `mask_corpus`, `mask_bench`) 1,712 lines, helpers in
+  `tests/mask_corpus/` 408, inline 662: 2,782 against the 2,000 line of the table (139%). The masking
+  lane's 01:01Z decision names points 3 and 4. The table row is not rewritten; the end-of-build report
+  counts 2,782.
+- **Gate time:** `gate fast` was 94 s on the merge of the core slice (78 s before). Mask tests run in the
+  default nextest tier.
+- **One timing assert in `gate fast`:** `mask_stream::runs_that_hold_candidates_stream_in_linear_time`
+  fails at 30 s (about 20 times the linear cost in a debug build). On a loaded box raise the bound; do not
+  delete the equality assert. `mask_bench` stays ignored and in no tier.
+- **`test-hooks`:** `Masker::passthrough_for_tests` is compiled under `feature = "test-hooks"` alone (the
+  clear-masker gate of the PRD-05 note is in).
+- No locked ledger item is touched and no owner question comes from this slice.

@@ -1,7 +1,7 @@
 # Architecture
 
 How do the parts of Goal Cup Proxy fit, and where is each guarantee tested? For contributors and
-their agents. Wire formats are in [CONTRACTS](CONTRACTS.md); rules that bind the code are in
+their agents. Wire formats are in [CONTRACTS](archive/CONTRACTS.md); rules that bind the code are in
 [DECISIONS](DECISIONS.md). Section 12 lists the terms. Use them exactly.
 
 ## 1. What Goal Cup Proxy is for
@@ -114,8 +114,7 @@ decoder is added.
   key there, and Goal Cup Proxy passes it none (D61). Amp instead keeps one isolated shared `HOME`
   across serialized runs. Other run homes are fresh, according to the connector. Every run home
   gets a `.profile` that exports the `PATH` the harness is handed, so a login shell whose
-  `/etc/profile` resets `PATH` (Debian, Ubuntu) still finds the participant's tools and `goalcup`
-  ([CONNECTOR-SCHEMA](CONNECTOR-SCHEMA.md)).
+  `/etc/profile` resets `PATH` (Debian, Ubuntu) still finds the participant's tools and `goalcup`.
 - **Contract kit.** Synthetic cases under `crates/goalcup-cli/tests/fixtures/harness-kit/` test the
   shared modules with stand-ins. Every connector runs through the manifest-driven shared stand-in
   (the connector contract), so a new connector adds no case. A passing kit says "synthetic
@@ -152,7 +151,7 @@ CLI phases are in `commands/start/phases.rs` (`prepare`, `create_and_gate`, `reg
    sends heartbeats.
 5. **Stop the harness.** A standalone seal enters the daemon's entry run lock, then SIGTERM,
    the connector's grace, SIGKILL, sweep and reconfirm run with wire and native capture still live.
-   This runs outside the capture budget ([TERMINATION](TERMINATION.md)); both the drain-share
+   This runs outside the capture budget ([TERMINATION](archive/TERMINATION.md)); both the drain-share
    boundary and final deadline move by actual termination time. The launcher sees the child exit
    and stops its recording proxy; competing finishes share one terminal.
 6. **Finish capture.** Close admission, drain the existing producers, persist explicit loss,
@@ -253,7 +252,7 @@ agent and seals. Details: [UPLOAD-API](UPLOAD-API.md), [server/worker](../server
 
 Deliberately not built: durable ingest replay, automatic recording proxy restart, torn-tail repair, a PTY or
 input relay, continuous workspace hashing, reminders injected by Goal Cup Proxy, cross-harness linking and
-native Windows. Operating the binaries: [OPERATING](OPERATING.md).
+native Windows. Running an event: [OPERATING](OPERATING.md).
 
 ## 12. Terms
 

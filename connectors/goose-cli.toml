@@ -1,0 +1,27 @@
+# Goose 1.57.0, checked against goose-docs.ai (guides: environment-variables, goose-cli-commands, config-files,
+# sessions; getting-started/providers) and the 1.57.0 release binary run in a build box. GOOSE_PATH_ROOT moves
+# config/, data/ and state/ under {home} and nothing else (box test), so other tools keep their XDG folders.
+# `session --resume` takes the most recently used session; GOOSE_MODE defaults to auto, so no approval setting.
+id = "goose-cli"
+name = "Goose"
+program = "goose"
+args = ["session"]
+resume = ["--resume"]
+home = { GOOSE_PATH_ROOT = "{home}" }
+ca_env = ["GOOSE_CA_CERT_PATH"]
+host_hints = [
+  { file = "{home}/config/custom_providers/*.json", key = "base_url" },
+  { file = "{home}/config/config.yaml", key = "*_HOST" },
+  { file = "{home}/config/config.yaml", key = "*_ENDPOINT" },
+  { file = "{home}/config/config.yaml", key = "ASTRON_BASE_URL" },
+]
+# The host variables the environment-variables and providers pages list on 2026-10-31; a name they add later is one line here.
+hint_env = [
+  "OPENAI_HOST", "ANTHROPIC_HOST", "GOOSE_PROVIDER__HOST", "LITELLM_HOST", "OPENROUTER_HOST", "XAI_HOST",
+  "TETRATE_HOST", "DATABRICKS_HOST", "SNOWFLAKE_HOST", "VENICE_HOST", "AVIAN_HOST", "ROUTSTR_HOST", "OLLAMA_HOST",
+  "GONDOLA_HOST", "ATOMIC_CHAT_HOST",
+  "AZURE_OPENAI_ENDPOINT", "AZURE_FOUNDRY_ENDPOINT", "TANZU_AI_ENDPOINT", "ASTRON_BASE_URL",
+]
+secret_files = ["{home}/config/secrets.yaml"]
+native = [{ name = "sessions", root = "{home}/data/sessions", pattern = "sessions.db*", form = "final" }]
+first_screen = "If Goose asks about usage data or a provider, answer now, before you type your prompt."
