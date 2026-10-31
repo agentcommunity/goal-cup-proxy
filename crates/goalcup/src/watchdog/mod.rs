@@ -1014,7 +1014,10 @@ mod tests {
     fn next_wait_resets() {
         let fast3 = [(0, 1), (1, 2), (2, 3)];
         let reset = [&fast3[..], &[(3, 63), (63, 64), (64, 65), (65, 66)]].concat();
-        assert_eq!(waits(&reset), [None, None, Some(30), None, None, None, Some(30)]);
+        assert_eq!(
+            waits(&reset),
+            [None, None, Some(30), None, None, None, Some(30)]
+        );
         let (h5, h140) = (5 * 3_600, 140 * 3_600);
         let far = [(h5, h5 + 1), (h140, h140 + 1), (h140 + 1, h140 + 2)];
         assert_eq!(waits(&far), [None; 3]);

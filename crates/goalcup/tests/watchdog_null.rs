@@ -181,7 +181,9 @@ fn watchdog_null_crash_loop_serves_and_retries() {
     let (dir, m, upstream) = (entry_dir.clone(), d.clone(), up.addr());
     let driver = std::thread::spawn(move || {
         let status = || cli::read_json::<Value>(&cli::status_json(&dir));
-        let first = until("boot 0", || status()?.get("pid")?.as_u64().filter(|p| *p > 0));
+        let first = until("boot 0", || {
+            status()?.get("pid")?.as_u64().filter(|p| *p > 0)
+        });
         // A boot that dies before its first LINK leaves its number to the next, so wait for one.
         until("a link", || {
             std::fs::metadata(dir.join("counts.jsonl"))
@@ -193,9 +195,14 @@ fn watchdog_null_crash_loop_serves_and_retries() {
         let null = until("null mode", || status().filter(|s| s["mode"] == "null"));
         assert!(null["off"]["since"].is_string(), "{null}");
         let answer = through_proxy(null["port"].as_u64().unwrap(), upstream);
-        assert!(answer.starts_with("HTTP/1.1 200") && answer.ends_with("hi"), "{answer}");
+        assert!(
+            answer.starts_with("HTTP/1.1 200") && answer.ends_with("hi"),
+            "{answer}"
+        );
         until("the normal try", || started(&m, "5"));
-        until("the try's status", || status().filter(|s| s["mode"] != "null"));
+        until("the try's status", || {
+            status().filter(|s| s["mode"] != "null")
+        });
         std::fs::write(m.join("stop"), "").unwrap();
     });
     let _ = watchdog::run_with(plan, facts, &recorder);
@@ -203,7 +210,10 @@ fn watchdog_null_crash_loop_serves_and_retries() {
     drop(up);
 
     let log = boot_log(&d);
-    assert!(log.iter().any(|l| l[0] == "4" && l.contains(&NULL_FLAG.to_string())));
+    assert!(
+        log.iter()
+            .any(|l| l[0] == "4" && l.contains(&NULL_FLAG.to_string()))
+    );
     assert!(log.iter().any(|l| l[..] == ["4", "exit", "0"]), "{log:?}");
     let (null_at, try_at) = (started(&d, "4").unwrap(), started(&d, "5").unwrap());
     // The wrapper reads its uptime a little after the wait began: 0.1 s of slack.
