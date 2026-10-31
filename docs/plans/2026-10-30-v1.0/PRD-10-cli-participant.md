@@ -1453,3 +1453,12 @@ What the pad calls, as merged (PRD-12 note):
 - **Still open for you:** the upload dispatch waits for `upload::manual::run`, which is PRD-06 slice 4
   (`Beat::final_beat` and `point_on_disk` for it are on integration now).
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-31, replan after PRD-05 core slice (merge 2c95e8f1)
+
+- **Values for the masker.** `Masker::new(&plan.mask_rules, values)` is final. Where PRD-10 supplies
+  values, it calls `mask::workspace_values(project)` and nothing else: `env` and `harness` values are
+  counted in `skipped` and never used until the owner says yes to question 3, so reading them would only
+  hold secret bytes in memory for no use. `MaskError` text is fixed (no byte, no value, no length) and may
+  be printed as is.
+- No locked ledger item is touched and no owner question comes from this slice.

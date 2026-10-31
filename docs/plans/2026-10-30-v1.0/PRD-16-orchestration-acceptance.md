@@ -2170,3 +2170,28 @@ kept and now cites BUILD-PROMPT section 5, since B3 no longer carries it.
   (PRD-11 note items 1 to 3). It is docs only and must land before the final acceptance run's link
   check and before the purge. PRD-12's `table` does not do it.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-31, replan after PRD-05 core slice (merge 2c95e8f1)
+
+- **Size report, PRD-05** (`wc -l` at 8e886901, row "Masking (PRD-05)", 3,530 src and 2,000 tests): src
+  4,030 lines of code, 114% of the row (`stream.rs` 2,327, `rules.rs` 834, `values.rs` 339, `meta.rs` 289,
+  `mod.rs` 241; 4,692 with 662 inline test lines; `shapes.tsv` 32 data lines not counted); tests 2,782,
+  139% of the row (6 `mask_*` files 1,712, corpus helpers 408, inline 662). The masking lane's decision
+  line names points 4 and 3. Per ledger L2 and the 30 Oct size rule, overage alone is a nit; this note
+  reports it and decides nothing.
+- **Rows over their size line, updated for the end-of-build report:** masking joins connector, usage,
+  upload and verifier, adding about 500 src and 780 tests. The sum of the PRD-00 src rows is 18,420; the
+  five rows at their ceilings or measured counts (connector 895 over, usage 1,080, upload 1,560, verifier
+  2,060, masking 500) add about 6,100, so the Rust src total is about 24,500 if the proxy, CLI and
+  pipeline rows (not yet built) end at their rows, against the target of about 18,100 (tests at most about
+  14,200). This is the check the PRD-08 slice 5 note asked for at the PRD-05 merge: the targets are the
+  owners' estimates and the 30 Oct size rule makes overage a nit, so it goes into the end-of-build report
+  as a plain figure and no owner question is asked now.
+- **Build order:** with PRD-05 core merged, `lessons_ws.rs` needs only PRD-03 and `common::upstream`; the
+  pad's C3 needs only PRD-08's `masks` key; the 50 MB/s mask throughput (A5) is PRD-02's pool, so the
+  rung that measures masking in a run is after the pool, not before. Rung 1's stub check (more than one
+  entry in `start.mask_rules`) now means something: it must pass on every build from 2c95e8f1 on.
+- **Acceptance lists as known,** if still open at the end: the PRD-05 nits (PEM hand-off coverage case,
+  the `Walk::absorbs` cut, the bench comment residue) and the question 3 shortfalls (32-value build 3.1 s
+  and 1.4 MB/s, `env` and `harness` values counted `skipped`) if the owner answers question 3 no.
+- No locked ledger item is touched and no owner question comes from this slice.

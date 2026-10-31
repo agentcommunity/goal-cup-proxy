@@ -1554,3 +1554,30 @@ to another file are made by that file's owner.
   line, and each remaining slice cuts first what serves no point (`counts.rs` and `handle.rs` are the
   places the reviewers named). The end-of-build report nets this against the Rust totals.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-31, replan after PRD-05 core slice (merge 2c95e8f1)
+
+- **S2 is the real masker now**, not the stub. `start.mask_rules` has the 18 shared kinds, the connector
+  kinds, `run_secret` and `fail_closed` (more than one entry), so the PRD-16 rung-1 stub check no longer
+  fires; entries built on a stub-era build stay not evidence. `Masker::new(&plan.mask_rules, values)`
+  returns `Result<Masker, MaskError>`: an error means a built-in shape or a connector rule did not
+  compile, and the recorder boot stops with a plain line (fixed text, no byte in it). `Span.rule`
+  indexes `mask_rules()`.
+- **Calls the pipeline makes** (PRD-05 note): one `StreamMasker` per stream from `masker.stream(kind)`;
+  `push` returns fewer or more bytes than were pushed (the released bytes are the record bytes, so
+  offsets follow the released length); `boundary()` at each WebSocket message end (K15, `fin`); `gap()`
+  before writing every GAP on that stream; `finish(self)` at the end of the stream. A stream holds at most
+  16 KiB undecided and stars (kind `fail_closed`) past that, never drops.
+- **R8, the mask pool.** One stream measured 10.4 MB/s (Codex request) and 12.6 MB/s (transcript) in a
+  release build, 16 KiB pieces, against the 50 MB/s target. The masker is `Send + Sync` and `Clone`
+  shares the policy, so the pool (one `StreamMasker` per stream, pinned to one worker at a time) is the
+  way to the target. Count the 16 KiB hold per stream in the pool's memory use.
+- **Values.** `mask::workspace_values(project)` returns the default build's exact values (the `GH_TOKEN`
+  value from the key files, usable only). `env` and `harness` values passed in are counted in
+  `start.mask_values.skipped` and never used until the owner's yes to question 3; PRD-02 need not
+  collect them. `Masker::new` took 3.1 s only with 32 values of 256 bytes, the question 3 case.
+- **`mask_meta` is real**: it keeps `method`, `status`, `host`, `port`, `alpn`, masks credential header
+  values and writes `meta.masked` for an object with `headers`. The rule "never read meta back after
+  `mask_meta`" stays (a native `path` with a shaped key or a credential query is starred); take the host,
+  the stream key and the native `path` before the call.
+- No locked ledger item is touched and no owner question comes from this slice.

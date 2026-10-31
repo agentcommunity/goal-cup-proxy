@@ -901,3 +901,56 @@ A1 reports it as a stated loss instead of failing on it.
 - **MASK counts by rule** are read from the start event's `mask_rules` (an index with no name shows
   as `other(n)`). Renaming a kind changes what PRD-12's C3 sees; that stays a seam line, as before.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-31, replan after PRD-05 core slice (merge 2c95e8f1)
+
+- **What is on integration:** `src/mask/{mod,rules,stream,values,meta}.rs`, S12 `shapes.tsv`, the
+  tests `mask_rules`, `mask_stream`, `mask_values`, `mask_meta`, `mask_corpus` (36 copied captures plus
+  the synthetic inputs in `tests/mask_corpus/`) and the ignored `mask_bench` (`by_hand_mask_bench`).
+  `Masker::new(&[connector::MaskRule], Vec<SecretValue>)` is the final shape. `mask_rules()` is the 18
+  shared kinds in S12 first-literal order, the connector kinds, `run_secret`, `fail_closed` last; no S12
+  kind name or row order changed. `gate fast` passed in 94 s on the merge (78 s before it).
+- **Final stream behaviour the other PRDs rely on.** `StreamMasker::push` returns fewer or more bytes
+  than were pushed; `boundary()` (end of a WebSocket message) decides the hold as end of input, ends a
+  fail-closed window and restarts; `gap()` goes before every GAP; `finish(self)` ends the stream. One
+  stream holds at most 16 KiB of undecided bytes (`MAX_HELD_BYTES`, a stated memory guard) and 64 live
+  candidates; past either it stars (kind `fail_closed`), never drops. Below the hold the output equals
+  `mask_whole`.
+- **Measured, release build, default build (no exact values beyond `GH_TOKEN`), one stream, 16 KiB
+  pieces:** generated Codex request 10.4 MB/s, Claude Code transcript 12.6 MB/s, `fail_closed` 0.
+  Lone PEM BEGIN lines with no END 28 to 300 B apart run at 2.3 to 4.8 MB/s (0.02 before round 3); with
+  END lines 12 to 14 MB/s. Target 50 MB/s is not met by one stream; PRD-02's mask pool (R8) is the next
+  step, and the masker is built for it (`Masker` is `Send + Sync`, a clone shares the policy, one
+  `StreamMasker` per stream). With 32 exact values of 256 bytes `Masker::new` takes 3.1 s and the
+  Codex request runs at 1.4 MB/s; that is the question 3 case, not built (below).
+- **Still deferred to the question 3 slice, which only an owner yes builds:** the section 9 name gate
+  for `env` and `harness` values (today they are counted in `skipped`, never used), the section 11 step 2
+  fix (exact-value regexes only after a hit) for the 3.1 s and 1.4 MB/s figures, and review A3-N1 and
+  A-5 (value counts with duplicates and unusable values; no count is wrong today). Without a yes, the
+  PRD-05 code is complete and no second slice is built.
+- **Nits left open at the merge, optional, none a defect:** (1) A4-N1 and B4-3: add one planted input
+  to `every_split_equals_the_whole_record_masker`, two BEGIN lines (a 300-byte body, then about 15,700
+  bytes), an END line, a newline and a `ghp_` key, so every split covers the PEM hold hand-off and the END
+  after it (the scratch fuzz of 1,792 runs found no difference); about 6 lines, with the dense
+  BEGIN/END generator of `the_pem_lines_find_what_the_pem_literal_finds` also compared at 16 KiB cuts.
+  (2) B4-1: replace `Walk::gap` and its caller block in `dedup` with one `Walk::absorbs(&mut self,
+  other: &Walk, start: u64) -> bool`, about 12 lines fewer, and drop or qualify "Candidates are in start
+  order" in the `dedup` doc. (3) A4-N2 and B4-2: `tests/mask_bench.rs` line 94 has "(review R3-F1)"
+  (process residue, drop it) and `format!("{}\n", "-----BEGIN PRIVATE KEY-----")` there and in
+  `mask_stream.rs` `runs_that_hold_candidates_stream_in_linear_time` is a literal with `\n`. Take them
+  in the next edit to these files; no slice is opened for them alone.
+- **One timing assert in the gate:** `runs_that_hold_candidates_stream_in_linear_time` asserts 30 s (about
+  20 times the linear cost in a debug build). If it flakes on a loaded box, raise the bound and keep the
+  equality assert, which is what keeps PEM merging honest (R4-N2). One residual cost, adversarial input
+  only: a PEM takeover moves the cut and the next release rescans the hold, about once per BEGIN gap
+  (R4-N1); within the never-stop budget, no change.
+- **Size (`wc -l` at 8e886901, PRD-00 row "Masking": 3,530 src, 2,000 tests).** Src 4,030 lines of
+  code against 3,530 (114%): `meta.rs` 289, `mod.rs` 241, `rules.rs` 834, `stream.rs` 2,327,
+  `values.rs` 339 (file totals 514, 302, 959, 2,578, 339 with 662 inline test lines; `shapes.tsv` 32 data
+  lines not counted). Tests 2,782 against 2,000 (139%): files 1,712 (`mask_corpus.rs` 469,
+  `mask_stream.rs` 443, `mask_rules.rs` 399, `mask_values.rs` 174, `mask_bench.rs` 147, `mask_meta.rs` 80)
+  plus helpers 408 (`mask_corpus/common.rs` 171, `synthetic.rs` 237) plus 662 inline. The decision line
+  of the masking lane (01:01Z) names the points: 4 (copied stream recognizers and PEM grouping), 3
+  (corpus streaming, every-split and linear-time cases, the never-stop rule). Reviewer B's rule applies:
+  no further growth without a new `decision` line.
+- No locked ledger item is touched and no owner question comes from this slice.

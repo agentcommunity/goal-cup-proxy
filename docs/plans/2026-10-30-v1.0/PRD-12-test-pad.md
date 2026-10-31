@@ -1757,3 +1757,18 @@ taken; "rejected" says why. Fixes for other files are made by those files' owner
   key", "subagents need the Gateway", "C1 history orphan"), as section 9 already says, so they fit a
   table cell.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-31, replan after PRD-05 core slice (merge 2c95e8f1)
+
+- **C3 can pass on a build that has the core slice**, once PRD-08's `masks` key is also there. The kind
+  names and the row order are unchanged from S12: `openai_key`, `github_token`, `google_key`, `jwt`,
+  `private_key`, `url_password` and the shell rule `generic_secret_assignment` are all in `mask_rules()`,
+  and `fail_closed` is last. Rows 1, 3 and 4 still win their overlap with row 11, and row 11 wins over row
+  13. A pad row built before 2c95e8f1 is a stub row and stays "not evidence".
+- **The left guard:** a guarded shape right after a letter, digit or `_` is not masked (a glued key); one
+  right after an escape (`\u`, `\x`, a backslash, percent) still is. A planted value in a pad row needs a
+  non-word byte before it, or C3 shows a false FAIL; check the section 5 rows against this.
+- **Exact-value planting stays out of scope.** Only `GH_TOKEN` from the workspace key files is an exact
+  value in the default build, and it is masked in 11 forms; a pad value that is not a shape and not
+  `GH_TOKEN` has no MASK by design.
+- No locked ledger item is touched and no owner question comes from this slice.

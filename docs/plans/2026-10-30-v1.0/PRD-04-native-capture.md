@@ -921,3 +921,12 @@ ledger wins over every row here.
   until PRD-02's `boot.rs` lands; a test that needs a non-zero `model_requests` builds it through the
   recorder's own write path, not a literal.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-31, replan after PRD-05 core slice (merge 2c95e8f1)
+
+- **The real `mask_meta` is on integration**, so the stub note on native OPEN meta no longer holds. It
+  scrubs the `path` string with the whole-record rules, stars a credential query value and a userinfo
+  before the last `@`, and leaves `method`, `status`, `host`, `port` and `alpn` clear. Keep reading the
+  path for the stream map before `mask_meta` runs, not after. An entry built on a stub-era build still
+  cannot be used as evidence.
+- No locked ledger item is touched and no owner question comes from this slice.
