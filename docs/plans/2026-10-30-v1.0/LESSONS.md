@@ -73,12 +73,12 @@ lessons lane (PRD-17); read by the deletion gate (PRD-17 Acceptance, checks 1 to
 | L-D7 | 2.4 | A: lessons_decode::bomb_relays_on_in_bounded_pieces | PRD-17 | open | - |
 | L-D8 | 2.4 | A: lessons_decode.rs | PRD-17 | open | - |
 | L-W1 | 2.5 | A: proxy_ws.rs (PRD-03); R: RR1 | PRD-03 | green | 7e620577 |
-| L-W2 | 2.5 | A: lessons_ws::negotiation_accepts_only_rfc7692 (parser half); A: lessons_ws::unknown_extension_relays_inside_a_named_loss (relay half through serve, with the conn GAP) | PRD-17 | open | - |
+| L-W2 | 2.5 | A: lessons_ws::negotiation_accepts_only_rfc7692 (parser half); A: lessons_ws::unknown_extension_relays_inside_a_named_loss (parser); A: lessons_ws::unknown_extension_through_serve (relay half, with the conn GAP and its `lost`) | PRD-17 | open | - |
 | L-W3 | 2.5 | A: lessons_ws::server_max_window_bits_10_decodes | PRD-17 | green | 0fa43715 |
 | L-W4 | 2.5 | A: lessons_ws::takeover_history_carries_between_messages (the guard drop itself is structural, see the test comment); R: RR1 | PRD-17 | open | - |
 | L-W5 | 2.5 | A: lessons_ws::bfinal_ends_takeover_history | PRD-17 | green | 0fa43715 |
 | L-W6 | 2.5 | A: lessons_ws::one_byte_reads_decode_the_same | PRD-17 | green | 0fa43715 |
-| L-W7 | 2.5 | A: lessons_ws::violations_are_named_and_relaying_goes_on (relay half through serve, with the 5a GAP) | PRD-17 | open | - |
+| L-W7 | 2.5 | A: lessons_ws::violations_are_named_and_relaying_goes_on (parser); A: lessons_ws::violations_through_serve (relay half, with the 5a GAP) | PRD-17 | open | - |
 | L-W8 | 2.5 | A: proxy_ws.rs (PRD-03) | PRD-03 | green | 7e620577 |
 | L-W9 | 2.5 | A: lessons_ws::upgrade_101_and_first_frame_in_one_write | PRD-17 | open | - |
 | L-W10 | 2.5 | A: lessons_ws::rejected_upgrade_stays_http; A: lessons_ws::bad_accept_is_a_named_loss_not_a_websocket | PRD-17 | open | - |

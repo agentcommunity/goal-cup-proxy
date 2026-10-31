@@ -15,26 +15,23 @@ mod common;
 mod proxy_fixtures;
 
 use common::pki::HTTP11;
-use common::recorder::{data_of, ends, entry_dir, gaps, opens as all_opens, records};
+use common::recorder::{data_of, ends, entry_dir, events, gaps, opens as all_opens};
 use common::upstream::{Script, Upstream};
-use common::{HANG, within_async};
 use flate2::Compression;
 use flate2::write::GzEncoder;
-use goalcup::connector::HostList;
 use goalcup::pipeline::{Call, Calls, EndReason, GapReason, Mono, Recorder, Sid, StreamKind};
 use goalcup::proxy::ca::RunCa;
 use goalcup::proxy::http1::Http1;
 use goalcup::proxy::pump::{Parser, Stop};
 use goalcup::proxy::ws::Dir;
-use goalcup::proxy::{ProxyCtx, ProxyHandle, serve};
+use goalcup::proxy::ProxyHandle;
 use goalcup_format::Record;
-use proxy_fixtures::{HOSTS, conns, through, trusting_run_ca};
+use proxy_fixtures::{conns, proxy_to, read_to, through, trusting_run_ca, wait_records};
 use rustls::pki_types::ServerName;
 use serde_json::{Value, json};
 use std::io::Write;
 use std::net::SocketAddr;
-use std::time::Duration;
-use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+use tokio::io::AsyncWriteExt as _;
 
 const CONN: Sid = 1000;
 const ROOM: u64 = 1 << 30;
@@ -679,54 +676,28 @@ fn unframeable_heads_stop_parsing_and_count_their_bytes() {
     assert!(gaps(&calls).is_empty());
 }
 
-/// The proxy decrypting `api.openai.com` in front of a TLS upstream that answers `hi`. `entry` is
-/// set when the real pipeline (masking, writer) records into a temp folder; otherwise `calls`
-/// shows the calls before masking.
+/// The proxy decrypting `api.openai.com` in front of a TLS upstream that answers `hi`. `calls`
+/// shows the calls before masking, unless `real` is the folder of an entry the real pipeline
+/// (masking, writer) records into.
 struct World {
     up: Upstream,
-    _dir: tempfile::TempDir,
     _h: ProxyHandle,
     addr: SocketAddr,
     ca: RunCa,
     calls: Calls,
-    entry: Option<common::recorder::KeptDir>,
 }
 
-fn world(real: bool) -> World {
+fn world(real: Option<&std::path::Path>) -> World {
     let up = Upstream::start(Script::ok(b"hi").with_tls(&["api.openai.com"], &[HTTP11]));
-    let dir = tempfile::tempdir().unwrap();
-    let roots = up.pki().roots_file(dir.path()).display().to_string();
-    // SAFETY: nextest runs each test in its own process; this runs before `serve` reads them.
-    unsafe {
-        std::env::set_var("GOALCUP_TEST_EXTRA_ROOTS", roots);
-        std::env::set_var(
-            "GOALCUP_TEST_UPSTREAM",
-            format!("api.openai.com={}", up.addr()),
-        );
-    }
-    let (listener, addr) = common::ports::held();
-    socket2::SockRef::from(&listener).listen(4096).unwrap();
-    let ca = RunCa::mint(&["openai.com".to_string()]).unwrap();
     let (plain, calls) = Recorder::for_tests(ROOM);
-    let entry = real.then(entry_dir);
-    let recorder = entry
-        .as_ref()
-        .map_or(plain, |e| common::recorder::real(e.path()));
-    let hosts = HostList::from_file(HOSTS.as_bytes(), "hosts.toml").unwrap();
-    let ctx = ProxyCtx {
-        recorder,
-        hosts,
-        ca: ca.clone(),
-    };
-    let _h = serve(listener.try_clone().unwrap(), ctx);
+    let recorder = real.map_or(plain, common::recorder::real);
+    let (_h, addr, ca) = proxy_to(recorder, up.addr(), up.pki());
     World {
         up,
-        _dir: dir,
         _h,
         addr,
         ca,
         calls,
-        entry,
     }
 }
 
@@ -745,70 +716,113 @@ async fn tls(w: &World) -> Tls {
 /// Writes `req`, then reads until the upstream's `hi`; gives the answer.
 async fn send(t: &mut Tls, req: &[u8]) -> Vec<u8> {
     t.write_all(req).await.unwrap();
-    within_async(HANG, async {
-        let mut got = Vec::new();
-        while !got.ends_with(b"hi") {
-            let mut b = [0u8; 4096];
-            let n = t.read(&mut b).await.unwrap();
-            assert!(n > 0, "the answer ended early");
-            got.extend_from_slice(&b[..n]);
-        }
-        got
-    })
-    .await
+    read_to(t, |got| got.ends_with(b"hi")).await
 }
 
 const MARK: &str = "mark-7c2d";
 const SECOND: &[u8] = b"GET /second HTTP/1.1\r\nHost: api.openai.com\r\n\r\n";
 
-/// H2, H9 (PRD-03 section 5a): `head` and then a second request on the same connection. The
-/// client gets both answers, the upstream gets every byte unchanged, the loss is one GAP of
-/// `reason`, every stream ends, and no tail holds a byte of the head. A stopped parser leaves
-/// the second request inside the `conn` GAP.
-async fn relays_on(label: &str, head: &[u8], reason: GapReason) {
-    let w = world(false);
-    let mut t = tls(&w).await;
-    for req in [head, SECOND] {
-        assert!(
-            send(&mut t, req).await.starts_with(b"HTTP/1.1 200"),
-            "{label}"
-        );
-    }
-    assert_eq!(w.up.received(), [[head, SECOND].concat()], "{label}");
-    drop(t);
-    let conn = conns(&w.calls, 1).await[0].0;
-    let [one]: [Call; 1] = gaps(&w.calls).try_into().expect("one GAP");
-    let Call::Gap(sid, got, _, _, _, lost, _) = one else {
-        unreachable!()
-    };
-    assert_eq!(got, reason, "{label}");
-    if reason == GapReason::DecodeFailed {
-        assert_eq!(sid, conn, "{label}");
-        assert!(lost.is_some_and(|n| n >= SECOND.len() as u64), "{label}");
-    }
-    assert!(!format!("{:?}", gaps(&w.calls)).contains(MARK), "{label}");
-    assert_eq!(ends(&w.calls).len(), all_opens(&w.calls).len(), "{label}");
+/// What `relays_on` saw.
+struct Relayed {
+    /// The `conn` stream.
+    conn: Sid,
+    /// The one GAP: its stream, reason and `lost`.
+    gap: (Sid, GapReason, Option<u64>),
+    /// Every byte relayed both ways: the head, the second request and both answers.
+    relayed: u64,
+    /// The `parse_stopped` notes.
+    notes: Vec<Value>,
 }
 
-/// H2, the relay half: each head the parser cannot frame, through a decrypted listed host.
+/// H2, H9 (PRD-03 section 5a): `head` and `body` and then a second request on the same
+/// connection. The client gets both answers (the same bytes, 200 and `hi`), the upstream gets
+/// every byte unchanged, the loss is one GAP, every stream ends, and no tail holds a byte of the
+/// head.
+async fn relays_on(label: &str, head: &[u8], body: &[u8]) -> Relayed {
+    let w = world(None);
+    let mut t = tls(&w).await;
+    let first = [head, body].concat();
+    let one = send(&mut t, &first).await;
+    let two = send(&mut t, SECOND).await;
+    assert!(one.starts_with(b"HTTP/1.1 200") && one == two, "{label}");
+    assert_eq!(w.up.received(), [[&first[..], SECOND].concat()], "{label}");
+    drop(t);
+    let conn = conns(&w.calls, 1).await[0].0;
+    let [one_gap]: [Call; 1] = gaps(&w.calls).try_into().expect("one GAP");
+    let Call::Gap(sid, reason, _, _, _, lost, _) = one_gap else {
+        unreachable!()
+    };
+    assert!(!format!("{:?}", gaps(&w.calls)).contains(MARK), "{label}");
+    assert_eq!(ends(&w.calls).len(), all_opens(&w.calls).len(), "{label}");
+    Relayed {
+        conn,
+        gap: (sid, reason, lost),
+        relayed: (first.len() + SECOND.len() + 2 * one.len()) as u64,
+        notes: events(&w.calls)
+            .into_iter()
+            .filter(|e| e["what"] == "parse_stopped")
+            .collect(),
+    }
+}
+
+/// H2, the relay half: each head the parser cannot frame, through a decrypted listed host. The
+/// loss is the `conn` GAP: its `lost` is every byte relayed from the fault on (head, body, the
+/// second request and both answers), and the `parse_stopped` note names that `conn`.
 #[tokio::test]
 async fn unframeable_heads_relay_on_inside_a_named_loss() {
-    let line = |bad: &str| format!("GET / HTTP/1.1\r\nX-Mark: {MARK}\r\n{bad}\r\n\r\n");
-    let heads = [
-        ("line folding", line("A: b\r\n folded")),
-        ("a space in a name", line("Bad Name: x")),
-        ("no colon", line("no colon here")),
+    // A request line, the marked header, then `bad` (a header block) when given.
+    let head = |first: &str, bad: &[u8]| {
+        let mut v = format!("{first}\r\nX-Mark: {MARK}\r\n").into_bytes();
+        if !bad.is_empty() {
+            v.extend_from_slice(bad);
+            v.extend_from_slice(b"\r\n");
+        }
+        v.extend_from_slice(b"\r\n");
+        v
+    };
+    let get = |bad: &[u8]| head("GET / HTTP/1.1", bad);
+    let post = |bad: &[u8]| head("POST / HTTP/1.1", bad);
+    // A body goes behind a head only where the scripted upstream frames it the same way (it
+    // reads the first Content-Length, and a body only for a chunked coding it can read).
+    let cases: Vec<(&str, Vec<u8>, &[u8])> = vec![
+        ("line folding", get(b"A: b\r\n folded"), b""),
+        ("a space in a name", get(b"Bad Name: x"), b""),
+        ("no colon", get(b"no colon here"), b""),
         (
             "an HTTP/2 line",
-            format!("GET / HTTP/2.0\r\nX-Mark: {MARK}\r\n\r\n"),
+            head("GET / HTTP/2.0", b""),
+            b"",
+        ),
+        ("no target", head("GET HTTP/1.1", b""), b""),
+        (
+            "a non-ASCII Content-Length",
+            post(b"Content-Length: 5\xc3\xa9"),
+            b"",
         ),
         (
-            "no target",
-            format!("GET HTTP/1.1\r\nX-Mark: {MARK}\r\n\r\n"),
+            "conflicting Content-Length lines",
+            post(b"Content-Length: 3\r\nContent-Length: 4"),
+            b"abc",
+        ),
+        (
+            "a final transfer coding that is not chunked",
+            post(b"Transfer-Encoding: gzip"),
+            b"",
+        ),
+        (
+            "a non-ASCII Transfer-Encoding",
+            post(b"Transfer-Encoding: chunk\xc3\xa9d"),
+            b"",
         ),
     ];
-    for (label, head) in heads {
-        relays_on(label, head.as_bytes(), GapReason::DecodeFailed).await;
+    for (label, head, body) in cases {
+        let seen = relays_on(label, &head, body).await;
+        let (sid, reason, lost) = seen.gap;
+        assert_eq!(reason, GapReason::DecodeFailed, "{label}");
+        assert_eq!(sid, seen.conn, "{label}");
+        assert_eq!(lost, Some(seen.relayed), "{label}");
+        let [note]: [Value; 1] = seen.notes.try_into().expect("one parse_stopped note");
+        assert_eq!(note["conn"], seen.conn, "{label}");
     }
 }
 
@@ -821,15 +835,30 @@ async fn head_over_64k_relays_inside_a_named_loss() {
     }
     head.extend_from_slice(b"\r\n");
     assert!(head.len() > 64 * 1024);
-    relays_on("a 64 KiB head", &head, GapReason::MemoryGuard).await;
+    let seen = relays_on("a 64 KiB head", &head, b"").await;
+    assert_eq!(seen.gap.1, GapReason::MemoryGuard);
+}
+
+/// Every byte the entry holds for the streams: meta, DATA, tails of END and GAP, EVENT json.
+fn recorded_bytes(recs: &[Record]) -> Vec<Vec<u8>> {
+    recs.iter()
+        .filter_map(|r| match r {
+            Record::Open { meta, .. } => Some(meta.clone()),
+            Record::Data { bytes, .. } => Some(bytes.clone()),
+            Record::End { tail, .. } | Record::Gap { tail, .. } => Some(tail.clone()),
+            Record::Event { json, .. } => Some(json.clone()),
+            _ => None,
+        })
+        .collect()
 }
 
 /// H10: the upstream gets `Authorization` byte for byte; the record has it starred, and the
-/// credential is in no record after decode.
+/// credential is in no record after decode (meta, DATA, tails, notes and events).
 #[tokio::test]
 async fn authorization_forwarded_unchanged_and_starred_in_meta() {
     const SECRET: &str = "synthetic-credential-for-the-test";
-    let w = world(true);
+    let entry = entry_dir();
+    let w = world(Some(entry.path()));
     let req = format!(
         "POST /v1/responses HTTP/1.1\r\nHost: api.openai.com\r\nAuthorization: Bearer {SECRET}\r\nContent-Length: 2\r\n\r\n{{}}"
     );
@@ -837,66 +866,53 @@ async fn authorization_forwarded_unchanged_and_starred_in_meta() {
     send(&mut t, req.as_bytes()).await;
     drop(t);
     assert_eq!(w.up.received(), [req.into_bytes()]);
-    let dir = w.entry.as_ref().unwrap().path().to_owned();
     // The request, the response and the conn have ended.
-    let recs = within_async(HANG, async {
-        loop {
-            let all = records(&dir);
-            if all
-                .iter()
-                .filter(|r| matches!(r, Record::End { .. }))
-                .count()
-                >= 3
-            {
-                return all;
-            }
-            tokio::time::sleep(Duration::from_millis(50)).await;
-        }
+    let recs = wait_records(entry.path(), |recs| {
+        recs.iter()
+            .filter(|r| matches!(r, Record::End { .. }))
+            .count()
+            >= 3
     })
     .await;
-    let mut starred = Vec::new();
-    for r in &recs {
-        let bytes = match r {
-            Record::Open { meta, .. } => {
-                let meta: Value = serde_json::from_slice(meta).unwrap();
-                let auth = meta["headers"].as_array().and_then(|h| {
-                    h.iter().find(|p| {
-                        p[0].as_str()
-                            .is_some_and(|n| n.eq_ignore_ascii_case("authorization"))
-                    })
-                });
-                starred.extend(auth.map(|p| p[1].as_str().unwrap().to_owned()));
-                meta.to_string().into_bytes()
-            }
-            Record::Data { bytes, .. } => bytes.clone(),
-            Record::End { tail, .. } | Record::Gap { tail, .. } => tail.clone(),
-            _ => continue,
-        };
+    for bytes in recorded_bytes(&recs) {
         assert!(!bytes.windows(SECRET.len()).any(|w| w == SECRET.as_bytes()));
     }
+    let starred: Vec<String> = recs
+        .iter()
+        .filter_map(|r| match r {
+            Record::Open { meta, .. } => serde_json::from_slice::<Value>(meta).ok(),
+            _ => None,
+        })
+        .filter_map(|meta| {
+            let found = meta["headers"].as_array()?.iter().find(|p| {
+                (p[0].as_str()).is_some_and(|n| n.eq_ignore_ascii_case("authorization"))
+            });
+            Some(found?[1].as_str()?.to_owned())
+        })
+        .collect();
     let [value] = starred
         .try_into()
         .expect("one Authorization header recorded");
     assert!(!value.is_empty() && value.bytes().all(|b| b == b'*'));
 }
 
-/// H11 (and G1): every request on a decrypted host is recorded, whatever its method or path.
+/// H11 (and G1): every request on a decrypted host is recorded, whatever its method, path or
+/// Host header (one names another host than the CONNECT did).
 #[tokio::test]
 async fn every_request_on_a_decrypted_host_is_recorded() {
-    let w = world(false);
+    let w = world(None);
     let mut t = tls(&w).await;
     let sent = [
-        ("GET", "/v1/models"),
-        ("POST", "/v1/chat/completions"),
-        ("POST", "/claude-code/v1/messages"),
-        ("POST", "/oauth/token"),
-        ("GET", "/odd//path;x=1?q=%zz&r=%C3%A9"),
-        ("DELETE", "/telemetry"),
+        ("GET", "/v1/models", "api.openai.com"),
+        ("POST", "/v1/chat/completions", "api.openai.com"),
+        ("POST", "/claude-code/v1/messages", "api.openai.com"),
+        ("POST", "/oauth/token", "api.openai.com"),
+        ("GET", "/odd//path;x=1?q=%zz&r=%C3%A9", "api.openai.com"),
+        ("DELETE", "/telemetry", "api.openai.com"),
+        ("POST", "/v1/responses", "other.example.net"),
     ];
-    for (method, path) in sent {
-        let req = format!(
-            "{method} {path} HTTP/1.1\r\nHost: api.openai.com\r\nContent-Length: 2\r\n\r\n{{}}"
-        );
+    for (method, path, host) in sent {
+        let req = format!("{method} {path} HTTP/1.1\r\nHost: {host}\r\nContent-Length: 2\r\n\r\n{{}}");
         send(&mut t, req.as_bytes()).await;
     }
     drop(t);
@@ -915,7 +931,7 @@ async fn every_request_on_a_decrypted_host_is_recorded() {
     assert_eq!(
         got,
         sent.map(|s| s.1.split('?').next().unwrap()),
-        "the query is its own field"
+        "the path is recorded without its query"
     );
     let resps = of(StreamKind::HttpResp);
     let paired: Vec<_> = resps.iter().map(|r| r.1).collect();

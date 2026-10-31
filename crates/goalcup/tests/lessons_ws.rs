@@ -11,7 +11,7 @@ mod common;
 mod proxy_fixtures;
 
 use common::pki::{HTTP11, TestPki};
-use common::recorder::{ends, entry_dir, gaps, opens, real, records};
+use common::recorder::{ends, entry_dir, gaps, opens, real};
 use common::upstream::{Answer, Body, Script, Upstream, WsMsg};
 use common::{HANG, within_async};
 use flate2::{Compress, Compression, FlushCompress, Status};
@@ -20,9 +20,9 @@ use goalcup::proxy::ca::RunCa;
 use goalcup::proxy::http1::Http1;
 use goalcup::proxy::pump::{Parser, Stop};
 use goalcup::proxy::ws::{Deflate, Dir, WsConn, negotiate};
-use goalcup::proxy::{ProxyCtx, ProxyHandle, serve};
+use goalcup::proxy::ProxyHandle;
 use goalcup_format::{FLAG_FIN, Record};
-use proxy_fixtures::{HOSTS, conns, through, trusting_run_ca};
+use proxy_fixtures::{all_ended, conns, proxy_to, read_to, through, trusting_run_ca, wait_records};
 use rustls::pki_types::ServerName;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
@@ -52,6 +52,17 @@ fn gap_reasons(c: &Calls, sid: Sid) -> Vec<GapReason> {
         .into_iter()
         .filter_map(|call| match call {
             Call::Gap(s, reason, ..) if s == sid => Some(reason),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The `lost` of the GAPs on `sid`, in order.
+fn gap_lost(c: &Calls, sid: Sid) -> Vec<Option<u64>> {
+    gaps(c)
+        .into_iter()
+        .filter_map(|call| match call {
+            Call::Gap(s, .., lost, _) if s == sid => Some(lost),
             _ => None,
         })
         .collect()
@@ -252,35 +263,14 @@ fn upgrade_req(path: &str, offer: bool) -> Vec<u8> {
 
 /// The proxy in front of an upstream at `up` that `pki` signs for `api.openai.com`.
 struct Wire {
-    _dir: tempfile::TempDir,
     _h: ProxyHandle,
     addr: SocketAddr,
     ca: RunCa,
 }
 
 fn wire(up: SocketAddr, pki: &TestPki, recorder: Recorder) -> Wire {
-    let dir = tempfile::tempdir().unwrap();
-    let roots = pki.roots_file(dir.path()).display().to_string();
-    // SAFETY: nextest runs each test in its own process; this runs before `serve` reads them.
-    unsafe {
-        std::env::set_var("GOALCUP_TEST_EXTRA_ROOTS", roots);
-        std::env::set_var("GOALCUP_TEST_UPSTREAM", format!("api.openai.com={up}"));
-    }
-    let (listener, addr) = common::ports::held();
-    socket2::SockRef::from(&listener).listen(4096).unwrap();
-    let ca = RunCa::mint(&["openai.com".to_string()]).unwrap();
-    let hosts = goalcup::connector::HostList::from_file(HOSTS.as_bytes(), "hosts.toml").unwrap();
-    let ctx = ProxyCtx {
-        recorder,
-        hosts,
-        ca: ca.clone(),
-    };
-    Wire {
-        _dir: dir,
-        _h: serve(listener, ctx),
-        addr,
-        ca,
-    }
+    let (_h, addr, ca) = proxy_to(recorder, up, pki);
+    Wire { _h, addr, ca }
 }
 
 /// A client through a decrypted CONNECT that writes `first` at once.
@@ -293,24 +283,6 @@ async fn client(w: &Wire, first: &[u8]) -> tokio_rustls::client::TlsStream<tokio
         .unwrap();
     t.write_all(first).await.unwrap();
     t
-}
-
-/// Reads until `done` says the bytes so far are enough.
-async fn read_to<S: tokio::io::AsyncRead + Unpin>(
-    t: &mut S,
-    done: impl Fn(&[u8]) -> bool,
-) -> Vec<u8> {
-    within_async(HANG, async {
-        let mut got = Vec::new();
-        while !done(&got) {
-            let mut b = [0u8; 4096];
-            let n = t.read(&mut b).await.unwrap();
-            assert!(n > 0, "the stream ended early");
-            got.extend_from_slice(&b[..n]);
-        }
-        got
-    })
-    .await
 }
 
 type Seen = Arc<Mutex<Vec<Vec<u8>>>>;
@@ -423,8 +395,9 @@ fn ws_upstream(messages: Vec<WsMsg>) -> Upstream {
     Upstream::start(script)
 }
 
-/// L-W2, serve half: the unknown extension in the `101` is relayed unchanged both ways and
+/// W2, the relay half: the unknown extension in the `101` is relayed unchanged both ways and
 /// the conn stream names the loss; no stream is decoded.
+#[tokio::test]
 async fn unknown_extension_through_serve() {
     let down = [text(Dir::Down, "down one"), text(Dir::Down, "down two")].concat();
     let up = text(Dir::Up, "up one");
@@ -434,14 +407,19 @@ async fn unknown_extension_through_serve() {
         .to_vec());
     for i in 0..answers.len() {
         let conn = r.session(i, &up, true).await;
-        let named = gap_reasons(&r.calls, conn);
-        assert!(!named.is_empty() && named.iter().all(|g| *g == GapReason::DecodeFailed));
+        assert_eq!(gap_reasons(&r.calls, conn), [GapReason::DecodeFailed]);
+        // Every frame behind the 101, both ways, sits in that one loss.
+        assert_eq!(
+            gap_lost(&r.calls, conn),
+            [Some((up.len() + down.len()) as u64)]
+        );
     }
     r.no_ws_stream();
 }
 
-/// L-W7, serve half: a violation mid-stream gives the 5a GAP on the WebSocket stream and every
+/// W7, the relay half: a violation mid-stream gives the 5a GAP on the WebSocket stream and every
 /// byte is still relayed, each way.
+#[tokio::test]
 async fn violations_through_serve() {
     let down = [
         text(Dir::Down, "first"),
@@ -458,7 +436,7 @@ async fn violations_through_serve() {
     for dir in [Dir::Up, Dir::Down] {
         let sid = stream(&r.calls, dir);
         let got = texts(&r.calls, sid);
-        assert_eq!(got.first().map(String::as_str), Some("first"), "{dir:?}");
+        assert_eq!(got, ["first", "last"], "{dir:?}");
         let named = gap_reasons(&r.calls, sid);
         assert!(!named.is_empty() && named.iter().all(|g| *g == GapReason::DecodeFailed));
     }
@@ -517,9 +495,13 @@ async fn bad_accept_is_a_named_loss_not_a_websocket() {
     ]
     .concat();
     let r = raw(vec![reply]);
-    let conn = r.session(0, &text(Dir::Up, "y"), false).await;
-    let named = gap_reasons(&r.calls, conn);
-    assert!(!named.is_empty() && named.iter().all(|g| *g == GapReason::DecodeFailed));
+    let (up, down) = (text(Dir::Up, "y"), text(Dir::Down, "x"));
+    let conn = r.session(0, &up, false).await;
+    assert_eq!(gap_reasons(&r.calls, conn), [GapReason::DecodeFailed]);
+    assert_eq!(
+        gap_lost(&r.calls, conn),
+        [Some((up.len() + down.len()) as u64)]
+    );
     r.no_ws_stream();
 }
 
@@ -545,8 +527,10 @@ async fn an_upgrade_on_any_path_is_recorded() {
 
 #[tokio::test]
 async fn fail_closed_ends_at_message_end() {
-    // K15: message 1 holds an undecided 20 KiB candidate; no mask span leaves that message and
-    // the next messages are whole and parse.
+    // K15: message 1 holds an undecided 20 KiB candidate; the fail-closed span ends with that
+    // message and the next messages are whole and parse. The messages come down (`ws_down`)
+    // from the scripted upstream; both directions run the same stream masker, so the
+    // direction does not change the rule.
     let first = format!(
         r#"{{"type":"response.create","input":"sk-{}"}}"#,
         "A9".repeat(10 * 1024)
@@ -562,26 +546,7 @@ async fn fail_closed_ends_at_message_end() {
     let mut t = client(&w, &upgrade_req("/v1/responses", false)).await;
     read_to(&mut t, |g| g.ends_with(plain[1].as_bytes())).await;
     drop(t);
-    let recs = within_async(HANG, async {
-        loop {
-            let recs = records(entry.path());
-            let open = recs
-                .iter()
-                .filter(|r| matches!(r, Record::Open { .. }))
-                .count();
-            if open > 0
-                && open
-                    == recs
-                        .iter()
-                        .filter(|r| matches!(r, Record::End { .. }))
-                        .count()
-            {
-                return recs;
-            }
-            tokio::time::sleep(Duration::from_millis(50)).await;
-        }
-    })
-    .await;
+    let recs = wait_records(entry.path(), all_ended).await;
     let sid = recs
         .iter()
         .find_map(|r| match r {
@@ -627,9 +592,25 @@ async fn fail_closed_ends_at_message_end() {
             at + plain[0].len() + plain[1].len()
         ]
     );
+    // The rule numbers index the start event's `mask_rules`.
+    let fail_closed: Vec<u64> = recs
+        .iter()
+        .find_map(|r| match r {
+            Record::Event { json, .. } => serde_json::from_slice::<serde_json::Value>(json)
+                .ok()
+                .filter(|v| v["ev"] == "start"),
+            _ => None,
+        })
+        .and_then(|start| {
+            let rules = start["mask_rules"].as_array()?.clone();
+            let at = |(i, r): (usize, &serde_json::Value)| (*r == "fail_closed").then_some(i as u64);
+            Some(rules.iter().enumerate().filter_map(at).collect())
+        })
+        .expect("a start event naming the mask rules");
     assert!(
-        recs.iter()
-            .any(|r| matches!(r, Record::Mask { sid: s, .. } if *s == sid))
+        recs.iter().any(|r| matches!(r, Record::Mask { sid: s, rule, .. }
+            if *s == sid && fail_closed.contains(rule))),
+        "the candidate is masked by the fail-closed rule"
     );
     assert_eq!(&bytes[at..], plain.concat().as_bytes());
     serde_json::from_slice::<serde_json::Value>(&bytes[at..at + plain[0].len()]).unwrap();
@@ -692,8 +673,8 @@ fn negotiation_accepts_only_rfc7692() {
     assert!(negotiate(Some("x-other"), Some("permessage-deflate")).is_err());
 }
 
-#[tokio::test]
-async fn unknown_extension_relays_inside_a_named_loss() {
+#[test]
+fn unknown_extension_relays_inside_a_named_loss() {
     // The 101 is the RFC 6455 section 1.3 example: this key and its accept value.
     const UPGRADE: &[u8] = b"GET /v1/responses HTTP/1.1\r\nHost: api.example.com\r\nUpgrade: websocket\r\n\
         Connection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\
@@ -753,7 +734,6 @@ async fn unknown_extension_relays_inside_a_named_loss() {
         assert_eq!(end_reason(&calls, sid), EndReason::DecodeError);
         assert_eq!(gap_reasons(&calls, sid), [GapReason::DecodeFailed]);
     }
-    unknown_extension_through_serve().await;
 }
 
 // W3: the inflater always uses the full 15-bit window, which decodes any smaller one.
@@ -928,8 +908,8 @@ fn one_byte_reads_decode_the_same() {
 // W7: a frame that breaks RFC 6455 is a named loss for its message, the next message parses, and
 // nothing panics. A length that cannot be trusted stops parsing for the connection.
 
-#[tokio::test]
-async fn violations_are_named_and_relaying_goes_on() {
+#[test]
+fn violations_are_named_and_relaying_goes_on() {
     let wrong_mask = |dir: Dir| if dir == Dir::Up { None } else { Some(KEY) };
     type Case = (&'static str, Dir, Box<dyn Fn(Dir) -> Vec<u8>>);
     let cases: Vec<Case> = vec![
@@ -1033,7 +1013,6 @@ async fn violations_are_named_and_relaying_goes_on() {
         assert!(!gap_reasons(&calls, sid).is_empty());
         assert_eq!(end_reason(&calls, sid), EndReason::DecodeError);
     }
-    violations_through_serve().await;
 }
 
 // W12: a long message is handed over in pieces while it is still arriving.

@@ -3,12 +3,13 @@
 
 #![allow(dead_code)]
 
-use crate::common::recorder::{ends, opens};
+use crate::common::recorder::{ends, opens, records};
 use crate::common::{HANG, within_async};
 use goalcup::connector::HostList;
 use goalcup::pipeline::{Calls, Recorder, StreamKind};
 use goalcup::proxy::ca::RunCa;
 use goalcup::proxy::{ProxyCtx, ProxyHandle, serve};
+use goalcup_format::Record;
 use rustls::pki_types::CertificateDer;
 use rustls::{ClientConfig, RootCertStore};
 use serde_json::Value;
@@ -25,18 +26,32 @@ pub const HOSTS: &str = "provider = [\"api.openai.com\"]\n";
 /// The real `serve` on a clone of `listener` with a test recorder.
 pub fn serve_on(listener: &TcpListener, hosts: &str, ca: RunCa) -> (ProxyHandle, Calls) {
     let (recorder, calls) = Recorder::for_tests(1 << 30);
+    (serve_with(listener, recorder, hosts, ca), calls)
+}
+
+/// The real `serve` on a clone of `listener` with `recorder`.
+pub fn serve_with(
+    listener: &TcpListener,
+    recorder: Recorder,
+    hosts: &str,
+    ca: RunCa,
+) -> ProxyHandle {
     let hosts = HostList::from_file(hosts.as_bytes(), "hosts.toml").unwrap();
     let ctx = ProxyCtx {
         recorder,
         hosts,
         ca,
     };
-    (serve(listener.try_clone().unwrap(), ctx), calls)
+    serve(listener.try_clone().unwrap(), ctx)
 }
 
-/// The real `serve` on a held port with a 4,096 backlog, as the watchdog sets it, and a fresh
-/// run CA; `env` holds the test hooks, read once in `serve`.
-pub fn proxy(hosts: &str, env: &[(&str, String)]) -> (ProxyHandle, SocketAddr, Calls, RunCa) {
+/// The real `serve` on a held port with a 4,096 backlog, as the watchdog sets it, a fresh run CA
+/// and `recorder`; `env` holds the test hooks, read once in `serve`.
+pub fn proxy_with(
+    recorder: Recorder,
+    hosts: &str,
+    env: &[(&str, String)],
+) -> (ProxyHandle, SocketAddr, RunCa) {
     for (k, v) in env {
         // SAFETY: nextest runs each test in its own process; this runs before `serve` reads them.
         unsafe { std::env::set_var(k, v) };
@@ -44,8 +59,68 @@ pub fn proxy(hosts: &str, env: &[(&str, String)]) -> (ProxyHandle, SocketAddr, C
     let (listener, addr) = crate::common::ports::held();
     socket2::SockRef::from(&listener).listen(4096).unwrap();
     let ca = RunCa::mint(&["openai.com".to_string()]).unwrap();
-    let (h, calls) = serve_on(&listener, hosts, ca.clone());
+    let h = serve_with(&listener, recorder, hosts, ca.clone());
+    (h, addr, ca)
+}
+
+/// [`proxy_with`] and a test recorder with a room of 1 GiB.
+pub fn proxy(hosts: &str, env: &[(&str, String)]) -> (ProxyHandle, SocketAddr, Calls, RunCa) {
+    let (recorder, calls) = Recorder::for_tests(1 << 30);
+    let (h, addr, ca) = proxy_with(recorder, hosts, env);
     (h, addr, calls, ca)
+}
+
+/// [`proxy_with`] for `api.openai.com` sent to the upstream at `up`, whose certificates `pki`
+/// signs.
+pub fn proxy_to(
+    recorder: Recorder,
+    up: SocketAddr,
+    pki: &crate::common::pki::TestPki,
+) -> (ProxyHandle, SocketAddr, RunCa) {
+    // `serve` reads the roots file once, so the folder may go when this returns.
+    let dir = tempfile::tempdir().unwrap();
+    let roots = pki.roots_file(dir.path()).display().to_string();
+    let env = [
+        ("GOALCUP_TEST_EXTRA_ROOTS", roots),
+        ("GOALCUP_TEST_UPSTREAM", format!("api.openai.com={up}")),
+    ];
+    proxy_with(recorder, HOSTS, &env)
+}
+
+/// Reads until `done` says the bytes so far are enough; gives them all.
+pub async fn read_to<S: AsyncRead + Unpin>(t: &mut S, done: impl Fn(&[u8]) -> bool) -> Vec<u8> {
+    within_async(HANG, async {
+        let mut got = Vec::new();
+        while !done(&got) {
+            let mut b = vec![0u8; 64 * 1024];
+            let n = t.read(&mut b).await.unwrap();
+            assert!(n > 0, "the stream ended early");
+            got.extend_from_slice(&b[..n]);
+        }
+        got
+    })
+    .await
+}
+
+/// Polls the entry in `dir` until `done` accepts its records; gives them.
+pub async fn wait_records(dir: &std::path::Path, done: impl Fn(&[Record]) -> bool) -> Vec<Record> {
+    within_async(HANG, async {
+        loop {
+            let recs = records(dir);
+            if done(&recs) {
+                return recs;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await
+}
+
+/// At least one OPEN, and an END for every OPEN.
+pub fn all_ended(recs: &[Record]) -> bool {
+    let count = |f: fn(&Record) -> bool| recs.iter().filter(|r| f(r)).count();
+    let open = count(|r| matches!(r, Record::Open { .. }));
+    open > 0 && open == count(|r| matches!(r, Record::End { .. }))
 }
 
 /// Reads an answer's head and gives its status.
