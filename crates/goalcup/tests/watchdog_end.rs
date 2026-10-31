@@ -174,10 +174,38 @@ impl Fixture {
         path
     }
 
+    /// [`Fixture::plan`] where the harness, a child and an orphan each note SIGTERM in
+    /// `<name>_term` and stay, so only SIGKILL ends them.
+    fn stubborn(&self) -> LaunchPlan {
+        let d = self.d.display();
+        let stay = |n: &str| format!("trap ': > {d}/{n}_term' TERM; while :; do sleep 0.05; done");
+        let mut plan = self.plan();
+        plan.argv[1] = format!(
+            "( {} ) & echo $! > {d}/child.pid
+             ( ( {} ) & echo $! > {d}/orphan.pid )
+             echo $$ > {d}/harness.pid
+             {}",
+            stay("child"),
+            stay("orphan"),
+            stay("harness")
+        );
+        plan
+    }
+
     /// Runs the watchdog on this thread and `drive` beside it.
     fn run(&self, recorder: &Path, drive: impl FnOnce() + Send + 'static) {
         let plan = self.plan();
         let facts = self.facts(&plan);
+        self.run_plan(plan, facts, recorder, drive);
+    }
+
+    fn run_plan(
+        &self,
+        plan: LaunchPlan,
+        facts: StartFacts,
+        recorder: &Path,
+        drive: impl FnOnce() + Send + 'static,
+    ) {
         let driver = std::thread::spawn(drive);
         let _ = watchdog::run_with(plan, facts, recorder);
         driver.join().unwrap();
@@ -318,4 +346,28 @@ fn watchdog_end_real_killed_recorder_restarts() {
         .collect();
     assert_eq!(down.len(), 1, "{down:?}");
     assert!(down[0].0 < down[0].1);
+}
+
+/// Point 3 (PRD-02 section 8 step 10): at the deadline (boot time, from the start facts) the
+/// harness, its child and its orphan get SIGTERM, then SIGKILL; the recorder is never signalled
+/// (it seals as boot 0 with reason `deadline`, not `signal`), nor is the watchdog (this test).
+#[test]
+fn watchdog_end_real_deadline_ends_the_tree() {
+    let f = Fixture::new();
+    let plan = f.stubborn();
+    let mut facts = f.facts(&plan);
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH);
+    facts.deadline = Some(now.unwrap().as_millis() as u64 + 3_000);
+    let orphan = f.m("orphan.pid");
+    f.run_plan(plan, facts, &real(), move || {
+        until("the orphan", || pid_in(&orphan));
+    });
+    for name in ["harness", "child", "orphan"] {
+        assert!(f.m(&format!("{name}_term")).exists(), "{name}: no SIGTERM");
+        let pid = pid_in(&f.m(&format!("{name}.pid"))).unwrap();
+        until(name, || gone(pid).then_some(()));
+    }
+    let status = f.sealed_status();
+    assert_eq!(status["seal"]["reason"], "deadline");
+    assert_eq!(status["boot"], 0);
 }
