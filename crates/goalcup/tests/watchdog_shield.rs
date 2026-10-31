@@ -2,8 +2,8 @@
 //! `Shield::harness_exited` gives the keys back must not end the watchdog's wrap-up, and a key
 //! typed after it still gets the default action.
 //!
-//! Each case runs in a forked child, which has one thread, so a signal blocked there stays pending
-//! until the child unblocks it: the late Ctrl-C of a loaded run, made certain. Linux only.
+//! Each case runs in a forked child, which has one thread, or two in the spare case, so a signal
+//! blocked there stays pending until the child unblocks it: the late Ctrl-C of a loaded run, made certain. Linux only.
 #![cfg(target_os = "linux")]
 
 use goalcup::watchdog::shield::Shield;

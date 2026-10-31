@@ -152,7 +152,10 @@ fn drain_pending(set: &libc::sigset_t) {
             libc::sigemptyset(&mut one);
             libc::sigaddset(&mut one, signal);
             let mut taken = 0;
-            libc::sigwait(&one, &mut taken);
+            if libc::sigwait(&one, &mut taken) != 0 {
+                // The signal stays pending; picking it again would loop for ever.
+                return;
+            }
         }
     }
 }
