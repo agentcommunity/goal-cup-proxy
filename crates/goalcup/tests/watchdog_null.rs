@@ -58,21 +58,14 @@ fn started(d: &Path, n: &str) -> Option<f64> {
 /// Boots 2 and 3 exit 1 at once; a `--null` boot runs the binary as a child to note its exit;
 /// every other boot is the binary itself (fds 3 and 4 pass through `exec`).
 fn wrapper(d: &Path) -> PathBuf {
-    let (dd, exe) = (d.display(), env!("CARGO_BIN_EXE_goalcup"));
-    let text = format!(
-        "#!/bin/sh
-         read up _ < /proc/uptime
-         n=$(( $(cat {dd}/boots 2>/dev/null || echo 0) + 1 )); echo $n > {dd}/boots
-         echo \"$n $up $*\" >> {dd}/boot_log
-         case $n in 2|3) exit 1;; esac
+    let exe = env!("CARGO_BIN_EXE_goalcup");
+    let body = format!(
+        "case $n in 2|3) exit 1;; esac
          case \" $* \" in *' {NULL_FLAG} '*) \"{exe}\" \"$@\"; c=$?
-           echo \"$n exit $c\" >> {dd}/boot_log; exit $c;; esac
-         exec \"{exe}\" \"$@\""
+           echo \"$n exit $c\" >> {dd}/boot_log; exit $c;; esac",
+        dd = d.display()
     );
-    let path = d.join("recorder.sh");
-    std::fs::write(&path, text).unwrap();
-    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
-    path
+    script(d, "recorder.sh", &body)
 }
 
 /// Boot 1 gets a server `stop` (reason `admin`) on its control socket 4 s after it starts, as
@@ -87,17 +80,30 @@ fn stop_crash_wrapper(d: &Path) -> PathBuf {
 }
 
 fn stop_wrapper_then(d: &Path, later: &str) -> PathBuf {
-    let (dd, exe) = (d.display(), env!("CARGO_BIN_EXE_goalcup"));
     let word = r#"{"line":"server","stop":true,"reason":"admin","seconds_left":null,"asked_at":0}"#;
+    let body = format!("case $n in 1) ( sleep 4; printf '%s\\n' '{word}' >&4 ) & ;; {later} esac");
+    script(d, "stop_recorder.sh", &body)
+}
+
+/// Every boot after the first, null ones too, exits 1 at once.
+fn crash_wrapper(d: &Path) -> PathBuf {
+    script(d, "crash_recorder.sh", "case $n in 1) ;; *) exit 1;; esac")
+}
+
+/// A recorder wrapper `name` in `d`: it counts boots in `boots` and logs each one's number,
+/// uptime and arguments in `boot_log`, runs `body` (which sees the boot number as `$n`), then
+/// execs the binary.
+fn script(d: &Path, name: &str, body: &str) -> PathBuf {
+    let (dd, exe) = (d.display(), env!("CARGO_BIN_EXE_goalcup"));
     let text = format!(
         "#!/bin/sh
          read up _ < /proc/uptime
          n=$(( $(cat {dd}/boots 2>/dev/null || echo 0) + 1 )); echo $n > {dd}/boots
          echo \"$n $up $*\" >> {dd}/boot_log
-         case $n in 1) ( sleep 4; printf '%s\\n' '{word}' >&4 ) & ;; {later} esac
+         {body}
          exec \"{exe}\" \"$@\""
     );
-    let path = d.join("stop_recorder.sh");
+    let path = d.join(name);
     std::fs::write(&path, text).unwrap();
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
     path
@@ -510,4 +516,43 @@ fn watchdog_sealed_entry_boots_are_spaced_and_never_null() {
     assert!((3..=8).contains(&log.len()), "{log:?}");
     let st = cli::read_json::<Value>(&cli::status_json(&entry_dir)).unwrap();
     assert_eq!(st["seal"]["reason"], "server_stop", "{st}");
+}
+
+/// Ledger R3a (locked): when the null boots also die at boot, their spacing never pushes the
+/// normal try past the 30 s wait.
+#[test]
+fn watchdog_null_boots_dying_at_boot_keep_the_wait() {
+    let Setup {
+        _tmp,
+        d,
+        entry_dir,
+        plan,
+        recorder,
+        facts,
+    } = setup_with(crash_wrapper);
+    let (dir, m) = (entry_dir.clone(), d.clone());
+    let null = NULL_FLAG.to_string();
+    let driver = std::thread::spawn(move || {
+        let status = || cli::read_json::<Value>(&cli::status_json(&dir));
+        let first = until("boot 0", || {
+            status()?.get("pid")?.as_u64().filter(|p| *p > 0)
+        });
+        // SAFETY: a signal to one pid, the first recorder's.
+        unsafe { libc::kill(first as libc::pid_t, libc::SIGKILL) };
+        let first_null = until("the first null boot", || {
+            let log = boot_log(&m);
+            log.iter().find(|l| l.contains(&null))?[1].parse::<f64>().ok()
+        });
+        let next_try = until("the normal try", || {
+            let log = boot_log(&m);
+            let n = log.iter().position(|l| l.contains(&null))?;
+            let t = log[n..].iter().find(|l| !l.contains(&null))?;
+            t[1].parse::<f64>().ok()
+        });
+        std::fs::write(m.join("stop"), "").unwrap();
+        next_try - first_null
+    });
+    let _ = watchdog::run_with(plan, facts, &recorder);
+    let wait = driver.join().unwrap();
+    assert!((29.0..=33.0).contains(&wait), "{wait} {:?}", boot_log(&d));
 }

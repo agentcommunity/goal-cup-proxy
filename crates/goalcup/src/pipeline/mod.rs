@@ -981,6 +981,9 @@ impl Run {
             .filter(|_| reason == SealReason::ServerStop)
             .and_then(|u| u.server_word().borrow().as_ref()?.reason.clone());
         if self.null && !self.sealed {
+            // Every later byte only counts, so what the boot relays after this seal reaches
+            // `after_seal` (section 11 step 6), as on the normal path.
+            self.rec.stop_all();
             self.board.stop();
             if let Some(t) = self.status.take() {
                 let _ = t.join();
@@ -997,6 +1000,7 @@ impl Run {
             self.board.sealed(dead::seal_status(&facts), &facts.totals);
             status::write(&self.rec, dir, &self.board);
             self.sealed = true;
+            self.late = Some(seal::keep_sealed(&self.rec, dir, None));
         }
         if self.sealed {
             seal::remove_key(dir);

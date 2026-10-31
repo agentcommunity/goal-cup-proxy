@@ -485,7 +485,7 @@ pub fn run_with(mut plan: LaunchPlan, mut facts: StartFacts, recorder_exe: &Path
                 left = true;
             }
             let up_ms = Mono::now().0.saturating_sub(boot.started.0) / 1_000_000;
-            restarts.space(&boot, sealed);
+            restarts.space(&boot, sealed, left);
             // A boot on a sealed entry relays and records nothing: no null mode there, whose
             // `status.json` would hide the seal.
             next_null = !sealed && restarts.next(&boot, status, &mut facts, &dir, seal.is_some());
@@ -500,6 +500,11 @@ pub fn run_with(mut plan: LaunchPlan, mut facts: StartFacts, recorder_exe: &Path
         // and records nothing. Only a boot that died at boot spaces the next (`Restarts::space`).
         let held = (restarts.hold).is_some_and(|h| Mono::now() < h);
         if boot.ended && !held && (!(sealed || left) || harness_pid.is_some()) {
+            // A null boot due when the wait is already over: the normal try takes its place.
+            if next_null && restarts.wait_over() {
+                restarts.end_null(false);
+                (facts.null_since, next_null) = (None, false);
+            }
             // A new boot takes the seal after `ready`.
             (restarts.hold, left) = (None, false);
             let mut failed = false;
@@ -670,9 +675,12 @@ impl Restarts {
         if boot.null {
             let waiting = self.until.is_some_and(|u| Mono::now() < u);
             if self.asked_at.is_none() && waiting && !sealing {
+                // The replacement is spaced, but never past the wait's end.
+                self.hold = self.hold.min(self.until);
                 return true;
             }
-            (self.until, self.asked_at, facts.null_since) = (None, None, None);
+            self.end_null(sealing);
+            facts.null_since = None;
             return false;
         }
         let Some(wait) = self.looped.exited(boot.started, Mono::now()) else {
@@ -690,13 +698,34 @@ impl Restarts {
         true
     }
 
+    /// A null wait runs and is over.
+    fn wait_over(&self) -> bool {
+        self.until.is_some_and(|u| Mono::now() >= u)
+    }
+
+    /// A null boot ended and the normal try comes next. Its space never pushes that try past the
+    /// R3a wait (ledger R3a, locked): the hold is cut to the wait's end, which has passed (the
+    /// `restart` line goes only once it has). A fast death of the try sends it straight back to
+    /// null mode with the next wait (`Loop::tries`), so no spin opens. Only with a seal pending,
+    /// which no null wait delays, does the space stand: a null seal that failed is spaced.
+    fn end_null(&mut self, sealing: bool) {
+        if !sealing {
+            self.hold = self.hold.min(self.until);
+        }
+        (self.until, self.asked_at) = (None, None);
+    }
+
     /// After `boot` exited: a null boot, or any boot on a sealed entry, that died at boot holds
     /// the next boot back 1 s, then 2 s, 4 s and so on up to [`SPACE_MAX_NS`]. Normal boots on an
     /// unsealed entry follow R3a alone (its first two fast exits restart at once); they neither
-    /// wait here nor end the run of deaths. A boot that served longer ends it.
-    fn space(&mut self, boot: &Boot, sealed: bool) {
+    /// wait here nor end the run of deaths. A boot that served longer ends it. A null boot whose
+    /// seal failed (`left`) counts as died at boot however long it was up, so a crash loop that
+    /// also fails the null seal does not spin. `ready` is seen only when its line is read in a
+    /// tick, so a boot that sends it and exits in the same tick counts as died at boot too: at
+    /// most one extra 1 s space.
+    fn space(&mut self, boot: &Boot, sealed: bool, left: bool) {
         let up = Mono::now().0.saturating_sub(boot.started.0);
-        if boot.ready && up >= QUICK_NS {
+        if boot.ready && up >= QUICK_NS && !left {
             self.quick = 0;
             return;
         }
@@ -1032,6 +1061,26 @@ mod tests {
         }
         // A `null_mode` cause always counts its exits.
         assert!(serde_json::from_str::<Prev>(r#"{"cause":"null_mode"}"#).is_err());
+    }
+
+    /// Ledger R3a: a null boot's space never puts the normal try after the wait's end; with a
+    /// seal pending (a failed null seal) the space stands.
+    #[test]
+    fn a_null_space_never_passes_the_wait() {
+        let r = |hold: u64| Restarts {
+            until: Some(at(30)),
+            hold: Some(at(hold)),
+            ..Restarts::default()
+        };
+        let mut late = r(61);
+        late.end_null(false);
+        assert_eq!((late.hold, late.until), (Some(at(30)), None));
+        let mut early = r(20);
+        early.end_null(false);
+        assert_eq!(early.hold, Some(at(20)));
+        let mut sealing = r(61);
+        sealing.end_null(true);
+        assert_eq!(sealing.hold, Some(at(61)));
     }
 
     fn at(s: u64) -> Mono {
