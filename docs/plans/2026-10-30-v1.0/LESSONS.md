@@ -53,7 +53,7 @@ lessons lane (PRD-17); read by the deletion gate (PRD-17 Acceptance, checks 1 to
 | L-T8 | 2.2 | A: proxy_tls.rs (PRD-03) | PRD-03 | green | 7e620577 |
 | L-T9 | 2.2 | D: docs/PARTICIPANT-GUIDE.md known limits (PRD-15) | PRD-03, PRD-15 | open | - |
 | L-H1 | 2.3 | A: lessons_http1::head_scan_skips_blank_lines_and_takes_bare_lf | PRD-17 | green | 0fa43715 |
-| L-H2 | 2.3 | A: lessons_http1::unframeable_heads_stop_parsing_and_count_their_bytes (parser half); A: lessons_http1::unframeable_heads_relay_on_inside_a_named_loss (relay half, pending until `proxy::serve` is on integration); A: proxy_http1.rs (PRD-03, generic fault case) | PRD-17 | open | - |
+| L-H2 | 2.3 | A: lessons_http1::unframeable_heads_stop_parsing_and_count_their_bytes (parser half); A: lessons_http1::unframeable_heads_relay_on_inside_a_named_loss (relay half through serve); A: proxy_http1.rs (PRD-03, generic fault case) | PRD-17 | open | - |
 | L-H3 | 2.3 | A: lessons_http1::transfer_gzip_then_chunked_decodes | PRD-17 | green | 0fa43715 |
 | L-H4 | 2.3 | A: lessons_http1::chunked_split_at_every_byte_ends_exactly; A: lessons_http1::chunk_size_rules; A: proxy_http1.rs (PRD-03, trailers) | PRD-17 | green | 0fa43715 |
 | L-H5 | 2.3 | A: proxy_http1.rs (PRD-03); A: lessons_http1::framing_matrix | PRD-03, PRD-17 | green | 0fa43715 |
@@ -73,12 +73,12 @@ lessons lane (PRD-17); read by the deletion gate (PRD-17 Acceptance, checks 1 to
 | L-D7 | 2.4 | A: lessons_decode::bomb_relays_on_in_bounded_pieces | PRD-17 | open | - |
 | L-D8 | 2.4 | A: lessons_decode.rs | PRD-17 | open | - |
 | L-W1 | 2.5 | A: proxy_ws.rs (PRD-03); R: RR1 | PRD-03 | green | 7e620577 |
-| L-W2 | 2.5 | A: lessons_ws::negotiation_accepts_only_rfc7692 (parser half); A: lessons_ws::unknown_extension_relays_inside_a_named_loss (parser half; relay half and the conn GAP pending until `proxy::serve`) | PRD-17 | open | - |
+| L-W2 | 2.5 | A: lessons_ws::negotiation_accepts_only_rfc7692 (parser half); A: lessons_ws::unknown_extension_relays_inside_a_named_loss (relay half through serve, with the conn GAP) | PRD-17 | open | - |
 | L-W3 | 2.5 | A: lessons_ws::server_max_window_bits_10_decodes | PRD-17 | green | 0fa43715 |
 | L-W4 | 2.5 | A: lessons_ws::takeover_history_carries_between_messages (the guard drop itself is structural, see the test comment); R: RR1 | PRD-17 | open | - |
 | L-W5 | 2.5 | A: lessons_ws::bfinal_ends_takeover_history | PRD-17 | green | 0fa43715 |
 | L-W6 | 2.5 | A: lessons_ws::one_byte_reads_decode_the_same | PRD-17 | green | 0fa43715 |
-| L-W7 | 2.5 | A: lessons_ws::violations_are_named_and_relaying_goes_on (parser half; relay half and the 5a GAP pending until `proxy::serve`) | PRD-17 | open | - |
+| L-W7 | 2.5 | A: lessons_ws::violations_are_named_and_relaying_goes_on (relay half through serve, with the 5a GAP) | PRD-17 | open | - |
 | L-W8 | 2.5 | A: proxy_ws.rs (PRD-03) | PRD-03 | green | 7e620577 |
 | L-W9 | 2.5 | A: lessons_ws::upgrade_101_and_first_frame_in_one_write | PRD-17 | open | - |
 | L-W10 | 2.5 | A: lessons_ws::rejected_upgrade_stays_http; A: lessons_ws::bad_accept_is_a_named_loss_not_a_websocket | PRD-17 | open | - |
