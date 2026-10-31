@@ -70,7 +70,7 @@ CONTROLS = [
      {"count": lambda n: 1736}),  # the fake status.json: run 1's finish line
     ("K6a", "k7-part", "k7-fetched", {"C4": "FAIL"}, {}, {"edit": flip}),
     ("K6b", "k7-part", "k7-fetched", {"C4": "FAIL"}, {}, {"edit": fetch_edit(drop)}),
-    ("K6c", "k7-part", "k7-fetched", {"C4": "FAIL"}, {},
+    ("K6c", "k7-part", "k7-fetched", {"C4": "FAIL", "C6": "FAIL"}, {},  # C6 too: C6 reads fetch.json's count as well
      {"edit": fetch_edit(lambda d, f: d.update(model_requests=d["model_requests"] + 1))}),
     ("K7", "k7-part", "k7-fetched", ALLC, {}, {}),
     ("K9", "k7-part", "k7-fetched", {"C6": "FAIL"}, {}, {"count": lambda n: n + 1}),
