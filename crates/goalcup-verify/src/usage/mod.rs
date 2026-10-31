@@ -608,7 +608,7 @@ pub fn run(args: Vec<OsString>) -> ExitCode {
 
 fn read_one(a: &Args, e: &crate::input::Entry) -> Result<(), String> {
     let dir = e.dir.display();
-    let (rd, _) = crate::input::open(e).map_err(|x| format!("{dir}: {x}"))?;
+    let rd = crate::input::open(e).map_err(|x| format!("{dir}: {x}"))?;
     let (mut calls, mut n, mut broke) = (Calls::new(), 0, false);
     // A torn tail is not an error (`tail().truncated`): an `Err` is a decode failure, and the
     // read stops there.
