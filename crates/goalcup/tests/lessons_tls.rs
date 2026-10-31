@@ -166,11 +166,6 @@ fn find_private_keys(dir: &Path, found: &mut Vec<String>) {
 /// T4: the CA files are created new with mode 0600; an existing file or a link at either path is
 /// refused and the link's target is untouched; no private key is written by `write_files`. The
 /// bundle holds the run CA first and at least 21 roots (the system store).
-///
-/// Pending: PRD-17 T4 also covers `rec/run-ca.key` (created new, 0600, never through a link, and
-/// no PRIVATE KEY block in the entry folder outside it nor after the seal). That file belongs to
-/// PRD-02 and is not on integration yet; add the case here when its writer lands. L-T4 stays open
-/// until then.
 #[cfg(unix)]
 #[test]
 fn ca_files_are_new_0600_and_never_follow_a_link() {
@@ -257,4 +252,161 @@ fn bundle_holds_certificates_only_with_the_run_ca_first() {
         kept.len()
     );
     assert!(text.lines().all(|l| l.len() <= 64));
+}
+
+/// The boot said in `goalcup.log` that it could not take the key file.
+#[cfg(target_os = "linux")]
+fn refused_for_key(entry: &Path) -> bool {
+    let log = std::fs::read_to_string(goalcup::cli::goalcup_log(entry)).unwrap_or_default();
+    log.lines()
+        .any(|l| l.contains(" watchdog_failed ") && l.contains("why=key"))
+}
+
+/// A private key PEM in the decoded records of the part folder `rec`: the part files are
+/// compressed, so a scan of their raw bytes would miss one.
+#[cfg(target_os = "linux")]
+fn key_in_records(rec: &Path) -> bool {
+    use goalcup_format::Record;
+    let has = |b: &[u8]| b.windows(11).any(|w| w == b"PRIVATE KEY");
+    let mut seen = 0;
+    for item in goalcup_format::read::open_dir(rec).unwrap() {
+        seen += 1;
+        match item.unwrap().rec {
+            Record::Open { meta, .. } if has(&meta) => return true,
+            Record::Data { bytes, .. } if has(&bytes) => return true,
+            Record::End { tail, .. } if has(&tail) => return true,
+            _ => {}
+        }
+    }
+    assert!(seen > 0, "no record was read back");
+    false
+}
+
+/// One real watchdog boot (recorder: this binary, server off) over an entry folder made by
+/// `prepare`; the harness copies the key file's mode to `mode` while it runs.
+#[cfg(target_os = "linux")]
+fn boot(entry: &Path, mode: &Path) -> std::process::ExitCode {
+    use goalcup::connector::{
+        ConnectorRef, HomeLock, HostList, LaunchPlan, NativeSources, builtin,
+    };
+    use goalcup::watchdog::{CaPem, StartFacts, run_with};
+    let hosts = HostList::from_file(builtin::HOSTS.as_bytes(), "model-hosts.toml").unwrap();
+    let key = entry.join("rec/run-ca.key");
+    let script = format!("stat -c %a {} > {}", key.display(), mode.display());
+    let connector = ConnectorRef {
+        id: "fake".into(),
+        name: "Fake".into(),
+        sha256: "0".repeat(64),
+        source: Default::default(),
+    };
+    let facts = StartFacts {
+        run: "r0123456789abcdef".into(),
+        entry: "e0123456789abcdef".into(),
+        segment: 0,
+        entry_dir: entry.to_path_buf(),
+        deadline: None,
+        server_time: None,
+        local_wall: 0,
+        workspace: entry.to_path_buf(),
+        connector: serde_json::to_value(&connector).unwrap(),
+        harness_version: None,
+        keep: true,
+        build: None,
+        hosts: serde_json::to_value(&hosts).unwrap(),
+        hosts_sha256: hosts.sha256().to_string(),
+        native: serde_json::to_value(NativeSources::default()).unwrap(),
+        mask_rules: serde_json::json!([]),
+        values: serde_json::json!([]),
+        ca: CaPem {
+            cert: String::new(),
+            key: String::new(),
+        },
+        prev: None,
+        harness: None,
+        null_since: None,
+        notes: Vec::new(),
+    };
+    let plan = LaunchPlan {
+        connector,
+        harness_version: None,
+        program: "/bin/sh".into(),
+        argv: vec!["-c".into(), script],
+        env: [("PATH".to_string(), "/usr/bin:/bin".to_string())].into(),
+        home: entry.join("home"),
+        lock: HomeLock::default(),
+        before: vec![],
+        after: vec![],
+        ca_env: vec![],
+        hosts,
+        native: NativeSources::default(),
+        mask_rules: vec![],
+        secret_values: vec![],
+        notes: vec![],
+        unread: vec![],
+        log: vec![],
+        refusal: None,
+    };
+    // SAFETY: nextest runs each test in its own process, before any thread of it starts.
+    unsafe { std::env::set_var("GOALCUP_SERVER", "off") };
+    run_with(plan, facts, Path::new(env!("CARGO_BIN_EXE_goalcup")))
+}
+
+/// T4, the key half (PRD-02 `rec/run-ca.key`): created new with mode 0600, no PRIVATE KEY block
+/// anywhere else in the entry folder, gone at the seal; a planted symlink or hardlink is never
+/// followed or written through, and the boot is refused rather than recording without it.
+#[cfg(target_os = "linux")]
+#[test]
+fn run_ca_key_is_new_0600_gone_at_the_seal_and_never_follows_a_link() {
+    use std::os::unix::fs::symlink;
+    let prepare = |tmp: &tempfile::TempDir| {
+        let home = tmp.path().join("g");
+        let run_dir = goalcup::cli::run_dir(&home, "r0123456789abcdef");
+        let entry = goalcup::cli::entry_dir(&home, "r0123456789abcdef", "e0123456789abcdef");
+        std::fs::create_dir_all(entry.join("rec")).unwrap();
+        let server = serde_json::json!({"v": 1, "server": null, "run": "r0123456789abcdef", "mode": "practice",
+            "deadline": null, "repo": null, "connector": {"id": "fake", "name": "Fake", "source": "builtin"},
+            "hosts_file": null, "entries": [{"id": "e0123456789abcdef", "harness_version": null, "resumed": false}]});
+        std::fs::write(goalcup::cli::server_json(&run_dir), server.to_string()).unwrap();
+        entry
+    };
+    let tmp = tempfile::tempdir().unwrap();
+    let entry = prepare(&tmp);
+    let mode = tmp.path().join("mode");
+    boot(&entry, &mode);
+    assert!(!refused_for_key(&entry), "the boot refused its own key");
+    assert_eq!(std::fs::read_to_string(&mode).unwrap().trim(), "600");
+    assert!(
+        !entry.join("rec/run-ca.key").exists(),
+        "the key outlived the seal"
+    );
+    let mut keys = Vec::new();
+    find_private_keys(&entry, &mut keys);
+    assert!(keys.is_empty(), "a private key was left: {keys:?}");
+    assert!(
+        !key_in_records(&entry.join("rec")),
+        "a private key reached a record"
+    );
+
+    for hard in [false, true] {
+        let tmp = tempfile::tempdir().unwrap();
+        let entry = prepare(&tmp);
+        let victim = tmp.path().join("victim");
+        std::fs::write(&victim, b"keep").unwrap();
+        let planted = entry.join("rec/run-ca.key");
+        if hard {
+            std::fs::hard_link(&victim, &planted)
+        } else {
+            symlink(&victim, &planted)
+        }
+        .unwrap();
+        let mode = tmp.path().join("mode");
+        boot(&entry, &mode);
+        assert!(refused_for_key(&entry), "hard={hard}");
+        assert!(!mode.exists(), "hard={hard}: the harness started anyway");
+        assert_eq!(
+            std::fs::read(&victim).unwrap(),
+            b"keep",
+            "hard={hard}: written through"
+        );
+    }
 }
