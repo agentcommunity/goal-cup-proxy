@@ -316,9 +316,9 @@ def local(r, few):
     hist = dig(r.entry, "s6_history") or {}  # a gap over a named history orphan: C1's section 8 rule, not a fault row's
     unexpected = sum(n for k, n in r.gaps()[1].items() if n and k.split(":")[0] not in allowed)
     orphans = hist.get("missing_call") or 0
-    off = any(dig(e, "s6_off") for e in r.entries)
+    off = any(dig(e, "s6_off") for e in r.entries)  # off time is explained only by a covered orphan (K11 (b): recorder_down)
     covered = r.check("history_complete") == "named" and 0 < unexpected <= orphans
-    explained = code == 1 and named and not off and (covered or named <= allowed)
+    explained = code == 1 and named and (covered or named <= allowed and not off)
     r.flag(r.meta.get("case") in ("direct", "gateway") and set(fault_kinds(r.meta)) <= set(CLEAN) and not r.failed and code != 0 and not explained,
            "C1", "FAIL", "verifier exit %s, the %s case expects 0 or only the GAPs %s" % (
                code, r.meta.get("case"), ", ".join(sorted(allowed))))
