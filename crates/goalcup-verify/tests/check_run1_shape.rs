@@ -114,13 +114,23 @@ fn the_coverage_line_counts_every_request_written() {
         "masked": [], "coding": null});
     let q = e.open(StreamKind::HttpReq, c, 0, head);
     e.end(q, EndReason::Complete, 0, json!({"wire": 0}));
-    e.end(c, EndReason::Complete, 0, json!({"up": 10, "down": 0, "plain_up": 0, "plain_down": 0}));
+    e.end(
+        c,
+        EndReason::Complete,
+        0,
+        json!({"up": 10, "down": 0, "plain_up": 0, "plain_down": 0}),
+    );
     e.count();
     let d = e.seal();
     let args = ["check", d.to_str().unwrap(), "--json"];
-    let out = Command::new(env!("CARGO_BIN_EXE_goalcup-verify")).args(args).output().unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_goalcup-verify"))
+        .args(args)
+        .output()
+        .unwrap();
     let v: Value = serde_json::from_slice(&out.stdout).unwrap();
-    let n = v["entries"][0]["counts"]["model_requests"].as_u64().unwrap();
+    let n = v["entries"][0]["counts"]["model_requests"]
+        .as_u64()
+        .unwrap();
     assert_eq!(n, 3);
     assert!(String::from_utf8_lossy(&out.stderr).contains(&format!("Recorded: {n} requests")));
 }

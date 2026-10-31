@@ -167,11 +167,16 @@ impl Honesty {
             } => {
                 let tail = obj(tail);
                 // A GAP with no extent (gap_has_end) covers nothing.
-                let span = has_extent(&tail, (*start_wall, *end_wall), (*start_mono, *end_mono), *lost)
-                    .then_some(Cover {
-                        start_wall: *start_wall,
-                        end_wall: *end_wall,
-                    });
+                let span = has_extent(
+                    &tail,
+                    (*start_wall, *end_wall),
+                    (*start_mono, *end_mono),
+                    *lost,
+                )
+                .then_some(Cover {
+                    start_wall: *start_wall,
+                    end_wall: *end_wall,
+                });
                 self.gap(*sid, *reason, *lost, &tail, at, span);
             }
             Record::End {
@@ -197,8 +202,10 @@ impl Honesty {
             && let Some(Value::Object(by_source)) = e.get("hosts")
         {
             let all = by_source.values().filter_map(Value::as_array).flatten();
-            let kind = |h: &Value| h.get("kind").and_then(Value::as_str).unwrap_or_default();
-            let names = all.filter_map(|h| Some((h.get("host")?.as_str()?, kind(h))));
+            let names = all.filter_map(|h| {
+                let kind = h.get("kind").and_then(Value::as_str);
+                Some((h.get("host")?.as_str()?, kind.unwrap_or_default()))
+            });
             self.on_list = names.map(|(h, k)| (h.into(), k.into())).collect();
         }
     }
@@ -306,7 +313,9 @@ impl Honesty {
         c.quiet |= tail.get("alert") == Some(&Value::Bool(false));
         // A conn GAP names the harness calls of a model host: a decrypted connection's, or a
         // tunnel's own (PRD-08 section 3). Not a stream GAP, not a vendor's.
-        if c.model && reason != GapReason::AfterStop && (!c.tunnel || names_tunnel(&c.reason, reason))
+        if c.model
+            && reason != GapReason::AfterStop
+            && (!c.tunnel || names_tunnel(&c.reason, reason))
         {
             self.covers.extend(span);
         }

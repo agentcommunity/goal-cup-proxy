@@ -6,8 +6,8 @@
 
 use crate::integrity::{Check, Res};
 use crate::usage::{CallRow, CallTable, Calls, Kind, Leg, NativeForm, Outcome, Reason, Shape};
-use goalcup_format::dump::wall;
 use goalcup_format::Item;
+use goalcup_format::dump::wall;
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 

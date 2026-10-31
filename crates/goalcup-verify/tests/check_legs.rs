@@ -44,7 +44,10 @@ fn totals(n: u64) -> CallTable {
 fn parent(read: bool, wire: u64) -> CallTable {
     let mut t = tab("k", 0, wire);
     t.children = Some([("p".to_string(), vec!["k".to_string()])].into());
-    t.threads = vec![thread("k", 0, None)].into_iter().filter(|_| read).collect();
+    t.threads = vec![thread("k", 0, None)]
+        .into_iter()
+        .filter(|_| read)
+        .collect();
     t
 }
 
