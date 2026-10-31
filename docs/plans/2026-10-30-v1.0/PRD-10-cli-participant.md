@@ -1508,3 +1508,14 @@ What the pad calls, as merged (PRD-12 note):
   slice 6 (it calls `close_dead_entry` inside `run`); until then show the `continue` line, as `seal` does.
   `Refused`, `Closed`, `Stuck` and `NoServer` take the section 10 lines; none is shown with a status code or
   token (point 4).
+
+### 2026-10-31, start order and upload source (PRD-10 fixer)
+
+- **`goalcup start` checks in this order:** `connector::load` (reads only), then the folder checks, then
+  `connector::plan`, then the mask check. The plan makes the harness home, takes its lock and runs the
+  harness `--version`, so it never runs before the folder check: a refused start leaves the project folder
+  and `$GOALCUP_HOME` as they were. Folder problems are listed with or without a saved harness; with none
+  saved and a clean folder the refusal is `no harness picked`.
+- **`goalcup upload` reads the run's own `server.json`, not `GOALCUP_SERVER`.** A run recorded against a
+  server sends whatever the environment says; a run with no server is `Local`.
+- `--practice` conflicts with `--test` and `--repo` (a practice run has no GitHub repository).
