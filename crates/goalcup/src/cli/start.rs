@@ -7,18 +7,16 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{SystemTime, UNIX_EPOCH};
+
+use serde_json::to_value;
 
 use super::approve::{self, Ask, Stop};
-use super::{
-    ConnectorSource, RunMode, Server, awake, fail, finish, folder, log, push, say, skill, text,
-};
+use super::{ConnectorSource, RunMode, Server, awake, fail, folder, push, say, skill, text};
 use crate::connector::{self, Connector, Env, LaunchPlan};
 use crate::mask::{Masker, SecretValue, workspace_values};
 use crate::pipeline::Mono;
-use crate::watchdog::{self, CaPem, StartFacts};
+use crate::watchdog::{CaPem, StartFacts};
 
 /// The tiers PRD-12 writes, read at build time.
 const TIERS: &str = include_str!("../../../../connectors/tiers.toml");
@@ -51,9 +49,9 @@ pub struct Ready {
     pub _lock: Option<awake::SleepLock>,
 }
 
-/// `goalcup start`: the checks, the approval and the open run ([`prepare`]), then the hand-over to
-/// the watchdog, which is this process from here (PRD-02 section 8). The end screen follows the
-/// watchdog's return; the exit code is the harness's, passed through.
+/// Until `watchdog::run` is on integration the command stops after the checks that need no server:
+/// the folder, the connector and its plan, the mask values. No approval is asked and no run is
+/// opened, so nothing says recording began when nothing records. [`prepare`] is the rest.
 pub fn run(a: &Args) -> ExitCode {
     if (a.connector.is_some() || a.hosts.is_some()) && !(a.practice || a.test) {
         return fail(text::FILE_FLAGS_COMPETE);
@@ -69,90 +67,25 @@ pub fn run(a: &Args) -> ExitCode {
         Ok(s) => s,
         Err(e) => return fail(e),
     };
+    let vars = super::env_vars();
     let ctx = Ctx {
         home,
         project,
-        vars: super::env_vars(),
+        vars,
         server,
     };
-    match prepare(a, &ctx, &mut std::io::stdout()) {
+    match check(a, &ctx) {
         Err(stop) => {
             say(&stop.text);
             ExitCode::from(stop.code)
         }
-        Ok(ready) => hand_over(ready),
-    }
-}
-
-/// Set once the watchdog has its own signal handlers in (its `status.json` exists): from then a
-/// SIGTERM to this process is a seal request and a Ctrl-C leaves it running, so the end screen is
-/// never dropped. Before that the default action stays, so a stuck start can still be killed.
-static CAUGHT: AtomicBool = AtomicBool::new(false);
-
-extern "C" fn on_signal(sig: libc::c_int) {
-    // Only async-signal-safe calls.
-    // SAFETY: `signal`, `raise`, `kill` and `getpid` are async-signal-safe.
-    unsafe {
-        if !CAUGHT.load(Ordering::SeqCst) {
-            libc::signal(sig, libc::SIG_DFL);
-            libc::raise(sig);
-        } else if sig == libc::SIGTERM {
-            // The watchdog's `goalcup seal` signal: it ends the harness and seals.
-            libc::kill(libc::getpid(), libc::SIGUSR1);
+        // `watchdog::run(plan, facts)` is not on integration yet; its call replaces this line,
+        // and the call is where `prepare` starts to run.
+        Ok(_) => {
+            say(&text::not_built("start"));
+            ExitCode::from(3)
         }
     }
-}
-
-/// Hands the terminal to the watchdog and, when it returns, the end screen and the upload
-/// progress. The ready line is printed once the recorder has written its `status.json`, the
-/// step right before it tells the watchdog `ready`.
-fn hand_over(ready: Ready) -> ExitCode {
-    let Ready {
-        plan,
-        facts,
-        _lock: lock,
-    } = ready;
-    let (dir, name, run) = (
-        facts.entry_dir.clone(),
-        facts.connector["name"].as_str().unwrap_or_default().to_owned(),
-        facts.run.clone(),
-    );
-    log::line(&dir, "start_handover", &[]);
-    let over = Arc::new(AtomicBool::new(false));
-    let mark = {
-        let (dir, over, line) = (dir.clone(), Arc::clone(&over), text::recording_now(&name));
-        std::thread::spawn(move || {
-            let status = super::status_json(&dir);
-            while !over.load(Ordering::SeqCst) {
-                if status.exists() {
-                    CAUGHT.store(true, Ordering::SeqCst);
-                    println!("{line}");
-                    return;
-                }
-                std::thread::sleep(Duration::from_millis(20));
-            }
-        })
-    };
-    let handler = on_signal as *const () as libc::sighandler_t;
-    // SAFETY: `signal` with a handler that only makes async-signal-safe calls.
-    unsafe {
-        libc::signal(libc::SIGINT, handler);
-        libc::signal(libc::SIGTERM, handler);
-    }
-    let code = watchdog::run(plan, facts);
-    over.store(true, Ordering::SeqCst);
-    let _ = mark.join();
-    // SAFETY: back to the default action, so Ctrl-C ends only this wait for the upload.
-    unsafe {
-        libc::signal(libc::SIGINT, libc::SIG_DFL);
-        libc::signal(libc::SIGTERM, libc::SIG_DFL);
-    }
-    CAUGHT.store(false, Ordering::SeqCst);
-    log::line(&dir, "start_returned", &[]);
-    print!("{}", finish::closing(&dir, &name, &run));
-    finish::wrap_up(&dir, &mut |l| println!("{l}"));
-    drop(lock);
-    code
 }
 
 fn stop(text: String) -> Stop {
@@ -314,6 +247,7 @@ pub fn prepare(a: &Args, c: &Ctx, out: &mut dyn std::io::Write) -> Result<Ready,
     }
     lines.push(text::harness_home(&name, &plan.home));
     lines.extend(sleep_warning);
+    lines.push(text::recording_now(&name));
     let _ = writeln!(out, "{}", lines.join("\n"));
     plan.env.insert(
         "GOALCUP_TIME_LEFT_FILE".to_owned(),
@@ -328,15 +262,16 @@ pub fn prepare(a: &Args, c: &Ctx, out: &mut dyn std::io::Write) -> Result<Ready,
         server_time: None,
         local_wall,
         workspace: c.project.clone(),
-        connector: json(&plan.connector),
+        // Each of these five becomes the typed field of the same name (S17) with one edit.
+        connector: to_value(&plan.connector).unwrap_or_default(),
         harness_version: plan.harness_version.clone(),
         keep: c.vars.get("GOALCUP_KEEP_PARTS").is_some_and(|v| v == "1"),
         build: None,
-        hosts: json(&plan.hosts),
+        hosts: to_value(&plan.hosts).unwrap_or_default(),
         hosts_sha256: plan.hosts.sha256().to_owned(),
-        native: json(&plan.native),
-        mask_rules: json(&plan.mask_rules),
-        values: json(&values),
+        native: to_value(&plan.native).unwrap_or_default(),
+        mask_rules: to_value(&plan.mask_rules).unwrap_or_default(),
+        values: to_value(&values).unwrap_or_default(),
         // The watchdog mints the run CA and fills this in.
         ca: CaPem {
             cert: String::new(),
@@ -352,11 +287,6 @@ pub fn prepare(a: &Args, c: &Ctx, out: &mut dyn std::io::Write) -> Result<Ready,
         facts,
         _lock: lock,
     })
-}
-
-/// The S17 fields carry the S2 and S3 types as their serde JSON.
-fn json<T: serde::Serialize>(v: &T) -> serde_json::Value {
-    serde_json::to_value(v).unwrap_or(serde_json::Value::Null)
 }
 
 /// Section 8: the push block and the prompt, written to `first-message.txt` and put on the
