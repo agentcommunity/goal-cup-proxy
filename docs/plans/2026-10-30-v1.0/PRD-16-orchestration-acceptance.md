@@ -2399,3 +2399,11 @@ kept and now cites BUILD-PROMPT section 5, since B3 no longer carries it.
 
 - **Size report, PRD-12** (`wc -l` on integration): `scripts/pad/` outside fixtures 4,344 lines against the PRD-00 row of about 1,350 to 1,450 (roughly three times). Slice 9 added about 40 net. No further code slice is planned; carry to the end-of-build report and the logged owner question.
 - **Gate effect:** none on order. Phase 1a rung 1 clears the `goalcup start` folder checks but still needs a `goalcup` build on integration to run. No seam change. No locked ledger item is touched.
+
+### 31 Oct, after PRD-10 slice 8 (merge 69f143a6)
+
+- **Size report, PRD-10** (`wc -l` on integration): `cli/*.rs` 4,362 lines (`text.rs` 1,174) against the PRD-00
+  row of about 2,900 (roughly 1.5 times); down 75 from slice 7. `tests/cli_*.rs` 2,358 against 1,200 (about
+  twice). Overage accepted by review (no cut keeps behaviour); carry to the end-of-build report.
+- **Gate effect:** none on order. The gated half of PRD-10 still waits on `watchdog::run`,
+  `watchdog::recover` and `pipeline::close_dead_entry`. No seam change. No locked ledger item is touched.
