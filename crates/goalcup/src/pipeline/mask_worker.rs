@@ -138,13 +138,30 @@ impl Worker {
                 let s = self.stream(sid);
                 (s.kind, s.m) = (kind, m);
                 let (t, skind, meta) = (t.ns(), kind, json_bytes(&meta));
-                let r = Record::Open { sid, t, skind, conn, req, meta };
+                let r = Record::Open {
+                    sid,
+                    t,
+                    skind,
+                    conn,
+                    req,
+                    meta,
+                };
                 let mut o = Out::new(r, 0);
                 (o.flags, o.host, o.source) = (flags, host, source);
                 self.outs.push(o);
             }
-            Item::Data { t, off, ws, bytes, .. } => self.data(sid, t, off, ws, &bytes),
-            Item::Gap { reason, start, end, off, lost, tail, .. } => {
+            Item::Data {
+                t, off, ws, bytes, ..
+            } => self.data(sid, t, off, ws, &bytes),
+            Item::Gap {
+                reason,
+                start,
+                end,
+                off,
+                lost,
+                tail,
+                ..
+            } => {
                 self.release(sid, start, |m| m.gap());
                 let r = Record::Gap {
                     sid,
@@ -162,7 +179,13 @@ impl Worker {
                 (s.out, s.inp) = (off + lost.unwrap_or(0), off + lost.unwrap_or(0));
                 s.pieces.clear();
             }
-            Item::End { t, reason, seen, tail, .. } => {
+            Item::End {
+                t,
+                reason,
+                seen,
+                tail,
+                ..
+            } => {
                 let kind = self.stream(sid).kind;
                 let next = self.masker.stream(kind);
                 self.release(sid, t, move |m| {
@@ -174,7 +197,16 @@ impl Worker {
                     out
                 });
                 let (t, tail) = (t.ns(), self.tail(tail));
-                self.outs.push(Out::new(Record::End { sid, t, reason, seen, tail }, 0));
+                self.outs.push(Out::new(
+                    Record::End {
+                        sid,
+                        t,
+                        reason,
+                        seen,
+                        tail,
+                    },
+                    0,
+                ));
             }
         }
         if !self.outs.is_empty() {
@@ -200,10 +232,7 @@ impl Worker {
         let fin = ws.is_some_and(|w| w.fin);
         let r = catch_unwind(AssertUnwindSafe(|| {
             #[cfg(feature = "test-hooks")]
-            if bytes
-                .windows(PANIC_MARKER.len())
-                .any(|w| w == PANIC_MARKER)
-            {
+            if bytes.windows(PANIC_MARKER.len()).any(|w| w == PANIC_MARKER) {
                 panic!("mask worker test marker");
             }
             let mut out = s.m.push(bytes);
@@ -218,7 +247,10 @@ impl Worker {
                 let before = self.outs.len();
                 emit(s, sid, &m, (opcode, fin), t, &mut self.outs);
                 if fin && self.outs.len() == before {
-                    self.outs.push(Out::new(data_rec(sid, t, s.out, (opcode << 4) | FLAG_FIN, &[]), 0));
+                    self.outs.push(Out::new(
+                        data_rec(sid, t, s.out, (opcode << 4) | FLAG_FIN, &[]),
+                        0,
+                    ));
                 }
             }
             Err(_) => failed(s, sid, t, &self.rec, &self.masker, &mut self.outs),
@@ -301,7 +333,10 @@ fn emit(s: &mut Stream, sid: Sid, m: &Masked, ws: (u8, bool), t: Mono, outs: &mu
         let off = base + at as u64;
         let t = s.time_at(off, t);
         let flags = (opcode << 4) | (if fin && last { FLAG_FIN } else { 0 });
-        outs.push(Out::new(data_rec(sid, t, off, flags, &m.bytes[at..at + k]), 0));
+        outs.push(Out::new(
+            data_rec(sid, t, off, flags, &m.bytes[at..at + k]),
+            0,
+        ));
         for sp in &m.spans {
             let (lo, hi) = (sp.start.max(at), (sp.start + sp.len).min(at + k));
             if lo < hi {
@@ -356,11 +391,10 @@ fn data_rec(sid: Sid, t: Mono, off: u64, flags: u8, bytes: &[u8]) -> Record {
 /// Appends `b` to `a`, its spans moved to stay relative to `a`'s bytes.
 fn join(a: &mut Masked, b: Masked) {
     let n = a.bytes.len();
-    a.spans
-        .extend(b.spans.into_iter().map(|mut sp| {
-            sp.start += n;
-            sp
-        }));
+    a.spans.extend(b.spans.into_iter().map(|mut sp| {
+        sp.start += n;
+        sp
+    }));
     a.bytes.extend(b.bytes);
 }
 

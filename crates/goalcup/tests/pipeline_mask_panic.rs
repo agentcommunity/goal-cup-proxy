@@ -28,9 +28,7 @@ fn settle(rec: &Recorder, posts: u64) {
     open(rec, StreamKind::HttpReq).end(rec.now(), EndReason::Complete, None);
     let rec = rec.clone();
     within(HANG, move || {
-        while rec.durable().borrow().totals.counts.http_post < posts
-            || rec.live().held_bytes > 0
-        {
+        while rec.durable().borrow().totals.counts.http_post < posts || rec.live().held_bytes > 0 {
             std::thread::sleep(Duration::from_millis(100));
         }
     });
@@ -46,11 +44,18 @@ fn index_of(part: &Path) -> std::path::PathBuf {
 fn records(dir: &Path) -> Vec<Record> {
     let mut out = Vec::new();
     for part in goalcup_format::read::part_files(&dir.join("rec")).unwrap() {
-        let Some(last) = goalcup_format::read::read_index(&index_of(&part)).unwrap().pop() else {
+        let Some(last) = goalcup_format::read::read_index(&index_of(&part))
+            .unwrap()
+            .pop()
+        else {
             continue;
         };
         let f = std::fs::File::open(&part).unwrap().take(last.c_end);
-        out.extend(goalcup_format::read::decode(f).unwrap().map(|i| i.unwrap().rec));
+        out.extend(
+            goalcup_format::read::decode(f)
+                .unwrap()
+                .map(|i| i.unwrap().rec),
+        );
     }
     out
 }
@@ -166,7 +171,10 @@ fn a_panic_with_bytes_held_leaves_data_and_gap_contiguous() {
     assert_eq!(reason, GapReason::MaskFailed);
     let held = (pieces[0].len() as u64).saturating_sub(off);
     assert_eq!(lost, held + PANIC_MARKER.len() as u64 + 1);
-    assert!(data.iter().any(|d| d.0 == off + lost - 1), "the stream goes on");
+    assert!(
+        data.iter().any(|d| d.0 == off + lost - 1),
+        "the stream goes on"
+    );
 }
 
 #[test]

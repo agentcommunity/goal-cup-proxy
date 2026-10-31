@@ -342,7 +342,10 @@ impl Writer {
     /// LINK and its index line.
     fn link(&mut self) {
         let np = now_pair();
-        for ev in self.drift.at_link(np.wall_ns, np.mono_ns, clock::awake_ns()) {
+        for ev in self
+            .drift
+            .at_link(np.wall_ns, np.mono_ns, clock::awake_ns())
+        {
             self.event(Mono(np.mono_ns), &ev);
         }
         let count = self.count();

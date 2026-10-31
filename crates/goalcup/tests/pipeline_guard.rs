@@ -23,7 +23,10 @@ const MIB: u64 = 1 << 20;
 
 /// One shared body: byte `i` is `i % 251`, so a byte's value follows from its stream offset.
 fn body() -> Bytes {
-    (0..BODY).map(|i| (i % 251) as u8).collect::<Vec<u8>>().into()
+    (0..BODY)
+        .map(|i| (i % 251) as u8)
+        .collect::<Vec<u8>>()
+        .into()
 }
 
 fn set_env(stall: Option<&str>) {
@@ -68,7 +71,11 @@ fn records(dir: &Path) -> Vec<Record> {
             continue;
         };
         let f = std::fs::File::open(&part).unwrap().take(last.c_end);
-        out.extend(goalcup_format::read::decode(f).unwrap().map(|i| i.unwrap().rec));
+        out.extend(
+            goalcup_format::read::decode(f)
+                .unwrap()
+                .map(|i| i.unwrap().rec),
+        );
     }
     out
 }
@@ -87,7 +94,9 @@ fn check(recs: &[Record], body: &[u8], seen: u64) -> Vec<u64> {
             } => {
                 at.insert(*sid, (0, false, 0));
             }
-            Record::Data { sid, off, bytes, .. } => {
+            Record::Data {
+                sid, off, bytes, ..
+            } => {
                 let Some(s) = at.get_mut(sid) else { continue };
                 assert_eq!(*off, s.0, "DATA where the stream stands");
                 let want = (0..bytes.len()).map(|j| body[(*off as usize + j) % BODY]);
@@ -132,7 +141,12 @@ fn check_count(dir: &Path, recs: &[Record], seq: u64) {
         .filter_map(|l| serde_json::from_str::<Value>(l).ok())
         .find(|l| l["seq"] == seq)
         .expect("a counts.jsonl line at the durable seq");
-    let mut n = BTreeMap::from([("gaps", 0), ("lost_bytes", 0), ("wire_bytes", 0), ("http_req", 0)]);
+    let mut n = BTreeMap::from([
+        ("gaps", 0),
+        ("lost_bytes", 0),
+        ("wire_bytes", 0),
+        ("http_req", 0),
+    ]);
     for r in recs {
         match r {
             Record::Link { seq: s, .. } if *s == seq => break,
@@ -177,7 +191,10 @@ fn held_writer(n: usize, bodies: usize) {
         handles
     });
     // Every call returned while the writer was held: nothing is durable yet.
-    assert!(rec.durable().borrow().point.is_none(), "the writer was free");
+    assert!(
+        rec.durable().borrow().point.is_none(),
+        "the writer was free"
+    );
     assert_eq!(rec.live().losing.streams_in_gap, n as u64);
     settle(&rec, 0);
     for h in handles.iter_mut() {
