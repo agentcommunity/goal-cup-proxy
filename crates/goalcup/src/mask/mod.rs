@@ -1,21 +1,31 @@
 //! Masking (PRD-05, seam S2): every recorded byte and every meta string passes here before it
-//! reaches disk.
+//! reaches disk. A masked byte becomes `*`, so lengths and offsets stay those of the source.
 //!
-//! This is the S2 stub. It stars every byte as `fail_closed`, same length, so no build writes a
-//! raw byte before the core slice lands. The core slice keeps these shapes and adds the rules.
-//! The masker is pure: no I/O, no threads, no clock, no panics. No error text here ever formats a
-//! byte, a value or the length of a value.
+//! - `rules`: the whole-record matcher over the shared literals of `shapes.tsv` (S12), the
+//!   connector rules and the exact values, with the left guard, the quote cut and escape
+//!   alignment.
+//! - `stream`: the streaming hold, whose output equals the whole-record masker below the hold.
+//! - `values`: exact values in their 11 forms, and the project's `GH_TOKEN` reader.
+//! - `meta`: header, scheme, URL and query rules for metadata.
+//!
+//! The masker is pure: no I/O but the `GH_TOKEN` reader, no threads, no clock, no panics by
+//! design. No error text here ever formats a byte, a value or the length of a value.
 
+mod meta;
+mod rules;
+mod stream;
+mod values;
+
+use crate::connector::{MaskPattern, MaskRule};
 use goalcup_format::StreamKind;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::sync::Arc;
 
-/// The name of the rule that stars bytes the masker could not decide.
-pub const FAIL_CLOSED: &str = "fail_closed";
+pub use values::workspace_values;
 
-/// The index of `fail_closed` in the stub's `mask_rules()`.
-const FAIL_CLOSED_RULE: usize = 0;
+/// The name of the rule that stars bytes the masker could not decide.
+pub const FAIL_CLOSED: &str = stream::FAIL_CLOSED_KIND;
 
 /// One masked run: `start` is relative to [`Masked::bytes`], `rule` indexes `mask_rules()`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -39,8 +49,9 @@ pub enum MaskError {
     /// A built-in shape, by its index in the shared list.
     #[error("a built-in mask shape does not compile (shape {0})")]
     Shape(usize),
-    #[error("a mask value could not be used")]
-    Value,
+    /// A connector rule, by its index in the rules given.
+    #[error("a connector mask rule cannot be used (rule {0})")]
+    Rule(usize),
 }
 
 /// Counts of exact values by source: the start event's `mask_values` object (PRD-01 section 8).
@@ -62,7 +73,7 @@ pub enum ValueSource {
 }
 
 /// One exact secret value. It crosses the first control line (S17) and is never written,
-/// hashed or logged. `Debug` prints the source only; drop overwrites the bytes with zeros.
+/// hashed or logged. `Debug` prints the source only.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SecretValue {
     source: ValueSource,
@@ -78,7 +89,6 @@ impl SecretValue {
         self.source
     }
 
-    #[allow(dead_code, reason = "read by the exact-value rule of the core slice")]
     pub(crate) fn bytes(&self) -> &[u8] {
         &self.bytes
     }
@@ -92,60 +102,47 @@ impl std::fmt::Debug for SecretValue {
     }
 }
 
-impl Drop for SecretValue {
-    fn drop(&mut self) {
-        self.bytes.fill(0);
-        std::hint::black_box(&self.bytes);
-    }
-}
-
-/// What every stream of one masker shares.
-#[derive(Debug)]
-struct Policy {
-    counts: ValueCounts,
-    /// Test-only: pass bytes through unchanged.
-    #[cfg(any(test, feature = "test-hooks"))]
-    clear: bool,
-}
-
 /// The masker of one recorder boot. `Send + Sync`; a clone shares the policy.
 #[derive(Debug, Clone)]
 pub struct Masker {
-    policy: Arc<Policy>,
+    policy: Arc<stream::Policy>,
+    /// The connector names that make a header a credential in meta.
+    meta_names: Arc<meta::Names>,
 }
 
 impl Masker {
-    /// Builds the masker. The stub ignores `rules` and stars every byte; the core slice takes
-    /// `&[connector::MaskRule]` once S3 is on integration (call sites written against S2 compile
-    /// either way). Values are counted by source and never matched by the stub.
-    pub fn new<R>(rules: &[R], values: Vec<SecretValue>) -> Result<Masker, MaskError> {
-        let _ = rules;
-        let mut counts = ValueCounts::default();
-        for value in &values {
-            let slot = match value.source() {
-                ValueSource::Workspace => &mut counts.workspace,
-                ValueSource::Env => &mut counts.env,
-                ValueSource::Harness => &mut counts.harness,
-            };
-            *slot = slot.saturating_add(1);
+    /// Builds the masker: the shared shapes, then `rules` (PRD-11 data), then the exact values.
+    /// A built-in shape that differs from its recognizer or does not compile is
+    /// `MaskError::Shape`; a connector rule whose regex does not compile, or whose kind is
+    /// `run_secret` or `fail_closed`, is `MaskError::Rule`. A value that cannot be used is
+    /// skipped and counted in `skipped`, never an error. Until the owner's yes to question 3
+    /// builds the section 9 name gate, only `workspace` values are used; an `env` or `harness`
+    /// value is counted in `skipped`, so a model name or a base URL is never masked by value.
+    pub fn new(rules: &[MaskRule], values: Vec<SecretValue>) -> Result<Masker, MaskError> {
+        let policy = stream::Policy::new(rules, &values)?;
+        let mut names = meta::Names::default();
+        for rule in rules {
+            match &rule.pattern {
+                MaskPattern::JsonField { field, .. } => {
+                    names.field_names.push(field.to_ascii_lowercase());
+                }
+                MaskPattern::HeaderPrefix(prefix) => {
+                    names.header_prefixes.push(prefix.to_ascii_lowercase());
+                }
+            }
         }
         Ok(Masker {
-            policy: Arc::new(Policy {
-                counts,
-                #[cfg(any(test, feature = "test-hooks"))]
-                clear: false,
-            }),
+            policy: Arc::new(policy),
+            meta_names: Arc::new(names),
         })
     }
 
     /// Test-only: a masker whose streams and meta pass through unchanged, with no spans.
-    #[cfg(any(test, feature = "test-hooks"))]
+    #[cfg(feature = "test-hooks")]
     pub fn passthrough_for_tests() -> Masker {
         Masker {
-            policy: Arc::new(Policy {
-                counts: ValueCounts::default(),
-                clear: true,
-            }),
+            policy: Arc::new(stream::Policy::clear()),
+            meta_names: Arc::default(),
         }
     }
 
@@ -153,30 +150,37 @@ impl Masker {
     pub fn stream(&self, kind: StreamKind) -> StreamMasker {
         let _ = kind;
         StreamMasker {
-            policy: Arc::clone(&self.policy),
+            scan: stream::Scanner::new(Arc::clone(&self.policy)),
         }
     }
 
-    /// Masks a metadata value in place, same length. Never fails. The stub stars every string
-    /// leaf; object keys, numbers, bools and null stay.
+    /// Masks `bytes` as one whole input: the same rules and guard as the streams, never a
+    /// `fail_closed` span. The oracle a stream equals below its hold.
+    pub fn mask_whole(&self, bytes: &[u8]) -> Masked {
+        if self.policy.is_clear() {
+            return Masked {
+                bytes: bytes.to_vec(),
+                spans: Vec::new(),
+            };
+        }
+        stream::mask_whole(&self.policy, bytes)
+    }
+
+    /// Masks a metadata value in place, same length (PRD-05 section 7). Never fails.
     pub fn mask_meta(&self, meta: &mut Value) {
         if self.policy.is_clear() {
             return;
         }
-        let mut stack: Vec<&mut Value> = vec![meta];
-        while let Some(value) = stack.pop() {
-            match value {
-                Value::String(s) => *s = "*".repeat(s.len()),
-                Value::Array(items) => stack.extend(items.iter_mut()),
-                Value::Object(map) => stack.extend(map.values_mut()),
-                Value::Null | Value::Bool(_) | Value::Number(_) => {}
-            }
-        }
+        let scrub = |text: &str| -> String {
+            String::from_utf8_lossy(&self.mask_whole(text.as_bytes()).bytes).into_owned()
+        };
+        meta::mask_meta(meta, &self.meta_names, &scrub);
     }
 
-    /// One name per rule, indexed by MASK `rule`; `fail_closed` is last.
+    /// One name per kind, indexed by MASK `rule`: the shared kinds, the connector kinds, then
+    /// `run_secret`, and `fail_closed` last.
     pub fn mask_rules(&self) -> Vec<String> {
-        vec![FAIL_CLOSED.to_string()]
+        self.policy.names().to_vec()
     }
 
     /// Counts only, for the start event.
@@ -185,71 +189,59 @@ impl Masker {
     }
 }
 
-impl Policy {
-    #[cfg(any(test, feature = "test-hooks"))]
-    fn is_clear(&self) -> bool {
-        self.clear
-    }
-
-    #[cfg(not(any(test, feature = "test-hooks")))]
-    fn is_clear(&self) -> bool {
-        false
-    }
-}
-
-/// The masker of one stream. The stub holds nothing between calls.
+/// The masker of one stream. Idle, it holds no buffer.
 #[derive(Debug)]
 pub struct StreamMasker {
-    policy: Arc<Policy>,
+    scan: stream::Scanner,
 }
 
 impl StreamMasker {
-    /// Masks the next piece. The stub returns `bytes.len()` stars as one `fail_closed` span.
+    /// Masks the next piece. Returns the next released bytes, possibly fewer or more than were
+    /// pushed (undecided bytes are held).
     #[must_use]
     pub fn push(&mut self, bytes: &[u8]) -> Masked {
-        if self.policy.is_clear() {
-            return Masked {
-                bytes: bytes.to_vec(),
-                spans: Vec::new(),
-            };
+        let mut out = Masked::default();
+        if self.scan.policy().is_clear() {
+            out.bytes = bytes.to_vec();
+        } else {
+            self.scan.feed(bytes, &mut out);
         }
-        if bytes.is_empty() {
-            return Masked::default();
-        }
-        Masked {
-            bytes: vec![b'*'; bytes.len()],
-            spans: vec![Span {
-                start: 0,
-                len: bytes.len(),
-                rule: FAIL_CLOSED_RULE,
-            }],
-        }
+        out
     }
 
-    /// End of a WebSocket message: held bytes are decided as end of input.
+    /// End of a WebSocket message: held bytes are decided as end of input, a fail-closed window
+    /// ends, and the next message starts like a new stream.
     #[must_use]
     pub fn boundary(&mut self) -> Masked {
-        Masked::default()
+        let mut out = Masked::default();
+        self.scan.finish_complete(&mut out);
+        self.scan.restart();
+        out
     }
 
-    /// Called before any GAP on the stream.
+    /// Called before any GAP on the stream: held bytes that look like secret material are
+    /// starred to the cut, the rest decided as end of input; the bytes after the gap start
+    /// like a new stream.
     #[must_use]
     pub fn gap(&mut self) -> Masked {
-        Masked::default()
+        let mut out = Masked::default();
+        self.scan.finish_cut(&mut out);
+        self.scan.restart();
+        out
     }
 
-    /// End of the stream: releases what is held.
+    /// End of the stream: releases what is held, decided as end of input.
     #[must_use]
-    pub fn finish(self) -> Masked {
-        Masked::default()
+    pub fn finish(mut self) -> Masked {
+        let mut out = Masked::default();
+        self.scan.finish_complete(&mut out);
+        out
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    use serde_json::json;
 
     type Res = Result<(), Box<dyn std::error::Error>>;
 
@@ -258,124 +250,6 @@ mod tests {
         v.extend(std::iter::repeat_n(b'x', 20));
         v.extend(std::iter::repeat_n(b'7', 20));
         v
-    }
-
-    fn stub() -> Result<Masker, MaskError> {
-        Masker::new::<()>(&[], Vec::new())
-    }
-
-    fn fail_closed_index(m: &Masker) -> Option<usize> {
-        m.mask_rules().iter().position(|r| r == FAIL_CLOSED)
-    }
-
-    /// Every output byte is `*` and the spans cover each byte once, all `fail_closed`.
-    fn assert_starred(m: &Masker, input_len: usize, out: &Masked) {
-        assert_eq!(out.bytes.len(), input_len);
-        assert!(out.bytes.iter().all(|&b| b == b'*'));
-        let mut covered = vec![0u8; out.bytes.len()];
-        for span in &out.spans {
-            assert_eq!(Some(span.rule), fail_closed_index(m));
-            for c in covered.iter_mut().skip(span.start).take(span.len) {
-                *c += 1;
-            }
-            assert!(span.start + span.len <= out.bytes.len());
-        }
-        assert!(covered.iter().all(|&c| c == 1));
-    }
-
-    #[test]
-    fn push_stars_every_byte_same_length() -> Res {
-        let m = stub()?;
-        let mut ascii = b"{\"key\":\"".to_vec();
-        ascii.extend(fake_key());
-        ascii.extend(b"\"}\n");
-        let inputs: [Vec<u8>; 3] = [Vec::new(), ascii, vec![0xff, 0xfe, b'a', 0xc3]];
-        for input in &inputs {
-            let mut s = m.stream(StreamKind::HttpReq);
-            let out = s.push(input);
-            assert_starred(&m, input.len(), &out);
-        }
-        Ok(())
-    }
-
-    #[test]
-    fn boundary_gap_finish_return_nothing_raw() -> Res {
-        let m = stub()?;
-        let key = fake_key();
-        let mut s = m.stream(StreamKind::WsUp);
-        let mut out = Vec::new();
-        let mut input_len = 0;
-        for piece in key.chunks(7) {
-            input_len += piece.len();
-            out.push(s.push(piece));
-            out.push(s.boundary());
-            out.push(s.gap());
-        }
-        out.push(s.finish());
-        let mut total = 0;
-        for piece in &out {
-            assert_starred(&m, piece.bytes.len(), piece);
-            total += piece.bytes.len();
-        }
-        assert_eq!(total, input_len);
-        Ok(())
-    }
-
-    fn strings(v: &Value, out: &mut Vec<String>) {
-        match v {
-            Value::String(s) => out.push(s.clone()),
-            Value::Array(items) => items.iter().for_each(|i| strings(i, out)),
-            Value::Object(map) => map.values().for_each(|i| strings(i, out)),
-            Value::Null | Value::Bool(_) | Value::Number(_) => {}
-        }
-    }
-
-    #[test]
-    fn mask_meta_keeps_lengths_and_no_original() -> Res {
-        let m = stub()?;
-        let bearer = format!("Bearer {}", String::from_utf8(fake_key())?);
-        let mut meta = json!({
-            "method": "POST",
-            "path": "/v1/responses",
-            "host": "api.example.test",
-            "port": 443,
-            "tls": true,
-            "alpn": null,
-            "headers": [
-                ["authorization", bearer],
-                ["content-type", "application/json"],
-                ["x-empty", ""],
-            ],
-        });
-        let before = meta.clone();
-        m.mask_meta(&mut meta);
-        let (mut a, mut b) = (Vec::new(), Vec::new());
-        strings(&before, &mut a);
-        strings(&meta, &mut b);
-        assert_eq!(a.len(), b.len());
-        for (orig, masked) in a.iter().zip(&b) {
-            assert_eq!(orig.len(), masked.len());
-            assert!(masked.bytes().all(|c| c == b'*'));
-        }
-        let text = serde_json::to_string(&meta)?;
-        assert!(
-            a.iter()
-                .filter(|s| !s.is_empty())
-                .all(|s| !text.contains(s.as_str()))
-        );
-        let keys = |v: &Value| v.as_object().map(|o| o.keys().cloned().collect::<Vec<_>>());
-        assert_eq!(keys(&before), keys(&meta));
-        assert_eq!(meta.get("port"), before.get("port"));
-        assert_eq!(meta.get("tls"), before.get("tls"));
-        assert_eq!(meta.get("alpn"), before.get("alpn"));
-        Ok(())
-    }
-
-    #[test]
-    fn fail_closed_is_last() -> Res {
-        let m = stub()?;
-        assert_eq!(m.mask_rules().last().map(String::as_str), Some(FAIL_CLOSED));
-        Ok(())
     }
 
     #[test]
@@ -389,22 +263,24 @@ mod tests {
         assert_eq!(back, v);
         assert_eq!(back.source(), ValueSource::Workspace);
         assert_eq!(back.bytes(), key.as_slice());
-        let m = Masker::new::<()>(
+        let m = Masker::new(
             &[],
             vec![
                 v,
                 SecretValue::new(ValueSource::Env, key.clone()),
-                SecretValue::new(ValueSource::Env, key),
+                SecretValue::new(ValueSource::Workspace, b"short".to_vec()),
             ],
         )?;
         let counts = m.value_counts();
         assert_eq!(
             (counts.workspace, counts.env, counts.harness, counts.skipped),
-            (1, 2, 0, 0)
+            (1, 0, 0, 2)
         );
+        assert!(!format!("{m:?}").contains(std::str::from_utf8(&key)?));
         Ok(())
     }
 
+    #[cfg(feature = "test-hooks")]
     #[test]
     fn passthrough_keeps_bytes() {
         let m = Masker::passthrough_for_tests();
@@ -413,9 +289,9 @@ mod tests {
         let out = s.push(&key);
         assert_eq!(out.bytes, key);
         assert!(out.spans.is_empty());
-        let mut meta = json!({"path": "/x"});
+        let mut meta = serde_json::json!({"path": "/x"});
         m.mask_meta(&mut meta);
-        assert_eq!(meta, json!({"path": "/x"}));
+        assert_eq!(meta, serde_json::json!({"path": "/x"}));
     }
 
     const fn send_sync_clone<T: Send + Sync + Clone>() {}

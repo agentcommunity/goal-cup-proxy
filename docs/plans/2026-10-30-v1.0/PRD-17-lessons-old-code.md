@@ -989,3 +989,19 @@ Names for `LESSONS.md` (the lessons lane writes them; judge 14:56Z, 15:13Z):
   (PRD-10 acceptance 7) only has a real target once a connector sets `HOME` (Amp, Droid, PRD-11
   slice 5).
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-31, replan after PRD-05 core slice (merge 2c95e8f1)
+
+- **`StreamMasker::boundary()` is on integration**, so the PRD-05 precondition of `lessons_ws.rs` (K15)
+  is met; it still waits for PRD-03 and `common::upstream`. The PRD-05 guard for K15 is
+  `mask_stream::a_fail_closed_window_ends_at_the_message`.
+- **Guard names that moved.** The Codex `rate_limits` case (row of `redact` 110-113) is not in
+  `mask_rules.rs`: it is `mask_stream::an_email_and_a_codex_rate_limit_object_stream_through` (it needs the
+  Codex connector rules, which `mask_rules.rs` does not load). Candidates for the planted-value
+  and every-split rows are `mask_corpus::every_shaped_planted_value_is_masked` and
+  `mask_stream::every_split_equals_the_whole_record_masker`; the left-guard cases are
+  `mask_rules::the_left_guard_keeps_escapes_and_drops_glue`; `url_password` is
+  `mask_rules::url_password_cases` and `long_url_credentials_stay_masked`. Turn the PRD-05-guarded rows
+  green with the `file::test` form against these names, after a build box proves them on the integration
+  head; a row whose old case has no named test in `mask_*` is checked by the lane before it is flipped.
+- No locked ledger item is touched and no owner question comes from this slice.

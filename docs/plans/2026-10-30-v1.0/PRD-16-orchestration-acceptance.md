@@ -2152,3 +2152,83 @@ kept and now cites BUILD-PROMPT section 5, since B3 no longer carries it.
 - **Acceptance lists as known,** if still open at the end: the three nits A9, A10 and A11 (PRD-15 note)
   if the next RECORD-FORMAT edit does not take them, and the 540-line page ceiling as a recorded overage.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-31, replan after PRD-11 slice 6 (merge 211ade46)
+
+- **PRD-11 is done except one data-and-docs touch.** The code is on integration and was not changed by
+  slice 6. `wc -l` at 211ade46 against the PRD-00 "Size budget" row (Connector code, 800 src, 400
+  tests): src 1,695 (`schema.rs` 423, `launch.rs` 324, `mod.rs` 317, `hints.rs` 303, `hosts.rs` 301,
+  `builtin.rs` 27), tests 759 (`connector_launch.rs` 261, `connector_hints.rs` 196,
+  `connector_builtin.rs` 155, `connector_hosts.rs` 105, `connector_no_model_address.rs` 42). That is 895
+  src and 359 tests over the row, and 5 and 1 under the ledger L2 ceilings of 1,700 and 760 that the
+  slice 5 note records. The row was never updated; the over-row amount was named in the PRD-11 lane's
+  `decision` lines and the connector set is the 16 data files plus the host list, not a code cost per
+  harness. Count the ceilings, not the row, at the final size check, and list the 895 and 359 in the
+  report next to the Rust total (the 18,100 and 14,200 totals are then about 900 and 350 low).
+- **Add one step to the end-of-build list, after the pad's P7:** one PRD-11 lane refreshes the README
+  Tier column (with each reason) and the 15 "Pad result" lines from `connectors/tiers.toml`
+  (PRD-11 note items 1 to 3). It is docs only and must land before the final acceptance run's link
+  check and before the purge. PRD-12's `table` does not do it.
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-31, replan after PRD-05 core slice (merge 2c95e8f1)
+
+- **Size report, PRD-05** (`wc -l` at 8e886901, row "Masking (PRD-05)", 3,530 src and 2,000 tests): src
+  4,030 lines of code, 114% of the row (`stream.rs` 2,327, `rules.rs` 834, `values.rs` 339, `meta.rs` 289,
+  `mod.rs` 241; 4,692 with 662 inline test lines; `shapes.tsv` 32 data lines not counted); tests 2,782,
+  139% of the row (6 `mask_*` files 1,712, corpus helpers 408, inline 662). The masking lane's decision
+  line names points 4 and 3. Per ledger L2 and the 30 Oct size rule, overage alone is a nit; this note
+  reports it and decides nothing.
+- **Rows over their size line, updated for the end-of-build report:** masking joins connector, usage,
+  upload and verifier, adding about 500 src and 780 tests. The sum of the PRD-00 src rows is 18,420; the
+  five rows at their ceilings or measured counts (connector 895 over, usage 1,080, upload 1,560, verifier
+  2,060, masking 500) add about 6,100, so the Rust src total is about 24,500 if the proxy, CLI and
+  pipeline rows (not yet built) end at their rows, against the target of about 18,100 (tests at most about
+  14,200). This is the check the PRD-08 slice 5 note asked for at the PRD-05 merge: the targets are the
+  owners' estimates and the 30 Oct size rule makes overage a nit, so it goes into the end-of-build report
+  as a plain figure and no owner question is asked now.
+- **Build order:** with PRD-05 core merged, `lessons_ws.rs` needs only PRD-03 and `common::upstream`; the
+  pad's C3 needs only PRD-08's `masks` key; the 50 MB/s mask throughput (A5) is PRD-02's pool, so the
+  rung that measures masking in a run is after the pool, not before. Rung 1's stub check (more than one
+  entry in `start.mask_rules`) now means something: it must pass on every build from 2c95e8f1 on.
+- **Acceptance lists as known,** if still open at the end: the PRD-05 nits (PEM hand-off coverage case,
+  the `Walk::absorbs` cut, the bench comment residue) and the question 3 shortfalls (32-value build 3.1 s
+  and 1.4 MB/s, `env` and `harness` values counted `skipped`) if the owner answers question 3 no.
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-31, replan after PRD-12 slice 6 (merge 645f3219)
+
+- **Gate:** `gate fast` passed in 98 s on the merge. It does not run the old `goalcup-protocol` tests or
+  `scripts/test_check_connector.py`, and both read the deleted `connector-harness.toml` (PRD-13 and PRD-15
+  notes). A full run before PRD-13 lands will fail those two; that is the known deletion, not a
+  regression.
+- **Size report, PRD-12** (`wc -l` at 645f3219, PRD-00 row "the pad, about 1,350 to 1,450 with its tests"):
+  `scripts/pad/` is 4,096 lines; 3,546 in code files and tests (`pad-run` 993 of 330, `check.py` 743 of
+  320, `pad` 664 of 320, `test_pad.py` 488 of 90, `table` 193 of 150, `selftest` 182 of 100, `sbx.mjs`
+  133, `exec/` 96 of 70, `image` 54 of 60), 440 in harness files and snippets (11 connectors), 176 in the
+  skill and templates, 79 in prompts, runs and `image.id`. The slice 7 work (five harness files, the
+  queue, fixtures) comes on top. The decision line of the PRD-12 note names points 1, 3 and 7. The
+  end-of-build report lists PRD-12 at its final size against its row; whether the row rises stays the
+  owner question already logged.
+- **Pad rows now possible by file:** the six faults of P11 have their expectations and code, so
+  phase 4 can schedule them once a `goalcup` build with PRD-02 core, PRD-03 serve and PRD-10 `start` is on
+  integration. Pad files cover 11 of 16 connectors; the other five (`cline-cli`, `crush-cli`, `droid-cli`,
+  `goose-cli`, `kimi-code-cli`) are PRD-12 slice 7 and must precede any tier refresh row for them. A
+  `cut-worker` row can end "not run: cut did not take"; count it as not run for PRD-06 U3 and U5, not as
+  a pass, and list it with the open acceptance lines if the resolver ignores `/etc/hosts` in the build.
+- **`selftest` has never run a control on a real fixture.** The K2 builder is on integration, but the
+  fixtures are not committed and K7 and K11 wait on PRD-08 slice 6 and PRD-09. P1 ("the rig is trusted")
+  stays open until slice 7 commits the fixtures and `selftest` exits 0 in a build box.
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-31, replan after PRD-11 slice 7 (merge 1c719d16)
+
+- **The end-of-build step added by the slice 6 note (README Tier column and Pad result lines) has landed.**
+  Remove it from the list. What stays is the final acceptance run's link check, which was not re-run after
+  the last push of that slice.
+- **Size report, PRD-11** (wc -l at 1c719d16, PRD-00 row "Connector code (PRD-11)", 800 src and 400 tests):
+  src 1,695 (schema.rs 423, launch.rs 324, mod.rs 317, hints.rs 303, hosts.rs 301, builtin.rs 27), tests
+  759. That is 895 and 359 over the row and 5 and 1 under the ledger L2 ceilings of 1,700 and 760. The slice
+  changed no code, so the figures equal the slice 6 note. Count the ceilings at the final check and list
+  the 895 and 359 beside the Rust total.
+- No locked ledger item is touched and no owner question comes from this slice.

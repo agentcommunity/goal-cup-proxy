@@ -1085,3 +1085,7 @@ lists disagreed, the ledger decided.
 - `goalcup-verify dump` uses `goalcup_format::dump::Dumper` unchanged; the worked example's dump
   through it equals the committed file as JSON (judge 12:35Z box).
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-31, conductor seam line from PRD-02 core step 2 (08:50Z)
+
+Two shapes PRD-02 writes, accepted here: GAP reason 12 (mask_failed) may carry lost 1 with no stream byte lost and tail {"meta": "open"|"tail"|"event"} when metadata masking panicked; DATA may be empty (0 bytes) only with fin, for an empty WebSocket message. The codec already accepts both. PRD-08 recounts them as PRD-02's Counter does.

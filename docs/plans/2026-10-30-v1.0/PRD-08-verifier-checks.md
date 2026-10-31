@@ -1117,3 +1117,23 @@ log; the pad lane follows.
   (above). Slice 7 is `timeline`, the manifest part of `subagents_present`, and the open nits. PRD-16 X1
   reads `timeline`; until slice 7 merges the pad and PRD-16 cannot use it.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-31, replan after PRD-05 core slice (merge 2c95e8f1)
+
+- **The stub caveat ends.** Entries built on the core slice have real MASK spans, `start.mask_rules`
+  longer than `["fail_closed"]`, the real `mask_meta` and a `meta.masked` list on objects with headers.
+  Checks and the secrets scan may read all four. S12 and the kind names are unchanged, so `shapes.tsv`
+  readers and the `masks` map need nothing. `fail_closed` is the last entry of `mask_rules` and counts in
+  `mask_bytes`.
+- **Seam from the PRD-05 fix round (review A-2), rare in real traffic:** section 3's escape alignment can
+  start a guarded-rule MASK on the escaping backslash (raw `x\sk-...`), so the byte before a MASK start is
+  not always the byte before the shape match. The `glued_shape` test reads the bytes before the regex
+  match and skips one escaping backslash; with that rule the escape list of the earlier note stands.
+- **PEM over SSE:** inside a PEM block every JSON string interior is starred, keys included; lines outside
+  the block are unchanged. A scan test that parses the masked line sees valid JSON with all-star strings
+  between the markers.
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-31, conductor seam line from PRD-02 core step 2 (08:50Z)
+
+PRD-02's mask worker writes two record shapes PRD-01's text does not list yet; the verifier must accept them or every real entry fails inv4, inv12 or the recount: (a) a GAP with reason mask_failed, lost 1 (no stream byte lost) and tail {"meta": "open"|"tail"|"event"}, on the stream's sid or sid 0 for an EVENT, after a panic in mask_meta; it counts as one gap with 0 lost bytes and marks the request holed (any GAP on the sid), as PRD-02's Counter does; (b) an empty DATA with fin for an empty WebSocket message. PRD-08 accepts both in its next slice; PRD-01 notes them below.

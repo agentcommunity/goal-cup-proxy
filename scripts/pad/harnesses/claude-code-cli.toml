@@ -14,8 +14,6 @@ model_host = "api.anthropic.com"
 # The once-only "use this API key?" question and any first-run screen are unmeasured on 2.1.312.
 pre_keys = '\033[B\r'
 exit_keys = '/exit\r'
-submit_delay = 2
-subagent_word = "subagent"
 keep_going = true
 
 [gateway]

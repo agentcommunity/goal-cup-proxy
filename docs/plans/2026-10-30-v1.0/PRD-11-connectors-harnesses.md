@@ -1424,3 +1424,72 @@ not own still link `../TERMINATION.md` and are now broken: `docs/harnesses/amp-c
 `docs/harnesses/codex-cli.md:166` and `docs/harnesses/hermes-cli.md:86`. Termination proof is cut
 (ledger section 7), so drop each link or repoint it to `../archive/TERMINATION.md` in the next PRD-11
 touch of those files. The facts sheets pass is the natural place. No locked ledger item is touched.
+
+### 2026-10-31, replan after PRD-11 slice 6 (merge 211ade46)
+
+Slice 6 put the 15 new-shape facts sheets, the goose `hint_env` fix and the README sheet list on
+integration. No src line changed: `wc -l` at 211ade46 is src 1,695 and tests 759, same as slice 5. What
+is left is data and docs only. Four items, in order:
+
+1. **README tier refresh (acceptance 6), after the pad's P7.** `scripts/pad/table` writes
+   `connectors/tiers.toml` and `PAD-RESULTS.md` and no README line (PRD-12 note), so the refresh is a
+   hand copy by a PRD-11 lane once the table exists. Every Tier cell then reads exactly what
+   `tiers.toml` holds for that connector: "verified on <version>", "not verified: <reason>" or "not
+   supported". The reason goes back into the cell for every row, not only the rows that differ (Amp and
+   Droid "no key", OpenClaw "subagents need the Gateway", any C1 or C2 reason), because today's cells
+   hold only "not verified" and acceptance 6 needs the reason shown (review A3-N1). Both OpenCode
+   connectors keep a cell each in row 4. Fifteen rows; compare the cells with the file by eye, no test
+   (ledger B10).
+2. **Pad result lines.** Each sheet ends with "Not yet run on the pad". That is false after the pad
+   runs. The refresh rewrites the line in all 15 sheets to a sentence that cannot go stale ("The tier,
+   version and runs are in `connectors/tiers.toml` and `PAD-RESULTS.md`"), so the sheets are not
+   edited again per pad run.
+3. **README shape (reviews B3-1, B3-3, A3-N1), same touch.** Make each Connector cell a link to its
+   sheet (both OpenCode cells to `opencode-cli.md`; the "no `opencode2-cli.md`" note goes in row 4 or the
+   sentence above the table) and delete the "15 sheets, one per row" paragraph, which repeats the
+   column as a second list. Keep the "snapshot of `connectors/tiers.toml`" sentence once (it is said
+   twice now). The column stays: PRD-11 acceptance 6 and alignment row CC 98 call for it; it is a
+   snapshot taken at the refresh, and `tiers.toml` is the record. Do not add a generator for it.
+4. **Sheet repeats (review B3-2), cosmetic.** Amp's "no Amp key / no account this cycle" once, in
+   section 9; Droid's no-account fact once; Kimi's `NODE_EXTRA_CA_CERTS` question once, in section 9.
+   Do it in the same touch; skip it if it costs a second lane.
+
+- **README link into purged research.** `docs/harnesses/README.md:52` links
+  `../research/coverage-matrix.md`, which the after-merge purge deletes (only four files plus run 1's
+  report stay in `docs/research/`). Drop that sentence in the refresh touch (the matrix is research
+  evidence, not a capability fact). The other sheets have no link into `docs/research/` or
+  `TERMINATION.md` any more (checked at 211ade46: every relative link in `docs/harnesses/` resolves).
+- **B9** (drop the `fill` copy with PRD-10) stays open and unused; it needs PRD-10 files, not PRD-11's.
+- **Size (ledger L2), `wc -l` at 211ade46:** src 1,695 of the 1,700 ceiling, tests 759 of 760 (per-file
+  numbers as in the slice 5 note). The PRD-00 table row still says 800 and 400; the ceilings above are
+  the ledger numbers, see the PRD-16 note.
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-31, replan after PRD-12 slice 6 (merge 645f3219)
+
+- **OpenCode 2 gaps found while writing its pad file** (box, 31 Oct, `@opencode/cli@2.2.2`): `connectors/opencode2-cli.toml`
+  has no `no_prompts` row (OpenCode 1 has `permission = "allow"`), and no `before` or `after` for the
+  background service. Its docs list an `--auto` switch; whether that or a config key stops approval
+  prompts is for the connector's next slice to read from `opencode.ai/v2/docs` first, and cite it. With
+  `args = ["--standalone"]` the run uses a private server, so no `before` is needed for the run itself;
+  the stale shared service is the pad's `stale-gateway.sh` case (acceptance 5), whose `daemon` value the
+  pad file carries (`opencode serve --service`). `opencode service start` detaches and exits at once, so
+  a `before` that starts it would prove nothing. Without a prompt switch a pad row on OpenCode 2 can stop
+  on an approval question and read `INCONCLUSIVE`; that is the connector's gap, not the pad's.
+- The OpenCode 2 and OpenCode 1 pad files share the program name `opencode`; the OpenCode 2 `version_cmd`
+  switches the link (`~/.local/bin/opencode`) to the 2.2.2 prefix. PRD-11 `version` matching is unchanged.
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-31, replan after slice 7 (merge 1c719d16)
+
+- **PRD-11 is finished.** Slice 7 changed docs/harnesses only (16 files, 39 insertions, 50 deletions): facts
+  sheets for amp, droid and kimi, the README tier table with links in place of the 15-sheet paragraph, and
+  the Pad result line (plain text path to PAD-RESULTS.md) in twelve sheets. The coverage-matrix link was
+  dropped from the README, as the 30 Oct note asked. No src or test line moved: wc -l at 1c719d16 is src
+  1,695 and tests 759, same as the slice 6 note.
+- **Not done, not this PRD's:** check-links was not re-run after the last push of the slice (plain code
+  text cannot break it, but the final acceptance link check must run). The Amp sheet says nothing was run
+  on 0.0.1793275344 and the pad has no Amp run; the profile writer is covered by its unit test only. Pad
+  files for cline, crush, droid, goose and kimi are PRD-12 slice 7 and the Pad result lines for them point at
+  a file that has no row until those runs happen.
+- No locked ledger item is touched and no owner question comes from this slice.

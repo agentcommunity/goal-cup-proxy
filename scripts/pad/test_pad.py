@@ -133,7 +133,7 @@ class Walk(unittest.TestCase):
         self.assertIn(["list", "--prefix", "pad-"], calls)
 
     def test_spans_and_upload_suffix_still_end_with_a_table(self):  # section 1a: no step stops the rig
-        self.walk(steps=["cut-worker@1+10", "kill-both@5+upload"])
+        self.walk(steps=["cut-worker@1+10", "kill-both@5+upload", "freeze@2+3", "route-drop@4", "kill-watchdog@8", "fd-limit@0"])
 
     def test_staging_approval_values_reach_only_the_request(self):  # rung 2; the scan in walk covers argv and files
         ok = {"result": "ok", "saw": ""}
@@ -200,11 +200,13 @@ class BoxHalf(unittest.TestCase):
             self.assertNotIn(form, safe)
         self.assertIn("[known:2]", safe)
 
-    def test_env_key_launch_holds_no_value(self):
+    def launch(self, steps=()):
+        """launch.sh as start writes it for an env-route key, and the argv start passed to its fake tmux."""
         run = self.enterContext(tempfile.TemporaryDirectory())
         os.makedirs(os.path.join(run, "keys"))
         key = key_file(os.path.join(run, "keys"))
-        for name, doc in (("settings.json", {"server": "off", "harness_id": "claude-code-cli", "keep": True, "harness": {}}),
+        for name, doc in (("settings.json", {"server": "off", "harness_id": "claude-code-cli", "keep": True, "harness": {},
+                                             "steps": list(steps)}),
                           ("state.json", {"key_route": "env", "key_env": "ANTHROPIC_API_KEY", "key_path": key})):
             with open(os.path.join(run, name), "w") as f:
                 json.dump(doc, f)
@@ -215,8 +217,16 @@ class BoxHalf(unittest.TestCase):
             with self.assertRaises(padrun.Step):  # the fake tmux never shows "Recording": the step ends after the launch
                 padrun.Run(run, "start").start(None)
         with open(os.path.join(run, "launch.sh")) as f:
-            self.assertNotIn("PADSENTINEL", f.read())
+            text = f.read()
+        self.assertNotIn("PADSENTINEL", text)
         self.assertFalse([a for argv in argvs for a in argv if "PADSENTINEL" in a])
+        return text
+
+    def test_env_key_launch_holds_no_value(self):
+        self.assertIn("rm -f", self.launch())
+
+    def test_kill_both_keeps_the_env_key_copy_for_continue(self):  # cont.sh is launch.sh less its last line: the key must still be there
+        self.assertNotIn("rm -f", self.launch(["kill-both@5"]))
 
     def test_exec_env_keeps_no_key(self):  # section 3.1: /proc/<pid>/environ holds the harness's keys
         environ = b"\0".join([b"HTTPS_PROXY=http://127.0.0.1:4100", b"SSL_CERT_FILE=/run/ca.pem", b"PAD_CA=/run/ca2.pem",
@@ -225,6 +235,25 @@ class BoxHalf(unittest.TestCase):
         got = padrun.exec_env(environ, ["PAD_CA"])  # PRD-10 acceptance 7 adds HOME, PATH and the time-left file
         self.assertEqual(set(got), {"HTTPS_PROXY", "SSL_CERT_FILE", "PAD_CA", "PATH", "HOME", "GOALCUP_TIME_LEFT_FILE"})
         self.assertNotIn("PADSENTINEL", json.dumps(got))
+
+
+class FaultRestore(unittest.TestCase):
+    """Point 3: a fault never outlives its step. hold() undoes in a finally, with a detached backstop for a killed pad-run,
+    and the frozen tree never holds pad-run, the shell running the step, or tmux."""
+
+    def test_hold_undoes_when_the_fault_fails(self):
+        undone = []
+        r = padrun.Run(self.enterContext(tempfile.TemporaryDirectory()), "freeze")
+        def boom():
+            raise OSError("no sudo")
+        with mock.patch.object(padrun.subprocess, "Popen") as backstop, mock.patch.object(padrun.signal, "signal"):
+            with self.assertRaises(OSError):
+                r.hold(1, boom, lambda: undone.append(1), "kill -CONT 1")
+        self.assertEqual((undone, backstop.call_args.kwargs["start_new_session"]), ([1], True))
+
+    def test_frozen_tree_leaves_this_process_and_its_parents(self):
+        got = padrun.Run(self.enterContext(tempfile.TemporaryDirectory()), "freeze").tree([os.getppid(), os.getpid()])
+        self.assertFalse({os.getpid(), os.getppid()} & set(got))
 
 
 class CrashRows(unittest.TestCase):
@@ -288,15 +317,73 @@ class CrashRows(unittest.TestCase):
         self.assertEqual((got["result"] != "FAIL", got["faults"]), (True, "INCONCLUSIVE"))
 
 
+class FaultRows(unittest.TestCase):
+    """The rows the record decides, one case each: a row passes only on evidence that the fault took and held (point 3)."""
+
+    SAMPLES = [{"at": "2026-10-30T10:%02d:00+00:00" % (i * 8), "status": {"written": {"model_requests": 2 + 3 * i}}} for i in (0, 1)]
+
+    def row(self, kinds, faults, gaps=(), counts=None, seal="harness_exit", **files):
+        kinds = [kinds] if isinstance(kinds, str) else kinds
+        entry = {"entry": "e1", "seal_reason": seal, "counts": {"model_requests": 5, "gaps": counts or {}}, "checks": [
+            {"id": "gap_has_end", "result": "pass"}, {"id": "history_complete", "result": "pass"},
+            {"id": "listed_hosts_decrypted", "result": "pass"}, {"id": "inv6", "result": "named", "facts": {"gaps": list(gaps)}}]}
+        use = {"tokens": {"merged": {"input": 9, "output": 9}}, "coverage": {"unattributed": 0},
+               "threads": [{"parent": None, "models": {"m": 3}, "wire_calls": 3}, {"parent": "t0", "models": {"m": 2}, "wire_calls": 2}]}
+        meta = {"connector": "codex-cli", "case": "direct", "variant": kinds, "server": "off", "keep": True,
+                "commits_since_start": 1, "entry": "e1", "started": "2026-10-30T10:00:00+00:00"}
+        lines = [dict(f, at="2026-10-30T10:%s+00:00" % f["at"]) for f in faults]
+        return evaluate({"meta.json": meta, "verify/check-local.json": {"exit": 1, "entries": [entry]},
+                         "verify/usage/e1.json": use, "watch/status.jsonl": self.SAMPLES, "watch/faults.jsonl": lines,
+                         **files})["faults"]
+
+    def test_a2_recorder_kill_then_recover_has_two_gaps(self):  # PRD-16 A2: kill-recorder@30 and kill-watchdog-recover@45
+        plain = {"start": "2026-10-30T10:00:30Z", "end": "2026-10-30T10:00:31Z"}
+        own = {"cause": "watchdog_lost", "start": "2026-10-30T10:02:00Z", "end": "2026-10-30T10:03:00Z"}
+        faults = [{"kind": k, "exit": 0, "said": w, "at": at} for k, w, at in (
+            ("recover", check.RECOVER[0], "02:30"), ("recover", check.RECOVER[1], "04:00"), ("status", check.STATUS_RECOVER, "03:30"))]
+        faults += [{"kind": k, "pid": 9, "at": t} for k, t in (("kill-recorder", "00:30"), ("kill-watchdog", "02:00"), ("kill-recorder", "02:00"))]
+        faults += [{"kind": "wait-recovery", "result": "ok", "at": "01:00"}]
+        both = ["kill-recorder@0", "kill-watchdog-recover@3"]
+        self.assertEqual(self.row(both, faults, [plain, own], counts={"recorder_down": 2}), "PASS")
+        self.assertEqual(self.row(both, faults, [dict(plain, cause="null_mode"), own], counts={"recorder_down": 2}), "FAIL")
+        self.assertEqual(self.row(both, faults, [own], counts={"recorder_down": 1}), "FAIL")  # the plain kill left no gap
+
+    def test_kill_both_abandoned_gap_may_start_a_minute_before_the_kill(self):  # it starts at the last LINK (PRD-01 section 10)
+        both = [{"kind": "kill-both", "pid": 3, "watchdog": 4, "at": "05:00"}]
+        for start, want in (("10:04:20", "PASS"), ("10:02:00", "FAIL")):
+            gap = {"cause": "abandoned", "start": "2026-10-30T%sZ" % start, "end": "2026-10-30T10:06:00Z"}
+            self.assertEqual(self.row("kill-both@5", both, [gap], counts={"recorder_down": 1}, seal="recovered"), want, start)
+
+    def test_kill_watchdog_seal_is_timed_from_the_record(self):  # not from status.json, which is rewritten until the box ends
+        faults = [{"kind": "kill-watchdog", "pid": 9, "at": "02:00"}, {"kind": "harness-exit", "seen": True, "at": "05:00"}]
+        for sealed, want in (("2026-10-30T10:05:20Z", "PASS"), ("2026-10-30T10:09:00Z", "FAIL")):
+            self.assertEqual(self.row("kill-watchdog@2", faults, **{"verify/seal.json": {"wall": sealed},
+                                                                     "status.json": {"updated": "2026-10-30T10:09:00Z"}}), want)
+        self.assertEqual(self.row("kill-watchdog@2", faults), "INCONCLUSIVE")  # no seal time read
+
+    def test_route_drop_needs_a_drop_that_took_and_names_loss_only_inside_it(self):
+        def drop(took):
+            return [{"kind": "route-drop", "took": took, "at": "03:00"}, {"kind": "route-back", "default": True, "at": "04:00"}]
+        decode = {"decode_failed": 1}
+        for start, want in (("10:03:30", "PASS"), ("10:12:00", "FAIL")):
+            lost = [{"reason": "decode_failed", "start": "2026-10-30T%sZ" % start, "end": "2026-10-30T%sZ" % start}]
+            self.assertEqual(self.row("route-drop@3", drop(True), counts=decode, **{"verify/gaps.json": lost}), want, start)
+        self.assertEqual(self.row("route-drop@3", drop(False)), "INCONCLUSIVE")
+
+    def test_freeze_that_stopped_nothing_is_not_a_pass(self):
+        for pids, want in ((3, "PASS"), (0, "INCONCLUSIVE")):
+            self.assertEqual(self.row("freeze@2", [{"kind": "freeze", "pids": pids, "at": "02:00"}, {"kind": "thaw", "at": "12:00"}]), want)
+
+
 class SecretCheck(unittest.TestCase):
     """C3 (point 4, section 5): a known-value hit fails, and so does a planted shape with no MASK. Only C3 is asserted."""
 
     PLANTED = {"openai_key": 1, "github_token": 1, "generic_secret_assignment": 1, "jwt": 1, "private_key": 1,
                "url_password": 1, "auth": 8}
 
-    def c3(self, masks, secrets_exit=1, plain_exit=0, more=None):
+    def c3(self, masks, secrets_exit=1, plain_exit=0):
         return evaluate({"meta.json": {"connector": "codex-cli", "case": "direct", "known_box": True, "entry": "e1"},
-                         "verify/secrets.json": dict(more or {}, masks=masks), "verify/secrets-conductor.json": {"hits": 0},
+                         "verify/secrets.json": {"masks": masks}, "verify/secrets-conductor.json": {"hits": 0},
                          "verify/exits.json": {"secrets": secrets_exit, "secrets-out": 0, "secrets-plain": plain_exit}}
                         )["checks"]["C3"]
 
@@ -360,6 +447,41 @@ class StartRefusal(unittest.TestCase):
             r.refusal()
         self.assertEqual({k: seen[0][1][k] for k in ("named_file", "named_key", "value_shown")},
                          {"named_file": True, "named_key": True, "value_shown": True})
+
+
+class KillBothVerify(unittest.TestCase):
+    """pad-run verify after kill-both: the row is the old entry's, so its server copy is the one compared and scanned."""
+
+    def test_verify_judges_the_old_entry_and_its_server_copy(self):
+        run = self.enterContext(tempfile.TemporaryDirectory())
+        for name, doc in (("settings.json", {"server": "staging", "harness": {}, "steps": ["kill-both@2"]}),
+                          ("state.json", {"home": run, "old": {"entry": "OLD", "run": "r1"}, "entry": "NEW", "run": "r1"})):
+            with open(os.path.join(run, name), "w") as f:
+                json.dump(doc, f)
+        for n, age in (("OLD", 100), ("NEW", 0)):  # the newest entry is the one goalcup continue started
+            for base in (os.path.join(run, "home", "runs", "r1", n), os.path.join(run, "fetched", n)):
+                os.makedirs(base)
+            with open(os.path.join(run, "home", "runs", "r1", n, "status.json"), "w") as f:
+                f.write("{}")
+            with open(os.path.join(run, "fetched", n, "rec.gcr.zst"), "w") as f:
+                f.write("x")
+            os.utime(os.path.join(run, "home", "runs", "r1", n, "status.json"), (1e9 - age, 1e9 - age))
+        seen = []
+        def fake(argv, **kw):
+            seen.append(argv[4:])
+            return subprocess.CompletedProcess(argv, 0, "{}", "")
+        r = padrun.Run(run, "verify")
+        with mock.patch.object(padrun, "sh", fake), mock.patch.object(padrun, "tool", lambda name: "/box/" + name), \
+                mock.patch.object(r, "wipe_secrets"):
+            r.verify(None)
+        first = lambda word: next(a for a in seen if a[0] == word)
+        check = next(a for a in seen if a[0] == "check" and "--server" in a)
+        server = check[check.index("--server") + 1:]
+        self.assertEqual((server[0], os.path.basename(server[2])), (os.path.join("fetched", "OLD"), "OLD"))
+        self.assertIn(os.path.join("fetched", "OLD"), first("secrets"))
+        self.assertEqual(first("usage")[1], os.path.join("fetched", "OLD"))
+        with open(os.path.join(run, "meta-box.json")) as f:
+            self.assertEqual(json.load(f)["entry"], "OLD")
 
 
 if __name__ == "__main__":

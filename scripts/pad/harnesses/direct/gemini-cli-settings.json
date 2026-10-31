@@ -1,0 +1,4 @@
+{
+  "security": { "auth": { "selectedType": "gemini-api-key" } },
+  "model": { "name": "gemini-4-argon" }
+}

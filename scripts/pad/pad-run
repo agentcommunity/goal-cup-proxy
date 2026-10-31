@@ -17,7 +17,7 @@ NO_BUILD = "no goalcup build"
 BESIDE = ("spend", "seal-now", "watch")  # these run beside the other steps, so they never write state.json
 STEPS = ("setup", "start", "paste", "wait-calls", "look", "wait-recovery", "keep-going", "seal", "wait-upload", "verify",
          "wipe") + BESIDE
-TIMED = ("kill-recorder", "kill-watchdog-recover")  # section 3.1, at <minute> after the paste
+TIMED = tuple(pc.FAULTS)  # section 3.1, at <minute> after the paste; pc.SPAN ones take +<minutes>, kill-both +upload
 USAGE = "usage: pad-run <run dir> " + "|".join([s + " N" * (s == "wait-calls") for s in STEPS] + [t + "@M" for t in TIMED]
                                                 + ["pre SCRIPT", "exec SCRIPT@M"])
 PROXY_VALUE = "127.0.0.1:9"  # the proxy setting exec/proxy-setting.sh writes (PAD_PROXY); start must not print it
@@ -140,15 +140,16 @@ def wait(ok, limit, every):
 
 
 class Run:
-    def __init__(self, run, kind="wipe", m=""):
+    def __init__(self, run, kind="wipe", m="", span=None):
         self.run, self.s, self.st = run, loads(path=os.path.join(run, "settings.json")), loads(path=os.path.join(run, "state.json"))
         self.quiet = kind in BESIDE  # reads the entry without the run-ca key append, writes no state.json
         self.h, self.project = self.s.get("harness", {}), os.path.join(run, "project")  # wipe needs no settings
         self.env = dict(os.environ, GOALCUP_HOME=os.path.join(run, "home"))
         self.sec = self.h.get("gateway" if self.s.get("case") == "gateway" else "direct", {})
-        self.keys, self.tmux = self.path("keys"), self.s.get("session") or "pad"  # copies only, never ~/.pad-keys
+        self.keys, self.session = self.path("keys"), self.s.get("session") or "pad"  # copies only, never ~/.pad-keys
+        self.tmux = self.st.get("pane") or self.session  # the pane to read and type into: after kill-both, pad:cont
         lim = float((self.s.get("limits") or {}).get(kind, 300))  # pad's limit for this step; a timed one's runs from its minute
-        self.m = float(m) if m else None  # a timed step's minute after the paste (kill-*, exec)
+        self.m, self.span = float(m) if m else None, span  # a timed step's minute after the paste, and its +n (main)
         self.end = max(time.time(), self.st.get("pasted", 0) + (self.m or 0) * 60) + lim
 
     def path(self, *p):
@@ -197,6 +198,9 @@ class Run:
 
     def status(self):
         return loads(path=os.path.join(self.entry() or self.run, "status.json"))
+
+    def has(self, *kinds):  # the settings' steps hold one of these faults
+        return any(str(x).startswith(tuple(k + "@" for k in kinds)) for x in self.s.get("steps") or [])
 
     def need(self, *names, started=False, entry=False):
         if not all(tool(n) for n in names):
@@ -287,8 +291,11 @@ class Run:
         server = "off" if s["server"] == "off" else s["server_url"]  # no --repo: push not tested
         lines = ["cd " + shlex.quote(self.project), "export " + " ".join("%s=%s" % (k, shlex.quote(v)) for k, v in self.gc_env().items())]
         lines += ["export %s=%s" % (k, shlex.quote(str(v))) for k, v in self.sec.get("env", {}).items()]
+        lines += ["ulimit -Sn 256"] * self.has("fd-limit")  # section 3.1 fd-limit@0: the launch shell's soft limit
         if self.st.get("key_route") == "env":  # the value is never in argv: the launch shell reads the file
-            lines += ['export %s="$(cat %s)"' % (self.st["key_env"], shlex.quote(self.st["key_path"])), "rm -f " + shlex.quote(self.st["key_path"])]
+            lines += ['export %s="$(cat %s)"' % (self.st["key_env"], shlex.quote(self.st["key_path"]))]
+            lines += ["rm -f " + shlex.quote(self.st["key_path"])] * (not self.has("kill-both"))  # goalcup continue relaunches the harness
+            # from this shell's lines (kill_both), so a kill-both row keeps the 0600 copy; the seal's wipe removes keys/
         argv = [tool("goalcup"), "start", "--test", "--harness", s["harness_id"], "--prompt", self.path("prompt.txt")]
         hosts = s.get("hosts") or os.path.exists(self.path("hosts.toml")) and "hosts.toml"  # a pre script may write it
         argv += [a for k, v in (("connector", s.get("connector")), ("hosts", hosts)) if v for a in ("--" + k, self.path(v))]
@@ -389,6 +396,14 @@ class Run:
             write(self.path("verify", out), r.stdout, 0o644)
         return r.returncode, loads(r.stdout)
 
+    def dump_lines(self, e, kind):
+        """The JSON lines of `goalcup-verify dump --kind <kind> <entry>` (gap and link lines hold no payload)."""
+        try:
+            r = sh(["nice", "-n", "19", tool("goalcup-verify"), "dump", "--kind", kind, e], timeout=max(1, self.left()), cwd=self.run)
+        except subprocess.TimeoutExpired:
+            return []
+        return [d for d in map(loads, r.stdout.splitlines()) if d.get("k") == kind]
+
     def look(self, _):
         """Section 4: the live line; a failed check, the `secrets` one included, is written for "first seen at T"."""
         self.need("goalcup-verify", started=True, entry=True)
@@ -417,8 +432,8 @@ class Run:
         wait(lambda: self.sealed() or self.dead(), self.st["pasted"] + float(self.s["minutes"]) * 60 - time.time(), 5)
         capped = any(f.get("kind") == "seal-now" and f.get("exit") == 0 for f in pc.load(self.run, "watch/faults.jsonl", 1))
         why = "at the spend cap" if capped else "at the harness's exit" if self.sealed() or self.dead() else "at %s min" % self.s["minutes"]
-        if not self.sealed() and any(str(x).startswith("kill-watchdog-recover@") for x in self.s.get("steps") or []):
-            self.exit_harness()  # section 3.1: that row ends by the harness's exit, never goalcup seal
+        if not self.sealed() and self.has("kill-watchdog", "kill-watchdog-recover"):
+            self.exit_harness()  # section 3.1: those rows end by the harness's exit, never goalcup seal
         elif not self.sealed():
             sh([tool("goalcup"), "seal", "--yes"], env=self.env, cwd=self.project)
         ok = wait(self.sealed, self.left() - 30, 5)
@@ -519,11 +534,163 @@ class Run:
             pc.dig(st, "s4_pid"), time.time() - k["at"], (pc.dig(st, "s4_down_ms") or 0) - (k["off_ms"] or 0),
             pc.dig(st, "s4_requests"), k["requests"])
 
-    def kill_watchdog_recover(self, m):  # section 3.1, PRD-10 acceptance 11; the harness is never touched
+    def kill_wd(self, m):  # kill9 of the pid in rec/watchdog.pid, at minute m -> the pid, or a FAIL when none was hit
         self.need("goalcup", started=True, entry=True)
         self.at(m)
-        wpid = read_pid(os.path.join(self.st["entry_dir"], "rec", "watchdog.pid"))
-        self.fault("kill-watchdog", minute=m, pid=wpid if kill9(wpid) else None)
+        pid = read_pid(os.path.join(self.st["entry_dir"], "rec", "watchdog.pid"))
+        self.fault("kill-watchdog", minute=m, pid=pid if kill9(pid) else None)
+        return pid
+
+    def kill_watchdog(self, m):  # section 3.1, PRD-02 R5: at m+3 the harness ends; the recorder seals itself, no goalcup seal
+        self.kill_wd(m)
+        self.at(m + 3)
+        pid = pc.dig(self.status(), "s4_harness_pid")
+        self.exit_harness()
+        gone = wait(lambda: not alive(pid), 60, 1)
+        self.fault("harness-exit", pid=pid, seen=bool(gone))  # check.py: the seal within 35 s of this line
+        return ("ok", "watchdog killed, harness ended at +%g min" % (m + 3)) if gone else ("FAIL", "the harness did not exit")
+
+    def kill_both(self, m):  # section 3.1, PRD-02 R7, PRD-06 U8: both die, the harness is ended, then continue (or upload)
+        self.need("goalcup", started=True, entry=True)
+        self.at(m)
+        e, st = self.st["entry_dir"], self.status()
+        hit = [(p, kill9(p)) for p in (read_pid(os.path.join(e, "rec", "watchdog.pid")), pc.dig(st, "s4_pid"))]  # together
+        self.fault("kill-both", minute=m, watchdog=hit[0][0] if hit[0][1] else None, pid=hit[1][0] if hit[1][1] else None)
+        if not all(ok for _, ok in hit):
+            raise Step("FAIL", "no live goalcup watchdog and recorder pids")
+        self.st["old"] = {k: self.st[k] for k in ("entry", "run")}  # the row is this entry's; verify and the ids follow it
+        pid = pc.dig(st, "s4_harness_pid")
+        self.exit_harness()
+        wait(lambda: not alive(pid), 30, 1)
+        cmd = "upload" if self.span == "upload" else "continue"
+        head = open(self.path("launch.sh")).read().splitlines()[:-1]  # the launch shell's cd and exports, not goalcup start
+        write(self.path("cont.sh"), "\n".join(head + [shlex.join([tool("goalcup"), cmd])]) + "\n", 0o700)
+        sh(["tmux", "new-window", "-d", "-t", self.session, "-n", "cont", "bash " + shlex.quote(self.path("cont.sh"))])
+        sh(["tmux", "set-option", "-w", "-t", self.session + ":cont", "remain-on-exit", "on"])
+        self.st["pane"] = self.session + ":cont"  # state.json: the panes and the watch follow that window
+        new = wait(lambda: cmd == "upload" or self.entry() != e, 90, 2)
+        self.fault(cmd, new_entry=bool(new))
+        return "ok", "goalcup %s in pad:cont%s" % (cmd, "" if new else ", no new entry in 90 s")
+
+    def tree(self, roots):
+        """The pids of `roots` and every descendant, from /proc; never this process or its parents, tmux or pad-run."""
+        kids, parent, up = {}, {}, set()
+        for d in (int(x) for x in os.listdir("/proc") if x.isdigit()):
+            try:
+                parent[d] = int(open("/proc/%d/stat" % d).read().rsplit(")", 1)[1].split()[1])
+                kids.setdefault(parent[d], []).append(d)
+            except (OSError, IndexError, ValueError):
+                pass
+        me = os.getpid()
+        while me > 1 and me not in up:
+            up.add(me)
+            me = parent.get(me, 0)
+        todo, got = [p for p in roots if type(p) is int], set()
+        while todo:
+            if (p := todo.pop()) not in got:
+                got.add(p)
+                todo += kids.get(p, [])
+
+        def mine(p):  # tmux, pad-run, or the shell running this step
+            try:
+                return p in up or b"pad-run" in open("/proc/%d/cmdline" % p, "rb").read() or open("/proc/%d/comm" % p).read().startswith("tmux")
+            except OSError:
+                return True  # gone
+        return sorted(p for p in got if not mine(p))
+
+    def hold(self, minutes, do, undo, backstop):
+        """do(); wait `minutes` (unless do() returned False); undo() in a finally. A detached shell runs `backstop` once more
+        30 s after the end, so a killed pad-run (SIGKILL included) or a dropped control channel never leaves the fault on."""
+        subprocess.Popen(["sh", "-c", "sleep %d; %s" % (minutes * 60 + 30, backstop)], start_new_session=True,
+                         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        for sig in (signal.SIGTERM, signal.SIGHUP):
+            signal.signal(sig, lambda *_: sys.exit(1))  # runs the finally
+        try:
+            if do() is not False:
+                time.sleep(minutes * 60)
+        finally:
+            undo()
+
+    def freeze(self, m):  # section 3.1: SIGSTOP of watchdog, recorder, harness and its children for n minutes (default 10)
+        self.need("goalcup", started=True, entry=True)
+        self.at(m)
+        st = self.status()
+        pids = self.tree([read_pid(os.path.join(self.st["entry_dir"], "rec", "watchdog.pid")), pc.dig(st, "s4_pid"),
+                          pc.dig(st, "s4_harness_pid")])
+        if not pids:
+            raise Step("FAIL", "no goalcup process to freeze")
+        n = int(self.span or 10)
+
+        def send(sig):  # -> how many processes took the signal
+            sent = 0
+            for p in pids:
+                try:
+                    os.kill(p, sig)
+                    sent += 1
+                except OSError:  # it left meanwhile
+                    pass
+            return sent
+        stopped = []
+
+        def stop():  # the line says how many were stopped; none stopped is no freeze (check.py: not run)
+            stopped.append(send(signal.SIGSTOP))
+            self.fault("freeze", minute=m, minutes=n, pids=stopped[0])
+            return stopped[0] > 0
+        self.hold(n, stop, lambda: (send(signal.SIGCONT), self.fault("thaw")), "kill -CONT %s 2>/dev/null" % " ".join(map(str, pids)))
+        return ("ok", "%d processes stopped %d min" % (stopped[0], n)) if stopped and stopped[0] else ("skip", "not run: no process was stopped")
+
+    def cut_worker(self, m):  # section 3.1, PRD-06 U3 and U5: one /etc/hosts line, so each lookup of the Worker is refused
+        self.need("goalcup", started=True)
+        if self.s["server"] == "off":
+            raise Step("skip", "server off")
+        host, n, took = urllib.parse.urlparse(str(self.s.get("server_url"))).hostname, int(self.span or 10), []
+        look = lambda: sh(["getent", "hosts", host]).stdout.split()[:1]  # noqa: E731  the first address, or nothing
+        self.at(m)
+
+        def cut():
+            before = look()
+            sh(["sudo", "-n", "sh", "-c", "echo %s >> /etc/hosts" % shlex.quote("127.0.0.1 %s # pad-cut" % host)])
+            during = look()  # a stand-in listener is not built: nothing listens on 443 here, so loopback refuses at once
+            took.append(during == ["127.0.0.1"] != before)
+            self.fault("cut-worker", minute=m, minutes=n, host=host, before=before, during=during, took=took[0])
+            return took[0]
+        self.hold(n, cut, lambda: (sh(["sudo", "-n", "sed", "-i", "/# pad-cut$/d", "/etc/hosts"]),
+                                   self.fault("cut-lifted", host=host, after=look())),
+                  "sudo -n sed -i '/# pad-cut$/d' /etc/hosts")
+        return ("ok", "%s resolved to 127.0.0.1 for %d min" % (host, n)) if took and took[0] else ("skip", "not run: cut did not take")
+
+    def route_drop(self, m):  # section 3.1: the default route gone for n minutes (default 1)
+        self.need("goalcup", started=True)
+        routes = [ln.split() for ln in sh(["ip", "route", "show", "default"]).stdout.splitlines() if ln.strip()]
+        if not routes:
+            raise Step("skip", "not run: no default route")
+        n, add = int(self.span or 1), [["sudo", "-n", "ip", "route", "add"] + r for r in routes]
+        self.at(m)  # the conductor's calls failing meanwhile never stop its walk (pad); the backstop restores it
+        took = []
+
+        def drop():  # the line comes after the del and says whether it took: the del exited 0 and no default route is left
+            took.append(sh(["sudo", "-n", "ip", "route", "del", "default"]).returncode == 0
+                        and not sh(["ip", "route", "show", "default"]).stdout.strip())
+            self.fault("route-drop", minute=m, minutes=n, routes=len(routes), took=took[0])
+            return took[0]
+        self.hold(n, drop, lambda: ([sh(a) for a in add], self.fault("route-back", default=bool(sh(["ip", "route", "show", "default"]).stdout.strip()))),
+                  "; ".join(shlex.join(a) + " 2>/dev/null" for a in add))
+        return ("ok", "default route gone %d min" % n) if took and took[0] else ("skip", "not run: drop did not take")
+
+    def fd_limit(self, m):  # section 3.1: `ulimit -Sn 256` went into the launch line (start); read what the processes got
+        self.need("goalcup", started=True)
+        got, st = {}, self.status()
+        for role, name in (("recorder", "s4_pid"), ("harness", "s4_harness_pid")):
+            try:  # [soft, hard]
+                found = re.search(r"Max open files\s+(\d+)\s+(\d+)", open("/proc/%d/limits" % pc.dig(st, name)).read())
+            except (OSError, TypeError):
+                found = None
+            got[role] = found and [int(found[1]), int(found[2])]
+        self.fault("fd-limit", minute=m, **got)
+        return "ok", "soft limits: recorder %s, harness %s" % tuple(x and x[0] for x in got.values())
+
+    def kill_watchdog_recover(self, m):  # section 3.1, PRD-10 acceptance 11; the harness is never touched
+        self.kill_wd(m)
         first = self.recover()
         try:
             self.at(m + 1)
@@ -546,7 +713,7 @@ class Run:
         n = self.st["recovers"] = self.st.get("recovers", 0) + 1
         out, code = self.path("recover-%d.txt" % n), self.path("recover-%d.exit" % n)
         argv = ["env", "-i"] + ["%s=%s" % kv for kv in self.gc_env(True).items()] + [tool("goalcup"), "recover"]
-        sh(["tmux", "new-window", "-d", "-t", self.tmux, "-n", "recover",
+        sh(["tmux", "new-window", "-d", "-t", self.session, "-n", "recover",
             "%s >%s 2>&1; echo $? >%s" % (shlex.join(argv), shlex.quote(out), shlex.quote(code))])
         got = wait(lambda: os.path.exists(code) and re.fullmatch(r"\d+\n", open(code).read()), 60, 1)
         got = got and int(got.group())
@@ -619,6 +786,7 @@ class Run:
             if "pane" in go or last:
                 if self.known() is None:  # point 4: the known values are wiped, so no more panes
                     return "ok", "known values gone"
+                self.tmux = loads(path=self.path("state.json")).get("pane") or self.tmux  # kill-both moves it to pad:cont
                 self.pane(tag="w")
                 write(self.path("watch", "watch.json"), json.dumps({k: self.st[k] for k in ("panes", "screen_known")}), 0o644)
                 if self.s.get("server") != "off":
@@ -655,20 +823,36 @@ class Run:
         """Section 8 (the server's copy is the conductor's fetched/<entry>/, S13; the git scan needs a push token, none yet),
         each inside the step's limit (a timeout is an exit "timeout"); then meta-box.json, scan and tar, whatever happened."""
         self.stop_watch()  # the watch's last line first, so the tar holds a whole watch/
-        e, exits, result, note = self.entry(), {}, None, ""
+        e, exits, result, note, new = self.entry(), {}, None, "", None
+        if old := self.st.get("old"):  # entry() is not called again below: it would put the newest entry back  # kill-both: the row is the old entry's, and the entry goalcup continue started is checked too
+            new = (self.st["entry"], e) if self.st.get("entry") != old["entry"] else None
+            self.st.update(old)
+            e = os.path.join(self.env["GOALCUP_HOME"], "runs", old["run"], old["entry"])
         self.st["screen_known"] = self.st.get("screen_known", 0) + (loads(path=self.path("watch", "watch.json")).get("screen_known") or 0)
         try:
             self.daemon_check(True)  # inside the try: meta-box.json, the out scan and the tar follow whatever happens
-            self.need("goalcup-verify", entry=True)
+            self.need("goalcup-verify")
+            if not e:
+                raise Step("skip", "no entry")
             shutil.copy(os.path.join(e, "status.json"), self.path("status.json"))
-            f, on = os.path.join("fetched", self.st["entry"]), self.s["server"] != "off"
+            on = self.s["server"] != "off"
+            f = os.path.join("fetched", self.st["entry"])
             got = on and os.path.isfile(self.path(f, "rec.gcr.zst"))
             note = "; no fetched copy" if on and not got else ""
-            for name, argv in [("check-local", ["check", "--json", "--known", "known", "--harness-files", "harness-files.json", e])] + [
-                    ("check-server", ["check", "--json", "--server", f, "--local", e, "--known", "known"])] * got + [
-                    ("secrets", ["secrets", "--known", "known", e] + [f] * got + ["status.json"]),
-                    ("secrets-plain", ["secrets", "--known", "known-plain", e] + [f] * got)] + [  # C5 is the server copy's
-                    ("usage", ["usage", f if got else e, "--json", "--out", os.path.join("verify", "usage")])] * (got or not on):
+            cmds, more = pc.verify_cmds(e, f if got else None, True), []
+            if new:  # the entry goalcup continue started: the same check (and server compare), and its paths in both scans
+                fn = os.path.join("fetched", new[0])
+                more = [new[1]] + [fn] * (on and os.path.isfile(self.path(fn, "rec.gcr.zst")))
+                cmds += [(n + "-new", a) for n, a in pc.verify_cmds(new[1], fn if len(more) > 1 else None) if n.startswith("check")]
+            if self.has("route-drop"):  # check.py: when decode_failed gaps started
+                write(self.path("verify", "gaps.json"), json.dumps(self.dump_lines(e, "gap")), 0o644)
+            if self.has("kill-watchdog"):  # check.py: the seal's time is the record's last LINK (nothing follows the seal's)
+                write(self.path("verify", "seal.json"), json.dumps(([{}] + self.dump_lines(e, "link"))[-1]), 0o644)
+            for name, argv in cmds + [("secrets-plain", ["secrets", "--known", "known-plain", e] + [f] * got)]:
+                if name == "usage" and on and not got:  # C5 is the server copy's
+                    continue
+                if name.startswith("secrets"):
+                    argv = argv + more + ["status.json"] * (name == "secrets")
                 exits[name] = self.verify_cmd(argv, None if name == "usage" else name + ".json")[0]
         except Step as stop:
             result = stop.args
@@ -748,18 +932,22 @@ class Run:
             self.stop_watch()
         left = self.stop_daemon()
         if shutil.which("tmux"):
-            sh(["tmux", "kill-session", "-t", self.tmux])
+            sh(["tmux", "kill-session", "-t", self.session])
         found = self.wipe_secrets(known=True)
         return "ok", "; ".join([("found and wiped: " + ", ".join(found)) if found else "nothing key-like left"] + ([left] if left else []))
 
 
 def parse(words):
-    """-> (step, argument, minute) or None. A timed step is `kill-recorder@M`; `pre SCRIPT`, `exec SCRIPT@M` and
+    """-> (step, argument, minute) or None. A timed step is `kill-recorder@M`, with `+N` minutes on pc.SPAN kinds and `+upload`
+    on kill-both (then the argument is the suffix); `pre SCRIPT`, `exec SCRIPT@M` and
     `wait-calls N` take a word; every other step stands alone. The minute is a string; the argument may be None."""
     kind, at, m = (words[0] if words else "").partition("@")
     arg = words[1] if len(words) == 2 else None
     if kind == "exec" and arg:
         arg, at, m = arg.partition("@")
+    if kind in TIMED:  # pad checked the suffix (parse_steps) before it wrote settings.json
+        m, _, arg = m.partition("+")
+        arg = arg or None
     script, minute = arg and re.fullmatch(r"[A-Za-z0-9._-]+", arg), re.fullmatch(r"\d+(\.\d+)?", m)
     if kind in TIMED:
         ok = len(words) == 1 and minute
@@ -781,7 +969,7 @@ def main(argv):
     os.umask(0o077)
     run, extra = None, {}
     try:
-        run = Run(argv[1], kind, m)
+        run = Run(argv[1], kind, m, arg if kind in TIMED else None)
         result, saw, *more = getattr(run, kind.replace("-", "_"))(float(m) if kind in TIMED else arg)
         extra = more[0] if more else {}
     except Step as stop:
@@ -793,6 +981,10 @@ def main(argv):
             run.fault(kind, result=result)
         write(run.path("state.json"), json.dumps(run.st))
     ids = dict({k: run.st.get(k) for k in ("entry", "run")}, code=getattr(run, "code", None)) if run else {}  # code: start's only
+    old = run.st.get("old") or {} if run else {}  # after kill-both the row is the old entry's; the conductor fetches both
+    if old and run.st.get("entry") not in (None, old.get("entry")):
+        ids["new_entry"] = run.st["entry"]
+    ids.update(old)
     print("PADSTEP " + json.dumps(dict({k: v for k, v in ids.items() if v}, result=result, saw=saw, **extra)))
     return 0
 

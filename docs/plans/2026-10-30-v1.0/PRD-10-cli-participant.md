@@ -1453,3 +1453,16 @@ What the pad calls, as merged (PRD-12 note):
 - **Still open for you:** the upload dispatch waits for `upload::manual::run`, which is PRD-06 slice 4
   (`Beat::final_beat` and `point_on_disk` for it are on integration now).
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-31, replan after PRD-05 core slice (merge 2c95e8f1)
+
+- **Values for the masker.** `Masker::new(&plan.mask_rules, values)` is final. Where PRD-10 supplies
+  values, it calls `mask::workspace_values(project)` and nothing else: `env` and `harness` values are
+  counted in `skipped` and never used until the owner says yes to question 3, so reading them would only
+  hold secret bytes in memory for no use. `MaskError` text is fixed (no byte, no value, no length) and may
+  be printed as is.
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-31, conductor seam decisions with PRD-02 (08:40Z)
+
+`watchdog::run(plan, facts) -> ExitCode` stays (S8); `StartFacts` gets typed fields (`HostList`, `NativeSources`, `Vec<MaskRule>`, `Vec<SecretValue>`, `ConnectorRef`) and `home: PathBuf` in PRD-02 slice A: build `start.rs` against that shape. `watchdog::recover(entry_dir, facts) -> Result<Recovered, NotRecovered>` as ask N9; a live recorder is never killed and `recover` exits 0 saying recording is on. `goalcup seal` sends SIGUSR1 to the pid in `rec/watchdog.pid`; with no watchdog it sends SIGTERM to the recorder (PRD-02 slice B handles it, reason `signal`). Rung 1 needs `start` and `seal` merged.

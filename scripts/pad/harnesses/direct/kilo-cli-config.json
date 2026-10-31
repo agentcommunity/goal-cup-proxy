@@ -1,0 +1,15 @@
+{
+  "$schema": "https://app.kilo.ai/config.json",
+  "model": "deepseek/deepseek-flash",
+  "small_model": "deepseek/deepseek-flash",
+  "provider": {
+    "deepseek": {
+      "models": {
+        "deepseek-flash": {
+          "name": "DeepSeek Flash",
+          "limit": { "context": 1000000, "output": 128000 }
+        }
+      }
+    }
+  }
+}
