@@ -109,5 +109,8 @@ fn a_ragged_span_across_buckets_loses_under_a_ms_per_row() {
     let (_, v) = check(&dir, &[]);
     let (got, n) = (sum(&v, "off_ms"), rows(&v).len() as u64);
     assert!(n > 2);
-    assert!(got <= span / 1_000_000 && span / 1_000_000 - got < n, "{got} of {span} in {n}");
+    assert!(
+        got <= span / 1_000_000 && span / 1_000_000 - got < n,
+        "{got} of {span} in {n}"
+    );
 }

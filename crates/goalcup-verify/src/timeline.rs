@@ -156,10 +156,10 @@ impl Tally {
         let rows = (self.rows.iter()).map(|(&i, r)| (i, ms(r)));
         rows.filter(|(_, r)| r.iter().any(|&n| n > 0))
             .map(|(i, r)| {
-            let start = first.saturating_add(i.saturating_mul(BUCKET));
-            json!({"bucket": i, "start": wall(start), "harness_calls": r[0], "wire_calls": r[1],
+                let start = first.saturating_add(i.saturating_mul(BUCKET));
+                json!({"bucket": i, "start": wall(start), "harness_calls": r[0], "wire_calls": r[1],
                 "wire_errors": r[2], "native_bytes": r[3], "gaps": r[4], "off_ms": r[5]})
-        })
-        .collect()
+            })
+            .collect()
     }
 }
