@@ -1368,3 +1368,13 @@ Slice 10 brought `docs/RECORD-FORMAT.md` to PRD-08 slice 4 (the three honesty ch
   slice with the newcomer run. CONNECTOR-SCHEMA is at PRD-11 slice 4; recheck its connector list
   against slice 5 (7a647ba4: amp, cline, crush, droid, goose, kimi) when the next slice touches it.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-31, replan after PRD-11 slice 6 (merge 211ade46)
+
+- The 15 harness sheets and `docs/harnesses/README.md` are rewritten on integration and have no link
+  into a purged path except one: `docs/harnesses/README.md:52` links `../research/coverage-matrix.md`.
+  PRD-11's refresh touch drops it (PRD-11 note). If that touch has not landed when the purge runs, the
+  purge's `check-links.py` pass removes the sentence. The three `TERMINATION.md` links in the old
+  amp, codex and hermes sheets are gone with the rewrite.
+- `docs/PARTICIPANT-GUIDE.md` links the README for the list and never copies the tier column
+  (section 4 of the guide); nothing else changes here. No locked ledger item is touched.

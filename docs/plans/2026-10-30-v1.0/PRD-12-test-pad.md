@@ -1746,3 +1746,14 @@ taken; "rejected" says why. Fixes for other files are made by those files' owner
   early while the harness went on is `fail`. A pinned model host stays `named` (exit 1), as the dodger
   case needs.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-31, replan after PRD-11 slice 6 (merge 211ade46)
+
+- **`table` does not touch `docs/harnesses/README.md` or the sheets** (PRD-11 owns both; PRD-00
+  ownership table). The README Tier column and the sheets' "Pad result" line are updated by one PRD-11
+  lane after P7, copied from `connectors/tiers.toml` with each row's reason (PRD-11 note, items 1 and 2).
+  Nothing for this PRD to build. The 15 sheets say "Not yet run on the pad" until that lane runs.
+- The reasons your `table` writes decide what the README shows: keep them one plain line each ("no
+  key", "subagents need the Gateway", "C1 history orphan"), as section 9 already says, so they fit a
+  table cell.
+- No locked ledger item is touched and no owner question comes from this slice.

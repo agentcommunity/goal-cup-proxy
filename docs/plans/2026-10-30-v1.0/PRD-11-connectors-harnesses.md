@@ -1424,3 +1424,43 @@ not own still link `../TERMINATION.md` and are now broken: `docs/harnesses/amp-c
 `docs/harnesses/codex-cli.md:166` and `docs/harnesses/hermes-cli.md:86`. Termination proof is cut
 (ledger section 7), so drop each link or repoint it to `../archive/TERMINATION.md` in the next PRD-11
 touch of those files. The facts sheets pass is the natural place. No locked ledger item is touched.
+
+### 2026-10-31, replan after PRD-11 slice 6 (merge 211ade46)
+
+Slice 6 put the 15 new-shape facts sheets, the goose `hint_env` fix and the README sheet list on
+integration. No src line changed: `wc -l` at 211ade46 is src 1,695 and tests 759, same as slice 5. What
+is left is data and docs only. Four items, in order:
+
+1. **README tier refresh (acceptance 6), after the pad's P7.** `scripts/pad/table` writes
+   `connectors/tiers.toml` and `PAD-RESULTS.md` and no README line (PRD-12 note), so the refresh is a
+   hand copy by a PRD-11 lane once the table exists. Every Tier cell then reads exactly what
+   `tiers.toml` holds for that connector: "verified on <version>", "not verified: <reason>" or "not
+   supported". The reason goes back into the cell for every row, not only the rows that differ (Amp and
+   Droid "no key", OpenClaw "subagents need the Gateway", any C1 or C2 reason), because today's cells
+   hold only "not verified" and acceptance 6 needs the reason shown (review A3-N1). Both OpenCode
+   connectors keep a cell each in row 4. Fifteen rows; compare the cells with the file by eye, no test
+   (ledger B10).
+2. **Pad result lines.** Each sheet ends with "Not yet run on the pad". That is false after the pad
+   runs. The refresh rewrites the line in all 15 sheets to a sentence that cannot go stale ("The tier,
+   version and runs are in `connectors/tiers.toml` and `PAD-RESULTS.md`"), so the sheets are not
+   edited again per pad run.
+3. **README shape (reviews B3-1, B3-3, A3-N1), same touch.** Make each Connector cell a link to its
+   sheet (both OpenCode cells to `opencode-cli.md`; the "no `opencode2-cli.md`" note goes in row 4 or the
+   sentence above the table) and delete the "15 sheets, one per row" paragraph, which repeats the
+   column as a second list. Keep the "snapshot of `connectors/tiers.toml`" sentence once (it is said
+   twice now). The column stays: PRD-11 acceptance 6 and alignment row CC 98 call for it; it is a
+   snapshot taken at the refresh, and `tiers.toml` is the record. Do not add a generator for it.
+4. **Sheet repeats (review B3-2), cosmetic.** Amp's "no Amp key / no account this cycle" once, in
+   section 9; Droid's no-account fact once; Kimi's `NODE_EXTRA_CA_CERTS` question once, in section 9.
+   Do it in the same touch; skip it if it costs a second lane.
+
+- **README link into purged research.** `docs/harnesses/README.md:52` links
+  `../research/coverage-matrix.md`, which the after-merge purge deletes (only four files plus run 1's
+  report stay in `docs/research/`). Drop that sentence in the refresh touch (the matrix is research
+  evidence, not a capability fact). The other sheets have no link into `docs/research/` or
+  `TERMINATION.md` any more (checked at 211ade46: every relative link in `docs/harnesses/` resolves).
+- **B9** (drop the `fill` copy with PRD-10) stays open and unused; it needs PRD-10 files, not PRD-11's.
+- **Size (ledger L2), `wc -l` at 211ade46:** src 1,695 of the 1,700 ceiling, tests 759 of 760 (per-file
+  numbers as in the slice 5 note). The PRD-00 table row still says 800 and 400; the ceilings above are
+  the ledger numbers, see the PRD-16 note.
+- No locked ledger item is touched and no owner question comes from this slice.

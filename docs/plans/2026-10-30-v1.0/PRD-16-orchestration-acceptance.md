@@ -2152,3 +2152,21 @@ kept and now cites BUILD-PROMPT section 5, since B3 no longer carries it.
 - **Acceptance lists as known,** if still open at the end: the three nits A9, A10 and A11 (PRD-15 note)
   if the next RECORD-FORMAT edit does not take them, and the 540-line page ceiling as a recorded overage.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-31, replan after PRD-11 slice 6 (merge 211ade46)
+
+- **PRD-11 is done except one data-and-docs touch.** The code is on integration and was not changed by
+  slice 6. `wc -l` at 211ade46 against the PRD-00 "Size budget" row (Connector code, 800 src, 400
+  tests): src 1,695 (`schema.rs` 423, `launch.rs` 324, `mod.rs` 317, `hints.rs` 303, `hosts.rs` 301,
+  `builtin.rs` 27), tests 759 (`connector_launch.rs` 261, `connector_hints.rs` 196,
+  `connector_builtin.rs` 155, `connector_hosts.rs` 105, `connector_no_model_address.rs` 42). That is 895
+  src and 359 tests over the row, and 5 and 1 under the ledger L2 ceilings of 1,700 and 760 that the
+  slice 5 note records. The row was never updated; the over-row amount was named in the PRD-11 lane's
+  `decision` lines and the connector set is the 16 data files plus the host list, not a code cost per
+  harness. Count the ceilings, not the row, at the final size check, and list the 895 and 359 in the
+  report next to the Rust total (the 18,100 and 14,200 totals are then about 900 and 350 low).
+- **Add one step to the end-of-build list, after the pad's P7:** one PRD-11 lane refreshes the README
+  Tier column (with each reason) and the 15 "Pad result" lines from `connectors/tiers.toml`
+  (PRD-11 note items 1 to 3). It is docs only and must land before the final acceptance run's link
+  check and before the purge. PRD-12's `table` does not do it.
+- No locked ledger item is touched and no owner question comes from this slice.
