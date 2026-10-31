@@ -984,3 +984,25 @@ pub fn time_left_unknown(practice: bool) -> String {
 
 pub const NO_OPEN_RUN_TIME_LEFT: &str = "Run goalcup status to see your runs. No run is open on \
 this computer, so there is no time left to show.";
+
+// The push block and `--prompt` (section 8).
+pub const PUSH_FRAME: &str = "Your first message must start with these lines. Without them your \
+agent cannot push, and you may not send them later.";
+
+pub fn first_message_ready(file: &Path) -> String {
+    format!(
+        "Your first message (the push block, then your prompt) is on your clipboard and in {}. \
+         Paste it once as your first message and press Enter.",
+        file.display()
+    )
+}
+
+pub fn prompt_not_utf8(file: &Path) -> String {
+    format!("{} is not UTF-8 text, so goalcup cannot send it as your prompt.", file.display())
+}
+
+pub fn prompt_unreadable(file: &Path, why: &str) -> String {
+    format!("goalcup cannot read your prompt file {}: {why}.", file.display())
+}
+
+pub const PUSH_AGAIN: &str = "If you never sent your prompt, send it now. It starts with these lines.";
