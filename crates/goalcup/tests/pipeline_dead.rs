@@ -267,6 +267,8 @@ fn a_pruned_boot_with_counts_behind_seals_the_bytes_written() {
     let flags = OpenFlags::POST | OpenFlags::DECRYPTED;
     let mut req = rec.open(StreamKind::HttpReq, 0, 0, 0, flags, json!({}));
     req.data(rec.now(), Bytes::from_static(BODY));
+    // A WebSocket open across the prune: its OPEN is pruned, its messages go on after the line.
+    let mut ws = rec.open(StreamKind::WsUp, 0, 0, 0, OpenFlags::NONE, json!({}));
     // Bytes that do not compress, so the part files reach the rotation size.
     let mut x: u64 = 0x9e37_79b9_7f4a_7c15;
     let noise = (0..MIB).map(|_| {
@@ -275,23 +277,23 @@ fn a_pruned_boot_with_counts_behind_seals_the_bytes_written() {
     });
     let chunk = Bytes::from(noise.collect::<Vec<u8>>());
     let mut sent = BODY.len() as u64;
-    let mut send = |req: &mut goalcup::pipeline::StreamHandle, n: usize| {
+    let mut send = |ws: &mut goalcup::pipeline::StreamHandle, n: usize| {
         for _ in 0..n {
-            req.data(rec.now(), chunk.clone());
+            ws.ws(rec.now(), 0x1, true, chunk.clone());
             sent += MIB as u64;
             let want = sent;
             wait_settled(&rec, move |c| c.wire_bytes == want);
         }
     };
-    send(&mut req, 7);
+    send(&mut ws, 7);
     let parts = goalcup_format::read::part_files(&live.path().join("rec")).unwrap();
     assert!(parts.len() >= 2, "the entry rotated");
     // What the prune leaves: `counts.jsonl` synced, its compacted line at the latest LINK.
     let log = std::fs::read(live.path().join("counts.jsonl")).unwrap();
     let line = log.split(|&b| b == b'\n').next().unwrap().to_vec();
-    send(&mut req, 3);
+    send(&mut ws, 3);
     req.end(rec.now(), EndReason::Complete, None);
-    wait_settled(&rec, |c| c.http_post == 1);
+    wait_settled(&rec, |c| c.http_post == 1 && c.ws_up_msgs == 10);
     let total = sent;
 
     let dead = entry_dir().path().join("e00000000000000d2");
@@ -320,6 +322,9 @@ fn a_pruned_boot_with_counts_behind_seals_the_bytes_written() {
     let (_, seal) = down_and_seal(&dead);
     assert_eq!(seal["totals"]["wire_bytes"], json!(total));
     assert_eq!(seal["totals"]["http_req"], json!(1));
+    assert_eq!(seal["totals"]["http_post"], json!(1), "a POST ended after the line");
+    assert_eq!(seal["totals"]["ws_up_msgs"], json!(10), "messages after the line");
+    assert_eq!(seal["totals"]["req_whole"], json!(11));
     assert_eq!(facts.totals.counts.wire_bytes, total);
     let totals = entry_totals(&dead);
     assert_eq!(facts.totals, totals);

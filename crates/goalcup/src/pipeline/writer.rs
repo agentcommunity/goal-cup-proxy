@@ -460,7 +460,7 @@ impl Writer {
     }
 
     fn append(&mut self, seq: u64, count: &Value) {
-        if let Err(e) = self.log.append(seq, count, self.counter.off_spans()) {
+        if let Err(e) = self.log.append(seq, count, self.counter.off_spans(), Some(self.counter.open_table())) {
             self.fail(&e);
         }
     }

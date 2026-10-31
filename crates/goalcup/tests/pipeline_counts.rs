@@ -115,7 +115,7 @@ fn count_and_link(
     .unwrap();
     k.tick();
     let line = w.link(k.now()).unwrap();
-    log.append(line.seq, &ev, c.off_spans()).unwrap();
+    log.append(line.seq, &ev, c.off_spans(), Some(c.open_table())).unwrap();
     w.sync().unwrap();
     c.counts()
 }
@@ -169,7 +169,7 @@ fn recover(
 fn link_and_line(w: &mut PartWriter, c: &Counter, k: &mut Clock, log: &mut CountsLog) {
     k.0 += 3 * SEC;
     let line = w.link(k.now()).unwrap();
-    log.append(line.seq, &c.count_event(w.boot(), 0, 0, 0), c.off_spans())
+    log.append(line.seq, &c.count_event(w.boot(), 0, 0, 0), c.off_spans(), None)
         .unwrap();
     w.sync().unwrap();
 }
@@ -497,9 +497,9 @@ fn a_dead_boot_counts_its_last_indexed_line_before_recovery() {
 fn a_boot_not_read_from_part_files_is_its_latest_line() {
     let dir = tempfile::tempdir().unwrap();
     let mut log = CountsLog::open(dir.path());
-    log.append(5, &json!({"ev": "count", "boot": 0, "http_post": 1}), 0)
+    log.append(5, &json!({"ev": "count", "boot": 0, "http_post": 1}), 0, None)
         .unwrap();
-    log.append(6, &json!({"ev": "count", "boot": 0, "http_post": 5}), 0)
+    log.append(6, &json!({"ev": "count", "boot": 0, "http_post": 5}), 0, None)
         .unwrap();
     assert_eq!(entry_totals(dir.path()).counts.http_post, 5);
 }

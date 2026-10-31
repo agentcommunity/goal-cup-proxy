@@ -154,7 +154,7 @@ fn close(
         && counts::count_at(dir, k.durable.seq).is_none()
         && let Ok(c) = serde_json::from_slice::<Value>(&counts::recount_at(dir, k.durable.seq))
     {
-        CountsLog::open(dir).append(k.durable.seq, &c, 0)?;
+        CountsLog::open(dir).append(k.durable.seq, &c, 0, None)?;
     }
     let mut totals = counts::entry_totals(dir);
     let tail = tail(rv.lineless);
