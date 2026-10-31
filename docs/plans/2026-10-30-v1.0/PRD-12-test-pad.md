@@ -1805,8 +1805,8 @@ taken; "rejected" says why. Fixes for other files are made by those files' owner
     samples, so the catch-up has a minute of slack.
   - `fd-limit@0` reads the recorder's and the harness's soft and hard limits from `/proc` in the box. It
     does not read the start event's `fd_limit`, so PRD-08 has nothing to add for it.
-  - `selftest` exit codes: 0 all controls as wanted, 1 a control differs, 3 not trusted (a control was not
-    run, fixtures or ids missing). Nothing outside exit 0 counts as "the pad works".
+  - `selftest` exit codes: 0 every control ran as wanted, 1 one differed, 3 none differed but one did not
+    run (fixtures or ids missing). Nothing outside exit 0 counts as "the pad works".
 - **Still to land (slice 7, in this order):** (1) pad files for the five connectors without one:
   `cline-cli` (with its `daemon` value, and a data dir for the stale hub that differs from the run's),
   `crush-cli`, `droid-cli`, `goose-cli`, `kimi-code-cli`; `droid-cli` ends as "not run: no key" (the
