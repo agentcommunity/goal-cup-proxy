@@ -7,8 +7,15 @@
 //! `h2`, pseudo-headers in wire order, `:path` without its query); a `1xx` is a note. `DATA`
 //! payloads, padding stripped, go through http1's [`Body`] (decoding, the decoder guard, the
 //! `wire` tail) as they arrive. `END_STREAM` ends a body, a second `HEADERS` carries trailers,
-//! `RST_STREAM` and `GOAWAY` end streams interrupted with `h2_error`. `PRIORITY`, `PING`,
-//! `SETTINGS`, `WINDOW_UPDATE` and unknown types are skipped by length.
+//! `RST_STREAM` and a server's `GOAWAY` end streams interrupted with `h2_error` (a client's
+//! `GOAWAY` names server streams, of which there are none). `PRIORITY`, `PING`, `SETTINGS`,
+//! `WINDOW_UPDATE` and unknown types are skipped by length. Decoded fields past 64 KiB are not
+//! stored and give GAP `memory_guard` `http_head`, as in HTTP/1.1; decoding goes on.
+//!
+//! Server frames from a `HEADERS` for a client stream whose request is not parsed yet wait,
+//! unparsed, until it is, so the response names its request. `DATA` or a header block for a
+//! stream already ended (frames in flight after `RST_STREAM`) is recorded in no stream: it counts
+//! as held, and the close names it in the `conn` GAP.
 //!
 //! Not followed, never silent: an extended `CONNECT` stream (RFC 8441) records no `DATA` and each
 //! side gets GAP `h2_unsupported`; a `grpc-encoding` or `connect-content-encoding` other than
@@ -24,8 +31,10 @@
 use crate::pipeline::{
     EndReason, GapReason, Mono, OpenFlags, Recorder, Sid, StreamHandle, StreamKind,
 };
-use crate::proxy::decode::{Coding, Unsupported, parse_codings};
-use crate::proxy::http1::{Body, Framing, Head, coding_meta, pairs, safe_path};
+use crate::proxy::decode::{Coding, Unsupported, parse_codings, unsupported};
+use crate::proxy::http1::{
+    Body, Framing, HEAD_LIMIT, Head, coding_meta, head_gap, pairs, safe_path,
+};
 use crate::proxy::pump::{Parser, Stop};
 use crate::proxy::ws::Dir;
 use loona_hpack::decoder::{Decoder, DecoderError};
@@ -86,6 +95,13 @@ pub struct H2 {
     kept: u64,
     /// The client bytes being taken were never forwarded.
     unsent: bool,
+    /// The highest client stream whose request was parsed.
+    last_req: u32,
+    /// Server bytes from a `HEADERS` whose request is not parsed yet, and when they came.
+    wait: Vec<u8>,
+    wait_at: Mono,
+    /// When the first frame for an ended stream came (its bytes are held).
+    late: Option<Mono>,
 }
 
 /// One direction's reader.
@@ -150,7 +166,7 @@ impl Half {
         match self {
             Half::Open(body) => (*body).end(t, reason, stop, extra),
             Half::Raw(mut h, n, at) => {
-                h.gap(GapReason::H2Unsupported, at, Some(n + 1), None);
+                h.gap(GapReason::H2Unsupported, at, Some(n), None);
                 if let Some((gap, tail)) = stop {
                     h.gap(gap, t, None, tail);
                     reason = EndReason::DecodeError;
@@ -189,6 +205,10 @@ impl H2 {
             seen: 0,
             kept: 0,
             unsent: false,
+            last_req: 0,
+            wait: Vec::new(),
+            wait_at: Mono::default(),
+            late: None,
         }
     }
 
@@ -198,7 +218,8 @@ impl H2 {
             let hdr = (!s.hdr.is_empty()).then_some(s.hdr_at);
             [hdr, s.block.as_ref().map(|b| b.at)]
         });
-        let since = at.flatten().fold(t, Mono::min);
+        let wait = (!self.wait.is_empty()).then_some(self.wait_at);
+        let since = at.chain([wait, self.late]).flatten().fold(t, Mono::min);
         (self.seen.saturating_sub(self.kept), since)
     }
 
@@ -228,6 +249,10 @@ impl H2 {
 
     fn take(&mut self, dir: Dir, t: Mono, mut bytes: &[u8]) -> Result<(), Fault> {
         let d = dir as usize;
+        if dir == Dir::Down && !self.wait.is_empty() {
+            self.wait.extend_from_slice(bytes);
+            return Ok(());
+        }
         while !bytes.is_empty() {
             let side = &mut self.sides[d];
             if side.preface > 0 {
@@ -249,6 +274,12 @@ impl H2 {
                 bytes = &bytes[n..];
                 if side.hdr.len() == 9 {
                     let h = std::mem::take(&mut side.hdr);
+                    let id = u32::from_be_bytes([h[5], h[6], h[7], h[8]]) & 0x7fff_ffff;
+                    // A response before its request: wait for it (client streams are odd).
+                    if dir == Dir::Down && h[3] == HEADERS && id % 2 == 1 && id > self.last_req {
+                        (self.wait, self.wait_at) = ([&h[..], bytes].concat(), side.hdr_at);
+                        return Ok(());
+                    }
                     self.open_frame(d, &h)?;
                     self.settle(dir, t)?;
                 }
@@ -278,15 +309,24 @@ impl H2 {
                         return Err(Fault::Unsupported);
                     }
                 }
+            } else if body && ty == DATA {
+                self.data(dir, t, id, piece);
             } else {
                 self.kept += n as u64;
-                if body && ty == DATA {
-                    self.data(dir, t, id, piece);
-                }
             }
             self.settle(dir, t)?;
         }
         Ok(())
+    }
+
+    /// Server frames that waited for a request now parsed go on.
+    fn resume(&mut self, t: Mono) -> Result<(), Fault> {
+        let id = |w: &[u8]| u32::from_be_bytes([w[5], w[6], w[7], w[8]]) & 0x7fff_ffff;
+        if self.wait.is_empty() || id(&self.wait) > self.last_req {
+            return Ok(());
+        }
+        let wait = std::mem::take(&mut self.wait);
+        self.take(Dir::Down, t, &wait)
     }
 
     /// A whole frame header: the frame to read, or a stop.
@@ -367,14 +407,13 @@ impl H2 {
                 let Some(b) = side.block.take() else {
                     return Ok(());
                 };
-                let raw = b.raw;
                 self.headers(dir, t, b)?;
-                self.kept += raw;
             }
             RST_STREAM => {
                 reset(self.streams.remove(&f.id).into_iter(), t, word(0));
             }
-            GOAWAY => {
+            // A client's GOAWAY names server streams (RFC 9113 section 6.8): none here.
+            GOAWAY if dir == Dir::Down => {
                 let last = word(0) & 0x7fff_ffff;
                 let above = self.streams.split_off(&last.saturating_add(1));
                 reset(above.into_values(), t, word(4));
@@ -410,42 +449,70 @@ impl H2 {
                 }
             }
             Some(Half::Raw(_, n, _)) => *n += piece.len() as u64,
-            _ => {}
+            // Recorded in no stream: held, so the close's `conn` GAP counts it.
+            _ => {
+                self.late.get_or_insert(t);
+                return;
+            }
         }
+        self.kept += piece.len() as u64;
     }
 
     /// A whole header block: opens that side of its stream, or is its trailers.
+    /// The block's raw bytes count as kept unless it is for an ended stream.
     fn headers(&mut self, dir: Dir, t: Mono, b: Block) -> Result<(), Fault> {
-        let mut fields = Vec::new();
+        let (mut fields, mut stored, mut over) = (Vec::new(), 0, 0);
         let hpack = &mut self.sides[dir as usize].hpack;
         let lossy = |b: &[u8]| String::from_utf8_lossy(b).into_owned();
-        let decoded = hpack.decode_with_cb(&b.bytes, |n, v| fields.push((lossy(&n), lossy(&v))));
+        // The `http_head` guard: fields past it are decoded, so the table stays in step, and
+        // not stored.
+        let decoded = hpack.decode_with_cb(&b.bytes, |n, v| {
+            let size = n.len() + v.len();
+            if over == 0 && stored + size <= HEAD_LIMIT {
+                stored += size;
+                fields.push((lossy(&n), lossy(&v)));
+            } else {
+                over += size as u64;
+            }
+        });
         decoded.map_err(|e| match e {
             DecoderError::InvalidMaxDynamicSize => Fault::Table,
             _ => Fault::Unsupported,
         })?;
+        let head = Head::past_guard_at((over > 0).then_some((b.at, over)));
         let d = dir as usize;
-        let s = self.streams.entry(b.id).or_insert_with(|| Stream {
-            req: 0,
-            tunnel: false,
-            halves: [Half::Waiting, Half::Waiting],
-        });
+        if dir == Dir::Up && b.id > self.last_req {
+            self.last_req = b.id;
+            let halves = [Half::Waiting, Half::Waiting];
+            let s = Stream {
+                req: 0,
+                tunnel: false,
+                halves,
+            };
+            self.streams.insert(b.id, s);
+        }
+        let Some(s) = self.streams.get_mut(&b.id) else {
+            // Frames in flight after the stream ended: recorded in no stream.
+            self.late.get_or_insert(b.at);
+            return Ok(());
+        };
         match &mut s.halves[d] {
-            Half::Open(body) => body.sink.trailers = fields,
+            Half::Open(body) => body.sink.set_trailers(fields, &head),
             Half::Waiting if dir == Dir::Up => {
                 let unsent = if self.unsent { b.raw } else { 0 };
-                self.request(t, b.id, fields, unsent);
+                self.request(t, b.id, fields, &head, unsent);
             }
-            Half::Waiting => self.response(t, b.id, fields),
+            Half::Waiting => self.response(t, b.id, fields, &head),
             _ => {}
         }
+        self.kept += b.raw;
         if b.end {
             self.finish(b.id, dir, t);
         }
         Ok(())
     }
 
-    fn request(&mut self, t: Mono, id: u32, mut fields: Vec<(String, String)>, unsent: u64) {
+    fn request(&mut self, t: Mono, id: u32, mut fields: Vec<Field>, head: &Head, unsent: u64) {
         let method = field(&fields, ":method").unwrap_or_default().to_owned();
         let tunnel = method == "CONNECT" && field(&fields, ":protocol").is_some();
         let path = field(&fields, ":path").map_or(Value::Null, safe_path);
@@ -471,13 +538,13 @@ impl H2 {
             .rec
             .open(StreamKind::HttpReq, self.conn, 0, 0, flags, meta);
         let req = h.sid();
-        let half = self.half(h, tunnel, codings, unsent, t);
+        let half = self.half(h, tunnel, codings, head, unsent, t);
         if let Some(s) = self.streams.get_mut(&id) {
             (s.req, s.tunnel, s.halves[0]) = (req, tunnel, half);
         }
     }
 
-    fn response(&mut self, t: Mono, id: u32, fields: Vec<(String, String)>) {
+    fn response(&mut self, t: Mono, id: u32, fields: Vec<Field>, head: &Head) {
         let status = field(&fields, ":status").and_then(|s| s.parse::<u16>().ok());
         if let Some(status @ 100..200) = status {
             self.rec.event(json!({
@@ -506,7 +573,7 @@ impl H2 {
         let h = self
             .rec
             .open(StreamKind::HttpResp, self.conn, req, 0, flags, meta);
-        let half = self.half(h, tunnel, codings, 0, t);
+        let half = self.half(h, tunnel, codings, head, 0, t);
         if let Some(s) = self.streams.get_mut(&id) {
             s.halves[1] = half;
         }
@@ -514,22 +581,26 @@ impl H2 {
 
     fn half(
         &self,
-        h: StreamHandle,
+        mut h: StreamHandle,
         tunnel: bool,
         codings: Result<Vec<Coding>, Unsupported>,
+        head: &Head,
         unsent: u64,
         t: Mono,
     ) -> Half {
         if tunnel {
+            head_gap(&mut h, head);
             return Half::Raw(h, 0, t);
         }
         let framing = Some(Framing::Close);
-        let body = Body::open(h, framing, codings, &Head::default(), unsent, t, &self.rec);
+        let body = Body::open(h, framing, codings, head, unsent, t, &self.rec);
         body.map_or(Half::Done, |b| Half::Open(Box::new(b)))
     }
 }
 
-fn field<'a>(fields: &'a [(String, String)], name: &str) -> Option<&'a str> {
+type Field = (String, String);
+
+fn field<'a>(fields: &'a [Field], name: &str) -> Option<&'a str> {
     fields.iter().find(|f| f.0 == name).map(|f| f.1.as_str())
 }
 
@@ -549,20 +620,14 @@ fn reset(streams: impl Iterator<Item = Stream>, t: Mono, code: u32) {
 
 /// The content codings to undo; a message-level coding other than `identity` (gRPC, Connect)
 /// cannot be undone as one body (D14).
-fn codings(fields: &[(String, String)]) -> Result<Vec<Coding>, Unsupported> {
-    fn named<'a>(fields: &'a [(String, String)], names: &[&str]) -> Vec<&'a str> {
+fn codings(fields: &[Field]) -> Result<Vec<Coding>, Unsupported> {
+    fn named<'a>(fields: &'a [Field], names: &[&str]) -> Vec<&'a str> {
         let named = fields.iter().filter(|f| names.contains(&f.0.as_str()));
         named.map(|f| f.1.trim()).collect()
     }
     let message = named(fields, &["grpc-encoding", "connect-content-encoding"]);
     if message.iter().any(|v| !v.eq_ignore_ascii_case("identity")) {
-        // As decode.rs cuts tokens: at most 4, each at most 32 bytes on a character boundary.
-        let cut = |v: &&str| -> String {
-            let fits = v.char_indices().take_while(|(i, c)| i + c.len_utf8() <= 32);
-            fits.map(|c| c.1).collect()
-        };
-        let codings = message.iter().take(4).map(cut).collect();
-        return Err(Unsupported { codings });
+        return Err(unsupported(message.into_iter()));
     }
     parse_codings(&named(fields, &["content-encoding"]))
 }
@@ -570,7 +635,8 @@ fn codings(fields: &[(String, String)]) -> Result<Vec<Coding>, Unsupported> {
 impl Parser for H2 {
     fn feed(&mut self, dir: Dir, t: Mono, bytes: &[u8]) -> Result<(), Stop> {
         self.seen += bytes.len() as u64;
-        self.take(dir, t, bytes)
+        let fed = self.take(dir, t, bytes);
+        fed.and_then(|()| self.resume(t))
             .map_err(|fault| self.stop(t, fault))
     }
 
@@ -580,7 +646,8 @@ impl Parser for H2 {
         if !self.stopped {
             self.seen += unsent.len() as u64;
             self.unsent = true;
-            late = match self.take(Dir::Up, t, unsent) {
+            let fed = self.take(Dir::Up, t, unsent).and_then(|()| self.resume(t));
+            late = match fed {
                 Err(fault) => Some(self.stop(t, fault)),
                 // A frame or header block the close cut short: recorded in no stream.
                 Ok(()) => Some(self.held(t))

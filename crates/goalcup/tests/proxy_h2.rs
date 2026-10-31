@@ -95,6 +95,13 @@ fn down(frames: &[Vec<u8>]) -> (Dir, Vec<u8>) {
 
 /// Feeds each step in irregular splits until a stop, then closes. The stop, if any, is returned.
 fn run(steps: &[(Dir, Vec<u8>)]) -> (Calls, Option<Stop>) {
+    let (calls, stop, late) = run_to_close(steps);
+    assert_eq!(late, None, "nothing held at the close");
+    (calls, stop)
+}
+
+/// As [`run`], and the stop the close gives for bytes held in no stream.
+fn run_to_close(steps: &[(Dir, Vec<u8>)]) -> (Calls, Option<Stop>, Option<Stop>) {
     let (rec, calls) = Recorder::for_tests(ROOM);
     let mut p = H2::new(&rec, CONN);
     let sizes = [1, 7, 2, 4096, 3, 13, 600, 9];
@@ -113,8 +120,7 @@ fn run(steps: &[(Dir, Vec<u8>)]) -> (Calls, Option<Stop>) {
     }
     // `pump::relay` ends the parser at the close whether or not it stopped, so this runs too.
     let late = Box::new(p).end(Mono::now(), EndReason::Complete, false, &[]);
-    assert_eq!(late, None, "nothing held at the close");
-    (calls, stop)
+    (calls, stop, late)
 }
 
 /// `(sid, req, meta)` of every stream of `kind`, in order.
@@ -338,7 +344,7 @@ fn an_extended_connect_stream_is_named_and_others_go_on() {
     assert_eq!(stop, None);
     let reqs = opens(&calls, StreamKind::HttpReq);
     let [(ws, ..), (next, ..)] = reqs.try_into().unwrap();
-    let want = [(GapReason::H2Unsupported, Some(16))];
+    let want = [(GapReason::H2Unsupported, Some(15))];
     assert_eq!(gaps_on(&calls, ws), want);
     assert!(data_of(&calls, ws).is_empty());
     assert!(gaps_on(&calls, next).is_empty());
@@ -411,4 +417,96 @@ fn a_table_past_1_mib_is_the_hpack_table_guard() {
     let tail = stop.tail.expect("a tail");
     let want = (&json!("hpack_table"), &json!(1048576));
     assert_eq!((&tail["guard"], &tail["limit"]), want);
+}
+
+/// A client's GOAWAY (last stream 0, a graceful close) names no client stream: the response
+/// still streaming arrives whole.
+#[test]
+fn a_client_goaway_leaves_its_streams_open() {
+    let steps = [
+        up(&[req(1, "POST", "/v1/m"), body(1, true, b"{}")]),
+        down(&[ok(1, ""), body(1, false, b"part1 ")]),
+        (Dir::Up, frame(GOAWAY, 0, 0, &[0; 8])),
+        (Dir::Down, body(1, true, b"part2")),
+    ];
+    let (calls, stop) = run(&steps);
+    assert_eq!(stop, None);
+    assert!(gaps(&calls).is_empty());
+    let [(resp, ..)] = opens(&calls, StreamKind::HttpResp).try_into().unwrap();
+    assert_eq!(data_of(&calls, resp), b"part1 part2");
+    assert_eq!(end_of(&calls, resp).0, EndReason::Complete);
+}
+
+/// DATA in flight after `RST_STREAM` is recorded in no stream: the close names its bytes.
+#[test]
+fn data_after_a_reset_is_named_at_the_close() {
+    let steps = [
+        up(&[req(1, "POST", "/v1/m"), body(1, true, b"{}")]),
+        down(&[ok(1, ""), body(1, false, b"aaa")]),
+        (Dir::Up, frame(RST, 0, 1, &8u32.to_be_bytes())),
+        (Dir::Down, body(1, true, b"bbbbbbbb")),
+    ];
+    let (calls, stop, late) = run_to_close(&steps);
+    assert_eq!(stop, None);
+    let [(resp, ..)] = opens(&calls, StreamKind::HttpResp).try_into().unwrap();
+    assert_eq!(data_of(&calls, resp), b"aaa");
+    assert_eq!(late.expect("the close names the late bytes").held, 8);
+}
+
+/// A response parsed before its request (the up leg's flush was late) still names it.
+#[test]
+fn a_response_before_its_request_is_paired() {
+    let steps = [
+        down(&[ok(1, ""), body(1, true, b"early")]),
+        up(&[req(1, "GET", "/v1/models")]),
+    ];
+    let (calls, stop) = run(&steps);
+    assert_eq!(stop, None);
+    let [(req, ..)] = opens(&calls, StreamKind::HttpReq).try_into().unwrap();
+    let [(resp, paired, _)] = opens(&calls, StreamKind::HttpResp).try_into().unwrap();
+    assert_eq!(paired, req);
+    assert_eq!(data_of(&calls, resp), b"early");
+    assert_eq!(end_of(&calls, resp).0, EndReason::Complete);
+}
+
+/// An HPACK integer with an `n`-bit prefix and `first` in the prefix byte's high bits.
+fn int(first: u8, n: u32, mut v: usize) -> Vec<u8> {
+    let max = (1 << n) - 1;
+    if v < max {
+        return vec![first | v as u8];
+    }
+    let mut out = vec![first | max as u8];
+    v -= max;
+    while v >= 128 {
+        out.push((v % 128) as u8 | 0x80);
+        v /= 128;
+    }
+    out.push(v as u8);
+    out
+}
+
+/// Decoded fields past 64 KiB are not stored and give the `http_head` GAP; the stream goes on.
+#[test]
+fn h2_fields_past_64_kib_are_the_http_head_guard() {
+    let big = vec![b'a'; 70_000];
+    let blk = [
+        block(&format!(":method=POST {API} :path=/v1/m")),
+        vec![0, 5],
+        b"x-big".to_vec(),
+        int(0, 7, big.len()),
+        big,
+        block("x-after=1"),
+    ]
+    .concat();
+    let steps = [up(&[
+        frame(HEADERS, END_HEADERS, 1, &blk),
+        body(1, true, b"{}"),
+    ])];
+    let (calls, stop) = run(&steps);
+    assert_eq!(stop, None);
+    let [(req, _, meta)] = opens(&calls, StreamKind::HttpReq).try_into().unwrap();
+    assert_eq!(meta["headers"], pairs(&format!(":method=POST {API} :path=/v1/m")));
+    assert_eq!(gaps_on(&calls, req), [(GapReason::MemoryGuard, None)]);
+    assert_eq!(data_of(&calls, req), b"{}");
+    assert_eq!(end_of(&calls, req).0, EndReason::Complete);
 }

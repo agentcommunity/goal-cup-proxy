@@ -37,7 +37,7 @@ use serde_json::{Value, json};
 use std::collections::VecDeque;
 
 /// The `http_head` guard: head bytes stored per head (and per chunked trailer section).
-const HEAD_LIMIT: usize = 64 * 1024;
+pub(crate) const HEAD_LIMIT: usize = 64 * 1024;
 /// The `upgrade_copy` guard: client bytes copied while an upgrade waits for its answer.
 const COPY_LIMIT: usize = 1 << 20;
 /// Past the head guard, framing field lines longer than this in all cannot be followed (5a).
@@ -623,6 +623,14 @@ pub(crate) struct Head {
 }
 
 impl Head {
+    /// A head decoded elsewhere (HTTP/2): only its guard state, the bytes not stored.
+    pub(crate) fn past_guard_at(over: Option<(Mono, u64)>) -> Head {
+        Head {
+            over,
+            ..Head::default()
+        }
+    }
+
     fn new(want_start: bool) -> Head {
         Head {
             want_start,
@@ -903,10 +911,16 @@ pub(crate) struct Sink {
     start: Mono,
     /// The first decoder answer other than `Ok`, and when it came.
     failed: Option<(Mono, Step)>,
-    pub(crate) trailers: Vec<(String, String)>,
+    trailers: Vec<(String, String)>,
 }
 
 impl Sink {
+    /// The trailers, with the `http_head` GAP when they passed the guard.
+    pub(crate) fn set_trailers(&mut self, fields: Vec<(String, String)>, head: &Head) {
+        head_gap(&mut self.h, head);
+        self.trailers = fields;
+    }
+
     fn data(&mut self, t: Mono, bytes: &[u8]) {
         if bytes.is_empty() {
             return;
@@ -923,7 +937,7 @@ impl Sink {
 }
 
 /// The `http_head` GAP, when a head or a trailer section passed the guard.
-fn head_gap(h: &mut StreamHandle, head: &Head) {
+pub(crate) fn head_gap(h: &mut StreamHandle, head: &Head) {
     if let Some((at, n)) = head.over {
         let tail = json!({"guard": "http_head", "limit": HEAD_LIMIT, "head": n});
         h.gap(GapReason::MemoryGuard, at, None, Some(tail));
@@ -1035,8 +1049,8 @@ impl Body {
                     pos += n;
                     *raw += n as u64;
                     if done {
-                        head_gap(&mut sink.h, head);
-                        sink.trailers = std::mem::take(&mut head.fields);
+                        let fields = std::mem::take(&mut head.fields);
+                        sink.set_trailers(fields, head);
                         return Ok((pos, true));
                     }
                 }
