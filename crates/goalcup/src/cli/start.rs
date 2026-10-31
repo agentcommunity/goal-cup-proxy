@@ -135,7 +135,10 @@ fn hand_over(ready: Ready) -> ExitCode {
     let refused =
         code == ExitCode::from(watchdog::MASK_REFUSED) && !super::status_json(&dir).exists();
     let not_started = code == ExitCode::from(watchdog::NOT_STARTED);
-    print!("{}", finish::closing(&dir, &name, &run, refused, not_started));
+    print!(
+        "{}",
+        finish::closing(&dir, &name, &run, refused, not_started)
+    );
     if !refused {
         finish::wrap_up(&dir, &mut |l| println!("{l}"));
     }

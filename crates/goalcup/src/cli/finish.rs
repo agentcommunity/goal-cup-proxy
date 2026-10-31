@@ -165,7 +165,13 @@ const SEALED_WAIT: u32 = 30;
 /// all. `refused` is the watchdog's mask refusal, which has its own text; `not_started` is its
 /// `NOT_STARTED` exit. Only the details a participant can act on; no value and no byte of the
 /// record.
-pub fn closing(entry_dir: &Path, name: &str, run: &str, refused: bool, not_started: bool) -> String {
+pub fn closing(
+    entry_dir: &Path,
+    name: &str,
+    run: &str,
+    refused: bool,
+    not_started: bool,
+) -> String {
     if refused {
         return format!("{}\n", text::mask_refused());
     }

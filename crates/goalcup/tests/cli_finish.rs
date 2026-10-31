@@ -292,7 +292,10 @@ fn a_recorder_that_died_before_ready_reads_as_not_started() {
     put(
         &entry,
         "status.json",
-        &patch(&sealed(), json!({"mode": "recording", "seal": null, "harness": null})),
+        &patch(
+            &sealed(),
+            json!({"mode": "recording", "seal": null, "harness": null}),
+        ),
     );
     let shown = goalcup::cli::finish::closing(&entry, "Agent", RUN, false, true);
     assert!(shown.contains("Agent was not started"), "{shown}");
