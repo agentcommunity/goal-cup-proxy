@@ -480,6 +480,21 @@ class StartRefusal(unittest.TestCase):
             self.assertEqual(r.seal(None)[0], "timeout")
 
 
+    def test_end_screen_count_ignores_the_no_request_warnings(self):  # a warning left on the pane is not the end screen
+        run = self.enterContext(tempfile.TemporaryDirectory())
+        for name, doc in (("settings.json", {"minutes": 1, "harness": {}, "steps": []}), ("state.json", {"pasted": 0})):
+            with open(os.path.join(run, name), "w") as f:
+                json.dump(doc, f)
+        r = padrun.Run(run, "verify")
+        for screen, want in (("No model request was written yet.", None), ("No model request was written for 10 minutes, x", None),
+                             ("No model request was written. h may not use the proxy", 0), ("3 model requests written", 3)):
+            with mock.patch.object(padrun, "wait", lambda *a: True), mock.patch.object(r, "sealed", lambda: True), \
+                    mock.patch.object(r, "pane", lambda *a, **k: screen), mock.patch.object(r, "status", lambda: {}), \
+                    mock.patch.object(r, "harness_files", lambda: None), mock.patch.object(r, "wipe_secrets", lambda **k: None):
+                r.seal(None)
+            self.assertEqual(r.st["end_screen_requests"], want, screen)
+
+
 class KillBothVerify(unittest.TestCase):
     """pad-run verify after kill-both: the row is the old entry's, so its server copy is the one compared and scanned."""
 

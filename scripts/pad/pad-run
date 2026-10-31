@@ -167,9 +167,10 @@ class Run:
             return None
         return got + (open(self.path("known-plain")).read().splitlines() if os.path.exists(self.path("known-plain")) else [])
 
-    def pane(self, keep=True, tag=""):
-        """Section 4: the screen. Only its replaced form reaches a file (watch/pane-<tag><n>.txt)."""
-        text = sh(["tmux", "capture-pane", "-p", "-J", "-t", self.tmux]).stdout
+    def pane(self, keep=True, tag="", text=None):
+        """Section 4: the screen (or the given text). Only its replaced form reaches a file (watch/pane-<tag><n>.txt)."""
+        if text is None:
+            text = sh(["tmux", "capture-pane", "-p", "-J", "-t", self.tmux]).stdout
         values = self.known() if keep else None
         if values is not None:
             safe, hits = replace_known(text, values)
@@ -459,14 +460,11 @@ class Run:
                 self.fault("seal", exit="timeout")
         ok = wait(self.sealed, self.left() - 30, 5)
         values = self.known()
-        if out and values is not None:  # the number is read only from files in the output folder: keep the seal's own words, masked
-            n = self.st["panes"] = self.st.get("panes", 0) + 1
-            safe, hits = replace_known(out, values)
-            self.st["screen_known"] = self.st.get("screen_known", 0) + hits
-            write(self.path("watch", "pane-s%d.txt" % n), safe, 0o644)
+        if out:  # the number is read only from files in the output folder: keep the seal's own words, masked
+            self.pane(tag="s", text=out)
         screen = (out if values is not None else "") + "\n" + self.pane()
         found = re.findall(r"([\d,]+) model requests? written", screen)
-        self.st["end_screen_requests"] = int(found[-1].replace(",", "")) if found else 0 if "No model request was written" in screen else None
+        self.st["end_screen_requests"] = int(found[-1].replace(",", "")) if found else 0 if re.search(r"No model request was written\.", screen) else None
         self.harness_files()
         self.wipe_secrets(home=ok or self.dead())  # an unsealed entry may still be reading the home: wipe leaves it
         return ("ok", "sealed %s, %s model requests written" % (why, pc.dig(self.status(), "s4_requests"))
