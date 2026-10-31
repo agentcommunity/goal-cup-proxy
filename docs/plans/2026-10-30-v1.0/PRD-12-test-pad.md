@@ -1856,3 +1856,10 @@ taken; "rejected" says why. Fixes for other files are made by those files' owner
 - `orphans_in_gaps` is null when `history_complete` is missing or fails, 0 for pass, skip or warn.
 - Open: regenerate K11b with a gap that has no off time, so the covered-orphan rule is exercised from the record and not only through `expect_gaps`.
 - **Rig order after the start-folder rule.** `goalcup start` needs a folder holding only `.env.local` and `.gitignore`, with `GOALCUP_HOME` (now `<run>/gc/home`) not beside it. The git init, local identity, `pad-setup-check.sh` and the planted remote therefore go in at 0:04, after the ready line and before the paste. Do not move them before start.
+
+### 2026-10-31, replan after slice 9 rung 1 readiness (merge fe40990f)
+
+- **Landed:** the micro run now passes the folder checks of `goalcup start` (PRD-10 section 3 step 2). `GOALCUP_HOME` moved off the project folder; the git init, `pad-setup-check.sh` and the planted remote go in after the ready line. Review fixes: the planted remote password is wiped and the seed flag is set only after the seed succeeds.
+- **Still not shown:** rung 1 stops at "start not built" until a `goalcup` build is on integration. Pad passing the folder checks is not a pass of start. If PRD-10 changes the folder rule, the pad changes with it (section 3 step 2 is the one source).
+- **Size, `wc -l` at fe40990f:** `scripts/pad/` outside fixtures is 4,344 lines against the PRD-00 row of about 1,350 to 1,450; `pad-run` 1,006, `check.py` 762, `pad` 736, `test_pad.py` 492, `table` 193, `selftest` 188. This slice added about 40 net. The overage stays the owner question already logged; no row is raised here.
+- No locked ledger item is touched.

@@ -2394,3 +2394,8 @@ kept and now cites BUILD-PROMPT section 5, since B3 no longer carries it.
   `Board::sealed` before the queue sees a real entry. Acceptance of the queue on a real recorder run
   depends on both.
 - No locked ledger item is touched.
+
+### 2026-10-31, replan after PRD-12 slice 9 (merge fe40990f)
+
+- **Size report, PRD-12** (`wc -l` on integration): `scripts/pad/` outside fixtures 4,344 lines against the PRD-00 row of about 1,350 to 1,450 (roughly three times). Slice 9 added about 40 net. No further code slice is planned; carry to the end-of-build report and the logged owner question.
+- **Gate effect:** none on order. Phase 1a rung 1 clears the `goalcup start` folder checks but still needs a `goalcup` build on integration to run. No seam change. No locked ledger item is touched.
