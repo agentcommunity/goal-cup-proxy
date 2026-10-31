@@ -129,9 +129,10 @@ fn reply(s: Sh, a: A) -> (&'static str, String) {
             )
         }
         (Gemini, _) => {
-            let c =
-                json!({"candidates": [{"content": {"role": "model", "parts": [{"text": text}]}}]});
-            (false, c.to_string())
+            // Streamed, with a thought part before the answer; the resent turn has no thought.
+            let parts = json!([{"text": "fake thought", "thought": true}, {"text": text}]);
+            let c = json!({"candidates": [{"content": {"role": "model", "parts": parts}}]});
+            (true, sse(&[c]))
         }
         (Anthropic, Text(_)) => {
             // Streamed, with a thinking block before the answer; the resent turn has no thinking.
@@ -340,8 +341,8 @@ fn a_clean_chain_passes_in_every_request_shape() {
         );
         assert_eq!((n(&h, "checked"), missing(&h)), (2, (0, 0, 0)));
     }
-    // Answers streamed with a thinking block still match the text a request resends.
-    for s in [Anthropic, Chat] {
+    // Answers streamed with a thinking block (Gemini: a thought part) still match the text a request resends.
+    for s in [Anthropic, Chat, Gemini] {
         let d = rec("h-clean-text", |e| drop(chain(e, s, true, 3, None)));
         assert_eq!(missing(&verdict(&d, "pass", 0)), (0, 0, 0));
     }
@@ -377,6 +378,34 @@ fn a_call_dropped_with_no_gap_fails_and_a_named_gap_over_it_names_it() {
         let d = rec("h-down", |e| drop(chain(e, s, false, 5, Some((j, true)))));
         assert_eq!(missing(&verdict(&d, "named", 1)), (1, 0, 0));
     }
+}
+
+/// A GAP on a stream that is no model call (a download) lies between two requests; a call
+/// dropped there with no GAP of its own is still a `fail`.
+#[test]
+fn a_gap_on_an_unrelated_stream_does_not_cover_a_dropped_call() {
+    let d = rec("h-unrelated", |e| {
+        let all: Vec<A> = (0..5).map(Call).collect();
+        for (i, &a) in all.iter().enumerate() {
+            if i != 1 {
+                call(e, Chat, T, &all[..i], a);
+                continue;
+            }
+            let (c, done) = (e.conn(), EndReason::Complete);
+            let head = json!({"method": "GET", "path": "/file", "ver": "1.1", "masked": [],
+                "coding": null, "headers": []});
+            let q = e.open(StreamKind::HttpReq, c, 0, head);
+            e.end(q, done, 0, Value::Null);
+            let head = json!({"status": 200, "ver": "1.1", "headers": [], "masked": [],
+                "coding": null, "decoded": true});
+            let p = e.open(StreamKind::HttpResp, c, q, head);
+            e.gap(p, GapReason::MemoryGuard, 10, 0, 0, json!({"guard": "held_bytes"}));
+            e.end(p, done, 0, Value::Null);
+            e.end(c, done, 0, json!({"up": 90, "down": 90}));
+            e.idle(1_000);
+        }
+    });
+    assert_eq!(missing(&verdict(&d, "fail", 2)), (1, 0, 0));
 }
 
 #[test]

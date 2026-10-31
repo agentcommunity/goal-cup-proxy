@@ -51,7 +51,9 @@ fn turn(m: &Map<String, Value>) -> Option<Turn> {
             if p.get("type").and_then(Value::as_str) == Some("tool_use") {
                 ids.extend(id(p, "id"));
             }
-            text.extend(p.get("text").and_then(Value::as_str));
+            if p.get("thought") != Some(&Value::Bool(true)) {
+                text.extend(p.get("text").and_then(Value::as_str));
+            }
             if let Some(f) = p.get("functionCall") {
                 fcs.push(hash(format!("{}{}", f["name"], f["args"]).as_bytes()));
             }
@@ -144,7 +146,7 @@ pub struct Hist {
     /// The anchored (empty) chains, in the order they began.
     zeros: Vec<usize>,
     answers: HashSet<Key>,
-    /// Wall spans of GAPs on model streams.
+    /// Wall spans of GAPs on streams of model calls: POST requests, their responses, WebSockets.
     gaps: Vec<(u64, u64)>,
     /// Requests skipped: previous-response id only, and undecoded. The compacted turns are
     /// counted at judge.
@@ -159,7 +161,8 @@ pub struct Sink {
     calls: Calls,
     boot: u64,
     open: HashMap<(u64, u64), St>,
-    /// Every HTTP and WebSocket stream of the record, by boot and sid.
+    /// The streams of possible model calls, by boot and sid: POST requests, the responses to
+    /// candidate requests, WebSocket streams. A GAP on one covers a missed call.
     net: HashSet<(u64, u64)>,
     /// Candidate requests whose response is still to come.
     cand: HashSet<(u64, u64)>,
@@ -227,24 +230,26 @@ impl Sink {
 
     fn open(&mut self, sid: u64, skind: StreamKind, req: u64, meta: &[u8]) {
         let b = self.boot;
-        if matches!(
-            skind,
-            StreamKind::HttpReq | StreamKind::HttpResp | StreamKind::WsUp | StreamKind::WsDown
-        ) {
-            // Any GAP on these covers a missed call, also over a body the pass never opened.
-            self.net.insert((b, sid));
-        }
         let m: Value = serde_json::from_slice(meta).unwrap_or_default();
         let role = match skind {
-            StreamKind::HttpReq if m["method"] == "POST" => Role::Req,
-            StreamKind::HttpResp if m["decoded"] != false => {
+            StreamKind::HttpReq if m["method"] == "POST" => {
+                self.net.insert((b, sid));
+                Role::Req
+            }
+            StreamKind::HttpResp => {
                 let pending = self
                     .open
                     .get(&(b, req))
                     .is_some_and(|s| s.role == Role::Req);
-                if !(self.cand.remove(&(b, req)) || pending) {
+                if !(self.cand.contains(&(b, req)) || pending) {
                     return;
                 }
+                // A GAP on a model call's response covers a missed call, decoded or not.
+                self.net.insert((b, sid));
+                if m["decoded"] == false {
+                    return;
+                }
+                self.cand.remove(&(b, req));
                 let sse = |h: &Value| {
                     let ct = h[0]
                         .as_str()
@@ -255,8 +260,13 @@ impl Sink {
                 };
                 Role::Resp(m["headers"].as_array().is_some_and(|h| h.iter().any(sse)))
             }
-            StreamKind::WsUp => Role::Up,
-            StreamKind::WsDown => Role::Down,
+            StreamKind::WsUp | StreamKind::WsDown => {
+                self.net.insert((b, sid));
+                match skind {
+                    StreamKind::WsUp => Role::Up,
+                    _ => Role::Down,
+                }
+            }
             _ => return,
         };
         let pend = role == Role::Req;

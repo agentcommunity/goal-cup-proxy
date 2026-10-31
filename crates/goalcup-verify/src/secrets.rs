@@ -164,20 +164,19 @@ pub fn answer_text(v: &Value, out: &mut String) {
 }
 
 fn join(v: &Value, in_delta: bool, answer: bool, out: &mut String) {
-    let any: &[&str] = if answer {
-        &["delta", "text"]
-    } else {
-        &["delta", "text", "partial_json"]
-    };
-    let inner: &[&str] = if answer {
-        &["content"]
-    } else {
-        &["content", "reasoning_content", "thinking", "arguments"]
+    let [any, inner]: [&[&str]; 2] = match answer {
+        true => [&["delta", "text"], &["content"]],
+        false => [
+            &["delta", "text", "partial_json"],
+            &["content", "reasoning_content", "thinking", "arguments"],
+        ],
     };
     match v {
         Value::Object(m) => {
             let kind = m.get("type").and_then(Value::as_str).unwrap_or_default();
-            if answer && (kind.contains("reasoning") || kind.contains("thinking")) {
+            // Reasoning items and Gemini `"thought": true` parts are not the answer.
+            let skip = kind.contains("reasoning") || kind.contains("thinking");
+            if answer && (skip || m.get("thought") == Some(&Value::Bool(true))) {
                 return;
             }
             m.iter().for_each(|(k, v)| match v.as_str() {
