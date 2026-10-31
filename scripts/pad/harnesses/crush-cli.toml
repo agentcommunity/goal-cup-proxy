@@ -1,0 +1,25 @@
+# Pad data for Crush (PRD-12 section 6): test data, never connector data; goalcup never reads it.
+# Vendor pages read 31 Oct 2026: https://github.com/charmbracelet/crush/blob/v0.99.0/README.md (npm i -g @charmland/crush,
+# custom provider type "completions" with base_url, "$VAR" in api_key, DeepSeek at https://api.deepseek.com/v1 with
+# DEEPSEEK_API_KEY, VERCEL_API_KEY for the Vercel AI Gateway). The README names no config path for crush.json and no quit key.
+# Read from docs only, not run against a live harness: every key below, the "models" selection block, the model ids and
+# the quit key (Ctrl-C twice is a guess).
+version = "0.99.0"
+version_cmd = "crush --version"
+install = "npm i -g @charmland/crush@0.99.0"
+key_kind = "deepseek"
+key_route = "env"
+key_env = "DEEPSEEK_API_KEY"
+# Pad data for the dodger copy only (section 2): the custom provider calls https://api.deepseek.com.
+model_host = "api.deepseek.com"
+exit_keys = '\003\003'
+keep_going = true
+
+[direct]
+# XDG_CONFIG_HOME is {home}/.config, so this is Crush's global crush.json.
+files = { ".config/crush/crush.json" = "direct/crush-cli-config.json" }
+
+[gateway]
+files = { ".config/crush/crush.json" = "gateway/crush-cli-config.json" }
+key_route = "env"
+key_env = "VERCEL_API_KEY"

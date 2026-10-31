@@ -1,0 +1,18 @@
+# Pad data for Kimi Code (PRD-12 section 6): test data, never connector data; goalcup never reads it.
+# Vendor pages read 31 Oct 2026: https://github.com/MoonshotAI/kimi-cli (npm i -g @moonshot-ai/kimi-code; the config page it
+# links, moonshotai.github.io/kimi-code, did not resolve from the writing session). The connector header says provider
+# keys and base URLs are read from config.toml only, so the key line below writes the whole config.toml (a TOML string
+# with \n) in the 0600 key file; no snippet file holds a key.
+# Read from docs only, not run against a live harness: the install package pin, the config.toml shape (type
+# "openai_legacy", [models.*], default_model), the model id and /exit. No [gateway] table: no gateway page read, n/a.
+version = "2.4.1"
+version_cmd = "kimi --version"
+install = "npm i -g @moonshot-ai/kimi-code@2.4.1"
+key_kind = "deepseek"
+key_route = "file"
+key_file = "{home}/config.toml"
+key_line = "default_model = \"ds\"\n[providers.deepseek]\ntype = \"openai_legacy\"\nbase_url = \"https://api.deepseek.com/v1\"\napi_key = \"{key}\"\n[models.ds]\nprovider = \"deepseek\"\nmodel = \"deepseek-flash\"\nmax_context_size = 128000"
+# Pad data for the dodger copy only (section 2): the provider calls https://api.deepseek.com.
+model_host = "api.deepseek.com"
+exit_keys = '/exit\r'
+keep_going = true
