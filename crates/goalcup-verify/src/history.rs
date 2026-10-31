@@ -367,7 +367,12 @@ impl Sink {
         let ds: Vec<u64> = turns
             .iter()
             .map(|t| {
-                (t.iter()).fold(0, |d, k| mix(d, u64::from_le_bytes(k.0[..8].try_into().unwrap_or_default())))
+                (t.iter()).fold(0, |d, k| {
+                    mix(
+                        d,
+                        u64::from_le_bytes(k.0[..8].try_into().unwrap_or_default()),
+                    )
+                })
             })
             .collect();
         self.h.seen += 1;
@@ -465,7 +470,11 @@ pub fn judge(h: &Hist, t: &CallTable, covers: &[Cover]) -> Check {
         }
     }
     let mut names = vec![String::new(); n];
-    for r in h.reqs.iter().filter(|r| r.first && home[r.chain] == r.chain) {
+    for r in h
+        .reqs
+        .iter()
+        .filter(|r| r.first && home[r.chain] == r.chain)
+    {
         let own = format!("chain-{}", r.chain + 1);
         names[r.chain] = thread[r.chain].map_or(own, String::from);
     }

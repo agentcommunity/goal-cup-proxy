@@ -323,7 +323,13 @@ fn a_clean_chain_passes_in_every_request_shape() {
 
 #[test]
 fn a_call_dropped_with_no_gap_fails_and_a_named_gap_over_it_names_it() {
-    for (s, j) in [(Chat, 1), (Anthropic, 1), (Responses, 1), (Chat, 2), (Anthropic, 2)] {
+    for (s, j) in [
+        (Chat, 1),
+        (Anthropic, 1),
+        (Responses, 1),
+        (Chat, 2),
+        (Anthropic, 2),
+    ] {
         let mut sids = vec![];
         let d = rec("h-drop", |e| sids = chain(e, s, false, 5, Some((j, false))));
         let h = verdict(&d, "fail", 2);
@@ -380,7 +386,13 @@ fn a_request_body_lost_to_a_gap_does_not_switch_off_its_thread() {
     let (_, v) = check(&d, &[]);
     let h = item(&v, "history_complete");
     assert_eq!(h["result"], "pass", "{h}");
-    assert_eq!((h["facts"]["skipped"]["undecoded"].as_u64(), h["facts"]["skipped"]["compacted"].as_u64()), (Some(1), Some(0)));
+    assert_eq!(
+        (
+            h["facts"]["skipped"]["undecoded"].as_u64(),
+            h["facts"]["skipped"]["compacted"].as_u64()
+        ),
+        (Some(1), Some(0))
+    );
     assert_eq!((n(h, "checked"), missing(h)), (3, (0, 0, 0)));
 }
 
