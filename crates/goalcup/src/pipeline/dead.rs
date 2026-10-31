@@ -147,9 +147,17 @@ fn close(
         }
     }
     let entry = dir.file_name().and_then(|n| n.to_str()).unwrap_or_default();
+    let kept = last_kept(&dir.join("rec"))?;
+    // The dead boot's COUNT recovery writes, put in `counts.jsonl` first when its line at the
+    // last LINK is missing, so the totals here and that COUNT are one figure.
+    if let Some(k) = kept.as_ref().filter(|k| k.seal.is_none())
+        && counts::count_at(dir, k.durable.seq).is_none()
+        && let Ok(c) = serde_json::from_slice::<Value>(&counts::recount_at(dir, k.durable.seq))
+    {
+        CountsLog::open(dir).append(k.durable.seq, &c, 0)?;
+    }
     let mut totals = counts::entry_totals(dir);
     let tail = tail(rv.lineless);
-    let kept = last_kept(&dir.join("rec"))?;
     if let Some(k @ Kept { seal: Some(s), .. }) = &kept {
         let reason = serde_json::from_value(s["reason"].clone()).unwrap_or(SealReason::Recovered);
         let workspace_head = s["workspace_head"].as_str().map(str::to_string);

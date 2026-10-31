@@ -172,6 +172,41 @@ fn a_dead_entry_closes_once_with_one_gap_and_the_files_totals() {
     assert_eq!(files(&dir), after);
 }
 
+/// Points 5 and 6 (section 11 "In null mode"): with `counts.jsonl` behind the index (the recorder
+/// died between the index line and the append, or a power loss), the seal's totals are the
+/// recovery COUNT's, which `entry_totals` and the closed entry's `status.json` also carry.
+#[test]
+fn a_counts_log_behind_the_index_still_seals_the_real_totals() {
+    for null in [false, true] {
+        let dir = dead_entry();
+        std::fs::write(dir.join("counts.jsonl"), b"").unwrap();
+        let facts = if null {
+            let prev = Prev::Cause(Cause::NullMode {
+                exits: 1,
+                last: None,
+            });
+            seal_null_for_tests(&dir, SealReason::HarnessExit, prev).unwrap()
+        } else {
+            let Ok(Closed::Sealed(facts)) = close_dead_entry(&dir) else {
+                panic!("the dead entry is sealed");
+            };
+            facts
+        };
+        let (_, seal) = down_and_seal(&dir);
+        let totals = entry_totals(&dir);
+        assert_eq!(totals.counts.wire_bytes, BODY.len() as u64);
+        assert_eq!(
+            seal["totals"],
+            serde_json::to_value(&totals.counts).unwrap()
+        );
+        assert_eq!(facts.totals, totals);
+        if !null {
+            let st = Status::read(&dir).expect("status.json");
+            assert_eq!(st.written.counts, totals.counts);
+        }
+    }
+}
+
 /// Points 3 and 6 (section 11 "In null mode"): the null recorder's seal writes one
 /// `recorder_down` gap with its `null_mode` cause and the seal with the real reason.
 #[test]
