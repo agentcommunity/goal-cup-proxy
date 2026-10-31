@@ -1,0 +1,30 @@
+# Pad data for Qwen Code (PRD-12 section 6): test data, never connector data; goalcup never reads it.
+# Vendor pages read 31 Oct 2026: https://github.com/QwenLM/qwen-code/blob/v0.26.4/docs/users/configuration/auth.md
+# (modelProviders.openai entry, security.auth.selectedType, key from ~/.qwen/.env),
+# https://github.com/QwenLM/qwen-code/blob/v0.26.4/docs/users/configuration/model-providers.md (DeepSeek entry: baseUrl
+# https://api.deepseek.com/v1, envKey DEEPSEEK_API_KEY), https://qwenlm.github.io/qwen-code-docs/en/users/features/commands/
+# (/quit), https://vercel.com/docs/ai-gateway/coding-agents/qwen (gateway entry), https://api-docs.deepseek.com/quick_start/pricing
+# (the model id).
+# Measured in a build box 31 Oct 2026: the install line prints 0.26.4.
+# Read from docs, not run against a live harness: the key route, the model ids, any trust-folder screen, /quit.
+version = "0.26.4"
+version_cmd = "qwen --version"
+install = "npm i -g @qwen-code/qwen-code@0.26.4"
+key_kind = "deepseek"
+# QWEN_HOME is the .qwen folder itself, so {home}/.env is ~/.qwen/.env, which Qwen loads when no other .env is found.
+key_route = "file"
+key_file = "{home}/.env"
+key_line = "DEEPSEEK_API_KEY={key}"
+# Pad data for the dodger copy only (section 2): the DeepSeek entry calls https://api.deepseek.com.
+model_host = "api.deepseek.com"
+exit_keys = '/quit\r'
+keep_going = true
+
+[direct]
+files = { "settings.json" = "direct/qwen-cli-settings.json" }
+
+[gateway]
+files = { "settings.json" = "gateway/qwen-cli-settings.json" }
+key_route = "file"
+key_file = "{home}/.env"
+key_line = "AI_GATEWAY_API_KEY={key}"
