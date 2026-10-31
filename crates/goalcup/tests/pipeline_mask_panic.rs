@@ -8,7 +8,7 @@
 mod common;
 
 use bytes::Bytes;
-use common::recorder::{records, wait_settled};
+use common::{HANG, within};
 use goalcup::connector::MaskRule;
 use goalcup::mask::Masker;
 use goalcup::pipeline::{
@@ -18,6 +18,7 @@ use goalcup_format::{FLAG_FIN, Record};
 use serde_json::{Value, json};
 use std::io::Read;
 use std::path::Path;
+use std::time::Duration;
 
 /// The masker in force with no connector rules (the S2 stub until PRD-05's core masker merges).
 fn masker() -> Masker {
@@ -44,13 +45,38 @@ fn open(rec: &Recorder, kind: StreamKind) -> StreamHandle {
 /// ended, with nothing held: everything offered before it is written and synced.
 fn settle(rec: &Recorder, posts: u64) {
     open(rec, StreamKind::HttpReq).end(rec.now(), EndReason::Complete, None);
-    wait_settled(rec, move |c| c.http_post >= posts);
+    let rec = rec.clone();
+    within(HANG, move || {
+        while rec.durable().borrow().totals.counts.http_post < posts || rec.live().held_bytes > 0 {
+            std::thread::sleep(Duration::from_millis(100));
+        }
+    });
 }
 
 /// The index file of a part file.
 fn index_of(part: &Path) -> std::path::PathBuf {
     let name = part.file_name().unwrap().to_str().unwrap();
     part.with_file_name(format!("{}.idx", name.trim_end_matches(".gcr.zst")))
+}
+
+/// Every record of the entry up to its last index line.
+fn records(dir: &Path) -> Vec<Record> {
+    let mut out = Vec::new();
+    for part in goalcup_format::read::part_files(&dir.join("rec")).unwrap() {
+        let Some(last) = goalcup_format::read::read_index(&index_of(&part))
+            .unwrap()
+            .pop()
+        else {
+            continue;
+        };
+        let f = std::fs::File::open(&part).unwrap().take(last.c_end);
+        out.extend(
+            goalcup_format::read::decode(f)
+                .unwrap()
+                .map(|i| i.unwrap().rec),
+        );
+    }
+    out
 }
 
 /// Every byte of the part files as stored and as decompressed (to the end of what is flushed),
