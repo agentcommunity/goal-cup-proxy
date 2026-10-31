@@ -1,15 +1,16 @@
 //! PRD-09's usage test (ledger B10): a run 1 shaped entry, scaled down (PRD-09 section 8), read
 //! through seam U1 only: wire cases and, under `codex-cli` and `claude-code-cli`, the native leg
-//! and join. Every value is an obvious fake; the panic case and the output files come with
-//! `usage::run`.
+//! and join, and the files `usage` writes. Every value is an obvious fake; the panic hook is the
+//! binary's (PRD-08).
 
 mod common;
 
-use common::{Entry, edit_event, read_records};
+use common::{ENTRY, Entry, edit_event, read_records, tmp, write_raw};
+use goalcup_format::read::part_files;
 use goalcup_format::{EndReason, FLAG_FIN, GapReason, Record, StreamKind};
 use goalcup_verify::usage::{CallRow, CallTable, Calls, Join, Kind, Outcome, Tokens};
 use serde_json::{Value, json};
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, fs, path::Path, path::PathBuf, process::Command};
 
 /// Planted in prompts, outputs and error messages; no row may hold it (point 4).
 const MARK: &str = "zebra-lantern-planted-text";
@@ -189,6 +190,7 @@ fn run1(name: &str) -> (Vec<Record>, BTreeMap<&'static str, Five>) {
     let planted = planted
         .into_iter()
         .chain([("fake-http-a", th), ("fake-claude", tc)]);
+    e.count();
     (read_records(&e.seal().join("rec")), planted.collect())
 }
 
@@ -208,7 +210,8 @@ fn rollout(e: &mut Entry, id: &str, parent: Option<&str>, at: &[&str]) {
             "last_token_usage": {"input_tokens": 9, "output_tokens": 2, "total_tokens": 11}}}});
         f += &format!("{v}\n");
     }
-    let path = format!("sessions:2026/11/07/rollout-{id}.jsonl");
+    // The folder holds MARK too: a session path can name the participant's folders (point 4).
+    let path = format!("sessions:{MARK}/rollout-{id}.jsonl");
     stream(e, StreamKind::Native, &path, &f);
 }
 
@@ -331,7 +334,6 @@ fn totals_equal_the_planted_sum_and_repeat() {
 #[test]
 fn native_leg_joins_codex_threads() {
     let mut recs = run1("u-native").0;
-    let codex = |v: &mut Value| v["connector"] = "codex-cli".into();
     edit_event(&mut recs, "start", 0, codex);
     let t = table(&recs);
     let th = |id| t.threads.iter().find(|x| x.id == id).unwrap();
@@ -342,8 +344,12 @@ fn native_leg_joins_codex_threads() {
     let ok = ["fake-ws-a", "fake-ws-b", "fake-ws-e", "fake-http-a"];
     assert_eq!(joined(&t, Join::Matched), ok);
     assert_eq!(joined(&t, Join::Unattributed), ["fake-claude"]);
-    // Point 4: no wire or native row, and no thread, holds text from a body or a session file.
-    assert!(!format!("{t:?}").contains(MARK));
+    // Point 4: no row, and no thread, holds text from a body or a session file (`path` is U1's).
+    let bare = t.rows.iter().map(|r| CallRow {
+        path: None,
+        ..r.clone()
+    });
+    assert!(!format!("{:?}", (bare.collect::<Vec<_>>(), &t.threads)).contains(MARK));
 }
 
 /// Point 2: a Claude Code subagent counts wherever its transcript sits under its session's
@@ -353,7 +359,8 @@ fn every_claude_code_subagent_transcript_counts() {
     let mut e = Entry::new("u-claude");
     let files = "S S/subagents/agent-a S/subagents/workflows/w/agent-b";
     for (k, f) in files.split(' ').enumerate() {
-        let v = json!({"type": "assistant", "timestamp": "2300-01-01T00:00:00Z", "message": {"id": k.to_string(),
+        let at = ["2300-01-01T00:00:00Z", "2026-11-07T00:00:00Z"][k.min(1)];
+        let v = json!({"type": "assistant", "timestamp": at, "message": {"id": k.to_string(),
             "usage": {"input_tokens": 3}, "content": MARK}});
         let (path, body) = (format!("transcripts:p/{f}.jsonl"), format!("{v}\n"));
         stream(&mut e, StreamKind::Native, &path, &body);
@@ -378,4 +385,119 @@ fn every_claude_code_subagent_transcript_counts() {
 fn joined(t: &CallTable, j: Join) -> Vec<&str> {
     let rows = t.rows.iter().filter(|r| r.join == Some(j));
     rows.flat_map(|r| r.model_requested.as_deref()).collect()
+}
+
+fn codex(v: &mut Value) {
+    v["connector"] = "codex-cli".into();
+}
+
+fn json(s: &str) -> Value {
+    serde_json::from_str(s).unwrap()
+}
+
+/// The Codex run 1 entry as a folder; `torn` loses its seal LINK and the end of its last frame.
+fn codex_entry(name: &str, torn: bool) -> PathBuf {
+    let (mut recs, dir) = (run1(name).0, tmp(name));
+    let rec = dir.join("rec");
+    fs::create_dir_all(&rec).unwrap();
+    edit_event(&mut recs, "start", 0, codex);
+    recs.truncate(recs.len() - usize::from(torn));
+    write_raw(&rec, &recs, None);
+    let last = part_files(&rec).unwrap().pop().unwrap();
+    let mut bytes = fs::read(&last).unwrap();
+    bytes.truncate(bytes.len() - 8 * usize::from(torn));
+    fs::write(last, bytes).unwrap();
+    dir
+}
+
+/// What `usage <path> --json --out <new folder>` gave: exit code, stdout, stderr, the two files.
+#[derive(Debug, PartialEq)]
+struct Ran {
+    code: Option<i32>,
+    stdout: String,
+    stderr: String,
+    sum: String,
+    calls: String,
+}
+
+fn run_usage(path: &Path) -> Ran {
+    let out = tmp("u-out");
+    let (p, o) = (path.to_str().unwrap(), out.to_str().unwrap());
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_goalcup-verify"));
+    let got = cmd
+        .args(["usage", p, "--json", "--out", o])
+        .output()
+        .unwrap();
+    let text = |b: &[u8]| String::from_utf8_lossy(b).into_owned();
+    let file =
+        |end: &str| fs::read_to_string(out.join(format!("{ENTRY}{end}"))).unwrap_or_default();
+    Ran {
+        code: got.status.code(),
+        stdout: text(&got.stdout),
+        stderr: text(&got.stderr),
+        sum: file(".json"),
+        calls: file(".calls.jsonl"),
+    }
+}
+
+#[test]
+fn usage_files_repeat_and_add_up() {
+    let dir = codex_entry("u-files", false);
+    let (a, b) = (run_usage(&dir), run_usage(&dir));
+    assert_eq!(a, b);
+    assert_eq!(a.code, Some(0));
+    let (sum, lines): (Value, Vec<Value>) = (json(&a.sum), a.calls.lines().map(json).collect());
+    let said = |l: &&Value| l["k"] == "call" && !l["usage_from"].is_null();
+    for k in ["input", "cached", "cache_write", "output", "reasoning"] {
+        let col = lines.iter().filter(said);
+        let got = col.filter_map(|l| l[k].as_u64()).reduce(|a, b| a + b);
+        assert_eq!(sum["tokens"]["merged"][k].as_u64(), got, "{k}");
+    }
+    let calls = CALLS.split_whitespace().count();
+    assert_eq!(sum["coverage"]["wire_calls"], calls);
+    // Which subagent used which model is in the summary's thread rows, not only in the calls file.
+    let kid = sum["threads"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["id"] == KID)
+        .unwrap();
+    assert_eq!(kid["models"]["fake-http-a-dated"], 1);
+}
+
+/// Point 3 in the reader: a decode error partway through an entry still gives the summary of what
+/// came, marked `read_error` with a line on stderr, never a clean-looking partial count.
+#[test]
+fn a_corrupt_entry_is_marked_not_silent() {
+    let dir = codex_entry("u-corrupt", false);
+    let first = part_files(&dir.join("rec")).unwrap().remove(0);
+    let mut bytes = fs::read(&first).unwrap();
+    let at = bytes.len() * 3 / 8;
+    bytes[at..at + 16].fill(0xA5);
+    fs::write(first, bytes).unwrap();
+    let ran = run_usage(&dir);
+    let ok = ran.code == Some(0) && json(&ran.sum)["read_error"] == true;
+    assert!(
+        !ran.stderr.is_empty() && !ran.stderr.contains(MARK) && ok,
+        "{ran:?}"
+    );
+}
+
+/// Point 4 on every path: the whole entry, a torn copy of it (exit 0, not sealed), a missing path.
+#[test]
+fn no_record_text_in_any_output() {
+    let check = |path: PathBuf, code: i32, sealed: bool| {
+        let ran = run_usage(&path);
+        let text = [&ran.stdout, &ran.stderr, &ran.sum, &ran.calls]
+            .map(String::as_str)
+            .concat();
+        assert_eq!(ran.code, Some(code), "{text}");
+        assert!(!text.is_empty() && !text.contains(MARK));
+        if code == 0 {
+            assert_eq!(json(&ran.sum)["sealed"], sealed);
+        }
+    };
+    check(codex_entry("u-whole", false), 0, true);
+    check(codex_entry("u-torn", true), 0, false);
+    check(tmp("u-none").join("absent"), 3, false);
 }
