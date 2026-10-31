@@ -12,6 +12,7 @@ pub mod start;
 pub mod status;
 pub mod text;
 pub mod time_left;
+pub mod upload;
 
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
