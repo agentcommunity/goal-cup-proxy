@@ -47,7 +47,7 @@ lessons lane (PRD-17); read by the deletion gate (PRD-17 Acceptance, checks 1 to
 | L-T2 | 2.2 | A: lessons_tls::ca_constraints_validity_and_leaf_shape | PRD-17 | open | - |
 | L-T3 | 2.2 | A: proxy_tls.rs (PRD-03); A: lessons_tls::untrusted_upstream_reaches_client_unchanged | PRD-03, PRD-17 | open | - |
 | L-T4 | 2.2 | A: lessons_tls::ca_files_are_new_0600_and_never_follow_a_link (run-ca.pem and bundle.pem only; the `rec/run-ca.key` case is pending until PRD-02's writer is on integration) | PRD-17 | open | - |
-| L-T5 | 2.2 | A: lessons_tls::bundle_system_store_holds_roots; A: lessons_tls::bundle_holds_certificates_only_with_the_run_ca_first; A: lessons_tls::bundle_store_without_a_root_is_refused; A: lessons_tls::bundle_written_privately_never_over_an_existing_entry; R: RR5 | PRD-17 | open | - |
+| L-T5 | 2.2 | A: lessons_tls::bundle_holds_certificates_only_with_the_run_ca_first; A: lessons_tls::ca_files_are_new_0600_and_never_follow_a_link; R: RR5 | PRD-17 | open | - |
 | L-T6 | 2.2 | A: connector_launch.rs (PRD-11) | PRD-11 | open | - |
 | L-T7 | 2.2 | A: proxy_tls.rs (PRD-03, ALPN mirror matrix) | PRD-03 | open | - |
 | L-T8 | 2.2 | A: proxy_tls.rs (PRD-03) | PRD-03 | open | - |
