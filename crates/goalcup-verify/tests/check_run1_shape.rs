@@ -6,8 +6,8 @@ mod common;
 
 use common::run1::{Shape, run1};
 use common::*;
-use goalcup_format::{EndReason, StreamKind, hex};
 use goalcup_format::read::{part_files, read_index};
+use goalcup_format::{EndReason, StreamKind, hex};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};

@@ -60,13 +60,29 @@ fn post(e: &mut Entry, id: &str, k: u64, limited: bool) {
     e.end(c, done, 0, json!({"up": 900, "down": 900}));
 }
 
-/// A tunnel to a host of `kind` lasting `ms`; only its GAP says it was there.
-fn tunnel(e: &mut Entry, host: &str, kind: &str, ms: u64) {
+/// A tunnel to a host of `kind`; only its GAP says it was there. It lasts `ms` and advances the
+/// clock, unless `back` is set: then its GAP reaches back `ms` from now and nothing advances.
+fn tunnel(e: &mut Entry, host: &str, kind: &str, ms: u64, back: bool) {
     let meta = json!({"host": host, "port": 443, "mode": "tunnel", "listed": "shared",
         "kind": kind, "reason": "pinned", "alpn": null, "tls": null,
         "fingerprint": "0123456789abcdef"});
     let s = e.open(StreamKind::Conn, 0, 0, meta);
-    e.gap(s, GapReason::Pinned, ms, 0, 2_561, Value::Null);
+    if back {
+        let end = e.clock.now();
+        e.put(Record::Gap {
+            sid: s,
+            reason: GapReason::Pinned,
+            start_wall: end.wall_ns - ms * MS,
+            end_wall: end.wall_ns,
+            start_mono: end.mono_ns - ms * MS,
+            end_mono: end.mono_ns,
+            off: 0,
+            lost: 2_561,
+            tail: vec![],
+        });
+    } else {
+        e.gap(s, GapReason::Pinned, ms, 0, 2_561, Value::Null);
+    }
     e.end(s, EndReason::Complete, 0, json!({"up": 512, "down": 2048}));
 }
 
@@ -148,7 +164,7 @@ pub fn run1(name: &str, shape: Shape) -> PathBuf {
             e.crash("killed", 600_000);
             rolls.iter_mut().for_each(|r| r.open(&mut e));
         } else if shape == Dodger {
-            tunnel(&mut e, HOST, "provider", 58_000);
+            tunnel(&mut e, HOST, "provider", 58_000, false);
         } else if !down {
             e.idle(59_000);
         }
@@ -182,7 +198,7 @@ pub fn run1(name: &str, shape: Shape) -> PathBuf {
         r.end(&mut e);
     }
     if shape == Vendor {
-        tunnel(&mut e, "telemetry.example.test", "vendor", 6_900_000);
+        tunnel(&mut e, "telemetry.example.test", "vendor", 6_900_000, true);
     }
     let dir = e.seal();
     let edit = |v: &mut Value| {
