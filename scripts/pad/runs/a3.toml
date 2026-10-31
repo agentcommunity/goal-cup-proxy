@@ -1,0 +1,9 @@
+# Acceptance A3 (PRD-16 section 9): Hermes through Vercel AI Gateway (its built-in ai-gateway provider), the chat TUI, half
+# an hour of the many-subagents prompt. `key` names the harness's own key; the gateway case uses the gateway key.
+# Run from the repository root: the prompt path is relative to it.
+harness = "hermes-cli"
+key = "deepseek"
+case = "gateway"
+mode = "full"
+minutes = 30
+prompt = "scripts/pad/prompts/many-subagents.txt"

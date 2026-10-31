@@ -1,0 +1,31 @@
+# Pad data for Gemini CLI (PRD-12 section 6): test data, never connector data; goalcup never reads it.
+# Vendor pages read 31 Oct 2026: https://github.com/google-gemini/gemini-cli/releases/tag/v0.66.0 and the npm package
+# (docs/plans/2026-10-30-audit/O-harness-access.md H8.1: `npm install -g @google/gemini-cli@0.66.0`),
+# https://geminicli.com/docs/get-started/authentication/ (GEMINI_API_KEY, ~/.gemini/.env, "Use Gemini API key"),
+# https://geminicli.com/docs/reference/configuration/ (model.name, security.auth.selectedType, GEMINI_CLI_TRUST_WORKSPACE),
+# https://geminicli.com/docs/cli/trusted-folders/ (the folder trust dialog and GEMINI_CLI_TRUST_WORKSPACE),
+# https://geminicli.com/docs/reference/keyboard-shortcuts/ (Ctrl+Y toggles YOLO), https://geminicli.com/docs/reference/commands/
+# (/quit), https://ai.google.dev/gemini-api/docs/models (gemini-4-argon), https://vercel.com/docs/ai-gateway/coding-agents
+# (no Gemini CLI page: no [gateway] table, so the gateway case is n/a).
+# Read from the docs, not run against a live harness (no key enters a build box): the key route, the trust bypass, Ctrl+Y.
+version = "0.66.0"
+version_cmd = "gemini --version"
+install = "npm i -g @google/gemini-cli@0.66.0"
+key_kind = "gemini"
+# GEMINI_CLI_HOME is the isolated home, so this is the file the docs name, ~/.gemini/.env.
+key_route = "file"
+key_file = "{home}/.gemini/.env"
+key_line = "GEMINI_API_KEY={key}"
+# Pad data for the dodger copy only (section 2): the Gemini API key route calls this host.
+model_host = "generativelanguage.googleapis.com"
+# The tool-approval default is a per-session choice: Ctrl+Y turns YOLO on, as a participant would (keyboard-shortcuts page).
+pre_keys = '\031'
+exit_keys = '/quit\r'
+submit_delay = 2
+subagent_word = "subagent"
+keep_going = true
+
+[direct]
+files = { ".gemini/settings.json" = "direct/gemini-cli-settings.json" }
+# The folder trust dialog is skipped the way the docs give for automated runs.
+env = { GEMINI_CLI_TRUST_WORKSPACE = "true" }

@@ -1,0 +1,19 @@
+# Pad data for Amp (PRD-12 section 6): test data, never connector data; goalcup never reads it.
+# Vendor pages read 31 Oct 2026: https://ampcode.com/docs/cli (install script, `amp version`, AMP_API_KEY and `amp login`),
+# https://registry.npmjs.org/@ampcode%2fcli (the package; `latest` is newer, so the version below is pinned on purpose),
+# https://vercel.com/docs/ai-gateway/coding-agents/amp (the gateway route is early access for Megawatt and Gigawatt
+# members only, set in Amp's account settings, not by file or environment: no [gateway] table).
+# The pinned version is the one the connector was measured on (docs/harnesses/amp-cli.md section 2, `npm install ...`).
+# No key (ledger T2): Amp's sign-in is a personal account. The pad prints "not verified: no key" and runs nothing; this
+# file only makes the image install the harness at its version.
+version = "0.0.1792209635-g24a9fe"
+version_cmd = "amp --version"
+install = "npm i -g @ampcode/cli@0.0.1792209635-g24a9fe"
+key_kind = "none"
+# Pad data for the dodger copy only (section 2): Amp's model calls go to its own server.
+model_host = "ampcode.com"
+# Two Ctrl-C quit the TUI with exit 0 (measured 17 Oct, docs/harnesses/amp-cli.md section 1).
+exit_keys = '\003\003'
+submit_delay = 2
+subagent_word = "subagent"
+keep_going = true
