@@ -26,7 +26,7 @@ fn entry() -> Entry {
     let head = json!({"method": "POST", "path": "/v1/responses", "ver": "1.1",
         "headers": [], "masked": [], "coding": null});
     let q = e.open(StreamKind::HttpReq, c, 0, head);
-    e.gap(q, GapReason::MaskFailed, 0, 0, 1, json!({"meta": "open"}));
+    e.meta_gap(q, json!({"meta": "open"}));
     let body = br#"{"model":"m1","input":"hi"}"#;
     e.data(q, 0, 0, body);
     e.gap(

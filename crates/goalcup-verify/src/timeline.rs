@@ -4,14 +4,24 @@
 //! range, which a DATA or GAP time cannot widen, so a forged span adds no buckets past it.
 
 use crate::integrity::{has_extent, is_meta_gap};
-use crate::legs::{Streams, Timed};
+use crate::legs::Timed;
 use goalcup_format::dump::wall;
 use goalcup_format::{GapReason, Record, StreamKind};
 use serde_json::{Map, Value, json};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 /// A timeline bucket, ns.
 const BUCKET: u64 = 600_000_000_000;
+
+/// The record's native and snapshot streams, by the path their OPEN meta names.
+#[derive(Default)]
+pub struct Streams {
+    /// A native file's last END `seen`.
+    pub native: HashMap<String, u64>,
+    pub snapshots: HashSet<String>,
+    /// Native files with a GAP on their stream.
+    pub gapped: HashSet<String>,
+}
 
 /// One row: harness calls, wire calls, wire errors, native bytes, gaps, off ms.
 type Row = [u64; 6];
@@ -52,7 +62,7 @@ impl Tally {
                 let path = m["path"].as_str().unwrap_or_default().to_string();
                 self.open.insert(*sid, (path, *skind == StreamKind::Native));
             }
-            Record::Data { sid, bytes, .. } if self.open.contains_key(sid) => {
+            Record::Data { sid, bytes, .. } if self.open.get(sid).is_some_and(|o| o.1) => {
                 if let Some(x) = self.row(w) {
                     x[3] = x[3].saturating_add(bytes.len() as u64);
                 }
@@ -77,7 +87,7 @@ impl Tally {
                 tail,
                 ..
             } => {
-                if let Some(x) = self.row(*start_wall) {
+                if let Some(x) = self.row(w) {
                     x[4] = x[4].saturating_add(1);
                 }
                 let tail: Map<String, Value> = serde_json::from_slice(tail).unwrap_or_default();
@@ -108,7 +118,20 @@ impl Tally {
             }
         }
         let Some(first) = self.first else { return };
+        let end = self.last.saturating_sub(first) / BUCKET;
         for (s, e) in std::mem::take(&mut self.off) {
+            if e <= s {
+                continue;
+            }
+            // The part before the first PART (a boot 0 that never wrote an index line) goes to
+            // bucket 0, the part past the last PART or LINK to the last bucket; no rows between.
+            let head = first.saturating_sub(s).min(e - s);
+            let tail = e.saturating_sub(self.last.max(s));
+            let ms = |ns: u64| ns / 1_000_000;
+            let x = self.rows.entry(0).or_default();
+            x[5] = x[5].saturating_add(ms(head));
+            let x = self.rows.entry(end).or_default();
+            x[5] = x[5].saturating_add(ms(tail));
             let (s, e) = (s.max(first), e.min(self.last));
             if e <= s {
                 continue;
@@ -117,7 +140,7 @@ impl Tally {
                 let lo = first + i * BUCKET;
                 let ns = e.min(lo.saturating_add(BUCKET)) - s.max(lo);
                 let x = self.rows.entry(i).or_default();
-                x[5] = x[5].saturating_add(ns / 1_000_000);
+                x[5] = x[5].saturating_add(ms(ns));
             }
         }
     }

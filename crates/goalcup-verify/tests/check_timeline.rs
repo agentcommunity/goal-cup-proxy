@@ -48,6 +48,17 @@ fn a_recorder_down_for_days_gets_a_row_per_bucket_it_covers() {
     assert!((ms / 600_000..=ms / 600_000 + 3).contains(&n), "{n} rows");
 }
 
+/// PRD-01 section 12: an entry with no index line restarts boot 0 after the dead boot, whose
+/// off span starts before the first PART. The timeline still holds the whole span.
+#[test]
+fn an_off_span_before_the_first_part_is_in_the_timeline() {
+    let dir = Entry::recovered_before_first_link("timeline-head", "killed", 30_000);
+    let (_, v) = check(&dir, &[]);
+    let off = v["entries"][0]["counts"]["off_ms"].as_u64().unwrap();
+    assert!(off >= 30_000);
+    assert_eq!(sum(&v, "off_ms"), off);
+}
+
 #[test]
 fn an_entry_with_nothing_in_it_has_an_empty_timeline() {
     let (_, v) = check(&Entry::new("timeline-empty").seal(), &[]);

@@ -4,6 +4,7 @@
 //! which honesty collects. It reads `native_form`, threads and `children`, and names no harness.
 
 use crate::integrity::{Check, Res};
+use crate::timeline::Streams;
 use crate::usage::{CallRow, CallTable, Kind, Leg, NativeForm, Outcome, Reason, Shape};
 use goalcup_format::dump::wall;
 use serde_json::{Value, json};
@@ -509,16 +510,6 @@ pub fn read_manifest(p: &std::path::Path) -> Result<Vec<(String, u64)>, String> 
     let each = v.as_array().ok_or_else(bad)?.iter();
     let pair = |f: &Value| Some((f["path"].as_str()?.to_string(), f["size"].as_u64()?));
     each.map(|f| pair(f).ok_or_else(bad)).collect()
-}
-
-/// The record's native and snapshot streams, by the path their OPEN meta names.
-#[derive(Default)]
-pub struct Streams {
-    /// A native file's last END `seen`.
-    pub native: HashMap<String, u64>,
-    pub snapshots: HashSet<String>,
-    /// Native files with a GAP on their stream.
-    pub gapped: HashSet<String>,
 }
 
 /// The manifest part of `subagents_present`: every file on disk has a native stream whose last

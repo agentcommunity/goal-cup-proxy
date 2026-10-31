@@ -221,7 +221,7 @@ pub struct Outcome {
     pub legs: crate::legs::Out,
     /// The report's timeline, and the native and snapshot streams by file path.
     pub timeline: Value,
-    pub streams: crate::legs::Streams,
+    pub streams: crate::timeline::Streams,
 }
 
 /// Checks one entry. `now_ns` is set for `--live`; `want` names the link seqs whose hashes
