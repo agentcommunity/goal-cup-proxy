@@ -147,7 +147,11 @@ fn read_entry(d: &Path) -> Vec<Item> {
         let mut rd = decode(fs::File::open(&p).unwrap()).unwrap();
         assert!(rd.by_ref().all(|i| i.unwrap().link_ok != Some(false)));
         let t = rd.tail();
-        assert_eq!((t.open_frame, t.truncated), (false, None), "{p:?} decodes alone");
+        assert_eq!(
+            (t.open_frame, t.truncated),
+            (false, None),
+            "{p:?} decodes alone"
+        );
     }
     items
 }
