@@ -249,7 +249,7 @@ fn soft_limit(soft: Option<u64>) -> u64 {
 }
 
 /// Rule 7: while `may_accept()` is false a new CONNECT waits in the backlog, never refused, and
-/// one `fd_limit` note is written; it is served once a connection closes. Connections still
+/// the episode writes one `fd_limit` note; it is served once a connection closes. Connections still
 /// before their decision (here: waiting for the first bytes) count.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn accepts_wait_while_descriptors_are_short_and_never_refuse() {
@@ -281,12 +281,13 @@ async fn accepts_wait_while_descriptors_are_short_and_never_refuse() {
         }
     })
     .await;
-    drop(held.pop());
-    assert_eq!(within_async(HANG, status(&mut waiting)).await, 200);
     let notes = events(&calls)
         .into_iter()
         .filter(|v| v["what"] == "fd_limit");
-    assert_eq!(notes.count(), 1);
+    assert_eq!(notes.count(), 1, "one note per episode");
+    // Serving the 69th starts a new episode at 68 open, with a note of its own.
+    drop(held.pop());
+    assert_eq!(within_async(HANG, status(&mut waiting)).await, 200);
 }
 
 /// A client that closes after the `200` without a byte, as a cancelled request does, loses
