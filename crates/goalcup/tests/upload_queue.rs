@@ -1,9 +1,10 @@
 //! PRD-06 section 1, "One queue of entries" (point 5): the uploader of a new live entry also sends
 //! older sealed entries whole and sealed; an older entry the server refuses never stops the live
 //! entry's chunks; an older entry past `upload_by` is closed and nothing of it is sent; an older
-//! entry whose `upload.lock` another uploader holds is not sent while held; a live entry with no
-//! server still sends an older entry of a run that has one; older entries on a server that never
-//! answers never hold the live entry's retry.
+//! entry whose `upload.lock` another uploader holds is not sent while held, and `goalcup upload`
+//! answers at once for an older entry the queue holds refused; a live entry with no server still
+//! sends an older entry of a run that has one; older entries on a server that never answers never
+//! hold the live entry's retry.
 
 mod common;
 mod upload_common;
@@ -12,7 +13,7 @@ use common::records::ENTRY;
 use common::worker::{CREDENTIAL, FakeWorker, Inject, RUN_ID, Route};
 use goalcup::cli;
 use goalcup::upload::state::{self, Final, State};
-use goalcup::upload::{UploadCtx, UploadHandle, spawn};
+use goalcup::upload::{UploadCtx, UploadHandle, manual, spawn};
 use goalcup_format::read::part_files;
 use serde_json::json;
 use std::fs;
@@ -117,6 +118,36 @@ fn a_refused_older_entry_never_stops_the_live_entry() {
     };
     assert!(until(refused));
     assert!(refusing.stream(OLD).is_empty());
+}
+
+#[test]
+fn goalcup_upload_answers_at_once_for_an_older_entry_the_queue_holds_refused() {
+    let (fake, refusing) = (FakeWorker::start(), FakeWorker::start());
+    for route in [Route::Position, Route::Heartbeat, Route::Chunk] {
+        for _ in 0..1000 {
+            let answer = Some((404, json!({"error": "not_found"})));
+            let inject = Inject {
+                answer,
+                ..Inject::default()
+            };
+            refusing.inject(route, inject);
+        }
+    }
+    let home = tempfile::tempdir().unwrap();
+    let earlier = run(home.path(), "r00000000000000b2", &refusing.url(), DEADLINE);
+    let (old, _) = entry(&earlier, OLD, true);
+    let run_dir = run(home.path(), RUN_ID, &fake.url(), DEADLINE);
+    entry(&run_dir, ENTRY, false);
+    let _h = live(home.path(), &run_dir);
+    let refused = || {
+        let e = state::read(&old).and_then(|j| j.last_error);
+        e.is_some_and(|e| e.status == Some(404))
+    };
+    assert!(until(refused), "the queue took the older entry");
+    // The recorder still runs: `goalcup upload` answers anyway.
+    let ids = ("r00000000000000b2", OLD);
+    let out = common::within(common::HANG, move || manual::run(&old, &earlier, ids, false));
+    assert_eq!(out, manual::Outcome::Refused(404));
 }
 
 #[test]

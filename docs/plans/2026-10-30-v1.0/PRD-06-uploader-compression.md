@@ -1117,8 +1117,8 @@ PRD-12 and PRD-17.
 ### 2026-10-31, slice 6 review fixes (older-entry queue)
 
 - **No decode in the recorder.** The queue takes an older entry's final-heartbeat totals from its
-  `status.json` (`written` and `off`), which PRD-02 sets together with the seal and which nothing else
-  sets, so they are the seal's totals; no part file is decoded on the upload thread. An entry the
+  `status.json` (`written` and `off`), which PRD-02 is to set together with the seal (not yet called:
+  see the open dependency in the re-review fixes below), so they are the seal's totals; no part file is decoded on the upload thread. An entry the
   queue takes is always sealed in `status.json`, or its `upload.json` says the server sealed it and no
   final goes. `goalcup upload`, a process of its own, keeps `pipeline::entry_totals`.
 - **A refused entry stays queued.** 401, 404 and 410 from an older entry keep it in the queue on its
@@ -1130,13 +1130,13 @@ PRD-12 and PRD-17.
   a panic writes `internal` into that entry's `upload.json` and one log line, and never reaches the
   live entry, its backoff or the other queued entries.
 - **The queue runs without a live client.** A live entry that is local or has no credential still
-  starts the upload thread, for the queue alone; `finish` does not wait for it.
-- **Descriptors.** A queued entry holds one descriptor, its `upload.lock`; the sender, the beat and
-  `upload.json`'s writer hold none between calls, and each call opens and closes its own connection.
-  Measured in a box with 40 queued older entries held on backoff: 41 `upload.lock` descriptors (the
-  40 and the live one) and no other growth. The 4 per entry the review saw were the fake Worker's,
-  which keeps a handle on every connection it accepts. 200 queued entries still hold 200
-  descriptors; raising `RLIMIT_NOFILE` is not this PRD's.
+  starts the queue's own thread (`goalcup-queue`, see the re-review fixes below; this line first
+  said the upload thread); `finish` does not wait for it.
+- **Descriptors.** The sender, the beat and `upload.json`'s writer hold none between calls, and each
+  call opens and closes its own connection. The 4 per entry the review saw were the fake Worker's,
+  which keeps a handle on every connection it accepts. (This line first said a queued entry holds its
+  `upload.lock` between rounds; since the second re-review it holds it for one round only, so a
+  queued entry holds no descriptor between rounds.)
 - **Also:** an entry writes `upload.json` once more when it leaves the queue (no state lost to the
   1 s write limit); the live entry is skipped by its `(run, entry)` ids, not by path; entries are
   ordered by their `status.json` time; done and closed entries are not read again.
@@ -1170,3 +1170,27 @@ PRD-12 and PRD-17.
   `upload_*.rs` module. The older `upload_*` binaries keep their own fixtures; moving them is a
   separate clean-up. Size stays over the PRD-00 row as reported above; the replan carries it.
 - No locked ledger item is touched and no owner question comes from these fixes.
+
+### 2026-10-31, slice 6 second re-review fixes
+
+- **`upload.lock` for one round only.** The queue took an older entry's `upload.lock` when it listed
+  it and kept it while the entry stayed queued, so a refused entry, or any entry behind a server that
+  never answers, kept `goalcup upload` for that entry waiting with no word until the recorder exited.
+  A queue round now takes the lock, skips the entry when another uploader or a recorder holds it,
+  and lets it go after the round, with `upload.json` holding the round's state. `goalcup upload`
+  waits at most one round and then answers (`Refused` at once for a refused entry, section 9 step 3).
+  An entry whose `upload.json` another uploader wrote between rounds leaves the queue without
+  writing and is listed afresh at the next listing. An entry writes `upload.json` when dropped only
+  while it holds the lock. Test: `upload_queue.rs`, `goalcup upload` answers `Refused(404)` for an
+  older entry the queue holds refused while the recorder runs.
+- **For the integrator: a change to the PRD-00 ruling "two plain threads".** The uploader now runs
+  three plain threads: `upload`, `beat` and `goalcup-queue` (PRD-00 interface rulings, PRD-02 and
+  PRD-06 row, and the architecture diagram both say two). The intent of the ruling and of L5 holds:
+  all three are in the recorder process, use the blocking client and never touch the async runtime.
+  Section 1's "Two plain threads" and "Each round serves the live entry first, then one round for
+  each older entry" read with this change: older entries are served on their own thread, after the
+  live entry's wrap-up is done; during recording they go out alongside the live entry, not strictly
+  after it. The replan records it in PRD-00.
+- The open dependency on PRD-02 (`Board::sealed`), the `tests/upload_common/` ownership question and
+  the size overage stand as written above. No locked ledger item is touched and no owner question
+  comes from these fixes.

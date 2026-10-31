@@ -508,7 +508,8 @@ impl UploadHandle {
     /// sealed (section 6), until `upload.json` says `done`, `wrap_up` is over or no upload thread
     /// runs. The threads then stop at their next tick, waited for a few seconds at most (a thread
     /// inside a call ends alone; an older entry's `upload.json` is written after every round that
-    /// changed it, so what it misses is that one call, which the server's position covers), and `upload.json` is written a last time with what they did.
+    /// changed it, so what it misses is that one call, which the server's position covers), and
+    /// `upload.json` is written a last time with what they did.
     /// If only the beat thread started, or the live entry has nothing to send with, no chunk can
     /// go, so this does not wait and the final heartbeat may not go out; the bytes stay on disk
     /// for a later upload.

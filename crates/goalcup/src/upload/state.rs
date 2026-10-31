@@ -232,6 +232,26 @@ impl Writer {
         self.at = Some(now);
         Ok(true)
     }
+
+    /// A writer that takes what the file holds now as its last write.
+    pub fn from_disk(entry_dir: PathBuf) -> Writer {
+        let last = read(&entry_dir);
+        Writer {
+            last,
+            ..Writer::new(entry_dir)
+        }
+    }
+
+    /// Writes `value` now unless it is what this writer last wrote.
+    pub fn settle(&mut self, now: Mono, value: &UploadJson) -> io::Result<bool> {
+        let changed = self.last.as_ref() != Some(value);
+        if changed { self.put(now, value, true) } else { Ok(false) }
+    }
+
+    /// Whether the file no longer holds this writer's last write: another uploader wrote it.
+    pub fn stale(&self) -> bool {
+        read(&self.dir) != self.last
+    }
 }
 
 /// `2026-11-07T10:00:01Z`: UTC, whole seconds. A time before 1970 is written as 1970.

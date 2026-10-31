@@ -55,7 +55,7 @@ pub enum Outcome {
 /// decided by the server: `AlreadyThere` when it holds the entry sealed, `Stuck` otherwise, so a
 /// sealed entry is never handed to `pipeline::close_dead_entry`.
 pub fn run(entry_dir: &Path, run_dir: &Path, ids: (&str, &str), keep: bool) -> Outcome {
-    let _held = loop {
+    let held = loop {
         if recording(entry_dir) {
             return Outcome::StillRecording;
         }
@@ -100,7 +100,8 @@ pub fn run(entry_dir: &Path, run_dir: &Path, ids: (&str, &str), keep: bool) -> O
             // A separate process: the totals may decode the part files (`counts.jsonl` for pruned
             // boots).
             let seal = facts(seal, pipeline::entry_totals(entry_dir));
-            let mut e = Entry::new(entry_dir, client, ids, point, seal, (j, file), None);
+            let mut e = Entry::new(entry_dir, client, ids, point, seal, (j, file));
+            e.held = Some(held);
             // Dropping `e` writes `upload.json`.
             return loop {
                 match e.step(true) {
@@ -188,7 +189,8 @@ fn position(
 }
 
 /// One sealed entry being sent, by `goalcup upload` or by the [`Queue`]. It holds no file open
-/// but its `upload.lock`, and writes `upload.json` once more when dropped.
+/// but its `upload.lock`, which the queue takes for one round at a time, and writes `upload.json`
+/// once more when dropped while it holds that lock.
 struct Entry {
     dir: PathBuf,
     ids: Ids,
@@ -201,7 +203,7 @@ struct Entry {
     seal: SealFacts,
     live: Live,
     word: watch::Sender<Option<ServerWord>>,
-    _held: Option<UploadLock>,
+    held: Option<UploadLock>,
 }
 
 /// `(run, entry)`, the folder names.
@@ -215,7 +217,6 @@ impl Entry {
         point: IndexLine,
         seal: SealFacts,
         (j, file): (Mutex<UploadJson>, Mutex<Writer>),
-        held: Option<UploadLock>,
     ) -> Entry {
         let p = Policy::from_env();
         Entry {
@@ -230,7 +231,7 @@ impl Entry {
             point,
             seal,
             word: watch::channel(None).0,
-            _held: held,
+            held: None,
         }
     }
 
@@ -251,11 +252,16 @@ impl Entry {
             self.tried = true;
         }
         while self.s.tick(&Mono::now, &Bound::OnDisk, true, &self.j) == Step::Again && all {}
-        // A round of the queue that changed the state writes it at once: a recorder that exits
-        // while the queue thread is inside a later call never runs `drop`.
-        let before = snap;
+        // A round of the queue ends with the file holding its state: the queue lets `upload.lock`
+        // go after it, and a recorder that exits while the queue thread is inside a later call
+        // never runs `drop`.
         let snap = lock(&self.j).clone();
-        let _ = lock(&self.file).put(Mono::now(), &snap, !all && snap != before);
+        let mut file = lock(&self.file);
+        let _ = match all {
+            true => file.put(Mono::now(), &snap, false),
+            false => file.settle(Mono::now(), &snap),
+        };
+        drop(file);
         if snap.final_ == Final::Sealed && snap.state == State::Done {
             prune(&self.dir, &self.j, &self.file);
             return Some(Outcome::Done);
@@ -272,16 +278,22 @@ impl Entry {
 }
 
 impl Drop for Entry {
-    /// The last state, written even within a second of the one before.
+    /// The last state, written even within a second of the one before, while `upload.lock` is
+    /// held: without it the file may be another uploader's.
     fn drop(&mut self) {
-        let _ = lock(&self.file).put(Mono::now(), &lock(&self.j).clone(), true);
+        if self.held.is_some() {
+            let _ = lock(&self.file).put(Mono::now(), &lock(&self.j).clone(), true);
+        }
     }
 }
 
 /// The upload thread's older entries (section 1): every sealed entry under `$GOALCUP_HOME/runs`
-/// but the live one that is not done or closed, whose run has a credential, that no recorder holds
-/// and whose `upload.lock` it could take. Listed at most once a minute; each tick gives each one
-/// round, so none holds another or the live entry. One refused waits on its backoff in the queue.
+/// but the live one that is not done or closed, whose run has a credential and that no recorder
+/// holds. Listed at most once a minute; each tick gives each one round, so none holds another or
+/// the live entry. A round takes the entry's `upload.lock` and lets it go after: an entry that is
+/// refused or waiting on its backoff holds nothing between rounds, so `goalcup upload` answers for
+/// it at once. A round skips an entry another uploader or a recorder holds, and an entry whose
+/// `upload.json` another uploader wrote leaves the queue until the next listing.
 /// An unsealed dead entry is left for `goalcup continue` or `goalcup upload`. The totals come from
 /// `status.json`, so no part file is decoded in the recorder.
 #[derive(Default)]
@@ -298,7 +310,7 @@ impl Queue {
     /// One tick: lists the entries again when due, then gives each one round, each under its own
     /// `catch_unwind`: a panic leaves that entry with `upload.json` saying `internal` and never
     /// touches the live entry or another. An entry past `upload_by` is dropped with `upload.json`
-    /// saying `closed`; a finished one lets its `upload.lock` go.
+    /// saying `closed`.
     pub fn serve(&mut self, home: &Path, live: (&str, &str)) {
         let now = Mono::now();
         if self
@@ -310,6 +322,14 @@ impl Queue {
         }
         let left = &mut self.left;
         self.entries.retain_mut(|e| {
+            e.held = state::lock_upload(&e.dir).filter(|_| !recording(&e.dir));
+            if e.held.is_none() {
+                return true;
+            }
+            if lock(&e.file).stale() {
+                e.held = None;
+                return false;
+            }
             let closed = past(lock(&e.j).upload_by.as_deref());
             let keep = match catch_unwind(AssertUnwindSafe(|| (!closed).then(|| e.step(false)))) {
                 Ok(Some(None | Some(Outcome::Refused(_)))) => true,
@@ -323,8 +343,9 @@ impl Queue {
                     false
                 }
             };
-            if !keep {
-                left.push(e.ids.clone());
+            match keep {
+                true => e.held = None,
+                false => left.push(e.ids.clone()),
             }
             keep
         });
@@ -408,7 +429,7 @@ fn older(run_dir: &Path, dir: &Path, ids: &Ids) -> Older {
     if cred.trim().is_empty() || (status.is_none() && old.final_ != Final::Sealed) {
         return Older::Skip;
     }
-    let Some(held) = state::lock_upload(dir).filter(|_| !recording(dir)) else {
+    let Some(_held) = state::lock_upload(dir).filter(|_| !recording(dir)) else {
         return Older::Skip;
     };
     let Some(point) = seal_link(&dir.join("rec")) else {
@@ -430,8 +451,8 @@ fn older(run_dir: &Path, dir: &Path, ids: &Ids) -> Older {
         off_spans: s.off.spans,
     });
     let seal = facts(status.and_then(|s| s.seal), totals.unwrap_or_default());
-    let j = (Mutex::new(json), Mutex::new(Writer::new(dir.into())));
-    let e = Entry::new(dir, client, (run, entry), point, seal, j, Some(held));
+    let j = (Mutex::new(json), Mutex::new(Writer::from_disk(dir.into())));
+    let e = Entry::new(dir, client, (run, entry), point, seal, j);
     Older::Ready(Box::new(e))
 }
 
