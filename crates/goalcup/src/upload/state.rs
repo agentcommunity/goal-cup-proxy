@@ -245,7 +245,11 @@ impl Writer {
     /// Writes `value` now unless it is what this writer last wrote.
     pub fn settle(&mut self, now: Mono, value: &UploadJson) -> io::Result<bool> {
         let changed = self.last.as_ref() != Some(value);
-        if changed { self.put(now, value, true) } else { Ok(false) }
+        if changed {
+            self.put(now, value, true)
+        } else {
+            Ok(false)
+        }
     }
 
     /// Whether the file no longer holds this writer's last write: another uploader wrote it.

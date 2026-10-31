@@ -146,7 +146,9 @@ fn goalcup_upload_answers_at_once_for_an_older_entry_the_queue_holds_refused() {
     assert!(until(refused), "the queue took the older entry");
     // The recorder still runs: `goalcup upload` answers anyway.
     let ids = ("r00000000000000b2", OLD);
-    let out = common::within(common::HANG, move || manual::run(&old, &earlier, ids, false));
+    let out = common::within(common::HANG, move || {
+        manual::run(&old, &earlier, ids, false)
+    });
     assert_eq!(out, manual::Outcome::Refused(404));
 }
 
