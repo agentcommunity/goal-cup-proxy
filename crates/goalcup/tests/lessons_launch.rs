@@ -66,6 +66,8 @@ fn describe(status: std::process::ExitStatus) -> String {
     }
 }
 
+// `wait_resuming` reaps each harness; clippy cannot see that.
+#[allow(clippy::zombie_processes)]
 #[test]
 fn launch_helper() {
     let Ok(role) = std::env::var(ROLE) else {
