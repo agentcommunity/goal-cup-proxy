@@ -7,12 +7,39 @@
 
 mod common;
 
-use common::recorder::{end_reason, gap_reasons, opens, sid_of};
+use common::recorder::{ends, gaps, opens};
 use flate2::{Compress, Compression, FlushCompress, Status};
 use goalcup::pipeline::{Call, Calls, EndReason, GapReason, Mono, Recorder, Sid, StreamKind};
 use goalcup::proxy::http1::Http1;
 use goalcup::proxy::pump::{Parser, Stop};
 use goalcup::proxy::ws::{Deflate, Dir, WsConn, negotiate};
+
+/// The stream of this kind that was opened first.
+fn sid_of(c: &Calls, kind: StreamKind) -> Sid {
+    opens(c)
+        .into_iter()
+        .find_map(|(sid, k, _)| (k == kind).then_some(sid))
+        .expect("a stream of this kind was opened")
+}
+
+/// The reason `sid` ended with.
+fn end_reason(c: &Calls, sid: Sid) -> EndReason {
+    ends(c)
+        .into_iter()
+        .find_map(|(s, reason, ..)| (s == sid).then_some(reason))
+        .expect("the stream ended")
+}
+
+/// The reasons of the GAPs on `sid`, in order.
+fn gap_reasons(c: &Calls, sid: Sid) -> Vec<GapReason> {
+    gaps(c)
+        .into_iter()
+        .filter_map(|call| match call {
+            Call::Gap(s, reason, ..) if s == sid => Some(reason),
+            _ => None,
+        })
+        .collect()
+}
 
 const KEY: [u8; 4] = [0x37, 0xfa, 0x21, 0x3d];
 const ROOM: u64 = 1 << 30;
