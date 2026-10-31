@@ -17,9 +17,7 @@ through the recording proxy, is the usual blocker.
 ## Do I need a core change?
 
 A core change is needed when the pad refuses a connector with the reason of a closed rule. Those
-rules are in
-[`capture_policy.rs`](../crates/goalcup-protocol/src/capture_policy.rs) and
-[`harness.rs`](../crates/goalcup-protocol/src/harness.rs), and
-[CONNECTOR-SCHEMA](CONNECTOR-SCHEMA.md#load-checks) lists the refusals. Never spell around a rule.
+rules are listed in
+[CONNECTOR-SCHEMA](CONNECTOR-SCHEMA.md#load-checks), which names every refusal. Never spell around a rule.
 Open an issue that names the rule and links your facts sheet, and write no connector until a
 maintainer lands the change as a separate core pull request with a [DECISIONS](DECISIONS.md) entry.

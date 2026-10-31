@@ -12,10 +12,9 @@ During your run you may type only "keep going" ([RULES](RULES.md#one-prompt-then
 So your harness must work for 168 hours without you. This page tells you which harness settings
 to set before the start, and where they go.
 
-Goal Cup never changes your harness settings
-([D67](DECISIONS.md#d67-goal-cup-recommends-running-without-permission-prompts-the-participant-sets-it)).
-You set them yourself. `goalcup setup` tells you when a permission setting is missing, and links
-to this page.
+`goalcup setup` writes the no-prompt settings into goalcup's own harness home after one question,
+and never changes your own settings
+([D86](DECISIONS.md#d86-goalcup-setup-writes-the-auto-update-switch-and-the-no-prompt-values-after-one-question)).
 
 Goal Cup records two things: the model calls (on the wire) and the harness's own session file.
 One does not stand in for the other. If a run has recorded requests to the model service for ten

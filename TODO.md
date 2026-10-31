@@ -47,6 +47,10 @@ The build uses each default below until the owner answers.
 - F-07: a guarded key prefix right after a `-` inside a base64url run masks the rest of the run,
   failing closed past 16 KiB, up to the end of the message
   ([PRD-05](docs/plans/2026-10-30-v1.0/PRD-05-masking.md#risks-and-blind-spots), question 10).
+- PRD-11 hand-off: repoint the harness facts sheets in `docs/harnesses/` from
+  [HARNESS-SETUP](docs/HARNESS-SETUP.md) to the [participant's guide](docs/PARTICIPANT-GUIDE.md#3-set-up),
+  then move HARNESS-SETUP to `docs/archive/`. Until then it is a temporary duplicate and still
+  describes `goalcup mcp` (removed, D84).
 
 ## After the merge to main
 
