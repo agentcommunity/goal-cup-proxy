@@ -1005,3 +1005,17 @@ Names for `LESSONS.md` (the lessons lane writes them; judge 14:56Z, 15:13Z):
   green with the `file::test` form against these names, after a build box proves them on the integration
   head; a row whose old case has no named test in `mask_*` is checked by the lane before it is flipped.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-31, replan after PRD-17 core slice 1 (merge 1863641b)
+
+- **On integration:** `lessons_hosts.rs` (N1-N6), `lessons_decode.rs` (D1-D4, D6, D7), `lessons_tls.rs` (T1, T2, T4,
+  T5) and the `LESSONS.md` upkeep. The encoders are a private `mod enc` in `lessons_decode.rs`, so the slice touches
+  only `tests/lessons_*.rs` and `LESSONS.md` and `common` stays PRD-14's. Review found no blockers.
+- **Still pending in this lane:** the `rec/run-ca.key` half of T4 (waits for PRD-02's writer), the GAP and END
+  records of D6 (wait for `proxy::serve`), `lessons_connect.rs`, `lessons_ws.rs` (K15, also waits for PRD-03 and
+  `common::upstream`), `lessons_launch.rs` and the remaining files.
+- **Nits left for the next PRD-17 touch, none a blocker:** the mapped-loopback and unspecified-address asserts
+  appear in both `unspecified_and_mapped_loopback_reach_this_computer` and `a_name_resolving_only_here_is_skipped`
+  (fold, about 6 lines); `leaf_aki_names_the_ca_key` repeats the AKI extract (a small `aki_of` helper, about
+  10 lines); `mod enc` has three near-identical encode wrappers. Taste only.
+- No locked ledger item is touched and no owner question comes from this slice.
