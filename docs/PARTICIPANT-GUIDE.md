@@ -5,7 +5,9 @@ You give one coding agent one prompt, then leave it alone for 168 hours. Goal Cu
 record. This page takes you from install to the end of your run. The rules are in
 [RULES.md](RULES.md), and what the record holds is in [RECORD-FORMAT.md](RECORD-FORMAT.md).
 
-> **Build state.** `goalcup continue` and `goalcup recover` print "not built yet".
+> **Build state.** `goalcup continue` and `goalcup recover` print "not built yet". The end at the
+> deadline and on the server's stop, and null mode, are not built yet either, so a practice run goes
+> on until you quit the harness or run `goalcup seal`.
 
 ## What goalcup does for you
 
@@ -228,9 +230,9 @@ a token for one repository needs the repository to exist first.
    opens the run. Ctrl-C while waiting creates nothing.
 
 The start screen lists the kind of run, a sign-in note if your harness needs one, the first message
-(below), **Ends** and **Upload** (as in `status`), the harness's tier
-([section 4](#4-your-harness-the-list-and-the-tiers)) and home folder, and a sleep warning if
-needed. The last line, "Recording in chat mode: <harness> opens now.", means recording is on.
+(below), **Ends** (as in `status`), where the **Upload** goes, the harness's tier
+([section 4](#4-your-harness-the-list-and-the-tiers)) and home folder, a note when the connector or
+host list comes from a file (not verified), and a sleep warning if needed. The last line, "Recording in chat mode: <harness> opens now.", means recording is on.
 
 The harness opens in the project folder. `goalcup` builds your **first message**: the push block,
 a blank line, then your prompt. It is on your clipboard when a tool for that exists (`pbcopy` on a
@@ -338,9 +340,10 @@ push if the agent's `git config` and `git remote add` lines are saved in the rep
 current part (it asks first; `--yes` skips that). The run stays open and `continue` goes on.
 
 **Time left.** `goalcup time-left` prints when the run stops, from the server's last word; the agent
-may run it too. After 11 minutes without word it says the time is unknown. **Leaving the machine:**
-keep it on mains power, awake, online and the lid open; over SSH, start inside `tmux`. Sleep
-suspends the agent too and loses nothing, but the clock runs on.
+may run it too. After 11 minutes without word it says the time is unknown.
+
+**Leaving the machine.** Keep it on mains power, awake, online and the lid open; over SSH, start
+inside `tmux`. Sleep suspends the agent too and loses nothing, but the clock runs on.
 
 **Change nothing the agent can read:** files, issues, messages, documents, websites. See
 [RULES, During the run](RULES.md#during-the-run).

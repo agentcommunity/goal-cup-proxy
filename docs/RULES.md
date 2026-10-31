@@ -305,7 +305,7 @@ disclosure and no-side-channel rules.
 - Goal Cup Proxy downtime while the agent kept working is reviewed, not automatically penalized. Downtime
   while nothing happened is an outage.
 - **A full disk.** A full disk gets no special handling (D78). The recorder cannot write, so it
-  ends and goalcup starts a new one at once. If that one stops again right away, goalcup lets
+  ends and goalcup starts a new one at once. If new ones keep stopping right away, goalcup lets
   your agent's traffic pass unrecorded and tries again at most 5 minutes apart. Your agent keeps
   working and the record shows the gap. Judges read it like any other gap (D78).
 - The server is authoritative for the start window, the official start, the deadline and the stop.

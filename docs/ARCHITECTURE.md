@@ -31,9 +31,7 @@ checking code.
 
 ## 3. The one process
 
-All of it is merged except four pieces: ending the harness at the deadline and on the server's stop,
-null mode, `goalcup recover`, and closing the part of an entry that died. The bullets below mark
-each "not built yet".
+Pieces not merged yet are marked "Not built yet" in the bullets below.
 
 ```mermaid
 flowchart LR
@@ -75,7 +73,7 @@ The rules of the shape:
   one control line pass, and neither carries a recorded byte (D75).
 - **The watchdog** is the `goalcup start` or `continue` process. It binds the port once and hands
   the socket to each recorder boot, so a restart never closes the port. It mints the run CA, runs
-  the connector's helper stops, starts the harness, ends it on `goalcup seal` and when the harness
+  the connector's helper stops, starts the harness, ends it on `goalcup seal`, seals the part when it
   exits, and starts a new recorder at once when one dies (D75). It never reads, masks, writes or
   uploads a recorded byte. Not built yet: ending the harness at the deadline and on the server's
   stop (D85); `goalcup recover`, which reopens the port and the CA when the watchdog itself died;

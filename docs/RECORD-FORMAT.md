@@ -186,8 +186,9 @@ writer links about every second while dirty, every 16 MiB of raw records and wit
 EVENT JSON always has `ev`: `start` (once per boot, with `mask_rules`), `prev_boot`, `count`,
 `clock`, `suspend`, `note` (with `what`) and `seal` (`reason`, `exit`, `harness`, `workspace_head`,
 `dirty`, `boots`, `totals`). A sealed entry ends with what was still open (`cut_at_seal` gaps and
-ends), an `after_stop` GAP if needed, the last COUNT, the `seal` event, a LINK and the frame end. A `recovered` seal (a dead entry closed later) is the `seal`
-event inside the recovery frame (see Recovery). Nothing follows the seal's LINK.
+ends), an `after_stop` GAP if needed, the last COUNT, the `seal` event, a LINK and the frame end.
+A `recovered` seal (a dead entry closed later) is the `seal` event inside the recovery frame (see
+Recovery). The `seal` event also carries `server_reason` when the server gave one. Nothing follows the seal's LINK.
 
 ## Compression, chunks and crash recovery
 
