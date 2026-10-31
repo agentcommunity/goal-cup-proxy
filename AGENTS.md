@@ -50,7 +50,7 @@ reads harness session formats after the run, chosen by connector id.
 
 One script, two tiers: `sh scripts/gate.sh fast` before every merge (format, clippy, every test,
 the Worker and script tests) and `sh scripts/gate.sh full` at phase exits and before a release (also
-the ignored end-to-end tests and the release build). CI runs `fast` on every pull request. Run it as
+the ignored end-to-end tests and the release build). CI runs `fast` on every pull request to main and every push to main or `v1.0/integration`. Run it as
 a normal user, not root. What each tier runs and what it needs: [README](README.md#the-gate).
 
 ## Hard rules
