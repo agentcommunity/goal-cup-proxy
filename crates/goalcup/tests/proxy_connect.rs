@@ -11,7 +11,7 @@ use common::upstream::{Script, Upstream};
 use common::{HANG, within_async};
 use goalcup::pipeline::{Call, GapReason, StreamKind};
 use goalcup::proxy::connect::{CLIENT_HELLO_GUARD, Hello, peek_client_hello};
-use proxy_fixtures::{HOSTS, ask, conns, connect, get, proxy, status, through, trusting_run_ca};
+use proxy_fixtures::{HOSTS, ask, connect, conns, get, proxy, status, through, trusting_run_ca};
 use rustls::pki_types::ServerName;
 use serde_json::json;
 use std::net::SocketAddr;
@@ -270,7 +270,10 @@ async fn accepts_wait_while_descriptors_are_short_and_never_refuse() {
     waiting.write_all(head.as_bytes()).await.unwrap();
     let mut b = [0u8; 1];
     let early = tokio::time::timeout(Duration::from_millis(500), waiting.read(&mut b)).await;
-    assert!(early.is_err(), "no answer and no close while descriptors are short");
+    assert!(
+        early.is_err(),
+        "no answer and no close while descriptors are short"
+    );
     let note = json!({"ev": "note", "what": "fd_limit", "limit": 200, "open": 68});
     within_async(HANG, async {
         while !events(&calls).contains(&note) {
@@ -280,7 +283,9 @@ async fn accepts_wait_while_descriptors_are_short_and_never_refuse() {
     .await;
     drop(held.pop());
     assert_eq!(within_async(HANG, status(&mut waiting)).await, 200);
-    let notes = events(&calls).into_iter().filter(|v| v["what"] == "fd_limit");
+    let notes = events(&calls)
+        .into_iter()
+        .filter(|v| v["what"] == "fd_limit");
     assert_eq!(notes.count(), 1);
 }
 
@@ -289,10 +294,16 @@ async fn accepts_wait_while_descriptors_are_short_and_never_refuse() {
 #[tokio::test]
 async fn a_connect_abandoned_before_any_byte_names_no_loss() {
     let up = echo(b"");
-    let (_h, addr, calls, _) = proxy(HOSTS, &[("GOALCUP_TEST_UPSTREAM", format!("api.openai.com={up}"))]);
+    let (_h, addr, calls, _) = proxy(
+        HOSTS,
+        &[("GOALCUP_TEST_UPSTREAM", format!("api.openai.com={up}"))],
+    );
     drop(through(addr, "api.openai.com:443").await);
     let got = conns(&calls, 1).await;
-    assert_eq!((got[0].2["up"].as_u64(), got[0].2["down"].as_u64()), (Some(0), Some(0)));
+    assert_eq!(
+        (got[0].2["up"].as_u64(), got[0].2["down"].as_u64()),
+        (Some(0), Some(0))
+    );
     assert!(gaps(&calls).is_empty(), "no loss to name");
 }
 
@@ -346,7 +357,10 @@ async fn an_unreachable_upstream_gets_502() {
 #[tokio::test]
 async fn a_client_hello_past_64_kib_tunnels_with_its_guard_gap() {
     let up = echo(b"");
-    let (_h, addr, calls, _) = proxy(HOSTS, &[("GOALCUP_TEST_UPSTREAM", format!("api.openai.com={up}"))]);
+    let (_h, addr, calls, _) = proxy(
+        HOSTS,
+        &[("GOALCUP_TEST_UPSTREAM", format!("api.openai.com={up}"))],
+    );
     let mut s = through(addr, "api.openai.com:443").await;
     let suites: Vec<u16> = (0..1_000).map(|i| 0x1301 + i).collect();
     let wire = hello(&suites, &[sni_ext("api.openai.com"), (21, vec![0; 64_000])]);
@@ -377,7 +391,10 @@ async fn a_listed_sni_behind_an_ip_literal_is_decrypted_and_recorded() {
     let (_h, addr, calls, ca) = proxy(HOSTS, &[("GOALCUP_TEST_EXTRA_ROOTS", roots)]);
     let s = through(addr, &up.addr().to_string()).await;
     let name = ServerName::try_from("api.openai.com").unwrap();
-    let mut t = trusting_run_ca(&ca, &[HTTP11]).connect(name, s).await.unwrap();
+    let mut t = trusting_run_ca(&ca, &[HTTP11])
+        .connect(name, s)
+        .await
+        .unwrap();
     get(&mut t).await;
     t.shutdown().await.unwrap();
     drop(t);

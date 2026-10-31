@@ -10,11 +10,11 @@ use common::recorder::{events, gaps};
 use common::upstream::{Script, Upstream};
 use goalcup::connector::{Decision, HostList, Kind, Source};
 use goalcup::pipeline::{Call, Calls, GapReason, Mono, Recorder};
+use goalcup::proxy::ProxyHandle;
 use goalcup::proxy::ca::RunCa;
 use goalcup::proxy::connect::fingerprint_hex16;
 use goalcup::proxy::hosts::{Hosts, REFUSAL_EXPIRY};
 use goalcup::proxy::tls::{Offer, Tls, upstream_offer};
-use goalcup::proxy::ProxyHandle;
 use proxy_fixtures::{client_trusting, conns, get, proxy, through};
 use rustls::ClientConnection;
 use rustls::pki_types::ServerName;
@@ -238,7 +238,10 @@ async fn an_upstream_tls_cut_reaches_the_harness_as_a_cut() {
 /// The real `serve` with `api.openai.com` sent to `up`, trusting its test CA when `trust`.
 fn proxy_to(up: &Upstream, trust: bool) -> (ProxyHandle, SocketAddr, Calls, RunCa, TempDir) {
     let dir = tempfile::tempdir().unwrap();
-    let mut env = vec![("GOALCUP_TEST_UPSTREAM", format!("api.openai.com={}", up.addr()))];
+    let mut env = vec![(
+        "GOALCUP_TEST_UPSTREAM",
+        format!("api.openai.com={}", up.addr()),
+    )];
     if trust {
         let roots = up.pki().roots_file(dir.path()).display().to_string();
         env.push(("GOALCUP_TEST_EXTRA_ROOTS", roots));

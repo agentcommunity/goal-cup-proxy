@@ -384,7 +384,13 @@ async fn connection(b: Arc<Boot>, mut client: TcpStream, hold: Admitted) {
     let h2 = chosen.as_deref() == Some(b"h2");
     let legs = (client_tls, up_tls);
     let (conn, p) = decrypt(&b, hold, meta, legs, Bytes::new(), h2).await;
-    finish(rec, conn, p, |t| t.into_inner().0.into_inner().inner, |_| wire_now());
+    finish(
+        rec,
+        conn,
+        p,
+        |t| t.into_inner().0.into_inner().inner,
+        |_| wire_now(),
+    );
 }
 
 /// A tunnel; `hold` ends as its `conn` opens, at the start of `tunnel::run`.
@@ -467,7 +473,11 @@ fn lost_tunnel(rec: &Recorder, c: &TunnelConn, (up, down): (u64, u64), tail: Opt
     let at = rec.now();
     let mut conn = rec.open(StreamKind::Conn, 0, 0, 0, OpenFlags::TUNNEL, meta);
     c.name_loss(&mut conn, at, up + down, tail);
-    conn.end(rec.now(), EndReason::Interrupted, Some(json!({"up": up, "down": down})));
+    conn.end(
+        rec.now(),
+        EndReason::Interrupted,
+        Some(json!({"up": up, "down": down})),
+    );
 }
 
 /// Until the HTTP/2 parser lands: an `h2` connection relays every byte and names its loss (5a
