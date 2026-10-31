@@ -106,12 +106,8 @@ fn the_deadline_is_the_servers_seconds_left_from_now() {
             ..Inject::default()
         },
     );
-    let ready = prepare(
-        &fix.args(),
-        &fix.ctx(Server::Url(w.url())),
-        &mut Vec::new(),
-    )
-    .unwrap_or_else(|s| panic!("{}", s.text));
+    let ready = prepare(&fix.args(), &fix.ctx(Server::Url(w.url())), &mut Vec::new())
+        .unwrap_or_else(|s| panic!("{}", s.text));
     let left = ready.facts.deadline.unwrap() - ready.facts.local_wall;
     assert!(left.abs_diff(7_200_000) < 1_000, "{left}");
 }

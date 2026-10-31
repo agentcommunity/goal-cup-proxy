@@ -8,8 +8,8 @@ use super::RunMode;
 use super::status::State;
 use crate::connector::Refusal;
 use crate::upload::client::ServerError;
-use crate::upload::policy::Class;
 use crate::upload::manual::Outcome;
+use crate::upload::policy::Class;
 use crate::upload::state::{Final, State as Upload, UploadJson};
 use crate::watchdog::Exit;
 
