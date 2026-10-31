@@ -1085,3 +1085,12 @@ lists disagreed, the ledger decided.
 - `goalcup-verify dump` uses `goalcup_format::dump::Dumper` unchanged; the worked example's dump
   through it equals the committed file as JSON (judge 12:35Z box).
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-31, PRD-08 ask answered
+
+- `read::Tail` now carries both values PRD-08 asked for: `raw: u64` (decompressed bytes the
+  `Reader` took, from the first byte of the stream, including a record cut at the end; after an
+  error, only up to the bad record) and `open_frame: bool` (the zstd stream ended inside an open
+  frame). Seam line for PRD-08: `goalcup-verify` may read `bytes.raw` and the torn tail from
+  `Reader::tail()` and drop its own `Raw` reader and `Meter` in `input.rs`; that removal is PRD-08's
+  edit. Nothing else in the format changes.
