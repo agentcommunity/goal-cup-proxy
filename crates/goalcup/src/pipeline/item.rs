@@ -7,7 +7,10 @@ use goalcup_format::{EndReason, GapReason, StreamKind};
 use serde_json::Value;
 
 /// What every item but DATA counts in `held` for its fixed fields; its JSON counts on top
-/// ([`json_held`]), so control items fill `held` as they fill memory and the stall exit sees them.
+/// ([`json_held`]), so control items fill `held` about as they fill memory and the stall exit
+/// sees them. Each costs about 140 bytes more (its channel slot and `serde_json`'s map node,
+/// review BRK9-N1), so the 2 x soft mark fires at about 1.3 times the memory it names. Kept at
+/// 256 because `Live::held_bytes` in `status.rs` documents that figure.
 pub(crate) const CONTROL_HELD: u64 = 256;
 
 /// The WebSocket facts of one DATA piece: the message's opcode on every piece, `fin` on its last.
@@ -17,8 +20,8 @@ pub(crate) struct Ws {
     pub fin: bool,
 }
 
-// The mask worker reads every field; it lands in the next slice.
-#[allow(dead_code)]
+// The mask worker reads every field; `run_recorder` starts it in the next slice.
+#[cfg_attr(not(feature = "test-hooks"), allow(dead_code))]
 #[derive(Debug)]
 pub(crate) enum Item {
     Open {

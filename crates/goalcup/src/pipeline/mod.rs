@@ -2,10 +2,10 @@
 //! session-file reader through one memory guard and masking to the part files.
 //!
 //! Seam S1 (`Recorder`, `StreamHandle`) and S4 (`Counts`, `EntryTotals`, `Durable`,
-//! `entry_totals`, `status.json`). The front half is here: every S1 call goes through the one
-//! held-bytes guard and the gap rule into an unbounded item channel. The mask worker and the
-//! writer that drain it come next. Under `test-hooks`, `Recorder::for_tests` collects every call
-//! before the guard and sends nothing.
+//! `entry_totals`, `status.json`). Every S1 call goes through the one held-bytes guard and the
+//! gap rule into an unbounded item channel; the mask worker masks off the relay and the writer
+//! writes the part files. Under `test-hooks`, `Recorder::for_tests` collects every call before
+//! the guard and sends nothing, and `Recorder::real_for_tests` runs the real pipeline.
 
 /// Hands one S1 call, before masking, to the `for_tests` collector. Without `test-hooks` it
 /// compiles to nothing, so the shipped recorder carries no test path.
@@ -25,8 +25,11 @@ pub mod fds;
 mod guard;
 mod handle;
 mod item;
+mod mask_worker;
+mod out;
 pub mod secure;
 pub mod status;
+mod writer;
 
 #[cfg(feature = "test-hooks")]
 pub use calls::{Call, Calls};
@@ -35,6 +38,8 @@ pub use counts::{Counts, Durable, EntryTotals, TunnelHost, entry_totals};
 pub use cursors::Cursors;
 pub use goalcup_format::{EndReason, GapReason, StreamKind};
 pub use handle::{OpenFlags, StreamHandle};
+#[cfg(feature = "test-hooks")]
+pub use mask_worker::PANIC_MARKER;
 pub use status::{Live, Status};
 
 use item::Item;
@@ -77,7 +82,8 @@ struct Inner {
     dropped_bytes: AtomicU64,
     streams_in_gap: AtomicU64,
     /// The guard gap open on each stream that is in one (PRD-02 section 3), so the seal can close
-    /// a gap whose handle is never called again. Taken at each guard drop and when a gap closes.
+    /// a gap whose handle is never called again. Added to at each guard drop, removed when the
+    /// gap closes or the seal drains it.
     open_gaps: Mutex<HashMap<Sid, GuardGap>>,
     /// Awake time of the writer's last write. The awake clock stops during sleep, so a suspend
     /// is never a stall.
@@ -398,9 +404,10 @@ pub(crate) fn sub(a: &AtomicU64, n: u64) {
     });
 }
 
-/// The front's API for the mask worker, the writer, the status thread and the seal. Their
-/// callers land in the next slice.
-#[allow(dead_code)]
+/// The front's API for the mask worker, the writer, the status thread and the seal.
+// The seal and `run_recorder` land in the next slice; until then the writer and the mask worker
+// run only under `real_for_tests`.
+#[cfg_attr(not(feature = "test-hooks"), allow(dead_code))]
 impl Recorder {
     /// A recorder whose items go to the returned receiver, under soft guard `guard`.
     pub(crate) fn pipeline(guard: u64) -> (Recorder, mpsc::Receiver<Item>) {
@@ -509,6 +516,74 @@ impl Recorder {
 /// process is already ending).
 fn pipeline_gone() {
     secure::exit(EXIT_PIPELINE_GONE, "pipeline_gone");
+}
+
+/// Ends the process with 70, naming the cause, when the thread holding it unwinds from a panic.
+pub(crate) struct ExitOnPanic(pub &'static str);
+
+impl Drop for ExitOnPanic {
+    fn drop(&mut self) {
+        if std::thread::panicking() {
+            secure::exit(EXIT_PIPELINE_GONE, self.0);
+        }
+    }
+}
+
+#[cfg(feature = "test-hooks")]
+impl Recorder {
+    /// The real pipeline for tests (seam S1): the mask worker with `masker`, the writer and the
+    /// status thread over a new entry in `dir` (part files in `dir/rec`, mode 0700), boot 0 with a
+    /// made-up entry id, a 1 MiB zstd window (PRD-14 section 4) and the soft guard of
+    /// `GOALCUP_TEST_GUARD_MB` when set. Its threads run for the life of the process.
+    pub fn real_for_tests(dir: &std::path::Path, masker: crate::mask::Masker) -> Recorder {
+        use std::os::unix::fs::DirBuilderExt;
+        const ENTRY: &str = "e00000000000000a1";
+        let rec_dir = dir.join("rec");
+        std::fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(&rec_dir)
+            .expect("the test entry folder");
+        let opts = writer::part_options(20);
+        let part = goalcup_format::PartWriter::open(
+            &rec_dir,
+            opts,
+            ENTRY,
+            clock::boot_id(),
+            clock::now_pair(),
+        )
+        .expect("the test part file");
+        let mut log = counts::CountsLog::open(dir);
+        let base = log.sync(dir).expect("counts.jsonl");
+        let mask_rules = masker.mask_rules();
+        let start = json!({
+            "ev": "start", "run": "r00000000000000a1", "entry": ENTRY, "segment": 0,
+            "goalcup": env!("CARGO_PKG_VERSION"), "build": null,
+            "os": std::env::consts::OS, "arch": std::env::consts::ARCH,
+            "connector": "test", "connector_source": "builtin", "connector_sha256": null,
+            "harness_version": null, "hosts": {}, "hosts_sha256": null,
+            "mask_rules": mask_rules, "mask_values": masker.value_counts(),
+            "fd_limit": null, "keep": true, "deadline": null, "server_time": null,
+            "local_wall_at_server_time": null, "workspace_head": null, "resume": false,
+        });
+        let (rec, rx) = Recorder::pipeline(guard::soft_guard());
+        let (tx, out_rx) = mpsc::sync_channel(mask_worker::TO_WRITER);
+        let board = status::Board::default();
+        mask_worker::spawn(rec.clone(), rx, masker, tx);
+        let start = writer::WriterStart {
+            part,
+            entry_dir: dir.to_path_buf(),
+            next_seq: 0,
+            log,
+            base,
+            mask_rules,
+            start,
+            board: board.clone(),
+        };
+        writer::spawn(rec.clone(), out_rx, start);
+        status::spawn(rec.clone(), dir.to_path_buf(), board);
+        rec
+    }
 }
 
 /// `n` bytes counted in `held` until dropped.
