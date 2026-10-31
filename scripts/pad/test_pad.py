@@ -311,6 +311,8 @@ class CrashRows(unittest.TestCase):
                              fails, (at, over_cap, code))
             self.assertEqual(self.row("kill-watchdog-recover", wgap, words=(check.RECOVER[0], "sealed"), over_cap=over_cap,
                                       more=seal)["result"] == "FAIL", fails, (at, over_cap, code))
+        late = [{"kind": "seal-now", "exit": "timeout", "began": "2026-10-30T10:03:00+00:00", "at": "2026-10-30T10:40:00+00:00"}]
+        self.assertNotEqual(self.row("kill-recorder", gap, recovery=down, over_cap=True, more=late)["result"], "FAIL")  # a seal cut by the step limit still counts
         # Sealed at the cap before the kill: nothing left to kill, no gap, verifier exit 0. Not goalcup's failure.
         early = [{"kind": "seal-now", "exit": 0, "at": "2026-10-30T10:01:00+00:00"}]
         got = self.row("kill-recorder", None, pid=None, code=0, recovery=(("skip", "10:02"),), over_cap=True, more=early)
@@ -451,6 +453,47 @@ class StartRefusal(unittest.TestCase):
     def test_home_is_not_beside_project(self):  # PRD-10 section 3 step 2
         run, r = self.run_for()
         self.assertNotEqual(os.path.dirname(os.path.realpath(r.project)), os.path.dirname(os.path.realpath(r.env["GOALCUP_HOME"])))
+
+    def test_own_goalcup_calls_never_default_to_production(self):  # ledger section 7: unset is production
+        for settings, want in (({"server": "off"}, "off"), ({"server": "on", "server_url": "http://srv.test"}, "http://srv.test"),
+                               ({"server": "on"}, "off")):
+            run = self.enterContext(tempfile.TemporaryDirectory())
+            for name, doc in (("settings.json", settings), ("state.json", {})):
+                with open(os.path.join(run, name), "w") as f:
+                    json.dump(doc, f)
+            r = padrun.Run(run, "verify")
+            self.assertEqual(r.env["GOALCUP_SERVER"], want)
+            self.assertEqual(r.gc_env()["GOALCUP_SERVER"], want)
+
+    def test_slow_seal_ends_the_step_not_the_rig(self):  # section 1a: no step stops the rig
+        run = self.enterContext(tempfile.TemporaryDirectory())
+        for name, doc in (("settings.json", {"minutes": 1, "harness": {}, "steps": []}), ("state.json", {"pasted": 0})):
+            with open(os.path.join(run, name), "w") as f:
+                json.dump(doc, f)
+        r = padrun.Run(run, "verify")
+        def fake(argv, **kw):
+            raise subprocess.TimeoutExpired(argv, 1)
+        with mock.patch.object(padrun, "sh", fake), mock.patch.object(padrun, "tool", lambda n: "/bin/true"), \
+                mock.patch.object(padrun, "wait", lambda *a: False), mock.patch.object(r, "dead", lambda: False), \
+                mock.patch.object(r, "pane", lambda *a, **k: ""), mock.patch.object(r, "status", lambda: {}), \
+                mock.patch.object(r, "harness_files", lambda: None), mock.patch.object(r, "wipe_secrets", lambda **k: None):
+            self.assertEqual(r.seal(None)[0], "timeout")
+
+
+    def test_end_screen_count_ignores_the_no_request_warnings(self):  # a warning left on the pane is not the end screen
+        run = self.enterContext(tempfile.TemporaryDirectory())
+        for name, doc in (("settings.json", {"minutes": 1, "harness": {}, "steps": []}), ("state.json", {"pasted": 0})):
+            with open(os.path.join(run, name), "w") as f:
+                json.dump(doc, f)
+        r = padrun.Run(run, "verify")
+        for screen, want in (("No model request was written yet.", None), ("No model request was written for 10 minutes, x", None),
+                             ("No model request was written. h may not use the proxy", 0), ("3 model requests written", 3)):
+            with mock.patch.object(padrun, "wait", lambda *a: True), mock.patch.object(padrun, "tool", lambda n: "/bin/true"), \
+                    mock.patch.object(r, "sealed", lambda: True), \
+                    mock.patch.object(r, "pane", lambda *a, **k: screen), mock.patch.object(r, "status", lambda: {}), \
+                    mock.patch.object(r, "harness_files", lambda: None), mock.patch.object(r, "wipe_secrets", lambda **k: None):
+                r.seal(None)
+            self.assertEqual(r.st["end_screen_requests"], want, screen)
 
 
 class KillBothVerify(unittest.TestCase):
