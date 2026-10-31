@@ -141,6 +141,7 @@ log or a command line.
 sh scripts/fetch-run.sh [--bucket B] <run id | entry id> <outdir>   # run id r..., entry id e...
 goalcup-verify check --server <outdir>/<entry>                       # exit 0, 1 or 2; 3 means no report
 goalcup-verify secrets --known <file> <outdir>/<entry>               # known values and secret shapes
+goalcup-verify usage <outdir>/<entry> --out <usage dir>              # model calls and tokens per entry
 ```
 
 `fetch-run.sh` reads the index in `BEGIN READ ONLY`, downloads every chunk, checks each against its SHA-256
@@ -152,7 +153,9 @@ index has a hole, and it never overwrites. Against a local `wrangler dev` use `-
 
 `check --server` reads the fetched folder; `--json` prints the report, `--local <entry dir>` compares the
 server copy with the participant's own entry, and `--known <file>` (one secret value per line) adds the
-secrets check. `dump` prints one JSON line per record. The report and its exit codes are in
+secrets check. `dump` prints one JSON line per record. `usage --out <dir>` writes `<entry>.json` and
+`<entry>.calls.jsonl` there; the rest is in
+[RECORD-FORMAT](RECORD-FORMAT.md#the-goalcup-verify-usage-files). The report and its exit codes are in
 [RECORD-FORMAT](RECORD-FORMAT.md#the-goalcup-verify-check---json-report).
 
 ## Runs whose recording is off
@@ -165,8 +168,7 @@ mails silence (no heartbeat for 20 minutes, only when the server itself was well
 request for 3 and 6 hours).
 
 To find a run whose recording stopped, read the `heartbeats` list in its `fetch.json`: `recording`,
-`received_at`, `seq`, `model_requests` and `counts` per heartbeat. A `failed` row names when it began. A
-query that lists such runs across the event is not in this build.
+`received_at`, `seq`, `model_requests` and `counts` per heartbeat. A `failed` row names when it began.
 
 ## Storage cost and the one manual lever
 
