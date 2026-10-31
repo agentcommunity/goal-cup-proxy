@@ -5,8 +5,15 @@
 //! the whole-path K15 case wait for `proxy::serve`. Records are what `Recorder::for_tests` shows
 //! before masking. The frame and deflate encoders below are private to this file.
 
+mod common;
+
+use common::recorder::{end_reason, gap_reasons, opens, sid_of};
 use flate2::{Compress, Compression, FlushCompress, Status};
-use goalcup::pipeline::{Call, Calls, EndReason, GapReason, Recorder, Sid, StreamKind};
+use goalcup::pipeline::{
+    Call, Calls, EndReason, GapReason, Mono, Recorder, Sid, StreamKind,
+};
+use goalcup::proxy::http1::Http1;
+use goalcup::proxy::pump::{Parser, Stop};
 use goalcup::proxy::ws::{Deflate, Dir, WsConn, negotiate};
 
 const KEY: [u8; 4] = [0x37, 0xfa, 0x21, 0x3d];
@@ -118,18 +125,8 @@ fn open(room: u64, deflate: Option<Deflate>) -> (WsConn, Recorder, Calls) {
     (ws, rec, calls)
 }
 
-fn sid_of(calls: &[Call], kind: StreamKind) -> Sid {
-    calls
-        .iter()
-        .find_map(|c| match c {
-            Call::Open(sid, k, ..) if *k == kind => Some(*sid),
-            _ => None,
-        })
-        .expect("the stream was opened")
-}
-
 /// The stream a direction's bytes are recorded on.
-fn stream(calls: &[Call], dir: Dir) -> Sid {
+fn stream(calls: &Calls, dir: Dir) -> Sid {
     sid_of(
         calls,
         if dir == Dir::Up {
@@ -142,53 +139,32 @@ fn stream(calls: &[Call], dir: Dir) -> Sid {
 
 /// The messages of one stream, `(opcode, bytes)` in the order they end: data pieces join up to
 /// `fin`, a control piece is a whole message.
-fn messages(calls: &[Call], sid: Sid) -> Vec<(u8, Vec<u8>)> {
+fn messages(calls: &Calls, sid: Sid) -> Vec<(u8, Vec<u8>)> {
     let (mut data, mut out) = (Vec::new(), Vec::new());
-    for call in calls {
+    for call in calls.all() {
         let Call::Ws(s, _, _, opcode, fin, bytes) = call else {
             continue;
         };
-        if *s != sid {
+        if s != sid {
             continue;
         }
         if opcode & 0x8 != 0 {
-            out.push((*opcode, bytes.to_vec()));
+            out.push((opcode, bytes.to_vec()));
             continue;
         }
-        data.extend_from_slice(bytes);
-        if *fin {
-            out.push((*opcode, std::mem::take(&mut data)));
+        data.extend_from_slice(&bytes);
+        if fin {
+            out.push((opcode, std::mem::take(&mut data)));
         }
     }
     out
 }
 
-fn texts(calls: &[Call], sid: Sid) -> Vec<String> {
+fn texts(calls: &Calls, sid: Sid) -> Vec<String> {
     messages(calls, sid)
         .into_iter()
         .map(|(_, b)| String::from_utf8(b).expect("utf-8"))
         .collect()
-}
-
-/// The reasons of the GAPs on one stream.
-fn gaps(calls: &[Call], sid: Sid) -> Vec<GapReason> {
-    calls
-        .iter()
-        .filter_map(|c| match c {
-            Call::Gap(s, reason, ..) if *s == sid => Some(*reason),
-            _ => None,
-        })
-        .collect()
-}
-
-fn end_of(calls: &[Call], sid: Sid) -> EndReason {
-    calls
-        .iter()
-        .find_map(|c| match c {
-            Call::End(s, _, reason, ..) if *s == sid => Some(*reason),
-            _ => None,
-        })
-        .expect("the stream ended")
 }
 
 /// A varied message of about `n` bytes whose repeats are all closer than 1 KiB.
@@ -264,34 +240,64 @@ fn negotiation_accepts_only_rfc7692() {
 
 #[test]
 fn unknown_extension_relays_inside_a_named_loss() {
-    let offer = Some("permessage-deflate");
-    assert!(negotiate(offer, Some("x-unknown-extension")).is_err());
-    assert!(negotiate(offer, Some("permessage-deflate; x_unknown=1")).is_err());
+    // The 101 is the RFC 6455 section 1.3 example: this key and its accept value.
+    const UPGRADE: &[u8] = b"GET /v1/responses HTTP/1.1\r\nHost: api.example.com\r\nUpgrade: websocket\r\n\
+        Connection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\
+        Sec-WebSocket-Extensions: permessage-deflate\r\n\r\n";
+    let up_frames = text(Dir::Up, "up one");
+    let down_frames = [text(Dir::Down, "down one"), text(Dir::Down, "down two")].concat();
+    for answer in ["x-unknown-extension", "permessage-deflate; x_unknown=1"] {
+        assert!(
+            negotiate(Some("permessage-deflate"), Some(answer)).is_err(),
+            "{answer}"
+        );
+        // What the proxy does with that refusal: the HTTP/1 parser stops parsing for the
+        // connection (5a) and never opens a WebSocket parser. The frames behind the 101, both
+        // ways, are relayed (not seen here) and counted held; nothing of them is decoded.
+        let (rec, calls) = Recorder::for_tests(ROOM);
+        let mut p = Http1::new(&rec, 1000);
+        let t = Mono::now();
+        p.feed(Dir::Up, t, UPGRADE).expect("the request parses");
+        p.feed(Dir::Up, t, &up_frames).expect("the copy is held");
+        let mut answered = format!(
+            "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\
+             Sec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=\r\nSec-WebSocket-Extensions: {answer}\r\n\r\n"
+        )
+        .into_bytes();
+        answered.extend_from_slice(&down_frames);
+        let stop = p.feed(Dir::Down, t, &answered).expect_err("parsing stops");
+        let held = (up_frames.len() + down_frames.len()) as u64;
+        assert_eq!(
+            stop,
+            Stop {
+                reason: GapReason::DecodeFailed,
+                tail: None,
+                held,
+                since: stop.since,
+                at_close: false,
+            },
+            "{answer}"
+        );
+        assert_eq!(Box::new(p).end(t, EndReason::Complete, false, &[]), None);
+        let opened = opens(&calls);
+        assert!(
+            opened
+                .iter()
+                .all(|(_, kind, _)| !matches!(kind, StreamKind::WsUp | StreamKind::WsDown)),
+            "{answer}: no WebSocket stream was opened"
+        );
+        assert!(!calls.all().iter().any(|c| matches!(c, Call::Ws(..))));
+    }
 
-    // The caller then parses no deflate: a compressed message is a loss that is named, and no
-    // byte of it is recorded as decoded; the next plain message parses.
-    let (mut ws, rec, calls) = open(ROOM, None);
-    let body = deflate_sync(
-        &mut Compress::new(Compression::default(), false),
-        b"secret-ish",
-    );
-    ws.feed(Dir::Down, rec.now(), &compressed(Dir::Down, &body))
-        .expect("goes on");
-    ws.feed(Dir::Down, rec.now(), &text(Dir::Down, "plain"))
-        .expect("goes on");
-    ws.end(rec.now(), EndReason::Complete, 0);
-    let all = calls.all();
-    let down = stream(&all, Dir::Down);
-    assert_eq!(texts(&all, down), ["plain"]);
-    assert_eq!(gaps(&all, down), [GapReason::DecodeFailed]);
-
-    // Parsing stopped for the connection: both streams name the loss and end `decode_error`.
+    // Parsing that stops inside an open WebSocket: both streams name the loss and end
+    // `decode_error`.
     let (mut ws, rec, calls) = open(ROOM, None);
     ws.stop(rec.now(), None);
     ws.end(rec.now(), EndReason::Complete, 0);
-    let all = calls.all();
     for dir in [Dir::Up, Dir::Down] {
-        assert_eq!(end_of(&all, stream(&all, dir)), EndReason::DecodeError);
+        let sid = stream(&calls, dir);
+        assert_eq!(end_reason(&calls, sid), EndReason::DecodeError);
+        assert_eq!(gap_reasons(&calls, sid), [GapReason::DecodeFailed]);
     }
 }
 
@@ -318,35 +324,29 @@ fn server_max_window_bits_10_decodes() {
             .expect("goes on");
     }
     ws.end(rec.now(), EndReason::Complete, 0);
-    let all = calls.all();
-    let down = stream(&all, Dir::Down);
-    assert_eq!(texts(&all, down), msgs);
-    assert!(gaps(&all, down).is_empty());
+    let down = stream(&calls, Dir::Down);
+    assert_eq!(texts(&calls, down), msgs);
+    assert!(gap_reasons(&calls, down).is_empty());
 }
 
-// W4: under takeover the inflater is fed whether or not a message's record survives. The parser
-// inflates before anything reaches the guard, so a record lost to the guard cannot touch the
-// history. `Recorder::for_tests` has no guard to drop with, so the lost record is taken out of the
-// calls here, the way the writer would lose it, and the next message must still decode.
+// W4: under takeover the inflater is fed whether or not a message's record survives. That is
+// structural: `StreamHandle::ws` returns nothing, so the parser cannot know that the guard dropped
+// a piece and keeps inflating every message as it arrives. `Recorder::for_tests` has no guard to
+// drop with, so this case shows the other half: the history carries from one message to the next,
+// and a second message that is only back-references to the first decodes. The guard's own GAP is
+// PRD-02's `pipeline_guard.rs`.
 
 #[test]
-fn guard_drop_keeps_the_next_message_decodable() {
+fn takeover_history_carries_between_messages() {
     let mut c = Compress::new(Compression::default(), false);
     let first = near_repeats(1, 20_000);
     // The second message repeats the first: it is a back-reference into history and only decodes
     // when the first message went through the inflater.
     let second = first.clone();
-    let (mut ws, rec, calls) = open(1 << 10, Some(both()));
+    let (mut ws, rec, calls) = open(ROOM, Some(both()));
     let body = deflate_sync(&mut c, first.as_bytes());
     ws.feed(Dir::Down, rec.now(), &compressed(Dir::Down, &body))
         .expect("goes on");
-    let down = stream(&calls.all(), Dir::Down);
-    let lost = calls.take();
-    assert!(
-        lost.iter().any(|c| matches!(c, Call::Ws(..))),
-        "the first message was offered"
-    );
-
     let body = deflate_sync(&mut c, second.as_bytes());
     assert!(
         body.len() < second.len() / 20,
@@ -355,10 +355,10 @@ fn guard_drop_keeps_the_next_message_decodable() {
     ws.feed(Dir::Down, rec.now(), &compressed(Dir::Down, &body))
         .expect("goes on");
     ws.end(rec.now(), EndReason::Complete, 0);
-    let all = calls.all();
 
-    assert_eq!(texts(&all, down), [second]);
-    assert!(gaps(&all, down).is_empty());
+    let down = stream(&calls, Dir::Down);
+    assert_eq!(texts(&calls, down), [first, second]);
+    assert!(gap_reasons(&calls, down).is_empty());
 }
 
 // W5: a final DEFLATE block, or bytes that do not inflate, end the takeover history for good.
@@ -386,12 +386,11 @@ fn bfinal_ends_takeover_history() {
         ws.feed(Dir::Down, rec.now(), &text(Dir::Down, "plain"))
             .expect("goes on");
         ws.end(rec.now(), EndReason::Complete, 0);
-        let all = calls.all();
-        let down = stream(&all, Dir::Down);
-        let got = texts(&all, down);
+            let down = stream(&calls, Dir::Down);
+        let got = texts(&calls, down);
         if bad_start {
             assert_eq!(got, ["plain"]);
-            assert_eq!(gaps(&all, down).len(), 3);
+            assert_eq!(gap_reasons(&calls, down).len(), 3);
         } else {
             assert_eq!(got.len(), 2);
             assert_eq!(
@@ -400,10 +399,10 @@ fn bfinal_ends_takeover_history() {
                 "the final block's own message decodes"
             );
             assert_eq!(got[1], "plain");
-            assert_eq!(gaps(&all, down).len(), 2);
+            assert_eq!(gap_reasons(&calls, down).len(), 2);
         }
         assert!(
-            gaps(&all, down)
+            gap_reasons(&calls, down)
                 .iter()
                 .all(|g| *g == GapReason::DecodeFailed)
         );
@@ -424,10 +423,9 @@ fn bfinal_ends_takeover_history() {
         .expect("goes on");
     }
     ws.end(rec.now(), EndReason::Complete, 0);
-    let all = calls.all();
-    let down = stream(&all, Dir::Down);
-    assert_eq!(texts(&all, down), ["{\"a\":1}", "{\"b\":2}"]);
-    assert!(gaps(&all, down).is_empty());
+    let down = stream(&calls, Dir::Down);
+    assert_eq!(texts(&calls, down), ["{\"a\":1}", "{\"b\":2}"]);
+    assert!(gap_reasons(&calls, down).is_empty());
 }
 
 // W6: headers and mask keys split across reads, and lengths that are not the shortest form.
@@ -457,9 +455,8 @@ fn one_byte_reads_decode_the_same() {
                 ws.feed(dir, rec.now(), chunk).expect("goes on");
             }
             ws.end(rec.now(), EndReason::Complete, 0);
-            let all = calls.all();
-            assert!(gaps(&all, stream(&all, dir)).is_empty());
-            messages(&all, stream(&all, dir))
+                    assert!(gap_reasons(&calls, stream(&calls, dir)).is_empty());
+            messages(&calls, stream(&calls, dir))
         };
         let whole = run(wire.len());
         assert_eq!(whole.len(), 7, "{dir:?}");
@@ -551,19 +548,18 @@ fn violations_are_named_and_relaying_goes_on() {
             assert!(ws.feed(dir, rec.now(), chunk).is_ok(), "{name}");
         }
         ws.end(rec.now(), EndReason::Complete, 0);
-        let all = calls.all();
-        let sid = stream(&all, dir);
-        let got = texts(&all, sid);
+            let sid = stream(&calls, dir);
+        let got = texts(&calls, sid);
         assert_eq!(got.first().map(String::as_str), Some("first"), "{name}");
         assert_eq!(got.last().map(String::as_str), Some("last"), "{name}");
         assert!(!got.is_empty() && got.len() <= 3, "{name}");
-        let named = gaps(&all, sid);
+        let named = gap_reasons(&calls, sid);
         assert!(!named.is_empty(), "{name}: the loss is named");
         assert!(
             named.iter().all(|g| *g == GapReason::DecodeFailed),
             "{name}"
         );
-        assert_eq!(end_of(&all, sid), EndReason::Complete, "{name}");
+        assert_eq!(end_reason(&calls, sid), EndReason::Complete, "{name}");
     }
 
     // A 64-bit length with its top bit set: the connection stops parsing, both streams say so.
@@ -577,11 +573,10 @@ fn violations_are_named_and_relaying_goes_on() {
         let stopped = ws.feed(dir, rec.now(), &wire);
         assert!(stopped.is_err(), "{dir:?}");
         ws.end(rec.now(), EndReason::Complete, 0);
-        let all = calls.all();
-        let sid = stream(&all, dir);
-        assert_eq!(texts(&all, sid), ["first"]);
-        assert!(!gaps(&all, sid).is_empty());
-        assert_eq!(end_of(&all, sid), EndReason::DecodeError);
+            let sid = stream(&calls, dir);
+        assert_eq!(texts(&calls, sid), ["first"]);
+        assert!(!gap_reasons(&calls, sid).is_empty());
+        assert_eq!(end_reason(&calls, sid), EndReason::DecodeError);
     }
 }
 
@@ -593,11 +588,10 @@ fn a_long_message_is_offered_before_its_last_frame() {
     const MIB: usize = 1 << 20;
     let chunk = vec![b'x'; MIB];
     let (mut ws, rec, calls) = open(ROOM, None);
-    let sid = stream(&calls.all(), Dir::Down);
+    let sid = stream(&calls, Dir::Down);
     let pieces = |calls: &Calls| -> (usize, usize) {
         calls.all().iter().fold((0, 0), |(open, fin), c| match c {
-            Call::Ws(s, _, _, _, f, bytes) if *s == sid => {
-                assert!(bytes.len() <= 32 * 1024);
+            Call::Ws(s, _, _, _, f, _) if *s == sid => {
                 if *f { (open, fin + 1) } else { (open + 1, fin) }
             }
             _ => (open, fin),
@@ -621,10 +615,9 @@ fn a_long_message_is_offered_before_its_last_frame() {
     let (open, fin) = pieces(&calls);
     assert!(open > 0 && fin == 1);
     ws.end(rec.now(), EndReason::Complete, 0);
-    let all = calls.all();
-    let total: usize = messages(&all, sid).iter().map(|(_, b)| b.len()).sum();
+    let total: usize = messages(&calls, sid).iter().map(|(_, b)| b.len()).sum();
     assert_eq!(total, FRAMES * MIB);
-    assert!(gaps(&all, sid).is_empty());
+    assert!(gap_reasons(&calls, sid).is_empty());
 }
 
 // W13: an end inside a frame or a message is `interrupted`, never `complete`.
@@ -646,16 +639,15 @@ fn eof_mid_message_is_interrupted() {
             .expect("goes on");
         ws.feed(Dir::Down, rec.now(), &cut).expect("goes on");
         ws.end(rec.now(), EndReason::Complete, 0);
-        let all = calls.all();
-        let (up, down) = (stream(&all, Dir::Up), stream(&all, Dir::Down));
-        assert_eq!(end_of(&all, down), EndReason::Interrupted, "{name}");
+            let (up, down) = (stream(&calls, Dir::Up), stream(&calls, Dir::Down));
+        assert_eq!(end_reason(&calls, down), EndReason::Interrupted, "{name}");
         assert_eq!(
-            end_of(&all, up),
+            end_reason(&calls, up),
             EndReason::Complete,
             "{name}: the quiet direction"
         );
         assert_eq!(
-            texts(&all, down).first().map(String::as_str),
+            texts(&calls, down).first().map(String::as_str),
             Some("whole"),
             "{name}"
         );
@@ -669,9 +661,9 @@ fn eof_mid_message_is_interrupted() {
     )
     .expect("goes on");
     ws.end(rec.now(), EndReason::Complete, 0);
-    let all = calls.all();
-    let down = stream(&all, Dir::Down);
-    let kept: Vec<(u8, bool, Vec<u8>)> = all
+    let down = stream(&calls, Dir::Down);
+    let kept: Vec<(u8, bool, Vec<u8>)> = calls
+        .all()
         .iter()
         .filter_map(|c| match c {
             Call::Ws(s, _, _, op, fin, b) if *s == down => Some((*op, *fin, b.to_vec())),

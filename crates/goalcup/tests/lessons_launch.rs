@@ -53,6 +53,24 @@ fn termios() -> libc::termios {
     }
 }
 
+/// This process's `SigCgt` and `SigIgn` masks, as the kernel reports them: bit `n - 1` is signal `n`.
+fn own_masks() -> (u64, u64) {
+    let status = std::fs::read_to_string("/proc/self/status").expect("own status");
+    let field = |name: &str| {
+        let hex = status
+            .lines()
+            .find_map(|line| line.strip_prefix(name))
+            .unwrap_or_else(|| panic!("no {name} line"));
+        u64::from_str_radix(hex.trim(), 16).expect("hex mask")
+    };
+    (field("SigCgt:"), field("SigIgn:"))
+}
+
+fn say_masks(stage: &str) {
+    let (caught, ignored) = own_masks();
+    say(&format!("{stage} caught={caught:x} ignored={ignored:x}"));
+}
+
 fn pid_of(child: &Child) -> libc::pid_t {
     libc::pid_t::try_from(child.id()).expect("pid")
 }
@@ -113,9 +131,11 @@ fn launch_helper() {
                 .expect("SigIgn line");
             say(&format!("ign={}", mask.trim()));
             let mut shield = Shield::take().expect("shield");
+            say_masks("held");
             say("shielded");
             let status = wait_resuming(child.id()).expect("wait");
             shield.harness_exited();
+            say_masks("given");
             say(&format!("harness {}", describe(status)));
             say("watchdog alive");
         }
@@ -319,6 +339,38 @@ fn ctrl_c_reaches_the_harness_and_the_watchdog_lives() {
         "{text}"
     );
     assert!(text.contains("watchdog alive"), "{text}");
+    // The watchdog's own dispositions: caught, never ignored, while the shield is held (the harness
+    // is already running, so its mask above cannot show this), and given back as the harness
+    // exits, except `SIGHUP`, which stays caught until the wrap-up ends.
+    let masks = |stage: &str| -> (u64, u64) {
+        let line = text
+            .lines()
+            .find(|line| line.starts_with(stage))
+            .unwrap_or_else(|| panic!("no {stage} line:\n{text}"));
+        let value = |key: &str| {
+            let hex = line
+                .split(key)
+                .nth(1)
+                .and_then(|rest| rest.split_whitespace().next())
+                .unwrap_or_else(|| panic!("no {key} in {line}"));
+            u64::from_str_radix(hex, 16).expect("hex mask")
+        };
+        (value("caught="), value("ignored="))
+    };
+    let bit = |mask: u64, signal: libc::c_int| mask >> (signal - 1) & 1 == 1;
+    let (caught, ignored) = masks("held");
+    for signal in [libc::SIGINT, libc::SIGQUIT, libc::SIGTSTP, libc::SIGHUP] {
+        assert!(bit(caught, signal), "signal {signal} is not caught: {text}");
+        assert!(!bit(ignored, signal), "signal {signal} is ignored: {text}");
+    }
+    assert!(bit(ignored, libc::SIGTTOU), "SIGTTOU is not ignored: {text}");
+    let (caught, ignored) = masks("given");
+    for signal in [libc::SIGINT, libc::SIGQUIT, libc::SIGTSTP] {
+        assert!(!bit(caught, signal), "signal {signal} still caught: {text}");
+        assert!(!bit(ignored, signal), "signal {signal} ignored: {text}");
+    }
+    assert!(bit(caught, libc::SIGHUP), "SIGHUP given back early: {text}");
+    assert!(bit(ignored, libc::SIGTTOU), "SIGTTOU given back early: {text}");
     let mask = text
         .split("ign=")
         .nth(1)

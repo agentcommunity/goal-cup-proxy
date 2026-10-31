@@ -7,7 +7,7 @@
 
 use super::{HANG, within};
 use goalcup::mask::Masker;
-use goalcup::pipeline::{Call, Calls, Counts, EndReason, Recorder, Sid, StreamKind};
+use goalcup::pipeline::{Call, Calls, Counts, EndReason, GapReason, Recorder, Sid, StreamKind};
 use goalcup_format::Record;
 use serde_json::Value;
 use std::io::Read;
@@ -86,6 +86,30 @@ pub fn opens(c: &Calls) -> Vec<(Sid, StreamKind, Value)> {
 pub fn ends(c: &Calls) -> Vec<(Sid, EndReason, u64, Option<Value>)> {
     pick(c, |call| match call {
         Call::End(sid, _, r, seen, tail) => Some((sid, r, seen, tail)),
+        _ => None,
+    })
+}
+
+/// The stream of this kind that was opened first.
+pub fn sid_of(c: &Calls, kind: StreamKind) -> Sid {
+    opens(c)
+        .into_iter()
+        .find_map(|(sid, k, _)| (k == kind).then_some(sid))
+        .expect("a stream of this kind was opened")
+}
+
+/// The reason `sid` ended with.
+pub fn end_reason(c: &Calls, sid: Sid) -> EndReason {
+    ends(c)
+        .into_iter()
+        .find_map(|(s, reason, ..)| (s == sid).then_some(reason))
+        .expect("the stream ended")
+}
+
+/// The reasons of the GAPs on `sid`, in order.
+pub fn gap_reasons(c: &Calls, sid: Sid) -> Vec<GapReason> {
+    pick(c, |call| match call {
+        Call::Gap(s, reason, ..) if s == sid => Some(reason),
         _ => None,
     })
 }

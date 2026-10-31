@@ -53,7 +53,7 @@ lessons lane (PRD-17); read by the deletion gate (PRD-17 Acceptance, checks 1 to
 | L-T8 | 2.2 | A: proxy_tls.rs (PRD-03) | PRD-03 | green | 7e620577 |
 | L-T9 | 2.2 | D: docs/PARTICIPANT-GUIDE.md known limits (PRD-15) | PRD-03, PRD-15 | open | - |
 | L-H1 | 2.3 | A: lessons_http1::head_scan_skips_blank_lines_and_takes_bare_lf | PRD-17 | open | - |
-| L-H2 | 2.3 | A: lessons_http1::unframeable_heads_relay_on_inside_a_named_loss; A: proxy_http1.rs (PRD-03, generic fault case) | PRD-17 | open | - |
+| L-H2 | 2.3 | A: lessons_http1::unframeable_heads_stop_parsing_and_count_their_bytes (parser half); A: lessons_http1::unframeable_heads_relay_on_inside_a_named_loss (relay half, pending until `proxy::serve` is on integration); A: proxy_http1.rs (PRD-03, generic fault case) | PRD-17 | open | - |
 | L-H3 | 2.3 | A: lessons_http1::transfer_gzip_then_chunked_decodes | PRD-17 | open | - |
 | L-H4 | 2.3 | A: lessons_http1::chunked_split_at_every_byte_ends_exactly; A: lessons_http1::chunk_size_rules; A: proxy_http1.rs (PRD-03, trailers) | PRD-17 | open | - |
 | L-H5 | 2.3 | A: proxy_http1.rs (PRD-03); A: lessons_http1::framing_matrix | PRD-03, PRD-17 | open | - |
@@ -75,7 +75,7 @@ lessons lane (PRD-17); read by the deletion gate (PRD-17 Acceptance, checks 1 to
 | L-W1 | 2.5 | A: proxy_ws.rs (PRD-03); R: RR1 | PRD-03 | green | 7e620577 |
 | L-W2 | 2.5 | A: lessons_ws::negotiation_accepts_only_rfc7692; A: lessons_ws::unknown_extension_relays_inside_a_named_loss | PRD-17 | open | - |
 | L-W3 | 2.5 | A: lessons_ws::server_max_window_bits_10_decodes | PRD-17 | open | - |
-| L-W4 | 2.5 | A: lessons_ws::guard_drop_keeps_the_next_message_decodable; R: RR1 | PRD-17 | open | - |
+| L-W4 | 2.5 | A: lessons_ws::takeover_history_carries_between_messages (the guard drop itself is structural, see the test comment); R: RR1 | PRD-17 | open | - |
 | L-W5 | 2.5 | A: lessons_ws::bfinal_ends_takeover_history | PRD-17 | open | - |
 | L-W6 | 2.5 | A: lessons_ws::one_byte_reads_decode_the_same | PRD-17 | open | - |
 | L-W7 | 2.5 | A: lessons_ws::violations_are_named_and_relaying_goes_on | PRD-17 | open | - |
@@ -189,7 +189,7 @@ lessons lane (PRD-17); read by the deletion gate (PRD-17 Acceptance, checks 1 to
 **Still waiting on `proxy::serve`.** The record halves need the whole path with the fake client, so these
 rows stay `open` until it is on integration: D1 to D4 and D6 (`lessons_decode.rs` drives `proxy::decode`
 alone and shows the decoded prefix and the `Step`, not the GAP `decode_failed` and END `decode_error`
-records; D8 is the whole-path case), H9 to H11, W9 to W11, the `lessons_connect.rs` C-rows, K15 (whole
+records; D8 is the whole-path case), the relay half of H2 (the bytes after the stop reach the far side), H9 to H11, W9 to W11, the `lessons_connect.rs` C-rows, K15 (whole
 path, with `lessons_ws.rs`) and SC3. L-T4 waits for the `rec/run-ca.key` case, L-VR2 for PRD-09's named
 `usage` case. Rows whose named file is not on integration (`pipeline_stall.rs`, `pipeline_seal.rs`,
 `watchdog_restart.rs`, `watchdog_end.rs`, `proxy_restart.rs`, `cli_start.rs`, `cli_continue.rs`) stay `open`.

@@ -9,45 +9,27 @@
 //! END `decode_error` records of D6 (and the coded bytes of D1 to D4) are not shown here; add that
 //! half through `proxy::serve` once it lands. LESSONS.md keeps L-D1 to L-D4 and L-D6 open until then.
 
+mod common;
+
 use bytes::Bytes;
+use common::encode::{gzip, raw_deflate, zlib};
 use flate2::write::{GzEncoder, ZlibEncoder};
 use flate2::{Compression, GzBuilder};
 use goalcup::pipeline::Recorder;
 use goalcup::proxy::decode::{BodyDecoder, Step, parse_codings};
 use std::io::Write;
 
-/// Body encoders and the synthetic SSE text, private to this file.
-mod enc {
-    use flate2::Compression;
-    use flate2::write::{DeflateEncoder, GzEncoder, ZlibEncoder};
-    use std::io::Write;
-
-    /// 2,000 synthetic SSE events, the plaintext of `proxy_fixtures/anthropic-sse.br`.
-    pub fn sse() -> Vec<u8> {
-        (0..2000)
-            .map(|i| {
-                format!(
-                    "event: content_block_delta\ndata: {{\"index\":{i},\"delta\":{{\"text\":\"token {i}\"}}}}\n\n"
-                )
-            })
-            .collect::<String>()
-            .into_bytes()
-    }
-
-    macro_rules! encoder {
-        ($name:ident, $enc:ident) => {
-            pub fn $name(data: &[u8]) -> Vec<u8> {
-                let mut e = $enc::new(Vec::new(), Compression::default());
-                e.write_all(data).unwrap();
-                e.finish().unwrap()
-            }
-        };
-    }
-    encoder!(gzip, GzEncoder);
-    encoder!(zlib, ZlibEncoder);
-    encoder!(raw_deflate, DeflateEncoder);
+/// 2,000 synthetic SSE events, the plaintext of `proxy_fixtures/anthropic-sse.br`.
+fn sse() -> Vec<u8> {
+    (0..2000)
+        .map(|i| {
+            format!(
+                "event: content_block_delta\ndata: {{\"index\":{i},\"delta\":{{\"text\":\"token {i}\"}}}}\n\n"
+            )
+        })
+        .collect::<String>()
+        .into_bytes()
 }
-use enc::{gzip, raw_deflate, sse, zlib};
 
 /// Made with `brotli -q 11` from [`sse`], not a real capture.
 const BR: &[u8] = include_bytes!("proxy_fixtures/anthropic-sse.br");

@@ -12,15 +12,13 @@
 
 mod common;
 
+use common::encode::gzip;
 use common::recorder::{data_of, ends, gaps, opens as all_opens};
-use flate2::Compression;
-use flate2::write::GzEncoder;
 use goalcup::pipeline::{Call, Calls, EndReason, GapReason, Mono, Recorder, Sid, StreamKind};
 use goalcup::proxy::http1::Http1;
 use goalcup::proxy::pump::{Parser, Stop};
 use goalcup::proxy::ws::Dir;
 use serde_json::{Value, json};
-use std::io::Write;
 
 const CONN: Sid = 1000;
 const ROOM: u64 = 1 << 30;
@@ -122,12 +120,6 @@ fn summary(calls: &Calls) -> Vec<(Value, Vec<u8>, EndReason, Value)> {
             (meta, data_of(calls, sid), reason, tail)
         })
         .collect()
-}
-
-fn gzip(plain: &[u8]) -> Vec<u8> {
-    let mut e = GzEncoder::new(Vec::new(), Compression::default());
-    e.write_all(plain).unwrap();
-    e.finish().unwrap()
 }
 
 const CHUNKED_HEAD: &[u8] = b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n";

@@ -2,6 +2,7 @@
 //! includes it as `mod common;` and uses the parts it needs, so unused items are allowed here.
 //!
 //! - [`ports`]: the only place a test binds port 0 (section 4).
+//! - [`encode`]: gzip, zlib and raw DEFLATE of a slice.
 //! - [`fds`]: raise the descriptor limit before a test that opens many.
 //! - [`home`]: temporary homes for a child, and the real-home guard.
 //! - [`pki`]: a test CA and leaf certificates.
@@ -13,6 +14,7 @@
 
 #![allow(dead_code)]
 
+pub mod encode;
 pub mod fds;
 pub mod home;
 pub mod pki;
