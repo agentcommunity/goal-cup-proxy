@@ -1058,3 +1058,17 @@ Names for `LESSONS.md` (the lessons lane writes them; judge 14:56Z, 15:13Z):
 ### 2026-10-31, replan after PRD-03 slice 3 (merge c81e8e9b): serve halves unblocked
 
 `proxy::serve` and `ProxyHandle::quiet_since` are on integration, so the serve halves of the lessons tests can be written now. Cases that need an h2 client wait for `h2.rs`; until then an h2-only client yields a named `h2_unsupported` GAP, which a case must not assert as the final behaviour. Rows stay open until a box run on the integration head. No locked ledger item is touched.
+
+### 2026-10-31, fix review of PRD-17 slice 4
+
+- **C4:** the two OpenSSL hellos are copied into `crates/goalcup/tests/lessons_fixtures/` and sent one byte per write
+  (`openssl_client_hellos_in_single_bytes_are_replayed_whole`, the upstream must receive them whole). The 2 KiB
+  synthetic hello is not written: the fixtures are above 1 KiB, which is the case the lesson names.
+- **C5 is open and asks the owner or PRD-03.** The test is written as C5 reads (no upstream connection, one `conn`
+  record, no GAP) and is held back with `ignore`, because the proxy dials the upstream before the `200` and tunnels
+  a partial hello with a GAP. Choose: PRD-03 closes before dialling when the hello is not whole, or C5 is amended to
+  "dial before the 200, and the partial hello is a named GAP". Until then L-C5 stays `open`.
+- **C6, C2:** C6 uses bounded waits (10 s for the unlisted refusal, 6 s for the listed retry) and does not count
+  connect rounds; the log half of C2 is K14's (`pipeline_secure.rs`, PRD-12 C3). Both left as written.
+- **T4:** the key test now decodes the records and looks for a key PEM there; a raw scan misses compressed parts.
+- **Budget after this fix:** wc -l of the eight lessons_ files is 3439; the fix added the C4 fixtures case and the recording sink.

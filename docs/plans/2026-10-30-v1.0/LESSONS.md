@@ -34,8 +34,8 @@ lessons lane (PRD-17); read by the deletion gate (PRD-17 Acceptance, checks 1 to
 | L-C1 | 2.1 | A: lessons_connect::connect_and_client_hello_in_one_write_are_decrypted; A: lessons_connect::connect_head_split_over_one_byte_reads_is_decrypted | PRD-17 | open | - |
 | L-C2 | 2.1 | A: lessons_connect::bad_heads_get_fixed_answers_without_echo | PRD-17 | open | - |
 | L-C3 | 2.1 | A: lessons_connect::authority_forms | PRD-17 | open | - |
-| L-C4 | 2.1 | A: lessons_connect::client_hello_in_two_records_and_one_byte_reads_decides_by_sni | PRD-17 | open | - |
-| L-C5 | 2.1 | A: lessons_connect::close_before_hello_opens_no_upstream | PRD-17 | open | - |
+| L-C4 | 2.1 | A: lessons_connect::client_hello_in_two_records_and_one_byte_reads_decides_by_sni; A: lessons_connect::openssl_client_hellos_in_single_bytes_are_replayed_whole (the two copied OpenSSL hellos, no 2 KiB synthetic one) | PRD-17 | open | - |
+| L-C5 | 2.1 | A: lessons_connect::close_before_hello_opens_no_upstream (held back with `ignore`: the proxy dials before the 200 and records a GAP) | PRD-17 | open | - |
 | L-C6 | 2.1 | A: lessons_connect::unlisted_refusal_is_one_round; A: lessons_connect::listed_refusal_is_retried; A: proxy_connect.rs (PRD-03, the reset rule); R: RR5 | PRD-17 | open | - |
 | L-C7 | 2.1 | R: RR1; A: lessons_connect::idle_tunnel_survives_120s (full tier, held back with `ignore`) | PRD-17 | open | - |
 | L-C8 | 2.1 | A: lessons_connect::one_bad_handshake_leaves_others_relaying | PRD-17 | open | - |
@@ -186,17 +186,23 @@ lessons lane (PRD-17); read by the deletion gate (PRD-17 Acceptance, checks 1 to
 | L-SC6 | 2.16 | A: cli_finish::unsealed_status_never_reads_as_finished (PRD-10) | PRD-10 | green | f5a200ae |
 | L-SC7 | 2.16 | X: ledger L5, L6 (PRD-10 section 4) | PRD-10 | open | - |
 
-**Still waiting on `proxy::serve`.** `proxy::serve` is not on integration (only the branch
-`prd-03-proxy-serve` has it), so the record halves stay `open`: D1 to D4 (`lessons_decode.rs` drives
-`proxy::decode` alone and shows the decoded prefix and the `Step`; D6 now has its serve case; D8 is the whole-path case), D7, the relay halves of H2, W2 and W7 (`lessons_ws.rs` runs at the parser layer and shows no relayed byte and no conn GAP), H9 to H11, W9 to W11, K15 (whole path, with `lessons_ws.rs`) and
-SC3. The C-rows, T3, the T4 key half and D6 have their tests (slice 4) and stay `open` until a box run on the
-integration head. L-VR2 waits for PRD-09's
+**Rows that still wait.** `proxy::serve` is on integration (`crates/goalcup/src/proxy/mod.rs`) and this
+slice's tests drive it through `tests/proxy_fixtures`. The rows below are `open` because nobody has written
+their serve cases yet, not because `serve` is missing: D1 to D4 (`lessons_decode.rs` drives `proxy::decode`
+alone and shows the decoded prefix and the `Step`; D6 has its serve case; D8 is the whole-path case), D7, the
+relay halves of H2, W2 and W7 (`lessons_ws.rs` runs at the parser layer and shows no relayed byte and no conn
+GAP), H9 to H11, W9 to W11, K15 (whole path, with `lessons_ws.rs`) and SC3. The C-rows, T3, the T4 key half and
+D6 have their tests (slice 4) and stay `open` until a box run on the integration head. **L-C5 is held back with
+`ignore`:** the test asks what PRD-17 C5 asks (the upstream sees no connection, one `conn` record, no GAP), and a
+box probe showed the proxy dials the upstream before the `200` and tunnels a partial hello with a GAP
+(`Hello::Closed` goes to `run_tunnel`). Either PRD-03 changes that path or the owner amends C5; until then
+the deletion gate may not count L-C5 green. L-VR2 waits for PRD-09's
 named `usage` case. Rows whose named file is not on integration (`pipeline_stall.rs`, `pipeline_seal.rs`,
 `watchdog_restart.rs`, `watchdog_end.rs`, `proxy_restart.rs`, `cli_continue.rs`) stay `open`. L-P3 stays
 `open`: its test is held back with `ignore` until the PRD-02 shield fix is on integration.
 
-**Budget after slice 4.** Lessons test lines total 3,226 across the eight `lessons_*.rs` files
-(`lessons_connect.rs` 302), up from 2,711, so the slice spent 515 against the ~290 that were left of the 3,000
+**Budget after slice 4.** `wc -l` of the eight `lessons_*.rs` files totals 3439 (`lessons_connect.rs` 487),
+up from 2,711, so the slice spent 728 against the ~290 that were left of the 3,000
 shared with PRD-14: nothing is left and the slice is over. The serve halves of H2, W2, W7 and H9, W10, K15,
 the SC3 watchdog loop and the L-P3 `ignore` removal need an owner question on the budget before they are written.
 
