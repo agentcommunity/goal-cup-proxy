@@ -197,14 +197,25 @@ fn older_entries_on_a_silent_server_never_hold_the_live_entry() {
     fake.inject(Route::Chunk, inject);
     let home = tempfile::tempdir().unwrap();
     let earlier = run(home.path(), "r00000000000000b2", &url, DEADLINE);
-    for id in ["e00000000000000c1", "e00000000000000c2", "e00000000000000c3"] {
+    for id in [
+        "e00000000000000c1",
+        "e00000000000000c2",
+        "e00000000000000c3",
+    ] {
         entry(&earlier, id, true);
     }
     let run_dir = run(home.path(), RUN_ID, &fake.url(), DEADLINE);
     let (_, mine) = entry(&run_dir, ENTRY, false);
     let start = Instant::now();
     let _h = live(home.path(), &run_dir);
-    assert!(until(|| fake.stream(ENTRY) == mine), "the live entry is stored");
+    assert!(
+        until(|| fake.stream(ENTRY) == mine),
+        "the live entry is stored"
+    );
     // One older call alone may wait 30 s or more; the live retry is due within a few seconds.
-    assert!(start.elapsed() < Duration::from_secs(25), "{:?}", start.elapsed());
+    assert!(
+        start.elapsed() < Duration::from_secs(25),
+        "{:?}",
+        start.elapsed()
+    );
 }
