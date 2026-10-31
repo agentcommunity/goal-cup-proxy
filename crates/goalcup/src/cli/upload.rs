@@ -36,17 +36,18 @@ pub fn run(part: Option<String>) -> ExitCode {
     let mut worst = ExitCode::SUCCESS;
     for entry in parts {
         let dir = run_dir(&home, &found.run).join(&entry);
-        let out = send(&dir, &found.run_dir, (&found.run, &entry), false);
-        let upload = state::read(&dir);
-        let line = match (&out, upload) {
-            (
-                Outcome::Done | Outcome::AlreadyThere | Outcome::Refused(_) | Outcome::Stuck,
-                Some(u),
-            )
-            | (Outcome::Closed { .. }, Some(u)) => text::upload_line(&u, super::now(), true),
-            _ => message(&out, &entry),
+        let keep = super::var("GOALCUP_KEEP_PARTS").is_some_and(|v| v == "1");
+        let out = send(&dir, &found.run_dir, (&found.run, &entry), keep);
+        // `upload.json` words the outcomes that change it; the rest it cannot say.
+        let said = !matches!(
+            out,
+            Outcome::StillRecording | Outcome::NotClosed | Outcome::Local | Outcome::NoServer
+        );
+        let line = match state::read(&dir) {
+            Some(u) if said => text::upload_line(&u, super::now(), true),
+            _ => text::upload_outcome(&out, &entry, &found.run),
         };
-        say(&line);
+        println!("{line}");
         if !matches!(
             out,
             Outcome::Done | Outcome::AlreadyThere | Outcome::StillRecording | Outcome::Local
@@ -55,36 +56,4 @@ pub fn run(part: Option<String>) -> ExitCode {
         }
     }
     worst
-}
-
-/// The cases `upload.json` cannot word.
-fn message(out: &Outcome, entry: &str) -> String {
-    match out {
-        Outcome::Done | Outcome::AlreadyThere => {
-            "Upload: done. The server holds this part.".to_owned()
-        }
-        Outcome::StillRecording => {
-            format!("Part {entry} is still recording; it sends itself, so there is nothing to do.")
-        }
-        Outcome::NotClosed => format!(
-            "Part {entry} has no end yet, so it is not sent. Run goalcup seal first; nothing is lost."
-        ),
-        Outcome::Local => "Upload: none. This run stays on this computer.".to_owned(),
-        Outcome::NoServer => format!(
-            "This run's server file or credential is missing, so nothing can be sent. Your record is \
-             kept on this computer. Write to {}.",
-            text::SUPPORT_ADDRESS
-        ),
-        Outcome::Refused(s) => format!(
-            "Upload: the server refuses this run ({s}). Nothing more is sent. Write to {}.",
-            text::SUPPORT_ADDRESS
-        ),
-        Outcome::Closed { upload_by } => format!(
-            "Upload: the server closed this run (it took uploads until {upload_by}). What was not sent stays on this computer."
-        ),
-        Outcome::Stuck => format!(
-            "Upload: stopped. The server's copy and this computer's copy differ. Nothing more is sent. Write to {}.",
-            text::SUPPORT_ADDRESS
-        ),
-    }
 }

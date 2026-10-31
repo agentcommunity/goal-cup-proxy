@@ -8,6 +8,7 @@ pub mod log;
 pub mod push;
 pub mod seal;
 pub mod setup;
+pub mod skill;
 pub mod start;
 pub mod status;
 pub mod text;

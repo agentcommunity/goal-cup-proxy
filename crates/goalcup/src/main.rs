@@ -154,19 +154,22 @@ fn run(command: Command) -> ExitCode {
     match command {
         Command::Recorder { null } => goalcup::pipeline::run_recorder(null),
         Command::Start {
+            harness,
             practice,
             test,
             repo,
             prompt,
             connector,
             hosts,
-            ..
-        } => cli::start::run(
-            practice || test,
-            connector.is_some() || hosts.is_some(),
-            repo.is_some(),
-            prompt.as_deref(),
-        ),
+        } => cli::start::run(&cli::start::Args {
+            harness: harness.as_deref(),
+            practice,
+            test,
+            repo: repo.as_deref(),
+            prompt: prompt.as_deref(),
+            connector: connector.as_deref(),
+            hosts: hosts.as_deref(),
+        }),
         Command::Setup {
             harness,
             yes,

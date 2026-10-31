@@ -12,24 +12,22 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use serde_json::to_value;
 
 use super::approve::{self, Ask, Stop};
-use super::{ConnectorSource, RunMode, Server, awake, fail, folder, push, say, text};
-use crate::connector::{self, Env, LaunchPlan};
-use crate::mask::{Masker, workspace_values};
+use super::{ConnectorSource, RunMode, Server, awake, fail, folder, push, say, skill, text};
+use crate::connector::{self, Connector, Env, LaunchPlan};
+use crate::mask::{Masker, SecretValue, workspace_values};
 use crate::pipeline::Mono;
 use crate::watchdog::{CaPem, StartFacts};
-
-// Declared here because `mod.rs` belongs to another task this slice; it can move there.
-#[path = "skill.rs"]
-pub mod skill;
 
 /// The tiers PRD-12 writes, read at build time.
 const TIERS: &str = include_str!("../../../../connectors/tiers.toml");
 
-/// The start arguments. `repo` is `<owner>/<name>`; a run with a repo and `trial` is a test run.
+/// The start arguments. `repo` is `<owner>/<name>`. `test` makes an organizer test run, `practice`
+/// a practice run, neither a competition run (which needs `repo`).
 #[derive(Default)]
 pub struct Args<'a> {
     pub harness: Option<&'a str>,
-    pub trial: bool,
+    pub practice: bool,
+    pub test: bool,
     pub repo: Option<&'a str>,
     pub prompt: Option<&'a Path>,
     pub connector: Option<&'a Path>,
@@ -48,7 +46,6 @@ pub struct Ctx {
 pub struct Ready {
     pub plan: LaunchPlan,
     pub facts: StartFacts,
-    pub name: String,
     pub _lock: Option<awake::SleepLock>,
 }
 
@@ -58,23 +55,11 @@ struct Saved {
     harness: String,
 }
 
-/// `main.rs` still passes only these four; the rest reach [`go`] when it is wired.
-/// `file_flags`: `--connector` or `--hosts` was given; `trial`: a practice or test run; `repo`:
-/// `--repo` was given.
-pub fn run(trial: bool, file_flags: bool, repo: bool, prompt: Option<&Path>) -> ExitCode {
-    if file_flags && !trial {
-        return fail(text::FILE_FLAGS_COMPETE);
-    }
-    go(&Args {
-        trial,
-        repo: repo.then_some(""),
-        prompt,
-        ..Args::default()
-    })
-}
-
-pub fn go(a: &Args) -> ExitCode {
-    if (a.connector.is_some() || a.hosts.is_some()) && !a.trial {
+/// Until `watchdog::run` is on integration the command stops after the checks that need no server:
+/// the folder, the connector and its plan, the mask values. No approval is asked and no run is
+/// opened, so nothing says recording began when nothing records. [`prepare`] is the rest.
+pub fn run(a: &Args) -> ExitCode {
+    if (a.connector.is_some() || a.hosts.is_some()) && !(a.practice || a.test) {
         return fail(text::FILE_FLAGS_COMPETE);
     }
     let home = match super::home() {
@@ -89,7 +74,12 @@ pub fn go(a: &Args) -> ExitCode {
         Err(e) => return fail(e),
     };
     let vars = std::env::vars_os()
-        .filter_map(|(k, v)| Some((k.into_string().ok()?, v.into_string().ok()?)))
+        .map(|(k, v)| {
+            (
+                k.to_string_lossy().into_owned(),
+                v.to_string_lossy().into_owned(),
+            )
+        })
         .collect();
     let ctx = Ctx {
         home,
@@ -97,14 +87,14 @@ pub fn go(a: &Args) -> ExitCode {
         vars,
         server,
     };
-    match prepare(a, &ctx, &mut std::io::stdout()) {
+    match check(a, &ctx) {
         Err(stop) => {
             say(&stop.text);
             ExitCode::from(stop.code)
         }
-        // `watchdog::run(plan, facts)` is not on integration yet; its call replaces this line.
-        Ok(ready) => {
-            let _ = (&ready.plan, &ready.facts);
+        // `watchdog::run(plan, facts)` is not on integration yet; its call replaces this line,
+        // and the call is where `prepare` starts to run.
+        Ok(_) => {
             say(&text::not_built("start"));
             ExitCode::from(3)
         }
@@ -115,37 +105,24 @@ fn stop(text: String) -> Stop {
     Stop { text, code: 1 }
 }
 
-pub fn prepare(a: &Args, c: &Ctx, out: &mut dyn std::io::Write) -> Result<Ready, Stop> {
-    let mode = match (a.trial, a.repo) {
-        (true, None) => RunMode::Practice,
-        (true, Some(_)) => RunMode::Test,
-        (false, Some(_)) => RunMode::Competition,
-        (false, None) => return Err(stop(text::NEEDS_REPO.to_owned())),
+/// What the checks before the approval leave: nothing is on disk or on the server yet.
+struct Checked {
+    mode: RunMode,
+    prompt: Option<String>,
+    connector: Connector,
+    plan: LaunchPlan,
+    values: Vec<SecretValue>,
+}
+
+/// Steps 1 and 2 and the mask check of step 6 (section 3): the connector and its plan, then the
+/// folder, then masking, all before an approval is spent.
+fn check(a: &Args, c: &Ctx) -> Result<Checked, Stop> {
+    let mode = match (a.test, a.practice, a.repo) {
+        (true, _, _) => RunMode::Test,
+        (_, true, _) => RunMode::Practice,
+        (_, _, Some(_)) => RunMode::Competition,
+        _ => return Err(stop(text::NEEDS_REPO.to_owned())),
     };
-    let prompt = a.prompt.filter(|p| p.exists()).map(push::read_prompt);
-    let mut problems = match folder::check(&c.project, &c.home, a.repo.is_some(), a.prompt) {
-        Err(problems) => problems,
-        Ok(warnings) => {
-            warnings.iter().for_each(|w| say(w));
-            Vec::new()
-        }
-    };
-    if let Some(Err(e)) = &prompt {
-        problems.push(e.clone());
-    }
-    let prompt = prompt.and_then(Result::ok);
-    if !problems.is_empty() {
-        let list: String = problems.iter().map(|p| format!("\n  {p}")).collect();
-        let (head, none) = (text::FOLDER_REFUSED, text::NOTHING_CREATED);
-        return Err(stop(format!("{head}{list}\n{none}")));
-    }
-    // `main.rs` does not pass the repository's name yet (see [`run`]).
-    if a.repo == Some("") {
-        return Err(Stop {
-            text: text::not_built("start"),
-            code: 3,
-        });
-    }
     // Step 1: the connector and its plan. A plan refusal names a file and a key, never a value.
     let saved = super::read_json::<Saved>(&super::setup_json(&c.home)).map(|s| s.harness);
     let id = match (a.connector, a.harness.map(str::to_owned).or(saved)) {
@@ -166,7 +143,7 @@ pub fn prepare(a: &Args, c: &Ctx, out: &mut dyn std::io::Write) -> Result<Ready,
         goalcup_home: c.home.clone(),
         server_host: c.server.host().unwrap_or_default().to_owned(),
     };
-    let mut plan = connector::plan(
+    let plan = connector::plan(
         &connector,
         &env,
         &super::isolated_home(&c.home, &connector.id),
@@ -174,18 +151,57 @@ pub fn prepare(a: &Args, c: &Ctx, out: &mut dyn std::io::Write) -> Result<Ready,
     if let Some(r) = &plan.refusal {
         return Err(stop(text::refusal(r)));
     }
-    let name = connector.name.clone();
+    // Step 2: the folder, every problem at once.
+    let (prompt, bad_prompt) = match a.prompt.filter(|p| p.exists()).map(push::read_prompt) {
+        Some(Ok(p)) => (Some(p), None),
+        Some(Err(e)) => (None, Some(e)),
+        None => (None, None),
+    };
+    let mut problems = match folder::check(&c.project, &c.home, a.repo.is_some(), a.prompt) {
+        Err(problems) => problems,
+        Ok(warnings) => {
+            warnings.iter().for_each(|w| say(w));
+            Vec::new()
+        }
+    };
+    problems.extend(bad_prompt);
+    if !problems.is_empty() {
+        let list: String = problems.iter().map(|p| format!("\n  {p}")).collect();
+        let (head, none) = (text::FOLDER_REFUSED, text::NOTHING_CREATED);
+        return Err(stop(format!("{head}{list}\n{none}")));
+    }
     // Step 6, before the approval, so a mask refusal never spends one.
     let values = workspace_values(&c.project);
     if Masker::new(&plan.mask_rules, values.clone()).is_err() {
         return Err(stop(text::MASK_REFUSED.to_owned()));
     }
+    Ok(Checked {
+        mode,
+        prompt,
+        connector,
+        plan,
+        values,
+    })
+}
+
+/// Everything from the checks to the launch block; `watchdog::run` takes what it returns.
+pub fn prepare(a: &Args, c: &Ctx, out: &mut dyn std::io::Write) -> Result<Ready, Stop> {
+    let Checked {
+        mode,
+        prompt,
+        connector,
+        mut plan,
+        values,
+    } = check(a, c)?;
+    let name = connector.name.clone();
+    let absolute = |p: &Path| std::path::absolute(p).unwrap_or_else(|_| p.to_path_buf());
+    let (connector_file, hosts_file) = (a.connector.map(absolute), a.hosts.map(absolute));
     // Steps 3 to 5: the repository, the approval, the open run (a null run for `off`).
     let source = ConnectorSource {
         id: connector.id.clone(),
         name: name.clone(),
-        source: a
-            .connector
+        source: connector_file
+            .as_ref()
             .map_or("builtin".to_owned(), |p| p.display().to_string()),
     };
     let ask = Ask {
@@ -197,7 +213,7 @@ pub fn prepare(a: &Args, c: &Ctx, out: &mut dyn std::io::Write) -> Result<Ready,
         harness_version: plan.harness_version.as_deref(),
         repo: a.repo,
         github_api: approve::GITHUB_API,
-        hosts_file: a.hosts,
+        hosts_file: hosts_file.as_deref(),
         machine: serde_json::json!({
             "os": std::env::consts::OS,
             "cpus": std::thread::available_parallelism().map_or(0, |n| n.get()),
@@ -215,9 +231,12 @@ pub fn prepare(a: &Args, c: &Ctx, out: &mut dyn std::io::Write) -> Result<Ready,
         &entry_dir,
     );
     // Step 9: the launch block.
+    // The deadline is the server's seconds left on the boot clock, put on the wall clock at the
+    // same moment `local_wall` is read, so their difference is exactly the time left.
+    let local_wall = wall_ms();
     let deadline = opened.deadline.map(|m| {
         let left_ms = m.ns().saturating_sub(Mono::now().ns()) / 1_000_000;
-        wall_ms().saturating_add(left_ms)
+        local_wall.saturating_add(left_ms)
     });
     let mut lines = vec![text::run_kind(mode)];
     lines.extend(connector.first_screen.clone());
@@ -232,8 +251,8 @@ pub fn prepare(a: &Args, c: &Ctx, out: &mut dyn std::io::Write) -> Result<Ready,
         plan.harness_version.as_deref(),
         &connector.id,
     ));
-    for (what, file) in [("Connector", a.connector), ("Host list", a.hosts)] {
-        lines.extend(file.map(|f| text::from_file(what, f)));
+    for (what, file) in [("Connector", &connector_file), ("Host list", &hosts_file)] {
+        lines.extend(file.as_deref().map(|f| text::from_file(what, f)));
     }
     lines.push(text::harness_home(&name, &plan.home));
     lines.extend(sleep_warning);
@@ -250,7 +269,7 @@ pub fn prepare(a: &Args, c: &Ctx, out: &mut dyn std::io::Write) -> Result<Ready,
         entry_dir,
         deadline,
         server_time: None,
-        local_wall: wall_ms(),
+        local_wall,
         workspace: c.project.clone(),
         // Each of these five becomes the typed field of the same name (S17) with one edit.
         connector: to_value(&plan.connector).unwrap_or_default(),
@@ -275,7 +294,6 @@ pub fn prepare(a: &Args, c: &Ctx, out: &mut dyn std::io::Write) -> Result<Ready,
     Ok(Ready {
         plan,
         facts,
-        name,
         _lock: lock,
     })
 }
@@ -314,18 +332,17 @@ fn first_message(a: &Args, c: &Ctx, prompt: Option<&str>, run: &str) -> Result<V
     }])
 }
 
+/// One row of `tiers.toml`; the file also holds a reason, which is not shown.
+#[derive(serde::Deserialize, Default, Clone)]
+struct Row {
+    tier: String,
+    version: String,
+}
+
 /// Section 6: the tier line of the connector, from `tiers.toml`.
 fn tier_line(name: &str, probed: Option<&str>, id: &str) -> String {
-    #[derive(serde::Deserialize, Default)]
-    struct Row {
-        tier: String,
-        version: String,
-    }
     let rows: BTreeMap<String, Row> = toml::from_str(TIERS).unwrap_or_default();
-    let row = rows.get(id).map_or_else(Row::default, |r| Row {
-        tier: r.tier.clone(),
-        version: r.version.clone(),
-    });
+    let row = rows.get(id).cloned().unwrap_or_default();
     let number = |t: &&str| t.starts_with(|c: char| c.is_ascii_digit());
     let version = probed.and_then(|v| v.split_whitespace().find(number));
     text::tier_line(name, version, &row.tier, &row.version)
@@ -343,4 +360,14 @@ fn session_id() -> String {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default();
     format!("s{:x}{:x}", t.as_nanos(), std::process::id())
+}
+
+#[cfg(test)]
+mod tests {
+    /// A tiers file that stops parsing would turn every agent into "not verified" without a word.
+    #[test]
+    fn tiers_file_parses() {
+        let rows = toml::from_str::<std::collections::BTreeMap<String, super::Row>>(super::TIERS);
+        assert!(rows.is_ok_and(|r| !r.is_empty()));
+    }
 }

@@ -1,12 +1,12 @@
 //! `goalcup start` up to the hand-over (PRD-10 section 3): the facts the watchdog gets, a plan
-//! refusal, the skill's place, the folder refusal and a denied approval. Facts only.
+//! refusal, the skill's place, the folder refusal, a denied approval and the deadline. Facts only.
 
 mod common;
 
 use std::path::{Path, PathBuf};
 
 use common::home::TempHome;
-use common::worker::{FakeWorker, Inject, Route};
+use common::worker::{FakeWorker, Inject, RUN_ID, Route};
 use goalcup::cli::start::{Args, Ctx, prepare};
 use goalcup::cli::{Server, isolated_home, text};
 use serde_json::json;
@@ -58,7 +58,7 @@ impl Fix {
 
     fn args(&self) -> Args<'_> {
         Args {
-            trial: true,
+            practice: true,
             connector: Some(&self.connector),
             ..Args::default()
         }
@@ -88,15 +88,32 @@ fn facts_hold_the_workspace_token_value_and_nothing_else_secret() {
     rest.as_object_mut().unwrap().remove("values");
     assert!(!rest.to_string().contains(TOKEN));
     assert!(!String::from_utf8(out.clone()).unwrap().contains(TOKEN));
-    assert!(facts["deadline"].is_null());
-    assert_eq!(facts["segment"], 0);
-    let screen = String::from_utf8(out).unwrap();
-    assert!(screen.contains(text::READY_MARK), "{screen}");
-    assert!(ready.plan.env["GOALCUP_TIME_LEFT_FILE"].ends_with("upload.json"));
-    // A null run has no credential on disk.
-    let run = facts["run"].as_str().unwrap();
-    let run_dir = fix.gc().join("runs").join(run);
-    assert!(!run_dir.join("credential").exists() && run_dir.join("server.json").is_file());
+}
+
+/// PRD-17 S7: the deadline comes from the server's `seconds_left` on the boot clock, so it sits
+/// exactly that far after the wall clock read beside it, whatever the wall clock says.
+#[test]
+fn the_deadline_is_the_servers_seconds_left_from_now() {
+    let fix = Fix::new("{home}/skills", "");
+    let w = FakeWorker::start();
+    let open = json!({"run_id": RUN_ID, "entry_id": "e0000000000000001", "segment": 0,
+        "official_start": "2026-11-06T10:00:00Z", "deadline_at": "2026-11-06T12:00:00Z",
+        "seconds_left": 7200});
+    w.inject(
+        Route::Open,
+        Inject {
+            answer: Some((201, open)),
+            ..Inject::default()
+        },
+    );
+    let ready = prepare(
+        &fix.args(),
+        &fix.ctx(Server::Url(w.url())),
+        &mut Vec::new(),
+    )
+    .unwrap_or_else(|s| panic!("{}", s.text));
+    let left = ready.facts.deadline.unwrap() - ready.facts.local_wall;
+    assert!(left.abs_diff(7_200_000) < 1_000, "{left}");
 }
 
 #[test]

@@ -9,6 +9,7 @@ use super::status::State;
 use crate::connector::Refusal;
 use crate::upload::client::ServerError;
 use crate::upload::policy::Class;
+use crate::upload::manual::Outcome;
 use crate::upload::state::{Final, State as Upload, UploadJson};
 use crate::watchdog::Exit;
 
@@ -1146,7 +1147,7 @@ pub fn no_prompts_left(name: &str) -> String {
     )
 }
 
-// start slice 7 messages
+// The start screen and its refusals.
 pub const NEEDS_REPO: &str =
     "a real run needs --repo <owner>/<name>, its new, empty, public GitHub repository.";
 
@@ -1187,6 +1188,9 @@ pub fn tier_line(name: &str, version: Option<&str>, tier: &str, verified: &str) 
         ("verified", Some(v)) if v != verified => {
             format!("{who}: verified with goalcup on {verified}, not on {v}.")
         }
+        ("verified", None) => format!(
+            "{who}: verified with goalcup on {verified}; the installed version was not read."
+        ),
         ("verified", _) => format!("{who}: verified with goalcup on {verified}."),
         ("not supported", _) => format!(
             "{name}: not supported. goalcup records its session files and the connections it can \
@@ -1209,4 +1213,33 @@ pub fn harness_home(name: &str, home: &Path) -> String {
 
 pub fn recording_now(name: &str) -> String {
     format!("{READY_MARK}: {name} opens now.")
+}
+
+/// `goalcup upload`: the outcomes `upload.json` cannot word. A part with no end shows the same
+/// continue line `seal` does.
+pub fn upload_outcome(out: &Outcome, entry: &str, run: &str) -> String {
+    let write = format!("Write to {SUPPORT_ADDRESS}.");
+    match out {
+        Outcome::Done | Outcome::AlreadyThere => "Upload: done. The server holds this part.".into(),
+        Outcome::StillRecording => {
+            format!("Part {entry} is still recording; it sends itself, so there is nothing to do.")
+        }
+        Outcome::NotClosed => seal_not_running(run),
+        Outcome::Local => "Upload: none. This run stays on this computer.".into(),
+        Outcome::NoServer => format!(
+            "This run's server file or credential is missing, so nothing can be sent. Your record \
+             is kept on this computer. {write}"
+        ),
+        Outcome::Refused(s) => {
+            format!("Upload: the server refuses this run ({s}). Nothing more is sent. {write}")
+        }
+        Outcome::Closed { upload_by } => format!(
+            "Upload: the server closed this run (it took uploads until {upload_by}). What was \
+             not sent stays on this computer."
+        ),
+        Outcome::Stuck => format!(
+            "Upload: stopped. The server's copy and this computer's copy differ. Nothing more is \
+             sent. {write}"
+        ),
+    }
 }
