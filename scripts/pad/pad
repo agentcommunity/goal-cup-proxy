@@ -223,8 +223,8 @@ def runner_limits(s):
                                          "wait-recovery")}
     run = int(math.ceil(s["minutes"] * 60))
     got["wait-recovery"] -= 30
-    lasts = lambda k: 60 * max([int(r.partition("+")[2] or FAULTS[k]) for _, _, r in s["plan"] if r.startswith(k + "@")]  # noqa: E731
-                               + [FAULTS[k]]) + 120  # the longest +n of the kind, then 2 minutes
+    lasts = lambda k: 60 * max([int(r.partition("+")[2] or FAULTS[k]) for _, _, r in s["plan"] if r.startswith(k + "@")],  # noqa: E731
+                               default=FAULTS[k]) + 120  # the longest +n of the kind, then 2 minutes
     return dict(got, paste=got["start"], verify=step_limit(s, "check"), wipe=step_limit(s, "cleanup") // 3, spend=120,
                 **{"kill-recorder": 120, "kill-watchdog-recover": 240, "kill-watchdog": 330, "kill-both": 300, "fd-limit": 60,
                    "keep-going": run, "seal-now": 120, "watch": run + 1800, "exec": EXEC_LIMIT}, **{k: lasts(k) for k in SPAN})
