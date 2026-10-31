@@ -1,18 +1,34 @@
 //! PRD-17 section 2.5, rows W2 to W7, W12 and W13: the WebSocket lessons of the 0.7 relay, driven
 //! at the parser layer through `proxy::ws::{negotiate, WsConn}` over `Recorder::for_tests`
 //! (`proxy_ws.rs` has the Codex fixture, fragmentation around a ping, the RFC 6455 examples and
-//! the close code; none of that is repeated here). The upgrade and fallback rows (W9 to W11) and
-//! the whole-path K15 case wait for `proxy::serve`. Records are what `Recorder::for_tests` shows
-//! before masking. The frame and deflate encoders below are private to this file.
+//! the close code; none of that is repeated here). The serve halves (W2 and W7 relay, W9 to W11,
+//! and K15, section 2.6) drive the real `proxy::serve` through a decrypted CONNECT, against the
+//! scripted upstream or a raw TLS peer that misbehaves on purpose. Records are what
+//! `Recorder::for_tests` shows before masking, except K15, which reads the part file of the real
+//! pipeline. The frame and deflate encoders below are private to this file.
 
 mod common;
+mod proxy_fixtures;
 
-use common::recorder::{ends, gaps, opens};
+use common::pki::{HTTP11, TestPki};
+use common::recorder::{ends, entry_dir, gaps, opens, real, records};
+use common::upstream::{Answer, Body, Script, Upstream, WsMsg};
+use common::{HANG, within_async};
 use flate2::{Compress, Compression, FlushCompress, Status};
 use goalcup::pipeline::{Call, Calls, EndReason, GapReason, Mono, Recorder, Sid, StreamKind};
 use goalcup::proxy::http1::Http1;
 use goalcup::proxy::pump::{Parser, Stop};
+use goalcup::proxy::ca::RunCa;
 use goalcup::proxy::ws::{Deflate, Dir, WsConn, negotiate};
+use goalcup::proxy::{ProxyCtx, ProxyHandle, serve};
+use goalcup_format::{FLAG_FIN, Record};
+use proxy_fixtures::{HOSTS, conns, through, trusting_run_ca};
+use rustls::pki_types::ServerName;
+use std::net::SocketAddr;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+use tokio_rustls::TlsAcceptor;
 
 /// The stream of this kind that was opened first.
 fn sid_of(c: &Calls, kind: StreamKind) -> Sid {
@@ -206,6 +222,318 @@ fn near_repeats(seed: usize, n: usize) -> String {
 // W2: the parameters come from the 101, never from the request; anything that is not RFC 7692
 // is refused, and a refusal is a named loss.
 
+/// `Sec-WebSocket-Accept` for the RFC 6455 section 1.3 key the client below always sends.
+const GOOD: &str = "s3pPLMBiTxaQ9kYGzzhZRbK+xOo=";
+
+/// A `101` head, with an extension answer when given.
+fn head101(ext: Option<&str>, accept: &str) -> Vec<u8> {
+    let ext = ext.map_or(String::new(), |e| format!("Sec-WebSocket-Extensions: {e}\r\n"));
+    format!(
+        "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\
+         Sec-WebSocket-Accept: {accept}\r\n{ext}\r\n"
+    )
+    .into_bytes()
+}
+
+fn upgrade_req(path: &str, offer: bool) -> Vec<u8> {
+    let ext = if offer { "Sec-WebSocket-Extensions: permessage-deflate\r\n" } else { "" };
+    format!(
+        "GET {path} HTTP/1.1\r\nHost: api.openai.com\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\
+         Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n{ext}\r\n"
+    )
+    .into_bytes()
+}
+
+/// The proxy in front of an upstream at `up` that `pki` signs for `api.openai.com`.
+struct Wire {
+    _dir: tempfile::TempDir,
+    _h: ProxyHandle,
+    addr: SocketAddr,
+    ca: RunCa,
+}
+
+fn wire(up: SocketAddr, pki: &TestPki, recorder: Recorder) -> Wire {
+    let dir = tempfile::tempdir().unwrap();
+    let roots = pki.roots_file(dir.path()).display().to_string();
+    // SAFETY: nextest runs each test in its own process; this runs before `serve` reads them.
+    unsafe {
+        std::env::set_var("GOALCUP_TEST_EXTRA_ROOTS", roots);
+        std::env::set_var("GOALCUP_TEST_UPSTREAM", format!("api.openai.com={up}"));
+    }
+    let (listener, addr) = common::ports::held();
+    socket2::SockRef::from(&listener).listen(4096).unwrap();
+    let ca = RunCa::mint(&["openai.com".to_string()]).unwrap();
+    let hosts = goalcup::connector::HostList::from_file(HOSTS.as_bytes(), "hosts.toml").unwrap();
+    let ctx = ProxyCtx { recorder, hosts, ca: ca.clone() };
+    Wire { _dir: dir, _h: serve(listener, ctx), addr, ca }
+}
+
+/// A client through a decrypted CONNECT that writes `first` at once.
+async fn client(w: &Wire, first: &[u8]) -> tokio_rustls::client::TlsStream<tokio::net::TcpStream> {
+    let s = through(w.addr, "api.openai.com:443").await;
+    let name = ServerName::try_from("api.openai.com").unwrap();
+    let mut t = trusting_run_ca(&w.ca, &[HTTP11]).connect(name, s).await.unwrap();
+    t.write_all(first).await.unwrap();
+    t
+}
+
+/// Reads until `done` says the bytes so far are enough.
+async fn read_to<S: tokio::io::AsyncRead + Unpin>(t: &mut S, done: impl Fn(&[u8]) -> bool) -> Vec<u8> {
+    within_async(HANG, async {
+        let mut got = Vec::new();
+        while !done(&got) {
+            let mut b = [0u8; 4096];
+            let n = t.read(&mut b).await.unwrap();
+            assert!(n > 0, "the stream ended early");
+            got.extend_from_slice(&b[..n]);
+        }
+        got
+    })
+    .await
+}
+
+type Seen = Arc<Mutex<Vec<Vec<u8>>>>;
+
+/// A TLS peer: for the i-th connection it reads the request head, answers `replies[i]` (the last
+/// one repeats) in one write, then keeps what the client sends next in `seen[i]`.
+fn raw_peer(pki: &TestPki, replies: Vec<Vec<u8>>) -> (SocketAddr, Seen) {
+    let (l, addr) = common::ports::held();
+    socket2::SockRef::from(&l).listen(4096).unwrap();
+    l.set_nonblocking(true).unwrap();
+    let l = tokio::net::TcpListener::from_std(l).unwrap();
+    let acceptor = TlsAcceptor::from(pki.server_config(&["api.openai.com"], &[HTTP11]));
+    let seen = Seen::default();
+    let kept = seen.clone();
+    tokio::spawn(async move {
+        while let Ok((s, _)) = l.accept().await {
+            let at = {
+                let mut all = kept.lock().unwrap();
+                all.push(Vec::new());
+                all.len() - 1
+            };
+            let (acceptor, kept) = (acceptor.clone(), kept.clone());
+            let reply = replies[at.min(replies.len() - 1)].clone();
+            tokio::spawn(async move {
+                let Ok(mut t) = acceptor.accept(s).await else { return };
+                let mut head = Vec::new();
+                while !head.ends_with(b"\r\n\r\n") {
+                    let mut b = [0u8; 1];
+                    if t.read(&mut b).await.unwrap_or(0) == 0 {
+                        return;
+                    }
+                    head.push(b[0]);
+                }
+                let _ = t.write_all(&reply).await;
+                let mut b = [0u8; 4096];
+                while let Ok(n @ 1..) = t.read(&mut b).await {
+                    kept.lock().unwrap()[at].extend_from_slice(&b[..n]);
+                }
+            });
+        }
+    });
+    (addr, seen)
+}
+
+/// The proxy in front of a raw peer that answers `replies`.
+struct Raw {
+    w: Wire,
+    calls: Calls,
+    seen: Seen,
+    replies: Vec<Vec<u8>>,
+}
+
+fn raw(replies: Vec<Vec<u8>>) -> Raw {
+    let pki = TestPki::new("lessons ws");
+    let (addr, seen) = raw_peer(&pki, replies.clone());
+    let (rec, calls) = Recorder::for_tests(ROOM);
+    Raw { w: wire(addr, &pki, rec), calls, seen, replies }
+}
+
+impl Raw {
+    /// Connection `i`: an upgrade with `up` behind it in one write. The client must get the
+    /// peer's reply byte for byte and the peer `up` byte for byte; gives the conn stream.
+    async fn session(&self, i: usize, up: &[u8], offer: bool) -> Sid {
+        let reply = &self.replies[i.min(self.replies.len() - 1)];
+        let mut first = upgrade_req("/v1/responses", offer);
+        first.extend_from_slice(up);
+        let mut t = client(&self.w, &first).await;
+        assert_eq!(&read_to(&mut t, |g| g.len() >= reply.len()).await, reply);
+        within_async(HANG, async {
+            while self.seen.lock().unwrap().get(i).is_none_or(|s| s.len() < up.len()) {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await;
+        assert_eq!(self.seen.lock().unwrap()[i], up);
+        drop(t);
+        conns(&self.calls, i + 1).await[i].0
+    }
+
+    fn no_ws_stream(&self) {
+        let kinds = opens(&self.calls);
+        assert!(kinds.iter().all(|(_, k, _)| !matches!(k, StreamKind::WsUp | StreamKind::WsDown)));
+    }
+}
+
+/// An upstream that upgrades every request and sends `messages`.
+fn ws_upstream(messages: Vec<WsMsg>) -> Upstream {
+    let mut script = Script::ok(b"").with_tls(&["api.openai.com"], &[HTTP11]);
+    script.answers = vec![Answer::Ws { deflate: false, messages }];
+    Upstream::start(script)
+}
+
+/// L-W2, serve half: the unknown extension in the `101` is relayed unchanged both ways and
+/// the conn stream names the loss; no stream is decoded.
+async fn unknown_extension_through_serve() {
+    let down = [text(Dir::Down, "down one"), text(Dir::Down, "down two")].concat();
+    let up = text(Dir::Up, "up one");
+    let answers = ["x-unknown-extension", "permessage-deflate; x_unknown=1"];
+    let r = raw(answers.map(|a| [head101(Some(a), GOOD), down.clone()].concat()).to_vec());
+    for i in 0..answers.len() {
+        let conn = r.session(i, &up, true).await;
+        let named = gap_reasons(&r.calls, conn);
+        assert!(!named.is_empty() && named.iter().all(|g| *g == GapReason::DecodeFailed));
+    }
+    r.no_ws_stream();
+}
+
+/// L-W7, serve half: a violation mid-stream gives the 5a GAP on the WebSocket stream and every
+/// byte is still relayed, each way.
+async fn violations_through_serve() {
+    let down = [text(Dir::Down, "first"), raw_frame(0xa1, b"x", None, None), text(Dir::Down, "last")];
+    let up = [text(Dir::Up, "first"), frame(true, false, 0x1, b"x", None), text(Dir::Up, "last")];
+    let r = raw(vec![[head101(None, GOOD), down.concat()].concat()]);
+    r.session(0, &up.concat(), false).await;
+    for dir in [Dir::Up, Dir::Down] {
+        let sid = stream(&r.calls, dir);
+        let got = texts(&r.calls, sid);
+        assert_eq!(got.first().map(String::as_str), Some("first"), "{dir:?}");
+        let named = gap_reasons(&r.calls, sid);
+        assert!(!named.is_empty() && named.iter().all(|g| *g == GapReason::DecodeFailed));
+    }
+}
+
+#[tokio::test]
+async fn upgrade_101_and_first_frame_in_one_write() {
+    // W9: the peer writes the 101 and the first frame as one write; the client's first frame
+    // follows its request at once.
+    let reply = [head101(None, GOOD), text(Dir::Down, "first message")].concat();
+    let r = raw(vec![reply]);
+    r.session(0, &text(Dir::Up, "hello up"), false).await;
+    assert_eq!(texts(&r.calls, stream(&r.calls, Dir::Down)), ["first message"]);
+    assert_eq!(texts(&r.calls, stream(&r.calls, Dir::Up)), ["hello up"]);
+    assert!(gaps(&r.calls).is_empty());
+}
+
+#[tokio::test]
+async fn rejected_upgrade_stays_http() {
+    // W10: a non-101 answer to an upgrade request is an HTTP exchange, nothing lost.
+    let mut script = Script::ok(b"no").with_tls(&["api.openai.com"], &[HTTP11]);
+    script.answers = vec![Answer::Http {
+        status: 426,
+        headers: Vec::new(),
+        body: Body::Whole(b"no".to_vec()),
+        coding: None,
+    }];
+    let up = Upstream::start(script);
+    let (rec, calls) = Recorder::for_tests(ROOM);
+    let w = wire(up.addr(), up.pki(), rec);
+    let mut t = client(&w, &upgrade_req("/v1/responses", false)).await;
+    let got = read_to(&mut t, |g| g.ends_with(b"no")).await;
+    assert!(got.starts_with(b"HTTP/1.1 426"));
+    drop(t);
+    conns(&calls, 1).await;
+    let kinds: Vec<_> = opens(&calls).into_iter().map(|o| o.1).collect();
+    assert!(kinds.contains(&StreamKind::HttpReq) && kinds.contains(&StreamKind::HttpResp));
+    assert!(!kinds.iter().any(|k| matches!(k, StreamKind::WsUp | StreamKind::WsDown)));
+    assert!(gaps(&calls).is_empty());
+}
+
+#[tokio::test]
+async fn bad_accept_is_a_named_loss_not_a_websocket() {
+    // W10: a 101 whose accept value does not match the key is relayed; parsing stops with one
+    // named loss on the conn stream and no WebSocket stream opens.
+    let reply = [head101(None, "AAAAAAAAAAAAAAAAAAAAAAAAAAA="), text(Dir::Down, "x")].concat();
+    let r = raw(vec![reply]);
+    let conn = r.session(0, &text(Dir::Up, "y"), false).await;
+    let named = gap_reasons(&r.calls, conn);
+    assert!(!named.is_empty() && named.iter().all(|g| *g == GapReason::DecodeFailed));
+    r.no_ws_stream();
+}
+
+#[tokio::test]
+async fn an_upgrade_on_any_path_is_recorded() {
+    // W11: the path does not matter on a decrypted host.
+    let up = ws_upstream(vec![WsMsg::Text("hello".into())]);
+    let (rec, calls) = Recorder::for_tests(ROOM);
+    let w = wire(up.addr(), up.pki(), rec);
+    let paths = ["/v1/realtime", "/ws/telemetry", "/"];
+    for path in paths {
+        let mut t = client(&w, &upgrade_req(path, false)).await;
+        read_to(&mut t, |g| g.ends_with(b"hello")).await;
+    }
+    conns(&calls, paths.len()).await;
+    for kind in [StreamKind::WsUp, StreamKind::WsDown] {
+        assert_eq!(opens(&calls).iter().filter(|o| o.1 == kind).count(), paths.len());
+    }
+}
+
+#[tokio::test]
+async fn fail_closed_ends_at_message_end() {
+    // K15: message 1 holds an undecided 20 KiB candidate; no mask span leaves that message and
+    // the next messages are whole and parse.
+    let first = format!(r#"{{"type":"response.create","input":"sk-{}"}}"#, "A9".repeat(10 * 1024));
+    let plain: Vec<String> = (2..=3)
+        .map(|i| format!(r#"{{"type":"response.create","n":{i},"input":"hello there"}}"#))
+        .collect();
+    let mut messages = vec![WsMsg::Text(first.clone())];
+    messages.extend(plain.iter().cloned().map(WsMsg::Text));
+    let up = ws_upstream(messages);
+    let entry = entry_dir();
+    let w = wire(up.addr(), up.pki(), real(entry.path()));
+    let mut t = client(&w, &upgrade_req("/v1/responses", false)).await;
+    read_to(&mut t, |g| g.ends_with(plain[1].as_bytes())).await;
+    drop(t);
+    let recs = within_async(HANG, async {
+        loop {
+            let recs = records(entry.path());
+            let open = recs.iter().filter(|r| matches!(r, Record::Open { .. })).count();
+            if open > 0 && open == recs.iter().filter(|r| matches!(r, Record::End { .. })).count() {
+                return recs;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await;
+    let sid = recs
+        .iter()
+        .find_map(|r| match r {
+            Record::Open { sid, skind: StreamKind::WsDown, .. } => Some(*sid),
+            _ => None,
+        })
+        .expect("a ws_down stream");
+    let (mut bytes, mut fins) = (Vec::new(), Vec::new());
+    for r in &recs {
+        match r {
+            Record::Data { sid: s, flags, bytes: b, .. } if *s == sid => {
+                bytes.extend_from_slice(b);
+                if flags & FLAG_FIN != 0 {
+                    fins.push(bytes.len());
+                }
+            }
+            Record::Mask { sid: s, off, len, .. } if *s == sid => {
+                assert!(off + len <= first.len() as u64, "a mask span crosses a message end");
+            }
+            _ => {}
+        }
+    }
+    let at = first.len();
+    assert_eq!(fins, [at, at + plain[0].len(), at + plain[0].len() + plain[1].len()]);
+    assert!(recs.iter().any(|r| matches!(r, Record::Mask { sid: s, .. } if *s == sid)));
+    assert_eq!(&bytes[at..], plain.concat().as_bytes());
+    serde_json::from_slice::<serde_json::Value>(&bytes[at..at + plain[0].len()]).unwrap();
+}
+
 #[test]
 fn negotiation_accepts_only_rfc7692() {
     let offer = Some("permessage-deflate; client_max_window_bits");
@@ -263,8 +591,8 @@ fn negotiation_accepts_only_rfc7692() {
     assert!(negotiate(Some("x-other"), Some("permessage-deflate")).is_err());
 }
 
-#[test]
-fn unknown_extension_relays_inside_a_named_loss() {
+#[tokio::test]
+async fn unknown_extension_relays_inside_a_named_loss() {
     // The 101 is the RFC 6455 section 1.3 example: this key and its accept value.
     const UPGRADE: &[u8] = b"GET /v1/responses HTTP/1.1\r\nHost: api.example.com\r\nUpgrade: websocket\r\n\
         Connection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\
@@ -324,6 +652,7 @@ fn unknown_extension_relays_inside_a_named_loss() {
         assert_eq!(end_reason(&calls, sid), EndReason::DecodeError);
         assert_eq!(gap_reasons(&calls, sid), [GapReason::DecodeFailed]);
     }
+    unknown_extension_through_serve().await;
 }
 
 // W3: the inflater always uses the full 15-bit window, which decodes any smaller one.
@@ -498,8 +827,8 @@ fn one_byte_reads_decode_the_same() {
 // W7: a frame that breaks RFC 6455 is a named loss for its message, the next message parses, and
 // nothing panics. A length that cannot be trusted stops parsing for the connection.
 
-#[test]
-fn violations_are_named_and_relaying_goes_on() {
+#[tokio::test]
+async fn violations_are_named_and_relaying_goes_on() {
     let wrong_mask = |dir: Dir| if dir == Dir::Up { None } else { Some(KEY) };
     type Case = (&'static str, Dir, Box<dyn Fn(Dir) -> Vec<u8>>);
     let cases: Vec<Case> = vec![
@@ -603,6 +932,7 @@ fn violations_are_named_and_relaying_goes_on() {
         assert!(!gap_reasons(&calls, sid).is_empty());
         assert_eq!(end_reason(&calls, sid), EndReason::DecodeError);
     }
+    violations_through_serve().await;
 }
 
 // W12: a long message is handed over in pieces while it is still arriving.
