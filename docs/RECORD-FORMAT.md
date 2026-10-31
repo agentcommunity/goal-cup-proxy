@@ -387,8 +387,8 @@ its meta):
   when a GAP of the tunnel's own reason is on that connection, `fail` when none is; a `sign_in`
   tunnel is no loss. A GAP on a decrypted listed connection is `named`. A `tls_refused` connection
   to a listed host whose host and fingerprint earlier ended a decrypted connection `complete` is
-  `warn`, unless its GAP says `alert: false`; a `long_tunnel` note for an unlisted host is `warn`.
-  Facts: `listed_conns`, `decrypted`, `sign_in`, `tunnels_named` (per reason), `tunnels_unnamed`,
+  `warn`, unless a GAP on it says `alert: false`; a `long_tunnel` note for an unlisted host is
+  `warn`. Facts: `listed_conns`, `decrypted`, `sign_in`, `tunnels_named` (per reason), `tunnels_unnamed`,
   `conn_gaps`, `long_tunnel_unlisted`, `refusal_after_trust`.
 - `conn_bytes`: per decrypted connection and direction, the plain bytes in its END tail
   (`plain_up`, `plain_down`) against what its streams account for. Over 1 MiB unaccounted is `warn`
@@ -442,7 +442,7 @@ the masker's own list, `crates/goalcup/src/mask/shapes.tsv`.
 
 The scan reads DATA joined per stream (a value split over two pieces is found), the joined text of
 server-sent events and WebSocket messages, OPEN meta, END and GAP tails, and events. A GAP or an
-offset jump cuts the join, so nothing matches across a hole. A span of only `*` is masked, not a hit.
+offset jump cuts the join, so nothing matches across a hole. A span of only `*` is masked, no hit.
 
 | Fact | Counts | Result |
 |---|---|---|
@@ -456,13 +456,13 @@ offset jump cuts the join, so nothing matches across a hole. A span of only `*` 
 `result` is the worst of the rows that hold an item, else `pass`. `in` is `<entry>/<boot>.<sid>`
 for a stream (`/deltas` for its joined text, `/meta` for its OPEN meta), `<entry>/<boot>.event` for
 an event, the path as given for a loose file. In the `secrets` check these are the `facts`, `first`
-is null and `why` is one line of counts, plus "the record was read only in part" if decoding stopped.
+is null and `why` is one line of counts, plus "the record was read only in part" if cut short.
 
 `goalcup-verify secrets PATH... [--known FILE]` prints one JSON object on standard output and one
 line of counts on standard error; it has no `--json` flag (that is a usage error). A part file is a
 record. A folder holding an entry has its record decoded and its other files read as raw bytes,
 except `rec/`, the recorder's own state (the run CA key among it), which is never read. Any other
-folder is walked, and any other file, or `-` (standard input), is raw bytes. The keys are `verifier`,
+folder is walked; any other file, or `-` (standard input), is raw bytes. The keys are `verifier`,
 `result` (`pass`, `warn` or `fail`), `exit`, `known_values` (values read from `FILE`, 0 without it),
 `inputs` (per path: `path`, `as` `record` or `raw`, `read` `whole` or `partial`) and the six facts
 above. Exit 2 on `fail`; else 1 when an input was read only in part; else 0, also on `warn`. Exit 3
@@ -525,7 +525,7 @@ give `token_count` events (Responses names, `cached_input_tokens`, `reasoning_ou
 repeat with no larger running total is skipped), Claude Code sessions the Anthropic names (largest
 per member over the lines of one `message.id`).
 
-**Thread hints**, by `connector` id. Any other connector gives wire calls only, joined as `wire_only`.
+**Thread hints**, by `connector` id. Any other connector gives wire calls only (`wire_only`).
 
 | Connector id | Native files read (by `meta.path` `<row>:<file>`) | Thread on the wire | Thread, parent and label in the files | Join |
 |---|---|---|---|---|
@@ -535,4 +535,4 @@ per member over the lines of one `message.id`).
 Neither file holds body text or a session file path: only model names, thread ids and agent labels
 (printable ASCII, at most 128 bytes, never all `*`), host names, the run, entry and connector ids,
 the harness version line (printable ASCII, at most 128 bytes), safe tokens (reason, effort and usage
-member names: at most 64 bytes from `A-Za-z0-9_.-` per part of a nested name), times and numbers leave the record.
+member names: at most 64 bytes of `A-Za-z0-9_.-` per name part), times and numbers leave the record.
