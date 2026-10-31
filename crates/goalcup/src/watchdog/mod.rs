@@ -416,6 +416,8 @@ pub fn run_with(mut plan: LaunchPlan, mut facts: StartFacts, recorder_exe: &Path
                     };
                     boot.send(&l);
                     seal = Some(l);
+                    // A seal asked is tried at once: no space from before holds it.
+                    restarts.hold = None;
                 }
             }
         }
@@ -466,6 +468,7 @@ pub fn run_with(mut plan: LaunchPlan, mut facts: StartFacts, recorder_exe: &Path
             };
             boot.send(&l);
             seal = Some(l);
+            restarts.hold = None;
         }
         let waited = (!boot.ended).then(|| boot.child.try_wait());
         if let Some(Ok(Some(_)) | Err(_)) = waited {

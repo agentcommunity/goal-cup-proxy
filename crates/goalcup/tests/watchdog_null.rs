@@ -519,7 +519,7 @@ fn watchdog_sealed_entry_boots_are_spaced_and_never_null() {
 }
 
 /// Ledger R3a (locked): when the null boots also die at boot, their spacing never pushes the
-/// normal try past the 30 s wait.
+/// normal try past the 30 s wait, and never holds the seal once the harness exits.
 #[test]
 fn watchdog_null_boots_dying_at_boot_keep_the_wait() {
     let Setup {
@@ -541,7 +541,9 @@ fn watchdog_null_boots_dying_at_boot_keep_the_wait() {
         unsafe { libc::kill(first as libc::pid_t, libc::SIGKILL) };
         let first_null = until("the first null boot", || {
             let log = boot_log(&m);
-            log.iter().find(|l| l.contains(&null))?[1].parse::<f64>().ok()
+            log.iter().find(|l| l.contains(&null))?[1]
+                .parse::<f64>()
+                .ok()
         });
         let next_try = until("the normal try", || {
             let log = boot_log(&m);
@@ -550,9 +552,13 @@ fn watchdog_null_boots_dying_at_boot_keep_the_wait() {
             t[1].parse::<f64>().ok()
         });
         std::fs::write(m.join("stop"), "").unwrap();
-        next_try - first_null
+        (next_try - first_null, Instant::now())
     });
     let _ = watchdog::run_with(plan, facts, &recorder);
-    let wait = driver.join().unwrap();
+    let ended = Instant::now();
+    let (wait, stopped) = driver.join().unwrap();
     assert!((29.0..=33.0).contains(&wait), "{wait} {:?}", boot_log(&d));
+    // The seal after the harness exit is tried at once, never held by a null boot's space.
+    let wind_down = ended.duration_since(stopped);
+    assert!(wind_down < Duration::from_secs(15), "{wind_down:?}");
 }
