@@ -16,6 +16,7 @@ macro_rules! collect {
     };
 }
 
+mod boot;
 #[cfg(feature = "test-hooks")]
 mod calls;
 pub mod clock;
@@ -27,6 +28,7 @@ mod handle;
 mod item;
 mod mask_worker;
 mod out;
+mod seal;
 pub mod secure;
 pub mod status;
 mod writer;
@@ -42,10 +44,23 @@ pub use handle::{OpenFlags, StreamHandle};
 pub use mask_worker::PANIC_MARKER;
 pub use status::{Live, Status};
 
+use crate::cli;
+use crate::mask::Masker;
+use crate::native::{self, NativeReader};
+use crate::proxy::{self, ProxyCtx, ProxyHandle, ca::RunCa};
+use crate::upload::{self, UploadCtx, UploadHandle};
+use crate::watchdog::{
+    Exit, HarnessFacts, SealReason, ToRecorder, ToWatchdog, read_line, send_line,
+};
 use item::Item;
 use serde_json::{Value, json};
-use status::{Losing, Off};
-use std::collections::HashMap;
+use status::{Losing, Off, Outlived};
+use std::collections::{HashMap, HashSet};
+use std::io::{BufRead, BufReader};
+use std::os::fd::FromRawFd;
+use std::os::unix::fs::DirBuilderExt;
+use std::os::unix::net::UnixStream;
+use std::path::Path;
 use std::process::ExitCode;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, mpsc};
@@ -65,7 +80,7 @@ pub struct Recorder {
 
 struct Inner {
     next_sid: AtomicU64,
-    /// To the mask worker. None under `for_tests` and in the scaffold, which send nothing.
+    /// To the mask worker. None under `for_tests` and in null mode, which send nothing.
     tx: Option<mpsc::Sender<Item>>,
     /// The soft guard in bytes.
     guard: u64,
@@ -97,9 +112,11 @@ struct Inner {
     wire_stopped: AtomicBool,
     /// The seal stopped every stream and event.
     all_stopped: AtomicBool,
-    /// Bytes offered after a stop, and the hosts of `conn` streams opened after it.
+    /// Bytes offered after a stop, and each connection that carried one, by its `conn` sid.
     after_stop_bytes: AtomicU64,
-    after_stop_hosts: Mutex<Vec<String>>,
+    after_stop_conns: Mutex<HashSet<Sid>>,
+    /// The raw host of each `conn` stream opened after a stop (no OPEN names it).
+    late_hosts: Mutex<HashMap<Sid, String>>,
     durable: watch::Sender<Durable>,
     /// Set only by `for_tests`.
     #[cfg(feature = "test-hooks")]
@@ -128,7 +145,8 @@ impl Inner {
             wire_stopped: AtomicBool::new(false),
             all_stopped: AtomicBool::new(false),
             after_stop_bytes: AtomicU64::new(0),
-            after_stop_hosts: Mutex::new(Vec::new()),
+            after_stop_conns: Mutex::new(HashSet::new()),
+            late_hosts: Mutex::new(HashMap::new()),
             durable,
             #[cfg(feature = "test-hooks")]
             calls: None,
@@ -171,15 +189,12 @@ impl Recorder {
             self,
             Call::Open(sid, kind, conn, req, from, flags, meta.clone())
         );
-        let handle = StreamHandle::new(self.clone(), sid, kind, from);
+        let handle = StreamHandle::new(self.clone(), sid, kind, conn, from);
         if !handle.opened() {
             if kind == StreamKind::Conn
                 && let Some(host) = meta.get("host").and_then(Value::as_str)
             {
-                let mut hosts = lock(&self.inner.after_stop_hosts);
-                if !hosts.iter().any(|h| h == host) {
-                    hosts.push(host.to_string());
-                }
+                lock(&self.inner.late_hosts).insert(sid, host.to_string());
             }
             return handle;
         }
@@ -294,7 +309,7 @@ impl Recorder {
     }
 
     /// Counts the item in `held`, then hands it on. A recorder that sends nothing (`for_tests`,
-    /// the scaffold) counts nothing.
+    /// null mode) counts nothing.
     fn send(&self, item: Item) {
         if self.inner.tx.is_none() {
             return;
@@ -404,10 +419,7 @@ pub(crate) fn sub(a: &AtomicU64, n: u64) {
     });
 }
 
-/// The front's API for the mask worker, the writer and the status thread.
-// `run_recorder` lands in the next slice; until then the writer and the mask worker run only
-// under `real_for_tests`.
-#[cfg_attr(not(feature = "test-hooks"), allow(dead_code))]
+/// The front's API for the mask worker, the writer, the boot and the status thread.
 impl Recorder {
     /// A recorder whose items go to the returned receiver, under soft guard `guard`.
     pub(crate) fn pipeline(guard: u64) -> (Recorder, mpsc::Receiver<Item>) {
@@ -437,6 +449,14 @@ impl Recorder {
     /// is lost without a count.
     pub(crate) fn count_after_stop(&self, n: u64) {
         self.inner.after_stop_bytes.fetch_add(n, Ordering::Relaxed);
+    }
+
+    /// Connection `conn` carried a byte after a stop. Once per stream handle; connection 0
+    /// (none) is not counted.
+    pub(crate) fn after_stop_conn(&self, conn: Sid) {
+        if conn != 0 {
+            lock(&self.inner.after_stop_conns).insert(conn);
+        }
     }
 
     /// The writer handed records worth `n` held bytes to the compressor. Only the writer calls
@@ -472,8 +492,7 @@ impl Recorder {
     }
 }
 
-/// The seal's API (PRD-02 section 11). `seal.rs` calls it in the next slice.
-#[allow(dead_code)]
+/// The seal's API (PRD-02 section 11).
 impl Recorder {
     /// The mask worker dropped an item worth `n` held bytes that it took: one that reached it
     /// after the seal's drain or marker (an offer or gap that read the stop flag just before it
@@ -505,14 +524,17 @@ impl Recorder {
         }
     }
 
-    /// Bytes offered after a stop, and the hosts of `conn` streams opened after it. The hosts are
-    /// raw OPEN meta: the seal runs each through the masker (`mask_meta`) before it reaches
-    /// `status.json` or `goalcup.log`, so a host holding a secret shape never reaches disk.
-    pub(crate) fn after_stop(&self) -> (u64, Vec<String>) {
-        (
-            self.inner.after_stop_bytes.load(Ordering::Relaxed),
-            lock(&self.inner.after_stop_hosts).clone(),
-        )
+    /// Bytes offered after a stop, and the connections that carried them, by sid, each with
+    /// its host when it was opened after the stop. The hosts are raw OPEN meta: the seal runs
+    /// each through the masker (`mask_meta`) before it reaches a record or `status.json`, so a
+    /// host holding a secret shape never reaches disk.
+    pub(crate) fn after_stop(&self) -> (u64, Vec<(Sid, Option<String>)>) {
+        let late = lock(&self.inner.late_hosts);
+        let mut conns: Vec<_> = (lock(&self.inner.after_stop_conns).iter())
+            .map(|sid| (*sid, late.get(sid).cloned()))
+            .collect();
+        conns.sort_unstable();
+        (self.inner.after_stop_bytes.load(Ordering::Relaxed), conns)
     }
 }
 
@@ -540,7 +562,6 @@ impl Recorder {
     /// made-up entry id, a 1 MiB zstd window (PRD-14 section 4) and the soft guard of
     /// `GOALCUP_TEST_GUARD_MB` when set. Its threads run for the life of the process.
     pub fn real_for_tests(dir: &std::path::Path, masker: crate::mask::Masker) -> Recorder {
-        use std::os::unix::fs::DirBuilderExt;
         const ENTRY: &str = "e00000000000000a1";
         let rec_dir = dir.join("rec");
         std::fs::DirBuilder::new()
@@ -560,16 +581,46 @@ impl Recorder {
         let mut log = counts::CountsLog::open(dir);
         let base = log.sync(dir).expect("counts.jsonl");
         let mask_rules = masker.mask_rules();
-        let start = json!({
-            "ev": "start", "run": "r00000000000000a1", "entry": ENTRY, "segment": 0,
-            "goalcup": env!("CARGO_PKG_VERSION"), "build": null,
-            "os": std::env::consts::OS, "arch": std::env::consts::ARCH,
-            "connector": "test", "connector_source": "builtin", "connector_sha256": null,
-            "harness_version": null, "hosts": {}, "hosts_sha256": null,
-            "mask_rules": mask_rules, "mask_values": masker.value_counts(),
-            "fd_limit": null, "keep": true, "deadline": null, "server_time": null,
-            "local_wall_at_server_time": null, "workspace_head": null, "resume": false,
-        });
+        let facts = crate::watchdog::StartFacts {
+            run: "r00000000000000a1".into(),
+            entry: ENTRY.into(),
+            segment: 0,
+            entry_dir: dir.to_path_buf(),
+            deadline: None,
+            server_time: None,
+            local_wall: 0,
+            workspace: dir.to_path_buf(),
+            connector: Value::Null,
+            harness_version: None,
+            keep: true,
+            build: None,
+            hosts: Value::Null,
+            hosts_sha256: String::new(),
+            native: Value::Null,
+            mask_rules: Value::Null,
+            values: Value::Null,
+            ca: crate::watchdog::CaPem {
+                cert: String::new(),
+                key: String::new(),
+            },
+            prev: None,
+            harness: None,
+            null_since: None,
+            notes: Vec::new(),
+        };
+        let typed = crate::watchdog::Typed {
+            connector: crate::connector::ConnectorRef {
+                id: "test".into(),
+                name: "test".into(),
+                sha256: String::new(),
+                source: crate::connector::ConnectorSource::Builtin,
+            },
+            hosts: crate::connector::HostList::default(),
+            native: crate::connector::NativeSources::default(),
+            mask_rules: Vec::new(),
+            values: Vec::new(),
+        };
+        let start = boot::start_event(&facts, &typed, &masker, &mask_rules, None, false);
         let (rec, rx) = Recorder::pipeline(guard::soft_guard());
         let (tx, out_rx) = mpsc::sync_channel(mask_worker::TO_WRITER);
         let board = status::Board::default();
@@ -616,11 +667,251 @@ pub fn low_priority() {
     }
 }
 
-/// The hidden recorder subcommand (PRD-10's `main.rs` dispatches to it): fd 3 is the listen
-/// socket, fd 4 the control socket, `null` the `--null` argument. The scaffold records nothing.
+/// The first control line is missing, too long, not a `start` line or holds a field that does
+/// not parse.
+const EXIT_NO_START: i32 = 65;
+/// The run CA from the first line cannot be imported.
+const EXIT_CA: i32 = 76;
+/// The masker cannot be built from its rules (PRD-02 section 8 step 5).
+const EXIT_MASKER: i32 = 78;
+
+/// The hidden recorder subcommand (PRD-10's `main.rs` dispatches to it; PRD-02 section 9.2): fd 3
+/// is the listen socket, fd 4 the control socket, `null` the `--null` argument. In this order:
+/// no core dump, the first line, the entry folder and the panic hook before any thread, the entry
+/// lock, the masker, the run CA, the proxy at once, the boot, the native reader, the uploader,
+/// the status thread, `ready`; then the control lines until the seal. A null recorder relays and
+/// records nothing, and so does a boot on an entry already sealed.
 pub fn run_recorder(null: bool) -> ExitCode {
-    let _ = null;
-    ExitCode::SUCCESS
+    secure::harden();
+    // SAFETY: the watchdog's spawn hands fd 4 to this process as a connected Unix socket, owned
+    // by nothing else here.
+    let ctl = unsafe { UnixStream::from_raw_fd(4) };
+    let Ok(read) = ctl.try_clone() else {
+        secure::die(EXIT_NO_START, "no_start_line")
+    };
+    let mut lines = BufReader::new(read);
+    // The first line holds the CA key and the exact values: never logged, never echoed.
+    let Some(Some(ToRecorder::Start(facts))) = read_line(&mut lines) else {
+        secure::die(EXIT_NO_START, "no_start_line")
+    };
+    let mut facts = *facts;
+    let Some(mut typed) = facts.typed() else {
+        secure::die(EXIT_NO_START, "no_start_line")
+    };
+    let dir = facts.entry_dir.clone();
+    let _ = std::fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(dir.join("rec"));
+    secure::panic_hook(&dir);
+    let _lock = boot::lock(&dir);
+    let masker = match null {
+        true => None,
+        false => match Masker::new(&typed.mask_rules, std::mem::take(&mut typed.values)) {
+            Ok(m) => Some(m),
+            Err(_) => secure::die(EXIT_MASKER, "masker"),
+        },
+    };
+    let Ok(ca) = RunCa::import(&facts.ca) else {
+        secure::die(EXIT_CA, "ca_import")
+    };
+    // SAFETY: the watchdog's spawn hands fd 3 to this process as a listening TCP socket, owned by
+    // nothing else here.
+    let listener = unsafe { std::net::TcpListener::from_raw_fd(3) };
+    let port = listener.local_addr().map_or(0, |a| a.port());
+    let (rec, rx) = match null {
+        true => (
+            Recorder {
+                inner: Arc::new(Inner::new(guard::CEILING, None)),
+            },
+            None,
+        ),
+        false => {
+            let (rec, rx) = Recorder::pipeline(guard::soft_guard());
+            (rec, Some(rx))
+        }
+    };
+    let proxy = proxy::serve(
+        listener,
+        ProxyCtx {
+            recorder: rec.clone(),
+            hosts: typed.hosts.clone(),
+            ca,
+        },
+    );
+    let board = status::Board::default();
+    board.set(|s| {
+        s.pid = std::process::id();
+        s.start_id = cli::proc_start_id(s.pid).unwrap_or(0);
+        s.port = port;
+        s.deadline = facts
+            .deadline
+            .map(|ms| goalcup_format::dump::wall(ms * 1_000_000));
+        s.harness = facts.harness.as_ref().map(harness_status);
+    });
+    let mut run = Run {
+        rec: rec.clone(),
+        board: board.clone(),
+        ctl,
+        proxy: Some(proxy),
+        native: None,
+        uploader: None,
+        status: None,
+        harness: facts.harness.clone(),
+        exit: None,
+        exit_at: None,
+        null,
+        sealed: false,
+    };
+    match (rx, &masker) {
+        (Some(rx), Some(masker)) => {
+            run.sealed = !boot::start(&rec, rx, &facts, &typed, masker, board.clone());
+            if !run.sealed {
+                let native = std::mem::take(&mut typed.native);
+                run.native = Some(native::start(rec.clone(), native));
+            }
+        }
+        _ => {
+            let t = counts::entry_totals(&dir);
+            let since = facts.null_since.unwrap_or(clock::wall_ns() / 1_000_000);
+            let since = Some(goalcup_format::dump::wall(since * 1_000_000));
+            let (spans, ms) = (t.off_spans, t.counts.off_ms);
+            rec.set_off(Off { spans, ms, since });
+            rec.set_counts(t.counts);
+        }
+    }
+    // On an entry sealed before this boot the uploader still runs its wrap-up (it reads the files,
+    // as in null mode), and `status.json` keeps the sealed one.
+    run.uploader = Some(upload::spawn(UploadCtx {
+        home: facts.home(),
+        run_dir: dir.parent().map(Path::to_path_buf).unwrap_or_default(),
+        entry_dir: dir.clone(),
+        run: facts.run.clone(),
+        entry: facts.entry.clone(),
+        recorder: (!null && !run.sealed).then(|| rec.clone()),
+        keep: facts.keep,
+    }));
+    if !run.sealed {
+        run.status = Some(status::spawn(rec, dir.clone(), board));
+    }
+    run.send(&ToWatchdog::Ready);
+    run.control(&mut lines, &dir, &facts.workspace)
+}
+
+/// What the control loop holds for the seal.
+struct Run {
+    rec: Recorder,
+    board: status::Board,
+    ctl: UnixStream,
+    proxy: Option<ProxyHandle>,
+    native: Option<NativeReader>,
+    uploader: Option<UploadHandle>,
+    /// The status thread, which the seal stops before its own writes.
+    status: Option<std::thread::JoinHandle<()>>,
+    harness: Option<HarnessFacts>,
+    exit: Option<Exit>,
+    exit_at: Option<Mono>,
+    null: bool,
+    /// The entry was sealed before this boot: the recorder records nothing, and a seal removes
+    /// the key, answers `sealed` and runs the wrap-up.
+    sealed: bool,
+}
+
+impl Run {
+    /// Reads control lines from the watchdog (PRD-02 section 8) until the seal. On EOF (the
+    /// watchdog is gone, section 9.1) it watches the harness by pid and start id each second and
+    /// seals with `harness_exit` once it is gone.
+    fn control(mut self, lines: &mut impl BufRead, dir: &Path, workspace: &Path) -> ExitCode {
+        while let Some(line) = read_line(lines) {
+            match line {
+                Some(ToRecorder::Launch(h)) => {
+                    self.board.set(|s| s.harness = Some(harness_status(&h)));
+                    self.harness = Some(h);
+                }
+                Some(ToRecorder::Exit { exit }) => {
+                    self.board.set(|s| {
+                        if let Some(h) = &mut s.harness {
+                            h.exit = exit;
+                        }
+                    });
+                    (self.exit, self.exit_at) = (exit, Some(self.rec.now()));
+                }
+                Some(ToRecorder::Seal { reason, outlived }) => {
+                    return self.seal(reason, outlived, dir, workspace);
+                }
+                // A null recorder exits without sealing; the watchdog starts a normal one.
+                Some(ToRecorder::Restart) if self.null => return ExitCode::SUCCESS,
+                _ => {}
+            }
+        }
+        // Slice B adds the recorder's own deadline timer to this watch.
+        loop {
+            let gone = (self.harness.as_ref()).is_none_or(|h| !cli::alive(h.pid, h.start_id));
+            if gone {
+                return self.seal(SealReason::HarnessExit, None, dir, workspace);
+            }
+            std::thread::sleep(std::time::Duration::from_secs(1));
+        }
+    }
+
+    /// The seal (PRD-02 section 11), once; `sealed` goes to the watchdog at its durable point. A
+    /// null recorder exits instead: the next normal boot recovers the entry and the watchdog sends
+    /// the seal again. On an entry sealed before this boot, the key a seal that died before
+    /// removing it left goes now, then `sealed` and the wrap-up.
+    fn seal(
+        mut self,
+        reason: SealReason,
+        outlived: Option<Outlived>,
+        dir: &Path,
+        workspace: &Path,
+    ) -> ExitCode {
+        if self.sealed {
+            seal::remove_key(dir);
+            self.send(&ToWatchdog::Sealed);
+            seal::wrap_up_sealed(dir, reason, self.uploader.take());
+            return ExitCode::SUCCESS;
+        }
+        if self.null {
+            return ExitCode::SUCCESS;
+        }
+        let proxy = self.proxy.take();
+        let quiet_since =
+            proxy.map(|p| Box::new(move || p.quiet_since()) as Box<dyn Fn() -> Mono + Send>);
+        let sealer = seal::Sealer {
+            rec: self.rec.clone(),
+            board: Some(self.board.clone()),
+            status: self.status.take(),
+            entry_dir: dir.to_path_buf(),
+            workspace: Some(workspace.to_path_buf()),
+            quiet_since,
+            native: self.native.take(),
+            uploader: self.uploader.take(),
+        };
+        let ask = seal::SealAsk {
+            reason,
+            server_reason: None,
+            harness: self.harness.clone(),
+            exit: self.exit,
+            exit_at: self.exit_at,
+            outlived,
+        };
+        sealer.run(ask, move || self.send(&ToWatchdog::Sealed));
+        ExitCode::SUCCESS
+    }
+
+    /// One line to the watchdog. A watchdog that is gone is not an error: recording goes on.
+    fn send(&self, line: &ToWatchdog) {
+        send_line(&self.ctl, line);
+    }
+}
+
+fn harness_status(h: &HarnessFacts) -> status::HarnessStatus {
+    status::HarnessStatus {
+        pid: h.pid,
+        started: h.started.clone(),
+        start_id: h.start_id,
+        exit: None,
+    }
 }
 
 #[cfg(test)]

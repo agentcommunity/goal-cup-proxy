@@ -574,10 +574,47 @@ fn boots(entry_dir: &Path) -> BTreeMap<u64, Boot> {
 /// on disk (None when there is none, or the index that would hold it could not be read).
 fn scan(rec: &Path) -> (BTreeMap<u64, Boot>, Option<u64>, Option<u64>) {
     let mut boots: BTreeMap<u64, Boot> = BTreeMap::new();
+    let mut link = None;
+    let (stopped, kept) = walk(rec, |n, r| match r {
+        Record::Part { next_link, .. } => link = next_link.checked_sub(1),
+        Record::Link { seq, .. } => {
+            boots.entry(n).or_default().seq = *seq;
+            link = Some(*seq);
+        }
+        Record::Event { json, .. } => {
+            let Ok(v) = serde_json::from_slice::<Value>(json) else {
+                return;
+            };
+            if v["ev"] == "count" {
+                let e = boots.entry(n).or_default();
+                (e.count, e.count_after) = (Some(v), link);
+                e.down_ms.clear();
+            }
+        }
+        Record::Gap {
+            sid: 0,
+            reason: GapReason::RecorderDown,
+            ..
+        } => {
+            let b = boots.entry(n).or_default();
+            b.down_ms.push(off_ms(r));
+            if b.count.is_none() {
+                b.spans += 1;
+            }
+        }
+        _ => {}
+    });
+    (boots, stopped, kept)
+}
+
+/// The one decoder of the part files: hands every record of `rec`, each part file read up to its
+/// last whole index line, to `f` with the boot of the PART before it. Returns the boot a failed
+/// read stopped in (0 before any PART) and the `seq` of the last whole index line on disk.
+fn walk(rec: &Path, mut f: impl FnMut(u64, &Record)) -> (Option<u64>, Option<u64>) {
     let files = match goalcup_format::read::part_files(rec) {
         Ok(files) => files,
         Err(e) if e.kind() == io::ErrorKind::NotFound => Vec::new(),
-        Err(_) => return (boots, Some(0), None),
+        Err(_) => return (Some(0), None),
     };
     let ends: Vec<io::Result<Option<IndexLine>>> = files.iter().map(|p| last_line(p)).collect();
     let mut kept = None;
@@ -595,54 +632,86 @@ fn scan(rec: &Path) -> (BTreeMap<u64, Boot>, Option<u64>, Option<u64>) {
             Ok(Some(l)) => l.c_end,
             // Recovery deletes a part file with no whole index line.
             Ok(None) => continue,
-            Err(_) => return (boots, Some(boot.unwrap_or(0)), kept),
+            Err(_) => return (Some(boot.unwrap_or(0)), kept),
         };
         let reader = match File::open(p).and_then(|f| goalcup_format::read::decode(f.take(end))) {
             Ok(r) => r,
             // Pruned after upload since it was listed.
             Err(e) if e.kind() == io::ErrorKind::NotFound => continue,
-            Err(_) => return (boots, Some(boot.unwrap_or(0)), kept),
+            Err(_) => return (Some(boot.unwrap_or(0)), kept),
         };
-        let mut link = None;
         for item in reader {
             let Ok(item) = item else {
-                return (boots, Some(boot.unwrap_or(0)), kept);
+                return (Some(boot.unwrap_or(0)), kept);
             };
-            let n = boot.unwrap_or(0);
-            match &item.rec {
-                Record::Part {
-                    boot: b, next_link, ..
-                } => (boot, link) = (Some(*b), next_link.checked_sub(1)),
-                Record::Link { seq, .. } => {
-                    boots.entry(n).or_default().seq = *seq;
-                    link = Some(*seq);
-                }
-                Record::Event { json, .. } => {
-                    let Ok(v) = serde_json::from_slice::<Value>(json) else {
-                        continue;
-                    };
-                    if v["ev"] == "count" {
-                        let e = boots.entry(n).or_default();
-                        (e.count, e.count_after) = (Some(v), link);
-                        e.down_ms.clear();
-                    }
-                }
-                r @ Record::Gap {
-                    sid: 0,
-                    reason: GapReason::RecorderDown,
-                    ..
-                } => {
-                    let b = boots.entry(n).or_default();
-                    b.down_ms.push(off_ms(r));
-                    if b.count.is_none() {
-                        b.spans += 1;
-                    }
-                }
-                _ => {}
+            if let Record::Part { boot: b, .. } = &item.rec {
+                boot = Some(*b);
             }
+            f(boot.unwrap_or(0), &item.rec);
         }
     }
-    (boots, None, kept)
+    (None, kept)
+}
+
+/// The COUNT event JSON of the last boot in `entry_dir`'s part files, recounted from its records
+/// up to its LINK `seq`: what recovery writes for a dead boot when `counts.jsonl` has no whole
+/// line at that `seq` (a torn tail, PRD-02 section 9.2 step 4). The same decoder as
+/// [`entry_totals`] and the writer's own [`Counter`]; an OPEN's flags and host come from its
+/// masked meta, which keeps `method`, `host` and `mode` (PRD-05). The gauges are 0.
+pub fn recount_at(entry_dir: &Path, seq: u64) -> Vec<u8> {
+    // The boot, its counter, its first and its last LINK's record-clock time.
+    let mut last: Option<(u64, Counter, u64, u64)> = None;
+    let mut done = false;
+    walk(&entry_dir.join("rec"), |n, r| {
+        if done {
+            return;
+        }
+        if last.as_ref().is_none_or(|b| b.0 != n) {
+            last = Some((n, Counter::new(&[]), 0, 0));
+        }
+        let Some((_, c, t0, t)) = last.as_mut() else {
+            return;
+        };
+        let (mut flags, mut host) = (OpenFlags::NONE, None);
+        match r {
+            Record::Part { mono_ns, .. } if *t0 == 0 => *t0 = *mono_ns,
+            Record::Event { json, .. } => {
+                let v: Value = serde_json::from_slice(json).unwrap_or_default();
+                if v["ev"] == "start" {
+                    let rules: Vec<String> =
+                        serde_json::from_value(v["mask_rules"].clone()).unwrap_or_default();
+                    *c = Counter::new(&rules);
+                }
+            }
+            Record::Link {
+                seq: s, mono_ns, ..
+            } => (*t, done) = (*mono_ns, *s >= seq),
+            Record::Open { skind, meta, .. } => {
+                let m: Value = serde_json::from_slice(meta).unwrap_or_default();
+                match skind {
+                    StreamKind::Conn if m["mode"] == "tunnel" => flags = OpenFlags::TUNNEL,
+                    StreamKind::HttpReq if m["method"] == "POST" => {
+                        flags = OpenFlags::DECRYPTED | OpenFlags::POST;
+                    }
+                    _ => {}
+                }
+                host = m["host"].as_str().map(String::from);
+            }
+            _ => {}
+        }
+        c.written(r, flags, host.as_deref());
+    });
+    let Some((boot, c, t0, t)) = last else {
+        return Vec::new();
+    };
+    let up_ms = t.saturating_sub(t0) / 1_000_000;
+    serde_json::to_vec(&c.count_event(boot, up_ms, 0, 0)).unwrap_or_default()
+}
+
+/// Whether a part file in `rec` has a whole index line: what recovery keeps.
+pub fn has_index_line(rec: &Path) -> bool {
+    let files = goalcup_format::read::part_files(rec).unwrap_or_default();
+    files.iter().any(|p| matches!(last_line(p), Ok(Some(_))))
 }
 
 /// A part file's last whole index line: one whose `c_end` is within the file, as recovery reads
