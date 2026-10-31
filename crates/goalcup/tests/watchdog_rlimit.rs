@@ -12,6 +12,7 @@ use goalcup::watchdog::spawn;
 use std::collections::BTreeMap;
 use std::net::{Ipv4Addr, TcpStream};
 use std::os::fd::AsRawFd;
+use std::os::unix::net::UnixStream;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Child;
@@ -155,7 +156,7 @@ fn the_recorder_gets_the_hard_limit_no_core_its_fds_and_its_own_session() {
         let dir = tempfile::tempdir().unwrap();
         let exe = probe(dir.path(), &[3, 4]);
         let listener = listener();
-        let (_ours, theirs) = spawn::control_pair().unwrap();
+        let (_ours, theirs) = UnixStream::pair().unwrap();
         let child = spawn::recorder(&exe, null, &listener, &theirs).unwrap();
         let pid = u64::from(child.id());
         let seen = Seen::read(dir.path(), child);
@@ -181,7 +182,7 @@ fn the_harness_gets_4096_none_of_our_sockets_our_group_and_only_its_env() {
     low_start();
     let dir = tempfile::tempdir().unwrap();
     let listener = listener();
-    let (ours, theirs) = spawn::control_pair().unwrap();
+    let (ours, theirs) = UnixStream::pair().unwrap();
     let ours_fds = [
         3,
         4,
@@ -219,6 +220,7 @@ fn the_harness_gets_4096_none_of_our_sockets_our_group_and_only_its_env() {
 #[test]
 fn a_taken_port_gives_way_to_a_new_one() {
     let (held, addr) = ports::held();
+    assert!(spawn::bind_exact(addr.port()).is_err(), "recover refuses");
     let bound = spawn::bind(addr.port()).unwrap();
     let at = bound.local_addr().unwrap();
     assert_eq!(at.ip(), Ipv4Addr::LOCALHOST);
@@ -245,9 +247,9 @@ fn a_port_with_connections_in_time_wait_is_bound_again() {
     let plain = socket2::Socket::new(socket2::Domain::IPV4, socket2::Type::STREAM, None).unwrap();
     let shown = plain.bind(&addr.into()).is_err();
     drop(plain);
-    let bound = spawn::bind(addr.port()).unwrap();
+    let bound = spawn::bind_exact(addr.port()).unwrap();
     assert_eq!(bound.local_addr().unwrap(), addr);
     if !shown {
-        eprintln!("no TIME_WAIT refusal without SO_REUSEADDR here; the rebind case is not shown");
+        eprintln!("SKIPPED: no TIME_WAIT refusal without SO_REUSEADDR here; rebind not shown");
     }
 }

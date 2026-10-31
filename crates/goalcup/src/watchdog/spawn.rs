@@ -1,5 +1,6 @@
 //! What the watchdog binds and starts (PRD-02 section 8 steps 2, 4 and 7, section 10): the listen
-//! socket, the control pair, the recorder and the harness.
+//! socket, the recorder and the harness. The control pair is `UnixStream::pair()`, which opens
+//! both ends with `FD_CLOEXEC` (`SOCK_CLOEXEC` on Linux).
 //!
 //! Both sockets carry `FD_CLOEXEC`; only the recorder's `pre_exec` clears it, on fd 3 and fd 4, so
 //! the harness never inherits them (a harness holding the listener keeps the port alive after
@@ -25,29 +26,24 @@ pub const CONTROL_FD: RawFd = 4;
 /// The accept backlog; the kernel clamps it to `somaxconn`.
 const BACKLOG: i32 = 4_096;
 
-/// Binds `127.0.0.1:port` with `SO_REUSEADDR` (so `goalcup recover` can reopen a port whose closed
-/// connections sit in TIME_WAIT), backlog 4,096 and `FD_CLOEXEC`. A port that is taken or refused
-/// gives way to port 0.
+/// [`bind_exact`], and a port that is taken or refused gives way to port 0 (`goalcup continue`).
 pub fn bind(port: u16) -> io::Result<TcpListener> {
-    match listen(port) {
-        Err(_) if port != 0 => listen(0),
+    match bind_exact(port) {
+        Err(_) if port != 0 => bind_exact(0),
         bound => bound,
     }
 }
 
-fn listen(port: u16) -> io::Result<TcpListener> {
+/// Binds `127.0.0.1:port` with `SO_REUSEADDR` (so `goalcup recover` can reopen a port whose closed
+/// connections sit in TIME_WAIT), backlog 4,096 and `FD_CLOEXEC`, or returns the OS error: recover
+/// reopens the same port or refuses.
+pub fn bind_exact(port: u16) -> io::Result<TcpListener> {
     let socket = Socket::new(Domain::IPV4, Type::STREAM, None)?;
     socket.set_cloexec(true)?;
     socket.set_reuse_address(true)?;
     socket.bind(&SocketAddr::from(([127, 0, 0, 1], port)).into())?;
     socket.listen(BACKLOG)?;
     Ok(socket.into())
-}
-
-/// The control socket pair, one JSON line each way. The standard library opens both ends with
-/// `FD_CLOEXEC` (`SOCK_CLOEXEC` on Linux).
-pub fn control_pair() -> io::Result<(UnixStream, UnixStream)> {
-    UnixStream::pair()
 }
 
 /// Starts `exe RECORDER_SUBCOMMAND [NULL_FLAG]`, stdin from `/dev/null`, in a session of its own

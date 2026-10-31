@@ -218,11 +218,10 @@ fn forty_streams_with_the_writer_held() {
     held_writer(40, (2 << 30) / BODY);
 }
 
-/// 200 streams, 256 MiB each rather than 2 GiB: past its first drop every offer takes the same
-/// drop path, so more bodies prove nothing new and only lengthen the hold the calls must fit in.
+/// 200 streams, 2 GiB each in 1.5 MB bodies (PRD-02 `pipeline_guard`).
 #[test]
 fn two_hundred_streams_with_the_writer_held() {
-    held_writer(200, (256 << 20) / BODY);
+    held_writer(200, (2 << 30) / BODY);
 }
 
 /// P3: 1,000 guard episodes in a row on one stream; recording resumes after every one.

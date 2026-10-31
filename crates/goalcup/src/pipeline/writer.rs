@@ -11,7 +11,7 @@
 #![cfg_attr(not(feature = "test-hooks"), allow(dead_code))]
 
 use super::clock::{self, Drift, Mono, now_pair, wall_at};
-use super::counts::{self, Counter, Counts, CountsLog, EntryTotals};
+use super::counts::{self, Counter, CountsLog, EntryTotals};
 use super::cursors::{Cursors, DurablePos, NativeCursor, SnapshotCursor};
 use super::out::{Out, Source};
 use super::status::{Board, Off};
@@ -181,7 +181,6 @@ impl Writer {
     /// Writes one record, counts it, releases its held bytes and tracks what status and the
     /// cursors need.
     fn write(&mut self, out: Out) {
-        let now = now_pair();
         let mut r = out.rec;
         if let Record::Gap {
             start_wall,
@@ -191,6 +190,7 @@ impl Writer {
             ..
         } = &mut r
         {
+            let now = now_pair();
             *start_wall = wall_at(Mono(*start_mono), now);
             *end_wall = wall_at(Mono(*end_mono), now);
         }
@@ -200,18 +200,14 @@ impl Writer {
         self.counter.written(&r, out.flags, out.host.as_deref());
         self.rec.release(out.held);
         self.dirty = true;
-        self.track(&r, out.flags, out.source, out.note, now);
+        self.track(&r, out.flags, out.source, out.note);
     }
 
-    fn track(
-        &mut self,
-        r: &Record,
-        flags: OpenFlags,
-        source: Option<Source>,
-        note: bool,
-        now: goalcup_format::Now,
-    ) {
-        let wall = |t: u64| Some(goalcup_format::dump::wall(wall_at(Mono(t), now) / S * S));
+    fn track(&mut self, r: &Record, flags: OpenFlags, source: Option<Source>, note: bool) {
+        let wall = |t: u64| {
+            let w = wall_at(Mono(t), now_pair());
+            Some(goalcup_format::dump::wall(w / S * S))
+        };
         match r {
             Record::Open { sid, skind, .. } => {
                 if let Some(Source::Native {
@@ -359,7 +355,8 @@ impl Writer {
             Ok(line) => self.seq = line.seq + 1,
             Err(e) => self.fail(&e),
         }
-        let c: Counts = serde_json::from_value(count).unwrap_or_default();
+        let mut c = self.counter.counts();
+        c.held_peak = count["held_peak"].as_u64().unwrap_or_default();
         let mut t = self.base.clone();
         t.counts.add(&c);
         t.off_spans = t.off_spans.saturating_add(self.counter.off_spans());
@@ -406,7 +403,6 @@ impl Writer {
             totals,
             at: self.rec.now(),
         });
-        self.rec.set_boot(self.boot);
         if let Err(e) = self.log.compact() {
             self.fail(&e);
         }

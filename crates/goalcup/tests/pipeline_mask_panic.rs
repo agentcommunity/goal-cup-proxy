@@ -1,21 +1,38 @@
 //! PRD-02 P13 (`pipeline_mask_panic`), points 1, 3 and 4: a masker panic drops only that piece
 //! and what the masker held, behind one `mask_failed` GAP, writes no raw byte, and the stream goes
 //! on with DATA and GAP exactly contiguous. A `fin` piece ends its message, and an EVENT body is
-//! masked. The panic is the test-hooks marker (`pipeline::PANIC_MARKER`).
+//! masked. A panic on metadata stars it and writes a `mask_failed` GAP. The panic is the
+//! test-hooks marker (`pipeline::PANIC_MARKER`). The cases where the masker holds bytes back run
+//! fully only with a masker that holds (PRD-05's core masker); with the S2 stub they say SKIPPED.
 
 mod common;
 
 use bytes::Bytes;
 use common::{HANG, within};
+use goalcup::connector::MaskRule;
 use goalcup::mask::Masker;
 use goalcup::pipeline::{
     EndReason, GapReason, OpenFlags, PANIC_MARKER, Recorder, StreamHandle, StreamKind,
 };
-use goalcup_format::Record;
-use serde_json::json;
+use goalcup_format::{FLAG_FIN, Record};
+use serde_json::{Value, json};
 use std::io::Read;
 use std::path::Path;
 use std::time::Duration;
+
+/// The masker in force with no connector rules (the S2 stub until PRD-05's core masker merges).
+fn masker() -> Masker {
+    Masker::new(&[] as &[MaskRule], Vec::new()).unwrap()
+}
+
+/// How many bytes of `piece` the masker in force holds back when it starts a `kind` stream.
+fn holds(kind: StreamKind, piece: &[u8]) -> usize {
+    let n = piece.len() - masker().stream(kind).push(piece).bytes.len();
+    if n == 0 {
+        eprintln!("SKIPPED: the masker in force holds nothing, so the held-bytes branch is not run");
+    }
+    n
+}
 
 fn open(rec: &Recorder, kind: StreamKind) -> StreamHandle {
     let flags = OpenFlags::POST | OpenFlags::DECRYPTED;
@@ -150,16 +167,16 @@ fn a_marker_piece_is_one_mask_failed_gap_and_the_stream_goes_on() {
     assert!(!contains(&all_bytes(dir.path()), PANIC_MARKER));
 }
 
-/// The masker in force (the S2 stub until PRD-05's core masker merges) with a candidate it may
-/// hold back at the end of the first piece; the panic drops it with the piece, and DATA, MASK and
-/// GAP stay contiguous either way. The stub holds nothing, so with it only the empty hold runs.
+/// The masker in force with a candidate it may hold back at the end of the first piece; the panic
+/// drops it with the piece, and DATA, MASK and GAP stay contiguous.
 #[test]
 fn a_panic_with_bytes_held_leaves_data_and_gap_contiguous() {
     let dir = tempfile::tempdir().unwrap();
-    let rec = Recorder::real_for_tests(dir.path(), Masker::new::<()>(&[], Vec::new()).unwrap());
+    let rec = Recorder::real_for_tests(dir.path(), masker());
     let mut h = open(&rec, StreamKind::HttpResp);
     let sid = h.sid();
     let pieces: [&[u8]; 3] = [b"data: {\"auth\": \"Bearer sk-", PANIC_MARKER, b"\"}\n\n"];
+    let want = holds(StreamKind::HttpResp, pieces[0]) as u64;
     for p in pieces {
         h.data(rec.now(), Bytes::from_static(p));
     }
@@ -170,6 +187,7 @@ fn a_panic_with_bytes_held_leaves_data_and_gap_contiguous() {
     let (reason, off, lost) = gaps[0];
     assert_eq!(reason, GapReason::MaskFailed);
     let held = (pieces[0].len() as u64).saturating_sub(off);
+    assert_eq!(held, want, "the GAP starts at the first held byte");
     assert_eq!(lost, held + PANIC_MARKER.len() as u64 + 1);
     assert!(
         data.iter().any(|d| d.0 == off + lost - 1),
@@ -211,7 +229,7 @@ fn a_fin_piece_ends_its_message() {
 #[test]
 fn an_event_body_is_masked() {
     let dir = tempfile::tempdir().unwrap();
-    let rec = Recorder::real_for_tests(dir.path(), Masker::new::<()>(&[], Vec::new()).unwrap());
+    let rec = Recorder::real_for_tests(dir.path(), masker());
     let key = format!("sk-{}{}", "x".repeat(20), "7".repeat(20));
     rec.event(json!({"ev": "note", "what": "connect_refused", "detail": format!("Bearer {key}")}));
     settle(&rec, 1);
@@ -221,4 +239,79 @@ fn an_event_body_is_masked() {
         .count();
     assert!(events >= 2, "the start event and the note are written");
     assert!(!contains(&all_bytes(dir.path()), key.as_bytes()));
+}
+
+/// A `fin` piece reaches the masker as `boundary()`: what it held comes out in that message, with
+/// `fin` on its last DATA. Bytes it held at an interrupted END keep their message's opcode.
+#[test]
+fn held_bytes_stay_in_their_websocket_message() {
+    let dir = tempfile::tempdir().unwrap();
+    let rec = Recorder::real_for_tests(dir.path(), masker());
+    let mut h = rec.open(StreamKind::WsUp, 0, 0, 0, OpenFlags::NONE, json!({}));
+    let sid = h.sid();
+    let (one, two): (&[u8], &[u8]) = (b"auth: Bearer sk-", b"next: Bearer sk-");
+    holds(StreamKind::WsUp, one);
+    h.ws(rec.now(), 0x1, true, Bytes::from_static(one));
+    h.ws(rec.now(), 0x2, false, Bytes::from_static(two));
+    h.end(rec.now(), EndReason::Interrupted, None);
+    settle(&rec, 1);
+    let (data, gaps) = stream(&records(dir.path()), sid);
+    assert!(gaps.is_empty());
+    let ops: Vec<(u8, bool)> = data.iter().map(|d| (d.2 >> 4, d.2 & FLAG_FIN != 0)).collect();
+    let k = ops.iter().position(|o| o.0 == 0x2).expect("the second message");
+    assert!(ops[..k].iter().all(|o| o.0 == 0x1) && ops[k..].iter().all(|o| *o == (0x2, false)));
+    assert_eq!(ops[k - 1], (0x1, true), "fin on the first message's last DATA");
+    assert_eq!(data[k].0, one.len() as u64, "the first message holds all its bytes");
+}
+
+/// A masker panic on an OPEN meta, an END tail or an EVENT stars every string in it, keeps its
+/// keys, numbers and `ev`, and writes one `mask_failed` GAP that loses no stream byte.
+#[test]
+fn a_metadata_panic_stars_it_and_writes_a_mask_failed_gap() {
+    let dir = tempfile::tempdir().unwrap();
+    let rec = Recorder::real_for_tests(dir.path(), Masker::passthrough_for_tests());
+    let mark = String::from_utf8_lossy(PANIC_MARKER).into_owned();
+    let flags = OpenFlags::POST | OpenFlags::DECRYPTED;
+    let mut h = rec.open(StreamKind::HttpReq, 0, 0, 0, flags, json!({"path": mark, "n": 7}));
+    let sid = h.sid();
+    h.data(rec.now(), Bytes::from_static(b"body"));
+    h.end(rec.now(), EndReason::Complete, Some(json!({"why": mark, "up": 5})));
+    rec.event(json!({"ev": "note", "what": mark}));
+    settle(&rec, 2);
+    let recs = records(dir.path());
+    let (_, gaps) = stream(&recs, sid);
+    let failed = (GapReason::MaskFailed, 0, 1);
+    assert_eq!(gaps, vec![failed, (GapReason::MaskFailed, 4, 1)]);
+    let json = |b: &[u8]| serde_json::from_slice::<Value>(b).unwrap();
+    let starred = |v: &Value| v.as_str().unwrap() == "*".repeat(mark.len());
+    let mut seen = 0;
+    for r in &recs {
+        match r {
+            Record::Open { sid: s, meta, .. } if *s == sid => {
+                let v = json(meta);
+                assert!(starred(&v["path"]) && v["n"] == 7);
+                seen += 1;
+            }
+            Record::End { sid: s, tail, .. } if *s == sid => {
+                let v = json(tail);
+                assert!(starred(&v["why"]) && v["up"] == 5);
+                seen += 1;
+            }
+            Record::Event { json: j, .. } if json(j)["what"].is_string() => {
+                let v = json(j);
+                assert!(starred(&v["what"]) && v["ev"] == "note");
+                seen += 1;
+            }
+            Record::Gap {
+                sid: 0,
+                reason: GapReason::MaskFailed,
+                off: 0,
+                lost: 1,
+                ..
+            } => seen += 1,
+            _ => {}
+        }
+    }
+    assert_eq!(seen, 4, "the OPEN, the END, the EVENT and the EVENT's GAP");
+    assert!(!contains(&all_bytes(dir.path()), b"mask-worker-panic-marker"));
 }

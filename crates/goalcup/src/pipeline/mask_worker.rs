@@ -1,11 +1,12 @@
 //! The mask worker (PRD-02 section 4): one low-priority thread that owns every stream's
 //! `StreamMasker`, masks each item off the relay and hands the records to the writer.
 //!
-//! Held accounting (the contract of the replan after core step 1): `taken` when an item comes
-//! off the item channel, `forwarded` for what goes to the writer, so taken = forwarded + held
+//! Held accounting (the contract of the replan after core step 1): `taken` once an item is
+//! masked (so an item the masker hangs on still waits, for the stall exit), `forwarded` for what goes to the writer, so taken = forwarded + held
 //! back. Bytes the masker holds back for a match stay held until it releases them; at END and
 //! GAP nothing stays held back. A masker panic drops the piece and the held bytes behind one
-//! `mask_failed` GAP, and the stream goes on with a fresh masker.
+//! `mask_failed` GAP, and the stream goes on with a fresh masker. A panic on metadata stars every
+//! string left in it and writes a `mask_failed` GAP that loses no stream byte.
 
 // `run_recorder` starts it in the next slice; until then only `Recorder::real_for_tests` does.
 #![cfg_attr(not(feature = "test-hooks"), allow(dead_code))]
@@ -15,7 +16,7 @@ use super::out::{Out, Source};
 use super::{ExitOnPanic, Mono, Recorder, Sid, low_priority};
 use crate::mask::{Masked, Masker, StreamMasker};
 use goalcup_format::{EndReason, FLAG_FIN, GapReason, Record, StreamKind};
-use serde_json::Value;
+use serde_json::{Value, json};
 use std::collections::{HashMap, VecDeque};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::mpsc;
@@ -32,6 +33,10 @@ const MAX_DATA: usize = 256 << 10;
 /// as a masker fault would (`tests/pipeline_mask_panic.rs`). No env var is read.
 #[cfg(feature = "test-hooks")]
 pub const PANIC_MARKER: &[u8] = b"\x01mask-worker-panic-marker\x02";
+
+/// Test builds only: metadata whose JSON text holds this panics the same way.
+#[cfg(feature = "test-hooks")]
+const PANIC_TEXT: &str = "mask-worker-panic-marker";
 
 /// Starts the mask worker. It runs until the item channel closes; a panic outside the per-item
 /// `catch_unwind` ends the process with 70.
@@ -80,14 +85,21 @@ struct Stream {
     pieces: VecDeque<(u64, Mono)>,
     /// Held bytes taken and not yet forwarded.
     owed: u64,
+    /// The opcode of the last WebSocket piece, for bytes the masker releases at a GAP or END.
+    op: u8,
 }
 
 impl Stream {
-    /// The time of the earliest input piece holding byte `off`.
-    fn time_at(&mut self, off: u64, or: Mono) -> Mono {
+    /// Forgets the input pieces that end at or before `off`.
+    fn drop_to(&mut self, off: u64) {
         while self.pieces.front().is_some_and(|p| p.0 <= off) {
             self.pieces.pop_front();
         }
+    }
+
+    /// The time of the earliest input piece holding byte `off`.
+    fn time_at(&mut self, off: u64, or: Mono) -> Mono {
+        self.drop_to(off);
         self.pieces.front().map_or(or, |p| p.1)
     }
 }
@@ -95,7 +107,6 @@ impl Stream {
 impl Worker {
     fn item(&mut self, item: Item) {
         let held = item.held();
-        self.rec.taken(held);
         let sid = match &item {
             Item::Event { .. } => 0,
             Item::Open { sid, .. }
@@ -108,12 +119,20 @@ impl Worker {
         self.stream(sid).owed += held;
         match item {
             Item::Event { t, mut ev } => {
-                let note = ev.get("ev").and_then(Value::as_str) == Some("note");
-                mask_value(&self.masker, &mut ev);
+                let name = ev.get("ev").cloned();
+                let note = name.as_ref().and_then(Value::as_str) == Some("note");
+                let ok = self.mask(&mut ev);
+                if let (false, Some(name), Some(m)) = (ok, name, ev.as_object_mut()) {
+                    // The event's name is the recorder's own word, never a value.
+                    m.insert("ev".into(), name);
+                }
                 let json = json_bytes(&ev);
                 let mut o = Out::new(Record::Event { t: t.ns(), json }, 0);
                 o.note = note;
                 self.outs.push(o);
+                if !ok {
+                    self.meta_lost(0, t, 0, "event");
+                }
             }
             Item::Open {
                 t,
@@ -124,31 +143,30 @@ impl Worker {
                 mut meta,
                 ..
             } => {
-                let host = (kind == StreamKind::Conn)
+                let mut host = (kind == StreamKind::Conn)
                     .then(|| meta.get("host").and_then(Value::as_str))
                     .flatten()
-                    .and_then(|h| {
-                        let mut v = Value::String(h.to_string());
-                        mask_value(&self.masker, &mut v);
-                        v.as_str().map(String::from)
-                    });
+                    .map(|h| Value::String(h.to_string()));
                 let source = Source::of(kind, &meta);
-                mask_value(&self.masker, &mut meta);
+                let ok = host.as_mut().is_none_or(|h| self.mask(h)) & self.mask(&mut meta);
+                let host = host.and_then(|h| h.as_str().map(String::from));
                 let m = self.masker.stream(kind);
                 let s = self.stream(sid);
                 (s.kind, s.m) = (kind, m);
-                let (t, skind, meta) = (t.ns(), kind, json_bytes(&meta));
                 let r = Record::Open {
                     sid,
-                    t,
-                    skind,
+                    t: t.ns(),
+                    skind: kind,
                     conn,
                     req,
-                    meta,
+                    meta: json_bytes(&meta),
                 };
                 let mut o = Out::new(r, 0);
                 (o.flags, o.host, o.source) = (flags, host, source);
                 self.outs.push(o);
+                if !ok {
+                    self.meta_lost(sid, t, 0, "open");
+                }
             }
             Item::Data {
                 t, off, ws, bytes, ..
@@ -163,6 +181,7 @@ impl Worker {
                 ..
             } => {
                 self.release(sid, start, |m| m.gap());
+                let tail = self.tail(sid, end, off, tail);
                 let r = Record::Gap {
                     sid,
                     reason,
@@ -172,7 +191,7 @@ impl Worker {
                     end_mono: end.ns(),
                     off,
                     lost: lost.map_or(0, |n| n.saturating_add(1)),
-                    tail: self.tail(tail),
+                    tail,
                 };
                 self.outs.push(Out::new(r, 0));
                 let s = self.stream(sid);
@@ -196,7 +215,9 @@ impl Worker {
                     join(&mut out, std::mem::replace(m, next).finish());
                     out
                 });
-                let (t, tail) = (t.ns(), self.tail(tail));
+                let s = self.stream(sid);
+                let off = if s.kind == StreamKind::Conn { 0 } else { s.out };
+                let (t, tail) = (t.ns(), self.tail(sid, t, off, tail));
                 self.outs.push(Out::new(
                     Record::End {
                         sid,
@@ -209,6 +230,8 @@ impl Worker {
                 ));
             }
         }
+        // Counted as waiting until here, so a masker that hangs on an item trips the stall exit.
+        self.rec.taken(held);
         if !self.outs.is_empty() {
             self.forward(sid);
         }
@@ -222,6 +245,9 @@ impl Worker {
     /// empty message gets one empty DATA with `fin`.
     fn data(&mut self, sid: Sid, t: Mono, off: u64, ws: Option<Ws>, bytes: &[u8]) {
         let s = stream(&mut self.streams, &self.masker, sid);
+        if let Some(w) = ws {
+            s.op = w.opcode;
+        }
         if s.inp == s.out {
             // Nothing held back: start where this piece starts (after a GAP moved the offset).
             (s.out, s.inp) = (off, off);
@@ -245,10 +271,10 @@ impl Worker {
             Ok(m) => {
                 let opcode = ws.map_or(0, |w| w.opcode);
                 let before = self.outs.len();
-                emit(s, sid, &m, (opcode, fin), t, &mut self.outs);
+                emit(s, sid, m, (opcode, fin), t, &mut self.outs);
                 if fin && self.outs.len() == before {
                     self.outs.push(Out::new(
-                        data_rec(sid, t, s.out, (opcode << 4) | FLAG_FIN, &[]),
+                        data_rec(sid, t, s.out, (opcode << 4) | FLAG_FIN, Vec::new()),
                         0,
                     ));
                 }
@@ -258,11 +284,12 @@ impl Worker {
     }
 
     /// Runs `f` on the stream's masker inside `catch_unwind` and emits what it released, or the
-    /// `mask_failed` GAP for what it held. Afterwards nothing is held back.
+    /// `mask_failed` GAP for what it held. Afterwards nothing is held back. Released bytes keep
+    /// the opcode of the WebSocket message they belong to, without `fin`.
     fn release(&mut self, sid: Sid, t: Mono, f: impl FnOnce(&mut StreamMasker) -> Masked) {
         let s = stream(&mut self.streams, &self.masker, sid);
         match catch_unwind(AssertUnwindSafe(|| f(&mut s.m))) {
-            Ok(m) => emit(s, sid, &m, (0, false), t, &mut self.outs),
+            Ok(m) => emit(s, sid, m, (s.op, false), t, &mut self.outs),
             Err(_) => failed(s, sid, t, &self.rec, &self.masker, &mut self.outs),
         }
         if s.out != s.inp {
@@ -271,12 +298,52 @@ impl Worker {
         }
     }
 
-    /// A GAP or END tail, masked; empty for none.
-    fn tail(&self, tail: Option<Value>) -> Vec<u8> {
-        tail.map_or_else(Vec::new, |mut v| {
-            mask_value(&self.masker, &mut v);
-            json_bytes(&v)
-        })
+    /// A GAP or END tail on `sid`, masked; empty for none. A masker panic on it writes the
+    /// `mask_failed` GAP at `t` and `off` first.
+    fn tail(&mut self, sid: Sid, t: Mono, off: u64, tail: Option<Value>) -> Vec<u8> {
+        let Some(mut v) = tail else {
+            return Vec::new();
+        };
+        if !self.mask(&mut v) {
+            self.meta_lost(sid, t, off, "tail");
+        }
+        json_bytes(&v)
+    }
+
+    /// `mask_meta` inside `catch_unwind`. On a panic it stars every string left in `v`, as
+    /// `fail_closed` does, so no raw value is written while keys and numbers (a tunnel's `up` and
+    /// `down`) stay, and returns false: the caller then writes [`Worker::meta_lost`].
+    fn mask(&self, v: &mut Value) -> bool {
+        let ok = catch_unwind(AssertUnwindSafe(|| {
+            #[cfg(feature = "test-hooks")]
+            if v.to_string().contains(PANIC_TEXT) {
+                panic!("mask worker test marker");
+            }
+            self.masker.mask_meta(v);
+        }))
+        .is_ok();
+        if !ok {
+            star(v);
+        }
+        ok
+    }
+
+    /// The `mask_failed` GAP of metadata the masker failed on (ledger R4): from `t` to now at the
+    /// stream's `off`, no stream byte lost (`lost` 1), tail `{"meta": what}` naming the part.
+    fn meta_lost(&mut self, sid: Sid, t: Mono, off: u64, what: &str) {
+        let end = self.rec.now().max(Mono(t.ns() + 1));
+        let r = Record::Gap {
+            sid,
+            reason: GapReason::MaskFailed,
+            start_wall: 0,
+            end_wall: 0,
+            start_mono: t.ns(),
+            end_mono: end.ns(),
+            off,
+            lost: 1,
+            tail: json_bytes(&json!({ "meta": what })),
+        };
+        self.outs.push(Out::new(r, 0));
     }
 
     fn stream(&mut self, sid: Sid) -> &mut Stream {
@@ -317,27 +384,31 @@ fn stream<'a>(streams: &'a mut HashMap<Sid, Stream>, masker: &Masker, sid: Sid) 
         inp: 0,
         pieces: VecDeque::new(),
         owed: 0,
+        op: 0,
     })
 }
 
 /// DATA records of at most 256 KiB for `m`, each followed by one MASK per span it touches, from
 /// the stream's next offset. Each DATA takes the time of the earliest input piece it holds (`t`
 /// when none is known). `ws` is the WebSocket opcode and whether the message ends here.
-fn emit(s: &mut Stream, sid: Sid, m: &Masked, ws: (u8, bool), t: Mono, outs: &mut Vec<Out>) {
+fn emit(s: &mut Stream, sid: Sid, m: Masked, ws: (u8, bool), t: Mono, outs: &mut Vec<Out>) {
     let (opcode, fin) = ws;
-    let base = s.out;
+    let Masked { mut bytes, spans } = m;
+    let (base, n) = (s.out, bytes.len());
     let mut at = 0;
-    while at < m.bytes.len() {
-        let k = MAX_DATA.min(m.bytes.len() - at);
-        let last = at + k == m.bytes.len();
+    while at < n {
+        let k = MAX_DATA.min(n - at);
         let off = base + at as u64;
         let t = s.time_at(off, t);
-        let flags = (opcode << 4) | (if fin && last { FLAG_FIN } else { 0 });
-        outs.push(Out::new(
-            data_rec(sid, t, off, flags, &m.bytes[at..at + k]),
-            0,
-        ));
-        for sp in &m.spans {
+        let flags = (opcode << 4) | (if fin && at + k == n { FLAG_FIN } else { 0 });
+        // One record, the common case, takes the masker's buffer instead of a copy.
+        let chunk = if k == n {
+            std::mem::take(&mut bytes)
+        } else {
+            bytes[at..at + k].to_vec()
+        };
+        outs.push(Out::new(data_rec(sid, t, off, flags, chunk), 0));
+        for sp in &spans {
             let (lo, hi) = (sp.start.max(at), (sp.start + sp.len).min(at + k));
             if lo < hi {
                 let rec = Record::Mask {
@@ -351,8 +422,8 @@ fn emit(s: &mut Stream, sid: Sid, m: &Masked, ws: (u8, bool), t: Mono, outs: &mu
         }
         at += k;
     }
-    s.out = base + m.bytes.len() as u64;
-    s.time_at(s.out, t);
+    s.out = base + n as u64;
+    s.drop_to(s.out);
 }
 
 /// A masker panic: the piece and the held bytes are dropped behind one `mask_failed` GAP from
@@ -378,13 +449,13 @@ fn failed(s: &mut Stream, sid: Sid, t: Mono, rec: &Recorder, masker: &Masker, ou
     s.m = masker.stream(s.kind);
 }
 
-fn data_rec(sid: Sid, t: Mono, off: u64, flags: u8, bytes: &[u8]) -> Record {
+fn data_rec(sid: Sid, t: Mono, off: u64, flags: u8, bytes: Vec<u8>) -> Record {
     Record::Data {
         sid,
         t: t.ns(),
         off,
         flags,
-        bytes: bytes.to_vec(),
+        bytes,
     }
 }
 
@@ -398,10 +469,16 @@ fn join(a: &mut Masked, b: Masked) {
     a.bytes.extend(b.bytes);
 }
 
-/// `mask_meta` inside `catch_unwind`: a panic leaves an empty object, never the raw value.
-fn mask_value(masker: &Masker, v: &mut Value) {
-    if catch_unwind(AssertUnwindSafe(|| masker.mask_meta(v))).is_err() {
-        *v = Value::Object(serde_json::Map::new());
+/// Stars every string leaf of `v`, same length; keys, numbers, bools and null stay.
+fn star(v: &mut Value) {
+    let mut stack = vec![v];
+    while let Some(v) = stack.pop() {
+        match v {
+            Value::String(s) => *s = "*".repeat(s.len()),
+            Value::Array(a) => stack.extend(a.iter_mut()),
+            Value::Object(o) => stack.extend(o.values_mut()),
+            Value::Null | Value::Bool(_) | Value::Number(_) => {}
+        }
     }
 }
 
