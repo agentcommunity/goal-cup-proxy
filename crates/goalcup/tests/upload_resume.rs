@@ -373,8 +373,8 @@ fn a_panic_in_a_round_or_a_beat_leaves_the_uploader_running() {
     // A beat's panic leaves `upload.json` alone; a guard whose wake is let go ends.
     let fresh = Mutex::new(UploadJson::new(RUN_ID.into(), ENTRY.into()));
     drop(wake);
-    let slow = Policy::default();
-    guard(false, dir.path(), &fresh, &slow, &rx, || panic!("a test panic"));
+    let (slow, boom) = (Policy::default(), || panic!("a test panic"));
+    guard(false, dir.path(), &fresh, &slow, &rx, boom);
     assert_eq!(fresh.lock().unwrap().last_error, None);
     assert_eq!(log().lines().count(), 3);
 }
