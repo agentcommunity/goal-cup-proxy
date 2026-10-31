@@ -2407,3 +2407,8 @@ kept and now cites BUILD-PROMPT section 5, since B3 no longer carries it.
   twice). Overage accepted by review (no cut keeps behaviour); carry to the end-of-build report.
 - **Gate effect:** none on order. The gated half of PRD-10 still waits on `watchdog::run`,
   `watchdog::recover` and `pipeline::close_dead_entry`. No seam change. No locked ledger item is touched.
+
+### 2026-10-31, replan after PRD-03 slice 4 (merge a3dbd3d5)
+
+- **PRD-03 code is complete** (slices 1 to 4). The only open item is pad acceptance 3, a watcher run in a pad box (PRD-12). Treat it as a Phase 1 pad row, not a build task.
+- **Size report, PRD-03** (`wc -l` on integration): src 5,961 against the 4,250 row (+40%; 4,400 replanned, +35%); tests 3,942 against 2,000 (about twice). Carry to the end-of-build report with the PRD-10 and PRD-12 overages. No locked ledger item is touched.

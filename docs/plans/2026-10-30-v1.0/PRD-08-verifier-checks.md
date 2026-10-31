@@ -1187,3 +1187,7 @@ PRD-02's mask worker writes two record shapes PRD-01's text does not list yet; t
 - Slice 7 accepts both PRD-02 record shapes (the mask_failed GAP with lost 1 and a meta tail; the empty DATA with fin). The PRD-01 text still needs the two shapes noted; that stays with PRD-01 and PRD-02.
 - Open nits, both inside PRD-08 and none moves a seam: (1) timeline `off_ms` floors each head, tail and 10-minute piece on its own, so the timeline sum can sit a few ms under `counts.off_ms` for real nanosecond walls. Fix: carry nanoseconds in the tally and divide once per row at output; also correct the module comment in `timeline.rs` lines 3-4 to say the head goes to bucket 0 and the tail to the last bucket. (2) `Out.covers` and `o.timeline` are cloned in `report.rs`; moving them removes two clones, optional.
 - Do these in the next PRD-08 touch only. A test should use non-ms-aligned span times. No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-31, replan after PRD-03 slice 4 (merge a3dbd3d5): h2 GAP reasons the checks will see
+
+- On a decrypted h2 connection, `h2_unsupported` GAPs now carry a real `lost` for an extended CONNECT stream or an orphan response while the server allows extended CONNECT, and the `conn` GAP at the close counts frames held for ended streams. `conn_bytes` counts these as named loss, not as an unaccounted gap. No new reason and no locked ledger item is touched.

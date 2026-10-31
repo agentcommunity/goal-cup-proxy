@@ -1863,3 +1863,7 @@ taken; "rejected" says why. Fixes for other files are made by those files' owner
 - **Still not shown:** rung 1 stops at "start not built" until a `goalcup` build is on integration. Pad passing the folder checks is not a pass of start. If PRD-10 changes the folder rule, the pad changes with it (section 3 step 2 is the one source).
 - **Size, `wc -l` at fe40990f:** `scripts/pad/` outside fixtures is 4,344 lines against the PRD-00 row of about 1,350 to 1,450; `pad-run` 1,006, `check.py` 762, `pad` 736, `test_pad.py` 492, `table` 193, `selftest` 188. This slice added about 40 net. The overage stays the owner question already logged; no row is raised here.
 - No locked ledger item is touched.
+
+### 2026-10-31, replan after PRD-03 slice 4 (merge a3dbd3d5): acceptance 3 is now runnable
+
+- The h2 parser is on integration, so `h2-parallel.sh` (acceptance 3) can pass for real in a pad box; before this it could only show `h2_unsupported`. The watcher reads the record: four `http_req`/`http_resp` pairs with `ver` "2", no `h2_unsupported` or `h2_error` GAP, and a verifier exit 0. A GAP `h2_unsupported` on this row now fails it. No locked ledger item is touched.
