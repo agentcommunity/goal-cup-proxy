@@ -1499,3 +1499,12 @@ What the pad calls, as merged (PRD-12 note):
   needs a decision line that names the point the lines serve; this slice's are points 3, 4 and 6 and the
   line is recorded in PRD-16.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-31, replan after PRD-06 slice 5 (merge 68ec7f2d)
+
+- `upload::manual::run(entry_dir, run_dir, (run_id, entry_id), keep) -> Outcome` is on integration (PRD-06
+  note names every variant). The upload dispatch in `main.rs` can be wired now. `StillRecording` means
+  "the entry sends itself": print the PRD-06 section 10 line, exit 0. `NotClosed` stays unwired until PRD-06
+  slice 6 (it calls `close_dead_entry` inside `run`); until then show the `continue` line, as `seal` does.
+  `Refused`, `Closed`, `Stuck` and `NoServer` take the section 10 lines; none is shown with a status code or
+  token (point 4).

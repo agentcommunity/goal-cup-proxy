@@ -2330,3 +2330,19 @@ kept and now cites BUILD-PROMPT section 5, since B3 no longer carries it.
 
 - **Size report, PRD-03** (`wc -l` on integration at 47835216): src is 4,611 lines (mod 17, hosts 113, pump 324, tunnel 190, http1 1,090, ca 439, connect 673, decode 812, tls 203, ws 750) against the 4,250 row in PRD-00 "Size budget": +8.5%, under the +10% line (4,675). `h2` and `serve` are not yet merged and will cross it unless something shrinks; each needs a replan `decision` line naming the point the extra lines serve. Proxy tests are not re-counted here.
 - Plan effects: none on the build order, a seam or a phase check. `serve` stays the gate for PRD-02 slice A. The review nits (pump `reason` doc, one F6 mid-upload case, `Pumped.upstream`) ride the serve slice; see the PRD-03 note. No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-31, replan after PRD-06 slice 5 (merge 68ec7f2d)
+
+- **Size report, PRD-06** (`wc -l` at 68ec7f2d, row "Upload (PRD-06)", 940 src and 1,000 tests): src
+  2,948 (314% of the row; 448 over the replan ceiling of 2,500), `upload_*` tests 2,178 (218%; 278 over the
+  ceiling of 1,900). Per-file figures are in the PRD-06 note. The decision stands: the lines serve points 3
+  and 5. Slice 6 (older-entry queue, dead-entry close) is the only code left; it must add under about 150
+  src lines. Only a Rust total past about 18,100 src or about 14,200 tests becomes the owner question.
+- **Build order:** PRD-06 slice 6 waits on PRD-02 `dead.rs` (`close_dead_entry`), which is not on
+  integration at 68ec7f2d. PRD-10 can wire the upload dispatch now (PRD-10 note); its `NotClosed` case waits
+  for slice 6. Box results as reported: fmt and clippy clean, 401 tests green on a test merge with
+  integration, prune-vs-live-writer stress at 40 and 200 streams with no loss without a GAP.
+- Review of slice 5 found and fixed: prune removing a seal part early (kept-last-indexed-part rule),
+  manual waiting behind a live `upload.lock`, seal detection by last line, `counts.jsonl` not synced before
+  prune. Three nits remain (PRD-06 note). No locked ledger item is touched and no owner question comes
+  from this slice.

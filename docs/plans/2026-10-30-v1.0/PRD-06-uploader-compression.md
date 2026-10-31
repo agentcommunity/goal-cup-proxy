@@ -1089,3 +1089,27 @@ PRD-12 and PRD-17.
   tests stay: one guards point 4 (a refused call never shows the token), the other a 409 or 429 answered
   before a PUT body ends, which no `upload_*` binary covers. The old `crates/goalcup-cli/src/upload`
   goes with PRD-13, which is where the net size falls.
+
+### 2026-10-31, replan after slice 5 (merge 68ec7f2d)
+
+- **Done:** prune (section 7), `upload.lock`, `upload::manual::run` (section 9), the slice 4 cuts (the
+  `Thread { upload }` flag replaces the `UP` name compare; one log line when the filtered seal-LINK read
+  finds nothing). `goalcup upload` answers with `Outcome`: `Done`, `AlreadyThere`, `StillRecording`,
+  `NotClosed`, `Local`, `NoServer`, `Refused(u16)`, `Closed { upload_by }`, `Stuck`. PRD-10 maps each to a
+  section 10 line; `NotClosed` is the only one it must not show as an error, because slice 6 closes it.
+- **Slice 6 (left):** the older-entry queue (section 1) and, in `manual::run`, the dead-entry close: on
+  `NotClosed` call `pipeline::close_dead_entry` (PRD-02 9.4), then run the same sealed path. `dead.rs` is
+  not on integration yet; build against the PRD-02 shape `close_dead_entry(dir) -> Result<Closed,
+  StillRecording>` and map `StillRecording` to `Outcome::StillRecording`. If it is still absent when slice 6
+  starts, poll up to 90 minutes, then land the queue alone and leave `NotClosed` as built.
+- **Nits for slice 6 to take while in the files (no behaviour change):** in `prune.rs` clone the
+  `upload.json` snapshot first (`let snap = lock(j).clone();`) so the mutex is not held across the two
+  syncs of the write; rewrap the doc comments of `connect` (past 100 columns) and `manual::send` by hand.
+- **Size (wc -l at 68ec7f2d, inline tests counted):** src 2,948 (beat 288, chunk 273, client 644, manual
+  232, mod 508, policy 232, prune 90, send 415, state 266); `upload_*` tests 2,178 (backoff 92, beat 608,
+  chunks 516, manual 239, null 94, prune 249, resume 380). The replan ceilings of 2,500 and 1,900 are
+  passed by 448 and 278. The slice itself adds 322 src and 488 tests and cut lines elsewhere; the overage
+  is mostly earlier slices. No behaviour-keeping cut is known. Slice 6 adds only the queue and a short
+  call, and must not grow `client.rs`. The overage serves points 3 and 5 (see the slice 5 note). Net
+  against the Rust totals at the end-of-build report; the old `goalcup-cli/src/upload` goes with PRD-13.
+- No locked ledger item is touched.
