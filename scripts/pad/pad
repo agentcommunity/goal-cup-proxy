@@ -90,6 +90,14 @@ def append(path, doc):
         f.write(json.dumps(doc, sort_keys=True) + "\n")
 
 
+def read_json(path):
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return {}
+
+
 def queue_slot(name, pad, out_root, who):
     """Section 7, per key at once: pad-out/queue/<key name>/ holds one file per held slot (pid, start; the name only, never a value).
     Waits (a line a minute) until fewer than per_key (per_key_deepseek until queue.json says a row passed 5% 429) are held,
@@ -107,9 +115,9 @@ def queue_slot(name, pad, out_root, who):
                     held.append(f)
                 except ProcessLookupError:
                     os.unlink(os.path.join(d, f))
-                except (PermissionError, ValueError):
+                except PermissionError:
                     held.append(f)
-            down = os.path.isfile(os.path.join(out_root, "queue.json")) and name in read_json(os.path.join(out_root, "queue.json")).get("downgraded", [])
+            down = name in read_json(os.path.join(out_root, "queue.json")).get("downgraded", [])
             if len(held) < (pad.get("per_key_deepseek", 6) if name == "deepseek" and not down else pad.get("per_key", 2)):
                 slot = os.path.join(d, "%d-%s.slot" % (os.getpid(), secrets.token_hex(3)))
                 with open(slot, "w") as f:
@@ -121,18 +129,10 @@ def queue_slot(name, pad, out_root, who):
         STOP.wait(5)
 
 
-def read_json(path):
-    try:
-        with open(path) as f:
-            return json.load(f)
-    except (OSError, ValueError):
-        return {}
-
-
 def downgrade_if_429(name, folder, out_root):
     """After a deepseek row: a 429 share over 5% of its wire requests drops the key to per_key for every later pad process."""
     facts = read_json(os.path.join(folder, "row.json")).get("facts") or {}
-    n = sum(v for k, v in (facts.get("provider_errors") or {}).items() if "429" in str(k) and isinstance(v, int))
+    n = sum(v for k, v in (facts.get("provider_errors") or {}).items() if ("429" in str(k) or "rate_limit" in str(k)) and isinstance(v, int))
     if name == "deepseek" and n and n > 0.05 * (facts.get("wire_requests") or 0):
         path = os.path.join(out_root, "queue.json")
         with open(path + ".lock", "w") as lock:
@@ -415,10 +415,14 @@ class Run:
             for name, slot in slots:
                 if slot:
                     try:
-                        downgrade_if_429(name, self.dir, self.out_root)
                         os.unlink(slot)
                     except OSError:
                         pass
+                    if name == self.price_key:  # only the key this row's model calls used
+                        try:
+                            downgrade_if_429(name, self.dir, self.out_root)
+                        except (OSError, ValueError, TypeError, AttributeError):
+                            pass
             try:  # section 7, the ledger: one line per run, also an interrupted or unpriced one (usd null, usd_live its
                 # last live estimate, so the scribe's 200 and 400 USD notices still count a run that spent)
                 append(os.path.join(self.out_root, "spend.jsonl"), {

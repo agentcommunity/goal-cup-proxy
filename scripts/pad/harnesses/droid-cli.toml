@@ -1,7 +1,7 @@
 # Pad data for Factory Droid (PRD-12 section 6): test data, never connector data; goalcup never reads it.
-# Vendor pages: https://docs.factory.ai did not resolve from the writing session (31 Oct 2026), so nothing here was read
-# from it; the version is the one the connector was measured on (connectors/droid-cli.toml) and the npm package name
-# `droid` is a guess, not run.
+# Vendor pages: docs/harnesses/droid-cli.md (Factory CLI reference, docs.factory.com/cli/configuration/cli-reference, read 2026-10-31):
+# `npm install -g droid@<version>` is the documented install, and the version is the one the connector was measured on
+# (connectors/droid-cli.toml).
 # No key (ledger T2): Droid's sign-in is a personal account. The pad prints "not verified: no key" and runs nothing
 # (key_kind "none", as Amp); this file only makes the image install the harness at its version. No [gateway] table,
 # no snippets: nothing runs, so the exit keys and model_host are placeholders.

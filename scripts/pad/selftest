@@ -67,6 +67,7 @@ def ids(result, *names):
 K2 = ("gap_has_end", "streams_closed", "server_counts_match", "wire_keeps_up", "threads_match", "subagents_present")
 ALLC = dict.fromkeys(("C1", "C2", "C4", "C5", "C6"), "PASS")
 # label, part, fetched, wanted checks, wanted finding ids, tampers (fetch edit, status count, after the verifier).
+# K2 wants C5 too: check.py's C5 repeats C2's thread-has-no-calls test, so the one lost subagent thread fails both (PRD-12 section 12, K2 row).
 # K6c wants C6 too: section 8's C6 compares fetch.json's model_requests, so a raised count fails C4 and C6.
 CONTROLS = [
     ("K2", "k2-part", "k2-fetched", {"C1": "FAIL", "C2": "FAIL", "C4": "FAIL", "C5": "FAIL", "C6": "FAIL"}, ids("fail", *K2),

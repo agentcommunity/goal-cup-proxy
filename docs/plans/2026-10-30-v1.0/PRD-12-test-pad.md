@@ -818,7 +818,7 @@ Control ids are kept from revision 1 so other PRDs' references hold; K1, K3 and 
 | Control | Input | Must give |
 |---|---|---|
 | K1 | Cut (the run 1 converter is cut, PRD-00). Run 1's real numbers come from PRD-16 A1 | |
-| K2 run 1 shape | PRD-08's run 1 shape builder (`check_run1_shape.rs`), written as a part folder and as a fake fetched copy | C1 FAIL (`gap_has_end`; local log check `wire_keeps_up`, `threads_match`), C2 FAIL (`subagents_present`), C4 FAIL (`gap_has_end`, `streams_closed`, `server_counts_match`), C6 FAIL against a fake `status.json` whose `written.model_requests` is run 1's finish-line 1,736 |
+| K2 run 1 shape | PRD-08's run 1 shape builder (`check_run1_shape.rs`), written as a part folder and as a fake fetched copy | C1 FAIL (`gap_has_end`; local log check `wire_keeps_up`, `threads_match`), C2 FAIL (`subagents_present`), C5 FAIL (the same lost-subagent thread has no calls; C5 repeats C2's thread test), C4 FAIL (`gap_has_end`, `streams_closed`, `server_counts_match`), C6 FAIL against a fake `status.json` whose `written.model_requests` is run 1's finish-line 1,736 |
 | K3, K4 | Cut (the silent-drop hook is cut, PRD-00). The C1 and C2 mapping on a silent loss is proven by K2 | |
 | K5 secret leak, real | Claude Code, `mode = "micro"`, `prompt = "smoke"`, `server = "staging"`, plus a value planted in a file outside the workspace that the setup script also prints, listed in the main known-values file. PRD-05 section 10: such a value is not masked | C3 FAIL with one known-value hit, in local parts and server copy |
 | K6 server tamper | A copy of K7's fetched folder: one flipped byte in `rec.gcr.zst`; one middle chunk removed from `fetch.json` and its bytes from `rec.gcr.zst`; `model_requests` in `fetch.json` plus one | C4 FAIL for each |
@@ -1830,3 +1830,4 @@ taken; "rejected" says why. Fixes for other files are made by those files' owner
   rises stays the owner question already logged. Slice 7 states its per-file lines again and cuts before
   it adds.
 - No locked ledger item is touched and no owner question comes from this slice.
+- K2 also fails C5: the lost-subagent thread has no wire calls and no native stream, which C2 and C5 both test, so the row and `selftest` now agree on C1, C2, C4, C5 and C6. P1 reads the same set.
