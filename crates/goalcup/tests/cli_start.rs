@@ -23,6 +23,10 @@ impl Fix {
     /// A clean project folder holding the token in a covered `.env.local`, and a test connector
     /// whose skills folder is `skills`.
     fn new(skills: &str, extra: &str) -> Fix {
+        Fix::with_program("true", skills, extra)
+    }
+
+    fn with_program(program: &str, skills: &str, extra: &str) -> Fix {
         let t = TempHome::new();
         let project = t.home().join("p");
         std::fs::create_dir_all(&project).unwrap();
@@ -30,7 +34,7 @@ impl Fix {
         std::fs::write(project.join(".gitignore"), ".env.local\n").unwrap();
         let connector = t.home().join("tester.toml");
         let body = format!(
-            "id = \"tester\"\nname = \"Tester\"\nprogram = \"true\"\nskills_dir = \"{skills}\"\n\
+            "id = \"tester\"\nname = \"Tester\"\nprogram = \"{program}\"\nskills_dir = \"{skills}\"\n\
              first_screen = \"Press Enter.\"\n{extra}"
         );
         std::fs::write(&connector, body).unwrap();
@@ -191,12 +195,16 @@ fn spawn_start(fix: &Fix, server: &str) -> std::process::Output {
         .spawn()
         .unwrap();
     let id = child.id();
+    let (done, wait) = std::sync::mpsc::channel::<()>();
     let timer = std::thread::spawn(move || {
-        std::thread::sleep(std::time::Duration::from_secs(120));
-        let _ = Command::new("kill").arg("-9").arg(id.to_string()).status();
+        // A message or a closed channel means the child ended; only a timeout kills it.
+        if wait.recv_timeout(std::time::Duration::from_secs(120)).is_err() {
+            let _ = Command::new("kill").arg("-9").arg(id.to_string()).status();
+        }
     });
     let out = child.wait_with_output().unwrap();
-    drop(timer);
+    let _ = done.send(());
+    let _ = timer.join();
     out
 }
 
@@ -205,14 +213,7 @@ fn spawn_start(fix: &Fix, server: &str) -> std::process::Output {
 #[cfg(target_os = "linux")]
 #[test]
 fn the_hand_over_passes_the_exit_code_and_ends_on_the_sealed_counts() {
-    let fix = Fix::new("{home}/skills", "args = [\"-c\", \"exit 7\"]\n");
-    std::fs::write(
-        &fix.connector,
-        std::fs::read_to_string(&fix.connector)
-            .unwrap()
-            .replace("program = \"true\"", "program = \"sh\""),
-    )
-    .unwrap();
+    let fix = Fix::with_program("sh", "{home}/skills", "args = [\"-c\", \"exit 7\"]\n");
     let w = FakeWorker::start();
     let out = spawn_start(&fix, &w.url());
     let shown = String::from_utf8_lossy(&out.stdout).into_owned();
@@ -249,4 +250,17 @@ fn a_refused_start_leaves_the_folder_and_the_home_untouched() {
     assert_eq!(out.status.code(), Some(1));
     assert_eq!(fix.listing(&fix.project), before);
     assert!(!fix.gc().exists());
+}
+
+/// A harness that itself exits 78 is a recorded part, not a masking refusal: the exit code is the
+/// harness's and the end screen is shown.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_harness_exit_of_78_is_not_a_masking_refusal() {
+    let fix = Fix::with_program("sh", "{home}/skills", "args = [\"-c\", \"exit 78\"]\n");
+    let w = FakeWorker::start();
+    let out = spawn_start(&fix, &w.url());
+    let shown = String::from_utf8_lossy(&out.stdout).into_owned();
+    assert_eq!(out.status.code(), Some(78), "{shown}");
+    assert!(shown.contains(text::PART_RECORDED), "{shown}");
 }

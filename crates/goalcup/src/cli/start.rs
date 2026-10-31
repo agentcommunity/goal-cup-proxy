@@ -7,6 +7,8 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde_json::to_value;
@@ -84,28 +86,21 @@ pub fn run(a: &Args) -> ExitCode {
     }
 }
 
-extern "C" fn on_signal(sig: libc::c_int) {
-    if sig == libc::SIGTERM {
-        // The watchdog's `goalcup seal` signal: it ends the harness and seals.
-        // SAFETY: `kill` and `getpid` are async-signal-safe.
-        unsafe { libc::kill(libc::getpid(), libc::SIGUSR1) };
-    }
+extern "C" fn on_signal(_: libc::c_int) {
     // A Ctrl-C reaches the harness through the terminal; this process stays for the end screen.
 }
 
 /// Hands the terminal to the watchdog and, when it returns, the end screen and the upload
-/// progress. The ready line and the signal handlers both wait for the recorder's `status.json`,
-/// the step right before it tells the watchdog `ready`. Until then a Ctrl-C or SIGTERM kills this
-/// process, which is the watchdog; a recorder it already started then runs on alone, and
-/// `goalcup status` shows it and `goalcup seal` closes it. The ready line is printed by a thread
-/// that polls, so the harness may open a few ms before it (seam question to PRD-02: a ready hook
-/// in `watchdog::run`, so the print can be ordered before the harness starts).
+/// progress. The ready line and the Ctrl-C handler both wait for the recorder's `status.json`,
+/// the step right before it tells the watchdog `ready`. Until then a Ctrl-C kills this process,
+/// which is the watchdog; a recorder it already started then runs on alone, and `goalcup status`
+/// shows it and `goalcup seal` closes it. A SIGTERM to this process is not turned into a seal:
+/// `goalcup seal` is what writes that reason. The ready line is printed by a thread that polls, so
+/// the harness may open a few ms before it (seam question to PRD-02: a ready hook in
+/// `watchdog::run`, so the print can be ordered before the harness starts).
 fn hand_over(ready: Ready) -> ExitCode {
-    let Ready {
-        plan,
-        facts,
-        _lock: lock,
-    } = ready;
+    // `_lock` keeps the machine awake until this function returns.
+    let Ready { plan, facts, _lock } = ready;
     let (dir, name, run) = (
         facts.entry_dir.clone(),
         plan.connector.name.clone(),
@@ -114,34 +109,36 @@ fn hand_over(ready: Ready) -> ExitCode {
     log::line(&dir, "start_handover", &[]);
     let line = text::recording_now(&name);
     let status = super::status_json(&dir);
-    std::thread::spawn(move || {
+    let done = Arc::new(AtomicBool::new(false));
+    let stop = Arc::clone(&done);
+    let printer = std::thread::spawn(move || {
         while !status.exists() {
+            if stop.load(Ordering::Relaxed) {
+                return;
+            }
             std::thread::sleep(Duration::from_millis(2));
         }
         let handler = on_signal as *const () as libc::sighandler_t;
-        // SAFETY: `signal` with a handler that only makes async-signal-safe calls.
-        unsafe {
-            libc::signal(libc::SIGINT, handler);
-            libc::signal(libc::SIGTERM, handler);
-        }
+        // SAFETY: `signal` with a handler that does nothing.
+        unsafe { libc::signal(libc::SIGINT, handler) };
         println!("{line}");
     });
     let code = watchdog::run(plan, facts);
+    // Joined before the reset, so the thread cannot install the handler after it.
+    done.store(true, Ordering::Relaxed);
+    let _ = printer.join();
     // SAFETY: back to the default action, so Ctrl-C ends only this wait for the upload.
-    unsafe {
-        libc::signal(libc::SIGINT, libc::SIG_DFL);
-        libc::signal(libc::SIGTERM, libc::SIG_DFL);
-    }
+    unsafe { libc::signal(libc::SIGINT, libc::SIG_DFL) };
     log::line(&dir, "start_returned", &[]);
-    let refused = code == ExitCode::from(watchdog::MASK_REFUSED);
+    // 78 is the recorder's masking refusal only when it never wrote a `status.json`; a harness
+    // that itself exits 78 leaves a recorded part.
+    let refused =
+        code == ExitCode::from(watchdog::MASK_REFUSED) && !super::status_json(&dir).exists();
     print!("{}", finish::closing(&dir, &name, &run, refused));
-    if refused {
-        drop(lock);
-        return ExitCode::from(1);
+    if !refused {
+        finish::wrap_up(&dir, &mut |l| println!("{l}"));
     }
-    finish::wrap_up(&dir, &mut |l| println!("{l}"));
-    drop(lock);
-    code
+    if refused { ExitCode::from(1) } else { code }
 }
 
 fn stop(text: String) -> Stop {
@@ -317,6 +314,7 @@ pub fn prepare(a: &Args, c: &Ctx, out: &mut dyn std::io::Write) -> Result<Ready,
         server_time: None,
         local_wall,
         workspace: c.project.clone(),
+        // Each of these five becomes the typed field of the same name (S17) with one edit.
         connector: to_value(&plan.connector).unwrap_or_default(),
         harness_version: plan.harness_version.clone(),
         keep: c.vars.get("GOALCUP_KEEP_PARTS").is_some_and(|v| v == "1"),

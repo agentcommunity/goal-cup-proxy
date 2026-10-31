@@ -160,9 +160,6 @@ pub fn screen(
 /// How long a sealed `status.json` is waited for after the watchdog returns, in 100 ms steps.
 const SEALED_WAIT: u32 = 30;
 
-/// The longest the front shows the wrap-up: the recorder's own bound is 60 minutes (PRD-06 section 9).
-const WRAP_UP_MAX: std::time::Duration = std::time::Duration::from_secs(61 * 60);
-
 /// What `start` prints when the watchdog has returned: the end screen of the sealed part, with a
 /// line first when the harness never started, or the start refusal when nothing was recorded at
 /// all. `refused` is the watchdog's mask refusal, which has its own text. Only the details a
@@ -180,10 +177,8 @@ pub fn closing(entry_dir: &Path, name: &str, run: &str, refused: bool) -> String
         }
         std::thread::sleep(std::time::Duration::from_millis(100));
     }
-    let (log, support) = (
-        text::details_at(&super::goalcup_log(entry_dir)),
-        text::SUPPORT_ADDRESS,
-    );
+    let log = text::details_at(&super::goalcup_log(entry_dir));
+    let support = text::SUPPORT_ADDRESS;
     if super::status_json(entry_dir).exists() {
         return format!(
             "goalcup could not read the final counts of this part. Run goalcup status, or write \
@@ -198,7 +193,8 @@ pub fn closing(entry_dir: &Path, name: &str, run: &str, refused: bool) -> String
 
 /// The upload progress after the end screen (PRD-06 section 9): while the recorder lives and the
 /// upload is going, one `Upload:` line whenever its state or the bytes waiting change, then the
-/// last word. Ctrl-C ends this wait only; the recorder finishes alone.
+/// last word. It ends when the recorder does (its own bound is 60 minutes, PRD-06 section 9).
+/// Ctrl-C ends this wait only; the recorder finishes alone.
 pub fn wrap_up(entry_dir: &Path, say: &mut dyn FnMut(&str)) {
     let recorder = || -> bool {
         let st: Option<Status> = super::read_json(&super::status_json(entry_dir));
@@ -207,14 +203,14 @@ pub fn wrap_up(entry_dir: &Path, say: &mut dyn FnMut(&str)) {
     if !recorder() {
         return;
     }
-    let started = std::time::Instant::now();
-    let mut shown = None;
-    while recorder() && started.elapsed() < WRAP_UP_MAX {
+    // The end screen just showed the upload line it read; do not print the same state again.
+    let key = |u: &UploadJson| (u.state, u.waiting_bytes, u.final_);
+    let mut shown = up::read(entry_dir).as_ref().map(key);
+    while recorder() {
         if let Some(u) = up::read(entry_dir) {
-            let key = (u.state, u.waiting_bytes, u.final_);
-            if shown != Some(key) {
+            if shown != Some(key(&u)) {
                 say(&text::upload_line(&u, super::now(), false));
-                shown = Some(key);
+                shown = Some(key(&u));
             }
             if matches!(
                 u.state,
