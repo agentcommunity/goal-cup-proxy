@@ -3,8 +3,9 @@
 //! re-reads and moves only to a position a local index line confirms, and any other position is
 //! `stuck`; an offset in a pruned range is `stuck`; with no live writer nothing past the file is
 //! sent; a 409 with no move backs off; `503 awaiting_final` waits for the final and is then
-//! retried at once; a Worker failing every other PUT never makes a wait above 4 s. The panic case
-//! needs `catch_unwind` in the thread wiring and lands with it (slice 4).
+//! retried at once; a Worker failing every other PUT never makes a wait above 4 s; a panic in a
+//! round or a beat is caught by the threads' guard, which no scripted answer can reach, so the case
+//! drives the guard itself.
 
 mod common;
 
@@ -13,7 +14,8 @@ use common::worker::{CREDENTIAL, FakeWorker, Inject, RUN_ID, Route};
 use goalcup::pipeline::Mono;
 use goalcup::upload::chunk::{self, Bound, Cut};
 use goalcup::upload::client::{RunPosition, ServerClient, Token};
-use goalcup::upload::policy::{Class, Policy};
+use goalcup::upload::guard;
+use goalcup::upload::policy::{Backoff, Class, Policy};
 use goalcup::upload::send::{Sender, Step};
 use goalcup::upload::state::{Final, State, UploadJson};
 use goalcup_format::read::{part_files, read_index};
@@ -340,4 +342,23 @@ fn a_worker_failing_every_other_put_never_waits_above_4_s() {
         r.t.set(next);
     }
     r.stored_once(&r.cat());
+}
+
+/// Section 1: a panic inside a round or a beat never ends the process and is not raised again: the
+/// guard returns, `upload.json` says `waiting` with class `internal`, the backoff counts a failure
+/// and one `goalcup.log` line says `internal`. A round that does not panic runs as it is.
+#[test]
+fn a_panic_in_a_round_or_a_beat_leaves_the_uploader_running() {
+    let dir = tempfile::tempdir().unwrap();
+    let j = Mutex::new(UploadJson::new(RUN_ID.into(), ENTRY.into()));
+    let mut b = Backoff::new(&Policy::default());
+    let out: Option<()> = guard("round", dir.path(), &j, &mut b, || panic!("a test panic"));
+    assert_eq!((out, b.failures), (None, 1));
+    let e = j.lock().unwrap().clone();
+    assert_eq!(e.state, State::Waiting);
+    assert_eq!(e.last_error.map(|e| e.class), Some(Class::Internal));
+    let log = fs::read_to_string(dir.path().join("goalcup.log")).unwrap();
+    assert_eq!(log.lines().count(), 1);
+    assert!(log.contains("class=internal"), "{log}");
+    assert_eq!(guard("beat", dir.path(), &j, &mut b, || 7), Some(7));
 }
