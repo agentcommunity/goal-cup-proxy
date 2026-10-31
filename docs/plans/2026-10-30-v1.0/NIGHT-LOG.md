@@ -1,5 +1,7 @@
 # Night log, goalcup 1.0 build
 
+call 12:32Z 31 Oct | W5 | CLOUDFLARE_API_TOKEN is active but refused on the account in CLOUDFLARE_ACCOUNT_ID: Workers scripts and R2 buckets answer 10000 (authentication), listing accounts answers 9109. No staging deploy (wrangler deploy --env staging) and no fetch-run of a server copy until the owner gives a token with Workers Scripts edit, R2 edit (goalcup-traces-staging, goalcup-usage-staging) and Account read on that account. Rung 1 (server off) goes on; rungs 2 and up wait. The staging bundle from integration 013ab7c5 is built and waiting.
+
 call 07:58Z 31 Oct | W6 | new conductor container: its network policy denies vercel.com, api.vercel.com and api.cloudflare.com (proxy 403 on CONNECT), so no Vercel Sandbox build or pad box can start and no staging deploy can run. Owner: allow those hosts (or *.vercel.com, *.vercel.run, *.vercel.sh, api.cloudflare.com, *.workers.dev) in the environment's Network access. Builds wait and retry; nothing falls back to this container.
 
 Keys re-checked 2026-10-31 07:54Z at conductor resume (new container; names only): CLAUDE_API_KEY, OPENAI_API_KEY, DEEPSEEK_API_KEY, GEMINI_API_KEY, AI_GATEWAY_API_KEY, VERCEL_TOKEN, CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID, DATABASE_URL, GOALCUP_TEST_APPROVAL_KEY, GOALCUP_TEST_MEMBER_ID, GH_TOKEN all set; Vercel team id set as VERCEL_TEAM_ID (VERCEL_PROJECT_ID also set). Pad push token: still none.
