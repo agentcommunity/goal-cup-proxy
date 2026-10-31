@@ -1369,3 +1369,50 @@ here; the other files carry their own part.
   and the rows' `row.json` (`exec`, `notes`); a connector with a daemon (Cline's hub, OpenCode 2's
   service) needs its `daemon` value for acceptance 5 to be a real run.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-31, replan after PRD-11 slice 5 (merge 7a647ba4)
+
+- **On integration now:** all 16 connector files (`amp-cli`, `cline-cli`, `crush-cli`, `droid-cli`,
+  `goose-cli`, `kimi-code-cli` added), 16 `entry!` lines, the sign-in and host rows, and README rows 6, 9
+  and 12 to 15. `gate fast: PASS in 131s` on 7a647ba4 (integrator 00:12Z). Box runs before the merge:
+  fmt, `clippy -D warnings`, 27 of 27 connector and `rule_code` tests. Not run: any real harness on these
+  six (that is the pad's job), `gate full`, macOS.
+- **Facts the slice settled, for the facts sheets:**
+  - Amp is the only connector that sets `HOME` (plus the four XDG folders). Droid uses
+    `FACTORY_HOME_OVERRIDE`, Goose `GOOSE_PATH_ROOT`, Kimi `KIMI_CODE_HOME`, Cline `CLINE_DIR` and
+    `CLINE_DATA_DIR`, Crush the four XDG folders. So the first real use of the `.profile` writer is Amp
+    alone, not "Amp and Droid" (the slice 4 note and the PRD-10 note said both). Amp has no key this cycle,
+    so no pad row proves P11 on a real binary; the unit test stays the proof and the facts sheet says so.
+  - Cline 3.0.74 has no continue form, so its connector has an empty `resume` and `goalcup continue`
+    starts a new Cline session (README row 15). Droid has no `daemon stop`, so it has no `before` or
+    `after` and the facts sheet names the daemon as a dodge. Cline's `hub stop` is scoped by
+    `CLINE_DATA_DIR`.
+  - Crush's database sits in the workspace (`{workspace}/.crush/crush.db`). Crush uses the closest
+    existing `.crush` between the working folder and the git root, so a run below a repository that
+    already has one writes there and the native root misses it (README row 12); the workspace file also
+    holds the participant's earlier Crush sessions for that folder.
+  - Amp's thread log folder (`.cache/amp/logs/threads`) is kept from a live run on an older version and
+    is not confirmable from the package; the pad's first Amp row is its proof.
+- **Last slice, data fix in `connectors/goose-cli.toml` (review nits A2-N1, A2-N2, no code):**
+  1. Add `GONDOLA_HOST` and `ATOMIC_CHAT_HOST` to `hint_env` and change the comment above it to "the
+     names those pages list on <date>"; it must not say "every".
+  2. Known item for the Goose sheet: a host variable without a scheme (`OLLAMA_HOST` defaults to
+     `localhost:11434`, `OPENAI_HOST` to `api.openai.com`) is skipped by `authority()` with
+     "not a URL, skipped" naming the variable, so a schemeless `OLLAMA_HOST` gives no `local_model` line
+     and a schemeless custom `OPENAI_HOST` stays a tunnel. Nothing is lost silently. Accepting a schemeless
+     hint is a `hints.rs` change and is not made (1,695 of 1,700).
+  3. **Decision:** `DATABRICKS_HOST` and `SNOWFLAKE_HOST` stay in `hint_env`. They are the providers' own
+     names, a Goose user on those providers needs them, secrets stay masked, and goalcup sets
+     `SSL_CERT_FILE` and `REQUESTS_CA_BUNDLE`. The Goose sheet says in the limits section that a
+     Databricks or Snowflake host exported in the shell is decrypted and recorded for the run whoever
+     uses it, including the agent's shell tools and their query traffic. Section 3's rule (hints are
+     named, never scanned) is unchanged.
+- **Size (ledger L2), `wc -l` at 7a647ba4.** src 1,695 of the 1,700 ceiling (`schema.rs` 423,
+  `launch.rs` 324, `mod.rs` 317, `hints.rs` 303, `hosts.rs` 301, `builtin.rs` 27). Tests 759 of 760
+  (`connector_launch.rs` 261, `connector_hints.rs` 196, `connector_builtin.rs` 155,
+  `connector_hosts.rs` 105, `connector_no_model_address.rs` 42). The B9 exception is still open and
+  unused. The last slice adds only data, sheets and the README tier refresh, no src line.
+- **Left for the last slice, in order:** the goose data fix above; the 15 or 16 new-shape facts sheets
+  and the tier refresh after the pad's rows (unchanged from the slice 4 note); drop the B9 `fill` copy
+  with PRD-10 if still open.
+- No locked ledger item is touched and no owner question comes from this slice.

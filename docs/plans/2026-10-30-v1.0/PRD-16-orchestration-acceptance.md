@@ -2025,3 +2025,26 @@ kept and now cites BUILD-PROMPT section 5, since B3 no longer carries it.
 - **Acceptance lists as known,** if still open at the end: `SnapshotCursor.fid` (PRD-02 note), the
   control-item weight nit (BRK9-N1) and the `open_gaps` comment (B-6) if the next touch did not fix them.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-31, replan after PRD-11 slice 5 (merge 7a647ba4)
+
+- `gate fast: PASS in 131s` on 7a647ba4 (integrator 00:12Z). Box runs before the merge: fmt,
+  `clippy -D warnings`, 27 of 27 connector and `rule_code` tests. Nine paths changed (six connector files,
+  `model-hosts.toml`, `builtin.rs`, the harness README), all PRD-11 owned, no `Cargo.toml`. Reviews A and
+  B left no blocker; two fixes and four nits were closed, A-N3 declined (accepted), two new Goose nits
+  moved into PRD-11's note. Linux only; no real harness run of the six; `gate full` not run.
+- **Size report, PRD-11** (`wc -l` at 7a647ba4, row "Connector code (PRD-11)", 800 src and 400 tests):
+  src 1,695 (`schema.rs` 423, `launch.rs` 324, `mod.rs` 317, `hints.rs` 303, `hosts.rs` 301,
+  `builtin.rs` 27), 212% of the row and 5 under the 1,700 ceiling; tests 759 (`connector_launch.rs` 261,
+  `connector_hints.rs` 196, `connector_builtin.rs` 155, `connector_hosts.rs` 105,
+  `connector_no_model_address.rs` 42), 190% of the row and 1 under the 760 ceiling. That is 895 src and
+  359 tests over the row, so the earlier "710 and 220 over" is out of date: use 895 and 359. The six new
+  connectors added 6 src lines; the rest of the slice is data. The 1,700 and 760 ceilings stand. The last
+  slice adds no src or test line; B9 stays the one allowed exception, unused.
+- **Build order, PRD-11:** the only slice left is data, the Goose hint fix and the facts sheets with the
+  tier refresh, after the pad's rows. Pad rows for the six new connectors are PRD-12's (note added);
+  PRD-10 gets a one-line rule for Cline's empty `resume` (note added).
+- **Acceptance lists as known,** if still open at the end: P11 on a real binary (Amp only, no key),
+  Droid's daemon with no stop command, Crush's database below an existing `.crush`, schemeless Goose host
+  variables, and the B9 `fill` copy.
+- No locked ledger item is touched and no owner question comes from this slice.

@@ -1679,3 +1679,18 @@ taken; "rejected" says why. Fixes for other files are made by those files' owner
   file is a GAP, not a missing stream. Keep the checks on the point (every subagent and database
   recorded), not on PRD-04's counts or wording.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-31, replan after PRD-11 slice 5 (merge 7a647ba4)
+
+- **Six more connectors have pad rows to add:** `amp-cli`, `cline-cli`, `crush-cli`, `droid-cli`,
+  `goose-cli`, `kimi-code-cli`. Amp and Droid have no key this cycle: "not run: no key" as in Defaults.
+- **Harness-file data for the new rows:** Cline needs its `daemon` value (the `hub` process) for
+  acceptance 5 to be a real run. Droid has no `daemon stop`, so goalcup stops nothing: its acceptance 5 row
+  is a dodge, shown as `skip` with that reason, not a pass or a fail. Cline's `hub stop` is scoped to the
+  run's `CLINE_DATA_DIR`, so the watcher's stale hub must use a different data dir.
+- **Crush:** the pad workspace must not sit below a folder that already holds a `.crush`, or the database
+  lands there and the `final` stream is absent (a fact to show, not a fail; PRD-11 README row 12).
+- **Acceptance 3 stays on Codex.** Goose reads host variables and a `config.yaml` key, but a schemeless
+  value is skipped by design (PRD-11 note), so no Goose row asserts a hint from a bare `OLLAMA_HOST`.
+- **Acceptance 7 has no real row:** only Amp sets `HOME` and it has no key. The unit test is the proof.
+- No locked ledger item is touched and no owner question comes from this slice.
