@@ -24,8 +24,7 @@ struct Conn {
     model: bool,
     /// A tunnel to a host that earlier finished a decrypted connection with this fingerprint.
     after_trust: bool,
-    /// Conn GAPs plus WebSocket stream GAPs of unknown size (lost 0): a loss `conn_bytes` need
-    /// not guess at.
+    /// Conn GAPs and WebSocket stream GAPs of unknown size (lost 0): losses `conn_bytes` skips.
     gaps: u64,
     lost: u64,
     /// A GAP names this tunnel's own reason (PRD-01 section 4).
@@ -247,10 +246,9 @@ impl Honesty {
             let (on_kind, on_src) = on.unwrap_or_default();
             let host_kind = s("kind").unwrap_or(on_kind);
             let src = s("listed").unwrap_or(on_src);
-            // A host the participant or the config listed is the harness's model host by their
-            // own word, whatever kind it carries (PRD-01 section 7: always `other`). The conn's
-            // own word or the start event's list: a recorder that mislabels a listed host as
-            // unlisted must not hide a blind relay.
+            // Listed by the conn's own word or the start event's list (a recorder that mislabels a
+            // listed host as unlisted must not hide a blind relay): by the participant's or the
+            // config's word it is the model host, whatever kind it carries (PRD-01 section 7).
             let listed = s("listed").is_some() || on.is_some();
             let model = listed
                 && (matches!(host_kind, "provider" | "gateway")
