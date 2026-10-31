@@ -72,8 +72,8 @@ fn setup(home: &TempHome, path: &str, args: &[&str]) -> (Output, String) {
 /// Like `setup`, but stdin and stdout are a pty holding `typed`; gives the exit code and output.
 fn setup_tty(home: &TempHome, path: &str, args: &[&str], typed: &str) -> (Option<i32>, String) {
     let (mut master, mut slave) = (0, 0);
-    let null = std::ptr::null_mut();
-    let rc = unsafe { libc::openpty(&mut master, &mut slave, null, null, null) };
+    let none = std::ptr::null_mut();
+    let rc = unsafe { libc::openpty(&mut master, &mut slave, none, std::ptr::null(), std::ptr::null()) };
     assert_eq!(rc, 0, "no pty here");
     let (master, slave) = unsafe { (OwnedFd::from_raw_fd(master), OwnedFd::from_raw_fd(slave)) };
     let mut input = std::fs::File::from(master.try_clone().unwrap());
