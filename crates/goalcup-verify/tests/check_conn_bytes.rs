@@ -40,7 +40,8 @@ fn conn_gapped(
         e.data(p, 0, 0, b"{}");
         let mut seen = 2;
         if let (Some(lost), true) = (stream_lost, i == wire.len() - 1) {
-            e.gap(p, GapReason::MemoryGuard, 10, 2, lost, json!({"guard": "held_bytes"}));
+            let tail = json!({"guard": "held_bytes"});
+            e.gap(p, GapReason::MemoryGuard, 10, 2, lost, tail);
             seen += lost - 1;
         }
         e.end(p, EndReason::Complete, seen, json!({"wire": down}));

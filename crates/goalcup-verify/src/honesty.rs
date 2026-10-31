@@ -246,9 +246,8 @@ impl Honesty {
             let (on_kind, on_src) = on.unwrap_or_default();
             let host_kind = s("kind").unwrap_or(on_kind);
             let src = s("listed").unwrap_or(on_src);
-            // Listed by the conn's own word or the start event's list (a recorder that mislabels a
-            // listed host as unlisted must not hide a blind relay): by the participant's or the
-            // config's word it is the model host, whatever kind it carries (PRD-01 section 7).
+            // Listed by the conn's word or the start event's (a mislabelled host must not hide a
+            // blind relay); by the participant's or config's word it is the model host.
             let listed = s("listed").is_some() || on.is_some();
             let model = listed
                 && (matches!(host_kind, "provider" | "gateway")
