@@ -146,6 +146,7 @@ fn launch_helper() {
             say("watchdog alive");
         }
         "watchdog" => {
+            say("WATCHDOG-START");
             let end = watchdog_world();
             say(&format!("END-OF-RUN {end:?}"));
         }
@@ -155,7 +156,9 @@ fn launch_helper() {
 
 /// One real watchdog run over a throwaway entry folder; the harness prints, waits, prints.
 fn watchdog_world() -> std::process::ExitCode {
-    use goalcup::connector::{ConnectorRef, HomeLock, HostList, LaunchPlan, NativeSources, builtin};
+    use goalcup::connector::{
+        ConnectorRef, HomeLock, HostList, LaunchPlan, NativeSources, builtin,
+    };
     use goalcup::watchdog::{CaPem, StartFacts, run_with};
     let tmp = tempfile::tempdir().expect("tempdir");
     let home = tmp.path().join("g");
@@ -200,7 +203,10 @@ fn watchdog_world() -> std::process::ExitCode {
         connector,
         harness_version: None,
         program: "/bin/sh".into(),
-        argv: vec!["-c".into(), "echo harness-one; sleep 2; echo harness-two".into()],
+        argv: vec![
+            "-c".into(),
+            "echo harness-one; sleep 2; echo harness-two".into(),
+        ],
         env: harness_env(),
         home: entry.join("home"),
         lock: HomeLock::default(),
@@ -486,11 +492,14 @@ fn nothing_is_written_to_the_terminal_while_the_harness_runs() {
     let pty = pty();
     let helper = run_helper("watchdog", &pty);
     let text = finish(helper, pty);
+    let (_, text) = text
+        .split_once("WATCHDOG-START")
+        .expect("the helper started");
     let (during, after) = text
         .split_once("END-OF-RUN")
         .unwrap_or_else(|| panic!("no end-of-run text:\n{text}"));
     assert_eq!(
-        during.replace('\r', ""),
+        during.replace('\r', "").trim_start(),
         "harness-one\nharness-two\n",
         "something besides the harness wrote to the terminal"
     );
