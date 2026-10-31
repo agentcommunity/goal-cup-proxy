@@ -369,7 +369,7 @@ fn a_101_hands_the_copied_frames_to_the_websocket_parser() {
     };
     assert_eq!(
         messages(ws_up),
-        [b"first up", b"second up", b"third up"].map(|m| m.to_vec())
+        [&b"first up"[..], b"second up", b"third up"].map(<[u8]>::to_vec)
     );
     assert_eq!(end_of(&calls, ws_up).1["unsent"], unsent.len());
     assert_eq!(messages(ws_down), [b"down one".to_vec()]);
