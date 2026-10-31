@@ -186,6 +186,10 @@ lessons lane (PRD-17); read by the deletion gate (PRD-17 Acceptance, checks 1 to
 | L-SC6 | 2.16 | A: cli_finish::unsealed_status_never_reads_as_finished (PRD-10) | PRD-10 | green | f5a200ae |
 | L-SC7 | 2.16 | X: ledger L5, L6 (PRD-10 section 4) | PRD-10 | open | - |
 
+**Verifier on H10 and K15.** Both tests seal the entry (`seal_for_tests`) and run `goalcup-verify check` on its one part
+file through `cargo run -p goalcup-verify` (`proxy_fixtures::verify_exits_0`), asserting exit 0. The `goalcup` crate has no
+dev-dependency on the verifier and the scaffold is PRD-02's, so the binary is reached by `cargo run`, not by a dependency.
+
 **Rows that still wait.** The serve halves now have tests: H2, H9 to H11, W2, W7, W9 to W11, K15, D7 and SC3
 (`lessons_http1.rs`, `lessons_ws.rs`, `lessons_decode.rs`, `lessons_launch.rs`; the guard names are in the
 table). They stay `open` because the run that showed them passing (below) was on the merged task branches,
