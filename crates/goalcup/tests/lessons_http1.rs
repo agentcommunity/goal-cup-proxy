@@ -912,7 +912,7 @@ async fn every_request_on_a_decrypted_host_is_recorded() {
         .iter()
         .map(|r| r.2["path"].as_str().unwrap().to_owned())
         .collect();
-    assert_eq!(got, sent.map(|s| s.1));
+    assert_eq!(got, sent.map(|s| s.1.split('?').next().unwrap()), "the query is its own field");
     let resps = of(StreamKind::HttpResp);
     let paired: Vec<_> = resps.iter().map(|r| r.1).collect();
     assert_eq!(
