@@ -33,10 +33,18 @@ is verified, and on which version, is written by the test pad to `connectors/tie
 | 14 | Kimi Code 2.4.1 | `kimi-code-cli` | HTTPS to `api.kimi.com`, or a provider in `config.toml` | `sessions/<workspace>/<session>/agents/*/wire.jsonl`; index `session_index.jsonl` | None found |
 | 15 | Cline CLI 3.0.74 | `cline-cli` | HTTPS to the provider, or Cline's own provider | `data/sessions/<id>/`, index `data/db/sessions.db` | A hub daemon already running may hold another environment. No continue form: `goalcup continue` starts a new Cline session |
 
-The per-harness sheets below are still in the old shape; they are rewritten from what the test pad shows, after it runs.
+The tier of each harness ("verified" on a named version, or "not verified" with the reason) is not
+copied into this table or into a sheet. Read it from [`connectors/tiers.toml`](../../connectors/tiers.toml),
+which the test pad writes, and from the pad's `PAD-RESULTS.md` (`docs/plans/2026-10-30-v1.0/`) once it
+has rows. Each sheet ends with a "Pad result" section that points there.
 
-The sheets so far: [codex-cli](codex-cli.md) (the worked example), [claude-code-cli](claude-code-cli.md),
-[hermes-cli](hermes-cli.md), [kilo-cli](kilo-cli.md) and [amp-cli](amp-cli.md).
+The 15 sheets, one per row above (OpenCode has two connectors and one sheet):
+[claude-code-cli](claude-code-cli.md), [codex-cli](codex-cli.md), [hermes-cli](hermes-cli.md),
+[opencode-cli](opencode-cli.md) (both OpenCode connectors; there is no `opencode2-cli.md`),
+[openclaw-cli](openclaw-cli.md), [amp-cli](amp-cli.md), [copilot-cli](copilot-cli.md),
+[gemini-cli](gemini-cli.md), [goose-cli](goose-cli.md), [kilo-cli](kilo-cli.md), [qwen-cli](qwen-cli.md),
+[crush-cli](crush-cli.md), [droid-cli](droid-cli.md), [kimi-code-cli](kimi-code-cli.md) and
+[cline-cli](cline-cli.md).
 
 Current research validation evidence and its limits are tracked in the
 [coverage matrix](../research/coverage-matrix.md), separately from these capability facts.
