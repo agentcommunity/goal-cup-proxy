@@ -5,6 +5,7 @@
 use crate::honesty::Honesty;
 use crate::input::{self, Entry};
 use goalcup_format::dump::wall;
+use goalcup_format::read::Tail;
 use goalcup_format::{EndReason, FLAG_FIN, GapReason, Item, Record, StreamKind};
 use serde_json::{Map, Value, json};
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -233,17 +234,16 @@ pub fn check(e: &Entry, now_ns: Option<u64>, want: &HashSet<u64>) -> Outcome {
         .map(|(id, n)| Check::new(id, (n < 15).then_some(n), Res::Pass, ""))
         .collect();
     p.want.clone_from(want);
-    let (mut err, mut truncated) = (None, None);
-    let mut meter = std::rc::Rc::new(input::Meter::default());
+    let (mut err, mut tail) = (None, Tail::default());
     match input::open(e) {
-        Ok((mut rd, m)) => {
+        Ok(mut rd) => {
             for r in rd.by_ref() {
                 match r {
                     Ok(it) => p.item(&it),
                     Err(x) => err = Some(x.to_string()),
                 }
             }
-            (truncated, meter) = (rd.tail().truncated, m);
+            tail = rd.tail();
         }
         Err(x) => err = Some(x.to_string()),
     }
@@ -251,7 +251,7 @@ pub fn check(e: &Entry, now_ns: Option<u64>, want: &HashSet<u64>) -> Outcome {
     if let Some(why) = err {
         let why = format!("the record stops decoding: {why}");
         p.fail("record_decode", &why, at);
-    } else if let Some(o) = truncated {
+    } else if let Some(o) = tail.truncated {
         if p.seal.is_some() {
             let why = "a sealed entry ends inside a record";
             p.fail("torn_tail", why, At(o, 0, at.2));
@@ -259,7 +259,7 @@ pub fn check(e: &Entry, now_ns: Option<u64>, want: &HashSet<u64>) -> Outcome {
             p.fact("torn_tail", "open_end", o.into());
         }
     }
-    p.finish(meter.open_frame.get(), now_ns, e);
+    p.finish(tail.open_frame, now_ns, e);
     let covers = std::mem::take(&mut p.h.covers);
     let (table, hist) = p.l.finish();
     let (legs_checks, legs) = crate::legs::judge(&table, &covers);
@@ -275,7 +275,7 @@ pub fn check(e: &Entry, now_ns: Option<u64>, want: &HashSet<u64>) -> Outcome {
         start: p.start.take().unwrap_or_default(),
         counts: std::mem::take(&mut p.all),
         entry: p.entry.take(),
-        raw: meter.raw.get(),
+        raw: tail.raw,
         compressed: input::compressed(e),
         data_bytes: p.data_bytes,
         links: p.links,

@@ -255,6 +255,17 @@ fn vr3_every_mutation_fails_its_check_with_exit_2() {
 }
 
 #[test]
+fn a_torn_tail_counts_the_cut_record_in_bytes_raw() {
+    let (_, whole) = check(&clean("torn-raw-a"), &[]);
+    let (code, v) = check(&m_torn_tail("torn-raw-b"), &[]);
+    assert_eq!(code, 2);
+    assert_eq!(result(&v, "torn_tail"), "fail");
+    // The cut record's three bytes are taken, so they are counted.
+    let raw = |v: &Value| v["entries"][0]["bytes"]["raw"].as_u64().unwrap();
+    assert_eq!(raw(&v), raw(&whole) + 3);
+}
+
+#[test]
 fn clean_entry_passes_as_parts_and_as_fetched_copy() {
     let d = clean("clean");
     let (code, v) = check(&d, &[]);

@@ -57,7 +57,7 @@ pub fn build(
         let name = o.entry.clone().unwrap_or_else(|| folder(&e.dir));
         text += &self::text(&name, &o, &checks);
         let mut en = entry(name, &o, &checks);
-        en["timeline"] = o.timeline.clone();
+        en["timeline"] = std::mem::take(&mut o.timeline);
         entries.push(en);
         all.extend(checks);
     }
