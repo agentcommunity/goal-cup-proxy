@@ -6,8 +6,9 @@ K8 are real runs, not here. Fixtures, under scripts/pad/fixtures/, each a synthe
   <name>-part/     an entry folder (rec/ and the native files)      <name>-fetched/  fetch-run's fetched/<entry>/
   k2-part, k2-fetched (PRD-08 check_run1_shape.rs, GOALCUP_FIXTURES_OUT); k7-part, k7-fetched, the clean pair
   that K6, K9 and K10 tamper with; k11-a, k11-b, k11-c (part only), k11-d and k11-d-fetched (PRD-09 history).
-K2 has met its real fixture (PRD-08 check_run1_shape.rs); K6, K7, K9, K10 and K11 are still "not run": the k7 pair
-waits on PRD-08 slice 6 and the k11 folders on PRD-09, so the exit is 3 and pad_trusted_at stays null.
+Regenerate (box job, then copy the folders): GOALCUP_FIXTURES_OUT=$HOME/fx cargo nextest run -p goalcup-verify
+--test check_run1_shape --test check_history. k11-d-fetched is the honest fetch of the k11-d record (the run 1 test's fetch
+helper, honest) and k7-fetched and k11-d-fetched also carry complete=true, missing=null, which the test helper does not write.
 A control whose fixtures are absent is "not run". Exit 0: every control ran as wanted; 1: one differed; 3: none
 differed but one did not run, so a missing fixture never reads as trusted. C3 is never wanted here: the setup
 script's planted values (K5) and the box's other scans are not part of an offline fold. Writes pad-out/selftest.json.
@@ -68,6 +69,8 @@ K2 = ("gap_has_end", "streams_closed", "server_counts_match", "wire_keeps_up", "
 ALLC = dict.fromkeys(("C1", "C2", "C4", "C5", "C6"), "PASS")
 # label, part, fetched, wanted checks, wanted finding ids, tampers (fetch edit, status count, after the verifier).
 # K2 wants C5 too: check.py's C5 repeats C2's thread-has-no-calls test, so the one lost subagent thread fails both (PRD-12 section 12, K2 row).
+# K11a-c want C5 FAIL: the wire-only K11 records carry no usage fields, so merged tokens are 0 (K11 asserts C1 and the history ids).
+# K11a wants C4 FAIL: a failed local check is filed under C4. K11b names recorder_down, so its meta carries a kill-recorder variant.
 # K6c wants C6 too: section 8's C6 compares fetch.json's model_requests, so a raised count fails C4 and C6.
 CONTROLS = [
     ("K2", "k2-part", "k2-fetched", {"C1": "FAIL", "C2": "FAIL", "C4": "FAIL", "C5": "FAIL", "C6": "FAIL"}, ids("fail", *K2),
@@ -79,8 +82,9 @@ CONTROLS = [
     ("K7", "k7-part", "k7-fetched", ALLC, {}, {}),
     ("K9", "k7-part", "k7-fetched", {"C6": "FAIL"}, {}, {"count": lambda n: n + 1}),
     ("K10", "k7-part", "k7-fetched", {"C5": "FAIL"}, {}, {"after": empty_usage}),
-    ("K11a", "k11-a-part", None, {"C1": "FAIL"}, ids("fail", "history_complete"), {"orphans": 1}),  # one orphan, not in a gap
-    ("K11b", "k11-b-part", None, {"C1": "PASS"}, {}, {"orphans": 0, "in_gap": 1}),  # the orphan sits in a gap and is counted there
+    ("K11a", "k11-a-part", None, {"C1": "FAIL", "C4": "FAIL", "C5": "FAIL"}, ids("fail", "history_complete"), {"orphans": 1}),  # one orphan, not in a gap
+    ("K11b", "k11-b-part", None, {"C1": "PASS", "C5": "FAIL"}, ids("named", "history_complete"),
+     {"orphans": 1, "in_gap": 1, "variant": ["kill-recorder@1"]}),  # the orphan sits in a gap; recorder_down is the fault row's own gap
     ("K11c", "k11-c-part", None, {"C1": "PASS"}, ids("skip", "history_complete"), {}),
     ("K11d", "k11-d-part", "k11-d-fetched", ALLC, ids("skip", "threads_match", "wire_keeps_up"), {}),
 ]
@@ -117,7 +121,7 @@ def run_control(part, fetched, mods, tool):
                   "seal": {"reason": "harness_exit"}}
         json.dump(status, open(os.path.join(run, "status.json"), "w"))
         json.dump({"connector": "selftest", "case": "direct", "mode": "micro", "server": "staging" if fetched else "off",
-                   "keep": True, "run": "selftest", "entry": ENTRY, "commits_since_start": 1, "known_box": True,
+                   "keep": True, "run": "selftest", "entry": ENTRY, "commits_since_start": 1, "known_box": True, "variant": mods.get("variant", []),
                    "end_screen_requests": n}, open(os.path.join(run, "meta.json"), "w"))
         if mods.get("after"):
             mods["after"](run)
