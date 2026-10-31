@@ -164,9 +164,16 @@ pub fn answer_text(v: &Value, out: &mut String) {
 }
 
 fn join(v: &Value, in_delta: bool, answer: bool, out: &mut String) {
-    let any: &[&str] = if answer { &["delta", "text"] } else { &["delta", "text", "partial_json"] };
-    let inner: &[&str] =
-        if answer { &["content"] } else { &["content", "reasoning_content", "thinking", "arguments"] };
+    let any: &[&str] = if answer {
+        &["delta", "text"]
+    } else {
+        &["delta", "text", "partial_json"]
+    };
+    let inner: &[&str] = if answer {
+        &["content"]
+    } else {
+        &["content", "reasoning_content", "thinking", "arguments"]
+    };
     match v {
         Value::Object(m) => {
             let kind = m.get("type").and_then(Value::as_str).unwrap_or_default();

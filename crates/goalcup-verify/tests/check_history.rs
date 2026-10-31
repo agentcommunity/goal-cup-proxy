@@ -135,9 +135,13 @@ fn reply(s: Sh, a: A) -> (&'static str, String) {
         }
         (Anthropic, Text(_)) => {
             // Streamed, with a thinking block before the answer; the resent turn has no thinking.
-            let d = |i: u64, d: Value| json!({"type": "content_block_delta", "index": i, "delta": d});
+            let d =
+                |i: u64, d: Value| json!({"type": "content_block_delta", "index": i, "delta": d});
             let evs = [
-                d(0, json!({"type": "thinking_delta", "thinking": "fake thought"})),
+                d(
+                    0,
+                    json!({"type": "thinking_delta", "thinking": "fake thought"}),
+                ),
                 d(1, json!({"type": "text_delta", "text": &text[..5]})),
                 d(1, json!({"type": "text_delta", "text": &text[5..]})),
                 json!({"type": "message_stop"}),
