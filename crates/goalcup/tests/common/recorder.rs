@@ -1,8 +1,9 @@
 //! Helpers over the calls of `Recorder::for_tests(room)` (seam S1), the recorder that collects
 //! every call before masking, with `room()` set by the test. Tests call that seam directly.
 //!
-//! `real(dir)` is the pipeline with the writer in a temp entry folder (PRD-02's
-//! `Recorder::real_for_tests`), and `settled` reads back what it made durable.
+//! `real(dir)` is the pipeline with masking (the built-in shapes) and the writer in a temp entry
+//! folder (PRD-02's `Recorder::real_for_tests`), `wait_settled` waits for a quiet durable point,
+//! and `records` reads back what is durable.
 
 use super::{HANG, within};
 use goalcup::mask::Masker;
@@ -12,28 +13,34 @@ use serde_json::Value;
 use std::io::Read;
 use std::path::Path;
 
-/// The real pipeline over `dir` with a passthrough masker (a test wanting masking calls
-/// `Recorder::real_for_tests(dir, masker)` itself).
+/// The real pipeline over `dir` with the built-in masking shapes and no connector rules. A test
+/// that needs another masker (for example a passthrough one) calls `Recorder::real_for_tests`.
 pub fn real(dir: &Path) -> Recorder {
-    Recorder::real_for_tests(dir, Masker::passthrough_for_tests())
+    let masker = Masker::new(&[], Vec::new()).expect("built-in shapes");
+    Recorder::real_for_tests(dir, masker)
 }
 
 /// Waits (bounded by `HANG`, never a speed check) for a durable point whose counts satisfy `done`
-/// with nothing held, then returns every record up to that point's index line.
-pub fn settled(
-    rec: &Recorder,
-    dir: &Path,
-    done: impl Fn(&Counts) -> bool + Send + 'static,
-) -> Vec<Record> {
+/// with nothing held, and returns that point's index line number.
+pub fn wait_settled(rec: &Recorder, done: impl Fn(&Counts) -> bool + Send + 'static) -> u64 {
     let rec = rec.clone();
     within(HANG, move || {
-        while !({
+        loop {
             let d = rec.durable().borrow().clone();
-            d.point.is_some() && done(&d.totals.counts) && rec.live().held_bytes == 0
-        }) {
+            if let Some(p) = &d.point
+                && done(&d.totals.counts)
+                && rec.live().held_bytes == 0
+            {
+                return p.line.seq;
+            }
             std::thread::sleep(std::time::Duration::from_millis(50));
         }
-    });
+    })
+}
+
+/// Every record of the entry in `dir` up to each part's last index line (a part with no index
+/// line yet is skipped). Durable records only.
+pub fn records(dir: &Path) -> Vec<Record> {
     let mut out = Vec::new();
     for part in goalcup_format::read::part_files(&dir.join("rec")).expect("part files") {
         let name = part.file_name().unwrap().to_str().unwrap();
