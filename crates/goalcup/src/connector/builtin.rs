@@ -6,12 +6,18 @@ macro_rules! entry {
 }
 /// Every built-in connector file as `(id, text)`; the id is the file's own `id` key.
 pub const CONNECTORS: &[(&str, &str)] = &[
+    entry!("amp-cli"),
     entry!("claude-code-cli"),
+    entry!("cline-cli"),
     entry!("codex-cli"),
     entry!("copilot-cli"),
+    entry!("crush-cli"),
+    entry!("droid-cli"),
     entry!("gemini-cli"),
+    entry!("goose-cli"),
     entry!("hermes-cli"),
     entry!("kilo-cli"),
+    entry!("kimi-code-cli"),
     entry!("openclaw-cli"),
     entry!("opencode-cli"),
     entry!("opencode2-cli"),
