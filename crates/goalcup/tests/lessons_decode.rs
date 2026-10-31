@@ -180,7 +180,13 @@ fn zstd_frame_ending_on_the_buffer_edge_is_complete() {
         for reads in [WHOLE_READ, SPLIT_READS] {
             let case = format!("{size} bytes, reads {reads:?}");
             assert_complete(&format!("one frame, {case}"), &["zstd"], &one, reads, plain);
-            assert_complete(&format!("two frames, {case}"), &["zstd"], &two, reads, plain);
+            assert_complete(
+                &format!("two frames, {case}"),
+                &["zstd"],
+                &two,
+                reads,
+                plain,
+            );
         }
     }
     // Two frames of different levels over a body that is not a whole number of pieces.
@@ -226,7 +232,13 @@ fn zstd_cut_after_whole_pieces_is_a_gap() {
     let first = first_zstd_block_end(&frame);
     assert!(first < frame.len(), "the cut is inside the frame");
     for reads in [WHOLE_READ, SPLIT_READS] {
-        let kept = assert_fault("cut at the first block", &["zstd"], &frame[..first], reads, &plain);
+        let kept = assert_fault(
+            "cut at the first block",
+            &["zstd"],
+            &frame[..first],
+            reads,
+            &plain,
+        );
         assert_eq!(kept, 131_072, "the block decodes and is kept");
     }
 
@@ -281,7 +293,10 @@ fn gzip_two_members_and_a_bad_crc() {
     // A reserved flag bit is refused before any byte decodes.
     let mut reserved = gzip(&plain);
     reserved[3] |= 0x20;
-    assert_eq!(assert_fault("reserved flag", &["gzip"], &reserved, SPLIT_READS, &plain), 0);
+    assert_eq!(
+        assert_fault("reserved flag", &["gzip"], &reserved, SPLIT_READS, &plain),
+        0
+    );
 
     // A bad CRC, and a bad size, in the last member and in the first.
     for (case, at) in [("crc", 8), ("size", 4)] {
@@ -295,11 +310,23 @@ fn gzip_two_members_and_a_bad_crc() {
     let mut bad_first = two.clone();
     let n = gzip(&plain[..100]).len() - 8;
     bad_first[n] ^= 0xff;
-    assert_fault("first member crc", &["gzip"], &bad_first, SPLIT_READS, &plain);
+    assert_fault(
+        "first member crc",
+        &["gzip"],
+        &bad_first,
+        SPLIT_READS,
+        &plain,
+    );
 
     // A body that stops before its trailer keeps what it decoded, and is a failure.
     let whole = gzip(&plain);
-    let kept = assert_fault("no trailer", &["gzip"], &whole[..whole.len() - 8], SPLIT_READS, &plain);
+    let kept = assert_fault(
+        "no trailer",
+        &["gzip"],
+        &whole[..whole.len() - 8],
+        SPLIT_READS,
+        &plain,
+    );
     assert_eq!(kept, plain.len());
 }
 
@@ -352,5 +379,11 @@ fn corrupt_tail_keeps_the_prefix() {
     let sse = sse();
     let frame = zstd::encode_all(sse.as_slice(), 3).unwrap();
     assert_fault("br", &["br"], &BR[..BR.len() / 2], SPLIT_READS, &sse);
-    assert_fault("zstd", &["zstd"], &frame[..frame.len() / 2], SPLIT_READS, &sse);
+    assert_fault(
+        "zstd",
+        &["zstd"],
+        &frame[..frame.len() / 2],
+        SPLIT_READS,
+        &sse,
+    );
 }
