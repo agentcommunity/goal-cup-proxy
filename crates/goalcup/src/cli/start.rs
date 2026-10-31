@@ -106,7 +106,10 @@ fn hand_over(ready: Ready) -> ExitCode {
     } = ready;
     let (dir, name, run) = (
         facts.entry_dir.clone(),
-        facts.connector["name"].as_str().unwrap_or_default().to_owned(),
+        facts.connector["name"]
+            .as_str()
+            .unwrap_or_default()
+            .to_owned(),
         facts.run.clone(),
     );
     log::line(&dir, "start_handover", &[]);
