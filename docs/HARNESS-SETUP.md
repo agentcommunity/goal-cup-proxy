@@ -26,7 +26,7 @@ a session file is recorded.
 
 A run that has recorded no model call at all is a different `PROBLEM:` line (3 minutes into a practice
 run, 10 into a real one): it works for every harness, and means Goal Cup is not seeing the agent's
-calls. The line says what to do, and [PARTICIPANT-GUIDE](PARTICIPANT-GUIDE.md#appendix-what-goalcup-status-says)
+calls. The line says what to do, and [PARTICIPANT-GUIDE](PARTICIPANT-GUIDE.md#7-during-the-run)
 lists it.
 
 The facts here come from Goal Cup's own runs, most of them from the
@@ -40,7 +40,7 @@ means that nobody at Goal Cup has tried it. The details are in each
 2. Sign in there, or paste your API key into the harness's own prompt. Answer the harness's
    first-run screens there ([section 7](#7-first-run-screens)). The `.env.local` in your project
    folder is not for this: model keys there are for your agent's own product, and the harness's
-   sign-in happens here, in setup ([guide, section 5](PARTICIPANT-GUIDE.md#5-your-run)).
+   sign-in happens here, in setup ([guide, section 5](PARTICIPANT-GUIDE.md#6-your-run)).
 3. Exit the harness.
 4. Open the settings file of your harness ([where the settings live](#where-the-settings-live)).
 5. Add the settings from your harness's section below.
@@ -190,7 +190,7 @@ Amp needs no setting to run without permission prompts.
 Hermes's own installer (`curl … install.sh | bash`) gives you the newest release. Before each
 start, Goal Cup adds a `recorder` entry for your model service to Hermes's config, with Goal
 Cup's recording certificate, and stops a Hermes gateway left running from before
-([facts sheet](harnesses/hermes-cli.md#hermes-022-the-gateway-and-certificate-trust)). You do not
+([facts sheet](harnesses/hermes-cli.md#6-network)). You do not
 need to do anything for it.
 
 What to expect from a recent Hermes:
@@ -369,7 +369,7 @@ Cup never pushes for your agent.
 1. Say in your prompt that the agent commits and pushes its work often.
 2. Let the agent write `.git`. For Codex, this needs `sandbox_mode = "danger-full-access"`.
 3. The agent pushes with the GitHub token in your project folder's `.env.local`
-   ([guide, section 5](PARTICIPANT-GUIDE.md#5-your-run)). Goal Cup passes it nothing of your git
+   ([guide, section 5](PARTICIPANT-GUIDE.md#6-your-run)). Goal Cup passes it nothing of your git
    login (D71), so it has no global git config: the agent must set `git config user.name` and
    `git config user.email` in its repository. The block `goalcup start` prints (it starts with
    "Push to") says so. Paste it at the very start of your first prompt: it is how the agent learns
