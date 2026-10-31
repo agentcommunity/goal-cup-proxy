@@ -8,18 +8,21 @@
 //! payloads, padding stripped, go through http1's [`Body`] (decoding, the decoder guard, the
 //! `wire` tail) as they arrive. `END_STREAM` ends a body, a second `HEADERS` carries trailers,
 //! `RST_STREAM` and a server's `GOAWAY` end streams interrupted with `h2_error` (a client's
-//! `GOAWAY` names server streams, of which there are none). `PRIORITY`, `PING`, `SETTINGS`,
-//! `WINDOW_UPDATE` and unknown types are skipped by length. Decoded fields past 64 KiB are not
+//! `GOAWAY` names server streams, of which there are none). `PRIORITY`, `PING`, `WINDOW_UPDATE`,
+//! unknown types and `SETTINGS` are skipped by length, but for a server's
+//! `SETTINGS_ENABLE_CONNECT_PROTOCOL` (RFC 8441 section 3). Decoded fields past 64 KiB are not
 //! stored and give GAP `memory_guard` `http_head`, as in HTTP/1.1; decoding goes on, and the
 //! fields the parser reads ([`READ`]) are still kept for it, at most [`FIELD_MAX`] bytes of them.
 //!
 //! Server frames from a `HEADERS` for a client stream whose request is not parsed yet wait,
 //! unparsed, until it is, so the response names its request; as in HTTP/1.1 they wait at most a
 //! head's worth. Past that, or at the close, they are parsed on, and a response whose request
-//! is still not parsed answers none (`req` 0): its request may yet be an extended `CONNECT`, so
-//! it records no `DATA` and gets GAP `h2_unsupported` counting it, as a tunnel side. `DATA` or a header block for a stream already ended (frames in flight
-//! after `RST_STREAM`) is recorded in no stream: it counts as held, and the close names it in
-//! the `conn` GAP.
+//! is still not parsed answers none (`req` 0). Its `DATA` is recorded as any response's, unless
+//! the server set `SETTINGS_ENABLE_CONNECT_PROTOCOL` to 1: then its request may be an extended
+//! `CONNECT`, so it records no `DATA` and gets GAP `h2_unsupported` counting it, as a tunnel side.
+//!
+//! `DATA` or a header block for a stream already ended (frames in flight after `RST_STREAM`) is
+//! recorded in no stream: it counts as held, and the close names it in the `conn` GAP.
 //!
 //! Not followed, never silent: an extended `CONNECT` stream (RFC 8441) records no `DATA` and each
 //! side gets GAP `h2_unsupported`; a `grpc-encoding` or `connect-content-encoding` other than
@@ -63,6 +66,7 @@ const READ: [&str; 6] = [
 const DATA: u8 = 0;
 const HEADERS: u8 = 1;
 const RST_STREAM: u8 = 3;
+const SETTINGS: u8 = 4;
 const PUSH_PROMISE: u8 = 5;
 const GOAWAY: u8 = 7;
 const CONTINUATION: u8 = 9;
@@ -70,6 +74,8 @@ const END_STREAM: u8 = 0x1;
 const END_HEADERS: u8 = 0x4;
 const PADDED: u8 = 0x8;
 const PRIORITY: u8 = 0x20;
+/// `SETTINGS_ENABLE_CONNECT_PROTOCOL` (RFC 8441 section 3).
+const ENABLE_CONNECT: [u8; 2] = [0, 8];
 
 /// Why parsing stopped for the connection.
 #[derive(Clone, Copy)]
@@ -118,6 +124,9 @@ pub struct H2 {
     orphan: bool,
     /// When the first frame for an ended stream came (its bytes are held).
     late: Option<Mono>,
+    /// The server allows extended `CONNECT`; a server `SETTINGS` entry read in part.
+    connect: bool,
+    setting: Vec<u8>,
 }
 
 /// One direction's reader.
@@ -178,9 +187,9 @@ impl Stream {
 enum Half {
     Waiting,
     Open(Box<Body>),
-    /// An extended `CONNECT` side, or a response to no parsed request (`true`): its handle, the
-    /// `DATA` bytes not recorded, its open time.
-    Raw(StreamHandle, u64, Mono, bool),
+    /// An extended `CONNECT` side, or a response that may answer one: its handle, the `DATA`
+    /// bytes not recorded, its open time.
+    Raw(StreamHandle, u64, Mono),
     Done,
 }
 
@@ -194,9 +203,8 @@ impl Half {
     ) {
         match self {
             Half::Open(body) => (*body).end(t, reason, stop, extra),
-            Half::Raw(mut h, n, at, orphan) => {
-                let why = orphan.then(|| json!({"request": "not_parsed"}));
-                h.gap(GapReason::H2Unsupported, at, Some(n), why);
+            Half::Raw(mut h, n, at) => {
+                h.gap(GapReason::H2Unsupported, at, Some(n), None);
                 if let Some((gap, tail)) = stop {
                     h.gap(gap, t, None, tail);
                     reason = EndReason::DecodeError;
@@ -240,6 +248,8 @@ impl H2 {
             wait_at: Mono::default(),
             orphan: false,
             late: None,
+            connect: false,
+            setting: Vec::new(),
         }
     }
 
@@ -351,6 +361,9 @@ impl H2 {
             } else if body && ty == DATA {
                 self.data(dir, t, id, piece);
             } else {
+                if body && ty == SETTINGS && dir == Dir::Down {
+                    self.settings(piece);
+                }
                 self.kept += n as u64;
             }
             self.settle(dir, t)?;
@@ -403,6 +416,10 @@ impl H2 {
                 Some(b) if b.id == id => b.raw += 9,
                 _ => return Err(Fault::Frame),
             },
+            SETTINGS => {
+                self.setting.clear();
+                self.kept += 9;
+            }
             _ => self.kept += 9,
         }
         let padded = usize::from(flags & PADDED != 0);
@@ -470,14 +487,28 @@ impl H2 {
         Ok(())
     }
 
-    /// `END_STREAM`: one side of the stream ends complete.
+    /// Server `SETTINGS` payload bytes, in 6-byte entries (RFC 9113 section 6.5.1).
+    fn settings(&mut self, piece: &[u8]) {
+        for &byte in piece {
+            self.setting.push(byte);
+            if self.setting.len() == 6 {
+                let entry = std::mem::take(&mut self.setting);
+                if entry[..2] == ENABLE_CONNECT {
+                    self.connect = entry[2..] == [0, 0, 0, 1];
+                }
+            }
+        }
+    }
+
+    /// `END_STREAM`: one side of the stream ends complete. A stream whose request is not
+    /// parsed yet stays, so that request opens no response half.
     fn finish(&mut self, id: u32, dir: Dir, t: Mono) {
         let Some(s) = self.streams.get_mut(&id) else {
             return;
         };
         let half = std::mem::replace(&mut s.halves[dir as usize], Half::Done);
         half.end(t, EndReason::Complete, None, None);
-        if s.halves.iter().all(|h| matches!(h, Half::Done)) {
+        if s.req != 0 && s.halves.iter().all(|h| matches!(h, Half::Done)) {
             self.streams.remove(&id);
         }
     }
@@ -624,8 +655,8 @@ impl H2 {
         let Some(s) = self.streams.get(&id) else {
             return;
         };
-        // A request not parsed yet may be an extended `CONNECT`: no `DATA` is recorded.
-        let (req, tunnel) = (s.req, s.tunnel || s.req == 0);
+        // A request not parsed yet may be an extended `CONNECT` if the server allows one.
+        let (req, tunnel) = (s.req, s.tunnel || (s.req == 0 && self.connect));
         let codings = codings(read);
         let meta = json!({
             "status": status,
@@ -639,10 +670,7 @@ impl H2 {
         let h = self
             .rec
             .open(StreamKind::HttpResp, self.conn, req, 0, flags, meta);
-        let mut half = self.half(h, tunnel, codings, head, 0, t);
-        if let Half::Raw(.., orphan) = &mut half {
-            *orphan = req == 0;
-        }
+        let half = self.half(h, tunnel, codings, head, 0, t);
         if let Some(s) = self.streams.get_mut(&id) {
             s.halves[1] = half;
         }
@@ -659,7 +687,7 @@ impl H2 {
     ) -> Half {
         if tunnel {
             head_gap(&mut h, head);
-            return Half::Raw(h, 0, t, false);
+            return Half::Raw(h, 0, t);
         }
         let framing = Some(Framing::Close);
         let body = Body::open(h, framing, codings, head, unsent, t, &self.rec);

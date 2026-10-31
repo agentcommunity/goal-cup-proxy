@@ -89,8 +89,18 @@ fn up(frames: &[Vec<u8>]) -> (Dir, Vec<u8>) {
 
 /// The server's frames, after its SETTINGS.
 fn down(frames: &[Vec<u8>]) -> (Dir, Vec<u8>) {
-    let start = [frame(SETTINGS, 0, 0, &[])];
+    down_with(&[], frames)
+}
+
+/// The server's frames, after its SETTINGS with these entries.
+fn down_with(settings: &[u8], frames: &[Vec<u8>]) -> (Dir, Vec<u8>) {
+    let start = [frame(SETTINGS, 0, 0, settings)];
     (Dir::Down, [&start[..], frames].concat().concat())
+}
+
+/// `SETTINGS_ENABLE_CONNECT_PROTOCOL` with `value` (RFC 8441 section 3).
+fn enable_connect(value: u8) -> [u8; 6] {
+    [0, 8, 0, 0, 0, value]
 }
 
 /// Feeds each step in irregular splits until a stop, then closes. The stop, if any, is returned.
@@ -572,8 +582,8 @@ fn fields_the_parser_reads_are_kept_past_the_guard() {
 }
 
 /// A server HEADERS for a stream the client never opens waits at most a head's worth: the
-/// frames after it are parsed, its response answers no request and records no `DATA` (its
-/// request may be an extended CONNECT), its GAP counts them, and nothing is held.
+/// frames after it are parsed, its response answers no request and records its `DATA` (the
+/// server allows no extended CONNECT), and nothing is held.
 #[test]
 fn a_response_to_no_request_waits_only_a_head() {
     let big = vec![b'z'; 70_000];
@@ -596,9 +606,39 @@ fn a_response_to_no_request_waits_only_a_head() {
     assert_eq!(end_of(&calls, one.0).0, EndReason::Complete);
     let three = on(&resps, 3);
     assert_eq!(three.1, 0);
-    assert!(data_of(&calls, three.0).is_empty());
-    let want = [(GapReason::H2Unsupported, Some(big.len() as u64))];
-    assert_eq!(gaps_on(&calls, three.0), want);
+    assert!(data_of(&calls, three.0) == big);
+    assert!(gaps_on(&calls, three.0).is_empty());
+}
+
+/// Point 1 and section 6: a model response parsed before its request, past the wait, is
+/// recorded unless the server set `SETTINGS_ENABLE_CONNECT_PROTOCOL` to 1. Then its request
+/// may be an extended CONNECT, so its bytes are counted in a GAP and never recorded.
+#[test]
+fn an_orphan_response_is_recorded_unless_extended_connect_is_allowed() {
+    let sse = vec![b'd'; 70_000];
+    for settings in [vec![], enable_connect(0).to_vec(), enable_connect(1).to_vec()] {
+        let allowed = settings.last() == Some(&1);
+        let steps = [
+            down_with(&settings, &[ok(1, ""), body(1, false, &sse)]),
+            up(&[req(1, "POST", "/v1/m"), body(1, true, b"{}")]),
+            (Dir::Down, body(1, true, b"end")),
+        ];
+        let (calls, stop) = run(&steps);
+        assert_eq!(stop, None);
+        let [(resp, paired, _)] = opens(&calls, StreamKind::HttpResp).try_into().unwrap();
+        assert_eq!(paired, 0);
+        assert_eq!(end_of(&calls, resp).0, EndReason::Complete);
+        if allowed {
+            assert!(data_of(&calls, resp).is_empty());
+            let want = [(GapReason::H2Unsupported, Some(sse.len() as u64 + 3))];
+            assert_eq!(gaps_on(&calls, resp), want);
+        } else {
+            assert!(data_of(&calls, resp) == [&sse[..], &b"end"[..]].concat());
+            assert!(gaps_on(&calls, resp).is_empty());
+        }
+        let [(req, ..)] = opens(&calls, StreamKind::HttpReq).try_into().unwrap();
+        assert_eq!(data_of(&calls, req), b"{}");
+    }
 }
 
 /// Section 6 and point 4: a WebSocket's server frames that pass the wait before the client's
@@ -608,7 +648,7 @@ fn an_extended_connect_parsed_after_the_wait_records_no_data() {
     let ws = vec![0xc1; 70_000];
     let connect = format!(":method=CONNECT :protocol=websocket {API} :path=/ws");
     let steps = [
-        down(&[ok(1, ""), body(1, false, &ws)]),
+        down_with(&enable_connect(1), &[ok(1, ""), body(1, false, &ws)]),
         up(&[head(1, 0, &connect)]),
         down(&[body(1, true, &[0xc1; 10])]),
     ];
@@ -623,7 +663,8 @@ fn an_extended_connect_parsed_after_the_wait_records_no_data() {
 }
 
 /// A server HEADERS whose frame header comes in the replayed bytes and whose block ends in a
-/// later read still opens its response, before its request: named in its GAP, nothing held.
+/// later read still opens its response, before its request: its `DATA` recorded, nothing held,
+/// and the request that comes after it ends its stream.
 #[test]
 fn a_header_block_split_across_the_replay_opens_its_response() {
     let (rec, calls) = Recorder::for_tests(ROOM);
@@ -645,6 +686,8 @@ fn a_header_block_split_across_the_replay_opens_its_response() {
     assert_eq!(late, None);
     on(&opens(&calls, StreamKind::HttpReq), 5);
     let five = on(&opens(&calls, StreamKind::HttpResp), 5).0;
-    assert_eq!(gaps_on(&calls, five), [(GapReason::H2Unsupported, Some(4))]);
+    assert_eq!(data_of(&calls, five), b"five");
+    assert!(gaps_on(&calls, five).is_empty());
     assert_eq!(end_of(&calls, five).0, EndReason::Complete);
+    assert_eq!(opens(&calls, StreamKind::HttpResp).len(), 2);
 }
