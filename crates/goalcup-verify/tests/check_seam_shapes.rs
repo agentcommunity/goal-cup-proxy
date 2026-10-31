@@ -75,7 +75,7 @@ fn mask_failed_meta_gaps_and_empty_messages_pass_and_recount() {
 fn extent_less_gaps_without_the_meta_shape_still_fail() {
     for (reason, lost, tail) in [
         (GapReason::MaskFailed, 1, Value::Null),
-        (GapReason::MaskFailed, 2, json!({"meta": "tail"})),
+        (GapReason::MaskFailed, 0, json!({"meta": "tail"})),
         (GapReason::Pinned, 1, Value::Null),
     ] {
         let mut e = Entry::new("seam-shapes-bad");
