@@ -95,11 +95,15 @@ impl Shield {
             }
             let mut old: libc::sigset_t = std::mem::zeroed();
             let blocked = libc::pthread_sigmask(libc::SIG_BLOCK, &set, &mut old) == 0;
-            let zero = libc::timespec { tv_sec: 0, tv_nsec: 0 };
+            let zero = libc::timespec {
+                tv_sec: 0,
+                tv_nsec: 0,
+            };
             while blocked
                 && (libc::sigtimedwait(&set, std::ptr::null_mut(), &zero) > 0
                     || std::io::Error::last_os_error().kind() == std::io::ErrorKind::Interrupted)
-            {}
+            {
+            }
             restore(&back);
             if blocked {
                 libc::pthread_sigmask(libc::SIG_SETMASK, &old, std::ptr::null_mut());
