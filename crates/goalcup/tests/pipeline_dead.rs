@@ -252,3 +252,69 @@ fn a_dead_entry_after_a_reboot_seals_the_files_totals() {
     );
     assert_eq!(facts.totals, totals);
 }
+
+/// Point 5 and a right count: a boot whose first part file is pruned after upload, with
+/// `counts.jsonl` behind its last LINK (the append after the last compaction lost to a power
+/// loss), seals the bytes it wrote. The recount starts from the line the prune left and adds the
+/// records after it, DATA on the stream opened in the pruned part included.
+#[test]
+fn a_pruned_boot_with_counts_behind_seals_the_bytes_written() {
+    const MIB: usize = 1 << 20;
+    // SAFETY: set before the recorder starts; only this test's own writer reads it.
+    unsafe { std::env::set_var("GOALCUP_TEST_ROTATE_MB", "1") };
+    let live = entry_dir();
+    let rec = real(live.path());
+    let mut req = rec.open(StreamKind::HttpReq, 0, 0, 0, OpenFlags::POST, json!({}));
+    req.data(rec.now(), Bytes::from_static(BODY));
+    // Bytes that do not compress, so the part files reach the rotation size.
+    let mut x: u64 = 0x9e37_79b9_7f4a_7c15;
+    let noise = (0..MIB).map(|_| {
+        x = x.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1);
+        (x >> 56) as u8
+    });
+    let chunk = Bytes::from(noise.collect::<Vec<u8>>());
+    let mut sent = BODY.len() as u64;
+    let mut send = |req: &mut goalcup::pipeline::StreamHandle, n: usize| {
+        for _ in 0..n {
+            req.data(rec.now(), chunk.clone());
+            sent += MIB as u64;
+            let want = sent;
+            wait_settled(&rec, move |c| c.wire_bytes == want);
+        }
+    };
+    send(&mut req, 7);
+    let parts = goalcup_format::read::part_files(&live.path().join("rec")).unwrap();
+    assert!(parts.len() >= 2, "the entry rotated");
+    // What the prune leaves: `counts.jsonl` synced, its compacted line at the latest LINK.
+    let log = std::fs::read(live.path().join("counts.jsonl")).unwrap();
+    let line = log.split(|&b| b == b'\n').next().unwrap().to_vec();
+    send(&mut req, 3);
+    req.end(rec.now(), EndReason::Complete, None);
+    wait_settled(&rec, |c| c.http_post == 1);
+    let total = sent;
+
+    let dead = entry_dir().path().join("e00000000000000d2");
+    copy(live.path(), &dead);
+    let rec_dir = dead.join("rec");
+    let oldest = goalcup_format::read::part_files(&rec_dir).unwrap()[0].clone();
+    let name = oldest.file_name().unwrap().to_str().unwrap().to_string();
+    let idx = oldest.with_file_name(format!("{}.idx", name.trim_end_matches(".gcr.zst")));
+    let oldest_end = goalcup_format::read::read_index(&idx).unwrap().last().unwrap().seq;
+    let kept: Value = serde_json::from_slice(&line).unwrap();
+    assert!(kept["seq"].as_u64().unwrap() >= oldest_end, "a prune syncs first");
+    std::fs::remove_file(&oldest).unwrap();
+    std::fs::remove_file(&idx).unwrap();
+    std::fs::write(dead.join("counts.jsonl"), [line.as_slice(), b"\n"].concat()).unwrap();
+
+    let Ok(Closed::Sealed(facts)) = close_dead_entry(&dead) else {
+        panic!("the dead entry is sealed");
+    };
+    let (_, seal) = down_and_seal(&dead);
+    assert_eq!(seal["totals"]["wire_bytes"], json!(total));
+    assert_eq!(seal["totals"]["http_req"], json!(1));
+    assert_eq!(facts.totals.counts.wire_bytes, total);
+    let totals = entry_totals(&dead);
+    assert_eq!(facts.totals, totals);
+    let st = Status::read(&dead).expect("status.json");
+    assert_eq!(st.written.counts.wire_bytes, total);
+}

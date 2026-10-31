@@ -218,10 +218,13 @@ impl Counter {
                 bytes,
                 ..
             } => {
+                let n = bytes.len() as u64;
+                // Only a recount meets a stream whose OPEN is gone (its part file pruned): the
+                // bytes are still written, and wire is the kind they most likely are.
                 let Some(o) = self.open.get_mut(sid) else {
+                    c.wire_bytes += n;
                     return;
                 };
-                let n = bytes.len() as u64;
                 match o.kind {
                     StreamKind::Native | StreamKind::Snapshot => c.native_bytes += n,
                     _ => c.wire_bytes += n,
@@ -658,18 +661,42 @@ fn walk(rec: &Path, mut f: impl FnMut(u64, &Record)) -> (Option<u64>, Option<u64
 /// line at that `seq` (a torn tail, PRD-02 section 9.2 step 4). The same decoder as
 /// [`entry_totals`] and the writer's own [`Counter`]; an OPEN's flags and host come from its
 /// masked meta, which keeps `method`, `host` and `mode` (PRD-05). The gauges are 0.
+///
+/// A boot whose start event is gone (its first part files pruned after upload) cannot be counted
+/// from its records alone: the count starts from what is known of the pruned part, its latest
+/// `counts.jsonl` line before the first part file left, and moves on to each later COUNT event or
+/// line at a LINK read, adding only the records after it. DATA on a stream opened in a pruned
+/// part counts as wire bytes.
 pub fn recount_at(entry_dir: &Path, seq: u64) -> Vec<u8> {
-    // The boot, its counter, its first and its last LINK's record-clock time.
-    let mut last: Option<(u64, Counter, u64, u64)> = None;
+    // Each boot's `counts.jsonl` lines by `seq`, the last of a `seq` winning, as `count_at`.
+    let mut known: BTreeMap<(u64, u64), Counts> = BTreeMap::new();
+    if let Ok(text) = std::fs::read(entry_dir.join(CountsLog::NAME)) {
+        for b in lines(&text) {
+            if let (Some(n), Some(c)) = (b.boot(), b.count.as_ref()) {
+                let c = serde_json::from_value(c.clone()).unwrap_or_default();
+                known.insert((n, b.seq), c);
+            }
+        }
+    }
+    // The boot, its counter, its first and its last LINK's record-clock time, its start read.
+    let mut last: Option<(u64, Counter, u64, u64, bool)> = None;
     let mut done = false;
     walk(&entry_dir.join("rec"), |n, r| {
         if done {
             return;
         }
         if last.as_ref().is_none_or(|b| b.0 != n) {
-            last = Some((n, Counter::new(&[]), 0, 0));
+            let mut c = Counter::new(&[]);
+            // The boot's first part file read: when its start is pruned, the start event below
+            // never comes and the count starts from the latest line before this part file.
+            if let Record::Part { next_link, .. } = r
+                && let Some((_, k)) = known.range((n, 0)..(n, *next_link)).next_back()
+            {
+                c.counts = k.clone();
+            }
+            last = Some((n, c, 0, 0, false));
         }
-        let Some((_, c, t0, t)) = last.as_mut() else {
+        let Some((_, c, t0, t, whole)) = last.as_mut() else {
             return;
         };
         let (mut flags, mut host) = (OpenFlags::NONE, None);
@@ -681,11 +708,20 @@ pub fn recount_at(entry_dir: &Path, seq: u64) -> Vec<u8> {
                     let rules: Vec<String> =
                         serde_json::from_value(v["mask_rules"].clone()).unwrap_or_default();
                     *c = Counter::new(&rules);
+                    *whole = true;
+                } else if v["ev"] == "count" && !*whole {
+                    c.counts = serde_json::from_value(v).unwrap_or_default();
                 }
             }
             Record::Link {
                 seq: s, mono_ns, ..
-            } => (*t, done) = (*mono_ns, *s >= seq),
+            } => {
+                (*t, done) = (*mono_ns, *s >= seq);
+                // The line's count is of the records before this LINK.
+                if let Some(k) = known.get(&(n, *s)).filter(|_| !*whole) {
+                    c.counts = k.clone();
+                }
+            }
             Record::Open { skind, meta, .. } => {
                 let m: Value = serde_json::from_slice(meta).unwrap_or_default();
                 match skind {
@@ -701,11 +737,12 @@ pub fn recount_at(entry_dir: &Path, seq: u64) -> Vec<u8> {
         }
         c.written(r, flags, host.as_deref());
     });
-    let Some((boot, c, t0, t)) = last else {
+    let Some((boot, c, t0, t, _)) = last else {
         return Vec::new();
     };
     let up_ms = t.saturating_sub(t0) / 1_000_000;
-    serde_json::to_vec(&c.count_event(boot, up_ms, 0, 0)).unwrap_or_default()
+    let peak = c.counts.held_peak;
+    serde_json::to_vec(&c.count_event(boot, up_ms, 0, peak)).unwrap_or_default()
 }
 
 /// Whether a part file in `rec` has a whole index line: what recovery keeps.
