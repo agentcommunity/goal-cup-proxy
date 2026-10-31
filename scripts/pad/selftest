@@ -84,7 +84,7 @@ CONTROLS = [
     ("K10", "k7-part", "k7-fetched", {"C5": "FAIL"}, {}, {"after": empty_usage}),
     ("K11a", "k11-a-part", None, {"C1": "FAIL", "C4": "FAIL", "C5": "FAIL"}, ids("fail", "history_complete"), {"orphans": 1}),  # one orphan, not in a gap
     ("K11b", "k11-b-part", None, {"C1": "PASS", "C5": "FAIL"}, ids("named", "history_complete"),
-     {"orphans": 1, "in_gap": 1, "variant": ["kill-recorder@1"]}),  # the orphan sits in a gap; recorder_down is the fault row's own gap
+     {"orphans": 1, "variant": ["kill-recorder@1"]}),  # the orphan sits in a gap (the verifier's `named` result; it reports no separate in-gap count); recorder_down is the fault row's own gap
     ("K11c", "k11-c-part", None, {"C1": "PASS"}, ids("skip", "history_complete"), {}),
     ("K11d", "k11-d-part", "k11-d-fetched", ALLC, ids("skip", "threads_match", "wire_keeps_up"), {}),
 ]
