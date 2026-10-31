@@ -357,7 +357,7 @@ the exit alone. For a run folder, the worst entry decides. Readers ignore keys t
 | `connector`, `keep`, `label` | The first two from the `start` event, or null; the evidence label, below |
 | `bytes` | `raw` (decompressed), `compressed` (bytes of the files read) and `framing` (raw minus DATA payload) |
 | `links` | LINK records read |
-| `checks` | Per check: `id`; `inv` (the invariant number, or null); `result` (`pass`, `skip`, `warn`, `named` or `fail`); `why` (one plain line, empty on a pass); `first` (`o`, `sid` and `wall` of the first finding at the worst level reached, or null); `facts` (an object) |
+| `checks` | Per check: `id`; `inv` (the invariant number, or null); `result` (`pass`, `skip`, `warn`, `named` or `fail`); `why` (one plain line, empty on a pass); `first` (`o`, `sid` and `wall` of the first finding at the worst level reached, or null; for the legs checks `o` and `sid` are null, `wall` may be, and `first` adds `thread`); `facts` (an object) |
 | `counts` | Recounted from the records: `model_requests` (model requests written, `http_post` plus `ws_up_msgs`), `req_whole`, `req_holes`, `gaps` (a count per reason name seen), `lost_bytes`, `lost_unknown`, `after_stop_bytes`, `mask_failclosed_bytes`, `off_ms`, `tunnels`, `native_files`, and `threads` (the length of the `threads` list) |
 | `harness_log` | What the harness's own log gave: `none` (not read, or nothing found), `totals` (a total per session) or `per_call` (one record per call) |
 | `provider_errors` | `{wire, native}`: for each leg, a count per error code the provider gave (else `http_<status>`, else `error`), one per failed call |
@@ -380,7 +380,8 @@ ones that depend on an option:
   row and heartbeat against the seal's totals; it skips if not sealed.
 - `secrets` (`inv` null), last, only with `--known`; see below.
 
-**Honesty checks** (`honesty.rs`; a listed host is on the `start` host list or has `listed` in its meta):
+**Honesty checks** (`honesty.rs`; a listed host is on the `start` host list or has `listed` in
+its meta):
 
 - `listed_hosts_decrypted`: a listed host should be read, not tunnelled. A tunnel to one is `named`
   when a GAP of the tunnel's own reason is on that connection, `fail` when none is; a `sign_in`
@@ -395,25 +396,35 @@ ones that depend on an option:
   `skip` when nothing was judged or a connection ended without both counts (a `warn` or `fail` from
   another connection stands). Facts: `checked`, `warn`, `fail`, `unaccounted_bytes`,
   `no_plain_tail`.
-- `mask_failclosed`: `warn` for a stream with over 1 MiB of `fail_closed` MASK bytes. Facts: `streams`, `bytes`.
+- `mask_failclosed`: `warn` for a stream with over 1 MiB of `fail_closed` MASK bytes. Facts:
+  `streams`, `bytes`.
 
 **Legs checks** (`legs.rs`): the recorded wire calls against the harness's own log, read from its
 `native_form`, threads and `children`; they name no harness.
 
 - `wire_keeps_up`: a model call the harness's own log shows that never reached the wire (a lost
-  model call). Facts: `harness`, `wire_ok`, `excess`, `from`, `to`, `wire_above`.
-- `threads_match`: a thread whose calls differ from the harness log (a log that gives only a total
-  per session is compared by that total). Facts: `threads`, `bad`.
+  model call), or a harness that kept calling over 10 minutes after the wire's last call. It
+  compares call times, so it is always `skip` ("no per-call times") when `harness_log` is `totals`;
+  only `threads_match` compares then. Facts: `harness`, `wire_ok`, `excess`, `from`, `to`,
+  `wire_above`.
+- `threads_match`: a thread with more calls in the harness log than ok calls on the wire (wire
+  calls above the harness count are no finding; a log that gives only a total per session is
+  compared by that total). Facts: `threads`, `bad`.
 - `subagents_present`: a subagent the harness's parentage names that has no wire calls and no
   native stream. Facts: `children`, `missing`.
 
-A comparison allows the larger of 3 calls and 2% before it counts. A finding is `named` when a
-recorder-down GAP, or a conn GAP of a connection to a model host (a listed provider or gateway, or a
-host the participant or config named), covers the loss, from its start to two minutes after its end;
-`fail` when nothing names it. Only a recorder-down GAP covers a subagent that has no leg at all: a
-conn GAP explains wire calls of its own connection, not a native stream. A check is `skip` with its
-reason where it cannot compare: "the harness's own log is not read" or "could not read the
-harness's own log", and for `subagents_present` "parentage was not read".
+A comparison allows the larger of 3 calls and 2% before it counts, with the wire given 2 minutes
+to catch up. A thread or entry with harness calls and no wire call, or a harness that kept calling
+over 10 minutes after the wire's last call, counts whatever the number. A finding is `named` when
+a recorder-down GAP, or a conn GAP of a connection to a model host (a listed provider or gateway,
+or a host the participant or config named) that has an extent and a reason other than
+`after_stop`, covers the loss, from its start to two minutes after its end; `fail` when nothing
+names it. The totals form has no times, so any such cover in the entry names the excess; likewise
+any recorder-down GAP in the entry names a missing subagent. Only a recorder-down GAP covers a
+subagent that has no leg at all: a conn GAP explains wire calls of its own connection, not a
+native stream. A check is `skip` with its reason in `why` where it cannot compare, such as when
+the harness's own log is not read or could not be read, it holds no calls or no per-call times,
+no call carries a thread id, or (for `subagents_present`) parentage was not read.
 
 **The label** is a hint for judges, not a judgement. It says which evidence the record holds:
 `wire_and_native` when model requests were written and a `native` or `snapshot` stream holds
@@ -524,4 +535,4 @@ per member over the lines of one `message.id`).
 Neither file holds body text or a session file path: only model names, thread ids and agent labels
 (printable ASCII, at most 128 bytes, never all `*`), host names, the run, entry and connector ids,
 the harness version line (printable ASCII, at most 128 bytes), safe tokens (reason, effort and usage
-member names: at most 64 bytes from `A-Za-z0-9_.-`), times and numbers leave the record.
+member names: at most 64 bytes from `A-Za-z0-9_.-` per part of a nested name), times and numbers leave the record.
