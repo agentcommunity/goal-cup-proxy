@@ -2325,3 +2325,8 @@ kept and now cites BUILD-PROMPT section 5, since B3 no longer carries it.
 - Pending for the deletion gate: T4's key half (PRD-02 writer), D6's GAP and END (PRD-03 `proxy::serve`),
   `lessons_connect`, `lessons_ws` and `lessons_launch`. Nothing here changes the build order, a seam or a phase
   check. No locked ledger item is touched and no owner question comes from this slice.
+
+### 31 Oct, after PRD-03 slice 2 (merge 47835216)
+
+- **Size report, PRD-03** (`wc -l` on integration at 47835216): src is 4,611 lines (mod 17, hosts 113, pump 324, tunnel 190, http1 1,090, ca 439, connect 673, decode 812, tls 203, ws 750) against the 4,250 row in PRD-00 "Size budget": +8.5%, under the +10% line (4,675). `h2` and `serve` are not yet merged and will cross it unless something shrinks; each needs a replan `decision` line naming the point the extra lines serve. Proxy tests are not re-counted here.
+- Plan effects: none on the build order, a seam or a phase check. `serve` stays the gate for PRD-02 slice A. The review nits (pump `reason` doc, one F6 mid-upload case, `Pumped.upstream`) ride the serve slice; see the PRD-03 note. No locked ledger item is touched and no owner question comes from this slice.
