@@ -150,7 +150,6 @@ fn check(a: &Args, c: &Ctx) -> Result<Checked, Stop> {
     let env = Env {
         vars: c.vars.clone(),
         workspace: c.project.clone(),
-        home: c.home.clone(),
         resume: false,
         run_start: SystemTime::now(),
         goalcup_home: c.home.clone(),
