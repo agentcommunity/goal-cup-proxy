@@ -78,7 +78,10 @@ fn export(from: &Path, to: &Path) {
 
 #[test]
 fn run1_shape_fails_exactly_its_checks_and_reads_six_wire_errors() {
-    let (d, k7) = (run1("r1-lossy", Shape::Lossy), run1("r1-pair", Shape::Clean));
+    let (d, k7) = (
+        run1("r1-lossy", Shape::Lossy),
+        run1("r1-pair", Shape::Clean),
+    );
     let k7f = fetch(&k7, true);
     if let Ok(out) = env::var("GOALCUP_FIXTURES_OUT") {
         let out = Path::new(&out);
@@ -101,7 +104,8 @@ fn run1_shape_fails_exactly_its_checks_and_reads_six_wire_errors() {
     };
     assert_eq!(hist(IDS[0]), "fail");
     assert_ne!(hist(IDS[1]), "fail");
-    assert!(!item(&v, "history_complete")["why"].as_str().unwrap().contains(TURN));
+    let why = item(&v, "history_complete")["why"].as_str().unwrap();
+    assert!(!why.contains(TURN));
     let wire = v["entries"][0]["provider_errors"]["wire"]
         .as_object()
         .unwrap();
