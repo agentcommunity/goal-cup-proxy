@@ -30,8 +30,8 @@ use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, ExitCode, ExitStatus};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard};
 use std::sync::mpsc::{self, RecvTimeoutError};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
@@ -694,9 +694,9 @@ mod tests {
     use super::*;
     use crate::connector::{self, Env, builtin};
     use crate::mask::ValueSource;
+    use serde_json::to_value;
     use std::collections::BTreeMap;
     use std::time::SystemTime;
-    use serde_json::to_value;
 
     /// The first line carries the whole start facts. With the largest built-in connector's
     /// plan, a minted CA and 32 shaped fake values of 120 bytes it stays under the line limit,

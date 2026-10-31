@@ -56,10 +56,9 @@ pub struct StreamHandle {
     conn: bool,
     /// Its OPEN was sent: false for a stream opened after a stop, which sends nothing.
     opened: bool,
-    /// The `conn` stream it belongs to (its own sid for a `conn` stream; 0 for none), and on a
-    /// `conn` stream opened after a stop its host, raw: for the `after_stop` tail.
+    /// The `conn` stream it belongs to (its own sid for a `conn` stream; 0 for none), for the
+    /// `after_stop` tail.
     conn_sid: Sid,
-    late_host: Option<String>,
     /// A byte after the stop on this stream was noted on its connection.
     noted: bool,
     off: u64,
@@ -96,7 +95,6 @@ impl StreamHandle {
             conn,
             opened: true,
             conn_sid: if wire { conn_sid } else { 0 },
-            late_host: None,
             noted: false,
             off: from,
             in_gap: false,
@@ -115,11 +113,6 @@ impl StreamHandle {
         self.opened
     }
 
-    /// The host of a `conn` stream opened after a stop, for the `after_stop` tail.
-    pub(super) fn late_host(&mut self, host: Option<String>) {
-        self.late_host = host;
-    }
-
     /// `n` bytes after a stop: into the `after_stop` count, and the first time also the
     /// stream's connection into the `after_stop` connections (PRD-02 section 11 steps 2 and 5).
     fn after_stop(&mut self, n: u64) {
@@ -132,7 +125,7 @@ impl StreamHandle {
     fn note_conn(&mut self) {
         if !self.noted {
             self.noted = true;
-            self.rec.after_stop_conn(self.conn_sid, self.late_host.take());
+            self.rec.after_stop_conn(self.conn_sid);
         }
     }
 
@@ -559,14 +552,24 @@ mod tests {
             json!({"host": "github.com"}),
         );
         conn.gap(GapReason::TlsRefused, rec.now(), None, None);
-        let mut req = rec.open(StreamKind::HttpReq, conn.sid(), 0, 0, OpenFlags::NONE, json!({}));
+        let mut req = rec.open(
+            StreamKind::HttpReq,
+            conn.sid(),
+            0,
+            0,
+            OpenFlags::NONE,
+            json!({}),
+        );
         req.gap(GapReason::DecodeFailed, rec.now(), Some(100), None);
         req.data(rec.now(), Bytes::from_static(b"more"));
         req.end(rec.now(), EndReason::Complete, None);
         let sid = conn.sid();
         drop((conn, idle));
         assert!(drain(&rec, &rx).is_empty());
-        assert_eq!(rec.after_stop(), (104, vec![(sid, Some("github.com".into()))]));
+        assert_eq!(
+            rec.after_stop(),
+            (104, vec![(sid, Some("github.com".into()))])
+        );
     }
 
     /// Point 3 and no drop without a GAP: relay threads dropping under a full guard while the

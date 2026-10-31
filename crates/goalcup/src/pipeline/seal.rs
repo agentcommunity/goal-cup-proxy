@@ -172,7 +172,8 @@ impl Sealer {
         }
         on_durable();
         if let (Some(b), Some(m)) = (&board, masker) {
-            after_seal(rec.clone(), entry_dir.clone(), b.clone(), m, after_bytes, seen);
+            let (rec, dir) = (rec.clone(), entry_dir.clone());
+            after_seal(rec, dir, b.clone(), m, after_bytes, seen);
         }
         let facts = SealFacts {
             reason,

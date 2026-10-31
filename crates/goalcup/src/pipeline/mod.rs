@@ -55,7 +55,7 @@ use crate::watchdog::{
 use item::Item;
 use serde_json::{Value, json};
 use status::{Losing, Off, Outlived};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::{BufRead, BufReader};
 use std::os::fd::FromRawFd;
 use std::os::unix::fs::DirBuilderExt;
@@ -112,10 +112,11 @@ struct Inner {
     wire_stopped: AtomicBool,
     /// The seal stopped every stream and event.
     all_stopped: AtomicBool,
-    /// Bytes offered after a stop, and each connection that carried one: its `conn` sid, with
-    /// its raw host when it was opened after the stop (no OPEN names it).
+    /// Bytes offered after a stop, and each connection that carried one, by its `conn` sid.
     after_stop_bytes: AtomicU64,
-    after_stop_conns: Mutex<HashMap<Sid, Option<String>>>,
+    after_stop_conns: Mutex<HashSet<Sid>>,
+    /// The raw host of each `conn` stream opened after a stop (no OPEN names it).
+    late_hosts: Mutex<HashMap<Sid, String>>,
     durable: watch::Sender<Durable>,
     /// Set only by `for_tests`.
     #[cfg(feature = "test-hooks")]
@@ -144,7 +145,8 @@ impl Inner {
             wire_stopped: AtomicBool::new(false),
             all_stopped: AtomicBool::new(false),
             after_stop_bytes: AtomicU64::new(0),
-            after_stop_conns: Mutex::new(HashMap::new()),
+            after_stop_conns: Mutex::new(HashSet::new()),
+            late_hosts: Mutex::new(HashMap::new()),
             durable,
             #[cfg(feature = "test-hooks")]
             calls: None,
@@ -187,10 +189,12 @@ impl Recorder {
             self,
             Call::Open(sid, kind, conn, req, from, flags, meta.clone())
         );
-        let mut handle = StreamHandle::new(self.clone(), sid, kind, conn, from);
+        let handle = StreamHandle::new(self.clone(), sid, kind, conn, from);
         if !handle.opened() {
-            if kind == StreamKind::Conn {
-                handle.late_host(meta.get("host").and_then(Value::as_str).map(String::from));
+            if kind == StreamKind::Conn
+                && let Some(host) = meta.get("host").and_then(Value::as_str)
+            {
+                lock(&self.inner.late_hosts).insert(sid, host.to_string());
             }
             return handle;
         }
@@ -447,15 +451,11 @@ impl Recorder {
         self.inner.after_stop_bytes.fetch_add(n, Ordering::Relaxed);
     }
 
-    /// Connection `conn` carried a byte after a stop; `host` is its raw host when it was opened
-    /// after the stop. Once per stream handle; connection 0 (none) is not counted.
-    pub(crate) fn after_stop_conn(&self, conn: Sid, host: Option<String>) {
+    /// Connection `conn` carried a byte after a stop. Once per stream handle; connection 0
+    /// (none) is not counted.
+    pub(crate) fn after_stop_conn(&self, conn: Sid) {
         if conn != 0 {
-            let mut conns = lock(&self.inner.after_stop_conns);
-            let h = conns.entry(conn).or_default();
-            if h.is_none() {
-                *h = host;
-            }
+            lock(&self.inner.after_stop_conns).insert(conn);
         }
     }
 
@@ -529,9 +529,9 @@ impl Recorder {
     /// each through the masker (`mask_meta`) before it reaches a record or `status.json`, so a
     /// host holding a secret shape never reaches disk.
     pub(crate) fn after_stop(&self) -> (u64, Vec<(Sid, Option<String>)>) {
-        let mut conns: Vec<_> = lock(&self.inner.after_stop_conns)
-            .iter()
-            .map(|(sid, h)| (*sid, h.clone()))
+        let late = lock(&self.inner.late_hosts);
+        let mut conns: Vec<_> = (lock(&self.inner.after_stop_conns).iter())
+            .map(|sid| (*sid, late.get(sid).cloned()))
             .collect();
         conns.sort_unstable();
         (self.inner.after_stop_bytes.load(Ordering::Relaxed), conns)
