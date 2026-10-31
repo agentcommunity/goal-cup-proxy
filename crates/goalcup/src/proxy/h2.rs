@@ -16,7 +16,7 @@
 //!
 //! Server frames from a `HEADERS` for a client stream whose request is not parsed yet wait,
 //! unparsed, until it is, so the response names its request; as in HTTP/1.1 they wait at most a
-//! head's worth. Past that, or at the close, they are parsed on, and a response whose request
+//! head's worth plus one read. Past that, or at the close, they are parsed on, and a response whose request
 //! is still not parsed answers none (`req` 0). Its `DATA` is recorded as any response's, unless
 //! the server set `SETTINGS_ENABLE_CONNECT_PROTOCOL` to 1: then its request may be an extended
 //! `CONNECT`, so it records no `DATA` and gets GAP `h2_unsupported` counting it, as a tunnel side.
@@ -416,7 +416,9 @@ impl H2 {
                 Some(b) if b.id == id => b.raw += 9,
                 _ => return Err(Fault::Frame),
             },
-            SETTINGS => {
+            // Only the server's entries are read; a client SETTINGS between two reads of
+            // them must not drop a partial entry.
+            SETTINGS if d == Dir::Down as usize => {
                 self.setting.clear();
                 self.kept += 9;
             }

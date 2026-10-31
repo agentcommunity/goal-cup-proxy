@@ -662,6 +662,31 @@ fn an_extended_connect_parsed_after_the_wait_records_no_data() {
     assert!(data_of(&calls, req).is_empty());
 }
 
+/// Section 6 and point 4: a client SETTINGS read between two parts of the server's SETTINGS
+/// keeps the server's partial entry, so `SETTINGS_ENABLE_CONNECT_PROTOCOL` is still seen and a
+/// WebSocket's server frames are counted in a GAP, never recorded as `DATA`.
+#[test]
+fn a_client_settings_inside_the_server_settings_keeps_extended_connect() {
+    let ws = vec![0xc1; 70_000];
+    let connect = format!(":method=CONNECT :protocol=websocket {API} :path=/ws");
+    let entries = [vec![0, 3, 0, 0, 0, 100], enable_connect(1)].concat();
+    let settings = frame(SETTINGS, 0, 0, &entries);
+    let (first, rest) = settings.split_at(12);
+    let steps = [
+        (Dir::Down, first.to_vec()),
+        up(&[]),
+        (Dir::Down, [rest, &ok(1, "")[..], &body(1, false, &ws)[..]].concat()),
+        (Dir::Up, head(1, 0, &connect)),
+        (Dir::Down, body(1, true, &[0xc1; 10])),
+    ];
+    let (calls, stop) = run(&steps);
+    assert_eq!(stop, None);
+    let [(resp, ..)] = opens(&calls, StreamKind::HttpResp).try_into().unwrap();
+    assert!(data_of(&calls, resp).is_empty());
+    let want = [(GapReason::H2Unsupported, Some(ws.len() as u64 + 10))];
+    assert_eq!(gaps_on(&calls, resp), want);
+}
+
 /// A server HEADERS whose frame header comes in the replayed bytes and whose block ends in a
 /// later read still opens its response, before its request: its `DATA` recorded, nothing held,
 /// and the request that comes after it ends its stream.
