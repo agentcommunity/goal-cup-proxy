@@ -11,6 +11,7 @@ use goalcup_format::read::{part_files, read_index};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::{env, fs};
 
 /// What fails run 1's shape. `history_complete` joins it with PRD-08 slice 6.
@@ -58,7 +59,9 @@ fn fetch(d: &Path) -> PathBuf {
     out
 }
 
-/// Copies a folder, for PRD-12's K2 fixtures (`scripts/pad/fixtures/k2-part`, `k2-fetched`).
+/// Copies a folder: the K2 export of PRD-12 (section 12): with `GOALCUP_FIXTURES_OUT` set,
+/// the run 1 test writes `k2-part` and `k2-fetched` there, to be committed under
+/// `scripts/pad/fixtures/`.
 fn export(from: &Path, to: &Path) {
     fs::create_dir_all(to).unwrap();
     for f in fs::read_dir(from).unwrap().map(|f| f.unwrap().path()) {
@@ -92,6 +95,34 @@ fn run1_shape_as_a_server_copy_fails_the_count_check_too() {
     assert_eq!(code, 2);
     let want = sorted(FAILS.iter().chain(&["server_counts_match"]));
     assert_eq!(sorted(ids_with(&v, "fail")), want);
+}
+
+#[test]
+fn a_vendor_tunnel_does_not_name_the_loss_of_model_calls() {
+    let (code, v) = check(&run1("r1-vendor", Shape::Vendor), &[]);
+    assert_eq!(code, 2);
+    assert_eq!(sorted(ids_with(&v, "fail")), sorted(FAILS));
+}
+
+#[test]
+fn the_coverage_line_counts_every_request_written() {
+    let mut e = Entry::new("r1-other");
+    e.standard();
+    // A POST to a listed host that is no model call: written as a request, not a call.
+    let c = e.conn();
+    let head = json!({"method": "POST", "path": "/v1/other", "ver": "1.1", "headers": [],
+        "masked": [], "coding": null});
+    let q = e.open(StreamKind::HttpReq, c, 0, head);
+    e.end(q, EndReason::Complete, 0, json!({"wire": 0}));
+    e.end(c, EndReason::Complete, 0, json!({"up": 10, "down": 0, "plain_up": 0, "plain_down": 0}));
+    e.count();
+    let d = e.seal();
+    let args = ["check", d.to_str().unwrap(), "--json"];
+    let out = Command::new(env!("CARGO_BIN_EXE_goalcup-verify")).args(args).output().unwrap();
+    let v: Value = serde_json::from_slice(&out.stdout).unwrap();
+    let n = v["entries"][0]["counts"]["model_requests"].as_u64().unwrap();
+    assert_eq!(n, 3);
+    assert!(String::from_utf8_lossy(&out.stderr).contains(&format!("Recorded: {n} requests")));
 }
 
 #[test]

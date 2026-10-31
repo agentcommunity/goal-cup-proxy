@@ -3,7 +3,8 @@
 //! dropped at its END and at a new boot. A record of a stream never seen open is ignored here
 //! (integrity reports it); a crafted record must not panic (L-VR3).
 
-use crate::integrity::{At, Check, Res};
+use crate::integrity::{At, Check, Res, has_extent};
+use crate::legs::Cover;
 use goalcup_format::{EndReason, GapReason, Item, Record, StreamKind};
 use serde_json::{Map, Value, json};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
@@ -18,6 +19,8 @@ struct Conn {
     fp: Option<String>,
     tunnel: bool,
     listed: bool,
+    /// A listed host of kind provider or gateway: a GAP on this connection covers harness calls.
+    model: bool,
     /// A tunnel to a host that earlier finished a decrypted connection with this fingerprint.
     after_trust: bool,
     /// GAPs on the connection or on one of its streams: a loss `conn_bytes` need not guess at.
@@ -78,8 +81,10 @@ pub struct Honesty {
     subs: HashMap<u64, Sub>,
     /// Fail-closed MASK bytes per open stream.
     masks: HashMap<u64, u64>,
-    /// The `start` event's host list: exact names and `*.suffix` patterns.
-    on_list: Vec<String>,
+    /// The `start` event's host list: exact names and `*.suffix` patterns, with their kinds.
+    on_list: Vec<(String, String)>,
+    /// Wall time in which a loss is named, for the legs checks.
+    pub(crate) covers: Vec<Cover>,
     trusted: HashSet<(String, String)>,
     listed: BTreeSet<String>,
     long: BTreeSet<String>,
@@ -152,10 +157,23 @@ impl Honesty {
             Record::Gap {
                 sid,
                 reason,
+                start_wall,
+                end_wall,
+                start_mono,
+                end_mono,
                 lost,
                 tail,
                 ..
-            } => self.gap(*sid, *reason, *lost, &obj(tail), at),
+            } => {
+                let tail = obj(tail);
+                // A GAP with no extent (gap_has_end) covers nothing.
+                let span = has_extent(&tail, (*start_wall, *end_wall), (*start_mono, *end_mono), *lost)
+                    .then_some(Cover {
+                        start_wall: *start_wall,
+                        end_wall: *end_wall,
+                    });
+                self.gap(*sid, *reason, *lost, &tail, at, span);
+            }
             Record::End {
                 sid,
                 reason,
@@ -179,8 +197,9 @@ impl Honesty {
             && let Some(Value::Object(by_source)) = e.get("hosts")
         {
             let all = by_source.values().filter_map(Value::as_array).flatten();
-            let names = all.filter_map(|h| h.get("host")?.as_str());
-            self.on_list = names.map(Into::into).collect();
+            let kind = |h: &Value| h.get("kind").and_then(Value::as_str).unwrap_or_default();
+            let names = all.filter_map(|h| Some((h.get("host")?.as_str()?, kind(h))));
+            self.on_list = names.map(|(h, k)| (h.into(), k.into())).collect();
         }
     }
 
@@ -196,19 +215,23 @@ impl Honesty {
         }
     }
 
-    /// Whether the `start` event's host list holds `host`.
-    fn is_on_list(&self, host: &str) -> bool {
-        let hit = |p: &String| {
+    /// The kind the `start` event's host list gives `host` (empty when it says none), or `None`
+    /// when the list does not hold it.
+    fn on_list(&self, host: &str) -> Option<&str> {
+        let hit = |(p, _): &&(String, String)| {
             let suffix = p.strip_prefix('*');
             p == host || suffix.is_some_and(|s| host.len() > s.len() && host.ends_with(s))
         };
-        self.on_list.iter().any(hit)
+        self.on_list.iter().find(hit).map(|(_, k)| k.as_str())
     }
 
     fn open(&mut self, sid: u64, kind: StreamKind, conn: u64, m: &Map<String, Value>) {
         let s = |k: &str| m.get(k).and_then(Value::as_str);
         if kind == StreamKind::Conn {
             let host = s("host").unwrap_or_default();
+            let (on, listed) = (self.on_list(host), s("listed").is_some());
+            let kind = s("kind").or(on).unwrap_or_default();
+            let model = (listed || on.is_some()) && matches!(kind, "provider" | "gateway");
             let mut c = Conn {
                 host: host.into(),
                 reason: s("reason").unwrap_or("unknown").into(),
@@ -216,7 +239,8 @@ impl Honesty {
                 tunnel: s("mode") == Some("tunnel"),
                 // The conn's own word, or the start event's list: a recorder that mislabels a
                 // listed host as unlisted must not hide a blind relay.
-                listed: s("listed").is_some() || self.is_on_list(host),
+                listed: listed || on.is_some(),
+                model,
                 ..Default::default()
             };
             if c.listed {
@@ -249,7 +273,18 @@ impl Honesty {
         self.subs.insert(sid, Sub { conn, dir, ws });
     }
 
-    fn gap(&mut self, sid: u64, reason: GapReason, lost: u64, tail: &Map<String, Value>, at: At) {
+    fn gap(
+        &mut self,
+        sid: u64,
+        reason: GapReason,
+        lost: u64,
+        tail: &Map<String, Value>,
+        at: At,
+        span: Option<Cover>,
+    ) {
+        if sid == 0 && reason == GapReason::RecorderDown {
+            self.covers.extend(span);
+        }
         // A GAP on a stream of a connection names only its own bytes, so it never waives the
         // `conn_bytes` fail rule for other requests. A WebSocket stream has no END `wire`: the
         // bytes it lost count as accounted for, and a loss of unknown size waives the rule.
@@ -269,6 +304,12 @@ impl Honesty {
         inc(&mut c.lost, lost.saturating_sub(1));
         c.gap_named |= names_tunnel(&c.reason, reason);
         c.quiet |= tail.get("alert") == Some(&Value::Bool(false));
+        // A conn GAP names the harness calls of a model host: a decrypted connection's, or a
+        // tunnel's own (PRD-08 section 3). Not a stream GAP, not a vendor's.
+        if c.model && reason != GapReason::AfterStop && (!c.tunnel || names_tunnel(&c.reason, reason))
+        {
+            self.covers.extend(span);
+        }
         if c.listed && !c.tunnel {
             self.hosts.insert(c.host.clone());
             inc(&mut self.n.conn_gaps, 1);

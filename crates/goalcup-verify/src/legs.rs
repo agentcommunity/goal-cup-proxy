@@ -1,13 +1,13 @@
 //! Legs (PRD-08 section 3): `wire_keeps_up`, `threads_match` and `subagents_present` over U1's call
 //! table, the provider error counts and the legs part of the coverage line. [`Legs`] takes the
-//! records of integrity's one pass (a few words per open stream, one table row per call);
-//! [`judge`] is pure over the table and the covers. It reads `native_form`, threads and
-//! `children`, and names no harness.
+//! records of integrity's one pass (one table row per call); [`judge`] is pure over the table and
+//! the covers, which honesty collects. It reads `native_form`, threads and `children`, and names
+//! no harness.
 
 use crate::integrity::{Check, Res};
-use crate::usage::{CallRow, CallTable, Calls, Kind, Leg, NativeForm, Outcome, Shape};
+use crate::usage::{CallRow, CallTable, Calls, Kind, Leg, NativeForm, Outcome, Reason, Shape};
 use goalcup_format::dump::wall;
-use goalcup_format::{GapReason, Item, Record, StreamKind};
+use goalcup_format::Item;
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
@@ -18,8 +18,8 @@ const WIRE_ENDED: u64 = 10 * MIN;
 const NOT_READ: &str = "the harness's own log is not read";
 const UNREAD: &str = "could not read the harness's own log";
 
-/// Wall time (ns since the epoch) in which a loss is named: a recorder-down GAP, or a GAP on a
-/// connection to a listed host.
+/// Wall time (ns since the epoch) in which a loss is named: a recorder-down GAP, or a conn GAP
+/// of a connection to a model host (kind provider or gateway). Honesty collects them.
 #[derive(Clone, Copy, Debug)]
 pub struct Cover {
     pub start_wall: u64,
@@ -27,76 +27,47 @@ pub struct Cover {
 }
 
 pub struct Out {
-    pub checks: Vec<Check>,
     pub harness_log: &'static str,
     pub provider_errors: Value,
     pub threads: Vec<Value>,
-    pub n_threads: u64,
+    /// Wire calls the provider refused.
+    pub refused: u64,
     /// The legs part of the coverage line; it never claims everything was recorded.
     pub coverage: String,
 }
 
-/// The collector held by integrity's pass: feeds U1 and gathers the covers.
+/// The collector held by integrity's pass: feeds U1.
 #[derive(Default)]
 pub struct Legs {
     calls: Calls,
-    covers: Vec<Cover>,
-    boot: Option<u64>,
-    /// Open connections and their streams, by sid: whether the connection is to a listed host.
-    listed: HashMap<u64, bool>,
 }
 
 impl Legs {
     pub(crate) fn item(&mut self, it: &Item) {
         self.calls.push(&it.rec);
-        match &it.rec {
-            Record::Part { boot, .. } if self.boot != Some(*boot) => {
-                (self.boot, self.listed) = (Some(*boot), HashMap::new());
-            }
-            Record::Open {
-                sid,
-                skind,
-                conn,
-                meta,
-                ..
-            } => {
-                let m: Value = serde_json::from_slice(meta).unwrap_or(Value::Null);
-                let own = !m["listed"].is_null();
-                let on = if *skind == StreamKind::Conn {
-                    own
-                } else {
-                    self.listed.get(conn) == Some(&true)
-                };
-                self.listed.insert(*sid, on);
-            }
-            Record::End { sid, .. } => {
-                self.listed.remove(sid);
-            }
-            Record::Gap {
-                sid,
-                reason,
-                start_wall,
-                end_wall,
-                lost,
-                ..
-            } => {
-                let on = *sid == 0 || self.listed.get(sid) == Some(&true);
-                // A GAP with no extent (gap_has_end) or after the stop covers nothing.
-                let none = end_wall < start_wall || (end_wall == start_wall && *lost <= 1);
-                if on && !none && *reason != GapReason::AfterStop {
-                    let (start_wall, end_wall) = (*start_wall, *end_wall);
-                    self.covers.push(Cover {
-                        start_wall,
-                        end_wall,
-                    });
-                }
-            }
-            _ => {}
-        }
     }
 
-    pub fn finish(self) -> Out {
-        judge(&self.calls.finish(), &self.covers)
+    /// The three checks and the rest, given the covers honesty gathered.
+    pub fn finish(self, covers: &[Cover]) -> (Vec<Check>, Out) {
+        judge(&self.calls.finish(), covers)
+    }
+}
+
+/// What the harness's own log gave, as the report's `harness_log`.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Log {
+    None,
+    Totals,
+    PerCall,
+}
+
+impl Log {
+    fn name(self) -> &'static str {
+        match self {
+            Log::None => "none",
+            Log::Totals => "totals",
+            Log::PerCall => "per_call",
+        }
     }
 }
 
@@ -104,7 +75,7 @@ impl Legs {
 struct Ctx<'a> {
     t: &'a CallTable,
     covers: &'a [Cover],
-    log: &'static str,
+    log: Log,
     /// Each thread's `native_until`: its native calls after it are not known, so not compared.
     until: HashMap<&'a str, u64>,
     native: u64,
@@ -114,9 +85,9 @@ struct Ctx<'a> {
 impl<'a> Ctx<'a> {
     fn new(t: &'a CallTable, covers: &'a [Cover]) -> Self {
         let log = match (t.readable(), t.native_form) {
-            (false, _) => "none",
-            (_, NativeForm::Totals) => "totals",
-            _ => "per_call",
+            (false, _) => Log::None,
+            (_, NativeForm::Totals) => Log::Totals,
+            _ => Log::PerCall,
         };
         let until = (t.threads.iter())
             .filter_map(|x| Some((x.id.as_str(), x.native_until?)))
@@ -151,53 +122,61 @@ impl<'a> Ctx<'a> {
         at(r).zip(cut).is_none_or(|(x, &c)| x <= c)
     }
 
-    /// Why a per-call comparison cannot run, or "".
+    /// Why a per-call comparison cannot run, or "". A reader that found nothing while the wire
+    /// had calls is not the same as no reader: the participant is told it could not read.
     fn unread(&self) -> &'static str {
-        match self.log {
-            "none" => NOT_READ,
-            "per_call" if self.native == 0 => ["no calls", UNREAD][usize::from(self.wire > 0)],
+        match (self.log, self.t.reason) {
+            (Log::None, Some(Reason::NoNative)) => UNREAD,
+            (Log::None, _) => NOT_READ,
+            (Log::PerCall, _) if self.native == 0 && self.wire > 0 => UNREAD,
+            (Log::PerCall, _) if self.native == 0 => "no calls",
             _ => "",
         }
     }
 }
 
 /// The three checks, the error counts and the coverage text of one table.
-pub fn judge(t: &CallTable, covers: &[Cover]) -> Out {
+pub fn judge(t: &CallTable, covers: &[Cover]) -> (Vec<Check>, Out) {
     let x = Ctx::new(t, covers);
     let (keeps, line) = wire_keeps_up(&x);
     let (matched, threads) = threads_match(&x);
-    let wire = t
-        .rows
-        .iter()
-        .filter(|r| r.leg == Leg::Wire && r.kind == Kind::Call);
-    let refused = wire.clone().filter(|r| r.outcome.is_error()).count();
-    let coverage = format!(
-        "Recorded: {} requests, {refused} refused by the provider. History check: skipped, not \
-         built in this slice. {line}",
-        wire.count()
-    );
-    Out {
-        checks: vec![keeps, matched, subagents(&x)],
-        harness_log: x.log,
+    let refused = (x.calls())
+        .filter(|r| r.leg == Leg::Wire && r.outcome.is_error())
+        .count() as u64;
+    let out = Out {
+        harness_log: x.log.name(),
         provider_errors: errors(t),
-        n_threads: threads.len() as u64,
         threads,
-        coverage,
-    }
+        refused,
+        coverage: format!("History check: skipped, not built in this slice. {line}"),
+    };
+    (vec![keeps, matched, subagents(&x)], out)
 }
 
 fn at(r: &CallRow) -> Option<u64> {
     r.wall_end.or(r.wall_start)
 }
 
-/// More than max(3, 2%) harness calls above the wire's.
-fn bad(h: u64, w: u64) -> bool {
-    h > 0 && (w == 0 || h > w.saturating_add((h / 50).max(3)))
+/// The tolerance: max(3, 2%) calls.
+fn tol(n: u64) -> u64 {
+    (n / 50).max(3)
 }
 
-/// `fail` when the excess stands with the covered calls taken out, `named` when only they hold it.
+/// More than the tolerance of harness calls above the wire's.
+fn bad(h: u64, w: u64) -> bool {
+    h > 0 && (w == 0 || h > w.saturating_add(tol(h)))
+}
+
+/// `fail` when the excess stands with the covered calls taken out, `named` when only they hold
+/// it. Taking calls out never turns a pass into a fail.
 fn grade(raw: bool, adjusted: bool) -> Res {
-    [Res::Pass, Res::Named, Res::Fail][if adjusted { 2 } else { usize::from(raw) }]
+    if !raw {
+        Res::Pass
+    } else if adjusted {
+        Res::Fail
+    } else {
+        Res::Named
+    }
 }
 
 fn hms(ns: u64) -> String {
@@ -241,7 +220,7 @@ impl Sweep {
             let n = j as u64 + 1;
             let ex = n.saturating_sub(w.partition_point(|&x| x <= t.saturating_add(LAG)) as u64);
             s.top = s.top.max(ex);
-            if ex > (n / 50).max(3) {
+            if ex > tol(n) {
                 s.first.get_or_insert(t);
                 if ex >= s.worst {
                     (s.worst, s.at) = (ex, t);
@@ -261,23 +240,27 @@ impl Sweep {
 /// The check and the harness's part of the coverage line.
 fn wire_keeps_up(x: &Ctx) -> (Check, String) {
     let c = Check::new("wire_keeps_up", None, Res::Pass, "");
-    let (mut h, mut w, mut last_wire) = (Vec::new(), Vec::new(), None);
+    // `w_open` leaves out the wire calls inside a cover: they answer covered harness calls and
+    // must not offset a loss outside it.
+    let (mut h, mut w, mut w_open, mut last_wire) = (Vec::new(), Vec::new(), Vec::new(), None);
     for r in x.calls() {
         if r.leg == Leg::Native {
             h.extend(at(r).filter(|_| x.known(r)));
         } else {
             last_wire = last_wire.max(at(r));
-            w.extend(at(r).filter(|_| !r.outcome.is_error()));
+            let ok = at(r).filter(|_| !r.outcome.is_error());
+            w.extend(ok);
+            w_open.extend(ok.filter(|_| !x.covered(r)));
         }
     }
     let why = match x.unread() {
-        "" if x.log == "totals" || h.is_empty() => "no per-call times",
+        "" if x.log == Log::Totals || h.is_empty() => "no per-call times",
         why => why,
     };
     if !why.is_empty() {
         let line = format!(
             "The harness's own log {}.",
-            if x.log == "none" {
+            if why == NOT_READ {
                 "is not read for this harness (optional)".to_string()
             } else {
                 format!("was not compared: {why}")
@@ -287,12 +270,13 @@ fn wire_keeps_up(x: &Ctx) -> (Check, String) {
     }
     h.sort_unstable();
     w.sort_unstable();
+    w_open.sort_unstable();
     let mut open: Vec<u64> = (x.calls())
         .filter(|r| r.leg == Leg::Native && x.known(r) && !x.covered(r))
         .filter_map(at)
         .collect();
     open.sort_unstable();
-    let (raw, adj) = (Sweep::new(&h, &w), Sweep::new(&open, &w));
+    let (raw, adj) = (Sweep::new(&h, &w), Sweep::new(&open, &w_open));
     // The harness kept calling long after the wire's last call, whatever the wire's outcome.
     let ended = |l: Option<&u64>| {
         l.is_some_and(|&l| last_wire.is_none_or(|v| l > v.saturating_add(WIRE_ENDED)))
@@ -341,6 +325,8 @@ struct Acc {
     h: u64,
     open: u64,
     ok: u64,
+    /// The `ok` wire calls not inside a cover.
+    ok_open: u64,
     err: u64,
     total: Option<u64>,
 }
@@ -348,7 +334,7 @@ struct Acc {
 /// The check and the per-thread rows of the report.
 fn threads_match(x: &Ctx) -> (Check, Vec<Value>) {
     let c = Check::new("threads_match", None, Res::Pass, "");
-    let totals = x.log == "totals";
+    let totals = x.log == Log::Totals;
     let mut by: BTreeMap<&str, Acc> = BTreeMap::new();
     let (mut threaded, mut chat) = (false, 0u64);
     for r in x.calls() {
@@ -362,11 +348,11 @@ fn threads_match(x: &Ctx) -> (Check, Vec<Value>) {
             (a.h, a.open) = (a.h + 1, a.open + u64::from(!x.covered(r)));
         } else if !nat {
             threaded = true;
-            *(if r.outcome.is_error() {
-                &mut a.err
+            if r.outcome.is_error() {
+                a.err += 1;
             } else {
-                &mut a.ok
-            }) += 1;
+                (a.ok, a.ok_open) = (a.ok + 1, a.ok_open + u64::from(!x.covered(r)));
+            }
         }
     }
     for th in &x.t.threads {
@@ -395,9 +381,12 @@ fn threads_match(x: &Ctx) -> (Check, Vec<Value>) {
             .fold(0, u64::saturating_add);
         by = BTreeMap::from([(
             "",
+            // The key `wire_ok` holds every chat call of the entry here, refused ones included
+            // (PRD-08 section 3.1), and `wire_err` stays 0.
             Acc {
                 total: Some(total),
                 ok: chat,
+                ok_open: chat,
                 ..Acc::default()
             },
         )]);
@@ -412,7 +401,7 @@ fn threads_match(x: &Ctx) -> (Check, Vec<Value>) {
             } else {
                 (a.h, a.open)
             };
-            let res = grade(bad(h, a.ok), bad(open, a.ok));
+            let res = grade(bad(h, a.ok), bad(open, a.ok_open));
             let thread = Some(*id).filter(|i| !i.is_empty());
             let v = json!({"thread": thread, "parent": a.parent, "harness": h, "wire_ok": a.ok,
                 "wire_err": a.err, "result": res.name(), "history": null});
@@ -447,8 +436,9 @@ fn subagents(x: &Ctx) -> Check {
     let Some(kids) = &x.t.children else {
         return skip(c, "parentage was not read");
     };
+    // A thread whose own log was read has a native stream, however few calls it completed.
     let named = (x.t.threads.iter())
-        .filter(|t| t.native_calls > 0)
+        .filter(|t| t.readable())
         .map(|t| t.id.as_str());
     let seen: HashSet<&str> = x
         .calls()
@@ -479,19 +469,22 @@ fn subagents(x: &Ctx) -> Check {
     )
 }
 
-/// Provider errors by code, one per error row: the wire apart from the harness's own log.
+/// Provider errors by code, one per error call: the wire apart from the harness's own log.
 fn errors(t: &CallTable) -> Value {
-    let mut m = [BTreeMap::new(), BTreeMap::new()];
-    for r in &t.rows {
+    let (mut wire, mut native) = (BTreeMap::new(), BTreeMap::new());
+    for r in t.rows.iter().filter(|r| r.kind == Kind::Call) {
         let (Outcome::RateLimited { status, code } | Outcome::Error { status, code }) = &r.outcome
         else {
             continue;
         };
         let key = code.clone().or_else(|| status.map(|s| format!("http_{s}")));
-        let n: &mut u64 = m[usize::from(r.leg == Leg::Native)]
-            .entry(key.unwrap_or_else(|| "error".into()))
-            .or_default();
+        let m = if r.leg == Leg::Native {
+            &mut native
+        } else {
+            &mut wire
+        };
+        let n: &mut u64 = m.entry(key.unwrap_or_else(|| "error".into())).or_default();
         *n = n.saturating_add(1);
     }
-    json!({"wire": m[0], "native": m[1]})
+    json!({"wire": wire, "native": native})
 }

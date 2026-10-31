@@ -7,7 +7,6 @@
 //! layout, [`run`] runs the binary. Every value here is an obvious fake.
 #![allow(dead_code)]
 
-pub mod run1;
 use goalcup_format::codec::{Codec, Record};
 use goalcup_format::link::{Chain, ZERO};
 use goalcup_format::read::{open_dir, part_files};
@@ -21,6 +20,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
+
+pub mod run1;
 
 pub const ENTRY: &str = "e0123456789abcdef";
 pub const RUN: &str = "r0123456789abcdef";

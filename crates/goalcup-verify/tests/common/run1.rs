@@ -7,6 +7,8 @@ use super::*;
 pub enum Shape {
     /// The wire stops at minute 49 while the rollouts run on, with run 1's other losses.
     Lossy,
+    /// Lossy, and a pinned tunnel to a vendor host for the whole entry: no cover for the wire.
+    Vendor,
     /// The same record with no loss.
     Clean,
     /// Clean, but the recorder is dead from minute 60 to 70.
@@ -58,13 +60,13 @@ fn post(e: &mut Entry, id: &str, k: u64, limited: bool) {
     e.end(c, done, 0, json!({"up": 900, "down": 900}));
 }
 
-/// A minute-long tunnel to the model host; only its GAP says it was there.
-fn tunnel(e: &mut Entry) {
-    let meta = json!({"host": HOST, "port": 443, "mode": "tunnel", "listed": "shared",
-        "kind": "provider", "reason": "pinned", "alpn": null, "tls": null,
+/// A tunnel to a host of `kind` lasting `ms`; only its GAP says it was there.
+fn tunnel(e: &mut Entry, host: &str, kind: &str, ms: u64) {
+    let meta = json!({"host": host, "port": 443, "mode": "tunnel", "listed": "shared",
+        "kind": kind, "reason": "pinned", "alpn": null, "tls": null,
         "fingerprint": "0123456789abcdef"});
     let s = e.open(StreamKind::Conn, 0, 0, meta);
-    e.gap(s, GapReason::Pinned, 58_000, 0, 2_561, Value::Null);
+    e.gap(s, GapReason::Pinned, ms, 0, 2_561, Value::Null);
     e.end(s, EndReason::Complete, 0, json!({"up": 512, "down": 2048}));
 }
 
@@ -122,7 +124,8 @@ impl Roll {
 pub fn run1(name: &str, shape: Shape) -> PathBuf {
     use Shape::*;
     let mut e = Entry::new(name);
-    let n = if shape == Lossy { 4 } else { 5 };
+    let lossy = matches!(shape, Lossy | Vendor);
+    let n = if lossy { 4 } else { 5 };
     let mut rolls: Vec<Roll> = IDS[..n].iter().map(Roll::new).collect();
     for r in &mut rolls {
         r.open(&mut e);
@@ -138,14 +141,14 @@ pub fn run1(name: &str, shape: Shape) -> PathBuf {
     let mut t0 = 0;
     for m in 1..=120u64 {
         let down = shape == Killed && (60..70).contains(&m);
-        let on = !down && (m <= 49 || shape != Lossy) && shape != Dodger;
+        let on = !down && (m <= 49 || !lossy) && shape != Dodger;
         if m == 60 && shape == Killed {
             rolls.iter().for_each(|r| r.end(&mut e));
             t0 = e.clock.ns;
             e.crash("killed", 600_000);
             rolls.iter_mut().for_each(|r| r.open(&mut e));
         } else if shape == Dodger {
-            tunnel(&mut e);
+            tunnel(&mut e, HOST, "provider", 58_000);
         } else if !down {
             e.idle(59_000);
         }
@@ -154,7 +157,7 @@ pub fn run1(name: &str, shape: Shape) -> PathBuf {
         } else {
             e.clock.ns
         };
-        if shape == Lossy && m % 10 == 0 && m <= 30 {
+        if lossy && m % 10 == 0 && m <= 30 {
             let r = &rolls[m as usize / 10 - 1];
             e.gap(r.sid, GapReason::MemoryGuard, 0, r.off, 0, Value::Null);
         }
@@ -174,9 +177,12 @@ pub fn run1(name: &str, shape: Shape) -> PathBuf {
         }
     }
     // Lossy leaves the last two it opened with no END.
-    let skip = if shape == Lossy { 2 } else { 0 };
+    let skip = if lossy { 2 } else { 0 };
     for r in rolls.iter().rev().skip(skip) {
         r.end(&mut e);
+    }
+    if shape == Vendor {
+        tunnel(&mut e, "telemetry.example.test", "vendor", 6_900_000);
     }
     let dir = e.seal();
     let edit = |v: &mut Value| {

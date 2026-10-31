@@ -40,11 +40,11 @@ fn totals(n: u64) -> CallTable {
     t
 }
 
-/// A parent `p` with the child `k`: `calls` harness calls of `k` and `wire` wire calls of it.
-fn parent(calls: u64, wire: u64) -> CallTable {
+/// A parent `p` with the child `k`: `wire` wire calls of it, and its own log read or not.
+fn parent(read: bool, wire: u64) -> CallTable {
     let mut t = tab("k", 0, wire);
     t.children = Some([("p".to_string(), vec!["k".to_string()])].into());
-    t.threads = vec![thread("k", calls, None)];
+    t.threads = vec![thread("k", 0, None)].into_iter().filter(|_| read).collect();
     t
 }
 
@@ -55,8 +55,8 @@ fn go(t: &CallTable, cover: Option<(u64, u64)>, id: &str) -> &'static str {
         start_wall: at(a),
         end_wall: at(b),
     });
-    let o = judge(t, c.as_slice());
-    o.checks.iter().find(|x| x.id == id).unwrap().result.name()
+    let (checks, _) = judge(t, c.as_slice());
+    checks.iter().find(|x| x.id == id).unwrap().result.name()
 }
 
 #[test]
@@ -73,10 +73,14 @@ fn legs_grade_the_excess_and_a_gap_names_it() {
         (totals(6), None, m, "fail"),
         (totals(6), Some((100, 101)), m, "named"),
         (CallTable::default(), None, s, "skip"),
-        (parent(0, 0), None, s, "fail"),
-        (parent(0, 0), Some((0, 1)), s, "named"),
-        (parent(0, 2), None, s, "pass"),
-        (parent(3, 0), None, s, "pass"),
+        (parent(false, 0), None, s, "fail"),
+        (parent(false, 0), Some((0, 1)), s, "named"),
+        (parent(false, 2), None, s, "pass"),
+        (parent(true, 0), None, s, "pass"),
+        // Wire calls inside the cover answer covered harness calls only: the loss at minutes
+        // 12 to 19 has no cover and no wire call.
+        (tab("a", 20, 10), Some((0, 9)), k, "fail"),
+        (tab("a", 20, 10), Some((0, 9)), m, "fail"),
         (tab("a", 0, 3), None, k, "skip"),
         (tab("a", 0, 3), None, m, "skip"),
         (totals(3), None, k, "skip"),
@@ -90,14 +94,14 @@ fn legs_grade_the_excess_and_a_gap_names_it() {
 fn no_reader_skips_and_a_wire_only_thread_is_reported() {
     let mut none = tab("a", 0, 3);
     none.reason = Some(Reason::NoReader);
-    assert_eq!(judge(&none, &[]).harness_log, "none");
+    assert_eq!(judge(&none, &[]).1.harness_log, "none");
     assert_eq!(go(&none, None, K[0]), "skip");
     assert_eq!(go(&none, None, K[1]), "skip");
     let mut t = tab("a", 5, 5);
     t.rows.extend(tab("w", 0, 3).rows);
     assert_eq!(go(&t, None, K[1]), "pass");
-    let o = judge(&t, &[]);
-    assert_eq!(o.n_threads, 2);
+    let (_, o) = judge(&t, &[]);
+    assert_eq!(o.threads.len(), 2);
     let w = o.threads.iter().find(|r| r["thread"] == "w").unwrap();
     assert_eq!((&w["harness"], &w["wire_ok"]), (&json!(0), &json!(3)));
 }
@@ -117,7 +121,7 @@ fn provider_errors_count_by_code_and_leg() {
     t.rows.push(err(Leg::Wire, true, "rate_limit"));
     t.rows.push(err(Leg::Wire, false, "server_error"));
     t.rows.push(err(Leg::Native, false, "overloaded"));
-    let e = judge(&t, &[]).provider_errors;
+    let e = judge(&t, &[]).1.provider_errors;
     assert_eq!(e["wire"], json!({"rate_limit": 1, "server_error": 1}));
     assert_eq!(e["native"], json!({"overloaded": 1}));
 }
