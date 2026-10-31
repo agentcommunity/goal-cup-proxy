@@ -1,5 +1,9 @@
 # Night log, goalcup 1.0 build
 
+call 07:58Z 31 Oct | W6 | new conductor container: its network policy denies vercel.com, api.vercel.com and api.cloudflare.com (proxy 403 on CONNECT), so no Vercel Sandbox build or pad box can start and no staging deploy can run. Owner: allow those hosts (or *.vercel.com, *.vercel.run, *.vercel.sh, api.cloudflare.com, *.workers.dev) in the environment's Network access. Builds wait and retry; nothing falls back to this container.
+
+Keys re-checked 2026-10-31 07:54Z at conductor resume (new container; names only): CLAUDE_API_KEY, OPENAI_API_KEY, DEEPSEEK_API_KEY, GEMINI_API_KEY, AI_GATEWAY_API_KEY, VERCEL_TOKEN, CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID, DATABASE_URL, GOALCUP_TEST_APPROVAL_KEY, GOALCUP_TEST_MEMBER_ID, GH_TOKEN all set; Vercel team id set as VERCEL_TEAM_ID (VERCEL_PROJECT_ID also set). Pad push token: still none.
+
 Keys (checked 2026-10-30 at session start; names only, no values):
 
 | Variable | State |
@@ -2247,3 +2251,6 @@ Keys (checked 2026-10-30 at session start; names only, no values):
 23:57Z | judge-usage reviewer-A PRD-09 | stop | review done: fmt clippy ok, 51 of 51 tests pass; findings: native path in calls file, detail doubled, decode error silent exit 0, no per-thread model
 23:57Z | masking reviewer PRD-05 | decision | breaker: glued prefix runs (task- repeated) drop stream masking to 0.1 MB/s and mask_whole goes quadratic; 16+ exact values saturate fail_closed on native streams; default-build bursts and fuzz pass
 23:58Z | judge-usage fixer PRD-09 | start | fixer starting on v1.0/prd-09-usage
+07:58Z | integrator conductor resume | start | new conductor container after the 01:30Z pause; gc-night and worktrees were empty, tools restored from conductor/, lane logs before 01:30Z not recovered (branch heads and commits hold that state)
+07:58Z | integrator conductor resume | stop | build boxes blocked: network policy denies vercel.com and api.cloudflare.com (call line at top)
+08:00Z | core PRD-02 | decision | two planning agents (deep model, owner's 31 Oct instruction) audit prd-02-core at 5cfb640 and plan the path to rung 1; their plans feed the PRD-02 lane
