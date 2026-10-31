@@ -1111,13 +1111,36 @@ pub const SEAL_NEEDS_TERMINAL: &str = "goalcup seal needs a terminal to ask firs
 pub const SEAL_WAIT: &str =
     "Ending the part and finishing its record files. This can take a minute.";
 
-pub const SEAL_STILL: &str = "Still finishing the record files.";
+pub const SEAL_STILL: &str =
+    "Still finishing the record files. Ctrl-C here leaves the seal running.";
 
 /// The line before the end screen when the seal ended a running harness.
 pub fn seal_stopped(name: &str) -> String {
     format!("goalcup seal stopped {name}.")
 }
 
+/// The part ended with no watchdog, so nobody ended the harness.
+pub fn seal_harness_left(name: &str) -> String {
+    format!(
+        "{name} is still running, and nothing is recording it now. End it yourself (Ctrl-C in its terminal)."
+    )
+}
+
 pub fn seal_could_not() -> String {
     format!("goalcup could not finish the part. Write to {SUPPORT_ADDRESS}.")
+}
+
+// Interactive setup.
+pub fn question(name: &str) -> String {
+    format!(
+        "{name} will run for days with nobody watching. goalcup can set it to never stop and ask \
+         for approval (it can then change any file you can). Set this in goalcup's own {name} home?"
+    )
+}
+
+pub fn advice(name: &str) -> String {
+    format!(
+        "Left as it is: {name} will stop and ask for approval during the run. Turn approvals off in \
+         goalcup's own {name} home yourself, or stay near it to answer."
+    )
 }

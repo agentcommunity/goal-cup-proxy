@@ -100,13 +100,17 @@ pub fn begin(home: &Path, server: &Server, ask: &Ask, out: &mut dyn Write) -> Re
     let client = ServerClient::new(base, Some(Token::new(secret.clone())));
     let body = json!({
         "connector_id": ask.connector.id, "connector_sha256": ask.connector_sha256,
-        "workspace": ask.workspace, "session_id": ask.session_id,
+        "workspace": ask.workspace.to_string_lossy(), "session_id": ask.session_id,
         "harness_version": ask.harness_version, "proxy_version": env!("CARGO_PKG_VERSION"),
         "repo_url": repo_url, "machine": ask.machine,
     });
-    let open: Open = client
-        .json("POST", "/v1/runs", Some(&body))
-        .map_err(|e| server_stop(&e, text::open_refused))?;
+    // The participant has approved: a blip, a GitHub outage (502) or a 429 is waited out, with the
+    // same `session_id`, so the open is idempotent and the approval is not spent for nothing.
+    let opened = send(&client, "/v1/runs", &body, true);
+    if interrupted() {
+        return Err(stopped(text::WHY_INTERRUPTED));
+    }
+    let open: Open = opened.map_err(|e| server_stop(&e, text::open_refused))?;
     let deadline = Mono::now()
         .ns()
         .saturating_add(open.seconds_left.saturating_mul(1_000_000_000));
@@ -127,6 +131,35 @@ pub fn begin(home: &Path, server: &Server, ask: &Ask, out: &mut dyn Write) -> Re
         deadline: Some(Mono(deadline)),
         token: Some(Token::new(secret)),
     })
+}
+
+/// `POST path`, again while the server says to wait for the code's life: a `429` always, and with
+/// `outage` a transport failure or a 5xx too. A `Retry-After` is obeyed (1 to 60 s).
+fn send<T: serde::de::DeserializeOwned>(
+    client: &ServerClient,
+    path: &str,
+    body: &Value,
+    outage: bool,
+) -> Result<T, ServerError> {
+    let until = Instant::now() + Duration::from_secs(MAX_WAIT);
+    loop {
+        let e = match client.json("POST", path, Some(body)) {
+            Err(e) => e,
+            done => return done,
+        };
+        let again = match &e {
+            ServerError::Status { status: 429, .. } => true,
+            ServerError::Status { status, .. } => outage && *status >= 500,
+            ServerError::Transport(_) => outage,
+            ServerError::Malformed(_) => false,
+        };
+        let now = Instant::now();
+        if !again || interrupted() || now >= until {
+            return Err(e);
+        }
+        let wait = e.retry_after().unwrap_or(5).clamp(INTERVAL.0, INTERVAL.1);
+        nap(Duration::from_secs(wait).min(until - now));
+    }
 }
 
 #[derive(Deserialize)]
@@ -183,7 +216,7 @@ fn write_run(home: &Path, sj: &ServerJson, secret: Option<&str>) -> Result<(), S
             put(
                 &server_json(&dir),
                 &serde_json::to_vec(sj).unwrap_or_default(),
-                0o644,
+                0o600,
             )
         });
     written.map_err(|_| {
@@ -252,8 +285,7 @@ fn approve(base: &str, ask: &Ask, out: &mut dyn Write) -> Result<String, Stop> {
     let wire = serde_json::to_value(ask.mode).unwrap_or_default();
     let body = json!({"purpose": "run", "mode": wire, "connector_id": ask.connector.id,
         "proxy_version": env!("CARGO_PKG_VERSION")});
-    let made: Made = server
-        .json("POST", "/v1/device", Some(&body))
+    let made: Made = send(&server, "/v1/device", &body, false)
         .map_err(|e| server_stop(&e, text::approval_refused))?;
     let wait = made.expires_in.unwrap_or(MAX_WAIT).min(MAX_WAIT);
     let until = Instant::now() + Duration::from_secs(wait);

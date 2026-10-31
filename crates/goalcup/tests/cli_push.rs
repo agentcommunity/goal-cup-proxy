@@ -24,7 +24,8 @@ fn first_message_is_block_blank_line_prompt_at_0600() {
     let prompt = dir.path().join("p.txt");
     std::fs::write(&prompt, "Build it.\nKeep going.\n").unwrap();
     let b = block();
-    let got = push::write_first_message(dir.path(), Some(&b), &prompt).unwrap();
+    let text = push::read_prompt(&prompt).unwrap();
+    let got = push::write_first_message(dir.path(), Some(&b), &text).unwrap();
     let file = dir.path().join("first-message.txt");
     assert_eq!(std::fs::read_to_string(&file).unwrap(), got);
     assert_eq!(got, format!("{}\n\nBuild it.\nKeep going.\n", b.join("\n")));
@@ -34,7 +35,7 @@ fn first_message_is_block_blank_line_prompt_at_0600() {
     );
     // a large prompt is not refused
     std::fs::write(&prompt, "x".repeat(1 << 20)).unwrap();
-    assert!(push::write_first_message(dir.path(), Some(&b), &prompt).is_ok());
+    assert!(push::read_prompt(&prompt).is_ok());
 }
 
 #[test]
@@ -42,7 +43,8 @@ fn practice_message_is_the_prompt_alone() {
     let dir = tempfile::tempdir().unwrap();
     let prompt = dir.path().join("p.txt");
     std::fs::write(&prompt, "Only this.").unwrap();
-    let got = push::write_first_message(dir.path(), None, &prompt).unwrap();
+    let text = push::read_prompt(&prompt).unwrap();
+    let got = push::write_first_message(dir.path(), None, &text).unwrap();
     assert_eq!(got, "Only this.");
     assert!(!got.contains("Push to"));
 }
@@ -52,7 +54,7 @@ fn a_prompt_that_is_not_utf8_is_refused() {
     let dir = tempfile::tempdir().unwrap();
     let prompt = dir.path().join("p.txt");
     std::fs::write(&prompt, [0xff, 0xfe, 0x41]).unwrap();
-    let err = push::write_first_message(dir.path(), None, &prompt).unwrap_err();
+    let err = push::read_prompt(&prompt).unwrap_err();
     assert_eq!(err, text::prompt_not_utf8(&prompt));
     assert!(!dir.path().join("first-message.txt").exists());
 }
@@ -70,9 +72,9 @@ fn the_token_value_is_never_in_the_block_or_the_file() {
     );
     let prompt = dir.path().join("p.txt");
     std::fs::write(&prompt, "go").unwrap();
-    let got = push::write_first_message(dir.path(), Some(&b), &prompt).unwrap();
-    let shown = push::shown(&b, false).join("\n");
-    assert!(!got.contains(TOKEN) && !shown.contains(TOKEN));
+    let text = push::read_prompt(&prompt).unwrap();
+    let got = push::write_first_message(dir.path(), Some(&b), &text).unwrap();
+    assert!(!got.contains(TOKEN) && !b.join("\n").contains(TOKEN));
     assert!(got.contains(".env.local"));
 }
 
@@ -81,7 +83,6 @@ fn no_clipboard_tool_is_not_an_error() {
     let dir = tempfile::tempdir().unwrap();
     let vars = BTreeMap::from([("PATH".to_string(), dir.path().display().to_string())]);
     assert!(!push::clipboard::copy("text", &vars));
-    assert!(push::show_again(0) && !push::show_again(3));
 }
 
 #[test]

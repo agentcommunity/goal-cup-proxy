@@ -41,25 +41,25 @@ pub fn block(
     ]
 }
 
-/// The first message: the block, a blank line, the prompt; or the prompt alone without a block.
-pub fn compose(block: Option<&[String]>, prompt: &str) -> String {
-    match block {
-        Some(lines) => format!("{}\n\n{prompt}", lines.join("\n")),
-        None => prompt.to_string(),
-    }
+/// Read `prompt_file` (UTF-8, any size). `start` calls this with the folder checks, before
+/// anything is created.
+pub fn read_prompt(prompt_file: &Path) -> Result<String, String> {
+    let bytes = std::fs::read(prompt_file)
+        .map_err(|e| text::prompt_unreadable(prompt_file, &e.to_string()))?;
+    String::from_utf8(bytes).map_err(|_| text::prompt_not_utf8(prompt_file))
 }
 
-/// Read `prompt_file` (UTF-8, any size), compose and write `dir/first-message.txt` at 0600.
-/// Returns the text, for the clipboard.
+/// The first message: the block, a blank line, the prompt (the prompt alone without a block).
+/// Written to `dir/first-message.txt` at 0600; returns the text, for the clipboard.
 pub fn write_first_message(
     dir: &Path,
     block: Option<&[String]>,
-    prompt_file: &Path,
+    prompt: &str,
 ) -> Result<String, String> {
-    let bytes = std::fs::read(prompt_file)
-        .map_err(|e| text::prompt_unreadable(prompt_file, &e.to_string()))?;
-    let prompt = String::from_utf8(bytes).map_err(|_| text::prompt_not_utf8(prompt_file))?;
-    let message = compose(block, &prompt);
+    let message = match block {
+        Some(lines) => format!("{}\n\n{prompt}", lines.join("\n")),
+        None => prompt.to_string(),
+    };
     let file = dir.join("first-message.txt");
     let fail = |e: std::io::Error| text::prompt_unreadable(&file, &e.to_string());
     let mut out = std::fs::OpenOptions::new()
@@ -73,23 +73,6 @@ pub fn write_first_message(
         .map_err(fail)?;
     out.write_all(message.as_bytes()).map_err(fail)?;
     Ok(message)
-}
-
-/// The lines to print for a run without `--prompt`: the framed line, then the block.
-pub fn shown(block: &[String], again: bool) -> Vec<String> {
-    let lead = if again {
-        text::PUSH_AGAIN
-    } else {
-        text::PUSH_FRAME
-    };
-    std::iter::once(lead.to_string())
-        .chain(block.iter().cloned())
-        .collect()
-}
-
-/// `continue` shows the block again only when the earlier parts wrote no model request.
-pub fn show_again(model_requests_written: u64) -> bool {
-    model_requests_written == 0
 }
 
 pub mod clipboard {

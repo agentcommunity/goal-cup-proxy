@@ -86,6 +86,13 @@ fn setup_tty(home: &TempHome, path: &str, args: &[&str], typed: &str) -> (Option
     let (master, slave) = unsafe { (OwnedFd::from_raw_fd(master), OwnedFd::from_raw_fd(slave)) };
     let mut input = std::fs::File::from(master.try_clone().unwrap());
     input.write_all(typed.as_bytes()).unwrap();
+    // Drained while the child runs, so output past the pty buffer cannot block it.
+    let mut reader = std::fs::File::from(master);
+    let drain = std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        let _ = reader.read_to_end(&mut bytes);
+        bytes
+    });
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_goalcup"));
     home.apply(&mut cmd)
         .env("GOALCUP_SERVER", "off")
@@ -95,11 +102,7 @@ fn setup_tty(home: &TempHome, path: &str, args: &[&str], typed: &str) -> (Option
         .stdout(slave.try_clone().unwrap());
     let code = cmd.stderr(slave).status().expect("goalcup runs").code();
     drop(cmd);
-    let mut out = String::new();
-    let mut bytes = Vec::new();
-    let _ = std::fs::File::from(master).read_to_end(&mut bytes);
-    out.push_str(&lossy(&bytes));
-    (code, out)
+    (code, lossy(&drain.join().unwrap()))
 }
 
 fn lossy(bytes: &[u8]) -> String {

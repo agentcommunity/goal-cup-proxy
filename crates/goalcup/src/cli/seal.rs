@@ -1,6 +1,8 @@
 //! `goalcup seal [PART] [--yes]` (PRD-10 section 1): ask, then tell PRD-02 to end the part, wait
 //! for the seal and print the end screen. The harness is never signalled here and descendants are
 //! never chased: the watchdog ends them (seam S8). Only written counts are read, from `status.json`.
+//! A part whose recorder and watchdog are both gone is refused here; closing such a dead entry
+//! first (`pipeline::close_dead_entry`) is not built yet and comes with the `continue` slice.
 
 use std::io::{BufRead as _, IsTerminal as _};
 use std::process::ExitCode;
@@ -13,7 +15,8 @@ use crate::pipeline::status::{Mode, Status};
 const POLL: Duration = Duration::from_millis(200);
 const NOTICE_EVERY: Duration = Duration::from_secs(10);
 
-/// 0 sealed and shown, 1 refused or not finished, 3 `status.json` unreadable.
+/// 0 sealed and shown, 1 refused (ask, no part, already ended, not running), 3 `status.json`
+/// unreadable or the part could not be finished.
 pub fn run(part: Option<String>, yes: bool) -> ExitCode {
     if super::var(time_left::FILE_ENV).is_some() {
         return fail(text::SEAL_INSIDE);
@@ -29,7 +32,7 @@ pub fn run(part: Option<String>, yes: bool) -> ExitCode {
     let dir = found.entry_dir();
     let path = status_json(&dir);
     let Some(st) = read_json::<Status>(&path) else {
-        return fail(&text::status_unreadable(&path));
+        return broke(&text::status_unreadable(&path));
     };
     if st.mode == Mode::Sealed {
         return fail(&text::seal_already(&found.run));
@@ -59,6 +62,8 @@ pub fn run(part: Option<String>, yes: bool) -> ExitCode {
         .harness
         .as_ref()
         .is_some_and(|h| h.exit.is_none() && alive(h.pid, h.start_id));
+    // Only the watchdog ends the harness; the recorder alone, on SIGTERM, does not.
+    let watchdog_ends_it = signal == libc::SIGUSR1;
     if let Ok(p) = libc::pid_t::try_from(pid) {
         // SAFETY: `alive` just saw this pid with this start id; it is above 0.
         unsafe { libc::kill(p, signal) };
@@ -74,7 +79,7 @@ pub fn run(part: Option<String>, yes: bool) -> ExitCode {
             if sealed() {
                 break;
             }
-            return fail(&text::seal_could_not());
+            return broke(&text::seal_could_not());
         }
         if noticed.elapsed() >= NOTICE_EVERY {
             say(text::SEAL_STILL);
@@ -84,12 +89,20 @@ pub fn run(part: Option<String>, yes: bool) -> ExitCode {
     }
     match super::finish::end_screen(&dir) {
         Ok(screen) => {
-            if harness_ran {
+            if harness_ran && watchdog_ends_it {
                 println!("{}", text::seal_stopped(name));
+            } else if harness_ran {
+                println!("{}", text::seal_harness_left(name));
             }
             print!("{screen}");
             ExitCode::SUCCESS
         }
-        Err(_) => fail(&text::seal_could_not()),
+        Err(_) => broke(&text::seal_could_not()),
     }
+}
+
+/// [`say`], then exit code 3: goalcup could not do its job.
+fn broke(text: &str) -> ExitCode {
+    say(text);
+    ExitCode::from(3)
 }

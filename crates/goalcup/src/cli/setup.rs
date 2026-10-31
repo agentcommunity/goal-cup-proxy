@@ -135,13 +135,10 @@ fn write_home(
         open(&plan, &c.name);
     }
     let update_off = write_rows(&plan.home, &c.update_off);
-    let go = !ask || confirm(&format!("{} [Y/n] ", question(&c.name)));
-    if !go {
-        put(&advice(&c.name));
-    }
-    let no_prompts = if go {
+    let no_prompts = if !ask || confirm(&format!("{} [Y/n] ", text::question(&c.name))) {
         write_rows(&plan.home, &c.no_prompts)
     } else {
+        put(&text::advice(&c.name));
         Vec::new()
     };
     let (update, prompts) = (!update_off.is_empty(), !no_prompts.is_empty());
@@ -157,21 +154,6 @@ fn write_home(
     }
     put(&text::settings_set(&c.name, &plan.home, update, prompts));
     Ok(plan.refusal.as_ref().map(text::refusal))
-}
-
-// Interactive setup. These lines move to `text.rs` in the next slice.
-fn question(name: &str) -> String {
-    format!(
-        "{name} will run for days with nobody watching. goalcup can set it to never stop and ask \
-         for approval (it can then change any file you can). Set this in goalcup's own {name} home?"
-    )
-}
-
-fn advice(name: &str) -> String {
-    format!(
-        "Left as it is: {name} will stop and ask for approval during the run. Turn approvals off in \
-         goalcup's own {name} home yourself, or stay near it to answer."
-    )
 }
 
 /// One line typed at the terminal, trimmed; empty at end of input.

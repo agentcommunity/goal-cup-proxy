@@ -122,6 +122,14 @@ fn the_credential_is_0600_and_nowhere_else() {
         0o600
     );
     assert_eq!(std::fs::read_to_string(&file).unwrap(), CREDENTIAL);
+    assert_eq!(
+        std::fs::metadata(dir.join("server.json"))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777,
+        0o600
+    );
     let record = std::fs::read_to_string(dir.join("server.json")).unwrap();
     assert!(!record.contains(CREDENTIAL) && !out.contains(CREDENTIAL));
     assert!(!format!("{opened:?}").contains(CREDENTIAL));
@@ -140,6 +148,30 @@ fn a_denial_an_expired_code_and_an_absent_server_create_nothing() {
     let (home, got, _) = start(&Server::Url(format!("http://{addr}")), None, "");
     assert_eq!(got.unwrap_err().code, 3);
     assert!(empty(home.path()));
+}
+
+#[test]
+fn an_outage_or_429_after_approval_is_waited_out_and_the_run_opens() {
+    let w = FakeWorker::start();
+    for (status, retry_after) in [(502, None), (429, Some(1))] {
+        w.inject(
+            Route::Open,
+            Inject {
+                answer: Some((status, json!({"error": "upstream_error"}))),
+                retry_after,
+                ..Inject::default()
+            },
+        );
+    }
+    let (home, got, _) = start(&url(&w), None, "");
+    let opened = got.unwrap();
+    assert!(
+        home.path()
+            .join("runs")
+            .join(&opened.run)
+            .join("credential")
+            .is_file()
+    );
 }
 
 #[test]

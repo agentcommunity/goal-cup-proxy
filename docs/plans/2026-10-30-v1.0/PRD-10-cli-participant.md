@@ -1466,3 +1466,16 @@ What the pad calls, as merged (PRD-12 note):
 ### 2026-10-31, conductor seam decisions with PRD-02 (08:40Z)
 
 `watchdog::run(plan, facts) -> ExitCode` stays (S8); `StartFacts` gets typed fields (`HostList`, `NativeSources`, `Vec<MaskRule>`, `Vec<SecretValue>`, `ConnectorRef`) and `home: PathBuf` in PRD-02 slice A: build `start.rs` against that shape. `watchdog::recover(entry_dir, facts) -> Result<Recovered, NotRecovered>` as ask N9; a live recorder is never killed and `recover` exits 0 saying recording is on. `goalcup seal` sends SIGUSR1 to the pid in `rec/watchdog.pid`; with no watchdog it sends SIGTERM to the recorder (PRD-02 slice B handles it, reason `signal`). Rung 1 needs `start` and `seal` merged.
+
+### 2026-10-31, fixes after the review of the participant slice 4 branch
+
+- **`seal` on a dead entry is deferred.** PRD-10 section 1 has seal run `close_dead_entry` and the uploader
+  when neither the recorder nor the watchdog lives. `pipeline::close_dead_entry` is not on integration yet,
+  so `seal` refuses that case with the `continue` line. The `continue`/`recover` slice carries the real
+  behaviour; the replan must keep it on its list.
+- **`start` is not wired yet.** `approve::begin`, `check_repo`, the push block, the clipboard and the sleep
+  lock are built and tested as parts; `start.rs` still ends in the not-built line after the folder checks
+  and the prompt read. The next slice joins them.
+- **Size.** The cli sources and the `cli_*.rs` tests are past the PRD-00 row. Decision: every part kept
+  serves a point (3 never block, 4 no secrets, 6 tell plainly, 7 harnesses as used); the slice dropped three
+  one-line push helpers and moved the setup sentences into `text.rs`. The next slice must cut before it adds.
