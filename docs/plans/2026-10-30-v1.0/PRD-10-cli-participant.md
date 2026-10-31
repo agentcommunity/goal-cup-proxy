@@ -1519,3 +1519,15 @@ What the pad calls, as merged (PRD-12 note):
 - **`goalcup upload` reads the run's own `server.json`, not `GOALCUP_SERVER`.** A run recorded against a
   server sends whatever the environment says; a run with no server is `Local`.
 - `--practice` conflicts with `--test` and `--repo` (a practice run has no GitHub repository).
+
+### 2026-10-31, replan after PRD-10 slice 7 (merge c3f4638c)
+
+- Merged: the pre-launch half of `start`, the `goalcup upload` dispatch and the `text.rs` give-back. Review
+  ended with no open defect; one nit is declined: in `upload_outcome` the `Done | AlreadyThere` arm repeats
+  `upload_line`. The next slice may fold it when it touches that function; it is not a gate item.
+- `cli/` src is 4,437 lines (`wc -l` of `crates/goalcup/src/cli/*.rs`, `main.rs` excluded) against the row of
+  about 2,900. `text.rs` is 1,250. The decision line (points 3 and 6) is in the lane log and PRD-16.
+- Still not built, as before: `watchdog::run`, `watchdog::recover` and `pipeline::close_dead_entry` are not on
+  integration, so the hand-over, `continue`, recover and seal-on-a-dead-entry stay for the next slice. That
+  slice must be net-negative in `text.rs` (fold sentence families) before it adds its lines.
+- No locked ledger item is touched and no owner question comes from this slice.

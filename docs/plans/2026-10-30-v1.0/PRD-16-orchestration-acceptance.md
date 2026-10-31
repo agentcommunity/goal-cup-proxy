@@ -2359,3 +2359,14 @@ kept and now cites BUILD-PROMPT section 5, since B3 no longer carries it.
   PRD-14 is asked to put `lessons_launch` in the heavy nextest filter. No build-order, seam or phase-check
   change. No locked ledger item is touched; the shield race was logged as an owner question for PRD-02's lane,
   not a ledger change.
+
+### 31 Oct, after PRD-10 slice 7 (merge c3f4638c)
+
+- **Size report, PRD-10** (`wc -l` on integration at 0fa43715): `cli/*.rs` 4,437 lines (`text.rs` 1,250,
+  `mod.rs` 484, `approve.rs` 457, `start.rs` 361, `status.rs` 349) against the PRD-00 row of about 2,900, 153%.
+  CLI tests (`tests/cli_*.rs`) 2,265 against 1,200. The excess serves points 3 and 6 (plain words to the
+  participant); the decision line is recorded. Past 10% over, the next slice must cut `text.rs` before adding.
+- **Gate effect:** none on build order or seams. The hand-over, `continue`, recover and seal-on-a-dead-entry wait
+  on `watchdog::run`, `watchdog::recover` and `pipeline::close_dead_entry` (PRD-02, PRD-06 slice 6). Total
+  Rust size is the owner question only past about 14,200 test lines; the CLI overage alone is not one.
+  No locked ledger item is touched.
