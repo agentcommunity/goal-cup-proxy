@@ -657,7 +657,10 @@ fn hermes_database_copies_read_by_set() {
     assert!(back.resumed && back.native_total.is_none() && back.native_tokens.input == Some(9));
     let sum = json(&run_usage(&next_dir).sum);
     assert_eq!(
-        (&sum["tokens"]["native"]["input"], &sum["tokens"]["native_partial"]),
+        (
+            &sum["tokens"]["native"]["input"],
+            &sum["tokens"]["native_partial"]
+        ),
         (&json!(107), &json!(true))
     );
     let (none, _) = hermes_entry("u-h3", &[(2, &bad, &[])], 0);
