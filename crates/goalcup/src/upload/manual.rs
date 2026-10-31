@@ -61,7 +61,9 @@ pub fn run(entry_dir: &Path, run_dir: &Path, ids: (&str, &str), keep: bool) -> O
     }
     let old = state::read(entry_dir).unwrap_or_default();
     let status = cli::read_json::<Status>(&cli::status_json(entry_dir));
-    let seal = status.filter(|s| s.mode == Mode::Sealed).and_then(|s| s.seal);
+    let seal = status
+        .filter(|s| s.mode == Mode::Sealed)
+        .and_then(|s| s.seal);
     let stored = old.final_ == Final::Sealed;
     if seal.is_none() && !stored {
         return Outcome::NotClosed;

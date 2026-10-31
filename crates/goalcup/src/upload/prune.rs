@@ -32,7 +32,10 @@ pub fn prune(entry_dir: &Path, j: &Mutex<UploadJson>, file: &Mutex<Writer>) {
         return;
     };
     let parts = parts(&rec).unwrap_or_default();
-    let lines: Vec<_> = parts.iter().map(|&n| index(&rec, n).unwrap_or_default()).collect();
+    let lines: Vec<_> = parts
+        .iter()
+        .map(|&n| index(&rec, n).unwrap_or_default())
+        .collect();
     let mut gone = Vec::new();
     for (i, &n) in parts.iter().enumerate() {
         let end = if lines[i + 1..].iter().any(|l| !l.is_empty()) {

@@ -226,12 +226,17 @@ fn start(ctx: UploadCtx, word: Arc<watch::Sender<Option<ServerWord>>>) -> Option
         wrap: Mutex::new(None),
         tried: AtomicBool::new(false),
     });
-    let threads: Vec<_> = [(true, upload_thread as fn(&Shared, &Receiver<()>)), (false, beat_thread)]
-        .into_iter()
-        .filter_map(|(upload, body)| {
-            let (wake, handle) = launch(&sh, upload, body)?;
-            Some(Thread { upload, wake, handle })
+    let thread = |upload, body| {
+        let (wake, handle) = launch(&sh, upload, body)?;
+        Some(Thread {
+            upload,
+            wake,
+            handle,
         })
+    };
+    let threads: Vec<_> = [thread(true, upload_thread), thread(false, beat_thread)]
+        .into_iter()
+        .flatten()
         .collect();
     sh.put(true);
     // With no thread, `finish` has nothing to wait for.

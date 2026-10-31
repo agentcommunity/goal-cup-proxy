@@ -16,8 +16,8 @@ use goalcup::upload::state::{self, Confirmed, Final, UploadJson, Writer};
 use goalcup::upload::{UploadCtx, spawn};
 use goalcup_format::read::{part_files, read_index};
 use goalcup_format::{IndexLine, PartOptions, PartWriter, Record, hex, part_name};
-use std::os::unix::fs::PermissionsExt;
 use serde_json::json;
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -188,7 +188,10 @@ fn only_confirmed_closed_parts_go_and_always_a_prefix() {
     let file = state::read(&dir).unwrap();
     assert_eq!(file.pruned.parts, parts.len() as u64);
     assert_eq!(file.pruned.bytes, sizes.iter().sum::<u64>());
-    let mode = fs::metadata(dir.join(state::FILE)).unwrap().permissions().mode();
+    let mode = fs::metadata(dir.join(state::FILE))
+        .unwrap()
+        .permissions()
+        .mode();
     assert_eq!(mode & 0o777, 0o600);
     assert!(KEPT.iter().all(|f| dir.join(f).exists()));
     assert!(dir.join(state::FILE).exists());
