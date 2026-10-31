@@ -1,7 +1,6 @@
 //! PRD-17 FW1 and R2: a close or a loss is never what the memory guard drops, and one stream's
-//! drop never takes another stream's OPEN or close. The writer is held, stream A fills the guard
-//! until it is in a gap, then B and C open, offer a piece each and everything ends. Durable
-//! records only; `pipeline_guard.rs` opens its streams before the guard fills, this case after.
+//! drop never takes another stream's OPEN or close. With the writer held, A fills the guard, then
+//! B and C open (`pipeline_guard.rs` opens its streams before the guard fills).
 
 mod common;
 
@@ -17,7 +16,7 @@ const PIECE: usize = 1_500_000;
 
 #[test]
 fn open_and_end_survive_a_full_guard() {
-    // SAFETY: the first statement, before any thread starts (nextest: one process per test).
+    // SAFETY: first statement, before any thread starts.
     unsafe {
         std::env::set_var("GOALCUP_TEST_GUARD_MB", "64");
         std::env::set_var("GOALCUP_TEST_WRITER_STALL", "0:10000");
@@ -55,14 +54,26 @@ fn open_and_end_survive_a_full_guard() {
     for r in records(dir.path()) {
         match r {
             Record::Open { sid, .. } => opens.push(sid),
-            Record::Data { sid, off, bytes, .. } => {
+            Record::Data {
+                sid, off, bytes, ..
+            } => {
                 let s = at.entry(sid).or_default();
                 assert_eq!(off, s.0, "DATA where the stream stands");
                 s.0 += bytes.len() as u64;
             }
-            Record::Gap { sid, reason, off, lost, .. } => {
+            Record::Gap {
+                sid,
+                reason,
+                off,
+                lost,
+                ..
+            } => {
                 let s = at.entry(sid).or_default();
-                assert_eq!((reason, off), (GapReason::MemoryGuard, s.0), "one drop, on its own stream");
+                assert_eq!(
+                    (reason, off),
+                    (GapReason::MemoryGuard, s.0),
+                    "one drop, on its own stream"
+                );
                 s.0 += lost - 1;
                 s.1 += 1;
             }
@@ -74,9 +85,19 @@ fn open_and_end_survive_a_full_guard() {
     }
     for (sid, want) in offered {
         assert!(opens.contains(&sid), "OPEN of every stream is durable");
-        assert_eq!(ends.get(&sid), Some(&want), "END of every stream, with what was offered");
+        assert_eq!(
+            ends.get(&sid),
+            Some(&want),
+            "END of every stream, with what was offered"
+        );
         let (covered, gaps) = at[&sid];
-        assert_eq!(covered, want, "DATA and GAP cover the stream up to END.seen");
-        assert!(gaps >= 1, "the full guard dropped a piece of this stream, as a GAP");
+        assert_eq!(
+            covered, want,
+            "DATA and GAP cover the stream up to END.seen"
+        );
+        assert!(
+            gaps >= 1,
+            "the full guard dropped a piece of this stream, as a GAP"
+        );
     }
 }
