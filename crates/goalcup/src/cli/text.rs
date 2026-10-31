@@ -1151,3 +1151,67 @@ pub fn no_prompts_left(name: &str) -> String {
          goalcup's own {name} home yourself, or stay near it to answer."
     )
 }
+
+// start slice 7 messages
+pub const NEEDS_REPO: &str = "a real run needs --repo <owner>/<name>, its new, empty, public GitHub repository.";
+
+pub const NO_HARNESS_SAVED: &str = "no harness picked. Run: goalcup setup --harness <id>";
+
+pub const MASK_REFUSED: &str = "goalcup could not set up masking, so nothing was started. Write to goalcup@agentcommunity.org.";
+
+pub fn run_kind(mode: RunMode) -> String {
+    match mode {
+        RunMode::Practice => "Practice run: kept apart from the competition, no GitHub repository.",
+        RunMode::Test => "Organizer test run.",
+        RunMode::Competition => "Your run.",
+    }
+    .to_owned()
+}
+
+pub fn first_message_file(file: &Path) -> String {
+    format!(
+        "Your first message (the push block, then your prompt) is in {}. Paste it once as your \
+         first message and press Enter.",
+        file.display()
+    )
+}
+
+pub const NO_END_TIME: &str = "This run has no end time: GOALCUP_SERVER=off.";
+
+pub fn upload_to(host: Option<&str>) -> String {
+    host.map_or_else(
+        || "Upload: off (GOALCUP_SERVER=off). Record files stay on this computer.".to_owned(),
+        |h| format!("Upload: to {h}, every 5 minutes."),
+    )
+}
+
+/// Section 6, the four tier lines. `version` is the number `--version` showed.
+pub fn tier_line(name: &str, version: Option<&str>, tier: &str, verified: &str) -> String {
+    let who = version.map_or_else(|| name.to_owned(), |v| format!("{name} {v}"));
+    match (tier, version) {
+        ("verified", Some(v)) if v != verified => {
+            format!("{who}: verified with goalcup on {verified}, not on {v}.")
+        }
+        ("verified", _) => format!("{who}: verified with goalcup on {verified}."),
+        ("not supported", _) => format!(
+            "{name}: not supported. goalcup records its session files and the connections it can \
+             see, not its model calls."
+        ),
+        _ => format!(
+            "{who}: not verified. goalcup records what reaches it; goalcup status says if model \
+             requests are missing."
+        ),
+    }
+}
+
+pub fn from_file(what: &str, file: &Path) -> String {
+    format!("{what} from a file: {} (not verified).", file.display())
+}
+
+pub fn harness_home(name: &str, home: &Path) -> String {
+    format!("{name}'s home for this run: \"{}\".", home.display())
+}
+
+pub fn recording_now(name: &str) -> String {
+    format!("{READY_MARK}: {name} opens now.")
+}
