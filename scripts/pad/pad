@@ -196,6 +196,13 @@ def load_settings(raw, pad):
     return s
 
 
+def lasts(raw):
+    """Minutes the timed step `kind@m[+n]` lasts: its +n, else the kind's own (also for `kill-both@m+upload`)."""
+    kind, _, rest = raw.partition("@")
+    n = rest.partition("+")[2]
+    return int(n) if n.isdigit() else FAULTS[kind]
+
+
 def step_limit(s, step):
     """Seconds; the one owner of every step limit (pad-run's own come from it through runner_limits). wait-upload:
     10 min, or 5 after the last fault ends (minutes from the paste, so a wait from the seal never falls short). A timed
@@ -205,8 +212,7 @@ def step_limit(s, step):
     if at:  # kind@m, kind@m+n, kill-both@m+upload or exec <script>@m
         return int(at.split("+")[0]) * 60 + runner_limits(s).get(kind, 300) + 120
     if kind == "wait-upload":
-        ends = [m + (int(rest.split("+")[1]) if f in SPAN and "+" in rest else FAULTS[f])
-                for _, m, r in s["plan"] for f, _, rest in [r.partition("@")] if f in FAULTS]
+        ends = [m + lasts(r) for _, m, r in s["plan"] if r.partition("@")[0] in FAULTS]
         return 60 * max(LIMITS[kind], 5 + max(ends, default=0))
     return LIMITS.get(kind, 5) * 60 + (s["minutes"] * 60 if kind in ("seal", "check", "keep-going") else 0)
 
@@ -221,11 +227,11 @@ def runner_limits(s):
                                          "wait-recovery")}
     run = int(math.ceil(s["minutes"] * 60))
     got["wait-recovery"] -= 30
-    lasts = lambda k: 60 * max([int(r.partition("+")[2] or FAULTS[k]) for _, _, r in s["plan"] if r.startswith(k + "@")],  # noqa: E731
-                               default=FAULTS[k]) + 120  # the longest +n of the kind, then 2 minutes
+    longest = lambda k: 60 * max([lasts(r) for _, _, r in s["plan"] if r.startswith(k + "@")],  # noqa: E731
+                                 default=FAULTS[k]) + 120  # the longest +n of the kind, then 2 minutes
     return dict(got, paste=got["start"], verify=step_limit(s, "check"), wipe=step_limit(s, "cleanup") // 3, spend=120,
                 **{"kill-recorder": 120, "kill-watchdog-recover": 240, "kill-watchdog": 330, "kill-both": 300, "fd-limit": 60,
-                   "keep-going": run, "seal-now": 120, "watch": run + 1800, "exec": EXEC_LIMIT}, **{k: lasts(k) for k in SPAN})
+                   "keep-going": run, "seal-now": 120, "watch": run + 1800, "exec": EXEC_LIMIT}, **{k: longest(k) for k in SPAN})
 
 
 def pin(data, host):
@@ -497,7 +503,8 @@ class Run:
         argv), then the copy in to the box's ~/run/fetched/<entry>/, where pad-run verify reads it."""
         if self.s["server"] != "staging":
             return "skip", NEEDS_LATER
-        entries = [str(self.meta.get("entry"))] + [self.meta[k] for k in ("new_entry",) if k in self.meta]  # kill-both: both
+        new = self.meta.get("new_entry")
+        entries = [str(self.meta.get("entry"))] + ([new] if new else [])  # kill-both: both
         for entry in entries:
             if not re.fullmatch(r"e[0-9a-f]{16}", entry):
                 return "FAIL", "server copy not fetched: no entry id"

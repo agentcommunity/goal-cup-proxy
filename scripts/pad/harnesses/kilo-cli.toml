@@ -3,11 +3,11 @@
 # $XDG_CONFIG_HOME/kilo, `model` as provider/model, {env:NAME} in global config, /connect), https://kilo.ai/docs/ai-providers/deepseek
 # (DeepSeek is a native provider; the CLI tab was not in the fetched text), https://vercel.com/docs/ai-gateway/coding-agents/kilo-code
 # (the openai-compatible provider block, https://ai-gateway.vercel.sh/coding-agent/v1, AI_GATEWAY_API_KEY, model ids
-# `openai-compatible/<gateway id>`), https://api-docs.deepseek.com/quick_start/pricing (deepseek-flash),
-# https://vercel.com/ai-gateway/models/deepseek-v4.1-flash (gateway id), https://github.com/Kilo-Org/kilocode/releases/tag/v7.8.25
+# `openai-compatible/<gateway id>`), https://api-docs.deepseek.com/quick_start/pricing (the model id),
+# https://vercel.com/ai-gateway/models/deepseek-v4.1-flash (the gateway's id), https://github.com/Kilo-Org/kilocode/releases/tag/v7.8.25
 # (the pinned version, docs/plans/2026-10-30-audit/O-harness-access.md H12.1), https://kilo.ai/docs/cli (/exit, /quit, /q).
 # Read from the docs, not run against a live harness (no key enters a build box): both routes and both config files. The
-# deepseek-flash model entry below is declared by hand because no page shows whether Kilo's catalog lists it.
+# model entry below is declared by hand because no page shows whether Kilo's catalog lists it.
 version = "7.8.25"
 version_cmd = "kilo --version"
 install = "npm i -g @kilocode/cli@7.8.25"

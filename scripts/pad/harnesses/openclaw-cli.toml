@@ -1,7 +1,7 @@
 # Pad data for OpenClaw (PRD-12 section 6): test data, never connector data; goalcup never reads it.
 # Vendor pages read 31 Oct 2026: https://docs.openclaw.ai/install/installer (install-cli.sh: user prefix, pinned Node 24.22.1,
 # --version), https://docs.openclaw.ai/install (openclaw --version), https://docs.openclaw.ai/providers/deepseek (plugin
-# @openclaw/deepseek-provider, DEEPSEEK_API_KEY, model ref deepseek/deepseek-flash), https://docs.openclaw.ai/cli/tui
+# @openclaw/deepseek-provider, DEEPSEEK_API_KEY, the model ref), https://docs.openclaw.ai/cli/tui
 # (openclaw chat is the embedded TUI), https://docs.openclaw.ai/web/tui (/exit),
 # https://vercel.com/docs/ai-gateway/coding-agents/openclaw (provider vercel-ai-gateway, ${AI_GATEWAY_API_KEY}).
 # Measured in a build box 31 Oct 2026: the install line prints 2026.10.9, and `plugins install` works with OPENCLAW_HOME set.

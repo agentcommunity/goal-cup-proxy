@@ -449,5 +449,40 @@ class StartRefusal(unittest.TestCase):
                          {"named_file": True, "named_key": True, "value_shown": True})
 
 
+class KillBothVerify(unittest.TestCase):
+    """pad-run verify after kill-both: the row is the old entry's, so its server copy is the one compared and scanned."""
+
+    def test_verify_judges_the_old_entry_and_its_server_copy(self):
+        run = self.enterContext(tempfile.TemporaryDirectory())
+        for name, doc in (("settings.json", {"server": "staging", "harness": {}, "steps": ["kill-both@2"]}),
+                          ("state.json", {"home": run, "old": {"entry": "OLD", "run": "r1"}, "entry": "NEW", "run": "r1"})):
+            with open(os.path.join(run, name), "w") as f:
+                json.dump(doc, f)
+        for n, age in (("OLD", 100), ("NEW", 0)):  # the newest entry is the one goalcup continue started
+            for base in (os.path.join(run, "home", "runs", "r1", n), os.path.join(run, "fetched", n)):
+                os.makedirs(base)
+            with open(os.path.join(run, "home", "runs", "r1", n, "status.json"), "w") as f:
+                f.write("{}")
+            with open(os.path.join(run, "fetched", n, "rec.gcr.zst"), "w") as f:
+                f.write("x")
+            os.utime(os.path.join(run, "home", "runs", "r1", n, "status.json"), (1e9 - age, 1e9 - age))
+        seen = []
+        def fake(argv, **kw):
+            seen.append(argv[4:])
+            return subprocess.CompletedProcess(argv, 0, "{}", "")
+        r = padrun.Run(run, "verify")
+        with mock.patch.object(padrun, "sh", fake), mock.patch.object(padrun, "tool", lambda name: "/box/" + name), \
+                mock.patch.object(r, "wipe_secrets"):
+            r.verify(None)
+        first = lambda word: next(a for a in seen if a[0] == word)
+        check = next(a for a in seen if a[0] == "check" and "--server" in a)
+        server = check[check.index("--server") + 1:]
+        self.assertEqual((server[0], os.path.basename(server[2])), (os.path.join("fetched", "OLD"), "OLD"))
+        self.assertIn(os.path.join("fetched", "OLD"), first("secrets"))
+        self.assertEqual(first("usage")[1], os.path.join("fetched", "OLD"))
+        with open(os.path.join(run, "meta-box.json")) as f:
+            self.assertEqual(json.load(f)["entry"], "OLD")
+
+
 if __name__ == "__main__":
     unittest.main()

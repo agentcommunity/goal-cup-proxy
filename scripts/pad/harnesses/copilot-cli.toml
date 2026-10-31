@@ -4,12 +4,12 @@
 # https://docs.github.com/en/copilot/how-tos/copilot-cli/customize-copilot/use-byok-models (BYOK, COPILOT_OFFLINE),
 # https://github.com/deepseek-ai/awesome-deepseek-agent/blob/main/docs/copilot_cli.md (DeepSeek: anthropic type, the four
 # COPILOT_PROVIDER_* variables, the token limits for a model outside the built-in catalog; the openai type fails on
-# reasoning_content), https://api-docs.deepseek.com/quick_start/pricing (model id deepseek-flash, base URLs),
+# reasoning_content), https://api-docs.deepseek.com/quick_start/pricing (the model id, base URLs),
 # https://vercel.com/docs/ai-gateway/coding-agents/copilot (gateway: COPILOT_PROVIDER_BASE_URL, COPILOT_PROVIDER_API_KEY,
 # COPILOT_MODEL; Chat Completions), https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-command-reference
 # (/exit, /quit).
 # Read from the docs, not run against a live harness (no key enters a build box): both routes, the token limits (the guide
-# gives them for deepseek-v4-pro; deepseek-flash is unmeasured) and pre_keys. No page read describes the first-run folder
+# gives them for another model; ours is unmeasured) and pre_keys. No page read describes the first-run folder
 # trust prompt; the Enter below takes its first (yes) choice if it appears and is a no-op on an empty prompt if it does not.
 version = "1.0.105"
 # `copilot --version` prints "GitHub Copilot CLI 1.0.105." with a full stop; the sed keeps pad-run's version match exact.

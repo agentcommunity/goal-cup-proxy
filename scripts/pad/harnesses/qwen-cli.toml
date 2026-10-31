@@ -4,7 +4,7 @@
 # https://github.com/QwenLM/qwen-code/blob/v0.26.4/docs/users/configuration/model-providers.md (DeepSeek entry: baseUrl
 # https://api.deepseek.com/v1, envKey DEEPSEEK_API_KEY), https://qwenlm.github.io/qwen-code-docs/en/users/features/commands/
 # (/quit), https://vercel.com/docs/ai-gateway/coding-agents/qwen (gateway entry), https://api-docs.deepseek.com/quick_start/pricing
-# (model id deepseek-flash).
+# (the model id).
 # Measured in a build box 31 Oct 2026: the install line prints 0.26.4.
 # Read from docs, not run against a live harness: the key route, the model ids, any trust-folder screen, /quit.
 version = "0.26.4"
