@@ -1191,3 +1191,7 @@ PRD-02's mask worker writes two record shapes PRD-01's text does not list yet; t
 ### 2026-10-31, replan after PRD-03 slice 4 (merge a3dbd3d5): h2 GAP reasons the checks will see
 
 - On a decrypted h2 connection, `h2_unsupported` GAPs now carry a real `lost` for an extended CONNECT stream or an orphan response while the server allows extended CONNECT, and the `conn` GAP at the close counts frames held for ended streams. `conn_bytes` counts these as named loss, not as an unaccounted gap. No new reason and no locked ledger item is touched.
+
+### 2026-10-31, C3 placeholder and glued-word fix: size decision
+
+- `secrets.rs` is 551 lines (was 528) and `tests/secrets_scan.rs` 291 (was 214). The extra lines are the `placeholder` rule (a mask, `[REDACTED]`, `[HIDDEN]` or `<redacted>` is no secret) and the masker's 24-byte guard. A glued shape hit stays `warn`. The standing cap for `secrets_*.rs` test files is 215, so 291 is over it; the replan counts it. Anything past 551 in `secrets.rs` needs a new decision line. A PEM placeholder split across SSE deltas passes on the joined deltas; its raw-stream hit stays a `fail` on purpose. Asked of PRD-05: export `glued` so the `ESCAPE` copy can go.
