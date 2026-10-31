@@ -88,8 +88,8 @@ command could not do its job.
 |---|---|
 | `goalcup-verify check <PATH> [--json] [--live] [--server] [--local <ENTRY_DIR>] [--known <FILE>]` | Prove an entry, a run or a fetched folder whole, and name every loss. `--json` prints the report ([RECORD-FORMAT](docs/RECORD-FORMAT.md)). |
 | `goalcup-verify dump <PATH> [--sid <ID>] [--kind <KIND>] [--text]` | One JSON line per record. Payload only with `--text`. |
-| `goalcup-verify secrets` | Scan records and raw files for known secret values and secret shapes. |
-| `goalcup-verify usage` | Read tokens, models and subagents from a record. |
+| `goalcup-verify secrets [--known <FILE>] <PATHS>...` | Scan records and raw files for known secret values and secret shapes. |
+| `goalcup-verify usage <PATH> [--json] [--out <OUT>]` | Read tokens, models and subagents from a record. |
 
 Exit codes of `goalcup-verify`: 0 whole; 1 honest but incomplete (every loss named, or not sealed);
 2 a failure; 3 no usable report (the input cannot be read or the command line is wrong). Exit 0
