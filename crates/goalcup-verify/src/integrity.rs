@@ -66,17 +66,15 @@ pub const IDS: &str = "inv1 inv2 inv3 inv4 inv5 inv6 inv7 inv8 inv9 streams_clos
     seen_matches_written gap_has_end recorder_alive inv14 torn_tail native_path_gen \
     counts_match_seal gaps_named record_decode parts_pruned record_kind_unknown gap_reason_unknown";
 
+type Ns2 = (u64, u64);
 /// Whether a GAP covers a stretch of time: it is not run 1's shape (`gap_has_end`). A GAP in the
 /// recorder's own clock is judged on record time, one carrying `boot_id` (another clock) on wall
 /// time.
-pub(crate) fn has_extent(
-    tail: &Map<String, Value>,
-    w: (u64, u64),
-    m: (u64, u64),
-    lost: u64,
-) -> bool {
+pub(crate) fn has_extent(tail: &Map<String, Value>, w: Ns2, m: Ns2, lost: u64) -> bool {
     let (s, e) = clock(tail, w, m);
-    !((e <= s && lost <= 1) || w.1 < w.0)
+    // A metadata mask_failed GAP (lost 1, tail "meta") loses no stream byte and needs no extent.
+    let meta = lost == 1 && tail.get("meta").is_some_and(Value::is_string);
+    meta || !((e <= s && lost <= 1) || w.1 < w.0)
 }
 
 fn clock(tail: &Map<String, Value>, w: (u64, u64), m: (u64, u64)) -> (u64, u64) {
