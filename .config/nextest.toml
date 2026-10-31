@@ -14,7 +14,7 @@ path = "junit.xml"
 # binaries (watchdog_null and the rest), e2e_*, proxy_restart, lessons_launch, pipeline_{restart,stall,many_streams}, proxy_connect (PRD-03's 2,000 connections).
 # End-to-end binaries also get slow-timeout = { period = "60s", terminate-after = 10 }.
 [[profile.default.overrides]]
-filter = 'binary(/^(native_walk|watchdog_rlimit)$/)'
+filter = 'binary(/^(native_walk|watchdog_rlimit|proxy_connect|proxy_restart)$/)'
 test-group = 'heavy'
 
 [test-groups]

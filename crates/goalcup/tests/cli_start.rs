@@ -23,6 +23,10 @@ impl Fix {
     /// A clean project folder holding the token in a covered `.env.local`, and a test connector
     /// whose skills folder is `skills`.
     fn new(skills: &str, extra: &str) -> Fix {
+        Fix::with_program("true", skills, extra)
+    }
+
+    fn with_program(program: &str, skills: &str, extra: &str) -> Fix {
         let t = TempHome::new();
         let project = t.home().join("p");
         std::fs::create_dir_all(&project).unwrap();
@@ -30,7 +34,7 @@ impl Fix {
         std::fs::write(project.join(".gitignore"), ".env.local\n").unwrap();
         let connector = t.home().join("tester.toml");
         let body = format!(
-            "id = \"tester\"\nname = \"Tester\"\nprogram = \"true\"\nskills_dir = \"{skills}\"\n\
+            "id = \"tester\"\nname = \"Tester\"\nprogram = \"{program}\"\nskills_dir = \"{skills}\"\n\
              first_screen = \"Press Enter.\"\n{extra}"
         );
         std::fs::write(&connector, body).unwrap();
@@ -171,4 +175,95 @@ fn a_denied_approval_creates_no_run() {
         .unwrap();
     assert_eq!(stop.code, 1);
     assert!(!fix.gc().join("runs").exists());
+}
+
+/// Runs the real `goalcup start --practice` in `fix`'s project folder, against `server`, and
+/// kills it if it has not ended in two minutes.
+fn spawn_start(fix: &Fix, server: &str) -> std::process::Output {
+    use std::process::{Command, Stdio};
+    let child = Command::new(env!("CARGO_BIN_EXE_goalcup"))
+        .args(["start", "--practice", "--connector"])
+        .arg(&fix.connector)
+        .current_dir(&fix.project)
+        .env("GOALCUP_SERVER", server)
+        .env("GOALCUP_HOME", fix.gc())
+        .env("HOME", fix.t.home())
+        .env("XDG_CONFIG_HOME", fix.t.home())
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let id = child.id();
+    let (done, wait) = std::sync::mpsc::channel::<()>();
+    let timer = std::thread::spawn(move || {
+        // A message or a closed channel means the child ended; only a timeout kills it.
+        if wait
+            .recv_timeout(std::time::Duration::from_secs(120))
+            .is_err()
+        {
+            let _ = Command::new("kill").arg("-9").arg(id.to_string()).status();
+        }
+    });
+    let out = child.wait_with_output().unwrap();
+    let _ = done.send(());
+    let _ = timer.join();
+    out
+}
+
+/// PRD-10 section 3 steps 7 to 10: the hand-over. The harness runs, its exit code is the command's
+/// exit code, the ready line is printed once, and the end screen follows from the sealed part.
+#[cfg(target_os = "linux")]
+#[test]
+fn the_hand_over_passes_the_exit_code_and_ends_on_the_sealed_counts() {
+    let fix = Fix::with_program("sh", "{home}/skills", "args = [\"-c\", \"exit 7\"]\n");
+    let w = FakeWorker::start();
+    let out = spawn_start(&fix, &w.url());
+    let shown = String::from_utf8_lossy(&out.stdout).into_owned();
+    assert_eq!(
+        out.status.code(),
+        Some(7),
+        "{shown}\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(
+        shown.matches(&text::recording_now("Tester")).count(),
+        1,
+        "{shown}"
+    );
+    assert!(shown.contains(text::PART_RECORDED), "{shown}");
+    let entry = fix.gc().join("runs").join(RUN_ID);
+    let sealed = std::fs::read_dir(&entry)
+        .unwrap()
+        .filter_map(Result::ok)
+        .any(|e| {
+            std::fs::read_to_string(e.path().join("status.json"))
+                .is_ok_and(|s| s.contains("\"sealed\""))
+        });
+    assert!(sealed);
+}
+
+/// A refused start leaves the project folder as it was and creates nothing under the home.
+#[test]
+fn a_refused_start_leaves_the_folder_and_the_home_untouched() {
+    let fix = Fix::new("{home}/skills", "");
+    std::fs::write(fix.project.join("notes.txt"), "x").unwrap();
+    let before = fix.listing(&fix.project);
+    let out = spawn_start(&fix, "off");
+    assert_eq!(out.status.code(), Some(1));
+    assert_eq!(fix.listing(&fix.project), before);
+    assert!(!fix.gc().exists());
+}
+
+/// A harness that itself exits 78 is a recorded part, not a masking refusal: the exit code is the
+/// harness's and the end screen is shown.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_harness_exit_of_78_is_not_a_masking_refusal() {
+    let fix = Fix::with_program("sh", "{home}/skills", "args = [\"-c\", \"exit 78\"]\n");
+    let w = FakeWorker::start();
+    let out = spawn_start(&fix, &w.url());
+    let shown = String::from_utf8_lossy(&out.stdout).into_owned();
+    assert_eq!(out.status.code(), Some(78), "{shown}");
+    assert!(shown.contains(text::PART_RECORDED), "{shown}");
 }

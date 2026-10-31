@@ -86,13 +86,18 @@ pub fn parse_codings(values: &[&str]) -> Result<Vec<Coding>, Unsupported> {
             "br" => Coding::Br,
             "zstd" => Coding::Zstd,
             _ => {
-                let codings = tokens.take(MAX_CODINGS).map(cut).collect();
-                return Err(Unsupported { codings });
+                return Err(unsupported(tokens));
             }
         };
         codings.push(coding);
     }
     Ok(codings)
+}
+
+/// The GAP 3 tail for unsupported `tokens`: at most [`MAX_CODINGS`], each cut.
+pub fn unsupported<'a>(tokens: impl Iterator<Item = &'a str>) -> Unsupported {
+    let codings = tokens.take(MAX_CODINGS).map(cut).collect();
+    Unsupported { codings }
 }
 
 /// `token` cut to at most [`MAX_CODING_BYTES`], on a character boundary.

@@ -11,11 +11,15 @@
 //! mode (no live writer) they send what is on disk and beat `failed` (ledger R7).
 //! [`UploadHandle::finish`] runs the wrap-up: final heartbeat, then chunks, then the final again
 //! until sealed. The upload thread holds the entry's `upload.lock` while it sends and runs
-//! [`prune`] after each tick that moved `confirmed`, and once the entry is sealed. [`manual`] is
-//! `goalcup upload` for one sealed entry.
+//! [`prune`] after each tick that moved `confirmed`, and once the entry is sealed. A third thread,
+//! `goalcup-queue`, serves the [`manual::Queue`] of older sealed entries (section 1), one round
+//! each per tick, so a slow or gone server of an older run never holds the live entry's rounds; it
+//! pauses while the live entry's wrap-up is not done, and runs alone when the live entry has
+//! nothing to send with (a local run, no credential). [`manual`] is `goalcup upload` for one
+//! sealed entry.
 //!
-//! Still open: the queue of older entries (section 1), the dead-entry close in [`manual`]
-//! (`pipeline::close_dead_entry`, PRD-02 9.4) and the full-tier `upload_worker.rs`.
+//! Still open: the dead-entry close in [`manual`] (`pipeline::close_dead_entry`, PRD-02 9.4) and
+//! the half of the full-tier `upload_worker.rs` case 2 that waits on PRD-02's null-mode watchdog.
 
 pub mod beat;
 pub mod chunk;
@@ -93,16 +97,24 @@ pub struct UploadHandle {
     word: watch::Receiver<Option<ServerWord>>,
     /// Keeps the channel open while the handle lives, also when no thread runs.
     _open: Arc<watch::Sender<Option<ServerWord>>>,
-    /// None when no thread runs (a local run, or nothing to send with).
+    /// None when no thread runs.
     run: Option<Run>,
 }
 
 /// The shared state and its threads.
 type Run = (Arc<Shared>, Vec<Thread>);
 
+/// Which thread.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Kind {
+    Beat,
+    Upload,
+    Queue,
+}
+
 /// One thread, with the sender `finish` wakes it by.
 struct Thread {
-    upload: bool,
+    kind: Kind,
     wake: mpsc::Sender<()>,
     handle: JoinHandle<()>,
 }
@@ -116,7 +128,10 @@ const TICK: Duration = Duration::from_secs(1);
 /// What the two threads share.
 struct Shared {
     p: Policy,
-    client: ServerClient,
+    /// `$GOALCUP_HOME`, for the queue of older entries.
+    home: PathBuf,
+    /// None when the live entry has nothing to send with: only the queue thread runs.
+    client: Option<ServerClient>,
     ids: (String, String),
     dir: PathBuf,
     rec: Option<Recorder>,
@@ -138,10 +153,10 @@ impl Shared {
         let _ = file.put(Mono::now(), &j, force);
     }
 
-    /// A new sender or beat (`Sender::new`, `Beat::new`).
-    fn build<T>(&self, f: fn(&Policy, ServerClient, &str, &str, &Path) -> T) -> T {
+    /// A new sender or beat (`Sender::new`, `Beat::new`); None with no client.
+    fn build<T>(&self, f: fn(&Policy, ServerClient, &str, &str, &Path) -> T) -> Option<T> {
         let (run, entry) = &self.ids;
-        f(&self.p, self.client.clone(), run, entry, &self.dir)
+        Some(f(&self.p, self.client.clone()?, run, entry, &self.dir))
     }
 }
 
@@ -164,9 +179,10 @@ pub fn spawn(ctx: UploadCtx) -> UploadHandle {
 }
 
 /// `upload.json` for the entry, keeping what `old`, the earlier one, confirmed, sent and pruned,
-/// and the client for its run's server. None when there is nothing to send with: the file, written here,
-/// says why. Only a readable `server.json` that says off makes the run local; an unreadable one is
-/// not read as "no server". The tail window `upload_by` is the run deadline plus a day.
+/// and the client for its run's server. None when there is nothing to send with: the file,
+/// written here, says why. Only a readable `server.json` that says off makes the run local; an
+/// unreadable one is not read as "no server". The tail window `upload_by` is the run deadline
+/// plus a day.
 fn connect(
     run_dir: &Path,
     entry_dir: &Path,
@@ -208,14 +224,16 @@ fn connect(
 
 type Connected = (UploadJson, Option<ServerClient>);
 
-/// The threads of [`spawn`]; None when none starts, `upload.json` says why.
+/// The threads of [`spawn`]; None when none starts. With nothing to send the live entry with
+/// (`upload.json` says why) only the queue thread starts.
 fn start(ctx: UploadCtx, word: Arc<watch::Sender<Option<ServerWord>>>) -> Option<Run> {
     let ids = (&*ctx.run, &*ctx.entry);
     let old = state::read(&ctx.entry_dir).unwrap_or_default();
     let (json, client) = connect(&ctx.run_dir, &ctx.entry_dir, ids, ctx.keep, old);
-    let client = client?;
+    let live = client.is_some();
     let sh = Arc::new(Shared {
         p: Policy::from_env(),
+        home: ctx.home,
         client,
         ids: (ctx.run, ctx.entry),
         dir: ctx.entry_dir.clone(),
@@ -226,15 +244,13 @@ fn start(ctx: UploadCtx, word: Arc<watch::Sender<Option<ServerWord>>>) -> Option
         wrap: Mutex::new(None),
         tried: AtomicBool::new(false),
     });
-    let thread = |upload, body: fn(&Shared, &Receiver<()>)| {
-        let (wake, handle) = launch(&sh, upload, body)?;
-        Some(Thread {
-            upload,
-            wake,
-            handle,
-        })
+    let thread = |kind, body: fn(&Shared, &Receiver<()>)| {
+        let (wake, handle) = launch(&sh, kind, body)?;
+        Some(Thread { kind, wake, handle })
     };
-    let threads: Vec<_> = [thread(true, upload_thread), thread(false, beat_thread)]
+    let up = live.then(|| thread(Kind::Upload, upload_thread)).flatten();
+    let beat = live.then(|| thread(Kind::Beat, beat_thread)).flatten();
+    let threads: Vec<_> = [up, beat, thread(Kind::Queue, queue_thread)]
         .into_iter()
         .flatten()
         .collect();
@@ -243,31 +259,39 @@ fn start(ctx: UploadCtx, word: Arc<watch::Sender<Option<ServerWord>>>) -> Option
     (!threads.is_empty()).then_some((sh, threads))
 }
 
-/// The upload thread (`round`) or the beat thread on `body`, under [`guard`]; None when it could
-/// not start, which `upload.json` says.
+/// The thread of `kind` on `body`, under [`guard`]; None when it could not start, which
+/// `upload.json` says. The queue thread's guard never writes the live entry's `upload.json`.
 fn launch(
     sh: &Arc<Shared>,
-    round: bool,
+    kind: Kind,
     body: fn(&Shared, &Receiver<()>),
 ) -> Option<(mpsc::Sender<()>, JoinHandle<()>)> {
     let (tx, rx) = mpsc::channel();
     let s = sh.clone();
-    let name = ["goalcup-beat", "goalcup-upload"][usize::from(round)];
+    let (name, what) = match kind {
+        Kind::Beat => ("goalcup-beat", "beat"),
+        Kind::Upload => ("goalcup-upload", "round"),
+        Kind::Queue => ("goalcup-queue", "queue"),
+    };
     let started = thread::Builder::new().name(name.into()).spawn(move || {
         pipeline::low_priority();
         let mut again = false;
-        guard(round, &s.dir, &s.json, &s.p, &rx, || {
+        let j = (kind == Kind::Upload).then_some(&s.json);
+        guarded(what, &s.dir, j, &s.p, &rx, || {
             // A beat body started again after `finish` (its last one panicked) never holds the
             // wrap-up chunks back; the sender waits out `503 awaiting_final` anyway.
-            if !round && std::mem::replace(&mut again, true) && lock(&s.wrap).is_some() {
+            if kind == Kind::Beat && std::mem::replace(&mut again, true) && lock(&s.wrap).is_some()
+            {
                 s.tried.store(true, SeqCst);
             }
             body(&s, &rx)
         });
         // A beat thread that is gone never holds the wrap-up chunks back.
-        s.tried.store(true, SeqCst);
+        if kind != Kind::Queue {
+            s.tried.store(true, SeqCst);
+        }
     });
-    if started.is_err() {
+    if started.is_err() && kind != Kind::Queue {
         sh.tried.store(true, SeqCst);
         lock(&sh.json).last_error = internal("an uploader thread could not start");
     }
@@ -291,6 +315,19 @@ pub fn guard(
     j: &Mutex<UploadJson>,
     p: &Policy,
     wake: &Receiver<()>,
+    body: impl FnMut(),
+) {
+    let what = if round { "round" } else { "beat" };
+    guarded(what, entry_dir, round.then_some(j), p, wake, body);
+}
+
+/// [`guard`], with the log line's `what` and the `upload.json` to mark (None: none).
+fn guarded(
+    what: &'static str,
+    entry_dir: &Path,
+    j: Option<&Mutex<UploadJson>>,
+    p: &Policy,
+    wake: &Receiver<()>,
     mut body: impl FnMut(),
 ) {
     let mut backoff = Backoff::new(p);
@@ -303,12 +340,11 @@ pub fn guard(
             backoff.progress();
         }
         let wait = backoff.fail(Mono::now(), None);
-        if round {
+        if let Some(j) = j {
             let mut j = lock(j);
             j.state = State::Waiting;
             j.last_error = internal("an internal error in the uploader");
         }
-        let what = if round { "round" } else { "beat" };
         send::log_failure(entry_dir, what, Class::Internal.word(), None, wait);
         while !backoff.due(Mono::now()) {
             if !next(wake) {
@@ -321,9 +357,11 @@ pub fn guard(
 /// The upload thread: a round on each tick, bounded by the durable point (live) or by what is on
 /// disk (null mode). After the seal it waits for the first final heartbeat, then sends back to
 /// back. It sends nothing while another uploader holds `upload.lock`, and prunes after each tick
-/// that moved `confirmed`, and once the entry is sealed.
+/// that moved `confirmed`, and once the entry is sealed. Started only with a client.
 fn upload_thread(sh: &Shared, rx: &Receiver<()>) {
-    let mut s = sh.build(Sender::new);
+    let Some(mut s) = sh.build(Sender::new) else {
+        return;
+    };
     let durable = sh.rec.as_ref().map(Recorder::durable);
     let (mut held, mut sealed) = (None, false);
     let raw = || lock(&sh.json).confirmed.as_ref().map(|c| c.raw);
@@ -347,6 +385,25 @@ fn upload_thread(sh: &Shared, rx: &Receiver<()>) {
     }
 }
 
+/// The queue thread: each older entry gets one round per tick (section 1), on a thread of its own
+/// so their calls never delay the live entry. While the live entry's wrap-up is not done the queue
+/// waits: the live entry goes first.
+fn queue_thread(sh: &Shared, rx: &Receiver<()>) {
+    let mut queue = manual::Queue::default();
+    while next(rx) {
+        let wrap = lock(&sh.wrap).is_some();
+        if wrap && sh.client.is_some() && !done(&lock(&sh.json)) {
+            continue;
+        }
+        queue.serve(&sh.home, (&sh.ids.0, &sh.ids.1));
+    }
+}
+
+/// The server holds the whole entry, sealed.
+fn done(j: &UploadJson) -> bool {
+    j.final_ == Final::Sealed && j.state == State::Done
+}
+
 /// The seal LINK: the last whole line on disk when it is an `E` or `R` line (after a seal the
 /// writer has synced it), else None.
 fn seal_link(rec_dir: &Path) -> Option<IndexLine> {
@@ -366,7 +423,9 @@ fn final_due(b: &Beat, now: Mono, tried: bool, j: &UploadJson, link: &IndexLine)
 /// again whenever its backoff is due while it is not committed or once the last chunk is stored,
 /// until sealed.
 fn beat_thread(sh: &Shared, rx: &Receiver<()>) {
-    let mut b = sh.build(Beat::new);
+    let Some(mut b) = sh.build(Beat::new) else {
+        return;
+    };
     let (durable, rec_dir) = (sh.rec.as_ref().map(Recorder::durable), sh.dir.join("rec"));
     let (mut link, mut said) = (None::<IndexLine>, false);
     // Null mode: no writer runs, so the point and totals on disk are read once, when a beat is
@@ -438,8 +497,8 @@ fn beat_thread(sh: &Shared, rx: &Receiver<()>) {
 }
 
 impl UploadHandle {
-    /// The last heartbeat answer; None before the first one. With no uploader thread (a local
-    /// run, or nothing to send with) the value stays None and `changed()` never returns while the
+    /// The last heartbeat answer; None before the first one. With no beat thread (a local run, or
+    /// nothing to send with) the value stays None and `changed()` never returns while the
     /// handle lives.
     pub fn server_word(&self) -> watch::Receiver<Option<ServerWord>> {
         self.word.clone()
@@ -447,10 +506,13 @@ impl UploadHandle {
 
     /// The seal is durable: final heartbeat, then the chunks left, then the final again until
     /// sealed (section 6), until `upload.json` says `done`, `wrap_up` is over or no upload thread
-    /// runs. Both threads then stop at their next tick, waited for a few seconds at most (a thread
-    /// inside a call ends alone), and `upload.json` is written a last time with what they did.
-    /// If only the beat thread started, no chunk can go, so this does not wait and the final
-    /// heartbeat may not go out; the bytes stay on disk for a later upload.
+    /// runs. The threads then stop at their next tick, waited for a few seconds at most (a thread
+    /// inside a call ends alone; an older entry's `upload.json` is written after every round that
+    /// changed it, so what it misses is that one call, which the server's position covers), and
+    /// `upload.json` is written a last time with what they did.
+    /// If only the beat thread started, or the live entry has nothing to send with, no chunk can
+    /// go, so this does not wait and the final heartbeat may not go out; the bytes stay on disk
+    /// for a later upload.
     pub fn finish(self, wrap_up: WrapUp, seal: SealFacts) {
         let Some((sh, threads)) = self.run else {
             return;
@@ -459,10 +521,12 @@ impl UploadHandle {
         for t in &threads {
             let _ = t.wake.send(());
         }
-        let done = |j: &UploadJson| j.final_ == Final::Sealed && j.state == State::Done;
-        while !done(&lock(&sh.json))
+        while sh.client.is_some()
+            && !done(&lock(&sh.json))
             && !wrap_up.over(Mono::now())
-            && threads.iter().any(|t| t.upload && !t.handle.is_finished())
+            && threads
+                .iter()
+                .any(|t| t.kind == Kind::Upload && !t.handle.is_finished())
         {
             thread::sleep(TICK / 20);
         }

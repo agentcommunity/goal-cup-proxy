@@ -68,3 +68,12 @@ pub(crate) fn exit(code: i32, cause: &'static str) {
     }
     std::process::exit(code);
 }
+
+/// [`exit`] for a caller that cannot go on: when another thread is already ending the process,
+/// this one parks until it ends.
+pub(crate) fn die(code: i32, cause: &'static str) -> ! {
+    exit(code, cause);
+    loop {
+        std::thread::park();
+    }
+}

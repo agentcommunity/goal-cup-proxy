@@ -2379,3 +2379,51 @@ kept and now cites BUILD-PROMPT section 5, since B3 no longer carries it.
 - **Gate effect:** none on build order or seams. Deletion gate check 1 has had a dry run; its rows stay open
   until an integration-head box run, and the L-P3 ctrl-c case and the serve halves still block counting green.
   The slice title claimed a helper dedupe it only partly did; the merge record is not edited. No locked ledger item is touched.
+
+### 2026-10-31, replan after PRD-03 slice 3 (merge c81e8e9b)
+
+- **Size report, PRD-03** (`wc -l` on integration): `proxy/*.rs` 5,171 lines against the PRD-00 row of 4,250 (4,400 replanned), 122% and 118%. `h2.rs` is still to come and would bring src to about 6,970. Proxy tests about 3,250 against 2,000. The excess serves points 1, 2 and 3 (full wire record, no stall); the decision lines are recorded. The `h2.rs` slice must cut before adding and delete `H2Unparsed` and `stop_h2`. Total test lines are the owner question only past about 14,200; check at the next size report.
+- **Gate effect:** `serve` is on integration, so the build-order step "PRD-02 slice A (boot.rs)" and the PRD-17 serve halves are unblocked. `h2.rs` stays the last PRD-03 slice; acceptance rows that need h2 (3 and the h2 parts of PRD-12) wait on it. No seam or phase-check change. No locked ledger item is touched.
+
+### 2026-10-31, replan after PRD-06 slice 6 (merge 114202ae)
+
+- **Size report, PRD-06** (`wc -l` on integration): `src/upload/*.rs` 3,283 against the PRD-00 row of
+  940 and the replanned 2,500; `tests/upload_*.rs` 2,765 against 1,000 and 1,900. Third row over, with
+  connector and usage. No cut known; carry to the end-of-build report.
+- **Build order:** PRD-06 slice 7 (dead-entry close) waits for `dead.rs`; PRD-02 must call
+  `Board::sealed` before the queue sees a real entry. Acceptance of the queue on a real recorder run
+  depends on both.
+- No locked ledger item is touched.
+
+### 2026-10-31, replan after PRD-12 slice 9 (merge fe40990f)
+
+- **Size report, PRD-12** (`wc -l` on integration): `scripts/pad/` outside fixtures 4,344 lines against the PRD-00 row of about 1,350 to 1,450 (roughly three times). Slice 9 added about 40 net. No further code slice is planned; carry to the end-of-build report and the logged owner question.
+- **Gate effect:** none on order. Phase 1a rung 1 clears the `goalcup start` folder checks but still needs a `goalcup` build on integration to run. No seam change. No locked ledger item is touched.
+
+### 31 Oct, after PRD-10 slice 8 (merge 69f143a6)
+
+- **Size report, PRD-10** (`wc -l` on integration): `cli/*.rs` 4,362 lines (`text.rs` 1,174) against the PRD-00
+  row of about 2,900 (roughly 1.5 times); down 75 from slice 7. `tests/cli_*.rs` 2,358 against 1,200 (about
+  twice). Overage accepted by review (no cut keeps behaviour); carry to the end-of-build report.
+- **Gate effect:** none on order. The gated half of PRD-10 still waits on `watchdog::run`,
+  `watchdog::recover` and `pipeline::close_dead_entry`. No seam change. No locked ledger item is touched.
+
+### 2026-10-31, replan after PRD-03 slice 4 (merge a3dbd3d5)
+
+- **PRD-03 code is complete** (slices 1 to 4). The only open item is pad acceptance 3, a watcher run in a pad box (PRD-12). Treat it as a Phase 1 pad row, not a build task.
+- **Size report, PRD-03** (`wc -l` on integration): src 5,961 against the 4,250 row (+40%; 4,400 replanned, +35%); tests 3,942 against 2,000 (about twice). Carry to the end-of-build report with the PRD-10 and PRD-12 overages. No locked ledger item is touched.
+
+### 2026-10-31, replan after PRD-17 slice 4 (merge 2f771304)
+
+- **Size report, PRD-17** (`wc -l` on integration): `crates/goalcup/tests/lessons_*.rs` 3,462 lines (eight files) against the PRD-00 row of 3,000 shared with PRD-14 (+15%). PRD-17 has no src. Carry to the end-of-build report with the other overages; PRD-14 must cut its own share to keep the Rust test total near 14,200.
+- **Gate effect:** none on order. The deletion gate (check 1) still needs K15, the serve halves of http1 and ws, and one box run of the full tier (C7 120 s) on the integration head. No seam change. No locked ledger item is touched.
+
+### 31 Oct, after PRD-10 slice 9 (merge 25102adc)
+
+- **Size report, PRD-10** (`wc -l` on integration): `cli/*.rs` 4,490 lines (`main.rs` excluded; `text.rs` 1,174)
+  against the PRD-00 row of about 2,900 (about 1.55 times); up 128 from slice 8 for the hand-over and finish
+  handling. `tests/cli_*.rs` 2,385 against 1,200 (about twice). Carry to the end-of-build report with the
+  PRD-03, PRD-12 and PRD-17 overages. Slice 10 must be net-negative in `text.rs` before it adds lines.
+- **Gate effect:** none on order. The remaining PRD-10 work (`continue`, `recover`, seal on a dead entry) still
+  waits on `watchdog::recover` and `pipeline::close_dead_entry` reaching integration; `watchdog::run` is there.
+  Acceptance 10 and 11 stay open until slice 10. No seam change. No locked ledger item is touched.

@@ -5,16 +5,21 @@
 //! PRD-03's own cases (each coding decodes, an unknown coding, a window over the room) are in
 //! `proxy_decode.rs`; the bomb (D7) and the fake client (D8) wait for the HTTP/1 parser.
 //!
-//! Pending: PRD-17 section 1 wants these cases asserted on records. The GAP `decode_failed` and
-//! END `decode_error` records of D6 (and the coded bytes of D1 to D4) are not shown here; add that
-//! half through `proxy::serve` once it lands. LESSONS.md keeps L-D1 to L-D4 and L-D6 open until then.
+//! D6's GAP and END records are asserted through `proxy::serve` in the last test. The coded
+//! bytes of D1 to D4 stay pieces-only here; LESSONS.md keeps L-D1 to L-D4 open for that half.
+
+mod common;
+mod proxy_fixtures;
 
 use bytes::Bytes;
+use common::recorder::{data_of, ends, gaps, opens};
+use common::upstream::{Answer, Body, Script, Upstream};
 use flate2::write::{DeflateEncoder, GzEncoder, ZlibEncoder};
 use flate2::{Compression, GzBuilder};
-use goalcup::pipeline::Recorder;
+use goalcup::pipeline::{Call, EndReason, GapReason, Recorder, StreamKind};
 use goalcup::proxy::decode::{BodyDecoder, Step, parse_codings};
 use std::io::Write;
+use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 
 macro_rules! encoder {
     ($name:ident, $enc:ident) => {
@@ -385,4 +390,88 @@ fn corrupt_tail_keeps_the_prefix() {
         SPLIT_READS,
         &sse,
     );
+}
+
+/// D6 through `proxy::serve`: a `br` reply whose tail is corrupt keeps the decoded prefix as DATA,
+/// then one GAP `decode_failed` and an END `decode_error`; the client still gets every byte the
+/// upstream sent, the bytes after the corruption included.
+#[tokio::test]
+async fn corrupt_br_tail_through_serve_keeps_prefix_gap_end_and_relays_everything() {
+    let plain = body(2000); // two meta-blocks, so the first is out before the corrupt header
+    let mut wire = brotli_stored(&plain);
+    *wire.last_mut().unwrap() = 0xfe; // the closing meta-block header becomes invalid
+    wire.extend_from_slice(b"bytes after the corruption");
+    let head = vec![("content-encoding".to_string(), "br".to_string())];
+    let answer = Answer::Http {
+        status: 200,
+        headers: head,
+        body: Body::Whole(wire.clone()),
+        coding: None,
+    };
+    let up = Upstream::start(
+        Script {
+            answers: vec![answer],
+            ..Script::ok(b"")
+        }
+        .with_tls(&["api.openai.com"], &[common::pki::HTTP11]),
+    );
+    let dir = tempfile::tempdir().unwrap();
+    let roots = up.pki().roots_file(dir.path()).display().to_string();
+    let env = [
+        (
+            "GOALCUP_TEST_UPSTREAM",
+            format!("api.openai.com={}", up.addr()),
+        ),
+        ("GOALCUP_TEST_EXTRA_ROOTS", roots),
+    ];
+    let (_h, addr, calls, ca) = proxy_fixtures::proxy(proxy_fixtures::HOSTS, &env);
+    let name = rustls::pki_types::ServerName::try_from("api.openai.com").unwrap();
+    let tcp = proxy_fixtures::through(addr, "api.openai.com:443").await;
+    let mut t = proxy_fixtures::trusting_run_ca(&ca, &[b"http/1.1"])
+        .connect(name, tcp)
+        .await
+        .unwrap();
+    t.write_all(b"GET /v1/models HTTP/1.1\r\nHost: api.openai.com\r\nAccept-Encoding: br\r\n\r\n")
+        .await
+        .unwrap();
+    let mut got = Vec::new();
+    common::within_async(common::HANG, async {
+        while !got.ends_with(&wire) {
+            let mut b = [0u8; 4096];
+            let n = t.read(&mut b).await.unwrap();
+            assert!(n > 0, "the reply ended early");
+            got.extend_from_slice(&b[..n]);
+        }
+    })
+    .await;
+
+    let [(resp, ..)] = opens(&calls)
+        .into_iter()
+        .filter(|o| o.1 == StreamKind::HttpResp)
+        .collect::<Vec<_>>()
+        .try_into()
+        .unwrap();
+    let ended = common::within_async(common::HANG, async {
+        loop {
+            if let Some(e) = ends(&calls).into_iter().find(|e| e.0 == resp) {
+                return e.1;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    })
+    .await;
+    let kept = data_of(&calls, resp);
+    assert!(
+        !kept.is_empty() && plain.starts_with(&kept),
+        "a decoded prefix, never a suffix byte"
+    );
+    let reasons: Vec<_> = gaps(&calls)
+        .into_iter()
+        .filter_map(|g| match g {
+            Call::Gap(s, r, ..) if s == resp => Some(r),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(reasons, [GapReason::DecodeFailed]);
+    assert_eq!(ended, EndReason::DecodeError);
 }

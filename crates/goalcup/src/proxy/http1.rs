@@ -37,11 +37,11 @@ use serde_json::{Value, json};
 use std::collections::VecDeque;
 
 /// The `http_head` guard: head bytes stored per head (and per chunked trailer section).
-const HEAD_LIMIT: usize = 64 * 1024;
+pub(crate) const HEAD_LIMIT: usize = 64 * 1024;
 /// The `upgrade_copy` guard: client bytes copied while an upgrade waits for its answer.
 const COPY_LIMIT: usize = 1 << 20;
 /// Past the head guard, framing field lines longer than this in all cannot be followed (5a).
-const FIELD_MAX: usize = 4 * 1024;
+pub(crate) const FIELD_MAX: usize = 4 * 1024;
 /// Past the head guard, a field line whose name has not ended within this many bytes is not a
 /// field framing needs, so the rest of it is skipped unread.
 const NAME_MAX: usize = 64;
@@ -60,7 +60,7 @@ const FRAMING: [&str; 9] = [
 
 /// Why parsing stopped for the connection.
 #[derive(Clone, Copy, Debug)]
-enum Fault {
+pub(crate) enum Fault {
     /// Framing this parser cannot follow, or the WebSocket parser stopped (it wrote its GAPs).
     Framing,
     /// The `upgrade_copy` guard.
@@ -169,7 +169,12 @@ impl Http1 {
             .into_iter()
             .flatten()
         {
-            body.end(t, EndReason::DecodeError, Some((reason, tail.clone())));
+            body.end(
+                t,
+                EndReason::DecodeError,
+                Some((reason, tail.clone())),
+                None,
+            );
         }
         if let Some(ws) = &mut self.ws {
             ws.stop(t, tail.clone());
@@ -254,7 +259,7 @@ impl Http1 {
                 }
                 let (n, done) = step?;
                 if done && let Some(body) = side.body.take() {
-                    body.end(t, EndReason::Complete, None);
+                    body.end(t, EndReason::Complete, None, None);
                 }
                 n
             } else {
@@ -464,7 +469,7 @@ impl Parser for Http1 {
             ws.end(t, reason, self.ws_unsent);
         }
         if let Some(body) = self.up.body.take() {
-            body.end(t, EndReason::Interrupted, None);
+            body.end(t, EndReason::Interrupted, None, None);
         }
         if let Some(body) = self.down.body.take() {
             // Only the server's close ends this body, and a cut close may come early.
@@ -474,7 +479,7 @@ impl Parser for Http1 {
             } else {
                 EndReason::Interrupted
             };
-            body.end(t, reason, None);
+            body.end(t, reason, None, None);
         }
         late.map(|s| Stop {
             since: s.since.min(since),
@@ -490,14 +495,14 @@ impl Parser for Http1 {
 }
 
 /// `codings` for the OPEN meta: the list undone, or null when none is.
-fn coding_meta(codings: &Result<Vec<Coding>, Unsupported>) -> Value {
+pub(crate) fn coding_meta(codings: &Result<Vec<Coding>, Unsupported>) -> Value {
     match codings {
         Ok(list) if !list.is_empty() => json!(list.iter().map(|c| c.name()).collect::<Vec<_>>()),
         _ => Value::Null,
     }
 }
 
-fn pairs(fields: &[(String, String)]) -> Value {
+pub(crate) fn pairs(fields: &[(String, String)]) -> Value {
     json!(fields.iter().map(|(n, v)| [n, v]).collect::<Vec<_>>())
 }
 
@@ -516,7 +521,7 @@ fn accept_key(key: &str) -> String {
 /// A request target reduced to its path without query and fragment.
 /// Origin form keeps `/p`, absolute form keeps the path after the authority; asterisk and
 /// authority forms have no path (null).
-fn safe_path(target: &str) -> Value {
+pub(crate) fn safe_path(target: &str) -> Value {
     let rest = if target.starts_with('/') {
         target
     } else {
@@ -593,7 +598,7 @@ fn strip_eol(line: &[u8]) -> &[u8] {
 /// A head, or a chunked trailer section, read line by line in any split. Empty lines before
 /// the start line are skipped and bare LF line ends are taken (RFC 9112 section 2.2).
 #[derive(Default)]
-struct Head {
+pub(crate) struct Head {
     /// The start line is still to come (never, for trailers).
     want_start: bool,
     start: Vec<u8>,
@@ -618,6 +623,14 @@ struct Head {
 }
 
 impl Head {
+    /// A head decoded elsewhere (HTTP/2): only its guard state, the bytes not stored.
+    pub(crate) fn past_guard_at(over: Option<(Mono, u64)>) -> Head {
+        Head {
+            over,
+            ..Head::default()
+        }
+    }
+
     fn new(want_start: bool) -> Head {
         Head {
             want_start,
@@ -828,7 +841,7 @@ fn length(digits: &str) -> Option<u64> {
 /// A chunk-size line, read without a buffer: `chunk-size [ BWS ; chunk-ext ]` and its line end
 /// (RFC 9112 section 7.1). Extensions are never recorded, so their bytes are only skipped.
 #[derive(Default)]
-struct SizeLine {
+pub(crate) struct SizeLine {
     size: u64,
     /// Significant hex digits so far: past 16 the size fits no `u64` (5a).
     digits: u8,
@@ -863,14 +876,14 @@ impl SizeLine {
 }
 
 /// How a body ends on the wire.
-enum Framing {
+pub(crate) enum Framing {
     Length(u64),
     Chunked(Chunk),
     /// Runs to the close of the connection.
     Close,
 }
 
-enum Chunk {
+pub(crate) enum Chunk {
     Size(SizeLine),
     Data(u64),
     /// The line end after a chunk's data; `true` once its CR was seen.
@@ -879,18 +892,18 @@ enum Chunk {
 }
 
 /// One open stream's body: framing, decoding and the END tail.
-struct Body {
+pub(crate) struct Body {
     framing: Framing,
-    sink: Sink,
+    pub(crate) sink: Sink,
     /// Body bytes on the wire, chunk framing included (END tail `wire`).
     raw: u64,
     /// Of the message's bytes on the wire, head included, those never forwarded (END tail
     /// `unsent`).
-    unsent: u64,
+    pub(crate) unsent: u64,
 }
 
 /// Where a body's bytes go.
-struct Sink {
+pub(crate) struct Sink {
     h: StreamHandle,
     dec: Result<BodyDecoder, Vec<String>>,
     /// Encoded body bytes, de-chunked (the GAP tails' `wire`).
@@ -902,6 +915,12 @@ struct Sink {
 }
 
 impl Sink {
+    /// The trailers, with the `http_head` GAP when they passed the guard.
+    pub(crate) fn set_trailers(&mut self, fields: Vec<(String, String)>, head: &Head) {
+        head_gap(&mut self.h, head);
+        self.trailers = fields;
+    }
+
     fn data(&mut self, t: Mono, bytes: &[u8]) {
         if bytes.is_empty() {
             return;
@@ -918,7 +937,7 @@ impl Sink {
 }
 
 /// The `http_head` GAP, when a head or a trailer section passed the guard.
-fn head_gap(h: &mut StreamHandle, head: &Head) {
+pub(crate) fn head_gap(h: &mut StreamHandle, head: &Head) {
     if let Some((at, n)) = head.over {
         let tail = json!({"guard": "http_head", "limit": HEAD_LIMIT, "head": n});
         h.gap(GapReason::MemoryGuard, at, None, Some(tail));
@@ -928,7 +947,7 @@ fn head_gap(h: &mut StreamHandle, head: &Head) {
 impl Body {
     /// Writes the `http_head` GAP when the head passed the guard; a message without a body ends
     /// at once and gives `None`. `unsent`: the head's bytes never forwarded.
-    fn open(
+    pub(crate) fn open(
         mut h: StreamHandle,
         framing: Option<Framing>,
         codings: Result<Vec<Coding>, Unsupported>,
@@ -968,7 +987,7 @@ impl Body {
 
     /// Consumes what `input` holds of this body: `(consumed, done)`. `raw` grows by each piece
     /// taken, also when a later piece faults.
-    fn advance(&mut self, t: Mono, input: &[u8]) -> Result<(usize, bool), Fault> {
+    pub(crate) fn advance(&mut self, t: Mono, input: &[u8]) -> Result<(usize, bool), Fault> {
         let Body {
             framing, sink, raw, ..
         } = self;
@@ -1030,8 +1049,8 @@ impl Body {
                     pos += n;
                     *raw += n as u64;
                     if done {
-                        head_gap(&mut sink.h, head);
-                        sink.trailers = std::mem::take(&mut head.fields);
+                        let fields = std::mem::take(&mut head.fields);
+                        sink.set_trailers(fields, head);
                         return Ok((pos, true));
                     }
                 }
@@ -1041,7 +1060,14 @@ impl Body {
     }
 
     /// Ends the stream: the decoder's GAP if it had one, then the 5a GAP if `stop` is set.
-    fn end(self, t: Mono, reason: EndReason, stop: Option<(GapReason, Option<Value>)>) {
+    /// `extra`: one more END tail key (HTTP/2's `h2_error`).
+    pub(crate) fn end(
+        self,
+        t: Mono,
+        reason: EndReason,
+        stop: Option<(GapReason, Option<Value>)>,
+        extra: Option<(&str, Value)>,
+    ) {
         let Sink {
             mut h,
             dec,
@@ -1084,6 +1110,9 @@ impl Body {
         }
         if self.unsent > 0 {
             tail["unsent"] = json!(self.unsent);
+        }
+        if let Some((key, value)) = extra {
+            tail[key] = value;
         }
         h.end(t, reason, Some(tail));
     }
