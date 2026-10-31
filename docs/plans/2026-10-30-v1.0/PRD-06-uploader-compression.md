@@ -1113,3 +1113,34 @@ PRD-12 and PRD-17.
   call, and must not grow `client.rs`. The overage serves points 3 and 5 (see the slice 5 note). Net
   against the Rust totals at the end-of-build report; the old `goalcup-cli/src/upload` goes with PRD-13.
 - No locked ledger item is touched.
+
+### 2026-10-31, slice 6 review fixes (older-entry queue)
+
+- **No decode in the recorder.** The queue takes an older entry's final-heartbeat totals from its
+  `status.json` (`written` and `off`), which PRD-02 sets together with the seal and which nothing else
+  sets, so they are the seal's totals; no part file is decoded on the upload thread. An entry the
+  queue takes is always sealed in `status.json`, or its `upload.json` says the server sealed it and no
+  final goes. `goalcup upload`, a process of its own, keeps `pipeline::entry_totals`.
+- **A refused entry stays queued.** 401, 404 and 410 from an older entry keep it in the queue on its
+  backoff, as section 1 says; `goalcup upload` still gives up on them. An entry leaves the queue when
+  it is done, closed, `stuck`, has nothing to send with, has every part pruned while `upload.json` is
+  not `done` (`goalcup upload` settles that one with the server's position), or its round panicked.
+  The next recorder or `goalcup upload` takes the unfinished ones.
+- **One panic, one entry.** Each older entry's listing and round run under their own `catch_unwind`;
+  a panic writes `internal` into that entry's `upload.json` and one log line, and never reaches the
+  live entry, its backoff or the other queued entries.
+- **The queue runs without a live client.** A live entry that is local or has no credential still
+  starts the upload thread, for the queue alone; `finish` does not wait for it.
+- **Descriptors.** A queued entry holds one descriptor, its `upload.lock`; the sender, the beat and
+  `upload.json`'s writer hold none between calls, and each call opens and closes its own connection.
+  Measured in a box with 40 queued older entries held on backoff: 41 `upload.lock` descriptors (the
+  40 and the live one) and no other growth. The 4 per entry the review saw were the fake Worker's,
+  which keeps a handle on every connection it accepts. 200 queued entries still hold 200
+  descriptors; raising `RLIMIT_NOFILE` is not this PRD's.
+- **Also:** an entry writes `upload.json` once more when it leaves the queue (no state lost to the
+  1 s write limit); the live entry is skipped by its `(run, entry)` ids, not by path; entries are
+  ordered by their `status.json` time; done and closed entries are not read again.
+- **Size:** src 3,190 (`src/upload/*.rs`, inline tests counted), `upload_*` tests and
+  `tests/upload_common/` 2,690, against the PRD-00 row of 940 and 1,000; these fixes add 74 src lines
+  and cut 29 test lines (the part-folder builder is shared). The overage stands as reported at slice 5.
+- No locked ledger item is touched and no owner question comes from these fixes.

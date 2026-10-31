@@ -1,22 +1,20 @@
 //! PRD-06 section 1, "One queue of entries" (point 5): the uploader of a new live entry also sends
 //! older sealed entries whole and sealed; an older entry the server refuses never stops the live
 //! entry's chunks; an older entry past `upload_by` is closed and nothing of it is sent; an older
-//! entry whose `upload.lock` another uploader holds is not sent while held.
+//! entry whose `upload.lock` another uploader holds is not sent while held; a live entry with no
+//! server still sends an older entry of a run that has one.
 
 mod common;
+mod upload_common;
 
-use common::records::{BOOT_ID, ENTRY, at};
+use common::records::ENTRY;
 use common::worker::{CREDENTIAL, FakeWorker, Inject, RUN_ID, Route};
 use goalcup::cli;
-use goalcup::pipeline::Status;
-use goalcup::pipeline::status::{Mode, SealStatus};
 use goalcup::upload::state::{self, Final, State};
 use goalcup::upload::{UploadCtx, UploadHandle, spawn};
-use goalcup::watchdog::SealReason;
-use goalcup_format::read::{part_files, read_index};
-use goalcup_format::{PartOptions, PartWriter, Record, hex};
+use goalcup_format::read::part_files;
 use serde_json::json;
-use std::fs::{self, File};
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -36,66 +34,10 @@ fn run(home: &Path, id: &str, url: &str, deadline: &str) -> PathBuf {
     dir
 }
 
-/// Entry `id` of several parts in `run_dir`: sealed with its seal in `status.json`, or left open at
-/// a synced LINK, as a live entry in null mode. Returns the folder and the bytes of each part up
-/// to its last index line, joined.
+/// Entry `id` in `run_dir`; see [`upload_common::entry`].
 fn entry(run_dir: &Path, id: &str, sealed: bool) -> (PathBuf, Vec<u8>) {
     let dir = run_dir.join(id);
-    let rec = dir.join("rec");
-    fs::create_dir_all(&rec).unwrap();
-    let opts = PartOptions {
-        window_log: 20,
-        rotate_at: 4096,
-        rotate_after_ns: u64::MAX,
-    };
-    let mut w = PartWriter::open(&rec, opts, id, BOOT_ID, at(0)).unwrap();
-    for n in 1..=5u64 {
-        // Bytes that do not compress, so the parts rotate.
-        let mut x = n.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1;
-        let noise: Vec<u8> = (0..400)
-            .flat_map(|_| {
-                x ^= x << 13;
-                x ^= x >> 7;
-                x ^= x << 17;
-                x.to_le_bytes()
-            })
-            .collect();
-        let json = format!(r#"{{"ev":"x","n":"{}"}}"#, hex(&noise)).into_bytes();
-        w.write(&Record::Event {
-            t: at(n).mono_ns,
-            json,
-        })
-        .unwrap();
-        w.link(at(n)).unwrap();
-        if n < 5 {
-            w.rotate_if_due(at(n)).unwrap();
-        }
-    }
-    if sealed {
-        w.seal(at(6)).unwrap();
-        let status = Status {
-            mode: Mode::Sealed,
-            seal: Some(SealStatus {
-                reason: SealReason::HarnessExit,
-                workspace_head: None,
-            }),
-            ..Status::default()
-        };
-        fs::write(cli::status_json(&dir), serde_json::to_vec(&status).unwrap()).unwrap();
-    } else {
-        w.sync().unwrap();
-        std::mem::forget(w);
-    }
-    File::create(rec.join("lock")).unwrap();
-    let bytes = part_files(&rec)
-        .unwrap()
-        .iter()
-        .flat_map(|p| {
-            let idx = p.with_extension("").with_extension("idx");
-            let end = read_index(&idx).unwrap().last().unwrap().c_end as usize;
-            fs::read(p).unwrap()[..end].to_vec()
-        })
-        .collect();
+    let bytes = upload_common::entry(&dir, id, sealed);
     (dir, bytes)
 }
 
@@ -214,4 +156,24 @@ fn an_older_entry_another_uploader_holds_is_not_sent() {
     std::thread::sleep(Duration::from_secs(3));
     assert!(!touched(&fake), "not sent while held");
     drop(held);
+}
+
+#[test]
+fn a_local_live_entry_still_sends_an_older_one() {
+    let fake = FakeWorker::start();
+    let home = tempfile::tempdir().unwrap();
+    let earlier = run(home.path(), "r00000000000000b2", &fake.url(), DEADLINE);
+    let (old, all) = entry(&earlier, OLD, true);
+    let run_dir = run(home.path(), RUN_ID, &fake.url(), DEADLINE);
+    // The live run is local: `server.json` names no server.
+    let local = json!({"v": 1, "server": null, "run": RUN_ID, "mode": "test",
+        "deadline": DEADLINE, "repo": null, "hosts_file": null, "entries": [],
+        "connector": {"id": "c", "name": "c", "source": "builtin"}});
+    fs::write(cli::server_json(&run_dir), local.to_string()).unwrap();
+    entry(&run_dir, ENTRY, false);
+    let _h = live(home.path(), &run_dir);
+    let done = || state::read(&old).is_some_and(|j| j.state == State::Done);
+    assert!(until(done), "the older entry is done");
+    assert_eq!(fake.stream(OLD), all);
+    assert!(fake.stream(ENTRY).is_empty(), "nothing of the local entry");
 }

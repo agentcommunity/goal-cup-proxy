@@ -5,18 +5,13 @@
 //! `scripts/fetch-run.sh --local`. Loopback only; nothing from staging or production.
 
 mod common;
+mod upload_common;
 
-use common::records::{BOOT_ID, at};
 use goalcup::cli;
-use goalcup::pipeline::Status;
-use goalcup::pipeline::status::{Mode, SealStatus};
 use goalcup::upload::client::{ServerClient, ServerError, Token};
 use goalcup::upload::manual::{Outcome, run};
 use goalcup::upload::state::{self, Final};
 use goalcup::upload::{UploadCtx, spawn};
-use goalcup::watchdog::SealReason;
-use goalcup_format::read::part_files;
-use goalcup_format::{PartOptions, PartWriter, Record};
 use serde_json::{Value, json};
 use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::process::CommandExt;
@@ -199,60 +194,6 @@ fn open_run(url: &str, home: &Path) -> (PathBuf, String, String) {
     (dir, run_id.into(), entry.into())
 }
 
-/// Two parts of `entry` cut at a small `rotate_at`, sealed with `status.json` saying so, or left
-/// as a crash leaves them in null mode. Returns the bytes of `cat rec-*.gcr.zst`.
-fn parts(entry_dir: &Path, entry: &str, seal: bool) -> Vec<u8> {
-    let rec = entry_dir.join("rec");
-    fs::create_dir_all(&rec).unwrap();
-    let opts = PartOptions {
-        window_log: 20,
-        // Any linked part is past it, so the first one rotates.
-        rotate_at: 1,
-        rotate_after_ns: u64::MAX,
-    };
-    let mut w = PartWriter::open(&rec, opts, entry, BOOT_ID, at(0)).unwrap();
-    for n in 1..=2u64 {
-        let (t, json) = (at(n).mono_ns, format!(r#"{{"n":{n}}}"#).into_bytes());
-        w.write(&Record::Event { t, json }).unwrap();
-        w.link(at(n)).unwrap();
-        if n == 1 {
-            w.rotate_if_due(at(n)).unwrap();
-        }
-    }
-    let status = if seal {
-        w.seal(at(3)).unwrap();
-        fs::File::create(rec.join("lock")).unwrap();
-        let seal = SealStatus {
-            reason: SealReason::HarnessExit,
-            workspace_head: None,
-        };
-        Status {
-            mode: Mode::Sealed,
-            seal: Some(seal),
-            ..Status::default()
-        }
-    } else {
-        w.sync().unwrap();
-        // Gone without its drop, as after a crash.
-        std::mem::forget(w);
-        Status {
-            mode: Mode::Null,
-            ..Status::default()
-        }
-    };
-    fs::write(
-        cli::status_json(entry_dir),
-        serde_json::to_vec(&status).unwrap(),
-    )
-    .unwrap();
-    assert_eq!(part_files(&rec).unwrap().len(), 2, "two parts");
-    part_files(&rec)
-        .unwrap()
-        .iter()
-        .flat_map(|p| fs::read(p).unwrap())
-        .collect()
-}
-
 #[test]
 #[ignore = "full tier: needs `npm ci` in server/worker; a build box runs it"]
 fn a_sealed_entry_of_two_parts_is_held_whole_and_sealed() {
@@ -260,7 +201,7 @@ fn a_sealed_entry_of_two_parts_is_held_whole_and_sealed() {
     let home = tempfile::tempdir().unwrap();
     let (run_dir, run_id, entry) = open_run(&w.url, home.path());
     let entry_dir = run_dir.join(&entry);
-    let all = parts(&entry_dir, &entry, true);
+    let all = upload_common::entry(&entry_dir, &entry, true);
     let ids = (run_id.clone(), entry.clone());
     let (e, r) = (entry_dir.clone(), run_dir.clone());
     let sent = common::within(Duration::from_secs(120), move || {
@@ -294,7 +235,7 @@ fn null_mode_is_stored_as_failed_with_mode_null() {
     let home = tempfile::tempdir().unwrap();
     let (run_dir, run_id, entry) = open_run(&w.url, home.path());
     let entry_dir = run_dir.join(&entry);
-    parts(&entry_dir, &entry, false);
+    upload_common::entry(&entry_dir, &entry, false);
     let _uploader = spawn(UploadCtx {
         home: home.path().into(),
         run_dir,

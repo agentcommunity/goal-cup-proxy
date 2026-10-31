@@ -13,7 +13,8 @@
 //! until sealed. The upload thread holds the entry's `upload.lock` while it sends and runs
 //! [`prune`] after each tick that moved `confirmed`, and once the entry is sealed. After the live
 //! entry it serves the [`manual::Queue`] of older sealed entries (section 1), one round each per
-//! tick. [`manual`] is `goalcup upload` for one sealed entry.
+//! tick; the upload thread also runs, for the queue alone, when the live entry has nothing to send
+//! with (a local run, no credential). [`manual`] is `goalcup upload` for one sealed entry.
 //!
 //! Still open: the dead-entry close in [`manual`] (`pipeline::close_dead_entry`, PRD-02 9.4) and
 //! the half of the full-tier `upload_worker.rs` case 2 that waits on PRD-02's null-mode watchdog.
@@ -94,7 +95,7 @@ pub struct UploadHandle {
     word: watch::Receiver<Option<ServerWord>>,
     /// Keeps the channel open while the handle lives, also when no thread runs.
     _open: Arc<watch::Sender<Option<ServerWord>>>,
-    /// None when no thread runs (a local run, or nothing to send with).
+    /// None when no thread runs.
     run: Option<Run>,
 }
 
@@ -119,7 +120,8 @@ struct Shared {
     p: Policy,
     /// `$GOALCUP_HOME`, for the queue of older entries.
     home: PathBuf,
-    client: ServerClient,
+    /// None when the live entry has nothing to send with: only the queue runs.
+    client: Option<ServerClient>,
     ids: (String, String),
     dir: PathBuf,
     rec: Option<Recorder>,
@@ -141,10 +143,10 @@ impl Shared {
         let _ = file.put(Mono::now(), &j, force);
     }
 
-    /// A new sender or beat (`Sender::new`, `Beat::new`).
-    fn build<T>(&self, f: fn(&Policy, ServerClient, &str, &str, &Path) -> T) -> T {
+    /// A new sender or beat (`Sender::new`, `Beat::new`); None with no client.
+    fn build<T>(&self, f: fn(&Policy, ServerClient, &str, &str, &Path) -> T) -> Option<T> {
         let (run, entry) = &self.ids;
-        f(&self.p, self.client.clone(), run, entry, &self.dir)
+        Some(f(&self.p, self.client.clone()?, run, entry, &self.dir))
     }
 }
 
@@ -212,12 +214,13 @@ fn connect(
 
 type Connected = (UploadJson, Option<ServerClient>);
 
-/// The threads of [`spawn`]; None when none starts, `upload.json` says why.
+/// The threads of [`spawn`]; None when none starts. With nothing to send the live entry with
+/// (`upload.json` says why) only the upload thread starts, for the queue of older entries.
 fn start(ctx: UploadCtx, word: Arc<watch::Sender<Option<ServerWord>>>) -> Option<Run> {
     let ids = (&*ctx.run, &*ctx.entry);
     let old = state::read(&ctx.entry_dir).unwrap_or_default();
     let (json, client) = connect(&ctx.run_dir, &ctx.entry_dir, ids, ctx.keep, old);
-    let client = client?;
+    let live = client.is_some();
     let sh = Arc::new(Shared {
         p: Policy::from_env(),
         home: ctx.home,
@@ -239,7 +242,8 @@ fn start(ctx: UploadCtx, word: Arc<watch::Sender<Option<ServerWord>>>) -> Option
             handle,
         })
     };
-    let threads: Vec<_> = [thread(true, upload_thread), thread(false, beat_thread)]
+    let beat = live.then(|| thread(false, beat_thread)).flatten();
+    let threads: Vec<_> = [thread(true, upload_thread), beat]
         .into_iter()
         .flatten()
         .collect();
@@ -327,6 +331,7 @@ pub fn guard(
 /// disk (null mode). After the seal it waits for the first final heartbeat, then sends back to
 /// back. It sends nothing while another uploader holds `upload.lock`, and prunes after each tick
 /// that moved `confirmed`, and once the entry is sealed. Then each older entry gets one round.
+/// With no client only the queue runs.
 fn upload_thread(sh: &Shared, rx: &Receiver<()>) {
     let mut s = sh.build(Sender::new);
     let mut queue = manual::Queue::default();
@@ -334,23 +339,25 @@ fn upload_thread(sh: &Shared, rx: &Receiver<()>) {
     let (mut held, mut sealed) = (None, false);
     let raw = || lock(&sh.json).confirmed.as_ref().map(|c| c.raw);
     while next(rx) {
-        held = held.or_else(|| state::lock_upload(&sh.dir));
-        let wrap = lock(&sh.wrap).is_some();
-        // Copied out, and the borrow dropped at once: the writer never waits on this thread.
-        let bound = match &durable {
-            Some(d) => d.borrow().point.clone().map(Bound::Durable),
-            None => Some(Bound::OnDisk),
-        };
-        let before = raw();
-        if let Some(b) = bound.filter(|_| held.is_some() && (!wrap || sh.tried.load(SeqCst))) {
-            while s.tick(&Mono::now, &b, wrap, &sh.json) == Step::Again {}
+        if let Some(s) = &mut s {
+            held = held.or_else(|| state::lock_upload(&sh.dir));
+            let wrap = lock(&sh.wrap).is_some();
+            // Copied out, and the borrow dropped at once: the writer never waits on this thread.
+            let bound = match &durable {
+                Some(d) => d.borrow().point.clone().map(Bound::Durable),
+                None => Some(Bound::OnDisk),
+            };
+            let before = raw();
+            if let Some(b) = bound.filter(|_| held.is_some() && (!wrap || sh.tried.load(SeqCst))) {
+                while s.tick(&Mono::now, &b, wrap, &sh.json) == Step::Again {}
+            }
+            let now_sealed = held.is_some() && lock(&sh.json).final_ == Final::Sealed;
+            if raw() != before || (now_sealed && !std::mem::replace(&mut sealed, true)) {
+                prune::prune(&sh.dir, &sh.json, &sh.file);
+            }
+            sh.put(false);
         }
-        let now_sealed = held.is_some() && lock(&sh.json).final_ == Final::Sealed;
-        if raw() != before || (now_sealed && !std::mem::replace(&mut sealed, true)) {
-            prune::prune(&sh.dir, &sh.json, &sh.file);
-        }
-        sh.put(false);
-        queue.serve(&sh.home, &sh.dir);
+        queue.serve(&sh.home, (&sh.ids.0, &sh.ids.1));
     }
 }
 
@@ -373,7 +380,9 @@ fn final_due(b: &Beat, now: Mono, tried: bool, j: &UploadJson, link: &IndexLine)
 /// again whenever its backoff is due while it is not committed or once the last chunk is stored,
 /// until sealed.
 fn beat_thread(sh: &Shared, rx: &Receiver<()>) {
-    let mut b = sh.build(Beat::new);
+    let Some(mut b) = sh.build(Beat::new) else {
+        return;
+    };
     let (durable, rec_dir) = (sh.rec.as_ref().map(Recorder::durable), sh.dir.join("rec"));
     let (mut link, mut said) = (None::<IndexLine>, false);
     // Null mode: no writer runs, so the point and totals on disk are read once, when a beat is
@@ -445,8 +454,8 @@ fn beat_thread(sh: &Shared, rx: &Receiver<()>) {
 }
 
 impl UploadHandle {
-    /// The last heartbeat answer; None before the first one. With no uploader thread (a local
-    /// run, or nothing to send with) the value stays None and `changed()` never returns while the
+    /// The last heartbeat answer; None before the first one. With no beat thread (a local run, or
+    /// nothing to send with) the value stays None and `changed()` never returns while the
     /// handle lives.
     pub fn server_word(&self) -> watch::Receiver<Option<ServerWord>> {
         self.word.clone()
@@ -456,8 +465,9 @@ impl UploadHandle {
     /// sealed (section 6), until `upload.json` says `done`, `wrap_up` is over or no upload thread
     /// runs. Both threads then stop at their next tick, waited for a few seconds at most (a thread
     /// inside a call ends alone), and `upload.json` is written a last time with what they did.
-    /// If only the beat thread started, no chunk can go, so this does not wait and the final
-    /// heartbeat may not go out; the bytes stay on disk for a later upload.
+    /// If only the beat thread started, or the live entry has nothing to send with, no chunk can
+    /// go, so this does not wait and the final heartbeat may not go out; the bytes stay on disk
+    /// for a later upload.
     pub fn finish(self, wrap_up: WrapUp, seal: SealFacts) {
         let Some((sh, threads)) = self.run else {
             return;
@@ -467,7 +477,8 @@ impl UploadHandle {
             let _ = t.wake.send(());
         }
         let done = |j: &UploadJson| j.final_ == Final::Sealed && j.state == State::Done;
-        while !done(&lock(&sh.json))
+        while sh.client.is_some()
+            && !done(&lock(&sh.json))
             && !wrap_up.over(Mono::now())
             && threads.iter().any(|t| t.upload && !t.handle.is_finished())
         {
