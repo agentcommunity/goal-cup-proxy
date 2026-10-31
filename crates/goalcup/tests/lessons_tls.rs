@@ -27,38 +27,40 @@ fn extension<'a, 'b>(
         .map(|e| (e.parsed_extension(), e.critical))
 }
 
+/// The key identifier in the leaf's Authority Key Identifier; the leaf must carry one.
+fn aki_of(leaf_der: &[u8]) -> Vec<u8> {
+    let cert = parse(leaf_der);
+    let Some((ParsedExtension::AuthorityKeyIdentifier(aki), _)) = extension(&cert, |p| {
+        matches!(p, ParsedExtension::AuthorityKeyIdentifier(_))
+    }) else {
+        panic!("the leaf has no Authority Key Identifier")
+    };
+    aki.key_identifier
+        .as_ref()
+        .expect("a key identifier")
+        .0
+        .to_vec()
+}
+
 /// T1: the leaf names the CA key in its Authority Key Identifier. Python 3.13 refuses a leaf
 /// without it, so every Python harness would fail.
 #[test]
 fn leaf_aki_names_the_ca_key() {
     let ca = RunCa::mint(&subtrees()).unwrap();
-    let leaf = ca.leaf("api.openai.com").unwrap();
     let ca_der = ca.cert_der().to_vec();
     let ca_cert = parse(&ca_der);
-    let leaf_cert = parse(leaf.cert[0].as_ref());
-
     let Some((ParsedExtension::SubjectKeyIdentifier(ski), _)) = extension(&ca_cert, |p| {
         matches!(p, ParsedExtension::SubjectKeyIdentifier(_))
     }) else {
         panic!("the CA has no Subject Key Identifier")
     };
-    let Some((ParsedExtension::AuthorityKeyIdentifier(aki), _)) = extension(&leaf_cert, |p| {
-        matches!(p, ParsedExtension::AuthorityKeyIdentifier(_))
-    }) else {
-        panic!("the leaf has no Authority Key Identifier")
-    };
-    assert_eq!(aki.key_identifier.as_ref().map(|k| k.0), Some(ski.0));
+    let leaf = ca.leaf("api.openai.com").unwrap();
+    assert_eq!(aki_of(leaf.cert[0].as_ref()), ski.0);
 
     // The same holds for a CA that a later boot imported.
     let again = RunCa::import(&ca.export()).unwrap();
     let leaf = again.leaf("api.anthropic.com").unwrap();
-    let leaf_cert = parse(leaf.cert[0].as_ref());
-    let Some((ParsedExtension::AuthorityKeyIdentifier(aki), _)) = extension(&leaf_cert, |p| {
-        matches!(p, ParsedExtension::AuthorityKeyIdentifier(_))
-    }) else {
-        panic!("the imported CA's leaf has no Authority Key Identifier")
-    };
-    assert_eq!(aki.key_identifier.as_ref().map(|k| k.0), Some(ski.0));
+    assert_eq!(aki_of(leaf.cert[0].as_ref()), ski.0);
 }
 
 /// T2: pathLen 0, critical name constraints from the host list, one hour back, about 8 days

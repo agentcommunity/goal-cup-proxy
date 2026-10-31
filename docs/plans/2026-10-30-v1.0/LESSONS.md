@@ -39,27 +39,27 @@ lessons lane (PRD-17); read by the deletion gate (PRD-17 Acceptance, checks 1 to
 | L-C6 | 2.1 | A: lessons_connect::unlisted_refusal_is_one_round; A: lessons_connect::listed_refusal_is_retried; A: proxy_connect.rs (PRD-03, the reset rule); R: RR5 | PRD-17 | open | - |
 | L-C7 | 2.1 | R: RR1; A: lessons_connect::idle_tunnel_survives_120s (full tier) | PRD-17 | open | - |
 | L-C8 | 2.1 | A: lessons_connect::one_bad_handshake_leaves_others_relaying | PRD-17 | open | - |
-| L-C9 | 2.1 | A: proxy_connect.rs (PRD-03) | PRD-03 | open | - |
+| L-C9 | 2.1 | A: proxy_connect.rs (PRD-03) | PRD-03 | green | 7e620577 |
 | L-C10 | 2.1 | A: proxy_connect.rs (PRD-03); A: lessons_connect::listed_sni_to_a_local_fake_server_is_never_trusted | PRD-03, PRD-17 | open | - |
 | L-C11 | 2.1 | A: proxy_connect.rs (PRD-03); A: watchdog_rlimit.rs (PRD-02) | PRD-03 | open | - |
 | L-C12 | 2.1 | A: watchdog_restart.rs (PRD-02) | PRD-02 | open | - |
-| L-T1 | 2.2 | A: lessons_tls::leaf_aki_names_the_ca_key; R: RR3 | PRD-17 | open | - |
-| L-T2 | 2.2 | A: lessons_tls::ca_constraints_validity_and_leaf_shape | PRD-17 | open | - |
+| L-T1 | 2.2 | A: lessons_tls::leaf_aki_names_the_ca_key; R: RR3 | PRD-17 | green | 7e620577 |
+| L-T2 | 2.2 | A: lessons_tls::ca_constraints_validity_and_leaf_shape | PRD-17 | green | 7e620577 |
 | L-T3 | 2.2 | A: proxy_tls.rs (PRD-03); A: lessons_tls::untrusted_upstream_reaches_client_unchanged | PRD-03, PRD-17 | open | - |
 | L-T4 | 2.2 | A: lessons_tls::ca_files_are_new_0600_and_never_follow_a_link (run-ca.pem and bundle.pem only; the `rec/run-ca.key` case is pending until PRD-02's writer is on integration) | PRD-17 | open | - |
-| L-T5 | 2.2 | A: lessons_tls::bundle_holds_certificates_only_with_the_run_ca_first; A: lessons_tls::ca_files_are_new_0600_and_never_follow_a_link; R: RR5 | PRD-17 | open | - |
-| L-T6 | 2.2 | A: connector_launch.rs (PRD-11) | PRD-11 | open | - |
-| L-T7 | 2.2 | A: proxy_tls.rs (PRD-03, ALPN mirror matrix) | PRD-03 | open | - |
-| L-T8 | 2.2 | A: proxy_tls.rs (PRD-03) | PRD-03 | open | - |
+| L-T5 | 2.2 | A: lessons_tls::bundle_holds_certificates_only_with_the_run_ca_first; A: lessons_tls::ca_files_are_new_0600_and_never_follow_a_link; R: RR5 | PRD-17 | green | 7e620577 |
+| L-T6 | 2.2 | A: connector_launch.rs (PRD-11) | PRD-11 | green | 7e620577 |
+| L-T7 | 2.2 | A: proxy_tls.rs (PRD-03, ALPN mirror matrix) | PRD-03 | green | 7e620577 |
+| L-T8 | 2.2 | A: proxy_tls.rs (PRD-03) | PRD-03 | green | 7e620577 |
 | L-T9 | 2.2 | D: docs/PARTICIPANT-GUIDE.md known limits (PRD-15) | PRD-03, PRD-15 | open | - |
-| L-H1 | 2.3 | A: lessons_http1::head_scan_skips_blank_lines_and_takes_bare_lf | PRD-17 | open | - |
-| L-H2 | 2.3 | A: lessons_http1::unframeable_heads_relay_on_inside_a_named_loss; A: proxy_http1.rs (PRD-03, generic fault case) | PRD-17 | open | - |
-| L-H3 | 2.3 | A: lessons_http1::transfer_gzip_then_chunked_decodes | PRD-17 | open | - |
-| L-H4 | 2.3 | A: lessons_http1::chunked_split_at_every_byte_ends_exactly; A: lessons_http1::chunk_size_rules; A: proxy_http1.rs (PRD-03, trailers) | PRD-17 | open | - |
-| L-H5 | 2.3 | A: proxy_http1.rs (PRD-03); A: lessons_http1::framing_matrix | PRD-03, PRD-17 | open | - |
-| L-H6 | 2.3 | A: proxy_http1.rs (PRD-03); A: lessons_http1::informational_then_final_keeps_the_pair | PRD-03, PRD-17 | open | - |
-| L-H7 | 2.3 | A: proxy_http1.rs (PRD-03) | PRD-03 | open | - |
-| L-H8 | 2.3 | A: lessons_http1::eof_inside_a_body_is_interrupted; A: lessons_http1::request_after_upstream_close_is_marked_unsent | PRD-17 | open | - |
+| L-H1 | 2.3 | A: lessons_http1::head_scan_skips_blank_lines_and_takes_bare_lf | PRD-17 | green | 0fa43715 |
+| L-H2 | 2.3 | A: lessons_http1::unframeable_heads_stop_parsing_and_count_their_bytes (parser half); A: lessons_http1::unframeable_heads_relay_on_inside_a_named_loss (relay half, pending until `proxy::serve` is on integration); A: proxy_http1.rs (PRD-03, generic fault case) | PRD-17 | open | - |
+| L-H3 | 2.3 | A: lessons_http1::transfer_gzip_then_chunked_decodes | PRD-17 | green | 0fa43715 |
+| L-H4 | 2.3 | A: lessons_http1::chunked_split_at_every_byte_ends_exactly; A: lessons_http1::chunk_size_rules; A: proxy_http1.rs (PRD-03, trailers) | PRD-17 | green | 0fa43715 |
+| L-H5 | 2.3 | A: proxy_http1.rs (PRD-03); A: lessons_http1::framing_matrix | PRD-03, PRD-17 | green | 0fa43715 |
+| L-H6 | 2.3 | A: proxy_http1.rs (PRD-03); A: lessons_http1::informational_then_final_keeps_the_pair | PRD-03, PRD-17 | green | 0fa43715 |
+| L-H7 | 2.3 | A: proxy_tunnel::bytes_reach_the_peer_before_the_parser_and_sse_before_eof (PRD-03) | PRD-03 | green | 7e620577 |
+| L-H8 | 2.3 | A: lessons_http1::eof_inside_a_body_is_interrupted; A: lessons_http1::request_after_upstream_close_is_marked_unsent | PRD-17 | green | 0fa43715 |
 | L-H9 | 2.3 | A: lessons_http1::head_over_64k_relays_inside_a_named_loss | PRD-17 | open | - |
 | L-H10 | 2.3 | A: lessons_http1::authorization_forwarded_unchanged_and_starred_in_meta | PRD-17 | open | - |
 | L-H11 | 2.3 | A: lessons_http1::every_request_on_a_decrypted_host_is_recorded | PRD-17 | open | - |
@@ -68,61 +68,61 @@ lessons lane (PRD-17); read by the deletion gate (PRD-17 Acceptance, checks 1 to
 | L-D2 | 2.4 | A: lessons_decode::zstd_frame_ending_on_the_buffer_edge_is_complete; A: lessons_decode::zstd_cut_after_whole_pieces_is_a_gap; R: a pad run with a ChatGPT sign-in, else not shown in a real run | PRD-17 | open | - |
 | L-D3 | 2.4 | A: lessons_decode::gzip_two_members_and_a_bad_crc | PRD-17 | open | - |
 | L-D4 | 2.4 | A: lessons_decode::raw_and_zlib_deflate_split_after_byte_one | PRD-17 | open | - |
-| L-D5 | 2.4 | A: proxy_http1.rs (PRD-03) | PRD-03 | open | - |
+| L-D5 | 2.4 | A: proxy_http1.rs (PRD-03) | PRD-03 | green | 7e620577 |
 | L-D6 | 2.4 | A: lessons_decode::corrupt_tail_keeps_the_prefix (decoder layer only; the GAP and END records are shown once `proxy::serve` lands, see the note below the table) | PRD-17 | open | - |
 | L-D7 | 2.4 | A: lessons_decode::bomb_relays_on_in_bounded_pieces | PRD-17 | open | - |
 | L-D8 | 2.4 | A: lessons_decode.rs | PRD-17 | open | - |
-| L-W1 | 2.5 | A: proxy_ws.rs (PRD-03); R: RR1 | PRD-03 | open | - |
-| L-W2 | 2.5 | A: lessons_ws::negotiation_accepts_only_rfc7692; A: lessons_ws::unknown_extension_relays_inside_a_named_loss | PRD-17 | open | - |
-| L-W3 | 2.5 | A: lessons_ws::server_max_window_bits_10_decodes | PRD-17 | open | - |
-| L-W4 | 2.5 | A: lessons_ws::guard_drop_keeps_the_next_message_decodable; R: RR1 | PRD-17 | open | - |
-| L-W5 | 2.5 | A: lessons_ws::bfinal_ends_takeover_history | PRD-17 | open | - |
-| L-W6 | 2.5 | A: lessons_ws::one_byte_reads_decode_the_same | PRD-17 | open | - |
-| L-W7 | 2.5 | A: lessons_ws::violations_are_named_and_relaying_goes_on | PRD-17 | open | - |
-| L-W8 | 2.5 | A: proxy_ws.rs (PRD-03) | PRD-03 | open | - |
+| L-W1 | 2.5 | A: proxy_ws.rs (PRD-03); R: RR1 | PRD-03 | green | 7e620577 |
+| L-W2 | 2.5 | A: lessons_ws::negotiation_accepts_only_rfc7692 (parser half); A: lessons_ws::unknown_extension_relays_inside_a_named_loss (parser half; relay half and the conn GAP pending until `proxy::serve`) | PRD-17 | open | - |
+| L-W3 | 2.5 | A: lessons_ws::server_max_window_bits_10_decodes | PRD-17 | green | 0fa43715 |
+| L-W4 | 2.5 | A: lessons_ws::takeover_history_carries_between_messages (the guard drop itself is structural, see the test comment); R: RR1 | PRD-17 | open | - |
+| L-W5 | 2.5 | A: lessons_ws::bfinal_ends_takeover_history | PRD-17 | green | 0fa43715 |
+| L-W6 | 2.5 | A: lessons_ws::one_byte_reads_decode_the_same | PRD-17 | green | 0fa43715 |
+| L-W7 | 2.5 | A: lessons_ws::violations_are_named_and_relaying_goes_on (parser half; relay half and the 5a GAP pending until `proxy::serve`) | PRD-17 | open | - |
+| L-W8 | 2.5 | A: proxy_ws.rs (PRD-03) | PRD-03 | green | 7e620577 |
 | L-W9 | 2.5 | A: lessons_ws::upgrade_101_and_first_frame_in_one_write | PRD-17 | open | - |
 | L-W10 | 2.5 | A: lessons_ws::rejected_upgrade_stays_http; A: lessons_ws::bad_accept_is_a_named_loss_not_a_websocket | PRD-17 | open | - |
 | L-W11 | 2.5 | A: lessons_ws::an_upgrade_on_any_path_is_recorded | PRD-17 | open | - |
-| L-W12 | 2.5 | A: lessons_ws::a_long_message_is_offered_before_its_last_frame | PRD-17 | open | - |
-| L-W13 | 2.5 | A: lessons_ws::eof_mid_message_is_interrupted | PRD-17 | open | - |
+| L-W12 | 2.5 | A: lessons_ws::a_long_message_is_offered_before_its_last_frame | PRD-17 | green | 0fa43715 |
+| L-W13 | 2.5 | A: lessons_ws::eof_mid_message_is_interrupted | PRD-17 | green | 0fa43715 |
 | L-W14 | 2.5 | R: RR1 | PRD-12 | open | - |
 | L-K1 | 2.6 | A: mask_stream::every_split_equals_the_whole_record_masker (PRD-05) | PRD-05 | green | f5a200ae |
-| L-K2 | 2.6 | A: mask_rules.rs (PRD-05) | PRD-05 | open | - |
-| L-K3 | 2.6 | A: mask_stream.rs (PRD-05) | PRD-05 | open | - |
-| L-K4 | 2.6 | A: mask_corpus.rs (PRD-05); A: mask_stream.rs (PRD-05) | PRD-05 | open | - |
+| L-K2 | 2.6 | A: mask_rules.rs (PRD-05) | PRD-05 | green | 7e620577 |
+| L-K3 | 2.6 | A: mask_stream.rs (PRD-05) | PRD-05 | green | 7e620577 |
+| L-K4 | 2.6 | A: mask_corpus.rs (PRD-05); A: mask_stream.rs (PRD-05) | PRD-05 | green | 7e620577 |
 | L-K5 | 2.6 | A: mask_rules::the_left_guard_keeps_escapes_and_drops_glue (PRD-05); A: mask_rules::a_base64url_blob_with_key_prefixes_inside_is_left_alone (PRD-05); R: RR1 (PRD-05 A2) | PRD-05 | green | f5a200ae |
-| L-K6 | 2.6 | A: mask_meta.rs (PRD-05); R: PRD-05 A3; R: RR2 | PRD-05 | open | - |
-| L-K7 | 2.6 | A: mask_rules.rs (PRD-05) | PRD-05 | open | - |
-| L-K8 | 2.6 | A: mask_stream.rs (PRD-05) | PRD-05 | open | - |
-| L-K9 | 2.6 | A: mask_stream.rs (PRD-05) | PRD-05 | open | - |
+| L-K6 | 2.6 | A: mask_meta.rs (PRD-05); A: mask::meta::tests (PRD-05, the unit cases of the header rules); R: PRD-05 A3; R: RR2 | PRD-05 | green | 7e620577 |
+| L-K7 | 2.6 | A: mask_rules.rs (PRD-05) | PRD-05 | green | 7e620577 |
+| L-K8 | 2.6 | A: mask_stream.rs (PRD-05) | PRD-05 | green | 7e620577 |
+| L-K9 | 2.6 | A: mask_stream.rs (PRD-05) | PRD-05 | green | 7e620577 |
 | L-K10 | 2.6 | A: mask_corpus::the_billing_header_in_a_system_prompt_is_masked (PRD-05); R: RR2 | PRD-05, PRD-11 | green | f5a200ae |
-| L-K11 | 2.6 | A: mask_rules.rs (PRD-05) | PRD-05, PRD-11 | open | - |
+| L-K11 | 2.6 | A: mask_rules.rs (PRD-05) | PRD-05, PRD-11 | green | 7e620577 |
 | L-K12 | 2.6 | A: mask_rules::url_password_cases (PRD-05); A: mask_rules::long_url_credentials_stay_masked (PRD-05); X: ledger M1 | PRD-05 | green | f5a200ae |
 | L-K13 | 2.6 | X: PRD-00, PRD-03 rule 5 | none | open | - |
-| L-K14 | 2.6 | A: pipeline_secure.rs (PRD-02); R: PRD-12 C3 | PRD-02, PRD-12 | open | - |
+| L-K14 | 2.6 | A: pipeline_secure.rs (PRD-02); R: PRD-12 C3 | PRD-02, PRD-12 | green | 7e620577 |
 | L-K15 | 2.6 | A: mask_stream::a_fail_closed_window_ends_at_the_message (PRD-05); A: lessons_ws::fail_closed_ends_at_message_end; R: RR1 | PRD-05, PRD-17 | open | - |
 | L-K16 | 2.6 | A: mask_stream::an_email_and_a_codex_rate_limit_object_stream_through (PRD-05); X: ledger M1 | PRD-05 | green | f5a200ae |
-| L-N1 | 2.7 | A: lessons_hosts::authority_with_backslash_or_control_is_never_a_host | PRD-17 | open | - |
-| L-N2 | 2.7 | A: lessons_hosts::unspecified_and_mapped_loopback_reach_this_computer | PRD-17 | open | - |
-| L-N3 | 2.7 | A: lessons_hosts::loopback_names_and_numeric_labels_are_refused | PRD-17 | open | - |
-| L-N4 | 2.7 | A: lessons_hosts::host_shape | PRD-17 | open | - |
-| L-N5 | 2.7 | A: lessons_hosts::the_event_server_is_never_listed | PRD-17 | open | - |
-| L-N6 | 2.7 | A: lessons_hosts::a_name_resolving_only_here_is_skipped | PRD-17 | open | - |
-| L-N7 | 2.7 | A: connector_hints.rs (PRD-11) | PRD-11 | open | - |
-| L-N8 | 2.7 | A: connector_launch.rs (PRD-11); A: connector_hints.rs (PRD-11) | PRD-11 | open | - |
+| L-N1 | 2.7 | A: lessons_hosts::authority_with_backslash_or_control_is_never_a_host | PRD-17 | green | 7e620577 |
+| L-N2 | 2.7 | A: lessons_hosts::unspecified_and_mapped_loopback_reach_this_computer | PRD-17 | green | 7e620577 |
+| L-N3 | 2.7 | A: lessons_hosts::loopback_names_and_numeric_labels_are_refused | PRD-17 | green | 7e620577 |
+| L-N4 | 2.7 | A: lessons_hosts::host_shape | PRD-17 | green | 7e620577 |
+| L-N5 | 2.7 | A: lessons_hosts::the_event_server_is_never_listed | PRD-17 | green | 7e620577 |
+| L-N6 | 2.7 | A: lessons_hosts::a_name_resolving_only_here_is_skipped | PRD-17 | green | 7e620577 |
+| L-N7 | 2.7 | A: connector_hints.rs (PRD-11) | PRD-11 | green | 7e620577 |
+| L-N8 | 2.7 | A: connector_launch.rs (PRD-11); A: connector_hints.rs (PRD-11) | PRD-11 | green | 7e620577 |
 | L-N9 | 2.7 | X: ledger H2, PRD-03 rule 2 | none | open | - |
 | L-P1 | 2.8 | A: watchdog_restart.rs (PRD-02); R: RR4 | PRD-02 | open | - |
 | L-P2 | 2.8 | A: proxy_restart.rs (PRD-03); A: watchdog_restart.rs (PRD-02); R: RR4 | PRD-02, PRD-03 | open | - |
-| L-P3 | 2.8 | A: lessons_launch::ctrl_c_reaches_the_harness_and_the_watchdog_lives | PRD-17 | open | - |
-| L-P4 | 2.8 | A: lessons_launch::a_tui_child_reads_the_terminal | PRD-17 | open | - |
-| L-P5 | 2.8 | A: lessons_launch::modes_restored_after_a_raw_exit | PRD-17 | open | - |
-| L-P6 | 2.8 | A: watchdog_rlimit.rs (PRD-02); R: PRD-02 R4; R: RR6 | PRD-02 | open | - |
+| L-P3 | 2.8 | A: lessons_launch::ctrl_c_reaches_the_harness_and_the_watchdog_lives (held back with `ignore`; fails 1 in 9 under load until the PRD-02 shield keeps INT, QUIT and TSTP caught, or drains a pending signal, before giving them back) | PRD-17, PRD-02 | open | - |
+| L-P4 | 2.8 | A: lessons_launch::a_tui_child_reads_the_terminal | PRD-17 | green | 0fa43715 |
+| L-P5 | 2.8 | A: lessons_launch::modes_restored_after_a_raw_exit | PRD-17 | green | 0fa43715 |
+| L-P6 | 2.8 | A: watchdog_rlimit.rs (PRD-02); R: PRD-02 R4; R: RR6 | PRD-02 | green | 7e620577 |
 | L-P7 | 2.8 | A: watchdog_end.rs (PRD-02) | PRD-02 | open | - |
 | L-P8 | 2.8 | A: pipeline_seal.rs (PRD-02); R: PRD-11 acceptance 5 | PRD-02 | open | - |
-| L-P9 | 2.8 | A: connector_launch.rs (PRD-11); R: PRD-12 gateway case | PRD-11 | open | - |
-| L-P10 | 2.8 | A: connector_launch.rs (PRD-11) | PRD-11 | open | - |
+| L-P9 | 2.8 | A: connector_launch.rs (PRD-11); R: PRD-12 gateway case | PRD-11 | green | 7e620577 |
+| L-P10 | 2.8 | A: connector_launch.rs (PRD-11) | PRD-11 | green | 7e620577 |
 | L-P11 | 2.8 | A: connector_launch::with_home_swapped_a_login_shell_finds_goalcup (PRD-11); R: PRD-10 acceptance 7 | PRD-11 | green | f5a200ae |
-| L-P12 | 2.8 | A: connector_launch.rs (PRD-11) | PRD-11 | open | - |
+| L-P12 | 2.8 | A: connector_launch.rs (PRD-11) | PRD-11 | green | 7e620577 |
 | L-P13 | 2.8 | R: RR6 (PRD-12 P9) | PRD-11 | open | - |
 | L-P14 | 2.8 | A: cli_commands.rs (PRD-10) | PRD-10 | open | - |
 | L-P15 | 2.8 | A: pipeline_seal.rs (PRD-02) | PRD-02 | open | - |
@@ -144,14 +144,14 @@ lessons lane (PRD-17); read by the deletion gate (PRD-17 Acceptance, checks 1 to
 | L-S8 | 2.10 | R: PRD-06 U2; R: PRD-06 U5 | PRD-06 | open | - |
 | L-S9 | 2.10 | R: PRD-06 U3 | PRD-06 | open | - |
 | L-S10 | 2.10 | A: device.test.ts (PRD-07); A: lifecycle.test.ts (PRD-07) | PRD-07 | green | b474329d |
-| L-R1 | 2.11 | A: pipeline_no_latch.rs (PRD-02) | PRD-02 | open | - |
-| L-R2 | 2.11 | A: pipeline_guard.rs (PRD-02); A: pipeline_stall.rs (PRD-02) | PRD-02 | open | - |
+| L-R1 | 2.11 | A: pipeline_guard::a_thousand_guard_episodes_never_latch (PRD-02) | PRD-02 | green | 7e620577 |
+| L-R2 | 2.11 | A: pipeline_guard.rs (PRD-02); A: lessons_pipeline::open_and_end_survive_a_full_guard; A: pipeline_stall.rs (PRD-02) | PRD-02 | open | - |
 | L-R3 | 2.11 | A: check_invariants.rs (PRD-08, invariant 12 gap_has_end); A: proxy_http1.rs (PRD-03, fault case); A: see L-H2, L-H9, L-W2, L-W7, L-W10 | PRD-08, PRD-03 | open | - |
 | L-R4 | 2.11 | R: PRD-02 R3; R: PRD-10 acceptance 1 | PRD-02, PRD-10 | open | - |
 | L-R5 | 2.11 | A: golden.rs (PRD-01); A: proxy_ws.rs (PRD-03); R: RR1 | PRD-01, PRD-03 | open | - |
 | L-R6 | 2.11 | A: proxy_connect.rs (PRD-03) | PRD-03 | open | - |
 | L-R7 | 2.11 | R: PRD-12 C1 | PRD-12 | open | - |
-| L-R8 | 2.11 | A: mask_meta.rs (PRD-05); R: RR1 | PRD-05, PRD-09 | open | - |
+| L-R8 | 2.11 | A: mask_meta.rs (PRD-05); R: RR1 | PRD-05, PRD-09 | green | 7e620577 |
 | L-HF1 | 2.12 | R: PRD-11 acceptance 5; R: RR3 | PRD-11 | open | - |
 | L-HF2 | 2.12 | R: RR6 | PRD-11 | open | - |
 | L-HF3 | 2.12 | D: connectors/hermes-cli.toml before, after; A: watchdog_end.rs (PRD-02) | PRD-11, PRD-02 | open | - |
@@ -159,19 +159,19 @@ lessons lane (PRD-17); read by the deletion gate (PRD-17 Acceptance, checks 1 to
 | L-HF5 | 2.12 | A: connector_launch::codex_gets_no_dash_c_override (PRD-11); D: connectors/codex-cli.toml args | PRD-11 | green | f5a200ae |
 | L-HF6 | 2.12 | A: cli_continue.rs (PRD-10); D: docs/plans/2026-10-30-v1.0/PRD-10-cli-participant.md section 3.1 step 3 | PRD-10 | open | - |
 | L-HF7 | 2.12 | R: PRD-12 pass rule | PRD-12 | open | - |
-| L-HF8 | 2.12 | A: connector_hosts.rs (PRD-11) | PRD-11 | open | - |
+| L-HF8 | 2.12 | A: connector_hosts.rs (PRD-11) | PRD-11 | green | 7e620577 |
 | L-G1 | 2.13 | A: see L-H11; R: PRD-12 P4 gateway rows | PRD-17, PRD-09 | open | - |
 | L-G2 | 2.13 | D: connectors/model-hosts.toml (kind: gateway entries); R: PRD-12 P4 | PRD-11, PRD-12 | open | - |
-| L-G3 | 2.13 | A: connector_launch.rs (PRD-11) | PRD-11 | open | - |
+| L-G3 | 2.13 | A: connector_launch.rs (PRD-11) | PRD-11 | green | 7e620577 |
 | L-G4 | 2.13 | R: PRD-12 gateway case config | PRD-12 | open | - |
 | L-G5 | 2.13 | R: PRD-12 pad boxes (--non-persistent, tmux) | PRD-12 | open | - |
-| L-FW1 | 2.14 | A: pipeline_guard.rs (PRD-02) | PRD-02 | open | - |
+| L-FW1 | 2.14 | A: pipeline_guard.rs (PRD-02); A: lessons_pipeline::open_and_end_survive_a_full_guard | PRD-02 | open | - |
 | L-FW2 | 2.14 | A: recovery::a_part_file_cut_at_any_byte_recovers_to_its_last_index_line (PRD-01) | PRD-01 | green | f5b0a6a2 |
 | L-FW3 | 2.14 | A: server_compare::missing_middle_chunk_fails (PRD-08); A: server_compare::fw3_pruned_entry_is_named_and_server_copy_stands_in (PRD-08) | PRD-08 | green | f5a200ae |
-| L-FW4 | 2.14 | A: check_invariants.rs (PRD-08) | PRD-08 | open | - |
+| L-FW4 | 2.14 | A: check_invariants.rs (PRD-08) | PRD-08 | green | 7e620577 |
 | L-FW5 | 2.14 | A: recovery::a_part_file_cut_at_any_byte_recovers_to_its_last_index_line (PRD-01); A: recovery::a_boot_with_no_index_line_is_deleted_and_an_r_closed_part_file_takes_a_second_frame (PRD-01); A: recovery::a_sealed_entry_takes_nothing_more (PRD-01) | PRD-01 | green | f5b0a6a2 |
 | L-FW6 | 2.14 | A: pipeline_seal.rs (PRD-02); A: check_invariants.rs (PRD-08) | PRD-02, PRD-08 | open | - |
-| L-FW7 | 2.14 | A: check_invariants.rs (PRD-08); A: recovery.rs (PRD-01) | PRD-01, PRD-08 | open | - |
+| L-FW7 | 2.14 | A: check_invariants.rs (PRD-08); A: recovery.rs (PRD-01) | PRD-01, PRD-08 | green | 7e620577 |
 | L-FW8 | 2.14 | A: recovery::a_part_file_cut_at_any_byte_recovers_to_its_last_index_line (PRD-01); R: RR4 | PRD-01 | green | f5b0a6a2 |
 | L-FW9 | 2.14 | A: server_compare::fw9_one_flipped_byte_fails_the_copy (PRD-08) | PRD-08 | green | f5a200ae |
 | L-VR1 | 2.15 | A: check_invariants.rs (PRD-08) | PRD-08 | open | - |
@@ -186,11 +186,27 @@ lessons lane (PRD-17); read by the deletion gate (PRD-17 Acceptance, checks 1 to
 | L-SC6 | 2.16 | A: cli_finish::unsealed_status_never_reads_as_finished (PRD-10) | PRD-10 | green | f5a200ae |
 | L-SC7 | 2.16 | X: ledger L5, L6 (PRD-10 section 4) | PRD-10 | open | - |
 
-**Pending record halves.** `lessons_decode.rs` (D1 to D4, D6) drives `proxy::decode` alone, so it
-shows the decoded prefix and the `Step`, not the GAP `decode_failed` and END `decode_error` records.
-L-D1 to L-D4 and L-D6 are not flipped until the record half runs through `proxy::serve` with the
-fake client (L-D8), in `lessons_http1.rs` or by extending those tests. L-T4 likewise waits for the
-`rec/run-ca.key` case. L-VR2 waits for PRD-09's named `usage` case.
+**Still waiting on `proxy::serve`.** `proxy::serve` is not on integration (only the branch
+`prd-03-proxy-serve` has it), so the record halves stay `open`: D1 to D4 and D6 (`lessons_decode.rs` drives
+`proxy::decode` alone and shows the decoded prefix and the `Step`, not the GAP `decode_failed` and END
+`decode_error` records; D8 is the whole-path case), D7, the relay halves of H2, W2 and W7 (`lessons_ws.rs` runs at the parser layer and shows no relayed byte and no conn GAP), H9 to H11, W9 to W11, the
+`lessons_connect.rs` C-rows (the file does not exist yet), K15 (whole path, with `lessons_ws.rs`), T3 and
+SC3. L-T4 waits for the `rec/run-ca.key` case: nothing in `crates/goalcup/src` writes that file, `proxy/ca.rs`
+only has a comment saying it is PRD-02's, and the question is logged for PRD-02. L-VR2 waits for PRD-09's
+named `usage` case. Rows whose named file is not on integration (`pipeline_stall.rs`, `pipeline_seal.rs`,
+`watchdog_restart.rs`, `watchdog_end.rs`, `proxy_restart.rs`, `cli_continue.rs`) stay `open`. L-P3 stays
+`open`: its test is held back with `ignore` until the PRD-02 shield fix is on integration.
+
+**Checked and left `open`.** FW1: `pipeline_guard.rs` never opens a stream while the guard is full, so it
+does not show "OPEN is always admitted"; `lessons_pipeline::open_and_end_survive_a_full_guard` covers it
+and is named in the FW1 and R2 rows; both stay `open` until a box run on the integration head proves it (R2
+also names `pipeline_stall.rs`). C11 names a 2,000-connection case
+that is not in `proxy_connect.rs`. R6 needs a `conn` record, which only `proxy::serve` writes. P14 and HF4
+name tests (`no timer under 15 min`, `cli_commands::second_start_on_one_home_refuses`) that are not in
+`cli_commands.rs`. VR1 shows the exit 2 for a torn tail but not the allocation bound. Rows with an `R:` guard
+stay `open` until the real run is shown. Gate check 1 dry run (nextest list, 0fa43715 plus this lane): no
+renamed guard was found; every row listed above that fails the list check is a named pending case or a file
+that does not exist yet.
 
 ## Real-run rows
 

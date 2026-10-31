@@ -1055,3 +1055,18 @@ PRDs they touch and the code. Where two fixes disagree, the ledger and the later
 - **`test-hooks`:** `Masker::passthrough_for_tests` is compiled under `feature = "test-hooks"` alone (the
   clear-masker gate of the PRD-05 note is in).
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 31 Oct, from the PRD-17 slice 2 review
+
+- **nextest:** add `lessons_launch` to the heavy binary filter in `.config/nextest.toml` (it starts pty
+  helpers and the watchdog; run alone to keep it steady).
+- **Test budget:** PRD-17 lessons tests are 2,610 lines of the 3,000 shared with this PRD. Only about 390 remain
+  for everything else in the shared row, so PRD-14 tests should be few and push shared helpers into
+  `tests/common/` (`encode` for gzip, zlib and raw deflate; recorder `sid_of`, `end_reason`, `gap_reasons`),
+  after which PRD-17 deletes its private copies. No locked ledger item is touched.
+
+### 2026-10-31, replan after PRD-06 slice 6 (merge 114202ae)
+
+`crates/goalcup/tests/upload_common/` (shared part-folder and fake Worker builder) is PRD-06's under the
+`upload_` prefix. Do not move it; PRD-17 may fold it into `tests/common/` later. No locked ledger item is
+touched.

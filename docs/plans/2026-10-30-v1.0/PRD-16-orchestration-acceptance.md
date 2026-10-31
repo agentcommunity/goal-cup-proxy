@@ -2346,3 +2346,51 @@ kept and now cites BUILD-PROMPT section 5, since B3 no longer carries it.
   manual waiting behind a live `upload.lock`, seal detection by last line, `counts.jsonl` not synced before
   prune. Three nits remain (PRD-06 note). No locked ledger item is touched and no owner question comes
   from this slice.
+
+### 31 Oct, after PRD-17 slice 2 (merge 0b661e6e)
+
+- **Size report, PRD-17** (`wc -l` on integration at 0b661e6e): `lessons_hosts.rs` 184, `lessons_decode.rs` 388,
+  `lessons_tls.rs` 260, `lessons_http1.rs` 667, `lessons_ws.rs` 703, `lessons_launch.rs` 408, total 2,610 test
+  lines against the 3,000 shared by lessons and PRD-14 in PRD-00 "Size budget" (87%, PRD-14's share not yet
+  counted). PRD-17 merged no src. Remaining lessons files must stay near 300 lines or the shared row is over;
+  only a Rust test total past about 14,200 becomes the owner question.
+- **Gate effect:** L-P3 (ctrl-c) is held back with `ignore` until PRD-02 fixes the Shield race (PRD-02
+  note); the deletion gate does not count it green. Other pending rows are listed in the PRD-17 note.
+  PRD-14 is asked to put `lessons_launch` in the heavy nextest filter. No build-order, seam or phase-check
+  change. No locked ledger item is touched; the shield race was logged as an owner question for PRD-02's lane,
+  not a ledger change.
+
+### 31 Oct, after PRD-10 slice 7 (merge c3f4638c)
+
+- **Size report, PRD-10** (`wc -l` on integration at 0fa43715): `cli/*.rs` 4,437 lines (`text.rs` 1,250,
+  `mod.rs` 484, `approve.rs` 457, `start.rs` 361, `status.rs` 349) against the PRD-00 row of about 2,900, 153%.
+  CLI tests (`tests/cli_*.rs`) 2,265 against 1,200. The excess serves points 3 and 6 (plain words to the
+  participant); the decision line is recorded. Past 10% over, the next slice must cut `text.rs` before adding.
+- **Gate effect:** none on build order or seams. The hand-over, `continue`, recover and seal-on-a-dead-entry wait
+  on `watchdog::run`, `watchdog::recover` and `pipeline::close_dead_entry` (PRD-02, PRD-06 slice 6). Total
+  Rust size is the owner question only past about 14,200 test lines; the CLI overage alone is not one.
+  No locked ledger item is touched.
+
+### 2026-10-31, replan after PRD-17 slice 3 (merge 2ad2ed16)
+
+- **Size report, PRD-17** (`wc -l` on integration at 2ad2ed16): `tests/lessons_*.rs` 2,711 lines against the
+  3,000 line row shared with PRD-14 (90%, about 290 left). PRD-17 has no src row (0). Over budget is the owner
+  question only past about 14,200 total test lines; not reached.
+- **Gate effect:** none on build order or seams. Deletion gate check 1 has had a dry run; its rows stay open
+  until an integration-head box run, and the L-P3 ctrl-c case and the serve halves still block counting green.
+  The slice title claimed a helper dedupe it only partly did; the merge record is not edited. No locked ledger item is touched.
+
+### 2026-10-31, replan after PRD-03 slice 3 (merge c81e8e9b)
+
+- **Size report, PRD-03** (`wc -l` on integration): `proxy/*.rs` 5,171 lines against the PRD-00 row of 4,250 (4,400 replanned), 122% and 118%. `h2.rs` is still to come and would bring src to about 6,970. Proxy tests about 3,250 against 2,000. The excess serves points 1, 2 and 3 (full wire record, no stall); the decision lines are recorded. The `h2.rs` slice must cut before adding and delete `H2Unparsed` and `stop_h2`. Total test lines are the owner question only past about 14,200; check at the next size report.
+- **Gate effect:** `serve` is on integration, so the build-order step "PRD-02 slice A (boot.rs)" and the PRD-17 serve halves are unblocked. `h2.rs` stays the last PRD-03 slice; acceptance rows that need h2 (3 and the h2 parts of PRD-12) wait on it. No seam or phase-check change. No locked ledger item is touched.
+
+### 2026-10-31, replan after PRD-06 slice 6 (merge 114202ae)
+
+- **Size report, PRD-06** (`wc -l` on integration): `src/upload/*.rs` 3,283 against the PRD-00 row of
+  940 and the replanned 2,500; `tests/upload_*.rs` 2,765 against 1,000 and 1,900. Third row over, with
+  connector and usage. No cut known; carry to the end-of-build report.
+- **Build order:** PRD-06 slice 7 (dead-entry close) waits for `dead.rs`; PRD-02 must call
+  `Board::sealed` before the queue sees a real entry. Acceptance of the queue on a real recorder run
+  depends on both.
+- No locked ledger item is touched.

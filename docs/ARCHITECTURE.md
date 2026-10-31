@@ -31,9 +31,10 @@ checking code.
 
 ## 3. The one process
 
-The mask worker and the writer are merged. The watchdog's `run` and `recover` are not yet (PRD-02
-slice A and B); read the bullets below on restart, null mode and `recover` as the design they will
-meet, not as merged code.
+The proxy, the native reader, the held-bytes guard, the mask worker, the writer and the uploader
+are merged, and so are the watchdog's spawn and shield helpers. The watchdog's `run` and `recover`
+are not yet (PRD-02 slice A and B); read the bullets below on restart, null mode and `recover` as
+the design they will meet, not as merged code.
 
 ```mermaid
 flowchart LR

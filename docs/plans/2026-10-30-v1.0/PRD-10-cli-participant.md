@@ -1508,3 +1508,26 @@ What the pad calls, as merged (PRD-12 note):
   slice 6 (it calls `close_dead_entry` inside `run`); until then show the `continue` line, as `seal` does.
   `Refused`, `Closed`, `Stuck` and `NoServer` take the section 10 lines; none is shown with a status code or
   token (point 4).
+
+### 2026-10-31, start order and upload source (PRD-10 fixer)
+
+- **`goalcup start` checks in this order:** `connector::load` (reads only), then the folder checks, then
+  `connector::plan`, then the mask check. The plan makes the harness home, takes its lock and runs the
+  harness `--version`, so it never runs before the folder check: a refused start leaves the project folder
+  and `$GOALCUP_HOME` as they were. Folder problems are listed with or without a saved harness; with none
+  saved and a clean folder the refusal is `no harness picked`.
+- **`goalcup upload` reads the run's own `server.json`, not `GOALCUP_SERVER`.** A run recorded against a
+  server sends whatever the environment says; a run with no server is `Local`.
+- `--practice` conflicts with `--test` and `--repo` (a practice run has no GitHub repository).
+
+### 2026-10-31, replan after PRD-10 slice 7 (merge c3f4638c)
+
+- Merged: the pre-launch half of `start`, the `goalcup upload` dispatch and the `text.rs` give-back. Review
+  ended with no open defect; one nit is declined: in `upload_outcome` the `Done | AlreadyThere` arm repeats
+  `upload_line`. The next slice may fold it when it touches that function; it is not a gate item.
+- `cli/` src is 4,437 lines (`wc -l` of `crates/goalcup/src/cli/*.rs`, `main.rs` excluded) against the row of
+  about 2,900. `text.rs` is 1,250. The decision line (points 3 and 6) is in the lane log and PRD-16.
+- Still not built, as before: `watchdog::run`, `watchdog::recover` and `pipeline::close_dead_entry` are not on
+  integration, so the hand-over, `continue`, recover and seal-on-a-dead-entry stay for the next slice. That
+  slice must be net-negative in `text.rs` (fold sentence families) before it adds its lines.
+- No locked ledger item is touched and no owner question comes from this slice.
