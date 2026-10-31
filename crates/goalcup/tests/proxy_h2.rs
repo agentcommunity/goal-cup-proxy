@@ -632,9 +632,10 @@ fn a_header_block_split_across_the_replay_opens_its_response() {
     let (first, rest) = five.split_at(12);
     let (_, opening) = down(&[ok(3, "")]);
     let (_, client) = up(&[req(3, "GET", "/a"), req(5, "GET", "/b")]);
+    let big = [body(3, false, &[b'z'; 70_000]), first.to_vec()].concat();
     for (dir, bytes) in [
         (Dir::Down, opening),
-        (Dir::Down, [body(3, false, &[b'z'; 70_000]), first.to_vec()].concat()),
+        (Dir::Down, big),
         (Dir::Down, [rest.to_vec(), body(5, true, b"five")].concat()),
         (Dir::Up, client),
     ] {
