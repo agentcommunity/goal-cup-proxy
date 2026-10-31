@@ -291,7 +291,7 @@ async fn accepts_wait_while_descriptors_are_short_and_never_refuse() {
 }
 
 /// A client that closes after the `200` without a byte, as a cancelled request does, loses
-/// nothing: its conn on a listed host carries no GAP.
+/// nothing: its conn on a listed host keeps its listed meta and carries no GAP.
 #[tokio::test]
 async fn a_connect_abandoned_before_any_byte_names_no_loss() {
     let up = echo(b"");
@@ -301,6 +301,8 @@ async fn a_connect_abandoned_before_any_byte_names_no_loss() {
     );
     drop(through(addr, "api.openai.com:443").await);
     let got = conns(&calls, 1).await;
+    let class = (got[0].1["listed"].clone(), got[0].1["kind"].clone());
+    assert_eq!(class, (json!("shared"), json!("provider")));
     assert_eq!(
         (got[0].2["up"].as_u64(), got[0].2["down"].as_u64()),
         (Some(0), Some(0))

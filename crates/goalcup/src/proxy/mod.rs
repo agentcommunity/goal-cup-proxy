@@ -252,8 +252,8 @@ async fn connection(b: Arc<Boot>, mut client: TcpStream, hold: Admitted) {
     if connect::answer(&mut client, 200).await.is_err() {
         return;
     }
-    // A client that closes before sending a byte (a call cancelled while connecting) loses
-    // nothing, so its tunnel is not a listed host's loss even on a listed host.
+    // A client that closes before sending a byte (a call cancelled while connecting) keeps its
+    // listed meta; `name_loss` names no GAP while no byte moved.
     let first = match head.rest.is_empty() {
         false => head.rest.clone(),
         true => match connect::first_bytes(&mut client, &mut up).await {
@@ -263,7 +263,7 @@ async fn connection(b: Arc<Boot>, mut client: TcpStream, hold: Admitted) {
                 return run_tunnel(&b, hold, c, client, up).await;
             }
             First::ClientClosed | First::ServerClosed => {
-                let c = tc("not_tls", None, None, Bytes::new(), Bytes::new());
+                let c = tc("not_tls", connect_listed, None, Bytes::new(), Bytes::new());
                 return run_tunnel(&b, hold, c, client, up).await;
             }
         },
@@ -286,8 +286,7 @@ async fn connection(b: Arc<Boot>, mut client: TcpStream, hold: Admitted) {
             return finish(rec, conn, p, |c| c, |plain| plain);
         }
         Hello::NotTls(bytes) | Hello::Closed(bytes) => {
-            let listed = connect_listed.filter(|_| !bytes.is_empty());
-            let c = tc("not_tls", listed, None, bytes, Bytes::new());
+            let c = tc("not_tls", connect_listed, None, bytes, Bytes::new());
             return run_tunnel(&b, hold, c, client, up).await;
         }
     };

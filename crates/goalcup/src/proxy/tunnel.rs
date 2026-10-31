@@ -57,8 +57,12 @@ impl TunnelConn {
     }
 
     /// A tunnel to a listed host is a named loss: the GAP its reason names, `lost` bytes from
-    /// `at`. A `hello_too_big` GAP names its guard unless `tail` says more.
+    /// `at`. A `hello_too_big` GAP names its guard unless `tail` says more. A tunnel where no
+    /// byte moved lost nothing, so it names no GAP.
     pub fn name_loss(&self, conn: &mut StreamHandle, at: Mono, lost: u64, tail: Option<Value>) {
+        if lost == 0 {
+            return;
+        }
         let Some(reason) = self.listed.and(goalcup_format::tunnel_gap(self.reason)) else {
             return;
         };
