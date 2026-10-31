@@ -172,3 +172,81 @@ fn a_denied_approval_creates_no_run() {
     assert_eq!(stop.code, 1);
     assert!(!fix.gc().join("runs").exists());
 }
+
+/// Runs the real `goalcup start --practice` in `fix`'s project folder, against `server`, and
+/// kills it if it has not ended in two minutes.
+fn spawn_start(fix: &Fix, server: &str) -> std::process::Output {
+    use std::process::{Command, Stdio};
+    let child = Command::new(env!("CARGO_BIN_EXE_goalcup"))
+        .args(["start", "--practice", "--connector"])
+        .arg(&fix.connector)
+        .current_dir(&fix.project)
+        .env("GOALCUP_SERVER", server)
+        .env("GOALCUP_HOME", fix.gc())
+        .env("HOME", fix.t.home())
+        .env("XDG_CONFIG_HOME", fix.t.home())
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let id = child.id();
+    let timer = std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_secs(120));
+        let _ = Command::new("kill").arg("-9").arg(id.to_string()).status();
+    });
+    let out = child.wait_with_output().unwrap();
+    drop(timer);
+    out
+}
+
+/// PRD-10 section 3 steps 7 to 10: the hand-over. The harness runs, its exit code is the command's
+/// exit code, the ready line is printed once, and the end screen follows from the sealed part.
+#[cfg(target_os = "linux")]
+#[test]
+fn the_hand_over_passes_the_exit_code_and_ends_on_the_sealed_counts() {
+    let fix = Fix::new("{home}/skills", "args = [\"-c\", \"exit 7\"]\n");
+    std::fs::write(
+        &fix.connector,
+        std::fs::read_to_string(&fix.connector)
+            .unwrap()
+            .replace("program = \"true\"", "program = \"sh\""),
+    )
+    .unwrap();
+    let w = FakeWorker::start();
+    let out = spawn_start(&fix, &w.url());
+    let shown = String::from_utf8_lossy(&out.stdout).into_owned();
+    assert_eq!(
+        out.status.code(),
+        Some(7),
+        "{shown}\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(
+        shown.matches(&text::recording_now("Tester")).count(),
+        1,
+        "{shown}"
+    );
+    assert!(shown.contains(text::PART_RECORDED), "{shown}");
+    let entry = fix.gc().join("runs").join(RUN_ID);
+    let sealed = std::fs::read_dir(&entry)
+        .unwrap()
+        .filter_map(Result::ok)
+        .any(|e| {
+            std::fs::read_to_string(e.path().join("status.json"))
+                .is_ok_and(|s| s.contains("\"sealed\""))
+        });
+    assert!(sealed);
+}
+
+/// A refused start leaves the project folder as it was and creates nothing under the home.
+#[test]
+fn a_refused_start_leaves_the_folder_and_the_home_untouched() {
+    let fix = Fix::new("{home}/skills", "");
+    std::fs::write(fix.project.join("notes.txt"), "x").unwrap();
+    let before = fix.listing(&fix.project);
+    let out = spawn_start(&fix, "off");
+    assert_eq!(out.status.code(), Some(1));
+    assert_eq!(fix.listing(&fix.project), before);
+    assert!(!fix.gc().exists());
+}
