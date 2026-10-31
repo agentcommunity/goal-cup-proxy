@@ -58,14 +58,10 @@ fn head(sid: u32, end: bool, fields: &[(&str, &str)]) -> Vec<u8> {
     frame(HEADERS, flags, sid, &block(fields))
 }
 
-fn get(sid: u32, path: &str) -> Vec<u8> {
-    let f = [(":method", "GET"), (":scheme", "https")];
-    head(sid, true, &[f[0], f[1], (":authority", "api.example.com"), (":path", path)])
-}
-
-fn post(sid: u32) -> Vec<u8> {
-    let f = [(":method", "POST"), (":scheme", "https"), (":path", "/v1/m")];
-    head(sid, false, &[f[0], f[1], (":authority", "api.example.com"), f[2]])
+/// A request head; a GET ends its stream.
+fn req(sid: u32, method: &str, path: &str) -> Vec<u8> {
+    let f = [(":method", method), (":scheme", "https"), (":authority", "api.example.com")];
+    head(sid, method == "GET", &[&f[..], &[(":path", path)]].concat())
 }
 
 fn ok(sid: u32, extra: &[(&str, &str)]) -> Vec<u8> {
@@ -149,7 +145,7 @@ fn pairs(fields: &[(&str, &str)]) -> Value {
 #[test]
 fn a_get_and_its_response_with_data() {
     let steps = [
-        up(&[get(1, "/v1/models?page=2")]),
+        up(&[req(1, "GET", "/v1/models?page=2")]),
         down(&[
             ok(1, &[("content-type", "text/plain")]),
             body(1, false, b"hello "),
@@ -272,7 +268,7 @@ fn continuation_padding_priority_and_trailers() {
 #[test]
 fn rst_stream_and_goaway_end_streams_interrupted() {
     let steps = [
-        up(&[post(1), body(1, false, b"par")]),
+        up(&[req(1, "POST", "/v1/m"), body(1, false, b"par")]),
         down(&[ok(1, &[]), body(1, false, b"x")]),
         (Dir::Up, frame(RST, 0, 1, &8u32.to_be_bytes())),
     ];
@@ -286,7 +282,7 @@ fn rst_stream_and_goaway_end_streams_interrupted() {
 
     let away = [&1u32.to_be_bytes()[..], &0u32.to_be_bytes()].concat();
     let steps = [
-        up(&[get(1, "/a"), post(3), body(3, false, b"cut")]),
+        up(&[req(1, "GET", "/a"), req(3, "POST", "/v1/m"), body(3, false, b"cut")]),
         down(&[ok(1, &[]), frame(GOAWAY, 0, 0, &away), body(1, true, b"ok")]),
     ];
     let (calls, stop) = run(&steps);
@@ -308,7 +304,7 @@ fn body_codings() {
     gz.write_all(&plain).unwrap();
     let gz = gz.finish().unwrap();
     let steps = [
-        up(&[get(1, "/a"), get(3, "/b")]),
+        up(&[req(1, "GET", "/a"), req(3, "GET", "/b")]),
         down(&[
             ok(1, &[("content-encoding", "gzip")]),
             ok(3, &[("grpc-encoding", "gzip")]),
@@ -345,7 +341,7 @@ fn an_extended_connect_stream_is_named_and_others_go_on() {
         ],
     );
     let steps = [
-        up(&[connect, body(1, false, &[0x82; 10]), get(3, "/b"), body(1, true, &[0x82; 5])]),
+        up(&[connect, body(1, false, &[0x82; 10]), req(3, "GET", "/b"), body(1, true, &[0x82; 5])]),
         down(&[ok(1, &[]), ok(3, &[]), body(3, true, b"whole"), body(1, true, b"")]),
     ];
     let (calls, stop) = run(&steps);
@@ -367,10 +363,10 @@ fn an_extended_connect_stream_is_named_and_others_go_on() {
 fn push_promise_and_hpack_errors_stop_parsing() {
     let promise = [&[0, 0, 0, 2][..], &block(&[(":method", "GET"), (":path", "/p")])].concat();
     let push = [
-        up(&[get(1, "/a")]),
+        up(&[req(1, "GET", "/a")]),
         down(&[ok(1, &[]), frame(PUSH, END_HEADERS, 1, &promise)]),
     ];
-    let bad_index = [up(&[post(1), frame(HEADERS, END_HEADERS | END_STREAM, 3, &[0xbe])])];
+    let bad_index = [up(&[req(1, "POST", "/v1/m"), frame(HEADERS, END_HEADERS | END_STREAM, 3, &[0xbe])])];
     for steps in [&push[..], &bad_index[..]] {
         let (calls, stop) = run(steps);
         assert_eq!(stop.expect("parsing stops").reason, GapReason::H2Unsupported);
