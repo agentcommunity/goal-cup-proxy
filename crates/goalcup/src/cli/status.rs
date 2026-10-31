@@ -254,11 +254,12 @@ pub fn block(
         w.counts.req_whole,
         w.counts.req_holes,
     ));
-    lines.push(text::session_files_line(
+    lines.push(format!(
+        "Session files: {}, {}.",
         w.counts.native_files,
-        w.counts.native_bytes,
+        text::size_words(w.counts.native_bytes)
     ));
-    lines.push(text::off_line(st.off.spans, st.off.ms));
+    lines.push(text::off_total(st.off.spans, st.off.ms));
     // Nothing sends the part by itself (as `finish::screen` reads it for the end screen). Not in
     // `Recover`: `goalcup recover` restarts the recorder, which sends the bytes, while `goalcup
     // upload` would seal the part and close that path.

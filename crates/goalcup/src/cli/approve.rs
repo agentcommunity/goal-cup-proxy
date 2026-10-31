@@ -301,7 +301,7 @@ fn approve(base: &str, ask: &Ask, out: &mut dyn Write) -> Result<String, Stop> {
     let mut say = |line: String| {
         let _ = writeln!(out, "{line}");
     };
-    say(text::approval_intro(ask.mode, &ask.connector.name));
+    say(text::approval_intro(&ask.connector.name));
     say(text::approval_address(browser(address), address));
     say(text::approval_code(&made.user_code));
     say(text::approval_waiting(wait.div_ceil(60).max(1)));
