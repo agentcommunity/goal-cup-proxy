@@ -1086,6 +1086,6 @@ PRD-12 and PRD-17.
   test binaries 2,171, against the PRD-00 row of 940 and 1,000 and the replan ceilings of 2,500 and
   1,900. The added lines serve point 5 (a pruned entry can always be resumed or sealed, nothing pruned
   ahead of the seal) and the acceptance case "refuses while a recorder lives". The `client.rs` inline
-  tests stay: one guards point 4 (a refused call never shows the token), the other the 413 answer read
+  tests stay: one guards point 4 (a refused call never shows the token), the other a 409 or 429 answered
   before a PUT body ends, which no `upload_*` binary covers. The old `crates/goalcup-cli/src/upload`
   goes with PRD-13, which is where the net size falls.
