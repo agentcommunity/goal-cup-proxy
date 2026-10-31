@@ -116,6 +116,28 @@ pub async fn wait_records(dir: &std::path::Path, done: impl Fn(&[Record]) -> boo
     .await
 }
 
+/// PRD-17 Interfaces (PRD-08): runs `goalcup-verify check --live` on the entry folder and
+/// asserts exit 0, so a lessons test that writes a part file proves the record whole. This crate
+/// has no dev-dependency on the verifier (the scaffold is PRD-02's), so the binary is built and
+/// run through `cargo run` from the workspace root; the entry is still recording, hence `--live`.
+pub fn verify_exits_0(entry: &std::path::Path) {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
+    let out = std::process::Command::new(cargo)
+        .current_dir(root)
+        .args(["run", "-q", "-p", "goalcup-verify", "--", "check", "--live"])
+        .arg(entry)
+        .output()
+        .expect("run goalcup-verify");
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
 /// At least one OPEN, and an END for every OPEN.
 pub fn all_ended(recs: &[Record]) -> bool {
     let count = |f: fn(&Record) -> bool| recs.iter().filter(|r| f(r)).count();
@@ -177,6 +199,21 @@ pub fn trusting_run_ca(ca: &RunCa, alpn: &[&[u8]]) -> TlsConnector {
 }
 
 /// One request; reads until the fake upstream's `hi`.
+/// A client through a decrypted CONNECT to `api.openai.com` that trusts the run CA and writes
+/// `first` at once.
+pub async fn tls_client(
+    addr: SocketAddr,
+    ca: &RunCa,
+    alpn: &[&[u8]],
+    first: &[u8],
+) -> tokio_rustls::client::TlsStream<TcpStream> {
+    let s = through(addr, "api.openai.com:443").await;
+    let name = rustls::pki_types::ServerName::try_from("api.openai.com").unwrap();
+    let mut t = trusting_run_ca(ca, alpn).connect(name, s).await.unwrap();
+    t.write_all(first).await.unwrap();
+    t
+}
+
 pub async fn get<S: AsyncRead + AsyncWrite + Unpin>(t: &mut S) {
     t.write_all(b"GET /v1/models HTTP/1.1\r\nHost: api.openai.com\r\n\r\n")
         .await

@@ -2,8 +2,9 @@
 //! the 0.7 relay learned the hard way, driven through the public parser `proxy::http1::Http1`
 //! with `Recorder::for_tests`, so what is asserted is the records (DATA bytes, GAP reasons, END
 //! reasons and tails) and the `Stop` the relay would act on. The serve halves at the end drive the
-//! real `proxy::serve` over the scripted upstream: the relay half of H2 and H9 (a head that cannot
-//! be framed, or is over 64 KiB, relays on inside a named loss, PRD-03 section 5a), H10
+//! real `proxy::serve` over the scripted upstream: the relay half of H2 (a head that cannot be
+//! framed relays on inside a named loss, PRD-03 section 5a), H9 (a head over 64 KiB gets the
+//! `memory_guard` GAP on its own stream and parsing goes on, PRD-03 section 5), H10
 //! (credentials reach the upstream unchanged and are starred in the record) and H11 (every
 //! request on a decrypted host is recorded, whatever its path).
 //!
@@ -26,7 +27,9 @@ use goalcup::proxy::http1::Http1;
 use goalcup::proxy::pump::{Parser, Stop};
 use goalcup::proxy::ws::Dir;
 use goalcup_format::Record;
-use proxy_fixtures::{conns, proxy_to, read_to, through, trusting_run_ca, wait_records};
+use proxy_fixtures::{
+    conns, proxy_to, read_to, through, trusting_run_ca, verify_exits_0, wait_records,
+};
 use rustls::pki_types::ServerName;
 use serde_json::{Value, json};
 use std::io::Write;
@@ -728,13 +731,19 @@ struct Relayed {
     conn: Sid,
     /// The one GAP: its stream, reason and `lost`.
     gap: (Sid, GapReason, Option<u64>),
+    /// The GAP's tail.
+    tail: Option<Value>,
+    /// The paths of the `http_req` streams, in open order, with their stream ids; and how many
+    /// `http_resp` streams opened.
+    reqs: Vec<(Sid, String)>,
+    resps: usize,
     /// Every byte relayed both ways: the head, the second request and both answers.
     relayed: u64,
     /// The `parse_stopped` notes.
     notes: Vec<Value>,
 }
 
-/// H2, H9 (PRD-03 section 5a): `head` and `body` and then a second request on the same
+/// H2, H9: `head` and `body` and then a second request on the same
 /// connection. The client gets both answers (the same bytes, 200 and `hi`), the upstream gets
 /// every byte unchanged, the loss is one GAP, every stream ends, and no tail holds a byte of the
 /// head.
@@ -749,7 +758,7 @@ async fn relays_on(label: &str, head: &[u8], body: &[u8]) -> Relayed {
     drop(t);
     let conn = conns(&w.calls, 1).await[0].0;
     let [one_gap]: [Call; 1] = gaps(&w.calls).try_into().expect("one GAP");
-    let Call::Gap(sid, reason, _, _, _, lost, _) = one_gap else {
+    let Call::Gap(sid, reason, _, _, _, lost, tail) = one_gap else {
         unreachable!()
     };
     assert!(!format!("{:?}", gaps(&w.calls)).contains(MARK), "{label}");
@@ -757,6 +766,16 @@ async fn relays_on(label: &str, head: &[u8], body: &[u8]) -> Relayed {
     Relayed {
         conn,
         gap: (sid, reason, lost),
+        tail,
+        reqs: all_opens(&w.calls)
+            .iter()
+            .filter(|o| o.1 == StreamKind::HttpReq)
+            .map(|o| (o.0, o.2["path"].as_str().unwrap_or_default().to_owned()))
+            .collect(),
+        resps: all_opens(&w.calls)
+            .iter()
+            .filter(|o| o.1 == StreamKind::HttpResp)
+            .count(),
         relayed: (first.len() + SECOND.len() + 2 * one.len()) as u64,
         notes: events(&w.calls)
             .into_iter()
@@ -832,7 +851,16 @@ async fn head_over_64k_relays_inside_a_named_loss() {
     head.extend_from_slice(b"\r\n");
     assert!(head.len() > 64 * 1024);
     let seen = relays_on("a 64 KiB head", &head, b"").await;
-    assert_eq!(seen.gap.1, GapReason::MemoryGuard);
+    let (sid, reason, lost) = seen.gap;
+    assert_eq!(reason, GapReason::MemoryGuard);
+    // The GAP sits on the first request's own stream, its loss unknown, and the tail names the
+    // guard. Parsing went on: `/second` is opened with its response.
+    assert_eq!(seen.reqs.first().map(|r| r.0), Some(sid));
+    assert_eq!(lost, None);
+    assert_eq!(seen.tail.as_ref().map(|t| &t["guard"]), Some(&json!("http_head")));
+    assert_eq!(seen.reqs.len(), 2);
+    assert!(seen.reqs[1].1.starts_with("/second"));
+    assert_eq!(seen.resps, 2);
 }
 
 /// Every byte the entry holds for the streams: meta, DATA, tails of END and GAP, EVENT json.
@@ -870,6 +898,7 @@ async fn authorization_forwarded_unchanged_and_starred_in_meta() {
             >= 3
     })
     .await;
+    verify_exits_0(entry.path());
     for bytes in recorded_bytes(&recs) {
         assert!(!bytes.windows(SECRET.len()).any(|w| w == SECRET.as_bytes()));
     }

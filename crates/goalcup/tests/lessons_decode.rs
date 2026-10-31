@@ -412,16 +412,10 @@ async fn serve_world(wire: Vec<u8>, coding: &str, recorder: Recorder) -> Vec<u8>
         .with_tls(&["api.openai.com"], &[common::pki::HTTP11]),
     );
     let (_h, addr, ca) = proxy_fixtures::proxy_to(recorder, up.addr(), up.pki());
-    let name = rustls::pki_types::ServerName::try_from("api.openai.com").unwrap();
-    let tcp = proxy_fixtures::through(addr, "api.openai.com:443").await;
-    let mut t = proxy_fixtures::trusting_run_ca(&ca, &[b"http/1.1"])
-        .connect(name, tcp)
-        .await
-        .unwrap();
     let req = format!(
         "GET /v1/models HTTP/1.1\r\nHost: api.openai.com\r\nAccept-Encoding: {coding}\r\n\r\n"
     );
-    t.write_all(req.as_bytes()).await.unwrap();
+    let mut t = proxy_fixtures::tls_client(addr, &ca, &[b"http/1.1"], req.as_bytes()).await;
     proxy_fixtures::read_to(&mut t, |got| got.ends_with(&wire)).await
 }
 

@@ -22,8 +22,7 @@ use goalcup::proxy::http1::Http1;
 use goalcup::proxy::pump::{Parser, Stop};
 use goalcup::proxy::ws::{Deflate, Dir, WsConn, negotiate};
 use goalcup_format::{FLAG_FIN, Record};
-use proxy_fixtures::{all_ended, conns, proxy_to, read_to, through, trusting_run_ca, wait_records};
-use rustls::pki_types::ServerName;
+use proxy_fixtures::{all_ended, conns, proxy_to, read_to, wait_records};
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -275,14 +274,7 @@ fn wire(up: SocketAddr, pki: &TestPki, recorder: Recorder) -> Wire {
 
 /// A client through a decrypted CONNECT that writes `first` at once.
 async fn client(w: &Wire, first: &[u8]) -> tokio_rustls::client::TlsStream<tokio::net::TcpStream> {
-    let s = through(w.addr, "api.openai.com:443").await;
-    let name = ServerName::try_from("api.openai.com").unwrap();
-    let mut t = trusting_run_ca(&w.ca, &[HTTP11])
-        .connect(name, s)
-        .await
-        .unwrap();
-    t.write_all(first).await.unwrap();
-    t
+    proxy_fixtures::tls_client(w.addr, &w.ca, &[HTTP11], first).await
 }
 
 type Seen = Arc<Mutex<Vec<Vec<u8>>>>;
@@ -547,6 +539,7 @@ async fn fail_closed_ends_at_message_end() {
     read_to(&mut t, |g| g.ends_with(plain[1].as_bytes())).await;
     drop(t);
     let recs = wait_records(entry.path(), all_ended).await;
+    proxy_fixtures::verify_exits_0(entry.path());
     let sid = recs
         .iter()
         .find_map(|r| match r {
