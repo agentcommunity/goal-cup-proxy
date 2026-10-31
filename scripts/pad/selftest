@@ -79,10 +79,10 @@ CONTROLS = [
     ("K7", "k7-part", "k7-fetched", ALLC, {}, {}),
     ("K9", "k7-part", "k7-fetched", {"C6": "FAIL"}, {}, {"count": lambda n: n + 1}),
     ("K10", "k7-part", "k7-fetched", {"C5": "FAIL"}, {}, {"after": empty_usage}),
-    ("K11a", "k11-a", None, {"C1": "FAIL"}, ids("fail", "history_complete"), {"orphans": 1}),  # one orphan, not in a gap
-    ("K11b", "k11-b", None, {"C1": "PASS"}, {}, {"orphans": 0, "in_gap": 1}),  # the orphan sits in a gap and is counted there
-    ("K11c", "k11-c", None, {"C1": "PASS"}, ids("skip", "history_complete"), {}),
-    ("K11d", "k11-d", "k11-d-fetched", ALLC, ids("skip", "threads_match", "wire_keeps_up"), {}),
+    ("K11a", "k11-a-part", None, {"C1": "FAIL"}, ids("fail", "history_complete"), {"orphans": 1}),  # one orphan, not in a gap
+    ("K11b", "k11-b-part", None, {"C1": "PASS"}, {}, {"orphans": 0, "in_gap": 1}),  # the orphan sits in a gap and is counted there
+    ("K11c", "k11-c-part", None, {"C1": "PASS"}, ids("skip", "history_complete"), {}),
+    ("K11d", "k11-d-part", "k11-d-fetched", ALLC, ids("skip", "threads_match", "wire_keeps_up"), {}),
 ]
 
 
