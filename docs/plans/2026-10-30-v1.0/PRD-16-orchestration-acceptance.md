@@ -2048,3 +2048,18 @@ kept and now cites BUILD-PROMPT section 5, since B3 no longer carries it.
   Droid's daemon with no stop command, Crush's database below an existing `.crush`, schemeless Goose host
   variables, and the B9 `fill` copy.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-31, replan after PRD-15 slice 9 (merge d56216f4)
+
+- `gate fast` PASS on the four task branches (83 to 93 s) and on the fixed lane branch (120 s). Review A
+  and B left no blocker; the fixes and nits closed, with four nits moved to PRD-15's note.
+- **Size report, PRD-15** (`wc -l` at c262ef5a). PRD-00 "Size budget" has no docs row, so the
+  comparison is with the PRD-15 outline estimates: `docs/OPERATING.md` 233 (estimate 280, 83%);
+  `docs/RECORD-FORMAT.md` 419 (estimate 280, 150%, decision line in PRD-15's note, ceiling 430);
+  `docs/CONNECTOR-SCHEMA.md` 115 (estimate 90, 128%); `scripts/README.md` 39. The slice's diff is 291
+  lines in and 920 out over twelve files. No Rust, script or workflow line changed, so the Rust and
+  Worker rows are unaffected.
+- **Gate for PRD-16:** the docs gate step for this lane stays `gate fast`; links are not checked in CI
+  (PRD-14 took `check-links.py` out of the gate), so the final link pass is PRD-15's own run before
+  PRD-14 deletes the script. The known broken-link filter list is in PRD-15's note.
+- No locked ledger item is touched and no owner question comes from this slice.

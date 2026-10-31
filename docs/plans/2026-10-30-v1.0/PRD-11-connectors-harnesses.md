@@ -1416,3 +1416,11 @@ here; the other files carry their own part.
   and the tier refresh after the pad's rows (unchanged from the slice 4 note); drop the B9 `fill` copy
   with PRD-10 if still open.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-31, note from the PRD-15 slice 9 replan (merge d56216f4)
+
+`docs/TERMINATION.md` moved to `docs/archive/TERMINATION.md` (PRD-15, unedited). Three files PRD-15 does
+not own still link `../TERMINATION.md` and are now broken: `docs/harnesses/amp-cli.md:28`,
+`docs/harnesses/codex-cli.md:166` and `docs/harnesses/hermes-cli.md:86`. Termination proof is cut
+(ledger section 7), so drop each link or repoint it to `../archive/TERMINATION.md` in the next PRD-11
+touch of those files. The facts sheets pass is the natural place. No locked ledger item is touched.
