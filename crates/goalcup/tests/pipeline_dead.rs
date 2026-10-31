@@ -10,8 +10,8 @@ use bytes::Bytes;
 use common::recorder::{entry_dir, real, records, wait_settled};
 use goalcup::pipeline::status::Mode;
 use goalcup::pipeline::{
-    Closed, EndReason, GapReason, OpenFlags, Status, StreamKind, close_dead_entry, entry_totals,
-    seal_null_for_tests,
+    Closed, Cursors, EndReason, GapReason, OpenFlags, Status, StreamKind, close_dead_entry,
+    entry_totals, seal_null_for_tests,
 };
 use goalcup::watchdog::{Cause, Exit, KEY_FILE, Prev, SealReason};
 use goalcup_format::{IndexKind, Record};
@@ -178,7 +178,10 @@ fn a_dead_entry_closes_once_with_one_gap_and_the_files_totals() {
 fn the_null_seal_names_null_mode_and_the_real_reason() {
     let dir = dead_entry();
     let last = Exit::Code(70);
-    let prev = Prev::Cause(Cause::NullMode { exits: 3, last });
+    let prev = Prev::Cause(Cause::NullMode {
+        exits: 3,
+        last: Some(last),
+    });
     let facts = seal_null_for_tests(&dir, SealReason::HarnessExit, prev).unwrap();
     let (down, seal) = down_and_seal(&dir);
     assert_eq!(down.len(), 1);
@@ -192,4 +195,25 @@ fn the_null_seal_names_null_mode_and_the_real_reason() {
     );
     assert_eq!(facts.totals, entry_totals(&dir));
     assert!(!dir.join("rec").join(KEY_FILE).exists());
+}
+
+/// Point 5: after a reboot (`cursors.json` names another `boot_id`, so its durable index length
+/// cuts the index first) the seal's totals still equal the files' totals.
+#[test]
+fn a_dead_entry_after_a_reboot_seals_the_files_totals() {
+    let dir = dead_entry();
+    let mut c = Cursors::read(&dir);
+    c.boot_id = Some("0".repeat(32));
+    c.write(&dir).unwrap();
+    let Ok(Closed::Sealed(facts)) = close_dead_entry(&dir) else {
+        panic!("the dead entry is sealed");
+    };
+    let (down, seal) = down_and_seal(&dir);
+    assert_eq!(down.len(), 1);
+    let totals = entry_totals(&dir);
+    assert_eq!(
+        seal["totals"],
+        serde_json::to_value(&totals.counts).unwrap()
+    );
+    assert_eq!(facts.totals, totals);
 }

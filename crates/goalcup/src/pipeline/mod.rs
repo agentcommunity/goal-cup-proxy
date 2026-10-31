@@ -976,36 +976,32 @@ impl Run {
         dir: &Path,
         workspace: &Path,
     ) -> ExitCode {
-        if self.sealed {
-            seal::remove_key(dir);
-            self.send(&ToWatchdog::Sealed);
-            let late = (self.late.take()).unwrap_or_else(|| seal::Late::sealed(&self.rec, None));
-            seal::wrap_up_sealed(&self.rec, dir, reason, self.uploader.take(), &late);
-            return ExitCode::SUCCESS;
-        }
         // The server's own words for a `server_stop` seal, from its last heartbeat answer.
         let server_reason = (self.uploader.as_ref())
             .filter(|_| reason == SealReason::ServerStop)
             .and_then(|u| u.server_word().borrow().as_ref()?.reason.clone());
-        if self.null {
+        if self.null && !self.sealed {
             self.board.stop();
             if let Some(t) = self.status.take() {
                 let _ = t.join();
             }
-            // A null boot whose watchdog sent no `null_mode` cause yet.
-            let last = Exit::Code(0);
-            let prev = (self.prev).unwrap_or(Prev::Cause(Cause::NullMode { exits: 0, last }));
+            // A null boot whose watchdog sent no `null_mode` cause: no exit is known.
+            let none = Prev::Cause(Cause::NullMode {
+                exits: 0,
+                last: None,
+            });
             let (h, ws) = (self.harness.as_ref(), Some(workspace));
+            let prev = self.prev.unwrap_or(none);
             let facts = dead::seal_null(dir, reason, h, self.exit, server_reason, prev, ws)
                 .unwrap_or_else(|e| writer::fail(dir, &e));
-            let seal = status::SealStatus {
-                reason: facts.reason,
-                workspace_head: facts.workspace_head.clone(),
-            };
-            self.board.sealed(seal, &facts.totals);
+            self.board.sealed(dead::seal_status(&facts), &facts.totals);
             status::write(&self.rec, dir, &self.board);
+            self.sealed = true;
+        }
+        if self.sealed {
+            seal::remove_key(dir);
             self.send(&ToWatchdog::Sealed);
-            let late = seal::Late::sealed(&self.rec, None);
+            let late = (self.late.take()).unwrap_or_else(|| seal::Late::sealed(&self.rec, None));
             seal::wrap_up_sealed(&self.rec, dir, reason, self.uploader.take(), &late);
             return ExitCode::SUCCESS;
         }

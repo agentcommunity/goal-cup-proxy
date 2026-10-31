@@ -4,6 +4,8 @@
 //! crash loop: the next recorder runs `--null`, the proxy still answers, `status.json` says `null`
 //! with `off.since`, the null recorder leaves on the `restart` line with exit 0 after 30 s of boot
 //! time, and the next normal boot writes one `recorder_down` gap naming `null_mode` over the span.
+//! A harness exit while the null recorder serves seals in null mode with that one gap; and after
+//! a server `stop` the harness's connections are still answered until it exits.
 //! Boot time here is `/proc/uptime` (`CLOCK_BOOTTIME`, the record clock). Linux only.
 #![cfg(target_os = "linux")]
 
@@ -68,6 +70,25 @@ fn wrapper(d: &Path) -> PathBuf {
          exec \"{exe}\" \"$@\""
     );
     let path = d.join("recorder.sh");
+    std::fs::write(&path, text).unwrap();
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    path
+}
+
+/// Boot 1 gets a server `stop` (reason `admin`) on its control socket 4 s after it starts, as
+/// its uploader's forwarder would send it; every boot is the binary itself.
+fn stop_wrapper(d: &Path) -> PathBuf {
+    let (dd, exe) = (d.display(), env!("CARGO_BIN_EXE_goalcup"));
+    let word = r#"{"line":"server","stop":true,"reason":"admin","seconds_left":null,"asked_at":0}"#;
+    let text = format!(
+        "#!/bin/sh
+         read up _ < /proc/uptime
+         n=$(( $(cat {dd}/boots 2>/dev/null || echo 0) + 1 )); echo $n > {dd}/boots
+         echo \"$n $up $*\" >> {dd}/boot_log
+         case $n in 1) ( sleep 4; printf '%s\\n' '{word}' >&4 ) & ;; esac
+         exec \"{exe}\" \"$@\""
+    );
+    let path = d.join("stop_recorder.sh");
     std::fs::write(&path, text).unwrap();
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
     path
@@ -151,14 +172,24 @@ fn through_proxy(port: u64, up: std::net::SocketAddr) -> String {
     answer
 }
 
-/// Point 3 and ledger R3a: a crash loop goes to null mode, which serves and retries a normal
-/// boot after 30 s by the `restart` line; the sealed entry holds one `null_mode` gap over it.
-#[test]
-fn watchdog_null_crash_loop_serves_and_retries() {
+/// The test folder: marker files in `d`, the entry folder, the plan and the recorder wrapper.
+struct Setup {
+    _tmp: tempfile::TempDir,
+    d: PathBuf,
+    entry_dir: PathBuf,
+    plan: LaunchPlan,
+    recorder: PathBuf,
+    facts: StartFacts,
+}
+
+fn setup() -> Setup {
+    setup_with(wrapper)
+}
+
+fn setup_with(wrapper: fn(&Path) -> PathBuf) -> Setup {
     // SAFETY: set before any thread of this test process starts; sound only because nextest
     // runs each test in its own process.
     unsafe { std::env::set_var("GOALCUP_SERVER", "off") };
-    let up = Upstream::start(Script::ok(b"hi"));
     let tmp = tempfile::tempdir().unwrap();
     let d = tmp.path().join("m");
     std::fs::create_dir_all(&d).unwrap();
@@ -177,22 +208,69 @@ fn watchdog_null_crash_loop_serves_and_retries() {
     .unwrap();
     let (plan, recorder) = (plan(&d), wrapper(&d));
     let facts = facts(&plan, &entry_dir, &d);
+    Setup {
+        _tmp: tmp,
+        d,
+        entry_dir,
+        plan,
+        recorder,
+        facts,
+    }
+}
+
+/// Kills boot 1 after its first LINK, so boots 1 to 3 make a crash loop, and waits for the null
+/// boot's `status.json`.
+fn crash_to_null(dir: &Path) -> Value {
+    let status = || cli::read_json::<Value>(&cli::status_json(dir));
+    let first = until("boot 0", || {
+        status()?.get("pid")?.as_u64().filter(|p| *p > 0)
+    });
+    // A boot that dies before its first LINK leaves its number to the next, so wait for one.
+    until("a link", || {
+        std::fs::metadata(dir.join("counts.jsonl"))
+            .ok()
+            .filter(|m| m.len() > 0)
+    });
+    // SAFETY: a signal to one pid, the first recorder's.
+    unsafe { libc::kill(first as libc::pid_t, libc::SIGKILL) };
+    until("null mode", || status().filter(|s| s["mode"] == "null"))
+}
+
+/// The `recorder_down` gaps as (start_mono, end_mono, tail).
+fn down_gaps(entry_dir: &Path) -> Vec<(u64, u64, Value)> {
+    records(entry_dir)
+        .into_iter()
+        .filter_map(|r| match r {
+            Record::Gap {
+                reason: GapReason::RecorderDown,
+                start_mono,
+                end_mono,
+                tail,
+                ..
+            } => Some((start_mono, end_mono, serde_json::from_slice(&tail).unwrap())),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Point 3 and ledger R3a: a crash loop goes to null mode, which serves and retries a normal
+/// boot after 30 s by the `restart` line; the sealed entry holds one `null_mode` gap over it.
+#[test]
+fn watchdog_null_crash_loop_serves_and_retries() {
+    let up = Upstream::start(Script::ok(b"hi"));
+    let Setup {
+        _tmp,
+        d,
+        entry_dir,
+        plan,
+        recorder,
+        facts,
+    } = setup();
 
     let (dir, m, upstream) = (entry_dir.clone(), d.clone(), up.addr());
     let driver = std::thread::spawn(move || {
         let status = || cli::read_json::<Value>(&cli::status_json(&dir));
-        let first = until("boot 0", || {
-            status()?.get("pid")?.as_u64().filter(|p| *p > 0)
-        });
-        // A boot that dies before its first LINK leaves its number to the next, so wait for one.
-        until("a link", || {
-            std::fs::metadata(dir.join("counts.jsonl"))
-                .ok()
-                .filter(|m| m.len() > 0)
-        });
-        // SAFETY: a signal to one pid, the first recorder's.
-        unsafe { libc::kill(first as libc::pid_t, libc::SIGKILL) };
-        let null = until("null mode", || status().filter(|s| s["mode"] == "null"));
+        let null = crash_to_null(&dir);
         assert!(null["off"]["since"].is_string(), "{null}");
         let answer = through_proxy(null["port"].as_u64().unwrap(), upstream);
         assert!(
@@ -223,23 +301,107 @@ fn watchdog_null_crash_loop_serves_and_retries() {
     until("the sealed status.json", || {
         cli::read_json::<Value>(&cli::status_json(&entry_dir)).filter(|s| !s["seal"].is_null())
     });
-    let down: Vec<(u64, u64, Value)> = records(&entry_dir)
-        .into_iter()
-        .filter_map(|r| match r {
-            Record::Gap {
-                reason: GapReason::RecorderDown,
-                start_mono,
-                end_mono,
-                tail,
-                ..
-            } => Some((start_mono, end_mono, serde_json::from_slice(&tail).unwrap())),
-            _ => None,
-        })
-        .collect();
+    let down = down_gaps(&entry_dir);
     assert_eq!(down.len(), 1, "{down:?}");
     let (start, end, tail) = &down[0];
     assert_eq!(tail["cause"], "null_mode", "{tail}");
     assert!(start < end);
     let ns = |s: f64| (s * 1e9) as u64;
     assert!(*start <= ns(null_at) && *end >= ns(try_at), "{down:?}");
+}
+
+/// Section 11 "In null mode" (PRD-02 section 12): the harness exits while the null recorder
+/// serves. The null recorder seals at once, no normal try follows, and the sealed entry holds one
+/// `null_mode` gap, the seal with reason `harness_exit`, an unbroken link chain read whole by the
+/// format reader, and an index that ends with its `R` line.
+#[test]
+fn watchdog_null_harness_exit_seals_in_null_mode() {
+    let Setup {
+        _tmp,
+        d,
+        entry_dir,
+        plan,
+        recorder,
+        facts,
+    } = setup();
+    let (dir, m) = (entry_dir.clone(), d.clone());
+    let driver = std::thread::spawn(move || {
+        crash_to_null(&dir);
+        std::fs::write(m.join("stop"), "").unwrap();
+    });
+    let _ = watchdog::run_with(plan, facts, &recorder);
+    driver.join().unwrap();
+
+    // The watchdog returned on the null recorder's `sealed`; no normal try was started.
+    let log = boot_log(&d);
+    assert!(started(&d, "5").is_none(), "{log:?}");
+    let text = std::fs::read_to_string(cli::goalcup_log(&entry_dir)).unwrap();
+    assert!(!text.contains("null_seal_left"));
+    let st = cli::read_json::<Value>(&cli::status_json(&entry_dir)).unwrap();
+    assert_eq!(st["mode"], "sealed", "{st}");
+    assert_eq!(st["seal"]["reason"], "harness_exit", "{st}");
+    assert!(!entry_dir.join("rec").join(watchdog::KEY_FILE).exists());
+
+    let down = down_gaps(&entry_dir);
+    assert_eq!(down.len(), 1, "{down:?}");
+    assert_eq!(down[0].2["cause"], "null_mode", "{down:?}");
+    assert!(down[0].0 < down[0].1);
+
+    // The whole entry, every part file in order: every LINK recomputes, the seal event comes
+    // right before the last LINK, and the last part file ends at its index's last line, an `R`.
+    let rec = entry_dir.join("rec");
+    let items: Vec<_> = goalcup_format::read::open_dir(&rec)
+        .unwrap()
+        .map(|i| i.unwrap())
+        .collect();
+    assert!(items.iter().all(|i| i.link_ok != Some(false)));
+    assert!(matches!(items.last().map(|i| &i.rec), Some(Record::Link { .. })));
+    let Record::Event { json, .. } = &items[items.len() - 2].rec else {
+        panic!("the seal event comes right before the last LINK");
+    };
+    let seal: Value = serde_json::from_slice(json).unwrap();
+    assert_eq!((&seal["ev"], &seal["reason"]), (&"seal".into(), &"harness_exit".into()));
+    let parts = goalcup_format::read::part_files(&rec).unwrap();
+    let last = parts.last().unwrap();
+    let name = last.file_name().unwrap().to_str().unwrap();
+    let idx = last.with_file_name(format!("{}.idx", name.trim_end_matches(".gcr.zst")));
+    let line = *goalcup_format::read::read_index(&idx).unwrap().last().unwrap();
+    assert_eq!(line.kind, goalcup_format::IndexKind::R);
+    assert_eq!(std::fs::metadata(last).unwrap().len(), line.c_end);
+}
+
+/// Point 3 and section 8 step 10: after a server `stop` the entry seals with `server_stop` and the
+/// harness runs on. The recorder that sealed ends after its wrap-up, and the watchdog starts the
+/// next at once on the sealed entry, so the harness's connections are still answered until it
+/// exits, and the seal stays as it was.
+#[test]
+fn watchdog_after_a_server_stop_serves_until_the_harness_exits() {
+    let up = Upstream::start(Script::ok(b"hi"));
+    let Setup {
+        _tmp,
+        d,
+        entry_dir,
+        plan,
+        recorder,
+        facts,
+    } = setup_with(stop_wrapper);
+    let (dir, m, upstream) = (entry_dir.clone(), d.clone(), up.addr());
+    let driver = std::thread::spawn(move || {
+        let status = || cli::read_json::<Value>(&cli::status_json(&dir));
+        let st = until("the server_stop seal", || {
+            status().filter(|s| s["seal"]["reason"] == "server_stop")
+        });
+        until("the boot after the seal", || started(&m, "2"));
+        let answer = through_proxy(st["port"].as_u64().unwrap(), upstream);
+        assert!(
+            answer.starts_with("HTTP/1.1 200") && answer.ends_with("hi"),
+            "{answer}"
+        );
+        std::fs::write(m.join("stop"), "").unwrap();
+    });
+    let _ = watchdog::run_with(plan, facts, &recorder);
+    driver.join().unwrap();
+    drop(up);
+    let st = cli::read_json::<Value>(&cli::status_json(&entry_dir)).unwrap();
+    assert_eq!(st["seal"]["reason"], "server_stop", "{st}");
 }

@@ -1,7 +1,10 @@
 //! Closing an entry no recorder will finish (PRD-02 section 9.4): `goalcup continue`, `seal` and
 //! `upload` after both processes died, and the null recorder's seal (section 11 "In null mode").
 //! One recovery frame holds the dead boot's COUNT, one `recorder_down` GAP, the `seal` event, a
-//! LINK and the `R` line (PRD-01 section 12); nothing is appended after it.
+//! LINK and the `R` line (PRD-01 section 12); nothing is appended after it. An entry that left no
+//! index line at all has no frame to recover: boot 0 is written afresh (`start`, the gap, a COUNT,
+//! the seal) and closed by an ordinary seal, so its index ends with an `E` line, and with no part
+//! file left the gap's start is its end.
 
 use super::boot::{WINDOW_LOG, down_tail};
 use super::clock::{self, now_pair};
@@ -47,18 +50,15 @@ pub fn close_dead_entry(entry_dir: &Path) -> Result<Closed, StillRecording> {
         let ev = json!({"ev": "seal", "reason": "recovered", "harness": "unknown", "exit": null,
             "workspace_head": null, "dirty": null});
         let (facts, fresh, durable, boot) = close(entry_dir, |_| tail, ev)?;
-        if fresh || Status::read(entry_dir).is_none_or(|s| s.mode != Mode::Sealed) {
-            let old = Status::read(entry_dir).unwrap_or_default();
+        let old = Status::read(entry_dir);
+        if fresh || old.as_ref().is_none_or(|s| s.mode != Mode::Sealed) {
+            let old = old.unwrap_or_default();
             let board = Board::default();
             board.set(|s| {
                 *s = old.clone();
                 s.sealing = None;
             });
-            let seal = SealStatus {
-                reason: facts.reason,
-                workspace_head: facts.workspace_head.clone(),
-            };
-            board.sealed(seal, &facts.totals);
+            board.sealed(seal_status(&facts), &facts.totals);
             let live = Live {
                 boot,
                 ..Live::default()
@@ -78,6 +78,14 @@ pub fn close_dead_entry(entry_dir: &Path) -> Result<Closed, StillRecording> {
             log::line(entry_dir, "close_dead_entry", &[("io", Fact::Io(e.kind()))]);
             Ok(Closed::Failed(e.kind()))
         }
+    }
+}
+
+/// What the sealed `status.json` says of a seal.
+pub(super) fn seal_status(facts: &SealFacts) -> SealStatus {
+    SealStatus {
+        reason: facts.reason,
+        workspace_head: facts.workspace_head.clone(),
     }
 }
 
@@ -142,19 +150,15 @@ fn close(
     let mut totals = counts::entry_totals(dir);
     let tail = tail(rv.lineless);
     let kept = last_kept(&dir.join("rec"))?;
-    if let Some(k) = kept.as_ref().filter(|k| k.seal.is_some()) {
-        let s: &Value = k.seal.as_ref().expect("filtered");
+    if let Some(k @ Kept { seal: Some(s), .. }) = &kept {
         let reason = serde_json::from_value(s["reason"].clone()).unwrap_or(SealReason::Recovered);
         let workspace_head = s["workspace_head"].as_str().map(str::to_string);
-        let (facts, d) = (
-            SealFacts {
-                reason,
-                workspace_head,
-                totals,
-            },
-            k.durable,
-        );
-        return Ok((facts, false, d, k.boot));
+        let facts = SealFacts {
+            reason,
+            workspace_head,
+            totals,
+        };
+        return Ok((facts, false, k.durable, k.boot));
     }
     let mut counter = Counter::new(&[]);
     let boot = kept.as_ref().map_or(0, |k| k.boot);
