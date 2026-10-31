@@ -404,9 +404,9 @@ pub(crate) fn sub(a: &AtomicU64, n: u64) {
     });
 }
 
-/// The front's API for the mask worker, the writer, the status thread and the seal.
-// The seal and `run_recorder` land in the next slice; until then the writer and the mask worker
-// run only under `real_for_tests`.
+/// The front's API for the mask worker, the writer and the status thread.
+// `run_recorder` lands in the next slice; until then the writer and the mask worker run only
+// under `real_for_tests`.
 #[cfg_attr(not(feature = "test-hooks"), allow(dead_code))]
 impl Recorder {
     /// A recorder whose items go to the returned receiver, under soft guard `guard`.
@@ -431,16 +431,6 @@ impl Recorder {
     /// returns to exactly 0 when the writer has written all it was handed.
     pub(crate) fn forwarded(&self, n: u64) {
         self.queue(n);
-    }
-
-    /// The mask worker dropped an item worth `n` held bytes that it took: one that reached it
-    /// after the seal's drain or marker (an offer or gap that read the stop flag just before it
-    /// was set). Its bytes leave `held` only: they are off `queued` since [`Recorder::taken`] and
-    /// no write happened. `lost` is the item's DATA length or a GAP's known loss, which goes to
-    /// the `after_stop` count, so no byte is lost without a count.
-    pub(crate) fn dropped(&self, n: u64, lost: u64) {
-        sub(&self.inner.held, n);
-        self.count_after_stop(lost);
     }
 
     /// Every byte that reaches no record after a stop lands in the `after_stop` count, so none
@@ -479,6 +469,20 @@ impl Recorder {
 
     pub(crate) fn publish_durable(&self, durable: Durable) {
         self.inner.durable.send_replace(durable);
+    }
+}
+
+/// The seal's API (PRD-02 section 11). `seal.rs` calls it in the next slice.
+#[allow(dead_code)]
+impl Recorder {
+    /// The mask worker dropped an item worth `n` held bytes that it took: one that reached it
+    /// after the seal's drain or marker (an offer or gap that read the stop flag just before it
+    /// was set). Its bytes leave `held` only: they are off `queued` since [`Recorder::taken`] and
+    /// no write happened. `lost` is the item's DATA length or a GAP's known loss, which goes to
+    /// the `after_stop` count, so no byte is lost without a count.
+    pub(crate) fn dropped(&self, n: u64, lost: u64) {
+        sub(&self.inner.held, n);
+        self.count_after_stop(lost);
     }
 
     /// Every later call on a wire stream only counts (PRD-02 section 11 step 2).

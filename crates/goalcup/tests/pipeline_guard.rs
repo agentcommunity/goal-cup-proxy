@@ -47,8 +47,11 @@ fn settle(rec: &Recorder, posts: u64) -> u64 {
     within(HANG, move || {
         loop {
             let d = rec.durable().borrow().clone();
-            if d.totals.counts.http_post >= posts && rec.live().held_bytes == 0 {
-                return d.point.expect("a durable point").line.seq;
+            if let Some(p) = &d.point
+                && d.totals.counts.http_post >= posts
+                && rec.live().held_bytes == 0
+            {
+                return p.line.seq;
             }
             std::thread::sleep(Duration::from_millis(100));
         }
