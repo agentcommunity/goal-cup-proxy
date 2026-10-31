@@ -6,10 +6,11 @@
 //! Present: the seams ([`ServerWord`] S10, [`spawn`], [`UploadCtx`], [`SealFacts`] S18,
 //! `upload.json` S9), the timing rules ([`policy`]), the client, the chunk cut ([`chunk`]), the
 //! heartbeat ([`beat`]), the sender's rounds ([`send`]) and the two threads: `goalcup-upload` runs
-//! the rounds and `goalcup-beat` the heartbeat, each on a 1 s tick on boot time, each round and beat
-//! under [`guard`], and both write the shared `upload.json` at most once a second. In null mode
-//! (no live writer) they send what is on disk and beat `failed` (ledger R7). [`UploadHandle::finish`]
-//! runs the wrap-up: final heartbeat, then chunks, then the final again until sealed.
+//! the rounds and `goalcup-beat` the heartbeat, each on a 1 s tick on boot time, each round and
+//! beat under [`guard`], and both write the shared `upload.json` at most once a second. In null
+//! mode (no live writer) they send what is on disk and beat `failed` (ledger R7).
+//! [`UploadHandle::finish`] runs the wrap-up: final heartbeat, then chunks, then the final again
+//! until sealed.
 //!
 //! Still open: `prune.rs`, `upload.lock`, the queue of older entries, `manual.rs` (`goalcup
 //! upload`) and the full-tier `upload_worker.rs`.
@@ -81,7 +82,7 @@ pub struct SealFacts {
     pub totals: EntryTotals,
 }
 
-/// The running uploader.
+/// The running uploader. Dropping it without `finish` stops both threads at their next tick.
 pub struct UploadHandle {
     word: watch::Receiver<Option<ServerWord>>,
     /// None when no thread runs (a local run, or nothing to send with).
