@@ -35,7 +35,11 @@ fn aki_of(leaf_der: &[u8]) -> Vec<u8> {
     }) else {
         panic!("the leaf has no Authority Key Identifier")
     };
-    aki.key_identifier.as_ref().expect("a key identifier").0.to_vec()
+    aki.key_identifier
+        .as_ref()
+        .expect("a key identifier")
+        .0
+        .to_vec()
 }
 
 /// T1: the leaf names the CA key in its Authority Key Identifier. Python 3.13 refuses a leaf

@@ -34,22 +34,18 @@ mod enc {
             .into_bytes()
     }
 
-    fn encode<W: Write>(mut e: W, data: &[u8], finish: impl FnOnce(W) -> Vec<u8>) -> Vec<u8> {
-        e.write_all(data).unwrap();
-        finish(e)
+    macro_rules! encoder {
+        ($name:ident, $enc:ident) => {
+            pub fn $name(data: &[u8]) -> Vec<u8> {
+                let mut e = $enc::new(Vec::new(), Compression::default());
+                e.write_all(data).unwrap();
+                e.finish().unwrap()
+            }
+        };
     }
-
-    pub fn gzip(data: &[u8]) -> Vec<u8> {
-        encode(GzEncoder::new(Vec::new(), Compression::default()), data, |e| e.finish().unwrap())
-    }
-
-    pub fn zlib(data: &[u8]) -> Vec<u8> {
-        encode(ZlibEncoder::new(Vec::new(), Compression::default()), data, |e| e.finish().unwrap())
-    }
-
-    pub fn raw_deflate(data: &[u8]) -> Vec<u8> {
-        encode(DeflateEncoder::new(Vec::new(), Compression::default()), data, |e| e.finish().unwrap())
-    }
+    encoder!(gzip, GzEncoder);
+    encoder!(zlib, ZlibEncoder);
+    encoder!(raw_deflate, DeflateEncoder);
 }
 use enc::{gzip, raw_deflate, sse, zlib};
 
