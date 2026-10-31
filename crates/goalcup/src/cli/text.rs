@@ -242,8 +242,15 @@ pub fn server_unreachable(e: &ServerError) -> String {
     format!("{said} A run needs it to start.")
 }
 
-pub fn approval_intro(name: &str) -> String {
-    format!("Approve {name} in your browser. Every run asks for its own approval; that is normal.")
+pub fn approval_intro(mode: RunMode, name: &str) -> String {
+    let what = match mode {
+        RunMode::Practice => "this practice run",
+        RunMode::Test => "this organizer test run",
+        RunMode::Competition => "your run",
+    };
+    format!(
+        "Approve {what} of {name} in your browser. Every run asks for its own approval; that is normal."
+    )
 }
 
 pub fn approval_address(opened: bool, address: &str) -> String {
@@ -364,7 +371,7 @@ pub fn local_clock(unix: u64) -> String {
         return format!("{day}, {} UTC", &time[..5]);
     }
     let a = off.unsigned_abs();
-    let zone = if zone.is_empty() {
+    let zone = if zone.is_empty() || !zone.chars().all(|c| c.is_ascii_alphabetic()) {
         format!(
             "UTC{}{:02}:{:02}",
             if off < 0 { '-' } else { '+' },
@@ -633,10 +640,20 @@ pub fn long_tunnel(host: &str, minutes: Option<u64>, up: u64) -> String {
 
 /// A listed host tunnelled unread, by its GAP reason name (or note `ca_refused`).
 pub fn listed_tunnel(host: &str, reason: &str) -> String {
-    format!(
-        "{PROBLEM} Not recorded: {host} ({}). Its traffic passed through unread.",
-        gap_words(reason)
-    )
+    match reason {
+        "tls_refused" | "pinned" => format!(
+            "{PROBLEM} Not recorded: {host} refused the recorder (it checks its own certificates). \
+             Its traffic passed through unread."
+        ),
+        "upstream_untrusted" => format!(
+            "{PROBLEM} Not recorded: {host}'s certificate is not one goalcup trusts (a company \
+             proxy?), so goalcup passed it through unread."
+        ),
+        _ => format!(
+            "{PROBLEM} Not recorded: {host} ({}). Its traffic passed through unread.",
+            gap_words(reason)
+        ),
+    }
 }
 
 pub fn parse_stopped(host: Option<&str>, at: Option<u64>) -> String {
@@ -746,6 +763,18 @@ pub fn session_files(files: u64, bytes: u64) -> String {
         plural(files, "session file", "session files"),
         size_words(bytes)
     )
+}
+
+/// `Off: 1 time, 2 min 30 s in total.`
+pub fn off_line(spans: u64, ms: u64) -> String {
+    match (spans, ms) {
+        (0, 0) => "Off: never.".to_owned(),
+        _ => format!(
+            "Off: {}, {} in total.",
+            plural(spans, "time", "times"),
+            span_words(ms)
+        ),
+    }
 }
 
 pub fn off_total(spans: u64, ms: u64) -> String {
