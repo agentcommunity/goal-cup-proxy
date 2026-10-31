@@ -69,13 +69,16 @@ fn ca_constraints_validity_and_leaf_shape() {
     let ca_der = ca.cert_der().to_vec();
     let cert = parse(&ca_der);
 
-    let bc = cert.basic_constraints().unwrap().expect("basic constraints");
+    let bc = cert
+        .basic_constraints()
+        .unwrap()
+        .expect("basic constraints");
     assert!(bc.value.ca);
     assert_eq!(bc.value.path_len_constraint, Some(0));
 
-    let Some((ParsedExtension::NameConstraints(nc), critical)) = extension(&cert, |p| {
-        matches!(p, ParsedExtension::NameConstraints(_))
-    }) else {
+    let Some((ParsedExtension::NameConstraints(nc), critical)) =
+        extension(&cert, |p| matches!(p, ParsedExtension::NameConstraints(_)))
+    else {
         panic!("the CA has no name constraints")
     };
     assert!(critical, "name constraints must be critical");
