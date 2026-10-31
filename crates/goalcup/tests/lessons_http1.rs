@@ -78,11 +78,7 @@ fn drive(
     }
     let (reason, cut_close, unsent) = how;
     let closed = Box::new(p).end(Mono::now(), reason, cut_close, unsent);
-    Run {
-        calls,
-        fed,
-        closed,
-    }
+    Run { calls, fed, closed }
 }
 
 /// A clean exchange: nothing stops, nothing is held at the close.
@@ -240,14 +236,38 @@ fn chunk_size_rules() {
     let long_ext = format!("5;{}\r\nhello\r\n0\r\n\r\n", "e".repeat(4096));
     let padded = format!("{}5\r\nhello\r\n0\r\n\r\n", "0".repeat(5000));
     let ok: [(&str, Vec<u8>, &[u8]); 8] = [
-        ("lower hex", b"a\r\n0123456789\r\n0\r\n\r\n".to_vec(), b"0123456789"),
-        ("upper hex", b"A\r\n0123456789\r\n0\r\n\r\n".to_vec(), b"0123456789"),
-        ("extensions", b"5;x=1;y=\"q;r\"\r\nhello\r\n0\r\n\r\n".to_vec(), b"hello"),
-        ("space before the extension", b"5 ; x\r\nhello\r\n0\r\n\r\n".to_vec(), b"hello"),
+        (
+            "lower hex",
+            b"a\r\n0123456789\r\n0\r\n\r\n".to_vec(),
+            b"0123456789",
+        ),
+        (
+            "upper hex",
+            b"A\r\n0123456789\r\n0\r\n\r\n".to_vec(),
+            b"0123456789",
+        ),
+        (
+            "extensions",
+            b"5;x=1;y=\"q;r\"\r\nhello\r\n0\r\n\r\n".to_vec(),
+            b"hello",
+        ),
+        (
+            "space before the extension",
+            b"5 ; x\r\nhello\r\n0\r\n\r\n".to_vec(),
+            b"hello",
+        ),
         ("a 4 KiB extension", long_ext.into_bytes(), b"hello"),
-        ("leading zeros are not digits", padded.into_bytes(), b"hello"),
+        (
+            "leading zeros are not digits",
+            padded.into_bytes(),
+            b"hello",
+        ),
         ("bare LF everywhere", b"5\nhello\n0\n\n".to_vec(), b"hello"),
-        ("last chunk with an extension", b"5\r\nhello\r\n0;done\r\n\r\n".to_vec(), b"hello"),
+        (
+            "last chunk with an extension",
+            b"5\r\nhello\r\n0;done\r\n\r\n".to_vec(),
+            b"hello",
+        ),
     ];
     for (label, body, want) in ok {
         let down = [CHUNKED_HEAD, &body, OK_RESPONSE].concat();
@@ -274,7 +294,11 @@ fn chunk_size_rules() {
         ("0x prefix", b"0x5\r\nhello\r\n", b""),
         ("17 significant digits", b"11111111111111111\r\n", b""),
         ("overflow", b"FFFFFFFFFFFFFFFFFFFF\r\n", b""),
-        ("junk after the data", b"5\r\nhelloXX\r\n0\r\n\r\n", b"hello"),
+        (
+            "junk after the data",
+            b"5\r\nhelloXX\r\n0\r\n\r\n",
+            b"hello",
+        ),
     ];
     for (label, body, kept) in bad {
         let down = [CHUNKED_HEAD, body, OK_RESPONSE].concat();
@@ -289,7 +313,11 @@ fn chunk_size_rules() {
         let resps = of_kind(&run.calls, StreamKind::HttpResp);
         assert_eq!(resps.len(), 1, "{label}: nothing parses after the fault");
         assert_eq!(data_of(&run.calls, resps[0].0), kept, "{label}");
-        assert_eq!(end_of(&run.calls, resps[0].0).0, EndReason::DecodeError, "{label}");
+        assert_eq!(
+            end_of(&run.calls, resps[0].0).0,
+            EndReason::DecodeError,
+            "{label}"
+        );
         let gap_sids: Vec<_> = gaps(&run.calls)
             .into_iter()
             .map(|g| match g {
@@ -377,7 +405,10 @@ fn framing_matrix() {
         );
         let stop = run.fed.unwrap_or_else(|| panic!("{length}: parsing stops"));
         assert_eq!(stop.reason, GapReason::DecodeFailed, "{length}");
-        assert!(of_kind(&run.calls, StreamKind::HttpResp).is_empty(), "{length}");
+        assert!(
+            of_kind(&run.calls, StreamKind::HttpResp).is_empty(),
+            "{length}"
+        );
     }
 
     // No length and not chunked: the body is whatever comes until the server closes.
@@ -390,7 +421,9 @@ fn framing_matrix() {
             (EndReason::Complete, false, &[]),
         );
         assert!(run.fed.is_none() && run.closed.is_none());
-        let [(resp, _, _)] = of_kind(&run.calls, StreamKind::HttpResp).try_into().unwrap();
+        let [(resp, _, _)] = of_kind(&run.calls, StreamKind::HttpResp)
+            .try_into()
+            .unwrap();
         assert_eq!(data_of(&run.calls, resp), b"data: 1\n\ndata: 2\n\n");
         let (reason, tail) = end_of(&run.calls, resp);
         assert_eq!((reason, &tail["wire"]), (EndReason::Complete, &json!(18)));
@@ -401,7 +434,9 @@ fn framing_matrix() {
             (cut, cut),
             (EndReason::Complete, true, &[]),
         );
-        let [(resp, _, _)] = of_kind(&run.calls, StreamKind::HttpResp).try_into().unwrap();
+        let [(resp, _, _)] = of_kind(&run.calls, StreamKind::HttpResp)
+            .try_into()
+            .unwrap();
         assert_eq!(end_of(&run.calls, resp).0, EndReason::Interrupted);
         assert_eq!(data_of(&run.calls, resp), b"data: 1\n\ndata: 2\n\n");
     }
@@ -444,16 +479,23 @@ fn informational_then_final_keeps_the_pair() {
         let note = json!("informational_response");
         assert_eq!(
             notes,
-            [(note.clone(), json!(100)), (note.clone(), json!(103)), (note, json!(102))]
+            [
+                (note.clone(), json!(100)),
+                (note.clone(), json!(103)),
+                (note, json!(102))
+            ]
         );
     }
 }
+
+/// A label, the client bytes, the server bytes, and the DATA the cut body keeps.
+type Eof<'a> = (&'a str, &'a [u8], &'a [u8], &'a [u8]);
 
 /// H8: the connection ends inside a body. The stream ends `interrupted`, never `complete`, and
 /// what arrived is in the record.
 #[test]
 fn eof_inside_a_body_is_interrupted() {
-    let cases: [(&str, &[u8], &[u8], &[u8]); 4] = [
+    let cases: [Eof; 4] = [
         (
             "a response of known length",
             b"GET /a HTTP/1.1\r\n\r\n",
@@ -476,7 +518,7 @@ fn eof_inside_a_body_is_interrupted() {
             "a request body",
             b"POST /a HTTP/1.1\r\nContent-Length: 10\r\n\r\nabc",
             b"",
-            b"",
+            b"abc",
         ),
     ];
     for (label, up, down, want) in cases {
@@ -485,7 +527,10 @@ fn eof_inside_a_body_is_interrupted() {
             // is unfinished.
             let run = drive(up, down, (cut, cut), (EndReason::Complete, false, &[]));
             assert!(run.fed.is_none(), "{label}");
-            assert!(run.closed.is_none(), "{label}: every byte is in some stream");
+            assert!(
+                run.closed.is_none(),
+                "{label}: every byte is in some stream"
+            );
             assert!(gaps(&run.calls).is_empty(), "{label}");
             let kind = if down.is_empty() {
                 StreamKind::HttpReq
@@ -506,7 +551,12 @@ fn request_after_upstream_close_is_marked_unsent() {
     let first = b"GET /a HTTP/1.1\r\n\r\n";
     let down = b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok";
     let cases: [(&str, &[u8], EndReason, &[u8]); 3] = [
-        ("a bare GET", b"GET /late HTTP/1.1\r\n\r\n", EndReason::Complete, b""),
+        (
+            "a bare GET",
+            b"GET /late HTTP/1.1\r\n\r\n",
+            EndReason::Complete,
+            b"",
+        ),
         (
             "a POST with its body",
             b"POST /late HTTP/1.1\r\nContent-Length: 3\r\n\r\nabc",
@@ -528,7 +578,10 @@ fn request_after_upstream_close_is_marked_unsent() {
             (EndReason::Interrupted, false, unsent),
         );
         assert!(run.fed.is_none(), "{label}");
-        assert!(run.closed.is_none(), "{label}: recorded, so nothing is held");
+        assert!(
+            run.closed.is_none(),
+            "{label}: recorded, so nothing is held"
+        );
         assert!(gaps(&run.calls).is_empty(), "{label}");
         let reqs = of_kind(&run.calls, StreamKind::HttpReq);
         assert_eq!(reqs.len(), 2, "{label}");
@@ -550,9 +603,18 @@ fn request_after_upstream_close_is_marked_unsent() {
 #[test]
 fn unframeable_heads_stop_parsing_and_count_their_bytes() {
     let heads: [(&str, &[u8]); 9] = [
-        ("obsolete line folding", b"GET / HTTP/1.1\r\nA: b\r\n folded\r\n\r\n"),
-        ("a space in a header name", b"GET / HTTP/1.1\r\nBad Name: x\r\n\r\n"),
-        ("a header line with no colon", b"GET / HTTP/1.1\r\nno colon here\r\n\r\n"),
+        (
+            "obsolete line folding",
+            b"GET / HTTP/1.1\r\nA: b\r\n folded\r\n\r\n",
+        ),
+        (
+            "a space in a header name",
+            b"GET / HTTP/1.1\r\nBad Name: x\r\n\r\n",
+        ),
+        (
+            "a header line with no colon",
+            b"GET / HTTP/1.1\r\nno colon here\r\n\r\n",
+        ),
         (
             "a non-ASCII Content-Length",
             b"POST / HTTP/1.1\r\nContent-Length: 5\xc3\xa9\r\n\r\nhello",
@@ -581,9 +643,16 @@ fn unframeable_heads_stop_parsing_and_count_their_bytes() {
         );
         let stop = run.fed.unwrap_or_else(|| panic!("{label}: parsing stops"));
         assert_eq!(stop.reason, GapReason::DecodeFailed, "{label}");
-        assert_eq!(stop.held, head.len() as u64, "{label}: every byte is counted");
+        assert_eq!(
+            stop.held,
+            head.len() as u64,
+            "{label}: every byte is counted"
+        );
         assert!(!stop.at_close, "{label}");
-        assert!(of_kind(&run.calls, StreamKind::HttpReq).is_empty(), "{label}");
+        assert!(
+            of_kind(&run.calls, StreamKind::HttpReq).is_empty(),
+            "{label}"
+        );
         assert!(run.closed.is_none(), "{label}: the close adds nothing");
     }
 
