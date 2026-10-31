@@ -20,10 +20,10 @@ use std::sync::Mutex;
 /// a part left without its `.idx` still goes. The last part with an index line goes only once the
 /// server sealed the entry (`final` is `sealed`), at its last line. `counts.jsonl` is synced, then
 /// `upload.json`, with `confirmed`, is written and synced with its folder, before any delete; when
-/// either fails nothing is deleted (a missing `counts.jsonl` has nothing to sync). Each part file goes first and its `.idx` second: a crash between the two leaves an
-/// `.idx` with no part, which nothing reads and nothing removes later. Only deletes that worked
-/// are added to `pruned`, which is written again after them; a failed delete is tried again on a
-/// later call. Never panics.
+/// either fails nothing is deleted (a missing `counts.jsonl` has nothing to sync). Each part file
+/// goes first and its `.idx` second: a crash between the two leaves an `.idx` with no part, which
+/// nothing reads and nothing removes later. Only deletes that worked are added to `pruned`, which
+/// is written again after them; a failed delete is tried again on a later call. Never panics.
 pub fn prune(entry_dir: &Path, j: &Mutex<UploadJson>, file: &Mutex<Writer>) {
     let rec = entry_dir.join("rec");
     let Some((confirmed, sealed)) = ({
