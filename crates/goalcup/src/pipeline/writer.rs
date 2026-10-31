@@ -326,6 +326,11 @@ impl Writer {
             self.link();
         }
         if self.unsynced && since(self.last_sync) >= SYNC_NS {
+            // Records written since the LINK get one first: the cursors and totals a sync
+            // publishes must be those of its LINK, never ahead of it.
+            if self.dirty {
+                self.link();
+            }
             self.sync();
         }
     }
@@ -374,9 +379,9 @@ impl Writer {
         }
     }
 
-    /// `fdatasync`, the durable point and its files, then rotation when due. Called right after
-    /// a LINK, so the cursors and totals are those of that LINK. The rotation's LINK has its
-    /// `counts.jsonl` line before it, whether or not it comes.
+    /// `fdatasync`, the durable point and its files, then rotation when due. Called with no
+    /// record written since the last LINK, so the cursors and totals are those of that LINK. The
+    /// rotation's LINK has its `counts.jsonl` line before it, whether or not it comes.
     fn sync(&mut self) {
         let d = self.w.sync().unwrap_or_else(|e| self.fail(&e));
         self.publish(d);
