@@ -10,11 +10,12 @@
 //! upstream TCP leg (before the `200`, so an unreachable target is a `502` and a server-first
 //! protocol can win the first-bytes race), the ClientHello, the decision, then a tunnel or both
 //! TLS legs (upstream first, so a bad upstream certificate is never laundered into our leaf) and
-//! the pump with a parser.
+//! the pump with a parser: [`h2::H2`] when TLS chose `h2`, else [`http1::Http1`].
 
 pub mod ca;
 pub mod connect;
 pub mod decode;
+pub mod h2;
 pub mod hosts;
 pub mod http1;
 pub mod pump;
@@ -23,14 +24,12 @@ pub mod tunnel;
 pub mod ws;
 
 use crate::connector::{Decision, HostList, Kind, Source};
-use crate::pipeline::{
-    EndReason, GapReason, Mono, OpenFlags, Recorder, StreamHandle, StreamKind, fds,
-};
+use crate::pipeline::{EndReason, Mono, OpenFlags, Recorder, StreamHandle, StreamKind, fds};
 use bytes::Bytes;
 use ca::RunCa;
 use connect::{First, Hello, NoHead, PrefixedIo, RefusalNotes, fingerprint_hex16};
 use hosts::Hosts;
-use pump::{Parser, Pumped, Stop};
+use pump::{Parser, Pumped};
 use rustls::pki_types::{CertificateDer, ServerName};
 use serde_json::{Value, json};
 use std::collections::HashMap;
@@ -46,7 +45,6 @@ use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::oneshot;
 use tunnel::{ConnMeta, TunnelConn};
-use ws::Dir;
 
 /// Relay threads (rule 6): TLS, framing and decoding only.
 pub const RELAY_THREADS: usize = 2;
@@ -416,7 +414,7 @@ where
     drop(hold);
     let mut conn = rec.open(StreamKind::Conn, 0, 0, 0, OpenFlags::DECRYPTED, meta);
     let parser: Box<dyn Parser> = match h2 {
-        true => Box::new(H2Unparsed),
+        true => Box::new(h2::H2::new(rec, conn.sid())),
         false => Box::new(http1::Http1::new(rec, conn.sid())),
     };
     let p = pump::relay(rec, &mut conn, legs, prefixes, Some(parser), &b.quiet, None).await;
@@ -477,35 +475,6 @@ fn lost_tunnel(rec: &Recorder, c: &TunnelConn, (up, down): (u64, u64), tail: Opt
         EndReason::Interrupted,
         Some(json!({"up": up, "down": down})),
     );
-}
-
-/// Until the HTTP/2 parser lands: an `h2` connection relays every byte and names its loss (5a
-/// `h2_unsupported`), never silently.
-struct H2Unparsed;
-
-impl Parser for H2Unparsed {
-    fn feed(&mut self, _: Dir, t: Mono, bytes: &[u8]) -> Result<(), Stop> {
-        Err(stop_h2(t, bytes.len(), false))
-    }
-
-    fn end(self: Box<Self>, t: Mono, _: EndReason, _: bool, unsent: &[u8]) -> Option<Stop> {
-        (!unsent.is_empty()).then(|| stop_h2(t, unsent.len(), true))
-    }
-
-    fn panicked(self: Box<Self>, t: Mono) -> Stop {
-        Stop::panic(0, t)
-    }
-}
-
-fn stop_h2(since: Mono, held: usize, at_close: bool) -> Stop {
-    let (reason, tail, held) = (GapReason::H2Unsupported, None, held as u64);
-    Stop {
-        reason,
-        tail,
-        held,
-        since,
-        at_close,
-    }
 }
 
 /// The harness leg's TCP bytes: read (`n[0]`) and written (`n[1]`).
