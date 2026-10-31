@@ -30,14 +30,21 @@ fn seal(rec: &Recorder, dir: &Path) -> Vec<Record> {
         .unwrap()
         .map(|i| i.unwrap().rec)
         .collect();
-    assert!(matches!(whole.last(), Some(Record::Link { .. })), "the seal's LINK is last");
+    assert!(
+        matches!(whole.last(), Some(Record::Link { .. })),
+        "the seal's LINK is last"
+    );
     let before = &whole[whole.len() - 2];
     assert!(matches!(before, Record::Event { json, .. } if event(json)["ev"] == "seal"));
     let name = last.file_name().unwrap().to_str().unwrap();
     let idx = last.with_file_name(format!("{}.idx", name.trim_end_matches(".gcr.zst")));
     let lines = goalcup_format::read::read_index(&idx).unwrap();
     assert_eq!(lines.last().map(|l| l.kind), Some(IndexKind::E));
-    assert_eq!(sealed, entry_totals(dir).counts, "the sealed totals equal a recount");
+    assert_eq!(
+        sealed,
+        entry_totals(dir).counts,
+        "the sealed totals equal a recount"
+    );
     records(dir)
 }
 
@@ -83,7 +90,14 @@ fn after_stop(recs: &[Record]) -> Option<(u64, u64, u64, Value)> {
 fn open_streams_end_cut_at_seal_with_every_byte_written() {
     let dir = tempfile::tempdir().unwrap();
     let rec = real(dir.path());
-    let conn = rec.open(StreamKind::Conn, 0, 0, 0, OpenFlags::NONE, json!({"host": "a.test"}));
+    let conn = rec.open(
+        StreamKind::Conn,
+        0,
+        0,
+        0,
+        OpenFlags::NONE,
+        json!({"host": "a.test"}),
+    );
     let mut req = rec.open(StreamKind::HttpReq, conn.sid(), 0, 0, REQ, json!({}));
     let mut offered = b"POST / HTTP/1.1\r\n\r\n".to_vec();
     // The masker holds this tail back for a match that may go on.
@@ -119,7 +133,11 @@ fn a_wire_call_after_the_stop_is_in_the_after_stop_gap() {
             assert!(!bytes.windows(8).any(|w| w == b"zq-after"));
         }
     }
-    assert!(!recs.iter().any(|r| matches!(r, Record::Open { sid, .. } if *sid == other.sid())));
+    assert!(
+        !recs
+            .iter()
+            .any(|r| matches!(r, Record::Open { sid, .. } if *sid == other.sid()))
+    );
 }
 
 /// Points 1 and 3 (R3-3): a native stream offered between the wire stop and the native finish is
@@ -163,7 +181,9 @@ fn a_guard_gap_open_at_the_seal_is_closed() {
     });
     let (_, _, end) = stream(&recs, req.sid());
     assert_eq!(end, Some((EndReason::CutAtSeal, 4096)));
-    let end_at = recs.iter().position(|r| matches!(r, Record::End { sid, .. } if *sid == req.sid()));
+    let end_at = recs
+        .iter()
+        .position(|r| matches!(r, Record::End { sid, .. } if *sid == req.sid()));
     assert!(gap.expect("the guard GAP") < end_at.unwrap());
 }
 
@@ -177,7 +197,14 @@ fn the_key_file_goes_and_an_after_stop_host_is_masked() {
     std::fs::write(&key_file, b"fake key for the test").unwrap();
     rec.stop_wire_for_tests();
     let key = ["gh", "p_", &"a1B2".repeat(9)].concat();
-    let mut c = rec.open(StreamKind::Conn, 0, 0, 0, OpenFlags::NONE, json!({"host": key}));
+    let mut c = rec.open(
+        StreamKind::Conn,
+        0,
+        0,
+        0,
+        OpenFlags::NONE,
+        json!({"host": key}),
+    );
     c.data(rec.now(), Bytes::from_static(b"relayed after the stop"));
     let recs = seal(&rec, dir.path());
     assert!(!key_file.exists());
@@ -187,11 +214,16 @@ fn the_key_file_goes_and_an_after_stop_host_is_masked() {
     let mut all = Vec::new();
     for f in std::fs::read_dir(dir.path().join("rec")).unwrap() {
         let p = f.unwrap().path();
-        let Ok(bytes) = std::fs::read(&p) else { continue };
+        let Ok(bytes) = std::fs::read(&p) else {
+            continue;
+        };
         all.extend(bytes);
         if p.to_string_lossy().ends_with(".gcr.zst") {
             let file = std::fs::File::open(&p).unwrap();
-            zstd::stream::read::Decoder::new(file).unwrap().read_to_end(&mut all).unwrap();
+            zstd::stream::read::Decoder::new(file)
+                .unwrap()
+                .read_to_end(&mut all)
+                .unwrap();
         }
     }
     all.extend(std::fs::read(dir.path().join("status.json")).unwrap());

@@ -98,7 +98,8 @@ impl Sealer {
         let fin = native.map(|n| n.finish(exited, guard)).unwrap_or_default();
         sealing(false);
         if let Some(o) = &ask.outlived {
-            let note = json!({"ev": "note", "what": "outlived", "count": o.count, "programs": o.programs});
+            let note =
+                json!({"ev": "note", "what": "outlived", "count": o.count, "programs": o.programs});
             rec.event(note);
         }
         let ws = workspace.as_deref();
@@ -166,7 +167,10 @@ impl Sealer {
             totals,
         };
         if let Some(u) = uploader {
-            u.finish(WrapUp::starting(rec.now(), &Policy::default()), facts.clone());
+            u.finish(
+                WrapUp::starting(rec.now(), &Policy::default()),
+                facts.clone(),
+            );
         }
         facts
     }

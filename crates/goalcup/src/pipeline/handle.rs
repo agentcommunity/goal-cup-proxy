@@ -285,7 +285,7 @@ mod tests {
             | Item::Data { sid, .. }
             | Item::Gap { sid, .. }
             | Item::End { sid, .. } => *sid,
-            Item::Event { .. } => 0,
+            Item::Event { .. } | Item::Mark(_) => 0,
         }
     }
 

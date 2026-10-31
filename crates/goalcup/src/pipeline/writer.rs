@@ -16,9 +16,7 @@ use super::out::{Out, Source, ToWriter};
 use super::status::{Board, Off, SealStatus};
 use super::{ExitOnPanic, OpenFlags, Recorder, Sid, low_priority, secure};
 use crate::cli::log::{self, Fact};
-use goalcup_format::{
-    EndReason, FLAG_FIN, GapReason, PartOptions, PartWriter, Record, StreamKind,
-};
+use goalcup_format::{EndReason, FLAG_FIN, GapReason, PartOptions, PartWriter, Record, StreamKind};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::io;

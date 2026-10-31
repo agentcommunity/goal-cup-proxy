@@ -7,7 +7,9 @@ use goalcup_format::{Record, StreamKind};
 use serde_json::Value;
 
 /// What the writer's channel carries: a masked record, or a seal marker, which counts
-/// `CONTROL_HELD` and is released like a control item.
+/// `CONTROL_HELD` and is released like a control item. Records are the hot path and markers come
+/// twice per entry, so the record stays unboxed.
+#[allow(clippy::large_enum_variant)]
 pub(crate) enum ToWriter {
     Rec(Out),
     Mark(Mark),
