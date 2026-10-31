@@ -6,9 +6,8 @@ K8 are real runs, not here. Fixtures, under scripts/pad/fixtures/, each a synthe
   <name>-part/     an entry folder (rec/ and the native files)      <name>-fetched/  fetch-run's fetched/<entry>/
   k2-part, k2-fetched (PRD-08 check_run1_shape.rs, GOALCUP_FIXTURES_OUT); k7-part, k7-fetched, the clean pair
   that K6, K9 and K10 tamper with; k11-a, k11-b, k11-c (part only), k11-d and k11-d-fetched (PRD-09 history).
-Not yet exercised: no writer of these fixtures is on the integration branch (PRD-08's tests do not write
-k2-part/k2-fetched through GOALCUP_FIXTURES_OUT, PRD-09 has not written the K11 folders), so every control is "not run",
-the exit is 3 and pad_trusted_at stays null. The CONTROLS expectations below have never met a fixture.
+K2 has met its real fixture (PRD-08 check_run1_shape.rs); K6, K7, K9, K10 and K11 are still "not run": the k7 pair
+waits on PRD-08 slice 6 and the k11 folders on PRD-09, so the exit is 3 and pad_trusted_at stays null.
 A control whose fixtures are absent is "not run". Exit 0: every control ran as wanted; 1: one differed; 3: none
 differed but one did not run, so a missing fixture never reads as trusted. C3 is never wanted here: the setup
 script's planted values (K5) and the box's other scans are not part of an offline fold. Writes pad-out/selftest.json.
@@ -138,8 +137,9 @@ def compare(row, found, want, finds, mods):
         bad.append("history orphans %s, wanted %s" % (hist["orphans"], mods["orphans"]))
     if "in_gap" in mods:
         if hist["orphans_in_gaps"] is None:  # null until PRD-08 or PRD-09 reports it: half the evidence is no pass
-            raise NotRun("the history check reported no in-gap orphan count")
-        if hist["orphans_in_gaps"] != mods["in_gap"]:
+            if not bad:  # a K11b already differing is reported as differing, not as not run
+                raise NotRun("the history check reported no in-gap orphan count")
+        elif hist["orphans_in_gaps"] != mods["in_gap"]:
             bad.append("history orphans in gaps %s, wanted %s" % (hist["orphans_in_gaps"], mods["in_gap"]))
     return bad
 
