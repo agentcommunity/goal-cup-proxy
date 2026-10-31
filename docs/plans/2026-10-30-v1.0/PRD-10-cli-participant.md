@@ -1462,3 +1462,7 @@ What the pad calls, as merged (PRD-12 note):
   hold secret bytes in memory for no use. `MaskError` text is fixed (no byte, no value, no length) and may
   be printed as is.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-31, conductor seam decisions with PRD-02 (08:40Z)
+
+`watchdog::run(plan, facts) -> ExitCode` stays (S8); `StartFacts` gets typed fields (`HostList`, `NativeSources`, `Vec<MaskRule>`, `Vec<SecretValue>`, `ConnectorRef`) and `home: PathBuf` in PRD-02 slice A: build `start.rs` against that shape. `watchdog::recover(entry_dir, facts) -> Result<Recovered, NotRecovered>` as ask N9; a live recorder is never killed and `recover` exits 0 saying recording is on. `goalcup seal` sends SIGUSR1 to the pid in `rec/watchdog.pid`; with no watchdog it sends SIGTERM to the recorder (PRD-02 slice B handles it, reason `signal`). Rung 1 needs `start` and `seal` merged.
