@@ -2417,3 +2417,13 @@ kept and now cites BUILD-PROMPT section 5, since B3 no longer carries it.
 
 - **Size report, PRD-17** (`wc -l` on integration): `crates/goalcup/tests/lessons_*.rs` 3,462 lines (eight files) against the PRD-00 row of 3,000 shared with PRD-14 (+15%). PRD-17 has no src. Carry to the end-of-build report with the other overages; PRD-14 must cut its own share to keep the Rust test total near 14,200.
 - **Gate effect:** none on order. The deletion gate (check 1) still needs K15, the serve halves of http1 and ws, and one box run of the full tier (C7 120 s) on the integration head. No seam change. No locked ledger item is touched.
+
+### 31 Oct, after PRD-10 slice 9 (merge 25102adc)
+
+- **Size report, PRD-10** (`wc -l` on integration): `cli/*.rs` 4,490 lines (`main.rs` excluded; `text.rs` 1,174)
+  against the PRD-00 row of about 2,900 (about 1.55 times); up 128 from slice 8 for the hand-over and finish
+  handling. `tests/cli_*.rs` 2,385 against 1,200 (about twice). Carry to the end-of-build report with the
+  PRD-03, PRD-12 and PRD-17 overages. Slice 10 must be net-negative in `text.rs` before it adds lines.
+- **Gate effect:** none on order. The remaining PRD-10 work (`continue`, `recover`, seal on a dead entry) still
+  waits on `watchdog::recover` and `pipeline::close_dead_entry` reaching integration; `watchdog::run` is there.
+  Acceptance 10 and 11 stay open until slice 10. No seam change. No locked ledger item is touched.
