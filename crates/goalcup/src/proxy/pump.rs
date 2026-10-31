@@ -80,8 +80,11 @@ pub struct Pumped<C, U> {
     pub upstream: U,
     pub plain_up: u64,
     pub plain_down: u64,
-    /// `complete` when both sides closed cleanly (a client's cut counts as clean, an upstream's
-    /// does not: it is passed on as a cut), else `interrupted`.
+    /// `complete` when both directions ended in a close: a client's cut counts as one, and so
+    /// does an upstream cut that comes after the client half-closed (`Eof` then `Cut`).
+    /// `interrupted` when a leg errored, or when an upstream cut ends the relay first and leaves
+    /// the client leg `Dropped`. No byte is lost and no GAP is written for a cut either way: a
+    /// close-delimited body it may have shortened still ends interrupted through `down_cut`.
     pub reason: EndReason,
     /// The upstream leg errored (reset, TLS error, read or write error), not a clean close.
     pub upstream_failed: bool,
@@ -94,10 +97,11 @@ pub struct Pumped<C, U> {
 pub type Tap<'a> = &'a (dyn Fn(Dir, Mono, u64) + Sync);
 
 /// How one direction ended. `Cut`: a TLS peer closed without close_notify. A client's cut is
-/// passed on as a clean close. An upstream's cut ends the relay with no shutdown of the client
-/// leg, so the harness gets no close_notify either and sees a close-delimited body cut, as it
-/// would without us (rule 8); the caller drops that leg, a plain TCP close. `Dropped`: the leg was
-/// left unfinished when the other one ended the relay.
+/// passed on as a clean close. An upstream's cut ends the relay (at once, unless the client
+/// already half-closed) with no shutdown of the client leg, so the harness gets no close_notify
+/// either and sees a close-delimited body cut, as it would without us (rule 8); the caller drops
+/// that leg, a plain TCP close. `Dropped`: the leg was left unfinished when the other one ended
+/// the relay.
 #[derive(Clone, Copy)]
 enum Leg {
     Eof,
