@@ -222,7 +222,8 @@ async fn close_before_hello_opens_no_upstream() {
 async fn unlisted_refusal_is_one_round() {
     let (_h, addr, _calls, _) = proxy(HOSTS, &[]);
     let (_refusing, dead) = common::ports::refusing();
-    let asked = tokio::time::timeout(Duration::from_secs(10), connect(addr, &dead.to_string()));
+    let target = dead.to_string();
+    let asked = tokio::time::timeout(Duration::from_secs(10), connect(addr, &target));
     assert_eq!(asked.await.expect("a listed host would still be retrying").1, 502);
 }
 
