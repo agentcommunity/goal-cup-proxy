@@ -1023,3 +1023,28 @@ PRD-01, PRD-05, PRD-08, PRD-12, PRD-16 and the old code.
   for, `mod.rs` the entry reader that must go on past a bad entry and mark a stopped read, and
   `usage_run1.rs` one more point-3 case. **Decision: the ceilings become 2,550 src and 500 tests** (`wc -l` at this slice: src 2,392 before `sqlite.rs`, tests 500);
   `sqlite.rs` stays at 150 and the CSV and `--text` stay last and only if they fit.
+
+### 2026-10-31, replan after the PRD-09 slice 4 re-review (A2-1 to A2-3, N1)
+
+- **Fixed:** `harness_version` keeps its spaces (`codex-cli 0.50.0`, `2.0.14 (Claude Code)` reach the
+  summary): it is checked only for printable ASCII, spaces allowed, at most 128 bytes, the rule the
+  CLI's `reported_line` uses; `run` and `connector` still go through `hints::id`. The output file
+  name is the entry id only when it is non-empty and all ASCII alphanumeric, else the folder's
+  name, else `entry` (a path with no folder name, as in `usage . --out o`), so no entry id can
+  write outside `--out`.
+- **Seam line to PRD-12 (S7 key `read_error`):** S7's summary has a top-level boolean `read_error`.
+  `true` means the read of that entry stopped at a decode error and every count is partial (usage
+  still exits 0). The spend check (ledger T6) must treat a summary with `read_error` true as not
+  read or as a lower bound, never price it as whole; the pad checks C1, C2 and C5 must report
+  INCONCLUSIVE for it, not judge partial thread and token counts as the whole run. The files that
+  do this (`scripts/pad/pad-run`, `scripts/pad/check.py`) are PRD-12's; PRD-09 does not edit them.
+  S7 keys therefore include `read_error` alongside the three widened keys. Until PRD-12 reads it,
+  a partial read is visible in the stderr line and in the key, and nowhere else.
+- **Size decision, stated plainly:** the PRD-00 Size budget row for the usage reader is 1,470 src
+  and 200 tests. The slice is at 2,396 src (`wc -l`: hints 67, mod 612, native 447, out 146, shapes
+  456, sse 61, wire 607), about 63% over, and 500 tests in `usage_run1.rs`, 2.5 times over. The
+  causes are the ones given in the earlier size decisions (both legs of a call joined by id, the
+  entry reader that goes on past a bad entry, thread rows, many harness shapes); no cut was found
+  that keeps behaviour. The ceilings stay 2,550 src; `sqlite.rs` (150) takes the rest. The tests
+  ceiling becomes **520**: the 20-line allowance reserved earlier is kept for the one `sqlite.rs`
+  case (a database copy read by its `set`), and the case goes in `usage_run1.rs`.

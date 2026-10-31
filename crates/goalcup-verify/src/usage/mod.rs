@@ -333,7 +333,11 @@ impl Ctx {
     fn start(&mut self, ev: &Value) {
         let label = |k: &str| ev[k].as_str().and_then(hints::id);
         (self.connector, self.run) = (label("connector"), label("run"));
-        self.harness_version = label("harness_version");
+        // The first line of `<harness> --version`: printable ASCII, spaces kept, at most 128 bytes.
+        self.harness_version = ev["harness_version"]
+            .as_str()
+            .filter(|v| v.len() <= 128 && v.bytes().all(|b| (b' '..=b'~').contains(&b)))
+            .map(str::to_string);
         let lists = ev
             .get("hosts")
             .and_then(Value::as_object)
@@ -585,11 +589,11 @@ fn read_one(a: &Args, e: &crate::input::Entry) -> Result<(), String> {
     }
     let t = calls.finish();
     // The entry names the files, so only a plain id does; else the folder's name.
+    let plain = !t.entry.is_empty() && t.entry.bytes().all(|b| b.is_ascii_alphanumeric());
     let name = match e.dir.file_name() {
-        Some(f) if t.entry.is_empty() || !t.entry.bytes().all(|b| b.is_ascii_alphanumeric()) => {
-            f.to_string_lossy().into_owned()
-        }
-        _ => t.entry.clone(),
+        _ if plain => t.entry.clone(),
+        Some(f) => f.to_string_lossy().into_owned(),
+        None => "entry".to_string(),
     };
     let mut sum = out::summary(&t);
     sum["read_error"] = broke.into();
