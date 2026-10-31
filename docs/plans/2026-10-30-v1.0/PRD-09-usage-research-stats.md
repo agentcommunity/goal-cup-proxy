@@ -1021,5 +1021,5 @@ PRD-01, PRD-05, PRD-08, PRD-12, PRD-16 and the old code.
 - **Size decision:** the slice 4 limits (`out.rs` 120, `mod.rs` at most 40 more, tests 400) were
   missed: `out.rs` carries the per-thread rows (models, effort) that the schema and ledger S2 ask
   for, `mod.rs` the entry reader that must go on past a bad entry and mark a stopped read, and
-  `usage_run1.rs` one more point-3 case. **Decision: the ceilings become 2,540 src and 490 tests**;
+  `usage_run1.rs` one more point-3 case. **Decision: the ceilings become 2,550 src and 500 tests** (`wc -l` at this slice: src 2,392 before `sqlite.rs`, tests 500);
   `sqlite.rs` stays at 150 and the CSV and `--text` stay last and only if they fit.
