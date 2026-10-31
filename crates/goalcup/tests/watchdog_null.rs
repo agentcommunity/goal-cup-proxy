@@ -355,17 +355,26 @@ fn watchdog_null_harness_exit_seals_in_null_mode() {
         .map(|i| i.unwrap())
         .collect();
     assert!(items.iter().all(|i| i.link_ok != Some(false)));
-    assert!(matches!(items.last().map(|i| &i.rec), Some(Record::Link { .. })));
+    assert!(matches!(
+        items.last().map(|i| &i.rec),
+        Some(Record::Link { .. })
+    ));
     let Record::Event { json, .. } = &items[items.len() - 2].rec else {
         panic!("the seal event comes right before the last LINK");
     };
     let seal: Value = serde_json::from_slice(json).unwrap();
-    assert_eq!((&seal["ev"], &seal["reason"]), (&"seal".into(), &"harness_exit".into()));
+    assert_eq!(
+        (&seal["ev"], &seal["reason"]),
+        (&"seal".into(), &"harness_exit".into())
+    );
     let parts = goalcup_format::read::part_files(&rec).unwrap();
     let last = parts.last().unwrap();
     let name = last.file_name().unwrap().to_str().unwrap();
     let idx = last.with_file_name(format!("{}.idx", name.trim_end_matches(".gcr.zst")));
-    let line = *goalcup_format::read::read_index(&idx).unwrap().last().unwrap();
+    let line = *goalcup_format::read::read_index(&idx)
+        .unwrap()
+        .last()
+        .unwrap();
     assert_eq!(line.kind, goalcup_format::IndexKind::R);
     assert_eq!(std::fs::metadata(last).unwrap().len(), line.c_end);
 }
