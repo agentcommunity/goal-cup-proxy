@@ -1019,3 +1019,42 @@ Names for `LESSONS.md` (the lessons lane writes them; judge 14:56Z, 15:13Z):
   (fold, about 6 lines); `leaf_aki_names_the_ca_key` repeats the AKI extract (a small `aki_of` helper, about
   10 lines); `mod enc` has three near-identical encode wrappers. Taste only.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-31, replan after PRD-17 slice 2 (merge 0b661e6e)
+
+- **On integration now:** `lessons_http1.rs` (667 lines) and `lessons_ws.rs` (703) at the parser layer (no
+  `proxy::serve`), `lessons_launch.rs` (408) P3 to P5 at the Shield and harness layer, and the `LESSONS.md`
+  upkeep (renamed guards L-R1 and L-H7 repointed). Lessons test lines total 2,610 (hosts 184, decode 388,
+  tls 260, http1 667, ws 703, launch 408) of the 3,000 shared with PRD-14.
+- **Budget warning:** only about 390 lines are left for `lessons_connect.rs`, the serve-halves of http1 and ws,
+  the D6 GAP and END records, the T4 key half and every later file, and PRD-14's own share is not counted
+  yet. The remaining files must reuse the existing private helpers and add near 300 lines at most; a case
+  that needs more is folded into a PRD-14 guard test or left as a named guard. A total past about 14,200 Rust
+  test lines is the owner question, not this file.
+- **Still waiting:** `lessons_connect.rs` and the serve halves (PRD-03 `serve`), K15 (`common::upstream`),
+  R6 (serve), the T4 key half (PRD-02 writer), SC3 (watchdog loop), and the open rows listed in the log of
+  10:15Z (FW1, C11, P14, HF4, VR1, D7).
+- **L-P3 ctrl-c case is held back with `ignore`.** Box runs fail it about 1 in 9: a pending process-directed
+  SIGINT is delivered after `Shield::harness_exited` restores the default and kills the watchdog in wrap-up.
+  This is a PRD-02 `shield.rs` defect (see its note). Remove the `ignore` in the PRD-02 fix PR; until then
+  L-P3 stays open in `LESSONS.md` and the deletion gate may not count it green.
+- Helpers `common/encode` and the recorder helpers stay private copies here until PRD-14 adds them; when it
+  does, delete the copies in the same PR. No locked ledger item is touched.
+
+### 2026-10-31, replan after PRD-17 slice 3 (merge 2ad2ed16)
+
+- **On integration now:** `lessons_pipeline.rs` (104 lines, the FW1 pipeline case plus the lost-count assert), the
+  gate check 1 dry run, the `LESSONS.md` upkeep (FW1 and R2 name the `lessons_pipeline` guard, W2 and W7 reopened
+  until the relay half has `proxy::serve`). The slice title overclaims: the helper dedupe is one fold in
+  `lessons_hosts.rs` plus the new test using `common::recorder`; the `mod enc` wrappers and `aki_of` nits stay open.
+- **Budget:** lessons test lines total 2,711 (decode 388, hosts 181, http1 667, launch 408, pipeline 104, tls 260,
+  ws 703) of the 3,000 shared with PRD-14, so about 290 lines remain for `lessons_connect.rs`, the serve halves,
+  the D6 GAP and END records and the T4 key half. Same rule as before: reuse the private helpers, fold or leave a
+  named guard when a case needs more.
+- **FW1 copy of the PRD-02 promise:** agreement with PRD-02 is not recorded. The owner of PRD-02 may move the case
+  into `pipeline_guard.rs`; if so delete it here in the same PR and repoint the L-FW1 and L-R2 rows.
+- **Rows stay open** until a box run on the integration head. Nothing the plan owes changes; no locked ledger item is touched.
+
+### 2026-10-31, replan after PRD-03 slice 3 (merge c81e8e9b): serve halves unblocked
+
+`proxy::serve` and `ProxyHandle::quiet_since` are on integration, so the serve halves of the lessons tests can be written now. Cases that need an h2 client wait for `h2.rs`; until then an h2-only client yields a named `h2_unsupported` GAP, which a case must not assert as the final behaviour. Rows stay open until a box run on the integration head. No locked ledger item is touched.

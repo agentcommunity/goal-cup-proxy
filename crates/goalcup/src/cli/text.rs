@@ -8,6 +8,7 @@ use super::RunMode;
 use super::status::State;
 use crate::connector::Refusal;
 use crate::upload::client::ServerError;
+use crate::upload::manual::Outcome;
 use crate::upload::policy::Class;
 use crate::upload::state::{Final, State as Upload, UploadJson};
 use crate::watchdog::Exit;
@@ -1067,11 +1068,15 @@ this computer, so there is no time left to show.";
 pub const PUSH_FRAME: &str = "Your first message must start with these lines. Without them your \
 agent cannot push, and you may not send them later.";
 
-pub fn first_message_ready(file: &Path) -> String {
+pub fn first_message(file: &Path, copied: bool) -> String {
+    let at = if copied {
+        format!("on your clipboard and in {}", file.display())
+    } else {
+        format!("in {}", file.display())
+    };
     format!(
-        "Your first message (the push block, then your prompt) is on your clipboard and in {}. \
-         Paste it once as your first message and press Enter.",
-        file.display()
+        "Your first message (the push block, then your prompt) is {at}. Paste it once as your \
+         first message and press Enter."
     )
 }
 
@@ -1150,4 +1155,96 @@ pub fn no_prompts_left(name: &str) -> String {
         "Left as it is: {name} will stop and ask for approval during the run. Turn approvals off in \
          goalcup's own {name} home yourself, or stay near it to answer."
     )
+}
+
+// The start screen and its refusals.
+pub const NEEDS_REPO: &str =
+    "a real run needs --repo <owner>/<name>, its new, empty, public GitHub repository.";
+
+pub const NO_HARNESS_SAVED: &str = "no harness picked. Run: goalcup setup --harness <id>";
+
+pub fn mask_refused() -> String {
+    format!("goalcup could not set up masking, so nothing was started. Write to {SUPPORT_ADDRESS}.")
+}
+
+pub fn run_kind(mode: RunMode) -> &'static str {
+    match mode {
+        RunMode::Practice => "Practice run.",
+        RunMode::Test => "Organizer test run.",
+        RunMode::Competition => "Your run.",
+    }
+}
+
+pub fn upload_to(host: Option<&str>) -> String {
+    host.map_or_else(
+        || {
+            "Upload: off (GOALCUP_SERVER=off), so this run has no end time and its record files \
+             stay on this computer."
+                .to_owned()
+        },
+        |h| format!("Upload: to {h}, every 5 minutes."),
+    )
+}
+
+/// Section 6, the four tier lines. `version` is the number `--version` showed.
+pub fn tier_line(name: &str, version: Option<&str>, tier: &str, verified: &str) -> String {
+    let who = version.map_or_else(|| name.to_owned(), |v| format!("{name} {v}"));
+    match (tier, version) {
+        ("verified", Some(v)) if v != verified => {
+            format!("{who}: verified with goalcup on {verified}, not on {v}.")
+        }
+        ("verified", None) => format!(
+            "{who}: verified with goalcup on {verified}; the installed version was not read."
+        ),
+        ("verified", _) => format!("{who}: verified with goalcup on {verified}."),
+        ("not supported", _) => format!(
+            "{name}: not supported. goalcup records its session files and the connections it can \
+             see, not its model calls."
+        ),
+        _ => format!(
+            "{who}: not verified. goalcup records what reaches it; goalcup status says if model \
+             requests are missing."
+        ),
+    }
+}
+
+pub fn from_file(what: &str, file: &Path) -> String {
+    format!("{what} from a file: {} (not verified).", file.display())
+}
+
+pub fn harness_home(name: &str, home: &Path) -> String {
+    format!("{name}'s home for this run: \"{}\".", home.display())
+}
+
+pub fn recording_now(name: &str) -> String {
+    format!("{READY_MARK}: {name} opens now.")
+}
+
+/// `goalcup upload`: the outcomes `upload.json` cannot word. A part with no end shows the same
+/// continue line `seal` does.
+pub fn upload_outcome(out: &Outcome, entry: &str, run: &str) -> String {
+    let write = format!("Write to {SUPPORT_ADDRESS}.");
+    match out {
+        Outcome::Done | Outcome::AlreadyThere => "Upload: done. The server holds this part.".into(),
+        Outcome::StillRecording => {
+            format!("Part {entry} is still recording; it sends itself, so there is nothing to do.")
+        }
+        Outcome::NotClosed => seal_not_running(run),
+        Outcome::Local => "Upload: none. This run stays on this computer.".into(),
+        Outcome::NoServer => format!(
+            "This run's server file or credential is missing, so nothing can be sent. Your record \
+             is kept on this computer. {write}"
+        ),
+        Outcome::Refused(_) => {
+            format!("Upload: the server refuses this run. Nothing more is sent. {write}")
+        }
+        Outcome::Closed { upload_by } => format!(
+            "Upload: the server closed this run (it took uploads until {upload_by}). What was \
+             not sent stays on this computer."
+        ),
+        Outcome::Stuck => format!(
+            "Upload: stopped. The server's copy and this computer's copy differ. Nothing more is \
+             sent. {write}"
+        ),
+    }
 }

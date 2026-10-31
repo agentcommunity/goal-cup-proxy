@@ -19,7 +19,7 @@ use std::time::SystemTime;
 
 use serde::{Deserialize, Serialize};
 
-use super::{Server, awake, fail, folder, isolated_home, read_json, record_hosts};
+use super::{Server, awake, fail, folder, isolated_home, record_hosts};
 use super::{setup_json, text};
 use crate::connector::launch::{fill, make_dir, resolve_program};
 use crate::connector::{self, Connector, Decision, Env, Form, HostList, LaunchPlan};
@@ -57,10 +57,8 @@ pub fn run(harness: Option<&str>, yes: bool, record_host: Option<&str>) -> ExitC
         Ok(server) => server,
         Err(e) => return fail(e),
     };
-    let vars: BTreeMap<String, String> = std::env::vars_os()
-        .filter_map(|(k, v)| Some((k.into_string().ok()?, v.into_string().ok()?)))
-        .collect();
-    let saved = read_json::<Saved>(&setup_json(&home)).map(|s| s.harness);
+    let vars = super::env_vars();
+    let saved = super::saved_harness(&home);
     let ask = !yes && std::io::stdin().is_terminal() && std::io::stdout().is_terminal();
     let id = match harness {
         Some(id) => Some(id.to_owned()),

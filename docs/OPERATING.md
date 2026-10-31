@@ -180,8 +180,8 @@ on standard error: the counts are of what was read.
 **`null` means not said, never zero.** A token key the provider did not report is `null`, and a sum
 is `null` when no row said it. Every key, the merged count and the coverage line are in
 [RECORD-FORMAT](RECORD-FORMAT.md#the-goalcup-verify-usage-files). Neither file holds body text or a
-session file path. The step that puts these files in R2 comes with the usage job script (PRD-09); until
-it merges, run the commands above by hand.
+session file path. They are stored as JSON in R2 by the usage job script (PRD-09), which has not
+merged; until it does, run the commands above by hand.
 
 ## Runs whose recording is off
 

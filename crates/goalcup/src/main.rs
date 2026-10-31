@@ -50,7 +50,7 @@ enum Command {
         #[arg(long, value_name = "ID")]
         harness: Option<String>,
         /// A practice run: kept apart from the competition, no GitHub repository.
-        #[arg(long)]
+        #[arg(long, conflicts_with_all = ["test", "repo"])]
         practice: bool,
         /// An organizer test run. Not for participants.
         #[arg(long)]
@@ -154,19 +154,22 @@ fn run(command: Command) -> ExitCode {
     match command {
         Command::Recorder { null } => goalcup::pipeline::run_recorder(null),
         Command::Start {
+            harness,
             practice,
             test,
             repo,
             prompt,
             connector,
             hosts,
-            ..
-        } => cli::start::run(
-            practice || test,
-            connector.is_some() || hosts.is_some(),
-            repo.is_some(),
-            prompt.as_deref(),
-        ),
+        } => cli::start::run(&cli::start::Args {
+            harness: harness.as_deref(),
+            practice,
+            test,
+            repo: repo.as_deref(),
+            prompt: prompt.as_deref(),
+            connector: connector.as_deref(),
+            hosts: hosts.as_deref(),
+        }),
         Command::Setup {
             harness,
             yes,
@@ -176,7 +179,7 @@ fn run(command: Command) -> ExitCode {
         Command::Recover { .. } => not_built("recover"),
         Command::Status { part, json } => cli::status::run(part, json),
         Command::Seal { part, yes } => cli::seal::run(part, yes),
-        Command::Upload { .. } => not_built("upload"),
+        Command::Upload { part } => cli::upload::run(part),
         Command::TimeLeft => cli::time_left::run(),
     }
 }
