@@ -1575,3 +1575,16 @@ What the pad calls, as merged (PRD-12 note):
   need `watchdog::recover` and `pipeline::close_dead_entry`. `watchdog::run` is on integration; the other two
   are not (PRD-06 owns `close_dead_entry` via `dead.rs`). Builders poll for the symbols, as before; a builder
   whose symbols never arrive logs a stop line and the work is replanned again. No locked ledger item is touched.
+
+### 2026-10-31, replan after PRD-10 slice 10 (merge b5cc8617)
+
+- Merged: **A6** (start-failure text for `NOT_STARTED` with an unsealed `status.json` and no harness) and **A7**
+  (timer kills only on `RecvTimeoutError::Timeout`). Review ended with no open defect. B2 (two bool parameters
+  on `closing()`) is declined and accepted. B3 (`closing()` and `never_ran` both touch `status.json`) is a
+  cosmetic nit; take it only if `finish.rs` is touched anyway.
+- **Slice 11 is still the gated half:** `continue`, `recover` and `seal` on a dead entry (acceptance 10 and 11).
+  The slice-10 builder polled 90 minutes and `pipeline::close_dead_entry` and `watchdog::recover` never reached
+  integration, so nothing of this half is built or reviewed. Same rule: poll for the symbols; if they are
+  absent, log a stop line and replan again. The half needs its own review when it lands. Net-negative in
+  `text.rs` before adding lines still holds.
+- No seam change. No locked ledger item is touched.
