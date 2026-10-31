@@ -14,7 +14,9 @@ use common::{HANG, within_async};
 use goalcup::pipeline::{Call, Calls, GapReason};
 use goalcup::proxy::ProxyHandle;
 use goalcup::proxy::ca::RunCa;
-use proxy_fixtures::{HOSTS, client_trusting, connect, conns, get, proxy, through, trusting_run_ca};
+use proxy_fixtures::{
+    HOSTS, client_trusting, connect, conns, get, proxy, through, trusting_run_ca,
+};
 use rustls::pki_types::{CertificateDer, ServerName};
 use serde_json::json;
 use std::io::{Read, Write};
@@ -44,10 +46,20 @@ fn world(trust: bool, map: bool) -> World {
         env.push(("GOALCUP_TEST_EXTRA_ROOTS", roots));
     }
     if map {
-        env.push(("GOALCUP_TEST_UPSTREAM", format!("api.openai.com={}", up.addr())));
+        env.push((
+            "GOALCUP_TEST_UPSTREAM",
+            format!("api.openai.com={}", up.addr()),
+        ));
     }
     let (_h, addr, calls, ca) = proxy(HOSTS, &env);
-    World { up, _dir: dir, _h, addr, calls, ca }
+    World {
+        up,
+        _dir: dir,
+        _h,
+        addr,
+        calls,
+        ca,
+    }
 }
 
 /// A TCP server that accepts and holds every connection; a CONNECT to it is answered `200`.
@@ -86,7 +98,8 @@ enum Cut {
 /// that does not wait for the `200` does, then asks for `hi`.
 fn tls_via(w: &World, target: &str, sni: &str, root: CertificateDer<'static>, cut: Cut) {
     let name = ServerName::try_from(sni.to_owned()).unwrap();
-    let mut conn = rustls::ClientConnection::new(client_trusting(vec![root], &[HTTP11]), name).unwrap();
+    let mut conn =
+        rustls::ClientConnection::new(client_trusting(vec![root], &[HTTP11]), name).unwrap();
     let mut hello = Vec::new();
     conn.write_tls(&mut hello).unwrap();
     if let Cut::Records = cut {
@@ -106,12 +119,17 @@ fn tls_via(w: &World, target: &str, sni: &str, root: CertificateDer<'static>, cu
     let mut head = Vec::new();
     while !head.ends_with(b"\r\n\r\n") {
         let mut b = [0u8; 1];
-        assert_eq!(sock.read(&mut b).unwrap(), 1, "the proxy closed before the 200");
+        assert_eq!(
+            sock.read(&mut b).unwrap(),
+            1,
+            "the proxy closed before the 200"
+        );
         head.push(b[0]);
     }
     assert!(head.starts_with(b"HTTP/1.1 200"));
     let mut tls = rustls::StreamOwned::new(conn, sock);
-    tls.write_all(b"GET /v1/models HTTP/1.1\r\nHost: api.openai.com\r\n\r\n").unwrap();
+    tls.write_all(b"GET /v1/models HTTP/1.1\r\nHost: api.openai.com\r\n\r\n")
+        .unwrap();
     let mut got = Vec::new();
     while !got.ends_with(b"hi") {
         let mut b = [0u8; 256];
@@ -124,14 +142,26 @@ fn tls_via(w: &World, target: &str, sni: &str, root: CertificateDer<'static>, cu
 #[tokio::test]
 async fn connect_and_client_hello_in_one_write_are_decrypted() {
     let w = world(true, false);
-    tls_via(&w, &w.up.addr().to_string(), "api.openai.com", w.ca.cert_der().clone(), Cut::One);
+    tls_via(
+        &w,
+        &w.up.addr().to_string(),
+        "api.openai.com",
+        w.ca.cert_der().clone(),
+        Cut::One,
+    );
     assert_eq!(conns(&w.calls, 1).await[0].1["mode"], "decrypt");
 }
 
 #[tokio::test]
 async fn connect_head_split_over_one_byte_reads_is_decrypted() {
     let w = world(true, false);
-    tls_via(&w, &w.up.addr().to_string(), "api.openai.com", w.ca.cert_der().clone(), Cut::Bytes);
+    tls_via(
+        &w,
+        &w.up.addr().to_string(),
+        "api.openai.com",
+        w.ca.cert_der().clone(),
+        Cut::Bytes,
+    );
     assert_eq!(conns(&w.calls, 1).await[0].1["mode"], "decrypt");
 }
 
@@ -139,12 +169,21 @@ async fn connect_head_split_over_one_byte_reads_is_decrypted() {
 async fn client_hello_in_two_records_and_one_byte_reads_decides_by_sni() {
     let w = world(true, false);
     let target = w.up.addr().to_string();
-    tls_via(&w, &target, "api.openai.com", w.ca.cert_der().clone(), Cut::Records);
+    tls_via(
+        &w,
+        &target,
+        "api.openai.com",
+        w.ca.cert_der().clone(),
+        Cut::Records,
+    );
     // An unlisted name is tunnelled: the client meets the upstream's own certificate.
     tls_via(&w, &target, "example.com", w.up.pki().root(), Cut::Records);
     let got = conns(&w.calls, 2).await;
     assert_eq!(got[0].1["mode"], "decrypt");
-    assert_eq!((&got[1].1["mode"], &got[1].1["reason"]), (&json!("tunnel"), &json!("not_listed")));
+    assert_eq!(
+        (&got[1].1["mode"], &got[1].1["reason"]),
+        (&json!("tunnel"), &json!("not_listed"))
+    );
 }
 
 /// C2/K14: a broken head gets a fixed answer, and nothing the client sent comes back in it or
@@ -155,12 +194,23 @@ async fn bad_heads_get_fixed_answers_without_echo() {
     let (_h, addr, calls, _) = proxy(HOSTS, &[]);
     let start = "CONNECT example.com:443 HTTP/1.1\r\nX: ";
     // Exactly the 8 KiB guard with no blank line: nothing is left unread to turn the answer into a reset.
-    let big = format!("{start}{}", MARK.repeat(8192).split_at(8192 - start.len()).0);
+    let big = format!(
+        "{start}{}",
+        MARK.repeat(8192).split_at(8192 - start.len()).0
+    );
     let cases = [
-        (format!("CONNECT {MARK} HTTP/1.1\r\nX: {MARK}\r\n\r\n"), "400"),
+        (
+            format!("CONNECT {MARK} HTTP/1.1\r\nX: {MARK}\r\n\r\n"),
+            "400",
+        ),
         (format!("{start}a\u{1}{MARK}\r\n\r\n"), "400"),
         (big, "431"),
-        (format!("GET http://u:{MARK}@example.com/{MARK}?q={MARK} HTTP/1.1\r\nX: {MARK}\r\n\r\n"), "405"),
+        (
+            format!(
+                "GET http://u:{MARK}@example.com/{MARK}?q={MARK} HTTP/1.1\r\nX: {MARK}\r\n\r\n"
+            ),
+            "405",
+        ),
     ];
     for (head, code) in cases {
         let mut s = tokio::net::TcpStream::connect(addr).await.unwrap();
@@ -187,15 +237,30 @@ async fn authority_forms() {
     for (target, ..) in accepted {
         drop(through(addr, target).await);
     }
-    let mut seen: Vec<_> = conns(&calls, accepted.len()).await.iter()
-        .map(|c| (c.1["host"].as_str().unwrap().to_owned(), c.1["port"].as_u64().unwrap()))
+    let mut seen: Vec<_> = conns(&calls, accepted.len())
+        .await
+        .iter()
+        .map(|c| {
+            (
+                c.1["host"].as_str().unwrap().to_owned(),
+                c.1["port"].as_u64().unwrap(),
+            )
+        })
         .collect();
     seen.sort();
     let mut want: Vec<_> = accepted.iter().map(|a| (a.1.to_owned(), a.2)).collect();
     want.sort();
     assert_eq!(seen, want);
-    let refused = ["example.com", "example.com:0", "u@example.com:443", "example.com:443/x",
-        "example.com:443?q=1", "example.com:99999", "example.com:", "[::1]"];
+    let refused = [
+        "example.com",
+        "example.com:0",
+        "u@example.com:443",
+        "example.com:443/x",
+        "example.com:443?q=1",
+        "example.com:99999",
+        "example.com:",
+        "[::1]",
+    ];
     for target in refused {
         assert_eq!(connect(addr, target).await.1, 400, "{target}");
     }
@@ -224,16 +289,29 @@ async fn unlisted_refusal_is_one_round() {
     let (_refusing, dead) = common::ports::refusing();
     let target = dead.to_string();
     let asked = tokio::time::timeout(Duration::from_secs(10), connect(addr, &target));
-    assert_eq!(asked.await.expect("a listed host would still be retrying").1, 502);
+    assert_eq!(
+        asked
+            .await
+            .expect("a listed host would still be retrying")
+            .1,
+        502
+    );
 }
 
 #[tokio::test]
 async fn listed_refusal_is_retried() {
     let (sock, dead) = common::ports::refusing();
-    let (_h, addr, _calls, _) = proxy(HOSTS, &[("GOALCUP_TEST_UPSTREAM", format!("api.openai.com={dead}"))]);
+    let (_h, addr, _calls, _) = proxy(
+        HOSTS,
+        &[("GOALCUP_TEST_UPSTREAM", format!("api.openai.com={dead}"))],
+    );
     let mut call = tokio::spawn(connect(addr, "api.openai.com:443"));
     // A proxy that gave up would have answered `502` at once; this one is still on its rounds.
-    assert!(tokio::time::timeout(Duration::from_secs(6), &mut call).await.is_err());
+    assert!(
+        tokio::time::timeout(Duration::from_secs(6), &mut call)
+            .await
+            .is_err()
+    );
     sock.listen(16).unwrap();
     let (_s, code) = within_async(HANG, async { call.await.unwrap() }).await;
     assert_eq!(code, 200, "the next round connected");
@@ -247,7 +325,10 @@ async fn idle_tunnel_survives_120s() {
     let (_h, addr, calls, _) = proxy(HOSTS, &[]);
     let mut s = through(addr, &sink(true).to_string()).await;
     tokio::time::sleep(Duration::from_secs(120)).await;
-    assert!(ends(&calls).is_empty(), "nothing ended while the tunnel was idle");
+    assert!(
+        ends(&calls).is_empty(),
+        "nothing ended while the tunnel was idle"
+    );
     s.write_all(b"ping").await.unwrap();
     let mut back = [0u8; 4];
     within_async(HANG, s.read_exact(&mut back)).await.unwrap();
@@ -263,14 +344,23 @@ async fn one_bad_handshake_leaves_others_relaying() {
     let w = world(true, true);
     let name = || ServerName::try_from("api.openai.com").unwrap();
     let listed = || through(w.addr, "api.openai.com:443");
-    let mut good = trusting_run_ca(&w.ca, &[HTTP11]).connect(name(), listed().await).await.unwrap();
+    let mut good = trusting_run_ca(&w.ca, &[HTTP11])
+        .connect(name(), listed().await)
+        .await
+        .unwrap();
     let wrong = TlsConnector::from(client_trusting(vec![w.up.pki().root()], &[HTTP11]));
-    assert!(wrong.connect(name(), listed().await).await.is_err(), "the run CA's leaf is refused");
+    assert!(
+        wrong.connect(name(), listed().await).await.is_err(),
+        "the run CA's leaf is refused"
+    );
     get(&mut good).await;
     let later = listed().await; // the listener goes on
     drop((good, later));
     let got = conns(&w.calls, 3).await;
-    let refused = got.iter().filter(|c| c.1["reason"] == "tls_refused").count();
+    let refused = got
+        .iter()
+        .filter(|c| c.1["reason"] == "tls_refused")
+        .count();
     let decrypted = got.iter().filter(|c| c.1["mode"] == "decrypt").count();
     assert_eq!((refused, decrypted), (1, 1));
 }
@@ -279,17 +369,35 @@ async fn one_bad_handshake_leaves_others_relaying() {
 /// a client trusting the run CA refuses what it sees, one trusting the upstream's CA is served.
 async fn untrusted(via_ip: bool) {
     let w = world(false, !via_ip);
-    let target = if via_ip { w.up.addr().to_string() } else { "api.openai.com:443".into() };
+    let target = if via_ip {
+        w.up.addr().to_string()
+    } else {
+        "api.openai.com:443".into()
+    };
     let name = || ServerName::try_from("api.openai.com").unwrap();
-    let by_run_ca = trusting_run_ca(&w.ca, &[HTTP11]).connect(name(), through(w.addr, &target).await);
-    assert!(by_run_ca.await.is_err(), "a fake is never trusted as a listed host");
+    let by_run_ca =
+        trusting_run_ca(&w.ca, &[HTTP11]).connect(name(), through(w.addr, &target).await);
+    assert!(
+        by_run_ca.await.is_err(),
+        "a fake is never trusted as a listed host"
+    );
     let own = TlsConnector::from(client_trusting(vec![w.up.pki().root()], &[HTTP11]));
-    let mut t = own.connect(name(), through(w.addr, &target).await).await.unwrap();
+    let mut t = own
+        .connect(name(), through(w.addr, &target).await)
+        .await
+        .unwrap();
     get(&mut t).await;
     drop(t);
     let got = conns(&w.calls, 2).await;
-    assert!(got.iter().all(|c| c.1["mode"] == "tunnel" && c.1["reason"] == "upstream_untrusted"));
-    assert!(gaps(&w.calls).iter().any(|g| matches!(g, Call::Gap(_, GapReason::UpstreamUntrusted, ..))));
+    assert!(
+        got.iter()
+            .all(|c| c.1["mode"] == "tunnel" && c.1["reason"] == "upstream_untrusted")
+    );
+    assert!(
+        gaps(&w.calls)
+            .iter()
+            .any(|g| matches!(g, Call::Gap(_, GapReason::UpstreamUntrusted, ..)))
+    );
 }
 
 #[tokio::test]
