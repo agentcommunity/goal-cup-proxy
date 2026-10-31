@@ -2292,3 +2292,11 @@ kept and now cites BUILD-PROMPT section 5, since B3 no longer carries it.
   (`upload::manual::run`). Rung 1 needs `start` and `seal` merged; `seal` is, `start` is not.
 - Gate result as reported: box build, clippy and fmt green, 276 tests green at the fixer commit.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 31 Oct, after PRD-15 slice 13 (merge f4741612)
+
+- **Size report, PRD-15** (`wc -l`; PRD-00 "Size budget" has no docs row, so informational): ARCHITECTURE 190
+  (estimate about 160), AGENTS 92 (about 95). Accepted; no code lines, no Rust row moves. Trim option is in the
+  PRD-15 note.
+- Remaining docs work: the PRD-15 note (section 5, 7 markers; CI wording) and the PRD-02 writer slice removing
+  the target-shape notes. No locked ledger item is touched and no owner question comes from this slice.

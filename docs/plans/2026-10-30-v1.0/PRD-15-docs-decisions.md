@@ -1426,3 +1426,17 @@ the HARNESS-ONBOARDING pointer; `docs/README.md` is deleted and `CONTRACTS`, `TE
 - Still open for PRD-15, unchanged: the README tier column and Pad result lines after phase 5; the
   RECORD-FORMAT catch-up from the slice 10 note (`legs.rs`, `report.rs`, `history.rs`).
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 31 Oct, after slice 13 (ARCHITECTURE and AGENTS rewrite, merge f4741612)
+
+- The target-shape note in `docs/ARCHITECTURE.md` covers section 3 and one sentence of section 6 only. Section 7's
+  opening ("one record stream per entry as zstd part files") and section 5's "at the seal it finishes what is
+  open" also describe the writer, which is not merged. The next PRD-15 touch marks both the same way
+  ("writer: PRD-02 target shape"), or widens the note to the whole page until the writer merges.
+- `AGENTS.md` gate paragraph: say "CI runs `fast` on every pull request to main and every push to main or
+  `v1.0/integration`" (ci.yml limits `pull_request` to `main`; lane merges are pushes). Rewrap the never-commit
+  rule and the tests paragraph to the file's usual width.
+- Size (`wc -l` at f4741612): ARCHITECTURE 190 against about 160, AGENTS 92 against about 95. Owner estimates,
+  not a blocker. If trimmed: fold sections 9 and 10 into one "See also" line and drop the "No proxy credential"
+  and "Boot-time timers" bullets (watchdog detail, already in D85 and the code).
+- No locked ledger item is touched and no owner question comes from this slice.
