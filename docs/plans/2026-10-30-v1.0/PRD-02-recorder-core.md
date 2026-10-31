@@ -1581,3 +1581,25 @@ to another file are made by that file's owner.
   `mask_meta`" stays (a native `path` with a shaped key or a credential query is starred); take the host,
   the stream key and the native `path` before the call.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-31, conductor decisions before PRD-02 slice A (planning pass, 08:40Z)
+
+Two planning passes (`/root/gc-night/prd02/path-plan.md` and `audit-fix-plan.md` in the conductor box) set the order: the slice under review (mask worker, writer, spawn, shield) merges first; then **slice A, one request end to end** (`boot.rs` boot 0 and boot recovery, `seal.rs` for `seal_command` and `harness_exit`, `watchdog::run` with the restart loop at once, `status.json` filled, `rec/watchdog.pid`, `rec/run-ca.key`); then slice B (null mode, the server word, the deadline, `dead.rs`, `recover`, SIGTERM); then slice C (`pipeline_stall.rs`, `by_hand_load`, `SnapshotCursor.fid` with PRD-04, the mask pool decision). Decisions (none touches a locked item; R3, R3a, R3b, R4 to R7, F2, M1, L5, B10 hold as written):
+
+- **Size.** Ceiling 6,000 src with the cuts the plan names in `counts.rs` and `handle.rs`; tests ceiling 2,300 (the restart, recover and end cases guard the never-stop rules, B10).
+- **Recover with a live recorder** follows PRD-10 section 3.2 and PRD-12's `kill-watchdog-recover` row: a live recorder holding `rec/lock` is never killed; `recover` says recording is on and exits 0. Section 8.1 step 4 is read this way.
+- **`watchdog::recover(entry_dir, facts) -> Result<Recovered, NotRecovered>`** (PRD-10 ask N9), not `-> ExitCode`; PRD-10 words every refusal.
+- **Seal drain** runs in channel order with no timer; the "5 s on a signal" default and PRD-00 S8's "drain 60 s" are read as no timer.
+- **`StartFacts` typed now** (`HostList`, `NativeSources`, `Vec<MaskRule>`, `Vec<SecretValue>`, `ConnectorRef`, plus `home: PathBuf`) in slice A, with a seam line; PRD-10's `start.rs` builds against the typed shape.
+- **`ToWatchdog::Server(upload::ServerWord)`** added in slice B.
+- **Tests folded:** `pipeline_native_room.rs`, `pipeline_panic.rs`, `pipeline_many_streams.rs` are not written; P5 to P7 are guarded by the folded case in `pipeline_guard.rs`, P11 by `watchdog_end.rs`, P14 by PRD-04's native room test.
+- **Mask pool:** decided in slice C after the R8 by-hand measure; not before.
+- Owner questions 2, 9 and 12 keep their defaults.
+
+### 2026-10-31, note from the PRD-06 slice 4 replan
+
+- `upload::finish` relies on the seal order of section 11: the writer has synced the E (or R) line
+  before `finish` is called, and the wrap-up takes the seal LINK from the last non-L line on disk. If
+  that order slips, the final heartbeat never goes out and the wrap-up holds every chunk. `upload::spawn`
+  has no caller on integration yet; the PRD-02 caller slice should add one live-mode case with a test
+  recorder (finish after seal, final then chunks then final). No locked ledger item is touched.

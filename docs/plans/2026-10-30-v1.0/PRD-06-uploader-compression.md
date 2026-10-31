@@ -89,10 +89,11 @@ upload thread --> upload.json (S9: state, server_word, for PRD-10 and the pad)
   (or `borrow().clone()`) on their 1 s tick (PRD-02 S4) and drop the borrow at once; no `Ref` is held
   across a read, a hash or a call, so the writer never waits on them. Settled by PRD-00; no
   `spawn_blocking` variant.
-- **The uploader never ends the process.** Each upload round and each beat runs inside
-  `catch_unwind`. A panic there writes one fixed-text line through `cli::log::line` (S11), sets
-  `upload.json` `state` `waiting` with class `internal`, backs off by section 5 and never ends the
-  process. Recording never depends on the uploader (PRD-02 9.2 step 1 lists no uploader exit).
+- **The uploader never ends the process.** Each uploader thread runs whole inside `catch_unwind`
+  (`upload::guard`). A panic there writes one fixed-text line through `cli::log::line` (S11), backs
+  off by section 5, then starts the thread's body again with a new sender or beat, and never ends the
+  process or the thread. A panic in the upload thread also sets `upload.json` `state` `waiting` with
+  class `internal`; one in the beat thread leaves `upload.json` to the sender. Recording never depends on the uploader (PRD-02 9.2 step 1 lists no uploader exit).
 - **One queue of entries.** The upload thread serves every entry on this computer whose
   `upload.json` is not `done` or `closed`, whose run's credential is still there and that is not
   being sent by another uploader (section 9). Each round serves the live entry first, then one round
@@ -1028,3 +1029,39 @@ PRD-12 and PRD-17.
   module passes the new ceilings.
 - No locked ledger item is touched and no owner question comes from this slice. Ledger L2 is "cut
   before you add", not a number; the overshoot goes into the end-of-build size report.
+
+### 2026-10-31, slice 4 review fixes
+
+- **Panic cover.** `guard` now wraps each thread's whole body, so a panic in `Sender::new`,
+  `Beat::new`, `next`, `put` or a `durable` read is caught too and the body starts again on its
+  backoff; the wrap-up facts sit in the shared state, so a body started again still has them.
+  `upload_resume.rs` drives `guard` with a body that panics twice: it runs three times, writes two
+  lines, and the upload thread's case says `waiting` with class `internal`. This is a partial cover
+  of the PRD case: no scripted answer can panic the parser, so the threads' own rebuild is shown
+  through `guard`, not through the Worker. In production the recorder's panic hook
+  (`pipeline/secure.rs`) also writes an `internal_error` line, so a panic gives two log lines.
+- **Seal LINK.** After `finish` the beat thread takes the seal LINK from the last line on disk in
+  both modes; the writer has sealed and synced before `finish`.
+- **Live mode untested.** Every thread test runs with `recorder: None`. The durable watch path and
+  `health(Some(live))` get their case once PRD-02 lands a test recorder.
+- **Decision (size).** At this fix the upload module is past the 2,500 src ceiling (inline tests
+  counted), with `prune.rs` and `manual.rs` still to come. The extra lines serve point 3 and point 5:
+  an uploader thread that cannot end for good, and a wrap-up that cannot stall on a dead thread.
+  `client.rs` (644) is the first place the next slice looks for a cut.
+
+### 2026-10-31, replan after slice 4 (merge a3a39f45)
+
+- **Decision (size).** The upload module is 2,558 src lines (inline tests counted) and the `upload_*`
+  test binaries 1,690, against the PRD-00 row of 940 and 1,000. The lines serve point 3 (a thread that
+  cannot end for good, a wrap-up that cannot stall) and point 5 (resend of a failed first final, wait for
+  the seal LINK, upload.json). `prune.rs` and `manual.rs` are still to come. Cut first: inline tests in
+  `client.rs` (644) that repeat an `upload_*` case, then the `UP` name compare in `finish` (keep a
+  bool or handle field instead).
+- **Known narrow cases, left as built.** (a) A body that panicked before `finish` and is in backoff when
+  `finish` arrives sets `tried`, so wrap-up chunks may go before the first final; the server answers
+  `503 awaiting_final` and the sender waits, no bytes lost. (b) If the last whole line on disk after
+  `finish` is an L line, `link` stays None and the beat thread re-reads the index each tick; PRD-02
+  section 11 steps 5 and 6 (E line synced before `finish`) rule it out. The next slice that touches
+  `finish` logs one line when the filtered read finds nothing.
+- Live mode and the recorder coupling stay untested until PRD-02 lands a test recorder and a caller of
+  `upload::spawn`. No locked ledger item is touched.

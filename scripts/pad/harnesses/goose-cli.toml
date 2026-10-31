@@ -1,0 +1,21 @@
+# Pad data for Goose (PRD-12 section 6): test data, never connector data; goalcup never reads it.
+# Vendor pages read 31 Oct 2026: https://github.com/aaif-goose/goose/blob/main/download_cli.sh (GOOSE_VERSION pins the
+# release, CONFIGURE=false skips the prompts, GOOSE_BIN_DIR), https://github.com/aaif-goose/goose/blob/main/documentation/docs/guides/config-files.md
+# (config.yaml, GOOSE_PROVIDER and GOOSE_MODEL; keys never in config.yaml, they come from the provider's variable such as
+# OPENAI_API_KEY). goose-docs.ai and vercel.com did not resolve from the writing session.
+# Read from docs only, not run against a live harness: every key below, OPENAI_HOST in config.yaml, the model id, /exit.
+# No [gateway] table: no Goose gateway page could be read, so the case is n/a until one is.
+version = "1.57.0"
+version_cmd = "goose --version"
+install = "curl -fsSL https://github.com/aaif-goose/goose/releases/download/stable/download_cli.sh | GOOSE_VERSION=v1.57.0 CONFIGURE=false bash"
+key_kind = "deepseek"
+key_route = "env"
+key_env = "OPENAI_API_KEY"
+# Pad data for the dodger copy only (section 2): OPENAI_HOST points at https://api.deepseek.com.
+model_host = "api.deepseek.com"
+exit_keys = '/exit\r'
+keep_going = true
+
+[direct]
+# GOOSE_PATH_ROOT is {home}, so config.yaml is {home}/config/config.yaml.
+files = { "config/config.yaml" = "direct/goose-cli-config.yaml" }

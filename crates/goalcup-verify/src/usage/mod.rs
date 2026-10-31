@@ -10,6 +10,7 @@ mod hints;
 mod native;
 mod out;
 mod shapes;
+mod sqlite;
 mod sse;
 mod wire;
 
@@ -206,6 +207,12 @@ pub struct Thread {
     pub native_only: u64,
     /// Native calls after this time (the database copy's time) are not known.
     pub native_until: Option<u64>,
+    /// The harness's own per-session token totals where it keeps them (Hermes `sessions`); never
+    /// on the call rows, which keep the wire usage.
+    pub native_tokens: Tokens,
+    /// The session began before this entry: `native_tokens` are whole-session values spanning
+    /// earlier entries, kept for the run rollup and left out of this entry's `tokens.native`.
+    pub resumed: bool,
     /// Why the native leg is not readable; `None` means readable.
     pub reason: Option<Reason>,
 }
@@ -227,6 +234,8 @@ impl Thread {
             native_total: None,
             native_only: 0,
             native_until: None,
+            native_tokens: Tokens::default(),
+            resumed: false,
             reason: Some(Reason::NoReader),
         }
     }
@@ -244,6 +253,11 @@ pub struct CallTable {
     /// Why the native leg is not readable; `None` means readable.
     pub reason: Option<Reason>,
     pub native_form: NativeForm,
+    /// The database copy the native leg was read from (Hermes): its `set` as `<boot>.<n>`, its
+    /// time (native calls after it are not known) and whether the harness had exited.
+    pub db_set: Option<String>,
+    pub native_until: Option<u64>,
+    pub harness_exited: Option<bool>,
     /// Calls that fell back to the time join.
     pub joined_by_time: u64,
     /// Codex `token_count` repeats skipped (no larger running total; PRD-09 section 4).
@@ -268,6 +282,9 @@ impl Default for CallTable {
             children: None,
             reason: Some(Reason::NoReader),
             native_form: NativeForm::None,
+            db_set: None,
+            native_until: None,
+            harness_exited: None,
             joined_by_time: 0,
             repeats_skipped: 0,
             copied_skipped: 0,
@@ -307,6 +324,10 @@ struct Ctx {
     harness_version: Option<String>,
     sealed: bool,
     boot: u64,
+    /// The `start` event's `segment`: 0 for `start`, then 1, 2 for each `continue`.
+    segment: u64,
+    /// The wall ns of the entry's first PART.
+    first: Option<u64>,
     /// (wall_ns, mono_ns) of the last PART or LINK of this boot.
     base: Option<(u64, u64)>,
     /// The `start` event's hosts and kinds, wildcards as given.
@@ -333,6 +354,7 @@ impl Ctx {
     fn start(&mut self, ev: &Value) {
         let label = |k: &str| ev[k].as_str().and_then(hints::id);
         (self.connector, self.run) = (label("connector"), label("run"));
+        self.segment = ev["segment"].as_u64().unwrap_or(0);
         // The first line of `<harness> --version`: printable ASCII, spaces kept, at most 128 bytes.
         self.harness_version = ev["harness_version"]
             .as_str()
@@ -383,6 +405,7 @@ impl Calls {
                 }
                 (self.ctx.entry, self.ctx.boot) = (entry.clone(), *boot);
                 self.ctx.base = Some((*wall_ns, *mono_ns));
+                self.ctx.first.get_or_insert(*wall_ns);
             }
             Record::Link {
                 wall_ns, mono_ns, ..
@@ -423,7 +446,7 @@ impl Calls {
             }
             return CallTable { rows, ..base };
         };
-        let leg = self.native.finish();
+        let leg = self.native.finish(&self.ctx);
         let mut nat = leg.rows;
         nat.sort_by(|a, b| (&a.0.path, a.0.wall_end).cmp(&(&b.0.path, b.0.wall_end)));
         let (mut pair, mut taken) = (vec![None; nat.len()], vec![false; rows.len()]);
@@ -482,7 +505,11 @@ impl Calls {
             let lost = (per_thread && ok(r) && r.thread.is_none()).then_some(Join::Unattributed);
             r.join = r.join.or(lost).or(Some(Join::WireOnly));
         }
-        let reason = (nat.is_empty() && rows.iter().any(ok)).then_some(Reason::NoNative);
+        let none = (nat.is_empty() && rows.iter().any(ok)).then_some(Reason::NoNative);
+        let reason = leg
+            .unreadable
+            .then_some(Reason::SnapshotUnreadable)
+            .or(none);
         let mut threads = leg.threads;
         let mut per: HashMap<&str, (u64, u64)> = HashMap::new();
         for x in &nat {
@@ -514,12 +541,24 @@ impl Calls {
             let p = r.thread.as_deref().and_then(|t| parents.get(t));
             r.parent = p.map(|p| (*p).clone());
         }
+        let (db_set, native_until, harness_exited) =
+            (leg.set).map_or((None, None, None), |u| (Some(u.id), u.until, u.exited));
         CallTable {
             rows,
             threads,
             children: leg.children,
             reason,
-            native_form: reason.map_or(NativeForm::PerCall, |_| NativeForm::None),
+            native_form: reason.map_or(
+                if leg.totals {
+                    NativeForm::Totals
+                } else {
+                    NativeForm::PerCall
+                },
+                |_| NativeForm::None,
+            ),
+            db_set,
+            native_until,
+            harness_exited,
             joined_by_time,
             repeats_skipped: leg.repeats_skipped,
             copied_skipped: leg.copied_skipped,
@@ -590,10 +629,10 @@ fn read_one(a: &Args, e: &crate::input::Entry) -> Result<(), String> {
     let t = calls.finish();
     // The entry names the files, so only a plain id does; else the folder's name.
     let plain = !t.entry.is_empty() && t.entry.bytes().all(|b| b.is_ascii_alphanumeric());
-    let name = match e.dir.file_name() {
-        _ if plain => t.entry.clone(),
-        Some(f) => f.to_string_lossy().into_owned(),
-        None => "entry".to_string(),
+    let name = if plain {
+        t.entry.clone()
+    } else {
+        (e.dir.file_name()).map_or_else(|| "entry".into(), |f| f.to_string_lossy().into_owned())
     };
     let mut sum = out::summary(&t);
     sum["read_error"] = broke.into();

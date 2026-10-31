@@ -1,12 +1,12 @@
 //! The sender of one entry (PRD-06 sections 3, 4, 5, 8 and 11): rounds of chunks from the server's
 //! position, the backoff that resets on progress (run 1's lag bug), the 409 re-read, `stuck`,
 //! `refused`, `503 awaiting_final` and the confirmed rule. One [`Sender::tick`] makes at most one
-//! HTTP call; the upload thread (slice 4) calls it on its 1 s tick and at once on [`Step::Again`].
+//! HTTP call; the upload thread calls it on its 1 s tick and at once on [`Step::Again`].
 
 use super::chunk::{self, Bound, Chunk, Cut};
 use super::client::{RunPosition, ServerClient, ServerError};
 use super::policy::{Backoff, Class, Policy, Timer, after, class_of_status};
-use super::state::{self, Confirmed, Final, LastError, State, UploadJson, rfc3339};
+use super::state::{Confirmed, Final, LastError, State, UploadJson, rfc3339};
 use crate::cli::log::{Fact, line};
 use crate::pipeline::Mono;
 use goalcup_format::hex;
@@ -47,8 +47,10 @@ pub struct Sender {
     inflight: Option<(u64, u64)>,
     refusals: u32,
     awaiting_final: bool,
-    /// `(durable raw end, offset)` of the last measure, and its `(raw end, waiting bytes)`.
-    measured: (Option<(u64, u64)>, (u64, u64)),
+    /// `(durable raw end, offset)` of the last measure; None with no live writer.
+    measured_at: Option<(u64, u64)>,
+    /// The last measure's `(raw end, waiting bytes)`.
+    measured: (u64, u64),
 }
 
 impl Sender {
@@ -70,7 +72,8 @@ impl Sender {
             inflight: None,
             refusals: 0,
             awaiting_final: false,
-            measured: (None, (0, 0)),
+            measured_at: None,
+            measured: (0, 0),
         }
     }
 
@@ -100,7 +103,10 @@ impl Sender {
         let Some((end, waiting)) = self.measure(bound, pos.offset) else {
             return self.fail(clock(), "chunk", UNREAD, None, j);
         };
-        self.update(j, |j| (j.durable_raw, j.waiting_bytes) = (end, waiting));
+        {
+            let mut j = lock(j);
+            (j.durable_raw, j.waiting_bytes) = (end, waiting);
+        }
         if pos.offset > 0 && end <= pos.offset && !self.held {
             // The server holds bytes the local copy does not, or a different chain of the same
             // length: the copies disagree. A position below the end is checked by the cut.
@@ -120,7 +126,7 @@ impl Sender {
             }
             self.timer.started(now);
             self.target = Some(end);
-            self.update(j, |j| j.state = State::Sending);
+            lock(j).state = State::Sending;
         }
         let confirmed = lock(j).confirmed.clone();
         match chunk::cut(&self.rec, &pos, bound, confirmed.as_ref()) {
@@ -257,7 +263,8 @@ impl Sender {
         let stored = self.inflight.take().filter(|i| moved && i.0 == p.offset);
         let at = rfc3339(SystemTime::now());
         let open = self.target.is_some_and(|t| p.offset < t);
-        self.update(j, |j| {
+        {
+            let mut j = lock(j);
             if p.sealed {
                 j.final_ = Final::Sealed;
             }
@@ -281,7 +288,7 @@ impl Sender {
                     j.state = State::Sending;
                 }
             }
-        });
+        }
         self.pos = Some(p);
     }
 
@@ -289,14 +296,13 @@ impl Sender {
     fn caught_up(&mut self, j: &Mutex<UploadJson>) {
         (self.target, self.refusals) = (None, 0);
         self.backoff.progress();
-        self.update(j, |j| {
-            j.state = if j.final_ == Final::Sealed {
-                State::Done
-            } else {
-                State::CaughtUp
-            };
-            (j.failures, j.next_try, j.last_error) = (0, None, None);
-        });
+        let mut j = lock(j);
+        j.state = if j.final_ == Final::Sealed {
+            State::Done
+        } else {
+            State::CaughtUp
+        };
+        (j.failures, j.next_try, j.last_error) = (0, None, None);
     }
 
     /// A failed call at `now` (read after it): back off, say so in `upload.json` and one log line.
@@ -332,11 +338,12 @@ impl Sender {
         wait: Option<Duration>,
     ) {
         let (class, status, text) = why;
-        self.update(j, |j| {
+        {
+            let mut j = lock(j);
             j.state = state;
             j.last_error = Some(LastError::new(SystemTime::now(), class, status, text));
             (j.failures, j.next_try) = (self.backoff.failures, wait.and_then(wall_after));
-        });
+        }
         let wait = wait.unwrap_or_default();
         log_failure(&self.entry_dir, what, class.word(), status, wait);
     }
@@ -348,26 +355,17 @@ impl Sender {
             Bound::Durable(d) => Some((d.line.raw_end, offset)),
             Bound::OnDisk => None,
         };
-        if key.is_none() || key != self.measured.0 {
-            self.measured = (key, chunk::waiting(&self.rec, offset, bound).ok()?);
+        if key.is_none() || key != self.measured_at {
+            self.measured = chunk::waiting(&self.rec, offset, bound).ok()?;
+            self.measured_at = key;
         }
-        Some(self.measured.1)
-    }
-
-    /// Changes `upload.json` and writes it when anything changed. Open for slice 4: at most once
-    /// a second (section 11, `state::Writer`); a round now writes it a few times per chunk.
-    fn update(&self, j: &Mutex<UploadJson>, f: impl FnOnce(&mut UploadJson)) {
-        let mut j = lock(j);
-        let before = j.clone();
-        f(&mut j);
-        if *j != before {
-            let _ = state::write(&self.entry_dir, &j);
-        }
+        Some(self.measured)
     }
 }
 
-pub(super) fn lock(j: &Mutex<UploadJson>) -> std::sync::MutexGuard<'_, UploadJson> {
-    j.lock().unwrap_or_else(|e| e.into_inner())
+/// Locks `m`; a lock a panic left behind is taken as it is (the panic is the guard's).
+pub(super) fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(|e| e.into_inner())
 }
 
 fn wall_after(wait: Duration) -> Option<String> {
