@@ -305,6 +305,13 @@ pub fn approval_refused(said: &str) -> String {
     format!("The server refused the approval request: {said}. {NOTHING_CREATED}")
 }
 
+/// Ctrl-C landed after the server opened the run and it was saved: nothing was launched.
+pub fn opened_then_stopped(run: &str) -> String {
+    format!(
+        "You pressed Ctrl-C after the run {run} was opened and saved. The harness was not started. Run the command again to carry on."
+    )
+}
+
 pub fn open_refused(said: &str) -> String {
     format!("The server did not open the run: {said}. {NOTHING_CREATED} Run the command again.")
 }

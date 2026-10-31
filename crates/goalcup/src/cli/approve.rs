@@ -106,8 +106,8 @@ pub fn begin(home: &Path, server: &Server, ask: &Ask, out: &mut dyn Write) -> Re
     });
     // The participant has approved: a blip, a GitHub outage (502) or a 429 is waited out, with the
     // same `session_id`, so the open is idempotent and the approval is not spent for nothing.
-    // A Ctrl-C that lands once the server has opened the run is ignored: the run exists, so it is
-    // written and `start` handles the stop with the run on disk.
+    // A Ctrl-C that lands once the server has opened the run does not undo it: the run is written
+    // to disk first, then the participant is told plainly that it was opened and saved.
     let opened = send(&client, "/v1/runs", &body, true);
     if opened.is_err() && interrupted() {
         return Err(stopped(text::WHY_INTERRUPTED));
@@ -127,6 +127,9 @@ pub fn begin(home: &Path, server: &Server, ask: &Ask, out: &mut dyn Write) -> Re
         Some(open.deadline_at),
     );
     write_run(home, &sj, Some(&secret))?;
+    if interrupted() {
+        return Err(refuse(text::opened_then_stopped(&open.run_id)));
+    }
     Ok(Opened {
         run: open.run_id,
         entry: open.entry_id,
