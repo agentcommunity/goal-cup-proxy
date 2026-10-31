@@ -2,8 +2,8 @@
 //! `proxy_http1.rs` drives `Http1`: streams with pseudo-headers and the query dropped, the HPACK
 //! dynamic table and size updates (RFC 7541 appendix C), CONTINUATION, padding and priority,
 //! trailers, `RST_STREAM`, `GOAWAY`, body codings, an extended CONNECT stream, and the stops for
-//! `PUSH_PROMISE`, an HPACK error and the `hpack_table` guard. The relay side of 5a is in
-//! `proxy_tunnel.rs`.
+//! `PUSH_PROMISE`, an HPACK error, a header block past 16 MiB and the `hpack_table` guard. The
+//! relay side of 5a (the `conn` GAP, the note, the bytes relayed whole) is in `proxy_tunnel.rs`.
 
 mod common;
 
@@ -111,6 +111,7 @@ fn run(steps: &[(Dir, Vec<u8>)]) -> (Calls, Option<Stop>) {
             i += 1;
         }
     }
+    // `pump::relay` ends the parser at the close whether or not it stopped, so this runs too.
     let late = Box::new(p).end(Mono::now(), EndReason::Complete, false, &[]);
     assert_eq!(late, None, "nothing held at the close");
     (calls, stop)
@@ -372,10 +373,26 @@ fn push_promise_and_hpack_errors_stop_parsing() {
             .collect();
         assert_eq!(open.len(), 1);
         for sid in open {
-            assert_eq!(gaps_on(&calls, sid).len(), 1);
+            // 5a item 1: the stream's own GAP; the bytes after the fault are the conn GAP's.
+            assert_eq!(gaps_on(&calls, sid), [(GapReason::H2Unsupported, None)]);
             assert_eq!(end_of(&calls, sid).0, EndReason::DecodeError);
         }
     }
+}
+
+/// A header block past 16 MiB (a HEADERS of the largest frame length, then a CONTINUATION) stops
+/// parsing (5a). A frame length itself cannot pass 16 MiB: its field has 24 bits.
+#[test]
+fn a_header_block_past_16_mib_stops_parsing() {
+    let largest = vec![0; (1 << 24) - 1];
+    let steps = [up(&[
+        frame(HEADERS, 0, 1, &largest),
+        frame(CONT, END_HEADERS, 1, &[0, 0]),
+    ])];
+    let (calls, stop) = run(&steps);
+    let stop = stop.expect("parsing stops");
+    assert_eq!(stop.reason, GapReason::H2Unsupported);
+    assert!(opens(&calls, StreamKind::HttpReq).is_empty());
 }
 
 /// A table size update past 1 MiB (the server allowed 2 MiB) is the `hpack_table` guard.
