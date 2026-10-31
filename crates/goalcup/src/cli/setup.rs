@@ -139,7 +139,11 @@ fn write_home(
     if !go {
         put(&advice(&c.name));
     }
-    let no_prompts = if go { write_rows(&plan.home, &c.no_prompts) } else { Vec::new() };
+    let no_prompts = if go {
+        write_rows(&plan.home, &c.no_prompts)
+    } else {
+        Vec::new()
+    };
     let (update, prompts) = (!update_off.is_empty(), !no_prompts.is_empty());
     let saved = Saved {
         v: 1,
@@ -182,8 +186,13 @@ fn read_line(prompt: &str) -> String {
 /// Step 1: Enter takes the saved harness; otherwise the id typed.
 fn pick(saved: Option<&str>, installed: &[&str]) -> Option<String> {
     let found = installed.join(", ");
-    let line = read_line(&format!("Harness ({found}) [{}]: ", saved.unwrap_or("none")));
-    (!line.is_empty()).then_some(line).or(saved.map(str::to_owned))
+    let line = read_line(&format!(
+        "Harness ({found}) [{}]: ",
+        saved.unwrap_or("none")
+    ));
+    (!line.is_empty())
+        .then_some(line)
+        .or(saved.map(str::to_owned))
 }
 
 /// Step 2: the harness in the isolated home with its own launch data; a failure is a line.
@@ -194,7 +203,9 @@ fn open(plan: &LaunchPlan, name: &str) {
     let mut cmd = Command::new(&plan.program);
     cmd.args(&plan.argv).env_clear().envs(&plan.env);
     if cmd.current_dir(&plan.home).status().is_err() {
-        put(&format!("goalcup could not open {name}. Open it yourself and sign in there."));
+        put(&format!(
+            "goalcup could not open {name}. Open it yourself and sign in there."
+        ));
     }
 }
 

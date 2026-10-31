@@ -73,7 +73,15 @@ fn setup(home: &TempHome, path: &str, args: &[&str]) -> (Output, String) {
 fn setup_tty(home: &TempHome, path: &str, args: &[&str], typed: &str) -> (Option<i32>, String) {
     let (mut master, mut slave) = (0, 0);
     let none = std::ptr::null_mut();
-    let rc = unsafe { libc::openpty(&mut master, &mut slave, none, std::ptr::null(), std::ptr::null()) };
+    let rc = unsafe {
+        libc::openpty(
+            &mut master,
+            &mut slave,
+            none,
+            std::ptr::null(),
+            std::ptr::null(),
+        )
+    };
     assert_eq!(rc, 0, "no pty here");
     let (master, slave) = unsafe { (OwnedFd::from_raw_fd(master), OwnedFd::from_raw_fd(slave)) };
     let mut input = std::fs::File::from(master.try_clone().unwrap());
@@ -83,7 +91,8 @@ fn setup_tty(home: &TempHome, path: &str, args: &[&str], typed: &str) -> (Option
         .env("GOALCUP_SERVER", "off")
         .env("PATH", path);
     cmd.arg("setup").args(args).current_dir(home.home());
-    cmd.stdin(slave.try_clone().unwrap()).stdout(slave.try_clone().unwrap());
+    cmd.stdin(slave.try_clone().unwrap())
+        .stdout(slave.try_clone().unwrap());
     let code = cmd.stderr(slave).status().expect("goalcup runs").code();
     drop(cmd);
     let mut out = String::new();
@@ -230,7 +239,11 @@ fn only_ours(home: &TempHome, c: &Connector, before: &BTreeMap<PathBuf, Option<V
     for (path, now) in snapshot(home.home()) {
         let ours = path.starts_with(&iso) || iso.starts_with(&path) || path == lock;
         let ours = ours || path == setup_json(&home.goalcup_home());
-        assert!(before.get(&path) == Some(&now) || ours, "wrote {}", path.display());
+        assert!(
+            before.get(&path) == Some(&now) || ours,
+            "wrote {}",
+            path.display()
+        );
     }
 }
 
@@ -266,10 +279,20 @@ fn answering_n_still_writes_update_off_and_leaves_no_prompts() {
         Some(got.as_str().map_or_else(|| got.to_string(), str::to_owned))
     };
     for row in &c.update_off {
-        assert_eq!(value(row).as_deref(), Some(row.value.as_str()), "{}", row.key);
+        assert_eq!(
+            value(row).as_deref(),
+            Some(row.value.as_str()),
+            "{}",
+            row.key
+        );
     }
     for row in &c.no_prompts {
-        assert_ne!(value(row).as_deref(), Some(row.value.as_str()), "{}", row.key);
+        assert_ne!(
+            value(row).as_deref(),
+            Some(row.value.as_str()),
+            "{}",
+            row.key
+        );
     }
     let saved = fs::read(setup_json(&home.goalcup_home())).unwrap();
     let saved: Value = serde_json::from_slice(&saved).unwrap();
