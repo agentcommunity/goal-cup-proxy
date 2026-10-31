@@ -7,6 +7,7 @@ use std::path::Path;
 use super::RunMode;
 use super::status::State;
 use crate::connector::Refusal;
+use crate::upload::client::ServerError;
 use crate::upload::policy::Class;
 use crate::upload::state::{Final, State as Upload, UploadJson};
 use crate::watchdog::Exit;
@@ -256,8 +257,85 @@ pub fn no_sleep_lock(why: &str) -> String {
 
 pub const SERVER_OFF: &str = "Server check skipped: GOALCUP_SERVER=off, so nothing is uploaded.";
 
-pub fn server_unreachable(why: &str) -> String {
-    format!("goalcup checked its server: {why}. A run needs it to start.")
+pub fn server_unreachable(e: &ServerError) -> String {
+    let said = match e {
+        ServerError::Transport(cause) => format!("goalcup could not reach its server ({cause})."),
+        e => format!("goalcup checked its server: {e}."),
+    };
+    format!("{said} A run needs it to start.")
+}
+
+/// PRD-10 section 3 steps 3 to 5: the repository, the approval and the open run.
+pub fn approval_intro(mode: RunMode, name: &str) -> String {
+    let what = match mode {
+        RunMode::Practice => "this practice run",
+        RunMode::Test => "this organizer test run",
+        RunMode::Competition => "your run",
+    };
+    format!(
+        "Approve {what} of {name} in your browser. Every run asks for its own approval; that is normal."
+    )
+}
+
+pub fn approval_address(opened: bool, address: &str) -> String {
+    let how = if opened {
+        "Your browser opened the approval page. If not, open"
+    } else {
+        "Open"
+    };
+    format!("{how} this address: {address}")
+}
+
+pub fn approval_waiting(minutes: u64) -> String {
+    format!("Waiting for your approval (the code expires in {minutes} min; Ctrl-C cancels).")
+}
+
+pub const APPROVED: &str = "Approved.";
+pub const WHY_DENIED: &str = "it was denied in the browser";
+pub const WHY_EXPIRED: &str = "the code expired";
+pub const WHY_INTERRUPTED: &str = "you pressed Ctrl-C";
+
+pub fn approval_stopped(why: &str) -> String {
+    format!(
+        "The approval did not finish: {why}. {NOTHING_CREATED} Run the command again to start over."
+    )
+}
+
+pub fn approval_refused(said: &str) -> String {
+    format!("The server refused the approval request: {said}. {NOTHING_CREATED}")
+}
+
+/// Ctrl-C landed after the server opened the run and it was saved: nothing was launched.
+pub fn opened_then_stopped(run: &str) -> String {
+    format!(
+        "You pressed Ctrl-C after the run {run} was opened and saved. The harness was not started. Running goalcup start again opens a new run; the run {run} stays open and its deadline keeps running."
+    )
+}
+
+pub fn open_refused(said: &str) -> String {
+    format!("The server did not open the run: {said}. {NOTHING_CREATED} Run the command again.")
+}
+
+pub fn bad_answer() -> String {
+    format!(
+        "The server's answer was not one goalcup accepts. {NOTHING_CREATED} Run the command again; if it keeps happening, write to {SUPPORT_ADDRESS}."
+    )
+}
+
+pub fn repo_name(given: &str) -> String {
+    format!("\"{given}\" is not a repository name. Give it as <owner>/<name>. {NOTHING_CREATED}")
+}
+
+pub fn repo_missing(repo: &str) -> String {
+    format!(
+        "GitHub does not show {repo}: it does not exist yet, or it is private. Create it as a public repository, then run the command again. {NOTHING_CREATED}"
+    )
+}
+
+pub fn repo_not_empty(repo: &str) -> String {
+    format!(
+        "{repo} already has commits. A run needs a new, empty, public repository: no README, .gitignore or license. {NOTHING_CREATED}"
+    )
 }
 
 pub const NO_GIT: &str = "git is not installed. Your agent needs it to push its repository.";
@@ -984,3 +1062,92 @@ pub fn time_left_unknown(practice: bool) -> String {
 
 pub const NO_OPEN_RUN_TIME_LEFT: &str = "Run goalcup status to see your runs. No run is open on \
 this computer, so there is no time left to show.";
+
+// The push block and `--prompt` (section 8).
+pub const PUSH_FRAME: &str = "Your first message must start with these lines. Without them your \
+agent cannot push, and you may not send them later.";
+
+pub fn first_message_ready(file: &Path) -> String {
+    format!(
+        "Your first message (the push block, then your prompt) is on your clipboard and in {}. \
+         Paste it once as your first message and press Enter.",
+        file.display()
+    )
+}
+
+pub fn prompt_not_utf8(file: &Path) -> String {
+    format!(
+        "{} is not UTF-8 text, so goalcup cannot send it as your prompt.",
+        file.display()
+    )
+}
+
+pub fn prompt_unreadable(file: &Path, why: &str) -> String {
+    format!(
+        "goalcup cannot read your prompt file {}: {why}.",
+        file.display()
+    )
+}
+
+pub const PUSH_AGAIN: &str =
+    "If you never sent your prompt, send it now. It starts with these lines.";
+
+/// `goalcup seal` run by the agent: the person ends the part, not the agent.
+pub const SEAL_INSIDE: &str = "goalcup seal runs outside your agent. Run it in another terminal.";
+
+/// The part has a seal already.
+pub fn seal_already(run: &str) -> String {
+    format!(
+        "This part has already ended, so there is nothing to seal. To go on, run: goalcup continue {run}"
+    )
+}
+
+/// Neither the watchdog nor the recorder lives, and the part has no seal.
+pub fn seal_not_running(run: &str) -> String {
+    format!("This part is not recording and has no seal yet. To go on, run: goalcup continue {run}")
+}
+
+pub fn seal_question(name: &str) -> String {
+    format!("Sure? This stops {name} and ends this part. [y/N] ")
+}
+
+pub const SEAL_NOT_CONFIRMED: &str = "Nothing was changed. The part is still recording.";
+
+pub const SEAL_NEEDS_TERMINAL: &str = "goalcup seal needs a terminal to ask first. To end the part without asking, run: goalcup seal --yes";
+
+pub const SEAL_WAIT: &str =
+    "Ending the part and finishing its record files. This can take a minute.";
+
+pub const SEAL_STILL: &str =
+    "Still finishing the record files. Ctrl-C here leaves the seal running.";
+
+/// The line before the end screen when the seal ended a running harness.
+pub fn seal_stopped(name: &str) -> String {
+    format!("goalcup seal stopped {name}.")
+}
+
+/// The part ended with no watchdog, so nobody ended the harness.
+pub fn seal_harness_left(name: &str) -> String {
+    format!(
+        "{name} is still running, and nothing is recording it now. End it yourself (Ctrl-C in its terminal)."
+    )
+}
+
+pub fn seal_could_not() -> String {
+    format!("goalcup could not finish the part. Write to {SUPPORT_ADDRESS}.")
+}
+
+// Interactive setup.
+pub fn no_prompts_question(name: &str) -> String {
+    format!(
+        "{name} will run for days with nobody watching. goalcup can set it to never stop and ask \
+         for approval (it can then change any file you can). Set this in goalcup's own {name} home?"
+    )
+}
+
+pub fn no_prompts_left(name: &str) -> String {
+    format!(
+        "Left as it is: {name} will stop and ask for approval during the run. Turn approvals off in \
+         goalcup's own {name} home yourself, or stay near it to answer."
+    )
+}
