@@ -197,7 +197,8 @@ fn dump(path: &std::path::Path, sid: Option<&str>, kind: Option<&str>, text: boo
                 return ExitCode::SUCCESS;
             }
         }
-        let (open, cut) = (rd.tail().open_frame, rd.tail().truncated);
+        let t = rd.tail();
+        let (open, cut) = (t.open_frame, t.truncated);
         if tail_line.is_none() && (open || cut.is_some()) {
             tail_line = Some(json!({"k": "tail", "open_frame": open, "truncated_at": cut}));
         }

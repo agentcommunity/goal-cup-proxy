@@ -128,8 +128,8 @@ impl Tally {
             }
             // The part before the first PART (a boot 0 that never wrote an index line) goes to
             // bucket 0, the part past the last PART or LINK to the last bucket; no rows between.
-            // Pieces add in ns; counts.off_ms floors each whole span, so a row's ms is at most
-            // 1 ms under its share of that.
+            // Pieces add in ns and each row floors once, so the rows sum to within 1 ms per
+            // span of counts.off_ms.
             let head = first.saturating_sub(s).min(e - s);
             let tail = e.saturating_sub(self.last.max(s));
             let x = self.rows.entry(0).or_default();
