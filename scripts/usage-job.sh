@@ -11,7 +11,7 @@
 # entries: a thread that spans a `continue` has its counts summed over the entries, and takes the
 # session's whole native values from its last entry (PRD-09 slice 5). An object made by a newer reader
 # (entry objects and run.json alike) is never overwritten, except by --entry. --box NAME decodes in that
-# build box (`sandbox copy` in, `sandbox exec`, `sandbox copy` out) and takes the reader version from it;
+# build box ($GOALCUP_BOX_CLI copy in, exec, copy out) and takes the reader version from it;
 # no credential enters it. Without it, goalcup-verify (or $GOALCUP_VERIFY) runs here.
 # Credentials, from the environment only: DATABASE_URL (read-only) and CLOUDFLARE_ACCOUNT_ID with a read
 # token for the traces bucket (fetch-run.sh), and GOALCUP_USAGE_TOKEN (read and write on the usage
@@ -40,6 +40,7 @@ while [ $# -gt 0 ]; do
 done
 here=$(cd "$(dirname "$0")" && pwd)
 gv=${GOALCUP_VERIFY:-goalcup-verify}
+bx=${GOALCUP_BOX_CLI:-sandbox}  # the conductor tool with `copy SRC DST` and `exec BOX -- CMD`; box:path names a path in a box
 ub=${GOALCUP_USAGE_BUCKET:-goalcup-usage}
 case $ub in '' | *[!A-Za-z0-9._-]*) echo "usage-job: bad bucket name" >&2; exit 2 ;; esac
 case $ub in *-staging) tb=goalcup-traces-staging staging=true ;; *) tb=goalcup-traces staging=false ;; esac
@@ -126,7 +127,7 @@ WHERE e.sealed_at IS NOT NULL AND ev.staging = :'staging' ORDER BY e.run_id, e.s
 ROLLBACK;
 SQL
 fi
-if [ -n "$box" ]; then v=$(sandbox exec "$box" -- "$gv" --version </dev/null) || v=
+if [ -n "$box" ]; then v=$($bx exec "$box" -- "$gv" --version </dev/null) || v=
 else v=$("$gv" --version </dev/null) || v=; fi
 reader=$(printf %s "$v" | awk 'NF{x=$NF} END{print x}')
 [ -n "$reader" ] || { echo "usage-job: cannot read the reader version from $gv" >&2; exit 1; }
@@ -137,11 +138,14 @@ if [ -n "$only" ]; then
 fi
 fail=0
 for run in $runs; do
-  stale=
-  while read -r ev r en; do
+  stale= ev=; : >"$w/puts"
+  while read -r e r en; do
     [ "$r" = "$run" ] || continue
-    if [ -n "$only" ] || ! newer "usage/$ev/$r/$en.json" "$reader"; then stale=1; fi
+    ev=$e
+    if [ -n "$only" ] || ! newer "usage/$e/$r/$en.json" "$reader"; then stale=1; echo "$en" >>"$w/puts"; fi
   done <"$w/all"
+  # run.json is put last: a run whose put failed after the entries is stale on its own.
+  putrun=; if [ -n "$only" ] || ! newer "usage/$ev/$run/run.json" "$reader"; then stale=1 putrun=1; fi
   [ -n "$stale" ] || continue
   # 2 and 3. Fetch each entry of the run and decode it.
   rd=$w/$run; mkdir -p "$rd/f" "$rd/o"; summaries=; ev=
@@ -153,10 +157,10 @@ for run in $runs; do
     [ -z "$store" ] || set -- "$@" --store "$store"
     if ! sh "$here/fetch-run.sh" "$@" "$en" "$rd/f" >/dev/null; then fail=1; continue 2; fi
     if [ -n "$box" ]; then
-      sandbox copy "$rd/f/$en" "$box:/tmp/uj/$en/in" >/dev/null </dev/null &&
-        sandbox exec "$box" -- "$gv" usage "/tmp/uj/$en/in" --json --out "/tmp/uj/$en/out" >/dev/null </dev/null &&
-        sandbox copy "$box:/tmp/uj/$en/out/$en.json" "$rd/o/$en.json" >/dev/null </dev/null &&
-        sandbox copy "$box:/tmp/uj/$en/out/$en.calls.jsonl" "$rd/o/$en.calls.jsonl" >/dev/null </dev/null || { echo "usage-job: decoding $en in the box failed" >&2; fail=1; continue 2; }
+      $bx copy "$rd/f/$en" "$box:/tmp/uj/$en/in" >/dev/null </dev/null &&
+        $bx exec "$box" -- "$gv" usage "/tmp/uj/$en/in" --json --out "/tmp/uj/$en/out" >/dev/null </dev/null &&
+        $bx copy "$box:/tmp/uj/$en/out/$en.json" "$rd/o/$en.json" >/dev/null </dev/null &&
+        $bx copy "$box:/tmp/uj/$en/out/$en.calls.jsonl" "$rd/o/$en.calls.jsonl" >/dev/null </dev/null || { echo "usage-job: decoding $en in the box failed" >&2; fail=1; continue 2; }
     else
       "$gv" usage "$rd/f/$en" --json --out "$rd/o" >/dev/null </dev/null || { echo "usage-job: decoding $en failed" >&2; fail=1; continue 2; }
     fi
@@ -173,14 +177,12 @@ for p in glob.glob(f"{rd}/o/e*.json"):
     rows.append((seg, entry, json.load(open(p))))
 rows.sort()
 KEYS = ("input", "cached", "cache_write", "output", "reasoning")
-LAST = ("parent", "depth", "label", "native_only", "native_total", "native_until", "native_tokens", "resumed", "readable", "reason")
+IDENT = ("parent", "depth", "label")  # from the latest copy that has them
+NATIVE = ("native_only", "native_total", "native_until", "native_tokens", "resumed")  # from the latest readable copy
+LAST = ("readable", "reason")
 
 def add(a, b):  # a number plus a number; unsaid only when both are
     return a if b is None else b if a is None else a + b
-
-def addto(m, t):
-    for k, v in t.items():
-        m[k] = add(m.get(k), v)
 
 def addall(m, t):
     for k, v in (t or {}).items():
@@ -192,7 +194,8 @@ for _, _, s in rows:
         m = threads.get(t["id"])
         if m is None:
             m = threads[t["id"]] = {"id": t["id"], "wire_calls": 0, "native_calls": 0, "matched": 0,
-                                    "status": {}, "tokens": {}, "models": {}, "effort": [], "first": None, "last": None}
+                                    "status": {}, "tokens": {}, "models": {}, "effort": [], "first": None, "last": None,
+                                    **{k: None for k in IDENT + NATIVE + LAST}}
         for k in ("wire_calls", "native_calls", "matched"):
             m[k] += t.get(k) or 0
         for k in ("status", "tokens", "models"):
@@ -201,30 +204,34 @@ for _, _, s in rows:
         for k, f in (("first", min), ("last", max)):
             seen = [x for x in (m[k], t.get(k)) if x]
             m[k] = f(seen) if seen else None
-        for k in LAST:  # the last entry holds the resumed session's whole native values
+        for k in IDENT:
+            if t.get(k) is not None:
+                m[k] = t[k]
+        if t.get("readable"):  # the last readable entry holds the resumed session's whole native values
+            for k in NATIVE:
+                m[k] = t.get(k)
+        for k in LAST:
             m[k] = t.get(k)
 tok = {}
 for _, _, s in rows:
     addall(tok, (s.get("tokens") or {}).get("merged"))
 tok = {k: tok.get(k) for k in KEYS}
 out = {"v": 1, "reader": min((s.get("reader", "0") for _, _, s in rows), key=lambda r: [int(x) for x in r.split(".") if x.isdigit()]),
-       "event": event, "run": run, "sealed": all(s.get("sealed") for _, _, s in rows),
+       "event": event, "run": run,
        "entries": [{"entry": e, "segment": g, "connector": s.get("connector"), "harness_version": s.get("harness_version"),
                     "sealed": s.get("sealed"), "readable": s.get("readable"), "coverage": s.get("coverage"), "read_error": bool(s.get("read_error")),
                     "native_partial": (s.get("tokens") or {}).get("native_partial")} for g, e, s in rows],
        "threads": sorted(threads.values(), key=lambda t: t["id"]),
-       "tokens": {"threads": tok, "calls_without_usage": sum((s.get("tokens") or {}).get("calls_without_usage") or 0 for _, _, s in rows)}}
+       "tokens": {"merged": tok, "calls_without_usage": sum((s.get("tokens") or {}).get("calls_without_usage") or 0 for _, _, s in rows)}}
 with open(f"{rd}/run.json", "w") as f:
     json.dump(out, f, sort_keys=True, separators=(",", ":"))
     f.write("\n")
 PY
   # 5. Put the objects, never over a newer reader's.
-  for f in "$rd"/o/e*.json; do
-    en=$(basename "$f" .json)
-    [ -n "$only" ] || ! newer "usage/$ev/$run/$en.json" "$reader" || continue
-    put "usage/$ev/$run/$en.json" "$f"; put "usage/$ev/$run/$en.calls.jsonl" "$rd/o/$en.calls.jsonl"
-  done
-  if [ -n "$only" ] || ! newer "usage/$ev/$run/run.json" "$reader"; then put "usage/$ev/$run/run.json" "$rd/run.json"; fi
+  while read -r en; do
+    put "usage/$ev/$run/$en.json" "$rd/o/$en.json"; put "usage/$ev/$run/$en.calls.jsonl" "$rd/o/$en.calls.jsonl"
+  done <"$w/puts"
+  if [ -n "$putrun" ]; then put "usage/$ev/$run/run.json" "$rd/run.json"; fi
   rm -rf "$rd"
 done
 exit "$fail"
