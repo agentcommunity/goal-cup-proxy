@@ -2,17 +2,18 @@
 # The organizer usage job (PRD-09 sections 1 and 7): for every sealed entry of a run that has no usage
 # object, or one made by an older reader, fetch the server copy, decode it and put the usage objects.
 #
-#   sh scripts/usage-job.sh [--box NAME] [--entry E] [--dry-run] [--index FILE [--event EV]] [--store DIR] [--usage-store DIR]
+#   sh scripts/usage-job.sh [--entry E] [--dry-run] [--index FILE [--event EV]] [--store DIR] [--usage-store DIR]
 #
 # Puts usage/{event}/{run}/{entry}.json, {entry}.calls.jsonl and run.json into the bucket named by
 # GOALCUP_USAGE_BUCKET (default goalcup-usage; goalcup-usage-staging reads the staging runs only).
-# A run is done whole: any stale entry re-reads all of the run's sealed entries. --entry E does only
-# E's run and puts E's objects whatever is there (exit 1 if E is not a sealed entry). run.json merges the
-# entries: a thread that spans a `continue` has its counts summed over the entries, and takes the
+# A run is done whole: any stale entry re-reads all of the run's sealed entries, and run.json is put
+# whenever any entry of the run is. --entry E does only E's run, puts E's objects and the run's run.json
+# whatever is there, and treats the run's other entries as usual (exit 1 if E is not a sealed entry).
+# run.json merges the entries: a thread that spans a `continue` has its counts summed over the entries, and takes the
 # session's whole native values from its last entry (PRD-09 slice 5). An object made by a newer reader
-# (entry objects and run.json alike) is never overwritten, except by --entry. --box NAME decodes in that
-# build box ($GOALCUP_BOX_CLI copy in, exec, copy out) and takes the reader version from it;
-# no credential enters it. Without it, goalcup-verify (or $GOALCUP_VERIFY) runs here.
+# (entry objects and run.json alike) is never overwritten, except E's own objects and run.json by --entry.
+# goalcup-verify (or $GOALCUP_VERIFY) decodes here and holds no credential of its own; run the whole job
+# in a build box to keep the credentials out of the decoder's reach.
 # Credentials, from the environment only: DATABASE_URL (read-only) and CLOUDFLARE_ACCOUNT_ID with a read
 # token for the traces bucket (fetch-run.sh), and GOALCUP_USAGE_TOKEN (read and write on the usage
 # bucket only). None reaches argv or output. --index and --store are fetch-run.sh's index and store; each
@@ -23,10 +24,9 @@ set -eu
 set +x
 umask 077
 
-box= only= dry= index= store= ustore= evarg=
+only= dry= index= store= ustore= evarg=
 while [ $# -gt 0 ]; do
   case $1 in
-    --box) box=${2:?--box needs a name}; shift ;;
     --entry) only=${2:?--entry needs an entry id}; shift ;;
     --index) index=${2:?--index needs a file}; shift ;;
     --event) evarg=${2:?--event needs an event id}; shift ;;
@@ -40,7 +40,6 @@ while [ $# -gt 0 ]; do
 done
 here=$(cd "$(dirname "$0")" && pwd)
 gv=${GOALCUP_VERIFY:-goalcup-verify}
-bx=${GOALCUP_BOX_CLI:-sandbox}  # the conductor tool with `copy SRC DST` and `exec BOX -- CMD`; box:path names a path in a box
 ub=${GOALCUP_USAGE_BUCKET:-goalcup-usage}
 case $ub in '' | *[!A-Za-z0-9._-]*) echo "usage-job: bad bucket name" >&2; exit 2 ;; esac
 case $ub in *-staging) tb=goalcup-traces-staging staging=true ;; *) tb=goalcup-traces staging=false ;; esac
@@ -127,8 +126,7 @@ WHERE e.sealed_at IS NOT NULL AND ev.staging = :'staging' ORDER BY e.run_id, e.s
 ROLLBACK;
 SQL
 fi
-if [ -n "$box" ]; then v=$($bx exec "$box" -- "$gv" --version </dev/null) || v=
-else v=$("$gv" --version </dev/null) || v=; fi
+v=$("$gv" --version </dev/null) || v=
 reader=$(printf %s "$v" | awk 'NF{x=$NF} END{print x}')
 [ -n "$reader" ] || { echo "usage-job: cannot read the reader version from $gv" >&2; exit 1; }
 runs=$(awk '{print $2}' "$w/all" | sort -u)
@@ -142,13 +140,14 @@ for run in $runs; do
   while read -r e r en; do
     [ "$r" = "$run" ] || continue
     ev=$e
-    if [ -n "$only" ] || ! newer "usage/$e/$r/$en.json" "$reader"; then stale=1; echo "$en" >>"$w/puts"; fi
+    if [ "$en" = "$only" ] || ! newer "usage/$e/$r/$en.json" "$reader"; then stale=1; echo "$en" >>"$w/puts"; fi
   done <"$w/all"
   # run.json is put last: a run whose put failed after the entries is stale on its own.
-  putrun=; if [ -n "$only" ] || ! newer "usage/$ev/$run/run.json" "$reader"; then stale=1 putrun=1; fi
+  # An entry going out makes the old run.json wrong; a run.json from an older reader is stale on its own.
+  putrun=; if [ -n "$stale" ] || ! newer "usage/$ev/$run/run.json" "$reader"; then stale=1 putrun=1; fi
   [ -n "$stale" ] || continue
   # 2 and 3. Fetch each entry of the run and decode it.
-  rd=$w/$run; mkdir -p "$rd/f" "$rd/o"; summaries=; ev=
+  rd=$w/$run; mkdir -p "$rd/f" "$rd/o"
   while read -r e r en; do
     [ "$r" = "$run" ] || continue
     ev=$e
@@ -156,14 +155,7 @@ for run in $runs; do
     [ -z "$index" ] || set -- "$@" --index "$w/idx-$en.json"
     [ -z "$store" ] || set -- "$@" --store "$store"
     if ! sh "$here/fetch-run.sh" "$@" "$en" "$rd/f" >/dev/null; then fail=1; continue 2; fi
-    if [ -n "$box" ]; then
-      $bx copy "$rd/f/$en" "$box:/tmp/uj/$en/in" >/dev/null </dev/null &&
-        $bx exec "$box" -- "$gv" usage "/tmp/uj/$en/in" --json --out "/tmp/uj/$en/out" >/dev/null </dev/null &&
-        $bx copy "$box:/tmp/uj/$en/out/$en.json" "$rd/o/$en.json" >/dev/null </dev/null &&
-        $bx copy "$box:/tmp/uj/$en/out/$en.calls.jsonl" "$rd/o/$en.calls.jsonl" >/dev/null </dev/null || { echo "usage-job: decoding $en in the box failed" >&2; fail=1; continue 2; }
-    else
-      "$gv" usage "$rd/f/$en" --json --out "$rd/o" >/dev/null </dev/null || { echo "usage-job: decoding $en failed" >&2; fail=1; continue 2; }
-    fi
+    "$gv" usage "$rd/f/$en" --json --out "$rd/o" >/dev/null </dev/null || { echo "usage-job: decoding $en failed" >&2; fail=1; continue 2; }
     [ -f "$rd/o/$en.json" ] && [ -f "$rd/o/$en.calls.jsonl" ] || { echo "usage-job: no output for $en" >&2; fail=1; continue 2; }
   done <"$w/all"
   # 4. run.json, in segment order.

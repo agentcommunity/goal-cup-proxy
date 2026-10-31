@@ -82,7 +82,7 @@ step cargo test --locked --workspace --doc # nextest does not run doctests
 step npm --prefix server/worker test
 # A named list, not `discover -s scripts`: old script tests name the old crates. A new script test
 # joins only if it guards one of the seven points, the format, masking or the never-stop rules (B10).
-step python3 -m unittest scripts/test_install.py scripts/test_fetch_run.py
+step python3 -m unittest scripts/test_install.py scripts/test_fetch_run.py scripts/test_usage_job.py
 step "$py311" -m unittest discover -s scripts/pad -p 'test_*.py'
 
 if [ "$tier" = full ]; then
