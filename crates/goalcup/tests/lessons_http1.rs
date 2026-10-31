@@ -699,18 +699,35 @@ fn world(real: bool) -> World {
     // SAFETY: nextest runs each test in its own process; this runs before `serve` reads them.
     unsafe {
         std::env::set_var("GOALCUP_TEST_EXTRA_ROOTS", roots);
-        std::env::set_var("GOALCUP_TEST_UPSTREAM", format!("api.openai.com={}", up.addr()));
+        std::env::set_var(
+            "GOALCUP_TEST_UPSTREAM",
+            format!("api.openai.com={}", up.addr()),
+        );
     }
     let (listener, addr) = common::ports::held();
     socket2::SockRef::from(&listener).listen(4096).unwrap();
     let ca = RunCa::mint(&["openai.com".to_string()]).unwrap();
     let (plain, calls) = Recorder::for_tests(ROOM);
     let entry = real.then(entry_dir);
-    let recorder = entry.as_ref().map_or(plain, |e| common::recorder::real(e.path()));
+    let recorder = entry
+        .as_ref()
+        .map_or(plain, |e| common::recorder::real(e.path()));
     let hosts = HostList::from_file(HOSTS.as_bytes(), "hosts.toml").unwrap();
-    let ctx = ProxyCtx { recorder, hosts, ca: ca.clone() };
+    let ctx = ProxyCtx {
+        recorder,
+        hosts,
+        ca: ca.clone(),
+    };
     let _h = serve(listener.try_clone().unwrap(), ctx);
-    World { up, _dir: dir, _h, addr, ca, calls, entry }
+    World {
+        up,
+        _dir: dir,
+        _h,
+        addr,
+        ca,
+        calls,
+        entry,
+    }
 }
 
 type Tls = tokio_rustls::client::TlsStream<tokio::net::TcpStream>;
@@ -719,7 +736,10 @@ type Tls = tokio_rustls::client::TlsStream<tokio::net::TcpStream>;
 async fn tls(w: &World) -> Tls {
     let s = through(w.addr, "api.openai.com:443").await;
     let name = ServerName::try_from("api.openai.com").unwrap();
-    trusting_run_ca(&w.ca, &[HTTP11]).connect(name, s).await.unwrap()
+    trusting_run_ca(&w.ca, &[HTTP11])
+        .connect(name, s)
+        .await
+        .unwrap()
 }
 
 /// Writes `req`, then reads until the upstream's `hi`; gives the answer.
@@ -749,13 +769,16 @@ async fn relays_on(label: &str, head: &[u8], reason: GapReason) {
     let w = world(false);
     let mut t = tls(&w).await;
     for req in [head, SECOND] {
-        assert!(send(&mut t, req).await.starts_with(b"HTTP/1.1 200"), "{label}");
+        assert!(
+            send(&mut t, req).await.starts_with(b"HTTP/1.1 200"),
+            "{label}"
+        );
     }
     assert_eq!(w.up.received(), [[head, SECOND].concat()], "{label}");
     drop(t);
     let conn = conns(&w.calls, 1).await[0].0;
-    let [Call::Gap(sid, got, _, _, _, lost, _)] = gaps(&w.calls).try_into().expect("one GAP")
-    else {
+    let [one]: [Call; 1] = gaps(&w.calls).try_into().expect("one GAP");
+    let Call::Gap(sid, got, _, _, _, lost, _) = one else {
         unreachable!()
     };
     assert_eq!(got, reason, "{label}");
@@ -775,8 +798,14 @@ async fn unframeable_heads_relay_on_inside_a_named_loss() {
         ("line folding", line("A: b\r\n folded")),
         ("a space in a name", line("Bad Name: x")),
         ("no colon", line("no colon here")),
-        ("an HTTP/2 line", format!("GET / HTTP/2.0\r\nX-Mark: {MARK}\r\n\r\n")),
-        ("no target", format!("GET HTTP/1.1\r\nX-Mark: {MARK}\r\n\r\n")),
+        (
+            "an HTTP/2 line",
+            format!("GET / HTTP/2.0\r\nX-Mark: {MARK}\r\n\r\n"),
+        ),
+        (
+            "no target",
+            format!("GET HTTP/1.1\r\nX-Mark: {MARK}\r\n\r\n"),
+        ),
     ];
     for (label, head) in heads {
         relays_on(label, head.as_bytes(), GapReason::DecodeFailed).await;
@@ -813,7 +842,12 @@ async fn authorization_forwarded_unchanged_and_starred_in_meta() {
     let recs = within_async(HANG, async {
         loop {
             let all = records(&dir);
-            if all.iter().filter(|r| matches!(r, Record::End { .. })).count() >= 3 {
+            if all
+                .iter()
+                .filter(|r| matches!(r, Record::End { .. }))
+                .count()
+                >= 3
+            {
                 return all;
             }
             tokio::time::sleep(Duration::from_millis(50)).await;
@@ -826,7 +860,10 @@ async fn authorization_forwarded_unchanged_and_starred_in_meta() {
             Record::Open { meta, .. } => {
                 let meta: Value = serde_json::from_slice(meta).unwrap();
                 let auth = meta["headers"].as_array().and_then(|h| {
-                    h.iter().find(|p| p[0].as_str().is_some_and(|n| n.eq_ignore_ascii_case("authorization")))
+                    h.iter().find(|p| {
+                        p[0].as_str()
+                            .is_some_and(|n| n.eq_ignore_ascii_case("authorization"))
+                    })
                 });
                 starred.extend(auth.map(|p| p[1].as_str().unwrap().to_owned()));
                 meta.to_string().into_bytes()
@@ -837,7 +874,9 @@ async fn authorization_forwarded_unchanged_and_starred_in_meta() {
         };
         assert!(!bytes.windows(SECRET.len()).any(|w| w == SECRET.as_bytes()));
     }
-    let [value] = starred.try_into().expect("one Authorization header recorded");
+    let [value] = starred
+        .try_into()
+        .expect("one Authorization header recorded");
     assert!(!value.is_empty() && value.bytes().all(|b| b == b'*'));
 }
 
@@ -855,7 +894,9 @@ async fn every_request_on_a_decrypted_host_is_recorded() {
         ("DELETE", "/telemetry"),
     ];
     for (method, path) in sent {
-        let req = format!("{method} {path} HTTP/1.1\r\nHost: api.openai.com\r\nContent-Length: 2\r\n\r\n{{}}");
+        let req = format!(
+            "{method} {path} HTTP/1.1\r\nHost: api.openai.com\r\nContent-Length: 2\r\n\r\n{{}}"
+        );
         send(&mut t, req.as_bytes()).await;
     }
     drop(t);
@@ -867,10 +908,17 @@ async fn every_request_on_a_decrypted_host_is_recorded() {
         })
     };
     let reqs = of(StreamKind::HttpReq);
-    let got: Vec<_> = reqs.iter().map(|r| r.2["path"].as_str().unwrap().to_owned()).collect();
+    let got: Vec<_> = reqs
+        .iter()
+        .map(|r| r.2["path"].as_str().unwrap().to_owned())
+        .collect();
     assert_eq!(got, sent.map(|s| s.1));
     let resps = of(StreamKind::HttpResp);
     let paired: Vec<_> = resps.iter().map(|r| r.1).collect();
-    assert_eq!(paired, reqs.iter().map(|r| r.0).collect::<Vec<_>>(), "a response each");
+    assert_eq!(
+        paired,
+        reqs.iter().map(|r| r.0).collect::<Vec<_>>(),
+        "a response each"
+    );
     assert!(gaps(&w.calls).is_empty());
 }
