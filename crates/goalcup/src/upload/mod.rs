@@ -85,21 +85,25 @@ pub struct SealFacts {
 pub struct UploadHandle {
     word: watch::Receiver<Option<ServerWord>>,
     /// None when no thread runs (a local run, or nothing to send with).
-    run: Option<(Arc<Shared>, Vec<mpsc::Sender<Wrap>>, Vec<JoinHandle<()>>)>,
+    run: Option<Run>,
 }
+
+/// The shared state, a sender per thread for `finish`, and the threads.
+type Run = (Arc<Shared>, Vec<mpsc::Sender<Wrap>>, Vec<JoinHandle<()>>);
 
 /// What `finish` hands both threads.
 type Wrap = (WrapUp, SealFacts);
-
-/// A thread's body.
-type Body = fn(&Shared, &Make, Option<Recorder>, Receiver<Wrap>);
 
 /// The threads' tick, on boot time.
 const TICK: Duration = Duration::from_secs(1);
 
 /// What the two threads share.
 struct Shared {
+    p: Policy,
+    client: ServerClient,
+    ids: (String, String),
     dir: PathBuf,
+    rec: Option<Recorder>,
     json: Mutex<UploadJson>,
     file: Mutex<state::Writer>,
     word: watch::Sender<Option<ServerWord>>,
@@ -111,26 +115,24 @@ impl Shared {
     /// Writes `upload.json` at most once a second unless `force` (section 11).
     fn put(&self, force: bool) {
         let mut file = lock(&self.file);
-        let j = lock(&self.json).clone();
-        let _ = file.put(Mono::now(), &j, force);
+        let _ = file.put(Mono::now(), &lock(&self.json).clone(), force);
+    }
+
+    /// A new sender or beat (`Sender::new`, `Beat::new`), also after a panic.
+    fn build<T>(&self, f: fn(&Policy, ServerClient, &str, &str, &Path) -> T) -> T {
+        f(&self.p, self.client.clone(), &self.ids.0, &self.ids.1, &self.dir)
     }
 }
 
-/// How a thread builds its sender or beat again after a panic.
-#[derive(Clone)]
-struct Make(Policy, ServerClient, String, String, PathBuf);
-
-impl Make {
-    fn build<T>(&self, f: fn(&Policy, ServerClient, &str, &str, &Path) -> T) -> T {
-        f(&self.0, self.1.clone(), &self.2, &self.3, &self.4)
-    }
+/// A `last_error` of class `internal` in fixed words.
+fn internal(text: &str) -> Option<LastError> {
+    Some(LastError::new(SystemTime::now(), Class::Internal, None, text))
 }
 
 /// Starts the uploader for the entry in `ctx`. Never panics and never fails: an unwritable folder
 /// is ignored. A restart keeps what an earlier `upload.json` confirmed, sent and pruned.
 pub fn spawn(ctx: UploadCtx) -> UploadHandle {
     let (word, seen) = watch::channel(None);
-    let mut handle = UploadHandle { word: seen, run: None };
     let old = state::read(&ctx.entry_dir).unwrap_or_default();
     let mut json = UploadJson {
         keep: ctx.keep,
@@ -146,55 +148,52 @@ pub fn spawn(ctx: UploadCtx) -> UploadHandle {
     // read as "no server".
     let server = cli::read_json::<ServerJson>(&cli::server_json(&ctx.run_dir));
     json.server_url = server.as_ref().and_then(|s| s.server.clone());
-    if server.as_ref().is_some_and(|s| s.server.is_none()) {
-        (json.state, json.keep) = (State::Local, true);
-        let _ = state::write(&ctx.entry_dir, &json);
-        return handle;
-    }
     let cred = std::fs::read_to_string(cli::credential(&ctx.run_dir)).unwrap_or_default();
-    let ready = server.zip(json.server_url.clone());
+    let ready = server.clone().zip(json.server_url.clone());
     let Some((server, url)) = ready.filter(|_| !cred.trim().is_empty()) else {
-        let text = match json.server_url {
-            Some(_) => "the run credential is missing",
-            None => "server.json unreadable",
+        (json.state, json.keep, json.last_error) = match (server, &json.server_url) {
+            (Some(_), None) => (State::Local, true, None),
+            (Some(_), Some(_)) => (State::Waiting, json.keep, internal("no run credential")),
+            (None, _) => (State::Waiting, json.keep, internal("server.json unreadable")),
         };
-        json.last_error = Some(LastError::new(SystemTime::now(), Class::Internal, None, text));
         let _ = state::write(&ctx.entry_dir, &json);
-        return handle;
+        return UploadHandle { word: seen, run: None };
     };
     // The server's intake ends a day after the run's deadline (section 9).
     let tail = |t: u64| state::rfc3339(UNIX_EPOCH + Duration::from_secs(t.saturating_add(86_400)));
-    json.upload_by = json
-        .upload_by
-        .or_else(|| server.deadline.as_deref().and_then(cli::unix_of).map(tail));
-    let client = ServerClient::new(&url, Some(Token::new(cred.trim())));
-    let make = Make(Policy::from_env(), client, ctx.run, ctx.entry, ctx.entry_dir.clone());
+    let deadline = server.deadline.as_deref().and_then(cli::unix_of);
+    json.upload_by = json.upload_by.or_else(|| deadline.map(tail));
     let sh = Arc::new(Shared {
+        p: Policy::from_env(),
+        client: ServerClient::new(&url, Some(Token::new(cred.trim()))),
+        ids: (ctx.run, ctx.entry),
         dir: ctx.entry_dir.clone(),
+        rec: ctx.recorder,
         json: Mutex::new(json),
         file: Mutex::new(state::Writer::new(ctx.entry_dir)),
         word,
         tried: AtomicBool::new(false),
     });
-    let (mut txs, mut joins) = (Vec::new(), Vec::new());
-    let threads: [(&str, Body); 2] = [("goalcup-upload", upload_thread), ("goalcup-beat", beat_thread)];
-    for (name, body) in threads {
+    let mut run: Run = (sh.clone(), Vec::new(), Vec::new());
+    let bodies: [(&str, fn(&Shared, Receiver<Wrap>)); 2] =
+        [("goalcup-upload", upload_thread), ("goalcup-beat", beat_thread)];
+    for (name, body) in bodies {
         let (tx, rx) = mpsc::channel();
-        let (s, make, rec) = (sh.clone(), make.clone(), ctx.recorder.clone());
+        let s = sh.clone();
         let started = thread::Builder::new().name(name.into()).spawn(move || {
             pipeline::low_priority();
-            body(&s, &make, rec, rx);
+            body(&s, rx);
         });
-        if let Ok(j) = started {
-            (txs.push(tx), joins.push(j));
-        } else {
-            let text = "a thread of the uploader could not start";
-            lock(&sh.json).last_error = Some(LastError::new(SystemTime::now(), Class::Internal, None, text));
+        match started {
+            Ok(j) => {
+                run.1.push(tx);
+                run.2.push(j);
+            }
+            Err(_) => lock(&sh.json).last_error = internal("an uploader thread could not start"),
         }
     }
     sh.put(true);
-    handle.run = Some((sh, txs, joins));
-    handle
+    UploadHandle { word: seen, run: Some(run) }
 }
 
 /// Waits one tick, or less when `finish` hands over the wrap-up. None once `finish` let go.
@@ -220,10 +219,8 @@ pub fn guard<T>(
     let out = catch_unwind(AssertUnwindSafe(f)).ok();
     if out.is_none() {
         let wait = backoff.fail(Mono::now(), None);
-        let text = "the uploader met an internal error";
         let mut j = lock(j);
-        j.state = State::Waiting;
-        j.last_error = Some(LastError::new(SystemTime::now(), Class::Internal, None, text));
+        (j.state, j.last_error) = (State::Waiting, internal("an internal error in the uploader"));
         send::log_failure(entry_dir, what, Class::Internal.word(), None, wait);
     }
     out
@@ -232,9 +229,9 @@ pub fn guard<T>(
 /// The upload thread: a round on each tick, bounded by the durable point (live) or by what is on
 /// disk (null mode). After the seal it waits for the first final heartbeat, then sends back to
 /// back.
-fn upload_thread(sh: &Shared, make: &Make, rec: Option<Recorder>, rx: Receiver<Wrap>) {
-    let mut s = make.build(Sender::new);
-    let durable = rec.as_ref().map(Recorder::durable);
+fn upload_thread(sh: &Shared, rx: Receiver<Wrap>) {
+    let mut s = sh.build(Sender::new);
+    let durable = sh.rec.as_ref().map(Recorder::durable);
     let mut wrap = false;
     while let Some(w) = next(&rx) {
         wrap |= w.is_some();
@@ -247,8 +244,7 @@ fn upload_thread(sh: &Shared, make: &Make, rec: Option<Recorder>, rx: Receiver<W
             let mut backoff = s.backoff;
             let round = || while s.tick(&Mono::now, &b, wrap, &sh.json) == Step::Again {};
             if guard("round", &sh.dir, &sh.json, &mut backoff, round).is_none() {
-                s = make.build(Sender::new);
-                s.backoff = backoff;
+                (s, s.backoff) = (sh.build(Sender::new), backoff);
             }
         }
         sh.put(false);
@@ -257,41 +253,35 @@ fn upload_thread(sh: &Shared, make: &Make, rec: Option<Recorder>, rx: Receiver<W
 
 /// The beat thread: an ordinary beat when due; after the seal the final heartbeat, then the final
 /// again whenever its backoff is due once the last chunk is stored, until sealed.
-fn beat_thread(sh: &Shared, make: &Make, rec: Option<Recorder>, rx: Receiver<Wrap>) {
-    let mut b = make.build(Beat::new);
-    let (durable, rec_dir) = (rec.as_ref().map(Recorder::durable), sh.dir.join("rec"));
+fn beat_thread(sh: &Shared, rx: Receiver<Wrap>) {
+    let mut b = sh.build(Beat::new);
+    let (durable, rec_dir) = (sh.rec.as_ref().map(Recorder::durable), sh.dir.join("rec"));
     let (mut fin, mut link) = (None::<Wrap>, None::<IndexLine>);
     while let Some(w) = next(&rx) {
         fin = w.or(fin);
-        let now = Mono::now();
-        let j = lock(&sh.json).clone();
+        let (now, j) = (Mono::now(), lock(&sh.json).clone());
         let mut backoff = b.backoff;
-        let one = || match &fin {
-            None => match (&rec, &durable) {
-                (Some(r), Some(d)) => {
-                    let d = d.borrow().clone();
-                    let h = health(Some(&r.live()), &sh.dir, &d.totals);
-                    b.tick(now, &d, &h, j.waiting_bytes, &sh.json, &sh.word);
-                }
-                _ => {
-                    // Null mode (ledger R7): the point and totals on disk, read only when due.
-                    let none = EntryTotals::default();
-                    if !b.due(now, recording(&health(None, &sh.dir, &none), &none)) {
-                        return;
-                    }
-                    let totals = pipeline::entry_totals(&sh.dir);
-                    let h = health(None, &sh.dir, &totals);
-                    let point = last_on_disk(&rec_dir).ok().flatten();
-                    let point = point.map(|line| goalcup_format::Durable {
-                        part: String::new(),
-                        index_len: 0,
-                        line,
+        let one = || match (&fin, &sh.rec, &durable) {
+            (None, Some(r), Some(d)) => {
+                let d = d.borrow().clone();
+                let h = health(Some(&r.live()), &sh.dir, &d.totals);
+                b.tick(now, &d, &h, j.waiting_bytes, &sh.json, &sh.word);
+            }
+            // Null mode (ledger R7): the point and totals on disk, read only when a beat is due.
+            (None, ..) => {
+                let none = EntryTotals::default();
+                if b.due(now, recording(&health(None, &sh.dir, &none), &none)) {
+                    let mut d = Durable::default();
+                    (d.totals, d.at) = (pipeline::entry_totals(&sh.dir), now);
+                    d.point = last_on_disk(&rec_dir).ok().flatten().map(|line| {
+                        let part = String::new();
+                        goalcup_format::Durable { part, index_len: 0, line }
                     });
-                    let d = Durable { point, totals, at: now };
+                    let h = health(None, &sh.dir, &d.totals);
                     b.tick(now, &d, &h, j.waiting_bytes, &sh.json, &sh.word);
                 }
-            },
-            Some((_, seal)) => {
+            }
+            (Some((_, seal)), ..) => {
                 // The seal LINK, the last `E` or `R` line, read once.
                 link = link.or_else(|| match &durable {
                     Some(d) => d.borrow().point.as_ref().map(|p| p.line),
@@ -301,20 +291,17 @@ fn beat_thread(sh: &Shared, make: &Make, rec: Option<Recorder>, rx: Receiver<Wra
                 let stored = j.confirmed.as_ref().is_some_and(|c| c.raw >= point.raw_end);
                 let again = !sh.tried.load(SeqCst) || (stored && b.backoff.due(now));
                 if j.final_ != Final::Sealed && again {
-                    let live = rec.as_ref().map_or_else(Live::default, Recorder::live);
-                    let waiting_bytes = j.waiting_bytes;
-                    let f = FinalFacts { point, seal, live: &live, waiting_bytes };
+                    let live = sh.rec.as_ref().map_or_else(Live::default, Recorder::live);
+                    let (live, waiting_bytes) = (&live, j.waiting_bytes);
+                    let f = FinalFacts { point, seal, live, waiting_bytes };
                     b.final_beat(now, &f, &sh.json, &sh.word);
                 }
             }
         };
         if guard("beat", &sh.dir, &sh.json, &mut backoff, one).is_none() {
-            b = make.build(Beat::new);
-            b.backoff = backoff;
+            (b, b.backoff) = (sh.build(Beat::new), backoff);
         }
-        if fin.is_some() {
-            sh.tried.store(true, SeqCst);
-        }
+        sh.tried.fetch_or(fin.is_some(), SeqCst);
         sh.put(false);
     }
 }
@@ -327,7 +314,8 @@ impl UploadHandle {
 
     /// The seal is durable: final heartbeat, then the chunks left, then the final again until
     /// sealed (section 6), until `upload.json` says `done` or `wrap_up` is over. Then a last write
-    /// of `upload.json`; both threads stop at their next tick.
+    /// of `upload.json`; both threads stop at their next tick, waited for a few seconds at most (a
+    /// thread inside a call ends alone).
     pub fn finish(self, wrap_up: WrapUp, seal: SealFacts) {
         let Some((sh, txs, joins)) = self.run else {
             return;
@@ -341,15 +329,9 @@ impl UploadHandle {
         }
         sh.put(true);
         drop(txs);
-        // A thread in a call is left to end alone: the bound guards the harness's exit.
         let until = policy::after(Mono::now(), 5 * TICK);
-        for j in joins {
-            while !j.is_finished() && Mono::now() < until {
-                thread::sleep(TICK / 100);
-            }
-            if j.is_finished() {
-                let _ = j.join();
-            }
+        while !joins.iter().all(JoinHandle::is_finished) && Mono::now() < until {
+            thread::sleep(TICK / 100);
         }
     }
 }

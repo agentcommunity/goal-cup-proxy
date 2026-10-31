@@ -30,7 +30,7 @@ fn null_mode_sends_up_to_the_last_whole_line_and_beats_failed() {
         rotate_after_ns: u64::MAX,
     };
     let mut w = PartWriter::open(&rec, opts, ENTRY, BOOT_ID, at(0)).unwrap();
-    for n in 1..=6 {
+    for n in 1..=6u64 {
         let json = format!(r#"{{"n":"{}"}}"#, hex(&n.to_le_bytes()).repeat(400)).into_bytes();
         let t = at(n).mono_ns;
         w.write(&Record::Event { t, json }).unwrap();
@@ -49,7 +49,11 @@ fn null_mode_sends_up_to_the_last_whole_line_and_beats_failed() {
         mode: Mode::Null,
         ..Status::default()
     };
-    fs::write(cli::status_json(&entry), serde_json::to_vec(&status).unwrap()).unwrap();
+    fs::write(
+        cli::status_json(&entry),
+        serde_json::to_vec(&status).unwrap(),
+    )
+    .unwrap();
     let server = json!({"v": 1, "server": fake.url(), "run": RUN_ID, "mode": "test",
         "deadline": "2026-11-07T10:00:00Z", "repo": null, "hosts_file": null, "entries": [],
         "connector": {"id": "c", "name": "c", "source": "builtin"}});
@@ -65,7 +69,11 @@ fn null_mode_sends_up_to_the_last_whole_line_and_beats_failed() {
         recorder: None,
         keep: true,
     });
-    let beat = || fake.heartbeats().into_iter().find(|b| b["seq"] == whole.seq);
+    let beat = || {
+        fake.heartbeats()
+            .into_iter()
+            .find(|b| b["seq"] == whole.seq)
+    };
     let raw = || state::read(&entry).map(|j| j.durable_raw);
     let start = Instant::now();
     while (fake.stream(ENTRY) != want || beat().is_none() || raw() != Some(whole.raw_end))
@@ -73,8 +81,15 @@ fn null_mode_sends_up_to_the_last_whole_line_and_beats_failed() {
     {
         thread::sleep(Duration::from_millis(100));
     }
-    assert_eq!(fake.stream(ENTRY), want, "the bytes up to the last whole line, none past it");
-    assert_eq!(beat().map(|b| b["recording"].clone()), Some(json!("failed")));
+    assert_eq!(
+        fake.stream(ENTRY),
+        want,
+        "the bytes up to the last whole line, none past it"
+    );
+    assert_eq!(
+        beat().map(|b| b["recording"].clone()),
+        Some(json!("failed"))
+    );
     assert_eq!(raw(), Some(whole.raw_end));
     // Section 9: the tail window is the deadline plus a day.
     let by = state::read(&entry).unwrap().upload_by;

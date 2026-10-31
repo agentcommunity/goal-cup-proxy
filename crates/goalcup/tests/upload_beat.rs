@@ -548,7 +548,10 @@ fn finish_sends_the_final_then_the_chunks_then_the_final_until_sealed() {
     while worker.chunks().is_empty() && start.elapsed() < common::HANG {
         std::thread::sleep(Duration::from_millis(10));
     }
-    assert!(start.elapsed() >= Duration::from_millis(1500), "a chunk before the final");
+    assert!(
+        start.elapsed() >= Duration::from_millis(1500),
+        "a chunk before the final"
+    );
     common::within(common::HANG, move || done.join().unwrap());
     let j = state::read(&entry).unwrap();
     assert_eq!((j.final_, j.state), (Final::Sealed, State::Done));
@@ -556,6 +559,9 @@ fn finish_sends_the_final_then_the_chunks_then_the_final_until_sealed() {
     assert!(!beats.is_empty() && beats.iter().all(|b| b["final"] == true));
     assert_eq!(beats.last().unwrap()["seq"], want.line.seq);
     let parts = part_files(&entry.join("rec")).unwrap();
-    let all: Vec<u8> = parts.iter().flat_map(|p| std::fs::read(p).unwrap()).collect();
+    let all: Vec<u8> = parts
+        .iter()
+        .flat_map(|p| std::fs::read(p).unwrap())
+        .collect();
     assert_eq!(worker.stream(records::ENTRY), all);
 }
