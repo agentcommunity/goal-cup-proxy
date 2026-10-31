@@ -1080,3 +1080,26 @@ PRD-01, PRD-05, PRD-08, PRD-12, PRD-16 and the old code.
   are the S7 summary keys `models[]`, `threads[]`, `tokens` and `coverage`; read `usage --json` or the
   S7 file, not the calls file. A `read_error` true summary is partial and must be shown as such.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-31, replan after the PRD-09 slice 5 re-review (`sqlite.rs`)
+
+- **Resumed sessions are marked, not summed (A5r-1, A5r2-1).** In a `continue` entry a session that
+  began before the entry keeps its rows, but its `api_call_count` and token totals span earlier
+  entries. The thread row keeps the token totals with `resumed: true`, leaves `native_total` empty,
+  and `tokens.native` leaves them out; the summary carries `tokens.native_partial: true`, so
+  `tokens.native` of that entry reads as a lower bound. The run rollup takes each session's whole
+  values from the last entry's copy. A totals-form comparison never counts earlier calls against
+  this entry's wire calls.
+- **A row after the copy's time marks the entry as totals (A5r-2).** An assistant row stamped later
+  than the copy's mtime is in the copy but cannot be joined; it no longer leaves `native_calls`
+  silently. The leg reads as totals.
+- **Time join kind (A5r-4, decision).** The Hermes time join matches any ok `Kind::Call` wire row,
+  not only Chat or Messages paths as PRD section 6 reads, because Hermes also speaks the Responses
+  and Gemini-native adapters. The code is right; this line is the PRD text's correction.
+- **Size decision (A5r-5, B1).** `sqlite.rs` is 386 lines against 150, usage src about 2,850 against
+  2,550, and `usage_run1.rs` 665 against 520. No cut keeps the behaviour: WAL needs real files (a
+  private temp dir, checksum repair, column probing). This line is the decision to carry the
+  overrun; no new reader is added to it. A long run holds every copy's bytes in memory until
+  `finish`; fine in a build box, listed as known.
+- B2 and B3 (one `Option<Used>` on `CallTable`, a named struct for the kept entry) are nits taken at
+  the next touch of those files.
