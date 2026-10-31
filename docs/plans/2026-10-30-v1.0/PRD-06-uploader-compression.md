@@ -1118,7 +1118,8 @@ PRD-12 and PRD-17.
 
 - **No decode in the recorder.** The queue takes an older entry's final-heartbeat totals from its
   `status.json` (`written` and `off`), which PRD-02 is to set together with the seal (not yet called:
-  see the open dependency in the re-review fixes below), so they are the seal's totals; no part file is decoded on the upload thread. An entry the
+  see the open dependency in the re-review fixes below), so they are the seal's totals; no part file
+  is decoded in the recorder (the queue thread included). An entry the
   queue takes is always sealed in `status.json`, or its `upload.json` says the server sealed it and no
   final goes. `goalcup upload`, a process of its own, keeps `pipeline::entry_totals`.
 - **A refused entry stays queued.** 401, 404 and 410 from an older entry keep it in the queue on its
@@ -1188,9 +1189,23 @@ PRD-12 and PRD-17.
   PRD-06 row, and the architecture diagram both say two). The intent of the ruling and of L5 holds:
   all three are in the recorder process, use the blocking client and never touch the async runtime.
   Section 1's "Two plain threads" and "Each round serves the live entry first, then one round for
-  each older entry" read with this change: older entries are served on their own thread, after the
-  live entry's wrap-up is done; during recording they go out alongside the live entry, not strictly
-  after it. The replan records it in PRD-00.
+  each older entry" read with this change: older entries are served on their own thread, which pauses only while
+  the live entry's wrap-up is in progress and otherwise runs alongside the live entry. The replan records it in PRD-00.
 - The open dependency on PRD-02 (`Board::sealed`), the `tests/upload_common/` ownership question and
   the size overage stand as written above. No locked ledger item is touched and no owner question
   comes from these fixes.
+
+### 2026-10-31, replan after slice 6 (merge 114202ae)
+
+- Two review nits (A13, A14, D1 of the re-review) are fixed in the slice 6 notes above: the long line
+  is rewrapped and says the queue thread, and the thread sentence is one plain statement.
+- **Size at merge** (`wc -l` on integration): `src/upload/*.rs` 3,283 against the PRD-00 row of 940;
+  `tests/upload_*.rs` 2,765 against 1,000. Over the replan ceilings of 2,500 and 1,900 as well. No
+  behaviour-keeping cut is known; the overage serves points 3 and 5. Slice 7 must not grow `client.rs`
+  or the queue.
+- **Slice 7 carries the dead-entry close** (PRD-02 `close_dead_entry` in `manual::run`), because
+  `dead.rs` is not on integration. It also needs PRD-02 to call `Board::sealed` with the seal; until
+  then the queue skips every real entry (open dependency above).
+- The queue costs one lock, one `recording()` check and one `upload.json` read per queued entry per
+  tick (up to 200 entries), on `goalcup-queue` only. Accepted; no cut keeps the behaviour.
+- No locked ledger item is touched.
