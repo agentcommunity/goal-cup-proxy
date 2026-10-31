@@ -4,14 +4,21 @@
 //! recorder's runtime, and never ends the process.
 //!
 //! Present: the seams ([`ServerWord`] S10, [`spawn`], [`UploadCtx`], [`SealFacts`] S18,
-//! `upload.json` S9), the timing rules ([`policy`]), the client, the chunk cut ([`chunk`]) and the
-//! heartbeat ([`beat`]). The threads come in slice 3; until then [`spawn`] starts none and says
-//! so plainly in `upload.json`.
+//! `upload.json` S9), the timing rules ([`policy`]), the client, the chunk cut ([`chunk`]), the
+//! heartbeat ([`beat`]) and the sender's rounds ([`send`]). The threads come in slice 4; until
+//! then [`spawn`] starts none and says so plainly in `upload.json`.
+//!
+//! Open for slice 4: the threads and their `catch_unwind` (with the panic case of
+//! `upload_resume.rs`); the call of `Policy::from_env` (gate full stays red until then); the order
+//! final heartbeat, chunks, final again until sealed; `upload.json` written at most once a second
+//! (`state::Writer` in both `Sender::update` and `Beat::send`);
+//! null mode's thread that sends `failed` (ledger R7); prune and the older-entry queue.
 
 pub mod beat;
 pub mod chunk;
 pub mod client;
 pub mod policy;
+pub mod send;
 pub mod state;
 
 pub use policy::WrapUp;

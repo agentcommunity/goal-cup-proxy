@@ -1298,3 +1298,12 @@ why. Fixes for other files are made by those files' owners; this list covers onl
   the Rust totals of about 18,100 src and at most about 14,200 tests hold only if other rows come in
   under them. PRD-16 tracks the totals.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-31, replan after PRD-06 slice 3 (merge a76bd11d)
+
+- **Size table, row "Upload (PRD-06)":** a replan decision sets its ceilings to 2,500 src and 1,900
+  tests, inline tests counted (PRD-06 note names points 3, 5 and 6). That is 1,560 src and 900 tests
+  over the row (at a76bd11d: 2,253 src and 1,625 tests with 7 of 9 files written). The Rust totals of
+  about 18,100 src and at most about 14,200 tests hold only if other rows come in under them. PRD-16
+  tracks the three rows that went over (connector, usage, upload).
+- No locked ledger item is touched and no owner question comes from this slice.

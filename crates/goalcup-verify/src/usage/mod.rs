@@ -8,14 +8,18 @@
 
 mod hints;
 mod native;
+mod out;
 mod shapes;
 mod sse;
 mod wire;
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::ffi::OsString;
+use std::io::Write;
+use std::path::PathBuf;
 use std::process::ExitCode;
 
+use clap::Parser;
 use goalcup_format::Record;
 use serde_json::Value;
 
@@ -247,6 +251,12 @@ pub struct CallTable {
     /// Child rollout lines skipped as copied parent records (timed before the child's own
     /// `session_meta`).
     pub copied_skipped: u64,
+    /// From the `start` event, the entry of the last PART, and whether a `seal` event was read.
+    pub run: Option<String>,
+    pub entry: String,
+    pub connector: Option<String>,
+    pub harness_version: Option<String>,
+    pub sealed: bool,
 }
 
 impl Default for CallTable {
@@ -261,6 +271,11 @@ impl Default for CallTable {
             joined_by_time: 0,
             repeats_skipped: 0,
             copied_skipped: 0,
+            run: None,
+            entry: String::new(),
+            connector: None,
+            harness_version: None,
+            sealed: false,
         }
     }
 }
@@ -288,6 +303,9 @@ fn host_kind(s: Option<&str>) -> Option<HostKind> {
 struct Ctx {
     entry: String,
     connector: Option<String>,
+    run: Option<String>,
+    harness_version: Option<String>,
+    sealed: bool,
     boot: u64,
     /// (wall_ns, mono_ns) of the last PART or LINK of this boot.
     base: Option<(u64, u64)>,
@@ -313,7 +331,13 @@ impl Ctx {
     }
 
     fn start(&mut self, ev: &Value) {
-        self.connector = ev["connector"].as_str().map(str::to_string);
+        let label = |k: &str| ev[k].as_str().and_then(hints::id);
+        (self.connector, self.run) = (label("connector"), label("run"));
+        // The first line of `<harness> --version`: printable ASCII, spaces kept, at most 128 bytes.
+        self.harness_version = ev["harness_version"]
+            .as_str()
+            .filter(|v| v.len() <= 128 && v.bytes().all(|b| (b' '..=b'~').contains(&b)))
+            .map(str::to_string);
         let lists = ev
             .get("hosts")
             .and_then(Value::as_object)
@@ -365,8 +389,10 @@ impl Calls {
             } => self.ctx.base = Some((*wall_ns, *mono_ns)),
             Record::Event { json, .. } => {
                 let ev = serde_json::from_slice::<Value>(json).unwrap_or(Value::Null);
-                if ev.get("ev").and_then(Value::as_str) == Some("start") {
-                    self.ctx.start(&ev);
+                match ev.get("ev").and_then(Value::as_str) {
+                    Some("start") => self.ctx.start(&ev),
+                    Some("seal") => self.ctx.sealed = true,
+                    _ => {}
                 }
             }
             _ => {
@@ -379,6 +405,15 @@ impl Calls {
     /// The table: wire rows in (boot, sid, msg) order, then native rows in (path, time) order,
     /// joined by reply id or by time (PRD-09 section 6).
     pub fn finish(self) -> CallTable {
+        let c = &self.ctx;
+        let base = CallTable {
+            run: c.run.clone(),
+            entry: c.entry.clone(),
+            connector: c.connector.clone(),
+            harness_version: c.harness_version.clone(),
+            sealed: c.sealed,
+            ..CallTable::default()
+        };
         let (mut rows, replies) = self.wire.finish(&self.ctx);
         let ok = |r: &CallRow| r.kind == Kind::Call && r.outcome == Outcome::Ok;
         let c = self.ctx.connector.as_deref();
@@ -386,10 +421,7 @@ impl Calls {
             for r in rows.iter_mut().filter(|r| r.kind == Kind::Call) {
                 r.join = Some(Join::WireOnly);
             }
-            return CallTable {
-                rows,
-                ..CallTable::default()
-            };
+            return CallTable { rows, ..base };
         };
         let leg = self.native.finish();
         let mut nat = leg.rows;
@@ -470,7 +502,10 @@ impl Calls {
                 ..Thread::new(id)
             });
         }
-        // An unmatched wire row of a child thread takes the parent its thread entry gives.
+        rows.extend(nat.into_iter().map(|x| x.0));
+        // A row of a child thread with no parent takes the one its thread entry gives. A thread
+        // only the wire names is pushed with the table's reason and `native_calls` 0: read
+        // `native_calls`, not `readable()`, for "this thread has native rows".
         let parents: HashMap<&str, &String> = threads
             .iter()
             .filter_map(|t| Some((t.id.as_str(), t.parent.as_ref()?)))
@@ -479,7 +514,6 @@ impl Calls {
             let p = r.thread.as_deref().and_then(|t| parents.get(t));
             r.parent = p.map(|p| (*p).clone());
         }
-        rows.extend(nat.into_iter().map(|x| x.0));
         CallTable {
             rows,
             threads,
@@ -489,13 +523,90 @@ impl Calls {
             joined_by_time,
             repeats_skipped: leg.repeats_skipped,
             copied_skipped: leg.copied_skipped,
+            ..base
         }
     }
 }
 
-/// Runs `goalcup-verify usage <args>` (PRD-09 section 7); not built yet, so exits 3 (no report).
+#[derive(Parser)]
+struct Args {
+    path: PathBuf,
+    #[arg(long)]
+    json: bool,
+    #[arg(long)]
+    out: Option<PathBuf>,
+}
+
+/// Runs `goalcup-verify usage <path> [--json] [--out <dir>]` (PRD-09 section 7): an entry, a run
+/// folder or a part file; `--out` writes `<entry>.json` and `<entry>.calls.jsonl`. An entry that
+/// cannot be read gets a line naming its folder, never record text, and the rest go on; exit 3
+/// only when no entry gave output, else 0. A decode error partway through an entry still gives a
+/// summary, with `read_error` true and a line on stderr, since what came before it is real.
 pub fn run(args: Vec<OsString>) -> ExitCode {
-    let _ = args;
-    eprintln!("goalcup-verify: the usage reader is not built yet");
-    ExitCode::from(3)
+    let a = match Args::try_parse_from(std::iter::once("usage".into()).chain(args)) {
+        Ok(a) => a,
+        Err(e) => {
+            let _ = e.print();
+            return ExitCode::from(if e.use_stderr() { 3 } else { 0 });
+        }
+    };
+    let entries = match crate::input::resolve(&a.path, false, false) {
+        Ok(i) => i.entries,
+        Err(e) => {
+            eprintln!("goalcup-verify: usage: {e}");
+            return ExitCode::from(3);
+        }
+    };
+    let mut done = 0;
+    for e in &entries {
+        match read_one(&a, e) {
+            Ok(()) => done += 1,
+            Err(x) => eprintln!("goalcup-verify: usage: {x}"),
+        }
+    }
+    ExitCode::from(if done == 0 { 3 } else { 0 })
+}
+
+fn read_one(a: &Args, e: &crate::input::Entry) -> Result<(), String> {
+    let dir = e.dir.display();
+    let (rd, _) = crate::input::open(e).map_err(|x| format!("{dir}: {x}"))?;
+    let (mut calls, mut n, mut broke) = (Calls::new(), 0, false);
+    // A torn tail is not an error (`tail().truncated`): an `Err` is a decode failure, and the
+    // read stops there.
+    for it in rd {
+        let Ok(it) = it else {
+            broke = true;
+            break;
+        };
+        calls.push(&it.rec);
+        n += 1;
+    }
+    if n == 0 {
+        return Err(format!("no record could be read in {dir}"));
+    }
+    if broke {
+        eprintln!("goalcup-verify: usage: the read stopped early in {dir}; the counts are partial");
+    }
+    let t = calls.finish();
+    // The entry names the files, so only a plain id does; else the folder's name.
+    let plain = !t.entry.is_empty() && t.entry.bytes().all(|b| b.is_ascii_alphanumeric());
+    let name = match e.dir.file_name() {
+        _ if plain => t.entry.clone(),
+        Some(f) => f.to_string_lossy().into_owned(),
+        None => "entry".to_string(),
+    };
+    let mut sum = out::summary(&t);
+    sum["read_error"] = broke.into();
+    if a.json || a.out.is_none() {
+        let _ = writeln!(std::io::stdout(), "{sum}");
+    }
+    if let Some(d) = &a.out {
+        let put = |path: PathBuf, body: &str| {
+            std::fs::write(&path, body).map_err(|x| format!("{}: {x}", path.display()))
+        };
+        std::fs::create_dir_all(d).map_err(|x| format!("{}: {x}", d.display()))?;
+        put(d.join(format!("{name}.json")), &format!("{sum}\n"))?;
+        put(d.join(format!("{name}.calls.jsonl")), &out::calls_jsonl(&t))?;
+    }
+    Ok(())
 }

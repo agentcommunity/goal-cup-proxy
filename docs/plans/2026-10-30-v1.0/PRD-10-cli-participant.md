@@ -1428,3 +1428,28 @@ What the pad calls, as merged (PRD-12 note):
 - **B9 is still open:** PRD-11 did not change `write_settings` in this slice; keep the `fill` copy
   in `cli/setup.rs` until PRD-11's merge that does, and drop it in that same merge (PRD-11 note).
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-31, replan after PRD-11 slice 5 (merge 7a647ba4)
+
+- **`continue` with an empty `resume`:** Cline's connector has no resume arguments (no continue form
+  in 3.0.74). Section 3.1 step 3 then opens a new session whatever the written counts say, and `continue`
+  prints one plain line before the start screen: `<Harness> cannot pick up its last session, so this part
+  starts a new one. Your earlier parts stay recorded.` (point 6). This is the rule in the connector data,
+  not a harness name in the CLI. The `resume_failed` rule does not apply to it. No shape change.
+- **Acceptance 7 (P11 real-run proof):** the earlier note named Amp and Droid. Only Amp sets `HOME`
+  (Droid sets `FACTORY_HOME_OVERRIDE`), and Amp has no key this cycle, so the unit test of the writer stays
+  the proof; do not wait for a real-run row.
+- **B9 is still open:** PRD-11's slice 5 did not change `write_settings`; the rule of the earlier note holds.
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-31, replan after PRD-06 slice 3 (merge a76bd11d)
+
+- **`upload.json` as the sender now writes it (S9, PRD-06 note):** `state` can be `sending`,
+  `caught_up`, `waiting`, `stuck` or `refused`; `final` goes `none`, `sent`, `sealed` and never back;
+  `next_try` is empty while the entry waits on the final heartbeat, so a status line must not print a
+  next-try time then; `stuck` and `refused` carry `last_error`, and `last_error` clears only on progress
+  or caught up. `confirmed` is set only from a chunk the server stored or a position a local index line
+  matches.
+- **Still open for you:** the upload dispatch waits for `upload::manual::run`, which is PRD-06 slice 4
+  (`Beat::final_beat` and `point_on_disk` for it are on integration now).
+- No locked ledger item is touched and no owner question comes from this slice.

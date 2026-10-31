@@ -996,3 +996,87 @@ PRD-01, PRD-05, PRD-08, PRD-12, PRD-16 and the old code.
   writes S7 from `Thread`/`CallTable` as merged, and the pad's spend keys stay as the PRD-12 note
   names them.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-31, replan after the PRD-09 slice 4 review (`out.rs` and `usage`)
+
+- **Fixed in this slice:** `calls.jsonl` no longer carries `path` (a session path can name the
+  participant's folders; section 7 keeps paths out of both files, and the test now plants MARK in a
+  Codex session path to guard it). `detail` is the row's own `detail` once, not status and code twice.
+  A decode error partway through an entry gives the summary with `read_error` true and a line on
+  stderr, never a clean-looking partial count; a torn tail is still not an error. A run folder
+  goes on past an entry it cannot read, and exit 3 means no entry gave output. Output files are named
+  `<name>.json` and `<name>.calls.jsonl` whole, so a folder name with a dot is not cut. Thread rows
+  carry `models` (model to call count) and `effort`, which the third-slice CSV and the PRD-16
+  hand-off table read. `coverage` shows `repeats_skipped` and `copied_skipped`. `harness_version`,
+  `connector` and `run` get the same printable 128-byte bound as other labels.
+- **Cut from the S7 summary, as a decision:** `coverage.by_10min`, `status.fail_closed` and
+  `threads[].source`. Nothing reads them today (the pad's spend check reads `models` and `tokens`);
+  a lane that needs one adds it with its reader.
+- **Seam line to PRD-08:** `CallTable` has five more public U1 fields (`run`, `entry`, `connector`,
+  `harness_version`, `sealed`), filled from the `start` event and the last PART; the table built
+  from `CallTable::default()` is unchanged for existing callers.
+- **Covered by inspection, not by a test:** "a panic inside `usage` prints no record text". The
+  hook is PRD-08's (`main.rs` prints only file and line and turns the panic into exit 3); no test in
+  `crates/goalcup-verify/tests` covers it, and this PRD adds none (ledger B10).
+- **Size decision:** the slice 4 limits (`out.rs` 120, `mod.rs` at most 40 more, tests 400) were
+  missed: `out.rs` carries the per-thread rows (models, effort) that the schema and ledger S2 ask
+  for, `mod.rs` the entry reader that must go on past a bad entry and mark a stopped read, and
+  `usage_run1.rs` one more point-3 case. **Decision: the ceilings become 2,550 src and 500 tests** (`wc -l` at this slice: src 2,392 before `sqlite.rs`, tests 500);
+  `sqlite.rs` stays at 150 and the CSV and `--text` stay last and only if they fit.
+
+### 2026-10-31, replan after the PRD-09 slice 4 re-review (A2-1 to A2-3, N1)
+
+- **Fixed:** `harness_version` keeps its spaces (`codex-cli 0.50.0`, `2.0.14 (Claude Code)` reach the
+  summary): it is checked only for printable ASCII, spaces allowed, at most 128 bytes, the rule the
+  CLI's `reported_line` uses; `run` and `connector` still go through `hints::id`. The output file
+  name is the entry id only when it is non-empty and all ASCII alphanumeric, else the folder's
+  name, else `entry` (a path with no folder name, as in `usage . --out o`), so no entry id can
+  write outside `--out`.
+- **Seam line to PRD-12 (S7 key `read_error`):** S7's summary has a top-level boolean `read_error`.
+  `true` means the read of that entry stopped at a decode error and every count is partial (usage
+  still exits 0). The spend check (ledger T6) must treat a summary with `read_error` true as not
+  read or as a lower bound, never price it as whole; the pad checks C1, C2 and C5 must report
+  INCONCLUSIVE for it, not judge partial thread and token counts as the whole run. The files that
+  do this (`scripts/pad/pad-run`, `scripts/pad/check.py`) are PRD-12's; PRD-09 does not edit them.
+  S7 keys therefore include `read_error` alongside the three widened keys. Until PRD-12 reads it,
+  a partial read is visible in the stderr line and in the key, and nowhere else.
+- **Size decision, stated plainly:** the PRD-00 Size budget row for the usage reader is 1,470 src
+  and 200 tests. The slice is at 2,396 src (`wc -l`: hints 67, mod 612, native 447, out 146, shapes
+  456, sse 61, wire 607), about 63% over, and 503 tests in `usage_run1.rs`, 2.5 times over. The
+  causes are the ones given in the earlier size decisions (both legs of a call joined by id, the
+  entry reader that goes on past a bad entry, thread rows, many harness shapes); no cut was found
+  that keeps behaviour. The ceilings stay 2,550 src; `sqlite.rs` (150) takes the rest. The tests
+  ceiling becomes **520** (`usage_run1.rs` is 503 after rustfmt): the rest of the allowance is for the one `sqlite.rs`
+  case (a database copy read by its `set`), and the case goes in `usage_run1.rs`.
+
+### 2026-10-31, replan after the PRD-09 slice 4 merge (c262ef5a)
+
+- **Correction:** the size paragraph of the re-review note said "500 tests" and "503 after rustfmt"
+  in two lines; the figure is 503 (`wc -l` of `usage_run1.rs` at c262ef5a), and the first mention now
+  reads 503. Src is 2,396 (hints 67, mod 612, native 447, out 146, shapes 456, sse 61, wire 607),
+  93% of 2,550; 154 lines remain for `sqlite.rs` (150), so nothing else fits in src. Tests are 503 of
+  520, 17 left for the one `sqlite.rs` case.
+- **Review nits carried, none a blocker;** taken at the next touch of the file and listed as known if
+  open at the end:
+  - B2-1: in `out.rs` `summary()`, each thread row scans every call row (threads times rows). Group
+    the rows once by thread in a `BTreeMap<&str, Vec<&CallRow>>` beside the model map; same code size.
+    Do it in the `sqlite.rs` slice, since `summary()` runs every 5 minutes on a long pad entry (point 2
+    allows any number of subagents).
+  - B2-2: in `mod.rs` `read_one`, the output-name `match` with `_ if plain` first is a plain `if
+    plain { t.entry.clone() } else { folder name or "entry" }`; in `summary()` the closure `said` is
+    shadowed by a local `said` in the thread rows, so rename one. Behaviour unchanged.
+  - B2-3: in `usage_run1.rs`, `every_claude_code_subagent_transcript_counts` gives the first file a
+    year-2300 time and the others a normal one without saying why. Add the one-line reason (it
+    exercises the Claude time join, as the earlier note says) or drop the change. The
+    A2-1 and A2-3 fixes (spaces in `harness_version`, safe output name) have no test; ledger B10 and
+    the ceiling allow that, and none is added.
+- **Next slice, unchanged in scope:** `sqlite.rs` (Hermes, read by its `set`, PRD-01 section 4) with
+  its one case. The CSV, `--text`, `usage table`, `run.json` and `scripts/usage-job.sh` (slice 6) are
+  built only if they fit under the ceilings above; with src at 2,396 the Rust parts (CSV, `--text`,
+  `run.json`) do not fit, and the decision when they are reached is a cut, not a new ceiling, unless
+  a point 1, 2 or 6 reader needs one (then a decision line names it, as before). The job script
+  is not counted against src.
+- **For PRD-10 (point 6):** the stats a participant summary prints (calls, threads, models, tokens)
+  are the S7 summary keys `models[]`, `threads[]`, `tokens` and `coverage`; read `usage --json` or the
+  S7 file, not the calls file. A `read_error` true summary is partial and must be shown as such.
+- No locked ledger item is touched and no owner question comes from this slice.

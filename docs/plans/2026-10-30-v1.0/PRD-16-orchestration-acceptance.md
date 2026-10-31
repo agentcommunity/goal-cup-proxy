@@ -2025,3 +2025,88 @@ kept and now cites BUILD-PROMPT section 5, since B3 no longer carries it.
 - **Acceptance lists as known,** if still open at the end: `SnapshotCursor.fid` (PRD-02 note), the
   control-item weight nit (BRK9-N1) and the `open_gaps` comment (B-6) if the next touch did not fix them.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-31, replan after PRD-11 slice 5 (merge 7a647ba4)
+
+- `gate fast: PASS in 131s` on 7a647ba4 (integrator 00:12Z). Box runs before the merge: fmt,
+  `clippy -D warnings`, 27 of 27 connector and `rule_code` tests. Nine paths changed (six connector files,
+  `model-hosts.toml`, `builtin.rs`, the harness README), all PRD-11 owned, no `Cargo.toml`. Reviews A and
+  B left no blocker; two fixes and four nits were closed, A-N3 declined (accepted), two new Goose nits
+  moved into PRD-11's note. Linux only; no real harness run of the six; `gate full` not run.
+- **Size report, PRD-11** (`wc -l` at 7a647ba4, row "Connector code (PRD-11)", 800 src and 400 tests):
+  src 1,695 (`schema.rs` 423, `launch.rs` 324, `mod.rs` 317, `hints.rs` 303, `hosts.rs` 301,
+  `builtin.rs` 27), 212% of the row and 5 under the 1,700 ceiling; tests 759 (`connector_launch.rs` 261,
+  `connector_hints.rs` 196, `connector_builtin.rs` 155, `connector_hosts.rs` 105,
+  `connector_no_model_address.rs` 42), 190% of the row and 1 under the 760 ceiling. That is 895 src and
+  359 tests over the row, so the earlier "710 and 220 over" is out of date: use 895 and 359. The six new
+  connectors added 6 src lines; the rest of the slice is data. The 1,700 and 760 ceilings stand. The last
+  slice adds no src or test line; B9 stays the one allowed exception, unused.
+- **Build order, PRD-11:** the only slice left is data, the Goose hint fix and the facts sheets with the
+  tier refresh, after the pad's rows. Pad rows for the six new connectors are PRD-12's (note added);
+  PRD-10 gets a one-line rule for Cline's empty `resume` (note added).
+- **Acceptance lists as known,** if still open at the end: P11 on a real binary (Amp only, no key),
+  Droid's daemon with no stop command, Crush's database below an existing `.crush`, schemeless Goose host
+  variables, and the B9 `fill` copy.
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-31, replan after PRD-15 slice 9 (merge d56216f4)
+
+- `gate fast` PASS on the four task branches (83 to 93 s) and on the fixed lane branch (120 s). Review A
+  and B left no blocker; the fixes and nits closed, with four nits moved to PRD-15's note.
+- **Size report, PRD-15** (`wc -l` at c262ef5a). PRD-00 "Size budget" has no docs row, so the
+  comparison is with the PRD-15 outline estimates: `docs/OPERATING.md` 233 (estimate 280, 83%);
+  `docs/RECORD-FORMAT.md` 419 (estimate 280, 150%, decision line in PRD-15's note, ceiling 430);
+  `docs/CONNECTOR-SCHEMA.md` 115 (estimate 90, 128%); `scripts/README.md` 39. The slice's diff is 291
+  lines in and 920 out over twelve files. No Rust, script or workflow line changed, so the Rust and
+  Worker rows are unaffected.
+- **Gate for PRD-16:** the docs gate step for this lane stays `gate fast`; links are not checked in CI
+  (PRD-14 took `check-links.py` out of the gate), so the final link pass is PRD-15's own run before
+  PRD-14 deletes the script. The known broken-link filter list is in PRD-15's note.
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-31, replan after PRD-09 slice 4 (merge c262ef5a)
+
+- **Gate and box runs:** box runs before the merge were fmt, clippy `-D warnings`, doc `-D warnings`
+  and nextest on the builder branch (39 of 39), the lane merge (51 of 51), the fixer round (52 of 52),
+  and the re-check at 63003771 (fmt, clippy, nextest 52 of 52), each re-read by a reviewer, the last
+  leaving no open fix or blocker. Review findings fixed: `path` kept out of `calls.jsonl`, `detail`
+  once, `read_error` instead of a silent partial read, per-thread `models` and `effort`,
+  `harness_version` with spaces, safe output file names. `gate full` was not run here.
+- **Size report, PRD-09** (`wc -l` at c262ef5a, row "Usage reader (PRD-09)", 1,470 src and 200
+  tests): src 2,396, 163% of the row and 94% of 2,550 (`mod.rs` 612, `wire.rs` 607, `shapes.rs` 456,
+  `native.rs` 447, `out.rs` 146, `hints.rs` 67, `sse.rs` 61); tests `usage_run1.rs` 503, 252% of the
+  row and 97% of 520. PRD-09's decision line (PRD-09 note) sets the ceilings to **2,550 src and 520
+  tests**, naming points 1, 2 and 6. `sqlite.rs` (150) is the last src that fits; the CSV, `--text`
+  and `run.json` are cut unless a reader needs them. The end-of-build report nets this against the
+  Rust totals (about 18,100 src, at most about 14,200 tests); only a total past those becomes the
+  owner's question.
+- **Build order, PRD-09:** slice 5 is `sqlite.rs` with its one case and the `summary()` grouping nit
+  (B2-1); slice 6 is `scripts/usage-job.sh` and whatever of the CSV, `--text` and `run.json` fits.
+  PRD-12's spend check and the watchers' `usage --json` are unblocked now (PRD-12 note: `read_error`
+  rule). `usage` no longer exits 3 on a readable entry, so the stale line in the slice 2 note ("until
+  then `usage` exits 3") is out of date.
+- **Seams:** the `read_error` rule is in the PRD-12 note; the five new `CallTable` fields are in the
+  PRD-08 note; PRD-15's usage section can now be written from `usage/out.rs` (PRD-15 note).
+- **Acceptance lists as known,** if still open at the end: the PRD-09 slice 4 nits B2-1, B2-2 and
+  B2-3 (PRD-09 note), and the cut of `usage table` or `--text` if not built.
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-31, replan after PRD-06 slice 3 (merge a76bd11d)
+
+- **Size report, PRD-06 slice 3** (`wc -l` at a76bd11d, row "Upload (PRD-06)", 940 src and 1,000
+  tests): src 2,253 (client 644, send 417, beat 289, chunk 273, state 255, policy 232, mod 143), of
+  which 176 inline tests; 2,077 without them, 221% of the row (240% with them). Tests 1,449
+  (`upload_chunks` 516, `upload_beat` 498, `upload_resume` 343, `upload_backoff` 92) plus 176 inline,
+  1,625, 163% of the row. 7 of 9 src files written; `prune.rs` and `manual.rs` remain. PRD-06's
+  decision line (PRD-06 note, points 3, 5 and 6) sets the ceilings to **2,500 src and 1,900 tests**.
+- **Rows over their size line, tracked for the end-of-build report:** connector (ceilings 1,510 src and
+  620 tests against 800 and 400), usage (2,550 and 520 against 1,470 and 200), upload (2,500 and 1,900
+  against 940 and 1,000). Only a Rust total past about 18,100 src or about 14,200 tests becomes the
+  owner's question; the other rows' final counts decide it.
+- **`gate full` stays red** until PRD-06 slice 4 calls `Policy::from_env()` from the threads (PRD-14
+  slice 3 note; still uncalled at a76bd11d). No release is cut before it; phase 2 and 3 runs are not
+  affected.
+- **Slice 4 of PRD-06 is the last PRD-06 slice** and carries the open acceptance cases listed in the
+  PRD-06 note (panic to `internal`, prune, manual, the null thread). The `upload_worker.rs` full-tier
+  run waits for it.
+- No locked ledger item is touched and no owner question comes from this slice.

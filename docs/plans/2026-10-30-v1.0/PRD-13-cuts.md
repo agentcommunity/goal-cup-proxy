@@ -757,3 +757,12 @@ PRD-14, PRD-15, PRD-16 and the code.
   crate: the five `tests/fixtures/connectors/*/*.json` files are the old decoders' expected-count
   snapshots (ledger B10) that only point at the `m2-native` files already copied (PRD-09 note).
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-31, note from the PRD-15 slice 9 replan (merge d56216f4)
+
+`scripts/README.md` (PRD-15, 39 lines) is written for the pre-cut tree: it names the scripts and
+`test_*.py` files that exist on integration today, keeping `test_install.py`, `test_fetch_run.py`,
+`test_check_links.py` and the pad tests, and leaves out the other eleven `test_*.py` files, which this PRD
+deletes. After the phase 3 deletes land (and PRD-14's `check-links.py` removal), PRD-15's last pass
+re-checks that every file the README names still exists. Do not edit the README in the cut commits.
+Nothing else in the cut list changes. No locked ledger item is touched.

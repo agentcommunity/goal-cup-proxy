@@ -445,8 +445,10 @@ impl ureq::TlsConnector for RustlsConnector {
         })?;
         let mut session = rustls::ClientConnection::new(Arc::clone(&self.0), name)
             .map_err(|e| std::io::Error::other(format!("TLS setup: {e}")))?;
-        // complete_io may return mid-handshake after a partial read; finish it within the bound.
+        // complete_io may return mid-handshake after a partial read, or with no I/O at all when it
+        // wants neither; finish it within the bound either way.
         while session.is_handshaking() {
+            io.left()?;
             session.complete_io(&mut io)?;
         }
         io.until = after(start, self.1);

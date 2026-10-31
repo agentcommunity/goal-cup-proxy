@@ -1,14 +1,16 @@
 //! The heartbeat (PRD-06 section 6): the flat `counts`, the recording state, the answer as
-//! [`ServerWord`] and `upload.json` `server_word`, and the ordinary beat. The final heartbeat comes
-//! with the sender.
+//! [`ServerWord`] and `upload.json` `server_word`, the ordinary beat and the final heartbeat. The
+//! point a beat names when no live writer publishes one is [`super::chunk::last_on_disk`].
 
+use super::SealFacts;
 use super::ServerWord;
 use super::client::{HeartbeatAnswer, HeartbeatRequest, Recording, ServerClient, ServerError};
 use super::policy::{Backoff, Class, Policy, Timer, class_of_status};
+use super::send::{lock, log_failure};
 use super::state::{self, FileWord, Final, UploadJson};
-use crate::cli::log::{Fact, line};
 use crate::pipeline::status::Mode;
 use crate::pipeline::{Durable, EntryTotals, Live, Mono, Status};
+use crate::watchdog::SealReason;
 use goalcup_format::IndexLine;
 use serde_json::{Map, Value, json};
 use std::path::{Path, PathBuf};
@@ -133,7 +135,16 @@ pub fn take_answer(
     word
 }
 
-/// The ordinary beat of one entry, with its own backoff.
+/// What the final heartbeat names: the seal LINK (the last `E` or `R` index line), the seal's
+/// facts, and the recorder's live facts, sent as `mode: sealed`.
+pub struct FinalFacts<'a> {
+    pub point: &'a IndexLine,
+    pub seal: &'a SealFacts,
+    pub live: &'a Live,
+    pub waiting_bytes: u64,
+}
+
+/// The beat of one entry, ordinary and final, with its own backoff.
 pub struct Beat {
     client: ServerClient,
     run: String,
@@ -143,6 +154,8 @@ pub struct Beat {
     pub backoff: Backoff,
     /// The recording state last answered.
     last: Option<Recording>,
+    /// A final heartbeat was tried: no ordinary beat follows (PRD-17 S4).
+    finals: bool,
 }
 
 impl Beat {
@@ -155,14 +168,39 @@ impl Beat {
             timer: Timer::new(p.beat, p.spread_first),
             backoff: Backoff::new(p),
             last: None,
+            finals: false,
         }
     }
 
     /// At once when the state changed, else on the timer, and never while its backoff waits;
-    /// `tick` beats only with a durable point.
+    /// `tick` beats only with a durable point. Never once a final heartbeat was tried.
     pub fn due(&self, now: Mono, recording: Recording) -> bool {
         let changed = self.last != Some(recording);
-        self.backoff.due(now) && (changed || self.timer.due(now))
+        !self.finals && self.backoff.due(now) && (changed || self.timer.due(now))
+    }
+
+    /// Sends one final heartbeat per call: `final: true` at the seal LINK with the seal's
+    /// `workspace_head` and totals. From the first call on `tick` sends nothing. The caller repeats
+    /// it when `backoff.due`, until `upload.json` `final` says sealed or the wrap-up ends: an answer that
+    /// does not say sealed waits like a failure. A recovered seal says at least `gaps`: its
+    /// abandoned span is off time (section 6).
+    pub fn final_beat(
+        &mut self,
+        now: Mono,
+        f: &FinalFacts<'_>,
+        j: &Mutex<UploadJson>,
+        word: &watch::Sender<Option<ServerWord>>,
+    ) -> Option<ServerWord> {
+        self.finals = true;
+        let (h, t) = (Health(Mode::Sealed, f.live.clone()), &f.seal.totals);
+        let c = counts(&h, t, f.waiting_bytes);
+        let head = f.seal.workspace_head.clone();
+        let mut rec = recording(&h, t);
+        if f.seal.reason == SealReason::Recovered && rec == Recording::Ok {
+            rec = Recording::Gaps;
+        }
+        let req = request(&self.entry, f.point, t, rec, c, true, head);
+        self.send(now, &req, j, word)
     }
 
     /// One ordinary tick: beats from `durable` if due. True when a beat was answered.
@@ -205,11 +243,18 @@ impl Beat {
     ) -> Option<ServerWord> {
         let wall = SystemTime::now();
         let answer = self.client.heartbeat(&self.run, req);
-        let mut j = j.lock().unwrap_or_else(|e| e.into_inner());
+        let mut j = lock(j);
         let out = match answer {
             Ok(a) => {
                 let w = take_answer(&mut j, &a, req.recording, now, wall);
-                self.backoff.progress();
+                if req.is_final && j.final_ == Final::None {
+                    j.final_ = Final::Sent;
+                }
+                if req.is_final && !a.sealed {
+                    self.backoff.fail(now, None);
+                } else {
+                    self.backoff.progress();
+                }
                 self.timer.started(now);
                 self.last = Some(req.recording);
                 word.send_replace(Some(w.clone()));
@@ -228,23 +273,17 @@ impl Beat {
         out
     }
 
-    /// `upload what=beat class=<class> status=<n or -> wait_s=<n>`: fixed words and numbers only.
-    /// A 409 has no class (section 5) and logs `none`; an unreadable success is `internal`.
+    /// `upload what=beat ...`. A 409 has no class (section 5) and logs `none`; an unreadable
+    /// success is `internal`.
     fn log_failure(&self, e: &ServerError, wait: Duration) {
         let (class, status) = match e {
             ServerError::Status { status, .. } => (
                 class_of_status(*status).map_or("none", Class::word),
-                Fact::N((*status).into()),
+                Some(*status),
             ),
-            ServerError::Malformed(_) => (Class::Internal.word(), Fact::Word("-")),
-            ServerError::Transport(_) => (Class::Network.word(), Fact::Word("-")),
+            ServerError::Malformed(_) => (Class::Internal.word(), None),
+            ServerError::Transport(_) => (Class::Network.word(), None),
         };
-        let facts = [
-            ("what", Fact::Word("beat")),
-            ("class", Fact::Word(class)),
-            ("status", status),
-            ("wait_s", Fact::N(wait.as_secs())),
-        ];
-        line(&self.entry_dir, "upload", &facts);
+        log_failure(&self.entry_dir, "beat", class, status, wait);
     }
 }
