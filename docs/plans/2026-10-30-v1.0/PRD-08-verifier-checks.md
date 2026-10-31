@@ -1170,3 +1170,14 @@ log; the pad lane follows.
 ### 2026-10-31, conductor seam line from PRD-02 core step 2 (08:50Z)
 
 PRD-02's mask worker writes two record shapes PRD-01's text does not list yet; the verifier must accept them or every real entry fails inv4, inv12 or the recount: (a) a GAP with reason mask_failed, lost 1 (no stream byte lost) and tail {"meta": "open"|"tail"|"event"}, on the stream's sid or sid 0 for an EVENT, after a panic in mask_meta; it counts as one gap with 0 lost bytes and marks the request holed (any GAP on the sid), as PRD-02's Counter does; (b) an empty DATA with fin for an empty WebSocket message. PRD-08 accepts both in its next slice; PRD-01 notes them below.
+
+### 2026-10-31, size decision for the legs and timeline slice
+
+- **Size decision** (`wc -l`). `legs.rs` is past its 540 ceiling, `integrity.rs` past 1,011,
+  `check_legs.rs` 238 against 145, and `timeline.rs` about 140 against the estimate of about 60 for
+  timeline and manifest part. The extra serves points 1, 2 and 3: every subagent file on disk is
+  accounted for by a native stream, a snapshot or a named cause, an off span is kept whole in the
+  timeline (a boot 0 that wrote no index line included), and nothing is dropped silently.
+  `Streams` now lives in `timeline.rs` beside the tally that fills it. The crate total outside
+  `usage/` is about 4,160 src lines against the 1,400 row in PRD-00, an owner-estimate matter for
+  the replan. Anything past these needs a new decision line.

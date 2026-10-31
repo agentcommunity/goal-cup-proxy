@@ -13,4 +13,5 @@ pub mod legs;
 pub mod report;
 pub mod secrets;
 pub mod server;
+pub mod timeline;
 pub mod usage;

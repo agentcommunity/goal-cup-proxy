@@ -4,6 +4,7 @@
 use crate::history;
 use crate::input::Input;
 use crate::integrity::{self, Check, Outcome, Recount, Res};
+use crate::legs;
 use crate::secrets::{self, Rules};
 use crate::server;
 use serde_json::{Map, Value, json};
@@ -23,6 +24,7 @@ pub fn build(
     now_ns: Option<u64>,
     local: Option<&Input>,
     known: Option<&Rules>,
+    files: Option<&[(String, u64)]>,
 ) -> Report {
     let is_server = input.kind == "server";
     let (mut exit, mut text, mut entries) = (0u8, String::new(), Vec::new());
@@ -36,6 +38,12 @@ pub fn build(
             checks.extend(server::checks(e, f, &o, local));
         }
         checks.extend(known.map(|k| secrets::check(k, e)));
+        if let (Some(f), Some(c)) = (
+            files,
+            checks.iter_mut().find(|c| c.id == "subagents_present"),
+        ) {
+            legs::manifest(c, f, &o.streams, &o.legs.covers);
+        }
         let worst = checks.iter().map(|c| c.result).max().unwrap_or(Res::Pass);
         let partial = !o.sealed || input.kind == "live" || o.pruned;
         exit = exit.max(match worst {
@@ -48,7 +56,9 @@ pub fn build(
         }
         let name = o.entry.clone().unwrap_or_else(|| folder(&e.dir));
         text += &self::text(&name, &o, &checks);
-        entries.push(entry(name, &o, &checks));
+        let mut en = entry(name, &o, &checks);
+        en["timeline"] = o.timeline.clone();
+        entries.push(en);
         all.extend(checks);
     }
     let server = is_server.then(|| server::summary(&all));

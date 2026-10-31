@@ -66,9 +66,9 @@ pub const IDS: &str = "inv1 inv2 inv3 inv4 inv5 inv6 inv7 inv8 inv9 streams_clos
     seen_matches_written gap_has_end recorder_alive inv14 torn_tail native_path_gen \
     counts_match_seal gaps_named record_decode parts_pruned record_kind_unknown gap_reason_unknown";
 
-/// Whether a GAP covers a stretch of time: it is not run 1's shape (`gap_has_end`). A GAP in the
-/// recorder's own clock is judged on record time, one carrying `boot_id` (another clock) on wall
-/// time.
+/// Whether a GAP covers a stretch of time: it is not run 1's shape. A GAP in the recorder's own
+/// clock is judged on record time, one carrying `boot_id` (another clock) on wall time. Covers,
+/// off spans and gapped files use this, so a metadata GAP covers nothing.
 pub(crate) fn has_extent(
     tail: &Map<String, Value>,
     w: (u64, u64),
@@ -77,6 +77,12 @@ pub(crate) fn has_extent(
 ) -> bool {
     let (s, e) = clock(tail, w, m);
     !((e <= s && lost <= 1) || w.1 < w.0)
+}
+
+/// A metadata mask_failed GAP (lost 1, tail "meta"): it loses no stream byte and needs no
+/// extent, so `gap_has_end` accepts it. Only that reason has this shape.
+pub(crate) fn is_meta_gap(reason: GapReason, lost: u64, tail: &Map<String, Value>) -> bool {
+    reason == GapReason::MaskFailed && lost == 1 && tail.get("meta").is_some_and(Value::is_string)
 }
 
 fn clock(tail: &Map<String, Value>, w: (u64, u64), m: (u64, u64)) -> (u64, u64) {
@@ -213,6 +219,9 @@ pub struct Outcome {
     pub pruned: bool,
     /// The legs: harness_log, provider errors, thread rows and the coverage text.
     pub legs: crate::legs::Out,
+    /// The report's timeline, and the native and snapshot streams by file path.
+    pub timeline: Value,
+    pub streams: crate::timeline::Streams,
 }
 
 /// Checks one entry. `now_ns` is set for `--live`; `want` names the link seqs whose hashes
@@ -256,6 +265,7 @@ pub fn check(e: &Entry, now_ns: Option<u64>, want: &HashSet<u64>) -> Outcome {
     let (legs_checks, legs) = crate::legs::judge(&table, &covers);
     p.checks.extend(std::mem::take(&mut p.h).finish());
     p.checks.extend(legs_checks);
+    p.tl.finish(&legs.timed);
     p.checks.push(crate::history::judge(&hist, &table, &covers));
     Outcome {
         sealed: p.seal.is_some(),
@@ -271,6 +281,8 @@ pub fn check(e: &Entry, now_ns: Option<u64>, want: &HashSet<u64>) -> Outcome {
         links: p.links,
         pruned: p.pruned,
         checks: p.checks,
+        timeline: p.tl.timeline(),
+        streams: std::mem::take(&mut p.tl.streams),
         legs,
     }
 }
@@ -280,6 +292,7 @@ struct Pass {
     checks: Vec<Check>,
     h: Honesty,
     l: crate::history::Sink,
+    tl: crate::timeline::Tally,
     entry: Option<String>,
     start: Option<Map<String, Value>>,
     mask_rules: Vec<String>,
@@ -398,6 +411,7 @@ impl Pass {
         };
         self.h.item(it, at, &ev);
         self.l.push(&it.rec, it.off);
+        self.tl.item(&it.rec, at.2);
         let ev_name = ev
             .get("ev")
             .and_then(Value::as_str)
@@ -531,7 +545,7 @@ impl Pass {
             } => {
                 let tail: Map<String, Value> = serde_json::from_slice(tail).unwrap_or_default();
                 let (w, m) = ((*start_wall, *end_wall), (*start_mono, *end_mono));
-                if !has_extent(&tail, w, m, *lost) {
+                if !is_meta_gap(*reason, *lost, &tail) && !has_extent(&tail, w, m, *lost) {
                     self.fail("gap_has_end", "a GAP with no extent (run 1's shape)", at);
                 }
                 let name = reason.name();
