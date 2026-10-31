@@ -1103,3 +1103,24 @@ PRD-01, PRD-05, PRD-08, PRD-12, PRD-16 and the old code.
   `finish`; fine in a build box, listed as known.
 - B2 and B3 (one `Option<Used>` on `CallTable`, a named struct for the kept entry) are nits taken at
   the next touch of those files.
+
+### 2026-10-31, replan after PRD-09 slice 5 (merge 52922c12)
+
+- **On integration:** `sqlite.rs` (Hermes state.db join) and the summary grouped by thread once. Box runs
+  before the merge: fmt, clippy `-D warnings`, nextest 64 of 64, two review rounds with every fix and
+  blocker closed.
+- **Size, `wc -l` at 52922c12:** usage src 2,861 (`mod.rs` 651, `wire.rs` 607, `native.rs` 469,
+  `shapes.rs` 456, `sqlite.rs` 393, `out.rs` 152, `sse.rs` 61, `hints.rs` 72) against the 1,470 row
+  and the 2,550 ceiling; tests `usage_run1.rs` 676 against the 200 row and the 520 ceiling. The
+  overrun past the ceilings (about 311 src, 156 tests) is carried by the slice 5 size decision above;
+  it adds no new reader. Nothing more may be added to usage src or tests without a cut elsewhere.
+- **Slice 6 scope:** `scripts/usage-job.sh` (not counted against src) only. The CSV and `--text` are cut.
+  `run.json` is an S7 object that PRD-12 and the job read: the job script writes it from the
+  `usage --json` summaries of the run's entries if `usage` does not, so the Rust side does not grow.
+  Whoever picks slice 6 posts that as a decision line.
+- **Open nits, taken at the next touch or listed as known:** no test covers the A5r-2 rule (a row
+  stamped after the copy mtime makes the leg read as totals and stays out of `native_calls`; one
+  assert on the existing Hermes fixture would do, B10 allows it); the thread `json!` line in `out.rs`
+  is long and `sum([&th.native_tokens].into_iter())` can be `sum(std::iter::once(&th.native_tokens))`;
+  B2 and B3 from the previous note stay as written.
+- No locked ledger item is touched and no owner question comes from this slice.
