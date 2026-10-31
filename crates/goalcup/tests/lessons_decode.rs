@@ -537,12 +537,18 @@ async fn bomb_relays_on_in_bounded_pieces() {
                 guards += 1;
                 lost += (*n).checked_sub(1).expect("the guard knows what it lost") as usize;
             }
-            Record::End { sid, reason, seen, .. } if *sid == resp => end = Some((*reason, *seen)),
+            Record::End {
+                sid, reason, seen, ..
+            } if *sid == resp => end = Some((*reason, *seen)),
             _ => {}
         }
     }
     assert!(prefix > 0, "a decoded prefix is recorded");
     assert!(guards > 0, "the guard dropped pieces and said so");
-    assert_eq!(prefix + lost, DECODED, "the prefix and the GAPs are the whole body");
+    assert_eq!(
+        prefix + lost,
+        DECODED,
+        "the prefix and the GAPs are the whole body"
+    );
     assert_eq!(end, Some((EndReason::Complete, DECODED as u64)));
 }

@@ -196,28 +196,36 @@ L-VR2 waits for PRD-09's named `usage` case. Rows whose named file is not on int
 (`pipeline_stall.rs`, `watchdog_restart.rs`, `cli_continue.rs`) stay `open`. L-P3 stays `open`: its test is held
 back with `ignore` until the PRD-02 shield fix is on integration.
 
-**Budget after slice 5.** `wc -l` of the eight `lessons_*.rs` files totals 4,314 (connect 510, decode 538,
-hosts 181, http1 928, launch 507, pipeline 104, tls 412, ws 1,134), measured in a box on the merged task
-branches. That is 852 more than the 3,462 after slice 4 (ws +431, http1 +261, launch +99, decode +61) against
-the 450 to 550 expected, and 1,314 over the 3,000 shared with PRD-14. This is an overrun and is not hidden.
+**Budget after slice 5.** `wc -l` of the eight `lessons_*.rs` files totals 4,324 (connect 510, decode 554,
+hosts 181, http1 941, launch 507, pipeline 104, tls 412, ws 1,115), measured on the task branch. The review
+fixes took the shared proxy set-up, the read loop and the wait for records into `proxy_fixtures`, which
+paid for most of what the tighter cases added. That is 862 more than the 3,462 after slice 4 against the
+450 to 550 expected, and 1,324 over the 3,000 shared with PRD-14. This is an overrun and is not hidden.
 The 14,200 owner-question line is a total over the whole build; the tree still holds the 0.7 crates' tests, so
 a build-wide Rust test line count cannot be read off it yet and is not reported here.
 
 **Checked and left `open`.** FW1: `pipeline_guard.rs` never opens a stream while the guard is full, so it
 does not show "OPEN is always admitted"; `lessons_pipeline::open_and_end_survive_a_full_guard` covers it
 and is named in the FW1 and R2 rows; both stay `open` until a box run on the integration head proves it (R2
-also names `pipeline_stall.rs`). C11 names a 2,000-connection case
-that is not in `proxy_connect.rs`. R6 needs a `conn` record, which only `proxy::serve` writes. P14 and HF4
-name tests (`no timer under 15 min`, `cli_commands::second_start_on_one_home_refuses`) that are not in
-`cli_commands.rs`. VR1 shows the exit 2 for a torn tail but not the allocation bound. Rows with an `R:` guard
-stay `open` until the real run is shown. Gate check 1 list check (box, `cargo nextest list --workspace` on
-the merged slice 5 branches; the file and `D:` checks by path): the 91 distinct `file::test` names resolve except those below (`mask::meta::tests` is a module
-prefix and was checked by hand), and every `D:` file exists. Not found: `lessons_connect::idle_tunnel_survives_120s` (L-C7) and
-`lessons_launch::ctrl_c_reaches_the_harness_and_the_watchdog_lives` (L-P3), which exist in the files but are
-held back with `ignore` and so are not in the default list (the box run reported them as the 2 skipped);
-`cli_commands::second_start_on_one_home_refuses` (L-HF4, not in `cli_commands.rs`); and the files
-`watchdog_restart.rs` (L-C12, L-P1, L-P2), `pipeline_stall.rs` (L-R2) and `cli_continue.rs` (L-HF6, L-SC4),
-which are not on the tree. No renamed guard was found. Box run of all eight `lessons_*` files: 63 tests run, 63 passed, 2 skipped (the two `ignore` tests above).
+also names `pipeline_stall.rs`). C11 names a 2,000-connection case that is not in `proxy_connect.rs`. R6
+needs a `conn` record, which only `proxy::serve` writes. P14 and HF4 name tests (`no timer under 15 min`,
+`cli_commands::second_start_on_one_home_refuses`) that are not in `cli_commands.rs`. VR1 shows the exit 2
+for a torn tail but not the allocation bound. Rows with an `R:` guard stay `open` until the real run is
+shown.
+
+Gate check 1 list check (box, `cargo nextest list --workspace` on the merged slice 5 branches; the file and
+`D:` checks by path): the 91 distinct `file::test` names resolve except the ones in the rows above marked
+`open` for a missing name. `mask::meta::tests` is a module prefix and was checked by hand, and every `D:`
+file exists. Two tests exist but are held back with `ignore`, so the default list omits them:
+`lessons_connect::idle_tunnel_survives_120s` (L-C7) and
+`lessons_launch::ctrl_c_reaches_the_harness_and_the_watchdog_lives` (L-P3). Not on the tree:
+`watchdog_restart.rs` (L-C12, L-P1, L-P2), `pipeline_stall.rs` (L-R2) and `cli_continue.rs` (L-HF6, L-SC4).
+No renamed guard was found.
+
+Last box run, on the PRD-17 task branch after the review fixes: the `lessons_*`, `proxy_*` and `rule_code`
+binaries, 149 tests run, 149 passed, 2 skipped (the two `ignore` tests above); `bomb_relays_on_in_bounded_pieces`
+passed 8 of 8 stress iterations. `cargo clippy --workspace --all-targets -D warnings` was clean. Not yet run on
+the integration head.
 
 ## Real-run rows
 

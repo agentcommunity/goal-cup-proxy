@@ -16,11 +16,11 @@ use common::upstream::{Answer, Body, Script, Upstream, WsMsg};
 use common::{HANG, within_async};
 use flate2::{Compress, Compression, FlushCompress, Status};
 use goalcup::pipeline::{Call, Calls, EndReason, GapReason, Mono, Recorder, Sid, StreamKind};
+use goalcup::proxy::ProxyHandle;
 use goalcup::proxy::ca::RunCa;
 use goalcup::proxy::http1::Http1;
 use goalcup::proxy::pump::{Parser, Stop};
 use goalcup::proxy::ws::{Deflate, Dir, WsConn, negotiate};
-use goalcup::proxy::ProxyHandle;
 use goalcup_format::{FLAG_FIN, Record};
 use proxy_fixtures::{all_ended, conns, proxy_to, read_to, through, trusting_run_ca, wait_records};
 use rustls::pki_types::ServerName;
@@ -603,12 +603,14 @@ async fn fail_closed_ends_at_message_end() {
         })
         .and_then(|start| {
             let rules = start["mask_rules"].as_array()?.clone();
-            let at = |(i, r): (usize, &serde_json::Value)| (*r == "fail_closed").then_some(i as u64);
+            let at =
+                |(i, r): (usize, &serde_json::Value)| (*r == "fail_closed").then_some(i as u64);
             Some(rules.iter().enumerate().filter_map(at).collect())
         })
         .expect("a start event naming the mask rules");
     assert!(
-        recs.iter().any(|r| matches!(r, Record::Mask { sid: s, rule, .. }
+        recs.iter()
+            .any(|r| matches!(r, Record::Mask { sid: s, rule, .. }
             if *s == sid && fail_closed.contains(rule))),
         "the candidate is masked by the fail-closed rule"
     );

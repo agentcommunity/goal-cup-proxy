@@ -20,11 +20,11 @@ use common::upstream::{Script, Upstream};
 use flate2::Compression;
 use flate2::write::GzEncoder;
 use goalcup::pipeline::{Call, Calls, EndReason, GapReason, Mono, Recorder, Sid, StreamKind};
+use goalcup::proxy::ProxyHandle;
 use goalcup::proxy::ca::RunCa;
 use goalcup::proxy::http1::Http1;
 use goalcup::proxy::pump::{Parser, Stop};
 use goalcup::proxy::ws::Dir;
-use goalcup::proxy::ProxyHandle;
 use goalcup_format::Record;
 use proxy_fixtures::{conns, proxy_to, read_to, through, trusting_run_ca, wait_records};
 use rustls::pki_types::ServerName;
@@ -788,11 +788,7 @@ async fn unframeable_heads_relay_on_inside_a_named_loss() {
         ("line folding", get(b"A: b\r\n folded"), b""),
         ("a space in a name", get(b"Bad Name: x"), b""),
         ("no colon", get(b"no colon here"), b""),
-        (
-            "an HTTP/2 line",
-            head("GET / HTTP/2.0", b""),
-            b"",
-        ),
+        ("an HTTP/2 line", head("GET / HTTP/2.0", b""), b""),
         ("no target", head("GET HTTP/1.1", b""), b""),
         (
             "a non-ASCII Content-Length",
@@ -877,19 +873,19 @@ async fn authorization_forwarded_unchanged_and_starred_in_meta() {
     for bytes in recorded_bytes(&recs) {
         assert!(!bytes.windows(SECRET.len()).any(|w| w == SECRET.as_bytes()));
     }
-    let starred: Vec<String> = recs
-        .iter()
-        .filter_map(|r| match r {
-            Record::Open { meta, .. } => serde_json::from_slice::<Value>(meta).ok(),
-            _ => None,
-        })
-        .filter_map(|meta| {
-            let found = meta["headers"].as_array()?.iter().find(|p| {
-                (p[0].as_str()).is_some_and(|n| n.eq_ignore_ascii_case("authorization"))
-            });
-            Some(found?[1].as_str()?.to_owned())
-        })
-        .collect();
+    let starred: Vec<String> =
+        recs.iter()
+            .filter_map(|r| match r {
+                Record::Open { meta, .. } => serde_json::from_slice::<Value>(meta).ok(),
+                _ => None,
+            })
+            .filter_map(|meta| {
+                let found = meta["headers"].as_array()?.iter().find(|p| {
+                    (p[0].as_str()).is_some_and(|n| n.eq_ignore_ascii_case("authorization"))
+                });
+                Some(found?[1].as_str()?.to_owned())
+            })
+            .collect();
     let [value] = starred
         .try_into()
         .expect("one Authorization header recorded");
@@ -912,7 +908,8 @@ async fn every_request_on_a_decrypted_host_is_recorded() {
         ("POST", "/v1/responses", "other.example.net"),
     ];
     for (method, path, host) in sent {
-        let req = format!("{method} {path} HTTP/1.1\r\nHost: {host}\r\nContent-Length: 2\r\n\r\n{{}}");
+        let req =
+            format!("{method} {path} HTTP/1.1\r\nHost: {host}\r\nContent-Length: 2\r\n\r\n{{}}");
         send(&mut t, req.as_bytes()).await;
     }
     drop(t);
