@@ -74,6 +74,7 @@ fn open_and_end_survive_a_full_guard() {
                     (GapReason::MemoryGuard, s.0),
                     "one drop, on its own stream"
                 );
+                assert!(lost >= 1, "a memory_guard GAP carries a known lost count");
                 s.0 += lost - 1;
                 s.1 += 1;
             }

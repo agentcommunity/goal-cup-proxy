@@ -73,12 +73,12 @@ lessons lane (PRD-17); read by the deletion gate (PRD-17 Acceptance, checks 1 to
 | L-D7 | 2.4 | A: lessons_decode::bomb_relays_on_in_bounded_pieces | PRD-17 | open | - |
 | L-D8 | 2.4 | A: lessons_decode.rs | PRD-17 | open | - |
 | L-W1 | 2.5 | A: proxy_ws.rs (PRD-03); R: RR1 | PRD-03 | green | 7e620577 |
-| L-W2 | 2.5 | A: lessons_ws::negotiation_accepts_only_rfc7692; A: lessons_ws::unknown_extension_relays_inside_a_named_loss | PRD-17 | green | 0fa43715 |
+| L-W2 | 2.5 | A: lessons_ws::negotiation_accepts_only_rfc7692 (parser half); A: lessons_ws::unknown_extension_relays_inside_a_named_loss (parser half; relay half and the conn GAP pending until `proxy::serve`) | PRD-17 | open | - |
 | L-W3 | 2.5 | A: lessons_ws::server_max_window_bits_10_decodes | PRD-17 | green | 0fa43715 |
 | L-W4 | 2.5 | A: lessons_ws::takeover_history_carries_between_messages (the guard drop itself is structural, see the test comment); R: RR1 | PRD-17 | open | - |
 | L-W5 | 2.5 | A: lessons_ws::bfinal_ends_takeover_history | PRD-17 | green | 0fa43715 |
 | L-W6 | 2.5 | A: lessons_ws::one_byte_reads_decode_the_same | PRD-17 | green | 0fa43715 |
-| L-W7 | 2.5 | A: lessons_ws::violations_are_named_and_relaying_goes_on | PRD-17 | green | 0fa43715 |
+| L-W7 | 2.5 | A: lessons_ws::violations_are_named_and_relaying_goes_on (parser half; relay half and the 5a GAP pending until `proxy::serve`) | PRD-17 | open | - |
 | L-W8 | 2.5 | A: proxy_ws.rs (PRD-03) | PRD-03 | green | 7e620577 |
 | L-W9 | 2.5 | A: lessons_ws::upgrade_101_and_first_frame_in_one_write | PRD-17 | open | - |
 | L-W10 | 2.5 | A: lessons_ws::rejected_upgrade_stays_http; A: lessons_ws::bad_accept_is_a_named_loss_not_a_websocket | PRD-17 | open | - |
@@ -145,7 +145,7 @@ lessons lane (PRD-17); read by the deletion gate (PRD-17 Acceptance, checks 1 to
 | L-S9 | 2.10 | R: PRD-06 U3 | PRD-06 | open | - |
 | L-S10 | 2.10 | A: device.test.ts (PRD-07); A: lifecycle.test.ts (PRD-07) | PRD-07 | green | b474329d |
 | L-R1 | 2.11 | A: pipeline_guard::a_thousand_guard_episodes_never_latch (PRD-02) | PRD-02 | green | 7e620577 |
-| L-R2 | 2.11 | A: pipeline_guard.rs (PRD-02); A: pipeline_stall.rs (PRD-02) | PRD-02 | open | - |
+| L-R2 | 2.11 | A: pipeline_guard.rs (PRD-02); A: lessons_pipeline::open_and_end_survive_a_full_guard; A: pipeline_stall.rs (PRD-02) | PRD-02 | open | - |
 | L-R3 | 2.11 | A: check_invariants.rs (PRD-08, invariant 12 gap_has_end); A: proxy_http1.rs (PRD-03, fault case); A: see L-H2, L-H9, L-W2, L-W7, L-W10 | PRD-08, PRD-03 | open | - |
 | L-R4 | 2.11 | R: PRD-02 R3; R: PRD-10 acceptance 1 | PRD-02, PRD-10 | open | - |
 | L-R5 | 2.11 | A: golden.rs (PRD-01); A: proxy_ws.rs (PRD-03); R: RR1 | PRD-01, PRD-03 | open | - |
@@ -165,7 +165,7 @@ lessons lane (PRD-17); read by the deletion gate (PRD-17 Acceptance, checks 1 to
 | L-G3 | 2.13 | A: connector_launch.rs (PRD-11) | PRD-11 | green | 7e620577 |
 | L-G4 | 2.13 | R: PRD-12 gateway case config | PRD-12 | open | - |
 | L-G5 | 2.13 | R: PRD-12 pad boxes (--non-persistent, tmux) | PRD-12 | open | - |
-| L-FW1 | 2.14 | A: pipeline_guard.rs (PRD-02) | PRD-02 | open | - |
+| L-FW1 | 2.14 | A: pipeline_guard.rs (PRD-02); A: lessons_pipeline::open_and_end_survive_a_full_guard | PRD-02 | open | - |
 | L-FW2 | 2.14 | A: recovery::a_part_file_cut_at_any_byte_recovers_to_its_last_index_line (PRD-01) | PRD-01 | green | f5b0a6a2 |
 | L-FW3 | 2.14 | A: server_compare::missing_middle_chunk_fails (PRD-08); A: server_compare::fw3_pruned_entry_is_named_and_server_copy_stands_in (PRD-08) | PRD-08 | green | f5a200ae |
 | L-FW4 | 2.14 | A: check_invariants.rs (PRD-08) | PRD-08 | green | 7e620577 |
@@ -189,7 +189,7 @@ lessons lane (PRD-17); read by the deletion gate (PRD-17 Acceptance, checks 1 to
 **Still waiting on `proxy::serve`.** `proxy::serve` is not on integration (only the branch
 `prd-03-proxy-serve` has it), so the record halves stay `open`: D1 to D4 and D6 (`lessons_decode.rs` drives
 `proxy::decode` alone and shows the decoded prefix and the `Step`, not the GAP `decode_failed` and END
-`decode_error` records; D8 is the whole-path case), D7, the relay half of H2, H9 to H11, W9 to W11, the
+`decode_error` records; D8 is the whole-path case), D7, the relay halves of H2, W2 and W7 (`lessons_ws.rs` runs at the parser layer and shows no relayed byte and no conn GAP), H9 to H11, W9 to W11, the
 `lessons_connect.rs` C-rows (the file does not exist yet), K15 (whole path, with `lessons_ws.rs`), T3 and
 SC3. L-T4 waits for the `rec/run-ca.key` case: nothing in `crates/goalcup/src` writes that file, `proxy/ca.rs`
 only has a comment saying it is PRD-02's, and the question is logged for PRD-02. L-VR2 waits for PRD-09's
@@ -198,8 +198,9 @@ named `usage` case. Rows whose named file is not on integration (`pipeline_stall
 `open`: its test is held back with `ignore` until the PRD-02 shield fix is on integration.
 
 **Checked and left `open`.** FW1: `pipeline_guard.rs` never opens a stream while the guard is full, so it
-does not show "OPEN is always admitted"; the `lessons_pipeline` case from task `lessons-pipeline-fw1` covers
-it and is named here once it merges (R2 also names `pipeline_stall.rs`). C11 names a 2,000-connection case
+does not show "OPEN is always admitted"; `lessons_pipeline::open_and_end_survive_a_full_guard` covers it
+and is named in the FW1 and R2 rows; both stay `open` until a box run on the integration head proves it (R2
+also names `pipeline_stall.rs`). C11 names a 2,000-connection case
 that is not in `proxy_connect.rs`. R6 needs a `conn` record, which only `proxy::serve` writes. P14 and HF4
 name tests (`no timer under 15 min`, `cli_commands::second_start_on_one_home_refuses`) that are not in
 `cli_commands.rs`. VR1 shows the exit 2 for a torn tail but not the allocation bound. Rows with an `R:` guard
