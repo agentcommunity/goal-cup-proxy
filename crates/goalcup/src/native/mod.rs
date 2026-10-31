@@ -1,9 +1,9 @@
 //! The session-file reader (PRD-04): one low-priority thread that walks each native row's root,
 //! reads the harness's session files raw and copies its databases, with no symlink followed.
-//! Database sets (`snapshot.rs`) come in the next slice.
 
 pub mod fsx;
 pub mod pattern;
+pub mod snapshot;
 pub mod tail;
 pub mod walk;
 
@@ -16,6 +16,7 @@ use serde_json::{Value, json};
 
 use crate::connector::{Form, NativeSources};
 use crate::pipeline::{Mono, Recorder};
+use snapshot::{Interval, Sets};
 use tail::{Stop, Tail};
 use walk::{Row, Walker};
 
@@ -24,6 +25,10 @@ const SETTLE: Duration = Duration::from_secs(1);
 const ROOM_WAIT: Duration = Duration::from_millis(100);
 const PASS: Duration = Duration::from_secs(1);
 const MISSING_AFTER: Duration = Duration::from_secs(300);
+const PERIODIC: Interval = Interval {
+    base: Duration::from_secs(3600),
+    per_2mib: Duration::from_secs(60),
+};
 
 /// What `finish` sends the thread: `harness_exited` and the seal's time guard.
 type Finish = (bool, Option<Duration>);
@@ -35,7 +40,10 @@ pub struct NativeReader {
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct NativeFinish {
+    /// Append streams open at the seal, ended in `close`.
     pub streams: u64,
+    /// Streams the seal opened for `final` database sets. A `snapshot` row's seal copy is counted
+    /// in neither field.
     pub snapshots: u64,
     pub cut_files: u64,
     pub cut_bytes: u64,
@@ -72,11 +80,10 @@ impl NativeReader {
 struct Reader {
     rec: Recorder,
     rows: Vec<Row>,
-    /// Per row. Until `snapshot.rs` copies database sets, a `final` row is read as single snapshot
-    /// files at the seal only: no copy during the run (section 6 step 1 has no interval yet).
     forms: Vec<Form>,
     walker: Walker,
     tail: Tail,
+    sets: Sets,
     missing: Missing,
 }
 
@@ -102,6 +109,7 @@ impl Reader {
         }
         Reader {
             tail: Tail::new(since, rec.native_cursors()),
+            sets: Sets::new(PERIODIC),
             missing,
             walker: Walker::default(),
             rec,
@@ -115,13 +123,17 @@ impl Reader {
     fn run(mut self, rx: &Receiver<Finish>) -> NativeFinish {
         loop {
             let began = self.rec.now();
-            self.pass(false);
+            self.pass();
             let next = PASS.max(elapsed(began, self.rec.now()) * 50);
             loop {
-                let wait = match self.tail.read(&self.rec, SLICE, SETTLE) {
-                    Stop::Done => Duration::MAX,
-                    Stop::Slice => Duration::ZERO,
-                    Stop::Room => ROOM_WAIT,
+                let read = (
+                    self.tail.read(&self.rec, SLICE, SETTLE),
+                    self.sets.read(&self.rec, SLICE),
+                );
+                let wait = match read {
+                    (Stop::Room, _) | (_, Stop::Room) => ROOM_WAIT,
+                    (Stop::Slice, _) | (_, Stop::Slice) => Duration::ZERO,
+                    _ => Duration::MAX,
                 };
                 let left = next.saturating_sub(elapsed(began, self.rec.now()));
                 if let Some(f) = wait_for(rx, wait.min(left)) {
@@ -134,59 +146,60 @@ impl Reader {
         }
     }
 
-    /// One full pass: walk, settle each file under its path ID, sweep the gone. `final` rows are
-    /// settled only when `sealing`.
-    fn pass(&mut self, sealing: bool) {
+    /// One full pass: walk, settle each file under its path ID or its database set, sweep the gone.
+    fn pass(&mut self) {
         let walked = self.walker.pass(&self.rec, &self.rows);
         for f in walked.found {
             let (row, form) = (&self.rows[f.row], self.forms[f.row]);
-            if self.tail.taken(&f.stat) {
+            let taken = self.tail.taken(&f.stat);
+            if taken {
                 self.missing.took(&row.name);
             }
-            if form == Form::Final && !sealing {
+            if form == Form::Final {
+                self.sets.see(&row.name, &row.root, &f.rel, f.stat, taken);
                 continue;
             }
             let id = pattern::path_id(&row.name, &f.rel);
-            let snap = form != Form::Append;
+            let snap = form == Form::Snapshot;
             self.tail
                 .settle(&self.rec, id, &row.root, &f.rel, f.stat, snap);
         }
+        self.sets.walked(&walked.unlisted);
         self.tail.sweep(&self.rec, &walked.unlisted);
         let requests = self.rec.counts().model_requests();
         self.missing
             .check(&self.rec, requests, MISSING_AFTER, self.rec.now());
     }
 
-    /// Section 8 steps 1, 2, 4 and 5. `harness_exited` is for step 3, the seal's database copies
-    /// in `snapshot.rs` (next slice); until then `snapshots` stays 0.
-    fn finish(mut self, (_harness_exited, guard): Finish) -> NativeFinish {
+    /// Section 8. Step 2 reads each snapshot as it is: a copy torn by the state the pass saw copies
+    /// that state once; one torn by a newer state is not started again (its settle clock is past
+    /// `seen`), so `close` names its loss. When the guard runs out, what is left is cut.
+    fn finish(mut self, (harness_exited, guard): Finish) -> NativeFinish {
         let began = self.rec.now();
-        let left = |rec: &Recorder| guard.map(|g| g.saturating_sub(elapsed(began, rec.now())));
-        self.pass(true);
-        // Step 2, each snapshot as it is: a copy torn by the state this pass saw copies that state
-        // once; one torn by a newer state is not started again (its settle clock is past `seen`),
-        // so `close` names its loss instead of copying it at once.
-        let seen = self.rec.now();
-        let cut = loop {
-            if left(&self.rec).is_some_and(|l| l.is_zero()) {
-                break true;
+        self.pass();
+        let (rec, seen) = (&self.rec, self.rec.now());
+        let drain = |read: &mut dyn FnMut() -> Stop| loop {
+            let left = guard.map(|g| g.saturating_sub(elapsed(began, rec.now())));
+            if left.is_some_and(|l| l.is_zero()) {
+                return true;
             }
-            let settle = elapsed(seen, self.rec.now());
-            match self.tail.read(&self.rec, SLICE, settle) {
-                Stop::Done => break false,
+            match read() {
+                Stop::Done => return false,
                 Stop::Slice => {}
-                Stop::Room => {
-                    let wait = left(&self.rec).map_or(ROOM_WAIT, |l| l.min(ROOM_WAIT));
-                    std::thread::sleep(wait);
-                }
+                Stop::Room => std::thread::sleep(left.map_or(ROOM_WAIT, |l| l.min(ROOM_WAIT))),
             }
         };
-        let c = self.tail.close(&self.rec, cut);
+        let cut = drain(&mut || self.tail.read(rec, SLICE, elapsed(seen, rec.now())));
+        self.sets.seal(harness_exited);
+        if !cut {
+            drain(&mut || self.sets.read(rec, SLICE));
+        }
+        let (s, c) = (self.sets.close(rec), self.tail.close(rec, cut));
         NativeFinish {
             streams: c.streams,
-            snapshots: 0,
-            cut_files: c.cut_files,
-            cut_bytes: c.cut_bytes,
+            snapshots: s.streams,
+            cut_files: c.cut_files + s.cut_files,
+            cut_bytes: c.cut_bytes + s.cut_bytes,
             took_ms: elapsed(began, self.rec.now()).as_millis() as u64,
         }
     }

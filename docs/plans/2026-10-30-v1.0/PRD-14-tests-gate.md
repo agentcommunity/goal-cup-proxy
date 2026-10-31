@@ -1028,3 +1028,14 @@ PRDs they touch and the code. Where two fixes disagree, the ledger and the later
   says about 75; the slice 4 note lets the overage stand), `.config/nextest.toml` 21,
   `packaging/README.md` 104 (was 103), `release.sh` 121, the rest as in the slice 3 note.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-31, replan after PRD-04 second slice (merge 7e8ed89b)
+
+- PRD-04 now uses `common::recorder` (`opens`, `ends`, `events`, `pick`) in all its tests and has no
+  private copy of them. Four helpers it still holds in `tests/native_common/mod.rs` (`append`,
+  `notes`, `end_of`, `gap_rows`) are a request to you, not an order: move them into `common::recorder`
+  only if a second suite needs them, and then delete the PRD-04 copy in the same slice. `tests/common/`
+  stays yours; `tests/native_common/` is PRD-04's (PRD-00 note).
+- Test budget: PRD-04 tests are 1,768 against the 1,000 row (ceiling 1,780, PRD-04 note); the Rust
+  test total of at most about 14,200 is tracked in PRD-16.
+- No locked ledger item is touched and no owner question comes from this slice.

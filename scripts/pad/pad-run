@@ -1,6 +1,7 @@
 #!/usr/bin/env python3.11
 """The test pad, box half (PRD-12 sections 1a, 3 to 8), modes micro and cycle:
-    pad-run <run dir> <step>      (pad writes settings.json; the steps are STEPS and TIMED@<minute>, wait-calls takes N)
+    pad-run <run dir> <step>      (pad writes settings.json; the steps are STEPS, TIMED@<minute>, wait-calls N,
+                                   pre <script> and exec <script>@<minute>, the scripts in exec/ beside this file)
 Each step ends with one line `PADSTEP {"result":..,"saw":..}` and exits 0, also on a failure; 2 is a
 usage error. Known values (keys, plants, the remote password) never leave the box: panes are replaced
 before a file gets them and the scans run here. No key or planted value is ever printed, logged or an
@@ -17,9 +18,16 @@ BESIDE = ("spend", "seal-now", "watch")  # these run beside the other steps, so 
 STEPS = ("setup", "start", "paste", "wait-calls", "look", "wait-recovery", "keep-going", "seal", "wait-upload", "verify",
          "wipe") + BESIDE
 TIMED = ("kill-recorder", "kill-watchdog-recover")  # section 3.1, at <minute> after the paste
-USAGE = "usage: pad-run <run dir> " + "|".join([s + " N" * (s == "wait-calls") for s in STEPS] + [t + "@M" for t in TIMED])
+USAGE = "usage: pad-run <run dir> " + "|".join([s + " N" * (s == "wait-calls") for s in STEPS] + [t + "@M" for t in TIMED]
+                                                + ["pre SCRIPT", "exec SCRIPT@M"])
+PROXY_VALUE = "127.0.0.1:9"  # the proxy setting exec/proxy-setting.sh writes (PAD_PROXY); start must not print it
 EVERY = {"status": 10, "procs": 30, "pane": 60, "live": 300}  # section 4: the watch's seconds per kind of line
-OUT = ("verify", "watch", "status.json", "harness-files.json", "meta-box.json")  # what out.tar carries
+OUT = ("verify", "watch", "exec", "status.json", "harness-files.json", "meta-box.json")  # what out.tar carries
+PROXY_CA = tuple(n for p in ("HTTPS", "HTTP", "ALL", "NO") for n in (p + "_PROXY", p.lower() + "_proxy")) + (
+    "SSL_CERT_FILE", "SSL_CERT_DIR", "NODE_EXTRA_CA_CERTS", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE")
+HARNESS_ENV = ("HOME", "PATH", "GOALCUP_TIME_LEFT_FILE")  # not keys: what `sh -lc 'goalcup time-left'` needs
+# ~/bin (pad puts the goalcup build there) and the image's harness folders (/etc/profile.d/pad.sh, a login file)
+BOX_BIN = ("~/bin", "~/.npm-global/bin", "~/.local/bin")
 
 
 class Step(Exception):  # a step's end: args are (result, saw)
@@ -43,13 +51,25 @@ def replace_known(text, values):
     return text, count
 
 
+def exec_env(environ, names=()):
+    """Section 3.1: from /proc/<pid>/environ bytes, only the proxy and CA names, HOME, PATH and the time-left file
+    (PRD-10 acceptance 7), and `names` (settings' ca_env and the connector's home names); never a key."""
+    pairs = (item.decode(errors="replace").partition("=") for item in environ.split(b"\0"))
+    return {k: v for k, eq, v in pairs if eq and k in PROXY_CA + HARNESS_ENV + tuple(names)}
+
+
+def quoted(env):
+    """NAME=value words, shell-quoted, for a script to take with `eval "set -- $VAR"`."""
+    return " ".join(shlex.quote("%s=%s" % kv) for kv in env.items())
+
+
 def sh(argv, timeout=120, stdin=subprocess.DEVNULL, **kw):
     return subprocess.run(argv, capture_output=True, text=True, timeout=timeout, stdin=stdin, **kw)
 
 
-def tool(name):  # ~/bin first (pad puts the build there), then PATH
-    mine = os.path.expanduser("~/bin/" + name)
-    return mine if os.access(mine, os.X_OK) else shutil.which(name)
+def tool(name):  # BOX_BIN first (pad puts the build in ~/bin), then PATH
+    mine = [os.path.expanduser("%s/%s" % (d, name)) for d in BOX_BIN]
+    return next((p for p in mine if os.access(p, os.X_OK)), None) or shutil.which(name)
 
 
 def write(path, text, mode=0o600):
@@ -128,7 +148,8 @@ class Run:
         self.sec = self.h.get("gateway" if self.s.get("case") == "gateway" else "direct", {})
         self.keys, self.tmux = self.path("keys"), self.s.get("session") or "pad"  # copies only, never ~/.pad-keys
         lim = float((self.s.get("limits") or {}).get(kind, 300))  # pad's limit for this step; a timed one's runs from its minute
-        self.end = max(time.time(), self.st.get("pasted", 0) + float(m) * 60 if m else 0) + lim
+        self.m = float(m) if m else None  # a timed step's minute after the paste (kill-*, exec)
+        self.end = max(time.time(), self.st.get("pasted", 0) + (self.m or 0) * 60) + lim
 
     def path(self, *p):
         return os.path.join(self.run, *p)
@@ -186,9 +207,11 @@ class Run:
             raise Step("skip", "no entry")
 
     def gc_env(self, clean=False):
-        """The run's GOALCUP_* values; clean: with only HOME, PATH and TERM beside them (no proxy or CA variable)."""
+        """The run's GOALCUP_* values; clean: with only HOME, PATH (BOX_BIN first) and TERM beside them (no proxy or
+        CA variable): the participant's shell."""
         s, e = self.s, os.environ
-        base = dict(HOME=e.get("HOME", ""), PATH=e.get("PATH", ""), TERM=e.get("TERM") or "xterm") if clean else {}
+        path = os.pathsep.join([os.path.expanduser(d) for d in BOX_BIN] + [e.get("PATH", "")])
+        base = dict(HOME=e.get("HOME", ""), PATH=path, TERM=e.get("TERM") or "xterm") if clean else {}
         return dict(base, GOALCUP_HOME=self.env["GOALCUP_HOME"], GOALCUP_SERVER="off" if s.get("server") == "off" else
                     str(s.get("server_url")), GOALCUP_NO_BROWSER="1", **{"GOALCUP_KEEP_PARTS": "1"} if s.get("keep") else {})
 
@@ -220,8 +243,7 @@ class Run:
         self.st.update(key_route=route, key_env=get("key_env"), key_path=key)
         if route == "login":
             with open(key) as f:  # the key goes to stdin, never an argument
-                home_vars = {k: v.replace("{home}", home) for k, v in (s.get("home_vars") or {}).items()}  # PRD-11 `home`
-                r = sh(shlex.split(get("login")), stdin=f, env=dict(self.env, **home_vars or {"HOME": home}))
+                r = sh(shlex.split(get("login")), stdin=f, env=dict(self.env, **self.home_env()))
             if r.returncode:
                 raise Step("FAIL", "harness login exit %d" % r.returncode)
         elif route == "file":
@@ -231,6 +253,11 @@ class Run:
             if not (route == "env" and name == s["route_key"]):
                 os.remove(os.path.join(self.keys, name))
         return "ok", saw + ", goalcup setup, key route %s" % route
+
+    def home_env(self):
+        """PRD-11 `home`: the connector's home mapping with {home} filled, else HOME (the login and the pre scripts)."""
+        home = self.st.get("home") or ""
+        return {k: v.replace("{home}", home) for k, v in (self.s.get("home_vars") or {}).items()} or {"HOME": home}
 
     def plant(self):
         """Section 5: one fake value per PRD-05 section 10 shape, the no-shape value, the remote password."""
@@ -263,7 +290,8 @@ class Run:
         if self.st.get("key_route") == "env":  # the value is never in argv: the launch shell reads the file
             lines += ['export %s="$(cat %s)"' % (self.st["key_env"], shlex.quote(self.st["key_path"])), "rm -f " + shlex.quote(self.st["key_path"])]
         argv = [tool("goalcup"), "start", "--test", "--harness", s["harness_id"], "--prompt", self.path("prompt.txt")]
-        argv += [a for k in ("connector", "hosts") if s.get(k) for a in ("--" + k, self.path(s[k]))]
+        hosts = s.get("hosts") or os.path.exists(self.path("hosts.toml")) and "hosts.toml"  # a pre script may write it
+        argv += [a for k, v in (("connector", s.get("connector")), ("hosts", hosts)) if v for a in ("--" + k, self.path(v))]
         write(self.path("launch.sh"), "\n".join(lines + [shlex.join(argv)]) + "\n", 0o700)
         t = self.tmux  # one session per run, so runs on one machine never meet
         for argv in (["new-session", "-d", "-s", t, "-x", "200", "-y", "50"], ["set-option", "-w", "-t", t, "remain-on-exit", "on"],
@@ -271,6 +299,7 @@ class Run:
             sh(["tmux"] + argv)
         if server == "off":  # no approval: paste now
             self.until("Recording in chat mode", "no 'Recording in chat mode'")
+            self.daemon_check()
             return self.type_prompt()
         self.code = self.until(r"shows the code ([A-Z0-9]{4}-[A-Z0-9]{4})\.", "no device code").group(1)  # out once
         self.pane()
@@ -280,13 +309,26 @@ class Run:
         """The first match of `pattern` on the screen within the step's limit; else the step ends INCONCLUSIVE."""
         got = wait(lambda: re.search(pattern, self.pane(False)), self.left(), 3)
         if not got:
+            self.refusal()
             self.pane()
             raise Step("INCONCLUSIVE", "harness did not start: " + why)
         return got
 
+    def refusal(self):
+        """A goalcup start that ended before recording began (the pane is dead): one faults.jsonl line with its exit,
+        whether the screen named settings.json and proxy, and whether it printed the pad's proxy value (PRD-11 acceptance
+        4 wants the first two and not the third). Booleans only."""
+        dead = sh(["tmux", "display-message", "-p", "-t", self.tmux, "#{pane_dead} #{pane_dead_status}"]).stdout.split()
+        if dead[:1] == ["1"]:
+            text = self.pane(False)
+            self.fault("start-refused", exit=int(dead[1]) if dead[1:] and dead[1].isdigit() else None,
+                       named_file="settings.json" in text, named_key=bool(re.search(r"\bproxy\b", text)),
+                       value_shown=bool(re.search(re.escape(PROXY_VALUE) + r"(?!\d)", text)))
+
     def paste(self, _):
         self.need("goalcup")
         self.until("Recording in chat mode", "no 'Recording in chat mode' after the approval")
+        self.daemon_check()
         return self.type_prompt()
 
     def type_prompt(self):  # section 3, 0:04: the ready text, pre keys, the paste, the submit delay and Enter
@@ -401,6 +443,41 @@ class Run:
 
     def at(self, m):  # sleep until minute m after the paste
         time.sleep(max(0, self.st["pasted"] + m * 60 - time.time()))
+
+    def pre(self, script):  # section 3.1: once, after setup and before start
+        return self.script("pre", script, self.gc_env(True))
+
+    def exec(self, script):  # section 3.1: at its minute, in the harness's proxy and CA environment, never its keys
+        self.need(started=True)
+        self.at(self.m)
+        if not alive(pid := pc.dig(self.status(), "s4_harness_pid")):
+            raise Step("skip", "no harness process")
+        with open("/proc/%d/environ" % pid, "rb") as f:  # filtered by name before anything holds it
+            env = exec_env(f.read(), list(self.s.get("ca_env") or ()) + list(self.s.get("home_vars") or {}))
+        return self.script("exec", script, env, minute=self.m)
+
+    def script(self, kind, name, env, **kw):
+        """bash exec/<name> in the project, its process group killed at the step's limit; only the replaced output
+        reaches exec/<name>.txt; one faults.jsonl line. No key file path or key value is in its environment. A pre
+        script runs in the participant's shell; an exec script with only the harness's names from exec_env."""
+        shell = self.gc_env(True)
+        env = dict(env, PAD_RUN=self.run, PAD_HOME=self.st.get("home") or "",
+                   PAD_MODEL_HOSTS=self.path("model-hosts.toml"), PAD_DAEMON=str(self.h.get("daemon") or ""), PAD_PROXY=PROXY_VALUE,
+                   PAD_SHELL_ENV=quoted(shell), PAD_HOME_ENV=quoted(self.home_env()))
+        p = subprocess.Popen(["bash", os.path.join(PAD, "exec", name)], cwd=self.project, env=env, stdin=subprocess.DEVNULL,
+                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, errors="replace", start_new_session=True)
+        try:
+            out, code = p.communicate(timeout=max(1, self.left()))[0], p.returncode
+        except subprocess.TimeoutExpired:
+            os.killpg(p.pid, signal.SIGKILL)
+            out, code = p.communicate()[0], None
+        values = self.known()
+        if values is not None:
+            write(self.path("exec", name + ".txt"), replace_known(out, values)[0], 0o644)
+        self.fault(kind, script=name, **kw, exit=code, withheld=values is None)
+        if code is None:
+            raise Step("timeout", "%s %s killed at the step's limit" % (kind, name))
+        return ("ok", "%s %s exit 0" % (kind, name)) if code == 0 else ("FAIL", "%s %s exit %d" % (kind, name, code))
 
     def kill_rec(self, m):
         """kill9 of the recorder in status.json; saves what wait-recovery compares against -> (pid or None, seconds
@@ -581,15 +658,15 @@ class Run:
         e, exits, result, note = self.entry(), {}, None, ""
         self.st["screen_known"] = self.st.get("screen_known", 0) + (loads(path=self.path("watch", "watch.json")).get("screen_known") or 0)
         try:
+            self.daemon_check(True)  # inside the try: meta-box.json, the out scan and the tar follow whatever happens
             self.need("goalcup-verify", entry=True)
             shutil.copy(os.path.join(e, "status.json"), self.path("status.json"))
-            raw = [p for p in (os.path.join(e, "goalcup.log"), os.path.join(e, "upload.json")) if os.path.exists(p)]
             f, on = os.path.join("fetched", self.st["entry"]), self.s["server"] != "off"
             got = on and os.path.isfile(self.path(f, "rec.gcr.zst"))
             note = "; no fetched copy" if on and not got else ""
             for name, argv in [("check-local", ["check", "--json", "--known", "known", "--harness-files", "harness-files.json", e])] + [
                     ("check-server", ["check", "--json", "--server", f, "--local", e, "--known", "known"])] * got + [
-                    ("secrets", ["secrets", "--known", "known", e] + [f] * got + ["status.json"] + raw),
+                    ("secrets", ["secrets", "--known", "known", e] + [f] * got + ["status.json"]),
                     ("secrets-plain", ["secrets", "--known", "known-plain", e] + [f] * got)] + [  # C5 is the server copy's
                     ("usage", ["usage", f if got else e, "--json", "--out", os.path.join("verify", "usage")])] * (got or not on):
                 exits[name] = self.verify_cmd(argv, None if name == "usage" else name + ".json")[0]
@@ -603,9 +680,10 @@ class Run:
         keys = ("harness_version", "run", "entry", "screen_known", "end_screen_requests", "commits_since_start", "plain_planted",
                 "known_box")
         write(self.path("meta-box.json"), json.dumps({k: self.st.get(k, 0 if k == "screen_known" else None) for k in keys}), 0o644)
-        if result is None:  # last: every file the tar carries, which is all the conductor's files are built from
+        if tool("goalcup-verify"):  # last, whatever happened above (it needs no entry): every file the tar carries
             exits["secrets-out"] = self.verify_cmd(["secrets", "--known", "known"] + [n for n in OUT if os.path.exists(self.path(n))],
                                                    "secrets-out.json")[0]
+        if result is None:
             result = ("ok", "exits " + ", ".join("%s %s" % kv for kv in exits.items()) + note)
         write(self.path("verify", "exits.json"), json.dumps(exits), 0o644)  # the exits of whatever ran
         # The known files go after the scan; the home only once nothing reads it (else the wipe step takes it).
@@ -620,26 +698,91 @@ class Run:
         write(self.path("watch.stop"), "")
         wait(lambda: not alive(read_pid(self.path("watch.pid"))), 30, 1)
 
+    def daemon_pids(self):
+        """The live pids, not ours, whose command line holds the harness file's `daemon` command and whose environment
+        holds this run's home (the connector's home mapping): the stale daemon, one it forked, or one goalcup started.
+        None when /proc cannot be listed (unknown); another run's or the participant's own daemon is never matched."""
+        want, home = str(self.h.get("daemon") or "").strip(), ["%s=%s" % kv for kv in self.home_env().items()]
+        if not want or not self.st.get("home"):
+            return []
+        try:
+            names = [int(d) for d in os.listdir("/proc") if d.isdigit() and int(d) != os.getpid()]
+        except OSError:
+            return None
+        out = []
+        for pid in names:
+            try:
+                with open("/proc/%d/cmdline" % pid, "rb") as f:
+                    line = f.read().replace(b"\0", b" ").decode(errors="replace")
+                with open("/proc/%d/environ" % pid, "rb") as f:
+                    env = f.read().decode(errors="replace").split("\0")
+            except OSError:
+                continue
+            if want in line and all(h in env for h in home) and alive(pid):
+                out.append(pid)
+        return out
+
+    def daemon_check(self, end=False):
+        """PRD-11 acceptance 5: goalcup start's `before` stops the stale daemon. One faults.jsonl line per look (after
+        start: `alive`, the stale daemon itself; and at verify: `left`, any such process after exit); check.py fails the row
+        when either lived. The one field is null when /proc could not be read. Nothing when stale-gateway.sh left no pid."""
+        pid = read_pid(self.path("exec", "stale-gateway.pid"))
+        if pid is not None:
+            pids = self.daemon_pids()
+            got = None if pids is None else bool(pids) if end else pid in pids
+            self.fault("daemon-check", script="stale-gateway.sh", **{"left" if end else "alive": got})
+
+    def stop_daemon(self):
+        """The cleanup after daemon_check: kills every daemon process (forks too) left -> a line for the wipe step, or None."""
+        left = 0
+        for pid in self.daemon_pids() or []:
+            try:
+                os.kill(pid, signal.SIGKILL)
+                left += 1
+            except OSError:  # it left meanwhile
+                pass
+        return "%d daemon process(es) still alive, killed" % left if left else None
+
     def wipe(self, _):
         if os.path.isdir(self.run):  # the watch ends before the run folder goes
             self.stop_watch()
+        left = self.stop_daemon()
         if shutil.which("tmux"):
             sh(["tmux", "kill-session", "-t", self.tmux])
         found = self.wipe_secrets(known=True)
-        return "ok", "found and wiped: " + ", ".join(found) if found else "nothing key-like left"
+        return "ok", "; ".join([("found and wiped: " + ", ".join(found)) if found else "nothing key-like left"] + ([left] if left else []))
+
+
+def parse(words):
+    """-> (step, argument, minute) or None. A timed step is `kill-recorder@M`; `pre SCRIPT`, `exec SCRIPT@M` and
+    `wait-calls N` take a word; every other step stands alone. The minute is a string; the argument may be None."""
+    kind, at, m = (words[0] if words else "").partition("@")
+    arg = words[1] if len(words) == 2 else None
+    if kind == "exec" and arg:
+        arg, at, m = arg.partition("@")
+    script, minute = arg and re.fullmatch(r"[A-Za-z0-9._-]+", arg), re.fullmatch(r"\d+(\.\d+)?", m)
+    if kind in TIMED:
+        ok = len(words) == 1 and minute
+    elif kind == "exec":
+        ok = script and at and minute
+    elif kind == "pre":
+        ok = script and not at
+    else:
+        ok = kind in STEPS and not at and len(words) == 1 + (kind == "wait-calls")
+    return (kind, arg, m) if ok else None
 
 
 def main(argv):
-    kind, at, m = argv[2].partition("@") if len(argv) in (3, 4) else ("", "", "")
-    timed = kind in TIMED and len(argv) == 3 and re.fullmatch(r"\d+(\.\d+)?", m)
-    if not (timed or kind in STEPS and not at and len(argv) == 3 + (kind == "wait-calls")):
+    got = parse(argv[2:])
+    if not got:
         print(USAGE, file=sys.stderr)
         return 2
+    kind, arg, m = got
     os.umask(0o077)
     run, extra = None, {}
     try:
         run = Run(argv[1], kind, m)
-        result, saw, *more = getattr(run, kind.replace("-", "_"))(float(m) if timed else argv[3] if len(argv) == 4 else None)
+        result, saw, *more = getattr(run, kind.replace("-", "_"))(float(m) if kind in TIMED else arg)
         extra = more[0] if more else {}
     except Step as stop:
         result, saw = stop.args

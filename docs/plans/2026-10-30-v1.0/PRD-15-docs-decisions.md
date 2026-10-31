@@ -1250,3 +1250,51 @@ against `folder.rs` and fixes the guide, without quoting message wording the cod
   copying the PRD text. The participant guide's line on what can still be recorded keeps "the scan
   flags a key glued to a word" (`glued_shape`, a `warn`).
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-31, replan after PRD-15 slice 9 (merge d56216f4)
+
+Slice 9 brought `docs/RECORD-FORMAT.md` to PRD-08 slice 3 and `docs/CONNECTOR-SCHEMA.md` to PRD-11 slice
+4; rewrote `docs/OPERATING.md` (863 to 233 lines, under the 280 estimate) from the merged Worker, pad,
+gate and release code; rewrote `scripts/README.md` (39 lines) for the PRD-13 pre-cut; and moved
+`docs/CONTRACTS.md` and `docs/TERMINATION.md` to `docs/archive/` with no edit (100% renames).
+
+- **Next RECORD-FORMAT slice (A2-N1).** PRD-08 slice 4 (1fdaf2c3) is on integration and builds
+  `listed_hosts_decrypted`, `conn_bytes` and `mask_failclosed` (`honesty.rs`). `docs/RECORD-FORMAT.md`
+  lines 365-366 still say those three are "Always `skip` with not built in this slice". The next slice
+  describes the three honesty checks by id and cuts that skip list to the four ids `report.rs` still
+  holds as LATER (`history_complete`, `wire_keeps_up`, `threads_match`, `subagents_present`). Re-read
+  `report.rs` first: PRD-08's remaining slices may shorten it again.
+- **OPERATING nit B-R1.** The last sentence of the recording-off section ("A query that lists such
+  runs across the event is not in this build.", `docs/OPERATING.md:169`) is build-state text in a
+  current doc (rule 7). Delete it in the next slice that touches OPERATING; the sentence before it
+  already points at `heartbeats` in `fetch.json`.
+- **RECORD-FORMAT size (B-R2), decision.** 419 lines against the 280 estimate (150%). What the extra
+  lines serve: the `check --json` report section with every check id and its facts (point 5: the
+  server rebuilds the story and an organizer reads this report), the `secrets` check and subcommand
+  (point 4), and the S6 key sets the Worker and the verifier both read. All three are reference tables a
+  reader looks up by id; none repeats PRD text. No behaviour-keeping cut was found in review. The
+  ceiling for this page is 430 lines. The A2-N1 edit should come out line-neutral or shorter (it
+  replaces a 3-line skip list with a shorter one and adds a short honesty paragraph); if it needs more
+  than 430 in total, cut the per-check fact lists to the ids and point at `report.rs`.
+- **Two build-progress marks stay until `continue` merges (B-R3).** `docs/CONNECTOR-SCHEMA.md` line 9
+  (the intro: `start` and `continue` not built) and the bold mark near line 100 ("next slice, ruled in
+  PRD-10: `continue` is not built yet"). `start` is still `not_built` on integration (`cli/start.rs`
+  prints it) and `continue`, `recover`, `seal`, `upload` are `not_built` in `main.rs`. Delete both marks
+  in the final link and wording pass, when PRD-10 has merged `start` and `continue`. They wait in the
+  same slice as the usage section.
+- **Usage section is unblocked on the code side.** PRD-09 slice 4 (`out.rs`, `usage::run`, c262ef5a) is
+  on integration. The OPERATING usage job (left out of the slice 9 rewrite) and the S7 summary and
+  calls files can be written from the merged code in the next slice, after PRD-09's own replan note.
+  Rule: read `usage/out.rs` for the file names and the CLI flags; do not copy PRD-09 text.
+- **Known broken links for the filter list** (history docs, not edited): `OPERATING.md#the-matrix` in
+  `docs/LOCAL-RESEARCH-HANDOFF.md:135`, `docs/research/LOCAL-CAMPAIGN.md` and `LOCAL-TEST-DAY.md`;
+  `docs/CONTRACTS.md` to `#pin-evolution` (now `docs/archive/CONTRACTS.md:615`); and
+  `../../skills/goal-cup-setup/SKILL.md` in `docs/archive/PARTICIPANT-GUIDE-0.6.md:13`. Links to the
+  moved files from `docs/CHEAT-CHECKLIST.md:91,:305` (moves unedited) and `docs/DECISIONS.md:206,:235`
+  (D22 and D35: a path-only fix is the one allowed edit to the append-only file, done in the DECISIONS
+  slice) are also known. Acceptance lists these as known broken links in history docs.
+- **Still waiting, unchanged:** the AGENTS.md map and README rewrite (PRD-02 recorder `run`, PRD-10
+  `start`), ARCHITECTURE and RECORD-FORMAT numbers (PRD-02 core), the HARNESS-ONBOARDING pointer
+  (PRD-12's skill rewrite; `skills/adding-a-capture-harness/writing-a-decoder.md` is still there), the
+  guide, RULES, SECURITY, TODO and the DECISIONS entries, and the third slice with the newcomer run.
+- No locked ledger item is touched and no owner question comes from this slice.
