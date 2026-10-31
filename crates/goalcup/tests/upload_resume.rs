@@ -291,7 +291,7 @@ fn awaiting_final_waits_for_the_final_then_retries_at_once() {
         while s.tick(&|| Mono(t.get()), &b, false, jm) == Step::Again {}
     });
     assert_eq!((r.j().failures, r.s.backoff.next_try), (0, None));
-    assert_eq!(r.tick(&b), Step::Again, "retried at once, at the same clock");
+    assert_eq!(r.tick(&b), Step::Again, "retried at once");
     assert_eq!(r.fake.chunks().len(), 1);
     r.finish(&b);
     r.stored_once(&r.cat());
