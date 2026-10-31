@@ -59,7 +59,7 @@ was learned; read it before planning that PRD.
 | 01 format | first slice (types, codec, PartWriter, golden, worked example) | small leftovers (acceptance helpers, the Raw/Meter cut PRD-08 asked for) |
 | 02 recorder core | scaffold with S1, S4, S8, S17 stubs | core step 1 in fix rounds (count log bounded by recovery, seal racing a drop: blockers); then mask worker, writer, `real_for_tests`, `pipeline_guard.rs`, seal; then the watchdog slice (restart with CA hand-over, null mode R3a, `goalcup recover` R3b), `pipeline_stall.rs`, `by_hand_load`. Critical path |
 | 03 proxy | leaf modules (ca, tls, connect, decode, ws) | slice 2 (pump, tunnel, http1, hosts) in fix for blocker K1; then `mod.rs` serve joining all; refusal learning; HTTP/2 with the PRD-00 ALPN rule |
-| 04 native | fsx, pattern, walk, tail, native reader | second slice: `snapshot.rs` database sets (Hermes `state.db`) in progress |
+| 04 native | complete: fsx, pattern, walk, tail, native reader, snapshot.rs database sets (7e8ed89b) | nothing unless a replan note or a real run asks |
 | 05 masking | S2 stub, S12 shapes, corpus copy | core slice (the real masker) built, in review. Its merge unlocks real-key rung 1 |
 | 06 uploader | seams S9, S10, S18, policy, client, chunk, beat | slice 3 sender in progress; then thread wiring, prune, `goalcup upload`. Its merge unlocks the first staging deploy |
 | 07 Worker | complete | staging deploy by the conductor (`wrangler deploy --env staging`, floor 1.0.0) after PRD-06 |
@@ -76,22 +76,22 @@ was learned; read it before planning that PRD.
 
 Not done at all yet: any real-key run, any staging deploy, phases 2 to 6, the cut.
 
-## Branches (30 Oct 23:30Z, integration at 86a7dfbf)
+## Branches (31 Oct 00:04Z, integration at e93409a9)
 
 | Branch | Commits not yet on integration | Last merge into integration |
 |---|---:|---|
 | `v1.0/prd-01-format` | 7 | f5b0a6a2 Merge v1.0/prd-01-format: phase 0 first group |
 | `v1.0/prd-02-core` | 34 | 675077f7 Merge v1.0/prd-02-core: PRD-02 scaffold: crates/goalcup with every dependency, lib.rs module list, S1 |
 | `v1.0/prd-03-proxy` | 22 | 0e411074 Merge v1.0/prd-03-proxy: PRD-03 proxy core slice 1: ca, tls, connect, decode, ws leaf modules |
-| `v1.0/prd-04-native` | 10 | a302d688 Merge v1.0/prd-04-native: PRD-04 native reader: native::start, loop duty cycle, finish steps 1,2,4,5, |
+| `v1.0/prd-04-native` | 0 | 7e8ed89b Merge v1.0/prd-04-native: PRD-04 second slice: database sets in native snapshot.rs, loop and finish s |
 | `v1.0/prd-05-masking` | 21 | 82484521 Merge v1.0/prd-05-masking: PRD-05 masking phase 0: S2 stub, S12 shapes.tsv, mask_rules pin, corpus co |
 | `v1.0/prd-06-upload` | 10 | a98f104c Merge v1.0/prd-06-upload: PRD-06 slice 2: chunk cut, heartbeat body and beat tick, size-amendment cut |
 | `v1.0/prd-07-worker` | 0 | 8db60d0e Merge v1.0/prd-07-worker: PRD-07: collision-safe wrangler dev ports in the Worker test helper (gate f |
-| `v1.0/prd-08-verify` | 0 | 1fdaf2c3 Merge v1.0/prd-08-verify: PRD-08 slice 4: honesty checks listed_hosts_decrypted, conn_bytes, mask_fai |
-| `v1.0/prd-09-usage` | 0 | 1a2c3537 Merge v1.0/prd-09-usage: PRD-09 slice 3: native leg (Codex rollouts, Claude Code transcripts) and the |
+| `v1.0/prd-08-verify` | 1 | 1fdaf2c3 Merge v1.0/prd-08-verify: PRD-08 slice 4: honesty checks listed_hosts_decrypted, conn_bytes, mask_fai |
+| `v1.0/prd-09-usage` | 3 | 1a2c3537 Merge v1.0/prd-09-usage: PRD-09 slice 3: native leg (Codex rollouts, Claude Code transcripts) and the |
 | `v1.0/prd-10-cli` | 0 | 64450e32 Merge v1.0/prd-10-cli: PRD-10 slice 5: goalcup time-left, upload lines in status and end screen, nits |
-| `v1.0/prd-11-connectors` | 1 | a96d9f71 Merge v1.0/prd-11-connectors: PRD-11 slice 4: six more connectors, builtin macro form, .profile write |
-| `v1.0/prd-12-pad` | 21 | 69f355c6 Merge v1.0/prd-12-pad: PRD-12 slice 4: pad cycle mode with fault kills, wait-recovery, keep-going, de |
+| `v1.0/prd-11-connectors` | 9 | a96d9f71 Merge v1.0/prd-11-connectors: PRD-11 slice 4: six more connectors, builtin macro form, .profile write |
+| `v1.0/prd-12-pad` | 0 | 9e71bde0 Merge v1.0/prd-12-pad: PRD-12 slice 5: gateway and dodger cases, exec and pre watcher commands, seven |
 | `v1.0/prd-13-cut` | 0 | none |
 | `v1.0/prd-14-gate` | 0 | 0ffc3c64 Merge v1.0/prd-14-gate: phase 0 first group |
 | `v1.0/prd-14-tests` | 0 | b3747b6a Merge v1.0/prd-14-tests: PRD-14 slice 5: gate.sh review nits A1 A2 A4 B1 B2, nextest.toml comment A3, |
