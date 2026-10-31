@@ -219,8 +219,9 @@ async fn client_hello_in_two_records_and_one_byte_reads_decides_by_sni() {
 }
 
 /// C4: the two OpenSSL hellos of 0.7, larger than the rustls ones, cut to one byte per write
-/// after the head: the decision still comes from the hello (SNI first, then the target), and the
-/// upstream receives the hello whole, as the client wrote it.
+/// after the head: a parse that broke would give `not_tls`, so `not_listed`
+/// shows the hello was read whole, and the upstream receives it whole, as the client wrote it.
+/// The SNI-first decision is shown by the two-records case above.
 #[tokio::test]
 async fn openssl_client_hellos_in_single_bytes_are_replayed_whole() {
     let (up, sent) = recording_sink();
@@ -335,26 +336,43 @@ async fn authority_forms() {
     }
 }
 
-/// C5: a client that closes before its hello is whole costs nothing: the upstream sees no
-/// connection, one `conn` record is written and no GAP.
-///
-/// Held back: the proxy dials the upstream before the `200` and tunnels the partial hello to it
-/// (`Hello::Closed` goes to `run_tunnel`, which records a GAP for it). PRD-03 owns that path; the
-/// lane asked the owner whether to change it or to amend C5 (night log). L-C5 stays open until
-/// this runs.
+/// C5 (as amended to PRD-03 section 1): the upstream is dialled before the `200`, so a client
+/// that closes before its hello is whole still opens one TCP leg. The upstream never sees a
+/// complete ClientHello and no TLS session is made; the connection is one `tunnel` record
+/// (`not_tls`), the partial record header is relayed as sent, and that unparsed relay is covered
+/// by one named GAP on the conn stream.
 #[tokio::test]
-#[ignore = "L-C5: the proxy dials before the 200 and records a GAP for a partial hello"]
-async fn close_before_hello_opens_no_upstream() {
+async fn close_before_hello_is_one_named_loss() {
     let (up, sent) = recording_sink();
     let hooks = format!("api.openai.com={up}");
     let (_h, addr, calls, _) = proxy(HOSTS, &[("GOALCUP_TEST_UPSTREAM", hooks)]);
-    drop(through(addr, "api.openai.com:443").await);
+    drop(through(addr, "api.openai.com:443").await); // closes before a single byte
+    let partial = [22u8, 3, 1, 2, 0]; // a record header that promises 512 bytes
     let mut s = through(addr, "api.openai.com:443").await;
-    s.write_all(&[22, 3, 1, 2, 0]).await.unwrap(); // a record header that promises 512 bytes
+    s.write_all(&partial).await.unwrap();
     drop(s);
-    assert_eq!(conns(&calls, 2).await.len(), 2);
-    assert!(sent.lock().unwrap().is_empty(), "the upstream was dialled");
-    assert!(gaps(&calls).is_empty(), "no byte moved, no loss to name");
+    let got = conns(&calls, 2).await;
+    assert_eq!(got.len(), 2, "one conn record per CONNECT");
+    assert!(got.iter().all(|c| c.1["mode"] == "tunnel"));
+    assert_eq!(got[1].1["reason"], "not_tls");
+    within_async(HANG, async {
+        while sent.lock().unwrap().get(1).is_none_or(|b| b.len() < partial.len()) {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await;
+    {
+        let seen = sent.lock().unwrap();
+        assert_eq!(seen.len(), 2, "one accepted connection per CONNECT");
+        assert!(seen[0].is_empty(), "the first client sent nothing");
+        assert_eq!(seen[1], partial, "relayed as sent, no TLS from the proxy");
+    }
+    let second = got[1].0;
+    let named: Vec<_> = gaps(&calls)
+        .into_iter()
+        .filter(|g| matches!(g, Call::Gap(sid, ..) if *sid == second))
+        .collect();
+    assert_eq!(named.len(), 1, "the partial hello is one named GAP");
 }
 
 /// C6: an unlisted host (the agent's own pip, npm, git) gets one round: the refusal is answered

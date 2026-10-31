@@ -35,7 +35,7 @@ lessons lane (PRD-17); read by the deletion gate (PRD-17 Acceptance, checks 1 to
 | L-C2 | 2.1 | A: lessons_connect::bad_heads_get_fixed_answers_without_echo | PRD-17 | open | - |
 | L-C3 | 2.1 | A: lessons_connect::authority_forms | PRD-17 | open | - |
 | L-C4 | 2.1 | A: lessons_connect::client_hello_in_two_records_and_one_byte_reads_decides_by_sni; A: lessons_connect::openssl_client_hellos_in_single_bytes_are_replayed_whole (the two copied OpenSSL hellos, no 2 KiB synthetic one) | PRD-17 | open | - |
-| L-C5 | 2.1 | A: lessons_connect::close_before_hello_opens_no_upstream (held back with `ignore`: the proxy dials before the 200 and records a GAP) | PRD-17 | open | - |
+| L-C5 | 2.1 | A: lessons_connect::close_before_hello_is_one_named_loss (upstream dialled before the 200; one conn record, one named GAP) | PRD-17 | open | - |
 | L-C6 | 2.1 | A: lessons_connect::unlisted_refusal_is_one_round; A: lessons_connect::listed_refusal_is_retried; A: proxy_connect.rs (PRD-03, the reset rule); R: RR5 | PRD-17 | open | - |
 | L-C7 | 2.1 | R: RR1; A: lessons_connect::idle_tunnel_survives_120s (full tier, held back with `ignore`) | PRD-17 | open | - |
 | L-C8 | 2.1 | A: lessons_connect::one_bad_handshake_leaves_others_relaying | PRD-17 | open | - |
@@ -192,11 +192,7 @@ their serve cases yet, not because `serve` is missing: D1 to D4 (`lessons_decode
 alone and shows the decoded prefix and the `Step`; D6 has its serve case; D8 is the whole-path case), D7, the
 relay halves of H2, W2 and W7 (`lessons_ws.rs` runs at the parser layer and shows no relayed byte and no conn
 GAP), H9 to H11, W9 to W11, K15 (whole path, with `lessons_ws.rs`) and SC3. The C-rows, T3, the T4 key half and
-D6 have their tests (slice 4) and stay `open` until a box run on the integration head. **L-C5 is held back with
-`ignore`:** the test asks what PRD-17 C5 asks (the upstream sees no connection, one `conn` record, no GAP), and a
-box probe showed the proxy dials the upstream before the `200` and tunnels a partial hello with a GAP
-(`Hello::Closed` goes to `run_tunnel`). Either PRD-03 changes that path or the owner amends C5; until then
-the deletion gate may not count L-C5 green. L-VR2 waits for PRD-09's
+D6 have their tests (slice 4) and stay `open` until a box run on the integration head. L-VR2 waits for PRD-09's
 named `usage` case. Rows whose named file is not on integration (`pipeline_stall.rs`, `pipeline_seal.rs`,
 `watchdog_restart.rs`, `watchdog_end.rs`, `proxy_restart.rs`, `cli_continue.rs`) stay `open`. L-P3 stays
 `open`: its test is held back with `ignore` until the PRD-02 shield fix is on integration.
