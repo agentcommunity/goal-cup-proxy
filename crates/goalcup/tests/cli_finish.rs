@@ -270,7 +270,11 @@ fn closing_prints_the_sealed_counts_and_never_invents_any() {
     std::fs::create_dir_all(&entry).unwrap();
     let none = goalcup::cli::finish::closing(&entry, "Agent", RUN, false);
     assert!(!none.contains(text::PART_RECORDED));
-    put(&entry, "status.json", &patch(&sealed(), json!({"mode": "recording", "seal": null})));
+    put(
+        &entry,
+        "status.json",
+        &patch(&sealed(), json!({"mode": "recording", "seal": null})),
+    );
     let open = goalcup::cli::finish::closing(&entry, "Agent", RUN, false);
     assert!(!open.contains(text::PART_RECORDED) && !open.contains("905"));
     assert_ne!(none, open);

@@ -180,7 +180,10 @@ pub fn closing(entry_dir: &Path, name: &str, run: &str, refused: bool) -> String
         }
         std::thread::sleep(std::time::Duration::from_millis(100));
     }
-    let (log, support) = (text::details_at(&super::goalcup_log(entry_dir)), text::SUPPORT_ADDRESS);
+    let (log, support) = (
+        text::details_at(&super::goalcup_log(entry_dir)),
+        text::SUPPORT_ADDRESS,
+    );
     if super::status_json(entry_dir).exists() {
         return format!(
             "goalcup could not read the final counts of this part. Run goalcup status, or write \

@@ -216,14 +216,26 @@ fn the_hand_over_passes_the_exit_code_and_ends_on_the_sealed_counts() {
     let w = FakeWorker::start();
     let out = spawn_start(&fix, &w.url());
     let shown = String::from_utf8_lossy(&out.stdout).into_owned();
-    assert_eq!(out.status.code(), Some(7), "{shown}\n{}", String::from_utf8_lossy(&out.stderr));
-    assert_eq!(shown.matches(&text::recording_now("Tester")).count(), 1, "{shown}");
+    assert_eq!(
+        out.status.code(),
+        Some(7),
+        "{shown}\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(
+        shown.matches(&text::recording_now("Tester")).count(),
+        1,
+        "{shown}"
+    );
     assert!(shown.contains(text::PART_RECORDED), "{shown}");
     let entry = fix.gc().join("runs").join(RUN_ID);
     let sealed = std::fs::read_dir(&entry)
         .unwrap()
         .filter_map(Result::ok)
-        .any(|e| std::fs::read_to_string(e.path().join("status.json")).is_ok_and(|s| s.contains("\"sealed\"")));
+        .any(|e| {
+            std::fs::read_to_string(e.path().join("status.json"))
+                .is_ok_and(|s| s.contains("\"sealed\""))
+        });
     assert!(sealed);
 }
 
