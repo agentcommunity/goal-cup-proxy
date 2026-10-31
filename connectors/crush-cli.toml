@@ -17,5 +17,6 @@ host_hints = [
 hint_env = ["HYPER_URL"]
 secret_files = [
   "{home}/.local/share/crush/crush.json", "{home}/.config/crush/crush.json", "{workspace}/.crush/crush.json",
+  "{workspace}/crush.json", "{workspace}/.crush.json",
 ]
 native = [{ name = "db", root = "{workspace}/.crush", pattern = "crush.db*", form = "final" }]
