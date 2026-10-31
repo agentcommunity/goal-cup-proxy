@@ -162,9 +162,10 @@ const SEALED_WAIT: u32 = 30;
 
 /// What `start` prints when the watchdog has returned: the end screen of the sealed part, with a
 /// line first when the harness never started, or the start refusal when nothing was recorded at
-/// all. `refused` is the watchdog's mask refusal, which has its own text. Only the details a
-/// participant can act on; no value and no byte of the record.
-pub fn closing(entry_dir: &Path, name: &str, run: &str, refused: bool) -> String {
+/// all. `refused` is the watchdog's mask refusal, which has its own text; `not_started` is its
+/// `NOT_STARTED` exit. Only the details a participant can act on; no value and no byte of the
+/// record.
+pub fn closing(entry_dir: &Path, name: &str, run: &str, refused: bool, not_started: bool) -> String {
     if refused {
         return format!("{}\n", text::mask_refused());
     }
@@ -179,7 +180,11 @@ pub fn closing(entry_dir: &Path, name: &str, run: &str, refused: bool) -> String
     }
     let log = text::details_at(&super::goalcup_log(entry_dir));
     let support = text::SUPPORT_ADDRESS;
-    if super::status_json(entry_dir).exists() {
+    // The recorder can die between writing `status.json` and sending `ready`: not started, no
+    // harness, never sealed.
+    let st: Option<Status> = super::read_json(&super::status_json(entry_dir));
+    let never_ran = not_started && st.as_ref().is_some_and(|s| s.harness.is_none());
+    if super::status_json(entry_dir).exists() && !never_ran {
         return format!(
             "goalcup could not read the final counts of this part. Run goalcup status, or write \
              to {support}.\n{log}\n"

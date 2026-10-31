@@ -197,10 +197,10 @@ fn spawn_start(fix: &Fix, server: &str) -> std::process::Output {
     let id = child.id();
     let (done, wait) = std::sync::mpsc::channel::<()>();
     let timer = std::thread::spawn(move || {
-        // A message or a closed channel means the child ended; only a timeout kills it.
-        if wait
-            .recv_timeout(std::time::Duration::from_secs(120))
-            .is_err()
+        // A message or a closed channel means the child ended (its pid may be reused); only a
+        // timeout kills it.
+        if let Err(std::sync::mpsc::RecvTimeoutError::Timeout) =
+            wait.recv_timeout(std::time::Duration::from_secs(120))
         {
             let _ = Command::new("kill").arg("-9").arg(id.to_string()).status();
         }
