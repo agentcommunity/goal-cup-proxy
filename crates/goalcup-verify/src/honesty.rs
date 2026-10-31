@@ -24,7 +24,8 @@ struct Conn {
     model: bool,
     /// A tunnel to a host that earlier finished a decrypted connection with this fingerprint.
     after_trust: bool,
-    /// GAPs on the connection or on one of its streams: a loss `conn_bytes` need not guess at.
+    /// Conn GAPs plus WebSocket stream GAPs of unknown size (lost 0): a loss `conn_bytes` need
+    /// not guess at.
     gaps: u64,
     lost: u64,
     /// A GAP names this tunnel's own reason (PRD-01 section 4).
@@ -242,23 +243,24 @@ impl Honesty {
         let s = |k: &str| m.get(k).and_then(Value::as_str);
         if kind == StreamKind::Conn {
             let host = s("host").unwrap_or_default();
-            let (on, listed) = (self.list_kind(host), s("listed").is_some());
+            let on = self.list_kind(host);
             let (on_kind, on_src) = on.unwrap_or_default();
-            let kind = s("kind").unwrap_or(on_kind);
+            let host_kind = s("kind").unwrap_or(on_kind);
             let src = s("listed").unwrap_or(on_src);
             // A host the participant or the config listed is the harness's model host by their
-            // own word, whatever kind it carries (PRD-01 section 7: always `other`).
-            let model = (listed || on.is_some())
-                && (matches!(kind, "provider" | "gateway")
+            // own word, whatever kind it carries (PRD-01 section 7: always `other`). The conn's
+            // own word or the start event's list: a recorder that mislabels a listed host as
+            // unlisted must not hide a blind relay.
+            let listed = s("listed").is_some() || on.is_some();
+            let model = listed
+                && (matches!(host_kind, "provider" | "gateway")
                     || matches!(src, "participant" | "config"));
             let mut c = Conn {
                 host: host.into(),
                 reason: s("reason").unwrap_or("unknown").into(),
                 fp: s("fingerprint").map(Into::into),
                 tunnel: s("mode") == Some("tunnel"),
-                // The conn's own word, or the start event's list: a recorder that mislabels a
-                // listed host as unlisted must not hide a blind relay.
-                listed: listed || on.is_some(),
+                listed,
                 model,
                 ..Default::default()
             };
