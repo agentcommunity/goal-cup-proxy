@@ -226,7 +226,7 @@ fn start(ctx: UploadCtx, word: Arc<watch::Sender<Option<ServerWord>>>) -> Option
         wrap: Mutex::new(None),
         tried: AtomicBool::new(false),
     });
-    let thread = |upload, body| {
+    let thread = |upload, body: fn(&Shared, &Receiver<()>)| {
         let (wake, handle) = launch(&sh, upload, body)?;
         Some(Thread {
             upload,
