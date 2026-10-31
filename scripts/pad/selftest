@@ -1,0 +1,174 @@
+#!/usr/bin/env python3.11
+"""PRD-12 section 12: the pad must fail before it is trusted. `scripts/pad/selftest [--bin DIR]` (DIR holds the
+goalcup-verify build, default target/release; no key, no network) runs the offline controls K2, K6, K7, K9, K10
+and K11 through the verifier and check.py and compares each row with what the control must give. K5, K7 (real) and
+K8 are real runs, not here. Fixtures, under scripts/pad/fixtures/, each a synthetic folder without a secret:
+  <name>-part/     an entry folder (rec/ and the native files)      <name>-fetched/  fetch-run's fetched/<entry>/
+  k2-part, k2-fetched (PRD-08 check_run1_shape.rs, GOALCUP_FIXTURES_OUT); k7-part, k7-fetched, the clean pair
+  that K6, K9 and K10 tamper with; k11-a, k11-b, k11-c (part only), k11-d and k11-d-fetched (PRD-09 history).
+A control whose fixtures are absent is "not run". Exit 0: every control ran as wanted; 1: one differed; 3: none
+differed but one did not run, so a missing fixture never reads as trusted. C3 is never wanted here: the setup
+script's planted values (K5) and the box's other scans are not part of an offline fold. Writes pad-out/selftest.json.
+"""
+import argparse, json, os, shutil, subprocess, sys, tempfile  # noqa: E401
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+REPO, FIX, ENTRY = os.path.dirname(os.path.dirname(HERE)), os.path.join(HERE, "fixtures"), "e0123456789abcdef"
+sys.path.insert(0, HERE)
+import check as pc  # noqa: E402  the same S6 key reads as the pad's own check
+
+
+class NotRun(Exception):  # the fixture cannot carry this control's tamper
+    pass
+
+
+def fetch_edit(fn):
+    def edit(f):
+        p = os.path.join(f, "fetch.json")
+        doc = json.load(open(p))
+        fn(doc, f)
+        json.dump(doc, open(p, "w"))
+    return edit
+
+
+def flip(f):  # K6: one byte of the server copy's record
+    p = os.path.join(f, "rec.gcr.zst")
+    b = bytearray(open(p, "rb").read())
+    b[len(b) // 2] ^= 1
+    open(p, "wb").write(b)
+
+
+def drop(doc, f):  # K6: the middle chunk leaves fetch.json and its bytes (the chunks' `bytes`, S13) leave rec.gcr.zst
+    cs = doc["chunks"]
+    if len(cs) < 2:
+        raise NotRun("k7-fetched has one chunk, no middle one to drop")
+    i, p = len(cs) // 2, os.path.join(f, "rec.gcr.zst")
+    at, b = sum(c["bytes"] for c in cs[:i]), open(p, "rb").read()
+    open(p, "wb").write(b[:at] + b[at + cs[i]["bytes"]:])
+    del cs[i]
+
+
+def empty_usage(run):  # K10: the usage summary says no tokens
+    d = os.path.join(run, "verify", "usage")
+    if not os.path.isdir(d):
+        raise NotRun("the usage reader wrote no summary")
+    for n in (n for n in os.listdir(d) if n.endswith(".json")):
+        doc = json.load(open(os.path.join(d, n)))
+        doc["tokens"]["merged"] = dict.fromkeys(pc.S7_TOKENS, 0)
+        json.dump(doc, open(os.path.join(d, n), "w"))
+
+
+def ids(result, *names):
+    return dict.fromkeys(names, result)
+
+
+K2 = ("gap_has_end", "streams_closed", "server_counts_match", "wire_keeps_up", "threads_match", "subagents_present")
+ALLC = dict.fromkeys(("C1", "C2", "C4", "C5", "C6"), "PASS")
+# label, part, fetched, wanted checks, wanted finding ids, tampers (fetch edit, status count, after the verifier)
+CONTROLS = [
+    ("K2", "k2-part", "k2-fetched", {"C1": "FAIL", "C2": "FAIL", "C4": "FAIL", "C6": "FAIL"}, ids("fail", *K2),
+     {"count": lambda n: 1736}),  # the fake status.json: run 1's finish line
+    ("K6a", "k7-part", "k7-fetched", {"C4": "FAIL"}, {}, {"edit": flip}),
+    ("K6b", "k7-part", "k7-fetched", {"C4": "FAIL"}, {}, {"edit": fetch_edit(drop)}),
+    ("K6c", "k7-part", "k7-fetched", {"C4": "FAIL", "C6": "FAIL"}, {},  # C6 too: C6 reads fetch.json's count as well
+     {"edit": fetch_edit(lambda d, f: d.update(model_requests=d["model_requests"] + 1))}),
+    ("K7", "k7-part", "k7-fetched", ALLC, {}, {}),
+    ("K9", "k7-part", "k7-fetched", {"C6": "FAIL"}, {}, {"count": lambda n: n + 1}),
+    ("K10", "k7-part", "k7-fetched", {"C5": "FAIL"}, {}, {"after": empty_usage}),
+    ("K11a", "k11-a", None, {"C1": "FAIL"}, ids("fail", "history_complete"), {}),
+    ("K11b", "k11-b", None, {"C1": "PASS"}, {}, {}),
+    ("K11c", "k11-c", None, {"C1": "PASS"}, ids("skip", "history_complete"), {}),
+    ("K11d", "k11-d", "k11-d-fetched", ALLC, ids("skip", "threads_match", "wire_keeps_up"), {}),
+]
+
+
+def verify(run, tool, fetched):
+    """The commands of `pad-run <dir> verify` (check-local, check-server, secrets, usage), spelled out: pad-run's own
+    state (settings, a started harness, the watch) is more than an offline fold has."""
+    rel, out = os.path.join("fetched", ENTRY), {}
+    cmds = [("check-local", ["check", "--json", "--known", "known", ENTRY])]
+    cmds += [("check-server", ["check", "--json", "--server", rel, "--local", ENTRY, "--known", "known"])] * bool(fetched)
+    cmds += [("secrets", ["secrets", "--known", "known", ENTRY] + [rel] * bool(fetched)),
+             ("usage", ["usage", rel if fetched else ENTRY, "--json", "--out", "verify/usage"])]
+    for name, argv in cmds:
+        r = subprocess.run([tool] + argv, cwd=run, capture_output=True, text=True, timeout=900)
+        out[name] = r.returncode
+        if name != "usage":
+            open(os.path.join(run, "verify", name + ".json"), "w").write(r.stdout)
+    json.dump(out, open(os.path.join(run, "verify", "exits.json"), "w"))
+
+
+def run_control(part, fetched, mods, tool):
+    """Assembles a run folder as pad-run's verify step leaves it, runs check.py on it: (row, finding results)."""
+    with tempfile.TemporaryDirectory(prefix="selftest-") as run:
+        shutil.copytree(os.path.join(FIX, part), os.path.join(run, ENTRY))
+        os.makedirs(os.path.join(run, "verify"))
+        open(os.path.join(run, "known"), "w").close()  # no known value: a fixture holds none
+        if fetched:
+            shutil.copytree(os.path.join(FIX, fetched), os.path.join(run, "fetched", ENTRY))
+            if mods.get("edit"):
+                mods["edit"](os.path.join(run, "fetched", ENTRY))
+        verify(run, tool, fetched)
+        local = pc.load(run, "verify/check-local.json")
+        ents = [e for e in pc.dig(local, "s6_entries") or [] if isinstance(e, dict)]
+        n = sum(pc.dig(e, "s6_requests") or 0 for e in ents)
+        n = mods.get("count", lambda n: n)(n)
+        status = {"mode": "sealed", "written": {"model_requests": n, "off_ms": sum(pc.dig(e, "s6_off") or 0 for e in ents)},
+                  "seal": {"reason": "harness_exit"}}
+        json.dump(status, open(os.path.join(run, "status.json"), "w"))
+        json.dump({"connector": "selftest", "case": "direct", "mode": "micro", "server": "staging" if fetched else "off",
+                   "keep": True, "run": "selftest", "entry": ENTRY, "commits_since_start": 1, "known_box": True,
+                   "end_screen_requests": n}, open(os.path.join(run, "meta.json"), "w"))
+        if mods.get("after"):
+            mods["after"](run)
+        subprocess.run([sys.executable, os.path.join(HERE, "check.py"), run], capture_output=True, check=True)
+        server = pc.load(run, "verify/check-server.json")
+        found = [e for d in (local, server) for e in pc.dig(d, "s6_entries") or [] if isinstance(e, dict)]
+        return pc.load(run, "row.json"), found
+
+
+def compare(row, found, want, finds):
+    got = row["checks"]
+    bad = ["%s %s, wanted %s" % (c, got[c], w) for c, w in want.items() if got[c] != w]
+    bad += ["%s FAIL, none wanted" % c for c in pc.CHECKS if c not in want and got[c] == "FAIL"]  # C3 too: never wanted
+    bad += ["%s %s, wanted %s" % (i, pc.worst(found, i).get("result"), w) for i, w in finds.items()
+            if pc.worst(found, i).get("result") != w]
+    return bad
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--bin", default=os.path.join(REPO, "target", "release"))
+    tool, results = os.path.join(os.path.abspath(ap.parse_args().bin), "goalcup-verify"), {}
+    for label, part, fetched, want, finds, mods in CONTROLS:
+        gone = [d for d in (part, fetched) if d and not os.path.isdir(os.path.join(FIX, d))]
+        if gone or not os.access(tool, os.X_OK):
+            why = "scripts/pad/fixtures/%s missing" % gone[0] if gone else "no goalcup-verify at " + tool
+            results[label] = {"state": "not run", "saw": why}
+            print("%s: not run (%s)" % (label, why))
+            continue
+        try:
+            row, found = run_control(part, fetched, mods, tool)
+            bad = compare(row, found, want, finds)
+            saw = ", ".join("%s %s" % kv for kv in sorted(row["checks"].items())) + "; failing ids: " + ", ".join(
+                sorted({e for e in (c.get("id") for x in found for c in pc.dig(x, "s6_checks") or [] if c.get("result") == "fail") if e}))
+        except NotRun as x:
+            results[label] = {"state": "not run", "saw": str(x)}
+            print("%s: not run (%s)" % (label, x))
+            continue
+        except Exception as x:  # a broken control never reads as a pass (a fixture holds no secret, so the message is shown)
+            bad, saw = ["error %s %s" % (type(x).__name__, str(x)[:120])], ""
+        results[label] = {"state": "FAIL" if bad else "PASS", "saw": saw, "differs": bad}
+        print("%s: %s  %s%s" % (label, results[label]["state"], saw, "  DIFFERS: " + "; ".join(bad) if bad else ""))
+    ran = [r["state"] != "not run" for r in results.values()]
+    code = 1 if any(r["state"] == "FAIL" for r in results.values()) else 0 if all(ran) else 3
+    commit = subprocess.run(["git", "-C", REPO, "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip() or None
+    os.makedirs(os.path.join(REPO, "pad-out"), exist_ok=True)
+    json.dump({"commit": commit, "controls": results, "all_ran": all(ran), "exit": code},
+              open(os.path.join(REPO, "pad-out", "selftest.json"), "w"), indent=1, sort_keys=True)
+    print("selftest: %s" % ("all controls ran as wanted" if code == 0 else "a control differed" if code == 1 else "some controls did not run, not trusted"))
+    return code
+
+
+if __name__ == "__main__":
+    sys.exit(main())
