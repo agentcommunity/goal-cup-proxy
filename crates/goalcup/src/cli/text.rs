@@ -189,12 +189,10 @@ pub fn no_harness(installed: &[&str]) -> String {
 /// A launch plan refusal (PRD-11 section 5) as the step to fix. It names files and keys only.
 pub fn refusal(r: &Refusal) -> String {
     match r {
-        Refusal::HomeLocked { home } => {
-            format!(
-                "a run uses \"{}\" now. Run this again once it has ended.",
-                home.display()
-            )
-        }
+        Refusal::HomeLocked { home } => format!(
+            "a run uses \"{}\" now. Run this again once it has ended.",
+            home.display()
+        ),
         Refusal::SettingSet { file, key } => format!(
             "\"{}\" sets {key}, which routes around the recorder. Remove it, then run this again.",
             file.display()
@@ -258,11 +256,7 @@ pub fn no_sleep_lock(why: &str) -> String {
 pub const SERVER_OFF: &str = "Server check skipped: GOALCUP_SERVER=off, so nothing is uploaded.";
 
 pub fn server_unreachable(e: &ServerError) -> String {
-    let said = match e {
-        ServerError::Transport(cause) => format!("goalcup could not reach its server ({cause})."),
-        e => format!("goalcup checked its server: {e}."),
-    };
-    format!("{said} A run needs it to start.")
+    format!("goalcup checked its server: {e}. A run needs it to start.")
 }
 
 /// PRD-10 section 3 steps 3 to 5: the repository, the approval and the open run.
