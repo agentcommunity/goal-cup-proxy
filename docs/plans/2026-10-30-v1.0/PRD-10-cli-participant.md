@@ -1556,3 +1556,22 @@ What the pad calls, as merged (PRD-12 note):
 - **Still open (slice 10):** `continue` (`close_dead_entry`), `recover` and `seal` on a dead entry
   (acceptance 10 and 11) wait for `watchdog::recover` and `pipeline::close_dead_entry`. This slice
   delivers the start hand-over and the end screen only; it does not close PRD-10.
+
+### 2026-10-31, replan after PRD-10 slice 9 (merge 25102adc)
+
+- Merged: the start hand-over to `watchdog::run` and the finish handling (end screen, exit 78 as a recorded
+  part, no SIGTERM translation). Review ended with no open defect and four nits. Not a gate item: **A6** and
+  **A7** are worth taking, **B8** and **B9** are cosmetic.
+- **A6 (take in slice 10, in `finish.rs`):** `status.json` is written just before the recorder sends `ready`.
+  A recorder that dies in that gap gives `NOT_STARTED` (3) with an unsealed `status.json` and no harness, and
+  `closing()` picks the "could not read the final counts" text. Rule: exit code `NOT_STARTED` with an unsealed
+  `status.json` whose `harness` is none uses the "Goal Cup could not start recording, so <harness> was not
+  started" text (step 9). Do not decide this on the file being absent alone.
+- **A7 (tests only):** in the `cli_start.rs` timer, kill only on `Err(RecvTimeoutError::Timeout)`. A
+  disconnected channel means the child already ended; killing then risks a reused pid.
+- B8 (three plain lets in `hand_over`) and B9 (merge the exit-7 and exit-78 hand-over tests) only when the file
+  is touched anyway.
+- **Slice 10 is still the gated half:** `continue`, `recover` and `seal` on a dead entry (acceptance 10 and 11)
+  need `watchdog::recover` and `pipeline::close_dead_entry`. `watchdog::run` is on integration; the other two
+  are not (PRD-06 owns `close_dead_entry` via `dead.rs`). Builders poll for the symbols, as before; a builder
+  whose symbols never arrive logs a stop line and the work is replanned again. No locked ledger item is touched.
