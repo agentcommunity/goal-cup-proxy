@@ -24,9 +24,7 @@ pub mod tunnel;
 pub mod ws;
 
 use crate::connector::{Decision, HostList, Kind, Source};
-use crate::pipeline::{
-    EndReason, Mono, OpenFlags, Recorder, StreamHandle, StreamKind, fds,
-};
+use crate::pipeline::{EndReason, Mono, OpenFlags, Recorder, StreamHandle, StreamKind, fds};
 use bytes::Bytes;
 use ca::RunCa;
 use connect::{First, Hello, NoHead, PrefixedIo, RefusalNotes, fingerprint_hex16};

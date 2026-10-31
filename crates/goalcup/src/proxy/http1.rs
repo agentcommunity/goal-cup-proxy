@@ -169,7 +169,12 @@ impl Http1 {
             .into_iter()
             .flatten()
         {
-            body.end(t, EndReason::DecodeError, Some((reason, tail.clone())), None);
+            body.end(
+                t,
+                EndReason::DecodeError,
+                Some((reason, tail.clone())),
+                None,
+            );
         }
         if let Some(ws) = &mut self.ws {
             ws.stop(t, tail.clone());

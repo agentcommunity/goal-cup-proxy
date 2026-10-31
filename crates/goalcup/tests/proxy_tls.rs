@@ -396,13 +396,22 @@ async fn four_parallel_h2_requests_are_recorded_on_one_conn() {
     );
     let opened = opens(&calls);
     let of = |kind: StreamKind| (opened.iter()).filter(move |o| o.1 == kind && o.2["h2"].is_u64());
-    let ids: BTreeSet<_> = of(StreamKind::HttpReq).map(|o| o.2["h2"].as_u64()).collect();
+    let ids: BTreeSet<_> = of(StreamKind::HttpReq)
+        .map(|o| o.2["h2"].as_u64())
+        .collect();
     assert_eq!(ids.len(), 4, "four requests on four streams");
     for (_, _, meta) in of(StreamKind::HttpReq) {
         assert_eq!(meta["path"], "/v1/models");
-        assert!(meta["headers"].as_array().unwrap().contains(&json!([":path", "/v1/models"])));
+        assert!(
+            meta["headers"]
+                .as_array()
+                .unwrap()
+                .contains(&json!([":path", "/v1/models"]))
+        );
     }
-    let answered: Vec<_> = of(StreamKind::HttpResp).map(|o| data_of(&calls, o.0)).collect();
+    let answered: Vec<_> = of(StreamKind::HttpResp)
+        .map(|o| data_of(&calls, o.0))
+        .collect();
     assert_eq!(answered, vec![b"hi".to_vec(); 4]);
     let lost = |g: &Call| matches!(g, Call::Gap(_, GapReason::H2Unsupported, ..));
     assert!(!gaps(&calls).iter().any(lost));

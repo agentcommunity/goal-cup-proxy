@@ -480,7 +480,12 @@ fn h2_head(sid: u32, end: bool, fields: &[(&str, &str)]) -> Vec<u8> {
 async fn an_h2_stop_names_the_rest_and_relays_it_whole() {
     let api = [(":scheme", "https"), (":authority", "api.example.com")];
     let req = |sid, method, end| {
-        let f = [&[(":method", method)][..], &api[..], &[(":path", "/v1/m")][..]].concat();
+        let f = [
+            &[(":method", method)][..],
+            &api[..],
+            &[(":path", "/v1/m")][..],
+        ]
+        .concat();
         h2_head(sid, end, &f)
     };
     let settings = h2_frame(4, 0, 0, &[]);
@@ -533,7 +538,11 @@ async fn an_h2_stop_names_the_rest_and_relays_it_whole() {
                     _ => None,
                 })
                 .collect();
-            assert_eq!(streams.len(), 2, "stream 1's request and response, nothing later");
+            assert_eq!(
+                streams.len(),
+                2,
+                "stream 1's request and response, nothing later"
+            );
             let lost = (fault.len() + later.len() + tail.len()) as u64;
             let mut want: Vec<_> = streams
                 .iter()

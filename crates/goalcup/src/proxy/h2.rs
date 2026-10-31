@@ -207,7 +207,12 @@ impl H2 {
         let (reason, tail) = fault.gap();
         for s in std::mem::take(&mut self.streams).into_values() {
             for half in s.halves {
-                half.end(t, EndReason::DecodeError, Some((reason, tail.clone())), None);
+                half.end(
+                    t,
+                    EndReason::DecodeError,
+                    Some((reason, tail.clone())),
+                    None,
+                );
             }
         }
         self.stopped = true;
@@ -393,7 +398,10 @@ impl H2 {
 
     fn data(&mut self, dir: Dir, t: Mono, id: u32, piece: &[u8]) {
         let unsent = self.unsent && dir == Dir::Up;
-        let half = self.streams.get_mut(&id).map(|s| &mut s.halves[dir as usize]);
+        let half = self
+            .streams
+            .get_mut(&id)
+            .map(|s| &mut s.halves[dir as usize]);
         match half {
             Some(Half::Open(body)) => {
                 let _ = body.advance(t, piece);
@@ -459,7 +467,9 @@ impl H2 {
         } else {
             OpenFlags::DECRYPTED
         };
-        let h = self.rec.open(StreamKind::HttpReq, self.conn, 0, 0, flags, meta);
+        let h = self
+            .rec
+            .open(StreamKind::HttpReq, self.conn, 0, 0, flags, meta);
         let req = h.sid();
         let half = self.half(h, tunnel, codings, unsent, t);
         if let Some(s) = self.streams.get_mut(&id) {
@@ -493,7 +503,9 @@ impl H2 {
             "decoded": codings.is_ok(),
         });
         let flags = OpenFlags::DECRYPTED;
-        let h = self.rec.open(StreamKind::HttpResp, self.conn, req, 0, flags, meta);
+        let h = self
+            .rec
+            .open(StreamKind::HttpResp, self.conn, req, 0, flags, meta);
         let half = self.half(h, tunnel, codings, 0, t);
         if let Some(s) = self.streams.get_mut(&id) {
             s.halves[1] = half;
@@ -525,7 +537,12 @@ fn field<'a>(fields: &'a [(String, String)], name: &str) -> Option<&'a str> {
 fn reset(streams: impl Iterator<Item = Stream>, t: Mono, code: u32) {
     for s in streams {
         for half in s.halves {
-            half.end(t, EndReason::Interrupted, None, Some(("h2_error", json!(code))));
+            half.end(
+                t,
+                EndReason::Interrupted,
+                None,
+                Some(("h2_error", json!(code))),
+            );
         }
     }
 }
@@ -553,7 +570,8 @@ fn codings(fields: &[(String, String)]) -> Result<Vec<Coding>, Unsupported> {
 impl Parser for H2 {
     fn feed(&mut self, dir: Dir, t: Mono, bytes: &[u8]) -> Result<(), Stop> {
         self.seen += bytes.len() as u64;
-        self.take(dir, t, bytes).map_err(|fault| self.stop(t, fault))
+        self.take(dir, t, bytes)
+            .map_err(|fault| self.stop(t, fault))
     }
 
     /// Takes the client bytes never forwarded; streams still open end interrupted.
@@ -565,13 +583,15 @@ impl Parser for H2 {
             late = match self.take(Dir::Up, t, unsent) {
                 Err(fault) => Some(self.stop(t, fault)),
                 // A frame or header block the close cut short: recorded in no stream.
-                Ok(()) => Some(self.held(t)).filter(|h| h.0 > 0).map(|(held, since)| Stop {
-                    reason: GapReason::DecodeFailed,
-                    tail: None,
-                    held,
-                    since,
-                    at_close: true,
-                }),
+                Ok(()) => Some(self.held(t))
+                    .filter(|h| h.0 > 0)
+                    .map(|(held, since)| Stop {
+                        reason: GapReason::DecodeFailed,
+                        tail: None,
+                        held,
+                        since,
+                        at_close: true,
+                    }),
             };
         }
         for s in std::mem::take(&mut self.streams).into_values() {
