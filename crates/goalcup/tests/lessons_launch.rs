@@ -320,8 +320,9 @@ fn ctrl_c_reaches_the_harness_and_the_watchdog_lives() {
     );
     assert!(text.contains("watchdog alive"), "{text}");
     let mask = text
-        .lines()
-        .find_map(|line| line.trim().strip_prefix("ign="))
+        .split("ign=")
+        .nth(1)
+        .and_then(|rest| rest.split_whitespace().next())
         .unwrap_or_else(|| panic!("harness printed no mask:\n{text}"));
     let ignored = u64::from_str_radix(mask.trim(), 16).expect("hex mask");
     for signal in [libc::SIGINT, libc::SIGQUIT, libc::SIGTSTP] {
