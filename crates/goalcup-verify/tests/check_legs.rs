@@ -189,15 +189,17 @@ fn files(dir: &Path, list: &[(&str, u64)]) -> (i32, String, Value) {
 fn a_harness_file_needs_a_stream_of_its_size_or_a_snapshot() {
     let d = rec("manifest-whole", false);
     let db = ("fake:state.db", 123_456);
-    assert_eq!(files(&d, &[(S1, 22), db]).1, "pass");
+    // A pass of the manifest part never raises a skip: no parentage was read here.
+    assert_eq!(files(&d, &[(S1, 22), db]).1, "skip");
     // No stream: fail, and the first finding names the path. A wrong size is no stream of its size.
     let (code, res, first) = files(&d, &[(S1, 22), ("fake:sessions/s2.jsonl", 5)]);
     assert_eq!(
         (code, res.as_str(), first),
         (2, "fail", json!("fake:sessions/s2.jsonl"))
     );
-    assert_eq!(files(&d, &[(S1, 30)]).1, "fail");
-    assert_eq!(files(&d, &[("fake:other.db", 1)]).1, "fail");
+    for bad in [&[(S1, 30)][..], &[("fake:other.db", 1)][..]] {
+        assert_eq!(files(&d, bad).1, "fail");
+    }
     // Without the flag the check is as before.
     let (_, v) = check(&d, &[]);
     assert_eq!(item(&v, "subagents_present")["result"], "skip");

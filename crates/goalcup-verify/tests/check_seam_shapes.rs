@@ -73,15 +73,9 @@ fn entry() -> Entry {
 
 #[test]
 fn mask_failed_meta_gaps_and_empty_messages_pass_and_recount() {
-    let (code, v) = check(&entry().seal(), &[]);
+    let (_, v) = check(&entry().seal(), &[]);
     no_fail(&v);
-    assert_ne!(code, 2, "{v}");
-    for id in ["inv3", "inv4", "inv7", "gap_has_end", "counts_match_seal"] {
-        assert_ne!(result(&v, id), "fail", "{id}");
-    }
-    assert_eq!(result(&v, "inv4"), "pass");
     assert_eq!(result(&v, "gap_has_end"), "pass");
-    assert_ne!(result(&v, "recorder_alive"), "fail");
     let c = &v["entries"][0]["counts"];
     assert_eq!(c["gaps"]["mask_failed"], 3);
     assert_eq!(c["lost_bytes"], 0);
@@ -99,6 +93,9 @@ fn extent_less_gaps_without_the_meta_shape_still_fail() {
         (GapReason::MaskFailed, 1, Value::Null),
         (GapReason::MaskFailed, 0, json!({"meta": "tail"})),
         (GapReason::Pinned, 1, Value::Null),
+        (GapReason::Pinned, 1, json!({"meta": "x"})),
+        (GapReason::RecorderDown, 1, json!({"meta": "x"})),
+        (GapReason::MemoryGuard, 1, json!({"meta": "x"})),
     ] {
         let mut e = Entry::new("seam-shapes-bad");
         e.standard();

@@ -27,6 +27,13 @@ pub struct Cover {
     pub down: bool,
 }
 
+/// A timed call for the report's timeline.
+pub struct Timed {
+    pub native: bool,
+    pub err: bool,
+    pub wall: u64,
+}
+
 pub struct Out {
     pub harness_log: &'static str,
     pub provider_errors: Value,
@@ -38,7 +45,7 @@ pub struct Out {
     /// The covers, and the timed calls the two checks count (native?, error?, wall) for the
     /// report's timeline.
     pub covers: Vec<Cover>,
-    pub timed: Vec<(bool, bool, u64)>,
+    pub timed: Vec<Timed>,
 }
 
 /// What the harness's own log gave, as the report's `harness_log`.
@@ -139,7 +146,10 @@ pub fn judge(t: &CallTable, covers: &[Cover]) -> (Vec<Check>, Out) {
         coverage: line,
         covers: covers.to_vec(),
         timed: (x.calls().filter(|r| r.leg == Leg::Wire || x.known(r)))
-            .filter_map(|r| Some((r.leg == Leg::Native, r.outcome.is_error(), at(r)?)))
+            .filter_map(|r| {
+                let native = r.leg == Leg::Native;
+                Some(Timed { native, err: r.outcome.is_error(), wall: at(r)? })
+            })
             .collect(),
     };
     (vec![keeps, matched, subagents(&x)], out)
@@ -517,18 +527,20 @@ pub fn manifest(c: &mut Check, files: &[(String, u64)], s: &Streams, covers: &[C
     let lost: Vec<(&String, bool)> = (files.iter().filter(|f| !ok(f)))
         .map(|(p, _)| (p, down || s.gapped.contains(p)))
         .collect();
-    let res = match lost.iter().any(|l| !l.1) {
-        _ if lost.is_empty() => Res::Pass,
-        true => Res::Fail,
-        false => Res::Named,
+    let unnamed = lost.iter().find(|l| !l.1);
+    let res = match (lost.first(), unnamed) {
+        (None, _) => Res::Pass,
+        (_, Some(_)) => Res::Fail,
+        _ => Res::Named,
     };
+    let named_by_down = lost.iter().filter(|l| l.1 && !s.gapped.contains(l.0)).count();
     c.facts.insert("files".into(), files.len().into());
     c.facts
         .insert("files_without_stream".into(), lost.len().into());
-    if res == Res::Pass && c.result == Res::Skip {
-        c.result = Res::Pass;
-    }
-    let Some((f, _)) = lost.iter().find(|l| (res == Res::Fail) != l.1) else {
+    c.facts
+        .insert("files_named_by_recorder_down".into(), named_by_down.into());
+    // A pass or a skip stays as it is: the manifest part never raises a skip (PRD-12 section 8).
+    let Some((f, _)) = unnamed.or(lost.first()) else {
         return;
     };
     if res > c.result {
