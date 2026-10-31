@@ -69,6 +69,18 @@ pub(crate) fn spawn(
         .expect("the mask worker starts")
 }
 
+/// An item no writer will take (behind the final marker, or on an entry sealed before this boot):
+/// its bytes go to the `after_stop` count, which `after_seal` names.
+pub(super) fn drop_late(rec: &Recorder, item: &Item) {
+    let lost = match item {
+        Item::Data { bytes, .. } => bytes.len() as u64,
+        Item::Gap { lost, .. } => lost.unwrap_or(0),
+        _ => 0,
+    };
+    rec.taken(item.held());
+    rec.dropped(item.held(), lost);
+}
+
 struct Worker {
     rec: Recorder,
     masker: Masker,
@@ -118,16 +130,8 @@ impl Worker {
     fn item(&mut self, item: Item) {
         let held = item.held();
         if self.done {
-            // Behind the final marker: the writer is gone. The bytes go to the `after_stop`
-            // count, which `after_seal` names.
-            let lost = match &item {
-                Item::Data { bytes, .. } => bytes.len() as u64,
-                Item::Gap { lost, .. } => lost.unwrap_or(0),
-                _ => 0,
-            };
-            self.rec.taken(held);
-            self.rec.dropped(held, lost);
-            return;
+            // Never reached: the seal's stops wait for every call in flight before each marker.
+            return drop_late(&self.rec, &item);
         }
         let item = match item {
             Item::Mark(m) => return self.mark(m, held),

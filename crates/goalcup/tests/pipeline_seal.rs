@@ -10,7 +10,7 @@ mod common;
 use bytes::Bytes;
 use common::recorder::{real, records};
 use goalcup::pipeline::{
-    Counts, EndReason, GapReason, OpenFlags, Recorder, StreamKind, entry_totals,
+    Counts, EndReason, GapReason, OpenFlags, Recorder, SLOW_MARKER, StreamKind, entry_totals,
 };
 use goalcup::watchdog::SealReason;
 use goalcup_format::{IndexKind, Record};
@@ -140,6 +140,29 @@ fn a_wire_call_after_the_stop_is_in_the_after_stop_gap() {
             .iter()
             .any(|r| matches!(r, Record::Open { sid, .. } if *sid == other.sid()))
     );
+}
+
+/// Points 1 and 3: an offer that read the stop flag unset and pushes only after the seal began is
+/// still written whole, because the seal waits for every call in flight before its markers.
+#[test]
+fn an_offer_in_flight_at_the_stop_is_written() {
+    let dir = tempfile::tempdir().unwrap();
+    let rec = real(dir.path());
+    let mut req = rec.open(StreamKind::HttpReq, 0, 0, 0, REQ, json!({}));
+    let sid = req.sid();
+    let piece = [SLOW_MARKER, b"held in flight"].concat();
+    let (r, p) = (rec.clone(), piece.clone());
+    let relay = std::thread::spawn(move || {
+        req.data(r.now(), Bytes::from(p));
+        req
+    });
+    std::thread::sleep(std::time::Duration::from_millis(100));
+    let recs = seal(&rec, dir.path());
+    drop(relay.join().unwrap());
+    let (data, lost, end) = stream(&recs, sid);
+    assert_eq!((data, lost), (piece.clone(), 0));
+    assert_eq!(end, Some((EndReason::CutAtSeal, piece.len() as u64)));
+    assert!(after_stop(&recs).is_none());
 }
 
 /// Points 1 and 3 (R3-3): a native stream offered between the wire stop and the native finish is

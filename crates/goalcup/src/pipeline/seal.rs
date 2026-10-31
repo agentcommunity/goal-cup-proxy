@@ -180,19 +180,26 @@ impl Sealer {
             workspace_head: head,
             totals,
         };
-        if let Some(u) = uploader {
-            u.finish(
-                WrapUp::starting(rec.now(), &Policy::default()),
-                facts.clone(),
-            );
-        }
-        // Bytes relayed after the seal's LINK cannot be recorded: their count goes to the log
-        // too (section 11 step 6).
-        let late = rec.after_stop().0.saturating_sub(after_bytes);
-        if late > 0 {
-            log::line(&entry_dir, "after_seal", &[("bytes", Fact::N(late))]);
-        }
+        wrap_up(&rec, &entry_dir, uploader, &facts, after_bytes);
         facts
+    }
+}
+
+/// The uploader's wrap-up (section 11 step 7), then the bytes relayed after the seal's tail was
+/// taken (`at_seal`, just before its final marker), which no record holds, to the log too (step 6).
+fn wrap_up(
+    rec: &Recorder,
+    entry_dir: &Path,
+    uploader: Option<UploadHandle>,
+    facts: &SealFacts,
+    at_seal: u64,
+) {
+    if let Some(u) = uploader {
+        u.finish(WrapUp::starting(rec.now(), &Policy::default()), facts.clone());
+    }
+    let late = rec.after_stop().0.saturating_sub(at_seal);
+    if late > 0 {
+        log::line(entry_dir, "after_seal", &[("bytes", Fact::N(late))]);
     }
 }
 
@@ -205,18 +212,36 @@ pub(super) fn remove_key(entry_dir: &Path) {
 }
 
 /// The wrap-up on an entry sealed before this boot: the seal's reason and head from the sealed
-/// `status.json` (else `reason`), and the totals counted from the files.
-pub(super) fn wrap_up_sealed(entry_dir: &Path, reason: SealReason, uploader: Option<UploadHandle>) {
-    let Some(u) = uploader else {
-        return;
-    };
+/// `status.json` (else `reason`), and the totals counted from the files. Every byte this boot
+/// relayed was after the seal, so all go to the log and to `after_seal` in `status.json`.
+pub(super) fn wrap_up_sealed(
+    rec: &Recorder,
+    entry_dir: &Path,
+    reason: SealReason,
+    uploader: Option<UploadHandle>,
+) {
     let seal = Status::read(entry_dir).and_then(|s| s.seal);
     let facts = SealFacts {
         reason: seal.as_ref().map_or(reason, |s| s.reason),
         workspace_head: seal.and_then(|s| s.workspace_head),
         totals: counts::entry_totals(entry_dir),
     };
-    u.finish(WrapUp::starting(Mono::now(), &Policy::default()), facts);
+    wrap_up(rec, entry_dir, uploader, &facts, 0);
+    let late = rec.after_stop().0;
+    if late > 0 {
+        sealed_status(entry_dir, |s| {
+            s.after_seal.get_or_insert_with(Default::default).bytes += late;
+        });
+    }
+}
+
+/// The sealed `status.json` with `f` applied, the seal's own fields kept: a boot on an entry
+/// sealed before it names itself there, and its `after_seal` bytes.
+pub(super) fn sealed_status(entry_dir: &Path, f: impl FnOnce(&mut Status)) {
+    if let Some(mut s) = Status::read(entry_dir) {
+        f(&mut s);
+        let _ = s.write(entry_dir);
+    }
 }
 
 /// Sends a seal marker and waits for the writer's answer. None for the first marker, or when the
@@ -228,8 +253,8 @@ fn mark(rec: &Recorder, last: Option<Box<SealEnd>>) -> Option<Sealed> {
 }
 
 /// Keeps `after_seal` current each second while the process lives, and writes `status.json`
-/// with it (the status thread is stopped): the bytes relayed after the seal's LINK, which cannot
-/// be recorded, and the hosts of connections opened after the stop that carried bytes and were
+/// with it (the status thread is stopped): the bytes relayed after the seal's tail was taken
+/// (just before its final marker), which no record holds, and the hosts of connections opened after the stop that carried bytes and were
 /// not named at the seal, masked. A masker panic stars the hosts and keeps the count.
 fn after_seal(
     rec: Recorder,
@@ -243,13 +268,17 @@ fn after_seal(
         loop {
             std::thread::sleep(Duration::from_secs(1));
             let (bytes, conns) = rec.after_stop();
-            let new = conns.into_iter().filter(|c| !seen.contains(&c.0));
+            // `seen` is sorted, as `after_stop` returns it.
+            let new = conns.into_iter().filter(|c| seen.binary_search(&c.0).is_err());
             let mut hosts = Value::from(new.filter_map(|c| c.1).collect::<Vec<_>>());
             let masked = catch_unwind(AssertUnwindSafe(|| masker.mask_meta(&mut hosts)));
             if masked.is_err() {
                 hosts = star(&hosts);
             }
-            let hosts = serde_json::from_value(hosts).unwrap_or_default();
+            // One name per host, however many connections went to it.
+            let mut hosts: Vec<String> = serde_json::from_value(hosts).unwrap_or_default();
+            hosts.sort_unstable();
+            hosts.dedup();
             let bytes = bytes.saturating_sub(at_seal);
             board.set(|s| s.after_seal = Some(AfterSeal { bytes, hosts }));
             status::write(&rec, &entry_dir, &board);

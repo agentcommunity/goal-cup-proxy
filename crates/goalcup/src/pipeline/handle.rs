@@ -10,7 +10,6 @@ use bytes::Bytes;
 use goalcup_format::{EndReason, GapReason, StreamKind};
 use serde_json::Value;
 use std::ops::BitOr;
-use std::sync::atomic::Ordering;
 
 /// The largest DATA piece (PRD-01 section 3): bigger offers are split, with no copy, after the
 /// whole offer is admitted or dropped, so no queued piece keeps a dropped one's memory alive.
@@ -75,14 +74,7 @@ impl StreamHandle {
         conn_sid: Sid,
         from: u64,
     ) -> StreamHandle {
-        let wire = matches!(
-            kind,
-            StreamKind::Conn
-                | StreamKind::HttpReq
-                | StreamKind::HttpResp
-                | StreamKind::WsUp
-                | StreamKind::WsDown
-        );
+        let wire = is_wire(kind);
         let conn = kind == StreamKind::Conn;
         if conn {
             fds::conn_opened();
@@ -131,17 +123,18 @@ impl StreamHandle {
 
     /// After the seal's stop a call on this stream only counts (PRD-02 section 11 step 2).
     pub(super) fn stopped(&self) -> bool {
-        self.all_stopped() || (self.wire && self.rec.inner.wire_stopped.load(Ordering::Acquire))
+        self.rec.stopped(self.wire)
     }
 
     /// The seal stopped everything and closes what is still open itself.
     fn all_stopped(&self) -> bool {
-        self.rec.inner.all_stopped.load(Ordering::Acquire)
+        self.rec.stopped(false)
     }
 
     /// One piece; moves the offset by its length, written or dropped.
     pub fn data(&mut self, t: Mono, bytes: Bytes) {
         collect!(self.rec, Call::Data(self.sid, t, self.off, bytes.clone()));
+        let _f = self.rec.flight(self.wire);
         self.offer(t, None, bytes);
     }
 
@@ -151,6 +144,7 @@ impl StreamHandle {
             self.rec,
             Call::Ws(self.sid, t, self.off, opcode, fin, bytes.clone())
         );
+        let _f = self.rec.flight(self.wire);
         self.offer(t, Some(Ws { opcode, fin }), bytes);
     }
 
@@ -167,6 +161,7 @@ impl StreamHandle {
             self.rec,
             Call::Gap(self.sid, reason, start, end, self.off, lost, tail.clone())
         );
+        let _f = self.rec.flight(false);
         if self.all_stopped() || !self.opened {
             self.after_stop(lost.unwrap_or(0));
         } else {
@@ -199,6 +194,10 @@ impl StreamHandle {
             self.rec,
             Call::End(self.sid, t, reason, self.off, tail.clone())
         );
+        if self.conn && !self.opened {
+            self.rec.late_conn_ended(self.sid);
+        }
+        let _f = self.rec.flight(false);
         if self.all_stopped() {
             return;
         }
@@ -227,6 +226,11 @@ impl StreamHandle {
         if self.stopped() {
             self.after_stop(n);
             return;
+        }
+        #[cfg(feature = "test-hooks")]
+        if bytes.starts_with(SLOW_MARKER) {
+            // A relay thread held between its stop check and its push, as under load.
+            std::thread::sleep(std::time::Duration::from_millis(500));
         }
         let rec = &self.rec;
         if n == 0 && !ws.is_some_and(|w| w.fin) {
@@ -280,6 +284,23 @@ impl StreamHandle {
     }
 }
 
+/// Test builds only: an offer starting with these bytes waits 500 ms after its stop check
+/// (`tests/pipeline_seal.rs`). No env var is read.
+#[cfg(feature = "test-hooks")]
+pub const SLOW_MARKER: &[u8] = b"\x01slow-offer-marker\x02";
+
+/// `conn`, `http_req`, `http_resp`, `ws_up` or `ws_down`: a stream the seal's wire stop stops.
+pub(super) fn is_wire(kind: StreamKind) -> bool {
+    matches!(
+        kind,
+        StreamKind::Conn
+            | StreamKind::HttpReq
+            | StreamKind::HttpResp
+            | StreamKind::WsUp
+            | StreamKind::WsDown
+    )
+}
+
 impl Drop for StreamHandle {
     fn drop(&mut self) {
         if !self.ended {
@@ -293,7 +314,7 @@ impl Drop for StreamHandle {
 mod tests {
     use super::*;
     use serde_json::json;
-    use std::sync::atomic::AtomicU64;
+    use std::sync::atomic::{AtomicU64, Ordering};
     use std::sync::mpsc::Receiver;
 
     const MIB: u64 = 1 << 20;

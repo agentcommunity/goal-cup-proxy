@@ -41,6 +41,8 @@ pub use cursors::Cursors;
 pub use goalcup_format::{EndReason, GapReason, StreamKind};
 pub use handle::{OpenFlags, StreamHandle};
 #[cfg(feature = "test-hooks")]
+pub use handle::SLOW_MARKER;
+#[cfg(feature = "test-hooks")]
 pub use mask_worker::PANIC_MARKER;
 pub use status::{Live, Status};
 
@@ -115,8 +117,11 @@ struct Inner {
     /// Bytes offered after a stop, and each connection that carried one, by its `conn` sid.
     after_stop_bytes: AtomicU64,
     after_stop_conns: Mutex<HashSet<Sid>>,
-    /// The raw host of each `conn` stream opened after a stop (no OPEN names it).
+    /// The raw host of each `conn` stream opened after a stop (no OPEN names it), kept once it
+    /// ends only if it carried a byte.
     late_hosts: Mutex<HashMap<Sid, String>>,
+    /// S1 calls that read the stop flags unset and have not yet pushed their item (`Flight`).
+    in_flight: AtomicU64,
     durable: watch::Sender<Durable>,
     /// Set only by `for_tests`.
     #[cfg(feature = "test-hooks")]
@@ -147,6 +152,7 @@ impl Inner {
             after_stop_bytes: AtomicU64::new(0),
             after_stop_conns: Mutex::new(HashSet::new()),
             late_hosts: Mutex::new(HashMap::new()),
+            in_flight: AtomicU64::new(0),
             durable,
             #[cfg(feature = "test-hooks")]
             calls: None,
@@ -185,6 +191,7 @@ impl Recorder {
         meta: Value,
     ) -> StreamHandle {
         let sid = self.inner.next_sid.fetch_add(1, Ordering::Relaxed);
+        let _f = self.flight(handle::is_wire(kind));
         collect!(
             self,
             Call::Open(sid, kind, conn, req, from, flags, meta.clone())
@@ -214,7 +221,8 @@ impl Recorder {
     /// seal's full stop, a no-op.
     pub fn event(&self, ev: Value) {
         collect!(self, Call::Event(ev.clone()));
-        if self.inner.all_stopped.load(Ordering::Acquire) {
+        let _f = self.flight(false);
+        if self.inner.all_stopped.load(Ordering::SeqCst) {
             return;
         }
         self.send(Item::Event { t: self.now(), ev });
@@ -357,7 +365,7 @@ impl Recorder {
     ) -> bool {
         let i = &self.inner;
         let mut open = lock(&i.open_gaps);
-        if i.all_stopped.load(Ordering::Acquire) {
+        if i.all_stopped.load(Ordering::SeqCst) {
             drop(open);
             self.count_after_stop(n);
             return false;
@@ -399,6 +407,17 @@ impl Recorder {
             tail: Some(json!({"guard": "held_bytes", "limit": self.inner.guard})),
         });
         sub(&self.inner.streams_in_gap, 1);
+    }
+}
+
+/// One S1 call in flight (`Recorder::flight`); a panic in it unwinds through the drop too.
+pub(super) struct Flight(Option<Arc<Inner>>);
+
+impl Drop for Flight {
+    fn drop(&mut self) {
+        if let Some(i) = &self.0 {
+            i.in_flight.fetch_sub(1, Ordering::SeqCst);
+        }
     }
 }
 
@@ -504,15 +523,53 @@ impl Recorder {
         self.count_after_stop(lost);
     }
 
-    /// Every later call on a wire stream only counts (PRD-02 section 11 step 2).
+    /// Every later call on a wire stream only counts (PRD-02 section 11 step 2). Returns once
+    /// every call that read the flag unset has pushed its item, so none lands behind the marker
+    /// the seal sends next.
     pub(crate) fn stop_wire(&self) {
-        self.inner.wire_stopped.store(true, Ordering::Release);
+        self.inner.wire_stopped.store(true, Ordering::SeqCst);
+        self.settle();
     }
 
-    /// Every later call on any stream only counts, and events are dropped.
+    /// Every later call on any stream only counts, and events are dropped. Returns as
+    /// `stop_wire` does.
     pub(crate) fn stop_all(&self) {
-        self.inner.wire_stopped.store(true, Ordering::Release);
-        self.inner.all_stopped.store(true, Ordering::Release);
+        self.inner.wire_stopped.store(true, Ordering::SeqCst);
+        self.inner.all_stopped.store(true, Ordering::SeqCst);
+        self.settle();
+    }
+
+    /// True once the seal stopped calls on this kind of stream.
+    pub(super) fn stopped(&self, wire: bool) -> bool {
+        let i = &self.inner;
+        i.all_stopped.load(Ordering::SeqCst) || (wire && i.wire_stopped.load(Ordering::SeqCst))
+    }
+
+    /// Enters an S1 call on a wire stream or not: in flight until the returned value drops,
+    /// unless the stop already holds (such a call only counts and pushes nothing). The count goes
+    /// up before the caller reads the flags again, and the seal sets a flag before it reads the
+    /// count (all `SeqCst`), so the seal sees every call that read a flag unset. Only calls that
+    /// began before the stop are waited for, so the wait ends; it never touches a relay.
+    pub(super) fn flight(&self, wire: bool) -> Flight {
+        if self.stopped(wire) {
+            return Flight(None);
+        }
+        self.inner.in_flight.fetch_add(1, Ordering::SeqCst);
+        Flight(Some(self.inner.clone()))
+    }
+
+    /// Waits until no call that read a stop flag unset is still on its way to the item channel.
+    fn settle(&self) {
+        while self.inner.in_flight.load(Ordering::SeqCst) > 0 {
+            std::thread::yield_now();
+        }
+    }
+
+    /// A `conn` stream opened after a stop ended: its host is kept only if it carried a byte.
+    pub(super) fn late_conn_ended(&self, sid: Sid) {
+        if !lock(&self.inner.after_stop_conns).contains(&sid) {
+            lock(&self.inner.late_hosts).remove(&sid);
+        }
     }
 
     /// After `stop_all`, the seal's GAP ending at `end` for every guard gap still open (PRD-02
@@ -793,6 +850,11 @@ pub fn run_recorder(null: bool) -> ExitCode {
     }));
     if !run.sealed {
         run.status = Some(status::spawn(rec, dir.clone(), board));
+    } else {
+        // The sealed `status.json` names this recorder, which serves the wrap-up.
+        let mut me = (0, 0, 0);
+        board.set(|b| me = (b.pid, b.start_id, b.port));
+        seal::sealed_status(&dir, |s| (s.pid, s.start_id, s.port) = me);
     }
     run.send(&ToWatchdog::Ready);
     run.control(&mut lines, &dir, &facts.workspace)
@@ -868,7 +930,7 @@ impl Run {
         if self.sealed {
             seal::remove_key(dir);
             self.send(&ToWatchdog::Sealed);
-            seal::wrap_up_sealed(dir, reason, self.uploader.take());
+            seal::wrap_up_sealed(&self.rec, dir, reason, self.uploader.take());
             return ExitCode::SUCCESS;
         }
         if self.null {

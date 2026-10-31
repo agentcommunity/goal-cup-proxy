@@ -203,9 +203,12 @@ pub(super) fn start(
     let dir = &facts.entry_dir;
     let opened = open(dir, &facts.entry, facts.prev, facts.harness.as_ref());
     let Some(o) = opened.unwrap_or_else(|e| fail(dir, &e)) else {
-        // Already sealed: every later call only counts, and the receiver is kept, so a call that
-        // raced the stop never meets a closed channel (exit 70).
+        // Already sealed: every later call only counts. What reached the channel before the stop
+        // is counted, and the receiver is kept, so no call meets a closed channel (exit 70).
         rec.stop_all();
+        for item in rx.try_iter() {
+            mask_worker::drop_late(rec, &item);
+        }
         std::mem::forget(rx);
         return false;
     };
