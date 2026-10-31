@@ -27,6 +27,7 @@ mod handle;
 mod item;
 mod mask_worker;
 mod out;
+mod seal;
 pub mod secure;
 pub mod status;
 mod writer;

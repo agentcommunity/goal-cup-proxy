@@ -1,13 +1,17 @@
 //! The one message from the mask worker to the writer (PRD-02 sections 4 and 5).
 
-// `run_recorder` starts the mask worker and the writer in the next slice; until then only
-// `Recorder::real_for_tests` does.
-#![cfg_attr(not(feature = "test-hooks"), allow(dead_code))]
-
 use super::OpenFlags;
 use super::cursors::Fid;
+use super::item::Mark;
 use goalcup_format::{Record, StreamKind};
 use serde_json::Value;
+
+/// What the writer's channel carries: a masked record, or a seal marker, which counts
+/// `CONTROL_HELD` and is released like a control item.
+pub(crate) enum ToWriter {
+    Rec(Out),
+    Mark(Mark),
+}
 
 /// One masked record. Times are on the record clock (Mono ns); a GAP's `start_wall` and
 /// `end_wall` are left 0 and the writer fills them at write. `held` is what the writer releases

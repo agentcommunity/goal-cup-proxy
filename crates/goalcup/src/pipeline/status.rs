@@ -112,7 +112,7 @@ impl Written {
 pub struct Live {
     pub boot: u64,
     /// Bytes offered and not yet written, plus reservations. Each queued item also counts its
-    /// cost in memory: 128 per DATA piece, 256 plus its JSON per control item (`Item::held`).
+    /// cost in memory: 128 per DATA piece, 384 plus its JSON per control item (`Item::held`).
     /// The boot's peak and the soft guard are not here: the status thread reads them from the
     /// recorder, so this shape stays the one PRD-06 builds.
     pub held_bytes: u64,
