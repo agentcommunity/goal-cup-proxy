@@ -308,7 +308,7 @@ pub fn approval_refused(said: &str) -> String {
 /// Ctrl-C landed after the server opened the run and it was saved: nothing was launched.
 pub fn opened_then_stopped(run: &str) -> String {
     format!(
-        "You pressed Ctrl-C after the run {run} was opened and saved. The harness was not started. Run the command again to carry on."
+        "You pressed Ctrl-C after the run {run} was opened and saved. The harness was not started. Running goalcup start again opens a new run; the run {run} stays open and its deadline keeps running."
     )
 }
 
