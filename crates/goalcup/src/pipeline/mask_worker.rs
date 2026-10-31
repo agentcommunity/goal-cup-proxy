@@ -423,8 +423,9 @@ impl Worker {
 
     /// A seal marker. The first finishes every wire stream's masker; the final one every
     /// stream's, ends each `cut_at_seal` (`seen` where its record ends; later sids first, so a
-    /// request ends before its connection), and masks the `after_stop` tail. Then the marker
-    /// goes to the writer behind those records.
+    /// request ends before its connection), and masks the `after_stop` tail: the connections that
+    /// carried a byte after the stop, and their hosts. Then the marker goes to the writer behind
+    /// those records.
     fn mark(&mut self, mut m: Mark, held: u64) {
         let (now, last) = (self.rec.now(), m.last.is_some());
         let wire = |k: StreamKind| {
@@ -442,7 +443,8 @@ impl Worker {
             .map(|(sid, _)| *sid)
             .collect();
         sids.sort_unstable_by(|a, b| b.cmp(a));
-        let mut hosts = Vec::new();
+        // The masked host of each `conn` stream the final marker ends, by sid.
+        let mut hosts = HashMap::new();
         for sid in sids {
             let kind = self.stream(sid).kind;
             let next = self.masker.stream(kind);
@@ -451,7 +453,9 @@ impl Worker {
             s.cut = true;
             let (carry, seen) = (std::mem::take(&mut s.owed), s.inp);
             if last {
-                hosts.extend(s.host.take().filter(|_| kind == StreamKind::Conn));
+                if let Some(h) = s.host.take().filter(|_| kind == StreamKind::Conn) {
+                    hosts.insert(sid, h);
+                }
                 let r = Record::End {
                     sid,
                     t: now.ns(),
@@ -472,11 +476,19 @@ impl Worker {
             self.send();
         }
         if let Some(end) = &mut m.last {
-            let conns = hosts.len() + end.hosts.len();
-            let mut tail = json!({ "conns": conns, "hosts": end.hosts });
+            // The connections that carried a byte after the stop, and their hosts: masked here
+            // from their OPEN, or raw for one opened after the stop (no OPEN), masked now.
+            let (mut named, mut late) = (Vec::new(), Vec::new());
+            for (sid, raw) in &end.conns {
+                match hosts.remove(sid) {
+                    Some(h) => named.push(Value::String(h)),
+                    None => late.extend(raw.clone()),
+                }
+            }
+            let mut tail = json!({ "conns": end.conns.len(), "hosts": late });
             self.mask(&mut tail);
             if let Some(Value::Array(all)) = tail.get_mut("hosts") {
-                all.extend(hosts.into_iter().map(Value::String));
+                all.extend(named);
                 all.sort_by_key(|h| h.to_string());
                 all.dedup();
             }

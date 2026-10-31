@@ -56,6 +56,12 @@ pub struct StreamHandle {
     conn: bool,
     /// Its OPEN was sent: false for a stream opened after a stop, which sends nothing.
     opened: bool,
+    /// The `conn` stream it belongs to (its own sid for a `conn` stream; 0 for none), and on a
+    /// `conn` stream opened after a stop its host, raw: for the `after_stop` tail.
+    conn_sid: Sid,
+    late_host: Option<String>,
+    /// A byte after the stop on this stream was noted on its connection.
+    noted: bool,
     off: u64,
     /// A guard gap is open on this stream; it lives in the recorder's `open_gaps`.
     in_gap: bool,
@@ -63,7 +69,13 @@ pub struct StreamHandle {
 }
 
 impl StreamHandle {
-    pub(super) fn new(rec: Recorder, sid: Sid, kind: StreamKind, from: u64) -> StreamHandle {
+    pub(super) fn new(
+        rec: Recorder,
+        sid: Sid,
+        kind: StreamKind,
+        conn_sid: Sid,
+        from: u64,
+    ) -> StreamHandle {
         let wire = matches!(
             kind,
             StreamKind::Conn
@@ -76,12 +88,16 @@ impl StreamHandle {
         if conn {
             fds::conn_opened();
         }
+        let conn_sid = if conn { sid } else { conn_sid };
         let mut h = StreamHandle {
             rec,
             sid,
             wire,
             conn,
             opened: true,
+            conn_sid: if wire { conn_sid } else { 0 },
+            late_host: None,
+            noted: false,
             off: from,
             in_gap: false,
             ended: false,
@@ -97,6 +113,27 @@ impl StreamHandle {
     /// Its OPEN is sent: false when it was opened after a stop.
     pub(super) fn opened(&self) -> bool {
         self.opened
+    }
+
+    /// The host of a `conn` stream opened after a stop, for the `after_stop` tail.
+    pub(super) fn late_host(&mut self, host: Option<String>) {
+        self.late_host = host;
+    }
+
+    /// `n` bytes after a stop: into the `after_stop` count, and the first time also the
+    /// stream's connection into the `after_stop` connections (PRD-02 section 11 steps 2 and 5).
+    fn after_stop(&mut self, n: u64) {
+        self.rec.count_after_stop(n);
+        if n > 0 {
+            self.note_conn();
+        }
+    }
+
+    fn note_conn(&mut self) {
+        if !self.noted {
+            self.noted = true;
+            self.rec.after_stop_conn(self.conn_sid, self.late_host.take());
+        }
     }
 
     /// After the seal's stop a call on this stream only counts (PRD-02 section 11 step 2).
@@ -138,7 +175,7 @@ impl StreamHandle {
             Call::Gap(self.sid, reason, start, end, self.off, lost, tail.clone())
         );
         if self.all_stopped() || !self.opened {
-            self.rec.count_after_stop(lost.unwrap_or(0));
+            self.after_stop(lost.unwrap_or(0));
         } else {
             self.close_gap(end);
             self.rec.send(Item::Gap {
@@ -193,12 +230,12 @@ impl StreamHandle {
     /// below it (PRD-03 offers at most 32 KiB). After a stop the bytes only count: they are in no
     /// record, so the offset stays where the record ends.
     fn offer(&mut self, t: Mono, ws: Option<Ws>, bytes: Bytes) {
-        let rec = &self.rec;
         let n = bytes.len() as u64;
         if self.stopped() {
-            rec.count_after_stop(n);
+            self.after_stop(n);
             return;
         }
+        let rec = &self.rec;
         if n == 0 && !ws.is_some_and(|w| w.fin) {
             // Only a message end has anything to say with no bytes.
             return;
@@ -213,6 +250,8 @@ impl StreamHandle {
             // After a full stop that raced this offer the bytes only count, as above.
             if rec.guard_drop(self.sid, &mut self.in_gap, t, self.off, n) {
                 self.off += n;
+            } else if n > 0 {
+                self.note_conn();
             }
             return;
         }
@@ -393,7 +432,8 @@ mod tests {
 
         assert!(items.iter().all(|i| sid_of(i) == native.sid()));
         assert!(matches!(items.as_slice(), [Item::Data { bytes, .. }] if bytes.len() == 300));
-        assert_eq!(rec.after_stop(), (500, vec!["example.com".to_string()]));
+        // The late connections relayed nothing, so none is named.
+        assert_eq!(rec.after_stop(), (500, Vec::new()));
     }
 
     /// Section 3: the guard weighs what a piece costs in memory, its queue slot and allocation
@@ -494,10 +534,21 @@ mod tests {
     }
 
     /// A stream opened after the wire stop has no OPEN, so it never gets a GAP either (PRD-01
-    /// invariant 3): its known loss goes to the `after_stop` count.
+    /// invariant 3): its known loss goes to the `after_stop` count, and its connection, with the
+    /// host, to the `after_stop` connections. A connection that carried nothing after the stop
+    /// is not one of them (PRD-02 section 11 step 2).
     #[test]
     fn a_stream_opened_after_the_stop_sends_nothing() {
         let (rec, rx) = Recorder::pipeline(MIB);
+        let idle = rec.open(
+            StreamKind::Conn,
+            0,
+            0,
+            0,
+            OpenFlags::NONE,
+            json!({"host": "idle.example"}),
+        );
+        drain(&rec, &rx);
         rec.stop_wire();
         let mut conn = rec.open(
             StreamKind::Conn,
@@ -508,12 +559,14 @@ mod tests {
             json!({"host": "github.com"}),
         );
         conn.gap(GapReason::TlsRefused, rec.now(), None, None);
-        let mut req = open(&rec, StreamKind::HttpReq, 0);
+        let mut req = rec.open(StreamKind::HttpReq, conn.sid(), 0, 0, OpenFlags::NONE, json!({}));
         req.gap(GapReason::DecodeFailed, rec.now(), Some(100), None);
+        req.data(rec.now(), Bytes::from_static(b"more"));
         req.end(rec.now(), EndReason::Complete, None);
-        drop(conn);
+        let sid = conn.sid();
+        drop((conn, idle));
         assert!(drain(&rec, &rx).is_empty());
-        assert_eq!(rec.after_stop(), (100, vec!["github.com".to_string()]));
+        assert_eq!(rec.after_stop(), (104, vec![(sid, Some("github.com".into()))]));
     }
 
     /// Point 3 and no drop without a GAP: relay threads dropping under a full guard while the

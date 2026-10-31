@@ -17,6 +17,7 @@ use crate::pipeline::clock::{self, Mono};
 use crate::pipeline::fds::{self, Target};
 use crate::pipeline::status::Outlived;
 use crate::proxy::ca::{BUNDLE_FILE, RUN_CA_FILE, RunCa};
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use shield::Shield;
 use std::fmt;
@@ -28,8 +29,8 @@ use std::os::unix::net::UnixStream;
 use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, ExitCode, ExitStatus};
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
@@ -108,6 +109,12 @@ pub struct HarnessFacts {
 
 /// Seam S17: the start facts, the body of the first control line. Every type serializes with
 /// serde. No `Debug`: it holds the CA key and the exact mask values.
+///
+/// `connector`, `hosts`, `native`, `mask_rules` and `values` carry the S3 and S2 types
+/// (`ConnectorRef`, `HostList`, `NativeSources`, `Vec<MaskRule>`, `Vec<SecretValue>`) as their
+/// serde JSON, so the line is the same bytes as with typed fields; the recorder parses them with
+/// [`StartFacts::typed`]. Typing the fields themselves changes PRD-10's `start.rs` too, so it is
+/// one change for the integrator.
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 pub struct StartFacts {
     /// `r` and 16 hex.
@@ -125,12 +132,9 @@ pub struct StartFacts {
     pub server_time: Option<u64>,
     pub local_wall: u64,
     pub workspace: PathBuf,
-    /// `$GOALCUP_HOME`, for `upload::UploadCtx.home` (the queue of older entries). Not the
-    /// harness's isolated home.
-    pub home: PathBuf,
     /// `LaunchPlan.connector` (S3 `connector::ConnectorRef`: id, name, sha256, source), for the
     /// `start` keys `connector`, `connector_source` and `connector_sha256`.
-    pub connector: ConnectorRef,
+    pub connector: serde_json::Value,
     /// `LaunchPlan.harness_version`; null when it could not be read.
     pub harness_version: Option<String>,
     /// `GOALCUP_KEEP_PARTS=1`.
@@ -138,13 +142,13 @@ pub struct StartFacts {
     /// The 40-hex commit the binary was built from, or null. The version is the binary's own
     /// `CARGO_PKG_VERSION`.
     pub build: Option<String>,
-    pub hosts: HostList,
+    pub hosts: serde_json::Value,
     /// SHA-256 of the host list file as read (the embedded list or a `--hosts` file), 64 hex.
     pub hosts_sha256: String,
-    pub native: NativeSources,
-    pub mask_rules: Vec<MaskRule>,
+    pub native: serde_json::Value,
+    pub mask_rules: serde_json::Value,
     /// The exact mask values. Never logged.
-    pub values: Vec<SecretValue>,
+    pub values: serde_json::Value,
     pub ca: CaPem,
     pub prev: Option<Prev>,
     pub harness: Option<HarnessFacts>,
@@ -152,6 +156,41 @@ pub struct StartFacts {
     pub null_since: Option<u64>,
     /// `LaunchPlan.notes`, written as events on boot 0 only.
     pub notes: Vec<serde_json::Value>,
+}
+
+/// The typed S3 and S2 fields of [`StartFacts`]. No `Debug`: it holds the exact mask values.
+pub struct Typed {
+    pub connector: ConnectorRef,
+    pub hosts: HostList,
+    pub native: NativeSources,
+    pub mask_rules: Vec<MaskRule>,
+    pub values: Vec<SecretValue>,
+}
+
+impl StartFacts {
+    /// Parses the JSON fields, taking the exact mask values out of `self`. None when one does not
+    /// parse: the recorder treats that as no start line.
+    pub fn typed(&mut self) -> Option<Typed> {
+        use serde_json::from_value as from;
+        let take = |v: &mut serde_json::Value| std::mem::take(v);
+        Some(Typed {
+            connector: from(take(&mut self.connector)).ok()?,
+            hosts: from(take(&mut self.hosts)).ok()?,
+            native: from(take(&mut self.native)).ok()?,
+            mask_rules: from(take(&mut self.mask_rules)).ok()?,
+            values: from(take(&mut self.values)).ok()?,
+        })
+    }
+
+    /// `$GOALCUP_HOME` (for `upload::UploadCtx.home`, the queue of older entries): the entry
+    /// folder is `$GOALCUP_HOME/runs/<run>/<entry>/` (PRD-01 section 1).
+    pub fn home(&self) -> PathBuf {
+        self.entry_dir
+            .ancestors()
+            .nth(3)
+            .map(Path::to_path_buf)
+            .unwrap_or_default()
+    }
 }
 
 /// The run CA key file in `rec/` (0600, created new, removed at the seal), so `goalcup recover`
@@ -228,17 +267,17 @@ pub fn run_with(mut plan: LaunchPlan, mut facts: StartFacts, recorder_exe: &Path
     }
     plan.finish_env(port, &dir.join(RUN_CA_FILE), &dir.join(BUNDLE_FILE));
 
-    let mut lp = Loop::default();
-    let recorder_pid = Arc::new(AtomicU32::new(0));
-    let mut boot = match Boot::start(recorder_exe, &listener, &facts) {
+    // The recorder's pid, set under its lock in the same step as the spawn, so the tree walk
+    // never takes a just-started recorder for a late child of the watchdog.
+    let recorder_pid = Arc::new(Mutex::new(0));
+    let mut boot = match Boot::start(recorder_exe, &listener, &facts, &recorder_pid) {
         Ok(boot) => boot,
         Err(_) => {
             remove_key(&rec);
             return failed("recorder_spawn");
         }
     };
-    lp.started(Mono::now());
-    recorder_pid.store(boot.child.id(), Ordering::SeqCst);
+    let (mut boots, mut up_since) = (1u64, Mono::now());
     if let Err(code) = boot.wait_ready() {
         remove_key(&rec);
         if code == Some(i32::from(MASK_REFUSED)) {
@@ -293,7 +332,7 @@ pub fn run_with(mut plan: LaunchPlan, mut facts: StartFacts, recorder_exe: &Path
     let harness_start = facts.harness.as_ref().map_or(0, |h| h.start_id);
     let spare = {
         let recorder_pid = Arc::clone(&recorder_pid);
-        move |pid: u32| pid == recorder_pid.load(Ordering::SeqCst)
+        move |pid: u32| pid == *lock(&recorder_pid)
     };
 
     let mut ending: Option<JoinHandle<()>> = None;
@@ -366,18 +405,15 @@ pub fn run_with(mut plan: LaunchPlan, mut facts: StartFacts, recorder_exe: &Path
             }
             // Ledger R3: the next recorder at once, same listener, same CA, never capped.
             let prev = boot.child.try_wait().ok().flatten().map(exit_of);
-            let up_ms = lp.exited(Mono::now());
+            let up_ms = Mono::now().0.saturating_sub(up_since.0) / 1_000_000;
             facts.prev = prev.map(Prev::Exit);
             line(
                 &dir,
                 "recorder_restart",
-                &[
-                    ("boot", Fact::N(lp.boots.len() as u64)),
-                    ("up_ms", Fact::N(up_ms)),
-                ],
+                &[("boot", Fact::N(boots)), ("up_ms", Fact::N(up_ms))],
             );
             boot = loop {
-                match Boot::start(recorder_exe, &listener, &facts) {
+                match Boot::start(recorder_exe, &listener, &facts, &recorder_pid) {
                     Ok(next) => break next,
                     Err(e) => {
                         line(&dir, "recorder_spawn_failed", &[("io", Fact::Io(e.kind()))]);
@@ -385,8 +421,7 @@ pub fn run_with(mut plan: LaunchPlan, mut facts: StartFacts, recorder_exe: &Path
                     }
                 }
             };
-            lp.started(Mono::now());
-            recorder_pid.store(boot.child.id(), Ordering::SeqCst);
+            (boots, up_since) = (boots + 1, Mono::now());
         }
     }
     for h in [ending, after].into_iter().flatten() {
@@ -402,25 +437,9 @@ pub fn run_with(mut plan: LaunchPlan, mut facts: StartFacts, recorder_exe: &Path
     }
 }
 
-/// Each recorder's start and exit on boot time (ledger R3). Slice B's null mode reads it to
-/// space out boots that crash at once.
-#[derive(Default)]
-struct Loop {
-    boots: Vec<(Mono, Option<Mono>)>,
-}
-
-impl Loop {
-    fn started(&mut self, at: Mono) {
-        self.boots.push((at, None));
-    }
-
-    /// Notes the last recorder's exit; how long it was up, in ms.
-    fn exited(&mut self, at: Mono) -> u64 {
-        self.boots.last_mut().map_or(0, |(start, end)| {
-            *end = Some(at);
-            at.0.saturating_sub(start.0) / 1_000_000
-        })
-    }
+/// A lock that a panic elsewhere never poisons for good: the data are plain values.
+fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(|e| e.into_inner())
 }
 
 /// One recorder and its end of a fresh control pair. A pair per boot: a dead recorder's unread
@@ -432,12 +451,22 @@ struct Boot {
 }
 
 impl Boot {
-    /// Spawns the recorder and writes the first line.
-    fn start(exe: &Path, listener: &TcpListener, facts: &StartFacts) -> io::Result<Boot> {
+    /// Spawns the recorder, sets `pid` to it under its lock, and writes the first line.
+    fn start(
+        exe: &Path,
+        listener: &TcpListener,
+        facts: &StartFacts,
+        pid: &Mutex<u32>,
+    ) -> io::Result<Boot> {
         let (to, theirs) = UnixStream::pair()?;
         let reader = to.try_clone()?;
         to.set_write_timeout(Some(Duration::from_secs(10)))?;
-        let child = spawn::recorder(exe, false, listener, &theirs)?;
+        let child = {
+            let mut pid = lock(pid);
+            let child = spawn::recorder(exe, false, listener, &theirs)?;
+            *pid = child.id();
+            child
+        };
         drop(theirs);
         let (tx, lines) = mpsc::channel();
         thread::spawn(move || read_lines(reader, &tx));
@@ -446,12 +475,9 @@ impl Boot {
         Ok(boot)
     }
 
-    /// One control line. Never logged; a failed write is the restart loop's to notice.
+    /// One control line; a failed write is the restart loop's to notice.
     fn send(&mut self, l: &ToRecorder) {
-        if let Ok(mut text) = serde_json::to_vec(l) {
-            text.push(b'\n');
-            let _ = self.to.write_all(&text);
-        }
+        send_line(&self.to, l);
     }
 
     /// The next line from the recorder within one tick, if any.
@@ -503,24 +529,40 @@ impl Boot {
 /// parse (a variant this build does not know) is skipped.
 fn read_lines(stream: UnixStream, tx: &mpsc::Sender<Option<ToWatchdog>>) {
     let mut reader = BufReader::new(stream);
-    let mut buf = Vec::new();
-    loop {
-        buf.clear();
-        match (&mut reader)
-            .take(MAX_LINE as u64)
-            .read_until(b'\n', &mut buf)
+    while let Some(l) = read_line(&mut reader) {
+        if let Some(l) = l
+            && tx.send(Some(l)).is_err()
         {
-            Ok(0) | Err(_) => break,
-            Ok(_) => {
-                if let Ok(l) = serde_json::from_slice(&buf)
-                    && tx.send(Some(l)).is_err()
-                {
-                    return;
-                }
-            }
+            return;
         }
     }
     let _ = tx.send(None);
+}
+
+/// One control line, both ways: JSON and a newline. Never logged; a failed write is the
+/// reader's to notice.
+pub fn send_line(mut to: &UnixStream, l: &impl Serialize) {
+    if let Ok(mut text) = serde_json::to_vec(l) {
+        text.push(b'\n');
+        let _ = to.write_all(&text);
+    }
+}
+
+/// The next control line, both ways: None at EOF or on a read error; `Some(None)` for a line
+/// that is too long (the rest of it is skipped unread) or does not parse, never echoed.
+pub fn read_line<T: DeserializeOwned>(r: &mut impl BufRead) -> Option<Option<T>> {
+    let mut buf = Vec::new();
+    let n = r
+        .by_ref()
+        .take(MAX_LINE as u64)
+        .read_until(b'\n', &mut buf)
+        .ok()?;
+    match buf.last() {
+        _ if n == 0 => None,
+        Some(b'\n') => Some(serde_json::from_slice(&buf).ok()),
+        _ if n == MAX_LINE => r.skip_until(b'\n').ok().map(|_| None),
+        _ => None,
+    }
 }
 
 /// The previous entry's port on `continue`, so a helper left from it reaches a live proxy;
@@ -654,6 +696,7 @@ mod tests {
     use crate::mask::ValueSource;
     use std::collections::BTreeMap;
     use std::time::SystemTime;
+    use serde_json::to_value;
 
     /// The first line carries the whole start facts. With the largest built-in connector's
     /// plan, a minted CA and 32 shaped fake values of 120 bytes it stays under the line limit,
@@ -683,18 +726,20 @@ mod tests {
                 server_time: Some(u64::MAX),
                 local_wall: u64::MAX,
                 workspace: env.workspace.clone(),
-                home: env.goalcup_home.clone(),
-                connector: plan.connector.clone(),
+                connector: to_value(&plan.connector).unwrap(),
                 harness_version: Some("1.2.3 (fake)".into()),
                 keep: true,
                 build: Some("f".repeat(40)),
-                hosts: plan.hosts.clone(),
+                hosts: to_value(&plan.hosts).unwrap(),
                 hosts_sha256: "0".repeat(64),
-                native: plan.native.clone(),
-                mask_rules: plan.mask_rules.clone(),
-                values: (0..32)
-                    .map(|i| SecretValue::new(ValueSource::Env, vec![b'x' + (i % 2); 120]))
-                    .collect(),
+                native: to_value(&plan.native).unwrap(),
+                mask_rules: to_value(&plan.mask_rules).unwrap(),
+                values: to_value(
+                    (0..32)
+                        .map(|i| SecretValue::new(ValueSource::Env, vec![b'x' + (i % 2); 120]))
+                        .collect::<Vec<_>>(),
+                )
+                .unwrap(),
                 ca: ca.clone(),
                 prev: Some(Prev::Cause(Cause::NullMode {
                     exits: 3,

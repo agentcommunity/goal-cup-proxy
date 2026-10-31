@@ -20,7 +20,7 @@ use std::time::Duration;
 pub const STATUS_V: u32 = 1;
 
 /// The stall exit's code (PRD-02 section 3); the next boot names the span `writer_stalled`.
-const EXIT_WRITER_STALLED: i32 = 75;
+pub(super) const EXIT_WRITER_STALLED: i32 = 75;
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Status {

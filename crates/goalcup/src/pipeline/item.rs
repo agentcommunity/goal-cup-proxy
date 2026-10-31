@@ -87,9 +87,9 @@ pub(crate) struct SealEnd {
     pub event: Value,
     /// The wire stop: the `after_stop` GAP's start.
     pub stop: Mono,
-    /// Bytes offered after the stop, and the raw hosts of `conn` streams opened after it.
+    /// Bytes offered after the stop, and the connections that carried them (`after_stop()`).
     pub after_bytes: u64,
-    pub hosts: Vec<String>,
+    pub conns: Vec<(super::Sid, Option<String>)>,
     /// Set by the mask worker: the `after_stop` GAP tail with its hosts masked, and a masker for
     /// the hosts `after_seal` names later.
     pub tail: Option<Value>,

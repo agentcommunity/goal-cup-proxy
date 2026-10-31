@@ -50,13 +50,13 @@ use crate::native::{self, NativeReader};
 use crate::proxy::{self, ProxyCtx, ProxyHandle, ca::RunCa};
 use crate::upload::{self, UploadCtx, UploadHandle};
 use crate::watchdog::{
-    Exit, HarnessFacts, MAX_LINE, SealReason, StartFacts, ToRecorder, ToWatchdog,
+    Exit, HarnessFacts, SealReason, ToRecorder, ToWatchdog, read_line, send_line,
 };
 use item::Item;
 use serde_json::{Value, json};
 use status::{Losing, Off, Outlived};
 use std::collections::HashMap;
-use std::io::{BufRead, BufReader, Read, Write};
+use std::io::{BufRead, BufReader};
 use std::os::fd::FromRawFd;
 use std::os::unix::fs::DirBuilderExt;
 use std::os::unix::net::UnixStream;
@@ -112,9 +112,10 @@ struct Inner {
     wire_stopped: AtomicBool,
     /// The seal stopped every stream and event.
     all_stopped: AtomicBool,
-    /// Bytes offered after a stop, and the hosts of `conn` streams opened after it.
+    /// Bytes offered after a stop, and each connection that carried one: its `conn` sid, with
+    /// its raw host when it was opened after the stop (no OPEN names it).
     after_stop_bytes: AtomicU64,
-    after_stop_hosts: Mutex<Vec<String>>,
+    after_stop_conns: Mutex<HashMap<Sid, Option<String>>>,
     durable: watch::Sender<Durable>,
     /// Set only by `for_tests`.
     #[cfg(feature = "test-hooks")]
@@ -143,7 +144,7 @@ impl Inner {
             wire_stopped: AtomicBool::new(false),
             all_stopped: AtomicBool::new(false),
             after_stop_bytes: AtomicU64::new(0),
-            after_stop_hosts: Mutex::new(Vec::new()),
+            after_stop_conns: Mutex::new(HashMap::new()),
             durable,
             #[cfg(feature = "test-hooks")]
             calls: None,
@@ -186,15 +187,10 @@ impl Recorder {
             self,
             Call::Open(sid, kind, conn, req, from, flags, meta.clone())
         );
-        let handle = StreamHandle::new(self.clone(), sid, kind, from);
+        let mut handle = StreamHandle::new(self.clone(), sid, kind, conn, from);
         if !handle.opened() {
-            if kind == StreamKind::Conn
-                && let Some(host) = meta.get("host").and_then(Value::as_str)
-            {
-                let mut hosts = lock(&self.inner.after_stop_hosts);
-                if !hosts.iter().any(|h| h == host) {
-                    hosts.push(host.to_string());
-                }
+            if kind == StreamKind::Conn {
+                handle.late_host(meta.get("host").and_then(Value::as_str).map(String::from));
             }
             return handle;
         }
@@ -451,6 +447,18 @@ impl Recorder {
         self.inner.after_stop_bytes.fetch_add(n, Ordering::Relaxed);
     }
 
+    /// Connection `conn` carried a byte after a stop; `host` is its raw host when it was opened
+    /// after the stop. Once per stream handle; connection 0 (none) is not counted.
+    pub(crate) fn after_stop_conn(&self, conn: Sid, host: Option<String>) {
+        if conn != 0 {
+            let mut conns = lock(&self.inner.after_stop_conns);
+            let h = conns.entry(conn).or_default();
+            if h.is_none() {
+                *h = host;
+            }
+        }
+    }
+
     /// The writer handed records worth `n` held bytes to the compressor. Only the writer calls
     /// it, for records it was handed. `release(0)` marks progress with nothing written, for work
     /// such as a long recount at boot, so it is not a stall. The write stamp is stored before
@@ -491,8 +499,6 @@ impl Recorder {
     /// was set). Its bytes leave `held` only: they are off `queued` since [`Recorder::taken`] and
     /// no write happened. `lost` is the item's DATA length or a GAP's known loss, which goes to
     /// the `after_stop` count, so no byte is lost without a count.
-    // The mask worker calls it for an item behind the seal's marker (task a-seal's half).
-    #[allow(dead_code)]
     pub(crate) fn dropped(&self, n: u64, lost: u64) {
         sub(&self.inner.held, n);
         self.count_after_stop(lost);
@@ -518,14 +524,17 @@ impl Recorder {
         }
     }
 
-    /// Bytes offered after a stop, and the hosts of `conn` streams opened after it. The hosts are
-    /// raw OPEN meta: the seal runs each through the masker (`mask_meta`) before it reaches
-    /// `status.json` or `goalcup.log`, so a host holding a secret shape never reaches disk.
-    pub(crate) fn after_stop(&self) -> (u64, Vec<String>) {
-        (
-            self.inner.after_stop_bytes.load(Ordering::Relaxed),
-            lock(&self.inner.after_stop_hosts).clone(),
-        )
+    /// Bytes offered after a stop, and the connections that carried them, by sid, each with
+    /// its host when it was opened after the stop. The hosts are raw OPEN meta: the seal runs
+    /// each through the masker (`mask_meta`) before it reaches a record or `status.json`, so a
+    /// host holding a secret shape never reaches disk.
+    pub(crate) fn after_stop(&self) -> (u64, Vec<(Sid, Option<String>)>) {
+        let mut conns: Vec<_> = lock(&self.inner.after_stop_conns)
+            .iter()
+            .map(|(sid, h)| (*sid, h.clone()))
+            .collect();
+        conns.sort_unstable();
+        (self.inner.after_stop_bytes.load(Ordering::Relaxed), conns)
     }
 }
 
@@ -572,7 +581,7 @@ impl Recorder {
         let mut log = counts::CountsLog::open(dir);
         let base = log.sync(dir).expect("counts.jsonl");
         let mask_rules = masker.mask_rules();
-        let facts = StartFacts {
+        let facts = crate::watchdog::StartFacts {
             run: "r00000000000000a1".into(),
             entry: ENTRY.into(),
             segment: 0,
@@ -581,20 +590,15 @@ impl Recorder {
             server_time: None,
             local_wall: 0,
             workspace: dir.to_path_buf(),
-            connector: crate::connector::ConnectorRef {
-                id: "test".into(),
-                name: "test".into(),
-                sha256: String::new(),
-                source: crate::connector::ConnectorSource::Builtin,
-            },
+            connector: Value::Null,
             harness_version: None,
             keep: true,
             build: None,
-            hosts: crate::connector::HostList::default(),
+            hosts: Value::Null,
             hosts_sha256: String::new(),
-            native: crate::connector::NativeSources::default(),
-            mask_rules: Vec::new(),
-            values: Vec::new(),
+            native: Value::Null,
+            mask_rules: Value::Null,
+            values: Value::Null,
             ca: crate::watchdog::CaPem {
                 cert: String::new(),
                 key: String::new(),
@@ -603,9 +607,20 @@ impl Recorder {
             harness: None,
             null_since: None,
             notes: Vec::new(),
-            home: dir.to_path_buf(),
         };
-        let start = boot::start_event(&facts, &masker, &mask_rules, None, false);
+        let typed = crate::watchdog::Typed {
+            connector: crate::connector::ConnectorRef {
+                id: "test".into(),
+                name: "test".into(),
+                sha256: String::new(),
+                source: crate::connector::ConnectorSource::Builtin,
+            },
+            hosts: crate::connector::HostList::default(),
+            native: crate::connector::NativeSources::default(),
+            mask_rules: Vec::new(),
+            values: Vec::new(),
+        };
+        let start = boot::start_event(&facts, &typed, &masker, &mask_rules, None, false);
         let (rec, rx) = Recorder::pipeline(guard::soft_guard());
         let (tx, out_rx) = mpsc::sync_channel(mask_worker::TO_WRITER);
         let board = status::Board::default();
@@ -652,7 +667,8 @@ pub fn low_priority() {
     }
 }
 
-/// The first control line is missing, too long or not a `start` line.
+/// The first control line is missing, too long, not a `start` line or holds a field that does
+/// not parse.
 const EXIT_NO_START: i32 = 65;
 /// The run CA from the first line cannot be imported.
 const EXIT_CA: i32 = 76;
@@ -664,23 +680,24 @@ const EXIT_MASKER: i32 = 78;
 /// no core dump, the first line, the entry folder and the panic hook before any thread, the entry
 /// lock, the masker, the run CA, the proxy at once, the boot, the native reader, the uploader,
 /// the status thread, `ready`; then the control lines until the seal. A null recorder relays and
-/// records nothing.
+/// records nothing, and so does a boot on an entry already sealed.
 pub fn run_recorder(null: bool) -> ExitCode {
     secure::harden();
     // SAFETY: the watchdog's spawn hands fd 4 to this process as a connected Unix socket, owned
     // by nothing else here.
     let ctl = unsafe { UnixStream::from_raw_fd(4) };
     let Ok(read) = ctl.try_clone() else {
-        secure::exit(EXIT_NO_START, "no_start_line");
-        return ExitCode::from(EXIT_NO_START as u8);
+        secure::die(EXIT_NO_START, "no_start_line")
     };
     let mut lines = BufReader::new(read);
     // The first line holds the CA key and the exact values: never logged, never echoed.
     let Some(Some(ToRecorder::Start(facts))) = read_line(&mut lines) else {
-        secure::exit(EXIT_NO_START, "no_start_line");
-        return ExitCode::from(EXIT_NO_START as u8);
+        secure::die(EXIT_NO_START, "no_start_line")
     };
     let mut facts = *facts;
+    let Some(mut typed) = facts.typed() else {
+        secure::die(EXIT_NO_START, "no_start_line")
+    };
     let dir = facts.entry_dir.clone();
     let _ = std::fs::DirBuilder::new()
         .recursive(true)
@@ -690,17 +707,13 @@ pub fn run_recorder(null: bool) -> ExitCode {
     let _lock = boot::lock(&dir);
     let masker = match null {
         true => None,
-        false => match Masker::new(&facts.mask_rules, std::mem::take(&mut facts.values)) {
+        false => match Masker::new(&typed.mask_rules, std::mem::take(&mut typed.values)) {
             Ok(m) => Some(m),
-            Err(_) => {
-                secure::exit(EXIT_MASKER, "masker");
-                return ExitCode::from(EXIT_MASKER as u8);
-            }
+            Err(_) => secure::die(EXIT_MASKER, "masker"),
         },
     };
     let Ok(ca) = RunCa::import(&facts.ca) else {
-        secure::exit(EXIT_CA, "ca_import");
-        return ExitCode::from(EXIT_CA as u8);
+        secure::die(EXIT_CA, "ca_import")
     };
     // SAFETY: the watchdog's spawn hands fd 3 to this process as a listening TCP socket, owned by
     // nothing else here.
@@ -718,12 +731,11 @@ pub fn run_recorder(null: bool) -> ExitCode {
             (rec, Some(rx))
         }
     };
-    let hosts = facts.hosts.clone();
     let proxy = proxy::serve(
         listener,
         ProxyCtx {
             recorder: rec.clone(),
-            hosts,
+            hosts: typed.hosts.clone(),
             ca,
         },
     );
@@ -744,6 +756,7 @@ pub fn run_recorder(null: bool) -> ExitCode {
         proxy: Some(proxy),
         native: None,
         uploader: None,
+        status: None,
         harness: facts.harness.clone(),
         exit: None,
         exit_at: None,
@@ -752,9 +765,9 @@ pub fn run_recorder(null: bool) -> ExitCode {
     };
     match (rx, &masker) {
         (Some(rx), Some(masker)) => {
-            run.sealed = !boot::start(&rec, rx, &facts, masker, board.clone());
+            run.sealed = !boot::start(&rec, rx, &facts, &typed, masker, board.clone());
             if !run.sealed {
-                let native = std::mem::take(&mut facts.native);
+                let native = std::mem::take(&mut typed.native);
                 run.native = Some(native::start(rec.clone(), native));
             }
         }
@@ -767,17 +780,19 @@ pub fn run_recorder(null: bool) -> ExitCode {
             rec.set_counts(t.counts);
         }
     }
+    // On an entry sealed before this boot the uploader still runs its wrap-up (it reads the files,
+    // as in null mode), and `status.json` keeps the sealed one.
+    run.uploader = Some(upload::spawn(UploadCtx {
+        home: facts.home(),
+        run_dir: dir.parent().map(Path::to_path_buf).unwrap_or_default(),
+        entry_dir: dir.clone(),
+        run: facts.run.clone(),
+        entry: facts.entry.clone(),
+        recorder: (!null && !run.sealed).then(|| rec.clone()),
+        keep: facts.keep,
+    }));
     if !run.sealed {
-        run.uploader = Some(upload::spawn(UploadCtx {
-            home: facts.home.clone(),
-            run_dir: dir.parent().map(Path::to_path_buf).unwrap_or_default(),
-            entry_dir: dir.clone(),
-            run: facts.run.clone(),
-            entry: facts.entry.clone(),
-            recorder: (!null).then(|| rec.clone()),
-            keep: facts.keep,
-        }));
-        status::spawn(rec, dir.clone(), board);
+        run.status = Some(status::spawn(rec, dir.clone(), board));
     }
     run.send(&ToWatchdog::Ready);
     run.control(&mut lines, &dir, &facts.workspace)
@@ -791,11 +806,14 @@ struct Run {
     proxy: Option<ProxyHandle>,
     native: Option<NativeReader>,
     uploader: Option<UploadHandle>,
+    /// The status thread, which the seal stops before its own writes.
+    status: Option<std::thread::JoinHandle<()>>,
     harness: Option<HarnessFacts>,
     exit: Option<Exit>,
     exit_at: Option<Mono>,
     null: bool,
-    /// The entry was sealed before this boot: a seal only answers `sealed`.
+    /// The entry was sealed before this boot: the recorder records nothing, and a seal removes
+    /// the key, answers `sealed` and runs the wrap-up.
     sealed: bool,
 }
 
@@ -838,7 +856,8 @@ impl Run {
 
     /// The seal (PRD-02 section 11), once; `sealed` goes to the watchdog at its durable point. A
     /// null recorder exits instead: the next normal boot recovers the entry and the watchdog sends
-    /// the seal again.
+    /// the seal again. On an entry sealed before this boot, the key a seal that died before
+    /// removing it left goes now, then `sealed` and the wrap-up.
     fn seal(
         mut self,
         reason: SealReason,
@@ -847,9 +866,12 @@ impl Run {
         workspace: &Path,
     ) -> ExitCode {
         if self.sealed {
+            seal::remove_key(dir);
             self.send(&ToWatchdog::Sealed);
+            seal::wrap_up_sealed(dir, reason, self.uploader.take());
+            return ExitCode::SUCCESS;
         }
-        if self.null || self.sealed {
+        if self.null {
             return ExitCode::SUCCESS;
         }
         let proxy = self.proxy.take();
@@ -858,6 +880,7 @@ impl Run {
         let sealer = seal::Sealer {
             rec: self.rec.clone(),
             board: Some(self.board.clone()),
+            status: self.status.take(),
             entry_dir: dir.to_path_buf(),
             workspace: Some(workspace.to_path_buf()),
             quiet_since,
@@ -878,28 +901,7 @@ impl Run {
 
     /// One line to the watchdog. A watchdog that is gone is not an error: recording goes on.
     fn send(&self, line: &ToWatchdog) {
-        if let Ok(mut text) = serde_json::to_vec(line) {
-            text.push(b'\n');
-            let _ = (&self.ctl).write_all(&text);
-        }
-    }
-}
-
-/// The next control line: None at EOF or on a read error; `Some(None)` for a line that is too
-/// long or does not parse, which is skipped and never echoed.
-fn read_line(r: &mut impl BufRead) -> Option<Option<ToRecorder>> {
-    let mut buf = Vec::new();
-    let n = r
-        .by_ref()
-        .take(MAX_LINE as u64)
-        .read_until(b'\n', &mut buf)
-        .ok()?;
-    match buf.last() {
-        _ if n == 0 => None,
-        Some(b'\n') => Some(serde_json::from_slice(&buf).ok()),
-        // Over the limit: the rest of the line is skipped unread.
-        _ if n == MAX_LINE => r.skip_until(b'\n').ok().map(|_| None),
-        _ => None,
+        send_line(&self.ctl, line);
     }
 }
 

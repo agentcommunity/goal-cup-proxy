@@ -400,7 +400,9 @@ pub fn outlived(harness_start: u64, spare: &dyn Fn(u32) -> bool) -> Option<Outli
 
 /// One look at the harness: `waitpid(WNOHANG | WUNTRACED)`. A stopped harness is continued
 /// (`SIGCONT` to its group, the watchdog's own, as [`super::shield::wait_resuming`] does) and
-/// reads as running. `Some` once it has exited; a lost child (`ECHILD`) reads as exited with no
+/// reads as running. This is the one signal the watchdog's own group gets, and an accepted
+/// exception to "never signalled": `SIGCONT` only resumes, and a job-control stop holds the
+/// harness's children too, which a `SIGCONT` to the pid alone would leave stopped. `Some` once it has exited; a lost child (`ECHILD`) reads as exited with no
 /// status.
 pub fn look(pid: u32) -> Option<Option<std::process::ExitStatus>> {
     use std::os::unix::process::ExitStatusExt;

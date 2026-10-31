@@ -32,7 +32,7 @@ const LINK_RAW: u64 = 16 << 20;
 const COUNT_NS: u64 = 60 * S;
 const SYNC_NS: u64 = 5 * S;
 /// The write error exit (PRD-02 section 5).
-const EXIT_WRITE_ERROR: i32 = 74;
+pub(super) const EXIT_WRITE_ERROR: i32 = 74;
 
 /// What the writer starts from.
 pub(crate) struct WriterStart {
@@ -356,13 +356,7 @@ impl Writer {
     /// The clock events, this boot's COUNT JSON at the LINK's `seq` in `counts.jsonl`, then the
     /// LINK and its index line.
     fn link(&mut self) {
-        let np = now_pair();
-        for ev in self
-            .drift
-            .at_link(np.wall_ns, np.mono_ns, clock::awake_ns())
-        {
-            self.event(Mono(np.mono_ns), &ev);
-        }
+        let np = self.clock_events();
         let count = self.count();
         self.append(self.seq, &count);
         match self.part().link(np) {
@@ -372,6 +366,18 @@ impl Writer {
         let t = self.totals(&count);
         self.linked(t);
         (self.dirty, self.unsynced, self.last_link) = (false, true, Mono(np.mono_ns));
+    }
+
+    /// The clock and suspend events due before a LINK, at the returned time pair.
+    fn clock_events(&mut self) -> goalcup_format::Now {
+        let np = now_pair();
+        for ev in self
+            .drift
+            .at_link(np.wall_ns, np.mono_ns, clock::awake_ns())
+        {
+            self.event(Mono(np.mono_ns), &ev);
+        }
+        np
     }
 
     /// The entry totals at a LINK whose COUNT is `count`.
@@ -397,7 +403,7 @@ impl Writer {
 
     /// The seal's records (PRD-02 section 11 steps 5 and 6; the mask worker wrote `END
     /// cut_at_seal` for what was open just before): the `after_stop` GAP when bytes came after the
-    /// stop, COUNT, the seal event, then `PartWriter::seal` (LINK, frame end, `E` line, both
+    /// stop, the clock and suspend events, COUNT, the seal event, then `PartWriter::seal` (LINK, frame end, `E` line, both
     /// files synced). The durable point is published from that line, then `counts.jsonl`
     /// compacted and `cursors.json` written, so neither runs ahead of the LINK.
     fn seal(mut self, end: SealEnd) -> Sealed {
@@ -416,6 +422,8 @@ impl Writer {
             };
             self.write(Out::new(r, 0));
         }
+        let np = self.clock_events();
+        let now = Mono(np.mono_ns);
         let count = self.count();
         self.event(now, &count);
         let totals = self.totals(&count);
@@ -424,7 +432,7 @@ impl Writer {
         ev["totals"] = serde_json::to_value(&totals.counts).unwrap_or_default();
         self.event(now, &ev);
         self.append(self.seq, &count);
-        let part = self.w.take().map(|w| w.seal(now_pair()));
+        let part = self.w.take().map(|w| w.seal(np));
         let d = match part {
             Some(Ok(d)) => d,
             Some(Err(e)) => self.fail(&e),
@@ -508,13 +516,9 @@ impl Writer {
     }
 }
 
-/// A write error: one `goalcup.log` line with its kind, then exit 74. The next boot's
-/// `recorder_down` gap names the span.
-fn fail(dir: &Path, e: &io::Error) -> ! {
+/// A write error (also at boot): one `goalcup.log` line with its kind, then exit 74. The next
+/// boot's `recorder_down` gap names the span.
+pub(super) fn fail(dir: &Path, e: &io::Error) -> ! {
     log::line(dir, "write_error", &[("io", Fact::Io(e.kind()))]);
-    secure::exit(EXIT_WRITE_ERROR, "write_error");
-    // Another thread is already ending the process.
-    loop {
-        std::thread::park();
-    }
+    secure::die(EXIT_WRITE_ERROR, "write_error")
 }

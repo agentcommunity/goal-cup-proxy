@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use serde_json::to_value;
 
 use super::approve::{self, Ask, Stop};
 use super::{ConnectorSource, RunMode, Server, awake, fail, folder, push, say, skill, text};
@@ -261,16 +262,16 @@ pub fn prepare(a: &Args, c: &Ctx, out: &mut dyn std::io::Write) -> Result<Ready,
         server_time: None,
         local_wall,
         workspace: c.project.clone(),
-        home: c.home.clone(),
-        connector: plan.connector.clone(),
+        // Each of these five becomes the typed field of the same name (S17) with one edit.
+        connector: to_value(&plan.connector).unwrap_or_default(),
         harness_version: plan.harness_version.clone(),
         keep: c.vars.get("GOALCUP_KEEP_PARTS").is_some_and(|v| v == "1"),
         build: None,
-        hosts: plan.hosts.clone(),
+        hosts: to_value(&plan.hosts).unwrap_or_default(),
         hosts_sha256: plan.hosts.sha256().to_owned(),
-        native: plan.native.clone(),
-        mask_rules: plan.mask_rules.clone(),
-        values,
+        native: to_value(&plan.native).unwrap_or_default(),
+        mask_rules: to_value(&plan.mask_rules).unwrap_or_default(),
+        values: to_value(&values).unwrap_or_default(),
         // The watchdog mints the run CA and fills this in.
         ca: CaPem {
             cert: String::new(),

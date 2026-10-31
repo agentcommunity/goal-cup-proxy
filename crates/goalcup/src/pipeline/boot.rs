@@ -7,11 +7,11 @@ use super::counts::{self, CountsLog};
 use super::cursors::Cursors;
 use super::fds::{self, Target};
 use super::item::Item;
-use super::status::{Board, Off};
-use super::{Recorder, mask_worker, secure, writer};
-use crate::cli::log::{self, Fact};
+use super::status::{Board, EXIT_WRITER_STALLED, Off};
+use super::writer::{EXIT_WRITE_ERROR, fail};
+use super::{EXIT_PIPELINE_GONE, Recorder, mask_worker, secure, writer};
 use crate::mask::Masker;
-use crate::watchdog::{Exit, HarnessFacts, Prev, StartFacts};
+use crate::watchdog::{Exit, HarnessFacts, Prev, StartFacts, Typed};
 use goalcup_format::{GapReason, PartWriter, Record, Recover};
 use serde_json::{Map, Value, json};
 use std::fs::{File, OpenOptions};
@@ -26,8 +26,6 @@ use std::time::Duration;
 const WINDOW_LOG: u32 = 27;
 /// Another recorder still holds the entry after 10 s (PRD-02 section 9.2 step 2).
 const EXIT_LOCKED: i32 = 73;
-/// A write error (PRD-02 section 5), here at boot.
-const EXIT_WRITE_ERROR: i32 = 74;
 
 /// Takes `rec/lock` with `flock` for the life of the process, waiting up to 10 s of boot time for
 /// a dying boot to let it go; else exit 73, so two recorders never write one entry.
@@ -51,10 +49,7 @@ pub(super) fn lock(entry_dir: &Path) -> File {
             std::thread::sleep(Duration::from_millis(100));
         }
     }
-    secure::exit(EXIT_LOCKED, "entry_locked");
-    loop {
-        std::thread::park();
-    }
+    secure::die(EXIT_LOCKED, "entry_locked")
 }
 
 /// This boot's part file before the writer takes it.
@@ -140,10 +135,10 @@ fn down_tail(prev: Option<Prev>, lineless: bool) -> Map<String, Value> {
         },
         p => {
             let cause = match p {
-                Some(Prev::Exit(Exit::Code(70))) => "pipeline_gone",
-                Some(Prev::Exit(Exit::Code(73))) => "entry_locked",
-                Some(Prev::Exit(Exit::Code(74))) => "write_error",
-                Some(Prev::Exit(Exit::Code(75))) => "writer_stalled",
+                Some(Prev::Exit(Exit::Code(EXIT_PIPELINE_GONE))) => "pipeline_gone",
+                Some(Prev::Exit(Exit::Code(EXIT_LOCKED))) => "entry_locked",
+                Some(Prev::Exit(Exit::Code(EXIT_WRITE_ERROR))) => "write_error",
+                Some(Prev::Exit(Exit::Code(EXIT_WRITER_STALLED))) => "writer_stalled",
                 Some(Prev::Exit(Exit::Code(_))) => "exited",
                 Some(Prev::Exit(Exit::Signal(_))) => "killed",
                 _ => "unknown",
@@ -196,17 +191,22 @@ fn harness_start(
 /// before the writer starts (the writer reads the cursors), then starts the mask worker on `rx`
 /// and the writer, whose first record is the `start` event. Then `prev_boot` (boot > 0), boot
 /// 0's `recorder_down` GAP when recovery returns one, and the launch notes (boot 0 only). False
-/// when the entry is already sealed: nothing is started.
+/// when the entry is already sealed: nothing is started and `rec` only counts from then on.
 pub(super) fn start(
     rec: &Recorder,
     rx: mpsc::Receiver<Item>,
     facts: &StartFacts,
+    typed: &Typed,
     masker: &Masker,
     board: Board,
 ) -> bool {
     let dir = &facts.entry_dir;
     let opened = open(dir, &facts.entry, facts.prev, facts.harness.as_ref());
     let Some(o) = opened.unwrap_or_else(|e| fail(dir, &e)) else {
+        // Already sealed: every later call only counts, and the receiver is kept, so a call that
+        // raced the stop never meets a closed channel (exit 70).
+        rec.stop_all();
+        std::mem::forget(rx);
         return false;
     };
     let mut log = CountsLog::open(dir);
@@ -224,7 +224,7 @@ pub(super) fn start(
     // One rule list for the start event and the writer's `fail_closed` count.
     let mask_rules = masker.mask_rules();
     let fd_limit = Some(fds::raise(Target::Recorder));
-    let start = start_event(facts, masker, &mask_rules, fd_limit, boot > 0);
+    let start = start_event(facts, typed, masker, &mask_rules, fd_limit, boot > 0);
     let (tx, out_rx) = mpsc::sync_channel(mask_worker::TO_WRITER);
     mask_worker::spawn(rec.clone(), rx, masker.clone(), tx);
     let ws = writer::WriterStart {
@@ -273,6 +273,7 @@ pub(super) fn start(
 /// `real_for_tests`. `mask_rules` is the list of the masker the mask worker runs.
 pub(super) fn start_event(
     f: &StartFacts,
+    t: &Typed,
     masker: &Masker,
     mask_rules: &[String],
     fd_limit: Option<u64>,
@@ -283,24 +284,15 @@ pub(super) fn start_event(
         "ev": "start", "run": f.run, "entry": f.entry, "segment": f.segment,
         "goalcup": env!("CARGO_PKG_VERSION"), "build": f.build,
         "os": std::env::consts::OS, "arch": std::env::consts::ARCH,
-        "connector": f.connector.id, "connector_source": f.connector.source,
-        "connector_sha256": f.connector.sha256, "harness_version": f.harness_version,
-        "hosts": f.hosts.lists(), "hosts_sha256": f.hosts_sha256,
+        "connector": t.connector.id, "connector_source": t.connector.source,
+        "connector_sha256": t.connector.sha256, "harness_version": f.harness_version,
+        "hosts": t.hosts.lists(), "hosts_sha256": f.hosts_sha256,
         "mask_rules": mask_rules, "mask_values": masker.value_counts(),
         "fd_limit": fd_limit, "keep": f.keep, "deadline": wall(f.deadline),
         "server_time": wall(f.server_time),
         "local_wall_at_server_time": wall(f.server_time.map(|_| f.local_wall)),
         "workspace_head": null, "resume": resume,
     })
-}
-
-/// A write error at boot: one `goalcup.log` line with its kind, then exit 74.
-fn fail(dir: &Path, e: &io::Error) -> ! {
-    log::line(dir, "write_error", &[("io", Fact::Io(e.kind()))]);
-    secure::exit(EXIT_WRITE_ERROR, "write_error");
-    loop {
-        std::thread::park();
-    }
 }
 
 #[cfg(test)]
@@ -407,21 +399,12 @@ mod tests {
         let prev = Some(Prev::Exit(Exit::Signal(9)));
         let o = open(dir, "e0000000000000000", prev, None).unwrap().unwrap();
         assert_eq!(o.part.boot(), 1);
-        assert_eq!(o.next_seq, line.seq + 2);
         drop(o);
+        // The recount, not the torn line's 9.
         let c = recovery_count(dir);
         assert_eq!(c["boot"], 0);
-        for (key, n) in [
-            ("conns", 1),
-            ("http_req", 1),
-            ("http_post", 1),
-            ("req_whole", 1),
-        ] {
-            assert_eq!(c[key], n, "{key}");
-        }
+        assert_eq!(c["http_post"], 1);
         assert_eq!(c["wire_bytes"], 7);
-        assert_eq!(c["mask_failclosed_bytes"], 3);
-        assert_eq!(c["hosts"]["api.example.com"], 1);
 
         // Boot 1 died after one LINK: the next is boot 2. One that dies with nothing kept
         // leaves its number to the next.

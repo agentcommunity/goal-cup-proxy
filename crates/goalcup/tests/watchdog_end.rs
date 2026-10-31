@@ -5,12 +5,15 @@
 //! cases start the goalcup binary as the recorder, server off. Linux only (the subreaper).
 #![cfg(target_os = "linux")]
 
+mod common;
+
+use common::recorder::records;
 use goalcup::cli::{self, proc_start_id, watchdog_alive, watchdog_pid};
 use goalcup::connector::{ConnectorRef, HomeLock, HostList, LaunchPlan, NativeSources, builtin};
 use goalcup::watchdog::{self, CaPem, StartFacts};
 use goalcup_format::Record;
+use serde_json::to_value;
 use std::collections::BTreeMap;
-use std::io::Read;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -44,7 +47,6 @@ struct Fixture {
     _tmp: tempfile::TempDir,
     /// Marker files.
     d: PathBuf,
-    home: PathBuf,
     entry_dir: PathBuf,
 }
 
@@ -68,7 +70,6 @@ impl Fixture {
         Fixture {
             _tmp: tmp,
             d,
-            home,
             entry_dir,
         }
     }
@@ -130,16 +131,15 @@ impl Fixture {
             server_time: None,
             local_wall: 0,
             workspace: self.d.clone(),
-            home: self.home.clone(),
-            connector: plan.connector.clone(),
+            connector: to_value(&plan.connector).unwrap(),
             harness_version: None,
             keep: true,
             build: None,
-            hosts: plan.hosts.clone(),
+            hosts: to_value(&plan.hosts).unwrap(),
             hosts_sha256: plan.hosts.sha256().to_string(),
-            native: plan.native.clone(),
-            mask_rules: Vec::new(),
-            values: Vec::new(),
+            native: to_value(&plan.native).unwrap(),
+            mask_rules: serde_json::json!([]),
+            values: serde_json::json!([]),
             ca: CaPem {
                 cert: String::new(),
                 key: String::new(),
@@ -250,28 +250,10 @@ fn watchdog_end_stub_seal_command_ends_the_tree_only() {
     assert!(seal.contains("seal_command"));
 }
 
-/// Every record of the entry up to each part file's last index line.
-fn records(entry_dir: &Path) -> Vec<Record> {
-    let mut out = Vec::new();
-    for part in goalcup_format::read::part_files(&entry_dir.join("rec")).unwrap() {
-        let name = part.file_name().unwrap().to_str().unwrap();
-        let idx = part.with_file_name(format!("{}.idx", name.trim_end_matches(".gcr.zst")));
-        let Some(last) = goalcup_format::read::read_index(&idx).unwrap().pop() else {
-            continue;
-        };
-        let file = std::fs::File::open(&part).unwrap().take(last.c_end);
-        out.extend(
-            goalcup_format::read::decode(file)
-                .unwrap()
-                .map(|i| i.unwrap().rec),
-        );
-    }
-    out
-}
-
 /// The real recorder, server off.
 fn real() -> PathBuf {
-    // SAFETY: set before any thread of this test process starts.
+    // SAFETY: set before any thread of this test process starts; sound only because nextest
+    // runs each test in its own process.
     unsafe { std::env::set_var("GOALCUP_SERVER", "off") };
     PathBuf::from(env!("CARGO_BIN_EXE_goalcup"))
 }

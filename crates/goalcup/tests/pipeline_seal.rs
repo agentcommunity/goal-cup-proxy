@@ -1,7 +1,8 @@
 //! PRD-02 section 11 (`pipeline_seal`), points 1, 3, 5 and 6 (PRD-17 L-P8, L-P15, L-FW6): the
 //! seal over the real pipeline. What was open ends `cut_at_seal` with every byte in DATA or a
 //! GAP, a call after the stop is counted in the `after_stop` GAP, native calls are admitted until
-//! the native finish, nothing follows the seal's LINK, and the sealed totals equal a recount.
+//! the native finish, nothing follows the seal's LINK, and the sealed totals equal the entry's
+//! written COUNT.
 //! Each test checks the last two through `seal` below. Fake keys are built from pieces.
 
 mod common;
@@ -21,7 +22,8 @@ const REQ: OpenFlags = OpenFlags::POST;
 
 /// Seals, then checks points 5 and 6 on every entry: the part file ends with the seal event and
 /// its LINK, read whole (nothing follows it), the index ends with `E`, and the sealed totals
-/// equal a recount of the part files. Returns the records.
+/// equal `entry_totals`, which reads the COUNT events on disk (the recount itself is
+/// `pipeline_guard::check_count`'s). Returns the records.
 fn seal(rec: &Recorder, dir: &Path) -> Vec<Record> {
     let sealed: Counts = rec.seal_for_tests(dir, SealReason::SealCommand);
     let parts = goalcup_format::read::part_files(&dir.join("rec")).unwrap();
@@ -43,7 +45,7 @@ fn seal(rec: &Recorder, dir: &Path) -> Vec<Record> {
     assert_eq!(
         sealed,
         entry_totals(dir).counts,
-        "the sealed totals equal a recount"
+        "the sealed totals equal the written COUNT"
     );
     records(dir)
 }
@@ -166,7 +168,8 @@ fn a_native_stream_after_the_wire_stop_is_recorded_before_the_seal() {
 /// its bytes in `lost`, before the stream's `cut_at_seal` END.
 #[test]
 fn a_guard_gap_open_at_the_seal_is_closed() {
-    // SAFETY: the test's first statement, before any thread is started.
+    // SAFETY: the test's first statement, before any thread is started; sound only because
+    // nextest runs each test in its own process.
     unsafe { std::env::set_var("GOALCUP_TEST_GUARD_MB", "64") };
     let dir = tempfile::tempdir().unwrap();
     let rec = real(dir.path());
