@@ -442,9 +442,9 @@ pub fn gap_words(name: &str) -> String {
     match name {
         "memory_guard" => "under heavy load",
         "recorder_down" => "recording was off",
-        "unsupported_encoding" | "decode_failed" | "h2_unsupported" | "protocol_other" => {
-            "a connection or reply goalcup cannot read"
-        }
+        "unsupported_encoding" | "decode_failed" => "a reply in a form goalcup cannot read",
+        "h2_unsupported" => "a connection goalcup could not follow",
+        "protocol_other" => "a connection in a form goalcup does not read",
         "source_changed" => "a session file was replaced or cut short",
         "tls_refused" | "pinned" => "the program refused the recorder",
         "cut_at_seal" => "still arriving when the part ended",
@@ -1091,6 +1091,9 @@ pub fn tier_line(name: &str, version: Option<&str>, tier: &str, verified: &str) 
                 version.unwrap_or_default()
             )
         }
+        "verified" if version.is_none() => format!(
+            "{who}: verified with goalcup on {verified}; the installed version was not read."
+        ),
         "verified" => format!("{who}: verified with goalcup on {verified}."),
         "not supported" => format!(
             "{name}: not supported. goalcup records its session files and the connections it can see, not its model calls."
@@ -1117,7 +1120,7 @@ pub fn recording_now(name: &str) -> String {
 pub fn upload_outcome(out: &Outcome, entry: &str, run: &str) -> String {
     let write = format!("Write to {SUPPORT_ADDRESS}.");
     match out {
-        Outcome::Done | Outcome::AlreadyThere => "Upload: done.".into(),
+        Outcome::Done | Outcome::AlreadyThere => "Upload: done. The server holds this part.".into(),
         Outcome::StillRecording => {
             format!("Part {entry} is still recording; it sends itself, so there is nothing to do.")
         }
