@@ -49,7 +49,9 @@ use crate::mask::Masker;
 use crate::native::{self, NativeReader};
 use crate::proxy::{self, ProxyCtx, ProxyHandle, ca::RunCa};
 use crate::upload::{self, UploadCtx, UploadHandle};
-use crate::watchdog::{Exit, HarnessFacts, MAX_LINE, SealReason, StartFacts, ToRecorder, ToWatchdog};
+use crate::watchdog::{
+    Exit, HarnessFacts, MAX_LINE, SealReason, StartFacts, ToRecorder, ToWatchdog,
+};
 use item::Item;
 use serde_json::{Value, json};
 use status::{Losing, Off, Outlived};
@@ -489,6 +491,8 @@ impl Recorder {
     /// was set). Its bytes leave `held` only: they are off `queued` since [`Recorder::taken`] and
     /// no write happened. `lost` is the item's DATA length or a GAP's known loss, which goes to
     /// the `after_stop` count, so no byte is lost without a count.
+    // The mask worker calls it for an item behind the seal's marker (task a-seal's half).
+    #[allow(dead_code)]
     pub(crate) fn dropped(&self, n: u64, lost: u64) {
         sub(&self.inner.held, n);
         self.count_after_stop(lost);
@@ -715,13 +719,22 @@ pub fn run_recorder(null: bool) -> ExitCode {
         }
     };
     let hosts = facts.hosts.clone();
-    let proxy = proxy::serve(listener, ProxyCtx { recorder: rec.clone(), hosts, ca });
+    let proxy = proxy::serve(
+        listener,
+        ProxyCtx {
+            recorder: rec.clone(),
+            hosts,
+            ca,
+        },
+    );
     let board = status::Board::default();
     board.set(|s| {
         s.pid = std::process::id();
         s.start_id = cli::proc_start_id(s.pid).unwrap_or(0);
         s.port = port;
-        s.deadline = facts.deadline.map(|ms| goalcup_format::dump::wall(ms * 1_000_000));
+        s.deadline = facts
+            .deadline
+            .map(|ms| goalcup_format::dump::wall(ms * 1_000_000));
         s.harness = facts.harness.as_ref().map(harness_status);
     });
     let mut run = Run {
