@@ -1,7 +1,6 @@
 //! PRD-06 "Automated tests": the backoff waits, the 120 s cap, `Retry-After`, the reset on
 //! progress (run 1's lag bug) and the clock case. `policy.rs` takes `now` as an argument, so the
-//! clock case needs no test hook. The every-other-PUT case guards the sender's reset on
-//! progress, so it lands with `send.rs` on PRD-14's common fake Worker.
+//! clock case needs no test hook. The every-other-PUT case is in `upload_resume.rs`, with its rig.
 
 use goalcup::pipeline::Mono;
 use goalcup::upload::policy::{Backoff, Policy, Timer, after, backoff, jitter};

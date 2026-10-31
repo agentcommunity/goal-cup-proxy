@@ -138,8 +138,7 @@ pub fn cut(
         return stuck("the server's next link is not the local one");
     }
     if let Bound::OnDisk = bound {
-        File::open(&path)?.sync_data()?;
-        File::open(rec_dir.join(index_name(part)))?.sync_data()?;
+        sync_pair(rec_dir, part)?;
     }
     Ok(Cut::Chunk(Chunk {
         part: path,
@@ -183,6 +182,71 @@ pub fn body(c: &Chunk) -> io::Result<io::Take<File>> {
     let mut f = File::open(&c.part)?;
     f.seek(SeekFrom::Start(c.c_start))?;
     Ok(f.take(c.c_end.saturating_sub(c.c_start)))
+}
+
+/// The bound's raw end and the compressed bytes between the server's offset `s` and it, over the
+/// parts on disk (`upload.json` `durable_raw` and `waiting_bytes`). Reads index files only.
+pub fn waiting(rec_dir: &Path, s: u64, bound: &Bound) -> io::Result<(u64, u64)> {
+    let (mut end, mut bytes) = (0, 0);
+    let parts = parts(rec_dir)?;
+    for (i, &p) in parts.iter().enumerate() {
+        // A part that ends at or before S adds no bytes: its index is not read.
+        if let Some(&next) = parts.get(i + 1).filter(|&&n| n <= s) {
+            end = end.max(next);
+            continue;
+        }
+        let (limit, flen) = match bound {
+            Bound::Durable(d) => (d.line.raw_end, u64::MAX),
+            Bound::OnDisk => (u64::MAX, fs::metadata(rec_dir.join(part_name(p)))?.len()),
+        };
+        let (mut from, mut to) = (0, 0);
+        for l in index(rec_dir, p)?
+            .iter()
+            .take_while(|l| l.raw_end <= limit && l.c_end <= flen)
+        {
+            if l.raw_end <= s {
+                from = l.c_end;
+            }
+            (to, end) = (l.c_end, end.max(l.raw_end));
+        }
+        bytes += to.saturating_sub(from);
+    }
+    if let Bound::Durable(d) = bound {
+        end = d.line.raw_end;
+    }
+    Ok((end, bytes))
+}
+
+/// The index line that ends at raw offset `raw`, when a part on disk holds one.
+pub fn line_at(rec_dir: &Path, raw: u64) -> io::Result<Option<IndexLine>> {
+    let Some(&p) = parts(rec_dir)?.iter().rev().find(|&&p| p < raw) else {
+        return Ok(None);
+    };
+    Ok(index(rec_dir, p)?.into_iter().find(|l| l.raw_end == raw))
+}
+
+/// The point a beat names when no live writer publishes one (null mode, `goalcup upload`, a dead
+/// entry): the last whole index line of the last part file whose `c_end` is within that file, its
+/// part and index synced (section 3). Two syncs a call, so it is called only when a beat is due.
+pub fn last_on_disk(rec_dir: &Path) -> io::Result<Option<IndexLine>> {
+    for &p in parts(rec_dir)?.iter().rev() {
+        let len = fs::metadata(rec_dir.join(part_name(p)))?.len();
+        if let Some(l) = index(rec_dir, p)?
+            .into_iter()
+            .rev()
+            .find(|l| l.c_end <= len)
+        {
+            sync_pair(rec_dir, p)?;
+            return Ok(Some(l));
+        }
+    }
+    Ok(None)
+}
+
+/// Syncs a part, then its index.
+fn sync_pair(rec_dir: &Path, part: u64) -> io::Result<()> {
+    File::open(rec_dir.join(part_name(part)))?.sync_data()?;
+    File::open(rec_dir.join(index_name(part)))?.sync_data()
 }
 
 /// The part files' first raw offsets, in order: the names are zero-padded, so the listing that
