@@ -1065,3 +1065,27 @@ PRD-12 and PRD-17.
   `finish` logs one line when the filtered read finds nothing.
 - Live mode and the recorder coupling stay untested until PRD-02 lands a test recorder and a caller of
   `upload::spawn`. No locked ledger item is touched.
+
+### 2026-10-31, slice 5 review fixes (prune, upload.lock, `goalcup upload`)
+
+- **Prune rule.** A part goes only when a later part has an index line (PRD-01 section 1), so the
+  last part with an index line always stays for crash recovery; that last part goes only once
+  `upload.json` says `final: sealed`. A rotation `E` or a recovery `R` is therefore never read as the
+  seal. `finish` runs prune once more after the threads stop, so a sealed, stored entry is fully
+  pruned. The `upload.json` write before a delete syncs the file and the entry folder; `pruned`
+  counts only deletes that worked and is written again after them. A crash between a part's delete
+  and its `.idx` delete leaves that `.idx` for good; nothing reads it.
+- **`goalcup upload`.** `rec/lock` is probed (a shared lock, for a moment) before `upload.lock` and on
+  every tick spent waiting for it, so a live recorder, whose upload thread holds `upload.lock` for its
+  whole life, gives `StillRecording` at once. Sealed comes from `status.json` (`mode: sealed` with its
+  seal) or `upload.json` (`final: sealed`); any other entry is `NotClosed` until the dead-entry close
+  lands. On a position that is sealed at the seal LINK's offset, `next_seq - 1` and `head` must match
+  that LINK too: then `confirmed`, `final` and `done` are written and the entry is pruned, even with
+  `upload.json` lost; otherwise it is `stuck`.
+- **Decision (size).** The upload module is 2,918 src lines (inline tests counted) and the `upload_*`
+  test binaries 2,171, against the PRD-00 row of 940 and 1,000 and the replan ceilings of 2,500 and
+  1,900. The added lines serve point 5 (a pruned entry can always be resumed or sealed, nothing pruned
+  ahead of the seal) and the acceptance case "refuses while a recorder lives". The `client.rs` inline
+  tests stay: one guards point 4 (a refused call never shows the token), the other the 413 answer read
+  before a PUT body ends, which no `upload_*` binary covers. The old `crates/goalcup-cli/src/upload`
+  goes with PRD-13, which is where the net size falls.
