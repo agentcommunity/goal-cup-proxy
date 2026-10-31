@@ -30,7 +30,7 @@ The connector sets `CLINE_DIR` to the isolated home and `CLINE_DATA_DIR` to `dat
 
 ## 4. Session format and identity
 
-- One folder of message files per session, plus a SQLite index (`sessions.db`, with `-wal` and `-shm`) (docs). The connector copies the whole `data/sessions` tree as row `sessions` and the index as row `index`, form `final`. The file format inside a session folder: unknown, and goalcup does not read it.
+- One folder of message files per session, plus a SQLite index (`sessions.db`, with `-wal` and `-shm`) (docs). The connector reads the whole `data/sessions` tree as row `sessions` (form `append`, read as it grows) and copies the index as row `index` (form `final`, copied when the run ends). The file format inside a session folder: unknown, and goalcup does not read it.
 - Subagents are started by the `spawn_agent` tool, on unless settings turn `enableSpawn` off (package). Whether each gets its own folder: unknown.
 - The session id is the folder name (docs).
 

@@ -10,7 +10,7 @@ Source words: "docs" is [docs.openclaw.ai](https://docs.openclaw.ai/help/environ
 
 - `openclaw chat` is `openclaw tui --local`: the embedded runtime, no Gateway ([docs](https://docs.openclaw.ai/cli/tui)). Plain `openclaw tui` connects to a Gateway instead and is not used. Exit: Escape, then `/exit` (measured). While a turn waits on retries, Ctrl-C and `/exit` are refused.
 - The connector has no `resume` form. Whether `chat` has a continue flag: unknown.
-- [RULES](../RULES.md) names `--local`, `agent exec`, `--profile`, `--dev` and `proxy` modes as ones that switch recording off; `chat` implies `--local`, and the rules question is open.
+- [RULES](../RULES.md) lists OpenClaw incognito threads, `agent exec`, `--profile`, `--dev` and `proxy` as modes that switch capture off. The connector runs `chat` and none of those.
 
 ## 2. Install and record a version
 

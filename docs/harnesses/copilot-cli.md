@@ -14,7 +14,7 @@ Source words: "docs" is [docs.github.com/copilot](https://docs.github.com/en/cop
 ## 2. Install and record a version
 
 - `npm install -g @github/copilot@<version>` (Node 22 or later), or `curl -fsSL https://gh.io/copilot-install | bash` ([docs](https://docs.github.com/en/copilot/how-tos/copilot-cli/set-up-copilot-cli/install-copilot-cli)). The package is a Node single-executable app with a Rust addon (package).
-- `copilot version` prints the version ([docs](https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-command-reference)). Fifteen stable releases between 30 Sep and 28 Oct (npm); expect more during a run.
+- `copilot version` prints the version ([docs](https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-command-reference)). goalcup's probe runs `copilot --version` instead; whether that form works on 1.0.105 is not measured, and if it fails the `start` event records no version (the run is not stopped). Fifteen stable releases between 30 Sep and 28 Oct (npm); expect more during a run.
 
 ## 3. Where it keeps things, per OS
 
