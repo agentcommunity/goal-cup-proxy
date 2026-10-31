@@ -113,7 +113,7 @@ lessons lane (PRD-17); read by the deletion gate (PRD-17 Acceptance, checks 1 to
 | L-N9 | 2.7 | X: ledger H2, PRD-03 rule 2 | none | open | - |
 | L-P1 | 2.8 | A: watchdog_restart.rs (PRD-02); R: RR4 | PRD-02 | open | - |
 | L-P2 | 2.8 | A: proxy_restart.rs (PRD-03); A: watchdog_restart.rs (PRD-02); R: RR4 | PRD-02, PRD-03 | open | - |
-| L-P3 | 2.8 | A: lessons_launch::ctrl_c_reaches_the_harness_and_the_watchdog_lives | PRD-17 | open | - |
+| L-P3 | 2.8 | A: lessons_launch::ctrl_c_reaches_the_harness_and_the_watchdog_lives (held back with `ignore`; fails 1 in 9 under load until the PRD-02 shield keeps INT, QUIT and TSTP caught, or drains a pending signal, before giving them back) | PRD-17, PRD-02 | open | - |
 | L-P4 | 2.8 | A: lessons_launch::a_tui_child_reads_the_terminal | PRD-17 | open | - |
 | L-P5 | 2.8 | A: lessons_launch::modes_restored_after_a_raw_exit | PRD-17 | open | - |
 | L-P6 | 2.8 | A: watchdog_rlimit.rs (PRD-02); R: PRD-02 R4; R: RR6 | PRD-02 | green | 7e620577 |
