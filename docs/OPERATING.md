@@ -112,7 +112,7 @@ failure, 3 inconclusive, 2 a usage error. Model keys are named in `scripts/pad/p
 from the conductor's environment; they and the staging approval and database credentials never enter the
 sandbox. `scripts/pad/table` writes the rows and `PAD-RESULTS.md`, and
 `scripts/pad/table --release-check <commit>` is the release gate ([Releasing](#releasing)). Design and
-settings: [PRD-12](plans/2026-10-30-v1.0/PRD-12-test-pad.md).
+settings: `scripts/pad/pad.toml` and the mode files in `scripts/pad/runs/`.
 
 Delete every test run, database rows and R2 objects, in one go (from `server/worker`):
 
@@ -180,8 +180,8 @@ on standard error: the counts are of what was read.
 **`null` means not said, never zero.** A token key the provider did not report is `null`, and a sum
 is `null` when no row said it. Every key, the merged count and the coverage line are in
 [RECORD-FORMAT](RECORD-FORMAT.md#the-goalcup-verify-usage-files). Neither file holds body text or a
-session file path. They are stored as JSON in R2 by the usage job script (PRD-09), which has not
-merged; until it does, run the commands above by hand.
+session file path. A job that stores them as JSON in R2 is not in this build yet; until it is, run
+the commands above by hand.
 
 ## Runs whose recording is off
 
