@@ -571,7 +571,7 @@ fn violations_are_named_and_relaying_goes_on() {
         let stopped = ws.feed(dir, rec.now(), &wire);
         assert!(stopped.is_err(), "{dir:?}");
         ws.end(rec.now(), EndReason::Complete, 0);
-            let sid = stream(&calls, dir);
+        let sid = stream(&calls, dir);
         assert_eq!(texts(&calls, sid), ["first"]);
         assert!(!gap_reasons(&calls, sid).is_empty());
         assert_eq!(end_reason(&calls, sid), EndReason::DecodeError);
@@ -590,7 +590,11 @@ fn a_long_message_is_offered_before_its_last_frame() {
     let pieces = |calls: &Calls| -> (usize, usize) {
         calls.all().iter().fold((0, 0), |(open, fin), c| match c {
             Call::Ws(s, _, _, _, f, _) if *s == sid => {
-                if *f { (open, fin + 1) } else { (open + 1, fin) }
+                if *f {
+                    (open, fin + 1)
+                } else {
+                    (open + 1, fin)
+                }
             }
             _ => (open, fin),
         })
@@ -637,7 +641,7 @@ fn eof_mid_message_is_interrupted() {
             .expect("goes on");
         ws.feed(Dir::Down, rec.now(), &cut).expect("goes on");
         ws.end(rec.now(), EndReason::Complete, 0);
-            let (up, down) = (stream(&calls, Dir::Up), stream(&calls, Dir::Down));
+        let (up, down) = (stream(&calls, Dir::Up), stream(&calls, Dir::Down));
         assert_eq!(end_reason(&calls, down), EndReason::Interrupted, "{name}");
         assert_eq!(
             end_reason(&calls, up),
