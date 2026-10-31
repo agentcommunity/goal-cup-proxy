@@ -447,7 +447,10 @@ fn watchdog_null_killed_is_replaced_at_once() {
         // SAFETY: a signal to one pid, the null recorder's.
         unsafe { libc::kill(pid as libc::pid_t, libc::SIGKILL) };
         until("boot 4's end", || {
-            boot_log(&m).iter().find(|l| l[..2] == ["4", "exit"]).cloned()
+            boot_log(&m)
+                .iter()
+                .find(|l| l[..2] == ["4", "exit"])
+                .cloned()
         });
         let t = Instant::now();
         let answer = through_proxy(port, upstream);
