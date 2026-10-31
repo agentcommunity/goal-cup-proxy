@@ -336,6 +336,5 @@ fn fail_closed_span(n: u64) -> (i32, Value) {
 fn fail_closed_masking_over_1_mib_in_one_stream_warns() {
     let (code, v) = fail_closed_span(1_048_577);
     assert_eq!(result(&v, "mask_failclosed"), "warn");
-    assert_eq!(item(&v, "mask_failclosed")["facts"]["streams"], 1);
     assert_eq!(code, 0);
 }

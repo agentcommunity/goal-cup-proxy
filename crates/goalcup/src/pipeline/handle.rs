@@ -261,12 +261,10 @@ impl Drop for StreamHandle {
 mod tests {
     use super::*;
     use serde_json::json;
-    use std::collections::BTreeMap;
     use std::sync::atomic::AtomicU64;
     use std::sync::mpsc::Receiver;
 
     const MIB: u64 = 1 << 20;
-    const PIECE: usize = 64 << 10;
 
     fn open(rec: &Recorder, kind: StreamKind, from: u64) -> StreamHandle {
         rec.open(kind, 0, 0, from, OpenFlags::NONE, json!({}))
@@ -331,63 +329,6 @@ mod tests {
     }
 
     #[test]
-    fn guard_drops_never_wait_and_gaps_cover_every_hole() {
-        let (rec, rx) = Recorder::pipeline(MIB);
-        let payload = Bytes::from(vec![b'x'; PIECE]);
-        let mut handles: Vec<StreamHandle> = (0..40)
-            .map(|_| open(&rec, StreamKind::HttpReq, 0))
-            .collect();
-        let mut offered = vec![64 * PIECE as u64; handles.len()];
-
-        // Nobody drains: every offer still returns.
-        std::thread::scope(|s| {
-            for h in handles.iter_mut() {
-                let payload = payload.clone();
-                let rec = rec.clone();
-                s.spawn(move || {
-                    for _ in 0..64 {
-                        h.data(rec.now(), payload.clone());
-                    }
-                });
-            }
-        });
-        let live = rec.live();
-        assert!(live.losing.dropped_bytes > 0);
-        assert!(live.losing.streams_in_gap > 0);
-
-        // Drain and offer again until every stream has recovered.
-        let mut items = drain(&rec, &rx);
-        for _ in 0..1000 {
-            if handles.iter().all(|h| !h.in_gap) {
-                break;
-            }
-            for (h, n) in handles.iter_mut().zip(offered.iter_mut()) {
-                if h.in_gap {
-                    h.data(rec.now(), payload.clone());
-                    *n += PIECE as u64;
-                }
-            }
-            items.extend(drain(&rec, &rx));
-        }
-        assert!(handles.iter().all(|h| !h.in_gap));
-        assert_eq!(rec.live().losing.streams_in_gap, 0);
-        for h in handles {
-            let t = rec.now();
-            h.end(t, EndReason::Complete, None);
-        }
-        items.extend(drain(&rec, &rx));
-
-        let mut by_sid: BTreeMap<Sid, Vec<&Item>> = BTreeMap::new();
-        for item in &items {
-            by_sid.entry(sid_of(item)).or_default().push(item);
-        }
-        assert_eq!(by_sid.len(), offered.len());
-        for (stream, n) in by_sid.values().zip(&offered) {
-            assert_eq!(check_stream(stream, 0), *n);
-        }
-    }
-
-    #[test]
     fn end_and_drop_send_the_open_gap_first() {
         let (rec, rx) = Recorder::pipeline(MIB);
         let full = rec.reserve(MIB);
@@ -418,50 +359,6 @@ mod tests {
         ));
         assert_eq!(check_stream(&dropped, 0), 10);
         assert_eq!(rec.live().losing.streams_in_gap, 0);
-    }
-
-    #[test]
-    fn big_pieces_split_and_keep_the_message_end() {
-        let (rec, rx) = Recorder::pipeline(MIB);
-        let mut h = open(&rec, StreamKind::WsUp, 0);
-        h.ws(rec.now(), 0x1, true, Bytes::from(vec![b'm'; 600 << 10]));
-        h.ws(rec.now(), 0x2, true, Bytes::new());
-        h.end(rec.now(), EndReason::Complete, None);
-        let items = drain(&rec, &rx);
-
-        let data: Vec<(u64, usize, Option<Ws>)> = items
-            .iter()
-            .filter_map(|i| match i {
-                Item::Data { off, ws, bytes, .. } => Some((*off, bytes.len(), *ws)),
-                _ => None,
-            })
-            .collect();
-        assert_eq!(data.len(), 4);
-        let mut at = 0;
-        for (i, (off, len, ws)) in data[..3].iter().enumerate() {
-            assert_eq!(*off, at);
-            assert!(*len <= MAX_PIECE);
-            assert_eq!(
-                *ws,
-                Some(Ws {
-                    opcode: 0x1,
-                    fin: i == 2
-                })
-            );
-            at += *len as u64;
-        }
-        assert_eq!(at, 600 << 10);
-        assert_eq!(
-            data[3],
-            (
-                at,
-                0,
-                Some(Ws {
-                    opcode: 0x2,
-                    fin: true
-                })
-            )
-        );
     }
 
     #[test]
@@ -657,25 +554,5 @@ mod tests {
             assert_eq!(lost + rec.after_stop().0, offered.into_inner());
             assert_eq!(rec.live().losing.streams_in_gap, 0);
         }
-    }
-
-    /// An offer is queued whole or dropped whole, so no queued piece keeps a dropped piece's
-    /// memory alive past the guard.
-    #[test]
-    fn an_offer_is_admitted_or_dropped_whole() {
-        let (rec, rx) = Recorder::pipeline(MIB);
-        let most = rec.reserve(MIB - (300 << 10));
-        let mut h = open(&rec, StreamKind::HttpResp, 0);
-        let body = Bytes::from(vec![b'b'; 600 << 10]);
-        h.data(rec.now(), body.clone());
-        assert!(rec.live().held_bytes < MIB);
-        drop(most);
-        h.data(rec.now(), body);
-        h.end(rec.now(), EndReason::Complete, None);
-        let items = drain(&rec, &rx);
-        let stream: Vec<&Item> = items.iter().collect();
-        assert!(matches!(stream[1], Item::Gap { lost: Some(n), .. } if *n == 600 << 10));
-        assert_eq!(check_stream(&stream, 0), 1200 << 10);
-        assert_eq!(rec.live().losing.dropped_bytes, 600 << 10);
     }
 }

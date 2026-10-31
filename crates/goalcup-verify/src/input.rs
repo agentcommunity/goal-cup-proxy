@@ -3,12 +3,10 @@
 //! subfolders are entries, or one part file. Every input is one zstd stream per entry: the part
 //! files are concatenated in name order and decoded together, never a chunk alone.
 
-use goalcup_format::read::{Reader, part_files, read_index};
-use std::cell::Cell;
+use goalcup_format::read::{Reader, Zst, decode, part_files, read_index};
 use std::fs::File;
-use std::io::{self, BufReader, Read};
+use std::io::{self, Read};
 use std::path::{Path, PathBuf};
-use std::rc::Rc;
 
 /// The fetched server copy of one entry (seam S13).
 pub const FETCHED: &str = "rec.gcr.zst";
@@ -128,7 +126,7 @@ fn durable_end(part: &Path) -> u64 {
 
 /// The wall time of an entry's first PART, for ordering a run's entries. Unreadable sorts last.
 fn first_wall(e: &Entry) -> u64 {
-    let first = open(e).ok().and_then(|(mut rd, _)| rd.next());
+    let first = open(e).ok().and_then(|mut rd| rd.next());
     match first {
         Some(Ok(it)) => match it.rec {
             goalcup_format::Record::Part { wall_ns, .. } => wall_ns,
@@ -138,41 +136,9 @@ fn first_wall(e: &Entry) -> u64 {
     }
 }
 
-/// What the decoder saw: raw bytes out, and whether the input ended inside an open frame.
-#[derive(Default)]
-pub struct Meter {
-    pub raw: Cell<u64>,
-    pub open_frame: Cell<bool>,
-}
-
-/// A zstd decoder (window 2^27, the default limit) that counts raw bytes and treats the end of
-/// input inside an open frame as the end of the stream.
-pub struct Raw {
-    d: zstd::stream::read::Decoder<'static, BufReader<Box<dyn Read>>>,
-    m: Rc<Meter>,
-}
-
-impl Read for Raw {
-    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        if self.m.open_frame.get() {
-            return Ok(0);
-        }
-        match self.d.read(buf) {
-            Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => {
-                self.m.open_frame.set(true);
-                Ok(0)
-            }
-            Ok(n) => {
-                self.m.raw.set(self.m.raw.get() + n as u64);
-                Ok(n)
-            }
-            r => r,
-        }
-    }
-}
-
-/// Opens an entry as one record stream.
-pub fn open(e: &Entry) -> io::Result<(Reader<Raw>, Rc<Meter>)> {
+/// Opens an entry as one record stream: the part files chained, with their limits, under one zstd
+/// decoder (window 2^27). `Reader::tail()` says how it ended once the walk is done.
+pub fn open(e: &Entry) -> io::Result<Reader<Zst<Box<dyn Read>>>> {
     let mut all: Box<dyn Read> = Box::new(io::empty());
     for (p, limit) in &e.files {
         let f = File::open(p)?;
@@ -181,9 +147,7 @@ pub fn open(e: &Entry) -> io::Result<(Reader<Raw>, Rc<Meter>)> {
             None => Box::new(all.chain(f)),
         };
     }
-    let m = Rc::new(Meter::default());
-    let d = zstd::stream::read::Decoder::new(all)?;
-    Ok((Reader::new(Raw { d, m: m.clone() }), m))
+    decode(all)
 }
 
 /// The compressed bytes this entry reads.

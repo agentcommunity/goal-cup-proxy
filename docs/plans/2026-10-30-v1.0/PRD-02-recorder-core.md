@@ -1603,3 +1603,10 @@ Two planning passes (`/root/gc-night/prd02/path-plan.md` and `audit-fix-plan.md`
   that order slips, the final heartbeat never goes out and the wrap-up holds every chunk. `upload::spawn`
   has no caller on integration yet; the PRD-02 caller slice should add one live-mode case with a test
   recorder (finish after seal, final then chunks then final). No locked ledger item is touched.
+
+### 31 Oct, from the PRD-15 slice 13 review
+
+- When the writer slice merges, the same PR removes the "PRD-02 target shape" notes from `docs/ARCHITECTURE.md`
+  (section 3 top note, section 5 "at the seal it finishes what is open", the `mask_failed` sentence in section 6,
+  the opening of section 7) and corrects `pipeline/mod.rs`'s "come next" comment. Docs and code must agree in
+  that PR. No locked ledger item is touched.

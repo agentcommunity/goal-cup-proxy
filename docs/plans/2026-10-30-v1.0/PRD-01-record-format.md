@@ -1086,6 +1086,19 @@ lists disagreed, the ledger decided.
   through it equals the committed file as JSON (judge 12:35Z box).
 - No locked ledger item is touched and no owner question comes from this slice.
 
+### 2026-10-31, PRD-08 ask answered
+
+- `read::Tail` now carries both values PRD-08 asked for: `raw: u64` (decompressed bytes the
+  `Reader` took, from the first byte of the stream, including a record cut at the end; after an
+  error, through the part of the bad record already read, see the field's doc comment) and
+  `open_frame: bool` (the zstd stream ended inside an open frame). Every reader error ends with
+  "at raw offset N", the bad record's first byte, so PRD-08 can place a `record_decode` failure
+  from the message. Seam line for PRD-08: `goalcup-verify` may read `bytes.raw` and the torn tail from
+  `Reader::tail()` and drop its own `Raw` reader and `Meter` in `input.rs`; that removal is PRD-08's
+  edit. Nothing else in the format changes. On a clean end `raw` equals the old `Meter` count;
+  after an error it is smaller, since `Meter` also counted the read-ahead zstd handed the 64 KiB
+  buffer, so `bytes.raw` on a `record_decode` failure changes value when PRD-08 switches.
+
 ### 2026-10-31, conductor seam line from PRD-02 core step 2 (08:50Z)
 
 Two shapes PRD-02 writes, accepted here: GAP reason 12 (mask_failed) may carry lost 1 with no stream byte lost and tail {"meta": "open"|"tail"|"event"} when metadata masking panicked; DATA may be empty (0 bytes) only with fin, for an empty WebSocket message. The codec already accepts both. PRD-08 recounts them as PRD-02's Counter does.

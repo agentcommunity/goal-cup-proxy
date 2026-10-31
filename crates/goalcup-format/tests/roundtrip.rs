@@ -4,7 +4,7 @@
 
 use goalcup_format::codec::{Codec, Record, put_varint};
 use goalcup_format::read::Reader;
-use goalcup_format::{EndReason, GapReason, StreamKind};
+use goalcup_format::{EndReason, GapReason, StreamKind, kind};
 
 struct Rng(u64);
 
@@ -123,15 +123,20 @@ fn random_records_of_every_kind_round_trip() {
     let back: Vec<Record> = rd.by_ref().map(|i| i.unwrap().rec).collect();
     assert_eq!(back, recs);
     assert_eq!(rd.tail().truncated, None);
+    assert_eq!(rd.tail().raw, raw.len() as u64);
 }
 
 #[test]
 fn a_body_over_16_mib_is_refused() {
     let mut raw = vec![0x03];
     put_varint(&mut raw, (16 << 20) + 1);
-    let r: Vec<_> = Reader::new(&raw[..]).collect();
-    assert_eq!(r.len(), 1);
-    assert!(r[0].is_err());
+    // After the error, raw counts the bad record's head and nothing past it.
+    let head = raw.len() as u64;
+    raw.extend([1, 2, 3, 4, 5, 6]);
+    let mut rd = Reader::new(&raw[..]);
+    let r: Vec<_> = rd.by_ref().collect();
+    assert_eq!((r.len(), r[0].is_err()), (1, true));
+    assert_eq!(rd.tail().raw, head);
     let mut c = Codec::default();
     let big = Record::Data {
         sid: 1,
@@ -150,6 +155,33 @@ fn a_body_over_16_mib_is_refused() {
     assert!(c.encode(&big, &mut raw).is_err());
     c.encode(&ev(200), &mut raw).unwrap();
     assert_eq!(decode(&raw), [ev(100), ev(200)]);
+}
+
+#[test]
+fn a_kind_0_record_stops_the_reader_at_its_kind_byte() {
+    let mut raw = encode(&[Record::Event {
+        t: 1,
+        json: b"{}".to_vec(),
+    }]);
+    let good = raw.len() as u64;
+    raw.extend([0, 5, 1, 2, 3, 4, 5]);
+    let mut rd = Reader::new(&raw[..]);
+    let r: Vec<_> = rd.by_ref().collect();
+    assert_eq!((r.len(), r[1].is_err()), (2, true));
+    assert_eq!(rd.tail().raw, good + 1);
+}
+
+#[test]
+fn a_bad_body_error_names_the_record_offset() {
+    // A PART body without its magic fails to decode; the error places the record.
+    let mut raw = encode(&[Record::Event {
+        t: 1,
+        json: b"{}".to_vec(),
+    }]);
+    let good = raw.len();
+    raw.extend([kind::PART, 4, 0, 0, 0, 0]);
+    let e = Reader::new(&raw[..]).nth(1).unwrap().unwrap_err();
+    assert!(e.to_string().ends_with(&format!("at raw offset {good}")));
 }
 
 #[test]
@@ -174,6 +206,7 @@ fn a_record_cut_at_the_end_is_reported_not_read() {
         let got: Vec<Record> = rd.by_ref().map(|i| i.unwrap().rec).collect();
         assert_eq!(got, recs[..1], "cut at {cut}");
         assert_eq!(rd.tail().truncated, Some(first as u64), "cut at {cut}");
+        assert_eq!(rd.tail().raw, cut as u64, "cut at {cut}");
     }
 }
 

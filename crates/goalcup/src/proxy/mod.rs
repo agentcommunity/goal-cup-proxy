@@ -9,5 +9,9 @@
 pub mod ca;
 pub mod connect;
 pub mod decode;
+pub mod hosts;
+pub mod http1;
+pub mod pump;
 pub mod tls;
+pub mod tunnel;
 pub mod ws;

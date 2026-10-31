@@ -1479,3 +1479,32 @@ What the pad calls, as merged (PRD-12 note):
 - **Size.** The cli sources and the `cli_*.rs` tests are past the PRD-00 row. Decision: every part kept
   serves a point (3 never block, 4 no secrets, 6 tell plainly, 7 harnesses as used); the slice dropped three
   one-line push helpers and moved the setup sentences into `text.rs`. The next slice must cut before it adds.
+
+### 2026-10-31, replan after PRD-10 slice 6 (merge 1c9afbed)
+
+- **Built:** `approve` (device flow, open run), the push block with `--prompt`, the sleep lock, `seal`
+  (S8: SIGUSR1 to the pid in `rec/watchdog.pid`, SIGTERM to the recorder when no watchdog lives), and the
+  interactive setup. `start.rs` is still the folder checks plus the not-built line (exit 3).
+- **Left for the next slice, in this order:** (1) wire `start.rs` (step 3 on): it needs
+  `watchdog::run(plan, facts) -> ExitCode` and the typed `StartFacts` of PRD-02 slice A, neither on
+  integration yet (`StartFacts` still carries `serde_json::Value` for `connector`, `hosts`, `native`,
+  `mask_rules`, `values`); build against the final shape and swap the field types when PRD-02 lands them.
+  (2) `continue` and `recover`, which wait for `watchdog::recover` (N9) and `pipeline::close_dead_entry`.
+  (3) `seal` on a dead entry: today it refuses with the `continue` line; section 1 wants
+  `close_dead_entry` plus the uploader. Keep it on the list. (4) the upload dispatch, which waits for
+  `upload::manual::run` (PRD-06 slice 4).
+- **Size: cut before add.** `cli/` src is now 3,625 lines against about 2,900 (125%); `text.rs` alone
+  is 1,153. The remaining slice must show a net cut in `text.rs` (fold repeated sentences, one helper per
+  sentence family) before it adds the start screen and the continue and recover lines. A budget past 10%
+  needs a decision line that names the point the lines serve; this slice's are points 3, 4 and 6 and the
+  line is recorded in PRD-16.
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-31, replan after PRD-06 slice 5 (merge 68ec7f2d)
+
+- `upload::manual::run(entry_dir, run_dir, (run_id, entry_id), keep) -> Outcome` is on integration (PRD-06
+  note names every variant). The upload dispatch in `main.rs` can be wired now. `StillRecording` means
+  "the entry sends itself": print the PRD-06 section 10 line, exit 0. `NotClosed` stays unwired until PRD-06
+  slice 6 (it calls `close_dead_entry` inside `run`); until then show the `continue` line, as `seal` does.
+  `Refused`, `Closed`, `Stuck` and `NoServer` take the section 10 lines; none is shown with a status code or
+  token (point 4).

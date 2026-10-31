@@ -9,12 +9,12 @@ slow-timeout = { period = "30s", terminate-after = 6 }
 path = "junit.xml"
 
 # Binaries that kill processes, change limits or open thousands of descriptors run one at a time.
-# Each joins `binary(/^(native_walk|...)$/)` below, never a second block, in the merge that brings
-# its heavy case (nextest refuses a filter matching no binary): watchdog_*, e2e_*, proxy_restart,
-# lessons_launch, pipeline_{restart,stall,many_streams}, proxy_connect (PRD-03's 2,000 connections).
+# Each joins `binary(/^(native_walk|watchdog_rlimit|...)$/)` below, never a second block, in the merge
+# that brings its heavy case (nextest refuses a filter matching no binary): the other watchdog_*
+# binaries (watchdog_null and the rest), e2e_*, proxy_restart, lessons_launch, pipeline_{restart,stall,many_streams}, proxy_connect (PRD-03's 2,000 connections).
 # End-to-end binaries also get slow-timeout = { period = "60s", terminate-after = 10 }.
 [[profile.default.overrides]]
-filter = 'binary(/^native_walk$/)'
+filter = 'binary(/^(native_walk|watchdog_rlimit)$/)'
 test-group = 'heavy'
 
 [test-groups]
