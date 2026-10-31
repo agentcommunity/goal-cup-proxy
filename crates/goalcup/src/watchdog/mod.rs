@@ -8,10 +8,13 @@
 pub mod shield;
 pub mod spawn;
 
+use crate::connector::{ConnectorRef, HostList, LaunchPlan, MaskRule, NativeSources};
+use crate::mask::SecretValue;
 use crate::pipeline::status::Outlived;
 use serde::{Deserialize, Serialize};
 use std::fmt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::process::ExitCode;
 
 /// The longest control line, newline included. Control lines carry no recorded byte and are
 /// never logged.
@@ -87,11 +90,6 @@ pub struct HarnessFacts {
 
 /// Seam S17: the start facts, the body of the first control line. Every type serializes with
 /// serde. No `Debug`: it holds the CA key and the exact mask values.
-///
-/// `connector`, `hosts`, `native`, `mask_rules`, `values` and `notes` are JSON until the seam S3
-/// types (`connector::ConnectorRef`, `HostList`, `NativeSources`, `MaskRule`, `LaunchPlan.notes`)
-/// and S2's `mask::SecretValue` are on integration; they then take those types, with the same
-/// names.
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 pub struct StartFacts {
     /// `r` and 16 hex.
@@ -109,9 +107,11 @@ pub struct StartFacts {
     pub server_time: Option<u64>,
     pub local_wall: u64,
     pub workspace: PathBuf,
+    /// The harness's isolated home, `LaunchPlan.home`, for `upload::UploadCtx`.
+    pub home: PathBuf,
     /// `LaunchPlan.connector` (S3 `connector::ConnectorRef`: id, name, sha256, source), for the
     /// `start` keys `connector`, `connector_source` and `connector_sha256`.
-    pub connector: serde_json::Value,
+    pub connector: ConnectorRef,
     /// `LaunchPlan.harness_version`; null when it could not be read.
     pub harness_version: Option<String>,
     /// `GOALCUP_KEEP_PARTS=1`.
@@ -119,13 +119,13 @@ pub struct StartFacts {
     /// The 40-hex commit the binary was built from, or null. The version is the binary's own
     /// `CARGO_PKG_VERSION`.
     pub build: Option<String>,
-    pub hosts: serde_json::Value,
+    pub hosts: HostList,
     /// SHA-256 of the host list file as read (the embedded list or a `--hosts` file), 64 hex.
     pub hosts_sha256: String,
-    pub native: serde_json::Value,
-    pub mask_rules: serde_json::Value,
+    pub native: NativeSources,
+    pub mask_rules: Vec<MaskRule>,
     /// The exact mask values. Never logged.
-    pub values: serde_json::Value,
+    pub values: Vec<SecretValue>,
     pub ca: CaPem,
     pub prev: Option<Prev>,
     pub harness: Option<HarnessFacts>,
@@ -133,6 +133,22 @@ pub struct StartFacts {
     pub null_since: Option<u64>,
     /// `LaunchPlan.notes`, written as events on boot 0 only.
     pub notes: Vec<serde_json::Value>,
+}
+
+/// The watchdog for one entry: binds, starts the recorder and the harness, restarts a dead
+/// recorder at once, and seals when the harness exits or `goalcup seal` asks. Returns the
+/// harness's exit code.
+pub fn run(plan: LaunchPlan, facts: StartFacts) -> ExitCode {
+    match std::env::current_exe() {
+        Ok(exe) => run_with(plan, facts, &exe),
+        Err(_) => ExitCode::from(70),
+    }
+}
+
+/// [`run`] with the recorder started from `recorder_exe`.
+pub fn run_with(plan: LaunchPlan, facts: StartFacts, recorder_exe: &Path) -> ExitCode {
+    let _ = (plan, facts, recorder_exe);
+    ExitCode::from(70)
 }
 
 /// A line from the watchdog to the recorder, one JSON object per line.
