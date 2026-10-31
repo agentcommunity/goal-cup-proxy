@@ -11,9 +11,19 @@ use super::text;
 /// The repository, the git identity and the credential helper, as the lines the participant's
 /// first message starts with. `token_path` is where the helper reads the token (the file's bare
 /// name when the path holds a quote, `$`, `\` or a backquote, which the line cannot carry).
-pub fn block(repo_url: &str, name: &str, email: &str, token_file: &str, token_path: &Path) -> Vec<String> {
+pub fn block(
+    repo_url: &str,
+    name: &str,
+    email: &str,
+    token_file: &str,
+    token_path: &Path,
+) -> Vec<String> {
     let path = token_path.display().to_string();
-    let path = if path.contains(['\'', '"', '$', '\\', '`']) { token_file.to_string() } else { path };
+    let path = if path.contains(['\'', '"', '$', '\\', '`']) {
+        token_file.to_string()
+    } else {
+        path
+    };
     vec![
         format!("Push to {repo_url}"),
         format!(
@@ -41,8 +51,13 @@ pub fn compose(block: Option<&[String]>, prompt: &str) -> String {
 
 /// Read `prompt_file` (UTF-8, any size), compose and write `dir/first-message.txt` at 0600.
 /// Returns the text, for the clipboard.
-pub fn write_first_message(dir: &Path, block: Option<&[String]>, prompt_file: &Path) -> Result<String, String> {
-    let bytes = std::fs::read(prompt_file).map_err(|e| text::prompt_unreadable(prompt_file, &e.to_string()))?;
+pub fn write_first_message(
+    dir: &Path,
+    block: Option<&[String]>,
+    prompt_file: &Path,
+) -> Result<String, String> {
+    let bytes = std::fs::read(prompt_file)
+        .map_err(|e| text::prompt_unreadable(prompt_file, &e.to_string()))?;
     let prompt = String::from_utf8(bytes).map_err(|_| text::prompt_not_utf8(prompt_file))?;
     let message = compose(block, &prompt);
     let file = dir.join("first-message.txt");
@@ -54,15 +69,22 @@ pub fn write_first_message(dir: &Path, block: Option<&[String]>, prompt_file: &P
         .mode(0o600)
         .open(&file)
         .map_err(fail)?;
-    out.set_permissions(std::fs::Permissions::from_mode(0o600)).map_err(fail)?;
+    out.set_permissions(std::fs::Permissions::from_mode(0o600))
+        .map_err(fail)?;
     out.write_all(message.as_bytes()).map_err(fail)?;
     Ok(message)
 }
 
 /// The lines to print for a run without `--prompt`: the framed line, then the block.
 pub fn shown(block: &[String], again: bool) -> Vec<String> {
-    let lead = if again { text::PUSH_AGAIN } else { text::PUSH_FRAME };
-    std::iter::once(lead.to_string()).chain(block.iter().cloned()).collect()
+    let lead = if again {
+        text::PUSH_AGAIN
+    } else {
+        text::PUSH_FRAME
+    };
+    std::iter::once(lead.to_string())
+        .chain(block.iter().cloned())
+        .collect()
 }
 
 /// `continue` shows the block again only when the earlier parts wrote no model request.
@@ -79,8 +101,17 @@ pub mod clipboard {
     const WITHIN: Duration = Duration::from_secs(5);
     /// What a clipboard tool is given of the participant's environment, so no key goes with it.
     const KEEP: &[&str] = &[
-        "PATH", "HOME", "LANG", "LC_ALL", "LC_CTYPE", "DISPLAY", "XAUTHORITY", "WAYLAND_DISPLAY",
-        "XDG_RUNTIME_DIR", "WSL_DISTRO_NAME", "WSL_INTEROP",
+        "PATH",
+        "HOME",
+        "LANG",
+        "LC_ALL",
+        "LC_CTYPE",
+        "DISPLAY",
+        "XAUTHORITY",
+        "WAYLAND_DISPLAY",
+        "XDG_RUNTIME_DIR",
+        "WSL_DISTRO_NAME",
+        "WSL_INTEROP",
     ];
 
     fn tool(vars: &BTreeMap<String, String>) -> Option<(std::path::PathBuf, Vec<&'static str>)> {
@@ -94,10 +125,14 @@ pub mod clipboard {
         {
             return Some((p, vec![]));
         }
-        if set("WAYLAND_DISPLAY") && let Some(p) = found("wl-copy") {
+        if set("WAYLAND_DISPLAY")
+            && let Some(p) = found("wl-copy")
+        {
             return Some((p, vec![]));
         }
-        if set("DISPLAY") && let Some(p) = found("xclip") {
+        if set("DISPLAY")
+            && let Some(p) = found("xclip")
+        {
             return Some((p, vec!["-selection", "clipboard"]));
         }
         None
@@ -106,7 +141,9 @@ pub mod clipboard {
     /// Copy `text` with the machine's own tool; true only when it took the text and ended well.
     /// No tool is normal: nothing is said and nothing fails.
     pub fn copy(text: &str, vars: &BTreeMap<String, String>) -> bool {
-        let Some((program, args)) = tool(vars) else { return false };
+        let Some((program, args)) = tool(vars) else {
+            return false;
+        };
         let Ok(mut child) = std::process::Command::new(&program)
             .args(args)
             .env_clear()
@@ -118,7 +155,10 @@ pub mod clipboard {
         else {
             return false;
         };
-        let wrote = child.stdin.take().is_some_and(|mut s| s.write_all(text.as_bytes()).is_ok());
+        let wrote = child
+            .stdin
+            .take()
+            .is_some_and(|mut s| s.write_all(text.as_bytes()).is_ok());
         let until = Instant::now() + WITHIN;
         loop {
             match child.try_wait() {

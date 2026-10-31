@@ -77,7 +77,12 @@ pub fn hold_with(which: &dyn Fn(&str) -> Option<PathBuf>) -> Result<SleepLock, S
         command.args(["-i", "-s", "-w", &std::process::id().to_string()]);
     } else {
         command.args(["--what=sleep:idle", "--mode=block", "--who=goalcup"]);
-        command.args(["--why=goalcup is recording a run", "sh", "-c", "echo ready; exec sleep infinity"]);
+        command.args([
+            "--why=goalcup is recording a run",
+            "sh",
+            "-c",
+            "echo ready; exec sleep infinity",
+        ]);
         #[cfg(target_os = "linux")]
         {
             let parent = std::process::id() as libc::pid_t;
@@ -96,7 +101,10 @@ pub fn hold_with(which: &dyn Fn(&str) -> Option<PathBuf>) -> Result<SleepLock, S
         }
     }
     // Its own process group: a Ctrl-C meant for the harness must not end the lock.
-    command.stdin(Stdio::null()).stderr(Stdio::null()).process_group(0);
+    command
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .process_group(0);
     command.stdout(if mac { Stdio::null() } else { Stdio::piped() });
     let (ready_tx, ready_rx) = mpsc::channel::<Result<u32, String>>();
     let (stop_tx, stop_rx) = mpsc::channel::<()>();
@@ -105,7 +113,11 @@ pub fn hold_with(which: &dyn Fn(&str) -> Option<PathBuf>) -> Result<SleepLock, S
         .spawn(move || {
             let mut child = match command.spawn() {
                 Ok(c) => c,
-                Err(e) => return drop(ready_tx.send(Err(format!("the sleep inhibitor did not start: {e}")))),
+                Err(e) => {
+                    return drop(
+                        ready_tx.send(Err(format!("the sleep inhibitor did not start: {e}"))),
+                    );
+                }
             };
             match settle(&mut child, !mac) {
                 Ok(()) => drop(ready_tx.send(Ok(child.id()))),
@@ -117,7 +129,11 @@ pub fn hold_with(which: &dyn Fn(&str) -> Option<PathBuf>) -> Result<SleepLock, S
         })
         .map_err(|e| format!("the sleep inhibitor did not start: {e}"))?;
     match ready_rx.recv() {
-        Ok(Ok(pid)) => Ok(SleepLock { pid, stop: Some(stop_tx), thread: Some(thread) }),
+        Ok(Ok(pid)) => Ok(SleepLock {
+            pid,
+            stop: Some(stop_tx),
+            thread: Some(thread),
+        }),
         Ok(Err(why)) => {
             let _ = thread.join();
             Err(why)

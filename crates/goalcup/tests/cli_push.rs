@@ -9,7 +9,13 @@ use goalcup::cli::{awake, push, text};
 const TOKEN: &str = "ghp_SECRETVALUE0123456789";
 
 fn block() -> Vec<String> {
-    push::block("https://github.com/a/b", "A", "a@x.org", ".env.local", Path::new("/p/.env.local"))
+    push::block(
+        "https://github.com/a/b",
+        "A",
+        "a@x.org",
+        ".env.local",
+        Path::new("/p/.env.local"),
+    )
 }
 
 #[test]
@@ -22,7 +28,10 @@ fn first_message_is_block_blank_line_prompt_at_0600() {
     let file = dir.path().join("first-message.txt");
     assert_eq!(std::fs::read_to_string(&file).unwrap(), got);
     assert_eq!(got, format!("{}\n\nBuild it.\nKeep going.\n", b.join("\n")));
-    assert_eq!(std::fs::metadata(&file).unwrap().permissions().mode() & 0o777, 0o600);
+    assert_eq!(
+        std::fs::metadata(&file).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
     // a large prompt is not refused
     std::fs::write(&prompt, "x".repeat(1 << 20)).unwrap();
     assert!(push::write_first_message(dir.path(), Some(&b), &prompt).is_ok());
@@ -52,7 +61,13 @@ fn a_prompt_that_is_not_utf8_is_refused() {
 fn the_token_value_is_never_in_the_block_or_the_file() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(dir.path().join(".env.local"), format!("GH_TOKEN={TOKEN}\n")).unwrap();
-    let b = push::block("https://github.com/a/b", "A", "a@x.org", ".env.local", &dir.path().join(".env.local"));
+    let b = push::block(
+        "https://github.com/a/b",
+        "A",
+        "a@x.org",
+        ".env.local",
+        &dir.path().join(".env.local"),
+    );
     let prompt = dir.path().join("p.txt");
     std::fs::write(&prompt, "go").unwrap();
     let got = push::write_first_message(dir.path(), Some(&b), &prompt).unwrap();
@@ -122,7 +137,9 @@ mod linux {
     /// Helper, run by `lock_ends_when_the_owner_dies` as a separate process.
     #[test]
     fn owner_helper() {
-        let Ok(dir) = std::env::var("GC_TEST_FAKE_DIR") else { return };
+        let Ok(dir) = std::env::var("GC_TEST_FAKE_DIR") else {
+            return;
+        };
         let lock = awake::hold_with(&fake(Path::new(&dir))).unwrap();
         println!("PID {}", lock.pid());
         std::thread::sleep(std::time::Duration::from_secs(60));
@@ -133,7 +150,12 @@ mod linux {
         use std::io::{BufRead as _, BufReader};
         let dir = tempfile::tempdir().unwrap();
         let mut owner = std::process::Command::new(std::env::current_exe().unwrap())
-            .args(["--exact", "linux::owner_helper", "--nocapture", "--test-threads=1"])
+            .args([
+                "--exact",
+                "linux::owner_helper",
+                "--nocapture",
+                "--test-threads=1",
+            ])
             .env("GC_TEST_FAKE_DIR", dir.path())
             .stdout(std::process::Stdio::piped())
             .spawn()

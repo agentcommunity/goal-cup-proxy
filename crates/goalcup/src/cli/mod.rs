@@ -12,11 +12,11 @@ pub mod status;
 pub mod text;
 pub mod time_left;
 
-use std::{env, fs};
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::{SystemTime, UNIX_EPOCH};
+use std::{env, fs};
 
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
