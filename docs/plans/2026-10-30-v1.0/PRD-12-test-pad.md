@@ -818,7 +818,7 @@ Control ids are kept from revision 1 so other PRDs' references hold; K1, K3 and 
 | Control | Input | Must give |
 |---|---|---|
 | K1 | Cut (the run 1 converter is cut, PRD-00). Run 1's real numbers come from PRD-16 A1 | |
-| K2 run 1 shape | PRD-08's run 1 shape builder (`check_run1_shape.rs`), written as a part folder and as a fake fetched copy | C1 FAIL (`gap_has_end`; local log check `wire_keeps_up`, `threads_match`), C2 FAIL (`subagents_present`), C4 FAIL (`gap_has_end`, `streams_closed`, `server_counts_match`), C6 FAIL against a fake `status.json` whose `written.model_requests` is run 1's finish-line 1,736 |
+| K2 run 1 shape | PRD-08's run 1 shape builder (`check_run1_shape.rs`), written as a part folder and as a fake fetched copy | C1 FAIL (`gap_has_end`; local log check `wire_keeps_up`, `threads_match`), C2 FAIL (`subagents_present`), C5 FAIL (the same lost-subagent thread has no calls; C5 repeats C2's thread test), C4 FAIL (`gap_has_end`, `streams_closed`, `server_counts_match`), C6 FAIL against a fake `status.json` whose `written.model_requests` is run 1's finish-line 1,736 |
 | K3, K4 | Cut (the silent-drop hook is cut, PRD-00). The C1 and C2 mapping on a silent loss is proven by K2 | |
 | K5 secret leak, real | Claude Code, `mode = "micro"`, `prompt = "smoke"`, `server = "staging"`, plus a value planted in a file outside the workspace that the setup script also prints, listed in the main known-values file. PRD-05 section 10: such a value is not masked | C3 FAIL with one known-value hit, in local parts and server copy |
 | K6 server tamper | A copy of K7's fetched folder: one flipped byte in `rec.gcr.zst`; one middle chunk removed from `fetch.json` and its bytes from `rec.gcr.zst`; `model_requests` in `fetch.json` plus one | C4 FAIL for each |
@@ -1830,3 +1830,28 @@ taken; "rejected" says why. Fixes for other files are made by those files' owner
   rises stays the owner question already logged. Slice 7 states its per-file lines again and cuts before
   it adds.
 - No locked ledger item is touched and no owner question comes from this slice.
+- K2 also fails C5: the lost-subagent thread has no wire calls and no native stream, which C2 and C5 both test, so the row and `selftest` now agree on C1, C2, C4, C5 and C6. P1 reads the same set.
+
+### 2026-10-31, replan after slice 7 (merge 1dd5caaf)
+
+- **Landed:** the five harness files (cline-cli, crush-cli, droid-cli, goose-cli, kimi-code-cli), the per-key queue, the K2 fixtures, and the selftest and pad nits. All sixteen connectors now have a pad file.  stays "not run: no key". Several vendor docs hosts were unreachable, so the new files mark those keys unverified; a later slice or a real run confirms them.
+- **Still to land:** K7 and K11 fixtures (they wait on PRD-08 slice 6 and PRD-09, as the slice 5 note says). `selftest` exits 3 until they exist: K2 passes, the others are "not run". Exit 3 is not "the pad works".
+- **Queue has no automated test.** Section 10 leaves it to real runs; the first real batch is its test. Not a gap to fill with a unit test.
+- **Open nit (taste, not blocking):** in the walk finally of `scripts/pad/pad`, the downgrade call catches four exception types and repeats the deepseek name test already inside `downgrade_if_429`. If touched again, read row.json defensively once and catch `Exception` in that one place; a failed downgrade must never stop the pad.
+- **Size, `wc -l` at 1dd5caaf:** all of `scripts/pad/` outside fixtures is 4,303 lines (the reviewer counted 4,298) against the PRD-00 row of about 1,350 to 1,450; `pad` 736 (320), `pad-run` 993 (330), `check.py` 743 (320), `test_pad.py` 488 (90), `table` 193 (150), `selftest` 183 (100). Slice 7 added about 220 lines, most of it harness files and the queue. No further slice is planned to add code except the K7 and K11 fixtures, which are data. The overage stays the owner question already logged; no row is raised here.
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-31, fixer round on slice K7/K11
+
+- **Local log check needs a native stream.** `check.py` counts the harness log as read when the usage summary says `readable` and the record has native files or parsed native calls. A record with native files and zero parsed calls still runs the check, so a reader that reads nothing still fails C1 (section 8). The wire-only K11 records have neither, so they skip it.
+- **A gap over a named history orphan is C1's pass in a plain row.** When `history_complete` is `named`, and the gaps outside the expected kinds number no more than `missing_call` (the orphans, not the text warnings), the direct and gateway exit-0 rule does not fail C1 (section 8, K11 (b)). `history_complete` is C1's, so it is no longer filed under C4.
+- **Seam note for PRD-09.** The usage reader reports `readable: true` for a record with no native stream; it should report `no_native`. The pad works around it by also requiring native files or calls.
+- **K11 sweep.** In `selftest` the wire-only K11 rows exempt only C2, C4 and C5 from the none-wanted sweep; C3 and C6 must not FAIL.
+- **Still open, outside this PRD's files.** The K7 export has one chunk, so K6b cannot drop a middle one. The K11 records have no ok response with usage and no subagent, so K11 (d) cannot show all six PASS; `selftest` says so and exits 3. Both need PRD-08's export and history helpers (`crates/goalcup-verify/tests`) to write multi-chunk uploads, usage and a child thread, and the S13 final fields (`complete`, `missing`) so the fixtures are regenerated, not hand-edited.
+
+### 2026-10-31, fixer round on A11 and A12
+
+- **Off time is not explained by an orphan.** In a plain direct or gateway row, a covered history orphan (gaps outside the expected kinds, no more than `missing_call`) no longer excuses off time; a clean row that went down fails C1 whether or not a call was also lost. Off time passes only when `recorder_down` is an expected gap for the row. `selftest` K11b says so through an `expect_gaps` key in its meta.
+- **The orphan limit is a count bound.** It compares gaps with orphans, not gaps that hold an orphan, until PRD-09 reports orphans as `[{thread, sid, at, in_gap}]` (section 13 ask).
+- `orphans_in_gaps` is null when `history_complete` is missing or fails, 0 for pass, skip or warn.
+- Open: regenerate K11b with a gap that has no off time, so the covered-orphan rule is exercised from the record and not only through `expect_gaps`.

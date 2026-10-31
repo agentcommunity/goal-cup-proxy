@@ -89,10 +89,11 @@ upload thread --> upload.json (S9: state, server_word, for PRD-10 and the pad)
   (or `borrow().clone()`) on their 1 s tick (PRD-02 S4) and drop the borrow at once; no `Ref` is held
   across a read, a hash or a call, so the writer never waits on them. Settled by PRD-00; no
   `spawn_blocking` variant.
-- **The uploader never ends the process.** Each upload round and each beat runs inside
-  `catch_unwind`. A panic there writes one fixed-text line through `cli::log::line` (S11), sets
-  `upload.json` `state` `waiting` with class `internal`, backs off by section 5 and never ends the
-  process. Recording never depends on the uploader (PRD-02 9.2 step 1 lists no uploader exit).
+- **The uploader never ends the process.** Each uploader thread runs whole inside `catch_unwind`
+  (`upload::guard`). A panic there writes one fixed-text line through `cli::log::line` (S11), backs
+  off by section 5, then starts the thread's body again with a new sender or beat, and never ends the
+  process or the thread. A panic in the upload thread also sets `upload.json` `state` `waiting` with
+  class `internal`; one in the beat thread leaves `upload.json` to the sender. Recording never depends on the uploader (PRD-02 9.2 step 1 lists no uploader exit).
 - **One queue of entries.** The upload thread serves every entry on this computer whose
   `upload.json` is not `done` or `closed`, whose run's credential is still there and that is not
   being sent by another uploader (section 9). Each round serves the live entry first, then one round
@@ -1028,3 +1029,87 @@ PRD-12 and PRD-17.
   module passes the new ceilings.
 - No locked ledger item is touched and no owner question comes from this slice. Ledger L2 is "cut
   before you add", not a number; the overshoot goes into the end-of-build size report.
+
+### 2026-10-31, slice 4 review fixes
+
+- **Panic cover.** `guard` now wraps each thread's whole body, so a panic in `Sender::new`,
+  `Beat::new`, `next`, `put` or a `durable` read is caught too and the body starts again on its
+  backoff; the wrap-up facts sit in the shared state, so a body started again still has them.
+  `upload_resume.rs` drives `guard` with a body that panics twice: it runs three times, writes two
+  lines, and the upload thread's case says `waiting` with class `internal`. This is a partial cover
+  of the PRD case: no scripted answer can panic the parser, so the threads' own rebuild is shown
+  through `guard`, not through the Worker. In production the recorder's panic hook
+  (`pipeline/secure.rs`) also writes an `internal_error` line, so a panic gives two log lines.
+- **Seal LINK.** After `finish` the beat thread takes the seal LINK from the last line on disk in
+  both modes; the writer has sealed and synced before `finish`.
+- **Live mode untested.** Every thread test runs with `recorder: None`. The durable watch path and
+  `health(Some(live))` get their case once PRD-02 lands a test recorder.
+- **Decision (size).** At this fix the upload module is past the 2,500 src ceiling (inline tests
+  counted), with `prune.rs` and `manual.rs` still to come. The extra lines serve point 3 and point 5:
+  an uploader thread that cannot end for good, and a wrap-up that cannot stall on a dead thread.
+  `client.rs` (644) is the first place the next slice looks for a cut.
+
+### 2026-10-31, replan after slice 4 (merge a3a39f45)
+
+- **Decision (size).** The upload module is 2,558 src lines (inline tests counted) and the `upload_*`
+  test binaries 1,690, against the PRD-00 row of 940 and 1,000. The lines serve point 3 (a thread that
+  cannot end for good, a wrap-up that cannot stall) and point 5 (resend of a failed first final, wait for
+  the seal LINK, upload.json). `prune.rs` and `manual.rs` are still to come. Cut first: inline tests in
+  `client.rs` (644) that repeat an `upload_*` case, then the `UP` name compare in `finish` (keep a
+  bool or handle field instead).
+- **Known narrow cases, left as built.** (a) A body that panicked before `finish` and is in backoff when
+  `finish` arrives sets `tried`, so wrap-up chunks may go before the first final; the server answers
+  `503 awaiting_final` and the sender waits, no bytes lost. (b) If the last whole line on disk after
+  `finish` is an L line, `link` stays None and the beat thread re-reads the index each tick; PRD-02
+  section 11 steps 5 and 6 (E line synced before `finish`) rule it out. The next slice that touches
+  `finish` logs one line when the filtered read finds nothing.
+- Live mode and the recorder coupling stay untested until PRD-02 lands a test recorder and a caller of
+  `upload::spawn`. No locked ledger item is touched.
+
+### 2026-10-31, slice 5 review fixes (prune, upload.lock, `goalcup upload`)
+
+- **Prune rule.** A part goes only when a later part has an index line (PRD-01 section 1), so the
+  last part with an index line always stays for crash recovery; that last part goes only once
+  `upload.json` says `final: sealed`. A rotation `E` or a recovery `R` is therefore never read as the
+  seal. `finish` runs prune once more after the threads stop, so a sealed, stored entry is fully
+  pruned. The `upload.json` write before a delete syncs the file and the entry folder; `pruned`
+  counts only deletes that worked and is written again after them. A crash between a part's delete
+  and its `.idx` delete leaves that `.idx` for good; nothing reads it.
+- **`goalcup upload`.** `rec/lock` is probed (a shared lock, for a moment) before `upload.lock` and on
+  every tick spent waiting for it, so a live recorder, whose upload thread holds `upload.lock` for its
+  whole life, gives `StillRecording` at once. Sealed comes from `status.json` (`mode: sealed` with its
+  seal) or `upload.json` (`final: sealed`); any other entry is `NotClosed` until the dead-entry close
+  lands. On a position that is sealed at the seal LINK's offset, `next_seq - 1` and `head` must match
+  that LINK too: then `confirmed`, `final` and `done` are written and the entry is pruned, even with
+  `upload.json` lost; otherwise it is `stuck`.
+- **Decision (size).** The upload module is 2,918 src lines (inline tests counted) and the `upload_*`
+  test binaries 2,171, against the PRD-00 row of 940 and 1,000 and the replan ceilings of 2,500 and
+  1,900. The added lines serve point 5 (a pruned entry can always be resumed or sealed, nothing pruned
+  ahead of the seal) and the acceptance case "refuses while a recorder lives". The `client.rs` inline
+  tests stay: one guards point 4 (a refused call never shows the token), the other a 409 or 429 answered
+  before a PUT body ends, which no `upload_*` binary covers. The old `crates/goalcup-cli/src/upload`
+  goes with PRD-13, which is where the net size falls.
+
+### 2026-10-31, replan after slice 5 (merge 68ec7f2d)
+
+- **Done:** prune (section 7), `upload.lock`, `upload::manual::run` (section 9), the slice 4 cuts (the
+  `Thread { upload }` flag replaces the `UP` name compare; one log line when the filtered seal-LINK read
+  finds nothing). `goalcup upload` answers with `Outcome`: `Done`, `AlreadyThere`, `StillRecording`,
+  `NotClosed`, `Local`, `NoServer`, `Refused(u16)`, `Closed { upload_by }`, `Stuck`. PRD-10 maps each to a
+  section 10 line; `NotClosed` is the only one it must not show as an error, because slice 6 closes it.
+- **Slice 6 (left):** the older-entry queue (section 1) and, in `manual::run`, the dead-entry close: on
+  `NotClosed` call `pipeline::close_dead_entry` (PRD-02 9.4), then run the same sealed path. `dead.rs` is
+  not on integration yet; build against the PRD-02 shape `close_dead_entry(dir) -> Result<Closed,
+  StillRecording>` and map `StillRecording` to `Outcome::StillRecording`. If it is still absent when slice 6
+  starts, poll up to 90 minutes, then land the queue alone and leave `NotClosed` as built.
+- **Nits for slice 6 to take while in the files (no behaviour change):** in `prune.rs` clone the
+  `upload.json` snapshot first (`let snap = lock(j).clone();`) so the mutex is not held across the two
+  syncs of the write; rewrap the doc comments of `connect` (past 100 columns) and `manual::send` by hand.
+- **Size (wc -l at 68ec7f2d, inline tests counted):** src 2,948 (beat 288, chunk 273, client 644, manual
+  232, mod 508, policy 232, prune 90, send 415, state 266); `upload_*` tests 2,178 (backoff 92, beat 608,
+  chunks 516, manual 239, null 94, prune 249, resume 380). The replan ceilings of 2,500 and 1,900 are
+  passed by 448 and 278. The slice itself adds 322 src and 488 tests and cut lines elsewhere; the overage
+  is mostly earlier slices. No behaviour-keeping cut is known. Slice 6 adds only the queue and a short
+  call, and must not grow `client.rs`. The overage serves points 3 and 5 (see the slice 5 note). Net
+  against the Rust totals at the end-of-build report; the old `goalcup-cli/src/upload` goes with PRD-13.
+- No locked ledger item is touched.

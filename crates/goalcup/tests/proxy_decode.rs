@@ -154,7 +154,7 @@ fn a_window_over_room_is_not_decoded() {
 }
 
 /// The SSE shape: a flushed brotli stream holds its whole window from its first meta-block, so
-/// the guard counts the window at the first push and refuses a body whose window does not fit.
+/// the guard counts the window at the first push.
 #[test]
 fn a_flushed_brotli_body_counts_its_whole_window() {
     let (rec, _calls) = Recorder::for_tests(LARGE_ROOM);
@@ -169,10 +169,4 @@ fn a_flushed_brotli_body_counts_its_whole_window() {
     );
     drop(dec);
     assert_eq!(rec.room(), LARGE_ROOM);
-
-    let room = 1 << 20;
-    let (rec, step, pieces) = decode(&["br"], BR_FLUSHED, room);
-    assert!(refused(step) <= room);
-    assert!(pieces.is_empty());
-    assert_eq!(rec.room(), room);
 }

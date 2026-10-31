@@ -94,7 +94,7 @@ goalcup setup --harness codex-cli
 Setup asks for no repository and no token. A real run needs its own new, empty, public repository,
 a fine-grained token for it (Contents read and write, 30 days) and a project folder holding
 `.env.local` (`GH_TOKEN=...`) and a `.gitignore` with `.env*`
-([guide, section 5](PARTICIPANT-GUIDE.md#5-your-run)). The `--test` start below names the
+([guide, section 6](PARTICIPANT-GUIDE.md#6-your-run)). The `--test` start below names the
 repository with `--repo`, from inside that folder, and the agent pushes with that token. Follow
 setup's interactive sign-in; never put key values in arguments or chat. The account must be
 authorized as a staging test operator. Inspect setup's actual output. A short practice run first is optional; if you run one, use a small useful prompt

@@ -110,7 +110,7 @@ fn digest<R: Read, E>(rs: impl IntoIterator<Item = Result<R, E>>, mut n: u64) ->
 fn equal(e: &Entry, o: &Outcome, local: Option<&Input>) -> Check {
     let c = |res, why: &str| Check::new("server_equals_local", None, res, why);
     // The first PART of each local entry: its entry id, and whether it starts the entry (PRD-01).
-    let first = |l: &Entry| Some((l.clone(), input::open(l).ok()?.0.next()?.ok()?.rec));
+    let first = |l: &Entry| Some((l.clone(), input::open(l).ok()?.next()?.ok()?.rec));
     let id = o.entry.as_deref().unwrap_or("-");
     let ours = |f: &(Entry, Record)| matches!(&f.1, Record::Part { entry, .. } if entry == id);
     let mut found = local.into_iter().flat_map(|i| &i.entries).filter_map(first);

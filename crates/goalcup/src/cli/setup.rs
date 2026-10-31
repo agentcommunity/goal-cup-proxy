@@ -2,18 +2,19 @@
 //! error is one `say` line on stderr, and every path is quoted.
 //!
 //! - `--record-host HOST` adds one host to `record-hosts.txt` and does nothing else.
-//! - Without `--yes` setup asks nothing, opens nothing and writes nothing: steps 1 and 4, then
-//!   `Ready.` or the step to fix.
+//! - Without `--yes` and without a terminal setup asks nothing, opens nothing and writes nothing:
+//!   steps 1 and 4, then `Ready.` or the step to fix. With a terminal it picks the harness, opens
+//!   it in the isolated home to sign in, writes `update_off`, asks the one `no_prompts` question.
 //! - With `--yes` it also writes the connector's `update_off` and `no_prompts` rows into the
 //!   isolated home and prints that home's path, the last folder path on stdout (S15: the pad takes
 //!   the last quoted folder path as the home).
 
 use std::collections::BTreeMap;
 use std::fs;
-use std::io::Write as _;
+use std::io::{BufRead as _, IsTerminal as _, Write as _};
 use std::os::unix::fs::OpenOptionsExt as _;
 use std::path::{Path, PathBuf};
-use std::process::ExitCode;
+use std::process::{Command, ExitCode};
 use std::time::SystemTime;
 
 use serde::{Deserialize, Serialize};
@@ -21,7 +22,8 @@ use serde::{Deserialize, Serialize};
 use super::{Server, awake, fail, folder, isolated_home, read_json, record_hosts};
 use super::{setup_json, text};
 use crate::connector::launch::{fill, make_dir, resolve_program};
-use crate::connector::{self, Connector, Decision, Env, Form, HostList, Refusal, SettingRow};
+use crate::connector::{self, Connector, Decision, Env, Form, HostList, LaunchPlan};
+use crate::connector::{Refusal, SettingRow};
 use crate::connector::{Source, builtin};
 use crate::upload::client::ServerClient;
 
@@ -59,7 +61,13 @@ pub fn run(harness: Option<&str>, yes: bool, record_host: Option<&str>) -> ExitC
         .filter_map(|(k, v)| Some((k.into_string().ok()?, v.into_string().ok()?)))
         .collect();
     let saved = read_json::<Saved>(&setup_json(&home)).map(|s| s.harness);
-    let Some(id) = harness.map(str::to_owned).or(saved) else {
+    let ask = !yes && std::io::stdin().is_terminal() && std::io::stdout().is_terminal();
+    let id = match harness {
+        Some(id) => Some(id.to_owned()),
+        None if ask => pick(saved.as_deref(), &installed(&vars)),
+        None => saved,
+    };
+    let Some(id) = id else {
         return fail(&text::no_harness(&installed(&vars)));
     };
     let c = match connector::load(&id, None) {
@@ -70,10 +78,8 @@ pub fn run(harness: Option<&str>, yes: bool, record_host: Option<&str>) -> ExitC
     if !program.is_absolute() {
         return fail(&text::not_installed(&c.name));
     }
-    // Without `--yes`, with a terminal or not: picking, opening the harness to sign in and the
-    // `no_prompts` question are the interactive slice. Until then this path runs nothing.
-    let fix = if yes {
-        match write_home(&c, &home, &server, vars.clone()) {
+    let fix = if yes || ask {
+        match write_home(&c, &home, &server, vars.clone(), ask) {
             Ok(fix) => fix,
             Err(e) => return fail(&e),
         }
@@ -93,16 +99,17 @@ pub fn run(harness: Option<&str>, yes: bool, record_host: Option<&str>) -> ExitC
     }
 }
 
-/// `--yes`: `plan` takes the home's lock, makes the home, probes the version and writes
+/// `--yes` (or `ask`, with a terminal): `plan` takes the home's lock, makes the home, probes the version and writes
 /// `update_off`; then every `update_off` and `no_prompts` row is written (a row already holding
 /// its value is left as it is), and `setup.json` saves those written. `Ok(Some(step))` is a
 /// refusal to show after the machine lines; `Err` a home another run holds, where nothing was
-/// written.
+/// written. `ask` opens the harness once to sign in and asks before the `no_prompts` rows.
 fn write_home(
     c: &Connector,
     home: &Path,
     server: &Server,
     vars: BTreeMap<String, String>,
+    ask: bool,
 ) -> Result<Option<String>, String> {
     let iso = isolated_home(home, &c.id);
     let env = Env {
@@ -124,8 +131,16 @@ fn write_home(
         v.split_whitespace().find(number).unwrap_or(v)
     });
     put(&text::harness_found(&c.name, version, &plan.program));
+    if ask {
+        open(&plan, &c.name);
+    }
     let update_off = write_rows(&plan.home, &c.update_off);
-    let no_prompts = write_rows(&plan.home, &c.no_prompts);
+    let no_prompts = if !ask || confirm(&format!("{} [Y/n] ", text::no_prompts_question(&c.name))) {
+        write_rows(&plan.home, &c.no_prompts)
+    } else {
+        put(&text::no_prompts_left(&c.name));
+        Vec::new()
+    };
     let (update, prompts) = (!update_off.is_empty(), !no_prompts.is_empty());
     let saved = Saved {
         v: 1,
@@ -141,11 +156,52 @@ fn write_home(
     Ok(plan.refusal.as_ref().map(text::refusal))
 }
 
+/// One line typed at the terminal, trimmed; empty at end of input.
+fn read_line(prompt: &str) -> String {
+    let _ = write!(std::io::stdout(), "{prompt}");
+    let _ = std::io::stdout().flush();
+    let mut line = String::new();
+    let _ = std::io::stdin().lock().read_line(&mut line);
+    line.trim().to_owned()
+}
+
+/// Step 1: Enter takes the saved harness; otherwise the id typed.
+fn pick(saved: Option<&str>, installed: &[&str]) -> Option<String> {
+    let found = installed.join(", ");
+    let line = read_line(&format!(
+        "Harness ({found}) [{}]: ",
+        saved.unwrap_or("none")
+    ));
+    (!line.is_empty())
+        .then_some(line)
+        .or(saved.map(str::to_owned))
+}
+
+/// Step 2: the harness in the isolated home with its own launch data; a failure is a line.
+fn open(plan: &LaunchPlan, name: &str) {
+    read_line(&format!(
+        "Press Enter to open {name} in its Goal Cup home. Sign in there, then quit it."
+    ));
+    let mut cmd = Command::new(&plan.program);
+    cmd.args(&plan.argv).env_clear().envs(&plan.env);
+    if cmd.current_dir(&plan.home).status().is_err() {
+        put(&format!(
+            "goalcup could not open {name}. Open it yourself and sign in there."
+        ));
+    }
+}
+
+/// Step 3: anything but `n` is yes.
+fn confirm(prompt: &str) -> bool {
+    !read_line(prompt).eq_ignore_ascii_case("n")
+}
+
 /// Writes each row into `home` and gives back those written; a row not written gets its line.
 fn write_rows(home: &Path, rows: &[SettingRow]) -> Vec<Row> {
     let mut written = Vec::new();
     for row in rows {
-        // Filled as connector::launch::write_settings fills it, until PRD-11 returns the file.
+        // Filled as connector::launch::write_settings fills it (keep the two in step), until
+        // PRD-11 returns the file.
         let file = PathBuf::from(fill(&row.file, home, Path::new("")));
         if connector::write_settings(home, std::slice::from_ref(row)).is_empty() {
             let (key, value) = (row.key.clone(), row.value.clone());
@@ -178,7 +234,7 @@ fn machine(home: &Path, server: &Server, vars: &BTreeMap<String, String>) {
         Server::Url(base) => ServerClient::new(base, None)
             .json::<serde_json::Value, ()>("GET", "/v1/health", None)
             .err()
-            .map(|e| text::server_unreachable(&e.to_string())),
+            .map(|e| text::server_unreachable(&e)),
     };
     let lines = [
         awake::missing(vars).map(text::no_sleep_lock),

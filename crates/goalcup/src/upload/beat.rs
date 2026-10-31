@@ -181,9 +181,9 @@ impl Beat {
 
     /// Sends one final heartbeat per call: `final: true` at the seal LINK with the seal's
     /// `workspace_head` and totals. From the first call on `tick` sends nothing. The caller repeats
-    /// it when `backoff.due`, until `upload.json` `final` says sealed or the wrap-up ends: an answer that
-    /// does not say sealed waits like a failure. A recovered seal says at least `gaps`: its
-    /// abandoned span is off time (section 6).
+    /// it when `backoff.due`, until `upload.json` `final` says sealed or the wrap-up ends: an
+    /// answer that does not say sealed waits like a failure. A recovered seal says at least
+    /// `gaps`: its abandoned span is off time (section 6).
     pub fn final_beat(
         &mut self,
         now: Mono,
@@ -232,8 +232,9 @@ impl Beat {
         self.send(now, &req, j, word).is_some()
     }
 
-    /// Sends `req` once, `now` read before the call. An answer goes into `upload.json` and onto
-    /// `word`; a failure backs off and writes one `goalcup.log` line.
+    /// Sends `req` once, `now` read before the call. An answer goes into the shared `upload.json`
+    /// (the threads write the file on their tick) and onto `word`; a failure backs off and writes
+    /// one `goalcup.log` line.
     pub fn send(
         &mut self,
         now: Mono,
@@ -244,7 +245,7 @@ impl Beat {
         let wall = SystemTime::now();
         let answer = self.client.heartbeat(&self.run, req);
         let mut j = lock(j);
-        let out = match answer {
+        match answer {
             Ok(a) => {
                 let w = take_answer(&mut j, &a, req.recording, now, wall);
                 if req.is_final && j.final_ == Final::None {
@@ -268,9 +269,7 @@ impl Beat {
                 self.log_failure(&e, wait);
                 None
             }
-        };
-        let _ = state::write(&self.entry_dir, &j);
-        out
+        }
     }
 
     /// `upload what=beat ...`. A 409 has no class (section 5) and logs `none`; an unreadable

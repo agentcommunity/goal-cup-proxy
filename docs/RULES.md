@@ -7,14 +7,14 @@ machine. The step-by-step path is the [participant's guide](PARTICIPANT-GUIDE.md
 **How Goal Cup Proxy runs.** `goalcup start` opens your harness in its normal chat mode, in your own
 terminal, in the project folder you start it from. That folder is the workspace; your agent pushes
 its work to your new, empty, public GitHub repository. You approve each run in the
-browser with your Agent Community account. Two approvals are normal: `goalcup login` signs this
-computer in once and starts nothing, and each `goalcup start` approves that one run. You type the
+browser with your Agent Community account: one approval per run. You type the
 prompt as the first message; after it, the only message you may type is "keep going". Goal Cup Proxy
 records the harness's model traffic through a recording proxy on your machine, set for the harness process only, and the harness's session files.
 It uploads the record to the Goal Cup server while the run goes on. It never changes a model base URL
 or any app-wide trust or config, never sends the agent a message, and never restarts it on its own.
-Secrets are removed on your machine before anything is written or uploaded, with one known gap
-([your logins](#goal-cup-proxy-auth-and-privacy)). Raw records stay private.
+Secrets are masked on your machine before anything is written or uploaded, by shape and by exact
+value; the [guide](PARTICIPANT-GUIDE.md#9-what-is-recorded-and-what-is-not) lists what can still be
+recorded. Raw records stay private.
 
 ## The idea
 
@@ -33,14 +33,10 @@ All times are UTC.
 
 - **Release availability:** install the latest published Goal Cup Proxy release on macOS, Linux or WSL2
   with `curl -fsSL https://github.com/agentcommunity/goal-cup-proxy/releases/latest/download/install.sh | sh`
-  ([guide](PARTICIPANT-GUIDE.md#1-install)).
-- **23 October to 6 November, 00:00:** the dry-run window is open; you can start dry runs on any
-  day. A release is planned for 6 November, 12:00; it is not a cutoff, and releases may follow (D70). A dry run is a 168-hour rehearsal
-  that does not count ([guide](PARTICIPANT-GUIDE.md#the-dry-run-optional)).
-- **Before the window:** you prepare with `goalcup setup` and practice runs. Practice is not limited
-  to the window.
-- **A dry run started on 0.6.1:** seal it, then update. The installer that shipped with 0.6.1 does not
-  check for a recording run; the current one does, but seal first anyway ([guide](PARTICIPANT-GUIDE.md#the-dry-run-optional)).
+  ([guide](PARTICIPANT-GUIDE.md#2-install)).
+- **Until the start window:** you prepare with `goalcup setup` and practice runs, which are not
+  limited to any window. The release is planned for 6 November, 12:00; it is not a cutoff, and
+  releases may follow (D70).
 - **7 November 2026, 00:00:** the 24-hour start window opens. It closes at 00:00 on 8 November.
 - **During the window:** you finalize your prompt and start your run.
 - **The run's start:** the server opens the run, stamps its official start on its own clock, and
@@ -103,8 +99,8 @@ The latest possible run ends 192 hours after the window opens.
   (for example `/model` to switch model) count as typing: they are recorded and reviewed, never
   blocked. Choose your model in setup.
 - Answering a permission prompt is typing too, so set your harness up in setup to run without them.
-  Goal Cup recommends how, per harness, and never changes your harness's settings (D67;
-  [Set up your harness for a 168-hour run](HARNESS-SETUP.md)).
+  `goalcup setup` offers to set this for you, in the harness's own home under goalcup, and never
+  changes your own settings (D86; [guide](PARTICIPANT-GUIDE.md#3-set-up)).
 - The review works out who said each message from what the model saw and how the harness structures its
   messages. That is a detection, not a proof. An organizer reviews a message it cannot explain.
 - Goal Cup Proxy never sends anything to the agent, and never relays, edits or blocks your input: no
@@ -150,12 +146,12 @@ The 4,000-character limit applies to the direct prompt. It is not a limit on the
   `goal-cup` skill goes in the harness's home, not the workspace. Your agent makes the repository
   itself (`git init`) and pushes.
 - The agent pushes its work to the repository with the token you made for it (see Keys). Goal Cup
-  Proxy passes the agent no git login, SSH agent or `gh` configuration. It does not claim the agent
-  cannot reach one: the agent runs as you, and `ssh` reads `~/.ssh` from your account whatever
-  `HOME` says. In a test on 26 Oct 2026 the agent used the tester's own SSH key unprompted, so
-  with an SSH key it can push to any repository that key reaches. Give the key a passphrase or a
-  per-use confirmation (for example the 1Password SSH agent with approval), or run in a Docker
-  container ([results](research/results/2026-10-26-mac-retest.md)). The commit the server records at the deadline is what is judged.
+  Proxy passes the agent no git login, SSH agent or `gh` configuration, but the agent runs as you,
+  and `ssh` reads `~/.ssh` whatever `HOME` says. In a test on 26 Oct 2026 the agent used the
+  tester's own SSH key unprompted, so it can push to any repository that key reaches. Give the key
+  a passphrase or a per-use confirmation, or run in a Docker container
+  ([results](research/results/2026-10-26-mac-retest.md)). The commit the server records at the
+  deadline is what is judged.
 - Prepared capabilities may help the agent work. A prebuilt product, substantial product code or an
   existing application may not be smuggled in as "context". The judged result must be a fresh build.
 - Participant-controlled instructions and task context available to the agent at the start are frozen
@@ -163,19 +159,18 @@ The 4,000-character limit applies to the direct prompt. It is not a limit on the
 - The original prompt and the participant-controlled context the agent actually uses must be disclosed
   when the run is published. Public skills or pages can be linked by exact version. Private or changeable
   material needs a frozen publishable copy.
-- An empty workspace is not an empty context, and some harnesses fill it in for you. The Codex desktop
-  app injects your saved memory summary and your global skill listing into every thread. OpenCode and
-  Cursor read the skills in your home directory into the system prompt. That is allowed, and it is
-  disclosed with your run like any other prepared context. If you would rather it were not there,
-  turn it off before you start. You cannot change it during the run.
-- If Goal Cup Proxy cannot resolve a referenced skill, website, MCP resource, memory or similar source
-  automatically, organizers may ask for access and you must provide the exact frozen material.
+- An empty workspace is not an empty context: some harnesses read the skills in your home directory
+  into the system prompt, or inject saved memory. That is allowed, and it is disclosed with your run
+  like any other prepared context. Turn it off before you start if you would rather it were not
+  there. You cannot change it during the run.
+- If a referenced skill, website, MCP resource or similar source cannot be resolved automatically,
+  organizers may ask for access and you must provide the exact frozen material.
 - Credentials, tokens and unrelated private account data are never published.
 - **You will see that it is working.** `goalcup status` shows the recording's state and health, and a
   `PROBLEM:` line for anything wrong. The server emails you when your run starts, when it has heard
   nothing from Goal Cup Proxy for 20 minutes, when your agent has made no model calls for 3 hours and
-  again at 6 hours, when the recording has a problem, when Goal Cup Proxy pauses your agent because
-  the disk is almost full, and when the run has ended and its commit is recorded. There is no token
+  again at 6 hours, when the recording has a problem, when the disk is full, and when the run has ended and its commit is
+  recorded. There is no token
   limit.
 - Ordinary public internet pages and normal third-party service responses do not need to be
   republished in full. Their source should be traceable when the harness exposes it.
@@ -193,11 +188,10 @@ disclosure and no-side-channel rules.
   yours to revoke.
 - Keys go in the project folder's `.env.local`. Set them up before the start; changing them during
   the run is outside help. The GitHub token must be one line, exactly `GH_TOKEN=<token>`. The
-  recorder redacts the token's value from everything it records (every common encoding) if it was
-  in the folder at the start; a token added later is covered by its `github_pat_` pattern only. So is a token after a
-  recorder restart: a reopened entry has no run secrets, and the pattern covers fine-grained
-  tokens. A real run needs the token line (a practice run does not). Model keys there are for your agent's own product. The harness's own
-  sign-in happened in setup and does not go there.
+  recorder masks the token's value in everything it records (every common encoding) if it was in
+  the folder at the start; a token added later is covered by its `github_pat_` pattern only. A real
+  run needs the token line (a practice run does not). Model keys there are for your agent's own
+  product. The harness's own sign-in happened in setup and does not go there.
 - **One token kind: a GitHub fine-grained personal access token for the one cup repository, with
   Contents read and write and an expiry of 30 days,** saved as `GH_TOKEN=...` in `.env.local`. You
   make it after the repository exists. A broader token (a classic token, or one for all your
@@ -251,8 +245,7 @@ disclosure and no-side-channel rules.
 ## Goal Cup Proxy, auth and privacy
 
 - The official open-source Goal Cup Proxy and Agent Community Auth are required for the full run.
-- `goalcup login` records nothing. Recording begins only when you start a run with `goalcup start` and
-  approve it in the browser.
+- Recording begins only when you start a run with `goalcup start` and approve it in the browser.
 - `goalcup start` is a terminal command. It checks the folder you run it in and your repository,
   opens the run on the server after you approve it, starts the recording proxy, and opens the
   harness in chat mode in that folder. It makes no commit or push there; it only reads git, to seal.
@@ -272,108 +265,92 @@ disclosure and no-side-channel rules.
   server's clock. `goalcup status` shows a live run's recording state, health, storage and gaps, and
   each heartbeat tells the server how the recording is doing.
 - Each harness writes its sessions into Goal Cup Proxy's own home for that harness, never into your own
-  store. Goal Cup Proxy records every session file new or written there since the run started. Runs that
-  share a harness home are recorded one at a time.
+  store. Goal Cup Proxy records every session file new or written there since the run started.
 - **No connector in this build changes app-wide configuration.** Goal Cup Proxy reads nothing from and
-  writes nothing to your `~/.claude`, `~/.codex` or `~/.hermes`, and the daemon refuses a config home
-  inside any of them. A future connector that must change one would say so in its manifest, and your
+  writes nothing to your `~/.claude`, `~/.codex` or `~/.hermes`, and goalcup refuses a config home
+  inside any of them. A future connector that must change one would say so in its connector, and your
   run would disclose it.
 - **Your agent is not limited the same way.** It runs with full access as your user, so it can read
-  and write anything you can, those folders and your Keychain included. Codex and Claude Code each use
-  one config home in Goal Cup Proxy's own config directory, shared by that connector's runs. Goal Cup Proxy
-  never copies your own settings into it: `goalcup setup` opens the harness there so you sign in and add
-  the settings, MCP servers and skills you want. Claude Code's run `HOME` on macOS holds a link to your
-  `~/Library/Keychains`, for your subscription login. Hermes uses one such home too, set up by its
-  own wizard when `goalcup setup` opens it. Each harness keeps its own login in its home, and its
-  access token is forwarded unread and never written ([README](../README.md#the-access-token)).
-- **Your agent can read your logins, and one recording gap remains.** The harness must read and
+  and write anything you can, those folders and your Keychain included. Goal Cup Proxy never copies
+  your own settings into its harness homes: `goalcup setup` opens the harness there so you sign in
+  and add the settings, MCP servers and skills you want. Claude Code's run `HOME` on macOS holds a
+  link to your `~/Library/Keychains`, for your subscription login. Each harness keeps its own login
+  in its home, and its access token is forwarded unread and never written.
+- **Your agent can read your logins.** The harness must read and
   refresh its own login all run, and its tools run as your user. So Goal Cup Proxy cannot stop your
   agent reading the harness's login files in Goal Cup Proxy's home (Codex `auth.json`, Hermes `.env`
   and `auth.json`, Amp `secrets.json`, Claude Code's credential store), or your own `~/.codex`,
-  `~/.claude` and Keychain. The harness's login header is never stored. But a key the model
-  repeats in its reply is recorded as it streams, in small pieces that redaction does not match
-  yet. A trace in which the verifier finds secret-shaped text is not rejected: it is flagged, and
-  it is cleaned before anyone else gets it. An uploaded raw record cannot be rewritten. So use a
-  login or account you can revoke, keep no unrelated secrets in the workspace or your home folder,
-  and log out of the harness or rotate its login after the event.
+  `~/.claude` and Keychain. The harness's login header is never stored. A trace in which the
+  verifier finds secret-shaped text is not rejected: it is flagged, and it is cleaned before anyone
+  else gets it. An uploaded raw record cannot be rewritten. So use a login or account you can
+  revoke, keep no unrelated secrets in the workspace or your home folder, and log out of the
+  harness or rotate its login after the event.
 - **What the evidence covers.** Every request your agent sent to the model service Goal Cup opened is
   captured, model calls and everything else on that service alike; a call that bypasses
   `HTTPS_PROXY` is not. Nor is every byte a tool produced: several harnesses truncate large tool
-  output before writing it, and on some the untruncated bytes exist nowhere on disk. A few internal
-  model calls, such as title generators and follow-up suggestion helpers, appear in no transcript on
-  any harness we measured. Neither affects judging.
-  [CHEAT-CHECKLIST](CHEAT-CHECKLIST.md) lists what a verifier `pass` does not cover.
-- <a id="what-a-label-is-worth"></a>**What a label is worth.** The verifier labels what each run
-  holds (D74): `wire_and_native` (the model requests and the harness's chat file), `wire_only`
-  (the model requests alone), `wire_undecoded` (model traffic recorded in a form no decoder reads
-  yet) and `native_only` (the chat file alone). Each of these counts. `none` (no model traffic
-  and no chat file) does not. "Native" means model work in the chat file: a chat file with no
-  model work in it labels `none`. "Counts" means the run is admissible: a `native_only` run is
-  reviewed with its sealed-hosts list for why its model calls were not recorded, and routing model
+  output before writing it. A few internal model calls, such as title generators, appear in no
+  transcript on any harness we measured. Neither affects judging.
+  [SECURITY](../SECURITY.md#what-a-check-does-not-prove) lists what a verifier `pass` does not cover.
+- <a id="what-a-label-is-worth"></a>**What a label is worth.** `goalcup-verify check --json` gives
+  each run a `label` (D74) from what the run holds: `wire_and_native` (model requests and the
+  harness's chat file), `wire_only` (model requests alone), `native_only` (the chat file alone) or
+  `none` (no model request and no chat file). The text output ends with a coverage line. Each of the
+  first three counts. `none` does not. "Native" means model work in the chat file: a chat file with
+  no model work in it labels `none`. "Counts" means the run is admissible: a `native_only` run is
+  reviewed for why its model calls were not recorded, and routing model
   work around Goal Cup Proxy on purpose is still grounds for disqualification (below).
-  The label is a hint for judges, not a judgement of the run. Only model requests count toward
-  `wire_undecoded`: a request on a recorded path with a protocol hint, a POST, or a message the
-  harness sent over a WebSocket on a recorded path with a hint. A lone GET (a model list or a
-  probe) and the sealed-connection list do not. Hermes and Amp keep their chat files in a form
-  with no native decoder yet, so their runs label `wire_only` or `none`. A `none` run with sealed
+  The label is a hint for judges, not a judgement of the run. Some harnesses keep their chat files
+  in a form no reader decodes, so their runs label `wire_only` or `none`; a `none` run with sealed
   chat files is reviewed, not thrown out.
 - Goal Cup Proxy downtime while the agent kept working is reviewed, not automatically penalized. Downtime
   while nothing happened is an outage.
-- **A full disk is a red flag.** When the disk fills, the record shows a `StorageFull` gap. It means
-  something was off. Judges decide each such gap case by case.
-- **A nearly full disk pauses the agent.** Under 1 GiB free beyond the run's reservation Goal Cup Proxy
-  freezes the agent, so nothing happens unrecorded, and resumes it by itself above 3 GiB (D65).
+- **A full disk.** If the disk fills, recording goes off until there is space again, and the record
+  shows the gap. Judges read it like any other gap (D78).
 - The server is authoritative for the start window, the official start, the deadline and the stop.
   Without a network at the deadline, Goal Cup Proxy stops the run once the run's length has passed on the
   machine's own clock.
 - Goal Cup Proxy captures the exact prompt, starting workspace state, observable prepared context, later
   human messages, agent and subagent lifecycle, tool calls and results, external sites and services
   used, harness and model identity when available, run continuity, and final state.
-- The record uploads to the server during the run, every 30 minutes or sooner by size. When the server
-  cannot be reached, the record waits on your disk and the upload retries; the run goes on. After the
-  stop, Goal Cup Proxy seals and uploads for at most one hour. What is still unsent goes up
-  by itself the next time you run any `goalcup` command, and `goalcup upload` sends it by hand.
+- The record uploads to the server during the run: a round every 5 minutes, or at once when 16 MiB
+  of compressed record waits. When the server cannot be reached, the record waits on your disk and
+  the upload retries; the run goes on. After the seal, goalcup keeps sending for up to 60 minutes.
+  The server takes uploads until 24 hours after the run ends. What is still unsent goes up by itself
+  the next time you run any `goalcup` command, and `goalcup upload` sends it by hand.
 - **What a trace holds.** Everything your agent sent to the model service and everything it saw back:
   the prompts and replies, the tool calls and their results, and the request and response headers of
-  each exchange. Credential headers (`authorization`, `cookie`, `set-cookie`, `x-api-key`, and any
-  header whose name contains `key`, `token`, `secret`, `password` or `auth`) are replaced by
-  `[masked]`. A `Bearer` or `Basic` credential is masked in any header value, whatever the header
-  is called. The userinfo of a URL is masked, and so is the value of a credential-named query
-  parameter: one whose name matches the header rule, `sig`, or any name containing `signature`
-  (signed-URL parameters). A credential in any other form, under a header name not listed here, is not masked.
-  Credentials in bodies are matched by pattern and replaced by a `<redacted:KIND>` marker, and
-  a key the model repeats in its reply is not reliably caught. The trace also holds file contents
+  each exchange. Credentials are masked
+  on your machine before anything is written: the value is replaced by stars of the same length, so
+  the shape of the record stays. This covers credential headers and URL parts, the exact values of
+  your run's own secrets, and credential patterns in bodies. The guide lists what can still be
+  recorded ([section 9](PARTICIPANT-GUIDE.md#9-what-is-recorded-and-what-is-not)).
+  The trace also holds file contents
   and file paths from your machine: the harness's own session and chat files, and the files its tools
-  read and wrote as the harness reports them. Paths are written as your machine names them. The
-  only other facts about your machine are the non-identifying ones listed below.
+  read and wrote as the harness reports them. Paths are written as your machine names them.
 - **What Goal Cup Proxy records, and what it never does.** It observes one process: the harness it
-  launched for your run, and any program that harness starts. It records that agent's conversation
-  with the model provider, every request and every reply, by pointing that one process at a recording
+  launched for your run, and any program that harness starts. It points that process at a recording
   proxy on your machine through its own environment; nothing else on the machine goes through it. It
-  records what you type into that agent, because the review must see every human message. Traffic from
-  the agent to any other address is noted as the address, the port, the bytes each way, the times
-  and the reason, nothing more, and is never decrypted; that list is uploaded with the seal.
-  Traffic on the model service's address is decrypted and every request and reply on it is recorded,
-  whether or not it is a model call: a model list, or a token refresh the harness makes there. The
-  sign-in hosts are among the other addresses, and their traffic is never decrypted. This holds only
-  for programs that use the `HTTPS_PROXY` setting: a tool that ignores it (`ssh`, a raw socket, a
-  command that unsets `HTTPS_PROXY`) connects directly and is not seen at all. Your ChatGPT, Claude
-  or login credentials are not stored as headers: the recording proxy removes their header values
-  before anything is written, and keeps neither their values nor any fingerprint of them. A key the
-  model repeats in its reply can still be recorded (see the recording gap above). Goal Cup Proxy
-  does not watch other terminals, your browser, other processes or audio. It also records the harness
-  build and non-identifying facts about the machine (operating system and version, architecture, CPU
-  count, memory, disk size and free space, WSL2, container, mains power): no host name, user name or
-  serial number. The server keeps the IP address and country of each connection from Goal Cup Proxy, on
-  the server only, never in the trace and never public.
+  records the agent's conversation with the model provider and what you type into that agent, because
+  the review must see every human message. Traffic from the agent to any other address (the sign-in
+  hosts included) is noted as the address, the port, the bytes each way, the times and the reason,
+  nothing more, and is never decrypted; that list is uploaded with the seal. Traffic on the model
+  service's address is decrypted and all of it recorded, a model list or token refresh included. This
+  holds only for programs that use the `HTTPS_PROXY` setting: a tool that ignores it (`ssh`, a raw
+  socket, a command that unsets `HTTPS_PROXY`) connects directly and is not seen at all. Your ChatGPT,
+  Claude or login credentials are not stored as headers: the recording proxy masks their header values
+  before anything is written, and keeps neither their values nor any fingerprint of them. Goal Cup
+  Proxy does not watch other terminals, your browser, other processes or audio. It also records the
+  harness build and non-identifying facts about the machine (operating system and version,
+  architecture, CPU count, memory, disk size and free space, WSL2, container, mains power): no host
+  name, user name or serial number. The server keeps the IP address and country of each connection,
+  on the server only, never in the trace and never public.
 - **Raw traces and terminal output stay private.** They are used only for compliance review and the
-  announced research project. They hold more about you than you might expect: Codex stamps your plan
-  type, credit balance and quota percentage into every token-count event, and harnesses read
-  credentials from outside their own home directories. That is another reason raw traces are never
-  published. They are kept until judging and appeals end, then deleted. The privacy notice on the
-  website has the full terms.
+  announced research project. They hold more about you than you might expect (Codex stamps your plan
+  type, credit balance and quota percentage into every token-count event), which is another reason
+  they are never published. They are kept until judging and appeals end, then deleted. The privacy
+  notice on the website has the full terms.
 - A published run includes the original prompt, the disclosed starting context, harness and model
-  information when known, the verification status (the verifier's `pass`, `flag` or `fail` verdict
+  information when known, the verification status (the verifier's `pass`, `named` or `fail` verdict
   and its findings), and the final result. A verdict is not proof of anything.
 - Modifying, disabling, bypassing, or deliberately routing work around Goal Cup Proxy is grounds for
   disqualification.
@@ -382,10 +359,12 @@ disclosure and no-side-channel rules.
 
 **Where the run happens.** Goal Cup Proxy and the harness run on the same machine, and that machine
 may be a laptop, a desktop, or a remote server or cloud sandbox you control (or one the organizers
-provide), reached over SSH. It needs a supported disk type (APFS, ext4 or XFS) and a supported system.
+provide), reached over SSH. It needs a supported system.
 Harness modes where the agent itself runs in a vendor's cloud (Claude Code on the web, Codex cloud,
 Cursor cloud agents, Amp orbs and Amp's remote executors) and CI runners are not eligible, because
-they leave no local trace. Amp's Claude Code mode starts a second harness and is not allowed either.
+they leave no local trace. Copilot CLI's `/delegate` and Factory Droid's cloud computers are cloud
+modes too, and are not allowed. Amp's Claude Code mode starts a second harness and is not allowed
+either.
 
 **Remote computers as tools.** Your agent may use other computers as tools: deploy to a server, run a
 database, call an API. Only its own commands and their results are recorded, not what happens on the
@@ -394,23 +373,18 @@ far side.
 **Other agents.** Your agent may not hand its work to another AI agent outside its own harness: an
 agent running on another machine, a hosted coding agent, or a different harness it starts (a sub
 harness rather than a subagent). Goal Cup Proxy cannot block this. If the review finds that such an
-outside agent did work that ended up in your code, the run is banned.
+outside agent did work that ended up in your code, the run is banned. This includes Qwen Code's
+built-in `claude-code` and `codex` subagents, which start another harness.
 
-Every connector shipped with the participant build is available to participants. Run
-`goalcup doctor --harness all` for that build's roster; the source [facts index](harnesses/README.md)
-records platform measurements and capture/decoder limits. Current chat-mode connectors are:
+Fifteen harnesses ship with the participant build, and a competition run uses only those connectors:
+`goalcup start` refuses `--connector` and `--hosts` in a competition run. The one harness table,
+with the connector id, how each harness is signed in and what goalcup cannot record or stop, is
+[docs/harnesses/README.md](harnesses/README.md); it is not copied here. That table also says which
+harnesses the test pad has verified. A tier does not decide whether you may take part.
 
-| Harness | Id | Notes |
-|---|---|---|
-| Claude Code CLI | `claude-code-cli` | The build that ran is recorded. |
-| Codex CLI | `codex-cli` | Launch the native binary, not the npm wrapper. |
-| Hermes Agent | `hermes-cli` | Its own setup keeps provider/login state; native snapshots are capture-only. |
-| Amp CLI | `amp-cli` | Conversation snapshots are decoded from the recording proxy; local metadata is not a transcript. |
-
-Other harnesses can join through the [connector process](HARNESS-ONBOARDING.md#getting-a-harness-into-the-event).
-Releases continue during the cup, and a merged connector ships in the next one. A harness
-without a shipped, tested connector has no supported recording path and its runs do not count.
-Source inclusion, event qualification and actual platform measurements remain distinct.
+Other harnesses can join through the [connector process](HARNESS-ONBOARDING.md).
+A merged connector ships in the next release. A harness without a shipped connector has no
+supported recording path and its runs do not count.
 
 ## Submission
 
@@ -481,9 +455,3 @@ Source inclusion, event qualification and actual platform measurements remain di
 - Sponsors and partners must be Agent Community members.
 - Awards, their criteria and judges freeze when the window opens.
 - Judge, partner and sponsor enquiries: goalcup@agentcommunity.org.
-
-## Still to decide
-
-- Judging and result dates.
-- Signed binary release policy and event capacity limits.
-- Final judging rubric, shortlist threshold and appeal process.

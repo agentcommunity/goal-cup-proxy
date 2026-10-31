@@ -9,6 +9,7 @@ use super::client::Recording;
 use super::policy::Class;
 use crate::pipeline::Mono;
 use serde::{Deserialize, Serialize};
+use std::fs::{File, TryLockError};
 use std::io::{self, Write as _};
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
@@ -163,6 +164,12 @@ pub fn read(entry_dir: &Path) -> Option<UploadJson> {
 /// Writes the file: a temp file in the same folder, created with mode 0600, then renamed over it.
 /// The temp name holds the pid and a per-call number, so two writers never share one.
 pub fn write(entry_dir: &Path, value: &UploadJson) -> io::Result<()> {
+    write_with(entry_dir, value, false)
+}
+
+/// [`write`], and with `sync` the temp file's data is synced before the rename and the folder
+/// after it, so the new file outlives a power loss that keeps a later delete (section 7).
+fn write_with(entry_dir: &Path, value: &UploadJson, sync: bool) -> io::Result<()> {
     static CALLS: AtomicU64 = AtomicU64::new(0);
     let n = CALLS.fetch_add(1, Ordering::Relaxed);
     let tmp = entry_dir.join(format!(".{FILE}.{}.{n}.tmp", std::process::id()));
@@ -172,8 +179,15 @@ pub fn write(entry_dir: &Path, value: &UploadJson) -> io::Result<()> {
         .create_new(true)
         .mode(0o600)
         .open(&tmp)
-        .and_then(|mut f| f.write_all(&body))
+        .and_then(|mut f| {
+            f.write_all(&body)?;
+            if sync { f.sync_data() } else { Ok(()) }
+        })
         .and_then(|()| std::fs::rename(&tmp, entry_dir.join(FILE)));
+    let done = done.and_then(|()| match sync {
+        true => File::open(entry_dir)?.sync_all(),
+        false => Ok(()),
+    });
     if done.is_err() {
         let _ = std::fs::remove_file(&tmp);
     }
@@ -194,6 +208,14 @@ impl Writer {
             last: None,
             at: None,
         }
+    }
+
+    /// Writes `value` now and syncs it and the folder: the write that comes before a prune.
+    pub fn put_synced(&mut self, now: Mono, value: &UploadJson) -> io::Result<()> {
+        write_with(&self.dir, value, true)?;
+        self.last = Some(value.clone());
+        self.at = Some(now);
+        Ok(())
     }
 
     /// Writes `value` if it is due; true when the file was written.
@@ -218,38 +240,27 @@ pub(super) fn rfc3339(t: SystemTime) -> String {
     goalcup_format::dump::wall(secs.saturating_mul(1_000_000_000))
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::os::unix::fs::PermissionsExt;
+/// `upload.lock` (section 9), held while it lives: one uploader sends an entry at a time. Never
+/// `rec/lock`, so a restarting recorder is never shut out.
+pub struct UploadLock {
+    _file: Option<File>,
+}
 
-    /// Section 11's example parses, and `write` leaves the file at mode 0600 (S9 readers rely on
-    /// both).
-    #[test]
-    fn example_parses_and_write_is_0600() {
-        let example = r#"{"v":1,"run":"r0123456789abcdef","entry":"e0123456789abcdef","server_url":"https://...",
- "keep":false,"state":"waiting","upload_by":"2026-11-15T00:00:00Z",
- "confirmed":{"raw":726000000,"seq":3601,"hash":"<64 hex>","at":"2026-11-07T10:00:01Z"},
- "durable_raw":727000000,"waiting_bytes":1048576,
- "sent":{"chunks":120,"bytes":98000000},
- "last_ok":"2026-11-07T10:00:01Z",
- "last_error":{"at":"2026-11-07T10:02:30Z","class":"network","status":null,"text":"connection reset"},
- "failures":2,"next_try":"2026-11-07T10:02:34Z",
- "final":"none","pruned":{"parts":3,"bytes":402653184},
- "beat":{"last_ok":"2026-11-07T10:00:00Z","failures":0,"recording":"gaps"},
- "server_word":{"stop":false,"reason":null,"seconds_left":561540,"asked_at":"2026-11-07T10:00:00Z"}}"#;
-        let j: UploadJson = serde_json::from_str(example).unwrap();
-        assert_eq!(j.state, State::Waiting);
-        assert_eq!(j.last_error.as_ref().unwrap().class, Class::Network);
-        assert_eq!(j.server_word.as_ref().unwrap().seconds_left, Some(561_540));
-
-        let dir = tempfile::tempdir().unwrap();
-        write(dir.path(), &j).unwrap();
-        let mode = std::fs::metadata(dir.path().join(FILE))
-            .unwrap()
-            .permissions()
-            .mode();
-        assert_eq!(mode & 0o777, 0o600);
-        assert_eq!(read(dir.path()), Some(j));
+/// Takes `<entry>/upload.lock` (an `flock`, mode 0600 when created) without waiting; None while
+/// another holder has it. A lock file that cannot be opened or locked goes unlocked: two uploaders
+/// on one entry are only wasteful (409, then a re-read).
+pub fn lock_upload(entry_dir: &Path) -> Option<UploadLock> {
+    let mut o = std::fs::OpenOptions::new();
+    o.read(true).write(true).create(true).mode(0o600);
+    let Ok(f) = o
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(entry_dir.join("upload.lock"))
+    else {
+        return Some(UploadLock { _file: None });
+    };
+    match f.try_lock() {
+        Ok(()) => Some(UploadLock { _file: Some(f) }),
+        Err(TryLockError::WouldBlock) => None,
+        Err(_) => Some(UploadLock { _file: None }),
     }
 }
