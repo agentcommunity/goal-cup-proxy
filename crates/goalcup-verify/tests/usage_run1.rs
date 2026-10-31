@@ -472,8 +472,8 @@ fn a_corrupt_entry_is_marked_not_silent() {
     let dir = codex_entry("u-corrupt", false);
     let first = part_files(&dir.join("rec")).unwrap().remove(0);
     let mut bytes = fs::read(&first).unwrap();
-    let q = bytes.len() / 4;
-    bytes[q..3 * q].fill(0xA5);
+    let at = bytes.len() * 3 / 8;
+    bytes[at..at + 16].fill(0xA5);
     fs::write(first, bytes).unwrap();
     let ran = run_usage(&dir);
     assert!(!ran.stderr.is_empty() && !ran.stderr.contains(MARK), "{ran:?}");
