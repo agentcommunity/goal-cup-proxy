@@ -39,8 +39,28 @@ def forms(v):
     b, out = v.encode(), {v, urllib.parse.quote(v, safe=""), json.dumps(v)[1:-1]}
     for k in range(3):  # only the base64 characters made of the value's own bits
         out.add(base64.b64encode(b"\0" * k + b).decode()[-(-8 * k // 6):8 * (k + len(b)) // 6])
-    out |= {v[-20:]} if len(v) >= 40 else set()  # the tail a harness shows of a key (Claude Code's key question)
+    out |= {v[-k:] for k in range(12, len(v))} if len(v) >= 24 else set()  # every tail of 12+ characters: a harness shows the last 20 (Claude Code's key question)
     return {f for f in out if len(f) >= 8}
+
+
+def merge_config(name, old, new):
+    """The provider file's rows beside the ones goalcup setup wrote: both kept, the pad's value wins a same key.
+    JSON merges by key; TOML keeps the top-level rows of both (before any table), then the tables of both."""
+    if name.endswith(".json"):
+        def deep(a, b):
+            return {**a, **{k: deep(a[k], v) if isinstance(a.get(k), dict) and isinstance(v, dict) else v for k, v in b.items()}}
+        try:
+            return json.dumps(deep(json.loads(old or "{}"), json.loads(new)), indent=2)
+        except ValueError:
+            return new
+    def split(text):
+        lines = text.splitlines()
+        cut = next((i for i, ln in enumerate(lines) if ln.lstrip().startswith("[")), len(lines))
+        return lines[:cut], lines[cut:]
+    (old_top, old_tab), (new_top, new_tab) = split(old), split(new)
+    key = lambda ln: ln.partition("=")[0].strip() if "=" in ln else None  # noqa: E731
+    mine = {key(ln) for ln in new_top} - {None}
+    return "\n".join([ln for ln in old_top if key(ln) not in mine] + new_top + old_tab + new_tab) + "\n"
 
 
 def replace_known(text, values):
@@ -245,7 +265,7 @@ class Run:
         home = self.st["home"] = homes[-1]
         for name, src in sec.get("files", {}).items():  # provider config, as a participant writes it
             old = open(os.path.join(home, name)).read() if os.path.isfile(os.path.join(home, name)) else ""  # keep goalcup setup's no_prompts rows
-            write(os.path.join(home, name), open(os.path.join(PAD, "harnesses", src)).read() + "\n" + old, 0o644)
+            write(os.path.join(home, name), merge_config(name, old, open(os.path.join(PAD, "harnesses", src)).read()), 0o644)
         get = lambda k: sec.get(k, h.get(k))  # noqa: E731
         key, route = (os.path.join(self.keys, s["route_key"]), get("key_route")) if s["route_key"] else (None, None)  # section 6
         self.st.update(key_route=route, key_env=get("key_env"), key_path=key)
