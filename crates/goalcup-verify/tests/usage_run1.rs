@@ -9,7 +9,7 @@ use common::{ENTRY, Entry, WALL0, edit_event, read_records, tmp, write_raw};
 use goalcup_format::read::part_files;
 use goalcup_format::{EndReason, FLAG_FIN, GapReason, Record, StreamKind};
 use goalcup_verify::usage::{
-    CallRow, CallTable, Calls, Join, Kind, NativeForm, Outcome, Reason, Tokens,
+    CallRow, CallTable, Calls, Join, Kind, Leg, NativeForm, Outcome, Reason, Tokens,
 };
 use serde_json::{Value, json};
 use std::{collections::BTreeMap, fs, path::Path, path::PathBuf, process::Command};
@@ -505,25 +505,32 @@ fn no_record_text_in_any_output() {
     check(tmp("u-none").join("absent"), 3, false);
 }
 
-/// A Hermes `state.db` (WAL kept, connection open): a parent and a delegated child session (and
-/// an old session), assistant `messages` rows at 1, 2 and 3 s of the run. Returns db and WAL bytes.
+/// A Hermes `state.db` (WAL kept, connection open): a parent and a delegated child session, an
+/// old session and one begun 10 minutes before the run, assistant `messages` rows at 1, 1.5 (that
+/// one), 2 and 3 s of the run. Returns db and WAL bytes.
 fn hermes_db(dir: &Path) -> (Vec<u8>, Vec<u8>) {
     let s = |ms: u64| (WALL0 / 1_000_000 + ms) as f64 / 1e3;
     let p = dir.join("state.db");
     let sql = format!(
         "PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0;
         CREATE TABLE sessions(id TEXT, parent_session_id TEXT, model TEXT, started_at REAL,
-            api_call_count INTEGER, title TEXT);
+            api_call_count INTEGER, title TEXT, input_tokens INTEGER, cache_read_tokens INTEGER,
+            cache_write_tokens INTEGER, output_tokens INTEGER, reasoning_tokens INTEGER);
         CREATE TABLE messages(session_id TEXT, role TEXT, timestamp REAL, active INTEGER, content TEXT);
-        INSERT INTO sessions VALUES ('s-main', NULL, 'fake-hermes', {a}, 2, '{MARK}'),
-            ('s-kid', 's-main', 'fake-kid', {a}, 1, '{MARK}'), ('s-old', NULL, 'fake-old', 1.0, 1, 'x');
+        INSERT INTO sessions VALUES ('s-main', NULL, 'fake-hermes', {a}, 2, '{MARK}', 100, 30, 0, 20, 5),
+            ('s-kid', 's-main', 'fake-kid', {a}, 1, '{MARK}', 7, 0, 0, 3, 0),
+            ('s-old', NULL, 'fake-old', 1.0, 1, 'x', 1, 1, 1, 1, 1),
+            ('s-back', NULL, 'fake-back', {b}, 1, 'x', 9, 0, 0, 4, 0);
         INSERT INTO messages VALUES ('s-main', 'assistant', {t1}, 1, '{MARK}'),
             ('s-main', 'user', {t1}, 1, '{MARK}'), ('s-main', 'assistant', {t2}, 0, '{MARK}'),
-            ('s-kid', 'assistant', {t3}, 1, '{MARK}'), ('s-old', 'assistant', 1.0, 1, 'x');",
+            ('s-kid', 'assistant', {t3}, 1, '{MARK}'), ('s-old', 'assistant', 1.0, 1, 'x'),
+            ('s-back', 'assistant', {t4}, 1, 'x');",
         a = s(100),
+        b = s(100) - 600.0,
         t1 = s(1000),
         t2 = s(2000),
-        t3 = s(3000)
+        t3 = s(3000),
+        t4 = s(1500)
     );
     let conn = rusqlite::Connection::open(&p).unwrap();
     conn.execute_batch(&sql).unwrap();
@@ -533,9 +540,10 @@ fn hermes_db(dir: &Path) -> (Vec<u8>, Vec<u8>) {
     )
 }
 
-/// A `hermes-cli` entry: four Chat Completions calls, then database copies `(n, db, wal)` as
-/// snapshot streams of set `0.n`, copied at `n` x 10 s of the run (no WAL when it is empty).
-fn hermes_entry(name: &str, sets: &[(u64, &[u8], &[u8])]) -> CallTable {
+/// A `hermes-cli` entry of that `segment`: four Chat Completions calls, then database copies
+/// `(n, db, wal)` as snapshot streams of set `0.n`, copied at `n` x 10 s of the run (no WAL when
+/// it is empty). Returns the table and the entry's folder.
+fn hermes_entry(name: &str, sets: &[(u64, &[u8], &[u8])], segment: u64) -> (CallTable, PathBuf) {
     let mut e = Entry::new(name);
     for k in 1..=4 {
         let req = json!({"model": format!("fake-h{k}"), "messages": [{"content": MARK}]});
@@ -560,16 +568,21 @@ fn hermes_entry(name: &str, sets: &[(u64, &[u8], &[u8])]) -> CallTable {
         }
     }
     e.count();
-    let mut recs = read_records(&e.seal().join("rec"));
+    let dir = e.seal();
+    let mut recs = read_records(&dir.join("rec"));
     edit_event(&mut recs, "start", 0, |v| {
-        v["connector"] = "hermes-cli".into()
+        v["connector"] = "hermes-cli".into();
+        v["segment"] = segment.into()
     });
-    table(&recs)
+    write_raw(&dir.join("rec"), &recs, None);
+    (table(&recs), dir)
 }
 
 /// Points 1 and 2 for Hermes: a WAL copy with a masked page (its checksum fails) is repaired and
 /// read by its set, each matched wire call takes the native thread, a newer broken set falls back
-/// to the older one, and an entry with no readable set says so and keeps every wire call.
+/// to the older one and the output names it, a `continue` entry keeps the session that began in
+/// an earlier entry and its rows, and an entry with no readable set says so and keeps every wire
+/// call.
 #[test]
 fn hermes_database_copies_read_by_set() {
     let (db, wal) = hermes_db(&tmp("u-hermes"));
@@ -581,27 +594,65 @@ fn hermes_database_copies_read_by_set() {
     masked[at..at + MARK.len()].fill(b'*');
     let mut bad = db.clone();
     bad[..16].fill(b'*');
-    let t = hermes_entry("u-h1", &[(1, &db, &masked)]);
+    let (t, _) = hermes_entry("u-h1", &[(1, &db, &masked)], 0);
     let th = |t: &CallTable, id: &str| t.threads.iter().find(|x| x.id == id).cloned();
-    let who = |m| row(&t, m).thread.clone();
+    let who = |t: &CallTable| {
+        ["fake-h1", "fake-h2", "fake-h3", "fake-h4"].map(|m| row(t, m).thread.clone())
+    };
     let want = [Some("s-main"), Some("s-main"), Some("s-kid"), None].map(|s| s.map(String::from));
-    assert_eq!(["fake-h1", "fake-h2", "fake-h3", "fake-h4"].map(who), want);
+    assert_eq!(who(&t), want);
     assert_eq!(row(&t, "fake-h4").join, Some(Join::WireOnly));
     let (main, kid) = (th(&t, "s-main").unwrap(), th(&t, "s-kid").unwrap());
     assert_eq!(
         (kid.parent.as_deref(), main.native_total),
         (Some("s-main"), Some(2))
     );
-    assert_eq!(t.children.as_ref().unwrap()["s-main"], ["s-kid"]);
-    assert!(t.readable() && th(&t, "s-old").is_none() && t.native_form == NativeForm::PerCall);
-    assert!(!format!("{t:?}").contains(MARK));
-    let newer = hermes_entry("u-h2", &[(1, &db, &masked), (2, &bad, &[])]);
-    assert_eq!(
-        th(&newer, "s-main").unwrap().native_until,
-        Some(WALL0 + 10_000_000_000)
+    // The session totals sit on the thread, never on the native call rows.
+    let tok = |i, c, w, o, r| Tokens {
+        input: Some(i),
+        cached: Some(c),
+        cache_write: Some(w),
+        output: Some(o),
+        reasoning: Some(r),
+    };
+    assert_eq!(main.native_tokens, tok(100, 30, 0, 20, 5));
+    assert!(
+        t.rows
+            .iter()
+            .filter(|r| r.leg == Leg::Native)
+            .all(|r| r.tokens == Tokens::default())
     );
-    assert_eq!(hermes_entry("u-h1", &[(1, &db, &masked)]), t);
-    let none = hermes_entry("u-h3", &[(2, &bad, &[])]);
+    assert_eq!(t.children.as_ref().unwrap()["s-main"], ["s-kid"]);
+    let gone = ["s-old", "s-back"].map(|id| th(&t, id));
+    assert!(t.readable() && gone == [None, None] && t.native_form == NativeForm::PerCall);
+    assert!(!format!("{t:?}").contains(MARK));
+    let (newer, dir) = hermes_entry("u-h2", &[(1, &db, &masked), (2, &bad, &[])], 0);
+    let until = Some(WALL0 + 10_000_000_000);
+    assert_eq!(th(&newer, "s-main").unwrap().native_until, until);
+    assert_eq!(
+        (
+            newer.db_set.as_deref(),
+            newer.native_until,
+            newer.harness_exited
+        ),
+        (Some("0.1"), until, Some(true))
+    );
+    let sum = json(&run_usage(&dir).sum);
+    assert_eq!(
+        (
+            &sum["db_set"],
+            sum["native_until"].is_string(),
+            &sum["harness_exited"]
+        ),
+        (&json!("0.1"), true, &json!(true))
+    );
+    assert_eq!(sum["tokens"]["native"]["input"], 107);
+    // A `continue` entry: the session begun before this entry keeps its thread and its row; one
+    // with no row inside the entry is an earlier entry's.
+    let (next, _) = hermes_entry("u-h4", &[(1, &db, &masked)], 1);
+    assert_eq!(who(&next)[1].as_deref(), Some("s-back"));
+    assert!(th(&next, "s-back").unwrap().readable() && th(&next, "s-old").is_none());
+    let (none, _) = hermes_entry("u-h3", &[(2, &bad, &[])], 0);
     let wire_only = none
         .rows
         .iter()

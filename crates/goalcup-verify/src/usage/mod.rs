@@ -207,6 +207,9 @@ pub struct Thread {
     pub native_only: u64,
     /// Native calls after this time (the database copy's time) are not known.
     pub native_until: Option<u64>,
+    /// The harness's own per-session token totals where it keeps them (Hermes `sessions`); never
+    /// on the call rows, which keep the wire usage.
+    pub native_tokens: Tokens,
     /// Why the native leg is not readable; `None` means readable.
     pub reason: Option<Reason>,
 }
@@ -228,6 +231,7 @@ impl Thread {
             native_total: None,
             native_only: 0,
             native_until: None,
+            native_tokens: Tokens::default(),
             reason: Some(Reason::NoReader),
         }
     }
@@ -245,6 +249,11 @@ pub struct CallTable {
     /// Why the native leg is not readable; `None` means readable.
     pub reason: Option<Reason>,
     pub native_form: NativeForm,
+    /// The database copy the native leg was read from (Hermes): its `set` as `<boot>.<n>`, its
+    /// time (native calls after it are not known) and whether the harness had exited.
+    pub db_set: Option<String>,
+    pub native_until: Option<u64>,
+    pub harness_exited: Option<bool>,
     /// Calls that fell back to the time join.
     pub joined_by_time: u64,
     /// Codex `token_count` repeats skipped (no larger running total; PRD-09 section 4).
@@ -269,6 +278,9 @@ impl Default for CallTable {
             children: None,
             reason: Some(Reason::NoReader),
             native_form: NativeForm::None,
+            db_set: None,
+            native_until: None,
+            harness_exited: None,
             joined_by_time: 0,
             repeats_skipped: 0,
             copied_skipped: 0,
@@ -308,6 +320,8 @@ struct Ctx {
     harness_version: Option<String>,
     sealed: bool,
     boot: u64,
+    /// The `start` event's `segment`: 0 for `start`, then 1, 2 for each `continue`.
+    segment: u64,
     /// The wall ns of the entry's first PART.
     first: Option<u64>,
     /// (wall_ns, mono_ns) of the last PART or LINK of this boot.
@@ -336,6 +350,7 @@ impl Ctx {
     fn start(&mut self, ev: &Value) {
         let label = |k: &str| ev[k].as_str().and_then(hints::id);
         (self.connector, self.run) = (label("connector"), label("run"));
+        self.segment = ev["segment"].as_u64().unwrap_or(0);
         // The first line of `<harness> --version`: printable ASCII, spaces kept, at most 128 bytes.
         self.harness_version = ev["harness_version"]
             .as_str()
@@ -522,6 +537,8 @@ impl Calls {
             let p = r.thread.as_deref().and_then(|t| parents.get(t));
             r.parent = p.map(|p| (*p).clone());
         }
+        let (db_set, native_until, harness_exited) =
+            (leg.set).map_or((None, None, None), |u| (Some(u.id), u.until, u.exited));
         CallTable {
             rows,
             threads,
@@ -535,6 +552,9 @@ impl Calls {
                 },
                 |_| NativeForm::None,
             ),
+            db_set,
+            native_until,
+            harness_exited,
             joined_by_time,
             repeats_skipped: leg.repeats_skipped,
             copied_skipped: leg.copied_skipped,

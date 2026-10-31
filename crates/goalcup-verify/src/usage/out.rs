@@ -47,9 +47,13 @@ fn five(t: &Tokens) -> [Option<u64>; 5] {
 
 /// The five sums of these rows' own tokens; a sum of numbers all unsaid is null, never 0.
 fn total<'a>(rows: impl Iterator<Item = &'a CallRow>) -> Value {
+    sum(rows.map(|r| &r.tokens))
+}
+
+fn sum<'a>(tokens: impl Iterator<Item = &'a Tokens>) -> Value {
     let mut acc = [None; 5];
-    for r in rows {
-        for (a, v) in acc.iter_mut().zip(five(&r.tokens)) {
+    for t in tokens {
+        for (a, v) in acc.iter_mut().zip(five(t)) {
             let old: Option<u64> = *a;
             *a = old.zip(v).map(|(x, y)| x.saturating_add(y)).or(old).or(v);
         }
@@ -98,6 +102,7 @@ pub(super) fn summary(t: &CallTable) -> Value {
             json!({"id": th.id, "parent": th.parent, "depth": th.depth, "label": th.label,
                 "wire_calls": wires().count(), "native_calls": th.native_calls,
                 "native_only": th.native_only, "native_total": th.native_total,
+                "native_until": th.native_until.map(wall), "native_tokens": sum([&th.native_tokens].into_iter()),
                 "matched": rs.iter().filter(|r| twin(r)).count(),
                 "status": by_status(wires()), "tokens": total(said), "models": models,
                 "effort": own().filter_map(|r| r.effort.as_deref()).collect::<BTreeSet<_>>(),
@@ -108,14 +113,15 @@ pub(super) fn summary(t: &CallTable) -> Value {
     let native = || rows().filter(|r| r.leg == Leg::Native);
     json!({"v": 1, "reader": env!("CARGO_PKG_VERSION"), "run": t.run, "entry": t.entry,
         "connector": t.connector, "harness_version": t.harness_version, "sealed": t.sealed,
-        "readable": t.readable(), "reason": t.reason.map(snake), "native_until": null, "db_set": null,
+        "readable": t.readable(), "reason": t.reason.map(snake), "native_until": t.native_until.map(wall),
+        "db_set": t.db_set, "harness_exited": t.harness_exited,
         "coverage": {"wire_calls": rows().filter(wire).count(), "native_calls": native().count(),
             "matched": n(Join::Matched), "native_only": n(Join::NativeOnly),
             "wire_only": n(Join::WireOnly), "unattributed": n(Join::Unattributed),
             "joined_by_time": t.joined_by_time, "repeats_skipped": t.repeats_skipped,
             "copied_skipped": t.copied_skipped},
         "status": st, "models": models, "threads": threads,
-        "tokens": {"merged": total(rows().filter(counted).filter(has_usage)), "native": total(native()),
+        "tokens": {"merged": total(rows().filter(counted).filter(has_usage)), "native": sum(native().map(|r| &r.tokens).chain(t.threads.iter().map(|x| &x.native_tokens))),
             "wire": total(rows().filter(counted).filter(|r| r.usage_from == Some(Leg::Wire))),
             "calls_without_usage": none.clone().count(),
             "calls_without_usage_by_status": by_status(none)}})

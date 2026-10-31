@@ -14,7 +14,7 @@ use serde_json::Value;
 
 use super::hints::{self, Reader};
 use super::shapes::{extra, less, model_name, safe_code};
-use super::sqlite::Sets;
+use super::sqlite::{Sets, Used};
 use super::{CallRow, Ctx, Kind, Leg, Outcome, Reason, Thread, Tokens};
 
 pub(super) struct NativeLeg {
@@ -33,6 +33,8 @@ pub(super) struct NativeLeg {
     pub(super) totals: bool,
     /// Hermes database copies were recorded and none opened.
     pub(super) unreadable: bool,
+    /// The Hermes database copy that was read.
+    pub(super) set: Option<Used>,
 }
 
 /// A Claude Code call: its row, usage counts (largest per member) and `requestId`.
@@ -174,11 +176,7 @@ impl Native {
     /// The native rows, threads and children of the entry. A file that names no thread keeps its
     /// rows, with `thread` `None`, so no native call leaves the count.
     pub(super) fn finish(self, ctx: &Ctx) -> NativeLeg {
-        let hermes = self.sets.finish(&ctx.entry, ctx.first);
-        let (totals, unreadable) = hermes
-            .as_ref()
-            .map_or((false, false), |h| (!h.per_call, h.unreadable));
-        let h = hermes.unwrap_or_default();
+        let h = (self.sets.finish(&ctx.entry, ctx.first, ctx.segment > 0)).unwrap_or_default();
         let (mut owner, mut threads) = (HashMap::new(), BTreeMap::new());
         let mut kids: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
         let (mut repeats_skipped, mut copied_skipped) = (0, 0);
@@ -252,8 +250,9 @@ impl Native {
             threads: threads.into_values().chain(h.threads).collect(),
             repeats_skipped,
             copied_skipped,
-            totals,
-            unreadable,
+            totals: h.totals,
+            unreadable: h.unreadable,
+            set: h.set,
         }
     }
 }
