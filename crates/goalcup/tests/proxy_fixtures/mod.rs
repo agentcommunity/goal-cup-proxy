@@ -116,17 +116,22 @@ pub async fn wait_records(dir: &std::path::Path, done: impl Fn(&[Record]) -> boo
     .await
 }
 
-/// PRD-17 Interfaces (PRD-08): runs `goalcup-verify check --live` on the entry folder and
-/// asserts exit 0, so a lessons test that writes a part file proves the record whole. This crate
+/// PRD-17 Interfaces (PRD-08): runs `goalcup-verify check` on the entry's part file and asserts
+/// exit 0, so a lessons test that writes a part file proves the record whole. This crate
 /// has no dev-dependency on the verifier (the scaffold is PRD-02's), so the binary is built and
-/// run through `cargo run` from the workspace root; the entry is still recording, hence `--live`.
+/// run through `cargo run` from the workspace root. The entry is never sealed here, so the check
+/// is of the one part file, as the PRD says.
 pub fn verify_exits_0(entry: &std::path::Path) {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let [part]: [_; 1] = goalcup_format::read::part_files(&entry.join("rec"))
+        .expect("part files")
+        .try_into()
+        .expect("one part file");
     let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
     let out = std::process::Command::new(cargo)
         .current_dir(root)
-        .args(["run", "-q", "-p", "goalcup-verify", "--", "check", "--live"])
-        .arg(entry)
+        .args(["run", "-q", "-p", "goalcup-verify", "--", "check"])
+        .arg(part)
         .output()
         .expect("run goalcup-verify");
     assert_eq!(

@@ -21,7 +21,6 @@ use goalcup::pipeline::{Call, Calls, EndReason, GapReason, Recorder, Sid, Stream
 use goalcup::proxy::decode::{BodyDecoder, Step, parse_codings};
 use goalcup_format::Record;
 use std::io::Write;
-use tokio::io::AsyncWriteExt as _;
 
 macro_rules! encoder {
     ($name:ident, $enc:ident) => {

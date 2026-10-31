@@ -857,7 +857,10 @@ async fn head_over_64k_relays_inside_a_named_loss() {
     // guard. Parsing went on: `/second` is opened with its response.
     assert_eq!(seen.reqs.first().map(|r| r.0), Some(sid));
     assert_eq!(lost, None);
-    assert_eq!(seen.tail.as_ref().map(|t| &t["guard"]), Some(&json!("http_head")));
+    assert_eq!(
+        seen.tail.as_ref().map(|t| &t["guard"]),
+        Some(&json!("http_head"))
+    );
     assert_eq!(seen.reqs.len(), 2);
     assert!(seen.reqs[1].1.starts_with("/second"));
     assert_eq!(seen.resps, 2);
