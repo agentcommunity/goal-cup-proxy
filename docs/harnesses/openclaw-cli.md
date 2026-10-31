@@ -68,4 +68,4 @@ No-approval host exec is the default (`tools.exec.mode` unset; docs say `full`).
 
 ## Pad result
 
-The tier, the tested version and the runs are in [`connectors/tiers.toml`](../../connectors/tiers.toml) and `PAD-RESULTS.md`; this sheet does not copy them.
+The tier, the tested version and the runs are in [`connectors/tiers.toml`](../../connectors/tiers.toml) and [`PAD-RESULTS.md`](../plans/2026-10-30-v1.0/PAD-RESULTS.md); this sheet does not copy them.

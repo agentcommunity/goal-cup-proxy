@@ -75,4 +75,4 @@ Claude Code asks before it runs a command or writes outside its rules, and a run
 
 ## Pad result
 
-The tier, the tested version and the runs are in [`connectors/tiers.toml`](../../connectors/tiers.toml) and `PAD-RESULTS.md`; this sheet does not copy them.
+The tier, the tested version and the runs are in [`connectors/tiers.toml`](../../connectors/tiers.toml) and [`PAD-RESULTS.md`](../plans/2026-10-30-v1.0/PAD-RESULTS.md); this sheet does not copy them.

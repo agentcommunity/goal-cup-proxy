@@ -66,7 +66,7 @@ The connector is the only one that sets `HOME`, plus the four XDG folders, all u
 
 - `AMP_SKIP_UPDATE_CHECK=1` (set by the connector) "overrides this setting and disables all update checks"; `amp.updates.mode` defaults to `"auto"` ([docs](https://ampcode.com/docs/cli/settings)).
 - Unknown: whether `amp last` resumes the same thread after a home switch, log rotation on a long run, and the Windows paths.
-- No Amp account was available this cycle, so no run exists and nothing here was run on `0.0.1793275344`.
+- No Amp account was available this cycle, so nothing here was run on `0.0.1793275344` and the pad has no Amp run (no key). The home-profile writer in section 3 is covered by its unit test only.
 
 ## Run without permission prompts
 
@@ -74,4 +74,4 @@ None needed: Amp runs tools without asking by default (strings in the binary; a 
 
 ## Pad result
 
-The tier, the tested version and the runs are in [`connectors/tiers.toml`](../../connectors/tiers.toml) and `PAD-RESULTS.md`; this sheet does not copy them.
+The tier, the tested version and the runs are in [`connectors/tiers.toml`](../../connectors/tiers.toml) and [`PAD-RESULTS.md`](../plans/2026-10-30-v1.0/PAD-RESULTS.md); this sheet does not copy them.
