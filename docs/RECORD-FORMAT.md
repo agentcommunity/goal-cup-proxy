@@ -188,7 +188,8 @@ EVENT JSON always has `ev`: `start` (once per boot, with `mask_rules`), `prev_bo
 `dirty`, `boots`, `totals`). A sealed entry ends with what was still open (`cut_at_seal` gaps and
 ends), an `after_stop` GAP if needed, the last COUNT, the `seal` event, a LINK and the frame end.
 A `recovered` seal (a dead entry closed later) is the `seal` event inside the recovery frame (see
-Recovery). The `seal` event also carries `server_reason` when the server gave one. Nothing follows the seal's LINK.
+Recovery). The `seal` event also carries `server_reason` when the server gave one. Nothing follows
+the seal's LINK.
 
 ## Compression, chunks and crash recovery
 

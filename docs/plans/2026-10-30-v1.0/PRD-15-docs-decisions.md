@@ -1453,3 +1453,14 @@ the HARNESS-ONBOARDING pointer; `docs/README.md` is deleted and `CONTRACTS`, `TE
 - Size (wc -l at c7c83b35): AGENTS 92, ARCHITECTURE 190, RECORD-FORMAT 545, LOCAL-RESEARCH-HANDOFF 306. No ceiling
   moves.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 31 Oct, after slice 16 (merge c3227203)
+
+- Slice 16 took the recorder run and `start` out of the build-state notes and rechecked RECORD-FORMAT, OPERATING
+  and CONNECTOR-SCHEMA against the merged recorder; the Acceptance greps over the PRD-15 files were clean. The
+  two review nits left (B1 in RECORD-FORMAT, R1 in PARTICIPANT-GUIDE, both an over-100-column prose line) are
+  re-wrapped by the replan commit. Table rows stay long on purpose.
+- Size (`wc -l` at b5cc8617): README 247, AGENTS 95, ARCHITECTURE 191, OPERATING 260, PARTICIPANT-GUIDE 487,
+  RECORD-FORMAT 542, RULES 459, CONNECTOR-SCHEMA 114. PRD-00 has no PRD-15 row, so there is no ceiling to pass.
+- Still open, unchanged: README tier column and Pad result lines after phase 5, and removing the "writer: PRD-02
+  target shape" marks when the PRD-02 writer merges. No seam change. No locked ledger item is touched.

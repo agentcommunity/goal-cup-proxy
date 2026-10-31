@@ -232,7 +232,8 @@ a token for one repository needs the repository to exist first.
 The start screen lists the kind of run, a sign-in note if your harness needs one, the first message
 (below), **Ends** (as in `status`), where the **Upload** goes, the harness's tier
 ([section 4](#4-your-harness-the-list-and-the-tiers)) and home folder, a note when the connector or
-host list comes from a file (not verified), and a sleep warning if needed. The last line, "Recording in chat mode: <harness> opens now.", means recording is on.
+host list comes from a file (not verified), and a sleep warning if needed. The last line,
+"Recording in chat mode: <harness> opens now.", means recording is on.
 
 The harness opens in the project folder. `goalcup` builds your **first message**: the push block,
 a blank line, then your prompt. It is on your clipboard when a tool for that exists (`pbcopy` on a

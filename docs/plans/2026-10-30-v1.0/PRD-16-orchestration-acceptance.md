@@ -2427,3 +2427,11 @@ kept and now cites BUILD-PROMPT section 5, since B3 no longer carries it.
 - **Gate effect:** none on order. The remaining PRD-10 work (`continue`, `recover`, seal on a dead entry) still
   waits on `watchdog::recover` and `pipeline::close_dead_entry` reaching integration; `watchdog::run` is there.
   Acceptance 10 and 11 stay open until slice 10. No seam change. No locked ledger item is touched.
+
+### 2026-10-31, replan after PRD-15 slice 16 (merge c3227203)
+
+- **Size report, PRD-15** (`wc -l` on integration): the files it writes total 2,599 lines (RECORD-FORMAT 542,
+  PARTICIPANT-GUIDE 487, OPERATING 260, README 247, RULES 459, ARCHITECTURE 191, CONNECTOR-SCHEMA 114, AGENTS 95).
+  The PRD-00 "Size budget" table has no docs row, so nothing is over a ceiling. Carry to the end-of-build report.
+- **Gate effect:** none on order. The docs lane has no code; its open items (tier column, Pad results, writer marks)
+  wait on phase 5 and the PRD-02 writer. No seam change. No locked ledger item is touched.
