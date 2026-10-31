@@ -139,7 +139,7 @@ fn check_count(dir: &Path, recs: &[Record], seq: u64) {
 /// it is free, then END.
 fn held_writer(n: usize, bodies: usize) {
     set_env(Some("0:25000"));
-    let dir = tempfile::tempdir().unwrap();
+    let dir = common::recorder::entry_dir();
     let rec = Recorder::real_for_tests(dir.path(), Masker::passthrough_for_tests());
     let body = body();
     let handles: Vec<StreamHandle> = (0..n).map(|_| open(&rec)).collect();
@@ -192,7 +192,7 @@ fn two_hundred_streams_with_the_writer_held() {
 #[test]
 fn a_thousand_guard_episodes_never_latch() {
     set_env(None);
-    let dir = tempfile::tempdir().unwrap();
+    let dir = common::recorder::entry_dir();
     let rec = Recorder::real_for_tests(dir.path(), Masker::passthrough_for_tests());
     let body = body();
     let mut h = open(&rec);

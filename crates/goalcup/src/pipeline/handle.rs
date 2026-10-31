@@ -230,6 +230,7 @@ impl StreamHandle {
         #[cfg(feature = "test-hooks")]
         if bytes.starts_with(SLOW_MARKER) {
             // A relay thread held between its stop check and its push, as under load.
+            SLOW_HELD.store(true, std::sync::atomic::Ordering::SeqCst);
             std::thread::sleep(std::time::Duration::from_millis(500));
         }
         let rec = &self.rec;
@@ -288,6 +289,11 @@ impl StreamHandle {
 /// (`tests/pipeline_seal.rs`). No env var is read.
 #[cfg(feature = "test-hooks")]
 pub const SLOW_MARKER: &[u8] = b"\x01slow-offer-marker\x02";
+
+/// Test builds only: set once an offer with [`SLOW_MARKER`] is past its stop check, so a test
+/// starts the seal while the offer is held there.
+#[cfg(feature = "test-hooks")]
+pub static SLOW_HELD: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 /// `conn`, `http_req`, `http_resp`, `ws_up` or `ws_down`: a stream the seal's wire stop stops.
 pub(super) fn is_wire(kind: StreamKind) -> bool {

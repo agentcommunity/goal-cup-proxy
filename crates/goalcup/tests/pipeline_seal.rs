@@ -10,13 +10,15 @@ mod common;
 use bytes::Bytes;
 use common::recorder::{real, records};
 use goalcup::pipeline::{
-    Counts, EndReason, GapReason, OpenFlags, Recorder, SLOW_MARKER, StreamKind, entry_totals,
+    Counts, EndReason, GapReason, OpenFlags, Recorder, SLOW_HELD, SLOW_MARKER, StreamKind,
+    entry_totals,
 };
 use goalcup::watchdog::SealReason;
 use goalcup_format::{IndexKind, Record};
 use serde_json::{Value, json};
 use std::io::Read;
 use std::path::Path;
+use std::sync::atomic::Ordering;
 
 const REQ: OpenFlags = OpenFlags::POST;
 
@@ -90,7 +92,7 @@ fn after_stop(recs: &[Record]) -> Option<(u64, u64, u64, Value)> {
 /// before it is in DATA or in a GAP, bytes the masker held back for a match included.
 #[test]
 fn open_streams_end_cut_at_seal_with_every_byte_written() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = common::recorder::entry_dir();
     let rec = real(dir.path());
     let conn = rec.open(
         StreamKind::Conn,
@@ -117,7 +119,7 @@ fn open_streams_end_cut_at_seal_with_every_byte_written() {
 /// the `after_stop` GAP's `lost`, with start before end.
 #[test]
 fn a_wire_call_after_the_stop_is_in_the_after_stop_gap() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = common::recorder::entry_dir();
     let rec = real(dir.path());
     let mut req = rec.open(StreamKind::HttpReq, 0, 0, 0, REQ, json!({}));
     req.data(rec.now(), Bytes::from_static(b"before the stop"));
@@ -146,7 +148,7 @@ fn a_wire_call_after_the_stop_is_in_the_after_stop_gap() {
 /// still written whole, because the seal waits for every call in flight before its markers.
 #[test]
 fn an_offer_in_flight_at_the_stop_is_written() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = common::recorder::entry_dir();
     let rec = real(dir.path());
     let mut req = rec.open(StreamKind::HttpReq, 0, 0, 0, REQ, json!({}));
     let sid = req.sid();
@@ -156,7 +158,12 @@ fn an_offer_in_flight_at_the_stop_is_written() {
         req.data(r.now(), Bytes::from(p));
         req
     });
-    std::thread::sleep(std::time::Duration::from_millis(100));
+    // The seal starts once the offer is past its stop check and held there.
+    common::within(common::HANG, || {
+        while !SLOW_HELD.load(Ordering::SeqCst) {
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+    });
     let recs = seal(&rec, dir.path());
     drop(relay.join().unwrap());
     let (data, lost, end) = stream(&recs, sid);
@@ -169,7 +176,7 @@ fn an_offer_in_flight_at_the_stop_is_written() {
 /// in the record before the seal event.
 #[test]
 fn a_native_stream_after_the_wire_stop_is_recorded_before_the_seal() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = common::recorder::entry_dir();
     let rec = real(dir.path());
     rec.stop_wire_for_tests();
     let meta = json!({"path": "t:a.jsonl", "gen": 0});
@@ -194,7 +201,7 @@ fn a_guard_gap_open_at_the_seal_is_closed() {
     // SAFETY: the test's first statement, before any thread is started; sound only because
     // nextest runs each test in its own process.
     unsafe { std::env::set_var("GOALCUP_TEST_GUARD_MB", "64") };
-    let dir = tempfile::tempdir().unwrap();
+    let dir = common::recorder::entry_dir();
     let rec = real(dir.path());
     let mut req = rec.open(StreamKind::HttpReq, 0, 0, 0, REQ, json!({}));
     let full = rec.reserve(64 << 20);
@@ -217,7 +224,7 @@ fn a_guard_gap_open_at_the_seal_is_closed() {
 /// like a key that opened after the stop reaches no part file, index or `status.json` unmasked.
 #[test]
 fn the_key_file_goes_and_an_after_stop_host_is_masked() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = common::recorder::entry_dir();
     let rec = real(dir.path());
     let key_file = dir.path().join("rec/run-ca.key");
     std::fs::write(&key_file, b"fake key for the test").unwrap();
@@ -254,4 +261,63 @@ fn the_key_file_goes_and_an_after_stop_host_is_masked() {
     }
     all.extend(std::fs::read(dir.path().join("status.json")).unwrap());
     assert!(!all.windows(key.len()).any(|w| w == key.as_bytes()));
+}
+
+/// Point 6 (PRD-02 section 11 step 6): a boot that finds its entry already sealed records nothing,
+/// and from boot on keeps `after_seal` in the sealed `status.json` current with the bytes it
+/// relayed and the hosts of the connections that carried them.
+#[test]
+fn a_boot_on_a_sealed_entry_keeps_after_seal_current() {
+    let first = common::recorder::entry_dir();
+    let rec = real(first.path());
+    let mut req = rec.open(StreamKind::HttpReq, 0, 0, 0, REQ, json!({}));
+    req.data(rec.now(), Bytes::from_static(b"before the seal"));
+    let sealed = seal(&rec, first.path());
+    // The second boot runs on a copy, out of reach of the first pipeline's status thread.
+    let dir = common::recorder::entry_dir();
+    copy_all(first.path(), dir.path());
+    let masker = goalcup::mask::Masker::new(&[], Vec::new()).expect("built-in shapes");
+    let rec = Recorder::sealed_boot_for_tests(dir.path(), masker);
+    let host = json!({"host": "late.example.com:443"});
+    let mut conn = rec.open(StreamKind::Conn, 0, 0, 0, OpenFlags::NONE, host);
+    let mut req = rec.open(StreamKind::HttpReq, conn.sid(), 0, 0, REQ, json!({}));
+    req.data(rec.now(), Bytes::from_static(b"after the seal"));
+    conn.data(rec.now(), Bytes::from_static(b"tls"));
+    // A connection that carried nothing is not named.
+    let quiet = json!({"host": "quiet.example.com"});
+    let mut idle = rec.open(StreamKind::Conn, 0, 0, 0, OpenFlags::NONE, quiet);
+    idle.end(rec.now(), EndReason::Complete, None);
+    let path = dir.path().join("status.json");
+    let after = common::within(common::HANG, move || {
+        loop {
+            let status: Option<Value> = std::fs::read(&path)
+                .ok()
+                .and_then(|b| serde_json::from_slice(&b).ok());
+            let after = status.map(|s| s["after_seal"].clone());
+            if after.as_ref().is_some_and(|a| a["bytes"] == 17) {
+                return after.unwrap();
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+    });
+    assert_eq!(after["hosts"], json!(["late.example.com:443"]));
+    assert_eq!(records(dir.path()), sealed, "nothing recorded after the seal");
+}
+
+/// Copies the entry folder `from` into `to`, files and `rec/`, but no temp file of a write
+/// under way.
+fn copy_all(from: &Path, to: &Path) {
+    for e in std::fs::read_dir(from).unwrap() {
+        let e = e.unwrap();
+        if e.file_name().to_string_lossy().starts_with('.') {
+            continue;
+        }
+        let dest = to.join(e.file_name());
+        if e.file_type().unwrap().is_dir() {
+            std::fs::create_dir_all(&dest).unwrap();
+            copy_all(&e.path(), &dest);
+        } else {
+            std::fs::copy(e.path(), dest).unwrap();
+        }
+    }
 }

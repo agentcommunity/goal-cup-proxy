@@ -40,7 +40,7 @@ pub use counts::{Counts, Durable, EntryTotals, TunnelHost, entry_totals};
 pub use cursors::Cursors;
 pub use goalcup_format::{EndReason, GapReason, StreamKind};
 #[cfg(feature = "test-hooks")]
-pub use handle::SLOW_MARKER;
+pub use handle::{SLOW_HELD, SLOW_MARKER};
 pub use handle::{OpenFlags, StreamHandle};
 #[cfg(feature = "test-hooks")]
 pub use mask_worker::PANIC_MARKER;
@@ -120,8 +120,10 @@ struct Inner {
     /// The raw host of each `conn` stream opened after a stop (no OPEN names it), kept once it
     /// ends only if it carried a byte.
     late_hosts: Mutex<HashMap<Sid, String>>,
-    /// S1 calls that read the stop flags unset and have not yet pushed their item (`Flight`).
+    /// S1 calls that read the stop flags unset and have not yet pushed their item (`Flight`),
+    /// and of those the wire calls, the only ones the wire stop waits for.
     in_flight: AtomicU64,
+    wire_in_flight: AtomicU64,
     durable: watch::Sender<Durable>,
     /// Set only by `for_tests`.
     #[cfg(feature = "test-hooks")]
@@ -153,6 +155,7 @@ impl Inner {
             after_stop_conns: Mutex::new(HashSet::new()),
             late_hosts: Mutex::new(HashMap::new()),
             in_flight: AtomicU64::new(0),
+            wire_in_flight: AtomicU64::new(0),
             durable,
             #[cfg(feature = "test-hooks")]
             calls: None,
@@ -410,14 +413,27 @@ impl Recorder {
     }
 }
 
-/// One S1 call in flight (`Recorder::flight`); a panic in it unwinds through the drop too.
-pub(super) struct Flight(Option<Arc<Inner>>);
+/// One S1 call in flight (`Recorder::flight`), on a wire stream or not; a panic in it unwinds
+/// through the drop too.
+pub(super) struct Flight(Option<(Arc<Inner>, bool)>);
 
 impl Drop for Flight {
     fn drop(&mut self) {
-        if let Some(i) = &self.0 {
+        if let Some((i, wire)) = &self.0 {
+            if *wire {
+                i.wire_in_flight.fetch_sub(1, Ordering::SeqCst);
+            }
             i.in_flight.fetch_sub(1, Ordering::SeqCst);
         }
+    }
+}
+
+/// Waits until `count` calls that read a stop flag unset are no longer on their way to the item
+/// channel. Only calls that began before the stop count, so the wait ends; the short sleep leaves
+/// the processor to a relay that was preempted in one.
+fn settle(count: &AtomicU64) {
+    while count.load(Ordering::SeqCst) > 0 {
+        std::thread::sleep(std::time::Duration::from_millis(1));
     }
 }
 
@@ -524,11 +540,12 @@ impl Recorder {
     }
 
     /// Every later call on a wire stream only counts (PRD-02 section 11 step 2). Returns once
-    /// every call that read the flag unset has pushed its item, so none lands behind the marker
-    /// the seal sends next.
+    /// every wire call that read the flag unset has pushed its item, so no wire record lands
+    /// behind the marker the seal sends next (an END or GAP on a wire stream may: those go on
+    /// until the full stop).
     pub(crate) fn stop_wire(&self) {
         self.inner.wire_stopped.store(true, Ordering::SeqCst);
-        self.settle();
+        settle(&self.inner.wire_in_flight);
     }
 
     /// Every later call on any stream only counts, and events are dropped. Returns as
@@ -536,7 +553,7 @@ impl Recorder {
     pub(crate) fn stop_all(&self) {
         self.inner.wire_stopped.store(true, Ordering::SeqCst);
         self.inner.all_stopped.store(true, Ordering::SeqCst);
-        self.settle();
+        settle(&self.inner.in_flight);
     }
 
     /// True once the seal stopped calls on this kind of stream.
@@ -555,14 +572,10 @@ impl Recorder {
             return Flight(None);
         }
         self.inner.in_flight.fetch_add(1, Ordering::SeqCst);
-        Flight(Some(self.inner.clone()))
-    }
-
-    /// Waits until no call that read a stop flag unset is still on its way to the item channel.
-    fn settle(&self) {
-        while self.inner.in_flight.load(Ordering::SeqCst) > 0 {
-            std::thread::yield_now();
+        if wire {
+            self.inner.wire_in_flight.fetch_add(1, Ordering::SeqCst);
         }
+        Flight(Some((self.inner.clone(), wire)))
     }
 
     /// A `conn` stream opened after a stop ended: its host is kept only if it carried a byte.
@@ -619,7 +632,6 @@ impl Recorder {
     /// made-up entry id, a 1 MiB zstd window (PRD-14 section 4) and the soft guard of
     /// `GOALCUP_TEST_GUARD_MB` when set. Its threads run for the life of the process.
     pub fn real_for_tests(dir: &std::path::Path, masker: crate::mask::Masker) -> Recorder {
-        const ENTRY: &str = "e00000000000000a1";
         let rec_dir = dir.join("rec");
         std::fs::DirBuilder::new()
             .recursive(true)
@@ -638,45 +650,7 @@ impl Recorder {
         let mut log = counts::CountsLog::open(dir);
         let base = log.sync(dir).expect("counts.jsonl");
         let mask_rules = masker.mask_rules();
-        let facts = crate::watchdog::StartFacts {
-            run: "r00000000000000a1".into(),
-            entry: ENTRY.into(),
-            segment: 0,
-            entry_dir: dir.to_path_buf(),
-            deadline: None,
-            server_time: None,
-            local_wall: 0,
-            workspace: dir.to_path_buf(),
-            connector: Value::Null,
-            harness_version: None,
-            keep: true,
-            build: None,
-            hosts: Value::Null,
-            hosts_sha256: String::new(),
-            native: Value::Null,
-            mask_rules: Value::Null,
-            values: Value::Null,
-            ca: crate::watchdog::CaPem {
-                cert: String::new(),
-                key: String::new(),
-            },
-            prev: None,
-            harness: None,
-            null_since: None,
-            notes: Vec::new(),
-        };
-        let typed = crate::watchdog::Typed {
-            connector: crate::connector::ConnectorRef {
-                id: "test".into(),
-                name: "test".into(),
-                sha256: String::new(),
-                source: crate::connector::ConnectorSource::Builtin,
-            },
-            hosts: crate::connector::HostList::default(),
-            native: crate::connector::NativeSources::default(),
-            mask_rules: Vec::new(),
-            values: Vec::new(),
-        };
+        let (facts, typed) = test_facts(dir);
         let start = boot::start_event(&facts, &typed, &masker, &mask_rules, None, false);
         let (rec, rx) = Recorder::pipeline(guard::soft_guard());
         let (tx, out_rx) = mpsc::sync_channel(mask_worker::TO_WRITER);
@@ -696,6 +670,69 @@ impl Recorder {
         status::spawn(rec.clone(), dir.to_path_buf(), board);
         rec
     }
+
+    /// A boot of the `real_for_tests` entry in `dir` that finds it sealed (it panics when the
+    /// entry is not): it records nothing and keeps `after_seal` in `status.json` current, as
+    /// `run_recorder` does on such a boot.
+    pub fn sealed_boot_for_tests(dir: &std::path::Path, masker: crate::mask::Masker) -> Recorder {
+        let (facts, typed) = test_facts(dir);
+        let (rec, rx) = Recorder::pipeline(guard::soft_guard());
+        let board = status::Board::default();
+        let sealed = !boot::start(&rec, rx, &facts, &typed, &masker, board);
+        assert!(sealed, "the entry is sealed");
+        seal::keep_sealed(&rec, dir, Some(masker));
+        rec
+    }
+}
+
+/// The made-up entry id of a `real_for_tests` entry.
+#[cfg(feature = "test-hooks")]
+const ENTRY: &str = "e00000000000000a1";
+
+/// The start facts of a `real_for_tests` entry in `dir`: no connector, hosts, native sources or
+/// rules.
+#[cfg(feature = "test-hooks")]
+fn test_facts(dir: &std::path::Path) -> (crate::watchdog::StartFacts, crate::watchdog::Typed) {
+    let facts = crate::watchdog::StartFacts {
+        run: "r00000000000000a1".into(),
+        entry: ENTRY.into(),
+        segment: 0,
+        entry_dir: dir.to_path_buf(),
+        deadline: None,
+        server_time: None,
+        local_wall: 0,
+        workspace: dir.to_path_buf(),
+        connector: Value::Null,
+        harness_version: None,
+        keep: true,
+        build: None,
+        hosts: Value::Null,
+        hosts_sha256: String::new(),
+        native: Value::Null,
+        mask_rules: Value::Null,
+        values: Value::Null,
+        ca: crate::watchdog::CaPem {
+            cert: String::new(),
+            key: String::new(),
+        },
+        prev: None,
+        harness: None,
+        null_since: None,
+        notes: Vec::new(),
+    };
+    let typed = crate::watchdog::Typed {
+        connector: crate::connector::ConnectorRef {
+            id: "test".into(),
+            name: "test".into(),
+            sha256: String::new(),
+            source: crate::connector::ConnectorSource::Builtin,
+        },
+        hosts: crate::connector::HostList::default(),
+        native: crate::connector::NativeSources::default(),
+        mask_rules: Vec::new(),
+        values: Vec::new(),
+    };
+    (facts, typed)
 }
 
 /// `n` bytes counted in `held` until dropped.
@@ -819,6 +856,7 @@ pub fn run_recorder(null: bool) -> ExitCode {
         exit_at: None,
         null,
         sealed: false,
+        late: None,
     };
     match (rx, &masker) {
         (Some(rx), Some(masker)) => {
@@ -855,6 +893,7 @@ pub fn run_recorder(null: bool) -> ExitCode {
         let mut me = (0, 0, 0);
         board.set(|b| me = (b.pid, b.start_id, b.port));
         seal::sealed_status(&dir, |s| (s.pid, s.start_id, s.port) = me);
+        run.late = Some(seal::keep_sealed(&run.rec, &dir, masker));
     }
     run.send(&ToWatchdog::Ready);
     run.control(&mut lines, &dir, &facts.workspace)
@@ -877,6 +916,8 @@ struct Run {
     /// The entry was sealed before this boot: the recorder records nothing, and a seal removes
     /// the key, answers `sealed` and runs the wrap-up.
     sealed: bool,
+    /// On a sealed entry, what this boot relayed: kept current in `status.json` from boot on.
+    late: Option<seal::Late>,
 }
 
 impl Run {
@@ -930,7 +971,8 @@ impl Run {
         if self.sealed {
             seal::remove_key(dir);
             self.send(&ToWatchdog::Sealed);
-            seal::wrap_up_sealed(&self.rec, dir, reason, self.uploader.take());
+            let late = (self.late.take()).unwrap_or_else(|| seal::Late::sealed(&self.rec, None));
+            seal::wrap_up_sealed(&self.rec, dir, reason, self.uploader.take(), &late);
             return ExitCode::SUCCESS;
         }
         if self.null {

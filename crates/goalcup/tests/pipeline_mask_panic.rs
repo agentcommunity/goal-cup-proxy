@@ -124,7 +124,7 @@ fn stream(recs: &[Record], want: u64) -> (Vec<(u64, Vec<u8>, u8)>, Vec<(GapReaso
 
 #[test]
 fn a_marker_piece_is_one_mask_failed_gap_and_the_stream_goes_on() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = common::recorder::entry_dir();
     let rec = Recorder::real_for_tests(dir.path(), Masker::passthrough_for_tests());
     let piece = [b"ab".as_slice(), PANIC_MARKER, b"cd"].concat();
     let mut h = open(&rec, StreamKind::HttpReq);
@@ -147,7 +147,7 @@ fn a_marker_piece_is_one_mask_failed_gap_and_the_stream_goes_on() {
 /// drops it with the piece, and DATA, MASK and GAP stay contiguous.
 #[test]
 fn a_panic_with_bytes_held_leaves_data_and_gap_contiguous() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = common::recorder::entry_dir();
     let rec = Recorder::real_for_tests(dir.path(), masker());
     let mut h = open(&rec, StreamKind::HttpResp);
     let sid = h.sid();
@@ -173,7 +173,7 @@ fn a_panic_with_bytes_held_leaves_data_and_gap_contiguous() {
 
 #[test]
 fn a_fin_piece_ends_its_message() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = common::recorder::entry_dir();
     let rec = Recorder::real_for_tests(dir.path(), Masker::passthrough_for_tests());
     let mut h = rec.open(StreamKind::WsUp, 0, 0, 0, OpenFlags::NONE, json!({}));
     let sid = h.sid();
@@ -204,7 +204,7 @@ fn a_fin_piece_ends_its_message() {
 
 #[test]
 fn an_event_body_is_masked() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = common::recorder::entry_dir();
     let rec = Recorder::real_for_tests(dir.path(), masker());
     let key = format!("sk-{}{}", "x".repeat(20), "7".repeat(20));
     rec.event(json!({"ev": "note", "what": "connect_refused", "detail": format!("Bearer {key}")}));
@@ -221,7 +221,7 @@ fn an_event_body_is_masked() {
 /// `fin` on its last DATA. Bytes it held at an interrupted END keep their message's opcode.
 #[test]
 fn held_bytes_stay_in_their_websocket_message() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = common::recorder::entry_dir();
     let rec = Recorder::real_for_tests(dir.path(), masker());
     let mut h = rec.open(StreamKind::WsUp, 0, 0, 0, OpenFlags::NONE, json!({}));
     let sid = h.sid();
@@ -258,7 +258,7 @@ fn held_bytes_stay_in_their_websocket_message() {
 /// keys, numbers and `ev`, and writes one `mask_failed` GAP that loses no stream byte.
 #[test]
 fn a_metadata_panic_stars_it_and_writes_a_mask_failed_gap() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = common::recorder::entry_dir();
     let rec = Recorder::real_for_tests(dir.path(), Masker::passthrough_for_tests());
     let mark = String::from_utf8_lossy(PANIC_MARKER).into_owned();
     let flags = OpenFlags::POST | OpenFlags::DECRYPTED;

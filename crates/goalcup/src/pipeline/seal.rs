@@ -171,28 +171,37 @@ impl Sealer {
             status::write(&rec, &entry_dir, b);
         }
         on_durable();
-        if let (Some(b), Some(m)) = (&board, masker) {
-            let (rec, dir) = (rec.clone(), entry_dir.clone());
-            after_seal(rec, dir, b.clone(), m, after_bytes, seen);
+        let late = Late {
+            rec: rec.clone(),
+            masker,
+            at_seal: after_bytes,
+            seen,
+        };
+        if let Some(b) = &board {
+            let (rec, dir, b) = (rec.clone(), entry_dir.clone(), b.clone());
+            late.clone().keep(move |a| {
+                b.set(|s| s.after_seal = Some(a));
+                status::write(&rec, &dir, &b);
+            });
         }
         let facts = SealFacts {
             reason,
             workspace_head: head,
             totals,
         };
-        wrap_up(&rec, &entry_dir, uploader, &facts, after_bytes);
+        wrap_up(&rec, &entry_dir, uploader, &facts, &late);
         facts
     }
 }
 
-/// The uploader's wrap-up (section 11 step 7), then the bytes relayed after the seal's tail was
-/// taken (`at_seal`, just before its final marker), which no record holds, to the log too (step 6).
+/// The uploader's wrap-up (section 11 step 7), then what reached the wire after the seal (step
+/// 6), which no record holds, to the log: its bytes and its masked hosts.
 fn wrap_up(
     rec: &Recorder,
     entry_dir: &Path,
     uploader: Option<UploadHandle>,
     facts: &SealFacts,
-    at_seal: u64,
+    late: &Late,
 ) {
     if let Some(u) = uploader {
         u.finish(
@@ -200,9 +209,15 @@ fn wrap_up(
             facts.clone(),
         );
     }
-    let late = rec.after_stop().0.saturating_sub(at_seal);
-    if late > 0 {
-        log::line(entry_dir, "after_seal", &[("bytes", Fact::N(late))]);
+    let a = late.now();
+    if a.bytes > 0 {
+        let mut line = vec![("bytes", Fact::N(a.bytes))];
+        for h in &a.hosts {
+            // A host the masker changed may no longer have host syntax: it is named masked.
+            let host = log::Host::checked(h).map_or(Fact::Word("masked"), Fact::Host);
+            line.push(("host", host));
+        }
+        log::line(entry_dir, "after_seal", &line);
     }
 }
 
@@ -214,14 +229,32 @@ pub(super) fn remove_key(entry_dir: &Path) {
     let _ = File::open(&rec_dir).and_then(|d| d.sync_all());
 }
 
+/// On an entry sealed before this boot: every byte this boot relays is after the seal, so from
+/// boot on `after_seal` in the sealed `status.json` (what earlier boots put there, plus this
+/// boot's) is kept current each second while the recorder lives. Returns what the wrap-up logs.
+pub(super) fn keep_sealed(rec: &Recorder, entry_dir: &Path, masker: Option<Masker>) -> Late {
+    let late = Late::sealed(rec, masker);
+    let before = Status::read(entry_dir).and_then(|s| s.after_seal);
+    let before = before.unwrap_or_default();
+    let dir = entry_dir.to_path_buf();
+    late.clone().keep(move |a| {
+        let mut hosts = [&before.hosts[..], &a.hosts[..]].concat();
+        hosts.sort_unstable();
+        hosts.dedup();
+        let bytes = before.bytes + a.bytes;
+        sealed_status(&dir, |s| s.after_seal = Some(AfterSeal { bytes, hosts }));
+    });
+    late
+}
+
 /// The wrap-up on an entry sealed before this boot: the seal's reason and head from the sealed
-/// `status.json` (else `reason`), and the totals counted from the files. Every byte this boot
-/// relayed was after the seal, so all go to the log and to `after_seal` in `status.json`.
+/// `status.json` (else `reason`), and the totals counted from the files.
 pub(super) fn wrap_up_sealed(
     rec: &Recorder,
     entry_dir: &Path,
     reason: SealReason,
     uploader: Option<UploadHandle>,
+    late: &Late,
 ) {
     let seal = Status::read(entry_dir).and_then(|s| s.seal);
     let facts = SealFacts {
@@ -229,13 +262,7 @@ pub(super) fn wrap_up_sealed(
         workspace_head: seal.and_then(|s| s.workspace_head),
         totals: counts::entry_totals(entry_dir),
     };
-    wrap_up(rec, entry_dir, uploader, &facts, 0);
-    let late = rec.after_stop().0;
-    if late > 0 {
-        sealed_status(entry_dir, |s| {
-            s.after_seal.get_or_insert_with(Default::default).bytes += late;
-        });
-    }
+    wrap_up(rec, entry_dir, uploader, &facts, late);
 }
 
 /// The sealed `status.json` with `f` applied, the seal's own fields kept: a boot on an entry
@@ -255,43 +282,62 @@ fn mark(rec: &Recorder, last: Option<Box<SealEnd>>) -> Option<Sealed> {
     answer.recv().ok().flatten()
 }
 
-/// Keeps `after_seal` current each second while the process lives, and writes `status.json`
-/// with it (the status thread is stopped): the bytes relayed after the seal's tail was taken
-/// (just before its final marker), which no record holds, and the hosts of connections opened after the stop that carried bytes and were
-/// not named at the seal, masked. A masker panic stars the hosts and keeps the count.
-fn after_seal(
+/// What reached the wire after the seal, which no record holds: the bytes relayed after
+/// `at_seal` (the count when the seal's tail was taken, just before its final marker), and the
+/// hosts of connections opened after the stop that carried bytes and are not in `seen` (named at
+/// the seal), masked.
+#[derive(Clone)]
+pub(super) struct Late {
     rec: Recorder,
-    entry_dir: PathBuf,
-    board: Board,
-    masker: Masker,
+    masker: Option<Masker>,
     at_seal: u64,
+    /// Sorted, as `after_stop` returns it.
     seen: Vec<Sid>,
-) {
-    let run = move || {
-        loop {
-            std::thread::sleep(Duration::from_secs(1));
-            let (bytes, conns) = rec.after_stop();
-            // `seen` is sorted, as `after_stop` returns it.
-            let new = conns
-                .into_iter()
-                .filter(|c| seen.binary_search(&c.0).is_err());
-            let mut hosts = Value::from(new.filter_map(|c| c.1).collect::<Vec<_>>());
-            let masked = catch_unwind(AssertUnwindSafe(|| masker.mask_meta(&mut hosts)));
-            if masked.is_err() {
-                hosts = star(&hosts);
-            }
-            // One name per host, however many connections went to it.
-            let mut hosts: Vec<String> = serde_json::from_value(hosts).unwrap_or_default();
-            hosts.sort_unstable();
-            hosts.dedup();
-            let bytes = bytes.saturating_sub(at_seal);
-            board.set(|s| s.after_seal = Some(AfterSeal { bytes, hosts }));
-            status::write(&rec, &entry_dir, &board);
+}
+
+impl Late {
+    /// On an entry sealed before this boot: every byte and host of this boot is late.
+    pub(super) fn sealed(rec: &Recorder, masker: Option<Masker>) -> Late {
+        Late {
+            rec: rec.clone(),
+            masker,
+            at_seal: 0,
+            seen: Vec::new(),
         }
-    };
-    let _ = std::thread::Builder::new()
-        .name("goalcup-after-seal".into())
-        .spawn(run);
+    }
+
+    /// The count and the hosts now, one name per host however many connections went to it. A
+    /// masker panic, or no masker, stars the hosts and keeps the count.
+    fn now(&self) -> AfterSeal {
+        let (bytes, conns) = self.rec.after_stop();
+        let new = conns
+            .into_iter()
+            .filter(|c| self.seen.binary_search(&c.0).is_err());
+        let mut hosts = Value::from(new.filter_map(|c| c.1).collect::<Vec<_>>());
+        let masked = (self.masker.as_ref())
+            .map(|m| catch_unwind(AssertUnwindSafe(|| m.mask_meta(&mut hosts))).is_ok());
+        if masked != Some(true) {
+            hosts = star(&hosts);
+        }
+        let mut hosts: Vec<String> = serde_json::from_value(hosts).unwrap_or_default();
+        hosts.sort_unstable();
+        hosts.dedup();
+        let bytes = bytes.saturating_sub(self.at_seal);
+        AfterSeal { bytes, hosts }
+    }
+
+    /// Hands `put` the count and hosts each second while the process lives.
+    fn keep(self, put: impl Fn(AfterSeal) + Send + 'static) {
+        let run = move || {
+            loop {
+                std::thread::sleep(Duration::from_secs(1));
+                put(self.now());
+            }
+        };
+        let _ = std::thread::Builder::new()
+            .name("goalcup-after-seal".into())
+            .spawn(run);
+    }
 }
 
 /// Every string of a list of hosts as stars of its length.
