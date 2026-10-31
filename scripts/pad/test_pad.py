@@ -448,6 +448,10 @@ class StartRefusal(unittest.TestCase):
         self.assertEqual({k: seen[0][1][k] for k in ("named_file", "named_key", "value_shown")},
                          {"named_file": True, "named_key": True, "value_shown": True})
 
+    def test_home_is_not_beside_project(self):  # PRD-10 section 3 step 2
+        run, r = self.run_for()
+        self.assertNotEqual(os.path.dirname(os.path.realpath(r.project)), os.path.dirname(os.path.realpath(r.env["GOALCUP_HOME"])))
+
 
 class KillBothVerify(unittest.TestCase):
     """pad-run verify after kill-both: the row is the old entry's, so its server copy is the one compared and scanned."""
@@ -459,13 +463,13 @@ class KillBothVerify(unittest.TestCase):
             with open(os.path.join(run, name), "w") as f:
                 json.dump(doc, f)
         for n, age in (("OLD", 100), ("NEW", 0)):  # the newest entry is the one goalcup continue started
-            for base in (os.path.join(run, "home", "runs", "r1", n), os.path.join(run, "fetched", n)):
+            for base in (os.path.join(run, "gc", "home", "runs", "r1", n), os.path.join(run, "fetched", n)):
                 os.makedirs(base)
-            with open(os.path.join(run, "home", "runs", "r1", n, "status.json"), "w") as f:
+            with open(os.path.join(run, "gc", "home", "runs", "r1", n, "status.json"), "w") as f:
                 f.write("{}")
             with open(os.path.join(run, "fetched", n, "rec.gcr.zst"), "w") as f:
                 f.write("x")
-            os.utime(os.path.join(run, "home", "runs", "r1", n, "status.json"), (1e9 - age, 1e9 - age))
+            os.utime(os.path.join(run, "gc", "home", "runs", "r1", n, "status.json"), (1e9 - age, 1e9 - age))
         seen = []
         def fake(argv, **kw):
             seen.append(argv[4:])
