@@ -36,7 +36,7 @@ def flip(f):  # K6: one byte of the server copy's record
 
 def drop(doc, f):  # K6: the middle chunk leaves fetch.json and its bytes (the chunks' `bytes`, S13) leave rec.gcr.zst
     cs = doc["chunks"]
-    assert len(cs) >= 3, "fewer than 3 chunks"
+    assert len(cs) >= 2, "a single chunk has no middle one to drop"
     i, p = len(cs) // 2, os.path.join(f, "rec.gcr.zst")
     at, b = sum(c["bytes"] for c in cs[:i]), open(p, "rb").read()
     open(p, "wb").write(b[:at] + b[at + cs[i]["bytes"]:])
@@ -132,7 +132,7 @@ def compare(row, found, want, finds):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--bin", default=os.path.join(REPO, "target", "release"))
-    tool, results = os.path.join(ap.parse_args().bin, "goalcup-verify"), {}
+    tool, results = os.path.join(os.path.abspath(ap.parse_args().bin), "goalcup-verify"), {}
     for label, part, fetched, want, finds, mods in CONTROLS:
         gone = [d for d in (part, fetched) if d and not os.path.isdir(os.path.join(FIX, d))]
         if gone or not os.access(tool, os.X_OK):
@@ -146,7 +146,7 @@ def main():
             saw = ", ".join("%s %s" % kv for kv in sorted(row["checks"].items())) + "; failing ids: " + ", ".join(
                 sorted({e for e in (c.get("id") for x in found for c in pc.dig(x, "s6_checks") or [] if c.get("result") == "fail") if e}))
         except Exception as x:  # a broken control never reads as a pass; the message is the type only
-            bad, saw = ["error %s" % type(x).__name__], ""
+            bad, saw = ["error %s %s" % (type(x).__name__, str(x)[:120])], ""
         results[label] = {"state": "FAIL" if bad else "PASS", "saw": saw, "differs": bad}
         print("%s: %s  %s%s" % (label, results[label]["state"], saw, "  DIFFERS: " + "; ".join(bad) if bad else ""))
     ran = [r["state"] != "not run" for r in results.values()]
