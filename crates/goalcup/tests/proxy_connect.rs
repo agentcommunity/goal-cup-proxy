@@ -1,21 +1,19 @@
 //! PRD-03 `proxy_connect.rs`: the ClientHello building blocks, then admission through the real
-//! `proxy::serve`. Not here: `may_accept()` false making accepts wait, since `pipeline::fds`
-//! offers no way to force it from a test.
+//! `proxy::serve`.
 
 mod common;
+mod proxy_fixtures;
 
 use bytes::Bytes;
 use common::pki::HTTP11;
-use common::recorder::{ends, events, gaps, opens};
+use common::recorder::{events, gaps, opens};
 use common::upstream::{Script, Upstream};
 use common::{HANG, within_async};
-use goalcup::connector::HostList;
-use goalcup::pipeline::{Call, Calls, GapReason, Recorder, StreamKind};
-use goalcup::proxy::ca::RunCa;
+use goalcup::pipeline::{Call, GapReason, StreamKind};
 use goalcup::proxy::connect::{CLIENT_HELLO_GUARD, Hello, peek_client_hello};
-use goalcup::proxy::{ProxyCtx, ProxyHandle, serve};
+use proxy_fixtures::{HOSTS, ask, conns, connect, get, proxy, status, through, trusting_run_ca};
 use rustls::pki_types::ServerName;
-use serde_json::{Value, json};
+use serde_json::json;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -185,53 +183,6 @@ async fn client_hello_past_64_kib_is_too_big_and_keeps_every_byte() {
     );
 }
 
-const HOSTS: &str = "provider = [\"api.openai.com\"]\n";
-
-/// The real `serve` on a held port with a 4,096 backlog, as the watchdog sets it; `env` holds the
-/// test hooks, read once in `serve`.
-fn proxy(env: &[(&str, String)]) -> (ProxyHandle, SocketAddr, Calls, RunCa) {
-    for (k, v) in env {
-        // SAFETY: nextest runs each test in its own process; this runs before `serve` reads them.
-        unsafe { std::env::set_var(k, v) };
-    }
-    let (listener, addr) = common::ports::held();
-    socket2::SockRef::from(&listener).listen(4096).unwrap();
-    let (recorder, calls) = Recorder::for_tests(1 << 30);
-    let ca = RunCa::mint(&["openai.com".to_string()]).unwrap();
-    let hosts = HostList::from_file(HOSTS.as_bytes(), "hosts.toml").unwrap();
-    let ctx = ProxyCtx {
-        recorder,
-        hosts,
-        ca: ca.clone(),
-    };
-    (serve(listener, ctx), addr, calls, ca)
-}
-
-/// Sends `head` and reads the answer's head; gives the stream and the status.
-async fn ask(proxy: SocketAddr, head: &str) -> (TcpStream, u16) {
-    let mut s = TcpStream::connect(proxy).await.unwrap();
-    s.write_all(head.as_bytes()).await.unwrap();
-    let mut got = Vec::new();
-    while !got.ends_with(b"\r\n\r\n") {
-        let mut b = [0u8; 1];
-        assert_eq!(
-            s.read(&mut b).await.unwrap(),
-            1,
-            "the proxy closed mid-answer"
-        );
-        got.push(b[0]);
-    }
-    (s, String::from_utf8_lossy(&got[9..12]).parse().unwrap())
-}
-
-async fn connect(proxy: SocketAddr, target: &str) -> (TcpStream, u16) {
-    ask(
-        proxy,
-        &format!("CONNECT {target} HTTP/1.1\r\nHost: {target}\r\n\r\n"),
-    )
-    .await
-}
-
 /// A loopback upstream that writes `banner` to each connection, then echoes it.
 fn echo(banner: &'static [u8]) -> SocketAddr {
     let (l, addr) = common::ports::held();
@@ -250,39 +201,18 @@ fn echo(banner: &'static [u8]) -> SocketAddr {
     addr
 }
 
-/// Waits for `n` conn ENDs, then gives (meta, END tail) per conn in open order.
-async fn conns(calls: &Calls, n: usize) -> Vec<(u64, Value, Value)> {
-    within_async(HANG, async {
-        loop {
-            let opened = opens(calls).into_iter().filter(|o| o.1 == StreamKind::Conn);
-            let ended = ends(calls);
-            let got: Vec<_> = (opened.filter_map(|(sid, _, meta)| {
-                let end = ended.iter().find(|e| e.0 == sid)?;
-                Some((sid, meta, end.3.clone().unwrap_or_default()))
-            }))
-            .collect();
-            if got.len() >= n {
-                return got;
-            }
-            tokio::time::sleep(Duration::from_millis(20)).await;
-        }
-    })
-    .await
-}
-
 /// No connection cap: 2,000 at once to an unlisted host, all open together, are all served.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn two_thousand_concurrent_connects_are_all_served() {
     common::fds::raise(10_000);
-    let (_h, addr, calls, _) = proxy(&[]);
+    let (_h, addr, calls, _) = proxy(HOSTS, &[]);
     let target = format!("{}", echo(b""));
     let all_open = Arc::new(tokio::sync::Barrier::new(2_000));
     let tasks: Vec<_> = (0..2_000)
         .map(|i| {
             let (target, all_open) = (target.clone(), all_open.clone());
             tokio::spawn(async move {
-                let (mut s, status) = connect(addr, &target).await;
-                assert_eq!(status, 200);
+                let mut s = through(addr, &target).await;
                 let ping = format!("ping {i:04}");
                 s.write_all(ping.as_bytes()).await.unwrap();
                 let mut back = vec![0u8; ping.len()];
@@ -301,12 +231,76 @@ async fn two_thousand_concurrent_connects_are_all_served() {
     assert_eq!(conns(&calls, 2_000).await.len(), 2_000);
 }
 
+fn soft_limit(soft: Option<u64>) -> u64 {
+    let mut lim = libc::rlimit {
+        rlim_cur: 0,
+        rlim_max: 0,
+    };
+    // SAFETY: getrlimit and setrlimit only touch the struct we own.
+    unsafe {
+        assert_eq!(libc::getrlimit(libc::RLIMIT_NOFILE, &mut lim), 0);
+        let old = lim.rlim_cur;
+        if let Some(soft) = soft {
+            lim.rlim_cur = soft;
+            assert_eq!(libc::setrlimit(libc::RLIMIT_NOFILE, &lim), 0);
+        }
+        old
+    }
+}
+
+/// Rule 7: while `may_accept()` is false a new CONNECT waits in the backlog, never refused, and
+/// one `fd_limit` note is written; it is served once a connection closes. Connections still
+/// before their decision (here: waiting for the first bytes) count.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn accepts_wait_while_descriptors_are_short_and_never_refuse() {
+    // The reserve reads the soft limit once per process (nextest: one process per test). It reads
+    // 200 here, then the test gets its own limit back, so only the reserve holds back:
+    // 2 x 68 + 64 = 200 is not under 200, so the 69th waits.
+    let real = soft_limit(Some(200));
+    assert!(goalcup::pipeline::fds::may_accept());
+    soft_limit(Some(real));
+    let (_h, addr, calls, _) = proxy(HOSTS, &[]);
+    let target = echo(b"").to_string();
+    let mut held = Vec::new();
+    for _ in 0..68 {
+        held.push(through(addr, &target).await);
+    }
+    let mut waiting = TcpStream::connect(addr).await.unwrap();
+    let head = format!("CONNECT {target} HTTP/1.1\r\nHost: {target}\r\n\r\n");
+    waiting.write_all(head.as_bytes()).await.unwrap();
+    let mut b = [0u8; 1];
+    let early = tokio::time::timeout(Duration::from_millis(500), waiting.read(&mut b)).await;
+    assert!(early.is_err(), "no answer and no close while descriptors are short");
+    let note = json!({"ev": "note", "what": "fd_limit", "limit": 200, "open": 68});
+    within_async(HANG, async {
+        while !events(&calls).contains(&note) {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await;
+    drop(held.pop());
+    assert_eq!(within_async(HANG, status(&mut waiting)).await, 200);
+    let notes = events(&calls).into_iter().filter(|v| v["what"] == "fd_limit");
+    assert_eq!(notes.count(), 1);
+}
+
+/// A client that closes after the `200` without a byte, as a cancelled request does, loses
+/// nothing: its conn on a listed host carries no GAP.
+#[tokio::test]
+async fn a_connect_abandoned_before_any_byte_names_no_loss() {
+    let up = echo(b"");
+    let (_h, addr, calls, _) = proxy(HOSTS, &[("GOALCUP_TEST_UPSTREAM", format!("api.openai.com={up}"))]);
+    drop(through(addr, "api.openai.com:443").await);
+    let got = conns(&calls, 1).await;
+    assert_eq!((got[0].2["up"].as_u64(), got[0].2["down"].as_u64()), (Some(0), Some(0)));
+    assert!(gaps(&calls).is_empty(), "no loss to name");
+}
+
 /// C9: a server-speaks-first protocol tunnels at once (the old proxy waited 30 s for the client).
 #[tokio::test]
 async fn a_server_first_protocol_tunnels_with_no_wait() {
-    let (_h, addr, calls, _) = proxy(&[]);
-    let (mut s, status) = connect(addr, &format!("{}", echo(b"220 ready\r\n"))).await;
-    assert_eq!(status, 200);
+    let (_h, addr, calls, _) = proxy(HOSTS, &[]);
+    let mut s = through(addr, &format!("{}", echo(b"220 ready\r\n"))).await;
     let mut banner = [0u8; 11];
     let read = tokio::time::timeout(Duration::from_secs(10), s.read_exact(&mut banner));
     read.await
@@ -324,7 +318,7 @@ async fn a_server_first_protocol_tunnels_with_no_wait() {
 /// Rule 3: a non-CONNECT request gets `405` and, for two tries within a minute, one note.
 #[tokio::test]
 async fn a_non_connect_request_gets_405_and_one_note() {
-    let (_h, addr, calls, _) = proxy(&[]);
+    let (_h, addr, calls, _) = proxy(HOSTS, &[]);
     for _ in 0..2 {
         let head = "GET http://someone@Example.com:80/x?q=1 HTTP/1.1\r\nHost: example.com\r\n\r\n";
         assert_eq!(ask(addr, head).await.1, 405);
@@ -342,7 +336,7 @@ async fn a_non_connect_request_gets_405_and_one_note() {
 /// Rule 3: an upstream that cannot be reached gets `502`, as the harness would see without us.
 #[tokio::test]
 async fn an_unreachable_upstream_gets_502() {
-    let (_h, addr, _calls, _) = proxy(&[]);
+    let (_h, addr, _calls, _) = proxy(HOSTS, &[]);
     let (_refusing, dead) = common::ports::refusing();
     assert_eq!(connect(addr, &format!("{dead}")).await.1, 502);
 }
@@ -352,9 +346,8 @@ async fn an_unreachable_upstream_gets_502() {
 #[tokio::test]
 async fn a_client_hello_past_64_kib_tunnels_with_its_guard_gap() {
     let up = echo(b"");
-    let (_h, addr, calls, _) = proxy(&[("GOALCUP_TEST_UPSTREAM", format!("api.openai.com={up}"))]);
-    let (mut s, status) = connect(addr, "api.openai.com:443").await;
-    assert_eq!(status, 200);
+    let (_h, addr, calls, _) = proxy(HOSTS, &[("GOALCUP_TEST_UPSTREAM", format!("api.openai.com={up}"))]);
+    let mut s = through(addr, "api.openai.com:443").await;
     let suites: Vec<u16> = (0..1_000).map(|i| 0x1301 + i).collect();
     let wire = hello(&suites, &[sni_ext("api.openai.com"), (21, vec![0; 64_000])]);
     s.write_all(&wire).await.unwrap();
@@ -381,22 +374,11 @@ async fn a_listed_sni_behind_an_ip_literal_is_decrypted_and_recorded() {
     let up = Upstream::start(Script::ok(b"hi").with_tls(&["api.openai.com"], &[HTTP11]));
     let dir = tempfile::tempdir().unwrap();
     let roots = up.pki().roots_file(dir.path()).display().to_string();
-    let (_h, addr, calls, ca) = proxy(&[("GOALCUP_TEST_EXTRA_ROOTS", roots)]);
-    let (s, status) = connect(addr, &up.addr().to_string()).await;
-    assert_eq!(status, 200);
-    let tls = trusting_run_ca(&ca);
+    let (_h, addr, calls, ca) = proxy(HOSTS, &[("GOALCUP_TEST_EXTRA_ROOTS", roots)]);
+    let s = through(addr, &up.addr().to_string()).await;
     let name = ServerName::try_from("api.openai.com").unwrap();
-    let mut t = tls.connect(name, s).await.unwrap();
-    t.write_all(b"GET /v1/models HTTP/1.1\r\nHost: api.openai.com\r\n\r\n")
-        .await
-        .unwrap();
-    let mut got = Vec::new();
-    while !got.ends_with(b"hi") {
-        let mut b = [0u8; 256];
-        let n = t.read(&mut b).await.unwrap();
-        assert!(n > 0, "the response ended early");
-        got.extend_from_slice(&b[..n]);
-    }
+    let mut t = trusting_run_ca(&ca, &[HTTP11]).connect(name, s).await.unwrap();
+    get(&mut t).await;
     t.shutdown().await.unwrap();
     drop(t);
     let got = conns(&calls, 1).await;
@@ -410,16 +392,4 @@ async fn a_listed_sni_behind_an_ip_literal_is_decrypted_and_recorded() {
     for key in ["up", "down", "plain_up", "plain_down"] {
         assert!(tail[key].as_u64().unwrap() > 0, "{key}");
     }
-}
-
-fn trusting_run_ca(ca: &RunCa) -> tokio_rustls::TlsConnector {
-    let mut store = rustls::RootCertStore::empty();
-    store.add(ca.cert_der().clone()).unwrap();
-    let mut config = rustls::ClientConfig::builder_with_provider(common::pki::provider())
-        .with_safe_default_protocol_versions()
-        .unwrap()
-        .with_root_certificates(store)
-        .with_no_client_auth();
-    config.alpn_protocols = vec![HTTP11.to_vec()];
-    tokio_rustls::TlsConnector::from(Arc::new(config))
 }

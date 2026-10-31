@@ -4,13 +4,13 @@
 //! per-host `long_tunnel` flag. Bytes pass through [`pump::relay`] with no parser.
 
 use crate::connector::hosts::{Kind, Source};
-use crate::pipeline::{Mono, OpenFlags, Recorder, StreamKind};
+use crate::pipeline::{Mono, OpenFlags, Recorder, StreamHandle, StreamKind};
 use crate::proxy::connect::{self, CLIENT_HELLO_GUARD};
 use crate::proxy::pump;
 use crate::proxy::ws::Dir;
 use bytes::Bytes;
 use serde::Serialize;
-use serde_json::json;
+use serde_json::{Value, json};
 use std::collections::{HashMap, VecDeque};
 use std::sync::Mutex;
 use std::sync::atomic::AtomicU64;
@@ -37,6 +37,37 @@ pub struct TunnelConn {
     /// Bytes already read: from the client (replayed upstream first), from upstream.
     pub client_prefix: Bytes,
     pub upstream_prefix: Bytes,
+}
+
+impl TunnelConn {
+    /// The `conn` meta of this tunnel; a decrypted conn overrides mode, reason, ALPN and TLS
+    /// version.
+    pub fn meta(&self) -> ConnMeta<'_> {
+        ConnMeta {
+            host: &self.host,
+            port: self.port,
+            mode: "tunnel",
+            listed: self.listed.map(|l| l.0),
+            kind: self.listed.map(|l| l.1),
+            reason: Some(self.reason),
+            alpn: None,
+            tls: None,
+            fingerprint: self.fingerprint.as_deref(),
+        }
+    }
+
+    /// A tunnel to a listed host is a named loss: the GAP its reason names, `lost` bytes from
+    /// `at`. A `hello_too_big` GAP names its guard unless `tail` says more.
+    pub fn name_loss(&self, conn: &mut StreamHandle, at: Mono, lost: u64, tail: Option<Value>) {
+        let Some(reason) = self.listed.and(goalcup_format::tunnel_gap(self.reason)) else {
+            return;
+        };
+        let tail = tail.or_else(|| {
+            (self.reason == "hello_too_big")
+                .then(|| json!({"guard": "client_hello", "limit": CLIENT_HELLO_GUARD}))
+        });
+        conn.gap(reason, at, Some(lost), tail);
+    }
 }
 
 /// The `conn` OPEN meta (PRD-01 section 4), for both modes.
@@ -142,18 +173,7 @@ pub async fn run(
     upstream: TcpStream,
 ) {
     let opened = rec.now();
-    let meta = ConnMeta {
-        host: &c.host,
-        port: c.port,
-        mode: "tunnel",
-        listed: c.listed.map(|l| l.0),
-        kind: c.listed.map(|l| l.1),
-        reason: Some(c.reason),
-        alpn: None,
-        tls: None,
-        fingerprint: c.fingerprint.as_deref(),
-    };
-    let meta = serde_json::to_value(meta).unwrap_or_default();
+    let meta = serde_json::to_value(c.meta()).unwrap_or_default();
     let mut conn = rec.open(StreamKind::Conn, 0, 0, 0, OpenFlags::TUNNEL, meta);
     let watch = (c.listed.is_none() && c.reason != "sign_in")
         .then(|| Mutex::new(flags.watch(&c.host, opened)));
@@ -168,7 +188,7 @@ pub async fn run(
             );
         }
     };
-    let prefixes = (c.client_prefix, c.upstream_prefix);
+    let prefixes = (c.client_prefix.clone(), c.upstream_prefix.clone());
     let legs = (client, upstream);
     let p = pump::relay(rec, &mut conn, legs, prefixes, None, quiet, Some(&tap)).await;
     // Read from the TCP wire, so counted, though an error kept them from the other side.
@@ -179,12 +199,6 @@ pub async fn run(
         drop(p.client);
     }
     drop(p.upstream);
-    if c.listed.is_some()
-        && let Some(reason) = goalcup_format::tunnel_gap(c.reason)
-    {
-        let tail = (c.reason == "hello_too_big")
-            .then(|| json!({"guard": "client_hello", "limit": CLIENT_HELLO_GUARD}));
-        conn.gap(reason, opened, Some(up + down), tail);
-    }
+    c.name_loss(&mut conn, opened, up + down, None);
     conn.end(rec.now(), p.reason, Some(json!({"up": up, "down": down})));
 }

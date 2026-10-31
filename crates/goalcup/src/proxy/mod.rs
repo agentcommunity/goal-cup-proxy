@@ -136,7 +136,7 @@ pub fn serve(listener: std::net::TcpListener, ctx: ProxyCtx) -> ProxyHandle {
                 _ = &mut stop_rx => return,
                 next = next_conn(&listener, &boot.rec) => if let Some(client) = next {
                     // A panic in one connection ends its task only.
-                    tokio::spawn(connection(boot.clone(), client));
+                    tokio::spawn(connection(boot.clone(), client, Admitted::new()));
                 },
             }
         }
@@ -167,6 +167,24 @@ async fn next_conn(listener: &TcpListener, rec: &Recorder) -> Option<TcpStream> 
             tokio::time::sleep(PAUSE).await;
             None
         }
+    }
+}
+
+/// One accepted connection that has no `conn` stream yet. `fds::may_accept` counts open `conn`
+/// streams; this counts the connection from its accept until its `conn` opens or it ends, so
+/// one waiting on its head, its upstream or its first bytes holds its two descriptors too.
+struct Admitted;
+
+impl Admitted {
+    fn new() -> Admitted {
+        fds::conn_opened();
+        Admitted
+    }
+}
+
+impl Drop for Admitted {
+    fn drop(&mut self) {
+        fds::conn_closed();
     }
 }
 
@@ -202,7 +220,7 @@ fn looks_like_request(bytes: &[u8]) -> bool {
 }
 
 /// One harness connection, section 1 from the head to the close.
-async fn connection(b: Arc<Boot>, mut client: TcpStream) {
+async fn connection(b: Arc<Boot>, mut client: TcpStream, hold: Admitted) {
     let rec = &b.rec;
     let head = match connect::read_head(&mut client, rec).await {
         Ok(head) => head,
@@ -234,17 +252,19 @@ async fn connection(b: Arc<Boot>, mut client: TcpStream) {
     if connect::answer(&mut client, 200).await.is_err() {
         return;
     }
+    // A client that closes before sending a byte (a call cancelled while connecting) loses
+    // nothing, so its tunnel is not a listed host's loss even on a listed host.
     let first = match head.rest.is_empty() {
         false => head.rest.clone(),
         true => match connect::first_bytes(&mut client, &mut up).await {
             First::Client(bytes) => bytes,
             First::Server(bytes) => {
                 let c = tc("not_tls", connect_listed, None, Bytes::new(), bytes);
-                return tunnel::run(rec, &b.flags, &b.quiet, c, client, up).await;
+                return run_tunnel(&b, hold, c, client, up).await;
             }
             First::ClientClosed | First::ServerClosed => {
-                let c = tc("not_tls", connect_listed, None, Bytes::new(), Bytes::new());
-                return tunnel::run(rec, &b.flags, &b.quiet, c, client, up).await;
+                let c = tc("not_tls", None, None, Bytes::new(), Bytes::new());
+                return run_tunnel(&b, hold, c, client, up).await;
             }
         },
     };
@@ -252,7 +272,7 @@ async fn connection(b: Arc<Boot>, mut client: TcpStream) {
         Hello::Parsed(hello) => hello,
         Hello::TooBig(bytes) => {
             let c = tc("hello_too_big", connect_listed, None, bytes, Bytes::new());
-            return tunnel::run(rec, &b.flags, &b.quiet, c, client, up).await;
+            return run_tunnel(&b, hold, c, client, up).await;
         }
         Hello::NotTls(bytes) if is_listed && looks_like_request(&bytes) => {
             // Plain HTTP to a listed host: decrypted with no TLS; the wire is the plaintext.
@@ -260,16 +280,15 @@ async fn connection(b: Arc<Boot>, mut client: TcpStream) {
             let meta = ConnMeta {
                 mode: "decrypt",
                 reason: None,
-                ..meta(&c)
+                ..c.meta()
             };
-            let (conn, p) = decrypt(&b, meta, (client, up), bytes, false).await;
-            let (reason, pu, pd) = close(p, |c| c);
-            let tail = json!({"up": pu, "down": pd, "plain_up": pu, "plain_down": pd});
-            return conn.end(rec.now(), reason, Some(tail));
+            let (conn, p) = decrypt(&b, hold, meta, (client, up), bytes, false).await;
+            return finish(rec, conn, p, |c| c, |plain| plain);
         }
         Hello::NotTls(bytes) | Hello::Closed(bytes) => {
-            let c = tc("not_tls", connect_listed, None, bytes, Bytes::new());
-            return tunnel::run(rec, &b.flags, &b.quiet, c, client, up).await;
+            let listed = connect_listed.filter(|_| !bytes.is_empty());
+            let c = tc("not_tls", listed, None, bytes, Bytes::new());
+            return run_tunnel(&b, hold, c, client, up).await;
         }
     };
     let (name, decision) = b.hosts.decide(hello.sni.as_deref(), host);
@@ -288,7 +307,7 @@ async fn connection(b: Arc<Boot>, mut client: TcpStream) {
     let dl = listed(decision);
     if let Some(reason) = reason {
         let c = tc(reason, dl, fp16, hello.bytes, Bytes::new());
-        return tunnel::run(rec, &b.flags, &b.quiet, c, client, up).await;
+        return run_tunnel(&b, hold, c, client, up).await;
     }
     // Upstream first, checked against the deciding name (C10). Any failure: a fresh TCP leg and a
     // tunnel, so the harness meets the real server itself.
@@ -297,6 +316,7 @@ async fn connection(b: Arc<Boot>, mut client: TcpStream) {
         (Some(c), Ok(server_name)) => c.connect(server_name, up).await,
         _ => Err(io::Error::other("no upstream TLS for this name")),
     };
+    let fresh = (target, is_listed);
     // An `h2`-only client whose upstream picked no ALPN is `alpn_other`: the legs would differ.
     let up_tls = match upstream_tls {
         Ok(t) if offer != Offer::H2 || t.get_ref().1.alpn_protocol().is_some() => t,
@@ -307,7 +327,7 @@ async fn connection(b: Arc<Boot>, mut client: TcpStream) {
                 _ => "alpn_other",
             };
             let c = tc(reason, dl, fp16, hello.bytes, Bytes::new());
-            return fresh_tunnel(&b, c, client, target).await;
+            return fresh_tunnel(&b, hold, c, client, fresh).await;
         }
     };
     let chosen = up_tls.get_ref().1.alpn_protocol().map(<[u8]>::to_vec);
@@ -316,10 +336,12 @@ async fn connection(b: Arc<Boot>, mut client: TcpStream) {
         None => b.tls.server_for(chosen.as_deref(), host),
     };
     let Ok(server) = server else {
-        // No leaf can be made for the name: the harness meets the real server itself.
+        // No SNI and no leaf can be made for the CONNECT host: the harness meets the real server
+        // itself. The upstream certificate did verify; `upstream_untrusted` is the closest
+        // PRD-01 reason for a leaf we cannot stand behind, chosen on purpose.
         drop(up_tls);
         let c = tc("upstream_untrusted", dl, fp16, hello.bytes, Bytes::new());
-        return fresh_tunnel(&b, c, client, target).await;
+        return fresh_tunnel(&b, hold, c, client, fresh).await;
     };
     // Harness-leg TCP bytes; the ClientHello was read before the counter, so it is added.
     let wire = Arc::new([AtomicU64::new(0), AtomicU64::new(0)]);
@@ -329,7 +351,6 @@ async fn connection(b: Arc<Boot>, mut client: TcpStream) {
         inner: client,
         n: wire.clone(),
     };
-    let opened = rec.now();
     let acceptor = tokio_rustls::TlsAcceptor::from(server);
     let client_tls = match acceptor.accept(PrefixedIo::new(hello.bytes, counted)).await {
         Ok(t) => t,
@@ -343,8 +364,8 @@ async fn connection(b: Arc<Boot>, mut client: TcpStream) {
                 Refusal::NoAlert => json!(false),
             };
             let c = tc("tls_refused", dl, fp16, Bytes::new(), Bytes::new());
-            let tail = Some(json!({ "alert": alert }));
-            return lost_tunnel(rec, &c, opened, wire_now(), tail);
+            drop(hold);
+            return lost_tunnel(rec, &c, wire_now(), Some(json!({ "alert": alert })));
         }
     };
     b.hosts.trust(&name, &fp);
@@ -358,19 +379,24 @@ async fn connection(b: Arc<Boot>, mut client: TcpStream) {
             Some(rustls::ProtocolVersion::TLSv1_2) => Some("1.2"),
             _ => None,
         },
-        ..meta(&c)
+        ..c.meta()
     };
     let h2 = chosen.as_deref() == Some(b"h2");
-    let (conn, p) = decrypt(&b, meta, (client_tls, up_tls), Bytes::new(), h2).await;
-    let (reason, plain_up, plain_down) = close(p, |t| t.into_inner().0.into_inner().inner);
-    let (up, down) = wire_now();
-    let tail = json!({"up": up, "down": down, "plain_up": plain_up, "plain_down": plain_down});
-    conn.end(rec.now(), reason, Some(tail));
+    let legs = (client_tls, up_tls);
+    let (conn, p) = decrypt(&b, hold, meta, legs, Bytes::new(), h2).await;
+    finish(rec, conn, p, |t| t.into_inner().0.into_inner().inner, |_| wire_now());
+}
+
+/// A tunnel; `hold` ends as its `conn` opens, at the start of `tunnel::run`.
+async fn run_tunnel(b: &Boot, hold: Admitted, c: TunnelConn, client: TcpStream, up: TcpStream) {
+    drop(hold);
+    tunnel::run(&b.rec, &b.flags, &b.quiet, c, client, up).await
 }
 
 /// Opens the decrypted `conn` and relays it through its parser.
 async fn decrypt<C, U>(
     b: &Boot,
+    hold: Admitted,
     meta: ConnMeta<'_>,
     legs: (C, U),
     to_up: Bytes,
@@ -382,6 +408,7 @@ where
 {
     let meta = serde_json::to_value(meta).unwrap_or_default();
     let (rec, prefixes) = (&b.rec, (to_up, Bytes::new()));
+    drop(hold);
     let mut conn = rec.open(StreamKind::Conn, 0, 0, 0, OpenFlags::DECRYPTED, meta);
     let parser: Box<dyn Parser> = match h2 {
         true => Box::new(H2Unparsed),
@@ -391,64 +418,56 @@ where
     (conn, p)
 }
 
-/// Rule 8: after an upstream failure the harness leg is reset; otherwise both legs are dropped,
-/// the harness leg never shut down (`Pumped::client`). Gives the END reason and plaintext counts.
-fn close<C, U>(p: Pumped<C, U>, tcp: impl FnOnce(C) -> TcpStream) -> (EndReason, u64, u64) {
-    let out = (p.reason, p.plain_up, p.plain_down);
+/// Ends a decrypted `conn`. Rule 8: after an upstream failure the harness leg is reset;
+/// otherwise both legs are dropped, the harness leg never shut down (`Pumped::client`). The END
+/// tail's `up` and `down` are the harness leg's TCP bytes: `wire` gets the plaintext plus what
+/// was read but not written, and gives the counts once the legs are gone.
+fn finish<C, U>(
+    rec: &Recorder,
+    conn: StreamHandle,
+    p: Pumped<C, U>,
+    tcp: impl FnOnce(C) -> TcpStream,
+    wire: impl FnOnce((u64, u64)) -> (u64, u64),
+) {
+    let (reason, plain_up, plain_down) = (p.reason, p.plain_up, p.plain_down);
+    let read = (plain_up + p.unwritten[0], plain_down + p.unwritten[1]);
     if p.upstream_failed {
         connect::reset(tcp(p.client));
+    } else {
+        drop(p);
     }
-    out
+    let (up, down) = wire(read);
+    let tail = json!({"up": up, "down": down, "plain_up": plain_up, "plain_down": plain_down});
+    conn.end(rec.now(), reason, Some(tail));
 }
 
-/// The upstream handshake failed: a fresh TCP connection and a tunnel. If that connect fails
-/// too, the harness leg is reset and the conn recorded as the tunnel with its loss.
-async fn fresh_tunnel(b: &Boot, c: TunnelConn, client: TcpStream, target: Option<SocketAddr>) {
-    let rec = &b.rec;
-    let opened = rec.now();
-    match connect::connect_upstream(rec, &c.host, c.port, true, target).await {
-        Ok(up) => tunnel::run(rec, &b.flags, &b.quiet, c, client, up).await,
+/// The upstream handshake failed: a fresh TCP connection (retried for a listed CONNECT target,
+/// as the first) and a tunnel. If that connect fails too, the harness leg is reset and the conn
+/// recorded as the tunnel with its loss.
+async fn fresh_tunnel(
+    b: &Boot,
+    hold: Admitted,
+    c: TunnelConn,
+    client: TcpStream,
+    (target, retry): (Option<SocketAddr>, bool),
+) {
+    match connect::connect_upstream(&b.rec, &c.host, c.port, retry, target).await {
+        Ok(up) => run_tunnel(b, hold, c, client, up).await,
         Err(_) => {
             connect::reset(client);
-            let up = c.client_prefix.len() as u64;
-            lost_tunnel(rec, &c, opened, (up, 0), None);
+            drop(hold);
+            lost_tunnel(&b.rec, &c, (c.client_prefix.len() as u64, 0), None);
         }
     }
 }
 
-/// The `conn` meta of a tunnel as `tunnel::run` writes it; a decrypted conn overrides mode,
-/// reason, ALPN and TLS version.
-fn meta(c: &TunnelConn) -> ConnMeta<'_> {
-    ConnMeta {
-        host: &c.host,
-        port: c.port,
-        mode: "tunnel",
-        listed: c.listed.map(|l| l.0),
-        kind: c.listed.map(|l| l.1),
-        reason: Some(c.reason),
-        alpn: None,
-        tls: None,
-        fingerprint: c.fingerprint.as_deref(),
-    }
-}
-
 /// A tunnel `conn` whose bytes never passed: the GAP its reason names on a listed host, then END.
-fn lost_tunnel(
-    rec: &Recorder,
-    c: &TunnelConn,
-    at: Mono,
-    (up, down): (u64, u64),
-    tail: Option<Value>,
-) {
-    let meta = serde_json::to_value(meta(c)).unwrap_or_default();
+fn lost_tunnel(rec: &Recorder, c: &TunnelConn, (up, down): (u64, u64), tail: Option<Value>) {
+    let meta = serde_json::to_value(c.meta()).unwrap_or_default();
+    let at = rec.now();
     let mut conn = rec.open(StreamKind::Conn, 0, 0, 0, OpenFlags::TUNNEL, meta);
-    if c.listed.is_some()
-        && let Some(reason) = goalcup_format::tunnel_gap(c.reason)
-    {
-        conn.gap(reason, at, Some(up + down), tail);
-    }
-    let tail = Some(json!({"up": up, "down": down}));
-    conn.end(rec.now(), EndReason::Interrupted, tail);
+    c.name_loss(&mut conn, at, up + down, tail);
+    conn.end(rec.now(), EndReason::Interrupted, Some(json!({"up": up, "down": down})));
 }
 
 /// Until the HTTP/2 parser lands: an `h2` connection relays every byte and names its loss (5a
