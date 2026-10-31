@@ -31,7 +31,7 @@ Read first: [VISION.md](VISION.md), then [ARCHITECTURE](docs/ARCHITECTURE.md), t
 | Path | What it is |
 |---|---|
 | `crates/goalcup-format` | The record format (GCR1): records, links, part writer, reader, dump. No async, no TLS. Spec: [RECORD-FORMAT](docs/RECORD-FORMAT.md). |
-| `crates/goalcup` | `goalcup`: the seven commands, the watchdog, the recorder process (proxy, session-file reader, masking, writer, uploader) and the connector loader. |
+| `crates/goalcup` | `goalcup`: the eight commands, the watchdog, the recorder process (proxy, session-file reader, masking, writer, uploader) and the connector loader. |
 | `crates/goalcup-verify` | `goalcup-verify`: `check`, `dump`, `secrets`, `usage`. Every judgement about the bytes lives here. |
 | `connectors/` | One `<id>.toml` per harness, `model-hosts.toml` (the one host list) and `tiers.toml` (written by the test pad). Data, compiled into the binary. |
 | `server/worker` | The upload server, a Cloudflare Worker. It stores bytes and interprets nothing. |
@@ -41,7 +41,7 @@ Read first: [VISION.md](VISION.md), then [ARCHITECTURE](docs/ARCHITECTURE.md), t
 | `packaging/` | Release packaging and `install.sh`. |
 
 The dependency rule: the recorder never links the verifier, and the verifier never links the
-recorder. They share only `goalcup-format`. A test checks it.
+recorder. They share only `goalcup-format`. No test guards this yet; the manifests are the only check.
 
 Core code is `crates/goalcup` and `crates/goalcup-format`. The usage reader in `crates/goalcup-verify`
 reads harness session formats after the run, chosen by connector id.
@@ -67,7 +67,8 @@ a normal user, not root. What each tier runs and what it needs: [README](README.
 - **No harness names in core code.** A harness is data (a connector) plus shared modules.
 - **Never write into `~/.claude`, `~/.codex`, `~/.hermes` or any app-wide config.** Goal Cup Proxy
   makes isolated homes. A test that launches a harness uses a private `HOME`.
-- **Never commit** anything under the repository root's `/pad-out/` or `/harnesses/`, or any
+- **Never commit** anything under the repository root's `/pad-out/` or `/harnesses/`, any `spikes/*/out/`
+  (until PRD-13 deletes `spikes/`), or any
   `target/`, a key, or a real run's record. A committed fixture is masked and reviewed by eye.
 - **Record raw, interpret later.** The recorder captures bytes. The verifier and the usage reader
   judge them. Do not put rule logic in the recorder (D3).
@@ -77,7 +78,7 @@ a normal user, not root. What each tier runs and what it needs: [README](README.
 One test per behaviour you add or change. Test the promise, not the shape: no golden snapshots of
 internal structures, and no assertions on doc text or message wording unless the text is the
 contract. Every behaviour that serves one of the seven points has a test, and that test is not
-deleted while the point stands, or is replaced in the same change by a test with the same name prefix
+deleted while the point stands unless it is replaced in the same change by a test with the same name prefix
 that asserts the same promise. Where they are: [README](README.md#the-seven-points-and-their-tests).
 
 ## Done

@@ -27,9 +27,13 @@ the harness did. Seven points decide every change:
 
 The dependency rule: the recorder never links the verifier. `goalcup` and `goalcup-verify` share
 only `goalcup-format`, so a check cannot be fooled by recorder code and the recorder carries no
-checking code. Each of the two programs depends on the format crate alone.
+checking code.
 
 ## 3. The one process
+
+Target shape, owned by PRD-02: the mask worker, the writer and the watchdog's `run` and `recover`
+are not all on the integration branch yet. Read the bullets below on writing, restart, null mode
+and `recover` as the design they will meet, not as merged code.
 
 ```mermaid
 flowchart LR
@@ -71,12 +75,13 @@ The rules of the shape:
   one control line pass, and neither carries a recorded byte (D75).
 - **The watchdog** is the `goalcup start` or `continue` process. It binds the port once and hands
   the socket to each recorder boot, so a restart never closes the port. It mints the run CA, runs
-  the connector's helper stops, starts the harness, ends it at the deadline and on `goalcup seal`,
-  and restarts a dead recorder at once (D85). It never reads, masks, writes or uploads a recorded
+  the connector's helper stops, starts the harness, ends it at the deadline, on `goalcup seal` and
+  on the server's stop (D85), and restarts a dead recorder at once (D75). It never reads, masks, writes or uploads a recorded
   byte. `goalcup recover` reopens the port and the CA when the watchdog itself died.
 - **Null mode.** If the recorder crashes three times in ten minutes, each within a minute of its
   start, the watchdog runs a relay-only recorder, says so in `status.json`, and retries a normal
-  boot after 30 seconds, then 1, 2 and 5 minutes, never more than 5 minutes apart. The harness
+  boot after 30 seconds, then 1, 2 and 5 minutes, never more than 5 minutes apart. The crash count
+  resets once a recorder stays up 60 seconds. The harness
   keeps its connections. The span is a `recorder_down` gap.
 - **Boot-time timers.** Every timer counts boot time, which keeps running while the machine
   sleeps, on a one-second tick: deadline, restart pauses, null-mode retries, upload backoff.
@@ -138,7 +143,7 @@ shapes in `crates/goalcup/src/mask/shapes.tsv`, the connector's own rules, and t
 the run (the project's `GH_TOKEN` among them). The stream form keeps a small hold so a secret split
 over two chunks is still caught, and its output equals the whole-record result. When the masker
 cannot decide a piece it stars it (fail closed); if it fails outright the piece is dropped under a
-`mask_failed` gap. A MASK record names the rule and the span, never the value. The masker is pure:
+`mask_failed` gap (the worker that does this is part of the PRD-02 target shape). A MASK record names the rule and the span, never the value. The masker is pure:
 no threads, no clock, and no error text that formats a byte or a value (D80).
 
 ## 7. The record and the upload
