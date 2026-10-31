@@ -502,7 +502,8 @@ fn cuts(side: DuplexStream, cut: bool) -> Join<Cuts, WriteHalf<DuplexStream>> {
 
 /// Relays `up`, then `down`, through [`Http1`]; the upstream closes, then the client, and the
 /// `cut` leg closes without close_notify. A client's cut reaches the harness as a close; an
-/// upstream's does not, while the relay's caller still holds the client leg (rule 8). Each
+/// upstream's does not, while the relay's caller still holds the client leg (rule 8), and the
+/// connection ends `interrupted` since the harness leg is dropped unfinished. Each
 /// stream's kind and END reason, by kind, and the GAPs.
 async fn cut_close(up: &[u8], down: &[u8], cut: Dir) -> (Vec<(StreamKind, EndReason)>, Vec<Call>) {
     let (rec, calls) = Recorder::for_tests(1 << 30);
@@ -551,6 +552,14 @@ async fn cut_close(up: &[u8], down: &[u8], cut: Dir) -> (Vec<(StreamKind, EndRea
     (by_kind(ends.collect()), gaps(&calls))
 }
 
+/// A client's cut is passed on as a close; an upstream's leaves the harness leg unfinished.
+fn conn_end(cut: Dir) -> EndReason {
+    match cut {
+        Dir::Up => EndReason::Complete,
+        Dir::Down => EndReason::Interrupted,
+    }
+}
+
 fn by_kind(mut ends: Vec<(StreamKind, EndReason)>) -> Vec<(StreamKind, EndReason)> {
     ends.sort_by_key(|e| e.0.to_u8());
     ends
@@ -565,7 +574,7 @@ async fn only_an_upstream_cut_leaves_a_close_delimited_reply_unproven() {
         let sse = b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n\r\ndata: 1\n\n";
         for (cut, resp) in [(Dir::Up, Complete), (Dir::Down, Interrupted)] {
             let (ends, gaps) = cut_close(get, sse, cut).await;
-            let want = vec![(HttpReq, Complete), (HttpResp, resp), (Conn, Complete)];
+            let want = vec![(HttpReq, Complete), (HttpResp, resp), (Conn, conn_end(cut))];
             assert_eq!(ends, by_kind(want));
             assert!(gaps.is_empty());
         }
@@ -583,8 +592,9 @@ async fn only_an_upstream_cut_leaves_a_close_delimited_reply_unproven() {
         down.extend(b"\x81\x02yo\x88\x02\x03\xe8");
         for cut in [Dir::Up, Dir::Down] {
             let (ends, gaps) = cut_close(&up, &down, cut).await;
-            let whole = [HttpReq, WsUp, WsDown, Conn].map(|k| (k, Complete));
-            assert_eq!(ends, by_kind(whole.to_vec()));
+            let mut whole = [HttpReq, WsUp, WsDown].map(|k| (k, Complete)).to_vec();
+            whole.push((Conn, conn_end(cut)));
+            assert_eq!(ends, by_kind(whole));
             assert!(gaps.is_empty());
         }
     })

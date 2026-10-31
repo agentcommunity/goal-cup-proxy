@@ -279,3 +279,57 @@ fn a_learned_refusal_expires_after_ten_minutes() {
     assert!(hosts.refused(later, "api.openai.com", &fp));
     assert_eq!(ca_refused(&calls).len(), 2);
 }
+
+/// Rule 8 over real TLS: the upstream ends a close-delimited reply without close_notify. The
+/// relay passes no clean close on; its caller drops the harness leg, and the harness reads the
+/// bytes that came, then `UnexpectedEof`, as it would without us.
+#[tokio::test]
+async fn an_upstream_tls_cut_reaches_the_harness_as_a_cut() {
+    use bytes::Bytes;
+    use goalcup::pipeline::{OpenFlags, StreamKind};
+    use goalcup::proxy::pump;
+    use std::sync::atomic::AtomicU64;
+
+    let ca = RunCa::mint(&["openai.com".to_string()]).unwrap();
+    let tls = Tls::new(&ca, Vec::new());
+    let trusting = || TlsConnector::from(client_trusting(vec![ca.cert_der().clone()], &[]));
+    let reply = b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n\r\ndata: 1\n\n";
+    let ((harness_io, down_io), (up_io, server_io)) = (duplex(1 << 16), duplex(1 << 16));
+    let acceptor = TlsAcceptor::from(tls.server(None));
+    let server = tokio::spawn({
+        let acceptor = acceptor.clone();
+        async move {
+            let mut s = acceptor.accept(server_io).await.unwrap();
+            let mut head = [0u8; 4];
+            s.read_exact(&mut head).await.unwrap();
+            s.write_all(reply).await.unwrap();
+            s.flush().await.unwrap();
+            // Gone without close_notify.
+            drop(s.into_inner().0);
+        }
+    });
+    let (rec, _calls) = Recorder::for_tests(1 << 30);
+    let up = trusting();
+    let relay = tokio::spawn(async move {
+        let client = acceptor.accept(down_io).await.unwrap();
+        let upstream = up.connect(name("api.openai.com"), up_io).await.unwrap();
+        let mut conn = rec.open(StreamKind::Conn, 0, 0, 0, OpenFlags::NONE, serde_json::json!({}));
+        let (none, quiet) = ((Bytes::new(), Bytes::new()), AtomicU64::new(0));
+        let p = pump::relay(&rec, &mut conn, (client, upstream), none, None, &quiet, None).await;
+        conn.end(rec.now(), p.reason, None);
+        assert!(!p.upstream_failed, "a cut is not a reset");
+        drop(p.client);
+    });
+    let mut harness = trusting()
+        .connect(name("api.openai.com"), harness_io)
+        .await
+        .unwrap();
+    harness.write_all(b"GET ").await.unwrap();
+    harness.flush().await.unwrap();
+    let mut got = Vec::new();
+    let err = harness.read_to_end(&mut got).await.unwrap_err();
+    assert_eq!(got, reply, "verbatim");
+    assert_eq!(err.kind(), std::io::ErrorKind::UnexpectedEof, "no clean close");
+    server.await.unwrap();
+    relay.await.unwrap();
+}

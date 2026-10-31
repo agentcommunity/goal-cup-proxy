@@ -74,11 +74,14 @@ pub trait Parser: Send {
 
 /// What [`relay`] hands back: both streams, so the caller can reset the harness leg (rule 8).
 pub struct Pumped<C, U> {
+    /// The harness leg. The caller drops it (or resets it, rule 8) and never shuts it down: after
+    /// an upstream cut a shutdown would send close_notify and pass a cut reply on as whole.
     pub client: C,
     pub upstream: U,
     pub plain_up: u64,
     pub plain_down: u64,
-    /// `complete` when both sides closed cleanly, else `interrupted`.
+    /// `complete` when both sides closed cleanly (a client's cut counts as clean, an upstream's
+    /// does not: it is passed on as a cut), else `interrupted`.
     pub reason: EndReason,
     /// The upstream leg errored (reset, TLS error, read or write error), not a clean close.
     pub upstream_failed: bool,
@@ -93,13 +96,15 @@ pub type Tap<'a> = &'a (dyn Fn(Dir, Mono, u64) + Sync);
 /// How one direction ended. `Cut`: a TLS peer closed without close_notify. A client's cut is
 /// passed on as a clean close. An upstream's cut ends the relay with no shutdown of the client
 /// leg, so the harness gets no close_notify either and sees a close-delimited body cut, as it
-/// would without us (rule 8); the caller drops that leg, a plain TCP close.
+/// would without us (rule 8); the caller drops that leg, a plain TCP close. `Dropped`: the leg was
+/// left unfinished when the other one ended the relay.
 #[derive(Clone, Copy)]
 enum Leg {
     Eof,
     Cut,
     ReadErr,
     WriteErr,
+    Dropped,
 }
 
 struct Pump<'a> {
@@ -249,10 +254,11 @@ where
         let a = pump.leg(Dir::Up, to_up, &mut cr, &mut uw);
         let b = pump.leg(Dir::Down, to_client, &mut ur, &mut cw);
         tokio::pin!(a, b);
-        // An error on one leg ends the other: the connection is over.
+        // An error on one leg, or an upstream cut, ends the other: the connection is over.
+        use Leg::{Cut, Dropped, Eof};
         tokio::select! {
-            x = &mut a => (x, if matches!(x, Leg::Eof | Leg::Cut) { b.await } else { Leg::Eof }),
-            y = &mut b => (if matches!(y, Leg::Eof) { a.await } else { Leg::Eof }, y),
+            x = &mut a => (x, if matches!(x, Eof | Cut) { b.await } else { Dropped }),
+            y = &mut b => (if matches!(y, Eof) { a.await } else { Dropped }, y),
         }
     };
     // A leg that errored, or was dropped mid-write, leaves the part its writer took; the rest of
