@@ -34,22 +34,21 @@ mod enc {
             .into_bytes()
     }
 
-    pub fn gzip(data: &[u8]) -> Vec<u8> {
-        let mut e = GzEncoder::new(Vec::new(), Compression::default());
+    fn encode<W: Write>(mut e: W, data: &[u8], finish: impl FnOnce(W) -> Vec<u8>) -> Vec<u8> {
         e.write_all(data).unwrap();
-        e.finish().unwrap()
+        finish(e)
+    }
+
+    pub fn gzip(data: &[u8]) -> Vec<u8> {
+        encode(GzEncoder::new(Vec::new(), Compression::default()), data, |e| e.finish().unwrap())
     }
 
     pub fn zlib(data: &[u8]) -> Vec<u8> {
-        let mut e = ZlibEncoder::new(Vec::new(), Compression::default());
-        e.write_all(data).unwrap();
-        e.finish().unwrap()
+        encode(ZlibEncoder::new(Vec::new(), Compression::default()), data, |e| e.finish().unwrap())
     }
 
     pub fn raw_deflate(data: &[u8]) -> Vec<u8> {
-        let mut e = DeflateEncoder::new(Vec::new(), Compression::default());
-        e.write_all(data).unwrap();
-        e.finish().unwrap()
+        encode(DeflateEncoder::new(Vec::new(), Compression::default()), data, |e| e.finish().unwrap())
     }
 }
 use enc::{gzip, raw_deflate, sse, zlib};
