@@ -78,6 +78,15 @@ fn wrapper(d: &Path) -> PathBuf {
 /// Boot 1 gets a server `stop` (reason `admin`) on its control socket 4 s after it starts, as
 /// its uploader's forwarder would send it; every boot is the binary itself.
 fn stop_wrapper(d: &Path) -> PathBuf {
+    stop_wrapper_then(d, "")
+}
+
+/// As [`stop_wrapper`], but every boot after the first exits 1 at once.
+fn stop_crash_wrapper(d: &Path) -> PathBuf {
+    stop_wrapper_then(d, "*) exit 1;;")
+}
+
+fn stop_wrapper_then(d: &Path, later: &str) -> PathBuf {
     let (dd, exe) = (d.display(), env!("CARGO_BIN_EXE_goalcup"));
     let word = r#"{"line":"server","stop":true,"reason":"admin","seconds_left":null,"asked_at":0}"#;
     let text = format!(
@@ -85,7 +94,7 @@ fn stop_wrapper(d: &Path) -> PathBuf {
          read up _ < /proc/uptime
          n=$(( $(cat {dd}/boots 2>/dev/null || echo 0) + 1 )); echo $n > {dd}/boots
          echo \"$n $up $*\" >> {dd}/boot_log
-         case $n in 1) ( sleep 4; printf '%s\\n' '{word}' >&4 ) & ;; esac
+         case $n in 1) ( sleep 4; printf '%s\\n' '{word}' >&4 ) & ;; {later} esac
          exec \"{exe}\" \"$@\""
     );
     let path = d.join("stop_recorder.sh");
@@ -411,6 +420,91 @@ fn watchdog_after_a_server_stop_serves_until_the_harness_exits() {
     let _ = watchdog::run_with(plan, facts, &recorder);
     driver.join().unwrap();
     drop(up);
+    let st = cli::read_json::<Value>(&cli::status_json(&entry_dir)).unwrap();
+    assert_eq!(st["seal"]["reason"], "server_stop", "{st}");
+}
+
+/// Point 3 and ledger R3: a null recorder that dies mid-run is replaced at once by another null
+/// boot, so the harness's next connection is answered within seconds, not at the end of the
+/// null wait.
+#[test]
+fn watchdog_null_killed_is_replaced_at_once() {
+    let up = Upstream::start(Script::ok(b"hi"));
+    let Setup {
+        _tmp,
+        d,
+        entry_dir,
+        plan,
+        recorder,
+        facts,
+    } = setup();
+    let (dir, m, upstream) = (entry_dir.clone(), d.clone(), up.addr());
+    let driver = std::thread::spawn(move || {
+        let null = crash_to_null(&dir);
+        let port = null["port"].as_u64().unwrap();
+        assert!(through_proxy(port, upstream).ends_with("hi"));
+        let pid = null["pid"].as_u64().unwrap();
+        // SAFETY: a signal to one pid, the null recorder's.
+        unsafe { libc::kill(pid as libc::pid_t, libc::SIGKILL) };
+        until("boot 4's end", || {
+            boot_log(&m).iter().find(|l| l[..2] == ["4", "exit"]).cloned()
+        });
+        let t = Instant::now();
+        let answer = through_proxy(port, upstream);
+        let waited = t.elapsed();
+        std::fs::write(m.join("stop"), "").unwrap();
+        (answer, waited)
+    });
+    let _ = watchdog::run_with(plan, facts, &recorder);
+    let (answer, waited) = driver.join().unwrap();
+    drop(up);
+    assert!(answer.ends_with("hi"), "{answer}");
+    assert!(waited < Duration::from_secs(5), "{waited:?}");
+    let log = boot_log(&d);
+    assert!(
+        log.iter()
+            .any(|l| l[0] == "5" && l.contains(&NULL_FLAG.to_string())),
+        "{log:?}"
+    );
+}
+
+/// Point 3 and section 8 step 10: after a server `stop`, boots on the sealed entry that die at
+/// boot are spaced out (never one per tick) and never start null mode, and the seal stays.
+#[test]
+fn watchdog_sealed_entry_boots_are_spaced_and_never_null() {
+    let Setup {
+        _tmp,
+        d,
+        entry_dir,
+        plan,
+        recorder,
+        facts,
+    } = setup_with(stop_crash_wrapper);
+    let (dir, m) = (entry_dir.clone(), d.clone());
+    let driver = std::thread::spawn(move || {
+        let status = || cli::read_json::<Value>(&cli::status_json(&dir));
+        until("the server_stop seal", || {
+            status().filter(|s| s["seal"]["reason"] == "server_stop")
+        });
+        until("the boot after the seal", || started(&m, "2"));
+        let t = Instant::now();
+        while t.elapsed() < Duration::from_secs(10) {
+            if let Some(st) = status() {
+                assert_eq!(st["seal"]["reason"], "server_stop", "{st}");
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        std::fs::write(m.join("stop"), "").unwrap();
+    });
+    let _ = watchdog::run_with(plan, facts, &recorder);
+    driver.join().unwrap();
+    let log = boot_log(&d);
+    assert!(
+        !log.iter().any(|l| l.contains(&NULL_FLAG.to_string())),
+        "{log:?}"
+    );
+    // Spaced 1, 2, 4, 8 s: about five boots in 10 s, where one per tick would be dozens.
+    assert!((3..=8).contains(&log.len()), "{log:?}");
     let st = cli::read_json::<Value>(&cli::status_json(&entry_dir)).unwrap();
     assert_eq!(st["seal"]["reason"], "server_stop", "{st}");
 }
