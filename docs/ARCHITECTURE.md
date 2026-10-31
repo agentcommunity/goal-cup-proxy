@@ -61,7 +61,7 @@ The rules of the shape:
   with a call that never waits. Past the stated memory guard the copy is dropped and the loss is a
   gap with its start, end and lost bytes. The harness is never slowed (point 3).
 - **Mask before disk.** Raw bytes live only in memory: in the queue, in the masker's hold and in the
-  decoder state. Nothing unmasked reaches a file or a log line.
+  parser state. Nothing unmasked reaches a file or a log line.
 - **No raw bytes leave memory any other way.** The recorder turns core dumps off before it reads a
   byte, and its panic hook prints only a file, a line and fixed text.
 - **One writer** owns the part files. It counts at write, so every count the participant sees is
