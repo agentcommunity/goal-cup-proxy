@@ -5,10 +5,7 @@ You give one coding agent one prompt, then leave it alone for 168 hours. Goal Cu
 record. This page takes you from install to the end of your run. The rules are in
 [RULES.md](RULES.md), and what the record holds is in [RECORD-FORMAT.md](RECORD-FORMAT.md).
 
-> **Build state.** `seal`, `upload`, `status` and `time-left` are built. `continue` and `recover`
-> print "not built yet". `start` runs its checks, then prints "start is not built yet"; no approval
-> is asked and no run is opened. Sections 5 to 8 describe the 1.0 release and cannot be followed end
-> to end yet. This note goes in the final pass.
+> **Build state.** `goalcup continue` and `goalcup recover` print "not built yet".
 
 ## What goalcup does for you
 
@@ -160,8 +157,8 @@ d=$(mktemp -d) && cd "$d" && goalcup start --practice
 
 Approve the run in the browser and return to the terminal at once. The harness opens in that
 folder. Type any prompt. After about ten minutes the server stops the run, and `goalcup` seals and
-uploads it. A practice run needs no repository and no token, so the agent has nowhere to push. It
-never counts. Do as many as you like.
+uploads it. A practice run needs no repository or token, so the agent cannot push. It never counts;
+do as many as you like.
 
 Check that the agent works without asking you anything, that `goalcup status` shows "Written so
 far" model requests, and that the end screen ([section 8](#8-the-end)) reads right. If `status` says
@@ -228,7 +225,12 @@ a token for one repository needs the repository to exist first.
    ([Appendix A](#appendix-a-start-refusals)). Then it opens the approval page. Check that the page
    shows the code printed in the terminal, approve, and **return to the terminal now**. If you
    already have a competition run open, approving replaces it. Your 168 hours start when the server
-   opens the run.
+   opens the run. Ctrl-C while waiting creates nothing.
+
+The start screen lists the kind of run, a sign-in note if your harness needs one, the first message
+(below), **Ends** and **Upload** (as in `status`), the harness's tier
+([section 4](#4-your-harness-the-list-and-the-tiers)) and home folder, and a sleep warning if
+needed. The last line, "Recording in chat mode: <harness> opens now.", means recording is on.
 
 The harness opens in the project folder. `goalcup` builds your **first message**: the push block,
 a blank line, then your prompt. It is on your clipboard when a tool for that exists (`pbcopy` on a
@@ -301,6 +303,7 @@ goalcup start". `goalcup status --json` prints the same facts as JSON.
 | `Recording: finished at 16:54. Nothing is recorded now.` | The part is sealed. |
 | `PROBLEM: Recording is off since ...: goalcup stopped, so your agent cannot reach the model service. Your agent is still running. Run: goalcup recover` | Both `goalcup` and its recorder stopped. In another terminal run `goalcup recover`. It brings the recorder back, never touches your agent, and the time between is recorded as a gap. |
 | `PROBLEM: Recording is off since ...: goalcup is not running. To go on, run: goalcup continue <run>` | The agent has stopped too. Run the command. |
+| `PROBLEM: Recording is off since ...: goalcup is not running. Time is up for this run. To close the part, run: goalcup seal` | The run's time is over. Run the command. |
 | `PROBLEM: Recording is off since ...: it stopped right after each restart, so goalcup lets your agent's traffic pass unrecorded for now.` | The recorder keeps failing, most often because a write to disk failed. Your agent keeps working and `goalcup` tries again, at most 5 minutes apart. Free space on the disk. The server is told. |
 
 `goalcup recover` prints that recording is on again, for how long it was off, and that the agent was
@@ -335,10 +338,9 @@ push if the agent's `git config` and `git remote add` lines are saved in the rep
 current part (it asks first; `--yes` skips that). The run stays open and `continue` goes on.
 
 **Time left.** `goalcup time-left` prints when the run stops, from the server's last word; the agent
-may run it too. After 11 minutes without word it says the time is unknown right now.
-
-**Leaving the machine.** Keep it on mains power, awake, online and the lid open; over SSH, start
-inside `tmux`. Sleep suspends the agent too and loses nothing, but the clock runs on.
+may run it too. After 11 minutes without word it says the time is unknown. **Leaving the machine:**
+keep it on mains power, awake, online and the lid open; over SSH, start inside `tmux`. Sleep
+suspends the agent too and loses nothing, but the clock runs on.
 
 **Change nothing the agent can read:** files, issues, messages, documents, websites. See
 [RULES, During the run](RULES.md#during-the-run).
@@ -357,7 +359,7 @@ What this part recorded (on this computer):
   896 of them written whole, 9 with missing parts. 1.5 MB was not recorded.
   43 session files, 48 MB.
   Recording was off 2 times, 2 min 30 s in total.
-  Not recorded, passed through unread: registry.npmjs.org (105 connections, 80 MB), ab.chatgpt.com (11, 24 MB), and 2 more hosts.
+  Not recorded, passed through unread: registry.npmjs.org (105 connections, 80 MB), ab.chatgpt.com (11 connections, 24 MB), and 2 more hosts.
 Upload: done. The server holds your whole record (95 MB). Removed here: 3 record files the server holds.
 Details for support are in "/home/you/.config/goalcup/runs/<run>/<part>/goalcup.log"
 ```
@@ -419,14 +421,11 @@ Also not recorded, or recorded less:
   recorded and its session files are not.
 - **A model server on this computer** (Ollama, LM Studio) is reached past the proxy and not
   recorded. The status block names it.
-- **HTTP/3, QUIC and ECH** never reach a proxy.
-- **A network that re-signs TLS** and needs its own proxy is not supported.
+- **HTTP/3, QUIC and ECH** never reach a proxy, and a network that re-signs TLS is not supported.
 - **A token used as the user name of a URL with no password** may be recorded.
 - **SQLite harnesses** keep their data in a database; it is copied once, at the seal.
 - **On Linux**, memory `goalcup` holds can reach swap that is not encrypted. It is the one place raw
-  bytes can leave memory.
-
-Core dumps are switched off for `goalcup`.
+  bytes can leave memory. Core dumps are switched off.
 
 ## 10. Help
 
