@@ -338,8 +338,7 @@ outdir, or one part file. `--live` reads an entry still recording up to its last
 Exit code and `result`: 0 `pass` (whole); 1 `named` (honest but incomplete: every loss is named, or
 the entry is unsealed, live or has pruned part files); 2 `fail` (a broken invariant, a silent
 loss, or with `--known` a `secrets` hit or big mask); 3 no usable report and no JSON (the input, `--local` or `--known` cannot be read, a wrong
-command line, an internal error). A `warn` (an unknown record kind or GAP reason, or a glued secret
-shape) or a `skip` leaves the exit alone. For a run folder, the worst entry decides. Readers ignore
+command line, an internal error). A `warn` or a `skip` leaves the exit alone. For a run folder, the worst entry decides. Readers ignore
 keys they do not know.
 
 | Top-level key | Holds |
@@ -378,15 +377,16 @@ null: `torn_tail`, `native_path_gen`, `counts_match_seal`, `gaps_named`, `record
 **Honesty checks** (`honesty.rs`; a listed host is on the `start` host list or has `listed` in its meta):
 
 - `listed_hosts_decrypted`: a listed host should be read, not tunnelled. A tunnel to one is `named`
-  when a GAP of the tunnel's own reason is in the record, `fail` when none is; a `sign_in` tunnel is
-  no loss. A GAP on a decrypted listed connection is `named`. A refusal from a host and fingerprint
-  that earlier finished a decrypted connection, and a `long_tunnel` note for an unlisted host, are
-  `warn`. Facts: `listed_conns`, `decrypted`, `sign_in`, `tunnels_named` (per reason),
+  when a GAP of the tunnel's own reason is on that connection, `fail` when none is; a `sign_in`
+  tunnel is no loss. A GAP on a decrypted listed connection is `named`. A `tls_refused` connection
+  from a host and fingerprint that earlier finished a decrypted connection is `warn`, unless its GAP
+  says `alert: false`; a `long_tunnel` note for an unlisted host is `warn`. Facts: `listed_conns`, `decrypted`, `sign_in`, `tunnels_named` (per reason),
   `tunnels_unnamed`, `conn_gaps`, `long_tunnel_unlisted`, `refusal_after_trust`.
 - `conn_bytes`: per decrypted connection and direction, the plain bytes in its END tail (`plain_up`,
   `plain_down`) against what its streams account for. Over 1 MiB unaccounted is `warn` when over a
-  tenth of the plain bytes, `fail` when over half and the connection has no GAP; `skip` when nothing
-  was judged or a connection ended without both counts. Facts: `checked`, `warn`, `fail`, `unaccounted_bytes`,
+  tenth of the plain bytes, `fail` when over half and the connection has no GAP; else `skip` when nothing
+  was judged or a connection ended without both counts (a `warn` or `fail` from another
+  connection stands). Facts: `checked`, `warn`, `fail`, `unaccounted_bytes`,
   `no_plain_tail`.
 - `mask_failclosed`: `warn` for a stream with over 1 MiB of `fail_closed` MASK bytes. Facts: `streams`, `bytes`.
 
@@ -461,15 +461,16 @@ true and a line on standard error; a torn tail is no error.
 | `tokens` | `merged`, `native` and `wire` (each the five token keys), `calls_without_usage` and `calls_without_usage_by_status` |
 
 A call counts once: a native record with a wire twin is not counted again, and `usage_from` (`wire`
-or `native`) says which leg gave its numbers. Each `calls.jsonl` line has the keys `k` (`call`, `warmup`, `interrupt` or `other`, a POST to a
-listed host), `leg` (`wire` or `native`), `entry`, `boot`, `sid`, `msg` (WebSocket message number),
-`t0` and `t1` (wall times), `host`, `host_kind` (`provider`, `gateway`, `vendor` or `other`),
-`shape` (`responses`, `anthropic`, `chat` or `gemini`, picked by the request path, never the host),
-`via` (`http` or `ws`), `model` (as the reply named it, else asked for), `model_requested`,
-`effort`, `status` (as in the summary), `detail` (a short safe reason token, such as why a response
-was incomplete), `whole`, `thread`, `parent`, `join` (as in `coverage`; null unless `k` is `call`),
-`usage_from`, the five token keys, and `extra` (only when not empty: other numeric usage members
-whose names end in `tokens`, by name). A key a leg cannot give is null.
+or `native`) says which leg gave its numbers. Each `calls.jsonl` line has the keys `k` (`call`,
+`warmup`, `interrupt` or `other`, a POST to a listed host), `leg` (`wire` or `native`), `entry`,
+`boot`, `sid`, `msg` (WebSocket message number), `t0` and `t1` (wall times), `host`, `host_kind`
+(`provider`, `gateway`, `vendor` or `other`), `shape` (`responses`, `anthropic`, `chat` or `gemini`,
+picked by the request path, never the host), `via` (`http` or `ws`), `model` (as the reply named it,
+else asked for), `model_requested`, `effort`, `status` (as in the summary), `detail` (a short safe
+reason token, such as why a response was incomplete), `whole`, `thread`, `parent`, `join` (as in
+`coverage`; null unless `k` is `call`), `usage_from`, the five token keys, and `extra` (only when
+not empty: other numeric usage members whose names end in `tokens`, `Tokens` or `TokenCount`, also
+one object down as `a.b`, by name). A key a leg cannot give is null.
 
 **Tokens.** Every row, `tokens` object and sum has all five keys. A number not said is null, never
 0, and a sum is null when no row said it.
@@ -493,8 +494,9 @@ per member over the lines of one `message.id`).
 | Connector id | Native files read (by `meta.path` `<row>:<file>`) | Thread on the wire | Thread, parent and label in the files | Join |
 |---|---|---|---|---|
 | `codex-cli` | row `sessions`, `rollout-*.jsonl` | Request header `thread-id`, else `client_metadata.thread_id` of a WebSocket `response.create` | `session_meta`: `id`, and for a child `source.subagent.thread_spawn` `parent_thread_id`, `depth`, `agent_path` (the label); `spawn_agent` items name children | Same thread, then the first unmatched `ok` wire call ending 120 s before to 5 s after the native record |
-| `claude-code-cli` | row `transcripts`, `*.jsonl`; row `meta`, `*.meta.json` snapshots | None | A file `<session>/subagents/agent-<id>*.jsonl` is subagent `<id>`, child of `<session>`; any other transcript is a thread named by its file stem; the label is `agentType` in the meta snapshot | The reply's `request-id` header equals the transcript's `requestId`, else by time as above |
+| `claude-code-cli` | row `transcripts`, `*.jsonl`; row `meta`, `*.meta.json` snapshots | None | A file `<session>/subagents/agent-<id>*.jsonl` is subagent `<id>`, child of `<session>`; any other transcript is a thread named by its file stem; the label is `agentType` in the meta snapshot | The reply's `request-id` header equals the transcript's `requestId`, else by time (the same window, any thread; `joined_by_time` counts only these) |
 
 Neither file holds body text or a session file path: only model names, thread ids and agent labels
-(printable ASCII, at most 128 bytes, never all `*`), safe reason tokens, times and numbers leave
-the record.
+(printable ASCII, at most 128 bytes, never all `*`), host names, the run, entry and connector ids,
+the harness version line (printable ASCII, at most 128 bytes), safe reason tokens, times and numbers
+leave the record.

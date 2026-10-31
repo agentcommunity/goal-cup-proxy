@@ -153,9 +153,9 @@ index has a hole, and it never overwrites. Against a local `wrangler dev` use `-
 
 `check --server` reads the fetched folder; `--json` prints the report, `--local <entry dir>` compares the
 server copy with the participant's own entry, and `--known <file>` (one secret value per line) adds the
-secrets check. `dump` prints one JSON line per record. `usage` prints one JSON summary per entry; with
-`--out` it also writes `<entry>.json` and `<entry>.calls.jsonl` there. It exits 0 when any entry gave
-output, else 3. The report and its exit codes are in
+secrets check. `dump` prints one JSON line per record. `usage --out <dir>` writes `<entry>.json` and
+`<entry>.calls.jsonl` there; the rest is in
+[RECORD-FORMAT](RECORD-FORMAT.md#the-goalcup-verify-usage-files). The report and its exit codes are in
 [RECORD-FORMAT](RECORD-FORMAT.md#the-goalcup-verify-check---json-report).
 
 ## Runs whose recording is off
