@@ -39,6 +39,7 @@ def forms(v):
     b, out = v.encode(), {v, urllib.parse.quote(v, safe=""), json.dumps(v)[1:-1]}
     for k in range(3):  # only the base64 characters made of the value's own bits
         out.add(base64.b64encode(b"\0" * k + b).decode()[-(-8 * k // 6):8 * (k + len(b)) // 6])
+    out |= {v[-20:]} if len(v) >= 40 else set()  # the tail a harness shows of a key (Claude Code's key question)
     return {f for f in out if len(f) >= 8}
 
 
@@ -243,7 +244,8 @@ class Run:
             raise Step("FAIL", "goalcup setup exit %d, %d home paths printed" % (r.returncode, len(homes)))
         home = self.st["home"] = homes[-1]
         for name, src in sec.get("files", {}).items():  # provider config, as a participant writes it
-            write(os.path.join(home, name), open(os.path.join(PAD, "harnesses", src)).read(), 0o644)
+            old = open(os.path.join(home, name)).read() if os.path.isfile(os.path.join(home, name)) else ""  # keep goalcup setup's no_prompts rows
+            write(os.path.join(home, name), open(os.path.join(PAD, "harnesses", src)).read() + "\n" + old, 0o644)
         get = lambda k: sec.get(k, h.get(k))  # noqa: E731
         key, route = (os.path.join(self.keys, s["route_key"]), get("key_route")) if s["route_key"] else (None, None)  # section 6
         self.st.update(key_route=route, key_env=get("key_env"), key_path=key)
@@ -319,7 +321,8 @@ class Run:
                      ["respawn-pane", "-k", "-t", t, "bash " + shlex.quote(self.path("launch.sh"))]):
             sh(["tmux"] + argv)
         if server == "off":  # no approval: paste now
-            self.until("Recording in chat mode", "no 'Recording in chat mode'")
+            if not wait(lambda: pc.dig(self.status(), "s4_mode") == "recording", self.left(), 2):  # Codex clears the screen and scrollback
+                self.until("Recording in chat mode", "no 'Recording in chat mode'")
             self.daemon_check()
             return self.type_prompt()
         self.code = self.until(r"shows the code ([A-Z0-9]{4}-[A-Z0-9]{4})\.", "no device code").group(1)  # out once
@@ -328,7 +331,7 @@ class Run:
 
     def until(self, pattern, why):
         """The first match of `pattern` on the screen within the step's limit; else the step ends INCONCLUSIVE."""
-        got = wait(lambda: re.search(pattern, self.pane(False)), self.left(), 3)
+        got = wait(lambda: re.search(pattern, sh(["tmux", "capture-pane", "-p", "-J", "-S", "-", "-t", self.tmux]).stdout), self.left(), 3)  # scrollback
         if not got:
             self.refusal()
             self.pane()
@@ -359,8 +362,9 @@ class Run:
             time.sleep(0 if ready else 30)
         self.seed()  # after the harness's ready text: the harness reads git state while it starts
         if h.get("pre_keys"):
-            sh(["tmux", "send-keys", "-t", t, "-l", h["pre_keys"].encode().decode("unicode_escape")])
-            time.sleep(2)
+            for k in ([h["pre_keys"]] if isinstance(h["pre_keys"], str) else h["pre_keys"]):  # one screen per item
+                sh(["tmux", "send-keys", "-t", t, "-l", k.encode().decode("unicode_escape")])
+                time.sleep(3)
         first = glob.glob(os.path.join(self.env["GOALCUP_HOME"], "runs", "*", "first-message.txt"))
         text = open(first[-1] if first else self.path("prompt.txt")).read().strip()
         # tmux(1) FORMATS: bracket_paste_flag. Without it a multi-line paste can submit early: join lines.
