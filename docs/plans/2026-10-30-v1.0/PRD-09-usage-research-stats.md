@@ -1046,5 +1046,5 @@ PRD-01, PRD-05, PRD-08, PRD-12, PRD-16 and the old code.
   causes are the ones given in the earlier size decisions (both legs of a call joined by id, the
   entry reader that goes on past a bad entry, thread rows, many harness shapes); no cut was found
   that keeps behaviour. The ceilings stay 2,550 src; `sqlite.rs` (150) takes the rest. The tests
-  ceiling becomes **520**: the 20-line allowance reserved earlier is kept for the one `sqlite.rs`
+  ceiling becomes **520** (`usage_run1.rs` is 502 after rustfmt): the rest of the allowance is for the one `sqlite.rs`
   case (a database copy read by its `set`), and the case goes in `usage_run1.rs`.
