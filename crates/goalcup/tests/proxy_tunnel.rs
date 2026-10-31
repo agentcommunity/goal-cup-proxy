@@ -661,7 +661,7 @@ async fn a_chunk_cut_mid_write_by_the_other_legs_error_is_recorded_as_far_as_it_
             _ => unreachable!(),
         });
         let want = (GapReason::DecodeFailed, 0, Some(8192 - got as u64));
-        assert_eq!(lost.collect::<Vec<_>>(), [want], "the reply's rest is a named loss");
+        assert_eq!(lost.collect::<Vec<_>>(), [want]);
     })
     .await;
 }
@@ -750,8 +750,8 @@ async fn reset_mid_upload(chunk: &[u8], took: usize) -> Upload {
     let reqs = reqs.iter().filter_map(|req| {
         all.iter().find_map(|c| match c {
             Call::End(sid, _, reason, _, tail) if sid == req => {
-                let tail = tail.as_ref().unwrap();
-                Some((*reason, tail["wire"].as_u64().unwrap(), tail["unsent"].as_u64()))
+                let t = tail.as_ref().unwrap();
+                Some((*reason, t["wire"].as_u64().unwrap(), t["unsent"].as_u64()))
             }
             _ => None,
         })
