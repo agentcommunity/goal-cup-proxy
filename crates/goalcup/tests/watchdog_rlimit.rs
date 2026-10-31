@@ -119,13 +119,18 @@ impl Seen {
 
     fn all(&self, key: &str) -> Vec<&str> {
         let lead = format!("{key} ");
-        self.lines.iter().filter_map(|l| l.strip_prefix(&lead)).collect()
+        self.lines
+            .iter()
+            .filter_map(|l| l.strip_prefix(&lead))
+            .collect()
     }
 
     /// `(process group, session)` from `/proc/<pid>/stat`, read after the command name.
     fn group_and_session(&self) -> (u64, u64) {
         let stat = self.one("stat");
-        let rest: Vec<&str> = stat[stat.rfind(')').unwrap() + 1..].split_whitespace().collect();
+        let rest: Vec<&str> = stat[stat.rfind(')').unwrap() + 1..]
+            .split_whitespace()
+            .collect();
         (rest[2].parse().unwrap(), rest[3].parse().unwrap())
     }
 }
@@ -177,7 +182,13 @@ fn the_harness_gets_4096_none_of_our_sockets_our_group_and_only_its_env() {
     let dir = tempfile::tempdir().unwrap();
     let listener = listener();
     let (ours, theirs) = spawn::control_pair().unwrap();
-    let ours_fds = [3, 4, listener.as_raw_fd(), ours.as_raw_fd(), theirs.as_raw_fd()];
+    let ours_fds = [
+        3,
+        4,
+        listener.as_raw_fd(),
+        ours.as_raw_fd(),
+        theirs.as_raw_fd(),
+    ];
     let exe = probe(dir.path(), &ours_fds);
     let argv = ["one".to_owned(), "two words".to_owned()];
     let env = BTreeMap::from([("GC_PROBE".to_owned(), "yes".to_owned())]);
