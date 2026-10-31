@@ -110,7 +110,7 @@ most runs have one, and `goalcup continue` starts the next. Every flag is in `go
 not that the run was good. `goalcup-verify --research-json <trace> --output <new.ndjson>` writes a
 private research report. `goalcup-verify --stats <trace>… --output <new.json>` writes one run's
 numbers (tokens, models, tool calls and errors, subagents, "keep going") and no text, with the same
-exit codes. Every command and exit code: [OPERATING](docs/OPERATING.md).
+exit codes. The report and its exit codes: [RECORD-FORMAT](docs/RECORD-FORMAT.md#the-goalcup-verify-check---json-report).
 
 ## How it works
 
@@ -265,7 +265,7 @@ sh scripts/gate.sh full                # before a release
   (it lacks `nss-myhostname`): add `127.0.0.1 api.e00.localhost auth.e00.localhost` to its
   `/etc/hosts`. If `/tmp` is tmpfs or btrfs and your home is ext4 or XFS, run this first:
   `export TMPDIR="$HOME/.cache/goalcup-tmp"; mkdir -p "$TMPDIR"`. CI (`check`) is a small Linux
-  smoke, not the gate. More: [OPERATING](docs/OPERATING.md#building-and-verifying).
+  smoke, not the gate. More: [scripts](scripts/README.md).
 
 **The dependency rule.** The daemon never links the verifier, and the CLI never links the daemon.
 Tests check both. Other hard rules (never a base URL, no harness names in core code, pins
@@ -300,7 +300,7 @@ Every doc, grouped by who reads it: [docs/README.md](docs/README.md). The key on
 |---|---|
 | A participant | [PARTICIPANT-GUIDE](docs/PARTICIPANT-GUIDE.md), [HARNESS-SETUP](docs/HARNESS-SETUP.md), [RULES](docs/RULES.md), [SECURITY](SECURITY.md) |
 | A harness builder | [skill](skills/adding-a-capture-harness/SKILL.md), [HARNESS-ONBOARDING](docs/HARNESS-ONBOARDING.md), [CONNECTOR-SCHEMA](docs/CONNECTOR-SCHEMA.md), [facts sheets](docs/harnesses/README.md) |
-| A developer | [AGENTS](AGENTS.md), [ARCHITECTURE](docs/ARCHITECTURE.md), [DECISIONS](docs/DECISIONS.md), [CONTRACTS](docs/CONTRACTS.md), [TODO](TODO.md) |
+| A developer | [AGENTS](AGENTS.md), [ARCHITECTURE](docs/ARCHITECTURE.md), [DECISIONS](docs/DECISIONS.md), [archive/CONTRACTS](docs/archive/CONTRACTS.md), [TODO](TODO.md) |
 | An organizer | [OPERATING](docs/OPERATING.md), [UPLOAD-API](docs/UPLOAD-API.md), [server/worker](server/worker/README.md) |
 | A researcher | [RESEARCH-TARGET](docs/RESEARCH-TARGET.md), [CHEAT-CHECKLIST](docs/CHEAT-CHECKLIST.md), [coverage matrix](docs/research/coverage-matrix.md) |
 

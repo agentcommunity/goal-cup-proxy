@@ -55,10 +55,10 @@ Both are checked by tests.
    retired.
 4. [`docs/RULES.md`](docs/RULES.md): the participant contract.
 5. [`docs/CHEAT-CHECKLIST.md`](docs/CHEAT-CHECKLIST.md): read before you trust a verifier Pass.
-   [`docs/TERMINATION.md`](docs/TERMINATION.md): what `Confirmed` does and does not claim.
+   [`docs/archive/TERMINATION.md`](docs/archive/TERMINATION.md): what `Confirmed` does and does not claim.
 6. Adding a harness: [`skills/adding-a-capture-harness/SKILL.md`](skills/adding-a-capture-harness/SKILL.md),
    then [`Add and test a connector`](docs/HARNESS-ONBOARDING.md#quick-path).
-7. Wire contracts: [`docs/CONTRACTS.md`](docs/CONTRACTS.md), [`docs/CONNECTOR-SCHEMA.md`](docs/CONNECTOR-SCHEMA.md),
+7. Wire contracts: [`docs/archive/CONTRACTS.md`](docs/archive/CONTRACTS.md), [`docs/CONNECTOR-SCHEMA.md`](docs/CONNECTOR-SCHEMA.md),
    [`docs/UPLOAD-API.md`](docs/UPLOAD-API.md). Running it: [`docs/OPERATING.md`](docs/OPERATING.md).
 
 ## The gate
