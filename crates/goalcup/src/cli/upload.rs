@@ -28,19 +28,29 @@ pub fn run(part: Option<String>) -> ExitCode {
         return fail(&line);
     };
     let alone = part.as_deref().is_some_and(|p| !p.starts_with('r'));
-    let parts = if alone { vec![found.entry.clone()] } else { found.entries.clone() };
+    let parts = if alone {
+        vec![found.entry.clone()]
+    } else {
+        found.entries.clone()
+    };
     let mut worst = ExitCode::SUCCESS;
     for entry in parts {
         let dir = run_dir(&home, &found.run).join(&entry);
         let out = send(&dir, &found.run_dir, (&found.run, &entry), false);
         let upload = state::read(&dir);
         let line = match (&out, upload) {
-            (Outcome::Done | Outcome::AlreadyThere | Outcome::Refused(_) | Outcome::Stuck, Some(u))
+            (
+                Outcome::Done | Outcome::AlreadyThere | Outcome::Refused(_) | Outcome::Stuck,
+                Some(u),
+            )
             | (Outcome::Closed { .. }, Some(u)) => text::upload_line(&u, super::now(), true),
             _ => message(&out, &entry),
         };
         say(&line);
-        if !matches!(out, Outcome::Done | Outcome::AlreadyThere | Outcome::StillRecording | Outcome::Local) {
+        if !matches!(
+            out,
+            Outcome::Done | Outcome::AlreadyThere | Outcome::StillRecording | Outcome::Local
+        ) {
             worst = ExitCode::from(1);
         }
     }
@@ -50,7 +60,9 @@ pub fn run(part: Option<String>) -> ExitCode {
 /// The cases `upload.json` cannot word.
 fn message(out: &Outcome, entry: &str) -> String {
     match out {
-        Outcome::Done | Outcome::AlreadyThere => "Upload: done. The server holds this part.".to_owned(),
+        Outcome::Done | Outcome::AlreadyThere => {
+            "Upload: done. The server holds this part.".to_owned()
+        }
         Outcome::StillRecording => {
             format!("Part {entry} is still recording; it sends itself, so there is nothing to do.")
         }

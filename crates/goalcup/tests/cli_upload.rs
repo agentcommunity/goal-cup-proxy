@@ -65,7 +65,11 @@ fn sealed(home: &TempHome, fake: &FakeWorker) -> (PathBuf, Vec<u8>) {
         seal: Some(seal),
         ..Status::default()
     };
-    fs::write(cli::status_json(&entry), serde_json::to_vec(&status).unwrap()).unwrap();
+    fs::write(
+        cli::status_json(&entry),
+        serde_json::to_vec(&status).unwrap(),
+    )
+    .unwrap();
     File::create(rec.join("lock")).unwrap();
     let server = json!({"v": 1, "server": fake.url(), "run": RUN_ID, "mode": "practice",
         "deadline": "2026-11-07T10:00:00Z", "repo": null, "hosts_file": null,
