@@ -521,7 +521,9 @@ mod tests {
         // The DATA fills the channel and the worker waits on its first MASK; the writer is held.
         for _ in 0..20 {
             std::thread::sleep(Duration::from_millis(50));
-            let idle = rec.live_at(clock::awake_ns() + 61_000_000_000).writer_idle_ms;
+            let idle = rec
+                .live_at(clock::awake_ns() + 61_000_000_000)
+                .writer_idle_ms;
             assert!(idle > 0, "a held writer must show as idle");
         }
         h.end(rec.now(), EndReason::Complete, None);

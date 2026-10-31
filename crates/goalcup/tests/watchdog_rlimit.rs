@@ -169,7 +169,10 @@ fn the_recorder_gets_the_hard_limit_no_core_its_fds_and_its_own_session() {
         assert_eq!(seen.all("open"), ["3", "4"]);
         assert_eq!(seen.one("fd3"), fd_link(listener.as_raw_fd()));
         // Nothing the recorder says lands on a harness's screen.
-        assert_eq!((seen.one("fd1"), seen.one("fd2")), ("/dev/null", "/dev/null"));
+        assert_eq!(
+            (seen.one("fd1"), seen.one("fd2")),
+            ("/dev/null", "/dev/null")
+        );
         assert_eq!(seen.group_and_session(), (pid, pid), "its own session");
         let mut args = vec![RECORDER_SUBCOMMAND];
         if null {
