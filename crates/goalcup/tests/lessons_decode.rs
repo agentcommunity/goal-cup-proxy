@@ -4,13 +4,20 @@
 //! `Step::Fault`. So "the records" here are the pieces (the DATA prefix) and the step (the GAP).
 //! PRD-03's own cases (each coding decodes, an unknown coding, a window over the room) are in
 //! `proxy_decode.rs`; the bomb (D7) and the fake client (D8) wait for the HTTP/1 parser.
+//!
+//! Pending: PRD-17 section 1 wants these cases asserted on records. The GAP `decode_failed` and
+//! END `decode_error` records of D6 (and the coded bytes of D1 to D4) are not shown here; add that
+//! half through `proxy::serve` once it lands. LESSONS.md keeps L-D1 to L-D4 and L-D6 open until then.
 
 use bytes::Bytes;
-use flate2::write::{DeflateEncoder, GzEncoder, ZlibEncoder};
+use flate2::write::{GzEncoder, ZlibEncoder};
 use flate2::{Compression, GzBuilder};
 use goalcup::pipeline::Recorder;
 use goalcup::proxy::decode::{BodyDecoder, Step, parse_codings};
 use std::io::Write;
+
+mod common;
+use common::decode::{gzip, raw_deflate, sse, zlib};
 
 /// Made with `brotli -q 11` from [`sse`], not a real capture (shared with `proxy_decode.rs`).
 const BR: &[u8] = include_bytes!("proxy_fixtures/anthropic-sse.br");
@@ -18,18 +25,6 @@ const PIECE: usize = 32 * 1024;
 const ROOM: u64 = 1 << 30;
 const WHOLE_READ: &[usize] = &[usize::MAX];
 const SPLIT_READS: &[usize] = &[7, 4096, 1000];
-
-/// 2,000 synthetic SSE events, the plaintext of [`BR`].
-fn sse() -> Vec<u8> {
-    (0..2000)
-        .map(|i| {
-            format!(
-                "event: content_block_delta\ndata: {{\"index\":{i},\"delta\":{{\"text\":\"token {i}\"}}}}\n\n"
-            )
-        })
-        .collect::<String>()
-        .into_bytes()
-}
 
 /// Feeds `wire` in reads of the given sizes (cycled); the pieces handed out and the last step.
 fn run(codings: &[&str], wire: &[u8], reads: &[usize]) -> (Step, Vec<Bytes>) {
@@ -72,24 +67,6 @@ fn assert_fault(case: &str, codings: &[&str], wire: &[u8], reads: &[usize], plai
     let got = pieces.concat();
     assert!(plain.starts_with(&got), "{case}: only a decoded prefix");
     got.len()
-}
-
-fn gzip(data: &[u8]) -> Vec<u8> {
-    let mut e = GzEncoder::new(Vec::new(), Compression::default());
-    e.write_all(data).unwrap();
-    e.finish().unwrap()
-}
-
-fn zlib(data: &[u8]) -> Vec<u8> {
-    let mut e = ZlibEncoder::new(Vec::new(), Compression::default());
-    e.write_all(data).unwrap();
-    e.finish().unwrap()
-}
-
-fn raw_deflate(data: &[u8]) -> Vec<u8> {
-    let mut e = DeflateEncoder::new(Vec::new(), Compression::default());
-    e.write_all(data).unwrap();
-    e.finish().unwrap()
 }
 
 /// `data` as a brotli stream of uncompressed meta-blocks (RFC 7932 sections 9.1 and 9.2),

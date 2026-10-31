@@ -46,7 +46,7 @@ lessons lane (PRD-17); read by the deletion gate (PRD-17 Acceptance, checks 1 to
 | L-T1 | 2.2 | A: lessons_tls::leaf_aki_names_the_ca_key; R: RR3 | PRD-17 | open | - |
 | L-T2 | 2.2 | A: lessons_tls::ca_constraints_validity_and_leaf_shape | PRD-17 | open | - |
 | L-T3 | 2.2 | A: proxy_tls.rs (PRD-03); A: lessons_tls::untrusted_upstream_reaches_client_unchanged | PRD-03, PRD-17 | open | - |
-| L-T4 | 2.2 | A: lessons_tls::ca_files_are_new_0600_and_never_follow_a_link | PRD-17 | open | - |
+| L-T4 | 2.2 | A: lessons_tls::ca_files_are_new_0600_and_never_follow_a_link (run-ca.pem and bundle.pem only; the `rec/run-ca.key` case is pending until PRD-02's writer is on integration) | PRD-17 | open | - |
 | L-T5 | 2.2 | A: lessons_tls::bundle_system_store_holds_roots; A: lessons_tls::bundle_holds_certificates_only_with_the_run_ca_first; A: lessons_tls::bundle_store_without_a_root_is_refused; A: lessons_tls::bundle_written_privately_never_over_an_existing_entry; R: RR5 | PRD-17 | open | - |
 | L-T6 | 2.2 | A: connector_launch.rs (PRD-11) | PRD-11 | open | - |
 | L-T7 | 2.2 | A: proxy_tls.rs (PRD-03, ALPN mirror matrix) | PRD-03 | open | - |
@@ -69,7 +69,7 @@ lessons lane (PRD-17); read by the deletion gate (PRD-17 Acceptance, checks 1 to
 | L-D3 | 2.4 | A: lessons_decode::gzip_two_members_and_a_bad_crc | PRD-17 | open | - |
 | L-D4 | 2.4 | A: lessons_decode::raw_and_zlib_deflate_split_after_byte_one | PRD-17 | open | - |
 | L-D5 | 2.4 | A: proxy_http1.rs (PRD-03) | PRD-03 | open | - |
-| L-D6 | 2.4 | A: lessons_decode::corrupt_tail_keeps_the_prefix | PRD-17 | open | - |
+| L-D6 | 2.4 | A: lessons_decode::corrupt_tail_keeps_the_prefix (decoder layer only; the GAP and END records are shown once `proxy::serve` lands, see the note below the table) | PRD-17 | open | - |
 | L-D7 | 2.4 | A: lessons_decode::bomb_relays_on_in_bounded_pieces | PRD-17 | open | - |
 | L-D8 | 2.4 | A: lessons_decode.rs | PRD-17 | open | - |
 | L-W1 | 2.5 | A: proxy_ws.rs (PRD-03); R: RR1 | PRD-03 | open | - |
@@ -167,7 +167,7 @@ lessons lane (PRD-17); read by the deletion gate (PRD-17 Acceptance, checks 1 to
 | L-G5 | 2.13 | R: PRD-12 pad boxes (--non-persistent, tmux) | PRD-12 | open | - |
 | L-FW1 | 2.14 | A: pipeline_guard.rs (PRD-02) | PRD-02 | open | - |
 | L-FW2 | 2.14 | A: recovery::a_part_file_cut_at_any_byte_recovers_to_its_last_index_line (PRD-01) | PRD-01 | green | f5b0a6a2 |
-| L-FW3 | 2.14 | A: server_compare::fw3_pruned_entry_is_named_and_server_copy_stands_in (PRD-08) | PRD-08 | green | f5a200ae |
+| L-FW3 | 2.14 | A: server_compare::missing_middle_chunk_fails (PRD-08); A: server_compare::fw3_pruned_entry_is_named_and_server_copy_stands_in (PRD-08) | PRD-08 | green | f5a200ae |
 | L-FW4 | 2.14 | A: check_invariants.rs (PRD-08) | PRD-08 | open | - |
 | L-FW5 | 2.14 | A: recovery::a_part_file_cut_at_any_byte_recovers_to_its_last_index_line (PRD-01); A: recovery::a_boot_with_no_index_line_is_deleted_and_an_r_closed_part_file_takes_a_second_frame (PRD-01); A: recovery::a_sealed_entry_takes_nothing_more (PRD-01) | PRD-01 | green | f5b0a6a2 |
 | L-FW6 | 2.14 | A: pipeline_seal.rs (PRD-02); A: check_invariants.rs (PRD-08) | PRD-02, PRD-08 | open | - |
@@ -175,7 +175,7 @@ lessons lane (PRD-17); read by the deletion gate (PRD-17 Acceptance, checks 1 to
 | L-FW8 | 2.14 | A: recovery::a_part_file_cut_at_any_byte_recovers_to_its_last_index_line (PRD-01); R: RR4 | PRD-01 | green | f5b0a6a2 |
 | L-FW9 | 2.14 | A: server_compare::fw9_one_flipped_byte_fails_the_copy (PRD-08) | PRD-08 | green | f5a200ae |
 | L-VR1 | 2.15 | A: check_invariants.rs (PRD-08) | PRD-08 | open | - |
-| L-VR2 | 2.15 | A: server_compare::vr2_seal_without_reason_or_totals_is_reported (PRD-08); A: check_invariants::vr3_every_mutation_fails_its_check_with_exit_2 (PRD-08, the inv5 row); the panic hook (file and line, exit 3) is a review check, no test input reaches it | PRD-08, PRD-09 | green | f5a200ae |
+| L-VR2 | 2.15 | A: usage_run1.rs (PRD-09, a panic inside `usage` prints file and line, never record text, name pending); A: server_compare::vr2_seal_without_reason_or_totals_is_reported (PRD-08, exit below 3 only, not a panic test); A: check_invariants::vr3_every_mutation_fails_its_check_with_exit_2 (PRD-08, the inv5 row, exit code only); X: PRD-08 Amendments, slice 2 (the panic hook in `main.rs`, file and line then exit 3, stays a review check because no test input reaches it) | PRD-08, PRD-09 | open | - |
 | L-VR3 | 2.15 | A: check_invariants::vr3_every_mutation_fails_its_check_with_exit_2 (PRD-08) | PRD-08 | green | f5a200ae |
 | L-VR4 | 2.15 | A: check_named::clean_record_with_interrupted_end_exits_0 (PRD-08) | PRD-08 | green | f5a200ae |
 | L-SC1 | 2.16 | A: cli_folder::project_folder_and_goalcup_home_never_hold_each_other (PRD-10) | PRD-10 | green | f5a200ae |
@@ -185,6 +185,12 @@ lessons lane (PRD-17); read by the deletion gate (PRD-17 Acceptance, checks 1 to
 | L-SC5 | 2.16 | R: PRD-10 acceptance 6 | PRD-10 | open | - |
 | L-SC6 | 2.16 | A: cli_finish::unsealed_status_never_reads_as_finished (PRD-10) | PRD-10 | green | f5a200ae |
 | L-SC7 | 2.16 | X: ledger L5, L6 (PRD-10 section 4) | PRD-10 | open | - |
+
+**Pending record halves.** `lessons_decode.rs` (D1 to D4, D6) drives `proxy::decode` alone, so it
+shows the decoded prefix and the `Step`, not the GAP `decode_failed` and END `decode_error` records.
+L-D1 to L-D4 and L-D6 are not flipped until the record half runs through `proxy::serve` with the
+fake client (L-D8), in `lessons_http1.rs` or by extending those tests. L-T4 likewise waits for the
+`rec/run-ca.key` case. L-VR2 waits for PRD-09's named `usage` case.
 
 ## Real-run rows
 

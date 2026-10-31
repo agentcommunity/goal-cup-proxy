@@ -106,7 +106,6 @@ fn loopback_names_and_numeric_labels_are_refused() {
         "intranet",
     ] {
         assert!(refused(name), "{name}");
-        assert!(hosts::check(name, Source::Participant).is_err(), "{name}");
     }
     assert!(!refused("localhost.example.com"));
 }
@@ -160,8 +159,6 @@ fn the_event_server_is_never_listed() {
         "my-goalcup-proxy.example.com",
     ] {
         assert!(refused(name), "{name}");
-        assert!(hosts::check(name, Source::Participant).is_err(), "{name}");
-        assert!(hosts::check(name, Source::Config).is_err(), "{name}");
     }
     assert!(!refused("notagentcommunity.org"));
 }

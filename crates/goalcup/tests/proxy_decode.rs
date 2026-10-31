@@ -8,10 +8,12 @@
 use bytes::Bytes;
 use flate2::Compression;
 use flate2::GzBuilder;
-use flate2::write::{DeflateEncoder, GzEncoder, ZlibEncoder};
 use goalcup::pipeline::Recorder;
 use goalcup::proxy::decode::{BodyDecoder, Step, Unsupported, parse_codings};
 use std::io::Write;
+
+mod common;
+use common::decode::{gzip, raw_deflate, sse as text, zlib};
 
 /// Made with `brotli -q 11` from [`text`], not a real capture.
 const BR: &[u8] = include_bytes!("proxy_fixtures/anthropic-sse.br");
@@ -20,18 +22,6 @@ const BR: &[u8] = include_bytes!("proxy_fixtures/anthropic-sse.br");
 const BR_FLUSHED: &[u8] = include_bytes!("proxy_fixtures/sse-flushed.br");
 const PIECE: usize = 32 * 1024;
 const LARGE_ROOM: u64 = 1 << 30;
-
-/// 2,000 synthetic SSE events, the plaintext of [`BR`].
-fn text() -> Vec<u8> {
-    (0..2000)
-        .map(|i| {
-            format!(
-                "event: content_block_delta\ndata: {{\"index\":{i},\"delta\":{{\"text\":\"token {i}\"}}}}\n\n"
-            )
-        })
-        .collect::<String>()
-        .into_bytes()
-}
 
 /// Feeds `wire` in irregular splits and answers the last step with every piece handed out.
 fn decode(codings: &[&str], wire: &[u8], room: u64) -> (Recorder, Step, Vec<Bytes>) {
@@ -67,18 +57,6 @@ fn assert_plain(codings: &[&str], wire: &[u8], plain: &[u8]) {
     );
 }
 
-fn gzip(data: &[u8]) -> Vec<u8> {
-    let mut e = GzEncoder::new(Vec::new(), Compression::default());
-    e.write_all(data).unwrap();
-    e.finish().unwrap()
-}
-
-fn zlib(data: &[u8]) -> Vec<u8> {
-    let mut e = ZlibEncoder::new(Vec::new(), Compression::default());
-    e.write_all(data).unwrap();
-    e.finish().unwrap()
-}
-
 /// A gzip member whose extra field, name and comment take its header past 128 KiB.
 fn gzip_long_header(data: &[u8]) -> Vec<u8> {
     let mut e = GzBuilder::new()
@@ -86,12 +64,6 @@ fn gzip_long_header(data: &[u8]) -> Vec<u8> {
         .filename(vec![b'n'; 40_000])
         .comment(vec![b'c'; 40_000])
         .write(Vec::new(), Compression::default());
-    e.write_all(data).unwrap();
-    e.finish().unwrap()
-}
-
-fn raw_deflate(data: &[u8]) -> Vec<u8> {
-    let mut e = DeflateEncoder::new(Vec::new(), Compression::default());
     e.write_all(data).unwrap();
     e.finish().unwrap()
 }

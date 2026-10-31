@@ -146,8 +146,7 @@ fn ca_constraints_validity_and_leaf_shape() {
     );
     assert!(!leaf_cert.is_ca());
 
-    // A name outside the host list is a leaf we still can mint, but the CA's constraints are what
-    // stop a client accepting it; the constraints above are the guard, so only shape is checked.
+    // A name that is not a host name is refused at minting.
     assert!(ca.leaf("not a name").is_err());
 }
 
@@ -163,7 +162,13 @@ fn find_private_keys(dir: &Path, found: &mut Vec<String>) {
 }
 
 /// T4: the CA files are created new with mode 0600; an existing file or a link at either path is
-/// refused and the link's target is untouched; no private key is written by `write_files`.
+/// refused and the link's target is untouched; no private key is written by `write_files`. The
+/// bundle holds the run CA first and at least 21 roots (the system store).
+///
+/// Pending: PRD-17 T4 also covers `rec/run-ca.key` (created new, 0600, never through a link, and
+/// no PRIVATE KEY block in the entry folder outside it nor after the seal). That file belongs to
+/// PRD-02 and is not on integration yet; add the case here when its writer lands. L-T4 stays open
+/// until then.
 #[cfg(unix)]
 #[test]
 fn ca_files_are_new_0600_and_never_follow_a_link() {
@@ -182,6 +187,9 @@ fn ca_files_are_new_0600_and_never_follow_a_link() {
     let mut keys = Vec::new();
     find_private_keys(dir.path(), &mut keys);
     assert!(keys.is_empty(), "a private key was written: {keys:?}");
+    let kept = certificates(&std::fs::read(dir.path().join(BUNDLE_FILE)).unwrap());
+    assert_eq!(kept[0], ca.cert_der().to_vec(), "the run CA is first");
+    assert!(kept.len() >= 21, "only {} certificates", kept.len());
 
     // Every file already there: refused, and the content is not replaced.
     let before = std::fs::read(dir.path().join(RUN_CA_FILE)).unwrap();
@@ -206,26 +214,17 @@ fn ca_files_are_new_0600_and_never_follow_a_link() {
     assert_eq!(std::fs::read(&target).unwrap(), b"keep");
 }
 
-/// T5 (old `the_system_trust_store_holds_roots`): the bundle `write_files` builds from the OS
-/// store holds real roots, and the run CA.
-#[test]
-fn bundle_system_store_holds_roots() {
-    let ca = RunCa::mint(&subtrees()).unwrap();
-    let dir = tempfile::tempdir().unwrap();
-    ca.write_files(dir.path()).unwrap();
-    let kept = certificates(&std::fs::read(dir.path().join(BUNDLE_FILE)).unwrap());
-    assert!(kept.len() >= 21, "only {} certificates", kept.len());
-}
-
 /// T5 (old `the_bundle_holds_certificates_only_with_the_proxy_ca_first`): the bundle is the run
 /// CA first, then certificates only, each re-encoded from its DER. The old test fed a source
 /// holding a key to `bundle_pem`, which is private now; the same filter is `certificates`, which
-/// the bundle is built through, and the written file is checked for what it must not hold.
+/// the bundle is built through, and the written file is checked for what it must not hold. A
+/// source with no certificate yields none (old `a_store_without_a_root_is_refused`; the refusal
+/// itself is inside the private builder, so only the filter is asserted).
 #[test]
 fn bundle_holds_certificates_only_with_the_run_ca_first() {
     let ca = RunCa::mint(&subtrees()).unwrap();
     let other = RunCa::mint(&["example.org".to_string()]).unwrap();
-    let key = "-----BEGIN PRIVATE KEY-----\nMIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQg\n-----END PRIVATE KEY-----\n";
+    let key = "-----BEGIN PRIVATE KEY-----\nAAAA\n-----END PRIVATE KEY-----\n";
     let source = format!(
         "comment line\n{key}{root}-----BEGIN TRUSTED CERTIFICATE-----\nAAAA\n\
          -----END TRUSTED CERTIFICATE-----\n-----BEGIN CERTIFICATE-----\nnot base64!\n\
@@ -238,6 +237,10 @@ fn bundle_holds_certificates_only_with_the_run_ca_first() {
         [other.cert_der().to_vec()],
         "only the block that parses survives"
     );
+
+    // A source with a key and no certificate yields none (the builder refuses it).
+    assert!(certificates(key.as_bytes()).is_empty());
+    assert!(certificates(b"").is_empty());
 
     let dir = tempfile::tempdir().unwrap();
     ca.write_files(dir.path()).unwrap();
@@ -252,43 +255,4 @@ fn bundle_holds_certificates_only_with_the_run_ca_first() {
         kept.len()
     );
     assert!(text.lines().all(|l| l.len() <= 64));
-}
-
-/// T5 (old `a_store_without_a_root_is_refused`): a source with no certificate yields none, which
-/// is what makes the bundle builder refuse it. The refusal itself is inside the private
-/// `bundle_pem`, so only the filter is asserted here.
-#[test]
-fn bundle_store_without_a_root_is_refused() {
-    for source in [
-        &b""[..],
-        b"-----BEGIN PRIVATE KEY-----\nAAAA\n-----END PRIVATE KEY-----\n",
-    ] {
-        assert!(certificates(source).is_empty());
-    }
-}
-
-/// T5 (old `the_bundle_is_written_privately_and_never_over_an_existing_entry`): bundle.pem is
-/// mode 0600, the run CA first, and an entry already at its path, a link included, is refused.
-#[cfg(unix)]
-#[test]
-fn bundle_written_privately_never_over_an_existing_entry() {
-    use std::os::unix::fs::PermissionsExt as _;
-    let ca = RunCa::mint(&subtrees()).unwrap();
-    let dir = tempfile::tempdir().unwrap();
-    ca.write_files(dir.path()).unwrap();
-    let path = dir.path().join(BUNDLE_FILE);
-    assert_eq!(
-        std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
-        0o600
-    );
-    let kept = certificates(&std::fs::read(&path).unwrap());
-    assert_eq!(kept[0], ca.cert_der().to_vec());
-    assert!(kept.len() >= 21);
-
-    let other = tempfile::tempdir().unwrap();
-    let target = other.path().join("elsewhere");
-    std::os::unix::fs::symlink(&target, other.path().join(BUNDLE_FILE)).unwrap();
-    assert!(ca.write_files(other.path()).is_err());
-    assert!(!target.exists());
-    assert!(ca.write_files(dir.path()).is_err());
 }
