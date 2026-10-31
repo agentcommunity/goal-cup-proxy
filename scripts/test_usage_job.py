@@ -35,7 +35,7 @@ echo "$last1/$last2"
 
 FAKE_VERIFY = """#!/bin/sh
 if [ "$1" = "--version" ]; then echo "goalcup-verify 1.0.0"; exit 0; fi
-in=$2; out=$4; entry=$(basename "$in"); mkdir -p "$out"
+in=$2; out=$5; entry=$(basename "$in"); mkdir -p "$out"
 cat >"$out/$entry.json" <<JSON
 {"reader":"1.0.0","threads":[{"id":"t1","wire_calls":1}],"tokens":{"merged":{"input":10},"calls_without_usage":0}}
 JSON
