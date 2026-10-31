@@ -534,12 +534,13 @@ async fn fail_closed_ends_at_message_end() {
     messages.extend(plain.iter().cloned().map(WsMsg::Text));
     let up = ws_upstream(messages);
     let entry = entry_dir();
-    let w = wire(up.addr(), up.pki(), real(entry.path()));
+    let rec = real(entry.path());
+    let w = wire(up.addr(), up.pki(), rec.clone());
     let mut t = client(&w, &upgrade_req("/v1/responses", false)).await;
     read_to(&mut t, |g| g.ends_with(plain[1].as_bytes())).await;
     drop(t);
     let recs = wait_records(entry.path(), all_ended).await;
-    proxy_fixtures::verify_exits_0(entry.path());
+    proxy_fixtures::verify_exits_0(&rec, entry.path());
     let sid = recs
         .iter()
         .find_map(|r| match r {

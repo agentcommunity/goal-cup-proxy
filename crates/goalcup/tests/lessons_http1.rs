@@ -688,12 +688,15 @@ struct World {
     addr: SocketAddr,
     ca: RunCa,
     calls: Calls,
+    /// The real recorder, when the world has an entry folder.
+    rec: Option<Recorder>,
 }
 
 fn world(real: Option<&std::path::Path>) -> World {
     let up = Upstream::start(Script::ok(b"hi").with_tls(&["api.openai.com"], &[HTTP11]));
     let (plain, calls) = Recorder::for_tests(ROOM);
     let recorder = real.map_or(plain, common::recorder::real);
+    let rec = real.map(|_| recorder.clone());
     let (_h, addr, ca) = proxy_to(recorder, up.addr(), up.pki());
     World {
         up,
@@ -701,6 +704,7 @@ fn world(real: Option<&std::path::Path>) -> World {
         addr,
         ca,
         calls,
+        rec,
     }
 }
 
@@ -886,6 +890,7 @@ async fn authorization_forwarded_unchanged_and_starred_in_meta() {
     const SECRET: &str = "synthetic-credential-for-the-test";
     let entry = entry_dir();
     let w = world(Some(entry.path()));
+    let rec = w.rec.clone().expect("the real recorder");
     let req = format!(
         "POST /v1/responses HTTP/1.1\r\nHost: api.openai.com\r\nAuthorization: Bearer {SECRET}\r\nContent-Length: 2\r\n\r\n{{}}"
     );
@@ -901,7 +906,7 @@ async fn authorization_forwarded_unchanged_and_starred_in_meta() {
             >= 3
     })
     .await;
-    verify_exits_0(entry.path());
+    verify_exits_0(&rec, entry.path());
     for bytes in recorded_bytes(&recs) {
         assert!(!bytes.windows(SECRET.len()).any(|w| w == SECRET.as_bytes()));
     }
