@@ -9,9 +9,9 @@
 use goalcup::watchdog::shield::Shield;
 
 /// How the forked child ended: `Ok(code)` for an exit, `Err(signal)` for a signal.
-fn in_child(case: fn() -> i32) -> Result<i32, i32> {
-    // SAFETY: the child calls only `case` and `_exit`; `case` uses libc calls and one small
-    // allocation, which glibc keeps usable after `fork`.
+fn in_child(case: impl FnOnce() -> i32) -> Result<i32, i32> {
+    // SAFETY: the child runs only `case` and `_exit`; `case` uses libc calls, small allocations
+    // and at most one thread, which glibc keeps usable after `fork`.
     let pid = unsafe { libc::fork() };
     assert!(pid >= 0, "fork: {}", std::io::Error::last_os_error());
     if pid == 0 {
@@ -45,49 +45,55 @@ fn default_action(signal: libc::c_int) {
     unsafe { libc::signal(signal, libc::SIG_DFL) };
 }
 
-/// A late key: pending while blocked, then `harness_exited`, then a wrap-up span.
-fn late_key(signal: libc::c_int) -> i32 {
+/// A late key: sent while this thread blocks it, then `harness_exited`, then a wrap-up span.
+/// With `spare`, a second thread that keeps the signal unblocked runs the whole time, so the key
+/// may be routed to it instead of staying pending.
+fn late_key(signal: libc::c_int, spare: bool) -> i32 {
     default_action(signal);
     let Ok(mut shield) = Shield::take() else {
         return 2;
     };
+    if spare {
+        std::thread::spawn(|| loop {
+            std::thread::park();
+        });
+    }
     mask(libc::SIG_BLOCK, signal);
     // SAFETY: integers only.
     unsafe { libc::kill(libc::getpid(), signal) };
-    shield.harness_exited();
+    if !shield.harness_exited() {
+        return 3;
+    }
     mask(libc::SIG_UNBLOCK, signal);
-    std::thread::sleep(std::time::Duration::from_millis(20));
     drop(shield);
     0
 }
 
 #[test]
 fn a_pending_key_does_not_end_the_wrap_up() {
-    for round in 0..50 {
-        for signal in [libc::SIGINT, libc::SIGQUIT] {
-            let case = if signal == libc::SIGINT {
-                (|| late_key(libc::SIGINT)) as fn() -> i32
-            } else {
-                || late_key(libc::SIGQUIT)
-            };
-            assert_eq!(in_child(case), Ok(0), "round {round}, signal {signal}");
+    for signal in [libc::SIGINT, libc::SIGQUIT] {
+        for spare in [false, true] {
+            let ended = in_child(|| late_key(signal, spare));
+            assert_eq!(ended, Ok(0), "signal {signal}, spare thread {spare}");
         }
     }
 }
 
 #[test]
 fn a_key_after_harness_exited_gets_the_default_action() {
-    fn case() -> i32 {
+    let ended = in_child(|| {
         default_action(libc::SIGINT);
         let Ok(mut shield) = Shield::take() else {
             return 2;
         };
-        shield.harness_exited();
-        // SAFETY: integers only.
+        if !shield.harness_exited() {
+            return 3;
+        }
+        // SAFETY: integers only. Unblocked on the only thread, so it is delivered before
+        // `kill` returns.
         unsafe { libc::kill(libc::getpid(), libc::SIGINT) };
-        std::thread::sleep(std::time::Duration::from_millis(200));
         drop(shield);
         0
-    }
-    assert_eq!(in_child(case), Err(libc::SIGINT));
+    });
+    assert_eq!(ended, Err(libc::SIGINT));
 }

@@ -2,7 +2,7 @@
 //! for the seal and print the end screen. The harness is never signalled here and descendants are
 //! never chased: the watchdog ends them (seam S8). Only written counts are read, from `status.json`.
 //! A part whose recorder and watchdog are both gone is refused here; closing such a dead entry
-//! first (`pipeline::close_dead_entry`) is not built yet and comes with the `continue` slice.
+//! first (`pipeline::close_dead_entry`) is not built yet and comes with PRD-02 slice B.
 
 use std::io::{BufRead as _, IsTerminal as _};
 use std::process::ExitCode;

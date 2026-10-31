@@ -77,16 +77,19 @@ impl Shield {
     /// pending here, not yet taken by any thread. Given back first, it would reach the default
     /// action and end the wrap-up. So this thread blocks them, takes every pending one while the
     /// handler is still in place, and only then gives them back and unblocks. A key typed after
-    /// this returns gets the default action, as it would without a watchdog.
-    pub fn harness_exited(&mut self) {
+    /// the last drain found nothing pending, even one that arrives inside this call before the
+    /// keys are given back, counts as typed after the harness exited: it gets the default action,
+    /// as it would without a watchdog.
+    ///
+    /// Returns `false` when this thread could not block them, so they were given back without
+    /// the drain; the caller logs it.
+    pub fn harness_exited(&mut self) -> bool {
         let (back, kept): (Vec<_>, Vec<_>) = self
             .saved
             .drain(..)
             .partition(|(signal, _)| GIVEN_BACK.contains(signal));
         self.saved = kept;
-        // SAFETY: zeroed locals filled by `sigemptyset` and `pthread_sigmask`; `sigtimedwait` with
-        // a zero timeout only takes a pending signal or returns at once. A thread that takes one
-        // first does so under the kernel's signal lock, with the handler still installed.
+        // SAFETY: zeroed locals filled by `sigemptyset`, `sigaddset` and `pthread_sigmask`.
         unsafe {
             let mut set: libc::sigset_t = std::mem::zeroed();
             libc::sigemptyset(&mut set);
@@ -94,20 +97,62 @@ impl Shield {
                 libc::sigaddset(&mut set, signal);
             }
             let mut old: libc::sigset_t = std::mem::zeroed();
-            let blocked = libc::pthread_sigmask(libc::SIG_BLOCK, &set, &mut old) == 0;
-            let zero = libc::timespec {
-                tv_sec: 0,
-                tv_nsec: 0,
-            };
-            while blocked
-                && (libc::sigtimedwait(&set, std::ptr::null_mut(), &zero) > 0
-                    || std::io::Error::last_os_error().kind() == std::io::ErrorKind::Interrupted)
-            {
+            let masked = libc::pthread_sigmask(libc::SIG_BLOCK, &set, &mut old) == 0;
+            if masked {
+                drain_pending(&set);
             }
             restore(&back);
-            if blocked {
+            if masked {
                 libc::pthread_sigmask(libc::SIG_SETMASK, &old, std::ptr::null_mut());
             }
+            masked
+        }
+    }
+}
+
+/// Take every signal of `set` that is pending, while this thread blocks them all and the handler
+/// is still installed. A thread that takes one first does so under the kernel's signal lock,
+/// with the handler still in place.
+#[cfg(target_os = "linux")]
+fn drain_pending(set: &libc::sigset_t) {
+    let zero = libc::timespec {
+        tv_sec: 0,
+        tv_nsec: 0,
+    };
+    loop {
+        // SAFETY: a zero timeout only takes a pending signal or returns at once.
+        if unsafe { libc::sigtimedwait(set, std::ptr::null_mut(), &zero) } > 0 {
+            continue;
+        }
+        if std::io::Error::last_os_error().kind() != std::io::ErrorKind::Interrupted {
+            return;
+        }
+    }
+}
+
+/// Elsewhere (macOS has no `sigtimedwait`): `sigwait` on one signal, and only one that
+/// `sigpending` shows pending, so it never waits.
+#[cfg(not(target_os = "linux"))]
+fn drain_pending(set: &libc::sigset_t) {
+    loop {
+        // SAFETY: zeroed locals filled by `sigpending`, `sigemptyset` and `sigaddset`; `sigwait`
+        // is called only for a signal that is pending and blocked here.
+        unsafe {
+            let mut pending: libc::sigset_t = std::mem::zeroed();
+            if libc::sigpending(&mut pending) != 0 {
+                return;
+            }
+            let Some(signal) = GIVEN_BACK
+                .into_iter()
+                .find(|s| libc::sigismember(set, *s) == 1 && libc::sigismember(&pending, *s) == 1)
+            else {
+                return;
+            };
+            let mut one: libc::sigset_t = std::mem::zeroed();
+            libc::sigemptyset(&mut one);
+            libc::sigaddset(&mut one, signal);
+            let mut taken = 0;
+            libc::sigwait(&one, &mut taken);
         }
     }
 }
