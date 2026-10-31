@@ -96,11 +96,9 @@ fn launch_helper() {
             say(&format!("resumed {}", describe(status)));
         }
         "ctrl_c" => {
-            say(&format!("DBG {:?}", std::fs::read_to_string("/proc/self/status").map(|s| s.lines().filter(|l| l.starts_with("Sig")).collect::<Vec<_>>().join(" "))));
-            say(&format!("DBG sh {:?}", std::fs::read_link("/bin/sh")));
             let child = start(
-                "m=$(sed -n 's/^SigIgn:[[:space:]]*//p' /proc/$$/status); echo ign=$m; echo up; \
-                 exec sleep 120",
+                "while read k v; do case $k in SigIgn:) echo ign=$v;; esac; done < /proc/$$/status; \
+                 echo up; exec sleep 120",
             );
             let mut shield = Shield::take().expect("shield");
             say("shielded");
