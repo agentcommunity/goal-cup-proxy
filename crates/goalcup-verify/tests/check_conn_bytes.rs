@@ -28,7 +28,7 @@ fn conn_gapped(
 ) -> (i32, Value) {
     let mut e = Entry::new("conn-bytes");
     let c = e.conn();
-    for &(up, down) in wire {
+    for (i, &(up, down)) in wire.iter().enumerate() {
         let head = json!({"method": "POST", "path": "/v1/responses", "ver": "1.1",
             "headers": [], "masked": [], "coding": null});
         let q = e.open(StreamKind::HttpReq, c, 0, head);
@@ -38,11 +38,13 @@ fn conn_gapped(
             "coding": null, "decoded": true});
         let p = e.open(StreamKind::HttpResp, c, q, head);
         e.data(p, 0, 0, b"{}");
-        if let (Some(lost), true) = (stream_lost, (up, down) == wire[wire.len() - 1]) {
+        let mut seen = 2;
+        if let (Some(lost), true) = (stream_lost, i == wire.len() - 1) {
             let tail = json!({"guard": "held_bytes"});
             e.gap(p, GapReason::MemoryGuard, 10, 2, lost, tail);
+            seen += lost - 1;
         }
-        e.end(p, EndReason::Complete, 2, json!({"wire": down}));
+        e.end(p, EndReason::Complete, seen, json!({"wire": down}));
     }
     if let Some(lost) = lost {
         e.gap(c, GapReason::DecodeFailed, 10, 0, lost, Value::Null);
@@ -74,7 +76,7 @@ fn a_lost_request_without_a_conn_gap_fails() {
 #[test]
 fn a_small_stream_gap_does_not_cover_a_silently_lost_request() {
     let (code, v) = conn_gapped((3 * MIB, MIB), &[(MIB, MIB)], None, Some(11));
-    assert_eq!(result(&v, "conn_bytes"), "fail");
+    assert_eq!(ids_with(&v, "fail"), ["conn_bytes"]);
     assert_eq!(code, 2);
 }
 
