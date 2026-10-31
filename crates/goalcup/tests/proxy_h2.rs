@@ -514,7 +514,8 @@ fn h2_fields_past_64_kib_are_the_http_head_guard() {
 
 /// The stream of `opens` on HTTP/2 stream `id`.
 fn on(opens: &[(Sid, Sid, Value)], id: u32) -> &(Sid, Sid, Value) {
-    opens.iter().find(|o| o.2["h2"] == json!(id)).expect("that stream")
+    let mut all = opens.iter();
+    all.find(|o| o.2["h2"] == json!(id)).expect("that stream")
 }
 
 /// A field `name` with a value of `n` bytes, literal without indexing.

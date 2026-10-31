@@ -515,7 +515,8 @@ impl H2 {
         if kept_past > FIELD_MAX {
             return Err(Fault::Frame);
         }
-        read.splice(0..0, fields.iter().filter(|f| READ.contains(&f.0.as_str())).cloned());
+        let named = fields.iter().filter(|f| READ.contains(&f.0.as_str()));
+        read.splice(0..0, named.cloned());
         let head = Head::past_guard_at((over > 0).then_some((b.at, over)));
         let d = dir as usize;
         if dir == Dir::Up && b.id > self.last_req {
