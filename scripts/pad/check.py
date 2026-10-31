@@ -286,9 +286,10 @@ def stale(r):
            "the stale daemon did not run before start, or a look after start or after exit is missing or unreadable")
 
 def read(r):
-    """True where the harness's own log was read. A record with no ok wire call and no native call reports `readable` by
-    default, so the local log check also needs at least one native call."""
-    return dig(r.usage, "s7_readable") is True and (dig(r.usage, "s7_native") or 0) > 0
+    """True where the harness's own log was read. A record with no native stream (no native file, no parsed native call)
+    reports `readable` by default, so the check needs one of them. Native files with zero parsed calls still run it:
+    a reader that reads nothing is a FAIL (section 8)."""
+    return dig(r.usage, "s7_readable") is True and bool(r.native or dig(r.usage, "s7_native"))
 
 def local(r, few):
     """C1 (no missed call) and C4 (record whole, server copy whole and readable)."""
@@ -313,9 +314,11 @@ def local(r, few):
     code, named = dig(r.local, "s6_exit"), {k.split(":")[0] for k, n in r.gaps()[1].items() if n}
     allowed = expected_gaps(r)
     hist = dig(r.entry, "s6_history") or {}  # a gap over a named history orphan: C1's section 8 rule, not a fault row's
-    covered = r.check("history_complete") == "named" and 0 < sum(
-        n for k, n in r.gaps()[1].items() if n and k.split(":")[0] not in allowed) <= (hist.get("missing_call") or 0) + (hist.get("missing_text") or 0)
-    explained = code == 1 and named and (covered or named <= allowed and not any(dig(e, "s6_off") for e in r.entries))
+    unexpected = sum(n for k, n in r.gaps()[1].items() if n and k.split(":")[0] not in allowed)
+    orphans = hist.get("missing_call") or 0
+    off = any(dig(e, "s6_off") for e in r.entries)
+    covered = r.check("history_complete") == "named" and 0 < unexpected <= orphans
+    explained = code == 1 and named and not off and (covered or named <= allowed)
     r.flag(r.meta.get("case") in ("direct", "gateway") and set(fault_kinds(r.meta)) <= set(CLEAN) and not r.failed and code != 0 and not explained,
            "C1", "FAIL", "verifier exit %s, the %s case expects 0 or only the GAPs %s" % (
                code, r.meta.get("case"), ", ".join(sorted(allowed))))

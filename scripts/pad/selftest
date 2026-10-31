@@ -69,8 +69,8 @@ K2 = ("gap_has_end", "streams_closed", "server_counts_match", "wire_keeps_up", "
 ALLC = dict.fromkeys(("C1", "C2", "C4", "C5", "C6"), "PASS")
 # label, part, fetched, wanted checks, wanted finding ids, tampers (fetch edit, status count, after the verifier).
 # K2 wants C5 too: check.py's C5 repeats C2's thread-has-no-calls test, so the one lost subagent thread fails both (PRD-12 section 12, K2 row).
-# K11 ("wire_only"): the records are wire-only with no ok response, so they carry no usage and no subagent and C2 to C6 are not this control's
-# (the section 12 K11 row asks for C1 and the history result); only C1 and the history ids are asserted.
+# K11 ("wire_only"): the records are wire-only with no ok response, so they carry no usage and no subagent and C2, C4 and C5 are not this control's
+# (the section 12 K11 row asks for C1 and the history result); C1 and the history ids are asserted, C3 and C6 must not FAIL.
 # K6c wants C6 too: section 8's C6 compares fetch.json's model_requests, so a raised count fails C4 and C6.
 CONTROLS = [
     ("K2", "k2-part", "k2-fetched", {"C1": "FAIL", "C2": "FAIL", "C4": "FAIL", "C5": "FAIL", "C6": "FAIL"}, ids("fail", *K2),
@@ -133,7 +133,7 @@ def run_control(part, fetched, mods, tool):
 def compare(row, found, want, finds, mods):
     got = row["checks"]
     bad = ["%s %s, wanted %s" % (c, got[c], w) for c, w in want.items() if got[c] != w]
-    bad += ["%s FAIL, none wanted" % c for c in pc.CHECKS if c not in want and got[c] == "FAIL" and "wire_only" not in mods]  # C3 too: never wanted
+    bad += ["%s FAIL, none wanted" % c for c in pc.CHECKS if c not in want and got[c] == "FAIL" and not ("wire_only" in mods and c in ("C2", "C4", "C5"))]  # C3 and C6 never wanted
     bad += ["%s %s, wanted %s" % (i, pc.worst(found, i).get("result"), w) for i, w in finds.items()
             if pc.worst(found, i).get("result") != w]
     hist = row["facts"]["history"]  # K11: the history check's own numbers
