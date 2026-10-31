@@ -1098,3 +1098,7 @@ lists disagreed, the ledger decided.
   edit. Nothing else in the format changes. On a clean end `raw` equals the old `Meter` count;
   after an error it is smaller, since `Meter` also counted the read-ahead zstd handed the 64 KiB
   buffer, so `bytes.raw` on a `record_decode` failure changes value when PRD-08 switches.
+
+### 2026-10-31, conductor seam line from PRD-02 core step 2 (08:50Z)
+
+Two shapes PRD-02 writes, accepted here: GAP reason 12 (mask_failed) may carry lost 1 with no stream byte lost and tail {"meta": "open"|"tail"|"event"} when metadata masking panicked; DATA may be empty (0 bytes) only with fin, for an empty WebSocket message. The codec already accepts both. PRD-08 recounts them as PRD-02's Counter does.

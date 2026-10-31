@@ -1462,3 +1462,40 @@ What the pad calls, as merged (PRD-12 note):
   hold secret bytes in memory for no use. `MaskError` text is fixed (no byte, no value, no length) and may
   be printed as is.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-31, conductor seam decisions with PRD-02 (08:40Z)
+
+`watchdog::run(plan, facts) -> ExitCode` stays (S8); `StartFacts` gets typed fields (`HostList`, `NativeSources`, `Vec<MaskRule>`, `Vec<SecretValue>`, `ConnectorRef`) and `home: PathBuf` in PRD-02 slice A: build `start.rs` against that shape. `watchdog::recover(entry_dir, facts) -> Result<Recovered, NotRecovered>` as ask N9; a live recorder is never killed and `recover` exits 0 saying recording is on. `goalcup seal` sends SIGUSR1 to the pid in `rec/watchdog.pid`; with no watchdog it sends SIGTERM to the recorder (PRD-02 slice B handles it, reason `signal`). Rung 1 needs `start` and `seal` merged.
+
+### 2026-10-31, fixes after the review of the participant slice 4 branch
+
+- **`seal` on a dead entry is deferred.** PRD-10 section 1 has seal run `close_dead_entry` and the uploader
+  when neither the recorder nor the watchdog lives. `pipeline::close_dead_entry` is not on integration yet,
+  so `seal` refuses that case with the `continue` line. The `continue`/`recover` slice carries the real
+  behaviour; the replan must keep it on its list.
+- **`start` is not wired yet.** `approve::begin`, `check_repo`, the push block, the clipboard and the sleep
+  lock are built and tested as parts; `start.rs` still ends in the not-built line after the folder checks
+  and the prompt read. The next slice joins them.
+- **Size.** The cli sources and the `cli_*.rs` tests are past the PRD-00 row. Decision: every part kept
+  serves a point (3 never block, 4 no secrets, 6 tell plainly, 7 harnesses as used); the slice dropped three
+  one-line push helpers and moved the setup sentences into `text.rs`. The next slice must cut before it adds.
+
+### 2026-10-31, replan after PRD-10 slice 6 (merge 1c9afbed)
+
+- **Built:** `approve` (device flow, open run), the push block with `--prompt`, the sleep lock, `seal`
+  (S8: SIGUSR1 to the pid in `rec/watchdog.pid`, SIGTERM to the recorder when no watchdog lives), and the
+  interactive setup. `start.rs` is still the folder checks plus the not-built line (exit 3).
+- **Left for the next slice, in this order:** (1) wire `start.rs` (step 3 on): it needs
+  `watchdog::run(plan, facts) -> ExitCode` and the typed `StartFacts` of PRD-02 slice A, neither on
+  integration yet (`StartFacts` still carries `serde_json::Value` for `connector`, `hosts`, `native`,
+  `mask_rules`, `values`); build against the final shape and swap the field types when PRD-02 lands them.
+  (2) `continue` and `recover`, which wait for `watchdog::recover` (N9) and `pipeline::close_dead_entry`.
+  (3) `seal` on a dead entry: today it refuses with the `continue` line; section 1 wants
+  `close_dead_entry` plus the uploader. Keep it on the list. (4) the upload dispatch, which waits for
+  `upload::manual::run` (PRD-06 slice 4).
+- **Size: cut before add.** `cli/` src is now 3,625 lines against about 2,900 (125%); `text.rs` alone
+  is 1,153. The remaining slice must show a net cut in `text.rs` (fold repeated sentences, one helper per
+  sentence family) before it adds the start screen and the continue and recover lines. A budget past 10%
+  needs a decision line that names the point the lines serve; this slice's are points 3, 4 and 6 and the
+  line is recorded in PRD-16.
+- No locked ledger item is touched and no owner question comes from this slice.

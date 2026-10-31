@@ -1,0 +1,4 @@
+# Goose with its OpenAI provider pointed at DeepSeek; the key is OPENAI_API_KEY from the launch shell.
+GOOSE_PROVIDER: openai
+GOOSE_MODEL: deepseek-flash
+OPENAI_HOST: https://api.deepseek.com

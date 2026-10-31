@@ -222,11 +222,12 @@ How it works, in the same one streaming pass (`src/history.rs`):
 1. **Answers recorded.** For every recorded model response (U1 pairs request and reply, PRD-09),
    take its answer keys: each tool-call id (`toolu_…`, `call_…`, Responses `call_id`) and the
    SHA-256 of its text, whitespace-trimmed and collapsed. For a streamed response the text is the
-   joined `delta`, `text` deltas (the same joiner as the secret scan). Keys go in one set for the
+   joined `delta` and `text` deltas (the secret scan's joiner in its answer-only form, which leaves out
+   reasoning, thinking, tool arguments and Gemini parts marked `thought`). Keys go in one set for the
    whole input; a few bytes per answer.
 2. **Answers resent.** For every decoded model request, list its earlier assistant turns (role
    `assistant`, Gemini `model`, Responses `message` and `function_call` items) with the same keys.
-   Reasoning items and turns with no id and no text are not checked.
+   Reasoning items, Gemini `thought` parts and turns with no id and no text are not checked.
 3. **Threads.** A request joins the open chain whose last list it extends (its earlier turns start
    with that list); else it starts a new chain. U1's thread id, where the wire carries one, names the
    chain in the report. Only the turns new since the previous request of the chain are kept, so
@@ -908,7 +909,8 @@ log; the pad lane follows.
     Completions `choices[].delta` and its `tool_calls[].function.arguments`, Anthropic thinking).
     Gemini's `parts[].text` is covered by `text`. This replaces the bullet's three-key list.
   - **One joiner.** It is `secrets::delta_text(&Value, &mut String)`, public. Section 3.2 step 1's
-    "the same joiner as the secret scan" means `history.rs` calls it; it never keeps a copy.
+    "the same joiner as the secret scan" means `history.rs` calls it; it never keeps a copy. The
+    slice 6 fixer added `secrets::answer_text`, the same walk with the answer keys only (see below).
   - **Tails** are cut at any GAP of the stream (a GAP on sid 0 cuts all) and at a DATA offset jump, so
     nothing is joined across a hole (test `secrets_nothing_is_joined_across_a_gap`). Bytes are
     scanned per 64 KiB batch with the 4 KiB tail kept, and at END, GAP, jump and the end of the
@@ -1133,3 +1135,49 @@ log; the pad lane follows.
   the block are unchanged. A scan test that parses the masked line sees valid JSON with all-star strings
   between the markers.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-31, history check fixes after review (slice 6 fixer)
+
+- **Chain rule, as built (section 3.2 step 3).** A request that extends no chain's last list opens its
+  own chain and may continue an empty chain (one whose first request resent nothing), whatever its
+  length. The pass keeps only how many empty chains existed then; `judge` picks the oldest one not yet
+  continued whose U1 thread id is the same, or absent on both. No such chain: the request is its own
+  chain's first request (`history_unanchored`, never `fail`). A second call dropped with no GAP now
+  fails, and a one-shot request on another thread no longer takes a resumed session's chain.
+- **A request body lost to a GAP** is skipped and counted, but its whole reply still supplies answers
+  (a body that looks like JSON and cannot be decoded still gets its reply read). The next request
+  extends the chain over it by more than one answer. A GAP on a POST request stream, on the response
+  to a candidate model request (decoded or not) or on a WebSocket stream counts as a named cover
+  beside the connection covers `honesty` gives; a GAP on any other stream (a GET download) does not; the window starts at the chain's last known
+  request time, else the request's own. The cover's host is not compared: `Cover` carries none, and
+  both rules lean towards `named` over `fail`.
+- **One joiner.** `history.rs` calls `secrets::answer_text` for streamed text, the one walk of
+  `secrets::delta_text` limited to the answer: no reasoning, thinking, `partial_json`, `arguments` or
+  Gemini `thought` part, since a later request does not resend them (a false `history_text_unmatched`
+  on every thinking turn otherwise). It keeps one joined text per response, not one per block or
+  choice. `turn()` skips `thought` parts too, so the request key and the response key stay equal.
+- **Declined: reuse of `usage` framing (review B1).** `Buf` and `Sse` live in `src/usage/`, which PRD-09
+  owns; making them `pub(crate)` is a seam request to PRD-09, not made here.
+- **Size decision** (`wc -l`). `history.rs` 637 against its 155 ceiling and `check_history.rs` 579
+  against 80: the 155 and 80 figures were estimates made before the streaming pass, four request
+  shapes, WebSocket messages and chain rules were fixed. The extra serves points 1 and 3 (a missed call
+  is named, never silently passed). `check_run1_shape.rs` and `common/run1.rs` stay at their slice 5
+  sizes, and the fixture export helper now lives once in `tests/common`. `secrets.rs` is 528 lines against 509 before
+  the answer joiner: the 19 lines serve point 1 (no false warn on a thinking answer, a missed call
+  reported by the right check). Anything past this needs a new decision line.
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-31, conductor seam line from PRD-02 core step 2 (08:50Z)
+
+PRD-02's mask worker writes two record shapes PRD-01's text does not list yet; the verifier must accept them or every real entry fails inv4, inv12 or the recount: (a) a GAP with reason mask_failed, lost 1 (no stream byte lost) and tail {"meta": "open"|"tail"|"event"}, on the stream's sid or sid 0 for an EVENT, after a panic in mask_meta; it counts as one gap with 0 lost bytes and marks the request holed (any GAP on the sid), as PRD-02's Counter does; (b) an empty DATA with fin for an empty WebSocket message. PRD-08 accepts both in its next slice; PRD-01 notes them below.
+
+### 2026-10-31, size decision for the legs and timeline slice
+
+- **Size decision** (`wc -l`). `legs.rs` is past its 540 ceiling, `integrity.rs` past 1,011,
+  `check_legs.rs` 238 against 145, and `timeline.rs` about 140 against the estimate of about 60 for
+  timeline and manifest part. The extra serves points 1, 2 and 3: every subagent file on disk is
+  accounted for by a native stream, a snapshot or a named cause, an off span is kept whole in the
+  timeline (a boot 0 that wrote no index line included), and nothing is dropped silently.
+  `Streams` now lives in `timeline.rs` beside the tally that fills it. The crate total outside
+  `usage/` is about 4,160 src lines against the 1,400 row in PRD-00, an owner-estimate matter for
+  the replan. Anything past these needs a new decision line.

@@ -14,6 +14,7 @@ use serde_json::Value;
 
 use super::hints::{self, Reader};
 use super::shapes::{extra, less, model_name, safe_code};
+use super::sqlite::{Sets, Used};
 use super::{CallRow, Ctx, Kind, Leg, Outcome, Reason, Thread, Tokens};
 
 pub(super) struct NativeLeg {
@@ -28,6 +29,12 @@ pub(super) struct NativeLeg {
     pub(super) repeats_skipped: u64,
     /// Child rollout lines timed before the child's own `session_meta` (copied parent records).
     pub(super) copied_skipped: u64,
+    /// The Hermes rows lack times or counts: the totals form, not per call.
+    pub(super) totals: bool,
+    /// Hermes database copies were recorded and none opened.
+    pub(super) unreadable: bool,
+    /// The Hermes database copy that was read.
+    pub(super) set: Option<Used>,
 }
 
 /// A Claude Code call: its row, usage counts (largest per member) and `requestId`.
@@ -43,6 +50,8 @@ pub(super) struct Native {
     msgs: BTreeMap<String, Msg>,
     /// Claude Code agent id to its session and the last `agentType` a meta snapshot gave.
     agents: BTreeMap<String, (String, Option<String>)>,
+    /// Hermes database copies.
+    sets: Sets,
 }
 
 /// What a stream carries: a session file (path, gen), or a meta snapshot (`None` after a hole).
@@ -93,7 +102,13 @@ impl Native {
                     (StreamKind::Snapshot, Some(Reader::ClaudeMeta)) => {
                         Src::Snap(file.0, Some(Vec::new()))
                     }
-                    (StreamKind::Native, Some(r)) if r != Reader::ClaudeMeta => {
+                    (StreamKind::Snapshot, Some(Reader::HermesDb)) => {
+                        return self.sets.open(key(sid), &m);
+                    }
+                    (
+                        StreamKind::Native,
+                        Some(r @ (Reader::CodexRollout | Reader::ClaudeTranscript)),
+                    ) => {
                         let f = File {
                             codex: r == Reader::CodexRollout,
                             next: m["from"].as_u64().unwrap_or(0),
@@ -135,10 +150,11 @@ impl Native {
                     Some(b) if *off == b.len() as u64 => b.extend_from_slice(bytes),
                     _ => *buf = None,
                 },
-                None => {}
+                None => self.sets.data(key(sid), *off, bytes),
             },
             // A hole in a session file shows in `data` by its offset; a snapshot is dropped here.
             Record::Gap { sid, lost, .. } if *lost != 1 => {
+                self.sets.gap(key(sid));
                 if let Some(Src::Snap(_, buf)) = self.streams.get_mut(&key(sid)) {
                     *buf = None;
                 }
@@ -159,7 +175,8 @@ impl Native {
 
     /// The native rows, threads and children of the entry. A file that names no thread keeps its
     /// rows, with `thread` `None`, so no native call leaves the count.
-    pub(super) fn finish(self) -> NativeLeg {
+    pub(super) fn finish(self, ctx: &Ctx) -> NativeLeg {
+        let h = (self.sets.finish(&ctx.entry, ctx.first, ctx.segment > 0)).unwrap_or_default();
         let (mut owner, mut threads) = (HashMap::new(), BTreeMap::new());
         let mut kids: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
         let (mut repeats_skipped, mut copied_skipped) = (0, 0);
@@ -226,11 +243,16 @@ impl Native {
         kids.retain(|_, v| !v.is_empty());
         let list = |(k, v): (String, BTreeSet<String>)| (k, v.into_iter().collect());
         NativeLeg {
-            rows: rows.collect(),
-            children: (!owner.is_empty()).then(|| kids.into_iter().map(list).collect()),
-            threads: threads.into_values().collect(),
+            rows: rows.chain(h.rows.into_iter().map(|r| (r, None))).collect(),
+            children: (!owner.is_empty())
+                .then(|| kids.into_iter().map(list).collect())
+                .or((!h.threads.is_empty()).then_some(h.children)),
+            threads: threads.into_values().chain(h.threads).collect(),
             repeats_skipped,
             copied_skipped,
+            totals: h.totals,
+            unreadable: h.unreadable,
+            set: h.set,
         }
     }
 }

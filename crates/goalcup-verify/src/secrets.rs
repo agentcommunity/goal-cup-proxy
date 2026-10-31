@@ -154,20 +154,39 @@ fn forms(v: &[u8]) -> Vec<(&'static str, Vec<u8>)> {
 /// `reasoning_content`, `thinking` and `arguments` inside a `delta` object (Chat Completions
 /// `choices[].delta`, its `tool_calls[].function.arguments`, Anthropic thinking).
 pub fn delta_text(v: &Value, out: &mut String) {
-    join(v, false, out);
+    join(v, false, false, out);
 }
 
-fn join(v: &Value, in_delta: bool, out: &mut String) {
-    const ANY: [&str; 3] = ["delta", "text", "partial_json"];
-    const IN_DELTA: [&str; 4] = ["content", "reasoning_content", "thinking", "arguments"];
+/// Like [`delta_text`] but only the answer: no reasoning, thinking or tool-argument pieces, so
+/// the joined text equals the text a later request resends as the assistant turn.
+pub fn answer_text(v: &Value, out: &mut String) {
+    join(v, false, true, out);
+}
+
+fn join(v: &Value, in_delta: bool, answer: bool, out: &mut String) {
+    let [any, inner]: [&[&str]; 2] = match answer {
+        true => [&["delta", "text"], &["content"]],
+        false => [
+            &["delta", "text", "partial_json"],
+            &["content", "reasoning_content", "thinking", "arguments"],
+        ],
+    };
     match v {
-        Value::Object(m) => m.iter().for_each(|(k, v)| match v.as_str() {
-            Some(s) if ANY.contains(&&**k) || in_delta && IN_DELTA.contains(&&**k) => {
-                out.push_str(s);
+        Value::Object(m) => {
+            let kind = m.get("type").and_then(Value::as_str).unwrap_or_default();
+            // Reasoning items and Gemini `"thought": true` parts are not the answer.
+            let skip = kind.contains("reasoning") || kind.contains("thinking");
+            if answer && (skip || m.get("thought") == Some(&Value::Bool(true))) {
+                return;
             }
-            _ => join(v, in_delta || k == "delta", out),
-        }),
-        Value::Array(a) => a.iter().for_each(|v| join(v, in_delta, out)),
+            m.iter().for_each(|(k, v)| match v.as_str() {
+                Some(s) if any.contains(&&**k) || in_delta && inner.contains(&&**k) => {
+                    out.push_str(s);
+                }
+                _ => join(v, in_delta || k == "delta", answer, out),
+            });
+        }
+        Value::Array(a) => a.iter().for_each(|v| join(v, in_delta, answer, out)),
         _ => {}
     }
 }
