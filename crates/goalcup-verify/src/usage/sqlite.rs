@@ -157,7 +157,9 @@ type Rows = (Vec<Sess>, Vec<Msg>);
 /// The leg of set `k` (boot, n), or `None` when it does not open. `(entry, start, resumed)`: a
 /// session is this run's when it started at or after `start`; in a `continue` entry it is also
 /// one that began earlier but has a row inside the entry. Rows timed before `start` are an
-/// earlier entry's and not counted.
+/// earlier entry's and not counted. Without the run's earlier entries a `continue` entry cannot
+/// tell a session of an earlier run from one of an earlier entry (the job reads the whole run, PRD
+/// section 5); the shared home runs serialized, so this only widens the set.
 fn read(
     k: (u64, u64),
     p: &Pair,
@@ -194,9 +196,10 @@ fn read(
         }
         let th = Thread {
             parent: s.parent,
-            native_total: s.calls,
+            // A resumed session's totals span earlier entries: only a fresh one carries them.
+            native_total: s.calls.filter(|_| fresh),
             native_until: until,
-            native_tokens: s.tokens,
+            native_tokens: if fresh { s.tokens } else { Tokens::default() },
             reason: None,
             ..Thread::new(&id)
         };
@@ -212,8 +215,10 @@ fn read(
         }
         *n += 1;
         leg.totals |= at.is_none();
-        // Rows after the copy's time are not known, so the join does not compare them.
+        // Rows after the copy's time are not known, so the join does not compare them. The row is
+        // in the copy yet leaves native_calls, so the entry reads as totals only.
         if at.zip(until).is_some_and(|(a, u)| a > u) {
+            leg.totals = true;
             continue;
         }
         let mut r = CallRow::new(Leg::Native, entry, k.0, Kind::Call);
