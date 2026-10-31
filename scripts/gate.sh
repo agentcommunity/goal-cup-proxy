@@ -20,6 +20,7 @@ fail() {
     echo "gate $tier: FAIL"
     exit 1
 }
+trap fail INT TERM HUP
 
 if [ "$(id -u)" = 0 ] && [ "${GOALCUP_GATE_ALLOW_ROOT:-}" != 1 ]; then
     echo "gate.sh: do not run the gate as root; some permission tests always fail as root." >&2
@@ -73,7 +74,6 @@ while ! mkdir "$lock" 2>/dev/null; do
 done
 echo $$ >"$lock/pid"
 trap 'rm -rf "$lock"' EXIT
-trap fail INT TERM HUP
 
 step cargo fmt --all --check
 step cargo clippy --locked --workspace --all-targets -- -D warnings
