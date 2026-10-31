@@ -4,8 +4,8 @@
 mod common;
 
 use common::run1::{Shape, run1};
-use common::{Entry, check, item};
-use goalcup_format::EndReason;
+use common::{Entry, check, item, mutate};
+use goalcup_format::{EndReason, GapReason, Record};
 use serde_json::Value;
 
 fn rows(v: &Value) -> &Vec<Value> {
@@ -63,4 +63,51 @@ fn an_off_span_before_the_first_part_is_in_the_timeline() {
 fn an_entry_with_nothing_in_it_has_an_empty_timeline() {
     let (_, v) = check(&Entry::new("timeline-empty").seal(), &[]);
     assert!(rows(&v).is_empty());
+}
+
+/// Moves the entry's `recorder_down` span to times that are not ms-aligned; returns its ns.
+fn skew_down_span(dir: &std::path::Path, start_by: i64, end_by: i64) -> u64 {
+    let mut span = 0;
+    mutate(dir, None, |recs| {
+        for r in recs.iter_mut() {
+            if let Record::Gap {
+                reason: GapReason::RecorderDown,
+                start_wall,
+                end_wall,
+                ..
+            } = r
+            {
+                *start_wall = start_wall.wrapping_add_signed(start_by);
+                *end_wall = end_wall.wrapping_add_signed(end_by);
+                span = *end_wall - *start_wall;
+            }
+        }
+    });
+    span
+}
+
+/// Each row divides its ns once: the rows' off_ms is the single-division total of the span,
+/// not a floor per piece. Here the head and a piece in bucket 0 share one row.
+#[test]
+fn a_head_piece_and_the_rest_of_its_row_are_floored_once() {
+    let dir = Entry::recovered_before_first_link("timeline-head-ns", "killed", 30_000);
+    let span = skew_down_span(&dir, 123_457, 700_300);
+    let (_, v) = check(&dir, &[]);
+    assert_eq!(sum(&v, "off_ms"), span / 1_000_000);
+}
+
+/// A span with ragged ends that crosses a bucket boundary loses under 1 ms per row.
+#[test]
+fn a_ragged_span_across_buckets_loses_under_a_ms_per_row() {
+    let mut e = Entry::new("timeline-ragged");
+    e.standard();
+    e.crash("killed", 25 * 60_000);
+    e.exchange(EndReason::Complete);
+    e.count();
+    let dir = e.seal();
+    let span = skew_down_span(&dir, 123_457, -234_567);
+    let (_, v) = check(&dir, &[]);
+    let (got, n) = (sum(&v, "off_ms"), rows(&v).len() as u64);
+    assert!(n > 2);
+    assert!(got <= span / 1_000_000 && span / 1_000_000 - got < n, "{got} of {span} in {n}");
 }

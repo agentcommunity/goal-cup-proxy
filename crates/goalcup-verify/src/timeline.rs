@@ -1,7 +1,9 @@
 //! The report's `timeline` (PRD-08 section 4), tallied in the integrity walk: native bytes and
 //! GAPs by time, the off spans, and the streams by file path. Rows are sparse, keyed by bucket
 //! index from the entry's first PART wall time. An off span is clamped to the PART and LINK wall
-//! range, which a DATA or GAP time cannot widen, so a forged span adds no buckets past it.
+//! range, which a DATA or GAP time cannot widen, so a forged span adds no buckets past it. The
+//! part of a span before the first PART goes to bucket 0 and the part past the last PART or LINK
+//! to the last bucket.
 
 use crate::integrity::{has_extent, is_meta_gap};
 use crate::legs::Timed;
@@ -23,7 +25,8 @@ pub struct Streams {
     pub gapped: HashSet<String>,
 }
 
-/// One row: harness calls, wire calls, wire errors, native bytes, gaps, off ms.
+/// One row: harness calls, wire calls, wire errors, native bytes, gaps, off ns (the report
+/// divides by 1_000_000 once per row).
 type Row = [u64; 6];
 
 #[derive(Default)]
@@ -125,13 +128,14 @@ impl Tally {
             }
             // The part before the first PART (a boot 0 that never wrote an index line) goes to
             // bucket 0, the part past the last PART or LINK to the last bucket; no rows between.
+            // Pieces add in ns; counts.off_ms floors each whole span, so a row's ms is at most
+            // 1 ms under its share of that.
             let head = first.saturating_sub(s).min(e - s);
             let tail = e.saturating_sub(self.last.max(s));
-            let ms = |ns: u64| ns / 1_000_000;
             let x = self.rows.entry(0).or_default();
-            x[5] = x[5].saturating_add(ms(head));
+            x[5] = x[5].saturating_add(head);
             let x = self.rows.entry(end).or_default();
-            x[5] = x[5].saturating_add(ms(tail));
+            x[5] = x[5].saturating_add(tail);
             let (s, e) = (s.max(first), e.min(self.last));
             if e <= s {
                 continue;
@@ -140,7 +144,7 @@ impl Tally {
                 let lo = first + i * BUCKET;
                 let ns = e.min(lo.saturating_add(BUCKET)) - s.max(lo);
                 let x = self.rows.entry(i).or_default();
-                x[5] = x[5].saturating_add(ms(ns));
+                x[5] = x[5].saturating_add(ns);
             }
         }
     }
@@ -148,8 +152,10 @@ impl Tally {
     /// The report's `timeline`: the buckets with anything in them.
     pub fn timeline(&self) -> Value {
         let first = self.first.unwrap_or(0);
-        let rows = self.rows.iter().filter(|(_, r)| r.iter().any(|&n| n > 0));
-        rows.map(|(&i, r)| {
+        let ms = |r: &Row| [r[0], r[1], r[2], r[3], r[4], r[5] / 1_000_000];
+        let rows = (self.rows.iter()).map(|(&i, r)| (i, ms(r)));
+        rows.filter(|(_, r)| r.iter().any(|&n| n > 0))
+            .map(|(i, r)| {
             let start = first.saturating_add(i.saturating_mul(BUCKET));
             json!({"bucket": i, "start": wall(start), "harness_calls": r[0], "wire_calls": r[1],
                 "wire_errors": r[2], "native_bytes": r[3], "gaps": r[4], "off_ms": r[5]})
