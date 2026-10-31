@@ -1225,8 +1225,8 @@ from nothing.
   no longer banned.
 - **`providers.toml` is frozen.** It keeps `anthropic` and `deepseek` (CONNECTOR-SCHEMA promise 6),
   and no row is added: no `vercel` row and no per-path hint in a host row.
-- **The access token.** README and SECURITY say it in one sentence
-  ([README](../README.md#the-access-token)): it is forwarded unread and never written.
+- **The access token.** RULES says it in one sentence
+  ([RULES](RULES.md)): it is forwarded unread and never written.
 
 This supersedes D62's refusal of a missing value (it now holds only with `absent = "refuse"`), its
 `env` deny word and its one-key form.

@@ -33,7 +33,7 @@ All times are UTC.
 
 - **Release availability:** install the latest published Goal Cup Proxy release on macOS, Linux or WSL2
   with `curl -fsSL https://github.com/agentcommunity/goal-cup-proxy/releases/latest/download/install.sh | sh`
-  ([guide](PARTICIPANT-GUIDE.md#1-install)).
+  ([guide](PARTICIPANT-GUIDE.md#2-install)).
 - **Until the start window:** you prepare with `goalcup setup` and practice runs, which are not
   limited to any window. The release is planned for 6 November, 12:00; it is not a cutoff, and
   releases may follow (D70).
@@ -99,8 +99,8 @@ The latest possible run ends 192 hours after the window opens.
   (for example `/model` to switch model) count as typing: they are recorded and reviewed, never
   blocked. Choose your model in setup.
 - Answering a permission prompt is typing too, so set your harness up in setup to run without them.
-  Goal Cup recommends how, per harness, and never changes your harness's settings (D67;
-  [Set up your harness for a 168-hour run](HARNESS-SETUP.md)).
+  `goalcup setup` offers to set this for you, in the harness's own home under goalcup, and never
+  changes your own settings (D67; [guide](PARTICIPANT-GUIDE.md#3-set-up)).
 - The review works out who said each message from what the model saw and how the harness structures its
   messages. That is a detection, not a proof. An organizer reviews a message it cannot explain.
 - Goal Cup Proxy never sends anything to the agent, and never relays, edits or blocks your input: no
@@ -169,7 +169,7 @@ The 4,000-character limit applies to the direct prompt. It is not a limit on the
 - **You will see that it is working.** `goalcup status` shows the recording's state and health, and a
   `PROBLEM:` line for anything wrong. The server emails you when your run starts, when it has heard
   nothing from Goal Cup Proxy for 20 minutes, when your agent has made no model calls for 3 hours and
-  again at 6 hours, when the recording has a problem, and when the run has ended and its commit is
+  again at 6 hours, when the recording has a problem, when the disk is full, and when the run has ended and its commit is
   recorded. There is no token
   limit.
 - Ordinary public internet pages and normal third-party service responses do not need to be
@@ -268,15 +268,14 @@ disclosure and no-side-channel rules.
   store. Goal Cup Proxy records every session file new or written there since the run started.
 - **No connector in this build changes app-wide configuration.** Goal Cup Proxy reads nothing from and
   writes nothing to your `~/.claude`, `~/.codex` or `~/.hermes`, and goalcup refuses a config home
-  inside any of them. A future connector that must change one would say so in its manifest, and your
+  inside any of them. A future connector that must change one would say so in its connector, and your
   run would disclose it.
 - **Your agent is not limited the same way.** It runs with full access as your user, so it can read
   and write anything you can, those folders and your Keychain included. Goal Cup Proxy never copies
   your own settings into its harness homes: `goalcup setup` opens the harness there so you sign in
   and add the settings, MCP servers and skills you want. Claude Code's run `HOME` on macOS holds a
   link to your `~/Library/Keychains`, for your subscription login. Each harness keeps its own login
-  in its home, and its access token is forwarded unread and never written
-  ([README](../README.md#the-access-token)).
+  in its home, and its access token is forwarded unread and never written.
 - **Your agent can read your logins.** The harness must read and
   refresh its own login all run, and its tools run as your user. So Goal Cup Proxy cannot stop your
   agent reading the harness's login files in Goal Cup Proxy's home (Codex `auth.json`, Hermes `.env`
@@ -291,14 +290,14 @@ disclosure and no-side-channel rules.
   `HTTPS_PROXY` is not. Nor is every byte a tool produced: several harnesses truncate large tool
   output before writing it. A few internal model calls, such as title generators, appear in no
   transcript on any harness we measured. Neither affects judging.
-  [CHEAT-CHECKLIST](CHEAT-CHECKLIST.md) lists what a verifier `pass` does not cover.
+  [SECURITY](../SECURITY.md#what-a-check-does-not-prove) lists what a verifier `pass` does not cover.
 - <a id="what-a-label-is-worth"></a>**What a label is worth.** `goalcup-verify check --json` gives
   each run a `label` (D74) from what the run holds: `wire_and_native` (model requests and the
   harness's chat file), `wire_only` (model requests alone), `native_only` (the chat file alone) or
   `none` (no model request and no chat file). The text output ends with a coverage line. Each of the
   first three counts. `none` does not. "Native" means model work in the chat file: a chat file with
   no model work in it labels `none`. "Counts" means the run is admissible: a `native_only` run is
-  reviewed with its sealed-hosts list for why its model calls were not recorded, and routing model
+  reviewed for why its model calls were not recorded, and routing model
   work around Goal Cup Proxy on purpose is still grounds for disqualification (below).
   The label is a hint for judges, not a judgement of the run. Some harnesses keep their chat files
   in a form no reader decodes, so their runs label `wire_only` or `none`; a `none` run with sealed
@@ -351,7 +350,7 @@ disclosure and no-side-channel rules.
   they are never published. They are kept until judging and appeals end, then deleted. The privacy
   notice on the website has the full terms.
 - A published run includes the original prompt, the disclosed starting context, harness and model
-  information when known, the verification status (the verifier's `pass`, `flag` or `fail` verdict
+  information when known, the verification status (the verifier's `pass`, `named` or `fail` verdict
   and its findings), and the final result. A verdict is not proof of anything.
 - Modifying, disabling, bypassing, or deliberately routing work around Goal Cup Proxy is grounds for
   disqualification.
@@ -383,7 +382,7 @@ with the connector id, how each harness is signed in and what goalcup cannot rec
 [docs/harnesses/README.md](harnesses/README.md); it is not copied here. That table also says which
 harnesses the test pad has verified. A tier does not decide whether you may take part.
 
-Other harnesses can join through the [connector process](HARNESS-ONBOARDING.md#getting-a-harness-into-the-event).
+Other harnesses can join through the [connector process](HARNESS-ONBOARDING.md).
 A merged connector ships in the next release. A harness without a shipped connector has no
 supported recording path and its runs do not count.
 

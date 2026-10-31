@@ -234,7 +234,7 @@ At most `MAX_HELD_BYTES` (16 KiB) of undecided bytes are held per stream. Past t
 **fails closed**: everything from the earliest undecided byte is replaced up to the next safe
 terminator. Below the bound, output equals whole-stream redaction whatever the chunking. A
 connector rule is a typed form with its own recognizer, never a regex. Redaction is best effort. The residuals are
-in the [checklist](CHEAT-CHECKLIST.md). The recording proxy also strips credential headers by name.
+in the [checklist](../SECURITY.md#what-a-check-does-not-prove). The recording proxy also strips credential headers by name.
 
 ## 10. Upload and the server
 

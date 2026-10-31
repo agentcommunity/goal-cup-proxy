@@ -63,7 +63,7 @@ The harnesses goalcup records are listed in [docs/harnesses/README.md](docs/harn
 end screen says what was written and what was lost. What is judged is the last push to your
 repository's default branch that GitHub received before the deadline. Your agent must push its own
 work; goalcup never pushes. Then hand in your demo video and questionnaire on the event site
-within 24 hours ([the end](docs/PARTICIPANT-GUIDE.md#7-the-end)).
+within 24 hours ([the end](docs/PARTICIPANT-GUIDE.md#8-the-end)).
 
 ## Commands
 
@@ -151,17 +151,10 @@ the run.
 
 ## Add a harness
 
-A harness is data, not code: one `connectors/<id>.toml`, one pad file and a facts sheet. No `.rs`
-file and no test of your own. The test pad is the one way to add it.
-
-1. Read the harness's current docs and fill the facts sheet (`docs/harnesses/<id>.md`).
-2. Write `connectors/<id>.toml`. Copy a neighbour such as `connectors/hermes-cli.toml`. Every key is
-   in [CONNECTOR-SCHEMA](docs/CONNECTOR-SCHEMA.md).
-3. Write `scripts/pad/harnesses/<id>.toml` and run the pad on it.
-4. Open the pull request with the run's `row.json`.
-
-Start with the [adding-a-capture-harness skill](skills/adding-a-capture-harness/SKILL.md). The
-harnesses that exist are in [docs/harnesses/README.md](docs/harnesses/README.md).
+A harness is data, not code, and the test pad is the one way to add it: follow the
+[adding-a-capture-harness skill](skills/adding-a-capture-harness/SKILL.md) or
+[CONTRIBUTING](CONTRIBUTING.md#adding-a-harness). The harnesses that exist are in
+[docs/harnesses/README.md](docs/harnesses/README.md).
 
 ## For developers
 
@@ -205,25 +198,23 @@ Each point has tests. A test that guards a point is never deleted while the poin
 move tier ([AGENTS.md](AGENTS.md#tests)). The test pad's six checks (C1 to C6, PAD-RESULTS) prove
 the same points on real harnesses.
 
-| Point | Real-run proof | Guard tests |
+| Point | Real-run proof | Guard tests in |
 |---|---|---|
-| 1 Every model request | Pad C1 | `proxy_connect.rs`, `proxy_ws.rs` |
-| 2 Every subagent | Pad C2 | `native_walk.rs`, `native_tail.rs`, `native_finish.rs`, `native_resume.rs` |
-| 3 Never block | Recorder kill test | none merged yet |
-| 4 No secrets | Pad C3 | `mask_stream.rs`, `mask_rules.rs`, `secrets_scan.rs` |
-| 5 Upload everything | Pad C4 | `upload_chunks.rs`, `server_compare.rs`, Worker `test/integration.test.ts` |
-| 6 Tell plainly | Pad C6 | `check_invariants.rs`, `cli_finish.rs`, `upload_beat.rs` |
-| 7 Real harnesses | Pad tiers | `connector_builtin.rs`, `connector_launch.rs`, `rule_code.rs`, `scripts/test_install.py` |
-| Usage | Pad C5 | `usage_run1.rs` |
-| Format | Pad | `golden.rs`, `recovery.rs`, `check_invariants.rs` |
-| All together | Done items 1 and 2 | none merged yet |
+| 1 Every model request | Pad C1 | `crates/goalcup/tests` |
+| 2 Every subagent | Pad C2 | `crates/goalcup/tests` |
+| 3 Never block | Recorder kill test | not merged yet |
+| 4 No secrets | Pad C3 | `crates/goalcup/tests`, `crates/goalcup-verify/tests` |
+| 5 Upload everything | Pad C4 | `crates/goalcup/tests`, `crates/goalcup-verify/tests`, `server/worker/test` |
+| 6 Tell plainly | Pad C6 | `crates/goalcup/tests`, `crates/goalcup-verify/tests` |
+| 7 Real harnesses | Pad tiers | `crates/goalcup/tests`, `scripts` |
+| Usage | Pad C5 | `crates/goalcup-verify/tests` |
+| Format | Pad | `crates/goalcup-format/tests` |
+| All together | Done items 1 and 2 | not merged yet |
 
 ### Releasing
 
-The version is written only in the workspace `Cargo.toml`. `sh scripts/release.sh prepare <x.y.z>`
-opens the version pull request. After it merges, run `sh scripts/gate.sh full` on that commit, then
-`scripts/pad/table --release-check <commit>`, then `sh scripts/release.sh tag <x.y.z>`
-([details](packaging/README.md)). Release notes: [GitHub releases](https://github.com/agentcommunity/goal-cup-proxy/releases).
+The version is written only in the workspace `Cargo.toml`; the steps are in
+[packaging](packaging/README.md). Release notes: [GitHub releases](https://github.com/agentcommunity/goal-cup-proxy/releases).
 
 ## Docs map
 

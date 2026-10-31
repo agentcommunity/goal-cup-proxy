@@ -34,23 +34,16 @@ the whole diff, and answers review questions. A `Co-Authored-By:` trailer says w
 
 ## The gate
 
-One script, two tiers ([README, The gate](README.md#the-gate)). Every change passes the fast tier;
-a release passes the full one:
+What each tier runs and what it needs is in [README, The gate](README.md#the-gate). Every change
+passes the fast tier; a release passes the full one:
 
 ```
 sh scripts/gate.sh fast
 sh scripts/gate.sh full   # before a release
 ```
 
-Fast runs `cargo fmt --check`, clippy with warnings denied, every test under `cargo nextest`, the
-doctests, the Worker tests and the Python script and pad tests. Full adds the `#[ignore]` end to
-end tests, the release build, and a check that no `GOALCUP_TEST_` text is in the release binary.
-It needs `cargo-nextest`, `zstd`, Python 3.11, `git`, `npm` and `npm ci --prefix server/worker`,
-names whatever is missing in one line, and refuses to run as root. The last line is
-`gate <tier>: PASS in <N>s` or `gate <tier>: FAIL`: report it, the platform and the Rust version
-in the PR.
-
-CI runs `sh scripts/gate.sh fast` with no secret. If you cannot run the gate, say so in the PR.
+Report the last line (`gate <tier>: PASS in <N>s` or `FAIL`), the platform and the Rust version in
+the PR. CI runs the fast tier with no secret. If you cannot run the gate, say so in the PR.
 
 ## What `main` requires
 
@@ -85,7 +78,7 @@ through it. In short:
    tier. A maintainer acknowledges a connector PR within 7 days, which is not a promise to merge.
 
 A new decrypted host is one line in `connectors/model-hosts.toml`. A new rule that connectors
-cannot express (D42, D84) is a separate core PR with a `docs/DECISIONS.md` entry. Pad results are
+cannot express (D42, D84; [when](docs/HARNESS-ONBOARDING.md#do-i-need-a-core-change)) is a separate core PR with a `docs/DECISIONS.md` entry. Pad results are
 synthetic: they say "recorded in a test", not "works for every user". Never commit a real trace,
 a key, `pad-out/` or `target/`, and read any fixture by eye first.
 
@@ -98,7 +91,7 @@ A connector is trusted data compiled into every build, so a code owner reads eac
 - `env` holds no key, token or user path, and no variable that names a command, hook or host;
 - every host added to `connectors/model-hosts.toml` has a vendor doc link, and is a model host,
   not a registry or an unrelated service;
-- the pad row is attached, from a run of the pinned version, and its table passes;
+- the pad row is attached, from a run of the version the connector names, and its table passes;
 - the PR holds no `.rs` file and no real trace.
 
 ## Maintainer-owned files

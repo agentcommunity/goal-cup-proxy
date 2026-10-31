@@ -94,7 +94,7 @@ tier column is written from the test pad's results. A tier does not decide wheth
 part. The three tiers:
 
 - **Verified on a version.** The test pad ran this harness at that version with a direct key, and
-  through a gateway where it has one, and every check passed on `goalcup`'s own record: no unexplained
+  through a gateway where it has one and in the "cannot read" case, and every check passed on `goalcup`'s own record: no unexplained
   gap, no missed model request, every subagent recorded, no secret found, the server's copy whole,
   usage readable, and the counts on screen true.
 - **Not verified.** `goalcup` records what reaches it, the same way, but the pad has not passed on
