@@ -175,7 +175,7 @@ fn run(command: Command) -> ExitCode {
         Command::Continue { .. } => not_built("continue"),
         Command::Recover { .. } => not_built("recover"),
         Command::Status { part, json } => cli::status::run(part, json),
-        Command::Seal { .. } => not_built("seal"),
+        Command::Seal { part, yes } => cli::seal::run(part, yes),
         Command::Upload { .. } => not_built("upload"),
         Command::TimeLeft => cli::time_left::run(),
     }
