@@ -1124,3 +1124,7 @@ PRD-01, PRD-05, PRD-08, PRD-12, PRD-16 and the old code.
   is long and `sum([&th.native_tokens].into_iter())` can be `sum(std::iter::once(&th.native_tokens))`;
   B2 and B3 from the previous note stay as written.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-11-01, replan after PRD-08 slice 11 (merge 8eee2a70)
+
+- The Hermes row of section 5 should now say: without state.db there are no native call rows, no token totals and no api_call_count; harness_log is none, threads_match and wire_keeps_up are skip, usage reports one entry-level bucket, and subagent threads come only from the delegation task files (HermesTask reader, hints.rs and native.rs, edited by PRD-08 under OWN-8). Known nit: with both state.db and task logs a subagent is listed twice in usage.json (state.db thread and <deleg>/task-n); no check reads it. No seam shape changes and no locked ledger item is touched.

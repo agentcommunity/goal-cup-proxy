@@ -2623,3 +2623,8 @@ kept and now cites BUILD-PROMPT section 5, since B3 no longer carries it.
 
 - **Size report, PRD-11** (`wc -l` on integration at 5dc8cbde): `crates/goalcup/src/connector/*.rs` 1,708 lines against the PRD-00 "Size budget" row of 800 src (more than 10% over; the overage is carried from earlier slices, in the same range as the 1,695 reported at slice 6, and this slice added only a few lines there); `crates/goalcup/tests/connector_*.rs` 775 against 400 tests. The slice's own code sits mostly in other PRDs' files (proxy tunnel/hosts 18, cli 40, verify honesty 16, plus tests), counted in those rows. Reported, not cut; carry to the end-of-build report.
 - **Order and gate effect:** none. The `expected` hosts seam from the sweep 3 note is now consumed by PRD-03, PRD-08 and PRD-10. The first-note key gap is routed to PRD-02 (see its note); it affects no acceptance row. Review nits A7 and B7 are carried, not blocking. No locked ledger item is touched.
+
+### 2026-11-01, replan after PRD-08 slice 11 (merge 8eee2a70)
+
+- **Size report, PRD-08** (wc -l on integration at 8eee2a70): crates/goalcup-verify src 4,298 outside usage/ plus 3,061 in usage/ (7,359) against the PRD-00 Verifier row of 1,400 src (and the 1,470 Usage row, which usage/ also counts toward); tests 5,099 against 1,100. Far past the 10% line; carried from earlier slices, this slice added the task-log reader only. Reported, not cut; carry to the end-of-build report.
+- **Order and gate effect:** none. Hermes subagent proof is now weak by design (task logs only, no wire attachment); the Hermes pad rows must expect threads_match and wire_keeps_up as skip. No locked ledger item is touched.
