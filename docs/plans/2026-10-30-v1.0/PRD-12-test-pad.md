@@ -1905,3 +1905,8 @@ taken; "rejected" says why. Fixes for other files are made by those files' owner
 ### 2026-11-01, replan after slice 12 (merge 5aaf7f55)
 
 - RIG-5, RIG-6 and RIG-7 are in. Open nit B1 (split `test_dead_pane_ends_the_wait_at_once` into short methods sharing a setUp) is optional tidying for the next pad slice; no plan change, no ledger item touched.
+
+### 2026-11-01, rig faults RIG-8 and RIG-9 (rung 2b)
+
+- **RIG-8 fixed.** With a server, Codex clears the screen and scrollback, so the paste step never saw "Recording in chat mode" and ended INCONCLUSIVE although `status.json` said recording. The paste step now waits the way the server-off start does (one shared helper): for `status.json` to say recording or for the pane to die, and looks for the screen text only if it does not say recording. A dead pane still ends the step at once as start-refused.
+- **RIG-9 fixed.** The last stderr line of a child (fetch-run, sbx) reached `table.txt`, `meta.json` and `calls.log`, and a database error carried the database host. The pad now replaces the fetch credentials, the host, user and password parts of `DATABASE_URL`, and the other organizer secrets with `<hidden>` before the line is cut to 160 characters, in `said()` and in the run log. Values are read from the environment at the moment of use and are never put on a command line.

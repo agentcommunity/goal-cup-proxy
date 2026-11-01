@@ -346,14 +346,19 @@ class Run:
                      ["respawn-pane", "-k", "-t", t, "bash " + shlex.quote(self.path("launch.sh"))]):
             sh(["tmux"] + argv)
         if server == "off":  # no approval: paste now
-            wait(self.recording_or_dead, self.left(), 2)  # Codex clears the screen and scrollback; a dead pane ends the wait (RIG-6)
-            if pc.dig(self.status(), "s4_mode") != "recording":  # a dead pane: until() raises start-refused at once
-                self.until("Recording in chat mode", "no 'Recording in chat mode'")
+            self.recording_seen("no 'Recording in chat mode'")
             self.daemon_check()
             return self.type_prompt()
         self.code = self.until(r"shows the code ([A-Z0-9]{4}-[A-Z0-9]{4})\.", "no device code").group(1)  # out once
         self.pane()
         return "ok", "device code shown"
+
+    def recording_seen(self, why):
+        """Wait for status.json to say recording (Codex clears the screen and scrollback, so the text may never be
+        seen); else look for the text. A dead pane ends the wait, and until() then raises start-refused at once."""
+        wait(self.recording_or_dead, self.left(), 2)
+        if pc.dig(self.status(), "s4_mode") != "recording":
+            self.until("Recording in chat mode", why)
 
     def recording_or_dead(self):
         return pc.dig(self.status(), "s4_mode") == "recording" or self.pane_exit()[0]
@@ -398,7 +403,7 @@ class Run:
 
     def paste(self, _):
         self.need("goalcup")
-        self.until("Recording in chat mode", "no 'Recording in chat mode' after the approval")
+        self.recording_seen("no 'Recording in chat mode' after the approval")
         self.daemon_check()
         return self.type_prompt()
 
