@@ -67,7 +67,7 @@ Every record is `kind` (one byte), `len` (a varint) and then `len` bytes of body
   first part file) and `next_link` the `seq` the next LINK will have.
 - DATA holds masked bytes at stream offset `off`. `flags` bit 0 (`FLAG_FIN`) marks the end of a
   WebSocket message; bits 4 to 7 hold its opcode (1 text, 2 binary, 8 close, 9 ping, 10 pong).
-  Both are 0 outside WebSocket streams. Bits 1 to 3 are 0.
+  Every other bit, and all bits outside WebSocket streams, are 0.
 - END `reason`: 1 `complete`, 2 `interrupted`, 3 `decode_error`, 4 `cut_at_seal`, 5
   `source_changed`. `seen` is the stream offset just past the last source byte seen, written or
   lost. For a `conn` stream it is 0; its tail holds bytes each way (`up`, `down`).
@@ -178,16 +178,18 @@ covered  = every raw byte after LINK n-1 (or from the start of the entry) up to 
 
 To recompute: start SHA-256 with the 9 bytes `GCR1-LINK` and the previous hash, feed every raw byte
 after the previous LINK, then the LINK's bytes except its last 32, and compare with those 32. The
-recorder chooses when to link; the writer flushes the compressor at every LINK and then writes the
-index line.
+writer links about every second while dirty, every 16 MiB of raw records and with each COUNT (every
+60 s), flushes the compressor at every LINK and then writes the index line.
 
 ## The seal and events
 
-EVENT JSON always has `ev`: `start` (once per boot, with `mask_rules`), `prev_boot`, `launch`,
-`exit`, `count`, `clock`, `suspend`, `note` (with `what`) and `seal`. A sealed entry ends with what
-was still open (`cut_at_seal` gaps and ends), an `after_stop` GAP if needed, the last COUNT, the
-`seal` event, a LINK and the frame end. A `recovered` seal (a dead entry closed later) is the `seal`
-event inside the recovery frame (see Recovery). Nothing follows the seal's LINK.
+EVENT JSON always has `ev`: `start` (once per boot, with `mask_rules`), `prev_boot`, `count`,
+`clock`, `suspend`, `note` (with `what`) and `seal` (`reason`, `exit`, `harness`, `workspace_head`,
+`dirty`, `boots`, `totals`). A sealed entry ends with what was still open (`cut_at_seal` gaps and
+ends), an `after_stop` GAP if needed, the last COUNT, the `seal` event, a LINK and the frame end.
+A `recovered` seal (a dead entry closed later) is the `seal` event inside the recovery frame (see
+Recovery). The `seal` event also carries `server_reason` when the server gave one. Nothing follows
+the seal's LINK.
 
 ## Compression, chunks and crash recovery
 
@@ -237,8 +239,7 @@ event inside the recovery frame (see Recovery). Nothing follows the seal's LINK.
 and a link: 998 raw bytes, 10 records. `crates/goalcup-format/tests/golden.rs` checks it. The file
 is raw and `goalcup-verify` reads only zstd input, so its dump (`worked-example.dump.jsonl`, below)
 is `goalcup-verify dump --text` on a zstd copy (`zstd -c worked-example.gcr > rec-0.gcr.zst`). Its
-`conn` meta has no `kind`: the example predates that key and is kept as is, which also shows that
-readers ignore a missing optional key.
+`conn` meta predates the `kind` key; readers ignore a missing optional key.
 
 ```json
 {"o":0,"k":"part","entry":"e0123456789abcdef","boot":0,"part":0,"raw_offset":0,"wall":"2026-11-07T00:00:00Z","mono":5000000000,"next_link":0}
@@ -387,16 +388,13 @@ its meta):
   tunnel is no loss. A GAP on a decrypted listed connection is `named`. A `tls_refused` connection
   to a listed host whose host and fingerprint earlier ended a decrypted connection `complete` is
   `warn`, unless a GAP on it says `alert: false`; a `long_tunnel` note for an unlisted host is
-  `warn`. Facts: `listed_conns`, `decrypted`, `sign_in`, `tunnels_named` (per reason), `tunnels_unnamed`,
-  `conn_gaps`, `long_tunnel_unlisted`, `refusal_after_trust`.
+  `warn`.
 - `conn_bytes`: per decrypted connection and direction, the plain bytes in its END tail
   (`plain_up`, `plain_down`) against what its streams account for. Over 1 MiB unaccounted is `warn`
   when over a tenth of the plain bytes, `fail` when over half and the connection has no GAP; else
   `skip` when nothing was judged or a connection ended without both counts (a `warn` or `fail` from
-  another connection stands). Facts: `checked`, `warn`, `fail`, `unaccounted_bytes`,
-  `no_plain_tail`.
-- `mask_failclosed`: `warn` for a stream with over 1 MiB of `fail_closed` MASK bytes. Facts:
-  `streams`, `bytes`.
+  another connection stands).
+- `mask_failclosed`: `warn` for a stream with over 1 MiB of `fail_closed` MASK bytes.
 
 **Legs checks** (`legs.rs`): the recorded wire calls against the harness's own log, read from its
 `native_form`, threads and `children`; they name no harness.
@@ -404,13 +402,12 @@ its meta):
 - `wire_keeps_up`: a model call the harness's own log shows that never reached the wire (a lost
   model call), or a harness that kept calling over 10 minutes after the wire's last call. It
   compares call times, so it is `skip` ("no per-call times") when `harness_log` is `totals`;
-  only `threads_match` compares then. Facts: `harness`, `wire_ok`, `excess`, `from`, `to`,
-  `wire_above`.
+  only `threads_match` compares then.
 - `threads_match`: a thread with more calls in the harness log than ok calls on the wire (wire
   calls above the harness count are no finding; a log that gives only a total per session is
-  compared by that total). Facts: `threads`, `bad`.
+  compared by that total).
 - `subagents_present`: a subagent the harness's parentage names that has no wire calls and no
-  native stream. Facts: `children`, `missing`.
+  native stream.
 
 A comparison allows the larger of 3 calls and 2% before it counts, with the wire given 2 minutes
 to catch up. A thread or entry with harness calls and no wire call, or a harness that kept calling

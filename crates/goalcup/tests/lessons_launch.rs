@@ -8,8 +8,8 @@
 //! foreground group, exactly as under a participant's shell. The test types on the master and reads
 //! what the helper and the harness print. Every wait is a read with a deadline.
 //!
-//! Left out until the watchdog loop is on the branch: SC3 (nothing is written to the terminal while
-//! the harness runs). Linux only.
+//! SC3 runs the real `watchdog::run_with` in the helper (recorder: this crate's binary, server off)
+//! around a harness that prints a line, waits and prints another. Linux only.
 #![cfg(target_os = "linux")]
 
 use goalcup::watchdog::shield::{Modes, Shield, wait_resuming};
@@ -145,8 +145,86 @@ fn launch_helper() {
             say_masks("given");
             say("watchdog alive");
         }
+        "watchdog" => {
+            say("WATCHDOG-START");
+            let end = watchdog_world();
+            say(&format!("END-OF-RUN {end:?}"));
+        }
         other => panic!("unknown role {other}"),
     }
+}
+
+/// One real watchdog run over a throwaway entry folder; the harness prints, waits, prints.
+fn watchdog_world() -> std::process::ExitCode {
+    use goalcup::connector::{
+        ConnectorRef, HomeLock, HostList, LaunchPlan, NativeSources, builtin,
+    };
+    use goalcup::watchdog::{CaPem, StartFacts, run_with};
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let home = tmp.path().join("g");
+    let (run, entry_id) = ("r0123456789abcdef", "e0123456789abcdef");
+    let entry = goalcup::cli::entry_dir(&home, run, entry_id);
+    std::fs::create_dir_all(entry.join("rec")).unwrap();
+    let hosts = HostList::from_file(builtin::HOSTS.as_bytes(), "model-hosts.toml").unwrap();
+    let connector = ConnectorRef {
+        id: "fake".into(),
+        name: "Fake".into(),
+        sha256: "0".repeat(64),
+        source: Default::default(),
+    };
+    let facts = StartFacts {
+        run: run.into(),
+        entry: entry_id.into(),
+        segment: 0,
+        entry_dir: entry.clone(),
+        deadline: None,
+        server_time: None,
+        local_wall: 0,
+        workspace: entry.clone(),
+        connector: serde_json::to_value(&connector).unwrap(),
+        harness_version: None,
+        keep: true,
+        build: None,
+        hosts: serde_json::to_value(&hosts).unwrap(),
+        hosts_sha256: hosts.sha256().to_string(),
+        native: serde_json::to_value(NativeSources::default()).unwrap(),
+        mask_rules: serde_json::json!([]),
+        values: serde_json::json!([]),
+        ca: CaPem {
+            cert: String::new(),
+            key: String::new(),
+        },
+        prev: None,
+        harness: None,
+        null_since: None,
+        notes: Vec::new(),
+    };
+    let plan = LaunchPlan {
+        connector,
+        harness_version: None,
+        program: "/bin/sh".into(),
+        argv: vec![
+            "-c".into(),
+            "echo harness-one; sleep 2; echo harness-two".into(),
+        ],
+        env: harness_env(),
+        home: entry.join("home"),
+        lock: HomeLock::default(),
+        before: vec![],
+        after: vec![],
+        ca_env: vec![],
+        hosts,
+        native: NativeSources::default(),
+        mask_rules: vec![],
+        secret_values: vec![],
+        notes: vec![],
+        unread: vec![],
+        log: vec![],
+        refusal: None,
+    };
+    // SAFETY: the helper is a single-purpose process; nothing else reads the environment yet.
+    unsafe { std::env::set_var("GOALCUP_SERVER", "off") };
+    run_with(plan, facts, Path::new(env!("CARGO_BIN_EXE_goalcup")))
 }
 
 // ---- the test side ----
@@ -330,12 +408,9 @@ fn modes_restored_after_a_raw_exit() {
 /// P3: ^C goes to the whole foreground group. The harness was started with the terminal's signals
 /// at their defaults and dies of `SIGINT`; the shielded watchdog catches it and carries on.
 ///
-/// Held back from the run, not weakened: the case fails about 1 run in 9 under load because the
-/// shield (PRD-02, `watchdog/shield.rs`) gives INT back at `harness_exited` while a process-directed
-/// ^C can still be pending on another thread, and the watchdog then dies of SIGINT during wrap-up.
-/// L-P3 stays open until PRD-02 closes that window; then remove the `ignore`.
+/// P3 proves INT, QUIT and TSTP are caught while the shield is held, given back at harness exit,
+/// HUP is kept until wrap-up ends, and the watchdog is still alive afterwards.
 #[test]
-#[ignore = "L-P3: waits on the PRD-02 shield fix (pending SIGINT after harness_exited)"]
 fn ctrl_c_reaches_the_harness_and_the_watchdog_lives() {
     let pty = pty();
     let helper = run_helper("ctrl_c", &pty);
@@ -405,4 +480,25 @@ fn ctrl_c_reaches_the_harness_and_the_watchdog_lives() {
             "signal {signal} is ignored: {mask}\n{text}"
         );
     }
+}
+
+/// SC3: from the start of the watchdog to the harness's exit the terminal carries only what the
+/// harness wrote (no status line, no log line); the end-of-run text, here the helper's, comes after.
+#[test]
+fn nothing_is_written_to_the_terminal_while_the_harness_runs() {
+    let pty = pty();
+    let helper = run_helper("watchdog", &pty);
+    let text = finish(helper, pty);
+    let (_, text) = text
+        .split_once("WATCHDOG-START")
+        .expect("the helper started");
+    let (during, after) = text
+        .split_once("END-OF-RUN")
+        .unwrap_or_else(|| panic!("no end-of-run text:\n{text}"));
+    assert_eq!(
+        during.replace('\r', "").trim_start(),
+        "harness-one\nharness-two\n",
+        "something besides the harness wrote to the terminal"
+    );
+    assert!(!after.trim().is_empty(), "the end-of-run text is missing");
 }

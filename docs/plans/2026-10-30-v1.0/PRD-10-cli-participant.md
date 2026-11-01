@@ -1543,3 +1543,48 @@ What the pad calls, as merged (PRD-12 note):
 - Still gated, unchanged: hand-over and end screen, `continue`, recover and seal on a dead entry wait for
   `watchdog::run`, `watchdog::recover` and `pipeline::close_dead_entry` on integration.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-31, fix pass on the start hand-over slice
+
+- **Seam ask to PRD-02:** a ready hook in `watchdog::run` (called after the recorder's `ready`, before
+  the harness starts), so `start` can print the "Recording" line in order instead of from a polling
+  thread, and install its Ctrl-C handler at the same point.
+- **SIGTERM to `goalcup start` is not translated into a seal.** The watchdog process has no SIGTERM
+  handler in PRD-10 or PRD-02; `goalcup seal` closes the part and writes its own reason.
+- **Exit 78 is a masking refusal only with no `status.json`.** A harness that exits 78 leaves a
+  recorded part and goes through the end screen.
+- **Still open (slice 10):** `continue` (`close_dead_entry`), `recover` and `seal` on a dead entry
+  (acceptance 10 and 11) wait for `watchdog::recover` and `pipeline::close_dead_entry`. This slice
+  delivers the start hand-over and the end screen only; it does not close PRD-10.
+
+### 2026-10-31, replan after PRD-10 slice 9 (merge 25102adc)
+
+- Merged: the start hand-over to `watchdog::run` and the finish handling (end screen, exit 78 as a recorded
+  part, no SIGTERM translation). Review ended with no open defect and four nits. Not a gate item: **A6** and
+  **A7** are worth taking, **B8** and **B9** are cosmetic.
+- **A6 (take in slice 10, in `finish.rs`):** `status.json` is written just before the recorder sends `ready`.
+  A recorder that dies in that gap gives `NOT_STARTED` (3) with an unsealed `status.json` and no harness, and
+  `closing()` picks the "could not read the final counts" text. Rule: exit code `NOT_STARTED` with an unsealed
+  `status.json` whose `harness` is none uses the "Goal Cup could not start recording, so <harness> was not
+  started" text (step 9). Do not decide this on the file being absent alone.
+- **A7 (tests only):** in the `cli_start.rs` timer, kill only on `Err(RecvTimeoutError::Timeout)`. A
+  disconnected channel means the child already ended; killing then risks a reused pid.
+- B8 (three plain lets in `hand_over`) and B9 (merge the exit-7 and exit-78 hand-over tests) only when the file
+  is touched anyway.
+- **Slice 10 is still the gated half:** `continue`, `recover` and `seal` on a dead entry (acceptance 10 and 11)
+  need `watchdog::recover` and `pipeline::close_dead_entry`. `watchdog::run` is on integration; the other two
+  are not (PRD-06 owns `close_dead_entry` via `dead.rs`). Builders poll for the symbols, as before; a builder
+  whose symbols never arrive logs a stop line and the work is replanned again. No locked ledger item is touched.
+
+### 2026-10-31, replan after PRD-10 slice 10 (merge b5cc8617)
+
+- Merged: **A6** (start-failure text for `NOT_STARTED` with an unsealed `status.json` and no harness) and **A7**
+  (timer kills only on `RecvTimeoutError::Timeout`). Review ended with no open defect. B2 (two bool parameters
+  on `closing()`) is declined and accepted. B3 (`closing()` and `never_ran` both touch `status.json`) is a
+  cosmetic nit; take it only if `finish.rs` is touched anyway.
+- **Slice 11 is still the gated half:** `continue`, `recover` and `seal` on a dead entry (acceptance 10 and 11).
+  The slice-10 builder polled 90 minutes and `pipeline::close_dead_entry` and `watchdog::recover` never reached
+  integration, so nothing of this half is built or reviewed. Same rule: poll for the symbols; if they are
+  absent, log a stop line and replan again. The half needs its own review when it lands. Net-negative in
+  `text.rs` before adding lines still holds.
+- No seam change. No locked ledger item is touched.

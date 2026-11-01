@@ -113,8 +113,24 @@ fn secrets_masked_glued_spaced_and_big_spans() {
         (0, [0, 0, 1, 0].map(Some), &json!("warn"))
     );
     assert_eq!(v["glued_shape"][0]["kind"], "openai_key");
-    let (code, got, _) = lens("spaced", &[format!("x {shape}").into()], &[]);
-    assert_eq!((code, got), (2, [0, 1, 0, 0].map(Some)));
+    for glue in ["very", "mailto:A"] {
+        let (code, got, _) = lens("prose", &[format!("{glue}{shape}-end").into()], &[]);
+        assert_eq!((code, got), (0, [0, 0, 1, 0].map(Some)), "{glue}");
+    }
+    // Where the masker's left guard still masks, the key is a shape hit, not glued.
+    let before = [
+        " ",
+        "\\n",
+        "%0A",
+        "\u{1b}[0m",
+        "\\u001B[1;31m",
+        "\\x1B[0m",
+        "\\u00e9",
+    ];
+    for b in before {
+        let (code, got, _) = lens("spaced", &[format!("x{b}{shape}").into()], &[]);
+        assert_eq!((code, got), (2, [0, 1, 0, 0].map(Some)), "{b:?}");
+    }
     let halves = [[0, 10240, 2], [10240, 10240, 2]];
     let (code, got, v) = lens("closed", &[stars(10240), stars(10240)], &halves);
     assert_eq!((code, got), (0, [Some(0); 4]));
@@ -211,4 +227,65 @@ fn secrets_nothing_is_joined_across_a_gap() {
         let got = [&v["known_hits"], &v["shape_hits"]].map(|l| l.as_array().map(Vec::len));
         assert_eq!((code, got), (want, [Some(0), Some(shapes)]), "{v}");
     }
+}
+
+#[test]
+fn secrets_placeholders_are_no_hit_and_real_bodies_are() {
+    let (head, tail) = (
+        "-----BEGIN RSA PRIVATE KEY-----",
+        "-----END RSA PRIVATE KEY-----",
+    );
+    let (real, pw) = (
+        "MIIEowIBAAKCAQEAu1SU1LfVLPHCozMxH2Mo4lgOEePz",
+        "Qm7xK2pL9vZt",
+    );
+    let delta = |p: &str| format!("data: {}\n\n", json!({"type": "x.delta", "delta": p}));
+    let pem = |body: &str, nl: &str| format!("{head}{nl}{body}{nl}{tail}");
+    let cases: Vec<(String, usize)> = vec![
+        ("https://user:[REDACTED]@host/".into(), 0),
+        (
+            "https://user:****@host/ https://user:<redacted>@host/ :[HIDDEN]@".into(),
+            0,
+        ),
+        (format!("https://user:{pw}@host/"), 1),
+        (pem("[REDACTED]", "\n"), 0),
+        (pem("[REDACTED]", "\\n"), 0),
+        (pem(real, "\n"), 1),
+        (pem(&format!("[REDACTED]{real}"), "\n"), 1),
+        (r#""password": "[REDACTED]******""#.into(), 0),
+        (format!(r#""password": "{real}""#), 1),
+    ];
+    for (i, (text, hits)) in cases.into_iter().enumerate() {
+        let (code, got, _) = lens(&format!("ph{i}"), &[text.into_bytes()], &[]);
+        assert_eq!((code, got[1]), (2 * hits as i32, Some(hits)), "case {i}");
+    }
+    // Split across SSE deltas the joined deltas are judged, so a placeholder is no hit there. The
+    // raw stream still holds the SSE framing between the markers, which is no placeholder text:
+    // that one `private_key` hit stays a fail (strict on purpose), and only it.
+    // (exit, private_key hits on the joined deltas, on the raw stream).
+    let sse = |name: &str, a: String, b: String| {
+        let (code, v) = scan(
+            &[&entry(
+                name,
+                true,
+                &[delta(&a).into(), delta(&b).into()],
+                &[],
+            )],
+            b"",
+        );
+        let hits = v["shape_hits"].as_array().unwrap();
+        let on = |d: bool| {
+            let n = hits
+                .iter()
+                .filter(|h| h["in"].as_str().unwrap().ends_with("/deltas") == d);
+            n.count()
+        };
+        assert!(hits.iter().all(|h| h["kind"] == "private_key"), "{v}");
+        (code, on(true), on(false))
+    };
+    let (a, b) = (format!("{head}\n[RED"), format!("ACTED]\n{tail}"));
+    assert_eq!(sse("ph-sse", a, b), (2, 0, 1));
+    let (x, y) = real.split_at(20);
+    let (a, b) = (format!("{head}\n{x}"), format!("{y}\n{tail}"));
+    assert_eq!(sse("ph-sse-real", a, b), (2, 1, 1));
 }
