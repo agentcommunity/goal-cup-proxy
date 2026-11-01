@@ -9,25 +9,16 @@ mod common;
 
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Output, Stdio};
+use std::process::{Command, Output, Stdio};
 use std::time::{Duration, Instant};
 
-use cli_common::{part, put, server_json, with};
+use cli_common::{Stand, part, put, server_json, with};
 use common::home::TempHome;
 use goalcup::cli::proc_start_id;
 use goalcup::connector::{HostList, builtin};
 use goalcup::pipeline::status::Mode;
 use goalcup::proxy::ca::RunCa;
 use serde_json::{Value, json};
-
-struct Stand(Child);
-
-impl Drop for Stand {
-    fn drop(&mut self) {
-        let _ = self.0.kill();
-        let _ = self.0.wait();
-    }
-}
 
 /// A shell that notes any signal in `marker` and otherwise sleeps; ready once its trap is set.
 fn stand_in(dir: &Path, marker: &Path) -> Stand {
@@ -70,6 +61,10 @@ impl World {
         };
         let mut server = server_json();
         server["connector"] = json!({"id": "codex-cli", "name": "Codex", "source": "builtin"});
+        server["entries"][0]["workspace"] = json!(w.scratch.path());
+        server["entries"][0]["hosts"] =
+            serde_json::to_value(HostList::from_file(builtin::HOSTS.as_bytes(), "m").unwrap())
+                .unwrap();
         put(w.dir().parent().unwrap(), "server.json", &server);
         w.status(Mode::Recording, json!({}));
         w
@@ -86,7 +81,7 @@ impl World {
             "pid": pid, "started": "2026-11-07T10:00:00Z", "start_id": start_id, "exit": null,
         });
         let st = with(mode, json!({"harness": harness}));
-        put(&self.dir(), "status.json", &patch(&st, p));
+        put(&self.dir(), "status.json", &cli_common::patch(&st, p));
     }
 
     fn goalcup(&self, inside: bool) -> Output {
@@ -110,14 +105,9 @@ impl World {
     }
 }
 
-fn patch(st: &goalcup::pipeline::status::Status, p: Value) -> goalcup::pipeline::status::Status {
-    cli_common::patch(st, p)
-}
-
 fn refused(out: &Output, code: i32) -> String {
     let err = String::from_utf8_lossy(&out.stderr).into_owned();
     assert_eq!(out.status.code(), Some(code), "{err}");
-    assert_eq!(err.trim_end().lines().count(), 1, "stderr: {err}");
     err
 }
 

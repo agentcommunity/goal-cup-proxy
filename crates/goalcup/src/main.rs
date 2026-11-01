@@ -192,7 +192,6 @@ fn run(command: Command) -> ExitCode {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::{Args, Command, NULL_FLAG, RECORDER_SUBCOMMAND};

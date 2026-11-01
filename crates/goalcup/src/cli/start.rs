@@ -265,6 +265,7 @@ pub fn prepare(a: &Args, c: &Ctx, out: &mut dyn std::io::Write) -> Result<Ready,
         repo: a.repo,
         github_api: approve::GITHUB_API,
         hosts_file: hosts_file.as_deref(),
+        hosts: &plan.hosts,
         machine: serde_json::json!({
             "os": std::env::consts::OS,
             "cpus": std::thread::available_parallelism().map_or(0, |n| n.get()),
@@ -431,7 +432,7 @@ fn tier_line(name: &str, probed: Option<&str>, id: &str) -> String {
     text::tier_line(name, version, &row.tier, &row.version)
 }
 
-fn wall_ms() -> u64 {
+pub(super) fn wall_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |d| d.as_millis() as u64)

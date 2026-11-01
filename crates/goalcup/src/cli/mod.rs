@@ -229,6 +229,14 @@ pub struct EntryFacts {
     pub harness_version: Option<String>,
     /// Whether `continue` resumed the harness's session.
     pub resumed: bool,
+    /// The folder the part ran in (not secret). `goalcup recover` reads the workspace's mask
+    /// values from it. None in a file an older goalcup wrote.
+    #[serde(default)]
+    pub workspace: Option<PathBuf>,
+    /// The host lists the part started with (not secret), so a recovered recorder records the
+    /// same hosts. None in a file an older goalcup wrote.
+    #[serde(default)]
+    pub hosts: Option<crate::connector::HostList>,
 }
 
 /// A JSON file read into `T`; None when it is missing or does not parse.

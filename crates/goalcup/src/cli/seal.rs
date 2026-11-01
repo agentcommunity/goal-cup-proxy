@@ -63,7 +63,7 @@ pub fn run(part: Option<String>, yes: bool) -> ExitCode {
         .as_ref()
         .is_some_and(|h| h.exit.is_none() && alive(h.pid, h.start_id));
     let Some((pid, start_id, signal)) = target else {
-        return seal_dead(&dir, &found.run, name, harness_ran);
+        return seal_dead(&found, name, harness_ran);
     };
     // Only the watchdog ends the harness; the recorder alone, on SIGTERM, does not.
     let watchdog_ends_it = signal == libc::SIGUSR1;
@@ -104,15 +104,20 @@ pub fn run(part: Option<String>, yes: bool) -> ExitCode {
     }
 }
 
-/// A dead entry: close it with seal reason `recovered`, then the end screen as after a live seal.
-/// A harness still running is not signalled.
-fn seal_dead(dir: &std::path::Path, run: &str, name: &str, harness_ran: bool) -> ExitCode {
-    match crate::pipeline::close_dead_entry(dir) {
+/// A dead entry: close it with seal reason `recovered`, send it (as `goalcup upload` does), then
+/// the end screen as after a live seal. A harness still running is not signalled.
+fn seal_dead(found: &super::Found, name: &str, harness_ran: bool) -> ExitCode {
+    let (dir, run) = (found.entry_dir(), found.run.as_str());
+    match crate::pipeline::close_dead_entry(&dir) {
         Err(_) => return fail(&text::seal_still_recording(run)),
         Ok(crate::pipeline::Closed::AlreadySealed) => return fail(&text::seal_already(run)),
         Ok(crate::pipeline::Closed::Failed(_)) => return broke(&text::seal_could_not()),
         Ok(crate::pipeline::Closed::Sealed(_)) => {}
     }
+    // What the server does not hold stays on disk and `goalcup upload` sends it later.
+    let keep = super::var("GOALCUP_KEEP_PARTS").is_some_and(|v| v == "1");
+    let _ = crate::upload::manual::run(&dir, &found.run_dir, (run, &found.entry), keep);
+    let dir = dir.as_path();
     match super::finish::end_screen(dir) {
         Ok(screen) => {
             if harness_ran {

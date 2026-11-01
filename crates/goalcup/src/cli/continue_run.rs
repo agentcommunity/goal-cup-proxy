@@ -26,44 +26,8 @@ use crate::pipeline::{Closed, Mono, close_dead_entry};
 use crate::upload::client::{ServerClient, ServerError, Token};
 use crate::watchdog::Exit;
 
-const NOT_STARTED_HERE: &str = "this run was not started on this computer (or its saved \
-    approval is gone), so it cannot be continued here.";
-const STILL_RECORDING: &str = "This part is still recording. To end it, run: goalcup seal";
-const TIME_UP: &str = "The run's time is up, so it cannot be continued. Nothing was started.";
-const ELSEWHERE: &str = "The server says the last part of this run is not the one on this \
-    computer, so the run was continued somewhere else. Nothing was started.";
 /// A harness that exits this fast with a non-zero code after a resume did not take the session.
 const QUICK_EXIT_SECS: u64 = 30;
-
-fn harness_running(name: &str) -> String {
-    format!(
-        "{name} from the last part is still running. To record it again, run: goalcup recover. \
-         To start a new part instead, end {name} first."
-    )
-}
-
-fn not_closed(run: &str, entry: &str, kind: std::io::ErrorKind) -> String {
-    format!(
-        "goalcup could not close part {entry} of run {run} ({kind}), so nothing was started. Write \
-         to {}, naming run {run}.",
-        text::SUPPORT_ADDRESS
-    )
-}
-
-fn file_changed(what: &str, first: &str) -> String {
-    format!(
-        "This run's first part used {first} as its {what}, and every part must use the same one. \
-         Give that file again, or none if the first part used none."
-    )
-}
-
-fn updated(name: &str, from: &str, to: &str) -> String {
-    format!("{name} was updated from {from} to {to} since the last part.")
-}
-
-fn refused(said: &str) -> String {
-    format!("The server did not continue the run: {said}. Nothing was started.")
-}
 
 pub struct Args<'a> {
     pub run: Option<&'a str>,
@@ -96,48 +60,26 @@ pub fn run(a: &Args) -> ExitCode {
     }
 }
 
-/// What one earlier part tells the resume rule.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct Earlier {
-    /// Model requests plus session files its sealed `status.json` counts as written.
-    pub written: u64,
-    /// Whether `continue` resumed the harness's session for it.
-    pub resumed: bool,
-    /// Its harness exited with a non-zero code within 30 s of starting.
-    pub quick_failure: bool,
-}
-
-/// Resume when the earlier parts wrote at least one model request or session file, unless the
-/// last part was itself a resume that failed at once (D73): then open a new session.
-pub fn resume(earlier: &[Earlier]) -> bool {
-    let failed = earlier.last().is_some_and(|p| p.resumed && p.quick_failure);
-    !failed && earlier.iter().map(|p| p.written).sum::<u64>() > 0
-}
-
-/// [`resume`] over the run's parts as their files say; a part with no sealed `status.json`
-/// counts nothing.
+/// Whether to resume the harness's session: the earlier parts wrote at least one model request
+/// or session file in their sealed `status.json`, unless the last part was itself a resume whose
+/// harness exited non-zero within 30 s (D73). A part with no sealed `status.json` counts nothing.
 pub fn resume_from_files(run_dir: &Path, entries: &[EntryFacts]) -> bool {
-    let parts: Vec<Earlier> = entries
-        .iter()
-        .map(|e| {
-            let st = read_json::<Status>(&status_json(&run_dir.join(&e.id)))
-                .filter(|s| s.mode == Mode::Sealed);
-            let seconds = |t: &str| super::unix_of(t);
-            let quick = st.as_ref().and_then(|s| {
-                let h = s.harness.as_ref()?;
-                let ran = seconds(&s.updated)?.saturating_sub(seconds(&h.started)?);
-                Some(matches!(h.exit, Some(Exit::Code(n)) if n != 0) && ran <= QUICK_EXIT_SECS)
-            });
-            Earlier {
-                written: st.as_ref().map_or(0, |s| {
-                    s.written.model_requests + s.written.counts.native_files
-                }),
-                resumed: e.resumed,
-                quick_failure: quick.unwrap_or(false),
-            }
-        })
-        .collect();
-    resume(&parts)
+    let (mut written, mut failed) = (0, false);
+    for e in entries {
+        let st = read_json::<Status>(&status_json(&run_dir.join(&e.id)))
+            .filter(|s| s.mode == Mode::Sealed);
+        let seconds = |t: &str| super::unix_of(t);
+        let quick = st.as_ref().and_then(|s| {
+            let h = s.harness.as_ref()?;
+            let ran = seconds(&s.updated)?.saturating_sub(seconds(&h.started)?);
+            Some(matches!(h.exit, Some(Exit::Code(n)) if n != 0) && ran <= QUICK_EXIT_SECS)
+        });
+        written += st.as_ref().map_or(0, |s| {
+            s.written.model_requests + s.written.counts.native_files
+        });
+        failed = e.resumed && quick.unwrap_or(false);
+    }
+    !failed && written > 0
 }
 
 fn refuse(text: impl Into<String>) -> Stop {
@@ -154,7 +96,7 @@ fn same_file(what: &str, given: Option<&Path>, first: Option<&str>) -> Result<()
     match (given, first) {
         (None, None) => Ok(()),
         (Some(g), Some(f)) if g.to_string_lossy() == f => Ok(()),
-        (_, first) => Err(refuse(file_changed(
+        (_, first) => Err(refuse(text::file_changed(
             what,
             &first.map_or("none".to_owned(), |f| format!("\"{f}\"")),
         ))),
@@ -178,13 +120,13 @@ pub fn prepare(
         )
     })?;
     let (Some(sj), Some(last)) = (found.server.clone(), found.entries.last().cloned()) else {
-        return Err(refuse(NOT_STARTED_HERE));
+        return Err(refuse(text::NOT_STARTED_HERE));
     };
     let base = sj.server.clone();
     let secret = match &base {
         Some(_) => match std::fs::read_to_string(credential(&found.run_dir)) {
             Ok(s) if !s.trim().is_empty() => Some(s.trim().to_owned()),
-            _ => return Err(refuse(NOT_STARTED_HERE)),
+            _ => return Err(refuse(text::NOT_STARTED_HERE)),
         },
         None => None,
     };
@@ -201,7 +143,7 @@ pub fn prepare(
         .map_or_else(|| sj.connector.id.clone(), |_| sj.connector.source.clone());
     let connector = connector::load(&id, a.hosts).map_err(|e| refuse(e.to_string()))?;
     if connector.id != sj.connector.id {
-        return Err(refuse(file_changed("connector file", &sj.connector.source)));
+        return Err(refuse(text::file_changed("connector file", &sj.connector.source)));
     }
     let name = sj.connector.name.clone();
 
@@ -209,28 +151,30 @@ pub fn prepare(
     let dir = entry_dir(home, &found.run, &last);
     let st = read_json::<Status>(&status_json(&dir));
     let mut lines = vec![text::run_kind(sj.mode).to_owned()];
-    if st.as_ref().is_none_or(|s| s.mode != Mode::Sealed) {
+    let sealed = st.as_ref().is_some_and(|s| s.mode == Mode::Sealed);
+    if !sealed {
         let recording =
             watchdog_alive(&dir) || st.as_ref().is_some_and(|s| alive(s.pid, s.start_id));
         if recording {
-            return Err(refuse(STILL_RECORDING));
+            return Err(refuse(text::STILL_RECORDING));
         }
-        let running = st
-            .as_ref()
-            .and_then(|s| s.harness.as_ref())
-            .is_some_and(|h| alive(h.pid, h.start_id));
-        if running {
-            return Err(refuse(harness_running(&name)));
-        }
-        if dir.is_dir() {
-            match close_dead_entry(&dir) {
-                Err(_) => return Err(refuse(STILL_RECORDING)),
-                Ok(Closed::Failed(kind)) => {
-                    return Err(refuse(not_closed(&found.run, &last, kind)));
-                }
-                Ok(Closed::Sealed(_)) => lines.push(text::RECOVERED.to_owned()),
-                Ok(Closed::AlreadySealed) => {}
+    }
+    // A harness left running by `goalcup seal` (no recorder, no home lock) still owns its home.
+    let running = st
+        .as_ref()
+        .and_then(|s| s.harness.as_ref())
+        .is_some_and(|h| h.exit.is_none() && alive(h.pid, h.start_id));
+    if running {
+        return Err(refuse(text::harness_running(&name, sealed)));
+    }
+    if !sealed && dir.is_dir() {
+        match close_dead_entry(&dir) {
+            Err(_) => return Err(refuse(text::STILL_RECORDING)),
+            Ok(Closed::Failed(kind)) => {
+                return Err(refuse(text::not_closed(&found.run, &last, kind)));
             }
+            Ok(Closed::Sealed(_)) => lines.push(text::RECOVERED.to_owned()),
+            Ok(Closed::AlreadySealed) => {}
         }
     }
 
@@ -266,15 +210,15 @@ pub fn prepare(
             let client = ServerClient::new(base, Some(Token::new(secret)));
             let path = format!("/v1/runs/{}/continue", found.run);
             let got: Next = approve::send(&client, &path, &body, true).map_err(|e| match e {
-                ServerError::Status { status: 410, .. } => refuse(TIME_UP),
-                ServerError::Status { status: 409, .. } => refuse(ELSEWHERE),
+                ServerError::Status { status: 410, .. } => refuse(text::TIME_UP),
+                ServerError::Status { status: 409, .. } => refuse(text::ELSEWHERE),
                 ServerError::Status {
                     status,
                     code,
                     message,
                     ..
                 } if status < 500 => {
-                    refuse(refused(if message.is_empty() { &code } else { &message }))
+                    refuse(text::refused(if message.is_empty() { &code } else { &message }))
                 }
                 e => Stop {
                     text: format!("{} Nothing was started.", text::server_unreachable(&e)),
@@ -302,6 +246,8 @@ pub fn prepare(
         id: entry.clone(),
         harness_version: plan.harness_version.clone(),
         resumed,
+        workspace: Some(project.to_path_buf()),
+        hosts: Some(plan.hosts.clone()),
     });
     let bytes = serde_json::to_vec(&next).unwrap_or_default();
     let path = server_json(&found.run_dir);
@@ -331,7 +277,7 @@ pub fn prepare(
         plan.harness_version.as_deref(),
     );
     if let (Some(a), Some(b)) = (before, now) {
-        lines.extend((a != b).then(|| updated(&name, a, b)));
+        lines.extend((a != b).then(|| text::updated(&name, a, b)));
     }
     lines.extend(connector.first_screen.clone());
     lines.extend(first_message(&found.run_dir, resumed, vars));

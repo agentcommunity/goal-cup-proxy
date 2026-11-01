@@ -60,6 +60,8 @@ pub struct Ask<'a> {
     pub repo: Option<&'a str>,
     pub github_api: &'a str,
     pub hosts_file: Option<&'a Path>,
+    /// The host lists in force; kept in `server.json` for `goalcup recover`.
+    pub hosts: &'a crate::connector::HostList,
     /// A flat object of machine facts (`os`, `cpus`, `ac_power`).
     pub machine: Value,
 }
@@ -195,6 +197,8 @@ fn server_record(
             id: entry.to_owned(),
             harness_version: ask.harness_version.map(str::to_owned),
             resumed: false,
+            workspace: Some(ask.workspace.to_path_buf()),
+            hosts: Some(ask.hosts.clone()),
         }],
     }
 }
