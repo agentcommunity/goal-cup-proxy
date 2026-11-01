@@ -940,7 +940,7 @@ class PinnedModel(unittest.TestCase):
     def test_c5_follows_the_pin(self):
         bad = self.row("claude-haiku-5-5", ["claude-opus-5-5"])
         self.assertEqual(bad["checks"]["C5"], "FAIL")
-        self.assertEqual(bad["pinned_model"], "claude-haiku-5-5")
+        self.assertEqual(bad["facts"]["pinned_model"], "claude-haiku-5-5")
         self.assertEqual(self.row("claude-haiku-5-5", ["claude-haiku-5-5"])["checks"]["C5"], "PASS")
         self.assertEqual(self.row("anthropic/claude-haiku-5.5", ["claude-haiku-5.5"], "gateway")["checks"]["C5"], "PASS")
         self.assertEqual(self.row(" claude-haiku-5-5 ", ["anthropic/claude-haiku-5-5"])["checks"]["C5"], "PASS")
