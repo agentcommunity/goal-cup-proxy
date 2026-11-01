@@ -503,7 +503,7 @@ class StatedLoss(unittest.TestCase):
         gaps = {"s6_gaps": {"memory_guard": 1}}
         for shapes, code in (([], 1), ([self.DELTAS], 2)):
             row = self.plain_row(shapes, code, gaps["s6_gaps"])
-            self.assertEqual(row["checks"]["C1"], "FAIL", (shapes, code))
+            self.assertEqual(row["checks"]["C1"], "FAIL", (shapes, code, row["why"]))
 
     def test_any_other_hit_still_fails(self):
         for known, shapes in (([self.KNOWN], [self.DELTAS]), ([], [self.PLAIN]), ([], [self.DELTAS, self.PLAIN]),

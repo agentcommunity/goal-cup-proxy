@@ -23,7 +23,8 @@ PAIR = ["kill-recorder@8", "kill-recorder@10"]
 
 def plan_for(harness_id, key, extra=None, **over):
     s = pad.load_settings(dict(harness=harness_id, key=key, mode="full", steps=list(PAIR), **over), PADCFG)
-    return pad.apply_kill_minutes(s, pad.read_toml(os.path.join(HERE, "harnesses", harness_id + ".toml")) if extra is None else extra)
+    pad.apply_kill_minutes(s, pad.read_toml(os.path.join(HERE, "harnesses", harness_id + ".toml")) if extra is None else extra)
+    return s
 
 
 def minutes(s):
