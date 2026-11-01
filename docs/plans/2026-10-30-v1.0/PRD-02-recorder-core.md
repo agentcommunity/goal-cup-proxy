@@ -1674,3 +1674,30 @@ The PRD-17 deletion gate (PRD-13) waits on tests that this PRD is asked to land 
 ### 2026-11-01, note from the PRD-17 slice 8 merge (822c5b77)
 
 - `pipeline_stall.rs` is the one file name the PRD-17 deletion gate (check 1, row L-R2) cannot resolve. It is the last gate-relevant item of slice C part 2; once merged, PRD-17 repoints the row and reruns the gate. If the case cannot be written without a test hook, say so in a replan note so L-R2 can rest on `pipeline_guard::two_hundred_streams_with_the_writer_held` and `lessons_pipeline::open_and_end_survive_a_full_guard` instead. No locked ledger item is touched.
+
+### 2026-11-01, from the PRD-02 `pipeline_stall.rs` fix round
+
+- **`pipeline_stall.rs` covers the stall exit only** (reviews A1, F1). The file is the 70 s half
+  of the "Automated tests" bullet: the real binary under `watchdog::run_with`, boot 0's writer held
+  with `GOALCUP_TEST_WRITER_STALL`, an exchange served while it is held (point 3), exit 75, one
+  `recorder_down` gap with cause `writer_stalled` whose span covers the held exchange unless its
+  bytes are in DATA (no drop without a GAP), and an exchange through the next boot on the same
+  port in the record, decrypted. The bullet is cut to that. The rest of it is guarded elsewhere,
+  in process, by the one-guard reduction: the held writer under the guard with many streams, every
+  hole a `memory_guard` GAP and COUNT equal to a recount in
+  `pipeline_guard::two_hundred_streams_with_the_writer_held`; OPEN and END admitted past a full
+  guard in `lessons_pipeline::open_and_end_survive_a_full_guard`; the heartbeat saying `failed`
+  once `writer_idle_ms` passed 60 s in PRD-06's `upload_beat`; reconnection to the same port across
+  a recorder exit in `watchdog_restart.rs`. PRD-17 repoints L-R2 to `pipeline_stall.rs` together
+  with the two `pipeline_guard` and `lessons_pipeline` cases, not to this file alone. The 20-client,
+  one-WebSocket, 64 MiB, 50 s half is not written; if it is, `held_peak` reads against the BRK9-N2
+  bound above, and the status line reads `losing` or `writer_slow`, since `mode()` puts
+  `writer_slow` ahead of `losing` once `writer_idle_ms` is 10 s or more (review F5).
+- **Timing:** the hold now starts 5 s after boot 0's start (was 2 s), and the test fails with a
+  named cause if boot 0's first LINK comes later than that (review A2). A driver that panics still
+  writes the stop file, so a regression fails on its assert, not on the nextest kill (A3, F3).
+- **Ask of PRD-14** (A4, F4): `.config/nextest.toml` says `pipeline_stall` joins the `heavy` group
+  and the end-to-end slow-timeout in the merge that brings it. This merge brings it and PRD-02
+  cannot edit that file. The test takes about 70 s of wall clock against the 180 s terminate
+  limit; please add it to `heavy` with the other end-to-end binaries.
+- No locked ledger item is touched.
