@@ -1508,3 +1508,7 @@ the HARNESS-ONBOARDING pointer; `docs/README.md` is deleted and `CONTRACTS`, `TE
   paragraph are re-wrapped. The four earlier queued nits were cleared by this slice.
 - Still open: the HARNESS-SETUP move stays blocked by the hermes sheet link (a PRD-11 file). No seam
   change; no locked ledger item is touched.
+
+### 2026-11-01, note from the PRD-16 post-cut slice (merge dacbc61b)
+
+- **Ask:** the OWN-5 rewording of the 0.x provenance comments in code (mask/rules.rs:5, mask/stream.rs:4, mask/values.rs:5, proxy/ca.rs:18-19 and the others PRD-13's grep lists) is not done and PRD-13 stays open on it. Include it in the docs sweep, comments only, no behaviour change. No locked ledger item is touched.

@@ -931,3 +931,7 @@ is cited.
 - Gaps found above and routed: the start-time filter (PRD-02, row 9), the WSL browser opener (PRD-10, row 11), the safe output file rule
   (PRD-08 and PRD-09, row 14), the unread `usage_fixtures` (PRD-09, row 13), and the Claude Code and
   Amp first-screen answers (PRD-11, row 16).
+
+### 2026-11-01, note from the PRD-16 post-cut slice (merge dacbc61b)
+
+- Closed by the slice: workspace `Cargo.toml` cleanup, selftest exit 0, heavy group, owners' "copied, tests green" lines. Still open: OWN-5, the 0.x provenance comments (mask/rules.rs:5, mask/stream.rs:4, mask/values.rs:5, proxy/ca.rs:18-19 and others) are not reworded; PRD-15's docs sweep owns it. Row 9 (subreaper start-time filter) is routed to PRD-02, not copied. PRD-13 closes when both are done. No locked ledger item is touched.

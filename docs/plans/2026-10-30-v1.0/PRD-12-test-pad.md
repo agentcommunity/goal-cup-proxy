@@ -2012,3 +2012,7 @@ taken; "rejected" says why. Fixes for other files are made by those files' owner
 ### 2026-11-01, replan after full-row fixes (merge 98f8f71d)
 
 - Per-harness `kill_minutes` (Codex 3 and 5) and the C3 stated-loss rule are in; check.py `other_named` now covers every named check, so the C1 exit rule holds when any check is named. Open nit R6: `other_named` is computed per row but read only when the loss is stated; one combined condition would do. Earlier nits stand. The C3 owner question stays open. No locked ledger item is touched.
+
+### 2026-11-01, note from the PRD-16 post-cut slice (merge dacbc61b)
+
+- `scripts/pad/selftest` now exits 0 (every control as wanted) after the k7 and k11-d fixture swap by the post-cut lane under integrator.log 09:57Z; please confirm the swap. The earlier note that the pad ends at selftest exit 3 is superseded for the pad's own controls; Crush and Cline rows remain "not verified" where the harness file says so. The generator is PRD-08's to adopt (see its note). No locked ledger item is touched.

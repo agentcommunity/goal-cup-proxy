@@ -1701,3 +1701,8 @@ The PRD-17 deletion gate (PRD-13) waits on tests that this PRD is asked to land 
   cannot edit that file. The test takes about 70 s of wall clock against the 180 s terminate
   limit; please add it to `heavy` with the other end-to-end binaries.
 - No locked ledger item is touched.
+
+### 2026-11-01, note from the PRD-16 post-cut slice (merge dacbc61b)
+
+- **Ask:** `pipeline_guard::two_hundred_streams_with_the_writer_held` still fails "hang: still running after 30s" under 8 CPU burners (2 of 3 standalone runs; every `data()` call returned and all streams were in a GAP, so it is the test bound, not a recorder stop). `wait_settled`'s `within(HANG)` in `tests/common/recorder.rs` starts before the 25 s writer hold and must also cover the drain: shorten the hold or give settle its own bound after the hold ends. `pipeline_guard` is now in the heavy group, which lowers load inside the gate but does not fix a loaded box. L-R2 rests on this test.
+- **Ask:** the old subreaper's start-time filter is not in the code (PRD-13-cuts row 9). Re-add it where the outlived-process scan needs it, or say in a replan note why it is not needed. No locked ledger item is touched.

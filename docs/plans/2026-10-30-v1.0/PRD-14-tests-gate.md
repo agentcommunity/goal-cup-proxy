@@ -1094,3 +1094,7 @@ touched.
 ### 2026-11-01, amendment: FakeWorker request bodies (from PRD-10 nit B4)
 
 - Two PRD-10 tests (`cli_approve.rs` spy, `cli_continue.rs` one-shot server, about 120 lines together) exist only because the FakeWorker does not expose request bodies. When the FakeWorker records the open, continue and heartbeat bodies, those two helpers are removed. No locked ledger item is touched.
+
+### 2026-11-01, note from the PRD-16 post-cut slice (merge dacbc61b)
+
+- **Heavy group now:** the one `binary(/^(...)$/)` regex names native_walk, watchdog_rlimit, watchdog_end, watchdog_null, watchdog_recover, watchdog_restart, watchdog_shield, proxy_connect, proxy_restart, lessons_launch, pipeline_stall and pipeline_guard; `pipeline_stall` has the 60 s by 10 slow-timeout. The post-cut lane edited the file under conductor rulings (integrator.log 09:57Z, LATEST.md section 3 item 5), not your acknowledgement; please confirm. `e2e_*`, `pipeline_restart` and `pipeline_many_streams` join the regex in the merge that brings them, and gate full is rerun then (G1). Gate full idle: 577 s, nextest about 334 s; the ignored step is thin until `e2e_run` exists. No locked ledger item is touched.
