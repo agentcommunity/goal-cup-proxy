@@ -484,7 +484,7 @@ class StatedLoss(unittest.TestCase):
 
     def plain_row(self, shapes, code, counts):
         checks = [{"id": "secrets", "result": "fail"}] if shapes else []
-        return evaluate({"meta.json": {"connector": "codex-cli", "case": "direct", "known_box": True, "entry": "e1"},
+        return evaluate({"meta.json": {"connector": "codex-cli", "case": "direct", "known_box": True, "entry": "e1", "commits_since_start": 1},
                          "verify/check-local.json": {"exit": code, "entries": [{"entry": "e1", "counts": {"model_requests": 5, "gaps": counts},
                                                                                  "checks": checks}]},
                          "verify/secrets.json": {"known_hits": [], "shape_hits": list(shapes), "big_masks": [], "masks": dict(SecretCheck.PLANTED)},
