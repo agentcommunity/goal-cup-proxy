@@ -1040,7 +1040,9 @@ pub fn seal_already(run: &str) -> String {
 }
 
 pub fn seal_still_recording(run: &str) -> String {
-    format!("This part is still recording, so it cannot be sealed this way. See: goalcup status {run}")
+    format!(
+        "This part is still recording, so it cannot be sealed this way. See: goalcup status {run}"
+    )
 }
 
 pub fn seal_dead_harness_left(name: &str) -> String {
