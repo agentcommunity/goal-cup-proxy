@@ -1508,3 +1508,15 @@ is left is data and docs only. Four items, in order:
 ### 2026-11-01, expected hosts as built
 
 - The `long_tunnel` note is kept, not skipped (record raw): it carries `expected: true` when `HostList::is_expected` holds for the CONNECT host. `status` prints an info line for expected ones and a problem line only for unflagged ones. Open for PRD-02 (`pipeline/status.rs`, `Board::note`): key the first note per `(what, expected)` so an expected note never hides an unflagged one; this slice does not touch that file. The `wire_version` 64-unit cut (OWN-6) is in `cli/approve.rs` with its edge tests. The verifier adds the fact `long_tunnel_expected` and drops the `listed_hosts_decrypted` warning for flagged hosts; it trusts the recorder's flag, since `start` does not carry the expected list.
+
+### 2026-11-01, owner answer: Hermes keeps state.db capture
+
+The owner answered on 1 November that Hermes keeps the `state` native row (point 2). The leak risk from bare keys in `state.db` is covered by PRD-05 exact-value masking (sources 1 to 3).
+
+The earlier plan to drop the row is abandoned, not merged: branch `v1.0/prd-11-connectors` with its drop commits, and the 1 November note about the search index. Nothing from that branch is reused.
+
+The `state.db` drop is parked until a separate Hermes subagent reader exists (the PRD-09 delegation manifest reader replacing the `HermesDb` read of parents and children in goalcup-verify). Only then can the row be revisited, and only by a new owner decision.
+
+On integration, `connectors/hermes-cli.toml` and the native row are unchanged. The comment above `secret_files` and the section 5 statement of `docs/harnesses/hermes-cli.md` are the only changes of this slice. The open items A1 and R1 from the drop review are void because the drop is not made.
+
+No locked ledger item is touched and no owner question comes from this slice.
