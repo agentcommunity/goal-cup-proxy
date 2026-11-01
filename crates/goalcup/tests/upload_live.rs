@@ -101,11 +101,7 @@ fn live_rounds_follow_the_durable_point() {
         })
         .collect();
     assert!(!want.is_empty());
-    assert_eq!(
-        fake.stream(&id),
-        want,
-        "the parts up to the durable point"
-    );
+    assert_eq!(fake.stream(&id), want, "the parts up to the durable point");
     assert!(
         fake.chunks().iter().all(|c| c.offset < durable),
         "no chunk starts at or past the durable point"

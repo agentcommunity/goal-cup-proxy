@@ -14,8 +14,8 @@ use common::recorder::{entry_dir, real, wait_settled};
 use common::records::{BOOT_ID, ENTRY, at};
 use common::worker::{CREDENTIAL, FakeWorker, Inject, RUN_ID, Route};
 use goalcup::cli;
-use goalcup::pipeline::{EndReason, OpenFlags, Status, StreamKind};
 use goalcup::pipeline::status::{Mode, SealStatus};
+use goalcup::pipeline::{EndReason, OpenFlags, Status, StreamKind};
 use goalcup::upload::manual::{Outcome, run};
 use goalcup::upload::state::{self, Final};
 use goalcup::watchdog::SealReason;
@@ -286,7 +286,11 @@ fn a_dead_entry_whose_watchdog_lives_is_left_alone() {
     let (entry, _) = entry(dir.path(), &fake, DEADLINE, false);
     let pid = std::process::id();
     let start_id = cli::proc_start_id(pid).unwrap();
-    fs::write(entry.join("rec/watchdog.pid"), format!("{pid} {start_id}\n")).unwrap();
+    fs::write(
+        entry.join("rec/watchdog.pid"),
+        format!("{pid} {start_id}\n"),
+    )
+    .unwrap();
     assert!(cli::watchdog_alive(&entry));
     let (before, status) = (parts(&entry), fs::read(cli::status_json(&entry)).unwrap());
     assert_eq!(upload(dir.path(), &entry, false), Outcome::StillRecording);
