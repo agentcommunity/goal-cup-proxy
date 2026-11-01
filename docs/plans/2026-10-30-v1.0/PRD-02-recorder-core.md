@@ -1643,3 +1643,7 @@ to PRD-06 slice 7 once `dead.rs` is on integration. No locked ledger item is tou
 ### 2026-11-01, from PRD-17 slice 6 (merge c9b87ac5)
 
 - The shield fix is on integration and the L-P3 ctrl-c case now runs in the box and passes. PRD-02 still owes `watchdog_restart.rs`: C12 (the proxy listens on `127.0.0.1` after a restart), P1 (unchanged port and a connection served during the restart) and P2 (a decrypted connection after a real kill verifies against `run-ca.pem`). `LESSONS.md` rows L-C12, L-P1, L-P2 name this file and stay open until it exists. Also unasserted: the 60 s drain and 180 s native bound (L-P15 names the `after_stop` half only). No locked ledger item is touched.
+
+### 2026-11-01, note from PRD-17 slice 7 (merge 888cd0b1)
+
+The PRD-17 deletion gate (PRD-13) waits on tests that this PRD is asked to land and are not yet on integration: watchdog_restart.rs (L-C12, L-P1, L-P2: an unchanged port and a decrypted connection served across a real recorder kill, verifying against run-ca.pem, no 127.0.0.1 assertion) and pipeline_stall.rs (L-R2: two hundred streams with the writer held, stall without loss). Their LESSONS.md rows stay open until the named tests exist and pass in a box. The names are those in LESSONS.md; if a different name fits better, say so in a replan note so the row can be repointed. No locked ledger item is touched.

@@ -2471,3 +2471,8 @@ kept and now cites BUILD-PROMPT section 5, since B3 no longer carries it.
 
 - **Size report, PRD-12** (`wc -l` on integration): rig code under `scripts/pad/` (pad 750, pad-run 1,075, check.py 762, table 193, selftest 188, sbx.mjs 133, exec/ scripts included) is 3197 lines; tests (`test_pad.py`) 631. Against the PRD-00 row of about 1,350 to 1,450 with its tests that is about 2.6 times. The slice itself added little (RIG-5/6/7 plus tests). Overage on an owner estimate is reported, not cut; carry to the end-of-build report with the PRD-03, PRD-08, PRD-10 and PRD-17 overages.
 - **Gate effect:** none. The one review finding left (B1, nit: split the long dead-pane test into shorter methods) is taste only and changes no behaviour or plan. No locked ledger item is touched.
+
+### 2026-11-01, replan after PRD-17 slice 7 (merge 888cd0b1)
+
+- **Size report, PRD-17** (wc -l on integration): the eight lessons_*.rs files total 4,345 (connect 510, decode 547, hosts 181, http1 978, launch 504, pipeline 104, tls 412, ws 1,109) against the PRD-00 row shared with PRD-14 of about 3,000, 45% over, unchanged by slice 7 (docs only). Past the 10% line, already accepted in the PRD-17 notes; no further growth. The build-wide 14,200 count stays the owner question.
+- **Gate effect:** the PRD-13 deletion gate (check 1) is not yet passable: four guard names (seven rows) are still not on the tree, two for PRD-02 and two for PRD-10. The conductor should treat landing watchdog_restart.rs, pipeline_stall.rs, cli_continue.rs and the second-start case as gate blockers, not nice-to-haves, and rerun the check 1 dry run after they merge. 117 of 160 rows are green. No locked ledger item is touched.
