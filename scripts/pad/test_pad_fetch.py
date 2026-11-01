@@ -57,11 +57,9 @@ class Fetch(unittest.TestCase):
         self.fetch_exit, self.fail_at = 1, "exec"
         with tempfile.TemporaryDirectory() as out, mock.patch.dict(os.environ, SECRETS, clear=False), mock.patch.object(pad, "call", self.fake):
             r = self.run_for(out)
-            self.fail_at = None
-            self.fail_at = "exec"
             res, saw = r.step_cleanup()
         self.assertIn("rec not kept: wipe did not finish", saw)
-        self.assertNotIn("rec-kept", [a[2] for a, _ in self.sbx() if a[0] == "get"])
+        self.assertFalse([a for a, _ in self.sbx() if a[0] == "get" and "rec-kept" in a[2]])
 
     def run_for(self, out, **env):
         s = pad.load_settings(dict(BASE, mode="cycle"), PADCFG)
