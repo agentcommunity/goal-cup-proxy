@@ -1,10 +1,11 @@
-//! PRD-02 section 3, the "Writer stall" row (PRD-17 L-R2): the real recorder under
-//! `watchdog::run_with`, a `sh` harness waiting on a stop file, and a recorder wrapper that holds
-//! boot 0's writer with `GOALCUP_TEST_WRITER_STALL` (boot 0 only: the hook is read on every boot).
-//! A decrypted exchange is served while the writer is held (point 3), its records wait, and after
-//! 60 s with no write the recorder exits 75. The watchdog starts the next boot on the same port,
-//! which writes one `recorder_down` gap with cause `writer_stalled` and serves and records the
-//! next exchange. Linux only.
+//! PRD-02 section 3, the "Writer stall" row (PRD-17 L-R2, with the in-process cases named in the
+//! PRD-02 amendment of this file): the real recorder under `watchdog::run_with`, a `sh` harness
+//! waiting on a stop file, and a recorder wrapper that holds boot 0's writer with
+//! `GOALCUP_TEST_WRITER_STALL` (boot 0 only: the hook is read on every boot). A decrypted
+//! exchange is served while the writer is held (point 3), its records wait, and after 60 s with
+//! no write the recorder exits 75. The watchdog starts the next boot on the same port, which
+//! writes one `recorder_down` gap with cause `writer_stalled` over the lost span (the held
+//! exchange inside it) and serves and records the next exchange. Linux only.
 #![cfg(target_os = "linux")]
 
 mod common;
@@ -12,128 +13,66 @@ mod common;
 mod watchdog_share;
 
 use common::pki::HTTP11;
-use common::recorder::records;
 use common::upstream::{Script, Upstream};
 use goalcup::cli;
-use goalcup::connector::{ConnectorRef, HomeLock, HostList, LaunchPlan, NativeSources, builtin};
+use goalcup::pipeline::Mono;
 use goalcup::watchdog;
-use goalcup_format::{GapReason, Record};
 use serde_json::{Value, json};
-use std::collections::BTreeMap;
-use std::os::unix::fs::PermissionsExt;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::Duration;
-use watchdog_share::{ENTRY, RUN, connect_tls, exchange, facts, loopback_only, until};
+use watchdog_share::{
+    Setup, StopOnDrop, connect_tls, down_gaps_and_data, exchange, has, script, setup_with,
+    tls_upstream, until,
+};
 
-/// When boot 0's writer is held, after its start: past its first LINK.
-const HOLD_FROM_MS: u64 = 2_000;
+/// When boot 0's writer is held, after its start: well past its first LINK (one tick, 1 s),
+/// with room for a loaded box.
+const HOLD_FROM_MS: u64 = 5_000;
 
 #[test]
 fn a_stalled_writer_exits_75_and_the_next_boot_names_it() {
-    let script = Script::ok(b"stall-answer").with_tls(&["api.openai.com"], &[HTTP11]);
-    let up = Upstream::start(script);
-    let tmp = tempfile::tempdir().unwrap();
-    let d = tmp.path().join("m");
-    std::fs::create_dir_all(&d).unwrap();
-    // SAFETY: nextest runs each test in its own process; the upstream's thread reads no env.
-    unsafe {
-        std::env::set_var("GOALCUP_SERVER", "off");
-        std::env::set_var(
-            "GOALCUP_TEST_UPSTREAM",
-            format!("api.openai.com={}", up.addr()),
-        );
-        std::env::set_var("GOALCUP_TEST_EXTRA_ROOTS", up.pki().roots_file(&d));
-    }
-    let home = tmp.path().join("g");
-    let entry_dir = cli::entry_dir(&home, RUN, ENTRY);
-    std::fs::create_dir_all(&entry_dir).unwrap();
-    let server = json!({"v": 1, "server": null, "run": RUN, "mode": "practice", "deadline": null,
-        "repo": null, "connector": {"id": "fake", "name": "Fake", "source": "builtin"},
-        "hosts_file": null, "entries": [{"id": ENTRY, "harness_version": null, "resumed": false}]});
-    std::fs::write(
-        cli::server_json(&cli::run_dir(&home, RUN)),
-        server.to_string(),
-    )
-    .unwrap();
-
+    let up = Upstream::start(Script::ok(b"stall-answer").with_tls(&["api.openai.com"], &[HTTP11]));
     // The first recorder process holds its writer past the 60 s stall exit; later ones do not.
-    let (dd, exe) = (d.display(), env!("CARGO_BIN_EXE_goalcup"));
-    let wrapper = d.join("recorder.sh");
-    let text = format!(
-        "#!/bin/sh\nn=$(( $(cat {dd}/boots 2>/dev/null || echo 0) + 1 )); echo $n > {dd}/boots\n\
-         if [ $n = 1 ]; then export GOALCUP_TEST_WRITER_STALL={HOLD_FROM_MS}:75000; fi\n\
-         exec \"{exe}\" \"$@\"\n"
-    );
-    std::fs::write(&wrapper, text).unwrap();
-    std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o755)).unwrap();
-
-    let hosts = HostList::from_file(builtin::HOSTS.as_bytes(), "model-hosts.toml").unwrap();
-    let connector = ConnectorRef {
-        id: "fake".into(),
-        name: "Fake".into(),
-        sha256: "0".repeat(64),
-        source: Default::default(),
-    };
-    let harness = format!("while [ ! -e {dd}/stop ]; do sleep 0.05; done");
-    let facts = facts(&entry_dir, &d, &hosts, json!({"cert": "", "key": ""}));
-    let plan = LaunchPlan {
-        connector,
-        harness_version: None,
-        program: PathBuf::from("/bin/sh"),
-        argv: vec!["-c".into(), harness],
-        env: BTreeMap::from([("PATH".into(), "/usr/bin:/bin".into())]),
-        home: d.join("home"),
-        lock: HomeLock::default(),
-        before: Vec::new(),
-        after: Vec::new(),
-        ca_env: Vec::new(),
-        hosts,
-        native: NativeSources::default(),
-        mask_rules: Vec::new(),
-        secret_values: Vec::new(),
-        notes: Vec::new(),
-        unread: Vec::new(),
-        log: Vec::new(),
-        refusal: None,
-    };
+    let Setup {
+        _tmp,
+        d,
+        entry_dir,
+        plan,
+        recorder,
+        facts,
+    } = setup_with(|d| {
+        let body = format!(
+            "if [ $n = 1 ]; then export GOALCUP_TEST_WRITER_STALL={HOLD_FROM_MS}:75000; fi"
+        );
+        script(d, "recorder.sh", &body)
+    });
+    tls_upstream(&up, &d);
 
     let (dir, m) = (entry_dir.clone(), d.clone());
     let driver = std::thread::spawn(move || drive(&dir, &m));
-    let _ = watchdog::run_with(plan, facts, &wrapper);
-    driver.join().unwrap();
+    let _ = watchdog::run_with(plan, facts, &recorder);
+    let posted = driver.join().unwrap();
     drop(up);
 
     let st = until("the sealed status.json", || {
         cli::read_json::<Value>(&cli::status_json(&entry_dir)).filter(|s| !s["seal"].is_null())
     });
     assert_eq!(st["seal"]["reason"], "harness_exit", "{st}");
-    let (mut down, mut data) = (Vec::new(), Vec::new());
-    for r in records(&entry_dir) {
-        match r {
-            Record::Gap {
-                reason: GapReason::RecorderDown,
-                start_mono,
-                end_mono,
-                tail,
-                ..
-            } => down.push((
-                start_mono,
-                end_mono,
-                serde_json::from_slice::<Value>(&tail).unwrap(),
-            )),
-            Record::Data { bytes, .. } => data.extend(bytes),
-            _ => {}
-        }
-    }
+    let (down, data) = down_gaps_and_data(&entry_dir);
     // One gap over the dead span, naming the stall exit; no null mode.
     assert_eq!(down.len(), 1, "{down:?}");
-    assert!(down[0].0 < down[0].1, "{down:?}");
-    assert_eq!(down[0].2["cause"], "writer_stalled", "{down:?}");
-    assert_eq!(down[0].2["prev"], json!({"code": 75}), "{down:?}");
+    let (start, end, tail) = &down[0];
+    assert_eq!(tail["cause"], "writer_stalled", "{down:?}");
+    assert_eq!(tail["prev"], json!({"code": 75}), "{down:?}");
+    // No drop without a GAP: the exchange served while the writer was held is in DATA, or the
+    // gap starts at or before it (the last durable point of boot 0) and ends after it.
+    if !has(&data, b"stall-request-1") {
+        assert!(*start <= posted && posted < *end, "{down:?}, posted at {posted}");
+    }
     // The exchange through the next boot is in the record, decrypted.
     for want in [&b"stall-request-2"[..], b"stall-answer"] {
         assert!(
-            data.windows(want.len()).any(|w| w == want),
+            has(&data, want),
             "{:?} not recorded",
             String::from_utf8_lossy(want)
         );
@@ -159,8 +98,10 @@ fn post(dir: &Path, port: u16, body: &[u8]) {
 }
 
 /// Talks through boot 0 while its writer is held, waits for the next boot on the same port,
-/// talks through it, and stops the harness.
-fn drive(dir: &Path, m: &Path) {
+/// talks through it, and stops the harness (also when it panics). Returns the record-clock time
+/// just before the held exchange.
+fn drive(dir: &Path, m: &Path) -> u64 {
+    let _stop = StopOnDrop(m.to_path_buf());
     let status = || cli::read_json::<Value>(&cli::status_json(dir));
     let (first, port) = until("boot 0", || {
         let s = status()?;
@@ -169,15 +110,22 @@ fn drive(dir: &Path, m: &Path) {
             s["port"].as_u64()? as u16,
         ))
     });
-    loopback_only(port);
     // Boot 0 must write a LINK before the hold, or the next boot reuses its number.
     until("a link", || {
         std::fs::metadata(dir.join("counts.jsonl"))
             .ok()
             .filter(|f| f.len() > 0)
     });
+    // The wrapper's start is before the writer's, so this bounds the LINK's time after it.
+    let boot0 = boot_log_uptime(m);
+    let to_link = uptime() - boot0;
+    assert!(
+        to_link * 1000.0 < HOLD_FROM_MS as f64,
+        "boot 0's first LINK came {to_link} s after its start, past the hold: a loaded box"
+    );
     std::thread::sleep(Duration::from_millis(HOLD_FROM_MS + 500));
     // Point 3: the harness is served while the writer is stuck; its records now wait.
+    let posted = Mono::now().ns();
     post(dir, port, b"stall-request-1");
     until("records waiting", || {
         (status()?["writer_idle_ms"].as_u64()? > 0).then_some(())
@@ -188,7 +136,19 @@ fn drive(dir: &Path, m: &Path) {
         (s["boot"].as_u64()? >= 1 && s["pid"].as_u64()? != first).then_some(s)
     });
     assert_eq!(after["port"].as_u64(), Some(u64::from(port)), "{after}");
-    loopback_only(port);
     post(dir, port, b"stall-request-2");
-    std::fs::write(m.join("stop"), "").unwrap();
+    posted
+}
+
+/// Boot time now, in seconds (`/proc/uptime`, `CLOCK_BOOTTIME`).
+fn uptime() -> f64 {
+    let text = std::fs::read_to_string("/proc/uptime").unwrap();
+    text.split_whitespace().next().unwrap().parse().unwrap()
+}
+
+/// The boot time at which the wrapper started boot 0, from its `boot_log`.
+fn boot_log_uptime(m: &Path) -> f64 {
+    let log = std::fs::read_to_string(m.join("boot_log")).unwrap();
+    let first = log.lines().find(|l| l.starts_with("1 ")).unwrap();
+    first.split_whitespace().nth(1).unwrap().parse().unwrap()
 }

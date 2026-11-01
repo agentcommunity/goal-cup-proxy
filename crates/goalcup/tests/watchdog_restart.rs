@@ -11,22 +11,18 @@ mod common;
 mod watchdog_share;
 
 use common::pki::HTTP11;
-use common::recorder::records;
 use common::upstream::{Script, Upstream};
 use goalcup::cli;
-use goalcup::connector::{ConnectorRef, HomeLock, HostList, LaunchPlan, NativeSources, builtin};
 use goalcup::proxy::ca::RUN_CA_FILE;
 use goalcup::watchdog;
-use goalcup_format::{GapReason, Record};
 use serde_json::{Value, json};
-use std::collections::BTreeMap;
 use std::io::{Read, Write};
 use std::net::TcpStream;
-use std::os::unix::fs::PermissionsExt;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::Duration;
 use watchdog_share::{
-    CONNECT, ENTRY, RUN, connect_tls, exchange, facts, loopback_only, tls_over, until,
+    CONNECT, Setup, connect_tls, down_gaps_and_data, exchange, has, loopback_only, script,
+    setup_with, tls_over, tls_upstream, until,
 };
 
 #[test]
@@ -35,70 +31,24 @@ fn watchdog_restart_keeps_port_backlog_and_ca() {
     // Every answer waits, so the kill below meets a request in flight.
     script.hold_answer = Some(Duration::from_secs(2));
     let up = Upstream::start(script);
-    let tmp = tempfile::tempdir().unwrap();
-    let d = tmp.path().join("m");
-    std::fs::create_dir_all(&d).unwrap();
-    // SAFETY: nextest runs each test in its own process; the upstream's thread reads no env.
-    unsafe {
-        std::env::set_var("GOALCUP_SERVER", "off");
-        std::env::set_var(
-            "GOALCUP_TEST_UPSTREAM",
-            format!("api.openai.com={}", up.addr()),
-        );
-        std::env::set_var("GOALCUP_TEST_EXTRA_ROOTS", up.pki().roots_file(&d));
-    }
-    let home = tmp.path().join("g");
-    let entry_dir = cli::entry_dir(&home, RUN, ENTRY);
-    std::fs::create_dir_all(&entry_dir).unwrap();
-    let server = json!({"v": 1, "server": null, "run": RUN, "mode": "practice", "deadline": null,
-        "repo": null, "connector": {"id": "fake", "name": "Fake", "source": "builtin"},
-        "hosts_file": null, "entries": [{"id": ENTRY, "harness_version": null, "resumed": false}]});
-    let run_dir = cli::run_dir(&home, RUN);
-    std::fs::write(cli::server_json(&run_dir), server.to_string()).unwrap();
-
     // Boot 2 notes its start, waits 3 s, notes its exec: the restart window is known.
-    let (dd, exe) = (d.display(), env!("CARGO_BIN_EXE_goalcup"));
-    let wrapper = d.join("recorder.sh");
-    let text = format!(
-        "#!/bin/sh\nn=$(( $(cat {dd}/boots 2>/dev/null || echo 0) + 1 )); echo $n > {dd}/boots\n\
-         if [ $n = 2 ]; then : > {dd}/second; sleep 3; : > {dd}/second_exec; fi\nexec \"{exe}\" \"$@\"\n"
-    );
-    std::fs::write(&wrapper, text).unwrap();
-    std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o755)).unwrap();
-
-    let hosts = HostList::from_file(builtin::HOSTS.as_bytes(), "model-hosts.toml").unwrap();
-    let connector = ConnectorRef {
-        id: "fake".into(),
-        name: "Fake".into(),
-        sha256: "0".repeat(64),
-        source: Default::default(),
-    };
-    let harness = format!("while [ ! -e {dd}/stop ]; do sleep 0.05; done");
-    let facts = facts(&entry_dir, &d, &hosts, json!({"cert": "", "key": ""}));
-    let plan = LaunchPlan {
-        connector,
-        harness_version: None,
-        program: PathBuf::from("/bin/sh"),
-        argv: vec!["-c".into(), harness],
-        env: BTreeMap::from([("PATH".into(), "/usr/bin:/bin".into())]),
-        home: d.join("home"),
-        lock: HomeLock::default(),
-        before: Vec::new(),
-        after: Vec::new(),
-        ca_env: Vec::new(),
-        hosts,
-        native: NativeSources::default(),
-        mask_rules: Vec::new(),
-        secret_values: Vec::new(),
-        notes: Vec::new(),
-        unread: Vec::new(),
-        log: Vec::new(),
-        refusal: None,
-    };
+    let Setup {
+        _tmp,
+        d,
+        entry_dir,
+        plan,
+        recorder,
+        facts,
+    } = setup_with(|d| {
+        let dd = d.display();
+        let body = format!("if [ $n = 2 ]; then : > {dd}/second; sleep 3; : > {dd}/second_exec; fi");
+        script(d, "recorder.sh", &body)
+    });
+    tls_upstream(&up, &d);
 
     let (dir, m) = (entry_dir.clone(), d.clone());
     let driver = std::thread::spawn(move || drive(&dir, &m));
-    let _ = watchdog::run_with(plan, facts, &wrapper);
+    let _ = watchdog::run_with(plan, facts, &recorder);
     driver.join().unwrap();
     drop(up);
 
@@ -108,24 +58,7 @@ fn watchdog_restart_keeps_port_backlog_and_ca() {
     assert_eq!(st["seal"]["reason"], "harness_exit", "{st}");
     // Boot numbers are contiguous: one kill, so the sealed boot is 1.
     assert_eq!(st["boot"], 1, "{st}");
-    let (mut down, mut data) = (Vec::new(), Vec::new());
-    for r in records(&entry_dir) {
-        match r {
-            Record::Gap {
-                reason: GapReason::RecorderDown,
-                start_mono,
-                end_mono,
-                tail,
-                ..
-            } => down.push((
-                start_mono,
-                end_mono,
-                serde_json::from_slice::<Value>(&tail).unwrap(),
-            )),
-            Record::Data { bytes, .. } => data.extend(bytes),
-            _ => {}
-        }
-    }
+    let (down, data) = down_gaps_and_data(&entry_dir);
     // One gap over the dead span, naming the kill (`prev_boot` names the signal).
     assert_eq!(down.len(), 1, "{down:?}");
     assert!(down[0].0 < down[0].1, "{down:?}");
@@ -133,7 +66,7 @@ fn watchdog_restart_keeps_port_backlog_and_ca() {
     // L-P2: the request and the answer through the next boot are in the record, decrypted.
     for want in [&b"restart-p2-request"[..], b"restart-p2-answer"] {
         assert!(
-            data.windows(want.len()).any(|w| w == want),
+            has(&data, want),
             "{:?} not recorded",
             String::from_utf8_lossy(want)
         );
