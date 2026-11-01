@@ -96,9 +96,15 @@ fn counts_and_hosts_are_the_fixtures() {
         )),
         "{out}"
     );
-    assert!(!out.contains(&text::no_request_written("your agent", None)), "{out}");
+    assert!(
+        !out.contains(&text::no_request_written("your agent", None)),
+        "{out}"
+    );
     let none = show(json!({"written": {"model_requests": 0}}));
-    assert!(none.contains(&text::no_request_written("your agent", None)), "{none}");
+    assert!(
+        none.contains(&text::no_request_written("your agent", None)),
+        "{none}"
+    );
     let host = |c: char| format!("{c}.example.org");
     let mut tunnels: Map<String, Value> = ('a'..='g')
         .zip(1u64..)
