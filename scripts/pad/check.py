@@ -40,6 +40,7 @@ SECRET_HITS = ("hits", "known_hits", "shape_hits", "big_masks")
 # Google line is masked under the shell rule, row 11, which wins over `google_key`, row 13.
 PLANTED = (("openai_key",), ("github_token",), ("google_key", "generic_secret_assignment"), ("jwt",), ("private_key",),
            ("url_password",))
+GATED = PLANTED[:3]  # the three planted under names PRD-05's credential name gate admits (OPENAI_API_KEY, GITHUB_TOKEN, GOOGLE_API_KEY)
 # Section 3.1: the fault kinds, each with the minutes it lasts by default, and the kinds that take `+<minutes>`; pad and
 # pad-run read both from here.
 FAULTS = {"kill-recorder": 0, "kill-watchdog": 3, "kill-watchdog-recover": 2, "kill-both": 0, "freeze": 10,
@@ -245,10 +246,11 @@ class Run:
         return code == 2 and bool(self.stated_loss()) and set(self.failed) <= {"secrets"}
 
     def exact_values(self):
-        """The start event's mask_values (PRD-05 ValueCounts) as pad-run copies it into meta.json, or None. Exact values are on
-        when workspace is above 0."""
+        """The start event's mask_values (PRD-05 ValueCounts) as pad-run copies it into meta.json when workspace is above 0
+        (exact values on), else None."""
         mv = self.meta.get("mask_values")
-        return mv if isinstance(mv, dict) else None
+        n = mv.get("workspace") if isinstance(mv, dict) else None
+        return mv if type(n) is int and n > 0 else None
 
     def masks(self):
         """MASK spans by rule kind from the record scan, or None when the report has none."""
@@ -497,25 +499,26 @@ def secrets(r):
     up = r.meta.get("redacts_tool_output") is True
     loss = r.stated_loss()  # the only hit being the stated loss (scan() reports it) is not a real hit
     hit, plain, mv = 0 if loss else r.hits("secrets"), r.hits("secrets-plain"), r.exact_values()
-    n = (mv or {}).get("workspace")
-    exact = type(n) is int and n > 0
+    exact = mv is not None
     if exact and (mv.get("skipped") or 0) > 0:  # a stated cut: the planted value may be one of the skipped ones
         r.mark("C3", "INCONCLUSIVE", "exact values skipped %s; the planted value may be cut" % mv.get("skipped"))
     elif exact and plain:
         r.mark("C3", "FAIL", "planted .env value reached the record unmasked (%s plain hits)" % plain)
+    # Exercise proof: with exact values the run_secret MASK, else the plain-value hit (expected there, not a leak) or, for an
+    # upstream-redacting harness, the masked_key MASK. Planted-shape MASKs alone are not proof with exact values on.
     proof = masks.get("run_secret") if exact else plain
-    if exact and not proof and not plain:  # the run_secret MASK is the exercise proof; planted-shape MASKs alone are not
-        r.mark("C3", "INCONCLUSIVE", "secret exercise not done: no MASK of the planted .env value")
-    seen = masks.get("run_secret") if exact else masks.get("masked_key")
-    # clean: nothing reached the record, and the exercise shows in the MASK counts (hit 0, not None: no scan is no proof)
-    clean = up and hit == 0 and plain == 0 and not loss and bool(seen)
-    # With a hit or a stated loss the masked_key term lets the run reach the per-kind lines below.
-    if not proof and not any(masks.get(kinds[0]) for kinds in PLANTED) and not clean and not (up and masks.get("masked_key")):
-        return r.mark("C3", "INCONCLUSIVE", "secret exercise not done: no %s and no MASK of a planted shape"
-                      % ("MASK of the planted .env value" if exact else "plain-value hit"))
+    clean = up and hit == 0 and not loss and (plain == 0 or not exact) and bool(proof or (not exact and masks.get("masked_key")))
+
+    def covered(kinds):
+        # With exact values on, the planted names PRD-05's credential name gate admits (key or token in the name) are exact
+        # values, and an exact form is a block that absorbs the shape claims: the MASK is recorded as run_secret.
+        return any(masks.get(x) for x in kinds) or bool(exact and kinds in GATED and masks.get("run_secret"))
+    bare = [" or ".join(k) for k in PLANTED if not covered(k)]
+    if not (proof or clean or (not exact and any(covered(k) for k in PLANTED))):
+        return r.mark("C3", "INCONCLUSIVE", "secret exercise not done: no %s"
+                      % ("MASK of the planted .env value" if exact else "plain-value hit and no MASK of a planted shape"))
     # A planted kind with no MASK is a FAIL when a hit shows it reached the record, else not exercised (a run never passes on
     # a missing exercise). An upstream-redacting harness with exercise evidence and no hit passes: masked upstream.
-    bare = [" or ".join(k) for k in PLANTED if not any(masks.get(x) for x in k)]
     if bare and clean:
         r.mark("C3", "PASS", "masked upstream, before the wire: no MASK of %s" % ", ".join(bare))
         r.upstream_pass = True

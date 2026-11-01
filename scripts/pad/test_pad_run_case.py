@@ -189,18 +189,26 @@ class PaneBeforePaste(unittest.TestCase):
         self.assertEqual(order, ["pane", "paste"])
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class MaskValues(unittest.TestCase):
-    """The start event's mask_values reaches check.py: a dump event line (as goalcup-verify prints it) is read whole."""
+    """The start event's mask_values reaches check.py: the dump's event lines (as goalcup-verify prints them) are read up to the start."""
+
+    def read(self, lines):
+        proc = mock.MagicMock()
+        proc.__enter__.return_value = proc
+        proc.stdout = iter(lines)
+        r = bare()
+        r.run, r.left = ".", lambda: 5
+        with mock.patch.object(padrun.subprocess, "Popen", return_value=proc):
+            return r.mask_values("e")
 
     def test_start_event_line_is_read(self):
-        r = bare()
         mv = {"workspace": 3, "env": 0, "harness": 1, "skipped": 0}
-        r.dump_lines = lambda e, kind: [{"k": "event", "o": 9, "t": 1, "ev": "other"},
-                                        {"k": "event", "o": 10, "t": 2, "ev": "start", "mask_rules": ["auth"], "mask_values": mv}]
-        self.assertEqual(r.mask_values("e"), mv)
-        r.dump_lines = lambda e, kind: [{"k": "event", "ev": "start"}]
-        self.assertIsNone(r.mask_values("e"))
+        got = self.read(['{"k": "event", "o": 9, "ev": "other"}\n',
+                         '{"k": "event", "o": 10, "ev": "start", "mask_values": {"workspace": 3, "env": 0, "harness": 1, "skipped": 0}}\n',
+                         'not read'])
+        self.assertEqual(got, mv)
+        self.assertIsNone(self.read(['{"k": "event", "ev": "start"}\n']))
+
+
+if __name__ == "__main__":
+    unittest.main()

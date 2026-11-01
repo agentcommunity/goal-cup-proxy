@@ -559,6 +559,13 @@ class UpstreamRedaction(unittest.TestCase):
         self.assertEqual(self.c3(True, {}), "INCONCLUSIVE")
         self.assertEqual(self.c3(True, {"auth": 8}), "INCONCLUSIVE")
 
+    def test_a_plain_hit_with_exact_off_is_evidence_not_less(self):
+        files = {"meta.json": {"connector": "hermes-cli", "case": "direct", "known_box": True, "entry": "e1", "redacts_tool_output": True},
+                 "verify/secrets.json": {"masks": {"masked_key": 3}, "known_hits": [], "shape_hits": [], "big_masks": []},
+                 "verify/secrets-conductor.json": {"hits": 0},
+                 "verify/exits.json": {"secrets": 1, "secrets-out": 0, "secrets-plain": 2}}
+        self.assertEqual(evaluate(files)["checks"]["C3"], "PASS")
+
     def test_a_harness_without_the_flag_stays_open(self):  # control: same files
         self.assertEqual(self.c3(False, {"masked_key": 3}), "INCONCLUSIVE")
         self.assertEqual(self.c3(False, {}), "INCONCLUSIVE")
@@ -601,6 +608,12 @@ class SecretCheck(unittest.TestCase):
         self.assertEqual(self.exact({"auth": 8}), "INCONCLUSIVE")  # no run_secret, no plain hit, no planted MASK
         self.assertEqual(self.exact(self.PLANTED), "INCONCLUSIVE")  # planted-shape MASKs alone are not the exercise
         self.assertEqual(self.exact(dict(self.PLANTED, run_secret=2), plain_exit=2, skipped=1), "INCONCLUSIVE")  # a stated cut
+
+    def test_exact_values_on_with_the_real_masks_shape(self):
+        # Gate-named planted values are exact values: their MASK is run_secret, the shape rules get none of their own.
+        real = {"jwt": 1, "private_key": 1, "url_password": 1, "openai_key": 0, "github_token": 0, "google_key": 0, "run_secret": 4, "auth": 8}
+        self.assertEqual(self.exact(real), "PASS")
+        self.assertEqual(self.exact(dict(real, jwt=0)), "INCONCLUSIVE")  # a name the gate does not admit still needs its own MASK
 
     def test_exact_values_off_keeps_a_plain_hit_as_proof(self):
         self.assertEqual(self.exact(self.PLANTED, plain_exit=2, on=False), "PASS")

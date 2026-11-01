@@ -491,9 +491,24 @@ class Run:
         return [d for d in map(loads, r.stdout.splitlines()) if d.get("k") == kind]
 
     def mask_values(self, e):
-        """The start event's mask_values object (PRD-05), or None; a `dump --kind event` line carries the event's own keys."""
-        start = next((d for d in self.dump_lines(e, "event") if d.get("ev") == "start"), {})
-        return start["mask_values"] if isinstance(start.get("mask_values"), dict) else None
+        """The start event's mask_values object (PRD-05), or None; a `dump --kind event` line carries the event's own keys.
+        Reads only up to the first start event, which opens the record, then stops the dump."""
+        argv = ["nice", "-n", "19", tool("goalcup-verify"), "dump", "--kind", "event", e]
+        end = time.time() + max(1, self.left())
+        got = None
+        try:
+            with subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, cwd=self.run) as p:
+                for line in p.stdout:
+                    d = loads(line)
+                    if d.get("k") == "event" and d.get("ev") == "start":
+                        got = d.get("mask_values")
+                        break
+                    if time.time() > end:
+                        break
+                p.kill()
+        except OSError:
+            return None
+        return got if isinstance(got, dict) else None
 
     def look(self, _):
         """Section 4: the live line; a failed check, the `secrets` one included, is written for "first seen at T"."""
