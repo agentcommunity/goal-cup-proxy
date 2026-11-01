@@ -638,9 +638,7 @@ fn a_value_with_html_bytes_is_masked_in_html_safe_json() -> Res {
 fn the_start_line_with_32_long_values_fits() -> Res {
     use goalcup::connector::{self, Env, builtin};
     use goalcup::proxy::ca::RunCa;
-    use goalcup::watchdog::{
-        Cause, Exit, HarnessFacts, MAX_LINE, Prev, StartFacts, ToRecorder,
-    };
+    use goalcup::watchdog::{Cause, Exit, HarnessFacts, MAX_LINE, Prev, StartFacts, ToRecorder};
     use serde_json::to_value;
     use std::time::SystemTime;
 
@@ -653,7 +651,9 @@ fn the_start_line_with_32_long_values_fits() -> Res {
     let mut vars = BTreeMap::from([("PATH".to_string(), "/usr/bin:/bin".to_string())]);
     let mut fakes = Vec::new();
     for i in 0..40 {
-        let tail: String = (0..254).map(|j| if j % 2 == 0 { '"' } else { '\\' }).collect();
+        let tail: String = (0..254)
+            .map(|j| if j % 2 == 0 { '"' } else { '\\' })
+            .collect();
         let value = format!("{i:02}{tail}");
         vars.insert(format!("FAKE_{i:02}_API_KEY"), value.clone());
         fakes.push(value);
