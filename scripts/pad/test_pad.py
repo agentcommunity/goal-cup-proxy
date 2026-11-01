@@ -302,8 +302,9 @@ class CrashRows(unittest.TestCase):
 
     UP = ({"written": {"model_requests": 2}}, {"written": {"model_requests": 5}})  # status samples before and after
 
-    def row(self, kind, gap, samples=UP, recovery=(("ok", "10:03"),), seal="harness_exit", over_cap=False,
-            words=check.RECOVER, more=(), pid=9, code=1, case="direct", quiet=False, commits=1):
+    @staticmethod
+    def row(kind, gap, samples=UP, recovery=(("ok", "10:03"),), seal="harness_exit", over_cap=False,
+            words=check.RECOVER, more=(), pid=9, code=1, case="direct", quiet=False, commits=1, extra=None):
         told = [{"kind": k, "exit": 0, "said": w, "at": "2026-10-30T10:%s+00:00" % t}
                 for k, w, t in zip(("recover", "recover", "status"), words + (check.STATUS_RECOVER,), ("02:30", "04:00", "03:30"))]
         kills = [dict({"kind": k, "pid": pid, "at": "2026-10-30T10:02:00+00:00"}, **({"quiet": True} if quiet else {}))
@@ -321,6 +322,7 @@ class CrashRows(unittest.TestCase):
                                                       {"parent": "t0", "models": {"m": 2}, "wire_calls": 2}]},
                  "watch/status.jsonl": [{"at": "2026-10-30T10:0%d:00+00:00" % (4 * i), "status": x} for i, x in enumerate(samples)],
                  "watch/faults.jsonl": told + kills + rec + list(more)}
+        files.update(extra or {})
         return evaluate(files)
 
     GAP = {"start": "2026-10-30T10:01:59.9Z", "end": "2026-10-30T10:02:01.2Z"}  # the kill is at 10:02:00
@@ -464,6 +466,102 @@ class FaultRows(unittest.TestCase):
     def test_freeze_that_stopped_nothing_is_not_a_pass(self):
         for pids, want in ((3, "PASS"), (0, "INCONCLUSIVE")):
             self.assertEqual(self.row("freeze@2", [{"kind": "freeze", "pids": pids, "at": "02:00"}, {"kind": "thaw", "at": "12:00"}]), want)
+
+
+class StatedLoss(unittest.TestCase):
+    """C3 and the kill row's exit rule for a shape found only in a joined SSE deltas body (PRD-05 Risks "Model echo")."""
+
+    DELTAS = {"kind": "generic_secret_assignment", "in": "e1/1.3/deltas", "sha12": "a" * 12, "n": 1}
+    PLAIN = {"kind": "generic_secret_assignment", "in": "e1/1.3", "sha12": "a" * 12, "n": 1}
+    KNOWN = {"form": "raw", "in": "e1/1.3/deltas", "sha12": "b" * 12, "n": 1}
+
+    def run_row(self, known=(), shapes=(), code=2):
+        extra = {"verify/secrets.json": {"known_hits": list(known), "shape_hits": list(shapes), "big_masks": [],
+                                         "masks": dict(SecretCheck.PLANTED)},
+                 "verify/secrets-conductor.json": {"hits": 0},
+                 "verify/exits.json": {"secrets": 2 if known or shapes else 0, "secrets-out": 0, "secrets-plain": 0}}
+        gap = {"start": "2026-10-30T10:01:59.9Z", "end": "2026-10-30T10:02:01.2Z"}
+        return CrashRows.row("kill-recorder", gap, code=code, extra=extra)
+
+    def plain_row(self, shapes, code, counts, extra_checks=()):
+        checks = ([{"id": "secrets", "result": "fail"}] if shapes else []) + list(extra_checks)
+        return evaluate({"meta.json": {"connector": "codex-cli", "case": "direct", "known_box": True, "entry": "e1", "commits_since_start": 1},
+                         "verify/check-local.json": {"exit": code, "entries": [{"entry": "e1", "counts": {"model_requests": 5, "gaps": counts},
+                                                                                 "checks": checks}]},
+                         "verify/secrets.json": {"known_hits": [], "shape_hits": list(shapes), "big_masks": [], "masks": dict(SecretCheck.PLANTED)},
+                         "verify/secrets-conductor.json": {"hits": 0},
+                         "verify/exits.json": {"secrets": 2 if shapes else 0, "secrets-out": 0, "secrets-plain": 0}})
+
+    def test_deltas_only_shape_is_open_not_a_fail_and_never_a_pass(self):
+        row = self.run_row(shapes=[self.DELTAS])
+        self.assertEqual(row["checks"]["C3"], "INCONCLUSIVE")
+        self.assertNotEqual(row["faults"], "FAIL")
+        self.assertNotEqual(row["result"], "FAIL")
+        self.assertNotEqual(row["result"], "PASS")
+
+    def test_stated_loss_does_not_hide_an_unexplained_gap(self):
+        gaps = {"s6_gaps": {"memory_guard": 1}}
+        for shapes, code in (([], 1), ([self.DELTAS], 2)):
+            row = self.plain_row(shapes, code, gaps["s6_gaps"])
+            self.assertEqual(row["checks"]["C1"], "FAIL", (shapes, code, row["why"]))
+        for shapes, code in (([], 1), ([self.DELTAS], 2)):  # no gap at all, but a named history orphan
+            row = self.plain_row(shapes, code, {}, [{"id": "history_complete", "result": "named"}])
+            self.assertEqual(row["checks"]["C1"], "FAIL", (shapes, code, row["why"]))
+        for shapes, code in (([], 1), ([self.DELTAS], 2)):  # no gap at all, another check named
+            row = self.plain_row(shapes, code, {}, [{"id": "gaps_named", "result": "named"}])
+            self.assertEqual(row["checks"]["C1"], "FAIL", (shapes, code, row["why"]))
+
+    def test_any_other_hit_still_fails(self):
+        for known, shapes in (([self.KNOWN], [self.DELTAS]), ([], [self.PLAIN]), ([], [self.DELTAS, self.PLAIN]),
+                              ([], [dict(self.DELTAS, **{"in": None})])):
+            row = self.run_row(known, shapes)
+            self.assertEqual((row["checks"]["C3"], row["faults"]), ("FAIL", "FAIL"), (known, shapes))
+
+    def planted_row(self, known, shapes, masks):
+        extra = {"verify/secrets.json": {"known_hits": list(known), "shape_hits": list(shapes), "big_masks": [], "masks": masks},
+                 "verify/secrets-conductor.json": {"hits": 0},
+                 "verify/exits.json": {"secrets": 2, "secrets-out": 0, "secrets-plain": 0}}
+        gap = {"start": "2026-10-30T10:01:59.9Z", "end": "2026-10-30T10:02:01.2Z"}
+        return CrashRows.row("kill-recorder", gap, code=2, extra=extra)
+
+    def test_stated_loss_with_a_planted_kind_unmasked_is_open_not_a_fail(self):
+        masks = dict(SecretCheck.PLANTED, jwt=0, private_key=0)
+        row = self.planted_row([], [self.DELTAS], masks)
+        self.assertEqual(row["checks"]["C3"], "INCONCLUSIVE")
+        self.assertNotIn(row["result"], ("FAIL", "PASS"))
+
+    def test_known_or_pathless_hit_with_a_planted_kind_unmasked_still_fails(self):
+        masks = dict(SecretCheck.PLANTED, jwt=0)
+        for known, shapes in (([self.KNOWN], [self.DELTAS]), ([], [self.PLAIN])):
+            self.assertEqual(self.planted_row(known, shapes, masks)["checks"]["C3"], "FAIL", (known, shapes))
+
+    def test_exit_2_without_a_stated_loss_still_fails(self):
+        self.assertEqual(self.run_row(code=2)["faults"], "FAIL")  # exit 2 with no stated loss behind it
+
+
+class UpstreamRedaction(unittest.TestCase):
+    """C3 for a harness file with redacts_tool_output (point 4): open until the owner answers, never PASS."""
+
+    DELTAS = StatedLoss.DELTAS
+
+    def c3(self, up, masks, known=(), shapes=()):
+        return evaluate({"meta.json": {"connector": "hermes-cli", "case": "direct", "known_box": True, "entry": "e1", "redacts_tool_output": up},
+                         "verify/secrets.json": {"masks": masks, "known_hits": list(known), "shape_hits": list(shapes), "big_masks": []},
+                         "verify/secrets-conductor.json": {"hits": 0},
+                         "verify/exits.json": {"secrets": 2 if known or shapes else 1, "secrets-out": 0, "secrets-plain": 0}}
+                        )["checks"]["C3"]
+
+    def test_no_mask_and_no_hit_is_never_a_pass(self):
+        self.assertEqual(self.c3(True, {}), "INCONCLUSIVE")  # no sign of any exercise
+        self.assertEqual(self.c3(True, {"masked_key": 3}), "INCONCLUSIVE")  # exercised, planted kinds open: stated loss, not PASS
+        self.assertEqual(self.c3(True, dict(SecretCheck.PLANTED, jwt=0)), "INCONCLUSIVE")
+        self.assertEqual(self.c3(False, {"masked_key": 3}), "INCONCLUSIVE")  # control: the flag is what counts masked_key as exercise
+
+    def test_a_known_hit_still_fails(self):
+        self.assertEqual(self.c3(True, {}, known=[StatedLoss.KNOWN]), "FAIL")
+
+    def test_deltas_only_shape_is_open_not_a_fail(self):
+        self.assertEqual(self.c3(True, SecretCheck.PLANTED, shapes=[self.DELTAS]), "INCONCLUSIVE")
 
 
 class SecretCheck(unittest.TestCase):

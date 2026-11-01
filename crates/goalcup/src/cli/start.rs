@@ -289,6 +289,10 @@ pub fn prepare(a: &Args, c: &Ctx, out: &mut dyn std::io::Write) -> Result<Ready,
     lines.extend(first_message(a, c, prompt.as_deref(), &opened.run)?);
     lines.extend(deadline.map(|ms| text::ends_line(ms / 1000, super::now())));
     lines.push(text::upload_to(c.server.host()));
+    if plan.harness_version.is_none() {
+        log::line(&entry_dir, "version_unread", &[]);
+        lines.push(text::version_unread(&name, c.server.host().is_some()));
+    }
     lines.push(tier_line(
         &name,
         plan.harness_version.as_deref(),

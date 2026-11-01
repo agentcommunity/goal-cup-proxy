@@ -51,6 +51,27 @@ fn broke(text: String) -> Stop {
     Stop { text, code: 3 }
 }
 
+/// What the open call says when the harness version could not be read: the Worker wants a string.
+/// The local record (`server.json`) keeps the honest `None`.
+const UNKNOWN_VERSION: &str = "unknown";
+
+/// The Worker refuses a string field longer than this many UTF-16 code units.
+const WIRE_UNITS: usize = 64;
+
+/// The harness version as the server gets it: as read (cut to 64 UTF-16 units at a char
+/// boundary), or "unknown", never null.
+pub(super) fn wire_version(read: Option<&str>) -> &str {
+    let v = read.unwrap_or(UNKNOWN_VERSION);
+    let mut units = 0;
+    for (i, c) in v.char_indices() {
+        units += c.len_utf16();
+        if units > WIRE_UNITS {
+            return &v[..i];
+        }
+    }
+    v
+}
+
 /// What `start` knows when it asks for the run.
 pub struct Ask<'a> {
     pub mode: RunMode,
@@ -108,7 +129,7 @@ pub fn begin(home: &Path, server: &Server, ask: &Ask, out: &mut dyn Write) -> Re
     let body = json!({
         "connector_id": ask.connector.id, "connector_sha256": ask.connector_sha256,
         "workspace": ask.workspace.to_string_lossy(), "session_id": ask.session_id,
-        "harness_version": ask.harness_version, "proxy_version": env!("CARGO_PKG_VERSION"),
+        "harness_version": wire_version(ask.harness_version), "proxy_version": env!("CARGO_PKG_VERSION"),
         "repo_url": repo_url, "machine": ask.machine,
     });
     // The participant has approved: a blip, a GitHub outage (502) or a 429 is waited out, with the

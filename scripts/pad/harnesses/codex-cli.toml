@@ -15,6 +15,8 @@ model_host = "api.openai.com"
 exit_keys = '/quit\r'
 subagent_word = "sub-agent"
 keep_going = true
+# Codex finishes the payments prompt in about 7 minutes (first full rows, 1 Nov 2026), so a kill pair at 8 and 10 meets no stream.
+kill_minutes = [3, 5]
 
 [direct]
 files = { "config.toml" = "direct/codex-config.toml" }

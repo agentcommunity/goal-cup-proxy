@@ -423,7 +423,8 @@ pub fn size_words(bytes: u64) -> String {
 pub fn span_words(ms: u64) -> String {
     let s = ms / 1000;
     match s {
-        0..60 => format!("{s} s"),
+        0 => "under 1 s".to_owned(),
+        1..60 => format!("{s} s"),
         60..3600 => format!("{} min {} s", s / 60, s % 60),
         _ => format!("{} h {} min", s / 3600, s % 3600 / 60),
     }
@@ -635,6 +636,11 @@ pub fn long_tunnel(host: &str, minutes: Option<u64>, up: u64) -> String {
     )
 }
 
+/// A host the proxy passes through on purpose (telemetry): information, not a problem.
+pub fn expected_tunnel(host: &str) -> String {
+    format!("Not recorded, expected (telemetry): {host}.")
+}
+
 /// A listed host tunnelled unread, by its GAP reason name (or note `ca_refused`).
 pub fn listed_tunnel(host: &str, reason: &str) -> String {
     match reason {
@@ -723,10 +729,15 @@ pub fn continue_now(run: &str) -> String {
     format!("To go on, run: goalcup continue {run} (you can do it in another terminal now).")
 }
 
-pub fn no_request_written(name: &str) -> String {
-    format!(
-        "No model request was written. {name} may not use the recording proxy, or it made no call."
-    )
+pub fn no_request_written(name: &str, pinned: Option<&str>) -> String {
+    match pinned {
+        Some(host) => format!(
+            "No model request was written. The host list pins {host}, so its traffic passed through unread."
+        ),
+        None => format!(
+            "No model request was written. {name} may not use the recording proxy, or it made no call."
+        ),
+    }
 }
 
 pub fn requests_written(n: u64, hosts: &[(&str, u64)]) -> String {
@@ -1112,6 +1123,17 @@ pub fn run_kind(mode: RunMode) -> &'static str {
     }
 }
 
+/// The harness version could not be read. The upload sentence is said only when there is an upload,
+/// because the upload carries "unknown".
+pub fn version_unread(name: &str, upload: bool) -> String {
+    let said = format!("{name}'s version could not be read, so the run starts without it.");
+    if upload {
+        format!("{said} The upload says unknown.")
+    } else {
+        said
+    }
+}
+
 pub fn upload_to(host: Option<&str>) -> String {
     match host {
         None => "Upload: off (GOALCUP_SERVER=off), so this run has no end time and its record files stay on this computer.".to_owned(),
@@ -1128,9 +1150,6 @@ pub fn tier_line(name: &str, version: Option<&str>, tier: &str, verified: &str) 
                 version.unwrap_or_default()
             )
         }
-        "verified" if version.is_none() => format!(
-            "{who}: verified with goalcup on {verified}; the installed version was not read."
-        ),
         "verified" => format!("{who}: verified with goalcup on {verified}."),
         "not supported" => format!(
             "{name}: not supported. goalcup records its session files and the connections it can see, not its model calls."

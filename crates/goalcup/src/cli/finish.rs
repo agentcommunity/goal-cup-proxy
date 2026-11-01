@@ -77,7 +77,13 @@ pub fn screen(
     // Rule 1 by construction: every line that names a loss goes through `loss`, and "Nothing was
     // lost." is the second line only when none did.
     let mut body = vec![match st.written.model_requests {
-        0 => text::no_request_written(name),
+        0 => text::no_request_written(
+            name,
+            c.tunnel_hosts
+                .iter()
+                .find(|(_, t)| t.listed.as_deref() == Some("pinned"))
+                .map(|(h, _)| h.as_str()),
+        ),
         n => text::requests_written(n, &by_count(&c.hosts)),
     }];
     let mut lost = false;
