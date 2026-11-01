@@ -309,21 +309,7 @@ fn a_dead_entry_whose_watchdog_lives_is_left_alone() {
 #[test]
 fn a_killed_recorders_entry_is_closed_and_sent_whole() {
     const CALLS: u64 = 3;
-    let live = entry_dir();
-    let rec = real(live.path());
-    for _ in 0..CALLS {
-        let flags = OpenFlags::POST | OpenFlags::DECRYPTED;
-        let mut h = rec.open(StreamKind::HttpReq, 0, 0, 0, flags, json!({}));
-        h.data(rec.now(), Bytes::from_static(b"{\"model\":\"m\"}"));
-        h.end(rec.now(), EndReason::Complete, None);
-    }
-    wait_settled(&rec, |c| c.http_post >= CALLS);
-    let fake = FakeWorker::start();
-    let dir = tempfile::tempdir().unwrap();
-    let id = first_entry_id(&live.path().join("rec"));
-    let entry = dir.path().join(&id);
-    copy(live.path(), &entry);
-    serve(dir.path(), &fake, DEADLINE);
+    let (fake, dir, entry, id) = killed(CALLS);
     assert_eq!(upload_as(dir.path(), &entry, &id, true), Outcome::Done);
     let status: Status =
         serde_json::from_slice(&fs::read(cli::status_json(&entry)).unwrap()).unwrap();
@@ -343,19 +329,7 @@ fn a_killed_recorders_entry_is_closed_and_sent_whole() {
 /// `goalcup recover`'s (ledger R3b), so it is neither closed nor sent and stays unsealed.
 #[test]
 fn a_dead_entry_whose_harness_lives_is_left_for_recover() {
-    let live = entry_dir();
-    let rec = real(live.path());
-    let flags = OpenFlags::POST | OpenFlags::DECRYPTED;
-    let mut h = rec.open(StreamKind::HttpReq, 0, 0, 0, flags, json!({}));
-    h.data(rec.now(), Bytes::from_static(b"{\"model\":\"m\"}"));
-    h.end(rec.now(), EndReason::Complete, None);
-    wait_settled(&rec, |c| c.http_post >= 1);
-    let fake = FakeWorker::start();
-    let dir = tempfile::tempdir().unwrap();
-    let id = first_entry_id(&live.path().join("rec"));
-    let entry = dir.path().join(&id);
-    copy(live.path(), &entry);
-    serve(dir.path(), &fake, DEADLINE);
+    let (fake, dir, entry, id) = killed(1);
     let _ = fs::remove_file(entry.join("rec/watchdog.pid"));
     let path = cli::status_json(&entry);
     let mut status = cli::read_json::<Status>(&path).unwrap_or_default();
@@ -377,6 +351,28 @@ fn a_dead_entry_whose_harness_lives_is_left_for_recover() {
     assert!(fake.chunks().is_empty() && fake.heartbeats().is_empty());
     assert_eq!(parts(&entry), before, "no part file changed");
     assert_eq!(fs::read(&path).unwrap(), bytes, "not sealed");
+}
+
+/// What a killed recorder leaves: a real recorder's entry folder, after `calls` model requests,
+/// copied into a served run while its frame is open past the last LINK. Gives the fake server, the
+/// run folder, the entry folder and the entry id its first PART carries.
+fn killed(calls: u64) -> (FakeWorker, tempfile::TempDir, PathBuf, String) {
+    let live = entry_dir();
+    let rec = real(live.path());
+    for _ in 0..calls {
+        let flags = OpenFlags::POST | OpenFlags::DECRYPTED;
+        let mut h = rec.open(StreamKind::HttpReq, 0, 0, 0, flags, json!({}));
+        h.data(rec.now(), Bytes::from_static(b"{\"model\":\"m\"}"));
+        h.end(rec.now(), EndReason::Complete, None);
+    }
+    wait_settled(&rec, |c| c.http_post >= calls);
+    let fake = FakeWorker::start();
+    let dir = tempfile::tempdir().unwrap();
+    let id = first_entry_id(&live.path().join("rec"));
+    let entry = dir.path().join(&id);
+    copy(live.path(), &entry);
+    serve(dir.path(), &fake, DEADLINE);
+    (fake, dir, entry, id)
 }
 
 /// The entry id a recorder wrote into the first PART of `rec`.

@@ -1209,3 +1209,26 @@ PRD-12 and PRD-17.
 - The queue costs one lock, one `recording()` check and one `upload.json` read per queued entry per
   tick (up to 200 entries), on `goalcup-queue` only. Accepted; no cut keeps the behaviour.
 - No locked ledger item is touched.
+
+### 2026-11-01, slice 7 re-review fixes (dead entry with a live harness)
+
+- **U8 runs against an exited harness.** `goalcup upload` closes a dead entry only when no recorder
+  holds `rec/lock`, its watchdog is gone and the harness `status.json` names no longer runs (same
+  pid and OS start time). A `kill -9` to the watchdog does not signal the harness's process group
+  (PRD-02 9.1), so the harness usually keeps running. U8's setup is therefore: `kill -9` the
+  watchdog and recorder together mid-run, then let the harness exit (or kill it), then run
+  `goalcup upload`. Run against a live harness, upload rightly answers `StillRecording` and closes
+  nothing, because that entry is `goalcup recover`'s (ledger R3b). PRD-12's U8 procedure follows
+  this.
+- **`StillRecording` has two meanings until PRD-10 splits it.** A live recorder or watchdog (the
+  entry sends itself) and a dead entry whose harness lives (nothing records or sends it; the
+  participant must run `goalcup recover`). The variant's doc comment says both. The participant
+  line in `cli/text.rs` says "it sends itself" for both, which is wrong for the second (points 1
+  and 6). Open on the integration checklist before 1.0: PRD-10 either adds a distinct outcome whose
+  line points to `goalcup recover` (this lane adds the variant in the same integration merge) or
+  words `StillRecording` neutrally. `NotClosed` still maps to "run goalcup continue" there, which
+  is wrong after a failed close; the same PRD-10 ask covers it.
+- `manual::run` reads `status.json` once for the seal and the harness check. The two killed-recorder
+  tests share one setup helper.
+- Size is unchanged in substance (src about 3,300 lines against the PRD-00 row); no
+  behaviour-keeping cut is known.
