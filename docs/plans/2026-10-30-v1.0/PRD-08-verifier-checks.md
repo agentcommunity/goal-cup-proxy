@@ -1187,3 +1187,17 @@ PRD-02's mask worker writes two record shapes PRD-01's text does not list yet; t
 - Slice 7 accepts both PRD-02 record shapes (the mask_failed GAP with lost 1 and a meta tail; the empty DATA with fin). The PRD-01 text still needs the two shapes noted; that stays with PRD-01 and PRD-02.
 - Open nits, both inside PRD-08 and none moves a seam: (1) timeline `off_ms` floors each head, tail and 10-minute piece on its own, so the timeline sum can sit a few ms under `counts.off_ms` for real nanosecond walls. Fix: carry nanoseconds in the tally and divide once per row at output; also correct the module comment in `timeline.rs` lines 3-4 to say the head goes to bucket 0 and the tail to the last bucket. (2) `Out.covers` and `o.timeline` are cloned in `report.rs`; moving them removes two clones, optional.
 - Do these in the next PRD-08 touch only. A test should use non-ms-aligned span times. No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-31, replan after PRD-03 slice 4 (merge a3dbd3d5): h2 GAP reasons the checks will see
+
+- On a decrypted h2 connection, `h2_unsupported` GAPs now carry a real `lost` for an extended CONNECT stream or an orphan response while the server allows extended CONNECT, and the `conn` GAP at the close counts frames held for ended streams. `conn_bytes` counts these as named loss, not as an unaccounted gap. No new reason and no locked ledger item is touched.
+
+### 2026-10-31, C3 placeholder and glued-word fix: size decision
+
+- `secrets.rs` is 551 lines (was 528) and `tests/secrets_scan.rs` 291 (was 214). The extra lines are the `placeholder` rule (a mask, `[REDACTED]`, `[HIDDEN]` or `<redacted>` is no secret) and the masker's 24-byte guard. A glued shape hit stays `warn`. The standing cap for `secrets_*.rs` test files is 215, so 291 is over it; the replan counts it. Anything past 551 in `secrets.rs` needs a new decision line. A PEM placeholder split across SSE deltas passes on the joined deltas; its raw-stream hit stays a `fail` on purpose. Asked of PRD-05: export `glued` so the `ESCAPE` copy can go.
+
+### 2026-11-01, replan after slice 8 (merge e4d537f1)
+
+- **Size report, PRD-08** (`wc -l` on integration): src outside `usage/` is 4,171 lines (secrets.rs 551, integrity.rs 1,027, legs.rs 550, history.rs 637, honesty.rs 497) against the 1,400 row in PRD-00 (about 3.0 times). The `usage/` tree is 2,861 against the PRD-09 row of 1,470. Tests under `crates/goalcup-verify/tests` are 4,359 (common 910, usage_run1 676, check_history 579, secrets_scan 291) against 1,100 plus 200 for PRD-09. Slice 8 added 23 src and 77 test lines; the overage is older and no behaviour-keeping cut is known. `secrets_scan.rs` is 291 against the standing 215 and is accepted, no growth. Carry to the end-of-build report with the PRD-03, PRD-10, PRD-12 and PRD-17 overages.
+- The open nits from the slice 7 replan (timeline nanosecond carry, two clones in `report.rs`) are still open.
+- Seam request to PRD-05: export the masker's `glued` guard so `secrets.rs` can drop its `ESCAPE` and `GUARD` copy. Until then the two copies must stay identical. No seam shape changes and no locked ledger item is touched.

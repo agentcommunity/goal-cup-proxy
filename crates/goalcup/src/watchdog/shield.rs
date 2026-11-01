@@ -72,13 +72,29 @@ impl Shield {
     /// The harness has exited: [`GIVEN_BACK`] are what they were before. `SIGHUP` and `SIGTTOU`
     /// stay held until the shield drops, so a window closed after the harness exited does not cut
     /// the seal or the upload short.
-    pub fn harness_exited(&mut self) {
+    ///
+    /// A key typed while the harness ran went to the whole group, so the same signal can still be
+    /// pending, not yet taken by any thread. Given back as it is, it would reach the default action
+    /// and end the wrap-up. So each one is first set to `SIG_IGN`, which discards it if pending
+    /// (POSIX `sigaction`: blocked or not, on any thread), and only then put back. No call waits.
+    /// A key that lands between the two is ignored; one typed after counts as typed after the
+    /// harness exited and gets the default action, as it would without a watchdog.
+    ///
+    /// Returns `false` when a pending key could not be discarded; the caller logs it.
+    pub fn harness_exited(&mut self) -> bool {
         let (back, kept): (Vec<_>, Vec<_>) = self
             .saved
             .drain(..)
             .partition(|(signal, _)| GIVEN_BACK.contains(signal));
         self.saved = kept;
+        let mut discarded = true;
+        for (signal, _) in &back {
+            // SAFETY: integers only; `signal` returns the previous action, which `restore` below
+            // replaces with the saved one.
+            discarded &= unsafe { libc::signal(*signal, libc::SIG_IGN) } != libc::SIG_ERR;
+        }
         restore(&back);
+        discarded
     }
 }
 

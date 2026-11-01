@@ -954,3 +954,7 @@ A1 reports it as a stated loss instead of failing on it.
   (corpus streaming, every-split and linear-time cases, the never-stop rule). Reviewer B's rule applies:
   no further growth without a new `decision` line.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-11-01, seam request from PRD-08 slice 8
+
+- PRD-08 `secrets.rs` keeps a copy of the masker's glued-word guard (the 24-byte rule and its escape set) so a glued shape hit stays `warn`. Export `glued` as `pub` in your next touch so the verifier can call it and delete the copy. Until then the copy must stay identical to the masker. No behaviour change; no locked ledger item is touched.

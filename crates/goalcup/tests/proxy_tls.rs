@@ -6,10 +6,10 @@ mod common;
 mod proxy_fixtures;
 
 use common::pki::{H2, HTTP11};
-use common::recorder::{events, gaps};
+use common::recorder::{data_of, events, gaps, opens};
 use common::upstream::{Script, Upstream};
 use goalcup::connector::{Decision, HostList, Kind, Source};
-use goalcup::pipeline::{Call, Calls, GapReason, Mono, Recorder};
+use goalcup::pipeline::{Call, Calls, GapReason, Mono, Recorder, StreamKind};
 use goalcup::proxy::ProxyHandle;
 use goalcup::proxy::ca::RunCa;
 use goalcup::proxy::connect::fingerprint_hex16;
@@ -19,6 +19,7 @@ use proxy_fixtures::{client_trusting, conns, get, proxy, through};
 use rustls::ClientConnection;
 use rustls::pki_types::ServerName;
 use serde_json::{Value, json};
+use std::collections::BTreeSet;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tempfile::TempDir;
@@ -354,10 +355,11 @@ async fn a_close_mid_handshake_teaches_nothing() {
     assert!(ca_refused(&calls).is_empty());
 }
 
-/// An `h2`-only client until the HTTP/2 parser lands: decrypted with `alpn` `h2`, every byte
-/// relayed, and the loss named (5a `h2_unsupported`), never silent.
+/// Acceptance 3, automated half: an `h2`-only client sends four requests in parallel on one
+/// connection. Each is recorded with its stream id and its answer, the query is dropped (point
+/// 4), and nothing is lost.
 #[tokio::test]
-async fn an_h2_only_client_is_relayed_and_its_loss_named() {
+async fn four_parallel_h2_requests_are_recorded_on_one_conn() {
     let up = Upstream::start(Script::ok(b"hi").with_tls(&["api.openai.com"], &[H2]));
     let (_h, addr, calls, ca, _dir) = proxy_to(&up, true);
     let trusting = TlsConnector::from(client_trusting(vec![ca.cert_der().clone()], &[b"h2"]));
@@ -365,34 +367,54 @@ async fn an_h2_only_client_is_relayed_and_its_loss_named() {
         .connect(name("api.openai.com"), through(addr, TARGET).await)
         .await
         .unwrap();
-    let (send, conn) = h2::client::handshake(t).await.unwrap();
+    let (mut send, conn) = h2::client::handshake(t).await.unwrap();
     let driver = tokio::spawn(conn);
-    let mut send = send.ready().await.unwrap();
-    let req = http::Request::get("https://api.openai.com/v1/models")
-        .body(())
-        .unwrap();
-    let mut body = send
-        .send_request(req, true)
-        .unwrap()
-        .0
-        .await
-        .unwrap()
-        .into_body();
-    let mut got = Vec::new();
-    while let Some(piece) = body.data().await {
-        let piece = piece.unwrap();
-        let _ = body.flow_control().release_capacity(piece.len());
-        got.extend_from_slice(&piece);
+    let mut answers = Vec::new();
+    for _ in 0..4 {
+        send = send.ready().await.unwrap();
+        let req = http::Request::get("https://api.openai.com/v1/models?key=v")
+            .body(())
+            .unwrap();
+        answers.push(send.send_request(req, true).unwrap().0);
     }
-    assert_eq!(got, b"hi");
+    for answer in answers {
+        let mut body = answer.await.unwrap().into_body();
+        let mut got = Vec::new();
+        while let Some(piece) = body.data().await {
+            let piece = piece.unwrap();
+            let _ = body.flow_control().release_capacity(piece.len());
+            got.extend_from_slice(&piece);
+        }
+        assert_eq!(got, b"hi");
+    }
+    drop(send);
     driver.abort();
     let (sid, meta, _) = conns(&calls, 1).await.remove(0);
     assert_eq!(
         (&meta["mode"], &meta["alpn"]),
         (&json!("decrypt"), &json!("h2"))
     );
-    assert_eq!(gaps_of(&calls, sid), [(GapReason::H2Unsupported, None)]);
-    let stopped =
-        json!({"ev": "note", "what": "parse_stopped", "conn": sid, "reason": "h2_unsupported"});
-    assert!(events(&calls).contains(&stopped));
+    let opened = opens(&calls);
+    let of = |kind: StreamKind| (opened.iter()).filter(move |o| o.1 == kind && o.2["h2"].is_u64());
+    let ids: BTreeSet<_> = of(StreamKind::HttpReq)
+        .map(|o| o.2["h2"].as_u64())
+        .collect();
+    assert_eq!(ids.len(), 4, "four requests on four streams");
+    for (_, _, meta) in of(StreamKind::HttpReq) {
+        assert_eq!(meta["path"], "/v1/models");
+        assert!(
+            meta["headers"]
+                .as_array()
+                .unwrap()
+                .contains(&json!([":path", "/v1/models"]))
+        );
+    }
+    let answered: Vec<_> = of(StreamKind::HttpResp)
+        .map(|o| data_of(&calls, o.0))
+        .collect();
+    assert_eq!(answered, vec![b"hi".to_vec(); 4]);
+    let lost = |g: &Call| matches!(g, Call::Gap(_, GapReason::H2Unsupported, ..));
+    assert!(!gaps(&calls).iter().any(lost));
+    assert!(gaps_of(&calls, sid).is_empty());
+    assert!(!events(&calls).iter().any(|e| e["what"] == "parse_stopped"));
 }

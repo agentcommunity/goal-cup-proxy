@@ -7,15 +7,14 @@
 mod common;
 
 use bytes::Bytes;
+use common::recorder::{records, wait_settled};
 use common::{HANG, within};
 use goalcup::mask::Masker;
 use goalcup::pipeline::{EndReason, GapReason, OpenFlags, Recorder, StreamHandle, StreamKind};
 use goalcup_format::Record;
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
-use std::io::Read;
 use std::path::Path;
-use std::time::Duration;
 
 const BODY: usize = 1_500_000;
 const POST: OpenFlags = OpenFlags::POST;
@@ -46,38 +45,7 @@ fn open(rec: &Recorder) -> StreamHandle {
 
 /// Waits for a durable point that counts `posts` requests ended, with nothing held.
 fn settle(rec: &Recorder, posts: u64) -> u64 {
-    let rec = rec.clone();
-    within(HANG, move || {
-        loop {
-            let d = rec.durable().borrow().clone();
-            if let Some(p) = &d.point
-                && d.totals.counts.http_post >= posts
-                && rec.live().held_bytes == 0
-            {
-                return p.line.seq;
-            }
-            std::thread::sleep(Duration::from_millis(100));
-        }
-    })
-}
-
-/// Every record of the entry up to its last index line.
-fn records(dir: &Path) -> Vec<Record> {
-    let mut out = Vec::new();
-    for part in goalcup_format::read::part_files(&dir.join("rec")).unwrap() {
-        let name = part.file_name().unwrap().to_str().unwrap();
-        let idx = part.with_file_name(format!("{}.idx", name.trim_end_matches(".gcr.zst")));
-        let Some(last) = goalcup_format::read::read_index(&idx).unwrap().pop() else {
-            continue;
-        };
-        let f = std::fs::File::open(&part).unwrap().take(last.c_end);
-        out.extend(
-            goalcup_format::read::decode(f)
-                .unwrap()
-                .map(|i| i.unwrap().rec),
-        );
-    }
-    out
+    wait_settled(rec, move |c| c.http_post >= posts)
 }
 
 /// Checks every `http_req` stream: DATA bytes match the shared body at their offsets, DATA and
@@ -171,7 +139,7 @@ fn check_count(dir: &Path, recs: &[Record], seq: u64) {
 /// it is free, then END.
 fn held_writer(n: usize, bodies: usize) {
     set_env(Some("0:25000"));
-    let dir = tempfile::tempdir().unwrap();
+    let dir = common::recorder::entry_dir();
     let rec = Recorder::real_for_tests(dir.path(), Masker::passthrough_for_tests());
     let body = body();
     let handles: Vec<StreamHandle> = (0..n).map(|_| open(&rec)).collect();
@@ -224,7 +192,7 @@ fn two_hundred_streams_with_the_writer_held() {
 #[test]
 fn a_thousand_guard_episodes_never_latch() {
     set_env(None);
-    let dir = tempfile::tempdir().unwrap();
+    let dir = common::recorder::entry_dir();
     let rec = Recorder::real_for_tests(dir.path(), Masker::passthrough_for_tests());
     let body = body();
     let mut h = open(&rec);

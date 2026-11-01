@@ -171,7 +171,7 @@ class Run:
         self.failed = {c.get("id"): c.get("why") for e in self.entries for c in dig(e, "s6_checks") or []
                        if isinstance(c, dict) and c.get("result") == "fail" and isinstance(c.get("id"), str)}
         self.v = dict.fromkeys(CHECKS + ("faults",), "PASS")
-        seals = [when(f.get("at")) for f in self.faults if f.get("kind") == "seal-now" and f.get("exit") == 0]  # section 7,
+        seals = [when(f.get("began") or f.get("at")) for f in self.faults if f.get("kind") == "seal-now" and f.get("exit") in (0, "timeout")]  # section 7,
         self.cap_at = min([t for t in seals if t], default=None) if meta.get("over_cap") is True else None  # as pad-run
         got = [dig(e, "s6_requests") for e in self.entries if isinstance(dig(e, "s6_requests"), int)]
         self.reqs, self.native = sum(got) if got else None, sum(count(dig(e, "s6_native")) for e in self.entries)

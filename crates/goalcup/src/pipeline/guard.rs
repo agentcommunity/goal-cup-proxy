@@ -8,8 +8,6 @@ const FLOOR: u64 = 128 << 20;
 /// The soft guard in bytes: 512 MiB, or one eighth of physical memory if that is smaller, at
 /// least 128 MiB. 512 MiB when memory cannot be read. Under `test-hooks` only,
 /// `GOALCUP_TEST_GUARD_MB` (MiB) sets it.
-// The recorder's start reads it; that lands with `run_recorder`.
-#[allow(dead_code)]
 pub(crate) fn soft_guard() -> u64 {
     #[cfg(feature = "test-hooks")]
     if let Some(mb) = std::env::var("GOALCUP_TEST_GUARD_MB")

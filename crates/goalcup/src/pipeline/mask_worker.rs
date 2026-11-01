@@ -8,12 +8,14 @@
 //! GAP nothing stays held back. A masker panic drops the piece and the held bytes behind one
 //! `mask_failed` GAP, and the stream goes on with a fresh masker. A panic on metadata stars every
 //! string left in it and writes a `mask_failed` GAP that loses no stream byte.
+//!
+//! The seal's markers (PRD-02 section 11): at the first, every wire stream's masker is finished
+//! (its held bytes go out as DATA and MASK) and a later piece on it is a `cut_at_seal` GAP; at the
+//! final one, every stream left is finished and ends `cut_at_seal`, the `after_stop` hosts are
+//! masked, and every later item is dropped and counted.
 
-// `run_recorder` starts it in the next slice; until then only `Recorder::real_for_tests` does.
-#![cfg_attr(not(feature = "test-hooks"), allow(dead_code))]
-
-use super::item::{Item, Ws};
-use super::out::{Out, Source};
+use super::item::{Item, Mark, Ws};
+use super::out::{Out, Source, ToWriter};
 use super::{ExitOnPanic, Mono, Recorder, Sid, low_priority};
 use crate::mask::{Masked, Masker, StreamMasker};
 use goalcup_format::{EndReason, FLAG_FIN, GapReason, Record, StreamKind};
@@ -45,7 +47,7 @@ pub(crate) fn spawn(
     rec: Recorder,
     rx: mpsc::Receiver<Item>,
     masker: Masker,
-    tx: mpsc::SyncSender<Out>,
+    tx: mpsc::SyncSender<ToWriter>,
 ) -> JoinHandle<()> {
     std::thread::Builder::new()
         .name("goalcup-mask".into())
@@ -58,6 +60,7 @@ pub(crate) fn spawn(
                 tx,
                 streams: HashMap::new(),
                 outs: Vec::new(),
+                done: false,
             };
             while let Ok(item) = rx.recv() {
                 w.item(item);
@@ -66,13 +69,27 @@ pub(crate) fn spawn(
         .expect("the mask worker starts")
 }
 
+/// An item no writer will take (behind the final marker, or on an entry sealed before this boot):
+/// its bytes go to the `after_stop` count, which `after_seal` names.
+pub(super) fn drop_late(rec: &Recorder, item: &Item) {
+    let lost = match item {
+        Item::Data { bytes, .. } => bytes.len() as u64,
+        Item::Gap { lost, .. } => lost.unwrap_or(0),
+        _ => 0,
+    };
+    rec.taken(item.held());
+    rec.dropped(item.held(), lost);
+}
+
 struct Worker {
     rec: Recorder,
     masker: Masker,
-    tx: mpsc::SyncSender<Out>,
+    tx: mpsc::SyncSender<ToWriter>,
     streams: HashMap<Sid, Stream>,
     /// The records of the item being handled.
     outs: Vec<Out>,
+    /// The final seal marker went to the writer, which ends after it.
+    done: bool,
 }
 
 /// One open stream as the worker sees it. Offsets are source offsets: `out` is the next byte to
@@ -88,6 +105,10 @@ struct Stream {
     owed: u64,
     /// The opcode of the last WebSocket piece, for bytes the masker releases at a GAP or END.
     op: u8,
+    /// Finished by a seal marker: a later piece is a `cut_at_seal` GAP.
+    cut: bool,
+    /// A `conn` stream's host, masked, for the `after_stop` tail.
+    host: Option<String>,
 }
 
 impl Stream {
@@ -108,8 +129,29 @@ impl Stream {
 impl Worker {
     fn item(&mut self, item: Item) {
         let held = item.held();
+        if self.done {
+            // Never reached: the seal's stops wait for every call in flight before each marker.
+            return drop_late(&self.rec, &item);
+        }
+        let item = match item {
+            Item::Mark(m) => return self.mark(m, held),
+            // A wire piece that read the stop flag just before the first marker: its bytes were
+            // taken before the stop, so they are named on their own stream.
+            Item::Data {
+                sid, t, off, bytes, ..
+            } if self.streams.get(&sid).is_some_and(|s| s.cut) => Item::Gap {
+                sid,
+                reason: GapReason::CutAtSeal,
+                start: t,
+                end: self.rec.now().max(Mono(t.ns() + 1)),
+                off,
+                lost: Some(bytes.len() as u64),
+                tail: None,
+            },
+            item => item,
+        };
         let sid = match &item {
-            Item::Event { .. } => 0,
+            Item::Event { .. } | Item::Mark(_) => 0,
             Item::Open { sid, .. }
             | Item::Data { sid, .. }
             | Item::Gap { sid, .. }
@@ -155,7 +197,8 @@ impl Worker {
                 let source = Source::of(kind, &meta);
                 let ok = host.as_mut().is_none_or(|h| self.mask(h)) & self.mask(&mut meta);
                 let host = host.and_then(|h| h.as_str().map(String::from));
-                stream(&mut self.streams, &self.masker, sid, kind).kind = kind;
+                let s = stream(&mut self.streams, &self.masker, sid, kind);
+                (s.kind, s.host) = (kind, host.clone());
                 let r = Record::Open {
                     sid,
                     t: t.ns(),
@@ -232,6 +275,7 @@ impl Worker {
                     0,
                 ));
             }
+            Item::Mark(_) => {}
         }
         if self.outs.is_empty() {
             self.rec.taken(held);
@@ -375,9 +419,90 @@ impl Worker {
     /// ends the process with 70.
     fn send(&mut self) {
         for o in self.outs.drain(..) {
-            if self.tx.send(o).is_err() {
+            if self.tx.send(ToWriter::Rec(o)).is_err() {
                 super::pipeline_gone();
             }
+        }
+    }
+
+    /// A seal marker. The first finishes every wire stream's masker; the final one every
+    /// stream's, ends each `cut_at_seal` (`seen` where its record ends; later sids first, so a
+    /// request ends before its connection), and masks the `after_stop` tail: the connections that
+    /// carried a byte after the stop, and their hosts. Then the marker goes to the writer behind
+    /// those records.
+    fn mark(&mut self, mut m: Mark, held: u64) {
+        let (now, last) = (self.rec.now(), m.last.is_some());
+        let wire = |k: StreamKind| {
+            matches!(
+                k,
+                StreamKind::Conn
+                    | StreamKind::HttpReq
+                    | StreamKind::HttpResp
+                    | StreamKind::WsUp
+                    | StreamKind::WsDown
+            )
+        };
+        let mut sids: Vec<Sid> = (self.streams.iter())
+            .filter(|(sid, s)| **sid != 0 && (last || (wire(s.kind) && !s.cut)))
+            .map(|(sid, _)| *sid)
+            .collect();
+        sids.sort_unstable_by(|a, b| b.cmp(a));
+        // The masked host of each `conn` stream the final marker ends, by sid.
+        let mut hosts = HashMap::new();
+        for sid in sids {
+            let kind = self.stream(sid).kind;
+            let next = self.masker.stream(kind);
+            self.release(sid, now, move |m| std::mem::replace(m, next).finish());
+            let s = self.stream(sid);
+            s.cut = true;
+            let (carry, seen) = (std::mem::take(&mut s.owed), s.inp);
+            if last {
+                if let Some(h) = s.host.take().filter(|_| kind == StreamKind::Conn) {
+                    hosts.insert(sid, h);
+                }
+                let r = Record::End {
+                    sid,
+                    t: now.ns(),
+                    reason: EndReason::CutAtSeal,
+                    seen,
+                    tail: Vec::new(),
+                };
+                self.outs.push(Out::new(r, 0));
+                self.streams.remove(&sid);
+            }
+            match self.outs.last_mut() {
+                Some(o) => {
+                    o.held += carry;
+                    self.rec.forwarded(carry);
+                }
+                None => self.rec.dropped(carry, 0),
+            }
+            self.send();
+        }
+        if let Some(end) = &mut m.last {
+            // The connections that carried a byte after the stop, and their hosts: masked here
+            // from their OPEN, or raw for one opened after the stop (no OPEN), masked now.
+            let (mut named, mut late) = (Vec::new(), Vec::new());
+            for (sid, raw) in &end.conns {
+                match hosts.remove(sid) {
+                    Some(h) => named.push(Value::String(h)),
+                    None => late.extend(raw.clone()),
+                }
+            }
+            let mut tail = json!({ "conns": end.conns.len(), "hosts": late });
+            self.mask(&mut tail);
+            if let Some(Value::Array(all)) = tail.get_mut("hosts") {
+                all.extend(named);
+                all.sort_by_key(|h| h.to_string());
+                all.dedup();
+            }
+            (end.tail, end.masker) = (Some(tail), Some(self.masker.clone()));
+            self.done = true;
+        }
+        self.rec.forwarded(held);
+        self.rec.taken(held);
+        if self.tx.send(ToWriter::Mark(m)).is_err() {
+            super::pipeline_gone();
         }
     }
 }
@@ -398,6 +523,8 @@ fn stream<'a>(
         pieces: VecDeque::new(),
         owed: 0,
         op: 0,
+        cut: false,
+        host: None,
     })
 }
 
@@ -513,7 +640,11 @@ mod tests {
         let (tx, out) = mpsc::sync_channel(1);
         spawn(rec.clone(), rx, Masker::new(&[], Vec::new()).unwrap(), tx);
         let mut h = rec.open(StreamKind::HttpResp, 0, 0, 0, OpenFlags::NONE, json!({}));
-        let open = out.recv_timeout(Duration::from_secs(30)).unwrap();
+        let rec_of = |t: ToWriter| match t {
+            ToWriter::Rec(o) => o,
+            ToWriter::Mark(_) => panic!("no seal marker was sent"),
+        };
+        let open = rec_of(out.recv_timeout(Duration::from_secs(30)).unwrap());
         rec.release(open.held);
         let key = format!("Bearer sk-{}{}", "x".repeat(20), "7".repeat(20));
         let body = format!("a {key} b {key} and plain words after the two keys.");
@@ -529,7 +660,7 @@ mod tests {
         h.end(rec.now(), EndReason::Complete, None);
         let (mut masks, mut n) = (0, 0);
         while rec.live().held_bytes > 0 && n < 100 {
-            let o = out.recv_timeout(Duration::from_secs(30)).unwrap();
+            let o = rec_of(out.recv_timeout(Duration::from_secs(30)).unwrap());
             masks += usize::from(matches!(o.rec, Record::Mask { .. }));
             rec.release(o.held);
             n += 1;

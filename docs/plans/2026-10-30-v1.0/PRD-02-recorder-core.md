@@ -1631,3 +1631,15 @@ with the seal, `written`, `off`). Nothing calls `pipeline::status::Board::sealed
 recorder's `status.json` never says sealed and the queue skips every real entry. PRD-02 must call it
 with the seal when it seals an entry. The dead-entry close (`close_dead_entry` in `manual::run`) moves
 to PRD-06 slice 7 once `dead.rs` is on integration. No locked ledger item is touched.
+
+### 2026-10-31, from the PRD-10 slice 9 review
+
+- **Ready-gap, small:** in `pipeline::run_recorder` the status thread writes `status.json` just before the
+  recorder sends `ready`. If the recorder dies in that gap, `watchdog::run` returns `NOT_STARTED` with an
+  unsealed `status.json` and no harness. PRD-10 now reads that combination as "could not start recording"
+  (PRD-10 A6), so the contract to keep is: `NOT_STARTED` never comes with a started harness. Nothing to add if
+  that already holds. No locked ledger item is touched.
+
+### 2026-11-01, from PRD-17 slice 6 (merge c9b87ac5)
+
+- The shield fix is on integration and the L-P3 ctrl-c case now runs in the box and passes. PRD-02 still owes `watchdog_restart.rs`: C12 (the proxy listens on `127.0.0.1` after a restart), P1 (unchanged port and a connection served during the restart) and P2 (a decrypted connection after a real kill verifies against `run-ca.pem`). `LESSONS.md` rows L-C12, L-P1, L-P2 name this file and stay open until it exists. Also unasserted: the 60 s drain and 180 s native bound (L-P15 names the `after_stop` half only). No locked ledger item is touched.

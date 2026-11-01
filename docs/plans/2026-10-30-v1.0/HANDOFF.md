@@ -76,27 +76,27 @@ was learned; read it before planning that PRD.
 
 Not done at all yet: any real-key run, any staging deploy, phases 2 to 6, the cut.
 
-## Branches (31 Oct 08:16Z, integration at ec9c3700)
+## Branches (31 Oct 12:26Z, integration at 26844796)
 
 | Branch | Commits not yet on integration | Last merge into integration |
 |---|---:|---|
-| `v1.0/prd-01-format` | 11 | f5b0a6a2 Merge v1.0/prd-01-format: phase 0 first group |
-| `v1.0/prd-02-core` | 13 | 2fd96576 Merge v1.0/prd-02-core: PRD-02 core step 1: S1 front with held-bytes guard and gap rule, secure, coun |
-| `v1.0/prd-03-proxy` | 29 | 0e411074 Merge v1.0/prd-03-proxy: PRD-03 proxy core slice 1: ca, tls, connect, decode, ws leaf modules |
+| `v1.0/prd-01-format` | 0 | 4302b391 Merge v1.0/prd-01-format: PRD-01 leftovers: Tail::raw byte bounds and error position for PRD-08 |
+| `v1.0/prd-02-core` | 19 | 5cb7fe05 Merge v1.0/prd-02-core: PRD-02 core step 2: mask worker, writer, out, real_for_tests, watchdog spawn  |
+| `v1.0/prd-03-proxy` | 1 | c81e8e9b Merge v1.0/prd-03-proxy: PRD-03 slice 3: serve, ProxyCtx, accept loop, per-connection flow, heavy nex |
 | `v1.0/prd-04-native` | 0 | 7e8ed89b Merge v1.0/prd-04-native: PRD-04 second slice: database sets in native snapshot.rs, loop and finish s |
 | `v1.0/prd-05-masking` | 1 | 2c95e8f1 Merge v1.0/prd-05-masking: PRD-05 core slice: the real masker (rules, stream, values, meta) with mask |
-| `v1.0/prd-06-upload` | 11 | a76bd11d Merge v1.0/prd-06-upload: PRD-06 slice 3: sender, resume, final beat, null-mode durable point |
+| `v1.0/prd-06-upload` | 1 | 114202ae Merge v1.0/prd-06-upload: PRD-06 slice 6: older-entry queue, slice 5 nits, upload_worker full tier |
 | `v1.0/prd-07-worker` | 0 | 8db60d0e Merge v1.0/prd-07-worker: PRD-07: collision-safe wrangler dev ports in the Worker test helper (gate f |
-| `v1.0/prd-08-verify` | 14 | bfd244e3 Merge v1.0/prd-08-verify: PRD-08 slice 5: legs checks (wire_keeps_up, threads_match, subagents_presen |
-| `v1.0/prd-09-usage` | 7 | c262ef5a Merge v1.0/prd-09-usage: PRD-09 slice 4: usage out.rs (S7 summary and calls files) and usage::run |
-| `v1.0/prd-10-cli` | 0 | 64450e32 Merge v1.0/prd-10-cli: PRD-10 slice 5: goalcup time-left, upload lines in status and end screen, nits |
+| `v1.0/prd-08-verify` | 0 | 18f15804 Merge v1.0/prd-08-verify: PRD-08 slice 8: timeline off_ms nanosecond rounding fix, use goalcup_format |
+| `v1.0/prd-09-usage` | 7 | 52922c12 Merge v1.0/prd-09-usage: PRD-09 slice 5: Hermes state.db join in usage, summary grouped by thread onc |
+| `v1.0/prd-10-cli` | 0 | c3f4638c Merge v1.0/prd-10-cli: PRD-10 slice 7: start pre-launch half, upload dispatch, text.rs give-back |
 | `v1.0/prd-11-connectors` | 0 | 1c719d16 Merge v1.0/prd-11-connectors: PRD-11 slice 7: facts sheet repeats (amp, droid, kimi), README table li |
-| `v1.0/prd-12-pad` | 8 | 9e71bde0 Merge v1.0/prd-12-pad: PRD-12 slice 5: gateway and dodger cases, exec and pre watcher commands, seven |
+| `v1.0/prd-12-pad` | 0 | fe40990f Merge v1.0/prd-12-pad: PRD-12 slice 9 rung 1 readiness: micro run passes goalcup start folder checks |
 | `v1.0/prd-13-cut` | 0 | none |
 | `v1.0/prd-14-gate` | 0 | 0ffc3c64 Merge v1.0/prd-14-gate: phase 0 first group |
-| `v1.0/prd-14-tests` | 0 | b3747b6a Merge v1.0/prd-14-tests: PRD-14 slice 5: gate.sh review nits A1 A2 A4 B1 B2, nextest.toml comment A3, |
-| `v1.0/prd-15-docs` | 9 | 00eebea8 Merge v1.0/prd-15-docs: PRD-15 slice 11: RECORD-FORMAT legs checks and new report keys |
+| `v1.0/prd-14-tests` | 0 | e0861297 Merge v1.0/prd-14-tests: PRD-14 slice 7: watchdog_rlimit in heavy test group |
+| `v1.0/prd-15-docs` | 0 | c1dcf19f Merge v1.0/prd-15-docs: PRD-15 slice 15: build-state sync, AGENTS wrap, final-pass audit greps |
 | `v1.0/prd-16-workspace` | 0 | 0dce79d7 Merge v1.0/prd-16-workspace: phase 0 first group |
-| `v1.0/prd-17-lessons` | 0 | ae970618 Merge v1.0/prd-17-lessons: PRD-17 PRD-17 LESSONS.md upkeep slice 2 (docs only, builder notes step 2 ' |
+| `v1.0/prd-17-lessons` | 0 | 2ad2ed16 Merge v1.0/prd-17-lessons: PRD-17 slice 3: FW1 pipeline case, gate check 1 dry run, LESSONS.md upkeep |
 
 Open merge requests in the queue: 0.

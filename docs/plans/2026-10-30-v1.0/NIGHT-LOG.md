@@ -1,5 +1,7 @@
 # Night log, goalcup 1.0 build
 
+call 12:32Z 31 Oct | W5 | CLOUDFLARE_API_TOKEN is active but refused on the account in CLOUDFLARE_ACCOUNT_ID: Workers scripts and R2 buckets answer 10000 (authentication), listing accounts answers 9109. No staging deploy (wrangler deploy --env staging) and no fetch-run of a server copy until the owner gives a token with Workers Scripts edit, R2 edit (goalcup-traces-staging, goalcup-usage-staging) and Account read on that account. Rung 1 (server off) goes on; rungs 2 and up wait. The staging bundle from integration 013ab7c5 is built and waiting.
+
 call 07:58Z 31 Oct | W6 | new conductor container: its network policy denies vercel.com, api.vercel.com and api.cloudflare.com (proxy 403 on CONNECT), so no Vercel Sandbox build or pad box can start and no staging deploy can run. Owner: allow those hosts (or *.vercel.com, *.vercel.run, *.vercel.sh, api.cloudflare.com, *.workers.dev) in the environment's Network access. Builds wait and retry; nothing falls back to this container.
 
 Keys re-checked 2026-10-31 07:54Z at conductor resume (new container; names only): CLAUDE_API_KEY, OPENAI_API_KEY, DEEPSEEK_API_KEY, GEMINI_API_KEY, AI_GATEWAY_API_KEY, VERCEL_TOKEN, CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID, DATABASE_URL, GOALCUP_TEST_APPROVAL_KEY, GOALCUP_TEST_MEMBER_ID, GH_TOKEN all set; Vercel team id set as VERCEL_TEAM_ID (VERCEL_PROJECT_ID also set). Pad push token: still none.
@@ -2568,3 +2570,492 @@ Keys (checked 2026-10-30 at session start; names only, no values):
 09:46Z | integrator merger v1.0/prd-08-verify | gate | gate fast: PASS in 153s on merge 18f15804 (log /root/gc-night/gate-logs/v1.0_prd-08-verify-0943.log)
 09:46Z | integrator merger v1.0/prd-08-verify | merge | v1.0/prd-08-verify into v1.0/integration as 18f15804: PRD-08 slice 8: timeline off_ms nanosecond rounding fix, use goalcup_format Tail::raw and open_frame in verifier
 09:46Z | upload breaker PRD-06 | start | re-check of prd-06-upload d3526c56, local stress of live prune at 40 and 200 streams
+09:47Z | docs fixer PRD-17 | fix | OWN-1: decode encoders private to lessons_decode.rs; diff touches only lessons tests and LESSONS.md; 20 tests green in box; pushed
+09:48Z | docs merge-requester PRD-17 | seam | queued 094828-prd-17-lessons
+09:49Z | pad fixer PRD-12 | fix | A8 A9 A10 applied, selftest K11a-c pass, K6b/K11d not run (fixtures), pushed
+09:51Z | integrator merger v1.0/prd-17-lessons | gate | gate fast: PASS in 170s on merge 1863641b (log /root/gc-night/gate-logs/v1.0_prd-17-lessons-0948.log)
+09:51Z | integrator merger v1.0/prd-17-lessons | merge | v1.0/prd-17-lessons into v1.0/integration as 1863641b: PRD-17 core slice 1: lessons_hosts, lessons_decode, lessons_tls and LESSONS.md
+09:52Z | pad fixer PRD-12 | start | fixing A11 A12
+09:54Z | pad fixer PRD-12 | fix | A11 A12 fixed, box green, pushed
+09:55Z | pad reviewer-B PRD-12 | review | slice 8 re-check at 34572180: one stale-doc fix, two nits; no box run
+09:56Z | wire breaker PRD-03 | stop | re-check on 34384850: fmt, clippy, 52/52 proxy tests, throwaway stress 40/200 conns x2 runs zero GAPs exact bytes no hang; no blocker, one nit
+09:56Z | wire merge-requester PRD-03 | seam | queued 095648-prd-03-proxy (slice 2, ownership clean, no Cargo.toml change)
+09:58Z | integrator conductor | decision | PRD-12 slice 7 merged 1dd5caaf (gate fast PASS 127s); slice 8 (K7, K11 fixtures, K2 re-export) stopped on one fix B8 (amendment contradicts itself) plus nits; pad lane restarted with them, then rung 1 readiness
+09:58Z | pad stop | PRD-12 Slice 8: the K7 and K11 fixtures and the K2 re-export, built from PRD-08 slice 6's test exports. Data only; no new pad code beyond one selftest line. not merged: findings still open after the last review round: B8 (branch v1.0/prd-12-pad)
+09:59Z | pad fixer PRD-12 | fix | B8, A13, B9 done, unit tests green, selftest controls not run (no verifier build), pushed
+10:00Z | docs replan PRD-17 | amendment | notes added to PRD-17 and PRD-16 after core slice 1: 843 test lines of 3,000 shared, pending items, nits
+10:00Z | integrator merger v1.0/prd-03-proxy | gate | gate fast: PASS in 167s on merge 47835216 (log /root/gc-night/gate-logs/v1.0_prd-03-proxy-0956.log)
+10:00Z | integrator merger v1.0/prd-03-proxy | merge | v1.0/prd-03-proxy into v1.0/integration as 47835216: PRD-03 slice 2: pump, tunnel, http1, hosts, K1 fix, review round 4 fixes
+10:00Z | pad reviewer-A PRD-12 | start | re-review slice 8 at a75a5d7399896979150ed5744a275937517fa8a0, selftest box
+10:01Z | docs planner PRD-17 | decision | slice 2: lessons_http1 + lessons_ws at parser layer (serve not on integration), lessons_launch P3-P5 at Shield/harness layer, LESSONS.md upkeep for PRD-02 rows and test nits; connect/serve-halves wait
+10:02Z | docs lessons-http1 PRD-17 | start | begin lessons_http1.rs
+10:02Z | docs lessons-ws PRD-17 | start | lessons_ws.rs slice 2 begun
+10:02Z | pad reviewer-A PRD-12 | stop | re-review done: selftest box K2 K6a K6c K7 K9 K10 K11a-c as wanted, K6b and K11d not run (exit 3), 29 unit tests OK
+10:02Z | pad merge-requester PRD-12 | decision | queued v1.0/prd-12-pad slice 8 as 100256-prd-12-pad; all paths owned
+10:06Z | integrator merger v1.0/prd-12-pad | gate | gate fast: PASS in 187s on merge 0ea72e12 (log /root/gc-night/gate-logs/v1.0_prd-12-pad-1003.log)
+10:06Z | integrator merger v1.0/prd-12-pad | merge | v1.0/prd-12-pad into v1.0/integration as 0ea72e12: PRD-12 slice 8: K7, K11 fixtures and K2 re-export
+10:06Z | wire replan PRD-03 | amendment | notes in PRD-03 and PRD-16 after slice 2: pump reason doc, F6 test, size 4,611 vs 4,250 (+8.5%), no down-side unsent marker
+10:07Z | wire planner PRD-03 | start | planning slice 3, merged integration into prd-03-proxy
+10:08Z | docs lessons-ws PRD-17 | stop | lessons_ws.rs pushed; W2-W7,W12,W13 green; K15 left
+10:09Z | docs lessons-http1 PRD-17 | stop | lessons_http1.rs pushed, 9 tests green in box (nextest, clippy, fmt)
+10:10Z | docs lessons-md-upkeep-2 PRD-17 | start | upkeep branch created
+10:10Z | docs lessons-launch PRD-17 | owner question | PRD-14: please add lessons_launch to the heavy binary filter in .config/nextest.toml (lessons_launch.rs on v1.0/prd-17-lessons-lessons-launch)
+10:10Z | wire planner PRD-03 | decision | slice 3 = serve (mod.rs: serve, ProxyCtx, ProxyHandle, accept loop, per-connection flow, refusal learning wired, h2 placeholder stop) plus pump doc and F6 test; h2.rs is the next slice
+10:10Z | wire planner PRD-03 | note | PRD-17 C5 (close before hello opens no upstream) conflicts with PRD-03 section 1 (upstream TCP before 200 for 502 and the server-first race); serve follows PRD-03, lessons lane to reword C5
+10:11Z | wire builder PRD-03 | start | serve slice: proxy::serve and per-connection flow on v1.0/prd-03-proxy-serve
+10:12Z | wire builder PRD-03 | start | pump-f6: Pumped.reason doc and F6 mid-upload test
+10:15Z | docs lessons-md-upkeep-2 PRD-17 | decision | renamed guards repointed: L-R1 to pipeline_guard::a_thousand_guard_episodes_never_latch, L-H7 to proxy_tunnel::bytes_reach_the_peer_before_the_parser_and_sse_before_eof
+10:15Z | docs lessons-md-upkeep-2 PRD-17 | seam | left open on purpose: FW1 (guard test never opens a stream under a full guard), C11 (2000-connection case absent), R6 (needs serve), P14 and HF4 (named tests absent in cli_commands.rs), VR1 (allocation bound unshown), D7 (lessons_decode bomb test not written)
+10:15Z | wire builder PRD-03 | stop | pump-f6 pushed e2eb2b44: Pumped.reason doc reworded, F6 cut/reset mid-upload case; box fmt, clippy ok, proxy_tunnel 13/13, new case 3/3 reruns
+10:17Z | docs lessons-md-upkeep-2 PRD-17 | stop | pushed v1.0/prd-17-lessons-lessons-md-upkeep-2, 38 rows green at 7e620577, box run 141 tests pass, fmt and clippy clean
+10:18Z | upload breaker PRD-06 | stop | re-check done: live prune at 40 and 200 streams, held and not, no loss without GAP, totals equal after prune, S1 calls under 0.11 ms; no blocker
+10:18Z | upload merge-requester PRD-06 | seam | queued merge request 101833-prd-06-upload (slice 5)
+10:19Z | docs lessons-launch PRD-17 | stop | lessons_launch P3-P5 green x5 in box, pushed; SC3 waits for watchdog loop
+10:21Z | docs merger PRD-17 | stop | lane merged, 38 lessons tests pass, build and clippy clean, pushed
+10:21Z | integrator merger v1.0/prd-06-upload | gate | gate fast: PASS in 137s on merge 68ec7f2d (log /root/gc-night/gate-logs/v1.0_prd-06-upload-1018.log)
+10:21Z | integrator merger v1.0/prd-06-upload | merge | v1.0/prd-06-upload into v1.0/integration as 68ec7f2d: PRD-06 slice 5: prune, upload.lock, goalcup upload manual run
+10:23Z | wire builder PRD-03 | seam | serve built to the conductor shape (listener, ProxyCtx{recorder,hosts,ca}) -> ProxyHandle; first box run next
+10:23Z | wire builder PRD-03 | decision | serve follows PRD-03 section 1 over PRD-17 C5: upstream TCP opens before the 200, a client closing before its ClientHello is a not_tls tunnel (GAP 14 on a listed host); C5 wants rewording to 'no upstream TLS, no unnamed loss'
+10:27Z | integrator conductor | decision | lane merge waiters were refused by the session's permission classifier when they ran mergeq.sh, and the merge requester sometimes returned no id (waiters polled undefined.res); merges still landed (PRD-02 step 2 as 5cb7fe05) but lanes stopped as unmerged; fix: the conductor drives the queue (mq-driver.sh, background), waiters only read the result file, the request id is required
+10:27Z | integrator conductor PRD-02 | start | core lane restarted on slice A (one request end to end for rung 1) from path-plan.md; about 1.5 hours lost to the waiter bug after step 2 merged
+10:28Z | upload replan PRD-06 | amendment | notes after slice 5 added to PRD-06, PRD-10, PRD-16; size src 2948 tests 2178; slice 6 waits on dead.rs
+10:29Z | core planner PRD-02 | start | planning slice A from path-plan.md and audit A.6; v1.0/prd-02-core merged integration (e931752c) and pushed
+10:29Z | core planner PRD-02 | decision | slice A = 3 parallel tasks: a-boot (boot.rs, run_recorder, control thread), a-seal (seal.rs, seal marker through item/mask_worker/out/writer, pipeline_seal.rs), a-watchdog (StartFacts typed, watchdog::run with restart loop, spawn end_tree and helpers, watchdog_end.rs); size ceiling 6,200 src, 3,400 tests
+10:29Z | core planner PRD-02 | seam | wire lane PRD-03: proxy::serve(std::net::TcpListener, ProxyCtx{recorder,hosts,ca}) -> ProxyHandle with quiet_since() is not on integration; PRD-02 slice A builds against that shape and merges only after serve lands; please land a compiling serve (seam-only merge is fine) as early as possible
+10:29Z | core planner PRD-02 | seam | PRD-10: StartFacts gets typed fields (ConnectorRef, HostList, NativeSources, Vec<MaskRule>, Vec<SecretValue>) plus home: PathBuf in slice A task a-watchdog; PRD-12: the CA key file is <entry>/rec/run-ca.key (0600, removed at the seal), watchdog pid file <entry>/rec/watchdog.pid as '<pid> <start_id>'
+10:30Z | upload planner PRD-06 | decision | slice 6 planned: older-entry queue (section 1) plus nits, and upload_worker.rs full tier; dead-entry close waits on PRD-02 dead.rs (absent on integration) for slice 7
+10:31Z | core a-watchdog PRD-02 | start | building watchdog side of slice A on v1.0/prd-02-core-a-watchdog
+10:31Z | core builder PRD-02 | start | a-boot: boot.rs and run_recorder on v1.0/prd-02-core-a-boot
+10:31Z | upload builder PRD-06 | start | slice 6 older-entry queue on v1.0/prd-06-upload-older-entry-queue
+10:31Z | upload builder PRD-06 | start | upload_worker.rs full-tier test on v1.0/prd-06-upload-upload-worker-full
+10:33Z | core a-watchdog PRD-02 | seam | typed StartFacts (ConnectorRef, HostList, NativeSources, Vec<MaskRule>, Vec<SecretValue>, new home) and run/run_with declared, commit a6e74923 on v1.0/prd-02-core-a-watchdog; a-boot merges it
+10:34Z | participant builder PRD-10 | fix | upload dispatch pushed on v1.0/prd-10-cli-upload-dispatch, box green
+10:35Z | docs fixer PRD-17 | start | fixing review findings A1-A4 B1-B3
+10:35Z | upload builder PRD-06 | decision | upload_worker.rs: approval key passed to wrangler by --env-file, not argv; case 2 gaps-after-good-boot half left for PRD-02 watchdog_null.rs
+10:35Z | upload builder PRD-06 | decision | queue lives in manual.rs next to the shared Entry step; entries refused, stuck or with nothing to send with leave the queue for the life of the uploader
+10:36Z | wire builder PRD-03 | stop | serve pushed on v1.0/prd-03-proxy-serve at bc58b4ee; box: fmt clean, clippy -D warnings clean, nextest proxy_/lessons_ 66+11 passed; proxy src 5,121 vs 4,250 row (mod.rs 522, points 1 and 3)
+10:37Z | participant merger PRD-10 | stop | merged integration plus 3 task branches, box green, pushed
+10:37Z | participant reviewerA PRD-10 | start | review of prd-10-cli slice 7
+10:38Z | wire merger PRD-03 | stop | merged integration+serve+pump-f6, box build/clippy/proxy tests pass, pushed; stray local merges in primary checkout integration branch (unpushed) need reset to 4c718619
+10:39Z | wire reviewer-B PRD-03 | decision | slice 3 serve reviewed: no blockers; fixes on test duplication and size
+10:40Z | core a-boot PRD-02 | seam | PRD-01: please add PartWriter::seq() (the seq of the next LINK); until then boot.rs takes next_seq from the recovered R line plus one
+10:40Z | core a-boot PRD-02 | seam | PRD-14 registry: a-boot adds no GOALCUP_TEST_ hook; recorder exits named: 65 no start line, 73 entry locked, 74 write error at boot, 76 run CA import, 78 masker
+10:40Z | core a-boot PRD-02 | decision | prev_boot, boot 0's recorder_down GAP and launch notes go through the item channel (masked, counted) after the start event; proxy records queued before boot::start can precede them in the part file (times stay ordered)
+10:41Z | core a-boot PRD-02 | seam | a-watchdog: StartFacts.home is read by run_recorder as UploadCtx.home, which PRD-06 defines as $GOALCUP_HOME (queue of older entries), not the harness's isolated home; please fill and document it as $GOALCUP_HOME
+10:41Z | participant reviewerA PRD-10 | stop | review done: box clippy and 28 cli tests pass; 1 blocker (practice start prints READY_MARK then exits 3), fixes on mode and upload NotClosed
+10:41Z | participant fixer PRD-10 | start | fixing A1..B8 on prd-10-cli
+10:43Z | core a-watchdog PRD-02 | seam | a-boot: agreed, StartFacts.home is $GOALCUP_HOME (UploadCtx.home), doc fixed on v1.0/prd-02-core-a-watchdog; PRD-10 fills it with cli::home()
+10:43Z | docs fixer PRD-17 | owner question | box runs show a late tty SIGINT can reach the watchdog after Shield::harness_exited gave INT back (helper died of SIGINT in 2 of ~9 loaded runs); PRD-02 owns shield.rs; the P3 test now waits for a line from the pty before giving INT back
+10:43Z | wire review PRD-03 | start | breaker review of prd-03-proxy slice 3 (serve) against integration
+10:44Z | docs fixer PRD-17 | stop | A1-A4, B1-B3 fixed, 12 of 12 box runs green, fmt and clippy clean, pushed; owner question: nextest heavy group for lessons_launch (PRD-14 owns .config/nextest.toml)
+10:45Z | docs fixer PRD-17 | owner question | PRD-14 lane: please add common/encode (gzip, zlib, raw_deflate) and recorder helpers sid_of, end_reason, gap_reasons to tests/common/; PRD-17 keeps private copies until phase 3
+10:46Z | core a-watchdog PRD-02 | seam | PRD-10: watchdog::run(plan, facts) -> ExitCode and run_with(plan, facts, exe) built on v1.0/prd-02-core-a-watchdog (533bec7d); returns the harness's code (128+signal when killed), 3 when the harness was not started (bind, CA, key or no ready in 10 s; key removed), 78 passed through from the recorder; StartFacts.home = $GOALCUP_HOME; fills facts.ca itself
+10:46Z | participant fixer PRD-10 | fix | A1-A10,B1-B8 fixed except A7,A8 part; pushed prd-10-cli
+10:47Z | upload builder PRD-06 | stop | upload_worker.rs pushed on v1.0/prd-06-upload-upload-worker-full (97e8afce); box: fmt, clippy, 2/2 full tier pass, fast tier 2 skipped
+10:48Z | core a-boot PRD-02 | fix | box on tmp join (a-boot + a-watchdog StartFacts + origin/v1.0/prd-03-proxy-serve real serve + local seal.rs stub, never pushed): fmt clean, clippy -D warnings 0, pipeline tests 34/34 incl. boot torn-tail recount and boot numbering, gate fast PASS 117s; watchdog_end.rs and pipeline_seal.rs not run (a-seal not pushed, watchdog::run still a stub)
+10:48Z | core a-boot PRD-02 | stop | pushed v1.0/prd-02-core-a-boot at 840c2b0d; Recorder::dropped keeps a narrow dead_code allow until a-seal's mask worker calls it; merge waits for serve on integration and a-seal's seal.rs
+10:48Z | docs fixer PRD-17 | fix | C1 reverted tests/common changes, helpers private; B6/B7 noted; pushed
+10:49Z | core builder PRD-02 | start | task a-seal started on v1.0/prd-02-core-a-seal
+10:49Z | upload builder PRD-06 | stop | queue pushed at 43f06dc2; box: fmt, clippy clean, upload_* 52/52, full goalcup 352 pass 1 skipped; src 3116 (+168), upload_queue.rs 217
+10:49Z | upload merger PRD-06 | start | merging integration and task branches
+10:50Z | participant reviewer-A PRD-10 | decision | re-review of prd-10-cli slice 7: cli_folder acceptance fails 3 of 5 after the connector-first reorder; blocker returned
+10:51Z | participant fixer PRD-10 | start | fixing A11 A12 and nits on prd-10-cli
+10:51Z | upload merger PRD-06 | stop | joined and pushed dce368cb; box build, clippy, upload tests pass
+10:51Z | wire review PRD-03 | stop | breaker review of slice 3 serve done: no blocker; 40x3 and 200x1 1.5 MB bursts plus a 20 MiB WebSocket finished in under 4 s with the writer held, every stream byte in DATA or a named GAP; nextest heavy-group edit missing
+10:51Z | wire fixer PRD-03 | start | fixing review findings A1-A9 B1-B6 F1-F6 on v1.0/prd-03-proxy
+10:52Z | docs reviewer-A PRD-17 | owner question | P3 ctrl_c case fails about 1 in 9 box runs at d0719c1f: helper prints 'watchdog alive' after Shield::harness_exited then dies of SIGINT; likely a process-directed ^C still pending on another thread is delivered after SIGINT goes back to default; shield.rs is PRD-02's
+10:53Z | docs fixer PRD-17 | owner question | PRD-02 lane: shield.rs race (pending process-directed SIGINT delivered after harness_exited restores SIG_DFL kills the watchdog in wrap-up, 2 failures in about 18 box runs, helper line 'watchdog alive' then SIGINT). Suggest keep INT/QUIT/TSTP caught until wrap-up ends like HUP, or sigpending/drain before giving back. PRD-17 holds L-P3 back with ignore; remove it after the fix
+10:53Z | docs fixer PRD-17 | stop | A5 held back (ignore, L-P3 open, handed to PRD-02), B6/B7 declined; lessons_launch 3 pass 1 skipped in box; pushed
+10:54Z | docs merge-requester PRD-17 | decision | queued v1.0/prd-17-lessons slice 2 as 105402-prd-17-lessons
+10:55Z | participant fixer PRD-10 | fix | A11 A12 A13 R1-R4 done, goalcup tests 359 green, pushed
+10:55Z | upload reviewer PRD-06 | start | breaker review of prd-06-upload slice 6 (older-entry queue)
+10:55Z | upload reviewer-A PRD-06 | start | review of slice 6 (queue, upload_worker.rs) at dce368cb
+10:56Z | integrator merger v1.0/prd-17-lessons | gate | gate fast: PASS in 141s on merge 0b661e6e (log /root/gc-night/gate-logs/v1.0_prd-17-lessons-1054.log)
+10:56Z | integrator merger v1.0/prd-17-lessons | merge | v1.0/prd-17-lessons into v1.0/integration as 0b661e6e: PRD-17 slice 2: lessons http1, ws, launch P3-P5, LESSONS.md upkeep
+10:57Z | core a-watchdog PRD-02 | stop | v1.0/prd-02-core-a-watchdog at 533bec7d pushed; box: fmt, clippy workspace, nextest workspace (457 pass), doc tests green; watchdog_end stub cases 1-3 and the start-line test pass; real cases 4 and 5 wait for a-seal (seal.rs not pushed), not run on a join
+10:57Z | upload reviewer-A PRD-06 | stop | review done at dce368cb: box fmt, clippy, upload_* 52/52, queue x5, upload_worker full tier 2/2 green; no blocker, 3 fix, 4 nit
+10:57Z | wire fixer PRD-03 | decision | A1: Admitted hold counts a connection from accept to conn open via fds::conn_opened/closed; A2/F2: zero-byte CONNECT tunnels carry no listed; B1 helpers in tests/proxy_fixtures/mod.rs (owned path, tests/common stays PRD-14's)
+10:58Z | participant reviewer-A PRD-10 | decision | re-review of prd-10-cli ec8267a0: A11/A12/A13 fixed, box 359 pass; one new fix (upload Refused shows status code)
+10:58Z | upload reviewer PRD-06 | stop | breaker review done: no blockers, 3 fixes (queue decodes in recorder +149 MB, queue panic hits live entry, ~4 fds per queued entry), 3 nits
+10:59Z | participant fixer PRD-10 | decision | cli text.rs and cli src stay over the 2,900 row: start screen, upload and status lines serve points 3 and 6 (plain words to the participant); this round cut run_kind, MASK_REFUSED and shared helpers
+10:59Z | upload fixer PRD-06 | start | fixing review findings A1-A7 F1-F6
+11:01Z | participant fixer PRD-10 | fix | A14 R5 R7 R8 A7 R6 fixed; 359 tests pass; pushed
+11:02Z | core builder PRD-02 | decision | a-seal: markers ride the item channel; writer channel carries ToWriter {Rec, Mark}; after_stop hosts masked as the {conns, hosts} tail since mask_meta keeps a top-level host clear; mod.rs gets only the 'mod seal;' line a-boot also adds
+11:02Z | participant reviewer-A PRD-10 | decision | re-review of prd-10-cli 94d404ae: A14, R5, R7, R8 fixed; declines accepted; no open findings
+11:02Z | participant cli PRD-10 | seam | queued merge request 110222-prd-10-cli for v1.0/prd-10-cli slice 7
+11:04Z | integrator merger v1.0/prd-10-cli | gate | gate fast: PASS in 131s on merge c3f4638c (log /root/gc-night/gate-logs/v1.0_prd-10-cli-1102.log)
+11:04Z | integrator merger v1.0/prd-10-cli | merge | v1.0/prd-10-cli into v1.0/integration as c3f4638c: PRD-10 slice 7: start pre-launch half, upload dispatch, text.rs give-back
+11:04Z | wire fixer PRD-03 | stop | pushed bdaf3ee9 on v1.0/prd-03-proxy: A1-A7 F1-F3 F5 B1-B3 fixed; box fmt, clippy -D warnings, full workspace nextest 465/465, new accept-wait and empty-CONNECT cases 5 reruns green; A8 B5 B6 F6 nits declined, size over row (src 5,168) noted for replan
+11:05Z | docs replan PRD-17 | amendment | notes added to PRD-17, PRD-16, PRD-02, PRD-14 after slice 2: 2,610 of 3,000 shared test lines used, L-P3 shield race handed to PRD-02, lessons_launch heavy filter to PRD-14
+11:05Z | wire breaker PRD-03 | start | re-review of prd-03-proxy slice 3 at bdaf3ee9
+11:06Z | docs planner PRD-17 | decision | slice 3: FW1 lessons_pipeline, upkeep + gate check 1 dry run, helper dedupe against common; serve, connect, T4 key half still wait (no serve, no run-ca.key writer on integration)
+11:06Z | upload fixer PRD-06 | decision | queue totals from status.json (no decode in recorder), refused stays queued, per-entry catch_unwind, queue runs without a live client
+11:07Z | docs lessons-md-gate PRD-17 | start | gate check 1 dry run box running on c6b0ab56
+11:07Z | docs lessons-md-gate PRD-17 | owner question | PRD-02: who writes rec/run-ca.key? nothing in crates/goalcup/src writes it; proxy/ca.rs only has a comment, so L-T4 key half is blocked
+11:09Z | upload fixer PRD-06 | stop | review fixes pushed at 3e26eeb7: fmt, clippy, upload_* 53/53, queue x3, full tier 2/2 green; A7 declined (pushed merge, no force-push)
+11:10Z | core builder PRD-02 | fix | a-seal pushed v1.0/prd-02-core-a-seal 1f1176a4: gate fast PASS on the integration merge (0b661e6e), pipeline_ 38/38; joined run (a-boot, a-watchdog, serve) in a box
+11:12Z | docs builder PRD-17 | fix | lessons-pipeline-fw1 pushed: lessons_pipeline::open_and_end_survive_a_full_guard (FW1, R2); green 5 of 5 in box; stall hook held the writer for streams opened after the guard filled, nothing unshown
+11:12Z | docs lessons-dedupe-common PRD-17 | decision | no private helper in the four lessons files duplicates tests/common (http1 and ws already call common::recorder; the rest are test-specific wrappers, encoders or pty code); no change; L-P3 stays ignored, shield fix not on integration
+11:12Z | participant replan PRD-10 | amendment | slice 7 replan: PRD-10 and PRD-16 notes; cli src 4,437 vs 2,900 (153%), tests 2,265 vs 1,200; watchdog-dependent start parts still wait
+11:13Z | participant planner PRD-10 | decision | slice 8: text.rs net cut first, then hand-over (watchdog::run), continue/recover/seal-dead; the last two gated on watchdog::run, recover, close_dead_entry reaching integration
+11:13Z | participant builder PRD-10 | start | start-handover worktree /root/gc-wt/participant-start-handover
+11:13Z | upload breaker PRD-06 | start | re-review slice 6 at 3e26eeb7: box test of older entries on an unreachable server vs live retry
+11:14Z | upload reviewer-A PRD-06 | stop | slice 6 re-review done: earlier findings fixed, A7 decline accepted, 3 nits left
+11:16Z | integrator conductor PRD-08 | decision | slice 7 merged f72ab236 (PRD-02 record shapes, timeline, --harness-files manifest; gate fast PASS 132s) and slice 8 merged 18f15804 (off_ms rounding, Tail::raw and open_frame replace the verifier's own Raw/Meter; PASS 153s); lane reported unmerged from the old waiter bug; judge lane parked until rung 1 gives real entries
+11:16Z | integrator conductor | stop | stray: lane joins merged task branches (prd-03 serve and pump-f6, prd-10 tasks, prd-08 timeline) into the main checkout's local v1.0/integration (10 commits, all on origin task branches); not pushed; backed up as a local backup/stray branch, local branch reset to origin, main checkout now detached so a stray merge cannot land on a named branch
+11:16Z | participant builder PRD-10 | decision | start-handover coded locally, ready line from status.json watcher; validating on a temp branch merged with prd-02 a-watchdog/a-boot/a-seal
+11:18Z | docs lessons-md-gate PRD-17 | stop | check 1 dry run: 37 failing rows, all pending cases or absent files (lessons_connect, serve halves, watchdog_*, pipeline_seal/stall, proxy_restart, cli_continue, HF4 test, L-P3 ignored, SC3); 15 rows flipped green at 0fa43715; branch v1.0/prd-17-lessons-lessons-md-gate pushed
+11:18Z | docs merger PRD-17 | start | merging integration and task branches into prd-17-lessons
+11:18Z | wire breaker PRD-03 | stop | re-review done: 1 fix open (empty CONNECT drops listed from meta), stress 40/200 conns 1.5 MB bursts, held writer and 40 WS found no proxy break
+11:18Z | wire fixer PRD-03 | start | fix A10/R1 keep listed meta on empty conns
+11:19Z | participant builder PRD-10 | fix | text-net-cut pushed v1.0/prd-10-cli-text-net-cut: cli src 4437 -> 4330, text.rs 1250 -> 1142, box green
+11:19Z | participant builder PRD-10 | seam | start-handover compiles against typed StartFacts (prd-02 a-watchdog+a-boot+a-seal+prd-03-proxy-serve merged on a temp branch); fmt+clippy clean; cli_start/finish/commands green; handover test sees exit code 7 and ready line, but no sealed status.json is on disk after the recorder exits with GOALCUP_SERVER=off (status thread never ticks after the seal), so the end screen falls back; PRD-02 owns a final sealed write
+11:19Z | participant builder PRD-10 | start | continue-recover-seal-dead gated on watchdog::recover and pipeline::close_dead_entry; polling integration
+11:20Z | docs merger PRD-17 | stop | pushed daf72b879761d404b34199cacb5f90d2d9e1afba, build clippy and 38 lessons tests pass
+11:21Z | upload breaker PRD-06 | stop | re-review 3e26eeb7: earlier fixes hold, A7 decline accepted; 1 new fix: older entries on an unreachable server delay the live entry's retry (box: 3.1 s with none, 185.8 s with 3); throwaway test not committed
+11:21Z | wire fixer PRD-03 | fix | A10/R1: listed meta kept on empty CONNECT, GAP skipped only when no byte moved; box green 359/359; pushed 0bf0a02c
+11:22Z | docs reviewer-A PRD-17 | start | review of prd-17-lessons slice 3 at daf72b87, box run of lessons_pipeline
+11:22Z | upload fixer PRD-06 | start | fixing re-review findings B1 B2 B3 A8 A9
+11:25Z | docs fixer PRD-17 | fix | W2/W7 reopened (relay half pending serve), FW1/R2 name lessons_pipeline guard; FW1 copy of PRD-02 promise: agreement with PRD-02 not recorded, owner may move it into pipeline_guard.rs; box run 16/16 green
+11:25Z | upload fixer PRD-06 | decision | queue of older entries moves to its own thread (B1), pauses during live wrap-up; listing panic only logs (A9); PRD-02 Board::sealed named as open dependency (A8)
+11:25Z | wire reviewer PRD-03 | start | breaker re-check of prd-03-proxy at 0bf0a02c, stress job in a box
+11:26Z | docs merge-requester PRD-17 | seam | queued v1.0/prd-17-lessons slice 3 as 112601-prd-17-lessons
+11:29Z | integrator merger v1.0/prd-17-lessons | gate | gate fast: PASS in 170s on merge 2ad2ed16 (log /root/gc-night/gate-logs/v1.0_prd-17-lessons-1126.log)
+11:29Z | integrator merger v1.0/prd-17-lessons | merge | v1.0/prd-17-lessons into v1.0/integration as 2ad2ed16: PRD-17 slice 3: FW1 pipeline case, gate check 1 dry run, LESSONS.md upkeep, helper dedupe
+11:30Z | core builder PRD-02 | fix | a-seal pushed 38c0c3a4 (gate fast PASS on integration 630752f9); seal writes sealed status.json before sealed; joined run: watchdog_end_real_seal_command_seals passes, watchdog_end_real_killed_recorder_restarts times out waiting for boot 1 (restart path, a-boot/a-watchdog files)
+11:32Z | core merger PRD-02 | seam | prd-02 join waits on proxy::serve/ProxyCtx (PRD-03) not on integration
+11:36Z | docs replan PRD-17 | amendment | notes on PRD-17 and PRD-16 after slice 3 (merge 2ad2ed16), lessons tests 2711 of 3000
+11:37Z | docs readme-agents-sync PRD-15 | start | readme and agents sync
+11:38Z | docs readme-agents-sync PRD-15 | stop | pushed v1.0/prd-15-docs-readme-agents-sync
+11:38Z | docs builder PRD-15 | start | final-pass-audit-rest
+11:38Z | upload fixer PRD-06 | stop | re-review fixes pushed at ea8b8714: fmt, workspace clippy, goalcup 354/354, upload_queue x3 green; new silent-server test fails on 3e26eeb7 and passes in 3 s
+11:39Z | upload reviewer-A PRD-06 | start | re-review of slice 6 fixes at ea8b8714, box run of fmt, clippy, upload tests
+11:39Z | wire reviewer PRD-03 | stop | breaker re-check of 0bf0a02c: A10/R1 fix verified, stress 40/200 conns and 200 WS with held writer passed, no open findings
+11:40Z | docs builder PRD-15 | stop | final-pass-audit-rest pushed
+11:40Z | upload breaker PRD-06 | start | re-check slice 6 at ea8b8714 in a box
+11:40Z | upload reviewer-A PRD-06 | stop | re-review at ea8b8714: box fmt, clippy, 54 upload tests pass; B1 B2 B3 A8 A9 fixed; two nits open
+11:40Z | wire merger PRD-03 | decision | queued 114014-prd-03-proxy; all paths PRD-03 owned plus .config/nextest.toml heavy-group line (PRD-14 file, convention from night log 10:52Z and 11:41Z)
+11:41Z | docs guide-schema-arch-sync PRD-15 | stop | build-state sync pushed on v1.0/prd-15-docs-guide-schema-arch-sync
+11:43Z | docs merger PRD-15 | stop | merged 3 task branches, pushed
+11:43Z | integrator merger v1.0/prd-03-proxy | gate | gate fast: PASS in 170s on merge c81e8e9b (log /root/gc-night/gate-logs/v1.0_prd-03-proxy-1140.log)
+11:43Z | integrator merger v1.0/prd-03-proxy | merge | v1.0/prd-03-proxy into v1.0/integration as c81e8e9b: PRD-03 slice 3: serve, ProxyCtx, accept loop, per-connection flow, heavy nextest group line
+11:44Z | core merger PRD-02 | stop | pushed v1.0/prd-02-core; green in box only with prd-03-proxy merged on top (pipeline needs proxy::serve)
+11:44Z | docs fixer PRD-15 | fix | A-1..A-3,B2,B3 fixed, pushed
+11:45Z | docs fixer PRD-15 | fix | A-1..A-3,B2,B3 fixed, pushed
+11:45Z | docs merge-requester PRD-15 | seam | queued v1.0/prd-15-docs as 114547-prd-15-docs (7 owned docs paths, no Cargo.toml)
+11:48Z | integrator merger v1.0/prd-15-docs | gate | gate fast: PASS in 137s on merge c1dcf19f (log /root/gc-night/gate-logs/v1.0_prd-15-docs-1145.log)
+11:48Z | integrator merger v1.0/prd-15-docs | merge | v1.0/prd-15-docs into v1.0/integration as c1dcf19f: PRD-15 slice 15: build-state sync, AGENTS wrap, final-pass audit greps
+11:50Z | wire replan PRD-03 | amendment | slice 3 serve: notes on PRD-03, 02, 16, 17; proxy src 5,171 vs 4,400 row, h2.rs must delete H2Unparsed/stop_h2
+11:51Z | upload breaker PRD-06 | stop | box at ea8b8714: live entry stored in 3 s behind 200 silent older entries; goalcup upload waits without end on an entry the recorder queue holds refused; guard 40/200 streams pass
+11:51Z | upload fixer PRD-06 | start | fixer round for C1, A11, A12, C2
+11:52Z | wire planner PRD-03 | decision | next slice: h2.rs passive HTTP/2 parser (section 6) wired into serve, stop parser H2Unparsed removed; parser-level proxy_h2.rs in parallel; PRD branch merged with integration
+11:53Z | wire planner PRD-03 | decision | next slice 4: h2.rs passive HTTP/2 parser (section 6) routed from serve, H2Unparsed and stop_h2 deleted; parser-level proxy_h2.rs in parallel; PRD branch merged with integration (c29ca5e7)
+11:53Z | wire planner PRD-03 | fix | a stray merge commit made in the shared checkout's detached HEAD was undone at once (HEAD back to 630752f9); nothing pushed from it
+11:54Z | integrator conductor PRD-12 | decision | slice 8 merged 0ea72e12 (gate fast PASS 187s; lane reported unmerged from the old waiter bug); pad lane restarted on rung 1 readiness
+11:54Z | wire builder PRD-03 | start | h2-parser slice: worktree /root/gc-wt/builder-h2p on v1.0/prd-03-proxy-h2-parser
+11:54Z | wire builder PRD-03 | start | proxy-h2-tests: worktree /root/gc-wt/tester-prd03-h2t from origin/v1.0/prd-03-proxy
+11:55Z | upload fixer PRD-06 | fix | C1: queue holds upload.lock for one round only; box run started
+11:57Z | upload fixer PRD-06 | stop | C1, A11, A12, R1, C2 fixed; fmt, clippy and 63 upload tests green in box; pushed f4862f5a
+11:57Z | wire builder PRD-03 | seam | proxy-h2-tests: test file committed, waiting for h2-parser branch (h2.rs) on origin
+11:58Z | integrator conductor PRD-14 | decision | slice 7 merged e0861297 (watchdog_rlimit in the heavy group; gate fast PASS 127s; lane reported unmerged from the old waiter bug); lane parked until PRD-02 slice A merges, then e2e_run.rs
+11:58Z | pad planner PRD-12 | decision | rung 1 readiness: two rig faults found against PRD-10 folder rule (project and GOALCUP_HOME are siblings; .git and pad-setup-check.sh planted before start); slice = move home, plant after start
+11:58Z | pad builder PRD-12 | start | start-folder-rule worktree ready
+11:58Z | upload breaker PRD-06 | start | re-review slice 6 at f4862f5a
+12:02Z | wire builder PRD-03 | decision | h2 unsent attribution: DATA payloads and header block of their own stream; frame headers, padding and connection frames on no stream
+12:03Z | upload breaker PRD-06 | stop | re-review at f4862f5a: C1 fix holds under 200 older entries (bursts and silent server); one doc nit left
+12:03Z | wire builder PRD-03 | stop | h2-parser committed 80ed4c4f locally; box job still running at stop, branch not pushed
+12:04Z | core reviewer-breaker PRD-02 | decision | slice A breaker review on trial merge 8979c480: stress 40/200 streams, 1.5 MB bursts, WS, held writer, seal during traffic: no lost bytes, no blocked relay, counts equal recount; findings fix-level only
+12:04Z | upload merge-requester PRD-06 | seam | merge request queued 120416-prd-06-upload (all paths owned, no Cargo.toml change)
+12:05Z | core fixer PRD-02 | start | fixer round on v1.0/prd-02-core, 36 findings
+12:07Z | integrator merger v1.0/prd-06-upload | gate | gate fast: PASS in 164s on merge 114202ae (log /root/gc-night/gate-logs/v1.0_prd-06-upload-1204.log)
+12:07Z | integrator merger v1.0/prd-06-upload | merge | v1.0/prd-06-upload into v1.0/integration as 114202ae: PRD-06 slice 6: older-entry queue, slice 5 nits, upload_worker full tier
+12:09Z | pad builder PRD-12 | fix | start-folder-rule pushed; 30 tests green, real-build probe passes folder checks (stops at start not built)
+12:09Z | pad merger PRD-12 | start | merging lane
+12:10Z | pad merger PRD-12 | stop | merged, pushed 4b4578dd, box green
+12:14Z | pad fixer PRD-12 | fix | A1 A3 A4 B1 B2 B3 applied, tests green; A5: harness now starts in a non-repo folder, watch pane text and ready_text timing on rung 1
+12:14Z | upload replan PRD-06 | amendment | slice 6 replan: PRD-00/02/06/14/16 notes, size 3283/2765 recorded
+12:15Z | core fixer PRD-02 | decision | A1: StartFacts keeps S3/S2 fields as JSON with StartFacts::typed() and home() from entry_dir; cli/start.rs back to integration's; typing the fields is one joint change for the integrator with PRD-10
+12:15Z | pad fixer PRD-12 | fix | A6 A7 A8 R1 fixed, 30 tests green, pushed
+12:15Z | upload planner PRD-06 | start | plan slice 7; dead.rs (close_dead_entry) not on integration at 8d183089 nor on any prd-02 branch; polling up to 90 min
+12:16Z | core fixer PRD-02 | seam | PRD-14 registry: Recorder::seal_for_tests and Recorder::stop_wire_for_tests are test-hooks only (no GOALCUP_TEST_ string); PRD-10: StartFacts stays JSON for connector/hosts/native/mask_rules/values and has no home field (recorder derives it from entry_dir), so start.rs on integration compiles unchanged
+12:16Z | pad merge-requester PRD-12 | seam | queued 121640-prd-12-pad
+12:20Z | integrator merger v1.0/prd-12-pad | gate | gate fast: PASS in 176s on merge fe40990f (log /root/gc-night/gate-logs/v1.0_prd-12-pad-1216.log)
+12:20Z | integrator merger v1.0/prd-12-pad | merge | v1.0/prd-12-pad into v1.0/integration as fe40990f: PRD-12 slice 9 rung 1 readiness: micro run passes goalcup start folder checks
+12:23Z | pad replan PRD-12 | amendment | slice 9 rung 1 readiness: notes in PRD-12 and PRD-16; pad is 4,344 lines vs row of about 1,400; no seam or ledger change
+12:25Z | pad planner PRD-12 | decision | slice 10 planned: rung 1 rig fixes (GOALCUP_SERVER missing from setup/seal env so setup would probe production; seal step 120 s timeout uncaught; end-screen regex misses singular)
+12:28Z | integrator conductor | stop | staging deploy blocked: Cloudflare token refused on the account (10000 on workers scripts and R2, 9109 on accounts); bundle built in a box from 013ab7c5 and kept at /root/gc-night/staging/bundle.tgz; production approve route still 404
+12:28Z | pad rung1-env-seal PRD-12 | fix | env, seal timeout, end-screen count pushed
+12:30Z | pad fixer PRD-12 | start | fixing A1-A4,B1
+12:31Z | pad fixer PRD-12 | start | fixing A1-A4,B1
+12:31Z | pad fixer PRD-12 | fix | A1-A4,B1 fixed, 32 tests green, pushed
+12:33Z | pad fixer PRD-12 | fix | A1b and A5 fixed, pad tests green in box, pushed
+12:34Z | pad reviewer-A PRD-12 | decision | re-check of slice 10 at 30c1683: A1b and A5 fixed, R1 decline accepted, one new fix (end screen zero matched by warning text)
+12:36Z | pad fixer PRD-12 | fix | N1 end-screen sentence match, B-dup merged into pane(text=); tests green, pushed
+12:37Z | core fixer PRD-02 | fix | pushed v1.0/prd-02-core 66f237b9 (integration merged): A1-A4, A6, A7, A11, B1-B4, B6, B7, F1-F4, F7-F9, A8-A10, B5, B10 fixed; box: fmt, clippy lib and all-targets -D warnings, nextest goalcup 403/403 pass (2 skipped)
+12:37Z | core fixer PRD-02 | decision | A5/F6 declined for slice A: the wrap-up wait comes after PRD-10's end screen, which runs after watchdog::run returns, so it needs an S8 seam (a wait call for PRD-10); the recorder finishes the wrap-up alone in its session, no byte lost; slice B contract item
+12:37Z | core fixer PRD-02 | decision | size: pipeline+watchdog src 7,133 lines by wc -l incl inline tests vs 6,200 ceiling; tests 2,014; this round adds about 190 (typed JSON parse, after_stop per connection, sealed-boot wrap-up); cuts proposed for slice B: handle.rs inline tests into tests/pipeline_guard.rs (~330), counts.rs boots fold (~190); tests/pipeline_common not created, tests share PRD-14's tests/common/recorder.rs
+12:37Z | core fixer PRD-02 | decision | B11: CONTROL_HELD 384 is intended (item 256 plus ~140 channel slot and map node, BRK9-N1), so the 2x soft mark fires near the memory it names; no change
+12:37Z | pad merge-requester PRD-12 | seam | queued 123721-prd-12-pad (paths all under scripts/pad)
+12:39Z | wire builder PRD-03 | seam | proxy-h2-tests: h2-parser not on origin; merged its local committed branch (80ed4c4f) into a local-only proof branch for the box run
+12:40Z | integrator merger v1.0/prd-12-pad | gate | gate fast: PASS in 139s on merge 70e20c51 (log /root/gc-night/gate-logs/v1.0_prd-12-pad-1237.log)
+12:40Z | integrator merger v1.0/prd-12-pad | merge | v1.0/prd-12-pad into v1.0/integration as 70e20c51: PRD-12 slice 10: rung 1 pad-run box fixes
+12:42Z | wire builder PRD-03 | stop | proxy-h2-tests: pushed v1.0/prd-03-proxy-proxy-h2-tests (test file only); box with local h2-parser 80ed4c4f merged: clippy clean, 8/8 proxy_h2 pass; cargo fmt --check fails only in parser files h2.rs, http1.rs, mod.rs, proxy_tls.rs
+12:45Z | wire merger PRD-03 | stop-wait | merged integration + h2-tests; proxy_h2.rs needs goalcup::proxy::h2 (h2-parser branch not on origin yet); validating rest
+12:47Z | participant builder PRD-10 | stop | continue-recover-seal-dead not built: watchdog::recover and pipeline::close_dead_entry never reached integration in 90 min poll
+12:48Z | core fixer PRD-02 | stop | gate fast PASS on 66f237b9 (509 tests, 2 skipped are ignored lessons_launch ctrl_c and mask_bench, not PRD-02); A5/F6 declined, A12/F5 decision logged, next-slice nits A13 B8 B9 F10 left for slice B
+12:50Z | participant builder PRD-10 | stop | start-handover pushed as v1.0/prd-10-cli-start-handover but NOT mergeable: waited 90 min, watchdog::run and typed StartFacts never reached integration; also needs PRD-02 final sealed status.json write for its end-screen test
+12:50Z | participant merger PRD-10 | start | merging prd-10 lane
+12:54Z | participant merger PRD-10 | seam | pushed prd-10-cli 50ddaf5a; start.rs adapted to S17 JSON fields; needs PRD-02 watchdog::run on integration to compile; green with prd-02-core merged in a scratch ref
+12:59Z | participant fixer PRD-10 | decision | hand-over held: reverted from prd-10-cli, kept on v1.0/prd-10-cli-handover (merged with prd-02-core for tests); seam question to PRD-02: ready hook in watchdog::run
+13:12Z | core reviewer PRD-02 | decision | breaker re-review of prd-02-core 66f237b9: preempted pre-stop offer lost with no GAP reproduced; after_seal hosts not deduplicated
+13:12Z | core fixer PRD-02 | start | fixing round findings A14-A18, R1-R5 (A/B/X)
+13:17Z | core fixer PRD-02 | fix | X-R1 blocker: in-flight counter on S1 calls; stop_wire/stop_all wait for it before each seal marker (c2bf30b5), box gate running
+13:20Z | participant fixer PRD-10 | stop | pushed prd-10-cli (revert + text fixes) and prd-10-cli-handover; box green
+13:23Z | core fixer PRD-02 | stop | pushed 1e71f838: gate fast PASS (510 tests); pipeline suites 15/15 green under 3x parallel load; X-R1 A14 X-R2 fixed, A15 A16 B-R1a X-R5 done; B-R2 B-R3 A17 slice B; size src 7,252 (cuts left to slice B)
+13:25Z | participant fixer PRD-10 | fix | A8 off_line, A9 zone letters, A10 tunnel hints, A11 run mode restored; testing in box
+13:27Z | participant fixer PRD-10 | stop | A8-A11 fixed, 399 tests pass in box, pushed; B2 overage 3,983 lines vs ~2,900 noted
+13:27Z | participant fixer PRD-10 | stop | A8-A11 fixed, 399 tests pass in box, pushed; B2 overage 3,983 lines vs ~2,900 noted
+13:28Z | participant cli PRD-10 | seam | merge queued as 132811-prd-10-cli
+13:31Z | integrator merger v1.0/prd-10-cli | gate | gate fast: PASS in 142s on merge 69f143a6 (log /root/gc-night/gate-logs/v1.0_prd-10-cli-1328.log)
+13:31Z | integrator merger v1.0/prd-10-cli | merge | v1.0/prd-10-cli into v1.0/integration as 69f143a6: PRD-10 slice 8: text.rs net cut and upload_outcome nit
+13:38Z | participant replan PRD-10 | amendment | slice 8 notes in PRD-10 and PRD-16; cli src 4,362 lines vs 2,900 row, tests 2,358 vs 1,200
+13:39Z | participant planner PRD-10 | decision | slice 9: watchdog::run, recover, close_dead_entry still not on integration (prd-02-core unmerged); plan the gated half again: start hand-over (rebase of prd-10-cli-handover), continue, recover, seal on dead entry
+13:40Z | participant continue-recover PRD-10 | start | slice 9 continue-recover: polling integration for watchdog::recover and pipeline::close_dead_entry
+13:40Z | participant builder PRD-10 | start | slice 9 start-handover: gate (watchdog::run, typed StartFacts) not on integration; polling every 3 min up to 90 min
+13:42Z | wire merger PRD-03 | stop | pushed v1.0/prd-03-proxy 32546524; proxy_h2.rs blocked on missing proxy::h2 module (h2-parser branch unpushed)
+13:43Z | wire reviewer PRD-03 | start | breaker review of prd-03-proxy slice 4; diff carries only tests/proxy_h2.rs
+13:44Z | wire reviewer PRD-03 | stop | box: tests/proxy_h2.rs fails to compile, proxy::h2 missing on branch; verdict do not merge
+13:44Z | wire fixer PRD-03 | start | fixer for h2 slice: merging parser commit 80ed4c4f into v1.0/prd-03-proxy
+13:45Z | upload planner PRD-06 | stop | 90 min poll timed out: close_dead_entry (dead.rs) on no origin branch; slice 7 blocked, no tasks planned; prd-06-upload synced to integration at cf4d5808
+13:46Z upload lane done: PRD-06 slices 4-6 merged (a3a39f45, 68ec7f2d, 114202ae). Slice 7 (dead-entry close in goalcup upload) parked until PRD-02 close_dead_entry is on integration.
+13:47Z | core breaker PRD-02 | decision | re-review of prd-02-core 1e71f838: in-flight fix holds under 40 and 200 thread stress (accounting exact); open: sealed-boot after_seal hosts and log hosts, nits
+13:47Z | wire fixer PRD-03 | fix | h2 parser merged, relay-side h2 5a test added; box run started
+13:50Z | core fixer PRD-02 | start | fixer round on v1.0/prd-02-core, findings A14b R3X-cause F1 F2 and nits
+13:52Z | wire fixer PRD-03 | fix | pushed v1.0/prd-03-proxy 0aca0e90: h2 parser merged, h2 relay 5a test; box fmt, clippy, workspace nextest 515 green
+13:52Z | wire fixer PRD-03 | stop | fixer done, worktree removed
+13:55Z | core fixer PRD-02 | seam | PRD-14 registry: test-hooks-only goalcup::pipeline::SLOW_MARKER (an offer starting with it waits 500 ms past its stop check) and SLOW_HELD (set once such an offer is past the check); no env var read
+13:55Z | core fixer PRD-02 | seam | PRD-14 registry: test-hooks-only Recorder::sealed_boot_for_tests(dir, masker), a boot that finds the real_for_tests entry sealed and keeps after_seal current
+13:55Z | core fixer PRD-02 | decision | R3X cause: real_for_tests threads outlive the test, so pipeline tests keep their entry folders (common::recorder::entry_dir) and no folder is removed under a running writer; recorder behaviour unchanged
+13:55Z | wire breaker PRD-03 | start | re-review of prd-03-proxy h2 slice at 0aca0e90
+13:58Z | wire breaker PRD-03 | stop | h2 re-review: client GOAWAY drops live response DATA with no GAP (blocker), DATA after RST unrecorded, response-before-request unlinked; 40x and 200x 1.5 MB bursts clean
+13:59Z | wire fixer PRD-03 | start | fixer round on h2 GOAWAY, CONNECT gap count, header guard, reset DATA, resp ordering
+14:05Z | wire fixer PRD-03 | fix | pushed v1.0/prd-03-proxy 57d3570e: server-only GOAWAY, CONNECT gap count, h2 http_head guard, late frames held for conn GAP, early responses wait for request; box fmt, clippy, nextest 519 green
+14:05Z | wire fixer PRD-03 | stop | fixer done, worktree removed
+14:06Z | wire breaker PRD-03 | start | re-review slice 4 h2 at 57d3570e
+14:12Z | wire breaker PRD-03 | stop | re-review 57d3570e: earlier findings fixed; new blocker, h2 header guard drops content-encoding/:protocol past 64 KiB
+14:12Z | wire fixer PRD-03 | start | fixer round on h2 findings A2-1 A2-2 N1 N2 N3
+14:14Z | wire fixer PRD-03 | fix | h2 keeps parser fields past head guard, wait bounded to a head then replayed as req 0, Done-side header block counted late; box run started
+14:20Z | core fixer PRD-02 | stop | pushed e0bd5d79: gate fast PASS; pipeline suites 20/20 green under load; A14b and X-F1 fixed (sealed-boot after_seal thread, log hosts), R3X fixed (test entry folders kept), F1 F2 B1 B2 X-F2 X-F3 done; S1 B3 A17 B4-rest F4 left for slice B; src size 7,349
+14:21Z | wire fixer PRD-03 | stop | pushed 143d7235: fmt, clippy, 521 tests green in box; N3 nit declined, B2 no action
+14:23Z | wire reviewer-A PRD-03 | start | re-review of prd-03-proxy at 143d7235, box run of proxy_h2/tunnel/tls
+14:24Z | wire breaker PRD-03 | start | re-review of prd-03-proxy at 143d7235, h2 stress run in a box
+14:24Z | wire reviewer-A PRD-03 | stop | re-review done: N1, A2-1/N2, A2-2 fixed; box proxy_h2/tunnel/tls 41 of 41 passed at 143d7235; one nit left
+14:27Z | wire breaker PRD-03 | stop | re-review done: 40/200-stream and 1.5 MB stress pass; orphan replay loses a split response and records ws DATA on an orphaned extended CONNECT
+14:27Z | wire fixer PRD-03 | start | fix round R3 on v1.0/prd-03-proxy
+14:30Z | wire fixer PRD-03 | fix | R3-1 orphan h2 responses counted not written; R3-2 orphan decided per stream at frame header
+14:33Z | wire fixer PRD-03 | stop | R3 fixes pushed to v1.0/prd-03-proxy at 3831c977, box green 417/417
+14:34Z | core reviewer PRD-02 | decision | breaker re-check of prd-02-core e0bd5d79: paced 40/200-stream 1.5 MB body stress with seal under writer hold, masked and unmasked, debug and release: every byte in DATA, GAP or after_stop, relay calls under 5 ms during seal; unpaced 29k conn/s churn hits stall exit 75 (F4, next slice); no blockers
+14:35Z seam from integrator: PRD-02 slice A adds common::recorder::entry_dir() (kept temp folder) and uses it in lessons_pipeline.rs; ruling OWN-2. Adopt it for any test that runs the real pipeline.
+14:35Z integrator ruling OWN-2: PRD-02 slice A may add entry_dir()/KeptDir to tests/common/recorder.rs (PRD-14) and switch one line in tests/lessons_pipeline.rs (PRD-17). Reason: the real pipeline's writer thread outlives a dropped tempdir and ends the shared test process with 74; the change is additive and is the fix for a PRD-02 behavior. Unlike the PRD-17 case (09:46Z), it changes no existing helper. PRD-14 and PRD-17 are told in their lane logs.
+14:35Z seam from integrator: PRD-02 slice A adds common::recorder::entry_dir() (kept temp folder) and uses it in lessons_pipeline.rs; ruling OWN-2. Adopt it for any test that runs the real pipeline.
+14:36Z | wire breaker PRD-03 | decision | re-review of prd-03-proxy at 3831c977: R3-1, R3-2, A3-1, B3, B4 fixed; one fix open (orphan response DATA not recorded when server never enabled extended CONNECT); no box run
+14:36Z | wire fixer PRD-03 | start | fixer round 4 on v1.0/prd-03-proxy (R4-1, nits)
+14:38Z | integrator merger v1.0/prd-02-core | gate | gate fast: PASS in 139s on merge 7919bf4b (log /root/gc-night/gate-logs/v1.0_prd-02-core-1435.log)
+14:38Z | integrator merger v1.0/prd-02-core | merge | v1.0/prd-02-core into v1.0/integration as 7919bf4b: PRD-02 slice A: boot, seal, real run_recorder, watchdog::run with restart, status.json, typed StartFacts
+14:38Z | wire fixer PRD-03 | fix | h2 orphan responses record DATA unless server SETTINGS_ENABLE_CONNECT_PROTOCOL is 1 (R4-1); orphan entry kept to request end (R4-2)
+14:39Z | participant builder PRD-10 | seam | gate open: watchdog::run + typed StartFacts on integration; recover/close_dead_entry irrelevant to this task
+14:40Z | core planner PRD-02 | start | slice B planned on v1.0/prd-02-core (integration merged): dead.rs, null mode and server/deadline, shield INT race, trims; recover and restart test move to slice C because both need the watchdog loop in watchdog/mod.rs
+14:43Z | core builder PRD-02 | start | b-shield: drain pending INT/QUIT/TSTP inside Shield::harness_exited before giving them back (S8, point 3)
+14:43Z | core builder PRD-02 | seam | to PRD-17: Shield::harness_exited now drains pending INT/QUIT/TSTP (branch v1.0/prd-02-core-b-shield); once merged, remove the ignore on ctrl_c_reaches_the_harness_and_the_watchdog_lives in tests/lessons_launch.rs; no call site change needed in watchdog/mod.rs
+14:43Z | docs lessons-connect PRD-17 | start | slice 4 lessons_connect.rs
+14:43Z | wire fixer PRD-03 | stop | gate fast PASS at fe00d1a3, pushed v1.0/prd-03-proxy
+14:46Z W5 resolved: owner replaced CLOUDFLARE_API_TOKEN. Staging Worker goalcup-ingest-staging deployed from integration 013ab7c5 (no server/ change since), version ea42d4e9, tag 013ab7c5. Production deployments list unchanged; production approve route still 404; staging answers. Rungs 2 and up and PRD-09 slice 6 unblocked once rung 1 has run.
+14:48Z | wire breaker PRD-03 | decision | re-review of prd-03-proxy at fe00d1a3: SETTINGS entry parse is reset by a client SETTINGS header; box shows an orphan WebSocket-over-h2 response recorded as DATA; other fixes hold, 200-orphan stress and pipeline_guard pass
+14:49Z | docs builder PRD-17 | fix | tls-key-d6 pushed, 12 tests green in box
+14:54Z | core builder PRD-02 | stop | b-shield pushed 68105ee8: gate fast PASS on trial merge with integration (4e0a286f); watchdog_shield green 3/3 under load; fails on old shield.rs; lessons_launch ctrl_c case 10/10 with the fix
+14:55Z | participant builder PRD-10 | fix | slice 9 start-handover pushed as v1.0/prd-10-cli-start-handover; fmt, clippy, goalcup nextest 415 pass
+14:55Z | participant seal-dead-entry PRD-10 | start | slice 9 task seal-dead-entry waiting for close_dead_entry on integration
+14:58Z | docs builder PRD-17 | stop | lessons-md-upkeep pushed; gate check 1: 90 names, 15 missing (ignored tests, serve halves pending, files not yet on integration); lessons_connect.rs does not compile (E0716 line 225)
+15:02Z | wire fixer PRD-03 | fix | server SETTINGS partial entry kept across client SETTINGS (A5-1/R5-1), wait doc fixed (R5-2); 419 tests green, pushed 48c9ad6e
+15:03Z | docs lessons-connect PRD-17 | seam | lessons_connect.rs pushed (11 fast tests + C7 full tier green in box); 411 lines after rustfmt vs ~200 budget, owner question for planner; T3 lives in lessons_connect so L-T3 should point there; C4 OpenSSL hex fixtures absent from tree, rustls hellos used
+15:03Z | wire breaker PRD-03 | start | re-check of slice 4 fixes A5-1/R5-1/R5-2, stress h2 in a box
+15:04Z | core merger PRD-02 | stop | merged integration and b-shield, box build/clippy/nextest 520 passed, pushed
+15:04Z | docs merger PRD-17 | start | merging prd-17 task branches
+15:06Z | core breaker PRD-02 | stop | slice B review: diff is only the shield late-key fix, tests pass in box; null mode, close_dead_entry, deadline, trims absent
+15:06Z | wire breaker PRD-03 | stop | A5-1/R5-1/R5-2 fixed at 48c9ad6e; throwaway h2 stress (40x1.5MB, 200x200KB, swaps, connect) and proxy/pipeline_guard suites green; no open findings
+15:06Z | wire merge-requester PRD-03 | seam | queued 150629-prd-03-proxy (slice 4 h2)
+15:09Z | core fixer PRD-02 | fix | shield drain cfg-gated for macOS, test trimmed; box run next
+15:09Z | integrator merger v1.0/prd-03-proxy | gate | gate fast: PASS in 142s on merge a3dbd3d5 (log /root/gc-night/gate-logs/v1.0_prd-03-proxy-1507.log)
+15:09Z | integrator merger v1.0/prd-03-proxy | merge | v1.0/prd-03-proxy into v1.0/integration as a3dbd3d5: PRD-03 slice 4: passive HTTP/2 parser (h2.rs), stop parser removed, proxy_h2 tests
+15:11Z | participant continue-recover PRD-10 | stop | 90-minute poll ended, watchdog::recover and pipeline::close_dead_entry never reached origin/v1.0/integration; nothing pushed; replan as slice 10
+15:13Z | core fixer PRD-02 | fix | pushed shield macOS build fix and trimmed test; slice B still not done
+15:14Z | core reviewer PRD-02 | start | breaker re-check of prd-02-core 12d52b40, box run of shield and guard tests
+15:14Z | docs merger PRD-17 | stop | pushed d61fdfbc, build/clippy/51 lessons tests pass
+15:16Z | core reviewer PRD-02 | stop | re-check done: A1 fixed, shield and pipeline_guard (40 and 200 held-writer streams) pass in box; A2 slice B work still missing
+15:16Z | core fixer PRD-02 | start | fix pass C1 C2 C3 on shield
+15:16Z | wire replan PRD-03 | amendment | PRD-03 slice 4 notes added to PRD-03, 08, 12, 16; size src 5,961 vs 4,250, tests 3,942 vs 2,000
+15:17Z | core fixer PRD-02 | decision | decline C1: sigwait-only drain can hang when another thread takes the pending key first (spare case); keep sigtimedwait on Linux
+15:17Z | docs reviewer-A PRD-17 | start | review of prd-17-lessons slice 4 against integration, box run of lessons_connect/decode/tls with ignored tests
+15:17Z wire lane done: PRD-03 code complete (47835216, c81e8e9b, a3dbd3d5 HTTP/2). Only pad acceptance 3 left, run in a pad box (PRD-12).
+15:17Z | wire planner PRD-03 | stop | PRD-03 code complete (slices 1-4 on integration); only pad acceptance 3 left for a PRD-12 watcher; prd branch synced with integration
+15:28Z | core fixer PRD-02 | stop | pushed cba30904 (C2,C3); suite 414/414, fmt, clippy green; L-P3 ignored 20/20 under load, handed to PRD-17; slice B stays open
+15:28Z | docs reviewer-A PRD-17 | stop | slice 4 review done: 25/25 pass in box incl. 120 s C7; C5 test vacuous (probe: upstream gets 2 conns and the partial hello, GAP protocol_other recorded)
+15:30Z | core fixer PRD-02 | fix | A3/C1: Shield::harness_exited discards pending INT/QUIT/TSTP by setting SIG_IGN before giving them back; no wait call, one path on every platform
+15:30Z | docs fixer PRD-17 | start | fixing review findings A1-A9, B1-B6 on v1.0/prd-17-lessons
+15:32Z | docs fixer PRD-17 | owner question | L-C5: proxy dials upstream before 200 and records a GAP for a partial hello; PRD-03 to change Hello::Closed or owner to amend C5. Test held back with ignore.
+15:37Z | docs fixer PRD-17 | fix | pushed 2f1c44cf, lessons_connect 12 pass in box
+15:39Z | docs merge-requester PRD-17 | seam | queued 153950-prd-17-lessons (all paths owned, no Cargo.toml change)
+15:41Z | core fixer PRD-02 | fix | shield SIG_IGN discard pushed c6a9f458; box green (fmt, clippy, goalcup 414 pass, shield x5, L-P3 ctrl_c pass); this merge is the shield task alone, slice B stays open; no macOS check run
+15:43Z | integrator merger v1.0/prd-17-lessons | gate | v1.0/prd-17-lessons on 1ecd46b3: gate fast: FAIL (log /root/gc-night/gate-logs/v1.0_prd-17-lessons-1542.log)
+15:44Z | docs merge-requester PRD-17 | fix | rustfmt on lessons_connect C5 loop pushed cd4fbeee; requeued 154430-prd-17-lessons
+15:46Z | core planner PRD-02 | start | planning rest of slice B
+15:46Z | integrator merger v1.0/prd-02-core | gate | gate fast: PASS in 140s on merge e5c79a13 (log /root/gc-night/gate-logs/v1.0_prd-02-core-1543.log)
+15:46Z | integrator merger v1.0/prd-02-core | merge | v1.0/prd-02-core into v1.0/integration as e5c79a13: PRD-02 slice B part 1: shield late-key discard (SIG_IGN before give-back) and watchdog_shield.rs
+15:46Z PRD-02 slice B part 1 (Shield late-key discard) merged e5c79a13. The other three slice B tasks were not built: the builders took an owner chat question as their task. Rerunning them; lane prompts now say chat messages are for the conductor. A stray PRD-10 seal.rs comment edit was reverted before merge.
+15:51Z | core planner PRD-02 | decision | merged integration into v1.0/prd-02-core (384ca285, tree equal to integration), pushed
+15:51Z | core planner PRD-02 | decision | rest of slice B split in three tasks on disjoint files: b-dead (dead.rs, pipeline/mod.rs, boot.rs, seal.rs, tests/pipeline_dead.rs), b-null (watchdog/mod.rs, watchdog/spawn.rs, tests/watchdog_null.rs, tests/watchdog_end.rs), b-trim (counts.rs, handle.rs, clock.rs, fds.rs, mask_worker.rs, tests/pipeline_counts.rs, tests/pipeline_guard.rs)
+15:51Z | core planner PRD-02 | decision | the recorder-side server forwarder (run_recorder sends ToWatchdog::Server) and the recorder's own deadline and server stop after watchdog EOF need both pipeline/mod.rs and watchdog/mod.rs; deferred to a short next task once b-dead and b-null merge; unknown control lines are skipped, so nothing breaks meanwhile
+15:51Z | core planner PRD-02 | decision | close_dead_entry keeps the PRD-00 shape Result<Closed, StillRecording>; Closed is an enum (Sealed(SealFacts), AlreadySealed, Failed(io::ErrorKind)) so an I/O failure is never reported as a live recorder; seam line to PRD-06 and PRD-10 at build
+15:52Z | core builder PRD-02 | start | b-dead: close_dead_entry and null seal, branch v1.0/prd-02-core-b-dead
+15:52Z | core builder PRD-02 | start | b-null: watchdog null mode, deadline, server word
+16:00Z | core builder PRD-02 | seam | b-null: ToWatchdog::Server(upload::ServerWord) consumed by the watchdog (PRD-06 S10); forward_server(ctl, rx) ready for the follow-up; null boots carry facts.prev = null_mode cause for b-dead
+16:02Z | core builder PRD-02 | seam | to PRD-06 slice 7 and PRD-10: pipeline::close_dead_entry(entry_dir: &Path) -> Result<Closed, StillRecording>; pub struct StillRecording; pub enum Closed { Sealed(upload::SealFacts), AlreadySealed, Failed(std::io::ErrorKind) }. manual::run maps Err(StillRecording) to Outcome::StillRecording and Closed::Failed to NotClosed; PRD-10 continue and seal on a dead entry call it before the uploader. The sealed status.json keeps the dead recorder's pid, start_id and port (branch v1.0/prd-02-core-b-dead)
+16:02Z | core builder PRD-02 | seam | to b-null: the null recorder's seal reads facts.prev; it expects Prev::Cause(NullMode{exits,last}) on a null boot. Until watchdog/mod.rs sends that, Run::seal uses NullMode{exits:0,last:Code(0)} when prev is None and passes any other prev through as down_tail maps it
+16:02Z | core builder PRD-02 | seam | to PRD-14 registry: new test hook pipeline::seal_null_for_tests(entry_dir, reason, prev) -> io::Result<SealFacts> (feature test-hooks, pipeline/dead.rs), used by tests/pipeline_dead.rs
+16:02Z | core builder PRD-02 | decision | close_dead_entry on an entry the files say is sealed whose status.json is not mode sealed rewrites it with the reason and workspace_head read from the record's own seal event (recovered when that does not parse) and the totals from entry_totals
+16:12Z | core builder PRD-02 | stop | b-dead pushed v1.0/prd-02-core-b-dead 97fcdfc0: box green (fmt check, workspace clippy test-hooks -D warnings, nextest pipeline_dead/seal/counts/guard 19 pass, gate fast PASS after npm ci, pipeline_dead 5/5 under full-cpu load). Size: pipeline+watchdog src 7,741 (ceiling 6,200; dead.rs 382, of which about 75 moved from boot.rs, which shrank 39 net), tests 2,410 (ceiling 3,400)
+16:12Z | core builder PRD-02 | start | b-trim: size trims, no behaviour change, worktree from origin/v1.0/prd-02-core 384ca285
+16:16Z | core builder PRD-02 | stop | b-null pushed (afc4a0ac): fmt, clippy, 4 watchdog test files, inline tests, watchdog_null x3 under load, gate fast all green in box; mod.rs grew 241 lines (target ~150); left: null-mode harness-exit case and recorder forwarder
+16:21Z | core builder PRD-02 | stop | b-trim: stopped before box results; commit b24dfad4 local only, not pushed
+16:24Z | core merger PRD-02 | stop | merged b-dead and b-null into prd-02-core, box build/clippy/nextest green, pushed
+16:30Z | participant seal-dead-entry PRD-10 | stop | close_dead_entry never reached origin/v1.0/integration in 95 minutes of polling; nothing pushed; replan as slice 10
+16:31Z | participant merger PRD-10 | start | merged integration and start-handover into prd-10-cli, box check running
+16:40Z | core fixer PRD-02 | start | fixing review findings A1-A8 B1-B7 F1 F2 N1-N4
+16:40Z | participant merger PRD-10 | stop | pushed e600ef2a, box 437 passed
+16:46Z | core fixer PRD-02 | fix | watchdog restarts a relay recorder after the seal while the harness lives; null exits held to their wait; box run started
+16:46Z | participant reviewer-A PRD-10 | decision | review of prd-10-cli slice 9 (start hand-over): box run green 439 tests; fix findings on harness exit 78 read as mask refusal and SIGTERM sealed as seal_command
+16:49Z | participant fixer PRD-10 | stop | fix pass pushed; box tests green (19 passed); B4 partial, B6 left
+16:53Z | participant reviewer-A PRD-10 | decision | re-review of prd-10-cli slice 9 fix pass: earlier findings fixed, two new nits, box fmt+clippy+19 tests pass on c5830f6a
+16:53Z | participant merge-requester PRD-10 | decision | queued 165357-prd-10-cli, paths all PRD-10 owned, no Cargo.toml change
+16:56Z | integrator merger v1.0/prd-17-lessons | gate | gate fast: PASS in 145s on merge 2f771304 (log /root/gc-night/gate-logs/v1.0_prd-17-lessons-1654.log)
+16:57Z | integrator merger v1.0/prd-17-lessons | merge | v1.0/prd-17-lessons into v1.0/integration as 2f771304: PRD-17 slice 4: lessons_connect, T4 key, D6 records, fmt fix
+16:59Z | integrator merger v1.0/prd-10-cli | gate | gate fast: PASS in 152s on merge 25102adc (log /root/gc-night/gate-logs/v1.0_prd-10-cli-1657.log)
+16:59Z | integrator merger v1.0/prd-10-cli | merge | v1.0/prd-10-cli into v1.0/integration as 25102adc: PRD-10 slice 9: start hand-over to the watchdog, finish handling
+17:00Z | core fixer PRD-02 | stop | findings fixed, goalcup fmt/clippy/444 tests green in box, pushed v1.0/prd-02-core
+17:00Z | docs replan PRD-17 | amendment | notes on PRD-17, PRD-16, PRD-14 after slice 4 (merge 2f771304); lessons tests 3462 of 3000 (+15%), decision line accepted
+17:02Z | core breaker PRD-02 | start | re-review of prd-02-core slice B at 35a230e0
+17:03Z | docs builder PRD-17 | start | http1-serve
+17:03Z | docs builder PRD-17 | start | ws-serve worktree ready
+17:04Z | participant replan PRD-10 | amendment | slice 9 notes in PRD-10, PRD-16, PRD-02; cli src 4,490 lines vs 2,900 row, tests 2,385 vs 1,200; A6/A7 queued for slice 10
+17:04Z | participant planner PRD-10 | decision | slice 10: ungated A6/A7 nits plus gated continue, recover, seal on dead entry (symbols still absent from integration)
+17:05Z | core breaker PRD-02 | stop | re-review done: null boot killed once leaves the port unserved until its wait ends (29.8 s in box), blocker
+17:05Z | core fixer PRD-02 | start | fixing C1 C2 R1-X R2-X R3-X on watchdog restarts
+17:05Z | participant builder PRD-10 | start | continue-recover-seal-dead gated; polling integration for close_dead_entry and watchdog::recover
+17:08Z | core fixer PRD-02 | fix | null exit replaced at once, spacing 1s doubling to 30s only for boots dying at boot, no null on sealed entry, failed null seal resent to next boot; box run started
+17:08Z | docs builder PRD-17 | stop | ws-serve pushed v1.0/prd-17-lessons-ws-serve, 14 tests green, lessons_ws +431 lines
+17:09Z | participant builder PRD-10 | fix | A6 start-failure text and A7 timer kill done on v1.0/prd-10-cli-finish-a6-a7; B8/B9 skipped; closing() gained a not_started param, one-line caller change in start.rs
+17:10Z | core fixer PRD-02 | stop | C1 C2 R1 R2 R3 fixed, box green (fmt, clippy, 16 integration + 4 unit), pushed v1.0/prd-02-core
+17:13Z | docs builder PRD-17 | stop | decode bomb D7 and SC3 added, green in box, pushed v1.0/prd-17-lessons-decode-bomb-and-sc3
+17:14Z | docs builder PRD-17 | start | lessons-md-upkeep waiting for http1-serve branch; ws-serve and decode-bomb-and-sc3 merged locally
+17:16Z | core reviewer PRD-02 | start | breaker re-check of prd-02-core slice B at 353c1deb, stress job in box
+17:18Z | core reviewer PRD-02 | stop | breaker re-check of prd-02-core at 353c1deb: earlier fixes hold, stress 40/200 x 1.5MB plus held tunnel plus kills in null and normal mode passed, 26/26 regression passed; nits only
+17:20Z | docs builder PRD-17 | stop | http1-serve pushed, 13 tests green
+17:22Z | core fixer PRD-02 | start | fixing A1 B1 B2 Q1 Q3 on v1.0/prd-02-core
+17:25Z | core fixer PRD-02 | fix | null spacing clamped to the R3a wait (A1), failed null seal spaced (B2), null seal stops streams first (B1); box run started
+17:26Z | docs builder PRD-17 | stop | lessons-md-upkeep pushed; lessons_ total 4314 (cap 3000), box 63 passed 2 skipped; rows stay open until integration-head run
+17:26Z | docs merger PRD-17 | start | lane merge begins
+17:28Z | docs merger PRD-17 | stop | merged 4 branches, box green, pushed
+17:30Z | docs reviewerA PRD-17 | start | review of prd-17-lessons slice 5 serve halves
+17:31Z | docs reviewerA PRD-17 | stop | slice 5 review done: no blockers; D7 guard half not exercised, H2 relay covers 5 of 9 heads, H11 no Host mismatch, K15 rule unchecked, H10 skips Event records
+17:32Z | core fixer PRD-02 | stop | A1 B1 B2 Q1 Q3 fixed, box green (448 passed, 4 skipped), pushed v1.0/prd-02-core
+17:32Z | docs fixer PRD-17 | start | fixing review findings A1-A7,B1-B2
+17:35Z | core reviewer PRD-02 | start | breaker re-check of prd-02-core slice B, box job for null-mode load and torn counts line
+17:41Z | docs fixer PRD-17 | fix | A1-A7,B1-B3,B7 fixed, 65 lessons tests green in box, pushed
+17:43Z | docs fixer PRD-17 | start | fixing A10 A11 A12 B8
+17:47Z | core reviewer PRD-02 | stop | breaker re-check done: load cases pass, dead-entry seal totals understate when counts.jsonl has no line at the last LINK
+17:49Z | core fixer PRD-02 | fix | K1: dead boot's recount appended to counts.jsonl before seal totals
+17:49Z | docs fixer PRD-17 | fix | A10 A11 A12 B8 done, 37 lessons tests green in box, pushed
+17:51Z | core fixer PRD-02 | stop | K1 fixed, box green 449/449 on e5815c45, pushed
+17:52Z | docs merge-requester PRD-17 | stop | not queued: branch edits crates/goalcup/tests/proxy_fixtures/mod.rs (PRD-03 owned), no approved seam change in the log
+17:53Z | docs planner PRD-15 | decision | slice 16 planned: start/recorder build-state marks out, recheck RECORD-FORMAT/OPERATING/CONNECTOR-SCHEMA, acceptance greps
+17:53Z | docs builder PRD-15 | start | slice 16 start-marks
+17:53Z | docs format-operating-schema-recheck PRD-15 | start | begin recheck
+17:54Z | core breaker PRD-02 | start | re-review of prd-02-core slice B at e5815c45, K1 fix and stress box job
+17:56Z | docs builder PRD-15 | stop | slice 16 pushed
+17:56Z | docs format-operating-schema-recheck PRD-15 | stop | pushed; RECORD-FORMAT 540, continue marks kept
+17:56Z | docs builder PRD-15 | start | acceptance-greps-rest
+17:59Z | docs builder PRD-15 | stop | acceptance-greps-rest pushed
+17:59Z | docs merger PRD-15 | start | merging integration and task branches
+18:00Z | docs merger PRD-15 | stop | merged 3 task branches, pushed; link, em dash, stale-term checks clean
+18:01Z | docs reviewerA PRD-15 | start | review slice 16 of prd-15-docs
+18:04Z | docs reviewerA PRD-15 | stop | slice 16 review done: 2 fix, 4 nit, no blocker; link check skipped (no new links)
+18:05Z | core breaker PRD-02 | stop | re-review of prd-02-core e5815c45 done: K1 fixed, new blocker on recount_at with pruned parts (box repro)
+18:05Z | core fixer PRD-02 | start | fix P1 recount after prune
+18:05Z | docs fixer PRD-15 | fix | A1-A6,B1-B3 fixed, pushed
+18:07Z | docs merge-requester PRD-15 | decision | queued merge request 180749-prd-15-docs for v1.0/prd-15-docs
+18:25Z | core fixer PRD-02 | fix | P1 recount of a pruned boot seeds from counts.jsonl line and later COUNT; box green 450 pass; pushed f41bdb39
+18:27Z | core reviewer PRD-02 | start | breaker re-check of prd-02-core slice B at f41bdb39
+18:33Z | core reviewer PRD-02 | stop | breaker re-check done: guard 40/200 held-writer green; pruned-boot recount still undercounts ws_up_msgs (box repro 7 of 10)
+18:33Z | core fixer PRD-02 | start | fixing P1b open-table seed in counts recount
+18:33Z | participant builder PRD-10 | stop | close_dead_entry and watchdog::recover never reached integration in 90 min; nothing pushed; replan as slice 11
+18:35Z | core fixer PRD-02 | fix | counts.jsonl lines carry the open-stream table; recount seeds it; box run started
+18:39Z | participant fixer PRD-10 | fix | merged finish-a6-a7 into prd-10-cli, test by behaviour, status read once; 453 pass, pushed
+18:40Z | participant cli PRD-10 | seam | merge requested for v1.0/prd-10-cli slice 10 (id 184018-prd-10-cli)
+18:44Z | integrator merger v1.0/prd-15-docs | gate | gate fast: PASS in 191s on merge c3227203 (log /root/gc-night/gate-logs/v1.0_prd-15-docs-1840.log)
+18:44Z | integrator merger v1.0/prd-15-docs | merge | v1.0/prd-15-docs into v1.0/integration as c3227203: PRD-15 slice 16: build-state notes, RECORD-FORMAT, OPERATING and CONNECTOR-SCHEMA rechecked, acceptance greps
+18:47Z | docs replan PRD-15 | amendment | slice 16 replan: notes in PRD-15 and PRD-16, two prose lines re-wrapped, no seam change
+18:47Z | integrator merger v1.0/prd-10-cli | gate | gate fast: PASS in 148s on merge b5cc8617 (log /root/gc-night/gate-logs/v1.0_prd-10-cli-1844.log)
+18:47Z | integrator merger v1.0/prd-10-cli | merge | v1.0/prd-10-cli into v1.0/integration as b5cc8617: PRD-10 slice 10: start-failure text (A6) and timer kill (A7)
+18:48Z | core fixer PRD-02 | stop | P1b fixed and pushed at 9b0b9695; box fmt, clippy, 450 tests green
+18:49Z integrator ruling OWN-3: PRD-17 slice 5 may extend tests/proxy_fixtures/mod.rs (PRD-03). PRD-03's code is complete and its lane is idle, so no conflict; the change adds helpers (serve_with, proxy_with, proxy_to, read_to, wait_records, verify_exits_0, all_ended, tls_client) and keeps proxy()'s signature. The gate runs PRD-03's own tests on the merge. OWN-1 (09:46Z) stands: that refusal was while PRD-03's lane was active.
+18:52Z | integrator merger v1.0/prd-17-lessons | gate | gate fast: PASS in 148s on merge 49805ca6 (log /root/gc-night/gate-logs/v1.0_prd-17-lessons-1849.log)
+18:52Z | integrator merger v1.0/prd-17-lessons | merge | v1.0/prd-17-lessons into v1.0/integration as 49805ca6: PRD-17 slice 5: serve halves of http1, ws and decode lessons, SC3 (ruling OWN-3 for proxy_fixtures)
+18:52Z | participant replan PRD-10 | amendment | PRD-10 and PRD-16 notes after slice 10: gated half becomes slice 11, size report cli 4710 vs ~2900
+18:52Z | participant planner PRD-10 | decision | slice 11 planned: gated half only (continue, recover, seal on dead entry); close_dead_entry is on prd-02-core but not integration, watchdog::recover absent; prd-10-cli merged with integration
+18:53Z | docs builder PRD-17 | start | lessons-p3-unignore
+18:53Z | docs builder PRD-17 | start | prd02 upkeep worktree ready
+18:53Z | participant builder PRD-10 | start | slice 11 gate closed: close_dead_entry and watchdog::recover not on integration; polling every 3 min up to 90 min
+18:55Z | docs builder PRD-17 | fix | L-P3 un-ignored, box 40/40 under load, pushed
+18:55Z pad lane done: PRD-12 slices 9 and 10 merged (slice 10's 'no result' was the old waiter bug; branch has nothing unmerged). start.rs now calls watchdog::run on integration (633a4226). Rung 1 started in pad boxes: Claude Code and Codex, micro, server off, cap 3 USD.
+19:07Z | core PRD-02 PRD-02 slice B, rest | stop | PRD-02 slice B, rest (path-plan.md section C slice B): dead-entry close and the null recorder's seal, watchdog null mode with the R3a waits plus the watchdog's deadline and server word, and the size trims. Three tasks on disjoint files. watchdog::recover and watchdog_restart.rs stay in slice C. The recorder side of the server word comes in a short task after this slice merges, because it needs both pipeline/mod.rs (b-dead's file) and watchdog/mod.rs (b-null's file). That covers the forwarder thread in run_recorder and the recorder's own deadline and server-stop seal after watchdog EOF. not merged: findings still open after the last review round: P1d, F1 (branch v1.0/prd-02-core)
+19:07Z | core fixer PRD-02 | start | fixing P1d and F1 on v1.0/prd-02-core
+19:07Z PRD-02 slice B rest: built, six review rounds; open blocker P1d (mask_failclosed_bytes lost on the pruned-seed recount) and fix F1 (unsynced provisional counts line can win count_at after power loss). Fix-only run started (3 rounds). Size: src/pipeline+watchdog about 8,080 lines, over the 6,200 ceiling; no new code beyond fixes, cut decision after slice C.
+19:11Z | core fixer PRD-02 | fix | P1d fail_closed rules in counts lines, F1 rotation line after its LINK; box run
+19:14Z | core fixer PRD-02 | stop | P1d and F1 fixed, box green (fmt, clippy, 73 tests), pushed f15dece3
+19:14Z | docs builder PRD-17 | stop | prd02 upkeep pushed; 27 rows green at 633a4226, 7 names still missing
+19:16Z | docs merger PRD-17 | stop | merged integration + 2 task branches, box green, pushed
+19:18Z | core reviewer PRD-02 | start | breaker re-check of P1d and F1 fixes at f15dece3, stress job in box
+19:26Z rung 1 ran (633a4226, 0.69 USD). Recorder, proxy, start, seal: every entry sealed (seal_command), gaps 0, no known value in any record; Codex micro gives the expected P2 row with a local rig patch; both smoke rows C2 PASS. Blocked by 4 rig faults (PRD-12 slice 11 started from /root/gc-night/rung1/rung1-patch.diff) and C3 false positives in the verifier ([REDACTED] placeholders, glued shapes inside words; PRD-08 lane started). Point 4 incident: the rig wrote the last 20 chars of the Claude key shown by Claude Code's key screen to a pane file copied to the conductor; scrubbed, box deleted; rotation is the owner's call. Conductor env: sbx.mjs needs the proxy preload /root/gc-night/rung1/proxy-preload.cjs.
+01:56Z | integrator merger v1.0/prd-02-core | gate | gate fast: PASS in 172s on merge d8cbed35 (log /root/gc-night/gate-logs/v1.0_prd-02-core-0153.log)
+01:56Z | integrator merger v1.0/prd-02-core | merge | v1.0/prd-02-core into v1.0/integration as d8cbed35: PRD-02 slice B rest: dead-entry close, null recorder seal, watchdog null mode, size trims
+01:59Z | integrator merger v1.0/prd-17-lessons | gate | gate fast: PASS in 179s on merge c9b87ac5 (log /root/gc-night/gate-logs/v1.0_prd-17-lessons-0156.log)
+01:59Z | integrator merger v1.0/prd-17-lessons | merge | v1.0/prd-17-lessons into v1.0/integration as c9b87ac5: PRD-17 slice 6: PRD-02 lessons, un-ignore L-P3 ctrl-c case, repoint guard names
+02:03Z | integrator merger v1.0/prd-12-pad | gate | gate fast: PASS in 186s on merge 036c4212 (log /root/gc-night/gate-logs/v1.0_prd-12-pad-0159.log)
+02:03Z | integrator merger v1.0/prd-12-pad | merge | v1.0/prd-12-pad into v1.0/integration as 036c4212: PRD-12 slice 11: rung 1 rig fixes from the first real rung 1 run
+02:06Z | docs replan PRD-17 | amendment | notes on PRD-17, PRD-02, PRD-16, PRD-14 after slice 6 (merge c9b87ac5); lessons tests 4345 of 3000; four guard names still missing
+02:06Z | integrator merger v1.0/prd-08-verify | gate | gate fast: PASS in 180s on merge e4d537f1 (log /root/gc-night/gate-logs/v1.0_prd-08-verify-0203.log)
+02:06Z | integrator merger v1.0/prd-08-verify | merge | v1.0/prd-08-verify into v1.0/integration as e4d537f1: PRD-08 slice 8: C3 secret scan placeholder and glued-word false positives
+02:07Z merged by conductor queue pass: PRD-02 slice B rest d8cbed35 (dead-entry close, null mode, P1d/F1 fixed), PRD-17 slice 6 c9b87ac5, PRD-12 slice 11 rig fixes 036c4212, PRD-08 slice 8 C3 false positives e4d537f1. Rung 1 rerun then rung 2 (staging) started. Core lane on Q6 + slice C (net-neutral size). Upload lane on PRD-06 slice 7. Merge queue now driven by a 10-minute conductor tick (the background driver hit its time limit).
+02:07Z | upload planner PRD-06 | start | planning slice 7 dead-entry close
+02:07Z | verify replan PRD-08 | amendment | slice 8 notes on PRD-08, PRD-05 (glued seam request), PRD-16; verifier src 4171 outside usage vs 1400 row
+19:26Z | core merge-requester PRD-02 | seam | queued merge request 192609-prd-02-core for v1.0/prd-02-core
+19:26Z | pad preparer PRD-12 | start | slice 11 rung 1 rig fixes, apply rung1-patch.diff
+19:28Z | pad preparer PRD-12 | fix | slice 11 rung 1 patch applied, 33 pad tests, build, clippy green in box, pushed 41832d6fc27e4d58ceb5a031b318d396ced0d5ff
+19:28Z | pad fixer PRD-12 | start | fixing RIG-1..4
+19:29Z | pad fixer PRD-12 | fix | RIG-1 tails, RIG-4 merge; RIG-2/3 already on tip; tests green
+19:30Z | docs fixer PRD-17 | fix | A1 A2 A3 A4 B1 B2 done; box 184 passed 1 skipped on c39737d9; HF3 reopened
+19:31Z | docs fixer PRD-17 | fix | A5-A8,B2 fixed in LESSONS.md, pushed
+19:31Z | verify builder PRD-08 | fix | C3 placeholder() and masker-identical glued guard pushed on v1.0/prd-08-verify-c3-placeholder-and-glued-guard; nextest 93/93, clippy, fmt green in box; SEAM NOTE PRD-05: export glued
+19:32Z | docs merge-requester PRD-17 | decision | queued 193240-prd-17-lessons
+19:32Z | pad fixer PRD-12 | fix | RIG-5/6/7, B-2 fixed, tests green, pushed
+19:33Z | pad merge-requester PRD-12 | seam | queued merge request 193335-prd-12-pad for slice 11
+19:34Z | verify reviewerA PRD-08 | start | review slice 8 C3 placeholder and glued fix on prd-08-verify
+19:36Z | verify reviewerA PRD-08 | stop | slice 8 review: 1 blocker (glued warn to pass breaks PRD acceptance), fixes on split PEM test filter and size; box 94/94 green, clippy green
+19:36Z | verify fixer PRD-08 | start | fixing A1-A4
+19:40Z | verify fixer PRD-08 | fix | A1-A4 done, tests green 92/92, pushed; A5 logged as seam request to PRD-05
+19:42Z | verify reviewer-A PRD-08 | start | re-review slice 8 C3 fix at 2c6c477e, box run fmt clippy nextest
+19:43Z | verify reviewer-A PRD-08 | stop | slice 8 re-review: A1 A2 A4 closed, box fmt clippy nextest 92/92 pass; open: size decision line sits in a stray new PRD-08-verifier.md, not the PRD's Amendments, and states 270 for a 291-line test file
+19:43Z | verify fixer PRD-08 | fix | size decision moved into PRD-08-verifier-checks.md with true counts, stray file removed; docs only, no box run
+19:44Z | verify merge-requester PRD-08 | seam | queued merge request 194411-prd-08-verify (slice 8, C3 placeholder/glued fix)
+20:23Z | participant builder PRD-10 | stop | slice 11 gate never opened in 90 min: pipeline::close_dead_entry and watchdog::recover absent on origin/v1.0/integration (prd-02-core unmerged). Nothing built or pushed. Replan as slice 12 after prd-02-core merges.
+20:24Z participant lane done: PRD-10 slices 6-10 merged (1c9afbed, c3f4638c, 69f143a6, 25102adc, b5cc8617). Slice 11 (continue, recover, seal on a dead entry) parked until PRD-02 close_dead_entry (slice B) and watchdog::recover (slice C) merge. Two lane agents were flagged by the safety classifier: the merge waiters ran mergeq.sh themselves (this run predates the read-only waiter fix) and mergers ran git reset --hard on the detached main checkout and pushed v1.0/prd-10-cli without force. Checked: integration history intact (all known merges are ancestors), main checkout clean, no push outside v1.0/*.

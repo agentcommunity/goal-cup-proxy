@@ -10,6 +10,7 @@ use goalcup::connector::hosts::{Kind, Source};
 use goalcup::pipeline::{
     Call, Calls, EndReason, GapReason, Mono, OpenFlags, Recorder, Sid, StreamKind,
 };
+use goalcup::proxy::h2::H2;
 use goalcup::proxy::http1::Http1;
 use goalcup::proxy::pump::{self, Parser, Stop};
 use goalcup::proxy::tunnel::{self, Flags, TunnelConn};
@@ -452,6 +453,121 @@ async fn a_later_request_sits_inside_the_conn_gap() {
         assert_eq!(*lost, Some((bad.len() + answer.len()) as u64));
     })
     .await;
+}
+
+/// One HTTP/2 frame: the 9-byte header, then the payload.
+fn h2_frame(ty: u8, flags: u8, sid: u32, payload: &[u8]) -> Vec<u8> {
+    let n = (payload.len() as u32).to_be_bytes();
+    [&n[1..], &[ty, flags], &sid.to_be_bytes(), payload].concat()
+}
+
+/// A HEADERS frame with `END_HEADERS` (and `END_STREAM` when `end`) whose block holds literal
+/// fields without indexing (RFC 7541 section 6.2.2).
+fn h2_head(sid: u32, end: bool, fields: &[(&str, &str)]) -> Vec<u8> {
+    let mut block = Vec::new();
+    for (n, v) in fields {
+        block.extend([0, n.len() as u8].iter().chain(n.as_bytes()));
+        block.extend([v.len() as u8].iter().chain(v.as_bytes()));
+    }
+    h2_frame(1, 0x4 | u8::from(end), sid, &block)
+}
+
+/// PRD-03 `proxy_h2.rs` list, relay side: `PUSH_PROMISE` and an HPACK error stop parsing an h2
+/// connection. The open streams get GAP `h2_unsupported`, a `parse_stopped` note is written, the
+/// relay goes on byte for byte, and the `conn` GAP's `lost` is every byte relayed from the
+/// faulting frame on.
+#[tokio::test]
+async fn an_h2_stop_names_the_rest_and_relays_it_whole() {
+    let api = [(":scheme", "https"), (":authority", "api.example.com")];
+    let req = |sid, method, end| {
+        let f = [
+            &[(":method", method)][..],
+            &api[..],
+            &[(":path", "/v1/m")][..],
+        ]
+        .concat();
+        h2_head(sid, end, &f)
+    };
+    let settings = h2_frame(4, 0, 0, &[]);
+    let start = [&b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n"[..], &settings].concat();
+    let open = [start, req(1, "POST", false), h2_frame(0, 0, 1, b"part")].concat();
+    let answer = [settings.clone(), h2_head(1, false, &[(":status", "200")])].concat();
+    let promise = [0, 0, 0, 2, 0x82, 0x84];
+    let push = (false, h2_frame(5, 0x4, 1, &promise));
+    // Index 62 with an empty dynamic table.
+    let bad_index = (true, h2_frame(1, 0x5, 3, &[0xbe]));
+    let later = [h2_frame(0, 1, 1, b"rest"), req(5, "GET", true)].concat();
+    for (fault_up, fault) in [push, bad_index] {
+        within_async(HANG, async {
+            let (rec, calls) = Recorder::for_tests(1 << 30);
+            let r2 = rec.clone();
+            let mut r = pumped(
+                &rec,
+                move |conn| Some(Box::new(H2::new(&r2, conn))),
+                Arc::default(),
+            )
+            .await;
+            let tail = b"server bytes after the fault".to_vec();
+            let steps = [
+                (true, &open),
+                (false, &answer),
+                (fault_up, &fault),
+                (true, &later),
+                (false, &tail),
+            ];
+            for (up, bytes) in steps {
+                let (from, to) = match up {
+                    true => (&mut r.client, &mut r.upstream),
+                    false => (&mut r.upstream, &mut r.client),
+                };
+                from.write_all(bytes).await.unwrap();
+                let mut got = vec![0; bytes.len()];
+                to.read_exact(&mut got).await.unwrap();
+                assert_eq!(&got, bytes, "relayed byte for byte");
+            }
+            close(r).await;
+            let all = calls.all();
+            let conn = all.iter().find_map(|c| match c {
+                Call::Open(sid, StreamKind::Conn, ..) => Some(*sid),
+                _ => None,
+            });
+            let streams: Vec<Sid> = all
+                .iter()
+                .filter_map(|c| match c {
+                    Call::Open(sid, StreamKind::HttpReq | StreamKind::HttpResp, ..) => Some(*sid),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(
+                streams.len(),
+                2,
+                "stream 1's request and response, nothing later"
+            );
+            let lost = (fault.len() + later.len() + tail.len()) as u64;
+            let mut want: Vec<_> = streams
+                .iter()
+                .map(|s| (*s, GapReason::H2Unsupported, None))
+                .collect();
+            want.push((conn.unwrap(), GapReason::H2Unsupported, Some(lost)));
+            let got: Vec<_> = gaps(&calls)
+                .into_iter()
+                .filter_map(|c| match c {
+                    Call::Gap(sid, reason, _, _, _, lost, _) => Some((sid, reason, lost)),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(got, want);
+            let stopped = notes(&calls, "parse_stopped");
+            let [note] = &stopped[..] else {
+                panic!("one parse_stopped note");
+            };
+            assert_eq!(
+                (note["conn"].as_u64(), &note["reason"]),
+                (conn, &json!("h2_unsupported"))
+            );
+        })
+        .await;
+    }
 }
 
 #[tokio::test]

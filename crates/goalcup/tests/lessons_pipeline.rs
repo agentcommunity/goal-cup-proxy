@@ -21,7 +21,7 @@ fn open_and_end_survive_a_full_guard() {
         std::env::set_var("GOALCUP_TEST_GUARD_MB", "64");
         std::env::set_var("GOALCUP_TEST_WRITER_STALL", "0:10000");
     }
-    let dir = tempfile::tempdir().unwrap();
+    let dir = common::recorder::entry_dir();
     let rec = Recorder::real_for_tests(dir.path(), Masker::passthrough_for_tests());
     let piece = Bytes::from(vec![7u8; PIECE]);
     let open = || -> StreamHandle {
