@@ -601,7 +601,7 @@ class Run:
         self.at(m)
         # the recorder rewrites status.json every second (pipeline/status.rs), so a 0.5 s poll never trails the write
         base = self.work() or 0
-        quiet = not wait(lambda: (self.work() or 0) > base, 60, 0.5)  # the 60 s ceiling: the restart bound runs from the kill
+        quiet = not wait(lambda: (self.work() or 0) > base, 60, 0.5)  # quiet if no new work within 60 s
         pid, since = self.kill_rec(m, quiet)
         if not pid:
             raise Step("FAIL", "no live goalcup recorder pid in status.json")

@@ -319,7 +319,10 @@ class CrashRows(unittest.TestCase):
         for start, end, quiet, fails in (("10:01:59.5", "10:02:01.2", False, False), ("10:01:00", "10:02:01.2", False, True),
                                          ("10:01:00", "10:02:01.2", True, False), ("10:01:59.5", "10:02:02.5", False, True),
                                          ("10:01:59.5", "10:02:02.5", True, True), ("10:01:00", "10:01:59", True, True)):
-            self.assertEqual(self.row("kill-recorder", gap(start, end), quiet=quiet)["result"] == "FAIL", fails, (start, end, quiet))
+            res = self.row("kill-recorder", gap(start, end), quiet=quiet)["result"]
+            self.assertEqual(res == "FAIL", fails, (start, end, quiet))
+            if quiet and not fails:
+                self.assertEqual(res, "INCONCLUSIVE", (start, end))
 
     def test_dodger_progress_is_tunnel_connections(self):
         def tun(n):

@@ -183,7 +183,6 @@ class Run:
         self.failed = {c.get("id"): c.get("why") for e in self.entries for c in dig(e, "s6_checks") or []
                        if isinstance(c, dict) and c.get("result") == "fail" and isinstance(c.get("id"), str)}
         self.v = dict.fromkeys(CHECKS + ("faults",), "PASS")
-        self.restarts = []  # per recorder kill: seconds from the kill to the gap end, and the gap's length
         seals = [when(f.get("began") or f.get("at")) for f in self.faults if f.get("kind") == "seal-now" and f.get("exit") in (0, "timeout")]  # section 7,
         self.cap_at = min([t for t in seals if t], default=None) if meta.get("over_cap") is True else None  # as pad-run
         got = [dig(e, "s6_requests") for e in self.entries if isinstance(dig(e, "s6_requests"), int)]
@@ -553,10 +552,11 @@ def recorder_kills(r, kinds):
         k = min(killed, key=lambda t: abs(b - t), default=None) if b else None
         if k:
             late = (b - k).total_seconds()
-            r.restarts.append({"restart_after_kill_s": round(late, 2), "gap_ms": ms})
             r.flag(not 0 <= late <= 2, "faults", "FAIL",
                    "gap ended %.1f s after the kill (limit 2 s); gap length %s ms" % (late, ms))
-            r.flag(k not in quiet and (ms is None or ms >= 2000), "faults", "FAIL", "a recorder_down gap of %s ms, not under 2 s" % ms)
+            long = ms is None or ms >= 2000
+            r.flag(long and k not in quiet, "faults", "FAIL", "a recorder_down gap of %s ms, not under 2 s" % ms)
+            r.flag(long and k in quiet, "faults", "INCONCLUSIVE", "quiet kill: gap of %s ms, length not shown" % ms)
     r.flag(kills and dig(r.local, "s6_exit") != 1, "faults", "FAIL", "verifier exit %s, a kill row expects 1" % dig(r.local, "s6_exit"))
 
 def near(gap, fault):
@@ -723,7 +723,7 @@ def facts(r):
             "threads": len(threads) if r.usage else dig(e, "s6_threads"), "native_files": dig(e, "s6_native"),
             "subagents": sum(1 for t in threads if dig(t, "t_parent")), "gaps": r.gaps()[1], "off_ms": dig(e, "s6_off"),
             "provider_errors": dict(kn for en in r.entries for kn in items(dig(en, "s6_errors"))),
-            "recorder_kills": r.restarts, "secret_hits": r.hits("secrets"), "masks": r.masks() or {}, "plain_hits": r.hits("secrets-plain"),
+            "secret_hits": r.hits("secrets"), "masks": r.masks() or {}, "plain_hits": r.hits("secrets-plain"),
             "screen_known": m.get("screen_known"), "canary": "not planted", "tokens": dig(u, "s7_tokens"),
             "models": [x.get("model") for x in dig(u, "s7_models") or [] if isinstance(x, dict)],
             "raw_bytes": size.get("raw"), "compressed_bytes": size.get("compressed"), "over_cap": m.get("over_cap") is True,
