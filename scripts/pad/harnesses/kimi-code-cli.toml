@@ -21,3 +21,6 @@ ready_text = "Trust and continue"
 pre_keys = ['\r']
 exit_keys = '/exit\r'
 keep_going = true
+
+[direct]
+model = "deepseek-flash"

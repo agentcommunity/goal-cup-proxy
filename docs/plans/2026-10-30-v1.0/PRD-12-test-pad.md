@@ -546,6 +546,24 @@ Google key), the rest DeepSeek, Copilot CLI DeepSeek through its bring-your-own-
 DeepSeek is rate limited. Amp, Factory Droid and any OpenRouter case have no key: the pad prints
 `not verified: no key` and runs nothing.
 
+#### Pinned models (owner rule, 1 Nov 2026)
+
+Every test run uses the cheapest model of its key, in both cases, and the harness file says which:
+a `model` line in `[direct]` and `[gateway]` is the pinned main model. The row records it as
+`pinned_model` and C5 flags a recorded model that differs.
+
+- Claude Code: Haiku 5.5. Direct `claude-haiku-5-5`, gateway `anthropic/claude-haiku-5.5`. The `env` of each
+  case sets `ANTHROPIC_MODEL` (main) and `ANTHROPIC_DEFAULT_HAIKU_MODEL` (the background model). The older
+  `ANTHROPIC_SMALL_FAST_MODEL` is marked deprecated on https://code.claude.com/docs/en/env-vars, so it is not
+  used. The dodger case uses the direct section. The first Haiku run on 2.1.312 must confirm that the first-run
+  screens in `pre_keys` are unchanged with a model set; they were probed without one.
+- Codex: `gpt-6.1-sol` direct, `openai/gpt-6.1-sol` gateway (the gateway file had the most expensive model).
+- DeepSeek harnesses: `deepseek-flash` direct, `deepseek/deepseek-v4.1-flash` gateway (Copilot's gateway
+  case had the most expensive OpenAI model and now uses it too).
+- Gemini CLI stays on the funded key's model, unchanged.
+- `pad.toml` `[rates]` has a line for every pinned id, gateway ids included: a model with no line is priced
+  at the highest rate of its key, which must not happen to a pinned model.
+
 ### 7. Keys and spend
 
 Keys:
@@ -648,7 +666,7 @@ Where it runs and fails, it is a FAIL like any other.
 | C2 | Every subagent recorded | usage `threads` has at least one thread with a parent, and every thread has wire calls or a native stream. Threads and parents come from the record (PRD-09's thread hints and the history check's chains, below), plus native streams where read; with a local log, `subagents_present` `pass` with the manifest too. Dodger: every `conn` to the pinned host is a named tunnel and no thread is claimed from it; with a local log, the native streams carry the threads | no thread with a parent (the agent did not spawn one; rerun once, then a prompt note) | B4 |
 | C3 | No secret | 0 known-value hits in local parts, the server copy, `status.json`, `goalcup.log`, `upload.json`, the pad's output folder (after the pane replacement of section 4) and the project's git objects (leak scan copied from `matrix.sh:1267-1320`, read in the box; "push not tested" without a push token); the known values include the run certificate key (`known-box`, ledger R3b); 0 unexpected shape hits, except the stated loss in the 2026-11-01 C3 amendment (INCONCLUSIVE, never PASS); every planted shaped value has at least one MASK. Hits of the no-shape value are `facts.plain_hits`, not a FAIL, in the default build (section 5) | the setup-check script never ran (section 5) | B8 |
 | C4 | Record whole, server copy whole and readable | local `check`: no `fail`; `server_chunks_whole`, `server_equals_local`, `server_counts_match` all `pass` (from `fetch.json`); parts kept (start event `keep: true` and `upload.json` `keep: true`). A `skip` on `server_equals_local` is FAIL, not skip | `server = "off"` (row is "local pass" at best) | B2, B5, B6 |
-| C5 | Usage stats present | usage on the server copy, from the wire calls (native tokens added where read): merged input plus output tokens above 0; every thread has a model and calls above 0; one row per subagent; `coverage.unattributed` 0 with PRD-09's meaning (only a hint-bearing call that lost its hint); `wire_only` calls are reported, never failed. Dodger: wire none, the summary says "not recorded on the wire"; native tokens present where a local log is read, and none claimed where there is none | the record holds fewer than 2 model calls | the usage reader silently reading nothing |
+| C5 | Usage stats present | usage on the server copy, from the wire calls (native tokens added where read): merged input plus output tokens above 0; every thread has a model and calls above 0; one row per subagent; `coverage.unattributed` 0 with PRD-09's meaning (only a hint-bearing call that lost its hint); `wire_only` calls are reported, never failed. A recorded thread model that differs from the row's `pinned_model` is flagged (a warning line, never a pass or fail by itself, owner rule 1 Nov 2026). Dodger: wire none, the summary says "not recorded on the wire"; native tokens present where a local log is read, and none claimed where there is none | the record holds fewer than 2 model calls | the usage reader silently reading nothing |
 | C6 | Counts the participant saw | `status.json` in `mode: sealed`: `written.model_requests` equals the verifier's `counts.model_requests` and `fetch.json`'s `model_requests`; `written.off_ms` equals the verifier's `off_ms`; the number on the saved end screen is that same number; no `status.jsonl` sample has `written.model_requests` above the final recount | none | B3 |
 
 **The history check** (ledger T4; worked out by PRD-09 from the record, ask 5). Most harnesses resend
@@ -1085,6 +1103,7 @@ waits (P14).
 | Per-run cap | 10 USD (ledger T6, locked), checked every 5 minutes during the run and sealed there; a `smoke` run near 2 USD is an estimate, not a cap | Owner |
 | Build spend report lines | 200 and 400 USD model, 75 and 150 USD sandboxes; no whole-build cap (PRD-00 owner question 8) | Owner |
 | Rate per model | The vendor's listed rate on the day, cached input at its cached rate; a model with no line at the highest rate for that key | PRD-12 builder |
+| Pinned model | Claude Code Haiku 5.5, Codex `gpt-6.1-sol`, DeepSeek harnesses `deepseek-flash`, in both cases; the row records `pinned_model` and C5 flags a recorded model that differs | Owner |
 | Parallelism | No total cap of our own (ledger B11); 2 per provider key; up to 6 for DeepSeek until its 429 share passes 5% (PRD-00 R3-9) | PRD-16 |
 | Sandbox | 4 vCPU, timeout run length plus 30 minutes, `--non-persistent` | PRD-16 |
 | Ready delay, submit delay | 30 s, 2 s, per harness override | Harness file author |
@@ -2020,3 +2039,9 @@ taken; "rejected" says why. Fixes for other files are made by those files' owner
 ### 2026-11-01, harness file key redacts_tool_output (C3 upstream redaction)
 
 - A harness file may carry `redacts_tool_output = true` (Hermes only; docs/harnesses/hermes-cli.md:28 is about Hermes's own logs, so the basis is not yet a vendor page on tool output). The pad copies it into the row meta under the same name. For such a harness only, a nonzero `masked_key` MASK counts as the exercise evidence, so C3 no longer stops at "secret exercise not done" for a run that has that MASK but none of the planted shapes. A planted kind with no MASK and no hit stays INCONCLUSIVE ("owner question open"), never PASS, and a run with no exercise evidence stays INCONCLUSIVE. Known-value hits, other shape hits, big masks and plain hits fail as before, and a harness without the key is unchanged. The C3 acceptance row ("every planted shaped value has at least one MASK") is unchanged; a row relying on this rule does not count toward `--release-check` until the owner confirms (point 4). No locked ledger item is touched.
+
+### 2026-11-01, model pin for every Claude Code run
+
+- Owner rule: every Claude Code test run uses Haiku 5.5 (direct `claude-haiku-5-5`, gateway `anthropic/claude-haiku-5.5`, main and background model both). The earlier full1 run used the default Opus and cost 7.33 USD in 22 minutes. Codex is pinned to its cheapest model in both cases and the DeepSeek harnesses use deepseek-flash (section 6, "Pinned models"). The row records `pinned_model` and C5 flags a recorded model that differs.
+- The vendor env name for the background model is `ANTHROPIC_DEFAULT_HAIKU_MODEL`; `ANTHROPIC_SMALL_FAST_MODEL` is deprecated.
+- Open for the first Haiku run: the 2.1.312 first-run screens with a model set (`pre_keys` were probed without one), and the gateway id spelling `anthropic/claude-haiku-5.5` (the Vercel pages were not reachable when this was written).
