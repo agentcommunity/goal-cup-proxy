@@ -2,7 +2,8 @@
 # cli-config.yaml.example and hermes_cli/observability/shared_metrics_consent.py (the "Help improve Hermes?"
 # screen). That screen is skipped once telemetry.shared_metrics.enabled or .send is in config.yaml and the answer
 # is not a "No thanks" lacking offer_version 2; a setting row writes a string, not the integer 2, so a true
-# "No thanks" cannot be written. The rows below record collect-only with send false: nothing is uploaded.
+# "No thanks" cannot be written. Not set here: rows enabled=true and send=false would skip the screen with nothing
+# uploaded, but tests/connector_launch.rs pins this file's rows exactly (owner question in the lane log).
 id = "hermes-cli"
 name = "Hermes"
 program = "hermes"
@@ -35,9 +36,5 @@ native = [
   { name = "delegation", root = "{home}/cache/delegation/live", pattern = "**/task-*.log", warn_missing = false },
 ]
 first_screen = "If Hermes asks to run setup, do it now, before you type your prompt: answer Y and pick your provider and model. Hermes then closes; continue the run, then type your prompt. The first run of a new home installs about 105 Python packages (72 MB from files.pythonhosted.org)."
-no_prompts = [
-  { file = "{home}/config.yaml", key = "approvals.mode", value = "off" },
-  { file = "{home}/config.yaml", key = "telemetry.shared_metrics.enabled", value = "true" },
-  { file = "{home}/config.yaml", key = "telemetry.shared_metrics.send", value = "false" },
-]
+no_prompts = [{ file = "{home}/config.yaml", key = "approvals.mode", value = "off" }]
 update_off = [{ file = "{home}/config.yaml", key = "updates.check", value = "false" }]
