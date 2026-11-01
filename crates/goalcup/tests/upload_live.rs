@@ -41,7 +41,10 @@ fn live_rounds_follow_the_durable_point() {
     let flags = OpenFlags::POST | OpenFlags::DECRYPTED;
     for _ in 0..CALLS {
         let mut h = rec.open(StreamKind::HttpReq, 0, 0, 0, flags, json!({}));
-        h.data(rec.now(), Bytes::from_static(b"{\"model\":\"m\",\"input\":\"hi\"}"));
+        h.data(
+            rec.now(),
+            Bytes::from_static(b"{\"model\":\"m\",\"input\":\"hi\"}"),
+        );
         h.end(rec.now(), EndReason::Complete, None);
     }
     wait_settled(&rec, |c| c.http_post >= CALLS);
@@ -70,7 +73,10 @@ fn live_rounds_follow_the_durable_point() {
             std::thread::sleep(Duration::from_millis(100));
         }
     });
-    assert!(durable >= settled, "the calls are inside the confirmed point");
+    assert!(
+        durable >= settled,
+        "the calls are inside the confirmed point"
+    );
 
     // Each part file up to its last index line at or below the durable point: what the server
     // holds, and nothing past it.
@@ -80,12 +86,19 @@ fn live_rounds_follow_the_durable_point() {
         .flat_map(|p| {
             let idx = p.with_extension("").with_extension("idx");
             let lines = read_index(&idx).unwrap();
-            let end = lines.iter().rfind(|l| l.raw_end <= durable).map_or(0, |l| l.c_end);
+            let end = lines
+                .iter()
+                .rfind(|l| l.raw_end <= durable)
+                .map_or(0, |l| l.c_end);
             fs::read(p).unwrap()[..end as usize].to_vec()
         })
         .collect();
     assert!(!want.is_empty());
-    assert_eq!(fake.stream(ENTRY), want, "the parts up to the durable point");
+    assert_eq!(
+        fake.stream(ENTRY),
+        want,
+        "the parts up to the durable point"
+    );
     assert!(
         fake.chunks().iter().all(|c| c.offset < durable),
         "no chunk starts at or past the durable point"
