@@ -30,5 +30,5 @@ if git diff --cached --quiet; then echo "handoff unchanged"; else
   git commit -q -m "docs(plans): handoff ledger and conductor tool copies
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_018LU9bbCzN7rHbM4pGrKQgh" && git push -q origin HEAD:v1.0/integration && echo "handoff pushed $(git rev-parse --short HEAD)"; fi
+Claude-Session: https://claude.ai/code/session_01V2hUmG4Ccnfp953KQMAUS6" && git push -q origin HEAD:v1.0/integration && echo "handoff pushed $(git rev-parse --short HEAD)"; fi
 cd "$REPO"; git worktree remove --force "$WT"

@@ -13,7 +13,7 @@ REPO=/home/user/goal-cup-proxy
 NIGHT=/root/gc-night
 WT=$NIGHT/merge-wt
 mkdir -p "$NIGHT/gate-logs"
-TRAILER=$'\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\nClaude-Session: https://claude.ai/code/session_018LU9bbCzN7rHbM4pGrKQgh'
+TRAILER=$'\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\nClaude-Session: https://claude.ai/code/session_01V2hUmG4Ccnfp953KQMAUS6'
 log() { echo "$(date -u +%H:%M)Z | integrator merger $BR | $1 | $2" >> "$NIGHT/lanes/integrator.log"; echo "$1: $2"; }
 
 exec 9>"$NIGHT/integration.lock"

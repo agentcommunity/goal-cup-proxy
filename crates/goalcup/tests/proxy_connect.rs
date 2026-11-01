@@ -1,16 +1,24 @@
-//! PRD-03 `proxy_connect.rs`, admission building blocks (core slice part 1). The serve-level
-//! cases (2,000 connections, `may_accept`, reset passing, decisions) land with `serve`.
+//! PRD-03 `proxy_connect.rs`: the ClientHello building blocks, then admission through the real
+//! `proxy::serve`.
+
+mod common;
+mod proxy_fixtures;
 
 use bytes::Bytes;
-use goalcup::pipeline::{Call, Recorder};
-use goalcup::proxy::connect::{
-    CLIENT_HELLO_GUARD, First, Hello, NoHead, RefusalNotes, Refused, connect_upstream, first_bytes,
-    peek_client_hello, read_head,
-};
+use common::pki::HTTP11;
+use common::recorder::{events, gaps, opens};
+use common::upstream::{Script, Upstream};
+use common::{HANG, within_async};
+use goalcup::pipeline::{Call, GapReason, StreamKind};
+use goalcup::proxy::connect::{CLIENT_HELLO_GUARD, Hello, peek_client_hello};
+use proxy_fixtures::{HOSTS, ask, connect, conns, get, proxy, status, through, trusting_run_ca};
+use rustls::pki_types::ServerName;
+use serde_json::json;
+use std::net::SocketAddr;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
-use tokio::net::{TcpListener, TcpStream};
+use tokio::net::TcpStream;
 
 /// A ClientHello as rustls writes it.
 fn rustls_hello(sni: &str, alpn: &[&[u8]]) -> Vec<u8> {
@@ -175,70 +183,233 @@ async fn client_hello_past_64_kib_is_too_big_and_keeps_every_byte() {
     );
 }
 
-#[tokio::test]
-async fn server_speaks_first_is_seen_at_once() {
-    let upstream = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let upstream_addr = upstream.local_addr().unwrap();
+/// A loopback upstream that writes `banner` to each connection, then echoes it.
+fn echo(banner: &'static [u8]) -> SocketAddr {
+    let (l, addr) = common::ports::held();
+    socket2::SockRef::from(&l).listen(4096).unwrap();
+    l.set_nonblocking(true).unwrap();
+    let l = tokio::net::TcpListener::from_std(l).unwrap();
     tokio::spawn(async move {
-        let (mut s, _) = upstream.accept().await.unwrap();
-        s.write_all(b"220 ready\r\n").await.unwrap();
-        let mut sink = [0u8; 16];
-        let _ = s.read(&mut sink).await;
+        while let Ok((mut s, _)) = l.accept().await {
+            tokio::spawn(async move {
+                let _ = s.write_all(banner).await;
+                let (mut r, mut w) = s.split();
+                let _ = tokio::io::copy(&mut r, &mut w).await;
+            });
+        }
     });
-    let front = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let _silent_client = TcpStream::connect(front.local_addr().unwrap())
-        .await
-        .unwrap();
-    let (mut client_leg, _) = front.accept().await.unwrap();
-    let (rec, _calls) = Recorder::for_tests(1 << 20);
-    let mut upstream_leg =
-        connect_upstream(&rec, "server-first.test", 25, true, Some(upstream_addr))
-            .await
-            .unwrap();
-
-    let started = Instant::now();
-    let first = tokio::time::timeout(
-        Duration::from_secs(10),
-        first_bytes(&mut client_leg, &mut upstream_leg),
-    )
-    .await
-    .expect("first_bytes waited for the silent client");
-    assert_eq!(first, First::Server(Bytes::from_static(b"220 ready\r\n")));
-    assert!(started.elapsed() < Duration::from_secs(2));
+    addr
 }
 
-#[tokio::test]
-async fn non_connect_gets_405_and_one_note_per_minute() {
-    let (rec, calls) = Recorder::for_tests(1 << 20);
-    let notes = RefusalNotes::default();
-    for _ in 0..2 {
-        let mut io: &[u8] =
-            b"GET http://someone@Example.com:80/x?q=1 HTTP/1.1\r\nHost: example.com\r\n\r\n";
-        let got = read_head(&mut io, &rec).await;
-        let refused = Refused {
-            status: 405,
-            host: Some("example.com".into()),
-        };
-        assert_eq!(got, Err(NoHead::Refused(refused.clone())));
-        notes.note(&rec, refused.host.as_deref(), refused.status);
-    }
-    let all = calls.all();
-    let refused: Vec<_> = all
-        .iter()
-        .filter_map(|c| match c {
-            Call::Event(v) if v["what"] == "connect_refused" => Some(v.clone()),
-            _ => None,
+/// No connection cap: 2,000 at once to an unlisted host, all open together, are all served.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn two_thousand_concurrent_connects_are_all_served() {
+    common::fds::raise(10_000);
+    let (_h, addr, calls, _) = proxy(HOSTS, &[]);
+    let target = format!("{}", echo(b""));
+    let all_open = Arc::new(tokio::sync::Barrier::new(2_000));
+    let tasks: Vec<_> = (0..2_000)
+        .map(|i| {
+            let (target, all_open) = (target.clone(), all_open.clone());
+            tokio::spawn(async move {
+                let mut s = through(addr, &target).await;
+                let ping = format!("ping {i:04}");
+                s.write_all(ping.as_bytes()).await.unwrap();
+                let mut back = vec![0u8; ping.len()];
+                s.read_exact(&mut back).await.unwrap();
+                assert_eq!(back, ping.as_bytes());
+                all_open.wait().await;
+            })
         })
         .collect();
-    assert_eq!(refused.len(), 1);
-    assert_eq!(refused[0]["ev"], "note");
-    assert_eq!(refused[0]["status"], 405);
-    assert_eq!(
-        refused[0]["host"], "example.com",
-        "the host, never its userinfo"
-    );
+    within_async(Duration::from_secs(120), async {
+        for t in tasks {
+            t.await.unwrap();
+        }
+    })
+    .await;
+    assert_eq!(conns(&calls, 2_000).await.len(), 2_000);
+}
+
+fn soft_limit(soft: Option<u64>) -> u64 {
+    let mut lim = libc::rlimit {
+        rlim_cur: 0,
+        rlim_max: 0,
+    };
+    // SAFETY: getrlimit and setrlimit only touch the struct we own.
+    unsafe {
+        assert_eq!(libc::getrlimit(libc::RLIMIT_NOFILE, &mut lim), 0);
+        let old = lim.rlim_cur;
+        if let Some(soft) = soft {
+            lim.rlim_cur = soft;
+            assert_eq!(libc::setrlimit(libc::RLIMIT_NOFILE, &lim), 0);
+        }
+        old
+    }
+}
+
+/// Rule 7: while `may_accept()` is false a new CONNECT waits in the backlog, never refused, and
+/// the episode writes one `fd_limit` note; it is served once a connection closes. Connections still
+/// before their decision (here: waiting for the first bytes) count.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn accepts_wait_while_descriptors_are_short_and_never_refuse() {
+    // The reserve reads the soft limit once per process (nextest: one process per test). It reads
+    // 200 here, then the test gets its own limit back, so only the reserve holds back:
+    // 2 x 68 + 64 = 200 is not under 200, so the 69th waits.
+    let real = soft_limit(Some(200));
+    assert!(goalcup::pipeline::fds::may_accept());
+    soft_limit(Some(real));
+    let (_h, addr, calls, _) = proxy(HOSTS, &[]);
+    let target = echo(b"").to_string();
+    let mut held = Vec::new();
+    for _ in 0..68 {
+        held.push(through(addr, &target).await);
+    }
+    let mut waiting = TcpStream::connect(addr).await.unwrap();
+    let head = format!("CONNECT {target} HTTP/1.1\r\nHost: {target}\r\n\r\n");
+    waiting.write_all(head.as_bytes()).await.unwrap();
+    let mut b = [0u8; 1];
+    let early = tokio::time::timeout(Duration::from_millis(500), waiting.read(&mut b)).await;
     assert!(
-        !all.iter().any(|c| matches!(c, Call::Open(..))),
-        "a refusal opens no stream"
+        early.is_err(),
+        "no answer and no close while descriptors are short"
     );
+    let note = json!({"ev": "note", "what": "fd_limit", "limit": 200, "open": 68});
+    within_async(HANG, async {
+        while !events(&calls).contains(&note) {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await;
+    let notes = events(&calls)
+        .into_iter()
+        .filter(|v| v["what"] == "fd_limit");
+    assert_eq!(notes.count(), 1, "one note per episode");
+    // Serving the 69th starts a new episode at 68 open, with a note of its own.
+    drop(held.pop());
+    assert_eq!(within_async(HANG, status(&mut waiting)).await, 200);
+}
+
+/// A client that closes after the `200` without a byte, as a cancelled request does, loses
+/// nothing: its conn on a listed host keeps its listed meta and carries no GAP.
+#[tokio::test]
+async fn a_connect_abandoned_before_any_byte_names_no_loss() {
+    let up = echo(b"");
+    let (_h, addr, calls, _) = proxy(
+        HOSTS,
+        &[("GOALCUP_TEST_UPSTREAM", format!("api.openai.com={up}"))],
+    );
+    drop(through(addr, "api.openai.com:443").await);
+    let got = conns(&calls, 1).await;
+    let class = (got[0].1["listed"].clone(), got[0].1["kind"].clone());
+    assert_eq!(class, (json!("shared"), json!("provider")));
+    assert_eq!(
+        (got[0].2["up"].as_u64(), got[0].2["down"].as_u64()),
+        (Some(0), Some(0))
+    );
+    assert!(gaps(&calls).is_empty(), "no loss to name");
+}
+
+/// C9: a server-speaks-first protocol tunnels at once (the old proxy waited 30 s for the client).
+#[tokio::test]
+async fn a_server_first_protocol_tunnels_with_no_wait() {
+    let (_h, addr, calls, _) = proxy(HOSTS, &[]);
+    let mut s = through(addr, &format!("{}", echo(b"220 ready\r\n"))).await;
+    let mut banner = [0u8; 11];
+    let read = tokio::time::timeout(Duration::from_secs(10), s.read_exact(&mut banner));
+    read.await
+        .expect("the banner came before the client spoke")
+        .unwrap();
+    assert_eq!(&banner, b"220 ready\r\n");
+    drop(s);
+    let got = conns(&calls, 1).await;
+    assert_eq!(
+        (got[0].1["mode"].clone(), got[0].1["reason"].clone()),
+        (json!("tunnel"), json!("not_tls"))
+    );
+}
+
+/// Rule 3: a non-CONNECT request gets `405` and, for two tries within a minute, one note.
+#[tokio::test]
+async fn a_non_connect_request_gets_405_and_one_note() {
+    let (_h, addr, calls, _) = proxy(HOSTS, &[]);
+    for _ in 0..2 {
+        let head = "GET http://someone@Example.com:80/x?q=1 HTTP/1.1\r\nHost: example.com\r\n\r\n";
+        assert_eq!(ask(addr, head).await.1, 405);
+    }
+    let notes: Vec<_> = (events(&calls).into_iter())
+        .filter(|v| v["what"] == "connect_refused")
+        .collect();
+    assert_eq!(
+        notes,
+        [json!({"ev": "note", "what": "connect_refused", "status": 405, "host": "example.com"})]
+    );
+    assert!(opens(&calls).is_empty(), "a refusal opens no stream");
+}
+
+/// Rule 3: an upstream that cannot be reached gets `502`, as the harness would see without us.
+#[tokio::test]
+async fn an_unreachable_upstream_gets_502() {
+    let (_h, addr, _calls, _) = proxy(HOSTS, &[]);
+    let (_refusing, dead) = common::ports::refusing();
+    assert_eq!(connect(addr, &format!("{dead}")).await.1, 502);
+}
+
+/// GAP 1: a ClientHello past 64 KiB to a listed CONNECT host is a `hello_too_big` tunnel whose
+/// `memory_guard` GAP covers every byte each way.
+#[tokio::test]
+async fn a_client_hello_past_64_kib_tunnels_with_its_guard_gap() {
+    let up = echo(b"");
+    let (_h, addr, calls, _) = proxy(
+        HOSTS,
+        &[("GOALCUP_TEST_UPSTREAM", format!("api.openai.com={up}"))],
+    );
+    let mut s = through(addr, "api.openai.com:443").await;
+    let suites: Vec<u16> = (0..1_000).map(|i| 0x1301 + i).collect();
+    let wire = hello(&suites, &[sni_ext("api.openai.com"), (21, vec![0; 64_000])]);
+    s.write_all(&wire).await.unwrap();
+    s.shutdown().await.unwrap();
+    let mut back = Vec::new();
+    s.read_to_end(&mut back).await.unwrap();
+    assert_eq!(back, wire, "every byte relayed");
+    let got = conns(&calls, 1).await;
+    let (sid, meta, tail) = &got[0];
+    assert_eq!(meta["reason"], "hello_too_big");
+    let lost = tail["up"].as_u64().unwrap() + tail["down"].as_u64().unwrap();
+    assert_eq!(lost, 2 * wire.len() as u64);
+    let guard = json!({"guard": "client_hello", "limit": CLIENT_HELLO_GUARD});
+    assert!(
+        matches!(&gaps(&calls)[..], [Call::Gap(s, GapReason::MemoryGuard, _, _, 0, Some(l), Some(t))]
+        if s == sid && *l == lost && *t == guard)
+    );
+}
+
+/// C10 and the decrypted HTTP/1.1 path: a listed SNI behind an IP-literal CONNECT is decrypted,
+/// checked upstream against the SNI name, and recorded with its byte counts.
+#[tokio::test]
+async fn a_listed_sni_behind_an_ip_literal_is_decrypted_and_recorded() {
+    let up = Upstream::start(Script::ok(b"hi").with_tls(&["api.openai.com"], &[HTTP11]));
+    let dir = tempfile::tempdir().unwrap();
+    let roots = up.pki().roots_file(dir.path()).display().to_string();
+    let (_h, addr, calls, ca) = proxy(HOSTS, &[("GOALCUP_TEST_EXTRA_ROOTS", roots)]);
+    let s = through(addr, &up.addr().to_string()).await;
+    let name = ServerName::try_from("api.openai.com").unwrap();
+    let mut t = trusting_run_ca(&ca, &[HTTP11])
+        .connect(name, s)
+        .await
+        .unwrap();
+    get(&mut t).await;
+    t.shutdown().await.unwrap();
+    drop(t);
+    let got = conns(&calls, 1).await;
+    let (_, meta, tail) = &got[0];
+    assert_eq!(
+        (&meta["mode"], &meta["alpn"]),
+        (&json!("decrypt"), &json!("http/1.1"))
+    );
+    let kinds: Vec<_> = opens(&calls).into_iter().map(|o| o.1).collect();
+    assert!(kinds.contains(&StreamKind::HttpReq) && kinds.contains(&StreamKind::HttpResp));
+    for key in ["up", "down", "plain_up", "plain_down"] {
+        assert!(tail[key].as_u64().unwrap() > 0, "{key}");
+    }
 }

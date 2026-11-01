@@ -47,9 +47,13 @@ fn five(t: &Tokens) -> [Option<u64>; 5] {
 
 /// The five sums of these rows' own tokens; a sum of numbers all unsaid is null, never 0.
 fn total<'a>(rows: impl Iterator<Item = &'a CallRow>) -> Value {
+    sum(rows.map(|r| &r.tokens))
+}
+
+fn sum<'a>(tokens: impl Iterator<Item = &'a Tokens>) -> Value {
     let mut acc = [None; 5];
-    for r in rows {
-        for (a, v) in acc.iter_mut().zip(five(&r.tokens)) {
+    for t in tokens {
+        for (a, v) in acc.iter_mut().zip(five(t)) {
             let old: Option<u64> = *a;
             *a = old.zip(v).map(|(x, y)| x.saturating_add(y)).or(old).or(v);
         }
@@ -62,7 +66,7 @@ pub(super) fn summary(t: &CallTable) -> Value {
     let twin = |r: &&CallRow| r.leg == Leg::Native && r.join == Some(Join::Matched);
     let counted = |r: &&CallRow| r.kind == Kind::Call && !twin(r);
     let wire = |r: &&CallRow| r.leg == Leg::Wire && r.kind == Kind::Call;
-    let said = |r: &&CallRow| r.usage_from.is_some();
+    let has_usage = |r: &&CallRow| r.usage_from.is_some();
     let n = |j| rows().filter(counted).filter(|r| r.join == Some(j)).count();
     let mut st = json!(by_status(rows().filter(wire)));
     st["not_whole"] = rows().filter(wire).filter(|r| !r.whole).count().into();
@@ -77,29 +81,29 @@ pub(super) fn summary(t: &CallTable) -> Value {
             let ths = rs.iter().filter_map(|r| r.thread.as_deref());
             json!({"model": m, "requested": req.collect::<BTreeSet<_>>(), "calls": rs.len(),
                 "threads": ths.collect::<BTreeSet<_>>().len(),
-                "tokens": total(rs.iter().copied().filter(said))})
+                "tokens": total(rs.iter().copied().filter(has_usage))})
         })
         .collect();
+    let mut by_th: BTreeMap<&str, Vec<&CallRow>> = BTreeMap::new();
+    for (k, r) in rows().filter_map(|r| Some((r.thread.as_deref()?, r))) {
+        by_th.entry(k).or_default().push(r);
+    }
     let threads: Vec<_> = (t.threads.iter())
         .map(|th| {
-            let mine: Vec<_> = rows()
-                .filter(|r| r.thread.as_deref() == Some(th.id.as_str()))
-                .collect();
-            let times = mine
-                .iter()
-                .flat_map(|r| [r.wall_start, r.wall_end])
-                .flatten();
-            let said = mine.iter().copied().filter(counted).filter(said);
-            let own = || mine.iter().copied().filter(counted);
+            let rs: &[_] = by_th.get(th.id.as_str()).map_or(&[], Vec::as_slice);
+            let times = rs.iter().flat_map(|r| [r.wall_start, r.wall_end]).flatten();
+            let said = rs.iter().copied().filter(counted).filter(has_usage);
+            let own = || rs.iter().copied().filter(counted);
             let mut models: BTreeMap<&str, u64> = BTreeMap::new();
             own()
                 .filter_map(|r| r.model.as_deref())
                 .for_each(|m| *models.entry(m).or_default() += 1);
-            let wires = || mine.iter().copied().filter(wire);
+            let wires = || rs.iter().copied().filter(wire);
             json!({"id": th.id, "parent": th.parent, "depth": th.depth, "label": th.label,
                 "wire_calls": wires().count(), "native_calls": th.native_calls,
                 "native_only": th.native_only, "native_total": th.native_total,
-                "matched": mine.iter().filter(|r| twin(r)).count(),
+                "native_until": th.native_until.map(wall), "native_tokens": sum([&th.native_tokens].into_iter()), "resumed": th.resumed,
+                "matched": rs.iter().filter(|r| twin(r)).count(),
                 "status": by_status(wires()), "tokens": total(said), "models": models,
                 "effort": own().filter_map(|r| r.effort.as_deref()).collect::<BTreeSet<_>>(),
                 "first": times.clone().min().map(wall), "last": times.max().map(wall),
@@ -109,14 +113,16 @@ pub(super) fn summary(t: &CallTable) -> Value {
     let native = || rows().filter(|r| r.leg == Leg::Native);
     json!({"v": 1, "reader": env!("CARGO_PKG_VERSION"), "run": t.run, "entry": t.entry,
         "connector": t.connector, "harness_version": t.harness_version, "sealed": t.sealed,
-        "readable": t.readable(), "reason": t.reason.map(snake), "native_until": null, "db_set": null,
+        "readable": t.readable(), "reason": t.reason.map(snake), "native_until": t.native_until.map(wall),
+        "db_set": t.db_set, "harness_exited": t.harness_exited,
         "coverage": {"wire_calls": rows().filter(wire).count(), "native_calls": native().count(),
             "matched": n(Join::Matched), "native_only": n(Join::NativeOnly),
             "wire_only": n(Join::WireOnly), "unattributed": n(Join::Unattributed),
             "joined_by_time": t.joined_by_time, "repeats_skipped": t.repeats_skipped,
             "copied_skipped": t.copied_skipped},
         "status": st, "models": models, "threads": threads,
-        "tokens": {"merged": total(rows().filter(counted).filter(said)), "native": total(native()),
+        "tokens": {"merged": total(rows().filter(counted).filter(has_usage)), "native": sum(native().map(|r| &r.tokens).chain(t.threads.iter().filter(|x| !x.resumed).map(|x| &x.native_tokens))),
+            "native_partial": t.threads.iter().any(|x| x.resumed),
             "wire": total(rows().filter(counted).filter(|r| r.usage_from == Some(Leg::Wire))),
             "calls_without_usage": none.clone().count(),
             "calls_without_usage_by_status": by_status(none)}})

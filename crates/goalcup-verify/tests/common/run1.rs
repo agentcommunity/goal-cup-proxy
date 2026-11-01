@@ -5,7 +5,8 @@ use super::*;
 
 #[derive(Clone, Copy, PartialEq)]
 pub enum Shape {
-    /// The wire stops at minute 49 while the rollouts run on, with run 1's other losses.
+    /// The wire stops at minute 49 while the rollouts run on, with run 1's other losses, and
+    /// the root's call at minute 21 never reaches it (no GAP) though later requests resend it.
     Lossy,
     /// Lossy, and a pinned tunnel to a vendor host for the whole entry: no cover for the wire.
     Vendor,
@@ -19,7 +20,7 @@ pub enum Shape {
     DodgerOwn,
 }
 
-const IDS: [&str; 5] = [
+pub const IDS: [&str; 5] = [
     "fake-thread-main",
     "fake-kid-1",
     "fake-kid-2",
@@ -27,9 +28,17 @@ const IDS: [&str; 5] = [
     "fake-kid-4",
 ];
 
-/// Thread `id`'s call `k` as a POST on its own connection, answered over SSE. A rate-limited
-/// call sends its error as an `error` event and as a `response.failed`, as run 1's did.
-fn post(e: &mut Entry, id: &str, k: u64, limited: bool) {
+/// The text of the one new user turn in every request body; no finding may carry it.
+pub const TURN: &str = "fake turn text";
+
+/// Thread `id`'s call `k` as a POST on its own connection, answered over SSE with a tool call.
+/// The body resends the thread's earlier calls `seen`, as Codex does. A rate-limited call sends
+/// its error as an `error` event and as a `response.failed`, as run 1's did, and has no answer.
+fn post(e: &mut Entry, id: &str, k: u64, limited: bool, seen: &[u64]) {
+    let call = |k: u64| {
+        json!({"type": "function_call", "call_id": format!("call_{k}"),
+        "name": "shell", "arguments": "{}"})
+    };
     let ev = |what: &str, x: Value| {
         let key = if what == "failed" { "error" } else { "usage" };
         json!({"type": format!("response.{what}"), "response": {"id": format!("r_{k}"),
@@ -41,12 +50,22 @@ fn post(e: &mut Entry, id: &str, k: u64, limited: bool) {
     let end = if limited {
         vec![err, ev("failed", rl)]
     } else {
-        vec![ev("completed", used)]
+        vec![
+            json!({"type": "response.output_item.done", "item": call(k)}),
+            ev("completed", used),
+        ]
     };
     let sse = |v: Value| format!("event: {}\ndata: {v}\n\n", v["type"].as_str().unwrap());
     let all = [vec![ev("created", Value::Null)], end].concat();
     let body: String = all.into_iter().map(sse).collect();
-    let req = json!({"model": "fake-model", "input": "fake"}).to_string();
+    let done = |j: u64| {
+        json!({"type": "function_call_output", "call_id": format!("call_{j}"),
+        "output": "fake"})
+    };
+    let mut input: Vec<Value> = seen.iter().flat_map(|&j| [call(j), done(j)]).collect();
+    input.push(json!({"type": "message", "role": "user",
+        "content": [{"type": "input_text", "text": TURN}]}));
+    let req = json!({"model": "fake-model", "input": input}).to_string();
     let head = json!({"method": "POST", "path": "/v1/responses", "ver": "1.1", "masked": [],
         "coding": null, "headers": [["content-type", "application/json"], ["thread-id", id]]});
     let (c, done) = (e.conn(), EndReason::Complete);
@@ -62,8 +81,9 @@ fn post(e: &mut Entry, id: &str, k: u64, limited: bool) {
     e.end(c, done, 0, json!({"up": 900, "down": 900}));
 }
 
-/// A tunnel to a host of `kind` from the `listed` source; only its GAP says it was there. It lasts `ms` and advances the
-/// clock, unless `back` is set: then its GAP reaches back `ms` from now and nothing advances.
+/// A tunnel to a host of `kind` from the `listed` source; only its GAP says it was there. It lasts
+/// `ms` and advances the clock, unless `back` is set: then its GAP reaches back `ms` from now and
+/// nothing advances.
 fn tunnel(e: &mut Entry, host: &str, listed: &str, kind: &str, ms: u64, back: bool) {
     let meta = json!({"host": host, "port": 443, "mode": "tunnel", "listed": listed,
         "kind": kind, "reason": "pinned", "alpn": null, "tls": null,
@@ -158,6 +178,9 @@ pub fn run1(name: &str, shape: Shape) -> PathBuf {
     let spawn = json!({"type": "event_msg", "payload": {"type": "item_completed", "item": item}});
     rolls[0].line(&mut e, 0, spawn);
     let mut t0 = 0;
+    // Each thread's earlier call ids. A call missing from the wire stays in the list: later
+    // requests resend its answer, which is what the history check finds.
+    let mut seen: Vec<Vec<u64>> = vec![vec![]; n];
     for m in 1..=120u64 {
         let down = shape == Killed && (60..70).contains(&m);
         let on = !down && (m <= 49 || !lossy) && !dodger;
@@ -185,13 +208,16 @@ pub fn run1(name: &str, shape: Shape) -> PathBuf {
             e.gap(r.sid, GapReason::MemoryGuard, 0, r.off, 0, Value::Null);
         }
         if on && m % 5 == 0 && m <= 30 {
-            post(&mut e, IDS[0], m * 10 + 9, true);
+            post(&mut e, IDS[0], m * 10 + 9, true, &seen[0]);
         }
         for (i, r) in rolls.iter_mut().enumerate() {
             if i == 0 || m % 12 == 3 * i as u64 % 12 {
-                if on {
-                    post(&mut e, r.id, m * 10 + i as u64, false);
+                let k = m * 10 + i as u64;
+                // Lossy drops the root's call at minute 21 from the wire, with no GAP.
+                if on && !(lossy && m == 21 && i == 0) {
+                    post(&mut e, r.id, k, false, &seen[i]);
                 }
+                seen[i].push(k);
                 r.call(&mut e, ns);
             }
         }

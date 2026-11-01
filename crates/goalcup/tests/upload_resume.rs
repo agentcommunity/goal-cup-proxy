@@ -3,8 +3,9 @@
 //! re-reads and moves only to a position a local index line confirms, and any other position is
 //! `stuck`; an offset in a pruned range is `stuck`; with no live writer nothing past the file is
 //! sent; a 409 with no move backs off; `503 awaiting_final` waits for the final and is then
-//! retried at once; a Worker failing every other PUT never makes a wait above 4 s. The panic case
-//! needs `catch_unwind` in the thread wiring and lands with it (slice 4).
+//! retried at once; a Worker failing every other PUT never makes a wait above 4 s; a panic in an
+//! uploader thread is caught by the threads' guard, which no scripted answer can reach, so the case
+//! drives the guard itself.
 
 mod common;
 
@@ -13,6 +14,7 @@ use common::worker::{CREDENTIAL, FakeWorker, Inject, RUN_ID, Route};
 use goalcup::pipeline::Mono;
 use goalcup::upload::chunk::{self, Bound, Cut};
 use goalcup::upload::client::{RunPosition, ServerClient, Token};
+use goalcup::upload::guard;
 use goalcup::upload::policy::{Class, Policy};
 use goalcup::upload::send::{Sender, Step};
 use goalcup::upload::state::{Final, State, UploadJson};
@@ -340,4 +342,39 @@ fn a_worker_failing_every_other_put_never_waits_above_4_s() {
         r.t.set(next);
     }
     r.stored_once(&r.cat());
+}
+
+/// Section 1: a panic anywhere in an uploader thread never ends the process or the thread and is
+/// not raised again: the guard writes one `goalcup.log` line per panic, the upload thread's
+/// `upload.json` says `waiting` with class `internal` (a beat's panic leaves it alone), and the
+/// body starts again on its backoff, building its sender or beat anew, until `finish` lets go.
+/// Partial cover: no scripted answer can panic the parser, so the case drives the guard itself.
+#[test]
+fn a_panic_in_a_round_or_a_beat_leaves_the_uploader_running() {
+    let dir = tempfile::tempdir().unwrap();
+    let j = Mutex::new(UploadJson::new(RUN_ID.into(), ENTRY.into()));
+    let p = Policy {
+        backoff_base: Duration::from_millis(1),
+        ..Policy::default()
+    };
+    let (wake, rx) = std::sync::mpsc::channel::<()>();
+    let runs = Cell::new(0);
+    let body = || {
+        runs.set(runs.get() + 1);
+        assert!(runs.get() > 2, "a test panic");
+    };
+    guard(true, dir.path(), &j, &p, &rx, body);
+    assert_eq!(runs.get(), 3, "started again after each panic");
+    let e = j.lock().unwrap().clone();
+    assert_eq!(e.state, State::Waiting);
+    assert_eq!(e.last_error.map(|e| e.class), Some(Class::Internal));
+    let log = || fs::read_to_string(dir.path().join("goalcup.log")).unwrap();
+    assert_eq!(log().lines().count(), 2);
+    // A beat's panic leaves `upload.json` alone; a guard whose wake is let go ends.
+    let fresh = Mutex::new(UploadJson::new(RUN_ID.into(), ENTRY.into()));
+    drop(wake);
+    let (slow, boom) = (Policy::default(), || panic!("a test panic"));
+    guard(false, dir.path(), &fresh, &slow, &rx, boom);
+    assert_eq!(fresh.lock().unwrap().last_error, None);
+    assert_eq!(log().lines().count(), 3);
 }

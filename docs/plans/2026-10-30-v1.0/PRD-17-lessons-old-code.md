@@ -146,7 +146,7 @@ PRD-17 lane edits that column. That is a LESSONS.md edit, not a new test and not
 | C2 | A broken CONNECT head gets a fixed answer (`400`, `431` at 8 KiB, `405` for a non-CONNECT method) and is never echoed: it may hold a credential. Control bytes in a header value are a `400` | `px/connect.rs:692-717`, `:756-801`, bound `:72`; `cli-it/m2_tls_connect.rs:803` | A: `lessons_connect::bad_heads_get_fixed_answers_without_echo` (no input byte in any answer, log or record) | E (no `407`) | PRD-17 |
 | C3 | Authority forms: `host:port`, `[v6]:port`, upper case, one trailing dot, `_` in a label; port 0, userinfo, path and query refused | `px/connect.rs:840-881`; inline test `px/connect.rs:1540` | A: the inline test, copied as `lessons_connect::authority_forms` | V | PRD-17 |
 | C4 | A ClientHello split across TLS records and across TCP reads. Post-quantum key shares make ClientHellos larger than one segment. The bytes read are replayed (`PrefixedIo`) | `px/connect.rs:1042-1213`, `:1215-1280`; inline `:1487`; `cli-it/m2_tls_connect.rs:602`; fixtures `crates/goalcup-cli/tests/fixtures/m2-tls/*.hex` | A: `lessons_connect::client_hello_in_two_records_and_one_byte_reads_decides_by_sni`, using the copied OpenSSL fixtures and a 2 KiB synthetic hello | E (adds ALPN and fingerprint, PRD-03) | PRD-17 |
-| C5 | A client that closes before its ClientHello is complete is no loss and opens no upstream connection (fix commit `92236c8e`) | `px/connect.rs:571-576`; `cli-it/m2_proxy_integration.rs:1385` | A: `lessons_connect::close_before_hello_opens_no_upstream` (fake upstream sees 0 connections; one `conn` record, no GAP) | W | PRD-17 |
+| C5 | A client that closes before its ClientHello is complete opens no upstream TLS session and loses nothing unnamed (fix commit `92236c8e`; amended 2026-10-31 to PRD-03 section 1) | `px/connect.rs:571-576`; `cli-it/m2_proxy_integration.rs:1385` | A: `lessons_connect::close_before_hello_is_one_named_loss` (upstream dialled before the 200, sees one connection per CONNECT and the partial bytes as sent, no TLS; one `conn` record; one named GAP) | W | PRD-17 |
 | C6 | Upstream connect: each round re-resolves, IPv4 first, `TCP_NODELAY`, keepalive 60 s / 15 s / 4. Retry only for listed hosts: the agent's own traffic (pip, npm, git) gets one round, because retrying changes the run being measured. 1.0 adds one rule (PRD-03 rule 8): an upstream failure reaches the harness as a TCP reset, not a clean close | `px/connect.rs:962-1041` (`connect_host`, `connect_addresses`, keepalive); `cli-it/m2_tls_connect.rs:273`, `:306` | A: `lessons_connect::unlisted_refusal_is_one_round` (the fake upstream counts one connect, the client gets `502`) and `lessons_connect::listed_refusal_is_retried` (refused once, accepted on the next round, the client's call goes through). No stopwatch. The reset rule: PRD-03 `proxy_connect.rs` | V | PRD-17 |
 | C7 | No idle timeout after admission: SSE and WebSocket streams idle for minutes between turns | `px/connect.rs:960-961` | R: RR1 (Codex WebSockets idle between turns and stay open). A: `lessons_connect::idle_tunnel_survives_120s` (full tier only) | V | PRD-17 |
 | C8 | One broken handshake or one cancelled connection closes only its own two sockets; the listener and the other connections go on | `cli-it/m2_tls_connect.rs:1088`; `cli-it/m2_proxy_integration.rs:1727` | A: `lessons_connect::one_bad_handshake_leaves_others_relaying` | W | PRD-17 |
@@ -1005,3 +1005,88 @@ Names for `LESSONS.md` (the lessons lane writes them; judge 14:56Z, 15:13Z):
   green with the `file::test` form against these names, after a build box proves them on the integration
   head; a row whose old case has no named test in `mask_*` is checked by the lane before it is flipped.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-31, replan after PRD-17 core slice 1 (merge 1863641b)
+
+- **On integration:** `lessons_hosts.rs` (N1-N6), `lessons_decode.rs` (D1-D4, D6, D7), `lessons_tls.rs` (T1, T2, T4,
+  T5) and the `LESSONS.md` upkeep. The encoders are a private `mod enc` in `lessons_decode.rs`, so the slice touches
+  only `tests/lessons_*.rs` and `LESSONS.md` and `common` stays PRD-14's. Review found no blockers.
+- **Still pending in this lane:** the `rec/run-ca.key` half of T4 (waits for PRD-02's writer), the GAP and END
+  records of D6 (wait for `proxy::serve`), `lessons_connect.rs`, `lessons_ws.rs` (K15, also waits for PRD-03 and
+  `common::upstream`), `lessons_launch.rs` and the remaining files.
+- **Nits left for the next PRD-17 touch, none a blocker:** the mapped-loopback and unspecified-address asserts
+  appear in both `unspecified_and_mapped_loopback_reach_this_computer` and `a_name_resolving_only_here_is_skipped`
+  (fold, about 6 lines); `leaf_aki_names_the_ca_key` repeats the AKI extract (a small `aki_of` helper, about
+  10 lines); `mod enc` has three near-identical encode wrappers. Taste only.
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-31, replan after PRD-17 slice 2 (merge 0b661e6e)
+
+- **On integration now:** `lessons_http1.rs` (667 lines) and `lessons_ws.rs` (703) at the parser layer (no
+  `proxy::serve`), `lessons_launch.rs` (408) P3 to P5 at the Shield and harness layer, and the `LESSONS.md`
+  upkeep (renamed guards L-R1 and L-H7 repointed). Lessons test lines total 2,610 (hosts 184, decode 388,
+  tls 260, http1 667, ws 703, launch 408) of the 3,000 shared with PRD-14.
+- **Budget warning:** only about 390 lines are left for `lessons_connect.rs`, the serve-halves of http1 and ws,
+  the D6 GAP and END records, the T4 key half and every later file, and PRD-14's own share is not counted
+  yet. The remaining files must reuse the existing private helpers and add near 300 lines at most; a case
+  that needs more is folded into a PRD-14 guard test or left as a named guard. A total past about 14,200 Rust
+  test lines is the owner question, not this file.
+- **Still waiting:** `lessons_connect.rs` and the serve halves (PRD-03 `serve`), K15 (`common::upstream`),
+  R6 (serve), the T4 key half (PRD-02 writer), SC3 (watchdog loop), and the open rows listed in the log of
+  10:15Z (FW1, C11, P14, HF4, VR1, D7).
+- **L-P3 ctrl-c case is held back with `ignore`.** Box runs fail it about 1 in 9: a pending process-directed
+  SIGINT is delivered after `Shield::harness_exited` restores the default and kills the watchdog in wrap-up.
+  This is a PRD-02 `shield.rs` defect (see its note). Remove the `ignore` in the PRD-02 fix PR; until then
+  L-P3 stays open in `LESSONS.md` and the deletion gate may not count it green.
+- Helpers `common/encode` and the recorder helpers stay private copies here until PRD-14 adds them; when it
+  does, delete the copies in the same PR. No locked ledger item is touched.
+
+### 2026-10-31, replan after PRD-17 slice 3 (merge 2ad2ed16)
+
+- **On integration now:** `lessons_pipeline.rs` (104 lines, the FW1 pipeline case plus the lost-count assert), the
+  gate check 1 dry run, the `LESSONS.md` upkeep (FW1 and R2 name the `lessons_pipeline` guard, W2 and W7 reopened
+  until the relay half has `proxy::serve`). The slice title overclaims: the helper dedupe is one fold in
+  `lessons_hosts.rs` plus the new test using `common::recorder`; the `mod enc` wrappers and `aki_of` nits stay open.
+- **Budget:** lessons test lines total 2,711 (decode 388, hosts 181, http1 667, launch 408, pipeline 104, tls 260,
+  ws 703) of the 3,000 shared with PRD-14, so about 290 lines remain for `lessons_connect.rs`, the serve halves,
+  the D6 GAP and END records and the T4 key half. Same rule as before: reuse the private helpers, fold or leave a
+  named guard when a case needs more.
+- **FW1 copy of the PRD-02 promise:** agreement with PRD-02 is not recorded. The owner of PRD-02 may move the case
+  into `pipeline_guard.rs`; if so delete it here in the same PR and repoint the L-FW1 and L-R2 rows.
+- **Rows stay open** until a box run on the integration head. Nothing the plan owes changes; no locked ledger item is touched.
+
+### 2026-10-31, replan after PRD-03 slice 3 (merge c81e8e9b): serve halves unblocked
+
+`proxy::serve` and `ProxyHandle::quiet_since` are on integration, so the serve halves of the lessons tests can be written now. Cases that need an h2 client wait for `h2.rs`; until then an h2-only client yields a named `h2_unsupported` GAP, which a case must not assert as the final behaviour. Rows stay open until a box run on the integration head. No locked ledger item is touched.
+
+### 2026-10-31, fix review of PRD-17 slice 4
+
+- **C4:** the two OpenSSL hellos are copied into `crates/goalcup/tests/lessons_fixtures/` and sent one byte per write
+  (`openssl_client_hellos_in_single_bytes_are_replayed_whole`, the upstream must receive them whole). The 2 KiB
+  synthetic hello is not written: the fixtures are above 1 KiB, which is the case the lesson names.
+- **C5 is amended to PRD-03 section 1.** The proxy dials the CONNECT target before the `200` (C6 depends on that
+  order), so the upstream is dialled, never sees a complete ClientHello and no TLS session is made. There is exactly
+  one `conn` record (`tunnel`, `not_tls`), the bytes relayed unparsed are relayed as sent, and they are covered by one
+  named GAP. The test is `close_before_hello_is_one_named_loss`, no longer ignored.
+- **C6, C2:** C6 uses bounded waits (10 s for the unlisted refusal, 6 s for the listed retry) and does not count
+  connect rounds; the log half of C2 is K14's (`pipeline_secure.rs`, PRD-12 C3). Both left as written.
+- **T4:** the key test now decodes the records and looks for a key PEM there; a raw scan misses compressed parts.
+- **Budget after this fix:** wc -l of the eight lessons_ files is 3439; the fix added the C4 fixtures case and the recording sink.
+
+### 2026-10-31, replan after PRD-17 slice 4 (merge 2f771304)
+
+- **On integration now:** `lessons_connect.rs` (510 lines: C1 to C8, C10, T3 through `proxy::serve`), the C4 OpenSSL hello fixtures, the T4 key half and the D6 GAP and END records (in `lessons_decode.rs` and `lessons_tls.rs`), and the `LESSONS.md` upkeep. C5 is amended to PRD-03 section 1 (the upstream is dialled before the 200; one `conn` record, one named GAP); no PRD-03 change follows from it.
+- **Budget, past the ledger line:** `wc -l` of the eight `lessons_*.rs` files is 3,462 (connect 510, decode 477, hosts 181, http1 667, launch 408, pipeline 104, tls 412, ws 703) against the 3,000 shared with PRD-14 (+15%, over the 10% that needs a replan decision). The excess serves the points: C1 to C8 and T3 go through the real `serve`, D6 shows GAP and END, T4 shows the key never lands on disk. Decision: accepted for the files already merged, no cut known. The remaining files may add at most about 150 lines (the K15 serve half, the open rows), and PRD-14 shrinks its own tests to match; a total past about 14,200 Rust test lines is still the owner question, not this file.
+- **Still open:** K15 (`common::upstream`), the serve halves of `lessons_http1` (L-H2 relay) and `lessons_ws`, R6, SC3, and the rows that need an h2 client (they wait for `h2.rs`). The C7 120 s case is held back with `ignore` and runs only in the full tier. Rows stay `open` until a box run on the integration head. No locked ledger item is touched.
+
+### 2026-11-01, replan after PRD-17 slice 6 (merge c9b87ac5)
+
+- **On integration now:** the L-P3 ctrl-c case is un-ignored and runs; the only `ignore` left in the lessons files is `lessons_connect::idle_tunnel_survives_120s` (full tier). The PRD-02 guard names in `LESSONS.md` are repointed and the gate check 1 dry run is refreshed (head 633a4226: 577 nextest entries; every name resolves except four).
+- **Budget:** `wc -l` of the eight `lessons_*.rs` files on integration is 4,345 (connect 510, decode 547, hosts 181, http1 978, launch 504, pipeline 104, tls 412, ws 1,109) against the 3,000 shared with PRD-14, 45% over. Slice 6 itself changed code by net minus 3 lines. The earlier allowance of about 150 more lines was exceeded in slice 5; no cut is known that keeps a point, and no further growth is allowed. The build-wide 14,200 line count stays the owner question, not this file.
+- **Still not nameable (seven rows, all stay open):** `watchdog_restart.rs` (L-C12, L-P1, L-P2; PRD-02), `pipeline_stall.rs` (L-R2), `cli_continue.rs` (L-HF6, L-SC4) and `cli_commands::second_start_on_one_home_refuses` (L-HF4; PRD-10). Their owners must land them, or a replan must repoint or drop the rows, before the deletion gate. No locked ledger item is touched.
+
+### 2026-11-01, replan after PRD-17 slice 7 (merge 888cd0b1)
+
+- **Done:** LESSONS.md upkeep against the new integration head (PRD-02 guard files, PRD-10 cli_commands.rs, PRD-08 C3 fix). 117 rows read green, 43 open. No Rust line was added: the eight lessons_*.rs files still total 4,345 (see the slice 6 note). Gate check 1 dry run refreshed.
+- **Still open for want of a named guard (seven rows):** watchdog_restart.rs (L-C12, L-P1, L-P2; PRD-02), pipeline_stall.rs (L-R2; PRD-02), cli_continue.rs (L-HF6, L-SC4; PRD-10) and cli_commands::second_start_on_one_home_refuses (L-HF4; PRD-10). Nothing PRD-17 can do closes them: the owners land the tests, or a later replan repoints or drops the rows, before the deletion gate. The other open rows wait on R:, D: or X: entries shown at the gate or in real runs.
+- No locked ledger item is touched.

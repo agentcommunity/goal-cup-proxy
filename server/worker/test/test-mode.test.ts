@@ -74,3 +74,70 @@ test("a competition run still replaces the account's competition run, and leaves
   assert.equal((await run(c2)).replaced_at, null);
   assert.equal((await run(t1)).replaced_at, null);
 });
+
+// Rung 2: `goalcup start --test` without --repo sends repo_url null. Only a test run may.
+async function openTest(body: Record<string, unknown>, session = "t1") {
+  const token = await credentialFor(rig!.api, "op-1", "test");
+  const res = await rig!.api.call("POST", "/v1/runs", { token, json: { ...body, session_id: session } });
+  return { token, res };
+}
+
+function withoutRepo() {
+  const { repo_url: _dropped, ...body } = openBody();
+  return body;
+}
+
+test("a test run opens with repo_url null, stored as no repository", async () => {
+  rig = inProcess("2026-11-06T10:00:00Z", { TEST_EVENT_ID: "test" });
+  const { res } = await openTest(openBody({ repo_url: null }));
+  assert.equal(res.status, 201, JSON.stringify(res.body));
+  const run = (await rig.db().getRun("op-1", (res.body as { run_id: string }).run_id, null))!.run;
+  assert.equal(run.mode, "test");
+  assert.equal(run.repo_url, "");
+});
+
+test("a test run opens with repo_url absent", async () => {
+  rig = inProcess("2026-11-06T10:00:00Z", { TEST_EVENT_ID: "test" });
+  const { res } = await openTest(withoutRepo());
+  assert.equal(res.status, 201, JSON.stringify(res.body));
+  const run = (await rig.db().getRun("op-1", (res.body as { run_id: string }).run_id, null))!.run;
+  assert.equal(run.repo_url, "");
+});
+
+test("with the GitHub check on, a test run without a repository asks GitHub nothing", async () => {
+  const realFetch = globalThis.fetch;
+  let calls = 0;
+  globalThis.fetch = (async () => {
+    calls++;
+    return new Response("{}", { status: 500 });
+  }) as typeof fetch;
+  try {
+    rig = inProcess("2026-11-06T10:00:00Z", { TEST_EVENT_ID: "test", GITHUB_CHECK: "on" });
+    const { res } = await openTest(openBody({ repo_url: null }));
+    assert.equal(res.status, 201, JSON.stringify(res.body));
+    assert.equal(calls, 0);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
+test("competition and practice runs still need a repository", async () => {
+  rig = inProcess("2026-11-06T10:00:00Z", { TEST_EVENT_ID: "test" });
+  for (const mode of ["competition", "practice"] as const) {
+    for (const body of [openBody({ repo_url: null }), withoutRepo()]) {
+      const token = await credentialFor(rig.api, "op-1", mode);
+      const res = await rig.api.call("POST", "/v1/runs", { token, json: body });
+      assert.equal(res.status, 400, `${mode}: ${JSON.stringify(res.body)}`);
+      assert.equal((res.body as { error: string }).error, "malformed");
+    }
+  }
+});
+
+test("a test run without a repository, asked again with the same session, is the same run", async () => {
+  rig = inProcess("2026-11-06T10:00:00Z", { TEST_EVENT_ID: "test" });
+  const { token, res } = await openTest(openBody({ repo_url: null }), "t9");
+  assert.equal(res.status, 201, JSON.stringify(res.body));
+  const again = await rig.api.call("POST", "/v1/runs", { token, json: openBody({ repo_url: null, session_id: "t9" }) });
+  assert.equal(again.status, 200, JSON.stringify(again.body));
+  assert.equal((again.body as { run_id: string }).run_id, (res.body as { run_id: string }).run_id);
+});

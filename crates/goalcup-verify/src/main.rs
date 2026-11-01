@@ -6,7 +6,7 @@
 use clap::{Parser, Subcommand};
 use goalcup_format::Record;
 use goalcup_format::dump::Dumper;
-use goalcup_verify::{input, report, secrets, usage};
+use goalcup_verify::{input, legs, report, secrets, usage};
 use serde_json::{Value, json};
 use std::ffi::OsString;
 use std::io::Write;
@@ -72,7 +72,8 @@ struct CheckArgs {
     /// Known secret values, one per line: adds the `secrets` check to every entry.
     #[arg(long, value_name = "FILE")]
     known: Option<PathBuf>,
-    /// The pad's list of harness files on disk (not read yet).
+    /// The pad's list of harness files on disk, `[{"path": "<source>:<path>", "size": n}]`:
+    /// each needs a native stream of its size or a snapshot stream.
     #[arg(long, value_name = "MANIFEST")]
     harness_files: Option<PathBuf>,
 }
@@ -124,14 +125,25 @@ fn check(a: &CheckArgs) -> ExitCode {
         input::resolve(l, false, false).or_else(|e| all_pruned.ok_or(e))
     });
     let known = a.known.as_deref().map(secrets::Rules::new).transpose();
+    let files = a
+        .harness_files
+        .as_deref()
+        .map(legs::read_manifest)
+        .transpose();
     let found = input::resolve(&a.path, a.live, a.server);
-    let (input, l, k) = match (found, local.transpose(), known) {
-        (Ok(i), Ok(l), Ok(k)) => (i, l, k),
-        (Err(e), _, _) | (_, Err(e), _) | (_, _, Err(e)) => return no_report(&e),
+    let (input, l, k, f) = match (found, local.transpose(), known, files) {
+        (Ok(i), Ok(l), Ok(k), Ok(f)) => (i, l, k, f),
+        (Err(e), ..) | (_, Err(e), ..) | (_, _, Err(e), _) | (.., Err(e)) => return no_report(&e),
     };
     let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH);
     let now = now.map_or(0, |d| u64::try_from(d.as_nanos()).unwrap_or(u64::MAX));
-    let r = report::build(&input, a.live.then_some(now), l.as_ref(), k.as_ref());
+    let r = report::build(
+        &input,
+        a.live.then_some(now),
+        l.as_ref(),
+        k.as_ref(),
+        f.as_deref(),
+    );
     eprint!("{}", r.text);
     if a.json {
         let _ = writeln!(std::io::stdout(), "{}", r.json);
@@ -154,7 +166,7 @@ fn dump(path: &std::path::Path, sid: Option<&str>, kind: Option<&str>, text: boo
     let mut out = std::io::BufWriter::new(std::io::stdout().lock());
     let mut broke = false;
     for e in &input.entries {
-        let (mut rd, meter) = match input::open(e) {
+        let mut rd = match input::open(e) {
             Ok(r) => r,
             Err(e) => return no_report(&e),
         };
@@ -185,7 +197,8 @@ fn dump(path: &std::path::Path, sid: Option<&str>, kind: Option<&str>, text: boo
                 return ExitCode::SUCCESS;
             }
         }
-        let (open, cut) = (meter.open_frame.get(), rd.tail().truncated);
+        let t = rd.tail();
+        let (open, cut) = (t.open_frame, t.truncated);
         if tail_line.is_none() && (open || cut.is_some()) {
             tail_line = Some(json!({"k": "tail", "open_frame": open, "truncated_at": cut}));
         }

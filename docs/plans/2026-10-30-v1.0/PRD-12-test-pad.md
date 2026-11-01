@@ -253,7 +253,7 @@ the rig goes on to seal, fetch, check and clean up, so every run ends with a tab
 | Step | What the rig does | Waits for | Limit, then |
 |---|---|---|---|
 | `setup` | Box from the pad image, copies, version check, plants, `goalcup setup`, key route (section 3, 0:00 to 0:01) | | 5 min, then FAIL "setup", cleanup |
-| `start` | `goalcup start` in tmux, approval when `server` is not `off`, paste, Enter (section 3, 0:02 to 0:04) | "Recording in chat mode", then the harness's ready text | 3 min, then INCONCLUSIVE "harness did not start" |
+| `start` | `goalcup start` in tmux, approval when `server` is not `off`, paste, Enter (section 3, 0:02 to 0:04) | "Recording in chat mode", then the harness's ready text | 3 min, then INCONCLUSIVE "harness did not start"; a pane that dies first ends it at once with INCONCLUSIVE "start-refused: (exit N) <last screen line>" |
 | `wait-calls n` | Reads `status.json` every 5 s | `written.model_requests` at least n | 4 min, then INCONCLUSIVE "the harness did no work" |
 | `look` | `check --live --json` and `usage --json` on the open entry, under `nice -n 19`; prints calls, threads, gaps and known-value hits so far | | 1 min. A live `fail` or a known-value hit is written as "first seen at T" and the run goes on (section 4) |
 | `kill-recorder@m` and the other faults | Section 3.1 | An open response stream, up to 60 s | As section 3.1 |
@@ -322,13 +322,13 @@ steps of section 1a between 0:04 and the seal.
 | Time | Conductor (`pad`) | Box (`pad-run`) |
 |---|---|---|
 | 0:00 | Check the key queue (section 7). With `--server staging` and a push token: create the empty public repo `<pad owner>/gc-pad-<id>` with `GH_TOKEN` (as `matrix.sh` `--test`, `:14-18`, `:162-187`). `sandbox create --name pad-<id> --snapshot <pad image> --non-persistent --vcpus 4 --timeout <minutes + 30>m` (https://vercel.com/docs/sandbox/cli-reference). `sandbox copy` the two binaries from the build box output, `scripts/pad/`, the harness key file, for `gateway` the gateway key file, and the push token file | |
-| 0:01 | | Check the harness version equals the pinned one; refuse otherwise. Make the project folder; with a push token, write it to `.env.local` as `GH_TOKEN=<push token>`, 0600 (PRD-10 start step 2 needs that line). Plant files (section 5). Apply a `fd-limit` fault if scheduled. `goalcup setup --harness <id> --yes` (S15). Run the `--pre` script if given. Give the key to the harness by its `key_route` (section 6): the harness's own login with the key file on stdin, a file in goalcup's isolated home, or the launch shell's environment. Delete each copied key file once its route has used it |
+| 0:01 | | Check the harness version equals the pinned one; refuse otherwise. Make the project folder; with a push token, write it to `.env.local` as `GH_TOKEN=<push token>`, 0600 (PRD-10 start step 2 needs that line). Plant `.env.local` and `.gitignore` only (section 5; the git part comes at 0:04). Apply a `fd-limit` fault if scheduled. `goalcup setup --harness <id> --yes` (S15). Run the `--pre` script if given. Give the key to the harness by its `key_route` (section 6): the harness's own login with the key file on stdin, a file in goalcup's isolated home, or the launch shell's environment. Delete each copied key file once its route has used it |
 | 0:02 | | `GOALCUP_SERVER=<staging>`, `GOALCUP_KEEP_PARTS=1` (unless `keep = false`), `GOALCUP_NO_BROWSER=1`; in tmux session `pad`: `goalcup start --test --harness <id> [--repo <repo>] --prompt prompt.txt [--connector <file>] [--hosts <copy>]` (`--repo` only with a push token). Write the device code goalcup prints (contract words "shows the code XXXX-XXXX.", PRD-10 section 3 step 4) to `code.txt`. With `server = "off"`: `GOALCUP_SERVER=off`, no repo, no approval |
 | 0:03 | Read `code.txt`; approve on the staging test route `POST /v1/device/approve` (PRD-07) with the approval key and the owner's member id, each piped from its own 0600 file (copied from `matrix.sh:839-887`) | |
-| 0:04 | | Wait for "Recording in chat mode", then the harness's ready text from the pad harness file (default 30 s). Send pre-prompt keys if the file names any. Paste `runs/<run>/first-message.txt` if goalcup wrote it (PRD-10 section 8), else the prompt file, with `tmux load-buffer` and `tmux paste-buffer -p`; wait the submit delay (default 2 s); send Enter. Start the fault and exec schedule (section 3.1). Copy the run certificate key file (ledger R3b; its name and place are PRD-02's) into `pad-run`'s own 0600 file `known-box`, for C3 |
+| 0:04 | | Wait for "Recording in chat mode", then the harness's ready text from the pad harness file (default 30 s). Then seed: copy `pad-setup-check.sh`, `git init` with a local identity, commit, add the planted `.git/config` remote (the folder must be empty of these when `goalcup start` runs, PRD-10 section 3 step 2). Send pre-prompt keys if the file names any. Paste `runs/<run>/first-message.txt` if goalcup wrote it (PRD-10 section 8), else the prompt file, with `tmux load-buffer` and `tmux paste-buffer -p`; wait the submit delay (default 2 s); send Enter. Start the fault and exec schedule (section 3.1). Copy the run certificate key file (ledger R3b; its name and place are PRD-02's) into `pad-run`'s own 0600 file `known-box`, for C3 |
 | 0:04 to 0:24 | Every 2 min: copy out `watch/*.jsonl` and the panes, with known values replaced (section 4). Every 5 min: the spend check (section 7) | Watch (section 4) |
 | 0:24 | | `goalcup seal --yes` at `minutes` after the paste, at the spend cap, or when the harness exits. Save the last screen. Wait until `upload.json` says `final: sealed` (PRD-06, S9), up to 10 minutes or until 5 minutes after the last scheduled fault ends, whichever is later. Write `harness-files.json`. Wipe keys, `.env.local` and the harness home |
-| 0:27 | `sandbox copy` out `rec/`, `status.json` series, `goalcup.log`, `upload.json`, panes, `harness-files.json`, `watch/`, `exec/` (panes with known values replaced). `scripts/fetch-run.sh --bucket goalcup-traces-staging <entry> <out>` (PRD-07, S13: `<out>/<entry>/rec.gcr.zst` and `fetch.json`). `sandbox copy` the fetched entry and the per-run known-values files in. `sandbox exec` the commands of section 8. Copy out their JSON. Then cleanup (section 3.2) | Append `known-box` to the known-values file. Run the section 8 commands; delete the known-values files and `known-box` after the scan |
+| 0:27 | `sandbox copy` out `rec/`, `status.json` series, `goalcup.log`, `upload.json`, panes, `harness-files.json`, `watch/`, `exec/` (panes with known values replaced). `scripts/fetch-run.sh --bucket goalcup-traces-staging <entry> <out>` (PRD-07, S13: `<out>/<entry>/rec.gcr.zst` and `fetch.json`). `sandbox copy` the fetched entry and the per-run known-values files in. `sandbox exec` the commands of section 8. Copy out their JSON. Then cleanup (section 3.2). `fetch-run` here uses the read-only fetch credentials of section 7, passed to that child only | Append `known-box` to the known-values file. Run the section 8 commands; delete the known-values files and `known-box` after the scan |
 | 0:28 | Write `row.json`, `report.txt` and `table.txt` from the JSON; scan the pad's own output folder for every known value, the approval key and the conductor's credentials included; append to the ledger; print the table | |
 
 `where = "here"` runs both halves on one machine, in a fresh temp folder with a fresh `GOALCUP_HOME`.
@@ -480,8 +480,8 @@ on the conductor and added to the known-values file:
   read once at start (PRD-05 section 9). If the agent never reads the file again, the row says "canary
   not exercised"; that changes no result. A hit is a C3 FAIL (review A finding 12). Without the yes
   none of these is planted.
-- `.git/config`: a second remote `https://pad:<random password>@example.invalid/pad.git`.
-- `pad-setup-check.sh`: prints `.env.local`, runs `git remote -v` and `env | sort`. `env` in the
+- `.git/config` (planted at 0:04 after the ready line, with `git init`): a second remote `https://pad:<random password>@example.invalid/pad.git`.
+- `pad-setup-check.sh` (copied at 0:04 with the git part): prints `.env.local`, runs `git remote -v` and `env | sort`. `env` in the
   harness's tool shell shows whatever key the harness exports, masked by its shape rule; in the default
   build only the `GH_TOKEN` value is masked by exact bytes (PRD-05 section 9).
 - `.gitignore` holding `.env*` (the starting kit, `matrix.sh:922-925`).
@@ -546,7 +546,17 @@ Keys:
   `umask 077` and no echo. The pad reads a key only to copy its file into a box or to pipe it into
   `curl`; never into an argument, log, prompt or row. In the box, a key reaches an environment variable
   only in the launch shell, for `key_route = "env"`, when that is the harness's documented key route.
-- The approval key, member id, `GH_TOKEN`, database and R2 credentials never leave the conductor. The
+- The approval key, member id, `GH_TOKEN`, database and R2 credentials never leave the conductor.
+- The conductor half may run `scripts/fetch-run.sh` with `DATABASE_URL` (a read-only role) and the
+  read-only `CLOUDFLARE_*` credentials, because BUILD-PROMPT allows `fetch-run` and read-only queries in
+  the conductor session. These values go to the `fetch-run` child only (`env_without(NEVER_IN_BOX minus
+  FETCH)` in `step_fetch`); never into a box, an argument, a file or a log. The known-values scan treats
+  them as never-in-box values. `DATABASE_URL` must be a read-only role for the staging data, never the
+  website database's service role or a write role: rung 2 withheld the website Supabase URL for exactly
+  this reason, and the conductor is handed only a role the owner issued for `fetch-run`. With no such
+  value `fetch-run` fails and `step_fetch` answers FAIL "server copy not fetched" with the last line it
+  printed (today it does not stop earlier with INCONCLUSIVE "no fetch credentials"; a later slice may).
+  C4's server part is then not shown (the row says so), never skipped silently. The
   device code comes out of the box; the approval goes in from the conductor (the `MATRIX_CODES_FILE`
   rule, `matrix.sh:70-73`).
 - The push token: a fine-grained token of a throwaway pad owner, Contents read and write only, the one
@@ -818,7 +828,7 @@ Control ids are kept from revision 1 so other PRDs' references hold; K1, K3 and 
 | Control | Input | Must give |
 |---|---|---|
 | K1 | Cut (the run 1 converter is cut, PRD-00). Run 1's real numbers come from PRD-16 A1 | |
-| K2 run 1 shape | PRD-08's run 1 shape builder (`check_run1_shape.rs`), written as a part folder and as a fake fetched copy | C1 FAIL (`gap_has_end`; local log check `wire_keeps_up`, `threads_match`), C2 FAIL (`subagents_present`), C4 FAIL (`gap_has_end`, `streams_closed`, `server_counts_match`), C6 FAIL against a fake `status.json` whose `written.model_requests` is run 1's finish-line 1,736 |
+| K2 run 1 shape | PRD-08's run 1 shape builder (`check_run1_shape.rs`), written as a part folder and as a fake fetched copy | C1 FAIL (`gap_has_end`; local log check `wire_keeps_up`, `threads_match`), C2 FAIL (`subagents_present`), C5 FAIL (the same lost-subagent thread has no calls; C5 repeats C2's thread test), C4 FAIL (`gap_has_end`, `streams_closed`, `server_counts_match`), C6 FAIL against a fake `status.json` whose `written.model_requests` is run 1's finish-line 1,736 |
 | K3, K4 | Cut (the silent-drop hook is cut, PRD-00). The C1 and C2 mapping on a silent loss is proven by K2 | |
 | K5 secret leak, real | Claude Code, `mode = "micro"`, `prompt = "smoke"`, `server = "staging"`, plus a value planted in a file outside the workspace that the setup script also prints, listed in the main known-values file. PRD-05 section 10: such a value is not masked | C3 FAIL with one known-value hit, in local parts and server copy |
 | K6 server tamper | A copy of K7's fetched folder: one flipped byte in `rec.gcr.zst`; one middle chunk removed from `fetch.json` and its bytes from `rec.gcr.zst`; `model_requests` in `fetch.json` plus one | C4 FAIL for each |
@@ -1772,3 +1782,139 @@ taken; "rejected" says why. Fixes for other files are made by those files' owner
   value in the default build, and it is masked in 11 forms; a pad value that is not a shape and not
   `GH_TOKEN` has no MASK by design.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-31, replan after PRD-12 slice 6 (merge 645f3219)
+
+- **What landed:** the six remaining faults with their section 3.1 expectations (`kill-watchdog`,
+  `kill-both`, `freeze`, `cut-worker`, `route-drop`, `fd-limit`), `selftest`, pad files for eight
+  connectors (`amp-cli`, `copilot-cli`, `gemini-cli`, `kilo-cli`, `openclaw-cli`, `opencode-cli`,
+  `opencode2-cli`, `qwen-cli`) with their direct and gateway settings snippets, runs A1 to A4, and the
+  skill rewrite (`SKILL.md`, `pad-harness.toml`, `harness-facts.md`; `writing-a-decoder.md` and
+  `connector-harness.toml` are deleted). Pad files now exist for 11 of the 16 connectors. Box proof was
+  22 then 29 unit tests plus fake-binary probes; no fault expectation and no new harness file has run
+  against a live harness (the file headers say which keys were read from docs only). Two review rounds
+  closed everything but the three nits below.
+- **Three nits to apply in the next slice, all small:**
+  - A3-1 (`selftest`, `compare()`): raise `NotRun` for K11b only when `bad` is empty, as in
+    `if hist["orphans_in_gaps"] is None: if not bad: raise NotRun(...)`. As built, a K11b whose C1 comes
+    out FAIL, or whose orphan count is wrong, is reported "not run" and the exit is 3 instead of 1. Exit 3
+    still means "not trusted", so nothing passes falsely, but a real difference is hidden.
+  - R1 (`pad-run`, `verify()`): the comment line before `if old :=` carries two comments joined on one
+    190-character line. Put the new sentence on its own line above the `if` and leave the old comment on
+    the line.
+  - R2 (size, below): reported, no cut proposed. The `KillBothVerify` test is about 35 lines of fixture
+    setup and asserts results (which entry is compared, scanned and priced), not wording.
+- **Decisions in the code that the next reader needs:**
+  - `cut-worker` does not build the stand-in listener. Loopback refuses at once, nothing listens on 443,
+    and a listener cannot take over a name the resolver ignores. If `getent hosts` does not change, the row
+    says "not run: cut did not take". That row is not a pass for PRD-06 U3 or U5; PRD-16 P11 counts it as
+    not run.
+  - `kill-both` checks the old entry only; the entry `goalcup continue` started is fetched and compared
+    separately (the review fix for F5). `route-drop` may name `decode_failed` (a body cut part way) and no
+    other gap. `freeze` reads the first heartbeat and the catch-up from the one-minute `upload.jsonl`
+    samples, so the catch-up has a minute of slack.
+  - `fd-limit@0` reads the recorder's and the harness's soft and hard limits from `/proc` in the box. It
+    does not read the start event's `fd_limit`, so PRD-08 has nothing to add for it.
+  - `selftest` exit codes: 0 every control ran as wanted, 1 one differed, 3 none differed but one did not
+    run (fixtures or ids missing). Nothing outside exit 0 counts as "the pad works".
+- **Still to land (slice 7, in this order):** (1) pad files for the five connectors without one:
+  `cline-cli` (with its `daemon` value, and a data dir for the stale hub that differs from the run's),
+  `crush-cli`, `droid-cli`, `goose-cli`, `kimi-code-cli`; `droid-cli` ends as "not run: no key" (the
+  slice 5 note stands); (2) the per-key queue of section 7 (`grep -i queue scripts/pad/pad` finds none;
+  two boxes per provider key, six for DeepSeek until a row's 429 share passes 5%); (3) the K2, K7, K11
+  fixtures under `scripts/pad/fixtures/` (the slice 5 note says how; `selftest` has never run a control
+  on a real fixture, so every claim about its checks is from fake-binary probes); (4) the three nits
+  above. Gateway DeepSeek rows have no `[rates]` line for `deepseek/deepseek-v4.1-flash`, so they price
+  at the highest rate of the key, which can raise `over_cap` early; add the line only if a gateway row
+  is planned.
+- **Size, `wc -l` at 645f3219** (per file against the PRD-12 "Files it owns" row): `pad-run` 993 (330),
+  `check.py` 743 (320), `pad` 664 (320), `test_pad.py` 488 (90), `table` 193 (150), `selftest` 182 (100),
+  `sbx.mjs` 133 (no row), `exec/` 96 (70), `image` 54 (60). Since 9e71bde0: `pad` +10, `pad-run` +192,
+  `check.py` +160, `test_pad.py` +122, `selftest` +182 (new), `table` +1. Code files together are 3,546
+  (2,909 at 9e71bde0), plus 440 lines of harness files and snippets, 176 of skill and templates, and 79 of
+  prompts, runs and `image.id`; all of `scripts/pad/` is 4,096 against PRD-00's "about 1,350 to 1,450". The
+  slice 5 projection was about 3,440 before the faults and the queue; the queue and five harness files are
+  still to come. The lines past the rows serve point 1 (a fault row is judged from the record alone and a
+  loss other than the named one fails), point 3 (the kill rows and the freeze must show the harness was
+  never held up) and point 7 (eight more harnesses). This is not a raise of the row; whether the row
+  rises stays the owner question already logged. Slice 7 states its per-file lines again and cuts before
+  it adds.
+- No locked ledger item is touched and no owner question comes from this slice.
+- K2 also fails C5: the lost-subagent thread has no wire calls and no native stream, which C2 and C5 both test, so the row and `selftest` now agree on C1, C2, C4, C5 and C6. P1 reads the same set.
+
+### 2026-10-31, replan after slice 7 (merge 1dd5caaf)
+
+- **Landed:** the five harness files (cline-cli, crush-cli, droid-cli, goose-cli, kimi-code-cli), the per-key queue, the K2 fixtures, and the selftest and pad nits. All sixteen connectors now have a pad file.  stays "not run: no key". Several vendor docs hosts were unreachable, so the new files mark those keys unverified; a later slice or a real run confirms them.
+- **Still to land:** K7 and K11 fixtures (they wait on PRD-08 slice 6 and PRD-09, as the slice 5 note says). `selftest` exits 3 until they exist: K2 passes, the others are "not run". Exit 3 is not "the pad works".
+- **Queue has no automated test.** Section 10 leaves it to real runs; the first real batch is its test. Not a gap to fill with a unit test.
+- **Open nit (taste, not blocking):** in the walk finally of `scripts/pad/pad`, the downgrade call catches four exception types and repeats the deepseek name test already inside `downgrade_if_429`. If touched again, read row.json defensively once and catch `Exception` in that one place; a failed downgrade must never stop the pad.
+- **Size, `wc -l` at 1dd5caaf:** all of `scripts/pad/` outside fixtures is 4,303 lines (the reviewer counted 4,298) against the PRD-00 row of about 1,350 to 1,450; `pad` 736 (320), `pad-run` 993 (330), `check.py` 743 (320), `test_pad.py` 488 (90), `table` 193 (150), `selftest` 183 (100). Slice 7 added about 220 lines, most of it harness files and the queue. No further slice is planned to add code except the K7 and K11 fixtures, which are data. The overage stays the owner question already logged; no row is raised here.
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-31, fixer round on slice K7/K11
+
+- **Local log check needs a native stream.** `check.py` counts the harness log as read when the usage summary says `readable` and the record has native files or parsed native calls. A record with native files and zero parsed calls still runs the check, so a reader that reads nothing still fails C1 (section 8). The wire-only K11 records have neither, so they skip it.
+- **A gap over a named history orphan is C1's pass in a plain row.** When `history_complete` is `named`, and the gaps outside the expected kinds number no more than `missing_call` (the orphans, not the text warnings), the direct and gateway exit-0 rule does not fail C1 (section 8, K11 (b)). `history_complete` is C1's, so it is no longer filed under C4.
+- **Seam note for PRD-09.** The usage reader reports `readable: true` for a record with no native stream; it should report `no_native`. The pad works around it by also requiring native files or calls.
+- **K11 sweep.** In `selftest` the wire-only K11 rows exempt only C2, C4 and C5 from the none-wanted sweep; C3 and C6 must not FAIL.
+- **Still open, outside this PRD's files.** The K7 export has one chunk, so K6b cannot drop a middle one. The K11 records have no ok response with usage and no subagent, so K11 (d) cannot show all six PASS; `selftest` says so and exits 3. Both need PRD-08's export and history helpers (`crates/goalcup-verify/tests`) to write multi-chunk uploads, usage and a child thread, and the S13 final fields (`complete`, `missing`) so the fixtures are regenerated, not hand-edited.
+
+### 2026-10-31, fixer round on A11 and A12
+
+- **Off time is not explained by an orphan.** In a plain direct or gateway row, a covered history orphan (gaps outside the expected kinds, no more than `missing_call`) no longer excuses off time; a clean row that went down fails C1 whether or not a call was also lost. Off time passes only when `recorder_down` is an expected gap for the row. `selftest` K11b says so through an `expect_gaps` key in its meta.
+- **The orphan limit is a count bound.** It compares gaps with orphans, not gaps that hold an orphan, until PRD-09 reports orphans as `[{thread, sid, at, in_gap}]` (section 13 ask).
+- `orphans_in_gaps` is null when `history_complete` is missing or fails, 0 for pass, skip or warn.
+- Open: regenerate K11b with a gap that has no off time, so the covered-orphan rule is exercised from the record and not only through `expect_gaps`.
+- **Rig order after the start-folder rule.** `goalcup start` needs a folder holding only `.env.local` and `.gitignore`, with `GOALCUP_HOME` (now `<run>/gc/home`) not beside it. The git init, local identity, `pad-setup-check.sh` and the planted remote therefore go in at 0:04, after the ready line and before the paste. Do not move them before start.
+
+### 2026-10-31, replan after slice 9 rung 1 readiness (merge fe40990f)
+
+- **Landed:** the micro run now passes the folder checks of `goalcup start` (PRD-10 section 3 step 2). `GOALCUP_HOME` moved off the project folder; the git init, `pad-setup-check.sh` and the planted remote go in after the ready line. Review fixes: the planted remote password is wiped and the seed flag is set only after the seed succeeds.
+- **Still not shown:** rung 1 stops at "start not built" until a `goalcup` build is on integration. Pad passing the folder checks is not a pass of start. If PRD-10 changes the folder rule, the pad changes with it (section 3 step 2 is the one source).
+- **Size, `wc -l` at fe40990f:** `scripts/pad/` outside fixtures is 4,344 lines against the PRD-00 row of about 1,350 to 1,450; `pad-run` 1,006, `check.py` 762, `pad` 736, `test_pad.py` 492, `table` 193, `selftest` 188. This slice added about 40 net. The overage stays the owner question already logged; no row is raised here.
+- No locked ledger item is touched.
+
+### 2026-10-31, replan after PRD-03 slice 4 (merge a3dbd3d5): acceptance 3 is now runnable
+
+- The h2 parser is on integration, so `h2-parallel.sh` (acceptance 3) can pass for real in a pad box; before this it could only show `h2_unsupported`. The watcher reads the record: four `http_req`/`http_resp` pairs with `ver` "2", no `h2_unsupported` or `h2_error` GAP, and a verifier exit 0. A GAP `h2_unsupported` on this row now fails it. No locked ledger item is touched.
+
+### 2026-11-01, replan after slice 11 and the rung 2 run
+
+- **Landed.** Slice 11 merged at 036c4212 with its two follow-ups (e4d537f1, d8cbed35). Rung 1 was run
+  again on integration 8dc99969: micro and smoke for Claude and Codex ran and checked; rung 2 (sandbox
+  box, staging server) opened no run.
+- **Rung 2 findings, in plain words, and what slice 12 changes for each.**
+  - **RIG-5.** `approve()` sent the default Python user agent and Cloudflare answered 403 "error code:
+    1010". Slice 12: every pad HTTP call sends a named User-Agent, and a non-JSON error body is reported
+    plainly (status and first line), not as a parse error.
+  - **RIG-6.** After `goalcup start` exited with a refusal, the rig waited out the 3-minute `start`
+    limit before saying so. Slice 12: when `goalcup start` exits, the step stops at once and reports
+    "start refused" with the exit.
+  - **RIG-7.** `fetch-run` needs `DATABASE_URL`, and the only value at hand was the website database.
+    Slice 12: section 7 states the rule (read-only role, fetch child only, never in a box; the code
+    already hid these values from every other child, and a small test now proves it). The owner issues
+    the role; until then C4's server part is not shown.
+- **Not the rig's, and the pad does not work around either.**
+  - The test-mode `repo_url` fault ("repo_url must be a string": the Worker requires it for every open,
+    the CLI sends null in test mode) belongs to the Worker (PRD-07).
+  - The micro-claude C3 FAIL is a false positive in `placeholder()` in `secrets.rs`: the model wrote a
+    private key block with an ellipsis token between the markers, and the placeholder rule has no ellipsis
+    case. It belongs to PRD-08. The row stays as the check reports it.
+- No locked ledger item is touched and no owner question comes from this note.
+
+### 2026-11-01, replan after slice 12 (merge 5aaf7f55)
+
+- RIG-5, RIG-6 and RIG-7 are in. Open nit B1 (split `test_dead_pane_ends_the_wait_at_once` into short methods sharing a setUp) is optional tidying for the next pad slice; no plan change, no ledger item touched.
+
+### 2026-11-01, rig faults RIG-8 and RIG-9 (rung 2b)
+
+- **RIG-8 fixed.** With a server, Codex clears the screen and scrollback, so the paste step never saw "Recording in chat mode" and ended INCONCLUSIVE although `status.json` said recording. The paste step now waits the way the server-off start does (one shared helper): for `status.json` to say recording or for the pane to die, and looks for the screen text only if it does not say recording. A dead pane still ends the step at once as start-refused.
+- **RIG-9 fixed.** The last stderr line of a child (fetch-run, sbx) reached `table.txt`, `meta.json` and `calls.log`, and a database error carried the database host. The pad now replaces the fetch credentials, the host, user and password parts of `DATABASE_URL`, and the other organizer secrets with `<hidden>` before the line is cut to 160 characters, in `said()` and in the run log. Values are read from the environment at the moment of use and are never put on a command line.
+
+### 2026-11-01, replan after slice 13 (merge 56a24821)
+
+- RIG-8 and RIG-9 are in. No plan change and no ledger item touched. Open nits, all optional tidying for any later pad slice: A1 (`hidden()` in `scripts/pad/pad` parses only URL-form `DATABASE_URL`; also unquote the user and password, compare the host case-insensitively, and ideally read libpq `host=`/`user=`/`password=` pairs), A2 (also check the scrollback inside the recording wait), A3 (assert `table.txt` and `meta.json` carry no credential), B1 (drop the duplicate `test_said_hides_every_fetch_credential`), B2 (simplify the paste test setup), B3 (one-line comment that values under 4 characters are not hidden). A1 touches point 4 only inside the pad (organizer database URL in a rig log); the owner issues a Supabase-style URL, so the gap is low risk and is not a gate blocker.
+
+### 2026-11-01, note from PRD-06 slice 7 (merge 20634842)
+
+- **U8 procedure (`kill-both@m+upload`):** `goalcup upload` closes a dead entry only after the harness has exited; against a live harness it answers `StillRecording` and closes nothing (that entry belongs to `goalcup recover`). The fault must therefore wait for the harness to exit (the exit keys, then SIGTERM to `harness.pid` after 30 s, then confirm the pid is gone) before it runs `goalcup upload`; a `StillRecording` answer there is a rig fault, not a PRD-06 failure. No locked ledger item is touched.

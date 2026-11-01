@@ -952,3 +952,31 @@ No locked ledger item is touched and no owner question comes from this note.
   row. A `tls_refused` GAP with `{"alert": false}` stays the case PRD-08 skips for `refusal_after_trust`.
   A dodger row expects `pinned` tunnels with no `tls_refused` of its own.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-31, conductor seam decision: `serve` for PRD-02 slice A (08:40Z)
+
+PRD-02's next slice (`boot.rs`) calls `serve`, so **`serve` must be on integration before PRD-02 slice A merges**. Shape: `proxy::serve(listener: std::net::TcpListener, ctx: ProxyCtx { recorder, hosts, ca }) -> ProxyHandle` is a plain `fn` that builds and owns its 2-worker tokio runtime, spawns the accept loop and returns at once; `ProxyHandle::quiet_since() -> Mono`. `extra_roots` leaves the context: the test hook is read once inside `serve`. If slice 2's review runs long, land a compiling `serve` in a seam-only merge first (PRD-00: stubs first) so PRD-02 can build against it.
+
+### 2026-10-31, replan after PRD-03 slice 2 (merge 47835216): pump reason, F6 test, size
+
+- **Pump doc and `reason` (nits A-N1, N-eofcut).** `Pumped.reason` is `Complete` when the client half-closed first and the upstream then cut (`Eof` then `Cut`), and `Interrupted` (through `Dropped`) when the upstream cut ends the relay first. No byte is lost and no GAP is involved either way: a close-delimited body still ends interrupted through `down_cut`. The serve slice, which touches this block anyway, rewords the doc to say that, or maps any `ld == Cut` to `Interrupted`; either is fine, pick the smaller. Do not add code for it elsewhere.
+- **`Pumped.upstream` and the two derived values (Q1).** Decide in the serve slice: if `serve` also just drops the upstream leg, drop the field; `streams` and `reason` can be one `match`. Taste only.
+- **F6 mid-upload test (A-N2).** The serve slice (or the next `proxy_tunnel` touch) adds one case: a Content-Length body cut short by an upstream cut, expecting `conn` and `http_req` END interrupted and the `unsent` tail on `http_req`. One case, no stress rerun.
+- **R3 note, down side.** Server bytes held when the harness aborts are recorded in `http_resp` / `ws_down`; there is no down-side `unsent` marker. Decision: none is added. The bytes are in the record, the `conn` END is interrupted, and `conn_bytes` counts them, so nothing is hidden; PRD-01's `unsent` stays up-side only.
+- **Size.** `wc -l` on integration at 47835216: mod 17, hosts 113, pump 324, tunnel 190, http1 1,090, ca 439, connect 673, decode 812, tls 203, ws 750; total 4,611 against the 4,250 row (+8.5%, under the +10% line of 4,675). `h2.rs` (ceiling 1,802 in this PRD's own estimate) and `serve` are still to land and will cross +10%; the builder of each says in its merge request which point the extra lines serve (PRD-00 rule), and first cuts what serves none. No cut is on offer today.
+- **Seam.** The `serve` rule in the conductor note above stands: `serve` drops the harness leg, never shuts it down. No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-31, replan after PRD-03 slice 3 (merge c81e8e9b): serve landed, h2 slice duties, size
+
+- **Landed:** `proxy::serve(listener, ProxyCtx) -> ProxyHandle` and `ProxyHandle::quiet_since() -> Mono` are on integration as the conductor note fixed them. PRD-02 slice A and the PRD-17 serve halves can build against them now.
+- **Temporary h2 stop parser.** `H2Unparsed` and `stop_h2` name the loss as `h2_unsupported` until `h2.rs` lands. The `h2.rs` slice deletes both in the same PR and routes h2 through the real parser; leaving either behind is a defect.
+- **Listed meta on empty CONNECT (A10/R1).** A decrypted or tunnelled connection that moved no byte keeps its `listed` meta; only the GAP is skipped (no byte moved, nothing lost). Do not reintroduce a `.filter(|_| !bytes.is_empty())` special case.
+- **Size.** `wc -l` on integration at c81e8e9b plus fixes: proxy src 5,171 (ca 439, connect 678, decode 812, hosts 113, http1 1,090, mod 550, pump 328, tls 203, tunnel 208, ws 750) against the PRD-00 row of 4,250 (replanned 4,400): +17.5% over 4,400, +21.7% over 4,250. Proxy tests (`tests/proxy_*.rs` plus fixtures) about 3,250 against the 2,000 row. With `h2.rs` (own ceiling 1,802) src would reach about 6,970. The `h2.rs` builder must say which point each extra line serves (R1 and R2 carried forward) and cut first what serves none. This is not an owner question yet: that line stays total test lines past about 14,200.
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-31, replan after PRD-03 slice 4 (merge a3dbd3d5): h2 landed, size, what is left
+
+- **Landed:** `h2.rs` routes ALPN h2 under PreferH1; `H2Unparsed` and `stop_h2` are gone; `tests/proxy_h2.rs` is on integration. No code task remains in PRD-03. Only pad acceptance 3 is left, run by a watcher (PRD-12 `h2-parallel.sh`).
+- **Behaviour fixed by review, now the rule for readers and later edits:** a client `GOAWAY` names server streams, of which there are none, so it ends nothing; a server `GOAWAY` and `RST_STREAM` end streams interrupted with `h2_error`. Frames for a stream already ended count as held and the close names them in the `conn` GAP. Server frames wait for their request, bounded to a head plus one read, then are parsed on with `req` 0. An orphan response records `DATA` unless the server set `SETTINGS_ENABLE_CONNECT_PROTOCOL` to 1, in which case it gets GAP `h2_unsupported` counting it. A partial server SETTINGS entry survives a client SETTINGS. Do not simplify any of these away.
+- **Size, `wc -l` at a3dbd3d5:** proxy src 5,961 (ca 439, connect 678, decode 817, h2 787, hosts 113, http1 1,119, mod 519, pump 328, tls 203, tunnel 208, ws 750) against the PRD-00 row of 4,250 (replanned 4,400): +40% over 4,250, +35% over 4,400. `h2.rs` came in at 787, far under its own 1,802 ceiling. Proxy tests (`tests/proxy_*.rs` plus fixtures) 3,942 against the 2,000 row (about twice). Carry both to the end-of-build report; no cut is on offer, review accepted the code. The owner-question line stays total test lines past about 14,200.
+- No locked ledger item is touched and no owner question comes from this slice.

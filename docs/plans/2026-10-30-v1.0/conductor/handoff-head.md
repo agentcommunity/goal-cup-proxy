@@ -60,7 +60,7 @@ was learned; read it before planning that PRD.
 | 02 recorder core | scaffold with S1, S4, S8, S17 stubs | core step 1 in fix rounds (count log bounded by recovery, seal racing a drop: blockers); then mask worker, writer, `real_for_tests`, `pipeline_guard.rs`, seal; then the watchdog slice (restart with CA hand-over, null mode R3a, `goalcup recover` R3b), `pipeline_stall.rs`, `by_hand_load`. Critical path |
 | 03 proxy | leaf modules (ca, tls, connect, decode, ws) | slice 2 (pump, tunnel, http1, hosts) in fix for blocker K1; then `mod.rs` serve joining all; refusal learning; HTTP/2 with the PRD-00 ALPN rule |
 | 04 native | complete: fsx, pattern, walk, tail, native reader, snapshot.rs database sets (7e8ed89b) | nothing unless a replan note or a real run asks |
-| 05 masking | S2 stub, S12 shapes, corpus copy | core slice (the real masker) built, in review. Its merge unlocks real-key rung 1 |
+| 05 masking | S2 stub, S12 shapes, corpus copy, the real masker core (2c95e8f1) | nothing unless a replan note asks (no exact values beyond GH_TOKEN: owner question 3) |
 | 06 uploader | seams S9, S10, S18, policy, client, chunk, beat | slice 3 sender in progress; then thread wiring, prune, `goalcup upload`. Its merge unlocks the first staging deploy |
 | 07 Worker | complete | staging deploy by the conductor (`wrangler deploy --env staging`, floor 1.0.0) after PRD-06 |
 | 08 verifier | check, server copy check, secrets | slice 4 honesty in progress; legs and history once PRD-09 U1 is complete; the run 1 shape builder |

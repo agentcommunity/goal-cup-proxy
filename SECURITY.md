@@ -5,7 +5,7 @@ Goal Cup Proxy or reviews a change to it.
 
 ## Supported versions
 
-The latest tagged release and `main`. Release tarballs are unsigned and not notarized
+Version 1.0 only. Release tarballs are unsigned and not notarized
 ([packaging/README.md](packaging/README.md)).
 
 ## Reporting a vulnerability
@@ -21,99 +21,84 @@ acknowledge a report within 7 days and will say what we plan to do. A small team
 project. There is no bug bounty.
 
 For an anti-cheat recorder, a way to bypass or forge capture is a vulnerability, not just a bug.
-The gaps already accepted are in [docs/CHEAT-CHECKLIST.md](docs/CHEAT-CHECKLIST.md). A report of
-one of those is known, not new, unless it shows that the stated bound does not hold.
+The gaps already accepted are under [What a check does not prove](#what-a-check-does-not-prove). A
+report of one of those is known, not new, unless it shows that the stated bound does not hold.
 
-## What the tool does on your machine
+## What runs on your machine
 
-- Runs a per-user daemon only while a run needs it. `goalcup start` (or `goalcup seal`) starts it
-  detached, in a session of its own, with an environment built from nothing: none of your shell's
-  API keys or proxy variables reach it. It exits once no run is unsealed. Nothing is installed as a
-  service and nothing starts at login.
-- Listens on loopback TCP only: the control API, an ingest port and a per-launch HTTPS proxy.
-- Generates a per-launch CA that only the harness process trusts, through that harness's own
-  variable (`NODE_EXTRA_CA_CERTS`, `CODEX_CA_CERTIFICATE` or `HERMES_CA_BUNDLE`). It never touches
-  the system trust store and never sets a model base URL. `HERMES_CA_BUNDLE` replaces that
-  harness's trust roots rather than extending them, so a harness that ignores it fails its TLS
-  handshake instead of leaving traffic uncaptured. D43 governs which other variables a connector
-  may use.
-- Uses isolated harness homes rather than the user's normal stores. Codex, Claude Code and
-  Hermes keep shared config homes (`CODEX_HOME`, `CLAUDE_CONFIG_DIR`, `HERMES_HOME`); Amp keeps
-  an isolated shared `HOME`. Runs sharing a home are serialized. Claude Code's per-run home
-  links the macOS Keychains directory. Hermes's shared home is never seeded: its own setup
-  keeps its provider and login there. Goal Cup Proxy passes no provider key and never writes
-  app-wide harness configuration such as `~/.claude`, `~/.codex` or `~/.hermes`. The harness's
-  access token passes through the recording proxy's memory on its way to the model service; it is
-  forwarded unread and never written
-  ([`crates/goalcup-cli/src/proxy/http.rs`](crates/goalcup-cli/src/proxy/http.rs), "every other
-  header is skipped unread").
-- With `goalcup login`, talks to the Goal Cup server (`https://ingest.agentcommunity.org`) and to
-  GitHub for the participant's repository. A run's credential is stored at mode 0600 under the
-  configuration directory and is never put in the harness's environment or argv. The seal also
-  sends the list of sealed connections: host, port, times, bytes each way and reason, never their
-  content (D74).
+- **One recorder process and its watchdog.** `goalcup start` is the watchdog. It starts the
+  recorder and the harness, restarts a recorder that dies, and ends the harness at the deadline
+  and at the seal. There is no daemon and no service, nothing starts at login, and nothing is left
+  running once the entry is sealed.
+- **A loopback proxy.** The recorder listens on `127.0.0.1` only, on a port chosen for the entry.
+  The harness reaches it through its proxy variables. Goal Cup never sets a model base URL.
+- **A run CA, trusted only by the harness.** Each entry gets its own certificate authority. It is
+  named only in the harness's own variables (`ca_env` in its connector), never added to the
+  system trust store or a browser. Name constraints limit it to the hosts on the host list, and it
+  expires after 8 days. Its key is a 0600 file in the run folder from the start of the entry to
+  its seal, so `goalcup recover` can reuse the same CA after a crash and the harness keeps
+  trusting it.
+- **Isolated harness homes.** The harness runs with a home of its own, not your `~/.claude`,
+  `~/.codex` or `~/.hermes`. Goal Cup writes nothing into those.
+- **No keys held.** Goal Cup keeps no provider key and sets none. The harness's own credentials
+  pass through the proxy's memory on the way to the model service and are masked before any byte
+  of a record is written.
+- **The upload.** The run credential is stored at mode 0600 under your Goal Cup folder and is
+  never put in the harness's environment or argv. The recorder sends the record, in order, to
+  `https://ingest.agentcommunity.org`. The seal also sends the list of connections passed through
+  unread: host, port, times, bytes each way and the reason, never their content.
 
-## Assets and trust boundaries
+## How raw bytes stay off disk
 
-Assets: harness subscription credentials; prompts, responses and tool output in traces; the control
-bearer; the ingest and proxy secrets; the run credential; trace integrity (the chain and its seal).
-A trace that never reached the server can be rewritten and re-sealed
-([CHEAT-CHECKLIST](docs/CHEAT-CHECKLIST.md)).
+- Every body, header and metadata string is masked before it is written. A masked byte becomes
+  `*`, so lengths and offsets stay those of the source ([RECORD-FORMAT](docs/RECORD-FORMAT.md)).
+- Core dumps are off for the recorder and the watchdog. A panic writes a fixed line with a file
+  and line number and never its message, which could hold a recorded value.
+- Credentials stay out of `goalcup.log`, argv, errors and `Debug` output.
 
-| Adversary | Position |
+The one place raw bytes can still land is memory paged out to swap. Nothing here locks memory, so
+on Linux with unencrypted swap a page of the recorder can reach disk. macOS encrypts swap. If that
+matters to you, use encrypted swap or none.
+
+## Trust boundaries
+
+| Who | Position |
 |---|---|
-| Other local accounts | Blocked by loopback plus a secret on every socket, and 0600/0700 files. Create artifact and config directories made by hand with mode 0700. |
-| Web pages | No CORS. The bearer is required on every mutating route. A status read needs a 64-bit entry id. The control API refuses any `Host` other than its own loopback address and port before the public/bearer split, so a DNS-rebinding page reads nothing. One route is public: `/v0/entries/{id}/status` ([CONTRACTS](docs/archive/CONTRACTS.md#the-control-apis-unauthenticated-surface)). |
-| Same-user processes, including the agent under test | **Inside the boundary.** They can read `control.json` (mode 0600, same uid), the harness environment and run directories, and call authenticated mutators while a capture has live authority. After a restart, a recovered capture accepts status and seal only. Detection is after the fact, from the captured native and wire records. |
-| Network | The recording proxy validates upstream TLS. Only declared provider hosts and paths are decrypted and retained. Authentication hosts always tunnel unmodified. |
-| The Goal Cup server | Signs start receipts and acknowledgements with an Ed25519 key. The verifier accepts only the key built into it (`SERVER_PUBLIC_KEYS`, the production Worker's). Any other key verifies only when passed with `--dev-key`, and the report then says `key_source: "supplied"` and `server_key_unpinned`. No key whose seed is in this repository is trusted. |
-| Connector authors | **Trusted code.** See below. |
+| Other local accounts | Blocked by loopback and 0600/0700 files. |
+| Web pages | The only listener is the loopback proxy. There is no control API to reach. |
+| Same-user processes, including the agent under test | **Inside the boundary.** They can read the run folder and the run CA key while the entry is open. Detection is after the fact, from what the record shows. |
+| Network | The proxy validates upstream TLS. Only the hosts on the host list are decrypted. Everything else, sign-in hosts included, tunnels unread. |
+| The Goal Cup server | Holds the copy organizers trust. Nothing in a record is signed, so organizers rely on the server's copy and its `received_at` times, not on files on your machine. |
+| Connector authors | **Trusted data.** See below. |
 
-## Connectors are trusted code
+## Connectors are trusted data
 
-A connector (`connectors/<id>/`) chooses what program runs, with what environment, which templates
-and seed files are copied into the harness home, which hosts are decrypted and which paths are
-retained. A `statusLine` command in a settings template, a `notify` or MCP entry in a Codex config,
-a `capture.hosts` entry or a seeded file is a code-execution or data-exfiltration surface. The
-directory pins detect tampering after a build. They do not defend against a malicious merge,
-because a connector PR regenerates them. Every connector change is reviewed by a code owner against
-the [checklist](docs/HARNESS-ONBOARDING.md#reviewing-a-connector-pr), and you must not run an
-unreviewed build (D51). Every committed [connector directory](connectors) is packaged for release;
-its [facts sheet](docs/harnesses/README.md) records measured support and gaps. Packaging inclusion
-is not proof of a published binary or a successful real harness run.
+A connector (`connectors/<id>.toml`) is compiled into the binary. It chooses the program, the
+environment, the hosts decrypted and the masking rules. A change to one is read by a code owner
+against the [reviewer checklist](CONTRIBUTING.md#reviewing-a-connector-pull-request). A file
+connector (`--connector`, for practice and test runs only) is named in the record: the `start`
+event holds `connector_source` `file` and the SHA-256 of the file, so judges can see it.
 
-## Guarantees the code aims to keep
+## What a check does not prove
 
-- Bodies are redacted by streaming before they reach disk.
-- Credentials stay out of logs, argv, errors and `Debug` output.
-- The harness environment is built from nothing. After the daemon durably registers the harness
-  process, the CLI re-opens the program path with `O_NOFOLLOW|O_NONBLOCK` and requires a regular
-  file before it releases the harness. It reads none of the file's bytes. The daemon records the
-  program and image digests in `Launch.harness_build` (D53).
-- The control API requires its version on mutating requests. Capture creation refuses, before
-  daemon entry, artifact and workspace allocation, when CLI and daemon loaded different connector
-  bytes (D46). Earlier CLI run, home, CA and seed preparation can exist, and is cleaned on refusal.
-- A restarted unfinished capture has status and seal authority only. Other authenticated mutators
-  refuse before side effects. A launched capture records one `IngestLost` gap.
-- A shared capture home keeps its exact leaf alias only after leaf and canonical-target ownership,
-  type, identity and `0700` mode checks, repeated before the create request (D39).
-- Undeclared hosts are never decrypted.
+`goalcup-verify check` says whether a record is complete and consistent. A pass is not a claim
+that the participant followed the rules. Anything that behaves worse than stated here is a bug.
 
-## Known residuals
-
-Listed in [docs/CHEAT-CHECKLIST.md](docs/CHEAT-CHECKLIST.md) (redaction, key-scan blind spots) and
-[docs/archive/TERMINATION.md](docs/archive/TERMINATION.md) (termination windows). Also:
-
-- Same-user control of the daemon (above).
-- The launch is not inode-bound execution. A same-UID writer or an updater can replace the program's
-  pathname before `exec`. That is a different build, and the daemon records it.
-- Shared-home checks do not inspect ACLs and cannot exclude a same-UID replacement after the final
-  check.
-- Connector loading is a sequence of directory reads and file opens, not an atomic snapshot. A
-  same-UID process can replace names between them. The digest binds the observed sequence, not one
-  instant.
-- The daemon `goalcup` starts is the `goalcup-daemon` beside it, or first on `PATH`. A same-user
-  process that replaces that binary is inside the stated boundary.
+- **Masking has gaps.** It works from the shapes of known secrets and from values the recorder
+  knows. A secret in a form nobody listed can survive. Masking keeps length, so the length of
+  every masked value is visible.
+- **Tunnels are unread.** A connection to a host not on the list, or a sign-in host, is passed
+  through. The seal lists each with host, port, times and bytes. A model gateway behind such a
+  host shows only as a named tunnel.
+- **Vendor backends.** A harness can send a prompt to its vendor's own service. If that host is
+  not a listed model host, the check cannot see the call.
+- **The harness's own log is read only where a reader exists.** Elsewhere the check has the wire
+  alone, and its coverage line says so.
+- **The label is a hint.** `label` (`wire_and_native`, `wire_only`, `native_only`, `none`) names
+  which sources of evidence a record has. Judges start from it. It is not a judgement.
+- **Local files can change before upload.** The record is synced at most every 5 seconds and
+  uploaded as it grows. A same-user process can rewrite the local files in that window. After
+  upload, the server's copy is what counts.
 
 ## Out of scope
 
@@ -122,6 +107,5 @@ Windows (use WSL2).
 
 ## For contributors
 
-Never commit `spikes/*/out/`, `harnesses/`, real traces or keys. Put every fixture through
-`spikes/redact.py` and review it by eye. CI runs no secrets on pull requests. See
-[CONTRIBUTING.md](CONTRIBUTING.md).
+Never commit `harnesses/`, `pad-out/`, real traces or keys, and read every fixture by eye. CI
+runs no secrets on pull requests. See [CONTRIBUTING.md](CONTRIBUTING.md).

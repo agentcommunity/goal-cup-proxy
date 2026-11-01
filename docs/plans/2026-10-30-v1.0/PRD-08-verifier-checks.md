@@ -222,11 +222,12 @@ How it works, in the same one streaming pass (`src/history.rs`):
 1. **Answers recorded.** For every recorded model response (U1 pairs request and reply, PRD-09),
    take its answer keys: each tool-call id (`toolu_…`, `call_…`, Responses `call_id`) and the
    SHA-256 of its text, whitespace-trimmed and collapsed. For a streamed response the text is the
-   joined `delta`, `text` deltas (the same joiner as the secret scan). Keys go in one set for the
+   joined `delta` and `text` deltas (the secret scan's joiner in its answer-only form, which leaves out
+   reasoning, thinking, tool arguments and Gemini parts marked `thought`). Keys go in one set for the
    whole input; a few bytes per answer.
 2. **Answers resent.** For every decoded model request, list its earlier assistant turns (role
    `assistant`, Gemini `model`, Responses `message` and `function_call` items) with the same keys.
-   Reasoning items and turns with no id and no text are not checked.
+   Reasoning items, Gemini `thought` parts and turns with no id and no text are not checked.
 3. **Threads.** A request joins the open chain whose last list it extends (its earlier turns start
    with that list); else it starts a new chain. U1's thread id, where the wire carries one, names the
    chain in the report. Only the turns new since the previous request of the chain are kept, so
@@ -908,7 +909,8 @@ log; the pad lane follows.
     Completions `choices[].delta` and its `tool_calls[].function.arguments`, Anthropic thinking).
     Gemini's `parts[].text` is covered by `text`. This replaces the bullet's three-key list.
   - **One joiner.** It is `secrets::delta_text(&Value, &mut String)`, public. Section 3.2 step 1's
-    "the same joiner as the secret scan" means `history.rs` calls it; it never keeps a copy.
+    "the same joiner as the secret scan" means `history.rs` calls it; it never keeps a copy. The
+    slice 6 fixer added `secrets::answer_text`, the same walk with the answer keys only (see below).
   - **Tails** are cut at any GAP of the stream (a GAP on sid 0 cuts all) and at a DATA offset jump, so
     nothing is joined across a hole (test `secrets_nothing_is_joined_across_a_gap`). Bytes are
     scanned per 64 KiB batch with the 4 KiB tail kept, and at END, GAP, jump and the end of the
@@ -1133,3 +1135,69 @@ log; the pad lane follows.
   the block are unchanged. A scan test that parses the masked line sees valid JSON with all-star strings
   between the markers.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-31, history check fixes after review (slice 6 fixer)
+
+- **Chain rule, as built (section 3.2 step 3).** A request that extends no chain's last list opens its
+  own chain and may continue an empty chain (one whose first request resent nothing), whatever its
+  length. The pass keeps only how many empty chains existed then; `judge` picks the oldest one not yet
+  continued whose U1 thread id is the same, or absent on both. No such chain: the request is its own
+  chain's first request (`history_unanchored`, never `fail`). A second call dropped with no GAP now
+  fails, and a one-shot request on another thread no longer takes a resumed session's chain.
+- **A request body lost to a GAP** is skipped and counted, but its whole reply still supplies answers
+  (a body that looks like JSON and cannot be decoded still gets its reply read). The next request
+  extends the chain over it by more than one answer. A GAP on a POST request stream, on the response
+  to a candidate model request (decoded or not) or on a WebSocket stream counts as a named cover
+  beside the connection covers `honesty` gives; a GAP on any other stream (a GET download) does not; the window starts at the chain's last known
+  request time, else the request's own. The cover's host is not compared: `Cover` carries none, and
+  both rules lean towards `named` over `fail`.
+- **One joiner.** `history.rs` calls `secrets::answer_text` for streamed text, the one walk of
+  `secrets::delta_text` limited to the answer: no reasoning, thinking, `partial_json`, `arguments` or
+  Gemini `thought` part, since a later request does not resend them (a false `history_text_unmatched`
+  on every thinking turn otherwise). It keeps one joined text per response, not one per block or
+  choice. `turn()` skips `thought` parts too, so the request key and the response key stay equal.
+- **Declined: reuse of `usage` framing (review B1).** `Buf` and `Sse` live in `src/usage/`, which PRD-09
+  owns; making them `pub(crate)` is a seam request to PRD-09, not made here.
+- **Size decision** (`wc -l`). `history.rs` 637 against its 155 ceiling and `check_history.rs` 579
+  against 80: the 155 and 80 figures were estimates made before the streaming pass, four request
+  shapes, WebSocket messages and chain rules were fixed. The extra serves points 1 and 3 (a missed call
+  is named, never silently passed). `check_run1_shape.rs` and `common/run1.rs` stay at their slice 5
+  sizes, and the fixture export helper now lives once in `tests/common`. `secrets.rs` is 528 lines against 509 before
+  the answer joiner: the 19 lines serve point 1 (no false warn on a thinking answer, a missed call
+  reported by the right check). Anything past this needs a new decision line.
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-31, conductor seam line from PRD-02 core step 2 (08:50Z)
+
+PRD-02's mask worker writes two record shapes PRD-01's text does not list yet; the verifier must accept them or every real entry fails inv4, inv12 or the recount: (a) a GAP with reason mask_failed, lost 1 (no stream byte lost) and tail {"meta": "open"|"tail"|"event"}, on the stream's sid or sid 0 for an EVENT, after a panic in mask_meta; it counts as one gap with 0 lost bytes and marks the request holed (any GAP on the sid), as PRD-02's Counter does; (b) an empty DATA with fin for an empty WebSocket message. PRD-08 accepts both in its next slice; PRD-01 notes them below.
+
+### 2026-10-31, size decision for the legs and timeline slice
+
+- **Size decision** (`wc -l`). `legs.rs` is past its 540 ceiling, `integrity.rs` past 1,011,
+  `check_legs.rs` 238 against 145, and `timeline.rs` about 140 against the estimate of about 60 for
+  timeline and manifest part. The extra serves points 1, 2 and 3: every subagent file on disk is
+  accounted for by a native stream, a snapshot or a named cause, an off span is kept whole in the
+  timeline (a boot 0 that wrote no index line included), and nothing is dropped silently.
+  `Streams` now lives in `timeline.rs` beside the tally that fills it. The crate total outside
+  `usage/` is about 4,160 src lines against the 1,400 row in PRD-00, an owner-estimate matter for
+  the replan. Anything past these needs a new decision line.
+
+### 2026-10-31, replan after slice 7 (merge f72ab236)
+
+- Slice 7 accepts both PRD-02 record shapes (the mask_failed GAP with lost 1 and a meta tail; the empty DATA with fin). The PRD-01 text still needs the two shapes noted; that stays with PRD-01 and PRD-02.
+- Open nits, both inside PRD-08 and none moves a seam: (1) timeline `off_ms` floors each head, tail and 10-minute piece on its own, so the timeline sum can sit a few ms under `counts.off_ms` for real nanosecond walls. Fix: carry nanoseconds in the tally and divide once per row at output; also correct the module comment in `timeline.rs` lines 3-4 to say the head goes to bucket 0 and the tail to the last bucket. (2) `Out.covers` and `o.timeline` are cloned in `report.rs`; moving them removes two clones, optional.
+- Do these in the next PRD-08 touch only. A test should use non-ms-aligned span times. No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-31, replan after PRD-03 slice 4 (merge a3dbd3d5): h2 GAP reasons the checks will see
+
+- On a decrypted h2 connection, `h2_unsupported` GAPs now carry a real `lost` for an extended CONNECT stream or an orphan response while the server allows extended CONNECT, and the `conn` GAP at the close counts frames held for ended streams. `conn_bytes` counts these as named loss, not as an unaccounted gap. No new reason and no locked ledger item is touched.
+
+### 2026-10-31, C3 placeholder and glued-word fix: size decision
+
+- `secrets.rs` is 551 lines (was 528) and `tests/secrets_scan.rs` 291 (was 214). The extra lines are the `placeholder` rule (a mask, `[REDACTED]`, `[HIDDEN]` or `<redacted>` is no secret) and the masker's 24-byte guard. A glued shape hit stays `warn`. The standing cap for `secrets_*.rs` test files is 215, so 291 is over it; the replan counts it. Anything past 551 in `secrets.rs` needs a new decision line. A PEM placeholder split across SSE deltas passes on the joined deltas; its raw-stream hit stays a `fail` on purpose. Asked of PRD-05: export `glued` so the `ESCAPE` copy can go.
+
+### 2026-11-01, replan after slice 8 (merge e4d537f1)
+
+- **Size report, PRD-08** (`wc -l` on integration): src outside `usage/` is 4,171 lines (secrets.rs 551, integrity.rs 1,027, legs.rs 550, history.rs 637, honesty.rs 497) against the 1,400 row in PRD-00 (about 3.0 times). The `usage/` tree is 2,861 against the PRD-09 row of 1,470. Tests under `crates/goalcup-verify/tests` are 4,359 (common 910, usage_run1 676, check_history 579, secrets_scan 291) against 1,100 plus 200 for PRD-09. Slice 8 added 23 src and 77 test lines; the overage is older and no behaviour-keeping cut is known. `secrets_scan.rs` is 291 against the standing 215 and is accepted, no growth. Carry to the end-of-build report with the PRD-03, PRD-10, PRD-12 and PRD-17 overages.
+- The open nits from the slice 7 replan (timeline nanosecond carry, two clones in `report.rs`) are still open.
+- Seam request to PRD-05: export the masker's `glued` guard so `secrets.rs` can drop its `ESCAPE` and `GUARD` copy. Until then the two copies must stay identical. No seam shape changes and no locked ledger item is touched.

@@ -20,7 +20,7 @@ use std::time::Duration;
 pub const STATUS_V: u32 = 1;
 
 /// The stall exit's code (PRD-02 section 3); the next boot names the span `writer_stalled`.
-const EXIT_WRITER_STALLED: i32 = 75;
+pub(super) const EXIT_WRITER_STALLED: i32 = 75;
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Status {
@@ -112,7 +112,7 @@ impl Written {
 pub struct Live {
     pub boot: u64,
     /// Bytes offered and not yet written, plus reservations. Each queued item also counts its
-    /// cost in memory: 128 per DATA piece, 256 plus its JSON per control item (`Item::held`).
+    /// cost in memory: 128 per DATA piece, 384 plus its JSON per control item (`Item::held`).
     /// The boot's peak and the soft guard are not here: the status thread reads them from the
     /// recorder, so this shape stays the one PRD-06 builds.
     pub held_bytes: u64,
@@ -365,22 +365,10 @@ pub fn spawn(rec: Recorder, entry_dir: PathBuf, board: Board) -> JoinHandle<()> 
         .name("goalcup-status".into())
         .spawn(move || {
             let _exit = ExitOnPanic;
-            let durable = rec.durable();
             let guard = rec.inner.guard;
             board.set(|s| s.guard = guard);
             while !board.stopped() {
-                let live = rec.live();
-                let d = durable
-                    .borrow()
-                    .point
-                    .as_ref()
-                    .map(|p| DurableStatus {
-                        seq: p.line.seq,
-                        raw_end: p.line.raw_end,
-                    })
-                    .unwrap_or_default();
-                let peak = rec.inner.held_peak.load(Ordering::Relaxed);
-                let _ = board.status(&live, peak, rec.counts(), d).write(&entry_dir);
+                let live = write(&rec, &entry_dir, &board);
                 if stalled(&live, guard) {
                     secure::exit(EXIT_WRITER_STALLED, "writer_stalled");
                 }
@@ -388,6 +376,22 @@ pub fn spawn(rec: Recorder, entry_dir: PathBuf, board: Board) -> JoinHandle<()> 
             }
         })
         .expect("the status thread starts")
+}
+
+/// Writes `status.json` once from the live atomics, the written counts, the durable point and
+/// `board`; the status thread each second, and the seal once its fields are set. Returns the live
+/// state it wrote.
+pub(crate) fn write(rec: &Recorder, entry_dir: &Path, board: &Board) -> Live {
+    let live = rec.live();
+    let d = (rec.inner.durable.borrow().point.as_ref())
+        .map(|p| DurableStatus {
+            seq: p.line.seq,
+            raw_end: p.line.raw_end,
+        })
+        .unwrap_or_default();
+    let peak = rec.inner.held_peak.load(Ordering::Relaxed);
+    let _ = board.status(&live, peak, rec.counts(), d).write(entry_dir);
+    live
 }
 
 /// Ends the process with 70 when the thread holding it unwinds from a panic.

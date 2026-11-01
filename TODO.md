@@ -26,6 +26,12 @@ The build uses each default below until the owner answers.
   website database. Default: shared; no migrations, read-only use.
 - O2, Copilot CLI and a subscription. Default: try the key; "not verified" if it fails.
 
+## Still to decide
+
+- Judging and result dates.
+- Event capacity limits.
+- Final judging rubric, shortlist threshold and appeal process.
+
 ## Known issues
 
 - Only Linux x86_64 is built and tested in this build. macOS (arm64 and x86_64) and Linux arm64 are
@@ -41,6 +47,10 @@ The build uses each default below until the owner answers.
 - F-07: a guarded key prefix right after a `-` inside a base64url run masks the rest of the run,
   failing closed past 16 KiB, up to the end of the message
   ([PRD-05](docs/plans/2026-10-30-v1.0/PRD-05-masking.md#risks-and-blind-spots), question 10).
+- PRD-11 hand-off: repoint the harness facts sheets in `docs/harnesses/` from
+  [HARNESS-SETUP](docs/HARNESS-SETUP.md) to the [participant's guide](docs/PARTICIPANT-GUIDE.md#3-set-up),
+  then move HARNESS-SETUP to `docs/archive/`. Until then it is a temporary duplicate and still
+  describes the removed MCP command (D84).
 
 ## After the merge to main
 
@@ -55,5 +65,6 @@ The build uses each default below until the owner answers.
 - The judge view (PRD-08).
 - PRD-14 G2 (sabotage) and G5 (the release workflow on four targets); PRD-12 P8 (contributor dry run).
 - `stopped-runs.sql`, the organizer query for stopped runs (PRD-07).
-- HTTP/2 PUSH_PROMISE, WebSocket over HTTP/2 (RFC 8441) and the gRPC branch (PRD-03).
+- Following HTTP/2 PUSH_PROMISE, WebSocket over HTTP/2 (RFC 8441) (PRD-03); today each is a GAP
+  (`h2_unsupported`), never silent. Compressed gRPC bodies are a GAP too (`unsupported_encoding`).
 - The mask worker pool, only if PRD-02's throughput test shows masking is the slow stage (PRD-02).

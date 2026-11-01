@@ -1581,3 +1581,92 @@ to another file are made by that file's owner.
   `mask_meta`" stays (a native `path` with a shaped key or a credential query is starred); take the host,
   the stream key and the native `path` before the call.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-31, conductor decisions before PRD-02 slice A (planning pass, 08:40Z)
+
+Two planning passes (`/root/gc-night/prd02/path-plan.md` and `audit-fix-plan.md` in the conductor box) set the order: the slice under review (mask worker, writer, spawn, shield) merges first; then **slice A, one request end to end** (`boot.rs` boot 0 and boot recovery, `seal.rs` for `seal_command` and `harness_exit`, `watchdog::run` with the restart loop at once, `status.json` filled, `rec/watchdog.pid`, `rec/run-ca.key`); then slice B (null mode, the server word, the deadline, `dead.rs`, `recover`, SIGTERM); then slice C (`pipeline_stall.rs`, `by_hand_load`, `SnapshotCursor.fid` with PRD-04, the mask pool decision). Decisions (none touches a locked item; R3, R3a, R3b, R4 to R7, F2, M1, L5, B10 hold as written):
+
+- **Size.** Ceiling 6,000 src with the cuts the plan names in `counts.rs` and `handle.rs`; tests ceiling 2,300 (the restart, recover and end cases guard the never-stop rules, B10).
+- **Recover with a live recorder** follows PRD-10 section 3.2 and PRD-12's `kill-watchdog-recover` row: a live recorder holding `rec/lock` is never killed; `recover` says recording is on and exits 0. Section 8.1 step 4 is read this way.
+- **`watchdog::recover(entry_dir, facts) -> Result<Recovered, NotRecovered>`** (PRD-10 ask N9), not `-> ExitCode`; PRD-10 words every refusal.
+- **Seal drain** runs in channel order with no timer; the "5 s on a signal" default and PRD-00 S8's "drain 60 s" are read as no timer.
+- **`StartFacts` typed now** (`HostList`, `NativeSources`, `Vec<MaskRule>`, `Vec<SecretValue>`, `ConnectorRef`, plus `home: PathBuf`) in slice A, with a seam line; PRD-10's `start.rs` builds against the typed shape.
+- **`ToWatchdog::Server(upload::ServerWord)`** added in slice B.
+- **Tests folded:** `pipeline_native_room.rs`, `pipeline_panic.rs`, `pipeline_many_streams.rs` are not written; P5 to P7 are guarded by the folded case in `pipeline_guard.rs`, P11 by `watchdog_end.rs`, P14 by PRD-04's native room test.
+- **Mask pool:** decided in slice C after the R8 by-hand measure; not before.
+- Owner questions 2, 9 and 12 keep their defaults.
+
+### 2026-10-31, note from the PRD-06 slice 4 replan
+
+- `upload::finish` relies on the seal order of section 11: the writer has synced the E (or R) line
+  before `finish` is called, and the wrap-up takes the seal LINK from the last non-L line on disk. If
+  that order slips, the final heartbeat never goes out and the wrap-up holds every chunk. `upload::spawn`
+  has no caller on integration yet; the PRD-02 caller slice should add one live-mode case with a test
+  recorder (finish after seal, final then chunks then final). No locked ledger item is touched.
+
+### 31 Oct, from the PRD-15 slice 13 review
+
+- When the writer slice merges, the same PR removes the "PRD-02 target shape" notes from `docs/ARCHITECTURE.md`
+  (section 3 top note, section 5 "at the seal it finishes what is open", the `mask_failed` sentence in section 6,
+  the opening of section 7) and corrects `pipeline/mod.rs`'s "come next" comment. Docs and code must agree in
+  that PR. No locked ledger item is touched.
+
+### 31 Oct, from the PRD-17 slice 2 review
+
+- **Shield race to fix in the writer or watchdog slice:** a late tty SIGINT (process-directed, still pending on
+  another thread) can arrive after `Shield::harness_exited` gives INT back to default and kills the watchdog
+  in wrap-up (2 of about 18 loaded box runs; the helper prints "watchdog alive", then dies of SIGINT). Point 3
+  and S8 need wrap-up to finish. Fix by keeping INT, QUIT and TSTP caught until wrap-up ends, as HUP is, or
+  drain `sigpending` before giving them back. Then remove the `ignore` on the ctrl-c case in
+  `lessons_launch.rs`. No locked ledger item is touched.
+
+### 2026-10-31, replan after PRD-03 slice 3 (merge c81e8e9b): serve is available
+
+`proxy::serve(listener: std::net::TcpListener, ctx: ProxyCtx { recorder, hosts, ca }) -> ProxyHandle` is on integration, a plain `fn` that owns its runtime, and `ProxyHandle::quiet_since() -> Mono` feeds the quiet-wire check. Slice A (`boot.rs`) may call it directly; do not wrap it in a thread or a channel. Until `h2.rs` lands an h2-only client is recorded with a named `h2_unsupported` GAP, not a tunnel. No locked ledger item is touched.
+
+### 2026-10-31, replan after PRD-06 slice 6 (merge 114202ae): call `Board::sealed`
+
+The uploader's older-entry queue and `goalcup upload` read sealed from `status.json` (`mode: sealed`
+with the seal, `written`, `off`). Nothing calls `pipeline::status::Board::sealed` yet, so a real
+recorder's `status.json` never says sealed and the queue skips every real entry. PRD-02 must call it
+with the seal when it seals an entry. The dead-entry close (`close_dead_entry` in `manual::run`) moves
+to PRD-06 slice 7 once `dead.rs` is on integration. No locked ledger item is touched.
+
+### 2026-10-31, from the PRD-10 slice 9 review
+
+- **Ready-gap, small:** in `pipeline::run_recorder` the status thread writes `status.json` just before the
+  recorder sends `ready`. If the recorder dies in that gap, `watchdog::run` returns `NOT_STARTED` with an
+  unsealed `status.json` and no harness. PRD-10 now reads that combination as "could not start recording"
+  (PRD-10 A6), so the contract to keep is: `NOT_STARTED` never comes with a started harness. Nothing to add if
+  that already holds. No locked ledger item is touched.
+
+### 2026-11-01, from PRD-17 slice 6 (merge c9b87ac5)
+
+- The shield fix is on integration and the L-P3 ctrl-c case now runs in the box and passes. PRD-02 still owes `watchdog_restart.rs`: C12 (the proxy listens on `127.0.0.1` after a restart), P1 (unchanged port and a connection served during the restart) and P2 (a decrypted connection after a real kill verifies against `run-ca.pem`). `LESSONS.md` rows L-C12, L-P1, L-P2 name this file and stay open until it exists. Also unasserted: the 60 s drain and 180 s native bound (L-P15 names the `after_stop` half only). No locked ledger item is touched.
+
+### 2026-11-01, note from PRD-17 slice 7 (merge 888cd0b1)
+
+The PRD-17 deletion gate (PRD-13) waits on tests that this PRD is asked to land and are not yet on integration: watchdog_restart.rs (L-C12, L-P1, L-P2: an unchanged port and a decrypted connection served across a real recorder kill, verifying against run-ca.pem, no 127.0.0.1 assertion) and pipeline_stall.rs (L-R2: two hundred streams with the writer held, stall without loss). Their LESSONS.md rows stay open until the named tests exist and pass in a box. The names are those in LESSONS.md; if a different name fits better, say so in a replan note so the row can be repointed. No locked ledger item is touched.
+
+### 2026-11-01, from the PRD-02 slice C part 1 fix round
+
+- **Ownership:** `crates/goalcup/tests/watchdog_share/` (the watchdog tests' shared TLS connect,
+  exchange, loopback and wait helpers) is PRD-02's, under its `tests/watchdog_*.rs` row (review X R3),
+  the same shape as `tests/cli_common/` and `tests/native_common/`. A folder module does not build as
+  its own test binary, and `tests/common/` stays PRD-14's. The PRD-00 replan reads the PRD-02 row as
+  `tests/watchdog_*`.
+- **Recover's first boot (review X R1):** a recorder that gives no `ready` within the 10 s wait is not
+  ended under `goalcup recover`. The new watchdog writes report byte 2 (late) for a boot that is slow
+  or ended at boot, and still watches it, so the restart loop and null mode (R3a) take over, as for
+  any boot after a kill. Recover then returns `Ok(Recovered { port, late: true })`: the watchdog runs
+  and the recorder comes back through the restart loop or null mode, which PRD-10 words apart from
+  plain success. Byte 1 is `late: false`. Byte 0, no byte, or the watchdog gone before it reported is
+  `NotRecovered::NotStarted` (renamed from `NoReady`): nothing runs. The full set is `Sealed`,
+  `WatchdogAlive`, `RecordingOn`, `HarnessGone`, `KeyMissing`, `PortTaken`, `NotStarted`. The
+  caller's report wait is the ready wait plus 2 s; past it, a watchdog whose pid file names a live
+  process counts as late. A watchdog that could not write its pid file (it logs
+  `watchdog_pid_failed` and records on) and is also slow to report reads as `NotStarted` while it
+  records; this is accepted as rare (the pid file is the first write into `rec/`).
+- Still owed in slice C part 2: the exit-74 L-FW2 case, native cursor resume after a kill, a server
+  stop after the watchdog's EOF, `pipeline_stall.rs`, `by_hand_load`, the mask pool decision and
+  `SnapshotCursor.fid` with PRD-04.

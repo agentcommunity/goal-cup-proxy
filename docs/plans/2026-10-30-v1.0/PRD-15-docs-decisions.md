@@ -1378,3 +1378,118 @@ Slice 10 brought `docs/RECORD-FORMAT.md` to PRD-08 slice 4 (the three honesty ch
   amp, codex and hermes sheets are gone with the rewrite.
 - `docs/PARTICIPANT-GUIDE.md` links the README for the list and never copies the tier column
   (section 4 of the guide); nothing else changes here. No locked ledger item is touched.
+
+### 2026-10-31, replan after PRD-12 slice 6 (merge 645f3219)
+
+- **The two skill files are gone.** `skills/adding-a-capture-harness/writing-a-decoder.md` and
+  `templates/connector-harness.toml` were deleted by PRD-12 slice 6; the skill now has `SKILL.md`,
+  `templates/pad-harness.toml` and `templates/harness-facts.md`. These docs still link or name them and
+  must be repointed in this PRD's pass (a link to a missing file is a `check-links.py` failure): `README.md`
+  (step 3, line about 206, copy the template: say to copy a neighbour such as `connectors/hermes-cli.toml`,
+  as the skill now does), `docs/HARNESS-ONBOARDING.md` (the decoder link near line 17, the template links near lines 30 and
+  298), and `docs/README.md` (the `writing-a-decoder` line near 45: drop it, decoders are cut). The
+  archive copy `docs/archive/CONTRACTS.md` and the older plan files are history; leave them, or let the
+  purge's link pass drop the link text.
+- **The "HARNESS-ONBOARDING pointer" item that waited on PRD-12's skill rewrite can start now.** The
+  shortened page links `skills/adding-a-capture-harness/SKILL.md` for the steps (its "five steps": docs and
+  facts sheet with `connectors/<id>.toml`, the pad file, a `micro`-based run, an optional native sample, the
+  pull request with `row.json`) and
+  `docs/CONNECTOR-SCHEMA.md` for the keys; it does not copy them.
+- No locked ledger item is touched and no owner question comes from this slice.
+
+
+### 2026-10-31, replan after PRD-15 slice 12 (merge 89549774)
+
+Slice 12 landed the guide, README, RULES with the OPERATING usage section, and SECURITY, CONTRIBUTING and
+the HARNESS-ONBOARDING pointer; `docs/README.md` is deleted and `CONTRACTS`, `TERMINATION`,
+`CHEAT-CHECKLIST` and `SERVER-DESIGN` are in `docs/archive/`.
+
+- **`HARNESS-SETUP.md` is the one page still to move, and the harness sheets block it.** Seven of the
+  sheets in `docs/harnesses/` link `../HARNESS-SETUP.md` (some with an anchor such as `#codex`). The
+  page also still describes `goalcup mcp` (lines 244, 280, 290, 315), removed by D84. The move to
+  `docs/archive/` waits for PRD-11's sheet refresh to repoint those links to the guide section 3 and the
+  connector TOML; then `git mv` it and let the link pass confirm nothing points at the old path. Do not
+  edit the page body; the archive copy is history. If the sheets are not repointed by the final pass, the
+  page stays and its first lines already say the guide is current.
+- **One stale anchor: `docs/LOCAL-RESEARCH-HANDOFF.md:97`** links `PARTICIPANT-GUIDE.md#5-your-run`; the
+  heading is `#6-your-run` (section 5 is "A practice run"). The text says "guide, section 5" in the same
+  line and in three places in `HARNESS-SETUP.md`; the next docs touch of LOCAL-RESEARCH-HANDOFF fixes the
+  anchor and number. The final `check-links.py` pass checks files only, not heading anchors, so grep
+  `PARTICIPANT-GUIDE.md#` against the guide's headings once at the end.
+- **Guide size (B7r).** `PARTICIPANT-GUIDE.md` is 483 lines against the 400 estimate and the 450 ceiling in
+  the slice plan. Accepted as is. When `HARNESS-SETUP.md` is archived, re-check the guide's "Your
+  harness" sections (section 4) for text copied from it and cut the copy, not the facts.
+- **Docs size report, slice 12** (`wc -l` at 89549774; PRD-00 "Size budget" has no docs row, so this is
+  listed beside the Rust totals for information only): PARTICIPANT-GUIDE 483, RULES 457, RECORD-FORMAT 538,
+  OPERATING 260, README 247, ARCHITECTURE 348, SECURITY 111, CONTRIBUTING 103, CONNECTOR-SCHEMA 115,
+  HARNESS-ONBOARDING 23, AGENTS 111, TODO 69. No ceiling is breached.
+- Still open for PRD-15, unchanged: the README tier column and Pad result lines after phase 5; the
+  RECORD-FORMAT catch-up from the slice 10 note (`legs.rs`, `report.rs`, `history.rs`).
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 31 Oct, after slice 13 (ARCHITECTURE and AGENTS rewrite, merge f4741612)
+
+- The target-shape note in `docs/ARCHITECTURE.md` covers section 3 and one sentence of section 6 only. Section 7's
+  opening ("one record stream per entry as zstd part files") and section 5's "at the seal it finishes what is
+  open" also describe the writer, which is not merged. The next PRD-15 touch marks both the same way
+  ("writer: PRD-02 target shape"), or widens the note to the whole page until the writer merges.
+- `AGENTS.md` gate paragraph: say "CI runs `fast` on every pull request to main and every push to main or
+  `v1.0/integration`" (ci.yml limits `pull_request` to `main`; lane merges are pushes). Rewrap the never-commit
+  rule and the tests paragraph to the file's usual width.
+- Size (`wc -l` at f4741612): ARCHITECTURE 190 against about 160, AGENTS 92 against about 95. Owner estimates,
+  not a blocker. If trimmed: fold sections 9 and 10 into one "See also" line and drop the "No proxy credential"
+  and "Boot-time timers" bullets (watchdog detail, already in D85 and the code).
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 31 Oct, after slice 14 (catch-up edits, merge c7c83b35)
+
+- Slice 14 merged the RECORD-FORMAT legs and history checks, the ARCHITECTURE writer marks (section 5 and 7), the
+  AGENTS CI wording and the LOCAL-RESEARCH-HANDOFF anchor. That closes the "still open" RECORD-FORMAT catch-up from
+  the slice 10 and slice 12 notes and the slice 13 note above. Still open: the README tier column and Pad result
+  lines after phase 5, and removing the "writer: PRD-02 target shape" marks when the PRD-02 writer merges.
+- Three nits remain, all cosmetic (A5, B1, B4): the AGENTS.md CI sentence is one line of about 130 characters
+  against the file's 100-column wrap, and one ARCHITECTURE line (the mask worker sentence) is over-long. Fix the
+  AGENTS.md wrap in the next PRD-15 touch of that file; the ARCHITECTURE line may stay. No separate merge request.
+- Size (wc -l at c7c83b35): AGENTS 92, ARCHITECTURE 190, RECORD-FORMAT 545, LOCAL-RESEARCH-HANDOFF 306. No ceiling
+  moves.
+- No locked ledger item is touched and no owner question comes from this slice.
+
+### 31 Oct, after slice 16 (merge c3227203)
+
+- Slice 16 took the recorder run and `start` out of the build-state notes and rechecked RECORD-FORMAT, OPERATING
+  and CONNECTOR-SCHEMA against the merged recorder; the Acceptance greps over the PRD-15 files were clean. The
+  two review nits left (B1 in RECORD-FORMAT, R1 in PARTICIPANT-GUIDE, both an over-100-column prose line) are
+  re-wrapped by the replan commit. Table rows stay long on purpose.
+- Size (`wc -l` at b5cc8617): README 247, AGENTS 95, ARCHITECTURE 191, OPERATING 260, PARTICIPANT-GUIDE 487,
+  RECORD-FORMAT 542, RULES 459, CONNECTOR-SCHEMA 114. PRD-00 has no PRD-15 row, so there is no ceiling to pass.
+- Still open, unchanged: README tier column and Pad result lines after phase 5, and removing the "writer: PRD-02
+  target shape" marks when the PRD-02 writer merges. No seam change. No locked ledger item is touched.
+
+### 1 Nov, replan after slice 17 (merge ca62fa3f)
+
+- Slice 17 removed the stale "not built" notes for the deadline end, the server stop word and null mode. Only
+  `goalcup continue` and `goalcup recover` stay "not built yet" (`src/main.rs` still calls `not_built` for
+  them; the dead-entry close in `pipeline/dead.rs` has no command). Remove those notes in the slice that wires
+  each command.
+- Two review nits fixed by the replan commit: README points-to-tests row 3 now names `crates/goalcup/tests`
+  (`watchdog_null.rs`, `watchdog_end.rs`, `proxy_restart.rs` are on integration), and two ARCHITECTURE
+  watchdog lines are re-wrapped. The real-run cell for point 3 (recorder kill test) and the "All together" row
+  stay "not merged yet" until those land.
+- Size (`wc -l` at the replan base): README 245, AGENTS 95, ARCHITECTURE 191, OPERATING 260,
+  PARTICIPANT-GUIDE 485, RECORD-FORMAT 542, RULES 459, CONNECTOR-SCHEMA 114. PRD-00 has no PRD-15 row, so no
+  ceiling applies. No seam change; no locked ledger item is touched.
+
+### 2026-11-01, replan after PRD-15 slice 18 (merge ad83e7d8)
+
+- **Size report, PRD-15:** docs only, `wc -l` on integration: README 245, AGENTS 95, ARCHITECTURE 193,
+  OPERATING 260, PARTICIPANT-GUIDE 488, RECORD-FORMAT 552, RULES 459, CONNECTOR-SCHEMA 114 (2,406 together).
+  PRD-00 "Size budget" has no PRD-15 row, so nothing to exceed.
+- **Four review nits left for the next docs slice** (all accuracy or taste, no seam change):
+  - PARTICIPANT-GUIDE HTTP/2 bullet: add one clause ("or broken HTTP/2 framing") so it also covers a
+    malformed frame or bad preface (`decode_failed`) and a table size update past 1 MiB (`memory_guard`
+    `hpack_table`), the other two cases that stop reading the whole connection (point 6).
+  - RECORD-FORMAT gap row 11: late frames are counted in the conn GAP of the stop if parsing stopped (so
+    `memory_guard` after an `hpack_table` stop), else in a `decode_failed` conn GAP at the close. Cut the
+    late-frames clause from row 11 and leave a pointer to row 4, which carries the rule.
+  - ARCHITECTURE: re-wrap the PUSH_PROMISE sentence to the file width. No content change.
+- No seam change; no locked ledger item is touched.

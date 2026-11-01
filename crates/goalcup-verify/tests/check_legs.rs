@@ -1,9 +1,14 @@
 //! The optional log checks (PRD-08 section 3.1) over hand-built call tables. A skip is never a
 //! pass; a loss inside a recorder GAP window makes a fail `named`.
 
+mod common;
+
+use common::{Entry as Rec, check, item, tmp};
+use goalcup_format::{EndReason, GapReason, StreamKind};
 use goalcup_verify::legs::{Cover, judge};
 use goalcup_verify::usage::*;
-use serde_json::json;
+use serde_json::{Value, json};
+use std::{fs, path::Path};
 
 const MIN: u64 = 60_000_000_000;
 const T0: u64 = 1_700_000_000_000_000_000;
@@ -142,4 +147,92 @@ fn provider_errors_count_by_code_and_leg() {
     let e = judge(&t, &[]).1.provider_errors;
     assert_eq!(e["wire"], json!({"rate_limit": 1, "server_error": 1}));
     assert_eq!(e["native"], json!({"overloaded": 1}));
+}
+
+const S1: &str = "fake:sessions/s1.jsonl";
+
+/// A sealed entry with `s1` (22 bytes) as a native stream and `state.db` as a snapshot stream;
+/// after a recorder crash when `down`.
+fn rec(name: &str, down: bool) -> std::path::PathBuf {
+    let mut e = Rec::new(name);
+    e.standard();
+    let meta = json!({"path": "fake:state.db", "gen": 0, "from": 0});
+    let s = e.open(StreamKind::Snapshot, 0, 0, meta);
+    e.data(s, 0, 0, b"SQLite");
+    e.end(s, EndReason::Complete, 6, Value::Null);
+    if down {
+        e.crash("killed", 5_000);
+        e.count();
+    }
+    e.seal()
+}
+
+/// `subagents_present` for the files `list` (path, size) on the entry: exit code, result and
+/// the first finding's file.
+fn files(dir: &Path, list: &[(&str, u64)]) -> (i32, String, Value) {
+    let f: Vec<Value> = list
+        .iter()
+        .map(|(p, n)| json!({"path": p, "size": n}))
+        .collect();
+    let m = tmp("manifest").join("m.json");
+    fs::write(&m, Value::Array(f).to_string()).unwrap();
+    let (code, v) = check(dir, &["--harness-files", m.to_str().unwrap()]);
+    let c = item(&v, "subagents_present");
+    (
+        code,
+        c["result"].as_str().unwrap().into(),
+        c["first"]["file"].clone(),
+    )
+}
+
+#[test]
+fn a_harness_file_needs_a_stream_of_its_size_or_a_snapshot() {
+    let d = rec("manifest-whole", false);
+    let db = ("fake:state.db", 123_456);
+    // A pass of the manifest part never raises a skip: no parentage was read here.
+    assert_eq!(files(&d, &[(S1, 22), db]).1, "skip");
+    // No stream: fail, and the first finding names the path. A wrong size is no stream of its size.
+    let (code, res, first) = files(&d, &[(S1, 22), ("fake:sessions/s2.jsonl", 5)]);
+    assert_eq!(
+        (code, res.as_str(), first),
+        (2, "fail", json!("fake:sessions/s2.jsonl"))
+    );
+    for bad in [&[(S1, 30)][..], &[("fake:other.db", 1)][..]] {
+        assert_eq!(files(&d, bad).1, "fail");
+    }
+    // Without the flag the check is as before.
+    let (_, v) = check(&d, &[]);
+    assert_eq!(item(&v, "subagents_present")["result"], "skip");
+}
+
+#[test]
+fn a_file_with_no_stream_is_named_when_the_recorder_was_down() {
+    let d = rec("manifest-down", true);
+    let (code, res, first) = files(&d, &[(S1, 22), ("fake:sessions/s2.jsonl", 5)]);
+    assert_eq!((code, res.as_str()), (1, "named"));
+    assert_eq!(first, json!("fake:sessions/s2.jsonl"));
+}
+
+#[test]
+fn a_stream_with_a_gap_names_its_file() {
+    let mut e = Rec::new("manifest-gap");
+    let meta = json!({"path": S1, "gen": 0, "from": 0});
+    let s = e.open(StreamKind::Native, 0, 0, meta);
+    e.gap(s, GapReason::MemoryGuard, 10, 0, 6, Value::Null);
+    e.data(s, 5, 0, b"abcd");
+    e.end(s, EndReason::Complete, 9, Value::Null);
+    e.count();
+    assert_eq!(files(&e.seal(), &[(S1, 40)]).1, "named");
+}
+
+#[test]
+fn a_manifest_of_another_shape_is_no_report() {
+    let m = tmp("manifest-bad").join("m.json");
+    fs::write(&m, r#"{"path": "x"}"#).unwrap();
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_goalcup-verify"))
+        .args(["check", rec("manifest-shape", false).to_str().unwrap()])
+        .args(["--harness-files", m.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(3));
 }

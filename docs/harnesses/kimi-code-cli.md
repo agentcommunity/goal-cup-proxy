@@ -44,7 +44,7 @@ Source words: "docs" is [moonshotai.github.io/kimi-code](https://moonshotai.gith
 ## 6. Network
 
 - Proxy: `HTTPS_PROXY`, `HTTP_PROXY`, `ALL_PROXY`, `NO_PROXY`; loopback always bypasses the proxy (docs). Node bundle: it installs an undici environment proxy agent and passes `NODE_USE_ENV_PROXY=1` and the proxy variables to child processes (package).
-- CA: `NODE_EXTRA_CA_CERTS` is the Node standard; the docs list no CA variable and the package does not mention one. Unverified, so the pad's first row is its proof. The connector has no `ca_env`; goalcup sets `NODE_EXTRA_CA_CERTS` to the run CA for every harness.
+- CA: `NODE_EXTRA_CA_CERTS` is the Node standard; the docs list no CA variable and the package does not mention one. The connector has no `ca_env`; goalcup sets `NODE_EXTRA_CA_CERTS` to the run CA for every harness. Whether Kimi uses it is open (section 9).
 - Where the model host is named: `providers.*.base_url` and `providers.*.env.*_BASE_URL` in `config.toml`. Hint variables: `KIMI_MODEL_BASE_URL` (only with `KIMI_MODEL_NAME` set), `KIMI_CODE_BASE_URL`.
 - `api.kimi.com`, `api.kimi.ai`, `api.moonshot.ai` and `api.moonshot.cn` are listed provider hosts. Sign-in hosts `auth.kimi.com` and `auth.kimi.ai` are on the never-decrypt list and pass through as tunnels.
 - Not found: HTTP/2, a WebSocket model path, pinning.
@@ -71,4 +71,4 @@ None set. `--yolo` ("ask when needed") and `--auto` ("never ask") are launch fla
 
 ## Pad result
 
-Not yet run on the pad. The tier and the runs are in [`connectors/tiers.toml`](../../connectors/tiers.toml).
+The tier, the tested version and the runs are in [`connectors/tiers.toml`](../../connectors/tiers.toml) and `docs/plans/2026-10-30-v1.0/PAD-RESULTS.md`; this sheet does not copy them.

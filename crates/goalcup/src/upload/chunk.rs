@@ -251,7 +251,7 @@ fn sync_pair(rec_dir: &Path, part: u64) -> io::Result<()> {
 
 /// The part files' first raw offsets, in order: the names are zero-padded, so the listing that
 /// recovery uses is already in number order.
-fn parts(rec_dir: &Path) -> io::Result<Vec<u64>> {
+pub(super) fn parts(rec_dir: &Path) -> io::Result<Vec<u64>> {
     let first = |p: &PathBuf| {
         let name = p.file_name()?.to_str()?;
         let n = name
@@ -265,7 +265,7 @@ fn parts(rec_dir: &Path) -> io::Result<Vec<u64>> {
 }
 
 /// A part's index lines; none while it has no index yet.
-fn index(rec_dir: &Path, part: u64) -> io::Result<Vec<IndexLine>> {
+pub(super) fn index(rec_dir: &Path, part: u64) -> io::Result<Vec<IndexLine>> {
     match read_index(&rec_dir.join(index_name(part))) {
         Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(Vec::new()),
         r => r,

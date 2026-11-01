@@ -1,12 +1,13 @@
 //! PRD-06 "Automated tests", `upload_beat.rs`: the flat `counts`, the recording state, the ordinary
-//! beat, the answer as `ServerWord`, the final heartbeat, no ordinary beat after it, and `failed`
-//! from the on-disk point in null mode, against PRD-14's fake Worker. The order final, chunks,
-//! final until `sealed` and `503 awaiting_final` land with the thread wiring (slice 4).
+//! beat, the answer as `ServerWord`, the final heartbeat, no ordinary beat after it, `failed` from
+//! the on-disk point in null mode, and through the threads the order final, chunks, final until
+//! `sealed`, against PRD-14's fake Worker. `503 awaiting_final` is in `upload_resume.rs`.
 
 mod common;
 
 use common::records;
-use common::worker::{CREDENTIAL, FakeWorker, Inject, Route, SECONDS_LEFT};
+use common::worker::{CREDENTIAL, FakeWorker, Inject, RUN_ID, Route, SECONDS_LEFT};
+use goalcup::cli;
 use goalcup::pipeline::status::{DurableStatus, Losing, Mode, Off, Written};
 use goalcup::pipeline::{Counts, Durable, EntryTotals, Live, Mono, Status};
 use goalcup::upload::beat::{
@@ -15,14 +16,16 @@ use goalcup::upload::beat::{
 use goalcup::upload::chunk::last_on_disk;
 use goalcup::upload::client::{HeartbeatAnswer, Recording, ServerClient, Token};
 use goalcup::upload::policy::{Policy, after};
-use goalcup::upload::state::{self, Final, UploadJson};
-use goalcup::upload::{SealFacts, ServerWord};
+use goalcup::upload::state::{self, Final, State, UploadJson};
+use goalcup::upload::{SealFacts, ServerWord, UploadCtx, WrapUp, spawn};
 use goalcup::watchdog::SealReason;
+use goalcup_format::read::part_files;
 use goalcup_format::{IndexKind, IndexLine, Record};
 use serde_json::{Value, json};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::thread::JoinHandle;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::watch;
 
 const S: u64 = 1_000_000_000;
@@ -325,9 +328,10 @@ fn server_word_carries_stop_and_seconds_left_into_upload_json_and_the_channel() 
         (true, Some(0), Some("deadline"))
     );
     assert_eq!(seen.borrow().as_ref(), Some(&w));
-    let file = state::read(r.dir.path()).unwrap().server_word.unwrap();
+    let j = r.json.lock().unwrap().clone();
+    let file = j.server_word.unwrap();
     assert_eq!((file.stop, file.seconds_left), (true, Some(0)));
-    assert!(state::read(r.dir.path()).unwrap().upload_by.is_none());
+    assert!(j.upload_by.is_none());
 }
 
 fn answer(seconds_left: u64, reason: Option<&str>) -> HeartbeatAnswer {
@@ -423,7 +427,7 @@ fn the_final_heartbeat_names_the_seal_and_ends_the_ordinary_beat() {
     assert_eq!(b["head"], goalcup_format::hex(&end.hash));
     assert_eq!(b["repo_head"], "ab".repeat(20));
     assert_eq!(b["counts"]["mode"], "sealed");
-    assert_eq!(state::read(r.dir.path()).unwrap().final_, Final::Sent);
+    assert_eq!(r.json.lock().unwrap().final_, Final::Sent);
 
     let sealed = json!({"stop": false, "seconds_left": 1, "reason": null, "sealed": true});
     let inject = Inject {
@@ -439,7 +443,7 @@ fn the_final_heartbeat_names_the_seal_and_ends_the_ordinary_beat() {
     r.beat
         .final_beat(after(next, Duration::from_secs(1)), &f, &r.json, &r.word)
         .unwrap();
-    assert_eq!(state::read(r.dir.path()).unwrap().final_, Final::Sealed);
+    assert_eq!(r.json.lock().unwrap().final_, Final::Sealed);
 
     let n = r.worker.heartbeats().len();
     let (d, losing) = (point(9), Health(Mode::Losing, Live::default()));
@@ -495,4 +499,110 @@ fn null_mode_beats_failed_from_the_point_on_disk() {
     let b = r.worker.heartbeats().remove(0);
     assert_eq!(b["recording"], "failed");
     assert_eq!(b["seq"], line.seq);
+}
+
+/// A null-mode entry sealed on disk, its run naming `worker` with the run deadline, the uploader
+/// started and `finish` begun on its own thread: the entry folder, the seal LINK, the start and
+/// the `finish` thread.
+fn wrap_up(worker: &FakeWorker, run: &Path) -> (PathBuf, IndexLine, Instant, JoinHandle<()>) {
+    let entry = run.join(records::ENTRY);
+    std::fs::create_dir_all(entry.join("rec")).unwrap();
+    let ev = [Record::Event {
+        t: 1,
+        json: br#"{"ev":"x"}"#.to_vec(),
+    }];
+    let want = records::sealed(&entry.join("rec"), &ev);
+    write_status(&entry, Mode::Null, 0);
+    let server = json!({"v": 1, "server": worker.url(), "run": RUN_ID, "mode": "test",
+        "deadline": "2026-11-07T10:00:00Z", "repo": null, "hosts_file": null, "entries": [],
+        "connector": {"id": "c", "name": "c", "source": "builtin"}});
+    std::fs::write(cli::server_json(run), server.to_string()).unwrap();
+    std::fs::write(cli::credential(run), CREDENTIAL).unwrap();
+    let start = Instant::now();
+    let h = spawn(UploadCtx {
+        home: run.into(),
+        run_dir: run.into(),
+        entry_dir: entry.clone(),
+        run: RUN_ID.into(),
+        entry: records::ENTRY.into(),
+        recorder: None,
+        keep: true,
+    });
+    let seal = SealFacts {
+        reason: SealReason::HarnessExit,
+        workspace_head: None,
+        totals: EntryTotals::default(),
+    };
+    let wrap_up = WrapUp::starting(Mono::now(), &Policy::default());
+    let done = std::thread::spawn(move || h.finish(wrap_up, seal));
+    (entry, want.line, start, done)
+}
+
+/// `finish` returned with the entry sealed and done, the server holding every byte, and the last
+/// heartbeat the final at the seal LINK with no ordinary beat after a final.
+fn sealed_and_done(worker: &FakeWorker, entry: &Path, link: IndexLine, done: JoinHandle<()>) {
+    common::within(common::HANG, move || done.join().unwrap());
+    let j = state::read(entry).unwrap();
+    assert_eq!((j.final_, j.state), (Final::Sealed, State::Done));
+    assert!(j.server_word.is_some(), "the answer is in upload.json");
+    let beats = worker.heartbeats();
+    let first = beats.iter().position(|b| b["final"] == true).unwrap();
+    assert!(beats[first..].iter().all(|b| b["final"] == true));
+    assert_eq!(beats.last().unwrap()["seq"], link.seq);
+    let parts = part_files(&entry.join("rec")).unwrap();
+    let all: Vec<u8> = parts
+        .iter()
+        .flat_map(|p| std::fs::read(p).unwrap())
+        .collect();
+    assert_eq!(worker.stream(records::ENTRY), all);
+}
+
+/// Section 6 through the threads, in null mode with an entry sealed on disk: the first final
+/// heartbeat's answer is held 1.5 s and does not say sealed, and no chunk goes before it; once the
+/// last chunk is stored the final goes again until an answer says sealed; no ordinary beat follows;
+/// `finish` returns with the entry done and the server holding every byte. Section 9: the tail
+/// window is the run deadline plus a day.
+#[test]
+fn finish_sends_the_final_then_the_chunks_then_the_final_until_sealed() {
+    let worker = FakeWorker::start();
+    let run = tempfile::tempdir().unwrap();
+    let held = json!({"stop": false, "seconds_left": 1, "reason": null, "sealed": false});
+    let held = Inject {
+        answer: Some((200, held)),
+        delay: Some(Duration::from_millis(1500)),
+        ..Inject::default()
+    };
+    worker.inject(Route::Heartbeat, held);
+    let (entry, link, start, done) = wrap_up(&worker, run.path());
+    while worker.chunks().is_empty() && start.elapsed() < common::HANG {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(
+        start.elapsed() >= Duration::from_millis(1500),
+        "a chunk before the final"
+    );
+    let by = state::read(&entry).unwrap().upload_by;
+    assert_eq!(by.as_deref(), Some("2026-11-08T10:00:00Z"));
+    sealed_and_done(&worker, &entry, link, done);
+}
+
+/// Section 6 past the run end: the first final heartbeat fails, and the server takes no chunk
+/// before a final is committed (`503 awaiting_final`). The final goes again on its backoff, then
+/// the chunks, then the final until sealed: the wrap-up never waits on itself.
+#[test]
+fn a_failed_first_final_goes_again_when_the_server_awaits_it() {
+    let worker = FakeWorker::start();
+    let run = tempfile::tempdir().unwrap();
+    let busy = Inject {
+        answer: Some((503, json!({"error": "unavailable"}))),
+        ..Inject::default()
+    };
+    worker.inject(Route::Heartbeat, busy);
+    let awaiting = Inject {
+        answer: Some((503, json!({"error": "awaiting_final"}))),
+        ..Inject::default()
+    };
+    worker.inject(Route::Chunk, awaiting);
+    let (entry, link, _, done) = wrap_up(&worker, run.path());
+    sealed_and_done(&worker, &entry, link, done);
 }

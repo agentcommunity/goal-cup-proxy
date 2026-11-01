@@ -19,7 +19,7 @@ if [ -s "$NEW" ]; then
   git add "$F" && git commit -q -m "docs(plans): night log, scribe merge
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_018LU9bbCzN7rHbM4pGrKQgh" && git push -q origin HEAD:v1.0/integration && for l in "$NIGHT"/lanes/*.log; do mv -f "$l.pending" "$l.scribed" 2>/dev/null; done
+Claude-Session: https://claude.ai/code/session_01V2hUmG4Ccnfp953KQMAUS6" && git push -q origin HEAD:v1.0/integration && for l in "$NIGHT"/lanes/*.log; do mv -f "$l.pending" "$l.scribed" 2>/dev/null; done
   echo "scribed $(wc -l < "$NEW") lines"
 else rm -f "$NIGHT"/lanes/*.pending; echo "nothing new"; fi
 rm -f "$NEW"; cd "$REPO"; git worktree remove --force "$WT"

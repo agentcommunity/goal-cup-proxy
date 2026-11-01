@@ -1,0 +1,27 @@
+# Pad data for Cline CLI (PRD-12 section 6): test data, never connector data; goalcup never reads it.
+# Vendor pages read 31 Oct 2026: https://github.com/cline/cline (npm i -g cline), https://github.com/cline/cline/blob/main/apps/cli/README.md
+# (cline hub, hub dashboard --data-dir, OPENAI_API_KEY and AI_GATEWAY_API_KEY as key variables, CLINE_DATA_DIR; -k and --apikey
+# are arguments, so the key goes by env). docs.cline.bot and vercel.com did not resolve from the writing session.
+# Read from docs only, not run against a live harness: every key below. The providers.json shape (from the connector's
+# host hint providers.*.settings.baseUrl), the provider ids "openai" and "vercel-ai-gateway", the model ids, /exit, and
+# whether `hub dashboard` is the process `hub stop` ends.
+version = "3.0.74"
+version_cmd = "cline --version"
+install = "npm i -g cline@3.0.74"
+key_kind = "deepseek"
+key_route = "env"
+key_env = "OPENAI_API_KEY"
+# Pad data for the dodger copy only (section 2): the OpenAI provider points at https://api.deepseek.com.
+model_host = "api.deepseek.com"
+exit_keys = '/exit\r'
+# The stale hub: --data-dir differs from the run's CLINE_DATA_DIR, so `hub stop` in the run does not end it (PRD-11 acceptance 5).
+daemon = "cline hub dashboard --no-open --data-dir /tmp/pad-stale-hub"
+keep_going = true
+
+[direct]
+files = { "data/settings/providers.json" = "direct/cline-cli-config.json" }
+
+[gateway]
+files = { "data/settings/providers.json" = "gateway/cline-cli-config.json" }
+key_route = "env"
+key_env = "AI_GATEWAY_API_KEY"

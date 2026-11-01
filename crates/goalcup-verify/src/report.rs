@@ -1,16 +1,14 @@
 //! The `check --json` report (seam S6, PRD-08 section 4), its exit code, and the text form with
 //! the coverage line (section 5). `why` is one plain line; no record byte is ever printed here.
 
+use crate::history;
 use crate::input::Input;
 use crate::integrity::{self, Check, Outcome, Recount, Res};
+use crate::legs;
 use crate::secrets::{self, Rules};
 use crate::server;
 use serde_json::{Map, Value, json};
 use std::path::Path;
-
-/// Checks a later slice builds: in the report as `skip`, so readers see every id now.
-const HISTORY_ID: &str = "history_complete";
-const NOT_BUILT: &str = "not built in this slice";
 
 /// The report as JSON, the exit code, and the text for stderr.
 pub struct Report {
@@ -26,6 +24,7 @@ pub fn build(
     now_ns: Option<u64>,
     local: Option<&Input>,
     known: Option<&Rules>,
+    files: Option<&[(String, u64)]>,
 ) -> Report {
     let is_server = input.kind == "server";
     let (mut exit, mut text, mut entries) = (0u8, String::new(), Vec::new());
@@ -35,11 +34,16 @@ pub fn build(
         let want = f.as_ref().map(server::wanted).unwrap_or_default();
         let mut o = integrity::check(e, now_ns, &want);
         let mut checks = std::mem::take(&mut o.checks);
-        checks.push(Check::new(HISTORY_ID, None, Res::Skip, NOT_BUILT));
         if let Some(f) = &f {
             checks.extend(server::checks(e, f, &o, local));
         }
         checks.extend(known.map(|k| secrets::check(k, e)));
+        if let (Some(f), Some(c)) = (
+            files,
+            checks.iter_mut().find(|c| c.id == "subagents_present"),
+        ) {
+            legs::manifest(c, f, &o.streams, &o.legs.covers);
+        }
         let worst = checks.iter().map(|c| c.result).max().unwrap_or(Res::Pass);
         let partial = !o.sealed || input.kind == "live" || o.pruned;
         exit = exit.max(match worst {
@@ -52,7 +56,9 @@ pub fn build(
         }
         let name = o.entry.clone().unwrap_or_else(|| folder(&e.dir));
         text += &self::text(&name, &o, &checks);
-        entries.push(entry(name, &o, &checks));
+        let mut en = entry(name, &o, &checks);
+        en["timeline"] = std::mem::take(&mut o.timeline);
+        entries.push(en);
         all.extend(checks);
     }
     let server = is_server.then(|| server::summary(&all));
@@ -94,6 +100,17 @@ fn entry(name: String, o: &Outcome, checks: &[Check]) -> Value {
         "mask_failclosed_bytes": c.get("mask_failclosed_bytes"), "off_ms": c.get("off_ms"),
         "tunnels": c.get("tunnels"), "native_files": c.get("native_files"),
         "threads": o.legs.threads.len()});
+    // The history check's facts are the S6 `history` object; its verdicts fill the thread rows.
+    let hist = checks.iter().find(|k| k.id == "history_complete");
+    let verdicts = hist.and_then(|k| k.facts.get("threads"));
+    let threads: Vec<Value> = (o.legs.threads.iter())
+        .map(|r| {
+            let v = r["thread"].as_str().and_then(|t| verdicts?.get(t));
+            let mut r = r.clone();
+            r["history"] = v.cloned().unwrap_or_default();
+            r
+        })
+        .collect();
     let checks: Vec<Value> = checks
         .iter()
         .map(|k| {
@@ -107,13 +124,14 @@ fn entry(name: String, o: &Outcome, checks: &[Check]) -> Value {
         "connector": s("connector"), "keep": s("keep"), "label": label, "harness_log": o.legs.harness_log,
         "provider_errors": o.legs.provider_errors,
         "bytes": {"raw": o.raw, "compressed": o.compressed, "framing": o.raw.saturating_sub(o.data_bytes)},
-        "links": o.links, "checks": checks, "counts": counts, "history": null, "threads": o.legs.threads})
+        "links": o.links, "checks": checks, "counts": counts, "history": hist.map(|k| &k.facts), "threads": threads})
 }
 
 /// The text form of one entry: `why` per failed or named check, then the coverage line.
 fn text(name: &str, o: &Outcome, checks: &[Check]) -> String {
     let c = &o.counts;
     let mut t = format!("goalcup-verify: entry {name}\n");
+    let hist = (checks.iter().find(|k| k.id == "history_complete")).map(history::line);
     for k in checks.iter().filter(|k| k.result >= Res::Named) {
         t += &format!("  {} {}: {}\n", k.id, k.result.name(), k.why);
     }
@@ -121,10 +139,10 @@ fn text(name: &str, o: &Outcome, checks: &[Check]) -> String {
         t += "  The entry is not sealed.\n";
     }
     t += &format!(
-        "Recorded: {} requests, {} refused by the provider. History check: skipped, {NOT_BUILT}. \
-         {} Recording off: {} times, {} s.\n",
+        "Recorded: {} requests, {} refused by the provider. {} {} Recording off: {} times, {} s.\n",
         requests(c),
         o.legs.refused,
+        hist.unwrap_or_default(),
         o.legs.coverage,
         c.off_spans,
         c.get("off_ms") / 1000

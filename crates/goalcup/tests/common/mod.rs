@@ -8,7 +8,8 @@
 //! - [`records`]: a part folder built from a list of records.
 //! - [`upstream`]: the fake upstream (TLS, HTTP/1.1, HTTP/2, WebSocket).
 //! - [`worker`]: the fake Worker (`docs/UPLOAD-API.md` from a script).
-//! - [`recorder`]: helpers over the calls `Recorder::for_tests` collects.
+//! - [`recorder`]: helpers over the calls `Recorder::for_tests` collects, and `real(dir)` over
+//!   `Recorder::real_for_tests` with `settled` to read the durable records back.
 
 #![allow(dead_code)]
 

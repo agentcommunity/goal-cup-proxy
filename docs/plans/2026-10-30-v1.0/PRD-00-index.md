@@ -1307,3 +1307,15 @@ why. Fixes for other files are made by those files' owners; this list covers onl
   about 18,100 src and at most about 14,200 tests hold only if other rows come in under them. PRD-16
   tracks the three rows that went over (connector, usage, upload).
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-10-31, replan after PRD-06 slice 6 (merge 114202ae)
+
+- **Interface ruling change (record it in the rulings table and the diagram):** the uploader runs three
+  plain threads, `upload`, `beat` and `goalcup-queue`, not two. The intent of the ruling and of L5 holds:
+  all three are in the recorder process, use the blocking client and never touch the async runtime. The
+  queue thread serves older entries and pauses only while the live entry's wrap-up is in progress;
+  otherwise it runs alongside the live entry.
+- **Size:** Upload row, 3,283 src and 2,765 tests (`wc -l`) against 940 and 1,000. PRD-16 carries it.
+- **Test helpers:** `crates/goalcup/tests/upload_common/` is read as PRD-06's under the `upload_` prefix;
+  PRD-14 owns `tests/common/`. Confirmed unless PRD-14 objects.
+- No locked ledger item is touched.

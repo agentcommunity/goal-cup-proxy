@@ -624,6 +624,11 @@ impl<T> PrefixedIo<T> {
     pub fn new(prefix: Bytes, inner: T) -> PrefixedIo<T> {
         PrefixedIo { prefix, inner }
     }
+
+    /// The stream under the prefix (the harness leg, for a reset after an upstream failure).
+    pub fn into_inner(self) -> T {
+        self.inner
+    }
 }
 
 impl<T: AsyncRead + Unpin> AsyncRead for PrefixedIo<T> {
