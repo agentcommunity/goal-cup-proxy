@@ -609,6 +609,20 @@ class RigFaults(unittest.TestCase):
         self.assertNotIn("Pane is dead", cm.exception.args[1])
         with mock.patch.object(padrun, "sh", stub("x\n")):  # server off: the status wait ends on the dead pane too
             self.assertTrue(r.recording_or_dead())
+        faults = []  # server off: a refused start is raised and written, not typed into a dead pane
+        r.s = {"server": "off", "harness_id": "x"}
+        typed = []
+        with mock.patch.object(padrun, "sh", stub("starting\nsettings.json refused\nPane is dead (status 1, Sun Nov  1 10:00:00 2026)\n")), \
+                mock.patch.object(padrun, "tool", lambda n: n), mock.patch.object(r, "need", lambda *a, **k: None), \
+                mock.patch.object(r, "gc_env", lambda *a, **k: {}), mock.patch.object(r, "daemon_check", lambda: typed.append("d")), \
+                mock.patch.object(r, "type_prompt", lambda: typed.append("t")), mock.patch.object(r, "fault", lambda *a, **k: faults.append(a)):
+            t0 = time.time()
+            with self.assertRaises(padrun.Step) as cm:
+                r.start(None)
+        self.assertLess(time.time() - t0, 5)
+        self.assertTrue(cm.exception.args[1].startswith("start-refused"))
+        self.assertEqual(typed, [])
+        self.assertTrue(any(a and a[0] == "start-refused" for a in faults))
         with mock.patch.object(padrun, "sh", stub("Recording in chat mode\n")):
             self.assertTrue(r.until("Recording in chat mode", "none"))
 

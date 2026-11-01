@@ -346,7 +346,8 @@ class Run:
                      ["respawn-pane", "-k", "-t", t, "bash " + shlex.quote(self.path("launch.sh"))]):
             sh(["tmux"] + argv)
         if server == "off":  # no approval: paste now
-            if not wait(self.recording_or_dead, self.left(), 2):  # Codex clears the screen and scrollback; a dead pane ends the wait (RIG-6)
+            wait(self.recording_or_dead, self.left(), 2)  # Codex clears the screen and scrollback; a dead pane ends the wait (RIG-6)
+            if pc.dig(self.status(), "s4_mode") != "recording":  # a dead pane: until() raises start-refused at once
                 self.until("Recording in chat mode", "no 'Recording in chat mode'")
             self.daemon_check()
             return self.type_prompt()
