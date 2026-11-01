@@ -286,10 +286,10 @@ fn message<R: Read>(r: &mut std::io::BufReader<R>) -> Option<(String, Vec<u8>)> 
         if r.read_line(&mut line).ok()? == 0 {
             return None;
         }
-        if let Some((k, v)) = line.split_once(':') {
-            if k.eq_ignore_ascii_case("content-length") {
-                len = v.trim().parse().ok()?;
-            }
+        if let Some((k, v)) = line.split_once(':')
+            && k.eq_ignore_ascii_case("content-length")
+        {
+            len = v.trim().parse().ok()?;
         }
         head += &line;
         if line == "\r\n" {
