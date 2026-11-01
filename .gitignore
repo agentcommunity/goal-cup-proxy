@@ -8,8 +8,6 @@ harnesses/*
 /dev/
 /qual/
 /v4/
-# spike artifacts (raw traces may contain secrets)
-spikes/*/out/
 # rust
 target/
 # os / editor
@@ -19,9 +17,6 @@ __pycache__/
 .worktrees/
 .superpowers/
 
-# M2 wire/PTY spike capture data: hundreds of MB of raw bodies, archived outside git.
-# The digest of the archive is recorded in spikes/wire-pty/REPORT.md.
-spikes/wire-pty/out/
 # release tarballs (scripts/package-release.sh)
 /dist/
 
