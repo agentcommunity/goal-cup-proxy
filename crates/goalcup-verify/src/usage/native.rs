@@ -75,6 +75,10 @@ struct Meta {
 #[derive(Default)]
 struct File {
     codex: bool,
+    gemini: bool,
+    /// Gemini: the first line was seen, and the session id it gave.
+    head: bool,
+    sid: Option<String>,
     next: u64,
     line: Vec<u8>,
     lboot: u64,
@@ -107,10 +111,15 @@ impl Native {
                     }
                     (
                         StreamKind::Native,
-                        Some(r @ (Reader::CodexRollout | Reader::ClaudeTranscript)),
+                        Some(
+                            r @ (Reader::CodexRollout
+                            | Reader::ClaudeTranscript
+                            | Reader::GeminiChat),
+                        ),
                     ) => {
                         let f = File {
                             codex: r == Reader::CodexRollout,
+                            gemini: r == Reader::GeminiChat,
                             next: m["from"].as_u64().unwrap_or(0),
                             ..File::default()
                         };
@@ -132,6 +141,13 @@ impl Native {
                         let Ok(v) = serde_json::from_slice::<Value>(&line) else {
                             continue;
                         };
+                        if f.gemini {
+                            // No per-call rows: only the first line's session id is kept.
+                            if !std::mem::replace(&mut f.head, true) {
+                                f.sid = id_at(&v, "/sessionId").or_else(|| id_at(&v, "/id"));
+                            }
+                            continue;
+                        }
                         let at = v["timestamp"].as_str().and_then(ts);
                         let row = || {
                             let mut r = CallRow::new(Leg::Native, &ctx.entry, boot, Kind::Call);
@@ -184,6 +200,14 @@ impl Native {
             reason: Some(Reason::NoNative),
             ..Thread::new(id)
         };
+        // Main Gemini chats as (id, 8-hex suffix of the file stem), to resolve a parent folder.
+        let mains: Vec<(String, String)> = (self.files.iter())
+            .filter(|(_, f)| f.gemini)
+            .filter_map(|((p, _), f)| match gemini_thread(p, f.sid.as_deref()) {
+                (Some(id), None, _) => Some((id, gemini_suffix(p).unwrap_or_default())),
+                _ => None,
+            })
+            .collect();
         for ((path, _), f) in self.files {
             repeats_skipped += f.repeats;
             copied_skipped += f.copied;
@@ -193,6 +217,17 @@ impl Native {
                     (m.id.or_else(|| file_uuid(&path)), m.parent, depth, m.label)
                 }
                 None if f.codex => (file_uuid(&path), None, None, None),
+                None if f.gemini => {
+                    let (id, parent, depth) = gemini_thread(&path, f.sid.as_deref());
+                    let one = |p: &String| {
+                        let hit = |(i, s): &&(String, String)| {
+                            i == p || i.starts_with(p.as_str()) || (!s.is_empty() && p.starts_with(s.as_str()))
+                        };
+                        let mut it = mains.iter().filter(hit);
+                        it.next().filter(|_| it.next().is_none()).map(|m| m.0.clone())
+                    };
+                    (id, parent.map(|p| one(&p).unwrap_or(p)), depth, None)
+                }
                 None => {
                     let (id, parent, depth) = claude_thread(&path);
                     (id, parent, depth, None)
@@ -429,6 +464,31 @@ fn claude_thread(path: &str) -> (Option<String>, Option<String>, Option<u32>) {
         (Some(s), Some(id)) => (hints::id(id), hints::id(s), Some(1)),
         _ => (hints::id(stem), None, (dirs.len() == 1).then_some(0)),
     }
+}
+
+/// The Gemini CLI thread of a chat path `…/chats/…`: (id, parent, depth). The parent link comes
+/// from the file path layout in the vendor docs (Gemini CLI "Session management" and "Subagents"):
+/// `chats/session-<time>-<8 hex>.jsonl` is a main thread (id: the first line's `sessionId`, else the
+/// stem); `chats/<parent session id>/<subagent session id>.jsonl` is a subagent of that session,
+/// at any depth under the folder. When the record holds no such file (pruned, a hole) the wire
+/// threads stay and the entry is reported as before.
+fn gemini_thread(path: &str, sid: Option<&str>) -> (Option<String>, Option<String>, Option<u32>) {
+    let rel = path.split_once(':').map_or(path, |p| p.1);
+    let parts: Vec<&str> = rel.split('/').collect();
+    let stem = |f: &str| f.strip_suffix(".jsonl").and_then(hints::id);
+    let (Some(i), Some(file)) = (parts.iter().position(|&p| p == "chats"), parts.last()) else {
+        return (None, None, None);
+    };
+    match parts.get(i + 1).filter(|_| i + 2 < parts.len()) {
+        Some(dir) => (stem(file), hints::id(dir), Some(1)),
+        None => (sid.and_then(hints::id).or_else(|| stem(file)), None, Some(0)),
+    }
+}
+
+/// The 8 hex digits that end a main Gemini chat file stem (the start of its session id).
+fn gemini_suffix(path: &str) -> Option<String> {
+    let s = path.strip_suffix(".jsonl")?.rsplit('-').next()?;
+    (s.len() == 8 && s.bytes().all(|c| c.is_ascii_hexdigit())).then(|| s.to_string())
 }
 
 /// The thread UUID that ends a Codex rollout file name, for a file read with no `session_meta`.

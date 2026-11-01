@@ -5,13 +5,15 @@ use serde_json::Value;
 
 /// A native session format this build reads: Codex `sessions:**/rollout-*.jsonl`, Claude Code
 /// `transcripts:**/*.jsonl`, the `meta:**/*.meta.json` snapshots, and Hermes's `state:state.db*`
-/// database copies (snapshot streams).
+/// database copies (snapshot streams), and Gemini CLI's `chats:**/*.jsonl` session files (thread
+/// links only).
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum Reader {
     CodexRollout,
     ClaudeTranscript,
     ClaudeMeta,
     HermesDb,
+    GeminiChat,
 }
 
 /// The reader of a native or snapshot stream by its connector and `meta.path` (`<row>:<rel>`).
@@ -23,18 +25,21 @@ pub(super) fn reader(connector: Option<&str>, path: &str) -> Option<Reader> {
         ("claude-code-cli", "transcripts", true) => Reader::ClaudeTranscript,
         ("claude-code-cli", "meta", _) if file.ends_with(".meta.json") => Reader::ClaudeMeta,
         ("hermes-cli", "state", _) if file.starts_with("state.db") => Reader::HermesDb,
+        ("gemini-cli", "chats", true) => Reader::GeminiChat,
         _ => return None,
     })
 }
 
 /// For a connector this build has a native reader for: (its wire requests carry their thread, as
 /// Codex's do; native calls join the wire by the reply's request id, as Claude Code's do). Hermes
-/// has neither: its calls join the entry's wire calls by time alone.
+/// has neither: its calls join the entry's wire calls by time alone. Gemini has no native call
+/// rows (the chat file's per-call shape is unmeasured), so its wire calls stay `WireOnly`; the
+/// reader is here for the threads and parent links of its chat files.
 pub(super) fn join_of(connector: Option<&str>) -> Option<(bool, bool)> {
     match connector? {
         "codex-cli" => Some((true, false)),
         "claude-code-cli" => Some((false, true)),
-        "hermes-cli" => Some((false, false)),
+        "hermes-cli" | "gemini-cli" => Some((false, false)),
         _ => None,
     }
 }
