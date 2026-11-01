@@ -37,7 +37,7 @@ lessons lane (PRD-17); read by the deletion gate (PRD-17 Acceptance, checks 1 to
 | L-C4 | 2.1 | A: lessons_connect::client_hello_in_two_records_and_one_byte_reads_decides_by_sni; A: lessons_connect::openssl_client_hellos_in_single_bytes_are_replayed_whole (the two copied OpenSSL hellos, no 2 KiB synthetic one) | PRD-17 | green | c39737d9 |
 | L-C5 | 2.1 | A: lessons_connect::close_before_hello_is_one_named_loss (upstream dialled before the 200, one conn record, one named GAP) | PRD-17 | green | c39737d9 |
 | L-C6 | 2.1 | A: lessons_connect::unlisted_refusal_is_one_round; A: lessons_connect::listed_refusal_is_retried; A: proxy_tunnel::an_upstream_reset_reaches_the_client_as_a_reset_and_a_close_as_a_close (PRD-03, the reset rule); R: RR5 | PRD-17 | green | 8dc99969 |
-| L-C7 | 2.1 | R: RR1; A: lessons_connect::idle_tunnel_survives_120s (full tier, held back with `ignore`) | PRD-17 | open | - |
+| L-C7 | 2.1 | R: RR1; A: lessons_connect::idle_tunnel_survives_120s (full tier, held back with `ignore`) | PRD-17 | green | 18fde505 |
 | L-C8 | 2.1 | A: lessons_connect::one_bad_handshake_leaves_others_relaying | PRD-17 | green | c39737d9 |
 | L-C9 | 2.1 | A: proxy_connect.rs (PRD-03) | PRD-03 | green | 7e620577 |
 | L-C10 | 2.1 | A: proxy_connect.rs (PRD-03); A: lessons_connect::listed_sni_to_a_local_fake_server_is_never_trusted | PRD-03, PRD-17 | green | c39737d9 |
@@ -145,7 +145,7 @@ lessons lane (PRD-17); read by the deletion gate (PRD-17 Acceptance, checks 1 to
 | L-S9 | 2.10 | R: PRD-06 U3 | PRD-06 | open | - |
 | L-S10 | 2.10 | A: device.test.ts (PRD-07); A: lifecycle.test.ts (PRD-07) | PRD-07 | green | b474329d |
 | L-R1 | 2.11 | A: pipeline_guard::a_thousand_guard_episodes_never_latch (PRD-02) | PRD-02 | green | 7e620577 |
-| L-R2 | 2.11 | A: pipeline_guard::two_hundred_streams_with_the_writer_held (PRD-02); A: lessons_pipeline::open_and_end_survive_a_full_guard; A: pipeline_stall.rs (PRD-02, file not on tree) | PRD-02 | open | - |
+| L-R2 | 2.11 | A: pipeline_guard::two_hundred_streams_with_the_writer_held (PRD-02); A: lessons_pipeline::open_and_end_survive_a_full_guard; A: pipeline_stall::a_stalled_writer_exits_75_and_the_next_boot_names_it (PRD-02) | PRD-02 | green | 18fde505 |
 | L-R3 | 2.11 | A: check_invariants.rs (PRD-08, invariant 12 gap_has_end); A: proxy_http1.rs (PRD-03, fault case); A: see L-H2, L-H9, L-W2, L-W7, L-W10 | PRD-08, PRD-03 | green | 8dc99969 |
 | L-R4 | 2.11 | R: PRD-02 R3; R: PRD-10 acceptance 1 | PRD-02, PRD-10 | open | - |
 | L-R5 | 2.11 | A: golden.rs (PRD-01); A: proxy_ws.rs (PRD-03); R: RR1 | PRD-01, PRD-03 | green | 8dc99969 |
@@ -192,9 +192,9 @@ dev-dependency on the verifier and the scaffold is PRD-02's, so the binary is re
 
 **Rows that still wait (integration head 6fb5db63).** A row reads `green` when every `A:` entry resolves in the
 nextest list (or is an existing Worker test file) and passes; `A:` plus `R:` rows too, until their `R:` guards are shown.
-The commit cell is the head whose code the box job ran. Rows that stay `open` say why in their Guard cell
+The commit cell is the head whose code the box job ran (18fde505 for L-R2 and L-C7, see the second run below). Rows that stay `open` say why in their Guard cell
 (file not on tree, case not in file, `R:` or `D:` entry not shown); the `X:`-only rows (H12, K13, N9, SC7) are flipped
-at the gate, and C7 waits on its `ignore` test.
+at the gate, and C7 was waiting on its `ignore` test (shown in the second run below).
 
 **Budget (slice 5 measurement; 4,345 after slice 6, see the PRD-17 Amendments).** `wc -l` of the eight `lessons_*.rs` files totalled 4,324 (connect 510, decode 554,
 hosts 181, http1 941, launch 507, pipeline 104, tls 412, ws 1,115), measured on the task branch. The review
@@ -204,7 +204,7 @@ paid for most of what the tighter cases added. That is 862 more than the 3,462 a
 The 14,200 owner-question line is a total over the whole build; the tree still holds the 0.7 crates' tests, so
 a build-wide Rust test line count cannot be read off it yet and is not reported here.
 
-Gate run of 2026-11-01 (nothing deleted), one box job on branch commit c4a873cf, whose code equals integration head
+Gate run of 2026-11-01 (nothing deleted; superseded by the second run below: L-R2 now resolves and L-C7 ran in `gate full`), one box job on branch commit c4a873cf, whose code equals integration head
 6fb5db63 (only this file differs; commit cells name 6fb5db63). Raw numbers: `cargo nextest list --workspace --run-ignored
 all` 624 entries; `cargo nextest run --workspace --no-fail-fast` 620 run, 620 passed, 0 failed, 4 skipped (the `ignore`
 tests `lessons_connect::idle_tunnel_survives_120s`, `mask_bench::by_hand_mask_bench` and two `upload_worker` full-tier
@@ -235,6 +235,40 @@ The `X:`-only and `R:`-only rows are read from the table; they do not block dele
 
 Skipped and not run here: `idle_tunnel_survives_120s` (`gate full`), `mask_bench::by_hand_mask_bench`, the two
 `upload_worker` full-tier tests, the real-run rows (all RR rows), and `cargo clippy`. Nothing was deleted.
+
+Gate run of 2026-11-01, second run (nothing deleted), one box job on branch commit 4b0256e6, whose code equals integration
+head 18fde505 (the merge adds only this file's L-R2 repoint; commit cells name 18fde505). Raw numbers: `cargo nextest list
+--workspace --run-ignored all` 626 entries; `cargo nextest run --workspace --no-fail-fast` (`gate fast`) 622 run, 622
+passed, 0 failed, 4 skipped (`lessons_connect::idle_tunnel_survives_120s`, `mask_bench::by_hand_mask_bench` and two
+`upload_worker` full-tier tests); `gate full` for `idle_tunnel_survives_120s` alone (`--run-ignored only`): 1 run, 1 passed
+(120.0 s); Worker `node --test` on all of `server/worker/test/*.test.ts`: 258 pass, 0 fail, 0 skipped.
+`pipeline_stall::a_stalled_writer_exits_75_and_the_next_boot_names_it` is in the list and passed in `gate fast`. Table in
+the box (before this record's two status flips): 154 rows, 123 `green`, 31 `open`; entries 191 `A:`, 45 `R:`, 5 `D:`, 9 `X:`.
+Table now, re-read from the rows after L-R2 and L-C7 flipped to `green` at 18fde505: 154 rows, 125 `green`, 29 `open`,
+0 `real-run pass`; entry counts unchanged.
+
+- **Check 1 (a guard for every lesson): passed.** All 154 rows have an entry, 154 of 154 against PRD-17 sections 2.1 to
+  2.16 (no row missing either way). Every `A: file::test` name is in the nextest list (L-R2 included); every other `A:` names
+  an existing test file; every `D:` file exists; every `X:` names a decision or PRD; every `see L-` points at a row. No
+  renamed guard was found. The script flagged one `R:` entry that names no numbered pad row (L-D2), counted under check 3.
+- **Check 2 (guards pass): passed.** Every `lessons_*.rs` test and every named `A:` guard passed in `gate fast`, no `A:` guard
+  failed, and no `green` row has a failing guard. `idle_tunnel_survives_120s` was run in `gate full` and passed, so L-C7's
+  `A:` guard is shown (its `R: RR1` guard is not, so it reads `green`, not `real-run pass`). The Worker file guards pass.
+  The two `pipeline_guard` cases that PRD-14 is asked to move to `heavy` passed in this box.
+- **Check 3 (R: rows): holds by the rule, one exception named.** 45 `R:` entries, none `real-run pass`; 44 name an RR row or
+  a PRD pad row. L-D2 names "a pad run with a ChatGPT sign-in, else not shown in a real run", which is a kind of run and not
+  a numbered pad row; PRD-17 Risks says D2 may never show in a pad run (the pad uses an OpenAI key). It is not repointed
+  because no pad row exists to point at. Real-run rows do not block the deletion. No pad run has failed.
+- **Check 4 (X or I fate rows name a decision or PRD): passed.** 9 fate rows by this script's read (L-C9, L-C10, L-T7, L-H12,
+  L-K12, L-K13, L-K16, L-N9, L-P1; the first run counted 7 by a narrower read), each names its decision or PRD.
+
+What blocks the gate: nothing. Check 1 (L-R2) and `gate full` (L-C7) both cleared in this run, so PRD-13 may delete. The
+`open` rows (29) wait on `R:`, `D:` or `X:` entries shown at the gate or in real runs, or on a thin guard named in their
+cells; they are not check failures.
+
+Skipped and not run here: `mask_bench::by_hand_mask_bench`, the two `upload_worker` full-tier tests, the real-run rows (all
+RR rows), and `cargo clippy`. Nothing was deleted. The box `--out` copy failed (path given relative), so the numbers above are
+read from the box job's printed output, not from a copied file.
 
 ## Real-run rows
 
