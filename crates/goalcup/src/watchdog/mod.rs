@@ -2,9 +2,9 @@
 //! the listen socket (fd 3 of the recorder) and one control socket (fd 4), restarts a dead
 //! recorder at once on the same port, and ends the harness at the deadline and on seal.
 //!
-//! Here: the control lines (S8) and the start facts (S17), [`run`] with the restart loop, the
-//! terminal [`shield`], and what the watchdog binds, [`spawn`]s and ends. Null mode, the deadline,
-//! the server word and `recover` come in the next slice.
+//! Here: the control lines (S8) and the start facts (S17), [`run`] with the restart loop, null
+//! mode ([`Loop`], ledger R3a), the deadline and the server word, the terminal [`shield`], and
+//! what the watchdog binds, [`spawn`]s and ends. `recover` comes in the next slice.
 
 pub mod shield;
 pub mod spawn;
@@ -17,6 +17,7 @@ use crate::pipeline::clock::{self, Mono};
 use crate::pipeline::fds::{self, Target};
 use crate::pipeline::status::Outlived;
 use crate::proxy::ca::{BUNDLE_FILE, RUN_CA_FILE, RunCa};
+use crate::upload::ServerWord;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use shield::Shield;
@@ -49,7 +50,8 @@ pub enum Exit {
 
 /// How the previous boot ended, on the first line: `{"code":n}`, `{"signal":n}`,
 /// `{"cause":"watchdog_lost"}` from `goalcup recover`, or after null mode
-/// `{"cause":"null_mode","exits":n,"last":{"code":n}}`. Null on boot 0. The next boot's
+/// `{"cause":"null_mode","exits":n,"last":{"code":n}}` (`last` left out when no exit status was
+/// read). Null on boot 0. The next boot's
 /// `recorder_down` GAP tail is written from it (PRD-02 section 8 step 9, section 9.2 step 4).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(untagged)]
@@ -64,8 +66,13 @@ pub enum Prev {
 pub enum Cause {
     /// `goalcup recover` replaced a recorder whose watchdog was gone (section 8.1).
     WatchdogLost,
-    /// Null mode, which always follows fast exits: how many, and how the last recorder ended.
-    NullMode { exits: u64, last: Exit },
+    /// Null mode, which always follows fast exits: how many, and how the last recorder ended
+    /// when its exit status was read.
+    NullMode {
+        exits: u64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        last: Option<Exit>,
+    },
 }
 
 /// The seal reasons (PRD-01 section 11).
@@ -214,6 +221,35 @@ const READY_NS: u64 = 10_000_000_000;
 /// How long the last lines of an exited recorder are waited for.
 const DRAIN_NS: u64 = 1_000_000_000;
 
+/// One second of boot time, in ns.
+const SEC: u64 = 1_000_000_000;
+
+/// Ledger R3a: a recorder up less than this exited fast (SIGKILL included); one up this long
+/// resets the count and the waits.
+const FAST_NS: u64 = 60 * SEC;
+
+/// Ledger R3a: fast exits further apart than this never add up.
+const WINDOW_NS: u64 = 600 * SEC;
+
+/// Ledger R3a: the waits in null mode before each normal try, in seconds; the last repeats for
+/// ever.
+const NULL_WAITS: [u64; 4] = [30, 60, 120, 300];
+
+/// A boot that ends before `ready`, or this soon after its start, died at boot.
+const QUICK_NS: u64 = SEC;
+
+/// The space before the next boot after a null boot, or a boot on a sealed entry, that died at
+/// boot: 1 s, doubling with each such death in a row, at most the first null wait. Short, so
+/// the listener is soon served again; growing, so a boot that always dies never spins.
+const SPACE_MAX_NS: u64 = NULL_WAITS[0] * SEC;
+
+/// A null recorder that has not exited this long after the `restart` line is killed.
+const RESTART_KILL_NS: u64 = 10 * SEC;
+
+/// The exit code of a recorder whose write failed (`pipeline::writer`): for a null boot, its seal
+/// failed and the entry is left for `close_dead_entry`.
+const EXIT_WRITE_ERROR: i32 = 74;
+
 /// Set by the SIGUSR1 handler: `goalcup seal`.
 static SEAL_ASKED: AtomicBool = AtomicBool::new(false);
 
@@ -270,14 +306,14 @@ pub fn run_with(mut plan: LaunchPlan, mut facts: StartFacts, recorder_exe: &Path
     // The recorder's pid, set under its lock in the same step as the spawn, so the tree walk
     // never takes a just-started recorder for a late child of the watchdog.
     let recorder_pid = Arc::new(Mutex::new(0));
-    let mut boot = match Boot::start(recorder_exe, &listener, &facts, &recorder_pid) {
+    let mut boot = match Boot::start(recorder_exe, &listener, &facts, &recorder_pid, false) {
         Ok(boot) => boot,
         Err(_) => {
             remove_key(&rec);
             return failed("recorder_spawn");
         }
     };
-    let (mut boots, mut up_since) = (1u64, Mono::now());
+    let mut boots = 1u64;
     if let Err(code) = boot.wait_ready() {
         remove_key(&rec);
         if code == Some(i32::from(MASK_REFUSED)) {
@@ -330,6 +366,9 @@ pub fn run_with(mut plan: LaunchPlan, mut facts: StartFacts, recorder_exe: &Path
         }
     }
     let harness_start = facts.harness.as_ref().map_or(0, |h| h.start_id);
+    // Converted once to boot time; only a server word moves it (PRD-17 S7).
+    let wall_ms = clock::wall_ns() / 1_000_000;
+    let mut deadline = (facts.deadline).map(|d| due(Mono::now(), d.saturating_sub(wall_ms)));
     let spare = {
         let recorder_pid = Arc::clone(&recorder_pid);
         move |pid: u32| pid == *lock(&recorder_pid)
@@ -339,24 +378,61 @@ pub fn run_with(mut plan: LaunchPlan, mut facts: StartFacts, recorder_exe: &Path
     let mut after: Option<JoinHandle<()>> = None;
     let mut exit_line: Option<ToRecorder> = None;
     let mut seal: Option<ToRecorder> = None;
-    let mut asked = false;
+    let mut asked = None;
     let mut sealed = false;
-    while !sealed {
-        match boot.next() {
-            Some(ToWatchdog::Ready) => {
-                // A restarted boot: what the dead one was told and did not answer, again.
+    // The null recorder's seal failed (section 11 "In null mode"): the entry is left for
+    // `close_dead_entry`, unless the harness still runs and the next boot takes the seal.
+    let mut left = false;
+    let mut restarts = Restarts::default();
+    // Whether the next boot runs `--null`, decided when the last one ended.
+    let mut next_null = false;
+    // After a server `stop` the seal may come first: the harness is waited for all the same.
+    while !(sealed || left) || harness_pid.is_some() {
+        let next = boot.next();
+        if next == Some(ToWatchdog::Ready) {
+            boot.ready = true;
+        }
+        match next {
+            // A restarted boot: what the dead one was told and did not answer, again. Once sealed
+            // a boot only relays, and a seal sent again would end it.
+            Some(ToWatchdog::Ready) if !sealed => {
                 for l in [&exit_line, &seal].into_iter().flatten() {
                     boot.send(l);
                 }
             }
+            Some(ToWatchdog::Ready) | None => {}
             Some(ToWatchdog::Sealed) => sealed = true,
-            None => {}
+            Some(ToWatchdog::Server(word)) => {
+                if let Some(s) = word.seconds_left {
+                    deadline = Some(due(word.asked_at, s.saturating_mul(1_000)));
+                }
+                if word.stop && word.reason.as_deref() == Some("deadline") {
+                    deadline = Some(Mono(0));
+                } else if word.stop && seal.is_none() {
+                    // Any other stop: seal at once and leave the harness alone (ledger section 7).
+                    let l = ToRecorder::Seal {
+                        reason: SealReason::ServerStop,
+                        outlived: None,
+                    };
+                    boot.send(&l);
+                    seal = Some(l);
+                    // A seal asked is tried at once: no space from before holds it.
+                    restarts.hold = None;
+                }
+            }
         }
-        if SEAL_ASKED.swap(false, Ordering::SeqCst)
+        let end = if SEAL_ASKED.swap(false, Ordering::SeqCst) {
+            Some(SealReason::SealCommand)
+        } else {
+            deadline
+                .filter(|d| Mono::now() >= *d)
+                .map(|_| SealReason::Deadline)
+        };
+        if let Some(reason) = end
             && ending.is_none()
             && let (Some(pid), Some(h)) = (harness_pid, &facts.harness)
         {
-            asked = true;
+            asked = Some(reason);
             let (target, spare) = ((pid, h.start_id), spare.clone());
             ending = Some(thread::spawn(move || spawn::end_tree(target, &spare)));
         }
@@ -386,43 +462,70 @@ pub fn run_with(mut plan: LaunchPlan, mut facts: StartFacts, recorder_exe: &Path
         let helpers_done = after.as_ref().is_some_and(JoinHandle::is_finished)
             && ending.as_ref().is_none_or(JoinHandle::is_finished);
         if seal.is_none() && helpers_done {
-            let reason = if asked {
-                SealReason::SealCommand
-            } else {
-                SealReason::HarnessExit
-            };
             let l = ToRecorder::Seal {
-                reason,
+                reason: asked.unwrap_or(SealReason::HarnessExit),
                 outlived: spawn::outlived(harness_start, &spare),
             };
             boot.send(&l);
             seal = Some(l);
+            restarts.hold = None;
         }
-        if !sealed && matches!(boot.child.try_wait(), Ok(Some(_)) | Err(_)) {
-            if boot.drain() {
+        let waited = (!boot.ended).then(|| boot.child.try_wait());
+        if let Some(Ok(Some(_)) | Err(_)) = waited {
+            boot.ended = true;
+            let status = waited.and_then(Result::ok).flatten().map(exit_of);
+            if !sealed && boot.drain() {
                 sealed = true;
-                continue;
+            } else if !sealed
+                && boot.null
+                && seal.is_some()
+                && (restarts.asked_at.is_none() || status == Some(Exit::Code(EXIT_WRITE_ERROR)))
+            {
+                // Section 11 "In null mode": the null seal failed, and the entry is left for
+                // `close_dead_entry`. A null boot that exits on the `restart` line is no failure:
+                // the normal try gets the seal again after `ready`.
+                line(&dir, "null_seal_left", &[]);
+                left = true;
             }
-            // Ledger R3: the next recorder at once, same listener, same CA, never capped.
-            let prev = boot.child.try_wait().ok().flatten().map(exit_of);
-            let up_ms = Mono::now().0.saturating_sub(up_since.0) / 1_000_000;
-            facts.prev = prev.map(Prev::Exit);
-            line(
-                &dir,
-                "recorder_restart",
-                &[("boot", Fact::N(boots)), ("up_ms", Fact::N(up_ms))],
-            );
+            let up_ms = Mono::now().0.saturating_sub(boot.started.0) / 1_000_000;
+            restarts.space(&boot, sealed, left);
+            // A boot on a sealed entry relays and records nothing: no null mode there, whose
+            // `status.json` would hide the seal.
+            next_null = !sealed && restarts.next(&boot, status, &mut facts, &dir, seal.is_some());
+            if !(sealed || left) || harness_pid.is_some() {
+                let facts = [("boot", Fact::N(boots)), ("up_ms", Fact::N(up_ms))];
+                line(&dir, "recorder_restart", &facts);
+            }
+        }
+        // Ledger R3: the next recorder at once, same listener, same CA, never capped; a crash
+        // loop starts a null one (R3a). After the seal one runs too while the harness lives, so
+        // its connections are always served (section 8 step 10): a boot on a sealed entry relays
+        // and records nothing. Only a boot that died at boot spaces the next (`Restarts::space`).
+        let held = (restarts.hold).is_some_and(|h| Mono::now() < h);
+        if boot.ended && !held && (!(sealed || left) || harness_pid.is_some()) {
+            // A null boot due when the wait is already over: the normal try takes its place.
+            if next_null && restarts.wait_over() {
+                restarts.end_null(false);
+                (facts.null_since, next_null) = (None, false);
+            }
+            // A new boot takes the seal after `ready`.
+            (restarts.hold, left) = (None, false);
+            let mut failed = false;
             boot = loop {
-                match Boot::start(recorder_exe, &listener, &facts, &recorder_pid) {
+                match Boot::start(recorder_exe, &listener, &facts, &recorder_pid, next_null) {
                     Ok(next) => break next,
                     Err(e) => {
-                        line(&dir, "recorder_spawn_failed", &[("io", Fact::Io(e.kind()))]);
+                        if !failed {
+                            line(&dir, "recorder_spawn_failed", &[("io", Fact::Io(e.kind()))]);
+                        }
+                        failed = true;
                         thread::sleep(spawn::TICK);
                     }
                 }
             };
-            (boots, up_since) = (boots + 1, Mono::now());
+            boots += 1;
         }
+        restarts.tick(&mut boot, seal.is_some());
     }
     for h in [ending, after].into_iter().flatten() {
         let _ = h.join();
@@ -450,6 +553,13 @@ struct Boot {
     child: Child,
     to: UnixStream,
     lines: mpsc::Receiver<Option<ToWatchdog>>,
+    /// Started with `--null`.
+    null: bool,
+    started: Mono,
+    /// It sent `ready`.
+    ready: bool,
+    /// Its exit was seen and handled.
+    ended: bool,
 }
 
 impl Boot {
@@ -459,20 +569,29 @@ impl Boot {
         listener: &TcpListener,
         facts: &StartFacts,
         pid: &Mutex<u32>,
+        null: bool,
     ) -> io::Result<Boot> {
         let (to, theirs) = UnixStream::pair()?;
         let reader = to.try_clone()?;
         to.set_write_timeout(Some(Duration::from_secs(10)))?;
         let child = {
             let mut pid = lock(pid);
-            let child = spawn::recorder(exe, false, listener, &theirs)?;
+            let child = spawn::recorder(exe, null, listener, &theirs)?;
             *pid = child.id();
             child
         };
         drop(theirs);
         let (tx, lines) = mpsc::channel();
         thread::spawn(move || read_lines(reader, &tx));
-        let mut boot = Boot { child, to, lines };
+        let mut boot = Boot {
+            child,
+            to,
+            lines,
+            null,
+            started: Mono::now(),
+            ready: false,
+            ended: false,
+        };
         boot.send(&ToRecorder::Start(Box::new(facts.clone())));
         Ok(boot)
     }
@@ -527,6 +646,157 @@ impl Boot {
     }
 }
 
+/// Null mode in the restart loop (PRD-02 section 8 step 9, ledger R3a).
+#[derive(Default)]
+struct Restarts {
+    looped: Loop,
+    /// While a null boot runs: when its wait ends.
+    until: Option<Mono>,
+    /// When the `restart` line went to the null boot.
+    asked_at: Option<Mono>,
+    /// The next boot starts no earlier than this (see [`SPACE_MAX_NS`]).
+    hold: Option<Mono>,
+    /// Boots in a row that died at boot.
+    quick: u32,
+}
+
+impl Restarts {
+    /// After `boot` exited unsealed with `status`: sets `facts` for the next boot and says whether
+    /// it starts with `--null`. A null boot and the normal try after it carry the `null_mode`
+    /// cause in `prev`, so the try's `recorder_down` gap names the whole span.
+    /// A null boot that ended alone before its wait is over is replaced by another null boot
+    /// with the same wait; after the `restart` line, the wait, or with a seal pending (the null
+    /// wait never delays a seal) the normal try follows.
+    fn next(
+        &mut self,
+        boot: &Boot,
+        status: Option<Exit>,
+        facts: &mut StartFacts,
+        dir: &Path,
+        sealing: bool,
+    ) -> bool {
+        if boot.null {
+            let waiting = self.until.is_some_and(|u| Mono::now() < u);
+            if self.asked_at.is_none() && waiting && !sealing {
+                // The replacement is spaced, but never past the wait's end.
+                self.hold = self.hold.min(self.until);
+                return true;
+            }
+            self.end_null(sealing);
+            facts.null_since = None;
+            return false;
+        }
+        let Some(wait) = self.looped.exited(boot.started, Mono::now()) else {
+            (facts.prev, facts.null_since) = (status.map(Prev::Exit), None);
+            return false;
+        };
+        let exits = self.looped.count;
+        facts.prev = Some(Prev::Cause(Cause::NullMode {
+            exits,
+            last: status,
+        }));
+        facts.null_since = Some(clock::wall_ns() / 1_000_000);
+        self.until = Some(Mono(Mono::now().0.saturating_add(wait)));
+        line(dir, "null_mode", &[("wait_s", Fact::N(wait / SEC))]);
+        true
+    }
+
+    /// A null wait runs and is over.
+    fn wait_over(&self) -> bool {
+        self.until.is_some_and(|u| Mono::now() >= u)
+    }
+
+    /// A null boot ended and the normal try comes next. Its space never pushes that try past the
+    /// R3a wait (ledger R3a, locked): the hold is cut to the wait's end, which has passed (the
+    /// `restart` line goes only once it has). A fast death of the try sends it straight back to
+    /// null mode with the next wait (`Loop::tries`), so no spin opens. Only with a seal pending,
+    /// which no null wait delays, does the space stand: a null seal that failed is spaced.
+    fn end_null(&mut self, sealing: bool) {
+        if !sealing {
+            self.hold = self.hold.min(self.until);
+        }
+        (self.until, self.asked_at) = (None, None);
+    }
+
+    /// After `boot` exited: a null boot, or any boot on a sealed entry, that died at boot holds
+    /// the next boot back 1 s, then 2 s, 4 s and so on up to [`SPACE_MAX_NS`]. Normal boots on an
+    /// unsealed entry follow R3a alone (its first two fast exits restart at once); they neither
+    /// wait here nor end the run of deaths. A boot that served longer ends it. A null boot whose
+    /// seal failed (`left`) counts as died at boot however long it was up, so a crash loop that
+    /// also fails the null seal does not spin. `ready` is seen only when its line is read in a
+    /// tick, so a boot that sends it and exits in the same tick counts as died at boot too: at
+    /// most one extra 1 s space.
+    fn space(&mut self, boot: &Boot, sealed: bool, left: bool) {
+        let up = Mono::now().0.saturating_sub(boot.started.0);
+        if boot.ready && up >= QUICK_NS && !left {
+            self.quick = 0;
+            return;
+        }
+        if !(boot.null || sealed) {
+            return;
+        }
+        let space = (SEC << self.quick.min(8)).min(SPACE_MAX_NS);
+        self.quick = self.quick.saturating_add(1);
+        self.hold = Some(Mono(Mono::now().0.saturating_add(space)));
+    }
+
+    /// Each tick: once a null boot's wait is over and no seal was sent, the `restart` line (never
+    /// SIGTERM); SIGKILL if it has not exited 10 s later (a null recorder holds no records).
+    fn tick(&mut self, boot: &mut Boot, sealing: bool) {
+        let Some(until) = self.until.filter(|_| boot.null && !boot.ended && !sealing) else {
+            return;
+        };
+        let now = Mono::now();
+        match self.asked_at {
+            None if now >= until => {
+                boot.send(&ToRecorder::Restart);
+                self.asked_at = Some(now);
+            }
+            Some(at) if now.0.saturating_sub(at.0) >= RESTART_KILL_NS => {
+                let _ = boot.child.kill();
+            }
+            _ => {}
+        }
+    }
+}
+
+/// The restart loop's memory (ledger R3a): the end times of normal recorders' fast exits on boot
+/// time, none older than 10 minutes, how many since the last reset, and the null waits spent
+/// since then.
+#[derive(Default)]
+struct Loop {
+    exits: Vec<Mono>,
+    count: u64,
+    tries: usize,
+}
+
+impl Loop {
+    /// Ledger R3a (locked): a normal recorder ran from `start` to `end`; the wait in ns in null
+    /// mode before the next normal boot, or None for one at once. A run under 60 s is a fast
+    /// exit, SIGKILL included; three within 10 minutes switch to null mode, and from there every
+    /// fast exit goes straight back. The waits are 30 s, 60 s, 120 s, then 300 s for ever. One up
+    /// 60 s resets the count and the waits.
+    fn exited(&mut self, start: Mono, end: Mono) -> Option<u64> {
+        if end.0.saturating_sub(start.0) >= FAST_NS {
+            *self = Loop::default();
+            return None;
+        }
+        self.exits.retain(|e| end.0.saturating_sub(e.0) < WINDOW_NS);
+        self.exits.push(end);
+        self.count += 1;
+        let wait = (self.tries > 0 || self.exits.len() >= 3)
+            .then(|| NULL_WAITS[self.tries.min(NULL_WAITS.len() - 1)] * SEC);
+        self.tries += usize::from(wait.is_some());
+        wait
+    }
+}
+
+/// The deadline on boot time: `from` plus `ms_left`, saturating. At start `from` is now and
+/// `ms_left` the deadline less the wall time; on a server word, `asked_at` and `seconds_left`.
+fn due(from: Mono, ms_left: u64) -> Mono {
+    Mono(from.0.saturating_add(ms_left.saturating_mul(1_000_000)))
+}
+
 /// Reads the recorder's lines until the pair closes, then sends `None`. A line that does not
 /// parse (a variant this build does not know) is skipped.
 fn read_lines(stream: UnixStream, tx: &mpsc::Sender<Option<ToWatchdog>>) {
@@ -541,13 +811,13 @@ fn read_lines(stream: UnixStream, tx: &mpsc::Sender<Option<ToWatchdog>>) {
     let _ = tx.send(None);
 }
 
-/// One control line, both ways: JSON and a newline. Never logged; a failed write is the
-/// reader's to notice.
-pub fn send_line(mut to: &UnixStream, l: &impl Serialize) {
-    if let Ok(mut text) = serde_json::to_vec(l) {
-        text.push(b'\n');
-        let _ = to.write_all(&text);
-    }
+/// One control line, both ways: JSON and a newline. Never logged; false when the write failed.
+pub fn send_line(mut to: &UnixStream, l: &impl Serialize) -> bool {
+    let Ok(mut text) = serde_json::to_vec(l) else {
+        return false;
+    };
+    text.push(b'\n');
+    to.write_all(&text).is_ok()
 }
 
 /// The next control line, both ways: None at EOF or on a read error; `Some(None)` for a line
@@ -687,8 +957,9 @@ pub enum ToWatchdog {
     Ready,
     /// The seal is durable.
     Sealed,
-    // The `server` line (the last heartbeat answer) carries PRD-06's `ServerWord` (seam S10) as
-    // `Server(upload::ServerWord)` once that stub is on integration.
+    /// The last heartbeat answer (PRD-06's `ServerWord`, seam S10), forwarded by the recorder:
+    /// `seconds_left` resets the deadline, `stop` ends the run.
+    Server(ServerWord),
 }
 
 #[cfg(test)]
@@ -745,7 +1016,7 @@ mod tests {
                 ca: ca.clone(),
                 prev: Some(Prev::Cause(Cause::NullMode {
                     exits: 3,
-                    last: Exit::Signal(9),
+                    last: Some(Exit::Signal(9)),
                 })),
                 harness: Some(HarnessFacts {
                     pid: u32::MAX,
@@ -775,21 +1046,85 @@ mod tests {
             (
                 Prev::Cause(Cause::NullMode {
                     exits: 3,
-                    last: Exit::Code(70),
+                    last: Some(Exit::Code(70)),
                 }),
                 r#"{"cause":"null_mode","exits":3,"last":{"code":70}}"#,
+            ),
+            (
+                Prev::Cause(Cause::NullMode {
+                    exits: 3,
+                    last: None,
+                }),
+                r#"{"cause":"null_mode","exits":3}"#,
             ),
         ];
         for (prev, json) in cases {
             assert_eq!(serde_json::to_string(&prev).unwrap(), json);
             assert_eq!(serde_json::from_str::<Prev>(json).unwrap(), prev);
         }
-        for bad in [
-            r#"{"cause":"null_mode"}"#,
-            r#"{"cause":"watchdog_lots"}"#,
-            r#"{"cause":"null_mode","exits":3}"#,
-        ] {
-            assert!(serde_json::from_str::<Prev>(bad).is_err(), "{bad}");
+        // A `null_mode` cause always counts its exits.
+        assert!(serde_json::from_str::<Prev>(r#"{"cause":"null_mode"}"#).is_err());
+    }
+
+    /// Ledger R3a: a null boot's space never puts the normal try after the wait's end; with a
+    /// seal pending (a failed null seal) the space stands.
+    #[test]
+    fn a_null_space_never_passes_the_wait() {
+        let r = |hold: u64| Restarts {
+            until: Some(at(30)),
+            hold: Some(at(hold)),
+            ..Restarts::default()
+        };
+        let mut late = r(61);
+        late.end_null(false);
+        assert_eq!((late.hold, late.until), (Some(at(30)), None));
+        let mut early = r(20);
+        early.end_null(false);
+        assert_eq!(early.hold, Some(at(20)));
+        let mut sealing = r(61);
+        sealing.end_null(true);
+        assert_eq!(sealing.hold, Some(at(61)));
+    }
+
+    fn at(s: u64) -> Mono {
+        Mono(s * SEC)
+    }
+
+    /// Runs each (start, end) in seconds through one [`Loop`]: the waits in seconds.
+    fn waits(runs: &[(u64, u64)]) -> Vec<Option<u64>> {
+        let mut l = Loop::default();
+        let wait = |(s, e): &(u64, u64)| l.exited(at(*s), at(*e)).map(|w| w / SEC);
+        runs.iter().map(wait).collect()
+    }
+
+    /// Ledger R3a, the contract: the first two fast exits restart at once, the third within
+    /// 10 minutes switches to null mode, and the waits are 30, 60, 120, then 300 s, never more.
+    #[test]
+    fn next_wait_r3a_waits() {
+        let mut runs = vec![(1_000, 1_010), (1_010, 1_011), (1_011, 1_070)];
+        let mut t = 1_100;
+        for _ in 0..6 {
+            runs.push((t, t + 1));
+            t += 400;
         }
+        let w = [None, None, Some(30), Some(60), Some(120), Some(300)];
+        assert_eq!(waits(&runs), [&w[..], &[Some(300); 3]].concat());
+    }
+
+    /// A recorder up 60 s resets the count and the waits; exits at hour 5 and hour 140 never
+    /// add up; three fast exits spread over more than 10 minutes do not switch.
+    #[test]
+    fn next_wait_resets() {
+        let fast3 = [(0, 1), (1, 2), (2, 3)];
+        let reset = [&fast3[..], &[(3, 63), (63, 64), (64, 65), (65, 66)]].concat();
+        assert_eq!(
+            waits(&reset),
+            [None, None, Some(30), None, None, None, Some(30)]
+        );
+        let (h5, h140) = (5 * 3_600, 140 * 3_600);
+        let far = [(h5, h5 + 1), (h140, h140 + 1), (h140 + 1, h140 + 2)];
+        assert_eq!(waits(&far), [None; 3]);
+        let spread = [(0, 1), (300, 301), (602, 603)];
+        assert_eq!(waits(&spread), [None; 3]);
     }
 }

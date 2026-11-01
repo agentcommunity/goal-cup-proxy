@@ -22,6 +22,7 @@ mod calls;
 pub mod clock;
 pub mod counts;
 pub mod cursors;
+mod dead;
 pub mod fds;
 mod guard;
 mod handle;
@@ -38,6 +39,9 @@ pub use calls::{Call, Calls};
 pub use clock::Mono;
 pub use counts::{Counts, Durable, EntryTotals, TunnelHost, entry_totals};
 pub use cursors::Cursors;
+#[cfg(feature = "test-hooks")]
+pub use dead::seal_null_for_tests;
+pub use dead::{Closed, StillRecording, close_dead_entry};
 pub use goalcup_format::{EndReason, GapReason, StreamKind};
 pub use handle::{OpenFlags, StreamHandle};
 #[cfg(feature = "test-hooks")]
@@ -52,7 +56,7 @@ use crate::native::{self, NativeReader};
 use crate::proxy::{self, ProxyCtx, ProxyHandle, ca::RunCa};
 use crate::upload::{self, UploadCtx, UploadHandle};
 use crate::watchdog::{
-    Exit, HarnessFacts, SealReason, ToRecorder, ToWatchdog, read_line, send_line,
+    Cause, Exit, HarnessFacts, Prev, SealReason, ToRecorder, ToWatchdog, read_line, send_line,
 };
 use item::Item;
 use serde_json::{Value, json};
@@ -855,6 +859,7 @@ pub fn run_recorder(null: bool) -> ExitCode {
         exit: None,
         exit_at: None,
         null,
+        prev: facts.prev,
         sealed: false,
         late: None,
     };
@@ -913,6 +918,8 @@ struct Run {
     exit: Option<Exit>,
     exit_at: Option<Mono>,
     null: bool,
+    /// How the boot before ended; a null recorder's seal names it in its `recorder_down` gap.
+    prev: Option<Prev>,
     /// The entry was sealed before this boot: the recorder records nothing, and a seal removes
     /// the key, answers `sealed` and runs the wrap-up.
     sealed: bool,
@@ -958,9 +965,10 @@ impl Run {
     }
 
     /// The seal (PRD-02 section 11), once; `sealed` goes to the watchdog at its durable point. A
-    /// null recorder exits instead: the next normal boot recovers the entry and the watchdog sends
-    /// the seal again. On an entry sealed before this boot, the key a seal that died before
-    /// removing it left goes now, then `sealed` and the wrap-up.
+    /// null recorder seals through the dead-entry recovery (section 11 "In null mode"); if that
+    /// fails it exits 74 without `sealed`, and the entry is left for `close_dead_entry`. On an
+    /// entry sealed before this boot, the key a seal that died before removing it left goes now,
+    /// then `sealed` and the wrap-up.
     fn seal(
         mut self,
         reason: SealReason,
@@ -968,14 +976,37 @@ impl Run {
         dir: &Path,
         workspace: &Path,
     ) -> ExitCode {
+        // The server's own words for a `server_stop` seal, from its last heartbeat answer.
+        let server_reason = (self.uploader.as_ref())
+            .filter(|_| reason == SealReason::ServerStop)
+            .and_then(|u| u.server_word().borrow().as_ref()?.reason.clone());
+        if self.null && !self.sealed {
+            // Every later byte only counts, so what the boot relays after this seal reaches
+            // `after_seal` (section 11 step 6), as on the normal path.
+            self.rec.stop_all();
+            self.board.stop();
+            if let Some(t) = self.status.take() {
+                let _ = t.join();
+            }
+            // A null boot whose watchdog sent no `null_mode` cause: no exit is known.
+            let none = Prev::Cause(Cause::NullMode {
+                exits: 0,
+                last: None,
+            });
+            let (h, ws) = (self.harness.as_ref(), Some(workspace));
+            let prev = self.prev.unwrap_or(none);
+            let facts = dead::seal_null(dir, reason, h, self.exit, server_reason.clone(), prev, ws)
+                .unwrap_or_else(|e| writer::fail(dir, &e));
+            self.board.sealed(dead::seal_status(&facts), &facts.totals);
+            status::write(&self.rec, dir, &self.board);
+            self.sealed = true;
+            self.late = Some(seal::keep_sealed(&self.rec, dir, None));
+        }
         if self.sealed {
             seal::remove_key(dir);
             self.send(&ToWatchdog::Sealed);
             let late = (self.late.take()).unwrap_or_else(|| seal::Late::sealed(&self.rec, None));
             seal::wrap_up_sealed(&self.rec, dir, reason, self.uploader.take(), &late);
-            return ExitCode::SUCCESS;
-        }
-        if self.null {
             return ExitCode::SUCCESS;
         }
         let proxy = self.proxy.take();
@@ -993,7 +1024,7 @@ impl Run {
         };
         let ask = seal::SealAsk {
             reason,
-            server_reason: None,
+            server_reason,
             harness: self.harness.clone(),
             exit: self.exit,
             exit_at: self.exit_at,

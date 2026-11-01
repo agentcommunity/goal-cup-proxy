@@ -349,7 +349,7 @@ fn star(hosts: &Value) -> Value {
 
 /// `git <args>` in `dir` with no optional lock (it never takes the workspace's index lock), its
 /// output, or None on failure or after 10 s of boot time.
-fn git(dir: &Path, args: &[&str]) -> Option<Vec<u8>> {
+pub(super) fn git(dir: &Path, args: &[&str]) -> Option<Vec<u8>> {
     let mut child = Command::new("git")
         .arg("--no-optional-locks")
         .arg("-C")
