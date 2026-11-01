@@ -23,9 +23,14 @@ pub(crate) const SOFT_KIND: &str = "masked_key";
 
 /// The kinds whose candidate is cut at an earlier claim and keeps its other pieces, instead of
 /// being dropped whole (see [`select`]): the two name-based literals, whose value may hold a key
-/// of a higher rule (`token=<run>.sk-...`), and the Bedrock keys, whose base64 a `bearer` match
-/// ends at the first `+` or `/`. So no part of such a value goes out raw.
-pub(crate) const CUT_KINDS: [&str; 2] = ["generic_secret_assignment", "bedrock_key"];
+/// of a higher rule (`token=<run>.sk-...`), and the Bedrock keys and Stripe webhook secrets,
+/// whose base64 a `bearer` or shell match ends at the first `+` or `/`
+/// (`WEBHOOK_SECRET=whsec_...`). So no part of such a value goes out raw.
+pub(crate) const CUT_KINDS: [&str; 3] = [
+    "generic_secret_assignment",
+    "bedrock_key",
+    "stripe_webhook_secret",
+];
 
 /// The kind of the one block rule of the shared list: a PEM private key, from its `BEGIN` line
 /// to the first `END` line that starts within [`PEM_BODY_MAX`] bytes, else those bytes. A

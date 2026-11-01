@@ -152,6 +152,10 @@ fn word_underscore(u: Unit) -> bool {
 fn base64(u: Unit) -> bool {
     ascii_where(u, |b| b.is_ascii_alphanumeric() || b == b'+' || b == b'/')
 }
+/// `[A-Za-z0-9+/=]`
+fn base64_padded(u: Unit) -> bool {
+    base64(u) || is(u, b'=')
+}
 /// `[A-Za-z0-9_\-]`
 fn token(u: Unit) -> bool {
     ascii_where(u, |b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
@@ -351,7 +355,7 @@ static BEDROCK_SHORT: [&[u8]; 44] = each(b"bedrock-api-key-YmVkcm9jay5hbWF6b25hd
 /// The streaming recognizer of each shared literal, in `shapes.tsv` order. A recognizer never
 /// decides a span below the bound (the regex does); it says how long a candidate must be held,
 /// and how long a fail-closed window must run.
-static SHAPES: [Shape; 30] = [
+static SHAPES: [Shape; 31] = [
     prefixed(
         "anthropic_key",
         r"sk-ant-[A-Za-z0-9_\-]{20,}",
@@ -474,8 +478,10 @@ static SHAPES: [Shape; 30] = [
     ),
     prefixed(
         "stripe_key",
-        r"[sr]k_live_[A-Za-z0-9]{16,}",
-        &[b"sr", b"k", b"_", b"l", b"i", b"v", b"e", b"_"],
+        r"[sr]k_(?:live|test)_[A-Za-z0-9]{16,}",
+        // `live` or `test` one position at a time, so the mixes (`lest`, `tive`) are held too;
+        // the regex decides the span, so a mix only holds a few bytes longer.
+        &[b"sr", b"k", b"_", b"lt", b"ie", b"vs", b"et", b"_"],
         word,
         16,
         None,
@@ -580,6 +586,15 @@ static SHAPES: [Shape; 30] = [
         &BEDROCK_SHORT,
         base64,
         20,
+        None,
+    ),
+    // Stripe webhook signing secrets (owner yes to PRD-00 question 3, 2026-11-01).
+    prefixed(
+        "stripe_webhook_secret",
+        r"whsec_[A-Za-z0-9+/=]{24,}",
+        &[b"w", b"h", b"s", b"e", b"c", b"_"],
+        base64_padded,
+        24,
         None,
     ),
 ];
@@ -2496,6 +2511,9 @@ mod tests {
         b"npm_",
         b"xai-",
         b"sk_live_",
+        b"sk_test_",
+        b"rk_test_",
+        b"whsec_",
         b"glpat-",
         b"dop_v1_",
         b"AQ.",
