@@ -267,6 +267,16 @@ fn chain(e: &mut Entry, s: Sh, text: bool, n: u64, lost: Option<(usize, bool)>) 
 /// each of `msgs` is a `response.create` resending the history, answered with the answer, if any.
 /// Offsets run through each stream. Returns the client stream's sid.
 fn ws(e: &mut Entry, thread: &str, msgs: &[(&[A], Option<A>)]) -> u64 {
+    ws_with(e, thread, msgs, |_| {})
+}
+
+/// [`ws`], and `between` runs while the socket is still open, after its last message.
+fn ws_with(
+    e: &mut Entry,
+    thread: &str,
+    msgs: &[(&[A], Option<A>)],
+    between: impl FnOnce(&mut Entry),
+) -> u64 {
     fn put(e: &mut Entry, sid: u64, off: &mut u64, m: &Value) {
         e.data(sid, *off, 0x10 | FLAG_FIN, m.to_string().as_bytes());
         *off += m.to_string().len() as u64;
@@ -299,6 +309,7 @@ fn ws(e: &mut Entry, thread: &str, msgs: &[(&[A], Option<A>)]) -> u64 {
             &json!({"type": "response.completed", "response": {}}),
         );
     }
+    between(e);
     let close = json!({"close_code": 1000});
     e.end(up, EndReason::Complete, u, close.clone());
     e.end(down, EndReason::Complete, d, close);
@@ -562,6 +573,25 @@ fn a_call_dropped_on_a_websocket_fails_and_names_the_thread() {
     });
     let h = verdict(&d, "fail", 2);
     assert_eq!(h["first"]["sid"], up);
+    assert_eq!(missing(&h), (1, 0, 0));
+}
+
+/// The last message of a socket is still open when another request of the thread extends the
+/// chain: the order of the records must still anchor it, so a later dropped call fails.
+#[test]
+fn a_websocket_message_and_a_later_http_request_keep_one_chain_and_a_dropped_call_fails() {
+    let h = verdict(
+        &rec("h-ws-http", |e| {
+            call(e, Responses, T, &[], Call(0));
+            let all = [Call(0), Call(1), Call(2), Call(3)];
+            ws_with(e, T, &[(&all[..1], Some(Call(1)))], |e| {
+                call(e, Responses, T, &all[..2], Call(2));
+            });
+            call(e, Responses, T, &all, Call(4));
+        }),
+        "fail",
+        2,
+    );
     assert_eq!(missing(&h), (1, 0, 0));
 }
 

@@ -148,8 +148,6 @@ struct St {
     acc: String,
     /// A MASK record was seen on this request, or on the open message.
     masked: bool,
-    /// Where the open message began.
-    start: u64,
     /// A finished WebSocket message waiting for the MASK records written after its last DATA.
     held: Option<Held>,
 }
@@ -159,7 +157,6 @@ struct Held {
     id: Id,
     off: u64,
     body: Option<Vec<u8>>,
-    start: u64,
     masked: bool,
 }
 
@@ -212,6 +209,8 @@ pub struct Sink {
     cand: HashSet<(u64, u64)>,
     by_last: HashMap<u64, Vec<usize>>,
     h: Hist,
+    /// The sids with a held client message.
+    holding: Vec<u64>,
 }
 
 fn mix(p: u64, d: u64) -> u64 {
@@ -237,9 +236,15 @@ impl Sink {
     /// Takes one record; `off` is its raw offset.
     pub fn push(&mut self, rec: &Record, off: u64) {
         self.calls.push(rec);
+        // A held message waits only for the MASK records written straight after its DATA.
+        let keep = if let Record::Mask { sid, .. } = rec {
+            Some(*sid)
+        } else {
+            None
+        };
+        self.flush_all(keep);
         match rec {
             Record::Part { boot, .. } if *boot != self.boot => {
-                self.flush_all();
                 // The dead boot's open requests and messages are cut.
                 let cut = std::mem::take(&mut self.open);
                 let up = |s: &&St| s.pend && matches!(s.role, Role::Req | Role::Up);
@@ -261,13 +266,13 @@ impl Sink {
                 ..
             } => self.data(*sid, off, (*o, *flags), bytes),
             Record::End { sid, .. } => self.end(*sid, off),
-            Record::Mask { sid, off: o, .. } => {
+            Record::Mask { sid, .. } => {
                 if let Some(st) = self.open.get_mut(&(self.boot, *sid))
                     && matches!(st.role, Role::Req | Role::Up)
                 {
                     // Written after the DATA it covers, so after a finished message too.
                     match st.held.as_mut() {
-                        Some(h) => h.masked |= *o >= h.start,
+                        Some(h) => h.masked = true,
                         None => st.masked = true,
                     }
                 }
@@ -335,7 +340,6 @@ impl Sink {
             msgs: 0,
             acc: String::new(),
             masked: false,
-            start: 0,
             held: None,
         };
         self.open.insert((b, sid), st);
@@ -343,13 +347,12 @@ impl Sink {
 
     fn data(&mut self, sid: u64, rec_off: u64, at: (u64, u8), bytes: &[u8]) {
         let (off, flags) = at;
-        self.flush(sid);
         let Some(st) = self.open.get_mut(&(self.boot, sid)) else {
             return;
         };
         if matches!(st.role, Role::Up | Role::Down) && !st.pend {
             // A message starts where its first byte is; a hole before it is not its own.
-            (st.pend, st.next, st.hole, st.start) = (true, off, false, off);
+            (st.pend, st.next, st.hole) = (true, off, false);
         }
         let on = off == st.next;
         st.next = off.saturating_add(bytes.len() as u64);
@@ -381,7 +384,6 @@ impl Sink {
         }
         if flags & FLAG_FIN != 0 && matches!(st.role, Role::Up | Role::Down) {
             let masked = std::mem::take(&mut st.masked);
-            let start = st.start;
             let (body, hole, n) = (std::mem::take(&mut st.buf), st.hole, st.msgs);
             (st.pend, st.msgs, st.hole) = (false, n + 1, false);
             let (role, op) = (st.role, flags >> 4);
@@ -394,31 +396,29 @@ impl Sink {
                     id,
                     off: rec_off,
                     body,
-                    start,
                     masked,
                 });
+                self.holding.push(sid);
             }
         }
     }
 
-    /// Handles the held client message of a stream, once nothing more can mask it.
-    fn flush(&mut self, sid: u64) {
-        let held = (self.open.get_mut(&(self.boot, sid))).and_then(|s| s.held.take());
-        if let Some(h) = held {
-            self.message(h.id, h.off, h.body.as_ref(), h.masked);
+    /// Handles every held client message but the one of `keep`, which a MASK may still reach.
+    fn flush_all(&mut self, keep: Option<u64>) {
+        let sids = std::mem::take(&mut self.holding);
+        for sid in sids {
+            if keep == Some(sid) {
+                self.holding.push(sid);
+                continue;
+            }
+            let held = (self.open.get_mut(&(self.boot, sid))).and_then(|s| s.held.take());
+            if let Some(h) = held {
+                self.message(h.id, h.off, h.body.as_ref(), h.masked);
+            }
         }
     }
 
-    fn flush_all(&mut self) {
-        let sids: Vec<u64> = (self.open.iter())
-            .filter(|(_, s)| s.held.is_some())
-            .map(|(k, _)| k.1)
-            .collect();
-        sids.into_iter().for_each(|s| self.flush(s));
-    }
-
     fn end(&mut self, sid: u64, off: u64) {
-        self.flush(sid);
         let k = (self.boot, sid);
         let Some(mut st) = self.open.remove(&k) else {
             return;
@@ -557,7 +557,7 @@ impl Sink {
 
     /// The call table and what the history pass kept.
     pub fn finish(mut self) -> (CallTable, Hist) {
-        self.flush_all();
+        self.flush_all(None);
         (self.calls.finish(), self.h)
     }
 }
