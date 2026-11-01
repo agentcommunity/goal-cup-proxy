@@ -69,7 +69,7 @@ EXPECTS_LOSS = {"refusal-curl.sh": "tls_refused",  # exec scripts whose owner ex
 SEALS_DEAD = "kill-both-seal.sh"  # the exec script that kills both and seals the dead entry: the record decides its row
 REFUSES = "proxy-setting.sh"  # the pre script after which goalcup start must refuse: no run is recorded
 STALE = "stale-gateway.sh"  # the pre script that leaves a daemon running for goalcup start to stop
-JUDGED = (REFUSES, STALE, SEALS_DEAD)  # pre scripts whose row the record decides (section 3.1), as a fault row is
+JUDGED = (REFUSES, STALE, SEALS_DEAD)  # pre and exec scripts whose row the record decides (section 3.1), as a fault row is
 # C3's scans (section 5, 7): the verifier's over the record, the box's output folder, the conductor's own folder.
 SCANS = (("secrets", "the local record and the run's files"), ("secrets-out", "the box's output folder"),
          ("secrets-conductor", "the conductor's run folder (its own secrets, section 7)"))
@@ -649,8 +649,8 @@ def both_row(r):
                      for g in gaps), "faults", "FAIL", "a gap starts before the crash window")
 
 def dead_seal_row(r):
-    """Rung 5b: both killed, then `goalcup seal --yes`: sealed `recovered`, one `abandoned` gap that starts before the
-    script ended (the kill is inside it), and the script's own line says it ran and exited 0."""
+    """Rung 5b: both killed, then `goalcup seal --yes`: sealed `recovered`, exactly one gap, `abandoned`, starting no later
+    than the script's end and no earlier than LINK_SLACK before the kill (the script's `began`), and script exit 0."""
     f = next((f for f in reversed(r.faults) if f.get("kind") == "exec" and f.get("script") == SEALS_DEAD), None)
     if not f:
         return r.mark("faults", "INCONCLUSIVE", "fault did not fire: %s" % SEALS_DEAD)
@@ -660,8 +660,11 @@ def dead_seal_row(r):
     if gaps is None:
         return r.mark("faults", "INCONCLUSIVE", "recorder_down gaps not readable from inv6")
     end = when(f.get("at"))
+    r.flag(len(gaps) != 1, "faults", "FAIL", "%d gaps, not one" % len(gaps))
     r.flag(not any(g.get("cause") == "abandoned" for g in gaps), "faults", "FAIL", "no abandoned gap")
     r.flag(end and any((a := when(g.get("start"))) and a > end for g in gaps), "faults", "FAIL", "a gap starts after the script ended")
+    kill = when(f.get("began"))
+    r.flag(kill and any((a := when(g.get("start"))) and a < kill - LINK_SLACK for g in gaps), "faults", "FAIL", "the gap starts long before the kill")
 
 def uploaded(r, t, beat_s):
     """After t (the thaw or the lift), from watch/upload.jsonl (S9, a line a minute, so the catch-up has that minute of

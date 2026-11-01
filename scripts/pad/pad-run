@@ -540,11 +540,13 @@ class Run:
     def exit_harness(self):  # the harness file's exit_keys (printf format); after 30 s SIGTERM to harness.pid if it lives
         if not self.dead():
             keys = str(self.h.get("exit_keys", "")).encode().decode("unicode_escape")
-            body, enter = (keys[:-1], True) if keys.endswith("\r") else (keys, False)
-            sh(["tmux", "send-keys", "-t", self.tmux, "-l", body] * bool(body))
-            if enter:  # a fast burst then Enter is a newline in some TUIs (paste burst): send Enter apart, as keep_going does
+            if keys.endswith("\r"):  # a fast burst then Enter is a newline in some TUIs (paste burst): send Enter apart, as keep_going does
+                if keys[:-1]:
+                    sh(["tmux", "send-keys", "-t", self.tmux, "-l", keys[:-1]])
                 time.sleep(0.3)
                 sh(["tmux", "send-keys", "-t", self.tmux, "Enter"])
+            elif keys:
+                sh(["tmux", "send-keys", "-t", self.tmux, "-l", keys])
             self.fault("exit-keys")
         pid = pc.dig(self.status(), "s4_harness_pid")  # S4 gives the harness no start id: a reused pid is not ruled out
         if type(pid) is int and not wait(lambda: not alive(pid), 30, 2):
@@ -567,7 +569,7 @@ class Run:
             raise Step("skip", "no harness process")
         with open("/proc/%d/environ" % pid, "rb") as f:  # filtered by name before anything holds it
             env = exec_env(f.read(), list(self.s.get("ca_env") or ()) + list(self.s.get("home_vars") or {}))
-        return self.script("exec", script, env, minute=self.m)
+        return self.script("exec", script, env, minute=self.m, began=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()))
 
     def script(self, kind, name, env, **kw):
         """bash exec/<name> in the project, its process group killed at the step's limit; only the replaced output

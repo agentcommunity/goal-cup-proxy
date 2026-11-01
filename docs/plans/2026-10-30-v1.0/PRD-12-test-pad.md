@@ -1965,5 +1965,5 @@ taken; "rejected" says why. Fixes for other files are made by those files' owner
   (W6). Conductor decision, owner to confirm; ledger R3b is untouched. Plain rows keep the old `launch.sh`.
 - **Rung 5b.** `exec kill-both-seal.sh@2` (after the harness has written requests) kills the watchdog and the recorder together, then runs plain
   `goalcup status` and `goalcup seal --yes` in the participant's shell (`PAD_SHELL_ENV`); the harness is
-  never touched. Expected, from the report run: status shows `Run: goalcup continue <run>`, `seal --yes`
-  exits 0, one `recorder_down` gap with cause `abandoned`, seal reason `recovered`, upload final `sealed`. check.py judges the row from the record (`dead_seal_row`): seal `recovered`, an `abandoned` gap starting before the script ended, script exit 0. The script exits 3 when the kill did not take.
+  never touched. Expected, from the report run: status shows `Run: goalcup continue <run>` (a line for a human to read in `exec/kill-both-seal.sh.txt`; check.py does not judge it), `seal --yes`
+  exits 0, one `recorder_down` gap with cause `abandoned`, seal reason `recovered`, upload final `sealed`. check.py judges the row from the record (`dead_seal_row`): seal `recovered`, exactly one gap, `abandoned`, starting before the script ended and not more than the link slack before the kill, script exit 0. The script exits 3 when the kill did not take.

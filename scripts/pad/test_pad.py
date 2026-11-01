@@ -411,11 +411,18 @@ class FaultRows(unittest.TestCase):
             gap = {"cause": "abandoned", "start": "2026-10-30T%sZ" % start, "end": "2026-10-30T10:06:00Z"}
             self.assertEqual(self.row("kill-both@5", both, [gap], counts={"recorder_down": 1}, seal="recovered"), want, start)
 
-    def test_kill_both_seal_is_judged_from_the_record(self):  # rung 5b: sealed recovered, an abandoned gap, script exit 0
-        gap = {"cause": "abandoned", "start": "2026-10-30T10:04:20Z", "end": "2026-10-30T10:06:00Z"}
-        ran = lambda code: [{"kind": "exec", "script": "kill-both-seal.sh", "exit": code, "at": "05:10"}]
-        for code, seal, gaps, want in ((0, "recovered", [gap], "PASS"), (0, "harness_exit", [gap], "FAIL"),
-                                       (0, "recovered", [], "FAIL"), (3, "recovered", [gap], "FAIL")):
+    def test_kill_both_seal_is_judged_from_the_record(self):  # rung 5b: sealed recovered, one abandoned gap, script exit 0
+        def gap(start, cause="abandoned"):
+            return {"cause": cause, "start": "2026-10-30T%sZ" % start, "end": "2026-10-30T10:06:00Z"}
+
+        def ran(code):
+            return [{"kind": "exec", "script": "kill-both-seal.sh", "exit": code, "at": "05:10", "began": "2026-10-30T10:04:30Z"}]
+        one = gap("10:04:20")
+        for code, seal, gaps, want in ((0, "recovered", [one], "PASS"), (0, "harness_exit", [one], "FAIL"),
+                                       (0, "recovered", [], "FAIL"), (3, "recovered", [one], "FAIL"),
+                                       (0, "recovered", [gap("10:01:00", "recorder_down"), one], "FAIL"),  # two gaps
+                                       (0, "recovered", [gap("10:01:00")], "FAIL"),  # long before the kill
+                                       (0, "recovered", [gap("10:05:30")], "FAIL")):  # after the script ended
             got = self.row("exec kill-both-seal.sh@2", ran(code), gaps, counts={"recorder_down": 1}, seal=seal)
             self.assertEqual(got, want, (code, seal, gaps))
 
