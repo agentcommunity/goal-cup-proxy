@@ -824,8 +824,8 @@ class Run:
         characters or more, as pad-run's forms). Only the count is written, to verify/<name>; check.py reads the default."""
         values, hits = [v.encode() for v in map(os.environ.get, NEVER_IN_BOX) if v and len(v) >= 8], 0
         for root, _, files in os.walk(top or self.dir):
-            for name in files:
-                with open(os.path.join(root, name), "rb") as f:
+            for fname in files:
+                with open(os.path.join(root, fname), "rb") as f:
                     data = f.read()
                 hits += sum(data.count(v) for v in values)
         os.makedirs(os.path.join(self.dir, "verify"), exist_ok=True)
