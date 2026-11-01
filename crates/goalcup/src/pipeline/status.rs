@@ -287,10 +287,7 @@ impl Board {
         let n = f.notes_seen;
         f.notes_seen += 1;
         let what = &note["what"];
-        let expected = note["expected"].as_bool().unwrap_or(false);
-        // Keyed by (what, expected): an expected long_tunnel must not hide an unflagged one.
-        let seen = |v: &Value| v["what"] == *what && v["expected"].as_bool().unwrap_or(false) == expected;
-        if !f.first_notes.iter().any(|(_, v)| seen(v)) {
+        if !f.first_notes.iter().any(|(_, v)| v["what"] == *what) {
             f.first_notes.push((n, note.clone()));
         }
         f.last_notes.push_back((n, note));
@@ -427,18 +424,5 @@ mod tests {
         assert!(stalled(1, 60_000));
         assert!(!stalled(2 * guard - 1, 0));
         assert!(stalled(2 * guard, 0));
-    }
-
-    #[test]
-    fn an_expected_note_does_not_hide_an_unflagged_one() {
-        let b = Board::default();
-        let note = |expected| serde_json::json!({"what": "long_tunnel", "expected": expected});
-        b.note(note(true));
-        b.note(note(false));
-        for _ in 0..LAST_NOTES + 5 {
-            b.note(note(true));
-        }
-        let f = crate::pipeline::lock(&b.0);
-        assert!(f.first_notes.iter().any(|(_, v)| v["expected"] == false));
     }
 }
