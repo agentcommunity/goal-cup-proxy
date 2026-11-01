@@ -379,13 +379,13 @@ between any two characters (`run_secret.rs:1-31`). It is copied whole. Its input
 the one rule for which values are used (PRD-00 "Smaller interface rulings"); PRD-11 only collects
 candidates.
 
-| Order | Source | Today | 1.0 | Count key in `mask_values` |
-|---:|---|---|---|---|
-| | Proxy credential | yes (`commands/start/phases.rs:385`) | gone with the credential | |
-| 1 | `GH_TOKEN=` in the project's key file (D71) | yes (`project.rs:330-346`) | yes, always first (default build) | `workspace` |
-| 2 | Credential-named variables of the environment goalcup builds for the harness (PRD-11 `LaunchPlan.env`; the whole participant environment if owner question 2, old 13, stays yes) | no | only with owner yes (question 3) | `env` |
-| 3 | Other credential-named values in the workspace key files (`.env`, `.env.*`, `project.rs:330-346` reads them already) | no | only with owner yes (question 3) | `workspace` |
-| 4 | The harness's own key files, PRD-11 `secret_files` (`auth.json`, `oauth_creds.json`, `secrets.yaml`, `settings.json` and so on) | no | only with owner yes (question 3) | `harness` |
+| Source no. | Order at the cut | Source | Today | 1.0 | Count key in `mask_values` |
+|---:|---:|---|---|---|---|
+| | | Proxy credential | yes (`commands/start/phases.rs:385`) | gone with the credential | |
+| 1 | 1 | `GH_TOKEN=` in the project's key file (D71) | yes (`project.rs:330-346`) | yes, always first (default build) | `workspace` |
+| 2 | 3 | Credential-named variables of the environment goalcup builds for the harness (PRD-11 `LaunchPlan.env`; the whole participant environment if owner question 2, old 13, stays yes) | no | only with owner yes (question 3) | `env` |
+| 3 | 2 | Other credential-named values in the workspace key files (`.env`, `.env.*`, `project.rs:330-346` reads them already) | no | only with owner yes (question 3) | `workspace` |
+| 4 | 4 | The harness's own key files, PRD-11 `secret_files` (`auth.json`, `oauth_creds.json`, `secrets.yaml`, `settings.json` and so on) | no | only with owner yes (question 3) | `harness` |
 
 **One gate for every source.** A value is used when all of these hold:
 
@@ -396,7 +396,13 @@ candidates.
 - it is 20 to 256 bytes of printable ASCII without a space (`run_secret.rs:39-42`); shorter values
   match ordinary text too often;
 - it is not a URL (holds `://`) and not a path (starts with `/`, `~` or `.`). A base URL under an
-  `auth_url` key would otherwise be starred in every request.
+  `auth_url` key would otherwise be starred in every request;
+- it does not look like a model id or a host (amendment of 2026-11-01): a value made only of
+  lowercase letters, digits and `-` `.` `_` `/` `:` `@`, with at least one of those separators, every
+  segment at most 15 bytes and one segment holding a letter `g` to `z`, is refused. A model id such as
+  a dated model name, or a host name, under a credential-named key would otherwise be starred in every
+  request and break PRD-09's usage reader. This is a stated over-skip: a real secret of that form is
+  not masked by value.
 
 Why the name gate also covers `secret_files` (new in revision 2): PRD-11 collects "every string value of
 16 bytes or more" from those files. Harness settings files hold model names, base URLs and paths
@@ -404,14 +410,20 @@ beside the keys (`settings.json`, `config.json`, `providers.json`). Masking thos
 star the model name in every request and break PRD-09's usage reader. PRD-11 therefore passes each
 candidate with its key path (ask, last section) and PRD-05 applies the gate.
 
-**Order, duplicates and the guard.** Values are taken in the order of the table, duplicates dropped
-(the same key in the environment and in `.env` counts once), up to 32 values. Past 32, the rest are
-left out and counted in `skipped`, as is a value that fails to compile (below); values the gate
-refused are not counted there (they are not secrets by the gate's rule). PRD-10's start screen says "N key values were not added to masking." when
-`skipped` is above 0. 32 is a stated guard, not a cap of
-records: each value adds 11 compiled forms and one candidate check per matching first byte, and the
-guard is start-up time and memory, measured by A5. The provider keys come first because the
-environment is source 2.
+**Order, duplicates and the guard.** Values are taken in the "Order at the cut" column of the table:
+`GH_TOKEN`, then the other workspace key-file values, then the environment values. Duplicates are
+dropped (the same key in the environment and in `.env` counts once), up to 32 values. The readers
+(`workspace_values`, `launch_values`) dedupe, order and cut at 32 before anything is sent, so at most
+32 values ever reach the first control line (amendment of 2026-11-01). The number left out past 32
+crosses as one count-only entry, so `skipped` stays right; a value that fails to compile (below) is
+counted there too. Values the gate refused are not counted there (they are not secrets by the gate's
+rule). Value bytes cross the control line as a compact JSON string, not a list of numbers. PRD-10's
+start screen says "N key values were not added to masking." when `skipped` is above 0. 32 is a
+stated guard, not a cap of records: each value adds 11 compiled forms and one candidate check per
+matching first byte, and the guard is start-up time and memory, measured by A5. The workspace
+key-file values come before the environment values because `cat .env` is the biggest real leak
+(Appendix G finding G.4): on a busy shell with many credential-named variables, those `.env` values
+are the ones that must not be cut.
 
 **Never written.** Values are read once, at `goalcup start` and `continue`, in memory only, and reach
 the recorder on PRD-02's first control line. They are never written, never hashed, never logged.
@@ -624,7 +636,9 @@ Automated tests that guard them (few, each named for its promise):
   appears in `Debug` or an error. Only with the owner's yes to question 3 (second slice): the gate
   refuses a value under 20 bytes, with a space, under a non-credential name (`auth.model` included), a
   URL or a path; the synthetic settings file gives its keys and not its model name or base URL; order
-  and dedupe across the four sources; past 32 the rest are `skipped`.
+  and dedupe across the four sources; past 32 the rest are `skipped`; a model id or host-like value
+  is refused and not counted; 200 gated values and a 64 KiB `.env` both start, with the serialized
+  values at most 16 KiB.
 - `mask_corpus.rs`: over the copied fixtures, new spans only where listed (today's known-catches rule,
   `redaction.rs:615-720`), and the Codex rollout with `encrypted_content` passes byte for byte except
   guarded spans right after a `-`, which are listed as known catches while the class lacks `-`.
@@ -640,7 +654,7 @@ Automated tests that guard them (few, each named for its promise):
 | No exact values by default | Shapeless keys in `.env` (`AWS_SECRET_ACCESS_KEY=`, `ASIA…`, unknown gateway keys) are recorded raw when the agent prints them | Ledger M1 as written; participant text says so. PRD-00 owner question 3 asks the owner; with a yes, section 9 is built |
 | Values read only at start (with the owner's yes to question 3) | Keys the agent adds later, short passwords, keys outside the workspace and the harness's key files are not masked by value | Participant text says so. `continue` reads the files again. A mid-run reader is not built (section 9) |
 | Exact values over-mask (with the yes) | A credential-named value that also appears as ordinary text is masked there too | The gate (name, 20 bytes, no URL, no path); accepted (it is the participant's own secret) |
-| Exact values over 32 (with the yes) | A participant with a large environment and big harness key files | Provider keys come first (environment is source 2); `skipped` in the start event says how many were left out |
+| Exact values over 32 (with the yes) | A participant with a large environment and big harness key files | `GH_TOKEN` and the workspace `.env` values come first, then the environment; the readers cut at 32 before the control line; `skipped` in the start event says how many were left out |
 | Token as URL user, no password | `https://<token>@host` with a shapeless token is recorded raw (PRD-17 K12) | Stated loss of dropping `email`; caught when the token has a shape or is an exact value |
 | Copy is large for one day | About 1,950 lines of recognizers moved under time pressure | Own lane from H+0; copied, not rewritten; the property tests come with it and stay green before any rule change and before PRD-13 deletes the old code |
 | Throughput unknown | Masking below the inflow turns into memory-guard gaps (point 1) | A5 measures in phase 1a; dispatch table, then PRD-02's pool, only if short |
@@ -1019,3 +1033,25 @@ A1 reports it as a stated loss instead of failing on it.
   (+1,409; this slice +215). Tests `tests/mask*.rs` and `tests/mask_corpus/*.rs` 2,396 against 2,000; with the
   corpus JSONL and fixture files the `tests/mask*` tree is 5,544. Reported, not enforced; PRD-13 and the
   integrator decide any trim. No locked ledger item is touched; the `gsk_`/`sgamp_` owner question stays open.
+
+### 2026-11-01, the cut before the control line (breaker 18:36Z, review 5 step 1a)
+
+- **Blocker (point 3).** Every gated `.env` value rode the first control line before the dedupe and
+  the 32 cut, which lived only in `RunSecrets::new` inside the recorder. Value bytes went as a JSON
+  list of numbers (about 3.4 bytes per value byte). Past about 120 values the line passed the 64 KiB
+  `watchdog::MAX_LINE` and the recorder could not start.
+- **Fix.** The readers (`workspace_values`, `launch_values`) dedupe and cut at 32 before anything is
+  sent. The number left out crosses as one count-only entry, so `skipped` and the start screen line
+  stay right. Value bytes cross the control line as a compact JSON string.
+- **Order at the cut.** `GH_TOKEN`, then the other workspace key-file values, then the environment
+  values (the conductor's ruling after review 5: the `cat .env` leak path is the one that must not be
+  cut on a busy shell). The source numbers in the section 9 table stay; its order column changes.
+  The old reason, provider keys first because the environment is source 2, is gone.
+- **Gate.** It also refuses a value that looks like a model id or a host: lowercase letters, digits
+  and `-` `.` `_` `/` `:` `@` only, at least one separator, every segment at most 15 bytes, and one
+  segment with a letter `g` to `z`. This is a stated over-skip, so PRD-09's usage reader is never
+  broken by a model id such as a dated model name under a credential-named key. Refused values are
+  not counted in `skipped`.
+- **Acceptance.** Two new tests in `mask_values.rs`: 200 gated values and a 64 KiB `.env` both start,
+  with the serialized values at most 16 KiB, so the first control line stays under `MAX_LINE`.
+- No locked ledger item is touched.
