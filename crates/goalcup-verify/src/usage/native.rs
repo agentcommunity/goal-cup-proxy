@@ -221,10 +221,14 @@ impl Native {
                     let (id, parent, depth) = gemini_thread(&path, f.sid.as_deref());
                     let one = |p: &String| {
                         let hit = |(i, s): &&(String, String)| {
-                            i == p || i.starts_with(p.as_str()) || (!s.is_empty() && p.starts_with(s.as_str()))
+                            i == p
+                                || i.starts_with(p.as_str())
+                                || (!s.is_empty() && p.starts_with(s.as_str()))
                         };
                         let mut it = mains.iter().filter(hit);
-                        it.next().filter(|_| it.next().is_none()).map(|m| m.0.clone())
+                        it.next()
+                            .filter(|_| it.next().is_none())
+                            .map(|m| m.0.clone())
                     };
                     (id, parent.map(|p| one(&p).unwrap_or(p)), depth, None)
                 }
@@ -481,7 +485,11 @@ fn gemini_thread(path: &str, sid: Option<&str>) -> (Option<String>, Option<Strin
     };
     match parts.get(i + 1).filter(|_| i + 2 < parts.len()) {
         Some(dir) => (stem(file), hints::id(dir), Some(1)),
-        None => (sid.and_then(hints::id).or_else(|| stem(file)), None, Some(0)),
+        None => (
+            sid.and_then(hints::id).or_else(|| stem(file)),
+            None,
+            Some(0),
+        ),
     }
 }
 
