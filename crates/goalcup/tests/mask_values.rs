@@ -380,10 +380,10 @@ fn past_thirty_two_values_the_rest_are_skipped_and_nothing_prints() -> Res {
     std::fs::write(dir.path().join(".env"), text)?;
     let values = launch_values(dir.path(), &env);
     assert_eq!(values.len(), 33);
-    assert_eq!(values[32].left_out_count(), 3);
+    let last = Masker::new(&[], values[32..].to_vec())?.value_counts();
+    assert_eq!((last.workspace, last.env, last.skipped), (0, 0, 3));
     let kept: Vec<&String> = file.iter().chain(env.values().take(12)).collect();
     for (value, want) in values[..32].iter().zip(&kept) {
-        assert_eq!(value.left_out_count(), 0);
         let one = Masker::new(&[], vec![value.clone()])?;
         assert!(
             one.mask_whole(want.as_bytes())
@@ -502,10 +502,81 @@ fn a_64_kib_env_file_starts() -> Res {
             (counts.workspace, counts.env, counts.skipped),
             (32, 0, skipped)
         );
-        // The first value holds a quote, which the masker keeps outside its span.
         for value in &distinct[1..32] {
             assert!(masks(&m, value));
         }
+        assert!(json_masked(&m, &distinct[0])?);
+    }
+    Ok(())
+}
+
+/// Whether `value` is starred where it sits inside a JSON string, and inside a JSON string
+/// nested in one, as a `cat .env` tool result travels in a request body. The form starred is
+/// the escaped one: `"` and `\` gain one backslash, then three.
+fn json_masked(m: &Masker, value: &str) -> Result<bool, serde_json::Error> {
+    let once = serde_json::to_string(value)?;
+    let inner = &once[1..once.len() - 1];
+    let twice = serde_json::to_string(inner)?;
+    let inner2 = &twice[1..twice.len() - 1];
+    let input = format!("{{\"p\":{once}}}");
+    let nested = format!("{{\"c\":{}}}", serde_json::to_string(&input)?);
+    let mut all = true;
+    for (text, form) in [(&input, inner), (&nested, inner2)] {
+        let Some(at) = text.find(form) else {
+            return Ok(false);
+        };
+        let whole = m.mask_whole(text.as_bytes());
+        all &= starred(&whole, at..at + form.len());
+        let cuts: Vec<usize> = (1..text.len() / 5).map(|i| i * 5).collect();
+        all &= stream_in(m, StreamKind::Native, text.as_bytes(), &cuts) == whole;
+    }
+    Ok(all)
+}
+
+/// Passwords holding `"` and `\` (source 3) are masked inside JSON strings, once and twice
+/// escaped, whole and streamed.
+#[test]
+fn a_value_with_quotes_and_backslashes_is_masked_in_json() -> Res {
+    let mut rng = Rng(0x0A57);
+    let quoted = ["Qz\"7\\w", &rng.chars(ALNUM, 30)].concat();
+    let edges = ["\\", &rng.chars(ALNUM, 24), "\"\"\\"].concat();
+    let m = Masker::new(
+        &[],
+        [&quoted, &edges]
+            .iter()
+            .map(|v| SecretValue::new(ValueSource::Workspace, v.as_bytes().to_vec()))
+            .collect(),
+    )?;
+    assert_eq!(m.value_counts().workspace, 2);
+    for value in [&quoted, &edges] {
+        assert!(json_masked(&m, value)?);
+    }
+    Ok(())
+}
+
+/// One byte that is not UTF-8 costs only its line, a leading BOM costs nothing, and a `#`
+/// comment after a tab is cut off.
+#[test]
+fn a_key_file_with_a_bad_byte_or_a_bom_still_gives_its_values() -> Res {
+    let mut rng = Rng(0xB0B0);
+    let (gh, service, tabbed) = (
+        rng.chars(ALNUM, 36),
+        rng.chars(ALNUM, 26),
+        rng.chars(ALNUM, 28),
+    );
+    let dir = tempfile::tempdir()?;
+    let mut local = b"# caf\xe9 note\nGH_TOKEN=".to_vec();
+    local.extend_from_slice(gh.as_bytes());
+    local.extend_from_slice(format!("\nA_KEY={tabbed}\t# note\n").as_bytes());
+    std::fs::write(dir.path().join(".env.local"), local)?;
+    std::fs::write(
+        dir.path().join(".env"),
+        format!("\u{feff}SERVICE_KEY={service}\n"),
+    )?;
+    let m = Masker::new(&[], workspace_values(dir.path()))?;
+    assert_eq!(m.value_counts().workspace, 3);
+    for value in [&gh, &service, &tabbed] {
+        assert!(masks(&m, value));
     }
     Ok(())
 }

@@ -8,7 +8,10 @@
 //! * `v` with every byte percent-encoded, in upper and in lower case hex;
 //! * `v` with every byte JSON `\u`-escaped, in lower and in upper case hex;
 //! * `v` inside a longer base64 text, standard and URL-safe alphabets, at each of the three
-//!   byte alignments: the characters that depend on no byte outside `v` (unpadded).
+//!   byte alignments: the characters that depend on no byte outside `v` (unpadded);
+//! * for a value holding `"` or `\`, `v` JSON-string escaped once (`\"`, `\\`) and twice
+//!   (`\\\"`, `\\\\`), as it travels inside a JSON string and inside a JSON string nested in
+//!   one (a `cat .env` tool result in a request body).
 //!
 //! A form is found with a line break between any two of its characters ([`Progress`],
 //! [`wrapped_regex`]): LF or CR LF, raw, or escaped with one or two backslashes before each of
@@ -53,7 +56,7 @@ pub const MAX_WRAPPED_FORM_BYTES: usize = wrapped_len(MAX_FORM_BYTES);
 const _: () = assert!(MAX_WRAPPED_FORM_BYTES <= super::stream::MAX_HELD_BYTES);
 
 /// The most values used (PRD-05 section 9): a stated guard on start-up time and memory, not a
-/// cap of records. Each value adds up to eleven compiled forms.
+/// cap of records. Each value adds up to thirteen compiled forms.
 pub const MAX_VALUES: usize = 32;
 
 /// Whether `value` is one the masker uses: 20 to 256 bytes of printable ASCII without a space.
@@ -83,10 +86,29 @@ pub fn encoded_forms(value: &[u8]) -> Vec<Vec<u8>> {
             forms.push(base64_inside(value, alignment, url_safe));
         }
     }
+    if value.iter().any(|b| matches!(b, b'"' | b'\\')) {
+        let once = json_escaped(value);
+        let twice = json_escaped(&once);
+        forms.push(once);
+        forms.push(twice);
+    }
     forms.retain(|form| form.len() >= 8);
     forms.sort();
     forms.dedup();
     forms
+}
+
+/// `value` as the inside of a JSON string: a backslash before every `"` and `\`. A usable value
+/// is printable ASCII, so nothing else is escaped.
+fn json_escaped(value: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(value.len() * 2);
+    for &b in value {
+        if matches!(b, b'"' | b'\\') {
+            out.push(b'\\');
+        }
+        out.push(b);
+    }
+    out
 }
 
 /// The base64 text `form` always produces inside a longer encoded stream at byte offset
@@ -364,7 +386,9 @@ fn finish(values: impl IntoIterator<Item = SecretValue>) -> Vec<SecretValue> {
 /// and sample files last, the rest by name. The first that holds a non-empty `GH_TOKEN=` line
 /// gives its last such line's value when it is usable ([`is_usable`]). Every line of every key
 /// file whose name and value pass [`gated`] gives one more value, an older `GH_TOKEN` included.
-/// Nothing is ever printed.
+/// A file is read whole, at any size, and as lossy UTF-8 without a leading BOM: a byte that is
+/// not UTF-8 costs only its own line (U+FFFD is not usable), never the file. Nothing is ever
+/// printed.
 fn key_file_values(project: &Path) -> (Option<SecretValue>, Vec<SecretValue>) {
     let Ok(entries) = std::fs::read_dir(project) else {
         return (None, Vec::new());
@@ -381,11 +405,15 @@ fn key_file_values(project: &Path) -> (Option<SecretValue>, Vec<SecretValue>) {
     });
     let texts: Vec<String> = names
         .iter()
-        .filter_map(|name| std::fs::read_to_string(project.join(name)).ok())
+        .filter_map(|name| std::fs::read(project.join(name)).ok())
+        .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
         .collect();
     let files: Vec<Vec<(&str, &str)>> = texts
         .iter()
-        .map(|text| text.lines().filter_map(pair_in).collect())
+        .map(|text| {
+            let text = text.strip_prefix('\u{feff}').unwrap_or(text);
+            text.lines().filter_map(pair_in).collect()
+        })
         .collect();
     let token = files
         .iter()
@@ -412,8 +440,8 @@ fn is_key_file(name: &str) -> bool {
 }
 
 /// The name and value of one `NAME=value` line of a key file: `export ` before it, one pair of
-/// quotes around the value and a ` #` comment after it are allowed (a usable value holds no
-/// space, so the cut never shortens one). A `#` comment line has no pair.
+/// quotes around the value and a `#` comment after any whitespace are allowed (a usable value
+/// holds no whitespace, so the cut never shortens one). A `#` comment line has no pair.
 fn pair_in(line: &str) -> Option<(&str, &str)> {
     let line = line.trim();
     let line = line.strip_prefix("export ").unwrap_or(line).trim_start();
@@ -423,10 +451,11 @@ fn pair_in(line: &str) -> Option<(&str, &str)> {
     if name.is_empty() || !name.bytes().all(is_name) {
         return None;
     }
-    let value = value
-        .split_once(" #")
-        .map_or(value, |(value, _)| value)
-        .trim();
+    let comment = value
+        .as_bytes()
+        .windows(2)
+        .position(|w| w[0].is_ascii_whitespace() && w[1] == b'#');
+    let value = comment.map_or(value, |at| &value[..at]).trim();
     let unquoted = ['"', '\'']
         .iter()
         .find_map(|q| value.strip_prefix(*q)?.strip_suffix(*q))

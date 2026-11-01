@@ -420,7 +420,7 @@ crosses as one count-only entry, so `skipped` stays right; a value that fails to
 counted there too. Values the gate refused are not counted there (they are not secrets by the gate's
 rule). Value bytes cross the control line as a compact JSON string, not a list of numbers. PRD-10's
 start screen says "N key values were not added to masking." when `skipped` is above 0. 32 is a
-stated guard, not a cap of records: each value adds 11 compiled forms and one candidate check per
+stated guard, not a cap of records: each value adds 11 compiled forms (13 with a `"` or `\`) and one candidate check per
 matching first byte, and the guard is start-up time and memory, measured by A5. The workspace
 key-file values come before the environment values because `cat .env` is the biggest real leak
 (Appendix G finding G.4): on a busy shell with many credential-named variables, those `.env` values
@@ -1079,3 +1079,23 @@ A1 reports it as a stated loss instead of failing on it.
   count-only entry stays inside `Vec<SecretValue>` because S17 owns the wire shape; carrying the
   count beside the list is a seam question. PRD-10's participant text should name the name-gate
   over-skip.
+
+### 2026-11-01, second review of the cut slice
+
+- **Blocker (point 4): a value with `"` or `\` inside a JSON string.** A password such as
+  `Qz"7\w...` under `PASSWORD` was counted as used, but a `cat .env` tool result carries it
+  JSON-escaped (`Qz\"7\\w...`), and no form matched that text, so it went out raw. Fix: such a
+  value gains two more forms, JSON-string escaped once and twice (the second for a JSON string
+  nested in a JSON string). Thirteen forms at most; values without `"` or `\` keep 11. The
+  escaped `"` follows an odd run of backslashes, so the quote cut never splits the form.
+- **Key files are read as lossy UTF-8.** One byte that is not UTF-8 (a Latin-1 comment) used to
+  drop every value of its file, `GH_TOKEN` included, uncounted. Now only that line is refused
+  (U+FFFD is not usable). A leading BOM is stripped, so the first line's name still passes.
+- **Inline comments** are cut at a `#` after any whitespace, a tab included.
+- **Stated: key files are read whole.** Every regular `.env*` file is read whole into memory at
+  `start`, whatever its size, before anything is recorded. Real key files are small; a huge
+  `.env.dump` costs start-up memory and time once, and its values pass the same cut at 32.
+- **Left open for the conductor (unchanged).** `start`, `continue` and `recover` still call
+  `workspace_values`; source 2 reaches the masker only when the PRD-12 C3 change swaps in
+  `launch_values`. The full first-line bound with 32 worst-case values (256 bytes of mixed `"`
+  and `\`) belongs in the watchdog line test, which this lane does not own.

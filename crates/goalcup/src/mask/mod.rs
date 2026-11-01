@@ -5,8 +5,9 @@
 //!   connector rules and the exact values, with the left guard, the quote cut and escape
 //!   alignment.
 //! - `stream`: the streaming hold, whose output equals the whole-record masker below the hold.
-//! - `values`: exact values in their 11 forms, and their readers: the project's key files and
-//!   the harness environment goalcup builds, behind the section 9 name gate.
+//! - `values`: exact values in their 11 forms (13 for a value with a `"` or `\`), and their
+//!   readers: the project's key files and the harness environment goalcup builds, behind the
+//!   section 9 name gate.
 //! - `meta`: header, scheme, URL and query rules for metadata.
 //!
 //! The masker is pure: no I/O but the key-file reader, no threads, no clock, no panics by
@@ -115,11 +116,6 @@ impl SecretValue {
 
     pub(crate) fn bytes(&self) -> &[u8] {
         &self.bytes
-    }
-
-    /// How many values this count-only entry stands for; 0 for a value.
-    pub fn left_out_count(&self) -> u32 {
-        self.left_out
     }
 }
 
