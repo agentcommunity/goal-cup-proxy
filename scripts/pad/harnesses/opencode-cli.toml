@@ -22,9 +22,11 @@ exit_keys = '/exit\r'
 keep_going = true
 
 [direct]
+model = "deepseek-flash"
 files = { ".config/opencode/opencode.json" = "direct/opencode-cli-config.json" }
 
 [gateway]
+model = "deepseek/deepseek-v4.1-flash"
 files = { ".config/opencode/opencode.json" = "gateway/opencode-cli-config.json" }
 key_route = "file"
 key_file = "{home}/.local/share/opencode/auth.json"

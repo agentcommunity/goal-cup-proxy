@@ -28,9 +28,11 @@ daemon = "cline hub dashboard --no-open --data-dir /tmp/pad-stale-hub"
 keep_going = true
 
 [direct]
+model = "deepseek-flash"
 files = { "data/settings/providers.json" = "direct/cline-cli-config.json" }
 
 [gateway]
+model = "deepseek/deepseek-v4.1-flash"
 files = { "data/settings/providers.json" = "gateway/cline-cli-config.json" }
 key_route = "env"
 key_env = "AI_GATEWAY_API_KEY"

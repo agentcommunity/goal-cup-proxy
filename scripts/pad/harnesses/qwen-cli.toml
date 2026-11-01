@@ -21,9 +21,11 @@ exit_keys = '/quit\r'
 keep_going = true
 
 [direct]
+model = "deepseek-flash"
 files = { "settings.json" = "direct/qwen-cli-settings.json" }
 
 [gateway]
+model = "deepseek/deepseek-v4.1-flash"
 files = { "settings.json" = "gateway/qwen-cli-settings.json" }
 key_route = "file"
 key_file = "{home}/.env"

@@ -32,9 +32,11 @@ daemon = "hermes gateway run"
 keep_going = true
 
 [direct]
+model = "deepseek-flash"
 files = { "config.yaml" = "direct/hermes-config.yaml" }
 
 [gateway]
+model = "deepseek/deepseek-v4.1-flash"
 files = { "config.yaml" = "gateway/hermes-config.yaml" }
 key_route = "file"
 key_file = "{home}/.env"
