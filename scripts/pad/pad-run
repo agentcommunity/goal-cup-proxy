@@ -601,9 +601,15 @@ class Run:
         self.need("goalcup", started=True)
         self.at(m)
         # the recorder rewrites status.json every second (pipeline/status.rs), so a 0.5 s poll never trails the write
-        # minute 0 (the smoke prompt): any request written so far counts, the task is still ahead; no wait for a second one
-        base = 0 if m == 0 else (self.work() or 0)
-        quiet = not wait(lambda: (self.work() or 0) > base, 60, 0.5)  # quiet if no work within 60 s
+        # minute 0 (the smoke prompt): no wait. The step comes after wait-calls and look, so a count above 0 proves nothing
+        # about now: it is quiet unless a request was written in the last 10 s (a quiet kill ends INCONCLUSIVE when no
+        # new request shows, never FAIL from rig timing)
+        if m == 0:
+            last = pc.when(pc.dig(self.status(), "s4_last"))
+            quiet = not (last and time.time() - last.timestamp() <= 10)
+        else:
+            base = self.work() or 0
+            quiet = not wait(lambda: (self.work() or 0) > base, 60, 0.5)  # quiet if no work within 60 s
         pid, since = self.kill_rec(m, quiet)
         if not pid:
             raise Step("FAIL", "no live goalcup recorder pid in status.json")

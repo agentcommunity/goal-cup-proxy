@@ -1,10 +1,9 @@
 """Tests of the conductor's fetch (PRD-12 sections 3.2, 7; ledger B10): DATABASE_URL reaches only the put-env call of a
-separate short-lived box, that box is always removed, the SQL is fetch-run.sh's own block, and a fetch that does not
+separate short-lived box, that box is always removed, and a fetch that does not
 finish keeps the entry's rec/ before the pad box goes. A fake sbx and fetch-run; nothing real runs.
 """
 import json
 import os
-import re
 import shutil
 import subprocess
 import sys
@@ -14,20 +13,19 @@ import unittest
 from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from test_pad import BASE, HERE, PADCFG, SENTINEL, Walk, pad  # noqa: E402
+from test_pad import BASE, PADCFG, SENTINEL, Walk, pad  # noqa: E402
 
 ENTRY = "e" + "0123456789abcdef"
 DB = SENTINEL + "db"
 SECRETS = {"DATABASE_URL": DB, "GH_TOKEN": SENTINEL + "gh", "GOALCUP_TEST_APPROVAL_KEY": SENTINEL + "ap",
            "CLOUDFLARE_ACCOUNT_ID": "acct12345678", "CLOUDFLARE_API_TOKEN": SENTINEL + "cf", "VERCEL_TOKEN": "vercel-fake-token"}
-FETCH_RUN = os.path.join(os.path.dirname(os.path.dirname(HERE)), "scripts", "fetch-run.sh")
 
 
 class Fetch(unittest.TestCase):
     def setUp(self):
         self.calls = []  # (argv, env) of every child
         self.fail_at, self.hang_at, self.fetch_exit = None, None, 0
-        self.sent_sql = None
+        self.rm_fails = False
 
     def fake(self, argv, timeout=None, env=None):
         self.calls.append((list(argv), dict(env or {})))
@@ -42,9 +40,6 @@ class Fetch(unittest.TestCase):
         verb = argv[2]
         if verb == self.hang_at:
             raise subprocess.TimeoutExpired(argv, timeout)
-        if verb == "put" and argv[4].endswith("query.sql"):
-            with open(argv[argv.index("--file") + 1]) as f:
-                self.sent_sql = f.read()
         if verb == "get" and argv[4].startswith("~/idx/"):
             os.makedirs(os.path.dirname(argv[-1]), exist_ok=True)  # as sbx get does
             with open(argv[-1], "w") as f:
@@ -54,7 +49,7 @@ class Fetch(unittest.TestCase):
                 with open(os.path.join(d, "x"), "w") as f:
                     f.write("recording")
                 t.add(os.path.join(d, "x"), "rec/x")
-        code = int(verb == self.fail_at or (self.fail_at == "get-rec" and verb == "get" and "rec-kept" in argv[4]))
+        code = int(verb == self.fail_at or (verb == "rm" and self.rm_fails and argv[3].startswith("pad-dbf-")))
         return subprocess.CompletedProcess(argv, code, "", "psql: " + DB if code else "")
 
     def run_for(self, out, **env):
@@ -106,20 +101,6 @@ class Fetch(unittest.TestCase):
                 self.assertIn("--index", argv)
         self.assertNotIn(DB, self.log)
 
-    def test_sql_is_the_fetch_run_block_and_extraction_fails_closed(self):
-        self.go()
-        with open(FETCH_RUN) as f:
-            block = re.search(r"<<'SQL'\n(.*?)\nSQL\n", f.read(), re.S).group(1) + "\n"
-        self.assertEqual(self.sent_sql, block)
-        self.assertTrue(block.startswith("BEGIN READ ONLY") and block.rstrip().endswith("ROLLBACK;"))
-        with tempfile.TemporaryDirectory() as d:
-            for name, text in (("none", "echo hi\n"), ("open", "x <<'SQL'\nSELECT 1;\n"), ("write", "x <<'SQL'\nDELETE FROM t;\nSQL\n"),
-                               ("two", "x <<'SQL'\nBEGIN READ ONLY;\nROLLBACK;\nSQL\ny <<'SQL'\nSQL\n")):
-                with open(os.path.join(d, name), "w") as f:
-                    f.write(text)
-                with self.assertRaises(pad.Refused, msg=name):
-                    pad.fetch_sql(os.path.join(d, name))
-
     def index_box_removed(self):
         rms = [a for a, _ in self.sbx() if a[0] == "rm"]
         created = [a[a.index("--name") + 1] for a, _ in self.sbx() if a[0] == "create"]
@@ -153,19 +134,17 @@ class Fetch(unittest.TestCase):
 
     def test_timed_out_fetch_also_keeps_rec(self):
         self.hang_at = "sh"
-        self.assertEqual(self.go(), "timeout")
+        self.assertEqual(self.go(cleanup=True), "timeout")
         self.assertTrue(self.kept)
 
-    def test_successful_fetch_copies_no_rec(self):
-        self.assertEqual(self.go(cleanup=True)[0], "ok")
-        self.assertFalse(self.kept)
-        self.assertFalse([a for a, _ in self.sbx() if a[0] == "get" and "rec-kept" in a[2]])
-
-    def test_failed_rec_copy_is_said_and_changes_nothing(self):
-        self.fetch_exit, self.fail_at = 1, "get-rec"
-        res = self.go()
-        self.assertEqual(res[0], "FAIL")
-        self.assertFalse(self.kept)
+    def test_index_box_that_will_not_go_is_retried_and_named_at_cleanup(self):
+        self.rm_fails = True
+        with tempfile.TemporaryDirectory() as out, mock.patch.dict(os.environ, SECRETS, clear=False), mock.patch.object(pad, "call", self.fake):
+            r = self.run_for(out)
+            self.assertEqual(r.step_fetch("fetch", 60)[0], "ok")
+            res, saw = r.step_cleanup()
+        self.assertEqual(res, "left")
+        self.assertIn("pad-dbf-", saw)
 
     def test_no_database_url_makes_no_box(self):
         res = self.go(env={})

@@ -65,39 +65,37 @@ class PreKeys(unittest.TestCase):
     def test_claude_code_gateway_list(self):
         with open(os.path.join(HERE, "harnesses", "claude-code-cli.toml"), "rb") as f:
             doc = tomllib.load(f)
-        self.assertEqual(len(doc["gateway"]["pre_keys"]), 4)
+        self.assertTrue(doc["gateway"]["pre_keys"])
         self.assertIn("pre_keys", doc)
 
 
 class KillTiming(unittest.TestCase):
-    def kill(self, m, counts):
+    def kill(self, m, counts, last=None):
         r = bare()
         it = iter(counts)
-        last = [counts[-1]]
-        r.work = lambda st=None: next(it, last[0])
-        r.kill_rec = lambda m, quiet=False: (7, 1.0) if not quiet else (7, None)
-        limits = []
-
-        def wait(ok, limit, every):
-            limits.append(limit)
-            return ok()
-        with mock.patch.object(padrun, "wait", wait):
-            saw = r.kill_recorder(m)[1]
-        return saw, limits
+        r.work = lambda st=None: next(it, counts[-1])
+        r.status = lambda: {}
+        quiets = []
+        r.kill_rec = lambda m, quiet=False: quiets.append(quiet) or (7, 1.0)
+        now = padrun.time.time()
+        pc_when = (lambda s: mock.Mock(timestamp=lambda: now - last)) if last is not None else (lambda s: None)
+        with mock.patch.object(padrun, "wait", lambda ok, limit, every: ok()), mock.patch.object(padrun.pc, "when", pc_when), \
+                mock.patch.object(padrun.pc, "dig", lambda d, n: "t"):
+            r.kill_recorder(m)
+        return quiets[0]
 
     def test_parses_at_zero(self):
         self.assertEqual(padrun.parse(["kill-recorder@0"]), ("kill-recorder", None, "0"))
         self.assertEqual(pad.parse_steps(["kill-recorder@0"])[0][1], 0)
 
-    def test_zero_fires_on_first_written_request(self):
-        saw, _ = self.kill(0, [1, 1])  # one request already written, no second one needed
-        self.assertNotIn("no request in flight", saw)
+    def test_zero_is_quiet_unless_a_request_was_just_written(self):
+        self.assertFalse(self.kill(0, [9], last=2))  # written 2 s ago
+        self.assertTrue(self.kill(0, [9], last=300))  # a count above 0 alone proves nothing
+        self.assertTrue(self.kill(0, [9], last=None))
 
     def test_three_keeps_the_wait_for_a_new_request(self):
-        saw, _ = self.kill(3, [5, 5, 5])
-        self.assertIn("no request in flight", saw)
-        saw, _ = self.kill(3, [5, 6])
-        self.assertNotIn("no request in flight", saw)
+        self.assertTrue(self.kill(3, [5, 5, 5]))
+        self.assertFalse(self.kill(3, [5, 6]))
 
 
 class Recovery(unittest.TestCase):

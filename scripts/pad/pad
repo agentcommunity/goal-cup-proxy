@@ -28,6 +28,7 @@ SBX = os.path.join(HERE, "sbx.mjs")
 # The only servers (ledger B4; scripts/matrix.sh:253-258): the one staging Worker and loopback, fixed
 # here. There is no server address setting, and production is never one.
 SERVERS = {"staging": "https://goalcup-ingest-staging.b-9a5.workers.dev", "local": "http://127.0.0.1:8787"}
+NOT = "server copy not fetched: "
 STAGING_BUCKET = "goalcup-traces-staging"  # fetch-run's bucket for staging; no setting, and never production's
 # Organizer secrets that never enter a box (PRD-12 section 7): they are not even in the environment of the
 # node process that talks to the sandbox, and the conductor's scan of its run folder looks for each value.
@@ -105,17 +106,19 @@ def extract(tar, dest):
         t.extractall(dest, **({"filter": "data"} if hasattr(tarfile, "data_filter") else {}))
 
 
-def fetch_sql(path):
-    """The read-only query in fetch-run.sh, between its <<'SQL' line and the closing SQL line: one source, never copied.
-    Refused when a marker is missing or it is not BEGIN READ ONLY ... ROLLBACK."""
+def fetch_block(path, tag):
+    """A heredoc body of fetch-run.sh, between its <<'TAG' line and the closing TAG line: one source, never copied.
+    Refused when a marker is missing; the SQL block must also be BEGIN READ ONLY ... ROLLBACK."""
     with open(path) as f:
         lines = f.read().splitlines()
-    starts = [i for i, ln in enumerate(lines) if ln.rstrip().endswith("<<'SQL'")]
-    ends = [i for i, ln in enumerate(lines) if ln == "SQL"]
+    starts = [i for i, ln in enumerate(lines) if ln.rstrip().endswith("<<'%s'" % tag)]
+    ends = [i for i, ln in enumerate(lines) if ln == tag]
+    if tag == "PY":  # the file has a second PY block, the converter is the first
+        starts, ends = starts[:1], ends[:1]
     if len(starts) != 1 or len(ends) != 1 or ends[0] <= starts[0] + 1:
-        raise Refused("fetch-run.sh has no single SQL block")
+        raise Refused("fetch-run.sh has no single %s block" % tag)
     body = lines[starts[0] + 1:ends[0]]
-    if not body[0].strip().upper().startswith("BEGIN READ ONLY") or body[-1].strip().upper() != "ROLLBACK;":
+    if tag == "SQL" and (not body[0].strip().upper().startswith("BEGIN READ ONLY") or body[-1].strip().upper() != "ROLLBACK;"):
         raise Refused("the SQL block in fetch-run.sh is not read-only")
     return "\n".join(body) + "\n"
 
@@ -127,26 +130,16 @@ command -v psql >/dev/null
 """
 INDEX_QUERY = """set -u
 cd ~
-python3 -I - <<'PY'
-import os, urllib.parse
-u = urllib.parse.urlsplit(open(os.path.expanduser("~/.dburl")).read().strip())
-p = {}
-for k, v in (("host", u.hostname), ("port", u.port), ("user", u.username), ("password", u.password), ("dbname", u.path.lstrip("/"))):
-    if v not in (None, ""):
-        p[k] = urllib.parse.unquote(str(v))
-for k, v in urllib.parse.parse_qsl(u.query):
-    if k in ("sslmode", "sslrootcert", "connect_timeout"):
-        p[k] = v
-p.setdefault("sslmode", "require")
-fd = os.open(os.path.expanduser("~/pg_service.conf"), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-os.write(fd, ("[fetchrun]\\n" + "".join("%%s=%%s\\n" %% kv for kv in p.items())).encode())
-os.close(fd)
-PY
-mkdir -p ~/idx
-PGSERVICEFILE=~/pg_service.conf PGSERVICE=fetchrun psql -X -q -At -v ON_ERROR_STOP=1 -v id=%s -v staging=true -f ~/query.sql > ~/idx/%s.json 2> ~/idx/err
+FETCH_RUN_URL=$(cat ~/.dburl) python3 -I - ~/pg_service.conf < ~/conv.py
 rc=$?
+rm -f ~/.dburl
+if [ $rc -eq 0 ]; then
+  mkdir -p ~/idx
+  PGSERVICEFILE=~/pg_service.conf PGSERVICE=fetchrun psql -X -q -At -v ON_ERROR_STOP=1 -v id=%s -v staging=true -f ~/query.sql > ~/idx/%s.json 2> ~/idx/err
+  rc=$?
+fi
 rm -f ~/.dburl ~/pg_service.conf
-[ $rc -eq 0 ] || tail -n 1 ~/idx/err >&2
+[ $rc -eq 0 ] || { [ ! -f ~/idx/err ] || tail -n 1 ~/idx/err >&2; }
 exit $rc
 """
 REC_TAR = """d=$(ls -d ~/run/gc/home/runs/*/%s | head -n 1)
@@ -443,6 +436,7 @@ class Run:
         # hit its limit, the box may still appear after cleanup. meta: meta-box.json; row: check.py's result.
         self.tried = self.create_late = self.no_build = self.setup_failed = False
         self.name, self.lines, self.meta, self.row = "pad-" + secrets.token_hex(3), [], {}, None
+        self.stray = []  # index boxes whose rm did not go
         self.fetched, self.kept = set(), {}  # entries whose server copy is here; entries rec/ was tried for: True, or why not
         self.tmp = tempfile.mkdtemp(prefix="pad-")  # box scripts; never in the run folder
         self.box_dir = None  # pad-run's run folder: here, or staged and pushed to the box's ~/run
@@ -666,26 +660,20 @@ class Run:
     def step_fetch(self, step, limit):
         """Section 3, 0:27: the index from a separate short-lived box that alone holds DATABASE_URL (the conductor cannot
         reach the database), fetch-run here on that index (R2 over HTTPS, no DATABASE_URL), then the copy in to the pad
-        box's ~/run/fetched/<entry>/, where pad-run verify reads it. A fetch that does not finish keeps the entry's rec/."""
+        box's ~/run/fetched/<entry>/, where pad-run verify reads it. A fetch that does not finish
+        leaves the entry's rec/ to step_cleanup (keep_rec), which runs after a timeout too."""
         if self.s["server"] != "staging":
             return "skip", NEEDS_LATER
-        done = False
-        try:
-            result = self.fetch_entries(limit)
-            done = result[0] == "ok"
-            return result
-        finally:
-            if not done:  # a timeout too: the pad box goes at cleanup, and a refetch plus check needs the recording
-                self.keep_rec()
+        return self.fetch_entries(limit)  # a fetch that does not finish: cleanup keeps rec/ before the pad box goes
 
     def fetch_entries(self, limit):
         new = self.meta.get("new_entry")
         entries = [str(self.meta.get("entry"))] + ([new] if new else [])  # kill-both: both
         for entry in entries:
             if not re.fullmatch(r"e[0-9a-f]{16}", entry):
-                return "FAIL", "server copy not fetched: no entry id"
+                return "FAIL", NOT + "no entry id"
         if not os.environ.get("DATABASE_URL"):
-            return "FAIL", "server copy not fetched: DATABASE_URL is not set"
+            return "FAIL", NOT + "DATABASE_URL is not set"
         for entry in entries:
             self.log("fetch-run " + entry)
             got = os.path.join(self.dir, "fetched", entry)
@@ -710,50 +698,55 @@ class Run:
         return "ok", "fetched " + " and ".join(entries)
 
     def fetch_index(self, entry, index, limit):
-        """fetch-run.sh's read-only query run in its own box (pad-dbf-*), whose only secret is ~/.dburl (0600, deleted by
-        the script); the index (no secret in it) is copied to `index`. The box is removed whatever happens.
-        None when it worked, else the FAIL line."""
+        """fetch-run.sh's DATABASE_URL converter and read-only query run in their own box (pad-dbf-*), whose only secret is
+        ~/.dburl (0600, deleted by the script); the index (no secret in it) is copied to `index`. The box is removed
+        whatever happens; one that will not go is named in the cleanup line. None when it worked, else the FAIL line."""
         name, deadline = "pad-dbf-" + self.name[len("pad-"):], time.time() + limit
-        left = lambda: max(1, deadline - time.time())  # noqa: E731
+
+        def ix(verb, *args, **kw):  # one sbx call on the index box, inside the step's limit
+            return self.sbx(verb, *args, limit=max(1, deadline - time.time()), name=name, **kw)
+        fr = os.path.join(REPO, "scripts", "fetch-run.sh")
         try:
-            sql = fetch_sql(os.path.join(REPO, "scripts", "fetch-run.sh"))
+            texts = {"query.sql": fetch_block(fr, "SQL"), "conv.py": fetch_block(fr, "PY"), "install.sh": INDEX_INSTALL,
+                     "idx.sh": INDEX_QUERY % (entry, entry)}
         except Refused as e:
-            return "server copy not fetched: " + str(e)
+            return NOT + str(e)
         files = {}
-        for fname, text in (("query.sql", sql), ("install.sh", INDEX_INSTALL), ("idx.sh", INDEX_QUERY % (entry, entry))):
+        for fname, text in texts.items():
             files[fname] = os.path.join(self.tmp, "dbf-" + fname)
             with open(files[fname], "w") as f:
                 f.write(text)
         try:
-            r = self.sbx("create", "--name", name, "--minutes", str(math.ceil(limit / 60) + 1), "--vcpus", "1",
-                         limit=left(), name=name)
+            r = ix("create", "--name", name, "--minutes", str(math.ceil(limit / 60) + 1), "--vcpus", "1")
             if r.returncode:
-                return said("server copy not fetched: index box not created", r)
-            for fname, mode in (("query.sql", "644"), ("install.sh", "755"), ("idx.sh", "755")):
-                r = self.sbx("put", name, "~/" + fname, "--file", files[fname], "--mode", mode, limit=left(), name=name)
+                return said(NOT + "index box not created", r)
+            for fname, mode in (("query.sql", "644"), ("conv.py", "644"), ("install.sh", "755"), ("idx.sh", "755")):
+                r = ix("put", name, "~/" + fname, "--file", files[fname], "--mode", mode)
                 if r.returncode:
-                    return said("server copy not fetched: index box not set up", r)
-            r = self.sbx("exec", name, "--script", files["install.sh"], "--sudo", limit=left(), name=name)
+                    return said(NOT + "index box not set up", r)
+            r = ix("exec", name, "--script", files["install.sh"], "--sudo")
             if r.returncode:
-                return said("server copy not fetched: no psql in the index box", r)
-            r = self.sbx("put-env", name, "~/.dburl", "--env", "DATABASE_URL", limit=left(), name=name,
-                         env=env_without(set(NEVER_IN_BOX) - {"DATABASE_URL"}))
+                return said(NOT + "no psql in the index box", r)
+            r = ix("put-env", name, "~/.dburl", "--env", "DATABASE_URL", env=env_without(set(NEVER_IN_BOX) - {"DATABASE_URL"}))
             if r.returncode:
-                return said("server copy not fetched: index box has no database address", r)
-            r = self.sbx("exec", name, "--script", files["idx.sh"], limit=left(), name=name)
+                return said(NOT + "index box has no database address", r)
+            r = ix("exec", name, "--script", files["idx.sh"])
             if r.returncode:
-                return said("server copy not fetched: index query failed", r)
-            r = self.sbx("get", name, "~/idx/%s.json" % entry, index, limit=left(), name=name)
+                return said(NOT + "index query failed", r)
+            r = ix("get", name, "~/idx/%s.json" % entry, index)
             if r.returncode:
-                return said("server copy not fetched: index not copied out", r)
+                return said(NOT + "index not copied out", r)
             if not isinstance(read_json(index), list):
-                return "server copy not fetched: the index is not a list"
+                return NOT + "the index is not a list"
             return None
-        finally:  # always, a timeout included; a failed rm is left to the box's own timeout
+        finally:  # always, a timeout included
             try:
-                self.sbx("rm", name, limit=120, name=name)
+                gone = not self.sbx("rm", name, limit=120, name=name).returncode
             except Exception:
+                gone = False
+            if not gone:
                 self.log("sbx rm failed " + name)
+                self.stray.append(name)  # the cleanup line retries it and says so
 
     def keep_rec(self):
         """P0b: before the pad box goes, the entry's rec/ (the recorder's masked recording, less the run certificate key) is
@@ -766,7 +759,6 @@ class Run:
                 continue
             if self.s["where"] != "here" and not self.tried:
                 continue
-            self.kept[entry] = None
             dest = os.path.join(self.dir, "rec-kept", entry)
             try:
                 if self.s["where"] == "here":
@@ -837,23 +829,30 @@ class Run:
 
     def step_cleanup(self):
         """Section 3.2: pad-run wipe, box removed by name, then a list to confirm. Never changes a result."""
-        saw, third = [], runner_limits(self.s)["wipe"]
+        saw, third, loose = [], runner_limits(self.s)["wipe"], []
         try:
-            before = set(self.kept)
-            self.keep_rec()  # a fetch that never ran (interrupted) still keeps the recording
-            if set(self.kept) - before:
-                self.scan_out()  # the kept copy is in the run folder: C3's count covers it
+            self.keep_rec()  # a fetch that failed, timed out or never ran still keeps the recording
+            self.scan_out()  # the kept copy is in the run folder: C3's count covers it
         except Exception as e:
             saw.append("rec copy %s" % type(e).__name__)
-        saw += ["rec kept for %s" % k if v is True else "rec not kept for %s: %s" % (k, v) for k, v in self.kept.items() if v is not None]
+        saw += ["rec kept for %s" % k if v is True else "rec not kept for %s: %s" % (k, v) for k, v in self.kept.items()]
         try:
             result, wiped, _ = self.box("wipe", third) if self.tried or self.s["where"] == "here" and self.box_dir else ("ok", "")
             saw += [wiped if result == "ok" else "wipe %s: %s" % (result, wiped)] if wiped else []
         except Exception as e:
             saw.append("wipe %s" % type(e).__name__)
+        for n in self.stray:  # an index box whose rm in the fetch did not go: once more, and said either way
+            try:
+                if self.sbx("rm", n, limit=third, name=n).returncode:
+                    raise Refused("rm failed")
+                saw.append("index box %s removed" % n)
+            except Exception:
+                loose.append(n)
+                saw.append("left: index box %s (holds the database address until its timeout)" % n)
+        ok = "left" if loose else "ok"
         if not self.tried:
             shutil.rmtree(self.box_dir or self.tmp, ignore_errors=True)
-            return "ok", ", ".join(saw + ["no box"])
+            return ok, ", ".join(saw + ["no box"])
         try:
             r = self.sbx("rm", self.name, limit=third)
             saw.append("rm exit %d" % r.returncode if r.returncode else "box removed")
@@ -865,7 +864,7 @@ class Run:
                     if b.get("name") == self.name] if r.returncode == 0 else ["unknown"]
             if all(st in ("stopped", "deleted", "failed") for st in live):
                 late = ["create timed out, box may appear until its timeout"] if self.create_late else []
-                return "ok", ", ".join(saw + ["list shows no live box"] + late)
+                return ok, ", ".join(saw + ["list shows no live box"] + late)
             saw.append(said("left: box %s %s" % (self.name, ",".join(map(str, live))), r))
         except Exception as e:
             saw.append("list %s, box %s may be left" % (type(e).__name__, self.name))
