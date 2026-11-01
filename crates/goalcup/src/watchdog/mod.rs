@@ -10,6 +10,7 @@ mod recover;
 pub mod shield;
 pub mod spawn;
 
+pub(crate) use recover::run as run_recovered;
 pub use recover::{NotRecovered, Recovered, recover, recover_with};
 
 use crate::cli::log::{Fact, line};
@@ -392,9 +393,7 @@ fn watch(
     let mut boots = 1u64;
     let mut exit: Option<Option<ExitStatus>> = harness_pid.is_none().then_some(None);
     let harness_start = facts.harness.as_ref().map_or(0, |h| h.start_id);
-    // Converted once to boot time; only a server word moves it (PRD-17 S7).
-    let wall_ms = clock::wall_ns() / 1_000_000;
-    let mut deadline = (facts.deadline).map(|d| due(Mono::now(), d.saturating_sub(wall_ms)));
+    let mut deadline = deadline_of(facts.deadline);
     let spared = Arc::clone(recorder_pid);
     let spare = move |pid: u32| pid == *lock(&spared);
     let mut ending: Option<JoinHandle<()>> = None;
@@ -426,21 +425,26 @@ fn watch(
             Some(ToWatchdog::Ready) | None => {}
             Some(ToWatchdog::Sealed) => sealed = true,
             Some(ToWatchdog::Server(word)) => {
-                if let Some(s) = word.seconds_left {
-                    deadline = Some(due(word.asked_at, s.saturating_mul(1_000)));
+                if let Some(d) = moved(&word) {
+                    deadline = Some(d);
+                    // A recorder started after this gets the moved deadline on its first line.
+                    let left_ms = d.0.saturating_sub(Mono::now().0) / 1_000_000;
+                    facts.deadline = Some(clock::wall_ns() / 1_000_000 + left_ms);
                 }
-                if word.stop && word.reason.as_deref() == Some("deadline") {
-                    deadline = Some(Mono(0));
-                } else if word.stop && seal.is_none() {
+                match stop_of(&word) {
+                    Some(SealReason::Deadline) => deadline = Some(Mono(0)),
                     // Any other stop: seal at once and leave the harness alone (ledger section 7).
-                    let l = ToRecorder::Seal {
-                        reason: SealReason::ServerStop,
-                        outlived: None,
-                    };
-                    boot.send(&l);
-                    seal = Some(l);
-                    // A seal asked is tried at once: no space from before holds it.
-                    restarts.hold = None;
+                    Some(reason) if seal.is_none() => {
+                        let l = ToRecorder::Seal {
+                            reason,
+                            outlived: None,
+                        };
+                        boot.send(&l);
+                        seal = Some(l);
+                        // A seal asked is tried at once: no space from before holds it.
+                        restarts.hold = None;
+                    }
+                    _ => {}
                 }
             }
         }
@@ -452,18 +456,26 @@ fn watch(
                 .map(|_| SealReason::Deadline)
         };
         if let Some(reason) = end
-            && ending.is_none()
-            && asked.is_none_or(|_| own.is_some())
             && let (Some(pid), Some(h)) = (harness_pid, &facts.harness)
         {
-            asked = Some(reason);
-            let (target, spare) = ((pid, h.start_id), spare.clone());
-            ending = own.map(|_| thread::spawn(move || spawn::end_tree(target, &spare)));
+            match own {
+                // Its own harness: the tree is ended once.
+                Some(_) if ending.is_none() => {
+                    asked = Some(reason);
+                    let (target, spare) = ((pid, h.start_id), spare.clone());
+                    ending = Some(thread::spawn(move || spawn::end_tree(target, &spare)));
+                }
+                // Recover: the first reason only, and the harness is left running.
+                None if asked.is_none() => asked = Some(reason),
+                _ => {}
+            }
         }
-        let gone = match (own, harness_pid) {
-            (Some(_), _) => harness_pid.and_then(spawn::look),
-            (None, Some(p)) if !cli::alive(p, harness_start) => Some(None),
-            (None, _) => None,
+        let gone = match own {
+            Some(_) => harness_pid.and_then(spawn::look),
+            // Recover: watched by pid and start id; its exit status is not ours to read.
+            None => (harness_pid)
+                .filter(|p| !cli::alive(*p, harness_start))
+                .map(|_| None),
         };
         if let Some(status) = gone {
             harness_pid = None;
@@ -478,6 +490,7 @@ fn watch(
             };
             boot.send(&l);
             exit_line = Some(l);
+            // Recover runs no `after` helpers.
             if let Some((plan, _)) = own {
                 let (program, entries, env, dir) = (
                     plan.program.clone(),
@@ -490,12 +503,19 @@ fn watch(
                 }));
             }
         }
-        let helpers_done = exit_line.is_some()
-            && after.as_ref().is_none_or(JoinHandle::is_finished)
-            && ending.as_ref().is_none_or(JoinHandle::is_finished);
-        if seal.is_none() && (helpers_done || own.is_none() && asked.is_some()) {
+        let seal_due = match own {
+            Some(_) => {
+                exit_line.is_some()
+                    && after.as_ref().is_none_or(JoinHandle::is_finished)
+                    && ending.as_ref().is_none_or(JoinHandle::is_finished)
+            }
+            // Recover: no tree to end and no helper to wait for, so a reason seals at once.
+            None => exit_line.is_some() || asked.is_some(),
+        };
+        if seal.is_none() && seal_due {
             let l = ToRecorder::Seal {
                 reason: asked.unwrap_or(SealReason::HarnessExit),
+                // Recover: the harness is not its child, so no `outlived` list.
                 outlived: own.and_then(|_| spawn::outlived(harness_start, &spare)),
             };
             boot.send(&l);
@@ -820,6 +840,27 @@ fn due(from: Mono, ms_left: u64) -> Mono {
     Mono(from.0.saturating_add(ms_left.saturating_mul(1_000_000)))
 }
 
+/// The start facts' wall deadline (unix ms) on boot time, converted once (PRD-17 S7): for the
+/// watchdog and the recorder alike.
+pub(crate) fn deadline_of(wall: Option<u64>) -> Option<Mono> {
+    let now_ms = clock::wall_ns() / 1_000_000;
+    wall.map(|d| due(Mono::now(), d.saturating_sub(now_ms)))
+}
+
+/// The deadline a server word sets: `seconds_left` from when it was asked, on boot time.
+pub(crate) fn moved(w: &ServerWord) -> Option<Mono> {
+    (w.seconds_left).map(|s| due(w.asked_at, s.saturating_mul(1_000)))
+}
+
+/// What a server word asks (section 8 step 10): nothing while it says go on, `deadline` for a
+/// stop with that reason (the harness is ended), else `server_stop` (the harness is left).
+pub(crate) fn stop_of(w: &ServerWord) -> Option<SealReason> {
+    w.stop.then(|| match w.reason.as_deref() {
+        Some("deadline") => SealReason::Deadline,
+        _ => SealReason::ServerStop,
+    })
+}
+
 /// Reads the recorder's lines until the pair closes, then sends `None`. A line that does not
 /// parse (a variant this build does not know) is skipped.
 fn read_lines(stream: UnixStream, tx: &mpsc::Sender<Option<ToWatchdog>>) {
@@ -934,15 +975,7 @@ fn not_dumpable() {
 /// SIGUSR1 sets [`SEAL_ASKED`]. Caught, never ignored, so the harness gets the default back at
 /// `exec`.
 fn catch_seal() {
-    // SAFETY: a zeroed local struct, filled before `sigaction` reads it; the handler stores into
-    // a static atomic and nothing else.
-    unsafe {
-        let mut action: libc::sigaction = std::mem::zeroed();
-        action.sa_sigaction = ask_seal as *const () as libc::sighandler_t;
-        libc::sigemptyset(&mut action.sa_mask);
-        action.sa_flags = libc::SA_RESTART;
-        libc::sigaction(libc::SIGUSR1, &action, std::ptr::null_mut());
-    }
+    crate::pipeline::secure::catch(libc::SIGUSR1, ask_seal);
 }
 
 fn exit_of(status: ExitStatus) -> Exit {
@@ -980,6 +1013,9 @@ pub enum ToRecorder {
     },
     /// Null recorder only: exit 0 without sealing.
     Restart,
+    /// From `goalcup recover` only, as the first line: this process is the new watchdog
+    /// (section 8.1), fd 3 its listener and fd 4 where it reports `ready` with one byte.
+    Recover(Box<StartFacts>),
 }
 
 /// A line from the recorder to the watchdog.

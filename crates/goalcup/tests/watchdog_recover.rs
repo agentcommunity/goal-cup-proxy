@@ -1,52 +1,38 @@
-//! PRD-02 section 8.1 (ledger R3b, point 3): `watchdog::recover_with` after the watchdog and then
-//! the recorder died while the harness runs. The state is built by hand: a minted CA and its key
+//! PRD-02 section 8.1 (ledger R3b, points 3 and 4): `watchdog::recover_with` after the watchdog
+//! and then the recorder died while the harness runs. The state is built by hand: a minted CA and its key
 //! file, a recorder started on a listener with the start line, `ready`, a shell harness sent as
 //! `launch`, one TLS request served, then the recorder SIGKILLed and everything closed. Linux only.
 #![cfg(target_os = "linux")]
 
 mod common;
+mod watchdog_share;
 
 use common::pki::HTTP11;
 use common::recorder::records;
 use common::upstream::{Script, Upstream};
 use goalcup::cli::{self, proc_start_id, read_json, status_json, watchdog_pid};
 use goalcup::connector::{HostList, NativeSources, builtin};
-use goalcup::proxy::ca::{RUN_CA_FILE, RunCa, certificates};
+use goalcup::proxy::ca::RunCa;
 use goalcup::watchdog::{self, HarnessFacts, NotRecovered, StartFacts, ToRecorder, spawn};
 use goalcup_format::{GapReason, Record};
-use rustls::pki_types::{CertificateDer, ServerName};
 use serde_json::{Value, json, to_value};
-use std::io::{BufReader, Read, Write};
-use std::net::{TcpListener, TcpStream};
+use std::io::BufReader;
+use std::net::TcpListener;
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command};
-use std::sync::Arc;
-use std::time::{Duration, Instant};
-
-/// Waits until `f` gives `Some`, at most 60 s.
-fn until<T>(what: &str, mut f: impl FnMut() -> Option<T>) -> T {
-    let start = Instant::now();
-    loop {
-        if let Some(v) = f() {
-            return v;
-        }
-        assert!(
-            start.elapsed() < Duration::from_secs(60),
-            "timed out: {what}"
-        );
-        std::thread::sleep(Duration::from_millis(50));
-    }
-}
+use watchdog_share::{connect_tls, exchange, loopback_only, until};
 
 struct Dead {
-    _tmp: tempfile::TempDir,
+    tmp: tempfile::TempDir,
     _up: Upstream,
     entry_dir: PathBuf,
     port: u16,
     harness: Child,
     facts: StartFacts,
+    /// The run CA key's PEM, to look for where it must never be.
+    key: String,
     /// The hand-started recorder, still running when [`setup`] was asked to keep it, and its
     /// control end and listener.
     recorder: Child,
@@ -76,7 +62,8 @@ fn setup(keep: bool) -> Dead {
     let ca = RunCa::mint(&hosts.ca_subtrees()).unwrap();
     ca.write_files(&entry_dir).unwrap();
     let key = rec.join(watchdog::KEY_FILE);
-    std::fs::write(&key, ca.export().key).unwrap();
+    let key_pem = ca.export().key;
+    std::fs::write(&key, &key_pem).unwrap();
     std::fs::set_permissions(&key, std::fs::Permissions::from_mode(0o600)).unwrap();
 
     let marker = tmp.path().join("signalled");
@@ -139,7 +126,8 @@ fn setup(keep: bool) -> Dead {
     }
     facts.harness = Some(launched);
     Dead {
-        _tmp: tmp,
+        tmp,
+        key: key_pem,
         _up: up,
         entry_dir,
         port: addr.port(),
@@ -153,40 +141,19 @@ fn setup(keep: bool) -> Dead {
 /// One GET through the proxy on `port` to the listed host, its leaf verified against
 /// `run-ca.pem` only: the answer's bytes.
 fn get(entry_dir: &Path, port: u16) -> Vec<u8> {
-    let mut tcp = TcpStream::connect(("127.0.0.1", port)).unwrap();
-    tcp.set_read_timeout(Some(Duration::from_secs(30))).unwrap();
-    tcp.write_all(b"CONNECT api.openai.com:443 HTTP/1.1\r\nHost: api.openai.com\r\n\r\n")
-        .unwrap();
-    let mut head = Vec::new();
-    while !head.ends_with(b"\r\n\r\n") {
-        let mut b = [0u8];
-        assert_eq!(tcp.read(&mut b).unwrap(), 1, "the proxy closed the CONNECT");
-        head.push(b[0]);
-    }
-    assert!(head.starts_with(b"HTTP/1.1 200"));
-    let mut store = rustls::RootCertStore::empty();
-    for c in certificates(&std::fs::read(entry_dir.join(RUN_CA_FILE)).unwrap()) {
-        store.add(CertificateDer::from(c)).unwrap();
-    }
-    let mut config = rustls::ClientConfig::builder_with_provider(common::pki::provider())
-        .with_safe_default_protocol_versions()
-        .unwrap()
-        .with_root_certificates(store)
-        .with_no_client_auth();
-    config.alpn_protocols = vec![HTTP11.to_vec()];
-    let name = ServerName::try_from("api.openai.com").unwrap();
-    let conn = rustls::ClientConnection::new(Arc::new(config), name).unwrap();
-    let mut tls = rustls::StreamOwned::new(conn, tcp);
-    tls.write_all(b"GET / HTTP/1.1\r\nHost: api.openai.com\r\n\r\n")
-        .unwrap();
+    let mut tls = connect_tls(entry_dir, port);
+    exchange(&mut tls, b"GET / HTTP/1.1\r\nHost: api.openai.com\r\n\r\n", b"hi")
+}
+
+/// Every file under `dir`, recursively.
+fn files(dir: &Path) -> Vec<PathBuf> {
     let mut out = Vec::new();
-    let mut buf = [0u8; 4096];
-    while !out.ends_with(b"hi") {
-        let n = tls
-            .read(&mut buf)
-            .expect("the leaf verifies against run-ca.pem");
-        assert!(n > 0, "closed early: {}", String::from_utf8_lossy(&out));
-        out.extend_from_slice(&buf[..n]);
+    for e in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+        let p = e.path();
+        match p.is_dir() {
+            true => out.extend(files(&p)),
+            false => out.push(p),
+        }
     }
     out
 }
@@ -197,14 +164,20 @@ fn get(entry_dir: &Path, port: u16) -> Vec<u8> {
 #[test]
 fn watchdog_recover_restarts_the_recorder_only() {
     let mut d = setup(false);
-    let got = watchdog::recover_with(&d.entry_dir, d.facts.clone(), &common::bin());
-    assert_eq!(got, Ok(watchdog::Recovered { port: d.port }));
+    let try_it = |d: &Dead| watchdog::recover_with(&d.entry_dir, d.facts.clone(), &common::bin());
+    assert_eq!(try_it(&d), Ok(watchdog::Recovered { port: d.port }));
+    loopback_only(d.port);
     assert!(get(&d.entry_dir, d.port).ends_with(b"hi"));
     let (pid, start_id) = watchdog_pid(&d.entry_dir).expect("rec/watchdog.pid");
     assert_ne!(pid, std::process::id());
-    assert!(cli::alive(pid, start_id), "the detached watchdog runs");
+    assert!(cli::alive(pid, start_id), "the new watchdog runs");
+    assert_eq!(try_it(&d), Err(NotRecovered::WatchdogAlive));
     assert!(d.harness.try_wait().unwrap().is_none(), "the harness ended");
-    assert!(!d._tmp.path().join("signalled").exists(), "signalled");
+    assert!(!d.tmp.path().join("signalled").exists(), "signalled");
+    // Point 4: the key file stays 0600 while the entry lives.
+    let key = d.entry_dir.join("rec").join(watchdog::KEY_FILE);
+    let mode = std::fs::metadata(&key).expect("the key file").permissions().mode();
+    assert_eq!(mode & 0o777, 0o600);
 
     d.harness.kill().unwrap();
     d.harness.wait().unwrap();
@@ -212,27 +185,53 @@ fn watchdog_recover_restarts_the_recorder_only() {
         read_json::<Value>(&status_json(&d.entry_dir)).filter(|s| !s["seal"].is_null())
     });
     assert_eq!(status["seal"]["reason"], "harness_exit", "{status}");
-    assert!(!d.entry_dir.join("rec").join(watchdog::KEY_FILE).exists());
-    let down: Vec<(u64, u64, Value)> = records(&d.entry_dir)
-        .into_iter()
-        .filter_map(|r| match r {
+    assert!(!key.exists());
+    assert_eq!(try_it(&d), Err(NotRecovered::Sealed));
+    // Each `recorder_down` gap with the mono of the last LINK before it: the last durable point.
+    let (mut link, mut down) = (0, Vec::new());
+    for r in records(&d.entry_dir) {
+        match r {
+            Record::Link { mono_ns, .. } => link = mono_ns,
             Record::Gap {
                 reason: GapReason::RecorderDown,
                 start_mono,
                 end_mono,
                 tail,
                 ..
-            } => Some((start_mono, end_mono, serde_json::from_slice(&tail).unwrap())),
-            _ => None,
-        })
-        .collect();
+            } => down.push((link, start_mono, end_mono, serde_json::from_slice::<Value>(&tail).unwrap())),
+            _ => {}
+        }
+    }
     assert_eq!(down.len(), 1, "{down:?}");
-    assert_eq!(down[0].2["cause"], "watchdog_lost", "{down:?}");
-    assert!(down[0].0 < down[0].1);
+    let (durable, start, end, tail) = &down[0];
+    assert_eq!(tail["cause"], "watchdog_lost", "{down:?}");
+    assert!(durable <= start && start < end, "{down:?}");
+    // Point 4: the key's PEM body is in no file of the entry (parts, index, goalcup.log).
+    let body: String = d.key.lines().filter(|l| !l.starts_with("-----")).collect();
+    let line = d.key.lines().nth(1).unwrap().as_bytes();
+    assert!(body.len() > 40 && line.len() > 40);
+    for f in files(d.tmp.path()) {
+        let bytes = std::fs::read(&f).unwrap();
+        let flat: Vec<u8> = bytes.iter().copied().filter(|b| *b != b'\n').collect();
+        let found = bytes.windows(line.len()).any(|w| w == line)
+            || flat.windows(body.len()).any(|w| w == body.as_bytes());
+        assert!(!found, "the CA key is in {}", f.display());
+    }
+    // And in no decoded record, since the part files are compressed.
+    for r in records(&d.entry_dir) {
+        let bytes = match &r {
+            Record::Data { bytes, .. } => bytes,
+            Record::Event { json, .. } => json,
+            Record::Open { meta, .. } => meta,
+            Record::End { tail, .. } | Record::Gap { tail, .. } => tail,
+            _ => continue,
+        };
+        assert!(!bytes.windows(line.len()).any(|w| w == line), "the CA key is in a record");
+    }
 }
 
-/// R3b refusals: a live recorder holding the lock is left alone, a missing key and a taken port
-/// refuse, and none of them starts a watchdog or binds the port.
+/// R3b refusals: a live recorder holding the lock is left alone, a taken port, a missing key and
+/// a gone harness refuse, and none of them starts a watchdog or binds the port.
 #[test]
 fn watchdog_recover_refusals_start_nothing() {
     let mut d = setup(true);
@@ -254,4 +253,6 @@ fn watchdog_recover_refusals_start_nothing() {
     assert!(spawn::bind_exact(d.port).is_ok(), "port left bound");
     d.harness.kill().unwrap();
     let _ = d.harness.wait();
+    assert_eq!(try_it(&d), Err(NotRecovered::HarnessGone));
+    assert!(watchdog_pid(&d.entry_dir).is_none());
 }

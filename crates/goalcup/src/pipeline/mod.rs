@@ -778,18 +778,14 @@ const EXIT_MASKER: i32 = 78;
 /// no core dump, the first line, the entry folder and the panic hook before any thread, the entry
 /// lock, the masker, the run CA, the proxy at once, the boot, the native reader, the uploader,
 /// the status thread, `ready`; then the control lines until the seal. A null recorder relays and
-/// records nothing, and so does a boot on an entry already sealed.
+/// records nothing, and so does a boot on an entry already sealed. A `recover` first line makes
+/// this process the new watchdog instead (section 8.1, `watchdog::recover_with`).
+///
+/// SIGTERM seals with reason `signal` while the control loop runs; once the seal or the wrap-up
+/// (up to 60 minutes of upload) is under way it is caught and ignored, so `goalcup seal` cannot
+/// end a recorder that is already ending (section 11).
 pub fn run_recorder(null: bool) -> ExitCode {
     secure::harden();
-    // SAFETY: a zeroed local struct, filled before `sigaction` reads it; the handler stores into
-    // a static atomic and nothing else.
-    unsafe {
-        let mut action: libc::sigaction = std::mem::zeroed();
-        action.sa_sigaction = on_term as *const () as libc::sighandler_t;
-        libc::sigemptyset(&mut action.sa_mask);
-        action.sa_flags = libc::SA_RESTART;
-        libc::sigaction(libc::SIGTERM, &action, std::ptr::null_mut());
-    }
     // SAFETY: the watchdog's spawn hands fd 4 to this process as a connected Unix socket, owned
     // by nothing else here.
     let ctl = unsafe { UnixStream::from_raw_fd(4) };
@@ -798,10 +794,17 @@ pub fn run_recorder(null: bool) -> ExitCode {
     };
     let mut lines = BufReader::new(read);
     // The first line holds the CA key and the exact values: never logged, never echoed.
-    let Some(Some(ToRecorder::Start(facts))) = read_line(&mut lines) else {
-        secure::die(EXIT_NO_START, "no_start_line")
+    let mut facts = match read_line(&mut lines) {
+        Some(Some(ToRecorder::Start(facts))) => *facts,
+        Some(Some(ToRecorder::Recover(facts))) => {
+            // SAFETY: as below, fd 3 is the listener `recover_with` bound, owned by nothing else.
+            let listener = unsafe { std::net::TcpListener::from_raw_fd(3) };
+            return crate::watchdog::run_recovered(*facts, listener, ctl);
+        }
+        _ => secure::die(EXIT_NO_START, "no_start_line"),
     };
-    let mut facts = *facts;
+    // After the first line, so the watchdog `recover` starts keeps the default.
+    secure::catch(libc::SIGTERM, on_term);
     let Some(mut typed) = facts.typed() else {
         secure::die(EXIT_NO_START, "no_start_line")
     };
@@ -910,9 +913,7 @@ pub fn run_recorder(null: bool) -> ExitCode {
         run.late = Some(seal::keep_sealed(&run.rec, &dir, masker));
     }
     // The deadline on boot time, converted once (PRD-17 S7); only a server word moves it.
-    let wall_ms = clock::wall_ns() / 1_000_000;
-    let left_ns = |d: u64| d.saturating_sub(wall_ms).saturating_mul(1_000_000);
-    let deadline = (facts.deadline).map(|d| Mono(Mono::now().0.saturating_add(left_ns(d))));
+    let deadline = crate::watchdog::deadline_of(facts.deadline);
     run.send(&ToWatchdog::Ready);
     run.control(lines, deadline, &dir, &facts.workspace)
 }
@@ -1000,23 +1001,20 @@ impl Run {
                 return self.seal(SealReason::Signal, None, dir, workspace);
             }
             let changed = word.as_mut().filter(|w| w.has_changed().unwrap_or(false));
-            if let Some(w) = changed.and_then(|w| w.borrow_and_update().clone()) {
-                if let Some(s) = w.seconds_left {
-                    let left = s.saturating_mul(1_000_000_000);
-                    deadline = Some(Mono(w.asked_at.0.saturating_add(left)));
-                }
-                if !eof {
-                    self.send(&ToWatchdog::Server(w));
-                }
+            let fresh = changed.and_then(|w| w.borrow_and_update().clone());
+            if let Some(d) = fresh.as_ref().and_then(crate::watchdog::moved) {
+                deadline = Some(d);
             }
             if !eof {
+                if let Some(w) = fresh {
+                    self.send(&ToWatchdog::Server(w));
+                }
                 continue;
             }
-            let stop = (word.as_ref()).and_then(|w| w.borrow().clone());
+            let stop = (word.as_ref()).and_then(|w| crate::watchdog::stop_of(w.borrow().as_ref()?));
             let gone = (self.harness.as_ref()).is_none_or(|h| !cli::alive(h.pid, h.start_id));
-            let reason = match stop.filter(|w| w.stop).map(|w| w.reason) {
-                Some(r) if r.as_deref() != Some("deadline") => SealReason::ServerStop,
-                Some(_) => SealReason::Deadline,
+            let reason = match stop {
+                Some(reason) => reason,
                 None if deadline.is_some_and(|d| Mono::now() >= d) => SealReason::Deadline,
                 None if gone => SealReason::HarnessExit,
                 None => continue,

@@ -6,6 +6,7 @@
 #![cfg(target_os = "linux")]
 
 mod common;
+mod watchdog_share;
 
 use common::recorder::records;
 use goalcup::cli::{self, proc_start_id, watchdog_alive, watchdog_pid};
@@ -20,21 +21,7 @@ use std::io::BufReader;
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
-
-const WAIT: Duration = Duration::from_secs(60);
-
-/// Waits until `f` gives `Some`, at most [`WAIT`].
-fn until<T>(what: &str, mut f: impl FnMut() -> Option<T>) -> T {
-    let start = Instant::now();
-    loop {
-        if let Some(v) = f() {
-            return v;
-        }
-        assert!(start.elapsed() < WAIT, "timed out waiting for {what}");
-        std::thread::sleep(Duration::from_millis(50));
-    }
-}
+use watchdog_share::{WAIT, until};
 
 /// The pid is gone: no `/proc` entry, or a zombie.
 fn gone(pid: u32) -> bool {

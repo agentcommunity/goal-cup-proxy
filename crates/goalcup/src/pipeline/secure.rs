@@ -30,6 +30,20 @@ pub fn harden() {
     }
 }
 
+/// Catches `sig` with `handler`, which must only store into a static atomic. Caught, never
+/// ignored, so a child gets the default back at `exec`.
+pub(crate) fn catch(sig: libc::c_int, handler: extern "C" fn(libc::c_int)) {
+    // SAFETY: a zeroed local struct, filled before `sigaction` reads it; the handler is
+    // async-signal-safe by the rule above.
+    unsafe {
+        let mut action: libc::sigaction = std::mem::zeroed();
+        action.sa_sigaction = handler as *const () as libc::sighandler_t;
+        libc::sigemptyset(&mut action.sa_mask);
+        action.sa_flags = libc::SA_RESTART;
+        libc::sigaction(sig, &action, std::ptr::null_mut());
+    }
+}
+
 /// Where [`exit`] and the panic hook write their `goalcup.log` line, once [`panic_hook`] set it.
 static LOG_DIR: OnceLock<PathBuf> = OnceLock::new();
 

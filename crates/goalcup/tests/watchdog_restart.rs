@@ -8,12 +8,14 @@
 
 mod common;
 
-use common::pki::{HTTP11, provider};
+mod watchdog_share;
+
+use common::pki::HTTP11;
 use common::recorder::records;
 use common::upstream::{Script, Upstream};
 use goalcup::cli;
 use goalcup::connector::{ConnectorRef, HomeLock, HostList, LaunchPlan, NativeSources, builtin};
-use goalcup::proxy::ca::{RUN_CA_FILE, certificates};
+use goalcup::proxy::ca::RUN_CA_FILE;
 use goalcup::watchdog::{self, StartFacts};
 use goalcup_format::{GapReason, Record};
 use serde_json::{Value, json};
@@ -22,48 +24,18 @@ use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+use watchdog_share::{CONNECT, connect_tls, exchange, loopback_only, tls_over, until};
 
 const RUN: &str = "r0123456789abcdef";
 const ENTRY: &str = "e0123456789abcdef";
-const WAIT: Duration = Duration::from_secs(90);
-
-/// Waits until `f` gives `Some`, at most [`WAIT`].
-fn until<T>(what: &str, mut f: impl FnMut() -> Option<T>) -> T {
-    let start = Instant::now();
-    loop {
-        if let Some(v) = f() {
-            return v;
-        }
-        assert!(start.elapsed() < WAIT, "timed out waiting for {what}");
-        std::thread::sleep(Duration::from_millis(50));
-    }
-}
-
-/// L-C12: the one socket listening on `port` is bound to 127.0.0.1 (none on IPv6).
-fn loopback_only(port: u16) {
-    let tail = format!(":{port:04X}");
-    let mut listening = Vec::new();
-    for file in ["/proc/net/tcp", "/proc/net/tcp6"] {
-        for l in std::fs::read_to_string(file)
-            .unwrap_or_default()
-            .lines()
-            .skip(1)
-        {
-            let f: Vec<&str> = l.split_whitespace().collect();
-            if f.len() > 3 && f[3] == "0A" && f[1].ends_with(&tail) {
-                listening.push(f[1].to_string());
-            }
-        }
-    }
-    assert_eq!(listening, [format!("0100007F{tail}")], "port {port}");
-}
 
 #[test]
 fn watchdog_restart_keeps_port_backlog_and_ca() {
-    let up =
-        Upstream::start(Script::ok(b"restart-p2-answer").with_tls(&["api.openai.com"], &[HTTP11]));
+    let mut script = Script::ok(b"restart-p2-answer").with_tls(&["api.openai.com"], &[HTTP11]);
+    // Every answer waits, so the kill below meets a request in flight.
+    script.hold_answer = Some(Duration::from_secs(2));
+    let up = Upstream::start(script);
     let tmp = tempfile::tempdir().unwrap();
     let d = tmp.path().join("m");
     std::fs::create_dir_all(&d).unwrap();
@@ -140,18 +112,26 @@ fn watchdog_restart_keeps_port_backlog_and_ca() {
         cli::read_json::<Value>(&cli::status_json(&entry_dir)).filter(|s| !s["seal"].is_null())
     });
     assert_eq!(st["seal"]["reason"], "harness_exit", "{st}");
-    let (mut down, mut data) = (0, Vec::new());
+    // Boot numbers are contiguous: one kill, so the sealed boot is 1.
+    assert_eq!(st["boot"], 1, "{st}");
+    let (mut down, mut data) = (Vec::new(), Vec::new());
     for r in records(&entry_dir) {
         match r {
             Record::Gap {
                 reason: GapReason::RecorderDown,
+                start_mono,
+                end_mono,
+                tail,
                 ..
-            } => down += 1,
+            } => down.push((start_mono, end_mono, serde_json::from_slice::<Value>(&tail).unwrap())),
             Record::Data { bytes, .. } => data.extend(bytes),
             _ => {}
         }
     }
-    assert_eq!(down, 1);
+    // One gap over the dead span, naming the kill (`prev_boot` names the signal).
+    assert_eq!(down.len(), 1, "{down:?}");
+    assert!(down[0].0 < down[0].1, "{down:?}");
+    assert_eq!(down[0].2["prev"], json!({"signal": 9}), "{down:?}");
     // L-P2: the request and the answer through the next boot are in the record, decrypted.
     for want in [&b"restart-p2-request"[..], b"restart-p2-answer"] {
         assert!(
@@ -180,52 +160,30 @@ fn drive(dir: &Path, m: &Path) {
             .ok()
             .filter(|f| f.len() > 0)
     });
+    // A request in flight (the upstream holds its answer) when the recorder dies.
+    let mut inflight = connect_tls(dir, port);
+    inflight
+        .write_all(b"GET / HTTP/1.1\r\nHost: api.openai.com\r\n\r\n")
+        .unwrap();
+    std::thread::sleep(Duration::from_millis(300));
     // SAFETY: a signal to one pid, the recorder's.
     unsafe { libc::kill(first as libc::pid_t, libc::SIGKILL) };
+    // Its connection ends with the process: no hang.
+    assert!(!matches!(inflight.read(&mut [0u8; 64]), Ok(n) if n > 0));
     // The watchdog starts boot 2 once it has seen boot 1 end.
     until("boot 2 started", || m.join("second").exists().then_some(()));
 
     // L-P1: no recorder runs now; the kernel takes the connection into the held backlog.
     let mut s = TcpStream::connect(("127.0.0.1", port)).unwrap();
-    s.set_read_timeout(Some(Duration::from_secs(30))).unwrap();
-    s.write_all(b"CONNECT api.openai.com:443 HTTP/1.1\r\nHost: api.openai.com:443\r\n\r\n")
-        .unwrap();
+    s.write_all(CONNECT).unwrap();
     assert!(
         !m.join("second_exec").exists(),
         "boot 2 ran before the connection was queued"
     );
-    let mut head = Vec::new();
-    while !head.ends_with(b"\r\n\r\n") {
-        let mut b = [0u8];
-        assert_eq!(s.read(&mut b).unwrap(), 1, "the proxy closed the CONNECT");
-        head.push(b[0]);
-    }
-    assert!(head.starts_with(b"HTTP/1.1 200"), "{head:?}");
-
     // L-P2: the next boot's leaf verifies against the `run-ca.pem` read before the kill.
-    let mut roots = rustls::RootCertStore::empty();
-    for c in certificates(&pem) {
-        roots.add(c.into()).unwrap();
-    }
-    let mut config = rustls::ClientConfig::builder_with_provider(provider())
-        .with_safe_default_protocol_versions()
-        .unwrap()
-        .with_root_certificates(roots)
-        .with_no_client_auth();
-    config.alpn_protocols = vec![HTTP11.to_vec()];
-    let name = rustls::pki_types::ServerName::try_from("api.openai.com").unwrap();
-    let conn = rustls::ClientConnection::new(Arc::new(config), name).unwrap();
-    let mut t = rustls::StreamOwned::new(conn, s);
-    let req = "POST /v1/responses HTTP/1.1\r\nHost: api.openai.com\r\nConnection: close\r\nContent-Length: 18\r\n\r\nrestart-p2-request";
-    t.write_all(req.as_bytes()).expect("the leaf verifies");
-    let mut answer = Vec::new();
-    let mut buf = [0u8; 4096];
-    while !answer.ends_with(b"restart-p2-answer") {
-        match t.read(&mut buf) {
-            Ok(n) if n > 0 => answer.extend_from_slice(&buf[..n]),
-            _ => break,
-        }
-    }
+    let mut t = tls_over(s, &pem);
+    let req = b"POST /v1/responses HTTP/1.1\r\nHost: api.openai.com\r\nConnection: close\r\nContent-Length: 18\r\n\r\nrestart-p2-request";
+    let answer = exchange(&mut t, req, b"restart-p2-answer");
     let answer = String::from_utf8_lossy(&answer);
     assert!(
         answer.starts_with("HTTP/1.1 200") && answer.ends_with("restart-p2-answer"),
