@@ -346,5 +346,11 @@ fn show(found: &Found, st: &Status, now: u64) -> String {
         })
         .collect();
     let upload = up::read(&found.entry_dir());
-    block(st, &state, run, upload.as_ref(), &cx, &parts)
+    let shown = block(st, &state, run, upload.as_ref(), &cx, &parts);
+    // A sealed part's final counts are always reachable: a recovered part had no watchdog to print
+    // them. The screen is a pure function of the sealed files, so it adds no counter.
+    match super::finish::end_screen(&found.entry_dir()) {
+        Ok(screen) if matches!(state, State::Sealed { .. }) => format!("{shown}\n{screen}"),
+        _ => shown,
+    }
 }
