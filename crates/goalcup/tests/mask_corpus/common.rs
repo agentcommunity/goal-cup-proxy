@@ -142,7 +142,11 @@ pub fn provider_keys() -> Vec<(&'static str, String, usize)> {
         k("together_key", &["tgp", "_v1_", &run(B64URL, 43, 69)], 7),
         k("sgamp_key", &["sga", "mp_user_", &run(B64URL, 40, 70)], 6),
         k("fk_key", &["f", "k-", &run(ALNUM, 40, 71)], 3),
-        k("bedrock_key", &["AB", "SK", BEDROCK_LONG, &run(B64, 102, 72)], 22),
+        k(
+            "bedrock_key",
+            &["AB", "SK", BEDROCK_LONG, &run(B64, 102, 72)],
+            22,
+        ),
         k(
             "bedrock_key",
             &["bedrock-", "api-key-", BEDROCK_SHORT, &run(B64, 172, 73)],

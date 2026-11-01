@@ -8,8 +8,8 @@
 mod common;
 
 use common::{
-    ALNUM, B64URL, Rng, aq_key, key_of, keys, only_spans_changed, provider_keys, run, shape_rows,
-    starred,
+    ALNUM, B64, B64URL, Rng, aq_key, key_of, keys, only_spans_changed, provider_keys, run,
+    shape_rows, starred,
 };
 
 /// The literal kinds in `shapes.tsv` order. The JSON literal (10) and the shell literal (11)
@@ -518,5 +518,18 @@ fn provider_prefixes_leave_ordinary_identifiers_alone() -> Res {
     ] {
         assert_clear(&m, text);
     }
+    // `ABSK` after a `+` or `/` inside an image's base64 is not a Bedrock key, whole or
+    // streamed: the rule needs the fixed start of the key's own base64.
+    let blob = [run(B64, 2048, 90), "+ABSK".into(), run(B64, 20_000, 91)].concat();
+    let input = format!("{{\"type\":\"image\",\"data\":\"{blob}\"}}");
+    assert_clear(&m, &input);
+    let cuts: Vec<usize> = (1..input.len() / 4096).map(|i| i * 4096).collect();
+    let got = common::stream_in(
+        &m,
+        goalcup_format::StreamKind::HttpReq,
+        input.as_bytes(),
+        &cuts,
+    );
+    assert!(got.spans.is_empty() && got.bytes == input.as_bytes());
     Ok(())
 }
