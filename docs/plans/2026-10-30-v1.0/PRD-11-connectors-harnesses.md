@@ -1550,3 +1550,17 @@ is left is data and docs only. Four items, in order:
     `integrator.log` 17:44Z only; the integrator should record it in `OWNER-DECISIONS.md`.
   - **Unmeasured, route after exact-value masking settles:** Codex (`*.sqlite*` final) and OpenClaw
     still copy whole SQLite files and may hold bare tokens in an index or token table.
+
+- **2026-11-01, Hermes state.db drop finished (docs and participant text).** The `state.db` native row is gone
+  from `connectors/hermes-cli.toml`; the PRD-04 case in `native_safety.rs` that still asserts `state.db` is
+  found must flip to assert it is not found (owned by the hermes-test-flip task; not in this commit). The
+  `secret_files` comment, sheet sections 4 and 5, and the `first_screen` string now say: Goal Cup stores and
+  uploads no key, Hermes finds the key where it always does, subagents are shown by their delegation task logs
+  (PRD-08 slice 11) and not tied to single calls, per-thread usage is not measured. No locked ledger item is
+  touched.
+  - **Owner question:** the owner sentence "its own home files" reads against the connector's isolated
+    `HERMES_HOME` (`home = { HERMES_HOME = "{home}" }`): the home files are the isolated home that `goalcup
+    setup` fills, not the participant's normal `~/.hermes`. The sentence is kept verbatim and the detail added
+    beside it in the sheet; `home` is unchanged. Decide whether the participant text should say this too.
+  - The Hermes docs host was not reachable from the build session, so the key-lookup wording rests on the
+    sheet's earlier cited facts, not a fresh page read.
