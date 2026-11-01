@@ -423,7 +423,10 @@ fn pair_in(line: &str) -> Option<(&str, &str)> {
     if name.is_empty() || !name.bytes().all(is_name) {
         return None;
     }
-    let value = value.split_once(" #").map_or(value, |(value, _)| value).trim();
+    let value = value
+        .split_once(" #")
+        .map_or(value, |(value, _)| value)
+        .trim();
     let unquoted = ['"', '\'']
         .iter()
         .find_map(|q| value.strip_prefix(*q)?.strip_suffix(*q))
