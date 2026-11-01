@@ -112,8 +112,11 @@ fn a_main_file_with_no_id_still_gives_the_subagent_its_parent() {
     let d = entry("gp-b", &[(MAIN_FILE, "not json\n"), (&kid_file(), &kid_line())]);
     let t = table(&d);
     let kid = thread(&t, KID);
-    // Resolved by the file name's 8-hex prefix, else the folder name stays the parent.
-    assert_eq!((kid.parent.as_deref(), kid.depth), (Some(MAIN), Some(1)));
+    // The folder id is matched to the main file by its 8-hex name suffix, so the child links to
+    // that file's thread (named by its stem when the file holds no id), not a dangling id.
+    let stem = "session-2026-11-01T08-42-d56586ab";
+    assert_eq!((kid.parent.as_deref(), kid.depth), (Some(stem), Some(1)));
+    assert!(t.threads.iter().any(|x| x.id == stem));
 }
 
 #[test]
