@@ -177,7 +177,7 @@ Files PRD-10 writes, all mode 0600:
    and writes one `goalcup.log` line, because goalcup adds nothing to the project folder.
 9. **Print the launch block** (section 8), add `GOALCUP_TIME_LEFT_FILE` to `plan.env` (section 10),
    then call `watchdog::run(plan, facts) -> ExitCode` (PRD-02, seam S8). From here PRD-02 does everything: bind the port, mint the CA, start the recorder, wait for
-   `ready` (10 s, first boot only), run `plan.before` (stop the connector's helpers), spawn the
+   `ready` (30 s, first boot only), run `plan.before` (stop the connector's helpers), spawn the
    harness, end it at the deadline, on `goalcup seal` and on the server's `stop` (SIGTERM to the
    harness tree, SIGKILL after 10 s), run `plan.after`, seal. PRD-10 does none of these. If the first
    boot fails, the harness is not started and PRD-10 words it: "Goal Cup could not start recording,
@@ -249,7 +249,7 @@ It never restarts, ends or signals the harness, and it never takes the terminal.
    file (0600, in the run folder, kept for the whole run: ledger R3b, PRD-02 owns it).
 2. Call PRD-02's recover entry (`watchdog::recover(entry_dir, facts)`, ask N9). It binds the port in
    `status.json` `port`, which must be free or held by no live process (a port left by a dead
-   recorder rebinds), starts the recorder alone, and waits for `ready` for at most 10 s, as on a
+   recorder rebinds), starts the recorder alone, and waits for `ready` for at most 30 s, as on a
    first boot. The new boot's recovery writes the `recorder_down` gap for the time recording was down
    (PRD-02 section 9.2 step 4), so the dead time is a gap with a start and an end, never silent (R4).
    With no watchdog, the recorder runs as in PRD-02's "watchdog only" row: it watches the harness pid,
@@ -268,7 +268,7 @@ Check it any time with: goalcup status
 Port taken by another program, or the key file missing or unreadable (exit 1): `goalcup cannot
 reopen recording on port <port>: <the port is used by another program | the run certificate key is
 missing>. Your agent cannot reach the model service until this part ends. To go on, run: goalcup
-seal, then goalcup continue <run>`. No `ready` within 10 s (exit 3): `goalcup could not restart
+seal, then goalcup continue <run>`. No `ready` within 30 s (exit 3): `goalcup could not restart
 recording. Your agent still cannot reach the model service. Run goalcup recover once more; if it
 fails again, run goalcup seal, then goalcup continue <run>, and write to <support> naming run <id>.`
 plus the "Details for support are in <log>" line.

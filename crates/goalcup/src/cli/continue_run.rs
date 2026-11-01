@@ -197,7 +197,8 @@ pub fn prepare(
         return Err(refuse(text::refusal(r)));
     }
     let values = launch_values(project, &plan.env);
-    if Masker::new(&plan.mask_rules, values.clone()).is_err() {
+    // Only the shapes and rules can refuse; the values are built once, by the recorder.
+    if Masker::new(&plan.mask_rules, Vec::new()).is_err() {
         return Err(refuse(text::mask_refused()));
     }
 

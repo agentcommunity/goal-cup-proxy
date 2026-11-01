@@ -207,7 +207,8 @@ fn rebuild(
         };
     }
     let values = launch_values(&workspace, &harness_env);
-    Masker::new(&plan.mask_rules, values.clone()).ok()?;
+    // Only the shapes and rules can refuse; the values are built once, by the recorder.
+    Masker::new(&plan.mask_rules, Vec::new()).ok()?;
     let part = Part {
         run: found.run.clone(),
         entry: found.entry.clone(),

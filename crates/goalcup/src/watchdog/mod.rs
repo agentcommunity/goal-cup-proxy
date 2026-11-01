@@ -219,8 +219,9 @@ pub const NOT_STARTED: u8 = 3;
 /// the watchdog passes it through and PRD-10 shows PRD-05's fixed text.
 pub const MASK_REFUSED: u8 = 78;
 
-/// The first boot's `ready` wait, on boot time.
-const READY_NS: u64 = 10_000_000_000;
+/// The first boot's `ready` wait, on boot time. The recorder builds its masker before `ready`,
+/// and 32 values of 256 bytes take 2 to 6.4 s, so the wait leaves room for a slow machine.
+const READY_NS: u64 = 30_000_000_000;
 
 /// How long the last lines of an exited recorder are waited for.
 const DRAIN_NS: u64 = 1_000_000_000;
@@ -658,7 +659,7 @@ impl Boot {
         }
     }
 
-    /// `ready` within 10 s of boot time, else the recorder's exit code (None when it gave none:
+    /// `ready` within 30 s of boot time, else the recorder's exit code (None when it gave none:
     /// ended when `end`, else left running for the restart loop).
     fn wait_ready(&mut self, end: bool) -> Result<(), Option<i32>> {
         let start = Mono::now();

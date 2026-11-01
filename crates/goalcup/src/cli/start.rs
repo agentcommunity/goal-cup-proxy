@@ -221,9 +221,10 @@ fn check(a: &Args, c: &Ctx) -> Result<Checked, Stop> {
     if let Some(r) = &plan.refusal {
         return Err(stop(text::refusal(r)));
     }
-    // Step 6, before the approval, so a mask refusal never spends one.
+    // Step 6, before the approval, so a mask refusal never spends one. Only the shapes and rules
+    // can refuse; values are counted and capped by `launch_values`, so none are compiled here.
     let values = launch_values(&c.project, &plan.env);
-    if Masker::new(&plan.mask_rules, values.clone()).is_err() {
+    if Masker::new(&plan.mask_rules, Vec::new()).is_err() {
         return Err(stop(text::mask_refused()));
     }
     Ok(Checked {
