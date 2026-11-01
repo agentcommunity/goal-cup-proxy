@@ -16,11 +16,14 @@ key_file = "{home}/.env"
 key_line = "DEEPSEEK_API_KEY={key}"
 # Pad data for the dodger copy only (section 2): [direct] provider deepseek calls https://api.deepseek.com.
 model_host = "api.deepseek.com"
-# Basis, stated plainly: docs/harnesses/hermes-cli.md:28 says Hermes redacts delegation task logs before writing them; that is
-# about its own log files, not tool output on the wire. The full3 record held 28 and 190 masked_key masks (the masker's rule for
-# Hermes's own redacted form), which is the exercise evidence C3 asks for. No vendor page naming the shapes covered could be
-# fetched (hermes-agent.nousresearch.com is not reachable from the build host), so C3 stays INCONCLUSIVE with a stated loss.
-# pad copies this to the row meta under the same name.
+# Basis, stated plainly: https://hermes-agent.nousresearch.com/docs/user-guide/security, section "Credential Redaction", says
+# error messages from MCP tools are sanitized before they go back to the LLM, matches replaced by [REDACTED], for GitHub
+# tokens (ghp_...), OpenAI-style keys (sk-...), Bearer tokens and token=/key=/API_KEY=/password=/secret= parameters. It names no
+# redaction of ordinary tool output and no jwt, private_key or url_password shape, so check.py puts the "may be masked before
+# the wire" note only on the openai, github and key=/token= kinds; the other kinds stay "not exercised". docs/harnesses/
+# hermes-cli.md:28 (redacted delegation task logs) is about Hermes's own log files. The full3 record held 28 and 190
+# masked_key masks (the masker's rule for Hermes's own redacted form), which is the exercise evidence C3 asks for. C3 stays
+# INCONCLUSIVE with a stated loss, never PASS. pad copies this to the row meta under the same name.
 redacts_tool_output = true
 ready_text = "Type your message or /help"
 ready_wait = 120

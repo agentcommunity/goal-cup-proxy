@@ -502,8 +502,7 @@ class Run:
                  "gaps": sum(pc.count(pc.dig(x, "s6_gaps")) for x in entries),
                  "secrets": pc.worst(entries, "secrets").get("result") or "not run"}
         fail = sorted({c["id"] for c in checks if c.get("result") == "fail" and isinstance(c.get("id"), str)})
-        result = rep.get("result")
-        append(self.path("watch", "live.jsonl"), dict(facts, result=result, fail=fail))
+        append(self.path("watch", "live.jsonl"), dict(facts, result=rep.get("result"), fail=fail))
         return ", ".join("%s %s" % kv for kv in facts.items())
 
     def sealed(self):

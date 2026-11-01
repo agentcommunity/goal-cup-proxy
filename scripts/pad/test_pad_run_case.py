@@ -114,7 +114,7 @@ class Recovery(unittest.TestCase):
 
 
 class EarlyPane(unittest.TestCase):
-    def test_pane_is_copied_right_after_respawn_before_any_wait(self):
+    def test_pane_is_copied_before_recording_seen(self):
         d = tempfile.TemporaryDirectory()
         self.addCleanup(d.cleanup)
         r = bare()

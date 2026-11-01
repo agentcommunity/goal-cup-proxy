@@ -493,8 +493,11 @@ def secrets(r):
     # A planted kind with no MASK is a FAIL when a hit shows it reached the record, else not exercised (a run never passes on
     # a missing exercise). For an upstream-redacting harness the missing MASK is a stated loss, open until the owner answers
     # (point 4): INCONCLUSIVE, never PASS.
-    why = "owner question open: the harness redacts tool output itself, so this kind may be masked before the wire" if up else "not exercised"
+    # The vendor page names only the openai, github and key=/token=/password= patterns, so only those kinds carry the note.
+    named = {"openai_key", "github_token", "generic_secret_assignment"}
     for kinds in PLANTED:
+        why = "owner question open: the harness redacts tool output itself, so this kind may be masked before the wire" \
+            if up and named.intersection(kinds) else "not exercised"
         r.flag(not any(masks.get(k) for k in kinds), "C3", "FAIL" if hit else "INCONCLUSIVE",
                "%s of %s: no MASK" % ("hits" if hit else why, " or ".join(kinds)))
 
