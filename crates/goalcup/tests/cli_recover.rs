@@ -142,6 +142,7 @@ fn sealed_run_over_and_live_watchdog_refuse() {
     std::fs::write(rec.join("watchdog.pid"), format!("{} {id}\n", wd.0.id())).unwrap();
     refused(&w.goalcup(false), 1);
     assert!(!w.scratch.path().join("signalled").exists());
+    assert!(!wd_dir.path().join("wd-hit").exists());
 }
 
 #[test]

@@ -8,7 +8,7 @@ use std::time::{Duration, UNIX_EPOCH};
 use super::log::{Fact, line};
 use super::start::{self, Part};
 use super::{
-    alive, fail, find, goalcup_log, home, read_json, say, status_json, text, time_left, unix_of,
+    alive, broke, fail, find, goalcup_log, home, read_json, status_json, text, time_left, unix_of,
     watchdog_alive,
 };
 use crate::connector::{self, Env, HomeLock};
@@ -148,11 +148,6 @@ fn not_recovered(
 
 fn support(run: &str, dir: &std::path::Path) -> String {
     text::recover_support(run, &goalcup_log(dir))
-}
-
-fn broke(text: &str) -> ExitCode {
-    say(text);
-    ExitCode::from(3)
 }
 
 /// The start facts again, from the run's own files: the part's folder and host lists as `start` or

@@ -9,7 +9,7 @@ use std::process::ExitCode;
 use std::thread::sleep;
 use std::time::{Duration, Instant};
 
-use super::{alive, fail, find, home, read_json, say, status_json, text, time_left, watchdog_pid};
+use super::{alive, broke, fail, find, home, read_json, say, status_json, text, time_left, watchdog_pid};
 use crate::pipeline::status::{Mode, Status};
 use crate::pipeline::{Closed, close_dead_entry};
 
@@ -125,7 +125,9 @@ fn seal_dead(found: &super::Found, name: &str, harness_ran: bool) -> ExitCode {
     }
     print!("{screen}");
     // What the server does not hold stays on disk and `goalcup upload` sends it later.
-    say(text::SEAL_SENDING);
+    if found.server.as_ref().is_some_and(|s| s.server.is_some()) {
+        say(text::SEAL_SENDING);
+    }
     let keep = super::var("GOALCUP_KEEP_PARTS").is_some_and(|v| v == "1");
     let out = crate::upload::manual::run(&dir, &found.run_dir, (run, &found.entry), keep);
     println!(
@@ -135,8 +137,3 @@ fn seal_dead(found: &super::Found, name: &str, harness_ran: bool) -> ExitCode {
     ExitCode::SUCCESS
 }
 
-/// [`say`], then exit code 3: goalcup could not do its job.
-fn broke(text: &str) -> ExitCode {
-    say(text);
-    ExitCode::from(3)
-}

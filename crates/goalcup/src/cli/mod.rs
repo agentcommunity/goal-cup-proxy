@@ -184,6 +184,12 @@ pub fn fail(text: &str) -> ExitCode {
     ExitCode::from(1)
 }
 
+/// [`say`], then exit code 3: goalcup could not do its job.
+pub fn broke(text: &str) -> ExitCode {
+    say(text);
+    ExitCode::from(3)
+}
+
 /// `runs/<run>/server.json` (section 2), written by `start`. It never holds the credential, so
 /// `status --json` prints it whole.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
