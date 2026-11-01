@@ -36,7 +36,8 @@ All from the [config directory reference](https://docs.github.com/en/copilot/ref
 
 - GitHub sign-in, or bring your own key with no GitHub login: "If you use your own LLM provider API keys (BYOK), GitHub authentication is not required"; without a login `/delegate` and the GitHub MCP server are unavailable ([docs](https://docs.github.com/en/copilot/how-tos/copilot-cli/set-up-copilot-cli/authenticate-copilot-cli)). Tokens come from `COPILOT_GITHUB_TOKEN`, `GH_TOKEN` or `GITHUB_TOKEN`, in that order.
 - Does the harness have a variable that moves its config and login? Yes, `COPILOT_HOME`; the connector sets it.
-- `COPILOT_OFFLINE=true` stops contact with GitHub's servers ([docs](https://docs.github.com/en/copilot/how-tos/copilot-cli/customize-copilot/use-byok-models)). The connector does not set it; that is the participant's choice.
+- `COPILOT_OFFLINE=true` stops contact with GitHub's servers ([docs](https://docs.github.com/en/copilot/how-tos/copilot-cli/customize-copilot/use-byok-models)). The connector does not set it; that is the participant's choice, and `copilot help environment` on 1.0.105 adds that it "Requires a local model provider (COPILOT_PROVIDER_BASE_URL)".
+- Rung 1 evidence: it ran with a DeepSeek bring-your-own-key provider and `COPILOT_OFFLINE=true`, with no GitHub login. The variables in the 1.0.105 `help environment` text are `COPILOT_PROVIDER_BASE_URL` (an Anthropic-format endpoint for DeepSeek), `COPILOT_PROVIDER_TYPE` (`openai`, `azure` or `anthropic`) and `COPILOT_PROVIDER_API_KEY`; they stay with the participant and the connector sets none of them.
 
 ## 6. Network
 
@@ -44,6 +45,8 @@ All from the [config directory reference](https://docs.github.com/en/copilot/ref
 - CA: `NODE_EXTRA_CA_CERTS`, read with the system store ([docs](https://docs.github.com/en/copilot/concepts/network-settings)). Which layer dials, the embedded Node or the Rust addon, is unknown; if the addon reads only its own roots, the run fails TLS loudly, not silently.
 - Model hosts: `*.githubcopilot.com` is a vendor host (decrypted and recorded). `github.com` and `api.github.com` carry sign-in and the token exchange but also far more; both pass as tunnels, are not decrypted and are not read.
 - DeepSeek needs the `anthropic` provider type, base `https://api.deepseek.com/anthropic`; the `openai` type fails with HTTP 400, "The reasoning_content in the thinking mode must be passed back to the API" ([DeepSeek guide](https://github.com/deepseek-ai/awesome-deepseek-agent/blob/main/docs/copilot_cli.md)). `providers.json` takes `type` of `openai`, `azure` or `anthropic` and a `baseUrl` ([docs](https://docs.github.com/en/copilot/how-tos/copilot-cli/customize-copilot/use-byok-models)). The connector hints `providers.*.baseUrl` and the variable `COPILOT_PROVIDER_BASE_URL`, both named, so a custom host is recorded.
+
+- Preconnect: Copilot opens a TLS connection to a listed host and closes it before sending a ClientHello. The verifier currently reports this as `listed_hosts_decrypted` FAIL. It is not a recording fault; the check belongs to the verifier owners (PRD-08 and PRD-03), not to this connector.
 
 ## 7. Process model
 
