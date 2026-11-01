@@ -212,7 +212,12 @@ fn settings_are_typed_keep_other_keys_and_never_follow_a_link() {
     assert_eq!(std::fs::read(d.join("target.json")).unwrap(), b"{}");
     // YAML: a 1.1 loader reads a bare `off` as a bool and a quoted "false" as a string.
     let hermes = connector::load("hermes-cli", None).unwrap();
-    let rows = [hermes.no_prompts, hermes.update_off].concat();
+    let mut rows = [hermes.no_prompts, hermes.update_off].concat();
+    let mut row = rows[0].clone();
+    (row.key, row.value) = ("telemetry.shared_metrics.enabled".into(), "true".into());
+    rows.push(row.clone());
+    (row.key, row.value) = ("telemetry.shared_metrics.send".into(), "false".into());
+    rows.push(row);
     let yaml = home.join("config.yaml");
     let was = "approvals:\n  mode: off\n\n# updates\nupdates:\n  check: \"false\"\n\ntelemetry:\n  shared_metrics:\n    enabled: false\n    send: \"true\"\n";
     std::fs::write(&yaml, was).unwrap();
