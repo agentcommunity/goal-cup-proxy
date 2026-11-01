@@ -19,8 +19,8 @@ use std::process::ExitCode;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-/// How long the caller waits for the new watchdog's report: its 10 s `ready` wait and some.
-const REPORT: Duration = Duration::from_secs(12);
+/// How long the caller waits for the new watchdog's report: its `ready` wait and some.
+const REPORT: Duration = Duration::from_nanos(super::READY_NS + 2 * super::SEC);
 
 /// The recorder is back on `port`, under a new watchdog in its own session.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -43,7 +43,8 @@ pub enum NotRecovered {
     KeyMissing,
     /// The port in `status.json` is unknown or another program holds it.
     PortTaken,
-    /// The new recorder gave no `ready` in time.
+    /// The new recorder gave no `ready` in time. Its watchdog goes on: the recorder is not ended,
+    /// and the restart loop takes it on.
     NoReady,
 }
 
@@ -55,9 +56,9 @@ pub fn recover(entry_dir: &Path, facts: StartFacts) -> Result<Recovered, NotReco
 
 /// Section 8.1: the checks and the bind here, then `recorder_exe` started as a new process in its
 /// own session (the hidden recorder entry, told by a `recover` first line to be the watchdog; no
-/// fork, so any thread of the caller is harmless). It starts the recorder (`prev`
-/// `{"cause":"watchdog_lost"}`), reports `ready` with one byte, and runs the shared loop hands off
-/// the harness.
+/// fork, so any thread of the caller is harmless). That watchdog starts the recorder (`prev`
+/// `{"cause":"watchdog_lost"}`), reports whether it gave `ready` in time with one byte, and then
+/// watches the harness in the shared loop.
 pub fn recover_with(
     entry_dir: &Path,
     mut facts: StartFacts,
@@ -111,9 +112,11 @@ pub fn recover_with(
 }
 
 /// The new watchdog, in the process [`recover_with`] started: `listener` on fd 3, `report` on fd
-/// 4. Section 8 step 1 for itself, the recorder started and its `ready` reported with one byte,
-/// then the shared loop hands off. It keeps the recorder entry's `oom_score_adj` 500: under
-/// memory pressure it ends before the harness, the recorder records on, and recover can run again.
+/// 4. Section 8 step 1 for itself, the recorder started and whether its `ready` came in time
+/// reported with one byte, then the shared loop. A boot slow to `ready` is not ended: the restart
+/// loop and null mode take it from there, as for any boot after a kill. It keeps the recorder
+/// entry's `oom_score_adj` 500: under memory pressure it ends before the harness, the recorder
+/// records on, and recover can run again.
 pub(crate) fn run(facts: StartFacts, listener: TcpListener, mut report: UnixStream) -> ExitCode {
     let dir = facts.entry_dir.clone();
     not_dumpable();
@@ -125,17 +128,16 @@ pub(crate) fn run(facts: StartFacts, listener: TcpListener, mut report: UnixStre
     }
     let exe = std::env::current_exe().unwrap_or_default();
     let recorder_pid = Arc::new(Mutex::new(0));
-    let boot = Boot::start(&exe, &listener, &facts, &recorder_pid, false);
-    let ready = boot
-        .ok()
-        .and_then(|mut b| b.wait_ready().is_ok().then_some(b));
-    let _ = report.write_all(&[u8::from(ready.is_some())]);
-    drop(report);
-    let Some(boot) = ready else {
-        line(&dir, "watchdog_failed", &[("why", Fact::Word("no_ready"))]);
+    let Ok(mut boot) = Boot::start(&exe, &listener, &facts, &recorder_pid, false) else {
+        let _ = report.write_all(&[0]);
+        line(&dir, "watchdog_failed", &[("why", Fact::Word("recorder_spawn"))]);
         return ExitCode::from(super::NOT_STARTED);
     };
-    line(&dir, "watchdog_recovered", &[]);
+    let ready = boot.wait_ready(false).is_ok();
+    let _ = report.write_all(&[u8::from(ready)]);
+    drop(report);
+    let late = [("ready", Fact::Word("late"))];
+    line(&dir, "watchdog_recovered", if ready { &[] } else { &late });
     let pid = facts.harness.as_ref().map(|h| h.pid);
     let _ = watch(boot, facts, None, (&exe, &listener, &recorder_pid), pid);
     ExitCode::SUCCESS

@@ -317,7 +317,7 @@ pub fn run_with(mut plan: LaunchPlan, mut facts: StartFacts, recorder_exe: &Path
             return failed("recorder_spawn");
         }
     };
-    if let Err(code) = boot.wait_ready() {
+    if let Err(code) = boot.wait_ready(true) {
         remove_key(&rec);
         if code == Some(i32::from(MASK_REFUSED)) {
             return ExitCode::from(MASK_REFUSED);
@@ -432,7 +432,10 @@ fn watch(
                     facts.deadline = Some(clock::wall_ns() / 1_000_000 + left_ms);
                 }
                 match stop_of(&word) {
-                    Some(SealReason::Deadline) => deadline = Some(Mono(0)),
+                    Some(SealReason::Deadline) => {
+                        deadline = Some(Mono(0));
+                        facts.deadline = Some(clock::wall_ns() / 1_000_000);
+                    }
                     // Any other stop: seal at once and leave the harness alone (ledger section 7).
                     Some(reason) if seal.is_none() => {
                         let l = ToRecorder::Seal {
@@ -656,9 +659,9 @@ impl Boot {
         }
     }
 
-    /// `ready` within 10 s of boot time, else the recorder's exit code (None when it gave none
-    /// and was ended).
-    fn wait_ready(&mut self) -> Result<(), Option<i32>> {
+    /// `ready` within 10 s of boot time, else the recorder's exit code (None when it gave none:
+    /// ended when `end`, else left running for the restart loop).
+    fn wait_ready(&mut self, end: bool) -> Result<(), Option<i32>> {
         let start = Mono::now();
         loop {
             if self.next() == Some(ToWatchdog::Ready) {
@@ -668,8 +671,10 @@ impl Boot {
                 return Err(status.code());
             }
             if Mono::now().0.saturating_sub(start.0) >= READY_NS {
-                let _ = self.child.kill();
-                let _ = self.child.wait();
+                if end {
+                    let _ = self.child.kill();
+                    let _ = self.child.wait();
+                }
                 return Err(None);
             }
         }
@@ -849,7 +854,7 @@ pub(crate) fn deadline_of(wall: Option<u64>) -> Option<Mono> {
 
 /// The deadline a server word sets: `seconds_left` from when it was asked, on boot time.
 pub(crate) fn moved(w: &ServerWord) -> Option<Mono> {
-    (w.seconds_left).map(|s| due(w.asked_at, s.saturating_mul(1_000)))
+    w.seconds_left.map(|s| due(w.asked_at, s.saturating_mul(1_000)))
 }
 
 /// What a server word asks (section 8 step 10): nothing while it says go on, `deadline` for a
@@ -1039,6 +1044,24 @@ mod tests {
     use serde_json::to_value;
     use std::collections::BTreeMap;
     use std::time::SystemTime;
+
+    /// A server word: `stop` with reason `deadline` ends the harness, any other stop leaves it,
+    /// and `seconds_left` counts from when the word was asked (section 8 step 10, PRD-17 S7).
+    #[test]
+    fn a_server_word_is_read() {
+        let w = |stop, reason: Option<&str>, left| ServerWord {
+            stop,
+            reason: reason.map(str::to_string),
+            seconds_left: left,
+            asked_at: Mono(5 * SEC),
+        };
+        assert_eq!(stop_of(&w(false, Some("deadline"), None)), None);
+        assert_eq!(stop_of(&w(true, Some("deadline"), None)), Some(SealReason::Deadline));
+        assert_eq!(stop_of(&w(true, Some("other"), None)), Some(SealReason::ServerStop));
+        assert_eq!(stop_of(&w(true, None, None)), Some(SealReason::ServerStop));
+        assert_eq!(moved(&w(false, None, None)), None);
+        assert_eq!(moved(&w(false, None, Some(3))), Some(Mono(8 * SEC)));
+    }
 
     /// The first line carries the whole start facts. With the largest built-in connector's
     /// plan, a minted CA and 32 shaped fake values of 120 bytes it stays under the line limit,

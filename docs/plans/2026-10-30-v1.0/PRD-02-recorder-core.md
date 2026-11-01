@@ -1643,3 +1643,18 @@ to PRD-06 slice 7 once `dead.rs` is on integration. No locked ledger item is tou
 ### 2026-11-01, from PRD-17 slice 6 (merge c9b87ac5)
 
 - The shield fix is on integration and the L-P3 ctrl-c case now runs in the box and passes. PRD-02 still owes `watchdog_restart.rs`: C12 (the proxy listens on `127.0.0.1` after a restart), P1 (unchanged port and a connection served during the restart) and P2 (a decrypted connection after a real kill verifies against `run-ca.pem`). `LESSONS.md` rows L-C12, L-P1, L-P2 name this file and stay open until it exists. Also unasserted: the 60 s drain and 180 s native bound (L-P15 names the `after_stop` half only). No locked ledger item is touched.
+
+### 2026-11-01, from the PRD-02 slice C part 1 fix round
+
+- **Ownership:** `crates/goalcup/tests/watchdog_share/` (the watchdog tests' shared TLS connect,
+  exchange, loopback and wait helpers) is PRD-02's, under its `tests/watchdog_*.rs` row (review X R3),
+  the same shape as `tests/cli_common/` and `tests/native_common/`. A folder module does not build as
+  its own test binary, and `tests/common/` stays PRD-14's. The PRD-00 replan reads the PRD-02 row as
+  `tests/watchdog_*`.
+- **Recover's first boot (review X R1):** a recorder that gives no `ready` within the 10 s wait is not
+  ended under `goalcup recover`. The new watchdog reports 0 (PRD-10 shows `NoReady`) and still watches
+  that boot, so the restart loop and null mode (R3a) take over, as for any boot after a kill. The
+  caller's report wait is the ready wait plus 2 s.
+- Still owed in slice C part 2: the exit-74 L-FW2 case, native cursor resume after a kill, a server
+  stop after the watchdog's EOF, `pipeline_stall.rs`, `by_hand_load`, the mask pool decision and
+  `SnapshotCursor.fid` with PRD-04.
