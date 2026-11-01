@@ -20,3 +20,6 @@ keep_going = true
 files = { "settings.json" = "gateway/claude-code-settings.json" }
 key_route = "env"
 key_env = "ANTHROPIC_AUTH_TOKEN"
+# With ANTHROPIC_AUTH_TOKEN there is no API-key screen: theme Enter, security notes Enter, trust Down+Enter, then the
+# "Make auto mode your default permission mode?" screen Down+Enter (No), seen on the rung 7 run.
+pre_keys = ['\r', '\r', '\033[B\r', '\033[B\r']
