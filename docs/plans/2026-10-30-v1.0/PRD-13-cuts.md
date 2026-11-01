@@ -777,3 +777,156 @@ Nothing else in the cut list changes. No locked ledger item is touched.
   commit that touches those crates and scripts; do not recreate the template to satisfy them. The fast
   gate does not run them, so nothing else turns red before then.
 - No locked ledger item is touched.
+
+### 2026-11-01, post-cut: copy ledger confirmed after the fact (conductor ruling 09:57Z)
+
+The cut merged as `d7759fdc` before any receiving owner wrote the "copied, tests green" line that
+section 4 and section 5 step 3 ask for (review LATEST.md section 3 item 1; cuts.log 09:50Z). Under the
+conductor's ruling (integrator.log 09:57Z) the lines below are written after the fact. Each is the
+receiving owner's confirmation, written by the post-cut lane on their behalf from evidence on
+integration `8fb59b7f`. No earlier section is changed.
+
+How the evidence was read. Destination: `git ls-tree` and `git show` on `origin/v1.0/integration`.
+Merge that brought it: `git log --first-parent -m --diff-filter=A -- <path>`. Byte equality: git blob
+ids against the old paths at `d7759fdc^1`, or the sha256 values in `provenance.json`. Tests green: the
+newest gate fast PASS on an integration merge after the cut, `gate-logs/v1.0_morning-interim-1004.log`
+on `7518b4b2` ("632 tests run: 632 passed (6 slow), 4 skipped", "gate fast: PASS in 238s"); the
+counts in brackets are that log's PASS lines per binary. `v1.0_prd-08-verify-0953.log` on `27341339`
+and `v1.0_prd-12-pad-1000.log` on `98873c1d` give the same 632. No box job was run for this note. No
+receiving lane log holds an owner's own "copied, tests green" line; where a lane line bears on a row it
+is cited.
+
+1. **PRD-03, proxy source** (`connect`, `tls`, `http`, `websocket`, `ca_bundle.rs`). Copied, tests
+   green. In `crates/goalcup/src/proxy/` (`connect.rs`, `tls.rs`, `ca.rs`, `decode.rs`, `ws.rs` by
+   `0e411074`; `http1.rs`, `pump.rs`, `tunnel.rs`, `hosts.rs` by `47835216`). `ca.rs:18-19` names its
+   sources (`proxy/tls.rs:100-215`, `ca_bundle.rs`). Covered by `proxy_connect` (11), `proxy_tls` (12),
+   `proxy_http1` (15), `proxy_h2` (19), `proxy_ws` (6), `proxy_decode` (4), `proxy_tunnel` (14),
+   `proxy_restart` (2) and the lessons cases `lessons_connect` (12), `lessons_tls` (5), `lessons_http1`
+   (13), `lessons_ws` (16), `lessons_decode` (8). Written by the post-cut lane from evidence on
+   integration `8fb59b7f`.
+2. **PRD-03, proxy test bodies.** Copied, tests green. `crates/goalcup/tests/proxy_fixtures/` by
+   `0e411074`: `anthropic-sse.br` is the same blob (`8539e615`) as the old
+   `crates/goalcup-cli/tests/fixtures/m2-http/sse-body.br`; `codex-ws.jsonl` is the masked plaintext
+   the WebSocket test re-deflates (PRD-03 P03-6); `sse-flushed.br` is new. The zstd body, the h2
+   session and the RFC WebSocket examples are built inside the test files, not kept as fixture files.
+   Read through `proxy_fixtures/mod.rs` by the ten `proxy_*` and `lessons_*` binaries above. Written by
+   the post-cut lane from evidence on integration `8fb59b7f`.
+3. **PRD-05, masking source** (`redact.rs`, `redact/stream.rs`, `proxy/headers.rs`, `run_secret.rs`).
+   Copied, tests green. `crates/goalcup/src/mask/` by `2c95e8f1`: `rules.rs:5`, `stream.rs:4`,
+   `values.rs:5` and `meta.rs:4` each name their 0.x source. Covered by `mask_rules` (13),
+   `mask_stream` (11), `mask_values` (3), `mask_meta` (2) and 14 unit tests in `mask::`. Masking lane
+   line 07:25Z (605 tests green on its fix pass) is the nearest owner line. Written by the post-cut
+   lane from evidence on integration `8fb59b7f`.
+4. **PRD-05, masking corpus.** Copied, tests green. `crates/goalcup/tests/mask_corpus/` by `82484521`:
+   36 data files, each the same blob as a file under `spikes/*/fixtures/` at `d7759fdc^1`. That is the
+   86 named in section 4 minus the 50 redaction logs PRD-05's core slice dropped (amendment of 30 Oct,
+   merge 82484521). Two `synthetic/` files are new. Covered by `mask_corpus` (7); `mask_bench` reads the
+   corpus too and is not in gate fast, so it is not counted here. Written by the post-cut lane from
+   evidence on integration `8fb59b7f`.
+5. **PRD-04, native capture** (`native_capture.rs`, `sourcecap*.rs`). Rewritten with the rules kept,
+   tests green. `crates/goalcup/src/native/` (`fsx.rs`, `pattern.rs` by `403d9165`; `walk.rs`,
+   `tail.rs` by `01afcf22`). `fsx.rs:1` says "copied in spirit from the 0.x sourcecap" and
+   `pattern.rs:150` keeps the single-component matcher. Covered by `native_finish` (5),
+   `native_pattern` (8), `native_resume` (3), `native_room` (2), `native_safety` (9),
+   `native_snapshot` (7), `native_tail` (14), `native_walk` (7). Written by the post-cut lane from
+   evidence on integration `8fb59b7f`.
+6. **PRD-11, `native_plan.rs` root templates and home isolation.** Rewritten as data and code, tests
+   green. Root templates are the `native` rows with `{home}` roots in `connectors/<id>.toml` (from
+   `9423ab43`); home isolation is `crates/goalcup/src/connector/launch.rs` (by `b9fa50f8`). Covered by
+   `connector_launch` (8) and `connector_builtin` (6). Written by the post-cut lane from evidence on
+   integration `8fb59b7f`.
+7. **PRD-02, terminal shield** (`terminal.rs:27-292`). Copied, tests green.
+   `crates/goalcup/src/watchdog/shield.rs` by `5cb7fe05`: `shield.rs:2` names the source; `Shield`
+   (`:37`), `Modes` (`:117`), `wait_resuming` (`:154`) and the signal constants `CAUGHT` and
+   `GIVEN_BACK` are there. The later drain fix is core.log 14:54Z and 15:41Z (shield passes under
+   load). Covered by `watchdog_shield` (2) and `lessons_launch` (5). Written by the post-cut lane from
+   evidence on integration `8fb59b7f`.
+8. **PRD-02, open-file limit raise** (`start/proxy.rs:33-62`). Copied, tests green, at a different
+   path than section 4 names: `crates/goalcup/src/pipeline/fds.rs` (by `675077f7`), not
+   `watchdog/`. The macOS clamp is `OPEN_MAX` 10,240 (`fds.rs:19-22`, `min(OPEN_MAX, hard)` at
+   `:146`); `watchdog/spawn.rs` calls `fds::raise` for the harness. Covered by `watchdog_rlimit` (4)
+   and two `pipeline::fds` unit tests. Written by the post-cut lane from evidence on integration
+   `8fb59b7f`.
+9. **PRD-02, subreaper** (`subreaper.rs:73-74` and the start-time filter idea). The subreaper is
+   copied, tests green; the start-time filter is not in the code. `spawn.rs:153-166` holds
+   `subreaper()` with `PR_SET_CHILD_SUBREAPER` (by `5cb7fe05`), called at `watchdog/mod.rs:336`.
+   Processes left at the seal are named in the status note `outlived` (`pipeline/status.rs:164`)
+   instead of a sweep filtered by start time. `watchdog_end` (7) reads the `outlived` note; no test
+   asserts the `prctl` call itself. Written by the post-cut lane from evidence on integration
+   `8fb59b7f`.
+10. **PRD-06, uploader** (`crates/goalcup-cli/src/upload/**`). Rewritten, as section 4 says, tests
+    green. `crates/goalcup/src/upload/` (policy and the copied, trimmed `client.rs` by `e6bd8a50`;
+    `send.rs` by `a76bd11d`; nine files). Covered by `upload_backoff` (4), `upload_beat` (15),
+    `upload_chunks` (9), `upload_live` (1), `upload_manual` (10), `upload_null` (1), `upload_prune`
+    (4), `upload_queue` (7), `upload_resume` (9) and three unit tests. `upload_worker` is full tier
+    and did not run in gate fast (review LATEST.md section 3 item 3). Written by the post-cut lane from
+    evidence on integration `8fb59b7f`.
+11. **PRD-10, sleep lock, participant text, push lines, device login, browser opener.** Copied, tests
+    green, except the browser opener. `crates/goalcup/src/cli/`: `awake.rs` (by `a5d7ddc3`, `:1`
+    names 0.7's `goalcup-platform/src/awake.rs`), `text.rs` (by `d55030ee`), `push.rs` and `approve.rs`
+    (device flow, by `1c9afbed`; participant lane 08:26Z: `cli_push` 9 green). Covered by
+    `cli_push` (9), `cli_approve` (8), `cli_start` (9), `cli_seal` (6), `cli_recover` (5) and the other
+    `cli_*` binaries. **Not copied:** the opener of `machine.rs:515-534`. `approve.rs:416-431` runs
+    `open` or `xdg-open` only, so `wslview` and WSL's `rundll32.exe url.dll,FileProtocolHandler` are
+    gone. Routed to PRD-10. Written by the post-cut lane from evidence on integration `8fb59b7f`.
+12. **PRD-11, model host YAML, launch env build, mask grammar.** Copied, tests green.
+    `crates/goalcup/src/connector/` by `b9fa50f8`: YAML lookup in `hints.rs:138-151`, env build in
+    `launch.rs`, mask rows in `schema.rs:96-124`. Covered by `connector_hints` (6), `connector_launch`
+    (8), `connector_hosts` (4), `connector_no_model_address` (2). Written by the post-cut lane from
+    evidence on integration `8fb59b7f`.
+13. **PRD-09, usage readers and fixtures.** Readers rewritten, fixtures copied, tests green for the
+    readers. `crates/goalcup-verify/src/usage/` (`wire.rs` by `dab0ce1f`, eight files). Fixtures in
+    `crates/goalcup-verify/tests/usage_fixtures/` by `f5a529c8`: all six files (`m2-openai`,
+    `m2-anthropic`, four `m2-native` excerpts) match the sha256 in their `provenance.json`, and so do
+    the old sources at the commit each `copied_from` names. Readers covered by `usage_run1` (11) and
+    the `check_*` binaries. No test binary on integration reads `usage_fixtures/` yet, so the fixtures
+    are copied but not exercised. **Knowingly not copied:** the `connectors` snapshot fixtures, which
+    went with the old crate (amendment of 30 Oct, merge f5a529c8). Written by the post-cut lane from
+    evidence on integration `8fb59b7f`.
+14. **PRD-08, `goalcup-verify.rs:264-310`.** The parse rule is copied, tests green; the safe output
+    file creation is not. `crates/goalcup-verify/src/main.rs:93-111` (by `d10feef7`) uses `try_parse`,
+    so a usage error exits 3 and `--help` exits 0. No `create_output_file` exists: `check` writes to
+    stdout, and `usage --out` (`usage/mod.rs:642-648`) uses `create_dir_all` and `fs::write`, not a new
+    file with mode 0600 outside every input folder (PRD-08 section 1). Covered by `check_named` (16),
+    `check_invariants` (7) and the other `goalcup-verify` binaries. Routed to PRD-08 and PRD-09.
+    Written by the post-cut lane from evidence on integration `8fb59b7f`.
+15. **PRD-11, `connectors/*/harness.toml` facts.** Copied, tests green. `connectors/amp-cli.toml`,
+    `claude-code-cli.toml`, `codex-cli.toml`, `hermes-cli.toml` and `connectors/model-hosts.toml` by
+    `9423ab43`, except `amp-cli.toml` by `7a647ba4`: hosts, `native` session rows, home and CA
+    variables, `no_prompts` (none for Amp), `first_screen`, and `warn_missing` where a row sets it. The old files were deleted in the cut
+    (cuts.log 07:03Z said this row had no owner line). Covered by `connector_builtin` (6) and
+    `connector_hosts` (4). Written by the post-cut lane from evidence on integration `8fb59b7f`.
+16. **PRD-11, `kit_settle.py` first-run answers.** Partly copied. The permission answers are in
+    `no_prompts`: Claude Code `permissions.defaultMode` and `skipDangerousModePermissionPrompt`, Codex
+    `approval_policy` and `sandbox_mode`. **Not copied:** Claude Code's `.claude.json` answers
+    (`fullscreenUpsellSeenCount`, `hasSeenAutoDefaultNudge`) and Amp's `session.json` answers
+    (`neoWelcomeDismissed`, `agentMode`), so those first screens may show on a participant run. The
+    kit's cheapest-model settings are test-kit rules, not participant settings, and were not meant
+    to move. Routed to PRD-11. Written by the post-cut lane from evidence on integration `8fb59b7f`.
+17. **PRD-14, `crates/goalcup-cli/tests/common/**`.** Rewritten from the named sources, tests green.
+    `crates/goalcup/tests/common/` (nine files, from `22fe5926`): `home.rs` holds the real-home guard
+    (`real_home_guard.rs`), and `mod.rs`, `pki.rs` and `upstream.rs` the `m2_common` parts (PRD-14
+    section 5 table). 55 test binaries include `mod common;`; all of them are in the 632. Written by
+    the post-cut lane from evidence on integration `8fb59b7f`.
+18. **PRD-17, lesson byte inputs.** Copied, tests green. `crates/goalcup/tests/lessons_fixtures/` by
+    `2f771304`: both `openssl-clienthello-*.hex` are the same blobs (`0c400281`, `284c3d4d`) as the old
+    `crates/goalcup-cli/tests/fixtures/m2-tls/` files. Read by `lessons_connect` (12). Written by the
+    post-cut lane from evidence on integration `8fb59b7f`.
+19. **PRD-17, every old crate, test and `docs/DECISIONS.md`.** Copied as acceptance cases, tests green.
+    `docs/plans/2026-10-30-v1.0/LESSONS.md` (from `1423f8f9`) and eight `crates/goalcup/tests/lessons_*.rs`
+    binaries: `lessons_connect` (12), `lessons_decode` (8), `lessons_hosts` (6), `lessons_http1` (13),
+    `lessons_launch` (5), `lessons_pipeline` (1), `lessons_tls` (5), `lessons_ws` (16). Deletion gate
+    green at `aed8e51f` (LESSONS.md line 232, PRD-17 slice 10, quoted in the cut merge message).
+    `docs/DECISIONS.md` is still on integration; it was not on the cut list. Written by the post-cut lane
+    from evidence on integration `8fb59b7f`.
+
+**Follow-ups outside this PRD's files.**
+
+- `scripts/check-links.py` and `scripts/test_check_links.py` are still on integration at `8fb59b7f`.
+  Section 5 put PRD-14's delete in the phase 3 merge; it did not land. Owner: PRD-14.
+- No Codex smoke row ran on the cut commit (section 5, "the core set `direct` rows and the Codex kill
+  row then rerun on the cut commit"; integrator.log 09:57Z). It goes on the PRD-12 pad schedule under
+  PRD-16, run on the post-cut head.
+- Gaps found above and routed: the WSL browser opener (PRD-10, row 11), the safe output file rule
+  (PRD-08 and PRD-09, row 14), the unread `usage_fixtures` (PRD-09, row 13), and the Claude Code and
+  Amp first-screen answers (PRD-11, row 16).
