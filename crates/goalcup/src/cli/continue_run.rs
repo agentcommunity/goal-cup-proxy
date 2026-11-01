@@ -16,7 +16,7 @@ use serde_json::json;
 use super::approve::{self, Stop};
 use super::start::{self, Part, Ready};
 use super::{
-    EntryFacts, Server, ServerJson, alive, awake, credential, entry_dir, fail, find, home, push,
+    EntryFacts, Server, ServerJson, alive, awake, credential, entry_dir, fail, find, home, log, push,
     read_json, say, server_json, skill, status_json, text, watchdog_alive,
 };
 use crate::connector::{self, Env};
@@ -289,11 +289,10 @@ pub fn prepare(
     lines.extend(first_message(&found.run_dir, resumed, vars));
     lines.extend(deadline.map(|ms| text::ends_line(ms / 1000, super::now())));
     lines.push(text::upload_to(server.host()));
-    lines.extend(
-        plan.harness_version
-            .is_none()
-            .then(|| text::version_unread(&name)),
-    );
+    if plan.harness_version.is_none() {
+        log::line(&new_dir, "version_unread", &[]);
+        lines.push(text::version_unread(&name, server.host().is_some()));
+    }
     for (what, file) in [
         ("Connector", first.map(PathBuf::from)),
         ("Host list", sj.hosts_file.clone()),
