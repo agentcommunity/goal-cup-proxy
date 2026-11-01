@@ -21,6 +21,7 @@ TIMED = tuple(pc.FAULTS)  # section 3.1, at <minute> after the paste; pc.SPAN on
 USAGE = "usage: pad-run <run dir> " + "|".join([s + " N" * (s == "wait-calls") for s in STEPS] + [t + "@M" for t in TIMED]
                                                 + ["pre SCRIPT", "exec SCRIPT@M"])
 KEEP_SHELL = "exec sleep 1000000"  # the last line of a kill-watchdog-recover run's launch.sh
+DODGER_EXPECTED = ("threads_match", "wire_keeps_up")  # checks a dodger run is expected to fail live, as in the final check
 PROXY_VALUE = "127.0.0.1:9"  # the proxy setting exec/proxy-setting.sh writes (PAD_PROXY); start must not print it
 EVERY = {"status": 10, "procs": 30, "pane": 60, "live": 300}  # section 4: the watch's seconds per kind of line
 OUT = ("verify", "watch", "exec", "status.json", "harness-files.json", "meta-box.json")  # what out.tar carries
@@ -349,6 +350,7 @@ class Run:
         for argv in (["new-session", "-d", "-s", t, "-x", "200", "-y", "50"], ["set-option", "-w", "-t", t, "remain-on-exit", "on"],
                      ["respawn-pane", "-k", "-t", t, "bash " + shlex.quote(self.path("launch.sh"))]):
             sh(["tmux"] + argv)
+        self.pane()  # the launch block and the version line, before any wait (replaced form only)
         if server == "off":  # no approval: paste now
             self.recording_seen("no 'Recording in chat mode'")
             self.daemon_check()
@@ -500,7 +502,11 @@ class Run:
                  "gaps": sum(pc.count(pc.dig(x, "s6_gaps")) for x in entries),
                  "secrets": pc.worst(entries, "secrets").get("result") or "not run"}
         fail = sorted({c["id"] for c in checks if c.get("result") == "fail" and isinstance(c.get("id"), str)})
-        append(self.path("watch", "live.jsonl"), dict(facts, result=rep.get("result"), fail=fail))
+        result = rep.get("result")
+        if self.s.get("case") == "dodger":  # the final check names these for a dodger too: expected, not an alarm
+            fail = [i for i in fail if i not in DODGER_EXPECTED]
+            result = "ok" if not fail and result == "fail" else result
+        append(self.path("watch", "live.jsonl"), dict(facts, result=result, fail=fail))
         return ", ".join("%s %s" % kv for kv in facts.items())
 
     def sealed(self):
