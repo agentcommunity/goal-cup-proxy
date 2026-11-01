@@ -1090,3 +1090,8 @@ Names for `LESSONS.md` (the lessons lane writes them; judge 14:56Z, 15:13Z):
 - **Done:** LESSONS.md upkeep against the new integration head (PRD-02 guard files, PRD-10 cli_commands.rs, PRD-08 C3 fix). 117 rows read green, 43 open. No Rust line was added: the eight lessons_*.rs files still total 4,345 (see the slice 6 note). Gate check 1 dry run refreshed.
 - **Still open for want of a named guard (seven rows):** watchdog_restart.rs (L-C12, L-P1, L-P2; PRD-02), pipeline_stall.rs (L-R2; PRD-02), cli_continue.rs (L-HF6, L-SC4; PRD-10) and cli_commands::second_start_on_one_home_refuses (L-HF4; PRD-10). Nothing PRD-17 can do closes them: the owners land the tests, or a later replan repoints or drops the rows, before the deletion gate. The other open rows wait on R:, D: or X: entries shown at the gate or in real runs.
 - No locked ledger item is touched.
+
+### 2026-11-01, replan after PRD-17 slice 8 (gate repoint and run, integration head 6fb5db63)
+
+- **On integration now:** `watchdog_restart.rs`, `cli_continue.rs`, `cli_recover.rs` and `cli_commands::second_start_on_one_home_refuses`; rows L-C12, L-P1, L-P2, L-HF4, L-HF6 and L-SC4 are repointed in `LESSONS.md` and read `green`. Not on integration: `pipeline_stall.rs` (PRD-02).
+- **Gate not passed, check 1: L-R2.** Counts, check verdicts, the PRD-02 proposal and the open thin-guard rows are in `LESSONS.md`, section "Gate run of 2026-11-01". PRD-13 may not delete yet. No Rust added; no locked ledger item touched.
