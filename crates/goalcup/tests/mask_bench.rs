@@ -180,7 +180,12 @@ fn planted_input(values: &[Vec<u8>]) -> (Vec<u8>, Vec<std::ops::Range<usize>>) {
         .filter_map(Result::ok)
         .map(|e| e.path())
         .filter(|p| p.is_dir())
-        .flat_map(|dir| std::fs::read_dir(dir).into_iter().flatten().filter_map(Result::ok))
+        .flat_map(|dir| {
+            std::fs::read_dir(dir)
+                .into_iter()
+                .flatten()
+                .filter_map(Result::ok)
+        })
         .map(|e| e.path())
         .filter(|p| p.is_file())
         .collect();
@@ -258,12 +263,17 @@ fn exact_values_mask_above_a_floor() {
         "exact_values_mask_above_a_floor: Masker::new with 32 values of 256 bytes: {:.1} ms",
         built.as_secs_f64() * 1e3
     );
-    assert!(built < Duration::from_secs(1), "Masker::new took 1 s or more");
+    assert!(
+        built < Duration::from_secs(1),
+        "Masker::new took 1 s or more"
+    );
 
     let (input, must) = planted_input(&values);
     assert!(input.len() > 3_000_000, "the input is about 4 MB");
     let piece = 16 * 1024;
-    let cuts: Vec<usize> = (1..input.len().div_ceil(piece)).map(|i| i * piece).collect();
+    let cuts: Vec<usize> = (1..input.len().div_ceil(piece))
+        .map(|i| i * piece)
+        .collect();
     let out = common::stream_in(&m, StreamKind::HttpReq, &input, &cuts);
     for v in &values {
         assert!(
@@ -272,9 +282,15 @@ fn exact_values_mask_above_a_floor() {
         );
     }
     for r in &must {
-        assert!(common::starred(&out, r.clone()), "a planted form left raw at {r:?}");
+        assert!(
+            common::starred(&out, r.clone()),
+            "a planted form left raw at {r:?}"
+        );
     }
-    assert!(out == m.mask_whole(&input), "the stream differs from mask_whole");
+    assert!(
+        out == m.mask_whole(&input),
+        "the stream differs from mask_whole"
+    );
 
     let mut best = Duration::MAX;
     for _ in 0..3 {

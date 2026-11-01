@@ -348,13 +348,19 @@ impl RunSecrets {
     fn children(&self, node: u32) -> &[(u8, u32)] {
         self.nodes.get(node as usize).map_or(&[], |n| {
             let first = n.first as usize;
-            self.edges.get(first..first + n.count as usize).unwrap_or(&[])
+            self.edges
+                .get(first..first + n.count as usize)
+                .unwrap_or(&[])
         })
     }
 
     fn child(&self, node: u32, b: u8) -> Option<u32> {
         if node == 0 {
-            return self.root.get(usize::from(b)).copied().filter(|&c| c != NONE);
+            return self
+                .root
+                .get(usize::from(b))
+                .copied()
+                .filter(|&c| c != NONE);
         }
         let kids = self.children(node);
         let at = kids.binary_search_by_key(&b, |e| e.0).ok()?;
@@ -370,12 +376,7 @@ impl RunSecrets {
     fn next(&self, s: State, b: u8) -> ([Option<State>; 2], Option<usize>) {
         let mut out = [None, None];
         let mut done = None;
-        let gap = |brk| {
-            Some(State {
-                brk,
-                ..s
-            })
-        };
+        let gap = |brk| Some(State { brk, ..s });
         match (s.brk, b) {
             (Break::None | Break::Done, _) => {
                 let byte = if b == b'\\' && s.no_backslash {
@@ -385,7 +386,10 @@ impl RunSecrets {
                 };
                 if let Some(child) = byte {
                     let node = self.nodes.get(child as usize);
-                    done = node.map(|n| n.end).filter(|&f| f != NONE).map(|f| f as usize);
+                    done = node
+                        .map(|n| n.end)
+                        .filter(|&f| f != NONE)
+                        .map(|f| f as usize);
                     if node.is_some_and(|n| n.count > 0) {
                         out[0] = Some(State {
                             node: child,
@@ -811,7 +815,7 @@ mod tests {
             (self.next() % n.max(1) as u64) as usize
         }
 
-        fn pick<'a>(&mut self, set: &'a [u8]) -> u8 {
+        fn pick(&mut self, set: &[u8]) -> u8 {
             set[self.below(set.len())]
         }
     }
@@ -921,7 +925,11 @@ mod tests {
                 .map(|f| (f, Progress::default()))
                 .collect();
             let walk = secrets.spawn(text[start]);
-            assert_eq!(walk.is_some(), !old.is_empty(), "case {case}: spawn at {start}");
+            assert_eq!(
+                walk.is_some(),
+                !old.is_empty(),
+                "case {case}: spawn at {start}"
+            );
             let Some(mut walk) = walk else {
                 continue;
             };

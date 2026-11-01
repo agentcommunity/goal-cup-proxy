@@ -147,7 +147,6 @@ impl Pattern {
             re,
         })
     }
-
 }
 
 /// The compiled form of a connector rule (PRD-11 data, seam S3): `"field"\s*:\s*VALUE` with the
