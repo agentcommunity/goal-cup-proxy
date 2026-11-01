@@ -318,7 +318,16 @@ fn an_unread_harness_version_is_sent_as_unknown_on_the_continue_call() {
         serde_json::from_slice::<Value>(&body).unwrap()
     });
     let mut w = World::new(Some(format!("http://{addr}")));
-    // The tester connector's program is `true`, which prints no version.
+    // A program whose version probe fails: the version is unread.
+    let script = w.t.home().join("tester-none");
+    std::fs::write(&script, "#!/bin/sh\nexit 1\n").unwrap();
+    std::fs::set_permissions(&script, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+    let body = std::fs::read_to_string(&w.connector).unwrap();
+    std::fs::write(
+        &w.connector,
+        body.replace("program = \"true\"", &format!("program = \"{}\"", script.display())),
+    )
+    .unwrap();
     w.part(1, false, Some(World::sealed(json!({"model_requests": 2}))));
     w.prepare().unwrap_or_else(|s| panic!("{}", s.text));
     assert_eq!(seen.join().unwrap()["harness_version"], json!("unknown"));
