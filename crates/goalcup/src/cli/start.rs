@@ -98,7 +98,7 @@ extern "C" fn on_signal(_: libc::c_int) {
 /// `goalcup seal` is what writes that reason. The ready line is printed by a thread that polls, so
 /// the harness may open a few ms before it (seam question to PRD-02: a ready hook in
 /// `watchdog::run`, so the print can be ordered before the harness starts).
-fn hand_over(ready: Ready) -> ExitCode {
+pub(super) fn hand_over(ready: Ready) -> ExitCode {
     // `_lock` keeps the machine awake until this function returns.
     let Ready { plan, facts, _lock } = ready;
     let (dir, name, run) = (
@@ -282,13 +282,7 @@ pub fn prepare(a: &Args, c: &Ctx, out: &mut dyn std::io::Write) -> Result<Ready,
         &entry_dir,
     );
     // Step 9: the launch block.
-    // The deadline is the server's seconds left on the boot clock, put on the wall clock at the
-    // same moment `local_wall` is read, so their difference is exactly the time left.
-    let local_wall = wall_ms();
-    let deadline = opened.deadline.map(|m| {
-        let left_ms = m.ns().saturating_sub(Mono::now().ns()) / 1_000_000;
-        local_wall.saturating_add(left_ms)
-    });
+    let (local_wall, deadline) = deadline_ms(opened.deadline);
     let mut lines = vec![text::run_kind(mode).to_owned()];
     lines.extend(connector.first_screen.clone());
     lines.extend(first_message(a, c, prompt.as_deref(), &opened.run)?);
@@ -305,29 +299,79 @@ pub fn prepare(a: &Args, c: &Ctx, out: &mut dyn std::io::Write) -> Result<Ready,
     lines.push(text::harness_home(&name, &plan.home));
     lines.extend(sleep_warning);
     let _ = writeln!(out, "{}", lines.join("\n"));
-    plan.env.insert(
-        "GOALCUP_TIME_LEFT_FILE".to_owned(),
-        entry_dir.join("upload.json").to_string_lossy().into_owned(),
-    );
-    let facts = StartFacts {
+    let part = Part {
         run: opened.run,
         entry: opened.entry,
         segment: 0,
         entry_dir,
         deadline,
-        server_time: None,
         local_wall,
-        workspace: c.project.clone(),
+    };
+    let facts = start_facts(&c.project, &c.vars, &mut plan, &values, part);
+    Ok(Ready {
+        plan,
+        facts,
+        _lock: lock,
+    })
+}
+
+/// The deadline is the server's seconds left on the boot clock, put on the wall clock at the same
+/// moment `local_wall` is read, so their difference is exactly the time left. Returns
+/// `(local_wall, deadline)` in unix ms.
+pub(super) fn deadline_ms(left: Option<Mono>) -> (u64, Option<u64>) {
+    let local_wall = wall_ms();
+    let deadline = left.map(|m| {
+        let left_ms = m.ns().saturating_sub(Mono::now().ns()) / 1_000_000;
+        local_wall.saturating_add(left_ms)
+    });
+    (local_wall, deadline)
+}
+
+/// Which part the facts are for (`segment` 0 for `start`, then 1, 2 for each `continue`).
+pub(super) struct Part {
+    pub run: String,
+    pub entry: String,
+    pub segment: u32,
+    pub entry_dir: PathBuf,
+    pub deadline: Option<u64>,
+    pub local_wall: u64,
+}
+
+/// The start facts (seam S17) of `start` and `continue`; adds `GOALCUP_TIME_LEFT_FILE` to the
+/// plan's environment (section 10).
+pub(super) fn start_facts(
+    project: &Path,
+    vars: &BTreeMap<String, String>,
+    plan: &mut LaunchPlan,
+    values: &[SecretValue],
+    part: Part,
+) -> StartFacts {
+    plan.env.insert(
+        "GOALCUP_TIME_LEFT_FILE".to_owned(),
+        part.entry_dir
+            .join("upload.json")
+            .to_string_lossy()
+            .into_owned(),
+    );
+    StartFacts {
+        run: part.run,
+        entry: part.entry,
+        segment: part.segment,
+        entry_dir: part.entry_dir,
+        deadline: part.deadline,
+        server_time: None,
+        local_wall: part.local_wall,
+        workspace: project.to_path_buf(),
         // Each of these five becomes the typed field of the same name (S17) with one edit.
         connector: to_value(&plan.connector).unwrap_or_default(),
         harness_version: plan.harness_version.clone(),
-        keep: c.vars.get("GOALCUP_KEEP_PARTS").is_some_and(|v| v == "1"),
+        keep: vars.get("GOALCUP_KEEP_PARTS").is_some_and(|v| v == "1"),
         build: None,
         hosts: to_value(&plan.hosts).unwrap_or_default(),
         hosts_sha256: plan.hosts.sha256().to_owned(),
         native: to_value(&plan.native).unwrap_or_default(),
         mask_rules: to_value(&plan.mask_rules).unwrap_or_default(),
-        values: to_value(&values).unwrap_or_default(),
+        values: to_value(values).unwrap_or_default(),
         // The watchdog mints the run CA and fills this in.
         ca: CaPem {
             cert: String::new(),
@@ -337,12 +381,7 @@ pub fn prepare(a: &Args, c: &Ctx, out: &mut dyn std::io::Write) -> Result<Ready,
         harness: None,
         null_since: None,
         notes: plan.notes.clone(),
-    };
-    Ok(Ready {
-        plan,
-        facts,
-        _lock: lock,
-    })
+    }
 }
 
 /// Section 8: the push block and the prompt, written to `first-message.txt` and put on the
@@ -399,7 +438,7 @@ fn wall_ms() -> u64 {
 }
 
 /// The run's idempotency key for the open: not secret.
-fn session_id() -> String {
+pub(super) fn session_id() -> String {
     let t = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default();

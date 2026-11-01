@@ -140,7 +140,7 @@ pub fn begin(home: &Path, server: &Server, ask: &Ask, out: &mut dyn Write) -> Re
 
 /// `POST path`, again while the server says to wait for the code's life: a `429` always, and with
 /// `outage` a transport failure or a 5xx too. A `Retry-After` is obeyed (1 to 60 s).
-fn send<T: serde::de::DeserializeOwned>(
+pub(super) fn send<T: serde::de::DeserializeOwned>(
     client: &ServerClient,
     path: &str,
     body: &Value,
@@ -199,30 +199,28 @@ fn server_record(
     }
 }
 
+/// `bytes` to `path` by a temporary file and a rename, mode 0600.
+pub(super) fn put(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    let tmp = path.with_extension("tmp");
+    let _ = fs::remove_file(&tmp);
+    let mut f = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&tmp)?;
+    f.write_all(bytes)?;
+    f.sync_all()?;
+    fs::rename(&tmp, path)
+}
+
 /// The run folder: the credential first, `server.json` last, so a run is listed only whole. A
 /// failure takes the folder away again.
 fn write_run(home: &Path, sj: &ServerJson, secret: Option<&str>) -> Result<(), Stop> {
     let dir = run_dir(home, &sj.run);
-    let put = |path: &Path, bytes: &[u8], mode: u32| {
-        let tmp = path.with_extension("tmp");
-        let _ = fs::remove_file(&tmp);
-        let mut f = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(mode)
-            .open(&tmp)?;
-        f.write_all(bytes)?;
-        f.sync_all()?;
-        fs::rename(&tmp, path)
-    };
     let written = fs::create_dir_all(&dir)
-        .and_then(|()| secret.map_or(Ok(()), |s| put(&credential(&dir), s.as_bytes(), 0o600)))
+        .and_then(|()| secret.map_or(Ok(()), |s| put(&credential(&dir), s.as_bytes())))
         .and_then(|()| {
-            put(
-                &server_json(&dir),
-                &serde_json::to_vec(sj).unwrap_or_default(),
-                0o600,
-            )
+            put(&server_json(&dir), &serde_json::to_vec(sj).unwrap_or_default())
         });
     written.map_err(|_| {
         let _ = fs::remove_dir_all(&dir);
@@ -231,7 +229,7 @@ fn write_run(home: &Path, sj: &ServerJson, secret: Option<&str>) -> Result<(), S
 }
 
 /// `r` or `e` and 16 hex: the ids become folder names, so the server's word is checked.
-fn is_id(id: &str, first: char) -> bool {
+pub(super) fn is_id(id: &str, first: char) -> bool {
     id.strip_prefix(first).is_some_and(|h| {
         h.len() == 16
             && h.bytes()
@@ -239,7 +237,7 @@ fn is_id(id: &str, first: char) -> bool {
     })
 }
 
-fn random_id(first: char) -> String {
+pub(super) fn random_id(first: char) -> String {
     let mut b = [0u8; 8];
     let got = File::open("/dev/urandom").and_then(|mut f| f.read_exact(&mut b));
     if got.is_err() {

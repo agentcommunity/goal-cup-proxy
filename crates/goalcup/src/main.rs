@@ -175,7 +175,15 @@ fn run(command: Command) -> ExitCode {
             yes,
             record_host,
         } => cli::setup::run(harness.as_deref(), yes, record_host.as_deref()),
-        Command::Continue { .. } => not_built("continue"),
+        Command::Continue {
+            run,
+            connector,
+            hosts,
+        } => cli::continue_run::run(&cli::continue_run::Args {
+            run: run.as_deref(),
+            connector: connector.as_deref(),
+            hosts: hosts.as_deref(),
+        }),
         Command::Recover { .. } => not_built("recover"),
         Command::Status { part, json } => cli::status::run(part, json),
         Command::Seal { part, yes } => cli::seal::run(part, yes),
