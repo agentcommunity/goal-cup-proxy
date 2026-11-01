@@ -255,7 +255,10 @@ fn secrets_placeholders_are_no_hit_and_real_bodies_are() {
         (r#""password": "[REDACTED]******""#.into(), 0),
         (format!(r#""password": "{real}""#), 1),
         (format!("{head} \u{2026}[redacted]\u{2026} {tail}"), 0),
-        (format!("{head} ...[redacted]... \\u2026[redacted]\\u2026 {tail}"), 0),
+        (
+            format!("{head} ...[redacted]... \\u2026[redacted]\\u2026 {tail}"),
+            0,
+        ),
         (format!("{head} \u{2026}{real}\u{2026} {tail}"), 1),
         (pem(&format!("\u{2026}{real}\u{2026}"), "\n"), 1),
     ];
