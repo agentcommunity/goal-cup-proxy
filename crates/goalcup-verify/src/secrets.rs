@@ -235,8 +235,8 @@ fn placeholder(span: &[u8], kind: &str) -> bool {
         s = find(s, b"KEY-----").map_or(s, |i| &s[i + 8..]);
         s = find(s, b"-----END").map_or(s, |i| &s[..i]);
     }
-    let toks = ["[REDACTED]", "[HIDDEN]", "<redacted>", "\\n", "*", "...", "\u{2026}"];
-    while let Some(t) = toks.iter().find(|t| {
+    let toks = "[REDACTED] [HIDDEN] <redacted> \\n * ... \u{2026}".split(' ');
+    while let Some(t) = toks.clone().find(|t| {
         s = s.trim_ascii_start();
         s.len() >= t.len() && s[..t.len()].eq_ignore_ascii_case(t.as_bytes())
     }) {
