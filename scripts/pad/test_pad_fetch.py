@@ -76,7 +76,10 @@ class Fetch(unittest.TestCase):
                 res = "timeout"
             if cleanup:
                 r.step_cleanup()
-            self.log = open(os.path.join(r.dir, "calls.log")).read() if os.path.exists(os.path.join(r.dir, "calls.log")) else ""
+            self.log = ""
+            if os.path.exists(os.path.join(r.dir, "calls.log")):
+                with open(os.path.join(r.dir, "calls.log")) as f:
+                    self.log = f.read()
             self.kept = os.path.isfile(os.path.join(r.dir, "rec-kept", ENTRY, "rec", "x"))
             return res
 
