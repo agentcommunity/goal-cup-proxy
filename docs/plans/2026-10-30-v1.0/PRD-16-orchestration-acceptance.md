@@ -2504,3 +2504,12 @@ kept and now cites BUILD-PROMPT section 5, since B3 no longer carries it.
 
 - **Size report, PRD-06** (`wc -l` on integration): `crates/goalcup/src/upload/` is 3,315 lines (client 644, mod 573, manual 509, send 415, state 290, beat 288, chunk 273, policy 232, prune 91) against the PRD-00 row of 1,000. Overage on an owner estimate is reported, not cut; carry to the end-of-build report with the other overages.
 - **Gate effect:** none on order. Two items are queued for PRD-10 (the `StillRecording` and `NotClosed` participant lines) and one for PRD-12 (U8 waits for the harness to exit). PRD-06 acceptance U8 now needs the pad run; U3 and U5 as before. No locked ledger item is touched.
+
+### 2026-11-01, replan after PRD-10 slice 11 (merge 64cf49ac)
+
+- **Size report, PRD-10** (`wc -l` on integration): `crates/goalcup/src/cli/*.rs` is 5,274 lines (text.rs 1,290), `main.rs` 206; CLI tests
+  (`tests/cli_*.rs` and `cli_common`) 3,094. PRD-00 rows: about 2,900 src, 1,200 tests (src about 1.8 times, tests about 2.6 times).
+  Overage on an owner estimate is reported, not cut; carry to the end-of-build report. The wording in `text.rs` serves point 6.
+- **Gate effect:** acceptance 10 and 11 (`continue`, `recover`) are now built, so the "not built yet" notes in ARCHITECTURE.md,
+  CONNECTOR-SCHEMA.md and PARTICIPANT-GUIDE.md (PRD-15) can go; the PRD-17 rows L-HF4, L-HF6, L-SC4 can be repointed to the named tests once a
+  box run passes them on integration. The PRD-07 `repo_url` ask for test mode is still open in PRD-10. No locked ledger item is touched.

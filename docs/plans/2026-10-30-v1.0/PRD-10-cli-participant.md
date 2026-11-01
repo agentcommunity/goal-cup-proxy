@@ -1607,3 +1607,17 @@ The PRD-17 deletion gate (PRD-13) waits on tests that this PRD is asked to land 
 
 - **Ask to PRD-10 (integration checklist, before 1.0):** `StillRecording` from `goalcup upload` now also covers a dead entry whose harness still runs (nothing records or sends it). `cli/text.rs` says "it sends itself" for it, which is wrong for that case (points 1 and 6), and `NotClosed` still maps to "run goalcup continue", wrong after a failed close. Either add a distinct outcome whose line points to `goalcup recover` (PRD-06 adds the variant in the same integration merge; say so in a replan note first, since PRD-10's exhaustive matches break otherwise) or word `StillRecording` neutrally; word `NotClosed` to match what failed. Cover the line in an existing CLI text case, no new test file.
 - No locked ledger item is touched.
+
+### 2026-11-01, replan after PRD-10 slice 11 (merge 64cf49ac)
+
+- Merged: `goalcup recover`, `goalcup continue` and `goalcup seal` on a dead entry (acceptance 10 and 11), the HF4 test
+  `cli_commands::second_start_on_one_home_refuses`, and `cli_continue.rs` (the L-HF6 and L-SC4 tests PRD-17 waits on).
+  The gate symbols (`watchdog::recover`, `pipeline::close_dead_entry`) were on integration, so nothing is gated any more.
+- PRD-06 ask done: `StillRecording` now says the agent may still be running and points to `goalcup status` and
+  `goalcup recover`; `NotClosed` says the part could not be closed and to run `goalcup upload` again. No new variant.
+- **Still open:** the PRD-07 ask (`repo_url` null for `start --test`) names `commands/start/server.rs` in the old
+  `goalcup-cli` crate; check where the new `goalcup` crate opens a test run and apply it there with the existing `upload_open.rs` case.
+- **Size (point 6, the participant is told plainly):** `text.rs` is 1,290 lines against an estimate of 420. It serves point 6 (what was
+  recorded, what was not, what to do next), plus points 3 and 7 (each refusal and gap line, each harness path). It is the participant-facing
+  wording in one place; no behaviour-preserving cut was found. Reported, not cut (ledger L2). Scratch branch `v1.0/prd-10-cli-fixer-tmp` is for the integrator to delete.
+- No seam change. No locked ledger item is touched.
