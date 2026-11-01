@@ -136,8 +136,7 @@ fn report_counts_carry_hosts_and_pinned_tunnels() {
             }
             _ => None,
         })
-        .filter(|j| j["ev"] == "count")
-        .next_back()
+        .rfind(|j| j["ev"] == "count")
         .unwrap();
     assert_eq!(c["hosts"], last["hosts"]);
     assert_eq!(c["tunnel_hosts"], last["tunnel_hosts"]);
