@@ -23,6 +23,7 @@ SEAM = {k: tuple(v.split(".")) for k, v in {
     "s7_threads": "threads", "t_parent": "parent", "t_models": "models", "t_wire": "wire_calls",
     "t_native": "native_calls", "s13_requests": "model_requests", "s13_final": "final", "s13_complete": "complete",
     "s4_mode": "mode", "s4_port": "port", "s4_harness_pid": "harness.pid", "s4_requests": "written.model_requests",
+    "s4_tunnels": "written.tunnel_hosts",
     "s4_off": "written.off_ms", "s4_seal": "seal.reason", "s4_pid": "pid", "s4_spans": "off.spans", "s4_down_ms": "off.ms",
     "s4_since": "off.since", "s4_last": "last_request_at", "s9_final": "final", "s9_keep": "keep", "s9_state": "state",
     "s6_hosts": "counts.hosts", "s6_tunnel_hosts": "counts.tunnel_hosts", "s_wall": "wall", "s_reason": "reason",
@@ -103,6 +104,17 @@ def dig(doc, name):
     for key in SEAM[name]:
         doc = doc.get(key) if isinstance(doc, dict) else None
     return doc
+
+def work(status, case, host):
+    """Work written so far, from one status sample: a dodger's calls ride its pinned host's tunnels (S4 tunnel_hosts conns),
+    every other case counts model requests (None when the sample has no count)."""
+    if case != "dodger":
+        n = dig(status, "s4_requests")
+    else:
+        t = dig(status, "s4_tunnels")
+        v = t.get(host) if isinstance(t, dict) else None
+        n = v.get("conns") if isinstance(v, dict) else None
+    return n if isinstance(n, int) else None
 
 def items(d):
     return [(str(k), v) for k, v in d.items()] if isinstance(d, dict) else []
@@ -491,10 +503,11 @@ def recorder_kills(r, kinds):
     r.flag(len(kills) < kinds.count("kill-recorder"), "faults", "INCONCLUSIVE", short)
     # The record's evidence around each kill: a status sample before and after it (the watch ran), and after a
     # recorder kill, written model requests up by at least 1 (section 1a).
-    pairs = [(t, n) for t, n in ((when(s.get("pad_at")), dig(s, "s4_requests")) for s in r.samples) if t]
+    case, host = r.meta.get("case"), r.meta.get("model_host")
+    pairs = [(t, n) for t, n in ((when(s.get("pad_at")), work(s, case, host)) for s in r.samples) if t]
     times, reqs = [t for t, _ in pairs], [(t, n) for t, n in pairs if isinstance(n, int)]
     rec = [(f.get("result"), when(f.get("at"))) for f in r.faults if f.get("kind") == "wait-recovery"]
-    killed = [t for t in (when(f.get("at")) for f in kills) if t]
+    killed = [t for t in (when(f.get("killed_at") or f.get("at")) for f in kills) if t]  # killed_at: taken just before kill9
     # Each kill's window runs to the end of the wait-recovery after it (open when unknown); a wait-recovery's from
     # the last kill before it. A record-only check (gaps, null_mode) is judged whatever the pad did after.
     for f in fired(r, "kill-recorder", "kill-watchdog"):
@@ -503,8 +516,12 @@ def recorder_kills(r, kinds):
             r.mark("faults", "INCONCLUSIVE", "no status sample on both sides of the %s at %s" % (f["kind"], f.get("at")))
         elif f in kills and "kill-recorder" in kinds:
             old, new = [n for t, n in reqs if t < k], [n for t, n in reqs if t > k]
-            fail(r, old and new and max(new) <= max(old), k, next((e for _, e in rec if e is None or e >= k), None),
-                 "no model request written after the kill at %s (status samples)" % f.get("at"))
+            stalled = old and new and max(new) <= max(old)
+            if f.get("quiet") and stalled:  # the pad saw no request in flight: the kill proves nothing about new work
+                r.mark("faults", "INCONCLUSIVE", "no work in flight at the kill at %s" % f.get("at"))
+            else:
+                fail(r, stalled, k, next((e for _, e in rec if e is None or e >= k), None),
+                     "no work written after the kill at %s (status samples)" % f.get("at"))
     for got, end in rec:
         fail(r, got == "FAIL", max([k for k in killed if end is None or k <= end], default=None), end,
              "did not stand back up (wait-recovery)")
@@ -527,9 +544,19 @@ def recorder_kills(r, kinds):
     r.flag(any("mode" in s and dig(s, "s4_mode") in (None, "null") for s in r.samples), "faults", "FAIL",
            "a status.jsonl line with mode null")
     r.flag(len(mine) != len(kills), "faults", "FAIL", "%d recorder_down gaps for %d kills" % (len(mine), len(kills)))
+    quiet = [when(f.get("killed_at") or f.get("at")) for f in kills if f.get("quiet")]
     for a, b, ms in ((when(g.get("start")), when(g.get("end")), g.get("ms")) for g in mine):
         ms = ms if isinstance(ms, (int, float)) else (b - a).total_seconds() * 1000 if a and b else None
-        r.flag(ms is None or ms >= 2000, "faults", "FAIL", "a recorder_down gap of %s ms, not under 2 s" % ms)
+        # PRD-02 R1: each gap is under 2 s, and ends within 2 s of its kill. A quiet kill (no request in flight) can
+        # leave unlinked records out of the chain, so its start may trail the kill: only its end is timed.
+        k = min(killed, key=lambda t: abs(b - t), default=None) if b else None
+        if k:
+            late = (b - k).total_seconds()
+            r.flag(not 0 <= late <= 2, "faults", "FAIL",
+                   "gap ended %.1f s after the kill (limit 2 s); gap length %s ms" % (late, ms))
+            long = ms is None or ms >= 2000
+            r.flag(long, "faults", "INCONCLUSIVE" if k in quiet else "FAIL",
+                   ("quiet kill: gap of %s ms, length not shown" if k in quiet else "a recorder_down gap of %s ms, not under 2 s") % ms)
     r.flag(kills and dig(r.local, "s6_exit") != 1, "faults", "FAIL", "verifier exit %s, a kill row expects 1" % dig(r.local, "s6_exit"))
 
 def near(gap, fault):
@@ -659,7 +686,8 @@ def route_row(r):
     r.flag(got != "pass", "faults", "FAIL" if got else "INCONCLUSIVE", "listed_hosts_decrypted %s" % (got or "not in the report"))
     r.flag((worst(r.entries, "listed_hosts_decrypted").get("facts") or {}).get("refusal_after_trust"), "faults", "FAIL",
            "refusal_after_trust is set")
-    reqs = [(when(s.get("pad_at")), dig(s, "s4_requests")) for s in r.samples if isinstance(dig(s, "s4_requests"), int)]
+    reqs = [(when(s.get("pad_at")), work(s, r.meta.get("case"), r.meta.get("model_host"))) for s in r.samples]
+    reqs = [(t, n) for t, n in reqs if isinstance(n, int)]
     old, new = [n for t, n in reqs if t and t < t0], [n for t, n in reqs if t and t > t1]
     fail(r, old and new and max(new) <= max(old), t0, None, "no model request written after the route came back")
     r.flag(not (old and new), "faults", "INCONCLUSIVE", "no status sample on both sides of the drop")
