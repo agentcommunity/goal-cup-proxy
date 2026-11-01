@@ -5,10 +5,11 @@
 //!   connector rules and the exact values, with the left guard, the quote cut and escape
 //!   alignment.
 //! - `stream`: the streaming hold, whose output equals the whole-record masker below the hold.
-//! - `values`: exact values in their 11 forms, and the project's `GH_TOKEN` reader.
+//! - `values`: exact values in their 11 forms, and their readers: the project's key files and
+//!   the harness environment goalcup builds, behind the section 9 name gate.
 //! - `meta`: header, scheme, URL and query rules for metadata.
 //!
-//! The masker is pure: no I/O but the `GH_TOKEN` reader, no threads, no clock, no panics by
+//! The masker is pure: no I/O but the key-file reader, no threads, no clock, no panics by
 //! design. No error text here ever formats a byte, a value or the length of a value.
 
 mod meta;
@@ -22,7 +23,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::sync::Arc;
 
-pub use values::workspace_values;
+pub use values::{env_values, launch_values, workspace_values};
 
 /// The name of the rule that stars bytes the masker could not decide.
 pub const FAIL_CLOSED: &str = stream::FAIL_CLOSED_KIND;
@@ -115,9 +116,10 @@ impl Masker {
     /// A built-in shape that differs from its recognizer or does not compile is
     /// `MaskError::Shape`; a connector rule whose regex does not compile, or whose kind is
     /// `run_secret` or `fail_closed`, is `MaskError::Rule`. A value that cannot be used is
-    /// skipped and counted in `skipped`, never an error. Until the owner's yes to question 3
-    /// builds the section 9 name gate, only `workspace` values are used; an `env` or `harness`
-    /// value is counted in `skipped`, so a model name or a base URL is never masked by value.
+    /// skipped and counted in `skipped`, never an error. `workspace` and `env` values are used
+    /// (the readers apply the section 9 name gate, so a model name or a base URL never arrives);
+    /// a `harness` value (source 4, not built) is counted in `skipped`. A value equal to an
+    /// earlier one is dropped and counted nowhere; past 32 used values the rest are `skipped`.
     pub fn new(rules: &[MaskRule], values: Vec<SecretValue>) -> Result<Masker, MaskError> {
         let policy = stream::Policy::new(rules, &values)?;
         let mut names = meta::Names::default();
@@ -274,7 +276,7 @@ mod tests {
         let counts = m.value_counts();
         assert_eq!(
             (counts.workspace, counts.env, counts.harness, counts.skipped),
-            (1, 0, 0, 2)
+            (1, 0, 0, 1)
         );
         assert!(!format!("{m:?}").contains(std::str::from_utf8(&key)?));
         Ok(())

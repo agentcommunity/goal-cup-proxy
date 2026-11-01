@@ -17,12 +17,17 @@
 //!
 //! Values are read once, in memory only, and never written, hashed or logged.
 //!
-//! Until the owner's yes to question 3 builds the section 9 name gate, only `workspace` values
-//! (the `GH_TOKEN` value) are used: a value from another source is left out and counted in
-//! `skipped`, as is every value past the first [`MAX_VALUES`].
+//! Sources (section 9, owner answer of 2026-11-01 to question 3, sources 1 to 3): the project's
+//! `GH_TOKEN` (1), the credential-named variables of the harness environment goalcup builds
+//! (2, [`env_values`]) and the other credential-named values of the project's key files (3).
+//! Sources 2 and 3 pass the one name gate ([`gated`]). A harness key-file value (source 4) is
+//! not built: it is left out and counted in `skipped`. Values are taken in that order, a value
+//! equal to an earlier one is dropped uncounted, and past [`MAX_VALUES`] used values the rest
+//! are counted in `skipped`.
 
 use super::{SecretValue, ValueCounts, ValueSource};
 use regex::bytes::Regex;
+use std::collections::BTreeMap;
 use std::path::Path;
 
 /// The shortest value used: a shorter one yields forms common in ordinary data.
@@ -236,16 +241,20 @@ impl std::fmt::Debug for RunSecrets {
 }
 
 impl RunSecrets {
-    /// The forms of `values`, compiled, and the counts for the start event. A value that is not
-    /// usable, one of whose forms does not compile, one that is not from the workspace (no name
-    /// gate yet, see the module text), and every value past [`MAX_VALUES`] is left out and
-    /// counted in `skipped`.
+    /// The forms of `values`, compiled, and the counts for the start event. A value equal to an
+    /// earlier one is dropped and counted nowhere. A harness value (source 4, not built), an
+    /// unusable value, one of whose forms does not compile, and every value past [`MAX_VALUES`]
+    /// used values is left out and counted in `skipped`.
     pub(crate) fn new(values: &[SecretValue]) -> (RunSecrets, ValueCounts) {
         let mut counts = ValueCounts::default();
         let mut forms: Vec<(Vec<u8>, Regex)> = Vec::new();
-        for value in values {
-            let compiled = (value.source() == ValueSource::Workspace
-                && counts.workspace < MAX_VALUES as u32
+        for (i, value) in values.iter().enumerate() {
+            if values[..i].iter().any(|earlier| earlier.bytes() == value.bytes()) {
+                continue;
+            }
+            let used = counts.workspace.saturating_add(counts.env);
+            let compiled = (value.source() != ValueSource::Harness
+                && used < MAX_VALUES as u32
                 && is_usable(value.bytes()))
             .then(|| compile(value.bytes(), &forms))
             .flatten();
@@ -254,7 +263,10 @@ impl RunSecrets {
                 continue;
             };
             forms.append(&mut new);
-            counts.workspace += 1;
+            match value.source() {
+                ValueSource::Env => counts.env += 1,
+                _ => counts.workspace += 1,
+            }
         }
         (RunSecrets { forms }, counts)
     }
@@ -291,14 +303,36 @@ const TOKEN_VARIABLE: &str = "GH_TOKEN";
 /// The key file the guide tells the participant to keep it in.
 const TOKEN_FILE: &str = ".env.local";
 
-/// The exact values of the project at `project` (the default build: the `GH_TOKEN` value
-/// only). The key files (`.env`, and `.env.` and anything) are read by name, `.env.local`
-/// first; the first that holds a `GH_TOKEN=` line gives its last such line's value. `export `
-/// before it and one pair of quotes around the value are allowed. The value is returned only
-/// when it is usable ([`is_usable`]); nothing is ever printed.
+/// The exact values of the project at `project`: the `GH_TOKEN` value first (source 1), then
+/// every other credential-named value of its key files (source 3), all `workspace`.
 pub fn workspace_values(project: &Path) -> Vec<SecretValue> {
+    let (token, others) = key_file_values(project);
+    token.into_iter().chain(others).collect()
+}
+
+/// The credential-named variables of `env`, the environment goalcup builds for the harness
+/// (source 2, `connector::LaunchPlan.env`), behind the name gate.
+pub fn env_values(env: &BTreeMap<String, String>) -> Vec<SecretValue> {
+    env.iter()
+        .filter(|(name, value)| gated(name, value))
+        .map(|(_, value)| SecretValue::new(ValueSource::Env, value.clone().into_bytes()))
+        .collect()
+}
+
+/// Every exact value of a launch in section 9 order: `GH_TOKEN`, the environment values, then
+/// the other key-file values. Duplicates are dropped by [`RunSecrets::new`].
+pub fn launch_values(project: &Path, env: &BTreeMap<String, String>) -> Vec<SecretValue> {
+    let (token, others) = key_file_values(project);
+    token.into_iter().chain(env_values(env)).chain(others).collect()
+}
+
+/// The key files (`.env`, and `.env.` and anything) are read by name, `.env.local` first. The
+/// first that holds a `GH_TOKEN=` line gives its last such line's value when it is usable
+/// ([`is_usable`]). Every other line of every key file whose name and value pass [`gated`]
+/// gives one more value. Nothing is ever printed.
+fn key_file_values(project: &Path) -> (Option<SecretValue>, Vec<SecretValue>) {
     let Ok(entries) = std::fs::read_dir(project) else {
-        return Vec::new();
+        return (None, Vec::new());
     };
     let mut names: Vec<String> = entries
         .filter_map(Result::ok)
@@ -307,15 +341,22 @@ pub fn workspace_values(project: &Path) -> Vec<SecretValue> {
         .filter(|name| is_key_file(name))
         .collect();
     names.sort_by_key(|name| (name != TOKEN_FILE, name.clone()));
-    let found = names.into_iter().find_map(|name| {
-        let text = std::fs::read_to_string(project.join(&name)).ok()?;
-        token_in(&text)
-    });
-    found
+    let texts: Vec<String> = names
+        .iter()
+        .filter_map(|name| std::fs::read_to_string(project.join(name)).ok())
+        .collect();
+    let token = texts
+        .iter()
+        .find_map(|text| token_in(text))
         .filter(|value| is_usable(value.as_bytes()))
-        .map(|value| SecretValue::new(ValueSource::Workspace, value.into_bytes()))
-        .into_iter()
-        .collect()
+        .map(|value| SecretValue::new(ValueSource::Workspace, value.into_bytes()));
+    let others = texts
+        .iter()
+        .flat_map(|text| text.lines().filter_map(pair_in))
+        .filter(|(name, value)| *name != TOKEN_VARIABLE && gated(name, value))
+        .map(|(_, value)| SecretValue::new(ValueSource::Workspace, value.as_bytes().to_vec()))
+        .collect();
+    (token, others)
 }
 
 /// Whether `name` is one of the participant's key files: `.env`, or `.env.` and anything.
@@ -325,15 +366,42 @@ fn is_key_file(name: &str) -> bool {
 
 /// The value of the last `GH_TOKEN=` line of a key file.
 fn token_in(text: &str) -> Option<String> {
-    text.lines().rev().find_map(|line| {
-        let line = line.trim();
-        let line = line.strip_prefix("export ").unwrap_or(line).trim_start();
-        let value = line.strip_prefix(TOKEN_VARIABLE)?.trim_start();
-        let value = value.strip_prefix('=')?.trim();
-        let unquoted = ['"', '\'']
-            .iter()
-            .find_map(|q| value.strip_prefix(*q)?.strip_suffix(*q))
-            .unwrap_or(value);
-        (!unquoted.is_empty()).then(|| unquoted.to_string())
-    })
+    text.lines()
+        .rev()
+        .filter_map(pair_in)
+        .find(|(name, value)| *name == TOKEN_VARIABLE && !value.is_empty())
+        .map(|(_, value)| value.to_string())
+}
+
+/// The name and value of one `NAME=value` line of a key file: `export ` before it and one pair
+/// of quotes around the value are allowed. A `#` comment line has no pair.
+fn pair_in(line: &str) -> Option<(&str, &str)> {
+    let line = line.trim();
+    let line = line.strip_prefix("export ").unwrap_or(line).trim_start();
+    let (name, value) = line.split_once('=')?;
+    let name = name.trim_end();
+    let is_name = |b: u8| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'.' | b'-');
+    if name.is_empty() || !name.bytes().all(is_name) {
+        return None;
+    }
+    let value = value.trim();
+    let unquoted = ['"', '\'']
+        .iter()
+        .find_map(|q| value.strip_prefix(*q)?.strip_suffix(*q))
+        .unwrap_or(value);
+    Some((name, unquoted))
+}
+
+/// The one name gate of section 9: `name` (a variable or dotenv name, the last segment of its
+/// key) contains, ignoring case, a credential word, and `value` is usable ([`is_usable`]) and
+/// neither a URL (holds `://`) nor a path (starts with `/`, `~` or `.`).
+fn gated(name: &str, value: &str) -> bool {
+    const WORDS: [&str; 8] = [
+        "key", "token", "secret", "password", "pass", "pwd", "auth", "credential",
+    ];
+    let name = name.to_ascii_lowercase();
+    WORDS.iter().any(|word| name.contains(word))
+        && is_usable(value.as_bytes())
+        && !value.contains("://")
+        && !value.starts_with(['/', '~', '.'])
 }

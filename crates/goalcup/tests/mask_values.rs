@@ -1,5 +1,7 @@
-//! Exact values (PRD-05 section 9, default build): the project's `GH_TOKEN` value is masked in
-//! all 11 forms, wrapped or not, whole and streamed. The value is fake and built from pieces.
+//! Exact values (PRD-05 section 9, sources 1 to 3): the project's `GH_TOKEN` value is masked in
+//! all 11 forms, wrapped or not, whole and streamed, and so are the credential-named values of
+//! the project's key files and of the harness environment, behind the name gate. Every value is
+//! fake: built from pieces or drawn from a seeded generator.
 
 #[allow(dead_code)]
 #[path = "mask_corpus/common.rs"]
@@ -8,8 +10,11 @@ mod common;
 use base64::Engine;
 use base64::engine::general_purpose::{STANDARD_NO_PAD, URL_SAFE_NO_PAD};
 use common::{ALNUM, Rng, starred, stream_in};
-use goalcup::mask::{Masker, SecretValue, ValueSource, workspace_values};
+use goalcup::mask::{
+    Masker, SecretValue, ValueSource, env_values, launch_values, workspace_values,
+};
 use goalcup_format::StreamKind;
+use std::collections::BTreeMap;
 use std::ops::Range;
 
 type Res = Result<(), Box<dyn std::error::Error>>;
@@ -170,5 +175,160 @@ fn thirty_two_values_stream_escaped_text_without_failing_closed() -> Res {
     assert_eq!(got, whole);
     let fail_closed = m.mask_rules().len() - 1;
     assert!(got.spans.iter().all(|s| s.rule != fail_closed));
+    Ok(())
+}
+
+/// Whether `value` appears in `bytes`.
+fn holds(bytes: &[u8], value: &str) -> bool {
+    bytes.windows(value.len()).any(|w| w == value.as_bytes())
+}
+
+/// The owner's case: `cat .env` with values no shape catches, and a password that also sits in
+/// a printed `.git/config` URL, masked by exact value raw and JSON-escaped, whole and streamed.
+#[test]
+fn the_owners_cat_env_case_is_masked_by_exact_value() -> Res {
+    let mut rng = Rng(0x0E7);
+    let aws = rng.chars(ALNUM, 40);
+    let encryption = rng.chars(ALNUM, 32);
+    let stripe = ["sk_", "test_", &rng.chars(ALNUM, 24)].concat();
+    let git = rng.chars(ALNUM, 24);
+    let env_file = format!(
+        "# keys\nAWS_SECRET_ACCESS_KEY={aws}\nexport ENCRYPTION_KEY=\"{encryption}\"\n\
+         STRIPE_SECRET_KEY={stripe}\nGIT_PASSWORD='{git}'\nMODEL_NAME=some-model-name-2026-preview\n"
+    );
+    let dir = tempfile::tempdir()?;
+    std::fs::write(dir.path().join(".env"), &env_file)?;
+    let m = Masker::new(&[], launch_values(dir.path(), &BTreeMap::new()))?;
+    assert_eq!(m.value_counts().workspace, 4);
+    let dump = format!(
+        "$ cat .env\n{env_file}$ cat .git/config\n[remote \"origin\"]\n\
+         \turl = https://bot:{git}@git.example.test/team/repo.git\n"
+    );
+    let escaped = format!(
+        "{{\"type\":\"tool_result\",\"content\":{}}}",
+        serde_json::to_string(&dump)?
+    );
+    for input in [dump.into_bytes(), escaped.into_bytes()] {
+        let whole = m.mask_whole(&input);
+        let cuts: Vec<usize> = (1..input.len() / 7).map(|i| i * 7).collect();
+        let streamed = stream_in(&m, StreamKind::Native, &input, &cuts);
+        assert_eq!(streamed, whole);
+        assert_eq!(whole.bytes.len(), input.len());
+        for value in [&aws, &encryption, &stripe, &git] {
+            assert!(holds(&input, value));
+            assert!(!holds(&whole.bytes, value));
+        }
+    }
+    Ok(())
+}
+
+/// Ordinary values stay out of masking: names that are not credential-named, a URL and a path
+/// under credential names, and a value under 20 bytes.
+#[test]
+fn ordinary_values_do_not_pass_the_name_gate() -> Res {
+    let dir = tempfile::tempdir()?;
+    std::fs::write(
+        dir.path().join(".env"),
+        "MODEL_NAME=some-model-name-2026-preview\n\
+         DATABASE_HOST=db-primary-internal-host-01.example.test\n\
+         LOG_LEVEL=info,goalcup=debug,hyper=warn,tower=info\n\
+         API_BASE_URL=https://api.example.test/v1/chat/completions\n\
+         AUTH_URL=https://auth.example.test/oauth2/authorize\n\
+         SSH_KEY_PATH=/home/participant/.ssh/id_ed25519_work\n\
+         TOKEN_DIR=~/.config/some-tool/tokens/cache\n\
+         SHORT_TOKEN=abc123def456ghi789\n",
+    )?;
+    let env = BTreeMap::from([
+        ("PATH".to_string(), "/usr/local/bin:/usr/bin:/bin:/opt/tool/bin".to_string()),
+        ("HOME".to_string(), "/home/participant/isolated-home".to_string()),
+        ("OPENAI_BASE_URL".to_string(), "https://gateway.example.test/v1".to_string()),
+    ]);
+    assert!(workspace_values(dir.path()).is_empty());
+    assert!(env_values(&env).is_empty());
+    let m = Masker::new(&[], launch_values(dir.path(), &env))?;
+    let counts = m.value_counts();
+    assert_eq!(
+        (counts.workspace, counts.env, counts.harness, counts.skipped),
+        (0, 0, 0, 0)
+    );
+    Ok(())
+}
+
+/// Source 2: credential-named environment variables are used, after `GH_TOKEN` and before the
+/// other key-file values; a value in both the environment and `.env` counts once.
+#[test]
+fn environment_values_are_used_once_in_section_nine_order() -> Res {
+    let mut rng = Rng(0x5EC2);
+    let (gh, provider, gateway, own) = (
+        rng.chars(ALNUM, 36),
+        rng.chars(ALNUM, 48),
+        rng.chars(ALNUM, 30),
+        rng.chars(ALNUM, 28),
+    );
+    let dir = tempfile::tempdir()?;
+    std::fs::write(
+        dir.path().join(".env.local"),
+        format!("SERVICE_SECRET={own}\nGH_TOKEN={gh}\nAI_GATEWAY_API_KEY={gateway}\n"),
+    )?;
+    let env = BTreeMap::from([
+        ("PROVIDER_API_KEY".to_string(), provider.clone()),
+        ("GATEWAY_AUTH".to_string(), gateway.clone()),
+        ("PATH".to_string(), "/usr/local/bin:/usr/bin:/bin:/opt/tool/bin".to_string()),
+        ("HOME".to_string(), "/home/participant/isolated-home".to_string()),
+    ]);
+    assert_eq!(env_values(&env).len(), 2);
+    let values = launch_values(dir.path(), &env);
+    let sources: Vec<ValueSource> = values.iter().map(SecretValue::source).collect();
+    assert_eq!(
+        sources,
+        [
+            ValueSource::Workspace,
+            ValueSource::Env,
+            ValueSource::Env,
+            ValueSource::Workspace,
+            ValueSource::Workspace,
+        ]
+    );
+    let m = Masker::new(&[], values)?;
+    let counts = m.value_counts();
+    assert_eq!(
+        (counts.workspace, counts.env, counts.harness, counts.skipped),
+        (2, 2, 0, 0)
+    );
+    for value in [&gh, &provider, &gateway, &own] {
+        assert!(m.mask_whole(value.as_bytes()).bytes.iter().all(|&b| b == b'*'));
+    }
+    Ok(())
+}
+
+/// The guard: of 35 usable values, 32 are used and the rest counted in `skipped`. `Debug` of
+/// the masker and of every value prints no value byte.
+#[test]
+fn past_thirty_two_values_the_rest_are_skipped_and_nothing_prints() -> Res {
+    let mut rng = Rng(0x3232);
+    let file: Vec<String> = (0..20).map(|_| rng.chars(ALNUM, 24)).collect();
+    let env: BTreeMap<String, String> = (0..15)
+        .map(|i| (format!("TOOL_{i}_TOKEN"), rng.chars(ALNUM, 24)))
+        .collect();
+    let dir = tempfile::tempdir()?;
+    let text: String = file
+        .iter()
+        .enumerate()
+        .map(|(i, v)| format!("SERVICE_{i}_KEY={v}\n"))
+        .collect();
+    std::fs::write(dir.path().join(".env"), text)?;
+    let values = launch_values(dir.path(), &env);
+    assert_eq!(values.len(), 35);
+    let all: Vec<&String> = file.iter().chain(env.values()).collect();
+    for value in &values {
+        let shown = format!("{value:?}");
+        assert!(all.iter().all(|v| !shown.contains(v.as_str())));
+    }
+    let m = Masker::new(&[], values)?;
+    let counts = m.value_counts();
+    assert_eq!(counts.workspace + counts.env, 32);
+    assert_eq!((counts.env, counts.skipped), (15, 3));
+    let shown = format!("{m:?}");
+    assert!(all.iter().all(|v| !shown.contains(v.as_str())));
     Ok(())
 }
