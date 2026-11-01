@@ -2521,3 +2521,8 @@ kept and now cites BUILD-PROMPT section 5, since B3 no longer carries it.
   CLI tests (`tests/cli_*.rs`) 3,082. PRD-00 rows: about 2,900 src and 1,200 tests (src about 1.8 times, tests about 2.6 times). Slice 12 added
   5 src lines and about 115 test lines. Overage on an owner estimate is reported and accepted, not cut; carry to the end-of-build report.
 - **Gate effect:** none on order. The "not built yet" notes in the PRD-15 docs can go for every PRD-10 command. No locked ledger item is touched.
+
+### 2026-11-01, replan after PRD-08 slice 9 (merge 3b18e91b)
+
+- **Size report, PRD-08** (`wc -l` on integration): src outside `usage/` is 4,192 lines (honesty.rs 507, history.rs 647, integrity.rs 1,027, legs.rs 550, secrets.rs 551, the rest 910) against the 1,400 row in PRD-00 (about 3.0 times); `usage/` is 2,861 against the PRD-09 row of 1,470. Tests in `crates/goalcup-verify/tests` are 4,460 against 1,100 plus 200. Slice 9 added about 21 src lines. Overage on an owner estimate is reported, not cut; carry to the end-of-build report with the other overages.
+- **Gate effect:** none on order or seams. Rung 1 sweep findings V1 and V2 are closed in the verifier. Two nits (A8, B-A7-1) are queued in the PRD-08 note. No locked ledger item is touched.

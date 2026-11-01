@@ -1208,3 +1208,10 @@ PRD-02's mask worker writes two record shapes PRD-01's text does not list yet; t
 - **Decision.** A tool-call id is keyed by its letters and digits only, lower case (`call_00_AbC` and `call00AbC` give one key). The key stays one per call, so a call dropped with no GAP is never covered by another call's response, in any thread, whatever its name and arguments. Review A1 withdrew an earlier name-and-arguments key, which let a real orphan pass whenever an identical call was recorded anywhere in the run. Test: an identical call recorded in another thread, its own response dropped, still gives `fail`.
 - **Limit.** An id changed by more than case and punctuation (re-minted) still fails; the next sweep's raw record decides whether a further rule is needed. No seam note for PRD-04 or PRD-11 is raised.
 - **Size.** `history.rs` is back to its size before this slice, plus the `id_key` helper (about 10 lines).
+
+### 2026-11-01, replan after slice 9 (merge 3b18e91b): zero-byte listed tunnel, OpenClaw history ids (fix round for A7)
+
+- V1 and V2 are closed. A listed tunnel with no byte now lands in `tunnels_empty`, so every tunnel that ENDED falls in exactly one bucket (decrypted, sign_in, empty, named, unnamed). The id-normalised key from the V2 note stands.
+- **Open nit A8 (next PRD-08 touch only).** `listed_conns` is counted at OPEN, the other buckets only in `tunnel_end`. A listed tunnel that never gets an END (the run stops while it is open, or a new boot's Part record clears `self.conns`) lands in no bucket, so `listed_conns` can exceed the sum of its parts. Rare and older than this slice. If the invariant should hold for every run, count conns still open at a boot change or at finish in their own `unended` bucket. Add it with a test only if done.
+- **Nit B-A7-1.** The reflowed `why` string in `honesty.rs` has a first line over 100 columns and a ragged break. Optional re-wrap, no behaviour change.
+- No seam moves and no locked ledger item is touched. No other PRD is affected.
