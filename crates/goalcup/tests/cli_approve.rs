@@ -210,11 +210,7 @@ fn a_repository_with_commits_is_refused_before_any_approval() {
     // asked first the stop would be exit 3.
     let api = github("[{}]");
     let (_held, closed) = ports::refusing();
-    let (home, got, out) = start(
-        &Server::Url(format!("http://{closed}")),
-        Some("o/r"),
-        &api,
-    );
+    let (home, got, out) = start(&Server::Url(format!("http://{closed}")), Some("o/r"), &api);
     assert_eq!(got.unwrap_err().code, 1);
     assert!(out.is_empty() && empty(home.path()));
 }
