@@ -11,6 +11,7 @@ use std::time::{Duration, Instant};
 
 use super::{alive, fail, find, home, read_json, say, status_json, text, time_left, watchdog_pid};
 use crate::pipeline::status::{Mode, Status};
+use crate::pipeline::{Closed, close_dead_entry};
 
 const POLL: Duration = Duration::from_millis(200);
 const NOTICE_EVERY: Duration = Duration::from_secs(10);
@@ -104,30 +105,34 @@ pub fn run(part: Option<String>, yes: bool) -> ExitCode {
     }
 }
 
-/// A dead entry: close it with seal reason `recovered`, send it (as `goalcup upload` does), then
-/// the end screen as after a live seal. A harness still running is not signalled.
+/// A dead entry: close it with seal reason `recovered`, show the end screen as after a live seal,
+/// then send it (as `goalcup upload` does). The screen comes first: a server that is down makes the
+/// upload wait with no cap of its own, and the participant has had their counts by then. A harness
+/// still running is not signalled.
 fn seal_dead(found: &super::Found, name: &str, harness_ran: bool) -> ExitCode {
     let (dir, run) = (found.entry_dir(), found.run.as_str());
-    match crate::pipeline::close_dead_entry(&dir) {
+    match close_dead_entry(&dir) {
         Err(_) => return fail(&text::seal_still_recording(run)),
-        Ok(crate::pipeline::Closed::AlreadySealed) => return fail(&text::seal_already(run)),
-        Ok(crate::pipeline::Closed::Failed(_)) => return broke(&text::seal_could_not()),
-        Ok(crate::pipeline::Closed::Sealed(_)) => {}
+        Ok(Closed::AlreadySealed) => return fail(&text::seal_already(run)),
+        Ok(Closed::Failed(_)) => return broke(&text::seal_could_not()),
+        Ok(Closed::Sealed(_)) => {}
     }
+    let Ok(screen) = super::finish::end_screen(&dir) else {
+        return broke(&text::seal_could_not());
+    };
+    if harness_ran {
+        println!("{}", text::seal_dead_harness_left(name));
+    }
+    print!("{screen}");
     // What the server does not hold stays on disk and `goalcup upload` sends it later.
+    say(text::SEAL_SENDING);
     let keep = super::var("GOALCUP_KEEP_PARTS").is_some_and(|v| v == "1");
-    let _ = crate::upload::manual::run(&dir, &found.run_dir, (run, &found.entry), keep);
-    let dir = dir.as_path();
-    match super::finish::end_screen(dir) {
-        Ok(screen) => {
-            if harness_ran {
-                println!("{}", text::seal_dead_harness_left(name));
-            }
-            print!("{screen}");
-            ExitCode::SUCCESS
-        }
-        Err(_) => broke(&text::seal_could_not()),
-    }
+    let out = crate::upload::manual::run(&dir, &found.run_dir, (run, &found.entry), keep);
+    println!(
+        "{}",
+        super::upload::outcome_line(&dir, &out, &found.entry, run)
+    );
+    ExitCode::SUCCESS
 }
 
 /// [`say`], then exit code 3: goalcup could not do its job.

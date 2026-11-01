@@ -253,6 +253,7 @@ pub fn prepare(
         resumed,
         workspace: Some(project.to_path_buf()),
         hosts: Some(plan.hosts.clone()),
+        segment: Some(segment),
     });
     let bytes = serde_json::to_vec(&next).unwrap_or_default();
     let path = server_json(&found.run_dir);

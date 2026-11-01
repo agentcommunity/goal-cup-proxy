@@ -1058,6 +1058,9 @@ pub const SEAL_NEEDS_TERMINAL: &str = "goalcup seal needs a terminal to ask firs
 pub const SEAL_WAIT: &str =
     "Ending the part and finishing its record files. This can take a minute.";
 
+/// Said before the dead part's upload, which waits for the server with no cap of its own.
+pub const SEAL_SENDING: &str = "Sending the rest of the record to the server. If the server is not reachable this waits; Ctrl-C leaves the rest on this computer and goalcup upload sends it later.";
+
 pub const SEAL_STILL: &str =
     "Still finishing the record files. Ctrl-C here leaves the seal running.";
 

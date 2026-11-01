@@ -75,13 +75,7 @@ pub fn run(arg: Option<String>) -> ExitCode {
     let word = match &outcome {
         Ok(r) if r.late => "late",
         Ok(_) => "recovered",
-        Err(NotRecovered::Sealed) => "sealed",
-        Err(NotRecovered::WatchdogAlive) => "watchdog_alive",
-        Err(NotRecovered::RecordingOn) => "recording_on",
-        Err(NotRecovered::HarnessGone) => "harness_gone",
-        Err(NotRecovered::PortTaken) => "port_taken",
-        Err(NotRecovered::KeyMissing) => "key_missing",
-        Err(NotRecovered::NotStarted) => "not_started",
+        Err(why) => outcome_word(why),
     };
     line(
         &dir,
@@ -112,6 +106,19 @@ pub fn run(arg: Option<String>) -> ExitCode {
         println!("{}", text::recover_on_again(name, part, &span, &from, &to));
     }
     ExitCode::SUCCESS
+}
+
+/// The word `goalcup.log` carries for each way a recover does not happen.
+fn outcome_word(why: &NotRecovered) -> &'static str {
+    match why {
+        NotRecovered::Sealed => "sealed",
+        NotRecovered::WatchdogAlive => "watchdog_alive",
+        NotRecovered::RecordingOn => "recording_on",
+        NotRecovered::HarnessGone => "harness_gone",
+        NotRecovered::PortTaken => "port_taken",
+        NotRecovered::KeyMissing => "key_missing",
+        NotRecovered::NotStarted => "not_started",
+    }
 }
 
 /// What the participant is told for each way a recover does not happen, and the exit code.
@@ -173,11 +180,8 @@ fn rebuild(
     if loaded.id != source.id {
         return None;
     }
-    let started = st
-        .harness
-        .as_ref()
-        .and_then(|h| unix_of(&h.started))
-        .unwrap_or(0);
+    // Without a start time the native sources' `since` would be a guess: refuse instead.
+    let started = unix_of(&st.harness.as_ref()?.started)?;
     let vars = super::env_vars();
     let own = server
         .server
@@ -200,7 +204,7 @@ fn rebuild(
     let part = Part {
         run: found.run.clone(),
         entry: found.entry.clone(),
-        segment: u32::try_from(found.entries.iter().position(|e| *e == found.entry)?).ok()?,
+        segment: me.segment?,
         entry_dir: found.entry_dir(),
         deadline: deadline.map(|d| d * 1000),
         local_wall: start::wall_ms(),

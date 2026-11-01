@@ -199,6 +199,7 @@ fn server_record(
             resumed: false,
             workspace: Some(ask.workspace.to_path_buf()),
             hosts: Some(ask.hosts.clone()),
+            segment: Some(0),
         }],
     }
 }

@@ -237,6 +237,10 @@ pub struct EntryFacts {
     /// same hosts. None in a file an older goalcup wrote.
     #[serde(default)]
     pub hosts: Option<crate::connector::HostList>,
+    /// The part's segment as the first boot used it, so a recovered recorder uses the same one.
+    /// None in a file an older goalcup wrote.
+    #[serde(default)]
+    pub segment: Option<u32>,
 }
 
 /// A JSON file read into `T`; None when it is missing or does not parse.
