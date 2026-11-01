@@ -44,10 +44,10 @@ Gone since 0.7, and not coming back: the receipt, abandon and seal calls (`/rece
   | 503 | `maintenance` | The server asks every client to wait (the maintenance switch). `Retry-After` says when. | backs off and retries |
   | 503 | `awaiting_final` | The run is over (`ends_at`), and the entry's final heartbeat has not arrived. | sends the final heartbeat, then retries at once |
 
-  During a run, no error stops the run or ends its upload: only a heartbeat answer with
+  During a run, no error stops the run or ends its upload (D64): only a heartbeat answer with
   `stop: true`, or goalcup's own count of the time left, stops it. After 3 refusals in a row the
   participant sees one line that recording continues and nothing is lost. Any other 5xx, and any
-  network failure, is retried too. The backoff is the client's (`crates/goalcup/src/upload/policy.rs`): it starts at
+  network failure, is retried too. The backoff is the client's (PRD-06 section 5): it starts at
   2 s, doubles to at most 120 s, is multiplied by a random 0.5 to 1.0, never waits less than a
   `Retry-After` the server sent (taken up to 120 s), and starts again from 2 s whenever the
   server's offset moves forward. Recording never waits on any of this. Only `goalcup upload`, run by
@@ -267,7 +267,7 @@ ends"). `status` is the run's: `open`, `sealed` (the run is over and its current
 
 ## `PUT /v1/runs/{run_id}/chunks/{offset}`: store bytes of the record
 
-The body is a byte range of one compressed part file of the entry ([RECORD-FORMAT](RECORD-FORMAT.md)): from one
+The body is a byte range of one compressed part file of the entry (PRD-01 section 12): from one
 index line, or the file's start, to a later index line, never across two part files. It continues
 its part file's zstd frame, so a chunk is **not** decodable on its own; the server never decodes
 it. At most 32 MiB (`Content-Length` at most 33554432). `Content-Type: application/zstd`. Headers:
@@ -316,7 +316,7 @@ checked later, on the fetched copy (`scripts/fetch-run.sh`, then `goalcup-verify
 ## `POST /v1/runs/{run_id}/heartbeat`: still running, and where the record is
 
 The client sends one every 5 minutes while the entry records, at once when its recording state
-changes, and the final one once the entry is sealed on disk:
+changes, and the final one once the entry is sealed on disk (PRD-06 section 6):
 
 ```json
 {"entry_id": "e0123456789abcdef", "seq": 3601, "head": "<64 hex>", "offset_local": 726000000,
@@ -335,14 +335,14 @@ changes, and the final one once the entry is sealed on disk:
 | `final` | `true` for the final heartbeat (below) |
 | `repo_head` | the 40-hex commit the workspace repository had checked out when the entry ended; final heartbeat only, else `null` |
 | `recording` | the client's recording state (table below) |
-| `model_requests` | model requests written (`http_post + ws_up_msgs`, see the COUNT event in [RECORD-FORMAT](RECORD-FORMAT.md)), entry totals over boots, as of the durable point, at most 2^53 - 1. A request count, not a call count |
+| `model_requests` | model requests written (`http_post + ws_up_msgs`, PRD-01 section 9), entry totals over boots, as of the durable point, at most 2^53 - 1. A request count, not a call count |
 | `counts` | the written counts and off time at the durable point (below) |
 
 The server stamps its own receive time on each heartbeat, which commits goalcup to that position
 before the bytes arrive. Every heartbeat row is kept, so the off spans can be read in time order.
 
-**`recording`.** The client decides it from `counts.mode` and the counts (`recording` in
-`crates/goalcup/src/upload/beat.rs`).
+**`recording`.** The client decides it from `counts.mode` and the counts. PRD-06 section 6 owns this
+rule; if this table ever differs, PRD-06 wins.
 
 | `recording` | Means | The client sends it when |
 |---|---|---|
@@ -350,16 +350,16 @@ before the bytes arrive. Every heartbeat row is kept, so the off spans can be re
 | `gaps` | recording now (or sealed), something was lost | any of those is above 0, or `mode` is `losing` or `writer_slow`. A recovered entry is `gaps` |
 | `failed` | **recording is off now** | `mode` is null, or the writer has stalled past 60 s while records wait; and only then |
 
-`streams_in_gap` is the recorder's live count of streams in a gap, which the
+`streams_in_gap` is the recorder's live count of streams in a gap (PRD-02 section 3), which the
 client reads for this decision; it is not a `counts` key, so the server cannot recompute the state
 from the stored counts alone. `failed` is a state, not a latch: the next heartbeat after a good boot says `gaps`. 1.0 never sends
 `unknown` (no heartbeat goes before the first durable point); the server still accepts it.
 
 **`counts`.** A flat JSON object whose values are whole numbers, strings of at most 64 bytes,
 booleans or `null`, at most 2 KiB serialized. The Worker fixes no key list and interprets nothing
-in it. The client's keys (`counts` in `crates/goalcup/src/upload/beat.rs`):
+in it. The client's keys (PRD-06 section 6 names them; this list copies it):
 
-- every whole-number counter of the COUNT event (see [RECORD-FORMAT](RECORD-FORMAT.md)) as entry totals at the durable
+- every whole-number counter of the COUNT event (PRD-01 section 9) as entry totals at the durable
   LINK: `up_ms`, `http_req`, `http_post`, `ws_up_msgs`, `ws_down_msgs`, `req_whole`, `req_holes`,
   `conns`, `tunnels`, `tunnel_up`, `tunnel_down`, `wire_bytes`, `native_files`, `native_bytes`,
   `snapshots`, `gaps`, `lost_bytes`, `lost_unknown`, `off_ms`, `mask_failclosed_bytes`, and
@@ -378,7 +378,7 @@ as optional: a missing one, or `null`, is stored as `null`. A bad `recording` or
 `400 malformed`, as are the heartbeat's own fields. A `counts` that is not a flat object within the
 bounds above is **dropped, never refused**: the heartbeat is kept and answered `200`, its row stores
 `{"counts_dropped": <byte length of the serialized counts>}`, and the Worker logs
-`counts-dropped <run_id>` without the value. A refused heartbeat would be a heartbeat lost.
+`counts-dropped <run_id>` without the value. A refused heartbeat would be a heartbeat lost (D64).
 
 **Storage.** Counts land in the database column `heartbeats.vitals` (and as the run's latest in
 `runs.last_vitals`) as `{"counts": ...}`; readers use `vitals -> 'counts'`. The column keeps the name
@@ -418,7 +418,7 @@ later competition start replaced it. At `ends_at` the run is over, in whatever s
 in. There is no grace period and no late window.
 
 - **Only two things stop a run:** a heartbeat answer with `stop: true`, or goalcup's own count
-  below. No error answer does.
+  below. No error answer does (D64).
 - **The server says stop.** Every heartbeat answered at or after `ends_at` carries `stop: true` and
   the `reason`. goalcup stops recording at once. Without a network it stops on its own count: the
   `seconds_left` of the last answer it had (the open, the continue or a heartbeat), counted from
