@@ -175,19 +175,21 @@ fn run(command: Command) -> ExitCode {
             yes,
             record_host,
         } => cli::setup::run(harness.as_deref(), yes, record_host.as_deref()),
-        Command::Continue { .. } => not_built("continue"),
-        Command::Recover { .. } => not_built("recover"),
+        Command::Continue {
+            run,
+            connector,
+            hosts,
+        } => cli::continue_run::run(&cli::continue_run::Args {
+            run: run.as_deref(),
+            connector: connector.as_deref(),
+            hosts: hosts.as_deref(),
+        }),
+        Command::Recover { run } => cli::recover::run(run),
         Command::Status { part, json } => cli::status::run(part, json),
         Command::Seal { part, yes } => cli::seal::run(part, yes),
         Command::Upload { part } => cli::upload::run(part),
         Command::TimeLeft => cli::time_left::run(),
     }
-}
-
-/// Phase 0 stub: the core slice moves each body into `src/cli/`.
-fn not_built(command: &str) -> ExitCode {
-    say(&text::not_built(command));
-    ExitCode::from(3)
 }
 
 #[cfg(test)]

@@ -141,3 +141,12 @@ fn the_runs_own_server_file_decides_not_the_environment() {
     assert_eq!(out.status.code(), Some(0));
     assert_eq!(fake.stream(ENTRY), all);
 }
+
+#[test]
+fn the_outcome_words_point_to_recover_and_support_not_to_continue() {
+    use goalcup::upload::manual::Outcome;
+    let still = cli::text::upload_outcome(&Outcome::StillRecording, ENTRY, RUN_ID);
+    assert!(still.contains("goalcup recover") && !still.contains("sends itself"));
+    let shut = cli::text::upload_outcome(&Outcome::NotClosed, ENTRY, RUN_ID);
+    assert!(shut.contains(cli::text::SUPPORT_ADDRESS) && !shut.contains("goalcup continue"));
+}

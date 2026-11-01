@@ -30,16 +30,7 @@ pub fn run(part: Option<String>) -> ExitCode {
         let dir = run_dir(&home, &found.run).join(&entry);
         let keep = super::var("GOALCUP_KEEP_PARTS").is_some_and(|v| v == "1");
         let out = send(&dir, &found.run_dir, (&found.run, &entry), keep);
-        // `upload.json` words the outcomes that change it; the rest it cannot say.
-        let said = !matches!(
-            out,
-            Outcome::StillRecording | Outcome::NotClosed | Outcome::Local | Outcome::NoServer
-        );
-        let line = match state::read(&dir) {
-            Some(u) if said => text::upload_line(&u, super::now(), true),
-            _ => text::upload_outcome(&out, &entry, &found.run),
-        };
-        println!("{line}");
+        println!("{}", outcome_line(&dir, &out, &entry, &found.run));
         if !matches!(
             out,
             Outcome::Done | Outcome::AlreadyThere | Outcome::StillRecording | Outcome::Local
@@ -48,4 +39,17 @@ pub fn run(part: Option<String>) -> ExitCode {
         }
     }
     worst
+}
+
+/// The words for one part's outcome: `upload.json`'s own line when the outcome changes it, else
+/// the few cases that file cannot say.
+pub fn outcome_line(dir: &std::path::Path, out: &Outcome, entry: &str, run: &str) -> String {
+    let said = !matches!(
+        out,
+        Outcome::StillRecording | Outcome::NotClosed | Outcome::Local | Outcome::NoServer
+    );
+    match state::read(dir) {
+        Some(u) if said => text::upload_line(&u, super::now(), true),
+        _ => text::upload_outcome(out, entry, run),
+    }
 }

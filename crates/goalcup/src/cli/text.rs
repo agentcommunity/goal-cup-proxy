@@ -134,10 +134,6 @@ pub fn network_folder(dir: &Path, kind: &str) -> String {
     )
 }
 
-pub fn not_built(command: &str) -> String {
-    format!("{command} is not built yet")
-}
-
 pub fn wsl(what: &str, drive: Option<&str>) -> String {
     match drive {
         None => "This is WSL1, which cannot run goalcup. Convert it to WSL2 and run goalcup there."
@@ -1039,8 +1035,16 @@ pub fn seal_already(run: &str) -> String {
     )
 }
 
-pub fn seal_not_running(run: &str) -> String {
-    format!("This part is not recording and has no seal yet. To go on, run: goalcup continue {run}")
+pub fn seal_still_recording(run: &str) -> String {
+    format!(
+        "This part is still recording, so it cannot be sealed this way. See: goalcup status {run}"
+    )
+}
+
+pub fn seal_dead_harness_left(name: &str) -> String {
+    format!(
+        "{name} is still running and was not stopped. goalcup recover would have kept recording it."
+    )
 }
 
 pub fn seal_question(name: &str) -> String {
@@ -1053,6 +1057,9 @@ pub const SEAL_NEEDS_TERMINAL: &str = "goalcup seal needs a terminal to ask firs
 
 pub const SEAL_WAIT: &str =
     "Ending the part and finishing its record files. This can take a minute.";
+
+/// Said before the dead part's upload, which waits for the server with no cap of its own.
+pub const SEAL_SENDING: &str = "Sending the rest of the record to the server. If the server is not reachable this waits; Ctrl-C leaves the rest on this computer and goalcup upload sends it later.";
 
 pub const SEAL_STILL: &str =
     "Still finishing the record files. Ctrl-C here leaves the seal running.";
@@ -1151,9 +1158,15 @@ pub fn upload_outcome(out: &Outcome, entry: &str, run: &str) -> String {
     match out {
         Outcome::Done | Outcome::AlreadyThere => "Upload: done. The server holds this part.".into(),
         Outcome::StillRecording => {
-            format!("Part {entry} is still recording; it sends itself, so there is nothing to do.")
+            format!(
+                "Part {entry} is still recording, or its agent is still running and nothing records \
+                 it. See: goalcup status. If status says recording is off, run: goalcup recover."
+            )
         }
-        Outcome::NotClosed => seal_not_running(run),
+        Outcome::NotClosed => format!(
+            "Part {entry} could not be closed. Run goalcup upload again; \
+             if it fails again write to {SUPPORT_ADDRESS} naming run {run}."
+        ),
         Outcome::Local => LOCAL_ONLY.into(),
         Outcome::NoServer => format!(
             "This run's server file or credential is missing, so nothing can be sent. Your record \
@@ -1171,4 +1184,107 @@ pub fn upload_outcome(out: &Outcome, entry: &str, run: &str) -> String {
              sent. {write}"
         ),
     }
+}
+
+// `goalcup continue` (section 3.1).
+pub const NOT_STARTED_HERE: &str = "this run was not started on this computer (or its saved \
+    approval is gone), so it cannot be continued here.";
+pub const STILL_RECORDING: &str = "This part is still recording. To end it, run: goalcup seal";
+pub const TIME_UP: &str = "The run's time is up, so it cannot be continued. Nothing was started.";
+pub const ELSEWHERE: &str = "The server says the last part of this run is not the one on this \
+    computer, so the run was continued somewhere else. Nothing was started.";
+
+pub fn harness_running(name: &str, sealed: bool) -> String {
+    if sealed {
+        return format!(
+            "{name} from the last part is still running, with nothing recording it. End {name} \
+             first, then run: goalcup continue"
+        );
+    }
+    format!(
+        "{name} from the last part is still running. To record it again, run: goalcup recover. \
+         To start a new part instead, end {name} first."
+    )
+}
+
+pub fn not_closed(run: &str, entry: &str, kind: std::io::ErrorKind) -> String {
+    format!(
+        "goalcup could not close part {entry} of run {run} ({kind}), so nothing was started. Write \
+         to {SUPPORT_ADDRESS}, naming run {run}."
+    )
+}
+
+pub fn file_changed(what: &str, first: &str) -> String {
+    format!(
+        "This run's first part used {first} as its {what}, and every part must use the same one. \
+         Give that file again, or none if the first part used none."
+    )
+}
+
+pub fn updated(name: &str, from: &str, to: &str) -> String {
+    format!("{name} was updated from {from} to {to} since the last part.")
+}
+
+pub fn refused(said: &str) -> String {
+    format!("The server did not continue the run: {said}. Nothing was started.")
+}
+
+// `goalcup recover` (section 3.2).
+pub const RECOVER_WATCHDOG_ALIVE: &str =
+    "goalcup is still running for this part and restarts recording itself. See: goalcup status";
+pub const RECOVER_ON: &str = "Recording is on; there is nothing to recover.";
+pub const RECOVER_TIME_UP: &str = "Time is up for this run. To close the part, run: goalcup seal";
+pub const RECOVER_INSIDE: &str =
+    "goalcup recover runs outside your agent. Run it in another terminal.";
+
+pub fn recover_sealed(run: &str) -> String {
+    format!(
+        "This part has ended, so there is nothing to recover. To go on, run: goalcup continue {run}"
+    )
+}
+
+pub fn recover_gone(name: &str, run: &str) -> String {
+    format!(
+        "{name} is not running, so there is nothing to keep recording. To go on, run: goalcup continue {run}"
+    )
+}
+
+pub fn recover_port(port: u16, key: bool, run: &str) -> String {
+    let why = if key {
+        "the run certificate key is missing"
+    } else {
+        "the port is used by another program"
+    };
+    format!(
+        "goalcup cannot reopen recording on port {port}: {why}. Your agent cannot reach the model service until this part ends. To go on, run: goalcup seal, then goalcup continue {run}"
+    )
+}
+
+pub fn recover_not_started(run: &str, support: &str) -> String {
+    format!(
+        "goalcup could not restart recording. Your agent still cannot reach the model service. Run goalcup recover once more; if it fails again, run goalcup seal, then goalcup continue {run}, and write to {SUPPORT_ADDRESS}. {support}"
+    )
+}
+
+pub fn recover_unreadable(support: &str) -> String {
+    format!("goalcup could not read what it needs to restart recording. {support}")
+}
+
+pub fn recover_support(run: &str, log: &std::path::Path) -> String {
+    format!("Name run {run} to {SUPPORT_ADDRESS}. {}.", details_at(log))
+}
+
+pub fn recover_late(name: &str, part: usize) -> String {
+    format!(
+        "goalcup is restarting recording for part {part} of your run with {name}, but it has not said it is ready yet. {name} was not restarted. Check with: goalcup status"
+    )
+}
+
+pub fn recover_on_again(name: &str, part: usize, span: &str, from: &str, to: &str) -> String {
+    format!(
+        "Recording is on again for part {part} of your run with {name}, on the same port.\n\
+         It was off from {from} to {to} ({span}); this time is in the record as a gap.\n\
+         {name} was not restarted. This part ends when {name} exits or at the deadline.\n\
+         Check it any time with: goalcup status"
+    )
 }

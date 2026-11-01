@@ -42,6 +42,7 @@ fn ask<'a>(c: &'a ConnectorSource, repo: Option<&'a str>, api: &'a str) -> Ask<'
         repo,
         github_api: api,
         hosts_file: None,
+        hosts: Box::leak(Box::default()),
         machine: json!({"os": "Linux"}),
     }
 }

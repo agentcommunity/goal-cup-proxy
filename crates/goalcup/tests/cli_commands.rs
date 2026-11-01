@@ -126,3 +126,42 @@ fn no_command_prints_the_help_and_exits_1() {
     let err = String::from_utf8_lossy(&out.stderr);
     assert!(COMMANDS.iter().all(|c| err.contains(c)), "stderr: {err}");
 }
+
+/// PRD-17 HF4: a second start on a harness home that a run already holds refuses with exit 1
+/// before anything is asked of the server (the address is dead: a call would end with 3) and
+/// before anything is written.
+#[test]
+fn second_start_on_one_home_refuses() {
+    let homes = Homes::new();
+    let project = homes.user.path().join("p");
+    std::fs::create_dir_all(&project).unwrap();
+    let connector = homes.user.path().join("tester.toml");
+    std::fs::write(
+        &connector,
+        "id = \"tester\"\nname = \"Tester\"\nprogram = \"true\"\nskills_dir = \"{home}/skills\"\n",
+    )
+    .unwrap();
+    let held = homes.goalcup.path().join("homes");
+    std::fs::create_dir_all(&held).unwrap();
+    let lock = std::fs::File::create(held.join("tester.goalcup.lock")).unwrap();
+    lock.try_lock().unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_goalcup"))
+        .args(["start", "--practice", "--connector"])
+        .arg(&connector)
+        .current_dir(&project)
+        .env("GOALCUP_SERVER", "http://127.0.0.1:1")
+        .env("GOALCUP_HOME", homes.goalcup.path())
+        .env("HOME", homes.user.path())
+        .env("XDG_CONFIG_HOME", homes.user.path())
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    one_error_line(&out);
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        err.contains(&held.join("tester").display().to_string()),
+        "{err}"
+    );
+    assert!(!homes.goalcup.path().join("runs").exists());
+    drop(lock);
+}

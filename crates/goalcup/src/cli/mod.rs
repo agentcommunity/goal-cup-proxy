@@ -2,10 +2,12 @@
 
 pub mod approve;
 pub mod awake;
+pub mod continue_run;
 pub mod finish;
 pub mod folder;
 pub mod log;
 pub mod push;
+pub mod recover;
 pub mod seal;
 pub mod setup;
 pub mod skill;
@@ -182,6 +184,12 @@ pub fn fail(text: &str) -> ExitCode {
     ExitCode::from(1)
 }
 
+/// [`say`], then exit code 3: goalcup could not do its job.
+pub fn broke(text: &str) -> ExitCode {
+    say(text);
+    ExitCode::from(3)
+}
+
 /// `runs/<run>/server.json` (section 2), written by `start`. It never holds the credential, so
 /// `status --json` prints it whole.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -227,6 +235,18 @@ pub struct EntryFacts {
     pub harness_version: Option<String>,
     /// Whether `continue` resumed the harness's session.
     pub resumed: bool,
+    /// The folder the part ran in (not secret). `goalcup recover` reads the workspace's mask
+    /// values from it. None in a file an older goalcup wrote.
+    #[serde(default)]
+    pub workspace: Option<PathBuf>,
+    /// The host lists the part started with (not secret), so a recovered recorder records the
+    /// same hosts. None in a file an older goalcup wrote.
+    #[serde(default)]
+    pub hosts: Option<crate::connector::HostList>,
+    /// The part's segment as the first boot used it, so a recovered recorder uses the same one.
+    /// None in a file an older goalcup wrote.
+    #[serde(default)]
+    pub segment: Option<u32>,
 }
 
 /// A JSON file read into `T`; None when it is missing or does not parse.
