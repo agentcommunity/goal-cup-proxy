@@ -1011,8 +1011,13 @@ impl Run {
                 }
                 continue;
             }
-            let stop = word.as_ref().and_then(|w| crate::watchdog::stop_of(w.borrow().as_ref()?));
-            let gone = self.harness.as_ref().is_none_or(|h| !cli::alive(h.pid, h.start_id));
+            let stop = word
+                .as_ref()
+                .and_then(|w| crate::watchdog::stop_of(w.borrow().as_ref()?));
+            let gone = self
+                .harness
+                .as_ref()
+                .is_none_or(|h| !cli::alive(h.pid, h.start_id));
             let reason = match stop {
                 Some(reason) => reason,
                 None if deadline.is_some_and(|d| Mono::now() >= d) => SealReason::Deadline,

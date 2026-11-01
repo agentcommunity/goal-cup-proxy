@@ -81,7 +81,12 @@ fn setup(keep: bool) -> Dead {
         started: "2026-11-01T00:00:00Z".into(),
         start_id: proc_start_id(pid).unwrap(),
     };
-    let mut facts = facts(&entry_dir, tmp.path(), &hosts, to_value(ca.export()).unwrap());
+    let mut facts = facts(
+        &entry_dir,
+        tmp.path(),
+        &hosts,
+        to_value(ca.export()).unwrap(),
+    );
     let (listener, addr) = common::ports::held();
     let (to, theirs) = UnixStream::pair().unwrap();
     let mut recorder = spawn::recorder(&common::bin(), false, &listener, &theirs).unwrap();
@@ -159,10 +164,13 @@ fn files(dir: &Path) -> Vec<PathBuf> {
 fn watchdog_recover_restarts_the_recorder_only() {
     let mut d = setup(false);
     let try_it = |d: &Dead| watchdog::recover_with(&d.entry_dir, d.facts.clone(), &common::bin());
-    assert_eq!(try_it(&d), Ok(watchdog::Recovered {
+    assert_eq!(
+        try_it(&d),
+        Ok(watchdog::Recovered {
             port: d.port,
             late: false
-        }));
+        })
+    );
     loopback_only(d.port);
     assert!(get(&d.entry_dir, d.port).ends_with(b"hi"));
     let (pid, start_id) = watchdog_pid(&d.entry_dir).expect("rec/watchdog.pid");
