@@ -113,5 +113,26 @@ class Recovery(unittest.TestCase):
         self.assertEqual(cm.exception.args[0], "INCONCLUSIVE")  # not FAIL: the first three held
 
 
+class EarlyPane(unittest.TestCase):
+    def test_pane_is_copied_before_recording_seen(self):
+        d = tempfile.TemporaryDirectory()
+        self.addCleanup(d.cleanup)
+        r = bare()
+        r.s.update(server="off", harness_id="h")
+        r.project, r.tmux, r.env = d.name, "t", {}
+        r.has = lambda k: False
+        r.gc_env = lambda: {}
+        r.path = lambda *a: os.path.join(d.name, *a)
+        order = []
+        r.capture = lambda *a: "goalcup 1.0"
+        r.pane = lambda *a, **k: order.append("pane") or ""
+        r.recording_seen = lambda why: order.append("wait") or (_ for _ in ()).throw(Stop())
+        sh = lambda cmd, *a, **k: mock.Mock(stdout="")
+        with mock.patch.object(padrun, "sh", sh), mock.patch.object(padrun, "tool", lambda n: n):
+            with self.assertRaises(Stop):
+                r.start(None)
+        self.assertEqual(order, ["pane", "wait"])
+
+
 if __name__ == "__main__":
     unittest.main()

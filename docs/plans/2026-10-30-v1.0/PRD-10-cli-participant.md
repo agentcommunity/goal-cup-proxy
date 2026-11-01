@@ -1650,6 +1650,10 @@ The PRD-17 deletion gate (PRD-13) waits on tests that this PRD is asked to land 
 - **Nit B5 (accepted):** the `harness_version` `json!` line in `approve.rs` `begin()` runs past 100 columns; rustfmt does not touch `json!`. Left.
 - No seam change. No locked ledger item is touched.
 
+### 2026-11-01, note from PRD-11 own6-expected-hosts-wired (merge 5dc8cbde)
+
+- Under ruling OWN-6 the PRD-11 slice edited PRD-10 files: `cli/approve.rs` (the `wire_version` 64-unit cut, so a long version line such as Hermes 62 units is sent whole and a longer one is cut at 64), `cli/status.rs` and `cli/text.rs` (an info line for an expected `long_tunnel` note, a problem line only for unflagged ones, no seal-and-continue advice for expected hosts). Treat them as PRD-10 code from here on. Nit B7 (test-only, `tests/cli_approve.rs` leaks three strings with `Box::leak`; a direct unit test on `wire_version(Option<&str>)` would be shorter) is left; take it only if that test is rewritten anyway. No seam change and no locked ledger item is touched.
+
 ### 2026-11-01, amendment: end-screen and start wording from the full3 report (N2, N3, N4b)
 
 - **N3:** an off total under 1 s is not shown as "0 s". `span_words` says "under 1 s" below 1000 ms, so "Recording was off 2 times, under 1 s in total." Status and end screen share the helper.

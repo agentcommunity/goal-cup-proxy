@@ -240,6 +240,7 @@ async fn connection(b: Arc<Boot>, mut client: TcpStream, hold: Admitted) {
         fingerprint,
         client_prefix,
         upstream_prefix,
+        expected: b.hosts.is_expected(host),
     };
     let is_listed = connect_listed.is_some();
     let Ok(mut up) = connect::connect_upstream(rec, host, port, is_listed, target).await else {

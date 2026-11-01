@@ -484,13 +484,22 @@ def secrets(r):
     masks = r.masks()
     if masks is None:
         return r.mark("C3", "INCONCLUSIVE", "no MASK counts by rule in verify/secrets.json")
-    if not r.hits("secrets-plain") and not any(masks.get(kinds[0]) for kinds in PLANTED):
+    # A harness that redacts tool output itself (harness file redacts_tool_output, point 4) shows the exercise by the masker's
+    # own MASK of the redacted form (masked_key); without it, or without a plain hit, the exercise is not done.
+    up = r.meta.get("redacts_tool_output")
+    hit, plain = r.hits("secrets"), r.hits("secrets-plain")
+    if not plain and not any(masks.get(kinds[0]) for kinds in PLANTED) and not (up and masks.get("masked_key")):
         return r.mark("C3", "INCONCLUSIVE", "secret exercise not done: no plain-value hit and no MASK of a planted shape")
     # A planted kind with no MASK is a FAIL when a hit shows it reached the record, else not exercised (a run never passes on
-    # a missing exercise).
+    # a missing exercise). For an upstream-redacting harness the missing MASK is a stated loss, open until the owner answers
+    # (point 4): INCONCLUSIVE, never PASS.
+    # The vendor page names only the openai, github and key=/token=/password= patterns, so only those kinds carry the note.
+    named = {"openai_key", "github_token", "generic_secret_assignment"}
     for kinds in PLANTED:
-        r.flag(not any(masks.get(k) for k in kinds), "C3", "FAIL" if r.hits("secrets") else "INCONCLUSIVE",
-               "%s of %s: no MASK" % ("hits" if r.hits("secrets") else "not exercised", " or ".join(kinds)))
+        why = "owner question open: the harness redacts tool output itself, so this kind may be masked before the wire" \
+            if up and named.intersection(kinds) else "not exercised"
+        r.flag(not any(masks.get(k) for k in kinds), "C3", "FAIL" if hit else "INCONCLUSIVE",
+               "%s of %s: no MASK" % ("hits" if hit else why, " or ".join(kinds)))
 
 def c6(r):
     st, final = r.status, dig(r.status, "s4_requests")

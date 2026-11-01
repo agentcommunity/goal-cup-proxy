@@ -269,3 +269,30 @@ fn status_of_a_sealed_part_prints_the_end_screen() {
     let json = json_out(goalcup(&home, &["status", "--json"]));
     assert_eq!(json["status"], serde_json::to_value(&st).unwrap());
 }
+
+/// An expected `long_tunnel` note is information: no PROBLEM line, no seal-and-continue advice.
+/// The same note without the flag still gives `text::long_tunnel`.
+#[test]
+fn an_expected_tunnel_is_not_a_problem() {
+    let expected = json!({"what": "long_tunnel", "host": "t.example.net", "why": "upload",
+        "up": 3, "expected": true});
+    let st = with(Mode::Recording, json!({"notes": [expected]}));
+    let cx = live(true, true, true, 5);
+    assert!(problems(&st, &State::Recording, &cx).is_empty());
+    let shown = block(&st, &State::Recording, None, None, &cx, &["recording"]);
+    assert!(shown.contains("t.example.net"), "{shown}");
+    for bad in [
+        text::PROBLEM,
+        "goalcup seal",
+        "goalcup continue",
+        "--record-host",
+    ] {
+        assert!(!shown.contains(bad), "{shown}");
+    }
+    let plain = json!({"what": "long_tunnel", "host": "t.example.net", "why": "upload", "up": 3});
+    let st = with(Mode::Recording, json!({"notes": [plain]}));
+    assert_eq!(
+        problems(&st, &State::Recording, &cx),
+        vec![text::long_tunnel("t.example.net", None, 3)]
+    );
+}

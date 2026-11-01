@@ -349,6 +349,8 @@ class Run:
         for argv in (["new-session", "-d", "-s", t, "-x", "200", "-y", "50"], ["set-option", "-w", "-t", t, "remain-on-exit", "on"],
                      ["respawn-pane", "-k", "-t", t, "bash " + shlex.quote(self.path("launch.sh"))]):
             sh(["tmux"] + argv)
+        wait(lambda: self.capture().strip() or self.pane_exit()[0], 10, 0.5)  # goalcup prints its launch block first
+        self.pane()  # keep the launch block and the version line, masked, before the long waits
         if server == "off":  # no approval: paste now
             self.recording_seen("no 'Recording in chat mode'")
             self.daemon_check()
