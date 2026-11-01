@@ -175,11 +175,19 @@ function clientFacts(request: Request): { client_ip: string | null; client_count
   return { client_ip: ip === null || ip === "" ? null : ip.slice(0, 64), client_country: typeof country === "string" ? country.slice(0, 8) : null };
 }
 
+/** A test run may name no repository (null or absent); every other run names one on GitHub. */
+function repoField(b: Record<string, unknown>, mode: Auth["mode"]): string {
+  // The website column runs.repo_url is NOT NULL, so "no repository" is stored as the empty string.
+  if (mode === "test" && (b.repo_url ?? null) === null) return "";
+  const repo_url = strField(b, "repo_url", 200);
+  if (!REPO_URL.test(repo_url)) throw malformed("repo_url must look like https://github.com/<owner>/<repo>.");
+  return repo_url;
+}
+
 export async function openRun(ctx: Ctx, auth: Auth, request: Request): Promise<Response> {
   const b = await readJson(request, JSON_BODY_MAX);
   const fields = connectorFields(b);
-  const repo_url = strField(b, "repo_url", 200);
-  if (!REPO_URL.test(repo_url)) throw malformed("repo_url must look like https://github.com/<owner>/<repo>.");
+  const repo_url = repoField(b, auth.mode);
   const machine = machineField(b);
   const dev = boolField(b, "dev", false);
 
@@ -197,7 +205,8 @@ export async function openRun(ctx: Ctx, auth: Auth, request: Request): Promise<R
 
   // A practice run judges nothing, so its repository is never asked about: 0.7 practice runs all
   // name one shared repository, and one commit there must not stop every practice start.
-  if (ctx.cfg.githubCheck && auth.mode !== "practice") {
+  // A test run that names no repository has nothing to ask GitHub about.
+  if (ctx.cfg.githubCheck && auth.mode !== "practice" && repo_url !== "") {
     await requirePublicGithubRepo(ctx, repo_url);
     await requireEmptyGithubRepo(ctx, repo_url);
   }
