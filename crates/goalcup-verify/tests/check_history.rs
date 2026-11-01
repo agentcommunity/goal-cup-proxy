@@ -593,6 +593,7 @@ fn a_websocket_message_and_a_later_http_request_keep_one_chain_and_a_dropped_cal
         2,
     );
     assert_eq!(missing(&h), (1, 0, 0));
+    assert_eq!(n(&h, "chains"), 1);
 }
 
 #[test]
