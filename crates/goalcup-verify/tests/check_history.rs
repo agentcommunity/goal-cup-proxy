@@ -176,6 +176,19 @@ fn send_with(
     rep: (&str, String),
     lose: u8,
 ) -> u64 {
+    send_full(e, path, thread, body, rep, (lose, None))
+}
+
+/// [`send_with`] and, as the recorder does while the request streams, a MASK record of `len`
+/// bytes at `off` in the request body.
+fn send_full(
+    e: &mut Entry,
+    path: &str,
+    thread: &str,
+    body: &Value,
+    rep: (&str, String),
+    (lose, mask): (u8, Option<(u64, u64)>),
+) -> u64 {
     let body = body.to_string();
     let head = json!({"method": "POST", "path": path, "ver": "1.1", "masked": [], "coding": null,
         "headers": [["content-type", "application/json"], ["thread-id", thread]]});
@@ -189,6 +202,14 @@ fn send_with(
         e.data(q, half as u64 + 10, 0, &body.as_bytes()[half + 10..]);
     } else {
         e.data(q, 0, 0, body.as_bytes());
+    }
+    if let Some((off, len)) = mask {
+        e.put(Record::Mask {
+            sid: q,
+            off,
+            len,
+            rule: 1,
+        });
     }
     e.end(q, done, body.len() as u64, Value::Null);
     let head = json!({"status": 200, "ver": "1.1", "headers": [["content-type", rep.0]],
@@ -246,6 +267,16 @@ fn chain(e: &mut Entry, s: Sh, text: bool, n: u64, lost: Option<(usize, bool)>) 
 /// each of `msgs` is a `response.create` resending the history, answered with the answer, if any.
 /// Offsets run through each stream. Returns the client stream's sid.
 fn ws(e: &mut Entry, thread: &str, msgs: &[(&[A], Option<A>)]) -> u64 {
+    ws_with(e, thread, msgs, |_| {})
+}
+
+/// [`ws`], and `between` runs while the socket is still open, after its last message.
+fn ws_with(
+    e: &mut Entry,
+    thread: &str,
+    msgs: &[(&[A], Option<A>)],
+    between: impl FnOnce(&mut Entry),
+) -> u64 {
     fn put(e: &mut Entry, sid: u64, off: &mut u64, m: &Value) {
         e.data(sid, *off, 0x10 | FLAG_FIN, m.to_string().as_bytes());
         *off += m.to_string().len() as u64;
@@ -278,6 +309,7 @@ fn ws(e: &mut Entry, thread: &str, msgs: &[(&[A], Option<A>)]) -> u64 {
             &json!({"type": "response.completed", "response": {}}),
         );
     }
+    between(e);
     let close = json!({"close_code": 1000});
     e.end(up, EndReason::Complete, u, close.clone());
     e.end(down, EndReason::Complete, d, close);
@@ -544,6 +576,26 @@ fn a_call_dropped_on_a_websocket_fails_and_names_the_thread() {
     assert_eq!(missing(&h), (1, 0, 0));
 }
 
+/// The last message of a socket is still open when another request of the thread extends the
+/// chain: the order of the records must still anchor it, so a later dropped call fails.
+#[test]
+fn a_websocket_message_and_a_later_http_request_keep_one_chain_and_a_dropped_call_fails() {
+    let h = verdict(
+        &rec("h-ws-http", |e| {
+            call(e, Responses, T, &[], Call(0));
+            let all = [Call(0), Call(1), Call(2), Call(3)];
+            ws_with(e, T, &[(&all[..1], Some(Call(1)))], |e| {
+                call(e, Responses, T, &all[..2], Call(2));
+            });
+            call(e, Responses, T, &all, Call(4));
+        }),
+        "fail",
+        2,
+    );
+    assert_eq!(missing(&h), (1, 0, 0));
+    assert_eq!(n(&h, "chains"), 1);
+}
+
 #[test]
 fn a_record_with_only_a_pinned_tunnel_skips() {
     let d = rec("h-tunnel", |e| {
@@ -598,4 +650,173 @@ fn the_k11_records_give_their_four_results() {
             export(&d, &Path::new(&out).join(format!("k11-{x}-part")));
         }
     }
+}
+
+const HEAD: &str = "I ran the fake setup check script and it only prints a banner, so I looked at how it builds the address it uses: https://u:";
+const TAIL: &str = "@example.invalid/p is the address, and the rest of this fake answer goes on for a while so that the end of it is well clear.";
+
+/// A masked resend of a streamed answer: request 0 resends nothing, request 1 (when `made`) is
+/// answered with the long answer in deltas split inside the secret-shaped span, and the last
+/// request resends the answer with that span as 10 stars and a MASK record. With `tool` the
+/// answer also made a tool call; with `tail` the resent tail is not the streamed one.
+fn masked_resend(name: &str, made: bool, tool: bool, tail: Option<&str>) -> PathBuf {
+    rec(name, |e| {
+        call(e, Anthropic, T, &[], Text(0));
+        let (a, b) = (HEAD, "[redacted]");
+        let mut evs = vec![json!({"type": "content_block_delta", "index": 0,
+            "delta": {"type": "text_delta", "text": a}})];
+        let rest = [b, TAIL];
+        evs.extend(rest.iter().map(|t| {
+            json!({"type": "content_block_delta", "index": 0,
+                "delta": {"type": "text_delta", "text": t}})
+        }));
+        if tool {
+            evs.push(json!({"type": "content_block_start", "index": 1,
+                "content_block": part(Anthropic, 9)}));
+        }
+        let sse: String = evs.iter().map(|v| format!("data: {v}\n\n")).collect();
+        let msgs = |extra: Vec<Value>| {
+            let mut m = turns(Anthropic, &[Text(0)]);
+            m.splice(2..2, extra);
+            json!({"model": "fake-model", "messages": m})
+        };
+        let path = "/v1/messages";
+        if made {
+            let body = msgs(vec![]);
+            send(e, path, T, &body, ("text/event-stream", sse));
+        }
+        let text = format!("{HEAD}**********{}", tail.unwrap_or(TAIL));
+        let content: Value = if tool {
+            json!([{"type": "text", "text": text}, part(Anthropic, 9)])
+        } else {
+            text.into()
+        };
+        let body = msgs(vec![
+            json!({"role": "assistant", "content": content}),
+            user(Anthropic),
+        ]);
+        let off = body.to_string().find("**********").unwrap() as u64;
+        let rep = reply(Anthropic, Text(7));
+        send_full(e, path, T, &body, rep, (0, Some((off, 10))));
+    })
+}
+
+#[test]
+fn a_masked_resend_of_a_streamed_answer_matches() {
+    let h = verdict(&masked_resend("h-mask", true, false, None), "pass", 0);
+    assert_eq!(missing(&h), (0, 0, 0));
+}
+
+#[test]
+fn a_masked_resend_whose_call_was_dropped_still_warns() {
+    let h = verdict(&masked_resend("h-mask-drop", false, false, None), "warn", 0);
+    assert_eq!(missing(&h), (0, 1, 0));
+}
+
+#[test]
+fn a_masked_resend_with_a_dropped_tool_call_still_fails() {
+    let h = verdict(&masked_resend("h-mask-tool", false, true, None), "fail", 2);
+    assert_eq!(missing(&h), (1, 0, 0));
+}
+
+#[test]
+fn a_masked_resend_with_a_rewritten_tail_warns() {
+    let tail = format!("{}, changed", &TAIL[..TAIL.len() - 10]);
+    let h = verdict(
+        &masked_resend("h-mask-tail", true, false, Some(&tail)),
+        "warn",
+        0,
+    );
+    assert_eq!(missing(&h), (0, 1, 0));
+}
+
+/// A long markdown answer with natural stars in its middle and none at its ends.
+fn md() -> String {
+    let w = "a fake sentence of plain words so that the answer is long enough for its ends";
+    format!("{w} and then **bold** and * a bullet * in the middle {w} to the very end.")
+}
+
+#[test]
+fn a_markdown_answer_with_a_later_mask_elsewhere_keeps_its_chain_and_a_dropped_call_fails() {
+    let h = verdict(
+        &rec("h-md-mask", |e| {
+            let path = "/v1/messages";
+            let delta = json!({"type": "content_block_delta", "index": 0,
+                "delta": {"type": "text_delta", "text": md()}});
+            let sse = format!("data: {delta}\n\n");
+            let body = json!({"model": "fake-model", "messages": [user(Anthropic)]});
+            send(e, path, T, &body, ("text/event-stream", sse));
+            let asst = json!({"role": "assistant", "content": md()});
+            let msgs = vec![user(Anthropic), asst.clone(), user(Anthropic)];
+            let body = json!({"model": "fake-model", "messages": msgs});
+            send(e, path, T, &body, reply(Anthropic, Text(7)));
+            // The tool call of this answer was never recorded; the request carries a MASK
+            // on its new user turn, which is not the markdown answer.
+            let last = json!({"role": "user", "content": "fake ****"});
+            let mut msgs = vec![user(Anthropic), asst, user(Anthropic)];
+            msgs.extend(ans(Anthropic, Call(1)));
+            msgs.push(last);
+            let body = json!({"model": "fake-model", "messages": msgs});
+            let off = body.to_string().find("fake ****").unwrap() as u64 + 5;
+            let rep = reply(Anthropic, Text(8));
+            send_full(e, path, T, &body, rep, (0, Some((off, 4))));
+        }),
+        "fail",
+        2,
+    );
+    assert_eq!(missing(&h), (1, 0, 0));
+    assert_eq!(n(&h, "chains"), 1);
+}
+
+#[test]
+fn a_masked_websocket_resend_is_matched_by_its_ends() {
+    let h = verdict(
+        &rec("h-ws-mask", |e| {
+            let c = e.conn();
+            let head = json!({"method": "GET", "path": "/v1/responses", "ver": "1.1",
+                "headers": [["upgrade", "websocket"]], "masked": [], "coding": null});
+            let q = e.open(StreamKind::HttpReq, c, 0, head);
+            e.end(q, EndReason::Complete, 0, Value::Null);
+            let up = e.open(StreamKind::WsUp, c, q, json!({"deflate": false}));
+            let down = e.open(StreamKind::WsDown, c, q, json!({"deflate": false}));
+            let item = |t: &str| {
+                json!({"type": "message", "role": "assistant",
+                    "content": [{"type": "output_text", "text": t}]})
+            };
+            let meta = json!({"thread_id": T});
+            let create = |input: Vec<Value>| json!({"type": "response.create", "input": input, "client_metadata": meta});
+            let streamed = format!("{HEAD}[redacted]{TAIL}");
+            let first = create(vec![user(Responses)]).to_string();
+            e.data(up, 0, 0x10 | FLAG_FIN, first.as_bytes());
+            let done = json!({"type": "response.output_item.done", "item": item(&streamed)});
+            e.data(down, 0, 0x10 | FLAG_FIN, done.to_string().as_bytes());
+            let resent = format!("{HEAD}**********{TAIL}");
+            let input = vec![user(Responses), item(&resent), user(Responses)];
+            let second = create(input).to_string();
+            let at = first.len() as u64;
+            e.data(up, at, 0x10 | FLAG_FIN, second.as_bytes());
+            // As the recorder writes it: the MASK follows the DATA that carries FIN.
+            let off = at + second.find("**********").unwrap() as u64;
+            e.put(Record::Mask {
+                sid: up,
+                off,
+                len: 10,
+                rule: 1,
+            });
+            let end = at + second.len() as u64;
+            let close = json!({"close_code": 1000});
+            e.end(up, EndReason::Complete, end, close.clone());
+            e.end(
+                down,
+                EndReason::Complete,
+                done.to_string().len() as u64,
+                close,
+            );
+            e.end(c, EndReason::Complete, 0, json!({"up": 400, "down": 300}));
+        }),
+        "pass",
+        0,
+    );
+    assert_eq!(missing(&h), (0, 0, 0));
+    assert!(n(&h, "checked") >= 1);
 }
