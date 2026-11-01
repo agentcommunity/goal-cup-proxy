@@ -9,7 +9,7 @@ Source words: "docs" is [opencode.ai/docs](https://opencode.ai/docs/cli/) for 1.
 ## 1. Run one prompt, in chat mode first
 
 - `opencode` with no argument starts the TUI in the current folder ([docs](https://opencode.ai/docs/cli/)). `opencode --continue` (`-c`) reopens the last session, `--session <id>` a named one. Both connectors use `--continue` to resume (2.x: not on its CLI page, taken from 1.x and the source).
-- OpenCode 2 is started `opencode --standalone` (the connector's `args`): it "run[s] with a private server" instead of the shared background service ([docs](https://opencode.ai/v2/docs/cli)).
+- OpenCode 2 is started `opencode --standalone --auto` (the connector's `args`; `--auto` is explained under "Run without permission prompts"): it "run[s] with a private server" instead of the shared background service ([docs](https://opencode.ai/v2/docs/cli)).
 - `opencode run "<prompt>"` is the one-shot form; it is not chat mode and is not used. [RULES](../RULES.md) lists `--pure`, `OPENCODE_PURE=1`, `OPENCODE_DISABLE_PROJECT_CONFIG=1`, `--attach` and `share` as modes that switch recording off.
 
 ## 2. Install and record a version
@@ -66,7 +66,7 @@ Both connectors set the four XDG folders under the isolated home and read `openc
 
 ## Run without permission prompts
 
-1.x: `"permission": "allow"` in `opencode.json`; `external_directory`, `doom_loop` and `.env` reads default to `ask` otherwise ([docs](https://opencode.ai/docs/permissions/)). The `opencode-cli` connector's `no_prompts` row writes it. 2.x names the key `permissions`, an ordered rule list ([docs](https://opencode.ai/v2/docs/config)), so `opencode2-cli` has no row and the participant sets it.
+1.x: `"permission": "allow"` in `opencode.json`; `external_directory`, `doom_loop` and `.env` reads default to `ask` otherwise ([docs](https://opencode.ai/docs/permissions/)). The `opencode-cli` connector's `no_prompts` row writes it. 2.x names the key `permissions`, an ordered rule list ([docs](https://opencode.ai/v2/docs/config)), so `opencode2-cli` has no `no_prompts` row. It passes the switch `--auto` instead: "Auto-approve permissions that are not explicitly denied" ([docs](https://opencode.ai/v2/docs/cli); listed by `opencode --help` on 2.2.2), so a deny rule the participant wrote still holds. Not yet re-run with the switch.
 
 ## Pad result
 

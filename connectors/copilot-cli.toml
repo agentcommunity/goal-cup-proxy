@@ -1,5 +1,8 @@
 # GitHub Copilot CLI 1.0.105, checked against the docs.github.com Copilot CLI reference and the 1.0.105 package
 # (--help and help environment, config, providers, permissions).
+# Rung 1 ran it with a DeepSeek bring-your-own-key provider (COPILOT_PROVIDER_TYPE=anthropic, COPILOT_PROVIDER_BASE_URL on an
+# Anthropic-format endpoint, COPILOT_PROVIDER_API_KEY) and COPILOT_OFFLINE=true, with no GitHub login. Those are the
+# participant's, not set here: `help environment` says COPILOT_OFFLINE "Requires a local model provider".
 id = "copilot-cli"
 name = "GitHub Copilot CLI"
 program = "copilot"
