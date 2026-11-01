@@ -1119,3 +1119,9 @@ Names for `LESSONS.md` (the lessons lane writes them; judge 14:56Z, 15:13Z):
 ### 2026-11-01, replan after PRD-02 slice C part 2 (merge cdc9b456)
 
 - `crates/goalcup/tests/pipeline_stall.rs` is on integration, the last name the deletion gate (check 1, row L-R2) could not resolve. Repoint L-R2 to `pipeline_stall.rs` (stall exit only) together with `pipeline_guard::two_hundred_streams_with_the_writer_held` and `lessons_pipeline::open_and_end_survive_a_full_guard`, as the PRD-02 Amendments say, and rerun the four gate checks in a box. The two `pipeline_guard` cases are load-sensitive at their 30 s hang bound (not a recorder defect); PRD-14 is asked to move them to `heavy`. Still deferred and not gate names: `by_hand_load`, native cursor resume, the mask pool, `pipeline_many_streams`, `pipeline_no_latch`, `SnapshotCursor.fid`. No locked ledger item is touched.
+
+### 2026-11-01, replan note, slice 10 (gate re-run after pipeline_stall.rs, integration head 18fde505)
+
+- **Changed:** `LESSONS.md` only. L-R2 now names `pipeline_stall::a_stalled_writer_exits_75_and_the_next_boot_names_it` (PRD-02) with the two `pipeline_guard` and `lessons_pipeline` guards; L-R2 and L-C7 read `green` at 18fde505. Section 2.11 row R2 already named `pipeline_stall.rs` and needs no change. No Rust changed.
+- **Verdict: PRD-13 may delete.** All four checks pass on one box job (numbers in `LESSONS.md`); L-D2 now carries `X: PRD-17 Risks` instead of an R: entry with no pad row, so check 3 is met. The 29 `open` rows wait on `R:`, `D:` or `X:` entries and do not block.
+- No locked ledger item is touched.
