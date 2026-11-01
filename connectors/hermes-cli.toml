@@ -1,9 +1,6 @@
 # Hermes Agent v0.22.5; facts in docs/harnesses/hermes-cli.md.
 # No telemetry rows: the setup question names approvals only.
-# No state.db row (owner decision 1 Nov, PRD-11 amendment 2026-11-01): Hermes keeps its full-text
-# search index inside state.db itself, with no toggle and no separate file, and the index can hold
-# text out of context. Native capture copies files raw, so the file is not copied at all. Model
-# calls and subagents are still recorded (wire, delegation manifest and task logs).
+# No state.db row: its search index can hold text out of context (facts sheet, section 4).
 id = "hermes-cli"
 name = "Hermes"
 program = "hermes"

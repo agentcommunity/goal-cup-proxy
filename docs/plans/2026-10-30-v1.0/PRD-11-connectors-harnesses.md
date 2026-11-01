@@ -490,7 +490,6 @@ after = [["gateway", "stop", "-y"]]
 host_hints = [{ file = "{home}/config.yaml", key = "model.base_url" }, { file = "{home}/.env", key = "*_BASE_URL" }]
 secret_files = ["{home}/.env", "{home}/auth.json", "{home}/.anthropic_oauth.json"]
 native = [
-  { name = "state", root = "{home}", pattern = "state.db*", form = "final" },
   { name = "delegation-manifest", root = "{home}/cache/delegation/live", pattern = "**/manifest.json", form = "snapshot", warn_missing = false },
   { name = "delegation", root = "{home}/cache/delegation/live", pattern = "**/task-*.log", warn_missing = false },
 ]
@@ -716,7 +715,7 @@ unless a link is given.
 |---|---|---|---|---|---|---|---|---|
 | 1 | Claude Code 2.1.312 (Bun binary) | HTTPS SSE to `api.anthropic.com`, or a gateway in `ANTHROPIC_BASE_URL`; Bedrock, Vertex, Foundry hosts when switched | `HTTPS_PROXY` (first of `https_proxy`, `HTTPS_PROXY`, `http_proxy`, `HTTP_PROXY`), `NO_PROXY`; `NODE_EXTRA_CA_CERTS` adds; `CLAUDE_CODE_CERT_STORE` (H1.3) | `projects/<p>/<session>.jsonl`; subagents `<session>/subagents/agent-<id>.jsonl` plus `.meta.json`; workflow agents one level deeper (H1.5) | `DISABLE_AUTOUPDATER=1`, `DISABLE_UPDATES=1` (H1.6) | API key env, subscription sign-in (OAuth), `apiKeyHelper`, cloud credentials | Settings `env` block may set proxy values; agent-view supervisor keeps an old env; Claude apps gateway (H1.3) | **Likely verified.** Measured through a gateway on 2.1.312; core set |
 | 2 | Codex 0.165.0 (Rust) | WebSocket `wss://api.openai.com/v1/responses` first, HTTPS SSE fallback; `chatgpt.com` with ChatGPT sign-in; provider tables | `HTTPS_PROXY`, `ALL_PROXY`, `NO_PROXY` for HTTPS and WebSocket; `CODEX_CA_CERTIFICATE`, else `SSL_CERT_FILE`, both add (H2.3) | `sessions/YYYY/MM/DD/rollout-*.jsonl`, one per thread, child threads too; state SQLite holds parent edges (H2.5) | No self-install; `check_for_update_on_startup=false` (H2.6) | API key (`CODEX_API_KEY` or `login --with-api-key`), ChatGPT sign-in | `$CODEX_HOME/.env` overwrites env proxy and CA; shared app-server daemon (`--no-daemon` avoids it) (H2.3) | **Likely verified.** Run 1 recorded it; WebSocket per direction is the new part; core set |
-| 3 | Hermes v0.22.5 (Python) | Chat Completions from a gateway process per `HERMES_HOME`, about 40 providers, `model.base_url` for gateways | `HTTPS_PROXY`, `NO_PROXY` (httpx); trust through `truststore`, which on Linux reads `SSL_CERT_FILE` as a replacement, so the full bundle (H3.3) | `state.db` (all sessions, children with `parent_session_id`); `cache/delegation/live/<id>/task-<n>.log` (H3.5) | Check only; `updates.check: false` in `config.yaml`, no env switch (H3.6) | Keys in `$HERMES_HOME/.env`, Nous Portal sign-in, borrowed Codex or Claude credentials | A gateway already running for the home keeps its env and calls direct, not even tunnelled; `copilot-acp` child is wire only (section 8) (H3.3) | **Likely verified**, risk: gateway env and `SSL_CERT_FILE` untested on 0.22.5; core set |
+| 3 | Hermes v0.22.5 (Python) | Chat Completions from a gateway process per `HERMES_HOME`, about 40 providers, `model.base_url` for gateways | `HTTPS_PROXY`, `NO_PROXY` (httpx); trust through `truststore`, which on Linux reads `SSL_CERT_FILE` as a replacement, so the full bundle (H3.3) | delegation `manifest.json` and `cache/delegation/live/<id>/task-<n>.log` (H3.5) | Check only; `updates.check: false` in `config.yaml`, no env switch (H3.6) | Keys in `$HERMES_HOME/.env`, Nous Portal sign-in, borrowed Codex or Claude credentials | A gateway already running for the home keeps its env and calls direct, not even tunnelled; `copilot-acp` child is wire only (section 8) (H3.3) | **Likely verified**, risk: gateway env and `SSL_CERT_FILE` untested on 0.22.5; core set |
 | 4 | OpenCode 1.19.5; OpenCode 2.2.2 (Bun) | HTTPS to the chosen provider (native DeepSeek), or OpenCode's own gateway | `HTTPS_PROXY` (measured), `NO_PROXY=localhost,127.0.0.1` required; `NODE_EXTRA_CA_CERTS` adds, `SSL_CERT_FILE` also worked (facts sheet section 6) | One `opencode.db` for all sessions; subagents are child sessions in it (H4.5) | `OPENCODE_DISABLE_AUTOUPDATE=1` (H4.6) | Key in `auth.json` or env, OpenCode gateway account | OpenCode 2 attaches to a background service with its own env unless `--standalone` (H4.3) | **Likely verified** for 1 (measured 28 Oct); **risky** for 2; needs a PRD-09 reader written from its phase 5 sample |
 | 5 | OpenClaw 2026.10.9 (Node 24+) | Chat Completions through provider plugins | `HTTPS_PROXY` with `NODE_USE_ENV_PROXY=1`; `NODE_EXTRA_CA_CERTS` adds, `SSL_CERT_FILE` ignored (measured); its own `proxy.proxyUrl` and `OPENCLAW_PROXY_URL` beat env (H5.3) | `agents/<agent>/agent/openclaw-agent.sqlite`, `state/openclaw.sqlite`; logs in `/tmp/openclaw` (H5.5) | `OPENCLAW_NO_AUTO_UPDATE=1` (H5.6) | Keys in `~/.openclaw/.env`, auth profiles in the agent SQLite | Own proxy setting; subagents need a Gateway daemon with its own env; raw sockets "may bypass" (H5.3, H5.4) | **Risky.** Main agent likely; subagents unknown; needs a PRD-09 reader written from its phase 5 sample. Subagents need a Gateway daemon (H5.4); 1.0 does not start one, so PRD-12 check C2 is expected INCONCLUSIVE "no subagent" and the tier "not verified: subagents need the Gateway" (owner list OW-10) |
 | 6 | Amp 0.0.1793275344 (Bun) | One JSON-RPC WebSocket to `ampcode.com`; Amp's servers call the model | `HTTPS_PROXY`; `NODE_EXTRA_CA_CERTS` adds (H6.3) | No transcript; `~/.cache/amp/logs/threads/T-*.log` metadata (H6.5) | `AMP_SKIP_UPDATE_CHECK=1` (H6.6) | Amp account always (`amp login` or `sgamp_` token); keys stored in Amp | Orbs (`-ox`) run remotely; provider calls always server side (H6.3) | **Vendor backend, not verified this cycle** (no Amp account, 30 Oct); needs a PRD-09 reader written from its phase 5 sample |
@@ -829,8 +828,8 @@ and is not pending.
 1. **Direct key.** Claude Code (Claude key) and Codex (OpenAI key) in the core slice, then Hermes
    (DeepSeek), each run the pad prompt from their built-in connector. Pass: every model request the
    harness's own session files record has a matching decrypted `http_req` or `ws_up` message in the
-   record (for Hermes, whose `state.db` has per-session totals only, the per-session comparison after
-   the seal counts, PRD-00 owner question 7, old 19); PRD-12 checks C1 and C2 pass; zero `conn` from the
+   record (for Hermes, which has no session file and no copied `state.db`, judged from the record; the local
+   log check is `skip`, see the 2026-11-01 amendment); PRD-12 checks C1 and C2 pass; zero `conn` from the
    harness to its model host is a tunnel; a tunnel to another listed host carries a named reason (PRD-08
    `named`); the start event shows `connector_source: "builtin"` and the SHA-256 of the built-in file.
 2. **Gateway.** Kilo, and the core set's gateway rows (PRD-12 P4), with `ai-gateway.vercel.sh` set in
@@ -917,7 +916,7 @@ Automated tests that guard them (`crates/goalcup/tests/`):
 | Hint file could not be read | A file over 1 MiB, linked, unreadable or unparsable names a model host we then do not decrypt | Skipped with a log line and one start line (section 2); the host is a tunnel the per-host flag shows |
 | Cross-harness subagents | Qwen Code's and Hermes's children write session files into the participant's real home; the subagent check of the pad cannot see them | Wire only, named (section 8); RULES names them not allowed (owner question 4, old 14) |
 | `update_off` in a settings file | A harness that rewrites its settings mid-run may still update | `plan` writes it again at every start and `continue`; the version is recorded at every start; an update lands only at the next `continue` |
-| Hermes in-place compaction | Today's connector turned `compression.in_place` off so the JSON snapshot kept growing (D61); 1.0 reads `state.db`, not the snapshot, and no longer sets it | The wire holds every call; whether compaction rewrites `state.db` rows of a session is unverified; the Hermes pad run shows it, and a `no_prompts`-style setting can be added as data |
+| Hermes in-place compaction | Today's connector turned `compression.in_place` off so the JSON snapshot kept growing (D61); 1.0 does not set it and copies neither the snapshot nor `state.db` | The wire holds every call, so compaction cannot hide one |
 | Local model servers | Calls to Ollama or LM Studio on loopback are never recorded | Named by the `local_model` note and PRD-10's line; recording plain HTTP on loopback is out of 1.0 |
 | OpenCode 2 under the 1.x connector | `version` refuses and points to `opencode2-cli` | One extra key in the schema; the alternative was a silent zero-call run |
 | Hermes gateway with an old env | If `before` fails (old Hermes has no `-y`), the old gateway calls direct, not even tunnelled | Logged; the pad's check 5; tier stays "not verified" until it passes |
@@ -1532,3 +1531,21 @@ is left is data and docs only. Four items, in order:
   line on what is recorded should add "Hermes's session database is not copied". PRD-04's
   `tests/native_safety.rs::hermes_rows_take_the_state_database_and_no_request_dump` asserts the old row;
   the slice flips it (outside file, integrator ruling like OWN-6).
+- **Follow-ups (fixer, 1 Nov).**
+  - **Point 2 risk, release blocker T8.** `goalcup-verify` took Hermes threads and parent links only
+    from the `state` row (`usage/hints.rs` `HermesDb`, `usage/native.rs`); with the row gone that leg
+    never fires. Calls stay recorded on the wire, but usage cannot yet say which subagent made which
+    call. full3 and full4 passed C2 for Hermes with that leg in place, so nobody claims Hermes C2 PASS
+    until the Hermes pad (`direct`, with subagents) is rerun after this merges.
+  - **PRD-09 seam note (expanded).** Read parent and child links from the delegation `manifest.json`
+    snapshots, and delete `HermesDb` and `usage/sqlite.rs`.
+  - **Acceptance 1, Hermes, reworded:** judged from the record; the local log check is `skip`.
+  - **Notes for owners, not edited here:** PRD-12 P3 (line 1000, "where `state.db` is read") and its
+    risk row (line 1057); PRD-16 X1, X2 and the Hermes `state.db` line (255); the open-items list.
+  - **Ruling needed (integrator):** `crates/goalcup/tests/native_safety.rs` belongs to PRD-04; the one
+    Hermes case there is flipped and also plants the delegation files, replacing a separate test file.
+    OWN-6 does not name this file. Asked in `connectors.log`; the flip stands only with a ruling.
+  - **Ledger:** the 1 Nov owner answer (exact-value masking for all, and no Hermes search index) is in
+    `integrator.log` 17:44Z only; the integrator should record it in `OWNER-DECISIONS.md`.
+  - **Unmeasured, route after exact-value masking settles:** Codex (`*.sqlite*` final) and OpenClaw
+    still copy whole SQLite files and may hold bare tokens in an index or token table.

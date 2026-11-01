@@ -187,6 +187,10 @@ fn hermes_rows_take_no_state_database_and_no_request_dump() {
     let home = t.path().join("home");
     fs::create_dir_all(home.join("sessions")).unwrap();
     fs::write(home.join("sessions/request_dump_x.json"), b"{}").unwrap();
+    let live = home.join("cache/delegation/live/run-1");
+    fs::create_dir_all(&live).unwrap();
+    fs::write(live.join("manifest.json"), b"{}").unwrap();
+    fs::write(live.join("task-1.log"), b"line\n").unwrap();
     for f in ["state.db", "state.db-wal", "state.db.fts_rebuild.lock"] {
         fs::write(home.join(f), b"SQLite format 3\0").unwrap();
     }
@@ -209,8 +213,13 @@ fn hermes_rows_take_no_state_database_and_no_request_dump() {
         .iter()
         .map(|f| rows[f.row].root.join(&f.rel))
         .collect();
-    // Owner decision 1 Nov: the search index lives in state.db, so none of it is copied.
-    assert!(names.is_empty(), "{names:?}");
+    // Owner decision 1 Nov: the search index lives in state.db, so none of it is copied; the
+    // delegation manifest and task log are the only matches.
+    let mut want = vec![live.join("manifest.json"), live.join("task-1.log")];
+    let mut got = names.clone();
+    want.sort();
+    got.sort();
+    assert_eq!(got, want, "{names:?}");
 }
 
 #[test]

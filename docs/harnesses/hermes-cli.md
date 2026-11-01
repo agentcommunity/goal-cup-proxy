@@ -25,7 +25,7 @@ Source words: "docs" is [hermes-agent.nousresearch.com/docs](https://hermes-agen
 | | macOS | Linux | Windows |
 |---|---|---|---|
 | Config dir | `$HERMES_HOME`, default `~/.hermes`: `config.yaml`, `.env`, `auth.json`, `.anthropic_oauth.json` ([docs](https://hermes-agent.nousresearch.com/docs/user-guide/configuration); measured) | same (docs; Docker uses `/opt/data`) | unknown |
-| Session store | `$HERMES_HOME/state.db`, SQLite in WAL mode, with `-wal` and `-shm`; every session ever run in the home is in it (docs; source). Goal Cup does not copy it (section 4) | same | unknown |
+| Session store | `$HERMES_HOME/state.db`, SQLite in WAL mode, with `-wal` and `-shm`; every session ever run in the home is in it (docs; source). Not copied (section 4) | same | unknown |
 | Subagent logs | `cache/delegation/live/<id>/task-<n>.log` and `manifest.json`, pruned after 7 days, redacted by Hermes before writing (source) | same | unknown |
 | Logs / cache | `logs/agent.log`, rotated at 5 MiB times 3 (docs) | same | unknown |
 | Env vars that move these | `HERMES_HOME` moves all of the above (measured); `-p`/`--profile` switches it (source) | same | unknown |
@@ -35,8 +35,7 @@ The connector sets `HERMES_HOME` to the isolated home and leaves `HOME` alone.
 ## 4. Session format and identity
 
 - `state.db` has `sessions`, `messages`, usage and `async_delegations` tables (schema 32 at v0.22.5, source). Hermes 0.21.1 and later write no `session_<id>.json` snapshot (source), so a run on 0.22.5 has no per-session file; its model calls are recorded on the wire. The connector does not copy `state.db`. Hermes keeps its full-text search index (`messages_fts` and `messages_fts_trigram`, each with `_data`, `_idx`, `_docsize` and `_config` shadow tables and sync triggers) inside that one file (source: `hermes_state.py`), so terms stored out of context cannot be masked: measured in full4, a planted password sat raw in `state.db` and in its WAL. There is no setting that turns the index off and no separate index file (measured at v0.22.5 in a keyless box: `SessionDB()` in an empty `HERMES_HOME`; the only toggle found, `cjk_fts`, adds a third index), and the native capture copies files whole.
-- What remains: every model call on the wire, the `cache/delegation/live/*/manifest.json` snapshots and the `task-*.log` files for delegations.
-- What is lost: the `sessions`, `messages`, usage and `async_delegations` tables, so Hermes's own per-session totals and `parent_session_id` links are not in the record. Subagent calls still appear on the wire.
+- Kept: every model call on the wire, the delegation `manifest.json` snapshots and `task-*.log` files. Not in the record: the `sessions`, `messages`, usage and `async_delegations` tables, so Hermes's own per-session totals and `parent_session_id` links. Which subagent made which call is read from the manifests (PRD-09 seam note); that reader is not built yet, so the Hermes pad needs a rerun before C2 is claimed.
 - A `delegate_task` child is a row with `parent_session_id` set in `state.db` (not copied), and also has a log under `cache/delegation/live/`. The connector reads `task-*.log` as it grows and copies each `manifest.json` as a snapshot; both may match nothing when no subagent runs, which is not a warning.
 - The session id is `YYYYMMDD_HHMMSS_<six hex>` (source). Hermes prints it in the banner; the connector does not read the terminal.
 
