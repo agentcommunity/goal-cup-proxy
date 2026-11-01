@@ -689,7 +689,7 @@ class Run:
             if why:
                 return "FAIL", why
             try:
-                r = call(["sh", os.path.join(REPO, "scripts", "fetch-run.sh"), "--bucket", STAGING_BUCKET, "--index", index,
+                r = call(["sh", fr, "--bucket", STAGING_BUCKET, "--index", index,
                           entry, os.path.dirname(got)], timeout=limit,
                          env=env_without(set(NEVER_IN_BOX) - {"CLOUDFLARE_ACCOUNT_ID", "CLOUDFLARE_API_TOKEN"}))
             finally:  # a timeout kills sh before its EXIT trap: its work folder goes here
@@ -712,15 +712,15 @@ class Run:
 
         def ix(verb, *args, **kw):  # one sbx call on the index box, inside the step's limit
             return self.sbx(verb, *args, limit=max(1, deadline - time.time()), name=name, **kw)
-        files = dict(files, **{"idx.sh": os.path.join(self.tmp, "dbf-idx-%s.sh" % entry)})
-        with open(files["idx.sh"], "w") as f:
+        idx = os.path.join(self.tmp, "dbf-idx-%s.sh" % entry)
+        with open(idx, "w") as f:
             f.write(INDEX_QUERY % (entry, entry))
         try:
             r = ix("create", "--name", name, "--minutes", str(math.ceil(limit / 60) + 1), "--vcpus", "1")
             if r.returncode:
                 return said(NOT + "index box not created", r)
             for fname, mode in (("query.sql", "644"), ("conv.py", "644"), ("install.sh", "755"), ("idx.sh", "755")):
-                r = ix("put", name, "~/" + fname, "--file", files[fname], "--mode", mode)
+                r = ix("put", name, "~/" + fname, "--file", idx if fname == "idx.sh" else files[fname], "--mode", mode)
                 if r.returncode:
                     return said(NOT + "index box not set up", r)
             r = ix("exec", name, "--script", files["install.sh"], "--sudo")
@@ -729,7 +729,7 @@ class Run:
             r = ix("put-env", name, "~/.dburl", "--env", "DATABASE_URL", env=env_without(set(NEVER_IN_BOX) - {"DATABASE_URL"}))
             if r.returncode:
                 return said(NOT + "index box has no database address", r)
-            r = ix("exec", name, "--script", files["idx.sh"])
+            r = ix("exec", name, "--script", idx)
             if r.returncode:
                 return said(NOT + "index query failed", r)
             r = ix("get", name, "~/idx/%s.json" % entry, index)
@@ -747,7 +747,7 @@ class Run:
                 self.log("sbx rm failed " + name)
                 self.stray.append(name)  # the cleanup line retries it and says so
 
-    def keep_rec(self):
+    def keep_rec(self, limit=300):
         """P0b: before the pad box goes, the entry's rec/ (the recorder's masked recording, less the run certificate key) is
         copied to rec-kept/<entry>/rec when the server copy was not fetched, so a refetch and a check can still finish C4.
         Not kept unless the row's C3 scans (record, box output) ran and found no known value: a masking failure must not put
@@ -775,10 +775,10 @@ class Run:
                     fd, script = tempfile.mkstemp(suffix=".sh", dir=self.tmp)
                     with os.fdopen(fd, "w") as f:
                         f.write(REC_TAR % (entry, entry))
-                    if self.sbx("exec", self.name, "--script", script, limit=300).returncode:
+                    if self.sbx("exec", self.name, "--script", script, limit=limit).returncode:
                         raise Refused("no rec folder in the box")
                     tar = os.path.join(self.tmp, "rec-kept-%s.tar" % entry)
-                    if self.sbx("get", self.name, "~/rec-kept-%s.tar" % entry, tar, limit=300).returncode:
+                    if self.sbx("get", self.name, "~/rec-kept-%s.tar" % entry, tar, limit=limit).returncode:
                         raise Refused("rec not copied out")
                     os.makedirs(dest)
                     extract(tar, dest)
@@ -835,14 +835,18 @@ class Run:
 
     def step_cleanup(self):
         """Section 3.2: pad-run wipe, box removed by name, then a list to confirm. Never changes a result."""
-        saw, third, loose = [], runner_limits(self.s)["wipe"], []
+        saw, third, loose, wiped_ok = [], runner_limits(self.s)["wipe"], [], False
         try:  # the keys go first, then the recording is kept (the wipe leaves rec/ alone)
             result, wiped, _ = self.box("wipe", third) if self.tried or self.s["where"] == "here" and self.box_dir else ("ok", "")
+            wiped_ok = result == "ok"
             saw += [wiped if result == "ok" else "wipe %s: %s" % (result, wiped)] if wiped else []
         except Exception as e:
             saw.append("wipe %s" % type(e).__name__)
         try:
-            self.keep_rec()  # a fetch that failed, timed out or never ran still keeps a clean recording
+            if wiped_ok:  # keys gone first; each call bounded by the wipe's share of the cleanup budget
+                self.keep_rec(third)  # a fetch that failed, timed out or never ran still keeps a clean recording
+            else:
+                saw.append("rec not kept: wipe did not finish")
             if any(v is True for v in self.kept.values()):  # scanned after the row: its count is verify/secrets-kept.json
                 if self.scan_out(os.path.join(self.dir, "rec-kept"), "secrets-kept.json"):
                     saw.append("kept rec has a conductor secret value")
