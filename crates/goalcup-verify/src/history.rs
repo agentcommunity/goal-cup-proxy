@@ -20,8 +20,10 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 type Key = [u8; 16];
 /// (boot, stream, WebSocket message number): the call table's row key.
 type Id = (u64, u64, Option<u64>);
-/// One answer's keys: (key, whether it is a tool-call id).
-type Turn = Vec<(Key, bool)>;
+/// One answer's keys: (key, whether it is a tool-call id, the call's name-and-arguments key).
+type Turn = Vec<(Key, bool, Option<Key>)>;
+/// A streamed call's name and joined arguments, by (choice, call index).
+type Deltas = BTreeMap<(u64, u64), (String, String)>;
 
 fn hash(b: &[u8]) -> Key {
     let mut k = [0; 16];
@@ -29,19 +31,43 @@ fn hash(b: &[u8]) -> Key {
     k
 }
 
+/// A tool call's second key: its name plus its canonical arguments (parsed JSON, else collapsed
+/// whitespace), so a harness that rewrites the call id on resend still matches. `None` when the
+/// name or the arguments are missing or empty (`{}`).
+fn fb(name: Option<&Value>, args: Option<&Value>) -> Option<Key> {
+    let (n, a) = (name?.as_str()?, args?);
+    let a = match a.as_str() {
+        Some("") => return None,
+        Some(t) => serde_json::from_str::<Value>(t).map_or_else(
+            |_| t.split_whitespace().collect::<Vec<_>>().join(" "),
+            |v| v.to_string(),
+        ),
+        None => a.to_string(),
+    };
+    // A call with no arguments says nothing that tells one from another.
+    (a != "{}").then(|| hash(format!("{n}\0{a}").as_bytes()))
+}
+
 /// The answer as one assistant turn: its tool-call ids, else (Gemini function calls, no id, and
 /// text) the hash of its whitespace-collapsed text. `None` when it has neither.
 fn turn(m: &Map<String, Value>) -> Option<Turn> {
     let s = |k: &str| m.get(k).and_then(Value::as_str);
-    let id = |v: &Value, k: &str| v.get(k).and_then(Value::as_str).map(String::from);
-    let mut ids: Vec<String> = Vec::new();
+    let pair = |i: Option<&Value>, n: Option<&Value>, a: Option<&Value>| {
+        Some((i?.as_str()?.to_string(), fb(n, a)))
+    };
+    let mut ids: Vec<(String, Option<Key>)> = Vec::new();
     match s("type") {
-        Some("tool_use") => ids.extend(s("id").map(String::from)),
-        Some("function_call") => ids.extend(s("call_id").map(String::from)),
+        Some("tool_use") => ids.extend(pair(m.get("id"), m.get("name"), m.get("input"))),
+        Some("function_call") => {
+            ids.extend(pair(m.get("call_id"), m.get("name"), m.get("arguments")));
+        }
         _ => {}
     }
     let calls = m.get("tool_calls").and_then(Value::as_array);
-    ids.extend(calls.into_iter().flatten().filter_map(|t| id(t, "id")));
+    ids.extend(calls.into_iter().flatten().filter_map(|t| {
+        let f = &t["function"];
+        pair(t.get("id"), f.get("name"), f.get("arguments"))
+    }));
     let (mut text, mut fcs) = (String::new(), Vec::new());
     if matches!(s("role"), Some("assistant" | "model")) {
         let parts = m.get("parts").and_then(Value::as_array);
@@ -49,7 +75,7 @@ fn turn(m: &Map<String, Value>) -> Option<Turn> {
         text.extend(s("content"));
         for p in blocks.into_iter().chain(parts).flatten() {
             if p.get("type").and_then(Value::as_str) == Some("tool_use") {
-                ids.extend(id(p, "id"));
+                ids.extend(pair(p.get("id"), p.get("name"), p.get("input")));
             }
             if p.get("thought") != Some(&Value::Bool(true)) {
                 text.extend(p.get("text").and_then(Value::as_str));
@@ -60,11 +86,15 @@ fn turn(m: &Map<String, Value>) -> Option<Turn> {
         }
     }
     if !ids.is_empty() {
-        return Some(ids.iter().map(|i| (hash(i.as_bytes()), true)).collect());
+        return Some(
+            ids.iter()
+                .map(|i| (hash(i.0.as_bytes()), true, i.1))
+                .collect(),
+        );
     }
     let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
-    let t = (!text.is_empty()).then(|| vec![(hash(text.as_bytes()), false)]);
-    Some(fcs.into_iter().map(|k| (k, false)).collect::<Turn>())
+    let t = (!text.is_empty()).then(|| vec![(hash(text.as_bytes()), false, None)]);
+    Some(fcs.into_iter().map(|k| (k, false, None)).collect::<Turn>())
         .filter(|f| !f.is_empty())
         .or(t)
 }
@@ -73,7 +103,8 @@ fn turn(m: &Map<String, Value>) -> Option<Turn> {
 fn keys_of(v: &Value, keys: &mut HashSet<Key>) {
     match v {
         Value::Object(m) => {
-            keys.extend(turn(m).into_iter().flatten().map(|k| k.0));
+            let ks = turn(m).into_iter().flatten();
+            keys.extend(ks.flat_map(|k| [Some(k.0), k.2]).flatten());
             m.values().for_each(|c| keys_of(c, keys));
         }
         Value::Array(a) => a.iter().for_each(|c| keys_of(c, keys)),
@@ -84,9 +115,28 @@ fn keys_of(v: &Value, keys: &mut HashSet<Key>) {
 /// One response event: its answer keys, and its streamed answer text joined into `acc` by the
 /// secret scan's joiner ([`answer_text`]); the scan and this check never keep two copies. The
 /// answer leaves out thinking, reasoning and tool arguments, which a resent turn does not carry.
-fn event(v: &Value, acc: &mut String, keys: &mut HashSet<Key>) {
+fn event(v: &Value, acc: &mut String, keys: &mut HashSet<Key>, calls: &mut Deltas) {
     keys_of(v, keys);
     answer_text(v, acc);
+    // Chat deltas carry a call's id and name in the first chunk, its arguments in pieces.
+    for c in v["choices"].as_array().into_iter().flatten() {
+        for t in c["delta"]["tool_calls"].as_array().into_iter().flatten() {
+            let at = (
+                c["index"].as_u64().unwrap_or(0),
+                t["index"].as_u64().unwrap_or(0),
+            );
+            let e = calls.entry(at).or_default();
+            e.0.extend(t["function"]["name"].as_str());
+            e.1.extend(t["function"]["arguments"].as_str());
+        }
+    }
+}
+
+/// The joined streamed calls of a finished response, as name-and-arguments keys.
+fn joined(calls: &mut Deltas, keys: &mut HashSet<Key>) {
+    for (n, a) in std::mem::take(calls).into_values() {
+        keys.extend(fb(Some(&n.into()), Some(&a.into())));
+    }
 }
 
 /// The joined text of a whole response is one answer key.
@@ -117,6 +167,7 @@ struct St {
     pend: bool,
     msgs: u64,
     acc: String,
+    calls: Deltas,
 }
 
 /// One model request: where it ended, its chain, and its turns new to that chain.
@@ -278,6 +329,7 @@ impl Sink {
             pend,
             msgs: 0,
             acc: String::new(),
+            calls: Deltas::new(),
         };
         self.open.insert((b, sid), st);
     }
@@ -311,8 +363,8 @@ impl Sink {
             }
             Role::Resp(true) => {
                 st.buf.extend_from_slice(bytes);
-                let (acc, keys) = (&mut st.acc, &mut self.h.answers);
-                lines(&mut st.buf, &mut |v| event(v, acc, keys));
+                let (acc, keys, calls) = (&mut st.acc, &mut self.h.answers, &mut st.calls);
+                lines(&mut st.buf, &mut |v| event(v, acc, keys, calls));
             }
             Role::Resp(false) | Role::Up | Role::Down if !st.hole => {
                 st.buf.extend_from_slice(bytes)
@@ -346,9 +398,10 @@ impl Sink {
             }
             Role::Resp(true) => {
                 st.buf.push(b'\n');
-                let (acc, keys) = (&mut st.acc, &mut self.h.answers);
-                lines(&mut st.buf, &mut |v| event(v, acc, keys));
+                let (acc, keys, calls) = (&mut st.acc, &mut self.h.answers, &mut st.calls);
+                lines(&mut st.buf, &mut |v| event(v, acc, keys, calls));
                 texts(&mut st.acc, keys);
+                joined(&mut st.calls, keys);
             }
             Role::Resp(false) if !st.hole => self.reply(&st.buf),
             Role::Up if st.pend => self.h.undecoded += 1,
@@ -360,8 +413,10 @@ impl Sink {
     fn reply(&mut self, body: &[u8]) {
         let (mut acc, keys) = (String::new(), &mut self.h.answers);
         match serde_json::from_slice::<Value>(body) {
-            Ok(Value::Array(a)) => a.iter().for_each(|v| event(v, &mut acc, keys)),
-            Ok(v) => event(&v, &mut acc, keys),
+            Ok(Value::Array(a)) => a
+                .iter()
+                .for_each(|v| event(v, &mut acc, keys, &mut Deltas::new())),
+            Ok(v) => event(&v, &mut acc, keys, &mut Deltas::new()),
             Err(_) => {}
         }
         texts(&mut acc, keys);
@@ -525,7 +580,9 @@ pub fn judge(h: &Hist, t: &CallTable, covers: &[Cover]) -> Check {
             e.1 += 1;
             checked += 1;
             let miss: Vec<bool> = (keys.iter())
-                .filter(|k| !h.answers.contains(&k.0))
+                .filter(|k| {
+                    !h.answers.contains(&k.0) && !k.2.is_some_and(|f| h.answers.contains(&f))
+                })
                 .map(|k| k.1)
                 .collect();
             if miss.is_empty() {
