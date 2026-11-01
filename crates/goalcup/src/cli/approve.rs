@@ -59,7 +59,7 @@ pub struct Ask<'a> {
     pub workspace: &'a Path,
     pub session_id: &'a str,
     pub harness_version: Option<&'a str>,
-    /// `<owner>/<name>`; none for a practice run.
+    /// `<owner>/<name>`; none for a practice run (the server is then sent the shared practice URL).
     pub repo: Option<&'a str>,
     pub github_api: &'a str,
     pub hosts_file: Option<&'a Path>,

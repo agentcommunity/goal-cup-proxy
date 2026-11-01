@@ -206,30 +206,14 @@ fn ctrl_c_while_waiting_creates_nothing() {
 
 #[test]
 fn a_repository_with_commits_is_refused_before_any_approval() {
-    // GitHub's fake: public, and a first commit. The server is a closed port: if the approval were
+    // GitHub's fake has a first commit. The server is a closed port: if the approval were
     // asked first the stop would be exit 3.
-    let (listener, addr) = ports::held();
-    std::thread::spawn(move || {
-        for mut s in listener.incoming().flatten() {
-            let mut buf = [0u8; 2048];
-            let n = s.read(&mut buf).unwrap_or(0);
-            let body = if String::from_utf8_lossy(&buf[..n]).contains("/commits") {
-                "[{}]"
-            } else {
-                r#"{"private":false}"#
-            };
-            let _ = write!(
-                s,
-                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-                body.len()
-            );
-        }
-    });
+    let api = github("[{}]");
     let (_held, closed) = ports::refusing();
     let (home, got, out) = start(
         &Server::Url(format!("http://{closed}")),
         Some("o/r"),
-        &format!("http://{addr}"),
+        &api,
     );
     assert_eq!(got.unwrap_err().code, 1);
     assert!(out.is_empty() && empty(home.path()));
@@ -242,6 +226,28 @@ fn a_local_only_run_asks_for_nothing() {
     assert!(out.is_empty() && opened.deadline.is_none() && opened.token.is_none());
     let dir = home.path().join("runs").join(&opened.run);
     assert!(dir.join("server.json").is_file() && !dir.join("credential").exists());
+}
+
+/// GitHub's fake: public, and `commits` as the answer to the commits list.
+fn github(commits: &'static str) -> String {
+    let (listener, addr) = ports::held();
+    std::thread::spawn(move || {
+        for mut s in listener.incoming().flatten() {
+            let mut buf = [0u8; 2048];
+            let n = s.read(&mut buf).unwrap_or(0);
+            let body = if String::from_utf8_lossy(&buf[..n]).contains("/commits") {
+                commits
+            } else {
+                r#"{"private":false}"#
+            };
+            let _ = write!(
+                s,
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+        }
+    });
+    format!("http://{addr}")
 }
 
 /// Forwards to the fake Worker and keeps the body of `POST /v1/runs`.
@@ -326,25 +332,11 @@ fn the_open_call_names_the_repository_each_mode_needs() {
         "https://github.com/agentcommunity/goalcup-matrix-empty"
     );
     assert_eq!(sent(RunMode::Test, None, &none), Value::Null);
-    // GitHub's fake: public and empty.
-    let (listener, addr) = ports::held();
-    std::thread::spawn(move || {
-        for mut s in listener.incoming().flatten() {
-            let mut buf = [0u8; 2048];
-            let n = s.read(&mut buf).unwrap_or(0);
-            let body = if String::from_utf8_lossy(&buf[..n]).contains("/commits") {
-                "[]"
-            } else {
-                r#"{"private":false}"#
-            };
-            let _ = write!(
-                s,
-                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-                body.len()
-            );
-        }
-    });
-    let api = format!("http://{addr}");
+    let api = github("[]");
+    assert_eq!(
+        sent(RunMode::Test, Some("o/r"), &api),
+        "https://github.com/o/r"
+    );
     assert_eq!(
         sent(RunMode::Competition, Some("o/r"), &api),
         "https://github.com/o/r"
