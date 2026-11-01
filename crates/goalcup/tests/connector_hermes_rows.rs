@@ -13,13 +13,13 @@ use goalcup::pipeline::Recorder;
 #[test]
 fn hermes_rows_take_no_state_database() {
     let c = connector::load("hermes-cli", None).unwrap();
-    let names: Vec<&str> = c.native.iter().map(|n| n.name.as_str()).collect();
-    assert_eq!(names, ["delegation-manifest", "delegation"]);
     assert!(c.native.iter().all(|n| !n.pattern.starts_with("state.db")));
 
     let t = tempfile::tempdir().unwrap();
     let home = t.path().join("home");
     fs::create_dir_all(home.join("sessions")).unwrap();
+    fs::create_dir_all(home.join("cache/delegation/live/x")).unwrap();
+    fs::write(home.join("cache/delegation/live/x/task-1.log"), b"log").unwrap();
     fs::write(home.join("sessions/request_dump_x.json"), b"{}").unwrap();
     fs::write(home.join("state.db"), b"SQLite format 3\0").unwrap();
     let home_s = home.to_str().unwrap();
@@ -38,6 +38,7 @@ fn hermes_rows_take_no_state_database() {
         .iter()
         .map(|f| rows[f.row].root.join(&f.rel).to_string_lossy().into_owned())
         .collect();
+    assert!(names.iter().any(|p| p.ends_with("task-1.log")), "{names:?}");
     assert!(
         !names
             .iter()

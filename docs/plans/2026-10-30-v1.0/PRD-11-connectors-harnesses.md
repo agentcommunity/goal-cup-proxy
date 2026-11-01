@@ -1529,23 +1529,22 @@ is left is data and docs only. Four items, in order:
   line on what is recorded should add "Hermes's session database is not copied". The PRD-11 case for
   the new rows is `tests/connector_hermes_rows.rs`. PRD-09 and PRD-04 notes are under follow-ups.
 - **Follow-ups (fixer, 1 Nov).**
-  - **HOLD (integrator, 18:04Z) and point 2 risk, release blocker T8.** `goalcup-verify` took Hermes
+  - **HOLD (integrator, 18:04Z), resolved: PRD-08 slice 11 (8eee2a70) landed and is merged into this branch.** Original risk, release blocker T8: `goalcup-verify` took Hermes
     threads and parent links only from the `state` row (`usage/hints.rs` `HermesDb`,
     `usage/native.rs`); with the row gone that leg never fires. Calls stay recorded on the wire, but
-    usage cannot yet say which subagent made which call. This branch is not queued until a Hermes
-    rung 3 row (`direct`, with subagents) on it shows C2 PASS, or the PRD-09 manifest reader lands
-    first or in the same merge. No such row exists yet; nobody claims Hermes C2 PASS.
+    usage cannot yet say which subagent made which call. Nobody claims Hermes C2 PASS
+    until a Hermes rung 3 row (`direct`, with subagents) shows it.
   - **PRD-09 seam note.** Read parent and child links from the delegation `manifest.json`
     snapshots, and delete `HermesDb` and `usage/sqlite.rs` (dead once the row is gone; per-call
     matching for Hermes is wire only).
   - **Acceptance 1, Hermes, reworded:** judged from the record; the local log check is `skip`.
   - **Notes for owners, not edited here:** PRD-12 P3 (line 1000, "where `state.db` is read") and its
     risk row (line 1057); PRD-16 X1, X2 and the Hermes `state.db` line (255); the open-items list.
-  - **Ruling needed (integrator), pending:** `crates/goalcup/tests/native_safety.rs` belongs to PRD-04
+  - **Ruling OWN-9 (integrator, `integrator.log` 19:42Z), resolved: the one case is removed.** `crates/goalcup/tests/native_safety.rs` belongs to PRD-04
     and still asserts the old `state.db` row
     (`hermes_rows_take_the_state_database_and_no_request_dump`), so it fails after this merges. No
-    ruling names that file (OWN-6 does not). This branch leaves it untouched; PRD-04's lane or an
-    integrator ruling flips or removes that one case before this branch is queued.
+    ruling names that file (OWN-6 does not). OWN-9 allows the narrow removal of that case; this branch
+    removes it and keeps the request_dump guard, moved to `tests/connector_hermes_rows.rs`. The integrator should record OWN-9 in the repo.
   - **Ledger:** the 1 Nov owner answer (exact-value masking for all, and no Hermes search index) is in
     `integrator.log` 17:44Z only; the integrator should record it in `OWNER-DECISIONS.md`.
   - **Unmeasured, route after exact-value masking settles:** Codex (`*.sqlite*` final) and OpenClaw
@@ -1553,7 +1552,7 @@ is left is data and docs only. Four items, in order:
 
 - **2026-11-01, Hermes state.db drop finished (docs and participant text).** The `state.db` native row is gone
   from `connectors/hermes-cli.toml`; the PRD-04 case in `native_safety.rs` that still asserts `state.db` is
-  found must flip to assert it is not found (owned by the hermes-test-flip task; not in this commit). The
+  found was removed under OWN-9 and its guard moved to `tests/connector_hermes_rows.rs`, which this branch carries. The
   `secret_files` comment, sheet sections 4 and 5, and the `first_screen` string now say: Goal Cup stores and
   uploads no key, Hermes finds the key where it always does, subagents are shown by their delegation task logs
   (PRD-08 slice 11) and not tied to single calls, per-thread usage is not measured. No locked ledger item is
