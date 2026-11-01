@@ -354,7 +354,12 @@ fn past_thirty_two_values_the_rest_are_skipped_and_nothing_prints() -> Res {
     for (value, want) in values[..32].iter().zip(&kept) {
         assert_eq!(value.left_out_count(), 0);
         let one = Masker::new(&[], vec![value.clone()])?;
-        assert!(one.mask_whole(want.as_bytes()).bytes.iter().all(|&b| b == b'*'));
+        assert!(
+            one.mask_whole(want.as_bytes())
+                .bytes
+                .iter()
+                .all(|&b| b == b'*')
+        );
     }
     let all: Vec<&String> = file.iter().chain(env.values()).collect();
     for value in &values {
@@ -408,7 +413,12 @@ fn model_ids_and_hosts_do_not_pass_the_name_gate() -> Res {
         (2, 0, 0, 0)
     );
     for kept in [&uuid, &mixed] {
-        assert!(m.mask_whole(kept.as_bytes()).bytes.iter().all(|&b| b == b'*'));
+        assert!(
+            m.mask_whole(kept.as_bytes())
+                .bytes
+                .iter()
+                .all(|&b| b == b'*')
+        );
     }
     for (_, refused) in names {
         assert_eq!(m.mask_whole(refused.as_bytes()).bytes, refused.as_bytes());
@@ -435,11 +445,7 @@ fn two_hundred_gated_lines_fit_the_first_control_line() -> Res {
     std::fs::write(dir.path().join(".env"), text)?;
     let values = launch_values(dir.path(), &env);
     assert!(values.len() <= 33);
-    assert!(
-        values
-            .iter()
-            .all(|v| v.source() == ValueSource::Workspace)
-    );
+    assert!(values.iter().all(|v| v.source() == ValueSource::Workspace));
     let json = serde_json::to_vec(&values)?;
     assert!(json.len() <= 16 * 1024, "{}", json.len());
     assert!(json.len() < goalcup::watchdog::MAX_LINE);
@@ -450,14 +456,19 @@ fn two_hundred_gated_lines_fit_the_first_control_line() -> Res {
         (32, 0, 0, 198)
     );
     for value in &file[..32] {
-        assert!(m.mask_whole(value.as_bytes()).bytes.iter().all(|&b| b == b'*'));
+        assert!(
+            m.mask_whole(value.as_bytes())
+                .bytes
+                .iter()
+                .all(|&b| b == b'*')
+        );
     }
     Ok(())
 }
 
 /// Point 3: a `.env` of more than 64 KiB, with duplicates and ordinary lines, still starts. Both
 /// readers send a few KiB, the masker builds, every distinct value past 32 is in `skipped`, and
-/// the values cross the control line unchanged, quote and backslash included.
+/// the values cross the control line unchanged, a quote and a backslash included.
 #[test]
 fn a_64_kib_env_file_starts() -> Res {
     let mut rng = Rng(0x64E1);
@@ -497,7 +508,7 @@ fn a_64_kib_env_file_starts() -> Res {
             (32, 0, skipped)
         );
         assert!(
-            m.mask_whole(distinct[0].as_bytes())
+            m.mask_whole(distinct[1].as_bytes())
                 .bytes
                 .iter()
                 .all(|&b| b == b'*')
