@@ -1215,3 +1215,7 @@ PRD-02's mask worker writes two record shapes PRD-01's text does not list yet; t
 - **Open nit A8 (next PRD-08 touch only).** `listed_conns` is counted at OPEN, the other buckets only in `tunnel_end`. A listed tunnel that never gets an END (the run stops while it is open, or a new boot's Part record clears `self.conns`) lands in no bucket, so `listed_conns` can exceed the sum of its parts. Rare and older than this slice. If the invariant should hold for every run, count conns still open at a boot change or at finish in their own `unended` bucket. Add it with a test only if done.
 - **Nit B-A7-1.** The reflowed `why` string in `honesty.rs` has a first line over 100 columns and a ragged break. Optional re-wrap, no behaviour change.
 - No seam moves and no locked ledger item is touched. No other PRD is affected.
+
+### 2026-11-01, note from the PRD-12 slice 15 merge (49f2c5d6)
+
+- **Pad fixture gap.** The pad selftest ends at exit 3 because the helpers PRD-08 offers to tests cannot write a multi-chunk K7 export or a K11-d fetched record with its usage record. When PRD-08 next touches its test helpers, either allow those two shapes or say plainly they are out of scope, so the pad owner can stop waiting. Not a build blocker; the pad rows for K7 and K11-d stay INCONCLUSIVE until then.

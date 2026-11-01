@@ -1967,3 +1967,11 @@ taken; "rejected" says why. Fixes for other files are made by those files' owner
   `goalcup status` and `goalcup seal --yes` in the participant's shell (`PAD_SHELL_ENV`); the harness is
   never touched. Expected, from the report run: status shows `Run: goalcup continue <run>` (a line for a human to read in `exec/kill-both-seal.sh.txt`; check.py does not judge it), `seal --yes`
   exits 0, one `recorder_down` gap with cause `abandoned`, seal reason `recovered`, upload final `sealed`. check.py judges the row from the record (`dead_seal_row`): seal `recovered`, exactly one gap, `abandoned`, starting before the script ended and not more than the link slack before the kill, script exit 0. The script exits 3 when the kill did not take.
+
+### 2026-11-01, replan after slice 15 (merge 49f2c5d6)
+
+- **Slice 15 is in** (rung 5 setup with the outliving launch shell, rung 5b kill-both-then-seal, check.py reason fixes R5-2 and R5-3, Codex exit keys R5-4, selftest exit 3). Review rounds fixed A1 to A9 and B1 to B6. No PRD text change needed.
+- **R5-4 (Codex exit keys) is a comment-only change.** The cause is the paste-burst Enter: the harness takes the pasted prompt and its Enter as one burst. The fix is a split send in pad-run (text first, Enter as a separate key send). It was not run; the first real Codex batch is its proof. A later pad slice that touches the send path should make the split send, for every harness whose TUI paste-bursts.
+- **Selftest still ends at exit 3.** The PRD-08 test helpers cannot write a multi-chunk K7 export or the K11-d fetched and usage record, so those two fixtures cannot be added from the pad side. The need is recorded as an amendment under PRD-08. Phase 2 exit must not read exit 3 as a pass.
+- **Open nits, none a blocker.** A12, B10, the SecretCheck docstring remark, A10 and B12 (slice 14 note) all stand. Size: R3 (no concrete cut) is accepted; see the PRD-16 size report.
+- No locked ledger item is touched.
