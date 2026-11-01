@@ -1,7 +1,8 @@
 //! The two record shapes PRD-02's mask worker writes (PRD-08 slice 7; points 1, 2 and 3): a
 //! `mask_failed` GAP for metadata (lost 1, tail names the part, on the stream or on sid 0 for an
 //! EVENT) and an empty DATA with fin (an empty WebSocket message). A real entry holding them
-//! passes the format checks and the recount; the run 1 shape still fails `gap_has_end`.
+//! passes the format checks and the recount; the run 1 shape still fails `gap_has_end`. Also the S6
+//! report counts: `hosts` and `tunnel_hosts` equal the last COUNT event (point 1).
 
 mod common;
 
