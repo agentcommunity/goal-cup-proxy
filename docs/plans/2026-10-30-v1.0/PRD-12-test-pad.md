@@ -328,7 +328,7 @@ steps of section 1a between 0:04 and the seal.
 | 0:04 | | Wait for "Recording in chat mode", then the harness's ready text from the pad harness file (default 30 s). Then seed: copy `pad-setup-check.sh`, `git init` with a local identity, commit, add the planted `.git/config` remote (the folder must be empty of these when `goalcup start` runs, PRD-10 section 3 step 2). Send pre-prompt keys if the file names any. Paste `runs/<run>/first-message.txt` if goalcup wrote it (PRD-10 section 8), else the prompt file, with `tmux load-buffer` and `tmux paste-buffer -p`; wait the submit delay (default 2 s); send Enter. Start the fault and exec schedule (section 3.1). Copy the run certificate key file (ledger R3b; its name and place are PRD-02's) into `pad-run`'s own 0600 file `known-box`, for C3 |
 | 0:04 to 0:24 | Every 2 min: copy out `watch/*.jsonl` and the panes, with known values replaced (section 4). Every 5 min: the spend check (section 7) | Watch (section 4) |
 | 0:24 | | `goalcup seal --yes` at `minutes` after the paste, at the spend cap, or when the harness exits. Save the last screen. Wait until `upload.json` says `final: sealed` (PRD-06, S9), up to 10 minutes or until 5 minutes after the last scheduled fault ends, whichever is later. Write `harness-files.json`. Wipe keys, `.env.local` and the harness home |
-| 0:27 | `sandbox copy` out `rec/`, `status.json` series, `goalcup.log`, `upload.json`, panes, `harness-files.json`, `watch/`, `exec/` (panes with known values replaced). `scripts/fetch-run.sh --bucket goalcup-traces-staging <entry> <out>` (PRD-07, S13: `<out>/<entry>/rec.gcr.zst` and `fetch.json`). `sandbox copy` the fetched entry and the per-run known-values files in. `sandbox exec` the commands of section 8. Copy out their JSON. Then cleanup (section 3.2) | Append `known-box` to the known-values file. Run the section 8 commands; delete the known-values files and `known-box` after the scan |
+| 0:27 | `sandbox copy` out `rec/`, `status.json` series, `goalcup.log`, `upload.json`, panes, `harness-files.json`, `watch/`, `exec/` (panes with known values replaced). `scripts/fetch-run.sh --bucket goalcup-traces-staging <entry> <out>` (PRD-07, S13: `<out>/<entry>/rec.gcr.zst` and `fetch.json`). `sandbox copy` the fetched entry and the per-run known-values files in. `sandbox exec` the commands of section 8. Copy out their JSON. Then cleanup (section 3.2). `fetch-run` here uses the read-only fetch credentials of section 7, passed to that child only | Append `known-box` to the known-values file. Run the section 8 commands; delete the known-values files and `known-box` after the scan |
 | 0:28 | Write `row.json`, `report.txt` and `table.txt` from the JSON; scan the pad's own output folder for every known value, the approval key and the conductor's credentials included; append to the ledger; print the table | |
 
 `where = "here"` runs both halves on one machine, in a fresh temp folder with a fresh `GOALCUP_HOME`.
@@ -546,7 +546,17 @@ Keys:
   `umask 077` and no echo. The pad reads a key only to copy its file into a box or to pipe it into
   `curl`; never into an argument, log, prompt or row. In the box, a key reaches an environment variable
   only in the launch shell, for `key_route = "env"`, when that is the harness's documented key route.
-- The approval key, member id, `GH_TOKEN`, database and R2 credentials never leave the conductor. The
+- The approval key, member id, `GH_TOKEN`, database and R2 credentials never leave the conductor.
+- The conductor half may run `scripts/fetch-run.sh` with `DATABASE_URL` (a read-only role) and the
+  read-only `CLOUDFLARE_*` credentials, because BUILD-PROMPT allows `fetch-run` and read-only queries in
+  the conductor session. These values go to the `fetch-run` child only (`env_without(NEVER_IN_BOX minus
+  FETCH)` in `step_fetch`); never into a box, an argument, a file or a log. The known-values scan treats
+  them as never-in-box values. `DATABASE_URL` must be a read-only role for the staging data, never the
+  website database's service role or a write role: rung 2 withheld the website Supabase URL for exactly
+  this reason, and the conductor is handed only a role the owner issued for `fetch-run`. With no such
+  value `fetch-run` fails and `step_fetch` answers FAIL "server copy not fetched" with the last line it
+  printed (today it does not stop earlier with INCONCLUSIVE "no fetch credentials"; a later slice may).
+  C4's server part is then not shown (the row says so), never skipped silently. The
   device code comes out of the box; the approval goes in from the conductor (the `MATRIX_CODES_FILE`
   rule, `matrix.sh:70-73`).
 - The push token: a fine-grained token of a throwaway pad owner, Contents read and write only, the one
@@ -1867,3 +1877,27 @@ taken; "rejected" says why. Fixes for other files are made by those files' owner
 ### 2026-10-31, replan after PRD-03 slice 4 (merge a3dbd3d5): acceptance 3 is now runnable
 
 - The h2 parser is on integration, so `h2-parallel.sh` (acceptance 3) can pass for real in a pad box; before this it could only show `h2_unsupported`. The watcher reads the record: four `http_req`/`http_resp` pairs with `ver` "2", no `h2_unsupported` or `h2_error` GAP, and a verifier exit 0. A GAP `h2_unsupported` on this row now fails it. No locked ledger item is touched.
+
+### 2026-11-01, replan after slice 11 and the rung 2 run
+
+- **Landed.** Slice 11 merged at 036c4212 with its two follow-ups (e4d537f1, d8cbed35). Rung 1 was run
+  again on integration 8dc99969: micro and smoke for Claude and Codex ran and checked; rung 2 (sandbox
+  box, staging server) opened no run.
+- **Rung 2 findings, in plain words, and what slice 12 changes for each.**
+  - **RIG-5.** `approve()` sent the default Python user agent and Cloudflare answered 403 "error code:
+    1010". Slice 12: every pad HTTP call sends a named User-Agent, and a non-JSON error body is reported
+    plainly (status and first line), not as a parse error.
+  - **RIG-6.** After `goalcup start` exited with a refusal, the rig waited out the 3-minute `start`
+    limit before saying so. Slice 12: when `goalcup start` exits, the step stops at once and reports
+    "start refused" with the exit.
+  - **RIG-7.** `fetch-run` needs `DATABASE_URL`, and the only value at hand was the website database.
+    Slice 12: section 7 states the rule (read-only role, fetch child only, never in a box; the code
+    already hid these values from every other child, and a small test now proves it). The owner issues
+    the role; until then C4's server part is not shown.
+- **Not the rig's, and the pad does not work around either.**
+  - The test-mode `repo_url` fault ("repo_url must be a string": the Worker requires it for every open,
+    the CLI sends null in test mode) belongs to the Worker (PRD-07).
+  - The micro-claude C3 FAIL is a false positive in `placeholder()` in `secrets.rs`: the model wrote a
+    private key block with an ellipsis token between the markers, and the placeholder rule has no ellipsis
+    case. It belongs to PRD-08. The row stays as the check reports it.
+- No locked ledger item is touched and no owner question comes from this note.
