@@ -629,3 +629,86 @@ fn a_value_with_html_bytes_is_masked_in_html_safe_json() -> Res {
     }
     Ok(())
 }
+
+/// Ruling OWN-10: the launch reads the environment goalcup builds for the harness (source 2)
+/// through `launch_values`, and with 32 worst-case values of 256 bytes (every byte after the tag
+/// a `"` or `\`, so its JSON text is twice as long) plus left-out ones, the whole start line of
+/// every built-in connector stays under `watchdog::MAX_LINE`, so the recorder can read it.
+#[test]
+fn the_start_line_with_32_long_values_fits() -> Res {
+    use goalcup::connector::{self, Env, builtin};
+    use goalcup::proxy::ca::RunCa;
+    use goalcup::watchdog::{
+        Cause, Exit, HarnessFacts, MAX_LINE, Prev, StartFacts, ToRecorder,
+    };
+    use serde_json::to_value;
+    use std::time::SystemTime;
+
+    let dir = tempfile::tempdir()?;
+    let project = dir.path().join("w");
+    std::fs::create_dir_all(&project)?;
+    let ca = RunCa::mint(&["example.org".to_string()])
+        .map_err(|_| "no run CA")?
+        .export();
+    let mut vars = BTreeMap::from([("PATH".to_string(), "/usr/bin:/bin".to_string())]);
+    let mut fakes = Vec::new();
+    for i in 0..40 {
+        let tail: String = (0..254).map(|j| if j % 2 == 0 { '"' } else { '\\' }).collect();
+        let value = format!("{i:02}{tail}");
+        vars.insert(format!("FAKE_{i:02}_API_KEY"), value.clone());
+        fakes.push(value);
+    }
+    let mut longest = 0;
+    for (id, _) in builtin::CONNECTORS {
+        let c = connector::load(id, None).map_err(|e| e.to_string())?;
+        let env = Env {
+            vars: vars.clone(),
+            workspace: project.clone(),
+            resume: true,
+            run_start: SystemTime::now(),
+            goalcup_home: dir.path().join("g"),
+            server_host: "ingest.example.org".into(),
+        };
+        let plan = connector::plan(&c, &env, &dir.path().join("homes").join(id));
+        let values = launch_values(&project, &plan.env);
+        // The environment values reach the masker: the first fake is among them.
+        let text = serde_json::to_string(&values)?;
+        assert!(text.contains(&serde_json::to_string(&fakes[0])?));
+        let facts = StartFacts {
+            run: format!("r{}", "a".repeat(16)),
+            entry: format!("e{}", "b".repeat(16)),
+            segment: 2,
+            entry_dir: dir.path().join("runs/r/e"),
+            deadline: Some(u64::MAX),
+            server_time: Some(u64::MAX),
+            local_wall: u64::MAX,
+            workspace: project.clone(),
+            connector: to_value(&plan.connector)?,
+            harness_version: Some("1.2.3 (fake)".into()),
+            keep: true,
+            build: Some("f".repeat(40)),
+            hosts: to_value(&plan.hosts)?,
+            hosts_sha256: "0".repeat(64),
+            native: to_value(&plan.native)?,
+            mask_rules: to_value(&plan.mask_rules)?,
+            values: to_value(&values)?,
+            ca: ca.clone(),
+            prev: Some(Prev::Cause(Cause::NullMode {
+                exits: 3,
+                last: Some(Exit::Signal(9)),
+            })),
+            harness: Some(HarnessFacts {
+                pid: u32::MAX,
+                program: "/usr/local/bin/harness".into(),
+                started: "2026-11-07T00:00:00Z".into(),
+                start_id: u64::MAX,
+            }),
+            null_since: Some(u64::MAX),
+            notes: plan.notes.clone(),
+        };
+        let line = serde_json::to_vec(&ToRecorder::Start(Box::new(facts)))?;
+        longest = longest.max(line.len() + 1);
+    }
+    assert!(longest <= MAX_LINE, "{longest}");
+    Ok(())
+}

@@ -20,7 +20,7 @@ use super::{
     push, read_json, say, server_json, skill, status_json, text, watchdog_alive,
 };
 use crate::connector::{self, Env};
-use crate::mask::{Masker, workspace_values};
+use crate::mask::{Masker, launch_values};
 use crate::pipeline::status::{Mode, Status};
 use crate::pipeline::{Closed, Mono, close_dead_entry};
 use crate::upload::client::{ServerClient, ServerError, Token};
@@ -196,7 +196,7 @@ pub fn prepare(
     if let Some(r) = &plan.refusal {
         return Err(refuse(text::refusal(r)));
     }
-    let values = workspace_values(project);
+    let values = launch_values(project, &plan.env);
     if Masker::new(&plan.mask_rules, values.clone()).is_err() {
         return Err(refuse(text::mask_refused()));
     }

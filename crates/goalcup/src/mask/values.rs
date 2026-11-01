@@ -14,7 +14,11 @@
 //!   one (a `cat .env` tool result in a request body);
 //! * for a value holding `<`, `>` or `&`, the same two with those bytes written `\u003c`,
 //!   `\u003e` and `\u0026`, as an HTML-safe JSON encoder (Go's `encoding/json` by default)
-//!   writes them, the other bytes raw.
+//!   writes them, the other bytes raw (a `"` or `\` escaped as above).
+//!
+//! Equal forms count once, so a value has 11 forms, 13 with one escape kind and 15 at most. Not
+//! covered (PRD-05 section 10, a stated loss): a value with both kinds, plainly escaped and then
+//! nested HTML-safe, or the reverse.
 //!
 //! A form is found with a line break between any two of its characters ([`Progress`],
 //! [`wrapped_regex`]): LF or CR LF, raw, or escaped with one or two backslashes before each of
@@ -371,7 +375,8 @@ pub fn launch_values(project: &Path, env: &BTreeMap<String, String>) -> Vec<Secr
 /// distinct values are kept, and when any were left out one count-only entry
 /// ([`SecretValue::left_out`]) carries their number into `skipped`. So the line holds at most 33
 /// entries, each at most 256 value bytes (twice that when every byte is a JSON-escaped `"` or
-/// `\`), well below `watchdog::MAX_LINE` whatever the size of the key files.
+/// `\`), and the whole start line stays below `watchdog::MAX_LINE` whatever the size of the key
+/// files (`mask_values.rs`, `the_start_line_with_32_long_values_fits`).
 fn finish(values: impl IntoIterator<Item = SecretValue>) -> Vec<SecretValue> {
     let mut kept: Vec<SecretValue> = Vec::new();
     let mut seen: HashSet<Vec<u8>> = HashSet::new();

@@ -375,7 +375,12 @@ design for that yes.
 
 The `run_secret` rule masks known values by exact bytes in 11 encodings (raw, percent upper and lower,
 `\u` lower and upper, base64 standard and URL-safe at three alignments), with a line break allowed
-between any two characters (`run_secret.rs:1-31`). It is copied whole. Its inputs change. PRD-05 owns
+between any two characters (`run_secret.rs:1-31`). It is copied whole, with up to four more forms
+(amendments of 2026-11-01): a value holding a `"` or `\` also gets its JSON-string form escaped once
+and twice, and a value holding a `"`, `\`, `<`, `>` or `&` also gets its HTML-safe JSON form (`<`,
+`>`, `&` as `\u003c`, `\u003e`, `\u0026`, as Go encoders write them) escaped once and twice. Equal
+forms count once, so a value has 11 forms, 13 with only one escape kind, 15 at most. The longest form
+is 7 bytes per value byte (`MAX_FORM_BYTES`, `\\u003c`). Its inputs change. PRD-05 owns
 the one rule for which values are used (PRD-00 "Smaller interface rulings"); PRD-11 only collects
 candidates.
 
@@ -420,7 +425,8 @@ crosses as one count-only entry, so `skipped` stays right; a value that fails to
 counted there too. Values the gate refused are not counted there (they are not secrets by the gate's
 rule). Value bytes cross the control line as a compact JSON string, not a list of numbers. PRD-10's
 start screen says "N key values were not added to masking." when `skipped` is above 0. 32 is a
-stated guard, not a cap of records: each value adds 11 compiled forms (13 with a `"` or `\`) and one candidate check per
+stated guard, not a cap of records: each value adds 11 compiled forms (up to 15 with a `"`, `\`, `<`,
+`>` or `&`, section 9 above) and one candidate check per
 matching first byte, and the guard is start-up time and memory, measured by A5. The workspace
 key-file values come before the environment values because `cat .env` is the biggest real leak
 (Appendix G finding G.4): on a busy shell with many credential-named variables, those `.env` values
@@ -476,6 +482,7 @@ messages and session files, JSON-escaped up to three levels (the rules take up t
 | `STRIPE_SECRET_KEY=sk_test_…`, `whsec_…` (the payments pad) | default build: `sk_test_…` not masked (no rule; the shell rule misses `SECRET_KEY=`), `whsec_…` masked only after `WEBHOOK_SECRET=` or a JSON secret key. With the owner's yes to question 3: both masked (section 2) and by exact value from `.env` |
 | A token used as a URL user with no password (`https://<token>@host`) | masked only if the token has a shape (`ghp_…` after `//` is not glued) or is an exact value (`GH_TOKEN`; others only with the owner's yes to question 3). The dropped `email` rule used to catch it (PRD-17 K12) |
 | Code with a dotted value whose long segment holds a digit, right after `=`, ending at a line end, a space, a quote or `&` (`secret=os.environ.AWS_S3_SECRET_ACCESS_KEY` on its own line) | masked: a stated over-mask of the shell rule's dotted arm (2026-11-01 amendment). The same value in a call or keyword argument, ending at `(`, `)`, `,` or `;`, stays raw |
+| A value holding both a `"` or `\` and a `<`, `>` or `&`, JSON-escaped plainly once and then nested in an HTML-safe JSON string (or the reverse) | not masked by value: none of the 15 forms is that mixed text (a stated loss; no new form). A shape rule still catches it if it has a shape |
 | A key the agent adds to `.env` during the run | shape rules only (with the owner's yes to question 3, by exact value from the next `continue`; section 9) |
 | A key after hours of one WebSocket connection whose hold overflowed | the overflowing message is starred to its end (`fail_closed`, counted); the next message is masked normally |
 | Hermes `state.db` (binary) | best effort: a value split across an overflow page is missed; masking a WAL frame breaks its checksum (PRD-01 risks, PRD-04) |
@@ -485,7 +492,7 @@ messages and session files, JSON-escaped up to three levels (the rules take up t
 Today, per decoded unit, every rule's spawn check runs (`stream.rs:2025-2036`), then each live candidate
 steps. Every released byte is then scanned by every literal's regex (`stream.rs:2209`). With 1.0's
 rules that is 20 shared literals (21 with the owner's yes to question 3), up to 5 connector rules and
-11 exact-value forms for `GH_TOKEN` (up to 352, 32 values times 11, only with that yes). What keeps it cheap, in build order (review B finding B2: measure before adding):
+11 exact-value forms for `GH_TOKEN` (up to 480, 32 values times 15, only with that yes). What keeps it cheap, in build order (review B finding B2: measure before adding):
 
 1. **Off the relay.** PRD-02's one mask worker runs at low priority; the relay never waits. Built.
 2. **Exact-value regexes only after a hit.** The exact-value forms run their regex only on a hold in
@@ -507,7 +514,16 @@ Target, measured on the sandbox (acceptance A5), reported and never a gate failu
 number fails a gate): 50 MB/s of masking on one worker on run-1-like input, because PRD-02 R8 wants 50
 MB/s through mask and writer with one worker. Run 1's heaviest burst was about 30 MB (appendix M section
 3), so even at 30 MB/s it clears in about a second; below the target a burst costs a memory-guard gap,
-not the harness's speed. Today's throughput is unmeasured.
+not the harness's speed.
+
+**Measured (2026-11-01, sandbox, review of the cut slice).** With 32 values of 256 bytes,
+`Masker::new` takes up to 6.4 s (target under 1 s), and one stream masks at 2.3 to 3.3 MB/s (target
+50 MB/s). Below target, but no GAP was written, no byte was lost and the relay was not blocked: the
+mask worker runs off the relay (item 1), so a slow mask costs memory-guard pressure, never the
+harness's speed. Without participant values the cost is that of the shared literals alone. The next
+steps stay those above (exact-value regexes only after a hit, then the dispatch table, then PRD-02's
+pool). Seam note for PRD-14: its by-hand load notes should carry these numbers beside A5's, and name
+the start-up time with 32 long values as the one cost the participant sees (a slower `start`).
 
 ### 12. Participant text (for PRD-10 and PRD-15)
 
@@ -1099,3 +1115,21 @@ A1 reports it as a stated loss instead of failing on it.
   `workspace_values`; source 2 reaches the masker only when the PRD-12 C3 change swaps in
   `launch_values`. The full first-line bound with 32 worst-case values (256 bytes of mixed `"`
   and `\`) belongs in the watchdog line test, which this lane does not own.
+
+### 2026-11-01, review fixes: the environment values and the HTML-safe forms
+
+- **Blocker (point 4, ruling OWN-10).** `start`, `continue` and `recover` called `workspace_values`,
+  so the credential-named values of the harness environment (source 2) never reached the masker in a
+  real run. All three now call `launch_values` with the plan's `LaunchPlan.env`, after the plan is
+  made. A test in `mask_values.rs` builds every built-in connector's plan with 40 credential-named
+  variables of 256 bytes each (every byte after a two-byte tag a `"` or `\`), checks an environment
+  value is among the values, and checks the full serialized start line stays under
+  `watchdog::MAX_LINE`.
+- **Forms.** Section 9 and the module doc now say what `values.rs` builds: 11 forms, 13 with one
+  escape kind, 15 at most (the JSON-escaped pair and the HTML-safe JSON pair), and
+  `MAX_FORM_BYTES = 7 x 256`.
+- **Stated loss.** A value with both a `"` or `\` and a `<`, `>` or `&`, plainly JSON-escaped and then
+  nested in an HTML-safe string (or the reverse), matches no form. Named in section 10; no new form.
+- **Cost.** The measured start-up time and single-stream rate with 32 long values are in section 11,
+  with a seam note for PRD-14's by-hand load notes.
+- No locked ledger item is touched.

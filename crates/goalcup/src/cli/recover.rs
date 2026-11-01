@@ -12,7 +12,7 @@ use super::{
     watchdog_alive,
 };
 use crate::connector::{self, Env, HomeLock};
-use crate::mask::{Masker, workspace_values};
+use crate::mask::{Masker, launch_values};
 use crate::pipeline::status::{Mode, Status};
 use crate::watchdog::{HarnessFacts, NotRecovered, StartFacts, recover};
 
@@ -194,7 +194,7 @@ fn rebuild(
     let _lock = HomeLock::take(&isolated).ok()?;
     let mut plan = connector::plan(&loaded, &env, &isolated);
     plan.hosts = hosts;
-    let values = workspace_values(&workspace);
+    let values = launch_values(&workspace, &plan.env);
     Masker::new(&plan.mask_rules, values.clone()).ok()?;
     let part = Part {
         run: found.run.clone(),
