@@ -2589,3 +2589,10 @@ kept and now cites BUILD-PROMPT section 5, since B3 no longer carries it.
 
 - **Size report, PRD-08** (wc -l on integration): `crates/goalcup-verify/src` 7,220 lines (of which `src/usage/` 2,944, PRD-09) against the PRD-00 "Size budget" row 1,400; `tests/*.rs` 4,873 against 1,100. This slice changed history.rs (647 to 731, about +84 net) and added about 221 lines to check_history.rs. Overage carried from earlier slices; reported, not cut; carry to the end-of-build report.
 - **Gate effect:** none on order or seams. The history_complete masked-resend fix is verifier-internal (ends() key, held WebSocket message release); no seam shape, no other PRD file, and no locked ledger item is touched.
+
+### 2026-11-01, replan after PRD-12 full-row fixes (merge 98f8f71d)
+
+- **Done item 2 / G3-16f wording.** The Codex kill test reads "kill at the harness's own minutes (Codex 3 and 5)"; Claude Code and Hermes keep 8 and 10. The pad's `kill_minutes` key in the harness file is the source. Not a change to a locked ledger item.
+- **C3 stated loss.** A secrets check whose only hits are shape hits inside joined streamed deltas is INCONCLUSIVE (exit 2 allowed on kill rows and C1), never PASS. The owner question on counting it as a stated loss stays open (log, kind "owner question"); no row relying on it counts toward `--release-check` until answered. Phase 4 must read those Hermes and OpenClaw rows as open.
+- **Size report, PRD-12** (`wc -l` on integration, `scripts/pad` without fixtures): Python and extensionless scripts, JS and tests 4,726 lines (check.py 856, pad 970, pad-run 1,132, table 197, selftest 188, sbx.mjs 133, tests 1,250), plus 850 lines of harness, exec, run and prompt data. PRD-00 "Size budget" row: about 1,350 to 1,450 with tests. This slice added about 198 lines, mostly tests. Overage carried from earlier slices; reported, not cut; carry to the end-of-build report.
+- **Review:** the last finding (R6) is a cosmetic nit in check.py `local()` (`other_named` computed on every row); left as is. No order or seam change.
