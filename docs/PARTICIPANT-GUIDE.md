@@ -5,8 +5,6 @@ You give one coding agent one prompt, then leave it alone for 168 hours. Goal Cu
 record. This page takes you from install to the end of your run. The rules are in
 [RULES.md](RULES.md), and what the record holds is in [RECORD-FORMAT.md](RECORD-FORMAT.md).
 
-> **Build state.** `goalcup continue` and `goalcup recover` print "not built yet".
-
 ## What goalcup does for you
 
 - It writes down your agent's model requests and session files for the whole run, subagents too,
@@ -308,9 +306,12 @@ goalcup start". `goalcup status --json` prints the same facts as JSON.
 | `PROBLEM: Recording is off since ...: it stopped right after each restart, so goalcup lets your agent's traffic pass unrecorded for now.` | The recorder keeps failing, most often because a write to disk failed. Your agent keeps working and `goalcup` tries again, at most 5 minutes apart. Free space on the disk. The server is told. |
 
 `goalcup recover` prints that recording is on again, for how long it was off, and that the agent was
-not restarted. It refuses with one line, and changes nothing, if the part is sealed, the run is over,
-`goalcup` still runs for the part (it restarts recording itself), or the agent is no longer running.
-Run it in another terminal, not inside the agent.
+not restarted. If recording is already on, it says there is nothing to recover. It refuses with one
+line, and changes nothing, if the part is sealed, the run is over, `goalcup` still runs for the
+part (it restarts recording itself), the agent is no longer running (it points you to
+`goalcup continue`), or the port or the run's certificate key is gone. If it cannot restart recording it says so and what
+to try next. It works only on the machine that started the run. Run it in another terminal, not
+inside the agent.
 
 **Problem lines.** A `PROBLEM:` line appears only where you must act or report; each cause is one
 line.
@@ -329,11 +330,16 @@ Lines without `PROBLEM:` (no session file found yet, a session folder on another
 one connection stopped, a model on this computer, many connections open) need nothing from you.
 
 **If the agent stops before the deadline** (a crash, a reboot, a closed window), run `goalcup continue`
-in a terminal you will leave open. It needs no new approval, keeps the same deadline and the same
-folder, and is a new part of the same run. If the earlier parts wrote model requests or session
-files, it resumes the harness's last conversation; if that fails at once it opens a new one. Either
-way type only "keep going". Do not paste the first message again: it is shown again only if no model
-request was recorded, which means your prompt may never have been sent. A new conversation can still
+in the project folder, in a terminal you will leave open. It works only on the machine that started
+the run. It needs no new approval, keeps the same deadline, and is a new part of the same run. If
+the last part died with the computer, it closes that part first and says so. It refuses, changing
+nothing, if the last part is still recording, if the agent from the last part still runs, if the
+time is up, if the run was continued somewhere else, or if `--connector` or `--hosts` differs from
+what the first part used. If the earlier parts wrote model requests or session files, it resumes the
+harness's last conversation; if that fails at once it opens a new one. Either way type only "keep
+going". Do not paste the first message again: it is put on the clipboard again only when a new
+conversation starts, which also means no model request or session file was written, so your prompt
+may never have been sent. A new conversation can still
 push if the agent's `git config` and `git remote add` lines are saved in the repository's
 `.git/config`. Do not delete or move the project folder. `goalcup seal` stops the agent and ends the
 current part (it asks first; `--yes` skips that). The run stays open and `continue` goes on.
@@ -423,9 +429,9 @@ Also not recorded, or recorded less:
   recorded and its session files are not.
 - **A model server on this computer** (Ollama, LM Studio) is reached past the proxy and not
   recorded. The status block names it.
-- **An HTTP/2 feature goalcup cannot follow** is passed on unharmed and named as a gap. For an extended
-  CONNECT stream only that stream is not read; for a push, a broken header compression or an
-  oversized header block the rest of that connection is not read.
+- **An HTTP/2 feature goalcup cannot follow** is passed on unharmed and named as a gap. For an
+  extended CONNECT stream only that stream is not read; for a push, a broken header compression, an
+  oversized header block or broken HTTP/2 framing the rest of that connection is not read.
 - **HTTP/3, QUIC and ECH** never reach a proxy, and a network that re-signs TLS is not supported.
 - **A token used as the user name of a URL with no password** may be recorded.
 - **SQLite harnesses** keep their data in a database; it is copied once, at the seal.
