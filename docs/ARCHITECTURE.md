@@ -31,8 +31,6 @@ checking code.
 
 ## 3. The one process
 
-Pieces not merged yet are marked "Not built yet" in the bullets below.
-
 ```mermaid
 flowchart LR
   subgraph PM[Participant machine]
@@ -71,18 +69,20 @@ The rules of the shape:
 - **One process, no IPC for bytes.** The proxy, the native reader, the masker, the writer and the
   uploader run in the recorder process. Between the watchdog and the recorder only a listener and
   one control line pass, and neither carries a recorded byte (D75).
-- **The watchdog** is the `goalcup start` or `continue` process. It binds the port once and hands
+- **The watchdog** is the `goalcup start` process (`goalcup continue` is not built yet). It binds the port once and hands
   the socket to each recorder boot, so a restart never closes the port. It mints the run CA, runs
   the connector's helper stops, starts the harness, ends it on `goalcup seal`, seals the part when it
-  exits, and starts a new recorder at once when one dies (D75). It never reads, masks, writes or
-  uploads a recorded byte. Not built yet: ending the harness at the deadline and on the server's
-  stop (D85); `goalcup recover`, which reopens the port and the CA when the watchdog itself died;
-  and closing the part of an entry whose watchdog and recorder both died.
+  exits, and starts a new recorder at once when one dies (D75). When the deadline passes, or the
+  server's stop word says the reason is the deadline, it ends the harness and seals the part. Any
+  other stop word seals the recorder at once and leaves the harness running (D85). It never reads,
+  masks, writes or uploads a recorded byte. Not built yet: `goalcup continue`; `goalcup recover`, which reopens the port
+  and the CA when the watchdog itself died; and closing the part of an entry whose watchdog and
+  recorder both died (no command calls the close).
 - **Null mode.** If the recorder crashes three times in ten minutes, each within a minute of its
   start, the watchdog runs a relay-only recorder, says so in `status.json`, and retries a normal
   boot after 30 seconds, then 1, 2 and 5 minutes, never more than 5 minutes apart. The crash count
   resets once a recorder stays up 60 seconds. The harness keeps its connections. The span is a
-  `recorder_down` gap. Not built yet.
+  `recorder_down` gap.
 - **Boot-time timers.** Every timer counts boot time, which keeps running while the machine
   sleeps, on a short tick: deadline, restart pauses, null-mode retries, upload backoff.
 - **The memory guard is a guard, not a cap** (D79). Held bytes stay under a stated size (512 MiB,
