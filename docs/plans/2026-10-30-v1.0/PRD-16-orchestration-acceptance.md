@@ -2452,3 +2452,8 @@ kept and now cites BUILD-PROMPT section 5, since B3 no longer carries it.
 
 - **Size report, PRD-17** (`wc -l` on integration): the eight `lessons_*.rs` files total 4,345 lines (http1 978, ws 1,109, decode 547, connect 510, launch 504, tls 412, hosts 181, pipeline 104) against the 3,000 lines PRD-00 gives lessons plus PRD-14 support (+45%; over the 10% line, decision recorded in PRD-17: accepted, no cut known, no growth). Slice 6 was net minus 3 code lines. Carry to the end-of-build report with the PRD-03, PRD-10 and PRD-12 overages.
 - **Gate effect:** none on order. The deletion gate (PRD-13 phase 2) is not due; check 1 would today list seven rows with four unresolved guard names (PRD-02 `watchdog_restart.rs`, PRD-10 `cli_continue.rs` and `second_start_on_one_home_refuses`, PRD-17/PRD-12 `pipeline_stall.rs`). The integrator should schedule those before phase 2. No seam change. No locked ledger item is touched.
+
+### 2026-11-01, replan after PRD-08 slice 8 (merge e4d537f1)
+
+- **Size report, PRD-08** (`wc -l` on integration): verifier src outside `usage/` is 4,171 lines against the PRD-00 row of 1,400 (about 3.0 times); `usage/` 2,861 against the PRD-09 row of 1,470; verifier tests 4,359 against 1,100 plus 200. Slice 8 added 23 src and 77 test lines. Decision lines exist in PRD-08; no cut known. Carry to the end-of-build report with the PRD-03, PRD-10, PRD-12 and PRD-17 overages.
+- **Gate effect:** none on order. One seam request to PRD-05 (export `glued`); it is a cleanup and blocks nothing. No locked ledger item is touched.
