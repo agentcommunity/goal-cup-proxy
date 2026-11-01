@@ -244,4 +244,28 @@ fn status_command_reads_the_files() {
     let plain = goalcup(&home, &["status"]);
     assert_eq!(plain.status.code(), Some(0));
     assert!(!String::from_utf8_lossy(&plain.stdout).contains(text::FINISHED));
+    assert!(!String::from_utf8_lossy(&plain.stdout).contains(text::PART_RECORDED));
+}
+
+/// A sealed part shows its end screen after the block (point 6), so a recovered part's counts are
+/// reachable; `--json` is unchanged.
+#[test]
+fn status_of_a_sealed_part_prints_the_end_screen() {
+    let home = TempHome::new();
+    let part = part(&home.goalcup_home());
+    put(part.parent().unwrap(), "server.json", &server_json());
+    let st = with(
+        Mode::Sealed,
+        json!({"written": {"model_requests": 905, "http_post": 905, "req_whole": 905,
+                "hosts": {"api.example.com": 905}},
+            "seal": {"reason": "recovered"}}),
+    );
+    put(&part, "status.json", &st);
+    let out = goalcup(&home, &["status"]);
+    assert_eq!(out.status.code(), Some(0));
+    let shown = String::from_utf8_lossy(&out.stdout);
+    let at = shown.find(text::PART_RECORDED).expect("end screen");
+    assert!(shown[at..].contains("905") && shown[at..].contains("api.example.com"));
+    let json = json_out(goalcup(&home, &["status", "--json"]));
+    assert_eq!(json["status"], serde_json::to_value(&st).unwrap());
 }
