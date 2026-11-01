@@ -143,25 +143,6 @@ pub(crate) fn resolve_program(program: &str, vars: &BTreeMap<String, String>) ->
         .unwrap_or_else(|| PathBuf::from(program))
 }
 
-/// The environment for the version probe: `harness_env` with the connector's own home variables
-/// (the keys of `home`) put back to the participant's value, or left out where they have none.
-/// A fresh isolated home can fail `--version` (Hermes exits 1 until a dependency environment is
-/// committed); the real home answers, and `--version` writes nothing.
-pub(crate) fn probe_env(
-    harness_env: &BTreeMap<String, String>,
-    home_keys: impl Iterator<Item = impl AsRef<str>>,
-    participant: &BTreeMap<String, String>,
-) -> BTreeMap<String, String> {
-    let mut vars = harness_env.clone();
-    for key in home_keys {
-        match participant.get(key.as_ref()) {
-            Some(value) => vars.insert(key.as_ref().to_owned(), value.clone()),
-            None => vars.remove(key.as_ref()),
-        };
-    }
-    vars
-}
-
 /// The first non-empty line of `program --version` run with exactly `vars`; `None` on a spawn
 /// failure, a failed exit, 5 s without an exit, or no output. Never logged.
 pub(crate) fn harness_version(program: &Path, vars: &BTreeMap<String, String>) -> Option<String> {

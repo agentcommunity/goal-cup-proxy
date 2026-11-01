@@ -68,20 +68,11 @@ The connector sets `GEMINI_CLI_HOME` to the isolated home, so every `~/.gemini` 
 
 ## Run without permission prompts
 
-The connector has no `no_prompts` row, on purpose. The only documented way to run without approvals is the launch flag `--approval-mode yolo` (or `--yolo`). The `general.defaultApprovalMode` settings key exists, but the 0.66.0 package ignores the value `yolo` there: its startup code takes the settings value only when it is not `yolo` (package, 0.66.0). `security.disableYoloMode`, and an untrusted folder, also turn yolo off. So a settings row cannot do it, and goalcup passes no flag. The participant, or the pad rig, answers the approvals until the owner decides on a setup-added launch switch (open owner question, with the Crush and OpenCode ones).
+The connector has no `no_prompts` row, on purpose. The only documented way to run without approvals is the launch flag `--approval-mode yolo` (or `--yolo`). The `general.defaultApprovalMode` settings key exists, but the 0.66.0 package ignores the value `yolo` there: its startup code takes the settings value only when it is not `yolo` (package, 0.66.0). `security.disableYoloMode`, and an untrusted folder, also turn yolo off. So a settings row cannot do it, and goalcup passes no flag. The participant, or the pad rig, answers the approvals until the owner decides on a setup-added launch switch.
 
 ### Subagent Shell stop with yolo on: not verified, no setting found
 
-Sweep 2 and the full2 run saw the generalist subagent's Shell call stop at "Untrusted Command Flags ... Allow execution of [Shell]?" even with yolo on. What the 0.66.0 package shows (`bundle/chunk-HJ5KJXNZ.js`, read keyless from `npm pack @google/gemini-cli@0.66.0`; line numbers are for that file):
-
-- The prompt text is built in `bundle/interactiveCli-*.js` (the "Untrusted Command Flags Detected" warning) and only when the shell tool's confirmation details carry `untrustedFlags` (line 328812).
-- `hasTaintedOrBuildFileRisk()` (328651) is true when `findUntrustedFlags` (311194) finds a flag or flag value in the command that also appears inside an `<untrusted_context>` block in the chat history (`UNTRUSTED_CONTEXT_REGEX`, 310955; `extractUntrustedContext`, 311138, scans text parts and tool outputs), or when a build or test command runs after build files were modified.
-- The scheduler (354231 to 354234) then overrides the policy decision: if the decision is ALLOW and the risk is true, it becomes ask-the-user (deny when not interactive). Yolo only makes the policy decision ALLOW, so this check comes after it and wins. It is not tied to the subagent; the subagent hits it because its history carries tool output.
-- No settings key, trusted-folder value, `tools.allowed` entry or policy allow rule feeds into this check. `security.folderTrust.enabled`, `security.disableYoloMode` and `general.defaultApprovalMode` all act before it. Turning folder trust off would not help and goes beyond approvals, so no row is added.
-
-So there is no plain settings key that makes this stop go away, and the connector stays without a `no_prompts` row. The stop is a deliberate safety check in the package, not a missing setting. Whether a subagent Shell call runs unattended therefore depends on the history of the run and is not verified. Owner question logged: should the pad rig answer this prompt (key press) or should the case be marked as attended-only in the tier text.
-
-Evidence limits: the vendor pages (geminicli.com configuration, trusted-folders, subagents, policy-engine) could not be fetched in this pass, because the build session cannot resolve geminicli.com; the finding rests on the package source alone. The end-to-end stop was not exercised, since that needs a key; PRD-12's pad rerun covers it.
+Sweep 2 and the full2 run saw the generalist subagent's Shell call stop at "Untrusted Command Flags ... Allow execution of [Shell]?" even with yolo on. In the 0.66.0 package (read keyless from `npm pack @google/gemini-cli@0.66.0`) the check runs after the yolo ALLOW and turns it back into ask. It reads the chat history for untrusted-context flags, so it hits the subagent, whose history carries tool output. No setting feeds it, so the connector stays without a `no_prompts` row. Owner question open: should the pad rig answer this prompt, or is the case attended-only. The vendor pages could not be fetched in this pass and the end-to-end stop was not exercised (it needs a key); PRD-12's pad rerun covers it.
 
 ## Pad result
 

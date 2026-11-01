@@ -229,10 +229,7 @@ pub fn plan(connector: &Connector, env: &Env, home: &Path) -> LaunchPlan {
     let harness_env = launch::build_env(connector, env, home);
     let program = launch::resolve_program(&connector.program, &env.vars);
     let harness_version = free
-        .then(|| {
-            let probe = launch::probe_env(&harness_env, connector.home.keys(), &env.vars);
-            launch::harness_version(&program, &probe)
-        })
+        .then(|| launch::harness_version(&program, &harness_env))
         .flatten();
     // `want` starts a word of the line, a leading `v` stripped: "2." takes v2.1, never 1.12.
     let held = |want: &str, got: &str| {
