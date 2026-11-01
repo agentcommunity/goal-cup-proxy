@@ -108,10 +108,7 @@ pub fn run(arg: Option<String>) -> ExitCode {
         println!("{}", text::recover_late(name, part));
     } else {
         let span = text::span_words(now.saturating_sub(since) * 1000);
-        let (from, to) = (
-            text::local_time(since, true),
-            text::local_time(now, true),
-        );
+        let (from, to) = (text::local_time(since, true), text::local_time(now, true));
         println!("{}", text::recover_on_again(name, part, &span, &from, &to));
     }
     ExitCode::SUCCESS
@@ -182,7 +179,10 @@ fn rebuild(
         .and_then(|h| unix_of(&h.started))
         .unwrap_or(0);
     let vars = super::env_vars();
-    let own = server.server.clone().map_or(super::Server::Off, super::Server::Url);
+    let own = server
+        .server
+        .clone()
+        .map_or(super::Server::Off, super::Server::Url);
     let env = Env {
         vars: vars.clone(),
         workspace: workspace.clone(),
