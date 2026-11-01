@@ -8,13 +8,13 @@
 #![allow(dead_code)]
 
 use goalcup_format::codec::{Codec, Record};
-use goalcup_verify::usage::{CallTable, Calls};
 use goalcup_format::link::{Chain, ZERO};
 use goalcup_format::read::{open_dir, part_files};
 use goalcup_format::{
     EndReason, FLAG_FIN, GapReason, Now, PartOptions, PartWriter, Recover, Recovered,
 };
 use goalcup_format::{StreamKind, index_name, part_name};
+use goalcup_verify::usage::{CallTable, Calls};
 use serde_json::{Map, Value, json};
 use std::collections::{BTreeMap, HashMap};
 use std::fs;

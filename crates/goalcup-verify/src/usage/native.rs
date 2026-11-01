@@ -204,7 +204,11 @@ impl Native {
                         .filter_map(idx)
                         .collect();
                     // A list with no usable index still names `task_count` tasks.
-                    let all = if named.is_empty() { (0..n).collect() } else { named };
+                    let all = if named.is_empty() {
+                        (0..n).collect()
+                    } else {
+                        named
+                    };
                     if let Some(d) = d {
                         self.manifests.entry(d).or_default().extend(all);
                     }
