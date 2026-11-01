@@ -372,11 +372,11 @@ impl Honesty {
         if !c.listed || c.reason == "sign_in" {
             return;
         }
-        // Nothing moved, nothing lost: the recorder writes no GAP then. Such a tunnel stays out of
+        // Nothing moved, nothing lost: the recorder writes no GAP then (a GAP present is still named). Such a tunnel stays out of
         // `hosts` too, so the host list equals the recorder's count. A tail without `up` or `down`
         // is an unknown size and is still judged.
         let moved = ["up", "down"].map(|k| tail.get(k).and_then(Value::as_u64));
-        if moved == [Some(0), Some(0)] {
+        if moved == [Some(0), Some(0)] && !c.gap_named {
             return;
         }
         self.hosts.insert(c.host.clone());
