@@ -400,11 +400,15 @@ fn by_hand(
     let mut lines = BufReader::new(ours.try_clone().unwrap());
     let ready = common::within(WAIT, move || read_line::<ToWatchdog>(&mut lines));
     assert_eq!(ready, Some(Some(ToWatchdog::Ready)));
-    let harness = std::process::Command::new("sleep").arg("600").spawn().unwrap();
+    let mut sleep = std::process::Command::new("sleep");
+    let harness = sleep.arg("600").spawn().unwrap();
     let pid = harness.id();
-    let start_id = proc_start_id(pid).unwrap();
-    let (program, started) = ("sleep".into(), "2026-11-01T00:00:00Z".into());
-    let launch = HarnessFacts { pid, program, started, start_id };
+    let launch = HarnessFacts {
+        pid,
+        program: "sleep".into(),
+        started: "2026-11-01T00:00:00Z".into(),
+        start_id: proc_start_id(pid).unwrap(),
+    };
     assert!(send_line(&ours, &ToRecorder::Launch(launch)));
     (recorder, ours, harness)
 }

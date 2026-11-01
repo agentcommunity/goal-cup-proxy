@@ -1012,10 +1012,9 @@ impl Run {
             if !eof {
                 continue;
             }
-            let stop = (word.as_ref())
-                .and_then(|w| w.borrow().as_ref().filter(|w| w.stop).map(|w| w.reason.clone()));
+            let stop = (word.as_ref()).and_then(|w| w.borrow().clone()).filter(|w| w.stop);
             let gone = (self.harness.as_ref()).is_none_or(|h| !cli::alive(h.pid, h.start_id));
-            let reason = match stop {
+            let reason = match stop.map(|w| w.reason) {
                 Some(r) if r.as_deref() != Some("deadline") => SealReason::ServerStop,
                 Some(_) => SealReason::Deadline,
                 None if deadline.is_some_and(|d| Mono::now() >= d) => SealReason::Deadline,
