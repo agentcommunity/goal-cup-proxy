@@ -922,5 +922,78 @@ class RigFaults(unittest.TestCase):
             self.assertTrue(r.until("Recording in chat mode", "none"))
 
 
+class PinnedModel(unittest.TestCase):
+    """The cheapest-model rule: the harness toml pins the main model, the row meta carries it, C5 fails a different one."""
+
+    @staticmethod
+    def row(pinned, recorded, case="direct", read=True):
+        use = {"tokens": {"merged": {"input": 9, "output": 9}}, "coverage": {"unattributed": 0},
+               "models": [{"model": m, "tokens": {"input": 1}} for m in recorded] if read else None,
+               "threads": [{"parent": None, "models": {"m": 3}, "wire_calls": 3}, {"parent": "t0", "models": {"m": 2}, "wire_calls": 2}]}
+        if not read:
+            del use["models"]
+        return evaluate({"meta.json": {"connector": "claude-code-cli", "case": case, "model_host": "api.example", "server": "off",
+                                       "keep": True, "entry": "e1", "commits_since_start": 1, "pinned_model": pinned, "started": "2026-10-30T10:00:00+00:00"},
+                         "verify/check-local.json": {"exit": 1, "entries": [{"entry": "e1", "counts": {"model_requests": 5}, "checks": []}]},
+                         "verify/usage/e1.json": use})
+
+    def test_c5_follows_the_pin(self):
+        bad = self.row("claude-haiku-5-5", ["claude-opus-5-5"])
+        self.assertEqual(bad["checks"]["C5"], "FAIL")
+        self.assertEqual(bad["facts"]["pinned_model"], "claude-haiku-5-5")
+        self.assertEqual(self.row("claude-haiku-5-5", ["claude-haiku-5-5"])["checks"]["C5"], "PASS")
+        self.assertEqual(self.row("anthropic/claude-haiku-5.5", ["claude-haiku-5.5"], "gateway")["checks"]["C5"], "PASS")
+        self.assertEqual(self.row(" claude-haiku-5-5 ", ["anthropic/claude-haiku-5-5"])["checks"]["C5"], "PASS")
+        self.assertEqual(self.row("claude-haiku-5-5", ["claude-haiku-5-5", "claude-opus-5-5"])["checks"]["C5"], "FAIL")
+
+    def test_no_models_read_or_no_pin_says_nothing(self):
+        for pin, recorded, read in (("claude-haiku-5-5", [], True), ("claude-haiku-5-5", [], False), (None, ["claude-opus-5-5"], True)):
+            self.assertNotIn("pinned", " ".join(self.row(pin, recorded, read=read)["why"]), (pin, recorded, read))
+
+    def test_meta_function_picks_the_case_section(self):
+        h = {"direct": {"model": "d"}, "gateway": {"model": "g"}}
+        self.assertEqual([pad.pinned_model(h, c) for c in ("direct", "dodger", "gateway")], ["d", "d", "g"])
+        self.assertIsNone(pad.pinned_model({"direct": {}}, "direct"))
+        self.assertIsNone(pad.pinned_model({}, "gateway"))
+
+    def test_the_written_meta_carries_it(self):
+        seen = []
+        real = pad.json.dump
+        with mock.patch.object(pad.json, "dump", lambda o, *a, **k: (seen.append(o), real(o, *a, **k))[1]):
+            w = Walk("test_sandbox_passes_names_only")
+            w.HARNESS = dict(Walk.HARNESS, gateway={"model": "anthropic/claude-haiku-5.5"})
+            w.walk(case="gateway")
+        self.assertIn("anthropic/claude-haiku-5.5", [o.get("pinned_model") for o in seen if isinstance(o, dict)])
+
+    def toml(self, name):
+        import tomllib
+        with open(os.path.join(HERE, name), "rb") as f:
+            return tomllib.load(f)
+
+    def test_claude_code_pins_haiku_in_both_cases(self):
+        h = self.toml("harnesses/claude-code-cli.toml")
+        for sec, model in (("direct", "claude-haiku-5-5"), ("gateway", "anthropic/claude-haiku-5.5")):
+            got = h[sec]
+            self.assertEqual(got.get("model"), model, sec)
+            small = {k: v for k, v in got["env"].items() if "SMALL_FAST" in k or "HAIKU" in k}
+            self.assertEqual(got["env"].get("ANTHROPIC_MODEL"), model, sec)
+            self.assertTrue(small and all(v == model for v in small.values()), (sec, small))
+
+    def test_every_pinned_model_has_a_rate_and_codex_is_cheapest(self):
+        rates = self.toml("pad.toml")["rates"]
+        names = sorted(n for n in os.listdir(os.path.join(HERE, "harnesses")) if n.endswith(".toml"))
+        for n in names:
+            h = self.toml("harnesses/" + n)
+            for sec in ("direct", "gateway"):
+                m = (h.get(sec) or {}).get("model")
+                if m:
+                    self.assertIn(m, rates, "%s [%s]" % (n, sec))
+        codex = self.toml("harnesses/codex-cli.toml")
+        cheapest = {"direct": min((r["input"], k) for k, r in rates.items() if r["key"] == "openai")[1],
+                    "gateway": min((r["input"], k) for k, r in rates.items() if k.startswith("openai/"))[1]}
+        for sec, want in cheapest.items():
+            self.assertEqual(codex[sec].get("model"), want, sec)
+
+
 if __name__ == "__main__":
     unittest.main()
