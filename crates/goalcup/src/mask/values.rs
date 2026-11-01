@@ -91,7 +91,8 @@ pub fn encoded_forms(value: &[u8]) -> Vec<Vec<u8>> {
         }
     }
     for html in [false, true] {
-        let escapes = |b: &u8| matches!(b, b'"' | b'\\') || (html && matches!(b, b'<' | b'>' | b'&'));
+        let escapes =
+            |b: &u8| matches!(b, b'"' | b'\\') || (html && matches!(b, b'<' | b'>' | b'&'));
         if value.iter().any(escapes) {
             let once = json_escaped(value, html);
             let twice = json_escaped(&once, html);

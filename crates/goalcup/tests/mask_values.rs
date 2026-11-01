@@ -621,7 +621,10 @@ fn a_value_with_html_bytes_is_masked_in_html_safe_json() -> Res {
             let whole = m.mask_whole(text.as_bytes());
             assert!(starred(&whole, at..at + form.len()));
             let cuts: Vec<usize> = (1..text.len() / 3).map(|i| i * 3).collect();
-            assert_eq!(stream_in(&m, StreamKind::Native, text.as_bytes(), &cuts), whole);
+            assert_eq!(
+                stream_in(&m, StreamKind::Native, text.as_bytes(), &cuts),
+                whole
+            );
         }
     }
     Ok(())
