@@ -3026,3 +3026,36 @@ Keys (checked 2026-10-30 at session start; names only, no values):
 19:16Z | docs merger PRD-17 | stop | merged integration + 2 task branches, box green, pushed
 19:18Z | core reviewer PRD-02 | start | breaker re-check of P1d and F1 fixes at f15dece3, stress job in box
 19:26Z rung 1 ran (633a4226, 0.69 USD). Recorder, proxy, start, seal: every entry sealed (seal_command), gaps 0, no known value in any record; Codex micro gives the expected P2 row with a local rig patch; both smoke rows C2 PASS. Blocked by 4 rig faults (PRD-12 slice 11 started from /root/gc-night/rung1/rung1-patch.diff) and C3 false positives in the verifier ([REDACTED] placeholders, glued shapes inside words; PRD-08 lane started). Point 4 incident: the rig wrote the last 20 chars of the Claude key shown by Claude Code's key screen to a pane file copied to the conductor; scrubbed, box deleted; rotation is the owner's call. Conductor env: sbx.mjs needs the proxy preload /root/gc-night/rung1/proxy-preload.cjs.
+01:56Z | integrator merger v1.0/prd-02-core | gate | gate fast: PASS in 172s on merge d8cbed35 (log /root/gc-night/gate-logs/v1.0_prd-02-core-0153.log)
+01:56Z | integrator merger v1.0/prd-02-core | merge | v1.0/prd-02-core into v1.0/integration as d8cbed35: PRD-02 slice B rest: dead-entry close, null recorder seal, watchdog null mode, size trims
+01:59Z | integrator merger v1.0/prd-17-lessons | gate | gate fast: PASS in 179s on merge c9b87ac5 (log /root/gc-night/gate-logs/v1.0_prd-17-lessons-0156.log)
+01:59Z | integrator merger v1.0/prd-17-lessons | merge | v1.0/prd-17-lessons into v1.0/integration as c9b87ac5: PRD-17 slice 6: PRD-02 lessons, un-ignore L-P3 ctrl-c case, repoint guard names
+02:03Z | integrator merger v1.0/prd-12-pad | gate | gate fast: PASS in 186s on merge 036c4212 (log /root/gc-night/gate-logs/v1.0_prd-12-pad-0159.log)
+02:03Z | integrator merger v1.0/prd-12-pad | merge | v1.0/prd-12-pad into v1.0/integration as 036c4212: PRD-12 slice 11: rung 1 rig fixes from the first real rung 1 run
+02:06Z | docs replan PRD-17 | amendment | notes on PRD-17, PRD-02, PRD-16, PRD-14 after slice 6 (merge c9b87ac5); lessons tests 4345 of 3000; four guard names still missing
+02:06Z | integrator merger v1.0/prd-08-verify | gate | gate fast: PASS in 180s on merge e4d537f1 (log /root/gc-night/gate-logs/v1.0_prd-08-verify-0203.log)
+02:06Z | integrator merger v1.0/prd-08-verify | merge | v1.0/prd-08-verify into v1.0/integration as e4d537f1: PRD-08 slice 8: C3 secret scan placeholder and glued-word false positives
+02:07Z merged by conductor queue pass: PRD-02 slice B rest d8cbed35 (dead-entry close, null mode, P1d/F1 fixed), PRD-17 slice 6 c9b87ac5, PRD-12 slice 11 rig fixes 036c4212, PRD-08 slice 8 C3 false positives e4d537f1. Rung 1 rerun then rung 2 (staging) started. Core lane on Q6 + slice C (net-neutral size). Upload lane on PRD-06 slice 7. Merge queue now driven by a 10-minute conductor tick (the background driver hit its time limit).
+02:07Z | upload planner PRD-06 | start | planning slice 7 dead-entry close
+02:07Z | verify replan PRD-08 | amendment | slice 8 notes on PRD-08, PRD-05 (glued seam request), PRD-16; verifier src 4171 outside usage vs 1400 row
+19:26Z | core merge-requester PRD-02 | seam | queued merge request 192609-prd-02-core for v1.0/prd-02-core
+19:26Z | pad preparer PRD-12 | start | slice 11 rung 1 rig fixes, apply rung1-patch.diff
+19:28Z | pad preparer PRD-12 | fix | slice 11 rung 1 patch applied, 33 pad tests, build, clippy green in box, pushed 41832d6fc27e4d58ceb5a031b318d396ced0d5ff
+19:28Z | pad fixer PRD-12 | start | fixing RIG-1..4
+19:29Z | pad fixer PRD-12 | fix | RIG-1 tails, RIG-4 merge; RIG-2/3 already on tip; tests green
+19:30Z | docs fixer PRD-17 | fix | A1 A2 A3 A4 B1 B2 done; box 184 passed 1 skipped on c39737d9; HF3 reopened
+19:31Z | docs fixer PRD-17 | fix | A5-A8,B2 fixed in LESSONS.md, pushed
+19:31Z | verify builder PRD-08 | fix | C3 placeholder() and masker-identical glued guard pushed on v1.0/prd-08-verify-c3-placeholder-and-glued-guard; nextest 93/93, clippy, fmt green in box; SEAM NOTE PRD-05: export glued
+19:32Z | docs merge-requester PRD-17 | decision | queued 193240-prd-17-lessons
+19:32Z | pad fixer PRD-12 | fix | RIG-5/6/7, B-2 fixed, tests green, pushed
+19:33Z | pad merge-requester PRD-12 | seam | queued merge request 193335-prd-12-pad for slice 11
+19:34Z | verify reviewerA PRD-08 | start | review slice 8 C3 placeholder and glued fix on prd-08-verify
+19:36Z | verify reviewerA PRD-08 | stop | slice 8 review: 1 blocker (glued warn to pass breaks PRD acceptance), fixes on split PEM test filter and size; box 94/94 green, clippy green
+19:36Z | verify fixer PRD-08 | start | fixing A1-A4
+19:40Z | verify fixer PRD-08 | fix | A1-A4 done, tests green 92/92, pushed; A5 logged as seam request to PRD-05
+19:42Z | verify reviewer-A PRD-08 | start | re-review slice 8 C3 fix at 2c6c477e, box run fmt clippy nextest
+19:43Z | verify reviewer-A PRD-08 | stop | slice 8 re-review: A1 A2 A4 closed, box fmt clippy nextest 92/92 pass; open: size decision line sits in a stray new PRD-08-verifier.md, not the PRD's Amendments, and states 270 for a 291-line test file
+19:43Z | verify fixer PRD-08 | fix | size decision moved into PRD-08-verifier-checks.md with true counts, stray file removed; docs only, no box run
+19:44Z | verify merge-requester PRD-08 | seam | queued merge request 194411-prd-08-verify (slice 8, C3 placeholder/glued fix)
+20:23Z | participant builder PRD-10 | stop | slice 11 gate never opened in 90 min: pipeline::close_dead_entry and watchdog::recover absent on origin/v1.0/integration (prd-02-core unmerged). Nothing built or pushed. Replan as slice 12 after prd-02-core merges.
+20:24Z participant lane done: PRD-10 slices 6-10 merged (1c9afbed, c3f4638c, 69f143a6, 25102adc, b5cc8617). Slice 11 (continue, recover, seal on a dead entry) parked until PRD-02 close_dead_entry (slice B) and watchdog::recover (slice C) merge. Two lane agents were flagged by the safety classifier: the merge waiters ran mergeq.sh themselves (this run predates the read-only waiter fix) and mergers ran git reset --hard on the detached main checkout and pushed v1.0/prd-10-cli without force. Checked: integration history intact (all known merges are ancestors), main checkout clean, no push outside v1.0/*.
