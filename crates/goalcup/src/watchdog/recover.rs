@@ -130,7 +130,11 @@ pub(crate) fn run(facts: StartFacts, listener: TcpListener, mut report: UnixStre
     let recorder_pid = Arc::new(Mutex::new(0));
     let Ok(mut boot) = Boot::start(&exe, &listener, &facts, &recorder_pid, false) else {
         let _ = report.write_all(&[0]);
-        line(&dir, "watchdog_failed", &[("why", Fact::Word("recorder_spawn"))]);
+        line(
+            &dir,
+            "watchdog_failed",
+            &[("why", Fact::Word("recorder_spawn"))],
+        );
         return ExitCode::from(super::NOT_STARTED);
     };
     let ready = boot.wait_ready(false).is_ok();

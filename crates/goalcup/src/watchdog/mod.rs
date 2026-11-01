@@ -854,7 +854,8 @@ pub(crate) fn deadline_of(wall: Option<u64>) -> Option<Mono> {
 
 /// The deadline a server word sets: `seconds_left` from when it was asked, on boot time.
 pub(crate) fn moved(w: &ServerWord) -> Option<Mono> {
-    w.seconds_left.map(|s| due(w.asked_at, s.saturating_mul(1_000)))
+    w.seconds_left
+        .map(|s| due(w.asked_at, s.saturating_mul(1_000)))
 }
 
 /// What a server word asks (section 8 step 10): nothing while it says go on, `deadline` for a
@@ -1056,8 +1057,14 @@ mod tests {
             asked_at: Mono(5 * SEC),
         };
         assert_eq!(stop_of(&w(false, Some("deadline"), None)), None);
-        assert_eq!(stop_of(&w(true, Some("deadline"), None)), Some(SealReason::Deadline));
-        assert_eq!(stop_of(&w(true, Some("other"), None)), Some(SealReason::ServerStop));
+        assert_eq!(
+            stop_of(&w(true, Some("deadline"), None)),
+            Some(SealReason::Deadline)
+        );
+        assert_eq!(
+            stop_of(&w(true, Some("other"), None)),
+            Some(SealReason::ServerStop)
+        );
         assert_eq!(stop_of(&w(true, None, None)), Some(SealReason::ServerStop));
         assert_eq!(moved(&w(false, None, None)), None);
         assert_eq!(moved(&w(false, None, Some(3))), Some(Mono(8 * SEC)));
