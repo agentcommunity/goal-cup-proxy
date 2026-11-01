@@ -250,6 +250,8 @@ pub struct CallTable {
     /// Parent thread id to its children; `None` when no parentage was read (independent of
     /// `reason`), and then `subagents_present` skips.
     pub children: Option<BTreeMap<String, Vec<String>>>,
+    /// The children come from task logs and manifests: shown by their logs, not tied to calls.
+    pub task_logs: bool,
     /// Why the native leg is not readable; `None` means readable.
     pub reason: Option<Reason>,
     pub native_form: NativeForm,
@@ -283,6 +285,7 @@ impl Default for CallTable {
             rows: Vec::new(),
             threads: Vec::new(),
             children: None,
+            task_logs: false,
             reason: Some(Reason::NoReader),
             native_form: NativeForm::None,
             db_set: None,
@@ -552,6 +555,7 @@ impl Calls {
             rows,
             threads,
             children: leg.children,
+            task_logs: leg.task_logs,
             reason,
             native_form: reason.map_or(
                 if leg.totals {

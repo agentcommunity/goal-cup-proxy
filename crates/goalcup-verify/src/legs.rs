@@ -144,7 +144,11 @@ pub fn judge(t: &CallTable, covers: &[Cover]) -> (Vec<Check>, Out) {
         provider_errors: errors(t),
         threads,
         refused,
-        coverage: line,
+        coverage: if t.task_logs {
+            format!("{line} {TASK_LOGS}")
+        } else {
+            line
+        },
         covers: covers.to_vec(),
         timed: (x.calls().filter(|r| r.leg == Leg::Wire || x.known(r)))
             .filter_map(|r| {
@@ -438,6 +442,9 @@ fn threads_match(x: &Ctx) -> (Check, Vec<Value>) {
     (check, rows.into_iter().map(|r| r.0).collect())
 }
 
+/// Plain words for a participant: what a subagent shown by a task log means.
+const TASK_LOGS: &str = "Subagents are shown by their task logs, not tied to individual calls.";
+
 fn subagents(x: &Ctx) -> Check {
     let c = Check::new("subagents_present", None, Res::Pass, "");
     let Some(kids) = &x.t.children else {
@@ -464,8 +471,13 @@ fn subagents(x: &Ctx) -> Check {
     let down = x.covers.iter().any(|c| c.down);
     let res = grade(!gone.is_empty(), !gone.is_empty() && !down);
     let first = gone.first().map(|k| k.as_str());
+    let what = if x.t.task_logs {
+        format!("named in the delegation manifest with no task log; {TASK_LOGS}")
+    } else {
+        "have no call on either leg".to_string()
+    };
     let why = format!(
-        "{} of {} subagents have no call on either leg; first: thread {}",
+        "{} of {} subagents {what}; first: thread {}",
         gone.len(),
         all.len(),
         first.unwrap_or_default()

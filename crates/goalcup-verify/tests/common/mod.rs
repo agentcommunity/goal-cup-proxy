@@ -14,6 +14,7 @@ use goalcup_format::{
     EndReason, FLAG_FIN, GapReason, Now, PartOptions, PartWriter, Recover, Recovered,
 };
 use goalcup_format::{StreamKind, index_name, part_name};
+use goalcup_verify::usage::{CallTable, Calls};
 use serde_json::{Map, Value, json};
 use std::collections::{BTreeMap, HashMap};
 use std::fs;
@@ -907,4 +908,33 @@ pub fn export(from: &Path, to: &Path) {
             false => drop(fs::copy(&f, to.join(f.file_name().unwrap())).unwrap()),
         }
     }
+}
+
+/// A Gemini `generateContent` call on its own connection.
+pub fn gemini_wire(e: &mut Entry, model: &str) {
+    let c = e.conn();
+    let path = format!("/v1beta/models/{model}:generateContent");
+    let head = json!({"method": "POST", "path": path, "ver": "1.1", "masked": [], "coding": null,
+        "headers": [["content-type", "application/json"]]});
+    let q = e.open(StreamKind::HttpReq, c, 0, head);
+    e.data(q, 0, 0, b"{}");
+    e.end(q, EndReason::Complete, 2, Value::Null);
+    let body = json!({"modelVersion": model, "responseId": format!("resp-{model}"),
+        "candidates": [{"finishReason": "STOP"}],
+        "usageMetadata": {"promptTokenCount": 10, "candidatesTokenCount": 3}})
+    .to_string();
+    let head = json!({"status": 200, "ver": "1.1", "decoded": true, "masked": [], "coding": null,
+        "headers": [["content-type", "application/json"]]});
+    let p = e.open(StreamKind::HttpResp, c, q, head);
+    e.data(p, 0, 0, body.as_bytes());
+    e.end(p, EndReason::Complete, body.len() as u64, Value::Null);
+    e.end(c, EndReason::Complete, 0, json!({"up": 90, "down": 90}));
+}
+
+/// The call table U1 reads from an entry folder.
+pub fn call_table(dir: &Path) -> CallTable {
+    let recs: Vec<Record> = read_records(&dir.join("rec"));
+    let mut calls = Calls::new();
+    recs.iter().for_each(|r| calls.push(r));
+    calls.finish()
 }
