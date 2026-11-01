@@ -207,7 +207,7 @@ pub fn prepare(
             let body = json!({
                 "previous_entry_id": last, "connector_id": connector.id,
                 "connector_sha256": connector.sha256, "workspace": project.to_string_lossy(),
-                "session_id": start::session_id(), "harness_version": plan.harness_version,
+                "session_id": start::session_id(), "harness_version": plan.harness_version.as_deref().unwrap_or(approve::UNKNOWN_VERSION),
                 "proxy_version": env!("CARGO_PKG_VERSION"),
             });
             let client = ServerClient::new(base, Some(Token::new(secret)));

@@ -51,6 +51,10 @@ fn broke(text: String) -> Stop {
     Stop { text, code: 3 }
 }
 
+/// What the open call says when the harness version could not be read: the Worker wants a string.
+/// The local record (`server.json`) keeps the honest `None`.
+pub(super) const UNKNOWN_VERSION: &str = "unknown";
+
 /// What `start` knows when it asks for the run.
 pub struct Ask<'a> {
     pub mode: RunMode,
@@ -108,7 +112,7 @@ pub fn begin(home: &Path, server: &Server, ask: &Ask, out: &mut dyn Write) -> Re
     let body = json!({
         "connector_id": ask.connector.id, "connector_sha256": ask.connector_sha256,
         "workspace": ask.workspace.to_string_lossy(), "session_id": ask.session_id,
-        "harness_version": ask.harness_version, "proxy_version": env!("CARGO_PKG_VERSION"),
+        "harness_version": ask.harness_version.unwrap_or(UNKNOWN_VERSION), "proxy_version": env!("CARGO_PKG_VERSION"),
         "repo_url": repo_url, "machine": ask.machine,
     });
     // The participant has approved: a blip, a GitHub outage (502) or a 429 is waited out, with the

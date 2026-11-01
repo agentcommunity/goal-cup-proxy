@@ -267,3 +267,33 @@ fn a_harness_exit_of_78_is_not_a_masking_refusal() {
     assert_eq!(out.status.code(), Some(78), "{shown}");
     assert!(shown.contains(text::PART_RECORDED), "{shown}");
 }
+
+/// An unreadable harness version is said on the start screen and the run still starts; a read
+/// version says nothing of the kind.
+#[test]
+fn an_unread_harness_version_is_said_and_the_run_starts() {
+    let screen = |fix: &Fix| {
+        let w = FakeWorker::start();
+        let mut out = Vec::new();
+        prepare(&fix.args(), &fix.ctx(Server::Url(w.url())), &mut out)
+            .unwrap_or_else(|s| panic!("{}", s.text));
+        String::from_utf8(out).unwrap()
+    };
+    let unread = Fix::new("{home}/skills", "");
+    let line = text::version_unread("Tester");
+    assert!(screen(&unread).contains(&line));
+
+    let dir = Fix::new("{home}/skills", "");
+    let script = dir.t.home().join("tester-bin");
+    std::fs::write(&script, "#!/bin/sh\necho tester 1.2.3\n").unwrap();
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let read = Fix::with_program(
+        script.to_str().unwrap(),
+        "{home}/skills",
+        "",
+    );
+    assert!(!screen(&read).contains(&line));
+}
