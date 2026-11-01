@@ -181,9 +181,11 @@ class HereAndFetch(unittest.TestCase):
             with open(os.path.join(work, "pg_service.conf"), "w") as f:
                 f.write("password=" + SENTINEL)
             raise subprocess.TimeoutExpired(argv, timeout)
-        with tempfile.TemporaryDirectory() as out, mock.patch.object(pad, "call", fake):
+        with tempfile.TemporaryDirectory() as out, mock.patch.object(pad, "call", fake), \
+                mock.patch.dict(os.environ, {"DATABASE_URL": "postgres://fake-not-a-secret"}):
             r = self.run_for(out, server="staging")
             r.meta["entry"] = "e" + "0" * 16
+            r.fetch_index = lambda *a: None  # the index box is test_pad_fetch's; here fetch-run is the one that hangs
             with self.assertRaises(subprocess.TimeoutExpired):
                 r.step_fetch("fetch", 10)
             self.assertEqual(os.listdir(os.path.join(r.dir, "fetched")), [])

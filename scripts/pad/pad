@@ -99,6 +99,62 @@ def call(argv, timeout=None, env=None):
     return subprocess.run(argv, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=timeout, env=env)
 
 
+def extract(tar, dest):
+    """A box tar unpacked under `dest` with the data filter where Python has it (no path out of `dest`, no device files)."""
+    with tarfile.open(tar) as t:
+        t.extractall(dest, **({"filter": "data"} if hasattr(tarfile, "data_filter") else {}))
+
+
+def fetch_sql(path):
+    """The read-only query in fetch-run.sh, between its <<'SQL' line and the closing SQL line: one source, never copied.
+    Refused when a marker is missing or it is not BEGIN READ ONLY ... ROLLBACK."""
+    with open(path) as f:
+        lines = f.read().splitlines()
+    starts = [i for i, ln in enumerate(lines) if ln.rstrip().endswith("<<'SQL'")]
+    ends = [i for i, ln in enumerate(lines) if ln == "SQL"]
+    if len(starts) != 1 or len(ends) != 1 or ends[0] <= starts[0] + 1:
+        raise Refused("fetch-run.sh has no single SQL block")
+    body = lines[starts[0] + 1:ends[0]]
+    if not body[0].strip().upper().startswith("BEGIN READ ONLY") or body[-1].strip().upper() != "ROLLBACK;":
+        raise Refused("the SQL block in fetch-run.sh is not read-only")
+    return "\n".join(body) + "\n"
+
+
+# Run in the index box (the entry id is checked before it is put in): psql through a 0600 service file made from
+# ~/.dburl, so the address is never in argv; both files are gone before the script ends.
+INDEX_INSTALL = """command -v psql >/dev/null || dnf install -y -q postgresql16 >/dev/null 2>&1 || dnf install -y -q postgresql15 >/dev/null 2>&1
+command -v psql >/dev/null
+"""
+INDEX_QUERY = """set -u
+cd ~
+python3 -I - <<'PY'
+import os, urllib.parse
+u = urllib.parse.urlsplit(open(os.path.expanduser("~/.dburl")).read().strip())
+p = {}
+for k, v in (("host", u.hostname), ("port", u.port), ("user", u.username), ("password", u.password), ("dbname", u.path.lstrip("/"))):
+    if v not in (None, ""):
+        p[k] = urllib.parse.unquote(str(v))
+for k, v in urllib.parse.parse_qsl(u.query):
+    if k in ("sslmode", "sslrootcert", "connect_timeout"):
+        p[k] = v
+p.setdefault("sslmode", "require")
+fd = os.open(os.path.expanduser("~/pg_service.conf"), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+os.write(fd, ("[fetchrun]\\n" + "".join("%%s=%%s\\n" %% kv for kv in p.items())).encode())
+os.close(fd)
+PY
+mkdir -p ~/idx
+PGSERVICEFILE=~/pg_service.conf PGSERVICE=fetchrun psql -X -q -At -v ON_ERROR_STOP=1 -v id=%s -v staging=true -f ~/query.sql > ~/idx/%s.json 2> ~/idx/err
+rc=$?
+rm -f ~/.dburl ~/pg_service.conf
+[ $rc -eq 0 ] || tail -n 1 ~/idx/err >&2
+exit $rc
+"""
+REC_TAR = """d=$(ls -d ~/run/gc/home/runs/*/%s | head -n 1)
+[ -d "$d/rec" ] || exit 3
+tar cf ~/rec-kept-%s.tar --exclude=run-ca.key -C "$d" rec
+"""
+
+
 def now():
     return datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds")
 
@@ -387,6 +443,7 @@ class Run:
         # hit its limit, the box may still appear after cleanup. meta: meta-box.json; row: check.py's result.
         self.tried = self.create_late = self.no_build = self.setup_failed = False
         self.name, self.lines, self.meta, self.row = "pad-" + secrets.token_hex(3), [], {}, None
+        self.fetched, self.kept = set(), {}  # entries whose server copy is here; entries rec/ was tried for: True, or why not
         self.tmp = tempfile.mkdtemp(prefix="pad-")  # box scripts; never in the run folder
         self.box_dir = None  # pad-run's run folder: here, or staged and pushed to the box's ~/run
         self.t0, self.out_root, self.over_cap, self.spender = time.time(), out_root, False, None
@@ -403,9 +460,12 @@ class Run:
         with open(os.path.join(self.dir, "calls.log"), "a") as f:
             f.write("%s %s\n" % (time.strftime("%H:%M:%SZ", time.gmtime()), mask(what)))
 
-    def sbx(self, verb, *args, limit=None):
-        self.log("sbx %s %s" % (verb, self.name))
-        return call(["node", SBX, verb] + list(args), timeout=limit, env=env_without())
+    def sbx(self, verb, *args, limit=None, name=None, env=None):
+        """One sbx call on this run's box, or on `name` (the short-lived index box); `env` only for the one put-env that
+        carries DATABASE_URL, every other call gets env_without()."""
+        name = name or self.name
+        self.log("sbx %s %s" % (verb, name))
+        return call(["node", SBX, verb] + list(args), timeout=limit, env=env_without() if env is None else env)
 
     def line(self, step, result, saw):
         at = int(time.time() - self.t0) // 60
@@ -604,30 +664,132 @@ class Run:
             self.spender.join(runner_limits(self.s)["spend"] + 240)
 
     def step_fetch(self, step, limit):
-        """Section 3, 0:27: fetch-run here (it reads DATABASE_URL and the read-only CLOUDFLARE_* itself, never in
-        argv), then the copy in to the box's ~/run/fetched/<entry>/, where pad-run verify reads it."""
+        """Section 3, 0:27: the index from a separate short-lived box that alone holds DATABASE_URL (the conductor cannot
+        reach the database), fetch-run here on that index (R2 over HTTPS, no DATABASE_URL), then the copy in to the pad
+        box's ~/run/fetched/<entry>/, where pad-run verify reads it. A fetch that does not finish keeps the entry's rec/."""
         if self.s["server"] != "staging":
             return "skip", NEEDS_LATER
+        done = False
+        try:
+            result = self.fetch_entries(limit)
+            done = result[0] == "ok"
+            return result
+        finally:
+            if not done:  # a timeout too: the pad box goes at cleanup, and a refetch plus check needs the recording
+                self.keep_rec()
+
+    def fetch_entries(self, limit):
         new = self.meta.get("new_entry")
         entries = [str(self.meta.get("entry"))] + ([new] if new else [])  # kill-both: both
         for entry in entries:
             if not re.fullmatch(r"e[0-9a-f]{16}", entry):
                 return "FAIL", "server copy not fetched: no entry id"
+        if not os.environ.get("DATABASE_URL"):
+            return "FAIL", "server copy not fetched: DATABASE_URL is not set"
+        for entry in entries:
             self.log("fetch-run " + entry)
             got = os.path.join(self.dir, "fetched", entry)
+            index = os.path.join(self.dir, "fetched-index", entry + ".json")
+            why = self.fetch_index(entry, index, limit)
+            if why:
+                return "FAIL", why
             try:
-                r = call(["sh", os.path.join(REPO, "scripts", "fetch-run.sh"), "--bucket", STAGING_BUCKET, entry,
-                          os.path.dirname(got)], timeout=limit, env=env_without(set(NEVER_IN_BOX) - set(FETCH)))
-            finally:  # a timeout kills sh before its EXIT trap: its work folder (pg_service.conf) goes here
+                r = call(["sh", os.path.join(REPO, "scripts", "fetch-run.sh"), "--bucket", STAGING_BUCKET, "--index", index,
+                          entry, os.path.dirname(got)], timeout=limit,
+                         env=env_without(set(NEVER_IN_BOX) - {"CLOUDFLARE_ACCOUNT_ID", "CLOUDFLARE_API_TOKEN"}))
+            finally:  # a timeout kills sh before its EXIT trap: its work folder goes here
                 for left in glob.glob(os.path.join(os.path.dirname(got), ".fetch-run.*")):
                     shutil.rmtree(left, ignore_errors=True)
             if r.returncode or not os.path.isfile(os.path.join(got, "fetch.json")):  # a partial entry exits 0
                 return "FAIL", said("server copy not fetched", r)
+            self.fetched.add(entry)
             if self.s["where"] == "here":
                 shutil.copytree(got, os.path.join(self.box_dir, "fetched", entry))
             elif self.sbx("push-dir", self.name, got, "~/run/fetched/" + entry, limit=limit).returncode:
                 return "error", "fetched copy not copied in"
         return "ok", "fetched " + " and ".join(entries)
+
+    def fetch_index(self, entry, index, limit):
+        """fetch-run.sh's read-only query run in its own box (pad-dbf-*), whose only secret is ~/.dburl (0600, deleted by
+        the script); the index (no secret in it) is copied to `index`. The box is removed whatever happens.
+        None when it worked, else the FAIL line."""
+        name, deadline = "pad-dbf-" + self.name[len("pad-"):], time.time() + limit
+        left = lambda: max(1, deadline - time.time())  # noqa: E731
+        try:
+            sql = fetch_sql(os.path.join(REPO, "scripts", "fetch-run.sh"))
+        except Refused as e:
+            return "server copy not fetched: " + str(e)
+        files = {}
+        for fname, text in (("query.sql", sql), ("install.sh", INDEX_INSTALL), ("idx.sh", INDEX_QUERY % (entry, entry))):
+            files[fname] = os.path.join(self.tmp, "dbf-" + fname)
+            with open(files[fname], "w") as f:
+                f.write(text)
+        try:
+            r = self.sbx("create", "--name", name, "--minutes", str(math.ceil(limit / 60) + 1), "--vcpus", "1",
+                         limit=left(), name=name)
+            if r.returncode:
+                return said("server copy not fetched: index box not created", r)
+            for fname, mode in (("query.sql", "644"), ("install.sh", "755"), ("idx.sh", "755")):
+                r = self.sbx("put", name, "~/" + fname, "--file", files[fname], "--mode", mode, limit=left(), name=name)
+                if r.returncode:
+                    return said("server copy not fetched: index box not set up", r)
+            r = self.sbx("exec", name, "--script", files["install.sh"], "--sudo", limit=left(), name=name)
+            if r.returncode:
+                return said("server copy not fetched: no psql in the index box", r)
+            r = self.sbx("put-env", name, "~/.dburl", "--env", "DATABASE_URL", limit=left(), name=name,
+                         env=env_without(set(NEVER_IN_BOX) - {"DATABASE_URL"}))
+            if r.returncode:
+                return said("server copy not fetched: index box has no database address", r)
+            r = self.sbx("exec", name, "--script", files["idx.sh"], limit=left(), name=name)
+            if r.returncode:
+                return said("server copy not fetched: index query failed", r)
+            r = self.sbx("get", name, "~/idx/%s.json" % entry, index, limit=left(), name=name)
+            if r.returncode:
+                return said("server copy not fetched: index not copied out", r)
+            if not isinstance(read_json(index), list):
+                return "server copy not fetched: the index is not a list"
+            return None
+        finally:  # always, a timeout included; a failed rm is left to the box's own timeout
+            try:
+                self.sbx("rm", name, limit=120, name=name)
+            except Exception:
+                self.log("sbx rm failed " + name)
+
+    def keep_rec(self):
+        """P0b: before the pad box goes, the entry's rec/ (the recorder's masked recording, less the run certificate key) is
+        copied to rec-kept/<entry>/rec when the server copy was not fetched, so a refetch and a check can still finish C4.
+        Never raises, never changes a result; the cleanup line says how it went."""
+        if self.s["server"] != "staging":
+            return
+        for entry in [self.meta.get("entry"), self.meta.get("new_entry")]:
+            if not entry or not re.fullmatch(r"e[0-9a-f]{16}", entry) or entry in self.fetched or entry in self.kept:
+                continue
+            if self.s["where"] != "here" and not self.tried:
+                continue
+            self.kept[entry] = None
+            dest = os.path.join(self.dir, "rec-kept", entry)
+            try:
+                if self.s["where"] == "here":
+                    srcs = glob.glob(os.path.join(self.box_dir or "", "gc", "home", "runs", "*", entry, "rec"))
+                    if not srcs:
+                        raise Refused("no rec folder")
+                    shutil.copytree(srcs[0], os.path.join(dest, "rec"), ignore=shutil.ignore_patterns("run-ca.key"))
+                else:
+                    fd, script = tempfile.mkstemp(suffix=".sh", dir=self.tmp)
+                    with os.fdopen(fd, "w") as f:
+                        f.write(REC_TAR % (entry, entry))
+                    if self.sbx("exec", self.name, "--script", script, limit=300).returncode:
+                        raise Refused("no rec folder in the box")
+                    tar = os.path.join(self.tmp, "rec-kept-%s.tar" % entry)
+                    if self.sbx("get", self.name, "~/rec-kept-%s.tar" % entry, tar, limit=300).returncode:
+                        raise Refused("rec not copied out")
+                    os.makedirs(dest)
+                    extract(tar, dest)
+                    os.remove(tar)
+                self.kept[entry] = True
+            except Exception as e:
+                shutil.rmtree(dest, ignore_errors=True)
+                self.kept[entry] = str(e) if isinstance(e, Refused) else type(e).__name__
 
     def step_check(self, step, limit):
         """Section 8: pad-run verify (sized to the run, it always writes its tar), the tar copied out, meta.json,
@@ -638,8 +800,7 @@ class Run:
             shutil.copy(os.path.join(self.box_dir, "out.tar"), tar)
         elif self.sbx("get", self.name, "~/run/out.tar", tar, limit=300).returncode:
             return "error", "results not copied out"
-        with tarfile.open(tar) as t:
-            t.extractall(self.dir, **({"filter": "data"} if hasattr(tarfile, "data_filter") else {}))
+        extract(tar, self.dir)
         os.remove(tar)
         with open(os.path.join(self.dir, "meta-box.json")) as f:
             self.meta.update(json.load(f))  # pad-run's keys, merged whole; pad's own keys below win
@@ -677,6 +838,14 @@ class Run:
     def step_cleanup(self):
         """Section 3.2: pad-run wipe, box removed by name, then a list to confirm. Never changes a result."""
         saw, third = [], runner_limits(self.s)["wipe"]
+        try:
+            before = set(self.kept)
+            self.keep_rec()  # a fetch that never ran (interrupted) still keeps the recording
+            if set(self.kept) - before:
+                self.scan_out()  # the kept copy is in the run folder: C3's count covers it
+        except Exception as e:
+            saw.append("rec copy %s" % type(e).__name__)
+        saw += ["rec kept for %s" % k if v is True else "rec not kept for %s: %s" % (k, v) for k, v in self.kept.items() if v is not None]
         try:
             result, wiped, _ = self.box("wipe", third) if self.tried or self.s["where"] == "here" and self.box_dir else ("ok", "")
             saw += [wiped if result == "ok" else "wipe %s: %s" % (result, wiped)] if wiped else []
