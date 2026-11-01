@@ -192,11 +192,6 @@ fn run(command: Command) -> ExitCode {
     }
 }
 
-/// Phase 0 stub: the core slice moves each body into `src/cli/`.
-fn not_built(command: &str) -> ExitCode {
-    say(&text::not_built(command));
-    ExitCode::from(3)
-}
 
 #[cfg(test)]
 mod tests {

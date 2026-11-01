@@ -134,10 +134,6 @@ pub fn network_folder(dir: &Path, kind: &str) -> String {
     )
 }
 
-pub fn not_built(command: &str) -> String {
-    format!("{command} is not built yet")
-}
-
 pub fn wsl(what: &str, drive: Option<&str>) -> String {
     match drive {
         None => "This is WSL1, which cannot run goalcup. Convert it to WSL2 and run goalcup there."
