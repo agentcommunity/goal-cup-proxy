@@ -565,7 +565,7 @@ class UpstreamRedaction(unittest.TestCase):
     def test_a_plain_hit_with_exact_off_is_evidence_not_less(self):
         files = {"meta.json": {"connector": "hermes-cli", "case": "direct", "known_box": True, "entry": "e1", "redacts_tool_output": True,
                            "redacts_kinds": ["openai_key", "github_token"]},
-                 "verify/secrets.json": {"masks": {"masked_key": 3}, "known_hits": [], "shape_hits": [], "big_masks": []},
+                 "verify/secrets.json": {"masks": {"masked_key": 3, "google_key": 1, "jwt": 1, "private_key": 1, "url_password": 1}, "known_hits": [], "shape_hits": [], "big_masks": []},
                  "verify/secrets-conductor.json": {"hits": 0},
                  "verify/exits.json": {"secrets": 1, "secrets-out": 0, "secrets-plain": 2}}
         self.assertEqual(evaluate(files)["checks"]["C3"], "PASS")
