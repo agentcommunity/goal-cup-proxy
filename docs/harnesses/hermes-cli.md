@@ -33,13 +33,13 @@ The connector sets `HERMES_HOME` to the isolated home and leaves `HOME` alone.
 
 ## 4. Session format and identity
 
-- `state.db` has `sessions`, `messages`, usage and `async_delegations` tables (schema 32 at v0.22.5, source). Hermes 0.21.1 and later write no `session_<id>.json` snapshot (source), so a run on 0.22.5 has no per-session file; its model calls are recorded on the wire. The connector copies `state.db*` as a set when the run ends (`final`).
+- `state.db` has `sessions`, `messages`, usage and `async_delegations` tables (schema 32 at v0.22.5, source). Hermes 0.21.1 and later write no `session_<id>.json` snapshot (source), so a run on 0.22.5 has no per-session file; its model calls are recorded on the wire. The connector copies `state.db*` as a set when the run ends (`final`). The session database is copied, and bare key values in it are removed by exact-value masking (PRD-05 sources 1 to 3) before anything reaches disk or upload.
 - A `delegate_task` child is a row with `parent_session_id` set, in the same database, and also has a log under `cache/delegation/live/`. The connector reads `task-*.log` as it grows and copies each `manifest.json` as a snapshot; both may match nothing when no subagent runs, which is not a warning.
 - The session id is `YYYYMMDD_HHMMSS_<six hex>` (source). Hermes prints it in the banner; the connector does not read the terminal.
 
 ## 5. Auth
 
-- About 40 providers. A key goes in `$HERMES_HOME/.env` (mode 0600; secrets only); the provider and model go in `config.yaml` as `model.provider`, `model.default` and `model.base_url` (docs). OAuth providers keep tokens in `auth.json`; Hermes can also borrow credentials from `~/.codex/auth.json` and `~/.claude/.credentials.json` (source). The connector lists `.env`, `auth.json`, `.anthropic_oauth.json` and `config.yaml` as secret files.
+- About 40 providers. A key goes in `$HERMES_HOME/.env` (mode 0600; secrets only); the provider and model go in `config.yaml` as `model.provider`, `model.default` and `model.base_url` (docs). OAuth providers keep tokens in `auth.json`; Hermes can also borrow credentials from `~/.codex/auth.json` and `~/.claude/.credentials.json` (source). Goal Cup supplies, stores and uploads no key. Hermes starts with your own shell environment (proxy variables replaced) and its own home files, so it finds your key where it always does.
 - Does the harness have a variable that moves its config and login? Yes, `HERMES_HOME`; the connector sets it. The participant's setup wizard writes into that home once, in `goalcup setup`.
 - A credential-pool entry in `auth.json` keeps `secret_fingerprint`, the first 16 hex digits of the key's SHA-256, and not the key (source). After a failed request, a `request_dump_*.json` in `sessions/` carries the first 8 characters of the key (measured on 0.19.0).
 

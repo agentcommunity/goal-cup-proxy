@@ -25,6 +25,7 @@ hint_env = [
   "HF_BASE_URL", "XIAOMI_BASE_URL", "TOKENHUB_BASE_URL", "TOKENPLAN_BASE_URL", "OLLAMA_BASE_URL",
   "LM_BASE_URL", "COPILOT_API_BASE_URL", "COPILOT_ACP_BASE_URL",
 ]
+# Goal Cup copies none of these files and reads no key from them; host_hints reads only base-URL keys from config.yaml and .env.
 secret_files = ["{home}/.env", "{home}/auth.json", "{home}/.anthropic_oauth.json", "{home}/config.yaml"]
 native = [
   { name = "state", root = "{home}", pattern = "state.db*", form = "final" },
