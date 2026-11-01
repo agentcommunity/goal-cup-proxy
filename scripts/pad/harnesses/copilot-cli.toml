@@ -26,11 +26,13 @@ exit_keys = '/exit\r'
 keep_going = true
 
 [direct]
+model = "deepseek-flash"
 # No GitHub sign-in in the pad: COPILOT_OFFLINE stops its calls to GitHub, model calls still go to DeepSeek.
 env = { COPILOT_PROVIDER_TYPE = "anthropic", COPILOT_PROVIDER_BASE_URL = "https://api.deepseek.com/anthropic", COPILOT_MODEL = "deepseek-flash", COPILOT_PROVIDER_MAX_PROMPT_TOKENS = "840000", COPILOT_PROVIDER_MAX_OUTPUT_TOKENS = "128000", COPILOT_OFFLINE = "true" }
 
 [gateway]
+model = "deepseek/deepseek-v4.1-flash"
 # Vercel AI Gateway as the page writes it; the key (AI_GATEWAY_API_KEY's value) takes the same COPILOT_PROVIDER_API_KEY route.
-env = { COPILOT_PROVIDER_BASE_URL = "https://ai-gateway.vercel.sh/coding-agent/v1", COPILOT_MODEL = "openai/gpt-6-astra", COPILOT_OFFLINE = "true" }
+env = { COPILOT_PROVIDER_BASE_URL = "https://ai-gateway.vercel.sh/coding-agent/v1", COPILOT_MODEL = "deepseek/deepseek-v4.1-flash", COPILOT_OFFLINE = "true" }
 key_route = "env"
 key_env = "COPILOT_PROVIDER_API_KEY"

@@ -5,8 +5,9 @@ use serde_json::Value;
 
 /// A native session format this build reads: Codex `sessions:**/rollout-*.jsonl`, Claude Code
 /// `transcripts:**/*.jsonl`, the `meta:**/*.meta.json` snapshots, and Hermes's `state:state.db*`
-/// database copies (snapshot streams), and Gemini CLI's `chats:**/*.jsonl` session files (thread
-/// links only).
+/// database copies (snapshot streams), Gemini CLI's `chats:**/*.jsonl` session files (thread
+/// links only), and Hermes's delegation files: `task-<n>.log` plain-text logs (read by path only,
+/// never parsed) and the `manifest.json` snapshots (delegation id and task indexes).
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum Reader {
     CodexRollout,
@@ -14,6 +15,8 @@ pub(super) enum Reader {
     ClaudeMeta,
     HermesDb,
     GeminiChat,
+    HermesTask,
+    HermesManifest,
 }
 
 /// The reader of a native or snapshot stream by its connector and `meta.path` (`<row>:<rel>`).
@@ -25,6 +28,12 @@ pub(super) fn reader(connector: Option<&str>, path: &str) -> Option<Reader> {
         ("claude-code-cli", "transcripts", true) => Reader::ClaudeTranscript,
         ("claude-code-cli", "meta", _) if file.ends_with(".meta.json") => Reader::ClaudeMeta,
         ("hermes-cli", "state", _) if file.starts_with("state.db") => Reader::HermesDb,
+        ("hermes-cli", "delegation", _) if file.starts_with("task-") && file.ends_with(".log") => {
+            Reader::HermesTask
+        }
+        ("hermes-cli", "delegation-manifest", _) if file == "manifest.json" => {
+            Reader::HermesManifest
+        }
         ("gemini-cli", "chats", true) => Reader::GeminiChat,
         _ => return None,
     })

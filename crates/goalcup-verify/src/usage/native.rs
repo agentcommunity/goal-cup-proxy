@@ -25,6 +25,8 @@ pub(super) struct NativeLeg {
     pub(super) threads: Vec<Thread>,
     /// `Some` when any session file named its thread.
     pub(super) children: Option<BTreeMap<String, Vec<String>>>,
+    /// The children are delegation task logs and manifests, not calls.
+    pub(super) task_logs: bool,
     /// Codex `token_count` repeats (no larger running total), skipped.
     pub(super) repeats_skipped: u64,
     /// Child rollout lines timed before the child's own `session_meta` (copied parent records).
@@ -52,6 +54,10 @@ pub(super) struct Native {
     agents: BTreeMap<String, (String, Option<String>)>,
     /// Hermes database copies.
     sets: Sets,
+    /// Hermes delegation task log paths (plain text, never parsed), and the task indexes each
+    /// delegation manifest names, by delegation id.
+    tasks: BTreeSet<String>,
+    manifests: BTreeMap<String, BTreeSet<u64>>,
 }
 
 /// What a stream carries: a session file (path, gen), or a meta snapshot (`None` after a hole).
@@ -104,7 +110,11 @@ impl Native {
                 let Some(p) = m["path"].as_str() else { return };
                 let file = (p.to_string(), m["gen"].as_u64().unwrap_or(0));
                 let src = match (skind, hints::reader(ctx.connector.as_deref(), p)) {
-                    (StreamKind::Snapshot, Some(Reader::ClaudeMeta)) => {
+                    (StreamKind::Native, Some(Reader::HermesTask)) => {
+                        self.tasks.insert(file.0);
+                        return;
+                    }
+                    (StreamKind::Snapshot, Some(Reader::ClaudeMeta | Reader::HermesManifest)) => {
                         Src::Snap(file.0, Some(Vec::new()))
                     }
                     (StreamKind::Snapshot, Some(Reader::HermesDb)) => {
@@ -180,11 +190,29 @@ impl Native {
                 }
             }
             Record::End { sid, .. } => {
-                if let Some(Src::Snap(path, Some(buf))) = self.streams.remove(&key(sid))
-                    && let (Some(id), Some(session), _) = claude_thread(&path)
-                {
+                let Some(Src::Snap(path, Some(buf))) = self.streams.remove(&key(sid)) else {
+                    return;
+                };
+                let v = serde_json::from_slice(&buf).unwrap_or(Value::Null);
+                if hints::reader(ctx.connector.as_deref(), &path) == Some(Reader::HermesManifest) {
+                    // Keyed by the folder, as the task logs are (else the delegation id).
+                    let d = hermes_dir(&path).or_else(|| id_at(&v, "/delegation_id"));
+                    let n = v["task_count"].as_u64().unwrap_or(0);
+                    let mut all: BTreeSet<u64> = v["tasks"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .filter_map(|t| t["index"].as_u64())
+                        .collect();
+                    // A list with no usable index still names `task_count` tasks.
+                    if all.is_empty() {
+                        all = (0..n).collect();
+                    }
+                    if let Some(d) = d {
+                        self.manifests.entry(d).or_default().extend(all);
+                    }
+                } else if let (Some(id), Some(session), _) = claude_thread(&path) {
                     // A later snapshot that gives no `agentType` keeps the earlier one.
-                    let v = serde_json::from_slice(&buf).unwrap_or(Value::Null);
                     let a = self.agents.entry(id).or_insert((session, None));
                     a.1 = id_at(&v, "/agentType").or(a.1.take());
                 }
@@ -267,6 +295,24 @@ impl Native {
             (t.label, t.depth) = (label.or(t.label.take()), t.depth.or(Some(1)));
             kids.entry(session).or_default().insert(id);
         }
+        // Hermes: a task log is a readable thread under its delegation (depth 1); a task only a
+        // manifest names is a child with no thread of its own (created below, `NoNative`).
+        let hermes = !self.tasks.is_empty() || !self.manifests.is_empty();
+        let task_id = |d: &str, n: u64| format!("{d}/task-{n}");
+        for path in &self.tasks {
+            let Some((d, n)) = hermes_task(path) else {
+                continue;
+            };
+            let id = task_id(&d, n);
+            let t = threads.entry(id.clone()).or_insert_with(|| named(&id));
+            (t.reason, t.parent, t.depth) = (None, Some(d.clone()), Some(1));
+            kids.entry(d).or_default().insert(id);
+        }
+        for (d, ns) in &self.manifests {
+            for &n in ns {
+                kids.entry(d.clone()).or_default().insert(task_id(d, n));
+            }
+        }
         // A thread only a spawn or a meta snapshot names still gets its entry and parent.
         for (p, cs) in &kids {
             for c in cs {
@@ -294,11 +340,21 @@ impl Native {
         });
         kids.retain(|_, v| !v.is_empty());
         let list = |(k, v): (String, BTreeSet<String>)| (k, v.into_iter().collect());
+        let children = if !owner.is_empty() || hermes {
+            // state.db children are the same subagents under other ids: the task files win.
+            if !hermes {
+                for (k, v) in h.children {
+                    kids.entry(k).or_default().extend(v);
+                }
+            }
+            Some(kids.into_iter().map(list).collect())
+        } else {
+            (!h.threads.is_empty()).then_some(h.children)
+        };
         NativeLeg {
             rows: rows.chain(h.rows.into_iter().map(|r| (r, None))).collect(),
-            children: (!owner.is_empty())
-                .then(|| kids.into_iter().map(list).collect())
-                .or((!h.threads.is_empty()).then_some(h.children)),
+            children,
+            task_logs: hermes,
             threads: threads.into_values().chain(h.threads).collect(),
             repeats_skipped,
             copied_skipped,
@@ -501,6 +557,23 @@ fn gemini_thread(path: &str, sid: Option<&str>) -> (Option<String>, Option<Strin
         Some(dir) => (stem(file), hints::id(dir)),
         None => (sid.and_then(hints::id).or_else(|| stem(file)), None),
     }
+}
+
+/// The Hermes delegation folder of a path `<row>:<…>/<delegation>/<file>`.
+fn hermes_dir(path: &str) -> Option<String> {
+    let rel = path.split_once(':').map_or(path, |p| p.1);
+    hints::id(rel.rsplit('/').nth(1)?)
+}
+
+/// The Hermes subagent of a task log path `delegation:<…>/<delegation>/task-<n>.log`:
+/// (delegation id, task index). Hermes `tools/delegation_live_log.py`.
+fn hermes_task(path: &str) -> Option<(String, u64)> {
+    let n = path
+        .rsplit('/')
+        .next()?
+        .strip_prefix("task-")?
+        .strip_suffix(".log")?;
+    Some((hermes_dir(path)?, n.parse().ok()?))
 }
 
 /// The 8 hex digits that end a main Gemini chat file stem (the start of its session id).

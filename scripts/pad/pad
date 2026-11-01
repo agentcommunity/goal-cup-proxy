@@ -65,6 +65,11 @@ def read_toml(path):
         return tomllib.load(f)
 
 
+def pinned_model(harness, case):
+    """The main model the harness toml pins for this case (the dodger case uses the direct section), or None."""
+    got = (harness.get("gateway" if case == "gateway" else "direct") or {}).get("model")
+    return got if isinstance(got, str) and got else None
+
 def hidden():
     """The values the pad never shows: the conductor's organizer secrets and the parts of DATABASE_URL (host, user,
     password), read from the environment at call time. Empty and very short parts are skipped."""
@@ -833,6 +838,7 @@ class Run:
                            server=s["server"], keep=s["keep"], minutes=s["minutes"],
                            started=at, push="not tested", pad_trusted_at=None, steps=[list(ln) for ln in self.lines],
                            hosts_sha256=self.hosts_sha, model_host=self.harness.get("model_host"),
+                           pinned_model=pinned_model(self.harness, self.case),
                            redacts_tool_output=self.harness.get("redacts_tool_output") is True,
                            redacts_kinds=list(self.harness.get("redacts_kinds") or [])),
                       f, indent=1, sort_keys=True)

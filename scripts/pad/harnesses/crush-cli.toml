@@ -22,10 +22,12 @@ exit_keys = '\003\003'
 keep_going = true
 
 [direct]
+model = "deepseek-flash"
 # XDG_CONFIG_HOME is {home}/.config, so this is Crush's global crush.json.
 files = { ".config/crush/crush.json" = "direct/crush-cli-config.json" }
 
 [gateway]
+model = "deepseek/deepseek-v4.1-flash"
 files = { ".config/crush/crush.json" = "gateway/crush-cli-config.json" }
 key_route = "env"
 key_env = "VERCEL_API_KEY"

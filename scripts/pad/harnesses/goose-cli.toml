@@ -17,5 +17,6 @@ exit_keys = '/exit\r'
 keep_going = true
 
 [direct]
+model = "deepseek-flash"
 # GOOSE_PATH_ROOT is {home}, so config.yaml is {home}/config/config.yaml.
 files = { "config/config.yaml" = "direct/goose-cli-config.yaml" }

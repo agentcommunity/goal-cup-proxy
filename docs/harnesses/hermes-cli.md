@@ -3,6 +3,7 @@
 Connector id: `hermes-cli` · Facts for version: `0.22.5` · Written by: Goal Cup team · Last checked: 2026-11-01
 Public disclosure: yes. Facts come from Nous Research's public Hermes docs and source at tag `v0.22.5`, the project's release page, and Goal Cup runs on macOS in October 2026. No keys, tokens, account names or personal paths are included.
 Status: shipped connector ([`connectors/hermes-cli.toml`](../../connectors/hermes-cli.toml))
+Not recorded: Hermes session database: not copied (search index).
 
 Source words: "docs" is [hermes-agent.nousresearch.com/docs](https://hermes-agent.nousresearch.com/docs/user-guide/configuration) (configuration and reference/cli-commands pages) as read on 2026-10-31; "source" is the public repository at `v0.22.5`; "measured" is a Goal Cup run, on 0.19.0 or 0.22.5 as each line says; "unknown" is not measured or read. Releases are git tags; PyPI stops at 0.19.0.
 
@@ -24,7 +25,7 @@ Source words: "docs" is [hermes-agent.nousresearch.com/docs](https://hermes-agen
 | | macOS | Linux | Windows |
 |---|---|---|---|
 | Config dir | `$HERMES_HOME`, default `~/.hermes`: `config.yaml`, `.env`, `auth.json`, `.anthropic_oauth.json` ([docs](https://hermes-agent.nousresearch.com/docs/user-guide/configuration); measured) | same (docs; Docker uses `/opt/data`) | unknown |
-| Session store | `$HERMES_HOME/state.db`, SQLite in WAL mode, with `-wal` and `-shm`; every session ever run in the home is in it (docs; source) | same | unknown |
+| Session store | `$HERMES_HOME/state.db`, SQLite in WAL mode, with `-wal` and `-shm`; every session ever run in the home is in it (docs; source). Not copied (section 4) | same | unknown |
 | Subagent logs | `cache/delegation/live/<id>/task-<n>.log` and `manifest.json`, pruned after 7 days, redacted by Hermes before writing (source) | same | unknown |
 | Logs / cache | `logs/agent.log`, rotated at 5 MiB times 3 (docs) | same | unknown |
 | Env vars that move these | `HERMES_HOME` moves all of the above (measured); `-p`/`--profile` switches it (source) | same | unknown |
@@ -33,14 +34,16 @@ The connector sets `HERMES_HOME` to the isolated home and leaves `HOME` alone.
 
 ## 4. Session format and identity
 
-- `state.db` has `sessions`, `messages`, usage and `async_delegations` tables (schema 32 at v0.22.5, source). Hermes 0.21.1 and later write no `session_<id>.json` snapshot (source), so a run on 0.22.5 has no per-session file; its model calls are recorded on the wire. The connector copies `state.db*` as a set when the run ends (`final`).
-- A `delegate_task` child is a row with `parent_session_id` set, in the same database, and also has a log under `cache/delegation/live/`. The connector reads `task-*.log` as it grows and copies each `manifest.json` as a snapshot; both may match nothing when no subagent runs, which is not a warning.
+- `state.db` has `sessions`, `messages`, usage and `async_delegations` tables (schema 32 at v0.22.5, source). Hermes 0.21.1 and later write no `session_<id>.json` snapshot (source), so a run on 0.22.5 has no per-session file; its model calls are recorded on the wire. The connector does not copy `state.db`. Hermes keeps its full-text search index (`messages_fts` and `messages_fts_trigram`, each with `_data`, `_idx`, `_docsize` and `_config` shadow tables and sync triggers) inside that one file (source: `hermes_state.py`), so terms stored out of context cannot be masked: measured in full4, a planted password sat raw in `state.db` and in its WAL. There is no setting that turns the index off and no separate index file (measured at v0.22.5 in a keyless box: `SessionDB()` in an empty `HERMES_HOME`; the only toggle found, `cjk_fts`, adds a third index), and the native capture copies files whole.
+- Kept: every model call on the wire, the delegation `manifest.json` snapshots and `task-*.log` files. Not in the record: the `sessions`, `messages`, usage and `async_delegations` tables, so Hermes's own per-session totals and `parent_session_id` links. Hermes subagents are shown by their delegation task logs (`cache/delegation/live` `task-*.log` and `manifest.json`), not tied to individual calls, and per-thread usage is not measured (PRD-08 reads them).
+- A `delegate_task` child is a row with `parent_session_id` set in `state.db` (not copied), and also has a log under `cache/delegation/live/`. The connector reads `task-*.log` as it grows and copies each `manifest.json` as a snapshot; both may match nothing when no subagent runs, which is not a warning.
 - The session id is `YYYYMMDD_HHMMSS_<six hex>` (source). Hermes prints it in the banner; the connector does not read the terminal.
 
 ## 5. Auth
 
-- About 40 providers. A key goes in `$HERMES_HOME/.env` (mode 0600; secrets only); the provider and model go in `config.yaml` as `model.provider`, `model.default` and `model.base_url` (docs). OAuth providers keep tokens in `auth.json`; Hermes can also borrow credentials from `~/.codex/auth.json` and `~/.claude/.credentials.json` (source). The connector lists `.env`, `auth.json`, `.anthropic_oauth.json` and `config.yaml` as secret files.
+- About 40 providers. A key goes in `$HERMES_HOME/.env` (mode 0600; secrets only); the provider and model go in `config.yaml` as `model.provider`, `model.default` and `model.base_url` (docs). OAuth providers keep tokens in `auth.json`; Hermes can also borrow credentials from `~/.codex/auth.json` and `~/.claude/.credentials.json` (source). Goal Cup supplies, stores and uploads no key. Hermes starts with your own shell environment (proxy variables replaced) and its own home files, so it finds your key where it always does. The home files are the connector's isolated `HERMES_HOME`, which the setup wizard fills once in `goalcup setup`, so a key kept only in your normal `~/.hermes` is not seen until setup writes it there. Goal Cup reads only base-URL settings from `config.yaml` and `.env` to name hosts.
 - Does the harness have a variable that moves its config and login? Yes, `HERMES_HOME`; the connector sets it. The participant's setup wizard writes into that home once, in `goalcup setup`.
+- The first screen tells the participant: "Your key is found where Hermes always finds it, and Goal Cup stores and uploads no key." and "Subagents are shown by their task logs, not tied to single calls, and per-thread usage is not measured."
 - A credential-pool entry in `auth.json` keeps `secret_fingerprint`, the first 16 hex digits of the key's SHA-256, and not the key (source). After a failed request, a `request_dump_*.json` in `sessions/` carries the first 8 characters of the key (measured on 0.19.0).
 
 ## 6. Network
@@ -67,7 +70,7 @@ The connector sets `HERMES_HOME` to the isolated home and leaves `HOME` alone.
 
 - `agent.max_turns` defaults to 90 steps; Hermes then waits at the prompt. Raise it in `config.yaml` before a long run ([HARNESS-SETUP](../HARNESS-SETUP.md#hermes)).
 - The first start downloads a command scanner from GitHub unless `security.tirith_enabled: false`; with the network refused it prints a warning (measured on 0.19.0).
-- Open: whether Hermes's Anthropic, Gemini-native, Bedrock and Vertex adapters use the process-wide trust setting; delegation, `SSL_CERT_FILE` with a full bundle, and `hermes chat --continue` after a home switch, all on 0.22.5; the Linux and Windows paths; whether `state.db` message rows are redacted; failure exit codes.
+- Open: whether Hermes's Anthropic, Gemini-native, Bedrock and Vertex adapters use the process-wide trust setting; delegation, `SSL_CERT_FILE` with a full bundle, and `hermes chat --continue` after a home switch, all on 0.22.5; the Linux and Windows paths; whether delegation task logs hold text outside masking shapes: not measured; failure exit codes.
 
 ## Run without permission prompts
 

@@ -22,9 +22,11 @@ keep_going = true
 # No daemon: PRD-11 names none for OpenClaw. Its subagents need a Gateway that 1.0 does not start (PRD-11 ledger OW-10).
 
 [direct]
+model = "deepseek-flash"
 files = { ".openclaw/openclaw.json" = "direct/openclaw-cli-config.json" }
 
 [gateway]
+model = "deepseek/deepseek-v4.1-flash"
 files = { ".openclaw/openclaw.json" = "gateway/openclaw-cli-config.json" }
 key_route = "file"
 key_file = "{home}/.openclaw/.env"
