@@ -19,12 +19,14 @@ model_host = "api.deepseek.com"
 # Basis, stated plainly: https://hermes-agent.nousresearch.com/docs/user-guide/security, section "Credential Redaction", says
 # error messages from MCP tools are sanitized before they go back to the LLM, matches replaced by [REDACTED], for GitHub
 # tokens (ghp_...), OpenAI-style keys (sk-...), Bearer tokens and token=/key=/API_KEY=/password=/secret= parameters. It names no
-# redaction of ordinary tool output and no jwt, private_key or url_password shape, so check.py puts the "may be masked before
-# the wire" note only on the openai, github and key=/token= kinds; the other kinds stay "not exercised". docs/harnesses/
-# hermes-cli.md:28 (redacted delegation task logs) is about Hermes's own log files. The full3 record held 28 and 190
-# masked_key masks (the masker's rule for Hermes's own redacted form), which is the exercise evidence C3 asks for. C3 stays
-# INCONCLUSIVE with a stated loss, never PASS. pad copies this to the row meta under the same name.
+# redaction of ordinary tool output and no jwt, private_key or url_password shape; docs/harnesses/hermes-cli.md:28 (redacted
+# delegation task logs) is about Hermes's own log files. check.py reads the flag as: with no hit and no stated loss, a planted
+# kind with no MASK is a C3 PASS "masked upstream" only when the run shows the exercise (a masked_key MASK, the masker's rule
+# for Hermes's own redacted form; the full3 record held 28 and 190), else C3 stays INCONCLUSIVE. Such a PASS does not count
+# toward --release-check until the owner confirms the rule (point 4). pad copies this to the row meta under the same name.
 redacts_tool_output = true
+# The planted kinds the vendor rule above names (sk- and ghp_ shapes); only these can pass as masked upstream.
+redacts_kinds = ["openai_key", "github_token"]
 ready_text = "Type your message or /help"
 ready_wait = 120
 exit_keys = '/exit\r'
