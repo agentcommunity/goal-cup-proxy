@@ -200,6 +200,24 @@ class BoxHalf(unittest.TestCase):
             self.assertNotIn(form, safe)
         self.assertIn("[known:2]", safe)
 
+    def test_key_tail_a_harness_shows_is_replaced(self):  # point 4: Claude Code shows the last 20 characters of the key
+        v = "sk-ant-api03-" + "Zq7xLm2VbN8cRt4HwK1d" + "PADTAIL0123456789abcd"
+        shown = "Use this API key?  ...%s  (No / Yes)" % v[-20:]
+        safe, n = padrun.replace_known(shown + " " + v[-12:], [v])
+        self.assertNotIn(v[-20:], safe)
+        self.assertNotIn(v[-12:], safe)
+        self.assertGreaterEqual(n, 2)
+
+    def test_provider_file_keeps_the_rows_setup_wrote(self):  # Codex needs approval_policy and sandbox_mode from setup
+        old = 'approval_policy = "never"\nsandbox_mode = "danger-full-access"\n[projects."/p"]\ntrust_level = "trusted"\n'
+        new = 'model = "m"\nmodel_reasoning_effort = "low"\n'
+        out = padrun.merge_config("config.toml", old, new)
+        for row in ('approval_policy = "never"', 'sandbox_mode = "danger-full-access"', 'model = "m"', 'trust_level = "trusted"'):
+            self.assertIn(row, out)
+        self.assertLess(out.index('model = "m"'), out.index("[projects"))  # top-level rows stay above the tables
+        merged = json.loads(padrun.merge_config("a.json", json.dumps({"x": {"a": 1}, "k": 1}), json.dumps({"x": {"b": 2}})))
+        self.assertEqual(merged, {"x": {"a": 1, "b": 2}, "k": 1})
+
     def launch(self, steps=()):
         """launch.sh as start writes it for an env-route key, and the argv start passed to its fake tmux."""
         run = self.enterContext(tempfile.TemporaryDirectory())
