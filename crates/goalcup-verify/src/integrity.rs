@@ -142,7 +142,7 @@ impl Recount {
         sat([&mut self.off_spans], [o.off_spans]);
     }
     /// The COUNT keys as JSON, to compare with a COUNT event or the seal's `totals`.
-    fn json(&self) -> Map<String, Value> {
+    pub(crate) fn json(&self) -> Map<String, Value> {
         let mut m: Map<String, Value> = COUNTERS
             .split_whitespace()
             .map(|k| (k.into(), self.get(k).into()))

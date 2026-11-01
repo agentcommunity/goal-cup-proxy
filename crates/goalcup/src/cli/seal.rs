@@ -1,16 +1,19 @@
 //! `goalcup seal [PART] [--yes]` (PRD-10 section 1): ask, then tell PRD-02 to end the part, wait
 //! for the seal and print the end screen. The harness is never signalled here and descendants are
 //! never chased: the watchdog ends them (seam S8). Only written counts are read, from `status.json`.
-//! A part whose recorder and watchdog are both gone is refused here; closing such a dead entry
-//! first (`pipeline::close_dead_entry`) is not built yet and comes with the `continue` slice.
+//! A part whose recorder and watchdog are both gone is closed here by `pipeline::close_dead_entry`;
+//! a harness still running there is left running.
 
 use std::io::{BufRead as _, IsTerminal as _};
 use std::process::ExitCode;
 use std::thread::sleep;
 use std::time::{Duration, Instant};
 
-use super::{alive, fail, find, home, read_json, say, status_json, text, time_left, watchdog_pid};
+use super::{
+    alive, broke, fail, find, home, read_json, say, status_json, text, time_left, watchdog_pid,
+};
 use crate::pipeline::status::{Mode, Status};
+use crate::pipeline::{Closed, close_dead_entry};
 
 const POLL: Duration = Duration::from_millis(200);
 const NOTICE_EVERY: Duration = Duration::from_secs(10);
@@ -38,10 +41,10 @@ pub fn run(part: Option<String>, yes: bool) -> ExitCode {
         return fail(&text::seal_already(&found.run));
     }
     // The watchdog takes SIGUSR1; with none, the recorder takes SIGTERM and seals as `signal`.
-    let (pid, start_id, signal) = match watchdog_pid(&dir).filter(|&(p, s)| alive(p, s)) {
-        Some((p, s)) => (p, s, libc::SIGUSR1),
-        None if alive(st.pid, st.start_id) => (st.pid, st.start_id, libc::SIGTERM),
-        None => return fail(&text::seal_not_running(&found.run)),
+    let target = match watchdog_pid(&dir).filter(|&(p, s)| alive(p, s)) {
+        Some((p, s)) => Some((p, s, libc::SIGUSR1)),
+        None if alive(st.pid, st.start_id) => Some((st.pid, st.start_id, libc::SIGTERM)),
+        None => None,
     };
     let name = found
         .server
@@ -62,6 +65,9 @@ pub fn run(part: Option<String>, yes: bool) -> ExitCode {
         .harness
         .as_ref()
         .is_some_and(|h| h.exit.is_none() && alive(h.pid, h.start_id));
+    let Some((pid, start_id, signal)) = target else {
+        return seal_dead(&found, name, harness_ran);
+    };
     // Only the watchdog ends the harness; the recorder alone, on SIGTERM, does not.
     let watchdog_ends_it = signal == libc::SIGUSR1;
     if let Ok(p) = libc::pid_t::try_from(pid) {
@@ -101,8 +107,34 @@ pub fn run(part: Option<String>, yes: bool) -> ExitCode {
     }
 }
 
-/// [`say`], then exit code 3: goalcup could not do its job.
-fn broke(text: &str) -> ExitCode {
-    say(text);
-    ExitCode::from(3)
+/// A dead entry: close it with seal reason `recovered`, show the end screen as after a live seal,
+/// then send it (as `goalcup upload` does). The screen comes first: a server that is down makes the
+/// upload wait with no cap of its own, and the participant has had their counts by then. A harness
+/// still running is not signalled.
+fn seal_dead(found: &super::Found, name: &str, harness_ran: bool) -> ExitCode {
+    let (dir, run) = (found.entry_dir(), found.run.as_str());
+    match close_dead_entry(&dir) {
+        Err(_) => return fail(&text::seal_still_recording(run)),
+        Ok(Closed::AlreadySealed) => return fail(&text::seal_already(run)),
+        Ok(Closed::Failed(_)) => return broke(&text::seal_could_not()),
+        Ok(Closed::Sealed(_)) => {}
+    }
+    let Ok(screen) = super::finish::end_screen(&dir) else {
+        return broke(&text::seal_could_not());
+    };
+    if harness_ran {
+        println!("{}", text::seal_dead_harness_left(name));
+    }
+    print!("{screen}");
+    // What the server does not hold stays on disk and `goalcup upload` sends it later.
+    if found.server.as_ref().is_some_and(|s| s.server.is_some()) {
+        say(text::SEAL_SENDING);
+    }
+    let keep = super::var("GOALCUP_KEEP_PARTS").is_some_and(|v| v == "1");
+    let out = crate::upload::manual::run(&dir, &found.run_dir, (run, &found.entry), keep);
+    println!(
+        "{}",
+        super::upload::outcome_line(&dir, &out, &found.entry, run)
+    );
+    ExitCode::SUCCESS
 }

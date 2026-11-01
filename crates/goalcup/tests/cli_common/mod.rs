@@ -5,6 +5,7 @@
 #![allow(dead_code)]
 
 use std::path::{Path, PathBuf};
+use std::process::{Child, Command};
 
 use goalcup::cli::status::Ctx;
 use goalcup::pipeline::status::{DurableStatus, Losing, Mode, Off, STATUS_V, Status, Written};
@@ -89,5 +90,27 @@ pub fn live(recorder: bool, watchdog: bool, harness: bool, age: u64) -> Ctx<'sta
         harness,
         deadline: Some(T0 + 86_400),
         now: T0 + age,
+    }
+}
+
+/// A stand-in process, killed when dropped.
+pub struct Stand(pub Child);
+
+impl Stand {
+    /// A process that only sleeps.
+    pub fn new() -> Stand {
+        Stand(Command::new("sleep").arg("60").spawn().unwrap())
+    }
+
+    /// The `pid` and `start_id` of this process, as `status.json` names a live one.
+    pub fn alive_as(&self) -> Value {
+        json!({"pid": self.0.id(), "start_id": goalcup::cli::proc_start_id(self.0.id()).unwrap()})
+    }
+}
+
+impl Drop for Stand {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
     }
 }

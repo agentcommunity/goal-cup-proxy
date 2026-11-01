@@ -434,11 +434,17 @@ class Run:
                          stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         return "ok", "recording, %s pasted%s" % ("first message" if first else "prompt", "" if bracketed else ", lines joined")
 
+    def work(self, st=None):
+        """The harness's work so far: model calls written, or for a dodger the tunnels pinned to its model host (S4)."""
+        return pc.work(self.status() if st is None else st, self.s.get("case"), self.h.get("model_host"))
+
     def wait_calls(self, n):
         self.need("goalcup", started=True)
+        dodger = self.s.get("case") == "dodger"
         while True:  # every 5 s until pad's limit; the watch writes status.jsonl
-            if (got := pc.dig(self.status(), "s4_requests") or 0) >= int(n):
-                return "ok", "%d model calls written" % got
+            # a dodger writes no model call by design; one pinned tunnel counts (a pinning client may hold one long tunnel)
+            if (got := self.work() or 0) >= (1 if dodger else int(n)):
+                return "ok", ("%d pinned tunnels to %s" % (got, self.h.get("model_host")) if dodger else "%d model calls written" % got)
             if self.left() < 5:
                 raise Step("timeout", "the harness did no work")
             time.sleep(5)
@@ -576,26 +582,31 @@ class Run:
             raise Step("timeout", "%s %s killed at the step's limit" % (kind, name))
         return ("ok", "%s %s exit 0" % (kind, name)) if code == 0 else ("FAIL", "%s %s exit %d" % (kind, name, code))
 
-    def kill_rec(self, m):
+    def kill_rec(self, m, quiet=False):
         """kill9 of the recorder in status.json; saves what wait-recovery compares against -> (pid or None, seconds
         since the last written request or None)."""
         st = self.status()
         pid, last = pc.dig(st, "s4_pid"), pc.when(pc.dig(st, "s4_last"))
         since = round(time.time() - last.timestamp(), 1) if last else None
+        t0 = time.time()
         if ok := kill9(pid):
-            self.st["kill"] = dict(pid=pid, at=time.time(), requests=pc.dig(st, "s4_requests"), off_spans=pc.dig(st, "s4_spans"),
-                                   off_ms=pc.dig(st, "s4_down_ms"))
-        self.fault("kill-recorder", minute=m, pid=pid if ok else None, since_request_s=since)
+            self.st["kill"] = dict(pid=pid, at=t0, requests=self.work(st), off_spans=pc.dig(st, "s4_spans"),
+                                   off_ms=pc.dig(st, "s4_down_ms"), quiet=quiet)
+        self.fault("kill-recorder", minute=m, pid=pid if ok else None, since_request_s=since, quiet=quiet or None,
+                   killed_at=datetime.datetime.fromtimestamp(t0, datetime.timezone.utc).isoformat(timespec="milliseconds"))
         return (pid if ok else None), since
 
-    def kill_recorder(self, m):  # section 3.1; S4 has no open-stream count yet: wait up to 60 s for a request in the last 10 s
+    def kill_recorder(self, m):  # section 3.1: kill while work is in flight
         self.need("goalcup", started=True)
         self.at(m)
-        wait(lambda: (t := pc.when(pc.dig(self.status(), "s4_last"))) is not None and time.time() - t.timestamp() < 10, 60, 1)
-        pid, since = self.kill_rec(m)
+        # the recorder rewrites status.json every second (pipeline/status.rs), so a 0.5 s poll never trails the write
+        base = self.work() or 0
+        quiet = not wait(lambda: (self.work() or 0) > base, 60, 0.5)  # quiet if no new work within 60 s
+        pid, since = self.kill_rec(m, quiet)
         if not pid:
             raise Step("FAIL", "no live goalcup recorder pid in status.json")
-        return "ok", "recorder %d killed %s" % (pid, "no request written yet" if since is None else "%g s after a written request" % since)
+        return "ok", "recorder %d killed; %s" % (pid, "no request in flight at the kill" if quiet else
+                                                  "%g s after a written request" % since)
 
     def wait_recovery(self, _):
         if not (k := self.st.get("kill")):
@@ -603,18 +614,24 @@ class Run:
 
         def missing():
             st = self.status()
-            n = pc.dig(st, "s4_requests")
+            n = self.work(st)
             return [w for w, bad in (("a new recorder pid", pc.dig(st, "s4_pid") in (None, k["pid"])),
                                      ("mode recording", pc.dig(st, "s4_mode") != "recording"),
                                      ("one closed recorder_down gap", (pc.dig(st, "s4_spans") or 0) != (k["off_spans"] or 0) + 1
                                       or pc.dig(st, "s4_since")),
-                                     ("a new model request", type(n) is not int or n <= (k["requests"] or 0))) if bad]
+                                     ("a new model request", not k.get("quiet")  # a quiet kill is judged on the first three only
+                                      and (type(n) is not int or n <= (k["requests"] or 0)))) if bad]
         if not wait(lambda: not missing(), self.left(), 2):
             raise Step("FAIL", "did not stand back up: missing " + ", ".join(missing()))
+        if k.get("quiet"):  # a short bounded wait for new work; none is not a failure
+            wait(lambda: (self.work() or 0) > (k["requests"] or 0), min(30, self.left()), 2)
         st = self.status()
-        return "ok", "recorder %s up in %.1f s, one recorder_down gap %s ms, calls %s > %s" % (
-            pc.dig(st, "s4_pid"), time.time() - k["at"], (pc.dig(st, "s4_down_ms") or 0) - (k["off_ms"] or 0),
-            pc.dig(st, "s4_requests"), k["requests"])
+        n = self.work(st) or 0
+        saw = "recorder %s back %.1f s after the kill, gap %s ms, work %s > %s" % (
+            pc.dig(st, "s4_pid"), time.time() - k["at"], (pc.dig(st, "s4_down_ms") or 0) - (k["off_ms"] or 0), n, k["requests"])
+        if k.get("quiet") and n <= (k["requests"] or 0):
+            raise Step("INCONCLUSIVE", "quiet kill: no new request to show; " + saw)
+        return "ok", saw
 
     def kill_wd(self, m):  # kill9 of the pid in rec/watchdog.pid, at minute m -> the pid, or a FAIL when none was hit
         self.need("goalcup", started=True, entry=True)

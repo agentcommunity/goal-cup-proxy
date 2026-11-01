@@ -1493,3 +1493,7 @@ the HARNESS-ONBOARDING pointer; `docs/README.md` is deleted and `CONTRACTS`, `TE
     late-frames clause from row 11 and leave a pointer to row 4, which carries the rule.
   - ARCHITECTURE: re-wrap the PUSH_PROMISE sentence to the file width. No content change.
 - No seam change; no locked ledger item is touched.
+
+### 2026-11-01, note from PRD-10 slice 11 (merge 64cf49ac)
+
+`goalcup continue` and `goalcup recover` are built. Remove the "not built yet" lines in ARCHITECTURE.md (lines 74, 80), CONNECTOR-SCHEMA.md (line 99) and the PARTICIPANT-GUIDE.md build-state banner, and describe both from the PRD-10 text. No locked ledger item is touched.

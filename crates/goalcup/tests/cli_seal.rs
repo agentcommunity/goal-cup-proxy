@@ -202,3 +202,54 @@ fn a_sealed_or_absent_part_is_refused() {
     };
     one_error_line(&empty.goalcup(&["seal", "--yes"], false));
 }
+
+/// A dead entry: an unsealed part file, a status naming no live recorder, `rec/lock` free. A
+/// stand-in harness runs on; it traps every signal it would be sent.
+fn dead_world(w: &World, harness: &Stand) {
+    let dir = w.dir();
+    common::records::open(
+        &dir.join("rec"),
+        &[goalcup_format::Record::Event {
+            t: 1,
+            json: br#"{"ev":"x"}"#.to_vec(),
+        }],
+    );
+    let st = with(
+        Mode::Recording,
+        json!({"harness": {"pid": harness.0.id(), "start_id": harness.start_id(),
+            "started": "2026-11-07T10:00:00Z", "exit": null}}),
+    );
+    put(&dir, "status.json", &st);
+}
+
+#[test]
+fn a_dead_entry_is_sealed_as_recovered_and_the_harness_is_left_alone() {
+    let w = World::new(Mode::Recording);
+    let harness = stand_in(w.scratch.path(), "h", "USR1 TERM INT HUP", &w.notes());
+    dead_world(&w, &harness);
+    let out = w.goalcup(&["seal", "--yes"], false);
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(w.sealed());
+    let text = std::fs::read_to_string(w.status()).unwrap();
+    assert!(text.contains("\"reason\":\"recovered\""), "{text}");
+    std::thread::sleep(Duration::from_millis(300));
+    assert!(!w.hit(), "the harness was signalled");
+}
+
+#[test]
+fn a_dead_entry_whose_lock_is_held_is_still_recording() {
+    use std::os::fd::AsRawFd as _;
+    let w = World::new(Mode::Recording);
+    let harness = stand_in(w.scratch.path(), "h", "USR1 TERM", &w.notes());
+    dead_world(&w, &harness);
+    let lock = std::fs::File::create(w.dir().join("rec").join("lock")).unwrap();
+    // SAFETY: `lock` is open for the whole test.
+    assert_eq!(unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX) }, 0);
+    one_error_line(&w.goalcup(&["seal", "--yes"], false));
+    assert!(!w.sealed());
+}
