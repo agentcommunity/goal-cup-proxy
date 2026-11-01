@@ -21,13 +21,20 @@
 //! `GH_TOKEN` (1), the credential-named variables of the harness environment goalcup builds
 //! (2, [`env_values`]) and the other credential-named values of the project's key files (3).
 //! Sources 2 and 3 pass the one name gate ([`gated`]). A harness key-file value (source 4) is
-//! not built: it is left out and counted in `skipped`. Values are taken in that order, a value
-//! equal to an earlier one is dropped uncounted, and past [`MAX_VALUES`] used values the rest
-//! are counted in `skipped`.
+//! not built: it is left out and counted in `skipped`.
+//!
+//! Order and the cut: the readers ([`workspace_values`], [`launch_values`]) take `GH_TOKEN`
+//! first, then the other key-file values, then the environment values, so the values the
+//! participant keeps in `.env` win the cut on a busy shell. In the reader, before anything
+//! reaches the first control line, a value equal to an earlier one is dropped uncounted, the
+//! first [`MAX_VALUES`] distinct values are kept, and the number left out travels as one
+//! count-only entry ([`SecretValue::left_out`]) that [`RunSecrets::new`] adds to `skipped`.
+//! So the first control line holds at most 33 entries of at most 256 bytes each, far below
+//! `watchdog::MAX_LINE`, whatever the size of the key files.
 
 use super::{SecretValue, ValueCounts, ValueSource};
 use regex::bytes::Regex;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::path::Path;
 
 /// The shortest value used: a shorter one yields forms common in ordinary data.
@@ -241,14 +248,19 @@ impl std::fmt::Debug for RunSecrets {
 }
 
 impl RunSecrets {
-    /// The forms of `values`, compiled, and the counts for the start event. A value equal to an
-    /// earlier one is dropped and counted nowhere. A harness value (source 4, not built), an
+    /// The forms of `values`, compiled, and the counts for the start event. A count-only entry
+    /// ([`SecretValue::left_out`], the readers' cut) adds its count to `skipped` and is otherwise
+    /// ignored. A value equal to an earlier one is dropped and counted nowhere. A harness value (source 4, not built), an
     /// unusable value, one of whose forms does not compile, and every value past [`MAX_VALUES`]
     /// used values is left out and counted in `skipped`.
     pub(crate) fn new(values: &[SecretValue]) -> (RunSecrets, ValueCounts) {
         let mut counts = ValueCounts::default();
         let mut forms: Vec<(Vec<u8>, Regex)> = Vec::new();
         for (i, value) in values.iter().enumerate() {
+            if value.left_out > 0 {
+                counts.skipped = counts.skipped.saturating_add(value.left_out);
+                continue;
+            }
             if values[..i]
                 .iter()
                 .any(|earlier| earlier.bytes() == value.bytes())
@@ -307,10 +319,11 @@ const TOKEN_VARIABLE: &str = "GH_TOKEN";
 const TOKEN_FILE: &str = ".env.local";
 
 /// The exact values of the project at `project`: the `GH_TOKEN` value first (source 1), then
-/// every other credential-named value of its key files (source 3), all `workspace`.
+/// every other credential-named value of its key files (source 3), all `workspace`. Deduped and
+/// cut at [`MAX_VALUES`] here, before the first control line ([`finish`]).
 pub fn workspace_values(project: &Path) -> Vec<SecretValue> {
     let (token, others) = key_file_values(project);
-    token.into_iter().chain(others).collect()
+    finish(token.into_iter().chain(others))
 }
 
 /// The credential-named variables of `env`, the environment goalcup builds for the harness
@@ -322,15 +335,37 @@ pub fn env_values(env: &BTreeMap<String, String>) -> Vec<SecretValue> {
         .collect()
 }
 
-/// Every exact value of a launch in section 9 order: `GH_TOKEN`, the environment values, then
-/// the other key-file values. Duplicates are dropped by [`RunSecrets::new`].
+/// Every exact value of a launch: `GH_TOKEN` (source 1), then the other key-file values
+/// (source 3), then the environment values (source 2), so a `.env` value is kept ahead of an
+/// environment value at the cut. Deduped and cut at [`MAX_VALUES`] here, before the first
+/// control line ([`finish`]): a value in both the environment and `.env` counts once, as
+/// `workspace`.
 pub fn launch_values(project: &Path, env: &BTreeMap<String, String>) -> Vec<SecretValue> {
     let (token, others) = key_file_values(project);
-    token
-        .into_iter()
-        .chain(env_values(env))
-        .chain(others)
-        .collect()
+    finish(token.into_iter().chain(others).chain(env_values(env)))
+}
+
+/// What a reader sends: `values` in order, a value whose bytes equal an earlier one dropped
+/// uncounted, the first [`MAX_VALUES`] distinct values kept, and when any were left out one
+/// count-only entry ([`SecretValue::left_out`]) with their number, so `skipped` stays right.
+fn finish(values: impl IntoIterator<Item = SecretValue>) -> Vec<SecretValue> {
+    let mut kept: Vec<SecretValue> = Vec::new();
+    let mut seen: HashSet<Vec<u8>> = HashSet::new();
+    let mut left_out: u32 = 0;
+    for value in values {
+        if !seen.insert(value.bytes().to_vec()) {
+            continue;
+        }
+        if kept.len() < MAX_VALUES {
+            kept.push(value);
+        } else {
+            left_out = left_out.saturating_add(1);
+        }
+    }
+    if left_out > 0 {
+        kept.push(SecretValue::left_out(left_out));
+    }
+    kept
 }
 
 /// The key files (`.env`, and `.env.` and anything) are read by name, `.env.local` first. The
@@ -400,8 +435,9 @@ fn pair_in(line: &str) -> Option<(&str, &str)> {
 }
 
 /// The one name gate of section 9: `name` (a variable or dotenv name, the last segment of its
-/// key) contains, ignoring case, a credential word, and `value` is usable ([`is_usable`]) and
-/// neither a URL (holds `://`) nor a path (starts with `/`, `~` or `.`).
+/// key) contains, ignoring case, a credential word, and `value` is usable ([`is_usable`]),
+/// neither a URL (holds `://`) nor a path (starts with `/`, `~` or `.`), and not a name
+/// ([`is_name_like`]: a model id or a host, which starring would break usage reading).
 fn gated(name: &str, value: &str) -> bool {
     const WORDS: [&str; 8] = [
         "key",
@@ -418,4 +454,22 @@ fn gated(name: &str, value: &str) -> bool {
         && is_usable(value.as_bytes())
         && !value.contains("://")
         && !value.starts_with(['/', '~', '.'])
+        && !is_name_like(value)
+}
+
+/// Whether `value` looks like a model id or a host rather than a secret: it is only lowercase
+/// ASCII letters, digits and the separators `- . _ / : @`, holds at least one separator, every
+/// separator-delimited segment is at most 15 bytes, and at least one segment holds a letter
+/// from `g` to `z`. A UUID-style key (all hex segments), and a random token with an uppercase
+/// letter or a segment of 16 bytes or more, are not name-like.
+fn is_name_like(value: &str) -> bool {
+    const SEPARATORS: [char; 6] = ['-', '.', '_', '/', ':', '@'];
+    value
+        .chars()
+        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || SEPARATORS.contains(&c))
+        && value.contains(SEPARATORS)
+        && value.split(SEPARATORS).all(|segment| segment.len() <= 15)
+        && value
+            .split(SEPARATORS)
+            .any(|segment| segment.bytes().any(|b| (b'g'..=b'z').contains(&b)))
 }

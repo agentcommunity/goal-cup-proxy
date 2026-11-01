@@ -9,7 +9,7 @@ mod common;
 
 use base64::Engine;
 use base64::engine::general_purpose::{STANDARD_NO_PAD, URL_SAFE_NO_PAD};
-use common::{ALNUM, Rng, starred, stream_in};
+use common::{ALNUM, HEX, Rng, starred, stream_in};
 use goalcup::mask::{
     Masker, SecretValue, ValueSource, env_values, launch_values, workspace_values,
 };
@@ -263,8 +263,8 @@ fn ordinary_values_do_not_pass_the_name_gate() -> Res {
     Ok(())
 }
 
-/// Source 2: credential-named environment variables are used, after `GH_TOKEN` and before the
-/// other key-file values; a value in both the environment and `.env` counts once.
+/// Source 2: credential-named environment variables are used, after `GH_TOKEN` and the other
+/// key-file values; a value in both the environment and `.env` counts once, as `workspace`.
 #[test]
 fn environment_values_are_used_once_in_section_nine_order() -> Res {
     let mut rng = Rng(0x5EC2);
@@ -298,17 +298,26 @@ fn environment_values_are_used_once_in_section_nine_order() -> Res {
         sources,
         [
             ValueSource::Workspace,
-            ValueSource::Env,
-            ValueSource::Env,
             ValueSource::Workspace,
             ValueSource::Workspace,
+            ValueSource::Env,
         ]
     );
-    let m = Masker::new(&[], values)?;
+    let order = [
+        gh.as_bytes(),
+        own.as_bytes(),
+        gateway.as_bytes(),
+        provider.as_bytes(),
+    ];
+    let m = Masker::new(&[], values.clone())?;
+    for (value, want) in values.iter().zip(order) {
+        let one = Masker::new(&[], vec![value.clone()])?;
+        assert!(one.mask_whole(want).bytes.iter().all(|&b| b == b'*'));
+    }
     let counts = m.value_counts();
     assert_eq!(
         (counts.workspace, counts.env, counts.harness, counts.skipped),
-        (2, 2, 0, 0)
+        (3, 1, 0, 0)
     );
     for value in [&gh, &provider, &gateway, &own] {
         assert!(
@@ -321,8 +330,9 @@ fn environment_values_are_used_once_in_section_nine_order() -> Res {
     Ok(())
 }
 
-/// The guard: of 35 usable values, 32 are used and the rest counted in `skipped`. `Debug` of
-/// the masker and of every value prints no value byte.
+/// The guard, in the reader: of 35 usable values, the 20 file values then 12 environment values
+/// are kept, and one count-only entry carries the 3 left out into `skipped`. `Debug` of the
+/// masker and of every value prints no value byte.
 #[test]
 fn past_thirty_two_values_the_rest_are_skipped_and_nothing_prints() -> Res {
     let mut rng = Rng(0x3232);
@@ -338,7 +348,14 @@ fn past_thirty_two_values_the_rest_are_skipped_and_nothing_prints() -> Res {
         .collect();
     std::fs::write(dir.path().join(".env"), text)?;
     let values = launch_values(dir.path(), &env);
-    assert_eq!(values.len(), 35);
+    assert_eq!(values.len(), 33);
+    assert_eq!(values[32].left_out_count(), 3);
+    let kept: Vec<&String> = file.iter().chain(env.values().take(12)).collect();
+    for (value, want) in values[..32].iter().zip(&kept) {
+        assert_eq!(value.left_out_count(), 0);
+        let one = Masker::new(&[], vec![value.clone()])?;
+        assert!(one.mask_whole(want.as_bytes()).bytes.iter().all(|&b| b == b'*'));
+    }
     let all: Vec<&String> = file.iter().chain(env.values()).collect();
     for value in &values {
         let shown = format!("{value:?}");
@@ -346,9 +363,145 @@ fn past_thirty_two_values_the_rest_are_skipped_and_nothing_prints() -> Res {
     }
     let m = Masker::new(&[], values)?;
     let counts = m.value_counts();
-    assert_eq!(counts.workspace + counts.env, 32);
-    assert_eq!((counts.env, counts.skipped), (15, 3));
+    assert_eq!(
+        (counts.workspace, counts.env, counts.harness, counts.skipped),
+        (20, 12, 0, 3)
+    );
     let shown = format!("{m:?}");
     assert!(all.iter().all(|v| !shown.contains(v.as_str())));
+    Ok(())
+}
+
+/// Model ids and hosts under credential names are not secrets: starring them would break usage
+/// reading. A UUID-style key and a mixed-case token still pass.
+#[test]
+fn model_ids_and_hosts_do_not_pass_the_name_gate() -> Res {
+    let mut rng = Rng(0x0DE1);
+    let uuid = [8, 4, 4, 4, 12]
+        .iter()
+        .map(|&n| rng.chars(HEX, n))
+        .collect::<Vec<_>>()
+        .join("-");
+    let mixed = ["Mx", &rng.chars(ALNUM, 30)].concat();
+    let names = [
+        ("X_AUTH_MODEL", "claude-sonnet-4-5-20250929"),
+        ("API_KEY_BASE", "openrouter.ai/api/v1"),
+        (
+            "DEFAULT_TOKEN_MODEL",
+            "accounts/fireworks/models/llama-v3p1-8b-instruct",
+        ),
+    ];
+    let mut text: String = names.iter().map(|(n, v)| format!("{n}={v}\n")).collect();
+    text.push_str(&format!("SERVICE_KEY={uuid}\nSERVICE_TOKEN={mixed}\n"));
+    let dir = tempfile::tempdir()?;
+    std::fs::write(dir.path().join(".env"), text)?;
+    let env: BTreeMap<String, String> = names
+        .iter()
+        .map(|(n, v)| (n.to_string(), v.to_string()))
+        .collect();
+    assert!(env_values(&env).is_empty());
+    let values = launch_values(dir.path(), &env);
+    let m = Masker::new(&[], values)?;
+    let counts = m.value_counts();
+    assert_eq!(
+        (counts.workspace, counts.env, counts.harness, counts.skipped),
+        (2, 0, 0, 0)
+    );
+    for kept in [&uuid, &mixed] {
+        assert!(m.mask_whole(kept.as_bytes()).bytes.iter().all(|&b| b == b'*'));
+    }
+    for (_, refused) in names {
+        assert_eq!(m.mask_whole(refused.as_bytes()).bytes, refused.as_bytes());
+    }
+    Ok(())
+}
+
+/// Point 3: 200 gated `.env` lines of 256-byte values and 30 gated environment values. The
+/// reader keeps 32 (all from `.env`, which wins the cut) plus one count-only entry, so the
+/// values ride the first control line in a few KiB, below `watchdog::MAX_LINE`.
+#[test]
+fn two_hundred_gated_lines_fit_the_first_control_line() -> Res {
+    let mut rng = Rng(0x200C);
+    let file: Vec<String> = (0..200).map(|_| rng.chars(ALNUM, 256)).collect();
+    let env: BTreeMap<String, String> = (0..30)
+        .map(|i| (format!("TOOL_{i:02}_API_KEY"), rng.chars(ALNUM, 64)))
+        .collect();
+    let text: String = file
+        .iter()
+        .enumerate()
+        .map(|(i, v)| format!("SERVICE_{i}_SECRET={v}\n"))
+        .collect();
+    let dir = tempfile::tempdir()?;
+    std::fs::write(dir.path().join(".env"), text)?;
+    let values = launch_values(dir.path(), &env);
+    assert!(values.len() <= 33);
+    assert!(
+        values
+            .iter()
+            .all(|v| v.source() == ValueSource::Workspace)
+    );
+    let json = serde_json::to_vec(&values)?;
+    assert!(json.len() <= 16 * 1024, "{}", json.len());
+    assert!(json.len() < goalcup::watchdog::MAX_LINE);
+    let m = Masker::new(&[], values)?;
+    let counts = m.value_counts();
+    assert_eq!(
+        (counts.workspace, counts.env, counts.harness, counts.skipped),
+        (32, 0, 0, 198)
+    );
+    for value in &file[..32] {
+        assert!(m.mask_whole(value.as_bytes()).bytes.iter().all(|&b| b == b'*'));
+    }
+    Ok(())
+}
+
+/// Point 3: a `.env` of more than 64 KiB, with duplicates and ordinary lines, still starts. Both
+/// readers send a few KiB, the masker builds, every distinct value past 32 is in `skipped`, and
+/// the values cross the control line unchanged, quote and backslash included.
+#[test]
+fn a_64_kib_env_file_starts() -> Res {
+    let mut rng = Rng(0x64E1);
+    let special = ["Qz\"7\\w", &rng.chars(ALNUM, 24)].concat();
+    let mut distinct = vec![special];
+    distinct.extend((0..119).map(|_| rng.chars(ALNUM, 64)));
+    let mut text = String::new();
+    for (i, v) in distinct.iter().enumerate() {
+        text.push_str(&format!("SERVICE_{i}_KEY={v}\n"));
+    }
+    let mut line = 0;
+    while text.len() < 64 * 1024 {
+        let v = &distinct[rng.below(distinct.len())];
+        text.push_str(&format!("COPY_{line}_TOKEN={v}\n"));
+        text.push_str(&format!(
+            "LOG_{line}_LEVEL=info,{}=debug\n",
+            rng.chars(ALNUM, 30)
+        ));
+        line += 1;
+    }
+    assert!(text.len() >= 64 * 1024);
+    let dir = tempfile::tempdir()?;
+    std::fs::write(dir.path().join(".env"), &text)?;
+    let skipped = (distinct.len() - 32) as u32;
+    for values in [
+        workspace_values(dir.path()),
+        launch_values(dir.path(), &BTreeMap::new()),
+    ] {
+        let json = serde_json::to_string(&values)?;
+        assert!(json.len() <= 16 * 1024, "{}", json.len());
+        let back: Vec<SecretValue> = serde_json::from_str(&json)?;
+        assert_eq!(back, values);
+        let m = Masker::new(&[], back)?;
+        let counts = m.value_counts();
+        assert_eq!(
+            (counts.workspace, counts.env, counts.skipped),
+            (32, 0, skipped)
+        );
+        assert!(
+            m.mask_whole(distinct[0].as_bytes())
+                .bytes
+                .iter()
+                .all(|&b| b == b'*')
+        );
+    }
     Ok(())
 }

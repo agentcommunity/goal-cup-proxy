@@ -74,16 +74,38 @@ pub enum ValueSource {
 }
 
 /// One exact secret value. It crosses the first control line (S17) and is never written,
-/// hashed or logged. `Debug` prints the source only.
+/// hashed or logged. `Debug` prints the source and `left_out` only.
+///
+/// On the wire `bytes` is a JSON string: a used value is printable ASCII
+/// (`values::is_usable`), so it round-trips exactly, and a value that is not UTF-8 was never
+/// usable and stays unusable in its lossy form. One count-only entry ([`SecretValue::left_out`]) carries the number of
+/// values a reader left out past the guard of 32, so the start event's `skipped` stays right.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SecretValue {
     source: ValueSource,
+    #[serde(with = "value_text")]
     bytes: Vec<u8>,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    left_out: u32,
 }
 
 impl SecretValue {
     pub fn new(source: ValueSource, bytes: Vec<u8>) -> SecretValue {
-        SecretValue { source, bytes }
+        SecretValue {
+            source,
+            bytes,
+            left_out: 0,
+        }
+    }
+
+    /// The count-only entry: `n` values were left out by a reader and are counted in `skipped`.
+    /// It holds no byte.
+    pub fn left_out(n: u32) -> SecretValue {
+        SecretValue {
+            source: ValueSource::Workspace,
+            bytes: Vec::new(),
+            left_out: n,
+        }
     }
 
     pub fn source(&self) -> ValueSource {
@@ -93,12 +115,35 @@ impl SecretValue {
     pub(crate) fn bytes(&self) -> &[u8] {
         &self.bytes
     }
+
+    /// How many values this count-only entry stands for; 0 for a value.
+    pub fn left_out_count(&self) -> u32 {
+        self.left_out
+    }
+}
+
+fn is_zero(n: &u32) -> bool {
+    *n == 0
+}
+
+/// `SecretValue.bytes` as one JSON string.
+mod value_text {
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    pub(super) fn serialize<S: Serializer>(bytes: &[u8], s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_str(&String::from_utf8_lossy(bytes))
+    }
+
+    pub(super) fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<u8>, D::Error> {
+        Ok(String::deserialize(d)?.into_bytes())
+    }
 }
 
 impl std::fmt::Debug for SecretValue {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("SecretValue")
             .field("source", &self.source)
+            .field("left_out", &self.left_out)
             .finish_non_exhaustive()
     }
 }
@@ -118,8 +163,12 @@ impl Masker {
     /// `run_secret` or `fail_closed`, is `MaskError::Rule`. A value that cannot be used is
     /// skipped and counted in `skipped`, never an error. `workspace` and `env` values are used
     /// (the readers apply the section 9 name gate, so a model name or a base URL never arrives);
-    /// a `harness` value (source 4, not built) is counted in `skipped`. A value equal to an
-    /// earlier one is dropped and counted nowhere; past 32 used values the rest are `skipped`.
+    /// a `harness` value (source 4, not built) is counted in `skipped`. The readers
+    /// ([`launch_values`], [`workspace_values`]) already drop duplicates and cut at 32 before the
+    /// first control line, and send the cut as one count-only entry, which adds its count to
+    /// `skipped`. The same dedupe and guard run here again for any other caller: a value equal
+    /// to an earlier one is dropped and counted nowhere; past 32 used values the rest are
+    /// `skipped`.
     pub fn new(rules: &[MaskRule], values: Vec<SecretValue>) -> Result<Masker, MaskError> {
         let policy = stream::Policy::new(rules, &values)?;
         let mut names = meta::Names::default();
