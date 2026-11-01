@@ -369,7 +369,8 @@ class Run:
                 return got
             self.refusal()
             screen = self.pane()
-            last = ([ln.strip() for ln in screen.splitlines() if ln.strip()] or [""])[-1]
+            lines = [ln.strip() for ln in screen.splitlines() if ln.strip() and not ln.strip().startswith("Pane is dead")]  # tmux's own footer is not goalcup's
+            last = (lines or [""])[-1]
             last = replace_known(last, self.known() or [])[0]
             last = re.sub(r"[\x00-\x1f\x7f]", "", last)[:120]
             raise Step("INCONCLUSIVE", "start-refused: " + ("(exit %s) " % status if status.isdigit() else "") + last)
@@ -384,10 +385,10 @@ class Run:
         """A goalcup start that ended before recording began (the pane is dead): one faults.jsonl line with its exit,
         whether the screen named settings.json and proxy, and whether it printed the pad's proxy value (PRD-11 acceptance
         4 wants the first two and not the third). Booleans only."""
-        dead = sh(["tmux", "display-message", "-p", "-t", self.tmux, "#{pane_dead} #{pane_dead_status}"]).stdout.split()
-        if dead[:1] == ["1"]:
+        dead, status = self.pane_exit()
+        if dead:
             text = self.pane(False)
-            self.fault("start-refused", exit=int(dead[1]) if dead[1:] and dead[1].isdigit() else None,
+            self.fault("start-refused", exit=int(status) if status.isdigit() else None,
                        named_file="settings.json" in text, named_key=bool(re.search(r"\bproxy\b", text)),
                        value_shown=bool(re.search(re.escape(PROXY_VALUE) + r"(?!\d)", text)))
 

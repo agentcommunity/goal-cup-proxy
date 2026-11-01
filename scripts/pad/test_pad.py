@@ -599,12 +599,14 @@ class RigFaults(unittest.TestCase):
             def fake(argv, **kw):
                 return subprocess.CompletedProcess(argv, 0, "1 1" if argv[1] == "display-message" else screen, "")
             return fake
-        with mock.patch.object(padrun, "sh", stub("starting\nsettings.json refused\n")), mock.patch.object(r, "fault", lambda *a, **k: None):
+        with mock.patch.object(padrun, "sh", stub("starting\nsettings.json refused\nPane is dead (status 1, Sun Nov  1 10:00:00 2026)\n")), mock.patch.object(r, "fault", lambda *a, **k: None):
             t0 = time.time()
             with self.assertRaises(padrun.Step) as cm:
                 r.until("Recording in chat mode", "none")
         self.assertLess(time.time() - t0, 5)
         self.assertTrue(cm.exception.args[1].startswith("start-refused"))
+        self.assertIn("settings.json refused", cm.exception.args[1])
+        self.assertNotIn("Pane is dead", cm.exception.args[1])
         with mock.patch.object(padrun, "sh", stub("Recording in chat mode\n")):
             self.assertTrue(r.until("Recording in chat mode", "none"))
 
