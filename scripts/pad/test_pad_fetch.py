@@ -50,7 +50,18 @@ class Fetch(unittest.TestCase):
                     f.write("recording")
                 t.add(os.path.join(d, "x"), "rec/x")
         code = int(verb == self.fail_at or (verb == "rm" and self.rm_fails and argv[3].startswith("pad-dbf-")))
-        return subprocess.CompletedProcess(argv, code, "", "psql: " + DB if code else "")
+        out = 'PADSTEP {"result": "ok", "saw": "wiped"}\n' if verb == "exec" and not code else ""  # pad-run wipe answers
+        return subprocess.CompletedProcess(argv, code, out, "psql: " + DB if code else "")
+
+    def test_rec_is_not_kept_when_the_wipe_did_not_finish(self):
+        self.fetch_exit, self.fail_at = 1, "exec"
+        with tempfile.TemporaryDirectory() as out, mock.patch.dict(os.environ, SECRETS, clear=False), mock.patch.object(pad, "call", self.fake):
+            r = self.run_for(out)
+            self.fail_at = None
+            self.fail_at = "exec"
+            res, saw = r.step_cleanup()
+        self.assertIn("rec not kept: wipe did not finish", saw)
+        self.assertNotIn("rec-kept", [a[2] for a, _ in self.sbx() if a[0] == "get"])
 
     def run_for(self, out, **env):
         s = pad.load_settings(dict(BASE, mode="cycle"), PADCFG)
