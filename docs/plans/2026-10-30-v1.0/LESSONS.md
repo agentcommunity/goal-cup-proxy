@@ -35,14 +35,14 @@ lessons lane (PRD-17); read by the deletion gate (PRD-17 Acceptance, checks 1 to
 | L-C2 | 2.1 | A: lessons_connect::bad_heads_get_fixed_answers_without_echo | PRD-17 | green | c39737d9 |
 | L-C3 | 2.1 | A: lessons_connect::authority_forms | PRD-17 | green | c39737d9 |
 | L-C4 | 2.1 | A: lessons_connect::client_hello_in_two_records_and_one_byte_reads_decides_by_sni; A: lessons_connect::openssl_client_hellos_in_single_bytes_are_replayed_whole (the two copied OpenSSL hellos, no 2 KiB synthetic one) | PRD-17 | green | c39737d9 |
-| L-C5 | 2.1 | A: lessons_connect::close_before_hello_is_one_named_loss (upstream dialled before the 200; one conn record, one named GAP) | PRD-17 | green | c39737d9 |
+| L-C5 | 2.1 | A: lessons_connect::close_before_hello_is_one_named_loss (upstream dialled before the 200, one conn record, one named GAP) | PRD-17 | green | c39737d9 |
 | L-C6 | 2.1 | A: lessons_connect::unlisted_refusal_is_one_round; A: lessons_connect::listed_refusal_is_retried; A: proxy_tunnel::an_upstream_reset_reaches_the_client_as_a_reset_and_a_close_as_a_close (PRD-03, the reset rule); R: RR5 | PRD-17 | green | 8dc99969 |
 | L-C7 | 2.1 | R: RR1; A: lessons_connect::idle_tunnel_survives_120s (full tier, held back with `ignore`) | PRD-17 | open | - |
 | L-C8 | 2.1 | A: lessons_connect::one_bad_handshake_leaves_others_relaying | PRD-17 | green | c39737d9 |
 | L-C9 | 2.1 | A: proxy_connect.rs (PRD-03) | PRD-03 | green | 7e620577 |
 | L-C10 | 2.1 | A: proxy_connect.rs (PRD-03); A: lessons_connect::listed_sni_to_a_local_fake_server_is_never_trusted | PRD-03, PRD-17 | green | c39737d9 |
 | L-C11 | 2.1 | A: proxy_connect::two_thousand_concurrent_connects_are_all_served (PRD-03); A: proxy_connect::accepts_wait_while_descriptors_are_short_and_never_refuse (PRD-03); A: watchdog_rlimit::the_recorder_gets_the_hard_limit_no_core_its_fds_and_its_own_session (PRD-02) | PRD-03 | green | c39737d9 |
-| L-C12 | 2.1 | A: watchdog_restart::watchdog_restart_keeps_port_backlog_and_ca (PRD-02, `loopback_only` reads /proc/net/tcp and tcp6 and asserts the one listener on the port is 127.0.0.1, before and after the kill) | PRD-02 | open | - |
+| L-C12 | 2.1 | A: watchdog_restart::watchdog_restart_keeps_port_backlog_and_ca (PRD-02, `loopback_only` reads /proc/net/tcp and tcp6 and asserts the one listener on the port is 127.0.0.1, before and after the kill) | PRD-02 | green | 6fb5db63 |
 | L-T1 | 2.2 | A: lessons_tls::leaf_aki_names_the_ca_key; R: RR3 | PRD-17 | green | 7e620577 |
 | L-T2 | 2.2 | A: lessons_tls::ca_constraints_validity_and_leaf_shape | PRD-17 | green | 7e620577 |
 | L-T3 | 2.2 | A: proxy_tls.rs (PRD-03); A: lessons_connect::untrusted_upstream_reaches_client_unchanged | PRD-03, PRD-17 | green | c39737d9 |
@@ -75,7 +75,7 @@ lessons lane (PRD-17); read by the deletion gate (PRD-17 Acceptance, checks 1 to
 | L-W1 | 2.5 | A: proxy_ws.rs (PRD-03); R: RR1 | PRD-03 | green | 7e620577 |
 | L-W2 | 2.5 | A: lessons_ws::negotiation_accepts_only_rfc7692 (parser half); A: lessons_ws::unknown_extension_relays_inside_a_named_loss (parser); A: lessons_ws::unknown_extension_through_serve (relay half, with the conn GAP and its `lost`) | PRD-17 | green | c39737d9 |
 | L-W3 | 2.5 | A: lessons_ws::server_max_window_bits_10_decodes | PRD-17 | green | 0fa43715 |
-| L-W4 | 2.5 | A: lessons_ws::takeover_history_carries_between_messages (no case drops a record: `StreamHandle::ws` returns nothing, so the parser cannot know a piece was dropped and keeps inflating; the guard's own GAP is in pipeline_guard.rs); R: RR1 | PRD-17 | green | 8dc99969 |
+| L-W4 | 2.5 | A: lessons_ws::takeover_history_carries_between_messages (no case drops a record: `StreamHandle::ws` returns nothing, so the parser cannot know a piece was dropped and keeps inflating, the guard's own GAP is in pipeline_guard.rs); R: RR1 | PRD-17 | green | 8dc99969 |
 | L-W5 | 2.5 | A: lessons_ws::bfinal_ends_takeover_history | PRD-17 | green | 0fa43715 |
 | L-W6 | 2.5 | A: lessons_ws::one_byte_reads_decode_the_same | PRD-17 | green | 0fa43715 |
 | L-W7 | 2.5 | A: lessons_ws::violations_are_named_and_relaying_goes_on (parser); A: lessons_ws::violations_through_serve (relay half, with the 5a GAP) | PRD-17 | green | c39737d9 |
@@ -111,8 +111,8 @@ lessons lane (PRD-17); read by the deletion gate (PRD-17 Acceptance, checks 1 to
 | L-N7 | 2.7 | A: connector_hints.rs (PRD-11) | PRD-11 | green | 7e620577 |
 | L-N8 | 2.7 | A: connector_launch.rs (PRD-11); A: connector_hints.rs (PRD-11) | PRD-11 | green | 7e620577 |
 | L-N9 | 2.7 | X: ledger H2, PRD-03 rule 2 | none | open | - |
-| L-P1 | 2.8 | A: watchdog_end::watchdog_end_real_killed_recorder_restarts (PRD-02, the kill and the one `recorder_down` GAP); A: watchdog_restart::watchdog_restart_keeps_port_backlog_and_ca (PRD-02, the unchanged port after the kill, and a connection made while boot 2 is held is queued and served by it); R: RR4 | PRD-02 | open | - |
-| L-P2 | 2.8 | A: proxy_restart::the_next_boot_serves_the_backlog_with_the_same_ca (PRD-03); A: watchdog_restart::watchdog_restart_keeps_port_backlog_and_ca (PRD-02, after a real SIGKILL the next boot's leaf verifies against the `run-ca.pem` read before the kill, and the request and answer are in the record); R: RR4 | PRD-02, PRD-03 | open | - |
+| L-P1 | 2.8 | A: watchdog_end::watchdog_end_real_killed_recorder_restarts (PRD-02, the kill and the one `recorder_down` GAP); A: watchdog_restart::watchdog_restart_keeps_port_backlog_and_ca (PRD-02, the unchanged port after the kill, and a connection made while boot 2 is held is queued and served by it); R: RR4 | PRD-02 | green | 6fb5db63 |
+| L-P2 | 2.8 | A: proxy_restart::the_next_boot_serves_the_backlog_with_the_same_ca (PRD-03); A: watchdog_restart::watchdog_restart_keeps_port_backlog_and_ca (PRD-02, after a real SIGKILL the next boot's leaf verifies against the `run-ca.pem` read before the kill, and the request and answer are in the record); R: RR4 | PRD-02, PRD-03 | green | 6fb5db63 |
 | L-P3 | 2.8 | A: lessons_launch::ctrl_c_reaches_the_harness_and_the_watchdog_lives (pty); A: watchdog_shield::a_pending_key_does_not_end_the_wrap_up (PRD-02); A: watchdog_shield::a_key_after_harness_exited_gets_the_default_action (PRD-02) | PRD-17, PRD-02 | green | c39737d9 |
 | L-P4 | 2.8 | A: lessons_launch::a_tui_child_reads_the_terminal | PRD-17 | green | 0fa43715 |
 | L-P5 | 2.8 | A: lessons_launch::modes_restored_after_a_raw_exit | PRD-17 | green | 0fa43715 |
@@ -145,19 +145,19 @@ lessons lane (PRD-17); read by the deletion gate (PRD-17 Acceptance, checks 1 to
 | L-S9 | 2.10 | R: PRD-06 U3 | PRD-06 | open | - |
 | L-S10 | 2.10 | A: device.test.ts (PRD-07); A: lifecycle.test.ts (PRD-07) | PRD-07 | green | b474329d |
 | L-R1 | 2.11 | A: pipeline_guard::a_thousand_guard_episodes_never_latch (PRD-02) | PRD-02 | green | 7e620577 |
-| L-R2 | 2.11 | A: pipeline_guard::two_hundred_streams_with_the_writer_held (PRD-02); A: lessons_pipeline::open_and_end_survive_a_full_guard; A: pipeline_stall.rs (PRD-02, file not on tree; PRD-02 section on R2 names it, no PRD-02 branch has landed it) | PRD-02 | open | - |
+| L-R2 | 2.11 | A: pipeline_guard::two_hundred_streams_with_the_writer_held (PRD-02); A: lessons_pipeline::open_and_end_survive_a_full_guard; A: pipeline_stall.rs (PRD-02, file not on tree, PRD-02 section on R2 names it and no PRD-02 branch has landed it; proposed, not decided: PRD-02 lands it, or its replan drops it and this row rests on the two pipeline_guard cases and lessons_pipeline) | PRD-02 | open | - |
 | L-R3 | 2.11 | A: check_invariants.rs (PRD-08, invariant 12 gap_has_end); A: proxy_http1.rs (PRD-03, fault case); A: see L-H2, L-H9, L-W2, L-W7, L-W10 | PRD-08, PRD-03 | green | 8dc99969 |
 | L-R4 | 2.11 | R: PRD-02 R3; R: PRD-10 acceptance 1 | PRD-02, PRD-10 | open | - |
 | L-R5 | 2.11 | A: golden.rs (PRD-01); A: proxy_ws.rs (PRD-03); R: RR1 | PRD-01, PRD-03 | green | 8dc99969 |
-| L-R6 | 2.11 | A: proxy_connect.rs (PRD-03; proxy_tunnel.rs opens its `conn` in a helper, so no case shows the record at open) | PRD-03 | open | - |
+| L-R6 | 2.11 | A: proxy_connect.rs (PRD-03, proxy_tunnel.rs opens its `conn` in a helper, so no case shows the record at open) | PRD-03 | open | - |
 | L-R7 | 2.11 | R: PRD-12 C1 | PRD-12 | open | - |
 | L-R8 | 2.11 | A: mask_meta.rs (PRD-05); R: RR1 | PRD-05, PRD-09 | green | 7e620577 |
 | L-HF1 | 2.12 | R: PRD-11 acceptance 5; R: RR3 | PRD-11 | open | - |
 | L-HF2 | 2.12 | R: RR6 | PRD-11 | open | - |
 | L-HF3 | 2.12 | D: connectors/hermes-cli.toml before, after; A: watchdog_end::watchdog_end_stub_helpers_run_in_order (PRD-02) | PRD-11, PRD-02 | open | - |
-| L-HF4 | 2.12 | A: cli_commands::second_start_on_one_home_refuses (PRD-10, exit 1 with the held home named, no server call, nothing written) | PRD-10 | open | - |
+| L-HF4 | 2.12 | A: cli_commands::second_start_on_one_home_refuses (PRD-10, exit 1 with the held home named, no server call, nothing written) | PRD-10 | green | 6fb5db63 |
 | L-HF5 | 2.12 | A: connector_launch::codex_gets_no_dash_c_override (PRD-11); D: connectors/codex-cli.toml args | PRD-11 | green | f5a200ae |
-| L-HF6 | 2.12 | A: cli_continue::the_resume_rule_follows_written_counts_alone (PRD-10, session files with nothing counted are no conversation); A: cli_continue::a_resume_that_failed_at_once_opens_a_new_session (PRD-10); D: docs/plans/2026-10-30-v1.0/PRD-10-cli-participant.md section 3.1 step 3 | PRD-10 | open | - |
+| L-HF6 | 2.12 | A: cli_continue::the_resume_rule_follows_written_counts_alone (PRD-10, session files with nothing counted are no conversation); A: cli_continue::a_resume_that_failed_at_once_opens_a_new_session (PRD-10); D: docs/plans/2026-10-30-v1.0/PRD-10-cli-participant.md section 3.1 step 3 | PRD-10 | green | 6fb5db63 |
 | L-HF7 | 2.12 | R: PRD-12 pass rule | PRD-12 | open | - |
 | L-HF8 | 2.12 | A: connector_hosts.rs (PRD-11) | PRD-11 | green | 7e620577 |
 | L-G1 | 2.13 | A: see L-H11; R: PRD-12 P4 gateway rows | PRD-17, PRD-09 | green | 8dc99969 |
@@ -179,9 +179,9 @@ lessons lane (PRD-17); read by the deletion gate (PRD-17 Acceptance, checks 1 to
 | L-VR3 | 2.15 | A: check_invariants::vr3_every_mutation_fails_its_check_with_exit_2 (PRD-08) | PRD-08 | green | f5a200ae |
 | L-VR4 | 2.15 | A: check_named::clean_record_with_interrupted_end_exits_0 (PRD-08) | PRD-08 | green | f5a200ae |
 | L-SC1 | 2.16 | A: cli_folder::project_folder_and_goalcup_home_never_hold_each_other (PRD-10) | PRD-10 | green | f5a200ae |
-| L-SC2 | 2.16 | A: cli_folder::refused_start_creates_nothing (PRD-10, folder half; the other cases wait on approve.rs); X: PRD-07 (abandon route cut) | PRD-10, PRD-07 | open | - |
+| L-SC2 | 2.16 | A: cli_folder::refused_start_creates_nothing (PRD-10, folder half, the other cases wait on approve.rs); X: PRD-07 (abandon route cut) | PRD-10, PRD-07 | open | - |
 | L-SC3 | 2.16 | A: lessons_launch::nothing_is_written_to_the_terminal_while_the_harness_runs | PRD-17 | green | c39737d9 |
-| L-SC4 | 2.16 | A: cli_continue::continue_adds_the_next_part_and_resumes_the_session (PRD-10); A: cli_continue::a_part_that_recorded_nothing_starts_a_new_session (PRD-10); R: PRD-10 acceptance 10 | PRD-10 | open | - |
+| L-SC4 | 2.16 | A: cli_continue::continue_adds_the_next_part_and_resumes_the_session (PRD-10); A: cli_continue::a_part_that_recorded_nothing_starts_a_new_session (PRD-10); R: PRD-10 acceptance 10 | PRD-10 | green | 6fb5db63 |
 | L-SC5 | 2.16 | R: PRD-10 acceptance 6 | PRD-10 | open | - |
 | L-SC6 | 2.16 | A: cli_finish::unsealed_status_never_reads_as_finished (PRD-10) | PRD-10 | green | f5a200ae |
 | L-SC7 | 2.16 | X: ledger L5, L6 (PRD-10 section 4) | PRD-10 | open | - |
@@ -190,7 +190,7 @@ lessons lane (PRD-17); read by the deletion gate (PRD-17 Acceptance, checks 1 to
 file through `cargo run -p goalcup-verify` (`proxy_fixtures::verify_exits_0`), asserting exit 0. The `goalcup` crate has no
 dev-dependency on the verifier and the scaffold is PRD-02's, so the binary is reached by `cargo run`, not by a dependency.
 
-**Rows that still wait (integration head 8dc99969).** A row reads `green` when every `A:` entry resolves in the
+**Rows that still wait (integration head 6fb5db63).** A row reads `green` when every `A:` entry resolves in the
 nextest list (or is an existing Worker test file) and passes; `A:` plus `R:` rows too, until their `R:` guards are shown.
 The commit cell is the head whose code the box job ran. Rows that stay `open` say why in their Guard cell
 (file not on tree, case not in file, `R:` or `D:` entry not shown); the `X:`-only rows (H12, K13, N9, SC7) are flipped
@@ -204,18 +204,47 @@ paid for most of what the tighter cases added. That is 862 more than the 3,462 a
 The 14,200 owner-question line is a total over the whole build; the tree still holds the 0.7 crates' tests, so
 a build-wide Rust test line count cannot be read off it yet and is not reported here.
 
-Gate check 1 dry run (list check only, nothing deleted), one box job on the code of integration head 8dc99969
-(the box ran that head's tree, not this branch's merge commit, so commit cells name 8dc99969)
-(`cargo nextest list --workspace --run-ignored all`: 594 entries; `cargo nextest run --workspace --no-fail-fast`: 590 tests
-run, 590 passed, 4 skipped, which are the `ignore` tests `lessons_connect::idle_tunnel_survives_120s`,
-`mask_bench::by_hand_mask_bench` and two `upload_worker` full-tier tests; Worker `node --test` on `integration.test.ts`,
-`device.test.ts` and `lifecycle.test.ts`: 90 pass, 0 fail). A script over this file found every `A:` `file::test` name
-in the list, every bare-file `A:` entry under `crates/*/tests/` or `server/worker/test/`, and every `A:` binary
-file passing all its tests, except four names (seven rows), all tests PRD-02 or PRD-10 are asked to land; their Guard cells say so and the rows stay `open`. `mask::meta::tests` is a module prefix
-and matches the unit tests. The `D:` files named in the table were checked by reading the head (see above for L-T9). No
-renamed guard was found. The `L-S1` title "a retry of the same chunk is 200 with the very same stored answer, body unread"
-is still in `integration.test.ts`. The deletion gate itself is not due until PRD-02 (`watchdog_restart`, `pipeline_stall`),
-PRD-10 (`cli_continue`, the second-start case) and the owners of the remaining `open` rows have merged.
+Gate run of 2026-11-01 (nothing deleted), one box job on branch commit c4a873cf, whose code equals integration head
+6fb5db63 (only this file differs; commit cells name 6fb5db63). Raw numbers: `cargo nextest list --workspace --run-ignored
+all` 624 entries; `cargo nextest run --workspace --no-fail-fast` 620 run, 620 passed, 0 failed, 4 skipped (the `ignore`
+tests `lessons_connect::idle_tunnel_survives_120s`, `mask_bench::by_hand_mask_bench` and two `upload_worker` full-tier
+tests); Worker `node --test` on all of `server/worker/test/*.test.ts`: 258 pass, 0 fail, 0 skipped. Table: 154 rows, 123 `green`,
+31 `open`, 0 `real-run pass`. Entries: 191 `A:`, 45 `R:`, 5 `D:`, 9 `X:`.
+
+- **Check 1 (a guard for every lesson): not passed, one name.** All 154 rows have an entry, 154 of 154 against PRD-17
+  sections 2.1 to 2.16. Every `A: file::test` name is in the nextest list; every `D:` file exists; every `X:` names a
+  decision or PRD. One bare-file `A:` names no file: `pipeline_stall.rs` (L-R2, owner PRD-02). The pipeline_stall file is on no
+  integration commit. No renamed guard was found. The script also flagged five cells with a `;` inside parentheses
+  (L-C5, L-W4, L-R2, L-R6, L-SC2), which the legend forbids; they are now commas, a wording fix with no guard change.
+- **Check 2 (guards pass): passed for the 123 green rows, one row skipped.** Every `lessons_*.rs` test and every named
+  `A:` guard ran and passed in `gate fast`, which skips `idle_tunnel_survives_120s`; L-C7 therefore stays open until a
+  `gate full` run. The Worker file guards (`integration`, `device`, `lifecycle`) pass.
+- **Check 3 (R: rows): holds by the rule, nothing shown yet.** 45 `R:` entries, none `real-run pass`; each names the pad
+  row that will show it (43 by RR or PRD-12/PRD-05 row; L-P8 and L-HF1 name PRD-11 acceptance 5, the `--pre stale-gateway.sh`
+  pad run, which a pattern in the script missed and a reading confirmed). No pad run has failed. Real-run rows do not block the deletion.
+- **Check 4 (X or I fate rows name a decision or PRD): passed.** 7 fate rows, each names its owner decision or PRD.
+
+What blocks the gate (PRD-13 may not delete yet), by row and owner:
+
+- **Check 1:** L-R2, PRD-02 (`pipeline_stall.rs`). PRD-02 either lands it, or its replan drops it and L-R2 rests on
+  `pipeline_guard::two_hundred_streams_with_the_writer_held`, `forty_streams_with_the_writer_held` and
+  `lessons_pipeline`. This is a proposal; the decision is PRD-02's.
+- **Open rows whose guard case is thin or not in an existing test, each needs its owner:** L-P14 (PRD-10, no
+  `no timer under 15 min` case in `cli_commands.rs`), L-P15 (PRD-02, no test by name for the 60 s drain and 180 s native bound), L-S7
+  (PRD-10, no case that sets the clock back 24 h in `cli_start.rs`), L-R6 (PRD-03, no case shows the `conn` record at open), L-SC2
+  (PRD-10, the cases beyond the folder half wait on `approve.rs`), L-VR1 (PRD-08, the torn-tail case claims 32 body bytes and holds 1: it shows exit 2, not that a hostile
+  length allocates nothing), L-VR2 (PRD-08, PRD-09; no test reaches the panic hook), L-HF3
+  (PRD-11, PRD-02; `connectors/hermes-cli.toml` holds `before` and `after`, and the `watchdog_end` case runs a helper that succeeds; no case shows
+  a failing helper logged with the run going on),
+  L-T9 (PRD-03, PRD-15; `docs/PARTICIPANT-GUIDE.md` has no known-limits entry for an egress that re-signs TLS).
+  These are not check 1 failures (each has an entry); they stay `open` until their cases exist or the lane reads them as met.
+- **`gate full`:** L-C7 (PRD-17), `idle_tunnel_survives_120s`.
+- **`X:`-only, flipped when the gate passes:** L-H12 (PRD-03), L-K13, L-N9 (no owner PRD), L-SC7 (PRD-10).
+- **`R:`-only or `R:` pending a pad run (PRD-12 and the named owners), not blocking deletion:** L-W14, L-P13, L-F7, L-F8,
+  L-S6, L-S8, L-S9, L-R4, L-R7, L-HF1, L-HF2, L-HF7, L-G2, L-G4, L-G5, L-SC5.
+
+Skipped and not run here: `idle_tunnel_survives_120s` (`gate full`), `mask_bench::by_hand_mask_bench`, the two
+`upload_worker` full-tier tests, the real-run rows (all RR rows), and `cargo clippy`. Nothing was deleted.
 
 ## Real-run rows
 
