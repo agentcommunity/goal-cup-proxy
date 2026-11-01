@@ -25,6 +25,8 @@ pub(super) struct NativeLeg {
     pub(super) threads: Vec<Thread>,
     /// `Some` when any session file named its thread.
     pub(super) children: Option<BTreeMap<String, Vec<String>>>,
+    /// The children are delegation task logs and manifests, not calls.
+    pub(super) task_logs: bool,
     /// Codex `token_count` repeats (no larger running total), skipped.
     pub(super) repeats_skipped: u64,
     /// Child rollout lines timed before the child's own `session_meta` (copied parent records).
@@ -198,10 +200,11 @@ impl Native {
                     let n = v["task_count"].as_u64().unwrap_or(0);
                     let list = v["tasks"].as_array().filter(|t| !t.is_empty());
                     let idx = |t: &Value| t["index"].as_u64();
-                    let all: BTreeSet<u64> = match list {
-                        Some(t) => t.iter().filter_map(idx).collect(),
-                        None => (0..n).collect(),
-                    };
+                    let named: BTreeSet<u64> = (list.iter().flat_map(|t| t.iter()))
+                        .filter_map(idx)
+                        .collect();
+                    // A list with no usable index still names `task_count` tasks.
+                    let all = if named.is_empty() { (0..n).collect() } else { named };
                     if let Some(d) = d {
                         self.manifests.entry(d).or_default().extend(all);
                     }
@@ -301,7 +304,7 @@ impl Native {
             let id = task_id(&d, n);
             let t = threads.entry(id.clone()).or_insert_with(|| named(&id));
             (t.reason, t.parent, t.depth) = (None, Some(d.clone()), Some(1));
-            kids.entry(d.clone()).or_default().insert(id.clone());
+            kids.entry(d).or_default().insert(id.clone());
             logged.insert(id);
         }
         for (d, ns) in &self.manifests {
@@ -341,8 +344,12 @@ impl Native {
         kids.retain(|_, v| !v.is_empty());
         let list = |(k, v): (String, BTreeSet<String>)| (k, v.into_iter().collect());
         let children = if !owner.is_empty() || hermes {
-            // Old records may also carry state.db children: both maps are kept.
-            (h.children.into_iter()).for_each(|(k, v)| kids.entry(k).or_default().extend(v));
+            // state.db children are the same subagents under other ids: the task files win.
+            if !hermes {
+                for (k, v) in h.children {
+                    kids.entry(k).or_default().extend(v);
+                }
+            }
             Some(kids.into_iter().map(list).collect())
         } else {
             (!h.threads.is_empty()).then_some(h.children)
@@ -350,6 +357,7 @@ impl Native {
         NativeLeg {
             rows: rows.chain(h.rows.into_iter().map(|r| (r, None))).collect(),
             children,
+            task_logs: hermes,
             threads: threads.into_values().chain(h.threads).collect(),
             repeats_skipped,
             copied_skipped,

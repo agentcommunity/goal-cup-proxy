@@ -576,7 +576,12 @@ fn hermes_db(dir: &Path) -> (Vec<u8>, Vec<u8>) {
 /// A `hermes-cli` entry of that `segment`: four Chat Completions calls, then database copies
 /// `(n, db, wal)` as snapshot streams of set `0.n`, copied at `n` x 10 s of the run (no WAL when
 /// it is empty). Returns the table and the entry's folder.
-fn hermes_entry(name: &str, sets: &[(u64, &[u8], &[u8])], segment: u64) -> (CallTable, PathBuf) {
+fn hermes_entry(
+    name: &str,
+    sets: &[(u64, &[u8], &[u8])],
+    segment: u64,
+    tasks: u64,
+) -> (CallTable, PathBuf) {
     let mut e = Entry::new(name);
     for k in 1..=4 {
         let req = json!({"model": format!("fake-h{k}"), "messages": [{"content": MARK}]});
@@ -599,6 +604,9 @@ fn hermes_entry(name: &str, sets: &[(u64, &[u8], &[u8])], segment: u64) -> (Call
             e.data(s, 0, 0, body);
             e.end(s, EndReason::Complete, body.len() as u64, Value::Null);
         }
+    }
+    for n in 0..tasks {
+        e.native(&format!("delegation:deleg_aaaaaaaa/task-{n}.log"), 0, 0);
     }
     e.count();
     let dir = e.seal();
@@ -627,7 +635,7 @@ fn hermes_database_copies_read_by_set() {
     masked[at..at + MARK.len()].fill(b'*');
     let mut bad = db.clone();
     bad[..16].fill(b'*');
-    let (t, _) = hermes_entry("u-h1", &[(1, &db, &masked)], 0);
+    let (t, _) = hermes_entry("u-h1", &[(1, &db, &masked)], 0, 0);
     let th = |t: &CallTable, id: &str| t.threads.iter().find(|x| x.id == id).cloned();
     let who = |t: &CallTable| {
         ["fake-h1", "fake-h2", "fake-h3", "fake-h4"].map(|m| row(t, m).thread.clone())
@@ -659,7 +667,7 @@ fn hermes_database_copies_read_by_set() {
     let gone = ["s-old", "s-back"].map(|id| th(&t, id));
     assert!(t.readable() && gone == [None, None] && t.native_form == NativeForm::PerCall);
     assert!(!format!("{t:?}").contains(MARK));
-    let (newer, dir) = hermes_entry("u-h2", &[(1, &db, &masked), (2, &bad, &[])], 0);
+    let (newer, dir) = hermes_entry("u-h2", &[(1, &db, &masked), (2, &bad, &[])], 0, 0);
     let until = Some(WALL0 + 10_000_000_000);
     assert_eq!(th(&newer, "s-main").unwrap().native_until, until);
     assert_eq!(
@@ -682,7 +690,7 @@ fn hermes_database_copies_read_by_set() {
     assert_eq!(sum["tokens"]["native"]["input"], 107);
     // A `continue` entry: the session begun before this entry keeps its thread and its row; one
     // with no row inside the entry is an earlier entry's.
-    let (next, next_dir) = hermes_entry("u-h4", &[(1, &db, &masked)], 1);
+    let (next, next_dir) = hermes_entry("u-h4", &[(1, &db, &masked)], 1, 0);
     assert_eq!(who(&next)[1].as_deref(), Some("s-back"));
     let back = th(&next, "s-back").unwrap();
     assert!(back.readable() && th(&next, "s-old").is_none());
@@ -696,7 +704,7 @@ fn hermes_database_copies_read_by_set() {
         ),
         (&json!(107), &json!(true))
     );
-    let (none, _) = hermes_entry("u-h3", &[(2, &bad, &[])], 0);
+    let (none, _) = hermes_entry("u-h3", &[(2, &bad, &[])], 0, 0);
     let wire_only = none
         .rows
         .iter()
@@ -706,4 +714,14 @@ fn hermes_database_copies_read_by_set() {
         (none.reason, none.readable(), wire_only),
         (Some(Reason::SnapshotUnreadable), false, 4)
     );
+}
+
+/// A record with state.db and delegation task logs names one subagent once, not under both id
+/// schemes.
+#[test]
+fn hermes_database_and_task_logs_count_each_subagent_once() {
+    let (db, wal) = hermes_db(&tmp("u-hermes-t"));
+    let (t, _) = hermes_entry("u-h5", &[(1, &db, &wal)], 0, 1);
+    let kids = t.children.as_ref().unwrap();
+    assert_eq!(kids.values().flatten().count(), 1);
 }
