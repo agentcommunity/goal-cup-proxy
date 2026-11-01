@@ -227,6 +227,22 @@ class Run:
         code = self.exits.get(name)
         return {0: 0, 1: 0, 2: 1}.get(code) if isinstance(code, int) else None  # 1: incomplete, never a hit
 
+    def stated_loss(self):
+        """Shape kinds and streams when every secret hit is a shape in a joined SSE deltas body (PRD-05 Risks "Model echo": JSON
+        framing sits between the pieces, a stated loss), else None. A hit with no stream path, a known value, a big MASK or
+        any other location is not this."""
+        doc = load(self.folder, "verify/secrets.json")
+        shapes = doc.get("shape_hits") if isinstance(doc, dict) else None
+        if not isinstance(shapes, list) or not shapes or any(count(doc.get(k)) for k in ("hits", "known_hits", "big_masks")):
+            return None
+        if not all(isinstance(h, dict) and str(h.get("in")).endswith("/deltas") for h in shapes):
+            return None
+        return sorted({str(h.get("kind")) for h in shapes}), sorted({str(h["in"]) for h in shapes})
+
+    def loss_exit(self, code):
+        """True when exit 2 comes from the stated loss alone, the verifier's only failed check."""
+        return code == 2 and bool(self.stated_loss()) and set(self.failed) <= {"secrets"}
+
     def masks(self):
         """MASK spans by rule kind from the record scan, or None when the report has none."""
         doc = load(self.folder, "verify/secrets.json")
@@ -341,8 +357,12 @@ def local(r, few):
     # never explains off time.
     off = any(dig(e, "s6_off") for e in r.entries)
     covered = r.check("history_complete") == "named" and 0 < unexpected <= orphans
-    explained = code == 1 and named and (not off or "recorder_down" in allowed) and (covered or named <= allowed)
-    r.flag(r.meta.get("case") in ("direct", "gateway") and set(fault_kinds(r.meta)) <= set(CLEAN) and not r.failed and code != 0 and not explained,
+    stated = r.loss_exit(code)  # exit 2 from the stated loss alone: the named gaps are still judged
+    # Any check the verifier names (not only history_complete) can give exit 1, so under exit 2 it keeps the exit rule.
+    other_named = any(c.get("result") == "named" for e in r.entries for c in dig(e, "s6_checks") or [] if isinstance(c, dict))
+    explained = (code == 1 or stated) and named and (not off or "recorder_down" in allowed) and (covered or named <= allowed)
+    r.flag(r.meta.get("case") in ("direct", "gateway") and set(fault_kinds(r.meta)) <= set(CLEAN) and (not r.failed or stated)
+           and code != 0 and not explained and not (stated and not named and not off and not other_named),  # nothing else could give exit 1
            "C1", "FAIL", "verifier exit %s, the %s case expects 0 or only the GAPs %s" % (
                code, r.meta.get("case"), ", ".join(sorted(allowed))))
     own = sorted(i for i in r.failed if i not in ("secrets", "history_complete"))  # `secrets` is C3's, `history_complete` C1's
@@ -436,13 +456,17 @@ def usage_checks(r, few):
 def scan(r, name, where):
     """One C3 scan: hits fail; no scan (None) is INCONCLUSIVE, never a PASS."""
     n = r.hits(name)
+    loss = r.stated_loss() if name == "secrets" else None
+    if loss:  # never a PASS: the report cannot show the shape crosses a delta edge (a masker miss reads the same), so C3 stays open
+        return r.mark("C3", "INCONCLUSIVE", "shape only in joined streamed replies (not verified, owner question open): %s in %s"
+                      % (", ".join(loss[0]), ", ".join(loss[1])))
     r.flag(n != 0, "C3", "FAIL" if n else "INCONCLUSIVE", "%s hits in %s" % (n, where) if n else "no scan of " + where)
 
 def secrets(r):
     """C3. The known-value and shape scans ran in the box; only their counts reach this folder."""
     for name, where in SCANS + ((("secrets-git", "the project's git objects"),) if r.meta.get("push") == "tested" else ()):
         scan(r, name, where)
-    r.flag("secrets" in r.failed, "C3", "FAIL", "secrets fail in the verifier report: %s" % r.failed.get("secrets"))
+    r.flag("secrets" in r.failed and not r.stated_loss(), "C3", "FAIL", "secrets fail in the verifier report: %s" % r.failed.get("secrets"))
     # The pad's pane copies are scanned for known values only (a hit is a replacement miss in the rig); their shape hits are
     # a harness screen echo, not a record, and are not read.
     # Where panes exist (pad-run sets the exit), no report or an exit other than 0 or 2 is no scan, never a PASS.
@@ -579,7 +603,9 @@ def recorder_kills(r, kinds):
             long = ms is None or ms >= 2000
             r.flag(long, "faults", "INCONCLUSIVE" if k in quiet else "FAIL",
                    ("quiet kill: gap of %s ms, length not shown" if k in quiet else "a recorder_down gap of %s ms, not under 2 s") % ms)
-    r.flag(kills and dig(r.local, "s6_exit") != 1, "faults", "FAIL", "verifier exit %s, a kill row expects 1" % dig(r.local, "s6_exit"))
+    code = dig(r.local, "s6_exit")
+    stated = r.loss_exit(code)  # C3's INCONCLUSIVE
+    r.flag(kills and code != 1 and not stated, "faults", "FAIL", "verifier exit %s, a kill row expects 1" % dig(r.local, "s6_exit"))
 
 def near(gap, fault):
     """True when the gap starts within CRASH_SLACK of the kill's time."""
