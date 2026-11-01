@@ -72,6 +72,16 @@ Every record is `kind` (one byte), `len` (a varint) and then `len` bytes of body
   `source_changed`. `seen` is the stream offset just past the last source byte seen, written or
   lost. For a `conn` stream it is 0; its tail holds bytes each way (`up`, `down`).
 
+Optional END tail keys, by stream kind. Each is a count or masked text, never a secret value.
+
+| Stream kind | Keys |
+|---|---|
+| `conn` | `up`, `down`: bytes each way on the TCP wire. `plain_up`, `plain_down`: plaintext bytes each way, `decrypt` mode only |
+| `http_req`, `http_resp` | `wire`: body bytes before de-chunking and decoding (`seen` counts decoded bytes). `trailers`: masked header list, shaped as `headers`. `h2_error`: the `RST_STREAM` or server `GOAWAY` error code. A client `GOAWAY` ends nothing; a server `GOAWAY` ends the streams above its last-stream-id (the ones it did not process) `interrupted`, and so does `RST_STREAM` for its stream |
+| `http_req` | `unsent`: bytes read from the client and recorded but never forwarded |
+| `ws_up`, `ws_down` | `close_code`: the close frame's status code |
+| `ws_up` | `unsent`, as for `http_req` |
+
 ## Stream kinds
 
 `skind` in OPEN. A stream is an OPEN, its DATA records and an END.
@@ -79,7 +89,7 @@ Every record is `kind` (one byte), `len` (a varint) and then `len` bytes of body
 | n | Kind | One stream is |
 |---|---|---|
 | 1 | `conn` | One client connection through the proxy, decrypted or tunnelled. No DATA. `meta` has `host`, `port`, `mode` (`decrypt` or `tunnel`), `listed`, `kind`, `reason` |
-| 2 | `http_req` | One request body. `meta` holds the head: `method`, `path` (no query), `ver`, `h2` (HTTP/2 stream id, absent for 1.1), masked `headers`, `masked`, `coding` |
+| 2 | `http_req` | One request body. `meta` holds the head: `method`, `path` (no query), `ver`, `h2` (the HTTP/2 stream id, absent for 1.1; the same on the response), masked `headers`, `masked`, `coding` |
 | 3 | `http_resp` | One final response body. `req` names its request. Bodies are de-chunked and decoded. `meta` has `status`, `ver`, `h2`, `headers`, `masked`, `coding`, `decoded` |
 | 4 | `ws_up` | Every message the client sent on one WebSocket, inflated, in order. `meta.deflate` is true when permessage-deflate was in use |
 | 5 | `ws_down` | Every message the server sent on it. `meta` as `ws_up` |
@@ -121,14 +131,14 @@ starts (0 for `sid` 0 and for `conn` streams).
 | 1 | `memory_guard` | A stated memory guard was passed; tail `{"guard", "limit"}` |
 | 2 | `recorder_down` | The recorder was not running, or ran in null mode. Always `sid` 0 |
 | 3 | `unsupported_encoding` | A body coding the proxy cannot decode; tail `codings` |
-| 4 | `decode_failed` | A coding or the framing broke part way |
+| 4 | `decode_failed` | A coding or the framing broke part way. For HTTP/2 this covers a bad framing or preface and frames that arrive after their stream ended (a `conn` GAP at the close) |
 | 5 | `source_changed` | A session file changed with bytes still unread |
 | 6 | `tls_refused` | A listed host's client refused the run CA; tunnelled |
 | 7 | `pinned` | A listed host's client pins certificates; tunnelled |
 | 8 | reserved | Never written. A write error ends the recorder instead. Shown as `other(8)` |
 | 9 | reserved | Never written. A failed read is retried. Shown as `other(9)` |
 | 10 | `cut_at_seal` | Bytes still unread or unwritten when the seal's time ran out |
-| 11 | `h2_unsupported` | An HTTP/2 feature the proxy cannot follow; the rest relays unparsed |
+| 11 | `h2_unsupported` | An HTTP/2 feature the proxy cannot follow. For an extended CONNECT stream (RFC 8441) only that stream is left unread: each side gets its own GAP counting its bytes, and the connection keeps being parsed. For `PUSH_PROMISE`, an HPACK error or a header block past 16 MiB the rest of the connection relays unparsed; the `conn` GAP counts those bytes, and each open `http_req`/`http_resp` stream gets the same GAP and ends `decode_error`. Frames that arrive after their stream ended are counted here only if such a stop already happened; otherwise see `decode_failed` |
 | 12 | `mask_failed` | The masker failed on a piece, so the piece was dropped |
 | 13 | `upstream_untrusted` | A listed host's server certificate failed the check; tunnelled |
 | 14 | `protocol_other` | A listed host spoken to in a protocol the proxy does not parse; tunnelled |

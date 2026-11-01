@@ -60,6 +60,8 @@ The rules of the shape:
 - **Relay first, record second.** The proxy forwards the bytes, then offers a copy to the recorder
   with a call that never waits. Past the stated memory guard the copy is dropped and the loss is a
   gap with its start, end and lost bytes. The harness is never slowed (point 3).
+  On listed hosts it reads HTTP/1.1, HTTP/2 and WebSocket. An HTTP/2 feature it cannot follow is
+  an `h2_unsupported` gap. An extended CONNECT stream is left unread alone; after `PUSH_PROMISE`, an HPACK error or an oversized header block the rest of that connection is relayed unparsed.
 - **Mask before disk.** Raw bytes live only in memory: in the queue, in the masker's hold and in the
   parser state. Nothing unmasked reaches a file or a log line.
 - **No raw bytes leave memory any other way.** The recorder turns core dumps off before it reads a
