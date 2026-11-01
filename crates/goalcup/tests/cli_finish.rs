@@ -81,7 +81,30 @@ fn counts_and_hosts_are_the_fixtures() {
     let shown = text::whole_and_lost(896, 9, 1_500_000);
     assert!(out.contains(&shown), "{out}");
     assert!(out.contains(&text::off_total(2, 150_000)));
-    assert!(out.contains(&text::no_request_written("your agent")));
+    assert!(out.contains(&text::no_request_written("your agent", None)));
+    // N3: an off total under a second is not "0 s".
+    let short = show(json!({"off": {"spans": 2, "ms": 620}}));
+    assert!(short.contains(&text::off_total(2, 620)), "{short}");
+    // N4b: a pinned host is named and the proxy guess is dropped; with no pin the guess stays.
+    let pin = json!({"written": {"model_requests": 0,
+        "tunnel_hosts": {"p.example.org": {"conns": 1, "up": 1, "down": 1, "listed": "pinned"}}}});
+    let out = show(pin);
+    assert!(
+        out.contains(&text::no_request_written(
+            "your agent",
+            Some("p.example.org")
+        )),
+        "{out}"
+    );
+    assert!(
+        !out.contains(&text::no_request_written("your agent", None)),
+        "{out}"
+    );
+    let none = show(json!({"written": {"model_requests": 0}}));
+    assert!(
+        none.contains(&text::no_request_written("your agent", None)),
+        "{none}"
+    );
     let host = |c: char| format!("{c}.example.org");
     let mut tunnels: Map<String, Value> = ('a'..='g')
         .zip(1u64..)
@@ -231,6 +254,8 @@ fn every_gap_reason_has_words() {
     for n in [0u8, 16, 200] {
         assert_eq!(words(n), other(n));
     }
+    // A pinned host was passed through unread; nobody refused anything.
+    assert_ne!(text::gap_words("pinned"), text::gap_words("tls_refused"));
 }
 
 /// PRD-17 SC6: a `status.json` with no seal never prints the finished line or block: an open

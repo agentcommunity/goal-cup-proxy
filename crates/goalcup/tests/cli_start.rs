@@ -267,3 +267,46 @@ fn a_harness_exit_of_78_is_not_a_masking_refusal() {
     assert_eq!(out.status.code(), Some(78), "{shown}");
     assert!(shown.contains(text::PART_RECORDED), "{shown}");
 }
+
+/// Every `goalcup.log` under `dir`, joined.
+fn logs(dir: &std::path::Path) -> String {
+    let mut all = String::new();
+    for e in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+        let p = e.path();
+        if p.is_dir() {
+            all += &logs(&p);
+        } else if p.file_name().is_some_and(|n| n == "goalcup.log") {
+            all += &std::fs::read_to_string(&p).unwrap_or_default();
+        }
+    }
+    all
+}
+
+/// An unreadable harness version is said on the start screen and the run still starts; a read
+/// version says nothing of the kind.
+#[test]
+fn an_unread_harness_version_is_said_and_the_run_starts() {
+    let screen = |fix: &Fix| {
+        let w = FakeWorker::start();
+        let mut out = Vec::new();
+        prepare(&fix.args(), &fix.ctx(Server::Url(w.url())), &mut out)
+            .unwrap_or_else(|s| panic!("{}", s.text));
+        String::from_utf8(out).unwrap()
+    };
+    let dir = Fix::new("{home}/skills", "");
+    let fake = |name: &str, body: &str| {
+        use std::os::unix::fs::PermissionsExt;
+        let script = dir.t.home().join(name);
+        std::fs::write(&script, body).unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        Fix::with_program(script.to_str().unwrap(), "{home}/skills", "")
+    };
+    let line = text::version_unread("Tester", true);
+    let unread = fake("tester-none", "#!/bin/sh\nexit 1\n");
+    assert!(screen(&unread).contains(&line));
+    // On record in goalcup.log too, for when the harness clears the terminal.
+    assert!(logs(unread.t.home()).contains("version_unread"));
+    let read = fake("tester-bin", "#!/bin/sh\necho tester 1.2.3\n");
+    assert!(!screen(&read).contains(&line));
+    assert!(!logs(read.t.home()).contains("version_unread"));
+}

@@ -20,8 +20,9 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 type Key = [u8; 16];
 /// (boot, stream, WebSocket message number): the call table's row key.
 type Id = (u64, u64, Option<u64>);
-/// One answer's keys: (key, whether it is a tool-call id).
-type Turn = Vec<(Key, bool)>;
+/// One answer's keys: (key, whether it is a tool-call id, the [`ends`] key a masked resend of a
+/// text is also matched by). Only the first key is digested into the chain.
+type Turn = Vec<(Key, bool, Option<Key>)>;
 
 fn hash(b: &[u8]) -> Key {
     let mut k = [0; 16];
@@ -29,8 +30,31 @@ fn hash(b: &[u8]) -> Key {
     k
 }
 
+/// Bytes kept at each end of an answer text for [`ends`].
+const END: usize = 64;
+
+/// Key of a text's first and last [`END`] bytes (`None` under twice that). The recorder masks a
+/// secret-shaped span in a resent request but not across the streamed deltas of the response, so a
+/// masked resend is matched by its ends, which the mask does not reach.
+fn ends(t: &str) -> Option<Key> {
+    let b = t.as_bytes();
+    (b.len() >= 2 * END).then(|| hash(&[b"ends\0", &b[..END], &b[b.len() - END..]].concat()))
+}
+
+/// A tool-call id's key: letters and digits only, lower case. A harness that sanitises or
+/// re-cases the id when it resends the turn (`call_00_AbC` to `call00AbC`) still matches, and the
+/// key stays one per call, so a dropped call is not covered by another call's response. An id
+/// with no letter or digit keeps its raw bytes.
+fn id_key(id: &str) -> Key {
+    let n: String = id.chars().filter(char::is_ascii_alphanumeric).collect();
+    let n = n.to_ascii_lowercase();
+    hash(if n.is_empty() { id } else { &n }.as_bytes())
+}
+
 /// The answer as one assistant turn: its tool-call ids, else (Gemini function calls, no id, and
-/// text) the hash of its whitespace-collapsed text. `None` when it has neither.
+/// text) the hash of its whitespace-collapsed text. `None` when it has neither. The key is always
+/// the hash, so a chain's digests never depend on a MASK elsewhere in a request. A text with
+/// stars, none of them in its [`ends`], also carries the ends key (the third field).
 fn turn(m: &Map<String, Value>) -> Option<Turn> {
     let s = |k: &str| m.get(k).and_then(Value::as_str);
     let id = |v: &Value, k: &str| v.get(k).and_then(Value::as_str).map(String::from);
@@ -60,11 +84,14 @@ fn turn(m: &Map<String, Value>) -> Option<Turn> {
         }
     }
     if !ids.is_empty() {
-        return Some(ids.iter().map(|i| (hash(i.as_bytes()), true)).collect());
+        return Some(ids.iter().map(|i| (id_key(i), true, None)).collect());
     }
     let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
-    let t = (!text.is_empty()).then(|| vec![(hash(text.as_bytes()), false)]);
-    Some(fcs.into_iter().map(|k| (k, false)).collect::<Turn>())
+    let b = text.as_bytes();
+    let star = |s: &[u8]| s.contains(&b'*');
+    let alt = ends(&text).filter(|_| star(b) && !star(&b[..END]) && !star(&b[b.len() - END..]));
+    let t = (!text.is_empty()).then(|| vec![(hash(b), false, alt)]);
+    Some(fcs.into_iter().map(|k| (k, false, None)).collect::<Turn>())
         .filter(|f| !f.is_empty())
         .or(t)
 }
@@ -73,7 +100,8 @@ fn turn(m: &Map<String, Value>) -> Option<Turn> {
 fn keys_of(v: &Value, keys: &mut HashSet<Key>) {
     match v {
         Value::Object(m) => {
-            keys.extend(turn(m).into_iter().flatten().map(|k| k.0));
+            let turn = turn(m).into_iter().flatten();
+            keys.extend(turn.flat_map(|k| [Some(k.0), k.2]).flatten());
             m.values().for_each(|c| keys_of(c, keys));
         }
         Value::Array(a) => a.iter().for_each(|c| keys_of(c, keys)),
@@ -95,6 +123,7 @@ fn texts(acc: &mut String, keys: &mut HashSet<Key>) {
     let t = t.split_whitespace().collect::<Vec<_>>().join(" ");
     if !t.is_empty() {
         keys.insert(hash(t.as_bytes()));
+        keys.extend(ends(&t));
     }
 }
 
@@ -117,6 +146,18 @@ struct St {
     pend: bool,
     msgs: u64,
     acc: String,
+    /// A MASK record was seen on this request, or on the open message.
+    masked: bool,
+    /// A finished WebSocket message waiting for the MASK records written after its last DATA.
+    held: Option<Held>,
+}
+
+/// A finished client message: its id, record offset, body (`None`: a hole) and MASK flag.
+struct Held {
+    id: Id,
+    off: u64,
+    body: Option<Vec<u8>>,
+    masked: bool,
 }
 
 /// One model request: where it ended, its chain, and its turns new to that chain.
@@ -168,6 +209,8 @@ pub struct Sink {
     cand: HashSet<(u64, u64)>,
     by_last: HashMap<u64, Vec<usize>>,
     h: Hist,
+    /// The sids with a held client message.
+    holding: Vec<u64>,
 }
 
 fn mix(p: u64, d: u64) -> u64 {
@@ -193,6 +236,13 @@ impl Sink {
     /// Takes one record; `off` is its raw offset.
     pub fn push(&mut self, rec: &Record, off: u64) {
         self.calls.push(rec);
+        // A held message waits only for the MASK records written straight after its DATA.
+        let keep = if let Record::Mask { sid, .. } = rec {
+            Some(*sid)
+        } else {
+            None
+        };
+        self.flush_all(keep);
         match rec {
             Record::Part { boot, .. } if *boot != self.boot => {
                 // The dead boot's open requests and messages are cut.
@@ -216,6 +266,17 @@ impl Sink {
                 ..
             } => self.data(*sid, off, (*o, *flags), bytes),
             Record::End { sid, .. } => self.end(*sid, off),
+            Record::Mask { sid, .. } => {
+                if let Some(st) = self.open.get_mut(&(self.boot, *sid))
+                    && matches!(st.role, Role::Req | Role::Up)
+                {
+                    // Written after the DATA it covers, so after a finished message too.
+                    match st.held.as_mut() {
+                        Some(h) => h.masked = true,
+                        None => st.masked = true,
+                    }
+                }
+            }
             Record::Gap {
                 sid,
                 start_wall: a,
@@ -278,6 +339,8 @@ impl Sink {
             pend,
             msgs: 0,
             acc: String::new(),
+            masked: false,
+            held: None,
         };
         self.open.insert((b, sid), st);
     }
@@ -320,6 +383,7 @@ impl Sink {
             _ => {}
         }
         if flags & FLAG_FIN != 0 && matches!(st.role, Role::Up | Role::Down) {
+            let masked = std::mem::take(&mut st.masked);
             let (body, hole, n) = (std::mem::take(&mut st.buf), st.hole, st.msgs);
             (st.pend, st.msgs, st.hole) = (false, n + 1, false);
             let (role, op) = (st.role, flags >> 4);
@@ -327,7 +391,29 @@ impl Sink {
                 self.reply(&body);
             } else if role == Role::Up && op == 1 {
                 let id = (self.boot, sid, Some(n));
-                self.message(id, rec_off, (!hole).then_some(&body));
+                let body = (!hole).then_some(body);
+                st.held = Some(Held {
+                    id,
+                    off: rec_off,
+                    body,
+                    masked,
+                });
+                self.holding.push(sid);
+            }
+        }
+    }
+
+    /// Handles every held client message but the one of `keep`, which a MASK may still reach.
+    fn flush_all(&mut self, keep: Option<u64>) {
+        let sids = std::mem::take(&mut self.holding);
+        for sid in sids {
+            if keep == Some(sid) {
+                self.holding.push(sid);
+                continue;
+            }
+            let held = (self.open.get_mut(&(self.boot, sid))).and_then(|s| s.held.take());
+            if let Some(h) = held {
+                self.message(h.id, h.off, h.body.as_ref(), h.masked);
             }
         }
     }
@@ -340,7 +426,7 @@ impl Sink {
         match st.role {
             Role::Req if st.pend => {
                 let body = (!st.hole).then_some(&st.buf);
-                if self.message((k.0, sid, None), off, body) {
+                if self.message((k.0, sid, None), off, body, st.masked) {
                     self.cand.insert(k);
                 }
             }
@@ -370,7 +456,7 @@ impl Sink {
     /// A finished request body (`None`: it has a hole). True when its reply is to be read: a
     /// model request, or a body that looks like JSON but could not be decoded (the call is real
     /// and its answer is still an answer).
-    fn message(&mut self, id: Id, off: u64, body: Option<&Vec<u8>>) -> bool {
+    fn message(&mut self, id: Id, off: u64, body: Option<&Vec<u8>>, masked: bool) -> bool {
         let parsed = body.and_then(|b| serde_json::from_slice::<Value>(b).ok());
         let Some(Value::Object(m)) = parsed else {
             let looks = body.is_none_or(|b| b.trim_ascii_start().first() == Some(&b'{'));
@@ -383,7 +469,12 @@ impl Sink {
         else {
             return false;
         };
-        let turns: Vec<Turn> = items.iter().filter_map(|t| turn(t.as_object()?)).collect();
+        let mut turns: Vec<Turn> = (items.iter())
+            .filter_map(|t| turn(t.as_object()?))
+            .collect();
+        if !masked {
+            turns.iter_mut().flatten().for_each(|k| k.2 = None);
+        }
         let ds: Vec<u64> = turns
             .iter()
             .map(|t| {
@@ -465,7 +556,8 @@ impl Sink {
     }
 
     /// The call table and what the history pass kept.
-    pub fn finish(self) -> (CallTable, Hist) {
+    pub fn finish(mut self) -> (CallTable, Hist) {
+        self.flush_all(None);
         (self.calls.finish(), self.h)
     }
 }
@@ -525,7 +617,9 @@ pub fn judge(h: &Hist, t: &CallTable, covers: &[Cover]) -> Check {
             e.1 += 1;
             checked += 1;
             let miss: Vec<bool> = (keys.iter())
-                .filter(|k| !h.answers.contains(&k.0))
+                .filter(|k| {
+                    !h.answers.contains(&k.0) && !k.2.is_some_and(|e| h.answers.contains(&e))
+                })
                 .map(|k| k.1)
                 .collect();
             if miss.is_empty() {

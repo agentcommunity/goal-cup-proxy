@@ -2513,3 +2513,113 @@ kept and now cites BUILD-PROMPT section 5, since B3 no longer carries it.
 - **Gate effect:** acceptance 10 and 11 (`continue`, `recover`) are now built, so the "not built yet" notes in ARCHITECTURE.md,
   CONNECTOR-SCHEMA.md and PARTICIPANT-GUIDE.md (PRD-15) can go; the PRD-17 rows L-HF4, L-HF6, L-SC4 can be repointed to the named tests once a
   box run passes them on integration. The PRD-07 `repo_url` ask for test mode is still open in PRD-10. No locked ledger item is touched.
+
+### 2026-11-01, replan after PRD-10 slice 12 (merge b8d12325)
+
+- **PRD-10 is fully built.** The last open ask (`repo_url` per mode) is merged; no PRD-10 slice remains.
+- **Size report, PRD-10** (`wc -l` on integration at b8d12325): `crates/goalcup/src/cli/*.rs` 5,279 lines (`text.rs` 1,290), `main.rs` 206;
+  CLI tests (`tests/cli_*.rs`) 3,082. PRD-00 rows: about 2,900 src and 1,200 tests (src about 1.8 times, tests about 2.6 times). Slice 12 added
+  5 src lines and about 115 test lines. Overage on an owner estimate is reported and accepted, not cut; carry to the end-of-build report.
+- **Gate effect:** none on order. The "not built yet" notes in the PRD-15 docs can go for every PRD-10 command. No locked ledger item is touched.
+
+### 2026-11-01, replan after PRD-08 slice 9 (merge 3b18e91b)
+
+- **Size report, PRD-08** (`wc -l` on integration): src outside `usage/` is 4,192 lines (honesty.rs 507, history.rs 647, integrity.rs 1,027, legs.rs 550, secrets.rs 551, the rest 910) against the 1,400 row in PRD-00 (about 3.0 times); `usage/` is 2,861 against the PRD-09 row of 1,470. Tests in `crates/goalcup-verify/tests` are 4,460 against 1,100 plus 200. Slice 9 added about 21 src lines. Overage on an owner estimate is reported, not cut; carry to the end-of-build report with the other overages.
+- **Gate effect:** none on order or seams. Rung 1 sweep findings V1 and V2 are closed in the verifier. Two nits (A8, B-A7-1) are queued in the PRD-08 note. No locked ledger item is touched.
+
+### 2026-11-01, replan after PRD-12 slice 13 (merge f5889891)
+
+- **Size report, PRD-12** (`wc -l` on integration): rig code under `scripts/pad/` is 3,295 lines (check.py 803, pad 769, pad-run 1,113, table 193, selftest 188, sbx.mjs 133, exec/ 96); tests (`test_pad.py`) 779; 4,074 together against the PRD-00 row of about 1,350 to 1,450 with its tests (about 2.9 times). The slice added about 74 source and 84 test lines. Overage on an owner estimate is reported, not cut; carry to the end-of-build report with the other overages.
+- **Gate effect:** none on order or seams. The C3 INCONCLUSIVE "not exercised" case and nits A12 and B10 are noted in the PRD-12 Amendments. No locked ledger item is touched.
+
+### 2026-11-01, note from the PRD-17 slice 8 merge (822c5b77)
+
+- **Size report, PRD-17** (`wc -l` on integration): the eight `crates/goalcup/tests/lessons_*.rs` files total 4,345 lines (connect 510, decode 547, hosts 181, http1 978, launch 504, pipeline 104, tls 412, ws 1,109), unchanged by this slice, against the 3,000 line row shared with PRD-14 in PRD-00 "Size budget" (45% over). PRD-17 has no src row (0). Reported, not cut; carry to the end-of-build report. PRD-14 must keep its own tests small enough that the Rust test total stays near the 14,200 line.
+- **Gate effect:** the deletion gate fails on one check-1 name, `pipeline_stall.rs` (PRD-02, in progress). Order: PRD-02 lands it, then one more PRD-17 slice repoints L-R2 and reruns the gate, then PRD-13 deletes. The gate full row (L-C7) remains the other blocker. No locked ledger item is touched.
+
+### 2026-11-01, replan after PRD-12 slice 14 (merge 40a32e51)
+
+- **Size report, PRD-12** (wc -l on integration): pad 949, pad-run 1,121, check.py 803, table 193, selftest 188, sbx.mjs 133, image 54, exec/ 96; rig source 3,537 plus 455 in harnesses/*.toml. Tests: test_pad.py 781, test_pad_fetch.py 178, test_pad_run_case.py 117 (1,076). Source plus tests 4,613 (5,068 with the toml) against the PRD-00 row of about 1,350 to 1,450 with its tests (about 3.2 times). Slice 14 added about 180 source lines (pad +180, pad-run +41) and about 380 test lines. Overage on an owner estimate is reported, not cut; carry to the end-of-build report. Review found no concrete behaviour-preserving cut beyond B7/B8 (done).
+- **Gate effect:** none on order or seams. Nits A10 and B12 are queued in the PRD-12 note. No locked ledger item is touched.
+
+### 2026-11-01, note from the PRD-17 slice 9 merge (132a35db)
+
+- **Size report, PRD-17** (`wc -l` on integration): the eight `crates/goalcup/tests/lessons_*.rs` files total 4,345 lines, unchanged (slice 9 was docs only), against the 3,000 line row shared with PRD-14 in PRD-00 "Size budget" (45% over). PRD-17 has no src row (0). Reported, not cut; carry to the end-of-build report.
+- **Gate effect:** none on order or seams. PRD-02 landing `pipeline_stall.rs` is still the step before the last PRD-17 gate rerun and PRD-13 deletion; L-C7 stays the other blocker. No locked ledger item is touched.
+
+### 2026-11-01, note from the PRD-12 slice 15 merge (49f2c5d6)
+
+- **Size report, PRD-12** (`wc -l` on integration): pad 949, pad-run 1,132, check.py 830, table 193, selftest 188, sbx.mjs 133, image 54, exec/ 114; rig source 3,593. Tests: test_pad.py 809, test_pad_fetch.py 178, test_pad_run_case.py 117 (1,104). Source plus tests 4,697 against the PRD-00 row of about 1,350 to 1,450 with its tests (about 3.3 times). Slice 15 added about 56 source and 28 test lines. Review (R3) found no concrete behaviour-preserving cut. Overage on an owner estimate is reported, not cut; carry to the end-of-build report.
+- **Gate effect:** none on order or seams. Rung 5b and the kept-open launch shell are in; the TUI-dies-with-the-watchdog case stays INCONCLUSIVE and the owner question W6 already logged. Selftest exit 3 persists (see the PRD-08 note); phase 2 exit must not read it as a pass. No locked ledger item is touched.
+
+### 2026-11-01, note from the PRD-15 slice 19 merge (a632d992)
+
+- **Size report, PRD-15** (`wc -l` on integration): README 246, AGENTS 95, ARCHITECTURE 199, OPERATING 261,
+  PARTICIPANT-GUIDE 495, RECORD-FORMAT 552, RULES 459, CONNECTOR-SCHEMA 117 (2,424 together); docs only, no
+  code. PRD-00 "Size budget" has no PRD-15 row, so no ceiling is exceeded.
+- **Gate effect:** none on order or seams. The remaining PRD-15 work is the tier columns after phase 5 and
+  the HARNESS-SETUP move. No locked ledger item is touched.
+
+### 2026-11-01, replan after PRD-02 slice C part 2 (merge cdc9b456)
+
+- **Size, PRD-02 merged code (`wc -l`):** src `pipeline/` plus `watchdog/` 8,236 lines against the PRD-00 "Size budget" row 1,350 (the earlier 6,000 ceiling is also passed); tests `pipeline_*` and `watchdog_*` including `watchdog_share/` 4,013 lines against the 1,500 row. The overage is the restored point guards, the recover and restart acceptance and the shared watchdog rig. Reported, not enforced by a gate; PRD-13 and the integrator decide any trim after the deletion gate, and cuts stay inside the seven points.
+- **Build plan:** the last gate-relevant PRD-02 item is merged; the deletion gate waits on PRD-17's repoint and rerun of L-R2 (PRD-17 note) and on the gate full row (L-C7). PRD-14 owes the `heavy` entries (PRD-14 note). Remaining PRD-02 slice items stay deferred by conductor decision: `by_hand_load`, native cursor resume, the mask pool, `pipeline_many_streams`, `pipeline_no_latch`, `SnapshotCursor.fid`. No locked ledger item is touched.
+
+### 2026-11-01, replan after PRD-05 point 4 leak fix (merge fc8df0e9)
+
+- **Size report, PRD-05** (`wc -l` on integration): src `src/mask/*` 4,939 against the PRD-00 "Size budget" row 3,530
+  (+1,409, this slice +215); tests `tests/mask*.rs` and `mask_corpus/*.rs` 2,396 against 2,000 (5,544 with corpus
+  data files). Overage reported, not cut; carry to the end-of-build report.
+- **Gate effect:** none on order or seams. The `gsk_`/`sgamp_` owner question stays open and only removes rows if
+  answered no. Open PRD-05 nits (`;` ending, AQ. name starred, 16 KiB fail-closed cases) are recorded in the PRD-05
+  note. PRD-08 and PRD-12 notes added. No locked ledger item is touched.
+
+### 2026-11-01, replan after PRD-08 Gemini native parent reader (merge 27341339)
+
+- **Size report, PRD-08** (`wc -l` on integration): `crates/goalcup-verify/src` 7,136 lines (of which `src/usage/` 2,944, owned by PRD-09 apart from the Gemini hunks) against the PRD-00 "Size budget" row 1,400; tests `crates/goalcup-verify/tests` 5,207 against 1,100. This slice added about 82 source and 192 test lines; the overage comes from earlier slices. Reported, not cut; carry to the end-of-build report.
+- **Review:** one nit (N1), the unique-match filter in the `hit` closure of `usage/native.rs` could be a plain `find`. Taste only, not a defect, left as is.
+- **Gate effect:** none on order or seams. Gemini thread links now come from the chat file path layout, with the wire-thread fallback when the file carries no id. No locked ledger item is touched.
+
+### 2026-11-01, replan after PRD-12 sweep 2 fixes (merge 98873c1d)
+
+- **Size report, PRD-12** (wc -l on integration, scripts/pad without fixtures): Python and extensionless scripts 4,473 lines (check.py 830, pad 949, pad-run 1,132, table 197, selftest 188, tests 1,123), plus 832 lines of harness toml, shell and config data. PRD-00 "Size budget" row: about 1,350 to 1,450 with tests. This slice added 54 and removed 10. The overage is carried from earlier slices and was accepted at the slice 15 report (R3, no concrete cut); reported, not cut; carry to the end-of-build report.
+- **Gate effect:** none on order or seams. The pad still ends at selftest exit 3 (PRD-08 fixture gap); Crush and Cline rows report exit 3 "not verified", which Phase 2 exit must not read as a pass. No locked ledger item is touched.
+
+### 2026-11-01, replan after PRD-08 slice 10 (merge 64ff365a)
+
+- **Size report, PRD-08** (wc -l on integration): `crates/goalcup-verify/src` 7,220 lines (of which `src/usage/` 2,944, PRD-09) against the PRD-00 "Size budget" row 1,400; `tests/*.rs` 4,873 against 1,100. This slice changed history.rs (647 to 731, about +84 net) and added about 221 lines to check_history.rs. Overage carried from earlier slices; reported, not cut; carry to the end-of-build report.
+- **Gate effect:** none on order or seams. The history_complete masked-resend fix is verifier-internal (ends() key, held WebSocket message release); no seam shape, no other PRD file, and no locked ledger item is touched.
+
+### 2026-11-01, post-cut slice: gate full and watchdog timing
+
+- **Heavy group (PRD-14 section 8):** the one `binary(/^(...)$/)` regex in `.config/nextest.toml` now names every heavy binary on the branch: native_walk, watchdog_rlimit, watchdog_end, watchdog_null, watchdog_recover, watchdog_restart, watchdog_shield, proxy_connect, proxy_restart, lessons_launch, pipeline_stall (commit 6917f523) and pipeline_guard (5ef5ad7c, PRD-02's replan ask); pipeline_stall also has the end-to-end slow-timeout, 60 s by 10. Still to come: e2e_*, pipeline_restart, pipeline_many_streams. The edit is PRD-14's file and the fixture swap PRD-12's. Covered by the conductor's rulings, not by owner acknowledgements: integrator.log 09:57Z gives selftest and owner confirmations to the post-cut lane, and LATEST.md section 3 item 5 gives the heavy-group line to the conductor ("PRD-14 heavy group by ruling"); wire.log 11:40Z is the precedent of another lane adding a heavy-group line. The post-cut lane asked both owners to acknowledge (postcut.log 11:50Z, kind "owner question"); neither has answered. The merge message records the acks if they arrive, or cites these rulings.
+- **Gate full (G1 row), on a pushed commit:** 5ef5ad7c on v1.0/prd-16-postcut (the branch with integration 78618a77 merged in), Vercel Sandbox, 8 vCPUs, cold target directory, dependencies fetched before the timer: `gate full: PASS in 575s`. fmt 1 s, clippy 20 s, nextest 334 s (639 run, 639 passed, 4 skipped, 6 slow), doctests 1 s, worker npm tests 24 s, script tests 17 s, pad tests 1 s, ignored tests 120 s (3 run, 3 passed), release build 56 s; `GOALCUP_TEST_` count 0 in the release binary and 3 in the debug one. A reviewer's box measured 544 s on 1014b494 (639 tests) and the merger's 573 s on the same head. The earlier figures below, 526 s and their step times, came from 6c5d8fee, a local merge that was never pushed and is on no branch; they are a second sample, not the evidence (526 s, nextest 244 s, 632 tests).
+- **Three slowest tests** (the same three on 5ef5ad7c, 73.1 s, 57.8 s and 37.2 s): pipeline_stall `a_stalled_writer_exits_75_and_the_next_boot_names_it` 73.2 s, pipeline_dead `a_pruned_boot_with_counts_behind_seals_the_bytes_written` 59.1 s, watchdog_null `watchdog_null_crash_loop_serves_and_retries` 37.3 s. In the ignored step, lessons_connect `idle_tunnel_survives_120s` takes 120.0 s and sets that step's time. No failures.
+- **Ignored step is thin:** no e2e_run.rs exists yet, so the step runs only the lessons_connect tunnel case and two upload_worker cases. Gate full passing here does not cover the end-to-end rows.
+- **Watchdog timing under load:** on 6917f523, same box size, `watchdog_end`, `watchdog_recover` and `watchdog_restart` with `--run-ignored all`, 10 runs idle and 10 runs with 8 CPU burners (one per vCPU). 0 failures in 20 runs for every test. `watchdog_end_real_killed_recorder_restarts` min/median/max 2.2/2.2/2.2 s idle, 2.3/2.4/2.5 s loaded (it hit the 180 s kill on c8f0a3a1). `watchdog_recover_restarts_the_recorder_only` 7.2/7.2/7.3 s idle, 7.3/7.4/7.5 s loaded (it failed on 6fb5db63). The slowest, `watchdog_restart_keeps_port_backlog_and_ca` and `watchdog_end_real_deadline_ends_the_tree`, stay at 12.7 s and 14.2 s at most. A restart under CPU load takes seconds, not minutes, so the earlier watchdog timeouts did not reproduce. This load measurement covered only the watchdog binaries.
+- **Selftest fixtures:** `scripts/pad/fixtures/regen-k7-k11d.rs` is the committed generator of k7-part, k7-fetched, k11-d-part and k11-d-fetched (command in the `scripts/pad/selftest` docstring). On 5ef5ad7c it rebuilt all four byte-identical to the committed folders, and `scripts/pad/selftest` exits 0 (every control as wanted). PRD-08 is asked to adopt it as a `GOALCUP_FIXTURES_OUT` test.
+- **pipeline_guard under load (routed to PRD-02):** with 8 CPU burners, `two_hundred_streams_with_the_writer_held` fails "hang: still running after 30s" in 2 of 3 standalone runs on 5ef5ad7c (a reviewer saw 5 of 5 on 1014b494, and 1 of 2 full-workspace rounds). The bound that fires is `wait_settled`'s `within(HANG)` in `tests/common/recorder.rs`: it starts before the 25 s writer hold and must also cover the drain. Not a recorder defect (every data() call returns while the writer is held, all streams in a GAP). PRD-02 owns `pipeline_guard.rs`: shorten the hold or give settle its own bound after the hold ends. Joining the heavy group lowers the load inside the gate; it does not fix a loaded box. Idle gate full passes it (32.5 s). G1 and L-R2 are not robust on a loaded box until PRD-02 makes that change.
+- **Gate effect:** the G1 row has its measured numbers on a pushed commit; it still needs a rerun once e2e_*, pipeline_restart and pipeline_many_streams land and join the heavy group. No locked ledger item is touched.
+
+### 2026-11-01, replan after PRD-12 full-row fixes (merge 98f8f71d)
+
+- **Done item 2 / G3-16f wording.** The Codex kill test reads "kill at the harness's own minutes (Codex 3 and 5)"; Claude Code and Hermes keep 8 and 10. The pad's `kill_minutes` key in the harness file is the source. Not a change to a locked ledger item.
+- **C3 stated loss.** A secrets check whose only hits are shape hits inside joined streamed deltas is INCONCLUSIVE (exit 2 allowed on kill rows and C1), never PASS. The owner question on counting it as a stated loss stays open (log, kind "owner question"); no row relying on it counts toward `--release-check` until answered. Phase 4 must read those Hermes and OpenClaw rows as open.
+- **Size report, PRD-12** (`wc -l` on integration, `scripts/pad` without fixtures): Python and extensionless scripts, JS and tests 4,726 lines (check.py 856, pad 970, pad-run 1,132, table 197, selftest 188, sbx.mjs 133, tests 1,250), plus 850 lines of harness, exec, run and prompt data. PRD-00 "Size budget" row: about 1,350 to 1,450 with tests. This slice added about 198 lines, mostly tests. Overage carried from earlier slices; reported, not cut; carry to the end-of-build report.
+- **Review:** the last finding (R6) is a cosmetic nit in check.py `local()` (`other_named` computed on every row); left as is. No order or seam change.
+
+### 2026-11-01, replan after PRD-10 unread-version slice (merge e707e427)
+
+- **Size report, PRD-10** (`wc -l` on integration): `crates/goalcup/src/cli/*.rs` 5,315 lines against the PRD-00 "Size budget" row about 2,900 (of which `text.rs` was reported at 1,290 against 420 and accepted earlier); `tests/cli_*.rs` (including `cli_common/`) 3,339 against 1,200. This slice added a small helper, one text line and one continue test; the overage is carried from earlier slices, reported, not cut; carry to the end-of-build report.
+- **Gate effect:** none on order or seams. The Worker is unchanged. Carried: PRD-14 FakeWorker body recording (nit B4), a cosmetic PRD-10 text nit (A5). No locked ledger item is touched.
+
+### 2026-11-01, replan after the PRD-16 post-cut slice (merge dacbc61b)
+
+- **Size report, PRD-16.** PRD-16 owns no code row in PRD-00 "Size budget": workspace `Cargo.toml` is 121 lines on integration (the slice trimmed it) and the rest is docs. The scripts it orchestrates (PRD-14's gate, release, packaging, fetch-run, smoke) are `gate.sh` 103, `release.sh` 121, `package-release.sh` 40, `fetch-run.sh` 375 and `smoke-release.sh` 53, 692 lines against the "Scripts" row of about 900. The slice added the pad fixture generator `scripts/pad/fixtures/regen-k7-k11d.rs` (168 lines, built by no target) and a nextest regex line. Within budget; nothing cut.
+- **What this settles.** Selftest exits 0, the `Cargo.toml` cleanup is in, and gate full has a pushed-head figure (577 s, idle, 8 vCPUs). The G1 row is not closed: the ignored step covers no end-to-end row until `e2e_*`, `pipeline_restart` and `pipeline_many_streams` land and join the heavy group, so gate full is rerun then (phase 3 exit). G1 and L-R2 are not robust on a loaded box: `pipeline_guard::two_hundred_streams_with_the_writer_held` hits its 30 s bound under 8 CPU burners, routed to PRD-02. Phase 4 and 6 boxes must not run it beside other load, and a red there is the test bound, not a recorder stop, until PRD-02 changes it.
+- **Open from the slice, routed in the PRD notes:** PRD-13 stays open on the OWN-5 provenance-comment rewording (PRD-15 sweep) and on the subreaper start-time filter (PRD-02); PRD-08 adopts the k7 and k11-d generator; the PRD-14 and PRD-12 acknowledgements of the post-cut edits are unanswered and the rulings (integrator.log 09:57Z, LATEST.md section 3 item 5) stand in for them. The Codex kill row on the post-cut head is still to be scheduled on the pad. No locked ledger item is touched.
+
+### 2026-11-01, replan after PRD-11 own6-expected-hosts-wired (merge 5dc8cbde)
+
+- **Size report, PRD-11** (`wc -l` on integration at 5dc8cbde): `crates/goalcup/src/connector/*.rs` 1,708 lines against the PRD-00 "Size budget" row of 800 src (more than 10% over; the overage is carried from earlier slices, in the same range as the 1,695 reported at slice 6, and this slice added only a few lines there); `crates/goalcup/tests/connector_*.rs` 775 against 400 tests. The slice's own code sits mostly in other PRDs' files (proxy tunnel/hosts 18, cli 40, verify honesty 16, plus tests), counted in those rows. Reported, not cut; carry to the end-of-build report.
+- **Order and gate effect:** none. The `expected` hosts seam from the sweep 3 note is now consumed by PRD-03, PRD-08 and PRD-10. The first-note key gap is routed to PRD-02 (see its note); it affects no acceptance row. Review nits A7 and B7 are carried, not blocking. No locked ledger item is touched.

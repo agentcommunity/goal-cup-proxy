@@ -423,7 +423,8 @@ pub fn size_words(bytes: u64) -> String {
 pub fn span_words(ms: u64) -> String {
     let s = ms / 1000;
     match s {
-        0..60 => format!("{s} s"),
+        0 => "under 1 s".to_owned(),
+        1..60 => format!("{s} s"),
         60..3600 => format!("{} min {} s", s / 60, s % 60),
         _ => format!("{} h {} min", s / 3600, s % 3600 / 60),
     }
@@ -449,7 +450,8 @@ pub fn gap_words(name: &str) -> String {
         "h2_unsupported" => "a connection goalcup could not follow",
         "protocol_other" => "a connection in a form goalcup does not read",
         "source_changed" => "a session file was replaced or cut short",
-        "tls_refused" | "pinned" => "the program refused the recorder",
+        "tls_refused" => "the program refused the recorder",
+        "pinned" => "the host list pins it",
         "cut_at_seal" => "still arriving when the part ended",
         "mask_failed" => "goalcup could not check it for secrets, so it dropped it",
         "upstream_untrusted" => "the model service's certificate was not one goalcup trusts",
@@ -634,10 +636,15 @@ pub fn long_tunnel(host: &str, minutes: Option<u64>, up: u64) -> String {
     )
 }
 
+/// A host the proxy passes through on purpose (telemetry): information, not a problem.
+pub fn expected_tunnel(host: &str) -> String {
+    format!("Not recorded, expected (telemetry): {host}.")
+}
+
 /// A listed host tunnelled unread, by its GAP reason name (or note `ca_refused`).
 pub fn listed_tunnel(host: &str, reason: &str) -> String {
     match reason {
-        "tls_refused" | "pinned" => format!(
+        "tls_refused" => format!(
             "{PROBLEM} Not recorded: {host} refused the recorder (it checks its own certificates). \
              Its traffic passed through unread."
         ),
@@ -722,10 +729,15 @@ pub fn continue_now(run: &str) -> String {
     format!("To go on, run: goalcup continue {run} (you can do it in another terminal now).")
 }
 
-pub fn no_request_written(name: &str) -> String {
-    format!(
-        "No model request was written. {name} may not use the recording proxy, or it made no call."
-    )
+pub fn no_request_written(name: &str, pinned: Option<&str>) -> String {
+    match pinned {
+        Some(host) => format!(
+            "No model request was written. The host list pins {host}, so its traffic passed through unread."
+        ),
+        None => format!(
+            "No model request was written. {name} may not use the recording proxy, or it made no call."
+        ),
+    }
 }
 
 pub fn requests_written(n: u64, hosts: &[(&str, u64)]) -> String {
@@ -1111,6 +1123,17 @@ pub fn run_kind(mode: RunMode) -> &'static str {
     }
 }
 
+/// The harness version could not be read. The upload sentence is said only when there is an upload,
+/// because the upload carries "unknown".
+pub fn version_unread(name: &str, upload: bool) -> String {
+    let said = format!("{name}'s version could not be read, so the run starts without it.");
+    if upload {
+        format!("{said} The upload says unknown.")
+    } else {
+        said
+    }
+}
+
 pub fn upload_to(host: Option<&str>) -> String {
     match host {
         None => "Upload: off (GOALCUP_SERVER=off), so this run has no end time and its record files stay on this computer.".to_owned(),
@@ -1127,9 +1150,6 @@ pub fn tier_line(name: &str, version: Option<&str>, tier: &str, verified: &str) 
                 version.unwrap_or_default()
             )
         }
-        "verified" if version.is_none() => format!(
-            "{who}: verified with goalcup on {verified}; the installed version was not read."
-        ),
         "verified" => format!("{who}: verified with goalcup on {verified}."),
         "not supported" => format!(
             "{name}: not supported. goalcup records its session files and the connections it can see, not its model calls."
@@ -1276,15 +1296,15 @@ pub fn recover_support(run: &str, log: &std::path::Path) -> String {
 
 pub fn recover_late(name: &str, part: usize) -> String {
     format!(
-        "goalcup is restarting recording for part {part} of your run with {name}, but it has not said it is ready yet. {name} was not restarted. Check with: goalcup status"
+        "goalcup is restarting recording for part {part} of your run with {name}, but it has not said it is ready yet. {name} was not restarted. When {name} exits no message appears in this terminal; goalcup status (or goalcup seal) shows the final counts."
     )
 }
 
 pub fn recover_on_again(name: &str, part: usize, span: &str, from: &str, to: &str) -> String {
     format!(
         "Recording is on again for part {part} of your run with {name}, on the same port.\n\
-         It was off from {from} to {to} ({span}); this time is in the record as a gap.\n\
-         {name} was not restarted. This part ends when {name} exits or at the deadline.\n\
-         Check it any time with: goalcup status"
+         It was off from about {from} to {to} (about {span}); the exact span is in the record as a gap.\n\
+         {name} was not restarted. This part ends when {name} exits or at the deadline, and no message appears in this terminal then.\n\
+         The final counts are shown by: goalcup status (or goalcup seal)"
     )
 }

@@ -11,35 +11,18 @@
 
 mod common;
 
-use common::recorder::records;
+mod watchdog_share;
+
 use common::upstream::{Script, Upstream};
 use goalcup::cli::{self, NULL_FLAG};
-use goalcup::connector::{ConnectorRef, HomeLock, HostList, LaunchPlan, NativeSources, builtin};
-use goalcup::watchdog::{self, CaPem, StartFacts};
-use goalcup_format::{GapReason, Record};
-use serde_json::{Value, to_value};
-use std::collections::BTreeMap;
+use goalcup::watchdog;
+use goalcup_format::Record;
+use serde_json::Value;
 use std::io::{Read, Write};
 use std::net::TcpStream;
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
-
-const WAIT: Duration = Duration::from_secs(90);
-const RUN: &str = "r0123456789abcdef";
-const ENTRY: &str = "e0123456789abcdef";
-
-/// Waits until `f` gives `Some`, at most [`WAIT`].
-fn until<T>(what: &str, mut f: impl FnMut() -> Option<T>) -> T {
-    let start = Instant::now();
-    loop {
-        if let Some(v) = f() {
-            return v;
-        }
-        assert!(start.elapsed() < WAIT, "timed out waiting for {what}");
-        std::thread::sleep(Duration::from_millis(50));
-    }
-}
+use watchdog_share::{Setup, down_gaps, script, setup_with, until};
 
 /// The wrapper's boot log: per boot `<n> <uptime> <args>`, and `<n> exit <code>` after a null one.
 fn boot_log(d: &Path) -> Vec<Vec<String>> {
@@ -90,84 +73,6 @@ fn crash_wrapper(d: &Path) -> PathBuf {
     script(d, "crash_recorder.sh", "case $n in 1) ;; *) exit 1;; esac")
 }
 
-/// A recorder wrapper `name` in `d`: it counts boots in `boots` and logs each one's number,
-/// uptime and arguments in `boot_log`, runs `body` (which sees the boot number as `$n`), then
-/// execs the binary.
-fn script(d: &Path, name: &str, body: &str) -> PathBuf {
-    let (dd, exe) = (d.display(), env!("CARGO_BIN_EXE_goalcup"));
-    let text = format!(
-        "#!/bin/sh
-         read up _ < /proc/uptime
-         n=$(( $(cat {dd}/boots 2>/dev/null || echo 0) + 1 )); echo $n > {dd}/boots
-         echo \"$n $up $*\" >> {dd}/boot_log
-         {body}
-         exec \"{exe}\" \"$@\""
-    );
-    let path = d.join(name);
-    std::fs::write(&path, text).unwrap();
-    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
-    path
-}
-
-fn plan(d: &Path) -> LaunchPlan {
-    let harness = format!("while [ ! -e {}/stop ]; do sleep 0.05; done", d.display());
-    LaunchPlan {
-        connector: ConnectorRef {
-            id: "fake".into(),
-            name: "Fake".into(),
-            sha256: "0".repeat(64),
-            source: Default::default(),
-        },
-        harness_version: None,
-        program: PathBuf::from("/bin/sh"),
-        argv: vec!["-c".into(), harness],
-        env: BTreeMap::from([("PATH".into(), "/usr/bin:/bin".into())]),
-        home: d.join("home"),
-        lock: HomeLock::default(),
-        before: Vec::new(),
-        after: Vec::new(),
-        ca_env: Vec::new(),
-        hosts: HostList::from_file(builtin::HOSTS.as_bytes(), "model-hosts.toml").unwrap(),
-        native: NativeSources::default(),
-        mask_rules: Vec::new(),
-        secret_values: Vec::new(),
-        notes: Vec::new(),
-        unread: Vec::new(),
-        log: Vec::new(),
-        refusal: None,
-    }
-}
-
-fn facts(plan: &LaunchPlan, entry_dir: &Path, d: &Path) -> StartFacts {
-    StartFacts {
-        run: RUN.into(),
-        entry: ENTRY.into(),
-        segment: 0,
-        entry_dir: entry_dir.to_path_buf(),
-        deadline: None,
-        server_time: None,
-        local_wall: 0,
-        workspace: d.to_path_buf(),
-        connector: to_value(&plan.connector).unwrap(),
-        harness_version: None,
-        keep: true,
-        build: None,
-        hosts: to_value(&plan.hosts).unwrap(),
-        hosts_sha256: plan.hosts.sha256().to_string(),
-        native: to_value(&plan.native).unwrap(),
-        mask_rules: serde_json::json!([]),
-        values: serde_json::json!([]),
-        ca: CaPem {
-            cert: String::new(),
-            key: String::new(),
-        },
-        prev: None,
-        harness: None,
-        null_since: None,
-        notes: Vec::new(),
-    }
-}
-
 /// A plain request to `up` through the proxy on `port`: a CONNECT tunnel, then one GET.
 fn through_proxy(port: u64, up: std::net::SocketAddr) -> String {
     let mut s = TcpStream::connect(("127.0.0.1", port as u16)).unwrap();
@@ -187,50 +92,8 @@ fn through_proxy(port: u64, up: std::net::SocketAddr) -> String {
     answer
 }
 
-/// The test folder: marker files in `d`, the entry folder, the plan and the recorder wrapper.
-struct Setup {
-    _tmp: tempfile::TempDir,
-    d: PathBuf,
-    entry_dir: PathBuf,
-    plan: LaunchPlan,
-    recorder: PathBuf,
-    facts: StartFacts,
-}
-
 fn setup() -> Setup {
     setup_with(wrapper)
-}
-
-fn setup_with(wrapper: fn(&Path) -> PathBuf) -> Setup {
-    // SAFETY: set before any thread of this test process starts; sound only because nextest
-    // runs each test in its own process.
-    unsafe { std::env::set_var("GOALCUP_SERVER", "off") };
-    let tmp = tempfile::tempdir().unwrap();
-    let d = tmp.path().join("m");
-    std::fs::create_dir_all(&d).unwrap();
-    let home = tmp.path().join("g");
-    let entry_dir = cli::entry_dir(&home, RUN, ENTRY);
-    std::fs::create_dir_all(&entry_dir).unwrap();
-    let server = serde_json::json!({
-        "v": 1, "server": null, "run": RUN, "mode": "practice", "deadline": null,
-        "repo": null, "connector": {"id": "fake", "name": "Fake", "source": "builtin"},
-        "hosts_file": null, "entries": [{"id": ENTRY, "harness_version": null, "resumed": false}],
-    });
-    std::fs::write(
-        cli::server_json(&cli::run_dir(&home, RUN)),
-        server.to_string(),
-    )
-    .unwrap();
-    let (plan, recorder) = (plan(&d), wrapper(&d));
-    let facts = facts(&plan, &entry_dir, &d);
-    Setup {
-        _tmp: tmp,
-        d,
-        entry_dir,
-        plan,
-        recorder,
-        facts,
-    }
 }
 
 /// Kills boot 1 after its first LINK, so boots 1 to 3 make a crash loop, and waits for the null
@@ -249,23 +112,6 @@ fn crash_to_null(dir: &Path) -> Value {
     // SAFETY: a signal to one pid, the first recorder's.
     unsafe { libc::kill(first as libc::pid_t, libc::SIGKILL) };
     until("null mode", || status().filter(|s| s["mode"] == "null"))
-}
-
-/// The `recorder_down` gaps as (start_mono, end_mono, tail).
-fn down_gaps(entry_dir: &Path) -> Vec<(u64, u64, Value)> {
-    records(entry_dir)
-        .into_iter()
-        .filter_map(|r| match r {
-            Record::Gap {
-                reason: GapReason::RecorderDown,
-                start_mono,
-                end_mono,
-                tail,
-                ..
-            } => Some((start_mono, end_mono, serde_json::from_slice(&tail).unwrap())),
-            _ => None,
-        })
-        .collect()
 }
 
 /// Point 3 and ledger R3a: a crash loop goes to null mode, which serves and retries a normal

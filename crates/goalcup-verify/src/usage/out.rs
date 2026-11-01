@@ -120,6 +120,8 @@ pub(super) fn summary(t: &CallTable) -> Value {
             "wire_only": n(Join::WireOnly), "unattributed": n(Join::Unattributed),
             "joined_by_time": t.joined_by_time, "repeats_skipped": t.repeats_skipped,
             "copied_skipped": t.copied_skipped},
+        "not_on_wire": t.not_on_wire.iter().map(|(host, reason, conns)| json!({"host": host,
+            "reason": reason, "conns": conns})).collect::<Vec<_>>(),
         "status": st, "models": models, "threads": threads,
         "tokens": {"merged": total(rows().filter(counted).filter(has_usage)), "native": sum(native().map(|r| &r.tokens).chain(t.threads.iter().filter(|x| !x.resumed).map(|x| &x.native_tokens))),
             "native_partial": t.threads.iter().any(|x| x.resumed),

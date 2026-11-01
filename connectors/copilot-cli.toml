@@ -1,5 +1,3 @@
-# GitHub Copilot CLI 1.0.105, checked against the docs.github.com Copilot CLI reference and the 1.0.105 package
-# (--help and help environment, config, providers, permissions).
 id = "copilot-cli"
 name = "GitHub Copilot CLI"
 program = "copilot"

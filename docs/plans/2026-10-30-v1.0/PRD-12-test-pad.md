@@ -197,7 +197,7 @@ of `scripts/matrix.sh:253-258`, `:559-600`, without its production flag).
 | `--case`, `--prompt`, `--minutes`, `--server`, `--where`, `--version`, `--build`, `--connector`, `--hosts`, `--gateway-key` | the key of the same name |
 | `--prompt-file <path>` (PRD-16 A1 uses run 1's prompt) | `prompt = "<path>"` |
 | `--keep-going <n>` | step `keep-going`, with `keep_going = n` |
-| `--kill-recorder 8,10` | steps `kill-recorder@8`, `kill-recorder@10` |
+| `--kill-recorder 8,10` | steps `kill-recorder@8`, `kill-recorder@10`; the pad takes the minutes from the harness file's `kill_minutes` (section 3.1 note, P10) |
 | `--fault <kind>@<m>[+<n>]`, `--exec <m>:<script>`, `--pre <script>` | steps `<kind>@<m>[+<n>]`, `exec <script>@<m>`, `pre <script>` (section 3.1) |
 | `--no-keep` | `keep = false` |
 
@@ -275,8 +275,9 @@ A `kill-recorder` step is always followed by `wait-recovery`; the rig adds it.
 | 1 Local capture | `mode = "micro"`, `case = "direct"`, `server = "off"`, `prompt = "micro"` (nothing uploaded) |
 | 2 Upload | rung 1 with `server = "staging"` |
 | 3 Subagents | rung 2 with `prompt = "smoke"` |
-| 4 Recorder crash | rung 3 with `steps = ["kill-recorder@1"]` |
-| 5 Watchdog kill and `goalcup recover` | rung 3 with `steps = ["kill-watchdog-recover@1"]`, `minutes = 5` |
+| 4 Recorder crash | rung 3 with `steps = ["kill-recorder@0"]` |
+| 5 Watchdog kill and `goalcup recover` | rung 3 with `steps = ["kill-watchdog-recover@1"]`, `minutes = 5`; the launch shell stays alive (see `kill-watchdog-recover`, section 3.1) |
+| 5b Both killed, then seal | rung 3 with `steps = ["exec kill-both-seal.sh@2"]`, `minutes = 5` |
 | 6 Keep going | rung 3 with `steps = ["keep-going"]` |
 | 7 Gateway | rung 3 with `case = "gateway"` |
 | 8 Dodger | rung 3 with `case = "dodger"` |
@@ -352,9 +353,9 @@ process, and writes what it did with the wall time to `watch/faults.jsonl`.
 
 | Kind | What `pad-run` does | Owner and pass line | What the checks expect |
 |---|---|---|---|
-| `kill-recorder@m` | Waits from minute m until `status.json` shows an open response stream (up to 60 s, else kills anyway and says so), then `kill -9` of the recorder pid in `status.json` | PRD-02 R1 (Codex, done item 2) and its kill case on Claude Code and Hermes; PRD-06 U4 and U6; PRD-10 acceptance 2 | Verifier exit 1. Exactly one `recorder_down` gap per kill, start before end, each under 2 s (PRD-02 defaults). No `null_mode` gap, and no `status.jsonl` line with `mode: null`: the kills are 2 minutes apart, so each restart is eager and no crash loop forms (ledger R3a). C1 and C2 may be `named` only by those gaps; any other named loss is FAIL |
+| `kill-recorder@m` | Waits from minute m until `status.json` shows an open response stream (up to 60 s, else kills anyway and says so; `kill-recorder@0` kills at once, with no wait; it counts as quiet unless a request was written in the last 10 s, so a recorder that does not stand back up with no new request to show ends INCONCLUSIVE, never FAIL from rig timing), then `kill -9` of the recorder pid in `status.json` | PRD-02 R1 (Codex, done item 2, at the harness's own kill minutes, P10) and its kill case on Claude Code and Hermes; PRD-06 U4 and U6; PRD-10 acceptance 2 | Verifier exit 1. Exactly one `recorder_down` gap per kill, start before end, each under 2 s (PRD-02 defaults). No `null_mode` gap, and no `status.jsonl` line with `mode: null`: the kills are 2 minutes apart, so each restart is eager and no crash loop forms (ledger R3a). C1 and C2 may be `named` only by those gaps; any other named loss is FAIL |
 | `kill-watchdog@m` | `kill -9` of the pid in `rec/watchdog.pid`. At minute m+3 `pad-run` sends the harness file's `exit_keys` and runs no `goalcup seal` | PRD-02 R5 | Seal reason `harness_exit` within 35 s of the harness's exit; checks as a clean run |
-| `kill-watchdog-recover@m` | `kill -9` of the pid in `rec/watchdog.pid`. Then `goalcup recover` at once in a new tmux window `pad:recover`, whose shell has the run's `GOALCUP_*` values and none of the harness's proxy or CA variables (the recorder still lives). At m+1, `kill -9` of the recorder pid in `status.json`; nothing restarts it now. Plain `goalcup status` every 2 s for 10 s. At m+2, `goalcup recover` again in `pad:recover`. The harness is never touched. At `minutes`, send `exit_keys`, then SIGTERM to `harness.pid` after 30 s if it still lives; no `goalcup seal` | PRD-10 acceptance 11 (ledger R3b); PRD-02 section 9.1 row "The watchdog, then later the recorder". PRD-10 kills both together; the pad's one-minute split covers that case and the order the ledger names | The first `recover` exits 0 with `Recording is on; there is nothing to recover.` Status shows the line ending `Run: goalcup recover` within 10 s of the recorder kill. The second `recover` exits 0 with `Recording is on again`. `status.jsonl` shows the same harness pid and the same `port` before and after. Exactly one `recorder_down` gap, from the recorder kill to the recovered boot's first record, start before end. Every later `conn` to a listed host is `decrypt` (same run certificate). Written model requests after the recover above 0. Seal reason `harness_exit` (or `deadline`). C1 and C2 `named` only by that gap. If the harness lost its terminal when the watchdog died (PRD-02 section 9.1), status must show the `goalcup continue` line instead; the row is INCONCLUSIVE "harness lost its terminal" and the watcher follows PRD-10 acceptance 11 |
+| `kill-watchdog-recover@m` | The run's `launch.sh` ends with `exec sleep 1000000` after the `goalcup start` line, so the launch shell, a shell without job control, outlives `goalcup start` (not an interactive terminal; conductor decision, owner to confirm; no marker file, the fault name decides). `kill -9` of the pid in `rec/watchdog.pid`. Then `goalcup recover` at once in a new tmux window `pad:recover`, whose shell has the run's `GOALCUP_*` values and none of the harness's proxy or CA variables (the recorder still lives). At m+1, `kill -9` of the recorder pid in `status.json`; nothing restarts it now. Plain `goalcup status` every 2 s for 10 s. At m+2, `goalcup recover` again in `pad:recover`. The harness is never touched. At `minutes`, send `exit_keys`, then SIGTERM to `harness.pid` after 30 s if it still lives; no `goalcup seal` | PRD-10 acceptance 11 (ledger R3b); PRD-02 section 9.1 row "The watchdog, then later the recorder". PRD-10 kills both together; the pad's one-minute split covers that case and the order the ledger names | The first `recover` exits 0 with `Recording is on; there is nothing to recover.` Status shows the line ending `Run: goalcup recover` within 10 s of the recorder kill. The second `recover` exits 0 with `Recording is on again`. `status.jsonl` shows the same harness pid and the same `port` before and after. Exactly one `recorder_down` gap, from the recorder kill to the recovered boot's first record, start before end. Every later `conn` to a listed host is `decrypt` (same run certificate). Written model requests after the recover above 0. Seal reason `harness_exit` (or `deadline`). C1 and C2 `named` only by that gap. If the harness lost its terminal when the watchdog died (PRD-02 section 9.1), status must show the `goalcup continue` line instead; the row is INCONCLUSIVE "harness lost its terminal" and the watcher follows PRD-10 acceptance 11 |
 | `kill-both@m` | `kill -9` of watchdog and recorder together; send `exit_keys`, then SIGTERM to `harness.pid` from `status.json` after 30 s if it still lives; then `goalcup continue` in a new tmux window `pad:cont` (or `goalcup upload` for PRD-06 U8, named in the fault: `kill-both@m+upload`). Typing, panes and the watch follow that window | PRD-02 R7, PRD-06 U8 | Old entry sealed `recovered` with an `abandoned` gap; checks run on both entries; named loss only inside the crash window |
 | `freeze@m+n` | `SIGSTOP` the whole process tree (watchdog, recorder, harness and its children) for n minutes (default 10), then `SIGCONT` | PRD-06 sleep stand-in; review A coverage gap. Not a clock proof (boot time runs on under `SIGSTOP`, PRD-02) | First heartbeat after `SIGCONT` within 10 s; server catches up within 3 minutes; checks as a clean run |
 | `cut-worker@m+n` | Appends `127.0.0.1 <worker host>` to `/etc/hosts` with `sudo` for n minutes (default 10); `getent hosts <worker host>` before, during and after, logged. If the lookup does not change, a local listener that refuses or holds the connection stands in; it never terminates TLS (PRD-06 risks). If neither takes, the row says "not run: cut did not take" | PRD-06 U3, U5 | Checks as a clean run; `upload.json` lines of PRD-06 read from `watch/upload.jsonl` |
@@ -394,6 +395,12 @@ error in the rig, or an interrupt (a trap in `pad`). It does, and prints in its 
 
 - Box: `sandbox remove pad-<id>`. Backstops: every box is `--non-persistent` with a timeout of `minutes`
   plus 30, so a rig that dies still leaves no box with keys for long.
+- Failed fetch: when `fetch` fails, the pad first copies the entry's `rec/` out of the pad box to
+  `rec-kept/<entry>/` in the run folder and only then removes the box, so a later refetch can still finish C4
+  `server_equals_local`. This runs in cleanup, after the key wipe and after the row: the copy is made only when the
+  row's C3 scans ran and found no known value (a masking failure never puts a raw key on the conductor), and the
+  cleanup line names the reason when it is not kept. The kept copy is scanned after the row, into
+  `verify/secrets-kept.json`; the row's own conductor count is not rewritten. A passing fetch needs no such copy.
 - Keys: the harness key, gateway key, push token, `.env.local`, `known-box` and the known-values files
   are already wiped in the box (section 3, 0:24 and 0:27); cleanup checks they are gone before it
   removes the box.
@@ -505,7 +512,8 @@ login = "codex login --with-api-key"      # "login": run with HOME and CODEX_HOM
 key_file = ""                             # "file": a path in the isolated home, e.g. "{home}/.gemini/.env"; written 0600
 key_line = ""                             # "file": the line written there, e.g. "GEMINI_API_KEY={key}"
 key_env = ""                              # "env": e.g. "ANTHROPIC_API_KEY"; the launch shell runs export NAME="$(cat <file>)" just before goalcup start, never echoed, never in argv, a log or a row
-ready_text = ""                           # text on screen when the harness can take input; empty: wait 30 s
+ready_text = ""                           # text on screen when the harness can take input; empty: wait ready_wait seconds
+ready_wait = 30                           # seconds to wait for ready_text, or for nothing when it is empty
 pre_keys = ""                             # printf format, for a first-run dialog (matrix.sh:123-129)
 exit_keys = "/exit\r"                    # printf format that ends the harness (kill-watchdog, kill-both)
 daemon = ""                               # command stale-gateway.sh starts, e.g. "hermes gateway"
@@ -516,6 +524,7 @@ keep_going = true                         # cycle mode types "keep going" for th
 files = { }                               # provider and model config copied into the isolated home, as a participant writes it
 env = { }                                 # non-secret values exported in the launch shell before goalcup start, as a participant does
 [gateway]                                 # absent: the gateway case is n/a
+pre_keys = ""                             # optional; a [gateway] or [dodger] section may carry its own pre_keys, which wins over the top-level one
 files = { "config.toml" = "gateway/codex-config.toml" }          # copied into the isolated home
 env = { }                                 # non-secret values only
 key_route = "file"                        # same three routes for the gateway key
@@ -547,15 +556,21 @@ Keys:
   `curl`; never into an argument, log, prompt or row. In the box, a key reaches an environment variable
   only in the launch shell, for `key_route = "env"`, when that is the harness's documented key route.
 - The approval key, member id, `GH_TOKEN`, database and R2 credentials never leave the conductor.
-- The conductor half may run `scripts/fetch-run.sh` with `DATABASE_URL` (a read-only role) and the
-  read-only `CLOUDFLARE_*` credentials, because BUILD-PROMPT allows `fetch-run` and read-only queries in
-  the conductor session. These values go to the `fetch-run` child only (`env_without(NEVER_IN_BOX minus
-  FETCH)` in `step_fetch`); never into a box, an argument, a file or a log. The known-values scan treats
-  them as never-in-box values. `DATABASE_URL` must be a read-only role for the staging data, never the
-  website database's service role or a write role: rung 2 withheld the website Supabase URL for exactly
-  this reason, and the conductor is handed only a role the owner issued for `fetch-run`. With no such
-  value `fetch-run` fails and `step_fetch` answers FAIL "server copy not fetched" with the last line it
-  printed (today it does not stop earlier with INCONCLUSIVE "no fetch credentials"; a later slice may).
+- The fetch route (owner-approved 2026-11-01). The conductor cannot reach the database (it has an
+  HTTPS proxy only), so the index query runs in a separate short-lived box that holds only
+  `DATABASE_URL`: written 0600 by `put-env`, removed with the box, and the file deleted on exit. It is
+  never the harness's pad box and never a build box. The query is the SQL block of
+  `scripts/fetch-run.sh`, extracted at run time (one source; PRD-07 owns the file and it is not
+  changed). The index is copied back to the conductor, and `fetch-run --index FILE` runs there with only
+  the read-only `CLOUDFLARE_*` values (R2 over HTTPS). `DATABASE_URL` is never in the environment of
+  that child, of the conductor or of any other box, never in an argument or a log; the known-values scan
+  treats it as a never-in-box value. The index box is removed always, after a PASS, a failure or an
+  interrupt; one whose removal fails is retried at cleanup and named in its line (result `left`). Its
+  DATABASE_URL converter is the one in `fetch-run.sh`, extracted like the SQL (a newline in the value is refused). `DATABASE_URL` must be a read-only role for the staging data, never the website
+  database's service role or a write role: rung 2 withheld the website Supabase URL for exactly this
+  reason, and the box is handed only a role the owner issued for the fetch. With no such value the index
+  step fails and `step_fetch` answers FAIL "server copy not fetched" with the last line it printed
+  (today it does not stop earlier with INCONCLUSIVE "no fetch credentials"; a later slice may).
   C4's server part is then not shown (the row says so), never skipped silently. The
   device code comes out of the box; the approval goes in from the conductor (the `MATRIX_CODES_FILE`
   rule, `matrix.sh:70-73`).
@@ -631,7 +646,7 @@ Where it runs and fails, it is a FAIL like any other.
 |---|---|---|---|---|
 | C1 | No missed call | No unexplained gap: `gap_has_end` `pass`, and every `named` loss sits in a gap with a start, an end and a reason (in a fault row, only the gaps section 3.1 expects). The history check (below) is `pass` or `skip`. The local log check, where it runs: `threads_match` `pass`, and `wire_keeps_up` `pass` or, for a totals log (`harness_log: "totals"`, Hermes), `skip` "no per-call times" with `threads_match` passing in the totals form (PRD-08 section 3.1). At least 2 model calls in the record; the case rows of section 2 hold. Dodger: `named` as section 2 says | the record holds fewer than 2 model calls | B1 |
 | C2 | Every subagent recorded | usage `threads` has at least one thread with a parent, and every thread has wire calls or a native stream. Threads and parents come from the record (PRD-09's thread hints and the history check's chains, below), plus native streams where read; with a local log, `subagents_present` `pass` with the manifest too. Dodger: every `conn` to the pinned host is a named tunnel and no thread is claimed from it; with a local log, the native streams carry the threads | no thread with a parent (the agent did not spawn one; rerun once, then a prompt note) | B4 |
-| C3 | No secret | 0 known-value hits in local parts, the server copy, `status.json`, `goalcup.log`, `upload.json`, the pad's output folder (after the pane replacement of section 4) and the project's git objects (leak scan copied from `matrix.sh:1267-1320`, read in the box; "push not tested" without a push token); the known values include the run certificate key (`known-box`, ledger R3b); 0 unexpected shape hits; every planted shaped value has at least one MASK. Hits of the no-shape value are `facts.plain_hits`, not a FAIL, in the default build (section 5) | the setup-check script never ran (section 5) | B8 |
+| C3 | No secret | 0 known-value hits in local parts, the server copy, `status.json`, `goalcup.log`, `upload.json`, the pad's output folder (after the pane replacement of section 4) and the project's git objects (leak scan copied from `matrix.sh:1267-1320`, read in the box; "push not tested" without a push token); the known values include the run certificate key (`known-box`, ledger R3b); 0 unexpected shape hits, except the stated loss in the 2026-11-01 C3 amendment (INCONCLUSIVE, never PASS); every planted shaped value has at least one MASK. Hits of the no-shape value are `facts.plain_hits`, not a FAIL, in the default build (section 5) | the setup-check script never ran (section 5) | B8 |
 | C4 | Record whole, server copy whole and readable | local `check`: no `fail`; `server_chunks_whole`, `server_equals_local`, `server_counts_match` all `pass` (from `fetch.json`); parts kept (start event `keep: true` and `upload.json` `keep: true`). A `skip` on `server_equals_local` is FAIL, not skip | `server = "off"` (row is "local pass" at best) | B2, B5, B6 |
 | C5 | Usage stats present | usage on the server copy, from the wire calls (native tokens added where read): merged input plus output tokens above 0; every thread has a model and calls above 0; one row per subagent; `coverage.unattributed` 0 with PRD-09's meaning (only a hint-bearing call that lost its hint); `wire_only` calls are reported, never failed. Dodger: wire none, the summary says "not recorded on the wire"; native tokens present where a local log is read, and none claimed where there is none | the record holds fewer than 2 model calls | the usage reader silently reading nothing |
 | C6 | Counts the participant saw | `status.json` in `mode: sealed`: `written.model_requests` equals the verifier's `counts.model_requests` and `fetch.json`'s `model_requests`; `written.off_ms` equals the verifier's `off_ms`; the number on the saved end screen is that same number; no `status.jsonl` sample has `written.model_requests` above the final recount | none | B3 |
@@ -693,7 +708,7 @@ Row, `row.json` (sorted keys, no secret, no path outside the run folder):
 ```
 
 `variant` lists the faults, `--exec` and `--pre` scripts (section 3.1), for example
-`["kill-recorder@8","kill-recorder@10"]`; empty for a plain run. `exec` maps each script to its
+`["kill-recorder@8","kill-recorder@10"]` (a harness file may name other minutes, P10; the variant holds the real strings); empty for a plain run. `exec` maps each script to its
 watcher verdict (`exec/<script>.verdict`), for example `{"h2-parallel.sh":"PASS"}`. Without a local
 log, `local_log` is `none`, `harness_calls` and `harness_log` are null, and `history` still holds. `goalcup` comes from the start event's `build` key (PRD-01). `why` holds one plain line
 per non-PASS check, copied from the verifier's `why`. The row result is PASS when all six are PASS, FAIL
@@ -989,7 +1004,7 @@ Deleted by this PRD (section 11): `writing-a-decoder.md` 277 and `templates/conn
 | P7 | **The table.** After phase 5 | `PAD-RESULTS.md` has 15 harnesses (OpenCode once), a tier and a reason for each, a named version for each "verified", and `pad_trusted_at` on every row; `connectors/tiers.toml` has 16 tables; `table --release-check <integration head>` exits 0 |
 | P8 | **Contributor dry run.** After the merge to main (PRD-00 "Not in this build"): a builder who did not write the pad adds a harness with only the skill and the pad, a `micro` settings file with `where = "here"` | A row with C1 PASS, under one hour of work |
 | P9 | **The Mac.** The owner runs `scripts/pad/pad` with `scripts/pad/runs/full.toml` changed to `harness = "claude-code-cli"`, `key = "claude"`, `case = "direct"`, `where = "here"`, on a Mac after the build | PASS, or a named failure the night log turns into a fix. Hermes on macOS reads the OS trust store (appendix O H3.3); goalcup never adds the run CA to a keychain; if Hermes cannot trust it there, Hermes on macOS is "not supported on macOS" with that reason |
-| P10 | **Kill case on the core set.** Codex (PRD-02 R1, done item 2), Claude Code and Hermes: `direct`, `mode = "full"` with `steps = ["kill-recorder@8", "kill-recorder@10"]` | Each row PASS with the `kill-recorder` expectations of section 3.1. The Codex row is in `--release-check`; a Claude Code or Hermes FAIL is a named risk in the end-of-build report |
+| P10 | **Kill case on the core set.** Codex (PRD-02 R1, done item 2), Claude Code and Hermes: `direct`, `mode = "full"` with `steps = ["kill-recorder@8", "kill-recorder@10"]`; kill minutes are per harness (harness file `kill_minutes`: Codex 3 and 5, Claude Code and Hermes 8 and 10), because Codex finishes the payments prompt in about 7 minutes and a kill needs a live stream; the minutes are recorded in the row | Each row PASS with the `kill-recorder` expectations of section 3.1. The Codex row is in `--release-check`; a Claude Code or Hermes FAIL is a named risk in the end-of-build report |
 | P11 | **The other faults, once each** (phase 4, beside the core set's `full` wave, PRD-16 section 6, since full runs come at the end, ledger B3; shared with other rows' boxes): `freeze@6+10` on Codex `full`; `route-drop@6+1` on Codex `full`; `cut-worker@1+10` on Claude Code `cycle` with `minutes = 14` (U3), and the same with `keep = false` (U5); `fd-limit@0` on Codex with 20 subagents asked (R4); `kill-watchdog@5` on Claude Code (R5); `kill-both@5` on Claude Code (R7, and `+upload` for U8); the `--pre` rows of PRD-11 acceptance 3 to 5 | Each row PASS with its section 3.1 expectations; the owner PRD's remaining lines read by the watcher from `report.txt` |
 | P12 | **Recover** (ledger R3b, PRD-10 acceptance 11). Codex `direct`, `mode = "full"`, `minutes = 10`, `steps = ["kill-watchdog-recover@3"]`, so the agent still works after the recover (PRD-10 names `smoke`; a 3-minute run may end before it). Phase 4, after PRD-02's recover entry lands | Row PASS with the `kill-watchdog-recover` expectations of section 3.1, judged from the record, `status.json` and the server copy only (ledger T4). Answers given before the recorder kill and resent after the recover match recorded responses or sit in the one gap |
 | P13 | **No local log, verified** (ledger T4). The first harness that keeps no session file the pad reads (Amp when it has a key; else Codex with its native roots left out by a `connector` copy, `mode = "full"`, `direct`, once in phase 4; the copy makes it a check row, not a tier row) | All six PASS with `local_log: none`; C2 finds a thread with a parent from the record's chains; C5 tokens above 0 from the wire |
@@ -1050,7 +1065,7 @@ waits (P14).
 | The agent sends `.env.local` to the model provider | It holds only the push token (Contents read and write on the throwaway owner) and fake values; the real harness key lives in the isolated home or the launch shell, as for a participant |
 | Provider outage looks like 15 failures | `provider_down` from recorded statuses only (`O-harness-access.md:266-281`); no status page is read (ledger T4) |
 | `goalcup recover` needs the run certificate key on disk for the whole run (ledger R3b) | Accepted by the owner: a participant who meddles with it breaks the rules anyway. The pad adds the key to `known-box`, so C3 fails if it ever reaches the record, the server copy or a log |
-| The harness loses its terminal when the watchdog dies, so `recover` has nothing to keep recording | The `kill-watchdog-recover` row is INCONCLUSIVE "harness lost its terminal", status must show the `goalcup continue` line, and the watcher follows PRD-10 acceptance 11 |
+| The harness loses its terminal when the watchdog dies, so `recover` has nothing to keep recording | Not run by rung 5 (see the `kill-watchdog-recover` row and the 2026-11-01 amendment; the owner's call, W6) |
 | A runaway run (Claude Code with 20 subagents) passes 10 USD inside 20 minutes | The spend check every 5 minutes seals it at 10 USD; between checks it can overshoot by up to 5 minutes of spend, and an open entry reads to its last whole frame, so the check errs low by at most one frame; the row says `over_cap`. Provider budgets are the backstop where they exist (unverified per vendor); the pad reads no provider usage page (ledger T4); the owner's dashboards stay the owner's check |
 | The spend check slows the harness | It runs under `nice -n 19` every 5 minutes, like `check --live`; `procs.jsonl` shows its cost |
 | A "verified" version is not the one people run on 7 Nov | The row names the version; connectors turn auto-update off (PRD-11); PRD-16 reruns the core set on 5 Nov |
@@ -1915,6 +1930,93 @@ taken; "rejected" says why. Fixes for other files are made by those files' owner
 
 - RIG-8 and RIG-9 are in. No plan change and no ledger item touched. Open nits, all optional tidying for any later pad slice: A1 (`hidden()` in `scripts/pad/pad` parses only URL-form `DATABASE_URL`; also unquote the user and password, compare the host case-insensitively, and ideally read libpq `host=`/`user=`/`password=` pairs), A2 (also check the scrollback inside the recording wait), A3 (assert `table.txt` and `meta.json` carry no credential), B1 (drop the duplicate `test_said_hides_every_fetch_credential`), B2 (simplify the paste test setup), B3 (one-line comment that values under 4 characters are not hidden). A1 touches point 4 only inside the pad (organizer database URL in a rig log); the owner issues a Supabase-style URL, so the gap is low risk and is not a gate blocker.
 
+- C3 scope note (slice 13): the pad's pane copies (`watch/pane-*.txt`) are scanned for known values only; their shape hits are a screen echo, not the record, and are not read. A pane scan that did not run or did not finish (no report, an exit other than 0 or 2) is C3 INCONCLUSIVE. For the integrator: the harness field `ready_wait` (default 30) is read by pad-run but not listed beside `ready_text` in the harness table.
+
 ### 2026-11-01, note from PRD-06 slice 7 (merge 20634842)
 
 - **U8 procedure (`kill-both@m+upload`):** `goalcup upload` closes a dead entry only after the harness has exited; against a live harness it answers `StillRecording` and closes nothing (that entry belongs to `goalcup recover`). The fault must therefore wait for the harness to exit (the exit keys, then SIGTERM to `harness.pid` after 30 s, then confirm the pid is gone) before it runs `goalcup upload`; a `StillRecording` answer there is a rig fault, not a PRD-06 failure. No locked ledger item is touched.
+
+### 2026-11-01, C3 and nits after slice 13 (merge f5889891)
+
+- **C3 INCONCLUSIVE case added (section 9).** A planted kind with no MASK in the record and the setup check done is now INCONCLUSIVE "not exercised", not FAIL. It is never a PASS: planted values are in the known-values file, so an unmasked one is a known-value hit, and any hit is still FAIL. C3 INCONCLUSIVE causes are now: the setup-check script never ran, a planted kind was not exercised, or the pane scan did not finish. The SecretCheck docstring in test_pad.py still says a planted shape with no MASK fails; update it with the next pad slice.
+- **Open nits for any later pad slice, none a blocker.** A12 (the header comment in harnesses/kimi-code-cli.toml still says type "openai_legacy"; key_line writes type = "openai" and models.ds.protocol = "openai"; fix the earlier line, as with A10 in cline-cli.toml). B10 (the pane-scan comment in check.py secrets() repeats the known-values-only statement; one statement is enough). No locked ledger item is touched.
+
+### 2026-11-01, slice 14 plan
+
+- **Slice:** P0a (the fetch runs through a short-lived box that holds only `DATABASE_URL`, section 7), P0b (a failed fetch keeps the entry's `rec/` in `rec-kept/<entry>/`, section 3.2), G1 (case-section `pre_keys`, plus `ready_wait` beside `ready_text`, section 6) and G3 (rung 4 and the `kill-recorder@0` row, sections 1a and 3.1; the cycle mode's `kill-recorder@3` is unchanged).
+- `scripts/fetch-run.sh` itself is not changed (PRD-07's file); the pad extracts its SQL block at run time.
+- Left for code slices, no PRD text change: the SecretCheck docstring remark, and A12 (the kimi header comment).
+- The files list ("Files it owns") already covers everything this slice touches.
+
+### 2026-11-01, replan after slice 14 (merge 40a32e51)
+
+- **Slice 14 is in** (P0a fetch through a short-lived DATABASE_URL-only box, P0b rec kept on failed fetch only when the wipe finished, G1 per-case pre_keys, G3 rung 4 kill@0). Review rounds fixed A1 to A9 and B1 to B11. No PRD text change needed.
+- **Open nits for any later pad slice, none a blocker.** A10: test_rec_is_not_kept_when_the_wipe_did_not_finish in test_pad_fetch.py asserts the cleanup wording; drop that assertIn and assert that no rec-kept folder exists (ledger B10: no wording asserts). B12: in step_cleanup the condition result == "ok" is spelled twice in the first try block; tidy only. Earlier open nits still stand: A12 (kimi header comment) and the SecretCheck docstring remark.
+- No locked ledger item is touched.
+
+### 2026-11-01, rung 5 setup and rung 5b (R5-1)
+
+- **Launch shell kept alive.** For a run whose steps hold `kill-watchdog-recover`, `launch.sh` ends with
+  `exec sleep 1000000` after the `goalcup start` line. This is a shell without job control, not an interactive
+  terminal, and it stays
+  open, so a killed watchdog does not hang up the harness, and it proves `goalcup recover` restores
+  recording on the same port. It does not prove the case where a TUI harness dies with the watchdog
+  (PRD-02 section 9.1); that case stays INCONCLUSIVE "harness lost its terminal" and is the owner's call
+  (W6). Conductor decision, owner to confirm; ledger R3b is untouched. Plain rows keep the old `launch.sh`.
+- **Rung 5b.** `exec kill-both-seal.sh@2` (after the harness has written requests) kills the watchdog and the recorder together, then runs plain
+  `goalcup status` and `goalcup seal --yes` in the participant's shell (`PAD_SHELL_ENV`); the harness is
+  never touched. Expected, from the report run: status shows `Run: goalcup continue <run>` (a line for a human to read in `exec/kill-both-seal.sh.txt`; check.py does not judge it), `seal --yes`
+  exits 0, one `recorder_down` gap with cause `abandoned`, seal reason `recovered`, upload final `sealed`. check.py judges the row from the record (`dead_seal_row`): seal `recovered`, exactly one gap, `abandoned`, starting before the script ended and not more than the link slack before the kill, script exit 0. The script exits 3 when the kill did not take.
+
+### 2026-11-01, replan after slice 15 (merge 49f2c5d6)
+
+- **Slice 15 is in** (rung 5 setup with the outliving launch shell, rung 5b kill-both-then-seal, check.py reason fixes R5-2 and R5-3, Codex exit keys R5-4, selftest exit 3). Review rounds fixed A1 to A9 and B1 to B6. No PRD text change needed.
+- **R5-4 (Codex exit keys) is a comment-only change.** The cause is the paste-burst Enter: the harness takes the pasted prompt and its Enter as one burst. The fix is a split send in pad-run (text first, Enter as a separate key send). It was not run; the first real Codex batch is its proof. A later pad slice that touches the send path should make the split send, for every harness whose TUI paste-bursts.
+- **Selftest still ends at exit 3.** The PRD-08 test helpers cannot write a multi-chunk K7 export or the K11-d fetched and usage record, so those two fixtures cannot be added from the pad side. The need is recorded as an amendment under PRD-08. Phase 2 exit must not read exit 3 as a pass.
+- **Open nits, none a blocker.** A12, B10, the SecretCheck docstring remark, A10 and B12 (slice 14 note) all stand. Size: R3 (no concrete cut) is accepted; see the PRD-16 size report.
+- No locked ledger item is touched.
+
+### 2026-11-01, note from the PRD-05 point 4 leak fix merge (fc8df0e9)
+
+- PRD-05 now masks a Google `AQ.` key and the Groq, Cerebras, Fireworks, Vercel gateway, Together, Amp, `fk-` and
+  Bedrock key forms. A pad planted file may use `AQ.` and dotted `SECRET=a.b.c` values as cases; do not plant
+  `gsk_` or `sgamp_` while the owner answer is open. `GEMINI_API_KEY=AQ.<run>` comes out starred from `API_KEY=`
+  on (PRD-05 note), so a pad check must not assert the variable name stays raw for that shape. No locked ledger
+  item is touched.
+
+### 2026-11-01, sweep 2 fixes slice (plan)
+
+- **Slice.** Data fixes from sweep 2, all measured in sweep 2 unless a vendor page is named. (1) Hermes: wait for "Type your message or /help", no `pre_keys`; the direct config.yaml preset removes the telemetry screen (measured in sweep 2). The gateway preset was not run and stays docs only. (2) Crush: stops at "Permission Required". The v0.99.0 README (read 1 Nov 2026) gives the permission setting only as crushrc commands or `--yolo`, so the row is marked `not verified: needs permission answer`; a crushrc data file is a follow-up. (3) Cline: the apps/cli README (read 1 Nov 2026) names no provider config file and its auth command puts the key in argv, so the row is marked `not verified: needs sign-in`. PRD-11 acceptance 5 (the stale hub daemon line) is therefore not exercised by the pad until a route is shown. (4) Kimi: header comment says type "openai", as the body does.
+- **Pad.** A harness file may carry `not_verified = "<reason>"`: the pad prints `<harness>: not verified: <reason>`, runs nothing and exits 3 (same as the no-key rows).
+- **Not in this slice.** The two check.py rules once planned here (C3 shape-only hits counted as masked upstream; C1 `history_complete` `warn` as a pass) are not shipped. check.py is unchanged; a known-value hit is never relaxed.
+- No locked ledger item is touched.
+
+### 2026-11-01, replan after sweep 2 fixes (merge 98873c1d)
+
+- **Slice is in** (Hermes ready text and direct config, Crush and Cline marked not verified with a stated reason, Kimi comment, table shows the reason over old rows). 54 lines added, 10 removed. The two check.py rules once planned (C3 upstream mask, history_complete warn) did not ship; check.py is unchanged and a known-value hit is never relaxed. Nothing in this PRD needs rewriting.
+- **Open nits, none a blocker.** B3-1: test_table_shows_the_reason_over_old_rows in test_pad.py asserts the start of the Crush reason text, a wording assert on harness data (ledger B10). A later pad slice should assert that the tier is neither "not yet run on the pad" nor a failing-check reason, or compare it to the not_verified string read from the toml. B3-2: the not_supported and not_verified blocks in scripts/pad/table are near-duplicates and harness_lines(cid) is read three times in tier_for; one loop over (key, tier) pairs is smaller. Earlier nits (A10, A12, B10, B12, SecretCheck docstring) still stand.
+- **Open rows.** Crush needs a crushrc permission data file, Cline needs a provider config route; both stay "not verified" until a vendor page shows one. Neither is a build blocker.
+- No locked ledger item is touched.
+
+### 2026-11-01, kill minutes per harness (note for the conductor)
+
+- **Why.** The first full rows (note N1) showed Codex finishes the payments prompt in about 7 minutes, so kills at 8 and 10 meet no live stream. A harness file may carry `kill_minutes = [a, b]` (two ascending whole minutes above 0; absent means 8 and 10; any other value is a usage error). When a run's steps hold the pair `kill-recorder@8` and `kill-recorder@10`, the pad replaces it with the harness file's minutes. `codex-cli.toml` sets `[3, 5]`; Claude Code and Hermes keep 8 and 10. No new fault kind. The rig's rule is unchanged: a kill fires only while a request is in flight (up to 60 s of waiting, else a quiet kill that ends INCONCLUSIVE). The row's `variant` holds the real step strings. The second minute must be 2 after the first (the kills are 2 minutes apart, ledger R3a) and before the run's `minutes`, else a usage error. A cycle run's own crash at minute 3 counts once, so cycle with the pair kills twice.
+- **For the conductor (seam note).** PRD-16 done item 2 / G3-16f should read "kill at the harness's own minutes (Codex 3 and 5)". PRD-16 is not edited here. No locked ledger item is touched.
+
+### 2026-11-01, C3 stated loss in joined streamed replies (fixer note, supersedes the "check.py is unchanged" line above)
+
+- **What check.py does.** When every secret hit is a `shape_hits` item whose `in` ends with `/deltas` (no known value, no big MASK, no other shape), C3 is INCONCLUSIVE with a why line, not FAIL and never PASS. PRD-05 Risks "Model echo" is the only basis: JSON framing between delta pieces can hide a shape from the masker. The report has no per-hit fact that the match crosses a delta edge, so a masker miss inside one delta whose decoded form differs reads the same; that is why the row stays open instead of passing. Hermes and OpenClaw rows that rely on it stay "not verified" (MORNING.md).
+- **Kill rows and C1.** Exit 2 from this loss alone is accepted by the kill row's exit rule and by C1; the named GAPs are still judged against the allowed ones, so an unexplained `memory_guard` or `mask_failed` GAP fails C1 whatever the secrets check says.
+- **Owner question (point 4), for the conductor.** May a shape found only in joined streamed deltas count as a stated loss (C3 PASS with a note) once the verifier reports that the match crosses a delta edge? Until the owner answers, no row relying on it counts toward `--release-check`. No locked ledger item is touched.
+
+### 2026-11-01, replan after full-row fixes (merge 98f8f71d)
+
+- Per-harness `kill_minutes` (Codex 3 and 5) and the C3 stated-loss rule are in; check.py `other_named` now covers every named check, so the C1 exit rule holds when any check is named. Open nit R6: `other_named` is computed per row but read only when the loss is stated; one combined condition would do. Earlier nits stand. The C3 owner question stays open. No locked ledger item is touched.
+
+### 2026-11-01, note from the PRD-16 post-cut slice (merge dacbc61b)
+
+- `scripts/pad/selftest` now exits 0 (every control as wanted) after the k7 and k11-d fixture swap by the post-cut lane under integrator.log 09:57Z; please confirm the swap. The earlier note that the pad ends at selftest exit 3 is superseded for the pad's own controls; Crush and Cline rows remain "not verified" where the harness file says so. The generator is PRD-08's to adopt (see its note). No locked ledger item is touched.
+
+### 2026-11-01, harness file key redacts_tool_output (C3 upstream redaction)
+
+- A harness file may carry `redacts_tool_output = true` (Hermes only; docs/harnesses/hermes-cli.md:28 is about Hermes's own logs, so the basis is not yet a vendor page on tool output). The pad copies it into the row meta under the same name. For such a harness only, a nonzero `masked_key` MASK counts as the exercise evidence, so C3 no longer stops at "secret exercise not done" for a run that has that MASK but none of the planted shapes. A planted kind with no MASK and no hit stays INCONCLUSIVE ("owner question open"), never PASS, and a run with no exercise evidence stays INCONCLUSIVE. Known-value hits, other shape hits, big masks and plain hits fail as before, and a harness without the key is unchanged. The C3 acceptance row ("every planted shaped value has at least one MASK") is unchanged; a row relying on this rule does not count toward `--release-check` until the owner confirms (point 4). No locked ledger item is touched.

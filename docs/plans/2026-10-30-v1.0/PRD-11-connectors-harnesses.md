@@ -1493,3 +1493,18 @@ is left is data and docs only. Four items, in order:
   files for cline, crush, droid, goose and kimi are PRD-12 slice 7 and the Pad result lines for them point at
   a file that has no row until those runs happen.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-11-01, note from PRD-12 sweep 2 fixes (merge 98873c1d)
+
+- Acceptance 5 (the stale hub daemon line on Cline) is not exercised by the pad: the Cline row is "not verified: needs sign-in" (the vendor README names no provider config file and its auth command puts the key in argv). It stays unexercised until a config route is shown; the Cline sheet must not claim a pad result. Crush is likewise "not verified: needs permission answer". No locked ledger item is touched.
+
+### 2026-11-01, note from sweep 3 (expected hosts, seam)
+
+- `connectors/model-hosts.toml` has a new array `expected` (non-model hosts tunnelled on purpose: `ab.chatgpt.com`, and Claude Code's two Datadog log intake hosts). It is not a fifth kind: `decide()` still answers `NotListed` for them, and `HostList::lists()` and the `start` event shape are unchanged. `HostList::is_expected(name)` is the one question to ask; a name another array lists, or `never` holds, is not expected.
+- Consumers must call it: PRD-03 `crates/goalcup/src/proxy/tunnel.rs:162` (skip the `long_tunnel` note), PRD-10 `cli/status.rs:175` and `text.rs:626` (no seal-and-continue advice), PRD-08 `honesty.rs:201` (the `long_tunnel_unlisted` fact). Until they do, the long_tunnel note still fires for these hosts.
+- Seam for PRD-15: the `expected` array holds non-model hosts, and the Claude Code Datadog hosts come from binary strings, not a vendor page. CONTRIBUTING.md:92 and README.md:124 should let the `expected` array through the "every host is a model host with a vendor doc link" checklist.
+- Seam for PRD-02, PRD-07 and PRD-08: the version probe runs in the isolated home (a probe in the real home wrote into `~/.codex`, `~/.gemini` and `~/.hermes`, measured). Hermes 0.22.5 fails `--version` there, so `cli/approve.rs:111` sends `harness_version: null` and `server/worker/src/runs.ts:144` refuses it. Fix on their side: omit the field when the probe fails and accept a missing `harness_version` (also keep the 64-unit limit in mind: the real Hermes line is 62).
+
+### 2026-11-01, expected hosts as built
+
+- The `long_tunnel` note is kept, not skipped (record raw): it carries `expected: true` when `HostList::is_expected` holds for the CONNECT host. `status` prints an info line for expected ones and a problem line only for unflagged ones. Open for PRD-02 (`pipeline/status.rs`, `Board::note`): key the first note per `(what, expected)` so an expected note never hides an unflagged one; this slice does not touch that file. The `wire_version` 64-unit cut (OWN-6) is in `cli/approve.rs` with its edge tests. The verifier adds the fact `long_tunnel_expected` and drops the `listed_hosts_decrypted` warning for flagged hosts; it trusts the recorder's flag, since `start` does not carry the expected list.

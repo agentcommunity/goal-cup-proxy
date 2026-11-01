@@ -1,6 +1,6 @@
 # OpenClaw harness facts
 
-Connector id: `openclaw-cli` · Facts for version: `2026.10.9` · Written by: Goal Cup team · Last checked: 2026-10-31
+Connector id: `openclaw-cli` · Facts for version: `2026.10.9` · Written by: Goal Cup team · Last checked: 2026-11-01
 Public disclosure: yes. Facts come from OpenClaw's public docs and source and a run on 2026.10.8 in a Linux container on 28 Oct 2026. No keys, tokens or personal paths are included.
 Status: shipped connector ([`connectors/openclaw-cli.toml`](../../connectors/openclaw-cli.toml))
 
@@ -9,6 +9,7 @@ Source words: "docs" is [docs.openclaw.ai](https://docs.openclaw.ai/help/environ
 ## 1. Run one prompt, in chat mode first
 
 - `openclaw chat` is `openclaw tui --local`: the embedded runtime, no Gateway ([docs](https://docs.openclaw.ai/cli/tui)). Plain `openclaw tui` connects to a Gateway instead and is not used. Exit: Escape, then `/exit` (measured). While a turn waits on retries, Ctrl-C and `/exit` are refused.
+- Known limit: the agent works in its own workspace, `{home}/.openclaw/workspace`, inside the isolated `OPENCLAW_HOME` where `AGENTS.md` and `SOUL.md` live, not the project folder; a commit made by the agent landed there (rung 1, 2026.10.9). The harness has `OPENCLAW_WORKSPACE_DIR` ("Override the default agent workspace", [environment](https://docs.openclaw.ai/help/environment), [agent workspace](https://docs.openclaw.ai/concepts/agent-workspace)) and the config key `agents.defaults.workspace`; `openclaw chat` and `openclaw tui` have no workspace flag (2026.10.9 package). The connector cannot set either: the loader fills `{workspace}` only in `args` and in `home` values that start with `{home}`, and neither holds the project path.
 - The connector has no `resume` form. Whether `chat` has a continue flag: unknown.
 - [RULES](../RULES.md) lists OpenClaw incognito threads, `agent exec`, `--profile`, `--dev` and `proxy` as modes that switch capture off. The connector runs `chat` and none of those.
 

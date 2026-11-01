@@ -131,14 +131,14 @@ starts (0 for `sid` 0 and for `conn` streams).
 | 1 | `memory_guard` | A stated memory guard was passed; tail `{"guard", "limit"}` |
 | 2 | `recorder_down` | The recorder was not running, or ran in null mode. Always `sid` 0 |
 | 3 | `unsupported_encoding` | A body coding the proxy cannot decode; tail `codings` |
-| 4 | `decode_failed` | A coding or the framing broke part way. For HTTP/2 this covers a bad framing or preface and frames that arrive after their stream ended (a `conn` GAP at the close) |
+| 4 | `decode_failed` | A coding or the framing broke part way. For HTTP/2 this covers a bad framing or preface and frames that arrive after their stream ended. Those late frames are counted in the `conn` GAP of the stop if parsing stopped (for example `memory_guard` after an `hpack_table` stop, or `h2_unsupported`), else in a `decode_failed` `conn` GAP at the close |
 | 5 | `source_changed` | A session file changed with bytes still unread |
 | 6 | `tls_refused` | A listed host's client refused the run CA; tunnelled |
 | 7 | `pinned` | A listed host's client pins certificates; tunnelled |
 | 8 | reserved | Never written. A write error ends the recorder instead. Shown as `other(8)` |
 | 9 | reserved | Never written. A failed read is retried. Shown as `other(9)` |
 | 10 | `cut_at_seal` | Bytes still unread or unwritten when the seal's time ran out |
-| 11 | `h2_unsupported` | An HTTP/2 feature the proxy cannot follow. For an extended CONNECT stream (RFC 8441) only that stream is left unread: each side gets its own GAP counting its bytes, and the connection keeps being parsed. For `PUSH_PROMISE`, an HPACK error or a header block past 16 MiB the rest of the connection relays unparsed; the `conn` GAP counts those bytes, and each open `http_req`/`http_resp` stream gets the same GAP and ends `decode_error`. Frames that arrive after their stream ended are counted here only if such a stop already happened; otherwise see `decode_failed` |
+| 11 | `h2_unsupported` | An HTTP/2 feature the proxy cannot follow. For an extended CONNECT stream (RFC 8441) only that stream is left unread: each side gets its own GAP counting its bytes, and the connection keeps being parsed. For `PUSH_PROMISE`, an HPACK error or a header block past 16 MiB the rest of the connection relays unparsed; the `conn` GAP counts those bytes, and each open `http_req`/`http_resp` stream gets the same GAP and ends `decode_error`. Frames that arrive after their stream ended: see row 4 |
 | 12 | `mask_failed` | The masker failed on a piece, so the piece was dropped |
 | 13 | `upstream_untrusted` | A listed host's server certificate failed the check; tunnelled |
 | 14 | `protocol_other` | A listed host spoken to in a protocol the proxy does not parse; tunnelled |

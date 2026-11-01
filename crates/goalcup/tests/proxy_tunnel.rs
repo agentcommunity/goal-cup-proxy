@@ -7,6 +7,7 @@ use bytes::Bytes;
 use common::recorder::gaps;
 use common::{HANG, within_async};
 use goalcup::connector::hosts::{Kind, Source};
+use goalcup::connector::{HostList, builtin};
 use goalcup::pipeline::{
     Call, Calls, EndReason, GapReason, Mono, OpenFlags, Recorder, Sid, StreamKind,
 };
@@ -126,6 +127,7 @@ fn conn(host: &str, reason: &'static str, listed: Option<(Source, Kind)>, cp: &[
         fingerprint,
         client_prefix: Bytes::copy_from_slice(cp),
         upstream_prefix: Bytes::from_static(b"srv"),
+        expected: false,
     }
 }
 
@@ -217,12 +219,12 @@ fn the_flag_fires_once_for_a_stream() {
     let flags = Flags::default();
     let base = 7_000_000_000_000;
     let at = |s: u64| Mono(base + s * 1_000_000_000);
-    let mut w = flags.watch("stream.example", at(0));
+    let mut w = flags.watch("stream.example", at(0), false);
     for s in 0..60 {
         flags.observe(&rec, &mut w, at(s), Dir::Down, 300);
     }
     assert!(notes(&calls, "long_tunnel").is_empty(), "open under 60 s");
-    let mut second = flags.watch("stream.example", at(60));
+    let mut second = flags.watch("stream.example", at(60), false);
     for s in 60..200 {
         flags.observe(&rec, &mut w, at(s), Dir::Down, 300);
         flags.observe(&rec, &mut second, at(s), Dir::Down, 300);
@@ -254,6 +256,38 @@ async fn the_flag_fires_once_for_an_upload_and_never_for_a_download() {
             (&got[0]["host"], &got[0]["why"]),
             (&json!("up.example"), &json!("upload"))
         );
+    })
+    .await;
+}
+
+/// Pumps enough upload through one host to raise its `long_tunnel` note; the note, if any.
+async fn upload_note(hosts: &HostList, host: &str) -> Option<Value> {
+    let (rec, calls) = Recorder::for_tests(1 << 30);
+    let flags = Arc::new(Flags::default());
+    for _ in 0..6 {
+        let mut c = conn(host, "not_listed", None, b"");
+        c.expected = hosts.is_expected(host);
+        let mut r = tunnel(&rec, &flags, c).await;
+        pass(&mut r.client, &mut r.upstream, 1, 256 << 10).await;
+        close(r).await;
+    }
+    let mut got = notes(&calls, "long_tunnel");
+    assert!(got.len() <= 1);
+    got.pop()
+}
+
+#[tokio::test]
+async fn an_expected_host_is_flagged_in_its_note_and_no_other_host_is() {
+    within_async(HANG, async {
+        let hosts = HostList::from_file(builtin::HOSTS.as_bytes(), "model-hosts.toml").unwrap();
+        let note = upload_note(&hosts, "ab.chatgpt.com").await.expect("note");
+        assert_eq!(note["expected"], json!(true));
+        let note = upload_note(&hosts, "plain.example").await.expect("note");
+        assert!(note.get("expected").is_none());
+        let both = b"provider = [\"api.both.example\"]\nexpected = [\"api.both.example\"]\n";
+        let hosts = HostList::from_file(both, "t.toml").unwrap();
+        let note = upload_note(&hosts, "api.both.example").await.expect("note");
+        assert!(note.get("expected").is_none());
     })
     .await;
 }

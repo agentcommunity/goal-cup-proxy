@@ -68,7 +68,11 @@ The connector sets `GEMINI_CLI_HOME` to the isolated home, so every `~/.gemini` 
 
 ## Run without permission prompts
 
-The connector has no `no_prompts` row. The docs pages read name no settings key for it; the package has the flag `--approval-mode yolo`, which goalcup does not pass. The participant answers the prompts Gemini shows. Whether a settings key for it exists: unknown.
+The connector has no `no_prompts` row, on purpose. The only documented way to run without approvals is the launch flag `--approval-mode yolo` (or `--yolo`). The `general.defaultApprovalMode` settings key exists, but the 0.66.0 package ignores the value `yolo` there: its startup code takes the settings value only when it is not `yolo` (package, 0.66.0). `security.disableYoloMode`, and an untrusted folder, also turn yolo off. So a settings row cannot do it, and goalcup passes no flag. The participant, or the pad rig, answers the approvals until the owner decides on a setup-added launch switch.
+
+### Subagent Shell stop with yolo on: not verified, no setting found
+
+Sweep 2 and the full2 run saw the generalist subagent's Shell call stop at "Untrusted Command Flags ... Allow execution of [Shell]?" even with yolo on. In the 0.66.0 package (read keyless from `npm pack @google/gemini-cli@0.66.0`) the check runs after the yolo ALLOW and turns it back into ask. It reads the chat history for untrusted-context flags, so it hits the subagent, whose history carries tool output. No setting feeds it, so the connector stays without a `no_prompts` row. Owner question open: should the pad rig answer this prompt, or is the case attended-only. The vendor pages could not be fetched in this pass and the end-to-end stop was not exercised (it needs a key); PRD-12's pad rerun covers it.
 
 ## Pad result
 

@@ -1,14 +1,6 @@
 [workspace]
 resolver = "3"
 members = ["crates/goalcup", "crates/goalcup-format", "crates/goalcup-verify"]
-# The 0.x crates. They stay on disk as reference and are never built, linted or tested again.
-exclude = [
-    "crates/goalcup-cli",
-    "crates/goalcup-daemon",
-    "crates/goalcup-platform",
-    "crates/goalcup-protocol",
-    "crates/goalcup-verifier",
-]
 
 [workspace.package]
 edition = "2024"
@@ -34,10 +26,10 @@ debug = "line-tables-only"
 [profile.dev.package."*"]
 debug = false
 
-# The regex engine and its search helpers, optimised in dev and test builds. The daemon's
-# redactor runs every byte through `regex::bytes`, and unoptimised they made the seeded
-# redaction tests 4 to 9 times slower: on a 4-vCPU x86_64 runner two of them passed nextest's
-# 180 s limit. Debug assertions and overflow checks stay on.
+# The regex engine and its search helpers, optimised in dev and test builds. The masker
+# (`goalcup`'s `mask`) runs every byte through `regex::bytes`, and unoptimised regex makes
+# seeded masking tests several times slower, enough to pass nextest's time limit on a small
+# runner. Debug assertions and overflow checks stay on.
 [profile.dev.package.regex]
 opt-level = 3
 
@@ -75,66 +67,55 @@ serde_json = "1"
 toml = "0.8"
 sha2 = "0.10"
 hex = "0.4"
-# The upload chunks (`goalcup-cli`'s `upload::uploader`): one zstd frame per chunk, at the
-# library's default level, no long window. The C library through `zstd-sys`, built by `cc`.
+# The part files (`goalcup-format`), read back by the verifier, and the proxy's `zstd`
+# content decoding (`goalcup`'s `proxy::decode`). The C library through `zstd-sys`, built by
+# `cc`.
 zstd = { version = "0.13", default-features = false }
-ed25519-dalek = "2"
 thiserror = "2"
 clap = { version = "4", features = ["derive"] }
 tempfile = "3"
-# The CLI's control-API client (`goalcup-cli`). A blocking HTTP/1.1 client and nothing more.
-# `default-features = false` drops ureq's rustls stack and its gzip decoder: the client speaks
-# only to 127.0.0.1, so it links no TLS at all.
+# The uploader's HTTP client (`goalcup`'s `upload`). A blocking HTTP/1.1 client and nothing
+# more. `default-features = false` drops ureq's own TLS stack and its gzip decoder: TLS goes
+# through ureq's connector hook on the rustls below.
 ureq = { version = "2", default-features = false }
-# The daemon's run registry (`goalcup-daemon/src/registry.rs`): every run it knows about.
-redb = "2"
-# The OS calls std does not have (free space, process and signal identity), made through
+# The OS calls std does not have (descriptors, process and signal identity), made through
 # one shared version.
 libc = "0.2"
-# `OsRng` for the run signing seed in `RunKeys` and the control and ingest secrets.
-rand = "0.8"
-# The redaction pattern set (`goalcup-daemon/src/redact.rs`). R10's set is regular
-# expressions and nothing else; `regex` is the only crate in this tree that compiles one,
-# and the regexes of the connector manifests' typed `extra_patterns[]` forms are written in
-# its syntax.
+# The masking rules (`goalcup`'s `mask`) and the verifier's secret scan
+# (`goalcup-verify/src/secrets.rs`). `regex` is the only crate in this tree that compiles one,
+# and the regexes of the connector manifests are written in its syntax.
 regex = "1"
-# Base64 for the redactor, the proxy and the verifier.
+# Base64 for the proxy, the masker and the verifier.
 base64 = "0.22"
-# The hook receiver and the control endpoint. One TCP listener per surface, loopback only;
-# `default-features = false` because this tree wants none of axum's optional extractors and, in
-# particular, none of its `tracing` integration.
-axum = { version = "0.8", default-features = false, features = ["http1", "json", "tokio"] }
-# The runtime under those listeners. No `fs`: filesystem I/O is `std::fs` on the polling
-# thread, which is the only thread allowed to touch a participant's disk.
+# The runtime under the proxy's listeners. No `fs`: filesystem I/O is `std::fs`.
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time", "signal"] }
-# M2 recorder. The recording proxy is `goalcup-cli`'s `proxy` module (run in-process by
-# `goalcup start` and `goalcup continue`); nothing below is linked by the daemon. TLS termination and upstream
-# TLS use rustls with the `ring` provider only: `default-features = false` keeps the aws-lc
-# provider and its C build out of the tree, and `ring` is the only
-# provider.
+# The recording proxy (`goalcup`'s `proxy`), run in-process. TLS termination and upstream TLS
+# use rustls with the `ring` provider only: `default-features = false` keeps the aws-lc
+# provider and its C build out of the tree, and `ring` is the only provider.
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
+# Upstream TCP keepalive and linger on the proxy's provider-facing sockets
+# (`goalcup`'s `proxy::connect`) and the watchdog's socket (`watchdog::spawn`). Already in the
+# graph through tokio, which enables the same `all` feature, so this names a crate that is
+# compiled either way and adds none.
+socket2 = { version = "0.6", features = ["all"] }
 # The per-launch, process-scoped CA and its leaf certificates. `pem` writes the one CA file a
 # harness is pointed at through its own process-scoped variable; never system trust.
-# Upstream TCP keepalive on the proxy's provider-facing sockets (`goalcup-cli`'s
-# `proxy::connect`). Already in the graph through tokio, which enables the same `all` feature,
-# so this names a crate that is compiled either way and adds none.
-socket2 = { version = "0.6", features = ["all"] }
 rcgen = { version = "0.14", default-features = false, features = ["ring", "pem"] }
 # Validation roots for the proxy's upstream (client-side) TLS.
 webpki-roots = "1"
 # The `Sec-WebSocket-Accept` derivation (RFC 6455 section 4.2.2: SHA-1 of the key plus a fixed
-# GUID, base64) in `proxy::http`. The proxy parses WebSocket frames itself, never buffering a
+# GUID, base64) in `proxy::http1`. The proxy parses WebSocket frames itself, never buffering a
 # whole message, so no WebSocket library is linked.
 sha1 = "0.11"
 # HTTP content decoding and permessage-deflate, on the pure-Rust `miniz_oxide` backend only.
 # Its fixed 15-bit window is the strategy the proxy uses; the zlib-only window-size
 # constructors do not exist in this build and must not be called.
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
-# HTTP `br` content decoding in `proxy::http`: Anthropic answers brotli whenever a request offers
-# it. Decode only and pure Rust (no encoder, no C). `default-features = false` leaves out its
-# `std` allocator crate (`alloc-stdlib`, which ships no licence file); `proxy::http` supplies
-# the few lines of allocator itself.
+# HTTP `br` content decoding in `proxy::decode`: Anthropic answers brotli whenever a request
+# offers it. Decode only and pure Rust (no encoder, no C). `default-features = false` leaves out
+# its `std` allocator crate (`alloc-stdlib`, which ships no licence file); `proxy::decode`
+# supplies the few lines of allocator itself.
 brotli-decompressor = { version = "5", default-features = false }
 # Tests only: parse the certificates the proxy mints.
 x509-parser = "0.18"

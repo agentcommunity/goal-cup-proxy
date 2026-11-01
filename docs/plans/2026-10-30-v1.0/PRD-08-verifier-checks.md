@@ -1199,5 +1199,52 @@ PRD-02's mask worker writes two record shapes PRD-01's text does not list yet; t
 ### 2026-11-01, replan after slice 8 (merge e4d537f1)
 
 - **Size report, PRD-08** (`wc -l` on integration): src outside `usage/` is 4,171 lines (secrets.rs 551, integrity.rs 1,027, legs.rs 550, history.rs 637, honesty.rs 497) against the 1,400 row in PRD-00 (about 3.0 times). The `usage/` tree is 2,861 against the PRD-09 row of 1,470. Tests under `crates/goalcup-verify/tests` are 4,359 (common 910, usage_run1 676, check_history 579, secrets_scan 291) against 1,100 plus 200 for PRD-09. Slice 8 added 23 src and 77 test lines; the overage is older and no behaviour-keeping cut is known. `secrets_scan.rs` is 291 against the standing 215 and is accepted, no growth. Carry to the end-of-build report with the PRD-03, PRD-10, PRD-12 and PRD-17 overages.
-- The open nits from the slice 7 replan (timeline nanosecond carry, two clones in `report.rs`) are still open.
+- The open nits from the slice 7 replan (timeline nanosecond carry, two clones in `report.rs`) are closed on integration: `timeline.rs` tallies off time in nanoseconds and divides once per row, and `report.rs` moves `covers` and `timeline` with `mem::take`.
 - Seam request to PRD-05: export the masker's `glued` guard so `secrets.rs` can drop its `ESCAPE` and `GUARD` copy. Until then the two copies must stay identical. No seam shape changes and no locked ledger item is touched.
+
+### 2026-11-01, history_complete and rewritten tool-call ids (rung 1 sweep V2)
+
+- **Finding.** OpenClaw on DeepSeek reported `resends answer N (tool call): never recorded as a response` for 7 of 7 and 19 of 20 resends although every response stream was recorded. Only summary files survive from that sweep, so the cause is not proven from the record. The matcher keyed a resent call only by the hash of its call id, so any harness that rewrites the id when it resends the turn (sanitised, shortened or re-minted) failed every call. A test with a rewritten id reproduces the exact report; the record itself is not shown to be missing anything, so no seam note for PRD-04 or PRD-11 is raised.
+- **Decision.** A tool-call id is keyed by its letters and digits only, lower case (`call_00_AbC` and `call00AbC` give one key). The key stays one per call, so a call dropped with no GAP is never covered by another call's response, in any thread, whatever its name and arguments. Review A1 withdrew an earlier name-and-arguments key, which let a real orphan pass whenever an identical call was recorded anywhere in the run. Test: an identical call recorded in another thread, its own response dropped, still gives `fail`.
+- **Limit.** An id changed by more than case and punctuation (re-minted) still fails; the next sweep's raw record decides whether a further rule is needed. No seam note for PRD-04 or PRD-11 is raised.
+- **Size.** `history.rs` is back to its size before this slice, plus the `id_key` helper (about 10 lines).
+
+### 2026-11-01, replan after slice 9 (merge 3b18e91b): zero-byte listed tunnel, OpenClaw history ids (fix round for A7)
+
+- V1 and V2 are closed. A listed tunnel with no byte now lands in `tunnels_empty`, so every tunnel that ENDED falls in exactly one bucket (decrypted, sign_in, empty, named, unnamed). The id-normalised key from the V2 note stands.
+- **Open nit A8 (next PRD-08 touch only).** `listed_conns` is counted at OPEN, the other buckets only in `tunnel_end`. A listed tunnel that never gets an END (the run stops while it is open, or a new boot's Part record clears `self.conns`) lands in no bucket, so `listed_conns` can exceed the sum of its parts. Rare and older than this slice. If the invariant should hold for every run, count conns still open at a boot change or at finish in their own `unended` bucket. Add it with a test only if done.
+- **Nit B-A7-1.** The reflowed `why` string in `honesty.rs` has a first line over 100 columns and a ragged break. Optional re-wrap, no behaviour change.
+- No seam moves and no locked ledger item is touched. No other PRD is affected.
+
+### 2026-11-01, note from the PRD-12 slice 15 merge (49f2c5d6)
+
+- **Pad fixture gap.** The pad selftest ends at exit 3 because the helpers PRD-08 offers to tests cannot write a multi-chunk K7 export or a K11-d fetched record with its usage record. When PRD-08 next touches its test helpers, either allow those two shapes or say plainly they are out of scope, so the pad owner can stop waiting. Not a build blocker; the pad rows for K7 and K11-d stay INCONCLUSIVE until then.
+
+### 2026-11-01, note from the PRD-05 point 4 leak fix merge (fc8df0e9)
+
+- `shapes.tsv` gained rows (S12 shape unchanged, kinds appended): `google_auth_key`, `groq_key`, `cerebras_key`,
+  `fireworks_key`, `vercel_gateway_key`, `together_key`, `sgamp_key`, `fk_key` and two `bedrock_key` forms. Line 11
+  (the shell assignment literal) is now three arms with the value in capture group 1; the span is group 1 when it
+  is set. `secrets.rs` must read kinds and spans from the file as it stands, not from a list. The `glued` export
+  request above is still open; until it lands the guard copy must stay identical. `gsk_` and `sgamp_` may still be
+  removed by the owner's answer, so `secrets` tests must not name those two kinds. No locked ledger item is touched.
+
+### 2026-11-01, Gemini parent reader edits in src/usage/ accepted
+
+- PRD-08 touched `crates/goalcup-verify/src/usage/native.rs` and `src/usage/hints.rs` (the Gemini chat
+  reader, thread links only) on the integrator's routing of 2026-11-01 09:27Z ("PRD-08 Gemini native
+  parent reader"). PRD-09 owns that directory; this note records the one-time reassignment of those two
+  Gemini hunks to PRD-08, and PRD-09 keeps ownership of everything else under `src/usage/`. Later
+  edits there go to a `v1.0/prd-09-*` branch. No seam moves and no locked ledger item is touched.
+
+### 2026-11-01, Gemini parent reader merged (27341339)
+
+- Merged: Gemini CLI native thread parentage from the chat file path layout, wire-thread fallback when the file carries no id. Nit N1 (simplify the unique-match filter for 8-hex prefix collisions) is optional and not a defect. Size: src 7,136 against the 1,400 row; reported in the PRD-16 note. No seam moves.
+
+### 2026-11-01, slice 10 merged (64ff365a)
+
+- Merged: history_complete no longer breaks a chain when a later request carries a MASK on earlier starred text (ends() key), a held WebSocket message is credited its MASK and released on the next non-MASK record, and a dropped tool call is no longer skipped as compacted. Four check_history fixtures added; box 108 tests green. Size: src 7,220 against the 1,400 row, reported in the PRD-16 note. No seam moves and no other PRD is affected.
+
+### 2026-11-01, note from the PRD-16 post-cut slice (merge dacbc61b)
+
+- **Ask:** adopt `scripts/pad/fixtures/regen-k7-k11d.rs` as a `GOALCUP_FIXTURES_OUT` test in `crates/goalcup-verify/tests`, building k7 from a builder rather than from the old k7-part, so the four selftest fixtures (k7-part, k7-fetched, k11-d-part, k11-d-fetched) regenerate with the others; then delete the unbuilt copy. It is built by no target today and can drift unseen. Selftest exits 0 on the committed fixtures. No locked ledger item is touched.

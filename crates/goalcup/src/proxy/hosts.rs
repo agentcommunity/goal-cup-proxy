@@ -49,6 +49,11 @@ impl Hosts {
         (name, self.list.decide(name))
     }
 
+    /// Whether `host` is in the `expected` array of the list.
+    pub fn is_expected(&self, host: &str) -> bool {
+        self.list.is_expected(host)
+    }
+
     /// True while (host, fingerprint) is a learned refusal younger than [`REFUSAL_EXPIRY`] at
     /// `now`; an expired entry is removed, so the next connection of the pair tries our leaf again.
     pub fn refused(&self, now: Mono, host: &str, fp: &[u8; 32]) -> bool {

@@ -64,11 +64,12 @@ ORDER = {"PASS": 0, "INCONCLUSIVE": 1, "FAIL": 2}
 CHECKS = ("C1", "C2", "C3", "C4", "C5", "C6")
 SEAL_SLACK = datetime.timedelta(seconds=120)  # pad's seal-now limit: a seal may begin that long before its line
 WATCHER = ("exec", "pre")  # section 3.1 watcher steps: the owning PRD's pass line decides, not `faults`
-EXPECTS_LOSS = ("refusal-curl.sh",)  # exec scripts whose owner expects a named loss (PRD-03 acceptance 7: a refused call)
-LOSS_GAP = "tls_refused"  # the only loss such a row may name: the curl's own refused connections
+EXPECTS_LOSS = {"refusal-curl.sh": "tls_refused",  # exec scripts whose owner expects a named loss, and the only one it may name:
+                "kill-both-seal.sh": "recorder_down"}  # PRD-03 acceptance 7 (the curl's refused calls); rung 5b (the dead entry's gap)
+SEALS_DEAD = "kill-both-seal.sh"  # the exec script that kills both and seals the dead entry: the record decides its row
 REFUSES = "proxy-setting.sh"  # the pre script after which goalcup start must refuse: no run is recorded
 STALE = "stale-gateway.sh"  # the pre script that leaves a daemon running for goalcup start to stop
-JUDGED = (REFUSES, STALE)  # pre scripts whose row the record decides (section 3.1), as a fault row is
+JUDGED = (REFUSES, STALE, SEALS_DEAD)  # pre and exec scripts whose row the record decides (section 3.1), as a fault row is
 # C3's scans (section 5, 7): the verifier's over the record, the box's output folder, the conductor's own folder.
 SCANS = (("secrets", "the local record and the run's files"), ("secrets-out", "the box's output folder"),
          ("secrets-conductor", "the conductor's run folder (its own secrets, section 7)"))
@@ -97,7 +98,7 @@ def expected_gaps(r):
     """The GAP kinds a row may name without it being a loss: the seal's after_stop (PRD-08 R2), a refused call for a
     script that expects one (PRD-03 acceptance 7), pinned for a dodger (section 2), FAULT_GAPS for a fault row. The meta key
     expect_gaps is selftest-only."""
-    return ({"after_stop"} | ({LOSS_GAP} if any(s in EXPECTS_LOSS for _, s in watchers(r.meta)) else set())
+    return ({"after_stop"} | {EXPECTS_LOSS[s] for _, s in watchers(r.meta) if s in EXPECTS_LOSS}
             | ({"pinned"} if r.meta.get("case") == "dodger" else set()) | set(r.meta.get("expect_gaps") or ()) | {g for k in fault_kinds(r.meta) for g in FAULT_GAPS.get(k, ())})
 
 def dig(doc, name):
@@ -226,11 +227,33 @@ class Run:
         code = self.exits.get(name)
         return {0: 0, 1: 0, 2: 1}.get(code) if isinstance(code, int) else None  # 1: incomplete, never a hit
 
+    def stated_loss(self):
+        """Shape kinds and streams when every secret hit is a shape in a joined SSE deltas body (PRD-05 Risks "Model echo": JSON
+        framing sits between the pieces, a stated loss), else None. A hit with no stream path, a known value, a big MASK or
+        any other location is not this."""
+        doc = load(self.folder, "verify/secrets.json")
+        shapes = doc.get("shape_hits") if isinstance(doc, dict) else None
+        if not isinstance(shapes, list) or not shapes or any(count(doc.get(k)) for k in ("hits", "known_hits", "big_masks")):
+            return None
+        if not all(isinstance(h, dict) and str(h.get("in")).endswith("/deltas") for h in shapes):
+            return None
+        return sorted({str(h.get("kind")) for h in shapes}), sorted({str(h["in"]) for h in shapes})
+
+    def loss_exit(self, code):
+        """True when exit 2 comes from the stated loss alone, the verifier's only failed check."""
+        return code == 2 and bool(self.stated_loss()) and set(self.failed) <= {"secrets"}
+
     def masks(self):
         """MASK spans by rule kind from the record scan, or None when the report has none."""
         doc = load(self.folder, "verify/secrets.json")
         got = doc.get("masks") if isinstance(doc, dict) else None
         return {k: count(n) for k, n in items(got)} if isinstance(got, dict) else None
+
+LOST_TERMINAL = "goalcup is not running. To go on, run: goalcup continue"  # the status words when the recorder is gone (cli/text.rs)
+
+def lost_terminal(r):
+    """True when a status line says goalcup is gone and the run goes on only by `goalcup continue`: the harness lost its terminal."""
+    return any(f.get("kind") == "status" and LOST_TERMINAL in str(f.get("said")) for f in r.faults)
 
 def cause(r):
     """Section 8: the INCONCLUSIVE causes that are never goalcup's failure, from the record first."""
@@ -251,8 +274,8 @@ def judge(r):
     pin = r.meta.get("model_host") if r.meta.get("case") == "dodger" else None  # meta.json, written by pad
     tunnels = (r.hosts("s6_tunnel_hosts") or {}).get(pin, 0)  # section 2: a dodger's calls ride `pinned` tunnels
     work = (seen or tunnels or r.native or dig(r.usage, "s7_native")) and (r.meta.get("commits_since_start") or 0) >= 1
-    stop = cause(r) or (None if work else "the harness did no work (commits since start %s, model requests %s)"
-                        % (r.meta.get("commits_since_start"), seen))
+    idle = "the harness did no work (commits since start %s, model requests %s)" % (r.meta.get("commits_since_start"), seen)
+    stop = cause(r) or (None if work else ("the harness lost its terminal; " if lost_terminal(r) else "") + idle)
     if stop:
         for c in ("C1", "C2", "C4", "C5", "C6", "faults"):
             r.mark(c, "INCONCLUSIVE", stop)
@@ -334,8 +357,12 @@ def local(r, few):
     # never explains off time.
     off = any(dig(e, "s6_off") for e in r.entries)
     covered = r.check("history_complete") == "named" and 0 < unexpected <= orphans
-    explained = code == 1 and named and (not off or "recorder_down" in allowed) and (covered or named <= allowed)
-    r.flag(r.meta.get("case") in ("direct", "gateway") and set(fault_kinds(r.meta)) <= set(CLEAN) and not r.failed and code != 0 and not explained,
+    stated = r.loss_exit(code)  # exit 2 from the stated loss alone: the named gaps are still judged
+    # Any check the verifier names (not only history_complete) can give exit 1, so under exit 2 it keeps the exit rule.
+    other_named = any(c.get("result") == "named" for e in r.entries for c in dig(e, "s6_checks") or [] if isinstance(c, dict))
+    explained = (code == 1 or stated) and named and (not off or "recorder_down" in allowed) and (covered or named <= allowed)
+    r.flag(r.meta.get("case") in ("direct", "gateway") and set(fault_kinds(r.meta)) <= set(CLEAN) and (not r.failed or stated)
+           and code != 0 and not explained and not (stated and not named and not off and not other_named),  # nothing else could give exit 1
            "C1", "FAIL", "verifier exit %s, the %s case expects 0 or only the GAPs %s" % (
                code, r.meta.get("case"), ", ".join(sorted(allowed))))
     own = sorted(i for i in r.failed if i not in ("secrets", "history_complete"))  # `secrets` is C3's, `history_complete` C1's
@@ -429,13 +456,27 @@ def usage_checks(r, few):
 def scan(r, name, where):
     """One C3 scan: hits fail; no scan (None) is INCONCLUSIVE, never a PASS."""
     n = r.hits(name)
+    loss = r.stated_loss() if name == "secrets" else None
+    if loss:  # never a PASS: the report cannot show the shape crosses a delta edge (a masker miss reads the same), so C3 stays open
+        return r.mark("C3", "INCONCLUSIVE", "shape only in joined streamed replies (not verified, owner question open): %s in %s"
+                      % (", ".join(loss[0]), ", ".join(loss[1])))
     r.flag(n != 0, "C3", "FAIL" if n else "INCONCLUSIVE", "%s hits in %s" % (n, where) if n else "no scan of " + where)
 
 def secrets(r):
     """C3. The known-value and shape scans ran in the box; only their counts reach this folder."""
     for name, where in SCANS + ((("secrets-git", "the project's git objects"),) if r.meta.get("push") == "tested" else ()):
         scan(r, name, where)
-    r.flag("secrets" in r.failed, "C3", "FAIL", "secrets fail in the verifier report: %s" % r.failed.get("secrets"))
+    r.flag("secrets" in r.failed and not r.stated_loss(), "C3", "FAIL", "secrets fail in the verifier report: %s" % r.failed.get("secrets"))
+    # The pad's pane copies are scanned for known values only (a hit is a replacement miss in the rig); their shape hits are
+    # a harness screen echo, not a record, and are not read.
+    # Where panes exist (pad-run sets the exit), no report or an exit other than 0 or 2 is no scan, never a PASS.
+    doc = load(r.folder, "verify/secrets-panes.json")
+    if "secrets-panes" in r.exits:
+        if not isinstance(doc, dict) or r.exits["secrets-panes"] not in (0, 2):
+            r.flag(True, "C3", "INCONCLUSIVE", "no scan of the pad's pane copies")
+        else:
+            pane = count(doc.get("known_hits"))
+            r.flag(pane, "C3", "FAIL", "%s known values on the pad's pane copies" % pane)
     r.flag(r.meta.get("known_box") is not True, "C3", "INCONCLUSIVE", "the run certificate key is not in the known values")
     # Section 5: the setup-check script printed .env.local. Its unmasked no-shape value (plain hits) or a
     # MASK of a planted value's own shape shows that output reached the model. Never any MASK: the
@@ -443,10 +484,26 @@ def secrets(r):
     masks = r.masks()
     if masks is None:
         return r.mark("C3", "INCONCLUSIVE", "no MASK counts by rule in verify/secrets.json")
-    if not r.hits("secrets-plain") and not any(masks.get(kinds[0]) for kinds in PLANTED):
+    # A harness that redacts tool output itself (harness file redacts_tool_output, point 4) shows the exercise by the masker's
+    # own MASK of the redacted form (masked_key); without it, or without a plain hit, the exercise is not done.
+    up = r.meta.get("redacts_tool_output")
+    loss = r.stated_loss()  # the only hit being the stated loss (scan() reports it) is not a real hit
+    hit, plain = 0 if loss else r.hits("secrets"), r.hits("secrets-plain")
+    if not plain and not any(masks.get(kinds[0]) for kinds in PLANTED) and not (up and masks.get("masked_key")):
         return r.mark("C3", "INCONCLUSIVE", "secret exercise not done: no plain-value hit and no MASK of a planted shape")
+    # A planted kind with no MASK is a FAIL when a hit shows it reached the record, else not exercised (a run never passes on
+    # a missing exercise). For an upstream-redacting harness the missing MASK is a stated loss, open until the owner answers
+    # (point 4): INCONCLUSIVE, never PASS.
+    # The vendor page names only the openai, github and key=/token=/password= patterns, so only those kinds carry the note.
+    named = {"openai_key", "github_token", "generic_secret_assignment"}
     for kinds in PLANTED:
-        r.flag(not any(masks.get(k) for k in kinds), "C3", "FAIL", "no MASK of %s for a planted value" % " or ".join(kinds))
+        why = "owner question open: the harness redacts tool output itself, so this kind may be masked before the wire" \
+            if up and named.intersection(kinds) else "not exercised"
+        if loss:
+            why += "; %s only in joined streamed replies (not verified, owner question open)" % (
+                "hit" if set(kinds) & set(loss[0]) else "shape")
+        r.flag(not any(masks.get(k) for k in kinds), "C3", "FAIL" if hit else "INCONCLUSIVE",
+               "%s of %s: no MASK" % ("hits" if hit else why, " or ".join(kinds)))
 
 def c6(r):
     st, final = r.status, dig(r.status, "s4_requests")
@@ -488,6 +545,8 @@ def faults(r):
         recorder_kills(r, kinds)
     for k in sorted(set(kinds) & set(KIND_CHECKS)):
         KIND_CHECKS[k](r)
+    if ("exec", SEALS_DEAD) in watchers(r.meta):
+        dead_seal_row(r)
 
 def recorder_kills(r, kinds):
     """kill-recorder (PRD-02 R1) and kill-watchdog-recover (PRD-10 acceptance 11)."""
@@ -557,7 +616,9 @@ def recorder_kills(r, kinds):
             long = ms is None or ms >= 2000
             r.flag(long, "faults", "INCONCLUSIVE" if k in quiet else "FAIL",
                    ("quiet kill: gap of %s ms, length not shown" if k in quiet else "a recorder_down gap of %s ms, not under 2 s") % ms)
-    r.flag(kills and dig(r.local, "s6_exit") != 1, "faults", "FAIL", "verifier exit %s, a kill row expects 1" % dig(r.local, "s6_exit"))
+    code = dig(r.local, "s6_exit")
+    stated = r.loss_exit(code)  # C3's INCONCLUSIVE
+    r.flag(kills and code != 1 and not stated, "faults", "FAIL", "verifier exit %s, a kill row expects 1" % dig(r.local, "s6_exit"))
 
 def near(gap, fault):
     """True when the gap starts within CRASH_SLACK of the kill's time."""
@@ -568,7 +629,7 @@ def recover(r, gaps):
     for kind in ("kill-watchdog", "kill-recorder"):  # PRD-10 acceptance 11 needs both kills
         if not fired(r, kind):
             return r.mark("faults", "INCONCLUSIVE", "fault did not fire: %s" % kind)
-    if any("goalcup continue" in str(f.get("said")) for f in r.faults):
+    if lost_terminal(r):
         return r.mark("faults", "INCONCLUSIVE", "harness lost its terminal")
     for what, name in (("harness pid", "s4_harness_pid"), ("port", "s4_port")):  # record-only: judged whatever came after
         r.flag(len({dig(s, name) for s in r.samples} - {None}) > 1, "faults", "FAIL", "the %s changed" % what)
@@ -625,6 +686,24 @@ def both_row(r):
     # The abandoned gap starts at the last LINK, up to a minute before the kill (PRD-01 section 10); any other starts at it.
     r.flag(k and any((a := when(g.get("start"))) and a < k - (LINK_SLACK if g.get("cause") == "abandoned" else CRASH_SLACK)
                      for g in gaps), "faults", "FAIL", "a gap starts before the crash window")
+
+def dead_seal_row(r):
+    """Rung 5b: both killed, then `goalcup seal --yes`: sealed `recovered`, exactly one gap, `abandoned`, starting no later
+    than the script's end and no earlier than LINK_SLACK before the kill (the script's `began`), and script exit 0."""
+    f = next((f for f in reversed(r.faults) if f.get("kind") == "exec" and f.get("script") == SEALS_DEAD), None)
+    if not f:
+        return r.mark("faults", "INCONCLUSIVE", "fault did not fire: %s" % SEALS_DEAD)
+    r.flag(f.get("exit") != 0, "faults", "FAIL", "%s exit %s" % (SEALS_DEAD, f.get("exit")))
+    sealed_as(r, "recovered")
+    gaps = r.gaps()[0]
+    if gaps is None:
+        return r.mark("faults", "INCONCLUSIVE", "recorder_down gaps not readable from inv6")
+    end = when(f.get("at"))
+    r.flag(len(gaps) != 1, "faults", "FAIL", "%d gaps, not one" % len(gaps))
+    r.flag(not any(g.get("cause") == "abandoned" for g in gaps), "faults", "FAIL", "no abandoned gap")
+    r.flag(end and any((a := when(g.get("start"))) and a > end for g in gaps), "faults", "FAIL", "a gap starts after the script ended")
+    kill = when(f.get("began"))
+    r.flag(kill and any((a := when(g.get("start"))) and a < kill - LINK_SLACK for g in gaps), "faults", "FAIL", "the gap starts long before the kill")
 
 def uploaded(r, t, beat_s):
     """After t (the thaw or the lift), from watch/upload.jsonl (S9, a line a minute, so the catch-up has that minute of

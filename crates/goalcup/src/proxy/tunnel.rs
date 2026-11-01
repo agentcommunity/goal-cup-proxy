@@ -37,6 +37,8 @@ pub struct TunnelConn {
     /// Bytes already read: from the client (replayed upstream first), from upstream.
     pub client_prefix: Bytes,
     pub upstream_prefix: Bytes,
+    /// `HostList::is_expected(host)`, decided once where the tunnel is built.
+    pub expected: bool,
 }
 
 impl TunnelConn {
@@ -106,17 +108,19 @@ struct HostWindow {
 pub struct Watch {
     host: String,
     opened: Mono,
+    expected: bool,
     secs: VecDeque<u64>,
 }
 
 impl Flags {
     /// Starts watching one tunnel to `host` that opened at `opened`.
-    pub fn watch(&self, host: &str, opened: Mono) -> Watch {
+    pub fn watch(&self, host: &str, opened: Mono, expected: bool) -> Watch {
         let mut hosts = self.hosts.lock().unwrap_or_else(|e| e.into_inner());
         hosts.entry(host.to_owned()).or_default().conns += 1;
         Watch {
             host: host.to_owned(),
             opened,
+            expected,
             secs: VecDeque::new(),
         }
     }
@@ -159,8 +163,11 @@ impl Flags {
         let secs = h.secs.iter().filter(|s| s.2 > 0).count();
         h.noted = true;
         h.secs = VecDeque::new();
-        let ev = json!({"ev": "note", "what": "long_tunnel", "host": w.host, "why": why,
+        let mut ev = json!({"ev": "note", "what": "long_tunnel", "host": w.host, "why": why,
             "conns": h.conns, "up": up, "down": down, "secs": secs});
+        if w.expected {
+            ev["expected"] = json!(true);
+        }
         drop(hosts);
         rec.event(ev);
     }
@@ -180,7 +187,7 @@ pub async fn run(
     let meta = serde_json::to_value(c.meta()).unwrap_or_default();
     let mut conn = rec.open(StreamKind::Conn, 0, 0, 0, OpenFlags::TUNNEL, meta);
     let watch = (c.listed.is_none() && c.reason != "sign_in")
-        .then(|| Mutex::new(flags.watch(&c.host, opened)));
+        .then(|| Mutex::new(flags.watch(&c.host, opened, c.expected)));
     let tap = |dir, t, n| {
         if let Some(w) = &watch {
             flags.observe(

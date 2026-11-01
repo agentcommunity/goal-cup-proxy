@@ -78,6 +78,25 @@ class Settings(unittest.TestCase):
             pad.load_settings(dict(BASE, key="cf"), PADCFG)
 
 
+class NotVerified(unittest.TestCase):
+    """PRD-12 section 9: a stated reason means nothing runs, exit 3, and the table shows that reason."""
+
+    def test_stated_reason_exits_3_before_any_box(self):
+        d = self.enterContext(tempfile.TemporaryDirectory())
+        f = os.path.join(d, "s.toml")
+        with open(f, "w") as fh:
+            fh.write('harness = "crush-cli"\nkey = "claude"\nmode = "cycle"\n')
+        with mock.patch.object(subprocess, "run", side_effect=AssertionError("started a box")):
+            self.assertEqual(pad.main(["pad", f]), 3)
+
+    def test_table_shows_the_reason_over_old_rows(self):
+        tbl = load("padtable", "table")
+        row = {"connector": "crush-cli", "case": "direct", "mode": "full", "result": "FAIL"}
+        tier = tbl.tier_for("crush-cli", [row])
+        self.assertEqual(tier[0], "not verified")
+        self.assertTrue(tier[2].startswith("needs permission answer"))
+
+
 class Walk(unittest.TestCase):
     """A sentinel key in the environment: no argument the pad builds, and no file it writes, holds it."""
 
@@ -181,9 +200,11 @@ class HereAndFetch(unittest.TestCase):
             with open(os.path.join(work, "pg_service.conf"), "w") as f:
                 f.write("password=" + SENTINEL)
             raise subprocess.TimeoutExpired(argv, timeout)
-        with tempfile.TemporaryDirectory() as out, mock.patch.object(pad, "call", fake):
+        with tempfile.TemporaryDirectory() as out, mock.patch.object(pad, "call", fake), \
+                mock.patch.dict(os.environ, {"DATABASE_URL": "postgres://fake-not-a-secret"}):
             r = self.run_for(out, server="staging")
             r.meta["entry"] = "e" + "0" * 16
+            r.fetch_index = lambda *a: None  # the index box is test_pad_fetch's; here fetch-run is the one that hangs
             with self.assertRaises(subprocess.TimeoutExpired):
                 r.step_fetch("fetch", 10)
             self.assertEqual(os.listdir(os.path.join(r.dir, "fetched")), [])
@@ -281,15 +302,16 @@ class CrashRows(unittest.TestCase):
 
     UP = ({"written": {"model_requests": 2}}, {"written": {"model_requests": 5}})  # status samples before and after
 
-    def row(self, kind, gap, samples=UP, recovery=(("ok", "10:03"),), seal="harness_exit", over_cap=False,
-            words=check.RECOVER, more=(), pid=9, code=1, case="direct", quiet=False):
+    @staticmethod
+    def row(kind, gap, samples=UP, recovery=(("ok", "10:03"),), seal="harness_exit", over_cap=False,
+            words=check.RECOVER, more=(), pid=9, code=1, case="direct", quiet=False, commits=1, extra=None):
         told = [{"kind": k, "exit": 0, "said": w, "at": "2026-10-30T10:%s+00:00" % t}
                 for k, w, t in zip(("recover", "recover", "status"), words + (check.STATUS_RECOVER,), ("02:30", "04:00", "03:30"))]
         kills = [dict({"kind": k, "pid": pid, "at": "2026-10-30T10:02:00+00:00"}, **({"quiet": True} if quiet else {}))
                  for k in ("kill-watchdog", "kill-recorder")]
         rec = [{"kind": "wait-recovery", "result": x, "at": "2026-10-30T%s:00+00:00" % t} for x, t in recovery]
         files = {"meta.json": {"connector": "codex-cli", "case": case, "model_host": "api.example", "variant": [kind + "@3"], "server": "off",
-                               "keep": True, "commits_since_start": 1, "entry": "e1", "over_cap": over_cap,
+                               "keep": True, "commits_since_start": commits, "entry": "e1", "over_cap": over_cap,
                                "started": "2026-10-30T10:00:00+00:00"},
                  "verify/check-local.json": {"exit": code, "entries": [{"entry": "e1", "seal_reason": seal,
                      "counts": {"model_requests": 5, "gaps": {"recorder_down": 1}}, "checks": [
@@ -300,6 +322,7 @@ class CrashRows(unittest.TestCase):
                                                       {"parent": "t0", "models": {"m": 2}, "wire_calls": 2}]},
                  "watch/status.jsonl": [{"at": "2026-10-30T10:0%d:00+00:00" % (4 * i), "status": x} for i, x in enumerate(samples)],
                  "watch/faults.jsonl": told + kills + rec + list(more)}
+        files.update(extra or {})
         return evaluate(files)
 
     GAP = {"start": "2026-10-30T10:01:59.9Z", "end": "2026-10-30T10:02:01.2Z"}  # the kill is at 10:02:00
@@ -323,6 +346,19 @@ class CrashRows(unittest.TestCase):
             self.assertEqual(res == "FAIL", fails, (start, end, quiet))
             if quiet and not fails:
                 self.assertEqual(res, "INCONCLUSIVE", (start, end))
+
+    LOST = {"kind": "status", "exit": 0, "at": "2026-10-30T10:03:40+00:00",
+            "said": "Problem. Recording is off since 10:02: goalcup is not running. To go on, run: goalcup continue r1"}
+
+    def test_unrelated_continue_text_is_not_a_lost_terminal(self):  # R5-2: a Codex status shows an unrelated 'goalcup continue' line
+        other = {"kind": "note", "said": "not recorded ... goalcup seal, then goalcup continue", "at": "2026-10-30T10:03:41+00:00"}
+        got = self.row("kill-watchdog-recover", self.GAP, more=[other])
+        self.assertNotEqual(got["faults"], "INCONCLUSIVE")
+        self.assertEqual(self.row("kill-watchdog-recover", self.GAP, more=[self.LOST])["faults"], "INCONCLUSIVE")
+
+    def test_no_work_is_inconclusive(self):  # R5-3
+        got = self.row("kill-watchdog-recover", self.GAP, more=[self.LOST], commits=0)
+        self.assertEqual(got["faults"], "INCONCLUSIVE")
 
     def test_dodger_progress_is_tunnel_connections(self):
         def tun(n):
@@ -396,6 +432,21 @@ class FaultRows(unittest.TestCase):
             gap = {"cause": "abandoned", "start": "2026-10-30T%sZ" % start, "end": "2026-10-30T10:06:00Z"}
             self.assertEqual(self.row("kill-both@5", both, [gap], counts={"recorder_down": 1}, seal="recovered"), want, start)
 
+    def test_kill_both_seal_is_judged_from_the_record(self):  # rung 5b: sealed recovered, one abandoned gap, script exit 0
+        def gap(start, cause="abandoned"):
+            return {"cause": cause, "start": "2026-10-30T%sZ" % start, "end": "2026-10-30T10:06:00Z"}
+
+        def ran(code):
+            return [{"kind": "exec", "script": "kill-both-seal.sh", "exit": code, "at": "05:10", "began": "2026-10-30T10:04:30Z"}]
+        one = gap("10:04:20")
+        for code, seal, gaps, want in ((0, "recovered", [one], "PASS"), (0, "harness_exit", [one], "FAIL"),
+                                       (0, "recovered", [], "FAIL"), (3, "recovered", [one], "FAIL"),
+                                       (0, "recovered", [gap("10:01:00", "recorder_down"), one], "FAIL"),  # two gaps
+                                       (0, "recovered", [gap("10:01:00")], "FAIL"),  # long before the kill
+                                       (0, "recovered", [gap("10:05:30")], "FAIL")):  # after the script ended
+            got = self.row("exec kill-both-seal.sh@2", ran(code), gaps, counts={"recorder_down": 1}, seal=seal)
+            self.assertEqual(got, want, (code, seal, gaps))
+
     def test_kill_watchdog_seal_is_timed_from_the_record(self):  # not from status.json, which is rewritten until the box ends
         faults = [{"kind": "kill-watchdog", "pid": 9, "at": "02:00"}, {"kind": "harness-exit", "seen": True, "at": "05:00"}]
         for sealed, want in (("2026-10-30T10:05:20Z", "PASS"), ("2026-10-30T10:09:00Z", "FAIL")):
@@ -417,6 +468,102 @@ class FaultRows(unittest.TestCase):
             self.assertEqual(self.row("freeze@2", [{"kind": "freeze", "pids": pids, "at": "02:00"}, {"kind": "thaw", "at": "12:00"}]), want)
 
 
+class StatedLoss(unittest.TestCase):
+    """C3 and the kill row's exit rule for a shape found only in a joined SSE deltas body (PRD-05 Risks "Model echo")."""
+
+    DELTAS = {"kind": "generic_secret_assignment", "in": "e1/1.3/deltas", "sha12": "a" * 12, "n": 1}
+    PLAIN = {"kind": "generic_secret_assignment", "in": "e1/1.3", "sha12": "a" * 12, "n": 1}
+    KNOWN = {"form": "raw", "in": "e1/1.3/deltas", "sha12": "b" * 12, "n": 1}
+
+    def run_row(self, known=(), shapes=(), code=2):
+        extra = {"verify/secrets.json": {"known_hits": list(known), "shape_hits": list(shapes), "big_masks": [],
+                                         "masks": dict(SecretCheck.PLANTED)},
+                 "verify/secrets-conductor.json": {"hits": 0},
+                 "verify/exits.json": {"secrets": 2 if known or shapes else 0, "secrets-out": 0, "secrets-plain": 0}}
+        gap = {"start": "2026-10-30T10:01:59.9Z", "end": "2026-10-30T10:02:01.2Z"}
+        return CrashRows.row("kill-recorder", gap, code=code, extra=extra)
+
+    def plain_row(self, shapes, code, counts, extra_checks=()):
+        checks = ([{"id": "secrets", "result": "fail"}] if shapes else []) + list(extra_checks)
+        return evaluate({"meta.json": {"connector": "codex-cli", "case": "direct", "known_box": True, "entry": "e1", "commits_since_start": 1},
+                         "verify/check-local.json": {"exit": code, "entries": [{"entry": "e1", "counts": {"model_requests": 5, "gaps": counts},
+                                                                                 "checks": checks}]},
+                         "verify/secrets.json": {"known_hits": [], "shape_hits": list(shapes), "big_masks": [], "masks": dict(SecretCheck.PLANTED)},
+                         "verify/secrets-conductor.json": {"hits": 0},
+                         "verify/exits.json": {"secrets": 2 if shapes else 0, "secrets-out": 0, "secrets-plain": 0}})
+
+    def test_deltas_only_shape_is_open_not_a_fail_and_never_a_pass(self):
+        row = self.run_row(shapes=[self.DELTAS])
+        self.assertEqual(row["checks"]["C3"], "INCONCLUSIVE")
+        self.assertNotEqual(row["faults"], "FAIL")
+        self.assertNotEqual(row["result"], "FAIL")
+        self.assertNotEqual(row["result"], "PASS")
+
+    def test_stated_loss_does_not_hide_an_unexplained_gap(self):
+        gaps = {"s6_gaps": {"memory_guard": 1}}
+        for shapes, code in (([], 1), ([self.DELTAS], 2)):
+            row = self.plain_row(shapes, code, gaps["s6_gaps"])
+            self.assertEqual(row["checks"]["C1"], "FAIL", (shapes, code, row["why"]))
+        for shapes, code in (([], 1), ([self.DELTAS], 2)):  # no gap at all, but a named history orphan
+            row = self.plain_row(shapes, code, {}, [{"id": "history_complete", "result": "named"}])
+            self.assertEqual(row["checks"]["C1"], "FAIL", (shapes, code, row["why"]))
+        for shapes, code in (([], 1), ([self.DELTAS], 2)):  # no gap at all, another check named
+            row = self.plain_row(shapes, code, {}, [{"id": "gaps_named", "result": "named"}])
+            self.assertEqual(row["checks"]["C1"], "FAIL", (shapes, code, row["why"]))
+
+    def test_any_other_hit_still_fails(self):
+        for known, shapes in (([self.KNOWN], [self.DELTAS]), ([], [self.PLAIN]), ([], [self.DELTAS, self.PLAIN]),
+                              ([], [dict(self.DELTAS, **{"in": None})])):
+            row = self.run_row(known, shapes)
+            self.assertEqual((row["checks"]["C3"], row["faults"]), ("FAIL", "FAIL"), (known, shapes))
+
+    def planted_row(self, known, shapes, masks):
+        extra = {"verify/secrets.json": {"known_hits": list(known), "shape_hits": list(shapes), "big_masks": [], "masks": masks},
+                 "verify/secrets-conductor.json": {"hits": 0},
+                 "verify/exits.json": {"secrets": 2, "secrets-out": 0, "secrets-plain": 0}}
+        gap = {"start": "2026-10-30T10:01:59.9Z", "end": "2026-10-30T10:02:01.2Z"}
+        return CrashRows.row("kill-recorder", gap, code=2, extra=extra)
+
+    def test_stated_loss_with_a_planted_kind_unmasked_is_open_not_a_fail(self):
+        masks = dict(SecretCheck.PLANTED, jwt=0, private_key=0)
+        row = self.planted_row([], [self.DELTAS], masks)
+        self.assertEqual(row["checks"]["C3"], "INCONCLUSIVE")
+        self.assertNotIn(row["result"], ("FAIL", "PASS"))
+
+    def test_known_or_pathless_hit_with_a_planted_kind_unmasked_still_fails(self):
+        masks = dict(SecretCheck.PLANTED, jwt=0)
+        for known, shapes in (([self.KNOWN], [self.DELTAS]), ([], [self.PLAIN])):
+            self.assertEqual(self.planted_row(known, shapes, masks)["checks"]["C3"], "FAIL", (known, shapes))
+
+    def test_exit_2_without_a_stated_loss_still_fails(self):
+        self.assertEqual(self.run_row(code=2)["faults"], "FAIL")  # exit 2 with no stated loss behind it
+
+
+class UpstreamRedaction(unittest.TestCase):
+    """C3 for a harness file with redacts_tool_output (point 4): open until the owner answers, never PASS."""
+
+    DELTAS = StatedLoss.DELTAS
+
+    def c3(self, up, masks, known=(), shapes=()):
+        return evaluate({"meta.json": {"connector": "hermes-cli", "case": "direct", "known_box": True, "entry": "e1", "redacts_tool_output": up},
+                         "verify/secrets.json": {"masks": masks, "known_hits": list(known), "shape_hits": list(shapes), "big_masks": []},
+                         "verify/secrets-conductor.json": {"hits": 0},
+                         "verify/exits.json": {"secrets": 2 if known or shapes else 1, "secrets-out": 0, "secrets-plain": 0}}
+                        )["checks"]["C3"]
+
+    def test_no_mask_and_no_hit_is_never_a_pass(self):
+        self.assertEqual(self.c3(True, {}), "INCONCLUSIVE")  # no sign of any exercise
+        self.assertEqual(self.c3(True, {"masked_key": 3}), "INCONCLUSIVE")  # exercised, planted kinds open: stated loss, not PASS
+        self.assertEqual(self.c3(True, dict(SecretCheck.PLANTED, jwt=0)), "INCONCLUSIVE")
+        self.assertEqual(self.c3(False, {"masked_key": 3}), "INCONCLUSIVE")  # control: the flag is what counts masked_key as exercise
+
+    def test_a_known_hit_still_fails(self):
+        self.assertEqual(self.c3(True, {}, known=[StatedLoss.KNOWN]), "FAIL")
+
+    def test_deltas_only_shape_is_open_not_a_fail(self):
+        self.assertEqual(self.c3(True, SecretCheck.PLANTED, shapes=[self.DELTAS]), "INCONCLUSIVE")
+
+
 class SecretCheck(unittest.TestCase):
     """C3 (point 4, section 5): a known-value hit fails, and so does a planted shape with no MASK. Only C3 is asserted."""
 
@@ -431,7 +578,26 @@ class SecretCheck(unittest.TestCase):
 
     def test_known_value_hit_fails(self):
         self.assertEqual(self.c3(self.PLANTED, secrets_exit=2), "FAIL")
-        self.assertEqual(self.c3(dict(self.PLANTED, jwt=0)), "FAIL")
+        self.assertEqual(self.c3(dict(self.PLANTED, jwt=0), secrets_exit=2), "FAIL")  # a hit in a kind with no MASK
+        self.assertEqual(self.c3(dict(self.PLANTED, jwt=0)), "INCONCLUSIVE")  # no hit, no MASK: not exercised
+
+    FILES = {"meta.json": {"connector": "codex-cli", "case": "direct", "known_box": True, "entry": "e1"},
+             "verify/secrets-conductor.json": {"hits": 0},
+             "verify/exits.json": {"secrets": 0, "secrets-out": 0, "secrets-plain": 0}}
+
+    def test_kind_with_no_mask_and_no_hit_is_not_a_pass(self):  # a run never passes on a missing exercise
+        files = dict(self.FILES, **{"verify/secrets.json": {"masks": dict(self.PLANTED, jwt=0)}})
+        self.assertEqual(evaluate(files)["checks"]["C3"], "INCONCLUSIVE")
+
+    def test_unscanned_pane_copies_are_not_a_pass(self):  # exit 3 and no report: no scan
+        files = dict(self.FILES, **{"verify/secrets.json": {"masks": self.PLANTED},
+                                    "verify/exits.json": {"secrets": 0, "secrets-out": 0, "secrets-plain": 0, "secrets-panes": 3}})
+        self.assertNotEqual(evaluate(files)["checks"]["C3"], "PASS")
+
+    def test_known_value_on_a_pane_copy_fails(self):  # the rig's own replacement missed a value
+        files = dict(self.FILES, **{"verify/secrets.json": {"masks": self.PLANTED}, "verify/secrets-panes.json": {"known_hits": [{}]},
+                                    "verify/exits.json": {"secrets": 0, "secrets-out": 0, "secrets-plain": 0, "secrets-panes": 2}})
+        self.assertEqual(evaluate(files)["checks"]["C3"], "FAIL")
 
     def test_conductor_scan_counts_its_own_secrets(self):  # section 7: the approval key in the run folder is a hit
         run = mock.Mock(dir=self.enterContext(tempfile.TemporaryDirectory()))
@@ -440,6 +606,20 @@ class SecretCheck(unittest.TestCase):
         with mock.patch.dict(os.environ, {"GOALCUP_TEST_APPROVAL_KEY": SENTINEL + "ap"}):
             pad.Run.scan_out(run)
         self.assertEqual(check.Run(run.dir, {}).hits("secrets-conductor"), 1)
+
+
+class OutScan(unittest.TestCase):
+    """The secrets-out scan leaves the pad's pane copies out and keeps goalcup's own folders in."""
+
+    def test_pane_copies_are_not_scanned_but_the_record_is(self):
+        with tempfile.TemporaryDirectory() as d:
+            for f in ("watch/pane-w1.txt", "watch/pane-3.txt", "watch/faults.jsonl", "verify/pane-x.json", "status.json"):
+                os.makedirs(os.path.dirname(os.path.join(d, f)), exist_ok=True)
+                open(os.path.join(d, f), "w").close()
+            run = mock.Mock(run=d)
+            run.path = lambda *p: os.path.join(d, *p)
+            got = padrun.Run.out_paths(run)
+        self.assertEqual(sorted(got), ["status.json", "verify/pane-x.json", "watch/faults.jsonl"])
 
 
 class PreRows(unittest.TestCase):

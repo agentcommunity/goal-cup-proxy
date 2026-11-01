@@ -16,8 +16,8 @@ use serde_json::json;
 use super::approve::{self, Stop};
 use super::start::{self, Part, Ready};
 use super::{
-    EntryFacts, Server, ServerJson, alive, awake, credential, entry_dir, fail, find, home, push,
-    read_json, say, server_json, skill, status_json, text, watchdog_alive,
+    EntryFacts, Server, ServerJson, alive, awake, credential, entry_dir, fail, find, home, log,
+    push, read_json, say, server_json, skill, status_json, text, watchdog_alive,
 };
 use crate::connector::{self, Env};
 use crate::mask::{Masker, workspace_values};
@@ -207,7 +207,7 @@ pub fn prepare(
             let body = json!({
                 "previous_entry_id": last, "connector_id": connector.id,
                 "connector_sha256": connector.sha256, "workspace": project.to_string_lossy(),
-                "session_id": start::session_id(), "harness_version": plan.harness_version,
+                "session_id": start::session_id(), "harness_version": approve::wire_version(plan.harness_version.as_deref()),
                 "proxy_version": env!("CARGO_PKG_VERSION"),
             });
             let client = ServerClient::new(base, Some(Token::new(secret)));
@@ -289,6 +289,10 @@ pub fn prepare(
     lines.extend(first_message(&found.run_dir, resumed, vars));
     lines.extend(deadline.map(|ms| text::ends_line(ms / 1000, super::now())));
     lines.push(text::upload_to(server.host()));
+    if plan.harness_version.is_none() {
+        log::line(&new_dir, "version_unread", &[]);
+        lines.push(text::version_unread(&name, server.host().is_some()));
+    }
     for (what, file) in [
         ("Connector", first.map(PathBuf::from)),
         ("Host list", sj.hosts_file.clone()),

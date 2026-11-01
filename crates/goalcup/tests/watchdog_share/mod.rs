@@ -4,13 +4,19 @@
 #![allow(dead_code)]
 
 use crate::common::pki::{HTTP11, provider};
-use goalcup::connector::{HostList, NativeSources};
+use crate::common::recorder::records;
+use crate::common::upstream::Upstream;
+use goalcup::cli;
+use goalcup::connector::{ConnectorRef, HomeLock, HostList, LaunchPlan, NativeSources, builtin};
 use goalcup::proxy::ca::{RUN_CA_FILE, certificates};
 use goalcup::watchdog::StartFacts;
+use goalcup_format::{GapReason, Record};
 use serde_json::{Value, json};
+use std::collections::BTreeMap;
 use std::io::{Read, Write};
 use std::net::TcpStream;
-use std::path::Path;
+use std::os::unix::fs::PermissionsExt;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -123,4 +129,146 @@ pub fn exchange(
         }
     }
     out
+}
+
+/// The test folder: marker files in `d`, the entry folder (its run's `server.json` written, no
+/// server), a plan whose harness is `sh` waiting for `d/stop`, its start facts and the recorder
+/// wrapper.
+pub struct Setup {
+    pub _tmp: tempfile::TempDir,
+    pub d: PathBuf,
+    pub entry_dir: PathBuf,
+    pub plan: LaunchPlan,
+    pub recorder: PathBuf,
+    pub facts: StartFacts,
+}
+
+/// [`Setup`] with the wrapper `wrapper` writes in `d` (most use [`script`]).
+pub fn setup_with(wrapper: impl FnOnce(&Path) -> PathBuf) -> Setup {
+    // SAFETY: set before any thread of this test process reads env; sound only because nextest
+    // runs each test in its own process.
+    unsafe { std::env::set_var("GOALCUP_SERVER", "off") };
+    let tmp = tempfile::tempdir().unwrap();
+    let d = tmp.path().join("m");
+    std::fs::create_dir_all(&d).unwrap();
+    let home = tmp.path().join("g");
+    let entry_dir = cli::entry_dir(&home, RUN, ENTRY);
+    std::fs::create_dir_all(&entry_dir).unwrap();
+    let server = json!({"v": 1, "server": null, "run": RUN, "mode": "practice", "deadline": null,
+        "repo": null, "connector": {"id": "fake", "name": "Fake", "source": "builtin"},
+        "hosts_file": null, "entries": [{"id": ENTRY, "harness_version": null, "resumed": false}]});
+    let run_dir = cli::run_dir(&home, RUN);
+    std::fs::write(cli::server_json(&run_dir), server.to_string()).unwrap();
+    let plan = plan(&d);
+    let facts = facts(&entry_dir, &d, &plan.hosts, json!({"cert": "", "key": ""}));
+    let recorder = wrapper(&d);
+    Setup {
+        _tmp: tmp,
+        d,
+        entry_dir,
+        plan,
+        recorder,
+        facts,
+    }
+}
+
+/// Points the proxy's `api.openai.com` at `up`, trusting its roots (files in `d`).
+pub fn tls_upstream(up: &Upstream, d: &Path) {
+    // SAFETY: as in [`setup_with`]; the upstream's thread reads no env.
+    unsafe {
+        std::env::set_var(
+            "GOALCUP_TEST_UPSTREAM",
+            format!("api.openai.com={}", up.addr()),
+        );
+        std::env::set_var("GOALCUP_TEST_EXTRA_ROOTS", up.pki().roots_file(d));
+    }
+}
+
+/// A recorder wrapper `name` in `d`: it counts boots in `boots` and logs each one's number,
+/// uptime and arguments in `boot_log`, runs `body` (which sees the boot number as `$n`), then
+/// execs the binary.
+pub fn script(d: &Path, name: &str, body: &str) -> PathBuf {
+    let (dd, exe) = (d.display(), env!("CARGO_BIN_EXE_goalcup"));
+    let text = format!(
+        "#!/bin/sh
+         read up _ < /proc/uptime
+         n=$(( $(cat {dd}/boots 2>/dev/null || echo 0) + 1 )); echo $n > {dd}/boots
+         echo \"$n $up $*\" >> {dd}/boot_log
+         {body}
+         exec \"{exe}\" \"$@\""
+    );
+    let path = d.join(name);
+    std::fs::write(&path, text).unwrap();
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    path
+}
+
+/// The plan: a fake built-in connector, the built-in hosts, and `sh` as the harness, waiting
+/// for `d/stop`.
+pub fn plan(d: &Path) -> LaunchPlan {
+    let harness = format!("while [ ! -e {}/stop ]; do sleep 0.05; done", d.display());
+    LaunchPlan {
+        connector: ConnectorRef {
+            id: "fake".into(),
+            name: "Fake".into(),
+            sha256: "0".repeat(64),
+            source: Default::default(),
+        },
+        harness_version: None,
+        program: PathBuf::from("/bin/sh"),
+        argv: vec!["-c".into(), harness],
+        env: BTreeMap::from([("PATH".into(), "/usr/bin:/bin".into())]),
+        home: d.join("home"),
+        lock: HomeLock::default(),
+        before: Vec::new(),
+        after: Vec::new(),
+        ca_env: Vec::new(),
+        hosts: HostList::from_file(builtin::HOSTS.as_bytes(), "model-hosts.toml").unwrap(),
+        native: NativeSources::default(),
+        mask_rules: Vec::new(),
+        secret_values: Vec::new(),
+        notes: Vec::new(),
+        unread: Vec::new(),
+        log: Vec::new(),
+        refusal: None,
+    }
+}
+
+/// Writes `stop` in its folder when dropped, so a driver that panics still ends the harness
+/// and the test fails on its assert instead of hanging.
+pub struct StopOnDrop(pub PathBuf);
+
+impl Drop for StopOnDrop {
+    fn drop(&mut self) {
+        let _ = std::fs::write(self.0.join("stop"), "");
+    }
+}
+
+/// The `recorder_down` gaps as (start_mono, end_mono, tail).
+pub fn down_gaps(entry_dir: &Path) -> Vec<(u64, u64, Value)> {
+    down_gaps_and_data(entry_dir).0
+}
+
+/// The `recorder_down` gaps as (start_mono, end_mono, tail), and every DATA byte in order.
+pub fn down_gaps_and_data(entry_dir: &Path) -> (Vec<(u64, u64, Value)>, Vec<u8>) {
+    let (mut down, mut data) = (Vec::new(), Vec::new());
+    for r in records(entry_dir) {
+        match r {
+            Record::Gap {
+                reason: GapReason::RecorderDown,
+                start_mono,
+                end_mono,
+                tail,
+                ..
+            } => down.push((start_mono, end_mono, serde_json::from_slice(&tail).unwrap())),
+            Record::Data { bytes, .. } => data.extend(bytes),
+            _ => {}
+        }
+    }
+    (down, data)
+}
+
+/// Whether `want` is somewhere in `data`.
+pub fn has(data: &[u8], want: &[u8]) -> bool {
+    data.windows(want.len()).any(|w| w == want)
 }

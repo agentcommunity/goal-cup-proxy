@@ -1,6 +1,6 @@
 # Hermes Agent harness facts
 
-Connector id: `hermes-cli` · Facts for version: `0.22.5` · Written by: Goal Cup team · Last checked: 2026-10-31
+Connector id: `hermes-cli` · Facts for version: `0.22.5` · Written by: Goal Cup team · Last checked: 2026-11-01
 Public disclosure: yes. Facts come from Nous Research's public Hermes docs and source at tag `v0.22.5`, the project's release page, and Goal Cup runs on macOS in October 2026. No keys, tokens, account names or personal paths are included.
 Status: shipped connector ([`connectors/hermes-cli.toml`](../../connectors/hermes-cli.toml))
 
@@ -16,7 +16,7 @@ Source words: "docs" is [hermes-agent.nousresearch.com/docs](https://hermes-agen
 ## 2. Install and record a version
 
 - `curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash` clones the repository and checks out the latest stable tag; `--skip-setup` makes it non-interactive and `--commit <sha>` pins a build (source, `scripts/install.sh`). The Python package `hermes-agent` on PyPI is 0.19.0 and is behind the tags. Python 3.11 or later; the installer uses 3.14.
-- `hermes --version` prints `Hermes Agent v<version> (<date>)` (measured on 0.19.0). The connector sets no `version` word, so any build runs and the `start` event records the one that ran.
+- `hermes --version` prints `Hermes Agent v<version> (<date>)` (measured on 0.19.0). The version probe runs in the isolated home like the launch, because a probe in the participant's real home would write there (measured on Hermes 0.22.5: `--version` creates `__pycache__` files and touches lease files under `~/.hermes`). In a fresh isolated home 0.22.5 exits 1 with "no dependency environment is committed for this install; run hermes pm repair", so the probe finds no version. `approve.rs` then sends `harness_version: null` and the server's `strField` refuses it (full2 REPORT N1, `logs/hermes-probe.txt`). Until PRD-02, PRD-07 and PRD-08 accept a missing version, a Hermes start is refused by the server for that reason; the fix is theirs (seam note in PRD-11). When the version is known, note that the real string is about 62 characters (`Hermes Agent v0.22.5 (2026.9.24) · stable · local bf0203a794a0`) against the server's 64-unit limit, so a longer channel name could be refused too. The connector sets no `version` word, so any build runs and the `start` event records the one that ran.
 - The core does not update itself. A background check runs at chat start and `updates.check: false` in `config.yaml` stops it; there is no environment switch (source). The connector's `update_off` row writes that key into the isolated home. Never run `hermes update` during a run.
 
 ## 3. Where it keeps things, per OS
@@ -72,6 +72,10 @@ The connector sets `HERMES_HOME` to the isolated home and leaves `HOME` alone.
 ## Run without permission prompts
 
 With the default `approvals.mode: smart`, a helper model approves low-risk shell commands and the rest get a prompt with a 60 s timeout (source). The connector's `no_prompts` row writes `approvals.mode = "off"` into `config.yaml` in the isolated home. The mode accepts `manual`, `smart` and `off`; quote `"off"`, because an unquoted `off` is YAML for false, which Hermes also reads as off (source). `hermes chat --yolo` does the same for one session ([docs](https://hermes-agent.nousresearch.com/docs/reference/cli-commands)); the connector passes no such option. File edits are not gated. See [HARNESS-SETUP](../HARNESS-SETUP.md#hermes).
+
+Telemetry screen: on a home that never answered, an interactive chat first shows "Help improve Hermes?" and waits behind it (rung 1, 2026-10-31: 0 requests until seal). The screen is skipped when `telemetry.shared_metrics.enabled` is true, or when a key is present and `offer_version` is 2 (source: `hermes_cli/observability/shared_metrics_consent.py`, `cli-config.yaml.example`, v0.22.5). A settings row cannot write the integer `offer_version`. Writing `enabled = true` would answer the screen for the participant and turn Hermes's usage counting on; `enabled` turns collection on and `send` turns the daily upload on, and Hermes's own offer text says data from before opt-in is never sent apart from a one-time install note, a note the source does not tie to a key. The setup question asks about approvals only, so the connector writes no telemetry row and the `first_screen` line tells the participant to pick "No thanks".
+
+First run of a new `HERMES_HOME` installs about 105 Python packages (72 MB from files.pythonhosted.org). Measured in rung 1.
 
 ## Pad result
 

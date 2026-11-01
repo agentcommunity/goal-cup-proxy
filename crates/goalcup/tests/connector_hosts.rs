@@ -103,3 +103,14 @@ fn ca_subtrees_are_wildcard_free_suffixes() {
         "in-label `*`"
     );
 }
+
+#[test]
+fn expected_hosts_are_tunnelled_not_decrypted_and_the_array_is_optional() {
+    let hosts = list("provider = [\"api.example.com\"]\nexpected = [\"tel.example.com\"]\n");
+    assert!(hosts.is_expected("tel.example.com"));
+    assert!(hosts.is_expected("TEL.example.com"));
+    assert_eq!(hosts.decide("tel.example.com"), Decision::NotListed);
+    assert!(!hosts.is_expected("api.example.com"));
+    // A participant --hosts copy without the array still loads.
+    assert!(!list("provider = [\"api.example.com\"]\n").is_expected("tel.example.com"));
+}
