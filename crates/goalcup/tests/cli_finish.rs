@@ -90,7 +90,13 @@ fn counts_and_hosts_are_the_fixtures() {
     let pin = json!({"written": {"model_requests": 0,
         "tunnel_hosts": {"p.example.org": {"conns": 1, "up": 1, "down": 1, "listed": "pinned"}}}});
     let out = show(pin);
-    assert!(out.contains(&text::no_request_written("your agent", Some("p.example.org"))), "{out}");
+    assert!(
+        out.contains(&text::no_request_written(
+            "your agent",
+            Some("p.example.org")
+        )),
+        "{out}"
+    );
     assert!(out.contains("p.example.org"), "{out}");
     assert!(!out.contains("may not use the recording proxy"), "{out}");
     let none = show(json!({"written": {"model_requests": 0}}));
