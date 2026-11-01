@@ -2499,3 +2499,8 @@ kept and now cites BUILD-PROMPT section 5, since B3 no longer carries it.
 
 - **Size report, PRD-12** (`wc -l` on integration): rig code under `scripts/pad/` is 3,221 lines (check.py 762, pad 769, pad-run 1,080, table 193, selftest 188, sbx.mjs 133, exec/ 96); tests (`test_pad.py`) 695; 3,916 together against the PRD-00 row of about 1,350 to 1,450 with its tests (about 2.7 times). The slice added about 38 source and 64 test lines. Overage on an owner estimate is reported, not cut; carry to the end-of-build report with the other overages. Review found no concrete behaviour-preserving cut beyond a 7-line duplicate test (B1).
 - **Gate effect:** none on order or seams. Seven nits (A1 to A3, B1 to B5) are queued in PRD-12 note; none blocks. No locked ledger item is touched.
+
+### 2026-11-01, replan after PRD-06 slice 7 (merge 20634842)
+
+- **Size report, PRD-06** (`wc -l` on integration): `crates/goalcup/src/upload/` is 3,315 lines (client 644, mod 573, manual 509, send 415, state 290, beat 288, chunk 273, policy 232, prune 91) against the PRD-00 row of 1,000. Overage on an owner estimate is reported, not cut; carry to the end-of-build report with the other overages.
+- **Gate effect:** none on order. Two items are queued for PRD-10 (the `StillRecording` and `NotClosed` participant lines) and one for PRD-12 (U8 waits for the harness to exit). PRD-06 acceptance U8 now needs the pad run; U3 and U5 as before. No locked ledger item is touched.

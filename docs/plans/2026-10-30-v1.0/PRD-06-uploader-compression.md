@@ -1232,3 +1232,8 @@ PRD-12 and PRD-17.
   tests share one setup helper.
 - Size is unchanged in substance (src about 3,300 lines against the PRD-00 row); no
   behaviour-keeping cut is known.
+
+### 2026-11-01, replan after slice 7 (merge 20634842)
+
+- Slice 7 (dead-entry close in `goalcup upload`, U8, `upload_manual.rs`, one live-mode upload case) is in. Review fixes are in the 2026-11-01 note above. No further PRD-06 slice is planned; remaining work is acceptance runs (U3, U5, U8 on the pad) and the PRD-10 wiring below. No locked ledger item is touched.
+- **Size, `wc -l` on integration:** `crates/goalcup/src/upload/` is 3,315 lines (client 644, mod 573, manual 509, send 415, state 290, beat 288, chunk 273, policy 232, prune 91) against the PRD-00 row of 1,000 (about 3.3 times). The slice added about 40 net lines to manual.rs. No behaviour-keeping cut is known; the overage is an owner estimate and is carried to the end-of-build report, not cut.

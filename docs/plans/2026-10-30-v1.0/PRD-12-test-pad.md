@@ -1914,3 +1914,7 @@ taken; "rejected" says why. Fixes for other files are made by those files' owner
 ### 2026-11-01, replan after slice 13 (merge 56a24821)
 
 - RIG-8 and RIG-9 are in. No plan change and no ledger item touched. Open nits, all optional tidying for any later pad slice: A1 (`hidden()` in `scripts/pad/pad` parses only URL-form `DATABASE_URL`; also unquote the user and password, compare the host case-insensitively, and ideally read libpq `host=`/`user=`/`password=` pairs), A2 (also check the scrollback inside the recording wait), A3 (assert `table.txt` and `meta.json` carry no credential), B1 (drop the duplicate `test_said_hides_every_fetch_credential`), B2 (simplify the paste test setup), B3 (one-line comment that values under 4 characters are not hidden). A1 touches point 4 only inside the pad (organizer database URL in a rig log); the owner issues a Supabase-style URL, so the gap is low risk and is not a gate blocker.
+
+### 2026-11-01, note from PRD-06 slice 7 (merge 20634842)
+
+- **U8 procedure (`kill-both@m+upload`):** `goalcup upload` closes a dead entry only after the harness has exited; against a live harness it answers `StillRecording` and closes nothing (that entry belongs to `goalcup recover`). The fault must therefore wait for the harness to exit (the exit keys, then SIGTERM to `harness.pid` after 30 s, then confirm the pid is gone) before it runs `goalcup upload`; a `StillRecording` answer there is a rig fault, not a PRD-06 failure. No locked ledger item is touched.

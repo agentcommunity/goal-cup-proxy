@@ -1602,3 +1602,8 @@ What the pad calls, as merged (PRD-12 note):
 ### 2026-11-01, note from PRD-17 slice 7 (merge 888cd0b1)
 
 The PRD-17 deletion gate (PRD-13) waits on tests that this PRD is asked to land and are not yet on integration: cli_continue.rs (L-HF6, L-SC4) and cli_commands::second_start_on_one_home_refuses (L-HF4). Their LESSONS.md rows stay open until the named tests exist and pass in a box. The names are those in LESSONS.md; if a different name fits better, say so in a replan note so the row can be repointed. No locked ledger item is touched.
+
+### 2026-11-01, ask from PRD-06 slice 7 (merge 20634842)
+
+- **Ask to PRD-10 (integration checklist, before 1.0):** `StillRecording` from `goalcup upload` now also covers a dead entry whose harness still runs (nothing records or sends it). `cli/text.rs` says "it sends itself" for it, which is wrong for that case (points 1 and 6), and `NotClosed` still maps to "run goalcup continue", wrong after a failed close. Either add a distinct outcome whose line points to `goalcup recover` (PRD-06 adds the variant in the same integration merge; say so in a replan note first, since PRD-10's exhaustive matches break otherwise) or word `StillRecording` neutrally; word `NotClosed` to match what failed. Cover the line in an existing CLI text case, no new test file.
+- No locked ledger item is touched.
