@@ -2485,3 +2485,12 @@ kept and now cites BUILD-PROMPT section 5, since B3 no longer carries it.
 - **Gate effect:** none. Acceptance still needs `goalcup continue` and `goalcup recover` built (their "not
   built yet" notes in ARCHITECTURE stay until then) and the recorder kill test for README point 3. No locked
   ledger item is touched.
+
+### 2026-11-01, replan after PRD-15 slice 18 (merge ad83e7d8)
+
+- **Size report, PRD-15** (`wc -l` on integration): docs only, 2,406 lines across the eight owned docs
+  (README 245, AGENTS 95, ARCHITECTURE 193, OPERATING 260, PARTICIPANT-GUIDE 488, RECORD-FORMAT 552, RULES
+  459, CONNECTOR-SCHEMA 114). PRD-00 "Size budget" has no PRD-15 row, so no ceiling applies.
+- **Gate effect:** none on order. The docs describe the merged HTTP/2 proxy (PRD-03 slice 4); the four
+  review nits are queued in PRD-15's note. Acceptance for PRD-15 still waits on `goalcup continue` and
+  `goalcup recover` and the recorder kill test. No locked ledger item is touched.
