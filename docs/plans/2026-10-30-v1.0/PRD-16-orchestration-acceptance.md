@@ -2494,3 +2494,8 @@ kept and now cites BUILD-PROMPT section 5, since B3 no longer carries it.
 - **Gate effect:** none on order. The docs describe the merged HTTP/2 proxy (PRD-03 slice 4); the four
   review nits are queued in PRD-15's note. Acceptance for PRD-15 still waits on `goalcup continue` and
   `goalcup recover` and the recorder kill test. No locked ledger item is touched.
+
+### 2026-11-01, replan after PRD-12 slice 13 (merge 56a24821)
+
+- **Size report, PRD-12** (`wc -l` on integration): rig code under `scripts/pad/` is 3,221 lines (check.py 762, pad 769, pad-run 1,080, table 193, selftest 188, sbx.mjs 133, exec/ 96); tests (`test_pad.py`) 695; 3,916 together against the PRD-00 row of about 1,350 to 1,450 with its tests (about 2.7 times). The slice added about 38 source and 64 test lines. Overage on an owner estimate is reported, not cut; carry to the end-of-build report with the other overages. Review found no concrete behaviour-preserving cut beyond a 7-line duplicate test (B1).
+- **Gate effect:** none on order or seams. Seven nits (A1 to A3, B1 to B5) are queued in PRD-12 note; none blocks. No locked ledger item is touched.
