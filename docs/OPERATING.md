@@ -221,6 +221,13 @@ data. The deadline stays on the server's clock; no switch moves it, and each `go
 its own clock. No error answer stops a run or ends its upload: only a `200` heartbeat answer with `stop` does,
 or the client's own count to the deadline. Fix the server and the runs catch up.
 
+`goalcup upload` is the manual path for one run: it sends what the server does not hold yet, in the order the
+wrap-up uses, and is safe to run again (it reads the server's position first and says so when nothing is left).
+Sending goes on until 24 hours after the run's end; after that the server answers `401` and the part stays on the
+participant's computer. A part file is removed there only after the server holds it (the closed parts up to the
+confirmed offset; the last one once the server sealed the entry), unless `GOALCUP_KEEP_PARTS=1`. `counts.jsonl`
+stays and carries the totals of a boot whose parts are gone.
+
 | Symptom | Do |
 |---|---|
 | A bad deploy, or anything you cannot explain | Switch maintenance on with `npx wrangler deploy --var MAINTENANCE:on` from a clean checkout of the commit that is live now ([steps](../server/worker/README.md#maintenance-on-and-off)); do not edit `wrangler.toml`. Every call answers `503 maintenance` with `Retry-After` (default 300 s), clients back off, and the cron pauses. Any deploy during maintenance must repeat `--var MAINTENANCE:on`, or maintenance ends. Then fix forward, and switch it off by a deploy without the flag. It blocks new starts too: there is no separate pause. |
