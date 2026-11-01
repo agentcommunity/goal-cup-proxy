@@ -214,9 +214,11 @@ item 27). A top-level `docs/*.md` that PRD-15 keeps as history but does not rewr
 
 **No-return guard.** PRD-13 runs it by hand once at the phase 3 merge and logs the output; any lane
 may run it on its own diff. It is no gate test: a word list pins words, not behaviour, and the
-never-stop tests guard our own caps (ledger B10, PRD-14 section 6). It scans `crates/goalcup*/src/` for every pattern below, and `crates/goalcup*/` (src, tests
-and `Cargo.toml`) for the two feature patterns: `test-support` anywhere, `test-hooks` outside
-`crates/goalcup`. Every line it prints
+never-stop tests guard our own caps (ledger B10, PRD-14 section 6). It scans every crate's `src/`
+for every pattern below, and every crate (src, tests and `Cargo.toml`) for the two feature patterns:
+`test-support` anywhere, `test-hooks` outside `crates/goalcup`. Write the scope as a glob pathspec,
+`git grep -nE '<patterns>' -- ':(glob)crates/*/src/**'` and `-- ':(glob)crates/**'`; a plain
+`crates/goalcup*/src/` pathspec matches no file and prints nothing. Every line it prints
 must also survive `grep -v 'v0\.7\.0:'` (a provenance comment such as
 `copied from v0.7.0:crates/goalcup-verifier/src/capture_analysis/openai.rs` is not a hit).
 
@@ -813,5 +815,29 @@ code stays at tag `v0.7.0`. Each stays open until its owner closes it.
 - **Size.** The recount (Rust src 39,908, Rust tests 30,801, Worker 3,566 and 5,380) is past the
   PRD-00 budget plus 10% in the new crates, not in the cut. The replan names the point the extra lines
   serve, or cuts them.
+
+No locked ledger item is touched.
+
+### 2026-11-01, after the conductor ruling (integration 61ef1156)
+
+- The conductor ruled at 09:57Z (integrator night log): the cut is not reverted, and its unmet
+  preconditions are completed after the fact by the post-cut lane (PRD-16, branch
+  `v1.0/prd-16-postcut`): the `Cargo.toml` `exclude` block and unused workspace dependencies, a
+  `selftest` that exits 0 (K6b, K11d), gate full with the heavy group, and the receiving owners'
+  "copied, tests green" lines. That ruling is the integrator's answer to the 09:50Z owner question;
+  it is not a waiver. Until those lines and the `selftest` pass are in the night log, section 2 rule 2
+  stays unmet.
+- PRD-13 acceptance is not met yet and is not waived by the merge. Open: the reference guard and the
+  no-return guard still print the provenance hits listed in the entry above (PRD-03, PRD-05, PRD-09,
+  PRD-10 reword them to `copied from v0.7.0:<path>`), the `Cargo.toml` hits (PRD-16), gate full, and
+  acceptances 1 to 5. Acceptance is marked met only on a commit where each has run and printed or
+  passed as section "Acceptance" asks, with the output in the night log.
+- Guard re-run with the glob pathspec of section 6 over `crates/`: the no-return word list prints only
+  `mask/rules.rs:5` and `mask/stream.rs:4` (`goalcup-daemon`, PRD-05 provenance) and the excluded
+  `proxy/ca.rs` date base; the `test-support` and `test-hooks` checks print nothing. This replaces the
+  earlier run that used a pathspec matching no file.
+- The size overage (Rust src about 39.9k against about 18.1k, tests about 30.8k against about 14.2k)
+  is in the new crates. The cut cannot reduce it without deleting kept behaviour; it goes to the
+  replan.
 
 No locked ledger item is touched.
