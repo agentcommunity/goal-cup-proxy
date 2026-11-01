@@ -219,7 +219,9 @@ pub fn problems(st: &Status, state: &State, cx: &Ctx<'_>) -> Vec<String> {
 fn expected_lines(st: &Status) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     for n in &st.notes {
-        if note_str(n, "what") == Some("long_tunnel") && n.get("expected") == Some(&Value::Bool(true)) {
+        if note_str(n, "what") == Some("long_tunnel")
+            && n.get("expected") == Some(&Value::Bool(true))
+        {
             let line = text::expected_tunnel(note_str(n, "host").unwrap_or("a host"));
             if !out.contains(&line) {
                 out.push(line);

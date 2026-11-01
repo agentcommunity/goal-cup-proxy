@@ -281,7 +281,12 @@ fn an_expected_tunnel_is_not_a_problem() {
     assert!(problems(&st, &State::Recording, &cx).is_empty());
     let shown = block(&st, &State::Recording, None, None, &cx, &["recording"]);
     assert!(shown.contains("t.example.net"), "{shown}");
-    for bad in [text::PROBLEM, "goalcup seal", "goalcup continue", "--record-host"] {
+    for bad in [
+        text::PROBLEM,
+        "goalcup seal",
+        "goalcup continue",
+        "--record-host",
+    ] {
         assert!(!shown.contains(bad), "{shown}");
     }
     let plain = json!({"what": "long_tunnel", "host": "t.example.net", "why": "upload", "up": 3});

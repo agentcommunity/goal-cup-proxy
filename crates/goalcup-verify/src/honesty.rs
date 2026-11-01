@@ -204,7 +204,11 @@ impl Honesty {
             && let Some(h) = e.get("host").and_then(Value::as_str)
         {
             let flagged = e.get("expected").and_then(Value::as_bool) == Some(true);
-            let set = if flagged { &mut self.long_expected } else { &mut self.long };
+            let set = if flagged {
+                &mut self.long_expected
+            } else {
+                &mut self.long
+            };
             set.insert(h.into());
         } else if is("ev", "start")
             && let Some(Value::Object(by_source)) = e.get("hosts")

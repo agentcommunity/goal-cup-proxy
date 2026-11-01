@@ -41,7 +41,10 @@ fn the_same_note_without_the_flag_warns_and_names_the_host() {
 
 #[test]
 fn only_the_unflagged_host_is_named() {
-    let v = with_notes("exp-both", &[("a.example.test", true), ("b.example.test", false)]);
+    let v = with_notes(
+        "exp-both",
+        &[("a.example.test", true), ("b.example.test", false)],
+    );
     assert_eq!(result(&v, "listed_hosts_decrypted"), "warn");
     assert_eq!(unlisted(&v), json!(["b.example.test"]));
 }
