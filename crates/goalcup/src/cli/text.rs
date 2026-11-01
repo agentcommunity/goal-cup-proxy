@@ -1112,6 +1112,13 @@ pub fn run_kind(mode: RunMode) -> &'static str {
     }
 }
 
+/// The harness version could not be read: said on every tier, because the upload carries "unknown".
+pub fn version_unread(name: &str) -> String {
+    format!(
+        "{name}'s version could not be read, so the run starts without it. The upload says unknown."
+    )
+}
+
 pub fn upload_to(host: Option<&str>) -> String {
     match host {
         None => "Upload: off (GOALCUP_SERVER=off), so this run has no end time and its record files stay on this computer.".to_owned(),
@@ -1128,9 +1135,6 @@ pub fn tier_line(name: &str, version: Option<&str>, tier: &str, verified: &str) 
                 version.unwrap_or_default()
             )
         }
-        "verified" if version.is_none() => format!(
-            "{who}: verified with goalcup on {verified}; the installed version was not read."
-        ),
         "verified" => format!("{who}: verified with goalcup on {verified}."),
         "not supported" => format!(
             "{name}: not supported. goalcup records its session files and the connections it can see, not its model calls."

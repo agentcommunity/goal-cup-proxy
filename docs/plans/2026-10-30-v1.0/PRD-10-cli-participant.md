@@ -1636,3 +1636,16 @@ The PRD-17 deletion gate (PRD-13) waits on tests that this PRD is asked to land 
 - A GAP `pinned` host is not a refusal. Rows 347 and 450 and acceptance 3 now read: the status line is `Not recorded: <host> (the host list pins it). Its traffic passed through unread.`, and `gap_words("pinned")` is "the host list pins it". Acceptance 3 passes when status shows that line during the run. `tls_refused` and `ca_refused` keep "refused the recorder".
 - Ask to PRD-15: `docs/PARTICIPANT-GUIDE.md` (about line 479) still pairs `tls_refused, pinned` with "the program refused the recorder"; split `pinned` out with the wording above. That file is outside PRD-10's ownership.
 - No locked ledger item is touched.
+
+### 2026-11-01, amendment: unread harness version
+
+- When the harness version cannot be read (`LaunchPlan.harness_version` is `None`), the open and continue calls send the string `"unknown"`, never null, because the Worker refuses a null `harness_version`. The Worker is unchanged. The local `server.json` entry keeps `None`, so the record says what was read.
+- The start screen says so plainly on every tier ("<harness>'s version could not be read, so the run starts without it. The upload says unknown.") and the run starts anyway. The connector version-floor refusal is PRD-11's and is unchanged.
+- PRD-11 fixes the Hermes version read in parallel. No locked ledger item is touched.
+
+### 2026-11-01, replan after PRD-10 unread-version slice (merge e707e427)
+
+- **Nit A5 (open, cosmetic):** `text::version_unread` always ends "The upload says unknown.", and `start.rs` and `continue_run.rs` push it whatever the server mode. With `GOALCUP_SERVER=off` nothing is uploaded and the line before says "Upload: off". Cut: push or keep that sentence only when `server.host()` is `Some`. A builder touching those two files next may do it; no behaviour changes.
+- **Nit B4 (carried to PRD-14):** `tests/cli_continue.rs` hand-rolls a one-shot HTTP server (about 53 lines) to read the continue body. Same cause as B1 above: the FakeWorker in `tests/common/` (PRD-14, PRD-08) does not record request bodies. When it does, this server and the `cli_approve.rs` spy both go.
+- **Nit B5 (accepted):** the `harness_version` `json!` line in `approve.rs` `begin()` runs past 100 columns; rustfmt does not touch `json!`. Left.
+- No seam change. No locked ledger item is touched.

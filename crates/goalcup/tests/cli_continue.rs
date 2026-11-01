@@ -282,3 +282,56 @@ fn a_run_whose_time_is_up_is_not_continued() {
     assert_eq!(w.server_json(), before);
     assert_eq!(w.folders(), 1);
 }
+
+/// An unreadable harness version goes up on the continue call as the string "unknown", never null.
+#[test]
+fn an_unread_harness_version_is_sent_as_unknown_on_the_continue_call() {
+    use std::io::{BufRead, BufReader, Read, Write};
+    let (listener, addr) = common::ports::held();
+    let seen = std::thread::spawn(move || {
+        let (stream, _) = listener.accept().unwrap();
+        let mut r = BufReader::new(stream);
+        let mut len = 0usize;
+        loop {
+            let mut line = String::new();
+            r.read_line(&mut line).unwrap();
+            if let Some((k, v)) = line.split_once(':')
+                && k.eq_ignore_ascii_case("content-length")
+            {
+                len = v.trim().parse().unwrap();
+            }
+            if line == "\r\n" {
+                break;
+            }
+        }
+        let mut body = vec![0; len];
+        r.read_exact(&mut body).unwrap();
+        let answer = json!({"run_id": RUN_ID, "entry_id": e(2), "segment": 1,
+            "official_start": "2026-11-06T10:00:00Z", "deadline_at": "2026-11-06T12:00:00Z",
+            "seconds_left": 3600})
+        .to_string();
+        let reply = format!(
+            "HTTP/1.1 201 Created\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{answer}",
+            answer.len()
+        );
+        r.get_mut().write_all(reply.as_bytes()).unwrap();
+        serde_json::from_slice::<Value>(&body).unwrap()
+    });
+    let mut w = World::new(Some(format!("http://{addr}")));
+    // A program whose version probe fails: the version is unread.
+    let script = w.t.home().join("tester-none");
+    std::fs::write(&script, "#!/bin/sh\nexit 1\n").unwrap();
+    std::fs::set_permissions(&script, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+    let body = std::fs::read_to_string(&w.connector).unwrap();
+    std::fs::write(
+        &w.connector,
+        body.replace(
+            "program = \"true\"",
+            &format!("program = \"{}\"", script.display()),
+        ),
+    )
+    .unwrap();
+    w.part(1, false, Some(World::sealed(json!({"model_requests": 2}))));
+    w.prepare().unwrap_or_else(|s| panic!("{}", s.text));
+    assert_eq!(seen.join().unwrap()["harness_version"], json!("unknown"));
+}

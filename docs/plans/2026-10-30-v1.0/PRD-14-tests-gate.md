@@ -1090,3 +1090,7 @@ touched.
 - **`heavy` group, two asks:** `pipeline_stall` (about 70 s of wall clock, one real binary) joins `binary(/^(...)$/)` in `.config/nextest.toml` with an end-to-end slow-timeout (PRD-02 cannot edit that file). Also put `pipeline_guard::two_hundred_streams_with_the_writer_held` and `forty_streams_with_the_writer_held` in the same group, or give their `common::within(HANG)` bound room: under 24 CPU busy loops on 8 vCPU, run beside `pipeline_stall`, both failed at the 30 s hang bound (about 32 s unloaded) with no byte lost. L-R2 rests on them, so a loaded full gate must not turn it red on correct code.
 - **Test budget:** PRD-02 tests are now 4,013 lines (budget row 1,500 in PRD-00; PRD-14 section 3 holds the total), see the PRD-16 note.
 - **Follow-up, nit:** `watchdog_end.rs` keeps its own env, server.json and plan setup; folding it into `watchdog_share::setup_with` would cut about 50 lines when a later slice touches it. No locked ledger item is touched.
+
+### 2026-11-01, amendment: FakeWorker request bodies (from PRD-10 nit B4)
+
+- Two PRD-10 tests (`cli_approve.rs` spy, `cli_continue.rs` one-shot server, about 120 lines together) exist only because the FakeWorker does not expose request bodies. When the FakeWorker records the open, continue and heartbeat bodies, those two helpers are removed. No locked ledger item is touched.
