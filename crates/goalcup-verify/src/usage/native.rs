@@ -195,20 +195,19 @@ impl Native {
                 };
                 let v = serde_json::from_slice(&buf).unwrap_or(Value::Null);
                 if hints::reader(ctx.connector.as_deref(), &path) == Some(Reader::HermesManifest) {
-                    // The delegation id (else its folder) and the task indexes.
-                    let d = id_at(&v, "/delegation_id").or_else(|| hermes_dir(&path));
+                    // Keyed by the folder, as the task logs are (else the delegation id).
+                    let d = hermes_dir(&path).or_else(|| id_at(&v, "/delegation_id"));
                     let n = v["task_count"].as_u64().unwrap_or(0);
-                    let list = v["tasks"].as_array().filter(|t| !t.is_empty());
-                    let idx = |t: &Value| t["index"].as_u64();
-                    let named: BTreeSet<u64> = (list.iter().flat_map(|t| t.iter()))
-                        .filter_map(idx)
+                    let mut all: BTreeSet<u64> = v["tasks"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .filter_map(|t| t["index"].as_u64())
                         .collect();
                     // A list with no usable index still names `task_count` tasks.
-                    let all = if named.is_empty() {
-                        (0..n).collect()
-                    } else {
-                        named
-                    };
+                    if all.is_empty() {
+                        all = (0..n).collect();
+                    }
                     if let Some(d) = d {
                         self.manifests.entry(d).or_default().extend(all);
                     }
@@ -300,7 +299,6 @@ impl Native {
         // manifest names is a child with no thread of its own (created below, `NoNative`).
         let hermes = !self.tasks.is_empty() || !self.manifests.is_empty();
         let task_id = |d: &str, n: u64| format!("{d}/task-{n}");
-        let mut logged = BTreeSet::new();
         for path in &self.tasks {
             let Some((d, n)) = hermes_task(path) else {
                 continue;
@@ -308,16 +306,11 @@ impl Native {
             let id = task_id(&d, n);
             let t = threads.entry(id.clone()).or_insert_with(|| named(&id));
             (t.reason, t.parent, t.depth) = (None, Some(d.clone()), Some(1));
-            kids.entry(d).or_default().insert(id.clone());
-            logged.insert(id);
+            kids.entry(d).or_default().insert(id);
         }
         for (d, ns) in &self.manifests {
-            for id in ns
-                .iter()
-                .map(|&n| task_id(d, n))
-                .filter(|i| !logged.contains(i))
-            {
-                kids.entry(d.clone()).or_default().insert(id);
+            for &n in ns {
+                kids.entry(d.clone()).or_default().insert(task_id(d, n));
             }
         }
         // A thread only a spawn or a meta snapshot names still gets its entry and parent.
