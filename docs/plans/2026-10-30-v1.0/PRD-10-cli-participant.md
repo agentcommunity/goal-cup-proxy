@@ -1588,3 +1588,13 @@ What the pad calls, as merged (PRD-12 note):
   absent, log a stop line and replan again. The half needs its own review when it lands. Net-negative in
   `text.rs` before adding lines still holds.
 - No seam change. No locked ledger item is touched.
+
+### 2026-11-01, replan after PRD-07 slice 5 (merge da6d79e3)
+
+- **Ask to PRD-10:** the Worker now accepts `repo_url` null or absent for mode `test` (and for no other
+  mode). Make `OpenRunRequest.repo_url` an `Option<String>` and, in `commands/start/server.rs`, send
+  null for `start --test` without a repository instead of `PRACTICE_REPO_URL`. Practice and competition
+  keep sending the exact string. Until this lands, a test open with `GITHUB_CHECK` on gets 400 (the
+  shared practice repository is checked as an empty repository). `docs/UPLOAD-API.md` already states the
+  contract. Cover it in an existing `upload_open.rs` case, no new test file.
+- No locked ledger item is touched and no owner question comes from this slice.

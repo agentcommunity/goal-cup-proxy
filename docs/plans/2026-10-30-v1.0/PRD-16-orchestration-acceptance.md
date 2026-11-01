@@ -2457,3 +2457,12 @@ kept and now cites BUILD-PROMPT section 5, since B3 no longer carries it.
 
 - **Size report, PRD-08** (`wc -l` on integration): verifier src outside `usage/` is 4,171 lines against the PRD-00 row of 1,400 (about 3.0 times); `usage/` 2,861 against the PRD-09 row of 1,470; verifier tests 4,359 against 1,100 plus 200. Slice 8 added 23 src and 77 test lines. Decision lines exist in PRD-08; no cut known. Carry to the end-of-build report with the PRD-03, PRD-10, PRD-12 and PRD-17 overages.
 - **Gate effect:** none on order. One seam request to PRD-05 (export `glued`); it is a cleanup and blocks nothing. No locked ledger item is touched.
+
+### 2026-11-01, replan after PRD-07 slice 5 (merge da6d79e3)
+
+- **Size report, PRD-07** (`wc -l` on integration): Worker src 3,566 against the PRD-00 row of about 3,440
+  (3.7% over); tests plus helpers 5,380 against about 4,950 (8.7% over). Both under the 10% line. The
+  slice added about 15 src and 67 test lines.
+- **Gate effect:** none on order. One open seam: the CLI must send null `repo_url` for `start --test`
+  without a repository (note added to PRD-10); until then Rung 2 is fixed at the Worker only. No locked
+  ledger item is touched.
