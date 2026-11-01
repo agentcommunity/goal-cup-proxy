@@ -10,6 +10,8 @@ key_route = "login"
 login = "codex login --with-api-key"
 # Pad data for the dodger copy only (section 2): an API-key login calls https://api.openai.com/v1.
 model_host = "api.openai.com"
+# Exit: /quit is documented (codex-rs/tui/src/slash_command.rs at rust-v0.165.0). An Enter right after a fast burst is
+# a newline (paste_burst.rs), so pad-run sends the final \r as its own key.
 exit_keys = '/quit\r'
 subagent_word = "sub-agent"
 keep_going = true

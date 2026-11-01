@@ -20,6 +20,7 @@ STEPS = ("setup", "start", "paste", "wait-calls", "look", "wait-recovery", "keep
 TIMED = tuple(pc.FAULTS)  # section 3.1, at <minute> after the paste; pc.SPAN ones take +<minutes>, kill-both +upload
 USAGE = "usage: pad-run <run dir> " + "|".join([s + " N" * (s == "wait-calls") for s in STEPS] + [t + "@M" for t in TIMED]
                                                 + ["pre SCRIPT", "exec SCRIPT@M"])
+KEEP_SHELL = "exec sleep 1000000"  # the last line of a kill-watchdog-recover run's launch.sh
 PROXY_VALUE = "127.0.0.1:9"  # the proxy setting exec/proxy-setting.sh writes (PAD_PROXY); start must not print it
 EVERY = {"status": 10, "procs": 30, "pane": 60, "live": 300}  # section 4: the watch's seconds per kind of line
 OUT = ("verify", "watch", "exec", "status.json", "harness-files.json", "meta-box.json")  # what out.tar carries
@@ -340,7 +341,10 @@ class Run:
         argv = [tool("goalcup"), "start", "--test", "--harness", s["harness_id"], "--prompt", self.path("prompt.txt")]
         hosts = s.get("hosts") or os.path.exists(self.path("hosts.toml")) and "hosts.toml"  # a pre script may write it
         argv += [a for k, v in (("connector", s.get("connector")), ("hosts", hosts)) if v for a in ("--" + k, self.path(v))]
-        write(self.path("launch.sh"), "\n".join(lines + [shlex.join(argv)]) + "\n", 0o700)
+        keep_tty = [KEEP_SHELL] * self.has("kill-watchdog-recover")  # conductor decision, owner to confirm (R5-1): the launch shell
+        # outlives goalcup start, so a killed watchdog does not hang up the harness; a shell without job control, which is
+        # not an interactive terminal (PRD-02 9.1 and W6 stay open)
+        write(self.path("launch.sh"), "\n".join(lines + [shlex.join(argv)] + keep_tty) + "\n", 0o700)
         t = self.tmux  # one session per run, so runs on one machine never meet
         for argv in (["new-session", "-d", "-s", t, "-x", "200", "-y", "50"], ["set-option", "-w", "-t", t, "remain-on-exit", "on"],
                      ["respawn-pane", "-k", "-t", t, "bash " + shlex.quote(self.path("launch.sh"))]):
@@ -535,7 +539,14 @@ class Run:
 
     def exit_harness(self):  # the harness file's exit_keys (printf format); after 30 s SIGTERM to harness.pid if it lives
         if not self.dead():
-            sh(["tmux", "send-keys", "-t", self.tmux, "-l", str(self.h.get("exit_keys", "")).encode().decode("unicode_escape")])
+            keys = str(self.h.get("exit_keys", "")).encode().decode("unicode_escape")
+            if keys.endswith("\r"):  # a fast burst then Enter is a newline in some TUIs (paste burst): send Enter apart, as keep_going does
+                if keys[:-1]:
+                    sh(["tmux", "send-keys", "-t", self.tmux, "-l", keys[:-1]])
+                time.sleep(0.3)
+                sh(["tmux", "send-keys", "-t", self.tmux, "Enter"])
+            elif keys:
+                sh(["tmux", "send-keys", "-t", self.tmux, "-l", keys])
             self.fault("exit-keys")
         pid = pc.dig(self.status(), "s4_harness_pid")  # S4 gives the harness no start id: a reused pid is not ruled out
         if type(pid) is int and not wait(lambda: not alive(pid), 30, 2):
@@ -558,14 +569,14 @@ class Run:
             raise Step("skip", "no harness process")
         with open("/proc/%d/environ" % pid, "rb") as f:  # filtered by name before anything holds it
             env = exec_env(f.read(), list(self.s.get("ca_env") or ()) + list(self.s.get("home_vars") or {}))
-        return self.script("exec", script, env, minute=self.m)
+        return self.script("exec", script, env, minute=self.m, began=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()))
 
     def script(self, kind, name, env, **kw):
         """bash exec/<name> in the project, its process group killed at the step's limit; only the replaced output
         reaches exec/<name>.txt; one faults.jsonl line. No key file path or key value is in its environment. A pre
         script runs in the participant's shell; an exec script with only the harness's names from exec_env."""
         shell = self.gc_env(True)
-        env = dict(env, PAD_RUN=self.run, PAD_HOME=self.st.get("home") or "",
+        env = dict(env, PAD_RUN=self.run, PAD_HOME=self.st.get("home") or "", PAD_ENTRY=self.st.get("entry_dir") or "",
                    PAD_MODEL_HOSTS=self.path("model-hosts.toml"), PAD_DAEMON=str(self.h.get("daemon") or ""), PAD_PROXY=PROXY_VALUE,
                    PAD_SHELL_ENV=quoted(shell), PAD_HOME_ENV=quoted(self.home_env()))
         p = subprocess.Popen(["bash", os.path.join(PAD, "exec", name)], cwd=self.project, env=env, stdin=subprocess.DEVNULL,
@@ -670,7 +681,7 @@ class Run:
         self.exit_harness()
         wait(lambda: not alive(pid), 30, 1)
         cmd = "upload" if self.span == "upload" else "continue"
-        head = open(self.path("launch.sh")).read().splitlines()[:-1]  # the launch shell's cd and exports, not goalcup start
+        head = [l for l in open(self.path("launch.sh")).read().splitlines() if l != KEEP_SHELL][:-1]  # the launch shell's cd and exports, not goalcup start
         write(self.path("cont.sh"), "\n".join(head + [shlex.join([tool("goalcup"), cmd])]) + "\n", 0o700)
         sh(["tmux", "new-window", "-d", "-t", self.session, "-n", "cont", "bash " + shlex.quote(self.path("cont.sh"))])
         sh(["tmux", "set-option", "-w", "-t", self.session + ":cont", "remain-on-exit", "on"])

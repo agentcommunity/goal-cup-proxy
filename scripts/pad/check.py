@@ -64,11 +64,12 @@ ORDER = {"PASS": 0, "INCONCLUSIVE": 1, "FAIL": 2}
 CHECKS = ("C1", "C2", "C3", "C4", "C5", "C6")
 SEAL_SLACK = datetime.timedelta(seconds=120)  # pad's seal-now limit: a seal may begin that long before its line
 WATCHER = ("exec", "pre")  # section 3.1 watcher steps: the owning PRD's pass line decides, not `faults`
-EXPECTS_LOSS = ("refusal-curl.sh",)  # exec scripts whose owner expects a named loss (PRD-03 acceptance 7: a refused call)
-LOSS_GAP = "tls_refused"  # the only loss such a row may name: the curl's own refused connections
+EXPECTS_LOSS = {"refusal-curl.sh": "tls_refused",  # exec scripts whose owner expects a named loss, and the only one it may name:
+                "kill-both-seal.sh": "recorder_down"}  # PRD-03 acceptance 7 (the curl's refused calls); rung 5b (the dead entry's gap)
+SEALS_DEAD = "kill-both-seal.sh"  # the exec script that kills both and seals the dead entry: the record decides its row
 REFUSES = "proxy-setting.sh"  # the pre script after which goalcup start must refuse: no run is recorded
 STALE = "stale-gateway.sh"  # the pre script that leaves a daemon running for goalcup start to stop
-JUDGED = (REFUSES, STALE)  # pre scripts whose row the record decides (section 3.1), as a fault row is
+JUDGED = (REFUSES, STALE, SEALS_DEAD)  # pre and exec scripts whose row the record decides (section 3.1), as a fault row is
 # C3's scans (section 5, 7): the verifier's over the record, the box's output folder, the conductor's own folder.
 SCANS = (("secrets", "the local record and the run's files"), ("secrets-out", "the box's output folder"),
          ("secrets-conductor", "the conductor's run folder (its own secrets, section 7)"))
@@ -97,7 +98,7 @@ def expected_gaps(r):
     """The GAP kinds a row may name without it being a loss: the seal's after_stop (PRD-08 R2), a refused call for a
     script that expects one (PRD-03 acceptance 7), pinned for a dodger (section 2), FAULT_GAPS for a fault row. The meta key
     expect_gaps is selftest-only."""
-    return ({"after_stop"} | ({LOSS_GAP} if any(s in EXPECTS_LOSS for _, s in watchers(r.meta)) else set())
+    return ({"after_stop"} | {EXPECTS_LOSS[s] for _, s in watchers(r.meta) if s in EXPECTS_LOSS}
             | ({"pinned"} if r.meta.get("case") == "dodger" else set()) | set(r.meta.get("expect_gaps") or ()) | {g for k in fault_kinds(r.meta) for g in FAULT_GAPS.get(k, ())})
 
 def dig(doc, name):
@@ -232,6 +233,12 @@ class Run:
         got = doc.get("masks") if isinstance(doc, dict) else None
         return {k: count(n) for k, n in items(got)} if isinstance(got, dict) else None
 
+LOST_TERMINAL = "goalcup is not running. To go on, run: goalcup continue"  # the status words when the recorder is gone (cli/text.rs)
+
+def lost_terminal(r):
+    """True when a status line says goalcup is gone and the run goes on only by `goalcup continue`: the harness lost its terminal."""
+    return any(f.get("kind") == "status" and LOST_TERMINAL in str(f.get("said")) for f in r.faults)
+
 def cause(r):
     """Section 8: the INCONCLUSIVE causes that are never goalcup's failure, from the record first."""
     errs = [(k, n) for e in r.entries for k, n in items(dig(e, "s6_errors")) if isinstance(n, int)]
@@ -251,8 +258,8 @@ def judge(r):
     pin = r.meta.get("model_host") if r.meta.get("case") == "dodger" else None  # meta.json, written by pad
     tunnels = (r.hosts("s6_tunnel_hosts") or {}).get(pin, 0)  # section 2: a dodger's calls ride `pinned` tunnels
     work = (seen or tunnels or r.native or dig(r.usage, "s7_native")) and (r.meta.get("commits_since_start") or 0) >= 1
-    stop = cause(r) or (None if work else "the harness did no work (commits since start %s, model requests %s)"
-                        % (r.meta.get("commits_since_start"), seen))
+    idle = "the harness did no work (commits since start %s, model requests %s)" % (r.meta.get("commits_since_start"), seen)
+    stop = cause(r) or (None if work else ("the harness lost its terminal; " if lost_terminal(r) else "") + idle)
     if stop:
         for c in ("C1", "C2", "C4", "C5", "C6", "faults"):
             r.mark(c, "INCONCLUSIVE", stop)
@@ -501,6 +508,8 @@ def faults(r):
         recorder_kills(r, kinds)
     for k in sorted(set(kinds) & set(KIND_CHECKS)):
         KIND_CHECKS[k](r)
+    if ("exec", SEALS_DEAD) in watchers(r.meta):
+        dead_seal_row(r)
 
 def recorder_kills(r, kinds):
     """kill-recorder (PRD-02 R1) and kill-watchdog-recover (PRD-10 acceptance 11)."""
@@ -581,7 +590,7 @@ def recover(r, gaps):
     for kind in ("kill-watchdog", "kill-recorder"):  # PRD-10 acceptance 11 needs both kills
         if not fired(r, kind):
             return r.mark("faults", "INCONCLUSIVE", "fault did not fire: %s" % kind)
-    if any("goalcup continue" in str(f.get("said")) for f in r.faults):
+    if lost_terminal(r):
         return r.mark("faults", "INCONCLUSIVE", "harness lost its terminal")
     for what, name in (("harness pid", "s4_harness_pid"), ("port", "s4_port")):  # record-only: judged whatever came after
         r.flag(len({dig(s, name) for s in r.samples} - {None}) > 1, "faults", "FAIL", "the %s changed" % what)
@@ -638,6 +647,24 @@ def both_row(r):
     # The abandoned gap starts at the last LINK, up to a minute before the kill (PRD-01 section 10); any other starts at it.
     r.flag(k and any((a := when(g.get("start"))) and a < k - (LINK_SLACK if g.get("cause") == "abandoned" else CRASH_SLACK)
                      for g in gaps), "faults", "FAIL", "a gap starts before the crash window")
+
+def dead_seal_row(r):
+    """Rung 5b: both killed, then `goalcup seal --yes`: sealed `recovered`, exactly one gap, `abandoned`, starting no later
+    than the script's end and no earlier than LINK_SLACK before the kill (the script's `began`), and script exit 0."""
+    f = next((f for f in reversed(r.faults) if f.get("kind") == "exec" and f.get("script") == SEALS_DEAD), None)
+    if not f:
+        return r.mark("faults", "INCONCLUSIVE", "fault did not fire: %s" % SEALS_DEAD)
+    r.flag(f.get("exit") != 0, "faults", "FAIL", "%s exit %s" % (SEALS_DEAD, f.get("exit")))
+    sealed_as(r, "recovered")
+    gaps = r.gaps()[0]
+    if gaps is None:
+        return r.mark("faults", "INCONCLUSIVE", "recorder_down gaps not readable from inv6")
+    end = when(f.get("at"))
+    r.flag(len(gaps) != 1, "faults", "FAIL", "%d gaps, not one" % len(gaps))
+    r.flag(not any(g.get("cause") == "abandoned" for g in gaps), "faults", "FAIL", "no abandoned gap")
+    r.flag(end and any((a := when(g.get("start"))) and a > end for g in gaps), "faults", "FAIL", "a gap starts after the script ended")
+    kill = when(f.get("began"))
+    r.flag(kill and any((a := when(g.get("start"))) and a < kill - LINK_SLACK for g in gaps), "faults", "FAIL", "the gap starts long before the kill")
 
 def uploaded(r, t, beat_s):
     """After t (the thaw or the lift), from watch/upload.jsonl (S9, a line a minute, so the catch-up has that minute of
