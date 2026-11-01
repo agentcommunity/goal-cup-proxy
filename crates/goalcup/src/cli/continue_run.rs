@@ -143,7 +143,10 @@ pub fn prepare(
         .map_or_else(|| sj.connector.id.clone(), |_| sj.connector.source.clone());
     let connector = connector::load(&id, a.hosts).map_err(|e| refuse(e.to_string()))?;
     if connector.id != sj.connector.id {
-        return Err(refuse(text::file_changed("connector file", &sj.connector.source)));
+        return Err(refuse(text::file_changed(
+            "connector file",
+            &sj.connector.source,
+        )));
     }
     let name = sj.connector.name.clone();
 
@@ -217,9 +220,11 @@ pub fn prepare(
                     code,
                     message,
                     ..
-                } if status < 500 => {
-                    refuse(text::refused(if message.is_empty() { &code } else { &message }))
-                }
+                } if status < 500 => refuse(text::refused(if message.is_empty() {
+                    &code
+                } else {
+                    &message
+                })),
                 e => Stop {
                     text: format!("{} Nothing was started.", text::server_unreachable(&e)),
                     code: 3,
