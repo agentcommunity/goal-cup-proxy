@@ -151,5 +151,17 @@ fn wire_calls_stay_the_call_source() {
 fn the_check_sees_a_thread_with_a_parent() {
     let d = entry("gp-check", &[(MAIN_FILE, &main_line()), (&kid_file(), &kid_line())]);
     let (_, v) = check(&d, &[]);
-    assert_ne!(result(&v, "subagents_present"), "skip");
+    // Every child here comes from a recorded file, so only the `--harness-files` manifest part
+    // of this check can name a missing subagent; that part is PRD-08's manifest case, not this.
+    assert_eq!(result(&v, "subagents_present"), "pass");
+}
+
+#[test]
+fn a_message_id_never_names_the_main_thread() {
+    // Line 1 is lost; a later line carries a message `id`, which is not the session id.
+    let body = format!("not json\n{}\n", json!({"id": "11111111-0000-4000-8000-0000000000aa"}));
+    let t = table(&entry("gp-e", &[(MAIN_FILE, &body)]));
+    let stem = "session-2026-11-01T08-42-d56586ab";
+    assert!(t.threads.iter().any(|x| x.id == stem));
+    assert!(t.threads.iter().all(|x| !x.id.starts_with("11111111")));
 }

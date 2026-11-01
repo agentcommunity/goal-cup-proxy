@@ -1228,3 +1228,11 @@ PRD-02's mask worker writes two record shapes PRD-01's text does not list yet; t
   is set. `secrets.rs` must read kinds and spans from the file as it stands, not from a list. The `glued` export
   request above is still open; until it lands the guard copy must stay identical. `gsk_` and `sgamp_` may still be
   removed by the owner's answer, so `secrets` tests must not name those two kinds. No locked ledger item is touched.
+
+### 2026-11-01, Gemini parent reader edits in src/usage/ accepted
+
+- PRD-08 touched `crates/goalcup-verify/src/usage/native.rs` and `src/usage/hints.rs` (the Gemini chat
+  reader, thread links only) on the integrator's routing of 2026-11-01 09:27Z ("PRD-08 Gemini native
+  parent reader"). PRD-09 owns that directory; this note records the one-time reassignment of those two
+  Gemini hunks to PRD-08, and PRD-09 keeps ownership of everything else under `src/usage/`. Later
+  edits there go to a `v1.0/prd-09-*` branch. No seam moves and no locked ledger item is touched.
