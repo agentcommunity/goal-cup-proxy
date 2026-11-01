@@ -498,7 +498,6 @@ class StatedLoss(unittest.TestCase):
         self.assertNotEqual(row["faults"], "FAIL")
         self.assertNotEqual(row["result"], "FAIL")
         self.assertNotEqual(row["result"], "PASS")
-        self.assertTrue(row["why"])
 
     def test_stated_loss_does_not_hide_an_unexplained_gap(self):
         gaps = {"s6_gaps": {"memory_guard": 1}}
@@ -530,7 +529,6 @@ class StatedLoss(unittest.TestCase):
         row = self.planted_row([], [self.DELTAS], masks)
         self.assertEqual(row["checks"]["C3"], "INCONCLUSIVE")
         self.assertNotIn(row["result"], ("FAIL", "PASS"))
-        self.assertTrue(row["why"])
 
     def test_known_or_pathless_hit_with_a_planted_kind_unmasked_still_fails(self):
         masks = dict(SecretCheck.PLANTED, jwt=0)

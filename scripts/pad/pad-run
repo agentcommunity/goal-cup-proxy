@@ -24,7 +24,7 @@ KEEP_SHELL = "exec sleep 1000000"  # the last line of a kill-watchdog-recover ru
 PROXY_VALUE = "127.0.0.1:9"  # the proxy setting exec/proxy-setting.sh writes (PAD_PROXY); start must not print it
 EVERY = {"status": 10, "procs": 30, "pane": 60, "live": 300}  # section 4: the watch's seconds per kind of line
 OUT = ("verify", "watch", "exec", "status.json", "harness-files.json", "meta-box.json",
-       "goalcup.log")  # what out.tar carries
+       "goalcup.log", "goalcup-new.log")  # what out.tar carries
 PROXY_CA = tuple(n for p in ("HTTPS", "HTTP", "ALL", "NO") for n in (p + "_PROXY", p.lower() + "_proxy")) + (
     "SSL_CERT_FILE", "SSL_CERT_DIR", "NODE_EXTRA_CA_CERTS", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE")
 HARNESS_ENV = ("HOME", "PATH", "GOALCUP_TIME_LEFT_FILE")  # not keys: what `sh -lc 'goalcup time-left'` needs
@@ -992,6 +992,8 @@ class Run:
                 "known_box")
         write(self.path("meta-box.json"), json.dumps({k: self.st.get(k, 0 if k == "screen_known" else None) for k in keys}), 0o644)
         self.copy_log(e)
+        if new:  # the entry goalcup continue started has its own log (the recovery lines)
+            self.copy_log(new[1], "goalcup-new.log")
         if tool("goalcup-verify"):  # last, whatever happened above (it needs no entry): every file the tar carries
             exits["secrets-out"] = self.verify_cmd(["secrets", "--known", "known"] + self.out_paths(),
                                                    "secrets-out.json")[0]
@@ -1010,12 +1012,11 @@ class Run:
                     t.add(self.path(name), name)
         return result
 
-    def copy_log(self, e):
-        """The run's goalcup.log (in the entry folder, like upload.json) into the output folder; a missing file is no error."""
+    def copy_log(self, e, name="goalcup.log"):
+        """An entry folder's goalcup.log (next to upload.json) into the output folder; a missing file is no error."""
         try:
-            if e and os.path.isfile(os.path.join(e, "goalcup.log")):
-                shutil.copy(os.path.join(e, "goalcup.log"), self.path("goalcup.log"))
-        except OSError:
+            shutil.copy(os.path.join(e, "goalcup.log"), self.path(name))
+        except (OSError, TypeError):
             pass
 
     def out_paths(self):

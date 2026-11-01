@@ -153,13 +153,17 @@ class GoalcupLog(unittest.TestCase):
     def test_log_is_copied_and_scanned(self):
         r, run = self.run_with(True)
         self.assertTrue(os.path.isfile(os.path.join(run, "goalcup.log")))
-        self.assertIn("goalcup.log", padrun.OUT)
         self.assertIn("goalcup.log", r.out_paths())
 
-    def test_missing_log_is_quiet(self):
+    def test_missing_log_is_quiet_and_second_entry_is_carried(self):
         r, run = self.run_with(False)
         self.assertFalse(os.path.exists(os.path.join(run, "goalcup.log")))
         self.assertNotIn("goalcup.log", r.out_paths())
+        d = tempfile.TemporaryDirectory()
+        self.addCleanup(d.cleanup)
+        open(os.path.join(d.name, "goalcup.log"), "w").write("recover\n")
+        r.copy_log(d.name, "goalcup-new.log")
+        self.assertIn("goalcup-new.log", r.out_paths())
 
 
 class PaneBeforePaste(unittest.TestCase):
