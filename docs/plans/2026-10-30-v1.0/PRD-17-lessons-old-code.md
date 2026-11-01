@@ -1119,3 +1119,10 @@ Names for `LESSONS.md` (the lessons lane writes them; judge 14:56Z, 15:13Z):
 ### 2026-11-01, replan after PRD-02 slice C part 2 (merge cdc9b456)
 
 - `crates/goalcup/tests/pipeline_stall.rs` is on integration, the last name the deletion gate (check 1, row L-R2) could not resolve. Repoint L-R2 to `pipeline_stall.rs` (stall exit only) together with `pipeline_guard::two_hundred_streams_with_the_writer_held` and `lessons_pipeline::open_and_end_survive_a_full_guard`, as the PRD-02 Amendments say, and rerun the four gate checks in a box. The two `pipeline_guard` cases are load-sensitive at their 30 s hang bound (not a recorder defect); PRD-14 is asked to move them to `heavy`. Still deferred and not gate names: `by_hand_load`, native cursor resume, the mask pool, `pipeline_many_streams`, `pipeline_no_latch`, `SnapshotCursor.fid`. No locked ledger item is touched.
+
+### 2026-11-01, replan note, slice 10 (gate re-run after pipeline_stall.rs, integration head 18fde505)
+
+- **Changed:** `LESSONS.md` only. L-R2 now names `pipeline_stall::a_stalled_writer_exits_75_and_the_next_boot_names_it` (PRD-02) with the two `pipeline_guard` and `lessons_pipeline` guards; L-R2 and L-C7 read `green` at 18fde505. Section 2.11 row R2 already named `pipeline_stall.rs` and needs no change. No Rust changed.
+- **Verdict, from one box job (second run in `LESSONS.md`):** nextest list 626; `gate fast` 622 run, 622 passed, 0 failed, 4 skipped; `gate full` ran `idle_tunnel_survives_120s` and it passed; Worker tests 258 pass. Check 1 passed (154 of 154 rows, every name resolves), check 2 passed, check 3 holds (L-D2 names a kind of run, not a pad row; no pad row exists for it, see Risks), check 4 passed. Table: 154 rows, 125 `green`, 29 `open`.
+- **For the cuts lane (PRD-13): PRD-13 may delete.** Both blockers (check 1, L-R2; `gate full`, L-C7) are cleared on 18fde505, and no check failed. The 29 `open` rows wait on `R:`, `D:` or `X:` entries and do not block, as Acceptance says. Skipped in the run: `mask_bench`, the `upload_worker` full-tier tests, the RR rows and `cargo clippy`.
+- No locked ledger item is touched.
