@@ -264,3 +264,21 @@ fn with_home_swapped_a_login_shell_finds_goalcup() {
     drop(connector::plan(&c, &e, &home));
     assert_eq!(std::fs::read_to_string(&profile).unwrap(), "# mine\n");
 }
+
+#[test]
+fn the_version_probe_runs_without_the_isolated_home_variable() {
+    let tmp = tempfile::tempdir().unwrap();
+    let d = tmp.path();
+    let program = d.join("hermes");
+    // Like Hermes 0.22.5: a fresh HERMES_HOME makes `--version` exit 1.
+    let body = "#!/bin/sh\nif [ -n \"$HERMES_HOME\" ]; then exit 1; fi\necho 'Hermes Agent v0.22.5 (2026.1.1)'\n";
+    std::fs::write(&program, body).unwrap();
+    std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let toml = "id = \"fake-hermes\"\nname = \"H\"\nprogram = \"hermes\"\nhome = { HERMES_HOME = \"{home}\" }";
+    let file = d.join("fake-hermes.toml");
+    std::fs::write(&file, toml).unwrap();
+    let c = connector::load(file.to_str().unwrap(), None).unwrap();
+    let plan = connector::plan(&c, &env(d, &[]), &d.join("goalcup/homes/fake-hermes"));
+    assert_eq!(plan.harness_version.as_deref(), Some("Hermes Agent v0.22.5 (2026.1.1)"));
+    assert_eq!(plan.env.get("HERMES_HOME").map(String::as_str), plan.home.to_str());
+}

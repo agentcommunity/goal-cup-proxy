@@ -16,7 +16,7 @@ Source words: "docs" is [hermes-agent.nousresearch.com/docs](https://hermes-agen
 ## 2. Install and record a version
 
 - `curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash` clones the repository and checks out the latest stable tag; `--skip-setup` makes it non-interactive and `--commit <sha>` pins a build (source, `scripts/install.sh`). The Python package `hermes-agent` on PyPI is 0.19.0 and is behind the tags. Python 3.11 or later; the installer uses 3.14.
-- `hermes --version` prints `Hermes Agent v<version> (<date>)` (measured on 0.19.0). The connector sets no `version` word, so any build runs and the `start` event records the one that ran.
+- `hermes --version` prints `Hermes Agent v<version> (<date>)` (measured on 0.19.0). The version probe runs without `HERMES_HOME` (the connector's `home` variables are put back to the participant's value or left out): in a fresh isolated home 0.22.5 exits 1 with "no dependency environment is committed for this install; run hermes pm repair", so the probe would have no version and the server would refuse the run (full2 REPORT N1; `logs/hermes-probe.txt`). With the variable unset `--version` answers and writes nothing. If no Hermes answers there either, the start goes ahead with `harness_version` absent. The connector sets no `version` word, so any build runs and the `start` event records the one that ran.
 - The core does not update itself. A background check runs at chat start and `updates.check: false` in `config.yaml` stops it; there is no environment switch (source). The connector's `update_off` row writes that key into the isolated home. Never run `hermes update` during a run.
 
 ## 3. Where it keeps things, per OS
