@@ -158,7 +158,10 @@ fn second_start_on_one_home_refuses() {
     assert_eq!(out.status.code(), Some(1));
     one_error_line(&out);
     let err = String::from_utf8_lossy(&out.stderr);
-    assert!(err.contains(&held.join("tester").display().to_string()), "{err}");
+    assert!(
+        err.contains(&held.join("tester").display().to_string()),
+        "{err}"
+    );
     assert!(!homes.goalcup.path().join("runs").exists());
     drop(lock);
 }

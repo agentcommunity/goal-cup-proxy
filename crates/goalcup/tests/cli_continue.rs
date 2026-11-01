@@ -13,7 +13,7 @@ use common::home::TempHome;
 use common::worker::{CREDENTIAL, FakeWorker, Inject, RUN_ID, Route};
 use goalcup::cli::approve::Stop;
 use goalcup::cli::continue_run::{Args, prepare, resume_from_files};
-use goalcup::cli::proc_start_id;
+use goalcup::cli::{EntryFacts, proc_start_id};
 use goalcup::cli::start::Ready;
 use goalcup::pipeline::status::Mode;
 use serde_json::{Value, json};
@@ -135,7 +135,7 @@ impl World {
 
     fn resume(&self) -> bool {
         let parts = serde_json::from_slice::<Value>(&self.server_json()).unwrap();
-        let entries = serde_json::from_value(parts["entries"].clone()).unwrap();
+        let entries: Vec<EntryFacts> = serde_json::from_value(parts["entries"].clone()).unwrap();
         resume_from_files(&self.run_dir(), &entries)
     }
 }
@@ -147,7 +147,12 @@ fn ran(secs: u64, exit: Value) -> Value {
         let (d, s) = (t / 86_400, t % 86_400);
         // 2026-11-07 is day 20_764 since 1970; T0 is 10:00:00 that day.
         assert_eq!(d, 20_764);
-        format!("2026-11-07T{:02}:{:02}:{:02}Z", s / 3600, s / 60 % 60, s % 60)
+        format!(
+            "2026-11-07T{:02}:{:02}:{:02}Z",
+            s / 3600,
+            s / 60 % 60,
+            s % 60
+        )
     };
     json!({"mode": "sealed", "updated": stamp(end), "written": {},
         "harness": {"pid": 1, "started": stamp(start), "start_id": 1, "exit": exit}})
@@ -257,14 +262,20 @@ fn continue_adds_the_next_part_and_resumes_the_session() {
     w.part(1, false, Some(World::sealed(json!({"model_requests": 2}))));
     let ready = w.prepare().unwrap_or_else(|s| panic!("{}", s.text));
     assert_eq!(ready.facts.run, RUN_ID);
-    assert_eq!((ready.facts.entry.as_str(), ready.facts.segment), (&*e(2), 1));
+    assert_eq!(
+        (ready.facts.entry.as_str(), ready.facts.segment),
+        (&*e(2), 1)
+    );
     assert_eq!(ready.facts.entry_dir, w.run_dir().join(e(2)));
     assert!(ready.plan.argv.contains(&"--resume".to_owned()));
     let left = ready.facts.deadline.unwrap() - ready.facts.local_wall;
     assert!(left.abs_diff(3_600_000) < 1_000, "{left}");
     let sj: Value = serde_json::from_slice(&w.server_json()).unwrap();
     let last = sj["entries"].as_array().unwrap().last().unwrap().clone();
-    assert_eq!((last["id"].clone(), last["resumed"].clone()), (json!(e(2)), json!(true)));
+    assert_eq!(
+        (last["id"].clone(), last["resumed"].clone()),
+        (json!(e(2)), json!(true))
+    );
     assert_eq!(sj["entries"].as_array().unwrap().len(), 2);
 }
 

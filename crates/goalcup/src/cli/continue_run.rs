@@ -81,7 +81,13 @@ pub fn run(a: &Args) -> ExitCode {
     let Ok(project) = std::env::current_dir() else {
         return fail(text::PROJECT_GONE);
     };
-    match prepare(a, &home, &project, &super::env_vars(), &mut std::io::stdout()) {
+    match prepare(
+        a,
+        &home,
+        &project,
+        &super::env_vars(),
+        &mut std::io::stdout(),
+    ) {
         Err(stop) => {
             say(&stop.text);
             ExitCode::from(stop.code)
@@ -166,7 +172,10 @@ pub fn prepare(
     out: &mut dyn std::io::Write,
 ) -> Result<Ready, Stop> {
     let found = find(home, a.run).ok_or_else(|| {
-        refuse(a.run.map_or_else(|| text::NO_RUN_YET.to_owned(), text::no_such_part))
+        refuse(
+            a.run
+                .map_or_else(|| text::NO_RUN_YET.to_owned(), text::no_such_part),
+        )
     })?;
     let (Some(sj), Some(last)) = (found.server.clone(), found.entries.last().cloned()) else {
         return Err(refuse(NOT_STARTED_HERE));
@@ -187,10 +196,9 @@ pub fn prepare(
     same_file("connector file", a.connector, first)?;
     let hosts = sj.hosts_file.as_ref().map(|p| p.to_string_lossy());
     same_file("host list", a.hosts, hosts.as_deref())?;
-    let id = a.connector.map_or_else(
-        || sj.connector.id.clone(),
-        |_| sj.connector.source.clone(),
-    );
+    let id = a
+        .connector
+        .map_or_else(|| sj.connector.id.clone(), |_| sj.connector.source.clone());
     let connector = connector::load(&id, a.hosts).map_err(|e| refuse(e.to_string()))?;
     if connector.id != sj.connector.id {
         return Err(refuse(file_changed("connector file", &sj.connector.source)));
@@ -202,7 +210,8 @@ pub fn prepare(
     let st = read_json::<Status>(&status_json(&dir));
     let mut lines = vec![text::run_kind(sj.mode).to_owned()];
     if st.as_ref().is_none_or(|s| s.mode != Mode::Sealed) {
-        let recording = watchdog_alive(&dir) || st.as_ref().is_some_and(|s| alive(s.pid, s.start_id));
+        let recording =
+            watchdog_alive(&dir) || st.as_ref().is_some_and(|s| alive(s.pid, s.start_id));
         if recording {
             return Err(refuse(STILL_RECORDING));
         }
@@ -264,7 +273,9 @@ pub fn prepare(
                     code,
                     message,
                     ..
-                } if status < 500 => refuse(refused(if message.is_empty() { &code } else { &message })),
+                } if status < 500 => {
+                    refuse(refused(if message.is_empty() { &code } else { &message }))
+                }
                 e => Stop {
                     text: format!("{} Nothing was started.", text::server_unreachable(&e)),
                     code: 3,
@@ -303,14 +314,22 @@ pub fn prepare(
     let new_dir = entry_dir(home, &found.run, &entry);
     let _ = std::fs::create_dir_all(&new_dir);
     let (lock, sleep_warning) = awake::take(vars);
-    skill::install(connector.skills_dir.as_deref(), &plan.home, project, &new_dir);
+    skill::install(
+        connector.skills_dir.as_deref(),
+        &plan.home,
+        project,
+        &new_dir,
+    );
     let (local_wall, deadline) = start::deadline_ms(left);
     lines.push(if resumed {
         format!("Continuing {name}'s last session.")
     } else {
         format!("Starting a new {name} session: the last one could not be resumed.")
     });
-    let (before, now) = (sj.entries.last().and_then(|e| e.harness_version.as_deref()), plan.harness_version.as_deref());
+    let (before, now) = (
+        sj.entries.last().and_then(|e| e.harness_version.as_deref()),
+        plan.harness_version.as_deref(),
+    );
     if let (Some(a), Some(b)) = (before, now) {
         lines.extend((a != b).then(|| updated(&name, a, b)));
     }
@@ -318,7 +337,10 @@ pub fn prepare(
     lines.extend(first_message(&found.run_dir, resumed, vars));
     lines.extend(deadline.map(|ms| text::ends_line(ms / 1000, super::now())));
     lines.push(text::upload_to(server.host()));
-    for (what, file) in [("Connector", first.map(PathBuf::from)), ("Host list", sj.hosts_file.clone())] {
+    for (what, file) in [
+        ("Connector", first.map(PathBuf::from)),
+        ("Host list", sj.hosts_file.clone()),
+    ] {
         lines.extend(file.map(|f| text::from_file(what, &f)));
     }
     lines.push(text::harness_home(&name, &plan.home));
@@ -344,7 +366,10 @@ pub fn prepare(
 fn first_message(run_dir: &Path, resumed: bool, vars: &BTreeMap<String, String>) -> Option<String> {
     let file = run_dir.join("first-message.txt");
     let message = std::fs::read_to_string(&file).ok().filter(|_| !resumed)?;
-    Some(text::first_message(&file, push::clipboard::copy(&message, vars)))
+    Some(text::first_message(
+        &file,
+        push::clipboard::copy(&message, vars),
+    ))
 }
 
 #[derive(Deserialize)]

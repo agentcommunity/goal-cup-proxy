@@ -220,7 +220,10 @@ fn write_run(home: &Path, sj: &ServerJson, secret: Option<&str>) -> Result<(), S
     let written = fs::create_dir_all(&dir)
         .and_then(|()| secret.map_or(Ok(()), |s| put(&credential(&dir), s.as_bytes())))
         .and_then(|()| {
-            put(&server_json(&dir), &serde_json::to_vec(sj).unwrap_or_default())
+            put(
+                &server_json(&dir),
+                &serde_json::to_vec(sj).unwrap_or_default(),
+            )
         });
     written.map_err(|_| {
         let _ = fs::remove_dir_all(&dir);
