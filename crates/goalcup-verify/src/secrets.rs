@@ -226,7 +226,7 @@ impl Tail {
 
 /// Whether a match is only a mask or a placeholder: its secret part (group 1; for `private_key`
 /// the text between the `-----BEGIN` line and `-----END`) is empty or only `*`, `[REDACTED]`,
-/// `[HIDDEN]`, `<redacted>` (any case), whitespace and `\n`. A body with any other text is a hit.
+/// `[HIDDEN]`, `<redacted>` (any case), ellipsis U+2026 or `...`, whitespace, `\n`; other text hits.
 fn placeholder(span: &[u8], kind: &str) -> bool {
     let (mut s, find) = (span, |h: &[u8], n: &[u8]| {
         h.windows(n.len()).position(|w| w == n)
@@ -235,10 +235,10 @@ fn placeholder(span: &[u8], kind: &str) -> bool {
         s = find(s, b"KEY-----").map_or(s, |i| &s[i + 8..]);
         s = find(s, b"-----END").map_or(s, |i| &s[..i]);
     }
-    let toks = [&b"[REDACTED]"[..], b"[HIDDEN]", b"<redacted>", b"\\n", b"*"];
+    let toks = ["[REDACTED]", "[HIDDEN]", "<redacted>", "\\n", "*", "...", "\u{2026}"];
     while let Some(t) = toks.iter().find(|t| {
         s = s.trim_ascii_start();
-        s.len() >= t.len() && s[..t.len()].eq_ignore_ascii_case(t)
+        s.len() >= t.len() && s[..t.len()].eq_ignore_ascii_case(t.as_bytes())
     }) {
         s = &s[t.len()..];
     }

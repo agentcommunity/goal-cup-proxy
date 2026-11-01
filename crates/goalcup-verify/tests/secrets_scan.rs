@@ -254,6 +254,10 @@ fn secrets_placeholders_are_no_hit_and_real_bodies_are() {
         (pem(&format!("[REDACTED]{real}"), "\n"), 1),
         (r#""password": "[REDACTED]******""#.into(), 0),
         (format!(r#""password": "{real}""#), 1),
+        (format!("{head} \u{2026}[redacted]\u{2026} {tail}"), 0),
+        (format!("{head} ...[redacted]... {tail}"), 0),
+        (format!("{head} \u{2026}{real}\u{2026} {tail}"), 1),
+        (pem(&format!("\u{2026}{real}\u{2026}"), "\n"), 1),
     ];
     for (i, (text, hits)) in cases.into_iter().enumerate() {
         let (code, got, _) = lens(&format!("ph{i}"), &[text.into_bytes()], &[]);
