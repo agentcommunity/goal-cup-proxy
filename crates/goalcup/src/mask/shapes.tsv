@@ -36,5 +36,5 @@ cerebras_key	1	csk[-_][A-Za-z0-9_\-]{20,}
 fireworks_key	1	fw_[A-Za-z0-9_\-]{20,}
 vercel_gateway_key	1	vck_[A-Za-z0-9_\-]{20,}
 together_key	1	tgp_v1_[A-Za-z0-9_\-]{20,}
-amp_key	1	sgamp_[A-Za-z0-9_\-]{20,}
+sgamp_key	1	sgamp_[A-Za-z0-9_\-]{20,}
 factory_key	1	fk-[A-Za-z0-9_\-]{20,}

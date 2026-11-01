@@ -495,7 +495,7 @@ static SHAPES: [Shape; 28] = [
         None,
     ),
     prefixed(
-        "amp_key",
+        "sgamp_key",
         r"sgamp_[A-Za-z0-9_\-]{20,}",
         &[b"s", b"g", b"a", b"m", b"p", b"_"],
         token,

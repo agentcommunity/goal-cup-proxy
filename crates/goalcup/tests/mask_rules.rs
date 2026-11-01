@@ -39,7 +39,7 @@ const KINDS: [&str; 28] = [
     "fireworks_key",
     "vercel_gateway_key",
     "together_key",
-    "amp_key",
+    "sgamp_key",
     "factory_key",
 ];
 
@@ -440,7 +440,7 @@ fn provider_keys() -> Vec<(&'static str, String)> {
             "together_key",
             ["tgp", "_v1_", &run(TOKEN, 43, 69)].concat(),
         ),
-        ("amp_key", ["sga", "mp_", &run(ALNUM, 40, 70)].concat()),
+        ("sgamp_key", ["sga", "mp_", &run(ALNUM, 40, 70)].concat()),
         ("factory_key", ["f", "k-", &run(ALNUM, 40, 71)].concat()),
     ]
 }

@@ -140,7 +140,7 @@ fn provider_keys() -> Vec<(&'static str, String, usize)> {
             ["tgp", "_v1_", &run(TOKEN, 43, 39)].concat(),
             7,
         ),
-        ("amp_key", ["sga", "mp_", &run(ALNUM, 40, 40)].concat(), 6),
+        ("sgamp_key", ["sga", "mp_", &run(ALNUM, 40, 40)].concat(), 6),
         ("factory_key", ["f", "k-", &run(ALNUM, 40, 41)].concat(), 3),
     ]
 }
