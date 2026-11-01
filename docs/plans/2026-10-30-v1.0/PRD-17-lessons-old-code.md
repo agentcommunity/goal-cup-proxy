@@ -1109,3 +1109,9 @@ Names for `LESSONS.md` (the lessons lane writes them; judge 14:56Z, 15:13Z):
 - **Gate state unchanged:** `pipeline_stall.rs` is still not on origin/v1.0/integration (f2f96f0e), so L-R2 is left as is and the four checks were not rerun. No box job ran, no Rust changed (the eight `lessons_*.rs` files stay at 4,345 lines).
 - **Blockers by owner:** check 1, L-R2 (PRD-02, `pipeline_stall.rs`); `gate full`, L-C7 (`idle_tunnel_survives_120s`, still open). PRD-13 may not delete yet. After PRD-02 lands the file, the next slice is one gate rerun.
 - No locked ledger item is touched.
+
+### 2026-11-01, replan after PRD-17 slice 9 (merge 132a35db)
+
+- **Merged:** docs only, `LESSONS.md` upkeep (A4, A5, B2). No Rust changed.
+- **Doc nits queued for the next LESSONS.md upkeep (wording only, no box job):** A-1/B1, add a blank line before the "`X:`-only and `R:`-only rows" sentence so it stops reading as part of the L-C7 bullet. A-2, say outright under "What blocks the gate" that only L-R2 (check 1) and L-C7 (`gate full`) block; the `R:`-only and `X:`-only rows do not. B2, the line that `X:`-only rows flip when the gate passes was dropped; restore it in that one sentence or leave it out on purpose. B3 is taste: the slice 9 note above repeats earlier notes, and later notes should be one line.
+- **Unchanged:** the gate blockers are L-R2 (`pipeline_stall.rs`, PRD-02, still not on integration) and L-C7. No locked ledger item is touched.

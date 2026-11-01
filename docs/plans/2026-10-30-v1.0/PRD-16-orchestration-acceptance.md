@@ -2541,3 +2541,8 @@ kept and now cites BUILD-PROMPT section 5, since B3 no longer carries it.
 
 - **Size report, PRD-12** (wc -l on integration): pad 949, pad-run 1,121, check.py 803, table 193, selftest 188, sbx.mjs 133, image 54, exec/ 96; rig source 3,537 plus 455 in harnesses/*.toml. Tests: test_pad.py 781, test_pad_fetch.py 178, test_pad_run_case.py 117 (1,076). Source plus tests 4,613 (5,068 with the toml) against the PRD-00 row of about 1,350 to 1,450 with its tests (about 3.2 times). Slice 14 added about 180 source lines (pad +180, pad-run +41) and about 380 test lines. Overage on an owner estimate is reported, not cut; carry to the end-of-build report. Review found no concrete behaviour-preserving cut beyond B7/B8 (done).
 - **Gate effect:** none on order or seams. Nits A10 and B12 are queued in the PRD-12 note. No locked ledger item is touched.
+
+### 2026-11-01, note from the PRD-17 slice 9 merge (132a35db)
+
+- **Size report, PRD-17** (`wc -l` on integration): the eight `crates/goalcup/tests/lessons_*.rs` files total 4,345 lines, unchanged (slice 9 was docs only), against the 3,000 line row shared with PRD-14 in PRD-00 "Size budget" (45% over). PRD-17 has no src row (0). Reported, not cut; carry to the end-of-build report.
+- **Gate effect:** none on order or seams. PRD-02 landing `pipeline_stall.rs` is still the step before the last PRD-17 gate rerun and PRD-13 deletion; L-C7 stays the other blocker. No locked ledger item is touched.
