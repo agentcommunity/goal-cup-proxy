@@ -35,7 +35,8 @@ fn hash(b: &[u8]) -> Key {
 /// with no letter or digit keeps its raw bytes.
 fn id_key(id: &str) -> Key {
     let n: String = id.chars().filter(char::is_ascii_alphanumeric).collect();
-    hash(if n.is_empty() { id } else { &n.to_ascii_lowercase() }.as_bytes())
+    let n = n.to_ascii_lowercase();
+    hash(if n.is_empty() { id } else { &n }.as_bytes())
 }
 
 /// The answer as one assistant turn: its tool-call ids, else (Gemini function calls, no id, and
