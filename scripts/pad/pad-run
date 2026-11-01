@@ -361,21 +361,22 @@ class Run:
 
     def until(self, pattern, why):
         """The first match of `pattern` on the screen within the step's limit; else the step ends INCONCLUSIVE. A pane
-        that has died ends the wait at once (one more look at the screen first: a fast successful exit still matches)."""
+        that has died ends the wait at once (its screen is read after the exit check: a fast successful exit still matches)."""
         def look():
-            return re.search(pattern, self.capture(True)) or (self.pane_exit()[0] and "dead")  # scrollback
-        got = wait(look, self.left(), 3)
-        if got == "dead":
-            got = re.search(pattern, self.capture(True))
-        if not got:
-            is_dead, status = self.pane_exit()
+            dead, status = self.pane_exit()
+            got = re.search(pattern, self.capture(True))  # scrollback
+            if got or not dead:
+                return got
             self.refusal()
             screen = self.pane()
-            if is_dead:
-                last = ([ln.strip() for ln in screen.splitlines() if ln.strip()] or [""])[-1]
-                last = replace_known(last, self.known() or [])[0]
-                last = re.sub(r"[\x00-\x1f\x7f]", "", last)[:120]
-                raise Step("INCONCLUSIVE", "start-refused: " + ("(exit %s) " % status if status.isdigit() else "") + last)
+            last = ([ln.strip() for ln in screen.splitlines() if ln.strip()] or [""])[-1]
+            last = replace_known(last, self.known() or [])[0]
+            last = re.sub(r"[\x00-\x1f\x7f]", "", last)[:120]
+            raise Step("INCONCLUSIVE", "start-refused: " + ("(exit %s) " % status if status.isdigit() else "") + last)
+        got = wait(look, self.left(), 3)
+        if not got:
+            self.refusal()
+            self.pane()
             raise Step("INCONCLUSIVE", "harness did not start: " + why)
         return got
 

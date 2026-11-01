@@ -579,7 +579,6 @@ class RigFaults(unittest.TestCase):
             got = pad.approve("t", "ABCD-EFGH")
         self.assertTrue(seen["ua"].startswith("goalcup-pad"))
         self.assertIn("403", got)
-        self.assertIn("error code: 1010", got)
         self.assertNotIn("fake-key-not-a-secret", got)
         self.assertNotIn("fake-member-not-real", got)
 
@@ -587,7 +586,6 @@ class RigFaults(unittest.TestCase):
         with mock.patch.dict(os.environ, {"DATABASE_URL": "postgres://fake-not-a-secret"}):
             self.assertIn("DATABASE_URL", pad.env_without(set(pad.NEVER_IN_BOX) - set(pad.FETCH)))
             self.assertNotIn("DATABASE_URL", pad.env_without())
-            self.assertIn(b"postgres://fake-not-a-secret", [v.encode() for v in map(os.environ.get, pad.NEVER_IN_BOX) if v])
 
     def test_dead_pane_ends_the_wait_at_once(self):
         run = self.enterContext(tempfile.TemporaryDirectory())

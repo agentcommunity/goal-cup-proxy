@@ -335,9 +335,14 @@ def approve(server, code):
         return "approval failed: " + type(e).__name__
     if status == 200:
         return "approved"
-    err = re.search(rb'"error":\s*"([a-z_]{1,40})"', body or b"")
-    if err:
-        return "approval refused: HTTP %d %s" % (status, err[1].decode())
+    try:
+        doc = json.loads(body)
+    except ValueError:
+        doc = None
+    if isinstance(doc, dict):  # JSON: the error code only, never the rest of the body
+        err = doc.get("error")
+        code = err if isinstance(err, str) and re.fullmatch(r"[a-z_]{1,40}", err) else ""
+        return ("approval refused: HTTP %d %s" % (status, code)).strip()
     lines = body.decode("utf-8", "replace").strip().splitlines()  # not JSON: its first line, plain
     first = re.sub(r"[\x00-\x1f\x7f]", "", lines[0])[:80] if lines else ""
     return ("approval refused: HTTP %d %s" % (status, first)).strip()

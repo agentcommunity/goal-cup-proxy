@@ -253,7 +253,7 @@ the rig goes on to seal, fetch, check and clean up, so every run ends with a tab
 | Step | What the rig does | Waits for | Limit, then |
 |---|---|---|---|
 | `setup` | Box from the pad image, copies, version check, plants, `goalcup setup`, key route (section 3, 0:00 to 0:01) | | 5 min, then FAIL "setup", cleanup |
-| `start` | `goalcup start` in tmux, approval when `server` is not `off`, paste, Enter (section 3, 0:02 to 0:04) | "Recording in chat mode", then the harness's ready text | 3 min, then INCONCLUSIVE "harness did not start" |
+| `start` | `goalcup start` in tmux, approval when `server` is not `off`, paste, Enter (section 3, 0:02 to 0:04) | "Recording in chat mode", then the harness's ready text | 3 min, then INCONCLUSIVE "harness did not start"; a pane that dies first ends it at once with INCONCLUSIVE "start-refused: (exit N) <last screen line>" |
 | `wait-calls n` | Reads `status.json` every 5 s | `written.model_requests` at least n | 4 min, then INCONCLUSIVE "the harness did no work" |
 | `look` | `check --live --json` and `usage --json` on the open entry, under `nice -n 19`; prints calls, threads, gaps and known-value hits so far | | 1 min. A live `fail` or a known-value hit is written as "first seen at T" and the run goes on (section 4) |
 | `kill-recorder@m` and the other faults | Section 3.1 | An open response stream, up to 60 s | As section 3.1 |
