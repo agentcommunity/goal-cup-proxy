@@ -78,6 +78,25 @@ class Settings(unittest.TestCase):
             pad.load_settings(dict(BASE, key="cf"), PADCFG)
 
 
+class NotVerified(unittest.TestCase):
+    """PRD-12 section 9: a stated reason means nothing runs, exit 3, and the table shows that reason."""
+
+    def test_stated_reason_exits_3_before_any_box(self):
+        d = self.enterContext(tempfile.TemporaryDirectory())
+        f = os.path.join(d, "s.toml")
+        with open(f, "w") as fh:
+            fh.write('harness = "crush-cli"\nkey = "claude"\nmode = "cycle"\n')
+        with mock.patch.object(subprocess, "run", side_effect=AssertionError("started a box")):
+            self.assertEqual(pad.main(["pad", f]), 3)
+
+    def test_table_shows_the_reason_over_old_rows(self):
+        tbl = load("padtable", "table")
+        row = {"connector": "crush-cli", "case": "direct", "mode": "full", "result": "FAIL"}
+        tier = tbl.tier_for("crush-cli", [row])
+        self.assertEqual(tier[0], "not verified")
+        self.assertTrue(tier[2].startswith("needs permission answer"))
+
+
 class Walk(unittest.TestCase):
     """A sentinel key in the environment: no argument the pad builds, and no file it writes, holds it."""
 
