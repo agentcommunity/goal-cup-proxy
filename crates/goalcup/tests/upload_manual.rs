@@ -3,16 +3,18 @@
 //! refuses while a recorder holds `rec/lock` and never holds `rec/lock` after it returns; the final
 //! heartbeat carries the counts of `counts.jsonl`; a dead entry (no seal anywhere, no recorder) is
 //! closed with the `recovered` seal and sent whole, and is left alone while a recorder holds
-//! `rec/lock` (U8); a sealed entry with bytes left ends sealed with the server holding
+//! `rec/lock` or its watchdog lives (U8); a sealed entry with bytes left ends sealed with the server holding
 //! `cat rec-*.gcr.zst` and the parts pruned; an entry the position already calls sealed is not
 //! sent again, and is pruned even with `upload.json` lost.
 
 mod common;
 
+use bytes::Bytes;
+use common::recorder::{entry_dir, real, wait_settled};
 use common::records::{BOOT_ID, ENTRY, at};
 use common::worker::{CREDENTIAL, FakeWorker, Inject, RUN_ID, Route};
 use goalcup::cli;
-use goalcup::pipeline::Status;
+use goalcup::pipeline::{EndReason, OpenFlags, Status, StreamKind};
 use goalcup::pipeline::status::{Mode, SealStatus};
 use goalcup::upload::manual::{Outcome, run};
 use goalcup::upload::state::{self, Final};
@@ -98,17 +100,22 @@ fn entry(run: &Path, fake: &FakeWorker, deadline: &str, seal: bool) -> (PathBuf,
     )
     .unwrap();
     File::create(rec.join("lock")).unwrap();
-    let server = json!({"v": 1, "server": fake.url(), "run": RUN_ID, "mode": "test",
-        "deadline": deadline, "repo": null, "hosts_file": null, "entries": [],
-        "connector": {"id": "c", "name": "c", "source": "builtin"}});
-    fs::write(cli::server_json(run), server.to_string()).unwrap();
-    fs::write(cli::credential(run), CREDENTIAL).unwrap();
+    serve(run, fake, deadline);
     let all = part_files(&rec)
         .unwrap()
         .iter()
         .flat_map(|p| fs::read(p).unwrap())
         .collect();
     (entry, all)
+}
+
+/// The run's `server.json` naming `fake` with `deadline`, and its credential.
+fn serve(run: &Path, fake: &FakeWorker, deadline: &str) {
+    let server = json!({"v": 1, "server": fake.url(), "run": RUN_ID, "mode": "test",
+        "deadline": deadline, "repo": null, "hosts_file": null, "entries": [],
+        "connector": {"id": "c", "name": "c", "source": "builtin"}});
+    fs::write(cli::server_json(run), server.to_string()).unwrap();
+    fs::write(cli::credential(run), CREDENTIAL).unwrap();
 }
 
 const DEADLINE: &str = "2026-11-07T10:00:00Z";
@@ -268,6 +275,75 @@ fn a_dead_entry_a_recorder_holds_is_left_alone() {
     assert_eq!(upload(dir.path(), &entry, false), Outcome::StillRecording);
     assert!(fake.chunks().is_empty() && fake.heartbeats().is_empty());
     assert_eq!(parts(&entry), before, "no part file changed");
+}
+
+/// A dead entry whose watchdog lives: `rec/lock` is unheld between boots, and the next boot would
+/// record into it. Nothing is closed or sent, and no part file changes.
+#[test]
+fn a_dead_entry_whose_watchdog_lives_is_left_alone() {
+    let fake = FakeWorker::start();
+    let dir = tempfile::tempdir().unwrap();
+    let (entry, _) = entry(dir.path(), &fake, DEADLINE, false);
+    let pid = std::process::id();
+    let start_id = cli::proc_start_id(pid).unwrap();
+    fs::write(entry.join("rec/watchdog.pid"), format!("{pid} {start_id}\n")).unwrap();
+    assert!(cli::watchdog_alive(&entry));
+    let (before, status) = (parts(&entry), fs::read(cli::status_json(&entry)).unwrap());
+    assert_eq!(upload(dir.path(), &entry, false), Outcome::StillRecording);
+    assert!(fake.chunks().is_empty() && fake.heartbeats().is_empty());
+    assert_eq!(parts(&entry), before, "no part file changed");
+    assert_eq!(fs::read(cli::status_json(&entry)).unwrap(), status);
+}
+
+/// U8 on what a killed recorder leaves: a real recorder's entry folder copied while its frame is
+/// open past the last LINK, unsealed. It is closed `recovered` and sent whole, and the final
+/// heartbeat carries every request it wrote.
+#[test]
+fn a_killed_recorders_entry_is_closed_and_sent_whole() {
+    const CALLS: u64 = 3;
+    let live = entry_dir();
+    let rec = real(live.path());
+    for _ in 0..CALLS {
+        let flags = OpenFlags::POST | OpenFlags::DECRYPTED;
+        let mut h = rec.open(StreamKind::HttpReq, 0, 0, 0, flags, json!({}));
+        h.data(rec.now(), Bytes::from_static(b"{\"model\":\"m\"}"));
+        h.end(rec.now(), EndReason::Complete, None);
+    }
+    wait_settled(&rec, |c| c.http_post >= CALLS);
+    let fake = FakeWorker::start();
+    let dir = tempfile::tempdir().unwrap();
+    let entry = dir.path().join(ENTRY);
+    copy(live.path(), &entry);
+    serve(dir.path(), &fake, DEADLINE);
+    assert_eq!(upload(dir.path(), &entry, true), Outcome::Done);
+    let status: Status =
+        serde_json::from_slice(&fs::read(cli::status_json(&entry)).unwrap()).unwrap();
+    assert_eq!(status.seal.unwrap().reason, SealReason::Recovered);
+    let beats = fake.heartbeats();
+    assert_eq!(beats[0]["final"], true);
+    assert_eq!(beats[0]["counts"]["http_post"], CALLS);
+    assert_eq!(beats[0]["model_requests"], CALLS);
+    assert_eq!(
+        fake.stream(ENTRY),
+        parts(&entry).concat(),
+        "cat rec-*.gcr.zst"
+    );
+}
+
+/// Copies the files of `from` into `to`, skipping temp files a live writer may rename away.
+fn copy(from: &Path, to: &Path) {
+    fs::create_dir_all(to).unwrap();
+    for e in fs::read_dir(from).unwrap() {
+        let e = e.unwrap();
+        let name = e.file_name();
+        if name.to_string_lossy().starts_with('.') {
+            continue;
+        } else if e.file_type().unwrap().is_dir() {
+            copy(&e.path(), &to.join(&name));
+        } else {
+            fs::copy(e.path(), to.join(&name)).unwrap();
+        }
+    }
 }
 
 /// `upload.json` is a cache: with it lost, an entry the server holds sealed is confirmed from the

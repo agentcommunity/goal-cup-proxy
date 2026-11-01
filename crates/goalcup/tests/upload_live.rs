@@ -12,14 +12,12 @@ use common::worker::{CREDENTIAL, FakeWorker, RUN_ID};
 use goalcup::cli;
 use goalcup::pipeline::{EndReason, OpenFlags, StreamKind};
 use goalcup::upload::{UploadCtx, spawn, state};
-use goalcup_format::read::{part_files, read_index};
+use goalcup_format::Record;
+use goalcup_format::read::{Item, open_dir, part_files, read_index};
 use serde_json::json;
 use std::fs;
 use std::path::PathBuf;
 use std::time::Duration;
-
-/// The entry id `Recorder::real_for_tests` writes into its part headers.
-const ENTRY: &str = "e00000000000000a1";
 
 /// Model requests fed through the recorder.
 const CALLS: u64 = 3;
@@ -49,13 +47,22 @@ fn live_rounds_follow_the_durable_point() {
     }
     wait_settled(&rec, |c| c.http_post >= CALLS);
     let settled = rec.durable().borrow().point.clone().unwrap().line.raw_end;
+    // The entry id the recorder wrote into its first PART.
+    let first = open_dir(&entry.path().join("rec")).unwrap().next();
+    let id = match &first {
+        Some(Ok(Item {
+            rec: Record::Part { entry, .. },
+            ..
+        })) => entry.clone(),
+        _ => panic!("the first record is a PART: {first:?}"),
+    };
 
     let _h = spawn(UploadCtx {
         home: run.path().into(),
         run_dir: run.path().into(),
         entry_dir: entry.path().into(),
         run: RUN_ID.into(),
-        entry: ENTRY.into(),
+        entry: id.clone(),
         recorder: Some(rec.clone()),
         keep: true,
     });
@@ -95,7 +102,7 @@ fn live_rounds_follow_the_durable_point() {
         .collect();
     assert!(!want.is_empty());
     assert_eq!(
-        fake.stream(ENTRY),
+        fake.stream(&id),
         want,
         "the parts up to the durable point"
     );
@@ -104,11 +111,16 @@ fn live_rounds_follow_the_durable_point() {
         "no chunk starts at or past the durable point"
     );
 
-    // A beat from the live recorder's health says `ok`, with no more requests than were fed.
+    // Every call was durable before the uploader started, so every beat carries the totals at a
+    // durable LINK: all of them, never fewer. One beat says `ok` from the live recorder's health.
     let beats = fake.heartbeats();
-    let ok = beats.iter().find(|b| b["recording"] == "ok");
-    let ok = ok.unwrap_or_else(|| panic!("a beat says ok: {beats:?}"));
-    let posts = ok["counts"]["http_post"].as_u64().unwrap();
-    assert!(posts <= CALLS, "counts.http_post {posts} of {CALLS} fed");
-    assert!(ok["model_requests"].as_u64().unwrap() <= CALLS);
+    assert!(!beats.is_empty());
+    for b in &beats {
+        assert_eq!(b["counts"]["http_post"], CALLS, "{b}");
+        assert_eq!(b["model_requests"], CALLS, "{b}");
+    }
+    assert!(
+        beats.iter().any(|b| b["recording"] == "ok"),
+        "a beat says ok: {beats:?}"
+    );
 }

@@ -1,5 +1,5 @@
-//! `goalcup upload` (PRD-06 section 9): sends what is left of one sealed entry by hand, in the
-//! wrap-up's order (final heartbeat, chunks, the final again until sealed), then prunes. It gives
+//! `goalcup upload` (PRD-06 section 9): closes a dead entry with the `recovered` seal (PRD-02 9.4)
+//! and sends what is left of one sealed entry by hand, in the wrap-up's order (final heartbeat, chunks, the final again until sealed), then prunes. It gives
 //! up only on 401, 404, 410 or `stuck`; a network or server failure waits on section 5's backoff,
 //! with no cap of ours. The words are PRD-10's; [`run`] returns the facts. The same step, one
 //! entry round, serves the upload thread's [`Queue`] of older sealed entries (section 1).
@@ -31,9 +31,11 @@ pub enum Outcome {
     Done,
     /// The server already held it, sealed: nothing was sent.
     AlreadyThere,
-    /// A recorder holds `rec/lock`: the entry sends itself.
+    /// A recorder holds `rec/lock`, or the entry's watchdog lives (it boots the next recorder):
+    /// the entry sends itself.
     StillRecording,
-    /// The dead-entry close failed (an I/O error, in `goalcup.log`).
+    /// The entry has no seal to send with: the dead-entry close failed (`close_dead_entry` writes
+    /// its I/O error to `goalcup.log`), or it found the entry sealed but left no seal LINK.
     NotClosed,
     /// The run has no server.
     Local,
@@ -51,8 +53,9 @@ pub enum Outcome {
 /// recorder holds `rec/lock`, checked before `upload.lock` and on every 1 s tick spent waiting for
 /// another uploader to let `upload.lock` go. An entry is sealed when `status.json` says `sealed`
 /// with its seal, or `upload.json` says the server sealed it. Only an entry with no seal anywhere
-/// is handed to `pipeline::close_dead_entry` (section 9 step 2), under `upload.lock`, and then
-/// sent with the `recovered` seal; a failed close is `NotClosed`. A sealed entry with nothing left
+/// and no live watchdog is handed to `pipeline::close_dead_entry` (section 9 step 2), under
+/// `upload.lock`, and then sent with the `recovered` seal; a failed close is `NotClosed`. A live
+/// watchdog leaves `rec/lock` unheld between boots, so it alone says `StillRecording` there. A sealed entry with nothing left
 /// on disk to check against (every part pruned and `upload.json` lost) is decided by the server:
 /// `AlreadyThere` when it holds the entry sealed, `Stuck` otherwise.
 pub fn run(entry_dir: &Path, run_dir: &Path, ids: (&str, &str), keep: bool) -> Outcome {
@@ -72,7 +75,12 @@ pub fn run(entry_dir: &Path, run_dir: &Path, ids: (&str, &str), keep: bool) -> O
     let stored = old.final_ == Final::Sealed;
     let (mut status, mut closed) = (sealed(entry_dir), None);
     if status.is_none() && !stored {
-        // No seal anywhere: the entry is dead, closed here while `upload.lock` is held.
+        // No seal anywhere and no watchdog to boot another recorder: the entry is dead, closed
+        // here while `upload.lock` is held. A live watchdog may be between boots (its restart
+        // spacing holds a boot back up to 30 s); closing then would seal the live entry for good.
+        if cli::watchdog_alive(entry_dir) {
+            return Outcome::StillRecording;
+        }
         match pipeline::close_dead_entry(entry_dir) {
             Err(_) => return Outcome::StillRecording,
             Ok(pipeline::Closed::Sealed(f)) => closed = Some(f),
