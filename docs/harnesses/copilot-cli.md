@@ -1,6 +1,6 @@
 # GitHub Copilot CLI harness facts
 
-Connector id: `copilot-cli` · Facts for version: `1.0.105` · Written by: Goal Cup team · Last checked: 2026-10-31
+Connector id: `copilot-cli` · Facts for version: `1.0.105` · Written by: Goal Cup team · Last checked: 2026-11-01
 Public disclosure: yes. Facts come from GitHub's public Copilot CLI docs, its public changelog and strings in the shipped package. No keys, tokens, account names or personal paths are included.
 Status: shipped connector ([`connectors/copilot-cli.toml`](../../connectors/copilot-cli.toml))
 
@@ -36,7 +36,7 @@ All from the [config directory reference](https://docs.github.com/en/copilot/ref
 
 - GitHub sign-in, or bring your own key with no GitHub login: "If you use your own LLM provider API keys (BYOK), GitHub authentication is not required"; without a login `/delegate` and the GitHub MCP server are unavailable ([docs](https://docs.github.com/en/copilot/how-tos/copilot-cli/set-up-copilot-cli/authenticate-copilot-cli)). Tokens come from `COPILOT_GITHUB_TOKEN`, `GH_TOKEN` or `GITHUB_TOKEN`, in that order.
 - Does the harness have a variable that moves its config and login? Yes, `COPILOT_HOME`; the connector sets it.
-- `COPILOT_OFFLINE=true` stops contact with GitHub's servers ([docs](https://docs.github.com/en/copilot/how-tos/copilot-cli/customize-copilot/use-byok-models)). The connector does not set it; that is the participant's choice.
+- Rung 1 ran with a DeepSeek bring-your-own-key provider and `COPILOT_OFFLINE=true`, with no GitHub login. `COPILOT_OFFLINE=true` stops contact with GitHub's servers ([docs](https://docs.github.com/en/copilot/how-tos/copilot-cli/customize-copilot/use-byok-models)) and, per `copilot help environment` on 1.0.105, "Requires a local model provider (COPILOT_PROVIDER_BASE_URL)". The other variables there are `COPILOT_PROVIDER_BASE_URL` (an Anthropic-format endpoint for DeepSeek), `COPILOT_PROVIDER_TYPE` (`openai`, `azure` or `anthropic`) and `COPILOT_PROVIDER_API_KEY`. They stay with the participant; the connector sets none of them.
 
 ## 6. Network
 
