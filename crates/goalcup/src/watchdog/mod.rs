@@ -4,13 +4,16 @@
 //!
 //! Here: the control lines (S8) and the start facts (S17), [`run`] with the restart loop, null
 //! mode ([`Loop`], ledger R3a), the deadline and the server word, the terminal [`shield`], and
-//! what the watchdog binds, [`spawn`]s and ends. `recover` comes in the next slice.
+//! what the watchdog binds, [`spawn`]s and ends, and [`recover`] (section 8.1).
 
+mod recover;
 pub mod shield;
 pub mod spawn;
 
+pub use recover::{NotRecovered, Recovered, recover, recover_with};
+
 use crate::cli::log::{Fact, line};
-use crate::cli::{ServerJson, proc_start_id, read_json, server_json, status_json};
+use crate::cli::{self, ServerJson, proc_start_id, read_json, server_json, status_json};
 use crate::connector::{ConnectorRef, HostList, LaunchPlan, MaskRule, NativeSources};
 use crate::mask::SecretValue;
 use crate::pipeline::clock::{self, Mono};
@@ -313,7 +316,6 @@ pub fn run_with(mut plan: LaunchPlan, mut facts: StartFacts, recorder_exe: &Path
             return failed("recorder_spawn");
         }
     };
-    let mut boots = 1u64;
     if let Err(code) = boot.wait_ready() {
         remove_key(&rec);
         if code == Some(i32::from(MASK_REFUSED)) {
@@ -335,21 +337,13 @@ pub fn run_with(mut plan: LaunchPlan, mut facts: StartFacts, recorder_exe: &Path
     }
     // A harness ended in raw mode would leave the participant's shell typing blind.
     let modes = shield::Modes::save(libc::STDIN_FILENO);
-    let harness = spawn::harness(&plan.program, &plan.argv, &plan.env, None);
     let mut shield = None;
-    let mut harness_pid = None;
-    let mut exit: Option<Option<ExitStatus>> = None;
-    match harness {
+    let harness_pid = match spawn::harness(&plan.program, &plan.argv, &plan.env, None) {
         Ok(child) => {
             let pid = child.id();
             shield = Shield::take().ok();
-            let zero = libc::rlimit {
-                rlim_cur: 0,
-                rlim_max: 0,
-            };
-            // SAFETY: `setrlimit` only reads the struct. After the spawn, so the harness keeps its
-            // own core limit.
-            unsafe { libc::setrlimit(libc::RLIMIT_CORE, &zero) };
+            // After the spawn, so the harness keeps its own core limit.
+            no_core();
             let launched = HarnessFacts {
                 pid,
                 program: plan.program.display().to_string(),
@@ -358,22 +352,51 @@ pub fn run_with(mut plan: LaunchPlan, mut facts: StartFacts, recorder_exe: &Path
             };
             boot.send(&ToRecorder::Launch(launched.clone()));
             facts.harness = Some(launched);
-            harness_pid = Some(pid);
+            Some(pid)
         }
         Err(e) => {
             line(&dir, "harness_failed", &[("io", Fact::Io(e.kind()))]);
-            exit = Some(None);
+            None
         }
+    };
+    let start = (recorder_exe, &listener, &recorder_pid);
+    let exit = watch(boot, facts, Some((&plan, modes.as_ref())), start, harness_pid);
+    if let Some(shield) = shield.as_mut()
+        && !shield.harness_exited()
+    {
+        line(&dir, "shield_undrained", &[]);
     }
+    drop(plan);
+    match exit.flatten() {
+        Some(status) => ExitCode::from(code_of(status)),
+        None => ExitCode::from(NOT_STARTED),
+    }
+}
+
+/// The watchdog loop (section 8 steps 8 to 11), one code path for [`run_with`] and [`recover`]:
+/// the restart loop and null mode (R3a), the control lines, the deadline, the server word,
+/// `goalcup seal`, and an unanswered `exit` or `seal` sent again after `ready`. `own` is the plan
+/// and terminal modes of a harness the loop started (`plan.after`, the tree end, `outlived`);
+/// with None (recover) the harness is watched by pid and start id each tick and never touched:
+/// on its exit `exit` (null) and `seal harness_exit`; at the deadline, on SIGUSR1 and on any
+/// server stop a seal with that reason, the harness left running. Returns how a harness of its
+/// own ended.
+fn watch(
+    mut boot: Boot,
+    mut facts: StartFacts,
+    own: Option<(&LaunchPlan, Option<&shield::Modes>)>,
+    (recorder_exe, listener, recorder_pid): (&Path, &TcpListener, &Arc<Mutex<u32>>),
+    mut harness_pid: Option<u32>,
+) -> Option<Option<ExitStatus>> {
+    let dir = facts.entry_dir.clone();
+    let mut boots = 1u64;
+    let mut exit: Option<Option<ExitStatus>> = harness_pid.is_none().then_some(None);
     let harness_start = facts.harness.as_ref().map_or(0, |h| h.start_id);
     // Converted once to boot time; only a server word moves it (PRD-17 S7).
     let wall_ms = clock::wall_ns() / 1_000_000;
     let mut deadline = (facts.deadline).map(|d| due(Mono::now(), d.saturating_sub(wall_ms)));
-    let spare = {
-        let recorder_pid = Arc::clone(&recorder_pid);
-        move |pid: u32| pid == *lock(&recorder_pid)
-    };
-
+    let spared = Arc::clone(recorder_pid);
+    let spare = move |pid: u32| pid == *lock(&spared);
     let mut ending: Option<JoinHandle<()>> = None;
     let mut after: Option<JoinHandle<()>> = None;
     let mut exit_line: Option<ToRecorder> = None;
@@ -430,16 +453,21 @@ pub fn run_with(mut plan: LaunchPlan, mut facts: StartFacts, recorder_exe: &Path
         };
         if let Some(reason) = end
             && ending.is_none()
+            && asked.is_none_or(|_| own.is_some())
             && let (Some(pid), Some(h)) = (harness_pid, &facts.harness)
         {
             asked = Some(reason);
             let (target, spare) = ((pid, h.start_id), spare.clone());
-            ending = Some(thread::spawn(move || spawn::end_tree(target, &spare)));
+            ending = own.map(|_| thread::spawn(move || spawn::end_tree(target, &spare)));
         }
-        if let Some(status) = harness_pid.and_then(spawn::look) {
+        let gone = match own {
+            Some(_) => harness_pid.and_then(spawn::look),
+            None => harness_pid.filter(|p| !cli::alive(*p, harness_start)).map(|_| None),
+        };
+        if let Some(status) = gone {
             harness_pid = None;
             exit = Some(status);
-            if let Some(modes) = &modes {
+            if let Some((_, Some(modes))) = own {
                 let _ = modes.restore();
             }
         }
@@ -449,22 +477,25 @@ pub fn run_with(mut plan: LaunchPlan, mut facts: StartFacts, recorder_exe: &Path
             };
             boot.send(&l);
             exit_line = Some(l);
-            let (program, entries, env, dir) = (
-                plan.program.clone(),
-                plan.after.clone(),
-                plan.env.clone(),
-                dir.clone(),
-            );
-            after = Some(thread::spawn(move || {
-                spawn::helpers(&program, &entries, &env, spawn::BUDGET_NS, &dir, "after");
-            }));
+            if let Some((plan, _)) = own {
+                let (program, entries, env, dir) = (
+                    plan.program.clone(),
+                    plan.after.clone(),
+                    plan.env.clone(),
+                    dir.clone(),
+                );
+                after = Some(thread::spawn(move || {
+                    spawn::helpers(&program, &entries, &env, spawn::BUDGET_NS, &dir, "after");
+                }));
+            }
         }
-        let helpers_done = after.as_ref().is_some_and(JoinHandle::is_finished)
+        let helpers_done = exit_line.is_some()
+            && after.as_ref().is_none_or(JoinHandle::is_finished)
             && ending.as_ref().is_none_or(JoinHandle::is_finished);
-        if seal.is_none() && helpers_done {
+        if seal.is_none() && (helpers_done || own.is_none() && asked.is_some()) {
             let l = ToRecorder::Seal {
                 reason: asked.unwrap_or(SealReason::HarnessExit),
-                outlived: spawn::outlived(harness_start, &spare),
+                outlived: own.and_then(|_| spawn::outlived(harness_start, &spare)),
             };
             boot.send(&l);
             seal = Some(l);
@@ -512,7 +543,7 @@ pub fn run_with(mut plan: LaunchPlan, mut facts: StartFacts, recorder_exe: &Path
             (restarts.hold, left) = (None, false);
             let mut failed = false;
             boot = loop {
-                match Boot::start(recorder_exe, &listener, &facts, &recorder_pid, next_null) {
+                match Boot::start(recorder_exe, listener, &facts, recorder_pid, next_null) {
                     Ok(next) => break next,
                     Err(e) => {
                         if !failed {
@@ -530,16 +561,7 @@ pub fn run_with(mut plan: LaunchPlan, mut facts: StartFacts, recorder_exe: &Path
     for h in [ending, after].into_iter().flatten() {
         let _ = h.join();
     }
-    if let Some(shield) = shield.as_mut()
-        && !shield.harness_exited()
-    {
-        line(&dir, "shield_undrained", &[]);
-    }
-    drop(plan);
-    match exit.flatten() {
-        Some(status) => ExitCode::from(code_of(status)),
-        None => ExitCode::from(NOT_STARTED),
-    }
+    exit
 }
 
 /// A lock that a panic elsewhere never poisons for good: the data are plain values.
@@ -888,6 +910,16 @@ fn remove_key(rec: &Path) {
     let _ = fs::File::open(rec).and_then(|d| d.sync_all());
 }
 
+/// `RLIMIT_CORE` 0: no core file holds the CA key or the exact mask values.
+fn no_core() {
+    let zero = libc::rlimit {
+        rlim_cur: 0,
+        rlim_max: 0,
+    };
+    // SAFETY: `setrlimit` only reads the struct.
+    unsafe { libc::setrlimit(libc::RLIMIT_CORE, &zero) };
+}
+
 /// `PR_SET_DUMPABLE` 0 on Linux: the watchdog holds the CA key and the exact mask values.
 fn not_dumpable() {
     #[cfg(target_os = "linux")]
@@ -1031,39 +1063,6 @@ mod tests {
             longest = longest.max(line.len() + 1);
         }
         assert!(longest <= MAX_LINE, "{longest}");
-    }
-
-    /// The `prev` shapes the `recorder_down` GAP tail is written from (PRD-02 section 8).
-    #[test]
-    fn prev_json_shapes() {
-        let cases = [
-            (Prev::Exit(Exit::Code(75)), r#"{"code":75}"#),
-            (Prev::Exit(Exit::Signal(9)), r#"{"signal":9}"#),
-            (
-                Prev::Cause(Cause::WatchdogLost),
-                r#"{"cause":"watchdog_lost"}"#,
-            ),
-            (
-                Prev::Cause(Cause::NullMode {
-                    exits: 3,
-                    last: Some(Exit::Code(70)),
-                }),
-                r#"{"cause":"null_mode","exits":3,"last":{"code":70}}"#,
-            ),
-            (
-                Prev::Cause(Cause::NullMode {
-                    exits: 3,
-                    last: None,
-                }),
-                r#"{"cause":"null_mode","exits":3}"#,
-            ),
-        ];
-        for (prev, json) in cases {
-            assert_eq!(serde_json::to_string(&prev).unwrap(), json);
-            assert_eq!(serde_json::from_str::<Prev>(json).unwrap(), prev);
-        }
-        // A `null_mode` cause always counts its exits.
-        assert!(serde_json::from_str::<Prev>(r#"{"cause":"null_mode"}"#).is_err());
     }
 
     /// Ledger R3a: a null boot's space never puts the normal try after the wait's end; with a
