@@ -316,9 +316,9 @@ class CrashRows(unittest.TestCase):
     def test_gap_is_under_2s_and_ends_within_2s_of_the_kill(self):  # PRD-02 R1, PRD-12 section 3.1; a quiet kill times only the end
         def gap(start, end):
             return {"start": "2026-10-30T%sZ" % start, "end": "2026-10-30T%sZ" % end}
-        for start, end, quiet, fails in (("10:01:59", "10:02:01.2", False, False), ("10:01:00", "10:02:01.2", False, True),
-                                         ("10:01:00", "10:02:01.2", True, False), ("10:01:59", "10:02:02.5", False, True),
-                                         ("10:01:59", "10:02:02.5", True, True), ("10:01:00", "10:01:59", True, True)):
+        for start, end, quiet, fails in (("10:01:59.5", "10:02:01.2", False, False), ("10:01:00", "10:02:01.2", False, True),
+                                         ("10:01:00", "10:02:01.2", True, False), ("10:01:59.5", "10:02:02.5", False, True),
+                                         ("10:01:59.5", "10:02:02.5", True, True), ("10:01:00", "10:01:59", True, True)):
             self.assertEqual(self.row("kill-recorder", gap(start, end), quiet=quiet)["result"] == "FAIL", fails, (start, end, quiet))
 
     def test_dodger_progress_is_tunnel_connections(self):
