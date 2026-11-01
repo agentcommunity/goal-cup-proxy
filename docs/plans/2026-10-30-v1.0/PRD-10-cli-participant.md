@@ -1649,3 +1649,10 @@ The PRD-17 deletion gate (PRD-13) waits on tests that this PRD is asked to land 
 - **Nit B4 (carried to PRD-14):** `tests/cli_continue.rs` hand-rolls a one-shot HTTP server (about 53 lines) to read the continue body. Same cause as B1 above: the FakeWorker in `tests/common/` (PRD-14, PRD-08) does not record request bodies. When it does, this server and the `cli_approve.rs` spy both go.
 - **Nit B5 (accepted):** the `harness_version` `json!` line in `approve.rs` `begin()` runs past 100 columns; rustfmt does not touch `json!`. Left.
 - No seam change. No locked ledger item is touched.
+
+### 2026-11-01, amendment: end-screen and start wording from the full3 report (N2, N3, N4b)
+
+- **N3:** an off total under 1 s is not shown as "0 s". `span_words` says "under 1 s" below 1000 ms, so "Recording was off 2 times, under 1 s in total." Status and end screen share the helper.
+- **N4b:** when no model request was written and the closing counts name a tunnelled host whose `listed` reason is `pinned`, the first end-screen line is `No model request was written. The host list pins <host>, so its traffic passed through unread.` The guess "may not use the recording proxy" stays only when no pinned host is named.
+- **N2:** the "version could not be read" start/continue line is also written to `goalcup.log` (S11 `log::line`, event `version_unread`, fact: the harness name only), so it is on record when the harness clears the terminal.
+- **Integrator ruling OWN-7:** the same slice lets `goalcup-verify usage` (PRD-09 `usage/out.rs`) name a pinned or otherwise tunnelled model host as "not recorded on the wire" in its summary. No seam change; no locked ledger item is touched.
