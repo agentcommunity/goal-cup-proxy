@@ -82,7 +82,12 @@ fn requests(c: &Recount) -> u64 {
 /// The recount's `tunnel_hosts`, in the shape of the COUNT event and the seal's totals.
 fn tunnel_hosts(c: &Recount) -> Map<String, Value> {
     (c.tunnel.iter())
-        .map(|(h, (n, u, d, l))| (h.clone(), json!({"conns": n, "up": u, "down": d, "listed": l})))
+        .map(|(h, (n, u, d, l))| {
+            (
+                h.clone(),
+                json!({"conns": n, "up": u, "down": d, "listed": l}),
+            )
+        })
         .collect()
 }
 
