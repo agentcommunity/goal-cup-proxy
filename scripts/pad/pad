@@ -664,9 +664,6 @@ class Run:
         leaves the entry's rec/ to step_cleanup (keep_rec), which runs after a timeout too."""
         if self.s["server"] != "staging":
             return "skip", NEEDS_LATER
-        return self.fetch_entries(limit)  # a fetch that does not finish: cleanup keeps rec/ before the pad box goes
-
-    def fetch_entries(self, limit):
         new = self.meta.get("new_entry")
         entries = [str(self.meta.get("entry"))] + ([new] if new else [])  # kill-both: both
         for entry in entries:
@@ -674,11 +671,21 @@ class Run:
                 return "FAIL", NOT + "no entry id"
         if not os.environ.get("DATABASE_URL"):
             return "FAIL", NOT + "DATABASE_URL is not set"
+        fr = os.path.join(REPO, "scripts", "fetch-run.sh")
+        try:
+            texts = {"query.sql": fetch_block(fr, "SQL"), "conv.py": fetch_block(fr, "PY"), "install.sh": INDEX_INSTALL}
+        except Refused as e:
+            return "FAIL", NOT + str(e)
+        files = {}
+        for fname, text in texts.items():
+            files[fname] = os.path.join(self.tmp, "dbf-" + fname)
+            with open(files[fname], "w") as f:
+                f.write(text)
         for entry in entries:
             self.log("fetch-run " + entry)
             got = os.path.join(self.dir, "fetched", entry)
             index = os.path.join(self.dir, "fetched-index", entry + ".json")
-            why = self.fetch_index(entry, index, limit)
+            why = self.fetch_index(entry, index, files, limit)
             if why:
                 return "FAIL", why
             try:
@@ -697,7 +704,7 @@ class Run:
                 return "error", "fetched copy not copied in"
         return "ok", "fetched " + " and ".join(entries)
 
-    def fetch_index(self, entry, index, limit):
+    def fetch_index(self, entry, index, files, limit):
         """fetch-run.sh's DATABASE_URL converter and read-only query run in their own box (pad-dbf-*), whose only secret is
         ~/.dburl (0600, deleted by the script); the index (no secret in it) is copied to `index`. The box is removed
         whatever happens; one that will not go is named in the cleanup line. None when it worked, else the FAIL line."""
@@ -705,17 +712,9 @@ class Run:
 
         def ix(verb, *args, **kw):  # one sbx call on the index box, inside the step's limit
             return self.sbx(verb, *args, limit=max(1, deadline - time.time()), name=name, **kw)
-        fr = os.path.join(REPO, "scripts", "fetch-run.sh")
-        try:
-            texts = {"query.sql": fetch_block(fr, "SQL"), "conv.py": fetch_block(fr, "PY"), "install.sh": INDEX_INSTALL,
-                     "idx.sh": INDEX_QUERY % (entry, entry)}
-        except Refused as e:
-            return NOT + str(e)
-        files = {}
-        for fname, text in texts.items():
-            files[fname] = os.path.join(self.tmp, "dbf-" + fname)
-            with open(files[fname], "w") as f:
-                f.write(text)
+        files = dict(files, **{"idx.sh": os.path.join(self.tmp, "dbf-idx-%s.sh" % entry)})
+        with open(files["idx.sh"], "w") as f:
+            f.write(INDEX_QUERY % (entry, entry))
         try:
             r = ix("create", "--name", name, "--minutes", str(math.ceil(limit / 60) + 1), "--vcpus", "1")
             if r.returncode:
@@ -751,13 +750,19 @@ class Run:
     def keep_rec(self):
         """P0b: before the pad box goes, the entry's rec/ (the recorder's masked recording, less the run certificate key) is
         copied to rec-kept/<entry>/rec when the server copy was not fetched, so a refetch and a check can still finish C4.
-        Never raises, never changes a result; the cleanup line says how it went."""
+        Not kept unless the row's C3 scans (record, box output) ran and found no known value: a masking failure must not put
+        a raw key on the conductor. Never raises, never changes a result; the cleanup line says how it went."""
         if self.s["server"] != "staging":
             return
+        seen = [pc.Run(self.dir, {}).hits(n) for n in ("secrets", "secrets-out")]
+        why = None if seen == [0, 0] else "known value found by C3" if any(seen) else "no C3 result"
         for entry in [self.meta.get("entry"), self.meta.get("new_entry")]:
             if not entry or not re.fullmatch(r"e[0-9a-f]{16}", entry) or entry in self.fetched or entry in self.kept:
                 continue
             if self.s["where"] != "here" and not self.tried:
+                continue
+            if why:
+                self.kept[entry] = why
                 continue
             dest = os.path.join(self.dir, "rec-kept", entry)
             try:
@@ -814,33 +819,36 @@ class Run:
         self.row = result if result in ("PASS", "FAIL", "INCONCLUSIVE") else None
         return result, saw
 
-    def scan_out(self):
-        """Section 7 and C3: the conductor's scan of its run folder for the raw values of its own secrets (8
-        characters or more, as pad-run's forms), before the row. Only the count is written, for check.py."""
+    def scan_out(self, top=None, name="secrets-conductor.json"):
+        """Section 7 and C3: the conductor's scan of its run folder (or `top`) for the raw values of its own secrets (8
+        characters or more, as pad-run's forms). Only the count is written, to verify/<name>; check.py reads the default."""
         values, hits = [v.encode() for v in map(os.environ.get, NEVER_IN_BOX) if v and len(v) >= 8], 0
-        for root, _, files in os.walk(self.dir):
+        for root, _, files in os.walk(top or self.dir):
             for name in files:
                 with open(os.path.join(root, name), "rb") as f:
                     data = f.read()
                 hits += sum(data.count(v) for v in values)
         os.makedirs(os.path.join(self.dir, "verify"), exist_ok=True)
-        with open(os.path.join(self.dir, "verify", "secrets-conductor.json"), "w") as f:
+        with open(os.path.join(self.dir, "verify", name), "w") as f:
             json.dump({"hits": hits}, f)
+        return hits
 
     def step_cleanup(self):
         """Section 3.2: pad-run wipe, box removed by name, then a list to confirm. Never changes a result."""
         saw, third, loose = [], runner_limits(self.s)["wipe"], []
-        try:
-            self.keep_rec()  # a fetch that failed, timed out or never ran still keeps the recording
-            self.scan_out()  # the kept copy is in the run folder: C3's count covers it
-        except Exception as e:
-            saw.append("rec copy %s" % type(e).__name__)
-        saw += ["rec kept for %s" % k if v is True else "rec not kept for %s: %s" % (k, v) for k, v in self.kept.items()]
-        try:
+        try:  # the keys go first, then the recording is kept (the wipe leaves rec/ alone)
             result, wiped, _ = self.box("wipe", third) if self.tried or self.s["where"] == "here" and self.box_dir else ("ok", "")
             saw += [wiped if result == "ok" else "wipe %s: %s" % (result, wiped)] if wiped else []
         except Exception as e:
             saw.append("wipe %s" % type(e).__name__)
+        try:
+            self.keep_rec()  # a fetch that failed, timed out or never ran still keeps a clean recording
+            if any(v is True for v in self.kept.values()):  # scanned after the row: its count is verify/secrets-kept.json
+                if self.scan_out(os.path.join(self.dir, "rec-kept"), "secrets-kept.json"):
+                    saw.append("kept rec has a conductor secret value")
+        except Exception as e:
+            saw.append("rec copy %s" % type(e).__name__)
+        saw += ["rec kept for %s" % k if v is True else "rec not kept for %s: %s" % (k, v) for k, v in self.kept.items()]
         for n in self.stray:  # an index box whose rm in the fetch did not go: once more, and said either way
             try:
                 if self.sbx("rm", n, limit=third, name=n).returncode:

@@ -395,9 +395,11 @@ error in the rig, or an interrupt (a trap in `pad`). It does, and prints in its 
 - Box: `sandbox remove pad-<id>`. Backstops: every box is `--non-persistent` with a timeout of `minutes`
   plus 30, so a rig that dies still leaves no box with keys for long.
 - Failed fetch: when `fetch` fails, the pad first copies the entry's `rec/` out of the pad box to
-  `rec-kept/<entry>/` in the run folder (scanned by the conductor's scan like any copied file, and the cleanup always rescans) and only
-  then removes the box, so a later refetch can still finish C4 `server_equals_local`. A passing fetch
-  needs no such copy.
+  `rec-kept/<entry>/` in the run folder and only then removes the box, so a later refetch can still finish C4
+  `server_equals_local`. This runs in cleanup, after the key wipe and after the row: the copy is made only when the
+  row's C3 scans ran and found no known value (a masking failure never puts a raw key on the conductor), and the
+  cleanup line names the reason when it is not kept. The kept copy is scanned after the row, into
+  `verify/secrets-kept.json`; the row's own conductor count is not rewritten. A passing fetch needs no such copy.
 - Keys: the harness key, gateway key, push token, `.env.local`, `known-box` and the known-values files
   are already wiped in the box (section 3, 0:24 and 0:27); cleanup checks they are gone before it
   removes the box.

@@ -59,7 +59,7 @@ class Fetch(unittest.TestCase):
         r.tried, r.meta["entry"] = True, ENTRY
         return r
 
-    def go(self, *, env=SECRETS, cleanup=False, **kw):
+    def go(self, *, env=SECRETS, cleanup=False, c3=0, **kw):
         with tempfile.TemporaryDirectory() as out, mock.patch.dict(os.environ, env, clear=False), \
                 mock.patch.object(pad, "call", self.fake):
             if "DATABASE_URL" not in env:
@@ -70,6 +70,12 @@ class Fetch(unittest.TestCase):
             except subprocess.TimeoutExpired:
                 res = "timeout"
             if cleanup:
+                for n in ("secrets", "secrets-out"):  # the row's C3 scans, as check.py read them
+                    os.makedirs(os.path.join(r.dir, "verify"), exist_ok=True)
+                    with open(os.path.join(r.dir, "verify", n + ".json"), "w") as f:
+                        json.dump({"hits": c3 if c3 is not None else 0, "known_hits": 0}, f)
+                if c3 is None:
+                    shutil.rmtree(os.path.join(r.dir, "verify"))
                 r.step_cleanup()
             self.log = ""
             if os.path.exists(os.path.join(r.dir, "calls.log")):
@@ -131,6 +137,12 @@ class Fetch(unittest.TestCase):
         got = next(i for i, a in enumerate(calls) if a[0] == "get" and "rec-kept" in a[2])
         pad_rm = next(i for i, a in enumerate(calls) if a[0] == "rm" and not a[1].startswith("pad-dbf-"))
         self.assertLess(got, pad_rm)
+
+    def test_rec_is_not_kept_after_a_known_value_hit_or_without_a_c3_result(self):
+        self.hang_at = "sh"
+        for c3 in (1, None):
+            self.assertEqual(self.go(cleanup=True, c3=c3), "timeout")
+            self.assertFalse(self.kept)
 
     def test_timed_out_fetch_also_keeps_rec(self):
         self.hang_at = "sh"
