@@ -67,6 +67,8 @@ struct Conn {
     host: Option<String>,
     kind: Option<HostKind>,
     listed: bool,
+    /// The reason of a tunnel (`pinned`), `None` for a decoded connection.
+    tunnel: Option<String>,
 }
 
 struct Req {
@@ -204,7 +206,8 @@ impl Wire {
                 let listed = !m.get("listed").is_none_or(Value::is_null)
                     || s("kind").is_some()
                     || found.is_some();
-                self.conns.insert(k, Conn { host, kind, listed });
+                let tunnel = (s("mode") == Some("tunnel")).then(|| s("reason").unwrap_or("unknown").to_string());
+                self.conns.insert(k, Conn { host, kind, listed, tunnel });
             }
             StreamKind::HttpReq if s("method") == Some("POST") => {
                 let path = s("path").unwrap_or("").split('?').next().unwrap_or("");
@@ -499,6 +502,18 @@ impl Wire {
         if let Some(w) = ctx.wall(m.t1) {
             r.row.wall_end = Some(w);
         }
+    }
+
+    /// Listed hosts reached through a tunnel, as (host, reason, connections): the wire has none of
+    /// their calls. An unlisted tunnel is not a loss and is left out.
+    pub fn not_on_wire(&self) -> Vec<(String, String, u64)> {
+        let mut m: std::collections::BTreeMap<(String, String), u64> = Default::default();
+        for c in self.conns.values().filter(|c| c.listed) {
+            if let (Some(h), Some(r)) = (&c.host, &c.tunnel) {
+                *m.entry((h.clone(), r.clone())).or_default() += 1;
+            }
+        }
+        m.into_iter().map(|((h, r), n)| (h, r, n)).collect()
     }
 
     /// The rows in a stable order (boot, sid, msg), outcomes and `whole` decided, each with its

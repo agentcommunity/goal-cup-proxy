@@ -468,6 +468,30 @@ fn usage_files_repeat_and_add_up() {
     assert_eq!(kid["models"]["fake-http-a-dated"], 1);
 }
 
+/// OWN-7: a tunnelled listed host is named as not recorded on the wire; no wire call is invented,
+/// and an unlisted tunnel is not named.
+#[test]
+fn a_tunnelled_listed_host_is_named_not_on_the_wire() {
+    let mut e = Entry::new("u-tunnel");
+    e.event(json!({"ev": "launch", "pid": 4242, "program": "fake-harness"}));
+    let tunnel = |host: &str, listed: Value| {
+        json!({"host": host, "port": 443, "mode": "tunnel", "listed": listed,
+            "kind": if listed.is_null() { Value::Null } else { json!("provider") },
+            "reason": "pinned", "alpn": null, "tls": null, "fingerprint": "0123456789abcdef"})
+    };
+    e.open(StreamKind::Conn, 0, 0, tunnel("pinned.example.test", json!("shared")));
+    e.open(StreamKind::Conn, 0, 0, tunnel("other.example.test", Value::Null));
+    let ran = run_usage(&e.seal());
+    let sum = json(&ran.sum);
+    let named = sum["not_on_wire"].as_array().unwrap();
+    assert_eq!(named.len(), 1, "{named:?}");
+    assert_eq!(named[0]["host"], "pinned.example.test");
+    assert_eq!(named[0]["reason"], "pinned");
+    assert_eq!(named[0]["conns"], 1);
+    assert_eq!(named[0]["note"], "not recorded on the wire");
+    assert_eq!(sum["coverage"]["wire_calls"], 0);
+}
+
 /// Point 3 in the reader: a decode error partway through an entry still gives the summary of what
 /// came, marked `read_error` with a line on stderr, never a clean-looking partial count.
 #[test]
