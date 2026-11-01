@@ -95,10 +95,10 @@ fn setup(keep: bool) -> Dead {
         started: "2026-11-01T00:00:00Z".into(),
         start_id: proc_start_id(pid).unwrap(),
     };
-    let connector = json!({"id": "fake", "name": "Fake", "sha256": "0".repeat(64), "source": "builtin"});
     let mut facts: StartFacts = serde_json::from_value(json!({
         "run": run, "entry": entry, "segment": 0, "entry_dir": entry_dir, "deadline": null,
-        "server_time": null, "local_wall": 0, "workspace": tmp.path(), "connector": connector,
+        "server_time": null, "local_wall": 0, "workspace": tmp.path(),
+        "connector": {"id": "fake", "name": "Fake", "sha256": "0".repeat(64), "source": "builtin"},
         "harness_version": null, "keep": true, "build": null, "hosts": to_value(&hosts).unwrap(),
         "hosts_sha256": hosts.sha256(), "native": to_value(NativeSources::default()).unwrap(),
         "mask_rules": [], "values": [], "ca": ca.export(), "prev": null, "harness": null,

@@ -359,7 +359,8 @@ pub fn run_with(mut plan: LaunchPlan, mut facts: StartFacts, recorder_exe: &Path
             None
         }
     };
-    let (own, start) = (Some((&plan, modes.as_ref())), (recorder_exe, &listener, &recorder_pid));
+    let own = Some((&plan, modes.as_ref()));
+    let start = (recorder_exe, &listener, &recorder_pid);
     let exit = watch(boot, facts, own, start, harness_pid);
     if let Some(shield) = shield.as_mut()
         && !shield.harness_exited()
