@@ -5,15 +5,8 @@
 # Read from docs only, not run against a live harness: every key below. The providers.json shape (from the connector's
 # host hint providers.*.settings.baseUrl), the provider ids "openai" and "vercel-ai-gateway", the model ids, /exit, and
 # whether `hub dashboard` is the process `hub stop` ends.
-# Slice 13 (P6). Measured in the rung 1x run (REPORT item 8): Cline ignored the planted file and showed "Connect a model
-# provider to get started". Source read 1 Nov 2026 (docs.cline.bot did not resolve; docs only, not run): cline/cline
-# sdk/packages/shared/src/storage/paths.ts (the file is <CLINE_DATA_DIR>/settings/providers.json, so the path was right),
-# sdk/packages/core/src/types/provider-settings.ts (StoredProviderSettingsSchema needs "version": 1 and, per provider entry,
-# "updatedAt" as an ISO datetime; the file was unreadable without them and read as empty), sdk/packages/core/src/services/llms/
-# provider-settings.ts (settings: provider, model, baseUrl, apiKey optional), sdk/packages/shared/src/llms/gateway.ts (provider
-# ids "openai-compatible", "openai-native", "vercel-ai-gateway"), apps/cli/README.md (OPENAI_API_KEY and AI_GATEWAY_API_KEY).
-# Not settled by what was readable: whether provider "openai-compatible" reads its key from OPENAI_API_KEY (the README names
-# that variable for "-P openai"), and the gateway base URL, left to the provider default. The next rung run measures both.
+# Measured, not settled: Cline ignored an unreadable providers.json (it needs "version": 1 and per-entry "updatedAt").
+# Not settled: whether "openai-compatible" reads OPENAI_API_KEY, and the gateway base URL (the provider default).
 version = "3.0.74"
 version_cmd = "cline --version"
 install = "npm i -g cline@3.0.74"

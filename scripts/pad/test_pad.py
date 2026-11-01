@@ -432,24 +432,25 @@ class SecretCheck(unittest.TestCase):
     def test_known_value_hit_fails(self):
         self.assertEqual(self.c3(self.PLANTED, secrets_exit=2), "FAIL")
         self.assertEqual(self.c3(dict(self.PLANTED, jwt=0), secrets_exit=2), "FAIL")  # a hit in a kind with no MASK
+        self.assertEqual(self.c3(dict(self.PLANTED, jwt=0)), "INCONCLUSIVE")  # no hit, no MASK: not exercised
 
-    def test_kind_masked_upstream_is_not_a_fail(self):  # rung 1x item 3: the harness redacted it, nothing reached the wire raw
-        files = {"meta.json": {"connector": "codex-cli", "case": "direct", "known_box": True, "entry": "e1"},
-                 "verify/secrets.json": {"masks": dict(self.PLANTED, jwt=0)}, "verify/secrets-conductor.json": {"hits": 0},
-                 "verify/exits.json": {"secrets": 0, "secrets-out": 0, "secrets-plain": 0}}
-        got = evaluate(files)
-        self.assertEqual(got["checks"]["C3"], "PASS")
-        self.assertIn("masked upstream", json.dumps(got))
-        del files["verify/exits.json"]["secrets-out"]  # a missing scan stays inconclusive
+    FILES = {"meta.json": {"connector": "codex-cli", "case": "direct", "known_box": True, "entry": "e1"},
+             "verify/secrets-conductor.json": {"hits": 0},
+             "verify/exits.json": {"secrets": 0, "secrets-out": 0, "secrets-plain": 0}}
+
+    def test_kind_with_no_mask_and_no_hit_is_not_a_pass(self):  # a run never passes on a missing exercise
+        files = dict(self.FILES, **{"verify/secrets.json": {"masks": dict(self.PLANTED, jwt=0)}})
         self.assertEqual(evaluate(files)["checks"]["C3"], "INCONCLUSIVE")
 
-    def test_headerless_pem_body_is_masked_upstream(self):  # rung 1x item 4: the BEGIN line was rewritten, the body stayed
-        files = {"meta.json": {"connector": "codex-cli", "case": "direct", "known_box": True, "entry": "e1"},
-                 "verify/secrets.json": {"masks": dict(self.PLANTED, private_key=0), "hits": 4},
-                 "verify/secrets-pem.json": {"hits": 4}, "verify/secrets-conductor.json": {"hits": 0},
-                 "verify/exits.json": {"secrets": 2, "secrets-out": 0, "secrets-plain": 0, "secrets-pem": 2}}
-        self.assertEqual(evaluate(files)["checks"]["C3"], "PASS")
-        files["verify/secrets.json"]["hits"] = 5  # one more hit than the body lines: not only the body
+    def test_headerless_pem_body_is_a_fail(self):  # the body stayed on the wire raw: point 4, never a pass
+        files = dict(self.FILES, **{"verify/secrets.json": {"masks": dict(self.PLANTED, private_key=0), "hits": 4},
+                                    "verify/secrets-pem.json": {"hits": 4},
+                                    "verify/exits.json": {"secrets": 2, "secrets-out": 0, "secrets-plain": 0, "secrets-pem": 2}})
+        self.assertEqual(evaluate(files)["checks"]["C3"], "FAIL")
+
+    def test_known_value_on_a_pane_copy_fails(self):  # the rig's own replacement missed a value
+        files = dict(self.FILES, **{"verify/secrets.json": {"masks": self.PLANTED}, "verify/secrets-panes.json": {"known_hits": [{}]},
+                                    "verify/exits.json": {"secrets": 0, "secrets-out": 0, "secrets-plain": 0, "secrets-panes": 2}})
         self.assertEqual(evaluate(files)["checks"]["C3"], "FAIL")
 
     def test_conductor_scan_counts_its_own_secrets(self):  # section 7: the approval key in the run folder is a hit

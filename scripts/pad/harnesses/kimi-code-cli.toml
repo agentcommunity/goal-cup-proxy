@@ -5,14 +5,8 @@
 # with \n) in the 0600 key file; no snippet file holds a key.
 # Read from docs only, not run against a live harness: the install package pin, the config.toml shape (type
 # "openai_legacy", [models.*], default_model), the model id and /exit.
-# Slice 13 (P5). Measured in the rung 1x run (REPORT item 6): the folder-trust screen ("Trust and continue" / "Exit") eats the
-# paste, and Kimi refuses the config with 'Model "ds" must declare a wire protocol (config: models.<id>.protocol)'.
-# Source read 1 Nov 2026 (moonshotai.github.io did not resolve; docs only, not run): MoonshotAI/kimi-code
-# packages/agent-core-v2 llm-adapter/protocol/protocol.ts (ProtocolSchema: anthropic, openai, openai_responses, google-genai),
-# llm-adapter/model/model-auth.ts (a model's own protocol wins, else the provider type if it is a protocol, else the provider
-# definition), llm-adapter/provider/provider-definition.ts (type "openai" has base protocol openai; "openai_legacy" is not a
-# registered type there and appears only in the legacy migration fixtures). So the provider type is now "openai" and
-# models.ds.protocol is "openai" (chat completions). The next rung run measures it. No [gateway] table: no gateway page read, n/a.
+# Measured, not settled: the folder-trust screen eats the paste, and the config needs models.<id>.protocol ("openai" here).
+# No [gateway] table: no gateway page read, n/a.
 version = "2.4.1"
 version_cmd = "kimi --version"
 install = "npm i -g @moonshot-ai/kimi-code@2.4.1"

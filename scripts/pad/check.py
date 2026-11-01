@@ -433,18 +433,14 @@ def scan(r, name, where):
 
 def secrets(r):
     """C3. The known-value and shape scans ran in the box; only their counts reach this folder."""
-    # PEM body lines (rung 1x item 4): the model's own sed can rewrite the BEGIN line and leave the body on the wire. With no
-    # header no PRD-05 shape matches a body line, so goalcup could not have recognised it. The body lines are one unit with
-    # their BEGIN line: a body hit counts only when that line was seen unmasked (a shape hit, so the verifier's hits then
-    # exceed the body-line scan `secrets-pem`) or when the PEM was masked. Hits that all are body lines, with no
-    # private_key MASK, are 'masked upstream'.
-    pem = r.hits("secrets-pem") or 0
-    body = pem > 0 and r.hits("secrets") == pem and not (r.masks() or {}).get("private_key")
-    scans = [(n, w) for n, w in SCANS + ((("secrets-git", "the project's git objects"),) if r.meta.get("push") == "tested" else ())
-             if not (body and n == "secrets")]
-    for name, where in scans:
+    for name, where in SCANS + ((("secrets-git", "the project's git objects"),) if r.meta.get("push") == "tested" else ()):
         scan(r, name, where)
-    r.flag("secrets" in r.failed and not body, "C3", "FAIL", "secrets fail in the verifier report: %s" % r.failed.get("secrets"))
+    r.flag("secrets" in r.failed, "C3", "FAIL", "secrets fail in the verifier report: %s" % r.failed.get("secrets"))
+    # The pad's pane copies are scanned for known values only (a hit is a replacement miss in the rig); their shape hits are
+    # a harness screen echo, not a record, and are not read.
+    doc = load(r.folder, "verify/secrets-panes.json")
+    pane = count(doc.get("known_hits")) if isinstance(doc, dict) else (1 if r.exits.get("secrets-panes") == 2 else 0)
+    r.flag(pane, "C3", "FAIL", "%s known values on the pad's pane copies" % pane)
     r.flag(r.meta.get("known_box") is not True, "C3", "INCONCLUSIVE", "the run certificate key is not in the known values")
     # Section 5: the setup-check script printed .env.local. Its unmasked no-shape value (plain hits) or a
     # MASK of a planted value's own shape shows that output reached the model. Never any MASK: the
@@ -454,12 +450,13 @@ def secrets(r):
         return r.mark("C3", "INCONCLUSIVE", "no MASK counts by rule in verify/secrets.json")
     if not r.hits("secrets-plain") and not any(masks.get(kinds[0]) for kinds in PLANTED):
         return r.mark("C3", "INCONCLUSIVE", "secret exercise not done: no plain-value hit and no MASK of a planted shape")
-    # A planted kind with no MASK was redacted by the harness or the model before it reached the wire: nothing to mask.
-    # The evidence is the folder's: every known-value scan is 0 (a hit fails and a missing scan is inconclusive above).
-    clean = all(r.hits(n) == 0 for n, _ in scans)
+    # A planted kind with no MASK is a FAIL when a hit shows it reached the record, else not exercised (a run never passes on
+    # a missing exercise). All hits being PEM body lines with no header is a PRD-05 shape limit, named in the reason.
+    pem = r.hits("secrets-pem") or 0
+    limit = " (all hits are PEM body lines with no header: PRD-05 shape limit)" if pem and r.hits("secrets") == pem else ""
     for kinds in PLANTED:
-        if clean and not any(masks.get(k) for k in kinds):
-            r.mark("C3", "PASS", ("PEM body without header: " if body and kinds[0] == "private_key" else "") + "masked upstream: " + " or ".join(kinds))
+        r.flag(not any(masks.get(k) for k in kinds), "C3", "FAIL" if r.hits("secrets") else "INCONCLUSIVE",
+               "%s of %s: no MASK%s" % ("hits" if r.hits("secrets") else "not exercised", " or ".join(kinds), limit))
 
 def c6(r):
     st, final = r.status, dig(r.status, "s4_requests")

@@ -8,8 +8,8 @@ set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
 sbx() { node "$here/sbx.mjs" "$@"; }
 tmp=$(mktemp -d)
-id=""
-cleanup() { [ -n "$id" ] && sbx rm "$id" >/dev/null 2>&1; rm -rf "$tmp"; }
+box=""
+cleanup() { [ -n "$box" ] && sbx rm "$box" >/dev/null 2>&1; rm -rf "$tmp"; }
 trap cleanup EXIT
 
 # A top-level string field of a harness file (before its first [table]).
@@ -43,12 +43,12 @@ EOF
   echo 'rm -f /tmp/pad-install.log'
 } > "$tmp/user.sh"
 
-id=$(sbx create --name "pad-image-$(date -u +%Y%m%d%H%M)-$RANDOM" --minutes 120 | sed -nE 's/.*"name":"([^"]+)".*/\1/p')
-[ -n "$id" ] || { echo "image: no box" >&2; exit 1; }
-echo "image: box $id" >&2
-sbx exec "$id" --script "$tmp/root.sh" --sudo
-sbx exec "$id" --script "$tmp/user.sh"
-snap=$(sbx snapshot "$id" | sed -nE 's/.*"snapshot":"([^"]+)".*/\1/p')
+box=$(sbx create --name "pad-image-$(date -u +%Y%m%d%H%M)-$RANDOM" --minutes 120 | sed -nE 's/.*"name":"([^"]+)".*/\1/p')
+[ -n "$box" ] || { echo "image: no box" >&2; exit 1; }
+echo "image: box $box" >&2
+sbx exec "$box" --script "$tmp/root.sh" --sudo
+sbx exec "$box" --script "$tmp/user.sh"
+snap=$(sbx snapshot "$box" | sed -nE 's/.*"snapshot":"([^"]+)".*/\1/p')
 [ -n "$snap" ] || { echo "image: no snapshot id" >&2; exit 1; }
 echo "$snap" > "$here/image.id"
 echo "image: snapshot $snap written to scripts/pad/image.id"

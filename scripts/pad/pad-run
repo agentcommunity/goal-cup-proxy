@@ -411,7 +411,7 @@ class Run:
     def type_prompt(self):  # section 3, 0:04: the ready text, pre keys, the paste, the submit delay and Enter
         h, t = self.h, self.tmux
         ready = h.get("ready_text")
-        if not (ready and wait(lambda: ready in self.pane(False), 30, 2)):
+        if not (ready and wait(lambda: ready in self.pane(False), float(h.get("ready_wait", 30)), 2)):
             time.sleep(0 if ready else 30)
         self.seed()  # after the harness's ready text: the harness reads git state while it starts
         if h.get("pre_keys"):
@@ -973,6 +973,10 @@ class Run:
         if tool("goalcup-verify"):  # last, whatever happened above (it needs no entry): every file the tar carries
             exits["secrets-out"] = self.verify_cmd(["secrets", "--known", "known"] + self.out_paths(),
                                                    "secrets-out.json")[0]
+            panes = glob.glob(self.path("watch", "pane-*.txt"))
+            if panes:  # the pad's screen copies: known values only (check.py), the shapes a model echoes are not the rig's
+                exits["secrets-panes"] = self.verify_cmd(["secrets", "--known", "known"] + [os.path.relpath(p, self.run) for p in panes],
+                                                         "secrets-panes.json")[0]
         if result is None:
             result = ("ok", "exits " + ", ".join("%s %s" % kv for kv in exits.items()) + note)
         write(self.path("verify", "exits.json"), json.dumps(exits), 0o644)  # the exits of whatever ran
@@ -985,9 +989,8 @@ class Run:
         return result
 
     def out_paths(self):
-        """What the secrets-out scan reads: the box's output files, but not the pad's own screen copies (watch/pane-*.txt).
-        Those are the pad's copy of the harness screen, never recorded or uploaded by goalcup; the shapes a model echoes
-        there are goalcup's masker limit (PRD-05, a known limit), not the rig's. Its record, upload and verify folders stay."""
+        """What the secrets-out scan reads: the box's output files, but not the pad's own screen copies (watch/pane-*.txt),
+        which get their own known-values-only scan (secrets-panes): the shapes a model echoes there are not the rig's."""
         out = []
         for n in OUT:
             if os.path.isdir(self.path(n)):
