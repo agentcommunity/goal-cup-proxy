@@ -1652,9 +1652,17 @@ to PRD-06 slice 7 once `dead.rs` is on integration. No locked ledger item is tou
   its own test binary, and `tests/common/` stays PRD-14's. The PRD-00 replan reads the PRD-02 row as
   `tests/watchdog_*`.
 - **Recover's first boot (review X R1):** a recorder that gives no `ready` within the 10 s wait is not
-  ended under `goalcup recover`. The new watchdog reports 0 (PRD-10 shows `NoReady`) and still watches
-  that boot, so the restart loop and null mode (R3a) take over, as for any boot after a kill. The
-  caller's report wait is the ready wait plus 2 s.
+  ended under `goalcup recover`. The new watchdog writes report byte 2 (late) for a boot that is slow
+  or ended at boot, and still watches it, so the restart loop and null mode (R3a) take over, as for
+  any boot after a kill. Recover then returns `Ok(Recovered { port, late: true })`: the watchdog runs
+  and the recorder comes back through the restart loop or null mode, which PRD-10 words apart from
+  plain success. Byte 1 is `late: false`. Byte 0, no byte, or the watchdog gone before it reported is
+  `NotRecovered::NotStarted` (renamed from `NoReady`): nothing runs. The full set is `Sealed`,
+  `WatchdogAlive`, `RecordingOn`, `HarnessGone`, `KeyMissing`, `PortTaken`, `NotStarted`. The
+  caller's report wait is the ready wait plus 2 s; past it, a watchdog whose pid file names a live
+  process counts as late. A watchdog that could not write its pid file (it logs
+  `watchdog_pid_failed` and records on) and is also slow to report reads as `NotStarted` while it
+  records; this is accepted as rare (the pid file is the first write into `rec/`).
 - Still owed in slice C part 2: the exit-74 L-FW2 case, native cursor resume after a kill, a server
   stop after the watchdog's EOF, `pipeline_stall.rs`, `by_hand_load`, the mask pool decision and
   `SnapshotCursor.fid` with PRD-04.

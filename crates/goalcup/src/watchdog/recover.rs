@@ -14,6 +14,7 @@ use std::fs::{self, TryLockError};
 use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::os::unix::net::UnixStream;
+use std::os::unix::process::ExitStatusExt;
 use std::path::Path;
 use std::process::ExitCode;
 use std::sync::{Arc, Mutex};
@@ -47,7 +48,8 @@ pub enum NotRecovered {
     /// The port in `status.json` is unknown (missing or 0) or another program holds it.
     PortTaken,
     /// No new watchdog runs: it or its recorder could not be started, or it ended before it
-    /// reported.
+    /// reported. One narrow case reads so while a watchdog records: it could not write its pid
+    /// file (it logs `watchdog_pid_failed` and goes on) and its report came after the wait.
     NotStarted,
 }
 
@@ -154,12 +156,18 @@ pub(crate) fn run(facts: StartFacts, listener: TcpListener, mut report: UnixStre
     let ready = boot.wait_ready(false);
     let _ = report.write_all(&[if ready.is_ok() { READY } else { LATE }]);
     drop(report);
-    // A recorder that ended at boot is logged with its code, not as late.
-    let code = |c: i32| Fact::N(u64::from(c.unsigned_abs()));
+    // A recorder that ended at boot is logged with its code or signal, not as late.
+    let n = |c: i32| Fact::N(u64::from(c.unsigned_abs()));
     let facts_line = match ready {
         Ok(()) => vec![],
-        Err(None) => vec![("ready", Fact::Word("late"))],
-        Err(Some(c)) => vec![("ready", Fact::Word("ended")), ("code", code(c))],
+        Err(Some(c)) => vec![("ready", Fact::Word("ended")), ("code", n(c))],
+        Err(None) => match boot.child.try_wait() {
+            Ok(Some(st)) => match st.signal() {
+                Some(sig) => vec![("ready", Fact::Word("ended")), ("signal", n(sig))],
+                None => vec![("ready", Fact::Word("ended"))],
+            },
+            _ => vec![("ready", Fact::Word("late"))],
+        },
     };
     line(&dir, "watchdog_recovered", &facts_line);
     let pid = facts.harness.as_ref().map(|h| h.pid);
