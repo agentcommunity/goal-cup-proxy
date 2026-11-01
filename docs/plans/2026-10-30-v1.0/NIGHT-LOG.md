@@ -3081,3 +3081,87 @@ Keys (checked 2026-10-30 at session start; names only, no values):
 02:25Z RUNG 1 PASSES on integration 8dc99969 (Codex micro/smoke exact; Claude smoke all PASS; Claude micro one C3 false positive on a '…[redacted]…' PEM echo). 0 key fragments in outputs. Rung 2 blocked: (1) pad HTTP sends Python-urllib UA, Cloudflare edge 1010 -> PRD-12 RIG-5; (2) Worker requires repo_url for test runs while CLI and rig send none -> conductor decision: Worker accepts null repo_url for mode test only (PRD-07 lane, then staging redeploy); (3) fetch-run with read-only DATABASE_URL is allowed in the conductor per BUILD-PROMPT (rung agent had withheld it). PRD-07, PRD-12, PRD-08 fix lanes started. 4 staging device requests left without runs (staging only).
 02:25Z | upload reviewer PRD-06 | stop | slice 7 review done: 1 blocker (close while watchdog lives), fixes on NotClosed wording and live count check; box tests and stress passed
 02:25Z | upload fixer PRD-06 | start | fixing slice 7 review findings at 42b52e64
+02:26Z | pad planner PRD-12 | decision | slice 12 planned: rung 2 rig faults RIG-5 user agent and plain error body, RIG-6 stop at once when start exits, RIG-7 DATABASE_URL only to fetch-run (already so in code, document and prove)
+02:26Z | server planner PRD-07 | decision | next slice: open accepts repo_url null (or absent) for mode test only, stored as empty string (runs.repo_url is NOT NULL in the website db); GitHub checks skipped for that run; UPLOAD-API test-runs paragraph; branch v1.0/prd-07-worker merged with integration and pushed
+02:26Z | verify planner PRD-08 | decision | next slice: C3 placeholder ellipsis fix, one task; prd-08-verify merged with integration
+02:27Z | core builder PRD-02 | seam | PRD-10 slice 11: watchdog::recover(entry_dir: &Path, facts: StartFacts) -> Result<Recovered { port: u16 }, NotRecovered>, NotRecovered = RecordingOn | HarnessGone | KeyMissing | PortTaken | NoReady; recover_with(entry_dir, facts, recorder_exe) for tests; the caller must start no thread before calling (it forks); facts.harness must be Some (pid, start_id)
+02:27Z | core builder PRD-02 | decision | recover: missing run-ca.pem or a key that does not import reads KeyMissing; an unknown or zero port in status.json reads PortTaken; sealed/sealing status.json is not refused here (PRD-10 may check it)
+02:27Z | core builder PRD-02 | stop | recover pushed on v1.0/prd-02-core-recover; box fmt, clippy -D warnings, nextest watchdog_* 23/23 green
+02:27Z | pad rig-7-prd-doc PRD-12 | seam | doc note and section 7 fetch credential rule pushed
+02:27Z | server builder PRD-07 | start | slice 5 test run null repo
+02:28Z | core builder PRD-02 | start | size-cuts task on v1.0/prd-02-core-size-cuts
+02:28Z | pad rig-5-6-7-code PRD-12 | fix | RIG-5/6/7 pushed, 38 pad tests green in box
+02:28Z | pad merger PRD-12 | start | merging integration and task branches
+02:28Z | server builder PRD-07 | stop | slice 5 pushed v1.0/prd-07-worker-test-run-null-repo, box npm test 258/258 pass
+02:28Z | upload fixer PRD-06 | fix | goalcup upload never closes an entry whose watchdog lives (cli::watchdog_alive answers StillRecording); live case asserts exact counts
+02:28Z | upload fixer PRD-06 | seam | ask to PRD-10: Outcome::NotClosed now means the dead-entry close failed (io kind in goalcup.log, line close_dead_entry) or a sealed entry left no seal LINK; text::upload_outcome maps it to seal_not_running ("run goalcup continue"), which repeats the same close. Please map NotClosed to a line such as: This part could not be closed; the reason is in goalcup.log. Nothing was sent. The enum shape is unchanged so text.rs still compiles
+02:28Z | verify c3-ellipsis PRD-08 | fix | C3 ellipsis around placeholder accepted, pushed v1.0/prd-08-verify-c3-ellipsis
+02:29Z | verify merger PRD-08 | stop | lane merge pushed, box build+clippy+92 tests pass
+02:30Z | pad merger PRD-12 | stop | merged integration plus 2 task branches, box green, pushed
+02:30Z | server merger PRD-07 | stop | merged test-run-null-repo (ff), box typecheck+258 tests pass, pushed
+02:31Z | server reviewer-A PRD-07 | decision | slice 5 (test-mode null repo_url) reviewed: no blockers, worker tests 258/258 pass in box at ac2b5a7d
+02:31Z | verify fixer PRD-08 | start | fixing A1 placeholder escaped ellipsis
+02:32Z | core builder PRD-02 | stop | watchdog_restart.rs pushed on v1.0/prd-02-core-watchdog-restart-test da7ee008; box fmt, clippy, nextest x3 green; file 242 lines, over the ~160 target
+02:32Z | pad fixer PRD-12 | fix | A1 A2 B1 B2 B4 done, 38 tests green, pushed
+02:32Z | upload fixer PRD-06 | stop | pushed d41327e4: watchdog blocker fixed, live counts exact, U8 on a real recorder copy; box fmt+clippy clean, 72 tests pass, live+manual x5 green; NotClosed wording asked of PRD-10
+02:32Z | verify fixer PRD-08 | fix | A1 escaped ellipsis token added, 92 tests green, pushed
+02:32Z | verify merge-requester PRD-08 | seam | queued 023258-prd-08-verify (C3 placeholder fix)
+02:33Z | docs merger PRD-17 | stop | merged integration + md-upkeep-3, box green, pushed
+02:33Z | server merge-requester PRD-07 | seam | queued 023350-prd-07-worker (repo_url optional for test mode)
+02:34Z | integrator merger v1.0/prd-08-verify | gate | v1.0/prd-08-verify on 6d486136: gate fast: FAIL (log /root/gc-night/gate-logs/v1.0_prd-08-verify-0233.log)
+02:34Z | pad fixer PRD-12 | fix | A4 R1 R2 fixed, 38 tests green in box, pushed
+02:35Z | core builder PRD-02 | decision | size-cuts: handle.rs inline tests deleted (covered by pipeline_seal/pipeline_guard); tiny-pieces and drop-racing-the-stop moved to tests/pipeline_guard.rs on the real pipeline; counts.rs boots/recount logic left untouched
+02:35Z | upload breaker PRD-06 | start | breaker re-review of slice 7 at d41327e4; box stress job
+02:36Z | pad fixer PRD-12 | fix | A5 dead pane ends server-off status wait; pushed
+02:36Z | pad PRD-12 PRD-12 | stop | PRD-12 PRD-12 slice 12: rung 2 rig faults. RIG-5 (approve() sends a named User-Agent on every pad HTTP call and reports a non-JSON error body plainly), RIG-6 (stop at once and report start-refused when goalcup start exits), RIG-7 (DATABASE_URL reaches only fetch-run on the conductor; prove it and document it). not merged: findings still open after the last review round: A6, A7, A5 (branch v1.0/prd-12-pad)
+02:37Z | pad fixer PRD-12 | fix | A6 start-refused raised with server off, A7 test
+02:38Z | core builder PRD-02 | stop | size-cuts pushed v1.0/prd-02-core-size-cuts 26f0a6d2; box: fmt, clippy test-hooks -D warnings, nextest pipeline_* + lessons_pipeline 32/32 green; src/pipeline+watchdog 8240 -> 7902 (-338); PRD-02 pipeline tests 2015 -> 1928 (-87, short of -300), with watchdog_* 3315 -> 3228
+02:38Z | integrator merger v1.0/prd-07-worker | gate | gate fast: PASS in 250s on merge da6d79e3 (log /root/gc-night/gate-logs/v1.0_prd-07-worker-0234.log)
+02:38Z | integrator merger v1.0/prd-07-worker | merge | v1.0/prd-07-worker into v1.0/integration as da6d79e3: PRD-07 slice 5: repo_url optional for test mode runs
+02:38Z | pad merge-requester PRD-12 | seam | queued merge request 023858-prd-12-pad (slice 12, no Cargo.toml change)
+02:39Z | server replan PRD-07 | amendment | notes after slice 5 on PRD-07, PRD-10 (CLI sends null repo for start --test), PRD-16 (size src 3566/3440, tests 5380/4950, under 10%)
+02:40Z PRD-07 slice 5 merged da6d79e3 (test runs may open with no repo_url). Staging redeployed from integration e626de8f (bundle built in a box), version 4ab8925f; production deployments unchanged, production approve route 404.
+02:41Z | upload breaker PRD-06 | stop | slice 7 re-check: watchdog fix holds; new blocker, manual upload seals a dead entry whose harness still runs (recover then refuses); 200x1.5MB mid-burst close ok
+02:42Z | core merger PRD-02 | stop | joined integration + 4 task branches clean; box build/clippy/nextest 589 pass; pushed
+02:42Z | upload fixer PRD-06 | start | fixing review findings BR1, BR2, B6
+02:43Z | upload fixer PRD-06 | fix | BR1: goalcup upload no longer closes an unsealed entry whose harness lives (status.json harness pid and start_id); it answers StillRecording, leaving it for goalcup recover
+02:43Z | upload fixer PRD-06 | seam | ask PRD-10: a live-harness dead entry answers StillRecording, whose text says it sends itself; a distinct outcome pointing to goalcup recover would need text.rs and cli/upload.rs changes (PRD-10 files)
+02:43Z | upload fixer PRD-06 | seam | ask PRD-02 (A5, BR3): watchdog writes rec/watchdog.pid after make_rec and goes on when write_pid fails; write the pid first or treat a failed write as fatal
+02:46Z | docs fixer PRD-17 | fix | LESSONS.md review fixes pushed (docs only, no box run)
+02:47Z | integrator merger v1.0/prd-12-pad | gate | gate fast: PASS in 181s on merge 5aaf7f55 (log /root/gc-night/gate-logs/v1.0_prd-12-pad-0243.log)
+02:47Z | integrator merger v1.0/prd-12-pad | merge | v1.0/prd-12-pad into v1.0/integration as 5aaf7f55: PRD-12 slice 12: rung 2 rig faults RIG-5, RIG-6, RIG-7 (fix round for A6/A7)
+02:47Z | pad replan PRD-12 | amendment | slice 12 replan: size note in PRD-16 and PRD-12 entry, B1 nit only, no plan change
+02:48Z | core breaker PRD-02 | start | reviewing origin/v1.0/prd-02-core slice C part 1 at cdcd548f; box job running slice tests plus throwaway 40/200-stream burst, WebSocket and seal-mid stress
+02:48Z | docs fixer PRD-17 | fix | A6 A7 A8 B3 applied to LESSONS.md, pushed
+02:49Z | docs merge-requester PRD-17 | stop | queued 024900-prd-17-lessons
+02:51Z | integrator merger v1.0/prd-08-verify | gate | gate fast: PASS in 181s on merge 1455cd37 (log /root/gc-night/gate-logs/v1.0_prd-08-verify-0248.log)
+02:51Z | integrator merger v1.0/prd-08-verify | merge | v1.0/prd-08-verify into v1.0/integration as 1455cd37: PRD-08 slice 9: C3 placeholder with ellipses and case-insensitive brackets
+02:52Z merged: PRD-12 slice 12 5aaf7f55 (rung 2 rig fixes), PRD-08 slice 9 1455cd37 (after a conductor rustfmt fix to a test table; first gate failed only on cargo fmt). Rung 2 started against staging 4ab8925f, cap 4 USD.
+02:56Z | upload fixer PRD-06 | stop | pushed 4b150fed to v1.0/prd-06-upload; fmt, clippy, workspace nextest 595 passed in box
+02:57Z | docs replan PRD-17 | amendment | slice 7 replan: notes in PRD-17, PRD-16, PRD-02, PRD-10; lessons tests 4345 of 3000 unchanged; seven rows still wait on four PRD-02/PRD-10 guard names
+02:57Z | integrator merger v1.0/prd-17-lessons | gate | gate fast: PASS in 184s on merge 888cd0b1 (log /root/gc-night/gate-logs/v1.0_prd-17-lessons-0253.log)
+02:57Z | integrator merger v1.0/prd-17-lessons | merge | v1.0/prd-17-lessons into v1.0/integration as 888cd0b1: PRD-17 slice 7: LESSONS.md upkeep against new integration head
+02:58Z | docs planner PRD-15 | decision | slice 17: build-state notes and Not built yet marks against merged null mode and deadline end (PRD-02 d8cbed35)
+02:58Z | upload reviewer PRD-06 | start | breaker re-check of prd-06-upload slice 7 at 4b150fed
+02:59Z | docs builder PRD-15 | start | operating-upload-recheck
+02:59Z | docs builder PRD-15 | start | build-state-and-arch
+02:59Z | upload reviewer PRD-06 | stop | breaker re-check done; stress box had not returned, reported as not run
+03:00Z | docs builder PRD-15 | stop | pushed v1.0/prd-15-docs-build-state-null-mode; AGENTS.md unchanged (CI sentence already within 100 cols)
+03:00Z | docs builder PRD-15 | stop | operating-upload-recheck pushed
+03:01Z | upload fixer PRD-06 | start | fixing slice 7 re-review findings at 4b150fed (N1, F1, R1, R2; A1 stays a PRD-10 seam)
+03:01Z | upload fixer PRD-06 | seam | A1 still open for PRD-10: StillRecording also covers a dead entry whose harness lives (needs goalcup recover), and NotClosed maps to run goalcup continue; text.rs must word both before 1.0; this lane adds a variant in the same integration merge if PRD-10 wants one
+03:01Z | upload fixer PRD-06 | owner question | U8 procedure (PRD-12) must let the harness exit or kill it before goalcup upload; against a live harness upload answers StillRecording by design
+03:02Z | docs merger PRD-15 | stop | merged integration plus two task branches, box build/clippy/link check pass, pushed
+03:03Z | core breaker PRD-02 | stop | review of prd-02-core cdcd548f done: slice tests 49/49 pass, recover/restart/end 3x clean; throwaway 40/200-stream 1.5 MB burst, WebSocket, held-writer, seal-mid and real-mask stress lost no byte without a GAP, counts equal recount, calls under 9 ms, peak held at guard; no blockers, fixes on deleted point tests, recover/restart acceptance gaps and fork precondition
+03:04Z | core fixer PRD-02 | start | fixing review findings A1-A10 B1-B9 F1-F5 N1-N6
+03:04Z | docs fixer PRD-15 | fix | restored UPLOAD-API.md to integration text, dropped OPERATING upload paragraph, tidied ARCHITECTURE not-built lines
+03:05Z | docs merge-requester PRD-15 | seam | queued 030509-prd-15-docs (slice 17, 3 docs files, no Cargo change)
+03:12Z | core fixer PRD-02 | decision | recover: no fork; the watchdog is the hidden recorder entry re-exec'd with a recover first line (main.rs untouched); helpers shared in tests/watchdog_share (tests/common is PRD-14's)
+03:12Z | core fixer PRD-02 | seam | S8: new control line ToRecorder::Recover(StartFacts), first line only, sent by recover_with; NotRecovered gains WatchdogAlive and Sealed (PRD-10 words them)
+03:12Z | core fixer PRD-02 | seam | ask PRD-14: add watchdog_recover, watchdog_restart, watchdog_end to the heavy test group in .config/nextest.toml (they kill processes and bind loopback ports)
+03:12Z | core fixer PRD-02 | decision | replan: watchdog_restart exit-74 case for L-FW2 (part file made unwritable, next gap cause code 74) deferred to slice C part 2 with pipeline_stall: an open part fd cannot be made to fail without a test hook; native cursor resume after a kill also there
+03:15Z call | W6 | network: this session reaches the outside only through an HTTPS CONNECT proxy, so psql cannot reach the Supabase pooler and fetch-run cannot read its read-only index. Uploads to staging complete for Claude Code and Codex (rung 2b, /root/gc-night/rung2b/REPORT.txt), but C4 (server copy) cannot be checked. The rules keep DATABASE_URL out of boxes, so no box can do it either. Owner options: allow a Postgres route from the conductor, or provide the index another way (e.g. a read-only index export). RIG-8 (paste wait) and RIG-9 (mask fetch error lines) sent to PRD-12.
+03:15Z | pad planner PRD-12 | decision | slice 13: RIG-8 paste waits for status.json recording, RIG-9 mask fetch credentials out of said(); one task; branch merged with integration and pushed
+03:15Z | upload fixer PRD-06 | stop | pushed 81215c0f: N1 comment, U8 amendment, R1 helper, R2 one status read; box fmt+clippy clean, workspace nextest 595 passed, upload_manual+upload_live x3 green; A1 left as PRD-10 seam
+03:17Z | integrator merger v1.0/prd-15-docs | gate | gate fast: PASS in 181s on merge ca62fa3f (log /root/gc-night/gate-logs/v1.0_prd-15-docs-0313.log)
+03:17Z | integrator merger v1.0/prd-15-docs | merge | v1.0/prd-15-docs into v1.0/integration as ca62fa3f: PRD-15 slice 17: remove stale not-built notes for deadline end, server stop word and null mode

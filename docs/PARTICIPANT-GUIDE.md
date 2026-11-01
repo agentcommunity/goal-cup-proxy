@@ -5,9 +5,7 @@ You give one coding agent one prompt, then leave it alone for 168 hours. Goal Cu
 record. This page takes you from install to the end of your run. The rules are in
 [RULES.md](RULES.md), and what the record holds is in [RECORD-FORMAT.md](RECORD-FORMAT.md).
 
-> **Build state.** `goalcup continue` and `goalcup recover` print "not built yet". The end at the
-> deadline and on the server's stop, and null mode, are not built yet either, so a practice run goes
-> on until you quit the harness or run `goalcup seal`.
+> **Build state.** `goalcup continue` and `goalcup recover` print "not built yet".
 
 ## What goalcup does for you
 
@@ -425,6 +423,9 @@ Also not recorded, or recorded less:
   recorded and its session files are not.
 - **A model server on this computer** (Ollama, LM Studio) is reached past the proxy and not
   recorded. The status block names it.
+- **An HTTP/2 feature goalcup cannot follow** is passed on unharmed and named as a gap. For an extended
+  CONNECT stream only that stream is not read; for a push, a broken header compression or an
+  oversized header block the rest of that connection is not read.
 - **HTTP/3, QUIC and ECH** never reach a proxy, and a network that re-signs TLS is not supported.
 - **A token used as the user name of a URL with no password** may be recorded.
 - **SQLite harnesses** keep their data in a database; it is copied once, at the seal.

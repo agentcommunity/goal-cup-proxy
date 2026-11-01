@@ -864,3 +864,24 @@ Slice 1 merged builder steps 1, 2 and 4. What the merge changed for the slices s
   `fetch.json` fails all three server checks, so `fetch-run.sh` always writes it, also for a partial
   copy.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-11-01, replan after PRD-07 slice 5 (merge da6d79e3)
+
+- **Contract now on integration:** `POST /v1/runs` accepts `repo_url` null or absent for mode `test` only.
+  The run is stored with `repo_url` "" (the column is NOT NULL), and the GitHub checks are skipped for it.
+  Competition and practice still need the exact `https://github.com/<owner>/<repo>` string. A test run
+  that names a repository is still checked.
+- **Client seam (ask to PRD-10):** `docs/UPLOAD-API.md` says the client may send null. The CLI does not
+  yet: `commands/start/server.rs` still sends `PRACTICE_REPO_URL` for `start --test` without a
+  repository, and `OpenRunRequest.repo_url` is a plain `String`. Until PRD-10 sends null (or leaves the
+  field out) for that case, a test open with `GITHUB_CHECK` on is still checked as an empty repository
+  and gets 400. Rung 2 is closed at the Worker only.
+- **Optional follow-up, one small slice if one is run anyway (review A2, X):** `notices.ts` puts the
+  stored "" into the started and ended payloads, and the SQL templates use `coalesce(...)`, which falls
+  back only on NULL. Operator `[TEST]` mail reads "Repository: " for such a run. Send
+  `repo_url: run.repo_url || null` in both payloads. Operator test mail only; no counts change. Also
+  optional: a README `GITHUB_CHECK` row line that a test open with no repository asks GitHub nothing.
+  No separate slice is worth opening for these.
+- **Size on integration** (`wc -l`): src 3,566 against about 3,440 (3.7% over); tests plus helpers 5,380
+  against about 4,950 (8.7% over). Both under the 10% line; no decision line needed.
+- No locked ledger item is touched and no owner question comes from this slice.

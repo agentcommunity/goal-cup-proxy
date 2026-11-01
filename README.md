@@ -14,9 +14,7 @@ Agents working in this repository: read [AGENTS.md](AGENTS.md) first.
 
 ## Quick start for participants
 
-> **Build state.** `goalcup continue` and `goalcup recover` print "not built yet". The end at the
-> deadline and on the server's stop, and null mode, are not built yet either, so a practice run goes
-> on until you quit the harness or run `goalcup seal`.
+> **Build state.** `goalcup continue` and `goalcup recover` print "not built yet".
 
 The full walk-through, with every message you will see, is the
 [participant's guide](docs/PARTICIPANT-GUIDE.md). The contract is [RULES](docs/RULES.md).
@@ -206,7 +204,7 @@ the same points on real harnesses.
 |---|---|---|
 | 1 Every model request | Pad C1 | `crates/goalcup/tests` |
 | 2 Every subagent | Pad C2 | `crates/goalcup/tests` |
-| 3 Never block | Recorder kill test | not merged yet |
+| 3 Never block | Recorder kill test | `crates/goalcup/tests` |
 | 4 No secrets | Pad C3 | `crates/goalcup/tests`, `crates/goalcup-verify/tests` |
 | 5 Upload everything | Pad C4 | `crates/goalcup/tests`, `crates/goalcup-verify/tests`, `server/worker/test` |
 | 6 Tell plainly | Pad C6 | `crates/goalcup/tests`, `crates/goalcup-verify/tests` |

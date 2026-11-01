@@ -2457,3 +2457,50 @@ kept and now cites BUILD-PROMPT section 5, since B3 no longer carries it.
 
 - **Size report, PRD-08** (`wc -l` on integration): verifier src outside `usage/` is 4,171 lines against the PRD-00 row of 1,400 (about 3.0 times); `usage/` 2,861 against the PRD-09 row of 1,470; verifier tests 4,359 against 1,100 plus 200. Slice 8 added 23 src and 77 test lines. Decision lines exist in PRD-08; no cut known. Carry to the end-of-build report with the PRD-03, PRD-10, PRD-12 and PRD-17 overages.
 - **Gate effect:** none on order. One seam request to PRD-05 (export `glued`); it is a cleanup and blocks nothing. No locked ledger item is touched.
+
+### 2026-11-01, replan after PRD-07 slice 5 (merge da6d79e3)
+
+- **Size report, PRD-07** (`wc -l` on integration): Worker src 3,566 against the PRD-00 row of about 3,440
+  (3.7% over); tests plus helpers 5,380 against about 4,950 (8.7% over). Both under the 10% line. The
+  slice added about 15 src and 67 test lines.
+- **Gate effect:** none on order. One open seam: the CLI must send null `repo_url` for `start --test`
+  without a repository (note added to PRD-10); until then Rung 2 is fixed at the Worker only. No locked
+  ledger item is touched.
+
+### 2026-11-01, replan after PRD-12 slice 12 (merge 5aaf7f55)
+
+- **Size report, PRD-12** (`wc -l` on integration): rig code under `scripts/pad/` (pad 750, pad-run 1,075, check.py 762, table 193, selftest 188, sbx.mjs 133, exec/ scripts included) is 3197 lines; tests (`test_pad.py`) 631. Against the PRD-00 row of about 1,350 to 1,450 with its tests that is about 2.6 times. The slice itself added little (RIG-5/6/7 plus tests). Overage on an owner estimate is reported, not cut; carry to the end-of-build report with the PRD-03, PRD-08, PRD-10 and PRD-17 overages.
+- **Gate effect:** none. The one review finding left (B1, nit: split the long dead-pane test into shorter methods) is taste only and changes no behaviour or plan. No locked ledger item is touched.
+
+### 2026-11-01, replan after PRD-17 slice 7 (merge 888cd0b1)
+
+- **Size report, PRD-17** (wc -l on integration): the eight lessons_*.rs files total 4,345 (connect 510, decode 547, hosts 181, http1 978, launch 504, pipeline 104, tls 412, ws 1,109) against the PRD-00 row shared with PRD-14 of about 3,000, 45% over, unchanged by slice 7 (docs only). Past the 10% line, already accepted in the PRD-17 notes; no further growth. The build-wide 14,200 count stays the owner question.
+- **Gate effect:** the PRD-13 deletion gate (check 1) is not yet passable: four guard names (seven rows) are still not on the tree, two for PRD-02 and two for PRD-10. The conductor should treat landing watchdog_restart.rs, pipeline_stall.rs, cli_continue.rs and the second-start case as gate blockers, not nice-to-haves, and rerun the check 1 dry run after they merge. 117 of 160 rows are green. No locked ledger item is touched.
+
+### 2026-11-01, replan after PRD-15 slice 17 (merge ca62fa3f)
+
+- **Size report, PRD-15:** docs only, `wc -l` on integration: README 245, AGENTS 95, ARCHITECTURE 191,
+  OPERATING 260, PARTICIPANT-GUIDE 485, RECORD-FORMAT 542, RULES 459, CONNECTOR-SCHEMA 114 (2,391 together).
+  PRD-00 "Size budget" has no PRD-15 row, so there is nothing to exceed.
+- **Gate effect:** none. Acceptance still needs `goalcup continue` and `goalcup recover` built (their "not
+  built yet" notes in ARCHITECTURE stay until then) and the recorder kill test for README point 3. No locked
+  ledger item is touched.
+
+### 2026-11-01, replan after PRD-15 slice 18 (merge ad83e7d8)
+
+- **Size report, PRD-15** (`wc -l` on integration): docs only, 2,406 lines across the eight owned docs
+  (README 245, AGENTS 95, ARCHITECTURE 193, OPERATING 260, PARTICIPANT-GUIDE 488, RECORD-FORMAT 552, RULES
+  459, CONNECTOR-SCHEMA 114). PRD-00 "Size budget" has no PRD-15 row, so no ceiling applies.
+- **Gate effect:** none on order. The docs describe the merged HTTP/2 proxy (PRD-03 slice 4); the four
+  review nits are queued in PRD-15's note. Acceptance for PRD-15 still waits on `goalcup continue` and
+  `goalcup recover` and the recorder kill test. No locked ledger item is touched.
+
+### 2026-11-01, replan after PRD-12 slice 13 (merge 56a24821)
+
+- **Size report, PRD-12** (`wc -l` on integration): rig code under `scripts/pad/` is 3,221 lines (check.py 762, pad 769, pad-run 1,080, table 193, selftest 188, sbx.mjs 133, exec/ 96); tests (`test_pad.py`) 695; 3,916 together against the PRD-00 row of about 1,350 to 1,450 with its tests (about 2.7 times). The slice added about 38 source and 64 test lines. Overage on an owner estimate is reported, not cut; carry to the end-of-build report with the other overages. Review found no concrete behaviour-preserving cut beyond a 7-line duplicate test (B1).
+- **Gate effect:** none on order or seams. Seven nits (A1 to A3, B1 to B5) are queued in PRD-12 note; none blocks. No locked ledger item is touched.
+
+### 2026-11-01, replan after PRD-06 slice 7 (merge 20634842)
+
+- **Size report, PRD-06** (`wc -l` on integration): `crates/goalcup/src/upload/` is 3,315 lines (client 644, mod 573, manual 509, send 415, state 290, beat 288, chunk 273, policy 232, prune 91) against the PRD-00 row of 1,000. Overage on an owner estimate is reported, not cut; carry to the end-of-build report with the other overages.
+- **Gate effect:** none on order. Two items are queued for PRD-10 (the `StillRecording` and `NotClosed` participant lines) and one for PRD-12 (U8 waits for the harness to exit). PRD-06 acceptance U8 now needs the pad run; U3 and U5 as before. No locked ledger item is touched.
