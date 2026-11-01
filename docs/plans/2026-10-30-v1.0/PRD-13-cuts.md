@@ -859,7 +859,8 @@ is cited.
     `send.rs` by `a76bd11d`; nine files). Covered by `upload_backoff` (4), `upload_beat` (15),
     `upload_chunks` (9), `upload_live` (1), `upload_manual` (10), `upload_null` (1), `upload_prune`
     (4), `upload_queue` (7), `upload_resume` (9) and three unit tests. `upload_worker` is full tier
-    and did not run in gate fast (review LATEST.md section 3 item 3). Written by the post-cut lane from
+    and did not run in gate fast (review LATEST.md section 3 item 3); its two cases ran green in the
+    ignored step of gate full on 5ef5ad7c (PRD-16 Amendments, post-cut slice). Written by the post-cut lane from
     evidence on integration `8fb59b7f`.
 11. **PRD-10, sleep lock, participant text, push lines, device login, browser opener.** Partly copied:
     tests green, except the browser opener. `crates/goalcup/src/cli/`: `awake.rs` (by `a5d7ddc3`, `:1`
