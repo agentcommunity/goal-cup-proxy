@@ -21,6 +21,12 @@ pub(crate) const SHAPES_TSV: &str = include_str!("shapes.tsv");
 /// cover (see [`select`]).
 pub(crate) const SOFT_KIND: &str = "masked_key";
 
+/// The kinds whose candidate is cut at an earlier claim and keeps its other pieces, instead of
+/// being dropped whole (see [`select`]): the two name-based literals, whose value may hold a key
+/// of a higher rule (`token=<run>.sk-...`), and the Bedrock keys, whose base64 a `bearer` match
+/// ends at the first `+` or `/`. So no part of such a value goes out raw.
+pub(crate) const CUT_KINDS: [&str; 2] = ["generic_secret_assignment", "bedrock_key"];
+
 /// The kind of the one block rule of the shared list: a PEM private key, from its `BEGIN` line
 /// to the first `END` line that starts within [`PEM_BODY_MAX`] bytes, else those bytes. A
 /// block absorbs every hard claim it contains or that crosses its edge (see [`select`]).
@@ -84,6 +90,8 @@ pub(crate) struct Pattern {
     pub(crate) span_group: usize,
     /// Loses every overlap (see [`select`]).
     pub(crate) soft: bool,
+    /// Cut at an earlier claim instead of dropped (see [`CUT_KINDS`]).
+    pub(crate) cut: bool,
     /// A match is one whole block that no claim inside it or across its edge may shadow.
     pub(crate) block: bool,
     /// The PEM block rule: its matches are cut into string pieces ([`pem_pieces`]).
@@ -125,6 +133,7 @@ impl Pattern {
         Some(Pattern {
             span_group: span_group_of(&re),
             soft: row.kind == SOFT_KIND,
+            cut: CUT_KINDS.contains(&row.kind),
             block: row.kind == BLOCK_KIND,
             pem: row.kind == BLOCK_KIND,
             guard: row.guard,
@@ -139,6 +148,7 @@ impl Pattern {
             re,
             span_group: 0,
             soft: false,
+            cut: false,
             block: true,
             pem: false,
             guard: false,
@@ -168,6 +178,7 @@ pub(crate) fn connector(rule: &MaskRule) -> Option<Pattern> {
     Some(Pattern {
         span_group: span_group_of(&re),
         soft: false,
+        cut: false,
         block: false,
         pem: false,
         guard: false,
@@ -276,6 +287,10 @@ pub(crate) struct Claim {
     pub(crate) whole_start: usize,
     pub(crate) whole_end: usize,
     pub(crate) soft: bool,
+    pub(crate) cut: bool,
+    /// Where the name and separator in front of a [`CUT_KINDS`] value end (`token=`), else
+    /// `start`. A leading piece cut down to them alone is not kept, so the name stays raw.
+    pub(crate) name_end: usize,
     pub(crate) block: bool,
     /// A piece of a PEM block that ended at its bound or at a later `BEGIN`, with no `END`.
     pub(crate) bounded: bool,
@@ -305,6 +320,12 @@ pub(crate) fn candidates<'a>(
         whole_start,
         whole_end,
         soft: p.soft,
+        cut: p.cut,
+        name_end: if p.cut {
+            start + name_len(&bytes[start..end])
+        } else {
+            start
+        },
         block: p.block,
         bounded: false,
     };
@@ -371,6 +392,17 @@ pub(crate) fn candidates<'a>(
         }
     }
     found_all
+}
+
+/// The length of the name and separator a [`CUT_KINDS`] span starts with, if any.
+fn name_len(span: &[u8]) -> usize {
+    static NAME: OnceLock<Option<Regex>> = OnceLock::new();
+    NAME.get_or_init(|| {
+        Regex::new(r#"^(?i)(?:api[_-]?key|secret|token|password)\s*[=:]\s*\\{0,7}['"]?"#).ok()
+    })
+    .as_ref()
+    .and_then(|re| re.find(span))
+    .map_or(0, |m| m.end())
 }
 
 /// The `BEGIN` and the `END` line of the `private_key` rule, each alone.
@@ -598,7 +630,9 @@ fn char_start(bytes: &[u8], start: usize) -> usize {
 /// Resolve every rule's candidates into the claimed spans, in source order, never overlapping.
 ///
 /// The hard rules are resolved first-wins, by list position and then by source order: a
-/// candidate that overlaps a claim already made is dropped whole. A block is then merged with
+/// candidate that overlaps a claim already made is dropped whole, except a [`CUT_KINDS`]
+/// candidate, which keeps the pieces that claim does not cover, but for a leading piece that
+/// holds only its name and separator. A block is then merged with
 /// every candidate that overlaps it, selected or dropped, transitively, so a block is never
 /// shadowed and never leaves the outside part of a claim raw. Then the one soft rule is cut
 /// against the hard claims and only its uncovered pieces are kept, so it can only add masking.
@@ -728,8 +762,33 @@ fn select_hard(mut candidates: Vec<Claim>) -> Vec<Claim> {
             let overlaps_admitted = admitted
                 .last()
                 .is_some_and(|last| last.end > candidate.start);
-            if !overlaps_claimed && !overlaps_admitted {
+            if overlaps_admitted {
+                continue;
+            }
+            if !overlaps_claimed {
                 admitted.push(*candidate);
+            } else if candidate.cut {
+                let mut at = candidate.start;
+                let mut next = claimed_at;
+                while next < claimed.len() && claimed[next].start < candidate.end {
+                    let name_only =
+                        at == candidate.start && claimed[next].start <= candidate.name_end;
+                    if claimed[next].start > at && !name_only {
+                        admitted.push(Claim {
+                            end: claimed[next].start,
+                            start: at,
+                            ..*candidate
+                        });
+                    }
+                    at = at.max(claimed[next].end);
+                    next += 1;
+                }
+                if at < candidate.end {
+                    admitted.push(Claim {
+                        start: at,
+                        ..*candidate
+                    });
+                }
             }
         }
         let mut merged = Vec::with_capacity(claimed.len() + admitted.len());
@@ -905,7 +964,13 @@ mod tests {
     /// whole regex from the byte after every glued start), on text dense with glued prefixes.
     #[test]
     fn the_head_search_finds_what_the_plain_search_finds() {
-        const PIECES: [&[u8]; 14] = [
+        const PIECES: [&[u8]; 20] = [
+            b"ABSKQmVkcm9ja0FQSUtleS",
+            b"ABSK",
+            b"+",
+            b"AQ.",
+            b"gsk_",
+            b"fk-",
             b"task-",
             b"sk-",
             b"x",
@@ -928,7 +993,7 @@ mod tests {
             .filter(|r| r.guard)
             .filter_map(|r| Pattern::shared(&r))
             .collect();
-        assert_eq!(guarded.len(), 14);
+        assert_eq!(guarded.len(), rows().flatten().filter(|r| r.guard).count());
         assert!(guarded.iter().all(|p| p.head.is_some()));
         for _ in 0..3000 {
             let text: Vec<u8> = (0..below(60))

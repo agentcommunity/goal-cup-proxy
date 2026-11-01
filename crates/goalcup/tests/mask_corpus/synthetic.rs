@@ -4,17 +4,12 @@
 //! so no committed file holds a contiguous shaped key. Included by `tests/mask_corpus.rs` and
 //! `tests/mask_bench.rs` with `#[path]`, next to `common.rs`; nothing else reads these inputs.
 
-use crate::common::{ALNUM, Rng};
+use crate::common::{ALNUM, B64, B64URL, HEX, Rng, UPPER, key_of};
 use std::ops::Range;
 
 pub const PLANTED_ENV: &str = include_str!("synthetic/planted.env");
 pub const PEM_SSE: &str = include_str!("synthetic/pem-sse.txt");
 pub const HARNESS_SETTINGS: &str = include_str!("synthetic/harness-settings.json");
-
-pub const UPPER: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
-pub const HEX: &[u8] = b"0123456789abcdef";
-pub const B64: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-pub const B64URL: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
 
 /// A template with every placeholder replaced, and where each replacement landed.
 pub struct Filled {
@@ -100,6 +95,20 @@ pub fn planted_values() -> Vec<(&'static str, String)> {
         ),
         ("pem", pem),
         ("plain_key", r.chars(ALNUM, 32)),
+        ("google_auth", ["A", "Q.", &r.chars(B64URL, 50)].concat()),
+        (
+            "dotted",
+            [r.chars(ALNUM, 8), r.chars(B64URL, 24), r.chars(ALNUM, 6)].join("."),
+        ),
+        ("groq", key_of("groq_key", 0)),
+        ("cerebras", key_of("cerebras_key", 0)),
+        ("fireworks", key_of("fireworks_key", 0)),
+        ("together", key_of("together_key", 0)),
+        ("amp", key_of("sgamp_key", 0)),
+        ("fk", key_of("fk_key", 0)),
+        ("vercel", key_of("vercel_gateway_key", 0)),
+        ("bedrock_long", key_of("bedrock_key", 0)),
+        ("bedrock_short", key_of("bedrock_key", 1)),
     ]
 }
 
