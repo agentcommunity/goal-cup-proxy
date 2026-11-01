@@ -1670,3 +1670,7 @@ The PRD-17 deletion gate (PRD-13) waits on tests that this PRD is asked to land 
 - Still owed in slice C part 2: the exit-74 L-FW2 case, native cursor resume after a kill, a server
   stop after the watchdog's EOF, `pipeline_stall.rs`, `by_hand_load`, the mask pool decision and
   `SnapshotCursor.fid` with PRD-04.
+
+### 2026-11-01, note from the PRD-17 slice 8 merge (822c5b77)
+
+- `pipeline_stall.rs` is the one file name the PRD-17 deletion gate (check 1, row L-R2) cannot resolve. It is the last gate-relevant item of slice C part 2; once merged, PRD-17 repoints the row and reruns the gate. If the case cannot be written without a test hook, say so in a replan note so L-R2 can rest on `pipeline_guard::two_hundred_streams_with_the_writer_held` and `lessons_pipeline::open_and_end_survive_a_full_guard` instead. No locked ledger item is touched.
