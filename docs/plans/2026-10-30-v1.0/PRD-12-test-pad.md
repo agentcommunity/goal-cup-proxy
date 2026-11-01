@@ -1983,3 +1983,8 @@ taken; "rejected" says why. Fixes for other files are made by those files' owner
   `gsk_` or `sgamp_` while the owner answer is open. `GEMINI_API_KEY=AQ.<run>` comes out starred from `API_KEY=`
   on (PRD-05 note), so a pad check must not assert the variable name stays raw for that shape. No locked ledger
   item is touched.
+
+### 2026-11-01, sweep 2 fixes slice (plan)
+
+- **Slice.** Data fixes from sweep 2 and two check rules. (1) Hermes: wait for "Type your message or /help", no `pre_keys` (the config.yaml telemetry preset removes the screen). (2) Crush: allow the tools the prompt asks for through Crush's own permissions setting in the pad's config file (PRD-11 keeps the prompts on in the connector; the pad answers by config, so it does not touch the connector). (3) Cline: use Cline's real provider config at the pinned version, or the row says `not verified: needs sign-in`. (4) C3: a planted kind with hits but no MASK is counted as masked upstream when the hits are shape hits only (the harness or model redacted the value first); a known-value hit is still FAIL. (5) C1 and `history_complete`: the rule is `pass`, `warn` or `skip` passes, `named` follows the orphan rule, `fail` fails. A `warn` is a text mismatch (for example resent text that matches no response), not a lost call; section 8 is read that way.
+- No locked ledger item is touched.
