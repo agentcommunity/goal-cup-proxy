@@ -1114,7 +1114,9 @@ pub fn run_kind(mode: RunMode) -> &'static str {
 
 /// The harness version could not be read: said on every tier, because the upload carries "unknown".
 pub fn version_unread(name: &str) -> String {
-    format!("{name}'s version could not be read, so the run starts without it. The upload says unknown.")
+    format!(
+        "{name}'s version could not be read, so the run starts without it. The upload says unknown."
+    )
 }
 
 pub fn upload_to(host: Option<&str>) -> String {
