@@ -360,46 +360,6 @@ fn an_undecoded_response_under_its_gap_names_the_missed_call() {
     }
 }
 
-/// A Chat chain of two requests: the first is answered with a streamed call (id and name in the
-/// first chunk, the arguments in pieces); the second resends it as `(id, name, arguments)`.
-fn resent_call(id: &str, name: &str, args: &str) -> PathBuf {
-    rec("h-ids", |e| {
-        let chunk = |d: Value| {
-            let ev = json!({"choices": [{"index": 0, "delta": {"tool_calls": [d]}}]});
-            format!("data: {ev}\n\n")
-        };
-        let sse = chunk(json!({"index": 0, "id": "call_00_AbC", "type": "function",
-            "function": {"name": "get", "arguments": ""}}))
-            + &chunk(json!({"index": 0, "function": {"arguments": "{\"path\":"}}))
-            + &chunk(json!({"index": 0, "function": {"arguments": " \"a b\"}"}}));
-        let body = |m: Vec<Value>| json!({"model": "fake-model", "messages": m});
-        let path = "/v1/chat/completions";
-        send(
-            e,
-            path,
-            T,
-            &body(vec![user(Chat)]),
-            ("text/event-stream", sse),
-        );
-        let asked = json!({"role": "assistant", "content": null, "tool_calls": [{"id": id,
-            "type": "function", "function": {"name": name, "arguments": args}}]});
-        let tool = json!({"role": "tool", "tool_call_id": id, "content": "ok"});
-        let b = body(vec![user(Chat), asked, tool, user(Chat)]);
-        send(e, path, T, &b, reply(Chat, Text(1)));
-    })
-}
-
-#[test]
-fn a_resent_call_with_a_rewritten_id_matches_by_name_and_arguments() {
-    let same = resent_call("call_00_AbC", "get", "{\"path\":\"a b\"}");
-    assert_eq!(missing(&verdict(&same, "pass", 0)), (0, 0, 0));
-    let rewritten = resent_call("call00AbC", "get", "{ \"path\": \"a b\" }");
-    assert_eq!(missing(&verdict(&rewritten, "pass", 0)), (0, 0, 0));
-    // A call that never appeared in any response still fails, whatever its id.
-    let other = resent_call("call00AbC", "get", "{\"path\": \"other\"}");
-    assert_eq!(missing(&verdict(&other, "fail", 2)), (1, 0, 0));
-}
-
 #[test]
 fn a_call_dropped_with_no_gap_fails_and_a_named_gap_over_it_names_it() {
     for (s, j) in [
@@ -551,6 +511,28 @@ fn an_answer_recorded_in_another_thread_matches() {
 
 /// The lost call is found by (sid, message number): the thread is the one of the second message
 /// on its stream, after a message that is no request, so only a count of every message names it.
+/// A harness that re-cases or sanitises a call id on resend still matches its own response; a
+/// call of the same name dropped in another thread is not covered by it.
+#[test]
+fn a_rewritten_call_id_matches_but_another_threads_response_does_not_cover_a_drop() {
+    let d = rec("h-ids", |e| {
+        call(e, Chat, T, &[], Call(0));
+        let (id, other) = (tid(Chat, 0).to_uppercase().replace('_', "-"), tid(Chat, 0));
+        let asked = json!({"role": "assistant", "content": null, "tool_calls": [{"id": id,
+            "type": "function", "function": {"name": "f"}}]});
+        let tool = json!({"role": "tool", "tool_call_id": other, "content": "ok"});
+        let b = json!({"model": "fake-model", "messages": [asked, tool, user(Chat)]});
+        send(e, "/v1/chat/completions", T, &b, reply(Chat, Text(1)));
+    });
+    assert_eq!(missing(&verdict(&d, "pass", 0)), (0, 0, 0));
+    let d = rec("h-ids-other", |e| {
+        call(e, Chat, T, &[], Call(0));
+        call(e, Chat, "t-other", &[], Text(5));
+        call(e, Chat, "t-other", &[Call(1)], Text(6));
+    });
+    assert_eq!(missing(&verdict(&d, "fail", 2)), (1, 0, 0));
+}
+
 #[test]
 fn a_call_dropped_on_a_websocket_fails_and_names_the_thread() {
     let mut up = 0;
