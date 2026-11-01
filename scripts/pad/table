@@ -63,9 +63,13 @@ def tier_for(cid, rows):
     said = [m.group(1) for m in map(re.compile(r'not_supported\s*=\s*"(.*)"').fullmatch, harness_lines(cid)) if m]
     if said:
         return ("not supported", "", said[0])
+    # A stated reason (`not_verified = "<reason>"`) or no key (PRD-12 section 6) means the pad runs nothing, so
+    # that reason is the cell, whatever old rows exist.
+    why = [m.group(1) for m in map(re.compile(r'not_verified\s*=\s*"(.*)"').fullmatch, harness_lines(cid)) if m]
+    if why or 'key_kind = "none"' in harness_lines(cid):
+        return ("not verified", "", why[0] if why else "no key")
     if not any(r.get("connector") == cid for r in rows):
-        nokey = 'key_kind = "none"' in harness_lines(cid)  # PRD-12 section 6: no key, so the pad runs nothing
-        return ("not verified", "", "no key" if nokey else "not yet run on the pad")
+        return ("not verified", "", "not yet run on the pad")
     got = [(c, latest(rows, tier_row((cid,), c))) for c in CASES if c != "gateway" or has_gateway(cid, rows)]
     reasons = [(1, "pad not trusted") for _, r in got if r and not r.get("pad_trusted_at")]
     for _, r in got:

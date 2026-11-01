@@ -1983,3 +1983,17 @@ taken; "rejected" says why. Fixes for other files are made by those files' owner
   `gsk_` or `sgamp_` while the owner answer is open. `GEMINI_API_KEY=AQ.<run>` comes out starred from `API_KEY=`
   on (PRD-05 note), so a pad check must not assert the variable name stays raw for that shape. No locked ledger
   item is touched.
+
+### 2026-11-01, sweep 2 fixes slice (plan)
+
+- **Slice.** Data fixes from sweep 2, all measured in sweep 2 unless a vendor page is named. (1) Hermes: wait for "Type your message or /help", no `pre_keys`; the direct config.yaml preset removes the telemetry screen (measured in sweep 2). The gateway preset was not run and stays docs only. (2) Crush: stops at "Permission Required". The v0.99.0 README (read 1 Nov 2026) gives the permission setting only as crushrc commands or `--yolo`, so the row is marked `not verified: needs permission answer`; a crushrc data file is a follow-up. (3) Cline: the apps/cli README (read 1 Nov 2026) names no provider config file and its auth command puts the key in argv, so the row is marked `not verified: needs sign-in`. PRD-11 acceptance 5 (the stale hub daemon line) is therefore not exercised by the pad until a route is shown. (4) Kimi: header comment says type "openai", as the body does.
+- **Pad.** A harness file may carry `not_verified = "<reason>"`: the pad prints `<harness>: not verified: <reason>`, runs nothing and exits 3 (same as the no-key rows).
+- **Not in this slice.** The two check.py rules once planned here (C3 shape-only hits counted as masked upstream; C1 `history_complete` `warn` as a pass) are not shipped. check.py is unchanged; a known-value hit is never relaxed.
+- No locked ledger item is touched.
+
+### 2026-11-01, replan after sweep 2 fixes (merge 98873c1d)
+
+- **Slice is in** (Hermes ready text and direct config, Crush and Cline marked not verified with a stated reason, Kimi comment, table shows the reason over old rows). 54 lines added, 10 removed. The two check.py rules once planned (C3 upstream mask, history_complete warn) did not ship; check.py is unchanged and a known-value hit is never relaxed. Nothing in this PRD needs rewriting.
+- **Open nits, none a blocker.** B3-1: test_table_shows_the_reason_over_old_rows in test_pad.py asserts the start of the Crush reason text, a wording assert on harness data (ledger B10). A later pad slice should assert that the tier is neither "not yet run on the pad" nor a failing-check reason, or compare it to the not_verified string read from the toml. B3-2: the not_supported and not_verified blocks in scripts/pad/table are near-duplicates and harness_lines(cid) is read three times in tier_for; one loop over (key, tier) pairs is smaller. Earlier nits (A10, A12, B10, B12, SecretCheck docstring) still stand.
+- **Open rows.** Crush needs a crushrc permission data file, Cline needs a provider config route; both stay "not verified" until a vendor page shows one. Neither is a build blocker.
+- No locked ledger item is touched.

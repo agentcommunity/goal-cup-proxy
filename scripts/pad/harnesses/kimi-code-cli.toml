@@ -4,7 +4,7 @@
 # keys and base URLs are read from config.toml only, so the key line below writes the whole config.toml (a TOML string
 # with \n) in the 0600 key file; no snippet file holds a key.
 # Read from docs only, not run against a live harness: the install package pin, the config.toml shape (type
-# "openai_legacy", [models.*], default_model), the model id and /exit.
+# "openai", [models.*], default_model), the model id and /exit.
 # Measured, not settled: the folder-trust screen eats the paste, and the config needs models.<id>.protocol ("openai" here).
 # No [gateway] table: no gateway page read, n/a.
 version = "2.4.1"
