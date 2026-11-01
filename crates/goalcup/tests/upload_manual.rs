@@ -78,7 +78,8 @@ fn entry(run: &Path, fake: &FakeWorker, deadline: &str, seal: bool) -> (PathBuf,
         }
     };
     // The boot's totals as `counts.jsonl` keeps them; the part files hold no COUNT event.
-    let count = json!({"seq": seq, "count": {"ev": "count", "boot": 0, "http_post": 42}, "spans": 0});
+    let count =
+        json!({"seq": seq, "count": {"ev": "count", "boot": 0, "http_post": 42}, "spans": 0});
     fs::write(entry.join("counts.jsonl"), format!("{count}\n")).unwrap();
     let status = match seal {
         true => Status {
@@ -235,16 +236,24 @@ fn a_dead_entry_is_closed_recovered_and_sent_whole() {
     let (entry, _) = entry(dir.path(), &fake, DEADLINE, false);
     assert!(part_files(&entry.join("rec")).unwrap().len() >= 3);
     assert_eq!(upload(dir.path(), &entry, true), Outcome::Done);
-    let status: Status = serde_json::from_slice(&fs::read(cli::status_json(&entry)).unwrap()).unwrap();
+    let status: Status =
+        serde_json::from_slice(&fs::read(cli::status_json(&entry)).unwrap()).unwrap();
     assert_eq!(status.mode, Mode::Sealed);
     assert_eq!(status.seal.unwrap().reason, SealReason::Recovered);
     let beats = fake.heartbeats();
     assert_eq!(beats[0]["final"], true);
     assert_eq!(beats[0]["recording"], "gaps");
-    assert_eq!(beats[0]["counts"]["http_post"], 42, "counts from counts.jsonl");
+    assert_eq!(
+        beats[0]["counts"]["http_post"], 42,
+        "counts from counts.jsonl"
+    );
     assert_eq!(beats[0]["model_requests"], 42);
     assert_eq!(state::read(&entry).unwrap().final_, Final::Sealed);
-    assert_eq!(fake.stream(ENTRY), parts(&entry).concat(), "cat rec-*.gcr.zst");
+    assert_eq!(
+        fake.stream(ENTRY),
+        parts(&entry).concat(),
+        "cat rec-*.gcr.zst"
+    );
 }
 
 /// A dead entry while a recorder holds `rec/lock`: nothing is sent and no recovery frame written.
