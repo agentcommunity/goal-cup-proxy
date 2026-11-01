@@ -1135,9 +1135,6 @@ pub fn tier_line(name: &str, version: Option<&str>, tier: &str, verified: &str) 
                 version.unwrap_or_default()
             )
         }
-        "verified" if version.is_none() => format!(
-            "{who}: verified with goalcup on {verified}; the installed version was not read."
-        ),
         "verified" => format!("{who}: verified with goalcup on {verified}."),
         "not supported" => format!(
             "{name}: not supported. goalcup records its session files and the connections it can see, not its model calls."

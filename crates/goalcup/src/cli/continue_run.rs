@@ -207,7 +207,7 @@ pub fn prepare(
             let body = json!({
                 "previous_entry_id": last, "connector_id": connector.id,
                 "connector_sha256": connector.sha256, "workspace": project.to_string_lossy(),
-                "session_id": start::session_id(), "harness_version": plan.harness_version.as_deref().unwrap_or(approve::UNKNOWN_VERSION),
+                "session_id": start::session_id(), "harness_version": approve::wire_version(plan.harness_version.as_deref()),
                 "proxy_version": env!("CARGO_PKG_VERSION"),
             });
             let client = ServerClient::new(base, Some(Token::new(secret)));
@@ -289,6 +289,11 @@ pub fn prepare(
     lines.extend(first_message(&found.run_dir, resumed, vars));
     lines.extend(deadline.map(|ms| text::ends_line(ms / 1000, super::now())));
     lines.push(text::upload_to(server.host()));
+    lines.extend(
+        plan.harness_version
+            .is_none()
+            .then(|| text::version_unread(&name)),
+    );
     for (what, file) in [
         ("Connector", first.map(PathBuf::from)),
         ("Host list", sj.hosts_file.clone()),
