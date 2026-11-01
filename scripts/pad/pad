@@ -318,6 +318,23 @@ def load_settings(raw, pad):
     return s
 
 
+KILL_PAIR = (8, 10)  # section 3.1: the kill-recorder pair a settings file names; a harness file's kill_minutes replaces it
+
+
+def apply_kill_minutes(s, harness):
+    """A harness file's `kill_minutes = [a, b]` (two ascending positive integers; absent: 8 and 10) replaces the
+    kill-recorder@8 and @10 pair in the plan. A run without that pair, a cycle run's own @3 included, keeps its steps."""
+    got = harness.get("kill_minutes", list(KILL_PAIR))
+    if not (isinstance(got, list) and len(got) == 2 and all(type(x) is int and x > 0 for x in got) and got[0] < got[1]):
+        raise Usage("kill_minutes in the harness file is two ascending whole minutes above 0")
+    old = ["kill-recorder@%d" % m for m in KILL_PAIR]
+    steps = [r for _, _, r in s["plan"]]
+    if all(r in steps for r in old):
+        new = dict(zip(old, ["kill-recorder@%d" % m for m in got]))
+        s["plan"] = parse_steps(list(dict.fromkeys(new.get(r, r) for r in steps)))  # a cycle run's own @3 is not doubled
+    return s
+
+
 def lasts(raw):
     """Minutes the timed step `kind@m[+n]` lasts: its +n, else the kind's own (also for `kill-both@m+upload`)."""
     kind, _, rest = raw.partition("@")
@@ -810,7 +827,7 @@ class Run:
         with open(os.path.join(self.dir, "meta.json"), "w") as f:
             json.dump(dict(self.meta, spend_usd_est=self.usd, priced_high=self.high, over_cap=self.over_cap, connector=s["harness"],
                            case=self.case, mode=s["mode"], prompt=s["prompt"], variant=self.variant(), where=s["where"],
-                           server=s["server"], keep=s["keep"], minutes=s["minutes"],
+                           server=s["server"], keep=s["keep"], minutes=s["minutes"], kill_minutes=self.kill_minutes(),
                            started=at, push="not tested", pad_trusted_at=None, steps=[list(ln) for ln in self.lines],
                            hosts_sha256=self.hosts_sha, model_host=self.harness.get("model_host")),
                       f, indent=1, sort_keys=True)
@@ -888,12 +905,17 @@ class Run:
         return [st for st in step_list(self.s, self.harness) if st.split("@")[0] in FAULTS or st.startswith(("exec ", "pre "))
                 ] + ["connector copy"] * bool(self.s.get("connector"))
 
+    def kill_minutes(self):
+        """The minutes this run killed the recorder at (null: none), in time order."""
+        return sorted(m for kind, m, r in self.s["plan"] if kind == "timed" and r.startswith("kill-recorder@")) or None
+
     def finish(self):
         """table.txt only: row.json and report.txt are check.py's (PRD-12 "Files it owns")."""
         s, secs = self.s, int(time.time() - self.t0)
         result = self.row or ("FAIL" if any(r == "FAIL" for _, r, _, _ in self.lines) else "INCONCLUSIVE")
-        head = "pad %s %s %s   variant %s   run %s  entry %s  box %s   %dm %02ds" % (
-            s["harness"], self.case, s["mode"], ",".join(self.variant()) or "-", self.meta.get("run") or "-",
+        head = "pad %s %s %s   variant %s   kill minutes %s   run %s  entry %s  box %s   %dm %02ds" % (
+            s["harness"], self.case, s["mode"], ",".join(self.variant()) or "-",
+            ",".join(map(str, self.kill_minutes() or [])) or "-", self.meta.get("run") or "-",
             self.meta.get("entry") or "-", self.name if self.tried else "-", secs // 60, secs % 60)
         rows = [head, FMT % ("step", "result", "at", "saw")] + [FMT % ln for ln in self.lines]
         rows.append("%-17s %-14s %s" % ("result", result, os.path.relpath(self.dir, REPO) + "/"))
@@ -924,6 +946,7 @@ def main(argv):
         pad = read_toml(os.path.join(HERE, "pad.toml"))
         s = load_settings(read_toml(argv[1]), pad)
         harness = read_toml(os.path.join(HERE, "harnesses", s["harness"] + ".toml"))  # a missing one is an OSError
+        apply_kill_minutes(s, harness)
         if harness.get("key_kind") == "none" or harness.get("not_verified"):  # Amp, Droid: no key to give it; a row with a stated reason: nothing to run (no box, no case)
             print("%s: not verified: %s" % (s["harness"], harness.get("not_verified") or "no key"))
             return 3  # nothing proven: the INCONCLUSIVE exit, never "every row PASS"
