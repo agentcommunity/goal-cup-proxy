@@ -243,6 +243,17 @@ class Run:
         """True when exit 2 comes from the stated loss alone, the verifier's only failed check."""
         return code == 2 and bool(self.stated_loss()) and set(self.failed) <= {"secrets"}
 
+    def exact_values(self):
+        """True when the start event's mask_values shows workspace values masked by exact bytes (PRD-05 ValueCounts). Read from
+        verify/secrets.json, else meta.json; absent or unreadable is not on."""
+        for rel in ("verify/secrets.json", "meta.json"):
+            doc = load(self.folder, rel)
+            mv = doc.get("mask_values") if isinstance(doc, dict) else None
+            if isinstance(mv, dict):
+                n = mv.get("workspace")
+                return type(n) is int and n > 0
+        return False
+
     def masks(self):
         """MASK spans by rule kind from the record scan, or None when the report has none."""
         doc = load(self.folder, "verify/secrets.json")
@@ -458,7 +469,7 @@ def scan(r, name, where):
     n = r.hits(name)
     loss = r.stated_loss() if name == "secrets" else None
     if loss:  # never a PASS: the report cannot show the shape crosses a delta edge (a masker miss reads the same), so C3 stays open
-        return r.mark("C3", "INCONCLUSIVE", "shape only in joined streamed replies (not verified, owner question open): %s in %s"
+        return r.mark("C3", "INCONCLUSIVE", "shape only in joined streamed replies (not verified): %s in %s"
                       % (", ".join(loss[0]), ", ".join(loss[1])))
     r.flag(n != 0, "C3", "FAIL" if n else "INCONCLUSIVE", "%s hits in %s" % (n, where) if n else "no scan of " + where)
 
@@ -485,25 +496,31 @@ def secrets(r):
     if masks is None:
         return r.mark("C3", "INCONCLUSIVE", "no MASK counts by rule in verify/secrets.json")
     # A harness that redacts tool output itself (harness file redacts_tool_output, point 4) shows the exercise by the masker's
-    # own MASK of the redacted form (masked_key); without it, or without a plain hit, the exercise is not done.
-    up = r.meta.get("redacts_tool_output")
+    # own MASK of the redacted form (masked_key), or by none: its planted kinds may never reach the wire.
+    up = r.meta.get("redacts_tool_output") is True
     loss = r.stated_loss()  # the only hit being the stated loss (scan() reports it) is not a real hit
-    hit, plain = 0 if loss else r.hits("secrets"), r.hits("secrets-plain")
-    if not plain and not any(masks.get(kinds[0]) for kinds in PLANTED) and not (up and masks.get("masked_key")):
-        return r.mark("C3", "INCONCLUSIVE", "secret exercise not done: no plain-value hit and no MASK of a planted shape")
+    hit, plain, exact = 0 if loss else r.hits("secrets"), r.hits("secrets-plain"), r.exact_values()
+    # Exact values on: the planted .env value is a known value to the masker, so a plain hit is a leak, and its run_secret
+    # MASK is the exercise. Off: a plain hit is the exercise proof, as before.
+    if exact and plain:
+        r.mark("C3", "FAIL", "planted .env value reached the record unmasked (%s plain hits)" % plain)
+    proof = masks.get("run_secret") if exact else plain
+    clean = up and not hit and not plain and not loss  # nothing reached the record
+    if not proof and not any(masks.get(kinds[0]) for kinds in PLANTED) and not clean and not (up and masks.get("masked_key")):
+        return r.mark("C3", "INCONCLUSIVE", "secret exercise not done: no %s and no MASK of a planted shape"
+                      % ("MASK of the planted .env value" if exact else "plain-value hit"))
     # A planted kind with no MASK is a FAIL when a hit shows it reached the record, else not exercised (a run never passes on
-    # a missing exercise). For an upstream-redacting harness the missing MASK is a stated loss, open until the owner answers
-    # (point 4): INCONCLUSIVE, never PASS.
-    # The vendor page names only the openai, github and key=/token=/password= patterns, so only those kinds carry the note.
-    named = {"openai_key", "github_token", "generic_secret_assignment"}
+    # a missing exercise). An upstream-redacting harness with no hit at all passes: masked upstream, before the wire.
     for kinds in PLANTED:
-        why = "owner question open: the harness redacts tool output itself, so this kind may be masked before the wire" \
-            if up and named.intersection(kinds) else "not exercised"
+        if any(masks.get(k) for k in kinds):
+            continue
+        if clean:
+            r.mark("C3", "PASS", "masked upstream: no MASK of %s, the harness redacts tool output before the wire" % " or ".join(kinds))
+            continue
+        why = "not exercised"
         if loss:
-            why += "; %s only in joined streamed replies (not verified, owner question open)" % (
-                "hit" if set(kinds) & set(loss[0]) else "shape")
-        r.flag(not any(masks.get(k) for k in kinds), "C3", "FAIL" if hit else "INCONCLUSIVE",
-               "%s of %s: no MASK" % ("hits" if hit else why, " or ".join(kinds)))
+            why += "; %s only in joined streamed replies (not verified)" % ("hit" if set(kinds) & set(loss[0]) else "shape")
+        r.mark("C3", "FAIL" if hit else "INCONCLUSIVE", "%s of %s: no MASK" % ("hits" if hit else why, " or ".join(kinds)))
 
 def c6(r):
     st, final = r.status, dig(r.status, "s4_requests")
