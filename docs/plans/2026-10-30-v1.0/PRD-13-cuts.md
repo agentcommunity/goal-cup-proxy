@@ -841,3 +841,16 @@ No locked ledger item is touched.
   replan.
 
 No locked ledger item is touched.
+
+### 2026-11-01, status at the third review (integration 8fb59b7f)
+
+- Still open, unchanged: no receiving owner's "copied, tests green" line and no `selftest` exit 0
+  (K6b, K11d) are in the night log, so section 2 rule 2 stays unmet and PRD-13 is not done.
+- The PRD-16 `Cargo.toml` cleanup is pushed as `a6b6e418` on
+  `v1.0/prd-16-postcut-workspace-cargo-cleanup` but is not on integration. The integrator checks that
+  it merges with `refresh_lock`, then re-runs the reference guard, before the final tag.
+- The provenance hits (PRD-03, PRD-05, PRD-09, PRD-10), the `.gitignore` negations (PRD-16), the
+  stale path mentions (PRD-12, PRD-14, PRD-15), gate full and acceptances 1 to 5 stay as listed above.
+  PRD-13 acceptance is not met.
+
+No locked ledger item is touched.
