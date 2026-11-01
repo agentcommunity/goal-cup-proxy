@@ -91,6 +91,8 @@ pub struct Honesty {
     trusted: HashSet<(String, String)>,
     listed: BTreeSet<String>,
     long: BTreeSet<String>,
+    /// Long tunnels the proxy flagged `"expected": true` (OWN-6): recorded, never raised.
+    long_expected: BTreeSet<String>,
     refused: BTreeSet<(String, String)>,
     hosts: BTreeSet<String>,
     tunnels_named: BTreeMap<String, u64>,
@@ -201,7 +203,13 @@ impl Honesty {
             && is("what", "long_tunnel")
             && let Some(h) = e.get("host").and_then(Value::as_str)
         {
-            self.long.insert(h.into());
+            let flagged = e.get("expected").and_then(Value::as_bool) == Some(true);
+            let set = if flagged {
+                &mut self.long_expected
+            } else {
+                &mut self.long
+            };
+            set.insert(h.into());
         } else if is("ev", "start")
             && let Some(Value::Object(by_source)) = e.get("hosts")
         {
@@ -449,8 +457,9 @@ impl Honesty {
         let refused: Vec<Value> = (self.refused.iter())
             .map(|(host, fingerprint)| json!({"host": host, "fingerprint": fingerprint}))
             .collect();
+        let expected = (self.long_expected.iter()).map(|h| format!("{h} (expected)"));
         let hosts = (self.hosts.iter().chain(long.iter().copied())).cloned();
-        let hosts = hosts.collect::<Vec<_>>().join(", ");
+        let hosts = hosts.chain(expected).collect::<Vec<_>>().join(", ");
         let blind = self.tunnels_named.values().sum::<u64>() + n.unnamed;
         let why = format!(
             "{} listed connections: {} decrypted, {} sign-in, {} tunnels that moved no byte, {blind} blind ({} with no GAP \
@@ -468,7 +477,8 @@ impl Honesty {
         let facts = json!({"listed_conns": n.listed, "decrypted": n.decrypted,
             "sign_in": n.sign_in, "tunnels_empty": n.empty, "tunnels_named": self.tunnels_named,
             "tunnels_unnamed": n.unnamed, "conn_gaps": n.conn_gaps,
-            "long_tunnel_unlisted": long, "refusal_after_trust": refused});
+            "long_tunnel_unlisted": long, "long_tunnel_expected": self.long_expected,
+            "refusal_after_trust": refused});
         fill(&mut listed, why, facts);
         let mut why = format!(
             "{} of {} decrypted connections have bytes no stream accounts for ({} bytes)",
