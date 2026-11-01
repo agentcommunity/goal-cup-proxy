@@ -11,6 +11,7 @@ import shutil
 import subprocess
 import tarfile
 import tempfile
+import time
 import unittest
 import urllib.parse
 from unittest import mock
@@ -547,6 +548,67 @@ class KillBothVerify(unittest.TestCase):
         self.assertEqual(first("usage")[1], os.path.join("fetched", "OLD"))
         with open(os.path.join(run, "meta-box.json")) as f:
             self.assertEqual(json.load(f)["entry"], "OLD")
+
+
+class RigFaults(unittest.TestCase):
+    """Rung 2 rig faults: a named user agent and a plain refusal text (RIG-5), a dead pane ends the wait (RIG-6),
+    DATABASE_URL only for fetch-run (RIG-7)."""
+
+    def test_approve_names_itself_and_hides_the_secrets(self):
+        import http.server
+        import threading
+        seen = {}
+
+        class H(http.server.BaseHTTPRequestHandler):
+            def do_POST(self):
+                seen["ua"] = self.headers.get("user-agent")
+                self.rfile.read(int(self.headers.get("content-length") or 0))
+                self.send_response(403)
+                self.end_headers()
+                self.wfile.write(b"error code: 1010\n")
+
+            def log_message(self, *a):
+                pass
+
+        srv = http.server.HTTPServer(("127.0.0.1", 0), H)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        self.addCleanup(srv.server_close)
+        self.addCleanup(srv.shutdown)
+        env = {"GOALCUP_TEST_APPROVAL_KEY": "fake-key-not-a-secret", "GOALCUP_TEST_MEMBER_ID": "fake-member-not-real"}
+        with mock.patch.dict(os.environ, env), mock.patch.dict(pad.SERVERS, {"t": "http://127.0.0.1:%d" % srv.server_port}):
+            got = pad.approve("t", "ABCD-EFGH")
+        self.assertTrue(seen["ua"].startswith("goalcup-pad"))
+        self.assertIn("403", got)
+        self.assertIn("error code: 1010", got)
+        self.assertNotIn("fake-key-not-a-secret", got)
+        self.assertNotIn("fake-member-not-real", got)
+
+    def test_database_url_reaches_only_fetch_run(self):
+        with mock.patch.dict(os.environ, {"DATABASE_URL": "postgres://fake-not-a-secret"}):
+            self.assertIn("DATABASE_URL", pad.env_without(set(pad.NEVER_IN_BOX) - set(pad.FETCH)))
+            self.assertNotIn("DATABASE_URL", pad.env_without())
+            self.assertIn(b"postgres://fake-not-a-secret", [v.encode() for v in map(os.environ.get, pad.NEVER_IN_BOX) if v])
+
+    def test_dead_pane_ends_the_wait_at_once(self):
+        run = self.enterContext(tempfile.TemporaryDirectory())
+        for name, doc in (("settings.json", {"harness": {}}), ("state.json", {"home": run})):
+            with open(os.path.join(run, name), "w") as f:
+                json.dump(doc, f)
+        r = padrun.Run(run, "verify")
+        r.end = time.time() + 120
+
+        def stub(screen):
+            def fake(argv, **kw):
+                return subprocess.CompletedProcess(argv, 0, "1 1" if argv[1] == "display-message" else screen, "")
+            return fake
+        with mock.patch.object(padrun, "sh", stub("starting\nsettings.json refused\n")), mock.patch.object(r, "fault", lambda *a, **k: None):
+            t0 = time.time()
+            with self.assertRaises(padrun.Step) as cm:
+                r.until("Recording in chat mode", "none")
+        self.assertLess(time.time() - t0, 5)
+        self.assertTrue(cm.exception.args[1].startswith("start-refused"))
+        with mock.patch.object(padrun, "sh", stub("Recording in chat mode\n")):
+            self.assertTrue(r.until("Recording in chat mode", "none"))
 
 
 if __name__ == "__main__":
