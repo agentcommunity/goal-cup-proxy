@@ -282,12 +282,13 @@ class CrashRows(unittest.TestCase):
     UP = ({"written": {"model_requests": 2}}, {"written": {"model_requests": 5}})  # status samples before and after
 
     def row(self, kind, gap, samples=UP, recovery=(("ok", "10:03"),), seal="harness_exit", over_cap=False,
-            words=check.RECOVER, more=(), pid=9, code=1):
+            words=check.RECOVER, more=(), pid=9, code=1, case="direct", quiet=False):
         told = [{"kind": k, "exit": 0, "said": w, "at": "2026-10-30T10:%s+00:00" % t}
                 for k, w, t in zip(("recover", "recover", "status"), words + (check.STATUS_RECOVER,), ("02:30", "04:00", "03:30"))]
-        kills = [{"kind": k, "pid": pid, "at": "2026-10-30T10:02:00+00:00"} for k in ("kill-watchdog", "kill-recorder")]
+        kills = [dict({"kind": k, "pid": pid, "at": "2026-10-30T10:02:00+00:00"}, **({"quiet": True} if quiet else {}))
+                 for k in ("kill-watchdog", "kill-recorder")]
         rec = [{"kind": "wait-recovery", "result": x, "at": "2026-10-30T%s:00+00:00" % t} for x, t in recovery]
-        files = {"meta.json": {"connector": "codex-cli", "case": "direct", "variant": [kind + "@3"], "server": "off",
+        files = {"meta.json": {"connector": "codex-cli", "case": case, "model_host": "api.example", "variant": [kind + "@3"], "server": "off",
                                "keep": True, "commits_since_start": 1, "entry": "e1", "over_cap": over_cap,
                                "started": "2026-10-30T10:00:00+00:00"},
                  "verify/check-local.json": {"exit": code, "entries": [{"entry": "e1", "seal_reason": seal,
@@ -301,14 +302,30 @@ class CrashRows(unittest.TestCase):
                  "watch/faults.jsonl": told + kills + rec + list(more)}
         return evaluate(files)
 
+    GAP = {"start": "2026-10-30T10:01:58.8Z", "end": "2026-10-30T10:02:01.2Z"}  # the kill is at 10:02:00
+
     def test_kill_recorder(self):
-        gap = {"start": "2026-10-30T10:00:00Z", "end": "2026-10-30T10:00:01.2Z"}
+        gap = self.GAP
         good = self.row("kill-recorder", gap)
         self.assertEqual((good["result"] != "FAIL", good["faults"]), (True, "PASS"))
         down = (("FAIL", "10:04"),)  # did not stand back up
-        for bad in ({"gap": dict(gap, cause="null_mode")}, {"gap": dict(gap, end="2026-10-30T10:00:02.5Z")}, {"recovery": down},
+        for bad in ({"gap": dict(gap, cause="null_mode")}, {"gap": dict(gap, end="2026-10-30T10:02:02.5Z")}, {"recovery": down},
                     {"samples": self.UP[:1] * 2}):  # no model request written after the kill
             self.assertEqual(self.row("kill-recorder", **dict({"gap": gap}, **bad))["result"], "FAIL", bad)
+
+    def test_gap_is_timed_by_its_end_not_its_length(self):  # PRD-02 R1: the gap starts at the last chain link
+        for start, end, fails in (("10:01:00", "10:02:01.2", False), ("10:01:58.8", "10:02:02.5", True),
+                                  ("10:01:58.8", "10:02:03", True), ("10:01:00", "10:01:59", True)):
+            gap = {"start": "2026-10-30T%sZ" % start, "end": "2026-10-30T%sZ" % end}
+            self.assertEqual(self.row("kill-recorder", gap)["result"] == "FAIL", fails, (start, end))
+
+    def test_dodger_progress_is_tunnel_connections(self):
+        def tun(n):
+            return {"written": {"model_requests": 0, "tunnel_hosts": {"api.example": {"conns": n}}}}
+        for samples, kw, fails, clean in (((tun(1), tun(4)), {}, False, True), ((tun(2), tun(2)), {}, True, False),
+                                          ((tun(2), tun(2)), {"quiet": True}, False, False)):
+            got = self.row("kill-recorder", self.GAP, samples, case="dodger", **kw)["faults"]
+            self.assertEqual((got == "FAIL", got == "PASS"), (fails, clean), (kw, got))
 
     def test_recover_keeps_harness_pid_and_port(self):
         gap = {"cause": "watchdog_lost", "start": "2026-10-30T10:01:00Z", "end": "2026-10-30T10:02:00Z"}
@@ -320,7 +337,7 @@ class CrashRows(unittest.TestCase):
                              fails, over_cap)
 
     def test_seal_at_the_spend_cap_is_not_a_fault_failure(self):  # section 7, ledger T6: the pad's own seal
-        gap = {"start": "2026-10-30T10:00:00Z", "end": "2026-10-30T10:00:01.2Z"}
+        gap = self.GAP
         down = (("FAIL", "10:04"),)
         wgap = {"cause": "watchdog_lost", "start": "2026-10-30T10:01:00Z", "end": "2026-10-30T10:02:00Z"}
         for at, over_cap, code, fails in (("10:03", True, 0, False), ("10:03", False, 0, True), ("10:20", True, 0, True),
