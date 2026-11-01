@@ -287,7 +287,10 @@ impl Board {
         let n = f.notes_seen;
         f.notes_seen += 1;
         let what = &note["what"];
-        if !f.first_notes.iter().any(|(_, v)| v["what"] == *what) {
+        let expected = note["expected"].as_bool().unwrap_or(false);
+        // Keyed by (what, expected): an expected long_tunnel must not hide an unflagged one.
+        let seen = |v: &Value| v["what"] == *what && v["expected"].as_bool().unwrap_or(false) == expected;
+        if !f.first_notes.iter().any(|(_, v)| seen(v)) {
             f.first_notes.push((n, note.clone()));
         }
         f.last_notes.push_back((n, note));

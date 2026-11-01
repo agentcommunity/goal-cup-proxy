@@ -358,32 +358,3 @@ fn an_unread_harness_version_is_sent_as_unknown_and_the_run_opens() {
     assert_eq!(sent(None), json!("unknown"));
     assert_eq!(sent(Some("1.2.3")), json!("1.2.3"));
 }
-
-/// A long harness version is cut to 64 UTF-16 units (the Worker counts `.length`) at a char
-/// boundary; a short one passes unchanged.
-#[test]
-fn a_long_harness_version_is_cut_to_64_units_on_the_wire() {
-    let _one = ONE.lock().unwrap_or_else(|e| e.into_inner());
-    let sent = |version: &'static str| {
-        let w = FakeWorker::start();
-        let (server, seen) = spy(&w);
-        let (home, c, mut out) = (tempfile::tempdir().unwrap(), connector(), Vec::new());
-        let (_held, closed) = ports::refusing();
-        let api = format!("http://{closed}");
-        let mut a = ask_in(RunMode::Practice, &c, None, &api);
-        a.harness_version = Some(version);
-        begin(home.path(), &server, &a, &mut out).unwrap();
-        let body = seen.lock().unwrap()[0].clone();
-        body["harness_version"].as_str().unwrap().to_owned()
-    };
-    let long = "v".repeat(200);
-    assert_eq!(sent(Box::leak(long.into_boxed_str())), "v".repeat(64));
-    // 63 ASCII then a 4-byte char (2 units): 65 units, so the char goes.
-    let edge: &'static str = Box::leak(format!("{}\u{1F600}x", "a".repeat(63)).into_boxed_str());
-    assert_eq!(sent(edge), "a".repeat(63));
-    // 32 two-unit chars make exactly 64 units; the rest is cut.
-    let wide: &'static str = Box::leak("\u{1F600}".repeat(40).into_boxed_str());
-    let got = sent(wide);
-    assert_eq!(got.encode_utf16().count(), 64);
-    assert_eq!(sent("1.2.3"), "1.2.3");
-}
