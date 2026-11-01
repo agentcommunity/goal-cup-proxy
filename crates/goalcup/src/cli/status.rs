@@ -172,6 +172,7 @@ pub fn problems(st: &Status, state: &State, cx: &Ctx<'_>) -> Vec<String> {
             Some("native_other_device") => {
                 text::native_other_device(note_str(n, "path").unwrap_or("a folder"), cx.name)
             }
+            Some("long_tunnel") if n.get("expected") == Some(&Value::Bool(true)) => continue,
             Some("long_tunnel") => {
                 let num = |k: &str| n.get(k).and_then(Value::as_u64);
                 let minutes =
@@ -209,6 +210,21 @@ pub fn problems(st: &Status, state: &State, cx: &Ctx<'_>) -> Vec<String> {
             &text::end_words(d, cx.now),
             cx.run,
         ));
+    }
+    out
+}
+
+/// Hosts the proxy tunnelled on purpose (the `expected` flag on a `long_tunnel` note): plain
+/// information, never a problem, with no advice.
+fn expected_lines(st: &Status) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for n in &st.notes {
+        if note_str(n, "what") == Some("long_tunnel") && n.get("expected") == Some(&Value::Bool(true)) {
+            let line = text::expected_tunnel(note_str(n, "host").unwrap_or("a host"));
+            if !out.contains(&line) {
+                out.push(line);
+            }
+        }
     }
     out
 }
@@ -267,6 +283,7 @@ pub fn block(
     let end = !cx.recorder && !recover && (st.mode == Mode::Sealed || !cx.watchdog);
     lines.extend(upload.map(|u| text::upload_line(u, cx.now, end)));
     lines.push(text::parts_line(parts));
+    lines.extend(expected_lines(st));
     let problems = problems(st, state, cx);
     lines.push(text::problems_head(problems.len()));
     let mut out = String::new();
