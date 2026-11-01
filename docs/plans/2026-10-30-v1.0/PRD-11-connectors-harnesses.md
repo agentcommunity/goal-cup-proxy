@@ -1508,3 +1508,27 @@ is left is data and docs only. Four items, in order:
 ### 2026-11-01, expected hosts as built
 
 - The `long_tunnel` note is kept, not skipped (record raw): it carries `expected: true` when `HostList::is_expected` holds for the CONNECT host. `status` prints an info line for expected ones and a problem line only for unflagged ones. Open for PRD-02 (`pipeline/status.rs`, `Board::note`): key the first note per `(what, expected)` so an expected note never hides an unflagged one; this slice does not touch that file. The `wire_version` 64-unit cut (OWN-6) is in `cli/approve.rs` with its edge tests. The verifier adds the fact `long_tunnel_expected` and drops the `listed_hosts_decrypted` warning for flagged hosts; it trusts the recorder's flag, since `start` does not carry the expected list.
+
+### 2026-11-01, owner decision: Hermes search index is not captured (planner)
+
+- **Decision (owner, 1 Nov):** the Hermes full-text search index is not captured. full4 F1 found the
+  planted remote password raw in `state.db` / `state.db-wal` as a bare search term, with no URL or
+  key shape for the masker to see.
+- **Measured at v0.22.5 in a keyless box (1 Nov):** `SessionDB()` in an empty `HERMES_HOME` makes one
+  `state.db` that holds `messages_fts` and `messages_fts_trigram` with their `_data`, `_idx`,
+  `_docsize` and `_config` shadow tables, plus triggers; a planted word appears in those bytes. There is
+  no separate index file, no setting that turns the index off, and no other session file (the home also
+  holds only `SOUL.md`, two empty lock files named `state.db.*`, and `cache/`). Native capture
+  (PRD-04) copies files raw by design, with no SQLite code, so it cannot copy some tables and skip
+  others.
+- **Smallest change:** delete the `state` native row from `connectors/hermes-cli.toml` (it also stops
+  the two empty `state.db.*` lock files matching). The delegation manifest and `task-*.log` rows stay.
+  Threads and subagents come from the wire (every call, PRD-02) and the delegation logs; the session
+  and message tables are not recorded. No native code changes, so no seam note to PRD-04.
+- **Point 6:** the `first_screen` line and `docs/harnesses/hermes-cli.md` say it plainly.
+- **Seam notes:** PRD-09 (`goalcup-verify` `usage/hints.rs` `HermesDb`, `usage/sqlite.rs`): the Hermes
+  database leg gets no input any more; the code is dead and can go (less code). Per-call matching
+  for Hermes is wire only. PRD-15: `docs/HARNESS-SETUP.md` Hermes item 1 and the PARTICIPANT-GUIDE
+  line on what is recorded should add "Hermes's session database is not copied". PRD-04's
+  `tests/native_safety.rs::hermes_rows_take_the_state_database_and_no_request_dump` asserts the old row;
+  the slice flips it (outside file, integrator ruling like OWN-6).
