@@ -2020,3 +2020,19 @@ taken; "rejected" says why. Fixes for other files are made by those files' owner
 ### 2026-11-01, harness file key redacts_tool_output (C3 upstream redaction)
 
 - A harness file may carry `redacts_tool_output = true` (Hermes only; docs/harnesses/hermes-cli.md:28 is about Hermes's own logs, so the basis is not yet a vendor page on tool output). The pad copies it into the row meta under the same name. For such a harness only, a nonzero `masked_key` MASK counts as the exercise evidence, so C3 no longer stops at "secret exercise not done" for a run that has that MASK but none of the planted shapes. A planted kind with no MASK and no hit stays INCONCLUSIVE ("owner question open"), never PASS, and a run with no exercise evidence stays INCONCLUSIVE. Known-value hits, other shape hits, big masks and plain hits fail as before, and a harness without the key is unchanged. The C3 acceptance row ("every planted shaped value has at least one MASK") is unchanged; a row relying on this rule does not count toward `--release-check` until the owner confirms (point 4). No locked ledger item is touched.
+
+### 2026-11-01, C3 with exact values, and masked upstream
+
+- **Exact values on.** `Run.exact_values()` is true when the record's `mask_values` (PRD-05 ValueCounts, from the
+  start event) has `workspace` above 0. The pad reads it from `verify/secrets.json` key `mask_values`, else from
+  `meta.json`; absent or unreadable means off. The box half does not write it yet, so until the verifier
+  surfaces it C3 behaves as before. When on, a plain hit of `PAD_SECRET_PLAIN` is a C3 FAIL (the planted value
+  reached the record unmasked), the exercise proof is a `run_secret` MASK, and with no `run_secret` MASK and no
+  planted-shape MASK C3 stays INCONCLUSIVE. The remote password in `.git/config` is not in `.env` and stays a
+  known value. `facts.plain_hits` is kept.
+- **Masked upstream (ledger 18:04Z).** For a harness with `redacts_tool_output`, no known, shape or plain hit and
+  no stated loss, a planted kind with no MASK is a C3 PASS ("masked upstream"), not INCONCLUSIVE. A known hit
+  or unmasked shape hit still FAILs, the deltas-only stated loss stays INCONCLUSIVE, and a harness without the
+  flag keeps INCONCLUSIVE for a kind with no MASK.
+- **Stripe kinds.** `PLANTED` is unchanged here. When PRD-05 stripe-rules merges, its `sk_test_` and `whsec_`
+  kinds join `PLANTED` as rows that need a MASK once those values are planted; the index shift follows then.
