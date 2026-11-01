@@ -607,6 +607,8 @@ class RigFaults(unittest.TestCase):
         self.assertTrue(cm.exception.args[1].startswith("start-refused"))
         self.assertIn("settings.json refused", cm.exception.args[1])
         self.assertNotIn("Pane is dead", cm.exception.args[1])
+        with mock.patch.object(padrun, "sh", stub("x\n")):  # server off: the status wait ends on the dead pane too
+            self.assertTrue(r.recording_or_dead())
         with mock.patch.object(padrun, "sh", stub("Recording in chat mode\n")):
             self.assertTrue(r.until("Recording in chat mode", "none"))
 
