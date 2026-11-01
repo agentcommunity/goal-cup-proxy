@@ -1649,3 +1649,7 @@ The PRD-17 deletion gate (PRD-13) waits on tests that this PRD is asked to land 
 - **Nit B4 (carried to PRD-14):** `tests/cli_continue.rs` hand-rolls a one-shot HTTP server (about 53 lines) to read the continue body. Same cause as B1 above: the FakeWorker in `tests/common/` (PRD-14, PRD-08) does not record request bodies. When it does, this server and the `cli_approve.rs` spy both go.
 - **Nit B5 (accepted):** the `harness_version` `json!` line in `approve.rs` `begin()` runs past 100 columns; rustfmt does not touch `json!`. Left.
 - No seam change. No locked ledger item is touched.
+
+### 2026-11-01, note from PRD-11 own6-expected-hosts-wired (merge 5dc8cbde)
+
+- Under ruling OWN-6 the PRD-11 slice edited PRD-10 files: `cli/approve.rs` (the `wire_version` 64-unit cut, so a long version line such as Hermes 62 units is sent whole and a longer one is cut at 64), `cli/status.rs` and `cli/text.rs` (an info line for an expected `long_tunnel` note, a problem line only for unflagged ones, no seal-and-continue advice for expected hosts). Treat them as PRD-10 code from here on. Nit B7 (test-only, `tests/cli_approve.rs` leaks three strings with `Box::leak`; a direct unit test on `wire_version(Option<&str>)` would be shorter) is left; take it only if that test is rewritten anyway. No seam change and no locked ledger item is touched.
