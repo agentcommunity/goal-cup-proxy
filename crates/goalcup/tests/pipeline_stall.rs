@@ -50,7 +50,11 @@ fn a_stalled_writer_exits_75_and_the_next_boot_names_it() {
     let server = json!({"v": 1, "server": null, "run": RUN, "mode": "practice", "deadline": null,
         "repo": null, "connector": {"id": "fake", "name": "Fake", "source": "builtin"},
         "hosts_file": null, "entries": [{"id": ENTRY, "harness_version": null, "resumed": false}]});
-    std::fs::write(cli::server_json(&cli::run_dir(&home, RUN)), server.to_string()).unwrap();
+    std::fs::write(
+        cli::server_json(&cli::run_dir(&home, RUN)),
+        server.to_string(),
+    )
+    .unwrap();
 
     // The first recorder process holds its writer past the 60 s stall exit; later ones do not.
     let (dd, exe) = (d.display(), env!("CARGO_BIN_EXE_goalcup"));
