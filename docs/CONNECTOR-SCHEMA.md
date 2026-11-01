@@ -95,7 +95,7 @@ host from the participant list or a hint is left out with a log line.
 `goalcup start` and `goalcup continue` take `--connector <file.toml>` and `--hosts <file.toml>`, with
 the same parser and checks; the `start` event gives `connector_source = "file"`. Both are for practice
 and test runs only: without `--practice` or `--test`, the start refuses before anything is read.
-`continue` has no `--practice` or `--test`: its two flags must name the same files, unchanged, as the
+`continue` has no `--practice` or `--test`: its two flags must name the same files, with the same connector id, as the
 run's first entry (none if it used none). A `continue` runs the connector profile the run's
 `server.json` names, the same one the first entry used. It appends `resume` to `args` when the
 run's earlier entries wrote at least one model request or session file; if the last entry was itself

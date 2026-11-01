@@ -309,9 +309,9 @@ goalcup start". `goalcup status --json` prints the same facts as JSON.
 not restarted. If recording is already on, it says there is nothing to recover. It refuses with one
 line, and changes nothing, if the part is sealed, the run is over, `goalcup` still runs for the
 part (it restarts recording itself), the agent is no longer running (it points you to
-`goalcup continue`), or the port or the run's certificate key is gone. If it cannot restart recording it says so and what
-to try next. It works only on the machine that started the run. Run it in another terminal, not
-inside the agent.
+`goalcup continue`), or the port or the run's certificate key is gone. If it cannot restart
+recording it says so and what to try next. It works only on the machine that started the run. Run it
+in another terminal, not inside the agent.
 
 **Problem lines.** A `PROBLEM:` line appears only where you must act or report; each cause is one
 line.
@@ -336,10 +336,11 @@ the last part died with the computer, it closes that part first and says so. It 
 nothing, if the last part is still recording, if the agent from the last part still runs, if the
 time is up, if the run was continued somewhere else, or if `--connector` or `--hosts` differs from
 what the first part used. If the earlier parts wrote model requests or session files, it resumes the
-harness's last conversation; if that fails at once it opens a new one. Either way type only "keep
-going". Do not paste the first message again: it is put on the clipboard again only when a new
-conversation starts, which also means no model request or session file was written, so your prompt
-may never have been sent. A new conversation can still
+harness's last conversation; if that fails at once it opens a new one. When it resumes, type only
+"keep going" and do not paste the first message again. When a new conversation starts (nothing was
+written earlier, or the resume failed at once and goalcup says "Starting a new ... session"), the
+first message is offered again: paste it once and press Enter, as goalcup says. A new conversation
+can still
 push if the agent's `git config` and `git remote add` lines are saved in the repository's
 `.git/config`. Do not delete or move the project folder. `goalcup seal` stops the agent and ends the
 current part (it asks first; `--yes` skips that). The run stays open and `continue` goes on.

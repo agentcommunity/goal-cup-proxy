@@ -131,7 +131,7 @@ starts (0 for `sid` 0 and for `conn` streams).
 | 1 | `memory_guard` | A stated memory guard was passed; tail `{"guard", "limit"}` |
 | 2 | `recorder_down` | The recorder was not running, or ran in null mode. Always `sid` 0 |
 | 3 | `unsupported_encoding` | A body coding the proxy cannot decode; tail `codings` |
-| 4 | `decode_failed` | A coding or the framing broke part way. For HTTP/2 this covers a bad framing or preface and frames that arrive after their stream ended. Those late frames are counted in the `conn` GAP of the stop if parsing stopped (`memory_guard` after an `hpack_table` stop), else in a `decode_failed` `conn` GAP at the close |
+| 4 | `decode_failed` | A coding or the framing broke part way. For HTTP/2 this covers a bad framing or preface and frames that arrive after their stream ended. Those late frames are counted in the `conn` GAP of the stop if parsing stopped (for example `memory_guard` after an `hpack_table` stop, or `h2_unsupported`), else in a `decode_failed` `conn` GAP at the close |
 | 5 | `source_changed` | A session file changed with bytes still unread |
 | 6 | `tls_refused` | A listed host's client refused the run CA; tunnelled |
 | 7 | `pinned` | A listed host's client pins certificates; tunnelled |
