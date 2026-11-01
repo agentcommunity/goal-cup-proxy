@@ -7,8 +7,14 @@ K8 are real runs, not here. Fixtures, under scripts/pad/fixtures/, each a synthe
   k2-part, k2-fetched (PRD-08 check_run1_shape.rs, GOALCUP_FIXTURES_OUT); k7-part, k7-fetched, the clean pair
   that K6, K9 and K10 tamper with; k11-a-part, k11-b-part, k11-c-part, k11-d-part and k11-d-fetched (PRD-09 history).
 Regenerate (box job, then copy the folders): GOALCUP_FIXTURES_OUT=$HOME/fx cargo nextest run -p goalcup-verify
---test check_run1_shape --test check_history. k11-d-fetched is the honest fetch of the k11-d record (the run 1 test's fetch
-helper, honest) and k7-fetched and k11-d-fetched also carry complete=true, missing=null, which the test helper does not write.
+--test check_run1_shape --test check_history gives k2-* and k11-a/b/c-part. The other four come from
+fixtures/regen-k7-k11d.rs, copied to crates/goalcup-verify/tests/regen_k7_k11d.rs, then
+GOALCUP_FIXTURES_IN=scripts/pad/fixtures GOALCUP_FIXTURES_OUT=$HOME/fx cargo test -p goalcup-verify --test regen_k7_k11d:
+  k7-part, k7-fetched: k7's raw records unchanged, re-compressed as PartWriter writes (one frame, flushed with an L
+    line at every LINK, E at the last); the fetched copy is the same bytes in three chunks (seqs 0-40, 41-80, 81-120).
+  k11-d-part, k11-d-fetched: Codex-shaped, every call and its usage on the wire only; the one native stream is the
+    root's rollout with its session_meta and the spawn naming the child, so C2's parent comes from there.
+k7-fetched and k11-d-fetched carry complete=true, missing=null (S13's final fields), which the test helper does not write.
 A control whose fixtures are absent is "not run". Exit 0: every control ran as wanted; 1: one differed; 3: none
 differed but one did not run, so a missing fixture never reads as trusted. C3 is never wanted here: the setup
 script's planted values (K5) and the box's other scans are not part of an offline fold. Writes pad-out/selftest.json.
@@ -69,8 +75,9 @@ K2 = ("gap_has_end", "streams_closed", "server_counts_match", "wire_keeps_up", "
 ALLC = dict.fromkeys(("C1", "C2", "C4", "C5", "C6"), "PASS")
 # label, part, fetched, wanted checks, wanted finding ids, tampers (fetch edit, status count, after the verifier).
 # K2 wants C5 too: check.py's C5 repeats C2's thread-has-no-calls test, so the one lost subagent thread fails both (PRD-12 section 12, K2 row).
-# K11 ("wire_only"): the records are wire-only with no ok response, so they carry no usage and no subagent and C2, C4 and C5 are not this control's
-# (the section 12 K11 row asks for C1 and the history result); C1 and the history ids are asserted, C3 and C6 must not FAIL.
+# K11 ("wire_only"): the calls are on the wire only; a, b and c have no ok response with usage and no subagent, so C2, C4 and C5 are not
+# their control's (the section 12 K11 row asks for C1 and the history result); C1 and the history ids are asserted, C3 and C6 must not FAIL.
+# K11d ("all_six") carries usage and a child thread, so it must also show all six PASS, or it is not run.
 # K6c wants C6 too: section 8's C6 compares fetch.json's model_requests, so a raised count fails C4 and C6.
 CONTROLS = [
     ("K2", "k2-part", "k2-fetched", {"C1": "FAIL", "C2": "FAIL", "C4": "FAIL", "C5": "FAIL", "C6": "FAIL"}, ids("fail", *K2),
