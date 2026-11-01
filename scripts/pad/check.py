@@ -495,9 +495,14 @@ def secrets(r):
     # (point 4): INCONCLUSIVE, never PASS.
     # The vendor page names only the openai, github and key=/token=/password= patterns, so only those kinds carry the note.
     named = {"openai_key", "github_token", "generic_secret_assignment"}
+    loss = r.stated_loss()
+    if loss:  # the only hit is the stated loss (scan() reports it): not a real hit, so a missing MASK is open, never a FAIL
+        hit = 0
     for kinds in PLANTED:
         why = "owner question open: the harness redacts tool output itself, so this kind may be masked before the wire" \
             if up and named.intersection(kinds) else "not exercised"
+        if loss:
+            why += "; shape only in joined streamed replies (not verified, owner question open)"
         r.flag(not any(masks.get(k) for k in kinds), "C3", "FAIL" if hit else "INCONCLUSIVE",
                "%s of %s: no MASK" % ("hits" if hit else why, " or ".join(kinds)))
 
