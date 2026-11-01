@@ -181,44 +181,21 @@ fn space(u: Unit) -> bool {
     u.is_whitespace()
 }
 
-/// One unit of the shell literal's value after a `=` with no space, as its two alternatives read
-/// it. `token_only` and `run` track the first alternative, `[A-Za-z0-9_\-]{16,}`: it is decided
-/// once it has sixteen units and a unit outside its class arrives, so the candidate ends there.
-/// The second is the form-encoded value, a run of `%XX` escapes and units of the class
-/// `[A-Za-z0-9_.~+/=\-]`, which needs sixteen units and a `%XX` escape or the dotted shape (see
-/// `redact.rs`). Its match ends at the end of that run, so this keeps every unit of the class
-/// live past the first alternative, and the regex then decides the exact span. `None` ends the
-/// candidate.
-fn encoded_step(run: u8, token_only: bool, hex: u8, u: Unit) -> Option<Shell> {
+/// One unit of the shell literal's value after a `=` with no space. The form-encoded
+/// alternatives come first there: a run of `%XX` escapes and units of the class
+/// `[A-Za-z0-9_.~+/=\-]` that needs sixteen units and a `%XX` escape, or the `[0-9]\.` shape.
+/// The dotted value of the last alternative (token units and single dots) lies inside that
+/// class, so this keeps every unit of the class live and the regex then decides the exact span.
+/// `None` ends the candidate.
+fn encoded_step(hex: u8, u: Unit) -> Option<Shell> {
     if hex > 0 {
-        return ascii_where(u, |b| b.is_ascii_hexdigit()).then_some(Shell::Encoded {
-            run,
-            token_only: false,
-            hex: hex - 1,
-        });
-    }
-    if token_folded(u) {
-        return Some(Shell::Encoded {
-            run: (run + 1).min(16),
-            token_only,
-            hex: 0,
-        });
-    }
-    if token_only && run >= 16 {
-        return None;
+        return ascii_where(u, |b| b.is_ascii_hexdigit())
+            .then_some(Shell::Encoded { hex: hex - 1 });
     }
     match u {
-        '%' => Some(Shell::Encoded {
-            run,
-            token_only: false,
-            hex: 2,
-        }),
-        '.' | '~' | '+' | '/' | '=' => Some(Shell::Encoded {
-            run,
-            token_only: false,
-            hex: 0,
-        }),
-        _ => None,
+        '%' => Some(Shell::Encoded { hex: 2 }),
+        '.' | '~' | '+' | '/' | '=' => Some(Shell::Encoded { hex: 0 }),
+        _ => token_folded(u).then_some(Shell::Encoded { hex: 0 }),
     }
 }
 /// `[^"\\]` in Unicode mode: any scalar value but a double quote or a backslash.
@@ -321,7 +298,7 @@ const fn prefixed(
 /// The streaming recognizer of each shared literal, in `shapes.tsv` order. A recognizer never
 /// decides a span below the bound (the regex does); it says how long a candidate must be held,
 /// and how long a fail-closed window must run.
-static SHAPES: [Shape; 20] = [
+static SHAPES: [Shape; 28] = [
     prefixed(
         "anthropic_key",
         r"sk-ant-[A-Za-z0-9_\-]{20,}",
@@ -402,7 +379,7 @@ static SHAPES: [Shape; 20] = [
     },
     Shape {
         kind: "generic_secret_assignment",
-        source: r#"(?i)(?:api[_-]?key|secret|token|password)(?:\s*[=:]\s*(?:\\{0,7}['"])?[A-Za-z0-9_\-]{16,}|=(?:%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){15,}|[A-Za-z0-9_.~+/=\-]{1}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){14,}|[A-Za-z0-9_.~+/=\-]{2}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){13,}|[A-Za-z0-9_.~+/=\-]{3}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){12,}|[A-Za-z0-9_.~+/=\-]{4}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){11,}|[A-Za-z0-9_.~+/=\-]{5}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){10,}|[A-Za-z0-9_.~+/=\-]{6}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){9,}|[A-Za-z0-9_.~+/=\-]{7}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){8,}|[A-Za-z0-9_.~+/=\-]{8}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){7,}|[A-Za-z0-9_.~+/=\-]{9}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){6,}|[A-Za-z0-9_.~+/=\-]{10}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){5,}|[A-Za-z0-9_.~+/=\-]{11}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){4,}|[A-Za-z0-9_.~+/=\-]{12}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){3,}|[A-Za-z0-9_.~+/=\-]{13}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){2,}|[A-Za-z0-9_.~+/=\-]{14}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){1,}|[A-Za-z0-9_.~+/=\-]{15,}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2})*|[0-9]\.[A-Za-z0-9_.~+/=\-]{14,}))"#,
+        source: r#"(?i)(?:api[_-]?key|secret|token|password)(?:=(?:%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){15,}|[A-Za-z0-9_.~+/=\-]{1}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){14,}|[A-Za-z0-9_.~+/=\-]{2}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){13,}|[A-Za-z0-9_.~+/=\-]{3}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){12,}|[A-Za-z0-9_.~+/=\-]{4}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){11,}|[A-Za-z0-9_.~+/=\-]{5}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){10,}|[A-Za-z0-9_.~+/=\-]{6}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){9,}|[A-Za-z0-9_.~+/=\-]{7}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){8,}|[A-Za-z0-9_.~+/=\-]{8}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){7,}|[A-Za-z0-9_.~+/=\-]{9}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){6,}|[A-Za-z0-9_.~+/=\-]{10}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){5,}|[A-Za-z0-9_.~+/=\-]{11}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){4,}|[A-Za-z0-9_.~+/=\-]{12}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){3,}|[A-Za-z0-9_.~+/=\-]{13}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){2,}|[A-Za-z0-9_.~+/=\-]{14}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){1,}|[A-Za-z0-9_.~+/=\-]{15,}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2})*|[0-9]\.[A-Za-z0-9_.~+/=\-]{14,})|\s*[=:]\s*(?:\\{0,7}['"])?(?:[A-Za-z0-9_\-]+\.)*[A-Za-z0-9_\-]{16,}(?:\.[A-Za-z0-9_\-]+)*)"#,
         form: Form::ShellAssignment,
     },
     Shape {
@@ -464,6 +441,73 @@ static SHAPES: [Shape; 20] = [
         &[b"d", b"o", b"p", b"_", b"v", b"1", b"_"],
         hex_lower,
         32,
+        None,
+    ), // Google's authentication keys (`AQ.` and 50 more), the only kind AI Studio now issues.
+    // The floor is 40, below the real 50, so a trimmed key is still caught.
+    prefixed(
+        "google_auth_key",
+        r"AQ\.[A-Za-z0-9_\-]{40,}",
+        &[b"A", b"Q", b"."],
+        token,
+        40,
+        None,
+    ),
+    // Provider and gateway keys with a fixed prefix (connectors/model-hosts.toml), each
+    // confirmed by the vendor's docs or its own SDK or CLI source.
+    prefixed(
+        "groq_key",
+        r"gsk_[A-Za-z0-9_\-]{20,}",
+        &[b"g", b"s", b"k", b"_"],
+        token,
+        20,
+        None,
+    ),
+    prefixed(
+        "cerebras_key",
+        r"csk[-_][A-Za-z0-9_\-]{20,}",
+        &[b"c", b"s", b"k", b"-_"],
+        token,
+        20,
+        None,
+    ),
+    prefixed(
+        "fireworks_key",
+        r"fw_[A-Za-z0-9_\-]{20,}",
+        &[b"f", b"w", b"_"],
+        token,
+        20,
+        None,
+    ),
+    prefixed(
+        "vercel_gateway_key",
+        r"vck_[A-Za-z0-9_\-]{20,}",
+        &[b"v", b"c", b"k", b"_"],
+        token,
+        20,
+        None,
+    ),
+    prefixed(
+        "together_key",
+        r"tgp_v1_[A-Za-z0-9_\-]{20,}",
+        &[b"t", b"g", b"p", b"_", b"v", b"1", b"_"],
+        token,
+        20,
+        None,
+    ),
+    prefixed(
+        "sgamp_key",
+        r"sgamp_[A-Za-z0-9_\-]{20,}",
+        &[b"s", b"g", b"a", b"m", b"p", b"_"],
+        token,
+        20,
+        None,
+    ),
+    prefixed(
+        "factory_key",
+        r"fk-[A-Za-z0-9_\-]{20,}",
+        &[b"f", b"k", b"-"],
+        token,
+        20,
         None,
     ),
 ];
@@ -894,16 +938,14 @@ enum Shell {
     /// Backslashes (one to seven) before the optional quote.
     Escape(u8),
     Quoted,
-    /// Value characters, capped at sixteen.
-    Value(u8),
-    /// Just after `=` with no space: the form-encoded literal's value may start here.
+    /// Inside a dotted value, on a token unit.
+    Value,
+    /// Inside a dotted value, just after a dot: a token unit must follow.
+    Dot,
+    /// Just after `=` with no space: the form-encoded value may start here.
     Direct,
-    /// Inside the form-encoded literal's value (see [`encoded_step`]).
+    /// Inside a value after `=` with no space (see [`encoded_step`]).
     Encoded {
-        /// Token-class units so far, capped at sixteen.
-        run: u8,
-        /// True while every unit so far is a token-class unit.
-        token_only: bool,
         /// Hex digits still owed by a `%XX` escape.
         hex: u8,
     },
@@ -1433,7 +1475,11 @@ impl Json {
 }
 
 impl Shell {
-    /// `(?i)(?:api[_-]?key|secret|token|password)\s*[=:]\s*(?:\\{0,7}['"])?[A-Za-z0-9_\-]{16,}`
+    /// The shell literal: `(?i)(?:api[_-]?key|secret|token|password)`, then either `=` and a
+    /// form-encoded value, or `\s*[=:]\s*(?:\\{0,7}['"])?` and a dotted value
+    /// `(?:[A-Za-z0-9_\-]+\.)*[A-Za-z0-9_\-]{16,}(?:\.[A-Za-z0-9_\-]+)*` (token runs joined by
+    /// single dots, one run of sixteen or more). The walk holds any token runs joined by single
+    /// dots, a superset: it never ends before the regex's match does.
     fn step(&mut self, u: Unit) -> bool {
         let next = match *self {
             Shell::Word { which, pos } => {
@@ -1489,20 +1535,18 @@ impl Shell {
             Shell::AfterSep | Shell::Direct | Shell::Escape(_) if is(u, b'\'') || is(u, b'"') => {
                 Shell::Quoted
             }
-            Shell::AfterSep | Shell::Quoted if token_folded(u) => Shell::Value(1),
-            Shell::Direct => match encoded_step(0, true, 0, u) {
+            Shell::AfterSep | Shell::Quoted | Shell::Value | Shell::Dot if token_folded(u) => {
+                Shell::Value
+            }
+            Shell::Value if is(u, b'.') => Shell::Dot,
+            Shell::Direct => match encoded_step(0, u) {
                 Some(next) => next,
                 None => return false,
             },
-            Shell::Encoded {
-                run,
-                token_only,
-                hex,
-            } => match encoded_step(run, token_only, hex, u) {
+            Shell::Encoded { hex } => match encoded_step(hex, u) {
                 Some(next) => next,
                 None => return false,
             },
-            Shell::Value(n) if token_folded(u) => Shell::Value((n + 1).min(16)),
             _ => return false,
         };
         *self = next;
@@ -1670,7 +1714,7 @@ impl Candidate {
                 matches!(json.phase, JsonPhase::Value | JsonPhase::ValueEnd(_))
                     .then_some(json.value_start)
             }
-            (Walk::Shell(Shell::Value(_) | Shell::Encoded { .. }), _) => Some(self.start),
+            (Walk::Shell(Shell::Value | Shell::Dot | Shell::Encoded { .. }), _) => Some(self.start),
             (Walk::Url(Url::Password { from, .. }), _) => Some(*from),
             (Walk::Field(field), Form::Field { scalar, .. }) => match field.phase {
                 FieldPhase::String(_) | FieldPhase::Scalar { .. } => Some(field.value_start),
@@ -2375,6 +2419,18 @@ mod tests {
         b"sk_live_",
         b"glpat-",
         b"dop_v1_",
+        b"AQ.",
+        b"gsk_",
+        b"csk-",
+        b"csk_",
+        b"fw_",
+        b"vck_",
+        b"tgp_v1_",
+        b"sgamp_",
+        b"fk-",
+        b"token=",
+        b"secret: ",
+        b"ab.",
         b" ",
         b"\n",
         b"\t",
