@@ -431,7 +431,26 @@ class SecretCheck(unittest.TestCase):
 
     def test_known_value_hit_fails(self):
         self.assertEqual(self.c3(self.PLANTED, secrets_exit=2), "FAIL")
-        self.assertEqual(self.c3(dict(self.PLANTED, jwt=0)), "FAIL")
+        self.assertEqual(self.c3(dict(self.PLANTED, jwt=0), secrets_exit=2), "FAIL")  # a hit in a kind with no MASK
+
+    def test_kind_masked_upstream_is_not_a_fail(self):  # rung 1x item 3: the harness redacted it, nothing reached the wire raw
+        files = {"meta.json": {"connector": "codex-cli", "case": "direct", "known_box": True, "entry": "e1"},
+                 "verify/secrets.json": {"masks": dict(self.PLANTED, jwt=0)}, "verify/secrets-conductor.json": {"hits": 0},
+                 "verify/exits.json": {"secrets": 0, "secrets-out": 0, "secrets-plain": 0}}
+        got = evaluate(files)
+        self.assertEqual(got["checks"]["C3"], "PASS")
+        self.assertIn("masked upstream", json.dumps(got))
+        del files["verify/exits.json"]["secrets-out"]  # a missing scan stays inconclusive
+        self.assertEqual(evaluate(files)["checks"]["C3"], "INCONCLUSIVE")
+
+    def test_headerless_pem_body_is_masked_upstream(self):  # rung 1x item 4: the BEGIN line was rewritten, the body stayed
+        files = {"meta.json": {"connector": "codex-cli", "case": "direct", "known_box": True, "entry": "e1"},
+                 "verify/secrets.json": {"masks": dict(self.PLANTED, private_key=0), "hits": 4},
+                 "verify/secrets-pem.json": {"hits": 4}, "verify/secrets-conductor.json": {"hits": 0},
+                 "verify/exits.json": {"secrets": 2, "secrets-out": 0, "secrets-plain": 0, "secrets-pem": 2}}
+        self.assertEqual(evaluate(files)["checks"]["C3"], "PASS")
+        files["verify/secrets.json"]["hits"] = 5  # one more hit than the body lines: not only the body
+        self.assertEqual(evaluate(files)["checks"]["C3"], "FAIL")
 
     def test_conductor_scan_counts_its_own_secrets(self):  # section 7: the approval key in the run folder is a hit
         run = mock.Mock(dir=self.enterContext(tempfile.TemporaryDirectory()))
@@ -440,6 +459,20 @@ class SecretCheck(unittest.TestCase):
         with mock.patch.dict(os.environ, {"GOALCUP_TEST_APPROVAL_KEY": SENTINEL + "ap"}):
             pad.Run.scan_out(run)
         self.assertEqual(check.Run(run.dir, {}).hits("secrets-conductor"), 1)
+
+
+class OutScan(unittest.TestCase):
+    """The secrets-out scan leaves the pad's pane copies out and keeps goalcup's own folders in."""
+
+    def test_pane_copies_are_not_scanned_but_the_record_is(self):
+        with tempfile.TemporaryDirectory() as d:
+            for f in ("watch/pane-w1.txt", "watch/pane-3.txt", "watch/faults.jsonl", "verify/pane-x.json", "status.json"):
+                os.makedirs(os.path.dirname(os.path.join(d, f)), exist_ok=True)
+                open(os.path.join(d, f), "w").close()
+            run = mock.Mock(run=d)
+            run.path = lambda *p: os.path.join(d, *p)
+            got = padrun.Run.out_paths(run)
+        self.assertEqual(sorted(got), ["status.json", "verify/pane-x.json", "watch/faults.jsonl"])
 
 
 class PreRows(unittest.TestCase):
