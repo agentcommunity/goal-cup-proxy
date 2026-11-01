@@ -313,7 +313,6 @@ impl Counter {
         }
     }
 
-    /// This boot's counts so far.
     pub fn counts(&self) -> Counts {
         self.counts.clone()
     }
@@ -324,18 +323,11 @@ impl Counter {
         self.spans
     }
 
-    /// Streams opened and not yet ended in this boot.
-    pub fn open_streams(&self) -> u64 {
-        self.open.len() as u64
-    }
-
-    /// The open-stream table, for [`CountsLog::append`].
     pub fn open_table(&self) -> &HashMap<u64, Open> {
         &self.open
     }
 
-    /// The rule numbers that name `fail_closed`, for [`CountsLog::append`], so a recount seeded
-    /// from a line after its boot's start event is pruned still counts `mask_failclosed_bytes`.
+    /// The rule numbers that name `fail_closed`, for [`CountsLog::append`].
     pub fn fail_closed(&self) -> &[u64] {
         &self.fail_closed
     }
@@ -348,7 +340,7 @@ impl Counter {
             m.insert("ev".into(), "count".into());
             m.insert("boot".into(), boot.into());
             m.insert("up_ms".into(), up_ms.into());
-            m.insert("open_streams".into(), self.open_streams().into());
+            m.insert("open_streams".into(), (self.open.len() as u64).into());
             m.insert("held_bytes".into(), held_bytes.into());
             m.insert("held_peak".into(), held_peak.into());
         }
@@ -435,13 +427,9 @@ impl Boot {
     }
 }
 
-/// `counts.jsonl` (PRD-02 section 5 step 3), local only, one compact line per LINK:
-/// `{"seq":<link seq>,"count":<the COUNT event JSON at that LINK>,"spans":<n>,"open":<table>,
-/// "fail_closed":<rule numbers>}`, where `spans` is the boot's own `recorder_down` spans so far
-/// ([`Counter::off_spans`]), `open` the writer's open-stream table ([`Counter::open_table`]) and
-/// `fail_closed` its `fail_closed` rule numbers ([`Counter::fail_closed`]). A later boot takes
-/// a dead boot's COUNT from it without decoding part files, and [`entry_totals`] takes a boot's
-/// totals from it once the boot's part files are pruned after upload (ledger U1).
+/// `counts.jsonl` (PRD-02 section 5 step 3), local only, one compact line per LINK (a [`Boot`]).
+/// A later boot takes a dead boot's COUNT from it without decoding part files, and
+/// [`entry_totals`] takes a boot's totals from it once its part files are pruned (ledger U1).
 pub struct CountsLog {
     path: PathBuf,
     /// The last line of each boot, by boot.
@@ -460,9 +448,7 @@ impl CountsLog {
         }
     }
 
-    /// Appends one line at a LINK: this boot's COUNT event JSON at the LINK with that `seq`, the
-    /// boot's own `recorder_down` spans so far, its open-stream table, when known, and its
-    /// `fail_closed` rule numbers.
+    /// Appends one line at the LINK with `seq`.
     pub fn append(
         &mut self,
         seq: u64,

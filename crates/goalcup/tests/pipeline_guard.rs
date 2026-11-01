@@ -11,6 +11,7 @@ use common::recorder::{records, wait_settled};
 use common::{HANG, within};
 use goalcup::mask::Masker;
 use goalcup::pipeline::{EndReason, GapReason, OpenFlags, Recorder, StreamHandle, StreamKind};
+use goalcup::watchdog::SealReason;
 use goalcup_format::Record;
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
@@ -211,4 +212,69 @@ fn a_thousand_guard_episodes_never_latch() {
     let recs = records(dir.path());
     assert_eq!(check(&recs, &body, off as u64), vec![1000]);
     check_count(dir.path(), &recs, seq);
+}
+
+/// Section 3: the guard weighs what a piece costs (its queue slot as well as its bytes), so
+/// 1-byte pieces reach the guard, and its GAP, long before their bytes alone would.
+#[test]
+fn tiny_pieces_reach_the_guard_by_their_cost() {
+    // SAFETY: the test's first statement, before any thread is started.
+    unsafe {
+        std::env::set_var("GOALCUP_TEST_GUARD_MB", "1");
+        std::env::set_var("GOALCUP_TEST_WRITER_STALL", "0:5000");
+    }
+    let dir = common::recorder::entry_dir();
+    let rec = Recorder::real_for_tests(dir.path(), Masker::passthrough_for_tests());
+    let body = body();
+    let mut h = open(&rec);
+    let mut n = 0;
+    while rec.live().losing.dropped_bytes == 0 {
+        h.data(rec.now(), body.slice(n..n + 1));
+        n += 1;
+        assert!((n as u64) < MIB / 64, "the guard counts a piece's cost");
+    }
+    h.end(rec.now(), EndReason::Complete, None);
+    let seq = settle(&rec, 1);
+    let recs = records(dir.path());
+    assert_eq!(check(&recs, &body, n as u64), vec![1]);
+    check_count(dir.path(), &recs, seq);
+}
+
+/// Point 3 and no drop without a GAP: 16 relay threads dropping under a full guard while the
+/// wire stop lands. Every byte is in a guard GAP or in the seal's `after_stop` GAP, and the seal
+/// leaves no stream in a gap.
+#[test]
+fn a_drop_racing_the_stop_is_in_a_gap_or_after_stop() {
+    set_env(None);
+    static PIECE: [u8; 64] = [b'r'; 64];
+    for _ in 0..10 {
+        let dir = common::recorder::entry_dir();
+        let rec = Recorder::real_for_tests(dir.path(), Masker::passthrough_for_tests());
+        let full = rec.reserve(64 * MIB);
+        let mut handles: Vec<StreamHandle> = (0..16).map(|_| open(&rec)).collect();
+        std::thread::scope(|s| {
+            for h in handles.iter_mut() {
+                let rec = &rec;
+                s.spawn(move || {
+                    for _ in 0..2000 {
+                        h.data(rec.now(), Bytes::from_static(&PIECE));
+                    }
+                });
+            }
+            std::thread::yield_now();
+            rec.stop_wire_for_tests();
+        });
+        rec.seal_for_tests(dir.path(), SealReason::SealCommand);
+        drop((handles, full));
+        let lost: u64 = records(dir.path())
+            .iter()
+            .map(|r| match r {
+                Record::Gap { lost, .. } => lost.saturating_sub(1),
+                Record::Data { sid, .. } if *sid != 0 => panic!("no piece fits a full guard"),
+                _ => 0,
+            })
+            .sum();
+        assert_eq!(lost, 16 * 2000 * 64);
+        assert_eq!(rec.live().losing.streams_in_gap, 0);
+    }
 }
