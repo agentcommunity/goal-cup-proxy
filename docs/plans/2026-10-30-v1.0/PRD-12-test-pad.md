@@ -1975,3 +1975,11 @@ taken; "rejected" says why. Fixes for other files are made by those files' owner
 - **Selftest still ends at exit 3.** The PRD-08 test helpers cannot write a multi-chunk K7 export or the K11-d fetched and usage record, so those two fixtures cannot be added from the pad side. The need is recorded as an amendment under PRD-08. Phase 2 exit must not read exit 3 as a pass.
 - **Open nits, none a blocker.** A12, B10, the SecretCheck docstring remark, A10 and B12 (slice 14 note) all stand. Size: R3 (no concrete cut) is accepted; see the PRD-16 size report.
 - No locked ledger item is touched.
+
+### 2026-11-01, note from the PRD-05 point 4 leak fix merge (fc8df0e9)
+
+- PRD-05 now masks a Google `AQ.` key and the Groq, Cerebras, Fireworks, Vercel gateway, Together, Amp, `fk-` and
+  Bedrock key forms. A pad planted file may use `AQ.` and dotted `SECRET=a.b.c` values as cases; do not plant
+  `gsk_` or `sgamp_` while the owner answer is open. `GEMINI_API_KEY=AQ.<run>` comes out starred from `API_KEY=`
+  on (PRD-05 note), so a pad check must not assert the variable name stays raw for that shape. No locked ledger
+  item is touched.

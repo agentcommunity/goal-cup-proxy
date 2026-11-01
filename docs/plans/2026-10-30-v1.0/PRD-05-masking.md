@@ -993,3 +993,29 @@ A1 reports it as a stated loss instead of failing on it.
   `Bearer bedrock-api-key-<base64 with +>` are starred whole. A leading piece that holds only the name
   and separator is not kept, so `OPENAI_API_KEY=sk-…` and `GITHUB_TOKEN=ghp_…` keep the name raw.
 - No locked ledger item is touched.
+
+### 2026-11-01, replan after the point 4 leak fix merge (fc8df0e9)
+
+- **Open nits for a later slice, none a leak, none a regression (integration behaves the same):**
+  - The dotted arm of `shapes.tsv` line 11 does not end at `;`, so `Cookie: token=ab.<20 b64url>; other=1` and
+    `TOKEN=ab.<20 b64url>;export TOKEN` stay raw. Option: accept `;` only when a space or a line end follows.
+    Otherwise state it in section 10.
+  - `GEMINI_API_KEY=AQ.<run>` is starred from `API_KEY=` on: the dotted arm claims the span before
+    `google_auth_key`, so the name is not kept raw as it is for `sk-` and `ghp_` keys. Fix: end the dotted arm's
+    value where an `AQ\.` run starts, or say so in section 10.
+  - `token=<long standard base64>` over 16 KiB, and a dotted value over 16 KiB after `name=`, still fail closed to
+    the end of the message when the first 16 units are not all token units (about 40 percent of random base64
+    has a `+` or `/` there). Reported only.
+- **Stated over-masks to add to the section 10 wrong-answer table:** camelCase identifiers that start with a new
+  prefix and are not glued to a word (`fw_readFirmwareConfigurationValue(dev)`, `vck_validateCheckpointKeyOrder(x)`,
+  `fk-ordersCustomerIdForeignKey`) are starred. snake_case and kebab-case stay raw. Do not require a digit: about
+  1.5 percent of real 24-character keys would then pass.
+- **Taste calls for the next touch, no owner input needed:** (B2) the 16-arm digit alternation in line 11 and its
+  copy in `stream.rs` SHAPES could drop for the terminator rule alone, at the price of more stated over-mask;
+  (B3) a value-only capture group on the shell literal would remove `name_end`, `name_len` and the `name_only`
+  branch (about 60 lines); (B4) `dotted_assignment_values_are_masked_whole` could keep 6 to 8 of its 20 negatives.
+  Reviewer B's rule stands: no growth without a `decision` line.
+- **Size (`wc -l` on integration at fc8df0e9):** src `src/mask/*` 4,939 against the PRD-00 "Size budget" row 3,530
+  (+1,409; this slice +215). Tests `tests/mask*.rs` and `tests/mask_corpus/*.rs` 2,396 against 2,000; with the
+  corpus JSONL and fixture files the `tests/mask*` tree is 5,544. Reported, not enforced; PRD-13 and the
+  integrator decide any trim. No locked ledger item is touched; the `gsk_`/`sgamp_` owner question stays open.

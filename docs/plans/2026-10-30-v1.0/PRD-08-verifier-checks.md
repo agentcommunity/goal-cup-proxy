@@ -1219,3 +1219,12 @@ PRD-02's mask worker writes two record shapes PRD-01's text does not list yet; t
 ### 2026-11-01, note from the PRD-12 slice 15 merge (49f2c5d6)
 
 - **Pad fixture gap.** The pad selftest ends at exit 3 because the helpers PRD-08 offers to tests cannot write a multi-chunk K7 export or a K11-d fetched record with its usage record. When PRD-08 next touches its test helpers, either allow those two shapes or say plainly they are out of scope, so the pad owner can stop waiting. Not a build blocker; the pad rows for K7 and K11-d stay INCONCLUSIVE until then.
+
+### 2026-11-01, note from the PRD-05 point 4 leak fix merge (fc8df0e9)
+
+- `shapes.tsv` gained rows (S12 shape unchanged, kinds appended): `google_auth_key`, `groq_key`, `cerebras_key`,
+  `fireworks_key`, `vercel_gateway_key`, `together_key`, `sgamp_key`, `fk_key` and two `bedrock_key` forms. Line 11
+  (the shell assignment literal) is now three arms with the value in capture group 1; the span is group 1 when it
+  is set. `secrets.rs` must read kinds and spans from the file as it stands, not from a list. The `glued` export
+  request above is still open; until it lands the guard copy must stay identical. `gsk_` and `sgamp_` may still be
+  removed by the owner's answer, so `secrets` tests must not name those two kinds. No locked ledger item is touched.
