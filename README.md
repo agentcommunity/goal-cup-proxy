@@ -14,8 +14,6 @@ Agents working in this repository: read [AGENTS.md](AGENTS.md) first.
 
 ## Quick start for participants
 
-> **Build state.** `goalcup continue` and `goalcup recover` print "not built yet".
-
 The full walk-through, with every message you will see, is the
 [participant's guide](docs/PARTICIPANT-GUIDE.md). The contract is [RULES](docs/RULES.md).
 The harnesses goalcup records are listed in [docs/harnesses/README.md](docs/harnesses/README.md).
@@ -54,7 +52,10 @@ The harnesses goalcup records are listed in [docs/harnesses/README.md](docs/harn
 - Check on it from a second terminal with `goalcup status`.
 - Your agent may run `goalcup time-left` to ask how much time is left. goalcup never sends anything
   to the agent: no reminders, no "keep going", no restarts.
-- If the agent stops early (a crash, a reboot, a closed window), run `goalcup continue`.
+- If the agent stops early (a crash, a reboot, a closed window), run `goalcup continue` on the
+  machine that started the run.
+- If `goalcup status` says recording stopped and your agent still runs, run `goalcup recover` in
+  another terminal. It restarts recording only and never touches your agent.
 - No server error stops a run. Recording goes on, and uploads are retried with longer waits.
 - If the disk fills, goalcup cannot write. Your agent keeps working, `goalcup status` says recording
   is off, and goalcup retries by itself. Free space and recording starts again. The time it was off
@@ -77,8 +78,8 @@ command could not do its job.
 |---|---|
 | `goalcup setup [--harness <ID>] [--yes] [--record-host <HOST>]` | Pick your harness, sign in to it once, check this machine. `--yes` asks nothing and opens nothing. `--record-host` adds a model host goalcup records. |
 | `goalcup start [--harness <ID>] [--practice \| --test] [--repo <OWNER/NAME>] [--prompt <FILE>] [--connector <FILE>] [--hosts <FILE>]` | Start a run: open your harness in the current folder and record it. A real run needs `--repo`. `--test` is for organizers. `--connector` and `--hosts` load a file and are for practice and test runs. |
-| `goalcup continue [<RUN>] [--connector <FILE>] [--hosts <FILE>]` | Start your agent again in the same run, after it stopped early. |
-| `goalcup recover [<RUN>]` | Restart recording when `status` says recording stopped and your agent still runs. |
+| `goalcup continue [<RUN>] [--connector <FILE>] [--hosts <FILE>]` | Start your agent again in the same run, on the machine that started it, after it stopped early. |
+| `goalcup recover [<RUN>]` | Restart recording in place when `status` says recording stopped and your agent still runs; the agent is not restarted. |
 | `goalcup status [<PART>] [--json]` | Show how the run is doing, and its parts. |
 | `goalcup seal [<PART>] [--yes]` | End a part now: stop recording, finish its record files and upload them. |
 | `goalcup upload [<PART>]` | Send what is not uploaded yet. Safe to repeat. |

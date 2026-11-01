@@ -2541,3 +2541,35 @@ kept and now cites BUILD-PROMPT section 5, since B3 no longer carries it.
 
 - **Size report, PRD-12** (wc -l on integration): pad 949, pad-run 1,121, check.py 803, table 193, selftest 188, sbx.mjs 133, image 54, exec/ 96; rig source 3,537 plus 455 in harnesses/*.toml. Tests: test_pad.py 781, test_pad_fetch.py 178, test_pad_run_case.py 117 (1,076). Source plus tests 4,613 (5,068 with the toml) against the PRD-00 row of about 1,350 to 1,450 with its tests (about 3.2 times). Slice 14 added about 180 source lines (pad +180, pad-run +41) and about 380 test lines. Overage on an owner estimate is reported, not cut; carry to the end-of-build report. Review found no concrete behaviour-preserving cut beyond B7/B8 (done).
 - **Gate effect:** none on order or seams. Nits A10 and B12 are queued in the PRD-12 note. No locked ledger item is touched.
+
+### 2026-11-01, note from the PRD-17 slice 9 merge (132a35db)
+
+- **Size report, PRD-17** (`wc -l` on integration): the eight `crates/goalcup/tests/lessons_*.rs` files total 4,345 lines, unchanged (slice 9 was docs only), against the 3,000 line row shared with PRD-14 in PRD-00 "Size budget" (45% over). PRD-17 has no src row (0). Reported, not cut; carry to the end-of-build report.
+- **Gate effect:** none on order or seams. PRD-02 landing `pipeline_stall.rs` is still the step before the last PRD-17 gate rerun and PRD-13 deletion; L-C7 stays the other blocker. No locked ledger item is touched.
+
+### 2026-11-01, note from the PRD-12 slice 15 merge (49f2c5d6)
+
+- **Size report, PRD-12** (`wc -l` on integration): pad 949, pad-run 1,132, check.py 830, table 193, selftest 188, sbx.mjs 133, image 54, exec/ 114; rig source 3,593. Tests: test_pad.py 809, test_pad_fetch.py 178, test_pad_run_case.py 117 (1,104). Source plus tests 4,697 against the PRD-00 row of about 1,350 to 1,450 with its tests (about 3.3 times). Slice 15 added about 56 source and 28 test lines. Review (R3) found no concrete behaviour-preserving cut. Overage on an owner estimate is reported, not cut; carry to the end-of-build report.
+- **Gate effect:** none on order or seams. Rung 5b and the kept-open launch shell are in; the TUI-dies-with-the-watchdog case stays INCONCLUSIVE and the owner question W6 already logged. Selftest exit 3 persists (see the PRD-08 note); phase 2 exit must not read it as a pass. No locked ledger item is touched.
+
+### 2026-11-01, note from the PRD-15 slice 19 merge (a632d992)
+
+- **Size report, PRD-15** (`wc -l` on integration): README 246, AGENTS 95, ARCHITECTURE 199, OPERATING 261,
+  PARTICIPANT-GUIDE 495, RECORD-FORMAT 552, RULES 459, CONNECTOR-SCHEMA 117 (2,424 together); docs only, no
+  code. PRD-00 "Size budget" has no PRD-15 row, so no ceiling is exceeded.
+- **Gate effect:** none on order or seams. The remaining PRD-15 work is the tier columns after phase 5 and
+  the HARNESS-SETUP move. No locked ledger item is touched.
+
+### 2026-11-01, replan after PRD-02 slice C part 2 (merge cdc9b456)
+
+- **Size, PRD-02 merged code (`wc -l`):** src `pipeline/` plus `watchdog/` 8,236 lines against the PRD-00 "Size budget" row 1,350 (the earlier 6,000 ceiling is also passed); tests `pipeline_*` and `watchdog_*` including `watchdog_share/` 4,013 lines against the 1,500 row. The overage is the restored point guards, the recover and restart acceptance and the shared watchdog rig. Reported, not enforced by a gate; PRD-13 and the integrator decide any trim after the deletion gate, and cuts stay inside the seven points.
+- **Build plan:** the last gate-relevant PRD-02 item is merged; the deletion gate waits on PRD-17's repoint and rerun of L-R2 (PRD-17 note) and on the gate full row (L-C7). PRD-14 owes the `heavy` entries (PRD-14 note). Remaining PRD-02 slice items stay deferred by conductor decision: `by_hand_load`, native cursor resume, the mask pool, `pipeline_many_streams`, `pipeline_no_latch`, `SnapshotCursor.fid`. No locked ledger item is touched.
+
+### 2026-11-01, replan after PRD-05 point 4 leak fix (merge fc8df0e9)
+
+- **Size report, PRD-05** (`wc -l` on integration): src `src/mask/*` 4,939 against the PRD-00 "Size budget" row 3,530
+  (+1,409, this slice +215); tests `tests/mask*.rs` and `mask_corpus/*.rs` 2,396 against 2,000 (5,544 with corpus
+  data files). Overage reported, not cut; carry to the end-of-build report.
+- **Gate effect:** none on order or seams. The `gsk_`/`sgamp_` owner question stays open and only removes rows if
+  answered no. Open PRD-05 nits (`;` ending, AQ. name starred, 16 KiB fail-closed cases) are recorded in the PRD-05
+  note. PRD-08 and PRD-12 notes added. No locked ledger item is touched.

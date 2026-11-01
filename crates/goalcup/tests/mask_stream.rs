@@ -7,7 +7,9 @@
 #[path = "mask_corpus/common.rs"]
 mod common;
 
-use common::{ALNUM, Rng, append, keys, random_cuts, run, starred};
+use common::{
+    ALNUM, B64, B64URL, Rng, append, aq_key, key_of, keys, provider_keys, random_cuts, run, starred,
+};
 use goalcup::connector::{self, FieldValue, MaskPattern, MaskRule};
 use goalcup::mask::{Masked, Masker, SecretValue, StreamMasker, ValueSource};
 use goalcup_format::StreamKind;
@@ -91,6 +93,28 @@ fn planted() -> Vec<Vec<u8>> {
     bad.extend(b"\xe2\x80");
     out.push(bad);
     out.push(format!("\x1b[32m{gh}\x1b[0m \\\\u001b[1m{gh} xx{gh} %3D{gh}").into_bytes());
+    let aq = aq_key(31);
+    let (a, c) = (run(B64URL, 20, 32), run(B64URL, 9, 33));
+    out.push(
+        format!(
+            "{{\"output\":\"HOME=/h\\nGEMINI_API_KEY={aq}\\nGEMINI_CLI=1\\n\"}}\nGEMINI_API_KEY={aq}\ntoken: ab.{a}\nSECRET={a}.{a}.{c}\ntoken={a}.{a} x\nsecret = a.b.c\ntoken = self.config.get_authentication_token()\n"
+        )
+        .into_bytes(),
+    );
+    let (sk, jwt, bedrock) = (
+        key_of("openai_key", 0),
+        key_of("jwt", 0),
+        key_of("bedrock_key", 1),
+    );
+    out.push(
+        format!("token={a}.{sk}\napi_key=\"{a}.{jwt}\"\nAuthorization: Bearer {bedrock}\n")
+            .into_bytes(),
+    );
+    let mut line = Vec::new();
+    for (_, key, _) in provider_keys() {
+        line.extend(format!("{{\"k\":\"{key}\"}} ").bytes());
+    }
+    out.push(line);
     out
 }
 
@@ -174,7 +198,7 @@ fn never_less_past_the_hold() -> Res {
 #[test]
 fn a_gap_or_boundary_never_releases_a_secret_prefix_raw() -> Res {
     let m = masker()?;
-    for (_, key, prefix) in keys() {
+    for (_, key, prefix) in keys().into_iter().chain(provider_keys()) {
         let input = format!("{{\"k\":\"{key}\"}}");
         let at = input.find(&key).unwrap_or(0);
         for k in at..=at + key.len() {
@@ -193,6 +217,19 @@ fn a_gap_or_boundary_never_releases_a_secret_prefix_raw() -> Res {
                 m.mask_whole(&input.as_bytes()[..k]),
                 "{key} message cut at {k}"
             );
+        }
+    }
+    // A held shell value is starred at a gap, dots included.
+    for input in [
+        format!("token={}", aq_key(42)),
+        format!("token=ab.{}", aq_key(43)),
+    ] {
+        let at = input.find(['=', ':']).unwrap_or(0) + 1;
+        for k in at + 2..=input.len() {
+            let mut s = m.stream(StreamKind::Native);
+            let mut out = s.push(&input.as_bytes()[..k]);
+            append(&mut out, s.gap());
+            assert!(starred(&out, at + 1..k), "{input} cut at {k}");
         }
     }
     Ok(())
@@ -229,6 +266,31 @@ fn a_fail_closed_window_ends_at_the_message() -> Res {
         let out = messages(&mut s, plain.as_bytes());
         assert_eq!(out.bytes, plain.as_bytes(), "message {i}");
         assert!(out.spans.is_empty(), "message {i}");
+    }
+    Ok(())
+}
+
+/// A `token=` value whose first sixteen units are token units is decided at the first unit
+/// outside `[A-Za-z0-9_\-.]`, so 20 KB of base64 after it streams as the whole record masks
+/// it and never fails closed.
+#[test]
+fn a_long_base64_after_a_shell_name_does_not_fail_closed() -> Res {
+    let m = masker()?;
+    let fail_closed = m.mask_rules().len() - 1;
+    let blob = [run(ALNUM, 16, 70), run(B64, 20_000, 71)].concat();
+    let input = format!("{{\"a\":\"token={blob}\",\"b\":1}}");
+    let whole = m.mask_whole(input.as_bytes());
+    for piece in [16 * 1024, 64 * 1024] {
+        let cuts: Vec<usize> = (1..)
+            .map(|i| i * piece)
+            .take_while(|&c| c < input.len())
+            .collect();
+        let got = common::stream_in(&m, StreamKind::HttpReq, input.as_bytes(), &cuts);
+        assert!(
+            !got.spans.iter().any(|s| s.rule == fail_closed),
+            "piece {piece}"
+        );
+        assert!(got == whole, "piece {piece}");
     }
     Ok(())
 }

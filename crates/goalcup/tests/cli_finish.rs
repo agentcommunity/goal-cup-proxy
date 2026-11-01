@@ -231,6 +231,8 @@ fn every_gap_reason_has_words() {
     for n in [0u8, 16, 200] {
         assert_eq!(words(n), other(n));
     }
+    // A pinned host was passed through unread; nobody refused anything.
+    assert_ne!(text::gap_words("pinned"), text::gap_words("tls_refused"));
 }
 
 /// PRD-17 SC6: a `status.json` with no seal never prints the finished line or block: an open

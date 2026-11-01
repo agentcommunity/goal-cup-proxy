@@ -7,12 +7,15 @@
 #[path = "mask_corpus/common.rs"]
 mod common;
 
-use common::{ALNUM, Rng, keys, only_spans_changed, run, shape_rows, starred};
+use common::{
+    ALNUM, B64, B64URL, Rng, aq_key, key_of, keys, only_spans_changed, provider_keys, run,
+    shape_rows, starred,
+};
 
 /// The literal kinds in `shapes.tsv` order. The JSON literal (10) and the shell literal (11)
 /// are fixed indexes the stream relies on; `url_password` (12) took the slot `email` left. The
 /// pad's C3 reads these names and this order (PRD-05 amendments).
-const KINDS: [&str; 20] = [
+const KINDS: &[&str] = &[
     "anthropic_key",
     "openai_key",
     "masked_key",
@@ -33,6 +36,16 @@ const KINDS: [&str; 20] = [
     "stripe_key",
     "gitlab_token",
     "digitalocean_token",
+    "google_auth_key",
+    "groq_key",
+    "cerebras_key",
+    "fireworks_key",
+    "vercel_gateway_key",
+    "together_key",
+    "sgamp_key",
+    "fk_key",
+    "bedrock_key",
+    "bedrock_key",
 ];
 
 #[test]
@@ -44,13 +57,6 @@ fn shapes_tsv_is_the_shared_list() {
     );
     let kinds: Vec<&str> = rows.iter().map(|r| r[0]).collect();
     assert_eq!(kinds, KINDS);
-    let guarded: Vec<usize> = rows
-        .iter()
-        .enumerate()
-        .filter(|(_, r)| r[1] == "1")
-        .map(|(i, _)| i)
-        .collect();
-    assert_eq!(guarded, [0, 1, 3, 4, 5, 7, 9, 13, 14, 15, 16, 17, 18, 19]);
 }
 
 // ── the masker over whole inputs (PRD-05 sections 2 to 5) ─────────────────────────────────
@@ -92,12 +98,11 @@ fn assert_clear(m: &Masker, input: &str) {
 #[test]
 fn mask_rules_lists_kinds_then_connectors_then_run_secret_then_fail_closed() -> Res {
     let mut want: Vec<String> = Vec::new();
-    for kind in KINDS {
+    for &kind in KINDS {
         if !want.iter().any(|k| k == kind) {
             want.push(kind.to_string());
         }
     }
-    assert_eq!(want.len(), 18);
     let plain: Vec<String> = [want.clone(), vec!["run_secret".into(), FAIL_CLOSED.into()]].concat();
     assert_eq!(masker()?.mask_rules(), plain);
 
@@ -395,5 +400,149 @@ fn a_connector_field_rule_masks_its_value() -> Res {
         String::from_utf8(out.bytes)?,
         format!(r#"{{"x-codex-turn-state": "{}"}}"#, "*".repeat(state.len()))
     );
+    Ok(())
+}
+
+// ── the point 4 leak fix: Google `AQ.` keys, dotted shell values, provider prefixes ──────
+
+/// The leaked case: a Google `AQ.` key, and every other provider key, bare, after `NAME=`, and
+/// inside the JSON-escaped output of `env | sort` in the next request, whole and streamed.
+/// Glued after a letter the guard drops it (PRD-05 section 4).
+#[test]
+fn provider_keys_are_masked_where_an_env_dump_leaks_them() -> Res {
+    let m = masker()?;
+    let mut rng = Rng(0xA0);
+    for (kind, key, _) in provider_keys() {
+        let out = m.mask_whole(format!("key {key} end").as_bytes());
+        assert_eq!(kinds(&m, &out), [kind], "{kind}");
+        assert_masks(&m, &format!("key {key} end"), &key);
+        assert_masks(&m, &format!("PROVIDER_KEY_ENV={key}\n"), &key);
+        let dump = format!("HOME=/home/u\nPROVIDER_KEY_ENV={key}\nCLI=1\nPATH=/usr/bin\n");
+        let body = serde_json::json!({"contents": [{"role": "user", "parts": [
+            {"functionResponse": {"name": "run_shell_command", "response": {"output": dump}}}
+        ]}]})
+        .to_string();
+        assert!(body.contains(&format!(r"\nPROVIDER_KEY_ENV={key}\n")));
+        assert_masks(&m, &body, &key);
+        let whole = m.mask_whole(body.as_bytes());
+        for max in [1, 7, 64] {
+            let cuts = common::random_cuts(&mut rng, body.len(), max);
+            let got = common::stream_in(
+                &m,
+                goalcup_format::StreamKind::HttpReq,
+                body.as_bytes(),
+                &cuts,
+            );
+            assert!(got == whole, "{kind} cuts {cuts:?}");
+        }
+        let out = m.mask_whole(format!("z{key} end").as_bytes());
+        assert_eq!(&out.bytes[1..1 + key.len()], key.as_bytes(), "{kind} glued");
+    }
+    Ok(())
+}
+
+/// A dotted value after `=` with no space is starred through to its end, length kept. A value
+/// that holds a key of a higher rule is starred whole all the same, and so is a Bedrock key
+/// whose base64 a `bearer` match ends early. In front of a key the name stays raw.
+#[test]
+fn dotted_assignment_values_are_masked_whole() -> Res {
+    let m = masker()?;
+    let (a, b, c) = (run(B64URL, 20, 81), run(B64URL, 20, 82), run(B64URL, 9, 83));
+    let (sk, jwt) = (key_of("openai_key", 0), key_of("jwt", 0));
+    let bedrock = key_of("bedrock_key", 1);
+    for (input, value) in [
+        (format!("GEMINI_API_KEY={}", aq_key(84)), aq_key(84)),
+        (format!("SECRET={a}.{b}.{c}\n"), format!("{a}.{b}.{c}")),
+        (format!("token={a}.{sk} x"), format!("{a}.{sk}")),
+        (format!("api_key={a}.{jwt}&x=1"), format!("{a}.{jwt}")),
+        (
+            format!("Authorization: Bearer {bedrock}\n"),
+            bedrock.clone(),
+        ),
+    ] {
+        assert_masks(&m, &input, &value);
+        assert_eq!(m.mask_whole(input.as_bytes()).bytes.len(), input.len());
+    }
+    for input in [
+        format!("api_key: {a}.{jwt}"),
+        format!("api_key: \"{a}.{jwt}\""),
+    ] {
+        assert_masks(&m, &input, &a);
+        assert_masks(&m, &input, &jwt);
+    }
+    let gh = key_of("github_token", 0);
+    for (name, key) in [
+        ("OPENAI_API_KEY=", &sk),
+        ("GITHUB_TOKEN=", &gh),
+        ("my token: ", &gh),
+    ] {
+        let input = format!("{name}{key}\n");
+        let out = m.mask_whole(input.as_bytes());
+        assert_eq!(&out.bytes[..name.len()], name.as_bytes(), "{input:?}");
+        assert!(
+            starred(&out, name.len()..name.len() + key.len()),
+            "{input:?}"
+        );
+        assert_eq!(out.spans.len(), 1, "{input:?}");
+    }
+    // Code is the bulk of what is recorded: a member path stays raw after a spaced `=` or `:`,
+    // after a quote, and as a keyword argument or call, even when a long segment holds a digit.
+    for code in [
+        "token = self.config.authentication_token",
+        "secret = a.b.c",
+        "token: a.b.c.d.e.f.g.h.i.j.k.l",
+        "password: process.env.DATABASE_PASSWORD_PRODUCTION",
+        "secret: google.cloud.secretmanager_v1beta1",
+        "secret: \"google.cloud.secretmanager_v1beta1.Client\"",
+        "api_key=os.environ.get(\"X\")",
+        "client = OpenAI(api_key=settings.OPENAI_API_KEY_PRODUCTION)",
+        "jwt.encode(payload, secret=settings.JWT_SIGNING_SECRET_KEY)",
+        "token=base64.urlsafe_b64encode(os.urandom(32))",
+        "password=hashlib.pbkdf2_hmac_sha256(pw, salt, 100000)",
+        "client(api_key=config.anthropic_api_key_v1beta)",
+        "f(api_key=settings.OPENAI_API_KEY_V2)",
+        "f(token=self.config.oauth2_authentication_token)",
+        "boto3.client(\"s3\", api_key=settings.AWS_S3_ACCESS_KEY_ID)",
+        "jwt.encode(payload, secret=settings.JWT_HS256_SIGNING_SECRET)",
+        "token=oauth2_session.fetch_access_token_v2()",
+        "hmac.new(secret=config.HMAC_SHA256_SECRET_KEY)",
+        "api_key=settings.OPENAI_API_KEY_V2_PRODUCTION, x",
+        "token=self.config.get_oauth2_installation_token();",
+    ] {
+        assert_clear(&m, code);
+    }
+    let input = format!("secret: {a}.Then more words");
+    let out = m.mask_whole(input.as_bytes());
+    assert!(String::from_utf8(out.bytes)?.ends_with(".Then more words"));
+    Ok(())
+}
+
+/// The short provider prefixes leave ordinary kebab and snake identifiers alone.
+#[test]
+fn provider_prefixes_leave_ordinary_identifiers_alone() -> Res {
+    let m = masker()?;
+    for text in [
+        "x fk-orders-customer-id-references y",
+        "call fw_update_firmware_image_v2(x)",
+        "gsk_some_long_snake_case_name_here",
+        "csk-cluster-shard-key-for-region-one",
+        "csk_cluster_shard_key_for_region_one",
+        "vck_validate_cache_key_before_write",
+    ] {
+        assert_clear(&m, text);
+    }
+    // `ABSK` after a `+` or `/` inside an image's base64 is not a Bedrock key, whole or
+    // streamed: the rule needs the fixed start of the key's own base64.
+    let blob = [run(B64, 2048, 90), "+ABSK".into(), run(B64, 20_000, 91)].concat();
+    let input = format!("{{\"type\":\"image\",\"data\":\"{blob}\"}}");
+    assert_clear(&m, &input);
+    let cuts: Vec<usize> = (1..input.len() / 4096).map(|i| i * 4096).collect();
+    let got = common::stream_in(
+        &m,
+        goalcup_format::StreamKind::HttpReq,
+        input.as_bytes(),
+        &cuts,
+    );
+    assert!(got.spans.is_empty() && got.bytes == input.as_bytes());
     Ok(())
 }

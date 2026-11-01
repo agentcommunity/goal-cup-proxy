@@ -144,6 +144,7 @@ JSON literal 10, shell literal 11) do not move: `url_password` takes the slot `e
 | 18 | `gitlab_token` | `glpat-[A-Za-z0-9_\-]{20,}` (`:294`) | yes | guard |
 | 19 | `digitalocean_token` | `dop_v1_[a-f0-9]{32,}` (`:295`) | yes | guard |
 | 20 | `stripe_webhook_secret` | **new, only with the owner's yes to question 3**: `whsec_[A-Za-z0-9+/=]{24,}` | yes | added last, so no index moves; not in the default build |
+| 20 to 29 | provider and gateway keys | **new** (amendment 2026-11-01): `google_auth_key`, `groq_key`, `cerebras_key`, `fireworks_key`, `vercel_gateway_key`, `together_key`, `sgamp_key`, `fk_key`, `bedrock_key` (two rows); `shapes.tsv` holds the regexes | yes | added at the end; `stripe_webhook_secret` would come after them |
 
 Why the Stripe pair is asked (only with owner yes; the default build keeps row 17 as today and has no
 row 20): the pad prompt builds a payments platform (BRIEF3, 30 Oct early), so agents write
@@ -206,7 +207,7 @@ the hold overflowed (section 6), never a secret the rules found. The start event
 
 ### 4. The left guard
 
-**Rule.** A match of a guarded literal (14 rules; 15 with the owner's yes to question 3; table above) is
+**Rule.** A match of a guarded literal (24 rules since the 2026-11-01 amendment, two of them pending the owner's answer; one more with the owner's yes to question 3; table above) is
 dropped when the byte just before it is one of `[A-Za-z0-9_]` (the ledger's word boundary; `[A-Za-z0-9_-]`
 only with the owner's yes to PRD-00 owner question 10), unless that byte ends one of these escapes:
 
@@ -457,10 +458,11 @@ messages and session files, JSON-escaped up to three levels (the rules take up t
 | `curl -H "Authorization: Basic …"` inside a command line | not masked in a body (no Basic rule there). Masked in a real request header |
 | A key the model repeats across SSE or WebSocket deltas | not masked: JSON framing sits between the pieces (`TODO.md:302-312`). PRD-08's scan joins deltas and flags it |
 | A key glued after a letter, digit or `_` (and `-` if the owner adds it) | not masked (section 4) |
-| A key with no known prefix and no name (`gsk_…`, `tvly-…`, `sgamp_…` bare) | not masked (with the owner's yes to question 3: masked when it is a workspace, environment or harness-file value) |
+| A key with no known prefix and no name (`tvly-…`, `pplx-…` bare; `gsk_…` and `sgamp_…` have rules since the 2026-11-01 amendment) | not masked (with the owner's yes to question 3: masked when it is a workspace, environment or harness-file value) |
 | A gateway key: `AI_GATEWAY_API_KEY=…` in `.env`, OpenRouter `sk-or-v1-…`, a Cloudflare `cf-aig-authorization` header | masked: the shell rule (`API_KEY=`), and with the owner's yes to question 3 the exact value; `sk-or-` by `openai_key`; the header by its name (`auth`). Same path as a direct key: one system |
 | `STRIPE_SECRET_KEY=sk_test_…`, `whsec_…` (the payments pad) | default build: `sk_test_…` not masked (no rule; the shell rule misses `SECRET_KEY=`), `whsec_…` masked only after `WEBHOOK_SECRET=` or a JSON secret key. With the owner's yes to question 3: both masked (section 2) and by exact value from `.env` |
 | A token used as a URL user with no password (`https://<token>@host`) | masked only if the token has a shape (`ghp_…` after `//` is not glued) or is an exact value (`GH_TOKEN`; others only with the owner's yes to question 3). The dropped `email` rule used to catch it (PRD-17 K12) |
+| Code with a dotted value whose long segment holds a digit, right after `=`, ending at a line end, a space, a quote or `&` (`secret=os.environ.AWS_S3_SECRET_ACCESS_KEY` on its own line) | masked: a stated over-mask of the shell rule's dotted arm (2026-11-01 amendment). The same value in a call or keyword argument, ending at `(`, `)`, `,` or `;`, stays raw |
 | A key the agent adds to `.env` during the run | shape rules only (with the owner's yes to question 3, by exact value from the next `continue`; section 9) |
 | A key after hours of one WebSocket connection whose hold overflowed | the overflowing message is starred to its end (`fail_closed`, counted); the next message is masked normally |
 | Hermes `state.db` (binary) | best effort: a value split across an overflow page is missed; masking a WAL frame breaks its checksum (PRD-01 risks, PRD-04) |
@@ -656,7 +658,7 @@ Automated tests that guard them (few, each named for its promise):
 | Default | Value | Who may change it |
 |---|---|---|
 | Guard class | `[A-Za-z0-9_]`, the word boundary; `-` added only with the owner's yes (PRD-00 owner question 10) | Owner; ledger M1 says a letter or digit (a word boundary) |
-| Guarded rules | The 13 vendor-prefix literals and `jwt`; `stripe_webhook_secret` too, only with the owner's yes to question 3 | Owner |
+| Guarded rules | The 13 vendor-prefix literals and `jwt`; `stripe_webhook_secret` too, only with the owner's yes to question 3. Pending the owner's answer: the 2026-11-01 amendment ships 10 more, 24 in all (`groq_key` and `sgamp_key` among them) | Owner |
 | Stripe test keys and `whsec_` | no; built in the second slice only with the owner's yes (PRD-00 owner question 3, old 12) | Owner |
 | `url_password` bounds | user 256, password 1,024, escaped slashes allowed | PRD-05 |
 | Hold | 16 KiB per stream, 64 candidates; a fail-closed window ends at `\n`, a message end, a gap or the end | PRD-05 after A5 |
@@ -665,7 +667,7 @@ Automated tests that guard them (few, each named for its promise):
 | Mid-run value reader | not built | Owner |
 | `object` form | cut | Owner |
 | Kept as is | `anthropic_billing_header`, the three Codex id rows | Owner may revisit |
-| Not added | `ASIA` beside `AKIA`, an env-line rule, prefixes `pplx-`, `gsk_`, `tvly-`, `re_`, `vcp_`, `sgamp_` (appendix G, G.4 and G.5) | Owner |
+| Not added | `ASIA` beside `AKIA`, an env-line rule, prefixes `pplx-`, `tvly-`, `re_`, `vcp_` (appendix G, G.4 and G.5). `gsk_` and `sgamp_` ship pending the owner's answer (2026-11-01 amendment; on a no they come out) | Owner |
 
 ## Builder notes
 
@@ -958,3 +960,62 @@ A1 reports it as a stated loss instead of failing on it.
 ### 2026-11-01, seam request from PRD-08 slice 8
 
 - PRD-08 `secrets.rs` keeps a copy of the masker's glued-word guard (the 24-byte rule and its escape set) so a glued shape hit stays `warn`. Export `glued` as `pub` in your next touch so the verifier can call it and delete the copy. Until then the copy must stay identical to the masker. No behaviour change; no locked ledger item is touched.
+
+### 2026-11-01, point 4 leak fix and its review (branch v1.0/prd-05-masking)
+
+- **Leak.** A Google `AQ.` key printed by `env | sort` went out raw. New literal `google_auth_key`
+  (`AQ\.[A-Za-z0-9_\-]{40,}`).
+- **New kinds**, guarded, appended to `shapes.tsv`: `groq_key` `gsk_`, `cerebras_key` `csk-`/`csk_`,
+  `fireworks_key` `fw_`, `vercel_gateway_key` `vck_`, `fk_key` `fk-` (body `[A-Za-z0-9]{20,}`, so kebab and
+  snake identifiers and base64url blobs end the run early), `together_key` `tgp_v1_` and `sgamp_key`
+  `sgamp_` (body `[A-Za-z0-9_\-]{20,}`: Amp keys hold `_`), `bedrock_key` long-term (`ABSK` and the
+  base64 of `BedrockAPIKey-`, `QmVkcm9ja0FQSUtleS`, then base64, body floor 100) and short-term
+  (`bedrock-api-key-` and the base64 of `bedrock.amazonaws.com`, then base64, floor 20). The fixed base64
+  starts keep a hit inside an image or signature blob out of reach (gitleaks anchors both the same way).
+- **Owner answer pending.** `gsk_` and `sgamp_` are in the "Not added" default and the guarded-rule
+  count in the Overridable defaults, both the owner's to change. The two rows ship because they only add
+  masking; the owner question is logged. If the owner says no, the `groq_key` and `sgamp_key` rows, their
+  `stream.rs` entries and their fixture keys come out.
+- **Shell literal (line 11).** One arm is added in front of the integration literal, which is kept
+  as it was: `=` with no space and a value of token runs joined by single dots, one run of 16 or more
+  holding a digit, that ends at whitespace, a quote, `&`, a backslash (an escaped `\n`) or the end of
+  the input. The ending byte is outside capture group 1, which is the span. So `SERVICE_SECRET=<a.b.c>`
+  in an env line or an escaped env dump is starred whole, and code stays raw: a dotted value after a
+  quote or a spaced `=` or `:`, and a keyword argument or call value that ends at `(`, `)`, `,` or `;`
+  (`token=base64.urlsafe_b64encode(...)`, `f(api_key=settings.OPENAI_API_KEY_V2)`). `AQ.` keys have
+  their own rule. No input the integration literal matched is matched shorter. The stream walk after
+  `=` is the integration one, with `.` kept live once the first 16 units are token units, so a long
+  base64 value after `token=` is decided at its first `+` or `/` and does not fail closed.
+- **Stated over-mask.** Code with such a dotted value at a line end, a space, a quote or `&`, such as
+  `secret=os.environ.AWS_S3_SECRET_ACCESS_KEY` on its own line, is starred (section 10).
+- **Cut, not dropped.** A `generic_secret_assignment` or `bedrock_key` candidate that overlaps an earlier
+  hard claim keeps its uncovered pieces (`CUT_KINDS` in `rules.rs`), so `token=<run>.sk-…` and
+  `Bearer bedrock-api-key-<base64 with +>` are starred whole. A leading piece that holds only the name
+  and separator is not kept, so `OPENAI_API_KEY=sk-…` and `GITHUB_TOKEN=ghp_…` keep the name raw.
+- No locked ledger item is touched.
+
+### 2026-11-01, replan after the point 4 leak fix merge (fc8df0e9)
+
+- **Open nits for a later slice, none a leak, none a regression (integration behaves the same):**
+  - The dotted arm of `shapes.tsv` line 11 does not end at `;`, so `Cookie: token=ab.<20 b64url>; other=1` and
+    `TOKEN=ab.<20 b64url>;export TOKEN` stay raw. Option: accept `;` only when a space or a line end follows.
+    Otherwise state it in section 10.
+  - `GEMINI_API_KEY=AQ.<run>` is starred from `API_KEY=` on: the dotted arm claims the span before
+    `google_auth_key`, so the name is not kept raw as it is for `sk-` and `ghp_` keys. Fix: end the dotted arm's
+    value where an `AQ\.` run starts, or say so in section 10.
+  - `token=<long standard base64>` over 16 KiB, and a dotted value over 16 KiB after `name=`, still fail closed to
+    the end of the message when the first 16 units are not all token units (about 40 percent of random base64
+    has a `+` or `/` there). Reported only.
+- **Stated over-masks to add to the section 10 wrong-answer table:** camelCase identifiers that start with a new
+  prefix and are not glued to a word (`fw_readFirmwareConfigurationValue(dev)`, `vck_validateCheckpointKeyOrder(x)`,
+  `fk-ordersCustomerIdForeignKey`) are starred. snake_case and kebab-case stay raw. Do not require a digit: about
+  1.5 percent of real 24-character keys would then pass.
+- **Taste calls for the next touch, no owner input needed:** (B2) the 16-arm digit alternation in line 11 and its
+  copy in `stream.rs` SHAPES could drop for the terminator rule alone, at the price of more stated over-mask;
+  (B3) a value-only capture group on the shell literal would remove `name_end`, `name_len` and the `name_only`
+  branch (about 60 lines); (B4) `dotted_assignment_values_are_masked_whole` could keep 6 to 8 of its 20 negatives.
+  Reviewer B's rule stands: no growth without a `decision` line.
+- **Size (`wc -l` on integration at fc8df0e9):** src `src/mask/*` 4,939 against the PRD-00 "Size budget" row 3,530
+  (+1,409; this slice +215). Tests `tests/mask*.rs` and `tests/mask_corpus/*.rs` 2,396 against 2,000; with the
+  corpus JSONL and fixture files the `tests/mask*` tree is 5,544. Reported, not enforced; PRD-13 and the
+  integrator decide any trim. No locked ledger item is touched; the `gsk_`/`sgamp_` owner question stays open.

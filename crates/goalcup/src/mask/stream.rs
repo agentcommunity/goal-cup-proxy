@@ -53,10 +53,12 @@ const MAX_QUOTE_ESCAPES: u8 = 7;
 const URL_USER_MAX: u16 = 256;
 const URL_PASSWORD_MAX: u16 = 1024;
 
-/// Positions of the JSON `generic_secret_assignment` literal and of `url_password` in the shared
-/// list, the two with a capture group. They do not move: `url_password` took the slot `email`
-/// left.
+/// Positions of the JSON and the shell `generic_secret_assignment` literals and of
+/// `url_password` in the shared list, the three with a capture group (the shell literal's group
+/// leaves out the byte that ends a dotted value). They do not move: `url_password` took the
+/// slot `email` left.
 const JSON_LITERAL: usize = 10;
+const SHELL_LITERAL: usize = 11;
 const URL_LITERAL: usize = 12;
 
 const _: () = assert!(rules::PEM_BODY_MAX + 512 <= MAX_HELD_BYTES);
@@ -146,6 +148,10 @@ fn word(u: Unit) -> bool {
 fn word_underscore(u: Unit) -> bool {
     ascii_where(u, |b| b.is_ascii_alphanumeric() || b == b'_')
 }
+/// `[A-Za-z0-9+/]`
+fn base64(u: Unit) -> bool {
+    ascii_where(u, |b| b.is_ascii_alphanumeric() || b == b'+' || b == b'/')
+}
 /// `[A-Za-z0-9_\-]`
 fn token(u: Unit) -> bool {
     ascii_where(u, |b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
@@ -181,14 +187,15 @@ fn space(u: Unit) -> bool {
     u.is_whitespace()
 }
 
-/// One unit of the shell literal's value after a `=` with no space, as its two alternatives read
-/// it. `token_only` and `run` track the first alternative, `[A-Za-z0-9_\-]{16,}`: it is decided
-/// once it has sixteen units and a unit outside its class arrives, so the candidate ends there.
-/// The second is the form-encoded value, a run of `%XX` escapes and units of the class
-/// `[A-Za-z0-9_.~+/=\-]`, which needs sixteen units and a `%XX` escape or the dotted shape (see
-/// `redact.rs`). Its match ends at the end of that run, so this keeps every unit of the class
-/// live past the first alternative, and the regex then decides the exact span. `None` ends the
-/// candidate.
+/// One unit of the shell literal's value after a `=` with no space, as its alternatives read
+/// it. The dotted value (token runs joined by single dots, ending at a space, a quote, `&`, a
+/// backslash or the end) and `[A-Za-z0-9_\-]{16,}` come first. `token_only` and `run` track
+/// whether the first sixteen units are all token units: then one of those two matches, so a
+/// unit outside `[A-Za-z0-9_\-.]` ends the candidate there. Otherwise the form-encoded value may
+/// still match: a run of `%XX` escapes and units of the class `[A-Za-z0-9_.~+/=\-]` that needs
+/// sixteen units and a `%XX` escape or the `[0-9]\.` shape. Its match ends at the end of that
+/// run, so this keeps every unit of the class live, and the regex then decides the exact span.
+/// `None` ends the candidate.
 fn encoded_step(run: u8, token_only: bool, hex: u8, u: Unit) -> Option<Shell> {
     if hex > 0 {
         return ascii_where(u, |b| b.is_ascii_hexdigit()).then_some(Shell::Encoded {
@@ -205,7 +212,11 @@ fn encoded_step(run: u8, token_only: bool, hex: u8, u: Unit) -> Option<Shell> {
         });
     }
     if token_only && run >= 16 {
-        return None;
+        return is(u, b'.').then_some(Shell::Encoded {
+            run,
+            token_only,
+            hex: 0,
+        });
     }
     match u {
         '%' => Some(Shell::Encoded {
@@ -318,10 +329,29 @@ const fn prefixed(
     }
 }
 
+/// A literal prefix, one byte per position, for [`prefixed`].
+const fn each<const N: usize>(s: &'static [u8; N]) -> [&'static [u8]; N] {
+    let empty: &'static [u8] = &[];
+    let mut out = [empty; N];
+    let mut i = 0;
+    while i < N {
+        out[i] = s.as_slice().split_at(i).1.split_at(1).0;
+        i += 1;
+    }
+    out
+}
+
+/// Amazon Bedrock API keys are base64 behind a fixed start, so a hit inside an image or a
+/// signature blob is out of reach. Long-term: `ABSK` and the base64 of `BedrockAPIKey-`.
+/// Short-term: `bedrock-api-key-` (AUTH_PREFIX in aws/aws-bedrock-token-generator-js
+/// src/token.ts) and the base64 of its host `bedrock.amazonaws.com`.
+static BEDROCK_LONG: [&[u8]; 22] = each(b"ABSKQmVkcm9ja0FQSUtleS");
+static BEDROCK_SHORT: [&[u8]; 44] = each(b"bedrock-api-key-YmVkcm9jay5hbWF6b25hd3MuY29t");
+
 /// The streaming recognizer of each shared literal, in `shapes.tsv` order. A recognizer never
 /// decides a span below the bound (the regex does); it says how long a candidate must be held,
 /// and how long a fail-closed window must run.
-static SHAPES: [Shape; 20] = [
+static SHAPES: [Shape; 30] = [
     prefixed(
         "anthropic_key",
         r"sk-ant-[A-Za-z0-9_\-]{20,}",
@@ -402,7 +432,7 @@ static SHAPES: [Shape; 20] = [
     },
     Shape {
         kind: "generic_secret_assignment",
-        source: r#"(?i)(?:api[_-]?key|secret|token|password)(?:\s*[=:]\s*(?:\\{0,7}['"])?[A-Za-z0-9_\-]{16,}|=(?:%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){15,}|[A-Za-z0-9_.~+/=\-]{1}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){14,}|[A-Za-z0-9_.~+/=\-]{2}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){13,}|[A-Za-z0-9_.~+/=\-]{3}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){12,}|[A-Za-z0-9_.~+/=\-]{4}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){11,}|[A-Za-z0-9_.~+/=\-]{5}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){10,}|[A-Za-z0-9_.~+/=\-]{6}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){9,}|[A-Za-z0-9_.~+/=\-]{7}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){8,}|[A-Za-z0-9_.~+/=\-]{8}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){7,}|[A-Za-z0-9_.~+/=\-]{9}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){6,}|[A-Za-z0-9_.~+/=\-]{10}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){5,}|[A-Za-z0-9_.~+/=\-]{11}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){4,}|[A-Za-z0-9_.~+/=\-]{12}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){3,}|[A-Za-z0-9_.~+/=\-]{13}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){2,}|[A-Za-z0-9_.~+/=\-]{14}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){1,}|[A-Za-z0-9_.~+/=\-]{15,}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2})*|[0-9]\.[A-Za-z0-9_.~+/=\-]{14,}))"#,
+        source: r#"(?i)(?:((?:api[_-]?key|secret|token|password)=(?:[A-Za-z0-9_\-]+\.)*(?:[0-9][A-Za-z0-9_\-]{15,}|[A-Za-z_\-][0-9][A-Za-z0-9_\-]{14,}|[A-Za-z_\-]{2}[0-9][A-Za-z0-9_\-]{13,}|[A-Za-z_\-]{3}[0-9][A-Za-z0-9_\-]{12,}|[A-Za-z_\-]{4}[0-9][A-Za-z0-9_\-]{11,}|[A-Za-z_\-]{5}[0-9][A-Za-z0-9_\-]{10,}|[A-Za-z_\-]{6}[0-9][A-Za-z0-9_\-]{9,}|[A-Za-z_\-]{7}[0-9][A-Za-z0-9_\-]{8,}|[A-Za-z_\-]{8}[0-9][A-Za-z0-9_\-]{7,}|[A-Za-z_\-]{9}[0-9][A-Za-z0-9_\-]{6,}|[A-Za-z_\-]{10}[0-9][A-Za-z0-9_\-]{5,}|[A-Za-z_\-]{11}[0-9][A-Za-z0-9_\-]{4,}|[A-Za-z_\-]{12}[0-9][A-Za-z0-9_\-]{3,}|[A-Za-z_\-]{13}[0-9][A-Za-z0-9_\-]{2,}|[A-Za-z_\-]{14}[0-9][A-Za-z0-9_\-]{1,}|[A-Za-z_\-]{15,}[0-9][A-Za-z0-9_\-]*)(?:\.[A-Za-z0-9_\-]+)*)(?:[\s'"&\\]|$)|(?:api[_-]?key|secret|token|password)(?:\s*[=:]\s*(?:\\{0,7}['"])?[A-Za-z0-9_\-]{16,}|=(?:%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){15,}|[A-Za-z0-9_.~+/=\-]{1}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){14,}|[A-Za-z0-9_.~+/=\-]{2}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){13,}|[A-Za-z0-9_.~+/=\-]{3}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){12,}|[A-Za-z0-9_.~+/=\-]{4}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){11,}|[A-Za-z0-9_.~+/=\-]{5}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){10,}|[A-Za-z0-9_.~+/=\-]{6}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){9,}|[A-Za-z0-9_.~+/=\-]{7}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){8,}|[A-Za-z0-9_.~+/=\-]{8}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){7,}|[A-Za-z0-9_.~+/=\-]{9}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){6,}|[A-Za-z0-9_.~+/=\-]{10}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){5,}|[A-Za-z0-9_.~+/=\-]{11}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){4,}|[A-Za-z0-9_.~+/=\-]{12}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){3,}|[A-Za-z0-9_.~+/=\-]{13}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){2,}|[A-Za-z0-9_.~+/=\-]{14}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){1,}|[A-Za-z0-9_.~+/=\-]{15,}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2})*|[0-9]\.[A-Za-z0-9_.~+/=\-]{14,})))"#,
         form: Form::ShellAssignment,
     },
     Shape {
@@ -466,6 +496,92 @@ static SHAPES: [Shape; 20] = [
         32,
         None,
     ),
+    // Google's authentication keys (`AQ.` and 50 more), the only kind AI Studio now issues.
+    // The floor is 40, below the real 50, so a trimmed key is still caught.
+    prefixed(
+        "google_auth_key",
+        r"AQ\.[A-Za-z0-9_\-]{40,}",
+        &[b"A", b"Q", b"."],
+        token,
+        40,
+        None,
+    ),
+    // Provider and gateway keys with a fixed prefix (connectors/model-hosts.toml), each
+    // confirmed by the vendor's docs or its own SDK or CLI source.
+    prefixed(
+        "groq_key",
+        r"gsk_[A-Za-z0-9]{20,}",
+        &[b"g", b"s", b"k", b"_"],
+        word,
+        20,
+        None,
+    ),
+    prefixed(
+        "cerebras_key",
+        r"csk[-_][A-Za-z0-9]{20,}",
+        &[b"c", b"s", b"k", b"-_"],
+        word,
+        20,
+        None,
+    ),
+    prefixed(
+        "fireworks_key",
+        r"fw_[A-Za-z0-9]{20,}",
+        &[b"f", b"w", b"_"],
+        word,
+        20,
+        None,
+    ),
+    prefixed(
+        "vercel_gateway_key",
+        r"vck_[A-Za-z0-9]{20,}",
+        &[b"v", b"c", b"k", b"_"],
+        word,
+        20,
+        None,
+    ),
+    prefixed(
+        "together_key",
+        r"tgp_v1_[A-Za-z0-9_\-]{20,}",
+        &[b"t", b"g", b"p", b"_", b"v", b"1", b"_"],
+        token,
+        20,
+        None,
+    ),
+    prefixed(
+        "sgamp_key",
+        r"sgamp_[A-Za-z0-9_\-]{20,}",
+        &[b"s", b"g", b"a", b"m", b"p", b"_"],
+        token,
+        20,
+        None,
+    ),
+    prefixed(
+        "fk_key",
+        r"fk-[A-Za-z0-9]{20,}",
+        &[b"f", b"k", b"-"],
+        word,
+        20,
+        None,
+    ),
+    // Amazon Bedrock API keys (see [`BEDROCK_LONG`]). The long-term body after `ABSK` has a
+    // floor of 100, below the real 109.
+    prefixed(
+        "bedrock_key",
+        r"ABSKQmVkcm9ja0FQSUtleS[A-Za-z0-9+/]{82,}",
+        &BEDROCK_LONG,
+        base64,
+        82,
+        None,
+    ),
+    prefixed(
+        "bedrock_key",
+        r"bedrock-api-key-YmVkcm9jay5hbWF6b25hd3MuY29t[A-Za-z0-9+/]{20,}",
+        &BEDROCK_SHORT,
+        base64,
+        20,
+        None,
+    ),
 ];
 
 /// The kind of the exact-value rule.
@@ -526,7 +642,7 @@ impl Policy {
                 .ok_or(MaskError::Shape(i))?;
             let pattern = Pattern::shared(&row).ok_or(MaskError::Shape(i))?;
             let group_ok = match i {
-                JSON_LITERAL | URL_LITERAL => pattern.span_group == 1,
+                JSON_LITERAL | SHELL_LITERAL | URL_LITERAL => pattern.span_group == 1,
                 _ => pattern.span_group == 0,
             };
             if !group_ok {
@@ -896,13 +1012,13 @@ enum Shell {
     Quoted,
     /// Value characters, capped at sixteen.
     Value(u8),
-    /// Just after `=` with no space: the form-encoded literal's value may start here.
+    /// Just after `=` with no space: the dotted or form-encoded value may start here.
     Direct,
-    /// Inside the form-encoded literal's value (see [`encoded_step`]).
+    /// Inside a value after `=` with no space (see [`encoded_step`]).
     Encoded {
         /// Token-class units so far, capped at sixteen.
         run: u8,
-        /// True while every unit so far is a token-class unit.
+        /// True while the units so far, up to sixteen, are all token-class units.
         token_only: bool,
         /// Hex digits still owed by a `%XX` escape.
         hex: u8,
@@ -1433,7 +1549,12 @@ impl Json {
 }
 
 impl Shell {
-    /// `(?i)(?:api[_-]?key|secret|token|password)\s*[=:]\s*(?:\\{0,7}['"])?[A-Za-z0-9_\-]{16,}`
+    /// The shell literal: `(?i)(?:api[_-]?key|secret|token|password)`, then `=` with no space
+    /// and a dotted value with a digit in its long run that ends at a space, a quote, `&`, a
+    /// backslash or the end (see [`encoded_step`]); or `\s*[=:]\s*`, an optional quote and
+    /// `[A-Za-z0-9_\-]{16,}`; or `=` and a form-encoded value. So code such as
+    /// `token = self.config.long_attribute_name` and `f(api_key=settings.OPENAI_API_KEY_V2)`
+    /// stays raw.
     fn step(&mut self, u: Unit) -> bool {
         let next = match *self {
             Shell::Word { which, pos } => {
@@ -2042,6 +2163,8 @@ impl Scanner {
                 whole_start: 0,
                 whole_end: whole,
                 soft: false,
+                cut: false,
+                name_end: start,
                 block: true,
                 bounded: true,
             });
@@ -2375,6 +2498,22 @@ mod tests {
         b"sk_live_",
         b"glpat-",
         b"dop_v1_",
+        b"AQ.",
+        b"gsk_",
+        b"csk-",
+        b"csk_",
+        b"fw_",
+        b"vck_",
+        b"tgp_v1_",
+        b"sgamp_",
+        b"fk-",
+        b"ABSKQmVkcm9ja0FQSUtleS",
+        b"bedrock-api-key-YmVkcm9jay5hbWF6b25hd3MuY29t",
+        b"QmVkcm9ja0FQSUtleS",
+        b"token=",
+        b"token='",
+        b"secret: ",
+        b"ab.",
         b" ",
         b"\n",
         b"\t",
