@@ -2513,3 +2513,21 @@ kept and now cites BUILD-PROMPT section 5, since B3 no longer carries it.
 - **Gate effect:** acceptance 10 and 11 (`continue`, `recover`) are now built, so the "not built yet" notes in ARCHITECTURE.md,
   CONNECTOR-SCHEMA.md and PARTICIPANT-GUIDE.md (PRD-15) can go; the PRD-17 rows L-HF4, L-HF6, L-SC4 can be repointed to the named tests once a
   box run passes them on integration. The PRD-07 `repo_url` ask for test mode is still open in PRD-10. No locked ledger item is touched.
+
+### 2026-11-01, replan after PRD-10 slice 12 (merge b8d12325)
+
+- **PRD-10 is fully built.** The last open ask (`repo_url` per mode) is merged; no PRD-10 slice remains.
+- **Size report, PRD-10** (`wc -l` on integration at b8d12325): `crates/goalcup/src/cli/*.rs` 5,279 lines (`text.rs` 1,290), `main.rs` 206;
+  CLI tests (`tests/cli_*.rs`) 3,082. PRD-00 rows: about 2,900 src and 1,200 tests (src about 1.8 times, tests about 2.6 times). Slice 12 added
+  5 src lines and about 115 test lines. Overage on an owner estimate is reported and accepted, not cut; carry to the end-of-build report.
+- **Gate effect:** none on order. The "not built yet" notes in the PRD-15 docs can go for every PRD-10 command. No locked ledger item is touched.
+
+### 2026-11-01, replan after PRD-08 slice 9 (merge 3b18e91b)
+
+- **Size report, PRD-08** (`wc -l` on integration): src outside `usage/` is 4,192 lines (honesty.rs 507, history.rs 647, integrity.rs 1,027, legs.rs 550, secrets.rs 551, the rest 910) against the 1,400 row in PRD-00 (about 3.0 times); `usage/` is 2,861 against the PRD-09 row of 1,470. Tests in `crates/goalcup-verify/tests` are 4,460 against 1,100 plus 200. Slice 9 added about 21 src lines. Overage on an owner estimate is reported, not cut; carry to the end-of-build report with the other overages.
+- **Gate effect:** none on order or seams. Rung 1 sweep findings V1 and V2 are closed in the verifier. Two nits (A8, B-A7-1) are queued in the PRD-08 note. No locked ledger item is touched.
+
+### 2026-11-01, replan after PRD-12 slice 13 (merge f5889891)
+
+- **Size report, PRD-12** (`wc -l` on integration): rig code under `scripts/pad/` is 3,295 lines (check.py 803, pad 769, pad-run 1,113, table 193, selftest 188, sbx.mjs 133, exec/ 96); tests (`test_pad.py`) 779; 4,074 together against the PRD-00 row of about 1,350 to 1,450 with its tests (about 2.9 times). The slice added about 74 source and 84 test lines. Overage on an owner estimate is reported, not cut; carry to the end-of-build report with the other overages.
+- **Gate effect:** none on order or seams. The C3 INCONCLUSIVE "not exercised" case and nits A12 and B10 are noted in the PRD-12 Amendments. No locked ledger item is touched.

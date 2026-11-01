@@ -885,3 +885,8 @@ Slice 1 merged builder steps 1, 2 and 4. What the merge changed for the slices s
 - **Size on integration** (`wc -l`): src 3,566 against about 3,440 (3.7% over); tests plus helpers 5,380
   against about 4,950 (8.7% over). Both under the 10% line; no decision line needed.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-11-01, note from PRD-10 slice 12 (merge b8d12325)
+
+The client side of the `repo_url` contract is on integration: practice sends the shared practice URL, `test` without `--repo` sends
+null, competition and `test` with `--repo` send the checked URL. The ask under the earlier note is closed. No Worker change.

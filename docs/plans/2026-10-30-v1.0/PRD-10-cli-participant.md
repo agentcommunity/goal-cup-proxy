@@ -1621,3 +1621,12 @@ The PRD-17 deletion gate (PRD-13) waits on tests that this PRD is asked to land 
   recorded, what was not, what to do next), plus points 3 and 7 (each refusal and gap line, each harness path). It is the participant-facing
   wording in one place; no behaviour-preserving cut was found. Reported, not cut (ledger L2). Scratch branch `v1.0/prd-10-cli-fixer-tmp` is for the integrator to delete.
 - No seam change. No locked ledger item is touched.
+
+### 2026-11-01, replan after PRD-10 slice 12 (merge b8d12325)
+
+- **The PRD-07 `repo_url` ask is done, and nothing is left to build in PRD-10.** `cli/approve.rs` sends the fixed practice repository
+  URL for practice, null for `test` without `--repo`, and the checked URL for competition and for `test` with `--repo`. The
+  `ServerJson.repo` field still holds what the participant named (null for practice), not what the server was sent.
+- **Carried to PRD-14 (nit B1, declined here):** `tests/cli_approve.rs` keeps a small spy (about 65 lines) to read the open body,
+  because `tests/common/` belongs to PRD-14 and PRD-08. When the FakeWorker records the open body, the spy goes.
+- Open nit B3 (cosmetic) is accepted. `text.rs` size is reported and accepted (see PRD-16). No locked ledger item is touched.

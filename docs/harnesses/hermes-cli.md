@@ -1,6 +1,6 @@
 # Hermes Agent harness facts
 
-Connector id: `hermes-cli` · Facts for version: `0.22.5` · Written by: Goal Cup team · Last checked: 2026-10-31
+Connector id: `hermes-cli` · Facts for version: `0.22.5` · Written by: Goal Cup team · Last checked: 2026-11-01
 Public disclosure: yes. Facts come from Nous Research's public Hermes docs and source at tag `v0.22.5`, the project's release page, and Goal Cup runs on macOS in October 2026. No keys, tokens, account names or personal paths are included.
 Status: shipped connector ([`connectors/hermes-cli.toml`](../../connectors/hermes-cli.toml))
 
@@ -72,6 +72,10 @@ The connector sets `HERMES_HOME` to the isolated home and leaves `HOME` alone.
 ## Run without permission prompts
 
 With the default `approvals.mode: smart`, a helper model approves low-risk shell commands and the rest get a prompt with a 60 s timeout (source). The connector's `no_prompts` row writes `approvals.mode = "off"` into `config.yaml` in the isolated home. The mode accepts `manual`, `smart` and `off`; quote `"off"`, because an unquoted `off` is YAML for false, which Hermes also reads as off (source). `hermes chat --yolo` does the same for one session ([docs](https://hermes-agent.nousresearch.com/docs/reference/cli-commands)); the connector passes no such option. File edits are not gated. See [HARNESS-SETUP](../HARNESS-SETUP.md#hermes).
+
+Telemetry screen: on a home that never answered, an interactive chat first shows "Help improve Hermes?" and waits behind it (rung 1, 2026-10-31: 0 requests until seal). The screen is skipped when `telemetry.shared_metrics.enabled` is true, or when a key is present and `offer_version` is 2 (source: `hermes_cli/observability/shared_metrics_consent.py`, `cli-config.yaml.example`, v0.22.5). A settings row cannot write the integer `offer_version`. Writing `enabled = true` would answer the screen for the participant and turn Hermes's usage counting on; `enabled` turns collection on and `send` turns the daily upload on, and Hermes's own offer text says data from before opt-in is never sent apart from a one-time install note, a note the source does not tie to a key. The setup question asks about approvals only, so the connector writes no telemetry row and the `first_screen` line tells the participant to pick "No thanks".
+
+First run of a new `HERMES_HOME` installs about 105 Python packages (72 MB from files.pythonhosted.org). Measured in rung 1.
 
 ## Pad result
 

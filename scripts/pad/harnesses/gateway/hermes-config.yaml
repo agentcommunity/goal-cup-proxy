@@ -2,3 +2,9 @@
 model:
   provider: ai-gateway
   default: deepseek/deepseek-v4.1-flash
+# The "Help improve Hermes?" answer, preset to "No thanks" (shared_metrics_consent.py at v0.22.5; docs only, not run).
+telemetry:
+  shared_metrics:
+    enabled: false
+    send: false
+    offer_version: 2

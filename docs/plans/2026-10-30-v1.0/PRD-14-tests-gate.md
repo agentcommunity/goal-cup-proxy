@@ -1079,3 +1079,8 @@ touched.
 ### 2026-11-01, from PRD-17 slice 6 (merge c9b87ac5)
 
 - The lessons files hold 4,345 test lines against the 3,000 shared with PRD-14, so PRD-14 section 3 has no room left for its own support; it must shrink its own tests to keep the Rust test total near the 14,200 line. Gate check 1 needs the four missing names (see PRD-17) to exist or be dropped by a replan. No locked ledger item is touched.
+
+### 2026-11-01, note from PRD-10 slice 12 (merge b8d12325)
+
+- **Follow-up for the `tests/common/` owner:** the FakeWorker should record the body of `POST /v1/runs` (an `opens()` accessor). Then
+  `tests/cli_approve.rs` drops its own spy and message pair (about 65 lines). Not a defect; no gate effect.
