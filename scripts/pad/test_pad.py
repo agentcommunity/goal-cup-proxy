@@ -545,22 +545,26 @@ class UpstreamRedaction(unittest.TestCase):
     DELTAS = StatedLoss.DELTAS
 
     def c3(self, up, masks, known=(), shapes=()):
-        return evaluate({"meta.json": {"connector": "hermes-cli", "case": "direct", "known_box": True, "entry": "e1", "redacts_tool_output": up},
+        return evaluate({"meta.json": {"connector": "hermes-cli", "case": "direct", "known_box": True, "entry": "e1", "redacts_tool_output": up,
+                                      "redacts_kinds": ["openai_key", "github_token"]},
                          "verify/secrets.json": {"masks": masks, "known_hits": list(known), "shape_hits": list(shapes), "big_masks": []},
                          "verify/secrets-conductor.json": {"hits": 0},
                          "verify/exits.json": {"secrets": 2 if known or shapes else 1, "secrets-out": 0, "secrets-plain": 0}}
                         )["checks"]["C3"]
 
     def test_no_hit_and_no_planted_mask_passes_upstream(self):
-        self.assertEqual(self.c3(True, {"masked_key": 3}), "PASS")
-        self.assertEqual(self.c3(True, dict(SecretCheck.PLANTED, jwt=0, masked_key=3)), "PASS")
+        rest = {"google_key": 1, "jwt": 1, "private_key": 1, "url_password": 1}  # kinds the vendor rule does not name
+        self.assertEqual(self.c3(True, dict(rest, masked_key=3)), "PASS")
+        self.assertEqual(self.c3(True, dict(SecretCheck.PLANTED, jwt=0, masked_key=3)), "INCONCLUSIVE")  # jwt is no vendor-named kind
+        self.assertEqual(self.c3(True, {"masked_key": 3}), "INCONCLUSIVE")
 
     def test_no_exercise_evidence_is_not_a_pass(self):  # nothing shows the planted file reached the harness
         self.assertEqual(self.c3(True, {}), "INCONCLUSIVE")
         self.assertEqual(self.c3(True, {"auth": 8}), "INCONCLUSIVE")
 
     def test_a_plain_hit_with_exact_off_is_evidence_not_less(self):
-        files = {"meta.json": {"connector": "hermes-cli", "case": "direct", "known_box": True, "entry": "e1", "redacts_tool_output": True},
+        files = {"meta.json": {"connector": "hermes-cli", "case": "direct", "known_box": True, "entry": "e1", "redacts_tool_output": True,
+                           "redacts_kinds": ["openai_key", "github_token"]},
                  "verify/secrets.json": {"masks": {"masked_key": 3}, "known_hits": [], "shape_hits": [], "big_masks": []},
                  "verify/secrets-conductor.json": {"hits": 0},
                  "verify/exits.json": {"secrets": 1, "secrets-out": 0, "secrets-plain": 2}}
@@ -612,6 +616,7 @@ class SecretCheck(unittest.TestCase):
 
     def hermes(self, masks):
         meta = {"connector": "hermes-cli", "case": "direct", "known_box": True, "entry": "e1", "redacts_tool_output": True,
+                "redacts_kinds": ["openai_key", "github_token"],
                 "mask_values": {"workspace": 4, "env": 0, "harness": 0, "skipped": 0}}
         out = evaluate({"meta.json": meta, "verify/secrets.json": {"masks": masks}, "verify/secrets-conductor.json": {"hits": 0},
                         "verify/exits.json": {"secrets": 1, "secrets-out": 0, "secrets-plain": 0}})
@@ -620,7 +625,7 @@ class SecretCheck(unittest.TestCase):
     def test_run_secret_never_stands_for_a_planted_kind(self):
         # Redacting harness, exact values on: masked_key and run_secret with no openai/github/google MASK is the unconfirmed
         # masked-upstream PASS (refused by the release check), never a plain PASS; run_secret alone is no evidence.
-        shaped = {"jwt": 1, "private_key": 1, "url_password": 1, "masked_key": 3, "run_secret": 1, "auth": 8}
+        shaped = {"google_key": 1, "jwt": 1, "private_key": 1, "url_password": 1, "masked_key": 3, "run_secret": 1, "auth": 8}
         self.assertEqual(self.hermes(shaped), ("PASS", True))
         self.assertEqual(self.hermes({"run_secret": 4, "auth": 8})[0], "INCONCLUSIVE")
 

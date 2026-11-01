@@ -2026,10 +2026,9 @@ taken; "rejected" says why. Fixes for other files are made by those files' owner
 - **Exact values on.** `Run.exact_values()` returns the start event's `mask_values` (PRD-05 ValueCounts) from
   `meta.json`; pad-run copies it there (via `goalcup-verify dump --kind event`, the `start` event) through
   `meta-box.json`. Exact values are on when `workspace` is above 0. When on, a plain hit of `PAD_SECRET_PLAIN` is a
-  C3 FAIL, the exercise proof is a `run_secret` MASK (planted-shape MASKs alone leave C3 INCONCLUSIVE), and
-  `skipped` above 0 is INCONCLUSIVE ("the planted value may be cut"), not FAIL. Absent means off.
+  C3 FAIL, and `skipped` above 0 is INCONCLUSIVE ("the planted value may be cut"), not FAIL. Absent means off.
 - **Masked upstream (ledger 18:04Z, conductor ruling).** For a harness with `redacts_tool_output`, no known, shape or
-  plain hit, no stated loss and exercise evidence (a `masked_key` MASK), a planted kind with no MASK is a C3 PASS ("masked upstream"). With no exercise evidence C3 stays
+  plain hit, no stated loss and exercise evidence (a `masked_key` MASK), a planted kind with no MASK is a C3 PASS ("masked upstream") only when the harness file's `redacts_kinds` names it (Hermes: `openai_key`, `github_token`); any other bare kind stays INCONCLUSIVE "not exercised". With no exercise evidence C3 stays
   INCONCLUSIVE. A known hit or unmasked shape hit still FAILs, the deltas-only stated loss stays INCONCLUSIVE, and a
   harness without the flag keeps INCONCLUSIVE. Such a PASS carries `facts.masked_upstream` and is refused by
   `--release-check` until the owner confirms it.

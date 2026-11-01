@@ -25,6 +25,8 @@ model_host = "api.deepseek.com"
 # for Hermes's own redacted form; the full3 record held 28 and 190), else C3 stays INCONCLUSIVE. Such a PASS does not count
 # toward --release-check until the owner confirms the rule (point 4). pad copies this to the row meta under the same name.
 redacts_tool_output = true
+# The planted kinds the vendor rule above names (sk- and ghp_ shapes); only these can pass as masked upstream.
+redacts_kinds = ["openai_key", "github_token"]
 ready_text = "Type your message or /help"
 ready_wait = 120
 exit_keys = '/exit\r'

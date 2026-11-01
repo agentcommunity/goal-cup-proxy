@@ -514,14 +514,19 @@ def secrets(r):
                       % ("" if exact else " and no plain-value hit"))
     # A planted kind with no MASK is a FAIL when a hit shows it reached the record, else not exercised (a run never passes on
     # a missing exercise). An upstream-redacting harness with exercise evidence and no hit passes: masked upstream.
-    if bare and clean:
-        r.mark("C3", "PASS", "masked upstream, before the wire: no MASK of %s" % ", ".join(bare))
-        r.upstream_pass = True
-    for name in bare if not clean else ():
+    # Only the kinds the harness file names as redacted by the vendor (redacts_kinds) can pass as masked upstream; any other
+    # bare kind was never shown to be redacted, so it stays not exercised.
+    named = set(r.meta.get("redacts_kinds") or [])
+    pending = [b for b in bare if b not in named] if clean else bare
+    if clean and len(pending) < len(bare):
+        r.mark("C3", "PASS", "masked upstream, before the wire: no MASK of %s" % ", ".join(b for b in bare if b in named))
+    for name in pending:
         why = "not exercised"
         if loss:
             why += "; %s only in joined streamed replies (not verified)" % ("hit" if set(name.split(" or ")) & set(loss[0]) else "shape")
         r.mark("C3", "FAIL" if hit else "INCONCLUSIVE", "%s of %s: no MASK" % ("hits" if hit else why, name))
+    if clean and len(pending) < len(bare) and r.v["C3"] == "PASS":
+        r.upstream_pass = True
 
 def c6(r):
     st, final = r.status, dig(r.status, "s4_requests")
