@@ -942,7 +942,8 @@ mod tests {
     /// whole regex from the byte after every glued start), on text dense with glued prefixes.
     #[test]
     fn the_head_search_finds_what_the_plain_search_finds() {
-        const PIECES: [&[u8]; 19] = [
+        const PIECES: [&[u8]; 20] = [
+            b"ABSKQmVkcm9ja0FQSUtleS",
             b"ABSK",
             b"+",
             b"AQ.",

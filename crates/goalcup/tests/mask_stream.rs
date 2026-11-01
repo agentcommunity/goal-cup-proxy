@@ -7,7 +7,9 @@
 #[path = "mask_corpus/common.rs"]
 mod common;
 
-use common::{ALNUM, Rng, TOKEN, append, aq_key, keys, provider_keys, random_cuts, run, starred};
+use common::{
+    ALNUM, B64URL, Rng, append, aq_key, key_of, keys, provider_keys, random_cuts, run, starred,
+};
 use goalcup::connector::{self, FieldValue, MaskPattern, MaskRule};
 use goalcup::mask::{Masked, Masker, SecretValue, StreamMasker, ValueSource};
 use goalcup_format::StreamKind;
@@ -92,19 +94,18 @@ fn planted() -> Vec<Vec<u8>> {
     out.push(bad);
     out.push(format!("\x1b[32m{gh}\x1b[0m \\\\u001b[1m{gh} xx{gh} %3D{gh}").into_bytes());
     let aq = aq_key(31);
-    let (a, c) = (run(TOKEN, 20, 32), run(TOKEN, 9, 33));
+    let (a, c) = (run(B64URL, 20, 32), run(B64URL, 9, 33));
     out.push(
         format!(
             "{{\"output\":\"HOME=/h\\nGEMINI_API_KEY={aq}\\nGEMINI_CLI=1\\n\"}}\nGEMINI_API_KEY={aq}\ntoken: ab.{a}\nSECRET={a}.{a}.{c}\ntoken={a}.{a} x\nsecret = a.b.c\ntoken = self.config.get_authentication_token()\n"
         )
         .into_bytes(),
     );
-    let key = |kind| keys().into_iter().find(|k| k.0 == kind).map(|k| k.1);
-    let (sk, jwt) = (
-        key("openai_key").unwrap_or_default(),
-        key("jwt").unwrap_or_default(),
+    let (sk, jwt, bedrock) = (
+        key_of("openai_key", 0),
+        key_of("jwt", 0),
+        key_of("bedrock_key", 1),
     );
-    let bedrock = provider_keys().pop().map(|k| k.1).unwrap_or_default();
     out.push(
         format!("token={a}.{sk}\napi_key=\"{a}.{jwt}\"\nAuthorization: Bearer {bedrock}\n")
             .into_bytes(),

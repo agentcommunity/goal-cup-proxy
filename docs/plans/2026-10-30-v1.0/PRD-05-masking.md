@@ -207,7 +207,7 @@ the hold overflowed (section 6), never a secret the rules found. The start event
 
 ### 4. The left guard
 
-**Rule.** A match of a guarded literal (24 rules since the 2026-11-01 amendment; one more with the owner's yes to question 3; table above) is
+**Rule.** A match of a guarded literal (24 rules since the 2026-11-01 amendment, two of them pending the owner's answer; one more with the owner's yes to question 3; table above) is
 dropped when the byte just before it is one of `[A-Za-z0-9_]` (the ledger's word boundary; `[A-Za-z0-9_-]`
 only with the owner's yes to PRD-00 owner question 10), unless that byte ends one of these escapes:
 
@@ -967,13 +967,21 @@ A1 reports it as a stated loss instead of failing on it.
 - **New kinds**, guarded, appended to `shapes.tsv`: `groq_key` `gsk_`, `cerebras_key` `csk-`/`csk_`,
   `fireworks_key` `fw_`, `vercel_gateway_key` `vck_`, `fk_key` `fk-` (body `[A-Za-z0-9]{20,}`, so kebab and
   snake identifiers and base64url blobs end the run early), `together_key` `tgp_v1_` and `sgamp_key`
-  `sgamp_` (body `[A-Za-z0-9_\-]{20,}`: Amp keys hold `_`), `bedrock_key` `ABSK` (base64, floor 100) and
-  `bedrock-api-key-` (base64, floor 20). This overrides the "Not added" default for `gsk_` and `sgamp_`
-  (Overridable defaults); it only adds masking, and the owner may take it back.
+  `sgamp_` (body `[A-Za-z0-9_\-]{20,}`: Amp keys hold `_`), `bedrock_key` long-term (`ABSK` and the
+  base64 of `BedrockAPIKey-`, `QmVkcm9ja0FQSUtleS`, then base64, body floor 100) and short-term
+  (`bedrock-api-key-` and the base64 of `bedrock.amazonaws.com`, then base64, floor 20). The fixed base64
+  starts keep a hit inside an image or signature blob out of reach (gitleaks anchors both the same way).
+- **Owner answer pending.** `gsk_` and `sgamp_` are in the "Not added" default and the guarded-rule
+  count in the Overridable defaults, both the owner's to change. The two rows ship because they only add
+  masking; the owner question is logged. If the owner says no, the `groq_key` and `sgamp_key` rows, their
+  `stream.rs` entries and their fixture keys come out.
 - **Shell literal (line 11).** Arms in order: `=` with a form-encoded value; `=` with no space, or a
-  quote, and a dotted value `(?:[A-Za-z0-9_\-]+\.)*[A-Za-z0-9_\-]{16,}(?:\.[A-Za-z0-9_\-]+)*`; a spaced or
-  `:` unquoted value, undotted as before, so code such as `token = self.config.long_attribute_name` stays
-  raw. No input the old literal matched is matched shorter.
+  quote, and a value of token runs joined by single dots, where one run of 16 or more holds a digit when
+  there is a dot (else an undotted run of 16 or more); a spaced or `:` unquoted value, undotted as before.
+  So code such as `token = self.config.long_attribute_name`, the keyword argument
+  `OpenAI(api_key=settings.OPENAI_API_KEY_PRODUCTION)` and
+  `secret: "projects.secretmanager.versions_access_latest"` stay raw. No input the old literal matched is
+  matched shorter.
 - **Cut, not dropped.** A `generic_secret_assignment` or `bedrock_key` candidate that overlaps an earlier
   hard claim keeps its uncovered pieces (`CUT_KINDS` in `rules.rs`), so `token=<run>.sk-…` and
   `Bearer bedrock-api-key-<base64 with +>` are starred whole.

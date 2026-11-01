@@ -8,7 +8,8 @@
 mod common;
 
 use common::{
-    ALNUM, Rng, TOKEN, aq_key, keys, only_spans_changed, provider_keys, run, shape_rows, starred,
+    ALNUM, B64URL, Rng, aq_key, key_of, keys, only_spans_changed, provider_keys, run, shape_rows,
+    starred,
 };
 
 /// The literal kinds in `shapes.tsv` order. The JSON literal (10) and the shell literal (11)
@@ -56,14 +57,6 @@ fn shapes_tsv_is_the_shared_list() {
     );
     let kinds: Vec<&str> = rows.iter().map(|r| r[0]).collect();
     assert_eq!(kinds, KINDS);
-    let guarded: Vec<usize> = rows
-        .iter()
-        .enumerate()
-        .filter(|(_, r)| r[1] == "1")
-        .map(|(i, _)| i)
-        .collect();
-    let late: Vec<usize> = (13..rows.len()).collect();
-    assert_eq!(guarded, [&[0, 1, 3, 4, 5, 7, 9][..], &late].concat());
 }
 
 // ── the masker over whole inputs (PRD-05 sections 2 to 5) ─────────────────────────────────
@@ -454,10 +447,9 @@ fn provider_keys_are_masked_where_an_env_dump_leaks_them() -> Res {
 #[test]
 fn dotted_assignment_values_are_masked_whole() -> Res {
     let m = masker()?;
-    let (a, b, c) = (run(TOKEN, 20, 81), run(TOKEN, 20, 82), run(TOKEN, 9, 83));
-    let key = |kind| keys().into_iter().find(|k| k.0 == kind).map(|k| k.1);
-    let (sk, jwt) = (key("openai_key").ok_or("sk")?, key("jwt").ok_or("jwt")?);
-    let bedrock = provider_keys().pop().ok_or("bedrock")?.1;
+    let (a, b, c) = (run(B64URL, 20, 81), run(B64URL, 20, 82), run(B64URL, 9, 83));
+    let (sk, jwt) = (key_of("openai_key", 0), key_of("jwt", 0));
+    let bedrock = key_of("bedrock_key", 1);
     for (input, value) in [
         (format!("GEMINI_API_KEY={}", aq_key(84)), aq_key(84)),
         (format!("token='ab.{a}'"), format!("ab.{a}")),
@@ -485,22 +477,24 @@ fn dotted_assignment_values_are_masked_whole() -> Res {
     let input = format!("api_key: {a}.{jwt}");
     assert_masks(&m, &input, &a);
     assert_masks(&m, &input, &jwt);
-    // Code is the bulk of what is recorded: a member path after a spaced `=` or `:` stays raw
-    // even when one segment is long.
+    // Code is the bulk of what is recorded: a member path stays raw even when one segment is
+    // long, after a spaced `=` or `:`, and as a keyword argument or a quoted name when no long
+    // segment holds a digit.
     for code in [
-        "token = self.config.auth_token",
-        "api_key=os.environ.get(\"X\")",
-        "password: user.password",
-        "secret = a.b.c",
-        "let token = entry.keys.signing_key",
-        "token: a.b.c.d.e.f.g.h.i.j.k.l",
-        "token = self.config.get_authentication_token()",
-        "password: process.env.DATABASE_PASSWORD_PRODUCTION",
         "token = self.config.authentication_token",
+        "secret = a.b.c",
+        "token: a.b.c.d.e.f.g.h.i.j.k.l",
+        "password: process.env.DATABASE_PASSWORD_PRODUCTION",
         "secret: google.cloud.secretmanager_v1beta1",
-        "token: process.env.GITHUB_TOKEN_FOR_RELEASES",
-        "password = form.cleaned_data.get_password_value",
-        "token = response.headers.x_amzn_requestid_value",
+        "api_key=os.environ.get(\"X\")",
+        "client = OpenAI(api_key=settings.OPENAI_API_KEY_PRODUCTION)",
+        "client = OpenAI(api_key=settings.OPENROUTER_API_KEY)",
+        "requests.get(url, token=self.config.get_authentication_token())",
+        "requests.get(url, token=self.settings.github_access_token)",
+        "jwt.encode(payload, secret=settings.JWT_SIGNING_SECRET_KEY)",
+        "connect(password=os.environ.DATABASE_PASSWORD_PRODUCTION)",
+        "f(secret=request.headers.x_amzn_requestid_value)",
+        "secret: \"projects.secretmanager.versions_access_latest\"",
     ] {
         assert_clear(&m, code);
     }

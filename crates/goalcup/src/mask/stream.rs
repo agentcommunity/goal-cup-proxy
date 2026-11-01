@@ -299,6 +299,25 @@ const fn prefixed(
     }
 }
 
+/// A literal prefix, one byte per position, for [`prefixed`].
+const fn each<const N: usize>(s: &'static [u8; N]) -> [&'static [u8]; N] {
+    let empty: &'static [u8] = &[];
+    let mut out = [empty; N];
+    let mut i = 0;
+    while i < N {
+        out[i] = s.as_slice().split_at(i).1.split_at(1).0;
+        i += 1;
+    }
+    out
+}
+
+/// Amazon Bedrock API keys are base64 behind a fixed start, so a hit inside an image or a
+/// signature blob is out of reach. Long-term: `ABSK` and the base64 of `BedrockAPIKey-`.
+/// Short-term: `bedrock-api-key-` (AUTH_PREFIX in aws/aws-bedrock-token-generator-js
+/// src/token.ts) and the base64 of its host `bedrock.amazonaws.com`.
+static BEDROCK_LONG: [&[u8]; 22] = each(b"ABSKQmVkcm9ja0FQSUtleS");
+static BEDROCK_SHORT: [&[u8]; 44] = each(b"bedrock-api-key-YmVkcm9jay5hbWF6b25hd3MuY29t");
+
 /// The streaming recognizer of each shared literal, in `shapes.tsv` order. A recognizer never
 /// decides a span below the bound (the regex does); it says how long a candidate must be held,
 /// and how long a fail-closed window must run.
@@ -383,7 +402,7 @@ static SHAPES: [Shape; 30] = [
     },
     Shape {
         kind: "generic_secret_assignment",
-        source: r#"(?i)(?:api[_-]?key|secret|token|password)(?:=(?:%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){15,}|[A-Za-z0-9_.~+/=\-]{1}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){14,}|[A-Za-z0-9_.~+/=\-]{2}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){13,}|[A-Za-z0-9_.~+/=\-]{3}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){12,}|[A-Za-z0-9_.~+/=\-]{4}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){11,}|[A-Za-z0-9_.~+/=\-]{5}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){10,}|[A-Za-z0-9_.~+/=\-]{6}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){9,}|[A-Za-z0-9_.~+/=\-]{7}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){8,}|[A-Za-z0-9_.~+/=\-]{8}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){7,}|[A-Za-z0-9_.~+/=\-]{9}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){6,}|[A-Za-z0-9_.~+/=\-]{10}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){5,}|[A-Za-z0-9_.~+/=\-]{11}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){4,}|[A-Za-z0-9_.~+/=\-]{12}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){3,}|[A-Za-z0-9_.~+/=\-]{13}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){2,}|[A-Za-z0-9_.~+/=\-]{14}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){1,}|[A-Za-z0-9_.~+/=\-]{15,}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2})*|[0-9]\.[A-Za-z0-9_.~+/=\-]{14,})|(?:=|\s*[=:]\s*\\{0,7}['"])(?:[A-Za-z0-9_\-]+\.)*[A-Za-z0-9_\-]{16,}(?:\.[A-Za-z0-9_\-]+)*|\s*[=:]\s*[A-Za-z0-9_\-]{16,})"#,
+        source: r#"(?i)(?:api[_-]?key|secret|token|password)(?:=(?:%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){15,}|[A-Za-z0-9_.~+/=\-]{1}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){14,}|[A-Za-z0-9_.~+/=\-]{2}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){13,}|[A-Za-z0-9_.~+/=\-]{3}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){12,}|[A-Za-z0-9_.~+/=\-]{4}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){11,}|[A-Za-z0-9_.~+/=\-]{5}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){10,}|[A-Za-z0-9_.~+/=\-]{6}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){9,}|[A-Za-z0-9_.~+/=\-]{7}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){8,}|[A-Za-z0-9_.~+/=\-]{8}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){7,}|[A-Za-z0-9_.~+/=\-]{9}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){6,}|[A-Za-z0-9_.~+/=\-]{10}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){5,}|[A-Za-z0-9_.~+/=\-]{11}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){4,}|[A-Za-z0-9_.~+/=\-]{12}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){3,}|[A-Za-z0-9_.~+/=\-]{13}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){2,}|[A-Za-z0-9_.~+/=\-]{14}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){1,}|[A-Za-z0-9_.~+/=\-]{15,}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2})*|[0-9]\.[A-Za-z0-9_.~+/=\-]{14,})|(?:=|\s*[=:]\s*\\{0,7}['"])(?:(?:[A-Za-z0-9_\-]+\.)*(?:[0-9][A-Za-z0-9_\-]{15,}|[A-Za-z_\-][0-9][A-Za-z0-9_\-]{14,}|[A-Za-z_\-]{2}[0-9][A-Za-z0-9_\-]{13,}|[A-Za-z_\-]{3}[0-9][A-Za-z0-9_\-]{12,}|[A-Za-z_\-]{4}[0-9][A-Za-z0-9_\-]{11,}|[A-Za-z_\-]{5}[0-9][A-Za-z0-9_\-]{10,}|[A-Za-z_\-]{6}[0-9][A-Za-z0-9_\-]{9,}|[A-Za-z_\-]{7}[0-9][A-Za-z0-9_\-]{8,}|[A-Za-z_\-]{8}[0-9][A-Za-z0-9_\-]{7,}|[A-Za-z_\-]{9}[0-9][A-Za-z0-9_\-]{6,}|[A-Za-z_\-]{10}[0-9][A-Za-z0-9_\-]{5,}|[A-Za-z_\-]{11}[0-9][A-Za-z0-9_\-]{4,}|[A-Za-z_\-]{12}[0-9][A-Za-z0-9_\-]{3,}|[A-Za-z_\-]{13}[0-9][A-Za-z0-9_\-]{2,}|[A-Za-z_\-]{14}[0-9][A-Za-z0-9_\-]{1,}|[A-Za-z_\-]{15,}[0-9][A-Za-z0-9_\-]*)(?:\.[A-Za-z0-9_\-]+)*|[A-Za-z0-9_\-]{16,})|\s*[=:]\s*[A-Za-z0-9_\-]{16,})"#,
         form: Form::ShellAssignment,
     },
     Shape {
@@ -515,24 +534,20 @@ static SHAPES: [Shape; 30] = [
         20,
         None,
     ),
-    // Amazon Bedrock API keys, base64 behind a fixed prefix: long-term `ABSK`, short-term
-    // `bedrock-api-key-` (aws/aws-bedrock-token-generator-js src/token.ts, AUTH_PREFIX). The
-    // long-term floor is 100, below the real 109.
+    // Amazon Bedrock API keys (see [`BEDROCK_LONG`]). The long-term body after `ABSK` has a
+    // floor of 100, below the real 109.
     prefixed(
         "bedrock_key",
-        r"ABSK[A-Za-z0-9+/]{100,}",
-        &[b"A", b"B", b"S", b"K"],
+        r"ABSKQmVkcm9ja0FQSUtleS[A-Za-z0-9+/]{82,}",
+        &BEDROCK_LONG,
         base64,
-        100,
+        82,
         None,
     ),
     prefixed(
         "bedrock_key",
-        r"bedrock-api-key-[A-Za-z0-9+/]{20,}",
-        &[
-            b"b", b"e", b"d", b"r", b"o", b"c", b"k", b"-", b"a", b"p", b"i", b"-", b"k", b"e",
-            b"y", b"-",
-        ],
+        r"bedrock-api-key-YmVkcm9jay5hbWF6b25hd3MuY29t[A-Za-z0-9+/]{20,}",
+        &BEDROCK_SHORT,
         base64,
         20,
         None,
@@ -1505,11 +1520,12 @@ impl Json {
 
 impl Shell {
     /// The shell literal: `(?i)(?:api[_-]?key|secret|token|password)`, then `=` and a
-    /// form-encoded value; or `=` with no space, or a quote, and a dotted value
-    /// `(?:[A-Za-z0-9_\-]+\.)*[A-Za-z0-9_\-]{16,}(?:\.[A-Za-z0-9_\-]+)*`; or `\s*[=:]\s*` and an undotted value
-    /// `[A-Za-z0-9_\-]{16,}`, so `token = self.config.long_attribute_name` stays raw. After a
-    /// quote the walk holds any token runs joined by single dots, a superset: it never ends
-    /// before the regex's match does.
+    /// form-encoded value; or `=` with no space, or a quote, and a value of token runs joined by
+    /// single dots, one run of sixteen or more that holds a digit when there is a dot; or
+    /// `\s*[=:]\s*` and an undotted value `[A-Za-z0-9_\-]{16,}`. So code such as
+    /// `token = self.config.long_attribute_name` and `f(api_key=settings.OPENAI_API_KEY)` stays
+    /// raw. After a quote the walk holds any token runs joined by single dots, digit or not, a
+    /// superset: it never ends before the regex's match does.
     fn step(&mut self, u: Unit) -> bool {
         let next = match *self {
             Shell::Word { which, pos } => {
@@ -2460,8 +2476,9 @@ mod tests {
         b"tgp_v1_",
         b"sgamp_",
         b"fk-",
-        b"ABSK",
-        b"bedrock-api-key-",
+        b"ABSKQmVkcm9ja0FQSUtleS",
+        b"bedrock-api-key-YmVkcm9jay5hbWF6b25hd3MuY29t",
+        b"QmVkcm9ja0FQSUtleS",
         b"token=",
         b"token='",
         b"secret: ",

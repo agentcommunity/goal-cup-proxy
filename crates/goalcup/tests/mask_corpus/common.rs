@@ -45,6 +45,11 @@ pub fn guarded_kinds() -> Vec<String> {
 }
 
 pub const ALNUM: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+pub const UPPER: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+pub const HEX: &[u8] = b"0123456789abcdef";
+pub const B64: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+/// `[A-Za-z0-9_\-]`, also the class of a shell value.
+pub const B64URL: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
 
 /// `n` characters of `set`, deterministic, never a real key.
 pub fn run(set: &[u8], n: usize, seed: usize) -> String {
@@ -55,7 +60,6 @@ pub fn run(set: &[u8], n: usize, seed: usize) -> String {
 
 /// One fake key per guarded literal: its kind, the key, and the length of its fixed prefix.
 pub fn keys() -> Vec<(&'static str, String, usize)> {
-    let upper = b"ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
     let jwt = [
         "ey",
         "J",
@@ -84,7 +88,7 @@ pub fn keys() -> Vec<(&'static str, String, usize)> {
         ("github_token", ["gh", "p_", &run(ALNUM, 30, 4)].concat(), 4),
         (
             "aws_access_key",
-            ["AK", "IA", &run(upper, 16, 5)].concat(),
+            ["AK", "IA", &run(UPPER, 16, 5)].concat(),
             4,
         ),
         ("jwt", jwt.concat(), 3),
@@ -109,47 +113,58 @@ pub fn keys() -> Vec<(&'static str, String, usize)> {
         ),
         (
             "digitalocean_token",
-            ["do", "p_v1_", &run(b"0123456789abcdef", 40, 16)].concat(),
+            ["do", "p_v1_", &run(HEX, 40, 16)].concat(),
             7,
         ),
     ]
 }
 
-/// `[A-Za-z0-9_\-]`, the class of a shell value.
-pub const TOKEN: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-";
-
 /// A fake Google authentication key: `AQ.` and 50 more.
 pub fn aq_key(seed: usize) -> String {
-    ["A", "Q.", &run(TOKEN, 50, seed)].concat()
+    ["A", "Q.", &run(B64URL, 50, seed)].concat()
 }
 
 /// One fake key per provider and gateway literal, `sk-` providers included: the kind that
 /// masks it, the key, and the length of its fixed prefix.
 pub fn provider_keys() -> Vec<(&'static str, String, usize)> {
-    let hex = b"0123456789abcdef";
-    let b64 = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let k = |kind, parts: &[&str], prefix| (kind, parts.concat(), prefix);
     vec![
         k("openai_key", &["s", "k-", &run(ALNUM, 32, 60)], 3), // DeepSeek
         k("openai_key", &["s", "k-", &run(ALNUM, 48, 61)], 3), // Moonshot / Kimi
-        k("openai_key", &["s", "k-", &run(hex, 32, 62)], 3),   // DashScope
-        k("openai_key", &["s", "k-or-", "v1-", &run(hex, 64, 63)], 3), // OpenRouter
+        k("openai_key", &["s", "k-", &run(HEX, 32, 62)], 3),   // DashScope
+        k("openai_key", &["s", "k-or-", "v1-", &run(HEX, 64, 63)], 3), // OpenRouter
         ("google_auth_key", aq_key(34), 3),
         k("groq_key", &["gs", "k_", &run(ALNUM, 52, 64)], 4),
         k("cerebras_key", &["cs", "k-", &run(ALNUM, 48, 65)], 4),
         k("cerebras_key", &["cs", "k_", &run(ALNUM, 48, 66)], 4),
         k("fireworks_key", &["f", "w_", &run(ALNUM, 24, 67)], 3),
         k("vercel_gateway_key", &["vc", "k_", &run(ALNUM, 56, 68)], 4),
-        k("together_key", &["tgp", "_v1_", &run(TOKEN, 43, 69)], 7),
-        k("sgamp_key", &["sga", "mp_user_", &run(TOKEN, 40, 70)], 6),
+        k("together_key", &["tgp", "_v1_", &run(B64URL, 43, 69)], 7),
+        k("sgamp_key", &["sga", "mp_user_", &run(B64URL, 40, 70)], 6),
         k("fk_key", &["f", "k-", &run(ALNUM, 40, 71)], 3),
-        k("bedrock_key", &["AB", "SK", &run(b64, 120, 72)], 4),
+        k("bedrock_key", &["AB", "SK", BEDROCK_LONG, &run(B64, 102, 72)], 22),
         k(
             "bedrock_key",
-            &["bedrock-", "api-key-", &run(b64, 200, 73)],
-            16,
+            &["bedrock-", "api-key-", BEDROCK_SHORT, &run(B64, 172, 73)],
+            44,
         ),
     ]
+}
+
+/// The fixed start of a Bedrock key's base64 body: of `BedrockAPIKey-` (long-term) and of
+/// `bedrock.amazonaws.com` (short-term).
+const BEDROCK_LONG: &str = "QmVkcm9ja0FQSUtleS";
+const BEDROCK_SHORT: &str = "YmVkcm9jay5hbWF6b25hd3MuY29t";
+
+/// The first fake key of `kind`, from [`keys`] then [`provider_keys`], and the `n`th one.
+pub fn key_of(kind: &str, n: usize) -> String {
+    keys()
+        .into_iter()
+        .chain(provider_keys())
+        .filter(|k| k.0 == kind)
+        .nth(n)
+        .map(|k| k.1)
+        .expect("a fake key of that kind")
 }
 
 /// One stream of `kind` fed `input` cut at `cuts`, ended by `finish`, spans made absolute.
