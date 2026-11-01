@@ -36,7 +36,7 @@ lessons lane (PRD-17); read by the deletion gate (PRD-17 Acceptance, checks 1 to
 | L-C3 | 2.1 | A: lessons_connect::authority_forms | PRD-17 | green | c39737d9 |
 | L-C4 | 2.1 | A: lessons_connect::client_hello_in_two_records_and_one_byte_reads_decides_by_sni; A: lessons_connect::openssl_client_hellos_in_single_bytes_are_replayed_whole (the two copied OpenSSL hellos, no 2 KiB synthetic one) | PRD-17 | green | c39737d9 |
 | L-C5 | 2.1 | A: lessons_connect::close_before_hello_is_one_named_loss (upstream dialled before the 200; one conn record, one named GAP) | PRD-17 | green | c39737d9 |
-| L-C6 | 2.1 | A: lessons_connect::unlisted_refusal_is_one_round; A: lessons_connect::listed_refusal_is_retried; A: proxy_connect.rs (PRD-03, the reset rule); R: RR5 | PRD-17 | green | 8dc99969 |
+| L-C6 | 2.1 | A: lessons_connect::unlisted_refusal_is_one_round; A: lessons_connect::listed_refusal_is_retried; A: proxy_tunnel::an_upstream_reset_reaches_the_client_as_a_reset_and_a_close_as_a_close (PRD-03, the reset rule); R: RR5 | PRD-17 | green | 8dc99969 |
 | L-C7 | 2.1 | R: RR1; A: lessons_connect::idle_tunnel_survives_120s (full tier, held back with `ignore`) | PRD-17 | open | - |
 | L-C8 | 2.1 | A: lessons_connect::one_bad_handshake_leaves_others_relaying | PRD-17 | green | c39737d9 |
 | L-C9 | 2.1 | A: proxy_connect.rs (PRD-03) | PRD-03 | green | 7e620577 |
@@ -75,7 +75,7 @@ lessons lane (PRD-17); read by the deletion gate (PRD-17 Acceptance, checks 1 to
 | L-W1 | 2.5 | A: proxy_ws.rs (PRD-03); R: RR1 | PRD-03 | green | 7e620577 |
 | L-W2 | 2.5 | A: lessons_ws::negotiation_accepts_only_rfc7692 (parser half); A: lessons_ws::unknown_extension_relays_inside_a_named_loss (parser); A: lessons_ws::unknown_extension_through_serve (relay half, with the conn GAP and its `lost`) | PRD-17 | green | c39737d9 |
 | L-W3 | 2.5 | A: lessons_ws::server_max_window_bits_10_decodes | PRD-17 | green | 0fa43715 |
-| L-W4 | 2.5 | A: lessons_ws::takeover_history_carries_between_messages (the guard drop itself is structural, see the test comment); R: RR1 | PRD-17 | green | 8dc99969 |
+| L-W4 | 2.5 | A: lessons_ws::takeover_history_carries_between_messages (no case drops a record: the guard drop is structural, the inflater is fed by the decoder and never by the recorder, see the test comment); R: RR1 | PRD-17 | green | 8dc99969 |
 | L-W5 | 2.5 | A: lessons_ws::bfinal_ends_takeover_history | PRD-17 | green | 0fa43715 |
 | L-W6 | 2.5 | A: lessons_ws::one_byte_reads_decode_the_same | PRD-17 | green | 0fa43715 |
 | L-W7 | 2.5 | A: lessons_ws::violations_are_named_and_relaying_goes_on (parser); A: lessons_ws::violations_through_serve (relay half, with the 5a GAP) | PRD-17 | green | c39737d9 |
@@ -111,8 +111,8 @@ lessons lane (PRD-17); read by the deletion gate (PRD-17 Acceptance, checks 1 to
 | L-N7 | 2.7 | A: connector_hints.rs (PRD-11) | PRD-11 | green | 7e620577 |
 | L-N8 | 2.7 | A: connector_launch.rs (PRD-11); A: connector_hints.rs (PRD-11) | PRD-11 | green | 7e620577 |
 | L-N9 | 2.7 | X: ledger H2, PRD-03 rule 2 | none | open | - |
-| L-P1 | 2.8 | A: watchdog_end::watchdog_end_real_killed_recorder_restarts (PRD-02, the kill and the one `recorder_down` GAP); A: watchdog_restart.rs (PRD-02, the unchanged port and a connection served during the restart; file not on integration at 8dc99969: PRD-02 must land it); R: RR4 | PRD-02 | open | - |
-| L-P2 | 2.8 | A: proxy_restart::the_next_boot_serves_the_backlog_with_the_same_ca (PRD-03); A: watchdog_restart.rs (PRD-02, a decrypted connection after a real kill verifies against `run-ca.pem`; file not on integration at 8dc99969: PRD-02 must land it); R: RR4 | PRD-02, PRD-03 | open | - |
+| L-P1 | 2.8 | A: watchdog_end::watchdog_end_real_killed_recorder_restarts (PRD-02, the kill and the one `recorder_down` GAP); A: watchdog_restart.rs (PRD-02, the unchanged port and a connection served during the restart; file not on tree); R: RR4 | PRD-02 | open | - |
+| L-P2 | 2.8 | A: proxy_restart::the_next_boot_serves_the_backlog_with_the_same_ca (PRD-03); A: watchdog_restart.rs (PRD-02, a decrypted connection after a real kill verifies against `run-ca.pem`; file not on tree); R: RR4 | PRD-02, PRD-03 | open | - |
 | L-P3 | 2.8 | A: lessons_launch::ctrl_c_reaches_the_harness_and_the_watchdog_lives (pty); A: watchdog_shield::a_pending_key_does_not_end_the_wrap_up (PRD-02); A: watchdog_shield::a_key_after_harness_exited_gets_the_default_action (PRD-02) | PRD-17, PRD-02 | green | c39737d9 |
 | L-P4 | 2.8 | A: lessons_launch::a_tui_child_reads_the_terminal | PRD-17 | green | 0fa43715 |
 | L-P5 | 2.8 | A: lessons_launch::modes_restored_after_a_raw_exit | PRD-17 | green | 0fa43715 |
@@ -149,7 +149,7 @@ lessons lane (PRD-17); read by the deletion gate (PRD-17 Acceptance, checks 1 to
 | L-R3 | 2.11 | A: check_invariants.rs (PRD-08, invariant 12 gap_has_end); A: proxy_http1.rs (PRD-03, fault case); A: see L-H2, L-H9, L-W2, L-W7, L-W10 | PRD-08, PRD-03 | green | 8dc99969 |
 | L-R4 | 2.11 | R: PRD-02 R3; R: PRD-10 acceptance 1 | PRD-02, PRD-10 | open | - |
 | L-R5 | 2.11 | A: golden.rs (PRD-01); A: proxy_ws.rs (PRD-03); R: RR1 | PRD-01, PRD-03 | green | 8dc99969 |
-| L-R6 | 2.11 | A: proxy_connect.rs (PRD-03) | PRD-03 | open | - |
+| L-R6 | 2.11 | A: proxy_connect.rs (PRD-03; proxy_tunnel.rs opens its `conn` in a helper, so no case shows the record at open) | PRD-03 | open | - |
 | L-R7 | 2.11 | R: PRD-12 C1 | PRD-12 | open | - |
 | L-R8 | 2.11 | A: mask_meta.rs (PRD-05); R: RR1 | PRD-05, PRD-09 | green | 7e620577 |
 | L-HF1 | 2.12 | R: PRD-11 acceptance 5; R: RR3 | PRD-11 | open | - |
