@@ -196,8 +196,16 @@ fn rebuild(
     let mut plan = connector::plan(&loaded, &env, &isolated);
     plan.hosts = hosts;
     // The values the live harness holds: its own start environment where the system shows it,
-    // else this terminal's plan, which may lack a value the first part masked (PRD-05 section 10).
-    let harness_env = process_env(pid).unwrap_or_else(|| plan.env.clone());
+    // plus this terminal's plan, which may differ (extra values only add masking; PRD-05 section 10).
+    // A name held with two values keeps both, the plan's under a suffixed name that passes the same gate.
+    let mut harness_env = process_env(pid).unwrap_or_default();
+    for (name, value) in &plan.env {
+        match harness_env.get(name) {
+            None => harness_env.insert(name.clone(), value.clone()),
+            Some(live) if live != value => harness_env.insert(format!("{name}_PLAN"), value.clone()),
+            Some(_) => None,
+        };
+    }
     let values = launch_values(&workspace, &harness_env);
     Masker::new(&plan.mask_rules, values.clone()).ok()?;
     let part = Part {
