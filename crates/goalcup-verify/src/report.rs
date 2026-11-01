@@ -82,6 +82,7 @@ fn requests(c: &Recount) -> u64 {
 /// One S6 entry.
 fn entry(name: String, o: &Outcome, checks: &[Check]) -> Value {
     let c = &o.counts;
+    let shared = c.json();
     let requests = requests(c);
     let label = match (requests > 0, c.get("native_bytes") > 0) {
         (true, true) => "wire_and_native",
@@ -99,7 +100,7 @@ fn entry(name: String, o: &Outcome, checks: &[Check]) -> Value {
         "lost_unknown": c.get("lost_unknown"), "after_stop_bytes": c.after_stop,
         "mask_failclosed_bytes": c.get("mask_failclosed_bytes"), "off_ms": c.get("off_ms"),
         "tunnels": c.get("tunnels"), "native_files": c.get("native_files"),
-        "threads": o.legs.threads.len()});
+        "hosts": shared["hosts"], "tunnel_hosts": shared["tunnel_hosts"], "threads": o.legs.threads.len()});
     // The history check's facts are the S6 `history` object; its verdicts fill the thread rows.
     let hist = checks.iter().find(|k| k.id == "history_complete");
     let verdicts = hist.and_then(|k| k.facts.get("threads"));
