@@ -204,7 +204,7 @@ the same points on real harnesses.
 |---|---|---|
 | 1 Every model request | Pad C1 | `crates/goalcup/tests` |
 | 2 Every subagent | Pad C2 | `crates/goalcup/tests` |
-| 3 Never block | Recorder kill test | not merged yet |
+| 3 Never block | Recorder kill test | `crates/goalcup/tests` |
 | 4 No secrets | Pad C3 | `crates/goalcup/tests`, `crates/goalcup-verify/tests` |
 | 5 Upload everything | Pad C4 | `crates/goalcup/tests`, `crates/goalcup-verify/tests`, `server/worker/test` |
 | 6 Tell plainly | Pad C6 | `crates/goalcup/tests`, `crates/goalcup-verify/tests` |

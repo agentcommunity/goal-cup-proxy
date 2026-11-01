@@ -2476,3 +2476,12 @@ kept and now cites BUILD-PROMPT section 5, since B3 no longer carries it.
 
 - **Size report, PRD-17** (wc -l on integration): the eight lessons_*.rs files total 4,345 (connect 510, decode 547, hosts 181, http1 978, launch 504, pipeline 104, tls 412, ws 1,109) against the PRD-00 row shared with PRD-14 of about 3,000, 45% over, unchanged by slice 7 (docs only). Past the 10% line, already accepted in the PRD-17 notes; no further growth. The build-wide 14,200 count stays the owner question.
 - **Gate effect:** the PRD-13 deletion gate (check 1) is not yet passable: four guard names (seven rows) are still not on the tree, two for PRD-02 and two for PRD-10. The conductor should treat landing watchdog_restart.rs, pipeline_stall.rs, cli_continue.rs and the second-start case as gate blockers, not nice-to-haves, and rerun the check 1 dry run after they merge. 117 of 160 rows are green. No locked ledger item is touched.
+
+### 2026-11-01, replan after PRD-15 slice 17 (merge ca62fa3f)
+
+- **Size report, PRD-15:** docs only, `wc -l` on integration: README 245, AGENTS 95, ARCHITECTURE 191,
+  OPERATING 260, PARTICIPANT-GUIDE 485, RECORD-FORMAT 542, RULES 459, CONNECTOR-SCHEMA 114 (2,391 together).
+  PRD-00 "Size budget" has no PRD-15 row, so there is nothing to exceed.
+- **Gate effect:** none. Acceptance still needs `goalcup continue` and `goalcup recover` built (their "not
+  built yet" notes in ARCHITECTURE stay until then) and the recorder kill test for README point 3. No locked
+  ledger item is touched.

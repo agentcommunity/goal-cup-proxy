@@ -1464,3 +1464,17 @@ the HARNESS-ONBOARDING pointer; `docs/README.md` is deleted and `CONTRACTS`, `TE
   RECORD-FORMAT 542, RULES 459, CONNECTOR-SCHEMA 114. PRD-00 has no PRD-15 row, so there is no ceiling to pass.
 - Still open, unchanged: README tier column and Pad result lines after phase 5, and removing the "writer: PRD-02
   target shape" marks when the PRD-02 writer merges. No seam change. No locked ledger item is touched.
+
+### 1 Nov, replan after slice 17 (merge ca62fa3f)
+
+- Slice 17 removed the stale "not built" notes for the deadline end, the server stop word and null mode. Only
+  `goalcup continue` and `goalcup recover` stay "not built yet" (`src/main.rs` still calls `not_built` for
+  them; the dead-entry close in `pipeline/dead.rs` has no command). Remove those notes in the slice that wires
+  each command.
+- Two review nits fixed by the replan commit: README points-to-tests row 3 now names `crates/goalcup/tests`
+  (`watchdog_null.rs`, `watchdog_end.rs`, `proxy_restart.rs` are on integration), and two ARCHITECTURE
+  watchdog lines are re-wrapped. The real-run cell for point 3 (recorder kill test) and the "All together" row
+  stay "not merged yet" until those land.
+- Size (`wc -l` at the replan base): README 245, AGENTS 95, ARCHITECTURE 191, OPERATING 260,
+  PARTICIPANT-GUIDE 485, RECORD-FORMAT 542, RULES 459, CONNECTOR-SCHEMA 114. PRD-00 has no PRD-15 row, so no
+  ceiling applies. No seam change; no locked ledger item is touched.
