@@ -5,9 +5,9 @@
 
 mod common;
 
-use common::{Entry, check, edit_event, mutate, read_records, result};
-use goalcup_format::{EndReason, GapReason, Record, StreamKind};
-use goalcup_verify::usage::{CallTable, Calls, Join, Kind, Leg};
+use common::{Entry, call_table, check, edit_event, gemini_wire, mutate, result};
+use goalcup_format::{EndReason, GapReason, StreamKind};
+use goalcup_verify::usage::{CallTable, Join, Kind, Leg};
 use serde_json::{Value, json};
 use std::path::PathBuf;
 
@@ -47,27 +47,6 @@ fn holed_file(e: &mut Entry, path: &str, first: &str) {
     e.end(s, EndReason::Complete, n + 15, Value::Null);
 }
 
-/// A Gemini `generateContent` call on its own connection.
-fn wire(e: &mut Entry, model: &str) {
-    let c = e.conn();
-    let path = format!("/v1beta/models/{model}:generateContent");
-    let head = json!({"method": "POST", "path": path, "ver": "1.1", "masked": [], "coding": null,
-        "headers": [["content-type", "application/json"]]});
-    let q = e.open(StreamKind::HttpReq, c, 0, head);
-    e.data(q, 0, 0, b"{}");
-    e.end(q, EndReason::Complete, 2, Value::Null);
-    let body = json!({"modelVersion": model, "responseId": format!("resp-{model}"),
-        "candidates": [{"finishReason": "STOP"}],
-        "usageMetadata": {"promptTokenCount": 10, "candidatesTokenCount": 3}})
-    .to_string();
-    let head = json!({"status": 200, "ver": "1.1", "decoded": true, "masked": [], "coding": null,
-        "headers": [["content-type", "application/json"]]});
-    let p = e.open(StreamKind::HttpResp, c, q, head);
-    e.data(p, 0, 0, body.as_bytes());
-    e.end(p, EndReason::Complete, body.len() as u64, Value::Null);
-    e.end(c, EndReason::Complete, 0, json!({"up": 90, "down": 90}));
-}
-
 fn gemini(v: &mut Value) {
     v["connector"] = "gemini-cli".into();
 }
@@ -75,8 +54,8 @@ fn gemini(v: &mut Value) {
 /// A sealed Gemini entry with two fake wire calls and these session files (path, body).
 fn entry(name: &str, files: &[(&str, &str)]) -> PathBuf {
     let mut e = Entry::new(name);
-    wire(&mut e, "fake-gem-a");
-    wire(&mut e, "fake-gem-b");
+    gemini_wire(&mut e, "fake-gem-a");
+    gemini_wire(&mut e, "fake-gem-b");
     for (p, b) in files {
         file(&mut e, p, b);
     }
@@ -86,13 +65,6 @@ fn entry(name: &str, files: &[(&str, &str)]) -> PathBuf {
 
 fn as_gemini(dir: PathBuf) -> PathBuf {
     mutate(&dir, None, |r| edit_event(r, "start", 0, gemini))
-}
-
-fn table(dir: &std::path::Path) -> CallTable {
-    let recs: Vec<Record> = read_records(&dir.join("rec"));
-    let mut calls = Calls::new();
-    recs.iter().for_each(|r| calls.push(r));
-    calls.finish()
 }
 
 fn main_line() -> String {
@@ -112,7 +84,7 @@ fn thread<'a>(t: &'a CallTable, id: &str) -> &'a goalcup_verify::usage::Thread {
 
 #[test]
 fn a_subagent_file_gives_its_parent_and_depth() {
-    let t = table(&entry(
+    let t = call_table(&entry(
         "gp-a",
         &[(MAIN_FILE, &main_line()), (&kid_file(), &kid_line())],
     ));
@@ -129,7 +101,7 @@ fn a_main_file_with_no_id_still_gives_the_subagent_its_parent() {
         "gp-b",
         &[(MAIN_FILE, "not json\n"), (&kid_file(), &kid_line())],
     );
-    let t = table(&d);
+    let t = call_table(&d);
     let kid = thread(&t, KID);
     // The folder id is matched to the main file by its 8-hex name suffix, so the child links to
     // that file's thread (named by its stem when the file holds no id), not a dangling id.
@@ -141,19 +113,19 @@ fn a_main_file_with_no_id_still_gives_the_subagent_its_parent() {
 #[test]
 fn a_hole_in_the_subagent_file_keeps_the_thread_and_its_parent() {
     let mut e = Entry::new("gp-c");
-    wire(&mut e, "fake-gem-a");
+    gemini_wire(&mut e, "fake-gem-a");
     file(&mut e, MAIN_FILE, &main_line());
     holed_file(&mut e, &kid_file(), &kid_line());
     e.count();
-    let t = table(&as_gemini(e.seal()));
+    let t = call_table(&as_gemini(e.seal()));
     let kid = thread(&t, KID);
     assert_eq!((kid.parent.as_deref(), kid.depth), (Some(MAIN), Some(1)));
 }
 
 #[test]
 fn wire_calls_stay_the_call_source() {
-    let wire_only = table(&entry("gp-d1", &[]));
-    let with_chats = table(&entry(
+    let wire_only = call_table(&entry("gp-d1", &[]));
+    let with_chats = call_table(&entry(
         "gp-d2",
         &[(MAIN_FILE, &main_line()), (&kid_file(), &kid_line())],
     ));
@@ -185,7 +157,7 @@ fn a_message_id_never_names_the_main_thread() {
         "not json\n{}\n",
         json!({"id": "11111111-0000-4000-8000-0000000000aa"})
     );
-    let t = table(&entry("gp-e", &[(MAIN_FILE, &body)]));
+    let t = call_table(&entry("gp-e", &[(MAIN_FILE, &body)]));
     let stem = "session-2026-11-01T08-42-d56586ab";
     assert!(t.threads.iter().any(|x| x.id == stem));
     assert!(t.threads.iter().all(|x| !x.id.starts_with("11111111")));
