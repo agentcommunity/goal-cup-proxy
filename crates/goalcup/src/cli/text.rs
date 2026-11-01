@@ -1039,8 +1039,14 @@ pub fn seal_already(run: &str) -> String {
     )
 }
 
-pub fn seal_not_running(run: &str) -> String {
-    format!("This part is not recording and has no seal yet. To go on, run: goalcup continue {run}")
+pub fn seal_still_recording(run: &str) -> String {
+    format!("This part is still recording, so it cannot be sealed this way. See: goalcup status {run}")
+}
+
+pub fn seal_dead_harness_left(name: &str) -> String {
+    format!(
+        "{name} is still running and was not stopped. goalcup recover would have kept recording it."
+    )
 }
 
 pub fn seal_question(name: &str) -> String {
@@ -1151,9 +1157,15 @@ pub fn upload_outcome(out: &Outcome, entry: &str, run: &str) -> String {
     match out {
         Outcome::Done | Outcome::AlreadyThere => "Upload: done. The server holds this part.".into(),
         Outcome::StillRecording => {
-            format!("Part {entry} is still recording; it sends itself, so there is nothing to do.")
+            format!(
+                "Part {entry} is still recording, or its agent is still running and nothing records \
+                 it. See: goalcup status. If status says recording is off, run: goalcup recover."
+            )
         }
-        Outcome::NotClosed => seal_not_running(run),
+        Outcome::NotClosed => format!(
+            "Part {entry} could not be closed. Nothing was lost on disk. Run goalcup upload again; \
+             if it fails again write to {SUPPORT_ADDRESS} naming run {run}."
+        ),
         Outcome::Local => LOCAL_ONLY.into(),
         Outcome::NoServer => format!(
             "This run's server file or credential is missing, so nothing can be sent. Your record \

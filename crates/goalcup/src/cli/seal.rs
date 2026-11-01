@@ -1,8 +1,8 @@
 //! `goalcup seal [PART] [--yes]` (PRD-10 section 1): ask, then tell PRD-02 to end the part, wait
 //! for the seal and print the end screen. The harness is never signalled here and descendants are
 //! never chased: the watchdog ends them (seam S8). Only written counts are read, from `status.json`.
-//! A part whose recorder and watchdog are both gone is refused here; closing such a dead entry
-//! first (`pipeline::close_dead_entry`) is not built yet and comes with the `continue` slice.
+//! A part whose recorder and watchdog are both gone is closed here by `pipeline::close_dead_entry`;
+//! a harness still running there is left running.
 
 use std::io::{BufRead as _, IsTerminal as _};
 use std::process::ExitCode;
@@ -38,10 +38,10 @@ pub fn run(part: Option<String>, yes: bool) -> ExitCode {
         return fail(&text::seal_already(&found.run));
     }
     // The watchdog takes SIGUSR1; with none, the recorder takes SIGTERM and seals as `signal`.
-    let (pid, start_id, signal) = match watchdog_pid(&dir).filter(|&(p, s)| alive(p, s)) {
-        Some((p, s)) => (p, s, libc::SIGUSR1),
-        None if alive(st.pid, st.start_id) => (st.pid, st.start_id, libc::SIGTERM),
-        None => return fail(&text::seal_not_running(&found.run)),
+    let target = match watchdog_pid(&dir).filter(|&(p, s)| alive(p, s)) {
+        Some((p, s)) => Some((p, s, libc::SIGUSR1)),
+        None if alive(st.pid, st.start_id) => Some((st.pid, st.start_id, libc::SIGTERM)),
+        None => None,
     };
     let name = found
         .server
@@ -62,6 +62,9 @@ pub fn run(part: Option<String>, yes: bool) -> ExitCode {
         .harness
         .as_ref()
         .is_some_and(|h| h.exit.is_none() && alive(h.pid, h.start_id));
+    let Some((pid, start_id, signal)) = target else {
+        return seal_dead(&dir, &found.run, name, harness_ran);
+    };
     // Only the watchdog ends the harness; the recorder alone, on SIGTERM, does not.
     let watchdog_ends_it = signal == libc::SIGUSR1;
     if let Ok(p) = libc::pid_t::try_from(pid) {
@@ -93,6 +96,27 @@ pub fn run(part: Option<String>, yes: bool) -> ExitCode {
                 println!("{}", text::seal_stopped(name));
             } else if harness_ran {
                 println!("{}", text::seal_harness_left(name));
+            }
+            print!("{screen}");
+            ExitCode::SUCCESS
+        }
+        Err(_) => broke(&text::seal_could_not()),
+    }
+}
+
+/// A dead entry: close it with seal reason `recovered`, then the end screen as after a live seal.
+/// A harness still running is not signalled.
+fn seal_dead(dir: &std::path::Path, run: &str, name: &str, harness_ran: bool) -> ExitCode {
+    match crate::pipeline::close_dead_entry(dir) {
+        Err(_) => return fail(&text::seal_still_recording(run)),
+        Ok(crate::pipeline::Closed::AlreadySealed) => return fail(&text::seal_already(run)),
+        Ok(crate::pipeline::Closed::Failed(_)) => return broke(&text::seal_could_not()),
+        Ok(crate::pipeline::Closed::Sealed(_)) => {}
+    }
+    match super::finish::end_screen(dir) {
+        Ok(screen) => {
+            if harness_ran {
+                println!("{}", text::seal_dead_harness_left(name));
             }
             print!("{screen}");
             ExitCode::SUCCESS
