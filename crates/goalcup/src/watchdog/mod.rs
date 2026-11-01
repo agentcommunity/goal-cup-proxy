@@ -359,8 +359,8 @@ pub fn run_with(mut plan: LaunchPlan, mut facts: StartFacts, recorder_exe: &Path
             None
         }
     };
-    let start = (recorder_exe, &listener, &recorder_pid);
-    let exit = watch(boot, facts, Some((&plan, modes.as_ref())), start, harness_pid);
+    let (own, start) = (Some((&plan, modes.as_ref())), (recorder_exe, &listener, &recorder_pid));
+    let exit = watch(boot, facts, own, start, harness_pid);
     if let Some(shield) = shield.as_mut()
         && !shield.harness_exited()
     {
@@ -375,12 +375,11 @@ pub fn run_with(mut plan: LaunchPlan, mut facts: StartFacts, recorder_exe: &Path
 
 /// The watchdog loop (section 8 steps 8 to 11), one code path for [`run_with`] and [`recover`]:
 /// the restart loop and null mode (R3a), the control lines, the deadline, the server word,
-/// `goalcup seal`, and an unanswered `exit` or `seal` sent again after `ready`. `own` is the plan
-/// and terminal modes of a harness the loop started (`plan.after`, the tree end, `outlived`);
-/// with None (recover) the harness is watched by pid and start id each tick and never touched:
-/// on its exit `exit` (null) and `seal harness_exit`; at the deadline, on SIGUSR1 and on any
-/// server stop a seal with that reason, the harness left running. Returns how a harness of its
-/// own ended.
+/// `goalcup seal`, and an unanswered `exit` or `seal` sent again after `ready`. `own`: the plan
+/// and terminal modes of a harness it started (`plan.after`, the tree end, `outlived`). With None
+/// (recover) the harness is watched by pid and start id each tick and never touched: on its exit
+/// `exit` (null) and `seal harness_exit`; at the deadline, on SIGUSR1 and on any server stop a
+/// seal with that reason, the harness left running. Returns how a harness of its own ended.
 fn watch(
     mut boot: Boot,
     mut facts: StartFacts,
@@ -460,9 +459,10 @@ fn watch(
             let (target, spare) = ((pid, h.start_id), spare.clone());
             ending = own.map(|_| thread::spawn(move || spawn::end_tree(target, &spare)));
         }
-        let gone = match own {
-            Some(_) => harness_pid.and_then(spawn::look),
-            None => harness_pid.filter(|p| !cli::alive(*p, harness_start)).map(|_| None),
+        let gone = match (own, harness_pid) {
+            (Some(_), _) => harness_pid.and_then(spawn::look),
+            (None, Some(p)) if !cli::alive(p, harness_start) => Some(None),
+            (None, _) => None,
         };
         if let Some(status) = gone {
             harness_pid = None;

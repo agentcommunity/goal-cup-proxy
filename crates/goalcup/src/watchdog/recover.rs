@@ -130,7 +130,9 @@ fn detached(facts: StartFacts, listener: &TcpListener, exe: &Path, mut tell: Uni
     }
     let recorder_pid = Arc::new(Mutex::new(0));
     let boot = Boot::start(exe, listener, &facts, &recorder_pid, false);
-    let ready = boot.ok().and_then(|mut b| b.wait_ready().is_ok().then_some(b));
+    let ready = boot
+        .ok()
+        .and_then(|mut b| b.wait_ready().is_ok().then_some(b));
     let _ = tell.write_all(&[u8::from(ready.is_some())]);
     drop(tell);
     let Some(boot) = ready else {

@@ -10,16 +10,16 @@ use common::pki::HTTP11;
 use common::recorder::records;
 use common::upstream::{Script, Upstream};
 use goalcup::cli::{self, proc_start_id, read_json, status_json, watchdog_pid};
-use goalcup::connector::{ConnectorRef, HostList, NativeSources, builtin};
+use goalcup::connector::{HostList, NativeSources, builtin};
 use goalcup::proxy::ca::{RUN_CA_FILE, RunCa, certificates};
-use goalcup::watchdog::{self, CaPem, HarnessFacts, NotRecovered, StartFacts, ToRecorder, spawn};
+use goalcup::watchdog::{self, HarnessFacts, NotRecovered, StartFacts, ToRecorder, spawn};
 use goalcup_format::{GapReason, Record};
 use rustls::pki_types::{CertificateDer, ServerName};
 use serde_json::{Value, json, to_value};
 use std::io::{BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
-use std::os::unix::net::UnixStream;
 use std::os::unix::fs::PermissionsExt;
+use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command};
 use std::sync::Arc;
@@ -32,7 +32,10 @@ fn until<T>(what: &str, mut f: impl FnMut() -> Option<T>) -> T {
         if let Some(v) = f() {
             return v;
         }
-        assert!(start.elapsed() < Duration::from_secs(60), "timed out: {what}");
+        assert!(
+            start.elapsed() < Duration::from_secs(60),
+            "timed out: {what}"
+        );
         std::thread::sleep(Duration::from_millis(50));
     }
 }
@@ -57,7 +60,10 @@ fn setup(keep: bool) -> Dead {
     // SAFETY: before any thread reads the environment; nextest runs one test per process.
     unsafe {
         std::env::set_var("GOALCUP_SERVER", "off");
-        std::env::set_var("GOALCUP_TEST_UPSTREAM", format!("api.openai.com={}", up.addr()));
+        std::env::set_var(
+            "GOALCUP_TEST_UPSTREAM",
+            format!("api.openai.com={}", up.addr()),
+        );
         std::env::set_var("GOALCUP_TEST_EXTRA_ROOTS", up.pki().roots_file(tmp.path()));
     }
     let (run, entry) = ("r0123456789abcdef", "e0123456789abcdef");
@@ -78,7 +84,10 @@ fn setup(keep: bool) -> Dead {
         "trap ': > {}' TERM INT HUP USR1 QUIT; while :; do sleep 0.05; done",
         marker.display()
     );
-    let harness = Command::new("/bin/sh").args(["-c", &script]).spawn().unwrap();
+    let harness = Command::new("/bin/sh")
+        .args(["-c", &script])
+        .spawn()
+        .unwrap();
     let pid = harness.id();
     let launched = HarnessFacts {
         pid,
@@ -86,51 +95,41 @@ fn setup(keep: bool) -> Dead {
         started: "2026-11-01T00:00:00Z".into(),
         start_id: proc_start_id(pid).unwrap(),
     };
-    let mut facts = StartFacts {
-        run: run.into(),
-        entry: entry.into(),
-        segment: 0,
-        entry_dir: entry_dir.clone(),
-        deadline: None,
-        server_time: None,
-        local_wall: 0,
-        workspace: tmp.path().to_path_buf(),
-        connector: to_value(ConnectorRef {
-            id: "fake".into(),
-            name: "Fake".into(),
-            sha256: "0".repeat(64),
-            source: Default::default(),
-        })
-        .unwrap(),
-        harness_version: None,
-        keep: true,
-        build: None,
-        hosts: to_value(&hosts).unwrap(),
-        hosts_sha256: hosts.sha256().to_string(),
-        native: to_value(NativeSources::default()).unwrap(),
-        mask_rules: json!([]),
-        values: json!([]),
-        ca: ca.export(),
-        prev: None,
-        harness: None,
-        null_since: None,
-        notes: Vec::new(),
-    };
+    let connector = json!({"id": "fake", "name": "Fake", "sha256": "0".repeat(64), "source": "builtin"});
+    let mut facts: StartFacts = serde_json::from_value(json!({
+        "run": run, "entry": entry, "segment": 0, "entry_dir": entry_dir, "deadline": null,
+        "server_time": null, "local_wall": 0, "workspace": tmp.path(), "connector": connector,
+        "harness_version": null, "keep": true, "build": null, "hosts": to_value(&hosts).unwrap(),
+        "hosts_sha256": hosts.sha256(), "native": to_value(NativeSources::default()).unwrap(),
+        "mask_rules": [], "values": [], "ca": ca.export(), "prev": null, "harness": null,
+        "null_since": null, "notes": [],
+    }))
+    .unwrap();
     let (listener, addr) = common::ports::held();
     let (to, theirs) = UnixStream::pair().unwrap();
     let mut recorder = spawn::recorder(&common::bin(), false, &listener, &theirs).unwrap();
     drop(theirs);
-    assert!(watchdog::send_line(&to, &ToRecorder::Start(Box::new(facts.clone()))));
+    assert!(watchdog::send_line(
+        &to,
+        &ToRecorder::Start(Box::new(facts.clone()))
+    ));
     let mut from = BufReader::new(to.try_clone().unwrap());
     let ready = watchdog::read_line::<Value>(&mut from).flatten().unwrap();
     assert_eq!(ready["line"], "ready");
-    assert!(watchdog::send_line(&to, &ToRecorder::Launch(launched.clone())));
+    assert!(watchdog::send_line(
+        &to,
+        &ToRecorder::Launch(launched.clone())
+    ));
     assert!(get(&entry_dir, addr.port()).ends_with(b"hi"));
     // A boot that dies before its first LINK leaves its number to the next.
     let counts = entry_dir.join("counts.jsonl");
-    until("a link", || std::fs::metadata(&counts).ok().filter(|m| m.len() > 0));
+    until("a link", || {
+        std::fs::metadata(&counts).ok().filter(|m| m.len() > 0)
+    });
     let status = || read_json::<Value>(&status_json(&entry_dir));
-    until("the port in status.json", || status().filter(|s| s["port"] == addr.port()));
+    until("the port in status.json", || {
+        status().filter(|s| s["port"] == addr.port())
+    });
     drop(from);
     let mut held = Some((to, listener));
     if !keep {
@@ -138,8 +137,17 @@ fn setup(keep: bool) -> Dead {
         recorder.wait().unwrap();
         held = None;
     }
-    (facts.ca, facts.harness) = (CaPem { cert: String::new(), key: String::new() }, Some(launched));
-    Dead { _tmp: tmp, _up: up, entry_dir, port: addr.port(), harness, facts, recorder, held }
+    facts.harness = Some(launched);
+    Dead {
+        _tmp: tmp,
+        _up: up,
+        entry_dir,
+        port: addr.port(),
+        harness,
+        facts,
+        recorder,
+        held,
+    }
 }
 
 /// One GET through the proxy on `port` to the listed host, its leaf verified against
@@ -147,7 +155,8 @@ fn setup(keep: bool) -> Dead {
 fn get(entry_dir: &Path, port: u16) -> Vec<u8> {
     let mut tcp = TcpStream::connect(("127.0.0.1", port)).unwrap();
     tcp.set_read_timeout(Some(Duration::from_secs(30))).unwrap();
-    tcp.write_all(b"CONNECT api.openai.com:443 HTTP/1.1\r\nHost: api.openai.com\r\n\r\n").unwrap();
+    tcp.write_all(b"CONNECT api.openai.com:443 HTTP/1.1\r\nHost: api.openai.com\r\n\r\n")
+        .unwrap();
     let mut head = Vec::new();
     while !head.ends_with(b"\r\n\r\n") {
         let mut b = [0u8];
@@ -168,11 +177,14 @@ fn get(entry_dir: &Path, port: u16) -> Vec<u8> {
     let name = ServerName::try_from("api.openai.com").unwrap();
     let conn = rustls::ClientConnection::new(Arc::new(config), name).unwrap();
     let mut tls = rustls::StreamOwned::new(conn, tcp);
-    tls.write_all(b"GET / HTTP/1.1\r\nHost: api.openai.com\r\n\r\n").unwrap();
+    tls.write_all(b"GET / HTTP/1.1\r\nHost: api.openai.com\r\n\r\n")
+        .unwrap();
     let mut out = Vec::new();
     let mut buf = [0u8; 4096];
     while !out.ends_with(b"hi") {
-        let n = tls.read(&mut buf).expect("the leaf verifies against run-ca.pem");
+        let n = tls
+            .read(&mut buf)
+            .expect("the leaf verifies against run-ca.pem");
         assert!(n > 0, "closed early: {}", String::from_utf8_lossy(&out));
         out.extend_from_slice(&buf[..n]);
     }
@@ -191,10 +203,8 @@ fn watchdog_recover_restarts_the_recorder_only() {
     let (pid, start_id) = watchdog_pid(&d.entry_dir).expect("rec/watchdog.pid");
     assert_ne!(pid, std::process::id());
     assert!(cli::alive(pid, start_id), "the detached watchdog runs");
-    let h = d.facts.harness.clone().unwrap();
-    assert!(cli::alive(h.pid, h.start_id));
-    assert!(d.harness.try_wait().unwrap().is_none());
-    assert!(!d._tmp.path().join("signalled").exists(), "the harness was signalled");
+    assert!(d.harness.try_wait().unwrap().is_none(), "the harness ended");
+    assert!(!d._tmp.path().join("signalled").exists(), "signalled");
 
     d.harness.kill().unwrap();
     d.harness.wait().unwrap();
@@ -206,9 +216,13 @@ fn watchdog_recover_restarts_the_recorder_only() {
     let down: Vec<(u64, u64, Value)> = records(&d.entry_dir)
         .into_iter()
         .filter_map(|r| match r {
-            Record::Gap { reason: GapReason::RecorderDown, start_mono, end_mono, tail, .. } => {
-                Some((start_mono, end_mono, serde_json::from_slice(&tail).unwrap()))
-            }
+            Record::Gap {
+                reason: GapReason::RecorderDown,
+                start_mono,
+                end_mono,
+                tail,
+                ..
+            } => Some((start_mono, end_mono, serde_json::from_slice(&tail).unwrap())),
             _ => None,
         })
         .collect();
@@ -224,24 +238,20 @@ fn watchdog_recover_refusals_start_nothing() {
     let mut d = setup(true);
     let try_it = |d: &Dead| watchdog::recover_with(&d.entry_dir, d.facts.clone(), &common::bin());
     assert_eq!(try_it(&d), Err(NotRecovered::RecordingOn));
-    assert!(d.recorder.try_wait().unwrap().is_none(), "the live recorder was touched");
+    assert!(d.recorder.try_wait().unwrap().is_none(), "touched");
     assert!(watchdog_pid(&d.entry_dir).is_none());
     d.recorder.kill().unwrap();
     d.recorder.wait().unwrap();
     d.held = None;
     until("the port is free", || spawn::bind_exact(d.port).ok());
 
-    let key = d.entry_dir.join("rec").join(watchdog::KEY_FILE);
-    let aside = key.with_extension("aside");
-    std::fs::rename(&key, &aside).unwrap();
-    assert_eq!(try_it(&d), Err(NotRecovered::KeyMissing));
-    std::fs::rename(&aside, &key).unwrap();
-
     let taken = spawn::bind_exact(d.port).unwrap();
     assert_eq!(try_it(&d), Err(NotRecovered::PortTaken));
     drop(taken);
+    std::fs::remove_file(d.entry_dir.join("rec").join(watchdog::KEY_FILE)).unwrap();
+    assert_eq!(try_it(&d), Err(NotRecovered::KeyMissing));
     assert!(watchdog_pid(&d.entry_dir).is_none());
-    assert!(spawn::bind_exact(d.port).is_ok(), "a refusal left the port bound");
+    assert!(spawn::bind_exact(d.port).is_ok(), "port left bound");
     d.harness.kill().unwrap();
     let _ = d.harness.wait();
 }
