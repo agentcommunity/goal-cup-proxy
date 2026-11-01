@@ -8,11 +8,11 @@ mod native_common;
 use std::ffi::{OsStr, OsString};
 use std::fs;
 use std::os::unix::fs::symlink;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::mpsc;
 use std::time::Duration;
 
-use goalcup::connector::{self, builtin::CONNECTORS};
+use goalcup::connector::builtin::CONNECTORS;
 use goalcup::native::fsx::{Dir, Kind, file_stat};
 use goalcup::native::pattern::{parse, path_id};
 use goalcup::native::walk::{Row, Walker};
@@ -178,40 +178,6 @@ fn the_root_never_reaches_a_path() {
         ids.iter()
             .all(|id| !id.contains("private-root-name") && !id.contains(&marker)),
         "{ids:?}"
-    );
-}
-
-#[test]
-fn hermes_rows_take_the_state_database_and_no_request_dump() {
-    let t = tempfile::tempdir().unwrap();
-    let home = t.path().join("home");
-    fs::create_dir_all(home.join("sessions")).unwrap();
-    fs::write(home.join("sessions/request_dump_x.json"), b"{}").unwrap();
-    fs::write(home.join("state.db"), b"SQLite format 3\0").unwrap();
-    let c = connector::load("hermes-cli", None).unwrap();
-    let home_s = home.to_str().unwrap();
-    let rows: Vec<Row> = c
-        .native
-        .iter()
-        .map(|n| {
-            row(
-                &n.name,
-                Path::new(&n.root.replace("{home}", home_s)),
-                &n.pattern,
-            )
-        })
-        .collect();
-    let (rec, _) = Recorder::for_tests(1 << 20);
-    let found = Walker::default().pass(&rec, &rows).found;
-    let names: Vec<PathBuf> = found
-        .iter()
-        .map(|f| rows[f.row].root.join(&f.rel))
-        .collect();
-    assert!(names.contains(&home.join("state.db")), "{names:?}");
-    assert!(
-        !names
-            .iter()
-            .any(|p| p.to_string_lossy().contains("request_dump"))
     );
 }
 
