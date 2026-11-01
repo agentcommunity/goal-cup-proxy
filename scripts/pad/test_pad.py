@@ -555,8 +555,11 @@ class PasteAndMask(unittest.TestCase):
         r = padrun.Run(run, "verify")
         r.end = time.time() + 5
         typed = []
+        status = {}
+        for key in check.SEAM["s4_mode"][::-1]:
+            status = {key: mode if status == {} else status}
         patches = [mock.patch.object(padrun, "tool", lambda n: "/bin/true"), mock.patch.object(padrun, "wait", lambda fn, *a: fn()),
-                   mock.patch.object(r, "status", lambda: {"s4_mode": mode}), mock.patch.object(r, "pane_exit", lambda: (dead, "1")),
+                   mock.patch.object(r, "status", lambda: status), mock.patch.object(r, "pane_exit", lambda: (dead, "1")),
                    mock.patch.object(r, "capture", lambda *a: "a cleared screen"), mock.patch.object(r, "refusal", lambda: None),
                    mock.patch.object(r, "pane", lambda *a, **k: ""), mock.patch.object(r, "daemon_check", lambda **k: None),
                    mock.patch.object(r, "type_prompt", lambda: typed.append(1) or ("ok", "typed"))]
