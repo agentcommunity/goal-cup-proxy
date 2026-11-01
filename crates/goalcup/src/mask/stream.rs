@@ -146,6 +146,10 @@ fn word(u: Unit) -> bool {
 fn word_underscore(u: Unit) -> bool {
     ascii_where(u, |b| b.is_ascii_alphanumeric() || b == b'_')
 }
+/// `[A-Za-z0-9+/]`
+fn base64(u: Unit) -> bool {
+    ascii_where(u, |b| b.is_ascii_alphanumeric() || b == b'+' || b == b'/')
+}
 /// `[A-Za-z0-9_\-]`
 fn token(u: Unit) -> bool {
     ascii_where(u, |b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
@@ -184,7 +188,7 @@ fn space(u: Unit) -> bool {
 /// One unit of the shell literal's value after a `=` with no space. The form-encoded
 /// alternatives come first there: a run of `%XX` escapes and units of the class
 /// `[A-Za-z0-9_.~+/=\-]` that needs sixteen units and a `%XX` escape, or the `[0-9]\.` shape.
-/// The dotted value of the last alternative (token units and single dots) lies inside that
+/// The dotted value of the next alternative (token units and single dots) lies inside that
 /// class, so this keeps every unit of the class live and the regex then decides the exact span.
 /// `None` ends the candidate.
 fn encoded_step(hex: u8, u: Unit) -> Option<Shell> {
@@ -298,7 +302,7 @@ const fn prefixed(
 /// The streaming recognizer of each shared literal, in `shapes.tsv` order. A recognizer never
 /// decides a span below the bound (the regex does); it says how long a candidate must be held,
 /// and how long a fail-closed window must run.
-static SHAPES: [Shape; 28] = [
+static SHAPES: [Shape; 30] = [
     prefixed(
         "anthropic_key",
         r"sk-ant-[A-Za-z0-9_\-]{20,}",
@@ -379,7 +383,7 @@ static SHAPES: [Shape; 28] = [
     },
     Shape {
         kind: "generic_secret_assignment",
-        source: r#"(?i)(?:api[_-]?key|secret|token|password)(?:=(?:%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){15,}|[A-Za-z0-9_.~+/=\-]{1}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){14,}|[A-Za-z0-9_.~+/=\-]{2}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){13,}|[A-Za-z0-9_.~+/=\-]{3}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){12,}|[A-Za-z0-9_.~+/=\-]{4}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){11,}|[A-Za-z0-9_.~+/=\-]{5}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){10,}|[A-Za-z0-9_.~+/=\-]{6}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){9,}|[A-Za-z0-9_.~+/=\-]{7}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){8,}|[A-Za-z0-9_.~+/=\-]{8}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){7,}|[A-Za-z0-9_.~+/=\-]{9}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){6,}|[A-Za-z0-9_.~+/=\-]{10}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){5,}|[A-Za-z0-9_.~+/=\-]{11}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){4,}|[A-Za-z0-9_.~+/=\-]{12}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){3,}|[A-Za-z0-9_.~+/=\-]{13}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){2,}|[A-Za-z0-9_.~+/=\-]{14}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){1,}|[A-Za-z0-9_.~+/=\-]{15,}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2})*|[0-9]\.[A-Za-z0-9_.~+/=\-]{14,})|\s*[=:]\s*(?:\\{0,7}['"])?(?:[A-Za-z0-9_\-]+\.)*[A-Za-z0-9_\-]{16,}(?:\.[A-Za-z0-9_\-]+)*)"#,
+        source: r#"(?i)(?:api[_-]?key|secret|token|password)(?:=(?:%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){15,}|[A-Za-z0-9_.~+/=\-]{1}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){14,}|[A-Za-z0-9_.~+/=\-]{2}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){13,}|[A-Za-z0-9_.~+/=\-]{3}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){12,}|[A-Za-z0-9_.~+/=\-]{4}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){11,}|[A-Za-z0-9_.~+/=\-]{5}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){10,}|[A-Za-z0-9_.~+/=\-]{6}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){9,}|[A-Za-z0-9_.~+/=\-]{7}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){8,}|[A-Za-z0-9_.~+/=\-]{8}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){7,}|[A-Za-z0-9_.~+/=\-]{9}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){6,}|[A-Za-z0-9_.~+/=\-]{10}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){5,}|[A-Za-z0-9_.~+/=\-]{11}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){4,}|[A-Za-z0-9_.~+/=\-]{12}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){3,}|[A-Za-z0-9_.~+/=\-]{13}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){2,}|[A-Za-z0-9_.~+/=\-]{14}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){1,}|[A-Za-z0-9_.~+/=\-]{15,}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2})*|[0-9]\.[A-Za-z0-9_.~+/=\-]{14,})|(?:=|\s*[=:]\s*\\{0,7}['"])(?:[A-Za-z0-9_\-]+\.)*[A-Za-z0-9_\-]{16,}(?:\.[A-Za-z0-9_\-]+)*|\s*[=:]\s*[A-Za-z0-9_\-]{16,})"#,
         form: Form::ShellAssignment,
     },
     Shape {
@@ -442,7 +446,8 @@ static SHAPES: [Shape; 28] = [
         hex_lower,
         32,
         None,
-    ), // Google's authentication keys (`AQ.` and 50 more), the only kind AI Studio now issues.
+    ),
+    // Google's authentication keys (`AQ.` and 50 more), the only kind AI Studio now issues.
     // The floor is 40, below the real 50, so a trimmed key is still caught.
     prefixed(
         "google_auth_key",
@@ -456,33 +461,33 @@ static SHAPES: [Shape; 28] = [
     // confirmed by the vendor's docs or its own SDK or CLI source.
     prefixed(
         "groq_key",
-        r"gsk_[A-Za-z0-9_\-]{20,}",
+        r"gsk_[A-Za-z0-9]{20,}",
         &[b"g", b"s", b"k", b"_"],
-        token,
+        word,
         20,
         None,
     ),
     prefixed(
         "cerebras_key",
-        r"csk[-_][A-Za-z0-9_\-]{20,}",
+        r"csk[-_][A-Za-z0-9]{20,}",
         &[b"c", b"s", b"k", b"-_"],
-        token,
+        word,
         20,
         None,
     ),
     prefixed(
         "fireworks_key",
-        r"fw_[A-Za-z0-9_\-]{20,}",
+        r"fw_[A-Za-z0-9]{20,}",
         &[b"f", b"w", b"_"],
-        token,
+        word,
         20,
         None,
     ),
     prefixed(
         "vercel_gateway_key",
-        r"vck_[A-Za-z0-9_\-]{20,}",
+        r"vck_[A-Za-z0-9]{20,}",
         &[b"v", b"c", b"k", b"_"],
-        token,
+        word,
         20,
         None,
     ),
@@ -503,10 +508,32 @@ static SHAPES: [Shape; 28] = [
         None,
     ),
     prefixed(
-        "factory_key",
-        r"fk-[A-Za-z0-9_\-]{20,}",
+        "fk_key",
+        r"fk-[A-Za-z0-9]{20,}",
         &[b"f", b"k", b"-"],
-        token,
+        word,
+        20,
+        None,
+    ),
+    // Amazon Bedrock API keys, base64 behind a fixed prefix: long-term `ABSK`, short-term
+    // `bedrock-api-key-` (aws/aws-bedrock-token-generator-js src/token.ts, AUTH_PREFIX). The
+    // long-term floor is 100, below the real 109.
+    prefixed(
+        "bedrock_key",
+        r"ABSK[A-Za-z0-9+/]{100,}",
+        &[b"A", b"B", b"S", b"K"],
+        base64,
+        100,
+        None,
+    ),
+    prefixed(
+        "bedrock_key",
+        r"bedrock-api-key-[A-Za-z0-9+/]{20,}",
+        &[
+            b"b", b"e", b"d", b"r", b"o", b"c", b"k", b"-", b"a", b"p", b"i", b"-", b"k", b"e",
+            b"y", b"-",
+        ],
+        base64,
         20,
         None,
     ),
@@ -938,6 +965,8 @@ enum Shell {
     /// Backslashes (one to seven) before the optional quote.
     Escape(u8),
     Quoted,
+    /// Inside an unquoted value after `[=:]` and a space or after `:`: token units only.
+    Run,
     /// Inside a dotted value, on a token unit.
     Value,
     /// Inside a dotted value, just after a dot: a token unit must follow.
@@ -1475,11 +1504,12 @@ impl Json {
 }
 
 impl Shell {
-    /// The shell literal: `(?i)(?:api[_-]?key|secret|token|password)`, then either `=` and a
-    /// form-encoded value, or `\s*[=:]\s*(?:\\{0,7}['"])?` and a dotted value
-    /// `(?:[A-Za-z0-9_\-]+\.)*[A-Za-z0-9_\-]{16,}(?:\.[A-Za-z0-9_\-]+)*` (token runs joined by
-    /// single dots, one run of sixteen or more). The walk holds any token runs joined by single
-    /// dots, a superset: it never ends before the regex's match does.
+    /// The shell literal: `(?i)(?:api[_-]?key|secret|token|password)`, then `=` and a
+    /// form-encoded value; or `=` with no space, or a quote, and a dotted value
+    /// `(?:[A-Za-z0-9_\-]+\.)*[A-Za-z0-9_\-]{16,}(?:\.[A-Za-z0-9_\-]+)*`; or `\s*[=:]\s*` and an undotted value
+    /// `[A-Za-z0-9_\-]{16,}`, so `token = self.config.long_attribute_name` stays raw. After a
+    /// quote the walk holds any token runs joined by single dots, a superset: it never ends
+    /// before the regex's match does.
     fn step(&mut self, u: Unit) -> bool {
         let next = match *self {
             Shell::Word { which, pos } => {
@@ -1535,9 +1565,8 @@ impl Shell {
             Shell::AfterSep | Shell::Direct | Shell::Escape(_) if is(u, b'\'') || is(u, b'"') => {
                 Shell::Quoted
             }
-            Shell::AfterSep | Shell::Quoted | Shell::Value | Shell::Dot if token_folded(u) => {
-                Shell::Value
-            }
+            Shell::AfterSep | Shell::Run if token_folded(u) => Shell::Run,
+            Shell::Quoted | Shell::Value | Shell::Dot if token_folded(u) => Shell::Value,
             Shell::Value if is(u, b'.') => Shell::Dot,
             Shell::Direct => match encoded_step(0, u) {
                 Some(next) => next,
@@ -1714,7 +1743,9 @@ impl Candidate {
                 matches!(json.phase, JsonPhase::Value | JsonPhase::ValueEnd(_))
                     .then_some(json.value_start)
             }
-            (Walk::Shell(Shell::Value | Shell::Dot | Shell::Encoded { .. }), _) => Some(self.start),
+            (Walk::Shell(Shell::Run | Shell::Value | Shell::Dot | Shell::Encoded { .. }), _) => {
+                Some(self.start)
+            }
             (Walk::Url(Url::Password { from, .. }), _) => Some(*from),
             (Walk::Field(field), Form::Field { scalar, .. }) => match field.phase {
                 FieldPhase::String(_) | FieldPhase::Scalar { .. } => Some(field.value_start),
@@ -2086,6 +2117,7 @@ impl Scanner {
                 whole_start: 0,
                 whole_end: whole,
                 soft: false,
+                cut: false,
                 block: true,
                 bounded: true,
             });
@@ -2428,7 +2460,10 @@ mod tests {
         b"tgp_v1_",
         b"sgamp_",
         b"fk-",
+        b"ABSK",
+        b"bedrock-api-key-",
         b"token=",
+        b"token='",
         b"secret: ",
         b"ab.",
         b" ",

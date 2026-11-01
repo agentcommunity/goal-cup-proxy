@@ -7,7 +7,7 @@
 #[path = "mask_corpus/common.rs"]
 mod common;
 
-use common::{ALNUM, Rng, append, keys, random_cuts, run, starred};
+use common::{ALNUM, Rng, TOKEN, append, aq_key, keys, provider_keys, random_cuts, run, starred};
 use goalcup::connector::{self, FieldValue, MaskPattern, MaskRule};
 use goalcup::mask::{Masked, Masker, SecretValue, StreamMasker, ValueSource};
 use goalcup_format::StreamKind;
@@ -95,9 +95,19 @@ fn planted() -> Vec<Vec<u8>> {
     let (a, c) = (run(TOKEN, 20, 32), run(TOKEN, 9, 33));
     out.push(
         format!(
-            "{{\"output\":\"HOME=/h\\nGEMINI_API_KEY={aq}\\nGEMINI_CLI=1\\n\"}}\nGEMINI_API_KEY={aq}\ntoken: ab.{a}\nSECRET={a}.{a}.{c}\ntoken={a}.{a} x\nsecret = a.b.c\n"
+            "{{\"output\":\"HOME=/h\\nGEMINI_API_KEY={aq}\\nGEMINI_CLI=1\\n\"}}\nGEMINI_API_KEY={aq}\ntoken: ab.{a}\nSECRET={a}.{a}.{c}\ntoken={a}.{a} x\nsecret = a.b.c\ntoken = self.config.get_authentication_token()\n"
         )
         .into_bytes(),
+    );
+    let key = |kind| keys().into_iter().find(|k| k.0 == kind).map(|k| k.1);
+    let (sk, jwt) = (
+        key("openai_key").unwrap_or_default(),
+        key("jwt").unwrap_or_default(),
+    );
+    let bedrock = provider_keys().pop().map(|k| k.1).unwrap_or_default();
+    out.push(
+        format!("token={a}.{sk}\napi_key=\"{a}.{jwt}\"\nAuthorization: Bearer {bedrock}\n")
+            .into_bytes(),
     );
     let mut line = Vec::new();
     for (_, key, _) in provider_keys() {
@@ -105,44 +115,6 @@ fn planted() -> Vec<Vec<u8>> {
     }
     out.push(line);
     out
-}
-
-/// `[A-Za-z0-9_\-]`
-const TOKEN: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-";
-
-/// A fake Google authentication key: `AQ.` and 50 more, built at run time.
-fn aq_key(seed: usize) -> String {
-    ["A", "Q.", &run(TOKEN, 50, seed)].concat()
-}
-
-/// One fake key per literal added for the point 4 leak fix, with its fixed prefix length.
-fn provider_keys() -> Vec<(&'static str, String, usize)> {
-    vec![
-        ("google_auth_key", aq_key(34), 3),
-        ("groq_key", ["gs", "k_", &run(ALNUM, 52, 35)].concat(), 4),
-        (
-            "cerebras_key",
-            ["cs", "k-", &run(ALNUM, 48, 36)].concat(),
-            4,
-        ),
-        (
-            "fireworks_key",
-            ["f", "w_", &run(ALNUM, 24, 37)].concat(),
-            3,
-        ),
-        (
-            "vercel_gateway_key",
-            ["vc", "k_", &run(ALNUM, 56, 38)].concat(),
-            4,
-        ),
-        (
-            "together_key",
-            ["tgp", "_v1_", &run(TOKEN, 43, 39)].concat(),
-            7,
-        ),
-        ("sgamp_key", ["sga", "mp_", &run(ALNUM, 40, 40)].concat(), 6),
-        ("factory_key", ["f", "k-", &run(ALNUM, 40, 41)].concat(), 3),
-    ]
 }
 
 /// K1: at every split point and over seeded random chunkings, the stream equals `mask_whole`,
@@ -249,7 +221,7 @@ fn a_gap_or_boundary_never_releases_a_secret_prefix_raw() -> Res {
     // A held shell value is starred at a gap, dots included.
     for input in [
         format!("token={}", aq_key(42)),
-        format!("token: ab.{}", aq_key(43)),
+        format!("token=ab.{}", aq_key(43)),
     ] {
         let at = input.find(['=', ':']).unwrap_or(0) + 1;
         for k in at + 2..=input.len() {

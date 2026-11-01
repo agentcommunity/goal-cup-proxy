@@ -144,6 +144,7 @@ JSON literal 10, shell literal 11) do not move: `url_password` takes the slot `e
 | 18 | `gitlab_token` | `glpat-[A-Za-z0-9_\-]{20,}` (`:294`) | yes | guard |
 | 19 | `digitalocean_token` | `dop_v1_[a-f0-9]{32,}` (`:295`) | yes | guard |
 | 20 | `stripe_webhook_secret` | **new, only with the owner's yes to question 3**: `whsec_[A-Za-z0-9+/=]{24,}` | yes | added last, so no index moves; not in the default build |
+| 20 to 29 | provider and gateway keys | **new** (amendment 2026-11-01): `google_auth_key`, `groq_key`, `cerebras_key`, `fireworks_key`, `vercel_gateway_key`, `together_key`, `sgamp_key`, `fk_key`, `bedrock_key` (two rows); `shapes.tsv` holds the regexes | yes | added at the end; `stripe_webhook_secret` would come after them |
 
 Why the Stripe pair is asked (only with owner yes; the default build keeps row 17 as today and has no
 row 20): the pad prompt builds a payments platform (BRIEF3, 30 Oct early), so agents write
@@ -206,7 +207,7 @@ the hold overflowed (section 6), never a secret the rules found. The start event
 
 ### 4. The left guard
 
-**Rule.** A match of a guarded literal (14 rules; 15 with the owner's yes to question 3; table above) is
+**Rule.** A match of a guarded literal (24 rules since the 2026-11-01 amendment; one more with the owner's yes to question 3; table above) is
 dropped when the byte just before it is one of `[A-Za-z0-9_]` (the ledger's word boundary; `[A-Za-z0-9_-]`
 only with the owner's yes to PRD-00 owner question 10), unless that byte ends one of these escapes:
 
@@ -457,7 +458,7 @@ messages and session files, JSON-escaped up to three levels (the rules take up t
 | `curl -H "Authorization: Basic …"` inside a command line | not masked in a body (no Basic rule there). Masked in a real request header |
 | A key the model repeats across SSE or WebSocket deltas | not masked: JSON framing sits between the pieces (`TODO.md:302-312`). PRD-08's scan joins deltas and flags it |
 | A key glued after a letter, digit or `_` (and `-` if the owner adds it) | not masked (section 4) |
-| A key with no known prefix and no name (`gsk_…`, `tvly-…`, `sgamp_…` bare) | not masked (with the owner's yes to question 3: masked when it is a workspace, environment or harness-file value) |
+| A key with no known prefix and no name (`tvly-…`, `pplx-…` bare; `gsk_…` and `sgamp_…` have rules since the 2026-11-01 amendment) | not masked (with the owner's yes to question 3: masked when it is a workspace, environment or harness-file value) |
 | A gateway key: `AI_GATEWAY_API_KEY=…` in `.env`, OpenRouter `sk-or-v1-…`, a Cloudflare `cf-aig-authorization` header | masked: the shell rule (`API_KEY=`), and with the owner's yes to question 3 the exact value; `sk-or-` by `openai_key`; the header by its name (`auth`). Same path as a direct key: one system |
 | `STRIPE_SECRET_KEY=sk_test_…`, `whsec_…` (the payments pad) | default build: `sk_test_…` not masked (no rule; the shell rule misses `SECRET_KEY=`), `whsec_…` masked only after `WEBHOOK_SECRET=` or a JSON secret key. With the owner's yes to question 3: both masked (section 2) and by exact value from `.env` |
 | A token used as a URL user with no password (`https://<token>@host`) | masked only if the token has a shape (`ghp_…` after `//` is not glued) or is an exact value (`GH_TOKEN`; others only with the owner's yes to question 3). The dropped `email` rule used to catch it (PRD-17 K12) |
@@ -958,3 +959,22 @@ A1 reports it as a stated loss instead of failing on it.
 ### 2026-11-01, seam request from PRD-08 slice 8
 
 - PRD-08 `secrets.rs` keeps a copy of the masker's glued-word guard (the 24-byte rule and its escape set) so a glued shape hit stays `warn`. Export `glued` as `pub` in your next touch so the verifier can call it and delete the copy. Until then the copy must stay identical to the masker. No behaviour change; no locked ledger item is touched.
+
+### 2026-11-01, point 4 leak fix and its review (branch v1.0/prd-05-masking)
+
+- **Leak.** A Google `AQ.` key printed by `env | sort` went out raw. New literal `google_auth_key`
+  (`AQ\.[A-Za-z0-9_\-]{40,}`).
+- **New kinds**, guarded, appended to `shapes.tsv`: `groq_key` `gsk_`, `cerebras_key` `csk-`/`csk_`,
+  `fireworks_key` `fw_`, `vercel_gateway_key` `vck_`, `fk_key` `fk-` (body `[A-Za-z0-9]{20,}`, so kebab and
+  snake identifiers and base64url blobs end the run early), `together_key` `tgp_v1_` and `sgamp_key`
+  `sgamp_` (body `[A-Za-z0-9_\-]{20,}`: Amp keys hold `_`), `bedrock_key` `ABSK` (base64, floor 100) and
+  `bedrock-api-key-` (base64, floor 20). This overrides the "Not added" default for `gsk_` and `sgamp_`
+  (Overridable defaults); it only adds masking, and the owner may take it back.
+- **Shell literal (line 11).** Arms in order: `=` with a form-encoded value; `=` with no space, or a
+  quote, and a dotted value `(?:[A-Za-z0-9_\-]+\.)*[A-Za-z0-9_\-]{16,}(?:\.[A-Za-z0-9_\-]+)*`; a spaced or
+  `:` unquoted value, undotted as before, so code such as `token = self.config.long_attribute_name` stays
+  raw. No input the old literal matched is matched shorter.
+- **Cut, not dropped.** A `generic_secret_assignment` or `bedrock_key` candidate that overlaps an earlier
+  hard claim keeps its uncovered pieces (`CUT_KINDS` in `rules.rs`), so `token=<run>.sk-…` and
+  `Bearer bedrock-api-key-<base64 with +>` are starred whole.
+- No locked ledger item is touched.

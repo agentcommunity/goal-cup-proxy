@@ -115,6 +115,43 @@ pub fn keys() -> Vec<(&'static str, String, usize)> {
     ]
 }
 
+/// `[A-Za-z0-9_\-]`, the class of a shell value.
+pub const TOKEN: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-";
+
+/// A fake Google authentication key: `AQ.` and 50 more.
+pub fn aq_key(seed: usize) -> String {
+    ["A", "Q.", &run(TOKEN, 50, seed)].concat()
+}
+
+/// One fake key per provider and gateway literal, `sk-` providers included: the kind that
+/// masks it, the key, and the length of its fixed prefix.
+pub fn provider_keys() -> Vec<(&'static str, String, usize)> {
+    let hex = b"0123456789abcdef";
+    let b64 = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let k = |kind, parts: &[&str], prefix| (kind, parts.concat(), prefix);
+    vec![
+        k("openai_key", &["s", "k-", &run(ALNUM, 32, 60)], 3), // DeepSeek
+        k("openai_key", &["s", "k-", &run(ALNUM, 48, 61)], 3), // Moonshot / Kimi
+        k("openai_key", &["s", "k-", &run(hex, 32, 62)], 3),   // DashScope
+        k("openai_key", &["s", "k-or-", "v1-", &run(hex, 64, 63)], 3), // OpenRouter
+        ("google_auth_key", aq_key(34), 3),
+        k("groq_key", &["gs", "k_", &run(ALNUM, 52, 64)], 4),
+        k("cerebras_key", &["cs", "k-", &run(ALNUM, 48, 65)], 4),
+        k("cerebras_key", &["cs", "k_", &run(ALNUM, 48, 66)], 4),
+        k("fireworks_key", &["f", "w_", &run(ALNUM, 24, 67)], 3),
+        k("vercel_gateway_key", &["vc", "k_", &run(ALNUM, 56, 68)], 4),
+        k("together_key", &["tgp", "_v1_", &run(TOKEN, 43, 69)], 7),
+        k("sgamp_key", &["sga", "mp_user_", &run(TOKEN, 40, 70)], 6),
+        k("fk_key", &["f", "k-", &run(ALNUM, 40, 71)], 3),
+        k("bedrock_key", &["AB", "SK", &run(b64, 120, 72)], 4),
+        k(
+            "bedrock_key",
+            &["bedrock-", "api-key-", &run(b64, 200, 73)],
+            16,
+        ),
+    ]
+}
+
 /// One stream of `kind` fed `input` cut at `cuts`, ended by `finish`, spans made absolute.
 pub fn stream_in(m: &Masker, kind: StreamKind, input: &[u8], cuts: &[usize]) -> Masked {
     let mut s = m.stream(kind);

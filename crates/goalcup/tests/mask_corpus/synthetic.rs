@@ -110,7 +110,13 @@ pub fn planted_values() -> Vec<(&'static str, String)> {
         ("fireworks", ["f", "w_", &r.chars(ALNUM, 24)].concat()),
         ("together", ["tgp", "_v1_", &r.chars(B64URL, 43)].concat()),
         ("amp", ["sga", "mp_", &r.chars(HEX, 40)].concat()),
-        ("factory", ["f", "k-", &r.chars(ALNUM, 40)].concat()),
+        ("fk", ["f", "k-", &r.chars(ALNUM, 40)].concat()),
+        ("vercel", ["vc", "k_", &r.chars(ALNUM, 56)].concat()),
+        ("bedrock_long", ["AB", "SK", &r.chars(B64, 120)].concat()),
+        (
+            "bedrock_short",
+            ["bedrock-", "api-key-", &r.chars(B64, 200)].concat(),
+        ),
     ]
 }
 
