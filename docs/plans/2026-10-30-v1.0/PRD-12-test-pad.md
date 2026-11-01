@@ -553,7 +553,7 @@ a `model` line in `[direct]` and `[gateway]` is the pinned main model. The row r
 `pinned_model` and C5 flags a recorded model that differs.
 
 - Claude Code: Haiku 5.5. Direct `claude-haiku-5-5`, gateway `anthropic/claude-haiku-5.5`. The `env` of each
-  case sets `ANTHROPIC_MODEL` (main) and `ANTHROPIC_DEFAULT_HAIKU_MODEL` (the background model). The older
+  case sets `ANTHROPIC_MODEL` (main), `ANTHROPIC_DEFAULT_HAIKU_MODEL` (the background model) and `ANTHROPIC_DEFAULT_SONNET_MODEL` / `ANTHROPIC_DEFAULT_OPUS_MODEL` (so a subagent spawned as `sonnet` or `opus` still runs Haiku). The older
   `ANTHROPIC_SMALL_FAST_MODEL` is marked deprecated on https://code.claude.com/docs/en/env-vars, so it is not
   used. The dodger case uses the direct section. The first Haiku run on 2.1.312 must confirm that the first-run
   screens in `pre_keys` are unchanged with a model set; they were probed without one.
@@ -2044,4 +2044,4 @@ taken; "rejected" says why. Fixes for other files are made by those files' owner
 
 - Owner rule: every Claude Code test run uses Haiku 5.5 (direct `claude-haiku-5-5`, gateway `anthropic/claude-haiku-5.5`, main and background model both). The earlier full1 run used the default Opus and cost 7.33 USD in 22 minutes. Codex is pinned to its cheapest model in both cases and the DeepSeek harnesses use deepseek-flash (section 6, "Pinned models"). The row records `pinned_model` and C5 flags a recorded model that differs.
 - The vendor env name for the background model is `ANTHROPIC_DEFAULT_HAIKU_MODEL`; `ANTHROPIC_SMALL_FAST_MODEL` is deprecated.
-- Open for the first Haiku run: the 2.1.312 first-run screens with a model set (`pre_keys` were probed without one), and the gateway id spelling `anthropic/claude-haiku-5.5` (the Vercel pages were not reachable when this was written).
+- Open for the first Haiku run: the 2.1.312 first-run screens with a model set (`pre_keys` were probed without one), the gateway id spelling `anthropic/claude-haiku-5.5` (the Vercel pages were not reachable when this was written), and the spelling the direct API records for `claude-haiku-5-5` (a dated form would show as a warning line on a correct run; confirm it on the first run's record).
