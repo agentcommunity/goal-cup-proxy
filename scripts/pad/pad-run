@@ -23,7 +23,8 @@ USAGE = "usage: pad-run <run dir> " + "|".join([s + " N" * (s == "wait-calls") f
 KEEP_SHELL = "exec sleep 1000000"  # the last line of a kill-watchdog-recover run's launch.sh
 PROXY_VALUE = "127.0.0.1:9"  # the proxy setting exec/proxy-setting.sh writes (PAD_PROXY); start must not print it
 EVERY = {"status": 10, "procs": 30, "pane": 60, "live": 300}  # section 4: the watch's seconds per kind of line
-OUT = ("verify", "watch", "exec", "status.json", "harness-files.json", "meta-box.json")  # what out.tar carries
+OUT = ("verify", "watch", "exec", "status.json", "harness-files.json", "meta-box.json",
+       "goalcup.log", "goalcup-new.log")  # what out.tar carries
 PROXY_CA = tuple(n for p in ("HTTPS", "HTTP", "ALL", "NO") for n in (p + "_PROXY", p.lower() + "_proxy")) + (
     "SSL_CERT_FILE", "SSL_CERT_DIR", "NODE_EXTRA_CA_CERTS", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE")
 HARNESS_ENV = ("HOME", "PATH", "GOALCUP_TIME_LEFT_FILE")  # not keys: what `sh -lc 'goalcup time-left'` needs
@@ -415,6 +416,7 @@ class Run:
 
     def type_prompt(self):  # section 3, 0:04: the ready text, pre keys, the paste, the submit delay and Enter
         h, t = self.h, self.tmux
+        self.pane()  # once, after the approval (or none) and before the ready wait: the launch block and the version line
         ready = h.get("ready_text")
         if not (ready and wait(lambda: ready in self.pane(False), float(h.get("ready_wait", 30)), 2)):
             time.sleep(0 if ready else 30)
@@ -989,6 +991,9 @@ class Run:
         keys = ("harness_version", "run", "entry", "screen_known", "end_screen_requests", "commits_since_start", "plain_planted",
                 "known_box")
         write(self.path("meta-box.json"), json.dumps({k: self.st.get(k, 0 if k == "screen_known" else None) for k in keys}), 0o644)
+        self.copy_log(e)
+        if new:  # the entry goalcup continue started has its own log (the recovery lines)
+            self.copy_log(new[1], "goalcup-new.log")
         if tool("goalcup-verify"):  # last, whatever happened above (it needs no entry): every file the tar carries
             exits["secrets-out"] = self.verify_cmd(["secrets", "--known", "known"] + self.out_paths(),
                                                    "secrets-out.json")[0]
@@ -1006,6 +1011,13 @@ class Run:
                 if os.path.exists(self.path(name)):
                     t.add(self.path(name), name)
         return result
+
+    def copy_log(self, e, name="goalcup.log"):
+        """An entry folder's goalcup.log (next to upload.json) into the output folder; a missing file is no error."""
+        try:
+            shutil.copy(os.path.join(e, "goalcup.log"), self.path(name))
+        except (OSError, TypeError):
+            pass
 
     def out_paths(self):
         """What the secrets-out scan reads: the box's output files, but not the pad's own screen copies (watch/pane-*.txt),
