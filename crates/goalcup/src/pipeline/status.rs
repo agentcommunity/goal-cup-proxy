@@ -438,7 +438,7 @@ mod tests {
         for _ in 0..LAST_NOTES + 5 {
             b.note(note(true));
         }
-        let f = super::lock(&b.0);
+        let f = crate::pipeline::lock(&b.0);
         assert!(f.first_notes.iter().any(|(_, v)| v["expected"] == false));
     }
 }
