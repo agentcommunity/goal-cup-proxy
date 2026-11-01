@@ -1,6 +1,6 @@
 # Crush harness facts
 
-Connector id: `crush-cli` · Facts for version: `0.99.0` · Written by: Goal Cup team · Last checked: 2026-10-31
+Connector id: `crush-cli` · Facts for version: `0.99.0` · Written by: Goal Cup team · Last checked: 2026-11-01
 Public disclosure: yes. Facts come from Crush's public README and source at `v0.99.0`. No keys, tokens, account names or personal paths are included.
 Status: shipped connector ([`connectors/crush-cli.toml`](../../connectors/crush-cli.toml))
 
@@ -64,7 +64,9 @@ The connector sets the four XDG folders under `{home}` and unsets `CRUSH_GLOBAL_
 
 ## Run without permission prompts
 
-Crush asks before tool calls; `--yolo` skips every prompt, and `permissions allow` lines in a `crushrc` allow single tools (README). The connector has no `no_prompts` row: the flag is not a settings key, and a `crushrc` is not a file goalcup writes.
+Crush asks before tool calls. The README "Permissions" section says `--yolo` skips every prompt, and `permissions allow` lines in a `crushrc` allow single tools; the source defines the flag as `--yolo`, `-y`, "Automatically accept all permissions (dangerous mode)" (`internal/cmd/root.go`, v0.99.0). The config key `permissions.allowed_tools` is a list, and a `no_prompts` row holds one string, so the connector passes `args = ["--yolo"]` and shows a `first_screen` line saying so. Rung 1 (2026-10-31) saw a run sit on "Permission Required ... Tool bash ... Allow/Deny" until seal.
+
+First-run init prompt: Crush offers to write an AGENTS.md when the file `init` is absent from the data directory (`<workspace>/.crush/init`), no context file is in the folder and the folder is not empty (`internal/config/init.go`, v0.99.0). No documented switch turns it off: `options.initialize_as` only names the file, and the marker file cannot be written by a settings row. The connector sets nothing for it; the participant answers or dismisses the screen before typing. Whether `--yolo` changes that screen: unknown, not run. Owner question logged.
 
 ## Pad result
 

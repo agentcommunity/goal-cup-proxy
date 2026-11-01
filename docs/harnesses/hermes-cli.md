@@ -1,6 +1,6 @@
 # Hermes Agent harness facts
 
-Connector id: `hermes-cli` · Facts for version: `0.22.5` · Written by: Goal Cup team · Last checked: 2026-10-31
+Connector id: `hermes-cli` · Facts for version: `0.22.5` · Written by: Goal Cup team · Last checked: 2026-11-01
 Public disclosure: yes. Facts come from Nous Research's public Hermes docs and source at tag `v0.22.5`, the project's release page, and Goal Cup runs on macOS in October 2026. No keys, tokens, account names or personal paths are included.
 Status: shipped connector ([`connectors/hermes-cli.toml`](../../connectors/hermes-cli.toml))
 
@@ -72,6 +72,10 @@ The connector sets `HERMES_HOME` to the isolated home and leaves `HOME` alone.
 ## Run without permission prompts
 
 With the default `approvals.mode: smart`, a helper model approves low-risk shell commands and the rest get a prompt with a 60 s timeout (source). The connector's `no_prompts` row writes `approvals.mode = "off"` into `config.yaml` in the isolated home. The mode accepts `manual`, `smart` and `off`; quote `"off"`, because an unquoted `off` is YAML for false, which Hermes also reads as off (source). `hermes chat --yolo` does the same for one session ([docs](https://hermes-agent.nousresearch.com/docs/reference/cli-commands)); the connector passes no such option. File edits are not gated. See [HARNESS-SETUP](../HARNESS-SETUP.md#hermes).
+
+Telemetry screen: before an interactive chat on a home that never answered, Hermes shows "Help improve Hermes?" with "Share with Nous" and "No thanks", and the chat waits behind it (rung 1, 2026-10-31: 0 requests until seal). The answer lives in `telemetry.shared_metrics.enabled` and `.send` in `config.yaml`; the screen is skipped when a key is present and `offer_version` is 2, or when `enabled` is true (source: `hermes_cli/observability/shared_metrics_consent.py`, `cli-config.yaml.example`, v0.22.5). A real "No thanks" also writes `offer_version: 2` as an integer, which a settings row cannot write (it writes a string, so Hermes would ask again). The connector therefore writes `enabled = true` and `send = false`: Hermes counts locally in the isolated home and uploads nothing. Owner question logged: accept this, or allow integer values in settings rows. This is not an update switch.
+
+First run of a new `HERMES_HOME` installs about 105 Python packages (72 MB from files.pythonhosted.org); the `first_screen` line says so. Measured in rung 1.
 
 ## Pad result
 
