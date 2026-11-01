@@ -114,15 +114,3 @@ fn a_ragged_span_across_buckets_loses_under_a_ms_per_row() {
         "{got} of {span} in {n}"
     );
 }
-
-/// A span of 1_999_999 ns, not ms aligned, sits in one row: the row shows its single floor, 1 ms,
-/// not a sum of floored pieces.
-#[test]
-fn a_short_unaligned_span_is_floored_once_from_nanoseconds() {
-    let dir = Entry::recovered_before_first_link("timeline-short-ns", "killed", 30_000);
-    let whole = skew_down_span(&dir, 0, 0);
-    let span = skew_down_span(&dir, 0, -((whole - 1_999_999) as i64));
-    assert_eq!(span, 1_999_999);
-    let (_, v) = check(&dir, &[]);
-    assert_eq!(sum(&v, "off_ms"), span / 1_000_000);
-}

@@ -509,8 +509,6 @@ fn an_answer_recorded_in_another_thread_matches() {
     assert_eq!((n(&h, "checked"), missing(&h)), (1, (0, 0, 0)));
 }
 
-/// The lost call is found by (sid, message number): the thread is the one of the second message
-/// on its stream, after a message that is no request, so only a count of every message names it.
 /// A harness that re-cases or sanitises a call id on resend still matches its own response; a
 /// call of the same name dropped in another thread is not covered by it.
 #[test]
@@ -533,6 +531,10 @@ fn a_rewritten_call_id_matches_but_another_threads_response_does_not_cover_a_dro
     assert_eq!(missing(&verdict(&d, "fail", 2)), (1, 0, 0));
 }
 
+/// The lost call is found by (sid, message number): the thread is the one of the second message
+/// on its stream, after a message that is no request, so only a count of every message names it.
+/// A harness that re-cases or sanitises a call id on resend still matches its own response; a
+/// call of the same name dropped in another thread is not covered by it.
 #[test]
 fn a_call_dropped_on_a_websocket_fails_and_names_the_thread() {
     let mut up = 0;

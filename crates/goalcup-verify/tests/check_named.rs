@@ -218,6 +218,9 @@ fn counts_equal_the_recorder_rules_for_tunnels_snapshots_and_ws_gaps() {
     assert_eq!(code, 1);
 }
 
+/// The `(up, down)` bytes of an ordinary tunnel.
+const USUAL: (u64, u64) = (512, 2048);
+
 /// A listed tunnel of `(up, down)` bytes, then its GAP (`lost` = up + down + 1) if any.
 fn tunnel_bytes(
     e: &mut Entry,
@@ -253,20 +256,14 @@ fn listed_tunnels_with_a_named_reason_are_named_and_without_a_gap_fail() {
         ("hello_too_big", MemoryGuard, guard),
     ] {
         let mut e = Entry::new("listed-tunnel");
-        tunnel_bytes(
-            &mut e,
-            "t.example.test",
-            reason,
-            Some((cause, tail)),
-            (512, 2048),
-        );
+        tunnel_bytes(&mut e, "t.example.test", reason, Some((cause, tail)), USUAL);
         let (code, v) = sealed(e);
         assert_eq!(result(&v, "listed_hosts_decrypted"), "named", "{reason}");
         assert_eq!(code, 1, "{reason}");
     }
     for (reason, res) in [("pinned", "fail"), ("sign_in", "pass")] {
         let mut e = Entry::new("listed-tunnel-no-gap");
-        tunnel_bytes(&mut e, "t.example.test", reason, None, (512, 2048));
+        tunnel_bytes(&mut e, "t.example.test", reason, None, USUAL);
         let (code, v) = sealed(e);
         assert_eq!(result(&v, "listed_hosts_decrypted"), res, "{reason}");
         assert_eq!(code == 2, res == "fail", "{reason}");
@@ -286,6 +283,13 @@ fn zero_byte_listed_tunnel_is_no_loss_but_a_gap_still_names_it() {
     tunnel_bytes(&mut e, "t.example.test", "pinned", gap, (0, 0));
     let (_, v) = sealed(e);
     assert_eq!(result(&v, "listed_hosts_decrypted"), "named");
+
+    let mut e = Entry::new("zero-tunnel-wrong-gap");
+    let gap = Some((GapReason::MemoryGuard, json!({"guard": "held_bytes"})));
+    tunnel_bytes(&mut e, "t.example.test", "pinned", gap, (0, 0));
+    let (code, v) = sealed(e);
+    assert_eq!(result(&v, "listed_hosts_decrypted"), "fail");
+    assert_eq!(code, 2);
 }
 
 #[test]
@@ -306,7 +310,7 @@ fn decrypted_conn_with_a_parser_fault_gap_is_named() {
 fn a_tunnel_with_the_wrong_gap_or_a_mislabelled_listed_host_fails() {
     let mut e = Entry::new("wrong-gap");
     let gap = Some((GapReason::MemoryGuard, json!({"guard": "held_bytes"})));
-    tunnel_bytes(&mut e, "t.example.test", "pinned", gap, (512, 2048));
+    tunnel_bytes(&mut e, "t.example.test", "pinned", gap, USUAL);
     let (code, v) = sealed(e);
     assert_eq!(result(&v, "listed_hosts_decrypted"), "fail");
     assert_eq!(code, 2);
@@ -327,7 +331,7 @@ fn refusal_after_trust_lists_a_learned_refusal_but_not_a_silent_one() {
         let mut e = Entry::new("refusal");
         e.exchange(EndReason::Complete);
         let gap = Some((GapReason::TlsRefused, json!({"alert": alert})));
-        tunnel_bytes(&mut e, HOST, "tls_refused", gap, (512, 2048));
+        tunnel_bytes(&mut e, HOST, "tls_refused", gap, USUAL);
         let (code, v) = sealed(e);
         let facts = &item(&v, "listed_hosts_decrypted")["facts"]["refusal_after_trust"];
         let n = facts.as_array().map_or(0, Vec::len);
