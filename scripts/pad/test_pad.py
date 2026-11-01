@@ -581,7 +581,7 @@ class UpstreamRedaction(unittest.TestCase):
 class SecretCheck(unittest.TestCase):
     """C3 (point 4, section 5): a known-value hit fails, and so does a planted shape with no MASK. Only C3 is asserted."""
 
-    PLANTED = {"openai_key": 1, "github_token": 1, "generic_secret_assignment": 1, "jwt": 1, "private_key": 1,
+    PLANTED = {"openai_key": 1, "github_token": 1, "google_key": 1, "jwt": 1, "private_key": 1,
                "url_password": 1, "auth": 8}
 
     def c3(self, masks, secrets_exit=1, plain_exit=0):
@@ -604,16 +604,25 @@ class SecretCheck(unittest.TestCase):
 
     def test_exact_values_on(self):
         self.assertEqual(self.exact(dict(self.PLANTED, run_secret=2), plain_exit=2), "FAIL")  # the planted value reached the record
-        self.assertEqual(self.exact(dict(self.PLANTED, run_secret=2)), "PASS")
-        self.assertEqual(self.exact({"auth": 8}), "INCONCLUSIVE")  # no run_secret, no plain hit, no planted MASK
-        self.assertEqual(self.exact(self.PLANTED), "INCONCLUSIVE")  # planted-shape MASKs alone are not the exercise
-        self.assertEqual(self.exact(dict(self.PLANTED, run_secret=2), plain_exit=2, skipped=1), "INCONCLUSIVE")  # a stated cut
+        self.assertEqual(self.exact(self.PLANTED), "PASS")
+        self.assertEqual(self.exact({"auth": 8, "run_secret": 4}), "INCONCLUSIVE")  # run_secret is no proof: env or auth can make it
+        self.assertEqual(self.exact({"auth": 8}), "INCONCLUSIVE")
+        self.assertEqual(self.exact(dict(self.PLANTED, jwt=0)), "INCONCLUSIVE")  # a kind with no MASK is not exercised
+        self.assertEqual(self.exact(self.PLANTED, plain_exit=2, skipped=1), "INCONCLUSIVE")  # a stated cut
 
-    def test_exact_values_on_with_the_real_masks_shape(self):
-        # Gate-named planted values are exact values: their MASK is run_secret, the shape rules get none of their own.
-        real = {"jwt": 1, "private_key": 1, "url_password": 1, "openai_key": 0, "github_token": 0, "google_key": 0, "run_secret": 4, "auth": 8}
-        self.assertEqual(self.exact(real), "PASS")
-        self.assertEqual(self.exact(dict(real, jwt=0)), "INCONCLUSIVE")  # a name the gate does not admit still needs its own MASK
+    def hermes(self, masks):
+        meta = {"connector": "hermes-cli", "case": "direct", "known_box": True, "entry": "e1", "redacts_tool_output": True,
+                "mask_values": {"workspace": 4, "env": 0, "harness": 0, "skipped": 0}}
+        out = evaluate({"meta.json": meta, "verify/secrets.json": {"masks": masks}, "verify/secrets-conductor.json": {"hits": 0},
+                        "verify/exits.json": {"secrets": 1, "secrets-out": 0, "secrets-plain": 0}})
+        return out["checks"]["C3"], out["facts"].get("masked_upstream")
+
+    def test_run_secret_never_stands_for_a_planted_kind(self):
+        # Redacting harness, exact values on: masked_key and run_secret with no openai/github/google MASK is the unconfirmed
+        # masked-upstream PASS (refused by the release check), never a plain PASS; run_secret alone is no evidence.
+        shaped = {"jwt": 1, "private_key": 1, "url_password": 1, "masked_key": 3, "run_secret": 1, "auth": 8}
+        self.assertEqual(self.hermes(shaped), ("PASS", True))
+        self.assertEqual(self.hermes({"run_secret": 4, "auth": 8})[0], "INCONCLUSIVE")
 
     def test_exact_values_off_keeps_a_plain_hit_as_proof(self):
         self.assertEqual(self.exact(self.PLANTED, plain_exit=2, on=False), "PASS")

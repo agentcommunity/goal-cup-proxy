@@ -2029,13 +2029,14 @@ taken; "rejected" says why. Fixes for other files are made by those files' owner
   C3 FAIL, the exercise proof is a `run_secret` MASK (planted-shape MASKs alone leave C3 INCONCLUSIVE), and
   `skipped` above 0 is INCONCLUSIVE ("the planted value may be cut"), not FAIL. Absent means off.
 - **Masked upstream (ledger 18:04Z, conductor ruling).** For a harness with `redacts_tool_output`, no known, shape or
-  plain hit, no stated loss and exercise evidence (a `masked_key` MASK, or with exact values on the `run_secret`
-  MASK), a planted kind with no MASK is a C3 PASS ("masked upstream"). With no exercise evidence C3 stays
+  plain hit, no stated loss and exercise evidence (a `masked_key` MASK), a planted kind with no MASK is a C3 PASS ("masked upstream"). With no exercise evidence C3 stays
   INCONCLUSIVE. A known hit or unmasked shape hit still FAILs, the deltas-only stated loss stays INCONCLUSIVE, and a
   harness without the flag keeps INCONCLUSIVE. Such a PASS carries `facts.masked_upstream` and is refused by
   `--release-check` until the owner confirms it.
-- **Gate-named planted values.** With exact values on, `OPENAI_API_KEY`, `GITHUB_TOKEN` and `GOOGLE_API_KEY` pass
-  PRD-05's credential name gate, so they are exact values (blocks) that absorb their shape claims; the MASK is
-  recorded as `run_secret`. C3 counts a `run_secret` MASK as the MASK for those three kinds only; `jwt`,
-  `private_key` and `url_password` still need their own. With exact values off, a plain hit is exercise evidence
-  (not a leak) and counts for the masked-upstream PASS as much as a `masked_key` MASK.
+- **Planted names (replaces the earlier gate-named note).** All six planted values sit under names PRD-05's
+  credential name gate does not admit (`PAD_OPENAI`, `PAD_GITHUB`, `PAD_GOOGLE`, `PAD_JWT`, `PAD_PEM`, and the remote
+  URL), so each shape rule claims its own value and C3 needs a MASK of its own kind. A `run_secret` MASK is not
+  evidence for any planted kind and not exercise proof: the harness env or an auth header can produce it, so it never
+  ties to the planted file (the earlier "run_secret is the exercise proof" text is withdrawn). Exercise evidence is a
+  MASK of a planted shape, a `masked_key` MASK for an upstream-redacting harness, or with exact values off a plain hit.
+  `PAD_SECRET_PLAIN` stays the exact-value canary: a plain hit of it with exact values on is a FAIL.

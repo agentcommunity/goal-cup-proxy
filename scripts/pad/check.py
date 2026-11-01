@@ -36,11 +36,10 @@ S7_TOKENS = ("input", "cached", "cache_write", "output", "reasoning")  # S7 mode
 # verify/exits.json (keyed by the JSON file's stem; 0 and 1 are no hit, 2 a hit, anything else no scan). MASK spans
 # by rule are read from the `masks` key.
 SECRET_HITS = ("hits", "known_hits", "shape_hits", "big_masks")
-# Section 5's planted shaped values, each as the S12 rule kinds (PRD-05 section 10) whose MASK covers it. The
-# Google line is masked under the shell rule, row 11, which wins over `google_key`, row 13.
-PLANTED = (("openai_key",), ("github_token",), ("google_key", "generic_secret_assignment"), ("jwt",), ("private_key",),
-           ("url_password",))
-GATED = PLANTED[:3]  # the three planted under names PRD-05's credential name gate admits (OPENAI_API_KEY, GITHUB_TOKEN, GOOGLE_API_KEY)
+# Section 5's planted shaped values, each as the S12 rule kinds (PRD-05 section 10) whose MASK covers it. All six are
+# planted under names PRD-05's credential name gate does not admit (PAD_OPENAI and so on), so none is an exact value and
+# each shape rule claims its own value; a run_secret MASK proves none of them.
+PLANTED = (("openai_key",), ("github_token",), ("google_key",), ("jwt",), ("private_key",), ("url_password",))
 # Section 3.1: the fault kinds, each with the minutes it lasts by default, and the kinds that take `+<minutes>`; pad and
 # pad-run read both from here.
 FAULTS = {"kill-recorder": 0, "kill-watchdog": 3, "kill-watchdog-recover": 2, "kill-both": 0, "freeze": 10,
@@ -504,19 +503,15 @@ def secrets(r):
         r.mark("C3", "INCONCLUSIVE", "exact values skipped %s; the planted value may be cut" % mv.get("skipped"))
     elif exact and plain:
         r.mark("C3", "FAIL", "planted .env value reached the record unmasked (%s plain hits)" % plain)
-    # Exercise proof: with exact values the run_secret MASK, else the plain-value hit (expected there, not a leak) or, for an
-    # upstream-redacting harness, the masked_key MASK. Planted-shape MASKs alone are not proof with exact values on.
-    proof = masks.get("run_secret") if exact else plain
-    clean = up and hit == 0 and not loss and (plain == 0 or not exact) and bool(proof or (not exact and masks.get("masked_key")))
-
-    def covered(kinds):
-        # With exact values on, the planted names PRD-05's credential name gate admits (key or token in the name) are exact
-        # values, and an exact form is a block that absorbs the shape claims: the MASK is recorded as run_secret.
-        return any(masks.get(x) for x in kinds) or bool(exact and kinds in GATED and masks.get("run_secret"))
-    bare = [" or ".join(k) for k in PLANTED if not covered(k)]
-    if not (proof or clean or (not exact and any(covered(k) for k in PLANTED))):
-        return r.mark("C3", "INCONCLUSIVE", "secret exercise not done: no %s"
-                      % ("MASK of the planted .env value" if exact else "plain-value hit and no MASK of a planted shape"))
+    # Exercise evidence: a MASK of a planted shape, or for an upstream-redacting harness the masked_key MASK, or with exact
+    # values off the plain-value hit (expected there, not a leak). A run_secret MASK is none of these: the harness env or an
+    # auth header can produce it, so it never ties to the planted file.
+    evidence = bool((up and masks.get("masked_key")) or (not exact and plain))
+    clean = up and hit == 0 and not loss and (plain == 0 or not exact) and evidence
+    bare = [" or ".join(k) for k in PLANTED if not any(masks.get(x) for x in k)]
+    if not (evidence or len(bare) < len(PLANTED)):
+        return r.mark("C3", "INCONCLUSIVE", "secret exercise not done: no MASK of a planted shape%s"
+                      % ("" if exact else " and no plain-value hit"))
     # A planted kind with no MASK is a FAIL when a hit shows it reached the record, else not exercised (a run never passes on
     # a missing exercise). An upstream-redacting harness with exercise evidence and no hit passes: masked upstream.
     if bare and clean:
