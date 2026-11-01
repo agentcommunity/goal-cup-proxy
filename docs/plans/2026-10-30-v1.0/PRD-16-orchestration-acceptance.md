@@ -2559,3 +2559,8 @@ kept and now cites BUILD-PROMPT section 5, since B3 no longer carries it.
   code. PRD-00 "Size budget" has no PRD-15 row, so no ceiling is exceeded.
 - **Gate effect:** none on order or seams. The remaining PRD-15 work is the tier columns after phase 5 and
   the HARNESS-SETUP move. No locked ledger item is touched.
+
+### 2026-11-01, replan after PRD-02 slice C part 2 (merge cdc9b456)
+
+- **Size, PRD-02 merged code (`wc -l`):** src `pipeline/` plus `watchdog/` 8,236 lines against the PRD-00 "Size budget" row 1,350 (the earlier 6,000 ceiling is also passed); tests `pipeline_*` and `watchdog_*` including `watchdog_share/` 4,013 lines against the 1,500 row. The overage is the restored point guards, the recover and restart acceptance and the shared watchdog rig. Reported, not enforced by a gate; PRD-13 and the integrator decide any trim after the deletion gate, and cuts stay inside the seven points.
+- **Build plan:** the last gate-relevant PRD-02 item is merged; the deletion gate waits on PRD-17's repoint and rerun of L-R2 (PRD-17 note) and on the gate full row (L-C7). PRD-14 owes the `heavy` entries (PRD-14 note). Remaining PRD-02 slice items stay deferred by conductor decision: `by_hand_load`, native cursor resume, the mask pool, `pipeline_many_streams`, `pipeline_no_latch`, `SnapshotCursor.fid`. No locked ledger item is touched.
