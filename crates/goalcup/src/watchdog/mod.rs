@@ -855,7 +855,7 @@ pub(crate) fn moved(w: &ServerWord) -> Option<Mono> {
 /// What a server word asks (section 8 step 10): nothing while it says go on, `deadline` for a
 /// stop with that reason (the harness is ended), else `server_stop` (the harness is left).
 pub(crate) fn stop_of(w: &ServerWord) -> Option<SealReason> {
-    w.stop.then(|| match w.reason.as_deref() {
+    w.stop.then_some(match w.reason.as_deref() {
         Some("deadline") => SealReason::Deadline,
         _ => SealReason::ServerStop,
     })

@@ -63,12 +63,12 @@ pub fn recover_with(
     mut facts: StartFacts,
     recorder_exe: &Path,
 ) -> Result<Recovered, NotRecovered> {
-    if cli::watchdog_alive(entry_dir) {
-        return Err(NotRecovered::WatchdogAlive);
-    }
     let status: Option<serde_json::Value> = read_json(&status_json(entry_dir));
     if status.as_ref().is_some_and(|s| s["mode"] == "sealed") {
         return Err(NotRecovered::Sealed);
+    }
+    if cli::watchdog_alive(entry_dir) {
+        return Err(NotRecovered::WatchdogAlive);
     }
     let rec = entry_dir.join("rec");
     // A probe only: held through the checks, released before anything starts.
