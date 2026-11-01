@@ -109,8 +109,26 @@ pub fn planted_values() -> Vec<(&'static str, String)> {
         ("vercel", key_of("vercel_gateway_key", 0)),
         ("bedrock_long", key_of("bedrock_key", 0)),
         ("bedrock_short", key_of("bedrock_key", 1)),
+        ("stripe", ["sk", "_test_", &r.chars(ALNUM, 32)].concat()),
+        (
+            "whsec",
+            [
+                "wh",
+                "sec_",
+                &r.chars(ALNUM, 12),
+                "+",
+                &r.chars(ALNUM, 9),
+                "/",
+                &r.chars(ALNUM, 9),
+                "=",
+            ]
+            .concat(),
+        ),
     ]
 }
+
+/// The Stripe pair (owner yes to PRD-00 question 3), planted after the template's lines.
+const PLANTED_STRIPE: &str = "STRIPE_SECRET_KEY={{stripe}}\nSTRIPE_WEBHOOK_SECRET={{whsec}}\n";
 
 /// The value planted under `name`.
 pub fn planted(name: &str) -> String {
@@ -123,7 +141,7 @@ pub fn planted(name: &str) -> String {
 
 /// `planted.env` filled.
 pub fn planted_env() -> Filled {
-    fill(PLANTED_ENV, planted)
+    fill(&[PLANTED_ENV, PLANTED_STRIPE].concat(), planted)
 }
 
 /// `harness-settings.json` filled.

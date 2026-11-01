@@ -28,7 +28,7 @@ google_key	1	AIza[A-Za-z0-9_\-]{30,}
 huggingface_token	1	hf_[A-Za-z0-9]{20,}
 npm_token	1	npm_[A-Za-z0-9]{20,}
 xai_key	1	xai-[A-Za-z0-9]{20,}
-stripe_key	1	[sr]k_live_[A-Za-z0-9]{16,}
+stripe_key	1	[sr]k_(?:live|test)_[A-Za-z0-9]{16,}
 gitlab_token	1	glpat-[A-Za-z0-9_\-]{20,}
 digitalocean_token	1	dop_v1_[a-f0-9]{32,}
 google_auth_key	1	AQ\.[A-Za-z0-9_\-]{40,}
@@ -41,3 +41,4 @@ sgamp_key	1	sgamp_[A-Za-z0-9_\-]{20,}
 fk_key	1	fk-[A-Za-z0-9]{20,}
 bedrock_key	1	ABSKQmVkcm9ja0FQSUtleS[A-Za-z0-9+/]{82,}
 bedrock_key	1	bedrock-api-key-YmVkcm9jay5hbWF6b25hd3MuY29t[A-Za-z0-9+/]{20,}
+stripe_webhook_secret	1	whsec_[A-Za-z0-9+/=]{24,}
