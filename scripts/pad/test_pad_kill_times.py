@@ -16,7 +16,7 @@ def load(name, file):
     return mod
 
 
-pad, table = load("padkt", "pad"), load("padkttable", "table")
+pad = load("padkt", "pad")
 PADCFG = {"keys": {"openai": "OPENAI_API_KEY", "claude": "CLAUDE_API_KEY", "gateway": "AI_GATEWAY_API_KEY"}}
 PAIR = ["kill-recorder@8", "kill-recorder@10"]
 

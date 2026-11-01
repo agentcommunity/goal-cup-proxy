@@ -830,7 +830,7 @@ class Run:
         with open(os.path.join(self.dir, "meta.json"), "w") as f:
             json.dump(dict(self.meta, spend_usd_est=self.usd, priced_high=self.high, over_cap=self.over_cap, connector=s["harness"],
                            case=self.case, mode=s["mode"], prompt=s["prompt"], variant=self.variant(), where=s["where"],
-                           server=s["server"], keep=s["keep"], minutes=s["minutes"], 
+                           server=s["server"], keep=s["keep"], minutes=s["minutes"],
                            started=at, push="not tested", pad_trusted_at=None, steps=[list(ln) for ln in self.lines],
                            hosts_sha256=self.hosts_sha, model_host=self.harness.get("model_host")),
                       f, indent=1, sort_keys=True)
@@ -913,8 +913,7 @@ class Run:
         s, secs = self.s, int(time.time() - self.t0)
         result = self.row or ("FAIL" if any(r == "FAIL" for _, r, _, _ in self.lines) else "INCONCLUSIVE")
         head = "pad %s %s %s   variant %s   run %s  entry %s  box %s   %dm %02ds" % (
-            s["harness"], self.case, s["mode"], ",".join(self.variant()) or "-",
-            self.meta.get("run") or "-",
+            s["harness"], self.case, s["mode"], ",".join(self.variant()) or "-", self.meta.get("run") or "-",
             self.meta.get("entry") or "-", self.name if self.tried else "-", secs // 60, secs % 60)
         rows = [head, FMT % ("step", "result", "at", "saw")] + [FMT % ln for ln in self.lines]
         rows.append("%-17s %-14s %s" % ("result", result, os.path.relpath(self.dir, REPO) + "/"))
@@ -945,10 +944,10 @@ def main(argv):
         pad = read_toml(os.path.join(HERE, "pad.toml"))
         s = load_settings(read_toml(argv[1]), pad)
         harness = read_toml(os.path.join(HERE, "harnesses", s["harness"] + ".toml"))  # a missing one is an OSError
-        apply_kill_minutes(s, harness)
         if harness.get("key_kind") == "none" or harness.get("not_verified"):  # Amp, Droid: no key to give it; a row with a stated reason: nothing to run (no box, no case)
             print("%s: not verified: %s" % (s["harness"], harness.get("not_verified") or "no key"))
             return 3  # nothing proven: the INCONCLUSIVE exit, never "every row PASS"
+        apply_kill_minutes(s, harness)
         if not (harness.get("version") and harness.get("version_cmd")):
             raise Usage("scripts/pad/harnesses/%s.toml needs version and version_cmd" % s["harness"])
         if s["case"] in ("dodger", "all") and not re.fullmatch(r"[a-z0-9][a-z0-9.-]*", str(harness.get("model_host"))):

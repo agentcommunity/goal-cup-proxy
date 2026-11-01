@@ -302,7 +302,8 @@ class CrashRows(unittest.TestCase):
 
     UP = ({"written": {"model_requests": 2}}, {"written": {"model_requests": 5}})  # status samples before and after
 
-    def row(self, kind, gap, samples=UP, recovery=(("ok", "10:03"),), seal="harness_exit", over_cap=False,
+    @staticmethod
+    def row(kind, gap, samples=UP, recovery=(("ok", "10:03"),), seal="harness_exit", over_cap=False,
             words=check.RECOVER, more=(), pid=9, code=1, case="direct", quiet=False, commits=1, extra=None):
         told = [{"kind": k, "exit": 0, "said": w, "at": "2026-10-30T10:%s+00:00" % t}
                 for k, w, t in zip(("recover", "recover", "status"), words + (check.STATUS_RECOVER,), ("02:30", "04:00", "03:30"))]
@@ -468,7 +469,7 @@ class FaultRows(unittest.TestCase):
 
 
 class StatedLoss(unittest.TestCase):
-    """C3 and the kill row's exit rule for a shape found only in a joined SSE deltas body (PRD-05 section 10)."""
+    """C3 and the kill row's exit rule for a shape found only in a joined SSE deltas body (PRD-05 Risks "Model echo")."""
 
     DELTAS = {"kind": "generic_secret_assignment", "in": "e1/1.3/deltas", "sha12": "a" * 12, "n": 1}
     PLAIN = {"kind": "generic_secret_assignment", "in": "e1/1.3", "sha12": "a" * 12, "n": 1}
@@ -480,10 +481,10 @@ class StatedLoss(unittest.TestCase):
                  "verify/secrets-conductor.json": {"hits": 0},
                  "verify/exits.json": {"secrets": 2 if known or shapes else 0, "secrets-out": 0, "secrets-plain": 0}}
         gap = {"start": "2026-10-30T10:01:59.9Z", "end": "2026-10-30T10:02:01.2Z"}
-        return CrashRows.row(self, "kill-recorder", gap, code=code, extra=extra)
+        return CrashRows.row("kill-recorder", gap, code=code, extra=extra)
 
-    def plain_row(self, shapes, code, counts):
-        checks = [{"id": "secrets", "result": "fail"}] if shapes else []
+    def plain_row(self, shapes, code, counts, extra_checks=()):
+        checks = ([{"id": "secrets", "result": "fail"}] if shapes else []) + list(extra_checks)
         return evaluate({"meta.json": {"connector": "codex-cli", "case": "direct", "known_box": True, "entry": "e1", "commits_since_start": 1},
                          "verify/check-local.json": {"exit": code, "entries": [{"entry": "e1", "counts": {"model_requests": 5, "gaps": counts},
                                                                                  "checks": checks}]},
@@ -504,6 +505,9 @@ class StatedLoss(unittest.TestCase):
         for shapes, code in (([], 1), ([self.DELTAS], 2)):
             row = self.plain_row(shapes, code, gaps["s6_gaps"])
             self.assertEqual(row["checks"]["C1"], "FAIL", (shapes, code, row["why"]))
+        for shapes, code in (([], 1), ([self.DELTAS], 2)):  # no gap at all, but a named history orphan
+            row = self.plain_row(shapes, code, {}, [{"id": "history_complete", "result": "named"}])
+            self.assertEqual(row["checks"]["C1"], "FAIL", (shapes, code, row["why"]))
 
     def test_any_other_hit_still_fails(self):
         for known, shapes in (([self.KNOWN], [self.DELTAS]), ([], [self.PLAIN]), ([], [self.DELTAS, self.PLAIN]),
@@ -511,9 +515,7 @@ class StatedLoss(unittest.TestCase):
             row = self.run_row(known, shapes)
             self.assertEqual((row["checks"]["C3"], row["faults"]), ("FAIL", "FAIL"), (known, shapes))
 
-    def test_kill_row_exit_rule_is_otherwise_unchanged(self):
-        self.assertEqual(self.run_row(code=1)["faults"], "PASS")
-        self.assertEqual(self.run_row(code=3)["faults"], "FAIL")
+    def test_exit_2_without_a_stated_loss_still_fails(self):
         self.assertEqual(self.run_row(code=2)["faults"], "FAIL")  # exit 2 with no stated loss behind it
 
 

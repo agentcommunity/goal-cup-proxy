@@ -162,7 +162,7 @@ def worst(entries, cid):
 
 class Run:
     def __init__(self, folder, meta):
-        self.folder, self.meta, self.why, self.loss = folder, meta, [], False  # loss: stated_loss() cached, False until read
+        self.folder, self.meta, self.why = folder, meta, []
         self.local = load(folder, "verify/check-local.json")
         new = load(folder, "verify/check-local-new.json")  # kill-both: the entry goalcup continue started (section 3.1)
         self.entries = [e for d in (self.local, new) for e in dig(d, "s6_entries") or [] if isinstance(e, dict)]
@@ -228,14 +228,9 @@ class Run:
         return {0: 0, 1: 0, 2: 1}.get(code) if isinstance(code, int) else None  # 1: incomplete, never a hit
 
     def stated_loss(self):
-        """Shape kinds and streams when every secret hit is a shape in a joined SSE deltas body (PRD-05 section 10: JSON
+        """Shape kinds and streams when every secret hit is a shape in a joined SSE deltas body (PRD-05 Risks "Model echo": JSON
         framing sits between the pieces, a stated loss), else None. A hit with no stream path, a known value, a big MASK or
         any other location is not this."""
-        if self.loss is False:
-            self.loss = self.read_loss()
-        return self.loss
-
-    def read_loss(self):
         doc = load(self.folder, "verify/secrets.json")
         shapes = doc.get("shape_hits") if isinstance(doc, dict) else None
         if not isinstance(shapes, list) or not shapes or any(count(doc.get(k)) for k in ("hits", "known_hits", "big_masks")):
@@ -244,9 +239,9 @@ class Run:
             return None
         return sorted({str(h.get("kind")) for h in shapes}), sorted({str(h["in"]) for h in shapes})
 
-    def loss_only(self):
-        """True when the stated loss is the verifier's only failed check."""
-        return bool(self.stated_loss()) and set(self.failed) <= {"secrets"}
+    def loss_exit(self, code):
+        """True when exit 2 comes from the stated loss alone, the verifier's only failed check."""
+        return code == 2 and bool(self.stated_loss()) and set(self.failed) <= {"secrets"}
 
     def masks(self):
         """MASK spans by rule kind from the record scan, or None when the report has none."""
@@ -362,10 +357,10 @@ def local(r, few):
     # never explains off time.
     off = any(dig(e, "s6_off") for e in r.entries)
     covered = r.check("history_complete") == "named" and 0 < unexpected <= orphans
-    stated = code == 2 and r.loss_only()  # exit 2 from the stated loss alone: the named gaps are still judged
+    stated = r.loss_exit(code)  # exit 2 from the stated loss alone: the named gaps are still judged
     explained = (code == 1 or stated) and named and (not off or "recorder_down" in allowed) and (covered or named <= allowed)
-    r.flag(r.meta.get("case") in ("direct", "gateway") and set(fault_kinds(r.meta)) <= set(CLEAN) and (not r.failed or r.loss_only())
-           and code != 0 and not explained and not (stated and not named),
+    r.flag(r.meta.get("case") in ("direct", "gateway") and set(fault_kinds(r.meta)) <= set(CLEAN) and (not r.failed or (r.stated_loss() and set(r.failed) <= {"secrets"}))
+           and code != 0 and not explained and not (stated and not named and not off and r.check("history_complete") != "named"),  # nothing else could give exit 1
            "C1", "FAIL", "verifier exit %s, the %s case expects 0 or only the GAPs %s" % (
                code, r.meta.get("case"), ", ".join(sorted(allowed))))
     own = sorted(i for i in r.failed if i not in ("secrets", "history_complete"))  # `secrets` is C3's, `history_complete` C1's
@@ -607,7 +602,7 @@ def recorder_kills(r, kinds):
             r.flag(long, "faults", "INCONCLUSIVE" if k in quiet else "FAIL",
                    ("quiet kill: gap of %s ms, length not shown" if k in quiet else "a recorder_down gap of %s ms, not under 2 s") % ms)
     code = dig(r.local, "s6_exit")
-    stated = code == 2 and r.loss_only()  # exit 2 from the stated loss alone, C3's INCONCLUSIVE
+    stated = r.loss_exit(code)  # C3's INCONCLUSIVE
     r.flag(kills and code != 1 and not stated, "faults", "FAIL", "verifier exit %s, a kill row expects 1" % dig(r.local, "s6_exit"))
 
 def near(gap, fault):
