@@ -423,6 +423,8 @@ Also not recorded, or recorded less:
   recorded and its session files are not.
 - **A model server on this computer** (Ollama, LM Studio) is reached past the proxy and not
   recorded. The status block names it.
+- **An HTTP/2 feature goalcup cannot follow** is passed on unharmed and named as a gap; the rest
+  of that connection is not read.
 - **HTTP/3, QUIC and ECH** never reach a proxy, and a network that re-signs TLS is not supported.
 - **A token used as the user name of a URL with no password** may be recorded.
 - **SQLite harnesses** keep their data in a database; it is copied once, at the seal.
