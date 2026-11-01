@@ -4,13 +4,17 @@
 //!
 //! Here: the control lines (S8) and the start facts (S17), [`run`] with the restart loop, null
 //! mode ([`Loop`], ledger R3a), the deadline and the server word, the terminal [`shield`], and
-//! what the watchdog binds, [`spawn`]s and ends. `recover` comes in the next slice.
+//! what the watchdog binds, [`spawn`]s and ends, and [`recover`] (section 8.1).
 
+mod recover;
 pub mod shield;
 pub mod spawn;
 
+pub(crate) use recover::run as run_recovered;
+pub use recover::{NotRecovered, Recovered, recover, recover_with};
+
 use crate::cli::log::{Fact, line};
-use crate::cli::{ServerJson, proc_start_id, read_json, server_json, status_json};
+use crate::cli::{self, ServerJson, proc_start_id, read_json, server_json, status_json};
 use crate::connector::{ConnectorRef, HostList, LaunchPlan, MaskRule, NativeSources};
 use crate::mask::SecretValue;
 use crate::pipeline::clock::{self, Mono};
@@ -313,8 +317,7 @@ pub fn run_with(mut plan: LaunchPlan, mut facts: StartFacts, recorder_exe: &Path
             return failed("recorder_spawn");
         }
     };
-    let mut boots = 1u64;
-    if let Err(code) = boot.wait_ready() {
+    if let Err(code) = boot.wait_ready(true) {
         remove_key(&rec);
         if code == Some(i32::from(MASK_REFUSED)) {
             return ExitCode::from(MASK_REFUSED);
@@ -335,21 +338,13 @@ pub fn run_with(mut plan: LaunchPlan, mut facts: StartFacts, recorder_exe: &Path
     }
     // A harness ended in raw mode would leave the participant's shell typing blind.
     let modes = shield::Modes::save(libc::STDIN_FILENO);
-    let harness = spawn::harness(&plan.program, &plan.argv, &plan.env, None);
     let mut shield = None;
-    let mut harness_pid = None;
-    let mut exit: Option<Option<ExitStatus>> = None;
-    match harness {
+    let harness_pid = match spawn::harness(&plan.program, &plan.argv, &plan.env, None) {
         Ok(child) => {
             let pid = child.id();
             shield = Shield::take().ok();
-            let zero = libc::rlimit {
-                rlim_cur: 0,
-                rlim_max: 0,
-            };
-            // SAFETY: `setrlimit` only reads the struct. After the spawn, so the harness keeps its
-            // own core limit.
-            unsafe { libc::setrlimit(libc::RLIMIT_CORE, &zero) };
+            // After the spawn, so the harness keeps its own core limit.
+            no_core();
             let launched = HarnessFacts {
                 pid,
                 program: plan.program.display().to_string(),
@@ -358,22 +353,49 @@ pub fn run_with(mut plan: LaunchPlan, mut facts: StartFacts, recorder_exe: &Path
             };
             boot.send(&ToRecorder::Launch(launched.clone()));
             facts.harness = Some(launched);
-            harness_pid = Some(pid);
+            Some(pid)
         }
         Err(e) => {
             line(&dir, "harness_failed", &[("io", Fact::Io(e.kind()))]);
-            exit = Some(None);
+            None
         }
-    }
-    let harness_start = facts.harness.as_ref().map_or(0, |h| h.start_id);
-    // Converted once to boot time; only a server word moves it (PRD-17 S7).
-    let wall_ms = clock::wall_ns() / 1_000_000;
-    let mut deadline = (facts.deadline).map(|d| due(Mono::now(), d.saturating_sub(wall_ms)));
-    let spare = {
-        let recorder_pid = Arc::clone(&recorder_pid);
-        move |pid: u32| pid == *lock(&recorder_pid)
     };
+    let own = Some((&plan, modes.as_ref()));
+    let start = (recorder_exe, &listener, &recorder_pid);
+    let exit = watch(boot, facts, own, start, harness_pid);
+    if let Some(shield) = shield.as_mut()
+        && !shield.harness_exited()
+    {
+        line(&dir, "shield_undrained", &[]);
+    }
+    drop(plan);
+    match exit.flatten() {
+        Some(status) => ExitCode::from(code_of(status)),
+        None => ExitCode::from(NOT_STARTED),
+    }
+}
 
+/// The watchdog loop (section 8 steps 8 to 11), one code path for [`run_with`] and [`recover`]:
+/// the restart loop and null mode (R3a), the control lines, the deadline, the server word,
+/// `goalcup seal`, and an unanswered `exit` or `seal` sent again after `ready`. `own`: the plan
+/// and terminal modes of a harness it started (`plan.after`, the tree end, `outlived`). With None
+/// (recover) the harness is watched by pid and start id each tick and never touched: on its exit
+/// `exit` (null) and `seal harness_exit`; at the deadline, on SIGUSR1 and on any server stop a
+/// seal with that reason, the harness left running. Returns how a harness of its own ended.
+fn watch(
+    mut boot: Boot,
+    mut facts: StartFacts,
+    own: Option<(&LaunchPlan, Option<&shield::Modes>)>,
+    (recorder_exe, listener, recorder_pid): (&Path, &TcpListener, &Arc<Mutex<u32>>),
+    mut harness_pid: Option<u32>,
+) -> Option<Option<ExitStatus>> {
+    let dir = facts.entry_dir.clone();
+    let mut boots = 1u64;
+    let mut exit: Option<Option<ExitStatus>> = harness_pid.is_none().then_some(None);
+    let harness_start = facts.harness.as_ref().map_or(0, |h| h.start_id);
+    let mut deadline = deadline_of(facts.deadline);
+    let spared = Arc::clone(recorder_pid);
+    let spare = move |pid: u32| pid == *lock(&spared);
     let mut ending: Option<JoinHandle<()>> = None;
     let mut after: Option<JoinHandle<()>> = None;
     let mut exit_line: Option<ToRecorder> = None;
@@ -403,21 +425,28 @@ pub fn run_with(mut plan: LaunchPlan, mut facts: StartFacts, recorder_exe: &Path
             Some(ToWatchdog::Ready) | None => {}
             Some(ToWatchdog::Sealed) => sealed = true,
             Some(ToWatchdog::Server(word)) => {
-                if let Some(s) = word.seconds_left {
-                    deadline = Some(due(word.asked_at, s.saturating_mul(1_000)));
+                if let Some(d) = moved(&word) {
+                    deadline = Some(d);
+                    // A recorder started after this gets the moved deadline on its first line.
+                    facts.deadline = Some(wall_of(d));
                 }
-                if word.stop && word.reason.as_deref() == Some("deadline") {
-                    deadline = Some(Mono(0));
-                } else if word.stop && seal.is_none() {
+                match stop_of(&word) {
+                    Some(SealReason::Deadline) => {
+                        deadline = Some(Mono(0));
+                        facts.deadline = Some(wall_of(Mono::now()));
+                    }
                     // Any other stop: seal at once and leave the harness alone (ledger section 7).
-                    let l = ToRecorder::Seal {
-                        reason: SealReason::ServerStop,
-                        outlived: None,
-                    };
-                    boot.send(&l);
-                    seal = Some(l);
-                    // A seal asked is tried at once: no space from before holds it.
-                    restarts.hold = None;
+                    Some(reason) if seal.is_none() => {
+                        let l = ToRecorder::Seal {
+                            reason,
+                            outlived: None,
+                        };
+                        boot.send(&l);
+                        seal = Some(l);
+                        // A seal asked is tried at once: no space from before holds it.
+                        restarts.hold = None;
+                    }
+                    _ => {}
                 }
             }
         }
@@ -429,17 +458,31 @@ pub fn run_with(mut plan: LaunchPlan, mut facts: StartFacts, recorder_exe: &Path
                 .map(|_| SealReason::Deadline)
         };
         if let Some(reason) = end
-            && ending.is_none()
             && let (Some(pid), Some(h)) = (harness_pid, &facts.harness)
         {
-            asked = Some(reason);
-            let (target, spare) = ((pid, h.start_id), spare.clone());
-            ending = Some(thread::spawn(move || spawn::end_tree(target, &spare)));
+            match own {
+                // Its own harness: the tree is ended once.
+                Some(_) if ending.is_none() => {
+                    asked = Some(reason);
+                    let (target, spare) = ((pid, h.start_id), spare.clone());
+                    ending = Some(thread::spawn(move || spawn::end_tree(target, &spare)));
+                }
+                // Recover: the first reason only, and the harness is left running.
+                None if asked.is_none() => asked = Some(reason),
+                _ => {}
+            }
         }
-        if let Some(status) = harness_pid.and_then(spawn::look) {
+        let gone = match own {
+            Some(_) => harness_pid.and_then(spawn::look),
+            // Recover: watched by pid and start id; its exit status is not ours to read.
+            None => harness_pid
+                .filter(|p| !cli::alive(*p, harness_start))
+                .map(|_| None),
+        };
+        if let Some(status) = gone {
             harness_pid = None;
             exit = Some(status);
-            if let Some(modes) = &modes {
+            if let Some((_, Some(modes))) = own {
                 let _ = modes.restore();
             }
         }
@@ -449,22 +492,33 @@ pub fn run_with(mut plan: LaunchPlan, mut facts: StartFacts, recorder_exe: &Path
             };
             boot.send(&l);
             exit_line = Some(l);
-            let (program, entries, env, dir) = (
-                plan.program.clone(),
-                plan.after.clone(),
-                plan.env.clone(),
-                dir.clone(),
-            );
-            after = Some(thread::spawn(move || {
-                spawn::helpers(&program, &entries, &env, spawn::BUDGET_NS, &dir, "after");
-            }));
+            // Recover runs no `after` helpers.
+            if let Some((plan, _)) = own {
+                let (program, entries, env, dir) = (
+                    plan.program.clone(),
+                    plan.after.clone(),
+                    plan.env.clone(),
+                    dir.clone(),
+                );
+                after = Some(thread::spawn(move || {
+                    spawn::helpers(&program, &entries, &env, spawn::BUDGET_NS, &dir, "after");
+                }));
+            }
         }
-        let helpers_done = after.as_ref().is_some_and(JoinHandle::is_finished)
-            && ending.as_ref().is_none_or(JoinHandle::is_finished);
-        if seal.is_none() && helpers_done {
+        let seal_due = match own {
+            Some(_) => {
+                exit_line.is_some()
+                    && after.as_ref().is_none_or(JoinHandle::is_finished)
+                    && ending.as_ref().is_none_or(JoinHandle::is_finished)
+            }
+            // Recover: no tree to end and no helper to wait for, so a reason seals at once.
+            None => exit_line.is_some() || asked.is_some(),
+        };
+        if seal.is_none() && seal_due {
             let l = ToRecorder::Seal {
                 reason: asked.unwrap_or(SealReason::HarnessExit),
-                outlived: spawn::outlived(harness_start, &spare),
+                // Recover: the harness is not its child, so no `outlived` list.
+                outlived: own.and_then(|_| spawn::outlived(harness_start, &spare)),
             };
             boot.send(&l);
             seal = Some(l);
@@ -501,7 +555,7 @@ pub fn run_with(mut plan: LaunchPlan, mut facts: StartFacts, recorder_exe: &Path
         // loop starts a null one (R3a). After the seal one runs too while the harness lives, so
         // its connections are always served (section 8 step 10): a boot on a sealed entry relays
         // and records nothing. Only a boot that died at boot spaces the next (`Restarts::space`).
-        let held = (restarts.hold).is_some_and(|h| Mono::now() < h);
+        let held = restarts.hold.is_some_and(|h| Mono::now() < h);
         if boot.ended && !held && (!(sealed || left) || harness_pid.is_some()) {
             // A null boot due when the wait is already over: the normal try takes its place.
             if next_null && restarts.wait_over() {
@@ -512,7 +566,7 @@ pub fn run_with(mut plan: LaunchPlan, mut facts: StartFacts, recorder_exe: &Path
             (restarts.hold, left) = (None, false);
             let mut failed = false;
             boot = loop {
-                match Boot::start(recorder_exe, &listener, &facts, &recorder_pid, next_null) {
+                match Boot::start(recorder_exe, listener, &facts, recorder_pid, next_null) {
                     Ok(next) => break next,
                     Err(e) => {
                         if !failed {
@@ -530,16 +584,7 @@ pub fn run_with(mut plan: LaunchPlan, mut facts: StartFacts, recorder_exe: &Path
     for h in [ending, after].into_iter().flatten() {
         let _ = h.join();
     }
-    if let Some(shield) = shield.as_mut()
-        && !shield.harness_exited()
-    {
-        line(&dir, "shield_undrained", &[]);
-    }
-    drop(plan);
-    match exit.flatten() {
-        Some(status) => ExitCode::from(code_of(status)),
-        None => ExitCode::from(NOT_STARTED),
-    }
+    exit
 }
 
 /// A lock that a panic elsewhere never poisons for good: the data are plain values.
@@ -613,20 +658,23 @@ impl Boot {
         }
     }
 
-    /// `ready` within 10 s of boot time, else the recorder's exit code (None when it gave none
-    /// and was ended).
-    fn wait_ready(&mut self) -> Result<(), Option<i32>> {
+    /// `ready` within 10 s of boot time, else the recorder's exit code (None when it gave none:
+    /// ended when `end`, else left running for the restart loop).
+    fn wait_ready(&mut self, end: bool) -> Result<(), Option<i32>> {
         let start = Mono::now();
         loop {
             if self.next() == Some(ToWatchdog::Ready) {
+                self.ready = true;
                 return Ok(());
             }
             if let Ok(Some(status)) = self.child.try_wait() {
                 return Err(status.code());
             }
             if Mono::now().0.saturating_sub(start.0) >= READY_NS {
-                let _ = self.child.kill();
-                let _ = self.child.wait();
+                if end {
+                    let _ = self.child.kill();
+                    let _ = self.child.wait();
+                }
                 return Err(None);
             }
         }
@@ -797,6 +845,34 @@ fn due(from: Mono, ms_left: u64) -> Mono {
     Mono(from.0.saturating_add(ms_left.saturating_mul(1_000_000)))
 }
 
+/// The start facts' wall deadline (unix ms) on boot time, converted once (PRD-17 S7): for the
+/// watchdog and the recorder alike.
+pub(crate) fn deadline_of(wall: Option<u64>) -> Option<Mono> {
+    let now_ms = clock::wall_ns() / 1_000_000;
+    wall.map(|d| due(Mono::now(), d.saturating_sub(now_ms)))
+}
+
+/// The inverse of [`deadline_of`]: a boot-time deadline as wall unix ms (now when it is past).
+fn wall_of(d: Mono) -> u64 {
+    let left_ms = d.0.saturating_sub(Mono::now().0) / 1_000_000;
+    (clock::wall_ns() / 1_000_000).saturating_add(left_ms)
+}
+
+/// The deadline a server word sets: `seconds_left` from when it was asked, on boot time.
+pub(crate) fn moved(w: &ServerWord) -> Option<Mono> {
+    w.seconds_left
+        .map(|s| due(w.asked_at, s.saturating_mul(1_000)))
+}
+
+/// What a server word asks (section 8 step 10): nothing while it says go on, `deadline` for a
+/// stop with that reason (the harness is ended), else `server_stop` (the harness is left).
+pub(crate) fn stop_of(w: &ServerWord) -> Option<SealReason> {
+    w.stop.then_some(match w.reason.as_deref() {
+        Some("deadline") => SealReason::Deadline,
+        _ => SealReason::ServerStop,
+    })
+}
+
 /// Reads the recorder's lines until the pair closes, then sends `None`. A line that does not
 /// parse (a variant this build does not know) is skipped.
 fn read_lines(stream: UnixStream, tx: &mpsc::Sender<Option<ToWatchdog>>) {
@@ -888,6 +964,16 @@ fn remove_key(rec: &Path) {
     let _ = fs::File::open(rec).and_then(|d| d.sync_all());
 }
 
+/// `RLIMIT_CORE` 0: no core file holds the CA key or the exact mask values.
+fn no_core() {
+    let zero = libc::rlimit {
+        rlim_cur: 0,
+        rlim_max: 0,
+    };
+    // SAFETY: `setrlimit` only reads the struct.
+    unsafe { libc::setrlimit(libc::RLIMIT_CORE, &zero) };
+}
+
 /// `PR_SET_DUMPABLE` 0 on Linux: the watchdog holds the CA key and the exact mask values.
 fn not_dumpable() {
     #[cfg(target_os = "linux")]
@@ -901,15 +987,7 @@ fn not_dumpable() {
 /// SIGUSR1 sets [`SEAL_ASKED`]. Caught, never ignored, so the harness gets the default back at
 /// `exec`.
 fn catch_seal() {
-    // SAFETY: a zeroed local struct, filled before `sigaction` reads it; the handler stores into
-    // a static atomic and nothing else.
-    unsafe {
-        let mut action: libc::sigaction = std::mem::zeroed();
-        action.sa_sigaction = ask_seal as *const () as libc::sighandler_t;
-        libc::sigemptyset(&mut action.sa_mask);
-        action.sa_flags = libc::SA_RESTART;
-        libc::sigaction(libc::SIGUSR1, &action, std::ptr::null_mut());
-    }
+    crate::pipeline::secure::catch(libc::SIGUSR1, ask_seal);
 }
 
 fn exit_of(status: ExitStatus) -> Exit {
@@ -947,6 +1025,9 @@ pub enum ToRecorder {
     },
     /// Null recorder only: exit 0 without sealing.
     Restart,
+    /// From `goalcup recover` only, as the first line: this process is the new watchdog
+    /// (section 8.1), fd 3 its listener and fd 4 where it reports `ready` with one byte.
+    Recover(Box<StartFacts>),
 }
 
 /// A line from the recorder to the watchdog.
@@ -970,6 +1051,30 @@ mod tests {
     use serde_json::to_value;
     use std::collections::BTreeMap;
     use std::time::SystemTime;
+
+    /// A server word: `stop` with reason `deadline` ends the harness, any other stop leaves it,
+    /// and `seconds_left` counts from when the word was asked (section 8 step 10, PRD-17 S7).
+    #[test]
+    fn a_server_word_is_read() {
+        let w = |stop, reason: Option<&str>, left| ServerWord {
+            stop,
+            reason: reason.map(str::to_string),
+            seconds_left: left,
+            asked_at: Mono(5 * SEC),
+        };
+        assert_eq!(stop_of(&w(false, Some("deadline"), None)), None);
+        assert_eq!(
+            stop_of(&w(true, Some("deadline"), None)),
+            Some(SealReason::Deadline)
+        );
+        assert_eq!(
+            stop_of(&w(true, Some("other"), None)),
+            Some(SealReason::ServerStop)
+        );
+        assert_eq!(stop_of(&w(true, None, None)), Some(SealReason::ServerStop));
+        assert_eq!(moved(&w(false, None, None)), None);
+        assert_eq!(moved(&w(false, None, Some(3))), Some(Mono(8 * SEC)));
+    }
 
     /// The first line carries the whole start facts. With the largest built-in connector's
     /// plan, a minted CA and 32 shaped fake values of 120 bytes it stays under the line limit,
@@ -1031,39 +1136,6 @@ mod tests {
             longest = longest.max(line.len() + 1);
         }
         assert!(longest <= MAX_LINE, "{longest}");
-    }
-
-    /// The `prev` shapes the `recorder_down` GAP tail is written from (PRD-02 section 8).
-    #[test]
-    fn prev_json_shapes() {
-        let cases = [
-            (Prev::Exit(Exit::Code(75)), r#"{"code":75}"#),
-            (Prev::Exit(Exit::Signal(9)), r#"{"signal":9}"#),
-            (
-                Prev::Cause(Cause::WatchdogLost),
-                r#"{"cause":"watchdog_lost"}"#,
-            ),
-            (
-                Prev::Cause(Cause::NullMode {
-                    exits: 3,
-                    last: Some(Exit::Code(70)),
-                }),
-                r#"{"cause":"null_mode","exits":3,"last":{"code":70}}"#,
-            ),
-            (
-                Prev::Cause(Cause::NullMode {
-                    exits: 3,
-                    last: None,
-                }),
-                r#"{"cause":"null_mode","exits":3}"#,
-            ),
-        ];
-        for (prev, json) in cases {
-            assert_eq!(serde_json::to_string(&prev).unwrap(), json);
-            assert_eq!(serde_json::from_str::<Prev>(json).unwrap(), prev);
-        }
-        // A `null_mode` cause always counts its exits.
-        assert!(serde_json::from_str::<Prev>(r#"{"cause":"null_mode"}"#).is_err());
     }
 
     /// Ledger R3a: a null boot's space never puts the normal try after the wait's end; with a

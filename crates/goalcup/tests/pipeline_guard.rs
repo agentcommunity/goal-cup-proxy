@@ -11,6 +11,7 @@ use common::recorder::{records, wait_settled};
 use common::{HANG, within};
 use goalcup::mask::Masker;
 use goalcup::pipeline::{EndReason, GapReason, OpenFlags, Recorder, StreamHandle, StreamKind};
+use goalcup::watchdog::SealReason;
 use goalcup_format::Record;
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
@@ -211,4 +212,184 @@ fn a_thousand_guard_episodes_never_latch() {
     let recs = records(dir.path());
     assert_eq!(check(&recs, &body, off as u64), vec![1000]);
     check_count(dir.path(), &recs, seq);
+}
+
+/// Section 3: the guard weighs what a piece costs (its queue slot as well as its bytes), so
+/// 1-byte pieces reach the guard, and its GAP, long before their bytes alone would.
+#[test]
+fn tiny_pieces_reach_the_guard_by_their_cost() {
+    // SAFETY: the test's first statement, before any thread is started.
+    unsafe {
+        std::env::set_var("GOALCUP_TEST_GUARD_MB", "1");
+        std::env::set_var("GOALCUP_TEST_WRITER_STALL", "0:5000");
+    }
+    let dir = common::recorder::entry_dir();
+    let rec = Recorder::real_for_tests(dir.path(), Masker::passthrough_for_tests());
+    let body = body();
+    let mut h = open(&rec);
+    let mut n = 0;
+    while rec.live().losing.dropped_bytes == 0 {
+        h.data(rec.now(), body.slice(n..n + 1));
+        n += 1;
+        assert!((n as u64) < MIB / 64, "the guard counts a piece's cost");
+    }
+    h.end(rec.now(), EndReason::Complete, None);
+    let seq = settle(&rec, 1);
+    let recs = records(dir.path());
+    assert_eq!(check(&recs, &body, n as u64), vec![1]);
+    check_count(dir.path(), &recs, seq);
+}
+
+/// Point 3 and no drop without a GAP: 16 relay threads dropping under a full guard while the
+/// wire stop lands. Every byte is in a guard GAP or in the seal's `after_stop` GAP, and the seal
+/// leaves no stream in a gap.
+#[test]
+fn a_drop_racing_the_stop_is_in_a_gap_or_after_stop() {
+    set_env(None);
+    static PIECE: [u8; 64] = [b'r'; 64];
+    for _ in 0..10 {
+        let dir = common::recorder::entry_dir();
+        let rec = Recorder::real_for_tests(dir.path(), Masker::passthrough_for_tests());
+        let full = rec.reserve(64 * MIB);
+        let mut handles: Vec<StreamHandle> = (0..16).map(|_| open(&rec)).collect();
+        std::thread::scope(|s| {
+            for h in handles.iter_mut() {
+                let rec = &rec;
+                s.spawn(move || {
+                    for _ in 0..2000 {
+                        h.data(rec.now(), Bytes::from_static(&PIECE));
+                    }
+                });
+            }
+            std::thread::yield_now();
+            rec.stop_wire_for_tests();
+        });
+        rec.seal_for_tests(dir.path(), SealReason::SealCommand);
+        drop((handles, full));
+        let lost: u64 = records(dir.path())
+            .iter()
+            .map(|r| match r {
+                Record::Gap { lost, .. } => lost.saturating_sub(1),
+                Record::Data { sid, .. } if *sid != 0 => panic!("no piece fits a full guard"),
+                _ => 0,
+            })
+            .sum();
+        assert_eq!(lost, 16 * 2000 * 64);
+        assert_eq!(rec.live().losing.streams_in_gap, 0);
+    }
+}
+
+/// Each record of stream `sid`, in order: (kind, reason or end reason, lost - 1 or seen).
+fn of(recs: &[Record], sid: u64) -> Vec<(&'static str, String, u64)> {
+    recs.iter()
+        .filter_map(|r| match r {
+            Record::Data { sid: s, bytes, .. } if *s == sid => {
+                Some(("data", String::new(), bytes.len() as u64))
+            }
+            Record::Gap {
+                sid: s,
+                reason,
+                lost,
+                ..
+            } if *s == sid => Some(("gap", format!("{reason:?}"), lost.saturating_sub(1))),
+            Record::End {
+                sid: s,
+                reason,
+                seen,
+                ..
+            } if *s == sid => Some(("end", format!("{reason:?}"), *seen)),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Point 1, no drop: a native piece and an empty WebSocket `fin` piece are admitted under a full
+/// guard, so no session-file byte and no message end is lost.
+#[test]
+fn native_and_empty_pieces_never_drop() {
+    set_env(None);
+    let dir = common::recorder::entry_dir();
+    let rec = Recorder::real_for_tests(dir.path(), Masker::passthrough_for_tests());
+    let full = rec.reserve(64 * MIB);
+    let flags = OpenFlags::NONE;
+    let mut native = rec.open(StreamKind::Native, 0, 0, 0, flags, json!({}));
+    let mut up = rec.open(StreamKind::WsUp, 0, 0, 0, flags, json!({}));
+    native.data(rec.now(), Bytes::from(vec![b'n'; 1000]));
+    up.ws(rec.now(), 0x1, true, Bytes::new());
+    assert_eq!(rec.live().losing.dropped_bytes, 0);
+    drop(full);
+    let sids = (native.sid(), up.sid());
+    native.end(rec.now(), EndReason::Complete, None);
+    up.end(rec.now(), EndReason::Complete, None);
+    rec.seal_for_tests(dir.path(), SealReason::SealCommand);
+    let recs = records(dir.path());
+    let (n, u) = (of(&recs, sids.0), of(&recs, sids.1));
+    assert!(n.iter().chain(&u).all(|r| r.0 != "gap"), "{n:?} {u:?}");
+    assert_eq!(n[0], ("data", String::new(), 1000), "{n:?}");
+    assert_eq!(u[0], ("data", String::new(), 0), "{u:?}");
+}
+
+/// No drop without a GAP: loss from before the seal's wire stop still gets its GAP, both a guard
+/// gap its handle closes after the stop and a caller's own gap reported after it.
+#[test]
+fn loss_before_the_wire_stop_keeps_its_gap() {
+    set_env(None);
+    let dir = common::recorder::entry_dir();
+    let rec = Recorder::real_for_tests(dir.path(), Masker::passthrough_for_tests());
+    let full = rec.reserve(64 * MIB);
+    let mut a = rec.open(StreamKind::HttpResp, 0, 0, 0, OpenFlags::NONE, json!({}));
+    let mut b = rec.open(StreamKind::Conn, 0, 0, 0, OpenFlags::NONE, json!({}));
+    a.data(rec.now(), Bytes::from(vec![b'a'; 1000]));
+    let start = rec.now();
+    rec.stop_wire_for_tests();
+    a.data(rec.now(), Bytes::from(vec![b'a'; 50]));
+    b.gap(GapReason::DecodeFailed, start, Some(500), None);
+    let sids = (a.sid(), b.sid());
+    a.end(rec.now(), EndReason::Complete, None);
+    drop((b, full));
+    rec.seal_for_tests(dir.path(), SealReason::SealCommand);
+    let recs = records(dir.path());
+    let (a, b) = (of(&recs, sids.0), of(&recs, sids.1));
+    let guard = a
+        .iter()
+        .any(|r| r.0 == "gap" && r.1 == "MemoryGuard" && r.2 >= 1000);
+    assert!(guard, "{a:?}");
+    assert!(b.contains(&("gap", "DecodeFailed".into(), 500)), "{b:?}");
+}
+
+/// No drop without a GAP: a guard gap still open at `end()`, or at a drop with no `end()`, is
+/// written before the END (the dropped handle's END `interrupted`).
+#[test]
+fn end_and_drop_send_the_open_gap_first() {
+    set_env(None);
+    let dir = common::recorder::entry_dir();
+    let rec = Recorder::real_for_tests(dir.path(), Masker::passthrough_for_tests());
+    let full = rec.reserve(64 * MIB);
+    let mut h = open(&rec);
+    for _ in 0..3 {
+        h.data(rec.now(), Bytes::from(vec![b'y'; 1000]));
+    }
+    let mut d = rec.open(StreamKind::HttpResp, 0, 0, 0, OpenFlags::NONE, json!({}));
+    d.data(rec.now(), Bytes::from(vec![b'z'; 10]));
+    let sids = (h.sid(), d.sid());
+    h.end(rec.now(), EndReason::Complete, None);
+    drop((d, full));
+    rec.seal_for_tests(dir.path(), SealReason::SealCommand);
+    let recs = records(dir.path());
+    let h = of(&recs, sids.0);
+    assert_eq!(
+        h,
+        [
+            ("gap", "MemoryGuard".into(), 3000),
+            ("end", "Complete".into(), 3000)
+        ]
+    );
+    let d = of(&recs, sids.1);
+    assert_eq!(
+        d,
+        [
+            ("gap", "MemoryGuard".into(), 10),
+            ("end", "Interrupted".into(), 10)
+        ]
+    );
 }

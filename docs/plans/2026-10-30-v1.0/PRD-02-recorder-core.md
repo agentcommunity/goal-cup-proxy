@@ -1647,3 +1647,26 @@ to PRD-06 slice 7 once `dead.rs` is on integration. No locked ledger item is tou
 ### 2026-11-01, note from PRD-17 slice 7 (merge 888cd0b1)
 
 The PRD-17 deletion gate (PRD-13) waits on tests that this PRD is asked to land and are not yet on integration: watchdog_restart.rs (L-C12, L-P1, L-P2: an unchanged port and a decrypted connection served across a real recorder kill, verifying against run-ca.pem, no 127.0.0.1 assertion) and pipeline_stall.rs (L-R2: two hundred streams with the writer held, stall without loss). Their LESSONS.md rows stay open until the named tests exist and pass in a box. The names are those in LESSONS.md; if a different name fits better, say so in a replan note so the row can be repointed. No locked ledger item is touched.
+
+### 2026-11-01, from the PRD-02 slice C part 1 fix round
+
+- **Ownership:** `crates/goalcup/tests/watchdog_share/` (the watchdog tests' shared TLS connect,
+  exchange, loopback and wait helpers) is PRD-02's, under its `tests/watchdog_*.rs` row (review X R3),
+  the same shape as `tests/cli_common/` and `tests/native_common/`. A folder module does not build as
+  its own test binary, and `tests/common/` stays PRD-14's. The PRD-00 replan reads the PRD-02 row as
+  `tests/watchdog_*`.
+- **Recover's first boot (review X R1):** a recorder that gives no `ready` within the 10 s wait is not
+  ended under `goalcup recover`. The new watchdog writes report byte 2 (late) for a boot that is slow
+  or ended at boot, and still watches it, so the restart loop and null mode (R3a) take over, as for
+  any boot after a kill. Recover then returns `Ok(Recovered { port, late: true })`: the watchdog runs
+  and the recorder comes back through the restart loop or null mode, which PRD-10 words apart from
+  plain success. Byte 1 is `late: false`. Byte 0, no byte, or the watchdog gone before it reported is
+  `NotRecovered::NotStarted` (renamed from `NoReady`): nothing runs. The full set is `Sealed`,
+  `WatchdogAlive`, `RecordingOn`, `HarnessGone`, `KeyMissing`, `PortTaken`, `NotStarted`. The
+  caller's report wait is the ready wait plus 2 s; past it, a watchdog whose pid file names a live
+  process counts as late. A watchdog that could not write its pid file (it logs
+  `watchdog_pid_failed` and records on) and is also slow to report reads as `NotStarted` while it
+  records; this is accepted as rare (the pid file is the first write into `rec/`).
+- Still owed in slice C part 2: the exit-74 L-FW2 case, native cursor resume after a kill, a server
+  stop after the watchdog's EOF, `pipeline_stall.rs`, `by_hand_load`, the mask pool decision and
+  `SnapshotCursor.fid` with PRD-04.
