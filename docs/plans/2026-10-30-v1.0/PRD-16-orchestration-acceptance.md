@@ -2579,3 +2579,8 @@ kept and now cites BUILD-PROMPT section 5, since B3 no longer carries it.
 - **Size report, PRD-08** (`wc -l` on integration): `crates/goalcup-verify/src` 7,136 lines (of which `src/usage/` 2,944, owned by PRD-09 apart from the Gemini hunks) against the PRD-00 "Size budget" row 1,400; tests `crates/goalcup-verify/tests` 5,207 against 1,100. This slice added about 82 source and 192 test lines; the overage comes from earlier slices. Reported, not cut; carry to the end-of-build report.
 - **Review:** one nit (N1), the unique-match filter in the `hit` closure of `usage/native.rs` could be a plain `find`. Taste only, not a defect, left as is.
 - **Gate effect:** none on order or seams. Gemini thread links now come from the chat file path layout, with the wire-thread fallback when the file carries no id. No locked ledger item is touched.
+
+### 2026-11-01, replan after PRD-12 sweep 2 fixes (merge 98873c1d)
+
+- **Size report, PRD-12** (wc -l on integration, scripts/pad without fixtures): Python and extensionless scripts 4,473 lines (check.py 830, pad 949, pad-run 1,132, table 197, selftest 188, tests 1,123), plus 832 lines of harness toml, shell and config data. PRD-00 "Size budget" row: about 1,350 to 1,450 with tests. This slice added 54 and removed 10. The overage is carried from earlier slices and was accepted at the slice 15 report (R3, no concrete cut); reported, not cut; carry to the end-of-build report.
+- **Gate effect:** none on order or seams. The pad still ends at selftest exit 3 (PRD-08 fixture gap); Crush and Cline rows report exit 3 "not verified", which Phase 2 exit must not read as a pass. No locked ledger item is touched.

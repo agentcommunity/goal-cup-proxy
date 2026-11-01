@@ -1990,3 +1990,10 @@ taken; "rejected" says why. Fixes for other files are made by those files' owner
 - **Pad.** A harness file may carry `not_verified = "<reason>"`: the pad prints `<harness>: not verified: <reason>`, runs nothing and exits 3 (same as the no-key rows).
 - **Not in this slice.** The two check.py rules once planned here (C3 shape-only hits counted as masked upstream; C1 `history_complete` `warn` as a pass) are not shipped. check.py is unchanged; a known-value hit is never relaxed.
 - No locked ledger item is touched.
+
+### 2026-11-01, replan after sweep 2 fixes (merge 98873c1d)
+
+- **Slice is in** (Hermes ready text and direct config, Crush and Cline marked not verified with a stated reason, Kimi comment, table shows the reason over old rows). 54 lines added, 10 removed. The two check.py rules once planned (C3 upstream mask, history_complete warn) did not ship; check.py is unchanged and a known-value hit is never relaxed. Nothing in this PRD needs rewriting.
+- **Open nits, none a blocker.** B3-1: test_table_shows_the_reason_over_old_rows in test_pad.py asserts the start of the Crush reason text, a wording assert on harness data (ledger B10). A later pad slice should assert that the tier is neither "not yet run on the pad" nor a failing-check reason, or compare it to the not_verified string read from the toml. B3-2: the not_supported and not_verified blocks in scripts/pad/table are near-duplicates and harness_lines(cid) is read three times in tier_for; one loop over (key, tier) pairs is smaller. Earlier nits (A10, A12, B10, B12, SecretCheck docstring) still stand.
+- **Open rows.** Crush needs a crushrc permission data file, Cline needs a provider config route; both stay "not verified" until a vendor page shows one. Neither is a build blocker.
+- No locked ledger item is touched.
