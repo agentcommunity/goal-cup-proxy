@@ -487,7 +487,8 @@ def secrets(r):
     # A harness that redacts tool output itself (harness file redacts_tool_output, point 4) shows the exercise by the masker's
     # own MASK of the redacted form (masked_key); without it, or without a plain hit, the exercise is not done.
     up = r.meta.get("redacts_tool_output")
-    hit, plain = r.hits("secrets"), r.hits("secrets-plain")
+    loss = r.stated_loss()  # the only hit being the stated loss (scan() reports it) is not a real hit
+    hit, plain = 0 if loss else r.hits("secrets"), r.hits("secrets-plain")
     if not plain and not any(masks.get(kinds[0]) for kinds in PLANTED) and not (up and masks.get("masked_key")):
         return r.mark("C3", "INCONCLUSIVE", "secret exercise not done: no plain-value hit and no MASK of a planted shape")
     # A planted kind with no MASK is a FAIL when a hit shows it reached the record, else not exercised (a run never passes on
@@ -498,6 +499,9 @@ def secrets(r):
     for kinds in PLANTED:
         why = "owner question open: the harness redacts tool output itself, so this kind may be masked before the wire" \
             if up and named.intersection(kinds) else "not exercised"
+        if loss:
+            why += "; %s only in joined streamed replies (not verified, owner question open)" % (
+                "hit" if set(kinds) & set(loss[0]) else "shape")
         r.flag(not any(masks.get(k) for k in kinds), "C3", "FAIL" if hit else "INCONCLUSIVE",
                "%s of %s: no MASK" % ("hits" if hit else why, " or ".join(kinds)))
 

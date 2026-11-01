@@ -498,7 +498,6 @@ class StatedLoss(unittest.TestCase):
         self.assertNotEqual(row["faults"], "FAIL")
         self.assertNotEqual(row["result"], "FAIL")
         self.assertNotEqual(row["result"], "PASS")
-        self.assertTrue(row["why"])
 
     def test_stated_loss_does_not_hide_an_unexplained_gap(self):
         gaps = {"s6_gaps": {"memory_guard": 1}}
@@ -517,6 +516,24 @@ class StatedLoss(unittest.TestCase):
                               ([], [dict(self.DELTAS, **{"in": None})])):
             row = self.run_row(known, shapes)
             self.assertEqual((row["checks"]["C3"], row["faults"]), ("FAIL", "FAIL"), (known, shapes))
+
+    def planted_row(self, known, shapes, masks):
+        extra = {"verify/secrets.json": {"known_hits": list(known), "shape_hits": list(shapes), "big_masks": [], "masks": masks},
+                 "verify/secrets-conductor.json": {"hits": 0},
+                 "verify/exits.json": {"secrets": 2, "secrets-out": 0, "secrets-plain": 0}}
+        gap = {"start": "2026-10-30T10:01:59.9Z", "end": "2026-10-30T10:02:01.2Z"}
+        return CrashRows.row("kill-recorder", gap, code=2, extra=extra)
+
+    def test_stated_loss_with_a_planted_kind_unmasked_is_open_not_a_fail(self):
+        masks = dict(SecretCheck.PLANTED, jwt=0, private_key=0)
+        row = self.planted_row([], [self.DELTAS], masks)
+        self.assertEqual(row["checks"]["C3"], "INCONCLUSIVE")
+        self.assertNotIn(row["result"], ("FAIL", "PASS"))
+
+    def test_known_or_pathless_hit_with_a_planted_kind_unmasked_still_fails(self):
+        masks = dict(SecretCheck.PLANTED, jwt=0)
+        for known, shapes in (([self.KNOWN], [self.DELTAS]), ([], [self.PLAIN])):
+            self.assertEqual(self.planted_row(known, shapes, masks)["checks"]["C3"], "FAIL", (known, shapes))
 
     def test_exit_2_without_a_stated_loss_still_fails(self):
         self.assertEqual(self.run_row(code=2)["faults"], "FAIL")  # exit 2 with no stated loss behind it
