@@ -225,7 +225,7 @@ all of `crates/`). Each pattern must print nothing:
 
 | Concept cut | Pattern |
 |---|---|
-| Separate daemon and its IPC | `goalcup-daemon`, `IngestListener`, `DaemonClient`; `epoch` under `src/proxy/` only |
+| Separate daemon and its IPC | `goalcup-daemon`, `IngestListener`, `DaemonClient`; `epoch` under `src/proxy/` only, except the certificate date base in `proxy/ca.rs` (`rcgen::date_time_ymd(1970, 1, 1)` and the two lines adding to it), which is a false match |
 | Our own caps | `MAX_OPEN_STREAMS`, `MAX_OPEN_CONNECTIONS`, `MAX_LIVE_PRODUCERS`, `MAX_PRODUCERS`, `MAX_CONNECTION_FAILURES`, `MAX_CONNECTION_TASKS`, `MAX_RECORDER_RESTARTS`, `MAX_TUNNEL_NOTES`, `MAX_CAPTURE_QUEUE_BYTES`, `CHAIN_QUOTA_BYTES`, `MAX_GIT_LIVE_HANDLES`, `MAX_GOAL_STREAMS`, `max_files`, `max_dir_entries` |
 | Disk handling | `AgentPause`, `DiskPolicy`, `ReserveFile`, `reserve_path`, `disk_free`, `agent_paused` |
 | Signing | `ed25519`, `receipt`, `acks.jsonl` |
@@ -777,3 +777,41 @@ Nothing else in the cut list changes. No locked ledger item is touched.
   commit that touches those crates and scripts; do not recreate the template to satisfy them. The fast
   gate does not run them, so nothing else turns red before then.
 - No locked ledger item is touched.
+
+### 2026-11-01, after the phase 3 merge (integration d7759fdc)
+
+The cut merged at d7759fdc (branch head 3c2ea690). Review found the merge left these open. None of
+them breaks a point: every copy destination is on integration, gate fast passes over them, and the old
+code stays at tag `v0.7.0`. Each stays open until its owner closes it.
+
+- **Preconditions not met at merge.** Section 2 rule 2 and builder notes step 3 ask for a "copied,
+  tests green" night-log line from every receiving owner in section 4, and a passing PRD-12 `selftest`
+  for the five test kits. At merge no receiving owner had written that line, and `selftest` still exits
+  3 (K6b and K11d not run, PRD-12's fixtures). The integrator closes this: either the owners' lines and
+  a `selftest` pass, or an owner decision waiving them, in the night log. PRD-13 cannot write either.
+- **Owed by other owners in the phase 3 merge (section 5).** PRD-16: drop the `exclude` block in
+  `Cargo.toml` and the workspace dependencies no kept crate uses (`ed25519-dalek`, `redb`, `axum`,
+  `rand`), and reword the comments that name deleted files; check with `cargo tree`. PRD-14: delete
+  `scripts/check-links.py` and `scripts/test_check_links.py` after PRD-15's last link run.
+- **Guard hits outside PRD-13 files.** Reference guard: provenance comments not in the
+  `copied from v0.7.0:<path>` form in `crates/goalcup/src/proxy/ca.rs:18-19` (PRD-03),
+  `mask/rules.rs:5`, `mask/stream.rs:4`, `mask/values.rs:5` (PRD-05; the first two are also the only
+  no-return guard hits), `cli/awake.rs:1`, `cli/folder.rs:96` (PRD-10), and
+  `crates/goalcup-verify/tests/usage_fixtures/*/provenance.json` (PRD-09). Each owner rewords to the
+  `v0.7.0:` form. The `epoch` hit at `proxy/ca.rs:300-302` is the certificate date base; section 6 now
+  excludes it.
+- **Stale mentions of deleted paths in kept files (other owners).** `.gitignore:3`
+  `!harnesses/install.sh` (rule 6 lets PRD-13 touch only the spikes lines, and PRD-00 names no
+  owner for this one; PRD-16 assigns it), `NOTICE:11`, `AGENTS.md:73`, `skills/adding-a-capture-harness/SKILL.md:20`,
+  `.github/ISSUE_TEMPLATE/harness_request.yml:8`, `docs/LOCAL-RESEARCH-HANDOFF.md` (PRD-15, PRD-14),
+  and the `scripts/pad/pad:28, 216, 228` comments citing `scripts/matrix.sh` (PRD-12: write them as
+  `v0.7.0:scripts/matrix.sh:...`).
+- **Acceptance not yet run on the post-cut commit.** Only gate fast ran (green). `gate full`,
+  acceptance 1 (Codex direct-key smoke row) and acceptances 2 to 5 (ps check, kill test, fetch-run
+  SHA-256 equality, release tarball smoke) are still to run, by a watcher. A box that re-runs gate fast
+  needs `npm ci --prefix server/worker` first.
+- **Size.** The recount (Rust src 39,908, Rust tests 30,801, Worker 3,566 and 5,380) is past the
+  PRD-00 budget plus 10% in the new crates, not in the cut. The replan names the point the extra lines
+  serve, or cuts them.
+
+No locked ledger item is touched.
