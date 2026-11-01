@@ -354,7 +354,7 @@ class Run:
         self.pane()
         return "ok", "device code shown"
 
-    def pane_end(self):
+    def pane_exit(self):
         """The tmux pane's end as (dead, status text): goalcup start has exited and the pane is left (remain-on-exit)."""
         f = sh(["tmux", "display-message", "-p", "-t", self.tmux, "#{pane_dead} #{pane_dead_status}"]).stdout.split()
         return f[:1] == ["1"], (f[1] if f[1:] else "")
@@ -363,12 +363,12 @@ class Run:
         """The first match of `pattern` on the screen within the step's limit; else the step ends INCONCLUSIVE. A pane
         that has died ends the wait at once (one more look at the screen first: a fast successful exit still matches)."""
         def look():
-            return re.search(pattern, self.capture(True)) or (self.pane_end()[0] and "dead")  # scrollback
+            return re.search(pattern, self.capture(True)) or (self.pane_exit()[0] and "dead")  # scrollback
         got = wait(look, self.left(), 3)
         if got == "dead":
             got = re.search(pattern, self.capture(True))
         if not got:
-            is_dead, status = self.pane_end()
+            is_dead, status = self.pane_exit()
             self.refusal()
             screen = self.pane()
             if is_dead:
@@ -484,15 +484,15 @@ class Run:
     def sealed(self):
         return pc.dig(self.status(), "s4_mode") == "sealed"
 
-    def pane_end(self):  # the harness pane is gone, or there never was one
+    def dead(self):  # the harness pane is gone, or there never was one
         return not shutil.which("tmux") or sh(["tmux", "list-panes", "-t", self.tmux, "-F", "#{pane_dead}"]).stdout.strip() != "0"
 
     def seal(self, _):
         self.need("goalcup", started=True)
-        wait(lambda: self.sealed() or self.pane_end(), self.st["pasted"] + float(self.s["minutes"]) * 60 - time.time(), 5)
+        wait(lambda: self.sealed() or self.dead(), self.st["pasted"] + float(self.s["minutes"]) * 60 - time.time(), 5)
         out = ""
         capped = any(f.get("kind") == "seal-now" and f.get("exit") in (0, "timeout") for f in pc.load(self.run, "watch/faults.jsonl", 1))
-        why = "at the spend cap" if capped else "at the harness's exit" if self.sealed() or self.pane_end() else "at %s min" % self.s["minutes"]
+        why = "at the spend cap" if capped else "at the harness's exit" if self.sealed() or self.dead() else "at %s min" % self.s["minutes"]
         if not self.sealed() and self.has("kill-watchdog", "kill-watchdog-recover"):
             self.exit_harness()  # section 3.1: those rows end by the harness's exit, never goalcup seal
         elif not self.sealed():
@@ -511,12 +511,12 @@ class Run:
         found = re.findall(r"([\d,]+) model requests? written", screen)
         self.st["end_screen_requests"] = int(found[-1].replace(",", "")) if found else 0 if re.search(r"No model request was written\.", screen) else None
         self.harness_files()
-        self.wipe_secrets(home=ok or self.pane_end())  # an unsealed entry may still be reading the home: wipe leaves it
+        self.wipe_secrets(home=ok or self.dead())  # an unsealed entry may still be reading the home: wipe leaves it
         return ("ok", "sealed %s, %s model requests written" % (why, pc.dig(self.status(), "s4_requests"))
                 ) if ok else ("timeout", "%s, not sealed within the step's limit after goalcup seal" % why)
 
     def exit_harness(self):  # the harness file's exit_keys (printf format); after 30 s SIGTERM to harness.pid if it lives
-        if not self.pane_end():
+        if not self.dead():
             sh(["tmux", "send-keys", "-t", self.tmux, "-l", str(self.h.get("exit_keys", "")).encode().decode("unicode_escape")])
             self.fault("exit-keys")
         pid = pc.dig(self.status(), "s4_harness_pid")  # S4 gives the harness no start id: a reused pid is not ruled out
@@ -797,7 +797,7 @@ class Run:
         self.need("goalcup", started=True)
         idle, last, since = float(self.s.get("keep_going", 1)) * 60, None, time.time()
         while time.time() < self.st["pasted"] + float(self.s["minutes"]) * 60:
-            if self.pane_end():
+            if self.dead():
                 raise Step("skip", "harness exited")
             if (now := (self.pane(False), pc.dig(self.status(), "s4_requests"))) != last:
                 last, since = now, time.time()
@@ -947,7 +947,7 @@ class Run:
             result = ("ok", "exits " + ", ".join("%s %s" % kv for kv in exits.items()) + note)
         write(self.path("verify", "exits.json"), json.dumps(exits), 0o644)  # the exits of whatever ran
         # The known files go after the scan; the home only once nothing reads it (else the wipe step takes it).
-        self.wipe_secrets(known=True, home=self.sealed() or self.pane_end())
+        self.wipe_secrets(known=True, home=self.sealed() or self.dead())
         with tarfile.open(self.path("out.tar"), "w") as t:
             for name in OUT:
                 if os.path.exists(self.path(name)):
