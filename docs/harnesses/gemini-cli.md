@@ -68,7 +68,7 @@ The connector sets `GEMINI_CLI_HOME` to the isolated home, so every `~/.gemini` 
 
 ## Run without permission prompts
 
-The connector has no `no_prompts` row. The docs pages read name no settings key for it; the package has the flag `--approval-mode yolo`, which goalcup does not pass. The participant answers the prompts Gemini shows. Whether a settings key for it exists: unknown.
+The connector has no `no_prompts` row, on purpose. The only documented way to run without approvals is the launch flag `--approval-mode yolo` (or `--yolo`). The `general.defaultApprovalMode` settings key exists, but the 0.66.0 package ignores the value `yolo` there: its startup code takes the settings value only when it is not `yolo` (package, 0.66.0; the vendor configuration page could not be fetched in this pass). `security.disableYoloMode`, and an untrusted folder, also turn yolo off. So a settings row cannot do it, and goalcup passes no flag. The participant, or the pad rig, answers the Shell approval until the owner decides on a setup-added launch switch (open owner question, with the Crush and OpenCode ones). Sweep 2 saw the subagent stop at "Allow execution of [Shell]" even with yolo on.
 
 ## Pad result
 
