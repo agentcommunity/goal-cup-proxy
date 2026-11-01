@@ -206,8 +206,17 @@ impl Wire {
                 let listed = !m.get("listed").is_none_or(Value::is_null)
                     || s("kind").is_some()
                     || found.is_some();
-                let tunnel = (s("mode") == Some("tunnel")).then(|| s("reason").unwrap_or("unknown").to_string());
-                self.conns.insert(k, Conn { host, kind, listed, tunnel });
+                let tunnel = (s("mode") == Some("tunnel"))
+                    .then(|| s("reason").unwrap_or("unknown").to_string());
+                self.conns.insert(
+                    k,
+                    Conn {
+                        host,
+                        kind,
+                        listed,
+                        tunnel,
+                    },
+                );
             }
             StreamKind::HttpReq if s("method") == Some("POST") => {
                 let path = s("path").unwrap_or("").split('?').next().unwrap_or("");

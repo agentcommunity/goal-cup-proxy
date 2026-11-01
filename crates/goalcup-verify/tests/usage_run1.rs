@@ -479,8 +479,18 @@ fn a_tunnelled_listed_host_is_named_not_on_the_wire() {
             "kind": if listed.is_null() { Value::Null } else { json!("provider") },
             "reason": "pinned", "alpn": null, "tls": null, "fingerprint": "0123456789abcdef"})
     };
-    e.open(StreamKind::Conn, 0, 0, tunnel("pinned.example.test", json!("shared")));
-    e.open(StreamKind::Conn, 0, 0, tunnel("other.example.test", Value::Null));
+    e.open(
+        StreamKind::Conn,
+        0,
+        0,
+        tunnel("pinned.example.test", json!("shared")),
+    );
+    e.open(
+        StreamKind::Conn,
+        0,
+        0,
+        tunnel("other.example.test", Value::Null),
+    );
     let ran = run_usage(&e.seal());
     let sum = json(&ran.sum);
     let named = sum["not_on_wire"].as_array().unwrap();
