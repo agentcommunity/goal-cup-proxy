@@ -302,7 +302,7 @@ class CrashRows(unittest.TestCase):
                  "watch/faults.jsonl": told + kills + rec + list(more)}
         return evaluate(files)
 
-    GAP = {"start": "2026-10-30T10:01:58.8Z", "end": "2026-10-30T10:02:01.2Z"}  # the kill is at 10:02:00
+    GAP = {"start": "2026-10-30T10:01:59.9Z", "end": "2026-10-30T10:02:01.2Z"}  # the kill is at 10:02:00
 
     def test_kill_recorder(self):
         gap = self.GAP
@@ -313,19 +313,20 @@ class CrashRows(unittest.TestCase):
                     {"samples": self.UP[:1] * 2}):  # no model request written after the kill
             self.assertEqual(self.row("kill-recorder", **dict({"gap": gap}, **bad))["result"], "FAIL", bad)
 
-    def test_gap_is_timed_by_its_end_not_its_length(self):  # PRD-02 R1: the gap starts at the last chain link
-        for start, end, fails in (("10:01:00", "10:02:01.2", False), ("10:01:58.8", "10:02:02.5", True),
-                                  ("10:01:58.8", "10:02:03", True), ("10:01:00", "10:01:59", True)):
-            gap = {"start": "2026-10-30T%sZ" % start, "end": "2026-10-30T%sZ" % end}
-            self.assertEqual(self.row("kill-recorder", gap)["result"] == "FAIL", fails, (start, end))
+    def test_gap_is_under_2s_and_ends_within_2s_of_the_kill(self):  # PRD-02 R1, PRD-12 section 3.1; a quiet kill times only the end
+        def gap(start, end):
+            return {"start": "2026-10-30T%sZ" % start, "end": "2026-10-30T%sZ" % end}
+        for start, end, quiet, fails in (("10:01:59", "10:02:01.2", False, False), ("10:01:00", "10:02:01.2", False, True),
+                                         ("10:01:00", "10:02:01.2", True, False), ("10:01:59", "10:02:02.5", False, True),
+                                         ("10:01:59", "10:02:02.5", True, True), ("10:01:00", "10:01:59", True, True)):
+            self.assertEqual(self.row("kill-recorder", gap(start, end), quiet=quiet)["result"] == "FAIL", fails, (start, end, quiet))
 
     def test_dodger_progress_is_tunnel_connections(self):
         def tun(n):
             return {"written": {"model_requests": 0, "tunnel_hosts": {"api.example": {"conns": n}}}}
-        for samples, kw, fails, clean in (((tun(1), tun(4)), {}, False, True), ((tun(2), tun(2)), {}, True, False),
-                                          ((tun(2), tun(2)), {"quiet": True}, False, False)):
-            got = self.row("kill-recorder", self.GAP, samples, case="dodger", **kw)["faults"]
-            self.assertEqual((got == "FAIL", got == "PASS"), (fails, clean), (kw, got))
+        for samples, kw, want in (((tun(1), tun(4)), {}, "PASS"), ((tun(2), tun(2)), {}, "FAIL"),
+                                  ((tun(2), tun(2)), {"quiet": True}, "INCONCLUSIVE")):
+            self.assertEqual(self.row("kill-recorder", self.GAP, samples, case="dodger", **kw)["faults"], want, kw)
 
     def test_recover_keeps_harness_pid_and_port(self):
         gap = {"cause": "watchdog_lost", "start": "2026-10-30T10:01:00Z", "end": "2026-10-30T10:02:00Z"}

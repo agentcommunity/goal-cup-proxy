@@ -588,10 +588,12 @@ class Run:
         st = self.status()
         pid, last = pc.dig(st, "s4_pid"), pc.when(pc.dig(st, "s4_last"))
         since = round(time.time() - last.timestamp(), 1) if last else None
+        t0 = time.time()
         if ok := kill9(pid):
-            self.st["kill"] = dict(pid=pid, at=time.time(), requests=self.work(st), off_spans=pc.dig(st, "s4_spans"),
-                                   off_ms=pc.dig(st, "s4_down_ms"))
-        self.fault("kill-recorder", minute=m, pid=pid if ok else None, since_request_s=since, **({"quiet": True} if quiet else {}))
+            self.st["kill"] = dict(pid=pid, at=t0, requests=self.work(st), off_spans=pc.dig(st, "s4_spans"),
+                                   off_ms=pc.dig(st, "s4_down_ms"), quiet=quiet)
+        self.fault("kill-recorder", minute=m, pid=pid if ok else None, since_request_s=since, quiet=quiet or None,
+                   killed_at=datetime.datetime.fromtimestamp(t0, datetime.timezone.utc).isoformat(timespec="milliseconds"))
         return (pid if ok else None), since
 
     def kill_recorder(self, m):  # section 3.1: kill while work is in flight
@@ -603,9 +605,6 @@ class Run:
         pid, since = self.kill_rec(m, quiet)
         if not pid:
             raise Step("FAIL", "no live goalcup recorder pid in status.json")
-        if quiet:
-            self.st["kill"]["quiet"] = True
-            write(self.path("state.json"), json.dumps(self.st))
         return "ok", "recorder %d killed; %s" % (pid, "no request in flight at the kill" if quiet else
                                                   "%g s after a written request" % since)
 
@@ -622,20 +621,15 @@ class Run:
                                       or pc.dig(st, "s4_since")),
                                      ("a new model request", (type(n) is not int or n <= (k["requests"] or 0))
                                       and not (k.get("quiet") and self.pane_exit()[0]))) if bad]
-        back = []  # the seconds from the kill to the first poll that shows the new pid, mode recording and the closed gap
-
-        def standing():
-            gone = missing()
-            if not back and gone in ([], ["a new model request"]):
-                back.append(time.time() - k["at"])
-            return not gone
-        if not wait(standing, self.left(), 2):
+        if not wait(lambda: not missing(), self.left(), 2):
             raise Step("FAIL", "did not stand back up: missing " + ", ".join(missing()))
         st = self.status()
         n = self.work(st) or 0
-        return "ok", "recorder %s back %.1f s after the kill, gap %s ms, work %s > %s%s" % (
-            pc.dig(st, "s4_pid"), back[0] if back else time.time() - k["at"], (pc.dig(st, "s4_down_ms") or 0) - (k["off_ms"] or 0),
-            n, k["requests"], " (quiet kill: a new request was not required)" if k.get("quiet") and n <= (k["requests"] or 0) else "")
+        saw = "recorder %s back %.1f s after the kill, gap %s ms, work %s > %s" % (
+            pc.dig(st, "s4_pid"), time.time() - k["at"], (pc.dig(st, "s4_down_ms") or 0) - (k["off_ms"] or 0), n, k["requests"])
+        if k.get("quiet") and n <= (k["requests"] or 0):
+            raise Step("INCONCLUSIVE", "quiet kill, harness exited: no new request to show; " + saw)
+        return "ok", saw
 
     def kill_wd(self, m):  # kill9 of the pid in rec/watchdog.pid, at minute m -> the pid, or a FAIL when none was hit
         self.need("goalcup", started=True, entry=True)
