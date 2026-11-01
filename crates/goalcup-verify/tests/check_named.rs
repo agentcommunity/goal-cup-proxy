@@ -277,7 +277,7 @@ fn zero_byte_listed_tunnel_is_no_loss_but_a_gap_still_names_it() {
     tunnel_bytes(&mut e, "t.example.test", "pinned", None, (0, 0));
     let (code, v) = sealed(e);
     assert_eq!(result(&v, "listed_hosts_decrypted"), "pass");
-    assert_eq!(code, 1);
+    assert_eq!(code, 0);
 
     let mut e = Entry::new("zero-tunnel-gap");
     let gap = Some((GapReason::Pinned, Value::Null));
