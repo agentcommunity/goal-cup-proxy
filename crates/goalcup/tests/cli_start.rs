@@ -279,21 +279,17 @@ fn an_unread_harness_version_is_said_and_the_run_starts() {
             .unwrap_or_else(|s| panic!("{}", s.text));
         String::from_utf8(out).unwrap()
     };
-    let unread = Fix::new("{home}/skills", "");
-    let line = text::version_unread("Tester");
-    assert!(screen(&unread).contains(&line));
-
     let dir = Fix::new("{home}/skills", "");
-    let script = dir.t.home().join("tester-bin");
-    std::fs::write(&script, "#!/bin/sh\necho tester 1.2.3\n").unwrap();
-    {
+    let fake = |name: &str, body: &str| {
         use std::os::unix::fs::PermissionsExt;
+        let script = dir.t.home().join(name);
+        std::fs::write(&script, body).unwrap();
         std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
-    }
-    let read = Fix::with_program(
-        script.to_str().unwrap(),
-        "{home}/skills",
-        "",
-    );
+        Fix::with_program(script.to_str().unwrap(), "{home}/skills", "")
+    };
+    let line = text::version_unread("Tester");
+    let unread = fake("tester-none", "#!/bin/sh\nexit 1\n");
+    assert!(screen(&unread).contains(&line));
+    let read = fake("tester-bin", "#!/bin/sh\necho tester 1.2.3\n");
     assert!(!screen(&read).contains(&line));
 }
