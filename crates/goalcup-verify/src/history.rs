@@ -20,8 +20,9 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 type Key = [u8; 16];
 /// (boot, stream, WebSocket message number): the call table's row key.
 type Id = (u64, u64, Option<u64>);
-/// One answer's keys: (key, whether it is a tool-call id).
-type Turn = Vec<(Key, bool)>;
+/// One answer's keys: (key, whether it is a tool-call id, the [`ends`] key a masked resend of a
+/// text is also matched by). Only the first key is digested into the chain.
+type Turn = Vec<(Key, bool, Option<Key>)>;
 
 fn hash(b: &[u8]) -> Key {
     let mut k = [0; 16];
@@ -51,10 +52,10 @@ fn id_key(id: &str) -> Key {
 }
 
 /// The answer as one assistant turn: its tool-call ids, else (Gemini function calls, no id, and
-/// text) the hash of its whitespace-collapsed text. `None` when it has neither. A text's [`ends`]
-/// key goes to `alt`; when `masked` (the request carried a MASK), the text has stars, and no star
-/// lies in its ends, that key is the turn's key in place of the hash.
-fn turn(m: &Map<String, Value>, masked: bool, alt: &mut Vec<Key>) -> Option<Turn> {
+/// text) the hash of its whitespace-collapsed text. `None` when it has neither. The key is always
+/// the hash, so a chain's digests never depend on a MASK elsewhere in a request. A text with
+/// stars, none of them in its [`ends`], also carries the ends key (the third field).
+fn turn(m: &Map<String, Value>) -> Option<Turn> {
     let s = |k: &str| m.get(k).and_then(Value::as_str);
     let id = |v: &Value, k: &str| v.get(k).and_then(Value::as_str).map(String::from);
     let mut ids: Vec<String> = Vec::new();
@@ -83,19 +84,14 @@ fn turn(m: &Map<String, Value>, masked: bool, alt: &mut Vec<Key>) -> Option<Turn
         }
     }
     if !ids.is_empty() {
-        return Some(ids.iter().map(|i| (id_key(i), true)).collect());
+        return Some(ids.iter().map(|i| (id_key(i), true, None)).collect());
     }
     let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
-    let e = ends(&text);
-    alt.extend(e);
     let b = text.as_bytes();
     let star = |s: &[u8]| s.contains(&b'*');
-    let k = match e {
-        Some(e) if masked && star(b) && !star(&b[..END]) && !star(&b[b.len() - END..]) => e,
-        _ => hash(b),
-    };
-    let t = (!text.is_empty()).then(|| vec![(k, false)]);
-    Some(fcs.into_iter().map(|k| (k, false)).collect::<Turn>())
+    let alt = ends(&text).filter(|_| star(b) && !star(&b[..END]) && !star(&b[b.len() - END..]));
+    let t = (!text.is_empty()).then(|| vec![(hash(b), false, alt)]);
+    Some(fcs.into_iter().map(|k| (k, false, None)).collect::<Turn>())
         .filter(|f| !f.is_empty())
         .or(t)
 }
@@ -104,9 +100,8 @@ fn turn(m: &Map<String, Value>, masked: bool, alt: &mut Vec<Key>) -> Option<Turn
 fn keys_of(v: &Value, keys: &mut HashSet<Key>) {
     match v {
         Value::Object(m) => {
-            let mut alt = Vec::new();
-            keys.extend(turn(m, false, &mut alt).into_iter().flatten().map(|k| k.0));
-            keys.extend(alt);
+            let turn = turn(m).into_iter().flatten();
+            keys.extend(turn.flat_map(|k| [Some(k.0), k.2]).flatten());
             m.values().for_each(|c| keys_of(c, keys));
         }
         Value::Array(a) => a.iter().for_each(|c| keys_of(c, keys)),
@@ -151,7 +146,20 @@ struct St {
     pend: bool,
     msgs: u64,
     acc: String,
-    /// A MASK record was seen on this request or message.
+    /// A MASK record was seen on this request, or on the open message.
+    masked: bool,
+    /// Where the open message began.
+    start: u64,
+    /// A finished WebSocket message waiting for the MASK records written after its last DATA.
+    held: Option<Held>,
+}
+
+/// A finished client message: its id, record offset, body (`None`: a hole) and MASK flag.
+struct Held {
+    id: Id,
+    off: u64,
+    body: Option<Vec<u8>>,
+    start: u64,
     masked: bool,
 }
 
@@ -182,8 +190,6 @@ pub struct Hist {
     /// The anchored (empty) chains, in the order they began.
     zeros: Vec<usize>,
     answers: HashSet<Key>,
-    /// The ends keys that stood in for a masked request turn's hash.
-    ends: HashSet<Key>,
     /// Wall spans of GAPs on streams of model calls: POST requests, their responses, WebSockets.
     gaps: Vec<(u64, u64)>,
     /// Requests skipped: previous-response id only, and undecoded. The compacted turns are
@@ -233,6 +239,7 @@ impl Sink {
         self.calls.push(rec);
         match rec {
             Record::Part { boot, .. } if *boot != self.boot => {
+                self.flush_all();
                 // The dead boot's open requests and messages are cut.
                 let cut = std::mem::take(&mut self.open);
                 let up = |s: &&St| s.pend && matches!(s.role, Role::Req | Role::Up);
@@ -254,11 +261,15 @@ impl Sink {
                 ..
             } => self.data(*sid, off, (*o, *flags), bytes),
             Record::End { sid, .. } => self.end(*sid, off),
-            Record::Mask { sid, .. } => {
+            Record::Mask { sid, off: o, .. } => {
                 if let Some(st) = self.open.get_mut(&(self.boot, *sid))
                     && matches!(st.role, Role::Req | Role::Up)
                 {
-                    st.masked = true;
+                    // Written after the DATA it covers, so after a finished message too.
+                    match st.held.as_mut() {
+                        Some(h) => h.masked |= *o >= h.start,
+                        None => st.masked = true,
+                    }
                 }
             }
             Record::Gap {
@@ -324,18 +335,21 @@ impl Sink {
             msgs: 0,
             acc: String::new(),
             masked: false,
+            start: 0,
+            held: None,
         };
         self.open.insert((b, sid), st);
     }
 
     fn data(&mut self, sid: u64, rec_off: u64, at: (u64, u8), bytes: &[u8]) {
         let (off, flags) = at;
+        self.flush(sid);
         let Some(st) = self.open.get_mut(&(self.boot, sid)) else {
             return;
         };
         if matches!(st.role, Role::Up | Role::Down) && !st.pend {
             // A message starts where its first byte is; a hole before it is not its own.
-            (st.pend, st.next, st.hole) = (true, off, false);
+            (st.pend, st.next, st.hole, st.start) = (true, off, false, off);
         }
         let on = off == st.next;
         st.next = off.saturating_add(bytes.len() as u64);
@@ -367,6 +381,7 @@ impl Sink {
         }
         if flags & FLAG_FIN != 0 && matches!(st.role, Role::Up | Role::Down) {
             let masked = std::mem::take(&mut st.masked);
+            let start = st.start;
             let (body, hole, n) = (std::mem::take(&mut st.buf), st.hole, st.msgs);
             (st.pend, st.msgs, st.hole) = (false, n + 1, false);
             let (role, op) = (st.role, flags >> 4);
@@ -374,12 +389,36 @@ impl Sink {
                 self.reply(&body);
             } else if role == Role::Up && op == 1 {
                 let id = (self.boot, sid, Some(n));
-                self.message(id, rec_off, (!hole).then_some(&body), masked);
+                let body = (!hole).then_some(body);
+                st.held = Some(Held {
+                    id,
+                    off: rec_off,
+                    body,
+                    start,
+                    masked,
+                });
             }
         }
     }
 
+    /// Handles the held client message of a stream, once nothing more can mask it.
+    fn flush(&mut self, sid: u64) {
+        let held = (self.open.get_mut(&(self.boot, sid))).and_then(|s| s.held.take());
+        if let Some(h) = held {
+            self.message(h.id, h.off, h.body.as_ref(), h.masked);
+        }
+    }
+
+    fn flush_all(&mut self) {
+        let sids: Vec<u64> = (self.open.iter())
+            .filter(|(_, s)| s.held.is_some())
+            .map(|(k, _)| k.1)
+            .collect();
+        sids.into_iter().for_each(|s| self.flush(s));
+    }
+
     fn end(&mut self, sid: u64, off: u64) {
+        self.flush(sid);
         let k = (self.boot, sid);
         let Some(mut st) = self.open.remove(&k) else {
             return;
@@ -430,13 +469,11 @@ impl Sink {
         else {
             return false;
         };
-        let mut alt = Vec::new();
-        let turns: Vec<Turn> = (items.iter())
-            .filter_map(|t| turn(t.as_object()?, masked, &mut alt))
+        let mut turns: Vec<Turn> = (items.iter())
+            .filter_map(|t| turn(t.as_object()?))
             .collect();
-        if masked {
-            let used = turns.iter().flatten().filter(|k| alt.contains(&k.0));
-            self.h.ends.extend(used.map(|k| k.0));
+        if !masked {
+            turns.iter_mut().flatten().for_each(|k| k.2 = None);
         }
         let ds: Vec<u64> = turns
             .iter()
@@ -519,7 +556,8 @@ impl Sink {
     }
 
     /// The call table and what the history pass kept.
-    pub fn finish(self) -> (CallTable, Hist) {
+    pub fn finish(mut self) -> (CallTable, Hist) {
+        self.flush_all();
         (self.calls.finish(), self.h)
     }
 }
@@ -562,7 +600,6 @@ pub fn judge(h: &Hist, t: &CallTable, covers: &[Cover]) -> Check {
     let mut chk = Check::new("history_complete", None, Res::Pass, "");
     let (mut checked, mut comp) = (0u64, 0u64);
     let (mut missing_call, mut missing_text, mut unanchored) = (0u64, 0u64, 0u64);
-    let mut by_ends = 0u64;
     let mut th: BTreeMap<&str, (Res, u64)> = BTreeMap::new();
     let mut last: HashMap<usize, u64> = HashMap::new();
     for r in &h.reqs {
@@ -580,11 +617,10 @@ pub fn judge(h: &Hist, t: &CallTable, covers: &[Cover]) -> Check {
             e.1 += 1;
             checked += 1;
             let miss: Vec<bool> = (keys.iter())
-                .filter(|k| !h.answers.contains(&k.0))
+                .filter(|k| !h.answers.contains(&k.0) && !k.2.is_some_and(|e| h.answers.contains(&e)))
                 .map(|k| k.1)
                 .collect();
             if miss.is_empty() {
-                by_ends += u64::from(keys.iter().any(|k| h.ends.contains(&k.0)));
                 continue;
             }
             // The time between the chain's previous request and this one (this one's own time
@@ -671,7 +707,7 @@ pub fn judge(h: &Hist, t: &CallTable, covers: &[Cover]) -> Check {
         chk.why += &tail;
     }
     let facts = json!({"checked": checked, "missing_call": missing_call,
-        "missing_text": missing_text, "masked_by_ends": by_ends, "unanchored": unanchored, "skipped": skipped,
+        "missing_text": missing_text, "unanchored": unanchored, "skipped": skipped,
         "threads": threads, "chains": home.iter().enumerate().filter(|(i, c)| i == *c).count()});
     chk.facts = facts.as_object().cloned().unwrap_or_default();
     chk

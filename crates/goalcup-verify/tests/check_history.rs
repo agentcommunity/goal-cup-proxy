@@ -674,7 +674,6 @@ fn masked_resend(name: &str, made: bool, tool: bool, tail: Option<&str>) -> Path
 fn a_masked_resend_of_a_streamed_answer_matches() {
     let h = verdict(&masked_resend("h-mask", true, false, None), "pass", 0);
     assert_eq!(missing(&h), (0, 0, 0));
-    assert_eq!(n(&h, "masked_by_ends"), 1);
 }
 
 #[test]
@@ -698,5 +697,92 @@ fn a_masked_resend_with_a_rewritten_tail_warns() {
         0,
     );
     assert_eq!(missing(&h), (0, 1, 0));
-    assert_eq!(n(&h, "masked_by_ends"), 0);
+}
+
+/// A long markdown answer with natural stars in its middle and none at its ends.
+fn md() -> String {
+    let w = "a fake sentence of plain words so that the answer is long enough for its ends";
+    format!("{w} and then **bold** and * a bullet * in the middle {w} to the very end.")
+}
+
+#[test]
+fn a_markdown_answer_with_a_later_mask_elsewhere_keeps_its_chain_and_a_dropped_call_fails() {
+    let h = verdict(
+        &rec("h-md-mask", |e| {
+            let path = "/v1/messages";
+            let delta = json!({"type": "content_block_delta", "index": 0,
+                "delta": {"type": "text_delta", "text": md()}});
+            let sse = format!("data: {delta}\n\n");
+            let body = json!({"model": "fake-model", "messages": [user(Anthropic)]});
+            send(e, path, T, &body, ("text/event-stream", sse));
+            let asst = json!({"role": "assistant", "content": md()});
+            let msgs = vec![user(Anthropic), asst.clone(), user(Anthropic)];
+            let body = json!({"model": "fake-model", "messages": msgs});
+            send(e, path, T, &body, reply(Anthropic, Text(7)));
+            // The tool call of this answer was never recorded; the request carries a MASK
+            // on its new user turn, which is not the markdown answer.
+            let last = json!({"role": "user", "content": "fake ****"});
+            let mut msgs = vec![user(Anthropic), asst, user(Anthropic)];
+            msgs.extend(ans(Anthropic, Call(1)));
+            msgs.push(last);
+            let body = json!({"model": "fake-model", "messages": msgs});
+            let off = body.to_string().find("fake ****").unwrap() as u64 + 5;
+            let rep = reply(Anthropic, Text(8));
+            send_full(e, path, T, &body, rep, (0, Some((off, 4))));
+        }),
+        "fail",
+        2,
+    );
+    assert_eq!(missing(&h), (1, 0, 0));
+    assert_eq!(n(&h, "chains"), 1);
+}
+
+#[test]
+fn a_masked_websocket_resend_is_matched_by_its_ends() {
+    let h = verdict(
+        &rec("h-ws-mask", |e| {
+            let c = e.conn();
+            let head = json!({"method": "GET", "path": "/v1/responses", "ver": "1.1",
+                "headers": [["upgrade", "websocket"]], "masked": [], "coding": null});
+            let q = e.open(StreamKind::HttpReq, c, 0, head);
+            e.end(q, EndReason::Complete, 0, Value::Null);
+            let up = e.open(StreamKind::WsUp, c, q, json!({"deflate": false}));
+            let down = e.open(StreamKind::WsDown, c, q, json!({"deflate": false}));
+            let item = |t: &str| {
+                json!({"type": "message", "role": "assistant",
+                    "content": [{"type": "output_text", "text": t}]})
+            };
+            let meta = json!({"thread_id": T});
+            let create = |input: Vec<Value>| {
+                json!({"type": "response.create", "input": input, "client_metadata": meta})
+            };
+            let streamed = format!("{HEAD}[redacted]{TAIL}");
+            let first = create(vec![user(Responses)]).to_string();
+            e.data(up, 0, 0x10 | FLAG_FIN, first.as_bytes());
+            let done = json!({"type": "response.output_item.done", "item": item(&streamed)});
+            e.data(down, 0, 0x10 | FLAG_FIN, done.to_string().as_bytes());
+            let resent = format!("{HEAD}**********{TAIL}");
+            let input = vec![user(Responses), item(&resent), user(Responses)];
+            let second = create(input).to_string();
+            let at = first.len() as u64;
+            e.data(up, at, 0x10 | FLAG_FIN, second.as_bytes());
+            // As the recorder writes it: the MASK follows the DATA that carries FIN.
+            let off = at + second.find("**********").unwrap() as u64;
+            e.put(Record::Mask {
+                sid: up,
+                off,
+                len: 10,
+                rule: 1,
+            });
+            let end = at + second.len() as u64;
+            let close = json!({"close_code": 1000});
+            e.end(up, EndReason::Complete, end, close.clone());
+            e.end(down, EndReason::Complete, done.to_string().len() as u64, close);
+            e.end(c, EndReason::Complete, 0, json!({"up": 400, "down": 300}));
+        }),
+        "pass",
+        0,
+    );
+    assert_eq!(missing(&h), (0, 0, 0));
+    assert!(n(&h, "checked") >= 1);
 }
