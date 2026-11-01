@@ -176,7 +176,7 @@ fn run(command: Command) -> ExitCode {
             record_host,
         } => cli::setup::run(harness.as_deref(), yes, record_host.as_deref()),
         Command::Continue { .. } => not_built("continue"),
-        Command::Recover { .. } => not_built("recover"),
+        Command::Recover { run } => cli::recover::run(run),
         Command::Status { part, json } => cli::status::run(part, json),
         Command::Seal { part, yes } => cli::seal::run(part, yes),
         Command::Upload { part } => cli::upload::run(part),
