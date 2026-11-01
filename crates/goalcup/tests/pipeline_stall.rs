@@ -67,7 +67,10 @@ fn a_stalled_writer_exits_75_and_the_next_boot_names_it() {
     // No drop without a GAP: the exchange served while the writer was held is in DATA, or the
     // gap starts at or before it (the last durable point of boot 0) and ends after it.
     if !has(&data, b"stall-request-1") {
-        assert!(*start <= posted && posted < *end, "{down:?}, posted at {posted}");
+        assert!(
+            *start <= posted && posted < *end,
+            "{down:?}, posted at {posted}"
+        );
     }
     // The exchange through the next boot is in the record, decrypted.
     for want in [&b"stall-request-2"[..], b"stall-answer"] {

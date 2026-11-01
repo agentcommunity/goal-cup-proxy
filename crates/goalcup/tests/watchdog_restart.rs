@@ -41,7 +41,8 @@ fn watchdog_restart_keeps_port_backlog_and_ca() {
         facts,
     } = setup_with(|d| {
         let dd = d.display();
-        let body = format!("if [ $n = 2 ]; then : > {dd}/second; sleep 3; : > {dd}/second_exec; fi");
+        let body =
+            format!("if [ $n = 2 ]; then : > {dd}/second; sleep 3; : > {dd}/second_exec; fi");
         script(d, "recorder.sh", &body)
     });
     tls_upstream(&up, &d);
