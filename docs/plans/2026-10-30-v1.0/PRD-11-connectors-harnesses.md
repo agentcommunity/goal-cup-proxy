@@ -1493,3 +1493,7 @@ is left is data and docs only. Four items, in order:
   files for cline, crush, droid, goose and kimi are PRD-12 slice 7 and the Pad result lines for them point at
   a file that has no row until those runs happen.
 - No locked ledger item is touched and no owner question comes from this slice.
+
+### 2026-11-01, note from PRD-12 sweep 2 fixes (merge 98873c1d)
+
+- Acceptance 5 (the stale hub daemon line on Cline) is not exercised by the pad: the Cline row is "not verified: needs sign-in" (the vendor README names no provider config file and its auth command puts the key in argv). It stays unexercised until a config route is shown; the Cline sheet must not claim a pad result. Crush is likewise "not verified: needs permission answer". No locked ledger item is touched.
