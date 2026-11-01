@@ -4,9 +4,10 @@
 # are arguments, so the key goes by env). docs.cline.bot and vercel.com did not resolve from the writing session.
 # Not verified: needs sign-in. Sweep 2: providers.json under data/settings is ignored and Enter picks "Sign in with Cline".
 # The apps/cli README (read 1 Nov 2026) names no provider config file; the only non-interactive route it shows is
-# `cline auth --provider P --apikey K --baseurl U`, which puts the key in argv and is not allowed here. key_kind = "none"
-# reuses the rig's existing marker, so the pad prints "not verified: no key" and runs nothing. Restore key_kind = "none"
-# when a file or env route is shown. The snippets below stay as the last attempt.
+# `cline auth --provider P --apikey K --baseurl U`, which puts the key in argv and is not allowed here. The `not_verified`
+# line below makes the pad print that reason and run nothing. To bring the row back, delete the `not_verified` line once a
+# file or env route is shown. The snippets below stay as the last attempt. Side effect: PRD-11 acceptance 5 (the stale hub
+# daemon line below) is not exercised by the pad while this row is off.
 # Read from docs only, not run against a live harness: every key below. The providers.json shape (from the connector's
 # host hint providers.*.settings.baseUrl), the provider ids "openai-compatible" and "vercel-ai-gateway", the model ids, /exit, and
 # whether `hub dashboard` is the process `hub stop` ends.
@@ -15,7 +16,8 @@
 version = "3.0.74"
 version_cmd = "cline --version"
 install = "npm i -g cline@3.0.74"
-key_kind = "none"
+key_kind = "deepseek"
+not_verified = "needs sign-in (no provider config file or env route; the auth command puts the key in argv)"
 key_route = "env"
 key_env = "OPENAI_API_KEY"
 # Pad data for the dodger copy only (section 2): the OpenAI provider points at https://api.deepseek.com.
