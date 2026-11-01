@@ -284,14 +284,14 @@ class CrashRows(unittest.TestCase):
     UP = ({"written": {"model_requests": 2}}, {"written": {"model_requests": 5}})  # status samples before and after
 
     def row(self, kind, gap, samples=UP, recovery=(("ok", "10:03"),), seal="harness_exit", over_cap=False,
-            words=check.RECOVER, more=(), pid=9, code=1, case="direct", quiet=False):
+            words=check.RECOVER, more=(), pid=9, code=1, case="direct", quiet=False, commits=1):
         told = [{"kind": k, "exit": 0, "said": w, "at": "2026-10-30T10:%s+00:00" % t}
                 for k, w, t in zip(("recover", "recover", "status"), words + (check.STATUS_RECOVER,), ("02:30", "04:00", "03:30"))]
         kills = [dict({"kind": k, "pid": pid, "at": "2026-10-30T10:02:00+00:00"}, **({"quiet": True} if quiet else {}))
                  for k in ("kill-watchdog", "kill-recorder")]
         rec = [{"kind": "wait-recovery", "result": x, "at": "2026-10-30T%s:00+00:00" % t} for x, t in recovery]
         files = {"meta.json": {"connector": "codex-cli", "case": case, "model_host": "api.example", "variant": [kind + "@3"], "server": "off",
-                               "keep": True, "commits_since_start": 1, "entry": "e1", "over_cap": over_cap,
+                               "keep": True, "commits_since_start": commits, "entry": "e1", "over_cap": over_cap,
                                "started": "2026-10-30T10:00:00+00:00"},
                  "verify/check-local.json": {"exit": code, "entries": [{"entry": "e1", "seal_reason": seal,
                      "counts": {"model_requests": 5, "gaps": {"recorder_down": 1}}, "checks": [
@@ -325,6 +325,22 @@ class CrashRows(unittest.TestCase):
             self.assertEqual(res == "FAIL", fails, (start, end, quiet))
             if quiet and not fails:
                 self.assertEqual(res, "INCONCLUSIVE", (start, end))
+
+    LOST = {"kind": "status", "exit": 0, "at": "2026-10-30T10:03:40+00:00",
+            "said": "Problem. Recording is off since 10:02: goalcup is not running. To go on, run: goalcup continue r1"}
+
+    def test_unrelated_continue_text_is_not_a_lost_terminal(self):  # R5-2: a Codex status shows an unrelated 'goalcup continue' line
+        other = {"kind": "note", "said": "not recorded ... goalcup seal, then goalcup continue", "at": "2026-10-30T10:03:41+00:00"}
+        got = self.row("kill-watchdog-recover", self.GAP, more=[other])
+        self.assertNotEqual(got["faults"], "INCONCLUSIVE")
+        self.assertEqual(self.row("kill-watchdog-recover", self.GAP, more=[self.LOST])["faults"], "INCONCLUSIVE")
+
+    def test_no_work_names_the_lost_terminal_first(self):  # R5-3
+        got = self.row("kill-watchdog-recover", self.GAP, more=[self.LOST], commits=0)
+        self.assertEqual(got["faults"], "INCONCLUSIVE")
+        text = " ".join(map(str, got["why"]))
+        self.assertIn("did no work", text)
+        self.assertLess(text.index("lost its terminal"), text.index("did no work"))
 
     def test_dodger_progress_is_tunnel_connections(self):
         def tun(n):
