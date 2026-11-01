@@ -847,8 +847,8 @@ is cited.
    `:146`); `watchdog/spawn.rs` calls `fds::raise` for the harness. Covered by `watchdog_rlimit` (4)
    and two `pipeline::fds` unit tests. Written by the post-cut lane from evidence on integration
    `8fb59b7f`.
-9. **PRD-02, subreaper** (`subreaper.rs:73-74` and the start-time filter idea). The subreaper is
-   copied, tests green; the start-time filter is not in the code. `spawn.rs:153-166` holds
+9. **PRD-02, subreaper** (`subreaper.rs:73-74` and the start-time filter idea). Partly copied. The
+   subreaper is copied, tests green; the start-time filter is not in the code (routed to PRD-02). `spawn.rs:153-166` holds
    `subreaper()` with `PR_SET_CHILD_SUBREAPER` (by `5cb7fe05`), called at `watchdog/mod.rs:336`.
    Processes left at the seal are named in the status note `outlived` (`pipeline/status.rs:164`)
    instead of a sweep filtered by start time. `watchdog_end` (7) reads the `outlived` note; no test
@@ -861,8 +861,8 @@ is cited.
     (4), `upload_queue` (7), `upload_resume` (9) and three unit tests. `upload_worker` is full tier
     and did not run in gate fast (review LATEST.md section 3 item 3). Written by the post-cut lane from
     evidence on integration `8fb59b7f`.
-11. **PRD-10, sleep lock, participant text, push lines, device login, browser opener.** Copied, tests
-    green, except the browser opener. `crates/goalcup/src/cli/`: `awake.rs` (by `a5d7ddc3`, `:1`
+11. **PRD-10, sleep lock, participant text, push lines, device login, browser opener.** Partly copied:
+    tests green, except the browser opener. `crates/goalcup/src/cli/`: `awake.rs` (by `a5d7ddc3`, `:1`
     names 0.7's `goalcup-platform/src/awake.rs`), `text.rs` (by `d55030ee`), `push.rs` and `approve.rs`
     (device flow, by `1c9afbed`; participant lane 08:26Z: `cli_push` 9 green). Covered by
     `cli_push` (9), `cli_approve` (8), `cli_start` (9), `cli_seal` (6), `cli_recover` (5) and the other
@@ -874,8 +874,8 @@ is cited.
     `launch.rs`, mask rows in `schema.rs:96-124`. Covered by `connector_hints` (6), `connector_launch`
     (8), `connector_hosts` (4), `connector_no_model_address` (2). Written by the post-cut lane from
     evidence on integration `8fb59b7f`.
-13. **PRD-09, usage readers and fixtures.** Readers rewritten, fixtures copied, tests green for the
-    readers. `crates/goalcup-verify/src/usage/` (`wire.rs` by `dab0ce1f`, eight files). Fixtures in
+13. **PRD-09, usage readers and fixtures.** Partly done. Readers rewritten, fixtures copied, tests
+    green for the readers. `crates/goalcup-verify/src/usage/` (`wire.rs` by `dab0ce1f`, eight files). Fixtures in
     `crates/goalcup-verify/tests/usage_fixtures/` by `f5a529c8`: all six files (`m2-openai`,
     `m2-anthropic`, four `m2-native` excerpts) match the sha256 in their `provenance.json`, and so do
     the old sources at the commit each `copied_from` names. Readers covered by `usage_run1` (11) and
@@ -883,8 +883,8 @@ is cited.
     are copied but not exercised. **Knowingly not copied:** the `connectors` snapshot fixtures, which
     went with the old crate (amendment of 30 Oct, merge f5a529c8). Written by the post-cut lane from
     evidence on integration `8fb59b7f`.
-14. **PRD-08, `goalcup-verify.rs:264-310`.** The parse rule is copied, tests green; the safe output
-    file creation is not. `crates/goalcup-verify/src/main.rs:93-111` (by `d10feef7`) uses `try_parse`,
+14. **PRD-08, `goalcup-verify.rs:264-310`.** Partly copied. The parse rule is copied, tests green;
+    the safe output file creation is not. `crates/goalcup-verify/src/main.rs:93-111` (by `d10feef7`) uses `try_parse`,
     so a usage error exits 3 and `--help` exits 0. No `create_output_file` exists: `check` writes to
     stdout, and `usage --out` (`usage/mod.rs:642-648`) uses `create_dir_all` and `fs::write`, not a new
     file with mode 0600 outside every input folder (PRD-08 section 1). Covered by `check_named` (16),
@@ -927,6 +927,6 @@ is cited.
 - No Codex smoke row ran on the cut commit (section 5, "the core set `direct` rows and the Codex kill
   row then rerun on the cut commit"; integrator.log 09:57Z). It goes on the PRD-12 pad schedule under
   PRD-16, run on the post-cut head.
-- Gaps found above and routed: the WSL browser opener (PRD-10, row 11), the safe output file rule
+- Gaps found above and routed: the start-time filter (PRD-02, row 9), the WSL browser opener (PRD-10, row 11), the safe output file rule
   (PRD-08 and PRD-09, row 14), the unread `usage_fixtures` (PRD-09, row 13), and the Claude Code and
   Amp first-screen answers (PRD-11, row 16).
