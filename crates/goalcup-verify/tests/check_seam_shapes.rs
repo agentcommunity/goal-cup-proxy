@@ -104,3 +104,41 @@ fn extent_less_gaps_without_the_meta_shape_still_fail() {
         assert_eq!(result(&v, "gap_has_end"), "fail", "{reason:?} {lost}");
     }
 }
+
+/// Point 1: the report's counts carry `hosts` and `tunnel_hosts` (S6) in the shape of the COUNT
+/// event, and the pad reads them from there.
+#[test]
+fn report_counts_carry_hosts_and_pinned_tunnels() {
+    let mut e = Entry::new("report-hosts");
+    e.exchange(EndReason::Complete);
+    e.exchange(EndReason::Complete);
+    for _ in 0..2 {
+        let meta = json!({"host": "pinned.example.test", "port": 443, "mode": "tunnel",
+            "listed": "shared", "kind": "provider", "reason": "pinned", "alpn": null,
+            "tls": null, "fingerprint": "0123456789abcdef"});
+        let s = e.open(StreamKind::Conn, 0, 0, meta);
+        e.gap(s, GapReason::Pinned, 1_000, 0, 2_561, Value::Null);
+        e.end(s, EndReason::Complete, 0, json!({"up": 512, "down": 2048}));
+    }
+    e.count();
+    let rec = e.rec.clone();
+    let (_, v) = check(&e.seal(), &[]);
+    no_fail(&v);
+    let c = &v["entries"][0]["counts"];
+    assert_eq!(c["hosts"][HOST], 2);
+    assert_eq!(c["tunnel_hosts"]["pinned.example.test"]["conns"], 2);
+    assert_eq!(c["tunnel_hosts"]["pinned.example.test"]["listed"], "pinned");
+    let last = read_records(&rec)
+        .into_iter()
+        .filter_map(|r| match r {
+            goalcup_format::codec::Record::Event { json, .. } => {
+                serde_json::from_slice::<Value>(&json).ok()
+            }
+            _ => None,
+        })
+        .filter(|j| j["ev"] == "count")
+        .next_back()
+        .unwrap();
+    assert_eq!(c["hosts"], last["hosts"]);
+    assert_eq!(c["tunnel_hosts"], last["tunnel_hosts"]);
+}
