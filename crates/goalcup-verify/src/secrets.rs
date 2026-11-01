@@ -22,9 +22,12 @@ use std::sync::LazyLock;
 const SHAPES: &str = include_str!("../../goalcup/src/mask/shapes.tsv");
 /// What ends just before a glued match when the masker's left guard still masks it (PRD-05
 /// section 4: a backslash, `\u`, `\x`, percent or ANSI escape): such a hit is no `glued_shape`.
+/// SEAM NOTE for PRD-05: exporting `glued` would let this copy of `ends_an_escape` go.
 static ESCAPE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?:\\+(?:[A-Za-z0-9]|u[0-9A-Fa-f]{4}|x[0-9A-Fa-f]{2})|%[0-9A-Fa-f]{2}|(?:\x1b|\\+(?:u001b|x1b|033|e))\[[0-9;]{0,16}[A-Za-z])$").expect("escape")
+    Regex::new(r"(?:\\+(?:[A-Za-z0-9]|u[0-9A-Fa-f]{4}|x[0-9A-Fa-f]{2})|%[0-9A-Fa-f]{2}|(?:\x1b|\\+(?:u001[bB]|x1[bB]|033|e))\[[0-9;]{0,16}[A-Za-z])$").expect("escape")
 });
+/// The bytes before a match the left guard reads (the masker's `GUARD_BYTES`).
+const GUARD: usize = 24;
 /// The bytes a tail gathers before it is scanned again with the 4 KiB it keeps.
 const BATCH: usize = 64 << 10;
 
@@ -221,10 +224,31 @@ impl Tail {
     }
 }
 
+/// Whether a match is only a mask or a placeholder: its secret part (group 1; for `private_key`
+/// the text between the `-----BEGIN` line and `-----END`) is empty or only `*`, `[REDACTED]`,
+/// `[HIDDEN]`, `<redacted>` (any case), ellipsis U+2026 or `...`, whitespace, `\n`; other text hits.
+fn placeholder(span: &[u8], kind: &str) -> bool {
+    let (mut s, find) = (span, |h: &[u8], n: &[u8]| {
+        h.windows(n.len()).position(|w| w == n)
+    });
+    if kind == "private_key" {
+        s = find(s, b"KEY-----").map_or(s, |i| &s[i + 8..]);
+        s = find(s, b"-----END").map_or(s, |i| &s[..i]);
+    }
+    let toks = "[REDACTED] [HIDDEN] <redacted> \\n * ... \u{2026} \\u2026".split(' ');
+    while let Some(t) = toks.clone().find(|t| {
+        s = s.trim_ascii_start();
+        s.len() >= t.len() && s[..t.len()].eq_ignore_ascii_case(t.as_bytes())
+    }) {
+        s = &s[t.len()..];
+    }
+    s.trim_ascii_start().is_empty()
+}
+
 impl Scan {
     /// Scans a tail's new bytes after the 4 KiB it keeps. A hit counts when it ends in the new
-    /// bytes and starts at or after the end of the last hit its matcher counted; a span of `*`
-    /// only is masked.
+    /// bytes and starts at or after the end of the last hit its matcher counted; a
+    /// [`placeholder`] is skipped.
     fn scan(&mut self, r: &Rules, t: &mut Tail) {
         if t.seen == t.buf.len() {
             return;
@@ -236,12 +260,11 @@ impl Scan {
         for (i, (kind, guard, re)) in r.rules.iter().enumerate() {
             for m in re.captures_iter(buf).filter_map(|c| c.get(1).or(c.get(0))) {
                 let (s, b) = (m.start(), m.as_bytes());
-                let masked = b.iter().all(|&c| c == b'*');
-                if m.end() <= t.seen || base + (s as u64) < t.last[i] || masked {
+                if m.end() <= t.seen || base + (s as u64) < t.last[i] || placeholder(b, kind) {
                     continue;
                 }
                 t.last[i] = base + m.end() as u64;
-                let before = &buf[s.saturating_sub(32)..s];
+                let before = &buf[s.saturating_sub(GUARD)..s];
                 let glued = *guard && before.last().is_some_and(word) && !ESCAPE.is_match(before);
                 let (list, name) = match (kind.is_empty(), glued) {
                     (true, _) => (0, r.forms[b]),

@@ -11,6 +11,7 @@ import shutil
 import subprocess
 import tarfile
 import tempfile
+import time
 import unittest
 import urllib.parse
 from unittest import mock
@@ -199,6 +200,24 @@ class BoxHalf(unittest.TestCase):
         for form in forms:
             self.assertNotIn(form, safe)
         self.assertIn("[known:2]", safe)
+
+    def test_key_tail_a_harness_shows_is_replaced(self):  # point 4: Claude Code shows the last 20 characters of the key
+        v = "sk-ant-api03-" + "Zq7xLm2VbN8cRt4HwK1d" + "PADTAIL0123456789abcd"
+        shown = "Use this API key?  ...%s  (No / Yes)" % v[-20:]
+        safe, n = padrun.replace_known(shown + " " + v[-12:], [v])
+        self.assertNotIn(v[-20:], safe)
+        self.assertNotIn(v[-12:], safe)
+        self.assertGreaterEqual(n, 2)
+
+    def test_provider_file_keeps_the_rows_setup_wrote(self):  # Codex needs approval_policy and sandbox_mode from setup
+        old = 'approval_policy = "never"\nsandbox_mode = "danger-full-access"\n[projects."/p"]\ntrust_level = "trusted"\n'
+        new = 'model = "m"\nmodel_reasoning_effort = "low"\n'
+        out = padrun.merge_config("config.toml", old, new)
+        for row in ('approval_policy = "never"', 'sandbox_mode = "danger-full-access"', 'model = "m"', 'trust_level = "trusted"'):
+            self.assertIn(row, out)
+        self.assertLess(out.index('model = "m"'), out.index("[projects"))  # top-level rows stay above the tables
+        merged = json.loads(padrun.merge_config("a.json", json.dumps({"x": {"a": 1}, "k": 1}), json.dumps({"x": {"b": 2}})))
+        self.assertEqual(merged, {"x": {"a": 1, "b": 2}, "k": 1})
 
     def launch(self, steps=()):
         """launch.sh as start writes it for an env-route key, and the argv start passed to its fake tmux."""
@@ -496,6 +515,70 @@ class StartRefusal(unittest.TestCase):
             self.assertEqual(r.st["end_screen_requests"], want, screen)
 
 
+class PasteAndMask(unittest.TestCase):
+    """RIG-8: paste waits for status.json to say recording. RIG-9: fetch credentials are never shown or written."""
+
+    ENV = {"DATABASE_URL": "postgres://padtester:Zq7fakePw@db.fake-host-123.example.com:6543/postgres",
+           "CLOUDFLARE_ACCOUNT_ID": "acct0fakeid42", "CLOUDFLARE_API_TOKEN": "tok-madeup-not-real-77"}
+    VALUES = ("padtester", "Zq7fakePw", "db.fake-host-123.example.com", "acct0fakeid42", "tok-madeup-not-real-77")
+
+    def failing(self):
+        err = "psql: could not translate host name; " + " ".join(self.VALUES) + " refused"
+        return subprocess.CompletedProcess(["x"], 1, "", "noise\n" + err)
+
+    def test_said_hides_every_fetch_credential(self):
+        with mock.patch.dict(os.environ, self.ENV):
+            got = pad.said("server copy not fetched", self.failing())
+        for v in self.VALUES:
+            self.assertNotIn(v, got)
+        self.assertIn("refused", got)
+
+    def test_failed_fetch_writes_no_credential(self):
+        with tempfile.TemporaryDirectory() as out, mock.patch.dict(os.environ, self.ENV), \
+                mock.patch.object(pad, "call", lambda argv, timeout=None, env=None: self.failing()):
+            s = pad.load_settings(dict(BASE, mode="micro", server="staging"), PADCFG)
+            r = pad.Run(s, "direct", PADCFG, Walk.HARNESS, out)
+            self.addCleanup(shutil.rmtree, r.tmp, True)
+            r.meta["entry"] = "e" + "0" * 16
+            result, text = r.step_fetch("fetch", 10)
+            r.log("fetch-run host " + self.VALUES[2])
+            logged = open(os.path.join(r.dir, "calls.log")).read()
+        self.assertEqual(result, "FAIL")
+        for v in self.VALUES:
+            self.assertNotIn(v, text + logged)
+
+    def paste_run(self, mode, dead):
+        run = self.enterContext(tempfile.TemporaryDirectory())
+        for name, doc in (("settings.json", {"harness": {}}), ("state.json", {"home": run})):
+            with open(os.path.join(run, name), "w") as f:
+                json.dump(doc, f)
+        r = padrun.Run(run, "verify")
+        r.end = time.time() + 5
+        typed = []
+        status = {}
+        for key in check.SEAM["s4_mode"][::-1]:
+            status = {key: mode if status == {} else status}
+        patches = [mock.patch.object(padrun, "tool", lambda n: "/bin/true"), mock.patch.object(padrun, "wait", lambda fn, *a: fn()),
+                   mock.patch.object(r, "status", lambda: status), mock.patch.object(r, "pane_exit", lambda: (dead, "1")),
+                   mock.patch.object(r, "capture", lambda *a: "a cleared screen"), mock.patch.object(r, "refusal", lambda: None),
+                   mock.patch.object(r, "pane", lambda *a, **k: ""), mock.patch.object(r, "daemon_check", lambda **k: None),
+                   mock.patch.object(r, "type_prompt", lambda: typed.append(1) or ("ok", "typed"))]
+        for p in patches:
+            self.enterContext(p)
+        return r, typed
+
+    def test_paste_goes_ahead_when_status_says_recording(self):
+        r, typed = self.paste_run("recording", False)
+        self.assertEqual(r.paste(None)[0], "ok")
+        self.assertEqual(typed, [1])
+
+    def test_paste_on_a_dead_pane_without_recording_is_refused_at_once(self):
+        r, typed = self.paste_run(None, True)
+        with self.assertRaises(padrun.Step) as got:
+            r.paste(None)
+        self.assertEqual((got.exception.args[0], typed), ("INCONCLUSIVE", []))
+
+
 class KillBothVerify(unittest.TestCase):
     """pad-run verify after kill-both: the row is the old entry's, so its server copy is the one compared and scanned."""
 
@@ -529,6 +612,83 @@ class KillBothVerify(unittest.TestCase):
         self.assertEqual(first("usage")[1], os.path.join("fetched", "OLD"))
         with open(os.path.join(run, "meta-box.json")) as f:
             self.assertEqual(json.load(f)["entry"], "OLD")
+
+
+class RigFaults(unittest.TestCase):
+    """Rung 2 rig faults: a named user agent and a plain refusal text (RIG-5), a dead pane ends the wait (RIG-6),
+    DATABASE_URL only for fetch-run (RIG-7)."""
+
+    def test_approve_names_itself_and_hides_the_secrets(self):
+        import http.server
+        import threading
+        seen = {}
+
+        class H(http.server.BaseHTTPRequestHandler):
+            def do_POST(self):
+                seen["ua"] = self.headers.get("user-agent")
+                self.rfile.read(int(self.headers.get("content-length") or 0))
+                self.send_response(403)
+                self.end_headers()
+                self.wfile.write(b"error code: 1010\n")
+
+            def log_message(self, *a):
+                pass
+
+        srv = http.server.HTTPServer(("127.0.0.1", 0), H)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        self.addCleanup(srv.server_close)
+        self.addCleanup(srv.shutdown)
+        env = {"GOALCUP_TEST_APPROVAL_KEY": "fake-key-not-a-secret", "GOALCUP_TEST_MEMBER_ID": "fake-member-not-real"}
+        with mock.patch.dict(os.environ, env), mock.patch.dict(pad.SERVERS, {"t": "http://127.0.0.1:%d" % srv.server_port}):
+            got = pad.approve("t", "ABCD-EFGH")
+        self.assertTrue(seen["ua"].startswith("goalcup-pad"))
+        self.assertIn("403", got)
+        self.assertNotIn("fake-key-not-a-secret", got)
+        self.assertNotIn("fake-member-not-real", got)
+
+    def test_database_url_reaches_only_fetch_run(self):
+        with mock.patch.dict(os.environ, {"DATABASE_URL": "postgres://fake-not-a-secret"}):
+            self.assertIn("DATABASE_URL", pad.env_without(set(pad.NEVER_IN_BOX) - set(pad.FETCH)))
+            self.assertNotIn("DATABASE_URL", pad.env_without())
+
+    def test_dead_pane_ends_the_wait_at_once(self):
+        run = self.enterContext(tempfile.TemporaryDirectory())
+        for name, doc in (("settings.json", {"harness": {}}), ("state.json", {"home": run})):
+            with open(os.path.join(run, name), "w") as f:
+                json.dump(doc, f)
+        r = padrun.Run(run, "verify")
+        r.end = time.time() + 120
+
+        def stub(screen):
+            def fake(argv, **kw):
+                return subprocess.CompletedProcess(argv, 0, "1 1" if argv[1] == "display-message" else screen, "")
+            return fake
+        with mock.patch.object(padrun, "sh", stub("starting\nsettings.json refused\nPane is dead (status 1, Sun Nov  1 10:00:00 2026)\n")), mock.patch.object(r, "fault", lambda *a, **k: None):
+            t0 = time.time()
+            with self.assertRaises(padrun.Step) as cm:
+                r.until("Recording in chat mode", "none")
+        self.assertLess(time.time() - t0, 5)
+        self.assertTrue(cm.exception.args[1].startswith("start-refused"))
+        self.assertIn("settings.json refused", cm.exception.args[1])
+        self.assertNotIn("Pane is dead", cm.exception.args[1])
+        with mock.patch.object(padrun, "sh", stub("x\n")):  # server off: the status wait ends on the dead pane too
+            self.assertTrue(r.recording_or_dead())
+        faults = []  # server off: a refused start is raised and written, not typed into a dead pane
+        r.s = {"server": "off", "harness_id": "x"}
+        typed = []
+        with mock.patch.object(padrun, "sh", stub("starting\nsettings.json refused\nPane is dead (status 1, Sun Nov  1 10:00:00 2026)\n")), \
+                mock.patch.object(padrun, "tool", lambda n: n), mock.patch.object(r, "need", lambda *a, **k: None), \
+                mock.patch.object(r, "gc_env", lambda *a, **k: {}), mock.patch.object(r, "daemon_check", lambda: typed.append("d")), \
+                mock.patch.object(r, "type_prompt", lambda: typed.append("t")), mock.patch.object(r, "fault", lambda *a, **k: faults.append(a)):
+            t0 = time.time()
+            with self.assertRaises(padrun.Step) as cm:
+                r.start(None)
+        self.assertLess(time.time() - t0, 5)
+        self.assertTrue(cm.exception.args[1].startswith("start-refused"))
+        self.assertEqual(typed, [])
+        self.assertTrue(any(a and a[0] == "start-refused" for a in faults))
+        with mock.patch.object(padrun, "sh", stub("Recording in chat mode\n")):
+            self.assertTrue(r.until("Recording in chat mode", "none"))
 
 
 if __name__ == "__main__":

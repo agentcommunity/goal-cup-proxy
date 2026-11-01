@@ -22,6 +22,7 @@ mod calls;
 pub mod clock;
 pub mod counts;
 pub mod cursors;
+mod dead;
 pub mod fds;
 mod guard;
 mod handle;
@@ -38,6 +39,9 @@ pub use calls::{Call, Calls};
 pub use clock::Mono;
 pub use counts::{Counts, Durable, EntryTotals, TunnelHost, entry_totals};
 pub use cursors::Cursors;
+#[cfg(feature = "test-hooks")]
+pub use dead::seal_null_for_tests;
+pub use dead::{Closed, StillRecording, close_dead_entry};
 pub use goalcup_format::{EndReason, GapReason, StreamKind};
 pub use handle::{OpenFlags, StreamHandle};
 #[cfg(feature = "test-hooks")]
@@ -52,13 +56,13 @@ use crate::native::{self, NativeReader};
 use crate::proxy::{self, ProxyCtx, ProxyHandle, ca::RunCa};
 use crate::upload::{self, UploadCtx, UploadHandle};
 use crate::watchdog::{
-    Exit, HarnessFacts, SealReason, ToRecorder, ToWatchdog, read_line, send_line,
+    Cause, Exit, HarnessFacts, Prev, SealReason, ToRecorder, ToWatchdog, read_line, send_line,
 };
 use item::Item;
 use serde_json::{Value, json};
 use status::{Losing, Off, Outlived};
 use std::collections::{HashMap, HashSet};
-use std::io::{BufRead, BufReader};
+use std::io::BufReader;
 use std::os::fd::FromRawFd;
 use std::os::unix::fs::DirBuilderExt;
 use std::os::unix::net::UnixStream;
@@ -774,7 +778,12 @@ const EXIT_MASKER: i32 = 78;
 /// no core dump, the first line, the entry folder and the panic hook before any thread, the entry
 /// lock, the masker, the run CA, the proxy at once, the boot, the native reader, the uploader,
 /// the status thread, `ready`; then the control lines until the seal. A null recorder relays and
-/// records nothing, and so does a boot on an entry already sealed.
+/// records nothing, and so does a boot on an entry already sealed. A `recover` first line makes
+/// this process the new watchdog instead (section 8.1, `watchdog::recover_with`).
+///
+/// SIGTERM seals with reason `signal` while the control loop runs; once the seal or the wrap-up
+/// (up to 60 minutes of upload) is under way it is caught and ignored, so `goalcup seal` cannot
+/// end a recorder that is already ending (section 11).
 pub fn run_recorder(null: bool) -> ExitCode {
     secure::harden();
     // SAFETY: the watchdog's spawn hands fd 4 to this process as a connected Unix socket, owned
@@ -785,10 +794,17 @@ pub fn run_recorder(null: bool) -> ExitCode {
     };
     let mut lines = BufReader::new(read);
     // The first line holds the CA key and the exact values: never logged, never echoed.
-    let Some(Some(ToRecorder::Start(facts))) = read_line(&mut lines) else {
-        secure::die(EXIT_NO_START, "no_start_line")
+    let mut facts = match read_line(&mut lines) {
+        Some(Some(ToRecorder::Start(facts))) => *facts,
+        Some(Some(ToRecorder::Recover(facts))) => {
+            // SAFETY: as below, fd 3 is the listener `recover_with` bound, owned by nothing else.
+            let listener = unsafe { std::net::TcpListener::from_raw_fd(3) };
+            return crate::watchdog::run_recovered(*facts, listener, ctl);
+        }
+        _ => secure::die(EXIT_NO_START, "no_start_line"),
     };
-    let mut facts = *facts;
+    // After the first line, so the watchdog `recover` starts keeps the default.
+    secure::catch(libc::SIGTERM, on_term);
     let Some(mut typed) = facts.typed() else {
         secure::die(EXIT_NO_START, "no_start_line")
     };
@@ -855,6 +871,7 @@ pub fn run_recorder(null: bool) -> ExitCode {
         exit: None,
         exit_at: None,
         null,
+        prev: facts.prev,
         sealed: false,
         late: None,
     };
@@ -895,8 +912,17 @@ pub fn run_recorder(null: bool) -> ExitCode {
         seal::sealed_status(&dir, |s| (s.pid, s.start_id, s.port) = me);
         run.late = Some(seal::keep_sealed(&run.rec, &dir, masker));
     }
+    // The deadline on boot time, converted once (PRD-17 S7); only a server word moves it.
+    let deadline = crate::watchdog::deadline_of(facts.deadline);
     run.send(&ToWatchdog::Ready);
-    run.control(&mut lines, &dir, &facts.workspace)
+    run.control(lines, deadline, &dir, &facts.workspace)
+}
+
+/// SIGTERM to the recorder: the control loop seals with reason `signal` (PRD-02 section 11).
+static TERM: AtomicBool = AtomicBool::new(false);
+
+extern "C" fn on_term(_: libc::c_int) {
+    TERM.store(true, Ordering::SeqCst);
 }
 
 /// What the control loop holds for the seal.
@@ -913,6 +939,8 @@ struct Run {
     exit: Option<Exit>,
     exit_at: Option<Mono>,
     null: bool,
+    /// How the boot before ended; a null recorder's seal names it in its `recorder_down` gap.
+    prev: Option<Prev>,
     /// The entry was sealed before this boot: the recorder records nothing, and a seal removes
     /// the key, answers `sealed` and runs the wrap-up.
     sealed: bool,
@@ -921,17 +949,38 @@ struct Run {
 }
 
 impl Run {
-    /// Reads control lines from the watchdog (PRD-02 section 8) until the seal. On EOF (the
-    /// watchdog is gone, section 9.1) it watches the harness by pid and start id each second and
-    /// seals with `harness_exit` once it is gone.
-    fn control(mut self, lines: &mut impl BufRead, dir: &Path, workspace: &Path) -> ExitCode {
-        while let Some(line) = read_line(lines) {
-            match line {
-                Some(ToRecorder::Launch(h)) => {
+    /// Reads control lines from the watchdog (PRD-02 section 8) until the seal, on a tick of at
+    /// most 1 s. Each tick: SIGTERM seals with `signal`; a new server word goes to the watchdog,
+    /// and `seconds_left` moves the deadline. While the watchdog lives it decides; after EOF (it
+    /// is gone, section 9.1) the recorder seals itself: on a server `stop` at once, at the
+    /// deadline, or once the harness, watched by pid and start id, is gone. It never signals the
+    /// harness.
+    fn control(
+        mut self,
+        mut lines: BufReader<UnixStream>,
+        mut deadline: Option<Mono>,
+        dir: &Path,
+        workspace: &Path,
+    ) -> ExitCode {
+        let (tx, rx) = mpsc::channel();
+        // At EOF the thread ends and drops `tx`: the loop sees the channel disconnected.
+        std::thread::spawn(move || {
+            while let Some(line) = read_line::<ToRecorder>(&mut lines) {
+                if tx.send(line).is_err() {
+                    return;
+                }
+            }
+        });
+        let mut word = self.uploader.as_ref().map(UploadHandle::server_word);
+        let tick = std::time::Duration::from_secs(1);
+        let mut eof = false;
+        loop {
+            match rx.recv_timeout(tick) {
+                Ok(Some(ToRecorder::Launch(h))) => {
                     self.board.set(|s| s.harness = Some(harness_status(&h)));
                     self.harness = Some(h);
                 }
-                Some(ToRecorder::Exit { exit }) => {
+                Ok(Some(ToRecorder::Exit { exit })) => {
                     self.board.set(|s| {
                         if let Some(h) = &mut s.harness {
                             h.exit = exit;
@@ -939,28 +988,51 @@ impl Run {
                     });
                     (self.exit, self.exit_at) = (exit, Some(self.rec.now()));
                 }
-                Some(ToRecorder::Seal { reason, outlived }) => {
+                Ok(Some(ToRecorder::Seal { reason, outlived })) => {
                     return self.seal(reason, outlived, dir, workspace);
                 }
                 // A null recorder exits without sealing; the watchdog starts a normal one.
-                Some(ToRecorder::Restart) if self.null => return ExitCode::SUCCESS,
+                Ok(Some(ToRecorder::Restart)) if self.null => return ExitCode::SUCCESS,
+                Err(mpsc::RecvTimeoutError::Disconnected) if !eof => eof = true,
+                Err(mpsc::RecvTimeoutError::Disconnected) => std::thread::sleep(tick),
                 _ => {}
             }
-        }
-        // Slice B adds the recorder's own deadline timer to this watch.
-        loop {
-            let gone = (self.harness.as_ref()).is_none_or(|h| !cli::alive(h.pid, h.start_id));
-            if gone {
-                return self.seal(SealReason::HarnessExit, None, dir, workspace);
+            if TERM.load(Ordering::SeqCst) {
+                return self.seal(SealReason::Signal, None, dir, workspace);
             }
-            std::thread::sleep(std::time::Duration::from_secs(1));
+            let changed = word.as_mut().filter(|w| w.has_changed().unwrap_or(false));
+            let fresh = changed.and_then(|w| w.borrow_and_update().clone());
+            if let Some(d) = fresh.as_ref().and_then(crate::watchdog::moved) {
+                deadline = Some(d);
+            }
+            if !eof {
+                if let Some(w) = fresh {
+                    self.send(&ToWatchdog::Server(w));
+                }
+                continue;
+            }
+            let stop = word
+                .as_ref()
+                .and_then(|w| crate::watchdog::stop_of(w.borrow().as_ref()?));
+            let gone = self
+                .harness
+                .as_ref()
+                .is_none_or(|h| !cli::alive(h.pid, h.start_id));
+            let reason = match stop {
+                Some(reason) => reason,
+                None if deadline.is_some_and(|d| Mono::now() >= d) => SealReason::Deadline,
+                None if gone => SealReason::HarnessExit,
+                None => continue,
+            };
+            return self.seal(reason, None, dir, workspace);
         }
     }
 
     /// The seal (PRD-02 section 11), once; `sealed` goes to the watchdog at its durable point. A
-    /// null recorder exits instead: the next normal boot recovers the entry and the watchdog sends
-    /// the seal again. On an entry sealed before this boot, the key a seal that died before
-    /// removing it left goes now, then `sealed` and the wrap-up.
+    /// null recorder seals through the dead-entry recovery (section 11 "In null mode"); if that
+    /// fails it exits 74 without `sealed`, and the entry is left for `close_dead_entry`. On an
+    /// entry sealed before this boot, the key a seal that died before removing it left goes now,
+    /// then `sealed` and the wrap-up.
     fn seal(
         mut self,
         reason: SealReason,
@@ -968,14 +1040,37 @@ impl Run {
         dir: &Path,
         workspace: &Path,
     ) -> ExitCode {
+        // The server's own words for a `server_stop` seal, from its last heartbeat answer.
+        let server_reason = (self.uploader.as_ref())
+            .filter(|_| reason == SealReason::ServerStop)
+            .and_then(|u| u.server_word().borrow().as_ref()?.reason.clone());
+        if self.null && !self.sealed {
+            // Every later byte only counts, so what the boot relays after this seal reaches
+            // `after_seal` (section 11 step 6), as on the normal path.
+            self.rec.stop_all();
+            self.board.stop();
+            if let Some(t) = self.status.take() {
+                let _ = t.join();
+            }
+            // A null boot whose watchdog sent no `null_mode` cause: no exit is known.
+            let none = Prev::Cause(Cause::NullMode {
+                exits: 0,
+                last: None,
+            });
+            let (h, ws) = (self.harness.as_ref(), Some(workspace));
+            let prev = self.prev.unwrap_or(none);
+            let facts = dead::seal_null(dir, reason, h, self.exit, server_reason.clone(), prev, ws)
+                .unwrap_or_else(|e| writer::fail(dir, &e));
+            self.board.sealed(dead::seal_status(&facts), &facts.totals);
+            status::write(&self.rec, dir, &self.board);
+            self.sealed = true;
+            self.late = Some(seal::keep_sealed(&self.rec, dir, None));
+        }
         if self.sealed {
             seal::remove_key(dir);
             self.send(&ToWatchdog::Sealed);
             let late = (self.late.take()).unwrap_or_else(|| seal::Late::sealed(&self.rec, None));
             seal::wrap_up_sealed(&self.rec, dir, reason, self.uploader.take(), &late);
-            return ExitCode::SUCCESS;
-        }
-        if self.null {
             return ExitCode::SUCCESS;
         }
         let proxy = self.proxy.take();
@@ -993,7 +1088,7 @@ impl Run {
         };
         let ask = seal::SealAsk {
             reason,
-            server_reason: None,
+            server_reason,
             harness: self.harness.clone(),
             exit: self.exit,
             exit_at: self.exit_at,

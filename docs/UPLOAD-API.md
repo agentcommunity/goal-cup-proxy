@@ -95,7 +95,10 @@ approval; an open is `403`). A test run belongs to the server's test event (prod
 R2 prefix `traces/test/`, never locked; staging `test-staging`), lasts that event's run hours
 (168 by default), and its emails go to the operator with `[TEST]` before the subject. A test run
 replaces nothing and is never replaced, so one operator may have several test runs open at once.
-Only a competition run replaces anything, and only the account's open competition run. Test runs
+Only a competition run replaces anything, and only the account's open competition run. A test
+run may send `repo_url` as `null` or leave it out (goalcup does this for `start --test` without
+`--repo`); such a run is stored with an empty repository, the empty-public-repository GitHub check
+and the one-repository rule do not apply to it, and no judged commit is read for it. Test runs
 are left out of every live number and research report, and
 `server/worker/scripts/delete-test-runs.sh` (the owner's tool) deletes all of them (rows and R2
 objects) in one go.
@@ -192,7 +195,8 @@ Cloudflare) on the run: the open call's pair, which stays, and the latest pair, 
 and each heartbeat moves (a call without one keeps the last). They are never in an answer, a key or
 a log.
 
-`repo_url` is `https://github.com/<owner>/<repo>` exactly: the owner is ASCII letters, digits and
+`repo_url` is required in competition and practice mode (a test run may send `null`) and is
+`https://github.com/<owner>/<repo>` exactly: the owner is ASCII letters, digits and
 `-`; the repository is ASCII letters, digits, `-`, `_` and `.`, and is never `.` or `..`. Anything
 else is `400`.
 
@@ -205,7 +209,7 @@ repository and the open goes on; `200` means the repository already has a commit
 `400 malformed` ("The repository must be empty when the run opens. Create a new one with no README,
 .gitignore or license, and start again."). Any other answer, or no answer, is `502 upstream_error`,
 which goalcup retries, so a GitHub outage never refuses a player; nothing is created in any of these
-cases. The check applies to competition and test runs, and to the first open only: a retried open
+cases. The check applies to competition runs and to test runs that name a repository, and to the first open only: a retried open
 of a run that exists is answered before GitHub is asked, and `continue` never asks. A practice run
 skips both GitHub checks, because it judges nothing.
 

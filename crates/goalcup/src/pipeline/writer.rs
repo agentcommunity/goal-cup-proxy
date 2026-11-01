@@ -460,27 +460,32 @@ impl Writer {
     }
 
     fn append(&mut self, seq: u64, count: &Value) {
-        if let Err(e) = self.log.append(seq, count, self.counter.off_spans()) {
+        if let Err(e) = self.log.append(
+            seq,
+            count,
+            self.counter.off_spans(),
+            Some(self.counter.open_table()),
+            self.counter.fail_closed(),
+        ) {
             self.fail(&e);
         }
     }
 
     /// `fdatasync`, the durable point and its files, then rotation when due. Called with no
     /// record written since the last LINK, so the cursors and totals are those of that LINK. The
-    /// rotation's LINK has its `counts.jsonl` line before it, whether or not it comes: whether a
-    /// rotation is due is `PartWriter`'s own (part size and age, links in the part, all private
-    /// to PRD-01) and its LINK is written inside `rotate_if_due`, so the line cannot wait for the
-    /// answer. A line with no LINK after it is harmless: `count_at` takes the last line of a
-    /// `seq` and compaction keeps the latest per boot. A `PartWriter::rotation_due` seam would
-    /// let it go.
+    /// rotation's LINK (written inside `rotate_if_due`, when due) gets its `counts.jsonl` line
+    /// once it is written: no record comes between, so the count is the one at the last LINK.
+    /// Only a LINK that is written gives a `seq` its line; a line taken before the answer could
+    /// outlive a power loss next to a later LINK at that `seq` and seal a short count. A crash
+    /// between the rotation and the line leaves no line at that `seq`, and recovery recounts.
     fn sync(&mut self) {
         let d = self.part().sync().unwrap_or_else(|e| self.fail(&e));
         self.publish(d);
-        let count = self.count();
-        self.append(self.seq, &count);
         let np = now_pair();
         match self.part().rotate_if_due(np) {
             Ok(Some(d)) => {
+                let count = self.count();
+                self.append(d.line.seq, &count);
                 self.seq = d.line.seq + 1;
                 self.publish(Some(d));
             }

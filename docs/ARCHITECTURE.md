@@ -31,8 +31,6 @@ checking code.
 
 ## 3. The one process
 
-Pieces not merged yet are marked "Not built yet" in the bullets below.
-
 ```mermaid
 flowchart LR
   subgraph PM[Participant machine]
@@ -62,6 +60,8 @@ The rules of the shape:
 - **Relay first, record second.** The proxy forwards the bytes, then offers a copy to the recorder
   with a call that never waits. Past the stated memory guard the copy is dropped and the loss is a
   gap with its start, end and lost bytes. The harness is never slowed (point 3).
+  On listed hosts it reads HTTP/1.1, HTTP/2 and WebSocket. An HTTP/2 feature it cannot follow is
+  an `h2_unsupported` gap. An extended CONNECT stream is left unread alone; after `PUSH_PROMISE`, an HPACK error or an oversized header block the rest of that connection is relayed unparsed.
 - **Mask before disk.** Raw bytes live only in memory: in the queue, in the masker's hold and in the
   parser state. Nothing unmasked reaches a file or a log line.
 - **No raw bytes leave memory any other way.** The recorder turns core dumps off before it reads a
@@ -71,18 +71,20 @@ The rules of the shape:
 - **One process, no IPC for bytes.** The proxy, the native reader, the masker, the writer and the
   uploader run in the recorder process. Between the watchdog and the recorder only a listener and
   one control line pass, and neither carries a recorded byte (D75).
-- **The watchdog** is the `goalcup start` or `continue` process. It binds the port once and hands
-  the socket to each recorder boot, so a restart never closes the port. It mints the run CA, runs
+- **The watchdog** is the `goalcup start` process (`goalcup continue` is not built yet). It binds the port
+  once and hands the socket to each recorder boot, so a restart never closes the port. It mints the run CA, runs
   the connector's helper stops, starts the harness, ends it on `goalcup seal`, seals the part when it
-  exits, and starts a new recorder at once when one dies (D75). It never reads, masks, writes or
-  uploads a recorded byte. Not built yet: ending the harness at the deadline and on the server's
-  stop (D85); `goalcup recover`, which reopens the port and the CA when the watchdog itself died;
-  and closing the part of an entry whose watchdog and recorder both died.
+  exits, and starts a new recorder at once when one dies (D75). When the deadline passes, or the
+  server's stop word says the reason is the deadline, it ends the harness and seals the part. Any
+  other stop word seals the recorder at once and leaves the harness running (D85). It never reads,
+  masks, writes or uploads a recorded byte. Not built yet: `goalcup continue`; `goalcup recover`, which
+  reopens the port and the CA when the watchdog itself died; and closing the part of an entry whose
+  watchdog and recorder both died (no command calls the close).
 - **Null mode.** If the recorder crashes three times in ten minutes, each within a minute of its
   start, the watchdog runs a relay-only recorder, says so in `status.json`, and retries a normal
   boot after 30 seconds, then 1, 2 and 5 minutes, never more than 5 minutes apart. The crash count
   resets once a recorder stays up 60 seconds. The harness keeps its connections. The span is a
-  `recorder_down` gap. Not built yet.
+  `recorder_down` gap.
 - **Boot-time timers.** Every timer counts boot time, which keeps running while the machine
   sleeps, on a short tick: deadline, restart pauses, null-mode retries, upload backoff.
 - **The memory guard is a guard, not a cap** (D79). Held bytes stay under a stated size (512 MiB,

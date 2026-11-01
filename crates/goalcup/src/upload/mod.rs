@@ -16,10 +16,11 @@
 //! each per tick, so a slow or gone server of an older run never holds the live entry's rounds; it
 //! pauses while the live entry's wrap-up is not done, and runs alone when the live entry has
 //! nothing to send with (a local run, no credential). [`manual`] is `goalcup upload` for one
-//! sealed entry.
+//! entry: it closes a dead one with the `recovered` seal (`pipeline::close_dead_entry`, PRD-02
+//! 9.4), then sends it sealed.
 //!
-//! Still open: the dead-entry close in [`manual`] (`pipeline::close_dead_entry`, PRD-02 9.4) and
-//! the half of the full-tier `upload_worker.rs` case 2 that waits on PRD-02's null-mode watchdog.
+//! Still open: the half of the full-tier `upload_worker.rs` case 2 that waits on PRD-02's
+//! null-mode watchdog.
 
 pub mod beat;
 pub mod chunk;

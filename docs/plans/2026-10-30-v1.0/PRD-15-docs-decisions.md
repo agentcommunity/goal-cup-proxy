@@ -1464,3 +1464,32 @@ the HARNESS-ONBOARDING pointer; `docs/README.md` is deleted and `CONTRACTS`, `TE
   RECORD-FORMAT 542, RULES 459, CONNECTOR-SCHEMA 114. PRD-00 has no PRD-15 row, so there is no ceiling to pass.
 - Still open, unchanged: README tier column and Pad result lines after phase 5, and removing the "writer: PRD-02
   target shape" marks when the PRD-02 writer merges. No seam change. No locked ledger item is touched.
+
+### 1 Nov, replan after slice 17 (merge ca62fa3f)
+
+- Slice 17 removed the stale "not built" notes for the deadline end, the server stop word and null mode. Only
+  `goalcup continue` and `goalcup recover` stay "not built yet" (`src/main.rs` still calls `not_built` for
+  them; the dead-entry close in `pipeline/dead.rs` has no command). Remove those notes in the slice that wires
+  each command.
+- Two review nits fixed by the replan commit: README points-to-tests row 3 now names `crates/goalcup/tests`
+  (`watchdog_null.rs`, `watchdog_end.rs`, `proxy_restart.rs` are on integration), and two ARCHITECTURE
+  watchdog lines are re-wrapped. The real-run cell for point 3 (recorder kill test) and the "All together" row
+  stay "not merged yet" until those land.
+- Size (`wc -l` at the replan base): README 245, AGENTS 95, ARCHITECTURE 191, OPERATING 260,
+  PARTICIPANT-GUIDE 485, RECORD-FORMAT 542, RULES 459, CONNECTOR-SCHEMA 114. PRD-00 has no PRD-15 row, so no
+  ceiling applies. No seam change; no locked ledger item is touched.
+
+### 2026-11-01, replan after PRD-15 slice 18 (merge ad83e7d8)
+
+- **Size report, PRD-15:** docs only, `wc -l` on integration: README 245, AGENTS 95, ARCHITECTURE 193,
+  OPERATING 260, PARTICIPANT-GUIDE 488, RECORD-FORMAT 552, RULES 459, CONNECTOR-SCHEMA 114 (2,406 together).
+  PRD-00 "Size budget" has no PRD-15 row, so nothing to exceed.
+- **Four review nits left for the next docs slice** (all accuracy or taste, no seam change):
+  - PARTICIPANT-GUIDE HTTP/2 bullet: add one clause ("or broken HTTP/2 framing") so it also covers a
+    malformed frame or bad preface (`decode_failed`) and a table size update past 1 MiB (`memory_guard`
+    `hpack_table`), the other two cases that stop reading the whole connection (point 6).
+  - RECORD-FORMAT gap row 11: late frames are counted in the conn GAP of the stop if parsing stopped (so
+    `memory_guard` after an `hpack_table` stop), else in a `decode_failed` conn GAP at the close. Cut the
+    late-frames clause from row 11 and leave a pointer to row 4, which carries the rule.
+  - ARCHITECTURE: re-wrap the PUSH_PROMISE sentence to the file width. No content change.
+- No seam change; no locked ledger item is touched.
