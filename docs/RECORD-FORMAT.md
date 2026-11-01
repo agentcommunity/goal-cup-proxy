@@ -72,6 +72,16 @@ Every record is `kind` (one byte), `len` (a varint) and then `len` bytes of body
   `source_changed`. `seen` is the stream offset just past the last source byte seen, written or
   lost. For a `conn` stream it is 0; its tail holds bytes each way (`up`, `down`).
 
+Optional END tail keys, by stream kind. Each is a count or masked text, never a secret value.
+
+| Stream kind | Keys |
+|---|---|
+| `conn` | `up`, `down`: bytes each way on the TCP wire. `plain_up`, `plain_down`: plaintext bytes each way, `decrypt` mode only |
+| `http_req`, `http_resp` | `wire`: body bytes before de-chunking and decoding (`seen` counts decoded bytes). `trailers`: masked header list, shaped as `headers`. `h2_error`: the `RST_STREAM` or server `GOAWAY` error code |
+| `http_req` | `unsent`: bytes read from the client and recorded but never forwarded |
+| `ws_up`, `ws_down` | `close_code`: the close frame's status code |
+| `ws_up` | `unsent`, as for `http_req` |
+
 ## Stream kinds
 
 `skind` in OPEN. A stream is an OPEN, its DATA records and an END.
@@ -79,7 +89,7 @@ Every record is `kind` (one byte), `len` (a varint) and then `len` bytes of body
 | n | Kind | One stream is |
 |---|---|---|
 | 1 | `conn` | One client connection through the proxy, decrypted or tunnelled. No DATA. `meta` has `host`, `port`, `mode` (`decrypt` or `tunnel`), `listed`, `kind`, `reason` |
-| 2 | `http_req` | One request body. `meta` holds the head: `method`, `path` (no query), `ver`, `h2` (HTTP/2 stream id, absent for 1.1), masked `headers`, `masked`, `coding` |
+| 2 | `http_req` | One request body. `meta` holds the head: `method`, `path` (no query), `ver`, `h2` (the HTTP/2 stream id, absent for 1.1; the same on the response), masked `headers`, `masked`, `coding` |
 | 3 | `http_resp` | One final response body. `req` names its request. Bodies are de-chunked and decoded. `meta` has `status`, `ver`, `h2`, `headers`, `masked`, `coding`, `decoded` |
 | 4 | `ws_up` | Every message the client sent on one WebSocket, inflated, in order. `meta.deflate` is true when permessage-deflate was in use |
 | 5 | `ws_down` | Every message the server sent on it. `meta` as `ws_up` |
@@ -128,7 +138,7 @@ starts (0 for `sid` 0 and for `conn` streams).
 | 8 | reserved | Never written. A write error ends the recorder instead. Shown as `other(8)` |
 | 9 | reserved | Never written. A failed read is retried. Shown as `other(9)` |
 | 10 | `cut_at_seal` | Bytes still unread or unwritten when the seal's time ran out |
-| 11 | `h2_unsupported` | An HTTP/2 feature the proxy cannot follow; the rest relays unparsed |
+| 11 | `h2_unsupported` | An HTTP/2 feature the proxy cannot follow. The rest of the connection relays unparsed, and the `conn` GAP counts those bytes and any frames for a stream that already ended. A client `GOAWAY` ends nothing; a server `GOAWAY` and `RST_STREAM` end the streams they name `interrupted` with `h2_error` |
 | 12 | `mask_failed` | The masker failed on a piece, so the piece was dropped |
 | 13 | `upstream_untrusted` | A listed host's server certificate failed the check; tunnelled |
 | 14 | `protocol_other` | A listed host spoken to in a protocol the proxy does not parse; tunnelled |
