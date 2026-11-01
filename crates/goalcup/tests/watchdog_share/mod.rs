@@ -31,7 +31,11 @@ pub fn loopback_only(port: u16) {
     let tail = format!(":{port:04X}");
     let mut listening = Vec::new();
     for file in ["/proc/net/tcp", "/proc/net/tcp6"] {
-        for l in std::fs::read_to_string(file).unwrap_or_default().lines().skip(1) {
+        for l in std::fs::read_to_string(file)
+            .unwrap_or_default()
+            .lines()
+            .skip(1)
+        {
             let f: Vec<&str> = l.split_whitespace().collect();
             if f.len() > 3 && f[3] == "0A" && f[1].ends_with(&tail) {
                 listening.push(f[1].to_string());
@@ -42,7 +46,8 @@ pub fn loopback_only(port: u16) {
 }
 
 /// The CONNECT a test sends to the proxy for the listed host.
-pub const CONNECT: &[u8] = b"CONNECT api.openai.com:443 HTTP/1.1\r\nHost: api.openai.com:443\r\n\r\n";
+pub const CONNECT: &[u8] =
+    b"CONNECT api.openai.com:443 HTTP/1.1\r\nHost: api.openai.com:443\r\n\r\n";
 
 /// After [`CONNECT`] was written on `tcp`: its `200` head, then TLS whose leaf must verify
 /// against `pem` (a `run-ca.pem`) only.
@@ -90,7 +95,8 @@ pub fn exchange(
     request: &[u8],
     tail: &[u8],
 ) -> Vec<u8> {
-    tls.write_all(request).expect("the leaf verifies against run-ca.pem");
+    tls.write_all(request)
+        .expect("the leaf verifies against run-ca.pem");
     let (mut out, mut buf) = (Vec::new(), [0u8; 4096]);
     while !out.ends_with(tail) {
         match tls.read(&mut buf) {

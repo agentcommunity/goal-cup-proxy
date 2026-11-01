@@ -350,7 +350,9 @@ fn loss_before_the_wire_stop_keeps_its_gap() {
     rec.seal_for_tests(dir.path(), SealReason::SealCommand);
     let recs = records(dir.path());
     let (a, b) = (of(&recs, sids.0), of(&recs, sids.1));
-    let guard = a.iter().any(|r| r.0 == "gap" && r.1 == "MemoryGuard" && r.2 >= 1000);
+    let guard = a
+        .iter()
+        .any(|r| r.0 == "gap" && r.1 == "MemoryGuard" && r.2 >= 1000);
     assert!(guard, "{a:?}");
     assert!(b.contains(&("gap", "DecodeFailed".into(), 500)), "{b:?}");
 }
@@ -375,7 +377,19 @@ fn end_and_drop_send_the_open_gap_first() {
     rec.seal_for_tests(dir.path(), SealReason::SealCommand);
     let recs = records(dir.path());
     let h = of(&recs, sids.0);
-    assert_eq!(h, [("gap", "MemoryGuard".into(), 3000), ("end", "Complete".into(), 3000)]);
+    assert_eq!(
+        h,
+        [
+            ("gap", "MemoryGuard".into(), 3000),
+            ("end", "Complete".into(), 3000)
+        ]
+    );
     let d = of(&recs, sids.1);
-    assert_eq!(d, [("gap", "MemoryGuard".into(), 10), ("end", "Interrupted".into(), 10)]);
+    assert_eq!(
+        d,
+        [
+            ("gap", "MemoryGuard".into(), 10),
+            ("end", "Interrupted".into(), 10)
+        ]
+    );
 }

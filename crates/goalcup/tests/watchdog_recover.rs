@@ -142,7 +142,11 @@ fn setup(keep: bool) -> Dead {
 /// `run-ca.pem` only: the answer's bytes.
 fn get(entry_dir: &Path, port: u16) -> Vec<u8> {
     let mut tls = connect_tls(entry_dir, port);
-    exchange(&mut tls, b"GET / HTTP/1.1\r\nHost: api.openai.com\r\n\r\n", b"hi")
+    exchange(
+        &mut tls,
+        b"GET / HTTP/1.1\r\nHost: api.openai.com\r\n\r\n",
+        b"hi",
+    )
 }
 
 /// Every file under `dir`, recursively.
@@ -176,7 +180,10 @@ fn watchdog_recover_restarts_the_recorder_only() {
     assert!(!d.tmp.path().join("signalled").exists(), "signalled");
     // Point 4: the key file stays 0600 while the entry lives.
     let key = d.entry_dir.join("rec").join(watchdog::KEY_FILE);
-    let mode = std::fs::metadata(&key).expect("the key file").permissions().mode();
+    let mode = std::fs::metadata(&key)
+        .expect("the key file")
+        .permissions()
+        .mode();
     assert_eq!(mode & 0o777, 0o600);
 
     d.harness.kill().unwrap();
@@ -198,7 +205,12 @@ fn watchdog_recover_restarts_the_recorder_only() {
                 end_mono,
                 tail,
                 ..
-            } => down.push((link, start_mono, end_mono, serde_json::from_slice::<Value>(&tail).unwrap())),
+            } => down.push((
+                link,
+                start_mono,
+                end_mono,
+                serde_json::from_slice::<Value>(&tail).unwrap(),
+            )),
             _ => {}
         }
     }
@@ -226,7 +238,10 @@ fn watchdog_recover_restarts_the_recorder_only() {
             Record::End { tail, .. } | Record::Gap { tail, .. } => tail,
             _ => continue,
         };
-        assert!(!bytes.windows(line.len()).any(|w| w == line), "the CA key is in a record");
+        assert!(
+            !bytes.windows(line.len()).any(|w| w == line),
+            "the CA key is in a record"
+        );
     }
 }
 

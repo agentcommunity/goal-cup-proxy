@@ -123,7 +123,11 @@ fn watchdog_restart_keeps_port_backlog_and_ca() {
                 end_mono,
                 tail,
                 ..
-            } => down.push((start_mono, end_mono, serde_json::from_slice::<Value>(&tail).unwrap())),
+            } => down.push((
+                start_mono,
+                end_mono,
+                serde_json::from_slice::<Value>(&tail).unwrap(),
+            )),
             Record::Data { bytes, .. } => data.extend(bytes),
             _ => {}
         }
