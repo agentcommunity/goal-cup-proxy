@@ -103,3 +103,18 @@ fn ca_subtrees_are_wildcard_free_suffixes() {
         "in-label `*`"
     );
 }
+
+#[test]
+fn expected_hosts_are_tunnelled_not_decrypted_and_the_array_is_optional() {
+    let hosts = HostList::from_file(
+        goalcup::connector::builtin::HOSTS.as_bytes(),
+        "model-hosts.toml",
+    )
+    .unwrap();
+    assert!(hosts.is_expected("ab.chatgpt.com"));
+    assert!(hosts.is_expected("AB.chatgpt.com"));
+    assert_eq!(hosts.decide("ab.chatgpt.com"), Decision::NotListed);
+    assert!(!hosts.is_expected("api.openai.com"));
+    // A participant --hosts copy without the array still loads.
+    assert!(!list("provider = [\"api.example.com\"]\n").is_expected("ab.chatgpt.com"));
+}

@@ -70,6 +70,7 @@ pub struct HostList {
     config: Vec<Host>,
     never: Vec<String>,
     pinned: Vec<String>,
+    expected: Vec<String>,
     sha256: String,
 }
 
@@ -82,6 +83,7 @@ struct RawHosts {
     vendor: Vec<String>,
     never: Vec<String>,
     pinned: Vec<String>,
+    expected: Vec<String>,
 }
 
 impl HostList {
@@ -113,12 +115,16 @@ impl HostList {
         for host in pins {
             add(&mut shared, &pinned, host);
         }
+        let expected = (raw.expected.iter().enumerate())
+            .map(|(i, name)| checked("expected", i, name).map(|h| h.name))
+            .collect::<Result<Vec<_>, _>>()?;
         Ok(HostList {
             shared,
             participant: Vec::new(),
             config: Vec::new(),
             never: raw.never.iter().map(|n| n.to_ascii_lowercase()).collect(),
             pinned,
+            expected,
             sha256: hex::encode(Sha256::digest(bytes)),
         })
     }
@@ -144,6 +150,13 @@ impl HostList {
             }
         }
         Decision::NotListed
+    }
+
+    /// Whether `name` is a non-model host a harness opens on purpose (the `expected` array). It is
+    /// tunnelled unrecorded as any unlisted host; a name another array lists, or `never` holds, is not expected.
+    pub fn is_expected(&self, name: &str) -> bool {
+        let name = name.to_ascii_lowercase();
+        self.decide(&name) == Decision::NotListed && self.expected.iter().any(|p| matches(p, &name))
     }
 
     /// The wildcard-free suffix of each entry for the run CA (`*.a.b` and `x*y.a.b` give `a.b`).
